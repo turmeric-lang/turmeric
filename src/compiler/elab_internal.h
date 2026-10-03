@@ -2207,6 +2207,13 @@ Expr *elab_borrow_mut(Elab *e, const Form *call);
 Expr *elab_defkind(Elab *e, const Form *call);
 Expr *elab_defrec(Elab *e, const Form *call);
 Expr *elab_defalias(Elab *e, const Form *call);
+/* associated-type-unusable-nullary-and-generic (half 2): the UNREDUCED
+ * projection `(assoc arg)` when `arg` mentions a type variable -- a named
+ * TY_TYVAR carrying assoc_of/assoc_arg (types.h), named by the printed
+ * projection.  Returns false (and leaves *out) when the projection is ground
+ * or has more than one argument; the caller then reports it unanswerable. */
+bool elab_assoc_projection(Elab *e, const Symbol *assoc, const Type *args,
+                           uint8_t n_args, Type *out);
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
     const Symbol **type_params, Kind *type_param_kinds,
     uint8_t n_type_params);

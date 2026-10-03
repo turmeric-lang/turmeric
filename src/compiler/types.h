@@ -943,6 +943,16 @@ typedef struct Type {
              * signature quantifies.  Nothing binds it; it only says "not fixed
              * here".  Copied with the Type, so it survives instantiation. */
             bool open_slot;
+            /* associated-type-unusable-nullary-and-generic (half 2): an
+             * UNREDUCED associated-type projection -- `(Inner A)` at a type
+             * variable, which no instance can answer until the variable is
+             * fixed.  It is a type variable in every other respect (its name
+             * is the printed projection, so two spellings of the same
+             * projection are the same variable), and a call that fixes
+             * `assoc_arg` reduces it through the instance (elab_call.c,
+             * call_bind_assoc_projections).  NULL for an ordinary variable. */
+            const struct Symbol *assoc_of;
+            const struct Type   *assoc_arg;
         } tyvar_;
         /* ET3/FH4.1: Handler type — handler<EffectRow, ValueType, ResultType> */
         struct {

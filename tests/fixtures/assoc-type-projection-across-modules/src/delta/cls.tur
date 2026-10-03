@@ -1,0 +1,13 @@
+;; associated-type-unusable-nullary-and-generic (half 2): the class and a
+;; generic over its associated type live in this module, which declares no
+;; instance -- the layout every spice has (the class beside the vocabulary,
+;; the instances beside the types).  `(Delta S)` stays unreduced here and is
+;; reduced at each call in the importer.
+(defmodule delta/cls
+  (export apply-twice)
+  (defclass Lattice [s]
+    (type Delta : Type)
+    (apply-delta [x : s d : Delta] : s)
+    (delta-of [x : s] : Delta))
+  (defn apply-twice [S] [(Lattice S)] [x : S d : (Delta S)] : S
+    (apply-delta (apply-delta x d) d)))

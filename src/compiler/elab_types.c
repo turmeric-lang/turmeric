@@ -690,6 +690,38 @@ static void reject_fn_type_colon(Elab *e, const Form *slot) {
  *   - Type applications: (ctor arg) -> TY_APP
  *   - Recursive references: the type name being defined
  * Returns NULL on error. */
+
+/* Does `t` mention a named type variable (so a projection over it cannot be
+ * answered yet)? */
+static bool assoc_arg_is_open(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: return t->as.tyvar_.name != NULL;
+        case TY_APP:   return assoc_arg_is_open(t->as.app.fn) ||
+                              assoc_arg_is_open(t->as.app.arg);
+        default:       return false;
+    }
+}
+
+bool elab_assoc_projection(Elab *e, const Symbol *assoc, const Type *args,
+                           uint8_t n_args, Type *out) {
+    if (!e || !assoc || !args || n_args != 1 || !out) return false;
+    if (!assoc_arg_is_open(&args[0])) return false;
+    Buf nb; buf_init(&nb);
+    buf_printf(&nb, "(%s ", assoc->name);
+    type_print(&nb, args[0]);
+    buf_putc(&nb, ')');
+    const Symbol *nm = symtab_intern(e->st, strslice(nb.data, (uint32_t)nb.len));
+    buf_free(&nb);
+    Type *ap = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *ap = args[0];
+    Type t = type_tyvar_named(nm->name);
+    t.as.tyvar_.assoc_of = assoc;
+    t.as.tyvar_.assoc_arg = ap;
+    *out = t;
+    return true;
+}
+
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                                   const Symbol **type_params, Kind *type_param_kinds,
                                   uint8_t n_type_params) {
@@ -2183,6 +2215,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                 }
                 const Type *bound = typeclass_env_resolve_assoc_type_n(
                     &e->typeclass_env, head_sym, arg_buf, n_args);
+                /* associated-type-unusable-nullary-and-generic (half 2): at a
+                 * type variable the projection stays unreduced until a call
+                 * fixes the variable. */
+                Type proj;
+                if (!bound && elab_assoc_projection(e, head_sym, arg_buf, n_args, &proj)) {
+                    Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *out = proj;
+                    return out;
+                }
                 if (!bound) {
                     diag_emit(DIAG_ERROR, form->span,
                               "no instance binding for associated type '%s' at this type",
