@@ -2,7 +2,7 @@
 
 **RESOLVED 2026-10-03** by fix direction 1, in the fork
 ([turmeric-lang/mir#6](https://github.com/turmeric-lang/mir/pull/6)) and
-re-synced into `external/mir/` at `e502b185` -- see *Resolution* at the end.
+re-synced into `external/mir/` (merged as `3c0d8c84`) -- see *Resolution* at the end.
 The release workflow's aarch64 exception for this fallback is deleted, so the
 next release's linux-aarch64 leg is the real-hardware confirmation.
 
@@ -201,7 +201,7 @@ glibc's `getcontext`/`swapcontext` -- compiled by gcc -- would write 16 bytes
 past the end of a JIT-allocated one, inside `FiberBlock`.  The loud fallback
 would have become silent memory corruption in fiber programs.
 
-The fork commit (`e502b185`, turmeric-lang/mir#6) therefore carries four
+The fork commit (`e502b185`, merged as `3c0d8c84` in turmeric-lang/mir#6) therefore carries four
 changes: the stand-in declared outside the Apple branch; an empty
 function-like `#define __attribute__` (the libc erase idiom) ignored outside
 pedantic mode, so attributes reach c2mir's parser; a run of attribute

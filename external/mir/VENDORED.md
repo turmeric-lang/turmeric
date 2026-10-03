@@ -152,7 +152,7 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     The emitter already stopped producing the shape, so nothing in the
     generated C depends on this; user inline C still can.
 
-  e502b185 (turmeric-lang/mir#6; pinned at the PR head until it merges) --
+  e502b185 (merged as 3c0d8c84, turmeric-lang/mir#6) --
     c2mir rejected every program including <ucontext.h> on Linux aarch64
     ("sys/user.h:30:1: syntax error on struct"): glibc's <sys/user.h>,
     reached through <sys/procfs.h>, declares `__uint128_t vregs[32]`, and the
