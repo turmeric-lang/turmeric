@@ -42,6 +42,10 @@ typedef struct CpsB {
     uint32_t counter;   /* fresh-id source */
     CKont  retk;        /* the function's return continuation (KK_RET) */
     const Binding *cur_fn;   /* binding of the fn being translated (self-call detection) */
+    /* The pending expression fold_pending is binding right now, when its
+     * consuming slot does not retain it (PendItem.reap_ok); NULL otherwise.
+     * The EX_CLOSURE arm reaps a capturing closure's env only for this one. */
+    const Expr *reap_closure_expr;
     bool cur_fn_leaf_fiber;  /* the fn's body indirect-calls a fn-VALUE -> permanently fiber */
     PapInline pap[32];       /* active pap-inline registrations (scoped per-let) */
     uint32_t  n_pap;
@@ -595,7 +599,10 @@ static bool fn_effect_may_escape(CpsB *b, const Binding *fn) {
 
 /* ---- pending bindings (drives atomization order) ---------------------- */
 
-typedef struct { Expr *expr; CVar x; } PendItem;
+/* reap_ok: the item is a call argument whose callee slot does not retain it
+ * (call_slot_nonretaining), so a capturing closure bound here is dead once the
+ * call returns and its env may be reaped at the entry boundary. */
+typedef struct { Expr *expr; CVar x; bool reap_ok; } PendItem;
 typedef struct { PendItem items[32]; uint32_t n; } Pending;
 
 /* forward decls */
@@ -2125,9 +2132,38 @@ static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
 
 /* Wrap `core` with the pending bindings, leftmost outermost. */
 static CTerm *fold_pending(CpsB *b, Pending *p, CTerm *core) {
-    for (int i = (int)p->n - 1; i >= 0; i--)
+    for (int i = (int)p->n - 1; i >= 0; i--) {
+        b->reap_closure_expr = p->items[i].reap_ok ? p->items[i].expr : NULL;
         core = cps_bind(b, p->items[i].expr, p->items[i].x, core);
+        b->reap_closure_expr = NULL;
+    }
     return core;
+}
+
+/* Does argument slot `i` of `call` keep nothing of what it is handed?  The
+ * callee is statically known and its parameter is `^borrow`, or the
+ * elaborator inferred it non-retaining (nonretain_param_mask: the body only
+ * calls it, or passes it to a slot that does the same) -- exactly the slots
+ * the direct emitter's escape walk (binding_escapes_impl) admits. */
+static bool call_slot_nonretaining(const Expr *call, uint32_t i) {
+    if (!call || call->kind != EX_CALL || call->as.call_.fn_expr) return false;
+    if (!call_dispatch_is_static(call)) return false;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN) return false;
+    if (i < fb->type.as.fn.arity && fb->type.as.fn.arg_flags &&
+        FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+        return true;
+    return i < 32 && (fb->nonretain_param_mask & (1u << i));
+}
+
+/* atomize() for argument `i` of `call`, recording whether its slot retains
+ * it (see PendItem.reap_ok). */
+static CAtom atomize_call_arg(CpsB *b, Expr *call, uint32_t i, Pending *p) {
+    uint32_t before = p->n;
+    CAtom a = atomize(b, call->as.call_.args[i], p);
+    if (p->n == before + 1)
+        p->items[before].reap_ok = call_slot_nonretaining(call, i);
+    return a;
 }
 
 static const char *builtin_name(const Expr *e) {
@@ -3873,7 +3909,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CTerm *t = new_term(b, CT_TAILCALL);
                     t->as.tailcall.fn = pf; t->as.tailcall.args = args;
                     t->as.tailcall.n = n; t->as.tailcall.kont = kont;
@@ -3894,7 +3930,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CTerm *t = new_term(b, CT_TAILCALL);
                     t->as.tailcall.fn = NULL; t->as.tailcall.fn_atom = fnatom;
                     t->as.tailcall.args = args; t->as.tailcall.n = n;
@@ -3991,7 +4027,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < n; i++)
-                args[i] = atomize(b, e->as.call_.args[i], &p);
+                args[i] = atomize_call_arg(b, e, i, &p);
             if (callee_colored(b, fn)) {
                 CTerm *t = new_term(b, CT_TAILCALL);
                 t->as.tailcall.fn = fn; t->as.tailcall.args = args;
@@ -4405,7 +4441,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CVar j = fresh_cvar(b, x.type);
                     j.name = arena_strdup(b->a, "j", 1);
                     CTerm *call = new_term(b, CT_TAILCALL);
@@ -4428,7 +4464,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CVar j = fresh_cvar(b, x.type);
                     j.name = arena_strdup(b->a, "j", 1);
                     CTerm *call = new_term(b, CT_TAILCALL);
@@ -4506,7 +4542,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < n; i++)
-                args[i] = atomize(b, e->as.call_.args[i], &p);
+                args[i] = atomize_call_arg(b, e, i, &p);
             if (callee_colored(b, fn)) {
                 CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
@@ -4716,12 +4752,20 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return unsupported_form(b, e);
         }
         case EX_CLOSURE: {
-            /* B8 slice-3 (probe): delegate a capturing closure with reap_env. */
+            /* B8 slice-3: delegate a capturing closure, reaping its env at the
+             * entry boundary only when the slot consuming it keeps nothing of
+             * it (fold_pending names that expression in reap_closure_expr).
+             * Reaping unconditionally freed the env of a lambda a callee had
+             * stored -- `(keep1 (fn [x] (+ x n)) 3)` with keep1 doing
+             * `(set! saved f)` -- so a later `(saved 10)` jumped through freed
+             * memory.  Anywhere else the env is left to leak, which is safe. */
             const struct Closure *cl = e->as.closure_.closure;
             if (cl && cl->n_captures > 0
                 && !cl->is_shift_receiver && !cl->is_effect_payload) {
+                bool reap = b->reap_closure_expr &&
+                            ascribe_peel(b->reap_closure_expr) == e;
                 CTerm *t = build_letraw(b, e, x, rest);
-                t->as.letraw.reap_env = true;
+                t->as.letraw.reap_env = reap;
                 return t;
             }
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);

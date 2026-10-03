@@ -1,6 +1,11 @@
-# A serial-cont that escapes its receiver, or is minted from bytes, is never freed
+# A serial-cont minted from bytes is never freed
 
-**Severity: low (leak; one chain per capture or per deserialize).**  Filed
+**Narrowed 2026-10-03 (same day): shape 1 is fixed** -- a `k` captured by a
+lambda that the callee only calls is now followed (see *Fixed*).  What is
+left is shape 2: a `serial-cont` minted by `bytes->serial-cont`, and the bytes
+`serial-cont->bytes` returns.
+
+**Severity: low (leak; one chain per deserialize).**  Filed
 2026-10-03 as the residue of
 [serial-cont-chain-never-freed](../archive/serial-cont-chain-never-freed.md),
 whose fix frees a receiver's chain only when the receiver *confines* `k`.
@@ -53,12 +58,30 @@ is nothing to walk.
 
 ## Fix directions
 
-1. **Shape 1, narrowly:** follow a lambda that captures `k` when it is passed
+1. ~~**Shape 1, narrowly:** follow a lambda that captures `k` when it is passed
    only to callees whose fn parameter is itself confined (called, never stored)
-   -- the same interprocedural walk, one level up.  Covers `helper`.
+   -- the same interprocedural walk, one level up.  Covers `helper`.~~ Done,
+   below.
 2. **Give `serial-cont` an owner** (the old report's direction 2): an affine
    continuation consumed by resume, cloned explicitly, with a drop, makes every
    case syntactic -- including a deserialized one.  A surface change.
 3. **Shape 2, cheaply:** a `serial-cont-free` (and typing
    `serial-cont->bytes`'s result as `Bytes` so `bytes-free` applies) gives a
    program that knows its continuation is dead a way to say so.
+
+## Fixed (2026-10-03): shape 1
+
+`serial_k_use_ok` (`src/compiler/emit_cps_ir.c`) takes a role: `K_SERIAL` for
+the receiver's `k`, `K_FNPARAM` for a fn value that may only be CALLED.  A
+lambda capturing `k` (through the same Binding, checked against its capture
+set) is accepted when its own body confines `k` and the value is then only
+called -- as a call argument, the callee's parameter is walked in the
+`K_FNPARAM` role; as a `let` init (the elaborator hoists a lambda argument that
+way), the rest of the `let` is.  A callee that stores, returns or re-captures
+the lambda keeps the chain, as before.  `serial-cont-receiver-chain-freed`
+gained `recv-lam` (through `apply1`) and `recv-lam2` (through `apply2`, which
+passes it on and calls it): both freed, leak-clean.
+
+Following this shape found two use-after-frees on the CPS and fat-closure
+paths, fixed in the same change -- see
+[cps-reaped-closure-kept-by-callee](../archive/cps-reaped-closure-kept-by-callee.md).

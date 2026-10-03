@@ -1023,6 +1023,23 @@ static Expr *saffron_dyn_fn_adaptor_make(Elab *e, Expr *value) {
  * and `set!`. */
 Expr *elab_fn_value_to_fat(Elab *e, Expr *value) {
     if (!value) return NULL;
+    /* A variable whose BINDING is already fat -- a `^fat` parameter, or a local
+     * the elaborator marked fat -- reads thin in its type, so the type test
+     * below would wrap the fat handle in a second box whose shim calls the
+     * handle as a code pointer: `(set! saved f)` with `f` a `^fat` param, then
+     * `(saved 10)`, jumped into the closure's env.  Same classification the
+     * tail/join walker uses (repr_of_binding for a param, is_fat otherwise). */
+    {
+        const Expr *pv = value;
+        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+        if (pv && pv->kind == EX_VAR && pv->as.var.binding) {
+            const Binding *vb = pv->as.var.binding;
+            bool fat = vb->is_param
+                ? repr_of_binding(vb, REPR_POS_RESULT) == REPR_FAT_HANDLE
+                : vb->is_fat;
+            if (fat) return value;
+        }
+    }
     if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
         !value->type.as.fn.cfnptr && value->type.as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY) {
         Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));

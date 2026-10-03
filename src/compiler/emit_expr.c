@@ -17862,7 +17862,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * let for an immutable binding) and spell the GLOBAL's name so the
              * static box is keyed and initialised on the constant, not on the
              * local. */
-            const Binding *sb_b = (inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+            /* An annotated `def` -- `(def ^mut f : (fn [int] int) ident)` --
+             * reaches here as an ascription of the global; it names the same
+             * constant, and missing it malloc'd a box per global init that
+             * the first `set!` then orphaned. */
+            const Expr *sb_inner = inner;
+            while (sb_inner && sb_inner->kind == EX_ASCRIBE)
+                sb_inner = sb_inner->as.ascribe_.inner;
+            const Binding *sb_b = (sb_inner && sb_inner->kind == EX_VAR)
+                                ? sb_inner->as.var.binding : NULL;
             if (sb_b && !sb_b->is_global && sb_b->widen_fn_alias)
                 sb_b = sb_b->widen_fn_alias;
             /* r7rs-lang-plan R6: a global that is a `def` of a function VALUE
@@ -17881,7 +17889,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 !sb_b->is_param &&
                 !sb_b->is_poly_fn &&
                 !sb_b->is_fat) {
-                if (sb_b != inner->as.var.binding) {
+                if (inner->kind != EX_VAR || sb_b != inner->as.var.binding) {
                     free(fnptr);
                     fnptr = atom_var(ctx, sb_b);
                 }

@@ -9397,8 +9397,9 @@ static const char *serial_recv_kty(CE *ce, const CTerm *t) {
  * `(k v)` resumes a COPY of it (dk_invoke), as does every other reader below,
  * so once the receiver has returned, a `k` it only resumed, serialized or
  * marshalled is dead -- and was never freed.  Conservative: `k` stored,
- * returned, captured by a closure, or passed anywhere else keeps the chain
- * alive (the old behaviour).  A reader is `(k v)` itself (the
+ * returned, or passed anywhere else keeps the chain alive (the old
+ * behaviour); a lambda capturing it is followed only when that lambda is
+ * itself only called (serial_k_closure_body_ok).  A reader is `(k v)` itself (the
  * tur_serial_cont_resume builtin), a Turmeric-bodied callee that in turn
  * confines its parameter (`serial-resume`, `workflow-suspend`), or one of the
  * stdlib's inline-C marshalers (`serial-cont->bytes`, `save-cont!`), each of
@@ -9418,50 +9419,93 @@ static bool serial_k_is(const Expr *x, const Binding *k) {
     return x && x->kind == EX_VAR && x->as.var.binding == k;
 }
 
-static bool serial_k_use_ok(const Expr *x, const Binding *k, int depth);
+/* What the walk below tracks.  K_SERIAL: the receiver's serial-cont, whose
+ * readers copy it.  K_FNPARAM: a fn value (a lambda that captured the
+ * serial-cont) that may only be CALLED -- never stored, returned, captured or
+ * passed on -- so it is dead when its holder returns. */
+typedef enum { K_SERIAL, K_FNPARAM } SerialKRole;
 
-/* Does callee `cfd` confine its parameter `i` (a serial-cont handed to it)?
- * A Turmeric body is walked like the receiver's own, a few calls deep.  An
- * inline-C body is opaque, so only the stdlib's own serial-cont readers are
- * trusted -- and only when they really are the stdlib's (a user defn of the
- * same name could store `k`). */
-static bool serial_k_param_confined(const FnDef *cfd, uint32_t i, int depth) {
+static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
+                            int depth);
+
+/* Does callee `cfd` confine its parameter `i` in `role`?  A Turmeric body is
+ * walked like the receiver's own, a few calls deep.  An inline-C body is
+ * opaque, so only the stdlib's own serial-cont readers are trusted -- and only
+ * when they really are the stdlib's (a user defn of the same name could store
+ * `k`). */
+static bool serial_k_param_confined(const FnDef *cfd, uint32_t i,
+                                    SerialKRole role, int depth) {
     if (!cfd || !cfd->body || cfd->is_variadic || i >= cfd->n_params) return false;
     if (cfd->body->kind == EX_INLINE_C ||
         (cfd->binding && cfd->binding->body_is_inline_c)) {
         const char *nm = (cfd->binding && cfd->binding->name)
                          ? cfd->binding->name->name : NULL;
         const char *path = diag_file_path(cfd->body->span.file_id);
-        return i == 0 && nm && path && strstr(path, "stdlib/") &&
+        return role == K_SERIAL && i == 0 && nm && path && strstr(path, "stdlib/") &&
                (strcmp(nm, "serial-cont->bytes") == 0 ||
                 strcmp(nm, "save-cont!") == 0);
     }
-    return depth < 4 && serial_k_use_ok(cfd->body, cfd->params[i], depth + 1);
+    return depth < 4 && serial_k_use_ok(cfd->body, cfd->params[i], role, depth + 1);
 }
 
-static bool serial_k_use_ok(const Expr *x, const Binding *k, int depth) {
+/* A closure literal that captures `k` confines it when its own body does --
+ * provided the lambda itself is then only CALLED (K_FNPARAM) by whatever holds
+ * it, so it, and the `k` inside it, are dead once that holder returns.  The
+ * callers below check the second half: a call argument against the callee's
+ * parameter, a `let`-bound lambda against the rest of the `let`. */
+static bool serial_k_closure_body_ok(const Expr *arg, const Binding *k,
+                                     SerialKRole role, int depth) {
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    if (!arg || arg->kind != EX_CLOSURE || !arg->as.closure_.closure) return false;
+    const struct Closure *cl = arg->as.closure_.closure;
+    if (!cl->fn || !cl->fn->body || depth >= 4) return false;
+    /* The captured k must be read through the same Binding in the lambda's
+     * body; a capture under any other name would hide its uses from the walk. */
+    bool captured = false;
+    for (uint32_t c = 0; c < cl->n_captures && !captured; c++)
+        captured = (cl->captures[c] == k);
+    if (!captured || !serial_k_mentions(cl->fn->body, k)) return false;
+    return serial_k_use_ok(cl->fn->body, k, role, depth + 1);
+}
+
+static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
+                            int depth) {
     if (!x) return true;
     switch (x->kind) {
         case EX_VAR:
             return x->as.var.binding != k;
         case EX_ASCRIBE:
-            return serial_k_use_ok(x->as.ascribe_.inner, k, depth);
+            return serial_k_use_ok(x->as.ascribe_.inner, k, role, depth);
         case EX_RESUME: {
             const ResumeExpr *r = x->as.resume_.resume;
             if (!r) return true;
-            if (!serial_k_is(r->k, k) && !serial_k_use_ok(r->k, k, depth)) return false;
-            return serial_k_use_ok(r->value, k, depth);
+            if (role == K_SERIAL && serial_k_is(r->k, k)) {
+                /* a resume of k is a copying read */
+            } else if (!serial_k_use_ok(r->k, k, role, depth)) {
+                return false;
+            }
+            return serial_k_use_ok(r->value, k, role, depth);
         }
         case EX_CALL: {
-            if (x->as.call_.fn_expr && serial_k_mentions(x->as.call_.fn_expr, k))
-                return false;
             const Binding *fb = x->as.call_.fn_binding;
-            const FnDef *cfd = (fb && g_prog) ? fd_for_binding(g_prog, fb) : NULL;
+            if (x->as.call_.fn_expr) {
+                /* `(f v)` through a fn value: calling the tracked fn is its
+                 * one allowed use. */
+                if (!(role == K_FNPARAM && serial_k_is(x->as.call_.fn_expr, k)) &&
+                    serial_k_mentions(x->as.call_.fn_expr, k))
+                    return false;
+            } else if (fb == k && role != K_FNPARAM) {
+                return false;
+            }
+            const FnDef *cfd = (fb && fb != k && g_prog) ? fd_for_binding(g_prog, fb) : NULL;
             for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
-                if (serial_k_is(x->as.call_.args[i], k) &&
-                    serial_k_param_confined(cfd, i, depth))
+                const Expr *a = x->as.call_.args[i];
+                if (serial_k_is(a, k) && serial_k_param_confined(cfd, i, role, depth))
                     continue;
-                if (!serial_k_use_ok(x->as.call_.args[i], k, depth)) return false;
+                if (serial_k_closure_body_ok(a, k, role, depth) &&
+                    serial_k_param_confined(cfd, i, K_FNPARAM, depth))
+                    continue;
+                if (!serial_k_use_ok(a, k, role, depth)) return false;
             }
             return true;
         }
@@ -9469,33 +9513,51 @@ static bool serial_k_use_ok(const Expr *x, const Binding *k, int depth) {
             /* `(k v)` on a serial-cont elaborates to this resume builtin
              * (elab_call's CC4 dispatch), the handle its argument 0. */
             const BuiltinSpec *sp = x->as.builtin.spec;
-            bool reader = sp && sp->name &&
+            bool reader = role == K_SERIAL && sp && sp->name &&
                           (strcmp(sp->name, "tur_serial_cont_resume") == 0 ||
                            strcmp(sp->name, "tur_serial_cont_serialize") == 0);
             for (uint32_t i = 0; i < x->as.builtin.n; i++) {
                 if (reader && i == 0 && serial_k_is(x->as.builtin.args[i], k)) continue;
-                if (!serial_k_use_ok(x->as.builtin.args[i], k, depth)) return false;
+                if (!serial_k_use_ok(x->as.builtin.args[i], k, role, depth)) return false;
             }
             return true;
         }
         case EX_IF:
-            return serial_k_use_ok(x->as.if_.cond, k, depth) &&
-                   serial_k_use_ok(x->as.if_.then_, k, depth) &&
-                   serial_k_use_ok(x->as.if_.else_or_null, k, depth);
+            return serial_k_use_ok(x->as.if_.cond, k, role, depth) &&
+                   serial_k_use_ok(x->as.if_.then_, k, role, depth) &&
+                   serial_k_use_ok(x->as.if_.else_or_null, k, role, depth);
         case EX_DO:
             for (uint32_t i = 0; i < x->as.do_.n; i++)
-                if (!serial_k_use_ok(x->as.do_.items[i], k, depth)) return false;
+                if (!serial_k_use_ok(x->as.do_.items[i], k, role, depth)) return false;
             return true;
         case EX_LET:
+            for (uint32_t i = 0; i < x->as.let_.n; i++) {
+                const Expr *init = x->as.let_.bindings[i].init;
+                const Binding *lb = x->as.let_.bindings[i].binding;
+                /* `(let [g (fn [x] (k x))] ...)` -- the elaborator hoists a
+                 * lambda argument this way.  Then g is what must not escape. */
+                if (lb && serial_k_closure_body_ok(init, k, role, depth)) {
+                    for (uint32_t j = i + 1; j < x->as.let_.n; j++)
+                        if (!serial_k_use_ok(x->as.let_.bindings[j].init, lb,
+                                             K_FNPARAM, depth))
+                            return false;
+                    if (!serial_k_use_ok(x->as.let_.body, lb, K_FNPARAM, depth))
+                        return false;
+                    continue;
+                }
+                if (!serial_k_use_ok(init, k, role, depth)) return false;
+            }
+            return serial_k_use_ok(x->as.let_.body, k, role, depth);
         case EX_LETREC:
             for (uint32_t i = 0; i < x->as.let_.n; i++)
-                if (!serial_k_use_ok(x->as.let_.bindings[i].init, k, depth)) return false;
-            return serial_k_use_ok(x->as.let_.body, k, depth);
+                if (!serial_k_use_ok(x->as.let_.bindings[i].init, k, role, depth))
+                    return false;
+            return serial_k_use_ok(x->as.let_.body, k, role, depth);
         case EX_MATCH:
-            if (!serial_k_use_ok(x->as.match_.scrutinee, k, depth)) return false;
+            if (!serial_k_use_ok(x->as.match_.scrutinee, k, role, depth)) return false;
             for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
-                if (!serial_k_use_ok(x->as.match_.arms[i].guard, k, depth) ||
-                    !serial_k_use_ok(x->as.match_.arms[i].body, k, depth))
+                if (!serial_k_use_ok(x->as.match_.arms[i].guard, k, role, depth) ||
+                    !serial_k_use_ok(x->as.match_.arms[i].body, k, role, depth))
                     return false;
             return true;
         default:
@@ -9516,7 +9578,7 @@ static bool serial_recv_confines_k(const CTerm *t) {
     if (fd->body->kind == EX_INLINE_C || (fd->binding && fd->binding->body_is_inline_c))
         return false;
     const Binding *k = fd->params[fd->n_params - 1];
-    return k && serial_k_use_ok(fd->body, k, 0);
+    return k && serial_k_use_ok(fd->body, k, K_SERIAL, 0);
 }
 
 static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
