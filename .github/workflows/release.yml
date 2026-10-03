@@ -134,29 +134,17 @@ jobs:
       # engine falling back to cc, which still prints the right answer -- so it
       # fails this check rather than passing it vacuously.
       #
-      # linux-aarch64 is the ONE exception, and it is narrowed rather than off.
-      # That leg failed v0.60.0: on glibc aarch64 the emitted unit reaches
-      # <ucontext.h> -> sys/procfs.h -> sys/user.h, whose
-      # `struct user_fpsimd_struct` c2mir cannot parse, so the engine declines
-      # EVERY program there until the vendored fork learns `__uint128_t` --
-      # docs/reported/jit-xopen-source-guard-inert-on-glibc.md and
-      # docs/reported/c2mir-rejects-uint128.md.  The `release` job needs every
-      # leg, so failing this one publishes NOTHING on any platform, which is
-      # strictly worse for everyone than publishing an archive whose aarch64
-      # `tur jit` takes a documented slow path.
-      #
-      # The exception is therefore conditional on it being THAT fallback: the
-      # engine must be in the archive, the answer must be right, and the
-      # diagnostics must name sys/user.h.  A missing engine, or a fallback for
-      # any other reason, still fails -- which is what stops this from becoming
-      # "aarch64 does not check the engine".  DELETE the exception when the fork
-      # fix lands; the leg then proves the engine runs again, and a stale
-      # exception would hide the next regression.
+      # Every leg is held to it, linux-aarch64 included.  That leg failed
+      # v0.60.0: on glibc aarch64 the emitted unit reaches <ucontext.h> ->
+      # sys/procfs.h -> sys/user.h, whose `__uint128_t` c2mir could not parse,
+      # so the engine declined every program; a narrowed exception for that
+      # one fallback stood here until the vendored fork fixed it
+      # (turmeric-lang/mir#6, docs/archive/jit-xopen-source-guard-inert-on-glibc.md).
+      # A TUR-W0070 on any leg is a regression now, not a known gap.
       - name: Run a program through the JIT from the extracted archive
         run: |
           # Whatever happens below, the engine's archive must be in the tarball:
-          # that is the packaging guarantee this step exists for, and it is
-          # exactly what the aarch64 exception must not be able to hide.
+          # that is the packaging guarantee this step exists for.
           if [ ! -f verify/lib/libtur_mir.a ]; then
             echo "::error::libtur_mir.a is missing from the archive -- the shipped engine is not there"
             exit 1
@@ -178,13 +166,8 @@ jobs:
 
           case "$out" in
             *TUR-W0070*)
-              if [ "${{ matrix.target }}" = "linux-aarch64" ] \
-                 && printf '%s\n' "$out" | grep -q 'sys/user\.h'; then
-                echo "::warning::aarch64: the engine declined through the known sys/user.h gap and cc took over -- see docs/reported/jit-xopen-source-guard-inert-on-glibc.md. Engine present in the archive, answer correct."
-              else
-                echo "::error::the JIT fell back to cc -- the engine did not run"
-                exit 1
-              fi
+              echo "::error::the JIT fell back to cc -- the engine did not run"
+              exit 1
               ;;
             *) echo "The shipped JIT engine runs." ;;
           esac

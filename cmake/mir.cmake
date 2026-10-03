@@ -8,7 +8,7 @@ include_guard(GLOBAL)
 # selection is written at all.
 #
 # The sources are VENDORED under external/mir/: exactly the three translation
-# units below and every file they #include, copied from the rjungemann/mir fork
+# units below and every file they #include, copied from the turmeric-lang/mir fork
 # at the commit external/mir/UPSTREAM records.  external/mir/VENDORED.md has the
 # fixes the fork carries over upstream and how to change them -- never by
 # editing the copy; tools/update-mir.sh re-syncs it from the fork.

@@ -6,7 +6,8 @@ that `tur`'s JIT engine compiles: the three translation units `mir.c`,
 MIR supports. That is about 2.7 MB of a ~55 MB checkout; most of the rest is
 `c-benchmarks/`. `cmake/mir.cmake` builds the `tur_mir` library from it.
 
-The files come from the [rjungemann/mir](https://github.com/rjungemann/mir) fork,
+The files come from the [turmeric-lang/mir](https://github.com/turmeric-lang/mir)
+fork (formerly `rjungemann/mir`; the PR numbers below are that repository's),
 at the commit recorded in [`UPSTREAM`](UPSTREAM). MIR is MIT-licensed; its
 licence is [`LICENSE`](LICENSE).
 
@@ -42,7 +43,7 @@ equivalents of every fix below.
 ## Fixes the fork carries over upstream
 
 ```text
-The pin points at the rjungemann/mir fork: upstream a8ab7c31 (master tip and
+The pin points at the turmeric-lang/mir fork (formerly rjungemann/mir): upstream a8ab7c31 (master tip and
 full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targets:
   b79e3681 -- make_one_ret merged multi-value rets through the LAST ret's
     operand list, which aliases when simplify canonicalizes a trailing
@@ -150,4 +151,29 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     (docs/archive/jit-x86-64-struct-valued-statement-expression-miscompiles.md).
     The emitter already stopped producing the shape, so nothing in the
     generated C depends on this; user inline C still can.
+
+  e502b185 (turmeric-lang/mir#6; pinned at the PR head until it merges) --
+    c2mir rejected every program including <ucontext.h> on Linux aarch64
+    ("sys/user.h:30:1: syntax error on struct"): glibc's <sys/user.h>,
+    reached through <sys/procfs.h>, declares `__uint128_t vregs[32]`, and the
+    target header declared the 16-aligned stand-in only under __APPLE__.  So
+    `tur jit` always fell back to cc on linux-aarch64, which failed the
+    v0.60.0 release's archive JIT step
+    (docs/archive/jit-xopen-source-guard-inert-on-glibc.md).  Declaring it
+    alone would have traded the refusal for a silent skew: glibc's
+    mcontext_t has `__reserved[4096] __attribute__ ((__aligned__ (16)))`,
+    which <sys/cdefs.h> erases for a compiler that is not gcc/clang and c2mir
+    ignored anyway, so ucontext_t was 4544/8 against gcc's 4560/16 and
+    glibc's getcontext/swapcontext wrote past a JIT-allocated one.  The fix
+    also lets attributes through that idiom (an empty function-like
+    `#define __attribute__` is ignored outside pedantic mode), merges a run
+    of attribute specifiers into one list (glibc <pthread.h>), and makes a
+    member's `aligned (N)` raise its alignment as _Alignas does.  Verified
+    under qemu-user with arm64 glibc 2.39: ucontext_t, mcontext_t and
+    FiberBlock match aarch64 gcc's layout, and a cross-built `tur jit` runs
+    hello-world and the fiber/async/channel corpus natively.  Covered by
+    c-tests/new/aarch64-linux-uint128-user-h.c and
+    c-tests/new/attr-aligned-member.c.  Not tested on macOS or MinGW
+    headers, which the `__attribute__` change reaches where they use the
+    same erase idiom.
 ```

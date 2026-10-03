@@ -1,5 +1,5 @@
 # external/mir/UPSTREAM -- where the files in this directory came from.
 # Written by tools/update-mir.sh; do not edit by hand.  Sourced by that script
 # and read by cmake/mir.cmake.
-MIR_REPOSITORY=https://github.com/rjungemann/mir.git
-MIR_COMMIT=96c34860a1fe0dfa4a8b95c92763e6001d0b104e
+MIR_REPOSITORY=https://github.com/turmeric-lang/mir
+MIR_COMMIT=e502b1851968a8a5e16ae8ad9964ed07b73fe797

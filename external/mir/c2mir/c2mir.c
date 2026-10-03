@@ -2396,6 +2396,19 @@ static void define (c2m_ctx_t c2m_ctx) {
     error (c2m_ctx, t->pos, "## at the end of a macro expansion");
   }
   name = id->repr;
+  /* libc headers erase GCC attributes for a compiler that is not gcc or clang
+     -- glibc's <sys/cdefs.h>: `#define __attribute__(xyz)` unless __GNUC__ or
+     __clang__.  c2mir parses attributes (attr_spec) and honours the ones that
+     change layout, so let them through: an erased `aligned (16)` silently
+     shrank glibc's aarch64 ucontext_t from 4560 bytes / align 16 to 4544 / 8,
+     and getcontext/swapcontext then wrote past the end of a JIT-allocated one.
+     Pedantic mode rejects attributes, so it keeps libc's erasure. */
+  if (!c2m_options->pedantic_p && strcmp (name, "__attribute__") == 0 && params != NULL
+      && VARR_LENGTH (token_t, repl) == 0) {
+    VARR_DESTROY (token_t, repl);
+    VARR_DESTROY (token_t, params);
+    return;
+  }
   macro_struct.id = id;
   if (!HTAB_DO (macro_t, macro_tab, &macro_struct, HTAB_FIND, m)) {
     if (strcmp (name, "defined") == 0) {
@@ -4533,6 +4546,13 @@ static node_t try_attr_spec (c2m_ctx_t c2m_ctx, pos_t pos, node_t *asm_part) {
     }
   }
   if ((r = TRY (attr_spec)) != err_node) {
+    node_t more;
+
+    /* GCC accepts a run of attribute specifiers wherever it accepts one --
+       glibc's <pthread.h> declares __pthread_unwind_next with
+       `__attribute__ ((__noreturn__)) __attribute__ ((__weak__))` -- so merge
+       them into one attribute list. */
+    while ((more = TRY (attr_spec)) != err_node) op_flat_append (c2m_ctx, r, more);
     if (c2m_options->pedantic_p)
       error (c2m_ctx, pos, "GCC attributes are not implemented");
     else {
@@ -8688,6 +8708,43 @@ static void process_func_stmtexprs_for_allocation (c2m_ctx_t c2m_ctx, node_t blo
   }
 }
 
+/* The alignment a GCC `__attribute__ ((aligned (N)))` names, or 0.  On a
+   struct member it raises the member's alignment exactly as `_Alignas (N)`
+   does -- it never lowers it (that takes `packed`) -- and the layout must
+   honour it to agree with the platform compiler.  glibc's aarch64
+   <sys/ucontext.h> declares mcontext_t's `__reserved[4096]` this way, so
+   ignoring it made ucontext_t 4544 bytes / align 8 where gcc and clang give
+   4560 / 16.  Only an explicit power-of-two argument is understood; the bare
+   `aligned` (the target's largest alignment) is left alone as before. */
+static int attr_aligned_value (node_t attrs) {
+  int res = 0;
+
+  if (attrs == NULL || attrs->code != N_LIST) return 0;
+  for (node_t n = NL_HEAD (attrs->u.ops); n != NULL; n = NL_NEXT (n)) {
+    node_t id, list, arg;
+    mir_llong v;
+
+    if (n->code != N_ATTR) continue;
+    id = NL_HEAD (n->u.ops);
+    if (id == NULL || id->code != N_ID
+        || (strcmp (id->u.s.s, "aligned") != 0 && strcmp (id->u.s.s, "__aligned__") != 0))
+      continue;
+    list = NL_NEXT (id);
+    if (list == NULL || (arg = NL_HEAD (list->u.ops)) == NULL || NL_NEXT (arg) != NULL) continue;
+    switch (arg->code) {
+    case N_I:
+    case N_L: v = arg->u.l; break;
+    case N_LL: v = arg->u.ll; break;
+    case N_U:
+    case N_UL: v = (mir_llong) arg->u.ul; break;
+    case N_ULL: v = (mir_llong) arg->u.ull; break;
+    default: continue;
+    }
+    if (v > 0 && v <= (1 << 28) && (v & (v - 1)) == 0 && v > res) res = (int) v;
+  }
+  return res;
+}
+
 static const char *check_attrs (c2m_ctx_t c2m_ctx, node_t r, decl_t decl, node_t attrs,
                                 int check_p) {
   node_t n, list, id, alias_id;
@@ -9806,7 +9863,13 @@ static void check (c2m_ctx_t c2m_ctx, node_t r, node_t context) {
     node_t const_expr = NL_NEXT (attrs);
     node_t unshared_specs = specs->code != N_SHARE ? specs : NL_HEAD (specs->u.ops);
     struct decl_spec decl_spec = check_decl_spec (c2m_ctx, unshared_specs, r);
+    int attr_align = attr_aligned_value (attrs);
 
+    /* A member's trailing `__attribute__ ((aligned (N)))` -- see
+       attr_aligned_value.  The layout takes the larger of this and the
+       member type's own alignment, so a smaller N lowers nothing, as in gcc.
+       (The member's type is not laid out yet here; do not ask it.) */
+    if (attr_align > decl_spec.align) decl_spec.align = attr_align;
     create_decl (c2m_ctx, curr_scope, r, decl_spec, NULL, FALSE);
     type = ((decl_t) r->attr)->decl_spec.type;
     if (const_expr->code != N_IGNORE) {
