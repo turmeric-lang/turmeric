@@ -36,14 +36,22 @@
 ;; run to run, so a slow draw would have killed it the way one killed
 ;; r7rs-tail-calls twice.
 ;;
-;; That ~2 us is -O0 plus MIR's JIT codegen, not a trampoline cost.  Compiled
-;; at -O2 the same mechanism is 47 ns a call -- 1e7 dynamic calls in 471 ms,
-;; and a registry HIT is 13 ns (benchmarks/saffron-dyn-tail-results.md, where
-;; T6 is a 2.7x SAVING over the nested-call shape it replaced).  The -O0 in
-;; the `flags` file is deliberate: at -O2 the optimizer collapses these loops
-;; and the fixture stops proving constant stack at all.  So do not read this
-;; fixture's wall clock as a per-call cost, and do not "fix" it by raising the
-;; optimization level -- that deletes the assertion.
+;; That cost is MIR's JIT codegen, not the trampoline -- and not the -O0
+;; either.  `tur jit` and `tur jit --debug` measure indistinguishable on the
+;; same program, so the `flags` file's -O0 moves the COMPILED run and leaves
+;; the JIT one alone.  Compiled at -O2 the same mechanism is 47 ns a call --
+;; 1e7 dynamic calls in 471 ms, and a registry HIT is 13 ns
+;; (benchmarks/saffron-dyn-tail-results.md, where T6 is a 2.7x SAVING over
+;; the nested-call shape it replaced).
+;;
+;; The -O0 is still deliberate for the compiled run: at -O2 the optimizer
+;; collapses these loops and the fixture stops proving constant stack at all.
+;; So do not read this fixture's wall clock as a per-call cost, and do not
+;; "fix" it by raising the optimization level -- that deletes the assertion.
+;;
+;; The JIT-vs-compiled RATIO is not established: the 47 ns baseline is
+;; x86_64 Linux and the JIT figures so far came off a contended laptop, so
+;; they mix machines and load.  A controlled measurement is follow-up work.
 ;;
 ;; run-jit.sh's summary prints the fixtures closest to their budget, so if
 ;; this one creeps back up it will show there before it fails.
