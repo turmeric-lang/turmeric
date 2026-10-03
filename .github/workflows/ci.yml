@@ -1849,8 +1849,15 @@ jobs:
         continue-on-error: true
         run: npx playwright install --with-deps webkit
 
+      # Step-level timeouts, not a job-level one: a job timeout CANCELS the
+      # job, and then the `!cancelled()` report upload below never runs -- the
+      # failure mode docs/archive/macos-jit-hang-loses-both-diagnostics.md
+      # records.  A step timeout fails the step and the evidence still uploads.
+      # Healthy durations on main: gate 7 s, desktop ~3.5 min, mobile ~2 min.
       - name: Run deploy-gate smoke test
+        id: gate
         working-directory: web
+        timeout-minutes: 5
         run: npx playwright test deploy-gate.spec.js --project=desktop
 
       # docs-offline.spec.js asserts a property of the *built* artefact: the
@@ -1901,6 +1908,7 @@ jobs:
       - name: Run broader smoke suite (desktop) -- BLOCKING
         id: desktop
         working-directory: web
+        timeout-minutes: 15
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-desktop.xml
         run: npx playwright test --project=desktop --reporter=list,junit
@@ -1911,11 +1919,18 @@ jobs:
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
           tests/security.spec.js tests/ci.spec.js
 
-      # `always()` because the desktop step above now BLOCKS: without it a
-      # desktop failure skips this step, mobile produces no JUnit, and
-      # collect-playwright-timings reports web_mobile as `skip` with "suite did
-      # not run" -- so a desktop regression would silently cost the mobile row
-      # too, and the skip ledger would blame the wrong thing.
+      # Not the default `success()`, because the desktop step above now
+      # BLOCKS: a desktop failure would skip this step, mobile would produce no
+      # JUnit, and collect-playwright-timings would report web_mobile as `skip`
+      # with "suite did not run" -- so a desktop regression would silently cost
+      # the mobile row too, and the skip ledger would blame the wrong thing.
+      #
+      # Not `always()` either: that also ran it after the deploy gate failed,
+      # and a gate failure is usually a wasm module that never reaches Ready.
+      # Then every mobile test waits out its timeout, three times over with
+      # `retries: 2`, and the job sat "in progress" for most of an hour after
+      # its verdict was already in (PR #1053, 2026-10-03).  The gate is the
+      # precondition the desktop step already skips on; mobile does too.
       #
       # Still non-blocking, and NOT because its tests are worse: mobile's
       # isolated-flake rate (1.9%) is lower than desktop's and its clean streak
@@ -1927,9 +1942,10 @@ jobs:
       # PR, which is infrastructure flake, not a test signal.
       - name: Run mobile smoke suite (non-blocking)
         id: mobile
-        if: always()
+        if: ${{ !cancelled() && steps.gate.outcome == 'success' }}
         working-directory: web
         continue-on-error: true
+        timeout-minutes: 10
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-mobile.xml
         run: npx playwright test --project=mobile --reporter=list,junit
@@ -1950,7 +1966,7 @@ jobs:
             echo
             echo "| suite | outcome |"
             echo "|---|---|"
-            echo "| deploy-gate (blocking) | passed |"
+            echo "| deploy-gate (blocking) | ${{ steps.gate.outcome }} |"
             echo "| desktop (blocking) | ${{ steps.desktop.outcome }} |"
             echo "| mobile (non-blocking) | ${{ steps.mobile.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
