@@ -204,7 +204,7 @@ them.
   exhaustion is `error: amb tree exhausted`, catchable by `guard`.
 - **Not in `(srfi 216)`**, which is a finished spec; adding names to it would
   break programs that define them.
-- **Name: `(sicp extras)`**, to be confirmed. Only `(scheme ...)` and
+- **Name: `(sicp extras)`** (decided 2026-10-03). Only `(scheme ...)` and
   `(srfi N)` are table-driven built-ins today (`SCHEME_LIBS[]`,
   `SRFI_LIBS[]` in src/compiler/scheme_lower.c), so this needs a third
   head or a generalization of the SRFI table to a named-library row. The
@@ -251,10 +251,15 @@ them.
 1. ~~Is CC BY-SA test content acceptable in the repo?~~ **Decided
    2026-10-03:** a separate repo (D3).
 2. ~~Should the `#lang sicp` extras ship?~~ **Decided 2026-10-03:** yes,
-   as a built-in library (D4). Open: confirm the name `(sicp extras)`.
+   as a built-in library (D4), named `(sicp extras)`.
 3. ~~Does a program with no `(import ...)` get the standard procedures?~~
    **Measured 2026-10-03:** yes, on both back ends
    (`(define (square x) (* x x)) (display (square 5))` prints 25); the
    guide says so.
-4. The corpus repo's name and creation: `turmeric-lang/sicp-corpus`,
-   public, CC BY-SA 4.0. Not created yet.
+4. ~~The corpus repo~~ **Created 2026-10-03:**
+   [turmeric-lang/sicp-corpus](https://github.com/turmeric-lang/sicp-corpus),
+   public, CC BY-SA 4.0, with `run.sh`, CI, `(corpus prelude)` standing in
+   for SRFI 216, and section 1.1. Adding 1.1 found
+   [r7rs-program-file-named-with-leading-digit-fails-to-compile](../reported/r7rs-program-file-named-with-leading-digit-fails-to-compile.md),
+   which is why its files are named `sec-<section>.scm`.
+5. ~~Name for the extras library~~ **Decided 2026-10-03:** `(sicp extras)`.
