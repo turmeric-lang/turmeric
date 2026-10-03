@@ -1,0 +1,53 @@
+;; constrained-generic-monomorph-passbyptr-arg: a constrained generic over a
+;; pass-by-pointer aggregate (a 3-word struct, a wide sum) did not compile.
+;; Inside the monomorph, the call to the re-resolved instance method spilled
+;; only its RECEIVER to a temp and passed its address; every other wide
+;; argument went by value into a `const T *` formal.  The instance method's
+;; own spec clone declared its params by value and then dereferenced them,
+;; because the pass-by-pointer registry ignored that the clone spells them
+;; from the spec.  And a `let`-bound method result's merge temp took the
+;; REPRESENTATIVE instance's result type (`Too` in the `Two` clone).
+;;
+;; Covered: two- and three-struct-argument methods, an `int` argument beside
+;; them, a generic relaying to a generic through a `let`, and a wide sum type.
+;; Every line matches `tur --interpret`.
+
+(defstruct Reg :copy [a : int b : int c : int])
+(defdata Shape :copy (Circ [r : int cx : int cy : int]) (Dot))
+
+(defclass Join [t]
+  (join [x : t y : t] : t)
+  (pick3 [x : t y : t z : t n : int] : t)
+  (weight [x : t k : int] : int))
+
+(definstance Join [Reg]
+  (join [x y] (make-struct Reg (+ (.a x) (.a y)) (+ (.b x) (.b y)) (+ (.c x) (.c y))))
+  (pick3 [x y z n] (if (= n 0) x (if (= n 1) y z)))
+  (weight [x k] (* k (+ (.a x) (+ (.b x) (.c x))))))
+
+(definstance Join [Shape]
+  (join [x y] (match x (Circ r cx cy) (match y (Circ r2 a b) (Circ (+ r r2) cx cy) (Dot) x) (Dot) y))
+  (pick3 [x y z n] (if (= n 0) x (if (= n 1) y z)))
+  (weight [x k] (match x (Circ r cx cy) (* k r) (Dot) 0)))
+
+(defn merge-two [T] [(Join T)] [p : T q : T] : T (join p q))
+(defn merge-three [T] [(Join T)] [p : T q : T r : T] : T
+  (let [pq (merge-two p q)]
+    (join pq r)))
+(defn third [T] [(Join T)] [p : T q : T r : T] : T (pick3 p q r 2))
+(defn heavy [T] [(Join T)] [p : T q : T] : int (+ (weight p 2) (weight q 3)))
+
+(defn main [] : int
+  (let [r1 (make-struct Reg 1 2 3)
+        r2 (make-struct Reg 10 20 30)
+        r3 (make-struct Reg 100 200 300)]
+    (println (.a (merge-two r1 r2)))
+    (println (.c (merge-three r1 r2 r3)))
+    (println (.b (third r1 r2 r3)))
+    (println (heavy r1 r2)))
+  (let [s1 (Circ 1 5 6)
+        s2 (Circ 2 7 8)]
+    (println (weight (merge-three s1 s2 (Dot)) 1))
+    (println (weight (third s1 s2 s1) 10))
+    (println (heavy s1 s2)))
+  0)

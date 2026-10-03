@@ -6372,7 +6372,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Phase D: record which params are pbp for field-access and call-site handling. */
     uint32_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
-    if (!fd->closure && !body_is_inline_c) {
+    /* constrained-generic-monomorph-passbyptr-arg: an ABI-spec clone spells
+     * its parameters from the spec's argument types, BY VALUE (the
+     * `use_abi_spec` arm of the signature loop), so none of them is a `const
+     * T *` however wide -- registering one sent every use through the pointer
+     * path: `*(y)` on a `tur_adt_Reg y`. */
+    bool spec_params_by_value = ctx->current_abi_specialization &&
+                                ctx->current_abi_specialization->fn == fd;
+    if (!fd->closure && !body_is_inline_c && !spec_params_by_value) {
         for (uint32_t _pi = 0; _pi < fd->n_params; _pi++) {
             Type pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[_pi])
                 ? *e->type.as.fn.arg_full_types[_pi] : fd->param_types[_pi];

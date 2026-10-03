@@ -1474,6 +1474,7 @@ bool emit_expr_abstract_under_active_spec(EmitCtx *ctx, const Expr *e);
  * takes the receiver by `const T *`, so the by-value receiver arg must be passed
  * by address.  Defined in emit_core.c. */
 bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call);
+bool emit_reresolved_param_is_by_ptr(EmitCtx *ctx, const Expr *call, uint32_t i);
 char *name_for_binding(EmitCtx *ctx, const Binding *b);
 /* WIN1: emit the binary-stdout prologue for a generated main(). Windows opens
  * stdout in text mode, which would turn every 

@@ -1488,6 +1488,16 @@ static bool call_ordinary_defn_byval_aggregate(EmitCtx *ctx, const Expr *call,
     if (!call || call->kind != EX_CALL || call->as.call_.is_poly_call)
         return false;
     const Binding *fb = call->as.call_.fn_binding;
+    /* constrained-generic-monomorph-passbyptr-arg: a dictionary-dispatched
+     * call's fn_binding is the elaborator's REPRESENTATIVE instance method;
+     * inside a spec the method that runs is the one this spec re-resolves to,
+     * and only its declared result says what the call yields.  Reading the
+     * representative's typed `(let [pq ...] (join pq r))`'s merge temp in the
+     * `Two` clone as `tur_adt_Too`. */
+    if (call->as.call_.dict_arg && !call_dispatch_is_static(call)) {
+        FnDef *rfd = emit_reresolve_method_fndef(ctx, call);
+        if (rfd && rfd->binding) fb = rfd->binding;
+    }
     if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.result_full_type)
         return false;
     if (!fb->is_global || fb->is_poly_fn || fb->poly_type) return false;
@@ -13950,8 +13960,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * the int64 carrier's by-value ABI.  Scoped to arg 0 (the
                  * receiver / dispatch tyvar) and to callees the predicate
                  * confirms take the receiver by pointer. */
-                if (i == 0 && !needs_fn_cast &&
-                    emit_reresolved_receiver_is_by_ptr(ctx, e)) {
+                if (!needs_fn_cast && raw[0] != '&' &&
+                    !(i > 0 && expr_is_pbp_param(ctx, emit_arg)) &&
+                    emit_reresolved_param_is_by_ptr(ctx, e, i)) {
                     Type _recv_ty;
                     if (!emit_var_spec_arg_type(ctx, emit_arg, &_recv_ty))
                         _recv_ty = emit_resolve_type(ctx, emit_arg->type);
