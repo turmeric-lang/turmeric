@@ -6254,7 +6254,7 @@ static const RtBodyWrites *rt_body_writes(Elab *e, const Form *body) {
         if (!nv) return NULL;
         for (uint32_t i = 0; i < g_rt_body_writes.cap; i++) {
             if (!g_rt_body_writes.v[i].body) continue;
-            uintptr_t x = (uintptr_t)g_rt_body_writes.v[i].body;
+            uint64_t x = (uint64_t)(uintptr_t)g_rt_body_writes.v[i].body;
             x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
             uint32_t h = (uint32_t)x & (ncap - 1);
             while (nv[h].body) h = (h + 1) & (ncap - 1);
@@ -6264,7 +6264,7 @@ static const RtBodyWrites *rt_body_writes(Elab *e, const Form *body) {
         g_rt_body_writes.v = nv;
         g_rt_body_writes.cap = ncap;
     }
-    uintptr_t x = (uintptr_t)body;
+    uint64_t x = (uint64_t)(uintptr_t)body;
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     uint32_t mask = g_rt_body_writes.cap - 1;
     uint32_t h = (uint32_t)x & mask;
