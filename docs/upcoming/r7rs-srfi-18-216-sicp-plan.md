@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: proposed (2026-10-03). Extends docs/archive/r7rs-srfi-plan.md
+Status: in progress -- T0 done 2026-10-03. Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -128,21 +128,37 @@ Turmeric side calls back only `thread-entry__`.
 ### D2 -- SRFI 216 is a `library` row over 18 and 27
 
 `stdlib/srfi/216.scm`, written fresh (not the reference, see Section 1).
-`random` over `(srfi 27)`: check whether the pruner drops enough of 27's
-2,076 lines when only `random-integer`/`random-real` are reached; if not,
-bind to `stdlib/random.tur` through the seam instead (216 asks for no
-saveable state). `test-and-set!` locks one private mutex.
+`random` is over `(srfi 27)`. **Measured at T0:** the pruner does not drop
+27's top-level state, so every `(srfi 216)` import costs what importing
+`(srfi 27)` does, whether or not the program calls `random`: +142 KB of
+emitted C over a bare program (1.51 MB to 1.65 MB, +9%), and the build stays
+under a second. **Scheduled as stage T0b** (Section 4), not left open.
+Binding `random` to `stdlib/random.tur` instead, as an earlier draft
+suggested, is not a drop-in: its float functions return `:int` (a scaled
+integer, `rand-float`, `random-next-float!`), and it has no bignum ranges,
+which SICP's Fermat test (1.2.6) reaches with a large `n`. `test-and-set!` locks one private mutex once T3 has threads; until
+then nothing else can run between its test and its set.
+
+**`parallel-execute` before SRFI 18 (decided at T0).** Not an error: it
+runs its thunks one after another, in argument order. That is a schedule a
+concurrent run may produce, so every result is one SICP 3.4 allows, and the
+section's code (serializers, mutexes over `test-and-set!`) runs. The cost is
+that no interleaving ever shows; sicp-guide.md says so in its 3.4 entry. T3
+replaces it with real threads.
 
 **Conflicts (D5 of the SRFI plan):** `stream-null?` and `the-empty-stream`
 also exist in `(srfi 41)` with different representations; importing both is
 an error naming `(prefix (srfi 41) s:)`. `random` does not collide with
 anything in `(scheme base)`.
 
-**User redefinition must still win.** Readers paste the book's own
-`(define nil '())` and `(define (stream-car s) ...)` after importing 216;
-pin that a program's definition shadows the import (R7RS calls redefining an
-imported name an error, but the existing `r7rs-program-shadows-names`
-behavior allows it -- keep it consistent).
+**A program that defines an imported name is refused (corrected at T0).**
+An earlier draft said a reader's own `(define nil '())` should shadow the
+import. The SRFI machinery already decides otherwise for every SRFI
+(`srfi_bind`, R7RS 5.2): the program is refused, and the message names
+`(except (srfi 216) nil)` as the fix. T0 keeps that rule rather than make
+216 a special case. It costs SICP little: the book defines none of 216's
+names itself (its `stream-car`/`stream-cdr` are not in 216). The guide says
+what to do.
 
 ### D3 -- a SICP corpus as a test suite
 
@@ -218,16 +234,44 @@ them.
 
 ## 4. Stages
 
-- **T0 -- SRFI 216 minus threads.** Row + file with every export except
-  `parallel-execute`/`test-and-set!` (those raise "needs (srfi 18), stage
-  T1"); fixture; the reference test suite's non-thread checks. Unblocks
-  readers for chapters 1-3.5 immediately.
+- **T0 -- SRFI 216 before threads. DONE 2026-10-03.** Row, file,
+  `(features)` entry and guide row, all ten exports (`parallel-execute`
+  sequential, see D2). The reference suite, rewritten into chibi's `test`
+  vocabulary, under `tests/r7rs/srfi/216` (21 of 21 on both back ends,
+  floor 21); `tests/fixtures/r7rs-srfi-216` runs book-style 1.2.6, 2.2.1, 3.4
+  and 3.5 code; `errors/r7rs-srfi-216-41-conflict` pins the refusal. The
+  guide's paste-in prelude became `(import (srfi 216))`.
+- **T0b -- `(srfi 216)` stops paying for all of SRFI 27.** Today every
+  import adds 142 KB of emitted C (D2), whether or not the program calls
+  `random`. **Done when:** a program that imports `(srfi 216)` and never
+  calls `random` emits the same C, within noise, as one without the import,
+  and a program that calls `random` adds only what `random-integer` and
+  `random-real` reach. Pin both with a size check, as
+  `tests/check-r7rs-srfi-prune.sh` does for the other SRFIs. Directions, in
+  order of preference:
+  1. Teach the SRFI pruner (src/passes/srfi_prune.c) to drop SRFI 27's
+     top-level state (`default-random-source`) when nothing
+     reached keeps it. This helps every `(srfi 27)` importer,
+     not only 216. Start from what r7rs-srfi-plan S7 measured: 27 keeps
+     2,076 lines "the pruner cannot drop".
+  2. Failing that, a small generator of 216's own for `random` (fixnum and
+     float ranges in inline C, with a bignum range built from fixnum draws
+     in Scheme), so 216 no longer imports 27. Mind the inline-C costs
+     r7rs-srfi-plan D3 lists: an interpreter twin, and the region-note and
+     GC-rooting audits.
+- **SRFI 18 (T1-T3) is part of this plan and required, not optional.**
+  SICP 3.4 is about interleavings, and the sequential `parallel-execute`
+  (D2) can never show one. The plan is not done until T3 has replaced it
+  and the guide's "one after another" caveat is gone. SRFI 18 also stands
+  on its own as an R7RS library people expect.
 - **T1 -- SRFI 18, compiled.** D1's two halves; fixture
   `r7rs-srfi-18` (`requires.compiled` until T2); the stress cases from the
   existing r7rs-threads fixtures re-expressed through the SRFI API.
 - **T2 -- SRFI 18 under turi.** Native overrides on fibers; drop the
   `requires.compiled`.
-- **T3 -- 216's thread procedures** over 18; the reference suite in full.
+- **T3 -- 216's thread procedures over 18.** `parallel-execute` starts a
+  thread per thunk and joins them all; `test-and-set!` takes a mutex. The
+  guide's 3.4 entry loses its "one after another" caveat.
 - **T0a -- `(sicp extras)`** (D4): the library-head change and the file;
   a fixture with the guide's `amb` cases on both back ends. Independent of
   T0, and the guide's extras block becomes the import.

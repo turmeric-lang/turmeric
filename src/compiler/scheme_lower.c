@@ -488,6 +488,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  98, SRFI_BUILTIN,    "An interface to access environment variables", "stdlib/srfi/98.scm", NULL },
     { 105, SRFI_NOLIB,      "Curly-infix-expressions", NULL,
         "`{a + b}` reads in every #lang, #lang r7rs included" },
+    { 216, SRFI_LIBRARY,    "SICP Prerequisites (Portable)", "stdlib/srfi/216.scm", NULL },
 };
 #define N_SRFI_LIBS (sizeof(SRFI_LIBS) / sizeof(SRFI_LIBS[0]))
 static const SrfiRow *srfi_row(int64_t num) {
