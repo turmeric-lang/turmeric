@@ -3914,7 +3914,7 @@ static PtClass      param_thread_class(const FnDef *fd, uint32_t pi);
 
 static int fvm_slot(const FvMulti *m, const Binding *b) {
     if (!m || !b || !m->cap) return -1;
-    uintptr_t x = (uintptr_t)b;
+    uint64_t x = (uint64_t)(uintptr_t)b;
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     for (uint32_t h = (uint32_t)x & (m->cap - 1);; h = (h + 1) & (m->cap - 1)) {
         if (!m->keys[h]) return -1;
@@ -4957,7 +4957,7 @@ static void fv_multi_init(FvMulti *m, const Binding *const *targets, int n) {
         m->dyn_head[i] = -1;
         const Binding *b = targets[i];
         if (!b || fvm_slot(m, b) >= 0) continue;
-        uintptr_t x = (uintptr_t)b;
+        uint64_t x = (uint64_t)(uintptr_t)b;
         x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
         uint32_t h = (uint32_t)x & (cap - 1);
         while (m->keys[h]) h = (h + 1) & (cap - 1);

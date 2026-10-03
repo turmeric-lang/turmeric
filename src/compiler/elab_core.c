@@ -427,8 +427,11 @@ bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span) {
  * key is the Symbol pointer. */
 #define SCOPE_INDEX_MIN 32
 
+/* Mixed at a fixed 64-bit width: a `uintptr_t` is 32 bits on wasm32, where
+ * `>> 33` is an over-wide shift (UB) -- the Try Turmeric worker hung in
+ * turi_wasm_init on it.  On LP64 this is bit-identical (see promo_hash). */
 static uint32_t scope_idx_hash(const Symbol *name) {
-    uintptr_t x = (uintptr_t)name;
+    uint64_t x = (uint64_t)(uintptr_t)name;
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     return (uint32_t)x;
 }

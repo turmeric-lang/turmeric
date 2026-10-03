@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.60.0` -- the JIT engine and its vendored MIR are on by default, a default `tur build` links the prebuilt runtime preamble instead of recompiling it (10-15% faster builds on Linux and Windows), `stdlib/either.tur` is generic in `(Either L R)`, and the repos now live in the `turmeric-lang` GitHub org.
+**Latest release:** `v0.60.1` -- the linux-aarch64 release leg publishes again (v0.60.0 was tagged but never released), the JIT engine and its vendored MIR are on by default, a default `tur build` links the prebuilt runtime preamble instead of recompiling it (10-15% faster builds on Linux and Windows), and `Arrow` composition is specialized at the call's element types.
 
 ## What
 

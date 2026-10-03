@@ -483,7 +483,7 @@ static const Binding **cfd_keys;
 static const FnDef   **cfd_vals;
 
 static uint32_t cfd_slot(const Binding *k) {
-    uintptr_t x = (uintptr_t)k;
+    uint64_t x = (uint64_t)(uintptr_t)k;
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     return (uint32_t)x & (cfd_cap - 1);
 }

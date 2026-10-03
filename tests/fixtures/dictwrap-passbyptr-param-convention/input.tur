@@ -1,0 +1,40 @@
+;; dictwrap-passbyptr-param-convention -- the per-instance dict wrapper must
+;; spell a pass-by-ptr aggregate parameter the way the impl and the slot do.
+;;
+;; A method whose RESULT is a by-value ADT forces `__dictwrap_*` to exist (the
+;; result rides back as a malloc'd word).  Its PARAMS here are ordinary
+;; pass-by-ptr structs, which the impl is emitted with as `const T *` and which
+;; the dict slot typedef also spells `const T *`.  The wrapper used to spell
+;; them `T` -- by value -- so it handed a struct to an impl expecting a pointer
+;; and was then assigned into a `const T *` slot:
+;;
+;;   error: incompatible type for argument 1 of '__inst_Join_join_Reg'
+;;   warning: initialization of 'int64_t (*)(const tur_adt_Reg *, ...)'
+;;            from incompatible pointer type 'int64_t (*)(tur_adt_Reg, ...)'
+;;
+;; Three int64 fields so the struct is over the by-value threshold and actually
+;; takes the pass-by-ptr path; the constrained generic is what routes the call
+;; through the dict rather than straight to the impl.
+;;
+;; Found as the last red job on turmeric-spices CI (the `crdt` spice, whose
+;; JoinSemilattice/LwwRegister instances have exactly this shape).
+
+(defstruct Reg [a : int b : int c : int])
+
+(defclass Join [t]
+  (join [x : t y : t] : t))
+
+(definstance Join [Reg]
+  (join [x y] y))
+
+;; The dict singleton is emitted (and its slot type-checked against the
+;; wrapper) for any instance, so a direct call is enough to pin this -- no
+;; constrained generic, which would drag in the separate monomorph defect
+;; reported alongside this fix.
+(defn main [] : int
+  (let [r (join (make-struct Reg 1 2 3)
+                (make-struct Reg 10 20 30))]
+    (println (.a r))
+    (println (.b r))
+    (println (.c r)))
+  0)

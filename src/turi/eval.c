@@ -244,7 +244,7 @@ typedef struct TuriProvSet {
 } TuriProvSet;
 
 static size_t prov_hash(const void *p) {
-    uintptr_t x = (uintptr_t)p;
+    uint64_t x = (uint64_t)(uintptr_t)p;
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     return (size_t)x;
 }

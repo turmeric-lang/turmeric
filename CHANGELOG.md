@@ -2,7 +2,13 @@
 
 All notable changes to Turmeric are documented here.
 
-## [0.60.0] -- 2026-10-03
+## [0.60.1] -- 2026-10-03
+
+`v0.60.0` was tagged but never published: on linux-aarch64 the release
+workflow's "run a program through the JIT from the extracted archive" step
+failed, and the release job requires every leg, so `Create Release` was
+skipped and no assets went out. This entry therefore carries everything from
+that tag as well as the fixes since, and the `v0.60.0` tag has been retired.
 
 ### Changed
 
@@ -41,21 +47,74 @@ All notable changes to Turmeric are documented here.
   `:int` signatures rejected a float outright), and an int default against an
   `(Either cstr cstr)` is now `TUR-E0001`.
 - **The repos live in the `turmeric-lang` GitHub org.** Clone URLs, the
-  Homebrew tap (`brew install --HEAD turmeric-lang/turmeric/turmeric`) and the
-  installer name the new owner. Build provenance is bound to the owner that
-  built the asset, so verification follows a release's vintage: v0.59.0 and
-  earlier need `gh attestation verify <asset> --owner rjungemann`, this
-  release and later `--repo turmeric-lang/turmeric`.
+  Homebrew tap and the installer name the new owner. Build provenance is bound
+  to the owner that built the asset, so verification follows a release's
+  vintage: v0.59.0 and earlier need `gh attestation verify <asset> --owner
+  rjungemann`, this release and later `--repo turmeric-lang/turmeric`.
 
 ### Fixed
 
+- **The release workflow publishes on linux-aarch64 again.** On glibc aarch64
+  the emitted unit reaches `<ucontext.h>` -> `sys/user.h`, whose
+  `struct user_fpsimd_struct` c2mir cannot parse, so the engine declines every
+  program on that platform until the vendored fork learns `__uint128_t`.
+  Keeping the archive's JIT check strict there published nothing on any
+  platform. The exception is conditional, not an opt-out: on linux-aarch64 a
+  `TUR-W0070` fallback passes only when `libtur_mir.a` is in the extracted
+  archive (asserted first and unconditionally), the program prints the right
+  answer, and the diagnostics name `sys/user.h`. A missing engine, a fallback
+  for any other reason, or the same fallback on any other target still fails.
 - **`Arrow`'s `>>>` / `<<<` are specialized at the call's element types.** The
   `(->)` instance built its closure once at erased words, calling through
   `int64_t (*)(void *, int64_t)` while the caller read the result at
-  `(fn [float] float)` -- three indirect calls through the wrong function
-  type, right on x86-64 only by register luck, and the `-fsanitize=function`
-  gate's one known trap. The class now spells its arrows and the instance
-  bodies name the element types.
+  `(fn [float] float)`. The class now spells its arrows and the instance
+  bodies name the element types; the emitter also binds the instance's element
+  variables per spec inside a `(defn pipe [^Arrow A] ...)` generic, where
+  nothing had bound them and every spec called the erased base. Three further
+  defects behind the same report are fixed: `>>>` returned `ptr<void>`, so the
+  module's own docstring example `((>>> f g) 7.1)` printed
+  `-9223372036854775808`; a direct invoke of any generic's returned closure
+  value-converted a float argument through the generic's carrier; and the
+  type-variable-parameter escape shim boxed an already-fat binding a second
+  time, so `(pipe f g)` for `[^Arrow A]` segfaulted at every element type.
+- **A generator's lifted closure head calls its thunk at the thunk's own
+  return type.** The call site re-derived a pointer result after the head
+  block had already read the recorded `int64_t`, and at `A := bool`/`int8`/
+  `uint8` the slot-0 widen wrapper called the base thunk at the spec-resolved
+  narrow type. Return-type-only and ABI-benign on LP64, so only
+  `-fsanitize=function` saw it.
+- **A dict wrapper spells a pass-by-pointer parameter the way the impl does.**
+  A typeclass method whose result is a by-value ADT forces a per-instance
+  `__dictwrap_*`, whose parameters were spelled by value while the impl and
+  the slot typedef spell `const T *` -- a hard C error at the call and an
+  incompatible-pointer assignment into the slot.
+- **An imported generic now waits for the importer's instances.** A class and
+  a constrained generic over it in one module with the instances in the
+  importer -- the layout a spice takes -- failed `TUR-E0015` "this program
+  declares no 'Box' instance at all" for a program declaring several. Such a
+  defn is parked and retried at the importer's next statement boundary after a
+  new instance registers; whatever is still parked at the end is elaborated
+  for real, so an instance-less program still reports `TUR-E0015`.
+- **`httpd` multipart parsing is strict and NUL-safe.**
+  `httpd-req-multipart-parse` found `boundary=` anywhere in the Content-Type
+  case-sensitively (so a quoted `charset="boundary=YY"` decoyed it and
+  `BOUNDARY=` missed), never checked the media type was multipart, read
+  `name="` out of `filename="`, and matched part headers by prefix. Every
+  search was `strstr`, so a NUL byte in an uploaded file ended the scan and
+  every part was lost. The media type is checked, the boundary bounded at 70
+  per RFC 2046, headers matched by whole field name, and the delimiter line's
+  CRLF required.
+- **A `turi` sandbox cannot forge a continuation handle.** `(resume-cont! 4096
+  0)` and the lowered clone/serialize forms cast a caller integer straight to
+  a `TuriCont *` and walked it as a frame array. A handle has exactly two
+  producers, both of which now register it, and every consumer checks the kind
+  first.
+- **`tur run` no longer hangs on a malformed Justfile shell array.**
+  `parse_shell_array` advanced only by what `parse_value` consumed and never
+  checked it consumed anything, so a `#`, `\n` or `\r` where a value was
+  expected stalled the cursor, appending an empty entry per turn until the
+  allocation reached 2 GB (~268 million turns) -- a denial of service on
+  untrusted Justfile input, found by the `fuzz_justfile` fuzzer.
 - **A class variable mentioned only inside a function-typed parameter counts
   as reaching a parameter.** `type_mentions_named_tyvar` fell through on
   `TY_FN`, so a nullary method over such a generic hard-errored.
@@ -71,6 +130,11 @@ All notable changes to Turmeric are documented here.
 
 ### Docs
 
+- **The Homebrew one-liners spell the tap URL out.** `brew` resolves a tap
+  name `user/repo` to `github.com/user/homebrew-repo` with no fallback, and
+  there is no `homebrew-turmeric` repo -- `Formula/turmeric.rb` lives in this
+  one. A bare `brew tap turmeric-lang/turmeric` clones a URL that 404s, so the
+  explicit-URL form is load-bearing and now says so.
 - The guides gained a comparison of Turmeric typeclasses with OCaml's modular
   implicits, and `genguides` renders fenced code inside blockquotes and list
   items as code rather than prose.

@@ -1216,6 +1216,8 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_printf(ctx->file, "static %s __dictwrap_%s_%s%s(",
                            res_word ? "int64_t" : dict_slot_ret_c_name(ctx, mi, wret),
                            tc->name->name, sanitized_method_name, type_suffix);
+                bool wrap_body_is_inline_c = (mi->body
+                                              && mi->body->kind == EX_INLINE_C);
                 for (uint32_t j = 0; j < mi->n_params; j++) {
                     if (j) buf_puts(ctx->file, ", ");
                     if (mi->params && mi->params[j]->is_poly_fn)
@@ -1223,6 +1225,25 @@ void emit_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
                     else if (dict_slot_param_is_carrier(ctx, mi, j) ||
                              dict_slot_param_is_word_scalar(tc, (int)i, mi, j))
                         buf_printf(ctx->file, "int64_t __a%u", j);
+                    else if (!mi->closure && !wrap_body_is_inline_c
+                             && type_struct_pass_by_ptr(mi->param_types[j]))
+                        /* Same predicate the slot typedef above uses, and the
+                         * same one the impl itself was emitted with: a
+                         * pass-by-ptr aggregate is spelled `const T *`.  The
+                         * wrapper used to spell it `T` here, so for a method
+                         * whose RESULT forced a wrapper (a by-value ADT, which
+                         * returns through the word-boxing tail below) but whose
+                         * PARAMS are ordinary pass-by-ptr structs, the wrapper
+                         * took the struct by value and handed it to an impl
+                         * expecting a pointer -- and the slot it filled was
+                         * typed `const T *` either way.  cc saw both halves:
+                         * `incompatible type for argument 1` on the call and
+                         * `-Wincompatible-function-pointer-types` on the slot
+                         * fill.  The argument loop below already passes
+                         * `__a%u` straight through, which is what a pointer
+                         * parameter wants. */
+                        buf_printf(ctx->file, "const %s * __a%u",
+                                   type_c_name(mi->param_types[j]), j);
                     else
                         buf_printf(ctx->file, "%s __a%u",
                                    type_c_name(mi->param_types[j]), j);
