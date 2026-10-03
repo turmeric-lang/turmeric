@@ -1,6 +1,7 @@
 # turmeric-spices CI -- build the compiler once, shard the spices
 
-> **Status: PLAN, nothing implemented.** Written 2026-10-03 in response to
+> **Status: PLAN; S1 and S3 verified by a probe run, nothing merged.**
+> Section 2.1 has the evidence. Written 2026-10-03 in response to
 > "turmeric-spices CI runs seem to clog up CI runs for other repos, because it
 > swamps GH Actions with dozens of small actions."
 > **Type:** CI / test infrastructure (in the turmeric-spices repo, plus one
@@ -8,7 +9,7 @@
 > **Touches:**
 > [`turmeric-spices/.github/workflows/ci.yml`](https://github.com/turmeric-lang/turmeric-spices/blob/main/.github/workflows/ci.yml)
 > (the `test-spice`, `discover-spices` and `manifest-parse` jobs), a new
-> `ci/run-shard.sh` there, and -- section 7 -- a `concurrency:` block on this
+> `scripts/run-shard.sh` there, and -- section 7 -- a `concurrency:` block on this
 > repo's [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
 >
 > **Decided:**
@@ -99,8 +100,15 @@ it in `<exe_dir>/src`. It prefers `libturt_runtime.a` and falls back to
 already sets to the turmeric checkout. So the artifact is:
 
 - `build/tur`
-- `build/src/libturt_runtime.a`, and `build/src/libturi.a` if it is built
-- anything else the S1 verification turns up (see below)
+- `build/src/libturt_runtime.a`, `build/src/libturt_preamble.a` and
+  `build/src/libturi.a`
+- `build/libtur_mir.a`
+- `build/toolchain.txt`, the build job's `cc --version` (see 2.1)
+
+Leave `build/src/libturi_wasm.a` out. It is as large as `libturi.a`
+(114 MB on Linux) and nothing on the `tur test` path links it. The probe
+shipped it anyway: its tarball of every `*.a` came to 69 MB on Linux and
+61 MB on macOS.
 
 Pack these with `tar` before uploading. `actions/upload-artifact` drops the
 executable bit, and a `tur` without it fails as `Permission denied`.
@@ -108,24 +116,60 @@ executable bit, and a `tur` without it fails as `Permission denied`.
 The shard jobs still check out turmeric at the pinned SHA, because they need
 the stdlib and the runtime headers that emitted C includes. Their job
 becomes: download the artifact, untar it into `turmeric/build/`, then carry
-on as today.
+on as today. That exact location is required, not just tidy: see 2.1.
 
-**Verification needed before relying on it.** The claim is that a `tur`
-built in one job works when copied into another job's workspace. Two things
-could break that, and both need checking on a branch:
+### 2.1 Verified: run 37143548334 (branch `claude/ci-shard-probe`)
 
-1. **Absolute paths compiled into `tur`.** Example: a source root baked in
-   by CMake. On GitHub-hosted runners `$GITHUB_WORKSPACE` is the same path in
-   every job of a repo on the same OS, so a baked path should still resolve.
-   Confirm this rather than assume it.
-2. **ASan runtime pairing.** The fixture compiler must be the same toolchain
-   that built the sanitized archive (CLAUDE.md, "macOS: building fixtures
-   against a sanitized `libturi.a`"). Both jobs run on the same
-   `macos-latest` image, so they should match. If GitHub rolls the image
-   between the build job and a shard job, they won't, and that shows up as
-   `___asan_version_mismatch_check_v8`. The guard is to record the build
-   job's `cc --version` in the artifact and have each shard compare its own
-   and fail with a clear message on a mismatch.
+A throwaway workflow on a turmeric-spices branch (no PR, so the full matrix
+did not run) built `tur` once per OS, uploaded it as an artifact, and
+downloaded it into a separate job per OS. That job ran 9 spices through
+`scripts/run-shard.sh`, chosen to stress the risky parts:
+
+- json, notebook and crdt: pure Turmeric; notebook is the heaviest spice
+- raylib and opengl: `:cmake-deps` native builds, Xvfb, GL
+- tls: mbedtls built from source
+- osc: a system library (liblo)
+- ecs: the deep-stack corpus behind the `ulimit -s` workaround
+- httpd: spices that depend on other spices
+
+**All 9 passed on both OSes.** The two questions this section existed to
+answer:
+
+1. **Absolute paths ARE compiled into `tur`.** `strings` finds the build
+   directory, `build/src/generated/...` and `external/mir/...` under
+   `$GITHUB_WORKSPACE`. It works anyway because `$GITHUB_WORKSPACE` is the
+   same path in every job of a repo on the same OS
+   (`/home/runner/work/turmeric-spices/turmeric-spices`, and the same under
+   `/Users/runner/...` on macOS). The consequence is a hard rule: **unpack
+   at `$GITHUB_WORKSPACE/turmeric/build`, and keep turmeric checked out at
+   `turmeric/`.** Changing either layout in only one of the two jobs breaks
+   it.
+2. **The toolchain matched.** The build and shard jobs reported the same
+   compiler: gcc 13.3.0 on Linux, and Apple clang 21.0.0 under Xcode 26.6 on
+   macOS. The guard works: the build job writes `cc --version` to
+   `build/toolchain.txt`, and the shard `diff`s it against its own before
+   running anything. Keep it. An image roll between the two jobs is rare,
+   but when it happens it fails every spice at link time, with a message
+   that does not mention the cause.
+
+Measured times:
+
+| job | ubuntu | macOS |
+| --- | ---: | ---: |
+| build-tur | 2m05s | 2m41s |
+| shard of 9 spices, whole job | 4m33s | 6m42s |
+
+Per spice, Linux / macOS, in seconds: json 24/23, notebook 58/103,
+raylib 36/43, opengl 9/20, tls 36/60, osc 2/7, ecs 18/36, crdt 8/11,
+httpd 43/72.
+
+These agree with section 1's projection of about 5 minutes per Linux shard
+and 7-8 per macOS shard.
+
+Queueing showed up here too. The ubuntu build started 12 minutes after the
+run was created, and the macOS build an hour later. That hour was the macOS
+pool this plan is about: it was busy with two turmeric PRs' macOS legs at
+the time.
 
 **Fold `manifest-parse` into the Linux `build-tur` job** as a final step. It
 builds its own `tur` today for no other reason than needing one.
@@ -152,7 +196,11 @@ The shard counts are a single pair of numbers at the top of the job, so
 tuning them later is a one-line change. macOS is deliberately kept at 3:
 the scarce resource is macOS runners, not wall-clock time within a shard.
 
-### S3 -- `ci/run-shard.sh`
+### S3 -- `scripts/run-shard.sh`
+
+**Written and verified (2.1).** It is on the probe branch,
+[`claude/ci-shard-probe`](https://github.com/turmeric-lang/turmeric-spices/blob/claude/ci-shard-probe/scripts/run-shard.sh),
+ready to move into the real PR. The list below is what it does.
 
 Move the body of today's per-spice steps (fetch, type-check, tests,
 `errors/run.sh`, `fixtures/run.sh`) out of the YAML and into a script that
@@ -172,7 +220,7 @@ It exits non-zero if any spice failed. Recording the seconds in the summary
 is what makes a weights file cheap to write later, if one is ever needed.
 
 Moving the logic into a script also lets a developer run a shard locally
-(`ci/run-shard.sh json crdt`), which today's inline YAML does not allow.
+(`scripts/run-shard.sh json crdt`), which today's inline YAML does not allow.
 
 **Leave the per-spice `ulimit -s` and `xvfb-run` handling as it is**; only
 where it lives changes.
@@ -230,6 +278,11 @@ to a turmeric PR branch starts the full matrix again, with its macOS legs,
 while the previous run is still in the queue. Of this repo's workflows,
 only `codeql.yml` cancels superseded runs.
 
+A related change already has its own PR:
+[#1058](https://github.com/turmeric-lang/turmeric/pull/1058) skips the
+build-and-suite jobs entirely on docs-only PRs, such as the one that added
+this plan.
+
 Add the same block as S4, gated on `pull_request`. Pushes to `main`, and with
 them the `ci-metrics` publisher, are unaffected, because their
 `cancel-in-progress` evaluates to false.
@@ -240,7 +293,7 @@ them the `ci-metrics` publisher, are unaffected, because their
 | --- | --- | --- |
 | S1 | spices | `build-tur` job per OS; tarred artifact; `manifest-parse` folded into the Linux build; toolchain-pairing guard |
 | S2 | spices | shard matrices and per-shard spice lists from `discover-spices`; `workflow_dispatch` `spices` input |
-| S3 | spices | `ci/run-shard.sh`: per-spice groups, keep going past a failure, spice-prefixed annotations, step-summary table |
+| S3 | spices | `scripts/run-shard.sh`: per-spice groups, keep going past a failure, spice-prefixed annotations, step-summary table |
 | S4 | spices | workflow `concurrency:`, cancel on PRs only |
 | S5 | turmeric | the same `concurrency:` block on `ci.yml` |
 | S6 | both | after the first run of the new shape, replace section 1's projections with measured numbers and retune the shard counts |
