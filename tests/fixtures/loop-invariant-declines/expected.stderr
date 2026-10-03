@@ -5,3 +5,5 @@ the invariant of the while loop in 'borrowed' is not analysed statically: the lo
 the invariant of the while loop in 'via-lambda' is not analysed statically: 'i' is borrowed, or assigned inside a lambda or handler clause
 the invariant of the while loop in 'via-handler' is not analysed statically: 'acc' is borrowed, or assigned inside a lambda or handler clause
 the invariant of the while loop in 'shadowing' is not analysed statically: the loop body's `let` rebinds 'i'
+the invariant of the while loop in 'named-borrow' is not analysed statically: 'lim' is borrowed, or assigned inside a lambda or handler clause
+the invariant of the while loop in 'borrow-in-loop' is not analysed statically: the loop borrows 'lim', so a call in it could write it

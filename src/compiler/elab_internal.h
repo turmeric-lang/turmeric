@@ -1147,6 +1147,13 @@ typedef struct LoopInvSite {
     /* An elaboration-time decline (the invariant reads a mutable global...),
      * or NULL.  Decided where the bindings are still resolvable. */
     const char         *decline;
+    /* The ELABORATED invariant predicate, back-filled by elab_while beside the
+     * two check slots.  It exists so the elision veto can ask the one
+     * contract-position gate (rt_pred_observably_impure) rather than the plain
+     * purity walk: that gate's `#reads` carve-out is keyed on resolved callee
+     * info, which the Form in `inv` cannot answer.  NULL when contracts are
+     * not emitted (there is then no check to elide). */
+    const struct Expr  *pred_e;
     /* Filled by li_analyze_loops. */
     bool                analyzed;
     bool                entry_proven;

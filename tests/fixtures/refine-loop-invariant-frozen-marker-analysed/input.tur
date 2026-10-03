@@ -1,0 +1,38 @@
+;; reads-measure-rejected-in-invariant-and-pre items 1 and 3.
+;;
+;; `(& v)` bound to a name nothing mentions is the marker idiom for a frozen
+;; region (see refine-stateful-resizable-bounds).  It used to make `v` VOLATILE
+;; and DECLINE the whole loop -- 0 proven, 1 declined, both runtime checks
+;; kept.  It no longer does, so the loop is analysed:
+;;
+;;   - `(>= i 0)` discharges on entry and through the body.
+;;   - `(<= i (vlen v))` discharges ON ENTRY, from `vlen`'s refined return.
+;;   - it is NOT preserved, and must not be: `v` is a by-value handle, so a
+;;     callee can grow it with no borrow for the analysis to see.  Its
+;;     re-establishment check is therefore KEPT -- item 2 of the reads-measure report
+;;     has the measurement, and refine-loop-invariant-byvalue-mutation-not-proved
+;;     is the adversarial control.
+;;
+;; The ENTRY check being gone is what pins item 3: the invariant's head is a
+;; `#reads` measure, and the old elision veto (the plain purity walk) kept
+;; BOTH checks for one of those even when the obligation was proved.
+;;
+;; `vlen`'s own return refinement stays runtime-checked -- `vec-len` is inline
+;; C, so `(>= r 0)` is not provable from its body.  That is the orthogonal gap
+;; the report records, and why this fixture does not run --strict-refine.
+(defn vlen [^borrow v : (Vec int)] #reads v : #refine{ r : int | (>= r 0) }
+  (vec-len v))
+
+(defn sum-all [^borrow v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut acc 0
+          ^mut i   0]
+      (while (< i (vlen v)) :invariant (and (>= i 0) (<= i (vlen v)))
+        (set! acc (+ acc (vec-get v i)))
+        (set! i   (+ i 1)))
+      acc)))
+
+(defn main [] : int
+  (println (sum-all (vec-of 1 2 3)))
+  (println (sum-all (vec-of)))
+  0)
