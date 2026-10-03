@@ -28,6 +28,25 @@
 ;;
 ;; `^tailcall` on each tail dynamic call is the assertion (T6 lets it annotate
 ;; a dynamic call; before, it had to be a static one).
+;;
+;; expected.timeout is 60 because this is SLOW ON PURPOSE, and the slowness is
+;; not a finding.  ~4e6 dynamic tail calls at -O0 took 9 s on the ubuntu JIT
+;; leg and 6 s on macOS (2026-10-03), i.e. ~2 us a call, against the 15 s
+;; harness default -- 60% of budget on a leg whose suite wall clock spans 2.8x
+;; run to run, so a slow draw would have killed it the way one killed
+;; r7rs-tail-calls twice.
+;;
+;; That ~2 us is -O0 plus MIR's JIT codegen, not a trampoline cost.  Compiled
+;; at -O2 the same mechanism is 47 ns a call -- 1e7 dynamic calls in 471 ms,
+;; and a registry HIT is 13 ns (benchmarks/saffron-dyn-tail-results.md, where
+;; T6 is a 2.7x SAVING over the nested-call shape it replaced).  The -O0 in
+;; the `flags` file is deliberate: at -O2 the optimizer collapses these loops
+;; and the fixture stops proving constant stack at all.  So do not read this
+;; fixture's wall clock as a per-call cost, and do not "fix" it by raising the
+;; optimization level -- that deletes the assertion.
+;;
+;; run-jit.sh's summary prints the fixtures closest to their budget, so if
+;; this one creeps back up it will show there before it fails.
 
 (defn run [f n acc]
   (if (= n 0) acc ^tailcall (f f (- n 1) (+ acc 1))))
