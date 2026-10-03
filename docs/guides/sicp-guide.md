@@ -46,58 +46,55 @@ macros last for the whole session. `:quit` leaves.
 
 ## The top of every file
 
-A Scheme file starts with an `import` line naming the standard libraries it
-uses. For SICP, this covers nearly everything:
+A Scheme file starts with an `import` line naming the libraries it uses. For
+SICP, this is the whole line:
 
 ```scheme
-(import (scheme base) (scheme write) (scheme time) (srfi 27))
+(import (scheme base) (scheme write) (srfi 216))
 ```
 
 - `(scheme base)` -- the core: `define`, `if`, `cond`, lists, numbers.
 - `(scheme write)` -- `display`, `write`, `newline`.
-- `(scheme time)` -- clocks, for `runtime` below.
-- `(srfi 27)` -- random numbers, for `random` below.
+- `(srfi 216)` -- the definitions the book assumes (next section).
 
 A file with **no** import line also works. It gets the standard procedures,
 so a pasted snippet like `(define (square x) (* x x)) (display (square 5))`
-runs as is. Write the line anyway once you start using `runtime`, `random`
-or streams.
+runs as is. Write the line anyway once you use any of the book's assumed
+names below.
 
 ## Definitions the book assumes
 
-SICP uses a few names that MIT Scheme provides and standard Scheme does not:
-`true`, `false`, `nil`, `runtime`, `random`, and the stream syntax
-`cons-stream`. Paste this block under your import line once, and the
-book's code that uses them runs unchanged:
+SICP uses a few names that MIT Scheme provides and standard Scheme does not.
+[SRFI 216](https://srfi.schemers.org/srfi-216/srfi-216.html), "SICP
+Prerequisites", is the standard library of exactly those, and
+`(import (srfi 216))` brings them in:
 
-```scheme
-;; --- SICP prelude ---
-(define true #t)
-(define false #f)
-(define nil '())
-(define (runtime)                      ; microseconds, as an exact integer
-  (round (/ (* (current-jiffy) 1000000) (jiffies-per-second))))
-(define (random n)                     ; (random 10) => 0..9, (random 1.0) => a float
-  (if (exact-integer? n)
-      (random-integer n)
-      (* n (random-real))))
-(define-syntax cons-stream             ; 3.5: must be syntax, not a procedure,
-  (syntax-rules ()                     ; so the second part is not evaluated yet
-    ((_ a b) (cons a (delay b)))))
-(define the-empty-stream '())
-(define (stream-null? s) (null? s))
-;; --- end of SICP prelude ---
-```
+| Name | What it is |
+|---|---|
+| `true`, `false` | `#t` and `#f` |
+| `nil` | the empty list, `'()` |
+| `runtime` | the time in microseconds, as an exact integer (1.2.6) |
+| `random` | `(random 10)` is an integer from 0 to 9; `(random 1.0)` is a float below 1.0 |
+| `cons-stream` | 3.5's stream constructor: syntax, so its second part is not evaluated until forced |
+| `the-empty-stream`, `stream-null?` | the empty stream and its test |
+| `parallel-execute`, `test-and-set!` | 3.4's concurrency primitives; see Chapter 3 below |
 
-Leave `stream-car` and `stream-cdr` out: the book defines those itself in
-3.5.1, and you will type them in when you get there.
+`stream-car` and `stream-cdr` are not in it: the book defines those itself
+in 3.5.1, and you will type them in when you get there.
+
+If you define one of these names yourself while importing `(srfi 216)`, the
+program is refused with a message saying so. That happens if you paste in
+an older copy of this guide's definitions, for example. Delete your
+definition, or keep it and import `(except (srfi 216) nil)`, naming
+whichever ones you define.
 
 ### Extras
 
 Some exercises use `inc`, `dec` and `identity` as if they already existed,
 and 4.3 is easier to explore with a real `amb` (more on that in Chapter 4
 below). Racket's `#lang sicp` provides these, so course materials often
-assume them. Paste this block too if you need them:
+assume them. They are not part of SRFI 216. Paste this block under your
+import line if you need them:
 
 ```scheme
 ;; --- SICP extras ---
@@ -145,7 +142,7 @@ Some things that are worth knowing:
   constant space on both, as the book says they should: a ten-million-step
   iterative loop, or `even?`/`odd?` calling each other a million times, is
   fine.
-- **Timing (exercises 1.22-1.24).** `runtime` from the prelude returns
+- **Timing (exercises 1.22-1.24).** `runtime` from SRFI 216 returns
   microseconds. Modern machines are fast, and a compiled program faster
   still, so you will need much larger primes than the book suggests before
   the times are measurable.
@@ -200,11 +197,17 @@ printed. The larger programs built from them (the digital circuit
 simulator, constraint propagation) use nothing else, but are not yet part of
 Turmeric's test suite.
 
-- **Streams (3.5)** work with the prelude's `cons-stream`. `stream-map` with
+- **Streams (3.5)** work with `cons-stream` from SRFI 216. `stream-map` with
   several streams (the version using `apply`), `integers`, `fibs` and the
   sieve of Eratosthenes give the book's answers.
-- **Concurrency (3.4).** `parallel-execute` and `test-and-set!` are not
-  available yet. Read 3.4 for the ideas; its code will not run.
+- **Concurrency (3.4).** The section's code runs: `parallel-execute`,
+  `test-and-set!`, and the serializers and mutexes the book builds from
+  them. For now, though, `parallel-execute` runs its procedures **one after
+  another**, in order, not at the same time. That is one of the orders a
+  real concurrent run could take, so every result you get is one the book
+  says is possible. But you will never see the interleaved results 3.4 is
+  about, so an unserialized bank account will look correct. Reason about
+  those on paper, as the book does.
 
 ### Chapter 4 -- the metacircular evaluator
 
@@ -269,8 +272,8 @@ it is worth reporting.
 ## When something goes wrong
 
 - **`unbound variable: nil`**, or `true`, `runtime`, `cons-stream`:
-  the SICP prelude is missing. Paste it under the import line. For `inc`,
-  `dec`, `identity` or `amb`, it is the extras block.
+  `(srfi 216)` is missing from the import line. For `inc`, `dec`,
+  `identity` or `amb`, it is the extras block.
 - **`error: Unknown operation -- TABLE frob`**: that is the book's own
   `(error "Unknown operation -- TABLE" m)` working as intended. The message
   is printed, then the objects, and the program stops.
@@ -309,11 +312,12 @@ entry here goes away.
 
 ## What is coming
 
-Built-in support is planned: `(import (srfi 216))` will replace the SICP
-prelude above, including `parallel-execute` and `test-and-set!` for 3.4,
-and a built-in library will replace the extras block. A collection of the
-book's code, run regularly against Turmeric, will catch breakage before you
-do. See the
+`parallel-execute` will run its procedures truly at the same time, once
+Turmeric's Scheme has threads (SRFI 18). A built-in `(sicp extras)` library
+will replace the extras block. And
+[sicp-corpus](https://github.com/turmeric-lang/sicp-corpus) runs the
+book's code against Turmeric every day, so breakage is caught before you
+hit it. See the
 [plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
 
 ## See also

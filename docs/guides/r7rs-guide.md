@@ -552,6 +552,7 @@ R7RS's own forms already are the SRFI's.
 | 87 | => in case clauses | built in | library | R7RS `case` takes `=>` |
 | 98 | An interface to access environment variables | built in | library | re-exports `(scheme process-context)`'s two procedures |
 | 105 | Curly-infix-expressions | no library | no module | `{a + b}` reads in every `#lang` |
+| 216 | SICP Prerequisites (Portable) | library | no module | `true`, `false`, `nil`, `runtime` (microseconds), `random` (over SRFI 27), `cons-stream`, `the-empty-stream`, `stream-null?`. Until SRFI 18 lands, `parallel-execute` runs its thunks one after another (a schedule SICP 3.4 allows, never an interleaved one). See [Working through SICP](sicp-guide.md) |
 
 Each built-in or alias row is one file, `stdlib/srfi/<N>.scm`, holding a
 `(define-library (srfi N) ...)`. `tests/check-r7rs-srfi-sync.sh` checks this

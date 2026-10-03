@@ -1,0 +1,85 @@
+#lang r7rs
+;; SRFI 216, SICP Prerequisites (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md,
+;; stage T0): the names SICP assumes from MIT Scheme, used the way the book
+;; uses them.  The suite under tests/r7rs/srfi/216 checks each export alone.
+(import (scheme base) (scheme write) (srfi 216))
+
+;; 1.2.6: timed-prime-test
+(define (square x) (* x x))
+(define (smallest-divisor n) (find-divisor n 2))
+(define (find-divisor n test)
+  (cond ((> (square test) n) n)
+        ((= (remainder n test) 0) test)
+        (else (find-divisor n (+ test 1)))))
+(define (prime? n) (= n (smallest-divisor n)))
+(define (timed-prime-test n)
+  (let ((start (runtime)))
+    (if (prime? n)
+        (begin (write n) (display " *** ")
+               (display (>= (- (runtime) start) 0)) (newline))
+        #f)))
+(timed-prime-test 1009)
+(timed-prime-test 1013)
+
+;; 1.2.6: the Fermat test, with random
+(define (expmod base exp m)
+  (cond ((= exp 0) 1)
+        ((even? exp) (remainder (square (expmod base (/ exp 2) m)) m))
+        (else (remainder (* base (expmod base (- exp 1) m)) m))))
+(define (fermat-test n)
+  (define (try-it a) (= (expmod a n n) a))
+  (try-it (+ 1 (random (- n 1)))))
+(define (fast-prime? n times)
+  (cond ((= times 0) true)
+        ((fermat-test n) (fast-prime? n (- times 1)))
+        (else false)))
+;; 1001 = 7 * 11 * 13 passes one Fermat trial for 164 of 1000 bases; 30
+;; trials make a false #t about 3e-24 likely.
+(display (list (fast-prime? 1009 30) (fast-prime? 1001 30))) (newline)
+
+;; 2.2.1: nil ends a list
+(define (enumerate-interval low high)
+  (if (> low high) nil (cons low (enumerate-interval (+ low 1) high))))
+(write (enumerate-interval 1 5)) (newline)
+
+;; 3.5: streams, with the book's own stream-car and stream-cdr
+(define (stream-car s) (car s))
+(define (stream-cdr s) (force (cdr s)))
+(define (stream-ref s n) (if (= n 0) (stream-car s) (stream-ref (stream-cdr s) (- n 1))))
+(define (stream-filter pred s)
+  (cond ((stream-null? s) the-empty-stream)
+        ((pred (stream-car s)) (cons-stream (stream-car s) (stream-filter pred (stream-cdr s))))
+        (else (stream-filter pred (stream-cdr s)))))
+(define (integers-from n) (cons-stream n (integers-from (+ n 1))))
+(define (sieve s)
+  (cons-stream (stream-car s)
+               (sieve (stream-filter (lambda (x) (not (= 0 (remainder x (stream-car s)))))
+                                     (stream-cdr s)))))
+(display (stream-ref (sieve (integers-from 2)) 50)) (newline)
+(define (stream-enumerate-interval low high)
+  (if (> low high) the-empty-stream
+      (cons-stream low (stream-enumerate-interval (+ low 1) high))))
+(display (stream-car (stream-cdr (stream-filter prime? (stream-enumerate-interval 10000 1000000))))) (newline)
+
+;; 3.4: a serializer over test-and-set!, run through parallel-execute.  The
+;; final balance is one SICP allows for the serialized account: 70.
+(define (make-mutex)
+  (let ((cell (list false)))
+    (define (the-mutex m)
+      (cond ((eq? m 'acquire) (if (test-and-set! cell) (the-mutex 'acquire)))
+            ((eq? m 'release) (set-car! cell false))))
+    the-mutex))
+(define (make-serializer)
+  (let ((mutex (make-mutex)))
+    (lambda (p)
+      (define (serialized-p . args)
+        (mutex 'acquire)
+        (let ((val (apply p args)))
+          (mutex 'release)
+          val))
+      serialized-p)))
+(define balance 100)
+(define protected (make-serializer))
+(parallel-execute (protected (lambda () (set! balance (- balance 10))))
+                  (protected (lambda () (set! balance (- balance 20)))))
+(display balance) (newline)
