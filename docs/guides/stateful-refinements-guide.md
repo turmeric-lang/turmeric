@@ -123,8 +123,16 @@ argument whose mutable state it reads:
   ...)
 ```
 
-`#reads w` names a `^borrow` parameter. A measure that reads more than one
-borrowed state names them all in one frame, the same way `#writes` does:
+`#reads w` names a parameter whose mutable state the body reads. A `^borrow`
+parameter is the shape the annotation was designed around, and the one every
+example here uses -- but it is **not** a requirement: a BY-VALUE parameter is
+accepted too, and `stdlib/vec.tur`'s `vec-len` / `vec-get` rely on that, since
+a container handle is passed by value. A generic (`[A]`) measure is accepted as
+well. In both cases the frame is live: the measure passes the contract-position
+gate and takes part in the congruence grant exactly as a `^borrow` one does.
+
+A measure that reads more than one borrowed state names them all in one frame,
+the same way `#writes` does:
 
 ```turmeric
 (defn linked? [^borrow w : World ^borrow g : Grid e : Entity] #reads [w g] : bool
@@ -243,28 +251,44 @@ is still `TUR-E0375`, and so is an unannotated function that wraps one. The
 other contract positions -- `:pre`, `:post`, a refined return, and a loop's
 `:invariant` -- therefore accept a `#reads` measure as an ordinary **runtime**
 check. Before 2026-10-03 all four were `TUR-E0375`
-([reads-measure-rejected-in-invariant-and-pre](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/reads-measure-rejected-in-invariant-and-pre.md)).
+([reads-measure-rejected-in-invariant-and-pre](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reads-measure-rejected-in-invariant-and-pre.md)).
 
-**A loop invariant over a `#reads` measure is analysed, and partly proved.** A
-bounded-index invariant such as `:invariant (and (>= i 0) (<= i (vlen v)))`
-inside a frozen region used to be **declined whole** -- the region's own `(& v)`
-made `v` volatile. It is now analysed, so `(>= i 0)` discharges both ways and
-`(<= i (vlen v))` discharges **on entry** (from `vlen`'s refined return), and
-each proved obligation loses its runtime check.
+**A bounded-index loop invariant is PROVED inside a frozen region.** An
+invariant such as `:invariant (and (>= i 0) (<= i (vlen v)))` over a frozen `v`
+discharges on entry and through the body, and both runtime checks are then
+elided. It used to be **declined whole** -- the region's own `(& v)` made `v`
+volatile.
 
-Two edges are worth knowing:
+What makes the bound provable is that two occurrences of `(vlen v)` denote the
+same value, and the evidence for that is **not** the borrow. A container's
+mutators take it BY VALUE -- `vec-push!` is `[v : (Vec A) val : A]`, `#fx{}` --
+so a region does not stop a callee growing it and no borrow conflict is
+reported. The evidence is a **write promise** on everything the loop hands `v`
+to, and there are two kinds:
+
+- `#reads v`, which `stdlib/vec.tur`'s `vec-len` and `vec-get` carry. The
+  mutators deliberately carry nothing: that asymmetry is what distinguishes a
+  reader from a writer, because the signatures cannot.
+- a callee the compiler knows is **pure**, which writes nothing by definition.
+
+Hand `v` to anything else inside the loop -- a mutator, or an unannotated
+inline-C callee -- and the grant is withheld for that loop. The bound then
+falls back to "proved on entry, not preserved", its re-establishment check
+stays, and a body that really does grow `v` dies on that check instead of
+compiling to a false proof.
+
+Two further edges:
 
 - **Only the marker shape is exempt from the volatile set** -- a shared borrow
   bound to a name nothing mentions. Name that borrow and use it, or take a
   borrow inside the loop, and the loop is declined again (`TUR-W0372`), because
   a shared borrow handed to an **inline-C callee does get written through**.
-- **The bound is not proved PRESERVED, and must not be.** A container is a
-  by-value handle and its mutators take it by value -- `vec-push!` is
-  `[v : (Vec A) val : A]`, `#fx{}`, with no `#writes` -- so a region does not
-  stop a callee growing it, and no borrow conflict is reported. The
-  re-establishment check is therefore kept, and a body that does grow `v` dies
-  on it rather than compiling to a false proof. Proving a bound across a body
-  needs the accessors to distinguish readers from mutators first.
+- **The `#reads` half is trusted, not verified.** A frame over an inline-C body
+  is `UNVERIFIED`, and nothing reports a `#reads` body that calls a mutator, so
+  a hand-written false claim reaches this grant
+  ([reads-frame-verification-ignores-a-callee-write-frame](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/reads-frame-verification-ignores-a-callee-write-frame.md)).
+  A crossing has survived the same trust since C2, but it keeps the callee's
+  own entry check as a backstop; an elided invariant check has none.
 
 The measure's own refined return is a separate obligation, and stays runtime
 checked while its body is inline C (`(>= r 0)` is not provable from

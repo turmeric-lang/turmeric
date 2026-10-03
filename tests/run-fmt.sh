@@ -457,6 +457,48 @@ else
     fail "$NAME" "a formatted Scheme file changed: $(printf '%s' "$ACTUAL" | head -4 | tr '\n' '|')"
 fi
 
+# ---------------------------------------------------------------------------
+# Test: `#reads` / `#writes` frames survive formatting.
+#
+# Both read as the lists `(reads ...)` / `(writes ...)` and neither has a paren
+# spelling, so printing them as calls produced a file that does NOT COMPILE --
+# `unknown function or operator 'reads'` -- silently, exit 0.  A single-name
+# frame normalizes to the unbracketed spelling; `#writes []` ("writes nothing")
+# must keep its brackets, since a frameless `#writes` is a different claim.
+# ---------------------------------------------------------------------------
+NAME="fmt-frame-annotations-round-trip"
+FRAME_IN='(defn r-one [^borrow v : (Vec int)] #reads v : int (vec-len v))
+(defn r-brk [^borrow v : (Vec int)] #reads [v] : int (vec-len v))
+(defn w-one [v : (Vec int) x : int] #writes v : nil (vec-push! v x))
+(defn w-brk [v : (Vec int) x : int] #writes [v] : nil (vec-push! v x))
+(defn w-none [x : int] #writes [] : int x)'
+FRAME_EXPECTED='(defn r-one [^borrow v : (Vec int)] #reads v : int (vec-len v))
+
+(defn r-brk [^borrow v : (Vec int)] #reads v : int (vec-len v))
+
+(defn w-one [v : (Vec int) x : int] #writes v : nil (vec-push! v x))
+
+(defn w-brk [v : (Vec int) x : int] #writes v : nil (vec-push! v x))
+
+(defn w-none [x : int] #writes [] : int x)'
+ACTUAL=$(printf '%s\n' "$FRAME_IN" | "$TUR" fmt --stdin 2>/dev/null)
+if [ "$ACTUAL" = "$FRAME_EXPECTED" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected:|$(printf '%s' "$FRAME_EXPECTED" | tr '\n' '|')| got:|$(printf '%s' "$ACTUAL" | tr '\n' '|')|"
+fi
+
+NAME="fmt-frame-annotations-still-compile"
+TMPDIR_FR=$(mktemp -d)
+printf '%s\n' "$FRAME_IN" '(defn main [] : int 0)' > "$TMPDIR_FR/fr.tur"
+"$TUR" fmt "$TMPDIR_FR/fr.tur" > /dev/null 2>&1
+if "$TUR" check "$TMPDIR_FR/fr.tur" > /dev/null 2>&1; then
+    pass "$NAME"
+else
+    fail "$NAME" "a formatted file with #reads/#writes no longer compiles: $("$TUR" check "$TMPDIR_FR/fr.tur" 2>&1 | grep -m1 error)"
+fi
+rm -rf "$TMPDIR_FR"
+
 NAME="fmt-r7rs-reindent"
 printf '%s\n' '#lang r7rs' '(define (f x)' '        (if (> x 0)' '     (list x' '  "a' '   b")' '  #f))' \
     '(let ((a 1)' '  (b 2))' '   (g a' '  b))' > "$TMPDIR_R7/ind.tur"

@@ -1,5 +1,5 @@
 ;; The soundness control for the loop frozen-set question
-;; (item 2 of docs/reported/reads-measure-rejected-in-invariant-and-pre.md).
+;; (item 2 of docs/archive/reads-measure-rejected-in-invariant-and-pre.md).
 ;;
 ;; A live SHARED borrow of `v` does NOT mean `v` holds still across the body:
 ;; `vec-push!` is declared `[v : (Vec A) val : A]` -- by value, `#fx{}`, no
