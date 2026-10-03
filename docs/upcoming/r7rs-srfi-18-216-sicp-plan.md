@@ -151,19 +151,28 @@ Source and license:
 - The MIT Press code files (`mitpress.mit.edu/sites/default/files/sicp/code/`)
   refuse scripted fetches (403) and carry no stated license.
 - sarabander's HTML edition (github.com/sarabander/sicp) is **CC BY-SA 4.0**.
-  Adapted snippets would carry ShareAlike; keep them in their own directory
-  with a `COPYING` note, as `tests/r7rs/CHIBI-COPYING` does, and decide
-  (Section 5, question 1) whether that is acceptable in the repo.
+  Adapted snippets carry ShareAlike.
 - Racket's `#lang sicp` (sicp-lang/sicp) is LGPL-3.0; its exports are a
-  useful checklist (`inc`, `dec`, `identity`, `amb` beyond 216) but not a test
-  source.
+  useful checklist (`inc`, `dec`, `identity`, `amb` beyond 216; see D4) but
+  not a test source.
 
-Layout: `tests/r7rs/sicp/<section>.scm`, each a `#lang r7rs` program that
-imports `(srfi 216)`, transcribes one section's code in the book's order,
-and prints the book's stated results; an `expected` file next to it. Run by
-a ctest target on both back ends (compiled, `--interpret`), like the
-conformance runner. Exercises are excluded (user work, and solutions are not
-ours to ship).
+**Decided 2026-10-03: the corpus lives in its own repo**, proposed as
+`turmeric-lang/sicp-corpus`, licensed CC BY-SA 4.0 to match its source, so
+no ShareAlike content enters this tree. It differs from the SMT-LIB
+precedent (`turmeric-lang/smt-lib-benchmarks`, whose labelled subset
+`tests/corpus/import-smtlib.py` copies in): nothing is imported here.
+Instead the corpus repo carries its own runner and CI, which builds
+Turmeric `main` and runs every program on both back ends, as
+turmeric-spices' CI does (and with the same caveat: two runs hours apart
+use different compilers, so a red run names the Turmeric sha it built).
+
+Layout there: `<chapter>/<section>.scm`, each a plain `.scm` program that
+imports `(srfi 216)` (and the D4 extras where the section needs them),
+transcribes one section's code in the book's order, and prints the book's
+stated results, with an `expected` file next to it. A program blocked on an
+open Turmeric report carries an xfail marker naming the report, like
+`expected.xfail` here, so it turns red the day the fix lands without it.
+Exercises are excluded (user work, and solutions are not ours to ship).
 
 Priorities, by what a reader hits and what stresses the implementation:
 
@@ -180,6 +189,33 @@ Priorities, by what a reader hits and what stresses the implementation:
 
 Not covered: 2.2.4's picture language (SRFI 216 defers it to SRFI 203).
 
+### D4 -- the `#lang sicp` extras ship as a built-in library
+
+**Decided 2026-10-03: ship them.** `inc`, `dec`, `identity` and `amb`, as
+Racket's `#lang sicp` provides them, plus `amb-reset!`, which is ours:
+Racket's `amb` has no way to drop the last search's choice points, and
+exhausting a second search otherwise resumes the first. Course materials
+written against Racket assume the four, which is the argument for shipping
+them.
+
+- **Available today** as a paste-in block in sicp-guide.md's "Extras",
+  measured on both back ends: SICP 4.3.2's multiple-dwelling puzzle gives
+  the book's answer, collecting all solutions by forced failure works, and
+  exhaustion is `error: amb tree exhausted`, catchable by `guard`.
+- **Not in `(srfi 216)`**, which is a finished spec; adding names to it would
+  break programs that define them.
+- **Name: `(sicp extras)`**, to be confirmed. Only `(scheme ...)` and
+  `(srfi N)` are table-driven built-ins today (`SCHEME_LIBS[]`,
+  `SRFI_LIBS[]` in src/compiler/scheme_lower.c), so this needs a third
+  head or a generalization of the SRFI table to a named-library row. The
+  file is `stdlib/sicp/extras.scm`, spliced in inline mode like an SRFI
+  (`amb` is `define-syntax`, which inline mode already handles). A
+  `(turmeric sicp)` name was considered and rejected: the `(turmeric ...)`
+  head means a Turmeric-language module, and `amb` is Scheme syntax.
+- `amb`'s state is a top-level variable, so it is per program, not per
+  thread; under T1 threads, two threads searching at once share it. Document
+  that rather than fix it (Racket's is the same).
+
 ## 4. Stages
 
 - **T0 -- SRFI 216 minus threads.** Row + file with every export except
@@ -192,8 +228,13 @@ Not covered: 2.2.4's picture language (SRFI 216 defers it to SRFI 203).
 - **T2 -- SRFI 18 under turi.** Native overrides on fibers; drop the
   `requires.compiled`.
 - **T3 -- 216's thread procedures** over 18; the reference suite in full.
-- **T4 -- SICP corpus**, in the priority order of D3; each section that
-  fails gets a report under `docs/reported/`.
+- **T0a -- `(sicp extras)`** (D4): the library-head change and the file;
+  a fixture with the guide's `amb` cases on both back ends. Independent of
+  T0, and the guide's extras block becomes the import.
+- **T4 -- SICP corpus** in `turmeric-lang/sicp-corpus` (D3), in the
+  priority order of D3: the repo, its runner and CI first, then sections.
+  Each section that fails gets a report under this repo's `docs/reported/`
+  and an xfail marker there.
 - **T5 -- guides.** `docs/guides/sicp-guide.md` exists (landed with this
   plan) and is written for a student with casual Scheme, not for Turmeric
   users. Each stage keeps it true: T0 replaces its pasted prelude with
@@ -207,12 +248,13 @@ Not covered: 2.2.4's picture language (SRFI 216 defers it to SRFI 203).
 
 ## 5. Open questions
 
-1. Is CC BY-SA test content acceptable in the repo, or should the corpus be
-   our own transcription limited to short excerpts, or live in a separate
-   repo (as the SMT-LIB benchmarks do)?
-2. Should `inc`/`dec`/`identity`/`amb` (Racket's `#lang sicp` extras) ship
-   anywhere? They are not in 216; a `(turmeric sicp)` convenience library is
-   one option.
-3. Does a program with no `(import ...)` at all get `(scheme base)`
-   implicitly? A reader pasting book code will not write imports; the guide
-   should say what happens.
+1. ~~Is CC BY-SA test content acceptable in the repo?~~ **Decided
+   2026-10-03:** a separate repo (D3).
+2. ~~Should the `#lang sicp` extras ship?~~ **Decided 2026-10-03:** yes,
+   as a built-in library (D4). Open: confirm the name `(sicp extras)`.
+3. ~~Does a program with no `(import ...)` get the standard procedures?~~
+   **Measured 2026-10-03:** yes, on both back ends
+   (`(define (square x) (* x x)) (display (square 5))` prints 25); the
+   guide says so.
+4. The corpus repo's name and creation: `turmeric-lang/sicp-corpus`,
+   public, CC BY-SA 4.0. Not created yet.

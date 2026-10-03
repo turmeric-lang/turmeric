@@ -92,6 +92,40 @@ book's code that uses them runs unchanged:
 Leave `stream-car` and `stream-cdr` out: the book defines those itself in
 3.5.1, and you will type them in when you get there.
 
+### Extras
+
+Some exercises use `inc`, `dec` and `identity` as if they already existed,
+and 4.3 is easier to explore with a real `amb` (more on that in Chapter 4
+below). Racket's `#lang sicp` provides these, so course materials often
+assume them. Paste this block too if you need them:
+
+```scheme
+;; --- SICP extras ---
+(define (inc x) (+ x 1))
+(define (dec x) (- x 1))
+(define (identity x) x)
+(define (amb-reset!)                   ; start a new search from scratch
+  (set! amb-fail (lambda () (error "amb tree exhausted"))))
+(define amb-fail #f)
+(amb-reset!)
+(define-syntax amb
+  (syntax-rules ()
+    ((_ alt ...)
+     (let ((prev-fail amb-fail))
+       (call/cc
+        (lambda (sk)
+          (call/cc
+           (lambda (fk)
+             (set! amb-fail
+                   (lambda ()
+                     (set! amb-fail prev-fail)
+                     (fk 'fail)))
+             (sk alt)))
+          ...
+          (prev-fail)))))))
+;; --- end of SICP extras ---
+```
+
 ## Chapter by chapter
 
 ### Chapter 1 -- procedures and processes
@@ -211,6 +245,20 @@ computes `(fact 20)` through it). The book's later evaluators (the
 analyzing evaluator in 4.1.7, the lazy one in 4.2, the `amb` evaluator in
 4.3) need the same rename.
 
+**Trying 4.3's puzzles before building the `amb` evaluator.** With the
+extras block loaded, `amb` works directly in Scheme, so you can run the
+section's examples (`require`, `an-integer-between`, the
+multiple-dwelling puzzle) as ordinary programs and check your answers to
+the exercises against them. Each `(amb)` with no choices left backtracks to
+the most recent choice point; when there are none left at all, you get
+`error: amb tree exhausted`. One thing differs from the book's evaluator,
+which starts every new problem fresh: here the choice points of the last
+search are still live. Call `(amb-reset!)` before starting a new search,
+or exhausting it will jump back into the previous one.
+
+This is a shortcut for experimenting, not a replacement for 4.3.3. Building
+the evaluator is the point of the section.
+
 ### Chapter 5 -- register machines
 
 The register-machine simulator and the explicit-control evaluator use only
@@ -221,7 +269,8 @@ it is worth reporting.
 ## When something goes wrong
 
 - **`unbound variable: nil`**, or `true`, `runtime`, `cons-stream`:
-  the SICP prelude is missing. Paste it under the import line.
+  the SICP prelude is missing. Paste it under the import line. For `inc`,
+  `dec`, `identity` or `amb`, it is the extras block.
 - **`error: Unknown operation -- TABLE frob`**: that is the book's own
   `(error "Unknown operation -- TABLE" m)` working as intended. The message
   is printed, then the objects, and the program stops.
@@ -257,7 +306,9 @@ entry here goes away.
 
 Built-in support is planned: `(import (srfi 216))` will replace the SICP
 prelude above, including `parallel-execute` and `test-and-set!` for 3.4,
-and the book's code will run as part of Turmeric's test suite. See the
+and a built-in library will replace the extras block. A collection of the
+book's code, run regularly against Turmeric, will catch breakage before you
+do. See the
 [plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
 
 ## See also
