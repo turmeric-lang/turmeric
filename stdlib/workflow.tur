@@ -67,7 +67,11 @@
    * SkReg table) and resume it on v. */
   if (!b) return 0;
   int64_t __k = tur_serial_cont_deserialize((int64_t)(intptr_t)b);
-  return tur_serial_cont_resume(__k, (int64_t)v);
+  int64_t __r = tur_serial_cont_resume(__k, (int64_t)v);
+  /* The resume ran a COPY (dk_invoke), and nothing else holds the chain the
+   * deserializer just built -- b, not __k, is what a caller resumes again. */
+  dk_free((DK *)(intptr_t)__k);
+  return __r;
   ```)
 ;; ---------------------------------------------------------------------------
 ;; Workflow step helpers

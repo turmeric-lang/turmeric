@@ -96,4 +96,4 @@ changed and not this report's: every serial continuation's DK chain is
 leaked when the receiver resumes it, outward or not (`run-leak-check`-style
 builds of `serial-shift-colored-receiver` and
 `cps-oracle-serial-closure-recv` leak 52 and 25 allocations on `main`) --
-filed as [serial-cont-chain-never-freed](serial-cont-chain-never-freed.md).
+filed as [serial-cont-chain-never-freed](../archive/serial-cont-chain-never-freed.md) (since resolved).

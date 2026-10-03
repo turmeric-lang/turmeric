@@ -1,0 +1,47 @@
+;; serial-cont-chain-never-freed: a serial-shift receiver is handed a DK chain
+;; it owns, and every read of a serial-cont (`(k v)`, serial-resume,
+;; serial-cont->bytes) works on a COPY.  So when the receiver's body only
+;; reads `k` -- never stores, returns or captures it -- the chain is dead once
+;; the receiver returns, and the shift body frees it.  Each shape below used
+;; to leak its captured chain (three DK nodes per capture for `page`); the
+;; requires.leak-check marker holds them at zero.
+(load "stdlib/serial.tur")
+
+(defn page [env : cstr hole : int] : int (+ hole 1))
+(defn dbl [n : int] : int (* n 2))
+
+;; `(k v)` directly.
+(defn recv [k : serial-cont] : int (k 41))
+
+;; resumed twice -- each resume runs its own copy.
+(defn recv-twice [k : serial-cont] : int (+ (k 1) (k 2)))
+
+;; through the stdlib reader and through a user helper that only resumes.
+(defn recv-std [k : serial-cont] : int (serial-resume k 9))
+(defn resume-plus [k : serial-cont v : int] : int (+ 1 (k v)))
+(defn recv-helper [k : serial-cont] : int (resume-plus k 20))
+
+;; branching: one arm resumes, the other drops k on the floor.
+(defn recv-if [k : serial-cont] : int
+  (if (> (k 0) 0) (k 100) -1))
+
+(defn run [] : int (serial-reset (page "" (serial-shift recv 0))))
+(defn run-twice [] : int (serial-reset (dbl (serial-shift recv-twice 0))))
+(defn run-std [] : int (serial-reset (+ 10 (serial-shift recv-std 0))))
+(defn run-helper [] : int (serial-reset (page "" (serial-shift recv-helper 0))))
+(defn run-if [] : int (serial-reset (page "" (serial-shift recv-if 0))))
+
+;; a closure receiver that captures something other than k.
+(defn run-closure [bonus : int] : int
+  (serial-reset
+    (+ 10 (serial-shift (fn [k : serial-cont] : int (+ bonus (k 5))) 0))))
+
+(defn main [] : int
+  (println (run))              ; page(41)          = 42
+  (println (run))              ; a second capture  = 42
+  (println (run-twice))        ; 2*1 + 2*2         = 6
+  (println (run-std))          ; 10 + 9            = 19
+  (println (run-helper))       ; 1 + page(20)      = 22
+  (println (run-if))           ; page(100)         = 101
+  (println (run-closure 100))  ; 100 + (10 + 5)    = 115
+  0)
