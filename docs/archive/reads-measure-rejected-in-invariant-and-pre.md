@@ -1,26 +1,30 @@
 # A `#reads` loop invariant is runtime-checked but never proved, even inside `frozen`
 
 **Severity: low-medium (completeness: a correct invariant keeps both runtime
-checks).** **Narrowed twice on 2026-10-03.** Filed 2026-10-02, found looking
-for an illustrating use case for `loop-invariants`.
+checks).** **RESOLVED 2026-10-03**, in three steps the same day. Filed
+2026-10-02, found looking for an illustrating use case for `loop-invariants`.
+A bounded-index walk over a container is now PROVED inside a `frozen` region
+and both of its runtime checks are elided
+(`refine-loop-invariant-reads-frozen-proved`).
 
-- **Items 1 and 3 are CLOSED** -- see "Resolution of items 1 and 3" at the
-  end. A frozen-region marker no longer declines the loop, and a proved
-  `#reads` invariant's check is elided. A bounded-index invariant now
-  discharges on ENTRY -- 3 of its 4 obligations -- where before the whole loop
-  was declined.
-- **Item 2 is OPEN, and the premise it was written on is wrong** -- see
-  "Item 2, re-measured". Plumbing the crossing's frozen set into the loop's
-  obligations is not the mechanical step this report assumed. It grants
-  congruence across a body that can legally mutate the container, and doing it
-  proved `(<= (vlen v) 3)` preserved by a body calling `(vec-push! v 7)`.
-  Measured. So `(<= i (vlen v))` is still not proved PRESERVED inside a
-  region, and its re-establishment check is still kept.
+- **Items 1 and 3** -- see "Resolution of items 1 and 3". A frozen-region
+  marker no longer declines the loop, and a proved `#reads` invariant's check
+  is elided.
+- **Item 2** -- see "Item 2, re-measured" and then "Resolution of item 2". The
+  premise this report stated was WRONG: publishing the crossing's frozen set on
+  a loop's obligations grants congruence across a body that can legally mutate
+  the container, and doing it proved `(<= (vlen v) 3)` preserved by a body
+  calling `(vec-push! v 7)`. What landed instead keys the grant on a WRITE
+  PROMISE rather than on borrow liveness.
 
-The earlier narrowing the same day was the CT1 purity gate (`TUR-E0375`)
-accepting a `#reads` measure in every contract position. The `vec-len`
-`#fx{}`-versus-purity-walk divergence under "Orthogonal, unchanged" is a
-third, separate thing, and waits on `trusted-refinement-claims-plan` R4.
+Two things this does NOT resolve, both separate and both still open:
+
+- `vec-len`'s `#fx{}`-versus-purity-walk divergence under "Orthogonal,
+  unchanged", which waits on `trusted-refinement-claims-plan` R4.
+- The promise the grant now leans on is TRUSTED, not verified: a hand-written
+  false `#reads` reaches the grant and nothing reports it --
+  [reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md),
+  filed from this work.
 
 ## What was fixed (2026-10-03)
 
@@ -52,8 +56,12 @@ Pinned by:
 - `tests/fixtures/refine-reads-measure-invariant-runtime-check`: the kept entry
   check fires at runtime.
 - `tests/fixtures/errors/refine-impure-accessor-contract-positions`: the
-  negative control. Raw `vec-len` is `E0375` in all four positions, and so are
-  a `(tick)` beside a `#reads` measure and an unannotated wrapper around one.
+  negative control. An unannotated inline-C accessor is `E0375` in all four
+  positions, and so are a `(tick)` beside a `#reads` measure and an
+  unannotated wrapper around one. That accessor is LOCAL to the fixture as of
+  the item 2 resolution below -- it used to be stdlib's `vec-len`, which is
+  `#reads v` now, and a control for "unannotated" must not depend on which
+  stdlib functions happen to carry an annotation.
 
 ## The proof inside `frozen` -- as filed (1 and 3 since closed, 2 since re-measured)
 
@@ -108,7 +116,7 @@ each is a separate change:
 `vec-len` is declared `#fx{}` -- pure on the effect row -- while the refinement
 purity walk calls its inline-C body impure. A reader who sees the `#fx{}` row
 reasonably concludes it is pure. The real fix is the one
-[trusted-refinement-claims-plan](../archive/trusted-refinement-claims-plan.md)'s
+[trusted-refinement-claims-plan](trusted-refinement-claims-plan.md)'s
 R4 is blocked on: make the measure layer hold its state in Turmeric-visible
 structs instead of a malloc'd block behind inline C, so the stdlib accessors
 stop being inline C. A purity allowlist of stdlib accessors would be the
@@ -116,26 +124,27 @@ stopgap.
 
 ## Relationship to graduating `loop-invariants`
 
-The bounded-index walk can now be **written** against a real container, and
-inside a region it now discharges on **entry** rather than being declined
-outright. Before either fix, `loop-invariants-plan` and
-`ecs-refinement-typed-apis-plan` could not express it at all.
+The bounded-index walk can now be **written** against a real container and
+**proved** inside a region, with both runtime checks elided. Before any of
+this, `loop-invariants-plan` and `ecs-refinement-typed-apis-plan` could not
+express it at all.
 
 `loop-invariants-plan` names this report as the gap to close before graduating
-that row. Items 1 and 3 are closed, and **item 2 is the whole of what is left
-here** -- but item 2 as re-measured is no longer a plumbing task inside this
-plan's scope: proving a bound over a container needs a reader/mutator
-distinction the container's API does not currently make (see below), which is
-`trusted-refinement-claims-plan` R4 territory. A grader deciding the row should
-weigh that against the other graduation questions -- a `beta` soak, the
-`loop-invariant-gate-off` harness inversion, and whether any consumer wants it.
+that row, and it is closed. What remains for that decision is not a capability
+gap: whether to graduate straight from `XF_LIFECYCLE_PROTOTYPE` and skip a
+`beta` soak, what to do with `loop-invariant-gate-off` (which asserts the
+gate-OFF behaviour and has no `TUR_LOOP_INVARIANTS=0` hatch to invert onto),
+whether any consumer wants it -- RE2 is unstarted by decision -- and whether
+the trust the frozen grant now rests on is acceptable while
+[reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md)
+is open.
 
 The companion completeness report,
-[loop-invariant-declines-more-than-soundness-requires](../archive/loop-invariant-declines-more-than-soundness-requires.md),
+[loop-invariant-declines-more-than-soundness-requires](loop-invariant-declines-more-than-soundness-requires.md),
 was resolved the same day.
 
 
-## Item 2, re-measured (2026-10-03) -- the premise is wrong
+## Item 2, re-measured (2026-10-03) -- the premise was wrong
 
 **Doing what item 2 says produces an unsound proof.** `LoopInvSite` was given a
 frozen set captured at `li_register_site` (where the borrow scope is still
@@ -251,3 +260,88 @@ Code: `li_inert_borrows` / `li_form_in_set` / `li_elision_observable` in
 `src/compiler/elab_fns.c`; the `pred_e` back-fill in `elab_while`
 (`src/compiler/elab_forms.c`); `pred_e` on `LoopInvSite` in
 `src/compiler/elab_internal.h`.
+
+## Resolution of item 2 (2026-10-03)
+
+The grant is keyed on a **write promise** instead of on borrow liveness, and
+the stdlib readers now carry one.
+
+**The guard** (`li_name_reads_only`, `li_frozen_for_site`). The live shared
+borrows at a loop are captured at registration as CANDIDATES
+(`LoopInvSite::frozen_cands`) -- still the only point where the borrow checker
+knows what is live. A candidate reaches an obligation only if every occurrence
+of it in the loop's CONDITION and BODY is a direct argument at a position some
+callee has promised not to write. Two promises count:
+
+- `#reads p`, in the positions its mask names -- the trusted one.
+- a callee the walk knows is PURE, in every position -- the proven one.
+  `info.pure` is the same bar congruence itself is held to, and something that
+  writes nothing cannot write this.
+
+Everything else withholds, and withholding is the safe direction, so every
+shape the walk cannot model answers "withhold": a bare mention, an argument to
+an unannotated impure callee, a term inside a constructed value, an
+overflowing walk, a computed head. The invariant itself is not walked -- it is
+already gated non-observably-impure, so evaluating it cannot write.
+
+**A promise counts only if the name still RESOLVES to the binding it was read
+off**, and getting this wrong was a live miscompile for the length of one
+build. `rt_resolve_fn` answers from the GLOBAL scope only, so it hands back
+stdlib `vec-get`'s `#reads v` for a call that actually goes to a LOCAL binding
+of that name. Measured, before the check existed:
+
+```turmeric
+(let [vec-get (fn [vv : (Vec int) ii : int] : int (do (vec-push! vv 7) 0))]
+  ... (while (< i 2) :invariant (<= (vlen v) 3) (vec-get v i) ...))
+```
+
+was given the grant, `(<= (vlen v) 3)` was reported PRESERVED, the
+re-establishment check was elided, and the program printed 5 -- the violated
+bound, silently. With the check it is `0 proven, 2 unproven`, the check stays,
+and the loop dies on it. Pinned by
+`refine-loop-invariant-shadowed-reads-not-trusted`.
+
+That is also why the whole filter runs at REGISTRATION rather than in the
+defn-level pass: the loop's scope is live there, and it is the only place the
+question can be asked. The cost is that a `#reads` measure defined LATER in
+the file is not yet in global scope and so withholds -- conservative, and the
+safe direction again.
+
+**The annotations.** `stdlib/vec.tur`'s `vec-len` and `vec-get` carry
+`#reads v`. They are the first `#reads` in stdlib, and both measured
+prerequisites held: the annotation is live on a BY-VALUE parameter and on a
+GENERIC function (each passes the CT1 gate in a `:pre`, which only happens
+through the `#reads` carve-out), so neither needed a signature change. The
+mutators deliberately carry nothing -- that asymmetry IS the discriminator,
+because the signatures cannot be: `vec-get` and `vec-push!` both take the
+vector by value.
+
+Measured:
+
+| | before | after |
+|---|---|---|
+| bounded-index walk | 3 proven, 1 unproven | **4 proven, 0 unproven**, both checks elided |
+| body calls `vec-push!` | 0 proven, 2 unproven | unchanged -- still withheld |
+| body calls `vec-set-o!` | n/a | 1 proven, 1 unproven -- withheld |
+| body calls an unannotated inline-C callee | n/a | 1 proven, 1 unproven -- withheld |
+
+Pinned by `refine-loop-invariant-reads-frozen-proved` (the positive case),
+`refine-loop-invariant-frozen-grant-declines` (the setter and the opaque
+callee), and `refine-loop-invariant-byvalue-mutation-not-proved` (the
+adversarial `vec-push!`, whose kept check still fires at runtime).
+
+**What this does NOT make verified.** The `#reads` half of the promise is
+trusted, and a hand-written false one reaches the grant with no diagnostic:
+`reads_checked` for an inline-C body is UNVERIFIED (visible in
+`read-frames-dump-verdicts`, which now opens with the two stdlib rows), and the
+reads verification never consults a callee's write frame. Filed as
+[reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md).
+The annotations added here are truthful -- both bodies dereference and return
+-- and the exposure is not new in kind: a call-site crossing has consumed the
+same trust since C2. It is new in CONSEQUENCE, because a crossing keeps the
+callee's own entry check as a backstop and an elided invariant check has none.
+
+Code: `li_name_reads_only` / `li_frozen_for_site` and the `frozen_cands`
+capture in `src/compiler/elab_fns.c`; `frozen_cands` / `frozen_names` on
+`LoopInvSite` in `src/compiler/elab_internal.h`; the two annotations in
+`stdlib/vec.tur`.

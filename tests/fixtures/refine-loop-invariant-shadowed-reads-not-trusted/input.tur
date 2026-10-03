@@ -1,0 +1,27 @@
+;; A write promise counts only if the name still RESOLVES to the binding the
+;; promise was read off.
+;;
+;; `rt_resolve_fn` answers from the GLOBAL scope only, so it hands back stdlib
+;; `vec-get`'s `#reads v` even for a call that goes to a LOCAL binding of that
+;; name.  Without the shadow check in `li_name_reads_only` this was a live
+;; miscompile, measured: the grant was given, `(<= (vlen v) 3)` was reported
+;; PRESERVED by a body whose `vec-get` grows the vector, the re-establishment
+;; check was elided, and the program printed 5 -- the violated bound, silently.
+;;
+;; Now the promise is withheld, the check is kept, and the loop dies on it.
+(defn vlen [^borrow v : (Vec int)] #reads v : #refine{ r : int | (>= r 0) }
+  (vec-len v))
+
+(defn f [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [vec-get (fn [vv : (Vec int) ii : int] : int (do (vec-push! vv 7) 0))]
+      (let [^mut i 0]
+        (while (< i 2) :invariant (<= (vlen v) 3)
+          (vec-get v i)
+          (set! i (+ i 1)))
+        (vlen v)))))
+
+(defn main [] : int
+  (let [^mut v (vec-of 1 2 3)]
+    (println (f v)))
+  0)

@@ -1155,6 +1155,20 @@ typedef struct LoopInvSite {
     /* An elaboration-time decline (the invariant reads a mutable global...),
      * or NULL.  Decided where the bindings are still resolvable. */
     const char         *decline;
+    /* C2 / #reads: the names this loop's obligations may treat as FROZEN, so
+     * two occurrences of a `#reads` measure over one are congruent.  Built at
+     * registration (li_register_site) and nowhere else, because that is the
+     * only point where the loop's scope is live -- which both the borrow
+     * liveness and `li_name_reads_only`'s shadow check need.
+     *
+     * A live shared borrow is NOT what qualifies a name.  Every stdlib
+     * container's mutator takes the container by value, so no borrow conflict
+     * is reported for one, and a loop needs the name unchanged ACROSS the body
+     * rather than at a point.  What qualifies it is a WRITE PROMISE on
+     * everything the condition and body hand it to.  NULL / 0 when nothing
+     * qualifies, which is the common case. */
+    const char        **frozen_names;
+    uint32_t            n_frozen;
     /* The ELABORATED invariant predicate, back-filled by elab_while beside the
      * two check slots.  It exists so the elision veto can ask the one
      * contract-position gate (rt_pred_observably_impure) rather than the plain

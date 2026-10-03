@@ -1,3 +1,5 @@
+read-frame vec-len: UNVERIFIED mask=0x1
+read-frame vec-get: UNVERIFIED mask=0x1
 read-frame gen-at: VERIFIED mask=0x1
 read-frame gen2-at: VERIFIED mask=0x1
 read-frame alive2?: VERIFIED mask=0x1
