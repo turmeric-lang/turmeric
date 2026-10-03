@@ -1,0 +1,30 @@
+;; struct-temporary-fn-field-box-leaks: a by-value struct with a function
+;; field owns the fat box its constructor wraps the function in.  A LET-BOUND
+;; struct releases it at scope exit (local-struct-drop); an unbound receiver
+;; -- `(.run (make-struct PE inc) 1)`, a constructor or a call result used
+;; straight away -- had no binding to release it, so every such call leaked
+;; 24 bytes.  The field call now binds an owning receiver first, which is the
+;; same program with an owner.
+;;
+;; `requires.leak-check` builds this under AddressSanitizer with LeakSanitizer
+;; on (tests/run-leak-check.sh): a missing release is a leak, an early one a
+;; use-after-free.
+;;
+;; Direct-emitted functions only: a function whose body calls through a field
+;; is usually CPS-lowered (an indirect call colors it), and the CPS backend
+;; runs no `drops_fn_fields` release for a `let`-bound struct either -- see
+;; the report.  `main` here is direct-emitted.
+
+(defstruct PE :copy [run : (fn [int] int) tag : int])
+
+(defn inc [v : int] : int (+ 1 v))
+(defn dbl [v : int] : int (* 2 v))
+
+(defn make-pe [k : int] : PE (make-struct PE dbl k))
+
+(defn main [] : int
+  (println (.run (make-struct PE inc 0) 1))      ;; constructor receiver
+  (println (.run (make-pe 0) 21))                ;; call-result receiver
+  (let [p (make-struct PE inc 0)]                ;; let-bound (control)
+    (println (.run p 2)))
+  0)

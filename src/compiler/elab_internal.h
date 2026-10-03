@@ -1764,6 +1764,8 @@ Expr *elab_own_byval_copy(Elab *e, Expr *v, Binding *local);
  * operand into a `let` so the node above it sees a variable.  The CPS IR can
  * lower a control op in a let INIT but only delegates the nodes below, and a
  * delegated control op reaches the direct emitter, which aborts. */
+/* struct-temporary-fn-field-box-leaks (elab_forms.c). */
+bool elab_type_owns_boxed_fnfield(Type t);
 Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb);
 Expr *elab_hoist_control_operands(Elab *e, Expr *node);
 /* union-tagged-union-c-emission: tag a member value flowing into a union slot.

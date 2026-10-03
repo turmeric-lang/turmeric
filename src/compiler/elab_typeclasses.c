@@ -7520,6 +7520,30 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         call_out->as.call_.fn_expr = get_field;
                         call_out->as.call_.args = args;
                         call_out->as.call_.n_args = n_args;
+                        /* struct-temporary-fn-field-box-leaks: an UNBOUND owning
+                         * receiver -- `(.run (make-struct S f) x)`, a constructor
+                         * or a call result -- owns the fn-field box the
+                         * constructor made, and with no binding nothing released
+                         * it (a `let`-bound one is freed at scope exit,
+                         * local-struct-drop).  Bind it: `(let [t <recv>] (.run t
+                         * x))` is the same program, and the `let` gives the
+                         * release its owner. */
+                        const Expr *ro = obj;
+                        while (ro && ro->kind == EX_ASCRIBE) ro = ro->as.ascribe_.inner;
+                        if (ro && (ro->kind == EX_CALL || ro->kind == EX_MAKE_STRUCT) &&
+                            elab_type_owns_boxed_fnfield(obj->type)) {
+                            LetBinding *lb = (LetBinding *)arena_alloc(
+                                e->arena, sizeof(LetBinding));
+                            Expr *rv = elab_bind_control_temp(e, obj, lb);
+                            lb->binding->drops_fn_fields = true;
+                            get_field->as.get_field_.struct_expr = rv;
+                            Expr *let_expr = expr_new(e->arena, EX_LET,
+                                                      call_out->type, call->span);
+                            let_expr->as.let_.bindings = lb;
+                            let_expr->as.let_.n = 1;
+                            let_expr->as.let_.body = call_out;
+                            return let_expr;
+                        }
                         return call_out;
                     }
                 }
