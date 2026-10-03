@@ -2575,6 +2575,22 @@ the `turmeric-ci` project; all three are accounted for:
 | --- | --- | --- |
 | ~~[parse-shell-array-spins-on-zero-progress-value](../archive/parse-shell-array-spins-on-zero-progress-value.md)~~ | medium | **RESOLVED 2026-10-03** (archived, found and fixed in one change): `parse_shell_array` advanced its cursor only by what `parse_value` consumed and never checked that it consumed anything, so a `#`, `\n` or `\r` where a value is expected stalled `p` while each turn appended an empty string and doubled the array -- seen both as `out-of-memory (malloc(2147483648))` (2^28 entries, so ~268M turns: unbounded, not slow) and, in CI with less headroom, as `libFuzzer: timeout after 15 seconds`. A DoS on untrusted Justfile input, not memory-unsafe. **The identical defect had already been found by this same fuzzer in the dependency-argument loop and fixed there** -- the guard was never applied to this sibling, because the first fix was written as a fix to one loop rather than to the `parse_value`-returns-nothing contract. Now guarded, with the `realloc`-failure leak beside it fixed and CI's reproducer pinned as `tests/fuzz/seeds/fuzz_justfile/shell-array-comment-hang.bin`. Found 2026-10-01, Sentry `TURMERIC-CI-2`; the triggering line in isolation does **not** reproduce (the logical-line scanner's bracket-depth handling decides whether a `#`/newline lands inside the span), which is why the seed is the unreduced artifact |
 
+## Found probing SICP code for the SRFI 216 plan (filed 2026-10-03)
+
+Found running book-style SICP code and an SRFI 18 thread-start prototype
+against `#lang r7rs`, for
+[r7rs-srfi-18-216-sicp-plan](../upcoming/r7rs-srfi-18-216-sicp-plan.md).
+Chapters 1-3.5 already run on both back ends. These are what a student will
+hit next; the SICP guide's "Known rough edges" section points at each.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-saved-standard-procedure-follows-redefinition](r7rs-saved-standard-procedure-follows-redefinition.md) | high (blocks SICP 4.1) | `(define saved apply)` then `(define (apply ...))`: compiled, `saved` *is* the new `apply` (`eq?` is `#t`), so the metacircular evaluator loops forever; interpreted, `unbound variable: apply--user`. Same for `square`. The `<name>--user` respelling (`scheme_lower.c:1200-1235`) reaches references that run before the redefinition |
+| [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md) | medium | `(define (eval e env) ...)` with `(scheme eval)` imported: `cc` rejects the unit, `redefinition of 'r7rs_hyeval'`. Interpreter fine; compiled fine without the import |
+| [r7rs-apply-variadic-over-eight-arguments](r7rs-apply-variadic-over-eight-arguments.md) | medium | `(apply + (list 1 ... 10))` panics on both back ends. The eight-argument ceiling meant for fixed-arity callees (archived r7rs-apply-more-than-four-arguments) is applied to variadic ones too; `r7rs-apply-list__` never checks |
+| [r7rs-deep-recursion-segfaults-silently](r7rs-deep-recursion-segfaults-silently.md) | medium | Non-tail recursion 1,000,000 deep: compiled program exits 139 with no output (100,000 is fine; the interpreter does 1,000,000). No `sigaltstack` handler, so no "stack overflow" message |
+| [turmeric-module-cannot-call-a-scheme-procedure-value](turmeric-module-cannot-call-a-scheme-procedure-value.md) | medium (expressiveness) | A Turmeric module handed a Scheme procedure cannot call it: `[f]` or `[f : any]` then `(f)` is `'f' is not a function or continuation`. The prelude does the same call and compiles. Forces SRFI 18's thread start through a named-export registry |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
