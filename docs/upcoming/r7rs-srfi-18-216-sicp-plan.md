@@ -132,9 +132,11 @@ Turmeric side calls back only `thread-entry__`.
 27's top-level state, so every `(srfi 216)` import costs what importing
 `(srfi 27)` does, whether or not the program calls `random`: +142 KB of
 emitted C over a bare program (1.51 MB to 1.65 MB, +9%), and the build stays
-under a second. Accepted for now. If it matters, bind `random` to
-`stdlib/random.tur` through the seam instead (216 asks for no saveable
-state). `test-and-set!` locks one private mutex once T3 has threads; until
+under a second. **Scheduled as stage T0b** (Section 4), not left open.
+Binding `random` to `stdlib/random.tur` instead, as an earlier draft
+suggested, is not a drop-in: its float functions return `:int` (a scaled
+integer, `rand-float`, `random-next-float!`), and it has no bignum ranges,
+which SICP's Fermat test (1.2.6) reaches with a large `n`. `test-and-set!` locks one private mutex once T3 has threads; until
 then nothing else can run between its test and its set.
 
 **`parallel-execute` before SRFI 18 (decided at T0).** Not an error: it
@@ -239,6 +241,29 @@ them.
   floor 21); `tests/fixtures/r7rs-srfi-216` runs book-style 1.2.6, 2.2.1, 3.4
   and 3.5 code; `errors/r7rs-srfi-216-41-conflict` pins the refusal. The
   guide's paste-in prelude became `(import (srfi 216))`.
+- **T0b -- `(srfi 216)` stops paying for all of SRFI 27.** Today every
+  import adds 142 KB of emitted C (D2), whether or not the program calls
+  `random`. **Done when:** a program that imports `(srfi 216)` and never
+  calls `random` emits the same C, within noise, as one without the import,
+  and a program that calls `random` adds only what `random-integer` and
+  `random-real` reach. Pin both with a size check, as
+  `tests/check-r7rs-srfi-prune.sh` does for the other SRFIs. Directions, in
+  order of preference:
+  1. Teach the SRFI pruner (src/passes/srfi_prune.c) to drop SRFI 27's
+     top-level state (`default-random-source`) when nothing
+     reached keeps it. This helps every `(srfi 27)` importer,
+     not only 216. Start from what r7rs-srfi-plan S7 measured: 27 keeps
+     2,076 lines "the pruner cannot drop".
+  2. Failing that, a small generator of 216's own for `random` (fixnum and
+     float ranges in inline C, with a bignum range built from fixnum draws
+     in Scheme), so 216 no longer imports 27. Mind the inline-C costs
+     r7rs-srfi-plan D3 lists: an interpreter twin, and the region-note and
+     GC-rooting audits.
+- **SRFI 18 (T1-T3) is part of this plan and required, not optional.**
+  SICP 3.4 is about interleavings, and the sequential `parallel-execute`
+  (D2) can never show one. The plan is not done until T3 has replaced it
+  and the guide's "one after another" caveat is gone. SRFI 18 also stands
+  on its own as an R7RS library people expect.
 - **T1 -- SRFI 18, compiled.** D1's two halves; fixture
   `r7rs-srfi-18` (`requires.compiled` until T2); the stress cases from the
   existing r7rs-threads fixtures re-expressed through the SRFI API.
