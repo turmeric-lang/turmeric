@@ -4695,6 +4695,34 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                      * would emit `__inst_Decode_decode_cstr(const char *)` for
                      * the cstr instance -- silently substituting cstr in where
                      * the user pinned int, and segfaulting at runtime. */
+                    /* saffron-dyn-parametric-extra-read-as-class-var (fix
+                     * direction 2): in a dynamic dialect, a bare EXTRA
+                     * parameter of an instance on a PARAMETRIC head is `any`,
+                     * not the head.  The rewrite below cannot tell `Eq [Vec]`'s
+                     * `y` (another vector) from `Nth [Vec]`'s `n` (an index):
+                     * both are bare in the class and the impl.  Retyped to the
+                     * head, the index made the dynamic witness cast it to
+                     * `(Vec any)` and panic.  As `any` the impl narrows it where
+                     * it is used -- `(vec-get v n)` and `(vec-len y)` both pass
+                     * it through the D5 seam, which casts to what the callee
+                     * takes -- the dialect's own default for a bare parameter,
+                     * and what spelling `n : any` already did.  The receiver
+                     * (parameter 0) keeps the rewrite; a kind-* head, whose
+                     * class variable IS a concrete type, keeps it too. */
+                    else if (param_type.kind == TY_INT && n_method_params > 0 &&
+                        n_type_args > 0 && type_args[0].kind == TY_ADT &&
+                        type_args[0].as.adt_.def &&
+                        type_args[0].as.adt_.def->n_type_params > 0 &&
+                        lang_span_is_dynamic(p->span) &&
+                        !method_is_return_dispatch(tc, &tc->methods[i]) &&
+                        !(tc->methods[i].param_explicit_type &&
+                          n_method_params < tc->methods[i].n_params &&
+                          tc->methods[i].param_explicit_type[n_method_params])) {
+                        memset(&elab_param_type, 0, sizeof(elab_param_type));
+                        elab_param_type.copy_kind = CK_COPY;
+                        elab_param_type.kind = TY_ANY;
+                        param_type = elab_param_type;
+                    }
                     else if (param_type.kind == TY_INT && n_type_args > 0 &&
                         !method_is_return_dispatch(tc, &tc->methods[i]) &&
                         !(tc->methods[i].param_explicit_type &&

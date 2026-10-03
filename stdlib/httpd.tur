@@ -90,6 +90,7 @@
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: static int64_t httpd_max_body = 8388608; */
   /* __tur_include__: static int httpd_bind_any = 0; */
+  /* __tur_include__: static char httpd_bind_addr_s[64] = {0}; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
@@ -225,6 +226,40 @@
   httpd_bind_any = on ? 1 : 0;
   return prev != 0;
   ```)
+;;; httpd-set-bind-addr! -- listen on one address, IPv4 or IPv6.
+;;;
+;;; httpd-set-bind-any! chooses between loopback and every interface; this
+;;; names the interface -- a numeric address like "192.168.1.5", "::1" or
+;;; "::" (every IPv6 interface).  It applies to the servers created after it
+;;; (httpd-new, httpd-new-pool, httpd-new-async, ...) and wins over
+;;; httpd-set-bind-any!.  "" clears it, back to that default.  An address
+;;; that does not parse is refused and the setting is left as it was.
+;;; TUR_BIND_LOOPBACK, which the test harnesses export, still forces loopback
+;;; -- of the address's own family (127.0.0.1 or ::1).
+;;;
+;;; Parameters:
+;;;   addr -- a numeric IPv4 or IPv6 address, or "" to clear
+;;;
+;;; Returns:
+;;;   true if the address was accepted (or cleared), false if it did not parse.
+;;;
+;;; Example:
+;;;   (httpd-set-bind-addr! "::1")
+;;;   (httpd-new 8080 handler)   ; IPv6 loopback only
+;;;
+;;; Since: 2026-10-03 (security-audit-plan WP4 residual)
+
+(defn httpd-set-bind-addr! [addr : cstr] : bool
+  ```c
+  if (!addr) return false;
+  if (!*addr) { httpd_bind_addr_s[0] = '\0'; return true; }
+  if (strlen(addr) >= sizeof httpd_bind_addr_s) return false;
+  unsigned char probe[16];
+  if (inet_pton(AF_INET, addr, probe) != 1 && inet_pton(AF_INET6, addr, probe) != 1)
+      return false;
+  memcpy(httpd_bind_addr_s, addr, strlen(addr) + 1);
+  return true;
+  ```)
 ;;; httpd-bind-addr -- internal: the IPv4 address (host order) to listen on.
 
 (defn httpd-bind-addr [] : int
@@ -233,6 +268,50 @@
   const char *e = getenv("TUR_HTTPD_BIND_ANY");
   int any = httpd_bind_any || (e && *e && strcmp(e, "0") != 0);
   return (int64_t)(any ? INADDR_ANY : INADDR_LOOPBACK);
+  ```)
+;;; httpd-listen-socket -- internal: a bound, listening, non-blocking socket for
+;;; `port` on the configured address (httpd-set-bind-addr!, else loopback or
+;;; every interface per httpd-bind-addr), or -1.  Shared by the constructors.
+
+(defn httpd-listen-socket [port : int] : int
+  ```c
+  #include <fcntl.h>
+  const char *a = httpd_bind_addr_s;
+  int fam = AF_INET;
+  unsigned char a6[16];
+  if (a[0] && inet_pton(AF_INET, a, a6) != 1) {
+      if (inet_pton(AF_INET6, a, a6) != 1) return -1;
+      fam = AF_INET6;
+  }
+  int loop = getenv("TUR_BIND_LOOPBACK") != NULL;
+  struct sockaddr_storage ss;
+  memset(&ss, 0, sizeof ss);
+  socklen_t sl;
+  if (fam == AF_INET) {
+      struct sockaddr_in *s4 = (struct sockaddr_in *)&ss;
+      s4->sin_family = AF_INET;
+      s4->sin_port   = htons((uint16_t)port);
+      /* No explicit address, or forced loopback: exactly the old default. */
+      if (!a[0] || loop) s4->sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
+      else inet_pton(AF_INET, a, &s4->sin_addr);
+      sl = (socklen_t)sizeof *s4;
+  } else {
+      struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&ss;
+      s6->sin6_family = AF_INET6;
+      s6->sin6_port   = htons((uint16_t)port);
+      if (loop) ((unsigned char *)&s6->sin6_addr)[15] = 1;   /* ::1 */
+      else memcpy(&s6->sin6_addr, a6, 16);
+      sl = (socklen_t)sizeof *s6;
+  }
+  int fd = socket(fam, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  if (bind(fd, (struct sockaddr *)&ss, sl) < 0) { close(fd); return -1; }
+  if (listen(fd, 128) < 0) { close(fd); return -1; }
+  return fd;
   ```)
 ;;; httpd-status-text -- internal: the reason phrase for a status code.
 
@@ -770,6 +849,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   typedef int64_t (*httpd_tls_wrap_fn)(int64_t, int64_t);
   typedef int64_t (*httpd_tls_handshake_fn)(int64_t);
@@ -834,6 +914,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   int64_t *fat = (int64_t *)env;
   HttpdBlock *hb = (HttpdBlock *)(intptr_t)fat[1];
@@ -850,6 +931,26 @@
       }
       pthread_mutex_lock(&hb->fdq_mtx);
       if (hb->fdq_closed) { pthread_mutex_unlock(&hb->fdq_mtx); close(cfd); break; }
+      /* The pending-connection cap (httpd-new-pool-with-limit; 512 by
+       * default).  Every queued connection holds an fd until a worker frees
+       * up, so an unbounded queue let a flood of connections exhaust the
+       * process's descriptors.  Refuse past the cap with a 503, as the async
+       * server does past its in-flight cap. */
+      if (hb->fdq_max > 0 && hb->fdq_count >= hb->fdq_max) {
+          pthread_mutex_unlock(&hb->fdq_mtx);
+          const char *resp =
+              "HTTP/1.0 503 Service Unavailable\r\n"
+              "Content-Length: 19\r\n"
+              "Connection: close\r\n"
+              "\r\n"
+              "server at capacity\n";
+          (void)send(cfd, resp, strlen(resp), 0);
+          /* Linger rather than close(): closing over the unread request
+           * sends RST, and a client that has not read the 503 yet loses it
+           * (see httpd-async-accept-cb). */
+          (void)tur_reactor_linger_close(hb->reactor, cfd, 2000);
+          continue;
+      }
       /* Grow the queue if full (doubling). */
       if (hb->fdq_count == hb->fdq_cap) {
           int new_cap = hb->fdq_cap * 2;
@@ -875,6 +976,10 @@
   }
   ```)
 ;;; httpd-new-pool -- create an httpd instance with a configurable worker count.
+;;;
+;;; At most 512 accepted connections wait for a free worker; past that a
+;;; connection is answered 503 and closed.  httpd-new-pool-with-limit sets
+;;; another cap.
 ;;;
 ;;; Parameters:
 ;;;   port    -- TCP port to listen on (0 = kernel-assigned)
@@ -910,6 +1015,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   /* `workers * sizeof(pthread_t)` wrapped for a huge count and the first
@@ -919,24 +1025,13 @@
     TUR_CLOSURE_DROP(handler);
     return NULL;
   }
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
-  int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  int flags = fcntl(fd, F_GETFL, 0);
-  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family      = AF_INET;
   /* Loopback unless the program opted in to every interface with
-   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
-   * server that is reachable from the network should be one somebody asked
-   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
-   * loopback. */
-  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
-  addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1, or named one with
+   * httpd-set-bind-addr! (security-audit-plan M-4: a server that is reachable
+   * from the network should be one somebody asked for).  TUR_BIND_LOOPBACK,
+   * which the test suite exports, still forces loopback. */
+  int fd = (int)httpd_hylisten_hysocket(port);
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdBlock *hb = (HttpdBlock *)calloc(1, sizeof(HttpdBlock));
   if (!hb) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   hb->listen_fd = fd;
@@ -944,6 +1039,10 @@
   hb->n_workers = (int)workers;
   /* Initialise the shared queue with a small capacity (will grow). */
   hb->fdq_cap = 16;
+  /* WP4 residual item 3: a default pending-connection cap, the same 512 as
+   * httpd-new-async's in-flight default; httpd-new-pool-with-limit sets
+   * another (0 = unlimited). */
+  hb->fdq_max = 512;
   hb->fdq     = (int *)malloc((size_t)hb->fdq_cap * sizeof(int));
   if (!hb->fdq) { close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   pthread_mutex_init(&hb->fdq_mtx, NULL);
@@ -982,6 +1081,60 @@
       pthread_create(&hb->workers[i], NULL,
                      (void *(*)(void *))httpd_hyworker, (void *)hb);
   }
+  return (void *)hb;
+  ```)
+;;; httpd-new-pool-with-limit -- httpd-new-pool with a pending-connection cap.
+;;;
+;;; Each worker serves one connection at a time; accepted connections wait
+;;; in a queue for a free worker, each holding a descriptor.  When
+;;; `max-pending` connections are already waiting, a new one is answered
+;;; `503 Service Unavailable` and closed instead of queued.
+;;;
+;;; Parameters:
+;;;   port        -- TCP port to listen on (0 = kernel-assigned)
+;;;   workers     -- number of worker threads in the pool (must be > 0)
+;;;   handler     -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   max-pending -- queued-connection cap (0 = unlimited; httpd-new-pool
+;;;                  uses 512)
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque Httpd handle, or nil on error
+;;;
+;;; Example:
+;;;   (let [h (httpd-new-pool-with-limit 0 4 handler 64)]
+;;;     (httpd-run h)
+;;;     (httpd-free h))
+;;;
+;;; Since: 2026-10-03 (security-audit-plan WP4 residual)
+
+(defn httpd-new-pool-with-limit [port : int
+                                 workers : int
+                                 ^fat handler : (fn [ptr<void>] nil)
+                                 max-pending : int]
+  #fx{Net}
+  : ptr<void>
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+  } HttpdBlock;
+  /* The handler's ownership passes to httpd-new-pool, which releases it on
+   * every refusal.  The reactor does not run until httpd-run, so no
+   * connection is accepted under the default cap before this one is set. */
+  HttpdBlock *hb = (HttpdBlock *)httpd_hynew_hypool((int64_t)port,
+                                                (int64_t)workers,
+                                                (int64_t)handler);
+  if (!hb) return NULL;
+  hb->fdq_max = max_pending <= 0 ? 0
+              : max_pending > INT32_MAX ? INT32_MAX : (int)max_pending;
   return (void *)hb;
   ```)
 ;;; httpd-new -- create a new httpd instance with the default worker pool size (4).
@@ -1058,6 +1211,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   /* handler is passed ^fat (this fn owns the heap box).  On an early refusal it
    * is never handed to httpd-new-pool, so release it here or it leaks -- via
@@ -1107,12 +1261,15 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
-  struct sockaddr_in addr;
+  struct sockaddr_storage addr;
   socklen_t len = sizeof(addr);
   if (getsockname(hb->listen_fd, (struct sockaddr *)&addr, &len) < 0) return -1;
-  return (int64_t)ntohs(addr.sin_port);
+  if (addr.ss_family == AF_INET6)
+      return (int64_t)ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+  return (int64_t)ntohs(((struct sockaddr_in *)&addr)->sin_port);
   ```)
 ;;; httpd-run -- run the listener reactor until httpd-stop is called.
 ;;;
@@ -1132,6 +1289,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   tur_reactor_run(hb->reactor);
@@ -1157,6 +1315,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
@@ -1195,6 +1354,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   if (hb->workers) {
@@ -2892,24 +3052,13 @@
       int   max_in_flight;        /* A4: cap; 0 = unlimited */
       int   in_flight;            /* A4: live request count */
   } HttpdAsync;
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
-  int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  int flags = fcntl(fd, F_GETFL, 0);
-  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family      = AF_INET;
   /* Loopback unless the program opted in to every interface with
-   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
-   * server that is reachable from the network should be one somebody asked
-   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
-   * loopback. */
-  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
-  addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1, or named one with
+   * httpd-set-bind-addr! (security-audit-plan M-4: a server that is reachable
+   * from the network should be one somebody asked for).  TUR_BIND_LOOPBACK,
+   * which the test suite exports, still forces loopback. */
+  int fd = (int)httpd_hylisten_hysocket(port);
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
   if (!ha) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   ha->listen_fd     = fd;
@@ -2943,17 +3092,20 @@
   }
   return (void *)ha;
   ```)
-;;; httpd-new-async -- create an async server with no in-flight cap.
+;;; httpd-new-async -- create an async server capped at 512 in-flight requests.
 ;;;
-;;; Shortcut for `(httpd-new-async-with-limit port handler 0)`.  Use
-;;; the -with-limit variant in production to cap concurrent requests.
+;;; Shortcut for `(httpd-new-async-with-limit port handler 512)`: past 512
+;;; live request fibers a new connection is answered 503 and closed.  512
+;;; sits under the common 1024 open-file soft limit, so a flood is refused
+;;; before it exhausts the process's descriptors.  Use the -with-limit
+;;; variant to choose another cap (0 = unlimited).
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-new-async [port : int ^fat handler : (fn [ptr<void>] nil)]
   #fx{Net}
   : ptr<void>
-  (httpd-new-async-with-limit port handler 0))
+  (httpd-new-async-with-limit port handler 512))
 ;;; httpd-run-async -- drive the async server until stopped.
 ;;;
 ;;; Blocks the calling thread, running the fiber-per-request loop.
@@ -3087,10 +3239,12 @@
   } HttpdAsync;
   if (!h) return 0;
   HttpdAsync *ha = (HttpdAsync *)h;
-  struct sockaddr_in sa;
+  struct sockaddr_storage sa;
   socklen_t sl = sizeof(sa);
   if (getsockname(ha->listen_fd, (struct sockaddr *)&sa, &sl) < 0) return 0;
-  return (int64_t)ntohs(sa.sin_port);
+  if (sa.ss_family == AF_INET6)
+      return (int64_t)ntohs(((struct sockaddr_in6 *)&sa)->sin6_port);
+  return (int64_t)ntohs(((struct sockaddr_in *)&sa)->sin_port);
   ```)
 ;;; httpd-await-readable -- suspend the current fiber until conn fd is readable.
 ;;;
@@ -4028,16 +4182,25 @@
 ;; MW2: mw-rate-limit -- sliding-window per-IP rate limiter
 ;; =============================================================================
 ;;
-;; State: a heap-allocated table of (ip_hash, window_start, count) slots
-;; protected by a pthread_mutex. Slots are addressed by linear probing on
-;; the FNV-1a hash of the client IP. Each mw-rate-limit closure has its
-;; OWN table; multiple instances do not share state.
+;; State: a heap-allocated table of (ip, window_start, count) entries
+;; protected by a pthread_mutex. The table is 8-way set-associative: the
+;; FNV-1a hash of the client IP picks a set of 8 entries, and the IP string
+;; itself is the key, so two IPs whose hashes collide never share a counter.
+;; Each mw-rate-limit closure has its OWN table; multiple instances do not
+;; share state.
 ;;
-;; Sliding window semantics: each slot remembers when its current window
+;; Sliding window semantics: each entry remembers when its current window
 ;; started. A request bumps the count; if (now - window_start) > window_s
 ;; the window resets first. When count > requests, the request is rejected
 ;; with 429 and a `Retry-After` header carrying the seconds until the
 ;; current window ends.
+;;
+;; A new IP takes an empty entry of its set, else one whose window has
+;; already ended (it carries no information), else the entry whose window
+;; started longest ago. So the table never fails open: a flood of distinct
+;; IPs cannot fill it so that every further IP goes unlimited -- under one,
+;; the IPs it evicts merely start a fresh window. Each check touches at most
+;; 8 entries.
 ;;
 ;; This is a single-process limiter -- it does not coordinate across
 ;; multiple server instances. Share the table only within one process.
@@ -4055,14 +4218,15 @@
 (defn httpd-mw-ratelimit-new [requests : int window-s : int] : int
   ```c
   typedef struct {
-      uint32_t ip_hash;
-      int64_t  window_start_s;
+      uint32_t ip_hash;          /* FNV-1a of the whole key; 0 = empty */
       int32_t  count;
+      int64_t  window_start_s;
+      char     ip[48];           /* the key (INET6_ADDRSTRLEN fits) */
   } RLEntry;
   typedef struct {
       pthread_mutex_t mtx;
       RLEntry        *entries;
-      int             capacity;
+      int             capacity;  /* n_sets * 8 */
       int             window_s;
       int             max_requests;
   } RLState;
@@ -4086,7 +4250,7 @@
   /* __tur_include__: static void httpd_rl_cleanup_all(void) { RLReg *r = g_rl_registry; while (r) { RLReg *nx = r->next; if (r->entries) free(r->entries); if (r->st) free(r->st); free(r); r = nx; } g_rl_registry = 0; } */
   RLState *st = (RLState *)calloc(1, sizeof(RLState));
   if (!st) return 0;
-  st->capacity     = 1024;
+  st->capacity     = 256 * 8;   /* 256 sets of 8 ways, 128 KiB */
   st->window_s     = window_s > 0 ? (int)window_s : 1;
   st->max_requests = requests > 0 ? (int)requests : 1;
   st->entries      = (RLEntry *)calloc((size_t)st->capacity, sizeof(RLEntry));
@@ -4111,64 +4275,73 @@
   ```c
   #include <time.h>
   typedef struct {
-      uint32_t ip_hash;
-      int64_t  window_start_s;
+      uint32_t ip_hash;          /* FNV-1a of the whole key; 0 = empty */
       int32_t  count;
+      int64_t  window_start_s;
+      char     ip[48];           /* the key (INET6_ADDRSTRLEN fits) */
   } RLEntry;
   typedef struct {
       pthread_mutex_t mtx;
       RLEntry        *entries;
-      int             capacity;
+      int             capacity;  /* n_sets * 8 */
       int             window_s;
       int             max_requests;
   } RLState;
   if (!state || !ip || !*ip) return 0;
   RLState *st = (RLState *)(intptr_t)state;
-  /* FNV-1a 32-bit hash of the IP cstr. */
+  /* FNV-1a 32-bit hash of the IP cstr: it picks the set and is a fast
+   * pre-check, but the key is the IP itself (the first 47 bytes of a longer
+   * one, whose hash still covers it whole) -- two IPs whose 32-bit hashes
+   * collide used to share one counter. */
   uint32_t h = 2166136261u;
   for (const char *p = ip; *p; p++) {
       h ^= (uint8_t)*p;
       h *= 16777619u;
   }
   if (h == 0) h = 1;  /* reserve 0 for "empty slot" */
+  const int ways = 8;
+  int n_sets = st->capacity / ways;
+  RLEntry *set = &st->entries[(size_t)(h % (uint32_t)n_sets) * (size_t)ways];
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   int64_t now = (int64_t)ts.tv_sec;
   pthread_mutex_lock(&st->mtx);
-  /* Linear probe up to capacity slots. */
-  int idx = (int)(h % (uint32_t)st->capacity);
-  for (int probe = 0; probe < st->capacity; probe++) {
-      RLEntry *e = &st->entries[idx];
-      if (e->ip_hash == 0) {
-          /* Fresh slot. */
-          e->ip_hash        = h;
-          e->window_start_s = now;
-          e->count          = 1;
-          pthread_mutex_unlock(&st->mtx);
-          return 0;
-      }
-      if (e->ip_hash == h) {
-          /* Existing window for this IP. */
-          int64_t age = now - e->window_start_s;
-          if (age >= (int64_t)st->window_s) {
-              e->window_start_s = now;
-              e->count          = 1;
-              pthread_mutex_unlock(&st->mtx);
-              return 0;
-          }
-          e->count++;
-          if (e->count > st->max_requests) {
-              int retry = (int)((int64_t)st->window_s - age);
-              if (retry < 1) retry = 1;
-              pthread_mutex_unlock(&st->mtx);
-              return retry;
-          }
-          pthread_mutex_unlock(&st->mtx);
-          return 0;
-      }
-      idx = (idx + 1) % st->capacity;
+  RLEntry *hit = NULL, *empty = NULL, *ended = NULL, *oldest = NULL;
+  for (int w = 0; w < ways; w++) {
+      RLEntry *e = &set[w];
+      if (e->ip_hash == 0) { if (!empty) empty = e; continue; }
+      if (e->ip_hash == h && strncmp(e->ip, ip, sizeof e->ip - 1) == 0) { hit = e; break; }
+      if (now - e->window_start_s >= (int64_t)st->window_s) { if (!ended) ended = e; }
+      if (!oldest || e->window_start_s < oldest->window_start_s) oldest = e;
   }
-  /* Table full -- fail-open (allow). */
+  if (!hit) {
+      /* A new IP: an empty entry, else one whose window has ended, else the
+       * oldest window in the set.  Never fail open -- a full table used to
+       * allow every IP it could not place. */
+      RLEntry *e = empty ? empty : ended ? ended : oldest;
+      e->ip_hash        = h;
+      e->window_start_s = now;
+      e->count          = 1;
+      strncpy(e->ip, ip, sizeof e->ip - 1);
+      e->ip[sizeof e->ip - 1] = '\0';
+      pthread_mutex_unlock(&st->mtx);
+      return 0;
+  }
+  /* Existing window for this IP. */
+  int64_t age = now - hit->window_start_s;
+  if (age >= (int64_t)st->window_s) {
+      hit->window_start_s = now;
+      hit->count          = 1;
+      pthread_mutex_unlock(&st->mtx);
+      return 0;
+  }
+  hit->count++;
+  if (hit->count > st->max_requests) {
+      int retry = (int)((int64_t)st->window_s - age);
+      if (retry < 1) retry = 1;
+      pthread_mutex_unlock(&st->mtx);
+      return retry;
+  }
   pthread_mutex_unlock(&st->mtx);
   return 0;
   ```)

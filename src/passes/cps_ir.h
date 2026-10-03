@@ -363,6 +363,8 @@ void cps_ir_dump_program(Arena *a, Expr *program, FILE *out);
 
 /* E2a: fn-value PARAM bindings whose effectful tail calls thread the DK. */
 void cps_ir_thread_param_reset(void);
+/* Forget the callee_fndef binding -> FnDef table (a new classification). */
+void cps_ir_callee_cache_reset(void);
 void cps_ir_thread_param_add(const Binding *param);
 bool cps_ir_thread_param_has(const Binding *param);
 

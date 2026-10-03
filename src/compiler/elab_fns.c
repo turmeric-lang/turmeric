@@ -6224,6 +6224,81 @@ static bool rt_pred_mentions_reflected(Elab *e, const Form *f, uint32_t depth) {
  * longer hold at the call, and when `call_form` is reachable by more than one
  * route, which a macro that shares a node can produce and which would make
  * "the" path ambiguous. */
+/* r7rs-conformance-program-emits-megabytes-of-c: what rt_push_cs_path_conds
+ * learns from a caller's body alone -- the names it assigns (WF3), and whether
+ * an assigned name is borrowed somewhere that may write it -- memoized per
+ * body for one refine_resolve_call_sites pass.  Each crossing used to walk
+ * its caller's whole body (macro expansions included) for this, so a caller
+ * with N crossings cost N walks: `main` in a large `#lang r7rs` program holds
+ * every top-level form, and this was about 40% of its `emit-c`.  Nothing it
+ * reads changes during the pass (the bodies and the macro table are fixed by
+ * then). */
+typedef struct {
+    const Form  *body;          /* NULL = empty slot */
+    bool         decline;       /* the whole-body decline: return before any fact */
+    uint32_t     nw;
+    const char  *wtgt[RT_WF3_MAX_TARGETS];
+} RtBodyWrites;
+static struct { RtBodyWrites *v; uint32_t cap, n; } g_rt_body_writes;
+
+static void rt_body_writes_reset(void) {
+    free(g_rt_body_writes.v);
+    g_rt_body_writes.v = NULL;
+    g_rt_body_writes.cap = g_rt_body_writes.n = 0;
+}
+
+static const RtBodyWrites *rt_body_writes(Elab *e, const Form *body) {
+    if (g_rt_body_writes.n * 2 + 2 > g_rt_body_writes.cap) {
+        uint32_t ncap = g_rt_body_writes.cap ? g_rt_body_writes.cap * 2 : 64;
+        RtBodyWrites *nv = (RtBodyWrites *)calloc(ncap, sizeof *nv);
+        if (!nv) return NULL;
+        for (uint32_t i = 0; i < g_rt_body_writes.cap; i++) {
+            if (!g_rt_body_writes.v[i].body) continue;
+            uint64_t x = (uint64_t)(uintptr_t)g_rt_body_writes.v[i].body;
+            x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+            uint32_t h = (uint32_t)x & (ncap - 1);
+            while (nv[h].body) h = (h + 1) & (ncap - 1);
+            nv[h] = g_rt_body_writes.v[i];
+        }
+        free(g_rt_body_writes.v);
+        g_rt_body_writes.v = nv;
+        g_rt_body_writes.cap = ncap;
+    }
+    uint64_t x = (uint64_t)(uintptr_t)body;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    uint32_t mask = g_rt_body_writes.cap - 1;
+    uint32_t h = (uint32_t)x & mask;
+    while (g_rt_body_writes.v[h].body) {
+        if (g_rt_body_writes.v[h].body == body) return &g_rt_body_writes.v[h];
+        h = (h + 1) & mask;
+    }
+    RtBodyWrites *w = &g_rt_body_writes.v[h];
+    w->body = body;
+    g_rt_body_writes.n++;
+    /* WF3: an assignment no longer declines the whole body outright.  Collect
+     * what the body assigns, so each hypothesis can be tested against it; a
+     * frame this analysis cannot vouch for (place-expression target, an
+     * unattributable assignment symbol, overflow, too deep) declines. */
+    w->nw = 0;
+    if (!rt_collect_set_targets(e, body, 0, w->wtgt, &w->nw)) {
+        w->decline = true;
+        return w;
+    }
+    /* A borrowed local is the one way a callee could write this frame's slot,
+     * so an assigned name that is also borrowed is not provably disjoint --
+     * unless every borrow of it provably goes nowhere that writes, which is
+     * the question WF2's checked frames made askable.  A body with no checked
+     * frame in reach answers "no" and the guard stays as strict as it was. */
+    for (uint32_t i = 0; i < w->nw; i++)
+        if (rt_form_borrows_name(e, body, w->wtgt[i], 0) &&
+            !wf_borrow_write_free(e, body, w->wtgt[i], 0)) {
+            w->decline = true;
+            return w;
+        }
+    w->decline = false;
+    return w;
+}
+
 static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
                                         bool *skip) {
     RefineHyp *saved = cs->env ? cs->env->head : NULL;
@@ -6231,23 +6306,11 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
     if (li_cs_path_facts(e, cs, skip)) return saved;   /* loop-invariants-plan LI3 */
 
-    /* WF3: an assignment no longer declines the whole body outright.  Collect
-     * what the body assigns, so each hypothesis can be tested against it
-     * below; a frame this analysis cannot vouch for (place-expression target,
-     * an unattributable assignment symbol, overflow, too deep) returns false
-     * here and restores the old whole-body decline. */
-    const char *wtgt[RT_WF3_MAX_TARGETS];
-    uint32_t nw = 0;
-    if (!rt_collect_set_targets(e, cs->caller_body, 0, wtgt, &nw)) return saved;
-    /* A borrowed local is the one way a callee could write this frame's slot,
-     * so an assigned name that is also borrowed is not provably disjoint --
-     * unless every borrow of it provably goes nowhere that writes, which is
-     * the question WF2's checked frames made askable.  A body with no checked
-     * frame in reach answers "no" and the guard stays as strict as it was. */
-    for (uint32_t i = 0; i < nw; i++)
-        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0) &&
-            !wf_borrow_write_free(e, cs->caller_body, wtgt[i], 0))
-            return saved;
+    /* What the body assigns, and the whole-body decline (rt_body_writes). */
+    const RtBodyWrites *bw = rt_body_writes(e, cs->caller_body);
+    if (!bw || bw->decline) return saved;
+    const char *const *wtgt = bw->wtgt;
+    uint32_t nw = bw->nw;
 
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
 
@@ -6337,6 +6400,7 @@ static void rt_lint_class_leniency(Elab *e, RefineCallSite *cs, uint32_t p,
 
 void refine_resolve_call_sites(Elab *e) {
     if (!e) return;
+    rt_body_writes_reset();
     /* Start at THIS turn's crossings.  Zero for a compile and for a session's
      * first turn, so the whole-program path walks everything exactly as before.
      *
@@ -6485,6 +6549,7 @@ void refine_resolve_call_sites(Elab *e) {
         }
         if (cs->env) cs->env->head = cs_saved;
     }
+    rt_body_writes_reset();
 }
 
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)

@@ -1312,6 +1312,30 @@ if [ "$_r7rs_warm" = 1 ]; then
     rm -f "$RESULTS_DIR/r7rs-warm.exe" "$RESULTS_DIR/r7rs-warm.tur"
 fi
 
+# macos-sanitized-libturi-fixture-builds-hit-10s-cap: a program that imports a
+# module autolinking `-lturi` (arc, httpd, reactor, turi/eval, r7rs/eval) links
+# the Debug libturi.a, so the driver compiles it with
+# -fsanitize=address,undefined too.  The FIRST such build of a run pays a cold
+# cost (the 110 MB archive and the sanitizer runtimes into the cache, ~2x a warm
+# build on Linux), and on a loaded macOS runner whichever of these fixtures came
+# first -- arc-basic and arc-weak-upgrade, alphabetically -- timed out at the
+# 10 s build cap.  Pay it once here, untimed, like the r7rs warm-up above, so
+# every one of them builds warm.  Only when the run reaches such a fixture.
+_turi_link_re='\(import (arc|httpd|reactor|turi/eval|r7rs/eval)[ )]|stdlib/(arc|httpd|reactor|turi/eval|r7rs/eval)\.tur|\(scheme eval\)'
+_turi_warm=0
+for d in "${HAPPY_DIRS[@]}"; do
+    if grep -rqE --include='*.tur' "$_turi_link_re" "$d" 2>/dev/null; then
+        _turi_warm=1; break
+    fi
+done
+if [ "$_turi_warm" = 1 ]; then
+    printf '(defmodule turi-warm\n  (import arc :refer [arc-new arc-drop])\n  (defn main [] : int (arc-drop (arc-new 1)) 0))\n' \
+        > "$RESULTS_DIR/turi-warm.tur"
+    CC="$BUILD_CC" "$TUR" build "$RESULTS_DIR/turi-warm.tur" \
+        -o "$RESULTS_DIR/turi-warm.exe" > /dev/null 2>&1 || true
+    rm -f "$RESULTS_DIR/turi-warm.exe" "$RESULTS_DIR/turi-warm.tur"
+fi
+
 HAPPY_XARGS_RC=0
 if [ ${#HAPPY_DIRS[@]} -gt 0 ]; then
     HAPPY_LIST_FILE="$RESULTS_DIR/happy_dirs.list"

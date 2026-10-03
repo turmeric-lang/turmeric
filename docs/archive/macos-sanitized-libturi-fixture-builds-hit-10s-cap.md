@@ -1,5 +1,22 @@
 # macOS: the first fixtures that link the sanitized `libturi` time out building under `run.sh`'s 10 s cap
 
+**RESOLVED 2026-10-03** by fix direction 1.  `tests/run.sh` now builds a
+three-line program that imports `arc` once, untimed, with the fixtures' `$TUR`
+and `$BUILD_CC`, before dispatching the happy-path fixtures -- the same shape
+as the r7rs prelude warm-up above it.  It runs only when the run reaches a
+fixture whose sources import an autolinking module (`arc`, `httpd`, `reactor`,
+`turi/eval`, `r7rs/eval`, or `(scheme eval)`; 47 fixtures today), so a
+filtered run that touches none of them pays nothing.  Whichever of those
+fixtures comes first -- under any shard, filter, or new fixture that sorts
+before `arc-` -- now builds warm, so the two `expected.timeout` overrides
+(`arc-basic`, `arc-weak-upgrade`) are deleted.
+
+Not measured on macOS (fix direction 2): the warm-up covers the cold cost
+whatever its split between compile, link and first exec.  If an `arc-`,
+`httpd-` or `reactor-` build times out on the macOS `Test` leg after this,
+the warm-up did not cover it -- reopen this report rather than restoring
+the overrides.
+
 **Filed 2026-10-01**, investigating CI #3081's red `Test (macos-latest)`.
 
 **Severity:** low-medium (intermittent CI red on `main`; no product defect).

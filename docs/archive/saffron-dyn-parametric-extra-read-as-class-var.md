@@ -1,5 +1,21 @@
 # An `int` extra on a parametric-head instance is cast as the receiver type
 
+**RESOLVED 2026-10-03** by fix direction 2, started at the rewrite as the
+narrowing below said it had to be.  In a dynamic dialect, a bare EXTRA
+parameter (not the receiver) of an instance on a parametric head is typed
+`any` by `elab_definstance` instead of being retyped to the head -- the
+dialect's own default for a bare parameter, and exactly what spelling
+`n : any` in the instance already did.  The impl narrows it where it is used:
+`(vec-get v n)` and `(vec-len y)` both pass it through the D5 seam, so
+`Nth [Vec]`'s index and a `same-len?` whose `y` really is another vector both
+work, on both dispatch paths.  The witness needs no change: an `any` impl
+parameter is neither the tyvar nor the head, so `saffron_extra_is_class_var`
+says no and the extra is passed through bare.  The receiver keeps the
+rewrite, and so does a kind-* head, whose class variable is a concrete type.
+Non-dynamic instances (the stdlib's `Eq [Vec]`) are untouched.  Pinned by
+`tests/fixtures/saffron-dyn-bare-extra` (the report's repro, a vector extra,
+a cstr/float extra; dynamic and static dispatch; matches `--interpret`).
+
 **Narrowed 2026-09-29: a SPELLED `n : int` is fixed; a bare `n` remains.**
 Fix direction 1: `saffron_extra_is_class_var` returns false for a parameter
 the class annotated (`param_explicit_type`), and the witness's concrete-type

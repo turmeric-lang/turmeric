@@ -177,6 +177,24 @@
   free(c);
   ```)
 
+;; mw-rate-limit's table, driven without a socket: limit 1 per 60 s, so a
+;; second request from an IP inside its window is refused.
+(defn print-rl [label : cstr r : int] : void
+  ```c printf("%s: %s\n", label, r > 0 ? "429" : "ok"); ```)
+
+(defn rl [label : cstr st : int ip : cstr] : void
+  (print-rl label (httpd-mw-ratelimit-check st ip)))
+
+;; One request each from n distinct IPs.
+(defn rl-flood [st : int n : int] : void
+  ```c
+  char ip[32];
+  for (int64_t i = 0; i < n; i++) {
+      snprintf(ip, sizeof ip, "10.9.%d.%d", (int)(i / 256), (int)(i % 256));
+      (void)httpd_hymw_hyratelimit_hycheck(st, ip);
+  }
+  ```)
+
 (defn main [] : int
   (do
     (parse "get"            "GET /a?b=1 HTTP/1.1\r\nHost: x\r\n\r\n")
@@ -253,4 +271,16 @@
         (println (set-cookie-len c))
         (free-cstr v)
         (free-conn c)))
+    ;; mw-rate-limit: the IP is the key -- 10.0.107.237 and 10.2.219.40 share
+    ;; an FNV-1a hash and used to share a counter -- and a full table evicts
+    ;; rather than failing open (4096 distinct IPs used to leave every later
+    ;; IP unlimited).
+    (let [st (httpd-mw-ratelimit-new 1 60)]
+      (do
+        (rl "rl first"             st "10.0.107.237")
+        (rl "rl again"             st "10.0.107.237")
+        (rl "rl colliding ip"      st "10.2.219.40")
+        (rl-flood st 4096)
+        (rl "rl after flood"       st "192.0.2.7")
+        (rl "rl after flood again" st "192.0.2.7")))
     0))

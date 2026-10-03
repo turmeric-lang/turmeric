@@ -109,7 +109,7 @@ reports are, and none of them is a wrong answer:
 [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)
 (the interpreter retains a re-entrant continuation's stack image for the life
 of the process -- deliberate for its closures elsewhere too),
-[r7rs-conformance-program-emits-megabytes-of-c](../reported/r7rs-conformance-program-emits-megabytes-of-c.md)
+[r7rs-conformance-program-emits-megabytes-of-c](r7rs-conformance-program-emits-megabytes-of-c.md)
 (build cost and CI wall-clock; nothing is miscompiled),
 [r7rs-library-file-shape-and-export-rename](../reported/r7rs-library-file-shape-and-export-rename.md)
 (the decided design question above, held as a report) and

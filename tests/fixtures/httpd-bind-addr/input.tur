@@ -1,0 +1,86 @@
+;; httpd-bind-addr -- httpd-set-bind-addr! names the interface to listen on.
+;;
+;; security-audit-plan WP4 residual item 9: binding chose only between
+;; loopback and every interface, and only over IPv4.  httpd-set-bind-addr!
+;; takes a numeric IPv4 or IPv6 address; one that does not parse is refused
+;; and the setting kept.  The constructors share one listener helper, which
+;; opens a socket of the address's family.
+;;
+;; Checked here: the parse (IPv6 literals included -- binding one needs an
+;; IPv6 stack, which not every CI container has) and a live round trip on an
+;; explicitly named IPv4 address, whose handler echoes the peer address.
+;;
+;; Expected output:
+;;   bad=false
+;;   v6=true
+;;   v6-any=true
+;;   cleared=true
+;;   v4=true
+;;   body=127.0.0.1
+;;   done
+
+(load "stdlib/httpd.tur")
+
+(defn print-flag [s : cstr v : bool] : nil
+  ```c printf("%s=%s\n", s, v ? "true" : "false"); ```)
+
+;; One GET to 127.0.0.1:port; prints the response body.
+(defn client-get [port : int] : nil
+  ```c
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) { printf("body=<no socket>\n"); return; }
+  struct timeval rcv_to = { 8, 0 };
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to));
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      printf("body=<no connect>\n"); close(fd); return;
+  }
+  const char *req = "GET / HTTP/1.0\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char buf[1024];
+  int total = 0;
+  while (total < (int)sizeof(buf) - 1) {
+      ssize_t r = recv(fd, buf + total, sizeof(buf) - 1 - (size_t)total, 0);
+      if (r <= 0) break;
+      total += (int)r;
+  }
+  buf[total] = '\0';
+  const char *b = strstr(buf, "\r\n\r\n");
+  printf("body=%s\n", b ? b + 4 : "<no body>");
+  close(fd);
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (print-flag "bad"     (httpd-set-bind-addr! "not-an-ip"))
+  (print-flag "v6"      (httpd-set-bind-addr! "::1"))
+  (print-flag "v6-any"  (httpd-set-bind-addr! "::"))
+  (print-flag "cleared" (httpd-set-bind-addr! ""))
+  (print-flag "v4"      (httpd-set-bind-addr! "127.0.0.1"))
+  (let [h      (httpd-new-pool 0 1 (fn [c : ptr<void>] : nil
+                                     (httpd-resp-status! c 200)
+                                     (httpd-resp-body! c (httpd-req-remote-ip c))))
+        port   (httpd-port h)
+        server (spawn-server h)]
+    (client-get port)
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h))
+  (println "done")
+  0)

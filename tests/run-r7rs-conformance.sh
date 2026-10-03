@@ -51,8 +51,9 @@ BACKEND="${R7RS_CONFORMANCE_BACKEND:-both}"
 # against a real hang.  A second compiled round would not fit, but one only
 # happens after a form crashes the program, and with the floor at today's full
 # pass count such a run is almost certainly below it already.  Why the build
-# is this large:
-# docs/reported/r7rs-conformance-program-emits-megabytes-of-c.md.
+# was this large, and how it came down to ~43 s on that box (2026-10-03, so
+# 480 is now headroom, not a requirement):
+# docs/archive/r7rs-conformance-program-emits-megabytes-of-c.md.
 TIMEOUT="${R7RS_CONFORMANCE_TIMEOUT:-480}"
 
 exec python3 tests/r7rs/run-conformance.py --tur "$TUR" --backend "$BACKEND" \

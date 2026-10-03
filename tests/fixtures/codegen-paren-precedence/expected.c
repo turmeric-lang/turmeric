@@ -3538,6 +3538,21 @@ typedef struct { DK *subk; TurFuture *outer; } TurAsyncPark;
 static int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */
 static TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */
 
+__attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {
+    __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
+    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
+    int64_t __r;
+    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    if (TUR_SETJMP(__dkjb) == 0) { __r = body(__root); }
+    else { __r = __dk_drive_after(); }
+    g_dk_driver = __dksave;
+    if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }
+    if (!tur_async_suspended) dk_free(__root);
+    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    return __r;
+}
+
 static int tur_async_reject_if_panicking(TurFuture *future) {
     if (!tur_panicking) return 0;
     tur_panicking = 0; tur_panic_in_progress = 0;

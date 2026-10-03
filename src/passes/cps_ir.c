@@ -472,8 +472,78 @@ static CAtom atom_cvar(CVar v) {
  * a colored module member reads as uncolored, so a caller in the same module
  * emits a DIRECT (unthreaded) call instead of the DK-threaded `__cps` call, and
  * an effect performed in the callee escapes the caller's handler. */
+/* r7rs-conformance-program-emits-megabytes-of-c: asked for every call the
+ * translation meets (callee_colored, safe_to_delegate), each answer a scan of
+ * the whole program.  A binding -> FnDef table, rebuilt when the program or
+ * its item count changes -- the same policy as emit_cps_ir.c's
+ * fd_for_binding -- holding the FIRST match the scan below finds. */
+static const Expr     *cfd_prog;
+static uint32_t        cfd_np, cfd_cap;
+static const Binding **cfd_keys;
+static const FnDef   **cfd_vals;
+
+static uint32_t cfd_slot(const Binding *k) {
+    uint64_t x = (uint64_t)(uintptr_t)k;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x & (cfd_cap - 1);
+}
+static void cfd_put(const Binding *k, const FnDef *fd) {
+    uint32_t h = cfd_slot(k);
+    while (cfd_keys[h] && cfd_keys[h] != k) h = (h + 1) & (cfd_cap - 1);
+    if (!cfd_keys[h]) { cfd_keys[h] = k; cfd_vals[h] = fd; }
+}
+static void cfd_build(const Expr *program) {
+    uint32_t np = program->as.program.n, n = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF) n++;
+        else if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) n += it->as.defmodule_.mod->n_body;
+    }
+    uint32_t cap = 16;
+    while (cap < 2 * n + 2) cap <<= 1;
+    free((void *)cfd_keys); free((void *)cfd_vals);
+    cfd_keys = (const Binding **)calloc(cap, sizeof *cfd_keys);
+    cfd_vals = (const FnDef **)calloc(cap, sizeof *cfd_vals);
+    cfd_prog = NULL;
+    if (!cfd_keys || !cfd_vals) {
+        free((void *)cfd_keys); free((void *)cfd_vals);
+        cfd_keys = NULL; cfd_vals = NULL; cfd_cap = 0;
+        return;   /* OOM: callee_fndef scans */
+    }
+    cfd_cap = cap;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->binding)
+            cfd_put(it->as.fn_def_.fn->binding, it->as.fn_def_.fn);
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            DefModule *m = it->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn && mb->as.fn_def_.fn->binding)
+                    cfd_put(mb->as.fn_def_.fn->binding, mb->as.fn_def_.fn);
+            }
+        }
+    }
+    cfd_prog = program;
+    cfd_np = np;
+}
+
+void cps_ir_callee_cache_reset(void) { cfd_prog = NULL; }
+
 static const FnDef *callee_fndef(CpsB *b, const Binding *fn) {
     if (!fn || !b->program || b->program->kind != EX_PROGRAM) return NULL;
+    if (b->program != cfd_prog || b->program->as.program.n != cfd_np || !cfd_keys)
+        cfd_build(b->program);
+    if (cfd_keys) {
+        uint32_t h = cfd_slot(fn);
+        while (cfd_keys[h]) {
+            if (cfd_keys[h] == fn) return cfd_vals[h];
+            h = (h + 1) & (cfd_cap - 1);
+        }
+        return NULL;
+    }
     for (uint32_t i = 0; i < b->program->as.program.n; i++) {
         Expr *it = b->program->as.program.items[i];
         if (!it) continue;

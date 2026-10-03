@@ -1,0 +1,45 @@
+#lang saffron
+;; saffron-dyn-parametric-extra-read-as-class-var: a BARE extra parameter of
+;; an instance on a parametric head (`Nth [Vec]`'s `n`) was retyped to the
+;; head by the instance rewrite, exactly as `Eq [Vec]`'s `y` is -- so the
+;; dynamic witness cast the index to `(Vec any)` and panicked ("any holds
+;; int, not Vec"), compiled only; `--interpret` answered.
+;;
+;; In a dynamic dialect a bare extra on a parametric head is `any` now, and
+;; the impl narrows it where it is used.  An extra that IS another vector
+;; (`same-len?`'s `y`) still works: `(vec-len y)` narrows it the same way.
+;; Each case runs through an `any` (dynamic dispatch) and on a concrete
+;; vector (static dispatch).  7.25 keeps a fraction so a float read as an
+;; int would show.
+
+(defclass Nth [a]
+  (nth-of [x n] : any))
+(definstance Nth [Vec]
+  (nth-of [v n] (vec-get v n)))
+
+(defclass SameLen [a]
+  (same-len? [x y] : bool))
+(definstance SameLen [Vec]
+  (same-len? [x y] (= (vec-len x) (vec-len y))))
+
+(defclass Tag [a]
+  (tag-with [x label] : any))
+(definstance Tag [Vec]
+  (tag-with [v label] (if (> (vec-len v) 0) label "empty")))
+
+(defn pick [x i] (.nth-of x i))
+(defn same [a b] (.same-len? a b))
+(defn tag [x l] (.tag-with x l))
+
+(defn main []
+  (println (pick [7.25 1 "hi"] 2))
+  (println (pick [7.25 1 "hi"] 0))
+  (println (same [1 2] [3 4]))
+  (println (same [1 2] [3]))
+  (println (tag [1 2 3] "full"))
+  (println (tag [] "full"))
+  (let [v [7.25 1 "hi"]]
+    (println (.nth-of v 1))
+    (println (.same-len? v [1 2 3]))
+    (println (.tag-with v 7.25)))
+  0)

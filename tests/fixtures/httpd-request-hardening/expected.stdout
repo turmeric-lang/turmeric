@@ -41,3 +41,8 @@ mp filename: name=up filename=a.bin len=3
 mp nul: name=f filename=- len=5
 mp nul: name=g filename=- len=2
 5040
+rl first: ok
+rl again: 429
+rl colliding ip: ok
+rl after flood: ok
+rl after flood again: 429

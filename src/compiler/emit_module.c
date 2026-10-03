@@ -9617,6 +9617,54 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     free(_spec_ret);
 }
 
+/* r7rs-conformance-program-emits-megabytes-of-c: a string -> entry-index hash
+ * over the emit side tables below.  Their entries stay where they are, in
+ * insertion order -- only the linear strcmp scan per lookup is replaced, which
+ * was a quarter of `emit-c` on a program of a few thousand functions. */
+typedef struct { uint32_t *slot; uint32_t cap; } StrIdx;   /* slot: index + 1; 0 = empty */
+typedef const char *(*StrIdxKey)(uint32_t i);
+
+static uint32_t stridx_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    for (; *s; s++) { h ^= (uint8_t)*s; h *= 16777619u; }
+    return h;
+}
+
+static void stridx_clear(StrIdx *x) { free(x->slot); x->slot = NULL; x->cap = 0; }
+
+static int64_t stridx_find(const StrIdx *x, const char *k, StrIdxKey key) {
+    if (!x->cap || !k) return -1;
+    uint32_t m = x->cap - 1, h = stridx_hash(k) & m;
+    while (x->slot[h]) {
+        uint32_t i = x->slot[h] - 1;
+        if (strcmp(key(i), k) == 0) return i;
+        h = (h + 1) & m;
+    }
+    return -1;
+}
+
+/* Index entry `i`, the newest of `n` entries (keys are unique). */
+static void stridx_add(StrIdx *x, uint32_t i, uint32_t n, StrIdxKey key) {
+    if ((uint64_t)n * 2 > x->cap) {
+        uint32_t nc = x->cap ? x->cap : 256;
+        while ((uint64_t)n * 2 > nc) nc *= 2;
+        uint32_t *ns = (uint32_t *)calloc(nc, sizeof *ns);
+        if (!ns) { stridx_clear(x); return; }   /* OOM: unindexed, lookups scan */
+        free(x->slot);
+        x->slot = ns;
+        x->cap = nc;
+        for (uint32_t j = 0; j < n; j++) {
+            uint32_t h = stridx_hash(key(j)) & (nc - 1);
+            while (x->slot[h]) h = (h + 1) & (nc - 1);
+            x->slot[h] = j + 1;
+        }
+        return;
+    }
+    uint32_t h = stridx_hash(key(i)) & (x->cap - 1);
+    while (x->slot[h]) h = (h + 1) & (x->cap - 1);
+    x->slot[h] = i + 1;
+}
+
 /* gcc14-int-conversion (carrier-representation-tracking): ground-truth side
  * table of emitted param C-types, keyed by emitted C name.  See emit_internal.h.
  * File-scope (like g_prog / g_cps_path); emit_sig_reset() clears it per program. */
@@ -9633,6 +9681,18 @@ typedef struct EmitSigEntry {
 static EmitSigEntry *g_sig_tab;
 static uint32_t      g_sig_tab_n;
 static uint32_t      g_sig_tab_cap;
+static StrIdx        g_sig_idx;
+static const char *sig_key(uint32_t i) { return g_sig_tab[i].cname; }
+
+/* The entry for `cname`, or NULL. */
+static EmitSigEntry *emit_sig_find(const char *cname) {
+    int64_t i = stridx_find(&g_sig_idx, cname, sig_key);
+    if (i >= 0) return &g_sig_tab[i];
+    if (g_sig_idx.cap) return NULL;   /* indexed: a miss is a miss */
+    for (uint32_t j = 0; j < g_sig_tab_n; j++)
+        if (strcmp(g_sig_tab[j].cname, cname) == 0) return &g_sig_tab[j];
+    return NULL;
+}
 
 /* Superseded ret_ctype strings, retired rather than freed.
  *
@@ -9676,6 +9736,7 @@ void emit_sig_reset(void) {
     g_sig_tab = NULL;
     g_sig_tab_n = 0;
     g_sig_tab_cap = 0;
+    stridx_clear(&g_sig_idx);
     for (uint32_t i = 0; i < g_sig_retired_n; i++) free(g_sig_retired[i]);
     free(g_sig_retired);
     g_sig_retired = NULL;
@@ -9684,8 +9745,8 @@ void emit_sig_reset(void) {
 }
 
 static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) {
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0) return &g_sig_tab[i];
+    EmitSigEntry *found = emit_sig_find(cname);
+    if (found) return found;
     if (g_sig_tab_n == g_sig_tab_cap) {
         uint32_t nc = g_sig_tab_cap ? g_sig_tab_cap * 2 : 64;
         EmitSigEntry *nt = (EmitSigEntry *)realloc(g_sig_tab, nc * sizeof(EmitSigEntry));
@@ -9699,6 +9760,7 @@ static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) 
     e->param_ctypes = n_params
         ? (char **)calloc(n_params, sizeof(char *)) : NULL;
     e->ret_ctype = NULL;   /* S1: a fresh entry has no recorded return type yet */
+    stridx_add(&g_sig_idx, g_sig_tab_n - 1, g_sig_tab_n, sig_key);
     return e;
 }
 
@@ -9745,18 +9807,16 @@ void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
 
 const char *emit_sig_lookup_ret_ctype(const char *cname) {
     if (!cname) return NULL;
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0) return g_sig_tab[i].ret_ctype;
-    return NULL;
+    const EmitSigEntry *e = emit_sig_find(cname);
+    return e ? e->ret_ctype : NULL;
 }
 
 /* proper-tail-calls T2b: the recorded arity, or -1 when `cname` has no
  * forward declaration on record. */
 int emit_sig_lookup_n_params(const char *cname) {
     if (!cname) return -1;
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0) return (int)g_sig_tab[i].n_params;
-    return -1;
+    const EmitSigEntry *e = emit_sig_find(cname);
+    return e ? (int)e->n_params : -1;
 }
 
 /* proper-tail-calls T2b (docs/archive/proper-tail-calls-plan.md, T-D2):
@@ -9859,10 +9919,8 @@ void emit_musttail_self_pin(Buf *body, int indent, const char *cname) {
 
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
     if (!cname) return NULL;
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0)
-            return (idx < g_sig_tab[i].n_params) ? g_sig_tab[i].param_ctypes[idx] : NULL;
-    return NULL;
+    const EmitSigEntry *e = emit_sig_find(cname);
+    return (e && idx < e->n_params) ? e->param_ctypes[idx] : NULL;
 }
 
 /* gcc14-int-conversion (carrier-representation-tracking): the local-variable /
@@ -9873,6 +9931,17 @@ typedef struct EmitLocalVarEntry { char *cname; char *ctype; } EmitLocalVarEntry
 static EmitLocalVarEntry *g_lv_tab;
 static uint32_t           g_lv_tab_n;
 static uint32_t           g_lv_tab_cap;
+static StrIdx             g_lv_idx;
+static const char *lv_key(uint32_t i) { return g_lv_tab[i].cname; }
+
+static EmitLocalVarEntry *emit_localvar_find(const char *cname) {
+    int64_t i = stridx_find(&g_lv_idx, cname, lv_key);
+    if (i >= 0) return &g_lv_tab[i];
+    if (g_lv_idx.cap) return NULL;
+    for (uint32_t j = 0; j < g_lv_tab_n; j++)
+        if (strcmp(g_lv_tab[j].cname, cname) == 0) return &g_lv_tab[j];
+    return NULL;
+}
 
 /* inline-c-option-carrier-box-leaks: the OWNED-CARRIER side table.
  *
@@ -9981,6 +10050,7 @@ void emit_localvar_reset(void) {
     g_lv_tab = NULL;
     g_lv_tab_n = 0;
     g_lv_tab_cap = 0;
+    stridx_clear(&g_lv_idx);
     for (uint32_t i = 0; i < g_own_tab_n; i++) free(g_own_tab[i]);
     free(g_own_tab);
     g_own_tab = NULL;
@@ -9995,12 +10065,12 @@ void emit_localvar_reset(void) {
 
 void emit_localvar_record_ctype(const char *cname, const char *ctype) {
     if (!cname || !ctype) return;
-    for (uint32_t i = 0; i < g_lv_tab_n; i++)
-        if (strcmp(g_lv_tab[i].cname, cname) == 0) {
-            free(g_lv_tab[i].ctype);
-            g_lv_tab[i].ctype = strdup(ctype);
-            return;
-        }
+    EmitLocalVarEntry *found = emit_localvar_find(cname);
+    if (found) {
+        free(found->ctype);
+        found->ctype = strdup(ctype);
+        return;
+    }
     if (g_lv_tab_n == g_lv_tab_cap) {
         uint32_t nc = g_lv_tab_cap ? g_lv_tab_cap * 2 : 256;
         EmitLocalVarEntry *nt =
@@ -10012,13 +10082,13 @@ void emit_localvar_record_ctype(const char *cname, const char *ctype) {
     g_lv_tab[g_lv_tab_n].cname = strdup(cname);
     g_lv_tab[g_lv_tab_n].ctype = strdup(ctype);
     g_lv_tab_n++;
+    stridx_add(&g_lv_idx, g_lv_tab_n - 1, g_lv_tab_n, lv_key);
 }
 
 const char *emit_localvar_lookup_ctype(const char *cname) {
     if (!cname) return NULL;
-    for (uint32_t i = 0; i < g_lv_tab_n; i++)
-        if (strcmp(g_lv_tab[i].cname, cname) == 0) return g_lv_tab[i].ctype;
-    return NULL;
+    const EmitLocalVarEntry *e = emit_localvar_find(cname);
+    return e ? e->ctype : NULL;
 }
 
 /* S1 (jit-engine-plan section 4): see emit_internal.h. */
@@ -15770,6 +15840,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_global(out, shared,
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
+
+    /* r7rs-conformance-program-emits-megabytes-of-c: the direct->cps entry
+     * wrapper of a ZERO-parameter colored function (emit_cps_ir.c) is this one
+     * helper plus a two-line shim, not a ~670-byte copy of its body per
+     * function -- 1,557 byte-identical copies in the r7rs conformance program,
+     * each with its own setjmp.  Exactly the inline wrapper's sequence: seed the
+     * root prompt, install the trampoline driver, run the body, copy a boxed
+     * (Tier-C) result out into `out` BEFORE the reap frees its box, then free
+     * the root and reap.  Here, after tur_async_suspended, which it reads. */
+    if (dk_machine_emitted) {
+        buf_puts(out,
+"__attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {\n"
+"    __dk_entry_depth++;\n"
+"    size_t __dk_reap_mark = __dk_reap_n;\n"
+"    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n"
+"    int64_t __r;\n"
+"    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n"
+"    if (TUR_SETJMP(__dkjb) == 0) { __r = body(__root); }\n"
+"    else { __r = __dk_drive_after(); }\n"
+"    g_dk_driver = __dksave;\n"
+"    if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }\n"
+"    if (!tur_async_suspended) dk_free(__root);\n"
+"    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n"
+"    return __r;\n"
+"}\n\n");
+    }
 
     /* async-panic-task-boundary: a panic inside an (async ...) body must
      * reject THAT task's future, not unwind whoever spawned it.  The body runs

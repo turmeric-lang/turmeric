@@ -5,7 +5,55 @@ denial of service, a policy gap or a misleading surface).
 **Filed:** 2026-09-30, by security-audit-plan WP4 (M-4).
 **Tag:** security-
 
-**Narrowed 2026-10-03: item 10 is fixed too; 3, 4 and 9 remain** (3 and 4
+**RESOLVED 2026-10-03: item 9 is done too, so every item is closed.**
+
+- **9** -- `(httpd-set-bind-addr! addr)` names the interface: a numeric IPv4
+  or IPv6 address (`"192.168.1.5"`, `"::1"`, `"::"`), winning over
+  `httpd-set-bind-any!`; `""` clears it; an address that does not parse
+  returns `false` and leaves the setting alone.  Both constructors now open
+  their listener through one helper, `httpd-listen-socket`, which picks the
+  socket family from the address -- with no address set it binds exactly as
+  before -- and `httpd-port` / `httpd-async-port` read either family's port.
+  `TUR_BIND_LOOPBACK` still forces loopback, of the address's own family.
+  Pinned by `tests/fixtures/httpd-bind-addr` (the parse, IPv6 literals
+  included, and a live round trip on a named IPv4 address).  The IPv6 BIND
+  was not exercised: the container this was written in has no IPv6 stack
+  (`EAFNOSUPPORT`), where a server on `"::1"` comes back NULL from both
+  constructors, cleanly -- checked by hand.
+
+**Narrowed a third time 2026-10-03: item 3 is fixed; only 9 remained** (an
+enhancement: IPv6 and a bind address beyond loopback / every interface).
+
+- **3** -- the default chosen is **512** for both servers.  `httpd-new-async`
+  is `(httpd-new-async-with-limit port handler 512)`; the blocking pool's
+  pending queue (accepted connections waiting for a worker, each an open
+  descriptor) stops at 512 too, answering `503` and lingering the close as
+  the async cap does.  512 sits under the common 1024 open-file soft limit,
+  so a flood is refused before it exhausts the process's descriptors.  `0`
+  still means unlimited, asked for by name:
+  `httpd-new-async-with-limit` as before, and the new
+  `httpd-new-pool-with-limit port workers handler max-pending`.  Pinned by
+  `tests/fixtures/httpd-pool-pending-limit` (one worker, cap 1: the third
+  connection is refused while the second waits; both defaults read back).
+
+**Narrowed again 2026-10-03: item 4 is fixed; 3 and 9 remained** (3 needed a
+default chosen, 9 is an enhancement).
+
+- **4** -- `mw-rate-limit`'s table is keyed by the IP string (first 47
+  bytes, the whole of any IPv6 text form; the hash still covers a longer
+  key), so `10.0.107.237` and `10.2.219.40`, which share an FNV-1a hash, no
+  longer share a counter.  It is 8-way set-associative (256 sets, 2048
+  entries, 128 KiB): a new IP takes an empty entry of its set, else one whose
+  window has ended, else the oldest window in the set.  The default chosen is
+  **evict, never fail open and never fail closed**: a flood of distinct IPs
+  restarts the windows of the IPs it evicts, but a new IP is always tracked,
+  so it cannot leave every later IP unlimited (4096 distinct IPs used to);
+  and each check touches at most 8 entries, so the flood buys no
+  per-request scan.  Pinned by the `rl` cases in
+  `tests/fixtures/httpd-request-hardening` -- against the old table the
+  colliding IP was refused and the IP after the flood was never limited.
+
+**Narrowed 2026-10-03: item 10 is fixed too; 3, 4 and 9 remained** (3 and 4
 need a default chosen, 9 is an enhancement).
 
 - **10** -- `httpd-req-multipart-parse` refuses a non-`multipart/` media type;

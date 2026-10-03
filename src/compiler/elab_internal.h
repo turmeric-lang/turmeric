@@ -146,6 +146,14 @@ typedef struct Scope {
     uint32_t      cap;
     /* Phase 12: Active borrows in this scope */
     ScopeBorrow  *borrows;
+    /* A name -> newest-binding index, built once the scope passes
+     * SCOPE_INDEX_MIN bindings (in practice: the global scope, which holds
+     * every stdlib and program definition).  Maintained by scope_add, the only
+     * way bindings enter a scope; slots hold `index + 1`, 0 = empty.  See
+     * scope_lookup. */
+    uint32_t     *idx;
+    uint32_t      idx_cap;
+    uint32_t      idx_n;     /* distinct names indexed */
 } Scope;
 
 /* ---- elaborator state ---- */

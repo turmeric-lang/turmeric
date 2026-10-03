@@ -886,8 +886,83 @@ static const char *cps_binding_c_symbol(const Binding *b) {
  * seed still colors it if it uses control, and the fixpoint still propagates
  * that to callers.  See
  * docs/archive/history/cps-colored-noncapture-named-let-recurses-through-entry.md. */
+/* r7rs-conformance-program-emits-megabytes-of-c: cps_color_program asks this
+ * once per call edge, and each answer scanned every node (twice on a miss) --
+ * quadratic in the number of functions.  While cps_color_program runs, its node
+ * array is indexed by binding and by C symbol, each slot holding the FIRST node
+ * the scans below would have found. */
+static struct {
+    const CpsNode  *nodes;
+    uint32_t        n, cap;
+    const Binding **bkey;  int *bval;     /* binding -> first node */
+    const char    **skey;  int *sval;     /* C symbol -> first node */
+} g_cps_nidx;
+
+static uint32_t cps_nidx_ptr_hash(const void *p) {
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x;
+}
+static uint32_t cps_nidx_str_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    for (; *s; s++) { h ^= (uint8_t)*s; h *= 16777619u; }
+    return h;
+}
+
+static void cps_nidx_free(void) {
+    free((void *)g_cps_nidx.bkey); free(g_cps_nidx.bval);
+    free((void *)g_cps_nidx.skey); free(g_cps_nidx.sval);
+    memset(&g_cps_nidx, 0, sizeof g_cps_nidx);
+}
+
+static const char *cps_binding_c_symbol(const Binding *b);
+
+static void cps_nidx_build(const CpsNode *nodes, uint32_t n) {
+    cps_nidx_free();
+    uint32_t cap = 16;
+    while (cap < 2 * n + 2) cap <<= 1;
+    g_cps_nidx.bkey = (const Binding **)calloc(cap, sizeof *g_cps_nidx.bkey);
+    g_cps_nidx.bval = (int *)calloc(cap, sizeof *g_cps_nidx.bval);
+    g_cps_nidx.skey = (const char **)calloc(cap, sizeof *g_cps_nidx.skey);
+    g_cps_nidx.sval = (int *)calloc(cap, sizeof *g_cps_nidx.sval);
+    if (!g_cps_nidx.bkey || !g_cps_nidx.bval || !g_cps_nidx.skey || !g_cps_nidx.sval) {
+        cps_nidx_free();   /* OOM: cps_find_node scans */
+        return;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        const Binding *b = nodes[i].fd->binding;
+        if (!b) continue;
+        uint32_t h = cps_nidx_ptr_hash(b) & (cap - 1);
+        while (g_cps_nidx.bkey[h] && g_cps_nidx.bkey[h] != b) h = (h + 1) & (cap - 1);
+        if (!g_cps_nidx.bkey[h]) { g_cps_nidx.bkey[h] = b; g_cps_nidx.bval[h] = (int)i; }
+        const char *sym = cps_binding_c_symbol(b);
+        if (!sym) continue;
+        h = cps_nidx_str_hash(sym) & (cap - 1);
+        while (g_cps_nidx.skey[h] && strcmp(g_cps_nidx.skey[h], sym) != 0) h = (h + 1) & (cap - 1);
+        if (!g_cps_nidx.skey[h]) { g_cps_nidx.skey[h] = sym; g_cps_nidx.sval[h] = (int)i; }
+    }
+    g_cps_nidx.nodes = nodes;
+    g_cps_nidx.n = n;
+    g_cps_nidx.cap = cap;
+}
+
 static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
     if (!b) return -1;
+    if (g_cps_nidx.cap && g_cps_nidx.nodes == nodes && g_cps_nidx.n == n) {
+        uint32_t m = g_cps_nidx.cap - 1, h = cps_nidx_ptr_hash(b) & m;
+        while (g_cps_nidx.bkey[h]) {
+            if (g_cps_nidx.bkey[h] == b) return g_cps_nidx.bval[h];
+            h = (h + 1) & m;
+        }
+        const char *bsym = cps_binding_c_symbol(b);
+        if (!bsym || !*bsym) return -1;
+        h = cps_nidx_str_hash(bsym) & m;
+        while (g_cps_nidx.skey[h]) {
+            if (strcmp(g_cps_nidx.skey[h], bsym) == 0) return g_cps_nidx.sval[h];
+            h = (h + 1) & m;
+        }
+        return -1;
+    }
     for (uint32_t i = 0; i < n; i++)
         if (nodes[i].fd->binding == b) return (int)i;
     const char *bsym = cps_binding_c_symbol(b);
@@ -917,6 +992,43 @@ static void cps_collect_calls(const Expr *e, CpsNode *nodes, uint32_t n_nodes,
     switch (e->kind) {
         case EX_CALL: {
             int idx = cps_find_node(nodes, n_nodes, e->as.call_.fn_binding);
+            /* cps-evicts-handle-in-operand-positions (fuzz seed 3333 case 121):
+             * a lambda LITERAL applied on the spot -- `((fn [] b))` -- has
+             * exactly one callee, its own lifted FnDef, which is a node like
+             * any top-level fn.  Counting it as an unresolved call colored
+             * every pure function that did this (a generic whose body was
+             * `(let [b x] ((fn [] b)))`), and a colored callee that then
+             * SIG-REJECTs still reads as cps->cps to its callers: their join
+             * over its fat-closure result is not slot-representable, so a
+             * `main` that also held a `handle` was evicted whole ("no lowering
+             * here").  An edge to the lambda's node is exact: a lambda that
+             * does use control still colors its applier through it. */
+            /* The elaborator hoists the head into a compiler temp --
+             * `(let [__call_head_N (fn [] b)] (__call_head_N))` -- which
+             * records its init in closure_head_init and is never assigned;
+             * see through it too.  (A user `let` stores only a CALL there,
+             * which the literal test below never matches.) */
+            const Expr *h = NULL;
+            if (idx < 0 && !e->as.call_.fn_binding)
+                h = e->as.call_.fn_expr;
+            else if (idx < 0)
+                h = e->as.call_.fn_binding->closure_head_init;
+            if (h) {
+                for (;;) {
+                    if (h->kind == EX_ASCRIBE) h = h->as.ascribe_.inner;
+                    else if (h->kind == EX_FN_TO_FAT) h = h->as.fn_to_fat_.inner;
+                    else if (h->kind == EX_POLY_TO_FAT) h = h->as.poly_to_fat_.inner;
+                    else break;
+                    if (!h) break;
+                }
+                const FnDef *lf = NULL;
+                if (h && h->kind == EX_CLOSURE && h->as.closure_.closure)
+                    lf = h->as.closure_.closure->fn;
+                else if (h && h->kind == EX_FN)
+                    lf = h->as.fn_.fn;
+                if (lf && lf->binding)
+                    idx = cps_find_node(nodes, n_nodes, lf->binding);
+            }
             if (idx >= 0) {
                 cps_node_add_edge(self, (uint32_t)idx);
             } else {
@@ -1355,6 +1467,7 @@ void cps_color_program(Arena *a, Expr *program) {
         }
     }
     #undef CPS_ADD_FN_NODE
+    cps_nidx_build(nodes, n);
 
     /* Seed + build edges. */
     for (uint32_t i = 0; i < n; i++) {
@@ -1413,6 +1526,7 @@ void cps_color_program(Arena *a, Expr *program) {
         nodes[i].fd->cps_colored = nodes[i].colored;
         free(nodes[i].edges);
     }
+    cps_nidx_free();
     free(nodes);
 }
 

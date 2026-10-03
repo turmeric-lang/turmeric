@@ -1,5 +1,60 @@
 # `#lang r7rs`: the conformance program emits 5.6 MB of C and takes ~4 minutes to build
 
+**RESOLVED 2026-10-03.**  The whole build is **42.5 s** on the box that
+measured 248 s below, and `R7RS_CONFORMANCE_BACKEND=compiled
+tests/run-r7rs-conformance.sh` runs end to end in 44 s (1223 passed, 0
+failed).  Two causes, both fixed (details in the narrowing that follows):
+
+- the 1,557 per-function copies of the direct->cps entry wrapper, each with
+  a `setjmp` -- one shared helper now (unit 5.66 MB -> 4.78 MB, `cc -O2`
+  90.5 s -> 35.1 s);
+- five lookups in the compiler that were linear in the program's size and
+  asked in proportion to it (`emit-c` 130 s -> 8.5 s, output identical).
+
+Directions 2 and 3 were measured and are not worth doing: `gcc -O2
+-ftime-report` on the remaining unit spends 82% in ordinary per-function
+optimization spread across the usual passes (register allocation 6%,
+scheduling 5%, alias walking 5%), with no superlinear pass for a split `main`
+or a table-driven `__tur_fatbox_init` to remove.  What is left is
+proportional to the code.  `tests/run-r7rs-conformance.sh` keeps its
+`--timeout 480` as headroom; the default 240 s would now do.
+
+**Narrowed 2026-10-03: fix direction 1 landed, and `emit-c` is 15x faster.**
+The direct->cps entry wrapper of a zero-parameter colored function that is
+not a T6 bouncer is now a two-line shim over one shared helper, `__dk_enter0` (emitted once per unit
+beside `tur_async_suspended`, emit_module.c), which runs exactly the inline
+wrapper's sequence -- root prompt, trampoline driver, body, a boxed result
+copied out before the reap, reap.  In the conformance program 1,559 of the
+entries take it.  Measured on one idle 4-core box, against the same program
+unit with the shims expanded back to the old inline bodies:
+
+| | before | after |
+| --- | --- | --- |
+| program unit | 5.66 MB | 4.78 MB |
+| `cc -O2` on it | 90.5 s | 35.1 s |
+
+So the per-function `setjmp` copies were most of the optimizer's time, not
+just ~1 MB of text.
+
+**`emit-c` too, the same day: 130 s -> 8.5 s** under the Debug `tur`, with
+byte-identical output.  Stack sampling (gdb, every 0.25-2 s) found it was not
+the size of the program but five lookups that were linear in it, each asked a
+number of times proportional to it:
+
+| hotspot | share before | fix |
+| --- | --- | --- |
+| `ensure_S` walked the whole program twice per fn-value (`fn_value_threadable`, `fnval_stored_in_struct`) | ~40% | one walk tallies every fn-value (`FvMulti`, emit_cps_ir.c); a capturing-lambda callee's tier is still re-asked in loop order, since it reads the threadable set the loop grows |
+| `rt_push_cs_path_conds` walked the caller's whole body (macro expansions included) per refinement crossing -- `main` holds all 1,181 forms | ~40% of the rest | per-body memo for the pass (`rt_body_writes`, elab_fns.c) |
+| `emit_sig_lookup_*` and the local-var C-type table: `strcmp` scans | ~25% of the rest | a string -> index hash (`StrIdx`, emit_module.c); entries stay put |
+| `callee_fndef` scanned the program per call; `cps_find_node` scanned every node per call edge | ~15% of the rest | binding -> FnDef / node tables, first-match semantics kept (cps_ir.c, cps.c) |
+| `scope_lookup` scanned the global scope (every stdlib and program definition) per global name or special form | ~40% of the rest | a scope past 32 bindings keeps a name -> newest-binding hash (elab_core.c) |
+
+Every program pays these, in proportion to its size; this one just made them
+visible.  Still open: directions 2-3 (`main` and `__tur_fatbox_init` as single
+huge functions), which matter far less now.  The harness's `--timeout 480`
+workaround stays until CI shows the new wall clock -- the build is now about
+45 s of the 248 s this report measured.
+
 **Filed 2026-10-01**, investigating CI #3079.
 
 **Severity:** medium (CI wall-clock and stability, and build cost for any large

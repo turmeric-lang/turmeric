@@ -1,0 +1,230 @@
+;; httpd-pool-pending-limit -- the blocking pool refuses past its pending cap.
+;;
+;; security-audit-plan WP4 residual item 3: the pool's accepted-connection
+;; queue grew without limit, each entry an open descriptor, so a flood could
+;; exhaust the process's fds; and httpd-new-async had no in-flight cap at all
+;; unless built with -with-limit.  Both default to 512 now, and
+;; httpd-new-pool-with-limit sets the pool's cap.
+;;
+;; One worker, max-pending 1.  One client thread drives three connections in
+;; order, so nothing depends on scheduling:
+;;   A -- connects and sends; the client waits until the handler has entered
+;;        (the worker holds A, the queue is empty);
+;;   B -- connects and sends; it is queued (one pending: the cap);
+;;   C -- connects and sends; it is answered 503 at once.
+;; The handler holds A until C's 503 is counted (or a client dropped out),
+;; then answers; the worker then dequeues B and answers it too.
+;;
+;; The two defaults are read back from the handles at the end.
+;;
+;; Expected output:
+;;   ok=2
+;;   busy=1
+;;   handler-ran=2
+;;   default-pending=512
+;;   default-in-flight=512
+;;   done
+
+(load "stdlib/httpd.tur")
+
+(defn print-tag [s : cstr v : int] : nil
+  ```c printf("%s=%d\n", s, (int)v); ```)
+
+(defn sleep-ms [ms : int] : nil
+  ```c
+  #include <time.h>
+  struct timespec ts = { (time_t)(ms / 1000), (long)(ms % 1000) * 1000000L };
+  nanosleep(&ts, NULL);
+  ```)
+
+;; Counters c[0..3] = ok, busy, lost, handler-ran, behind a mutex: the JIT
+;; engine links no atomic builtins.
+(defn client-driver [arg : ptr<void>] : ptr<void>
+  ```c
+  #include <time.h>
+  int64_t *args = (int64_t *)arg;
+  int64_t port = args[0];
+  typedef struct { pthread_mutex_t m; int64_t c[4]; } Ctr;
+  Ctr *ctr = (Ctr *)(intptr_t)args[1];
+  #define CTR_ADD(i, d) (pthread_mutex_lock(&ctr->m), ctr->c[i] += (d), \
+                         pthread_mutex_unlock(&ctr->m))
+  free(arg);
+  int fds[3] = { -1, -1, -1 };
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  const char *req = "GET / HTTP/1.0\r\n\r\n";
+  for (int i = 0; i < 3; i++) {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (fd < 0) { CTR_ADD(2, 1); continue; }
+      /* Backstop: a server that never answers fails the counts inside the
+       * fixture's 10 s window instead of hanging the join. */
+      struct timeval rcv_to = { 8, 0 };
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to));
+      if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+          CTR_ADD(2, 1);
+          close(fd);
+          continue;
+      }
+      send(fd, req, strlen(req), 0);
+      fds[i] = fd;
+      if (i == 0) {
+          /* Wait until the worker has taken A, so B is the one queued. */
+          for (int t = 0; t < 800; t++) {
+              pthread_mutex_lock(&ctr->m);
+              int64_t ran = ctr->c[3];
+              pthread_mutex_unlock(&ctr->m);
+              if (ran >= 1) break;
+              struct timespec ts = { 0, 10000000L };
+              nanosleep(&ts, NULL);
+          }
+      }
+  }
+  /* C first: it is answered at once, and that answer releases A. */
+  int order[3] = { 2, 0, 1 };
+  for (int k = 0; k < 3; k++) {
+      int fd = fds[order[k]];
+      if (fd < 0) continue;
+      char drain[256];
+      int total = 0;
+      while (total < (int)sizeof(drain) - 1) {
+          ssize_t r = recv(fd, drain + total, sizeof(drain) - 1 - (size_t)total, 0);
+          if (r <= 0) break;
+          total += (int)r;
+      }
+      drain[total] = '\0';
+      if (strncmp(drain, "HTTP/1.0 200", 12) == 0)      CTR_ADD(0, 1);
+      else if (strncmp(drain, "HTTP/1.0 503", 12) == 0) CTR_ADD(1, 1);
+      else                                              CTR_ADD(2, 1);
+      close(fd);
+  }
+  #undef CTR_ADD
+  return NULL;
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int ctr : ptr<void>] : ptr<void>
+  ```c
+  int64_t *args = (int64_t *)malloc(2 * sizeof(int64_t));
+  args[0] = (int64_t)port;
+  args[1] = (int64_t)(intptr_t)ctr;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_hydriver, (void *)args);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn alloc-counters [] : ptr<void>
+  ```c
+  typedef struct { pthread_mutex_t m; int64_t c[4]; } Ctr;
+  Ctr *c = (Ctr *)calloc(1, sizeof(Ctr));
+  pthread_mutex_init(&c->m, NULL);
+  return (void *)c;
+  ```)
+
+(defn counter [p : ptr<void> i : int] : int
+  ```c
+  typedef struct { pthread_mutex_t m; int64_t c[4]; } Ctr;
+  Ctr *c = (Ctr *)p;
+  pthread_mutex_lock(&c->m);
+  int64_t v = c->c[i];
+  pthread_mutex_unlock(&c->m);
+  return v;
+  ```)
+
+(defn bump! [p : ptr<void> i : int] : nil
+  ```c
+  typedef struct { pthread_mutex_t m; int64_t c[4]; } Ctr;
+  Ctr *c = (Ctr *)p;
+  pthread_mutex_lock(&c->m);
+  c->c[i]++;
+  pthread_mutex_unlock(&c->m);
+  ```)
+
+(defn free-counters [p : ptr<void>] : nil
+  ```c
+  typedef struct { pthread_mutex_t m; int64_t c[4]; } Ctr;
+  pthread_mutex_destroy(&((Ctr *)p)->m);
+  free(p);
+  ```)
+
+;; The defaults, read back from the handles.  The layouts are httpd.tur's.
+(defn pool-max-pending [h : ptr<void>] : int
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;
+  } HttpdBlock;
+  return h ? ((HttpdBlock *)h)->fdq_max : -1;
+  ```)
+
+(defn async-max-in-flight [h : ptr<void>] : int
+  ```c
+  typedef struct {
+      int   listen_fd;
+      int64_t handler;
+      void *reactor;
+      void *fiber_group;
+      int   listen_src_id;
+      void *accept_clos;
+      int64_t body_closure;
+      volatile int stop_flag;
+      int   max_in_flight;
+      int   in_flight;
+  } HttpdAsync;
+  return h ? ((HttpdAsync *)h)->max_in_flight : -1;
+  ```)
+
+(defn main [] : int
+  (let [ctr     (alloc-counters)
+        handler (fn [c : ptr<void>] : nil
+                  (bump! ctr 3)
+                  ;; Hold until C's 503 is counted (or a client dropped out).
+                  (while (< (+ (counter ctr 1) (counter ctr 2)) 1)
+                    (sleep-ms 10))
+                  (httpd-resp-status! c 200)
+                  (httpd-resp-body! c "served"))
+        h       (httpd-new-pool-with-limit 0 1 handler 1)
+        port    (httpd-port h)
+        server  (spawn-server h)
+        client  (spawn-client port ctr)]
+    (join-thread client)
+    (httpd-stop h)
+    (join-thread server)
+    (print-tag "ok"          (counter ctr 0))
+    (print-tag "busy"        (counter ctr 1))
+    (print-tag "handler-ran" (counter ctr 3))
+    (when (> (counter ctr 2) 0)
+      (print-tag "lost" (counter ctr 2)))
+    (httpd-free h)
+    (free-counters ctr))
+  (let [p (httpd-new-pool 0 1 (fn [c : ptr<void>] : nil (httpd-resp-status! c 200)))]
+    (print-tag "default-pending" (pool-max-pending p))
+    (httpd-stop p)
+    (httpd-free p))
+  (let [a (httpd-new-async 0 (fn [c : ptr<void>] : nil (httpd-resp-status! c 200)))]
+    (print-tag "default-in-flight" (async-max-in-flight a))
+    (httpd-async-free a))
+  (println "done")
+  0)

@@ -348,6 +348,9 @@ void scope_init(Scope *s, Scope *parent) {
     s->n = 0;
     s->cap = 0;
     s->borrows = NULL;
+    s->idx = NULL;
+    s->idx_cap = 0;
+    s->idx_n = 0;
 }
 
 void scope_free(Scope *s) {
@@ -362,6 +365,9 @@ void scope_free(Scope *s) {
     s->bindings = NULL;
     s->n = s->cap = 0;
     s->borrows = NULL;
+    free(s->idx);
+    s->idx = NULL;
+    s->idx_cap = s->idx_n = 0;
 }
 
 /* Phase 12: Check if a binding has an active borrow that conflicts with the requested kind */
@@ -411,6 +417,47 @@ bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span) {
     return true;
 }
 
+/* r7rs-conformance-program-emits-megabytes-of-c: scope_lookup scanned every
+ * binding of every scope it passed, newest first -- and the global scope holds
+ * every stdlib and program definition, so each lookup of a global name (or of
+ * a special form, which misses) cost thousands of compares: 40% of `emit-c` on
+ * a large `#lang r7rs` program once the passes after it were fixed.  A scope
+ * past SCOPE_INDEX_MIN bindings keeps a hash from name to its NEWEST binding,
+ * which is the one the newest-first scan returns.  Names are interned, so the
+ * key is the Symbol pointer. */
+#define SCOPE_INDEX_MIN 32
+
+/* Mixed at a fixed 64-bit width: a `uintptr_t` is 32 bits on wasm32, where
+ * `>> 33` is an over-wide shift (UB) -- the Try Turmeric worker hung in
+ * turi_wasm_init on it.  On LP64 this is bit-identical (see promo_hash). */
+static uint32_t scope_idx_hash(const Symbol *name) {
+    uint64_t x = (uint64_t)(uintptr_t)name;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x;
+}
+
+/* Point `name`'s slot at binding `i` (newer than any it held). */
+static void scope_idx_put(Scope *s, uint32_t i) {
+    const Symbol *name = s->bindings[i]->name;
+    uint32_t m = s->idx_cap - 1, h = scope_idx_hash(name) & m;
+    while (s->idx[h]) {
+        if (s->bindings[s->idx[h] - 1]->name == name) { s->idx[h] = i + 1; return; }
+        h = (h + 1) & m;
+    }
+    s->idx[h] = i + 1;
+    s->idx_n++;
+}
+
+static void scope_idx_rebuild(Scope *s, uint32_t cap) {
+    uint32_t *ni = (uint32_t *)calloc(cap, sizeof *ni);
+    if (!ni) { fprintf(stderr, "tur: oom\n"); abort(); }
+    free(s->idx);
+    s->idx = ni;
+    s->idx_cap = cap;
+    s->idx_n = 0;
+    for (uint32_t i = 0; i < s->n; i++) scope_idx_put(s, i);   /* oldest first */
+}
+
 void scope_add(Scope *s, Binding *b) {
     if (s->n == s->cap) {
         s->cap = s->cap ? s->cap * 2 : 4;
@@ -418,10 +465,25 @@ void scope_add(Scope *s, Binding *b) {
         if (!s->bindings) { fprintf(stderr, "tur: oom\n"); abort(); }
     }
     s->bindings[s->n++] = b;
+    if (s->idx) {
+        if ((s->idx_n + 1) * 2 > s->idx_cap) scope_idx_rebuild(s, s->idx_cap * 2);
+        else scope_idx_put(s, s->n - 1);
+    } else if (s->n >= SCOPE_INDEX_MIN) {
+        scope_idx_rebuild(s, 128);
+    }
 }
 
 Binding *scope_lookup(Scope *s, const Symbol *name) {
     for (Scope *cur = s; cur; cur = cur->parent) {
+        if (cur->idx) {
+            uint32_t m = cur->idx_cap - 1, h = scope_idx_hash(name) & m;
+            while (cur->idx[h]) {
+                Binding *b = cur->bindings[cur->idx[h] - 1];
+                if (b->name == name) return b;
+                h = (h + 1) & m;
+            }
+            continue;   /* no binding of that name in this scope */
+        }
         for (uint32_t i = cur->n; i > 0; i--) {
             Binding *b = cur->bindings[i - 1];
             if (b->name == name) return b;

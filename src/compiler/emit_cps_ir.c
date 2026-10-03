@@ -3790,6 +3790,30 @@ static void mark_effect(const Symbol *eff, uint64_t *lo, uint64_t *hi) {
  * an overflow past the cap, sets `*callee_overflow` (the caller then treats the
  * function as reaching every colored peer -- sound over-approximation).  The
  * combined "performs-or-handles" wrapper aliases plo==hlo and phi==hhi. */
+/* r7rs-conformance-program-emits-megabytes-of-c: the E2 threadability tallies
+ * for EVERY fn-value at once.  ensure_S used to walk the whole program once
+ * per fn-value (fn_value_threadable, fnval_stored_in_struct) -- quadratic, and
+ * about 40% of `emit-c` on a program of 3,800 lambdas.  The walk's dependence
+ * on its single `count_target` is three spots (a value use, a closure literal,
+ * a threadable call argument), so one walk with a binding -> slot index serves
+ * every target, each slot tallied exactly as its own walk would have. */
+typedef struct FvMulti {
+    const Binding **keys;   /* open addressing; NULL = empty */
+    int            *slot;   /* keys[h]'s slot */
+    uint32_t        cap;    /* power of two */
+    int            *total, *ok, *tier;
+    bool           *stored; /* fnval_stored_in_struct, per slot */
+    /* A threadable-argument use whose callee is a CAPTURING lambda: its
+     * param_thread_class goes through fn_sig_ok, which asks threadable_has --
+     * state the classification loop grows.  Its tier is left out of `tier` and
+     * re-asked when the loop reaches the slot, as the per-target walk did. */
+    const FnDef   **dyn_cfd;
+    uint32_t       *dyn_pi;
+    int            *dyn_next;   /* chain per slot; -1 ends it */
+    int            *dyn_head;   /* per slot */
+    int             dyn_n, dyn_cap;
+} FvMulti;
+
 typedef struct {
     uint64_t *plo, *phi;      /* performed effects */
     uint64_t *hlo, *hhi;      /* handled effects   */
@@ -3831,6 +3855,9 @@ typedef struct {
      * raw op run an effect right here", which taking a function's ADDRESS never
      * does.  Only letraw_effect_free sets this. */
     bool           calls_only;
+    /* Multi-target E2 tallies (FvMulti, above): set in place of
+     * count_target / count_out / thr_ok / thr_tier by fv_multi_tally. */
+    const FvMulti *multi;
 } EffAcc;
 
 /* E2 param-threading tiers -- how ready a HOF param is to thread the DK to the
@@ -3852,6 +3879,56 @@ typedef enum {
 static const Expr  *peel_fn_value(const Expr *e);
 static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
 static PtClass      param_thread_class(const FnDef *fd, uint32_t pi);
+
+static int fvm_slot(const FvMulti *m, const Binding *b) {
+    if (!m || !b || !m->cap) return -1;
+    uint64_t x = (uint64_t)(uintptr_t)b;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    for (uint32_t h = (uint32_t)x & (m->cap - 1);; h = (h + 1) & (m->cap - 1)) {
+        if (!m->keys[h]) return -1;
+        if (m->keys[h] == b) return m->slot[h];
+    }
+}
+
+/* The targets a fn-value reference `a` (already peeled) is a use of, exactly
+ * as the single-target walk tests them: the variable's own binding, or the
+ * lifted lambda a let / `^borrow`-hoist temp records, or a closure literal's
+ * lifted lambda.  Deduplicated, so one reference counts once per target. */
+static int fvm_ref_slots(const FvMulti *m, const Expr *a, int out[3]) {
+    int n = 0;
+    const Binding *c[3] = { NULL, NULL, NULL };
+    if (a && a->kind == EX_VAR && a->as.var.binding) {
+        c[0] = a->as.var.binding;
+        c[1] = a->as.var.binding->closure_fn_binding;
+        c[2] = a->as.var.binding->hoist_closure_fn_binding;
+    } else if (a && a->kind == EX_CLOSURE && a->as.closure_.closure
+               && a->as.closure_.closure->fn) {
+        c[0] = a->as.closure_.closure->fn->binding;
+    }
+    for (int k = 0; k < 3; k++) {
+        if (!c[k]) continue;
+        bool dup = false;
+        for (int j = 0; j < k; j++) if (c[j] == c[k]) dup = true;
+        if (dup) continue;
+        int sl = fvm_slot(m, c[k]);
+        if (sl >= 0) out[n++] = sl;
+    }
+    return n;
+}
+
+static void fvm_dyn_add(FvMulti *m, int sl, const FnDef *cfd, uint32_t pi) {
+    if (m->dyn_n == m->dyn_cap) {
+        int nc = m->dyn_cap ? m->dyn_cap * 2 : 64;
+        m->dyn_cfd  = (const FnDef **)realloc((void *)m->dyn_cfd, (size_t)nc * sizeof(*m->dyn_cfd));
+        m->dyn_pi   = (uint32_t *)realloc(m->dyn_pi, (size_t)nc * sizeof(*m->dyn_pi));
+        m->dyn_next = (int *)realloc(m->dyn_next, (size_t)nc * sizeof(*m->dyn_next));
+        m->dyn_cap  = nc;
+    }
+    m->dyn_cfd[m->dyn_n]  = cfd;
+    m->dyn_pi[m->dyn_n]   = pi;
+    m->dyn_next[m->dyn_n] = m->dyn_head[sl];
+    m->dyn_head[sl]       = m->dyn_n++;
+}
 
 static void eff_acc_add_callee(EffAcc *acc, const Binding *b) {
     if (!acc->callees) return;
@@ -4064,6 +4141,29 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     }
                 }
             }
+            if (acc->multi && acc->thr_program) {
+                FvMulti *m = (FvMulti *)acc->multi;
+                const FnDef *cfd = NULL;
+                bool cfd_done = false;
+                for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                    int sls[3];
+                    int ns = fvm_ref_slots(m, peel_fn_value(e->as.call_.args[i]), sls);
+                    if (!ns) continue;
+                    if (!cfd_done) {
+                        cfd = e->as.call_.fn_binding
+                            ? fd_for_binding(acc->thr_program, e->as.call_.fn_binding) : NULL;
+                        cfd_done = true;
+                    }
+                    if (!cfd) break;
+                    PtClass cls = param_thread_class(cfd, i);
+                    if (cls == PT_NONE) continue;
+                    for (int k = 0; k < ns; k++) {
+                        m->ok[sls[k]]++;
+                        if (cfd->closure) fvm_dyn_add(m, sls[k], cfd, i);
+                        else if ((int)cls > m->tier[sls[k]]) m->tier[sls[k]] = (int)cls;
+                    }
+                }
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) REC(e->as.call_.args[i]);
             REC(e->as.call_.fn_expr); REC(e->as.call_.dict_arg); return;
         case EX_RETURN: REC(e->as.return_.value); return;
@@ -4171,6 +4271,10 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 && e->as.closure_.closure && e->as.closure_.closure->fn
                 && e->as.closure_.closure->fn->binding == acc->count_target)
                 (*acc->count_out)++;
+            if (acc->multi && e->as.closure_.closure && e->as.closure_.closure->fn) {
+                int sl = fvm_slot(acc->multi, e->as.closure_.closure->fn->binding);
+                if (sl >= 0) acc->multi->total[sl]++;
+            }
             if (e->as.closure_.closure && e->as.closure_.closure->fn)
                 REC(e->as.closure_.closure->fn->body);
             return;
@@ -4197,6 +4301,11 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                      && (e->as.var.binding->closure_fn_binding == acc->count_target
                          || e->as.var.binding->hoist_closure_fn_binding == acc->count_target))
                 (*acc->count_out)++;
+            if (acc->multi) {
+                int sls[3];
+                int ns = fvm_ref_slots(acc->multi, e, sls);
+                for (int k = 0; k < ns; k++) acc->multi->total[sls[k]]++;
+            }
             if (e->as.var.binding && e->as.var.binding->type.kind == TY_FN) {
                 if (!acc->calls_only) eff_acc_add_callee(acc, e->as.var.binding);
                 /* E2/taint-completeness (cps-tramp-resume): a fn-value reference in
@@ -4229,7 +4338,7 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
  * every existing caller uses.  Perform and handle tags fold into the same set. */
 static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
-                   NULL, NULL, NULL, false };
+                   NULL, NULL, NULL, false, NULL };
     expr_collect_effects_acc(e, &acc);
 }
 
@@ -4339,7 +4448,7 @@ static bool letraw_effect_free(const CTerm *t) {
      * this gate exists for (its effect would run on the fiber, escaping the
      * handle's DK prompt). */
     EffAcc acc = { &lo, &hi, &lo, &hi, callees, &nc, 64, &ov,
-                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true };
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true, NULL };
     expr_collect_effects_acc(t->as.letraw.e, &acc);
     if (lo || hi || ov) return false;
     for (int i = 0; i < nc; i++)
@@ -4379,7 +4488,7 @@ static int expr_count_all_uses(const Expr *e, const Binding *b) {
     int n = 0;
     uint64_t dl = 0, dh = 0;
     EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL,
-                   b, &n, NULL, false };
+                   b, &n, NULL, false, NULL };
     expr_collect_effects_acc(e, &acc);
     return n;
 }
@@ -4662,40 +4771,41 @@ static bool threadable_has(const Binding *b) {
     return false;
 }
 
-/* Whole-program threadability for fn-value `fv`: over ONE exhaustive walk of the
- * program, count every value-use of fv (total) and every use that is a threadable
- * argument (ok).  Threadable iff there is at least one use and ALL uses are
- * threadable-args -- the coloring invariant.  The two counts ride the same
- * traversal (expr_collect_effects_acc with count_out + thr_ok both set), so no
- * form is missed and the comparison is exact.  Returns the counts via out-params
- * so the trace can show why a fn-value is or is not threadable. */
-/* E2c: is fn-value `fv` stored as a value in a `make-struct` field anywhere in
- * `e`?  An effectful fn-value stored in a struct field is called via `(.field
- * obj)` and threaded via the registry (cps_ir.c), so it must be registered even
- * though its make-struct store is not a "threadable ARG" use in the param sense.
- * Recurses the common containers; a miss only forgoes registration (conservative). */
-static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
+/* E2c: which target fn-values are stored as a value in a `make-struct` field
+ * in `e`?  An effectful fn-value stored in a struct field is called via
+ * `(.field obj)` and threaded via the registry (cps_ir.c), so it must be
+ * registered even though its make-struct store is not a "threadable ARG" use
+ * in the param sense.  Recurses the common containers; a miss only forgoes
+ * registration (conservative).  Marks each target's `stored` slot (FvMulti);
+ * the walk answers false throughout, so it visits every store once. */
+static bool sfs_hit(const Binding *b, const FvMulti *m) {
+    int sl = fvm_slot(m, b);
+    if (sl >= 0) m->stored[sl] = true;
+    return false;
+}
+
+static bool expr_stores_fnval_in_struct(const Expr *e, const FvMulti *m) {
     if (!e) return false;
     switch (e->kind) {
         case EX_MAKE_STRUCT:
             for (uint32_t i = 0; i < e->as.make_struct_.n_fields; i++) {
                 const Expr *v = peel_fn_value(e->as.make_struct_.field_values[i]);
-                if (v && v->kind == EX_VAR && v->as.var.binding == fv) return true;
-                if (expr_stores_fnval_in_struct(e->as.make_struct_.field_values[i], fv)) return true;
+                if (v && v->kind == EX_VAR && sfs_hit(v->as.var.binding, m)) return true;
+                if (expr_stores_fnval_in_struct(e->as.make_struct_.field_values[i], m)) return true;
             }
             return false;
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++)
-                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, fv)) return true;
-            return expr_stores_fnval_in_struct(e->as.let_.body, fv);
+                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, m)) return true;
+            return expr_stores_fnval_in_struct(e->as.let_.body, m);
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (expr_stores_fnval_in_struct(e->as.do_.items[i], fv)) return true;
+                if (expr_stores_fnval_in_struct(e->as.do_.items[i], m)) return true;
             return false;
         case EX_IF:
-            return expr_stores_fnval_in_struct(e->as.if_.cond, fv)
-                || expr_stores_fnval_in_struct(e->as.if_.then_, fv)
-                || expr_stores_fnval_in_struct(e->as.if_.else_or_null, fv);
+            return expr_stores_fnval_in_struct(e->as.if_.cond, m)
+                || expr_stores_fnval_in_struct(e->as.if_.then_, m)
+                || expr_stores_fnval_in_struct(e->as.if_.else_or_null, m);
         case EX_CALL: {
             /* A `(make-struct S ...)` lowers to a CONSTRUCTOR call (e->as.call_.ctor
              * set), so a fn-value stored in a struct field arrives here, not as
@@ -4704,20 +4814,21 @@ static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
             const CtorDef *ctor = e->as.call_.ctor;
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *v = peel_fn_value(e->as.call_.args[i]);
-                if (ctor && v && v->kind == EX_VAR && v->as.var.binding == fv
+                if (ctor && v && v->kind == EX_VAR
                     && i < ctor->n_fields
-                    && !effect_row_is_empty(ctor->fields[i].effect_row))
+                    && !effect_row_is_empty(ctor->fields[i].effect_row)
+                    && sfs_hit(v->as.var.binding, m))
                     return true;
-                if (expr_stores_fnval_in_struct(e->as.call_.args[i], fv)) return true;
+                if (expr_stores_fnval_in_struct(e->as.call_.args[i], m)) return true;
             }
-            return expr_stores_fnval_in_struct(e->as.call_.fn_expr, fv);
+            return expr_stores_fnval_in_struct(e->as.call_.fn_expr, m);
         }
         case EX_HANDLE: {
             HandleExpr *h = e->as.handle_.handle;
             if (!h) return false;
-            if (expr_stores_fnval_in_struct(h->body, fv)) return true;
+            if (expr_stores_fnval_in_struct(h->body, m)) return true;
             for (uint8_t i = 0; i < h->n_cases; i++)
-                if (expr_stores_fnval_in_struct(h->cases[i].body, fv)) return true;
+                if (expr_stores_fnval_in_struct(h->cases[i].body, m)) return true;
             return false;
         }
         /* handle-over-effectful-fn-field-in-arg-let-evicted: a builtin's
@@ -4730,48 +4841,74 @@ static bool expr_stores_fnval_in_struct(const Expr *e, const Binding *fv) {
          * worked. */
         case EX_BUILTIN:
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                if (expr_stores_fnval_in_struct(e->as.builtin.args[i], fv)) return true;
+                if (expr_stores_fnval_in_struct(e->as.builtin.args[i], m)) return true;
             return false;
         /* `(.run (make-struct FE fe) 3)`: the store is the field read's
          * receiver. */
         case EX_GET_FIELD:
-            return expr_stores_fnval_in_struct(e->as.get_field_.struct_expr, fv);
+            return expr_stores_fnval_in_struct(e->as.get_field_.struct_expr, m);
         case EX_LETREC:
             for (uint32_t i = 0; i < e->as.let_.n; i++)
-                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, fv)) return true;
-            return expr_stores_fnval_in_struct(e->as.let_.body, fv);
+                if (expr_stores_fnval_in_struct(e->as.let_.bindings[i].init, m)) return true;
+            return expr_stores_fnval_in_struct(e->as.let_.body, m);
         case EX_MATCH:
-            if (expr_stores_fnval_in_struct(e->as.match_.scrutinee, fv)) return true;
+            if (expr_stores_fnval_in_struct(e->as.match_.scrutinee, m)) return true;
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
-                if (expr_stores_fnval_in_struct(e->as.match_.arms[i].body, fv)) return true;
+                if (expr_stores_fnval_in_struct(e->as.match_.arms[i].body, m)) return true;
             return false;
-        case EX_REINTERPRET: return expr_stores_fnval_in_struct(e->as.reinterpret_.expr, fv);
-        case EX_ASCRIBE: return expr_stores_fnval_in_struct(e->as.ascribe_.inner, fv);
-        case EX_RETURN:  return expr_stores_fnval_in_struct(e->as.return_.value, fv);
-        case EX_SET:     return expr_stores_fnval_in_struct(e->as.set_.value, fv);
-        case EX_DEF:     return expr_stores_fnval_in_struct(e->as.def_.init, fv);
-        case EX_WHILE:   return expr_stores_fnval_in_struct(e->as.while_.cond, fv)
-                             || expr_stores_fnval_in_struct(e->as.while_.body, fv);
+        case EX_REINTERPRET: return expr_stores_fnval_in_struct(e->as.reinterpret_.expr, m);
+        case EX_ASCRIBE: return expr_stores_fnval_in_struct(e->as.ascribe_.inner, m);
+        case EX_RETURN:  return expr_stores_fnval_in_struct(e->as.return_.value, m);
+        case EX_SET:     return expr_stores_fnval_in_struct(e->as.set_.value, m);
+        case EX_DEF:     return expr_stores_fnval_in_struct(e->as.def_.init, m);
+        case EX_WHILE:   return expr_stores_fnval_in_struct(e->as.while_.cond, m)
+                             || expr_stores_fnval_in_struct(e->as.while_.body, m);
         default:         return false;
     }
 }
 
-/* E2c: does fn-value `fv` flow into a make-struct field anywhere in the program? */
-static bool fnval_stored_in_struct(const Expr *program, const Binding *fv) {
-    if (!program || program->kind != EX_PROGRAM) return false;
-    for (uint32_t i = 0; i < program->as.program.n; i++) {
-        Expr *it = program->as.program.items[i];
-        if (!it) continue;
-        const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
-                         ? it->as.fn_def_.fn->body : it;
-        if (expr_stores_fnval_in_struct(body, fv)) return true;
+/* r7rs-conformance-program-emits-megabytes-of-c: E2 threadability for every
+ * target at once (FvMulti) -- one walk of the program, where ensure_S used to
+ * walk it twice per fn-value (a per-target fn_value_threadable and
+ * fnval_stored_in_struct).  For each target: `total` value-uses and `ok`
+ * threadable-argument uses (threadable iff total >= 1 and total == ok), the
+ * hardest tier among them, and whether it is stored in an effectful struct
+ * field. */
+static void fv_multi_init(FvMulti *m, const Binding *const *targets, int n) {
+    memset(m, 0, sizeof *m);
+    uint32_t cap = 16;
+    while (cap < (uint32_t)n * 2u + 2u) cap *= 2;
+    m->cap      = cap;
+    m->keys     = (const Binding **)calloc(cap, sizeof *m->keys);
+    m->slot     = (int *)calloc(cap, sizeof *m->slot);
+    m->total    = (int *)calloc((size_t)n + 1, sizeof *m->total);
+    m->ok       = (int *)calloc((size_t)n + 1, sizeof *m->ok);
+    m->tier     = (int *)calloc((size_t)n + 1, sizeof *m->tier);
+    m->stored   = (bool *)calloc((size_t)n + 1, sizeof *m->stored);
+    m->dyn_head = (int *)malloc(((size_t)n + 1) * sizeof *m->dyn_head);
+    for (int i = 0; i < n; i++) {
+        m->dyn_head[i] = -1;
+        const Binding *b = targets[i];
+        if (!b || fvm_slot(m, b) >= 0) continue;
+        uint64_t x = (uint64_t)(uintptr_t)b;
+        x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+        uint32_t h = (uint32_t)x & (cap - 1);
+        while (m->keys[h]) h = (h + 1) & (cap - 1);
+        m->keys[h] = b;
+        m->slot[h] = i;
     }
-    return false;
 }
 
-static bool fn_value_threadable(const Expr *program, const Binding *fv,
-                                int *out_total, int *out_ok, int *out_tier) {
-    int total = 0, ok = 0, tier = 0;
+static void fv_multi_free(FvMulti *m) {
+    free((void *)m->keys); free(m->slot);
+    free(m->total); free(m->ok); free(m->tier); free(m->stored);
+    free((void *)m->dyn_cfd); free(m->dyn_pi); free(m->dyn_next); free(m->dyn_head);
+    memset(m, 0, sizeof *m);
+}
+
+/* The same item walk, and the same per-item accumulator, as the single-target
+ * fn_value_threadable / fnval_stored_in_struct. */
+static void fv_multi_tally(const Expr *program, FvMulti *m) {
     uint64_t dl = 0, dh = 0;
     uint32_t np = program->as.program.n;
     for (uint32_t i = 0; i < np; i++) {
@@ -4780,13 +4917,22 @@ static bool fn_value_threadable(const Expr *program, const Binding *fv,
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
         EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL,
-                       fv, &total, program, &ok, NULL, NULL, &tier, false };
+                       NULL, NULL, program, NULL, NULL, NULL, NULL, false, m };
         expr_collect_effects_acc(body, &acc);
+        (void)expr_stores_fnval_in_struct(body, m);
     }
-    if (out_total) *out_total = total;
-    if (out_ok)    *out_ok = ok;
-    if (out_tier)  *out_tier = tier;
-    return total >= 1 && total == ok;
+}
+
+/* Target `sl`'s tier as fn_value_threadable would compute it NOW: the
+ * state-independent part from the walk, raised by each capturing-lambda
+ * callee's class asked against the current threadable set. */
+static int fv_multi_tier(const FvMulti *m, int sl) {
+    int tier = m->tier[sl];
+    for (int d = m->dyn_head[sl]; d >= 0; d = m->dyn_next[d]) {
+        PtClass cls = param_thread_class(m->dyn_cfd[d], m->dyn_pi[d]);
+        if ((int)cls > tier) tier = (int)cls;
+    }
+    return tier;
 }
 
 /* E2a param->value converse: is EVERY fn-value flowing into param `pi` of `fd` a
@@ -4986,6 +5132,7 @@ static void ensure_S(const Expr *program) {
     free(g_ents); g_ents = NULL; g_ents_n = 0;
     g_prog = program;
     fdc_prog = NULL;   /* a new classification: rebuild fd_for_binding's table */
+    cps_ir_callee_cache_reset();   /* ... and callee_fndef's */
     g_fwd_done = false;
     g_eff_n = 0;
     ctg_reset();
@@ -5041,6 +5188,14 @@ static void ensure_S(const Expr *program) {
     g_threadable_fn_n = 0;
     cps_ir_thread_param_reset();
     bool trace = getenv("TUR_TRACE_EVICT") != NULL;
+    /* Every target first, then one tally walk for all of them (FvMulti), then
+     * the classification in the same order as before -- a capturing-lambda
+     * callee's tier is re-asked as the loop reaches each target, so a target
+     * sees every threadable_add the targets before it made. */
+    FnDef **tg_fd = (FnDef **)calloc(np ? np : 1, sizeof *tg_fd);
+    const Binding **tg_b = (const Binding **)calloc(np ? np : 1, sizeof *tg_b);
+    uint64_t *tg_eff = (uint64_t *)calloc(np ? np : 1, sizeof *tg_eff);
+    int ntg = 0;
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = (Expr *)items[i];
         if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
@@ -5050,6 +5205,17 @@ static void ensure_S(const Expr *program) {
         if (!is_fnval) continue;
         uint64_t lo = 0, hi = 0;
         expr_collect_effects(fd->body, &lo, &hi);
+        if (!(lo || hi) && !fd->cps_colored) continue;
+        tg_fd[ntg] = fd; tg_b[ntg] = fd->binding; tg_eff[ntg] = (lo || hi);
+        ntg++;
+    }
+    FvMulti fvm;
+    fv_multi_init(&fvm, tg_b, ntg);
+    fv_multi_tally(program, &fvm);
+    for (int ti = 0; ti < ntg; ti++) {
+        FnDef *fd = tg_fd[ti];
+        int sl = fvm_slot(&fvm, fd->binding);
+        uint64_t lo = tg_eff[ti], hi = 0;
         /* An effectful fn-value keeps the fiber alive.  A PURE fn-value
          * normally does not -- EXCEPT one the coloring pass force-colored
          * because it flows into an EFFECTFUL fn-value param (effect-subtype
@@ -5057,9 +5223,8 @@ static void ensure_S(const Expr *program) {
          * even a pure callback to be `threadable_add`ed with a `__cps` entry,
          * else `param_is_thread_safe` fails and the HOF sig_perms "E2 pending".
          * So a colored pure lambda proceeds to the threadability check. */
-        if (!(lo || hi) && !fd->cps_colored) continue;
-        int total = 0, ok = 0, tier = 0;
-        bool thr = fn_value_threadable(program, fd->binding, &total, &ok, &tier);
+        int total = fvm.total[sl], ok = fvm.ok[sl], tier = fv_multi_tier(&fvm, sl);
+        bool thr = total >= 1 && total == ok;
         /* E2a: a concrete captureless fn-value is threaded onto the DK -- tier
          * `now` (tail call) OR tier `nontail` (a non-tail call, reified as a
          * heap-join frame threaded to its __cps).  Covers BOTH a lifted lambda
@@ -5083,8 +5248,7 @@ static void ensure_S(const Expr *program) {
          * so `(.field obj)` threads to its __cps.  Includes a PURE fn stored in
          * an effectful field (effect subtyping) once the coloring pass has
          * force-colored it (so it reaches here with a __cps entry). */
-        if (fnval_stored_in_struct(program, fd->binding)
-            && (lo || hi || fd->cps_colored))
+        if (fvm.stored[sl] && (lo || hi || fd->cps_colored))
             threadable_add(fd->binding);
         if (trace) {
             const char *nm = fd->binding->name ? fd->binding->name->name : "?";
@@ -5095,6 +5259,8 @@ static void ensure_S(const Expr *program) {
                     total, ok, fd->binding->is_lifted_lambda ? "lambda" : "named");
         }
     }
+    fv_multi_free(&fvm);
+    free(tg_fd); free((void *)tg_b); free(tg_eff);
     /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = (Expr *)items[i];
@@ -5206,7 +5372,7 @@ static void ensure_S(const Expr *program) {
                 en->edges = NULL; en->edges_all = false;
                 EffAcc acc = { &en->perf_lo, &en->perf_hi,
                                &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
-                               NULL, NULL, NULL, NULL, NULL, NULL, NULL, false };
+                               NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL };
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi;
@@ -5251,7 +5417,7 @@ static void ensure_S(const Expr *program) {
         uint64_t scratch_lo = 0, scratch_hi = 0;
         EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
                        cbuf, &ncb, CALLEE_CAP, &overflow, NULL, NULL, NULL, NULL,
-                       NULL, NULL, NULL, false };
+                       NULL, NULL, NULL, false, NULL };
         expr_collect_effects_acc(g_ents[i].fd->body, &acc);
         g_ents[i].edges_all = overflow;
         for (int k = 0; k < ncb; k++)
@@ -11268,11 +11434,6 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         free(pn);
     }
     buf_puts(file, ") {\n");
-    buf_puts(file, "    __dk_entry_depth++;\n");
-    /* r7rs-callcc-memory-never-freed: where this entry's registrations
-     * start, so a nested exit can drop them (__dk_reap_drop_to). */
-    buf_puts(file, "    size_t __dk_reap_mark = __dk_reap_n;\n");
-    buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     /* proper-tail-calls T6 (T-D6): a bouncer's direct entry is where the
      * trampoline's arming lands -- the driver arms exactly this function, and
      * the fat box's shim calls it directly.  Armed, it publishes its root as
@@ -11281,6 +11442,35 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * Saved and restored around the body so a nested entry cannot leak its
      * root outward. */
     bool tb_entry = !fd->closure && fn_may_bounce(fd);
+    /* r7rs-conformance-program-emits-megabytes-of-c: a zero-parameter entry
+     * that is not a bouncer is the shared __dk_enter0 helper (emit_module.c,
+     * beside tur_async_suspended) -- the same sequence as below, once per
+     * program instead of once per function.  The result is read the way the
+     * inline wrapper reads it: a boxed (Tier-C) value is copied out by the
+     * helper before its reap, a word converted after (a pure conversion). */
+    if (fd->n_params == 0 && !tb_entry) {
+        if (void_ret) {
+            buf_printf(file, "    (void)__dk_enter0(%s__cps, NULL, 0);\n    return;\n}\n", cn);
+        } else {
+            Type _rr; const Type *rrt = cps_resolve_ty(rt, &_rr);
+            if (slot_box_ty(rrt)) {
+                buf_printf(file, "    %s __ret;\n"
+                                 "    (void)__dk_enter0(%s__cps, &__ret, sizeof __ret);\n"
+                                 "    return __ret;\n}\n", rety, cn);
+            } else {
+                char *ld = slot_load(ctx, rt->kind, rt, "__r", false);
+                buf_printf(file, "    int64_t __r = __dk_enter0(%s__cps, NULL, 0);\n"
+                                 "    return %s;\n}\n", cn, ld);
+                free(ld);
+            }
+        }
+        goto entry_wrapper_done;
+    }
+    buf_puts(file, "    __dk_entry_depth++;\n");
+    /* r7rs-callcc-memory-never-freed: where this entry's registrations
+     * start, so a nested exit can drop them (__dk_reap_drop_to). */
+    buf_puts(file, "    size_t __dk_reap_mark = __dk_reap_n;\n");
+    buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
     if (tb_entry) {
         ensure_saffron_dyn_runtime(ctx);
         buf_puts(file, "    void *__tb_save = tur_tb_root; tur_tb_root = NULL;\n");
@@ -11349,6 +11539,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     } else {
         buf_puts(file, "    return __ret;\n}\n");
     }
+entry_wrapper_done:
 
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
