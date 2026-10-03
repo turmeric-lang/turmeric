@@ -16,6 +16,12 @@ required capability and the native dispatch checks it. What it can still do is
 read or write an arbitrary address in the host's process, with no capability
 at all.
 
+**Narrowed a fourth time 2026-10-03: the wild JUMP is closed** -- an
+integer re-typed as a function is refused at the call (see *Resolved: a forged
+call target*).  What is open is the wild READ: the same erasing ascription
+re-typing an integer as a by-value struct or a `cstr`, and a field read
+through a bare-int receiver.
+
 **Narrowed a third time 2026-10-03: continuation resume is closed** (see
 *Resolved: continuation resume*).  What is open is the erasing ascription on a
 type variable.
@@ -168,6 +174,27 @@ without going through either.  `0` stays the documented no-op.  Pinned by the
 `forgery/serial-cont-resume`, `forgery/cloneable-cont-clone` and
 `handles-ok/continuation` cases in `tests/turi/sandbox-eval.c`.
 
+## Resolved: a forged call target (2026-10-03)
+
+`(defn mk [A] [x : int] : A (:: x A))` then
+`(let [f : (fn [int] int) (mk 4096)] (f 1))` jumped to 4096: the ascription is
+transparent on a bare int, and the call head re-tagged it as a closure
+(`recover_carrier_closure`, because the head's binding is fn-typed).  Three
+natives re-tag the same way (`seq_as_closure`, `free_call_fat`).
+
+A closure only loses its tag by entering a native -- stored in a Vec, a map, a
+cell, as the word its union holds; the interpreter's own ascriptions keep the
+tag.  So in a provenance-tracked env every closure argument of a native call
+is registered as `TURI_HK_CLOSURE` (`turi_prov_note_args`, at the native
+dispatch and at the inline-C override), and every int-to-closure re-tag goes
+through `turi_closure_from_carrier`, which refuses a word that is not
+registered -- "not a live handle of the expected kind".  Outside a sandbox
+both are no-ops.  `turi_call` hands such a refusal back unchanged.
+
+Pinned by `forgery/closure-retag` and its control `handles-ok/closure-carrier`
+(a closure pushed into a Vec and called back through a `^fat` parameter) in
+`tests/turi/sandbox-eval.c`.
+
 ## Still open: the value-model channel -- direction 2
 
 Direction 1 guards *the native dispatch*. The forgery below reaches a pointer
@@ -178,16 +205,20 @@ section already flagged, and it is what direction 2 (tagged handles) closes.
 
 - **An erasing ascription on a type variable.** A generic body that ascribes a
   caller integer to its type parameter re-tags it in the interpreter's own value
-  model, then the tree-walker dereferences the result -- as a struct field read
-  or as a call target:
+  model, then the tree-walker dereferences the result as a struct or a string:
 
   ```
   (defn mk [A] [x : int] : A (:: x A))
-  (let [f : (fn [int] int) (mk 4096)] (f 1))   ; still a wild jump
+  (.x (:: (mk 4096) Point))      ; a wild read
   ```
 
-  The retag sites are `try_retag_carrier_struct` / `recover_carrier_closure` /
-  the `EX_ASCRIBE` cstr arm in `src/turi/eval.c`, none of which is a native.
+  The sites are `try_retag_carrier_struct` (which dereferences the word to
+  validate it), the `EX_ASCRIBE` / `EX_REINTERPRET` cstr arms, and
+  `get_field_extract`'s bare-int receiver path, which reads the word as a raw
+  field buffer -- all in `src/turi/eval.c`, none a native.  The call-target
+  re-tag is closed (above); these are not, because a struct carrier and a
+  string are MINTED in too many places (natives build both and hand them back
+  as words) for the closure fix's "register where it loses its tag" to cover.
 
 - **Continuation resume.** `(resume-cont! 4096 0)` and the lowered
   `tur_*_cont_resume` builtins are folded by the CEK driver

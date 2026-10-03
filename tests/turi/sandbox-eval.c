@@ -333,6 +333,13 @@ static void check_handle_forgery_refused(void) {
                            "(tur_serial_cont_resume 4096 0)");
     expect_forgery_refused(env, "forgery/cloneable-cont-clone",
                            "(tur_cloneable_cont_clone 4096)");
+    /* The value-model channel: an erasing ascription on a type variable
+     * re-types a caller integer as a function, and the call through it used
+     * to jump to 4096.  No native is involved, so the retag carries its own
+     * check (TURI_HK_CLOSURE, minted where a closure loses its tag). */
+    turi_eval(env, "(defn mk-forged [A] [x : int] : A (:: x A))");
+    expect_forgery_refused(env, "forgery/closure-retag",
+                           "(let [f : (fn [int] int) (mk-forged 4096)] (f 1))");
     turi_env_free(env);
 }
 
@@ -365,6 +372,21 @@ static void check_handles_still_round_trip(void) {
         snprintf(msg, sizeof msg, "a live continuation was wrongly refused (tag %d: %s)",
                  kr.tag, kr.tag == TURI_ERROR && kr.as_error ? kr.as_error : "-");
         fail("handles-ok/continuation", msg);
+    }
+    /* A closure that really lost its tag -- stored in a Vec, read back as a
+     * bare word -- was minted when it entered vec-push!, so the re-tag at the
+     * fn-typed call head still accepts it (the closure-retag guard's control). */
+    turi_eval(env, "(defn call1-sbx [^fat f : (fn [int] int) x : int] : int (f x))");
+    TuriValue cr = turi_eval(env,
+        "(let [v (vec-new) n 1]"
+        "  (vec-push! v (:: (fn [x : int] : int (+ x n)) int))"
+        "  (call1-sbx (:: (vec-get v 0) ptr<void>) 41))");
+    if (cr.tag == TURI_INT && cr.as_int == 42) pass("handles-ok/closure-carrier", NULL);
+    else {
+        char msg[256];
+        snprintf(msg, sizeof msg, "a stored closure was wrongly refused (tag %d: %s)",
+                 cr.tag, cr.tag == TURI_ERROR && cr.as_error ? cr.as_error : "-");
+        fail("handles-ok/closure-carrier", msg);
     }
     /* A cstr literal is a trusted reader pointer, not a forgeable integer. */
     TuriValue s = turi_eval(env, "(str-concat \"a\" \"b\")");

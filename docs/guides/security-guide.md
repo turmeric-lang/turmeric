@@ -245,9 +245,13 @@ What is **not** yet closed is the narrower *value-model* channel: an erasing
 ascription on a type variable still launders a caller integer into a pointer
 WITHOUT passing through any of those checks (the retag happens in the
 interpreter's own value model, e.g. `(:: x A)` in a generic body followed by a
-call or field read). The registry does not see it, because a bare `:int` in the
-value model carries no kind to check against. Closing it is the "tagged
-handles" route (direction 2 in the report).
+field read or a string use). The registry does not see it, because a bare
+`:int` in the value model carries no kind to check against. Closing it is the
+"tagged handles" route (direction 2 in the report). The worst of it -- the same
+integer re-typed as a function and CALLED -- is refused: a closure is
+registered as it enters a native (the only place it can lose its tag), and a
+call through a re-tagged word must name one. What remains is a wild read, not
+a wild jump.
 
 A panic, by contrast, no longer ends the host. In an environment without
 `TURI_CAP_PROC`, a panic that nothing catches, and the error exits of natives
