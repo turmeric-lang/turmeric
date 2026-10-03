@@ -122,10 +122,10 @@ function emitter flushed AFTER its lifted helpers.  It flushes them first now
 `tests/fixtures/handle-sequential-widened-closure`; two snapshots
 (`defstruct-field-handler*`) move by the same reordering.
 
-Also found, NOT fixed (pre-existing, both back ends): a struct TEMPORARY with
+Also found (pre-existing, both back ends; since fixed): a struct TEMPORARY with
 a fn field -- `(.run (make-struct S f) x)` -- leaks its 24-byte fn-field box;
 a let-bound one is freed.  Filed as
-[struct-temporary-fn-field-box-leaks](struct-temporary-fn-field-box-leaks.md).
+[struct-temporary-fn-field-box-leaks](../archive/struct-temporary-fn-field-box-leaks.md).
 
 ## Item 3, reduced and investigated (2026-10-03)
 

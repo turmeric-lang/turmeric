@@ -6952,6 +6952,7 @@ static void emit_perform(CE *ce, const CTerm *t);
 static void emit_await(CE *ce, const CTerm *t);   /* F3 (cps-async) */
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
+static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
 static void emit_escaping_join(CE *ce, const CTerm *t);  /* escaping joins */
@@ -8250,9 +8251,44 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         ce_line(ce, "if ((void *)__kont != tur_tb_root) "
                     "__dk_reap_closure((intptr_t)TUR_UNTAG(%s));", bn);
     }
+    emit_letraw_fnfield_reap(ce, t, bn);
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);
+}
+
+/* struct-temporary-fn-field-box-leaks (the CPS half): a by-value struct
+ * local the elaborator flagged `drops_fn_fields` -- non-escaping, so its boxed
+ * fn fields die with it (local-struct-drop) -- is released by the direct
+ * emitter's `drop_fnfields_<T>` at scope end.  Here the scope can end in a
+ * tail call (often the very call through the field), and nothing runs after
+ * one, so each boxed field is registered with the entry boundary's reap
+ * instead, as a headered closure (kind 2) -- the same channel `reap_env` uses
+ * for a non-escaping closure env.  Reaping later than the scope's end is
+ * safe for a value nothing outside the scope can name. */
+static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn) {
+    const Binding *xb = t->as.letraw.x.bind;
+    if (!xb || !xb->drops_fn_fields || xb->type.kind != TY_ADT) return;
+    const AdtDef *def = xb->type.as.adt_.def;
+    if (!def || def->n_ctors < 1 || !def->ctors[0]) return;
+    if (t->as.letraw.x.ty == TY_NIL || t->as.letraw.x.ty == TY_NEVER ||
+        t->as.letraw.x.ty == TY_FN)
+        return;
+    /* Only a binder declared as the aggregate itself: a carrier word or a
+     * pointer names storage this binder does not own. */
+    const char *bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty,
+                                        t->as.letraw.x.type);
+    if (!bct || strncmp(bct, "tur_adt_", 8) != 0 || strchr(bct, '*')) return;
+    const CtorDef *ctor = def->ctors[0];
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        const Type *ft = ctor->fields[fi].full_type;
+        if (ctor->fields[fi].kind != TY_FN || !ft || ft->kind != TY_FN ||
+            !ft->as.fn.boxed)
+            continue;
+        char *mp = adt_field_member_path(def, ctor, fi);
+        ce_line(ce, "__dk_reap_closure((intptr_t)(%s).%s);", bn, mp);
+        free(mp);
+    }
 }
 
 /* ---- binder pre-declaration ------------------------------------------ *

@@ -1,11 +1,12 @@
 # A struct temporary with a fn field leaks its fn-field box
 
-**Narrowed 2026-10-03 (same day): the direct emitter's half is fixed; a
-CPS-lowered function still leaks, and so does a `let`-bound struct there --
-see "What is left".**
+**RESOLVED 2026-10-03.**  The direct emitter's half first (an unbound owning
+receiver gets a binding), then the CPS backend's (each boxed field of a
+`drops_fn_fields` binder is handed to the entry boundary's reap) -- see the two
+*Fixed* sections below.
 
 **Severity: low (leak; 24 bytes per evaluation).**  Filed 2026-10-03, found
-working [cps-evicts-handle-in-operand-positions](cps-evicts-handle-in-operand-positions.md)
+working [cps-evicts-handle-in-operand-positions](../reported/cps-evicts-handle-in-operand-positions.md)
 item 4.  Pre-existing; the direct emitter and the CPS backend both show it.
 
 ## Repro
@@ -50,7 +51,7 @@ the same program, and the `let` is what local-struct-drop releases.  Pinned
 by `tests/fixtures/struct-temporary-fn-field-released` (leak-checked: a
 constructor receiver, a call-result receiver, and the `let`-bound control).
 
-## What is left: CPS-lowered functions
+## Was left: CPS-lowered functions
 
 A function that calls through a field is usually CPS-lowered -- the indirect
 call colors it -- and the CPS backend emits a `let` with no
@@ -62,3 +63,23 @@ struct `let`-bound.  The release cannot simply be emitted at the end of the
 until the call returns, and nothing runs after a CPS tail call.  A fix needs
 the release threaded as a continuation frame (or the drop deferred to the
 entry boundary's reap list, the way DK nodes are reaped).
+
+## Fixed (2026-10-03, later): the CPS half
+
+`emit_letraw_fnfield_reap` (`src/compiler/emit_cps_ir.c`), called from
+`emit_letraw` beside the `reap_env` / `reap_any_env` registrations it is
+modelled on: a binder whose source `Binding` is flagged `drops_fn_fields`, and
+is declared as the aggregate itself (not a carrier word or a pointer), hands
+each boxed fn field to the entry boundary's reap as a headered closure --
+`__dk_reap_closure((intptr_t)(p).run)` -- and the outermost `__dk_enter`'s
+exit releases it through `TUR_CLOSURE_DROP`.  The flag is the elaborator's
+proof that nothing outside the scope can name the value, which is what lets
+the release run later than the scope's end; the synthesized receiver binding
+of the direct fix carries it too, so the constructor receiver and the
+`let`-bound struct are covered by the one rule.  `tests/fixtures/struct-temporary-fn-field-released`
+gained three CPS-lowered callers (a constructor receiver in the tail, a
+`let`-bound struct, and a field call that is not the tail): 96 bytes in 4
+allocations before, clean after.
+
+Suite 3556/0; `tests/run-leak-check.sh` 121/0 (3 known-open); the type fuzzer
+(`--crossing fn_field`, 200 cases, and seed 3333) reports no bug class.

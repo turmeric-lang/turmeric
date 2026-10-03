@@ -10,10 +10,11 @@
 ;; on (tests/run-leak-check.sh): a missing release is a leak, an early one a
 ;; use-after-free.
 ;;
-;; Direct-emitted functions only: a function whose body calls through a field
-;; is usually CPS-lowered (an indirect call colors it), and the CPS backend
-;; runs no `drops_fn_fields` release for a `let`-bound struct either -- see
-;; the report.  `main` here is direct-emitted.
+;; `main` is direct-emitted.  A function whose body calls through a field is
+;; usually CPS-lowered instead (the indirect call colors it): there the field
+;; call can be the tail, after which nothing runs, so the CPS backend hands
+;; each boxed field to the entry boundary's reap.  `via-ctor`, `via-let` and
+;; `via-rest` (a field call that is NOT the tail) exercise that path.
 
 (defstruct PE :copy [run : (fn [int] int) tag : int])
 
@@ -22,9 +23,17 @@
 
 (defn make-pe [k : int] : PE (make-struct PE dbl k))
 
+(defn via-ctor [n : int] : int (.run (make-struct PE inc 0) n))
+(defn via-let [n : int] : int (let [p (make-struct PE dbl 0)] (.run p n)))
+(defn via-rest [n : int] : int (+ 100 (.run (make-pe 0) n)))
+
 (defn main [] : int
   (println (.run (make-struct PE inc 0) 1))      ;; constructor receiver
   (println (.run (make-pe 0) 21))                ;; call-result receiver
   (let [p (make-struct PE inc 0)]                ;; let-bound (control)
     (println (.run p 2)))
+  (println (via-ctor 4))                         ;; CPS, constructor receiver
+  (println (via-let 5))                          ;; CPS, let-bound
+  (println (via-rest 6))                         ;; CPS, call not in tail
+  (println (via-ctor 7))                         ;; a second entry
   0)
