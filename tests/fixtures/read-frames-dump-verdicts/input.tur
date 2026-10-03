@@ -1,5 +1,14 @@
 ;; R4 slice 2: the read-frame verification pass (rf_resolve_read_frames) and
-;; its --dump-read-frames surface, one function per verdict shape:
+;; its --dump-read-frames surface, one function per verdict shape.
+;;
+;; The two `vec-*` rows the dump opens with are stdlib's, not this fixture's:
+;; `vec-len` and `vec-get` carry `#reads v` so a bounded-index invariant can
+;; discharge inside a frozen region (refine-loop-invariant-reads-frozen-proved).
+;; UNVERIFIED is the right verdict for them -- their bodies are inline C, which
+;; the pass cannot scan, so each frame stays a trusted claim rather than a
+;; checked one.  That is the gap
+;; docs/reported/reads-frame-verification-ignores-a-callee-write-frame.md
+;; records.
 ;;
 ;;   gen-at    VERIFIED    a direct raw load rooted at the framed parameter
 ;;   alive2?   VERIFIED    reads only THROUGH a verified callee's frame; the

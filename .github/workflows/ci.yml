@@ -24,7 +24,65 @@ permissions:
   contents: read
 
 jobs:
+  # Docs-only gate.  A PR that touches nothing outside docs/ cannot change what
+  # the compiler does, so the build-and-suite jobs below are skipped for it --
+  # including their macOS legs, which wait on a small shared runner pool (see
+  # docs/upcoming/ci-aux-suite-latency-plan.md section 3).  A skipped job
+  # reports "skipped", which is not a failure.
+  #
+  # Two outputs, because docs/ is not all inert:
+  #   code   -- something outside docs/ changed.  Every job runs.
+  #   guides -- something under docs/guides/ changed.  The guides are rendered
+  #             and link-checked by web-smoke (`tur run docs` ends in
+  #             `genpack.py --strict-links`), and checked by check-guides and
+  #             check-spaced-types, so those three still run.
+  # docs-lint (below) always runs: it holds the ctest checks that read docs/
+  # and need no build, which a docs-only PR would otherwise never reach.
+  #
+  # Pushes to main, and anything this step cannot classify, count as code:
+  # main keeps its full run per merge, and the gate fails open.
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      guides: ${{ steps.classify.outputs.guides }}
+    steps:
+      # A pull_request run checks out the merge commit; its first parent is
+      # the base branch tip, so HEAD^1..HEAD is exactly the PR's change.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: classify
+        run: |
+          code=true
+          guides=true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] \
+             && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
+            echo "$files"
+            grep -qv '^docs/' <<<"$files" || code=false
+            grep -q '^docs/guides/' <<<"$files" || guides=false
+          fi
+          echo "code=$code guides=$guides"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "guides=$guides" >> "$GITHUB_OUTPUT"
+
+  # The ctest checks that read docs/ and need no compiler.  They also run
+  # inside the `test` job's ctest; this copy is what covers a docs-only PR,
+  # where `test` is skipped.  Seconds on ubuntu, so it runs unconditionally.
+  docs-lint:
+    name: Docs lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: docs/reported/README.md lists exactly the open reports
+        run: bash tests/check-reported-index.sh
+      - name: r7rs guide SRFI list matches the prelude
+        run: bash tests/check-r7rs-srfi-sync.sh
+
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # Several jobs per OS, split along ctest boundaries: `fixtures` runs the
     # RUN_SERIAL tur_tests corpus, `r7rs` runs every suite whose name contains
     # `r7rs`, `fconv` and `gsm1`/`gsm2` run the two expensive serial suites
@@ -599,6 +657,8 @@ jobs:
           key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
 
   jit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: JIT engine (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # The MIR JIT engine had NO CI coverage at all until this job: the `test`
@@ -958,6 +1018,8 @@ jobs:
   # Linux only: macOS still defaults to the whole preamble, so its `test` legs
   # cover it there.
   whole-preamble:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Whole runtime preamble (cc path)
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1037,6 +1099,8 @@ jobs:
   # failing fixture here is a new mismatched call.  tests/run-fnsan.sh proves
   # the detector armed with a canary first, so it cannot pass vacuously.
   fnsan:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Indirect-call type check (clang -fsanitize=function)
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1154,6 +1218,8 @@ jobs:
           bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl
 
   windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Windows build + suite ${{ matrix.shard }} (MSYS2/UCRT64)
     runs-on: windows-latest
 
@@ -1442,6 +1508,8 @@ jobs:
           if-no-files-found: ignore
 
   windows-jit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Windows JIT build (MSYS2/UCRT64)
     runs-on: windows-latest
 
@@ -1596,6 +1664,8 @@ jobs:
         run: TUR=./build-win-jit/tur.exe timeout 600 bash tests/turi/repl-spice-jit.sh
 
   check-guides:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.guides == 'true'
     name: Check guide toggle pairs
     runs-on: ubuntu-latest
     env:
@@ -1639,6 +1709,8 @@ jobs:
         run: python3 tools/check-guide-pairs.py --tur build/tur docs/guides/
 
   check-spaced-types:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.guides == 'true'
     name: Check spaced-type annotations
     runs-on: ubuntu-latest
     steps:
@@ -1661,6 +1733,8 @@ jobs:
   # detection, tar layouts, `sha256sum` vs `shasum`, and the target triple all
   # differ, and macOS is where the advertised one-liner is most used.
   tvm:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: tvm (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -1690,6 +1764,8 @@ jobs:
         run: sh tvm/tests/install-script.sh
 
   check-snapshots:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Check codegen snapshots
     runs-on: ubuntu-latest
     # Only run when src/codegen/ changed or expected.c files changed.
@@ -1740,6 +1816,8 @@ jobs:
         run: ./build/tur run regen-snapshots -- --check
 
   web-smoke:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.guides == 'true'
     name: Try Turmeric smoke test (browser)
     runs-on: ubuntu-latest
     # Pre-deploy gate for try.turmeric-lang.com: builds the wasm bundle and

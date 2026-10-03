@@ -1,0 +1,44 @@
+;; The frozen grant is withheld unless the loop body is PROMISED not to write
+;; the frozen name.  A live shared borrow is not that promise: a container's
+;; mutator takes the container BY VALUE, so no borrow conflict is ever
+;; reported for it.  Each loop here holds a region marker and still fails to
+;; prove its bound preserved, for a different reason:
+;;
+;;   - via-setter:  `vec-set-o!` is a mutator, so it carries no `#reads`.
+;;   - via-opaque:  an inline-C callee with no annotation at all; its body is
+;;                  opaque, so nothing promises anything about `v`.
+;;
+;; Entry still discharges in both (from `vlen`'s refined return), so these are
+;; `1 proven, 1 unproven` each -- the grant is per obligation, and withholding
+;; it costs only the conjunct that needed congruence.  The positive case is
+;; refine-loop-invariant-reads-frozen-proved.
+(defn vlen [^borrow v : (Vec int)] #reads v : #refine{ r : int | (>= r 0) }
+  (vec-len v))
+
+(defn opaque [v : (Vec int)] #fx{} : int
+  ```c
+  (void)v;
+  return 0;
+  ```)
+
+(defn via-setter [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (< i (vlen v)) :invariant (<= i (vlen v))
+        (vec-set-o! v i 9 0)
+        (set! i (+ i 1)))
+      i)))
+
+(defn via-opaque [^borrow v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (< i (vlen v)) :invariant (<= i (vlen v))
+        (opaque v)
+        (set! i (+ i 1)))
+      i)))
+
+(defn main [] : int
+  (let [^mut v (vec-of 1 2 3)]
+    (println (via-setter v)))
+  (println (via-opaque (vec-of 1 2)))
+  0)

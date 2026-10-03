@@ -1,0 +1,2 @@
+'stream-null?' is imported from (srfi 216) and from (srfi 41) with different meanings
+rename or prefix one of them

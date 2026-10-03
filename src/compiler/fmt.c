@@ -159,6 +159,42 @@ static const char *fx_map_open(const Form *f) {
     return (f->fx_prov == PROV_FX_EXPLICIT) ? "#fx{" : "#{";
 }
 
+/* WF1 / C2: `#reads` and `#writes` read as the lists `(reads ...)` and
+ * `(writes ...)`, stamped PROV_READS / PROV_WRITES (reader.c).  Neither list
+ * has a paren spelling -- `reads` and `writes` are not functions, so a
+ * formatted `(reads v)` is a hard `unknown function or operator 'reads'` the
+ * next time the file is compiled.  Print them back as the annotation sugar,
+ * for the same reason the `&mut x` borrow sugar is special-cased below.
+ *
+ * Measured before this existed: `tur fmt` turned a clean one-line
+ * `(defn vlen [^borrow v : (Vec int)] #reads v : int (vec-len v))` into a file
+ * that does not compile -- silently, exit 0.
+ *
+ * The frame's BRACKETS are kept whenever a bare name would not round-trip:
+ * `#writes []` is the meaningful "writes nothing" claim and reads as a
+ * one-element `(writes)`, which must not come back as a frameless `#writes`.
+ * A single-name frame normalizes to the unbracketed spelling, which is what
+ * the guides use and what re-reads identically. */
+static bool fmt_frame_annot(Buf *b, const Form *f) {
+    const char *kw = NULL;
+    if (f->fx_prov == (uint8_t)PROV_READS)       kw = "#reads";
+    else if (f->fx_prov == (uint8_t)PROV_WRITES) kw = "#writes";
+    if (!kw || f->tag != F_LIST || f->as.list.len == 0) return false;
+    buf_puts(b, kw);
+    if (f->as.list.len == 2) {
+        buf_putc(b, ' ');
+        fmt_form_flat(b, f->as.list.items[1]);
+        return true;
+    }
+    buf_puts(b, " [");
+    for (uint32_t i = 1; i < f->as.list.len; i++) {
+        if (i > 1) buf_putc(b, ' ');
+        fmt_form_flat(b, f->as.list.items[i]);
+    }
+    buf_putc(b, ']');
+    return true;
+}
+
 static void fmt_form_flat(Buf *b, const Form *f) {
     switch (f->tag) {
         case F_NIL:   buf_puts(b, "nil"); break;
@@ -174,6 +210,7 @@ static void fmt_form_flat(Buf *b, const Form *f) {
             buf_write(b, f->as.sym->name, f->as.sym->len);
             break;
         case F_LIST:
+            if (fmt_frame_annot(b, f)) break;
             /* fmt-drops-comments-in-handle-and-binding-modifier-gaps: the
              * reader's `&mut x` borrow sugar reads as the list `(&mut x)`, and
              * that list has no paren spelling -- `(&mut x)` written out reads
@@ -1390,6 +1427,14 @@ static void fmt_form(FmtState *s, const Form *f) {
             break;
         }
         case F_LIST:
+            /* A `#reads`/`#writes` frame has a sugar spelling and no paren
+             * spelling (fmt_frame_annot), so it goes out flat rather than
+             * through the list breaker, which would print it as a call. */
+            if (f->fx_prov == (uint8_t)PROV_READS ||
+                f->fx_prov == (uint8_t)PROV_WRITES) {
+                fmt_emit_inline(s, f);
+                break;
+            }
             fmt_list(s, f);
             break;
         case F_READER_COND:

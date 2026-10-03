@@ -1,0 +1,40 @@
+;; reads-measure-rejected-in-invariant-and-pre, all three items: a bounded
+;; index walk over a container is PROVED inside a frozen region, and both of
+;; its runtime checks are elided.
+;;
+;; Three things have to line up, and each has a control fixture:
+;;
+;;   1. the region's marker -- `(& v)` bound to a name nothing mentions --
+;;      must not make `v` volatile, or the loop is declined outright.
+;;      Controls: `named-borrow` and `borrow-in-loop` in
+;;      loop-invariant-declines.
+;;   2. the loop's obligations must carry a frozen set, or each `(vlen v)` is
+;;      a fresh symbol and the bound is unknown after the body.  A live shared
+;;      borrow is NOT sufficient evidence for that -- a container's mutator
+;;      takes it by value -- so the set holds only the names the body is
+;;      PROMISED not to write: `vec-len`/`vec-get` are `#reads v`, and
+;;      `vec-push!` deliberately is not.  Controls:
+;;      refine-loop-invariant-byvalue-mutation-not-proved and
+;;      refine-loop-invariant-frozen-grant-declines.
+;;   3. a proved `#reads` invariant's checks must be elidable, which the one
+;;      contract-position gate decides, not the plain purity walk.
+;;
+;; `vlen`'s refined return is still runtime-checked -- `(>= r 0)` is not
+;; provable from `vec-len`'s inline-C body -- which is why this does not run
+;; --strict-refine.  That is the orthogonal gap the report records.
+(defn vlen [^borrow v : (Vec int)] #reads v : #refine{ r : int | (>= r 0) }
+  (vec-len v))
+
+(defn sum-all [^borrow v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut acc 0
+          ^mut i   0]
+      (while (< i (vlen v)) :invariant (and (>= i 0) (<= i (vlen v)))
+        (set! acc (+ acc (vec-get v i)))
+        (set! i   (+ i 1)))
+      acc)))
+
+(defn main [] : int
+  (println (sum-all (vec-of 1 2 3)))
+  (println (sum-all (vec-of)))
+  0)

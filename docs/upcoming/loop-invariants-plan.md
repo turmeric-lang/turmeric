@@ -624,12 +624,41 @@ harness's documented report-only class.
   runtime". So RE2 would consume the correctness path only, and is unstarted
   by decision. Trigger 1 above, which is phrased in terms of a profile showing
   the re-check is a real cost, cannot be fired by RE2.
-- **The gap that should be closed before graduating this row** was
-  [reads-measure-rejected-in-invariant-and-pre](../reported/reads-measure-rejected-in-invariant-and-pre.md):
-  a `#reads` measure was rejected in a `:invariant` by `TUR-E0375` while a
-  parameter refinement accepted it, so no stdlib container's length could
-  appear in an invariant. **Half-closed 2026-10-03:** the gate now accepts a
-  `#reads` measure in every contract position, so the bounded-index walk can be
-  written against a real container and is runtime-checked
-  (`refine-reads-measure-contract-positions`). It is not yet *proved*, even
-  inside `frozen` -- the report lists the three changes that stand in the way.
+- ~~**The gap that should be closed before graduating this row** was
+  `reads-measure-rejected-in-invariant-and-pre`: a `#reads` measure was
+  rejected in a `:invariant` by `TUR-E0375` while a parameter refinement
+  accepted it, so no stdlib container's length could appear in an
+  invariant.~~ **RESOLVED 2026-10-03**, all three items
+  ([archived report](../archive/reads-measure-rejected-in-invariant-and-pre.md)).
+  A bounded-index walk over a container is PROVED inside a `frozen` region and
+  both of its runtime checks are elided
+  (`refine-loop-invariant-reads-frozen-proved`). It took three steps:
+
+  - the CT1 gate accepted a `#reads` measure in every contract position, so
+    the walk could be *written* against a real container and runtime-checked;
+  - items 1 and 3: the frozen marker idiom -- a shared borrow bound to a name
+    nothing mentions -- no longer makes the borrowed name volatile
+    (`li_inert_borrows`; the blanket narrowing to `&mut` the report proposed
+    measured UNSOUND, since an inline-C callee does write through a shared
+    borrow), and the elision veto asks the one contract-position gate instead
+    of the plain purity walk;
+  - item 2, whose stated premise was wrong. Publishing the crossing's frozen
+    set grants congruence ACROSS the body and proved `(<= (vlen v) 3)`
+    preserved by a body calling `(vec-push! v 7)` -- borrow liveness does not
+    pin a container whose mutators take it BY VALUE. The grant is keyed on a
+    WRITE PROMISE instead (`li_name_reads_only`: a `#reads` position, or a
+    callee known pure), and `stdlib/vec.tur`'s `vec-len` / `vec-get` carry
+    `#reads v` while the mutators deliberately carry nothing -- that asymmetry
+    is the discriminator, since the signatures cannot be. Held either way by
+    `refine-loop-invariant-byvalue-mutation-not-proved` and
+    `refine-loop-invariant-frozen-grant-declines`.
+
+  **The remaining graduation questions are no longer capability gaps:** whether
+  to graduate straight from `XF_LIFECYCLE_PROTOTYPE` and skip a `beta` soak;
+  what to do with `tests/fixtures/loop-invariant-gate-off`, which asserts the
+  gate-OFF behaviour and has no `TUR_LOOP_INVARIANTS=0` hatch to invert onto
+  (see the experimental-flags guide on a harness that inverts rather than
+  retires); whether any consumer wants it -- RE2 is unstarted by decision, per
+  the bullet above; and whether the TRUST the frozen grant now rests on is
+  acceptable, since a hand-written false `#reads` reaches it with no diagnostic
+  ([reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md)).

@@ -338,6 +338,14 @@ static bool rt_pred_observably_impure(const Expr *x);
  * Defined after rt_resolve_fn; forward-declared here for rt_inject_param_checks. */
 static bool rt_pred_reads_measure(Elab *e, const Form *f);
 
+/* loop-invariants / C2: is every occurrence of `name` in `f` at a position
+ * some callee promised not to write?  Defined with the other `li_*` walkers;
+ * forward-declared here because li_register_site builds a loop's frozen set
+ * with it, and registration is the only point where the loop's scope is live
+ * to check an approved callee name against its global. */
+static bool li_name_reads_only(Elab *e, const Form *f, const char *name,
+                               uint32_t depth);
+
 /* CT1: a contract predicate whose EVALUATION does something observable.
  *
  * Checks are conditional on the build: `--no-contracts` strips them, a release
@@ -669,6 +677,54 @@ LoopInvSite *li_register_site(Elab *e, const Form *call, const Form *cond,
         snprintf(buf, sizeof(buf), "the loop reads the mutable global '%s', "
                  "which a call in the body could change", mg);
         site->decline = arena_strdup(e->arena, buf, strlen(buf));
+    }
+
+    /* C2 / #reads: the loop's FROZEN SET -- the shared borrows live here that
+     * the loop's condition and body are promised not to write.  Decided here,
+     * at registration, for two independent reasons: the borrow checker only
+     * knows what is live at this point, and `li_name_reads_only`'s shadow
+     * check needs the loop's scope to ask whether an approved callee name
+     * still resolves to the binding its promise was read off.
+     *
+     * Two carve-outs on the candidates, both the crossing's
+     * (refine_note_call_site) and for its reasons:
+     *
+     *   - a SHADOWED borrow is skipped.  The encoder matches a frozen name by
+     *     spelling, so an inner binding of the same name would otherwise be
+     *     read as frozen when it is not.
+     *   - a MUTABLE GLOBAL is never frozen.  It is written by name rather than
+     *     passed, so borrowing it does not stop a callee's `(set! *g* ...)`.
+     *
+     * And one the crossing does not make: only `BK_IMMUT`.  A `&mut` borrow IS
+     * the write channel a frozen set exists to rule out.
+     *
+     * The invariant is not walked for write promises -- it is gated
+     * non-observably-impure already, so evaluating it cannot write. */
+    {
+        uint32_t nb = 0;
+        for (const Scope *sc = e->scope; sc; sc = sc->parent)
+            for (const ScopeBorrow *bo = sc->borrows; bo; bo = bo->next)
+                if (bo->kind == BK_IMMUT && bo->binding && bo->binding->name) nb++;
+        if (nb) {
+            const char **fz = (const char **)arena_alloc(e->arena,
+                                                         nb * sizeof(char *));
+            uint32_t k = 0;
+            for (const Scope *sc = e->scope; sc; sc = sc->parent)
+                for (const ScopeBorrow *bo = sc->borrows; bo; bo = bo->next) {
+                    if (bo->kind != BK_IMMUT) continue;
+                    Binding *b = bo->binding;
+                    if (!b || !b->name) continue;
+                    if (scope_lookup(e->scope, b->name) != b) continue;
+                    if (b->is_global && b->is_mut) continue;
+                    const char *nm = b->name->name;
+                    if (!li_name_reads_only(e, cond, nm, 0)) continue;
+                    bool ok = true;
+                    for (uint32_t i = body_start; i < call->as.list.len && ok; i++)
+                        ok = li_name_reads_only(e, call->as.list.items[i], nm, 0);
+                    if (ok) fz[k++] = nm;
+                }
+            if (k) { site->frozen_names = fz; site->n_frozen = k; }
+        }
     }
     return site;
 }
@@ -5077,6 +5133,88 @@ static bool li_head_runs_in_place(Elab *e, const Form *f) {
     return b && b->type.kind == TY_FN;
 }
 
+/* An INERT shared borrow: `(& x)` bound by a `let` to a name that nothing in
+ * the rest of that `let` ever mentions.  Such a borrow cannot be handed to
+ * anything, which is the whole reason the borrow channel is a channel.
+ *
+ * It is the shape `(frozen v ...)` lowers to -- `(let [__f (& v)] ...)`, a
+ * marker whose only job is to hold the borrow live so the borrow checker
+ * forbids a conflicting `&mut`.  Recorded by FORM IDENTITY (the pointer), so
+ * only the borrow actually bound this way is exempted; a second `(& x)`
+ * elsewhere in the function is untouched.
+ *
+ * Why only this shape, when a shared borrow cannot be assigned through at all
+ * ("cannot assign through immutable borrow; use `&mut T` for mutation")?
+ * Because that is a rule about TURMERIC code, and it is not the only writer.
+ * Measured: an inline-C callee handed `(& x)` writes straight through the
+ * pointer, and `x` changes with nothing in the caller to see --
+ *
+ *     (defn poke [p : &int] : int ```c *(int64_t *)p = 99; return 0; ```)
+ *     (let [^mut x 1] (poke (& x)) (println x))   ;; prints 99
+ *
+ * -- so narrowing the volatile set to `&mut` borrows outright, which is what
+ * reads-measure-rejected-in-invariant-and-pre item 1 proposed, is unsound.  A
+ * borrow nothing can name is the case where that exposure provably cannot
+ * arise: there is no call to hand it to. */
+static bool li_inert_borrows(Elab *e, const Form *f, uint32_t depth,
+                             const Form **out, uint32_t *n) {
+    if (!f) return true;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    const Form *mx = rt_macro_expansion(e, f);
+    if (mx) return li_inert_borrows(e, mx, depth, out, n);
+    if (f->tag == F_LIST && f->as.list.len >= 2 &&
+        (rt_head_is(f, "let") || rt_head_is(f, "let*")) &&
+        f->as.list.items[1] && f->as.list.items[1]->tag == F_VEC) {
+        const Form *bv = f->as.list.items[1];
+        /* ONE binding, and nothing else in the vector.  Deliberately not a
+         * general walk over binding specs: pairing a name with its init means
+         * reimplementing `let`'s spec grammar (`^mut`, `name : T value`) in a
+         * place where getting it wrong the other way -- calling a USED borrow
+         * inert -- is unsound, not merely conservative.  A vector of exactly
+         * `[sym (& sym)]`, or `[sym : T (& sym)]`, cannot be mispaired.
+         *
+         * This is the shape the idiom actually takes: a dedicated marker
+         * `let`, as in refine-stateful-resizable-bounds.  A marker folded in
+         * beside other bindings simply keeps today's conservative answer; to
+         * widen this, reuse `let`'s own spec parser rather than guessing. */
+        uint32_t ni = 0, vi = 1;
+        if (bv->as.list.len == 4 && rt_sym_is(bv->as.list.items[1], ":")) vi = 3;
+        else if (bv->as.list.len != 2) vi = 0;          /* no match */
+        if (vi) {
+            const Form *nm   = bv->as.list.items[ni];
+            const Form *init = bv->as.list.items[vi];
+            if (nm && nm->tag == F_SYM && nm->as.sym &&
+                init && init->tag == F_LIST && init->as.list.len >= 2 &&
+                rt_sym_is(init->as.list.items[0], "&")) {
+                const Form *t = init->as.list.items[1];
+                if (t && t->tag == F_SYM && t->as.sym) {
+                    /* Named anywhere in the `let` body?  Then it can flow
+                     * somewhere, and it stays a channel. */
+                    bool used = false;
+                    for (uint32_t k = 2; k < f->as.list.len && !used; k++)
+                        used = rt_form_mentions_name(e, f->as.list.items[k],
+                                                     nm->as.sym->name, 0);
+                    if (!used) {
+                        if (*n >= LI_MAX_NAMES) return false;
+                        out[(*n)++] = init;
+                    }
+                }
+            }
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!li_inert_borrows(e, f->as.list.items[i], depth + 1, out, n))
+            return false;
+    return true;
+}
+
+static bool li_form_in_set(const Form *f, const Form **set, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++)
+        if (set[i] == f) return true;
+    return false;
+}
+
 /* The VOLATILE names of a body: those something can rebind with no `set!`
  * at the point it happens.  Two channels:
  *
@@ -5088,11 +5226,15 @@ static bool li_head_runs_in_place(Elab *e, const Form *f) {
  *     to an alias before a loop and handed to a writing callee inside it
  *     (`(zap rm)`), where no scan of the loop sees `x` at all.
  *
+ * `inert` exempts the one borrow shape that provably cannot reach a callee
+ * (li_inert_borrows).  Pass NULL / 0 to get the unnarrowed set.
+ *
  * A volatile name is never a fact, and a loop whose invariant, condition or
  * assignments touch one is declined.  False on an assignment symbol this
  * cannot attribute. */
 static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn,
-                              const char **names, uint32_t *n) {
+                              const char **names, uint32_t *n,
+                              const Form **inert, uint32_t n_inert) {
     if (!f) return true;
     if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;
     if (f->tag == F_SYM && f->as.sym) {
@@ -5104,14 +5246,16 @@ static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn
     }
     if (f->tag != F_LIST && f->tag != F_VEC) return true;
     const Form *mx = rt_macro_expansion(e, f);
-    if (mx) return li_lambda_targets(e, mx, depth, in_fn, names, n);
+    if (mx) return li_lambda_targets(e, mx, depth, in_fn, names, n, inert, n_inert);
     /* `(handle e clauses...)`: `e` runs in place, the clauses do not. */
     if (!in_fn && f->tag == F_LIST && f->as.list.len >= 2 &&
         (rt_head_is(f, "handle") || rt_head_is(f, "handle-shallow"))) {
-        if (!li_lambda_targets(e, f->as.list.items[1], depth + 1, false, names, n))
+        if (!li_lambda_targets(e, f->as.list.items[1], depth + 1, false, names, n,
+                               inert, n_inert))
             return false;
         for (uint32_t i = 2; i < f->as.list.len; i++)
-            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, true, names, n))
+            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, true, names, n,
+                                   inert, n_inert))
                 return false;
         return true;
     }
@@ -5120,7 +5264,10 @@ static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn
     if (f->tag == F_LIST && f->as.list.len >= 2 &&
         (rt_sym_is(f->as.list.items[0], "&") || rt_sym_is(f->as.list.items[0], "&mut"))) {
         const Form *t = f->as.list.items[1];
-        if (t && t->tag == F_SYM && t->as.sym) {
+        /* A borrow nothing can name reaches no callee, so it stales nothing
+         * (li_inert_borrows).  `&mut` is never exempt. */
+        if (t && t->tag == F_SYM && t->as.sym &&
+            !li_form_in_set(f, inert, n_inert)) {
             bool of = false;
             li_name_add(t->as.sym->name, names, n, LI_MAX_NAMES, &of);
             if (of) return false;
@@ -5137,12 +5284,14 @@ static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn
             if (of) return false;
         }
         for (uint32_t i = 2; i < f->as.list.len; i++)
-            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n))
+            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n,
+                                   inert, n_inert))
                 return false;
         return true;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
-        if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n))
+        if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n,
+                               inert, n_inert))
             return false;
     return true;
 }
@@ -5726,6 +5875,14 @@ static bool li_obligation(Elab *e, const LoopInvSite *s, const LiFnCtx *F,
     if (ob) {
         ob->quiet = true;
         ob->runtime_guarded = false;   /* the user's own claim; see the plan */
+        /* C2 / #reads: the names a live shared borrow pins AND the body is
+         * promised not to write (li_frozen_for_site).  Borrow liveness alone
+         * is NOT that promise -- see li_name_reads_only for the measurement
+         * that settled it.  Without a set, every `(vlen v)` in the invariant
+         * encodes as a fresh symbol, so a bound over a container is unknown
+         * after the body even inside a region. */
+        if (s->n_frozen)
+            refine_obligation_set_frozen(ob, s->frozen_names, s->n_frozen);
         proven = refine_discharge_one(ob, e->arena);
         if (!proven && !ob->refuted)
             reason = ob->unknown_reason ? ob->unknown_reason : "the solver returned unknown";
@@ -5783,6 +5940,124 @@ static bool li_obligation(Elab *e, const LoopInvSite *s, const LiFnCtx *F,
     if (ob && ob->vc) refine_emit_obligation_notes(ob, e->arena, refuted, false);
     li_path_note(e, s, loc, entry, path);
     return false;
+}
+
+/* Would eliding this loop's two checks be OBSERVABLE?
+ *
+ * Decided by the ONE contract-position gate (rt_pred_observably_impure), on
+ * the ELABORATED predicate.  That gate's own comment states the design this
+ * restores: "One gate, so every contract position -- parameter, `:pre`,
+ * `:post`/return, `:invariant` -- agrees."  This site was the one left asking
+ * the plain purity walk (rt_pred_is_impure), which calls a `#reads` measure
+ * impure because its body is inline C -- so a PROVED `#reads` invariant still
+ * kept both runtime checks, which is item 3 of
+ * reads-measure-rejected-in-invariant-and-pre.
+ *
+ * The carve-out is the gate's, not a new one, and it is narrow in the way that
+ * matters here: a DIRECT call to a `#reads` measure does not count, because
+ * reading borrowed state is neutral however often it runs -- or never.  A
+ * predicate that CHANGES state still counts, so `(>= (tick) 0)` (the
+ * counter-bumping shape the fuzzer found as an output divergence, which is why
+ * this veto exists at all) still keeps its checks, and so does an unannotated
+ * wrapper around a measure, and so does `(vlen (next-vec!))`.
+ *
+ * Falls back to the Form walk when no elaborated predicate was kept -- that
+ * happens only when contracts are not emitted, where there is no check to
+ * elide in the first place. */
+static bool li_elision_observable(Elab *e, const LoopInvSite *s) {
+    if (s->pred_e) return rt_pred_observably_impure(s->pred_e);
+    return rt_pred_is_impure(e, s->inv);
+}
+
+/* Is every occurrence of `name` in `f` one that a callee has PROMISED not to
+ * write?
+ *
+ * This is the question a loop's frozen set actually turns on, and the reason a
+ * live shared borrow does not answer it.  A crossing's frozen set means "a
+ * shared borrow of x is live at this POINT", which makes two occurrences of a
+ * measure inside one predicate congruent.  A loop needs x unchanged ACROSS THE
+ * BODY, and a borrow does not give that: every stdlib container's mutator
+ * takes the container BY VALUE -- `vec-push!` is `[v : (Vec A) val : A]`,
+ * `#fx{}`, with no `#writes` -- so there is no conflicting borrow for
+ * TUR-E0200 to reject and the mutation is legal inside the region.  Publishing
+ * the borrow-liveness set alone proved `(<= (vlen v) 3)` preserved by a body
+ * calling `(vec-push! v 7)`; see item 2 of
+ * docs/archive/reads-measure-rejected-in-invariant-and-pre.md.
+ *
+ * So the evidence has to be a WRITE promise, and there are exactly two.
+ * `#reads p` is the trusted one: a measure declared that way claims it reads
+ * p's state and nothing more.  A callee the walk knows is PURE is the proven
+ * one -- `info.pure` means known-pure (that is the bar congruence itself is
+ * held to), and something that writes nothing cannot write this.  A pure
+ * callee is safe in EVERY position; `#reads` only in the positions its mask
+ * names.
+ *
+ * An occurrence therefore counts only as a DIRECT argument -- a bare symbol --
+ * at such a position.  Everything else withholds: a bare mention can be
+ * captured, an argument to an unannotated impure callee can be written
+ * through, and a term inside a constructed value escapes the loop entirely.
+ *
+ * False means "withhold the grant", which is always the safe answer, so every
+ * shape this cannot model answers false -- an overflowing walk, a computed
+ * head, a macro it cannot expand. */
+static bool li_name_reads_only(Elab *e, const Form *f, const char *name,
+                               uint32_t depth) {
+    if (!f) return true;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;
+    if (f->tag == F_SYM && f->as.sym)
+        return strcmp(f->as.sym->name, name) != 0;
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    const Form *mx = rt_macro_expansion(e, f);
+    if (mx) return li_name_reads_only(e, mx, name, depth + 1);
+    if (f->tag == F_LIST && f->as.list.len > 0) {
+        const Form *h = f->as.list.items[0];
+        if (h && h->tag == F_SYM && h->as.sym) {
+            if (strcmp(h->as.sym->name, name) == 0) return false;
+            /* A head that resolves to nothing -- a special form (`set!`,
+             * `let`, `do`), a builtin, an unannotated callee -- carries a zero
+             * mask, so a bare `name` under it withholds.  That is the intended
+             * reading for every one of them: `(set! v ...)` writes it, a `let`
+             * rebinds it, and an unannotated callee may do either. */
+            RefineFnInfo info;
+            memset(&info, 0, sizeof(info));
+            uint64_t mask = 0;
+            bool pure = false;
+            /* rt_resolve_fn answers from the GLOBAL scope only, so it will
+             * happily hand back stdlib `vec-get`'s `#reads v` for a call that
+             * actually goes to a LOCAL binding of that name.  Measured before
+             * this check existed: a `(let [vec-get (fn ... (vec-push! vv 7))]
+             * ...)` shadow was approved on the global's mask, preservation was
+             * "proved", and the check that would have caught the violated
+             * bound was elided -- the vector really did grow, to 5.
+             *
+             * So a promise counts only if the name still RESOLVES to the
+             * binding it was read off.  This is the reason the whole filter
+             * runs at REGISTRATION: that is the only point where the loop's
+             * scope is live to ask. */
+            if (scope_lookup(e->scope, h->as.sym) ==
+                    scope_lookup(&e->global, h->as.sym) &&
+                rt_resolve_fn(e, h->as.sym->name, &info)) {
+                mask = info.reads_params_mask;
+                pure = info.pure;
+            }
+            for (uint32_t i = 1; i < f->as.list.len; i++) {
+                const Form *a = f->as.list.items[i];
+                if (a && a->tag == F_SYM && a->as.sym &&
+                    strcmp(a->as.sym->name, name) == 0) {
+                    uint32_t p = i - 1;
+                    if (!pure && (p >= 64 || !(mask & (UINT64_C(1) << p))))
+                        return false;
+                    continue;                      /* writes nothing, or reads */
+                }
+                if (!li_name_reads_only(e, a, name, depth + 1)) return false;
+            }
+            return true;
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!li_name_reads_only(e, f->as.list.items[i], name, depth + 1))
+            return false;
+    return true;
 }
 
 static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
@@ -5928,9 +6203,10 @@ static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     s->entry_proven = entry_ok;
     s->pres_proven  = pres_ok;
 
-    /* Never elide a check that is itself observable (rt_pred_is_impure: a
-     * callee not known pure).  The proof still stands for what follows. */
-    if (rt_pred_is_impure(e, s->inv)) return;
+    /* Never elide a check that is itself observable.  The proof still stands
+     * for what follows either way -- entry_proven / pres_proven are already
+     * set above, so the post-loop fact does not depend on this. */
+    if (li_elision_observable(e, s)) return;
     if (entry_ok && s->entry_check) *s->entry_check = e_nil(e, s->span);
     if (pres_ok && s->body_check)   *s->body_check  = e_nil(e, s->span);
 }
@@ -5951,7 +6227,7 @@ static bool li_reuse_prior(Elab *e, uint32_t i) {
     s->early_return = prior->early_return;
     s->assigned     = prior->assigned;
     s->n_assigned   = prior->n_assigned;
-    if (!rt_pred_is_impure(e, s->inv)) {
+    if (!li_elision_observable(e, s)) {
         if (s->entry_proven && s->entry_check) *s->entry_check = e_nil(e, s->span);
         if (s->pres_proven && s->body_check)   *s->body_check  = e_nil(e, s->span);
     }
@@ -5971,7 +6247,15 @@ void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_param
     F.ct_pre_form = ct_pre_form; F.body = body; F.fn_name = fn_name;
     const char *vol[LI_MAX_NAMES];
     uint32_t nvol = 0;
-    F.vol_unknown = !li_lambda_targets(e, body, 0, false, vol, &nvol);
+    /* A borrow bound to a name nothing mentions cannot reach a callee, so it
+     * is not a staling channel -- the `(frozen v ...)` marker.  An overflowing
+     * or unwalkable scan yields an EMPTY exemption set, which is the
+     * conservative direction (every borrow stays volatile). */
+    const Form *inert[LI_MAX_NAMES];
+    uint32_t n_inert = 0;
+    if (!li_inert_borrows(e, body, 0, inert, &n_inert)) n_inert = 0;
+    F.vol_unknown = !li_lambda_targets(e, body, 0, false, vol, &nvol,
+                                       inert, n_inert);
     F.vol = vol; F.n_vol = nvol;
     for (uint32_t i = from; i < e->n_loop_inv_sites; i++) {
         LoopInvSite *s = &e->loop_inv_sites[i];
@@ -6188,7 +6472,11 @@ static bool li_cs_path_facts(Elab *e, RefineCallSite *cs, bool *skip) {
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return false;
     const char *vol[LI_MAX_NAMES];
     uint32_t nvol = 0;
-    if (!li_lambda_targets(e, cs->caller_body, 0, false, vol, &nvol)) return false;
+    /* No exemption here on purpose: this is the CROSSING's path-condition
+     * walk, which the loop change is not about.  Narrowing it would move
+     * call-site behaviour in the same commit for no measured reason. */
+    if (!li_lambda_targets(e, cs->caller_body, 0, false, vol, &nvol, NULL, 0))
+        return false;
     LiFacts facts;
     facts.n = 0;
     LiWalk W;
