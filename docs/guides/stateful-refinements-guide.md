@@ -244,8 +244,31 @@ other contract positions -- `:pre`, `:post`, a refined return, and a loop's
 `:invariant` -- therefore accept a `#reads` measure as an ordinary **runtime**
 check. Before 2026-10-03 all four were `TUR-E0375`
 ([reads-measure-rejected-in-invariant-and-pre](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/reads-measure-rejected-in-invariant-and-pre.md)).
-A `#reads` invariant is not yet *proved*, even inside `frozen`; that report says
-why.
+
+**A loop invariant over a `#reads` measure is analysed, and partly proved.** A
+bounded-index invariant such as `:invariant (and (>= i 0) (<= i (vlen v)))`
+inside a frozen region used to be **declined whole** -- the region's own `(& v)`
+made `v` volatile. It is now analysed, so `(>= i 0)` discharges both ways and
+`(<= i (vlen v))` discharges **on entry** (from `vlen`'s refined return), and
+each proved obligation loses its runtime check.
+
+Two edges are worth knowing:
+
+- **Only the marker shape is exempt from the volatile set** -- a shared borrow
+  bound to a name nothing mentions. Name that borrow and use it, or take a
+  borrow inside the loop, and the loop is declined again (`TUR-W0372`), because
+  a shared borrow handed to an **inline-C callee does get written through**.
+- **The bound is not proved PRESERVED, and must not be.** A container is a
+  by-value handle and its mutators take it by value -- `vec-push!` is
+  `[v : (Vec A) val : A]`, `#fx{}`, with no `#writes` -- so a region does not
+  stop a callee growing it, and no borrow conflict is reported. The
+  re-establishment check is therefore kept, and a body that does grow `v` dies
+  on it rather than compiling to a false proof. Proving a bound across a body
+  needs the accessors to distinguish readers from mutators first.
+
+The measure's own refined return is a separate obligation, and stays runtime
+checked while its body is inline C (`(>= r 0)` is not provable from
+`vec-len`).
 
 **Enforcement of the crossing lives at compile time, under `--strict-refine`.**
 Because there is no runtime contract for a `#reads` crossing, an *unproven* one

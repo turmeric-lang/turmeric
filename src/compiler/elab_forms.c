@@ -4725,6 +4725,10 @@ Expr *elab_while(Elab *e, const Form *call) {
         if (site) {
             site->entry_check = entry_slot;
             site->body_check  = body_slot;
+            /* The elaborated predicate, for the one contract-position gate
+             * that decides whether eliding those two checks is observable
+             * (li_elision_observable). */
+            site->pred_e      = inv_e;
         }
     }
     if (entry_do) {

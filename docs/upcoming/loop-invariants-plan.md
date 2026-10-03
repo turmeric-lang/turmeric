@@ -624,12 +624,39 @@ harness's documented report-only class.
   runtime". So RE2 would consume the correctness path only, and is unstarted
   by decision. Trigger 1 above, which is phrased in terms of a profile showing
   the re-check is a real cost, cannot be fired by RE2.
-- **The gap that should be closed before graduating this row** was
-  [reads-measure-rejected-in-invariant-and-pre](../reported/reads-measure-rejected-in-invariant-and-pre.md):
-  a `#reads` measure was rejected in a `:invariant` by `TUR-E0375` while a
-  parameter refinement accepted it, so no stdlib container's length could
-  appear in an invariant. **Half-closed 2026-10-03:** the gate now accepts a
-  `#reads` measure in every contract position, so the bounded-index walk can be
-  written against a real container and is runtime-checked
-  (`refine-reads-measure-contract-positions`). It is not yet *proved*, even
-  inside `frozen` -- the report lists the three changes that stand in the way.
+- ~~**The gap that should be closed before graduating this row** was
+  `reads-measure-rejected-in-invariant-and-pre`: a `#reads` measure was
+  rejected in a `:invariant` by `TUR-E0375` while a parameter refinement
+  accepted it, so no stdlib container's length could appear in an
+  invariant.~~ **Two of its three items resolved 2026-10-03**
+  ([report](../reported/reads-measure-rejected-in-invariant-and-pre.md)). First
+  the CT1 gate accepted a `#reads` measure in every contract position, so the
+  bounded-index walk could be *written* against a real container and
+  runtime-checked (`refine-reads-measure-contract-positions`). Then items 1 and
+  3 landed: a shared borrow bound to a name nothing mentions -- the frozen
+  marker idiom -- no longer makes the borrowed name volatile
+  (`li_inert_borrows`; the proposed blanket narrowing to `&mut` was measured
+  UNSOUND, since an inline-C callee does write through a shared borrow), and
+  the elision veto asks the one contract-position gate instead of the plain
+  purity walk. A bounded-index invariant now discharges on ENTRY and loses that
+  check -- 3 of 4 obligations, where the whole loop used to be declined
+  (`refine-loop-invariant-frozen-marker-analysed`).
+
+  **Item 2 stays open, and it is not the plumbing task the report assumed.**
+  Publishing the crossing's frozen set on the loop's obligations grants
+  congruence ACROSS the body, and measurably proved `(<= (vlen v) 3)` preserved
+  by a body calling `(vec-push! v 7)`: a live shared borrow does not pin a
+  container whose mutators take it BY VALUE (`vec-push! [v : (Vec A) ...]`,
+  `#fx{}`, no `#writes`), so nothing for `TUR-E0200` to reject. Held out by
+  `refine-loop-invariant-byvalue-mutation-not-proved`. A sound grant needs the
+  stdlib accessors to carry `#reads`/`#writes` first, which is
+  `trusted-refinement-claims-plan` R4's territory, not this plan's.
+
+  **So the remaining graduation questions are:** whether to accept that a
+  bound over a container is proved on entry but not preserved; that this row is
+  `XF_LIFECYCLE_PROTOTYPE`, so going straight to always-on skips a `beta` soak;
+  that `tests/fixtures/loop-invariant-gate-off` asserts the gate-OFF behaviour
+  with no `TUR_LOOP_INVARIANTS=0` hatch for it to invert onto (see the
+  experimental-flags guide on a harness that inverts rather than retires); and
+  that no consumer currently demands it -- RE2 is unstarted by decision, per
+  the bullet above.

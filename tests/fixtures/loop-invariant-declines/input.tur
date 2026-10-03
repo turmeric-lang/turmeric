@@ -6,6 +6,7 @@
 (defstruct Box [v : int])
 (defeffect Tick [] : nil)
 (defn peek-mut [r : &mut int] : int @r)
+(defn see [p : &int] : int @p)
 
 ;; A write through a place expression.
 (defn field-write [n : int] : int
@@ -80,6 +81,27 @@
       (set! i (+ i 1)))
     i))
 
+;; A SHARED borrow the code can still NAME.  Only a borrow bound to a name
+;; nothing mentions is exempt from the volatile set (the `(frozen v ...)`
+;; marker -- refine-loop-invariant-reads-frozen).  A named one can still be
+;; handed to an inline-C callee, and one of those does write through a shared
+;; borrow -- measured, which is why the exemption is this narrow.
+(defn named-borrow [n : int lim : int] : int
+  (let [^mut i 0]
+    (let [r (& lim)]
+      (while (< i n) :invariant (>= lim 0)
+        (set! i (+ i 1)))
+      (do (see r) i))))
+
+;; A SHARED borrow taken inside the loop: the loop-local borrow channel is
+;; untouched by that exemption, for either borrow kind.
+(defn borrow-in-loop [n : int lim : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= lim 0)
+      (see (& lim))
+      (set! i (+ i 1)))
+    i))
+
 (defn main [] : int
   (println (field-write 3))
   (println (early 3))
@@ -88,4 +110,6 @@
   (println (via-lambda 3))
   (println (via-handler 3))
   (println (shadowing 3))
+  (println (named-borrow 3 7))
+  (println (borrow-in-loop 3 7))
   0)
