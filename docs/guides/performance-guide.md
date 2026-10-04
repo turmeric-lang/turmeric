@@ -188,9 +188,16 @@ are left as ordinary recursive calls -- correct, but not stack-optimized:
 - self-recursive functions with pass-by-pointer struct, function-typed,
   poly-fn, or carrier-ABI (a by-value recursive ADT such as a `(Tree float)`)
   parameters -- a backedge cannot reassign them;
-- a call under a `let` that binds a function value or a carrier-ABI value (a
-  `Vec`, a list, a `:heap` struct, a by-value recursive ADT) -- the whole `let`
-  is off the tail path, whether or not the binding is live at the call;
+- a call under a `let` that binds a function value -- the whole `let` is off
+  the tail path, whether or not the binding is live at the call.  A `let` that
+  binds a carrier-ABI value (a `Vec`, a list, a `:heap` struct, a by-value
+  recursive ADT) **is** in the tail grammar;
+- a call under a `let` whose binding is released when the `let` ends (a
+  by-value recursive spine it owns, a `^mut` cell a closure captured, a caught
+  `Result` box, a fresh `Option`/`Result` box) and is used as more than a plain
+  number while the backedge carries a non-number into the next iteration.  The
+  release moves to the backedge; it can do that only once nothing that leaves
+  the iteration could still point into what it frees;
 - a self-recursive function with an explicit `defer` in the block around the
   call: a `defer` you wrote runs after the call, innermost first, and that
   order is observable, so it cannot move ahead of a backedge;

@@ -654,10 +654,17 @@ static bool outward_receivers_in_s(const CTerm *t) {
         case CT_PERFORM:  return outward_receivers_in_s(t->as.perform.body);
         case CT_RESUME:   return outward_receivers_in_s(t->as.resume.body);
         case CT_CLONEABLE:
-            if (t->as.cloneable.recv_outward &&
-                !(t->as.cloneable.receiver &&
-                  binding_cps_reachable(t->as.cloneable.receiver)))
-                return false;
+            if (t->as.cloneable.recv_outward) {
+                /* A closure receiver (shape 2 of serial-receiver-effect-under-
+                 * if-closure-or-leaf) is called through its lifted lambda's
+                 * twin, so that lambda is what must be in S. */
+                const Binding *rb = t->as.cloneable.receiver;
+                const Expr *rx = t->as.cloneable.receiver_expr;
+                if (!rb && rx && rx->kind == EX_CLOSURE && rx->as.closure_.closure &&
+                    rx->as.closure_.closure->fn)
+                    rb = rx->as.closure_.closure->fn->binding;
+                if (!(rb && binding_cps_reachable(rb))) return false;
+            }
             return outward_receivers_in_s(t->as.cloneable.body);
         case CT_CALLCC:   return outward_receivers_in_s(t->as.callcc.body);
         case CT_LOOP:     return outward_receivers_in_s(t->as.loop.body);
@@ -1326,6 +1333,23 @@ static void cap_add_cvar(CapSet *cs, uint32_t id, const char *name, TypeKind ty,
     cs->owning[cs->n] = false; cs->n++;
 }
 
+/* cps-evicts-handle-in-operand-positions item 4: the E2c FIELD-LOAD callee of a
+ * `via_registry` tailcall (`(.run obj)`, atomized into a CVar) captured by a
+ * lifted continuation -- the join a `handle` body's non-atomic argument
+ * builds before the call.  It is the same int64 direct-entry fn-ptr word
+ * cap_add_fn_scalar carries for a fn-value PARAM callee (cap_ctype spells a
+ * TY_FN slot `int64_t`), so it rides the env the same way; the generic CVar
+ * gate refuses a TY_FN and evicted the whole function (BODY-STRUCT-JOIN). */
+static void cap_add_cvar_fn_scalar(CapSet *cs, uint32_t id, const char *name,
+                                   const Type *type) {
+    if (!name) { cs->ok = false; return; }
+    for (int i = 0; i < cs->n; i++) if (cs->cvname[i] && cs->cvid[i] == id) return;
+    if (cs->n >= CC_MAX_CAPS) { cs->ok = false; return; }
+    cs->b[cs->n] = NULL; cs->cvname[cs->n] = name; cs->cvid[cs->n] = id;
+    cs->ty[cs->n] = TY_FN; cs->type[cs->n] = type; cs->polyfn[cs->n] = false;
+    cs->owning[cs->n] = false; cs->n++;
+}
+
 static void collect_caps_rec(const CTerm *t, uint32_t exclude,
                              uint32_t *bound, int nb, CapSet *cs) {
     if (!cs->ok) return;
@@ -1368,8 +1392,16 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
             collect_caps_rec(t->as.letcall.body, exclude, bound, nb + 1, cs); return;
         case CT_TAILCALL:
             for (uint32_t i = 0; i < t->as.tailcall.n; i++) COL_ATOM(&t->as.tailcall.args[i]);
-            if (t->as.tailcall.via_registry && !t->as.tailcall.fn)
-                COL_ATOM(&t->as.tailcall.fn_atom);   /* E2c field-load callee */
+            if (t->as.tailcall.via_registry && !t->as.tailcall.fn) {
+                const CAtom *_fa = &t->as.tailcall.fn_atom;   /* E2c field-load callee */
+                if (_fa->kind == CA_CVAR && _fa->ty == TY_FN) {
+                    bool _f = _fa->cvar_id != exclude;
+                    for (int _i = 0; _i < nb; _i++) if (bound[_i] == _fa->cvar_id) { _f = false; break; }
+                    if (_f) cap_add_cvar_fn_scalar(cs, _fa->cvar_id, _fa->cvar_name, _fa->type);
+                } else {
+                    COL_ATOM(_fa);
+                }
+            }
             /* E2c: a `via_registry` tailcall threads its fn-value CALLEE through
              * `__tur_cps_lookup(f)`; when that callee is an enclosing param (not a
              * local of this lifted body), carry it on the frame env as an int64
@@ -3954,6 +3986,21 @@ static void eff_acc_add_callee(EffAcc *acc, const Binding *b) {
  * Effects are dynamically scoped -- a `perform` and its `handle` must run on the
  * same machine (both DK, or both fiber) -- so this set is what the fixpoint
  * compares across every top-level function. */
+
+/* serial-receiver-effect-under-if-closure-or-leaf (shape 2): may an effect
+ * escape this closure receiver's body?  The same test cps_ir.c's
+ * fn_effect_may_escape applies to a named receiver: its declared row, else
+ * its inferred one, is not runtime-pure. */
+static bool serial_closure_recv_escapes(const FnDef *fd) {
+    if (!fd) return false;
+    if (fd->binding && fd->binding->type.kind == TY_FN
+        && !effect_row_is_runtime_pure(fd->binding->type.as.fn.effect_row))
+        return true;
+    if (!fd->inferred_effect_row) return true;
+    return !effect_row_is_runtime_pure(fd->inferred_effect_row);
+}
+static const Expr *peel_fn_value(const Expr *e);
+
 static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
     if (!e) return;
     #define REC(x) expr_collect_effects_acc((x), acc)
@@ -4188,7 +4235,27 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
         case EX_CLONEABLE_RESET:  REC(e->as.cloneable_reset_.body); return;
         case EX_CLONEABLE_SHIFT:  REC(e->as.cloneable_shift_.k_fn); REC(e->as.cloneable_shift_.body); return;
         case EX_SERIAL_RESET:     REC(e->as.serial_reset_.body); return;
-        case EX_SERIAL_SHIFT:     REC(e->as.serial_shift_.k_fn); REC(e->as.serial_shift_.body); return;
+        case EX_SERIAL_SHIFT: {
+            /* serial-receiver-effect-under-if-closure-or-leaf (shape 2): a
+             * CAPTURING closure receiver an effect escapes is called OUTWARD,
+             * through its env-taking `__cps` twin (emit_serial_outward_call), so
+             * the reset's own continuation -- and the handlers above it -- is
+             * its downstream chain.  That twin exists only for a lambda in the
+             * threadable set, and this use is exactly a threading one: the call
+             * is a tail call on the reset's continuation (tier `now`). */
+            const Expr *kf = peel_fn_value(e->as.serial_shift_.k_fn);
+            if (acc->multi && kf && kf->kind == EX_CLOSURE
+                && kf->as.closure_.closure && kf->as.closure_.closure->fn
+                && serial_closure_recv_escapes(kf->as.closure_.closure->fn)) {
+                int sl = fvm_slot(acc->multi, kf->as.closure_.closure->fn->binding);
+                if (sl >= 0) {
+                    acc->multi->ok[sl]++;
+                    if ((int)PT_NOW > acc->multi->tier[sl])
+                        acc->multi->tier[sl] = (int)PT_NOW;
+                }
+            }
+            REC(e->as.serial_shift_.k_fn); REC(e->as.serial_shift_.body); return;
+        }
         /* async / STM */
         case EX_ASYNC:      REC(e->as.async_.fn_expr); return;
         case EX_AWAIT:      REC(e->as.await_.fut_expr); return;
@@ -6885,6 +6952,7 @@ static void emit_perform(CE *ce, const CTerm *t);
 static void emit_await(CE *ce, const CTerm *t);   /* F3 (cps-async) */
 static void emit_resume(CE *ce, const CTerm *t);
 static void emit_letraw(CE *ce, const CTerm *t);
+static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn);
 static void emit_callcc(CE *ce, const CTerm *t);
 static void emit_heap_join(CE *ce, const CTerm *t);
 static void emit_escaping_join(CE *ce, const CTerm *t);  /* escaping joins */
@@ -8183,9 +8251,44 @@ static void emit_letraw(CE *ce, const CTerm *t) {
         ce_line(ce, "if ((void *)__kont != tur_tb_root) "
                     "__dk_reap_closure((intptr_t)TUR_UNTAG(%s));", bn);
     }
+    emit_letraw_fnfield_reap(ce, t, bn);
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);
+}
+
+/* struct-temporary-fn-field-box-leaks (the CPS half): a by-value struct
+ * local the elaborator flagged `drops_fn_fields` -- non-escaping, so its boxed
+ * fn fields die with it (local-struct-drop) -- is released by the direct
+ * emitter's `drop_fnfields_<T>` at scope end.  Here the scope can end in a
+ * tail call (often the very call through the field), and nothing runs after
+ * one, so each boxed field is registered with the entry boundary's reap
+ * instead, as a headered closure (kind 2) -- the same channel `reap_env` uses
+ * for a non-escaping closure env.  Reaping later than the scope's end is
+ * safe for a value nothing outside the scope can name. */
+static void emit_letraw_fnfield_reap(CE *ce, const CTerm *t, const char *bn) {
+    const Binding *xb = t->as.letraw.x.bind;
+    if (!xb || !xb->drops_fn_fields || xb->type.kind != TY_ADT) return;
+    const AdtDef *def = xb->type.as.adt_.def;
+    if (!def || def->n_ctors < 1 || !def->ctors[0]) return;
+    if (t->as.letraw.x.ty == TY_NIL || t->as.letraw.x.ty == TY_NEVER ||
+        t->as.letraw.x.ty == TY_FN)
+        return;
+    /* Only a binder declared as the aggregate itself: a carrier word or a
+     * pointer names storage this binder does not own. */
+    const char *bct = binder_ctype_full(ce->ctx, t->as.letraw.x.ty,
+                                        t->as.letraw.x.type);
+    if (!bct || strncmp(bct, "tur_adt_", 8) != 0 || strchr(bct, '*')) return;
+    const CtorDef *ctor = def->ctors[0];
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
+        const Type *ft = ctor->fields[fi].full_type;
+        if (ctor->fields[fi].kind != TY_FN || !ft || ft->kind != TY_FN ||
+            !ft->as.fn.boxed)
+            continue;
+        char *mp = adt_field_member_path(def, ctor, fi);
+        ce_line(ce, "__dk_reap_closure((intptr_t)(%s).%s);", bn, mp);
+        free(mp);
+    }
 }
 
 /* ---- binder pre-declaration ------------------------------------------ *
@@ -9289,8 +9392,198 @@ static const char *serial_recv_kty(CE *ce, const CTerm *t) {
     return (L && ct[L - 1] == '*') ? "void *" : "int64_t";
 }
 
+/* serial-cont-chain-never-freed: does the serial-shift receiver keep its
+ * continuation `k` to itself?  A receiver is handed a DK chain it owns, and
+ * `(k v)` resumes a COPY of it (dk_invoke), as does every other reader below,
+ * so once the receiver has returned, a `k` it only resumed, serialized or
+ * marshalled is dead -- and was never freed.  Conservative: `k` stored,
+ * returned, or passed anywhere else keeps the chain alive (the old
+ * behaviour); a lambda capturing it is followed only when that lambda is
+ * itself only called (serial_k_closure_body_ok).  A reader is `(k v)` itself (the
+ * tur_serial_cont_resume builtin), a Turmeric-bodied callee that in turn
+ * confines its parameter (`serial-resume`, `workflow-suspend`), or one of the
+ * stdlib's inline-C marshalers (`serial-cont->bytes`, `save-cont!`), each of
+ * which copies.  See docs/archive/serial-cont-chain-never-freed.md. */
+static bool serial_k_mentions(const Expr *x, const Binding *k) {
+    if (!x) return false;
+    uint32_t n = 0;
+    Binding **fv = collect_free_vars(x, NULL, 0, NULL, 0, &n);
+    bool hit = false;
+    for (uint32_t i = 0; i < n && !hit; i++) hit = (fv[i] == k);
+    free(fv);
+    return hit;
+}
+
+static bool serial_k_is(const Expr *x, const Binding *k) {
+    while (x && x->kind == EX_ASCRIBE) x = x->as.ascribe_.inner;
+    return x && x->kind == EX_VAR && x->as.var.binding == k;
+}
+
+/* What the walk below tracks.  K_SERIAL: the receiver's serial-cont, whose
+ * readers copy it.  K_FNPARAM: a fn value (a lambda that captured the
+ * serial-cont) that may only be CALLED -- never stored, returned, captured or
+ * passed on -- so it is dead when its holder returns. */
+typedef enum { K_SERIAL, K_FNPARAM } SerialKRole;
+
+static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
+                            int depth);
+
+/* Does callee `cfd` confine its parameter `i` in `role`?  A Turmeric body is
+ * walked like the receiver's own, a few calls deep.  An inline-C body is
+ * opaque, so only the stdlib's own serial-cont readers are trusted -- and only
+ * when they really are the stdlib's (a user defn of the same name could store
+ * `k`). */
+static bool serial_k_param_confined(const FnDef *cfd, uint32_t i,
+                                    SerialKRole role, int depth) {
+    if (!cfd || !cfd->body || cfd->is_variadic || i >= cfd->n_params) return false;
+    if (cfd->body->kind == EX_INLINE_C ||
+        (cfd->binding && cfd->binding->body_is_inline_c)) {
+        const char *nm = (cfd->binding && cfd->binding->name)
+                         ? cfd->binding->name->name : NULL;
+        const char *path = diag_file_path(cfd->body->span.file_id);
+        return role == K_SERIAL && i == 0 && nm && path && strstr(path, "stdlib/") &&
+               (strcmp(nm, "serial-cont->bytes") == 0 ||
+                strcmp(nm, "save-cont!") == 0);
+    }
+    return depth < 4 && serial_k_use_ok(cfd->body, cfd->params[i], role, depth + 1);
+}
+
+/* A closure literal that captures `k` confines it when its own body does --
+ * provided the lambda itself is then only CALLED (K_FNPARAM) by whatever holds
+ * it, so it, and the `k` inside it, are dead once that holder returns.  The
+ * callers below check the second half: a call argument against the callee's
+ * parameter, a `let`-bound lambda against the rest of the `let`. */
+static bool serial_k_closure_body_ok(const Expr *arg, const Binding *k,
+                                     SerialKRole role, int depth) {
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    if (!arg || arg->kind != EX_CLOSURE || !arg->as.closure_.closure) return false;
+    const struct Closure *cl = arg->as.closure_.closure;
+    if (!cl->fn || !cl->fn->body || depth >= 4) return false;
+    /* The captured k must be read through the same Binding in the lambda's
+     * body; a capture under any other name would hide its uses from the walk. */
+    bool captured = false;
+    for (uint32_t c = 0; c < cl->n_captures && !captured; c++)
+        captured = (cl->captures[c] == k);
+    if (!captured || !serial_k_mentions(cl->fn->body, k)) return false;
+    return serial_k_use_ok(cl->fn->body, k, role, depth + 1);
+}
+
+static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
+                            int depth) {
+    if (!x) return true;
+    switch (x->kind) {
+        case EX_VAR:
+            return x->as.var.binding != k;
+        case EX_ASCRIBE:
+            return serial_k_use_ok(x->as.ascribe_.inner, k, role, depth);
+        case EX_RESUME: {
+            const ResumeExpr *r = x->as.resume_.resume;
+            if (!r) return true;
+            if (role == K_SERIAL && serial_k_is(r->k, k)) {
+                /* a resume of k is a copying read */
+            } else if (!serial_k_use_ok(r->k, k, role, depth)) {
+                return false;
+            }
+            return serial_k_use_ok(r->value, k, role, depth);
+        }
+        case EX_CALL: {
+            const Binding *fb = x->as.call_.fn_binding;
+            if (x->as.call_.fn_expr) {
+                /* `(f v)` through a fn value: calling the tracked fn is its
+                 * one allowed use. */
+                if (!(role == K_FNPARAM && serial_k_is(x->as.call_.fn_expr, k)) &&
+                    serial_k_mentions(x->as.call_.fn_expr, k))
+                    return false;
+            } else if (fb == k && role != K_FNPARAM) {
+                return false;
+            }
+            const FnDef *cfd = (fb && fb != k && g_prog) ? fd_for_binding(g_prog, fb) : NULL;
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+                const Expr *a = x->as.call_.args[i];
+                if (serial_k_is(a, k) && serial_k_param_confined(cfd, i, role, depth))
+                    continue;
+                if (serial_k_closure_body_ok(a, k, role, depth) &&
+                    serial_k_param_confined(cfd, i, K_FNPARAM, depth))
+                    continue;
+                if (!serial_k_use_ok(a, k, role, depth)) return false;
+            }
+            return true;
+        }
+        case EX_BUILTIN: {
+            /* `(k v)` on a serial-cont elaborates to this resume builtin
+             * (elab_call's CC4 dispatch), the handle its argument 0. */
+            const BuiltinSpec *sp = x->as.builtin.spec;
+            bool reader = role == K_SERIAL && sp && sp->name &&
+                          (strcmp(sp->name, "tur_serial_cont_resume") == 0 ||
+                           strcmp(sp->name, "tur_serial_cont_serialize") == 0);
+            for (uint32_t i = 0; i < x->as.builtin.n; i++) {
+                if (reader && i == 0 && serial_k_is(x->as.builtin.args[i], k)) continue;
+                if (!serial_k_use_ok(x->as.builtin.args[i], k, role, depth)) return false;
+            }
+            return true;
+        }
+        case EX_IF:
+            return serial_k_use_ok(x->as.if_.cond, k, role, depth) &&
+                   serial_k_use_ok(x->as.if_.then_, k, role, depth) &&
+                   serial_k_use_ok(x->as.if_.else_or_null, k, role, depth);
+        case EX_DO:
+            for (uint32_t i = 0; i < x->as.do_.n; i++)
+                if (!serial_k_use_ok(x->as.do_.items[i], k, role, depth)) return false;
+            return true;
+        case EX_LET:
+            for (uint32_t i = 0; i < x->as.let_.n; i++) {
+                const Expr *init = x->as.let_.bindings[i].init;
+                const Binding *lb = x->as.let_.bindings[i].binding;
+                /* `(let [g (fn [x] (k x))] ...)` -- the elaborator hoists a
+                 * lambda argument this way.  Then g is what must not escape. */
+                if (lb && serial_k_closure_body_ok(init, k, role, depth)) {
+                    for (uint32_t j = i + 1; j < x->as.let_.n; j++)
+                        if (!serial_k_use_ok(x->as.let_.bindings[j].init, lb,
+                                             K_FNPARAM, depth))
+                            return false;
+                    if (!serial_k_use_ok(x->as.let_.body, lb, K_FNPARAM, depth))
+                        return false;
+                    continue;
+                }
+                if (!serial_k_use_ok(init, k, role, depth)) return false;
+            }
+            return serial_k_use_ok(x->as.let_.body, k, role, depth);
+        case EX_LETREC:
+            for (uint32_t i = 0; i < x->as.let_.n; i++)
+                if (!serial_k_use_ok(x->as.let_.bindings[i].init, k, role, depth))
+                    return false;
+            return serial_k_use_ok(x->as.let_.body, k, role, depth);
+        case EX_MATCH:
+            if (!serial_k_use_ok(x->as.match_.scrutinee, k, role, depth)) return false;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++)
+                if (!serial_k_use_ok(x->as.match_.arms[i].guard, k, role, depth) ||
+                    !serial_k_use_ok(x->as.match_.arms[i].body, k, role, depth))
+                    return false;
+            return true;
+        default:
+            return !serial_k_mentions(x, k);
+    }
+}
+
+static bool serial_recv_confines_k(const CTerm *t) {
+    const FnDef *fd = NULL;
+    if (t->as.cloneable.receiver_expr) {
+        const Expr *f = t->as.cloneable.receiver_expr;
+        if (f->kind == EX_CLOSURE && f->as.closure_.closure)
+            fd = f->as.closure_.closure->fn;
+    } else if (t->as.cloneable.receiver && g_prog) {
+        fd = fd_for_binding(g_prog, t->as.cloneable.receiver);
+    }
+    if (!fd || !fd->body || fd->n_params < 1) return false;
+    if (fd->body->kind == EX_INLINE_C || (fd->binding && fd->binding->body_is_inline_c))
+        return false;
+    const Binding *k = fd->params[fd->n_params - 1];
+    return k && serial_k_use_ok(fd->body, k, K_SERIAL, 0);
+}
+
 static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
-                                 const char *cont_setup, const char *cont_arg) {
+                                 const char *cont_setup, const char *cont_arg,
+                                 bool free_cap) {
     if (t->as.cloneable.receiver_expr) {
         const Expr *f = t->as.cloneable.receiver_expr;
         struct Closure *closure = f->as.closure_.closure;
@@ -9315,10 +9608,20 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
          * pointer for the cloneable int64_t k.  A serial k is itself either
          * spelling (serial_recv_kty). */
         const char *kty = t->as.cloneable.serial ? serial_recv_kty(ce, t) : "int64_t";
-        buf_printf(ce->helpers,
-            "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n}\n",
-            bodyfn, cont_setup, thunk_name, kty, cont_arg);
+        if (free_cap)
+            /* serial-cont-chain-never-freed: the receiver kept nothing of
+             * `k` (serial_recv_confines_k), so its chain dies here. */
+            buf_printf(ce->helpers,
+                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+                "    intptr_t __r = (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n"
+                "    if (!tur_async_suspended) dk_free(%s);\n"
+                "    return __r;\n}\n",
+                bodyfn, cont_setup, thunk_name, kty, cont_arg, cont_arg);
+        else
+            buf_printf(ce->helpers,
+                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+                "    return (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n}\n",
+                bodyfn, cont_setup, thunk_name, kty, cont_arg);
         free(thunk_name);
     } else {
         /* Named-fn receiver: cast the receiver fn ptr (threaded through `env`)
@@ -9362,10 +9665,18 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
         buf_putc(&call, '\0');
         emit_scalar_word_conv(&rc, rty, "int64_t", call.data);
         buf_putc(&rc, '\0');
-        buf_printf(ce->helpers,
-            "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
-            "    return (intptr_t)%s;\n}\n",
-            bodyfn, cont_setup, rc.data);
+        if (free_cap)
+            buf_printf(ce->helpers,
+                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+                "    intptr_t __r = (intptr_t)%s;\n"
+                "    if (!tur_async_suspended) dk_free(%s);\n"
+                "    return __r;\n}\n",
+                bodyfn, cont_setup, rc.data, cont_arg);
+        else
+            buf_printf(ce->helpers,
+                "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
+                "    return (intptr_t)%s;\n}\n",
+                bodyfn, cont_setup, rc.data);
         buf_free(&rc);
         buf_free(&call);
     }
@@ -9385,6 +9696,18 @@ static char *emit_cl_shift_env(CE *ce, const CTerm *t, const char *rfn) {
     return strdup(rfn);
 }
 
+/* The closure receiver's fat box (emit_cl_shift_env) rides only the dk_shift
+ * node's env, which the shift body reads to call the receiver; the chain it
+ * captures starts BELOW the shift node, so no resume copy ever sees it.  Once
+ * the run has returned it is dead -- release it, as a consumed closure literal
+ * is released everywhere else (catch-unwind's thunk).  A named receiver's env
+ * is its code address.  See docs/archive/serial-cont-chain-never-freed.md. */
+static void emit_cl_shift_env_drop(CE *ce, const CTerm *t, const char *senv) {
+    const Expr *f = t->as.cloneable.receiver_expr;
+    if (f && f->kind == EX_CLOSURE)
+        ce_line(ce, "if (!tur_async_suspended) TUR_CLOSURE_DROP(%s);", senv);
+}
+
 /* serial-receiver-effect-cannot-reach-enclosing-handler: the tail of an
  * outward serial reset -- `return <receiver>__cps(<k>, <rest frame>)`.  The
  * rest (the cloneable node's body, binding x) is lifted as a resume-frame over
@@ -9401,14 +9724,77 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
     emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.cloneable.x.ty,
                 t->as.cloneable.x.type, t->as.cloneable.body, NULL, caps);
     free(xn);
+    /* serial-cont-chain-never-freed: the receiver owns `kchain`; when it
+     * keeps nothing of it (serial_recv_confines_k) the chain is dead once the
+     * receiver is done, which is inside this entry's dynamic extent -- so it is
+     * registered for the entry boundary's reap.  It cannot be freed after the
+     * call: the call is this function's tail. */
+    char kreap[96];
+    if (serial_recv_confines_k(t)) {
+        snprintf(kreap, sizeof kreap, "__dk_reap_keep(%s)", kchain);
+        kchain = kreap;
+    }
     char *envexpr = emit_cont_env(ce, jname, caps);
-    char *fn = callee_name(t->as.cloneable.receiver);
     const char *kty = serial_recv_kty(ce, t);
-    ce_line(ce, "return %s__cps((%s)(intptr_t)%s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
-                " /* serial reset: outward receiver */",
-            fn, kty, kchain, jname, envexpr, ce->cur_k);
+    if (t->as.cloneable.receiver_expr) {
+        /* serial-receiver-effect-under-if-closure-or-leaf (shape 2): a closure
+         * receiver.  Its value is emitted here, at the reset site, so its
+         * captures are read from the visible locals (or the lifted env), and
+         * its lifted lambda's `__cps` twin takes that value as the env it
+         * reads them through -- the same first argument the direct thunk
+         * gets on the native path (emit_cl_shift_bodyfn). */
+        const Expr *f = t->as.cloneable.receiver_expr;
+        int saved = ce->ctx->indent;
+        ce->ctx->indent = ce->indent;
+        char *fval = emit_value(ce->ctx, ce->out, f);
+        ce->ctx->indent = saved;
+        const FnDef *lfd = f->as.closure_.closure->fn;
+        char *thunk = raw_name_for_binding(lfd->binding);
+        const char *envty = lfd->closure && lfd->n_params > 1
+                          ? emit_param_ctype(ce->ctx, (FnDef *)lfd, 0) : NULL;
+        if (envty)
+            ce_line(ce, "return %s__cps((%s)(intptr_t)(%s), (%s)(intptr_t)%s,"
+                        " __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                        " /* serial reset: outward closure receiver */",
+                    thunk, envty, fval, kty, kchain, jname, envexpr, ce->cur_k);
+        else
+            ce_line(ce, "return %s__cps((%s)(intptr_t)%s,"
+                        " __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                        " /* serial reset: outward closure receiver */",
+                    thunk, kty, kchain, jname, envexpr, ce->cur_k);
+        free(thunk);
+        free(fval);
+    } else {
+        char *fn = callee_name(t->as.cloneable.receiver);
+        ce_line(ce, "return %s__cps((%s)(intptr_t)%s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                    " /* serial reset: outward receiver */",
+                fn, kty, kchain, jname, envexpr, ce->cur_k);
+        free(fn);
+    }
     free(envexpr);
-    free(fn);
+    /* serial-receiver-effect-under-if-closure-or-leaf (shape 1): with an `if`
+     * branch point in the context, the shift arm above ends in the outward
+     * call, and the PURE arm delivers its value -- the outer frames re-applied,
+     * exactly as the native lowering yields it -- into the same lifted rest.
+     * Both arms then share one continuation: the rest is emitted once, and an
+     * effect performed further down it still reaches the handlers above. */
+    if (t->as.cloneable.if_cond) {
+        ce->indent--;
+        ce_line(ce, "} else {");
+        ce->indent++;
+        char *pv = emit_cloneable_pure_arm(ce, t);
+        char *sv = slot_store_reap(ce->ctx, t->as.cloneable.x.ty,
+                                   t->as.cloneable.x.type, pv);
+        char *env2 = emit_cont_env(ce, jname, caps);
+        ce_line(ce, "return dk_run(__dk_reap_node(dk_frame_resume(%s, %s, %s)), %s);"
+                    " /* serial reset: pure arm into the outward rest */",
+                jname, env2, ce->cur_k, sv);
+        free(env2);
+        free(sv);
+        free(pv);
+        ce->indent--;
+        ce_line(ce, "}");
+    }
 }
 
 static void emit_cloneable(CE *ce, const CTerm *t) {
@@ -9499,7 +9885,8 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         snprintf(bodyfn, sizeof(bodyfn), "%s_skbody%d", ce->fn_cn, id);
         if (!outward)
             emit_cl_shift_bodyfn(ce, bodyfn, t,
-                "    DK *__cap = dk_copy_range(subk, NULL);\n", "__cap");
+                "    DK *__cap = dk_copy_range(subk, NULL);\n", "__cap",
+                serial_recv_confines_k(t));
         /* A 1-arg call frame gets a per-site wrapper fn plus a SkReg entry that
          * self-registers (constructor) so the marshaler maps the frame <-> a stable
          * name ("<fn>$L") for save/restore.  Arithmetic frames need no per-site
@@ -9673,10 +10060,11 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
-        free(senv);
         ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
                 binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
+        emit_cl_shift_env_drop(ce, t, senv);
+        free(senv);
     } else {
         /* Shape 2: an arithmetic context (1+ frames) + dk_copy_range capture. */
         uint32_t nf = t->as.cloneable.n_frames;
@@ -9842,7 +10230,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         emit_cl_shift_bodyfn(ce, bodyfn, t,
             "    DK *__cap = dk_copy_range(subk, NULL);\n"
             "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n",
-            "__k");
+            "__k", false);
         char dv[48];
         snprintf(dv, sizeof(dv), "__ccd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);
@@ -9887,10 +10275,11 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         }
         char *senv = emit_cl_shift_env(ce, t, rfn);
         ce_line(ce, "%s = dk_shift(1, %s, (intptr_t)(%s), %s);", dv, bodyfn, senv, dv);
-        free(senv);
         ce_line(ce, "%s = (%s)dk_run(%s, 0);", xn,
                 binder_ctype_full(ce->ctx, t->as.cloneable.x.ty, t->as.cloneable.x.type), dv);
         ce_line(ce, "dk_free(%s);", dv);
+        emit_cl_shift_env_drop(ce, t, senv);
+        free(senv);
     }
 
     if (has_if) {
@@ -11246,19 +11635,28 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_putc(&body_buf, '\0');
     buf_putc(&helpers, '\0');
 
-    if (helpers.len > 1) buf_puts(file, helpers.data);
-
     /* A CT_LETRAW delegation to the direct emitter (e.g. a cloneable-reset)
      * emits its file-scope helper fns into ctx->pending_handler_fns, which the
      * direct-function path flushes ahead of the using function.  A CPS function
      * has its own emission path, so flush those helpers here too -- before the
      * __cps body that references them -- otherwise the helper is defined after
-     * its use ('<helper>' undeclared). */
+     * its use ('<helper>' undeclared).
+     *
+     * And before this function's own lifted HELPERS (its handler clauses, join
+     * and continuation frames): a frame's body is emitted through the same
+     * direct emitter, so a closure literal inside one -- the second of two
+     * sequential `handle`s, whose body lands in the first's continuation --
+     * puts its slot-0 widen wrapper here too, and the frame used it before its
+     * definition ('__tur_widen___fn_N' undeclared).  The pending fns name only
+     * file-scope functions the forward declarations already cover, never a
+     * lifted CPS helper, so they can always go first. */
     if (ctx->pending_handler_fns && ctx->pending_handler_fns->len > 0) {
         buf_write(file, ctx->pending_handler_fns->data, ctx->pending_handler_fns->len);
         buf_free(ctx->pending_handler_fns);
         buf_init(ctx->pending_handler_fns);
     }
+
+    if (helpers.len > 1) buf_puts(file, helpers.data);
 
     if (grp) {
         /* cps-self-tail-call-relies-on-sibling-call: the body is this

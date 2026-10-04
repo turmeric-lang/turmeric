@@ -1474,6 +1474,7 @@ bool emit_expr_abstract_under_active_spec(EmitCtx *ctx, const Expr *e);
  * takes the receiver by `const T *`, so the by-value receiver arg must be passed
  * by address.  Defined in emit_core.c. */
 bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call);
+bool emit_reresolved_param_is_by_ptr(EmitCtx *ctx, const Expr *call, uint32_t i);
 char *name_for_binding(EmitCtx *ctx, const Binding *b);
 /* WIN1: emit the binary-stdout prologue for a generated main(). Windows opens
  * stdout in text mode, which would turn every 
@@ -1766,6 +1767,29 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx);
  * heap box).  The drop channels carry these rather than names so one channel
  * serves both.  Caller frees the returned string. */
 char *let_binding_widen_drop_stmt(EmitCtx *ctx, const Expr *e, uint32_t idx);
+/* tail-grammar-skips-and-or-and-carrier-lets: one let-binding's declaration,
+ * shared by emit_let_value and emit_tail's inline tail-position `let` arm.
+ * `plain` is set for the ordinary `T name = init;` shape (not a generator
+ * frame field, a fn pointer or a poly fn), and then `bind_c` is the declared C
+ * type and `init_recorded_i64` says the initializer's recorded spelling was
+ * the int64 carrier -- what the scope-exit sum-box drops key on. */
+typedef struct {
+    bool        plain;
+    const char *bind_c;
+    bool        init_recorded_i64;
+} LetBindDecl;
+char *emit_let_binding_decl(EmitCtx *ctx, Buf *body, const Expr *e, uint32_t i,
+                            const char *bn, char *iv, LetBindDecl *out);
+/* Could let-binding `i` be given a scope-exit release by emit_let_value (other
+ * than the `any` drop)?  Decided before emission, so it over-approximates the
+ * two decisions that need the emitted declaration. */
+bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i);
+/* Push every scope-exit release emit_let_value would give let-binding `i` onto
+ * the `any` scope-drop channel, which a tail path's backedge and every
+ * `return` fire.  The caller has proved each use of the binding is a plain
+ * scalar read (emit_fns.c, tco_let_refusal), so firing early is safe. */
+void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
+                                  const LetBindDecl *d);
 void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null);
 
 /* True when a handle's sole case is the built-in `Unsafe` effect -- a pure

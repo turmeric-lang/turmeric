@@ -1,0 +1,31 @@
+;; tail-grammar-skips-and-or-and-carrier-lets: a tail-position `let` is emitted
+;; INLINE by emit_tail -- there is no code after its body, which always ends in
+;; a `return` or a backedge -- so the releases emit_let_value runs after a
+;; `let` body had nowhere to go.  A by-value recursive local was already on
+;; the tail path and lost its spine on every iteration: this fixture leaked
+;; 2,002 boxes before the releases joined the drop channel the backedge and
+;; every `return` fire.
+;;
+;; `requires.leak-check` builds it under AddressSanitizer with LeakSanitizer on
+;; (tests/run-leak-check.sh): a release that goes missing is a leak, and one
+;; that fires before the last read of the spine is a use-after-free.
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+;; the spine is never read: released at the backedge, and on the way out
+(defn spin [n : int acc : int] : int
+  (let [xs (Cons n (Cons 2 (Nil)))]
+    (if (= n 0) acc ^tailcall (spin (- n 1) (+ acc 1)))))
+
+;; read through a match before the exit -- every value that leaves the loop
+;; is a number, so the release may still move to the backedge
+(defn spin-match [n : int acc : int] : int
+  (let [xs (Cons n (Cons 2 (Nil)))]
+    (match xs
+      (Cons h t) (if (= n 0) (+ acc h) ^tailcall (spin-match (- n 1) (+ acc h)))
+      (Nil) acc)))
+
+(defn main [] : int
+  (println (spin 1000 0))
+  (println (spin-match 1000 0))
+  0)

@@ -138,9 +138,14 @@ static char aarch64_mirc[]
     "#define __ARM64_ARCH_8__ 1\n"
     "#define __ARM_ALIGN_MAX_STACK_PWR 4\n"
     "#define __ARM_ARCH_8_3__ 1\n"
-    "typedef struct {_Alignas(16) unsigned long hi; unsigned long lo;} __uint128_t;\n"
     "extern float __nan (void);\n"
     "#define _Float16 short\n"
 #endif
+    /* A layout-only stand-in for the 128-bit integer c2mir lacks, 16-aligned
+       as AAPCS64 requires.  Needed on every aarch64 OS, not only Apple:
+       glibc's <sys/user.h> -- reached from <ucontext.h> through
+       <sys/procfs.h> -- declares `__uint128_t vregs[32];`, which without it
+       is a syntax error at the enclosing struct. */
+    "typedef struct {_Alignas(16) unsigned long hi; unsigned long lo;} __uint128_t;\n"
     "\n"
     "void *alloca (unsigned long);\n";

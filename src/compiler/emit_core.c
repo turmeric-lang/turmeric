@@ -3547,7 +3547,15 @@ char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
  * struct params by value).  Without this bridge a genuinely-sized struct
  * receiver passed a `T` to a `const T *` formal -- a hard cc type error that
  * single-field structs only "worked around" by register-class coincidence. */
-bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
+/* constrained-generic-monomorph-passbyptr-arg: the same question for ANY
+ * argument `i` of a dictionary-dispatched call re-resolved in this spec.  The
+ * re-resolved instance method takes every parameter that crosses the
+ * pass-by-ptr threshold as `const T *`, not only the receiver: `(join p q)`
+ * inside `merge-two [T] [(Join T)]` at T := Reg spilled `p` and passed `q` by
+ * value.  An argument typed by a type variable resolves through the spec; a
+ * concrete one is its own type (the representative's binding said nothing
+ * about it). */
+bool emit_reresolved_param_is_by_ptr(EmitCtx *ctx, const Expr *call, uint32_t i) {
     if (!ctx || !ctx->current_abi_specialization || !call ||
         call->kind != EX_CALL) {
         return false;
@@ -3555,25 +3563,26 @@ bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
     const Expr *dict = call->as.call_.dict_arg;
     if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
     if (dict->as.dict_.method_name[0] == '\0') return false;
-    /* The dispatch tyvar must be the receiver argument (arg 0).  A
-     * return-dispatch method carries the tyvar only in its result type and has
-     * no receiver tyvar arg, so it never needs this address-of bridge. */
-    if (call->as.call_.n_args < 1 || !call->as.call_.args) return false;
-    const Expr *recv = call->as.call_.args[0];
-    while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-    if (!recv || recv->type.kind != TY_TYVAR) return false;
+    if (i >= call->as.call_.n_args || !call->as.call_.args) return false;
+    const Expr *arg = call->as.call_.args[i];
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    if (!arg) return false;
+    /* The receiver (arg 0) keeps its original contract: only a type-variable
+     * receiver needs the bridge (a return-dispatch method has none). */
+    if (i == 0 && arg->type.kind != TY_TYVAR) return false;
 
-    Type resolved = emit_resolve_type(ctx, recv->type);
+    Type resolved = emit_resolve_type(ctx, arg->type);
     if (resolved.kind != TY_STRUCT && resolved.kind != TY_ADT &&
         resolved.kind != TY_APP) {
         return false; /* scalar carrier / still unbound -> int base clone */
     }
     if (!type_struct_pass_by_ptr(resolved)) return false;
 
-    /* Confirm the selected instance method emits the receiver by pointer.  Match
-     * the dict's (mangled) method name against the instance's typeclass methods
-     * to locate the impl FnDef; an inline-C / closure body declares the receiver
-     * by value even above the pass-by-ptr threshold (emit_fns.c §737). */
+    /* Confirm the selected instance method emits the parameter by pointer.
+     * Match the dict's (mangled) method name against the instance's typeclass
+     * methods to locate the impl FnDef; an inline-C / closure body declares
+     * its params by value even above the pass-by-ptr threshold (emit_fns.c
+     * §737). */
     TypeClassInstance *inst = dict->as.dict_.instance;
     const TypeClass *tc = inst->typeclass;
     if (!tc) return false;
@@ -3599,6 +3608,10 @@ bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
         return true;
     }
     return false;
+}
+
+bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
+    return emit_reresolved_param_is_by_ptr(ctx, call, 0);
 }
 
 static char *capture_env_access(EmitCtx *ctx, const Binding *b);

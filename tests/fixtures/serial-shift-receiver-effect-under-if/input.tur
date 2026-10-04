@@ -1,0 +1,54 @@
+;; serial-receiver-effect-under-if-closure-or-leaf (shape 1): a serial-shift
+;; receiver an effect escapes, with an `if` branch point in the reset's
+;; context.
+;;
+;; An escaping receiver is called OUTWARD: as an ordinary colored call whose
+;; continuation is the rest of the function, so its effect reaches the
+;; handlers around the reset (serial-shift-receiver-effect-reaches-handler).
+;; With an `if` in the context the pure arm yields straight into that same
+;; rest, so the rest had to be reached from both arms, and the shape was
+;; refused (TUR-E0706).  The rest is lifted once now, and the pure arm --
+;; its outer frames re-applied -- is delivered into it.  Every line matches
+;; `tur --interpret`.
+;;
+;;   run true        -- shift arm: (41+1)+1                      = 43
+;;   run false       -- pure arm                                  = 5
+;;   run-outer true  -- pure arm under the outer frame: (10+7)*2  = 34
+;;   run-outer false -- shift in the ELSE arm: (10+(42+1))*2      = 106
+;;   run-let 1       -- the condition reads a prelude `let`: 2+100 = 102
+;;   run-let 5       -- shift arm, then an effect in the rest:
+;;                      ((100+1)+1)+100                           = 202
+;;   run true        -- the handler keeps working after resuming:
+;;                      100+((1+1)+1)                             = 103
+
+(load "stdlib/serial.tur")
+(defeffect Ask [] :int)
+(defn page [env : cstr hole : int] : int (+ hole 1))
+(defn asks [] : int (+ (perform (Ask)) 1))
+(defn recv-e [k : serial-cont] : int (k (asks)))
+
+;; shift in the then arm; both arms
+(defn run [c : bool] : int
+  (serial-reset (if c (page "" (serial-shift recv-e 0)) 5)))
+
+;; an outer frame around the if, the shift in the ELSE arm, and the
+;; reset's value used by the rest of the function
+(defn run-outer [c : bool n : int] : int
+  (let [x (serial-reset (+ n (if c 7 (page "" (serial-shift recv-e 0)))))]
+    (* x 2)))
+
+;; a let prelude the condition reads, and an effect in the rest
+(defn run-let [n : int] : int
+  (let [x (serial-reset (let [m (+ n 1)]
+                          (if (> m 3) (page "" (serial-shift recv-e 0)) m)))]
+    (+ x (perform (Ask)))))
+
+(defn main [] : int
+  (println (handle (run true) (Ask [] r) (resume r 41)))
+  (println (handle (run false) (Ask [] r) (resume r 41)))
+  (println (handle (run-outer true 10) (Ask [] r) (resume r 41)))
+  (println (handle (run-outer false 10) (Ask [] r) (resume r 41)))
+  (println (handle (run-let 1) (Ask [] r) (resume r 100)))
+  (println (handle (run-let 5) (Ask [] r) (resume r 100)))
+  (println (handle (run true) (Ask [] r) (+ 100 (resume r 1))))
+  0)

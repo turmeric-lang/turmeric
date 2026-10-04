@@ -335,6 +335,8 @@ typedef enum TuriHandleKind {
     TURI_HK_REACTOR,    /* epoll/kqueue reactor handle */
     TURI_HK_CMP,        /* carrier comparator C fn-ptr (mk-cmp / keyeq) */
     TURI_HK_GENERIC,    /* a pointer handle with no more specific kind */
+    TURI_HK_CLOSURE,    /* a TuriClosure* that crossed into a native, where an
+                         * int64 carrier can drop its tag (turi_prov_note_args) */
     TURI_HK__COUNT
 } TuriHandleKind;
 
@@ -380,6 +382,17 @@ void turi_prov_track_native(TuriEnv *env, const TuriNativeHandleRow *sig,
 void turi_prov_register(TuriEnv *env, TuriHandleKind kind, const void *ptr);
 void turi_prov_forget(TuriEnv *env, const void *ptr);   /* all kinds for ptr */
 bool turi_prov_check(TuriEnv *env, TuriHandleKind kind, const void *ptr);
+
+/* A closure argument entering a native can come back out as a bare int64 --
+ * stored in a Vec, a map, a cell -- so register each one as TURI_HK_CLOSURE
+ * there.  No-op when provenance is off. */
+void turi_prov_note_args(TuriEnv *env, const TuriValue *args, uint32_t n);
+
+/* Re-tag an int64 carrier as the closure it holds.  In a provenance-tracked env
+ * the word must be a closure some native was handed (TURI_HK_CLOSURE), else
+ * the result is a TURI_ERROR: an erasing ascription or a carrier-taking native
+ * would otherwise turn a caller integer into a call target.  0 stays 0. */
+TuriValue turi_closure_from_carrier(TuriEnv *env, int64_t w);
 
 /* Turn provenance tracking on for a restricted env, seeding it from the current
  * globals (their pointer-carrying values become GENERIC handles) so a handle

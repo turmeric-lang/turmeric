@@ -5,6 +5,11 @@ effect operation has no lowering here". This is an expressiveness gap, not a
 miscompile. It is what remains of the type fuzzer's `GEN_REJECT`s after
 `handle-over-effectful-fn-field-in-arg-let-evicted` (archived) was fixed.
 
+**Narrowed again 2026-10-03: item 4 (seed 4444 case 93) is fixed; only (3)
+remains, now reduced to a five-line repro and investigated -- see "Item 4
+fixed" and "Item 3, reduced" at the end.**  Seeds 3333, 4444, 5555 and
+6666: 0 `GEN_REJECT`s and 0 bugs in 300 each.
+
 **Narrowed 2026-10-03: item 5 (seed 3333 case 121) is fixed; (3) and (4)
 remain.**  It was not the generic-over-rank-2-over-`handle` the shape
 suggested.  Reduced, it needed only a `handle` in `main` plus a call to a PURE
@@ -88,5 +93,85 @@ went from 5 `GEN_REJECT`s in 600 cases to 2 (one per seed): seed 3333 case 121
 ## Regression check
 
 The fuzzer's `GEN_REJECT` count on a fixed seed: `python3
-tests/type-fuzz-src.py --n 300 --seed 3333`, which is 0 since 2026-10-03
-(seed 4444: 1, item 4).
+tests/type-fuzz-src.py --n 300 --seed 3333`, which is 0 since 2026-10-03,
+as are seeds 4444 (was 1, item 4), 5555 and 6666.  Run it against a COPY of
+the binary (`--tur`) if anything may rebuild `build/tur` meanwhile.
+
+## Item 4 fixed (2026-10-03)
+
+`(handle (.run (make-struct FE fe) (let [c false] (t (fn [] c)))) ...)`: the
+argument is not atomic, so it is bound by a join lifted into a DK frame, and
+that frame makes the field call -- so it captures the field-load callee
+`(.run s)`, which the CPS IR atomizes into a fn-typed CVar.  `cap_add_cvar`
+refuses a `TY_FN` CVar (it is not a slot type), `collect_caps` failed, and
+`needs_heap_join` evicted `main` (`BODY-STRUCT-JOIN`).  The callee is the
+same int64 direct-entry word a fn-value PARAM callee is, which already rides a
+frame env as one (`cap_add_fn_scalar`); `cap_add_cvar_fn_scalar` does the
+same for the field-load CVar, and the frame's `emit_e2a_fat_dispatch` reads
+it from there.  Pinned by `tests/fixtures/handle-field-call-joined-arg`
+(the fuzzer's case plus an altered resume value, an int field, and a handler
+that keeps working after `resume`; every line equals `tur --interpret`).
+
+Found on the way, and fixed: **two sequential `handle`s with a closure
+literal in the second** were invalid C on `main` --
+`'__tur_widen___fn_N' undeclared`.  The second body is lifted into the
+first's continuation frame, emitted through the direct emitter, and the
+closure's slot-0 widen wrapper went to `pending_handler_fns`, which the CPS
+function emitter flushed AFTER its lifted helpers.  It flushes them first now
+(they name only file-scope functions the forward declarations cover).
+`tests/fixtures/handle-sequential-widened-closure`; two snapshots
+(`defstruct-field-handler*`) move by the same reordering.
+
+Also found (pre-existing, both back ends; since fixed): a struct TEMPORARY with
+a fn field -- `(.run (make-struct S f) x)` -- leaks its 24-byte fn-field box;
+a let-bound one is freed.  Filed as
+[struct-temporary-fn-field-box-leaks](../archive/struct-temporary-fn-field-box-leaks.md).
+
+## Item 3, reduced and investigated (2026-10-03)
+
+No seed reproduces it any more, but the shape does, in five lines:
+
+```turmeric
+(defeffect E [x : int] :int)
+(defn gapp [B] [f : (fn [B] B #fx{E}) v : B] : B (f v))
+(defn eff [x : int] : int (perform (E x)))
+(defn main [] : int
+  (println (handle (gapp eff 1) (E [x] k) (resume k (+ x 1))))
+  0)
+```
+
+"this effect operation has no lowering here" compiled; `--interpret` prints
+2.  The NON-generic twin (`[f : (fn [int] int) v : int] : int`) works.  The
+explicit `#fx{E}` row makes no difference.
+
+What is in the way, measured:
+
+1. **There is no clone to admit.**  A colored generic reaches the CPS backend
+   as a mono-template that stands in for its ABI-specialized clones
+   (`mono_template_all_admissible`).  `B := int` is the erased carrier
+   instantiation, so no ABI spec is registered (`n_specs` has none for
+   `gapp`), `any` is false, and the generic is not a template.  Its BASE
+   sig-rejects (`fn_sig_ok`: a `TY_TYVAR` parameter and result), so it is
+   `sig_perm`, its call path perm-taints `E`, and `eff` and `main` follow it
+   to the fiber -- where `perform` has no lowering.
+2. **Admitting the spec-less base is not enough.**  A prototype that let
+   `fn_sig_ok` take a bare `TY_TYVAR` parameter/result as the int64 word when
+   the generic has no ABI spec at all got past the signature, then failed the
+   body check (`BODY-STRUCT-CORE`: `atom_ok` refuses every tyvar-typed atom,
+   at the final `CT_APPCONT`), so `atom_ok` / `slot_store` would need the
+   same carrier reading.
+3. **And it exposed a soundness edge that must not ship.**  With an EMPTY-row
+   parameter receiving the effectful function -- `(fn [B] B)`, which the
+   default (non-strict) checker accepts -- the function's eviction stops
+   being `sig_perm`, and a BODY eviction credits the call through `f` with
+   `f`'s declared (empty) row.  Nothing tainted `E` any more, `main` stayed
+   CPS and called `gapp` cps->direct, and the program aborted at run time with
+   "unhandled effect" instead of being refused.  The `sig_perm` taint is what
+   is keeping that case honest today.  The prototype was reverted.
+
+Fix direction: either mint a spec (a clone) for a COLORED generic's carrier
+instantiation too, so the existing mono-template path admits it; or admit the
+spec-less base with tyvar-as-word reading in `fn_sig_ok`, `atom_ok` and the
+slot store -- and in both cases make an effectful fn-value flowing into an
+empty-row fn parameter taint like the `sig_perm` path does (or refuse it
+under the lenient checker, as `--strict-effects` already would).

@@ -1,0 +1,18 @@
+(defmodule main
+  (import delta/cls :refer [apply-twice])
+  (defopaque Counter :int)
+  (defstruct DPair [a : int b : int])
+  (defopaque PairS :int)
+  (definstance Lattice [Counter]
+    (type Delta = int)
+    (apply-delta [x d] (:: (+ (:: x int) d) Counter))
+    (delta-of [x] 1))
+  (definstance Lattice [PairS]
+    (type Delta = DPair)
+    (apply-delta [x d] (:: (+ (:: x int) (+ (.a d) (.b d))) PairS))
+    (delta-of [x] (make-struct DPair 1 2)))
+  (defn main [] : int
+    (println (:: (apply-twice (:: 10 Counter) 5) int))
+    (println (:: (apply-twice (:: 10 PairS) (make-struct DPair 1 2)) int))
+    (println (:: (apply-twice (:: 0 Counter) (delta-of (:: 0 Counter))) int))
+    0))

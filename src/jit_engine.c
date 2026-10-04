@@ -536,6 +536,18 @@ static void jit_set_lazy_gen_interface (MIR_context_t ctx, MIR_item_t func_item)
  * and runs the program alone.) */
 static MIR_context_t g_jit_lazy_ctx;   /* the context still generating lazily */
 
+/* A thread the program started can still be running when its `main` returns
+ * -- a detached worker, or one the program never joins.  A native program
+ * then exits and the thread dies with the process; here the engine would go
+ * on to MIR_finish, freeing the module's code and globals under it.  Seen in
+ * `r7rs-threads-lifecycle` under suite load: a worker's memcpy read a bss
+ * global that MIR_finish's remove_item had just freed.  So once the program
+ * has started a thread, its context is retired, not torn down: it lives, as
+ * a native program's image does, until the process ends, and stays reachable
+ * from g_jit_retired_ctx so LeakSanitizer does not report it. */
+static int g_jit_program_started_threads;
+static MIR_context_t g_jit_retired_ctx __attribute__ ((unused));
+
 static void jit_generate_rest (MIR_context_t ctx) {
   pthread_mutex_lock (&g_gen_lock);
   for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
@@ -558,6 +570,7 @@ static int jit_pthread_create (pthread_t *tid, const pthread_attr_t *attr,
                                void *(*fn) (void *), void *arg) {
   MIR_context_t ctx = __atomic_exchange_n (&g_jit_lazy_ctx, NULL, __ATOMIC_SEQ_CST);
   if (ctx != NULL) jit_generate_rest (ctx);
+  __atomic_store_n (&g_jit_program_started_threads, 1, __ATOMIC_SEQ_CST);
   return pthread_create (tid, attr, fn, arg);
 }
 
@@ -1099,9 +1112,13 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   jit_timing_rss ();
 
   jit_forget_lazy_ctx (ctx);
-  if (g_jit_gen_inited) MIR_gen_finish (ctx);
-  c2mir_finish (ctx);
-  MIR_finish (ctx);
+  if (__atomic_load_n (&g_jit_program_started_threads, __ATOMIC_SEQ_CST)) {
+    g_jit_retired_ctx = ctx;   /* its threads may still be running in it */
+  } else {
+    if (g_jit_gen_inited) MIR_gen_finish (ctx);
+    c2mir_finish (ctx);
+    MIR_finish (ctx);
+  }
 
   if (prog_rc) *prog_rc = box.rc;
   return TUR_JIT_OK;

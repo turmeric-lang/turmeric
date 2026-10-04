@@ -1,12 +1,21 @@
 # c2mir cannot parse `__uint128_t`, so inline C using it never reaches the JIT
 
+**Narrowed 2026-10-03: the aarch64 system-header half is fixed** -- the fork
+declares the 16-aligned stand-in on Linux aarch64 too, and glibc's
+`ucontext_t` now has gcc's layout there
+([jit-xopen-source-guard-inert-on-glibc](../archive/jit-xopen-source-guard-inert-on-glibc.md),
+turmeric-lang/mir#6).  What is left is the report's own subject: user inline C
+that does ARITHMETIC on `__uint128_t` -- undeclared on x86-64, and a
+layout-only struct on aarch64, so the repro below still falls back to cc on
+both.  The `sys/user.h` baseline noise described under *Repro* is gone.
+
 **Severity: medium.** `tur jit` declines any program whose inline C writes
 `__uint128_t`: the engine's parse fails, `TUR-W0070` fires and the cc path takes
 over, so the answer is still right -- just compiled the slow way, with a warning,
 and with the engine silently unused for that program. On aarch64 the same gap
 also makes a *system* header unparseable, which is the mechanism behind
-[jit-xopen-source-guard-inert-on-glibc](jit-xopen-source-guard-inert-on-glibc.md)
-and what stranded the v0.60.0 release.
+[jit-xopen-source-guard-inert-on-glibc](../archive/jit-xopen-source-guard-inert-on-glibc.md)
+and what stranded the v0.60.0 release (since fixed).
 
 Found 2026-10-03 while diagnosing that release failure.
 
@@ -51,16 +60,27 @@ these are the only errors.
 
 ## Root cause
 
-Not pinpointed inside c2mir. What is established is the behaviour: the token is
-rejected at parse time, in a position where a type name is expected, and the
-generated unit itself never writes `__uint128_t` anywhere -- so nothing else in
-the JIT path depends on support existing today.
+`__uint128_t` is a builtin type name, so c2mir knows it only where a target's
+predefined header (`external/mir/c2mir/<arch>/mirc_<arch>_linux.h`) declares
+it.  Read 2026-10-03:
 
-Prior art says support may be partial rather than absent:
-[`docs/archive/history/jit-arm64-uint128-align-struct-layout-skew.md`](../archive/history/jit-arm64-uint128-align-struct-layout-skew.md)
-records a fix in the fork for `__uint128_t` *alignment and struct layout* on
-arm64, which implies the type is modelled somewhere downstream of the parser.
-Worth reading before assuming the frontend has to learn it from scratch.
+- **x86-64:** not declared at all -- the repro's `__uint128_t v = ...` is
+  `<identifier> <identifier>`, the "expected ';'" above.
+- **aarch64, Apple:** declared as a LAYOUT-ONLY stand-in,
+  `typedef struct {_Alignas(16) unsigned long hi; unsigned long lo;}
+  __uint128_t;` (fork commit `90633091` fixed its alignment), so SDK headers
+  that embed it in structs parse with the right size -- but it is a struct,
+  so `(__uint128_t)x` and `v * 3u` still fail.
+- **aarch64, Linux:** the stand-in sat inside the `#elif defined(__APPLE__)`
+  branch, so the name was undeclared -- the whole of
+  [jit-xopen-source-guard-inert-on-glibc](../archive/jit-xopen-source-guard-inert-on-glibc.md).
+  Fixed 2026-10-03: declared for every aarch64 OS, same layout-only struct as
+  Apple.
+
+MIR itself has no 128-bit integer type, so ARITHMETIC on `__uint128_t` in
+inline C is a real frontend-plus-backend feature (lowering to pairs of 64-bit
+operations), not a parser fix.  Declaring the stand-in for Linux aarch64 is the
+cheap, separate fix the header problem needs.
 
 ## Fix directions
 
@@ -75,5 +95,5 @@ Worth reading before assuming the frontend has to learn it from scratch.
   fixture asserting only *output* would pass today via the cc fallback -- it has
   to assert the absence of `TUR-W0070`, the way `release.yml`'s archive JIT check
   does.
-- Until it lands, the aarch64 header consequence can be sidestepped on its own;
-  see fix direction 1 of the sibling report.
+- The aarch64 header consequence no longer depends on this: it was fixed on
+  its own (the sibling report, now archived).

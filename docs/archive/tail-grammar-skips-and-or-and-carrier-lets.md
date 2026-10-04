@@ -1,7 +1,50 @@
 # The tail grammar skips `and`/`or` and a `let` that binds a carrier value
 
-**Narrowed 2026-09-29: the `and`/`or` half is fixed; the carrier-`let`
-half stays open, and the audit it asked for has a result.**
+**RESOLVED 2026-10-03 (archived).** Both halves are fixed: the `and`/`or`
+half on 2026-09-29, the carrier-`let` half on 2026-10-03 (below).
+
+## The carrier-`let` half -- fixed (2026-10-03)
+
+The structural fix the audit asked for, in both of its parts:
+
+- **One declaration ladder.** `emit_let_binding_decl` (`emit_expr.c`) is
+  `emit_let_value`'s per-binding declaration -- every carrier bridge,
+  recorded-representation straddle and pass-by-pointer deref -- and
+  `emit_tail`'s inline `let` arm calls it instead of its partial copy.  The
+  RM1 / value-struct payload decisions that used to sit in the middle of the
+  ladder are predicates of their own (`let_binding_sum_box_freeable`,
+  `let_binding_vsp_box_freeable`), asked by both sites.
+- **The releases ride the backedge.** `let_binding_push_scope_frees` puts
+  each scope-exit release `emit_let_value` would run after the body -- a
+  recursive spine, a `^mut` cell, a caught `Result` box, a fresh sum box, a
+  struct's fn-field handles -- on the `any` scope-drop channel, which the
+  backedge, the group jump and every `return` already fire after their
+  arguments or value are in temps.
+- **`tco_let_simple`'s carrier-ABI bail is gone.**  `tco_let_refusal`
+  replaces it: fn-typed and poly-fn bindings still refuse (`TC_LET_FN`), and
+  a binding with a release is admitted when every value that leaves the
+  `let`'s tail structure -- backedge arguments, returned values -- is a
+  plain number (`tco_tail_values_scalar`), or else when every use of the
+  binding is a plain-number read (`tco_drop_use_ok`, T4's rule for drop
+  glue).  Otherwise `TC_LET_DROP`.
+
+Found on the way, and fixed by the same change: a by-value recursive ADT is
+not carrier-ABI, so a `let` binding one was ALREADY on the tail path -- and
+the inline arm had no release for it, so the spine leaked on every iteration
+(a 1,000-step loop: 2,002 boxes; `tailcall-carrier-let-releases` is that
+loop, leak-checked).
+
+Measured: the 21 fixtures the first attempt broke all pass; `tests/run.sh`
+3544/0 (two snapshots move -- a `let` binding a `Vec`, and a `Vec` inside a
+`Result`, now reach a direct `return`); `tests/run-leak-check.sh` 116/0.
+Pinned by `tests/fixtures/tailcall-carrier-let-deep` (-O0, 1,000,000 steps:
+a `Vec`, a list, a parametric `:heap` ADT, two carrier bindings through a
+`match`, and the by-value ADT and `:heap` struct controls),
+`tailcall-carrier-let-releases` (leak-check) and
+`errors/tailcall-let-release-live` (`TC_LET_DROP`).  The performance guide's
+Boundary list says what is left.
+
+## The carrier-`let` half -- the 2026-09-29 audit (historical)
 
 ## The `and`/`or` half -- fixed
 
@@ -20,8 +63,6 @@ two- and three-operand forms), `tests/fixtures/tailcall-and-or-annot` (the
 `tests/fixtures/errors/tailcall-and-or-test-operand`.  Two stdlib snapshots
 moved with it (`map-typed-consumer`, `set-typed-consumer`: an `and` in tail
 position now early-returns and makes a genuine tail call).
-
-## The carrier-`let` half -- audited, still open
 
 Removing `tco_let_simple`'s carrier-ABI arm outright was tried.  The report's
 own shapes then ran (a `Vec`, a `Cons` list, a by-value recursive ADT and a

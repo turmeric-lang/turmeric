@@ -237,27 +237,111 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
     return same;
 }
 
-/* A let/letrec is tail-transparent for TCO only if every binding is a plain
- * scalar we can declare with `T name = init;`.  fn-typed (incl. letrec global
- * fns), poly-fn, and carrier-ABI bindings force the whole let onto the default
- * (emit_value + return) path.
+/* A let/letrec is tail-transparent for TCO unless one of its bindings is a
+ * shape emit_tail's inline `let` arm cannot serve.  Returns the reason (one of
+ * the TC_LET_* strings below, phrased for the `^tailcall` verifier) or NULL.
  *
- * tail-grammar-skips-and-or-and-carrier-lets: the carrier-ABI arm was audited
- * 2026-09-29 and is still load-bearing.  emit_tail's inline `let` arm repeats
- * only part of emit_let_value's init ladder (the by-value carrier bridge, the
- * recorded-pointer and erased-word casts); dropping the arm sent 21 fixtures'
- * pointer-represented carrier bindings (`tur_adt_Vec__int *` from an int64
- * producer, among others) through the inline arm unbridged -- -Wint-conversion
- * in the emitted C.  Relaxing it wants the two sites to share one per-binding
- * init emission first. */
-static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
+ *   - fn-typed (incl. letrec global fns) and poly-fn bindings: their
+ *     declarations are the fn-pointer / fat-carrier / tur_poly_fn_t arms of the
+ *     shared declaration ladder, and a letrec of them needs the knot.
+ *   - a binding emit_let_value would RELEASE at scope exit (a recursive spine,
+ *     a `^mut` cell, a caught Result box, a fresh sum box, a struct's fn-field
+ *     handles), unless every use of it is a plain scalar read.  The inline arm
+ *     has no trailing code, so the release fires at the backedge or `return`
+ *     instead (let_binding_push_scope_frees) -- after the arguments or the
+ *     value are in temps, but before a next iteration that could still hold
+ *     the binding had it been passed along.  tco_drop_use_ok is the same
+ *     conservative test T4 applies to drop glue.
+ *
+ * tail-grammar-skips-and-or-and-carrier-lets: a carrier-ABI binding (a `Vec`,
+ * a `Cons` list, a parametric heap ADT) used to take the whole `let` off the
+ * tail path.  The bail was load-bearing for two reasons, both gone: the
+ * inline arm repeated only part of emit_let_value's declaration ladder (it
+ * shares emit_let_binding_decl now), and it had no channel for the scope-exit
+ * releases (it pushes them onto the `any` drop channel now). */
+#define TC_LET_FN    "a binding of the enclosing `let` is `fn`-typed or " \
+                     "poly-fn, which takes the whole `let` off the tail path"
+#define TC_LET_DROP  "a binding of the enclosing `let` is released when the " \
+                     "`let` ends (a recursive spine, a `^mut` cell or a fresh " \
+                     "box) and is used as more than a plain number, so its " \
+                     "release cannot move ahead of the call"
+static bool tco_drop_use_ok(const Expr *e, const Binding *b);
+static bool tco_plain_scalar(TypeKind k);
+static bool tco_builtin_short_circuit(const Expr *e);
+
+/* Does every value that LEAVES `e` through its tail structure -- a call's
+ * arguments (a backedge carries them into the next iteration), or the value
+ * itself when it is returned -- have a plain scalar type?  Then nothing that
+ * leaves can alias a local released on the way out, and the release may fire
+ * at the exit instead of after the body: everything else the body does with
+ * the local happens before the exit, exactly as it does before emit_let_value's
+ * trailing release, whose own predicates already vouch for those uses.
+ *
+ * Walks the same structure tco_mark does; a form it does not know is a leaf,
+ * judged by its type.  An explicit `return`/`throw` anywhere in the body, or a
+ * dynamic call, answers no -- the conservative tco_drop_use_ok decides then. */
+static bool tco_tail_values_scalar(const Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return tco_tail_values_scalar(e->as.if_.then_) &&
+                   tco_tail_values_scalar(e->as.if_.else_or_null);
+        case EX_DO:
+            return e->as.do_.n == 0 ||
+                   tco_tail_values_scalar(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+        case EX_LETREC:
+            return tco_tail_values_scalar(e->as.let_.body);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!tco_tail_values_scalar(e->as.match_.arms[i].body))
+                    return false;
+            return true;
+        case EX_BUILTIN:
+            if (tco_builtin_short_circuit(e))
+                return tco_tail_values_scalar(
+                    e->as.builtin.args[e->as.builtin.n - 1]);
+            return tco_plain_scalar(e->type.kind);
+        case EX_CALL:
+            if (e->as.call_.fn_expr) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = e->as.call_.args[i];
+                if (!a || !tco_plain_scalar(a->type.kind)) return false;
+            }
+            return e->type.kind == TY_NIL || e->type.kind == TY_NEVER ||
+                   tco_plain_scalar(e->type.kind);
+        case EX_DYN_CALL:
+            return false;
+        default:
+            return e->type.kind == TY_NIL || e->type.kind == TY_NEVER ||
+                   tco_plain_scalar(e->type.kind);
+    }
+}
+
+static const char *tco_let_refusal(EmitCtx *ctx, const Expr *e) {
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
-        if (!b) return false;
-        if (b->type.kind == TY_FN || b->is_poly_fn) return false;
-        if (type_uses_carrier_abi(emit_resolve_type(ctx, b->type))) return false;
+        if (!b) return TC_LET_FN;
+        if (b->type.kind == TY_FN || b->is_poly_fn) return TC_LET_FN;
     }
-    return true;
+    int values_scalar = -1;   /* computed on first need */
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        if (!let_binding_may_need_scope_free(ctx, e, i)) continue;
+        if (values_scalar < 0)
+            values_scalar = !expr_contains_return_or_throw(e->as.let_.body) &&
+                            tco_tail_values_scalar(e->as.let_.body);
+        if (values_scalar) continue;
+        const Binding *b = e->as.let_.bindings[i].binding;
+        if (!tco_drop_use_ok(e->as.let_.body, b)) return TC_LET_DROP;
+        for (uint32_t j = 0; j < e->as.let_.n; j++)
+            if (j != i && !tco_drop_use_ok(e->as.let_.bindings[j].init, b))
+                return TC_LET_DROP;
+    }
+    return NULL;
+}
+
+static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
+    return tco_let_refusal(ctx, e) == NULL;
 }
 
 /* proper-tail-calls T2 (T-D2): can this NON-self call in tail position be
@@ -756,9 +840,6 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                       "grammar -- give it an else branch"
 #define TC_NOT_LAST   "only the LAST form of a `do` block is in tail position"
 #define TC_LET_INIT   "a `let` initializer is evaluated before the body"
-#define TC_LET_HARD   "a binding of the enclosing `let` is `fn`-typed, poly-fn, " \
-                      "or carrier-ABI, which takes the whole `let` off the tail " \
-                      "path"
 #define TC_MATCH_SCR  "the scrutinee of a `match` is evaluated before any arm"
 #define TC_SC_TEST    "only the LAST operand of `and` / `or` is in tail position; " \
                       "the others are tests evaluated before it"
@@ -903,8 +984,8 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 tc_check(ctx, fd, fn_cname, e->as.let_.bindings[i].init,
                          TC_LET_INIT, fn_block);
-            const char *sub = tco_let_simple(ctx, e) ? why
-                                                     : (why ? why : TC_LET_HARD);
+            const char *lr = tco_let_refusal(ctx, e);
+            const char *sub = !lr ? why : (why ? why : lr);
             if (e->as.let_.body && e->as.let_.body->kind == EX_DO)
                 tc_check_do(ctx, fd, fn_cname, e->as.let_.body, e, sub, fn_block);
             else
@@ -1804,112 +1885,45 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                 indent_buf(body, ctx->indent);
                 buf_puts(body, "{\n");
                 ctx->indent += 4;
+                /* This arm emits a tail-position `let` INLINE rather than
+                 * through emit_let_value, because nothing may follow the body:
+                 * every path through it ends in a `return` or a backedge.  The
+                 * declarations are emit_let_value's own
+                 * (emit_let_binding_decl) -- this arm used to repeat a subset
+                 * of that ladder, one straddle at a time
+                 * (tail-recursive-let-drops-carrier-bridge,
+                 * let-bound-erasing-ascription-int-to-pointer, gcc14-int-
+                 * conversion), which is why a carrier-ABI binding was kept off
+                 * the tail path altogether
+                 * (tail-grammar-skips-and-or-and-carrier-lets).
+                 *
+                 * The releases emit_let_value runs after the body ride the
+                 * `any` scope-drop channel instead, which the backedge and
+                 * every `return` fire -- any-struct-box-leak-per-widen started
+                 * it for `any` locals, and let_binding_push_scope_frees adds the
+                 * rest.  No trailing drop is emitted: anything after the body
+                 * would be dead code. */
+                uint32_t any_mark = ctx->n_any_scope_drops;
                 for (uint32_t i = 0; i < e->as.let_.n; i++) {
                     const Binding *b = e->as.let_.bindings[i].binding;
                     char *bn = name_for_binding(ctx, b);
                     char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
-                    const char *bind_c = emit_type_c_name(ctx, b->type);
-                    /* tail-recursive-let-drops-carrier-bridge: this arm emits a
-                     * tail-position `let` INLINE rather than through
-                     * emit_let_value -- see the `any` drop note below -- so the
-                     * carrier->by-value crossing that lives there has to be
-                     * repeated too, and was not.  A binding whose C type is a
-                     * by-value aggregate, initialised by a producer whose C
-                     * return is the int64 carrier (an inline-C body declared
-                     * `: (Result T E)`, a ^construct helper, an instance
-                     * method), emitted `T x = <int64_t>;` -- a hard cc error,
-                     * loud but pointing at a generated identifier, and absent
-                     * the moment the recursive call left tail position.  The
-                     * decision is emit_let_init_carrier_bridge_type so the three
-                     * sites that ask it cannot drift apart again. */
-                    Type init_bv = emit_let_init_carrier_bridge_type(
-                        ctx, e->as.let_.bindings[i].init, bind_c, iv);
-                    if (init_bv.kind != TY_UNKNOWN) {
-                        char *bridged = emit_carrier_bridge(ctx, body, iv,
-                                            CK_CARRIER, CK_CONCRETE, init_bv);
-                        iv = bridged;  /* emit_carrier_bridge freed the old iv */
-                    }
-                    /* gcc14-int-conversion (carrier-representation-tracking): the
-                     * REVERSE straddle of the one below -- a bare temp whose
-                     * RECORDED emitted C type is a pointer, initialising an
-                     * `int64_t` binder.  `emit_let_value` bridges this
-                     * (`init_val_recorded_ptr` / `_voidp`); this inline arm did
-                     * not, so a `let` that reached tail position declared
-                     * `int64_t x = <tur_adt_Value *>;` -- a hard error under
-                     * Apple clang's default -Wint-conversion, and the shape
-                     * `examples/datalog/datalog.tur` hit the moment
-                     * proper-tail-calls T2 widened which bodies reach here.
-                     *
-                     * Third face of the same defect the return ladder had, and
-                     * the reason this arm exists at all is the `any`-drop
-                     * bookkeeping a few lines down -- see
-                     * docs/reported/emit-tail-return-path-lacks-carrier-bridges.md,
-                     * whose fix direction covers this arm too. */
-                    bool iv_recorded_ptr = false;
-                    /* ...and the FORWARD straddle, which this arm was still
-                     * missing: a bare temp whose RECORDED emitted C type is the
-                     * int64 carrier, initialising a POINTER binder.  A call
-                     * hoisted behind a panic check spills as
-                     * `int64_t __ps_N = f(...);` (emit_expr.c's `__ps_` hoist,
-                     * which records the temp's ctype), and a binder whose type
-                     * lowers to a pointer -- an opaque handle like thread-pool's
-                     * `(Pool T)`, so `void *` -- then declared
-                     * `void * p = __ps_N;`: a hard error under Apple clang's
-                     * default -Wint-conversion, a bare warning under gcc, which
-                     * is why it read as a macOS-only spice failure.
-                     *
-                     * emit_let_value bridges this at emit_expr.c:3800 on the
-                     * same two facts (`bind_is_ptr_repr` + `init_val_recorded_i64`);
-                     * the arm below is that arm, and `void *` is exactly the case
-                     * emit_let_init_carrier_bridge_type above cannot serve --
-                     * a pointer handle is not a by-value aggregate, so it
-                     * returns TY_UNKNOWN and the plain relabel won.  Fourth face
-                     * of the defect this arm's other two comments describe. */
-                    bool iv_recorded_i64 = false;
-                    bool bind_is_ptr_repr = bind_c && strchr(bind_c, '*') != NULL;
-                    if (bind_c && emit_str_is_bare_ident(iv)) {
-                        const char *lvty = emit_localvar_lookup_ctype(iv);
-                        size_t lL = lvty ? strlen(lvty) : 0;
-                        if (strcmp(bind_c, "int64_t") == 0)
-                            iv_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*';
-                        iv_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
-                    }
-                    indent_buf(body, ctx->indent);
-                    /* let-bound-erasing-ascription-int-to-pointer: the same
-                     * inline-arm repetition as the bridge above, for the
-                     * int64-word-into-pointer-binder init. */
-                    if (iv_recorded_ptr)
-                        buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n",
-                                   bind_c, bn, iv);
-                    else if (emit_let_init_is_erased_word_to_ptr(
-                            ctx, e->as.let_.bindings[i].init, bind_c))
-                        buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
-                                   bind_c, bn, bind_c, iv);
-                    else if (bind_is_ptr_repr && iv_recorded_i64)
-                        buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
-                                   bind_c, bn, bind_c, iv);
-                    else
-                        buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+                    LetBindDecl d;
+                    iv = emit_let_binding_decl(ctx, body, e, i, bn, iv, &d);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "(void)%s;\n", bn);
                     free(bn);
                     free(iv);
-                }
-                /* any-struct-box-leak-per-widen: this arm emits a tail-position
-                 * `let` INLINE rather than through emit_let_value, so the `any`
-                 * drop bookkeeping that lives there has to be repeated.  No
-                 * trailing drop is emitted: emit_tail always ends in a `return`
-                 * or a back-edge `goto`, and both of those fire the scope list
-                 * themselves -- anything after would be dead code. */
-                uint32_t any_mark = ctx->n_any_scope_drops;
-                for (uint32_t i = 0; i < e->as.let_.n; i++) {
-                    if (!let_binding_any_freeable(ctx, e, i)) continue;
                     /* union-tagged-union-c-emission 1b: the channel carries the
-                     * drop STATEMENT now, so a union local's plain free reaches
-                     * the early exits this arm is entirely made of. */
-                    char *nm = let_binding_widen_drop_stmt(ctx, e, i);
-                    any_scope_drops_push(ctx, nm);
-                    free(nm);
+                     * drop STATEMENT, so a union local's plain free reaches the
+                     * early exits this arm is entirely made of. */
+                    if (let_binding_any_freeable(ctx, e, i)) {
+                        char *nm = let_binding_widen_drop_stmt(ctx, e, i);
+                        any_scope_drops_push(ctx, nm);
+                        free(nm);
+                    }
+                    if (let_binding_may_need_scope_free(ctx, e, i))
+                        let_binding_push_scope_frees(ctx, e, i, &d);
                 }
                 emit_tail(ctx, body, fn_e, fd, e->as.let_.body, result_kind, is_main);
                 any_scope_drops_pop(ctx, any_mark);
@@ -6358,7 +6372,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Phase D: record which params are pbp for field-access and call-site handling. */
     uint32_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
-    if (!fd->closure && !body_is_inline_c) {
+    /* constrained-generic-monomorph-passbyptr-arg: an ABI-spec clone spells
+     * its parameters from the spec's argument types, BY VALUE (the
+     * `use_abi_spec` arm of the signature loop), so none of them is a `const
+     * T *` however wide -- registering one sent every use through the pointer
+     * path: `*(y)` on a `tur_adt_Reg y`. */
+    bool spec_params_by_value = ctx->current_abi_specialization &&
+                                ctx->current_abi_specialization->fn == fd;
+    if (!fd->closure && !body_is_inline_c && !spec_params_by_value) {
         for (uint32_t _pi = 0; _pi < fd->n_params; _pi++) {
             Type pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[_pi])
                 ? *e->type.as.fn.arg_full_types[_pi] : fd->param_types[_pi];

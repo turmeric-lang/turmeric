@@ -299,6 +299,19 @@ static bool elab_field_is_boxed_fnfield(const CtorDef *ctor, uint32_t fi) {
            ctor->fields[fi].full_type->as.fn.boxed;
 }
 
+/* struct-temporary-fn-field-box-leaks: does a by-value value of type `t`
+ * own a BOXED fn-field -- the case local-struct-drop frees at a `let`'s scope
+ * exit?  Exported for the field-call path, which hoists an unbound owning
+ * receiver into a `let` so the same release reaches it. */
+bool elab_type_owns_boxed_fnfield(Type t) {
+    const AdtDef *ad = elab_byval_drop_adt(t);
+    if (!ad) return false;
+    const CtorDef *ctor = ad->ctors[0];
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
+        if (elab_field_is_boxed_fnfield(ctor, fi)) return true;
+    return false;
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_body_def_head -- is `f` a body-position binding form, and under which

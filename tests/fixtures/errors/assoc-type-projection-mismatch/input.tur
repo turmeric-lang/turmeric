@@ -1,0 +1,12 @@
+;; associated-type-unusable-nullary-and-generic (half 2): a call fixes A, so
+;; `(Inner A)` is the instance's answer -- an argument of another type is a
+;; mismatch, named in terms of the projection.
+(defclass Box [a]
+  (type Inner : Type)
+  (peel [x : a] : Inner))
+(defopaque W :int)
+(definstance Box [W] (type Inner = int) (peel [x] (:: x int)))
+(defn take-generic [A] [(Box A)] [x : A d : (Inner A)] : (Inner A) d)
+(defn main [] : int
+  (println (take-generic (:: 5 W) "s"))
+  0)

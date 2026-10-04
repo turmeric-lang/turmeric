@@ -1488,6 +1488,16 @@ static bool call_ordinary_defn_byval_aggregate(EmitCtx *ctx, const Expr *call,
     if (!call || call->kind != EX_CALL || call->as.call_.is_poly_call)
         return false;
     const Binding *fb = call->as.call_.fn_binding;
+    /* constrained-generic-monomorph-passbyptr-arg: a dictionary-dispatched
+     * call's fn_binding is the elaborator's REPRESENTATIVE instance method;
+     * inside a spec the method that runs is the one this spec re-resolves to,
+     * and only its declared result says what the call yields.  Reading the
+     * representative's typed `(let [pq ...] (join pq r))`'s merge temp in the
+     * `Two` clone as `tur_adt_Too`. */
+    if (call->as.call_.dict_arg && !call_dispatch_is_static(call)) {
+        FnDef *rfd = emit_reresolve_method_fndef(ctx, call);
+        if (rfd && rfd->binding) fb = rfd->binding;
+    }
     if (!fb || fb->type.kind != TY_FN || !fb->type.as.fn.result_full_type)
         return false;
     if (!fb->is_global || fb->is_poly_fn || fb->poly_type) return false;
@@ -3417,6 +3427,484 @@ static void letrec_knot_add_patch(EmitCtx *ctx, const Binding *target, const cha
     ctx->letrec_knot.n_patches       = n + 1;
 }
 
+/* tail-grammar-skips-and-or-and-carrier-lets: ONE binding's declaration --
+ * `T name = <init>;` with every carrier bridge, recorded-representation
+ * straddle and pass-by-pointer deref the binding's C type needs.  Shared by
+ * emit_let_value and emit_tail's inline tail-position `let` arm, which used to
+ * repeat only part of this ladder (the by-value carrier bridge, the recorded-
+ * pointer and erased-word casts) and so could not be trusted with a carrier-
+ * ABI binding: `tco_let_simple` kept every such `let` off the tail path.
+ *
+ * `iv` is the emitted initializer, owned by this function; the (possibly
+ * bridged) value comes back and the caller frees it.  `out` reports what the
+ * scope-exit drop decisions need to know about the declaration -- its C type
+ * and whether the initializer's recorded spelling was the int64 carrier --
+ * which is why those decisions (RM1's sum box, the value-struct payload box)
+ * are no longer made in the middle of it. */
+char *emit_let_binding_decl(EmitCtx *ctx, Buf *body, const Expr *e, uint32_t i,
+                            const char *bn, char *iv, LetBindDecl *out) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    out->plain = false;
+    out->bind_c = NULL;
+    out->init_recorded_i64 = false;
+    indent_buf(body, ctx->indent);
+    /* GF1: gen struct fields are already declared in the struct -- just assign */
+    bool is_gen_field = false;
+    if (ctx->gen_var_name && ctx->gen_struct_bindings) {
+        for (uint32_t gi = 0; gi < ctx->n_gen_struct_bindings; gi++) {
+            if (ctx->gen_struct_bindings[gi] == b) { is_gen_field = true; break; }
+        }
+    }
+    if (is_gen_field) {
+        /* gen-local-fn-field-int-conversion: the frame field is declared
+         * by emit_type_c_name, which spells a function value as the int64
+         * word, while the initializer is a function pointer (a lifted
+         * lambda's C name).  Every non-generator let converts it (the
+         * branches below); the field assignment did not -- an int-conversion
+         * error under clang and gcc 14 (found by the type fuzzer's gbody
+         * crossing: a lambda called inside a generator). */
+        const char *fct = emit_type_c_name(ctx, b->type);
+        size_t fL = fct ? strlen(fct) : 0;
+        const char *ivc = emit_localvar_lookup_ctype(iv);
+        if (fct && strcmp(fct, "int64_t") == 0 &&
+            (b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID))
+            buf_printf(body, "%s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+        else if (fL >= 1 && fct[fL - 1] == '*' && ivc &&
+                 strcmp(ivc, "int64_t") == 0)
+            /* A concrete-pointer field (a spec's `tur_adt_Vec__float *`)
+             * fed the int64 word a carrier primitive returned. */
+            buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", bn, fct, iv);
+        else
+            buf_printf(body, "%s = %s;\n", bn, iv);
+    } else if (b->type.kind == TY_FN && (b->is_fat || b->type.as.fn.boxed)) {
+        /* closure-representation-unification (Phase 0): a fn-typed ^fat alias
+         * holds a fat-closure box, not a bare function pointer.  CRU B-1: a
+         * boxed TY_FN (a first-class closure value) is likewise a box, not a
+         * thin fn pointer.  Declare either as the int64_t carrier so the
+         * fat-dispatch call site (the ER2 is_fat/boxed path) casts it back to
+         * void * and reads slot 0 -- declaring it as a thin fn pointer (the
+         * TY_FN branch below) both mistypes the box and trips
+         * -Wint-conversion.  A bare ^fat alias is :ptr<void> and is handled
+         * cleanly by the fallback below. */
+        buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+        /* gcc14-int-conversion (carrier-representation-tracking): this boxed/
+         * fat closure binder is the int64 carrier; record it so a downstream
+         * straddle site (a `void *` letrec-result temp assigned this closure
+         * carrier) resolves the real int64 representation instead of the fn
+         * type's colliding pointer c-name. */
+        emit_localvar_record_ctype(bn, "int64_t");
+    } else if (b->type.kind == TY_FN
+               && (b->type.as.fn.result_kind == TY_FN
+                   || b->type.as.fn.result_kind == TY_UNKNOWN)) {
+        /* Closure-returning-instance-method codegen: a let-bound *curried*
+         * closure -- the result of calling a method whose return type is a
+         * function-returning-function (e.g. (.adder w) : (fn [:int] (fn
+         * [:int] :int))) -- is a single fat-closure handle, not a thin
+         * function pointer.  The thin-fn-pointer declaration below would
+         * unwrap the result kind to an unknown-void return type and mistype
+         * the handle; carry it as the int64_t handle instead, mirroring the
+         * is_fat/boxed branch above. */
+        buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+        emit_localvar_record_ctype(bn, "int64_t");
+    } else if (b->type.kind == TY_FN &&
+               let_init_aliases_fat_fn_param(e->as.let_.bindings[i].init)) {
+        buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
+        emit_localvar_record_ctype(bn, "int64_t");
+    } else if (b->type.kind == TY_FN) {
+        /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
+        const char *ret_c = type_c_name(emit_type_from_kind(b->type.as.fn.result_kind));
+        Buf argbuf; buf_init(&argbuf);
+        for (uint32_t j = 0; j < b->type.as.fn.arity; j++) {
+            if (j > 0) buf_puts(&argbuf, ", ");
+            buf_puts(&argbuf,
+                     type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
+        }
+        buf_putc(&argbuf, '\0');
+        /* parametric-defstruct-fn-field-gaps (Gap 4): the initializer may be
+         * the int64_t carrier (a fn-typed struct field whose non-primitive
+         * arg/result kept it off the typed `tur_fnptr_..._t` path).  Bridge
+         * through (intptr_t) and cast to the exact function-pointer type so
+         * the assignment is not an int64_t -> fn-pointer init
+         * (-Wint-conversion / hard error under -Werror). */
+        buf_printf(body, "%s (*%s)(%s) = (%s (*)(%s))(intptr_t)(%s);\n",
+                   ret_c, bn, argbuf.data, ret_c, argbuf.data, iv);
+        buf_free(&argbuf);
+    } else if (b->is_poly_fn) {
+        /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
+        buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
+    } else {
+        /* KB-021: declare the binding with the C representation its
+         * initialiser actually yields.  Carrier-ABI types have two C
+         * representations (int64_t carrier vs by-value concrete struct);
+         * picking the wrong one makes the C initialiser fail to type-check
+         * (e.g. `int64_t v = (Vec__int){...}` or `Vec__int v = vec_new()`). */
+        const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
+                                 e->as.let_.bindings[i].init);
+        /* Shadow only bindings whose DECLARED type is concrete: a
+         * tyvar-declared binding inside a generic body keeps the erased
+         * spelling by design even when the active spec resolves it (the
+         * shadow resolves through the spec, so it would misread the
+         * erasure as a disagreement -- the Line-in-lens rows of the
+         * third sweep). */
+        if (!emit_repr_type_mentions_tyvar(&b->type))
+            repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
+                              bind_c);
+        /* KB-021: record whether this binding ended up by-value so that a
+         * later dictionary-dispatch use of the var bridges it to the carrier. */
+        if (e->as.let_.bindings[i].binding)
+            e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
+                type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
+                strcmp(bind_c, "int64_t") != 0;
+        /* CC1 (curried-call-cast-rough-edges-plan): when the binding is
+         * declared as an int64_t carrier but the init expression yields a
+         * function pointer or void * (e.g. a PAP wrapper capturing a bare
+         * top-level defn into its env), wrap the init with the standard
+         * (int64_t)(intptr_t) coercion -- otherwise clang rejects the
+         * implicit pointer-to-int conversion under -Wint-conversion. */
+        TypeKind init_kind = e->as.let_.bindings[i].init->type.kind;
+        /* vec-push-heap-struct-element-not-carrier-cast (read side): a
+         * carrier (int64_t) binding whose initialiser emits a POINTER-
+         * represented value -- e.g. `(let [c (:: x (Cons A))] ...)` inside a
+         * specialized instance body, where the spec receiver `x` lowers to a
+         * `Cons__Option__int *` heap pointer -- needs the pointer->carrier
+         * reinterpret, else `int64_t c = x` trips -Wint-conversion.  A
+         * pointer->intptr_t->int64_t cast is always valid and is a no-op for
+         * a value that is already the int64 carrier (whose declared
+         * carrier-ABI type may still c-name to a pointer), so this only
+         * tightens codegen; a by-value aggregate init c-names without a `*`
+         * and is left to the by-value binding declaration above. */
+        /* The ascription node's own type is erased to the int64 carrier, so
+         * peek through ascriptions to an inner spec param and resolve its
+         * concrete type via the active ABI spec -- otherwise `(:: x (Cons A))`
+         * resolves only to the abstract carrier (c-name int64_t) and the
+         * pointer-repr check below misses it. */
+        Type init_ty_r = emit_resolve_type(ctx, e->as.let_.bindings[i].init->type);
+        {
+            const Expr *iexpr = e->as.let_.bindings[i].init;
+            while (iexpr && iexpr->kind == EX_ASCRIBE) iexpr = iexpr->as.ascribe_.inner;
+            Type spec_ty;
+            if (iexpr && emit_var_spec_arg_type(ctx, iexpr, &spec_ty))
+                init_ty_r = spec_ty;
+        }
+        const char *init_cn = emit_type_c_name(ctx, init_ty_r);
+        bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
+        /* gcc14-int-conversion (carrier-representation-tracking, reverse
+         * straddle): the init VALUE is a bare temp whose RECORDED emitted C
+         * type is a concrete pointer, while the binder is the int64 carrier
+         * (`int64_t z = __t169;` where `__t169` was declared
+         * `tur_adt_Cons__Option__int *`).  The init's TYPE c-names to the
+         * carrier (init_is_ptr_repr is false), so a type-based check
+         * under-fires; keying on the type broadly over-fires (139-fixture
+         * churn).  The local-var side table records the temp's ACTUAL emitted
+         * representation, so the bridge fires only for a genuine pointer temp
+         * flowing into an int64 binder. Value-preserving. */
+        bool init_val_recorded_ptr = false;
+        /* Whether the init value's RECORDED emitted C type is exactly `void *`
+         * (an `__auto_type __ps_N` temp holding a `void *`-returning call) or
+         * the `int64_t` carrier.  The concrete-pointer flag above excludes
+         * `void *` (its consumers gate on `!= "void *"`), so these two carry the
+         * void*<->int64 straddle directions the concrete-pointer bridge does
+         * not: a `void *` temp flowing into an `int64_t` binder, and an
+         * `int64_t` temp flowing into a pointer binder. */
+        bool init_val_recorded_voidp = false;
+        bool init_val_recorded_i64 = false;
+        if (emit_str_is_bare_ident(iv)) {
+            const char *lvty = emit_localvar_lookup_ctype(iv);
+            size_t lL = lvty ? strlen(lvty) : 0;
+            if (strcmp(bind_c, "int64_t") == 0)
+                init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
+                                        strcmp(lvty, "void *") != 0;
+            init_val_recorded_voidp = lvty && strcmp(lvty, "void *") == 0;
+            init_val_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
+        }
+        /* gcc14-int-conversion (carrier-representation-tracking): the init
+         * VALUE is a `void *` union-default read (`((union { int64_t s; void *
+         * d; }){.s = ..}).d`, emitted for a `(:: <int> :ptr<void>)` carrier
+         * relabel) while the binder is the int64 carrier -- e.g.
+         * `(let [c (:: (:: 0 :ptr<void>) (SChan ...))] ...)`.  `int64_t c =
+         * <void *>` is `integer from pointer` -- a hard error under GCC >= 14.
+         * Detect the exact void*-member union read (unique to this emit; it
+         * cannot match an int64 value) and reinterpret it to the carrier. */
+        if (!init_val_recorded_ptr && strcmp(bind_c, "int64_t") == 0 && iv) {
+            size_t ivL = strlen(iv);
+            if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
+                strstr(iv, "void * d;") != NULL)
+                init_val_recorded_ptr = true;
+        }
+        /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
+         * parameter whose fields sum to > 16 bytes arrives via the
+         * by-pointer ABI (`const T *`), but the let binding is declared
+         * by value (`bind_c` is the bare struct, no `*`).  A direct
+         * `T g = t;` initialiser is then a pointer->struct mismatch that
+         * `cc` rejects.  Dereference the pbp param (`T g = *t;`) so the
+         * by-value local is initialised from the pointed-to struct -- the
+         * same receiver handling EX_GET_FIELD already applies via
+         * `expr_is_pbp_param`.  A pointer-represented binding (carrier /
+         * :heap, `bind_c` contains `*`) keeps the bare alias. */
+        bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
+        bool init_is_pbp = expr_is_pbp_param(ctx,
+                                             e->as.let_.bindings[i].init);
+        /* CONV-S1 seam 4 (inline-C carrier init -> by-value binding): the
+         * initializer is a call to an inline-C function whose by-value ADT-app
+         * result (`(Result Device int)` under lowering) is nonetheless EMITTED
+         * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
+         * int64), but the binding is the by-value aggregate.  Deref the carrier
+         * into the aggregate so the initialiser type-checks -- the consume-side
+         * companion of the assignment-straddle merge bridge.
+         *
+         * The decision and its four guards live in
+         * emit_let_init_carrier_bridge_type, because emit_tail's inline
+         * tail-position `let` arm is a third site that has to ask it --
+         * see the header comment there. */
+        Type init_bv = emit_let_init_carrier_bridge_type(
+            ctx, e->as.let_.bindings[i].init, bind_c, iv);
+        bool init_carrier_to_byval = init_bv.kind != TY_UNKNOWN;
+        /* SR3 slice B (inline-C carrier producer): an inline-C body declared
+         * `: (Option String)` builds its result with the preamble's typed
+         * builders (`tur_some_ptr`), which return the CARRIER -- a pointer to
+         * a tagged box -- and its C signature is `int64_t` accordingly.  A
+         * niche binding IS the payload pointer, so binding the carrier
+         * straight into it makes every reader treat the box as the String:
+         * `(let [o (mk-opt 1)] (string/to-cstr (unwrap o)))` printed blank.
+         * The arms below cannot see this -- a niche Option is not a by-value
+         * aggregate, so `init_carrier_to_byval` is false and the plain
+         * pointer relabel wins.  Keyed on the RECORDED emitted spelling, so
+         * it fires only for a producer that really handed back the carrier
+         * word; a niche-returning Turmeric function is already the payload. */
+        bool init_niche_from_carrier =
+            init_val_recorded_i64 && adt_app_is_niche_option(init_ty_r);
+        if (init_niche_from_carrier) {
+            char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                CK_CARRIER, CK_CONCRETE, init_ty_r);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+            iv = bridged;  /* emit_carrier_bridge freed the old iv */
+        } else if (init_is_pbp && !bind_is_ptr_repr &&
+            strcmp(bind_c, "int64_t") != 0) {
+            buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
+        } else if (init_carrier_to_byval) {
+            char *bridged = emit_carrier_bridge(ctx, body, iv,
+                                CK_CARRIER, CK_CONCRETE, init_bv);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
+            iv = bridged;  /* emit_carrier_bridge freed the old iv */
+        } else if (strcmp(bind_c, "int64_t") == 0 &&
+            (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
+             init_is_ptr_repr || init_val_recorded_ptr ||
+             init_val_recorded_voidp)) {
+            buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
+        } else if (bind_is_ptr_repr &&
+                   ((init_cn && strcmp(init_cn, "int64_t") == 0) ||
+                    init_val_recorded_i64 ||
+                    /* let-bound-erasing-ascription-int-to-pointer: the
+                     * ascription's OUTER type is the pointer, so init_cn
+                     * under-fires; ask the innermost word instead. */
+                    emit_let_init_is_erased_word_to_ptr(
+                        ctx, e->as.let_.bindings[i].init, bind_c))) {
+            buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
+        } else if (bind_is_ptr_repr && iv &&
+                   strncmp(iv, "(int64_t)", 9) == 0) {
+            /* gcc14-int-conversion (carrier-representation-tracking, Class B):
+             * the binder's declared C type is a concrete pointer, but the init
+             * VALUE is emitted as the int64 carrier -- e.g.
+             * `(:: (.tail xs) (Cons (Option int)))` emits `(int64_t)(...)->tail`
+             * while `t0` is declared `tur_adt_Cons__Option__int *`.  `init_cn`
+             * (the init's TYPE c-name) is the pointer here, so the branch above
+             * under-fires; key on the emitted value being the carrier (its
+             * `(int64_t)` prefix) and reinterpret it to the binder's pointer.
+             * Value-preserving (int64 -> intptr_t -> pointer), and only fires
+             * for a pointer binder fed an explicitly int64-cast value. */
+            buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
+        } else {
+            buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+        }
+        /* gcc14-int-conversion (carrier-representation-tracking): record the
+         * binder's ACTUAL declared C type so a downstream straddle site (a
+         * control-result assignment reading this var) resolves the real
+         * representation, not the colliding source-type c-name -- e.g. a
+         * self-capturing closure carrier declared `int64_t self` whose fn type
+         * c-names to a pointer, feeding a `void *` letrec-result temp. */
+        emit_localvar_record_ctype(bn, bind_c);
+        out->plain = true;
+        out->bind_c = bind_c;
+        out->init_recorded_i64 = init_val_recorded_i64;
+    }
+    return iv;
+}
+
+/* RM1: the sum-carrier scope drop.  Four conditions, each load-
+ * bearing: the callee's every value path mints a fresh box or NULL
+ * (the elab-computed flag -- `ap` yes, `alt-or` no, and freeing
+ * alt-or's result would free a box the caller still holds); the
+ * BINDING is emitted as the int64 carrier (a by-value spec result
+ * has no box and must never be freed); the call temp's RECORDED
+ * spelling agrees (a byval-to-carrier spill would be a stack
+ * address); and every use in the body and sibling inits passes the
+ * accessor-whitelist walk, whose polarity only ever greenlights a
+ * free.  Trailing-only, like the env and catch-box clients: an
+ * early exit keeps the status-quo leak, never a UAF.
+ * (A trailing-only caller also requires a body with no early exit.) */
+static bool let_binding_sum_box_freeable(EmitCtx *ctx, const Expr *e,
+                                         uint32_t i, const LetBindDecl *d) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!d->plain || !d->bind_c || strcmp(d->bind_c, "int64_t") != 0 ||
+        !d->init_recorded_i64)
+        return false;
+    const Expr *fin = e->as.let_.bindings[i].init;
+    while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
+    if (!emit_init_owns_fresh_sum(ctx, fin)) return false;
+    if (sum_box_binding_escapes(e->as.let_.body, b)) return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++)
+        if (j != i && sum_box_binding_escapes(e->as.let_.bindings[j].init, b))
+            return false;
+    return true;
+}
+
+/* value-struct-payload-sum-monomorph-box-has-no-owner: the same
+ * shape one level in -- the BINDING is the by-value aggregate and
+ * what leaks is the payload box its arm points at.  Ownership is
+ * unambiguous (the spec ctor mallocs a FRESH copy; no pass-through
+ * hazard), the accessors deref-COPY (`ok-val` emits
+ * `T v = *(T *)(...)`), so the same accessor-whitelist walk that
+ * guards the carrier drop guards this one.  Trailing-only. */
+static bool let_binding_vsp_box_freeable(EmitCtx *ctx, const Expr *e,
+                                         uint32_t i, const LetBindDecl *d) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!d->plain || !d->bind_c || strcmp(d->bind_c, "int64_t") == 0 ||
+        strchr(d->bind_c, '*') != NULL ||
+        !adt_app_has_boxed_struct_payload(ctx, b->type))
+        return false;
+    const Expr *win = e->as.let_.bindings[i].init;
+    while (win && win->kind == EX_ASCRIBE) win = win->as.ascribe_.inner;
+    if (!emit_init_owns_fresh_sum(ctx, win)) return false;
+    if (sum_box_binding_escapes(e->as.let_.body, b)) return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++)
+        if (j != i && sum_box_binding_escapes(e->as.let_.bindings[j].init, b))
+            return false;
+    return true;
+}
+
+/* tail-grammar-skips-and-or-and-carrier-lets: the scope-exit releases
+ * emit_let_value gives a binding, for emit_tail's inline `let` arm.  That arm
+ * has no trailing code -- every path through it ends in a `return` or a
+ * backedge -- so the releases ride the `any` scope-drop channel those exits
+ * fire, after the value or the backedge arguments are already in temps.  The
+ * arm used to have only the `any` drop, which is why a binding that needs one
+ * of the others (a recursive spine, a `^mut` cell, a caught Result box, a
+ * fresh sum box) could not be moved onto the tail path without leaking it on
+ * every iteration.
+ *
+ * The decisions are emit_let_value's own predicates; only the timing differs.
+ * A trailing free there runs once the body is done with the binding, and the
+ * early firing here is safe because the caller admitted the `let` only when
+ * every use of such a binding is a plain scalar read (tco_let_refusal). */
+static char *let_binding_locown_type(EmitCtx *ctx, const Binding *rb) {
+    if (!rb || !rb->drops_local_owned || rb->type.kind != TY_ADT ||
+        !rb->type.as.adt_.def || !emit_own_binding_owned(ctx, rb))
+        return NULL;
+    char *rmn = mangle_adt_name(rb->type.as.adt_.def->name);
+    size_t rtl = strlen(rmn) + 16;
+    char *rtn = (char *)malloc(rtl);
+    snprintf(rtn, rtl, "tur_adt_%s", rmn);
+    free(rmn);
+    return rtn;
+}
+
+static bool let_binding_fnfld_freeable(const Expr *e, uint32_t i) {
+    const Binding *sb = e->as.let_.bindings[i].binding;
+    return sb && sb->drops_fn_fields && sb->type.kind == TY_ADT &&
+           sb->type.as.adt_.def && !let_binding_env_freeable(e, i) &&
+           !let_binding_box_freeable(e, i);
+}
+
+bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!b) return false;
+    char *lt = let_binding_locown_type(ctx, b);
+    if (lt) { free(lt); return true; }
+    if (let_binding_mut_cell_freeable(e, i) || let_binding_env_freeable(e, i) ||
+        let_binding_box_freeable(e, i) || let_binding_fnfld_freeable(e, i))
+        return true;
+    /* RM1 and the value-struct payload box both need the emitted declaration
+     * to decide.  Its C type is known now; only the initializer's recorded
+     * spelling is not, so this answers as if it were the carrier. */
+    const Expr *fin = e->as.let_.bindings[i].init;
+    while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
+    if (!emit_init_owns_fresh_sum(ctx, fin)) return false;
+    LetBindDecl d = { true, emit_binding_repr_c_name(ctx, b->type,
+                                                     e->as.let_.bindings[i].init),
+                      true };
+    if (!d.bind_c) return true;
+    return let_binding_sum_box_freeable(ctx, e, i, &d) ||
+           let_binding_vsp_box_freeable(ctx, e, i, &d);
+}
+
+/* Render a statement emitter's output as ONE statement for the drop channel
+ * (which prints each entry followed by `;`). */
+static void push_rendered_drop(EmitCtx *ctx, Buf *r) {
+    buf_putc(r, '\0');
+    Buf w; buf_init(&w);
+    buf_printf(&w, "do { %s } while (0)", r->data);
+    buf_putc(&w, '\0');
+    any_scope_drops_push(ctx, w.data);
+    buf_free(&w);
+}
+
+void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
+                                  const LetBindDecl *d) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!b) return;
+    char *bn = name_for_binding(ctx, b);
+    Buf st; buf_init(&st);
+    if (let_binding_env_freeable(e, i)) {
+        buf_printf(&st, "TUR_CLOSURE_DROP(%s)", bn);
+    } else if (let_binding_box_freeable(e, i)) {
+        buf_printf(&st, "tur_result_box_free((int64_t)(intptr_t)%s)", bn);
+    } else if (let_binding_fnfld_freeable(e, i)) {
+        char *mn = mangle_adt_name(b->type.as.adt_.def->name);
+        buf_printf(&st, "drop_fnfields_tur_adt_%s((void *)&%s)", mn, bn);
+        free(mn);
+    }
+    if (st.len) {
+        buf_putc(&st, '\0');
+        any_scope_drops_push(ctx, st.data);
+    }
+    buf_free(&st);
+    if (let_binding_mut_cell_freeable(e, i)) {
+        Buf c; buf_init(&c);
+        buf_printf(&c, "%s((void *)(intptr_t)(%s))",
+                   regions_enabled() ? "tur_region_free" : "free", bn);
+        buf_putc(&c, '\0');
+        any_scope_drops_push(ctx, c.data);
+        buf_free(&c);
+    }
+    if (let_binding_sum_box_freeable(ctx, e, i, d) ||
+        let_binding_vsp_box_freeable(ctx, e, i, d)) {
+        bool sum = let_binding_sum_box_freeable(ctx, e, i, d);
+        Buf r; buf_init(&r);
+        int save_indent = ctx->indent;
+        ctx->indent = 0;
+        if (sum) emit_carrier_sum_free(ctx, &r, bn, b->type);
+        else     emit_boxed_struct_payload_free(ctx, &r, bn, b->type);
+        ctx->indent = save_indent;
+        /* The emitters end each line in a newline; the channel adds its own. */
+        for (uint32_t k = 0; k < r.len; k++)
+            if (r.data[k] == '\n') r.data[k] = ' ';
+        push_rendered_drop(ctx, &r);
+        buf_free(&r);
+    }
+    char *lt = let_binding_locown_type(ctx, b);
+    if (lt) {
+        Buf o; buf_init(&o);
+        buf_printf(&o, "drop_localowned_%s((void *)&%s)", lt, bn);
+        buf_putc(&o, '\0');
+        any_scope_drops_push(ctx, o.data);
+        buf_free(&o);
+        free(lt);
+    }
+    free(bn);
+}
+
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
@@ -3577,349 +4065,27 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *bn = name_for_binding(ctx, b);
         if (knot) letrec_knot_owner(ctx, e, i);
         char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
-        indent_buf(body, ctx->indent);
-        /* GF1: gen struct fields are already declared in the struct -- just assign */
-        bool is_gen_field = false;
-        if (ctx->gen_var_name && ctx->gen_struct_bindings) {
-            for (uint32_t gi = 0; gi < ctx->n_gen_struct_bindings; gi++) {
-                if (ctx->gen_struct_bindings[gi] == b) { is_gen_field = true; break; }
+        LetBindDecl d;
+        iv = emit_let_binding_decl(ctx, body, e, i, bn, iv, &d);
+        if (d.plain && !body_has_return_or_throw) {
+            if (let_binding_sum_box_freeable(ctx, e, i, &d)) {
+                sum_free_names = (char **)realloc(sum_free_names,
+                    (n_sum_free + 1) * sizeof(char *));
+                sum_free_types = (Type *)realloc(sum_free_types,
+                    (n_sum_free + 1) * sizeof(Type));
+                sum_free_names[n_sum_free] = name_for_binding(ctx, b);
+                sum_free_types[n_sum_free] = b->type;
+                n_sum_free++;
             }
-        }
-        if (is_gen_field) {
-            /* gen-local-fn-field-int-conversion: the frame field is declared
-             * by emit_type_c_name, which spells a function value as the int64
-             * word, while the initializer is a function pointer (a lifted
-             * lambda's C name).  Every non-generator let converts it (the
-             * branches below); the field assignment did not -- an int-conversion
-             * error under clang and gcc 14 (found by the type fuzzer's gbody
-             * crossing: a lambda called inside a generator). */
-            const char *fct = emit_type_c_name(ctx, b->type);
-            size_t fL = fct ? strlen(fct) : 0;
-            const char *ivc = emit_localvar_lookup_ctype(iv);
-            if (fct && strcmp(fct, "int64_t") == 0 &&
-                (b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID))
-                buf_printf(body, "%s = (int64_t)(intptr_t)(%s);\n", bn, iv);
-            else if (fL >= 1 && fct[fL - 1] == '*' && ivc &&
-                     strcmp(ivc, "int64_t") == 0)
-                /* A concrete-pointer field (a spec's `tur_adt_Vec__float *`)
-                 * fed the int64 word a carrier primitive returned. */
-                buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", bn, fct, iv);
-            else
-                buf_printf(body, "%s = %s;\n", bn, iv);
-        } else if (b->type.kind == TY_FN && (b->is_fat || b->type.as.fn.boxed)) {
-            /* closure-representation-unification (Phase 0): a fn-typed ^fat alias
-             * holds a fat-closure box, not a bare function pointer.  CRU B-1: a
-             * boxed TY_FN (a first-class closure value) is likewise a box, not a
-             * thin fn pointer.  Declare either as the int64_t carrier so the
-             * fat-dispatch call site (the ER2 is_fat/boxed path) casts it back to
-             * void * and reads slot 0 -- declaring it as a thin fn pointer (the
-             * TY_FN branch below) both mistypes the box and trips
-             * -Wint-conversion.  A bare ^fat alias is :ptr<void> and is handled
-             * cleanly by the fallback below. */
-            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
-            /* gcc14-int-conversion (carrier-representation-tracking): this boxed/
-             * fat closure binder is the int64 carrier; record it so a downstream
-             * straddle site (a `void *` letrec-result temp assigned this closure
-             * carrier) resolves the real int64 representation instead of the fn
-             * type's colliding pointer c-name. */
-            emit_localvar_record_ctype(bn, "int64_t");
-        } else if (b->type.kind == TY_FN
-                   && (b->type.as.fn.result_kind == TY_FN
-                       || b->type.as.fn.result_kind == TY_UNKNOWN)) {
-            /* Closure-returning-instance-method codegen: a let-bound *curried*
-             * closure -- the result of calling a method whose return type is a
-             * function-returning-function (e.g. (.adder w) : (fn [:int] (fn
-             * [:int] :int))) -- is a single fat-closure handle, not a thin
-             * function pointer.  The thin-fn-pointer declaration below would
-             * unwrap the result kind to an unknown-void return type and mistype
-             * the handle; carry it as the int64_t handle instead, mirroring the
-             * is_fat/boxed branch above. */
-            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
-            emit_localvar_record_ctype(bn, "int64_t");
-        } else if (b->type.kind == TY_FN &&
-                   let_init_aliases_fat_fn_param(e->as.let_.bindings[i].init)) {
-            buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n", bn, iv);
-            emit_localvar_record_ctype(bn, "int64_t");
-        } else if (b->type.kind == TY_FN) {
-            /* For function pointer types, emit: <result> (*<name>)(<args...>) = <init>; */
-            const char *ret_c = type_c_name(emit_type_from_kind(b->type.as.fn.result_kind));
-            Buf argbuf; buf_init(&argbuf);
-            for (uint32_t j = 0; j < b->type.as.fn.arity; j++) {
-                if (j > 0) buf_puts(&argbuf, ", ");
-                buf_puts(&argbuf,
-                         type_c_name(emit_type_from_kind(b->type.as.fn.arg_kinds[j])));
+            if (let_binding_vsp_box_freeable(ctx, e, i, &d)) {
+                vsp_free_names = (char **)realloc(vsp_free_names,
+                    (n_vsp_free + 1) * sizeof(char *));
+                vsp_free_types = (Type *)realloc(vsp_free_types,
+                    (n_vsp_free + 1) * sizeof(Type));
+                vsp_free_names[n_vsp_free] = name_for_binding(ctx, b);
+                vsp_free_types[n_vsp_free] = b->type;
+                n_vsp_free++;
             }
-            buf_putc(&argbuf, '\0');
-            /* parametric-defstruct-fn-field-gaps (Gap 4): the initializer may be
-             * the int64_t carrier (a fn-typed struct field whose non-primitive
-             * arg/result kept it off the typed `tur_fnptr_..._t` path).  Bridge
-             * through (intptr_t) and cast to the exact function-pointer type so
-             * the assignment is not an int64_t -> fn-pointer init
-             * (-Wint-conversion / hard error under -Werror). */
-            buf_printf(body, "%s (*%s)(%s) = (%s (*)(%s))(intptr_t)(%s);\n",
-                       ret_c, bn, argbuf.data, ret_c, argbuf.data, iv);
-            buf_free(&argbuf);
-        } else if (b->is_poly_fn) {
-            /* Phase HRT4: let-bound poly fn alias — declare as tur_poly_fn_t. */
-            buf_printf(body, "tur_poly_fn_t %s = %s;\n", bn, iv);
-        } else {
-            /* KB-021: declare the binding with the C representation its
-             * initialiser actually yields.  Carrier-ABI types have two C
-             * representations (int64_t carrier vs by-value concrete struct);
-             * picking the wrong one makes the C initialiser fail to type-check
-             * (e.g. `int64_t v = (Vec__int){...}` or `Vec__int v = vec_new()`). */
-            const char *bind_c = emit_binding_repr_c_name(ctx, b->type,
-                                     e->as.let_.bindings[i].init);
-            /* Shadow only bindings whose DECLARED type is concrete: a
-             * tyvar-declared binding inside a generic body keeps the erased
-             * spelling by design even when the active spec resolves it (the
-             * shadow resolves through the spec, so it would misread the
-             * erasure as a disagreement -- the Line-in-lens rows of the
-             * third sweep). */
-            if (!emit_repr_type_mentions_tyvar(&b->type))
-                repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
-                                  bind_c);
-            /* KB-021: record whether this binding ended up by-value so that a
-             * later dictionary-dispatch use of the var bridges it to the carrier. */
-            if (e->as.let_.bindings[i].binding)
-                e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
-                    type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
-                    strcmp(bind_c, "int64_t") != 0;
-            /* CC1 (curried-call-cast-rough-edges-plan): when the binding is
-             * declared as an int64_t carrier but the init expression yields a
-             * function pointer or void * (e.g. a PAP wrapper capturing a bare
-             * top-level defn into its env), wrap the init with the standard
-             * (int64_t)(intptr_t) coercion -- otherwise clang rejects the
-             * implicit pointer-to-int conversion under -Wint-conversion. */
-            TypeKind init_kind = e->as.let_.bindings[i].init->type.kind;
-            /* vec-push-heap-struct-element-not-carrier-cast (read side): a
-             * carrier (int64_t) binding whose initialiser emits a POINTER-
-             * represented value -- e.g. `(let [c (:: x (Cons A))] ...)` inside a
-             * specialized instance body, where the spec receiver `x` lowers to a
-             * `Cons__Option__int *` heap pointer -- needs the pointer->carrier
-             * reinterpret, else `int64_t c = x` trips -Wint-conversion.  A
-             * pointer->intptr_t->int64_t cast is always valid and is a no-op for
-             * a value that is already the int64 carrier (whose declared
-             * carrier-ABI type may still c-name to a pointer), so this only
-             * tightens codegen; a by-value aggregate init c-names without a `*`
-             * and is left to the by-value binding declaration above. */
-            /* The ascription node's own type is erased to the int64 carrier, so
-             * peek through ascriptions to an inner spec param and resolve its
-             * concrete type via the active ABI spec -- otherwise `(:: x (Cons A))`
-             * resolves only to the abstract carrier (c-name int64_t) and the
-             * pointer-repr check below misses it. */
-            Type init_ty_r = emit_resolve_type(ctx, e->as.let_.bindings[i].init->type);
-            {
-                const Expr *iexpr = e->as.let_.bindings[i].init;
-                while (iexpr && iexpr->kind == EX_ASCRIBE) iexpr = iexpr->as.ascribe_.inner;
-                Type spec_ty;
-                if (iexpr && emit_var_spec_arg_type(ctx, iexpr, &spec_ty))
-                    init_ty_r = spec_ty;
-            }
-            const char *init_cn = emit_type_c_name(ctx, init_ty_r);
-            bool init_is_ptr_repr = init_cn && strchr(init_cn, '*') != NULL;
-            /* gcc14-int-conversion (carrier-representation-tracking, reverse
-             * straddle): the init VALUE is a bare temp whose RECORDED emitted C
-             * type is a concrete pointer, while the binder is the int64 carrier
-             * (`int64_t z = __t169;` where `__t169` was declared
-             * `tur_adt_Cons__Option__int *`).  The init's TYPE c-names to the
-             * carrier (init_is_ptr_repr is false), so a type-based check
-             * under-fires; keying on the type broadly over-fires (139-fixture
-             * churn).  The local-var side table records the temp's ACTUAL emitted
-             * representation, so the bridge fires only for a genuine pointer temp
-             * flowing into an int64 binder. Value-preserving. */
-            bool init_val_recorded_ptr = false;
-            /* Whether the init value's RECORDED emitted C type is exactly `void *`
-             * (an `__auto_type __ps_N` temp holding a `void *`-returning call) or
-             * the `int64_t` carrier.  The concrete-pointer flag above excludes
-             * `void *` (its consumers gate on `!= "void *"`), so these two carry the
-             * void*<->int64 straddle directions the concrete-pointer bridge does
-             * not: a `void *` temp flowing into an `int64_t` binder, and an
-             * `int64_t` temp flowing into a pointer binder. */
-            bool init_val_recorded_voidp = false;
-            bool init_val_recorded_i64 = false;
-            if (emit_str_is_bare_ident(iv)) {
-                const char *lvty = emit_localvar_lookup_ctype(iv);
-                size_t lL = lvty ? strlen(lvty) : 0;
-                if (strcmp(bind_c, "int64_t") == 0)
-                    init_val_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*' &&
-                                            strcmp(lvty, "void *") != 0;
-                init_val_recorded_voidp = lvty && strcmp(lvty, "void *") == 0;
-                init_val_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
-            }
-            /* RM1: the sum-carrier scope drop.  Four conditions, each load-
-             * bearing: the callee's every value path mints a fresh box or NULL
-             * (the elab-computed flag -- `ap` yes, `alt-or` no, and freeing
-             * alt-or's result would free a box the caller still holds); the
-             * BINDING is emitted as the int64 carrier (a by-value spec result
-             * has no box and must never be freed); the call temp's RECORDED
-             * spelling agrees (a byval-to-carrier spill would be a stack
-             * address); and every use in the body and sibling inits passes the
-             * accessor-whitelist walk, whose polarity only ever greenlights a
-             * free.  Trailing-only, like the env and catch-box clients: an
-             * early exit keeps the status-quo leak, never a UAF. */
-            if (!body_has_return_or_throw &&
-                strcmp(bind_c, "int64_t") == 0 &&
-                init_val_recorded_i64) {
-                const Expr *fin = e->as.let_.bindings[i].init;
-                while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
-                bool fresh = emit_init_owns_fresh_sum(ctx, fin);
-                if (fresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
-                    bool sib = false;
-                    for (uint32_t j = 0; j < e->as.let_.n && !sib; j++)
-                        if (j != i && sum_box_binding_escapes(
-                                e->as.let_.bindings[j].init, b))
-                            sib = true;
-                    if (!sib) {
-                        sum_free_names = (char **)realloc(sum_free_names,
-                            (n_sum_free + 1) * sizeof(char *));
-                        sum_free_types = (Type *)realloc(sum_free_types,
-                            (n_sum_free + 1) * sizeof(Type));
-                        sum_free_names[n_sum_free] = name_for_binding(ctx, b);
-                        sum_free_types[n_sum_free] = b->type;
-                        n_sum_free++;
-                    }
-                }
-            }
-            /* value-struct-payload-sum-monomorph-box-has-no-owner: the same
-             * shape one level in -- the BINDING is the by-value aggregate and
-             * what leaks is the payload box its arm points at.  Ownership is
-             * unambiguous (the spec ctor mallocs a FRESH copy; no pass-through
-             * hazard), the accessors deref-COPY (`ok-val` emits
-             * `T v = *(T *)(...)`), so the same accessor-whitelist walk that
-             * guards the carrier drop guards this one.  Trailing-only. */
-            if (!body_has_return_or_throw &&
-                strcmp(bind_c, "int64_t") != 0 &&
-                strchr(bind_c, '*') == NULL &&
-                adt_app_has_boxed_struct_payload(ctx, b->type)) {
-                const Expr *win = e->as.let_.bindings[i].init;
-                while (win && win->kind == EX_ASCRIBE) win = win->as.ascribe_.inner;
-                bool wfresh = emit_init_owns_fresh_sum(ctx, win);
-                if (wfresh && !sum_box_binding_escapes(e->as.let_.body, b)) {
-                    bool wsib = false;
-                    for (uint32_t j = 0; j < e->as.let_.n && !wsib; j++)
-                        if (j != i && sum_box_binding_escapes(
-                                e->as.let_.bindings[j].init, b))
-                            wsib = true;
-                    if (!wsib) {
-                        vsp_free_names = (char **)realloc(vsp_free_names,
-                            (n_vsp_free + 1) * sizeof(char *));
-                        vsp_free_types = (Type *)realloc(vsp_free_types,
-                            (n_vsp_free + 1) * sizeof(Type));
-                        vsp_free_names[n_vsp_free] = name_for_binding(ctx, b);
-                        vsp_free_types[n_vsp_free] = b->type;
-                        n_vsp_free++;
-                    }
-                }
-            }
-            /* gcc14-int-conversion (carrier-representation-tracking): the init
-             * VALUE is a `void *` union-default read (`((union { int64_t s; void *
-             * d; }){.s = ..}).d`, emitted for a `(:: <int> :ptr<void>)` carrier
-             * relabel) while the binder is the int64 carrier -- e.g.
-             * `(let [c (:: (:: 0 :ptr<void>) (SChan ...))] ...)`.  `int64_t c =
-             * <void *>` is `integer from pointer` -- a hard error under GCC >= 14.
-             * Detect the exact void*-member union read (unique to this emit; it
-             * cannot match an int64 value) and reinterpret it to the carrier. */
-            if (!init_val_recorded_ptr && strcmp(bind_c, "int64_t") == 0 && iv) {
-                size_t ivL = strlen(iv);
-                if (ivL >= 4 && strcmp(iv + ivL - 4, "}).d") == 0 &&
-                    strstr(iv, "void * d;") != NULL)
-                    init_val_recorded_ptr = true;
-            }
-            /* let-bind-passbyptr-struct-param-invalid-initializer: a struct
-             * parameter whose fields sum to > 16 bytes arrives via the
-             * by-pointer ABI (`const T *`), but the let binding is declared
-             * by value (`bind_c` is the bare struct, no `*`).  A direct
-             * `T g = t;` initialiser is then a pointer->struct mismatch that
-             * `cc` rejects.  Dereference the pbp param (`T g = *t;`) so the
-             * by-value local is initialised from the pointed-to struct -- the
-             * same receiver handling EX_GET_FIELD already applies via
-             * `expr_is_pbp_param`.  A pointer-represented binding (carrier /
-             * :heap, `bind_c` contains `*`) keeps the bare alias. */
-            bool bind_is_ptr_repr = strchr(bind_c, '*') != NULL;
-            bool init_is_pbp = expr_is_pbp_param(ctx,
-                                                 e->as.let_.bindings[i].init);
-            /* CONV-S1 seam 4 (inline-C carrier init -> by-value binding): the
-             * initializer is a call to an inline-C function whose by-value ADT-app
-             * result (`(Result Device int)` under lowering) is nonetheless EMITTED
-             * as the int64 carrier (emit_fns lowers an inline-C TY_APP result to
-             * int64), but the binding is the by-value aggregate.  Deref the carrier
-             * into the aggregate so the initialiser type-checks -- the consume-side
-             * companion of the assignment-straddle merge bridge.
-             *
-             * The decision and its four guards live in
-             * emit_let_init_carrier_bridge_type, because emit_tail's inline
-             * tail-position `let` arm is a third site that has to ask it --
-             * see the header comment there. */
-            Type init_bv = emit_let_init_carrier_bridge_type(
-                ctx, e->as.let_.bindings[i].init, bind_c, iv);
-            bool init_carrier_to_byval = init_bv.kind != TY_UNKNOWN;
-            /* SR3 slice B (inline-C carrier producer): an inline-C body declared
-             * `: (Option String)` builds its result with the preamble's typed
-             * builders (`tur_some_ptr`), which return the CARRIER -- a pointer to
-             * a tagged box -- and its C signature is `int64_t` accordingly.  A
-             * niche binding IS the payload pointer, so binding the carrier
-             * straight into it makes every reader treat the box as the String:
-             * `(let [o (mk-opt 1)] (string/to-cstr (unwrap o)))` printed blank.
-             * The arms below cannot see this -- a niche Option is not a by-value
-             * aggregate, so `init_carrier_to_byval` is false and the plain
-             * pointer relabel wins.  Keyed on the RECORDED emitted spelling, so
-             * it fires only for a producer that really handed back the carrier
-             * word; a niche-returning Turmeric function is already the payload. */
-            bool init_niche_from_carrier =
-                init_val_recorded_i64 && adt_app_is_niche_option(init_ty_r);
-            if (init_niche_from_carrier) {
-                char *bridged = emit_carrier_bridge(ctx, body, iv,
-                                    CK_CARRIER, CK_CONCRETE, init_ty_r);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
-                iv = bridged;  /* emit_carrier_bridge freed the old iv */
-            } else if (init_is_pbp && !bind_is_ptr_repr &&
-                strcmp(bind_c, "int64_t") != 0) {
-                buf_printf(body, "%s %s = *(%s);\n", bind_c, bn, iv);
-            } else if (init_carrier_to_byval) {
-                char *bridged = emit_carrier_bridge(ctx, body, iv,
-                                    CK_CARRIER, CK_CONCRETE, init_bv);
-                indent_buf(body, ctx->indent);
-                buf_printf(body, "%s %s = %s;\n", bind_c, bn, bridged);
-                iv = bridged;  /* emit_carrier_bridge freed the old iv */
-            } else if (strcmp(bind_c, "int64_t") == 0 &&
-                (init_kind == TY_FN || init_kind == TY_PTR_VOID ||
-                 init_is_ptr_repr || init_val_recorded_ptr ||
-                 init_val_recorded_voidp)) {
-                buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n", bind_c, bn, iv);
-            } else if (bind_is_ptr_repr &&
-                       ((init_cn && strcmp(init_cn, "int64_t") == 0) ||
-                        init_val_recorded_i64 ||
-                        /* let-bound-erasing-ascription-int-to-pointer: the
-                         * ascription's OUTER type is the pointer, so init_cn
-                         * under-fires; ask the innermost word instead. */
-                        emit_let_init_is_erased_word_to_ptr(
-                            ctx, e->as.let_.bindings[i].init, bind_c))) {
-                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
-            } else if (bind_is_ptr_repr && iv &&
-                       strncmp(iv, "(int64_t)", 9) == 0) {
-                /* gcc14-int-conversion (carrier-representation-tracking, Class B):
-                 * the binder's declared C type is a concrete pointer, but the init
-                 * VALUE is emitted as the int64 carrier -- e.g.
-                 * `(:: (.tail xs) (Cons (Option int)))` emits `(int64_t)(...)->tail`
-                 * while `t0` is declared `tur_adt_Cons__Option__int *`.  `init_cn`
-                 * (the init's TYPE c-name) is the pointer here, so the branch above
-                 * under-fires; key on the emitted value being the carrier (its
-                 * `(int64_t)` prefix) and reinterpret it to the binder's pointer.
-                 * Value-preserving (int64 -> intptr_t -> pointer), and only fires
-                 * for a pointer binder fed an explicitly int64-cast value. */
-                buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n", bind_c, bn, bind_c, iv);
-            } else {
-                buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
-            }
-            /* gcc14-int-conversion (carrier-representation-tracking): record the
-             * binder's ACTUAL declared C type so a downstream straddle site (a
-             * control-result assignment reading this var) resolves the real
-             * representation, not the colliding source-type c-name -- e.g. a
-             * self-capturing closure carrier declared `int64_t self` whose fn type
-             * c-names to a pointer, feeding a `void *` letrec-result temp. */
-            emit_localvar_record_ctype(bn, bind_c);
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
@@ -13794,8 +13960,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * the int64 carrier's by-value ABI.  Scoped to arg 0 (the
                  * receiver / dispatch tyvar) and to callees the predicate
                  * confirms take the receiver by pointer. */
-                if (i == 0 && !needs_fn_cast &&
-                    emit_reresolved_receiver_is_by_ptr(ctx, e)) {
+                if (!needs_fn_cast && raw[0] != '&' &&
+                    !(i > 0 && expr_is_pbp_param(ctx, emit_arg)) &&
+                    emit_reresolved_param_is_by_ptr(ctx, e, i)) {
                     Type _recv_ty;
                     if (!emit_var_spec_arg_type(ctx, emit_arg, &_recv_ty))
                         _recv_ty = emit_resolve_type(ctx, emit_arg->type);
@@ -17695,7 +17862,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * let for an immutable binding) and spell the GLOBAL's name so the
              * static box is keyed and initialised on the constant, not on the
              * local. */
-            const Binding *sb_b = (inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+            /* An annotated `def` -- `(def ^mut f : (fn [int] int) ident)` --
+             * reaches here as an ascription of the global; it names the same
+             * constant, and missing it malloc'd a box per global init that
+             * the first `set!` then orphaned. */
+            const Expr *sb_inner = inner;
+            while (sb_inner && sb_inner->kind == EX_ASCRIBE)
+                sb_inner = sb_inner->as.ascribe_.inner;
+            const Binding *sb_b = (sb_inner && sb_inner->kind == EX_VAR)
+                                ? sb_inner->as.var.binding : NULL;
             if (sb_b && !sb_b->is_global && sb_b->widen_fn_alias)
                 sb_b = sb_b->widen_fn_alias;
             /* r7rs-lang-plan R6: a global that is a `def` of a function VALUE
@@ -17714,7 +17889,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 !sb_b->is_param &&
                 !sb_b->is_poly_fn &&
                 !sb_b->is_fat) {
-                if (sb_b != inner->as.var.binding) {
+                if (inner->kind != EX_VAR || sb_b != inner->as.var.binding) {
                     free(fnptr);
                     fnptr = atom_var(ctx, sb_b);
                 }

@@ -1,5 +1,11 @@
 # The emitted unit's `_XOPEN_SOURCE 700` guard is inert on glibc, and it stranded a release
 
+**RESOLVED 2026-10-03** by fix direction 1, in the fork
+([turmeric-lang/mir#6](https://github.com/turmeric-lang/mir/pull/6)) and
+re-synced into `external/mir/` (merged as `3c0d8c84`) -- see *Resolution* at the end.
+The release workflow's aarch64 exception for this fallback is deleted, so the
+next release's linux-aarch64 leg is the real-hardware confirmation.
+
 **Severity: high -- it cost the v0.60.0 release.** The `linux-aarch64` leg of
 [release run 37110162147](https://github.com/turmeric-lang/turmeric/actions/runs/37110162147)
 failed at *Run a program through the JIT from the extracted archive*, so
@@ -90,15 +96,39 @@ satisfy glibc and break both macOS constraints.
 `sys/user.h` declares its register structs with plain integer types rather than
 `__uint128_t` -- *not verified*, and worth checking before relying on it.
 
-## What is NOT established
+## Established by reading (2026-10-03): c2mir has no `__uint128_t` on Linux aarch64
 
-That `__uint128_t` is specifically why c2mir fails on that header. It is the
-only unusual token in the struct at the named line, and c2mir does reject the
-token elsewhere ([c2mir-rejects-uint128](c2mir-rejects-uint128.md)), but the
-probe arm that would have isolated it was confounded: the `sys/user.h:30` error
-is present in *every* `tur jit` run on this platform, including a plain hello,
-so "including the header reproduced it" proved nothing. It does not change the
-fix -- if `sys/procfs.h` never arrives, neither does `sys/user.h`.
+glibc 2.39's `aarch64-linux-gnu/sys/user.h` (read from Ubuntu's
+`libc6-dev-arm64-cross` 2.39-0ubuntu8cross1, the runner's version):
+
+```c
+30  struct user_fpsimd_struct
+31  {
+32    __uint128_t  vregs[32];
+33    unsigned int fpsr;
+34    unsigned int fpcr;
+35  };
+```
+
+`__uint128_t` is a compiler builtin type name, so it is only a type in c2mir if
+the target's predefined header declares it.  `external/mir/c2mir/aarch64/mirc_aarch64_linux.h`
+does -- `typedef struct {_Alignas(16) unsigned long hi; unsigned long lo;} __uint128_t;`,
+the layout-only stand-in fork commit `90633091` aligned to 16 -- but **only in
+its `#elif defined(__APPLE__)` branch**.  On Linux aarch64 the name is
+undeclared, line 32 is `<identifier> <identifier>[32];`, and c2mir reports the
+failure at the start of the enclosing declaration: line 30, column 1, "syntax
+error on struct (expected '<declarator>')" -- exactly the message every `tur
+jit` run on that platform prints.  x86-64 never reaches it: no x86-64 glibc
+header on the `<ucontext.h>` path names the type.
+
+So the fix is one line in the fork: declare the same stand-in on Linux
+aarch64 (outside the Apple branch).  `struct user_fpsimd_struct` then parses
+with glibc's layout (512 + 8 bytes, 16-aligned), `<ucontext.h>` compiles, and
+nothing in the unit does arithmetic on the type.  It is *not* measured here --
+this container is x86-64 and no CI job runs the engine on aarch64 -- so the
+release workflow's archive JIT step (or an `ubuntu-24.04-arm` probe run) is the
+check.  User inline C that does arithmetic on `__uint128_t` stays a separate,
+larger gap ([c2mir-rejects-uint128](../reported/c2mir-rejects-uint128.md)).
 
 ## Fix directions
 
@@ -129,10 +159,13 @@ it.
 
 That leaves:
 
-1. **Teach c2mir `__uint128_t`** in the vendored fork -- now the primary route.
+1. **Declare c2mir's `__uint128_t` stand-in on Linux aarch64** in the vendored
+   fork (see "Established by reading" above) -- now the primary route, and a
+   one-line change; full 128-bit arithmetic is not needed for the headers.
+   Originally: **teach c2mir `__uint128_t`**.
    It fixes this *and* user inline C on arm64, and it disturbs none of the
    carefully-ordered include dance. See
-   [c2mir-rejects-uint128](c2mir-rejects-uint128.md),
+   [c2mir-rejects-uint128](../reported/c2mir-rejects-uint128.md),
    `external/mir/VENDORED.md`, and the layout prior art in
    `docs/archive/history/jit-arm64-uint128-align-struct-layout-skew.md`.
 2. **Emit `<ucontext.h>` only when the program needs `FiberBlock`.** The unit
@@ -154,3 +187,51 @@ That leaves:
 
 Whichever lands, `v0.60.0`'s tag has to move onto it (or the fix ships as
 `v0.60.1`) -- the tag as pushed has no release behind it.
+
+## Resolution (2026-10-03)
+
+Direction 1, but not as the one line this report expected.  Declaring the
+`__uint128_t` stand-in for Linux aarch64 makes `<ucontext.h>` parse, and
+measured on its own it would have made things worse: glibc's `mcontext_t`
+carries `unsigned char __reserved[4096] __attribute__ ((__aligned__ (16)))`,
+glibc's `<sys/cdefs.h>` defines `__attribute__(xyz)` to nothing for a
+compiler that is neither gcc nor clang, and c2mir ignored `aligned` anyway.
+So `ucontext_t` came out 4544 bytes / align 8 against gcc's 4560 / 16, and
+glibc's `getcontext`/`swapcontext` -- compiled by gcc -- would write 16 bytes
+past the end of a JIT-allocated one, inside `FiberBlock`.  The loud fallback
+would have become silent memory corruption in fiber programs.
+
+The fork commit (`e502b185`, merged as `3c0d8c84` in turmeric-lang/mir#6) therefore carries four
+changes: the stand-in declared outside the Apple branch; an empty
+function-like `#define __attribute__` (the libc erase idiom) ignored outside
+pedantic mode, so attributes reach c2mir's parser; a run of attribute
+specifiers merged into one list (glibc's `<pthread.h>` needed it once they
+did); and a member's trailing `aligned (N)` raising its alignment as
+`_Alignas` does.  `external/mir/VENDORED.md` logs it.
+
+Measured, with Ubuntu's arm64 glibc 2.39 (this runner's) under qemu-user:
+
+- `ucontext_t` / `mcontext_t` equal aarch64 gcc's layout (4560/16/176,
+  4384/16/288), and so does a real emitted unit's `FiberBlock` (9648/16 and
+  every checked offset); master fails the same `_Static_assert`s.
+- A cross-built aarch64 `tur jit` runs hello-world natively -- `hi`, no
+  TUR-W0070 -- where the same build against master MIR prints exactly this
+  report's two `sys/user.h:30:1` errors, TUR-W0071 and TUR-W0070.
+- `tests/run-jit.sh` with that `tur`, filtered to the fiber / async /
+  channel / scheduler / generator fixtures: 72 passed, 0 failed; the 3 cc
+  fallbacks (`cancel-chan`, `httpd-async-*`) fall back identically on
+  x86-64 (a link-level decline).
+- x86-64, where glibc's attributes now reach c2mir too: the full JIT corpus
+  3430 passed, 0 failed, no new fallbacks; `tests/run.sh` 3557/0; the fork's
+  c-tests 1090/1090 with both the generator and the interpreter.
+
+Not measured: real arm64 hardware (qemu-user only), and macOS / MinGW headers,
+which the `__attribute__` change reaches where they use the same idiom.
+
+The release workflow's linux-aarch64 exception ("narrowed rather than off")
+said to delete it when the fork fix landed; it is deleted, so a TUR-W0070 on
+any leg fails the release again.  `VERSION` already reads 0.60.1, so the next
+cut carries the fix; the `v0.60.0` tag still has no release behind it.
+User inline C that does arithmetic on `__uint128_t` is still a gap --
+[c2mir-rejects-uint128](../reported/c2mir-rejects-uint128.md), narrowed to
+that.

@@ -6,6 +6,11 @@ type the way the guide's own shape suggests: one method spelling is
 unreachable and generic code over such a class cannot name the projection, so
 the class is usable only one concrete instance at a time.
 
+**Narrowed again 2026-10-03: half 2 is fixed** -- `(Inner A)` at a type
+variable stays an unreduced projection and each call reduces it (see "Fixed
+2026-10-03: the projection at a type variable" at the end).  **Half 1 is
+what is left.**
+
 **Narrowed 2026-10-03: the third blocker of half 2 is fixed** -- a
 constrained generic that does not name the projection, in a module that holds
 no instance, no longer fails TUR-E0015 "declares no instance at all" when the
@@ -172,3 +177,59 @@ module as its own translation unit) still has no instance to elaborate the
 generic against, and `tur check` of the class module ALONE still reports the
 error -- in both cases the instances are genuinely absent from the program
 being elaborated.
+
+## Fixed 2026-10-03: the projection at a type variable
+
+```turmeric
+(defn take-generic [A] [(Box A)] [x : A d : (Inner A)] : (Inner A) d)
+(defn get [A] [(Box A)] [x : A] : (Inner A) (peel x))
+(defn count-all [A] [(Box A)] [x : A ds : (Vec (Inner A))] : int (vec-len ds))
+```
+
+all compile now, on both back ends, including an instance whose `Inner` is a
+by-value struct.
+
+- **Representation.**  `(Inner A)` with `A` a type variable is a named
+  `TY_TYVAR` carrying `assoc_of` / `assoc_arg` (types.h), named by the printed
+  projection, so two spellings of it are the same variable.  Everything that
+  treats a type variable as abstract treats the projection the same way, so
+  inside the generic it is an opaque type (built by `elab_assoc_projection`,
+  elab_types.c, from both projection sites -- `type_expr_from_form` and
+  `fn_type_from_form_impl`).  The signature checks that refuse a lone bare
+  type variable as a typo leave a projection alone; it is determined by its
+  argument.
+- **Reduction.**  Once a call's arguments are in, `call_bind_assoc_projections`
+  (elab_call.c) reduces each projection the callee's signature mentions:
+  with `A` fixed to a ground type it is the instance's binding, which an
+  argument typed `(Inner A)` must agree with (`TUR-E0001`, naming the
+  projection) and which is recorded under the projection's name -- so the
+  result instantiates by name and the emitter's per-call clone substitutes the
+  real C type; with no instance it is `TUR-E0015`; at another type variable
+  (`A := B` in a generic caller) it becomes `(Inner B)`.
+- **Methods.**  A class method whose declared result is one of the class's
+  associated types, called on a type-variable receiver, yields the projection
+  `(Inner A)` instead of the carrier representative's binding.
+
+Pinned by `tests/fixtures/assoc-type-projection-at-tyvar` (a projection param
+and result, a generic relaying to a generic, `(Vec (Inner A))`, a method
+result through an `if`, int and by-value-struct instances),
+`assoc-type-projection-across-modules` (class and generic in an
+instance-less module, instances in the importer, both engines),
+`errors/assoc-type-projection-mismatch` and
+`errors/assoc-type-projection-no-instance`.  `run.sh`, `run-turi.sh` green.
+
+Not changed: a type-variable body is still accepted for any declared result
+(`(defn f [A] [x : A] : int x)` checks clean), so `(peel x)` returned as `:
+int` is not refused -- that leniency is general, not the projection's.
+
+## Still open: half 1
+
+A nullary method whose only class mention is the associated type,
+`(empty [] : Inner)`, still has nothing to dispatch on.  With half 2 in place
+the natural spelling inside a generic would be expected-type dispatch on a
+PROJECTION -- `(:: (empty) (Inner A))` names `A`, which picks the instance --
+but at a concrete type the projection is reduced where it is parsed
+(`(Inner W)` is just `int`), so the instance is gone by the time the call is
+typed.  A fix needs the ascription to keep the projection it was written as
+(or the return-dispatch path to accept one), which is the design question
+this half is left on.  The witness-parameter workaround above still applies.

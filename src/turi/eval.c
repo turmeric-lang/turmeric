@@ -326,6 +326,23 @@ void turi_prov_forget(TuriEnv *env, const void *ptr) {
     }
 }
 
+void turi_prov_note_args(TuriEnv *env, const TuriValue *args, uint32_t n) {
+    if (!env || !env->provenance_on || !args) return;
+    for (uint32_t i = 0; i < n; i++)
+        if (args[i].tag == TURI_CLOSURE && args[i].as_closure)
+            turi_prov_register(env, TURI_HK_CLOSURE, args[i].as_closure);
+}
+
+TuriValue turi_closure_from_carrier(TuriEnv *env, int64_t w) {
+    if (w == 0) return turi_int(0);
+    const void *p = (const void *)(intptr_t)w;
+    if (env && env->provenance_on && !turi_prov_check(env, TURI_HK_CLOSURE, p))
+        return turi_error("eval: call target is not a live handle of the "
+                          "expected kind -- a sandboxed function value cannot be "
+                          "forged from an integer (S-5)");
+    return turi_closure((TuriClosure *)(intptr_t)w);
+}
+
 /* The pointer an int64-carried handle argument holds.  A TURI_CSTR value is a
  * real string pointer produced by the reader / interpreter (never forged from
  * an attacker integer), so it needs no provenance and returns NULL "trusted".
@@ -1227,14 +1244,14 @@ static TuriValue reword_unbound_call_head(TuriValue fn_val, const Expr *fn_expr)
  * binding is fat / TY_FN / TY_PTR_VOID, i.e. a context where a bare int *is* a
  * closure carrier (closures are heap-allocated and process-lifetime under the
  * interpreter, so the recovered pointer stays valid). */
-static TuriValue recover_carrier_closure(TuriValue fn_val, const Binding *b) {
+static TuriValue recover_carrier_closure(TuriEnv *env, TuriValue fn_val,
+                                         const Binding *b) {
     if (fn_val.tag == TURI_INT && b && fn_val.as_int != 0 &&
-        (b->is_fat || b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID)) {
-        TuriValue r = {0};
-        r.tag        = TURI_CLOSURE;
-        r.as_closure = (TuriClosure *)(intptr_t)fn_val.as_int;
-        return r;
-    }
+        (b->is_fat || b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID))
+        /* turi-sandbox-handles-are-forgeable-integers: in a sandbox the word
+         * must be a closure that really lost its tag in a native; an erasing
+         * ascription `(:: x A)` at A = a fn type re-types ANY integer here. */
+        return turi_closure_from_carrier(env, fn_val.as_int);
     return fn_val;
 }
 
@@ -8839,8 +8856,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (turi_is_error(fn_val) || env_signaled(env)) {
                     cur = fn_val; descending = false; break;
                 }
-                if (!gde_resolved && control->as.call_.fn_binding)
-                    fn_val = recover_carrier_closure(fn_val, control->as.call_.fn_binding);
+                if (!gde_resolved && control->as.call_.fn_binding) {
+                    fn_val = recover_carrier_closure(env, fn_val,
+                                                     control->as.call_.fn_binding);
+                    if (turi_is_error(fn_val)) { cur = fn_val; descending = false; break; }
+                }
                 if (fn_val.tag != TURI_CLOSURE) {
                     cur = turi_errorf("eval: expected function, got tag %d", fn_val.tag);
                     descending = false; break;
@@ -10325,6 +10345,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
      * a HOF native re-entering evaluation, and the inline-C override below. */
     if (cl->native) {
         if (cl->native_caps & ~env->caps) return native_caps_denied(env, cl);
+        turi_prov_note_args(env, args, n_args);
         if (env->provenance_on && cl->native_handle) {
             TuriValue pv;
             if (turi_prov_guard_native(env, cl->native_handle, args, n_args, &pv))
@@ -10359,6 +10380,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
             native_v.as_closure->native) {
             if (native_v.as_closure->native_caps & ~env->caps)
                 return native_caps_denied(env, native_v.as_closure);
+            turi_prov_note_args(env, args, n_args);
             return native_v.as_closure->native(env, args, n_args,
                                                native_v.as_closure->native_ud);
         }
@@ -15217,6 +15239,7 @@ static TuriValue call_run(TuriEnv *env, void *ctx) {
 
 TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args) {
     if (!env) return turi_error("turi_call: null env");
+    if (fn.tag == TURI_ERROR) return fn;   /* e.g. a refused carrier re-tag */
     if (fn.tag != TURI_CLOSURE || !fn.as_closure)
         return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
     /* S-5: an embedder (or the macro env) calling straight into a restricted

@@ -9686,6 +9686,14 @@ static int64_t with_hyregion(int64_t body) {
         return __ps_171;
 }
 
+static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
+static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
+    (void)__dkenv; (void)__dkarg; (void)__dksubk;
+    int64_t k_5 = (int64_t)(intptr_t)__dksubk;
+    ((struct DK *)(intptr_t)k_5)->consumed = 1;
+    return dk_tail_resume((struct DK *)(intptr_t)k_5, (intptr_t)((int64_t)INT64_C(41)));
+}
+
 static intptr_t main_hk0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
     (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
@@ -9701,14 +9709,6 @@ static intptr_t main_pf1(intptr_t env, intptr_t __t4__slot) {
     __t2 = 0;
     return (intptr_t)(INT64_C(0));
 }
-static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
-static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
-    (void)__dkenv; (void)__dkarg; (void)__dksubk;
-    int64_t k_5 = (int64_t)(intptr_t)__dksubk;
-    ((struct DK *)(intptr_t)k_5)->consumed = 1;
-    return dk_tail_resume((struct DK *)(intptr_t)k_5, (intptr_t)((int64_t)INT64_C(41)));
-}
-
 static int64_t main__cps(DK *__kont) {
     tur_handler_table_t * _un_unctlhoist_un6_7;
     tur_adt_HRow row_8;

@@ -670,11 +670,12 @@ static TuriValue native_flat_set(TuriEnv *env, TuriValue *a, uint32_t n, void *u
  * is a TURI_CLOSURE and a generator is a TURI_GEN; re-implement the bridges over
  * turi_call + turi_gen_advance_val.  A yielded value is boxed as a malloc'd
  * int64 (NULL = exhausted), matching seq-val-some?/seq-val-unwrap. */
-static TuriValue seq_as_closure(TuriValue v) {
+static TuriValue seq_as_closure(TuriEnv *env, TuriValue v) {
     /* A factory/callback passed through an `int` param keeps its TURI_CLOSURE
-     * tag; if it arrived as a raw carrier, rebuild the closure value. */
+     * tag; if it arrived as a raw carrier, rebuild the closure value -- a
+     * checked rebuild, since in a sandbox the carrier may be a forged integer. */
     if (v.tag == TURI_CLOSURE) return v;
-    return turi_closure((TuriClosure *)(intptr_t)v.as_int);
+    return turi_closure_from_carrier(env, v.as_int);
 }
 /* k-apply-raw (stdlib/kleisli.tur): invoke the fat-closure carrier `k` on `x`,
  * returning the int-level Option it produces.  kleisli.tur's body is
@@ -685,7 +686,7 @@ static TuriValue native_k_apply_raw(TuriEnv *env, TuriValue *a, uint32_t n, void
     (void)ud;
     if (n < 2) return turi_int(0);
     TuriValue av = turi_int(a[1].as_int);
-    TuriValue r = turi_call(env, seq_as_closure(a[0]), &av, 1);
+    TuriValue r = turi_call(env, seq_as_closure(env, a[0]), &av, 1);
     if (turi_is_error(r) || env->throwing) return r;  /* propagate callback error */
     /* The arrow body returns an int-level Option.  Under --interpret the
      * Option carrier is dual-rep: `some` may yield either a native int64[2]
@@ -702,7 +703,7 @@ static TuriValue native_seq_iter(TuriEnv *e, TuriValue *a, uint32_t n, void *ud)
     if (n < 1) return turi_nil();
     int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
     if (!s) return turi_nil();
-    return turi_call(e, seq_as_closure(turi_int(s[0])), NULL, 0); /* mk() -> gen */
+    return turi_call(e, seq_as_closure(e, turi_int(s[0])), NULL, 0); /* mk() -> gen */
 }
 static TuriValue native_seq_gen_done(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
@@ -740,30 +741,30 @@ static TuriValue native_seq_gen_to_int(TuriEnv *e, TuriValue *a, uint32_t n, voi
 static TuriValue native_seq_call_fn0(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 1) return turi_int(0);
-    return turi_call(e, seq_as_closure(a[0]), NULL, 0);
+    return turi_call(e, seq_as_closure(e, a[0]), NULL, 0);
 }
 static TuriValue native_seq_call_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_int(0);
-    return turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    return turi_call(e, seq_as_closure(e, a[0]), &a[1], 1);
 }
 static TuriValue native_seq_call_fn2(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 3) return turi_int(0);
     TuriValue args[2] = { a[1], a[2] };
-    return turi_call(e, seq_as_closure(a[0]), args, 2);
+    return turi_call(e, seq_as_closure(e, a[0]), args, 2);
 }
 static TuriValue native_seq_call_bool_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_bool(false);
-    TuriValue r = turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    TuriValue r = turi_call(e, seq_as_closure(e, a[0]), &a[1], 1);
     if (turi_is_error(r) || e->throwing) return r;  /* propagate callback error */
     return turi_bool(r.tag == TURI_BOOL ? r.as_bool : r.as_int != 0);
 }
 static TuriValue native_seq_call_void_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_nil();
-    TuriValue r = turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    TuriValue r = turi_call(e, seq_as_closure(e, a[0]), &a[1], 1);
     if (turi_is_error(r) || e->throwing) return r;  /* propagate callback error */
     return turi_nil();
 }
@@ -1609,7 +1610,7 @@ static char *sch_mkidx(const char *base, int64_t idx) {
  * with one int64-carrier argument, returning the result as an int64 carrier. */
 static int64_t sch_apply1(TuriEnv *env, int64_t fn_carrier, int64_t arg) {
     TuriValue av = turi_int(arg);
-    TuriValue r = turi_call(env, seq_as_closure(turi_int(fn_carrier)), &av, 1);
+    TuriValue r = turi_call(env, seq_as_closure(env, turi_int(fn_carrier)), &av, 1);
     if (turi_is_error(r) || env->throwing) {
         /* returns a raw int64 carrier; promote a value-level error to a throw so
          * the enclosing schema native and the driver propagate it. */
@@ -2178,8 +2179,8 @@ static bool free_is_ctor(TuriValue v, const char *name) {
  * carrier holding the TuriClosure* (the carrier-readback case). */
 static TuriValue free_call_fat(TuriEnv *env, TuriValue k, TuriValue arg) {
     if (k.tag == TURI_INT && k.as_int != 0) {
-        TuriClosure *cl = (TuriClosure *)(intptr_t)k.as_int;
-        k.tag = TURI_CLOSURE; k.as_closure = cl;
+        k = turi_closure_from_carrier(env, k.as_int);
+        if (turi_is_error(k)) return k;
     }
     return turi_call(env, k, &arg, 1);
 }

@@ -7043,6 +7043,15 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 }
                 const Type *bound = typeclass_env_resolve_assoc_type_n(
                     &e->typeclass_env, head, arg_buf, n_args);
+                /* associated-type-unusable-nullary-and-generic (half 2): `(Inner
+                 * A)` at a signature type variable stays unreduced; a call that
+                 * fixes A reduces it (call_bind_assoc_projections). */
+                Type proj;
+                if (!bound && elab_assoc_projection(e, head, arg_buf, n_args, &proj)) {
+                    Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *out = proj;
+                    return out;
+                }
                 if (!bound) {
                     diag_emit(DIAG_ERROR, form->span,
                               "no instance binding for associated type '%s' at this type",
@@ -10616,6 +10625,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
         for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->type.kind != TY_TYVAR ||
                 !params[i]->type.as.tyvar_.name) continue;
+            /* associated-type-unusable-nullary-and-generic (half 2): an
+             * associated-type projection `(Inner A)` is determined by its
+             * argument -- it is not a typo, however often it occurs. */
+            if (params[i]->type.as.tyvar_.assoc_of) continue;
             const char *nm = params[i]->type.as.tyvar_.name;
             bool declared = false;
             for (uint8_t k = 0; k < n_fn_type_params; k++)
@@ -10657,7 +10670,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
         /* Reject a bare return type variable with no quantifying binder. */
         if (return_kind == TY_TYVAR && return_tyvar_type &&
-            return_tyvar_type->as.tyvar_.name) {
+            return_tyvar_type->as.tyvar_.name &&
+            !return_tyvar_type->as.tyvar_.assoc_of) {
             const char *rn = return_tyvar_type->as.tyvar_.name;
             bool declared = false;
             for (uint8_t k = 0; k < n_fn_type_params; k++)

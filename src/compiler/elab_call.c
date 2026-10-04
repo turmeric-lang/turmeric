@@ -1023,6 +1023,23 @@ static Expr *saffron_dyn_fn_adaptor_make(Elab *e, Expr *value) {
  * and `set!`. */
 Expr *elab_fn_value_to_fat(Elab *e, Expr *value) {
     if (!value) return NULL;
+    /* A variable whose BINDING is already fat -- a `^fat` parameter, or a local
+     * the elaborator marked fat -- reads thin in its type, so the type test
+     * below would wrap the fat handle in a second box whose shim calls the
+     * handle as a code pointer: `(set! saved f)` with `f` a `^fat` param, then
+     * `(saved 10)`, jumped into the closure's env.  Same classification the
+     * tail/join walker uses (repr_of_binding for a param, is_fat otherwise). */
+    {
+        const Expr *pv = value;
+        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+        if (pv && pv->kind == EX_VAR && pv->as.var.binding) {
+            const Binding *vb = pv->as.var.binding;
+            bool fat = vb->is_param
+                ? repr_of_binding(vb, REPR_POS_RESULT) == REPR_FAT_HANDLE
+                : vb->is_fat;
+            if (fat) return value;
+        }
+    }
     if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
         !value->type.as.fn.cfnptr && value->type.as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY) {
         Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -6930,6 +6947,105 @@ static Expr *scheme_arity_error(Elab *e, const Form *call, const Binding *fn_bin
     return elab_form(e, form_list(e->arena, call->span, items, n_args + 2));
 }
 
+/* associated-type-unusable-nullary-and-generic (half 2): the unreduced
+ * projections (`(Inner A)`, types.h tyvar_.assoc_of) a callee's signature
+ * mentions. */
+static void call_collect_assoc_projs(const Type *t, const Type **out,
+                                     uint8_t *n, uint8_t cap) {
+    if (!t || *n >= cap) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (t->as.tyvar_.assoc_of && t->as.tyvar_.name) {
+                for (uint8_t i = 0; i < *n; i++)
+                    if (out[i]->as.tyvar_.name == t->as.tyvar_.name) return;
+                out[(*n)++] = t;
+            }
+            return;
+        case TY_APP:
+            call_collect_assoc_projs(t->as.app.fn, out, n, cap);
+            call_collect_assoc_projs(t->as.app.arg, out, n, cap);
+            return;
+        case TY_FN:
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    call_collect_assoc_projs(t->as.fn.arg_full_types[i], out, n, cap);
+            call_collect_assoc_projs(t->as.fn.result_full_type, out, n, cap);
+            return;
+        default:
+            return;
+    }
+}
+
+/* Reduce each projection the callee's signature mentions against this call's
+ * bindings, once every argument is in.  `(Inner A)` with A fixed to a ground
+ * type is the instance's answer -- an argument typed `(Inner A)` must agree
+ * with it, and the binding it adds (by the projection's name) is what
+ * instantiates the result and what the emitter's per-call spec substitutes, so
+ * a by-value associated type gets its real C type in the clone.  At another
+ * type variable (`A := B` inside a generic caller) it becomes `(Inner B)`.
+ * Returns false after reporting. */
+static bool call_bind_assoc_projections(Elab *e, const Form *call,
+                                        const Binding *fn_binding,
+                                        const Type *fn_type,
+                                        CallTypeBinding *bindings,
+                                        uint8_t *n_bindings) {
+    if (!fn_type || fn_type->kind != TY_FN) return true;
+    const Type *projs[16];
+    uint8_t np = 0;
+    call_collect_assoc_projs(fn_type, projs, &np, 16);
+    for (uint8_t pi = 0; pi < np; pi++) {
+        const Type *P = projs[pi];
+        Type a = call_instantiate_type(e, P->as.tyvar_.assoc_arg, bindings, *n_bindings);
+        Type want;
+        if (!call_type_has_named_tyvar(&a)) {
+            const Type *r = typeclass_env_resolve_assoc_type_n(
+                &e->typeclass_env, P->as.tyvar_.assoc_of, &a, 1);
+            if (!r) {
+                Buf ab; buf_init(&ab);
+                type_print(&ab, a);
+                buf_putc(&ab, '\0');
+                diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                    "function '%s': no instance binding for associated type '%s' "
+                    "at %s (its signature mentions %s)",
+                    fn_binding && fn_binding->name ? fn_binding->name->name : "?",
+                    P->as.tyvar_.assoc_of->name, ab.data, P->as.tyvar_.name);
+                buf_free(&ab);
+                return false;
+            }
+            want = *r;
+        } else if (type_eq(a, *P->as.tyvar_.assoc_arg)) {
+            continue;   /* the variable stands for itself (a recursive call) */
+        } else if (!elab_assoc_projection(e, P->as.tyvar_.assoc_of, &a, 1, &want)) {
+            continue;
+        }
+        uint8_t idx = 0;
+        if (call_find_type_binding(bindings, *n_bindings, P->as.tyvar_.name, &idx)) {
+            if (!type_eq(bindings[idx].type, want)) {
+                Buf wb; buf_init(&wb);
+                type_print(&wb, want);
+                buf_putc(&wb, '\0');
+                Buf gb; buf_init(&gb);
+                type_print(&gb, bindings[idx].type);
+                buf_putc(&gb, '\0');
+                diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                    "function '%s': %s is %s here, but an argument gives it %s",
+                    fn_binding && fn_binding->name ? fn_binding->name->name : "?",
+                    P->as.tyvar_.name, wb.data, gb.data);
+                buf_free(&wb);
+                buf_free(&gb);
+                return false;
+            }
+            bindings[idx].type = want;
+            continue;
+        }
+        if (*n_bindings >= 16) return true;
+        bindings[*n_bindings].name = P->as.tyvar_.name;
+        bindings[*n_bindings].type = want;
+        (*n_bindings)++;
+    }
+    return true;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -10077,6 +10193,11 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             args[i]->type = inst;
         }
     }
+
+    if (fn_type.kind == TY_FN &&
+        !call_bind_assoc_projections(e, call, fn_binding, &fn_type,
+                                     type_bindings, &n_type_bindings))
+        return NULL;
 
     /* S4 (vec-new + vec-push! forward element inference): a generic call whose
      * receiver argument is a *local* let-bound EX_VAR with an under-constrained

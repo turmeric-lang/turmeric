@@ -1,0 +1,39 @@
+;; A capturing lambda handed to a CPS-lowered callee that KEEPS it.
+;;
+;; `keep1` stores its `^fat` argument in a global and calls it, so it is
+;; colored, and so is `mk`.  Two defects met here:
+;;
+;;   - the CPS backend registered every capturing lambda in an operand
+;;     position with the entry boundary's reap (cps_ir.c's EX_CLOSURE arm),
+;;     whatever the slot did with it -- so the env `saved-f` holds was freed
+;;     when `mk` returned, and `(saved-f 10)` read freed memory.  Now only a
+;;     slot that keeps nothing (a `^borrow` or inferred non-retaining
+;;     parameter, like `apply1`'s) gets the reap; `borrow-only` is that
+;;     control, and the leak check holds it at zero.
+;;   - `(set! saved-f f)` wrapped the already-fat `f` in a second fat box
+;;     whose shim called the handle as a code pointer (elab_fn_value_to_fat
+;;     judged it by its thin-looking type, not its binding).
+;;
+;; requires.leak-check: a use-after-free fails it, and so would a lambda the
+;; non-retaining path forgot to reap.  `saved-f` still holds the kept lambda
+;; at exit, so that one is reachable, not leaked.
+
+(defn ident [x : int] : int x)
+(def ^mut saved-f : (fn [int] int) ident)
+
+(defn keep1 [^fat f : (fn [int] int) v : int] : int
+  (do (set! saved-f f)
+      (f v)))
+(defn apply1 [^fat f : (fn [int] int) v : int] : int (f v))
+
+(defn mk [n : int] : int (keep1 (fn [x : int] : int (+ x n)) 3))
+(defn borrow-only [n : int] : int (apply1 (fn [x : int] : int (* x n)) 3))
+
+(defn main [] : int
+  (println (saved-f 10))      ; ident              = 10
+  (println (mk 100))          ; 3 + 100            = 103
+  (println (saved-f 10))      ; the kept lambda    = 110
+  (println (borrow-only 7))   ; 3 * 7              = 21
+  (println (borrow-only 8))   ; 3 * 8              = 24
+  (println (saved-f 1))       ; still the kept one = 101
+  0)

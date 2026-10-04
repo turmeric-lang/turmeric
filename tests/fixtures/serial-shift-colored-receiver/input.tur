@@ -9,7 +9,8 @@
 ;; is how every other effect-free colored function is already called (apply1
 ;; below colors every caller, and they all call it directly).  So a colored
 ;; receiver with an empty effect row is admitted; one an effect escapes is
-;; still refused (errors/serial-shift-receiver-effect-escapes).
+;; called outward instead (serial-shift-receiver-effect-reaches-handler,
+;; serial-shift-receiver-effect-under-if, serial-shift-closure-receiver-effect).
 ;;
 ;; The shapes:
 ;;   1. the report's repro -- a lambda receiver calling a colored helper.

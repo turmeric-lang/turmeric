@@ -117,9 +117,9 @@ The write-up is `docs/archive/mir-interp-tier-plan.md`.
 
 ### MIR is a pinned fork, not upstream
 
-`external/mir/` is a copy of `rjungemann/mir`, not `vnmakarov/mir`, at the
-commit `external/mir/UPSTREAM` records: upstream master plus fixes that have not
-landed upstream. `external/mir/VENDORED.md` logs every one; the main ones:
+`external/mir/` is a copy of `turmeric-lang/mir` (formerly `rjungemann/mir`),
+not `vnmakarov/mir`, at the commit `external/mir/UPSTREAM` records: upstream
+master plus fixes that have not landed upstream. `external/mir/VENDORED.md` logs every one; the main ones:
 
 Two are **MIR back-end** bugs -- wrong code or memory corruption:
 
@@ -131,11 +131,16 @@ Two are **MIR back-end** bugs -- wrong code or memory corruption:
   same spilled register in three positions, and the third write smashed the
   caller's frame.
 
-Four are **c2mir front-end** gaps, and three of those are *silent* -- c2mir
+Five are **c2mir front-end** gaps, and three of those are *silent* -- c2mir
 compiles the input and gets the answer wrong:
 
 - aarch64 `__uint128_t` modeled with alignment 8 where AAPCS64 requires 16,
   skewing `ucontext_t` (and with it `FiberBlock`).
+- On Linux aarch64, `__uint128_t` not declared at all, so `<ucontext.h>` --
+  every emitted unit -- failed to parse and `tur jit` always fell back to cc;
+  and GCC `aligned` attributes dropped (glibc's `<sys/cdefs.h>` erases
+  `__attribute__` for a non-GNU compiler), which made glibc's `ucontext_t` 16
+  bytes too small once it did parse.
 - `#pragma pack` accepted and ignored, laying structs out at natural alignment
   -- which the Apple and Windows SDKs rely on heavily.
 - C23 `enum [tag] : type` unparseable, so anything reaching

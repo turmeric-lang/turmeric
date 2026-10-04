@@ -9686,6 +9686,24 @@ static int64_t with_hyregion(int64_t body) {
         return __ps_171;
 }
 
+static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
+static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
+    (void)__dkenv; (void)__dkarg; (void)__dksubk;
+    int64_t k_5 = (int64_t)(intptr_t)__dksubk;
+    ((struct DK *)(intptr_t)k_5)->consumed = 1;
+    return dk_tail_resume((struct DK *)(intptr_t)k_5, (intptr_t)((int64_t)INT64_C(41)));
+}
+
+static intptr_t __dk_hcase_175(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
+static intptr_t __dk_hcase_175(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
+    (void)__dkenv; (void)__dkarg; (void)__dksubk;
+    const char * s_6 = (const char *)((int64_t)__dkarg);
+    int64_t k_7 = (int64_t)(intptr_t)__dksubk;
+    puts(s_6);
+    ((struct DK *)(intptr_t)k_7)->consumed = 1;
+    return dk_tail_resume((struct DK *)(intptr_t)k_7, (intptr_t)0);
+}
+
 static intptr_t main_hk0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
     (void)env;
     int64_t __t0 = (int64_t)(__t0__slot);
@@ -9706,24 +9724,6 @@ static intptr_t main_rf1(intptr_t env, intptr_t __t5__slot, DK *__kont) {
     int64_t __t5 = (int64_t)(__t5__slot);
     return dk_perform(2, (intptr_t)(0), __dk_reap_node(dk_frame(main_pf2, 0, __kont)));
 }
-static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
-static intptr_t __dk_hcase_172(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
-    (void)__dkenv; (void)__dkarg; (void)__dksubk;
-    int64_t k_5 = (int64_t)(intptr_t)__dksubk;
-    ((struct DK *)(intptr_t)k_5)->consumed = 1;
-    return dk_tail_resume((struct DK *)(intptr_t)k_5, (intptr_t)((int64_t)INT64_C(41)));
-}
-
-static intptr_t __dk_hcase_175(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk);
-static intptr_t __dk_hcase_175(intptr_t __dkenv, intptr_t __dkarg, struct DK *__dksubk) {
-    (void)__dkenv; (void)__dkarg; (void)__dksubk;
-    const char * s_6 = (const char *)((int64_t)__dkarg);
-    int64_t k_7 = (int64_t)(intptr_t)__dksubk;
-    puts(s_6);
-    ((struct DK *)(intptr_t)k_7)->consumed = 1;
-    return dk_tail_resume((struct DK *)(intptr_t)k_7, (intptr_t)0);
-}
-
 static int64_t main__cps(DK *__kont) {
     tur_handler_table_t * _un_unctlhoist_un8_9;
     tur_adt_HRow2 row_10;

@@ -106,11 +106,11 @@ Two further rules follow from how the frames are marshalled by name:
   (k (perform (Ask))))` under `(handle (run) (Ask [] r) (resume r 41))` works
   compiled as it does interpreted
   (`docs/archive/serial-receiver-effect-cannot-reach-enclosing-handler.md`).
-  Three shapes are still `TUR-E0706`, naming the receiver and the effect: a
-  context with an `if` branch point, a CAPTURING `(fn [k] ...)` receiver (a
-  non-capturing one, or a named function, is fine), and an effect escaping a
-  context callee as above. Hoist the `if` out of the reset, name the
-  receiver, or handle the effect inside it.
+  That holds with an `if` branch point in the context too, and for a
+  capturing `(fn [k] ...)` receiver whose captures are plain values (ints,
+  floats, strings). What is still `TUR-E0706`: a closure receiver
+  capturing anything else (name the receiver instead), and an effect escaping
+  a context callee as above -- handle it inside the callee.
 
 `TUR_TRACE_CORE=1` names the collector rule (`[CTX-REJECT] cps_ir.c:<line>`)
 that rejected a context, which is faster than guessing.

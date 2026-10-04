@@ -5,10 +5,11 @@ Status: **complete** -- T1-T6 and the optional T2b (`musttail`) landed
 open by decision. One follow-on was never staged and was not done: T-D4's
 audit after `match` (`handle` arms, `and`/`or`, `tco_let_simple`'s
 carrier-ABI bail). It now lives in
-[tail-grammar-skips-and-or-and-carrier-lets](../reported/tail-grammar-skips-and-or-and-carrier-lets.md):
+[tail-grammar-skips-and-or-and-carrier-lets](tail-grammar-skips-and-or-and-carrier-lets.md):
 `handle` bodies CPS-lower, so they are out of this emitter's reach by
-construction; the last operand of `and`/`or`, and a self tail call under a
-`let` that binds a carrier-ABI value, are still refused (probed 2026-09-28). The CPS
+construction; the last operand of `and`/`or` and a self tail call under a `let` that
+binds a carrier-ABI value were refused when probed 2026-09-28, and both are
+fixed (2026-09-29 and 2026-10-03; that report is archived). The CPS
 backend's cross-function tail call is filed separately
 ([cps-self-tail-call-relies-on-sibling-call](../reported/cps-self-tail-call-relies-on-sibling-call.md),
 owned by r7rs-lang-plan), and `#lang r7rs`, which the text below says does

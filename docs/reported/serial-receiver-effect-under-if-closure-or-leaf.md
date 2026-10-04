@@ -1,5 +1,9 @@
 # An escaping effect in a serial-shift context is refused under an `if`, in a capturing receiver, or in a leaf
 
+**Narrowed 2026-10-03: shapes 1 and 2 are fixed; shape 3 (a leaf) stays
+open, and is a semantics question rather than a lowering gap.**  See "Fixed
+2026-10-03" at the end.
+
 **Severity: low.** A compile-time refusal (`TUR-E0706`), not a wrong answer;
 `tur --interpret` runs all three.  The residue of
 [serial-receiver-effect-cannot-reach-enclosing-handler](../archive/serial-receiver-effect-cannot-reach-enclosing-handler.md),
@@ -28,9 +32,11 @@ continuation (`recv_outward`).
 (serial-reset (page2 "" (serial-shift recv 0)))
 ```
 
-Shape 1 is pinned by `tests/fixtures/errors/serial-shift-receiver-effect-escapes`.
+Shapes 1 and 2 compile now (`serial-shift-receiver-effect-under-if`,
+`serial-shift-closure-receiver-effect`); shape 3 is pinned by
+`tests/fixtures/errors/serial-shift-context-callee-effect`.
 
-## Why each is still refused
+## Why each was refused
 
 1. **`if`.** The outward lowering replaces the shift with a tail call whose
    continuation is the rest of the function.  With an `if` in the context the
@@ -57,3 +63,37 @@ Shape 1 is pinned by `tests/fixtures/errors/serial-shift-receiver-effect-escapes
   heap join threads a fat fn value.
 - (3): decide the semantics first -- probably "the resumer's handlers", which
   means `resume-cont!` would need to run the chain on the caller's `__kont`.
+
+## Fixed 2026-10-03: shapes 1 and 2
+
+- **(1) `if`.**  The emitter, not the IR, was the obstacle:
+  `emit_serial_outward_call` already lifts the rest as a resume frame for the
+  receiver's call, so with an `if` in the context the PURE arm now delivers
+  its value -- the outer frames re-applied by `emit_cloneable_pure_arm`, as
+  the native lowering computes it -- into that same frame
+  (`dk_run(dk_frame_resume(rest, env, cur_k), pure)`).  Both arms share one
+  continuation and the rest is emitted once; `build_cloneable` no longer
+  refuses `recv_outward && saw_if`.  An outer frame, a shift in the `else`
+  arm, a prelude `let` the condition reads, and an effect performed later in
+  the rest all agree with `tur --interpret`
+  (`tests/fixtures/serial-shift-receiver-effect-under-if`).
+- **(2) Capturing closure.**  A closure literal used as a serial-shift
+  receiver an effect escapes (`serial_closure_recv_escapes`, the same test as
+  `fn_effect_may_escape`) is a threading use of its lifted lambda -- tier
+  `now`, since the outward call is a tail call on the reset's continuation --
+  so the lambda joins the threadable set and gets its env-taking `__cps`
+  twin.  The builder marks the receiver outward; the emitter evaluates the
+  closure at the reset site and calls `<lambda>__cps(<closure>, k, <rest>)`,
+  the same first argument the direct thunk gets; and Rule D
+  (`outward_receivers_in_s`) evicts the function if that twin is not
+  emitted after all -- a capture `fn_sig_ok` does not admit -- so the
+  fallback's TUR-E0706 still names it then.  Int and cstr captures, a
+  receiver that never resumes, and the `if` shape together all agree with
+  `--interpret` (`tests/fixtures/serial-shift-closure-receiver-effect`).
+
+Both new fixtures run through `tur jit` with no `TUR-W0070` fallback.  Not
+changed and not this report's: every serial continuation's DK chain is
+leaked when the receiver resumes it, outward or not (`run-leak-check`-style
+builds of `serial-shift-colored-receiver` and
+`cps-oracle-serial-closure-recv` leak 52 and 25 allocations on `main`) --
+filed as [serial-cont-chain-never-freed](../archive/serial-cont-chain-never-freed.md) (since resolved).

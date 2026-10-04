@@ -7520,6 +7520,30 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         call_out->as.call_.fn_expr = get_field;
                         call_out->as.call_.args = args;
                         call_out->as.call_.n_args = n_args;
+                        /* struct-temporary-fn-field-box-leaks: an UNBOUND owning
+                         * receiver -- `(.run (make-struct S f) x)`, a constructor
+                         * or a call result -- owns the fn-field box the
+                         * constructor made, and with no binding nothing released
+                         * it (a `let`-bound one is freed at scope exit,
+                         * local-struct-drop).  Bind it: `(let [t <recv>] (.run t
+                         * x))` is the same program, and the `let` gives the
+                         * release its owner. */
+                        const Expr *ro = obj;
+                        while (ro && ro->kind == EX_ASCRIBE) ro = ro->as.ascribe_.inner;
+                        if (ro && (ro->kind == EX_CALL || ro->kind == EX_MAKE_STRUCT) &&
+                            elab_type_owns_boxed_fnfield(obj->type)) {
+                            LetBinding *lb = (LetBinding *)arena_alloc(
+                                e->arena, sizeof(LetBinding));
+                            Expr *rv = elab_bind_control_temp(e, obj, lb);
+                            lb->binding->drops_fn_fields = true;
+                            get_field->as.get_field_.struct_expr = rv;
+                            Expr *let_expr = expr_new(e->arena, EX_LET,
+                                                      call_out->type, call->span);
+                            let_expr->as.let_.bindings = lb;
+                            let_expr->as.let_.n = 1;
+                            let_expr->as.let_.body = call_out;
+                            return let_expr;
+                        }
                         return call_out;
                     }
                 }
@@ -9294,6 +9318,24 @@ resolved_user_fallback:;
                 cm->return_type.as.tyvar_.name &&
                 strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
             if (recv_is_cv && res_is_cv) result_type = obj->type;
+            /* associated-type-unusable-nullary-and-generic (half 2): a result
+             * that is one of the class's ASSOCIATED types -- `(unwrap [x : a]
+             * : Inner)` -- is the projection at the receiver, `(Inner A)`, not
+             * the representative's binding: that is what a parameter declared
+             * `(Inner A)` holds, and what each instantiation reduces. */
+            else if (recv_is_cv && cm->return_type.kind == TY_TYVAR &&
+                     cm->return_type.as.tyvar_.name &&
+                     obj->type.as.tyvar_.name && rtc->n_assoc_types > 0) {
+                for (uint8_t ak = 0; ak < rtc->n_assoc_types; ak++) {
+                    const Symbol *an = rtc->assoc_type_names[ak];
+                    if (!an || strcmp(an->name, cm->return_type.as.tyvar_.name) != 0)
+                        continue;
+                    Type proj;
+                    if (elab_assoc_projection(e, an, &obj->type, 1, &proj))
+                        result_type = proj;
+                    break;
+                }
+            }
             /* class-var-applied-result-untyped-in-constrained-generic: the
              * same rule for a result that mentions the class variable INSIDE
              * an application -- `(co [x : a] : (Option a))`.  The
