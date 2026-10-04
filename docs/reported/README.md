@@ -2629,6 +2629,12 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 | [panic-location-names-the-runtime-not-the-call-site](panic-location-names-the-runtime-not-the-call-site.md) | medium (UX) | Every compiled panic says `panic at <tmp>/x_tur.c:1127` -- `__FILE__`/`__LINE__` expanded inside `tur_panic` itself (`emit_module.c:14423`), so it names the runtime, never the caller, even under `--debug`. The interpreter prints an empty `panic at`; a failed `:pre` says only `Precondition failed`; `--panic-trace` prints defer-frame pointers, not a stack. The debugging guide carries the workaround (lldb / `tur debug`) |
 | [panicking-if-branch-leaks-cc-uninitialized-warning](panicking-if-branch-leaks-cc-uninitialized-warning.md) | low | An `if` with `panic` in one branch leaves the result temp unset on that path, so `cc` prints `-Wsometimes-uninitialized` on every `tur run`/`build`. `emit_fns.c:6564` already fixes the whole-body version; the branch-level case is uncovered |
 
+## Found reviewing interpreter rot risk after the JIT default (filed 2026-10-04)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [turi-ios-readiness-unverified](turi-ios-readiness-unverified.md) | medium (platform readiness) | iOS can only run the tree-walking interpreter (no JIT, no runtime dylibs), and since `TUR_JIT` defaulted ON no CI leg builds turi without the JIT. Six areas to check: `TUR_JIT` defaults ON for an iOS configure, `ucontext` fibers, spice loading via `system()`+`dlopen`, FFI limited to the shape table, inline-C bodies (only C1/MIR runs them), `process/spawn` forks. Apple SDK claims unverified -- step 1 is a `-DTUR_JIT=OFF` CI leg, then an iOS cross-compile nightly |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
