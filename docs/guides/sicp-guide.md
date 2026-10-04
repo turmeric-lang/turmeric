@@ -33,8 +33,8 @@ tur run ex1.scm           # compile to a native program, then run it
 tur repl --lang r7rs      # an interactive prompt
 ```
 
-**Which to use.** Start with `tur --interpret`. It runs a file at once and
-handles very deep recursion (see Chapter 1 below). Switch to `tur run` when a
+**Which to use.** Start with `tur --interpret`. It runs a file at once.
+Switch to `tur run` when a
 program is slow, for example the timing exercises in 1.2.6. The first
 `tur run` after installing takes several seconds while Turmeric builds its
 runtime once; later runs take about a second to compile.
@@ -136,9 +136,11 @@ Some things that are worth knowing:
   31 digits. Dividing integers gives an exact fraction, as in the book:
   `(/ 6 4)` is `3/2`. Use a decimal point (`1.0`) when you want a float.
 - **Deep recursion.** 1.2.1 contrasts recursive and iterative processes.
-  The interpreter happily runs a recursive process a million calls deep. A
-  compiled program (`tur run`) handles a hundred thousand but not a
-  million. See "Rough edges" below. Iterative processes (tail calls) run in
+  Both back ends run a recursive process a million calls deep. A compiled
+  program (`tur run`) goes much further: 1.2.1's linear-recursive sum
+  reaches twenty million calls. Past its limit a compiled program stops
+  with `stack overflow: recursion too deep`.
+  Iterative processes (tail calls) run in
   constant space on both, as the book says they should: a ten-million-step
   iterative loop, or `even?`/`odd?` calling each other a million times, is
   fine.
@@ -277,8 +279,9 @@ it is worth reporting.
 - **`error: Unknown operation -- TABLE frob`**: that is the book's own
   `(error "Unknown operation -- TABLE" m)` working as intended. The message
   is printed, then the objects, and the program stops.
-- **A program prints nothing and exits** under `tur run`: probably a very
-  deep recursion (see Chapter 1). Run it with `tur --interpret`.
+- **`stack overflow: recursion too deep`** under `tur run`: a recursive
+  process went tens of millions of calls deep (see Chapter 1). Make it
+  iterative, as 1.2.1 shows.
 - **Turmeric's own syntax in examples elsewhere** (square brackets in
   `defn`, `:int` types) is the main Turmeric language, not Scheme. In a
   `.scm` file you are always writing plain Scheme.
@@ -306,9 +309,6 @@ entry here goes away.
   library of your own. Start file names with a letter: `sec-1.1.scm`.
   `tur --interpret` is not affected.
   [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-program-file-named-with-leading-digit-fails-to-compile.md).
-- **Very deep recursion in a compiled program** (around a million calls)
-  ends the program with no message. Use `tur --interpret`, which handles it.
-  [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-deep-recursion-segfaults-silently.md).
 
 ## What is coming
 

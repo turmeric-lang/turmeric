@@ -1265,6 +1265,28 @@ static void tur_gc_thread_end(tur_gc_thread *t, void *r) {
     tur_gc_self = NULL;
 }
 
+/* The calling thread hands the heap to another thread and will not touch it
+ * again: its record leaves the registry now, so a collection neither signals
+ * it nor scans its stack.  What only it could reach -- its thread-locals and
+ * key values -- it will never read.  r7rs-deep-recursion-segfaults-silently:
+ * the process's initial thread, once main has moved to its big-stack thread
+ * (emit_module.c, emit_deep_stack_runtime), waits in a plain join; it must
+ * not count as a live thread of the program either.  The caller uses the
+ * unwrapped pthread_join afterwards: the wrapped one parks, which needs a
+ * record. */
+static __attribute__((unused)) void tur_gc_leave_thread(void) {
+    tur_gc_state *G = tur_gc_G;
+    tur_gc_thread *t = tur_gc_self;
+    if (!G || !t) return;
+    pthread_mutex_lock(&G->world);
+    t->done = true;
+    t->n_tls = 0;
+    t->gone = true;
+    tur_gc_retire(t);
+    pthread_mutex_unlock(&G->world);
+    tur_gc_self = NULL;
+}
+
 /* Every OS thread the unit starts runs on this trampoline: it records its
  * identity, stack base and thread-local roots, runs what the program asked
  * for, and hands the result to the collector's record until the join.

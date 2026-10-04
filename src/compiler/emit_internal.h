@@ -1061,6 +1061,8 @@ bool emit_c_type_is_scalar(const char *cname);
  * rejects it outright ("braces around scalar initializer", c2mir.c:7781), and
  * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
 char *emit_c_zero_of(const char *cname);
+/* `#lang r7rs`: main's first statement, re-entering on a big stack (emit_module.c). */
+void emit_main_deep_stack_prologue(Buf *out);
 bool emit_str_is_bare_ident(const char *s);
 /* cps-let-binder-bridge-lacks-position-check: the single position-level test --
  * is `v` a bare identifier whose RECORDED emitted C type is exactly
