@@ -28,7 +28,7 @@ spice per OS (48 spices x 2 OSes), plus `discover-spices` and
 Debug+ASan `tur` at the same pinned SHA before doing anything else.
 
 The org's runners are shared between turmeric and turmeric-spices, and the
-macOS pool is small. [ci-aux-suite-latency-plan](ci-aux-suite-latency-plan.md)
+macOS pool is small. [ci-aux-suite-latency-plan](../archive/ci-aux-suite-latency-plan.md)
 section 3 already measured this repo's macOS jobs waiting 40-80 minutes to
 start. A spices run puts 48 macOS jobs into that same queue, and those jobs
 are mostly recompiling the compiler.

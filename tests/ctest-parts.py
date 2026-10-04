@@ -51,7 +51,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # macOS CPU: macOS jobs for this repo wait 40-80 minutes to START while every
 # ubuntu job starts at t+0.  So on Linux the fix for a serial barrier is more
 # jobs, and on macOS it is less work -- adding a macOS job spends the scarce
-# resource.  See docs/upcoming/ci-aux-suite-latency-plan.md section 3.
+# resource.  See docs/archive/ci-aux-suite-latency-plan.md section 3.
 PARTS = {
     "linux": {
         "fixtures": ("include", r"^tur_tests$"),

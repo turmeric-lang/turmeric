@@ -27,7 +27,7 @@ jobs:
   # Docs-only gate.  A PR that touches nothing outside docs/ cannot change what
   # the compiler does, so the build-and-suite jobs below are skipped for it --
   # including their macOS legs, which wait on a small shared runner pool (see
-  # docs/upcoming/ci-aux-suite-latency-plan.md section 3).  A skipped job
+  # docs/archive/ci-aux-suite-latency-plan.md section 3).  A skipped job
   # reports "skipped", which is not a failure.
   #
   # Two outputs, because docs/ is not all inert:
@@ -109,13 +109,12 @@ jobs:
     # aux job from 18m12s to 67m28s in ONE merge (#1007, 8bb60d016).  Both are
     # RUN_SERIAL for the same reason as the r7rs pair, and together they were
     # 70% of the job.  `fconv` and `gsm1`/`gsm2` are the answer, and the leg
-    # asymmetry below is the rest of it.  PROJECTED from the pre-change
-    # measurements, not yet observed: macOS aux 66 -> ~27 min, Linux aux
-    # ~15 min with the two suites moved out.  Check them against the real trend
-    # (branch `ci-metrics`, suite-timings-2026.jsonl) once this has run a few
-    # times, and correct this comment to measured numbers then -- the "~13 min"
-    # that used to be here was measured, and went stale in two days anyway, so
-    # a number in this comment is worth only as much as its date.
+    # asymmetry below is the rest of it.  MEASURED 2026-10-04 on main: macOS
+    # aux 66 -> ~16-18 min, Linux aux ~16-17 min, gsm1/gsm2 ~12-16 min, fconv
+    # ~7-12 min (docs/archive/ci-aux-suite-latency-plan.md section 11).  The
+    # "~13 min" that used to be here was measured too, and went stale in two
+    # days, so a number in this comment is worth only as much as its date --
+    # re-check it against branch `ci-metrics` (suite-timings-2026.jsonl).
     #
     # The parts must between them run every registered test, and that is no
     # longer something to verify by hand: every pattern below comes from
@@ -131,14 +130,14 @@ jobs:
     # default, which is why a 67-minute macOS aux job passed quietly instead of
     # saying anything.  A number here is a diagnostic, not a budget.
     #
-    # 90, against a projected ~27 min for the slowest part (macOS aux) plus a
-    # cold-cache build: deliberately loose, because a timeout-minutes kill is the
-    # one outcome with NO diagnostics -- it cancels the job and leaves the
-    # `if: always()` timing uploads pending, so a run killed here tells you less
-    # than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
+    # 60, against a measured ~18 min for the slowest part (macOS aux, 2026-10-04;
+    # was 90 against a ~27 min projection): deliberately loose, because a
+    # timeout-minutes kill is the one outcome with NO diagnostics -- it cancels
+    # the job and leaves the `if: always()` timing uploads pending, so a run
+    # killed here tells you less than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
     # the tight bound and they name the suite; this is only the outer fence.
-    # Tighten it once the post-split durations are in the trend, not before.
-    timeout-minutes: 90
+    # Re-derive it from the trend, not from a projection, if the parts move.
+    timeout-minutes: 60
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
     # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
@@ -908,23 +907,21 @@ jobs:
           # any other break in test registration would sail through as a green
           # step that ran no tests -- the same vacuous-pass shape that step
           # exists to prevent.
-          # tur_flags_tests is here as well as in the `test` job, and the
-          # duplication is the point: it is the only harness carrying the
-          # `jit-ffi-*` cases, and EVERY one of them is gated on the engine
-          # being present (`HAS_JIT`), so in the `test` job -- which builds
-          # without -DTUR_JIT=ON -- they all SKIP.  Before this line nothing
-          # in CI ran run-flags.sh against a JIT build on any runner, which
-          # meant the interpreter's whole dynamic-FFI surface (call-ptr,
-          # thunk-backed extern-c, callbacks, struct-by-value) was asserted
-          # only by hand.  The aarch64 HFA refusal in particular is
-          # `#if defined(__aarch64__)` and had NEVER executed anywhere: this
-          # macOS leg is the only arm64 machine in the matrix, so this line
-          # is what turns that case from documentation into a test.
+          # tur_flags_tests is NOT here any more.  It used to be, because its
+          # `jit-ffi-*` cases are gated on the engine (`HAS_JIT`) and the `test`
+          # job built without it, so they all SKIPped there.  Since TUR_JIT
+          # defaulted ON (2026-10-02) the `test` job runs the same Debug + JIT +
+          # ASan build and the same cases (134 passed on Linux, 137 on macOS,
+          # identical in both jobs), including the arm64 HFA refusal on its
+          # macOS leg.  Running it here as well bought no coverage and put two
+          # rows per run into one ci-metrics series (both jit=true now), which
+          # drew the suite as a zig-zag between ~9s and ~28s.
           #
           # --output-junit rides along for the suite-timing trend
           # (docs/archive/suite-timing-trends-plan.md).  These rows carry
-          # jit=true from the build cache, so they form their own series and
-          # are never averaged against the `test` job's jit=false rows.
+          # jit=true, and since TUR_JIT defaulted ON so do the `test` job's: the
+          # two jobs share one ci-metrics environment.  That is why no suite
+          # may run in both -- it would draw two points per run in one series.
           #
           # macos-jit-hang-loses-both-diagnostics: BOUNDED INSIDE THE JOB
           # BUDGET, which is the whole reason the instrumentation above finally
@@ -952,7 +949,7 @@ jobs:
           perl -e 'alarm 2550; exec @ARGV' \
             ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
                 --test-output-size-passed 262144 --test-output-truncation head \
-                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
           rc=${PIPESTATUS[0]}

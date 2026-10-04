@@ -1,5 +1,8 @@
 # A child forked under the sanitized `tur jit` can hang on ASan's allocator lock
 
+**RESOLVED 2026-10-04** -- the closure condition below is met; see "Confirmed
+in CI".
+
 **Severity: low (CI flake on the JIT legs; no product impact).** Only the Debug
 (`-fsanitize=address`) `tur jit` is affected, because only there does the
 program run on ASan's allocator: the compiled build and a Release `tur jit`
@@ -8,7 +11,7 @@ exactly what CI's `JIT engine` legs run, so there it shows up as an
 intermittent failure.
 
 Found 2026-09-29 while validating the JIT prune
-([jit-suite-pays-for-the-whole-prelude](../archive/jit-suite-pays-for-the-whole-prelude.md));
+([jit-suite-pays-for-the-whole-prelude](jit-suite-pays-for-the-whole-prelude.md));
 it reproduces identically with `TUR_JIT_NO_PRUNE=1`, so it is not caused by
 that change.
 
@@ -20,7 +23,7 @@ newest, 9 are this one and the other 9 are a since-fixed fixture. So the
 leg is `continue-on-error` none of it is visible. That raises the value of the
 fixture-side skip below without changing this report's severity -- it is still
 a CI flake with no product impact. Details and method in
-[jit-linux-leg-failures-absorbed](../archive/jit-linux-leg-failures-absorbed.md).
+[jit-linux-leg-failures-absorbed](jit-linux-leg-failures-absorbed.md).
 
 ## Repro
 
@@ -59,11 +62,11 @@ does not, so any child of a multithreaded sanitized process that allocates can
 hang.
 
 This is the same shape as the archived
-[jit-fork-child-hangs-with-threads](../archive/jit-fork-child-hangs-with-threads.md)
+[jit-fork-child-hangs-with-threads](jit-fork-child-hangs-with-threads.md)
 (the JIT's `g_gen_lock`, fixed with `pthread_atfork` in `src/jit_engine.c`).
 That fix is in place and holds. This lock is ASan's, which `tur` cannot take.
 
-## Direction 1 implemented 2026-10-03 -- OPEN until CI confirms
+## Direction 1 implemented 2026-10-03 -- CONFIRMED in CI 2026-10-04
 
 The host now tells the program: `src/jit_engine.c`'s `JIT_PRELUDE` carries
 `#define TUR_JIT_HOST_ASAN 1` when, and only when, `tur` itself was built with
@@ -103,11 +106,29 @@ the CI closure condition still stands. Two notes from that work:
   lock, because MIR's generator runs in the host and allocates through it.
 - **Coverage traded.** This check was the only one exercising the
   `g_gen_lock` `pthread_atfork` fix
-  ([jit-fork-child-hangs-with-threads](../archive/jit-fork-child-hangs-with-threads.md))
+  ([jit-fork-child-hangs-with-threads](jit-fork-child-hangs-with-threads.md))
   under the JIT, and every CI JIT leg that can fork is a Debug (ASan) build,
   so that fix now runs unexercised in CI. A Release `tur jit` leg, or fix
   direction 2 below, would restore it -- delete the `#ifdef` in `life-forks`
   then.
+
+## Confirmed in CI, 2026-10-04
+
+Over `origin/ci-metrics`, `tur_jit_fixture_tests` on `JIT engine
+(ubuntu-latest)` since #1050 merged (`5d250958`): **25 of 26 runs green, the
+last 17 in a row** -- past the ~15-consecutive closure condition above, against
+18% red before. No run since has printed `(fork-failures 1)`.
+
+The one red run in that window (`37149022036`, `dde72b1fd`, 2026-10-03 20:24Z)
+did fail on this fixture, but with a different symptom: `exited 1 (expected
+0)`, not the `stdout mismatch` a fork failure produces (the fork check prints a
+count; it does not change the exit status). That is a separate finding, filed
+as [jit-r7rs-threads-lifecycle-exited-1-once](../reported/jit-r7rs-threads-lifecycle-exited-1-once.md).
+40 local runs of the CI configuration (Debug + `TUR_JIT`, `detect_leaks=0`,
+4 at a time) were all clean.
+
+The coverage note above still stands: the `g_gen_lock` `pthread_atfork` fix
+runs unexercised on CI's sanitized JIT legs.
 
 ## Fix directions
 
