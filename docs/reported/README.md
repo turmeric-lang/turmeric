@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing #1075's CI (filed 2026-10-04)
+
+Three legs timed out building two new r7rs fixtures. They were not slow
+fixtures: one of them sorts first and paid a cold prelude compile that the
+suite's warm-up should have absorbed.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md) | medium | The "program-independent" cached prelude object is not: fresh-name counters, whole-program CPS decisions and irrelevant `-I` flags reach its text, so 114 r7rs fixtures need 10 objects at 5-14 s each cold, a lambda alone forks a new one, `run.sh`'s warm-up warms the wrong variant, and the cache is never evicted. Importing a library is not the cause |
+
 ## Editor integration surfaces (filed 2026-10-03)
 
 All resolved and archived. These are the six findings from bringing
