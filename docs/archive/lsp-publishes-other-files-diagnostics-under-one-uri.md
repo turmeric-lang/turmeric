@@ -77,12 +77,20 @@ included header:
   client can jump to it. The `"file"` key stays for existing consumers.
 
 A file this document does not name directly -- one loaded by a loaded file --
-gets no anchor and falls back to the first line. The prefix and the related
-location still say where it really is. `tur mcp` and `tur check --json` keep
+is anchored through its origin chain (follow-up, 2026-10-04). The loader of
+each `load`ed or imported file records the span of the form that named it
+(`diag_set_file_origin`, `src/compiler/diag.c`); `lsp_append` walks that chain
+up to the file the document names, and the anchor is the document's `load` /
+`import` of it -- found by the same text scan, with the recorded span as the
+fallback. The message names the step: `in deep.tur:1:29 (via mid.tur): ...`.
+Only a file the chain does not reach (the auto-loaded stdlib) falls back to
+the first line. `tur mcp` and `tur check --json` keep
 the old shape: they are not publishing for a document, so the entries keep
 their own coordinates.
 
 Pinned by `tests/lsp/cross-file-diagnostics.py` (ctest
 `lsp_cross_file_diagnostics`): a loaded file's error is anchored on the `load`
 string with the prefix and related location, a sibling import's error on the
-module name, and an own-file error stays where it is (the control).
+module name, a load-of-a-load and an import-of-an-import on the document's
+own form with `(via ...)` in the message, and an own-file error stays where it
+is (the control).

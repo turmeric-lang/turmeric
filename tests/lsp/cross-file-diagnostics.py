@@ -161,6 +161,55 @@ try:
         report(False, "import anchor", "no diagnostic for greeter.tur (%r)"
                % ([d.get("message", "")[:40] for d in last],))
 
+    # -- a file loaded BY a loaded file lands on the document's `load` --------
+    # The document never names deep.tur, so the anchor is the `load` of the
+    # file that does (the origin chain, diag_set_file_origin).
+    deep = os.path.join(work, "deep.tur")
+    write(deep, "(defn deep-helper [] : int (undefined-deep-fn 1))\n")
+    mid = os.path.join(work, "mid.tur")
+    write(mid, ';; mid\n(load "%s")\n(defn mid-helper [] : int 1)\n' % deep)
+    top = os.path.join(work, "top.tur")
+    text = ';; header\n;; more\n(load "%s")\n(defn main [] : int 0)\n' % mid
+    last = session(top, text, work) or []
+    foreign = [d for d in last if "undefined-deep-fn" in d.get("message", "")]
+    if not foreign:
+        report(False, "transitive load", "no diagnostic for deep.tur (%r)"
+               % (last,))
+    else:
+        d = foreign[0]
+        col = text.splitlines()[2].index('"')
+        rel = (d.get("relatedInformation") or [{}])[0].get("location", {})
+        report(d["range"]["start"] == {"line": 2, "character": col}
+               and d["message"].startswith("in deep.tur:1:")
+               and "(via mid.tur)" in d["message"]
+               and rel.get("uri", "").endswith("/deep.tur"),
+               "transitive load", "range %r, message %r, related %r"
+               % (d["range"]["start"], d["message"][:50],
+                  rel.get("uri", "")[-12:]))
+
+    # -- the same through modules: entry imports outer, outer imports inner --
+    write(os.path.join(work, "inner-mod.tur"),
+          "(defmodule inner-mod\n  (export inner)\n"
+          "  (defn inner [] : int (no-such-inner 1)))\n")
+    write(os.path.join(work, "outer-mod.tur"),
+          "(defmodule outer-mod\n  (export outer)\n"
+          "  (import inner-mod :refer [inner])\n"
+          "  (defn outer [] : int (inner)))\n")
+    text = ("(defmodule chain-main\n  (export)\n"
+            "  (import outer-mod :refer [outer])\n"
+            "  (defn main [] : int (outer)))\n")
+    last = session(os.path.join(work, "chain_main.tur"), text, "/") or []
+    foreign = [d for d in last if "no-such-inner" in d.get("message", "")]
+    if foreign:
+        want = {"line": 2, "character": text.splitlines()[2].index("outer-mod")}
+        report(foreign[0]["range"]["start"] == want
+               and "(via outer-mod.tur)" in foreign[0]["message"],
+               "transitive import", "range %r, message %r"
+               % (foreign[0]["range"]["start"], foreign[0]["message"][:60]))
+    else:
+        report(False, "transitive import", "no diagnostic for inner-mod.tur "
+               "(%r)" % ([d.get("message", "")[:40] for d in last],))
+
     # -- a sibling reader-macro file resolves the same way --------------------
     rm_src = os.path.join(ROOT, "tests", "fixtures", "reader-macros-use")
     shutil.copy(os.path.join(rm_src, "macros.tur"), work)

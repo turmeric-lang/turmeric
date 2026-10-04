@@ -888,6 +888,7 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
         sfile->lang        = dialect;
     }
     diag_register_file(sfile);
+    diag_set_file_origin(sfile->file_id, import_span);
 
     /* Parse the source into forms.
      *

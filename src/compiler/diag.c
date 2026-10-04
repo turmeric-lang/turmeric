@@ -13,6 +13,7 @@
 #define MAX_SECONDARY_SPANS 4
 
 static const SourceFile *files_[MAX_FILES];
+static Span              origins_[MAX_FILES];  /* see diag_set_file_origin */
 static size_t            file_count_;
 static bool              had_error_;
 static uint64_t          error_serial_;   /* count of SHOWN (uncaptured) errors */
@@ -42,7 +43,15 @@ void diag_register_file(const SourceFile *file) {
         abort();
     }
     files_[file->file_id] = file;
+    origins_[file->file_id] = SPAN_UNKNOWN;
     if (file->file_id >= file_count_) file_count_ = (size_t)file->file_id + 1;
+}
+
+void diag_set_file_origin(uint16_t file_id, Span origin) {
+    if (file_id >= MAX_FILES || origin.line == 0 ||
+        origin.file_id >= MAX_FILES || origin.file_id == file_id)
+        return;
+    origins_[file_id] = origin;
 }
 
 uint16_t diag_alloc_file_id(void) {
@@ -3256,6 +3265,12 @@ typedef struct DiagLspEntry {
     uint32_t  col_end0;     /* 0-based */
     char      file[256];    /* path copied at emit time (avoids dangling ptr) */
     char      message[512];
+    /* The outermost file on the origin chain (diag_set_file_origin) -- the
+     * one the entry file named -- and the span of the form that named it, in
+     * `via_parent`.  Empty when the file has no recorded origin. */
+    char      via[256];
+    char      via_parent[256];
+    uint32_t  via_line0, via_col_start0, via_col_end0;
 } DiagLspEntry;
 
 static bool          lsp_collect_ = false;
@@ -3306,6 +3321,26 @@ static void lsp_append(DiagLevel level, DiagCode code, Span span, const char *ms
     const SourceFile *f = (span.file_id < MAX_FILES) ? files_[span.file_id] : NULL;
     snprintf(e->file, sizeof(e->file), "%s", f && f->path ? f->path : "");
     snprintf(e->message, sizeof(e->message), "%s", msg ? msg : "");
+
+    /* Walk the origin chain while the SourceFiles are still alive.  The
+     * depth cap only guards a cycle (a file loading itself back). */
+    e->via[0] = e->via_parent[0] = '\0';
+    uint16_t cur = span.file_id, top = MAX_FILES;
+    Span top_origin = SPAN_UNKNOWN;
+    for (int d = 0; d < 64 && cur < MAX_FILES && origins_[cur].line > 0; d++) {
+        top = cur;
+        top_origin = origins_[cur];
+        cur = top_origin.file_id;
+    }
+    if (top < MAX_FILES && files_[top] && files_[top]->path &&
+        files_[top_origin.file_id] && files_[top_origin.file_id]->path) {
+        snprintf(e->via, sizeof(e->via), "%s", files_[top]->path);
+        snprintf(e->via_parent, sizeof(e->via_parent), "%s",
+                 files_[top_origin.file_id]->path);
+        e->via_line0      = top_origin.line - 1;
+        e->via_col_start0 = top_origin.col_start > 0 ? top_origin.col_start - 1 : 0;
+        e->via_col_end0   = top_origin.col_end > 0 ? top_origin.col_end - 1 : 0;
+    }
 }
 
 /* Build the LSP diagnostics array.  With `doc_path` set, entries from another
@@ -3334,11 +3369,35 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
         uint32_t line0 = e->line0, cs0 = e->col_start0, ce0 = col_end;
         char rel_uri[1024];
         bool have_uri = false;
+        /* The file the document names, when it is not e->file itself: the
+         * outermost file on the origin chain, if that chain reaches here. */
+        const char *via = NULL;
+        if (foreign && e->via[0] && strcmp(e->via, e->file) != 0 &&
+            strcmp(e->via, doc_path) != 0)
+            via = e->via;
         if (foreign) {
             line0 = 0; cs0 = 0; ce0 = 1;
             rel_uri[0] = '\0';
-            have_uri = relocate(ctx, e->file, &line0, &cs0, &ce0,
+            bool anchored = false;
+            have_uri = relocate(ctx, e->file, &line0, &cs0, &ce0, &anchored,
                                 rel_uri, sizeof(rel_uri));
+            /* lsp-transitive-load-anchors-on-line-one: a file loaded by a
+             * loaded file is not named in the document; anchor on the form
+             * that names the outermost file on its chain instead. */
+            if (!anchored && via) {
+                char via_uri[1024];
+                uint32_t l = 0, c0 = 0, c1 = 1;
+                (void)relocate(ctx, via, &l, &c0, &c1, &anchored,
+                               via_uri, sizeof(via_uri));
+                if (anchored) { line0 = l; cs0 = c0; ce0 = c1; }
+            }
+            /* The text scan missed (a form split across lines, a path spelled
+             * differently): fall back to the span the compiler recorded. */
+            if (!anchored && e->via[0] && strcmp(e->via_parent, doc_path) == 0) {
+                line0 = e->via_line0;
+                cs0   = e->via_col_start0;
+                ce0   = e->via_col_end0;
+            }
             if (ce0 <= cs0) ce0 = cs0 + 1;
         }
 
@@ -3361,8 +3420,18 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
                 if (strncmp(e->file, doc_path, dl) == 0 && e->file[dl])
                     shown = e->file + dl;
             }
-            buf_printf(&m, "in %s:%u:%u: %s", shown, e->line0 + 1,
-                       e->col_start0 + 1, e->message);
+            buf_printf(&m, "in %s:%u:%u", shown, e->line0 + 1,
+                       e->col_start0 + 1);
+            if (via) {
+                const char *vshown = via;
+                if (slash) {
+                    size_t dl = (size_t)(slash - doc_path) + 1;
+                    if (strncmp(via, doc_path, dl) == 0 && via[dl])
+                        vshown = via + dl;
+                }
+                buf_printf(&m, " (via %s)", vshown);
+            }
+            buf_printf(&m, ": %s", e->message);
             buf_putc(&m, '\0');
             json_escape_string(b, m.data);
             buf_free(&m);
@@ -3818,8 +3887,13 @@ void diag_lsp_end(void) {
 void diag_lsp_remap_path(const char *from_path, const char *to_path) {
     if (!from_path || !to_path) return;
     for (size_t i = 0; i < lsp_entry_count_; i++) {
-        if (strcmp(lsp_entries_[i].file, from_path) == 0)
-            snprintf(lsp_entries_[i].file, sizeof(lsp_entries_[i].file), "%s", to_path);
+        DiagLspEntry *e = &lsp_entries_[i];
+        if (strcmp(e->file, from_path) == 0)
+            snprintf(e->file, sizeof(e->file), "%s", to_path);
+        if (strcmp(e->via, from_path) == 0)
+            snprintf(e->via, sizeof(e->via), "%s", to_path);
+        if (strcmp(e->via_parent, from_path) == 0)
+            snprintf(e->via_parent, sizeof(e->via_parent), "%s", to_path);
     }
 }
 

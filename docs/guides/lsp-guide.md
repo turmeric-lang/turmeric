@@ -53,7 +53,11 @@ Behaviours worth knowing about:
   form that names that file. Its message starts with the real location (`in
   lib.tur:1:24: ...`), and the location is also attached as
   `relatedInformation` so the editor can jump to it. A file the document does
-  not name directly -- one loaded by a loaded file -- shows on the first line.
+  not name directly -- one loaded by a loaded file -- shows on the document's
+  `load` / `import` that leads to it, with `(via mid.tur)` in the message.
+  This is clangd's model for errors in an included header: each document's
+  analysis publishes only under that document's URI, so two open documents
+  never overwrite each other's diagnostics.
 - **Paths resolve as they do for `tur check`.** A sibling `(import mod)` and
   `#use-reader-macros "x.tur"` resolve against the document's own directory,
   and `(load "x.tur")` against the server's working directory -- which is

@@ -1380,6 +1380,7 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
             sfile->lang        = dialect;
         }
         diag_register_file(sfile);
+        diag_set_file_origin(sfile->file_id, path_f->span);
         /* Transitive-RM (T2): share the entry file's macro registry. */
         uint32_t lf_n = 0;
         bool had_error_before_load = diag_had_error();

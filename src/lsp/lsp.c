@@ -383,7 +383,7 @@ static void doc_symbol_view(const LspDoc *doc,
  * client can still jump there. */
 static bool relocate_foreign_diag(void *ctx, const char *foreign_path,
                                   uint32_t *line0, uint32_t *col_start0,
-                                  uint32_t *col_end0,
+                                  uint32_t *col_end0, bool *anchored,
                                   char *uri_out, size_t uri_cap) {
     const LspDoc *doc = (const LspDoc *)ctx;
     unsigned l = 0, cs = 0, ce = 1;
@@ -392,6 +392,7 @@ static bool relocate_foreign_diag(void *ctx, const char *foreign_path,
         *line0 = l;
         *col_start0 = cs;
         *col_end0 = ce;
+        *anchored = true;
     }
     /* `load` paths are recorded as written (cwd-relative), so resolve before
      * building a URI; a path that no longer resolves gets no related
