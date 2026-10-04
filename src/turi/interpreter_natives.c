@@ -3698,6 +3698,31 @@ static TuriValue native_r7rs_thread_now(TuriEnv *env, TuriValue *a, uint32_t n, 
     (void)env; (void)a; (void)n; (void)ud;
     return turi_float(r7rs_thread_now());
 }
+/* r7rs-apply-variadic-over-eight-arguments: twins of the prelude's
+ * r7rs-variadic-fixed__ / r7rs-call-variadic__.  The interpreter's call has
+ * no eight-argument ceiling, so the "fixed count" is 0 for any procedure and
+ * the call spreads the whole list; a fixed-arity callee then reports its own
+ * arity error, as a direct call would. */
+static TuriValue native_r7rs_variadic_fixed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(n >= 1 && a[0].tag == TURI_CLOSURE ? 0 : -1);
+}
+static TuriValue native_r7rs_call_variadic(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_error("apply: internal: bad call");
+    int64_t len = r7rs_arg_int(a, n, 2);
+    TuriValue car = turi_env_get(env, "r7rs-car"), cdr = turi_env_get(env, "r7rs-cdr");
+    TuriValue *av = (TuriValue *)malloc((size_t)(len ? len : 1) * sizeof *av);
+    if (!av) return turi_error("apply: out of memory");
+    TuriValue cur = a[3];
+    for (int64_t i = 0; i < len; i++) {
+        av[i] = turi_call(env, car, &cur, 1);
+        cur = turi_call(env, cdr, &cur, 1);
+    }
+    TuriValue r = turi_call_dynamic(env, a[0], av, (uint32_t)len);
+    free(av);
+    return r;
+}
 static TuriValue native_r7rs_same_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_bool(false);
@@ -4577,6 +4602,8 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-dyn-ref__",        native_r7rs_dyn_ref,         NULL);
     turi_env_register_native(env, "r7rs-dyn-set__",        native_r7rs_dyn_set,         NULL);
     turi_env_register_native(env, "r7rs-dyn-unset?__",     native_r7rs_dyn_unset,       NULL);
+    turi_env_register_native(env, "r7rs-variadic-fixed__", native_r7rs_variadic_fixed,  NULL);
+    turi_env_register_native(env, "r7rs-call-variadic__",  native_r7rs_call_variadic,   NULL);
     /* The inline-C layer of stdlib/r7rs/thread.tur (only an inline-C defn
      * yields to a native of its name); the monitor is a dummy here. */
     turi_env_register_native(env, "r7rs-thread-spawn-c__", native_r7rs_thread_spawn,    NULL);

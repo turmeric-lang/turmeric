@@ -7589,6 +7589,25 @@ static TuriValue *turi_pack_rest_args(TuriEnv *env, const TuriValue *args,
     return out;
 }
 
+/* A call as a dynamic call site makes it: a variadic closure gets the
+ * surplus packed into its rest chain first.  For natives that apply a
+ * procedure to a computed argument list (r7rs-call-variadic__). */
+TuriValue turi_call_dynamic(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n) {
+    if (fn.tag == TURI_CLOSURE && fn.as_closure && !fn.as_closure->native && fn.as_closure->fn &&
+        ((FnDef *)fn.as_closure->fn)->is_variadic) {
+        const FnDef *vfd = (const FnDef *)fn.as_closure->fn;
+        uint32_t skip = fn.as_closure->skip_env_param ? 1u : 0u;
+        uint32_t want = (uint32_t)vfd->n_params - skip;
+        TuriValue *packed = turi_pack_rest_args(env, args, n, 0, want);
+        if (packed) {
+            TuriValue r = turi_call(env, fn, packed, want);
+            free(packed);
+            return r;
+        }
+    }
+    return turi_call(env, fn, args, n);
+}
+
 static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
     uint32_t idx = e->as.get_field_.field_idx;
     /* Auto-deref an rc<T> receiver: an rc value is a "__rc" wrapper struct

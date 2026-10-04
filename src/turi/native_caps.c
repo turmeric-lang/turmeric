@@ -317,6 +317,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "r7rs-big-radix__", 0 },
     { "r7rs-blen__", 0 },
     { "r7rs-bsubstring__", 0 },
+    { "r7rs-call-variadic__", 0 },
     { "r7rs-cont-capture__", 0 },
     { "r7rs-cont-here?__", 0 },
     { "r7rs-cont-null?__", 0 },
@@ -418,6 +419,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "r7rs-utf8-at__", 0 },
     { "r7rs-utf8-count__", 0 },
     { "r7rs-utf8-ref__", 0 },
+    { "r7rs-variadic-fixed__", 0 },
     { "random-access-bench", TURI_CAP_FS | TURI_CAP_IO },    /* benchmark helper: temp file + stdout */
     { "reactor-new", TURI_CAP_IO },                          /* epoll/kqueue fd and a blocking poll */
     { "read-async", TURI_CAP_IO },                           /* read(2)/write(2) on a caller-supplied raw fd -- 0/1/2 need no open */

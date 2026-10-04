@@ -37,6 +37,9 @@ TuriValue turi_eval_file(TuriEnv *env, const char *path);
  * obtained from turi_env_get() after a turi_eval_file() call.
  * Returns TURI_ERROR on arity mismatch or runtime error. */
 TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args);
+/* turi_call as a dynamic call site makes it: a variadic closure's surplus
+ * arguments are packed into its rest chain. */
+TuriValue turi_call_dynamic(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args);
 
 /* Initialise the diagnostics subsystem for standalone libturi use.
  * Call once before the first turi_eval.  `use_color` enables ANSI colour

@@ -57,3 +57,19 @@ applied to 20 elements.
 `docs/guides/sicp-guide.md` documents this defect in its "Rough edges" list
 (and the workaround in the chapter it affects). When this is fixed, delete
 that entry and any workaround text that only exists because of it.
+
+## Resolution (2026-10-04)
+
+Past eight elements, `r7rs-apply-list__` now hands over to
+`r7rs-apply-long__` (stdlib/r7rs/prelude.tur): when `f` is a registered
+variadic (the dynamic call's own `__tur_dyn_reg_variadic` table, read by
+`r7rs-variadic-fixed__`) with no more fixed parameters than elements,
+`r7rs-call-variadic__` spreads the fixed ones and builds the rest chain with
+the runtime's `__tur_dyn_pack_rest`, then calls the closure's thunk -- the
+first direction above. The interpreter's twins spread the whole list
+through the new `turi_call_dynamic` (eval.c), which packs a variadic's rest
+as a dynamic call site does. A fixed-arity procedure with more than eight
+parameters is still refused compiled, with a message that says so. Pinned by
+`tests/fixtures/r7rs-apply-long` on both back ends (`+` over 100,000
+elements, `max`, `append`, `string-append`, a program's own variadic, and
+leading arguments before the list).

@@ -254,11 +254,6 @@ it is worth reporting.
 These are known defects, each with an open report. When one is fixed, its
 entry here goes away.
 
-- **`apply` with more than eight arguments** stops with `apply: more than 8
-  arguments is not supported`, even for `+` or `append`. For a sum or a
-  maximum over a long list, use `accumulate` (2.2.3) instead of `(apply +
-  lst)`.
-  [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-apply-variadic-over-eight-arguments.md).
 - **A file name starting with a digit** (`1.1.scm`, `3.5-streams.scm`)
   fails under `tur run` with C compiler errors once the file imports a
   library of your own. Start file names with a letter: `sec-1.1.scm`.

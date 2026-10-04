@@ -1,0 +1,18 @@
+#lang r7rs
+;; docs/archive/r7rs-apply-variadic-over-eight-arguments.md: apply of a
+;; variadic procedure takes a list of any length -- the standard ones and a
+;; program's own -- on both back ends.  A fixed-arity callee past eight
+;; is still refused compiled (the dynamic-call helpers carry eight).
+(import (scheme base) (scheme write))
+(define (iota* n) (let lp ((i n) (acc '())) (if (= i 0) acc (lp (- i 1) (cons i acc)))))
+(write (apply + (iota* 100))) (newline)
+(write (apply max (iota* 20))) (newline)
+(write (apply append (map list (iota* 12)))) (newline)
+(write (apply string-append (map (lambda (i) "ab") (iota* 10)))) (newline)
+(define (sum . xs) (if (null? xs) 0 (+ (car xs) (apply sum (cdr xs)))))
+(write (sum 1 2 3)) (newline)
+(write (apply sum (iota* 20))) (newline)
+(define (tagged tag . xs) (cons tag (length xs)))
+(write (apply tagged 'n (iota* 30))) (newline)
+(write (apply + 1 2 (iota* 10))) (newline)
+(write (apply + (iota* 100000))) (newline)
