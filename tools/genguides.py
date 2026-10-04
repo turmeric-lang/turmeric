@@ -335,6 +335,67 @@ INDEX_PAGE_HEADER = (build_page_header(active='Guides', search='Filter guides')
 # The guides index's filter box. Loaded from guide-index.js (see script_tag).
 INDEX_FILTER_JS_SRC = '''\
 document.addEventListener('DOMContentLoaded', function(){
+    // ---- Recently Added / Recently Updated tabs ----------------------------
+    // The choice is remembered in localStorage, the same way the guide pages'
+    // turmeric/sweet-exp toggle remembers 'guide-syntax'. A #recently-added or
+    // #recently-updated hash (the sidebar links, an old bookmark) wins over
+    // the stored choice for that visit but is not saved as one.
+    var RECENT_KEY = 'guide-recent-tab';
+    var recentBtns = Array.prototype.slice.call(
+      document.querySelectorAll('.recent-tablist .seg-btn'));
+
+    function selectRecent(slug, focus) {
+      var found = recentBtns.some(function(b){ return b.dataset.recentTab === slug; });
+      if (!found) return false;
+      recentBtns.forEach(function(b){
+        var on = b.dataset.recentTab === slug;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+        var panel = document.getElementById(b.dataset.recentTab);
+        if (panel) panel.hidden = !on;
+        if (on && focus) b.focus();
+      });
+      return true;
+    }
+
+    function rememberRecent(slug) {
+      try { localStorage.setItem(RECENT_KEY, slug); } catch (e) {}
+    }
+
+    function selectFromHash() {
+      return selectRecent(location.hash.slice(1), false);
+    }
+
+    if (recentBtns.length) {
+      if (!selectFromHash()) {
+        var stored = null;
+        try { stored = localStorage.getItem(RECENT_KEY); } catch (e) {}
+        if (stored) selectRecent(stored, false);
+      }
+      window.addEventListener('hashchange', selectFromHash);
+      recentBtns.forEach(function(btn, i){
+        btn.addEventListener('click', function(){
+          selectRecent(btn.dataset.recentTab, false);
+          rememberRecent(btn.dataset.recentTab);
+        });
+        // Arrow / Home / End move between tabs (WAI-ARIA tabs pattern).
+        btn.addEventListener('keydown', function(e){
+          var n = recentBtns.length, j = -1;
+          if (e.key === 'ArrowRight') j = (i + 1) % n;
+          else if (e.key === 'ArrowLeft') j = (i - 1 + n) % n;
+          else if (e.key === 'Home') j = 0;
+          else if (e.key === 'End') j = n - 1;
+          if (j < 0) return;
+          e.preventDefault();
+          var slug = recentBtns[j].dataset.recentTab;
+          selectRecent(slug, true);
+          rememberRecent(slug);
+        });
+      });
+    }
+
+    // ---- Filter box ---------------------------------------------------------
     var input = document.querySelector('.search-input');
     if (!input) return;
 
@@ -342,7 +403,13 @@ document.addEventListener('DOMContentLoaded', function(){
       var q = input.value.trim().toLowerCase();
       var visibleItems = 0;
 
-      document.querySelectorAll('.index-card').forEach(function(card) {
+      // The Recently Added / Updated tabs repeat guides the category cards
+      // already list, and one of them is always a hidden tab, so a search hides
+      // the whole box instead of filtering inside it.
+      var recentBox = document.querySelector('.recent-tabs');
+      if (recentBox) recentBox.style.display = q ? 'none' : 'block';
+
+      document.querySelectorAll('.index-card:not(.recent-tabs)').forEach(function(card) {
         var items = card.querySelectorAll('ul li');
         var shown = 0;
         items.forEach(function(li) {
@@ -358,8 +425,11 @@ document.addEventListener('DOMContentLoaded', function(){
       // Sync sidebar category links with card visibility.
       document.querySelectorAll('.sidebar a[href^="#"]').forEach(function(link) {
         var target = document.getElementById(link.getAttribute('href').slice(1));
+        // A recent-tab panel answers for its whole box: an unselected tab is
+        // hidden, but its sidebar link must stay.
+        var box = target && (target.closest('.recent-tabs') || target);
         link.parentElement.style.display =
-          (!target || target.style.display !== 'none') ? '' : 'none';
+          (!box || box.style.display !== 'none') ? '' : 'none';
       });
 
       var noResults = document.querySelector('.search-no-results');
@@ -1676,29 +1746,42 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     sidebar_html = build_sidebar(
         toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
 
-    def dated_card(entries: list[dict], slug: str, heading: str) -> str:
-        """One of the two dated cards above the category grid, or '' if empty."""
-        if not entries:
-            return ''
-        items = ''.join(
+    def dated_items(entries: list[dict]) -> str:
+        return ''.join(
             f'<li><a href="{r["stem"]}.html">{_fmt_inline(r["label"])}</a>'
             f'<span style="color:var(--text-sec)"> -- {r["date"]}</span></li>'
             for r in entries
         )
-        return f'''\
-      <div class="index-card" style="display:block;margin-bottom:1.5rem" id="{slug}">
-        <h3 style="font-family:system-ui;font-size:0.9rem;margin-bottom:0.5rem">{heading}</h3>
-        <ul style="list-style:none;margin:0">{items}</ul>
-      </div>'''
 
-    # Two cards, same shape, stacked: what arrived, then what changed. The
-    # dates are the two ends of each guide's git history -- first commit and
-    # last -- so a guide can honestly appear in both only when it landed and
-    # was then edited on a later day.
-    recent_html = '\n'.join(filter(None, [
-        dated_card(recent, 'recently-added', 'Recently Added'),
-        dated_card(recent_updated, 'recently-updated', 'Recently Updated'),
-    ]))
+    # What arrived, then what changed, as two tabs of one card. The dates are
+    # the two ends of each guide's git history -- first commit and last -- so a
+    # guide can honestly appear in both only when it landed and was then edited
+    # on a later day. The panel ids keep the old card ids, so the sidebar's
+    # #recently-added / #recently-updated links (and any bookmark of them) still
+    # land here; guide-index.js selects the matching tab. The first tab is
+    # selected server-side, so the page reads correctly with no JS at all.
+    tabs = [(slug, heading, entries) for slug, heading, entries in (
+        ('recently-added', 'Recently Added', recent),
+        ('recently-updated', 'Recently Updated', recent_updated),
+    ) if entries]
+    buttons = ''.join(
+        f'<button class="seg-btn{" active" if i == 0 else ""}" role="tab"'
+        f' id="{slug}-tab" data-recent-tab="{slug}" aria-controls="{slug}"'
+        f' aria-selected="{"true" if i == 0 else "false"}"'
+        f' tabindex="{0 if i == 0 else -1}">{heading}</button>'
+        for i, (slug, heading, _) in enumerate(tabs)
+    )
+    panels = ''.join(
+        f'<ul class="recent-panel" role="tabpanel" id="{slug}"'
+        f' aria-labelledby="{slug}-tab" style="list-style:none;margin:0"'
+        f'{"" if i == 0 else " hidden"}>{dated_items(entries)}</ul>'
+        for i, (slug, _, entries) in enumerate(tabs)
+    )
+    recent_html = f'''\
+      <div class="index-card recent-tabs" style="display:block;margin-bottom:1.5rem">
+        <div class="recent-tablist" role="tablist" aria-label="Recent guide changes">{buttons}</div>
+        {panels}
+      </div>''' if tabs else ''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -1713,6 +1796,12 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .index-card ul li {{ margin:0.3rem 0; font-size:0.875rem; }}
     .index-card ul li a {{ color:var(--text-primary); }}
     .index-card ul li a:hover {{ color:var(--gold); }}
+    .recent-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
+    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; transition:all 0.14s; }}
+    .recent-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
+    .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
+    .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
+    .recent-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
   </style>
 </head>
 <body>
@@ -1725,7 +1814,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     <div class="content">
       <div class="module-heading">
         <h1 style="font-family:system-ui;color:var(--gold)">Guides</h1>
-        <div class="module-path">Tutorials, how-tos, and in-depth feature guides for Turmeric</div>
+        <div class="module-path guide-count">There are currently {len(all_stems)} tutorials, how-tos, and in-depth feature guides for Turmeric.</div>
       </div>
 {recent_html}
       <div class="index-grid">
