@@ -696,6 +696,20 @@ bool diag_use_color(void);
 bool stderr_is_tty(void);
 
 void diag_register_file(const SourceFile *file);
+/* Record that `file_id` was pulled into the compile by the form at `origin`
+ * (the `load` string or the `import` form, a span in the file that names it).
+ * Call after diag_register_file, which clears it.  The LSP follows these
+ * links up to the open document, so an error in a file loaded by a loaded
+ * file is drawn on the document's own `load` line.  A span with line 0 (no
+ * source form, e.g. a forced import) records nothing. */
+void diag_set_file_origin(uint16_t file_id, Span origin);
+/* The call site of the outermost macro expansion in progress, and the macro's
+ * name; SPAN_UNKNOWN / NULL when none.  A diagnostic raised inside the
+ * expansion is located in the DEFMACRO's file, so the LSP anchors it on this
+ * call instead -- the code the user actually wrote.  Returns the previous
+ * site so a caller can restore it. */
+Span diag_set_expansion_site(Span site, const char *macro_name,
+                             const char **prev_name);
 /* A fresh file id for a SourceFile a pass reads on its own, outside the
  * elaborator's import/load counter (an R7RS `include`): handed out from the
  * top of the range downwards, so the two never meet. */
@@ -841,11 +855,14 @@ void diag_lsp_flush_array(struct Buf *buf);
  * belongs to ANOTHER file should be drawn in the document being published.
  * Given the foreign file's path, set the 0-based anchor range in the document
  * (typically the `load` / `import` that pulled the file in) and that file's
- * `file://` URI.  Return false to leave the URI out of the related location;
- * the anchor is used either way. */
+ * `file://` URI, and set `*anchored` when an anchor was found.  Return false
+ * to leave the URI out of the related location.  A file the document does not
+ * name directly is retried through the origin chain (diag_set_file_origin):
+ * first the document's `load` / `import` of the outermost file on the chain,
+ * then that form's recorded span. */
 typedef bool (*DiagLspRelocateFn)(void *ctx, const char *foreign_path,
                                   uint32_t *line0, uint32_t *col_start0,
-                                  uint32_t *col_end0,
+                                  uint32_t *col_end0, bool *anchored,
                                   char *uri_out, size_t uri_cap);
 
 /* As diag_lsp_flush_array, for a publish addressed to `doc_path`: an entry

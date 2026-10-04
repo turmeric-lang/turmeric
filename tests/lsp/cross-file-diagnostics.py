@@ -53,10 +53,10 @@ def find_tur():
 TUR = find_tur()
 
 
-def session(path, text, cwd):
+def session(path, text, cwd, env_extra=None):
     """Open `text` as `path` with the server started in `cwd`; return the last
     published diagnostic set, or None when nothing was published."""
-    env = dict(os.environ, TUR_NO_AUTO_SPICE="1")
+    env = dict(os.environ, TUR_NO_AUTO_SPICE="1", **(env_extra or {}))
     p = subprocess.Popen([TUR, "lsp"], stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          cwd=cwd, env=env)
@@ -160,6 +160,121 @@ try:
     else:
         report(False, "import anchor", "no diagnostic for greeter.tur (%r)"
                % ([d.get("message", "")[:40] for d in last],))
+
+    # -- a file loaded BY a loaded file lands on the document's `load` --------
+    # The document never names deep.tur, so the anchor is the `load` of the
+    # file that does (the origin chain, diag_set_file_origin).
+    deep = os.path.join(work, "deep.tur")
+    write(deep, "(defn deep-helper [] : int (undefined-deep-fn 1))\n")
+    mid = os.path.join(work, "mid.tur")
+    write(mid, ';; mid\n(load "%s")\n(defn mid-helper [] : int 1)\n' % deep)
+    top = os.path.join(work, "top.tur")
+    text = ';; header\n;; more\n(load "%s")\n(defn main [] : int 0)\n' % mid
+    last = session(top, text, work) or []
+    foreign = [d for d in last if "undefined-deep-fn" in d.get("message", "")]
+    if not foreign:
+        report(False, "transitive load", "no diagnostic for deep.tur (%r)"
+               % (last,))
+    else:
+        d = foreign[0]
+        col = text.splitlines()[2].index('"')
+        rel = (d.get("relatedInformation") or [{}])[0].get("location", {})
+        report(d["range"]["start"] == {"line": 2, "character": col}
+               and d["message"].startswith("in deep.tur:1:")
+               and "(via mid.tur)" in d["message"]
+               and rel.get("uri", "").endswith("/deep.tur"),
+               "transitive load", "range %r, message %r, related %r"
+               % (d["range"]["start"], d["message"][:50],
+                  rel.get("uri", "")[-12:]))
+
+    # -- the same through modules: entry imports outer, outer imports inner --
+    write(os.path.join(work, "inner-mod.tur"),
+          "(defmodule inner-mod\n  (export inner)\n"
+          "  (defn inner [] : int (no-such-inner 1)))\n")
+    write(os.path.join(work, "outer-mod.tur"),
+          "(defmodule outer-mod\n  (export outer)\n"
+          "  (import inner-mod :refer [inner])\n"
+          "  (defn outer [] : int (inner)))\n")
+    text = ("(defmodule chain-main\n  (export)\n"
+            "  (import outer-mod :refer [outer])\n"
+            "  (defn main [] : int (outer)))\n")
+    last = session(os.path.join(work, "chain_main.tur"), text, "/") or []
+    foreign = [d for d in last if "no-such-inner" in d.get("message", "")]
+    if foreign:
+        want = {"line": 2, "character": text.splitlines()[2].index("outer-mod")}
+        report(foreign[0]["range"]["start"] == want
+               and "(via outer-mod.tur)" in foreign[0]["message"],
+               "transitive import", "range %r, message %r"
+               % (foreign[0]["range"]["start"], foreign[0]["message"][:60]))
+    else:
+        report(False, "transitive import", "no diagnostic for inner-mod.tur "
+               "(%r)" % ([d.get("message", "")[:40] for d in last],))
+
+    # -- an error inside a macro's expansion lands on the call ---------------
+    # The error is located in the DEFMACRO's file -- here the auto-loaded
+    # stdlib/map.tur, which the document never names, so there is no `load`
+    # to anchor on.  The call the user wrote is the right place anyway.
+    text = ("#lang saffron\n"
+            "(defn main [] : int\n"
+            "  (let [m (:: (map-new) (Map Sym int))]\n"
+            "    (println (map-get (map-assoc m \"k\" 1) \"k\")))\n"
+            "  0)\n")
+    last = session(os.path.join(work, "mx.tur"), text, work) or []
+    foreign = [d for d in last if "tur-map-kcheck" in d.get("message", "")]
+    if foreign:
+        d = foreign[0]
+        line = text.splitlines()[3]
+        rel = (d.get("relatedInformation") or [{}])[0].get("location", {})
+        report(d["range"]["start"]["line"] == 3
+               and d["range"]["start"]["character"] == line.index("(map-get")
+               and "(expanding map-get)" in d["message"]
+               and d["message"].startswith("in stdlib/map.tur:")
+               and rel.get("uri", "").endswith("/stdlib/map.tur"),
+               "macro call anchor", "range %r, message %r, related %r"
+               % (d["range"]["start"], d["message"][:70],
+                  rel.get("uri", "")[-16:]))
+    else:
+        report(False, "macro call anchor", "no diagnostic from map.tur (%r)"
+               % ([d.get("message", "")[:40] for d in last],))
+
+    # -- loading a stdlib file explicitly brings none of its own lint --------
+    # TUR-W0039 skipped the auto-loaded stdlib only; arrow.tur's deliberate
+    # free `arr` / `>>>` fallbacks warned on every `(load "stdlib/arrow.tur")`,
+    # which the LSP then drew on the user's `load` line.
+    text = '(load "stdlib/arrow.tur")\n(defn main [] : int 0)\n'
+    last = session(os.path.join(work, "arrows.tur"), text, ROOT)
+    report(last == [], "explicit stdlib load",
+           "clean" if last == [] else "%r" % ([d.get("message", "")[:60]
+                                                for d in (last or [])],))
+
+    # -- an error inside the auto-loaded stdlib itself ------------------------
+    # No form in the document leads to it, so it can only sit at the top; it
+    # must cover the first line (not one character) and say it is the
+    # stdlib's, not the user's.  A copy of the stdlib with one planted error,
+    # selected by TUR_STDLIB_DIR, stands in for a stdlib bug or a mismatched
+    # install.
+    bstd = os.path.join(work, "broken-stdlib")
+    shutil.copytree(os.path.join(ROOT, "stdlib"), bstd)
+    with open(os.path.join(bstd, "option.tur"), "a") as f:
+        f.write("\n(defn __broken-probe [] : int (undefined-probe-fn 1))\n")
+    text = "(defn main [] : int 0)\n"
+    last = session(os.path.join(work, "clean.tur"), text, work,
+                   {"TUR_STDLIB_DIR": bstd}) or []
+    foreign = [d for d in last if "undefined-probe-fn" in d.get("message", "")]
+    if foreign:
+        d = foreign[0]
+        rng = d["range"]
+        report(rng["start"] == {"line": 0, "character": 0}
+               and rng["end"] == {"line": 0, "character": len(text.rstrip())}
+               and d["message"].startswith("in stdlib/option.tur:")
+               and "in the standard library, not in this file" in d["message"]
+               and d.get("relatedInformation"),
+               "stdlib's own error", "range %r, message %r"
+               % (rng, d["message"][:60]))
+    else:
+        report(False, "stdlib's own error", "nothing from option.tur (%r)"
+               % ([d.get("message", "")[:40] for d in last],))
+    shutil.rmtree(bstd, ignore_errors=True)
 
     # -- a sibling reader-macro file resolves the same way --------------------
     rm_src = os.path.join(ROOT, "tests", "fixtures", "reader-macros-use")

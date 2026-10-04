@@ -4763,6 +4763,15 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
          * `.method` call with no matching instance) can point the user at where
          * they wrote the macro call rather than at stdlib/macros.tur. */
         if (e->macro_expand_depth == 0) e->macro_call_site_span = call->span;
+        /* The same site, for the LSP (diag_set_expansion_site).  Saved and
+         * restored rather than cleared: a macro-time evaluation runs a nested
+         * elaborator whose depth starts again at 0. */
+        const char *saved_site_macro = NULL;
+        Span saved_site = SPAN_UNKNOWN;
+        bool outermost = e->macro_expand_depth == 0;
+        if (outermost)
+            saved_site = diag_set_expansion_site(call->span, name->name,
+                                                 &saved_site_macro);
         e->macro_expand_depth++;
         /* macro-expansion provenance: template spans survive expansion, so an
          * error inside generated code points at the DEFMACRO body -- useless
@@ -4788,6 +4797,8 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                           "in expansion of macro '%s' -- the diagnostics above "
                           "are inside code this call generated",
                           name->name);
+            if (outermost)
+                (void)diag_set_expansion_site(saved_site, saved_site_macro, NULL);
             e->macro_expand_depth--;
             return NULL;
         }
@@ -4871,6 +4882,8 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                       "in expansion of macro '%s' -- the diagnostics above are "
                       "inside code this call generated",
                       name->name);
+        if (outermost)
+            (void)diag_set_expansion_site(saved_site, saved_site_macro, NULL);
         e->macro_expand_depth--;
         return out;
     }
