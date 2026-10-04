@@ -13229,8 +13229,8 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
  *
  * After the collector's paste, so `pthread_create` is its registering
  * wrapper, and the collector and call/cc read this thread's own stack bounds
- * (both ask pthreads for the calling thread).  Not on Windows, and not under
- * `tur jit` (`__MIRC__`), whose engine already runs main on a sized thread
+ * (both ask pthreads for the calling thread).  Windows has its own branch
+ * (CreateThread).  Not under `tur jit` (`__MIRC__`), whose engine already runs main on a sized thread
  * (TUR_JIT_STACK_MB).  In a split build it is written into the program unit
  * only (emit_split.h).  A failure to make the thread is not an error --
  * main just runs where it is, as before. */
@@ -13296,6 +13296,49 @@ static void emit_deep_stack_runtime(Buf *out) {
         "    tur_gc_leave_thread();   /* this thread is done with the heap */\n"
         "#endif\n"
         "    (pthread_join)(t, NULL);   /* unwrapped; tur_deep_run exits the process */\n"
+        "    return 1;\n"
+        "}\n"
+        "#define TUR_DEEP_STACK_ENTER(argc, argv) do { if (tur_deep_enter((argc), (argv))) return 0; } while (0)\n");
+    buf_puts(out,
+        /* Windows: the same move with the Win32 calls -- no pthreads needed,
+         * and no collector to register with (TUR_GC_ON is 0 there).  The
+         * stack is a RESERVATION (committed as touched), and call/cc reads
+         * the calling thread's TEB, so it follows the move.  The overflow
+         * message comes from a vectored handler for EXCEPTION_STACK_OVERFLOW;
+         * SetThreadStackGuarantee leaves it room to run.  The exception then
+         * goes on unhandled, as before. */
+        "#elif defined(_WIN32) && !defined(__MIRC__)\n"
+        "#include <windows.h>\n"
+        "int main(int, char **);\n"
+        "typedef struct { int argc; char **argv; } tur_deep_state_t;\n"
+        "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
+        "static LONG WINAPI tur_deep_fault(EXCEPTION_POINTERS *ep) {\n"
+        "    if (ep && ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {\n"
+        "        static const char m[] = \"stack overflow: recursion too deep\\n\";\n"
+        "        DWORD w = 0;\n"
+        "        WriteFile(GetStdHandle(STD_ERROR_HANDLE), m, (DWORD)(sizeof m - 1), &w, NULL);\n"
+        "    }\n"
+        "    return EXCEPTION_CONTINUE_SEARCH;\n"
+        "}\n"
+        "static DWORD WINAPI tur_deep_run(LPVOID p) {\n"
+        "    tur_deep_state_t *s = (tur_deep_state_t *)p;\n"
+        "    ULONG g = 65536;\n"
+        "    if (SetThreadStackGuarantee(&g)) AddVectoredExceptionHandler(1, tur_deep_fault);\n"
+        "    exit(main(s->argc, s->argv));\n"
+        "    return 0;\n"
+        "}\n"
+        "static __attribute__((unused)) int tur_deep_enter(int argc, char **argv) {\n"
+        "    static int tur_deep_entered;\n"
+        "    if (tur_deep_entered) return 0;\n"
+        "    tur_deep_entered = 1;\n"
+        "    if (getenv(\"TUR_NO_DEEP_STACK\")) return 0;\n"
+        "    tur_deep_state_t *s = tur_deep_state();\n"
+        "    s->argc = argc; s->argv = argv;\n"
+        "    SIZE_T sz = sizeof(void *) >= 8 ? ((SIZE_T)1 << 30) : ((SIZE_T)64 << 20);\n"
+        "    HANDLE h = CreateThread(NULL, sz, tur_deep_run, s, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);\n"
+        "    if (!h) return 0;\n"
+        "    WaitForSingleObject(h, INFINITE);   /* tur_deep_run exits the process */\n"
+        "    CloseHandle(h);\n"
         "    return 1;\n"
         "}\n"
         "#define TUR_DEEP_STACK_ENTER(argc, argv) do { if (tur_deep_enter((argc), (argv))) return 0; } while (0)\n"
