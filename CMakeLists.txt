@@ -142,6 +142,10 @@ enable_testing()
 # reaches the network.  MIR also targets ppc64, s390x and riscv64, which no CI
 # leg covers -- -DTUR_JIT=ON opts those in.  An Emscripten toolchain build
 # gets no JIT (MIR's wasm32 target is not wired up as a host engine).
+# Neither do Apple's embedded platforms (iOS, tvOS, watchOS, visionOS): they
+# forbid a JIT outright, so the interpreter is the engine there, and an arm64
+# processor alone must not turn MIR on (docs/reported/turi-ios-readiness-
+# unverified.md).
 #
 # An EXISTING build directory keeps the value it cached, so one configured
 # before this default changed stays OFF until reconfigured with -DTUR_JIT=ON
@@ -152,6 +156,7 @@ enable_testing()
 # found it in the cache) saw the default.
 set(_tur_jit_default OFF)
 if(NOT EMSCRIPTEN AND CMAKE_SIZEOF_VOID_P EQUAL 8
+   AND NOT CMAKE_SYSTEM_NAME MATCHES "^(iOS|tvOS|watchOS|visionOS)$"
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|aarch64|arm64|ARM64)$")
   set(_tur_jit_default ON)
 endif()

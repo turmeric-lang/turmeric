@@ -770,12 +770,17 @@ jobs:
       # precisely the failure mode that let this gap persist.  Fail loudly
       # instead.  `perl -e alarm` is the portable timeout (macOS runners ship
       # no coreutils `timeout`), matching the smoke check in the `test` job.
+      # Needs a real file: a bare `tur jit` prints "usage: tur jit" whether or
+      # not the engine is compiled in, so matching on the usage line passed a
+      # no-JIT build too.  Only an engine-less build prints "carries no JIT
+      # engine"; a real one runs the probe.
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit 2>&1) || true
+          printf '(defn main [] : int (do (println "jit-ok") 0))\n' > /tmp/jit-probe.tur
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit /tmp/jit-probe.tur 2>&1) || true
           echo "$out"
           case "$out" in
-            *"usage: tur jit"*)
+            *"jit-ok"*)
               echo "JIT engine present." ;;
             *)
               echo "::error::tur was built without the MIR JIT engine -- the JIT suites would self-skip and this job would pass vacuously."
@@ -1002,6 +1007,103 @@ jobs:
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+
+  # The interpreter in the configuration that has no JIT to lean on.
+  #
+  # TUR_JIT defaulted ON on 2026-10-02, and from then on every leg above built
+  # with the MIR engine -- so nothing compiled or ran the interpreter the way a
+  # no-JIT platform gets it.  That is not hypothetical: iOS forbids a JIT and
+  # the WASM web REPL has none, and on both the tree-walking interpreter
+  # (src/turi/) is the only engine.  A turi change that quietly leans on
+  # TUR_HAVE_JIT (the c2mir FFI thunks, the C1 inline-C hook) passes every
+  # other leg and only breaks there.  See
+  # docs/reported/turi-ios-readiness-unverified.md.
+  #
+  # Linux only and per PR: Linux runners start immediately (see the `test`
+  # matrix `exclude` comment), and a JIT dependency is cheapest to catch the
+  # day it lands.  The iOS cross-compile half of the same concern is nightly,
+  # in nightly-ios.yml, because it needs a macOS runner.
+  #
+  # Runs tests/run-turi.sh directly, not through ctest, so this job adds no row
+  # to tests/ctest-parts.py: the `test` job still owns turi_fixture_tests, and
+  # this is a second configuration of it, not a part of the partition.
+  interp-nojit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Interpreter without JIT (ubuntu-latest)
+    runs-on: ubuntu-latest
+    # The suite measures ~5 min; 60 leaves room for a cold-cache build and is a
+    # diagnostic, not a budget (same reasoning as the `test` job's number).
+    timeout-minutes: 60
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-nojit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-nojit-${{ runner.os }}-
+
+      - name: Configure (Debug, JIT off)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets: fixtures that fall back to the cc path link libturi.a,
+      # which `--target tur` does not build.
+      - name: Build
+        run: cmake --build build -j
+
+      # The inverse of the `jit` job's presence check.  If -DTUR_JIT=OFF were
+      # ever dropped or overridden, this job would quietly become a second copy
+      # of the `test` job's turi run and report green having tested nothing new.
+      # Needs a real file: a bare `tur jit` prints its usage line whether or
+      # not the engine is compiled in.
+      - name: Verify the JIT engine is absent
+        run: |
+          printf '(defn main [] : int (do (println "hi") 0))\n' > /tmp/nojit-probe.tur
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit /tmp/nojit-probe.tur 2>&1) || true
+          echo "$out"
+          case "$out" in
+            *"carries no JIT engine"*)
+              echo "JIT engine absent, as intended." ;;
+            *)
+              echo "::error::this build carries the MIR JIT engine -- the no-JIT interpreter configuration is not what ran."
+              exit 1 ;;
+          esac
+
+      - name: Interpreter fixture suite (run-turi.sh)
+        run: |
+          set -o pipefail
+          timeout 720 bash tests/run-turi.sh 2>&1 | tee turi.log
+
+      # Skips are where interpreter gaps hide (fixtures with user inline-C are
+      # skipped outright), so record the count where a reader will see it.
+      - name: Record the skip count
+        if: always()
+        run: |
+          line=$(grep -E '^turi fixture summary: ' turi.log | tail -1 || true)
+          echo "${line:-no summary line -- the suite did not finish}"
+          { echo "### Interpreter without JIT"; echo; echo "${line:-no summary line -- the suite did not finish}"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-nojit-${{ runner.os }}-${{ github.sha }}
 
   # cc-path-preamble-split-plan: run the corpus with the WHOLE preamble.
   #
@@ -1576,12 +1678,15 @@ jobs:
       # Same reasoning as the `jit` job: a build that silently lost -DTUR_JIT=ON
       # would pass this job having compiled none of the sources it exists to
       # guard.
+      # Needs a real file -- a bare `tur jit` prints its usage line with or
+      # without the engine (see the `jit` job's copy of this step).
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(timeout 30 ./build-win-jit/tur.exe jit 2>&1) || true
+          printf '(defn main [] : int (do (println "jit-ok") 0))\n' > jit-probe.tur
+          out=$(timeout 30 ./build-win-jit/tur.exe jit jit-probe.tur 2>&1) || true
           echo "$out"
           case "$out" in
-            *"usage: tur jit"*)
+            *"jit-ok"*)
               echo "JIT engine present." ;;
             *)
               echo "::error::tur.exe was built without the MIR JIT engine -- this job would pass having compiled nothing it guards."
