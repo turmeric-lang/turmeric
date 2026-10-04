@@ -1771,6 +1771,11 @@ body.split-dragging * {
     z-index: 9999;
     display: flex;
     flex-direction: column;
+    /* The popovers open below the toolbar; with the Turmeric, Saffron and
+       Scheme example groups a menu is taller than a phone screen, so it
+       scrolls rather than running off the bottom. */
+    max-height: calc(100dvh - 72px);
+    overflow-y: auto;
 }
 .more-menu[hidden] { display: none; }
 .more-item {
