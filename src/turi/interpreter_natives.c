@@ -5011,6 +5011,12 @@ static void wk_register_chan_natives(TuriEnv *env) {
  *                                  signal ended it, or -errno */
 static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
+#if defined(__EMSCRIPTEN__)
+    /* No fork/exec in the browser (and no <sys/wait.h>; see the include
+     * guard at the top of this file). */
+    (void)a; (void)n;
+    return turi_int(-ENOSYS);
+#else
     const char *path = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : NULL;
     if (!path) return turi_int(-EINVAL);
     int64_t argv = (n > 1) ? a[1].as_int : 0;
@@ -5060,6 +5066,7 @@ static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, vo
     }
     return turi_int((int64_t)pid);
 #endif
+#endif /* __EMSCRIPTEN__ */
 }
 static TuriValue native_process_child_of(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;

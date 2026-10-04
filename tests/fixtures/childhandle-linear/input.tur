@@ -5,11 +5,14 @@
 ;; type-checks, while forgetting to wait (a leaked zombie) is a TUR-E0100 and
 ;; double-waiting is a TUR-E0101.
 ;;
+;; Spawns `true` through PATH: macOS has no /bin/true (it is /usr/bin/true),
+;; which the old spawn hid by reporting a failed exec as an ordinary child.
+;;
 ;; Expected output: child ok
 (load "stdlib/process.tur")
 
 (defn main [] : int
-  (match (process/spawn "/bin/true")
+  (match (process/spawn "true")
     ;; the single consumption -- reaps the child
     (Ok child) (match (process/wait child)
                  (Ok st) (do (println (if (exit-status/success? st) "child ok" "child failed")) 0)

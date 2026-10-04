@@ -1,6 +1,10 @@
 ;; stdlib-os-surface-plan P0.3: get-time-ms has real millisecond resolution
 ;; (it used to be time(NULL) * 1000), and monotonic-ns measures durations.
-;; Two reads around a 15 ms sleep differ by >= 15 ms and < 1 s.
+;; Two reads around a 15 ms sleep differ by >= 10 ms and < 1 s.  The lower
+;; bound is 10, not 15: Windows' Sleep can wake a little before 15 ms of real
+;; time (seen on CI: the monotonic delta came in under 15 ms while the
+;; whole-millisecond wall delta rounded up to 15).  A failing check prints the
+;; measured delta instead of `false`, so the diff says what happened.
 (defmodule time-clock-resolution
   (import time :refer [get-time-ms now-ms monotonic-ns sleep-ms])
   (defn main [] : int
@@ -9,7 +13,7 @@
       (sleep-ms 15)
       (let [dw (- (get-time-ms) w0)
             dm (- (monotonic-ns) m0)]
-        (println (and (>= dw 15) (< dw 1000)))
-        (println (and (>= dm 15000000) (< dm 1000000000)))
+        (if (and (>= dw 10) (< dw 1000)) (println true) (println dw))
+        (if (and (>= dm 10000000) (< dm 1000000000)) (println true) (println dm))
         (println (>= (now-ms) w0))))
     0))
