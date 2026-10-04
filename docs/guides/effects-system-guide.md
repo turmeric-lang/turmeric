@@ -407,30 +407,30 @@ enforce that it has the capabilities of everything it calls.
 (import tur/fs :refer [fs/read-text])
 
 ;; OK: declares the FS capability it relies on.
-(defn load-config [path : cstr] #fx{FS} : cstr
+(defn load-config [path : cstr] #fx{FS} : (Result cstr IoError)
   (fs/read-text path))
 
 ;; ERROR (TUR-E0009): claims purity but reaches the file system.
-(defn load-config-bad [path : cstr] #fx{} : cstr
+(defn load-config-bad [path : cstr] #fx{} : (Result cstr IoError)
   (fs/read-text path))
 
 ;; OK: un-annotated, so the row is not checked at all.
-(defn load-config-unchecked [path : cstr] : cstr
+(defn load-config-unchecked [path : cstr] : (Result cstr IoError)
   (fs/read-text path))
 ```
 ```sweet-exp
 import tur/fs :refer [fs/read-text]
 
 ;; OK: declares the FS capability it relies on.
-defn load-config [path : cstr] #fx{FS} : cstr
+defn load-config [path : cstr] #fx{FS} : (Result cstr IoError)
   fs/read-text(path)
 
 ;; ERROR (TUR-E0009): claims purity but reaches the file system.
-defn load-config-bad [path : cstr] #fx{} : cstr
+defn load-config-bad [path : cstr] #fx{} : (Result cstr IoError)
   fs/read-text(path)
 
 ;; OK: un-annotated, so the row is not checked at all.
-defn load-config-unchecked [path : cstr] : cstr
+defn load-config-unchecked [path : cstr] : (Result cstr IoError)
   fs/read-text(path)
 ```
 

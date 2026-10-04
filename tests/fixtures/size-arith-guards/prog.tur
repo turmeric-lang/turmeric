@@ -45,8 +45,11 @@
               (println (grid-get g 1 1))
               (grid-set! g 2 0 9)
               0)
-    ;; ftell is -1 on a pipe: the slurp must fail, not overrun a 0-byte buffer
-    (= c 9) (do (println (= (:: (fs/read-text "/dev/stdin") :int) 0)) 0)
+    ;; ftell is -1 on a pipe: the slurp must read the stream in growing chunks,
+    ;; not overrun a 0-byte buffer (stdlib-os-surface P1: it now succeeds)
+    (= c 9) (match (fs/read-text "/dev/stdin")
+              (Ok s) (do (println s) 0)
+              (Err e) (do (println (io-error/message e)) 1))
     :else (do (println "no such case") 2)))
 
 (defn main [] : int

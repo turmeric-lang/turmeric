@@ -8,19 +8,17 @@
 ;; Wrappers around unistd.h / sys/wait.h primitives.
 ;; process/capture uses popen(3) for capturing stdout.
 ;;
-;; NOTE on argv: the argv parameter is a raw cons list. The (cons ...) examples
-;; in the docstrings below are interpreter idioms -- `cons` is an interpreter
-;; native and is NOT available when you `tur build` / `tur emit-c`. In compiled
-;; programs, pass 0 for an empty argv, build the list with an inline-C cons stub,
-;; or use a stdlib list helper. See the "Interpreter-only natives" section of
-;; docs/guides/c-integration-guide.md.
+;; stdlib-os-surface-plan P1: arguments are variadic cstrs after the program
+;; -- (process/run "/bin/ls" "-l" "/tmp") -- and argv[0] is the program itself,
+;; so callers no longer build a cons list.  Every fallible operation returns
+;; (Result T IoError) (stdlib/io-error.tur); a reaped child reports an
+;; ExitStatus, so a killed child cannot be mistaken for an exit code.
 ;; ---- Opaque handle newtype (stdlib-opaque-handle-types-plan, I/O sweep) ----
 ;; Pid wraps a process id (an :int) with a nominally distinct type, so the
 ;; checker rejects passing an exit code, a byte count, or any unrelated integer
 ;; to process/wait -- only a pid produced by process/pid / -ppid / -spawn is
-;; accepted. process/spawn still encodes its error case as pid -1; recover the
-;; raw integer with (:: pid :int) to compare against it. Pid lowers to :int in
-;; the C ABI, so the inline-C bodies are unchanged.
+;; accepted. Pid lowers to :int in the C ABI, so the inline-C bodies are
+;; unchanged.
 (defopaque Pid :int)
 ;; ---- Linearity (stdlib-linearity-affinity-plan, L2) ----
 ;; ChildHandle is the handle to a spawned child process. It is :linear: a
@@ -30,8 +28,8 @@
 ;; it twice (TUR-E0101). ChildHandle is nominally distinct from Pid so the
 ;; checker also rejects passing a self/parent Pid (from process/pid /
 ;; process/ppid) to process/wait, and vice versa. Like Pid it lowers to :int in
-;; the C ABI; process/spawn still encodes fork failure as a ChildHandle wrapping
-;; -1, recoverable with (:: child :int).
+;; the C ABI.  process/spawn answers (Result ChildHandle IoError), so a
+;; ChildHandle always names a real child.
 
 (defopaque ChildHandle :int :linear)
 ;; stdlib-effect-rows: every process/* entry point touches OS process state, so
@@ -39,6 +37,8 @@
 ;; checking (by annotating their own row) must declare #{Proc} to use them.
 
 (load "stdlib/effects.tur")
+
+(load "stdlib/io-error.tur")
 ;;; process/pid -- return the current process ID.
 ;;;
 ;;; Returns:
@@ -89,285 +89,6 @@
   ```c
   exit((int)code);
   ```)
-;;; process/exec -- replace the current process image with a new program.
-;;;
-;;; Linearises the Turmeric cons list argv into a NULL-terminated char**
-;;; and calls execvp(3).  Does not return on success.
-;;;
-;;; Parameters:
-;;;   path -- NUL-terminated path to the executable
-;;;   argv -- cons list of cstr arguments (head = argv[0])
-;;;
-;;; Returns:
-;;;   -1 if execvp fails (errno set); does not return on success.
-;;;
-;;; Example:
-;;;   (process/exec "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))
-;;;
-;;; Since: Phase B2
-
-(defn process/exec [path : cstr argv : int]
-  #fx{Proc}
-  : int
-  ```c
-  #include <unistd.h>
-  int argc = 0;
-  int64_t tmp = argv;
-  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
-  char **args = (char**)malloc((argc + 1) * sizeof(char*));
-  tmp = argv;
-  for (int i = 0; i < argc; i++) {
-    int64_t *cell = (int64_t*)(intptr_t)tmp;
-    args[i] = (char*)(intptr_t)cell[0];
-    tmp = cell[1];
-  }
-  args[argc] = NULL;
-  execvp(path, args);
-  free(args);
-  return -1;
-  ```)
-;;; process/spawn -- fork and exec a new child process.
-;;;
-;;; Parameters:
-;;;   path -- path to the executable
-;;;   argv -- cons list of cstr arguments (head = argv[0])
-;;;
-;;; Returns:
-;;;   The child as a ChildHandle on success, or a ChildHandle wrapping -1 on
-;;;   fork failure.  The handle is linear: reap it exactly once with
-;;;   process/wait.
-;;;
-;;; Example:
-;;;   (let [child (process/spawn "/bin/ls" (cons "/bin/ls" (cons "-l" 0)))]
-;;;     (process/wait child))
-;;;
-;;; Since: Phase B2
-
-(defn process/spawn [path : cstr argv : int]
-  #fx{Proc}
-  : ChildHandle
-  ```c
-  #ifdef _WIN32
-  #include <process.h>
-#else
-  #include <unistd.h>
-#endif
-  int argc = 0;
-  int64_t tmp = argv;
-  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
-  char **args = (char**)malloc((argc + 1) * sizeof(char*));
-  tmp = argv;
-  for (int i = 0; i < argc; i++) {
-    int64_t *cell = (int64_t*)(intptr_t)tmp;
-    args[i] = (char*)(intptr_t)cell[0];
-    tmp = cell[1];
-  }
-  args[argc] = NULL;
-#ifdef _WIN32
-  /* No fork on Windows.  _spawnvp(_P_NOWAIT) is fork+execvp in one call and
-   * returns a process HANDLE (not a pid) that process/wait reaps with _cwait.
-   * ChildHandle is opaque to callers, so its meaning is unchanged. */
-  intptr_t child = _spawnvp(_P_NOWAIT, path, (const char *const *)args);
-  free(args);
-  return (int64_t)child;   /* -1 on failure, matching the POSIX branch */
-#else
-  pid_t pid = fork();
-  if (pid < 0) { free(args); return -1; }
-  if (pid == 0) { execvp(path, args); _exit(127); }
-  free(args);
-  return (int64_t)pid;
-#endif
-  ```)
-;;; process/wait -- wait for a child process to exit, consuming its handle.
-;;;
-;;; Parameters:
-;;;   child -- ChildHandle returned by process/spawn (consumed)
-;;;
-;;; Returns:
-;;;   The exit status code (0 = clean exit), -1 on error.
-;;;
-;;; Example:
-;;;   (process/wait child)  ; => 0
-;;;
-;;; Since: Phase B2
-
-(defn process/wait [child : ChildHandle]
-  #fx{Proc}
-  : int
-  ```c
-  #ifdef _WIN32
-  /* _cwait yields the child's exit code directly -- there is no POSIX
-   * wait-status word to unpack, so no WIFEXITED/WEXITSTATUS here. */
-  #include <process.h>
-  int status = 0;
-  if (_cwait(&status, (intptr_t)child, 0) == -1) return -1;
-  return (int64_t)status;
-#else
-  #include <sys/wait.h>
-  int status = 0;
-  if (waitpid((pid_t)child, &status, 0) < 0) return -1;
-  if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
-  return -1;
-#endif
-  ```)
-;;; process/run -- spawn a child process and wait for it to finish.
-;;;
-;;; Parameters:
-;;;   path -- path to the executable
-;;;   argv -- cons list of cstr arguments
-;;;
-;;; Returns:
-;;;   An ok result (:int pointer) containing the exit code, or an err
-;;;   result containing a strdup'd error message cstr.  Free with
-;;;   result-free when done.
-;;;
-;;; Example:
-;;;   (process/run "/bin/ls" (cons "/bin/ls" 0))
-;;;
-;;; Since: Phase B2
-
-(defn process/run [path : cstr argv : int]
-  #fx{Proc}
-  : int
-  ```c
-  #include <unistd.h>
-  #include <sys/wait.h>
-  int argc = 0;
-  int64_t tmp = argv;
-  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
-  char **args = (char**)malloc((argc + 1) * sizeof(char*));
-  tmp = argv;
-  for (int i = 0; i < argc; i++) {
-    int64_t *cell = (int64_t*)(intptr_t)tmp;
-    args[i] = (char*)(intptr_t)cell[0];
-    tmp = cell[1];
-  }
-  args[argc] = NULL;
-  #define _RUN_RESULT(ok_flag, oval, eval) \
-    do { \
-      return (ok_flag) ? tur_box_ok((oval)) : tur_box_err((eval)); \
-    } while(0)
-  pid_t pid = fork();
-  if (pid < 0) { free(args); _RUN_RESULT(false, 0, (int64_t)(intptr_t)strdup("fork failed")); }
-  if (pid == 0) { execvp(path, args); _exit(127); }
-  free(args);
-  int status = 0;
-  if (waitpid(pid, &status, 0) < 0) _RUN_RESULT(false, 0, (int64_t)(intptr_t)strdup("waitpid failed"));
-  int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-  _RUN_RESULT(true, (int64_t)code, 0);
-  #undef _RUN_RESULT
-  ```)
-;;; process/capture -- run a command and capture its stdout as a string.
-;;;
-;;; Uses popen(3) internally; argument values are single-quote wrapped
-;;; before being passed to the shell.
-;;;
-;;; Parameters:
-;;;   path -- path to the executable
-;;;   argv -- cons list of cstr arguments
-;;;
-;;; Returns:
-;;;   An ok result containing a heap-allocated NUL-terminated cstr of the
-;;;   captured stdout, or an err result with an error message cstr.
-;;;   Free captured output with free(); free the result with result-free.
-;;;
-;;; Example:
-;;;   (process/capture "/bin/echo" (cons "/bin/echo" (cons "hi" 0)))
-;;;
-;;; Since: Phase B2
-
-(defn process/capture [path : cstr argv : int]
-  #fx{Proc}
-  : int
-  ```c
-  int argc = 0;
-  int64_t tmp = argv;
-  while (tmp) { argc++; tmp = ((int64_t*)(intptr_t)tmp)[1]; }
-  char **args = (char**)malloc((argc + 1) * sizeof(char*));
-  tmp = argv;
-  for (int i = 0; i < argc; i++) {
-    int64_t *cell = (int64_t*)(intptr_t)tmp;
-    args[i] = (char*)(intptr_t)cell[0];
-    tmp = cell[1];
-  }
-  args[argc] = NULL;
-  /* build shell command string with single-quoted args */
-  size_t cmd_cap = strlen(path) + 8;
-  for (int i = 0; i < argc; i++) cmd_cap += strlen(args[i]) + 6;
-  char *cmd = malloc(cmd_cap);
-  size_t cpos = 0;
-  for (int i = 0; i < argc; i++) {
-    if (i > 0) cmd[cpos++] = ' ';
-    cmd[cpos++] = '\'';
-    size_t alen = strlen(args[i]);
-    memcpy(cmd + cpos, args[i], alen);
-    cpos += alen;
-    cmd[cpos++] = '\'';
-  }
-  cmd[cpos] = '\0';
-  free(args);
-  FILE *fp = popen(cmd, "r");
-  free(cmd);
-  #define _CAP_RESULT(ok_flag, oval, eval) \
-    do { \
-      return (ok_flag) ? tur_box_ok((oval)) : tur_box_err((eval)); \
-    } while(0)
-  if (!fp) _CAP_RESULT(false, 0, (int64_t)(intptr_t)strdup("popen failed"));
-  size_t cap = 4096, len = 0;
-  char *buf = malloc(cap);
-  size_t n;
-  while ((n = fread(buf + len, 1, cap - len - 1, fp)) > 0) {
-    len += n;
-    if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
-  }
-  pclose(fp);
-  buf[len] = '\0';
-  _CAP_RESULT(true, (int64_t)(intptr_t)buf, 0);
-  #undef _CAP_RESULT
-  ```)
-;;; process/cwd -- return the current working directory.
-;;;
-;;; Returns:
-;;;   A heap-allocated NUL-terminated cstr of the cwd, or NULL on error.
-;;;   The caller must free the returned string.
-;;;
-;;; Example:
-;;;   (process/cwd)  ; => "/home/user/project"
-;;;
-;;; Since: Phase B2
-
-(defn process/cwd []
-  #fx{Proc}
-  : cstr
-  ```c
-  #include <unistd.h>
-  char *buf = malloc(4096);
-  if (!getcwd(buf, 4096)) { free(buf); return NULL; }
-  return buf;
-  ```)
-;;; process/chdir -- change the current working directory.
-;;;
-;;; Parameters:
-;;;   path -- the target directory path cstr
-;;;
-;;; Returns:
-;;;   0 on success, -1 on error (errno set).
-;;;
-;;; Example:
-;;;   (process/chdir "/tmp")  ; => 0
-;;;
-;;; Since: Phase B2
-
-(defn process/chdir [path : cstr]
-  #fx{Proc}
-  : int
-  ```c
-  #include <unistd.h>
-  return (int64_t)chdir(path);
-  ```)
-;; ============================================================================
-;; stdlib-os-surface-plan P0.4: signals and process/kill
-;; ============================================================================
 ;;; Signal -- a signal to deliver to (or that terminated) a process.
 ;;;
 ;;; SigTerm / SigKill / SigInt / SigHup name the common ones; SigOther carries
@@ -392,6 +113,365 @@
     (= n 2) (SigInt)
     (= n 1) (SigHup)
     :else (SigOther n)))
+;;; ExitStatus -- how a reaped child process ended.
+;;;
+;;; (Exited code) for a normal exit with that status code; (Signaled sig) when
+;;; a signal terminated it.  Two variants, so a caller cannot mistake a killed
+;;; child for exit code 9.  Windows has no signals, so there every child is
+;;; Exited.
+;;;
+;;; Since: stdlib-os-surface P1
+(defdata ExitStatus :copy (Exited int) (Signaled Signal))
+;;; exit-status/success? -- true for (Exited 0).
+;;;
+;;; Parameters:
+;;;   st -- an ExitStatus
+;;;
+;;; Returns:
+;;;   true when the child exited normally with status 0.
+;;;
+;;; Example:
+;;;   (exit-status/success? (Exited 0))  ; => true
+;;;
+;;; Since: stdlib-os-surface P1
+(defn exit-status/success? [st : ExitStatus] : bool
+  (match st
+    (Exited c) (= c 0)
+    (Signaled _) false))
+;; The process/*-raw helpers below take the variadic argument list as its
+;; cons-list carrier (`args : int`, {head,tail} cells of cstr) -- the shape a
+;; `& args : cstr` rest parameter has at run time.  They are internal: the
+;; exported wrappers carry the real types.
+```c
+/* Build a NULL-terminated argv of { path, args... } from a cons carrier. */
+static char **__tur_proc_argv(const char *path, int64_t args) {
+  int argc = 1;
+  for (int64_t t = args; t; t = ((int64_t *)(intptr_t)t)[1]) argc++;
+  char **argv = (char **)malloc((size_t)(argc + 1) * sizeof(char *));
+  if (!argv) return NULL;
+  int i = 0;
+  argv[i++] = (char *)path;
+  for (int64_t t = args; t; t = ((int64_t *)(intptr_t)t)[1])
+    argv[i++] = (char *)(intptr_t)((int64_t *)(intptr_t)t)[0];
+  argv[i] = NULL;
+  return argv;
+}
+```
+;;; process/exec-raw -- execvp with a cons-carrier arg list (internal).
+(defn process/exec-raw [path : cstr args : int]
+  #fx{Proc}
+  : IoError
+  ```c
+  #include <unistd.h>
+  #include <errno.h>
+  char **argv = __tur_proc_argv(path, args);
+  if (!argv) return ENOMEM;
+  execvp(path, argv);
+  int e = errno;
+  free(argv);
+  return (int64_t)e;
+  ```)
+;;; process/exec -- replace the current process image with a new program.
+;;;
+;;; Calls execvp(3) with argv = { path, args... }; PATH is searched when path
+;;; has no slash.  Does not return on success.
+;;;
+;;; Parameters:
+;;;   path -- the program to run (also passed as argv[0])
+;;;   args -- the remaining arguments, one cstr each
+;;;
+;;; Returns:
+;;;   Only on failure: the IoError execvp reported (e.g. not-found).
+;;;
+;;; Example:
+;;;   (process/exec "/bin/ls" "-l")
+;;;
+;;; Since: Phase B2
+(defn process/exec [path : cstr & args : cstr]
+  #fx{Proc}
+  : IoError
+  (process/exec-raw path args))
+;;; process/spawn-raw -- start a child; its pid, or -errno on failure (internal).
+;;
+;; POSIX reports a failed exec through a close-on-exec pipe, so a program that
+;; does not exist is an error from spawn (ENOENT) rather than a child that
+;; exits 127.  The interpreter overrides this helper with a native of the same
+;; contract (src/turi/interpreter_natives.c).
+(defn process/spawn-raw [path : cstr args : int]
+  #fx{Proc}
+  : int
+  ```c
+  #include <errno.h>
+  #include <process.h>  /* tur:optional -- Windows only (_spawnvp) */
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <sys/wait.h>  /* tur:optional -- POSIX only (waitpid) */
+  /* Every include above sits bare at the top so it is hoisted to file scope
+   * (see fs/mkdir in stdlib/fs.tur); a hoisted angle include is guarded by
+   * __has_include, so a platform without one just skips it. */
+  char **argv = __tur_proc_argv(path, args);
+  if (!argv) return -ENOMEM;
+#ifdef _WIN32
+  /* No fork on Windows.  _spawnvp(_P_NOWAIT) is fork+execvp in one call and
+   * returns a process HANDLE (not a pid) that process/wait reaps with _cwait.
+   * ChildHandle is opaque to callers, so its meaning is unchanged. */
+  intptr_t child = _spawnvp(_P_NOWAIT, path, (const char *const *)argv);
+  int e = errno;
+  free(argv);
+  if (child == -1) return -(int64_t)(e ? e : ENOENT);
+  return (int64_t)child;
+#else
+  int fds[2];
+  if (pipe(fds) != 0) { int e = errno; free(argv); return -(int64_t)e; }
+  fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+  pid_t pid = fork();
+  if (pid < 0) { int e = errno; close(fds[0]); close(fds[1]); free(argv); return -(int64_t)e; }
+  if (pid == 0) {
+    close(fds[0]);
+    execvp(path, argv);
+    int e = errno;
+    ssize_t wr = write(fds[1], &e, sizeof e);
+    (void)wr;
+    _exit(127);
+  }
+  close(fds[1]);
+  free(argv);
+  int child_err = 0;
+  ssize_t got;
+  do { got = read(fds[0], &child_err, sizeof child_err); } while (got < 0 && errno == EINTR);
+  close(fds[0]);
+  if (got == (ssize_t)sizeof child_err) {
+    /* exec failed: reap the child now, so the caller holds no handle. */
+    int st;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    return -(int64_t)child_err;
+  }
+  return (int64_t)pid;
+#endif
+  ```)
+;;; process/child-of-raw -- wrap a live child's pid as its ChildHandle (internal).
+(defn process/child-of-raw [pid : int] : ChildHandle
+  ```c
+  return pid;
+  ```)
+;;; process/spawn -- start a new child process running path.
+;;;
+;;; Parameters:
+;;;   path -- the program to run (PATH is searched when it has no slash; also
+;;;           passed as argv[0])
+;;;   args -- the remaining arguments, one cstr each
+;;;
+;;; Returns:
+;;;   (Ok child) -- a linear ChildHandle to reap exactly once with
+;;;   process/wait -- or (Err e) when the child could not be started
+;;;   (e.g. io-error/not-found? for a missing program).
+;;;
+;;; Example:
+;;;   (match (process/spawn "/bin/ls" "-l")
+;;;     (Ok child) (process/wait child)
+;;;     (Err e)    (Err e))
+;;;
+;;; Since: Phase B2
+(defn process/spawn [path : cstr & args : cstr]
+  #fx{Proc}
+  : (Result ChildHandle IoError)
+  (let [r (process/spawn-raw path args)]
+    (if (< r 0)
+      (Err (io-error/of-code (- 0 r)))
+      (Ok (process/child-of-raw r)))))
+;;; process/wait-raw -- reap a child; an encoded status (internal).
+;;
+;; Answers code (0..255) for a normal exit, 256 + signo for a child a signal
+;; terminated, and -errno when waiting failed.  process/wait decodes it.  The
+;; interpreter overrides this helper with a native of the same contract.
+(defn process/wait-raw [child : ChildHandle]
+  #fx{Proc}
+  : int
+  ```c
+  #include <errno.h>
+  #include <process.h>  /* tur:optional -- Windows only (_cwait) */
+  #include <sys/wait.h>  /* tur:optional -- POSIX only (waitpid) */
+#ifdef _WIN32
+  /* _cwait yields the child's exit code directly -- there is no POSIX
+   * wait-status word to unpack, so no WIFEXITED/WEXITSTATUS here. */
+  int status = 0;
+  if (_cwait(&status, (intptr_t)child, 0) == -1) return -(int64_t)errno;
+  return (int64_t)(status & 0xff);
+#else
+  int status = 0;
+  pid_t r;
+  do { r = waitpid((pid_t)child, &status, 0); } while (r < 0 && errno == EINTR);
+  if (r < 0) return -(int64_t)errno;
+  if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
+  if (WIFSIGNALED(status)) return 256 + (int64_t)WTERMSIG(status);
+  return -(int64_t)ECHILD;
+#endif
+  ```)
+;;; process/decode-wait -- turn a process/wait-raw code into a Result (internal).
+(defn process/decode-wait [code : int] : (Result ExitStatus IoError)
+  (cond
+    (< code 0) (Err (io-error/of-code (- 0 code)))
+    (>= code 256) (Ok (Signaled (number->signal (- code 256))))
+    :else (Ok (Exited code))))
+;;; process/wait -- wait for a child process to end, consuming its handle.
+;;;
+;;; Parameters:
+;;;   child -- ChildHandle from process/spawn (consumed)
+;;;
+;;; Returns:
+;;;   (Ok status) -- (Exited code) or (Signaled sig) -- or (Err e) when
+;;;   waiting failed.
+;;;
+;;; Example:
+;;;   (process/wait child)  ; => (Ok (Exited 0))
+;;;
+;;; Since: Phase B2
+(defn process/wait [child : ChildHandle]
+  #fx{Proc}
+  : (Result ExitStatus IoError)
+  (process/decode-wait (process/wait-raw child)))
+;;; process/run -- run a program to completion.
+;;;
+;;; process/spawn followed by process/wait.  The child inherits this process's
+;;; stdin, stdout and stderr; use process/capture or process/output to collect
+;;; its output instead.
+;;;
+;;; Parameters:
+;;;   path -- the program to run (PATH searched when it has no slash)
+;;;   args -- the remaining arguments, one cstr each
+;;;
+;;; Returns:
+;;;   (Ok status) -- how the child ended -- or (Err e) when it could not be
+;;;   started or waited for.
+;;;
+;;; Example:
+;;;   (process/run "/bin/ls" "-l" "/tmp")  ; => (Ok (Exited 0))
+;;;
+;;; Since: Phase B2
+(defn process/run [path : cstr & args : cstr]
+  #fx{Proc}
+  : (Result ExitStatus IoError)
+  (let [r (process/spawn-raw path args)]
+    (if (< r 0)
+      (Err (io-error/of-code (- 0 r)))
+      (process/wait (process/child-of-raw r)))))
+;;; process/capture-raw -- popen-based stdout capture (internal).
+(defn process/capture-raw [path : cstr args : int]
+  #fx{Proc}
+  : (Result cstr IoError)
+  ```c
+  #include <errno.h>
+  char **argv = __tur_proc_argv(path, args);
+  if (!argv) return tur_err_int(ENOMEM);
+  /* Build a shell command with every word single-quoted; an embedded quote
+   * becomes '\'' so no argument can break out of its word. */
+  size_t cmd_cap = 1;
+  for (int i = 0; argv[i]; i++) cmd_cap += 4 * strlen(argv[i]) + 3;
+  char *cmd = (char *)malloc(cmd_cap);
+  if (!cmd) { free(argv); return tur_err_int(ENOMEM); }
+  size_t cpos = 0;
+  for (int i = 0; argv[i]; i++) {
+    if (i > 0) cmd[cpos++] = ' ';
+    cmd[cpos++] = '\'';
+    for (const char *c = argv[i]; *c; c++) {
+      if (*c == '\'') { memcpy(cmd + cpos, "'\\''", 4); cpos += 4; }
+      else cmd[cpos++] = *c;
+    }
+    cmd[cpos++] = '\'';
+  }
+  cmd[cpos] = '\0';
+  free(argv);
+  FILE *fp = popen(cmd, "r");
+  int perr = errno;
+  free(cmd);
+  if (!fp) return tur_err_int(perr ? perr : EAGAIN);
+  size_t cap = 4096, len = 0;
+  char *buf = (char *)malloc(cap);
+  if (!buf) { pclose(fp); return tur_err_int(ENOMEM); }
+  size_t n;
+  while ((n = fread(buf + len, 1, cap - len - 1, fp)) > 0) {
+    len += n;
+    if (len + 1 >= cap) {
+      char *grown = (char *)realloc(buf, cap * 2);
+      if (!grown) { free(buf); pclose(fp); return tur_err_int(ENOMEM); }
+      buf = grown; cap *= 2;
+    }
+  }
+  pclose(fp);
+  buf[len] = '\0';
+  return tur_ok_ptr(buf);
+  ```)
+;;; process/capture -- run a program and capture its stdout as a string.
+;;;
+;;; Runs the command through popen(3) with every word single-quoted (quotes
+;;; inside an argument are escaped), so arguments reach the program verbatim.
+;;; The child's stderr is inherited and its exit status is not reported; use
+;;; process/output for both.
+;;;
+;;; Parameters:
+;;;   path -- the program to run
+;;;   args -- the remaining arguments, one cstr each
+;;;
+;;; Returns:
+;;;   (Ok out) -- a fresh heap cstr of everything the child wrote to stdout,
+;;;   which the caller owns (release with free) -- or (Err e) when the
+;;;   command could not be started.
+;;;
+;;; Example:
+;;;   (process/capture "echo" "hi")  ; => (Ok "hi\n")
+;;;
+;;; Since: Phase B2
+(defn process/capture [path : cstr & args : cstr]
+  #fx{Proc}
+  : (Result cstr IoError)
+  (process/capture-raw path args))
+;;; process/cwd -- return the current working directory.
+;;;
+;;; Returns:
+;;;   (Ok dir) -- a fresh heap cstr the caller owns (release with free) -- or
+;;;   (Err e).
+;;;
+;;; Example:
+;;;   (process/cwd)  ; => (Ok "/home/user/project")
+;;;
+;;; Since: Phase B2
+(defn process/cwd []
+  #fx{Proc}
+  : (Result cstr IoError)
+  ```c
+  #include <unistd.h>
+  #include <errno.h>
+  size_t cap = 256;
+  for (;;) {
+    char *buf = (char *)malloc(cap);
+    if (!buf) return tur_err_int(ENOMEM);
+    if (getcwd(buf, cap)) return tur_ok_ptr(buf);
+    int e = errno;
+    free(buf);
+    if (e != ERANGE) return tur_err_int(e);
+    cap *= 2;
+  }
+  ```)
+;;; process/chdir -- change the current working directory.
+;;;
+;;; Parameters:
+;;;   path -- the target directory path cstr
+;;;
+;;; Returns:
+;;;   (Ok nil), or (Err e) carrying the errno.
+;;;
+;;; Example:
+;;;   (process/chdir "/tmp")  ; => (Ok nil)
+;;;
+;;; Since: Phase B2
+(defn process/chdir [path : cstr]
+  #fx{Proc}
+  : (Result nil IoError)
+  ```c
+  #include <unistd.h>
+  #include <errno.h>
+  return chdir(path) == 0 ? tur_ok_int(0) : tur_err_int(errno);
+  ```)
 ;;; process/child-pid -- the process id of a spawned child, without reaping it.
 ;;;
 ;;; Parameters:
@@ -416,21 +496,22 @@
 ;;; process/kill-raw -- kill(2) with a signal number (internal).
 (defn process/kill-raw [pid : Pid signo : int]
   #fx{Proc}
-  : int
+  : (Result nil IoError)
   ```c
+  #include <errno.h>
+  #include <signal.h>
 #ifdef _WIN32
   /* Windows has no signals.  Termination is the only thing that maps:
    * SIGKILL (9) and SIGTERM (15) both become TerminateProcess; anything else
    * is reported as an error rather than silently ignored. */
-  if (signo != 9 && signo != 15) return -1;
+  if (signo != 9 && signo != 15) return tur_err_int(EINVAL);
   HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
-  if (!h) return -1;
+  if (!h) return tur_err_int(ESRCH);
   BOOL ok = TerminateProcess(h, 128 + (UINT)signo);
   CloseHandle(h);
-  return ok ? 0 : -1;
+  return ok ? tur_ok_int(0) : tur_err_int(EPERM);
 #else
-  #include <signal.h>
-  return (int64_t)kill((pid_t)pid, (int)signo);
+  return kill((pid_t)pid, (int)signo) == 0 ? tur_ok_int(0) : tur_err_int(errno);
 #endif
   ```)
 ;;; process/kill -- send a signal to a process.
@@ -440,14 +521,14 @@
 ;;;   sig -- the Signal to send
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error.  On Windows only SigKill and SigTerm map
-;;;   (both to TerminateProcess); any other Signal returns -1.
+;;;   (Ok nil), or (Err e).  On Windows only SigKill and SigTerm map (both to
+;;;   TerminateProcess); any other Signal is an EINVAL error.
 ;;;
 ;;; Example:
-;;;   (process/kill (process/child-pid child) (SigKill))  ; => 0
+;;;   (process/kill (process/child-pid child) (SigKill))  ; => (Ok nil)
 ;;;
 ;;; Since: stdlib-os-surface P0
 (defn process/kill [pid : Pid sig : Signal]
   #fx{Proc}
-  : int
+  : (Result nil IoError)
   (process/kill-raw pid (signal->number sig)))

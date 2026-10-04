@@ -9,8 +9,9 @@
 (load "stdlib/process.tur")
 
 (defn main [] : int
-  (let [child (process/spawn "/bin/true" 0)]
+  (match (process/spawn "/bin/true")
     ;; the single consumption -- reaps the child
-    (process/wait child)
-    (println "child ok")
-    0))
+    (Ok child) (match (process/wait child)
+                 (Ok st) (do (println (if (exit-status/success? st) "child ok" "child failed")) 0)
+                 (Err e) (do (println (io-error/message e)) 1))
+    (Err e) (do (println (io-error/message e)) 1)))

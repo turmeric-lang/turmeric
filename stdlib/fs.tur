@@ -29,6 +29,11 @@
 (load "stdlib/fd.tur")
 
 (load "stdlib/effects.tur")
+
+(load "stdlib/io-error.tur")
+;; stdlib-os-surface-plan P1: every fallible fs/* operation returns
+;; (Result T IoError) -- IoError from stdlib/io-error.tur carries the errno.
+;; Operations with no useful success value answer (Result nil IoError).
 ;; stdlib-effect-rows: fs/* operations that touch the file system carry the
 ;; #{FS} capability tag.  Pure accessors over an already-fetched StatInfo or
 ;; TmpFile handle (fs/stat-size, fs/tmpfile-path, ...) stay untagged.
@@ -42,32 +47,36 @@
 ;;;   path -- NUL-terminated path cstr
 ;;;
 ;;; Returns:
-;;;   An opaque pointer (as :int) to a { size mtime mode } triple, or 0
-;;;   if the path is inaccessible.  Inspect with fs/stat-size, fs/stat-mtime,
-;;;   fs/stat-mode.  Free with fs/stat-free.
+;;;   (Ok info) -- a StatInfo over a { size mtime mode } triple; inspect it
+;;;   with fs/stat-size, fs/stat-mtime, fs/stat-mode and release it with
+;;;   fs/stat-free -- or (Err e) when the path is inaccessible.
 ;;;
 ;;; Example:
-;;;   (let [s (fs/stat "/etc/hosts")] (fs/stat-size s))
+;;;   (match (fs/stat "/etc/hosts")
+;;;     (Ok s)  (do (println (fs/stat-size s)) (fs/stat-free s))
+;;;     (Err e) (println (io-error/message e)))
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/stat [path : cstr]
   #fx{FS}
-  : StatInfo
+  : (Result StatInfo IoError)
   ```c
   #include <sys/stat.h>
+  #include <errno.h>
   struct stat st;
-  if (stat(path, &st) != 0) return 0;
+  if (stat(path, &st) != 0) return tur_err_int(errno);
   int64_t *info = malloc(3 * sizeof(int64_t));
+  if (!info) return tur_err_int(ENOMEM);
   info[0] = (int64_t)st.st_size;
   info[1] = (int64_t)st.st_mtime;
   info[2] = (int64_t)st.st_mode;
-  return (int64_t)(intptr_t)info;
+  return tur_ok_ptr(info);
   ```)
 ;;; fs/stat-free -- free the stat result returned by fs/stat.
 ;;;
 ;;; Parameters:
-;;;   s -- stat pointer from fs/stat (may be 0)
+;;;   s -- a StatInfo from a successful fs/stat
 ;;;
 ;;; Example:
 ;;;   (fs/stat-free s)
@@ -87,7 +96,7 @@
 ;;;   File size in bytes as :int.
 ;;;
 ;;; Example:
-;;;   (fs/stat-size (fs/stat "/etc/hosts"))  ; => 221
+;;;   (fs/stat-size info)  ; => 221
 ;;;
 ;;; Since: Phase B2
 
@@ -104,7 +113,7 @@
 ;;;   Modification time as a Unix timestamp (:int).
 ;;;
 ;;; Example:
-;;;   (fs/stat-mtime (fs/stat "/etc/hosts"))
+;;;   (fs/stat-mtime info)  ; => 1747123456
 ;;;
 ;;; Since: Phase B2
 
@@ -121,7 +130,7 @@
 ;;;   File mode bits as :int (same as st_mode from stat(2)).
 ;;;
 ;;; Example:
-;;;   (fs/stat-mode (fs/stat "/etc/hosts"))  ; => 33188
+;;;   (fs/stat-mode info)  ; => 33188
 ;;;
 ;;; Since: Phase B2
 
@@ -200,18 +209,19 @@
 ;;;   path -- NUL-terminated path cstr
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error (errno set).
+;;;   (Ok nil) on success, or (Err e) carrying the errno.
 ;;;
 ;;; Example:
-;;;   (fs/mkdir "/tmp/mydir")  ; => 0
+;;;   (fs/mkdir "/tmp/mydir")  ; => (Ok nil)
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/mkdir [path : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
   #include <sys/stat.h>
+  #include <errno.h>
   #include <direct.h>  /* tur:optional -- Windows only; POSIX takes the mkdir() branch below */
   /* MinGW's mkdir takes one argument (the legacy MSVC signature); Windows has
    * no POSIX permission bits, so the 0755 is dropped rather than translated.
@@ -225,10 +235,11 @@
    * POSIX: tur_emit_hoisted_include wraps angle includes in
    * `#if __has_include(<...>)`, so a platform without direct.h just skips it. */
 #ifdef _WIN32
-  return (int64_t)_mkdir(path);
+  int rc = _mkdir(path);
 #else
-  return (int64_t)mkdir(path, 0755);
+  int rc = mkdir(path, 0755);
 #endif
+  return rc == 0 ? tur_ok_int(0) : tur_err_int(errno);
   ```)
 ;;; fs/mkdirp -- create a directory and all missing parent directories.
 ;;;
@@ -236,17 +247,17 @@
 ;;;   path -- NUL-terminated path cstr
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 if any mkdir call fails for a reason other than
-;;;   the directory already existing.
+;;;   (Ok nil) on success (including when the directory already exists), or
+;;;   (Err e) for the first mkdir that failed for any other reason.
 ;;;
 ;;; Example:
-;;;   (fs/mkdirp "/tmp/a/b/c")  ; => 0
+;;;   (fs/mkdirp "/tmp/a/b/c")  ; => (Ok nil)
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/mkdirp [path : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
   #include <sys/stat.h>
   #include <errno.h>
@@ -261,18 +272,19 @@
   #define __tur_mkdir(p) mkdir((p), 0755)
 #endif
   char *p = strdup(path);
-  int ret = 0;
+  if (!p) return tur_err_int(ENOMEM);
+  int err = 0;
   for (char *s = p + 1; *s; s++) {
     if (*s == '/') {
       *s = '\0';
-      if (__tur_mkdir(p) != 0 && errno != EEXIST) { ret = -1; break; }
+      if (__tur_mkdir(p) != 0 && errno != EEXIST) { err = errno; break; }
       *s = '/';
     }
   }
-  if (ret == 0 && __tur_mkdir(p) != 0 && errno != EEXIST) ret = -1;
+  if (err == 0 && __tur_mkdir(p) != 0 && errno != EEXIST) err = errno;
   free(p);
   #undef __tur_mkdir
-  return ret;
+  return err == 0 ? tur_ok_int(0) : tur_err_int(err);
   ```)
 ;;; fs/rmdir -- remove an empty directory.
 ;;;
@@ -280,18 +292,19 @@
 ;;;   path -- NUL-terminated path cstr
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error.
+;;;   (Ok nil) on success, or (Err e) carrying the errno.
 ;;;
 ;;; Example:
-;;;   (fs/rmdir "/tmp/mydir")  ; => 0
+;;;   (fs/rmdir "/tmp/mydir")  ; => (Ok nil)
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/rmdir [path : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
-  return (int64_t)rmdir(path);
+  #include <errno.h>
+  return rmdir(path) == 0 ? tur_ok_int(0) : tur_err_int(errno);
   ```)
 ;;; fs/rm -- remove a regular file.
 ;;;
@@ -299,18 +312,19 @@
 ;;;   path -- NUL-terminated path cstr
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error.
+;;;   (Ok nil) on success, or (Err e) carrying the errno.
 ;;;
 ;;; Example:
-;;;   (fs/rm "/tmp/tmpfile.txt")  ; => 0
+;;;   (fs/rm "/tmp/tmpfile.txt")  ; => (Ok nil)
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/rm [path : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
-  return (int64_t)unlink(path);
+  #include <errno.h>
+  return unlink(path) == 0 ? tur_ok_int(0) : tur_err_int(errno);
   ```)
 ;;; fs/rename -- rename or move a file.
 ;;;
@@ -319,18 +333,19 @@
 ;;;   dst -- destination path cstr
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error.
+;;;   (Ok nil) on success, or (Err e) carrying the errno.
 ;;;
 ;;; Example:
-;;;   (fs/rename "/tmp/a.txt" "/tmp/b.txt")  ; => 0
+;;;   (fs/rename "/tmp/a.txt" "/tmp/b.txt")  ; => (Ok nil)
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/rename [src : cstr dst : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
-  return (int64_t)rename(src, dst);
+  #include <errno.h>
+  return rename(src, dst) == 0 ? tur_ok_int(0) : tur_err_int(errno);
   ```)
 ;;; fs/copy -- copy a file from src to dst using a read/write loop.
 ;;;
@@ -339,30 +354,32 @@
 ;;;   dst -- destination path cstr
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error.
+;;;   (Ok nil) on success, or (Err e) carrying the errno.
 ;;;
 ;;; Example:
-;;;   (fs/copy "/etc/hosts" "/tmp/hosts.bak")  ; => 0
+;;;   (fs/copy "/etc/hosts" "/tmp/hosts.bak")  ; => (Ok nil)
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/copy [src : cstr dst : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
+  #include <errno.h>
   FILE *in = fopen(src, "rb");
-  if (!in) return -1;
+  if (!in) return tur_err_int(errno);
   FILE *out = fopen(dst, "wb");
-  if (!out) { fclose(in); return -1; }
+  if (!out) { int e = errno; fclose(in); return tur_err_int(e); }
   char buf[8192];
   size_t n;
-  int ret = 0;
+  int err = 0;
   while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-    if (fwrite(buf, 1, n, out) != n) { ret = -1; break; }
+    if (fwrite(buf, 1, n, out) != n) { err = errno ? errno : EIO; break; }
   }
+  if (!err && ferror(in)) err = errno ? errno : EIO;
   fclose(in);
-  fclose(out);
-  return ret;
+  if (fclose(out) != 0 && !err) err = errno ? errno : EIO;
+  return err ? tur_err_int(err) : tur_ok_int(0);
   ```)
 ;;; fs/glob -- list directory entries matching a fnmatch(3) pattern.
 ;;;
@@ -371,20 +388,23 @@
 ;;;   pattern -- fnmatch pattern applied to entry names (e.g., "*.txt")
 ;;;
 ;;; Returns:
-;;;   A cons list of heap-allocated full-path cstrs for matching entries.
-;;;   Returns 0 (empty list) if the directory cannot be opened.
-;;;   Free with fs/glob-free.
+;;;   (Ok paths) -- a (Vec cstr) of fresh heap-allocated full paths, in
+;;;   directory order; release it with fs/paths-free -- or (Err e) when the
+;;;   directory cannot be opened.
 ;;;
 ;;; Example:
-;;;   (fs/glob "/tmp" "*.txt")  ; => cons list of paths
+;;;   (match (fs/glob "/tmp" "*.txt")
+;;;     (Ok v)  (do (println (vec-len v)) (fs/paths-free v))
+;;;     (Err e) (println (io-error/message e)))
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/glob [dir : cstr pattern : cstr]
   #fx{FS}
-  : int
+  : (Result (Vec cstr) IoError)
   ```c
   #include <dirent.h>
+  #include <errno.h>
   /* fnmatch(3) is POSIX and absent on MinGW.  Windows' PathMatchSpecA does the
    * same wildcard job ('*' and '?'), takes (name, pattern) instead of
    * (pattern, name), and returns TRUE on a match instead of 0.  Links shlwapi
@@ -395,8 +415,12 @@
   #include <fnmatch.h>
 #endif
   DIR *d = opendir(dir);
-  if (!d) return 0;
-  int64_t head = 0;
+  if (!d) return tur_err_int(errno);
+  /* The (Vec cstr) header layout every Vec producer shares (stdlib/vec.tur). */
+  struct __tur_vec { int64_t *data; int64_t len; int64_t cap; };
+  struct __tur_vec *v = (struct __tur_vec *)malloc(sizeof *v);
+  if (!v) { closedir(d); return tur_err_int(ENOMEM); }
+  v->data = NULL; v->len = 0; v->cap = 0;
   struct dirent *ent;
   size_t dlen = strlen(dir);
   while ((ent = readdir(d))) {
@@ -412,35 +436,50 @@
     memcpy(full, dir, dlen);
     if (sep) full[dlen] = '/';
     memcpy(full + dlen + sep, ent->d_name, nlen + 1);
-    int64_t *cell = malloc(2 * sizeof(int64_t));
-    cell[0] = (int64_t)(intptr_t)full;
-    cell[1] = head;
-    head = (int64_t)(intptr_t)cell;
+    if (v->len == v->cap) {
+      int64_t ncap = v->cap ? v->cap * 2 : 8;
+      int64_t *grown = (int64_t *)realloc(v->data, (size_t)ncap * sizeof(int64_t));
+      if (!grown) { free(full); break; }
+      v->data = grown; v->cap = ncap;
+    }
+    v->data[v->len++] = (int64_t)(intptr_t)full;
   }
   closedir(d);
-  return head;
+  return tur_ok_ptr(v);
   ```)
-;;; fs/glob-free -- free a cons list of paths returned by fs/glob.
+;;; fs/paths-free -- free a (Vec cstr) of owned strings and the Vec itself.
+;;;
+;;; Releases what fs/glob, fs/walk and fs/read-lines hand back (and env/all):
+;;; every element string, then the vector.  Do not use it on a Vec whose
+;;; strings you did not get from one of those.
 ;;;
 ;;; Parameters:
-;;;   lst -- cons list returned by fs/glob
+;;;   v -- a (Vec cstr) whose element strings are heap-owned
 ;;;
 ;;; Example:
-;;;   (fs/glob-free my-list)
+;;;   (fs/paths-free paths)
+;;;
+;;; Since: stdlib-os-surface P1
+(defn fs/paths-free [v : (Vec cstr)] : void
+  ```c
+  struct __tur_vec { int64_t *data; int64_t len; int64_t cap; };
+  struct __tur_vec *h = (struct __tur_vec *)(intptr_t)v;
+  if (!h) return;
+  for (int64_t i = 0; i < h->len; i++) free((void *)(intptr_t)h->data[i]);
+  free(h->data);
+  free(h);
+  ```)
+;;; fs/glob-free -- deprecated name for fs/paths-free.
+;;;
+;;; Parameters:
+;;;   v -- the (Vec cstr) returned by fs/glob
+;;;
+;;; Example:
+;;;   (fs/glob-free paths)
 ;;;
 ;;; Since: Phase B2
-
-(defn fs/glob-free [lst : int] : void
-  ```c
-  int64_t cur = lst;
-  while (cur) {
-    int64_t *cell = (int64_t*)(intptr_t)cur;
-    free((void*)(intptr_t)cell[0]);
-    int64_t next = cell[1];
-    free(cell);
-    cur = next;
-  }
-  ```)
+(defn ^deprecated "use fs/paths-free" fs/glob-free [v : (Vec cstr)] : void
+  (fs/paths-free v))
 ;;; fs/tmpfile -- create a unique temporary file in the system temp directory.
 ;;;
 ;;; Returns:
@@ -581,33 +620,48 @@
 ;;;   path -- NUL-terminated path cstr
 ;;;
 ;;; Returns:
-;;;   A heap-allocated NUL-terminated cstr of the file contents, or NULL
-;;;   on error.  The caller must free the returned buffer.
+;;;   (Ok text) -- a fresh heap-allocated NUL-terminated cstr of the file
+;;;   contents, which the caller owns (release with free) -- or (Err e).
 ;;;
 ;;; Example:
-;;;   (fs/read-text "/etc/hostname")  ; => "myhost\n"
+;;;   (match (fs/read-text "/etc/hostname")
+;;;     (Ok s)  (println s)
+;;;     (Err e) (println (io-error/message e)))
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/read-text [path : cstr]
   #fx{FS}
-  : cstr
+  : (Result cstr IoError)
   ```c
+  #include <errno.h>
   FILE *f = fopen(path, "rb");
-  if (!f) return NULL;
-  fseek(f, 0, SEEK_END);
-  long size = ftell(f);
-  /* ftell answers -1 for a pipe, a FIFO or /dev/stdin: `(size_t)-1 + 1`
-     was a zero-byte malloc and fread then ran the stream into it
-     (security audit WP5, M-5). */
-  if (size < 0) { fclose(f); return NULL; }
-  fseek(f, 0, SEEK_SET);
-  char *buf = malloc((size_t)size + 1);
-  if (!buf) { fclose(f); return NULL; }
-  size_t n = fread(buf, 1, (size_t)size, f);
+  if (!f) return tur_err_int(errno);
+  size_t cap, len = 0;
+  char *buf;
+  long size = -1;
+  if (fseek(f, 0, SEEK_END) == 0) size = ftell(f);
+  /* ftell answers -1 for a pipe, a FIFO or /dev/stdin, which used to make a
+     zero-byte malloc that fread then overran (security audit WP5, M-5).
+     Those now take the growing-buffer path below instead of failing. */
+  if (size >= 0) { fseek(f, 0, SEEK_SET); cap = (size_t)size + 1; }
+  else cap = 4096;
+  buf = (char *)malloc(cap);
+  if (!buf) { fclose(f); return tur_err_int(ENOMEM); }
+  for (;;) {
+    if (cap - len < 2) {
+      char *grown = (char *)realloc(buf, cap * 2);
+      if (!grown) { free(buf); fclose(f); return tur_err_int(ENOMEM); }
+      buf = grown; cap *= 2;
+    }
+    size_t n = fread(buf + len, 1, cap - len - 1, f);
+    len += n;
+    if (n == 0) break;
+  }
+  if (ferror(f)) { int e = errno ? errno : EIO; free(buf); fclose(f); return tur_err_int(e); }
   fclose(f);
-  buf[n] = '\0';
-  return buf;
+  buf[len] = '\0';
+  return tur_ok_ptr(buf);
   ```)
 ;;; fs/write-text -- write a NUL-terminated string to a file.
 ;;;
@@ -616,23 +670,25 @@
 ;;;   content -- NUL-terminated string to write
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error.
+;;;   (Ok nil) on success, or (Err e) carrying the errno.
 ;;;
 ;;; Example:
-;;;   (fs/write-text "/tmp/out.txt" "hello\n")  ; => 0
+;;;   (fs/write-text "/tmp/out.txt" "hello\n")  ; => (Ok nil)
 ;;;
 ;;; Since: Phase B2
 
 (defn fs/write-text [path : cstr content : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
+  #include <errno.h>
   FILE *f = fopen(path, "wb");
-  if (!f) return -1;
+  if (!f) return tur_err_int(errno);
   size_t len = strlen(content);
   size_t n = fwrite(content, 1, len, f);
-  fclose(f);
-  return (n == len) ? 0 : -1;
+  int e = (n == len) ? 0 : (errno ? errno : EIO);
+  if (fclose(f) != 0 && !e) e = errno ? errno : EIO;
+  return e ? tur_err_int(e) : tur_ok_int(0);
   ```)
 ;;; fs/append-text -- append a NUL-terminated string to a file.
 ;;;
@@ -643,20 +699,22 @@
 ;;;   content -- NUL-terminated string to append
 ;;;
 ;;; Returns:
-;;;   0 on success, -1 on error.
+;;;   (Ok nil) on success, or (Err e) carrying the errno.
 ;;;
 ;;; Example:
-;;;   (fs/append-text "/tmp/log.txt" "one more line\n")  ; => 0
+;;;   (fs/append-text "/tmp/log.txt" "one more line\n")  ; => (Ok nil)
 ;;;
 ;;; Since: stdlib-os-surface P0
 (defn fs/append-text [path : cstr content : cstr]
   #fx{FS}
-  : int
+  : (Result nil IoError)
   ```c
+  #include <errno.h>
   FILE *f = fopen(path, "ab");
-  if (!f) return -1;
+  if (!f) return tur_err_int(errno);
   size_t len = strlen(content);
   size_t n = fwrite(content, 1, len, f);
-  int rc = fclose(f);
-  return (n == len && rc == 0) ? 0 : -1;
+  int e = (n == len) ? 0 : (errno ? errno : EIO);
+  if (fclose(f) != 0 && !e) e = errno ? errno : EIO;
+  return e ? tur_err_int(e) : tur_ok_int(0);
   ```)

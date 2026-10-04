@@ -1,0 +1,129 @@
+;;; tur/io-error -- IoError, the one error type of the fs / io / process surface.
+;;;
+;;; An IoError carries the errno of a failed OS call.  errno is a genuine
+;;; machine integer, but it is wrapped so a signature reading
+;;; (Result nil IoError) says what it means, and so the predicates below
+;;; replace comparing against magic constants.  Every fallible function in
+;;; stdlib/fs.tur, stdlib/io.tur and stdlib/process.tur returns
+;;; (Result T IoError); inline-C bodies build the err side with
+;;; tur_err_int(errno).
+;;;
+;;; Since: stdlib-os-surface P1
+;; stdlib-os-surface-plan P1.1.  Loaded by fs.tur, io.tur and process.tur.
+(defopaque IoError :int)
+;;; io-error/of-code -- wrap a raw errno value as an IoError.
+;;;
+;;; Parameters:
+;;;   code -- an errno value (e.g. from a C library you call yourself)
+;;;
+;;; Returns:
+;;;   The IoError carrying code.
+;;;
+;;; Example:
+;;;   (io-error/not-found? (io-error/of-code 2))  ; => true on POSIX (ENOENT)
+;;;
+;;; Since: stdlib-os-surface P1
+(defn io-error/of-code [code : int] : IoError
+  ```c
+  return code;
+  ```)
+;;; io-error/last -- the IoError for the calling thread's current errno.
+;;;
+;;; Returns:
+;;;   errno, wrapped.  Only meaningful right after a failed OS call.
+;;;
+;;; Example:
+;;;   (io-error/last)
+;;;
+;;; Since: stdlib-os-surface P1
+(defn io-error/last [] : IoError
+  ```c
+  #include <errno.h>
+  return (int64_t)errno;
+  ```)
+;;; io-error/code -- the raw errno an IoError carries, for interop.
+;;;
+;;; Parameters:
+;;;   e -- an IoError
+;;;
+;;; Returns:
+;;;   The errno value as an int.
+;;;
+;;; Example:
+;;;   (io-error/code e)  ; => 2
+;;;
+;;; Since: stdlib-os-surface P1
+(defn io-error/code [e : IoError] : int
+  ```c
+  return e;
+  ```)
+;;; io-error/message -- the human-readable description of an IoError.
+;;;
+;;; Parameters:
+;;;   e -- an IoError
+;;;
+;;; Returns:
+;;;   strerror(3) text, e.g. "No such file or directory".  Static storage:
+;;;   do not free it, and copy it before the next io-error/message call if
+;;;   you need to keep it.
+;;;
+;;; Example:
+;;;   (println (io-error/message e))  ; prints "No such file or directory"
+;;;
+;;; Since: stdlib-os-surface P1
+(defn io-error/message [e : IoError] : cstr
+  ```c
+  #include <string.h>
+  return strerror((int)e);
+  ```)
+;;; io-error/not-found? -- true when the error is "no such file or directory".
+;;;
+;;; Parameters:
+;;;   e -- an IoError
+;;;
+;;; Returns:
+;;;   true for ENOENT.
+;;;
+;;; Example:
+;;;   (io-error/not-found? e)  ; => true
+;;;
+;;; Since: stdlib-os-surface P1
+(defn io-error/not-found? [e : IoError] : bool
+  ```c
+  #include <errno.h>
+  return e == ENOENT;
+  ```)
+;;; io-error/exists? -- true when the error is "already exists".
+;;;
+;;; Parameters:
+;;;   e -- an IoError
+;;;
+;;; Returns:
+;;;   true for EEXIST.
+;;;
+;;; Example:
+;;;   (io-error/exists? e)  ; => true after fs/mkdir on an existing dir
+;;;
+;;; Since: stdlib-os-surface P1
+(defn io-error/exists? [e : IoError] : bool
+  ```c
+  #include <errno.h>
+  return e == EEXIST;
+  ```)
+;;; io-error/permission? -- true when the error is a permission failure.
+;;;
+;;; Parameters:
+;;;   e -- an IoError
+;;;
+;;; Returns:
+;;;   true for EACCES or EPERM.
+;;;
+;;; Example:
+;;;   (io-error/permission? e)  ; => true
+;;;
+;;; Since: stdlib-os-surface P1
+(defn io-error/permission? [e : IoError] : bool
+  ```c
+  #include <errno.h>
+  return e == EACCES || e == EPERM;
+  ```)

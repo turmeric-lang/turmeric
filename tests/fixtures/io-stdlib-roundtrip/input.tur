@@ -1,4 +1,5 @@
-;; Happy-path fixture for io-real-filesystem-and-list-dir-uncompilable:
+;; Happy-path fixture for io-real-filesystem-and-list-dir-uncompilable
+;; (moved off the deprecated write-file / file-exists? in stdlib-os-surface P1):
 ;; loads the full stdlib/io.tur and compiles+runs the runtime path that used to
 ;; be uncompilable. Exercises a file round-trip through file-open / file-read /
 ;; file-close, the directory listing helpers (list-dir / free-dir-listing), and
@@ -46,18 +47,24 @@
 (defn emit [p : ptr<void>] : void
   ```c fputs((const char*)p, stdout); ```)
 
+(defn read-back [path : cstr] : int
+  (match (file-open path "rb")
+    (Ok fh) (let [buf (make-buf 64)]
+              (match (file-read fh buf 63)
+                (Ok n) (do (term-buf buf n) (emit buf))
+                (Err e) (println (io-error/message e)))
+              (free-buf buf)
+              (file-close fh)
+              0)
+    (Err e) (do (println (io-error/message e)) 1)))
+
 (defn main [] : int
   (let [path (tmp-path "tur-io-stdlib-fixture.txt")
-        msg  "io stdlib ok\n"
-        wr   (write-file path (cstr->ptr msg) 13)
-        ex   (file-exists? path)
-        fh   (file-open path "rb")
-        buf  (make-buf 64)
-        n    (file-read fh buf 63)]
-    (file-close fh)
-    (term-buf buf n)
-    (emit buf)
-    (free-buf buf)
+        msg  "io stdlib ok\n"]
+    (match (file-open path "wb")
+      (Ok fh) (do (file-write fh (cstr->ptr msg) 13) (file-close fh))
+      (Err e) (Err e))
+    (read-back path)
     (let [fs (Real-FileSystem)]
       (Real-FileSystem-free fs))
     (let [entries (list-dir "/tmp")]
