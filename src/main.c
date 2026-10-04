@@ -1009,6 +1009,13 @@ static int auto_append_spice_includes(const char *input,
 
 static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
 
+/* The real path of the document compile_to_c is analysing from a scratch copy
+ * (tur_collect_symbols), or NULL.  Resolution that is relative to the ENTRY
+ * FILE's directory -- a sibling `(import mod)`, a `#use-reader-macros "x.tur"`
+ * -- has to start from the document, not from the temp directory the scratch
+ * copy sits in.  `load` is cwd-relative and is unaffected either way. */
+static const char *g_logical_entry_path = NULL;
+
 int tur_collect_symbols(const char *path, const char *logical_path,
                         LspSymbol *out, int cap, int *count_out) {
     lsp_collect_begin(out, cap, count_out);
@@ -1040,8 +1047,13 @@ int tur_collect_symbols(const char *path, const char *logical_path,
     int rm_n = 0;
     char **rm_p = discover_manifest_reader_macros(anchor, &rm_n);
     ls2_resolver_ctx_set(&ls2);
+    /* lsp-sibling-import-resolves-against-scratch-dir: spice includes were
+     * already anchored on the real path (above); the entry file's own
+     * directory has to be too. */
+    g_logical_entry_path = (logical_path && *logical_path) ? logical_path : NULL;
     int rc = compile_to_c(path, &discard, (const char **)inc, n_inc,
                           (const char **)rm_p, rm_n);
+    g_logical_entry_path = NULL;
     ls2_resolver_ctx_set(NULL);
     ls2_resolver_ctx_dispose(&ls2);
     free_reader_macro_paths(rm_p, rm_n);
@@ -1110,8 +1122,15 @@ static int compile_to_c(const char *path, Buf *out_c,
     pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
+    /* The directory entry-relative paths resolve against: the scratch copy's
+     * own directory is meaningless (see g_logical_entry_path). */
+    char base_dir[4096];
+    dir_of_path(g_logical_entry_path ? g_logical_entry_path : path,
+                base_dir, sizeof(base_dir));
+
     SourceFile file = {0};
     file.path = path;
+    file.base_dir = g_logical_entry_path ? base_dir : NULL;
     file.src = src_adj;
     file.len = len_adj;
     /* How much of the file `src_adj` skipped -- the `#lang` line. Span
@@ -1164,8 +1183,6 @@ static int compile_to_c(const char *path, Buf *out_c,
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
-        char base_dir[4096];
-        dir_of_path(path, base_dir, sizeof(base_dir));
         PassContext ctx = {0};
         ctx.arena = &arena;
         ctx.st    = &st;

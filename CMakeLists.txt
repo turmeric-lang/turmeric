@@ -224,6 +224,17 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(lsp_r7rs_diagnostics PROPERTIES TIMEOUT 300)
+# lsp-publishes-other-files-diagnostics-under-one-uri and
+# lsp-sibling-import-resolves-against-scratch-dir: a loaded/imported file's
+# diagnostic lands on the form that names it (with the real location as
+# relatedInformation), and entry-relative resolution starts from the document,
+# not from the temp directory its scratch copy sits in.
+add_test(
+  NAME lsp_cross_file_diagnostics
+  COMMAND bash tests/lsp/run-cross-file-diagnostics.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(lsp_cross_file_diagnostics PROPERTIES TIMEOUT 300)
 
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 

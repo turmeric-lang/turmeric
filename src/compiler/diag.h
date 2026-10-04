@@ -837,6 +837,25 @@ void diag_lsp_flush(FILE *out);
 /* Write just the diagnostics JSON array [...] into buf (no outer wrapper). */
 void diag_lsp_flush_array(struct Buf *buf);
 
+/* lsp-publishes-other-files-diagnostics-under-one-uri: where a diagnostic that
+ * belongs to ANOTHER file should be drawn in the document being published.
+ * Given the foreign file's path, set the 0-based anchor range in the document
+ * (typically the `load` / `import` that pulled the file in) and that file's
+ * `file://` URI.  Return false to leave the URI out of the related location;
+ * the anchor is used either way. */
+typedef bool (*DiagLspRelocateFn)(void *ctx, const char *foreign_path,
+                                  uint32_t *line0, uint32_t *col_start0,
+                                  uint32_t *col_end0,
+                                  char *uri_out, size_t uri_cap);
+
+/* As diag_lsp_flush_array, for a publish addressed to `doc_path`: an entry
+ * from any other file is moved onto the document at the range `relocate`
+ * gives, its message prefixed with the real `path:line:col`, and the real
+ * location attached as LSP `relatedInformation`.  Every entry still carries
+ * its `"file"` key. */
+void diag_lsp_flush_array_for(struct Buf *buf, const char *doc_path,
+                              DiagLspRelocateFn relocate, void *ctx);
+
 void diag_lsp_end(void);
 
 /* Replace all occurrences of `from_path` with `to_path` in buffered entries.
