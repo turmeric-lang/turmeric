@@ -129,7 +129,7 @@ static void collect_items(Pr *p, Expr **arr, uint32_t n) {
 
 static bool srfi_file_span(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
-    return f && f->path && strstr(f->path, "stdlib/srfi/") != NULL;
+    return f && f->path && (strstr(f->path, "stdlib/srfi/") != NULL || strstr(f->path, "stdlib/sicp/") != NULL);
 }
 
 /* A `def` whose initializer is dropped with it must do nothing but make its

@@ -558,6 +558,13 @@ Each built-in or alias row is one file, `stdlib/srfi/<N>.scm`, holding a
 `(define-library (srfi N) ...)`. `tests/check-r7rs-srfi-sync.sh` checks this
 table, those files, and the compiler's own table against each other.
 
+One more library is built in the same way without being an SRFI:
+`(sicp extras)` (`stdlib/sicp/extras.scm`) has the names Racket's
+`#lang sicp` adds beyond SRFI 216 -- `inc`, `dec`, `identity`, `amb` --
+and `amb-reset!`, which starts a new `amb` search from scratch. It is not
+an `srfi-N` feature; `cond-expand` sees it as `(library (sicp extras))`.
+See [Working through SICP](sicp-guide.md).
+
 ## Memory
 
 A compiled program's allocator is a conservative mark-sweep collector

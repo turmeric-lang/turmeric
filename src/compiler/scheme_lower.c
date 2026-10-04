@@ -431,6 +431,13 @@ static const char *const ONDEMAND[][3] = {
  * licence, and which test suite exists for it: r7rs-srfi-plan Appendix C
  * (the S0 inventory). */
 enum { SRFI_BUILTIN, SRFI_ALIAS, SRFI_LIBRARY, SRFI_NOLIB, SRFI_NOTPLANNED, SRFI_NOTYET };
+/* r7rs-srfi-18-216-sicp-plan D4: `(sicp extras)` -- Racket's `#lang sicp`
+ * extras (inc, dec, identity, amb) plus amb-reset! -- is not an SRFI, but it
+ * is built in the same way: one file, stdlib/sicp/extras.scm, spliced in
+ * when imported.  It rides the SRFI machinery under this number, which no
+ * SRFI will reach; lib_label names it in messages, it is never a `srfi-N`
+ * feature, and its definitions are spelled sicpx--<name>. */
+#define SICP_EXTRAS_NUM 100000
 typedef struct { int num; int kind; const char *title; const char *file; const char *why; } SrfiRow;
 static const SrfiRow SRFI_LIBS[] = {
     {   0, SRFI_NOLIB,      "Feature-based conditional expansion construct", NULL,
@@ -489,6 +496,7 @@ static const SrfiRow SRFI_LIBS[] = {
     { 105, SRFI_NOLIB,      "Curly-infix-expressions", NULL,
         "`{a + b}` reads in every #lang, #lang r7rs included" },
     { 216, SRFI_LIBRARY,    "SICP Prerequisites (Portable)", "stdlib/srfi/216.scm", NULL },
+    { SICP_EXTRAS_NUM, SRFI_LIBRARY, "SICP extras", "stdlib/sicp/extras.scm", NULL },
 };
 #define N_SRFI_LIBS (sizeof(SRFI_LIBS) / sizeof(SRFI_LIBS[0]))
 static const SrfiRow *srfi_row(int64_t num) {
@@ -500,16 +508,38 @@ static bool srfi_importable(const SrfiRow *r) {
 }
 /* `srfi-N` holds in cond-expand: the SRFI is here, importable or always on. */
 static bool srfi_supported(const SrfiRow *r) { return srfi_importable(r) || (r && r->kind == SRFI_NOLIB); }
-/* The N of a `(srfi N)` library name, or -1 when `set` is not one. */
+/* The N of a `(srfi N)` library name -- SICP_EXTRAS_NUM for `(sicp
+ * extras)` -- or -1 when `set` is not one. */
 static int64_t srfi_libname_num(const Form *set) {
     if (!set || set->tag != F_LIST || set->as.list.len != 2) return -1;
     const Form *h = set->as.list.items[0], *n = set->as.list.items[1];
-    if (h->tag != F_SYM || strcmp(h->as.sym->name, "srfi") != 0 || n->tag != F_INT || n->as.i < 0) return -1;
+    if (h->tag != F_SYM) return -1;
+    if (strcmp(h->as.sym->name, "sicp") == 0)
+        return n->tag == F_SYM && strcmp(n->as.sym->name, "extras") == 0 ? SICP_EXTRAS_NUM : -1;
+    if (strcmp(h->as.sym->name, "srfi") != 0 || n->tag != F_INT || n->as.i < 0 || n->as.i >= SICP_EXTRAS_NUM) return -1;
     return n->as.i;
 }
-static bool is_srfi_libname(const Form *set) {
+static bool is_sicp_libname(const Form *set) {
     return set && set->tag == F_LIST && set->as.list.len >= 1 && set->as.list.items[0]->tag == F_SYM &&
-           strcmp(set->as.list.items[0]->as.sym->name, "srfi") == 0;
+           strcmp(set->as.list.items[0]->as.sym->name, "sicp") == 0;
+}
+static bool is_srfi_libname(const Form *set) {
+    return (set && set->tag == F_LIST && set->as.list.len >= 1 && set->as.list.items[0]->tag == F_SYM &&
+            strcmp(set->as.list.items[0]->as.sym->name, "srfi") == 0) || is_sicp_libname(set);
+}
+/* How a message names the library numbered `num`: "(srfi N)" or "(sicp
+ * extras)".  One of two rotating buffers, so a message may name two. */
+static const char *lib_label(int64_t num) {
+    static char bufs[2][32];
+    static int which = 0;
+    char *b = bufs[which ^= 1];
+    if (num == SICP_EXTRAS_NUM) snprintf(b, sizeof bufs[0], "(sicp extras)");
+    else snprintf(b, sizeof bufs[0], "(srfi %lld)", (long long)num);
+    return b;
+}
+/* The message for a library name that names no importable library. */
+static const char *bad_libname_msg(const Form *set) {
+    return is_sicp_libname(set) ? "the SICP library is (sicp extras)" : "an SRFI is named by its number, e.g. (srfi 1)";
 }
 
 /* The SCHEME_LIBS row of a `(scheme <x>)` library name, or -1. */
@@ -4398,11 +4428,12 @@ static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
         sl->lib_imported[li] = true;
         return NULL;
     }
-    if (strcmp(head, "srfi") == 0) {
+    if (strcmp(head, "srfi") == 0 || strcmp(head, "sicp") == 0) {
         /* r7rs-srfi-plan D1: an SRFI is a built-in library, like (scheme
-         * ...): srfi_import binds it; it is never a module. */
+         * ...): srfi_import binds it; it is never a module.  So is (sicp
+         * extras). */
         if (srfi_libname_num(set) < 0) {
-            err(set, "an SRFI is named by its number, e.g. (srfi 1)");
+            err(set, "%s", bad_libname_msg(set));
             *ok = false;
         }
         return NULL;
@@ -4748,7 +4779,7 @@ static bool feature_holds(SL *sl, Form *req) {
         if (strncmp(n, "srfi-", 5) == 0 && n[5] >= '0' && n[5] <= '9') {
             char *end = NULL;
             long long num = strtoll(n + 5, &end, 10);
-            return end && *end == '\0' && srfi_supported(srfi_row(num));
+            return end && *end == '\0' && num < SICP_EXTRAS_NUM && srfi_supported(srfi_row(num));
         }
         return false;
     }
@@ -5967,11 +5998,12 @@ static void lib_syntax_import(SL *sl, LibSyntax *lx, const SchemeImportSpec *spe
  * ------------------------------------------------------------------------- */
 static bool srfi_span(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
-    return f && f->path && strstr(f->path, "stdlib/srfi/") != NULL;
+    return f && f->path && (strstr(f->path, "stdlib/srfi/") != NULL || strstr(f->path, "stdlib/sicp/") != NULL);
 }
 static const Symbol *srfi_spelling(SL *sl, int64_t num, const Symbol *name) {
     char buf[256];
-    snprintf(buf, sizeof buf, "srfi%lld--%s", (long long)num, name->name);
+    if (num == SICP_EXTRAS_NUM) snprintf(buf, sizeof buf, "sicpx--%s", name->name);
+    else snprintf(buf, sizeof buf, "srfi%lld--%s", (long long)num, name->name);
     return I(sl, buf);
 }
 typedef struct SrfiLib {
@@ -6000,7 +6032,7 @@ static void srfi_scan_imports(SL *sl, Form *deflib, FB *from, FB *to) {
             int64_t dep_num = srfi_libname_num(set);
             if (dep_num >= 0 && srfi_importable(srfi_row(dep_num))) {
                 SrfiLib *dep = srfi_lib_of(sl, dep_num);
-                if (!dep) { err(set, "(srfi %lld): its library file was not found", (long long)dep_num); continue; }
+                if (!dep) { err(set, "%s: its library file was not found", lib_label(dep_num)); continue; }
                 srfi_lib_register(sl, dep);
                 for (uint32_t k = 0; k < dep->exp_pub.n; k++) {
                     const Symbol *in = dep->exp_in.items[k]->as.sym;
@@ -6117,7 +6149,8 @@ static SrfiLib *srfi_lib_of(SL *sl, int64_t num) {
     SrfiLib *lib = srfi_lib_find(sl, num);
     if (lib) return lib;
     char mod[64], path[4096];
-    snprintf(mod, sizeof mod, "srfi/%lld", (long long)num);
+    if (num == SICP_EXTRAS_NUM) snprintf(mod, sizeof mod, "sicp/extras");
+    else snprintf(mod, sizeof mod, "srfi/%lld", (long long)num);
     if (!sl->lib_resolve || !sl->lib_resolve(sl->lib_resolve_ud, mod, path, sizeof path)) return NULL;
     uint32_t nf = 0;
     Form **fs = lib_read_source(sl, path, &nf);
@@ -6137,7 +6170,8 @@ static void srfi_lib_register(SL *sl, SrfiLib *lib) {
 static void srfi_source_forms(SL *sl, Form *deflib, FB *out) {
     int64_t num = deflib->as.list.len >= 2 ? srfi_libname_num(deflib->as.list.items[1]) : -1;
     if (num < 0 || !srfi_importable(srfi_row(num))) {
-        err(deflib, "a file under stdlib/srfi/ holds one (define-library (srfi N) ...) of an importable SRFI");
+        err(deflib, "a file under stdlib/srfi/ holds one (define-library (srfi N) ...) of an importable SRFI "
+                    "(stdlib/sicp/extras.scm, the (sicp extras) one)");
         return;
     }
     /* Spliced twice into one pass: once is enough.  A library already read
@@ -6207,21 +6241,21 @@ static bool srfi_bind(SL *sl, const Symbol *vis, const Symbol *target, int64_t n
     for (uint32_t i = 0; i < sl->n_srfi; i++) {
         if (sl->srfi_from[i] != vis) continue;
         if (sl->srfi_to[i] == target) return true;
-        err(at, "'%s' is imported from (srfi %lld) and from (srfi %lld) with different meanings; R7RS 5.2 "
+        err(at, "'%s' is imported from %s and from %s with different meanings; R7RS 5.2 "
                 "allows one binding per imported name -- rename or prefix one of them",
-            vis->name, (long long)sl->srfi_by[i], (long long)num);
+            vis->name, lib_label(sl->srfi_by[i]), lib_label(num));
         return false;
     }
     if (std_imported(sl, vis) && is_std_name(sl, vis) && std_meaning(sl, vis) != target) {
-        err(at, "'%s' would name both R7RS's own '%s' and (srfi %lld)'s; R7RS 5.2 allows one binding per "
+        err(at, "'%s' would name both R7RS's own '%s' and %s's; R7RS 5.2 allows one binding per "
                 "imported name -- rename or prefix the SRFI's, or leave R7RS's out with (except (scheme base) %s)",
-            vis->name, vis->name, (long long)num, vis->name);
+            vis->name, vis->name, lib_label(num), vis->name);
         return false;
     }
     if (fb_has_sym(&sl->user_globals, vis)) {
-        err(at, "'%s' is imported from (srfi %lld) and also defined by this program (R7RS 5.2); import it "
-                "with (except (srfi %lld) %s) to define your own",
-            vis->name, (long long)num, (long long)num, vis->name);
+        err(at, "'%s' is imported from %s and also defined by this program (R7RS 5.2); import it "
+                "with (except %s %s) to define your own",
+            vis->name, lib_label(num), lib_label(num), vis->name);
         return false;
     }
     if (sl->n_srfi == sl->cap_srfi) {
@@ -6259,7 +6293,7 @@ static const Symbol *import_visible_name(SL *sl, const SchemeImportSpec *spec, c
 static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Span sp) {
     (void)sp;
     int64_t num = srfi_libname_num(libname);
-    if (num < 0) { err(libname, "an SRFI is named by its number, e.g. (srfi 1)"); return; }
+    if (num < 0) { err(libname, "%s", bad_libname_msg(libname)); return; }
     const SrfiRow *row = srfi_row(num);
     if (!row) {
         err(libname, "(srfi %lld): no such SRFI in #lang r7rs; the SRFI table in docs/guides/r7rs-guide.md "
@@ -6281,8 +6315,8 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
     }
     SrfiLib *lib = srfi_lib_of(sl, num);
     if (!lib) {
-        err(libname, "(srfi %d): its library file %s could not be read -- is the stdlib installed?",
-            row->num, row->file);
+        err(libname, "%s: its library file %s could not be read -- is the stdlib installed?",
+            lib_label(row->num), row->file);
         return;
     }
     srfi_lib_register(sl, lib);
@@ -6291,10 +6325,10 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
         for (int w = 0; w < 2; w++)
             for (uint32_t i = 0; i < named[w]->n; i++)
                 if (!fb_has_sym(&lib->exp_pub, named[w]->items[i]->as.sym))
-                    err(named[w]->items[i], "(srfi %d) does not export '%s'", row->num, named[w]->items[i]->as.sym->name);
+                    err(named[w]->items[i], "%s does not export '%s'", lib_label(row->num), named[w]->items[i]->as.sym->name);
         for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2)
             if (!fb_has_sym(&lib->exp_pub, spec->renames.items[i + 1]->as.sym))
-                err(spec->renames.items[i + 1], "(srfi %d) does not export '%s'", row->num,
+                err(spec->renames.items[i + 1], "%s does not export '%s'", lib_label(row->num),
                     spec->renames.items[i + 1]->as.sym->name);
     }
     for (uint32_t k = 0; k < lib->exp_pub.n; k++) {

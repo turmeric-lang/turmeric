@@ -93,35 +93,17 @@ whichever ones you define.
 Some exercises use `inc`, `dec` and `identity` as if they already existed,
 and 4.3 is easier to explore with a real `amb` (more on that in Chapter 4
 below). Racket's `#lang sicp` provides these, so course materials often
-assume them. They are not part of SRFI 216. Paste this block under your
-import line if you need them:
+assume them. They are not part of SRFI 216; they are in a library of their
+own. Add it to your import line if you need them:
 
 ```scheme
-;; --- SICP extras ---
-(define (inc x) (+ x 1))
-(define (dec x) (- x 1))
-(define (identity x) x)
-(define (amb-reset!)                   ; start a new search from scratch
-  (set! amb-fail (lambda () (error "amb tree exhausted"))))
-(define amb-fail #f)
-(amb-reset!)
-(define-syntax amb
-  (syntax-rules ()
-    ((_ alt ...)
-     (let ((prev-fail amb-fail))
-       (call/cc
-        (lambda (sk)
-          (call/cc
-           (lambda (fk)
-             (set! amb-fail
-                   (lambda ()
-                     (set! amb-fail prev-fail)
-                     (fk 'fail)))
-             (sk alt)))
-          ...
-          (prev-fail)))))))
-;; --- end of SICP extras ---
+(import (scheme base) (scheme write) (srfi 216) (sicp extras))
 ```
+
+It gives you `inc`, `dec`, `identity`, `amb`, and `amb-reset!` (see
+Chapter 4). As with `(srfi 216)`, defining one of these names yourself is
+refused; import `(except (sicp extras) inc)`, naming whichever ones you
+define.
 
 ## Chapter by chapter
 
@@ -248,8 +230,8 @@ computes `(fact 20)` through it). The book's later evaluators (the
 analyzing evaluator in 4.1.7, the lazy one in 4.2, the `amb` evaluator in
 4.3) need the same rename.
 
-**Trying 4.3's puzzles before building the `amb` evaluator.** With the
-extras block loaded, `amb` works directly in Scheme, so you can run the
+**Trying 4.3's puzzles before building the `amb` evaluator.** With
+`(sicp extras)` imported, `amb` works directly in Scheme, so you can run the
 section's examples (`require`, `an-integer-between`, the
 multiple-dwelling puzzle) as ordinary programs and check your answers to
 the exercises against them. Each `(amb)` with no choices left backtracks to
@@ -273,7 +255,7 @@ it is worth reporting.
 
 - **`unbound variable: nil`**, or `true`, `runtime`, `cons-stream`:
   `(srfi 216)` is missing from the import line. For `inc`, `dec`,
-  `identity` or `amb`, it is the extras block.
+  `identity` or `amb`, it is `(sicp extras)`.
 - **`error: Unknown operation -- TABLE frob`**: that is the book's own
   `(error "Unknown operation -- TABLE" m)` working as intended. The message
   is printed, then the objects, and the program stops.
@@ -313,8 +295,7 @@ entry here goes away.
 ## What is coming
 
 `parallel-execute` will run its procedures truly at the same time, once
-Turmeric's Scheme has threads (SRFI 18). A built-in `(sicp extras)` library
-will replace the extras block. And
+Turmeric's Scheme has threads (SRFI 18). And
 [sicp-corpus](https://github.com/turmeric-lang/sicp-corpus) runs the
 book's code against Turmeric every day, so breakage is caught before you
 hit it. See the

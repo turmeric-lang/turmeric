@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03, T0b done 2026-10-04. Extends docs/archive/r7rs-srfi-plan.md
+Status: in progress -- T0 done 2026-10-03, T0b and T0a done 2026-10-04. Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -287,7 +287,16 @@ them.
   guide's 3.4 entry loses its "one after another" caveat.
 - **T0a -- `(sicp extras)`** (D4): the library-head change and the file;
   a fixture with the guide's `amb` cases on both back ends. Independent of
-  T0, and the guide's extras block becomes the import.
+  T0, and the guide's extras block becomes the import. **DONE 2026-10-04.**
+  The SRFI table took a named row rather than a third table:
+  `(sicp extras)` maps to `SICP_EXTRAS_NUM` (src/compiler/scheme_lower.c),
+  `lib_label` names it in every message, it is never an `srfi-N` feature,
+  and its definitions are spelled `sicpx--<name>`. `amb` sets its choice
+  point through an exported-to-nobody `amb-set-fail!`, since a macro's
+  expansion cannot `set!` a library's variable. Fixture
+  `r7rs-sicp-extras` (both back ends): 4.3.2's multiple-dwelling puzzle,
+  every Pythagorean triple to 15 by forced failure with exhaustion caught
+  by `guard`, and a fresh search after `amb-reset!`.
 - **T4 -- SICP corpus** in `turmeric-lang/sicp-corpus` (D3), in the
   priority order of D3: the repo, its runner and CI first, then sections.
   Each section that fails gets a report under this repo's `docs/reported/`

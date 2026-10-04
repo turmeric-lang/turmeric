@@ -1,0 +1,6 @@
+(42 42 x)
+(2 3 4)
+((baker 3) (cooper 2) (fletcher 4) (miller 5) (smith 1))
+((3 4 5) (5 12 13) (6 8 10) (9 12 15))
+amb tree exhausted
+2
