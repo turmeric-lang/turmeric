@@ -120,6 +120,47 @@ jobs:
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
+      # The full-size stress fixtures (docs/upcoming/stress-fixture-tiering-plan.md).
+      # A fixture carrying `requires.stress` is the 1e7 twin of a per-PR fixture
+      # that runs 1e6; every harness skips it unless TUR_STRESS=1, and this is
+      # the only place that sets it.  Both paths, because the cost and the
+      # tail-call lowering differ: run.sh compiles, run-jit.sh runs the engine.
+      #
+      # VERIFIED, not assumed: a nightly that silently ran nothing would look
+      # exactly like coverage.  So the set comes from the markers on disk, each
+      # harness must report that many PASSES with nothing skipped, and an empty
+      # set is itself an error.  TUR_FORCE=1 so a stamp-cache hit can never
+      # stand in for a run.  The 12-minute CLAUDE.md bound applies per harness
+      # run.
+      - name: Run the stress fixtures at full size
+        id: stress
+        run: |
+          set +e
+          names=$(for m in tests/fixtures/*/requires.stress; do
+                    [ -f "$m" ] && basename "$(dirname "$m")"; done)
+          n=$(printf '%s\n' "$names" | sed '/^$/d' | wc -l | tr -d ' ')
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no requires.stress fixtures found -- the full-size tier ran nothing"
+            echo "rc=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          filter="^($(printf '%s\n' "$names" | sed '/^$/d' | paste -sd'|' -))\$"
+          echo "stress fixtures ($n): $filter"
+          rc=0
+          TUR=./build/tur TUR_STRESS=1 TUR_FORCE=1 TUR_TEST_FILTER="$filter" \
+            gtimeout 720 bash tests/run.sh 2>&1 | tee stress.log
+          # run.sh reports every requires.* skip as a PASS, so the count alone
+          # cannot tell a run from a skip; a stress skip tags its PASS line.
+          if ! grep -q "^summary: $n passed, 0 failed" stress.log \
+             || grep -q "(stress-skipped)" stress.log; then
+            echo "::error::run.sh did not run and pass all $n stress fixtures"; rc=1
+          fi
+          TUR=./build/tur TUR_STRESS=1 TUR_FORCE=1 TUR_TEST_FILTER="$filter" TUR_HEADROOM_TOP=20 \
+            gtimeout 720 bash tests/run-jit.sh 2>&1 | tee -a stress.log
+          grep -q "^jit fixture summary: $n passed, 0 failed, 0 skipped" stress.log \
+            || { echo "::error::run-jit.sh did not pass all $n stress fixtures"; rc=1; }
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
       # The trend rows for the FULL arm64 runs.  Uploaded rather than published
       # to the ci-metrics branch: that publisher aggregates one run of ci.yml,
       # and teaching it a second workflow is a separate change.  No --shard and
@@ -143,6 +184,7 @@ jobs:
           name: nightly-arm64-${{ github.run_id }}
           path: |
             nightly.log
+            stress.log
             timings.jsonl
           if-no-files-found: warn
           retention-days: 30
@@ -154,4 +196,10 @@ jobs:
         if: steps.run.outputs.rc != '0'
         run: |
           echo "::error::the full arm64 representation suites failed (ctest exit ${{ steps.run.outputs.rc }}). A cell failing only here, and not on the PR legs, is an arm64-specific representation bug -- which is what this leg exists to find. The per-cell output is in the uploaded nightly.log."
+          exit 1
+
+      - name: Report the stress-fixture result
+        if: always() && steps.stress.outputs.rc != '0'
+        run: |
+          echo "::error::the full-size requires.stress fixtures failed or did not all run. Their per-PR twins run 1e6; a failure only here, at 1e7, means the tail-call bound held at 1e6 and broke further out. stress.log in the uploaded artifact has both harnesses' output."
           exit 1

@@ -238,6 +238,12 @@ if [ "$TUR_TSAN" = "1" ]; then
 fi
 export TUR_TSAN
 
+# stress-fixture-tiering-plan: fixtures carrying a `requires.stress` marker are
+# the full-size twins of per-PR fixtures (1e7 where the per-PR one runs 1e6).
+# SKIPPED unless TUR_STRESS=1, which only the nightly sets.
+TUR_STRESS="${TUR_STRESS:-0}"
+export TUR_STRESS
+
 # proper-tail-calls T2b: `requires.musttail` fixtures assert a depth that holds
 # only where the fixture compiler honours `TUR_MUSTTAIL` -- today clang on
 # x86-64 / aarch64; gcc 13 and the JIT's c2mir expand it to nothing, and a
@@ -477,9 +483,11 @@ write_result() {
     # so lines from concurrent workers do not interleave.
     if [ "$kind" = "PASS" ]; then
         # A named failing test says so on its PASS line, so a reader of the
-        # log sees the gap is still open; skips stay terse.
+        # log sees the gap is still open; skips stay terse -- except a stress
+        # skip, which the nightly's full-size tier greps for to prove its
+        # fixtures really ran (nightly-arm64.yml).
         case "$detail" in
-            *xfail*) echo "PASS $name $detail" ;;
+            *xfail*|*stress-skipped*) echo "PASS $name $detail" ;;
             *)       echo "PASS $name" ;;
         esac
     elif [ "$kind" = "FAIL" ]; then
@@ -721,6 +729,12 @@ run_happy() {
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
         write_result "PASS" "$name" "(tsan-skipped)" ""
+        return
+    fi
+
+    # Full-size stress twin: nightly only (TUR_STRESS=1).
+    if [ -f "$dir/requires.stress" ] && [ "$TUR_STRESS" != "1" ]; then
+        write_result "PASS" "$name" "(stress-skipped)" ""
         return
     fi
 
@@ -1216,7 +1230,7 @@ export TUR BUILD_CC RESULTS_DIR TUR_EMIT_C_MODE
 export TUR_TEST_FILTER TUR_TEST_EXCLUDE
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
-export TUR_TSAN _tur_timeout_bin TUR_MTIME TUR_STDLIB_HASH TUR_CONFIG_HASH
+export TUR_TSAN TUR_STRESS _tur_timeout_bin TUR_MTIME TUR_STDLIB_HASH TUR_CONFIG_HASH
 export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
 export -f note_sanitizer
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed

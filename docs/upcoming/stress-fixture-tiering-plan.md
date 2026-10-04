@@ -1,6 +1,12 @@
 # Stress-fixture tiering -- small counts per PR, full counts nightly
 
-> **Status: PROPOSED 2026-10-03; nothing landed.** Written in answer to "do we
+> **Status: IMPLEMENTED 2026-10-04 -- archive once the first nightly confirms
+> T4** (section 8). The expensive set turned out to be ONE fixture,
+> `r7rs-tail-calls`; it now runs 1e6 per PR and its 1e7 twin runs nightly
+> under a new `requires.stress` marker (mechanism B). Section 3's suggested
+> per-PR value of ~1e5 is WRONG for r7rs and section 8.2 says why.
+>
+> Originally written in answer to "do we
 > need such a high order of magnitude for testing stack depth in tests, and is
 > there a nightly test we can run that is more intensive while keeping feature
 > branch runs quicker?"
@@ -183,3 +189,72 @@ proves contentious, B alone is sufficient and strictly better than C.
   the only JIT figures so far came off a contended laptop, so the ratio is not
   established. It does not block any step here: the tiering decision rests on
   the measured per-fixture wall clock, whatever the per-call breakdown is.
+
+## 8. As implemented (2026-10-04)
+
+### 8.1 T1 -- the measurement
+
+`tests/run-jit.sh` grew `TUR_HEADROOM_TOP` (default 8) so the headroom block
+can list everything. Run over all 147 candidates -- every fixture with an
+`expected.timeout`, plus every `*deep*` / `*stress*` / `*unoptimized*` one --
+on a 4-core Linux Debug + `TUR_JIT` build, otherwise idle:
+
+| fixture | elapsed / budget |
+| --- | --- |
+| `r7rs-tail-calls` | **25 s / 120 s** |
+| `tailcall-carrier-let-deep` | 3 s / 15 s |
+| `tailcall-mutual-deep`, `tailcall-drop-glue-deep`, `panic-catch-unwind-nested-deep` | 2 s / 15 s |
+| `cps-tramp-resume-deep-1m`, `cps-tramp-resume-multicase-500k`, `r7rs-threads-dynamic-env` | 7 s / 60 s |
+| `tailcall-dyn-deep` | 4 s / 60 s |
+| every other candidate | <= 7% of budget |
+
+That agrees with section 4's CI numbers (`r7rs-tail-calls` 45 s, the next
+9 s and falling): **one** fixture is expensive, and it is 40M trampolined
+dynamic calls. Everything else, including `tailcall-dyn-deep`, has margin and
+was left alone (section 7's reasoning applies to it too).
+
+### 8.2 T3 -- how low the count can go, measured for r7rs
+
+Section 3 took its threshold from the Turmeric dynamic-call path (~285 bytes
+a level, overflow near 20-30k). r7rs frames are far smaller. The same
+procedures as the fixture WITHOUT the tail position,
+`(define (f n) (if (= n 0) 0 (+ 1 (f (- n 1)))))`, with the fixture's
+`--debug` flag on an 8 MB stack:
+
+| depth | compiled | `tur jit` |
+| --- | --- | --- |
+| 1e5 - 2.5e5 | ok | ok |
+| 3e5, 1e6 | crash | crash |
+
+So **1e5 would not assert anything** -- it fits on the stack, and a tail-call
+regression would pass. **1e6 is the floor**, ~3.5x past the overflow, and is
+what `r7rs-tail-calls` now runs; its header carries the measurement and a "do
+not lower" note. Measured cost at 1e6: 4 s under `tur jit` (mostly compile;
+23-25 s at 1e7) and 0.29 s compiled (2.7 s at 1e7).
+
+### 8.3 T2 / T4 / T5 -- mechanism, nightly, budgets
+
+- **Mechanism B.** `requires.stress` is honoured by `run.sh`, `run-jit.sh` and
+  `run-turi.sh` (skipped unless `TUR_STRESS=1`). `run.sh` prints the skip as
+  `PASS <name> (stress-skipped)` rather than a bare PASS, so a log can tell a
+  skip from a run. `r7rs-tail-calls-stress` is the 1e7 twin. Mechanism A's env
+  plumbing was not needed for one fixture.
+- **Nightly.** `nightly-arm64.yml` runs every `requires.stress` fixture through
+  both `run.sh` and `run-jit.sh` with `TUR_STRESS=1 TUR_FORCE=1`. The set comes
+  from the markers on disk; an empty set is an error; each harness must report
+  exactly that many passes, with nothing skipped and no `(stress-skipped)`
+  line. Dry-run locally both ways: passes with `TUR_STRESS=1`, and fails with
+  it withheld from either harness.
+- **Budget.** `r7rs-tail-calls` goes 120 -> **30 s** (4 s measured; ~2x a
+  pessimistic slow-macOS estimate), so the budget describes a hang again. The
+  twin keeps 120.
+
+**Found on the way:** `run-jit.sh`'s headroom block hung forever when no
+fixture wrote a `.time` file (all skipped, or all stamp-cache hits): with
+`nullglob` on, the `ls` guard got no operand and succeeded, and `cat` then
+read stdin. Fixed with an array guard.
+
+**Still to observe:** the first scheduled nightly after merge -- its
+`stress.log` should show `r7rs-tail-calls-stress` passing under both
+harnesses. Archive this plan then.
+
