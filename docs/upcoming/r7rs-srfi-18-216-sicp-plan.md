@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2 and T3 done 2026-10-04 (T4, T5 open). Extends docs/archive/r7rs-srfi-plan.md
+Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2, T3 and T5's fixtures done 2026-10-04. Open: T4 (the corpus, in turmeric-lang/sicp-corpus) and the 2.1a reports. Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -356,7 +356,12 @@ them.
   `tests/fixtures/docs-r7rs-guide-examples` does for r7rs-guide.md; today
   they were checked by hand (extracted verbatim and run, 2026-10-03).
   r7rs-guide.md gets SRFI table rows for 18 and 216 and a pointer to the SICP
-  guide.
+  guide. **Mostly done 2026-10-04:** the guide's examples and stated
+  results are pinned on both back ends in `docs-sicp-guide-examples` (and
+  `docs-sicp-guide-no-import` for the no-import claim); r7rs-guide.md has
+  the 18 and 216 rows, a `(sicp extras)` paragraph and SRFI 18 in its
+  Threads paragraph, all pointing at the SICP guide. What stays open is the
+  standing upkeep: each 2.1a fix deletes its "Rough edges" entry.
 
 ## 5. Open questions
 
