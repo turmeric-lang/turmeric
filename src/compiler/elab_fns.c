@@ -346,6 +346,11 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f);
 static bool li_name_reads_only(Elab *e, const Form *f, const char *name,
                                uint32_t depth);
 
+/* The typed half of the same question, over the ELABORATED loop: is every use
+ * of the binding `b` in `x` a read?  Defined beside the `#reads` write walk it
+ * reuses (rw_scan). */
+static bool rw_binding_reads_only(const Expr *x, Binding *b);
+
 /* CT1: a contract predicate whose EVALUATION does something observable.
  *
  * Checks are conditional on the build: `--no-contracts` strips them, a release
@@ -622,7 +627,8 @@ static void li_note_mutable_global(Elab *e, const Form *f, uint32_t depth,
 }
 
 LoopInvSite *li_register_site(Elab *e, const Form *call, const Form *cond,
-                              const Form *inv, uint32_t body_start, Span span) {
+                              const Form *inv, uint32_t body_start, Span span,
+                              const Expr *while_e) {
     if (!e || !call || !inv) return NULL;
     if (e->n_loop_inv_sites == e->cap_loop_inv_sites) {
         uint32_t ncap = e->cap_loop_inv_sites ? e->cap_loop_inv_sites * 2 : 8;
@@ -721,6 +727,15 @@ LoopInvSite *li_register_site(Elab *e, const Form *call, const Form *cond,
                     bool ok = true;
                     for (uint32_t i = body_start; i < call->as.list.len && ok; i++)
                         ok = li_name_reads_only(e, call->as.list.items[i], nm, 0);
+                    /* The Form walk cannot see what a call RETURNS, so it
+                     * approved `(vec-push! (id v) 7)` -- `id` is pure, and a
+                     * pure callee is safe in any position -- and proved a bound
+                     * the push then broke, with the check elided.  The typed
+                     * walk over the elaborated loop sees that `(id v)` is a
+                     * non-scalar value flowing into a writer's slot.  Both must
+                     * agree; the Form walk stays for the shadow check it makes
+                     * by name. */
+                    if (ok) ok = while_e && rw_binding_reads_only(while_e, b);
                     if (ok) fz[k++] = nm;
                 }
             if (k) { site->frozen_names = fz; site->n_frozen = k; }
@@ -1359,6 +1374,266 @@ static const Binding *reads_scan_unframed_param(const Expr *x,
 #undef RSUP
 }
 
+/* reads-frame-verification-ignores-a-callee-write-frame: does a `#reads`
+ * body only READ its framed parameters?
+ *
+ * The two scans above ask what the body reads.  `#reads p` also promises the
+ * body does not CHANGE p's state -- a measure that grows the vector it
+ * measures is not a function of that vector -- and nothing asked.  That
+ * mattered little while the only consumer of the promise was a call-site
+ * crossing, whose callee entry check is never elided; the loop-invariant
+ * frozen grant has no such backstop, so a false promise there elides a check
+ * that would fail.
+ *
+ * Tri-state, like the WF2 / R4 walks:
+ *   RW_CLEAN   -- every use of a framed parameter is a read this walk can see.
+ *   RW_UNKNOWN -- some use is not: the parameter is aliased into a local,
+ *                 returned, stored, captured, or handed to a callee slot with
+ *                 no read-only promise.  Silent; withholds the loop grant.
+ *   RW_WRITES  -- positive evidence: a field or deref store through it, a raw
+ *                 memory write to it, or a callee slot whose `#writes` frame
+ *                 names it (directly or through a `#reads` callee that itself
+ *                 writes).  TUR-W0383, and every grant refused.
+ *
+ * A callee slot is read-only only when the callee is known PURE, or names that
+ * slot in its own `#reads` frame and its own walk came back clean.  A declared
+ * `#writes` frame that EXCLUDES the slot is not enough: it says the callee does
+ * not write through the argument, not that it does not keep it.
+ *
+ * Inline C is the trust boundary, the same one the reads scans stop at: an
+ * inline-C body uses its parameters in C text this walk cannot see, so it
+ * answers CLEAN and the frame stays as trusted as it was.  What this closes is
+ * the Turmeric body that says one thing and does another in plain sight.
+ *
+ * `allow` is "this expression's VALUE is consumed by a read-only use", so a
+ * framed parameter reaching it is fine.  A scalar-typed value cannot alias
+ * state, so it is always allowed; its sub-expressions are still walked. */
+typedef enum { RW_CLEAN = 0, RW_UNKNOWN = 1, RW_WRITES = 2 } RwVerdict;
+
+typedef struct {
+    Binding  **params;
+    uint32_t   n_params;
+    uint64_t   mask;
+    uint32_t   budget;
+    uint64_t   writes;    /* framed params a RW_WRITES verdict reached */
+} RwCtx;
+
+static RwVerdict rw_worse(RwVerdict a, RwVerdict b) { return a > b ? a : b; }
+
+static bool rw_scalar(const Expr *x) {
+    switch (x->type.kind) {
+    case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_NEVER:
+    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+    case TY_FLOAT32: case TY_FLOAT64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* The framed target index `root` is, or -1.  Binding identity, so a shadowing
+ * local is never mistaken for the target. */
+static int rw_framed(const RwCtx *c, const Binding *root) {
+    if (!root) return -1;
+    for (uint32_t i = 0; i < c->n_params && i < 64; i++)
+        if (c->params[i] == root)
+            return (c->mask & (UINT64_C(1) << i)) ? (int)i : -1;
+    return -1;
+}
+
+/* What does `callee` do with the argument in slot j? */
+static RwVerdict rw_slot(Binding *callee, uint32_t j) {
+    if (!callee) return RW_UNKNOWN;
+    if (j < WF_MAX_FRAME_PARAMS && callee->writes_declared &&
+        (callee->writes_param_mask & ((uint32_t)1u << j)))
+        return RW_WRITES;
+    if (j < 64 && (callee->reads_params_mask & (UINT64_C(1) << j))) {
+        if (callee->reads_write_mask & (UINT64_C(1) << j)) return RW_WRITES;
+        if (callee->reads_frame_omits_state || callee->reads_write_unverified)
+            return RW_UNKNOWN;
+        return RW_CLEAN;
+    }
+    return rt_binding_is_pure(callee) ? RW_CLEAN : RW_UNKNOWN;
+}
+
+/* A store through `target`: RW_WRITES when it roots at a framed parameter. */
+static RwVerdict rw_store(RwCtx *c, const Expr *target) {
+    int k = rw_framed(c, reads_read_root(target));
+    if (k < 0) return RW_CLEAN;
+    c->writes |= UINT64_C(1) << k;
+    return RW_WRITES;
+}
+
+static RwVerdict rw_scan(RwCtx *c, const Expr *x, bool allow) {
+#define RWS(sub, a) rw_scan(c, (sub), (a))
+    if (!x) return RW_CLEAN;
+    if (c->budget == 0) return RW_UNKNOWN;
+    c->budget--;
+    if (rw_scalar(x)) allow = true;
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return RW_CLEAN;
+
+    case EX_VAR:
+        return (allow || rw_framed(c, x->as.var.binding) < 0) ? RW_CLEAN
+                                                               : RW_UNKNOWN;
+
+    case EX_INLINE_C:          /* the trust boundary; see above */
+        return RW_CLEAN;
+
+    case EX_ASCRIBE:     return RWS(x->as.ascribe_.inner, allow);
+    case EX_CAST:        return RWS(x->as.cast_.expr, allow);
+    case EX_REINTERPRET: return RWS(x->as.reinterpret_.expr, allow);
+    case EX_GET_FIELD:   return RWS(x->as.get_field_.struct_expr, allow);
+
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return RW_UNKNOWN;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        RwVerdict v = RW_CLEAN;
+        bool reads_args = rt_builtin_shape_pure(sh);
+        switch (sh) {
+        case BS_PRINTLN_INT:  case BS_PRINTLN_FLOAT: case BS_PRINTLN_BOOL:
+        case BS_PRINTLN_CSTR: case BS_PRINTLN_UINT:  case BS_PRINTLN_FLOAT32:
+        case BS_PTR_ARITH: case BS_UNSAFE_CAST: case BS_REINTERPRET:
+        case BS_TRANSMUTE: case BS_RAW_MALLOC:
+            reads_args = true;
+            break;
+        case BS_PREFIX_UNARY_FREE:
+        case BS_PTR_WRITE: case BS_ARRAY_SET_UNCHECKED:
+        case BS_RAW_MEMSET: case BS_RAW_FREE: case BS_RAW_REALLOC:
+        case BS_RAW_MEMCPY:
+            /* arg 0 is written; the rest are values that may be stored. */
+            if (x->as.builtin.n >= 1) {
+                v = rw_store(c, x->as.builtin.args[0]);
+                v = rw_worse(v, RWS(x->as.builtin.args[0], true));
+            }
+            for (uint32_t i = 1; i < x->as.builtin.n; i++)
+                v = rw_worse(v, RWS(x->as.builtin.args[i], false));
+            return v;
+        case BS_PTR_DEREF: case BS_ARRAY_GET_UNCHECKED:
+            reads_args = true;
+            break;
+        default:
+            break;
+        }
+        /* A read-only builtin whose result is not a scalar may hand back an
+         * alias of its argument (pointer arithmetic, a cast), so its args are
+         * only as allowed as its own value is. */
+        bool a = reads_args && (allow || rw_scalar(x));
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            v = rw_worse(v, RWS(x->as.builtin.args[i], a));
+        return v;
+    }
+
+    case EX_CALL: {
+        RwVerdict v = RW_CLEAN;
+        Binding *callee = (x->as.call_.fn_expr || x->as.call_.is_poly_call)
+                              ? NULL : x->as.call_.fn_binding;
+        if (x->as.call_.fn_expr) v = RWS(x->as.call_.fn_expr, false);
+        for (uint32_t j = 0; j < x->as.call_.n_args; j++) {
+            const Expr *a = x->as.call_.args[j];
+            int k = rw_framed(c, reads_read_root(a));
+            if (k < 0) { v = rw_worse(v, RWS(a, false)); continue; }
+            RwVerdict sv = rw_slot(callee, j);
+            if (sv == RW_WRITES) c->writes |= UINT64_C(1) << k;
+            /* A read-only callee may still RETURN an alias of what it read,
+             * which is only harmless where the call's own value is. */
+            if (sv == RW_CLEAN && !allow) sv = RW_UNKNOWN;
+            v = rw_worse(v, sv);
+            v = rw_worse(v, RWS(a, true));
+        }
+        return v;
+    }
+
+    case EX_IF:
+        return rw_worse(RWS(x->as.if_.cond, false),
+                        rw_worse(RWS(x->as.if_.then_, allow),
+                                 RWS(x->as.if_.else_or_null, allow)));
+    case EX_DO: {
+        /* A discarded value aliases nothing, so only the last item inherits. */
+        RwVerdict v = RW_CLEAN;
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            v = rw_worse(v, RWS(x->as.do_.items[i],
+                                i + 1 < x->as.do_.n ? true : allow));
+        return v;
+    }
+    case EX_LET: case EX_LETREC: {
+        /* A binding's init is an alias the walk does not follow. */
+        RwVerdict v = RWS(x->as.let_.body, allow);
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            v = rw_worse(v, RWS(x->as.let_.bindings[i].init, false));
+        return v;
+    }
+    case EX_WHILE:
+        return rw_worse(RWS(x->as.while_.cond, false),
+                        RWS(x->as.while_.body, true));
+    case EX_SET: {
+        RwVerdict v = RWS(x->as.set_.value, false);
+        if (rw_framed(c, x->as.set_.target) >= 0) v = rw_worse(v, RW_UNKNOWN);
+        return v;
+    }
+    case EX_SET_FIELD: {
+        RwVerdict v = rw_store(c, x->as.set_field_.receiver);
+        v = rw_worse(v, RWS(x->as.set_field_.receiver, true));
+        return rw_worse(v, RWS(x->as.set_field_.value, false));
+    }
+    case EX_SET_DEREF: {
+        RwVerdict v = rw_store(c, x->as.set_deref_.ref);
+        v = rw_worse(v, RWS(x->as.set_deref_.ref, true));
+        return rw_worse(v, RWS(x->as.set_deref_.value, false));
+    }
+    case EX_MATCH: {
+        /* Pattern binders alias the scrutinee, so it is not a read-only use. */
+        RwVerdict v = RWS(x->as.match_.scrutinee, false);
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            v = rw_worse(v, RWS(x->as.match_.arms[i].guard, false));
+            v = rw_worse(v, RWS(x->as.match_.arms[i].body, allow));
+        }
+        return v;
+    }
+    case EX_RETURN:
+        return RWS(x->as.return_.value, false);
+    case EX_HANDLE: {
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return RW_UNKNOWN;
+        RwVerdict v = RWS(h->body, allow);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            v = rw_worse(v, RWS(h->cases[i].body, allow));
+        return v;
+    }
+    case EX_RESUME: {
+        const ResumeExpr *r = x->as.resume_.resume;
+        if (!r) return RW_UNKNOWN;
+        return rw_worse(RWS(r->k, false), RWS(r->value, false));
+    }
+    default:
+        return RW_UNKNOWN;   /* unmodeled: could not see, never clean */
+    }
+#undef RWS
+}
+
+/* Run the walk over a `#reads` body.  The body's own value leaves the
+ * function, so it is NOT a read-only use: a measure that returns its framed
+ * parameter hands the caller a handle to write through. */
+static RwVerdict reads_scan_frame_writes(const Expr *body, Binding **params,
+                                         uint32_t n_params, uint64_t mask,
+                                         uint64_t *writes_out) {
+    RwCtx c = { params, n_params, mask, 4096, 0 };
+    RwVerdict v = rw_scan(&c, body, false);
+    if (writes_out) *writes_out = c.writes;
+    return v;
+}
+
+/* A loop's frozen candidate: every use of `b` in the elaborated `while` is a
+ * read.  The loop's own value is discarded, hence `allow`. */
+static bool rw_binding_reads_only(const Expr *x, Binding *b) {
+    Binding *t[1] = { b };
+    RwCtx c = { t, 1, 1, 4096, 0 };
+    return rw_scan(&c, x, true) == RW_CLEAN;
+}
+
 
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
  * by the elaborator because it is the only side that can look a name up in the
@@ -1547,6 +1822,7 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * -- unconditional since checked-reads graduated (2026-08-20). */
     out->reads_params_mask      = b->reads_params_mask;
     out->reads_frame_omits_state = b->reads_frame_omits_state;
+    out->reads_write_unverified  = b->reads_write_unverified;
 
     /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
      * CHECKED.  A consumer that acts on the frame (WF3, WF4) must gate on
@@ -2784,6 +3060,7 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
     s->defn_form  = defn_form;
     s->body_start = body_start;
     s->annot      = annot;
+    s->from_stdlib = e->in_stdlib_load || g_turi_stdlib_preload;
 }
 
 void wf_note_image_cache_root(Elab *e, const Symbol *root, Span span) {
@@ -2913,6 +3190,11 @@ void wf_resolve_write_frames(Elab *e) {
         for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
             WriteFrameSite *s = &e->wf_frame_sites[i];
             if (!s->fn || !s->fn->writes_declared) continue;
+            /* The stdlib's own frames (the Vec mutators' `#writes [v]`) are
+             * not what a dump of this program is asking about, and the
+             * interpreter elaborates the stdlib more than once, which would
+             * print them once per load. */
+            if (s->from_stdlib) continue;
             /* Recompute the FRAME-ONLY verdict so the two questions stay
              * separable in the output: a fixture needs to tell "the frame did
              * not hold" from "the frame held but the body writes a global". */
@@ -5978,7 +6260,7 @@ static bool li_elision_observable(Elab *e, const LoopInvSite *s) {
  * measure inside one predicate congruent.  A loop needs x unchanged ACROSS THE
  * BODY, and a borrow does not give that: every stdlib container's mutator
  * takes the container BY VALUE -- `vec-push!` is `[v : (Vec A) val : A]`,
- * `#fx{}`, with no `#writes` -- so there is no conflicting borrow for
+ * `#fx{}`, `#writes [v]` -- so there is no conflicting borrow for
  * TUR-E0200 to reject and the mutation is legal inside the region.  Publishing
  * the borrow-liveness set alone proved `(<= (vlen v) 3)` preserved by a body
  * calling `(vec-push! v 7)`; see item 2 of
@@ -6039,6 +6321,12 @@ static bool li_name_reads_only(Elab *e, const Form *f, const char *name,
                 rt_resolve_fn(e, h->as.sym->name, &info)) {
                 mask = info.reads_params_mask;
                 pure = info.pure;
+                /* A `#reads` promise the measure's own body was seen to break
+                 * (W0383), or could not be shown to keep, backs nothing here:
+                 * this grant elides a check, with no callee-side backstop.
+                 * See reads_scan_frame_writes. */
+                if (info.reads_frame_omits_state || info.reads_write_unverified)
+                    mask = 0;
             }
             for (uint32_t i = 1; i < f->as.list.len; i++) {
                 const Form *a = f->as.list.items[i];
@@ -6343,7 +6631,7 @@ static bool li_prove_paths_ext(Elab *e, const Form *pred, const char *var_name,
                                RefineEnv *env, Span loc, uint32_t depth,
                                bool *handled) {
     *handled = false;
-    if (!g_opt_loop_invariants || !subject) return false;
+    if (!subject) return false;
 
     if (rt_head_is(subject, "let") && subject->as.list.len >= 3) {
         const Form *bv = subject->as.list.items[1];
@@ -6467,7 +6755,7 @@ static bool li_prove_paths_ext(Elab *e, const Form *pred, const char *var_name,
  * Returns false when the walk has nothing to add, leaving the crossing to the
  * ordinary path. */
 static bool li_cs_path_facts(Elab *e, RefineCallSite *cs, bool *skip) {
-    if (!g_opt_loop_invariants || e->n_loop_inv_sites == 0) return false;
+    if (e->n_loop_inv_sites == 0) return false;
     if (!cs->env || !cs->caller_body || !cs->call_form) return false;
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return false;
     const char *vol[LI_MAX_NAMES];
@@ -12173,6 +12461,43 @@ Expr *elab_defn(Elab *e, const Form *call) {
                                         frame_txt[0] ? frame_txt : "?",
                                         pb_omitted->name->name);
                 }
+            }
+        }
+    }
+    /* reads-frame-verification-ignores-a-callee-write-frame: `#reads p` also
+     * promises the body does not change p.  Walked here, at the definition,
+     * because the loop-invariant frozen grant that leans hardest on the
+     * promise is decided while later defns are still being elaborated -- and
+     * it only ever sees a measure whose mask is already stamped, i.e. one
+     * that has already passed through here.  Stamped on clones too, for the
+     * same whichever-binding-a-call-resolves-to reason as the evidence above. */
+    b->reads_write_mask       = 0;
+    b->reads_write_unverified = false;
+    if (reads_params_mask_defn != 0 && body) {
+        uint64_t wmask = 0;
+        RwVerdict rv = reads_scan_frame_writes(body, params, n_params,
+                                               reads_params_mask_defn, &wmask);
+        b->reads_write_unverified = rv != RW_CLEAN;
+        if (rv == RW_WRITES && wmask) {
+            b->reads_write_mask        = wmask;
+            b->reads_frame_omits_state = true;   /* refuses every grant */
+            if (!e->bare_fat_spec_active) {
+                const char *pn = "?";
+                for (uint32_t pi = 0; pi < n_params && pi < 64; pi++)
+                    if ((wmask & (UINT64_C(1) << pi)) && params[pi] && params[pi]->name) {
+                        pn = params[pi]->name->name;
+                        break;
+                    }
+                diag_emit_with_code(DIAG_WARNING,
+                                    reads_annot_defn ? reads_annot_defn->span
+                                                     : name_f->span,
+                                    TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                    "`#reads %s` is broken: the body writes the state "
+                                    "of '%s' (directly, or through a callee whose "
+                                    "`#writes` frame names it), so two calls this "
+                                    "frame lets the solver treat as one value can "
+                                    "differ; drop `#reads %s`, or stop writing it",
+                                    pn, pn, pn);
             }
         }
     }

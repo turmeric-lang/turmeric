@@ -1199,7 +1199,8 @@ typedef struct LoopInvSite {
 struct Expr *elab_loop_invariant_pred(Elab *e, const struct Form *pred, Span span);
 struct Expr *li_contract_check(Elab *e, struct Expr *pred_e, const char *msg, Span span);
 LoopInvSite *li_register_site(Elab *e, const struct Form *call, const struct Form *cond,
-                              const struct Form *inv, uint32_t body_start, Span span);
+                              const struct Form *inv, uint32_t body_start, Span span,
+                              const struct Expr *while_e);
 
 /* loop-invariants-plan LI2: decide every loop site recorded since `from`
  * (initiation + preservation), eliding the runtime checks a proof covers.
@@ -1349,6 +1350,8 @@ typedef struct WriteFrameSite {
     const Form   *defn_form;   /* the whole `(defn ...)`; the body is a suffix */
     uint32_t      body_start;  /* index of the first body form within defn_form */
     const Form   *annot;       /* the `#writes` form, for the diagnostic span */
+    bool          from_stdlib; /* registered while loading the stdlib (either path);
+                                * left out of --dump-write-frames */
 } WriteFrameSite;
 
 /* Record an annotated function for the deferred WF2 walk. */

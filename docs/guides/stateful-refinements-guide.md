@@ -267,9 +267,12 @@ reported. The evidence is a **write promise** on everything the loop hands `v`
 to, and there are two kinds:
 
 - `#reads v`, which `stdlib/vec.tur`'s `vec-len` and `vec-get` carry. The
-  mutators deliberately carry nothing: that asymmetry is what distinguishes a
+  mutators carry `#writes [v]` instead: that asymmetry is what distinguishes a
   reader from a writer, because the signatures cannot.
-- a callee the compiler knows is **pure**, which writes nothing by definition.
+- a callee the compiler knows is **pure**, which writes nothing by definition
+  -- provided its result is a scalar or is itself only read. A pure function
+  that RETURNS `v` hands back a handle to write through, so
+  `(vec-push! (id v) 7)` withholds the grant.
 
 Hand `v` to anything else inside the loop -- a mutator, or an unannotated
 inline-C callee -- and the grant is withheld for that loop. The bound then
@@ -283,12 +286,14 @@ Two further edges:
   bound to a name nothing mentions. Name that borrow and use it, or take a
   borrow inside the loop, and the loop is declined again (`TUR-W0372`), because
   a shared borrow handed to an **inline-C callee does get written through**.
-- **The `#reads` half is trusted, not verified.** A frame over an inline-C body
-  is `UNVERIFIED`, and nothing reports a `#reads` body that calls a mutator, so
-  a hand-written false claim reaches this grant
-  ([reads-frame-verification-ignores-a-callee-write-frame](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/reads-frame-verification-ignores-a-callee-write-frame.md)).
-  A crossing has survived the same trust since C2, but it keeps the callee's
-  own entry check as a backstop; an elided invariant check has none.
+- **A `#reads` measure written in Turmeric is checked for writes; one written
+  in inline C is trusted.** At its definition, every use of a framed parameter
+  in the body must be a read. A store through it, or handing it to a callee
+  whose `#writes` frame names it, is `TUR-W0383` and refuses every grant. A use
+  the walk cannot vouch for -- binding it to a local, returning it, passing it
+  to an unannotated function -- is silent, but that measure no longer backs
+  this grant. An inline-C body cannot be seen into, so its `#reads` stays a
+  trusted claim; the stdlib's are truthful.
 
 The measure's own refined return is a separate obligation, and stays runtime
 checked while its body is inline C (`(>= r 0)` is not provable from
@@ -356,7 +361,7 @@ both are worth knowing.
 about a mutable resource, congruent in a scope where that resource is frozen."
 The same `frozen` + `#reads` pair covers an open file (`(open? conn)`), a
 resizable buffer (`(in-bounds? buf i)` -- the bounds-elimination case
-[`loop-invariants-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md) wants;
+[`loop-invariants-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/loop-invariants-plan.md) wants;
 pinned by
 `tests/fixtures/refine-stateful-resizable-bounds`: the guard proves inside the
 region, `grow!` is `TUR-E0200` there, and without the region the read is

@@ -139,7 +139,7 @@ world whose state lives behind a `:int` handle is not.
 the one that costs real performance rather than real safety: `for-each` lowers
 to a `while` over slot indices, and the bounds facts that would let dense
 storage drop its per-access check live in the loop condition. Waiting on
-[`loop-invariants-plan.md`](../loop-invariants-plan.md), which was on hold
+[`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md), which was on hold
 for want of a demand signal -- **this plan was that signal.**
 
 > **C3 landed (experimental), 2026-09-30.** `(while c :invariant p ...)` ships
@@ -228,7 +228,7 @@ it.
 |---|---|---|---|
 | C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
 | C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
-| C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../loop-invariants-plan.md) -- **LANDED 2026-09-30** behind `--enable=loop-invariants` |
+| C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md) -- **LANDED 2026-09-30** behind `--enable=loop-invariants` |
 
 **C1 is not strictly blocking** -- probe 2 shows the `(= (alive-i w x) 1)`
 encoding proves today. It is blocking on *whether anyone would write it*. An
@@ -1007,7 +1007,7 @@ work), then RE1 as the dogfooding vehicle, then C3/RE2 only against a profile.
 - [`refinement-types-guide.md`](../../guides/refinement-types-guide.md) -- the surface
 - [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md)
 - [`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md)
-- [`loop-invariants-plan.md`](../loop-invariants-plan.md)
+- [`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md)
 - `docs/guides/ecs-guide.md`, `docs/guides/ecs-vs-haskell-ecs.md`,
   `docs/guides/ecs-storage-guide.md`
 - `docs/guides/substructural-types-guide.md` -- the linear caps C2 leans on

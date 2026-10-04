@@ -23,7 +23,7 @@ Two things this does NOT resolve, both separate and both still open:
   unchanged", which waits on `trusted-refinement-claims-plan` R4.
 - The promise the grant now leans on is TRUSTED, not verified: a hand-written
   false `#reads` reaches the grant and nothing reports it --
-  [reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md),
+  [reads-frame-verification-ignores-a-callee-write-frame](../archive/reads-frame-verification-ignores-a-callee-write-frame.md),
   filed from this work.
 
 ## What was fixed (2026-10-03)
@@ -136,7 +136,7 @@ gap: whether to graduate straight from `XF_LIFECYCLE_PROTOTYPE` and skip a
 gate-OFF behaviour and has no `TUR_LOOP_INVARIANTS=0` hatch to invert onto),
 whether any consumer wants it -- RE2 is unstarted by decision -- and whether
 the trust the frozen grant now rests on is acceptable while
-[reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md)
+[reads-frame-verification-ignores-a-callee-write-frame](../archive/reads-frame-verification-ignores-a-callee-write-frame.md)
 is open.
 
 The companion completeness report,
@@ -335,7 +335,7 @@ trusted, and a hand-written false one reaches the grant with no diagnostic:
 `reads_checked` for an inline-C body is UNVERIFIED (visible in
 `read-frames-dump-verdicts`, which now opens with the two stdlib rows), and the
 reads verification never consults a callee's write frame. Filed as
-[reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md).
+[reads-frame-verification-ignores-a-callee-write-frame](../archive/reads-frame-verification-ignores-a-callee-write-frame.md).
 The annotations added here are truthful -- both bodies dereference and return
 -- and the exposure is not new in kind: a call-site crossing has consumed the
 same trust since C2. It is new in CONSEQUENCE, because a crossing keeps the

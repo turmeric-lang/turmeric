@@ -5,7 +5,7 @@ graduated 2026-08-01 (v0.33.0).** Nothing here is outstanding work. The file is
 archived rather than retired because it remains the **status source** for the
 refinement feature and for the `tests/fixtures/refine-*` corpus -- read it as a
 record, per the two-document note below. Work that builds on it and is still
-open lives in [`loop-invariants-plan.md`](../upcoming/loop-invariants-plan.md)
+open lives in [`loop-invariants-plan.md`](loop-invariants-plan.md)
 (landed 2026-09-29 behind `--enable=loop-invariants`) and
 [`reflected-measures-plan.md`](../upcoming/reflected-measures-plan.md)
 (in progress since 2026-09-29, behind `--enable=reflected-measures`).
@@ -1816,7 +1816,7 @@ never mentions:
 >   crossings are worth more and need no new syntax.
 >
 >   Placeholder plan, with the sketch and the trigger condition written down:
->   [docs/upcoming/hold/loop-invariants-plan.md](../upcoming/loop-invariants-plan.md).
+>   [docs/upcoming/hold/loop-invariants-plan.md](loop-invariants-plan.md).
 > - ~~**A datatype theory for the VC**~~ -- LANDED IN FULL, see above, and
 >   without the new sort this entry assumed it needed. Arm hypotheses and
 >   constructor axioms both shipped; `(.a (Box p q))` now reduces to `p`. What

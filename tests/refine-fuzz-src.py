@@ -1281,11 +1281,10 @@ def run_gate(tur, path, refined):
     # reflected-measures: the `^reflect` helper kinds need the gate on both
     # legs (the reference leg still suppresses discharge, so the equations
     # are asserted into VCs that then decide nothing).
-    # loop-invariants-plan LI5: both legs enable the experiment, so a
-    # generated `:invariant` is ACTED on -- runtime checks in the reference
-    # leg, checks minus proofs in the discharge leg.  Harmless to the other
-    # shapes: each gate only acts where the shape it names is generated.
-    cmd = [tur, "--enable=reflected-measures", "--enable=loop-invariants", "run", path]
+    # loop-invariants-plan LI5: a generated `:invariant` is ACTED on in both
+    # legs (always on since loop-invariants graduated) -- runtime checks in the
+    # reference leg, checks minus proofs in the discharge leg.
+    cmd = [tur, "--enable=reflected-measures", "run", path]
     env = dict(os.environ)
     # See the note in tests/type-fuzz-src.py: a shimmed `python3` (mise, asdf)
     # can re-export another install's TUR_STDLIB_DIR inside this process, which

@@ -428,24 +428,18 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "`^reflect` admits a total measure's defining equation to the refinement solver (bounded unfolding)",
       "docs/upcoming/reflected-measures-plan.md",
       "0.57.0",                  /* introduced */
-      "0.61.0",                  /* expires_at -- advisory; never blocks a release */
+      "0.64.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_reflected_measures },
-    /* loop-invariants (docs/upcoming/loop-invariants-plan.md) -- a `while` may
-     * carry a user-WRITTEN `:invariant <pred>` (checking, never inference).
-     * Follows the `#writes` precedent: the annotation always parses and is
-     * validated (bool, pure); the gate withholds the acting -- the entry and
-     * re-establishment runtime checks, the Hoare initiation/preservation
-     * obligations that elide them, and the post-loop fact `p AND (not c)`.
-     * A prototype: the decline list (place writes, early exits, nested
-     * loops, borrowed locals) is the part expected to move. */
-    { "loop-invariants",
-      "`(while c :invariant p ...)` -- user-written loop invariants: runtime-checked, statically discharged, usable after the loop",
-      "docs/upcoming/loop-invariants-plan.md",
-      "0.57.0",                  /* introduced */
-      "0.58.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_loop_invariants },
+    /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
+     * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
+     * ...)` is always on: the runtime checks, the initiation/preservation
+     * obligations that elide them, and the post-loop fact.  Graduated straight
+     * from prototype -- the decline list a beta would have frozen was closed
+     * out, and the last trust gap (a `#reads` body that writes, and a pure
+     * callee returning an alias into a writer) closed with this change.  No
+     * bisection hatch is kept, so the gate-off fixture retires rather than
+     * inverts.  The name moves to GRADUATED[] below. */
     /* repl-jit-inline-c (aot-compiled-repl-plan C1) -- the interpreter
      * compiles an inline-C defn it cannot run, through the real emitter and
      * the in-process MIR engine, on that defn's first call; `tur repl` and
@@ -552,6 +546,10 @@ static const char *const GRADUATED[] = {
      * enable is exactly what a real adopter's config looks like: it keeps the
      * full migration window.  Eligible to age out at 0.54.0. */
     "class-superclasses",
+    /* graduated 2026-10-03, in the 0.61 line.  Source syntax a user had to
+     * write and enable, so it keeps the full window.  Eligible to age out at
+     * 0.62.0.  See docs/archive/loop-invariants-plan.md. */
+    "loop-invariants",
     NULL,
 };
 

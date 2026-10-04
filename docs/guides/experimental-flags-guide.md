@@ -16,9 +16,7 @@ Unlike `-X`, which conflated "in development", "stable but opt-in", and
 every flag carries a hard expiry by which it must graduate or be removed.
 
 > **The registry is small by design.** Run `tur experiments` for the
-> authoritative current set (at the time of writing it holds three rows:
-> `loop-invariants` -- `(while c :invariant p ...)`, see
-> [loop-invariants-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md);
+> authoritative current set (at the time of writing it holds two rows:
 > `reflected-measures` -- `^reflect` on a defn admits a total measure's
 > defining equation to the refinement solver, see
 > [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)

@@ -129,6 +129,7 @@
 
 (defn vec-push! [A] [v : (Vec A) val :A]
   #fx{}
+  #writes v
   :nil
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -173,6 +174,7 @@
 
 (defn vec-pop! [A] [v : (Vec A)]
   #fx{}
+  #writes v
   :A
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -197,6 +199,7 @@
 
 (defn vec-drop-last-o! [A] [v : (Vec A) owned : int]
   #fx{}
+  #writes v
   :void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -260,6 +263,7 @@
 
 (defn vec-set-o! [A] [v : (Vec A) i :int val :A owned :int]
   #fx{}
+  #writes v
   :void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -361,6 +365,7 @@
 
 (defn vec-free-o [A] [v : (Vec A) owned : int]
   #fx{}
+  #writes v
   : void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
