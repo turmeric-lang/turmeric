@@ -31,7 +31,7 @@ name: Nightly arm64
 # exact thing this split exists to avoid.  Nor does a red run block anything:
 # this repo's standing position is that a red suite never blocks landing.
 #
-# Ref docs/upcoming/ci-aux-suite-latency-plan.md S6.
+# Ref docs/archive/ci-aux-suite-latency-plan.md S6.
 
 on:
   schedule:
@@ -120,11 +120,12 @@ jobs:
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
-      # The trend rows for the FULL arm64 runs.  Uploaded rather than published
-      # to the ci-metrics branch: that publisher aggregates one run of ci.yml,
-      # and teaching it a second workflow is a separate change.  No --shard and
-      # no --suite-shard, so these rows are null/null -- the unsharded series,
-      # directly comparable to every row written before sharding existed.
+      # The trend rows for the FULL arm64 runs, published to the ci-metrics
+      # branch by the `publish-timings` job below.  No --shard and no
+      # --suite-shard, so these rows are null/null -- the unsharded series,
+      # directly comparable to every row written before sharding existed, and
+      # disjoint from the PR leg's macOS rows for the same suites (those carry
+      # [1/4], and the float lint does not run there at all).
       - name: Collect suite timings
         if: always()
         run: |
@@ -155,3 +156,51 @@ jobs:
         run: |
           echo "::error::the full arm64 representation suites failed (ctest exit ${{ steps.run.outputs.rc }}). A cell failing only here, and not on the PR legs, is an arm64-specific representation bug -- which is what this leg exists to find. The per-cell output is in the uploaded nightly.log."
           exit 1
+
+  # Append the nightly's rows to the ci-metrics branch, the same way ci.yml's
+  # `publish-timings` job does for a main push.  ci.yml's publisher only sees
+  # its own run's artifacts, so without this the full-matrix arm64 durations
+  # were retrievable per run and plotted nowhere
+  # (docs/archive/nightly-arm64-timings-not-on-ci-metrics.md).
+  #
+  # A separate ubuntu job rather than a step in `suites`: the write token stays
+  # off the macOS job, and this needs no build.  always(): a red nightly's
+  # timings are the interesting ones.  main only: a workflow_dispatch from a
+  # branch measures that branch, and the trend is main's.
+  publish-timings:
+    name: Publish suite timings
+    needs: suites
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # Concurrency groups are repository-wide, so this shares ci.yml's
+    # publisher lock and the two never race for the branch tip (the script
+    # also re-fetches and retries on a rejected push).
+    concurrency:
+      group: ci-metrics
+      cancel-in-progress: false
+    steps:
+      # Full history: the publish script pushes a branch, and a shallow clone
+      # can have a push rejected with "shallow update not allowed".
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # continue-on-error: a `suites` job that died before its upload leaves
+      # no artifact, and the step below then says so as a warning.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          name: nightly-arm64-${{ github.run_id }}
+          path: nightly-artifact
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          if [ ! -s nightly-artifact/timings.jsonl ]; then
+            echo "::warning::no nightly suite timings collected; nothing to publish"
+            exit 0
+          fi
+          echo "publishing $(wc -l < nightly-artifact/timings.jsonl) nightly row(s)"
+          bash tools/ci/publish-timings.sh nightly-artifact/timings.jsonl
