@@ -36,18 +36,13 @@ directory is worse for triage than no index.
 
 ## Editor integration surfaces (filed 2026-10-03)
 
-The six findings from bringing [Trowel](https://github.com/rjungemann/trowel)
-onto `v0.60.1` are resolved and archived -- the LSP reader, the two formatter
-sweet paths, the `--lang` vocabulary, `:run`/`:reload` changing the session's
-reader, and the signature-help trigger. See `docs/archive/` under their
-original slugs. Two of them were rewritten when the investigation found the
-filed mechanism was wrong. These two came up while resolving them and are
-still open:
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [lsp-relative-load-resolves-against-scratch-dir](lsp-relative-load-resolves-against-scratch-dir.md) | medium | `tur lsp` analyzes a scratch copy in the temp dir, so a relative `(load "b.tur")` resolves there and fails with `load: cannot open`, while `tur check` on the real file is clean. Spice includes are already re-anchored on the document's path (`logical_path`); `load` is not. Same shape as the archived extension bug |
-| [lsp-publishes-other-files-diagnostics-under-one-uri](lsp-publishes-other-files-diagnostics-under-one-uri.md) | low-medium | One `publishDiagnostics` carries every diagnostic from a compile, so a loaded file's error is drawn on the open buffer at the other file's line, told apart only by a non-standard `"file"` key (`lsp_build_array`, `src/compiler/diag.c`). Not latent: any `load`/`import` of a broken file shows it. Fix: one publish per URI |
+All resolved and archived. These are the six findings from bringing
+[Trowel](https://github.com/rjungemann/trowel) onto `v0.60.1`: the LSP reader,
+the two formatter sweet paths, the `--lang` vocabulary, `:run`/`:reload`
+changing the session's reader, and the signature-help trigger. The two found
+while resolving them are archived too: cross-file diagnostics published under
+one URI, and sibling imports resolved from the LSP's scratch directory. See
+`docs/archive/` under their slugs.
 
 ## Security (filed 2026-09-30)
 

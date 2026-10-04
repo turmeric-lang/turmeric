@@ -3308,7 +3308,12 @@ static void lsp_append(DiagLevel level, DiagCode code, Span span, const char *ms
     snprintf(e->message, sizeof(e->message), "%s", msg ? msg : "");
 }
 
-static void lsp_build_array(Buf *b) {
+/* Build the LSP diagnostics array.  With `doc_path` set, entries from another
+ * file are relocated onto the document (see diag_lsp_flush_array_for); with
+ * it NULL, every entry keeps its own coordinates -- the shape the MCP server
+ * and diag_lsp_flush want. */
+static void lsp_build_array_ex(Buf *b, const char *doc_path,
+                               DiagLspRelocateFn relocate, void *ctx) {
     static const int lsp_severity[] = { 1, 2, 3, 4 };
     buf_putc(b, '[');
     for (size_t i = 0; i < lsp_entry_count_; i++) {
@@ -3320,14 +3325,50 @@ static void lsp_build_array(Buf *b) {
          * hand; widen once here instead. */
         unsigned col_end = e->col_end0 > e->col_start0 ? e->col_end0
                                                        : e->col_start0 + 1;
+
+        /* An entry from another file -- a `load`ed or imported module -- has
+         * coordinates that mean nothing in this document.  Published as-is it
+         * underlined whatever sat at that line and column of the open buffer. */
+        bool foreign = doc_path && relocate && e->file[0] &&
+                       strcmp(e->file, doc_path) != 0;
+        uint32_t line0 = e->line0, cs0 = e->col_start0, ce0 = col_end;
+        char rel_uri[1024];
+        bool have_uri = false;
+        if (foreign) {
+            line0 = 0; cs0 = 0; ce0 = 1;
+            rel_uri[0] = '\0';
+            have_uri = relocate(ctx, e->file, &line0, &cs0, &ce0,
+                                rel_uri, sizeof(rel_uri));
+            if (ce0 <= cs0) ce0 = cs0 + 1;
+        }
+
         if (i > 0) buf_putc(b, ',');
         buf_printf(b,
             "{\"severity\":%d"
             ",\"range\":{\"start\":{\"line\":%u,\"character\":%u}"
                        ",\"end\":{\"line\":%u,\"character\":%u}}",
-            sev, e->line0, e->col_start0, e->line0, col_end);
+            sev, line0, cs0, line0, ce0);
         buf_puts(b, ",\"message\":");
-        json_escape_string(b, e->message);
+        if (foreign) {
+            Buf m;
+            buf_init(&m);
+            /* Name the file relative to the document's directory when it
+             * is under it -- `greeter.tur`, not a 90-character temp path. */
+            const char *shown = e->file;
+            const char *slash = strrchr(doc_path, '/');
+            if (slash) {
+                size_t dl = (size_t)(slash - doc_path) + 1;
+                if (strncmp(e->file, doc_path, dl) == 0 && e->file[dl])
+                    shown = e->file + dl;
+            }
+            buf_printf(&m, "in %s:%u:%u: %s", shown, e->line0 + 1,
+                       e->col_start0 + 1, e->message);
+            buf_putc(&m, '\0');
+            json_escape_string(b, m.data);
+            buf_free(&m);
+        } else {
+            json_escape_string(b, e->message);
+        }
         const char *code_str = diag_code_to_string(e->code);
         if (code_str && code_str[0]) {
             buf_puts(b, ",\"code\":");
@@ -3338,9 +3379,24 @@ static void lsp_build_array(Buf *b) {
             buf_puts(b, ",\"file\":");
             json_escape_string(b, e->file);
         }
+        if (foreign && have_uri) {
+            buf_puts(b, ",\"relatedInformation\":[{\"location\":{\"uri\":");
+            json_escape_string(b, rel_uri);
+            buf_printf(b,
+                ",\"range\":{\"start\":{\"line\":%u,\"character\":%u}"
+                           ",\"end\":{\"line\":%u,\"character\":%u}}}",
+                e->line0, e->col_start0, e->line0, col_end);
+            buf_puts(b, ",\"message\":");
+            json_escape_string(b, e->message);
+            buf_puts(b, "}]");
+        }
         buf_putc(b, '}');
     }
     buf_putc(b, ']');
+}
+
+static void lsp_build_array(Buf *b) {
+    lsp_build_array_ex(b, NULL, NULL, NULL);
 }
 
 /* Original snippet rendering (backward compatible) */
@@ -3744,6 +3800,11 @@ void diag_lsp_flush(FILE *out) {
 
 void diag_lsp_flush_array(struct Buf *buf) {
     lsp_build_array(buf);
+}
+
+void diag_lsp_flush_array_for(struct Buf *buf, const char *doc_path,
+                              DiagLspRelocateFn relocate, void *ctx) {
+    lsp_build_array_ex(buf, doc_path, relocate, ctx);
 }
 
 void diag_lsp_end(void) {

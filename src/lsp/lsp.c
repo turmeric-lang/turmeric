@@ -376,6 +376,34 @@ static void doc_symbol_view(const LspDoc *doc,
     *count = doc->symbol_count;
 }
 
+/* DiagLspRelocateFn for run_doc_analysis: a diagnostic from a loaded or
+ * imported file is drawn on the form that pulled that file in, or on the
+ * first line when no form in this document names it (a file loaded by a
+ * loaded file).  Its real location goes along as relatedInformation, so a
+ * client can still jump there. */
+static bool relocate_foreign_diag(void *ctx, const char *foreign_path,
+                                  uint32_t *line0, uint32_t *col_start0,
+                                  uint32_t *col_end0,
+                                  char *uri_out, size_t uri_cap) {
+    const LspDoc *doc = (const LspDoc *)ctx;
+    unsigned l = 0, cs = 0, ce = 1;
+    if (lsp_reference_anchor(doc->text, doc->text_len, foreign_path,
+                             &l, &cs, &ce)) {
+        *line0 = l;
+        *col_start0 = cs;
+        *col_end0 = ce;
+    }
+    /* `load` paths are recorded as written (cwd-relative), so resolve before
+     * building a URI; a path that no longer resolves gets no related
+     * location rather than a wrong one. */
+    char abs_path[4096];
+    const char *p = foreign_path;
+    if (realpath(foreign_path, abs_path)) p = abs_path;
+    else if (foreign_path[0] != '/') return false;
+    lsp_path_to_uri(p, uri_out, uri_cap);
+    return true;
+}
+
 static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
     /* 1. Scan docstrings from source text */
     LspDocTable dtable;
@@ -512,7 +540,12 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
     buf_puts(&params, "{\"uri\":");
     json_str(&params, doc->uri);
     buf_puts(&params, ",\"diagnostics\":");
-    diag_lsp_flush_array(&params);
+    /* lsp-publishes-other-files-diagnostics-under-one-uri: entries from
+     * other files are moved onto this document rather than published at
+     * their own coordinates under its URI.  One publish per URI instead
+     * would overwrite that file's own diagnostics whenever it is also open
+     * -- the last publish for a URI wins -- so they stay here, anchored. */
+    diag_lsp_flush_array_for(&params, doc->path, relocate_foreign_diag, doc);
     buf_puts(&params, "}");
     buf_putc(&params, '\0'); /* NUL-terminate for C-string use; strlen stops here */
     diag_lsp_end();

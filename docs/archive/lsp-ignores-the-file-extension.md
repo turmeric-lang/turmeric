@@ -104,10 +104,11 @@ headerless `.tur.sweet` analyze clean, and the same Scheme body in a `.tur`
 (the control) still reports. The LSP guide states the rule.
 
 The secondary observation -- other files' diagnostics published under the
-open document's URI -- is real, is not fixed here, and is now its own report:
-[lsp-publishes-other-files-diagnostics-under-one-uri](../reported/lsp-publishes-other-files-diagnostics-under-one-uri.md).
-Checking it turned up a related gap, also filed:
-[lsp-relative-load-resolves-against-scratch-dir](../reported/lsp-relative-load-resolves-against-scratch-dir.md).
+open document's URI -- was real, was not fixed here, and became its own
+report, since resolved:
+[lsp-publishes-other-files-diagnostics-under-one-uri](lsp-publishes-other-files-diagnostics-under-one-uri.md).
+Checking it turned up a related bug, also resolved:
+[lsp-sibling-import-resolves-against-scratch-dir](lsp-sibling-import-resolves-against-scratch-dir.md).
 
 ## Client-side consequence
 

@@ -48,6 +48,16 @@ Behaviours worth knowing about:
   been quiet for ~200ms. Requests that need symbols (hover, completion,
   definition, document symbols) force any pending analysis to run first, so
   this delays diagnostics slightly but never returns a stale answer.
+- **Errors in other files are shown on the line that pulls them in.** An
+  error inside a `load`ed or imported file is drawn on the `load` / `import`
+  form that names that file. Its message starts with the real location (`in
+  lib.tur:1:24: ...`), and the location is also attached as
+  `relatedInformation` so the editor can jump to it. A file the document does
+  not name directly -- one loaded by a loaded file -- shows on the first line.
+- **Paths resolve as they do for `tur check`.** A sibling `(import mod)` and
+  `#use-reader-macros "x.tur"` resolve against the document's own directory,
+  and `(load "x.tur")` against the server's working directory -- which is
+  usually the workspace root the editor started it in.
 - **Signature help triggers on space, not `(`.** In a lisp the callee is typed
   after the paren, so nothing names it yet at the moment `(` is typed; the
   space after the head is the first position with an answer. A signature
