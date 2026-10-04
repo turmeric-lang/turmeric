@@ -4222,6 +4222,24 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
         refine_caps_delta(&probe_caps, refine_caps(), &caps_before_probes);
         if (split_ok) {
             refine_note_split_proven();
+            /* Record the site as an obligation already decided, so the JSON
+             * dump lists it.  It used to return before any record existed:
+             * a return refinement proved per path appeared in the dump only
+             * when it FAILED, so a consumer could not tell "proved" from "never
+             * checked".  Pre-discharged, so refine_discharge_all skips it and
+             * the stats refine_note_split_proven counted are not counted
+             * twice. */
+            RefineObligation *pob =
+                refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
+                                          rt_sort_of_kind(base_kind),
+                                          type_name(type_simple(base_kind, CK_COPY)),
+                                          loc, env, what, fn_name);
+            if (pob) {
+                pob->discharged = true;
+                pob->proven     = true;
+                pob->decided_by = "RT4 (per-path split)";
+                refine_caps_add_hits(&pob->caps_probe, &probe_caps);
+            }
             env->head = ax_head; env->n_names = ax_names;
             return true;
         }

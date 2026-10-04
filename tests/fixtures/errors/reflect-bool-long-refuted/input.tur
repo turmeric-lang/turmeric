@@ -1,0 +1,22 @@
+;; reflected-measures: the refuting twin of reflect-bool-measure-long.  Unit
+;; propagation in the cube expansion drops cubes that are PROPOSITIONALLY
+;; contradictory; it must never drop the one that is not.  The fourth entry
+;; breaks the order, so the obligation is false and RF6.1's model search must
+;; still say so (TUR-E0371), rather than the pruning turning it into a proof
+;; or an unknown.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect desc? [^borrow xs : Lst] : bool
+  (match xs
+    (Nil) true
+    (Cons h t) (match t
+                 (Nil) true
+                 (Cons h2 _) (and (>= h h2) (desc? t)))))
+
+(defn top [xs : #refine{ v : Lst | (desc? v) }] : int
+  (match xs (Nil) 0 (Cons h _) h))
+
+(defn main [] : int
+  (println (top (Cons 9 (Cons 8 (Cons 8 (Cons 9 (Cons 6 (Cons 2 (Nil)))))))))
+  (println "unreachable")
+  0)

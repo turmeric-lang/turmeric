@@ -6161,22 +6161,14 @@ static int cmd_run(int argc, char **argv) {
         }
         /* RM4: in explicit-file mode, walk up from the file to discover an
          * enclosing build.tur and apply its `:reader-macros [...]` if any.
-         * Mirrors the auto-include discovery a few lines above. */
-        {
-            char *sroot = find_spice_root(explicit_file);
-            if (sroot) {
-                char mp[4096];
-                (void)pkg_resolve_manifest_path(sroot, mp, sizeof(mp));
-                PkgManifest sm; memset(&sm, 0, sizeof(sm));
-                if (pkg_manifest_read(mp, &sm)) {
-                    rm_paths_owned = resolve_manifest_reader_macros(
-                        sroot, &sm, &n_rm_paths);
-                    rm_paths = (const char **)rm_paths_owned;
-                }
-                pkg_manifest_free(&sm);
-                free(sroot);
-            }
-        }
+         * Mirrors the auto-include discovery a few lines above.  The shared
+         * helper also applies the manifest's `:experiments` (and the user
+         * experiments file), which a hand-rolled copy of this walk used to
+         * skip -- so `tur check f.tur` honoured a project's gates and
+         * `tur run f.tur` silently compiled with them off. */
+        rm_paths_owned = discover_manifest_reader_macros(explicit_file,
+                                                         &n_rm_paths);
+        rm_paths = (const char **)rm_paths_owned;
         /* engine-selection-plan E3: a resolved non-cc engine delegates to
          * that engine's own arm; "cc" continues into RUN_ENTRY unchanged. */
         {

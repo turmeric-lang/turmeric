@@ -1,0 +1,7 @@
+;; reflected-measures -- a scoreboard whose preconditions are reflected measures.
+;;
+;; `^reflect` is still behind the `reflected-measures` experiment gate; the
+;; manifest turns it on so `tur check` / `tur run` on src/main.tur need no flag.
+(defpackage reflected-measures
+  :name "reflected-measures"
+  :experiments ["reflected-measures"])
