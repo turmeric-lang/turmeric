@@ -1,0 +1,16 @@
+#lang r7rs
+;; r7rs-tail-calls at full size: 10,000,000 deep, four ways.  NIGHTLY ONLY
+;; (requires.stress -- skipped unless TUR_STRESS=1; nightly-arm64.yml runs it).
+;; The per-PR r7rs-tail-calls asserts the same thing at 1e6, which is already
+;; ~3.5x past the measured stack overflow; this one is the insurance against a
+;; threshold nobody expects to move, and it is 40,000,000 trampoline round
+;; trips -- the reason it is not on every PR (stress-fixture-tiering-plan).
+;; requires.compiled: see r7rs-tail-calls.
+(define (loop i) (if (= i 0) 0 (loop (- i 1))))
+(display (loop 10000000)) (newline)
+(define (ev? n) (if (= n 0) #t (od? (- n 1))))
+(define (od? n) (if (= n 0) #f (ev? (- n 1))))
+(display (ev? 10000000)) (newline)
+(define (ind f n) (if (= n 0) 'done (f f (- n 1))))
+(display (ind ind 10000000)) (newline)
+(let lp ((i 10000000)) (if (= i 0) (display "named-let ok") (lp (- i 1)))) (newline)

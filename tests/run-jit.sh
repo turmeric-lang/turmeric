@@ -24,6 +24,9 @@
 #                  engine SKIPs the whole run (exit 0) so this harness is
 #                  safe to invoke against any build.
 #   TUR_TEST_JOBS  parallelism (default: cpu count, capped at 8)
+#   TUR_HEADROOM_TOP  how many fixtures the closing "closest to their timeout
+#                  budget" block lists (default 8).  Set it high to size the
+#                  whole corpus (stress-fixture-tiering-plan T1).
 #   TUR_TEST_SHARD "i/N" -- run only the i-th of N disjoint slices of the
 #                  corpus, so N runners can share it.  Mirrors run.sh: the
 #                  partition is round-robin by discovery ordinal, ordinals are
@@ -44,6 +47,8 @@
 #   requires.dedicated-runner -- owned by its own ctest target; PASS-skip
 #   requires.spices           -- skipped when the sibling checkout is absent
 #   requires.tsan             -- skipped unless TUR_TSAN=1
+#   requires.stress           -- skipped unless TUR_STRESS=1 (nightly-only
+#                                full-size twin of a per-PR fixture)
 #
 # Like tests/run.sh, a fully green run needs a DEBUG-configured tur: the
 # refine-* fixtures depend on Debug-only refinement discharge and fail on
@@ -333,6 +338,9 @@ run_jit_fixture() {
         echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
     if [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then
         printf 'SKIP %s (requires.tsan)\n' "$name"
+        echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
+    if [ -f "$dir/requires.stress" ] && [ "${TUR_STRESS:-0}" != "1" ]; then
+        printf 'SKIP %s (requires.stress)\n' "$name"
         echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
     if jit_known_miscompile "$name"; then
         printf 'SKIP %s (known miscompile -- see docs/reported/)\n' "$name"
@@ -659,14 +667,21 @@ fi
 # ~1.9x slower 3-core macos-latest ~97% of the time -- so "passed" is not the
 # same as "has margin".  Printed unconditionally and cheap: one awk pass over
 # files the run already wrote.
-if ls "$RESULTS_DIR"/*.time >/dev/null 2>&1; then
+#
+# An array, not `ls`: nullglob is on (above), so when no fixture wrote a .time
+# file -- every one skipped, or answered from the stamp cache -- the glob is
+# EMPTY.  `ls` with no operand lists the cwd and succeeds, and `cat` with no
+# operand then reads stdin, which hung the harness forever on a terminal or
+# socket stdin.
+_time_files=("$RESULTS_DIR"/*.time)
+if [ "${#_time_files[@]}" -gt 0 ]; then
     echo "  closest to their timeout budget (elapsed/budget, worst attempt):"
-    cat "$RESULTS_DIR"/*.time 2>/dev/null \
+    cat "${_time_files[@]}" 2>/dev/null \
       | awk '{ pct = ($2 > 0) ? (100 * $1 / $2) : 0
                if (pct > best[$3]) { best[$3] = pct; el[$3] = $1; bud[$3] = $2 } }
              END { for (n in best) printf "%6.0f%%  %9s  %s\n",
                                          best[n], (el[n] "s/" bud[n] "s"), n }' \
-      | sort -rn | head -8 | sed 's/^/   /'
+      | sort -rn | head -"${TUR_HEADROOM_TOP:-8}" | sed 's/^/   /'
 fi
 
 # The fallback ratchet (see the header above RESULTS_DIR).  Only meaningful

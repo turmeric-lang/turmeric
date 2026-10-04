@@ -174,6 +174,13 @@ caught by the per-fixture bound first and still named.
 This is the second time this fixture has been killed by a slow draw; the
 2026-10-01 occurrence is the other, where it reported as a stdout mismatch.
 
+**2026-10-04 (stress-fixture-tiering-plan):** the cause is now removed rather
+than budgeted around. `r7rs-tail-calls` runs each loop 1e6 deep (4 s under the
+Debug JIT locally, against 23-25 s at 1e7) with a 30 s budget; the 1e7 version
+moved to `r7rs-tail-calls-stress` (`requires.stress`), which only the nightly
+arm64 workflow runs. 1e6 still asserts: the same procedures without the tail
+position overflow an 8 MB stack between 250,000 and 300,000 frames.
+
 Measured frequency, one entry per commit from `suite-timings-2026.jsonl` on
 the `ci-metrics` branch:
 
