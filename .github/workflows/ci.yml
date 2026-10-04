@@ -75,10 +75,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: docs/reported/README.md lists exactly the open reports
-        run: bash tests/check-reported-index.sh
-      - name: r7rs guide SRFI list matches the prelude
-        run: bash tests/check-r7rs-srfi-sync.sh
+      # One entry point, shared with the Claude Code pre-push hook
+      # (.claude/hooks/docs-lint-before-push.sh): add a check to the script,
+      # not a step here.  Today: docs/reported/README.md lists exactly the open
+      # reports, and the r7rs guide's SRFI list matches the prelude.
+      - name: Docs lint checks (tests/check-docs-lint.sh)
+        run: bash tests/check-docs-lint.sh
 
   test:
     needs: changes
