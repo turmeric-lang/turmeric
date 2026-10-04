@@ -1502,6 +1502,7 @@ static const char *__tur_any_type_name(int64_t tag) {
     }
 }
 static void tur_panic(const char *msg);
+static void tur_panic_at(const char *file, int line, const char *msg);
 static void __tur_any_cast_check(int64_t have, int64_t want) {
     if (have != want) {
         char __m[192];
@@ -1862,19 +1863,19 @@ static inline int64_t tur_sc_bits_f32(float f){ int64_t i=0; memcpy(&i,&f,sizeof
 static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }
 static tur_panic_payload *global_panic_payload;
 static tur_panic_payload *panic_payload_new(int, void *, const char *, int, int);
-static void tur_panic(const char *msg) {
+static void tur_panic_at(const char *file, int line, const char *msg) {
     if (tur_panic_in_progress) {
         fprintf(stderr, "double panic: aborting\n");
         abort();
     }
     tur_panic_in_progress = 1;
     if (tur_handler_chain) {
-        global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, __FILE__, __LINE__, 1);
+        global_panic_payload = panic_payload_new(5, msg ? strdup(msg) : NULL, file, line, 1);
         if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }
         tur_panicking = 1;
         return;
     }
-    fprintf(stderr, "panic at %s:%d: %s\n", __FILE__, __LINE__, msg ? msg : "(no message)");
+    fprintf(stderr, "panic at %s:%d: %s\n", file, line, msg ? msg : "(no message)");
     tur_panic_print_scope_chain();
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
@@ -1882,6 +1883,7 @@ static void tur_panic(const char *msg) {
     fflush(NULL);
     abort();
 }
+static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }
 
 /* Phase R5: tur_panic_abort - no unwinding, immediate abort */
 static void tur_panic_abort(const char *msg) {
@@ -9898,7 +9900,7 @@ static int64_t schema_hydecode_hyabort(int64_t errs) {
         int64_t __ps_193 = (schema_hydecode_hyreport(errs));
         if (tur_panicking) return ((int64_t)0);
         (void)(__ps_193);
-        tur_panic("schema-decode!: validation failed");
+        tur_panic_at("schema.tur", 1071, "schema-decode!: validation failed");
         if (tur_panicking) return ((int64_t)0);
         return ((int64_t)0);
 }
