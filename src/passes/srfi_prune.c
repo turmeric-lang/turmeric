@@ -127,9 +127,12 @@ static void collect_items(Pr *p, Expr **arr, uint32_t n) {
     }
 }
 
+/* An SRFI's file, (sicp extras)'s, or the C half an SRFI splices in beside
+ * its own (scheme_lower.c SRFI_HELPERS), which nothing else loads. */
 static bool srfi_file_span(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
-    return f && f->path && (strstr(f->path, "stdlib/srfi/") != NULL || strstr(f->path, "stdlib/sicp/") != NULL);
+    return f && f->path && (strstr(f->path, "stdlib/srfi/") != NULL || strstr(f->path, "stdlib/sicp/") != NULL ||
+                            strstr(f->path, "stdlib/r7rs/thread.tur") != NULL);
 }
 
 /* A `def` whose initializer is dropped with it must do nothing but make its
@@ -182,8 +185,12 @@ static Binding *item_binding(const Expr *e) {
  * Anything else -- an indirect call, a builtin, a global `set!`, I/O,
  * control -- is an effect, and the `def` stays.
  * ------------------------------------------------------------------------- */
-static const char *const PURE_PRELUDE[] = {
-    "r7rs-list->vector", "r7rs-vector->list", "r7rs-vector-copy", "r7rs-vector", "r7rs-list",
+static const struct { const char *name; bool no_rest; } PURE_PRELUDE[] = {
+    { "r7rs-list->vector", false }, { "r7rs-vector->list", false }, { "r7rs-vector-copy", false },
+    { "r7rs-vector", false },       { "r7rs-list", false },
+    /* With no converter, make-parameter only allocates; a converter is
+     * called on the initial value, and may do anything. */
+    { "r7rs-make-parameter", true },
 };
 
 typedef struct Purity {
@@ -193,21 +200,33 @@ typedef struct Purity {
     PSet state;   /* FnDef* -> 1 in progress, 2 allocation-only, 3 not */
 } Purity;
 
-static bool prelude_pure(const Binding *b) {
+/* `call` names one of PURE_PRELUDE, with a rest argument it allows. */
+static bool prelude_pure(const Expr *call) {
+    const Binding *b = call->as.call_.fn_binding;
     if (!b || !b->is_global || !b->name) return false;
     const SourceFile *f = diag_source_file(b->span.file_id);
     if (!f || !f->path) return false;
     size_t n = strlen(f->path), m = strlen("stdlib/r7rs/prelude.tur");
     if (n < m || strcmp(f->path + n - m, "stdlib/r7rs/prelude.tur") != 0) return false;
-    for (size_t i = 0; i < sizeof PURE_PRELUDE / sizeof PURE_PRELUDE[0]; i++)
-        if (strcmp(b->name->name, PURE_PRELUDE[i]) == 0) return true;
+    for (size_t i = 0; i < sizeof PURE_PRELUDE / sizeof PURE_PRELUDE[0]; i++) {
+        if (strcmp(b->name->name, PURE_PRELUDE[i].name) != 0) continue;
+        if (!PURE_PRELUDE[i].no_rest) return true;
+        uint32_t na = call->as.call_.n_args;
+        const Expr *rest = na ? call->as.call_.args[na - 1] : NULL;
+        while (rest && (rest->kind == EX_ASCRIBE || rest->kind == EX_CAST || rest->kind == EX_UNION_INJECT))
+            rest = rest->kind == EX_ASCRIBE ? rest->as.ascribe_.inner
+                 : rest->kind == EX_CAST    ? rest->as.cast_.expr
+                                            : rest->as.union_inject_.value;
+        /* No rest arguments: the empty list, spelled 0 or nil. */
+        return rest && ((rest->kind == EX_CONS_LIST && rest->as.cons_list_.n == 0) || rest->kind == EX_NIL_LIT ||
+                        (rest->kind == EX_INT_LIT && rest->as.i == 0));
+    }
     return false;
 }
 
 static bool alloc_only(Purity *pu, const Expr *e);
 
 static bool fn_alloc_only(Purity *pu, const Binding *b) {
-    if (prelude_pure(b)) return true;
     uint32_t idx;
     if (!b || !pset_get(&pu->fn_of, b, &idx)) return false;
     const FnDef *fd = pu->fns[idx];
@@ -266,7 +285,7 @@ static bool alloc_only(Purity *pu, const Expr *e) {
             return e->as.set_.target && !e->as.set_.target->is_global && alloc_only(pu, e->as.set_.value);
         case EX_CALL:
             if (e->as.call_.fn_expr || e->as.call_.dict_arg) return false;
-            if (ctor_call(e)) return alloc_only_n(pu, e->as.call_.args, e->as.call_.n_args);
+            if (ctor_call(e) || prelude_pure(e)) return alloc_only_n(pu, e->as.call_.args, e->as.call_.n_args);
             return fn_alloc_only(pu, e->as.call_.fn_binding) &&
                    alloc_only_n(pu, e->as.call_.args, e->as.call_.n_args);
         default:

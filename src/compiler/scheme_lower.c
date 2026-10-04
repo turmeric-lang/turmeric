@@ -455,6 +455,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  14, SRFI_LIBRARY,    "Character-set Library", "stdlib/srfi/14.scm", NULL },
     {  16, SRFI_BUILTIN,    "Syntax for procedures of variable arity", "stdlib/srfi/16.scm", NULL },
     {  17, SRFI_LIBRARY,    "Generalized set!", "stdlib/srfi/17.scm", NULL },
+    {  18, SRFI_LIBRARY,    "Multithreading support", "stdlib/srfi/18.scm", NULL },
     {  19, SRFI_NOTYET,     "Time Data Types and Procedures", NULL, "S8" },
     {  23, SRFI_BUILTIN,    "Error reporting mechanism", "stdlib/srfi/23.scm", NULL },
     {  25, SRFI_NOTYET,     "Multi-dimensional Array Primitives", NULL, "S8" },
@@ -499,6 +500,13 @@ static const SrfiRow SRFI_LIBS[] = {
     { SICP_EXTRAS_NUM, SRFI_LIBRARY, "SICP extras", "stdlib/sicp/extras.scm", NULL },
 };
 #define N_SRFI_LIBS (sizeof(SRFI_LIBS) / sizeof(SRFI_LIBS[0]))
+/* r7rs-srfi-18-216-sicp-plan D1: an SRFI whose primitives are C has them in
+ * a prelude-shaped file under stdlib/r7rs/, spliced in ahead of the SRFI's
+ * own (lib_files_of_set), whose definitions the SRFI calls by their
+ * r7rs-...__ names. */
+static const struct { int num; const char *file; } SRFI_HELPERS[] = {
+    { 18, "stdlib/r7rs/thread.tur" },
+};
 static const SrfiRow *srfi_row(int64_t num) {
     for (size_t i = 0; i < N_SRFI_LIBS; i++) if (SRFI_LIBS[i].num == num) return &SRFI_LIBS[i];
     return NULL;
@@ -6822,6 +6830,8 @@ static void lib_files_of_set(const Form *set, const char **out, uint32_t cap, ui
     const SrfiRow *srow = srfi_row(srfi_libname_num(set));
     if (srfi_importable(srow)) {
         for (uint32_t i = 0; i < *n; i++) if (out[i] == srow->file) return;
+        for (size_t h = 0; h < sizeof SRFI_HELPERS / sizeof SRFI_HELPERS[0]; h++)
+            if (SRFI_HELPERS[h].num == srow->num && *n < cap) out[(*n)++] = SRFI_HELPERS[h].file;
         if (*n < cap) out[(*n)++] = srow->file;
         return;
     }

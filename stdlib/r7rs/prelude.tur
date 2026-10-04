@@ -2745,7 +2745,7 @@
              (:: (str->sym "srfi-9") any) (:: (str->sym "srfi-11") any)
              (:: (str->sym "srfi-13") any) (:: (str->sym "srfi-14") any)
              (:: (str->sym "srfi-16") any) (:: (str->sym "srfi-17") any)
-             (:: (str->sym "srfi-23") any)
+             (:: (str->sym "srfi-18") any) (:: (str->sym "srfi-23") any)
              (:: (str->sym "srfi-26") any) (:: (str->sym "srfi-27") any)
              (:: (str->sym "srfi-28") any) (:: (str->sym "srfi-30") any)
              (:: (str->sym "srfi-31") any) (:: (str->sym "srfi-34") any)

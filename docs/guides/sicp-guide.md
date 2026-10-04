@@ -184,12 +184,17 @@ Turmeric's test suite.
   sieve of Eratosthenes give the book's answers.
 - **Concurrency (3.4).** The section's code runs: `parallel-execute`,
   `test-and-set!`, and the serializers and mutexes the book builds from
-  them. For now, though, `parallel-execute` runs its procedures **one after
-  another**, in order, not at the same time. That is one of the orders a
-  real concurrent run could take, so every result you get is one the book
-  says is possible. But you will never see the interleaved results 3.4 is
-  about, so an unserialized bank account will look correct. Reason about
-  those on paper, as the book does.
+  them. `parallel-execute` runs each procedure on a thread of its own, so
+  the interleavings the section is about really happen: run the book's
+  unserialized `(set! x (* x x))` / `(set! x (+ x 1))` pair a few hundred
+  times and you will see the lost updates (11 and 100) next to 101 and
+  121. Serialize the two and only 101 and 121 come up. A program that
+  calls `parallel-execute` gets a different interleaving each run; that is
+  the point. Under `tur --interpret` the threads take turns, switching
+  only when one waits, sleeps or spins on `test-and-set!`, so code with
+  none of those -- like that unserialized pair -- runs one procedure to
+  the end before the next starts. Use `tur run` to watch interleavings.
+  If you want threads directly, `(import (srfi 18))` has them.
 
 ### Chapter 4 -- the metacircular evaluator
 
@@ -294,8 +299,6 @@ entry here goes away.
 
 ## What is coming
 
-`parallel-execute` will run its procedures truly at the same time, once
-Turmeric's Scheme has threads (SRFI 18). And
 [sicp-corpus](https://github.com/turmeric-lang/sicp-corpus) runs the
 book's code against Turmeric every day, so breakage is caught before you
 hit it. See the

@@ -515,6 +515,7 @@ R7RS's own forms already are the SRFI's.
 | 14 | Character-set Library | library | library | Written for Turmeric: a set is an inversion list, so the algebra is one merge and membership a binary search. The standard sets cover all of Unicode, as SRFI 14's 2019 CharsetDefs note defines them (`char-set:letter` is the Alphabetic property, `char-set:punctuation` the P* categories, ...), and each is built the first time a program uses it. `char-set:full` is every Unicode scalar value. The linear-update `!` procedures are the pure ones |
 | 16 | Syntax for procedures of variable arity | built in | re-export | `(scheme case-lambda)` |
 | 17 | Generalized set! | library | library | `(set! (f arg ...) v)` is `((setter f) arg ... v)`. The target is an arm of the lowering's `set!`, on in a unit that imports this SRFI's `set!` under any name, so the export is R7RS's own and the import sits beside `(scheme base)` as one binding. Settable out of the box: `car`, `cdr`, the `c[ad]r` family, `vector-ref`, `string-ref` and `bytevector-u8-ref`. `setter` is keyed on procedure identity, which R7RS 6.1 gives a procedure and this implementation keeps |
+| 18 | Multithreading support | library | library | Threads are OS threads; mutexes, condition variables and joins are built on one monitor, with timeouts (a time object or a number of seconds). `thread-terminate!` is refused: an OS thread cannot be stopped safely from outside. A mutex whose owner has ended reads as abandoned. Under `tur --interpret` threads are green (scheduler fibers, which SRFI 18 allows): they switch when one waits, sleeps or yields |
 | 19 | Time Data Types and Procedures | not yet (S8) | library |  |
 | 23 | Error reporting mechanism | built in | re-export | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
@@ -552,7 +553,7 @@ R7RS's own forms already are the SRFI's.
 | 87 | => in case clauses | built in | library | R7RS `case` takes `=>` |
 | 98 | An interface to access environment variables | built in | library | re-exports `(scheme process-context)`'s two procedures |
 | 105 | Curly-infix-expressions | no library | no module | `{a + b}` reads in every `#lang` |
-| 216 | SICP Prerequisites (Portable) | library | no module | `true`, `false`, `nil`, `runtime` (microseconds), `random` (over SRFI 27), `cons-stream`, `the-empty-stream`, `stream-null?`. Until SRFI 18 lands, `parallel-execute` runs its thunks one after another (a schedule SICP 3.4 allows, never an interleaved one). See [Working through SICP](sicp-guide.md) |
+| 216 | SICP Prerequisites (Portable) | library | no module | `true`, `false`, `nil`, `runtime` (microseconds), `random` (over SRFI 27), `cons-stream`, `the-empty-stream`, `stream-null?`. `parallel-execute` runs each thunk on an SRFI 18 thread and joins them all; `test-and-set!` is atomic. See [Working through SICP](sicp-guide.md) |
 
 Each built-in or alias row is one file, `stdlib/srfi/<N>.scm`, holding a
 `(define-library (srfi N) ...)`. `tests/check-r7rs-srfi-sync.sh` checks this
@@ -581,7 +582,8 @@ build prog.tur`, builds without the collector; the data then stays
 allocated until the process exits, the way a Turmeric `:heap` box does.
 
 **Threads** run in parallel under the collector, and their memory is
-reclaimed too. A program starts them through the seam: `thread-spawn-fn`,
+reclaimed too. A program starts them with SRFI 18 (`(import (srfi 18))`,
+`make-thread` and `thread-start!`), or through the seam: `thread-spawn-fn`,
 `session-spawn`, a task group, a future's timeout, or a Turmeric module's
 own `pthread_create`. Each thread allocates from its own cache of slots. A
 collection stops the other threads by signal wherever they are, the way the

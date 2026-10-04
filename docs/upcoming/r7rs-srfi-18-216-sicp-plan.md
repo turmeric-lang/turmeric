@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03, T0b and T0a done 2026-10-04. Extends docs/archive/r7rs-srfi-plan.md
+Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2 and T3 done 2026-10-04 (T4, T5 open). Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -125,6 +125,37 @@ Turmeric side calls back only `thread-entry__`.
 - **Registry access is locked.** The probe's alist was only safe because
   every `register!` happened on the main thread.
 
+**As built (T1-T2, 2026-10-04): simpler than the above.** No registry, no
+callback by name, no pthread mutex per SRFI mutex:
+
+- `stdlib/r7rs/thread.tur` is not a Turmeric module but a prelude-shaped
+  `#lang r7rs` file, like `(scheme time)`'s. Such a file can call a Scheme
+  procedure value, so a new thread's first frame (`r7rs-thread-entry__`)
+  calls its thunk directly. The SRFI table splices it in ahead of
+  `18.scm` (`SRFI_HELPERS` in scheme_lower.c), and 18.scm calls its
+  `r7rs-thread-...__` names, as other SRFI files call prelude internals.
+- **Rooting without a registry.** The thunk is handed from the creator's
+  stack to the child's: the creator waits (parked) until the child has
+  copied it, so it is on a scanned stack at every instant. Threads are
+  detached; a join waits on the thread record, not on `pthread_join`.
+- **One monitor.** Every SRFI 18 mutex, condition variable and join is
+  Scheme state in a record, changed only under one pthread mutex, and every
+  wait is a timed or untimed wait on its one condition variable,
+  re-checked on wake. A condition variable keeps a queue of waiter tokens,
+  so `signal` wakes exactly one and `broadcast` all. Every blocking call is
+  one r7gc.c already routes through a release point.
+- **current-thread** is a parameter: the parameter bindings are per thread
+  (and per fiber), and each new thread binds it first thing.
+- **Abandonment is decided lazily**: a locked mutex whose owner has ended
+  reads as abandoned (`mutex-state`, `mutex-lock!`).
+- **Interpreter (T2):** natives for the inline-C layer of thread.tur (turi
+  overrides only an inline-C defn by name): start is `eval_spawn_fiber`,
+  the monitor is a no-op (fibers switch only at a wait), a wait/sleep/yield
+  is `turi_sched_yield` (fiber.c), and every switch saves, clears and
+  restores turi's process-global dynamic-environment slots, so each green
+  thread has its own handlers and parameter bindings. A wait with nothing
+  able to run anywhere reports a deadlock instead of spinning.
+
 ### D2 -- SRFI 216 is a `library` row over 18 and 27
 
 `stdlib/srfi/216.scm`, written fresh (not the reference, see Section 1).
@@ -136,15 +167,15 @@ emitted C over a bare program (1.51 MB to 1.65 MB, +9%). **Fixed in T0b**
 Binding `random` to `stdlib/random.tur` instead, as an earlier draft
 suggested, is not a drop-in: its float functions return `:int` (a scaled
 integer, `rand-float`, `random-next-float!`), and it has no bignum ranges,
-which SICP's Fermat test (1.2.6) reaches with a large `n`. `test-and-set!` locks one private mutex once T3 has threads; until
-then nothing else can run between its test and its set.
+which SICP's Fermat test (1.2.6) reaches with a large `n`. `test-and-set!` runs under SRFI 18's monitor since T3; until
+then nothing else could run between its test and its set.
 
 **`parallel-execute` before SRFI 18 (decided at T0).** Not an error: it
 runs its thunks one after another, in argument order. That is a schedule a
 concurrent run may produce, so every result is one SICP 3.4 allows, and the
 section's code (serializers, mutexes over `test-and-set!`) runs. The cost is
 that no interleaving ever shows; sicp-guide.md says so in its 3.4 entry. T3
-replaces it with real threads.
+replaces it with real threads. **Replaced at T3 (2026-10-04).**
 
 **Conflicts (D5 of the SRFI plan):** `stream-null?` and `the-empty-stream`
 also exist in `(srfi 41)` with different representations; importing both is
@@ -277,14 +308,29 @@ them.
   (D2) can never show one. The plan is not done until T3 has replaced it
   and the guide's "one after another" caveat is gone. SRFI 18 also stands
   on its own as an R7RS library people expect.
-- **T1 -- SRFI 18, compiled.** D1's two halves; fixture
-  `r7rs-srfi-18` (`requires.compiled` until T2); the stress cases from the
-  existing r7rs-threads fixtures re-expressed through the SRFI API.
-- **T2 -- SRFI 18 under turi.** Native overrides on fibers; drop the
-  `requires.compiled`.
-- **T3 -- 216's thread procedures over 18.** `parallel-execute` starts a
-  thread per thunk and joins them all; `test-and-set!` takes a mutex. The
-  guide's 3.4 entry loses its "one after another" caveat.
+- **T1 -- SRFI 18, compiled. DONE 2026-10-04.** D1's two halves, as built
+  (D1's last part). Fixture `r7rs-srfi-18`: threads, values, uncaught
+  exceptions, join timeouts, owned / not-owned / abandoned / timed-out
+  mutexes, a bounded buffer and a broadcast on condition variables, time
+  objects, the refusals, and eight threads on one mutex allocating between
+  turns (r7rs-threads-stress's shape through the SRFI API). It runs in
+  `tests/run-r7rs-gc.sh` under a collection every 31st allocation
+  (`threads-srfi18`); 30/30 plain runs and a `TUR_GC_TORTURE=1` run
+  matched. An unused `(srfi 18)` import costs only its eight record
+  types' declarations: thread.tur is pruned like an SRFI file, and
+  `make-parameter` with no converter counts as allocation-only.
+- **T2 -- SRFI 18 under turi. DONE 2026-10-04.** Native overrides on
+  fibers (D1's last part); `requires.compiled` dropped, the fixture's
+  output is identical on both back ends.
+- **T3 -- 216's thread procedures over 18. DONE 2026-10-04.**
+  `parallel-execute` starts a thread per thunk and joins them all;
+  `test-and-set!` runs under SRFI 18's monitor and yields when the cell was
+  already set (SICP's mutex spins on it, which would never let the holder
+  run under green threads). Measured: 300 runs of 3.4.1's unserialized
+  `(* x x)` / `(+ x 1)` pair gave 101 (226), 11 (73) and 100 (1). The
+  `r7rs-srfi-216` fixture now checks 40 runs of each, unserialized and
+  serialized, stay inside the book's sets. The guide's "one after
+  another" caveat is gone.
 - **T0a -- `(sicp extras)`** (D4): the library-head change and the file;
   a fixture with the guide's `amb` cases on both back ends. Independent of
   T0, and the guide's extras block becomes the import. **DONE 2026-10-04.**

@@ -1,0 +1,166 @@
+#lang r7rs
+;;; r7rs/thread -- the C half of SRFI 18 (stdlib/srfi/18.scm) for `#lang r7rs`.
+;;;
+;;; Spliced in with `(import (srfi 18))` (scheme_lower.c SRFI_HELPERS), and
+;;; written, like the prelude, in Turmeric shapes -- which can call a Scheme
+;;; procedure value, so a new thread runs its thunk directly and nothing
+;;; calls back into the SRFI by name.  What is here:
+;;;
+;;;   - starting a detached OS thread on a thunk;
+;;;   - one monitor (a mutex and a condition variable) that every SRFI 18
+;;;     mutex, condition variable and join is built on, in Scheme;
+;;;   - the wall clock, a sleep and a yield.
+;;;
+;;; Every blocking call below (the monitor's lock and waits, the handoff's
+;;; wait, nanosleep) is one of the collector's release points: r7gc.c routes
+;;; them through wrappers that park the thread around the call, so a
+;;; collection never waits on a thread that is waiting on SRFI 18.
+;;;
+;;; Interpreter twins of these primitives are T2 of
+;;; docs/upcoming/r7rs-srfi-18-216-sicp-plan.md.
+;;;
+;;; Since: r7rs-srfi-18-216-sicp-plan T1
+;; (srfi 18)'s primitives
+;; The monitor.  SRFI 18's state (who owns which mutex, who waits on which
+;; condition variable, which thread has ended) is Scheme data that only
+;; changes under it, and every wait for a change of it is a wait on it.
+;;
+;; A new thread's thunk is handed from the creator's stack to the child's
+;; (r7rs_thread_handoff, spelled out in each body that uses it, as the
+;; prelude does): the creator waits until the child has taken it, so at every
+;; instant the thunk is on a stack the collector scans, and nothing needs
+;; rooting in libc memory, which it does not scan.
+;;
+;; No top-level C block: the file is spliced into the program where its
+;; import is, so the monitor is a static inside r7rs-thread-monitor__.
+
+;;; r7rs-thread-monitor__ -- internal: the monitor's address.
+(defn r7rs-thread-monitor__ [] : ptr<void>
+  ```c
+  static struct { pthread_mutex_t mu; pthread_cond_t cv; } mon = {
+      PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER };
+  return (void *)&mon;
+  ```)
+
+;;; r7rs-thread-spawn-c__ -- internal: start a detached thread at `entry`
+;;; (r7rs-thread-entry__) on `thunk`; #f when the OS refuses one.  Returns
+;;; once the child holds the thunk.
+(defn r7rs-thread-spawn-c__ [entry : ptr<void> thunk] : bool
+  ```c
+  /* The thunk now lives on another thread, past any region bracket open
+   * here: the region store-hook rule. */
+  TUR_REGION_NOTE_WORDS(&thunk, sizeof thunk);
+  typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int taken; tur_tagged_t thunk; } r7rs_thread_handoff;
+  r7rs_thread_handoff h;
+  pthread_mutex_init(&h.mu, NULL);
+  pthread_cond_init(&h.cv, NULL);
+  h.taken = 0;
+  h.thunk = thunk;
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  pthread_t tid;
+  int rc = pthread_create(&tid, &attr, (void *(*)(void *))entry, &h);
+  pthread_attr_destroy(&attr);
+  if (rc == 0) {
+      pthread_mutex_lock(&h.mu);
+      while (!h.taken) pthread_cond_wait(&h.cv, &h.mu);
+      pthread_mutex_unlock(&h.mu);
+  }
+  pthread_mutex_destroy(&h.mu);
+  pthread_cond_destroy(&h.cv);
+  return rc == 0;
+  ```)
+
+;;; r7rs-thread-take__ -- internal: the child's side of the handoff.
+(defn r7rs-thread-take__ [arg : ptr<void>] : any
+  ```c
+  typedef struct { pthread_mutex_t mu; pthread_cond_t cv; int taken; tur_tagged_t thunk; } r7rs_thread_handoff;
+  r7rs_thread_handoff *h = (r7rs_thread_handoff *)arg;
+  tur_tagged_t t = h->thunk;
+  pthread_mutex_lock(&h->mu);
+  h->taken = 1;
+  pthread_cond_signal(&h->cv);
+  pthread_mutex_unlock(&h->mu);
+  return t;
+  ```)
+
+;;; r7rs-thread-entry__ -- internal: a new thread's first frame.  The thunk
+;;; (18.scm's) catches everything the program's thunk raises.
+(defn r7rs-thread-entry__ [arg : ptr<void>] : ptr<void>
+  (let [thunk (r7rs-thread-take__ arg)]
+    (thunk)
+    arg))
+
+;;; r7rs-thread-spawn__ -- internal: start a thread running `thunk`.
+(defn r7rs-thread-spawn__ [thunk] : bool
+  (r7rs-thread-spawn-c__ r7rs-thread-entry__ thunk))
+
+;;; r7rs-thread-lock__ / r7rs-thread-unlock__ -- internal: the monitor.
+(defn r7rs-thread-lock-c__ [mon : ptr<void>] : nil
+  ```c
+  pthread_mutex_lock((pthread_mutex_t *)mon);
+  ```)
+(defn r7rs-thread-unlock-c__ [mon : ptr<void>] : nil
+  ```c
+  pthread_mutex_unlock((pthread_mutex_t *)mon);
+  ```)
+(defn r7rs-thread-lock__ [] : nil (r7rs-thread-lock-c__ (r7rs-thread-monitor__)))
+(defn r7rs-thread-unlock__ [] : nil (r7rs-thread-unlock-c__ (r7rs-thread-monitor__)))
+
+;;; r7rs-thread-wait__ -- internal: with the monitor held, wait for a change
+;;; until `deadline` (wall-clock seconds; negative: none).  #t when the
+;;; deadline passed.  A return without one is not a promise that anything
+;;; changed: the caller looks again.
+(defn r7rs-thread-wait-c__ [mon : ptr<void> deadline : float] : bool
+  ```c
+  typedef struct { pthread_mutex_t mu; pthread_cond_t cv; } r7rs_thread_mon;
+  r7rs_thread_mon *m = (r7rs_thread_mon *)mon;
+  if (deadline < 0) {
+      pthread_cond_wait(&m->cv, &m->mu);
+      return false;
+  }
+  struct timespec ts;
+  double whole = (double)(int64_t)deadline;
+  ts.tv_sec = (time_t)whole;
+  ts.tv_nsec = (long)((deadline - whole) * 1e9);
+  if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
+  if (ts.tv_nsec < 0) ts.tv_nsec = 0;
+  return pthread_cond_timedwait(&m->cv, &m->mu, &ts) == ETIMEDOUT;
+  ```)
+(defn r7rs-thread-wait__ [deadline : float] : bool
+  (r7rs-thread-wait-c__ (r7rs-thread-monitor__) deadline))
+
+;;; r7rs-thread-notify__ -- internal: with the monitor held, wake every
+;;; waiter to look again.
+(defn r7rs-thread-notify-c__ [mon : ptr<void>] : nil
+  ```c
+  typedef struct { pthread_mutex_t mu; pthread_cond_t cv; } r7rs_thread_mon;
+  pthread_cond_broadcast(&((r7rs_thread_mon *)mon)->cv);
+  ```)
+(defn r7rs-thread-notify__ [] : nil (r7rs-thread-notify-c__ (r7rs-thread-monitor__)))
+
+;;; r7rs-thread-now__ -- internal: the wall clock, in seconds.
+(defn r7rs-thread-now__ [] : float
+  ```c
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+  ```)
+
+;;; r7rs-thread-sleep__ -- internal: sleep `secs` seconds (none if <= 0).
+(defn r7rs-thread-sleep__ [secs : float] : nil
+  ```c
+  if (secs <= 0) return;
+  struct timespec ts, rem;
+  double whole = (double)(int64_t)secs;
+  ts.tv_sec = (time_t)whole;
+  ts.tv_nsec = (long)((secs - whole) * 1e9);
+  while (nanosleep(&ts, &rem) != 0 && errno == EINTR) ts = rem;
+  ```)
+
+;;; r7rs-thread-yield__ -- internal: let another thread run.
+(defn r7rs-thread-yield__ [] : nil
+  ```c
+  sched_yield();
+  ```)

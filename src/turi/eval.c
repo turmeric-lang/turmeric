@@ -11137,6 +11137,8 @@ static TuriValue eval_spawn_fiber(TuriEnv *env, TuriValue cl_val) {
     return turi_future_val(f);
 }
 
+TuriValue turi_spawn_fiber(TuriEnv *env, TuriValue cl) { return eval_spawn_fiber(env, cl); }
+
 /* Wait for the future `fv` to settle and return its value: park the current
  * fiber on it, or pump the event loop from the main context.  DEPR-R0
  * (throw-deprecation-plan): a rejection surfaces as a TURI_REJECTION value

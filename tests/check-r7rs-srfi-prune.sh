@@ -74,11 +74,13 @@ if [ "$out" != "6" ]; then
     fail "p2 printed '$out', expected '6'"
 fi
 
-# r7rs-srfi-18-216-sicp-plan T0b: (srfi 216) imports (srfi 27) for `random`.
-# Unused, it must cost what an unused SRFI 1 does -- nothing beyond a record
-# type's declaration and (scheme time)'s three procedures, which are not SRFI
-# definitions the pass may drop: a few KB of a 1.5 MB program, where all of
-# SRFI 27 used to be 142 KB.  Calling `random` reaches the generator's
+# r7rs-srfi-18-216-sicp-plan T0b: (srfi 216) imports (srfi 27) for `random`,
+# and since T3 (srfi 18) for its threads.  Unused, it must cost what an
+# unused SRFI 1 does -- no procedure of either, nor of SRFI 18's C half
+# (stdlib/r7rs/thread.tur).  What is left is not definitions the pass may
+# drop: the record types' declarations (SRFI 27's one, SRFI 18's eight) and
+# (scheme time)'s three procedures, about 9 KB of a 1.5 MB program, where
+# SRFI 27 alone used to be 142 KB.  Calling `random` reaches the generator's
 # drawing procedures and not the rest of SRFI 27 (pseudo-randomize!, the
 # record's closures): spot-checked by name.
 mkdir -p "$TMP/q1" "$TMP/q2"
@@ -91,11 +93,11 @@ for p in q1 q2; do
 done
 p0_size=$(wc -c < "$TMP/p0/prog.c")
 q1_size=$(wc -c < "$TMP/q1/prog.c")
-if [ $((q1_size - p0_size)) -gt 8192 ]; then
-    fail "an unused (import (srfi 216)) adds $((q1_size - p0_size)) bytes of C (budget 8192) -- is SRFI 27's default-random-source kept again? TUR_SRFI_PRUNE_DEBUG=1 says what reached it"
+if [ $((q1_size - p0_size)) -gt 16384 ]; then
+    fail "an unused (import (srfi 216)) adds $((q1_size - p0_size)) bytes of C (budget 16384) -- is SRFI 27's default-random-source, or SRFI 18's current-thread parameter, kept again? TUR_SRFI_PRUNE_DEBUG=1 says what reached it"
 fi
-if grep -q 'srfi27_' "$TMP/q1/prog.c"; then
-    fail "an unused (import (srfi 216)) still defines SRFI 27 procedures: $(grep -o 'srfi27_[A-Za-z0-9_]*' "$TMP/q1/prog.c" | sort -u | head -5 | tr '\n' ' ')"
+if grep -q 'srfi27_hy_hy\|srfi18_hy_hy\|r7rs_hythread' "$TMP/q1/prog.c"; then
+    fail "an unused (import (srfi 216)) still defines SRFI 27 or SRFI 18 procedures: $(grep -o 'srfi27_hy_hy[A-Za-z0-9_]*\|srfi18_hy_hy[A-Za-z0-9_]*\|r7rs_hythread[A-Za-z0-9_]*' "$TMP/q1/prog.c" | sort -u | head -5 | tr '\n' ' ')"
 fi
 if ! grep -q 'srfi27_hy_hyrandom_hyinteger' "$TMP/q2/prog.c"; then
     fail "q2 calls random, but its C does not define SRFI 27's random-integer"
@@ -113,4 +115,4 @@ fi
 if [ $FAILED -ne 0 ]; then
     exit 1
 fi
-echo "PASS check-r7rs-srfi-prune: an unused (srfi 1) costs nothing; fold costs fold; an unused (srfi 216) carries no SRFI 27"
+echo "PASS check-r7rs-srfi-prune: an unused (srfi 1) costs nothing; fold costs fold; an unused (srfi 216) carries no SRFI 27 or 18"
