@@ -130,23 +130,19 @@
                   (Entry s2 r2) (ranked? r))))
 
 (defn main [] : int
-  ;; The five-judge panel: Int measures unfold the whole board.
+  ;; The five-judge panel.
   (println "average:")
   (println (average (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
   (println "podium total:")
   (println (podium (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
   (println "panel size:")
   (println (panel-size))
-  ;; The final: three entries.  Bool measures (`valid?`, `ranked?`) stop
-  ;; proving at four ground entries today -- each unfolding is an `iff`, and
-  ;; the cube expansion doubles twice per unfolding past REFINE_MAX_CUBES.
-  ;; See docs/reported/reflect-bool-measure-cube-blowup.md.
   (println "winner:")
-  (println (winner (Entry 9 (Entry 8 (Entry 6 (Empty))))))
+  (println (winner (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
   (println "certified total:")
-  (println (certify (Entry 9 (Entry 8 (Entry 6 (Empty))))))
+  (println (certify (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
   (println "runner-up board ranked:")
-  (println (runner-up-ranked? (Entry 9 (Entry 8 (Entry 6 (Empty))))))
+  (println (runner-up-ranked? (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
   ;; The timed round: a Float measure, Real arithmetic.
   (println "timed round:")
   (println (within-cutoff (Lap 19.25 (Lap 20.5 (Lap 18.75 (NoLaps))))))

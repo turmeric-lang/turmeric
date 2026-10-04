@@ -41,6 +41,12 @@
 | RF6.2 `ENC_MAX_PROPAGATE` as a well-founded budget | not done, by design | the plan says touch it only if a real program hits the depth-4 cutoff; none has |
 | RF6.3 RT4 justification | landed | the return-refinement propagation comment in `enc_measure` now says which half of its partial-correctness argument a total callee makes unconditional |
 
+**2026-10-04:** a Bool measure's `iff` equations used to overflow the cube
+cap at four ground elements; unit propagation in the solver's DNF expansion
+fixed it, so Bool measures now run to the same fuel limit as Int ones
+([reflect-bool-measure-cube-blowup](../archive/reflect-bool-measure-cube-blowup.md)).
+`examples/reflected-measures` is the end-to-end program for the feature.
+
 Three things the first cut settled that the phases below did not predict:
 
 - **`if` needs no term.** The logic has no if-then-else, so a body under an

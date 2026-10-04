@@ -36,7 +36,6 @@ tur check --dump-refine=json examples/reflected-measures/src/main.tur
   value given here`.
 - Change `ranked?`'s recursive call to `(ranked? b)`: the definition is
   rejected with `TUR-E0384` (fails the termination gate).
-- Pass `winner` a five-entry board: it falls to `TUR-W0372`. Bool measures
-  stop proving at four ground entries today -- see
-  [reflect-bool-measure-cube-blowup](../../docs/reported/reflect-bool-measure-cube-blowup.md).
-  Int and Float measures handle the five-judge panel fine.
+- Pass `winner` a nine-entry board: unfolding runs out of fuel (8 unfoldings
+  per obligation by default) and the check fails with `TUR-W0385`.
+  `TUR_REFLECT_FUEL=16` raises the budget.

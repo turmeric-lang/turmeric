@@ -1,0 +1,34 @@
+;; reflected-measures: a Bool measure over a LONGER ground list.  Each
+;; unfolding of a Bool measure is an `iff`, asserted as two implications, so
+;; a chain of n unfoldings is n pairs of binary clauses.  The DNF cube
+;; expansion used to distribute every one of them -- 4^n cubes, almost all
+;; holding both `p` and `(not p)` -- and overflowed REFINE_MAX_CUBES at four
+;; elements, though one literal settles each link.  Unit propagation in the
+;; expansion (refine_solver.c) drops a satisfied disjunction and skips a
+;; contradicted disjunct, so the chain expands linearly.  Six elements is
+;; seven unfoldings, inside the default fuel of 8.
+;; docs/archive/reflect-bool-measure-cube-blowup.md
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect desc? [^borrow xs : Lst] : bool
+  (match xs
+    (Nil) true
+    (Cons h t) (match t
+                 (Nil) true
+                 (Cons h2 _) (and (>= h h2) (desc? t)))))
+
+(defn ^reflect in-range? [^borrow xs : Lst] : bool
+  (match xs
+    (Nil) true
+    (Cons h t) (and (>= h 0) (and (<= h 10) (in-range? t)))))
+
+(defn top [xs : #refine{ v : Lst | (desc? v) }] : int
+  (match xs (Nil) 0 (Cons h _) h))
+
+(defn checked [xs : #refine{ v : Lst | (in-range? v) }] : int 1)
+
+(defn main [] : int
+  (println (top (Cons 9 (Cons 8 (Cons 8 (Cons 7 (Cons 6 (Cons 2 (Nil)))))))))
+  (println (checked (Cons 9 (Cons 8 (Cons 8 (Cons 7 (Cons 6 (Cons 2 (Nil)))))))))
+  (println "reflect-bool-measure-long")
+  0)
