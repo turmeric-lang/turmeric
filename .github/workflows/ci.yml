@@ -907,23 +907,21 @@ jobs:
           # any other break in test registration would sail through as a green
           # step that ran no tests -- the same vacuous-pass shape that step
           # exists to prevent.
-          # tur_flags_tests is here as well as in the `test` job, and the
-          # duplication is the point: it is the only harness carrying the
-          # `jit-ffi-*` cases, and EVERY one of them is gated on the engine
-          # being present (`HAS_JIT`), so in the `test` job -- which builds
-          # without -DTUR_JIT=ON -- they all SKIP.  Before this line nothing
-          # in CI ran run-flags.sh against a JIT build on any runner, which
-          # meant the interpreter's whole dynamic-FFI surface (call-ptr,
-          # thunk-backed extern-c, callbacks, struct-by-value) was asserted
-          # only by hand.  The aarch64 HFA refusal in particular is
-          # `#if defined(__aarch64__)` and had NEVER executed anywhere: this
-          # macOS leg is the only arm64 machine in the matrix, so this line
-          # is what turns that case from documentation into a test.
+          # tur_flags_tests is NOT here any more.  It used to be, because its
+          # `jit-ffi-*` cases are gated on the engine (`HAS_JIT`) and the `test`
+          # job built without it, so they all SKIPped there.  Since TUR_JIT
+          # defaulted ON (2026-10-02) the `test` job runs the same Debug + JIT +
+          # ASan build and the same cases (134 passed on Linux, 137 on macOS,
+          # identical in both jobs), including the arm64 HFA refusal on its
+          # macOS leg.  Running it here as well bought no coverage and put two
+          # rows per run into one ci-metrics series (both jit=true now), which
+          # drew the suite as a zig-zag between ~9s and ~28s.
           #
           # --output-junit rides along for the suite-timing trend
           # (docs/archive/suite-timing-trends-plan.md).  These rows carry
-          # jit=true from the build cache, so they form their own series and
-          # are never averaged against the `test` job's jit=false rows.
+          # jit=true, and since TUR_JIT defaulted ON so do the `test` job's: the
+          # two jobs share one ci-metrics environment.  That is why no suite
+          # may run in both -- it would draw two points per run in one series.
           #
           # macos-jit-hang-loses-both-diagnostics: BOUNDED INSIDE THE JOB
           # BUDGET, which is the whole reason the instrumentation above finally
@@ -951,7 +949,7 @@ jobs:
           perl -e 'alarm 2550; exec @ARGV' \
             ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
                 --test-output-size-passed 262144 --test-output-truncation head \
-                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
           rc=${PIPESTATUS[0]}
