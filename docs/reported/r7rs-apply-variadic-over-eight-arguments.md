@@ -1,6 +1,20 @@
 # `#lang r7rs`: `apply` of a variadic procedure refuses a list longer than eight
 
-**Severity:** medium. `(apply + lst)`, `(apply max lst)`, `(apply append
+**Narrowed 2026-10-04: the standard variadic procedures are fixed** (fix
+direction 2). `r7rs-apply-list__` hands a list of more than eight to
+`r7rs-apply-std-many__` (stdlib/r7rs/prelude.tur). That recognises `+`, `*`,
+`-`, `/`, `max`, `min`, `=`, `<`, `>`, `<=`, `>=`, `list`, `append`,
+`string-append`, `vector` and `string` by identity, and computes each from the
+list the way its own body computes it from its rest chain. The folds are
+self tail calls, so `(apply + (iota 1000000))` costs no stack. Both back ends,
+pinned by `tests/fixtures/r7rs-apply-standard-variadic-many`, which also pins
+inexact contagion through `max`/`min`. **Still open:** a program's own
+`(define (f . xs) ...)` applied to more than eight. It now fails with a
+message that says so. That case needs fix direction 1: a primitive that reads
+a closure's fixed count (`__tur_dyn_variadic_fixed`) and calls it with a
+pre-built rest chain, plus its interpreter twin.
+
+**Severity:** low (was medium). `(apply + lst)`, `(apply max lst)`, `(apply append
 lists)` and `(apply string-append strs)` are everyday Scheme, and SICP code
 (and its readers' exercise answers) use them on lists of any length. All of
 these callees are variadic and have no arity ceiling, yet `apply` panics

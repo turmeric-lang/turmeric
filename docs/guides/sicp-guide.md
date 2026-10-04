@@ -292,10 +292,11 @@ entry here goes away.
   gives the variable the new definition, or fails with `unbound variable:
   apply--user`. Rename instead, as shown in Chapter 4.
   [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-saved-standard-procedure-follows-redefinition.md).
-- **`apply` with more than eight arguments** stops with `apply: more than 8
-  arguments is not supported`, even for `+` or `append`. For a sum or a
-  maximum over a long list, use `accumulate` (2.2.3) instead of `(apply +
-  lst)`.
+- **`apply` of your own variadic procedure** (`(define (f . xs) ...)`) to
+  more than eight arguments stops with `apply: more than 8 arguments is
+  supported only for the standard variadic procedures`. The standard ones
+  (`+`, `*`, `max`, `append`, `string-append`, `list`, ...) take a list of
+  any length. For your own, pass the list itself as one argument.
   [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-apply-variadic-over-eight-arguments.md).
 - **Very deep recursion in a compiled program** (around a million calls)
   ends the program with no message. Use `tur --interpret`, which handles it.
