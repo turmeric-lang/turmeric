@@ -603,6 +603,53 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
   return tur_ok_int((int64_t)pos);
   ```)
 ;; ============================================================================
+;; stdlib-os-surface-plan P2.1: line iteration
+;; ============================================================================
+;; One line reader shared by io/read-line (stdin) and file-read-line (any
+;; FileHandle): getline(3) on POSIX, an fgets loop on Windows (no getline).
+;; Answers a fresh malloc'd line with the newline (and a CR before it)
+;; stripped, or NULL with *err set: 0 at end of input, else the errno.
+```c
+#include <errno.h>
+static char *__tur_io_read_line(FILE *f, int *err) {
+  char *line = NULL;
+  size_t len = 0;
+  *err = 0;
+#ifdef _WIN32
+  size_t cap = 0;
+  char chunk[512];
+  for (;;) {
+    if (!fgets(chunk, (int)sizeof chunk, f)) break;
+    size_t n = strlen(chunk);
+    if (len + n + 1 > cap) {
+      size_t ncap = cap ? cap * 2 : 1024;
+      while (ncap < len + n + 1) ncap *= 2;
+      char *grown = (char *)realloc(line, ncap);
+      if (!grown) { free(line); *err = ENOMEM; return NULL; }
+      line = grown; cap = ncap;
+    }
+    memcpy(line + len, chunk, n + 1);
+    len += n;
+    if (n > 0 && chunk[n - 1] == '\n') break;
+  }
+  if (!line) { if (ferror(f)) { *err = errno ? errno : EIO; clearerr(f); } return NULL; }
+#else
+  size_t cap = 0;
+  errno = 0;
+  ssize_t n = getline(&line, &cap, f);
+  if (n < 0) {
+    free(line);
+    if (ferror(f)) { *err = errno ? errno : EIO; clearerr(f); }
+    return NULL;
+  }
+  len = (size_t)n;
+#endif
+  if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+  if (len > 0 && line[len - 1] == '\r') line[--len] = '\0';
+  return line;
+}
+```
+;; ============================================================================
 ;; stdlib-os-surface-plan P0.1: line-oriented stdin
 ;; ============================================================================
 ;;; io/read-line -- read one line from stdin.
@@ -625,34 +672,9 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
   #fx{IO}
   : (Option cstr)
   ```c
-  char *line = NULL;
-  size_t len = 0;
-#ifdef _WIN32
-  size_t cap = 0;
-  char chunk[512];
-  for (;;) {
-    if (!fgets(chunk, (int)sizeof chunk, stdin)) break;
-    size_t n = strlen(chunk);
-    if (len + n + 1 > cap) {
-      size_t ncap = cap ? cap * 2 : 1024;
-      while (ncap < len + n + 1) ncap *= 2;
-      char *grown = (char *)realloc(line, ncap);
-      if (!grown) { free(line); return tur_none(); }
-      line = grown; cap = ncap;
-    }
-    memcpy(line + len, chunk, n + 1);
-    len += n;
-    if (n > 0 && chunk[n - 1] == '\n') break;
-  }
+  int err;
+  char *line = __tur_io_read_line(stdin, &err);
   if (!line) return tur_none();
-#else
-  size_t cap = 0;
-  ssize_t n = getline(&line, &cap, stdin);
-  if (n < 0) { free(line); return tur_none(); }
-  len = (size_t)n;
-#endif
-  if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
-  if (len > 0 && line[len - 1] == '\r') line[--len] = '\0';
   return tur_some_ptr(line);
   ```)
 ;;; io/read-stdin -- read all of stdin into one string.
@@ -689,3 +711,46 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
   buf[len] = '\0';
   return tur_some_ptr(buf);
   ```)
+;;; file-read-line-raw -- one line, EOF as an errno-0 error (internal).
+;;
+;; (Result (Option cstr) IoError) cannot be built from inline-C (the Option is
+;; stored by value inside the Result; see
+;; docs/reported/inline-c-builders-cannot-nest-option-in-result.md), so this
+;; helper answers (Err 0) at end of file and file-read-line nests in Turmeric.
+(defn file-read-line-raw [^borrow fh : FileHandle]
+  #fx{FS}
+  : (Result cstr IoError)
+  ```c
+  int err;
+  char *line = __tur_io_read_line((FILE *)fh, &err);
+  if (!line) return tur_err_int(err);
+  return tur_ok_ptr(line);
+  ```)
+;;; file-read-line -- read the next line from fh.
+;;;
+;;; The bounded-memory way through a large file: one line per call, with the
+;;; newline (and a CR before it) stripped.  The last line counts without a
+;;; trailing newline.  Shares its reader with io/read-line.
+;;;
+;;; Parameters:
+;;;   fh -- an open FileHandle (borrowed; not consumed).
+;;;
+;;; Returns:
+;;;   (Ok (Some line)) -- a fresh heap cstr the caller owns (release with
+;;;   free); (Ok (None)) at end of file; (Err e) on a read error, so errors
+;;;   are never mistaken for end of file.
+;;;
+;;; Example:
+;;;   (match (file-read-line fh)
+;;;     (Ok o)  (match o (Some s) (println s) (None) (println "<eof>"))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P2
+(defn file-read-line [^borrow fh : FileHandle]
+  #fx{FS}
+  : (Result (Option cstr) IoError)
+  (match (file-read-line-raw fh)
+    (Ok s) (Ok (Some s))
+    (Err e) (if (= (io-error/code e) 0)
+              (Ok (:: (None) (Option cstr)))
+              (Err e))))

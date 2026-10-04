@@ -532,3 +532,261 @@ static char **__tur_proc_argv(const char *path, int64_t args) {
   #fx{Proc}
   : (Result nil IoError)
   (process/kill-raw pid (signal->number sig)))
+;; ============================================================================
+;; stdlib-os-surface-plan P2.3: richer child-process I/O
+;; ============================================================================
+;;; ProcOutput -- everything process/output collects from a finished child.
+;;;
+;;; out and err are the child's complete stdout and stderr, as fresh heap
+;;; strings the caller owns (release each with free); status is how it ended.
+;;; (The fields are not spelled stdout / stderr: those are macros in some C
+;;; libraries, and a struct field takes its C name from the field.)
+;;;
+;;; Since: stdlib-os-surface P2
+(defstruct ProcOutput [out : cstr err : cstr status : ExitStatus])
+;;; ProcOpts -- how process/output starts the child.
+;;;
+;;; input -- (Some text) is written to the child's stdin, which is then
+;;;          closed; None gives it an empty stdin (never this process's own).
+;;; cwd   -- (Some dir) runs the child in dir; None inherits the cwd.
+;;; env   -- (Some vars) replaces the environment with these "KEY=VALUE"
+;;;          strings; None inherits it.
+;;; process/default-opts is all three None.
+;;;
+;;; Since: stdlib-os-surface P2
+(defstruct ProcOpts [input : (Option cstr) cwd : (Option cstr) env : (Option (Vec cstr))])
+;;; process/default-opts -- ProcOpts with empty stdin, inherited cwd and env.
+;;;
+;;; Returns:
+;;;   (ProcOpts (None) (None) (None)).
+;;;
+;;; Example:
+;;;   (process/output (process/default-opts) "ls" "-l")
+;;;
+;;; Since: stdlib-os-surface P2
+(defn process/default-opts [] : ProcOpts
+  (ProcOpts (None) (None) (None)))
+;;; ProcRun -- the raw outcome of process/output-raw (internal).
+(defopaque ProcRun :ptr<void>)
+```c
+typedef struct __tur_proc_run { char *out; char *err; int64_t code; } __tur_proc_run;
+```
+;;; process/output-raw -- spawn with three pipes and collect (internal).
+;;
+;; POSIX: fork + execvp, stdin/stdout/stderr on pipes, a close-on-exec pipe for
+;; a failed exec's errno, and a poll(2) loop that feeds stdin and drains both
+;; outputs together -- reading one stream to the end before the other
+;; deadlocks once the child fills the other pipe.  SIGPIPE is ignored for the
+;; call so a child that exits without reading its input cannot kill this
+;; process.  code is encoded as for process/wait-raw.  Windows: not
+;; implemented yet (ENOSYS) -- windows-remaining-plan.md owns that.
+(defn process/output-raw [path : cstr args : int
+                          has-input : bool input : cstr
+                          has-cwd : bool cwd : cstr
+                          has-env : bool env : (Vec cstr)]
+  #fx{Proc}
+  : (Result ProcRun IoError)
+  ```c
+  #include <errno.h>
+  #include <signal.h>
+  #include <unistd.h>
+  #include <fcntl.h>
+  #include <poll.h>  /* tur:optional -- POSIX only */
+  #include <sys/wait.h>  /* tur:optional -- POSIX only (waitpid) */
+#ifdef _WIN32
+  (void)path; (void)args; (void)has_input; (void)input; (void)has_cwd; (void)cwd;
+  (void)has_env; (void)env;
+  return tur_err_int(ENOSYS);
+#else
+  struct __tur_vec { int64_t *data; int64_t len; int64_t cap; };
+  char **argv = __tur_proc_argv(path, args);
+  if (!argv) return tur_err_int(ENOMEM);
+  char **envp = NULL;
+  if (has_env) {
+    struct __tur_vec *ev = (struct __tur_vec *)(intptr_t)env;
+    int64_t n = ev ? ev->len : 0;
+    envp = (char **)malloc((size_t)(n + 1) * sizeof(char *));
+    if (!envp) { free(argv); return tur_err_int(ENOMEM); }
+    for (int64_t i = 0; i < n; i++) envp[i] = (char *)(intptr_t)ev->data[i];
+    envp[n] = NULL;
+  }
+  int pin[2] = {-1, -1}, pout[2] = {-1, -1}, perr[2] = {-1, -1}, pexec[2] = {-1, -1};
+  int e = 0;
+  if (pipe(pin) || pipe(pout) || pipe(perr) || pipe(pexec)) e = errno;
+  if (e) {
+    int all[8] = {pin[0], pin[1], pout[0], pout[1], perr[0], perr[1], pexec[0], pexec[1]};
+    for (int i = 0; i < 8; i++) if (all[i] >= 0) close(all[i]);
+    free(argv); free(envp);
+    return tur_err_int(e);
+  }
+  fcntl(pexec[1], F_SETFD, FD_CLOEXEC);
+  pid_t pid = fork();
+  if (pid < 0) {
+    e = errno;
+    close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
+    close(perr[0]); close(perr[1]); close(pexec[0]); close(pexec[1]);
+    free(argv); free(envp);
+    return tur_err_int(e);
+  }
+  if (pid == 0) {
+    dup2(pin[0], 0); dup2(pout[1], 1); dup2(perr[1], 2);
+    close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
+    close(perr[0]); close(perr[1]); close(pexec[0]);
+    int ce = 0;
+    if (has_cwd && chdir(cwd) != 0) ce = errno;
+    if (!ce) {
+      if (envp) { extern char **environ; environ = envp; }
+      execvp(path, argv);
+      ce = errno;
+    }
+    ssize_t wr = write(pexec[1], &ce, sizeof ce);
+    (void)wr;
+    _exit(127);
+  }
+  close(pin[0]); close(pout[1]); close(perr[1]); close(pexec[1]);
+  free(argv); free(envp);
+  int child_err = 0;
+  ssize_t got;
+  do { got = read(pexec[0], &child_err, sizeof child_err); } while (got < 0 && errno == EINTR);
+  close(pexec[0]);
+  if (got == (ssize_t)sizeof child_err) {
+    close(pin[1]); close(pout[0]); close(perr[0]);
+    int st;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    return tur_err_int(child_err);
+  }
+  void (*old_pipe)(int) = signal(SIGPIPE, SIG_IGN);
+  const char *in_p = has_input ? input : "";
+  size_t in_left = strlen(in_p);
+  int in_fd = pin[1];
+  if (in_left == 0) { close(in_fd); in_fd = -1; }
+  else fcntl(in_fd, F_SETFL, fcntl(in_fd, F_GETFL) | O_NONBLOCK);
+  char *bufs[2] = {NULL, NULL};
+  size_t lens[2] = {0, 0}, caps[2] = {0, 0};
+  int fds[2] = {pout[0], perr[0]};
+  for (int k = 0; k < 2 && !e; k++) {
+    caps[k] = 4096;
+    bufs[k] = (char *)malloc(caps[k]);
+    if (!bufs[k]) e = ENOMEM;
+  }
+  while (!e && (fds[0] >= 0 || fds[1] >= 0 || in_fd >= 0)) {
+    struct pollfd pf[3];
+    int np = 0, idx[3];
+    for (int k = 0; k < 2; k++)
+      if (fds[k] >= 0) { pf[np].fd = fds[k]; pf[np].events = POLLIN; pf[np].revents = 0; idx[np++] = k; }
+    if (in_fd >= 0) { pf[np].fd = in_fd; pf[np].events = POLLOUT; pf[np].revents = 0; idx[np++] = 2; }
+    int pr = poll(pf, (nfds_t)np, -1);
+    if (pr < 0) { if (errno == EINTR) continue; e = errno; break; }
+    for (int j = 0; j < np && !e; j++) {
+      if (!pf[j].revents) continue;
+      int k = idx[j];
+      if (k == 2) {
+        ssize_t w = write(in_fd, in_p, in_left);
+        if (w > 0) { in_p += w; in_left -= (size_t)w; }
+        if ((w < 0 && errno != EAGAIN && errno != EINTR) || in_left == 0
+            || (pf[j].revents & (POLLERR | POLLHUP))) {
+          close(in_fd); in_fd = -1;  /* EPIPE: the child stopped reading */
+        }
+        continue;
+      }
+      if (caps[k] - lens[k] < 2) {
+        char *grown = (char *)realloc(bufs[k], caps[k] * 2);
+        if (!grown) { e = ENOMEM; break; }
+        bufs[k] = grown; caps[k] *= 2;
+      }
+      ssize_t r = read(fds[k], bufs[k] + lens[k], caps[k] - lens[k] - 1);
+      if (r > 0) lens[k] += (size_t)r;
+      else if (r == 0 || (errno != EINTR && errno != EAGAIN)) { close(fds[k]); fds[k] = -1; }
+    }
+  }
+  if (in_fd >= 0) close(in_fd);
+  for (int k = 0; k < 2; k++) if (fds[k] >= 0) close(fds[k]);
+  int status = 0;
+  pid_t wr;
+  do { wr = waitpid(pid, &status, 0); } while (wr < 0 && errno == EINTR);
+  signal(SIGPIPE, old_pipe);
+  if (!e && wr < 0) e = errno;
+  if (e) { free(bufs[0]); free(bufs[1]); return tur_err_int(e); }
+  bufs[0][lens[0]] = '\0';
+  bufs[1][lens[1]] = '\0';
+  __tur_proc_run *run = (__tur_proc_run *)malloc(sizeof *run);
+  if (!run) { free(bufs[0]); free(bufs[1]); return tur_err_int(ENOMEM); }
+  run->out = bufs[0];
+  run->err = bufs[1];
+  run->code = WIFEXITED(status) ? WEXITSTATUS(status)
+            : WIFSIGNALED(status) ? 256 + WTERMSIG(status) : -ECHILD;
+  return tur_ok_ptr(run);
+#endif
+  ```)
+;;; process/proc-run-out -- take the captured stdout (internal).
+(defn process/proc-run-out [r : ProcRun] : cstr
+  ```c
+  return ((__tur_proc_run *)r)->out;
+  ```)
+;;; process/proc-run-err -- take the captured stderr (internal).
+(defn process/proc-run-err [r : ProcRun] : cstr
+  ```c
+  return ((__tur_proc_run *)r)->err;
+  ```)
+;;; process/proc-run-code -- the encoded exit status (internal).
+(defn process/proc-run-code [r : ProcRun] : int
+  ```c
+  return ((__tur_proc_run *)r)->code;
+  ```)
+;;; process/proc-run-free -- free the ProcRun record, not its strings (internal).
+(defn process/proc-run-free [r : ProcRun] : void
+  ```c
+  free((void *)r);
+  ```)
+;;; process/finish-output -- move a ProcRun into a ProcOutput (internal).
+(defn process/finish-output [r : ProcRun] : (Result ProcOutput IoError)
+  (let [out  (process/proc-run-out r)
+        err  (process/proc-run-err r)
+        code (process/proc-run-code r)]
+    (process/proc-run-free r)
+    (match (process/decode-wait code)
+      (Ok st) (Ok (ProcOutput out err st))
+      (Err e) (Err e))))
+;;; process/output-with -- run the raw spawn with opts' cwd and env (internal).
+(defn process/output-with [opts : ProcOpts path : cstr args : int
+                           has-input : bool input : cstr]
+  #fx{Proc}
+  : (Result ProcOutput IoError)
+  (let [has-cwd (match (.cwd opts) (Some _) true (None) false)
+        cwd     (match (.cwd opts) (Some d) d (None) "")]
+    (match (.env opts)
+      (Some vars) (match (process/output-raw path args has-input input has-cwd cwd true vars)
+                    (Ok r) (process/finish-output r)
+                    (Err e) (Err e))
+      (None) (let [none (:: (vec-new) (Vec cstr))]
+               (match (process/output-raw path args has-input input has-cwd cwd false none)
+                 (Ok r) (do (vec-free-o none 0) (process/finish-output r))
+                 (Err e) (do (vec-free-o none 0) (Err e)))))))
+;;; process/output -- run a program to completion and collect everything.
+;;;
+;;; The child's stdout and stderr are each captured in full, read together so
+;;; a chatty child cannot deadlock against a full pipe; its stdin is
+;;; opts' input (or empty).  argv[0] is path, as for process/run.
+;;;
+;;; Parameters:
+;;;   opts -- a ProcOpts (process/default-opts for the plain case)
+;;;   path -- the program to run (PATH searched when it has no slash)
+;;;   args -- the remaining arguments, one cstr each
+;;;
+;;; Returns:
+;;;   (Ok (ProcOutput out err status)), or (Err e) when the child could not be
+;;;   started (e.g. not-found, or a cwd that does not exist).  On Windows this
+;;;   is not implemented yet and answers an ENOSYS IoError.
+;;;
+;;; Example:
+;;;   (match (process/output (process/default-opts) "sh" "-c" "echo hi; echo oops >&2")
+;;;     (Ok o)  (println (.out o))      ; prints "hi"
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P2
+(defn process/output [opts : ProcOpts path : cstr & args : cstr]
+  #fx{Proc}
+  : (Result ProcOutput IoError)
+  (match (.input opts)
+    (Some text) (process/output-with opts path args true text)
+    (None) (process/output-with opts path args false "")))

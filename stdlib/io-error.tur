@@ -127,3 +127,20 @@
   #include <errno.h>
   return e == EACCES || e == EPERM;
   ```)
+;;; io-error/ok-unit -- (Ok nil) as a (Result nil IoError).
+;;;
+;;; Turmeric code cannot spell (Ok nil) today (nil in expression position is
+;;; void; see docs/reported/ok-nil-unconstructible-in-turmeric.md), so
+;;; Turmeric-bodied functions returning (Result nil IoError) return this.
+;;;
+;;; Returns:
+;;;   (Ok nil).
+;;;
+;;; Example:
+;;;   (io-error/ok-unit)  ; => (Ok nil)
+;;;
+;;; Since: stdlib-os-surface P2
+(defn io-error/ok-unit [] : (Result nil IoError)
+  ```c
+  return tur_ok_int(0);
+  ```)

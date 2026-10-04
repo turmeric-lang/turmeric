@@ -718,3 +718,275 @@
   if (fclose(f) != 0 && !e) e = errno ? errno : EIO;
   return e ? tur_err_int(e) : tur_ok_int(0);
   ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P2: streaming and traversal
+;; ============================================================================
+;;; fs/read-lines -- read a whole file as a vector of lines.
+;;;
+;;; Each line has its newline (and a CR before it) stripped.  A final line
+;;; without a trailing newline counts; a trailing newline does not add an
+;;; empty last line.  For files too large to hold at once, open a FileHandle
+;;; and call file-read-line in a loop.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   (Ok lines) -- a (Vec cstr) of fresh heap strings; release it with
+;;;   fs/paths-free -- or (Err e).
+;;;
+;;; Example:
+;;;   (match (fs/read-lines "/etc/hosts")
+;;;     (Ok v)  (do (println (vec-len v)) (fs/paths-free v))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P2
+(defn fs/read-lines [path : cstr]
+  #fx{FS}
+  : (Result (Vec cstr) IoError)
+  ```c
+  #include <errno.h>
+  FILE *f = fopen(path, "rb");
+  if (!f) return tur_err_int(errno);
+  struct __tur_vec { int64_t *data; int64_t len; int64_t cap; };
+  struct __tur_vec *v = (struct __tur_vec *)malloc(sizeof *v);
+  if (!v) { fclose(f); return tur_err_int(ENOMEM); }
+  v->data = NULL; v->len = 0; v->cap = 0;
+  size_t lcap = 256, llen = 0;
+  char *line = (char *)malloc(lcap);
+  int err = line ? 0 : ENOMEM;
+  int c = 0, any = 0;
+  while (!err) {
+    c = fgetc(f);
+    if (c == EOF || c == '\n') {
+      if (c == EOF && !any) break;
+      if (llen > 0 && line[llen - 1] == '\r') llen--;
+      char *s = (char *)malloc(llen + 1);
+      if (!s) { err = ENOMEM; break; }
+      memcpy(s, line, llen);
+      s[llen] = '\0';
+      if (v->len == v->cap) {
+        int64_t ncap = v->cap ? v->cap * 2 : 16;
+        int64_t *grown = (int64_t *)realloc(v->data, (size_t)ncap * sizeof(int64_t));
+        if (!grown) { free(s); err = ENOMEM; break; }
+        v->data = grown; v->cap = ncap;
+      }
+      v->data[v->len++] = (int64_t)(intptr_t)s;
+      llen = 0; any = 0;
+      if (c == EOF) break;
+      continue;
+    }
+    any = 1;
+    if (llen + 1 >= lcap) {
+      char *grown = (char *)realloc(line, lcap * 2);
+      if (!grown) { err = ENOMEM; break; }
+      line = grown; lcap *= 2;
+    }
+    line[llen++] = (char)c;
+  }
+  if (!err && ferror(f)) err = errno ? errno : EIO;
+  free(line);
+  fclose(f);
+  if (err) {
+    for (int64_t i = 0; i < v->len; i++) free((void *)(intptr_t)v->data[i]);
+    free(v->data);
+    free(v);
+    return tur_err_int(err);
+  }
+  return tur_ok_ptr(v);
+  ```)
+;;; fs/read-dir -- the names in a directory, sorted.
+;;;
+;;; Lists every entry except "." and "..", sorted by byte order so the result
+;;; is stable across runs and platforms.  Names only -- join them onto dir
+;;; with fs/path-join for a usable path.
+;;;
+;;; Parameters:
+;;;   dir -- the directory to list
+;;;
+;;; Returns:
+;;;   (Ok names) -- a (Vec cstr) of fresh heap strings; release it with
+;;;   fs/paths-free -- or (Err e) when the directory cannot be opened.
+;;;
+;;; Example:
+;;;   (match (fs/read-dir "/tmp")
+;;;     (Ok v)  (do (println (vec-len v)) (fs/paths-free v))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P2
+(defn fs/read-dir [dir : cstr]
+  #fx{FS}
+  : (Result (Vec cstr) IoError)
+  ```c
+  #include <dirent.h>
+  #include <errno.h>
+  #include <stdlib.h>
+  DIR *d = opendir(dir);
+  if (!d) return tur_err_int(errno);
+  struct __tur_vec { int64_t *data; int64_t len; int64_t cap; };
+  struct __tur_vec *v = (struct __tur_vec *)malloc(sizeof *v);
+  if (!v) { closedir(d); return tur_err_int(ENOMEM); }
+  v->data = NULL; v->len = 0; v->cap = 0;
+  int err = 0;
+  struct dirent *ent;
+  errno = 0;
+  while ((ent = readdir(d))) {
+    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+    if (v->len == v->cap) {
+      int64_t ncap = v->cap ? v->cap * 2 : 16;
+      int64_t *grown = (int64_t *)realloc(v->data, (size_t)ncap * sizeof(int64_t));
+      if (!grown) { err = ENOMEM; break; }
+      v->data = grown; v->cap = ncap;
+    }
+    char *name = strdup(ent->d_name);
+    if (!name) { err = ENOMEM; break; }
+    v->data[v->len++] = (int64_t)(intptr_t)name;
+  }
+  closedir(d);
+  if (err) {
+    for (int64_t i = 0; i < v->len; i++) free((void *)(intptr_t)v->data[i]);
+    free(v->data);
+    free(v);
+    return tur_err_int(err);
+  }
+  /* insertion sort by strcmp: directory listings are small, and this keeps the
+   * body free of a file-scope qsort comparator */
+  for (int64_t i = 1; i < v->len; i++) {
+    int64_t key = v->data[i];
+    int64_t j = i - 1;
+    while (j >= 0 && strcmp((const char *)(intptr_t)v->data[j], (const char *)(intptr_t)key) > 0) {
+      v->data[j + 1] = v->data[j];
+      j--;
+    }
+    v->data[j + 1] = key;
+  }
+  return tur_ok_ptr(v);
+  ```)
+;;; fs/path-join -- join a directory and a name with one separator.
+;;;
+;;; Parameters:
+;;;   dir  -- the directory part (a trailing '/' is not doubled)
+;;;   name -- the entry name
+;;;
+;;; Returns:
+;;;   A fresh heap cstr "dir/name" the caller owns (release with free).
+;;;
+;;; Example:
+;;;   (fs/path-join "/tmp" "a.txt")  ; => "/tmp/a.txt"
+;;;
+;;; Since: stdlib-os-surface P2
+(defn fs/path-join [dir : cstr name : cstr] : cstr
+  ```c
+  size_t dl = strlen(dir), nl = strlen(name);
+  int sep = (dl > 0 && dir[dl - 1] != '/') ? 1 : 0;
+  char *out = (char *)malloc(dl + (size_t)sep + nl + 1);
+  if (!out) return NULL;
+  memcpy(out, dir, dl);
+  if (sep) out[dl] = '/';
+  memcpy(out + dl + sep, name, nl + 1);
+  return out;
+  ```)
+;;; fs/free-cstr -- free a heap cstr (internal).
+(defn fs/free-cstr [s : cstr] : void
+  ```c
+  free((void *)s);
+  ```)
+;;; fs/dup-cstr -- a fresh heap copy of a cstr (internal).
+(defn fs/dup-cstr [s : cstr] : cstr
+  ```c
+  return strdup(s);
+  ```)
+;;; fs/walk-dir? -- is path a directory the walk descends into (internal).
+;;
+;; lstat(2) on POSIX, so a symlink to a directory is reported as a leaf and the
+;; walk never follows it (no cycles).  Windows has no lstat; there stat is used
+;; and symlinked directories are followed.
+(defn fs/walk-dir? [path : cstr] #fx{FS} : bool
+  ```c
+  #include <sys/stat.h>
+  struct stat st;
+#ifdef _WIN32
+  if (stat(path, &st) != 0) return false;
+#else
+  if (lstat(path, &st) != 0) return false;
+#endif
+  return S_ISDIR(st.st_mode);
+  ```)
+;;; fs/walk-names -- visit names[i..] of dir, recursing into directories (internal).
+(defn fs/walk-names [dir : cstr names : (Vec cstr) i : int f : (fn [cstr bool] nil)]
+  #fx{FS}
+  : (Result nil IoError)
+  (if (>= i (vec-len names))
+    (io-error/ok-unit)
+    (let [full   (fs/path-join dir (vec-get names i))
+          is-dir (fs/walk-dir? full)]
+      (f full is-dir)
+      ;; Self-recursion only: a forward reference to a function returning
+      ;; (Result nil IoError) trips TUR-E0012 (see
+      ;; docs/reported/ok-nil-unconstructible-in-turmeric.md).
+      (let [r (if is-dir
+                (match (fs/read-dir full)
+                  (Ok sub) (let [rr (fs/walk-names full sub 0 f)]
+                             (fs/paths-free sub)
+                             rr)
+                  (Err e) (Err e))
+                (io-error/ok-unit))]
+        (fs/free-cstr full)
+        (match r
+          (Ok _) (fs/walk-names dir names (+ i 1) f)
+          (Err e) (Err e))))))
+;;; fs/walk-fn -- call f on every path under root, depth first.
+;;;
+;;; Visits entries in fs/read-dir order (sorted), calling (f path is-dir?)
+;;; for each before descending into it, so nothing is materialized beyond one
+;;; directory's names at a time.  root itself is not visited.  Symlinks are
+;;; not followed on POSIX (no cycles).  The path handed to f is freed when f
+;;; returns -- copy it to keep it.
+;;;
+;;; Parameters:
+;;;   root -- the directory to walk
+;;;   f    -- (fn [path is-dir] nil), called once per entry
+;;;
+;;; Returns:
+;;;   (Ok nil) once the whole tree was visited, or (Err e) for the first
+;;;   directory that could not be read (the walk stops there).
+;;;
+;;; Example:
+;;;   (fs/walk-fn "/tmp/proj" (fn [p : cstr d : bool] : nil (println p)))
+;;;
+;;; Since: stdlib-os-surface P2
+(defn fs/walk-fn [root : cstr f : (fn [cstr bool] nil)]
+  #fx{FS}
+  : (Result nil IoError)
+  (match (fs/read-dir root)
+    (Ok names) (let [r (fs/walk-names root names 0 f)]
+                 (fs/paths-free names)
+                 r)
+    (Err e) (Err e)))
+;;; fs/walk -- every path under root, depth first, as a vector.
+;;;
+;;; The convenience form of fs/walk-fn: the same order (sorted per
+;;; directory, each directory before its contents), root itself excluded,
+;;; symlinks not followed on POSIX.
+;;;
+;;; Parameters:
+;;;   root -- the directory to walk
+;;;
+;;; Returns:
+;;;   (Ok paths) -- a (Vec cstr) of fresh heap paths, each starting with
+;;;   root; release it with fs/paths-free -- or (Err e) for the first
+;;;   directory that could not be read.
+;;;
+;;; Example:
+;;;   (match (fs/walk "/tmp/proj")
+;;;     (Ok v)  (do (println (vec-len v)) (fs/paths-free v))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P2
+(defn fs/walk [root : cstr]
+  #fx{FS}
+  : (Result (Vec cstr) IoError)
+  (let [out (vec-new)]
+    (match (fs/walk-fn root (fn [p : cstr d : bool] : nil (vec-push! out (fs/dup-cstr p))))
+      (Ok _) (Ok out)
+      (Err e) (do (fs/paths-free out) (Err e)))))

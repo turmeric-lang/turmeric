@@ -12,6 +12,11 @@ All notable changes to Turmeric are documented here.
   `SeekFrom` ADT, `fs/append-text`, `time/now-ms` and `time/monotonic-ns`,
   `process/kill` over a `Signal` ADT plus `process/child-pid`, and the
   `eprintln` / `eprint` builtins -- `println`'s overload set, on stderr.
+- **stdlib OS surface, P2.** `fs/read-lines`, `file-read-line`, `fs/read-dir`,
+  `fs/path-join`, `fs/walk` / `fs/walk-fn`, and `process/output` (stdout, stderr and an `ExitStatus`,
+  read concurrently; `ProcOpts` sets stdin, cwd and environment).
+- **`docs/guides/files-and-processes-guide.md`** -- the fs / io / process
+  surface, `IoError`, ownership and the Windows gaps in one page.
 
 ### Changed
 
