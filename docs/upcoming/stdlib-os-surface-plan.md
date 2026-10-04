@@ -1,6 +1,7 @@
 # stdlib OS surface -- the fs / io / process / time gaps a typical user hits
 
-> **Status: PROPOSED 2026-10-04.** Written in response to "is the stdlib
+> **Status: PROPOSED 2026-10-04.** Its three open questions were answered by
+> the author the same day; see section 7. Written in response to "is the stdlib
 > missing fs, os, or posix-related functions that a typical user would expect
 > to see?" The answer was yes; this is the plan, ordered quick wins and pre-v1
 > work first.
@@ -159,12 +160,13 @@ caller cannot mistake a killed child for exit code 9.
 `fs/glob`, `env/all`, and every `argv : int` in `process/*` pass untyped cons
 lists. Move them to a typed container using the parametric-signature-over-
 carrier pattern the int-stand-in audit chose (`Vec`'s shape: typed signature,
-int64 carrier underneath, inline-C body unchanged). **Decision needed:**
-`(Vec cstr)` (auto-loaded, already typed, indexable) vs. `(List cstr)` from
-`list-typed.tur` (zero-cost view over the existing cons carrier, but not
-auto-loaded). Recommendation: `(Vec cstr)` for results (`glob`, `env/all`,
-P2's `walk`) and accept either for `argv` via the variadic
-`& args : cstr` form, which already type-checks each element:
+int64 carrier underneath, inline-C body unchanged).
+
+**Decided 2026-10-04: `(Vec cstr)`** for list results (`glob`, `env/all`,
+P2's `walk`) -- auto-loaded, already typed, indexable. `(List cstr)` from
+`list-typed.tur` was the alternative (a zero-cost view over the existing cons
+carrier) but is not auto-loaded. `argv` moves to the variadic `& args : cstr`
+form, which already type-checks each element:
 
 ```turmeric
 (process/run "/bin/ls" "-l" "/tmp")   ; instead of (cons "/bin/ls" (cons "-l" ...))
@@ -174,7 +176,8 @@ P2's `walk`) and accept either for `argv` via the variadic
 
 `io.tur` and `fs.tur` overlap (`file-exists?` returns `int`, `fs/exists?`
 returns `bool`; `read-file` vs. `fs/read-text`). Make `fs/` the filesystem
-namespace and `io/` the stream/handle namespace, and delete the duplicates.
+namespace and `io/` the stream/handle namespace. The duplicates go through
+the deprecate-then-remove cycle in P1.5.
 
 ### P1.5 Migration
 
@@ -184,9 +187,19 @@ the larger consumer -- ~85 `write-file`, ~37 `file-exists?`, ~24 `read-file`
 call sites, many of them local redefinitions rather than stdlib calls. Land P1
 in turmeric first, then one spices PR that migrates the callers (spices CI
 re-pins turmeric `main` per run, so the spices PR must follow promptly).
-**Decision needed:** whether to keep the old `io.tur` names as deprecated
-aliases for one release, or remove them outright (pre-v1, removal is
-allowed).
+**Decided 2026-10-04: deprecate, then decommission.** The release that lands
+P1 keeps each old name as a thin wrapper over its replacement, marked with the
+existing `^deprecated "message"` attribute (`(defn ^deprecated "use fs/exists?"
+file-exists? ...)`), which warns at every use site and names the replacement.
+The following minor release deletes the wrappers. The CHANGELOG entry for each
+release says which of the two steps it is.
+
+The cycle only covers names that are *going away* (the `io.tur` duplicates
+from P1.4, and `file-handle-ok?`). A function that keeps its name but changes
+its return type (`fs/mkdir`, `fs/stat`, `process/capture`, ...) cannot also
+keep its old signature, so those are a hard break in the P1 release. That is
+what forces the spices migration PR to land right behind P1: the renamed
+callers can wait out the deprecation window, the retyped ones cannot.
 
 ---
 
@@ -282,11 +295,11 @@ Ordered by expected demand. None is started before P0-P2 land.
 - **Docs.** Each phase updates the stdlib API docs (`tur run docs`) and, once
   P1 lands, gains a short "Files and processes" section in a guide.
 
-## 7. Open questions
+## 7. Decisions log
 
-1. P1.3: `(Vec cstr)` vs. `(List cstr)` for list results (recommendation:
-   `Vec`).
-2. P1.5: deprecated aliases for one release, or remove the old `io.tur` names
-   outright?
-3. Should P2 be promoted into `docs/upcoming/v1/` alongside P0 and P1, or
-   stay "should" and slip past v1 if the track needs the time?
+1. **2026-10-04 -- list results are `(Vec cstr)`** (section 3.3).
+2. **2026-10-04 -- old `io.tur` names are deprecated for one release, then
+   removed** (section 3.5).
+3. **2026-10-04 -- this plan stays in `docs/upcoming/`**, not
+   `docs/upcoming/v1/`. P0 and P1 are still the intended pre-v1 work; P2 may
+   slip past v1 if the track needs the time.
