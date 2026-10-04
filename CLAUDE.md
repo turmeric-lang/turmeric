@@ -13,6 +13,13 @@ minimal repro, root cause with file:line when known, fix directions). But
 this is an aid, not a gate -- do not let it stop you from pressing on toward
 v1.
 
+Every file in `docs/reported/` needs a row in `docs/reported/README.md`. CI's
+"Docs lint" job checks that (and the r7rs SRFI table) via
+`tests/check-docs-lint.sh`, which runs in well under a second. A Claude Code
+`PreToolUse` hook (`.claude/hooks/docs-lint-before-push.sh`) runs the same
+script before any `git push` of this repo and blocks the push while it fails.
+It reads the working tree, so commit the fix before pushing again.
+
 ### Test suites -- `bash tests/run.sh`
 
 `bash tests/run.sh` (the by-value HKT path) is the suite. The legacy
@@ -731,6 +738,7 @@ PASS-skip it under certain conditions:
 | Marker | Skips when ... |
 | --- | --- |
 | `requires.tsan` | `TUR_TSAN` is not `1` |
+| `requires.stress` | `TUR_STRESS` is not `1`; the fixture is the full-size (e.g. 1e7) twin of a per-PR fixture, run only by `nightly-arm64.yml`. Its skip prints as `PASS <name> (stress-skipped)` |
 | `requires.interp` | (override) forces the interpreter path even under non-TSan |
 | `requires.interp-only` | always under `run.sh` (happy path and `errors/` alike); the fixture asserts a `tur --interpret` behaviour and is owned by `tests/run-turi.sh` |
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
@@ -739,9 +747,9 @@ PASS-skip it under certain conditions:
 | `requires.musttail` | the fixture compiler (`$CC`) does not honour `TUR_MUSTTAIL` -- probed once per run with the same gate the emitter writes; today only clang on x86-64/aarch64 passes it |
 | `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
 
-`tests/run-turi.sh` honours the same five markers (`requires.compiled`,
+`tests/run-turi.sh` honours the same six markers (`requires.compiled`,
 `requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,
-`requires.tsan`) on both its positive pass and its `errors/` pass, through one
+`requires.tsan`, `requires.stress`) on both its positive pass and its `errors/` pass, through one
 helper, and counts every skip: its summary reads `P passed, F failed, S
 skipped of D discovered` and the run fails if those do not add up. It also
 PASS-skips any fixture whose program (own file or one `load` deep) contains

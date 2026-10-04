@@ -44,7 +44,7 @@ rename tables, versus `(scheme base)` names.
 - A C-level redefinition should never reach `cc`: if the emitter can see a
   duplicate top-level C name, report it as a Turmeric diagnostic naming the
   Scheme identifier.
-- Related: [r7rs-saved-standard-procedure-follows-redefinition](r7rs-saved-standard-procedure-follows-redefinition.md);
+- Related: [r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md);
   fix and pin both with the same SICP 4.1 fixture.
 
 ## Guide upkeep

@@ -1063,6 +1063,8 @@ bool emit_c_type_is_scalar(const char *cname);
 char *emit_c_zero_of(const char *cname);
 /* `#lang r7rs`: main's first statement, re-entering on a big stack (emit_module.c). */
 void emit_main_deep_stack_prologue(Buf *out);
+/* `(panic msg)` at `span`: tur_panic_at with the source location (emit_expr.c). */
+void emit_panic_call(Buf *body, Span span, const char *msg);
 bool emit_str_is_bare_ident(const char *s);
 /* cps-let-binder-bridge-lacks-position-check: the single position-level test --
  * is `v` a bare identifier whose RECORDED emitted C type is exactly

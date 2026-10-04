@@ -302,6 +302,7 @@ done <<< "$TURI_ERRORS_DENY"
 #   requires.dedicated-runner -- owned by its own ctest target
 #   requires.spices           -- needs the sibling ../turmeric-spices checkout
 #   requires.tsan             -- TSan-only fixture
+#   requires.stress           -- nightly-only full-size twin (TUR_STRESS=1)
 # Returns 0 (and has printed + recorded the skip) when the fixture is skipped.
 # ---------------------------------------------------------------------------
 record_result() {   # record_result <name> <kind>
@@ -315,6 +316,7 @@ marker_skip() {     # marker_skip <dir> <name>
     elif [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
         why="requires.spices; sibling checkout absent"
     elif [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then why="requires.tsan"
+    elif [ -f "$dir/requires.stress" ] && [ "${TUR_STRESS:-0}" != "1" ]; then why="requires.stress"
     fi
     [ -n "$why" ] || return 1
     printf 'SKIP %s (%s)\n' "$name" "$why"
