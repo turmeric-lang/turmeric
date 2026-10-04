@@ -347,6 +347,17 @@ them.
   priority order of D3: the repo, its runner and CI first, then sections.
   Each section that fails gets a report under this repo's `docs/reported/`
   and an xfail marker there.
+  **Priority 1 and 4.1 written 2026-10-04** (sicp-corpus PR #1): 1.1-1.3,
+  2.1-2.3 (no picture language), 3.1, 3.3, 3.4, 3.5, and 4.1.1-4.1.4 as
+  printed (the evaluator's own `eval` and `apply`, its driver loop fed the
+  book's session); `(corpus prelude)` gave way to `(import (srfi 216))`.
+  Writing them found three defects, fixed here the same day:
+  [r7rs-program-redefinition-refused](../archive/r7rs-program-redefinition-refused.md)
+  (every section that refines a procedure),
+  [r7rs-internal-procedure-value-not-eq](../archive/r7rs-internal-procedure-value-not-eq.md)
+  (3.3.5's constraints), and the 2.1a `apply` report. Until they reach
+  `main` the affected sections are xfail there. Open: 4.1.5-4.1.7, 4.2,
+  4.3 (with `(sicp extras)`), 4.4, 5.2, 5.5.
 - **T5 -- guides.** `docs/guides/sicp-guide.md` exists (landed with this
   plan) and is written for a student with casual Scheme, not for Turmeric
   users. Each stage keeps it true: T0 replaces its pasted prelude with
