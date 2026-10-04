@@ -52,6 +52,14 @@ static bool pset_get(const PSet *s, const void *p, uint32_t *val) {
     return false;
 }
 
+/* Insert or overwrite p's value. */
+static void pset_set(PSet *s, const void *p, uint32_t val) {
+    if (pset_put(s, p, val)) return;
+    uint32_t i = pset_hash(p, s->cap);
+    while (s->keys[i] != p) i = (i + 1) & (s->cap - 1);
+    s->vals[i] = val;
+}
+
 static void pset_grow(PSet *s) {
     PSet old = *s;
     s->cap = old.cap ? old.cap * 2 : 256;
@@ -151,7 +159,122 @@ static Binding *item_binding(const Expr *e) {
     return NULL;
 }
 
-static bool is_candidate(const Expr *e, bool keep_exported) {
+/* ---------------------------------------------------------------------------
+ * Allocation-only initializers (r7rs-srfi-18-216-sicp-plan T0b)
+ *
+ * A `def` whose initializer CALLS may still be dropped when nothing the call
+ * does can be seen once its result is gone: it only allocates.  SRFI 27's
+ * `(define default-random-source (make-random-source))` is the case that
+ * asks for it -- a record of closures over a fresh state vector -- and it
+ * was the root that kept the whole generator in every program importing
+ * (srfi 27), or (srfi 216) over it.
+ *
+ * The check is deliberately narrow.  An expression is allocation-only when
+ * it is a literal, a reference, a lambda (made, not run), a constructor or
+ * a binding/sequencing form over allocation-only parts, a `set!` of a local,
+ * or a direct call -- arguments allocation-only -- to:
+ *
+ *   - a top-level procedure defined in a stdlib/srfi/ file whose body is
+ *     allocation-only (recursion, direct or mutual, is not: it might not
+ *     return), or
+ *   - one of the prelude's copying constructors in PURE_PRELUDE.
+ *
+ * Anything else -- an indirect call, a builtin, a global `set!`, I/O,
+ * control -- is an effect, and the `def` stays.
+ * ------------------------------------------------------------------------- */
+static const char *const PURE_PRELUDE[] = {
+    "r7rs-list->vector", "r7rs-vector->list", "r7rs-vector-copy", "r7rs-vector", "r7rs-list",
+};
+
+typedef struct Purity {
+    PSet fn_of;   /* Binding* -> index into fns[] (stdlib/srfi/ top-level defns) */
+    const FnDef **fns;
+    uint32_t n_fns, cap_fns;
+    PSet state;   /* FnDef* -> 1 in progress, 2 allocation-only, 3 not */
+} Purity;
+
+static bool prelude_pure(const Binding *b) {
+    if (!b || !b->is_global || !b->name) return false;
+    const SourceFile *f = diag_source_file(b->span.file_id);
+    if (!f || !f->path) return false;
+    size_t n = strlen(f->path), m = strlen("stdlib/r7rs/prelude.tur");
+    if (n < m || strcmp(f->path + n - m, "stdlib/r7rs/prelude.tur") != 0) return false;
+    for (size_t i = 0; i < sizeof PURE_PRELUDE / sizeof PURE_PRELUDE[0]; i++)
+        if (strcmp(b->name->name, PURE_PRELUDE[i]) == 0) return true;
+    return false;
+}
+
+static bool alloc_only(Purity *pu, const Expr *e);
+
+static bool fn_alloc_only(Purity *pu, const Binding *b) {
+    if (prelude_pure(b)) return true;
+    uint32_t idx;
+    if (!b || !pset_get(&pu->fn_of, b, &idx)) return false;
+    const FnDef *fd = pu->fns[idx];
+    uint32_t st;
+    if (pset_get(&pu->state, fd, &st)) return st == 2;
+    pset_put(&pu->state, fd, 1);
+    bool ok = alloc_only(pu, fd->body);
+    pset_set(&pu->state, fd, ok ? 2 : 3);
+    return ok;
+}
+
+/* A call of a constructor of the ADT (a lowered defstruct included) the call
+ * makes: a global with no function body, named like one of its variants. */
+static bool ctor_call(const Expr *e) {
+    const Binding *b = e->as.call_.fn_binding;
+    if (!b || !b->is_global || b->source_fn_def || !b->name) return false;
+    const Type *t = &e->type;
+    while (t && t->kind == TY_APP) t = t->as.app.fn;   /* (Cons A): its head */
+    if (!t || t->kind != TY_ADT || !t->as.adt_.def) return false;
+    const AdtDef *d = t->as.adt_.def;
+    for (uint32_t i = 0; i < d->n_ctors; i++)
+        if (d->ctors[i] && d->ctors[i]->name && strcmp(d->ctors[i]->name, b->name->name) == 0) return true;
+    return false;
+}
+
+static bool alloc_only_n(Purity *pu, Expr *const *arr, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) if (arr && !alloc_only(pu, arr[i])) return false;
+    return true;
+}
+
+static bool alloc_only(Purity *pu, const Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT: case EX_FLOAT_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT: case EX_DEFAULT_OF:
+        case EX_VAR: case EX_FN: case EX_CLOSURE:
+            return true;
+        case EX_ASCRIBE:      return alloc_only(pu, e->as.ascribe_.inner);
+        case EX_UNION_INJECT: return alloc_only(pu, e->as.union_inject_.value);
+        case EX_FN_TO_FAT:    return alloc_only(pu, e->as.fn_to_fat_.inner);
+        case EX_POLY_TO_FAT:  return alloc_only(pu, e->as.poly_to_fat_.inner);
+        case EX_POLY_WRAP:    return alloc_only(pu, e->as.poly_wrap_.inner);
+        case EX_CAST:         return alloc_only(pu, e->as.cast_.expr);
+        case EX_REINTERPRET:  return alloc_only(pu, e->as.reinterpret_.expr);
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++)
+                if (!alloc_only(pu, e->as.let_.bindings[i].init)) return false;
+            return alloc_only(pu, e->as.let_.body);
+        case EX_IF:
+            return alloc_only(pu, e->as.if_.cond) && alloc_only(pu, e->as.if_.then_) &&
+                   alloc_only(pu, e->as.if_.else_or_null);
+        case EX_DO:          return alloc_only_n(pu, e->as.do_.items, e->as.do_.n);
+        case EX_CONS_LIST:   return alloc_only_n(pu, e->as.cons_list_.items, e->as.cons_list_.n);
+        case EX_MAKE_STRUCT: return alloc_only_n(pu, e->as.make_struct_.field_values, e->as.make_struct_.n_fields);
+        case EX_SET:
+            return e->as.set_.target && !e->as.set_.target->is_global && alloc_only(pu, e->as.set_.value);
+        case EX_CALL:
+            if (e->as.call_.fn_expr || e->as.call_.dict_arg) return false;
+            if (ctor_call(e)) return alloc_only_n(pu, e->as.call_.args, e->as.call_.n_args);
+            return fn_alloc_only(pu, e->as.call_.fn_binding) &&
+                   alloc_only_n(pu, e->as.call_.args, e->as.call_.n_args);
+        default:
+            return false;
+    }
+}
+
+static bool is_candidate(const Expr *e, bool keep_exported, Purity *pu) {
     if (e->kind != EX_FN_DEF && e->kind != EX_DEF) return false;
     if (!srfi_file_span(e->span)) return false;
     Binding *b = item_binding(e);
@@ -161,7 +284,7 @@ static bool is_candidate(const Expr *e, bool keep_exported) {
     if (e->kind == EX_FN_DEF) {
         const FnDef *fd = e->as.fn_def_.fn;
         if (fd->owner_instance || b->is_instance_method) return false;
-    } else if (!init_has_no_effect(e->as.def_.init)) {
+    } else if (!init_has_no_effect(e->as.def_.init) && !alloc_only(pu, e->as.def_.init)) {
         return false;
     }
     return true;
@@ -528,12 +651,28 @@ uint32_t srfi_prune_program(Arena *arena, Expr *prog, bool keep_exported) {
     memset(&p, 0, sizeof p);
     collect_items(&p, prog->as.program.items, prog->as.program.n);
 
+    /* The stdlib/srfi/ procedures an allocation-only initializer may call. */
+    Purity pu;
+    memset(&pu, 0, sizeof pu);
+    for (uint32_t i = 0; i < p.n_items; i++) {
+        Expr *e = *p.items[i].slot;
+        if (!e || e->kind != EX_FN_DEF || !e->as.fn_def_.fn || !srfi_file_span(e->span)) continue;
+        const FnDef *fd = e->as.fn_def_.fn;
+        if (!fd->binding || pset_get(&pu.fn_of, fd->binding, NULL)) continue;
+        if (pu.n_fns == pu.cap_fns) {
+            pu.cap_fns = pu.cap_fns ? pu.cap_fns * 2 : 256;
+            pu.fns = (const FnDef **)realloc((void *)pu.fns, pu.cap_fns * sizeof *pu.fns);
+        }
+        pset_put(&pu.fn_of, fd->binding, pu.n_fns);
+        pu.fns[pu.n_fns++] = fd;
+    }
+
     /* Candidates.  A Binding two items define is left alone (both stay). */
     uint32_t n_cand = 0;
     PSet twice = {0};
     for (uint32_t i = 0; i < p.n_items; i++) {
         Expr *e = *p.items[i].slot;
-        if (!is_candidate(e, keep_exported)) continue;
+        if (!is_candidate(e, keep_exported, &pu)) continue;
         Binding *b = item_binding(e);
         uint32_t prev;
         if (pset_get(&p.cand_of, b, &prev)) { pset_put(&twice, b, 0); continue; }
@@ -551,6 +690,9 @@ uint32_t srfi_prune_program(Arena *arena, Expr *prog, bool keep_exported) {
         }
     }
     pset_free(&twice);
+    free((void *)pu.fns);
+    pset_free(&pu.fn_of);
+    pset_free(&pu.state);
 
     /* TUR_SRFI_PRUNE_DEBUG=1 says, on stderr, which SRFI definitions stayed
      * and what reached each one -- the question to ask when an unused import

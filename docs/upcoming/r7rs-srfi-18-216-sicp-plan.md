@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03. Extends docs/archive/r7rs-srfi-plan.md
+Status: in progress -- T0 done 2026-10-03, T0b done 2026-10-04. Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -128,11 +128,11 @@ Turmeric side calls back only `thread-entry__`.
 ### D2 -- SRFI 216 is a `library` row over 18 and 27
 
 `stdlib/srfi/216.scm`, written fresh (not the reference, see Section 1).
-`random` is over `(srfi 27)`. **Measured at T0:** the pruner does not drop
-27's top-level state, so every `(srfi 216)` import costs what importing
+`random` is over `(srfi 27)`. **Measured at T0:** the pruner did not drop
+27's top-level state, so every `(srfi 216)` import cost what importing
 `(srfi 27)` does, whether or not the program calls `random`: +142 KB of
-emitted C over a bare program (1.51 MB to 1.65 MB, +9%), and the build stays
-under a second. **Scheduled as stage T0b** (Section 4), not left open.
+emitted C over a bare program (1.51 MB to 1.65 MB, +9%). **Fixed in T0b**
+(Section 4): +1.8 KB unused, +40 KB with `random` called.
 Binding `random` to `stdlib/random.tur` instead, as an earlier draft
 suggested, is not a drop-in: its float functions return `:int` (a scaled
 integer, `rand-float`, `random-next-float!`), and it has no bignum ranges,
@@ -241,7 +241,20 @@ them.
   floor 21); `tests/fixtures/r7rs-srfi-216` runs book-style 1.2.6, 2.2.1, 3.4
   and 3.5 code; `errors/r7rs-srfi-216-41-conflict` pins the refusal. The
   guide's paste-in prelude became `(import (srfi 216))`.
-- **T0b -- `(srfi 216)` stops paying for all of SRFI 27.** Today every
+- **T0b -- `(srfi 216)` stops paying for all of SRFI 27. DONE 2026-10-04.**
+  Direction 1 below, in two parts. The pruner (src/passes/srfi_prune.c,
+  `alloc_only`) now drops a `def` whose initializer is a call that only
+  allocates: literals, lambdas, constructors, local `set!`, and direct calls
+  to non-recursive `stdlib/srfi/` procedures of the same shape or to the
+  prelude's copying constructors (`PURE_PRELUDE`). And SRFI 27 keeps its
+  sources' state in a one-slot vector, so `random-integer`/`random-real`
+  draw from the default state directly rather than through the record's
+  closures (which reach `pseudo-randomize!` and the rest). Measured: an
+  unused `(srfi 216)` import went from +142 KB of C to +1.8 KB (a record
+  typedef and `(scheme time)`'s three procedures), and a program calling
+  `random` from +147 KB to +40 KB. `tests/check-r7rs-srfi-prune.sh` pins
+  both. SRFI 27's own suite: 36 of 36 on both back ends. Original text:
+  Today every
   import adds 142 KB of emitted C (D2), whether or not the program calls
   `random`. **Done when:** a program that imports `(srfi 216)` and never
   calls `random` emits the same C, within noise, as one without the import,

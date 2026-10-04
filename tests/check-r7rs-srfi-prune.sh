@@ -74,7 +74,43 @@ if [ "$out" != "6" ]; then
     fail "p2 printed '$out', expected '6'"
 fi
 
+# r7rs-srfi-18-216-sicp-plan T0b: (srfi 216) imports (srfi 27) for `random`.
+# Unused, it must cost what an unused SRFI 1 does -- nothing beyond a record
+# type's declaration and (scheme time)'s three procedures, which are not SRFI
+# definitions the pass may drop: a few KB of a 1.5 MB program, where all of
+# SRFI 27 used to be 142 KB.  Calling `random` reaches the generator's
+# drawing procedures and not the rest of SRFI 27 (pseudo-randomize!, the
+# record's closures): spot-checked by name.
+mkdir -p "$TMP/q1" "$TMP/q2"
+printf '#lang r7rs\n(import (scheme base) (scheme write) (srfi 216))\n(write 1)\n' > "$TMP/q1/prog.scm"
+printf '#lang r7rs\n(import (scheme base) (scheme write) (srfi 216))\n(write (list (< -1 (random 10) 10) (< 0.0 (random 1.5) 1.5)))\n' > "$TMP/q2/prog.scm"
+for p in q1 q2; do
+    if ! (cd "$TMP/$p" && "$TUR" emit-c prog.scm > prog.c 2> emit.err); then
+        fail "$p: tur emit-c failed: $(grep -vE 'W006[01]' "$TMP/$p/emit.err" | head -3)"
+    fi
+done
+p0_size=$(wc -c < "$TMP/p0/prog.c")
+q1_size=$(wc -c < "$TMP/q1/prog.c")
+if [ $((q1_size - p0_size)) -gt 8192 ]; then
+    fail "an unused (import (srfi 216)) adds $((q1_size - p0_size)) bytes of C (budget 8192) -- is SRFI 27's default-random-source kept again? TUR_SRFI_PRUNE_DEBUG=1 says what reached it"
+fi
+if grep -q 'srfi27_' "$TMP/q1/prog.c"; then
+    fail "an unused (import (srfi 216)) still defines SRFI 27 procedures: $(grep -o 'srfi27_[A-Za-z0-9_]*' "$TMP/q1/prog.c" | sort -u | head -5 | tr '\n' ' ')"
+fi
+if ! grep -q 'srfi27_hy_hyrandom_hyinteger' "$TMP/q2/prog.c"; then
+    fail "q2 calls random, but its C does not define SRFI 27's random-integer"
+fi
+for name in mrg32k3a_hypseudo_hyrandomize_hystate default_hyrandom_hysource make_hyrandom_hysource; do
+    if grep -q "srfi27_hy_hy$name" "$TMP/q2/prog.c"; then
+        fail "q2 calls only random, but its C still defines SRFI 27's $name"
+    fi
+done
+out="$(cd "$TMP/q2" && "$TUR" build prog.scm -o prog 2>/dev/null && ./prog)"
+if [ "$out" != "(#t #t)" ]; then
+    fail "q2 printed '$out', expected '(#t #t)'"
+fi
+
 if [ $FAILED -ne 0 ]; then
     exit 1
 fi
-echo "PASS check-r7rs-srfi-prune: an unused (srfi 1) costs nothing; fold costs fold"
+echo "PASS check-r7rs-srfi-prune: an unused (srfi 1) costs nothing; fold costs fold; an unused (srfi 216) carries no SRFI 27"
