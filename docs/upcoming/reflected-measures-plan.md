@@ -17,7 +17,7 @@
 > equation is admitted as an axiom. Program termination and total
 > correctness in general remain **out of scope, permanently**, exactly as
 > [refinement-types-plan.md](../archive/refinement-types-plan.md) and
-> [loop-invariants-plan.md](loop-invariants-plan.md) state; nothing here
+> [loop-invariants-plan.md](../archive/loop-invariants-plan.md) state; nothing here
 > makes an un-annotated non-terminating program fail to compile. The gate is
 > a hard error (`TUR-E0384`) on the definition, never a silent downgrade.
 > **Type:** Compiler / Refinement types
@@ -171,7 +171,7 @@ and **this plan does not reopen either of them**:
 - [refinement-types-plan.md](../archive/refinement-types-plan.md), under
   "Non-goals for this prototype": *"Termination checking or total-correctness
   verification."*
-- [loop-invariants-plan.md](loop-invariants-plan.md), "Explicitly not in
+- [loop-invariants-plan.md](../archive/loop-invariants-plan.md), "Explicitly not in
   scope": *"A refinement says nothing about whether the loop finishes... A
   non-terminating loop with a true invariant is perfectly well-typed. Ranking
   functions / decreasing measures. Same reason."*
@@ -325,7 +325,7 @@ unchanged.
 ### 5. Diagnostic codes: the ones this plan reserved are gone
 
 Write-frames took `TUR-E0381`/`TUR-E0382`. The sibling
-[loop-invariants-plan.md](loop-invariants-plan.md) needs no codes (its
+[loop-invariants-plan.md](../archive/loop-invariants-plan.md) needs no codes (its
 obligations report through `TUR-E0371`/`TUR-W0372` like `:pre`/`:post` do),
 so this plan takes the next free slots: **`TUR-E0383`** (a `^reflect` whose
 function fails the totality gate -- purity, termination, or coverage; the
@@ -644,7 +644,7 @@ of these would supply one, and would settle item 2 above:
 - [checked-write-frames-plan.md](../archive/checked-write-frames-plan.md) -- WF2's
   `WriteFrameSite` + deferred resolver is the structural template for RF0/RF1,
   and its sabotage-run convention is the acceptance style RF1/RF3 adopt.
-- [loop-invariants-plan.md](loop-invariants-plan.md) -- the sibling plan;
+- [loop-invariants-plan.md](../archive/loop-invariants-plan.md) -- the sibling plan;
   shares the termination non-goal and the structure-indexed-type trigger, and
   reuses `TUR-E0371`/`TUR-W0372` rather than claiming codes of its own.
 - [../../guides/refinement-types-guide.md](../guides/refinement-types-guide.md)

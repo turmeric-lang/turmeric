@@ -111,7 +111,7 @@ in `refine_collect.h:114`):
   Loop invariants use it, because "the body does not preserve `(>= acc 0)`" is
   not a sentence the generic "refinement on X" reporter can build.
 
-### Loop invariants (experimental, `--enable=loop-invariants`)
+### Loop invariants
 
 `elab_while` parses `:invariant p`, validates it (pure `bool`), injects the two
 runtime checks (entry; last statement of the body) and records a

@@ -3060,6 +3060,7 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
     s->defn_form  = defn_form;
     s->body_start = body_start;
     s->annot      = annot;
+    s->from_stdlib = e->in_stdlib_load || g_turi_stdlib_preload;
 }
 
 void wf_note_image_cache_root(Elab *e, const Symbol *root, Span span) {
@@ -3189,6 +3190,11 @@ void wf_resolve_write_frames(Elab *e) {
         for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
             WriteFrameSite *s = &e->wf_frame_sites[i];
             if (!s->fn || !s->fn->writes_declared) continue;
+            /* The stdlib's own frames (the Vec mutators' `#writes [v]`) are
+             * not what a dump of this program is asking about, and the
+             * interpreter elaborates the stdlib more than once, which would
+             * print them once per load. */
+            if (s->from_stdlib) continue;
             /* Recompute the FRAME-ONLY verdict so the two questions stay
              * separable in the output: a fixture needs to tell "the frame did
              * not hold" from "the frame held but the body writes a global". */
@@ -6254,7 +6260,7 @@ static bool li_elision_observable(Elab *e, const LoopInvSite *s) {
  * measure inside one predicate congruent.  A loop needs x unchanged ACROSS THE
  * BODY, and a borrow does not give that: every stdlib container's mutator
  * takes the container BY VALUE -- `vec-push!` is `[v : (Vec A) val : A]`,
- * `#fx{}`, with no `#writes` -- so there is no conflicting borrow for
+ * `#fx{}`, `#writes [v]` -- so there is no conflicting borrow for
  * TUR-E0200 to reject and the mutation is legal inside the region.  Publishing
  * the borrow-liveness set alone proved `(<= (vlen v) 3)` preserved by a body
  * calling `(vec-push! v 7)`; see item 2 of
@@ -6625,7 +6631,7 @@ static bool li_prove_paths_ext(Elab *e, const Form *pred, const char *var_name,
                                RefineEnv *env, Span loc, uint32_t depth,
                                bool *handled) {
     *handled = false;
-    if (!g_opt_loop_invariants || !subject) return false;
+    if (!subject) return false;
 
     if (rt_head_is(subject, "let") && subject->as.list.len >= 3) {
         const Form *bv = subject->as.list.items[1];
@@ -6749,7 +6755,7 @@ static bool li_prove_paths_ext(Elab *e, const Form *pred, const char *var_name,
  * Returns false when the walk has nothing to add, leaving the crossing to the
  * ordinary path. */
 static bool li_cs_path_facts(Elab *e, RefineCallSite *cs, bool *skip) {
-    if (!g_opt_loop_invariants || e->n_loop_inv_sites == 0) return false;
+    if (e->n_loop_inv_sites == 0) return false;
     if (!cs->env || !cs->caller_body || !cs->call_form) return false;
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return false;
     const char *vol[LI_MAX_NAMES];

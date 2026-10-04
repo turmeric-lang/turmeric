@@ -749,10 +749,6 @@ A refinement alias takes no type parameters in this prototype.
 
 ## Loop invariants: `(while c :invariant p ...)`
 
-> **Experimental** -- `--enable=loop-invariants` (TUR-W0060 names the plan).
-> Without the flag the annotation still parses and is validated, and nothing
-> acts on it.
-
 A value a `while` loop builds cannot satisfy a refinement on its own: the
 solver does not infer what a loop does, and never will (the same *checking,
 not inference* rule as everywhere else here). You can **write** what the loop
@@ -857,7 +853,7 @@ Two shapes look like they should decline and do not:
 
 Termination is not part of any of this: a loop that never ends with a true
 invariant is perfectly well-typed. See
-[docs/upcoming/loop-invariants-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md).
+[docs/archive/loop-invariants-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/loop-invariants-plan.md).
 
 ## The solver
 
@@ -1199,8 +1195,8 @@ anyway.
   under `x > 0` once "proved" `x != 0` of a value that is zero. Dropping the
   binding's equation is not enough, because the collision is in the name rather
   than the fact, so the whole crossing is skipped.
-- **[prototype] A `while` loop needs a written `:invariant`** -- behind
-  `--enable=loop-invariants`; see *Loop invariants* above.
+- **A `while` loop needs a written `:invariant`** -- see *Loop invariants*
+  above.
   An unannotated loop is still not analysed: an accumulator it builds is
   Unknown, and there is no invariant *inference* -- inferring facts is the
   thing this design deliberately does not do. An annotated loop whose body

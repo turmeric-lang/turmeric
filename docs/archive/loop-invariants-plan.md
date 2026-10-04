@@ -1,13 +1,15 @@
 # Plan: Loop Invariants for Refinement Types (`:invariant`)
 
-> **Status:** LI0--LI5 **landed 2026-09-30** behind `--enable=loop-invariants`
-> (prototype; `introduced` 0.57.0, `expires_at` 0.58.0 -- advisory). Moved out
-> of `hold/` when executed. What shipped, and where it departs from the
+> **Status:** **GRADUATED 2026-10-03** (0.61 line) -- `:invariant` is always on;
+> `--enable=loop-invariants` is a TUR-W0063 no-op until it ages out at 0.62.0.
+> LI0--LI5 landed 2026-09-30 behind the gate (prototype; `introduced` 0.57.0,
+> `expires_at` 0.58.0 -- advisory). Graduated straight from prototype: see
+> "Graduation" at the end for what closed and what was decided. What shipped, and where it departs from the
 > elaboration below, is recorded in [Delivered](#delivered-2026-09-30) at the
 > end; the rest of this file is the plan as elaborated.
-> **Last Updated:** 2026-09-30
+> **Last Updated:** 2026-10-03
 > **Type:** Compiler / Refinement types
-> **Depends on:** [refinement-types-plan.md](../archive/refinement-types-plan.md)
+> **Depends on:** [refinement-types-plan.md](refinement-types-plan.md)
 > (RT0--RT7 + S0--S4, all landed). The `refined` graduation this plan used to
 > wait on **happened 2026-08-01** (`bb7cbef61`, shipped v0.33.0); static
 > discharge is unconditional and the old experiment clock is gone.
@@ -70,7 +72,7 @@ proves its own invariant and then nothing downstream can use it.
 The 2026-07-25 version of this file recorded zero measured demand. That is no
 longer quite true:
 
-- [ecs-refinement-typed-apis-plan.md](v1/ecs-refinement-typed-apis-plan.md)
+- [ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md)
   (on the v1 track) names user-written `while` invariants as its prerequisite
   **C3** and states "this plan is that signal". Its RE2 phase (bounds-checked
   slot access on sized worlds) is the concrete consumer: `for-each` lowers to
@@ -435,7 +437,7 @@ bet and elaboration confirmed it.
   A non-terminating loop with a true invariant is perfectly well-typed.
 - **Ranking functions / decreasing measures.** Same reason. (A measure's
   *definition* entering the logic is the separate
-  [reflected-measures-plan.md](reflected-measures-plan.md), which carves out
+  [reflected-measures-plan.md](../upcoming/reflected-measures-plan.md), which carves out
   its own totality obligation without touching program termination.)
 - **`for` / `loop` surface support.** Nothing to support -- see settled
   decision 3. Macros that expand to `while` compose for free.
@@ -449,7 +451,7 @@ bet and elaboration confirmed it.
 
 ## References
 
-- [refinement-types-plan.md](../archive/refinement-types-plan.md) -- the
+- [refinement-types-plan.md](refinement-types-plan.md) -- the
   parent plan; "Why checking, not inference" is the constraint this one
   inherits.
 - [../guides/refinement-types-guide.md](../guides/refinement-types-guide.md)
@@ -457,9 +459,9 @@ bet and elaboration confirmed it.
   line 954 and is what LI5 rewrites.
 - [../guides/refinement-solver-internals-guide.md](../guides/refinement-solver-internals-guide.md)
   -- pipeline, staged solver, caps.
-- [v1/ecs-refinement-typed-apis-plan.md](v1/ecs-refinement-typed-apis-plan.md)
+- [v1/ecs-refinement-typed-apis-plan.md](../upcoming/v1/ecs-refinement-typed-apis-plan.md)
   -- the demand signal (C3) and the RE2 consumer.
-- [checked-write-frames-plan.md](../archive/checked-write-frames-plan.md) -- WF3's
+- [checked-write-frames-plan.md](checked-write-frames-plan.md) -- WF3's
   `rt_collect_set_targets` is the assignment model this plan reuses; a landed
   `#writes` frame would later let a call in the loop body stop declining.
 - Hoare (1969) -- the while rule; Floyd-Hoare initiation/preservation/use is
@@ -597,7 +599,7 @@ harness's documented report-only class.
   review, not the date it happens).
 - ~~A nested loop that assigns still declines the outer loop; a `when` guarding
   an early `return` still declines the whole loop.~~ **Resolved 2026-10-03**
-  ([archived report](../archive/loop-invariant-declines-more-than-soundness-requires.md)).
+  ([archived report](loop-invariant-declines-more-than-soundness-requires.md)).
   A nested loop's assigned names are havocked on every path, so the outer loop
   declines only if one of them is read after it. A `return`'s paths are pruned
   from the body composition, so initiation and preservation are still proved,
@@ -608,13 +610,13 @@ harness's documented report-only class.
 - ~~A loop outside a `defn` -- in a `definstance` method or a top-level lambda --
   is registered and given both runtime checks but never analysed, and says
   nothing at any strictness level.~~ **Resolved 2026-10-03**
-  ([archived report](../archive/loop-invariant-silently-unverified-outside-a-defn.md)):
+  ([archived report](loop-invariant-silently-unverified-outside-a-defn.md)):
   methods are analysed, and a top-level lambda is declined out loud. See the
   "Scope of the defn-level pass" note above.
 - The ECS `for-each` lowering (RE2) is **no longer waiting on this plan, and
   will not be the consumer that fires the trigger above.** C3 landed, and RE2
   was re-measured 2026-10-02 (see its probe update in
-  [ecs-refinement-typed-apis-plan](v1/ecs-refinement-typed-apis-plan.md)): one
+  [ecs-refinement-typed-apis-plan](../upcoming/v1/ecs-refinement-typed-apis-plan.md)): one
   `:invariant (>= i 0)` in the expansion does discharge the bounds obligation,
   3 of 3 proven under `--strict-refine`, with three negative controls
   refuting. But the profile that gated RE2 shows the per-access bounds
@@ -629,7 +631,7 @@ harness's documented report-only class.
   rejected in a `:invariant` by `TUR-E0375` while a parameter refinement
   accepted it, so no stdlib container's length could appear in an
   invariant.~~ **RESOLVED 2026-10-03**, all three items
-  ([archived report](../archive/reads-measure-rejected-in-invariant-and-pre.md)).
+  ([archived report](reads-measure-rejected-in-invariant-and-pre.md)).
   A bounded-index walk over a container is PROVED inside a `frozen` region and
   both of its runtime checks are elided
   (`refine-loop-invariant-reads-frozen-proved`). It took three steps:
@@ -661,4 +663,33 @@ harness's documented report-only class.
   retires); whether any consumer wants it -- RE2 is unstarted by decision, per
   the bullet above; and whether the TRUST the frozen grant now rests on is
   acceptable, since a hand-written false `#reads` reaches it with no diagnostic
-  ([reads-frame-verification-ignores-a-callee-write-frame](../archive/reads-frame-verification-ignores-a-callee-write-frame.md)).
+  ([reads-frame-verification-ignores-a-callee-write-frame](reads-frame-verification-ignores-a-callee-write-frame.md)).
+
+## Graduation (2026-10-03)
+
+The four open questions above, answered:
+
+- **Prototype straight to graduated, no `beta` soak.** A beta freezes a surface
+  so it can soak; what this row's prototype status protected was the decline
+  list, and that was closed out on 2026-10-03 (nested loops, early `return`,
+  loops in `definstance` methods). The syntax has not moved since LI0.
+- **`loop-invariant-gate-off` retires; it does not invert.** No bisection hatch
+  is kept (`g_opt_loop_invariants` is gone, not defaulted on), so there is no
+  OFF path left for a harness to cover. The `--enable=loop-invariants` flag on
+  27 fixtures and the refinement fuzzer was dropped.
+- **No consumer is required.** Unlike `reflected-measures`, this feature acts on
+  annotations a user writes and costs nothing where none is written; RE2 being
+  unstarted by decision is not a reason to keep the gate.
+- **The trust gap closed.** A `#reads` measure with a Turmeric body is walked
+  for writes at its definition (`reads_scan_frame_writes`): a definite write is
+  `TUR-W0383` and refuses every grant, an unvouchable use withholds the frozen
+  grant, and stdlib's Vec mutators carry `#writes [v]`. Closing it found a
+  second, live hole with no `#reads` in it -- the Form-level frozen filter
+  approved a pure callee in any position, so `(vec-push! (id v) 7)` proved
+  `(<= (vlen v) 3)` preserved with the check elided while `v` grew to 5. The
+  frozen set now also passes a typed walk over the elaborated `while`
+  (`rw_binding_reads_only`). Pinned by
+  `refine-loop-invariant-reads-writes-not-trusted`.
+
+Inline C stays the trust boundary: a `#reads` measure written in inline C is a
+trusted claim, as every stdlib measure is.

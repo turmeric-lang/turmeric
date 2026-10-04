@@ -40,7 +40,7 @@ unanalysable loop gets. The annotation looks accepted, costs runtime checks on
 every iteration, and verifies nothing. Filed 2026-10-02, found reviewing the
 `loop-invariants` row against its `expires_at` at the v0.59.0 cut. Listed as a
 scope note under "Where it departs from the elaboration above" in
-[loop-invariants-plan](../upcoming/loop-invariants-plan.md); this is the
+[loop-invariants-plan](loop-invariants-plan.md); this is the
 measured version.
 
 ## Minimal repro

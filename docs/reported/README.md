@@ -85,7 +85,7 @@ question 3 as Option A.
 ## Refinement experiments reviewed at the v0.59.0 cut (filed 2026-10-02)
 
 Found reviewing the two live `EXPERIMENTS[]` rows --
-[loop-invariants](../upcoming/loop-invariants-plan.md) (`expires_at 0.58.0`,
+[loop-invariants](../archive/loop-invariants-plan.md) (`expires_at 0.58.0`,
 so due) and [reflected-measures](../upcoming/reflected-measures-plan.md)
 (`expires_at 0.61.0`, not due) -- against what graduating each would freeze.
 Every row below was reproduced against a v0.59.0 Debug build. None is a

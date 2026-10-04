@@ -1350,6 +1350,8 @@ typedef struct WriteFrameSite {
     const Form   *defn_form;   /* the whole `(defn ...)`; the body is a suffix */
     uint32_t      body_start;  /* index of the first body form within defn_form */
     const Form   *annot;       /* the `#writes` form, for the diagnostic span */
+    bool          from_stdlib; /* registered while loading the stdlib (either path);
+                                * left out of --dump-write-frames */
 } WriteFrameSite;
 
 /* Record an annotated function for the deferred WF2 walk. */

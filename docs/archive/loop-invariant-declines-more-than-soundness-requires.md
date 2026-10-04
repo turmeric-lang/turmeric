@@ -52,7 +52,7 @@ declines are broader than the reason behind them: in both, obligations that do
 not depend on the declined channel are abandoned along with the one that does.
 Filed 2026-10-02, found reviewing the `loop-invariants` row against its
 `expires_at` at the v0.59.0 cut. Both halves are listed under "Left open" in
-[loop-invariants-plan](../upcoming/loop-invariants-plan.md); this report is the
+[loop-invariants-plan](loop-invariants-plan.md); this report is the
 measured version with repros.
 
 Run every repro below with `--enable=loop-invariants`.

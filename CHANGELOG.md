@@ -2,6 +2,35 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Loop invariants graduated: `(while c :invariant p ...)` is always on.**
+  The invariant is checked on entry and after every iteration, the checks are
+  elided where the solver proves them, and a proved invariant is a fact after
+  the loop. `--enable=loop-invariants` is now a `TUR-W0063` no-op (eligible to
+  age out at 0.62.0).
+
+### Changed
+
+- **`#reads` measures are checked for writes.** A measure written in Turmeric
+  whose body writes a framed parameter -- a store through it, or a call to a
+  callee whose `#writes` frame names it -- draws `TUR-W0383` and backs no
+  proof. The stdlib's Vec mutators (`vec-push!`, `vec-pop!`, `vec-set-o!`,
+  `vec-drop-last-o!`, `vec-free-o`) now declare `#writes [v]`. Inline-C
+  measures remain trusted.
+- **`reflected-measures`'s advisory `expires_at` moves to 0.64.0** -- built and
+  fuzzed, waiting on a consumer.
+
+### Fixed
+
+- **A loop invariant over a container could be "proved" through an alias.**
+  Inside a `frozen` region, `(vec-push! (id v) 7)` -- `id` a pure function that
+  returns its argument -- let `(<= (vlen v) 3)` be proved preserved and its
+  check elided while `v` grew. The frozen set is now also checked against the
+  elaborated loop, so the check stays and fires.
+
 ## [0.61.0] -- 2026-10-03
 
 ### Added

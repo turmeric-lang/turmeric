@@ -4667,8 +4667,7 @@ Expr *elab_while(Elab *e, const Form *call) {
         inv_e = elab_loop_invariant_pred(e, inv_form, inv_form->span);
         if (!inv_e) return NULL;
     }
-    bool li_on = inv_form && g_opt_loop_invariants;
-    if (li_on) experiment_warn_if_used("loop-invariants");
+    bool li_on = inv_form != NULL;
 
     uint32_t n = call->as.list.len - body_start;
     Expr *body;
