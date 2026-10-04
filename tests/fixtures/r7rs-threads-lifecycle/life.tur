@@ -73,7 +73,7 @@
      * and dies of its own alarm(5) -- counted as a failure that is not one.
      * ASan's allocator is not fork-safe; glibc's is, so the compiled path
      * and a Release JIT still run the check below.
-     * docs/reported/jit-fork-child-inherits-asan-allocator-lock.md.
+     * docs/archive/jit-fork-child-inherits-asan-allocator-lock.md.
      *
      * Reported 55/306 of the ubuntu JIT leg's commits before this skip, all
      * absorbed by that leg's continue-on-error

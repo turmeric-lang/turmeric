@@ -1,0 +1,14 @@
+#lang r7rs
+;; Where two fixes meet: (scheme eval)'s `eval` is respelled when the program
+;; defines its own (r7rs-redefining-eval-with-scheme-eval-fails-to-compile),
+;; and a reference evaluated before that definition keeps the library's
+;; (r7rs-saved-standard-procedure-follows-redefinition).
+(import (scheme base) (scheme write) (scheme eval))
+(define saved eval)
+(define (eval e env) (quote mine))
+(write (eval 5 0))
+(newline)
+(write (eq? saved eval))
+(newline)
+(write (saved (quote (+ 1 2)) (environment (quote (scheme base)))))
+(newline)

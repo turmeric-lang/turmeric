@@ -4605,6 +4605,23 @@ static void emit_if_dead_branch_zero(Buf *body, int indent, const char *tmp,
     free(z);
 }
 
+/* panic-location-names-the-runtime-not-the-call-site: `(panic msg)` at
+ * `span` -> `tur_panic_at("<file>", <line>, msg);`.  The file is the
+ * source's basename, so the message is the same in every checkout (and in
+ * every expected.c snapshot); a node with no span falls back to tur_panic. */
+void emit_panic_call(Buf *body, Span span, const char *msg) {
+    const char *path = span.line ? diag_file_path(span.file_id) : NULL;
+    if (!path) { buf_printf(body, "tur_panic(%s);\n", msg); return; }
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    buf_puts(body, "tur_panic_at(\"");
+    for (const char *p = base; *p; p++) {
+        if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+        buf_putc(body, *p);
+    }
+    buf_printf(body, "\", %u, %s);\n", span.line, msg);
+}
+
 static char *emit_if_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* Phase 3/4: Check if branches contain return or throw */
     bool then_has_return_or_throw = expr_contains_return_or_throw(e->as.if_.then_);
@@ -8887,12 +8904,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (ctx->frame_var) {
                     buf_printf(body, "tur_panic_set_frame(&%s);\n", ctx->frame_var);
                 }
-                if (payload->type.kind == TY_CSTR) {
-                    buf_printf(body, "tur_panic(%s);\n", msg_val);
-                } else {
-                    /* For non-cstr, use a generic message */
-                    buf_printf(body, "tur_panic(\"(non-string panic)\");\n");
-                }
+                emit_panic_call(body, e->span,
+                                payload->type.kind == TY_CSTR ? msg_val : "\"(non-string panic)\"");
                 /* tur_panic returns (no longjmp), so the panicking frame must
                  * propagate the signal by returning now. */
                 emit_panic_signal_return(ctx, body);
