@@ -121,12 +121,23 @@ Payload header (sketch): magic, format version, the S2 runtime preamble hash
 - **Otherwise:** leave this as a recorded idea. It does not advance the v1
   track, and it adds a third backend to maintain.
 
+## Decisions
+
+- **c2mir rejects the C at build time -> fail.** `tur build --engine jit`
+  exits with the c2mir diagnostic; it never silently substitutes a native
+  binary. The two artifacts differ in platform policy (section 4), so asking
+  for one and getting the other would be a surprise. Building native remains
+  an explicit choice of engine.
+- **Payload is appended to the shim.** One self-contained file per program,
+  like `deno compile` / `bun build --compile`. No sidecar `.bmir`.
+
 ## Open questions
 
-- Should the build-time fallback (c2mir rejects the C) silently produce a
-  native binary, or fail? Silent substitution hides the platform-policy
-  differences in section 4.
-- Payload location: appended to the shim (single file) vs. a sidecar `.bmir`
-  next to a shared shim (smaller per program, but two files to ship).
-- Can lazy gen be warmed with a profile-guided eager list stored in the
-  payload, to cut cold-start time for hot paths?
+- **Eager-generating hot functions.** The payload could carry a list of
+  functions to generate up front (e.g. gathered from a profiling run), with
+  the rest still generated lazily, to reduce cold-start latency. Undecided.
+  It only matters if the spike's cold-start measurement (section 6, question
+  3) shows lazy generation is a real cost, so defer it until that number
+  exists. Note it would add a profiling step to the build, and
+  `TUR_JIT_GEN=eager` already gives an all-or-nothing baseline to compare
+  against.
