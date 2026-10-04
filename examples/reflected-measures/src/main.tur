@@ -1,0 +1,153 @@
+;; reflected-measures -- a judged-round scoreboard whose API contracts are
+;; recursive measures the refinement solver can actually evaluate.
+;;
+;; Every precondition below is written in terms of a recursive function over
+;; the Board list: `size`, `points`, `valid?`, `ranked?`, `lap-total`.  Without
+;; `^reflect` each of them is an uninterpreted symbol to the solver -- it can
+;; compare `(size b)` to itself, but cannot tell that `(size (Entry 9 ...))`
+;; is 1 or more -- so every call site falls to TUR-W0372 and keeps a runtime
+;; check.  With `^reflect` the function passes the totality gate (pure,
+;; structurally recursive, exhaustively matching) and the encoder may unfold
+;; its defining equation, so the same call sites PROVE.
+;;
+;; What each section exercises (see docs/upcoming/reflected-measures-plan.md):
+;;
+;;   1. ground unfolding (RF3)       -- call sites with constructor-built
+;;                                      boards: Int, Bool and Float measures
+;;   2. in-place return obligation   -- a return refinement decided while its
+;;                                      own defn elaborates
+;;   3. non-ground unfolding (RF4)   -- a match arm's tag/selector facts pick
+;;                                      the measure's arm for a variable board
+;;
+;; Run it (the manifest enables the experiment):
+;;
+;;   tur run examples/reflected-measures/src/main.tur
+;;   tur check --strict-refine examples/reflected-measures/src/main.tur
+;;
+;; `--strict-refine` turns any obligation the solver cannot prove into a hard
+;; error, so a clean check is the claim that every contract here is
+;; discharged at compile time.  `--dump-reflect` prints the totality verdicts.
+;;
+;; The other direction works too: give `certify` a board with an 11 in it, or
+;; `winner` one out of order, and the check fails with TUR-E0371 "the
+;; predicate ... is false for the value given here" (RF6.1) -- a real
+;; refutation, not an unknown.
+
+;; A board is a list of judges' scores, best first.
+(defdata Board [] (Entry [score : int rest : Board]) (Empty))
+
+;; Lap times in seconds for the timed round.
+(defdata Laps [] (Lap [secs : float rest : Laps]) (NoLaps))
+
+;; ---------------------------------------------------------------------------
+;; The measures.  `^borrow` lets one board feed several of them.
+;; ---------------------------------------------------------------------------
+
+;;; size -- number of scores on the board.
+(defn ^reflect size [^borrow b : Board] : int
+  (match b
+    (Empty) 0
+    (Entry _ r) (+ 1 (size r))))
+
+;;; points -- sum of the scores on the board.
+(defn ^reflect points [^borrow b : Board] : int
+  (match b
+    (Empty) 0
+    (Entry s r) (+ s (points r))))
+
+;;; valid? -- every score is in the judges' 0..10 range.
+(defn ^reflect valid? [^borrow b : Board] : bool
+  (match b
+    (Empty) true
+    (Entry s r) (and (>= s 0) (and (<= s 10) (valid? r)))))
+
+;;; ranked? -- scores are in non-increasing order.
+(defn ^reflect ranked? [^borrow b : Board] : bool
+  (match b
+    (Empty) true
+    (Entry s r) (match r
+                  (Empty) true
+                  (Entry s2 _) (and (>= s s2) (ranked? r)))))
+
+;;; lap-total -- total time of a timed round (a Real-sorted measure).
+(defn ^reflect lap-total [^borrow l : Laps] : float
+  (match l
+    (NoLaps) 0.0
+    (Lap t r) (+ t (lap-total r))))
+
+;; ---------------------------------------------------------------------------
+;; 1. The API: contracts stated with the measures.
+;; ---------------------------------------------------------------------------
+
+;;; average -- integer mean score; a non-empty board makes the division safe.
+(defn average [^borrow b : #refine{ v : Board | (> (size v) 0) }] : int
+  (/ (points b) (size b)))
+
+;;; winner -- the top score of a ranked board.
+(defn winner [b : #refine{ v : Board | (ranked? v) }] : int
+  (match b
+    (Empty) 0
+    (Entry s _) s))
+
+;;; certify -- the total a valid board submits to the scorekeeper.
+(defn certify [b : #refine{ v : Board | (valid? v) }] : int
+  (points b))
+
+;;; podium -- top three of a board that has at least three entries.
+(defn podium [b : #refine{ v : Board | (>= (size v) 3) }] : int
+  (match b
+    (Empty) 0
+    (Entry a r) (match r
+                  (Empty) a
+                  (Entry c r2) (match r2
+                                 (Empty) (+ a c)
+                                 (Entry d _) (+ a (+ c d))))))
+
+;;; within-cutoff -- a timed round counts only under the 60.5s cutoff.
+(defn within-cutoff [l : #refine{ v : Laps | (< (lap-total v) 60.5) }] : float
+  (lap-total l))
+
+;; ---------------------------------------------------------------------------
+;; 2. A return refinement proved in place: the panel always has five judges.
+;; ---------------------------------------------------------------------------
+
+(defn panel-size [] : #refine{ r : int | (= r 5) }
+  (size (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
+
+;; ---------------------------------------------------------------------------
+;; 3. Non-ground: dropping the top score of a ranked board leaves it ranked.
+;;    `b` is a variable; RF4 selects ranked?'s Entry/Entry arm from the tag
+;;    facts this function's own matches supply.
+;; ---------------------------------------------------------------------------
+
+;;; runner-up-ranked? -- the board below the winner is still ranked.
+(defn runner-up-ranked? [b : #refine{ v : Board | (ranked? v) }]
+    : #refine{ r : bool | r }
+  (match b
+    (Empty) true
+    (Entry s r) (match r
+                  (Empty) true
+                  (Entry s2 r2) (ranked? r))))
+
+(defn main [] : int
+  ;; The five-judge panel: Int measures unfold the whole board.
+  (println "average:")
+  (println (average (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
+  (println "podium total:")
+  (println (podium (Entry 9 (Entry 8 (Entry 8 (Entry 7 (Entry 6 (Empty))))))))
+  (println "panel size:")
+  (println (panel-size))
+  ;; The final: three entries.  Bool measures (`valid?`, `ranked?`) stop
+  ;; proving at four ground entries today -- each unfolding is an `iff`, and
+  ;; the cube expansion doubles twice per unfolding past REFINE_MAX_CUBES.
+  ;; See docs/reported/reflect-bool-measure-cube-blowup.md.
+  (println "winner:")
+  (println (winner (Entry 9 (Entry 8 (Entry 6 (Empty))))))
+  (println "certified total:")
+  (println (certify (Entry 9 (Entry 8 (Entry 6 (Empty))))))
+  (println "runner-up board ranked:")
+  (println (runner-up-ranked? (Entry 9 (Entry 8 (Entry 6 (Empty))))))
+  ;; The timed round: a Float measure, Real arithmetic.
+  (println "timed round:")
+  (println (within-cutoff (Lap 19.25 (Lap 20.5 (Lap 18.75 (NoLaps))))))
+  0)

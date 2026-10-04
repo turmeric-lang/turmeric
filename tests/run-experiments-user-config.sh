@@ -95,6 +95,10 @@ printf '(defpackage "demo" :version "0.1.0" :experiments [not-a-real-experiment]
 cp "$SRC" "$S4/src/input.tur"
 assert_exit 2 "A. unknown :experiments name aborts with TUR-E0310" \
     "$XDG_EMPTY" "$S4" emit-c src/input.tur
+# `tur run <file>` walks up to the same manifest; it used to read only its
+# :reader-macros and compile with the project's :experiments silently off.
+assert_exit 2 "A. unknown :experiments name aborts 'tur run <file>' too" \
+    "$XDG_EMPTY" "$S4" run src/input.tur
 
 # --- B. user file with an unknown experiment name -> TUR-E0310 + path ------
 XDG_BAD="$WORK/xdg-bad"; mkdir -p "$XDG_BAD/turmeric"
