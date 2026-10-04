@@ -1199,7 +1199,8 @@ typedef struct LoopInvSite {
 struct Expr *elab_loop_invariant_pred(Elab *e, const struct Form *pred, Span span);
 struct Expr *li_contract_check(Elab *e, struct Expr *pred_e, const char *msg, Span span);
 LoopInvSite *li_register_site(Elab *e, const struct Form *call, const struct Form *cond,
-                              const struct Form *inv, uint32_t body_start, Span span);
+                              const struct Form *inv, uint32_t body_start, Span span,
+                              const struct Expr *while_e);
 
 /* loop-invariants-plan LI2: decide every loop site recorded since `from`
  * (initiation + preservation), eliding the runtime checks a proof covers.

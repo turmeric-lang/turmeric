@@ -661,4 +661,4 @@ harness's documented report-only class.
   retires); whether any consumer wants it -- RE2 is unstarted by decision, per
   the bullet above; and whether the TRUST the frozen grant now rests on is
   acceptable, since a hand-written false `#reads` reaches it with no diagnostic
-  ([reads-frame-verification-ignores-a-callee-write-frame](../reported/reads-frame-verification-ignores-a-callee-write-frame.md)).
+  ([reads-frame-verification-ignores-a-callee-write-frame](../archive/reads-frame-verification-ignores-a-callee-write-frame.md)).

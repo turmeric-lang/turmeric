@@ -286,7 +286,7 @@ Two further edges:
 - **The `#reads` half is trusted, not verified.** A frame over an inline-C body
   is `UNVERIFIED`, and nothing reports a `#reads` body that calls a mutator, so
   a hand-written false claim reaches this grant
-  ([reads-frame-verification-ignores-a-callee-write-frame](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/reads-frame-verification-ignores-a-callee-write-frame.md)).
+  ([reads-frame-verification-ignores-a-callee-write-frame](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reads-frame-verification-ignores-a-callee-write-frame.md)).
   A crossing has survived the same trust since C2, but it keeps the callee's
   own entry check as a backstop; an elided invariant check has none.
 

@@ -559,6 +559,19 @@ struct Binding {
      * evidence" -- an
      * inline-C body is unwalkable and stays false by design. */
     bool                reads_frame_omits_state;
+    /* reads-frame-verification-ignores-a-callee-write-frame: the WRITE side
+     * of the same promise, from the defn-site walk reads_scan_frame_writes.
+     *   reads_write_mask       -- framed parameters (bit i == param i) the
+     *     body DEMONSTRABLY writes: `set!` through one, or one handed to a
+     *     callee slot a `#writes` frame names.  Positive evidence; TUR-W0383.
+     *   reads_write_unverified -- the walk could not vouch that every use of
+     *     a framed parameter only reads it (set whenever the mask is).  An
+     *     inline-C body is the trust boundary and stays false, exactly as it
+     *     does for reads_frame_omits_state.
+     * The loop-invariant frozen grant -- the consumer with no runtime
+     * backstop -- refuses a `#reads` callee with either set. */
+    uint64_t            reads_write_mask;
+    bool                reads_write_unverified;
     /* R4 slice 2 (trusted-refinement-claims-plan): the read-side mirror of
      * `writes_checked`.  True only when the deferred rf_resolve_read_frames
      * pass saw the WHOLE elaborated body and attributed every read of

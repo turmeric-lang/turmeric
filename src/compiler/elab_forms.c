@@ -4734,7 +4734,8 @@ Expr *elab_while(Elab *e, const Form *call) {
     out->as.while_.invariant = inv_form;
     if (li_on) {
         LoopInvSite *site = li_register_site(e, call, call->as.list.items[1],
-                                             inv_form, body_start, call->span);
+                                             inv_form, body_start, call->span,
+                                             out);
         if (site) {
             site->entry_check = entry_slot;
             site->body_check  = body_slot;

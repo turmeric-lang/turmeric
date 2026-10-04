@@ -1,3 +1,5 @@
+> **Resolved 2026-10-03** (branch claude/graduate-loop-invariants): a `#reads` body is walked for writes at its definition (reads_scan_frame_writes, elab_fns.c) -- a definite write is TUR-W0383, an unvouchable use withholds the loop-invariant frozen grant -- and the stdlib Vec mutators carry `#writes [v]`. The same change closed a second hole found on the way: the Form-level grant approved a pure callee returning its argument (`(vec-push! (id v) 7)`); a typed walk over the elaborated loop now gates the frozen set. Pinned by tests/fixtures/refine-loop-invariant-reads-writes-not-trusted.
+
 # A `#reads` frame is not checked against the write frames of what its body calls
 
 **Severity: low-medium (trust: a false `#reads` claim grants congruence, and no

@@ -2,7 +2,7 @@
 
 > **Status:** **In progress** since 2026-09-29, behind
 > `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
-> `expires_at` 0.61.0, prototype). RF0, RF1, RF2, RF3 and RF5 landed in the
+> `expires_at` 0.64.0, prototype -- bumped from 0.61.0 on 2026-10-03: built and fuzzed, waiting on a consumer; see "What graduation waits on"). RF0, RF1, RF2, RF3 and RF5 landed in the
 > first cut (2026-09-29), RF4 and RF6.1 the next day; RF6.2 is deliberately
 > untouched (see "Landed" below). Taken off hold by
 > direct request ("execute the plan"), not by one of the triggers below.

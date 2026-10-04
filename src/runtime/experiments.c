@@ -428,7 +428,7 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "`^reflect` admits a total measure's defining equation to the refinement solver (bounded unfolding)",
       "docs/upcoming/reflected-measures-plan.md",
       "0.57.0",                  /* introduced */
-      "0.61.0",                  /* expires_at -- advisory; never blocks a release */
+      "0.64.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_reflected_measures },
     /* loop-invariants (docs/upcoming/loop-invariants-plan.md) -- a `while` may
