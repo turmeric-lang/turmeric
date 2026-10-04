@@ -1,0 +1,45 @@
+;; stdlib-os-surface-plan P0.2: file-write / file-write-str / file-seek /
+;; file-tell on a FileHandle, plus fs/append-text.
+(load "stdlib/io.tur")
+(load "stdlib/fs.tur")
+
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Run-time scratch dir (see io-stdlib-roundtrip for why not "/tmp"). */
+  static char buf[512];
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof buf, "%s/%s", d, name);
+  return buf;
+  ```)
+
+(defn cstr->ptr [s : cstr] : ptr<void>
+  ```c return (void*)s; ```)
+
+(defn make-buf [n : int] : ptr<void>
+  ```c return calloc(1, (size_t)n); ```)
+
+(defn buf->cstr [p : ptr<void>] : cstr
+  ```c return (const char*)p; ```)
+
+(defn free-buf [p : ptr<void>] : void
+  ```c free(p); ```)
+
+(defn main [] : int
+  (let [path (tmp-path "tur-io-file-write-seek.txt")
+        fh   (file-open path "w+b")]
+    (println (file-write-str fh "hello "))
+    (println (file-write fh (cstr->ptr "world!") 5))
+    (println (file-tell fh))
+    (println (file-seek fh 0 (SeekStart)))
+    (let [buf (make-buf 32)]
+      (println (file-read fh buf 31))
+      (println (buf->cstr buf))
+      (free-buf buf))
+    (println (file-seek fh -5 (SeekEnd)))
+    (println (file-seek fh 2 (SeekCurrent)))
+    (file-close fh)
+    (println (fs/append-text path "\nmore"))
+    (println (fs/read-text path))
+    (fs/rm path))
+  0)

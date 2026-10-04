@@ -1,5 +1,7 @@
 #include "builtins.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Static table — entries get their `name_sym` filled in by builtins_init.
@@ -148,6 +150,40 @@ static BuiltinSpec table_[] = {
     { "println", NULL, 1, 1, {.kind=TY_UINT64}, {.kind=TY_NIL}, BS_PRINTLN_UINT,    NULL, "IO" },
     { "println", NULL, 1, 1, {.kind=TY_FLOAT32},{.kind=TY_NIL}, BS_PRINTLN_FLOAT32, NULL, "IO" },
     { "println", NULL, 1, 1, {.kind=TY_FLOAT64},{.kind=TY_NIL}, BS_PRINTLN_FLOAT,   NULL, "IO" },
+    /* stdlib-os-surface-plan P0.5: eprintln / eprint -- println's overload
+     * set, writing to stderr.  They share println's BS_PRINTLN_* shapes so
+     * every pass that classifies a print (purity, CPS admission, the
+     * interpreter's capability gate) treats them identically; the
+     * destination rides c_op ("stderr" = with newline, "stderr-nonl" =
+     * without), which no println row sets.  See builtin_print_stmt. */
+    { "eprintln", NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_FLOAT}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_BOOL}, {.kind=TY_NIL}, BS_PRINTLN_BOOL, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_NIL}, BS_PRINTLN_CSTR, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_INT8}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_INT16}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_INT32}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_INT64}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_UINT8}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_UINT16}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_UINT32}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_UINT64}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_FLOAT32}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT32, "stderr", "IO" },
+    { "eprintln", NULL, 1, 1, {.kind=TY_FLOAT64}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT, "stderr", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_INT}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_FLOAT}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_BOOL}, {.kind=TY_NIL}, BS_PRINTLN_BOOL, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_CSTR}, {.kind=TY_NIL}, BS_PRINTLN_CSTR, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_INT8}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_INT16}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_INT32}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_INT64}, {.kind=TY_NIL}, BS_PRINTLN_INT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_UINT8}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_UINT16}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_UINT32}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_UINT64}, {.kind=TY_NIL}, BS_PRINTLN_UINT, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_FLOAT32}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT32, "stderr-nonl", "IO" },
+    { "eprint", NULL, 1, 1, {.kind=TY_FLOAT64}, {.kind=TY_NIL}, BS_PRINTLN_FLOAT, "stderr-nonl", "IO" },
     /* Phase 5: ref drop */
     { "drop!", NULL, 1, 1, {.kind=TY_UNKNOWN}, {.kind=TY_NIL}, BS_PREFIX_UNARY_FREE, "free", NULL },
 
@@ -268,6 +304,58 @@ const BuiltinSpec *builtin_first_with_name(const Symbol *name) {
         if (table_[i].name_sym == name) return &table_[i];
     }
     return NULL;
+}
+
+bool builtin_print_to_stderr(const BuiltinSpec *spec) {
+    return spec && spec->c_op && strncmp(spec->c_op, "stderr", 6) == 0;
+}
+
+bool builtin_print_newline(const BuiltinSpec *spec) {
+    return !(spec && spec->c_op && strcmp(spec->c_op, "stderr-nonl") == 0);
+}
+
+char *builtin_print_stmt(const BuiltinSpec *spec, BuiltinShape shape,
+                         const char *arg) {
+    size_t cap = strlen(arg) + 96;   /* longest fixed text below is < 80 */
+    char *buf = (char *)malloc(cap);
+    if (!buf) { fprintf(stderr, "tur: oom\n"); abort(); }
+    const char *nl = builtin_print_newline(spec) ? "\\n" : "";
+    if (!builtin_print_to_stderr(spec)) {
+        /* println: the historical spellings, byte for byte (fixture
+         * snapshots and the dynamic __tur_dyn_println helper match them). */
+        switch (shape) {
+            case BS_PRINTLN_INT:
+                snprintf(buf, cap, "printf(\"%%lld\\n\", (long long)(%s));", arg); break;
+            case BS_PRINTLN_FLOAT:
+                snprintf(buf, cap, "printf(\"%%g\\n\", (double)(%s));", arg); break;
+            case BS_PRINTLN_BOOL:
+                snprintf(buf, cap, "puts((%s) ? \"true\" : \"false\");", arg); break;
+            case BS_PRINTLN_CSTR:
+                snprintf(buf, cap, "puts(%s);", arg); break;
+            case BS_PRINTLN_UINT:
+                snprintf(buf, cap, "printf(\"%%llu\\n\", (unsigned long long)(%s));", arg); break;
+            case BS_PRINTLN_FLOAT32:
+                snprintf(buf, cap, "printf(\"%%.7g\\n\", (double)(%s));", arg); break;
+            default: buf[0] = '\0'; break;
+        }
+    } else {
+        switch (shape) {
+            case BS_PRINTLN_INT:
+                snprintf(buf, cap, "fprintf(stderr, \"%%lld%s\", (long long)(%s));", nl, arg); break;
+            case BS_PRINTLN_FLOAT:
+                snprintf(buf, cap, "fprintf(stderr, \"%%g%s\", (double)(%s));", nl, arg); break;
+            case BS_PRINTLN_BOOL:
+                snprintf(buf, cap, "fprintf(stderr, \"%%s%s\", (%s) ? \"true\" : \"false\");", nl, arg); break;
+            case BS_PRINTLN_CSTR:
+                snprintf(buf, cap, "fprintf(stderr, \"%%s%s\", (const char *)(%s));", nl, arg); break;
+            case BS_PRINTLN_UINT:
+                snprintf(buf, cap, "fprintf(stderr, \"%%llu%s\", (unsigned long long)(%s));", nl, arg); break;
+            case BS_PRINTLN_FLOAT32:
+                snprintf(buf, cap, "fprintf(stderr, \"%%.7g%s\", (double)(%s));", nl, arg); break;
+            default: buf[0] = '\0'; break;
+        }
+    }
+    return buf;
 }
 
 bool builtin_div_is_ieee(const BuiltinSpec *spec) {

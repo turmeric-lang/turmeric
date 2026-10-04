@@ -634,3 +634,29 @@
   fclose(f);
   return (n == len) ? 0 : -1;
   ```)
+;;; fs/append-text -- append a NUL-terminated string to a file.
+;;;
+;;; Creates the file when it does not exist; never truncates it.
+;;;
+;;; Parameters:
+;;;   path    -- NUL-terminated destination path cstr
+;;;   content -- NUL-terminated string to append
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.
+;;;
+;;; Example:
+;;;   (fs/append-text "/tmp/log.txt" "one more line\n")  ; => 0
+;;;
+;;; Since: stdlib-os-surface P0
+(defn fs/append-text [path : cstr content : cstr]
+  #fx{FS}
+  : int
+  ```c
+  FILE *f = fopen(path, "ab");
+  if (!f) return -1;
+  size_t len = strlen(content);
+  size_t n = fwrite(content, 1, len, f);
+  int rc = fclose(f);
+  return (n == len && rc == 0) ? 0 : -1;
+  ```)

@@ -44,6 +44,8 @@
 
 (load "stdlib/capability.tur")
 
+(load "stdlib/effects.tur")
+
 (defopaque DirListing :ptr<void>)
 
 (defopaque FileStream :ptr<void>)
@@ -450,4 +452,198 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
   ```c
   if (!fh.ptr) return -1;
   return fclose((FILE*)fh.ptr);
+  ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P0.2: write / seek / tell on FileHandle
+;; ============================================================================
+;;; SeekFrom -- the origin a file-seek offset is measured from.
+;;;
+;;; SeekStart is the beginning of the file (SEEK_SET), SeekCurrent the current
+;;; position (SEEK_CUR), SeekEnd the end of the file (SEEK_END).  A tagged
+;;; union rather than an int whence, so a caller cannot pass a stray integer.
+;;;
+;;; Since: stdlib-os-surface P0
+(defdata SeekFrom :copy (SeekStart) (SeekCurrent) (SeekEnd))
+;;; seek-from->whence -- the C whence constant for a SeekFrom.
+(defn seek-from->whence [w : SeekFrom] : int
+  (match w
+    (SeekStart) 0
+    (SeekCurrent) 1
+    (SeekEnd) 2))
+;;; file-write -- write len bytes from buf to fh.
+;;;
+;;; Parameters:
+;;;   fh  -- an open FileHandle (borrowed; not consumed).
+;;;   buf -- source buffer as ptr<void>.
+;;;   len -- number of bytes to write.
+;;;
+;;; Returns:
+;;;   Number of bytes actually written (short on error), or -1 when the
+;;;   handle is not open.
+;;;
+;;; Example:
+;;;   (file-write fh buf 13)  ; => 13
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-write [^borrow fh : FileHandle buf : ptr<void> len : int]
+  #fx{FS}
+  : int
+  ```c
+  if (!fh.ptr || len < 0) return -1;
+  return (int64_t)fwrite(buf, 1, (size_t)len, (FILE*)fh.ptr);
+  ```)
+;;; file-write-str -- write a NUL-terminated string to fh (no newline added).
+;;;
+;;; Parameters:
+;;;   fh -- an open FileHandle (borrowed; not consumed).
+;;;   s  -- the string to write.
+;;;
+;;; Returns:
+;;;   Number of bytes written, or -1 when the handle is not open.
+;;;
+;;; Example:
+;;;   (file-write-str fh "hello\n")  ; => 6
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-write-str [^borrow fh : FileHandle s : cstr]
+  #fx{FS}
+  : int
+  ```c
+  if (!fh.ptr) return -1;
+  return (int64_t)fwrite(s, 1, strlen(s), (FILE*)fh.ptr);
+  ```)
+;;; file-seek-raw -- fseek(3) with a C whence constant (internal).
+(defn file-seek-raw [^borrow fh : FileHandle offset : int whence : int]
+  #fx{FS}
+  : int
+  ```c
+  if (!fh.ptr) return -1;
+  FILE *f = (FILE*)fh.ptr;
+  int w = whence == 1 ? SEEK_CUR : whence == 2 ? SEEK_END : SEEK_SET;
+  if (fseek(f, (long)offset, w) != 0) return -1;
+  return (int64_t)ftell(f);
+  ```)
+;;; file-seek -- move fh's position to offset, measured from whence.
+;;;
+;;; Parameters:
+;;;   fh     -- an open FileHandle (borrowed; not consumed).
+;;;   offset -- byte offset (may be negative with SeekCurrent / SeekEnd).
+;;;   whence -- SeekStart, SeekCurrent or SeekEnd.
+;;;
+;;; Returns:
+;;;   The new absolute position, or -1 on error.
+;;;
+;;; Example:
+;;;   (file-seek fh 0 (SeekEnd))  ; => file size
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-seek [^borrow fh : FileHandle offset : int whence : SeekFrom]
+  #fx{FS}
+  : int
+  (file-seek-raw fh offset (seek-from->whence whence)))
+;;; file-tell -- the current byte position of fh.
+;;;
+;;; Parameters:
+;;;   fh -- an open FileHandle (borrowed; not consumed).
+;;;
+;;; Returns:
+;;;   The position from the start of the file, or -1 on error.
+;;;
+;;; Example:
+;;;   (file-tell fh)  ; => 0
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-tell [^borrow fh : FileHandle]
+  #fx{FS}
+  : int
+  ```c
+  if (!fh.ptr) return -1;
+  return (int64_t)ftell((FILE*)fh.ptr);
+  ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P0.1: line-oriented stdin
+;; ============================================================================
+;;; io/read-line -- read one line from stdin.
+;;;
+;;; The trailing newline (and a CR before it) is stripped.  The last line of
+;;; input counts even without a trailing newline.  Uses getline(3) on POSIX
+;;; and an fgets loop on Windows, which has no getline.
+;;;
+;;; Returns:
+;;;   (Some line) -- a fresh heap cstr the caller owns (release with free) --
+;;;   or None at end of input.  End of input is not an error.
+;;;
+;;; Example:
+;;;   (match (io/read-line)
+;;;     (Some s) (println s)
+;;;     (None)   (println "<eof>"))
+;;;
+;;; Since: stdlib-os-surface P0
+(defn io/read-line []
+  #fx{IO}
+  : (Option cstr)
+  ```c
+  char *line = NULL;
+  size_t len = 0;
+#ifdef _WIN32
+  size_t cap = 0;
+  char chunk[512];
+  for (;;) {
+    if (!fgets(chunk, (int)sizeof chunk, stdin)) break;
+    size_t n = strlen(chunk);
+    if (len + n + 1 > cap) {
+      size_t ncap = cap ? cap * 2 : 1024;
+      while (ncap < len + n + 1) ncap *= 2;
+      char *grown = (char *)realloc(line, ncap);
+      if (!grown) { free(line); return tur_none(); }
+      line = grown; cap = ncap;
+    }
+    memcpy(line + len, chunk, n + 1);
+    len += n;
+    if (n > 0 && chunk[n - 1] == '\n') break;
+  }
+  if (!line) return tur_none();
+#else
+  size_t cap = 0;
+  ssize_t n = getline(&line, &cap, stdin);
+  if (n < 0) { free(line); return tur_none(); }
+  len = (size_t)n;
+#endif
+  if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+  if (len > 0 && line[len - 1] == '\r') line[--len] = '\0';
+  return tur_some_ptr(line);
+  ```)
+;;; io/read-stdin -- read all of stdin into one string.
+;;;
+;;; Reads until end of input, so it works on a pipe or a terminal as well as
+;;; a redirected file.
+;;;
+;;; Returns:
+;;;   (Some text) -- a fresh NUL-terminated heap cstr the caller owns (release
+;;;   with free) -- or None on a read error.  Empty input is (Some "").
+;;;
+;;; Example:
+;;;   (match (io/read-stdin) (Some s) (println s) (None) (println "read failed"))
+;;;
+;;; Since: stdlib-os-surface P0
+(defn io/read-stdin []
+  #fx{IO}
+  : (Option cstr)
+  ```c
+  size_t cap = 4096, len = 0;
+  char *buf = (char *)malloc(cap);
+  if (!buf) return tur_none();
+  for (;;) {
+    if (cap - len < 2) {
+      char *grown = (char *)realloc(buf, cap * 2);
+      if (!grown) { free(buf); return tur_none(); }
+      buf = grown; cap *= 2;
+    }
+    size_t n = fread(buf + len, 1, cap - len - 1, stdin);
+    len += n;
+    if (n == 0) break;
+  }
+  if (ferror(stdin)) { free(buf); return tur_none(); }
+  buf[len] = '\0';
+  return tur_some_ptr(buf);
   ```)

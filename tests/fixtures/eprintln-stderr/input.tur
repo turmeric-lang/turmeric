@@ -1,0 +1,11 @@
+;; stdlib-os-surface-plan P0.5: eprintln / eprint mirror println on stderr.
+;; stdout must carry only the println lines; stderr carries the rest.
+(defn main [] : int
+  (println "out-1")
+  (eprintln "err-line")
+  (eprint "err-no-newline:")
+  (eprintln 42)
+  (eprintln 7.25)
+  (eprintln false)
+  (println "out-2")
+  0)

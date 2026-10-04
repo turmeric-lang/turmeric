@@ -1,0 +1,13 @@
+;; stdlib-os-surface-plan P0.4: process/kill delivers a Signal to a spawned
+;; child; process/wait then reaps it.  (Before P1 a signaled child reports
+;; -1 from process/wait.)
+(load "stdlib/process.tur")
+
+(defn main [] : int
+  (let [child (process/spawn "sleep" (cons "sleep" (cons "10" 0)))]
+    (println (process/kill (process/child-pid child) (SigKill)))
+    (println (process/wait child)))
+  (println (signal->number (SigTerm)))
+  (println (signal->number (number->signal 1)))
+  (println (signal->number (SigOther 10)))
+  0)

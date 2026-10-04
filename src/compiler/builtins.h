@@ -102,6 +102,18 @@ int builtin_describe(const char *name, char *out, size_t cap);
  * this to emit a bare `(a) / (b)` for the float rows. */
 bool builtin_div_is_ieee(const BuiltinSpec *spec);
 
+/* stdlib-os-surface-plan P0.5: the print family's destination.  Every
+ * BS_PRINTLN_* row is `println` (stdout, trailing newline) unless its c_op
+ * says otherwise: "stderr" is `eprintln`, "stderr-nonl" is `eprint`. */
+bool builtin_print_to_stderr(const BuiltinSpec *spec);
+bool builtin_print_newline(const BuiltinSpec *spec);
+
+/* The C statement (no indent, no trailing newline) that prints `arg` for a
+ * BS_PRINTLN_* `shape` through `spec`'s destination.  Heap string; the caller
+ * frees it.  Shared by the direct and CPS emitters so both spell it alike. */
+char *builtin_print_stmt(const BuiltinSpec *spec, BuiltinShape shape,
+                         const char *arg);
+
 /* Collect overloads for a builtin name.
  * Returns number of entries written to `out` (up to max_out). */
 uint32_t builtin_collect_with_name(const Symbol *name,

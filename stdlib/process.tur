@@ -365,3 +365,89 @@
   #include <unistd.h>
   return (int64_t)chdir(path);
   ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P0.4: signals and process/kill
+;; ============================================================================
+;;; Signal -- a signal to deliver to (or that terminated) a process.
+;;;
+;;; SigTerm / SigKill / SigInt / SigHup name the common ones; SigOther carries
+;;; any other platform signal number as an escape hatch.  A tagged union rather
+;;; than a raw signal number, so call sites say what they send.
+;;;
+;;; Since: stdlib-os-surface P0
+(defdata Signal :copy (SigTerm) (SigKill) (SigInt) (SigHup) (SigOther int))
+;;; signal->number -- the platform signal number for a Signal (POSIX values).
+(defn signal->number [s : Signal] : int
+  (match s
+    (SigTerm) 15
+    (SigKill) 9
+    (SigInt) 2
+    (SigHup) 1
+    (SigOther n) n))
+;;; number->signal -- the Signal for a platform signal number.
+(defn number->signal [n : int] : Signal
+  (cond
+    (= n 15) (SigTerm)
+    (= n 9) (SigKill)
+    (= n 2) (SigInt)
+    (= n 1) (SigHup)
+    :else (SigOther n)))
+;;; process/child-pid -- the process id of a spawned child, without reaping it.
+;;;
+;;; Parameters:
+;;;   child -- ChildHandle from process/spawn (borrowed; still must be waited)
+;;;
+;;; Returns:
+;;;   The child's Pid.  On Windows the handle is a process HANDLE, and this
+;;;   answers its process id via GetProcessId.
+;;;
+;;; Example:
+;;;   (process/kill (process/child-pid child) (SigTerm))
+;;;
+;;; Since: stdlib-os-surface P0
+(defn process/child-pid [^borrow child : ChildHandle] : Pid
+  ```c
+#ifdef _WIN32
+  return (int64_t)GetProcessId((HANDLE)(intptr_t)child);
+#else
+  return (int64_t)child;
+#endif
+  ```)
+;;; process/kill-raw -- kill(2) with a signal number (internal).
+(defn process/kill-raw [pid : Pid signo : int]
+  #fx{Proc}
+  : int
+  ```c
+#ifdef _WIN32
+  /* Windows has no signals.  Termination is the only thing that maps:
+   * SIGKILL (9) and SIGTERM (15) both become TerminateProcess; anything else
+   * is reported as an error rather than silently ignored. */
+  if (signo != 9 && signo != 15) return -1;
+  HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+  if (!h) return -1;
+  BOOL ok = TerminateProcess(h, 128 + (UINT)signo);
+  CloseHandle(h);
+  return ok ? 0 : -1;
+#else
+  #include <signal.h>
+  return (int64_t)kill((pid_t)pid, (int)signo);
+#endif
+  ```)
+;;; process/kill -- send a signal to a process.
+;;;
+;;; Parameters:
+;;;   pid -- target process (process/child-pid gives a spawned child's)
+;;;   sig -- the Signal to send
+;;;
+;;; Returns:
+;;;   0 on success, -1 on error.  On Windows only SigKill and SigTerm map
+;;;   (both to TerminateProcess); any other Signal returns -1.
+;;;
+;;; Example:
+;;;   (process/kill (process/child-pid child) (SigKill))  ; => 0
+;;;
+;;; Since: stdlib-os-surface P0
+(defn process/kill [pid : Pid sig : Signal]
+  #fx{Proc}
+  : int
+  (process/kill-raw pid (signal->number sig)))

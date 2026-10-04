@@ -1,0 +1,13 @@
+;; stdlib-os-surface-plan P0.1: io/read-line reads stdin one line at a time,
+;; stripping the newline; the last line counts without a trailing newline, and
+;; end of input is None (not an error).
+(load "stdlib/io.tur")
+
+(defn drain [n : int] : int
+  (match (io/read-line)
+    (Some s) (do (println s) (drain (+ n 1)))
+    (None) (do (println "<eof>") n)))
+
+(defn main [] : int
+  (println (drain 0))
+  0)

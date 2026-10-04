@@ -4658,29 +4658,33 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
          * for 2.  Printing is the one place the static type can win without
          * anything downstream depending on the tag.  See
          * docs/archive/ascribe-bool-to-int-prints-differently-per-path.md. */
+        /* stdlib-os-surface-plan P0.5: eprintln / eprint share these
+         * shapes; the destination and newline ride the spec. */
+        FILE *out = builtin_print_to_stderr(spec) ? stderr : stdout;
+        const char *nl = builtin_print_newline(spec) ? "\n" : "";
         if (a.tag == TURI_BOOL) {
             if (spec->shape == BS_PRINTLN_INT) {
-                printf("%lld\n", (long long)(a.as_bool ? 1 : 0)); return turi_nil();
+                fprintf(out, "%lld%s", (long long)(a.as_bool ? 1 : 0), nl); return turi_nil();
             }
             if (spec->shape == BS_PRINTLN_UINT) {
-                printf("%llu\n", (unsigned long long)(a.as_bool ? 1u : 0u)); return turi_nil();
+                fprintf(out, "%llu%s", (unsigned long long)(a.as_bool ? 1u : 0u), nl); return turi_nil();
             }
             if (spec->shape == BS_PRINTLN_FLOAT || spec->shape == BS_PRINTLN_FLOAT32) {
-                printf("%g\n", a.as_bool ? 1.0 : 0.0); return turi_nil();
+                fprintf(out, "%g%s", a.as_bool ? 1.0 : 0.0, nl); return turi_nil();
             }
         }
         switch (a.tag) {
-        case TURI_CSTR:  puts(a.as_cstr ? a.as_cstr : ""); break;
-        case TURI_BOOL:  puts(a.as_bool ? "true" : "false"); break;
-        case TURI_FLOAT: printf("%g\n", a.as_float); break;
+        case TURI_CSTR:  fprintf(out, "%s%s", a.as_cstr ? a.as_cstr : "", nl); break;
+        case TURI_BOOL:  fprintf(out, "%s%s", a.as_bool ? "true" : "false", nl); break;
+        case TURI_FLOAT: fprintf(out, "%g%s", a.as_float, nl); break;
         case TURI_INT:
         default:
             if (spec->shape == BS_PRINTLN_UINT)
-                printf("%llu\n", (unsigned long long)(uint64_t)a.as_int);
+                fprintf(out, "%llu%s", (unsigned long long)(uint64_t)a.as_int, nl);
             else if (spec->shape == BS_PRINTLN_FLOAT32)
-                printf("%.7g\n", a.as_float);
+                fprintf(out, "%.7g%s", a.as_float, nl);
             else
-                printf("%lld\n", (long long)a.as_int);
+                fprintf(out, "%lld%s", (long long)a.as_int, nl);
             break;
         }
         return turi_nil();

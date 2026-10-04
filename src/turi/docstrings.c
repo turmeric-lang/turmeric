@@ -214,6 +214,8 @@ const char *turi_doc_lookup_builtin(const char *sym) {
         /* I/O */
         {"println",  "(println x) -- print value with trailing newline; #fx{IO}"},
         {"print",    "(print x) -- print value without trailing newline"},
+        {"eprintln", "(eprintln x) -- print value to stderr with trailing newline; #fx{IO}"},
+        {"eprint",   "(eprint x) -- print value to stderr without trailing newline; #fx{IO}"},
         /* Core special forms */
         {"let",      "(let [x v ...] body) -- bind local variables in scope of body"},
         {"if",       "(if cond then else) -- conditional: evaluates then or else branch"},
