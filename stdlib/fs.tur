@@ -478,7 +478,10 @@
 ;;;   (fs/glob-free paths)
 ;;;
 ;;; Since: Phase B2
-(defn ^deprecated "use fs/paths-free" fs/glob-free [v : (Vec cstr)] : void
+(defn ^deprecated "use fs/paths-free"
+  fs/glob-free
+  [v : (Vec cstr)]
+  : void
   (fs/paths-free v))
 ;;; fs/tmpfile -- create a unique temporary file in the system temp directory.
 ;;;
@@ -901,7 +904,9 @@
 ;; lstat(2) on POSIX, so a symlink to a directory is reported as a leaf and the
 ;; walk never follows it (no cycles).  Windows has no lstat; there stat is used
 ;; and symlinked directories are followed.
-(defn fs/walk-dir? [path : cstr] #fx{FS} : bool
+(defn fs/walk-dir? [path : cstr]
+  #fx{FS}
+  : bool
   ```c
   #include <sys/stat.h>
   struct stat st;
@@ -913,7 +918,10 @@
   return S_ISDIR(st.st_mode);
   ```)
 ;;; fs/walk-names -- visit names[i..] of dir, recursing into directories (internal).
-(defn fs/walk-names [dir : cstr names : (Vec cstr) i : int f : (fn [cstr bool] nil)]
+(defn fs/walk-names [dir : cstr
+                     names : (Vec cstr)
+                     i : int
+                     f : (fn [cstr bool] nil)]
   #fx{FS}
   : (Result nil IoError)
   (if (>= i (vec-len names))
@@ -926,15 +934,13 @@
       ;; docs/reported/ok-nil-unconstructible-in-turmeric.md).
       (let [r (if is-dir
                 (match (fs/read-dir full)
-                  (Ok sub) (let [rr (fs/walk-names full sub 0 f)]
-                             (fs/paths-free sub)
-                             rr)
-                  (Err e) (Err e))
+                  (Ok sub)
+                  (let [rr (fs/walk-names full sub 0 f)] (fs/paths-free sub) rr)
+                  (Err e)
+                  (Err e))
                 (io-error/ok-unit))]
         (fs/free-cstr full)
-        (match r
-          (Ok _) (fs/walk-names dir names (+ i 1) f)
-          (Err e) (Err e))))))
+        (match r (Ok _) (fs/walk-names dir names (+ i 1) f) (Err e) (Err e))))))
 ;;; fs/walk-fn -- call f on every path under root, depth first.
 ;;;
 ;;; Visits entries in fs/read-dir order (sorted), calling (f path is-dir?)
@@ -959,10 +965,10 @@
   #fx{FS}
   : (Result nil IoError)
   (match (fs/read-dir root)
-    (Ok names) (let [r (fs/walk-names root names 0 f)]
-                 (fs/paths-free names)
-                 r)
-    (Err e) (Err e)))
+    (Ok names)
+    (let [r (fs/walk-names root names 0 f)] (fs/paths-free names) r)
+    (Err e)
+    (Err e)))
 ;;; fs/walk -- every path under root, depth first, as a vector.
 ;;;
 ;;; The convenience form of fs/walk-fn: the same order (sorted per
@@ -987,6 +993,9 @@
   #fx{FS}
   : (Result (Vec cstr) IoError)
   (let [out (vec-new)]
-    (match (fs/walk-fn root (fn [p : cstr d : bool] : nil (vec-push! out (fs/dup-cstr p))))
-      (Ok _) (Ok out)
-      (Err e) (do (fs/paths-free out) (Err e)))))
+    (match (fs/walk-fn root
+             (fn [p : cstr d : bool] : nil (vec-push! out (fs/dup-cstr p))))
+      (Ok _)
+      (Ok out)
+      (Err e)
+      (do (fs/paths-free out) (Err e)))))

@@ -99,20 +99,14 @@
 (defdata Signal :copy (SigTerm) (SigKill) (SigInt) (SigHup) (SigOther int))
 ;;; signal->number -- the platform signal number for a Signal (POSIX values).
 (defn signal->number [s : Signal] : int
-  (match s
-    (SigTerm) 15
-    (SigKill) 9
-    (SigInt) 2
-    (SigHup) 1
-    (SigOther n) n))
+  (match s (SigTerm) 15 (SigKill) 9 (SigInt) 2 (SigHup) 1 (SigOther n) n))
 ;;; number->signal -- the Signal for a platform signal number.
 (defn number->signal [n : int] : Signal
-  (cond
-    (= n 15) (SigTerm)
-    (= n 9) (SigKill)
-    (= n 2) (SigInt)
-    (= n 1) (SigHup)
-    :else (SigOther n)))
+  (cond (= n 15) (SigTerm)
+        (= n 9)  (SigKill)
+        (= n 2)  (SigInt)
+        (= n 1)  (SigHup)
+        :else    (SigOther n)))
 ;;; ExitStatus -- how a reaped child process ended.
 ;;;
 ;;; (Exited code) for a normal exit with that status code; (Signaled sig) when
@@ -135,9 +129,7 @@
 ;;;
 ;;; Since: stdlib-os-surface P1
 (defn exit-status/success? [st : ExitStatus] : bool
-  (match st
-    (Exited c) (= c 0)
-    (Signaled _) false))
+  (match st (Exited c) (= c 0) (Signaled _) false))
 ;; The process/*-raw helpers below take the variadic argument list as its
 ;; cons-list carrier (`args : int`, {head,tail} cells of cstr) -- the shape a
 ;; `& args : cstr` rest parameter has at run time.  They are internal: the
@@ -276,9 +268,7 @@ static char **__tur_proc_argv(const char *path, int64_t args) {
   #fx{Proc}
   : (Result ChildHandle IoError)
   (let [r (process/spawn-raw path args)]
-    (if (< r 0)
-      (Err (io-error/of-code (- 0 r)))
-      (Ok (process/child-of-raw r)))))
+    (if (< r 0) (Err (io-error/of-code (- 0 r))) (Ok (process/child-of-raw r)))))
 ;;; process/wait-raw -- reap a child; an encoded status (internal).
 ;;
 ;; Answers code (0..255) for a normal exit, 256 + signo for a child a signal
@@ -309,10 +299,9 @@ static char **__tur_proc_argv(const char *path, int64_t args) {
   ```)
 ;;; process/decode-wait -- turn a process/wait-raw code into a Result (internal).
 (defn process/decode-wait [code : int] : (Result ExitStatus IoError)
-  (cond
-    (< code 0) (Err (io-error/of-code (- 0 code)))
-    (>= code 256) (Ok (Signaled (number->signal (- code 256))))
-    :else (Ok (Exited code))))
+  (cond (< code 0)    (Err (io-error/of-code (- 0 code)))
+        (>= code 256) (Ok (Signaled (number->signal (- code 256))))
+        :else         (Ok (Exited code))))
 ;;; process/wait -- wait for a child process to end, consuming its handle.
 ;;;
 ;;; Parameters:
@@ -487,7 +476,7 @@ static char **__tur_proc_argv(const char *path, int64_t args) {
 ;;; Since: stdlib-os-surface P0
 (defn process/child-pid [^borrow child : ChildHandle] : Pid
   ```c
-#ifdef _WIN32
+  #ifdef _WIN32
   return (int64_t)GetProcessId((HANDLE)(intptr_t)child);
 #else
   return (int64_t)child;
@@ -554,7 +543,8 @@ static char **__tur_proc_argv(const char *path, int64_t args) {
 ;;; process/default-opts is all three None.
 ;;;
 ;;; Since: stdlib-os-surface P2
-(defstruct ProcOpts [input : (Option cstr) cwd : (Option cstr) env : (Option (Vec cstr))])
+(defstruct ProcOpts
+  [input : (Option cstr) cwd : (Option cstr) env : (Option (Vec cstr))])
 ;;; process/default-opts -- ProcOpts with empty stdin, inherited cwd and env.
 ;;;
 ;;; Returns:
@@ -564,10 +554,10 @@ static char **__tur_proc_argv(const char *path, int64_t args) {
 ;;;   (process/output (process/default-opts) "ls" "-l")
 ;;;
 ;;; Since: stdlib-os-surface P2
-(defn process/default-opts [] : ProcOpts
-  (ProcOpts (None) (None) (None)))
+(defn process/default-opts [] : ProcOpts (ProcOpts (None) (None) (None)))
 ;;; ProcRun -- the raw outcome of process/output-raw (internal).
 (defopaque ProcRun :ptr<void>)
+
 ```c
 typedef struct __tur_proc_run { char *out; char *err; int64_t code; } __tur_proc_run;
 ```
@@ -580,10 +570,14 @@ typedef struct __tur_proc_run { char *out; char *err; int64_t code; } __tur_proc
 ;; call so a child that exits without reading its input cannot kill this
 ;; process.  code is encoded as for process/wait-raw.  Windows: not
 ;; implemented yet (ENOSYS) -- windows-remaining-plan.md owns that.
-(defn process/output-raw [path : cstr args : int
-                          has-input : bool input : cstr
-                          has-cwd : bool cwd : cstr
-                          has-env : bool env : (Vec cstr)]
+(defn process/output-raw [path : cstr
+                          args : int
+                          has-input : bool
+                          input : cstr
+                          has-cwd : bool
+                          cwd : cstr
+                          has-env : bool
+                          env : (Vec cstr)]
   #fx{Proc}
   : (Result ProcRun IoError)
   ```c
@@ -745,23 +739,48 @@ typedef struct __tur_proc_run { char *out; char *err; int64_t code; } __tur_proc
         code (process/proc-run-code r)]
     (process/proc-run-free r)
     (match (process/decode-wait code)
-      (Ok st) (Ok (ProcOutput out err st))
-      (Err e) (Err e))))
+      (Ok st)
+      (Ok (ProcOutput out err st))
+      (Err e)
+      (Err e))))
 ;;; process/output-with -- run the raw spawn with opts' cwd and env (internal).
-(defn process/output-with [opts : ProcOpts path : cstr args : int
-                           has-input : bool input : cstr]
+(defn process/output-with [opts : ProcOpts
+                           path : cstr
+                           args : int
+                           has-input : bool
+                           input : cstr]
   #fx{Proc}
   : (Result ProcOutput IoError)
   (let [has-cwd (match (.cwd opts) (Some _) true (None) false)
         cwd     (match (.cwd opts) (Some d) d (None) "")]
     (match (.env opts)
-      (Some vars) (match (process/output-raw path args has-input input has-cwd cwd true vars)
-                    (Ok r) (process/finish-output r)
-                    (Err e) (Err e))
-      (None) (let [none (:: (vec-new) (Vec cstr))]
-               (match (process/output-raw path args has-input input has-cwd cwd false none)
-                 (Ok r) (do (vec-free-o none 0) (process/finish-output r))
-                 (Err e) (do (vec-free-o none 0) (Err e)))))))
+      (Some vars)
+      (match (process/output-raw path
+               args
+               has-input
+               input
+               has-cwd
+               cwd
+               true
+               vars)
+        (Ok r)
+        (process/finish-output r)
+        (Err e)
+        (Err e))
+      (None)
+      (let [none (:: (vec-new) (Vec cstr))]
+        (match (process/output-raw path
+                 args
+                 has-input
+                 input
+                 has-cwd
+                 cwd
+                 false
+                 none)
+          (Ok r)
+          (do (vec-free-o none 0) (process/finish-output r))
+          (Err e)
+          (do (vec-free-o none 0) (Err e)))))))
 ;;; process/output -- run a program to completion and collect everything.
 ;;;
 ;;; The child's stdout and stderr are each captured in full, read together so
@@ -788,5 +807,7 @@ typedef struct __tur_proc_run { char *out; char *err; int64_t code; } __tur_proc
   #fx{Proc}
   : (Result ProcOutput IoError)
   (match (.input opts)
-    (Some text) (process/output-with opts path args true text)
-    (None) (process/output-with opts path args false "")))
+    (Some text)
+    (process/output-with opts path args true text)
+    (None)
+    (process/output-with opts path args false "")))

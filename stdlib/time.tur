@@ -244,7 +244,7 @@
     #fx{IO}
     : int
     ```c
-#ifdef _WIN32
+    #ifdef _WIN32
     FILETIME ft;
     GetSystemTimePreciseAsFileTime(&ft);
     uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
@@ -274,7 +274,7 @@
     #fx{IO}
     : int
     ```c
-#ifdef _WIN32
+    #ifdef _WIN32
     LARGE_INTEGER freq, now;
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&now);
@@ -299,8 +299,7 @@
   ;;;   (get-time-ms)  ; => 1747123456789
   ;;;
   ;;; Since: Phase 16
-  (defn get-time-ms [] : int
-    (now-ms))
+  (defn get-time-ms [] : int (now-ms))
   ;;; sleep-ms -- suspend execution for a given number of milliseconds.
   ;;;
   ;;; Parameters:

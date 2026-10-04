@@ -244,7 +244,10 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
 ;; Sets out_len to the number of bytes read
 
 
-(defn ^deprecated "use fs/read-text from stdlib/fs.tur" read-file [path : cstr] : ptr<void>
+(defn ^deprecated "use fs/read-text from stdlib/fs.tur"
+  read-file
+  [path : cstr]
+  : ptr<void>
   ```c
   FILE* f = fopen(path, "rb");
   if (!f) return NULL;
@@ -283,7 +286,10 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
 ;; Write data to a file
 ;; Returns 0 on success, non-zero on error
 
-(defn ^deprecated "use fs/write-text from stdlib/fs.tur, or file-open + file-write for bytes" write-file [path : cstr data : ptr<void> len : int] : int
+(defn ^deprecated "use fs/write-text from stdlib/fs.tur, or file-open + file-write for bytes"
+  write-file
+  [path : cstr data : ptr<void> len : int]
+  : int
   ```c
   FILE* f = fopen(path, "wb");
   if (!f) return -1;
@@ -308,7 +314,10 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
 ;;; Since: Phase 16
 ;; Check if file exists
 
-(defn ^deprecated "use fs/exists? from stdlib/fs.tur" file-exists? [path : cstr] : int
+(defn ^deprecated "use fs/exists? from stdlib/fs.tur"
+  file-exists?
+  [path : cstr]
+  : int
   ```c
   FILE* f = fopen(path, "rb");
   if (f) { fclose(f); return 1; }
@@ -434,7 +443,10 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
 ;;;   (file-handle-ok? fh)  ; => true
 ;;;
 ;;; Since: LT4
-(defn ^deprecated "file-open returns (Result FileHandle IoError); match on it instead" file-handle-ok? [^borrow fh : FileHandle] : bool
+(defn ^deprecated "file-open returns (Result FileHandle IoError); match on it instead"
+  file-handle-ok?
+  [^borrow fh : FileHandle]
+  : bool
   ```c
   return fh != NULL;
   ```)
@@ -498,10 +510,7 @@ static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, 
 (defdata SeekFrom :copy (SeekStart) (SeekCurrent) (SeekEnd))
 ;;; seek-from->whence -- the C whence constant for a SeekFrom.
 (defn seek-from->whence [w : SeekFrom] : int
-  (match w
-    (SeekStart) 0
-    (SeekCurrent) 1
-    (SeekEnd) 2))
+  (match w (SeekStart) 0 (SeekCurrent) 1 (SeekEnd) 2))
 ;;; file-write -- write len bytes from buf to fh.
 ;;;
 ;;; Parameters:
@@ -750,7 +759,7 @@ static char *__tur_io_read_line(FILE *f, int *err) {
   #fx{FS}
   : (Result (Option cstr) IoError)
   (match (file-read-line-raw fh)
-    (Ok s) (Ok (Some s))
-    (Err e) (if (= (io-error/code e) 0)
-              (Ok (:: (None) (Option cstr)))
-              (Err e))))
+    (Ok s)
+    (Ok (Some s))
+    (Err e)
+    (if (= (io-error/code e) 0) (Ok (:: (None) (Option cstr))) (Err e))))
