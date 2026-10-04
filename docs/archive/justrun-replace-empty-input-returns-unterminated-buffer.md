@@ -1,5 +1,7 @@
 # `tur run`: `replace("", from, to)` returns an unterminated, uninitialized buffer
 
+**RESOLVED 2026-10-04.** `replace` writes the NUL before its fill loop (`src/compiler/justrun.c`), so `""` comes back as an empty string. Pinned by the last case of `tests/run-tur-run-rhs-eval.sh` (`replace("", "a", "b")` -> `[]`, alongside an ordinary `replace`).
+
 **Severity:** low. A Justfile that calls `replace` on an empty string gets
 whatever byte `malloc` handed back, then reads past the 1-byte allocation
 until it happens to hit a NUL. Usually that byte is already 0 and nothing

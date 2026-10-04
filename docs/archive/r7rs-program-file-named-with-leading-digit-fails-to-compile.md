@@ -1,5 +1,7 @@
 # `#lang r7rs`: a program whose file name starts with a digit fails to compile once it imports a user library
 
+**RESOLVED 2026-10-04.** The fix is in `scheme_lower_program` (`src/compiler/scheme_lower.c`), where a program that imports a library gets its module name from the file stem. A stem that starts with a digit is now prefixed `r7rs-program-`. Only the last dot counts as the extension now, so `1.1.scm` becomes `r7rs-program-1-1` and no longer shares `1` with `1.2.scm`. The module is internal to the program (nothing imports it), so this renames no user-visible name. `9lives.scm`, `1.1.scm` and `lives9.scm` all print `4`. Pinned by `tests/fixtures/9lives-r7rs-program`. The `sicp-guide` rough-edges entry is gone.
+
 **Severity:** medium. The compiled back end emits C identifiers that begin
 with a digit, and `cc` rejects the unit with a wall of `expected identifier
 or '('` errors that never mention the file name. SICP readers name files

@@ -231,6 +231,33 @@ EOF
     fi
 }
 
+# --------------------------------------------------------------------------
+# 13. A shebang recipe under a TMPDIR with a space or shell metacharacters.
+#     The script path comes from $TMPDIR and used to reach system() as shell
+#     text: a space gave exit 127, and `;` ran the rest as a command.
+# --------------------------------------------------------------------------
+{
+    dir="$WORK/shebang-tmpdir"
+    mkdir -p "$dir"
+    tdir="$WORK/my tmp;touch PWNED"  # PWNED lands in cwd ($dir) if it runs
+    mkdir -p "$tdir"
+    printf 'bang:\n    #!/bin/sh\n    echo shebang-ran\n' > "$dir/Justfile"
+    out="$(cd "$dir" && TMPDIR="$tdir" "$TUR" run bang 2>&1)"
+    rc=$?
+    if [ "$rc" -eq 0 ] && grep -q "shebang-ran" <<< "$out"; then
+        pass "shebang-spaced-tmpdir-runs"
+    else
+        fail "shebang-spaced-tmpdir-runs" "exit=$rc out=$out"
+    fi
+    # Only this case's dirs: justfile-used-forces leaves a PWNED on purpose.
+    hits="$(find "$dir" "$tdir" -name PWNED 2>/dev/null)"
+    if [ -n "$hits" ]; then
+        fail "shebang-tmpdir-inert" "the TMPDIR text ran as shell (PWNED exists)"
+    else
+        pass "shebang-tmpdir-inert"
+    fi
+}
+
 echo
 echo "run-security-driver: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

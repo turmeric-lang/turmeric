@@ -1940,6 +1940,7 @@ static char *eval_builtin(const char *name, const char **args, int n_args,
         char *out = (char *)malloc(strlen(s) + n * (tlen > flen ? tlen - flen : 0) + 1);
         if (!out) { fprintf(stderr, "tur run: out of memory\n"); exit(2); }
         char *w = out;
+        *w = '\0';  /* "" never enters the loop, whose exits write the NUL */
         for (const char *q = s; *q; ) {
             const char *hit = strstr(q, from);
             if (!hit) { strcpy(w, q); break; }
@@ -2620,8 +2621,31 @@ static int exec_recipe_idx(JFile *jf, int idx, const char **args, int n_args,
         }
         int exit_code = 0;
         if (!dry_run) {
-            int sys_rc = system(tmpl);
+            /* The path is built from $TMPDIR, text the Justfile author did not
+             * write, so it never goes through a shell: system() word-split a
+             * TMPDIR with a space (exit 127) and expanded `;` or `$(...)` in
+             * one.  exec'ing the file directly still has the kernel honour the
+             * shebang. */
+#ifndef _WIN32
+            fflush(NULL);
+            pid_t pid = fork();
+            if (pid < 0) {
+                exit_code = 1;
+            } else if (pid == 0) {
+                char *argv[] = { tmpl, NULL };
+                execv(tmpl, argv);
+                _exit(127);
+            } else {
+                int st = 0;
+                while (waitpid(pid, &st, 0) < 0 && errno == EINTR) { }
+                exit_code = WIFEXITED(st) ? WEXITSTATUS(st) : 1;
+            }
+#else
+            char quoted[1100];
+            snprintf(quoted, sizeof(quoted), "\"%s\"", tmpl);
+            int sys_rc = system(quoted);
             exit_code = WIFEXITED(sys_rc) ? WEXITSTATUS(sys_rc) : 1;
+#endif
         }
         unlink(tmpl);
         jenv_free(&env);
