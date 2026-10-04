@@ -111,17 +111,17 @@ A panic prints a message and stops the program with exit code 134 (`SIGABRT`):
 ```
 $ tur run boom.tur
 5
-panic at /var/folders/.../tur-build/boom_tur.c:1127: division by zero
+panic at boom.tur:3: division by zero
 ```
 
-**The location in that message is the runtime's, not yours.** The file is the
-temporary C file `tur run` generated, and the line is inside the runtime's own
-panic function, so it is the same for every panic. To find where *your* code
-panicked, use either of the next two sections: `tur debug` shows the
-Turmeric call stack directly, and a `--debug` build under lldb stops at the
-panic with the full stack (see
-[the panic recipe](#finding-where-a-panic-came-from)). This is tracked in
-[panic-location-names-the-runtime-not-the-call-site](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/panic-location-names-the-runtime-not-the-call-site.md).
+The location is the `(panic ...)` that fired: the source file's name and its
+line. `tur --interpret` prints the same line, with exit code 1. A panic raised
+by the runtime itself (a failed bounds check, say) still names a line in the
+generated C. The location does not say how your code got there. For the
+calls that led to it, use either of the next two sections: `tur debug`
+shows the Turmeric call stack directly, and a `--debug` build under lldb
+stops at the panic with the full stack (see
+[the panic recipe](#finding-where-a-panic-came-from)).
 
 A failed `:pre` contract is a panic too, with the message
 `Precondition failed`. The same two tools find it.
@@ -253,16 +253,16 @@ stack. No breakpoint is needed -- run the program, then ask for a backtrace:
 ```
 $ lldb ./boom
 (lldb) run
-panic at .../boom_tur.c:1127: division by zero
+panic at boom.tur:3: division by zero
 * thread #1, stop reason = signal SIGABRT
 (lldb) bt
-    frame #3: boom`tur_panic(msg=<unavailable>) at boom_tur.c:1133:5 [opt]
+    frame #3: boom`tur_panic_at(file="boom.tur", line=3, msg=...) at boom_tur.c:...
     frame #4: boom`checked_hydiv(a=10, b=0) at boom.tur:3:13 [opt] [inlined]
     frame #5: boom`average(total=10, count=0) at boom.tur:6:29 [opt] [inlined]
     frame #6: boom`main(...) at boom.tur:11:29 [opt]
 ```
 
-The first frame below `tur_panic` is the call that panicked. In gdb, `run` then
+The first frame below `tur_panic_at` is the call that panicked. In gdb, `run` then
 `bt`.
 
 ### Reading the names: `tur demangle`

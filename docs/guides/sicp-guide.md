@@ -219,34 +219,10 @@ its own `eval` and `apply` after saving the real one:
 (define (apply procedure arguments) ...)   ; the evaluator's own apply
 ```
 
-**This does not work in Turmeric today** (see "Rough edges"). Compiled, the
-program loops forever; interpreted, it stops with `unbound variable:
-apply--user`. The fix is a rename: call the evaluator's procedures `mc-eval`
-and `mc-apply`, and change every call to them. Keep
-`(define apply-in-underlying-scheme apply)` as it is; only the
-definitions of the book's `eval` and `apply` are renamed:
-
-```scheme
-(define apply-in-underlying-scheme apply)
-
-(define (mc-eval exp env)
-  (cond ((self-evaluating? exp) exp)
-        ...
-        ((application? exp)
-         (mc-apply (mc-eval (operator exp) env)
-                   (list-of-values (operands exp) env)))
-        (else (error "Unknown expression type -- EVAL" exp))))
-
-(define (mc-apply procedure arguments)
-  (cond ((primitive-procedure? procedure)
-         (apply-primitive-procedure procedure arguments))
-        ...))
-```
-
-With that change the evaluator works on both back ends (a trimmed version
-computes `(fact 20)` through it). The book's later evaluators (the
-analyzing evaluator in 4.1.7, the lazy one in 4.2, the `amb` evaluator in
-4.3) need the same rename.
+This works as the book writes it, on both back ends: `apply-in-underlying-scheme`
+keeps the standard `apply`, because the program's own `apply` is defined
+only later, and the evaluator's procedures call the new one. A trimmed
+evaluator from 4.1, unrenamed, computes `(fact 20)` through itself.
 
 **Trying 4.3's puzzles before building the `amb` evaluator.** With the
 extras block loaded, `amb` works directly in Scheme, so you can run the
@@ -288,10 +264,6 @@ it is worth reporting.
 These are known defects, each with an open report. When one is fixed, its
 entry here goes away.
 
-- **Saving a standard procedure, then redefining it** (the start of 4.1)
-  gives the variable the new definition, or fails with `unbound variable:
-  apply--user`. Rename instead, as shown in Chapter 4.
-  [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-saved-standard-procedure-follows-redefinition.md).
 - **Defining `eval` while importing `(scheme eval)`** fails to compile
   under `tur run` with a C compiler error. Leave `(scheme eval)` out of the
   import line (SICP does not need it).

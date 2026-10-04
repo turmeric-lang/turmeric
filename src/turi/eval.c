@@ -2843,8 +2843,22 @@ void turi_host_exit_guard(TuriEnv *env, const char *msg) {
  * is safe -- the returned value is discarded while the signal is in flight.  For
  * a setjmp boundary (or no boundary) the old behaviour is preserved (longjmp /
  * fire-defers-and-exit). */
+/* panic-location-names-the-runtime-not-the-call-site: the `(panic ...)`
+ * node's span, set by EX_PANIC for the one call it makes; every other
+ * runtime panic has none.  Printed as the compiled path prints it --
+ * `panic at boom.tur:3: msg`, the file's basename. */
+static _Thread_local Span g_panic_site;
+static const char *panic_site_base(Span sp) {
+    const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
+    if (!path) return NULL;
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    return base;
+}
 void turi_runtime_panic(TuriEnv *env, const char *msg) {
     const char *s = msg ? msg : "(no message)";
+    Span site = g_panic_site;
+    g_panic_site = SPAN_UNKNOWN;
     if (env->panicking || g_firing_panic_defer) {
         /* Double panic: a defer (or a panic during unwinding) panicked again. */
         host_exit_unwind(env, "double panic");
@@ -2868,6 +2882,8 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     env->panicking = true;
     if (env->in_no_unwind) {
         fprintf(stderr, "panic (no unwind): %s\n", s);
+    } else if (panic_site_base(site)) {
+        fprintf(stderr, "panic at %s:%u: %s\n", panic_site_base(site), site.line, s);
     } else {
         fprintf(stderr, "panic at\npanic: %s\n", s);
     }
@@ -12261,6 +12277,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_PANIC: {
         TuriValue msg = eval_expr(env, frame, e->as.panic_.payload);
         const char *s = (msg.tag == TURI_CSTR && msg.as_cstr) ? msg.as_cstr : "(no message)";
+        g_panic_site = e->span;
         turi_runtime_panic(env, s);
         return turi_nil(); /* unreachable: turi_runtime_panic never returns */
     }
@@ -12295,7 +12312,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
         host_exit_unwind(env, "typed panic");
         env->panicking = true;
-        fprintf(stderr, "panic at\n");
+        if (panic_site_base(e->span))
+            fprintf(stderr, "panic at %s:%u\n", panic_site_base(e->span), e->span.line);
+        else
+            fprintf(stderr, "panic at\n");
         fflush(stderr);
         fire_defers_to_mark_by_scope(env, NULL, NULL);
         fflush(stdout);

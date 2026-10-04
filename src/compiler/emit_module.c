@@ -13905,6 +13905,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the target TypeKind and panics on mismatch (the agreed failure behavior).
      * Declared after tur_panic in the preamble; forward-declare tur_panic here. */
     buf_puts(out, "static void tur_panic(const char *msg);\n");
+    buf_puts(out, "static void tur_panic_at(const char *file, int line, const char *msg);\n");
     /* any-narrowing-broken-for-parametric-receivers: two ids can share a NAME.
      * The box id is interned per instantiation, so `(Option int)` and
      * `(Option float)` are distinct ids -- but `type-of` reports the head name
@@ -14401,7 +14402,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int, int);\n");
-    buf_puts(out, "static void tur_panic(const char *msg) {\n");
+    /* panic-location-names-the-runtime-not-the-call-site: the location is a
+     * PARAMETER.  `__FILE__`/`__LINE__` written in this body name the
+     * runtime, never the caller, so a `(panic ...)` site calls tur_panic_at
+     * with its own .tur file and line (emit_panic_call); tur_panic is the
+     * runtime's own entry, whose location is honestly its own. */
+    buf_puts(out, "static void tur_panic_at(const char *file, int line, const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
     buf_puts(out, "        abort();\n");
@@ -14413,14 +14419,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * lives in a different call frame), giving partial unwind for free. */
     buf_printf(out, "    if (tur_handler_chain) {\n");
     /* owns_value = 1: the strdup'd message is a heap block this payload owns. */
-    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__, 1);\n", (int)TY_CSTR);
+    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, file, line, 1);\n", (int)TY_CSTR);
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
     /* Signal transport -- set the flag and RETURN; the caller's per-call-site
      * check propagates it up to the catch-unwind boundary. */
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", __FILE__, __LINE__, msg ? msg : \"(no message)\");\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", file, line, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    tur_panic_print_scope_chain();\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
@@ -14429,7 +14435,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * abort(), which does not flush stdio streams. */
     buf_puts(out, "    fflush(NULL);\n");
     buf_puts(out, "    abort();\n");
-    buf_puts(out, "}\n\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }\n\n");
 
     /* Phase R5: tur_panic_abort for #[no-unwind] */
     buf_puts(out, "/* Phase R5: tur_panic_abort - no unwinding, immediate abort */\n");
