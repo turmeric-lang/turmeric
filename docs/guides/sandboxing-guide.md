@@ -70,14 +70,14 @@ without restriction.
 The `println` family returns `TURI_ERROR` in a sandboxed environment, and so
 does every native function whose row in the
 [classification table](#capability-classification) names a capability the
-environment does not hold: `process/spawn`, `io-fopen-write`, `r7rs-unlink__`,
+environment does not hold: `process/spawn-raw` (under `process/spawn`), `io-fopen-write`, `r7rs-unlink__`,
 `r7rs-getenv__`, the raw-descriptor `read-async`/`write-async`, and the rest.
 The check is made once, where every native call is dispatched, so a native
 reached by name, through `turi_call`, or from a higher-order native is refused
 the same way:
 
 ```
-eval: 'process/spawn' requires capability proc, which this environment does not hold
+eval: 'process/spawn-raw' requires capability proc, which this environment does not hold
 ```
 
 `(load "path")` is refused alongside `(import ...)`.
@@ -370,7 +370,7 @@ Expected output:
 |---|---|---|---|
 | I/O | `TURI_CAP_IO` | yes | `println`, stdout writers, `read-async`/`write-async` on raw descriptors, pipes, the reactor, the stdio ports |
 | Filesystem | `TURI_CAP_FS` | yes | opening, creating, removing and testing files by path |
-| Process | `TURI_CAP_PROC` | yes | `process/spawn`, `process/wait`, exiting the host process |
+| Process | `TURI_CAP_PROC` | yes | `process/spawn-raw`, `process/wait-raw` (under `process/spawn` / `process/wait` / `process/run`), exiting the host process |
 | Environment | `TURI_CAP_ENV` | yes | `getenv`, `environ` |
 | FFI | `TURI_CAP_FFI` | yes | `dlopen`, `dlsym`, `dlclose`, every `extern-c`, spice reload |
 | Inline-C | `TURI_CAP_INLINE_C` | yes | `` (` ``c ... `` `) `` expressions |
@@ -396,7 +396,7 @@ need no open. About six hundred natives are pure; these are the rest:
 
 | Class | Natives |
 |---|---|
-| `proc` | `process/spawn`, `process/wait`, `r7rs-exit__` |
+| `proc` | `process/spawn-raw`, `process/wait-raw`, `process/child-of-raw`, `r7rs-exit__` |
 | `fs` | `fs/tmpfile`, `fs/tmpfile-path`, `fs/tmpfile-fd`, `fs/tmpfile-free`, `io-fopen-read`, `io-fopen-write`, `io-fread-chunk`, `io-fwrite-chunk`, `io-fclose`, `io-remove`, `write-temp-file`, `json/decode-file!`, `r7rs-io-open__`, `r7rs-file-exists-c__`, `r7rs-unlink__` |
 | `fs`, `io` | `random-access-bench` |
 | `env` | `r7rs-getenv__`, `r7rs-getenv-set?__`, `r7rs-environ-count__`, `r7rs-environ-name__`, `r7rs-environ-value__` |

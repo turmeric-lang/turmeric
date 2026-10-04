@@ -7063,28 +7063,10 @@ static void emit_deliver(CE *ce, const CKont *kont, const char *v) {
     emit_deliver_ty(ce, kont, v, NULL);
 }
 
-static void emit_println(CE *ce, BuiltinShape shape, const char *arg) {
-    switch (shape) {
-        case BS_PRINTLN_INT:
-            ce_line(ce, "printf(\"%%lld\\n\", (long long)(%s));", arg);
-            break;
-        case BS_PRINTLN_UINT:
-            ce_line(ce, "printf(\"%%llu\\n\", (unsigned long long)(%s));", arg);
-            break;
-        case BS_PRINTLN_BOOL:
-            ce_line(ce, "puts((%s) ? \"true\" : \"false\");", arg);
-            break;
-        case BS_PRINTLN_CSTR:
-            ce_line(ce, "puts(%s);", arg);
-            break;
-        case BS_PRINTLN_FLOAT:
-            ce_line(ce, "printf(\"%%g\\n\", (double)(%s));", arg);
-            break;
-        case BS_PRINTLN_FLOAT32:
-            ce_line(ce, "printf(\"%%.7g\\n\", (double)(%s));", arg);
-            break;
-        default: break;
-    }
+static void emit_println(CE *ce, const BuiltinSpec *sp, const char *arg) {
+    char *stmt = builtin_print_stmt(sp, sp->shape, arg);
+    ce_line(ce, "%s", stmt);
+    free(stmt);
 }
 
 /* ---------------------------------------------------------------------------
@@ -7266,7 +7248,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * normalizes both. */
                 ce_line(ce, "%s = !((DK *)(intptr_t)(%s))->consumed;", bn, n ? as[0] : "0");
             } else if (is_println_shape(sp->shape)) {
-                emit_println(ce, sp->shape, n ? as[0] : "0");
+                emit_println(ce, sp, n ? as[0] : "0");
                 ce_line(ce, "%s = 0;", bn);  /* nil result */
             } else {
                 char *rhs = prim_expr(sp, as, n);

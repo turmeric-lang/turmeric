@@ -2647,6 +2647,13 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 | --- | --- | --- |
 | [turi-ios-readiness-unverified](turi-ios-readiness-unverified.md) | medium (platform readiness) | iOS can only run the tree-walking interpreter (no JIT, no runtime dylibs), and since `TUR_JIT` defaulted ON no CI leg builds turi without the JIT. Six areas to check: `TUR_JIT` defaults ON for an iOS configure, `ucontext` fibers, spice loading via `system()`+`dlopen`, FFI limited to the shape table, inline-C bodies (only C1/MIR runs them), `process/spawn` forks. Apple SDK claims unverified. The JIT default is fixed for iOS; the `interp-nojit` CI job (per PR) and `nightly-ios.yml` (libturi cross-compile) landed 2026-10-04 to answer the rest |
 
+## Found executing stdlib-os-surface P0-P2 (filed 2026-10-04)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [ok-nil-unconstructible-in-turmeric](ok-nil-unconstructible-in-turmeric.md) | low | `(Result nil E)` is legal, but Turmeric code cannot build its ok side: `nil` in expression position is `:void`, so `(Ok nil)` is a cc error. Separately, a forward reference to a function returning `(Result nil E)` is a TUR-E0012 kind mismatch at 0:0. Worked around with `io-error/ok-unit` and a self-recursive `fs/walk-names` |
+| [inline-c-builders-cannot-nest-option-in-result](inline-c-builders-cannot-nest-option-in-result.md) | low-medium | `(Result (Option T) E)` stores the `Option` BY VALUE in the ok slot, so `tur_ok_int(tur_some_ptr(s))` from inline-C silently matches neither arm. `file-read-line` nests it in Turmeric instead |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a

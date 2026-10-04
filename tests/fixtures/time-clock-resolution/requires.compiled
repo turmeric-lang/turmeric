@@ -1,0 +1,1 @@
+sleep-ms is a deterministic no-op under --interpret (src/turi/interpreter_natives.c), so a wall-clock delta cannot be asserted there.

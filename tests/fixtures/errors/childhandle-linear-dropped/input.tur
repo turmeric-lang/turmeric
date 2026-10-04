@@ -1,9 +1,10 @@
 ;; stdlib-linearity-affinity-plan (L2): dropping a :linear ChildHandle. A
 ;; spawned child that is never process/wait'd leaks a zombie; there is no
 ;; borrowing accessor that discharges the obligation.
-;; Expected: TUR-E0100 (linear value dropped without being consumed).
+;; Expected: TUR-E0100 (linear field dropped without being consumed in match arm).
 (load "stdlib/process.tur")
 
 (defn main [] : int
-  (let [child (process/spawn "/bin/true" 0)]
-    0))
+  (match (process/spawn "/bin/true")
+    (Ok child) 0
+    (Err e) 1))

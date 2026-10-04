@@ -1,0 +1,72 @@
+;; stdlib-os-surface-plan P2.1/P2.2: fs/read-lines, file-read-line (one line
+;; per call, None at end of file), and the recursive fs/walk / fs/walk-fn
+;; (sorted per directory, each directory before its contents).
+(load "stdlib/fs.tur")
+(load "stdlib/io.tur")
+
+(defn scratch [name : cstr] : cstr
+  ```c
+  /* Run-time scratch dir (see io-stdlib-roundtrip for why not "/tmp");
+   * a fresh buffer per call. */
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  size_t cap = strlen(d) + strlen(name) + 48;
+  char *buf = (char *)malloc(cap);
+  snprintf(buf, cap, "%s/tur-fs-walk-%d/%s", d, (int)getpid(), name);
+  return buf;
+  ```)
+
+;; print a path relative to the scratch root
+(defn rel [p : cstr] : cstr
+  ```c
+  const char *m = strstr(p, "/tur-fs-walk-");
+  if (!m) return p;
+  const char *s = strchr(m + 1, '/');
+  return s ? s + 1 : p;
+  ```)
+
+(defn print-vec [v : (Vec cstr) i : int] : int
+  (if (>= i (vec-len v))
+    0
+    (do (println (rel (vec-get v i)))
+        (print-vec v (+ i 1)))))
+
+(defn drain [fh : FileHandle n : int] : int
+  (match (file-read-line fh)
+    (Ok o) (match o
+             (Some s) (do (println s) (drain fh (+ n 1)))
+             (None) (do (println "<eof>") (file-close fh) n))
+    (Err e) (do (println (io-error/message e)) (file-close fh) -1)))
+
+(defn main [] : int
+  (fs/mkdirp (scratch "t/b/deep"))
+  (fs/mkdirp (scratch "t/a"))
+  (fs/write-text (scratch "t/lines.txt") "alpha\r\nbeta\n\ngamma")
+  (fs/write-text (scratch "t/b/deep/x.txt") "x")
+  (fs/write-text (scratch "t/a/y.txt") "y")
+  (match (fs/read-lines (scratch "t/lines.txt"))
+    (Ok v) (do (println (vec-len v)) (print-vec v 0) (fs/paths-free v) 0)
+    (Err e) (do (println (io-error/message e)) 1))
+  (match (file-open (scratch "t/lines.txt") "rb")
+    (Ok fh) (println (drain fh 0))
+    (Err e) (println (io-error/message e)))
+  (println "-- walk")
+  (match (fs/walk (scratch "t"))
+    (Ok v) (do (print-vec v 0) (fs/paths-free v) 0)
+    (Err e) (do (println (io-error/message e)) 1))
+  (println "-- walk-fn")
+  (fs/walk-fn (scratch "t")
+              (fn [p : cstr d : bool] : nil
+                (when d (println (rel p)))))
+  (match (fs/walk (scratch "missing"))
+    (Ok v) (do (fs/paths-free v) 1)
+    (Err e) (do (println (io-error/not-found? e)) 0))
+  (fs/rm (scratch "t/lines.txt"))
+  (fs/rm (scratch "t/b/deep/x.txt"))
+  (fs/rm (scratch "t/a/y.txt"))
+  (fs/rmdir (scratch "t/b/deep"))
+  (fs/rmdir (scratch "t/b"))
+  (fs/rmdir (scratch "t/a"))
+  (fs/rmdir (scratch "t"))
+  (fs/rmdir (scratch ""))
+  0)
