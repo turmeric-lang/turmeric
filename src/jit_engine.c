@@ -162,7 +162,7 @@ static const char JIT_PRELUDE[] =
    * That distinction matters for fork().  A child forked while another thread
    * holds ASan's allocator lock inherits it HELD, and deadlocks on its next
    * malloc -- glibc's allocator is fork-safe, ASan's is not
-   * (docs/reported/jit-fork-child-inherits-asan-allocator-lock.md).  A
+   * (docs/archive/jit-fork-child-inherits-asan-allocator-lock.md).  A
    * fixture that forks and then allocates can only know to avoid that if we
    * tell it, so this is the channel.
    *

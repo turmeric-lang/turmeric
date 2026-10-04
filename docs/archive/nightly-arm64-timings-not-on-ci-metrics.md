@@ -1,6 +1,6 @@
 # Nightly arm64 suite timings are uploaded, never plotted
 
-**Severity:** low -- observability only; no test signal is lost.
+**Severity:** low -- observability only; no test signal is lost. **RESOLVED 2026-10-04** -- see the end.
 
 **Summary.** `.github/workflows/nightly-arm64.yml` runs the full
 `tur_generic_spec_matrix`, `tur_emitted_float_conversions` and
@@ -28,4 +28,24 @@ Rows are unsharded (`shard_index`/`shard_total` null), so once published they
 continue the pre-sharding macOS series directly.
 
 Origin: the one follow-up left open by
-[ci-aux-suite-latency-plan](../archive/ci-aux-suite-latency-plan.md) (9.1, 11.4).
+[ci-aux-suite-latency-plan](ci-aux-suite-latency-plan.md) (9.1, 11.4).
+
+## Resolved 2026-10-04
+
+Fix direction 1. `nightly-arm64.yml` has a `publish-timings` job: it runs
+after `suites` (`always()`, `main` only), downloads that run's
+`nightly-arm64-<run_id>` artifact and appends `timings.jsonl` through the same
+`tools/ci/publish-timings.sh` ci.yml uses, under the same repository-wide
+`ci-metrics` concurrency group. The write token stays on that ubuntu job, off
+the macOS one.
+
+The rows land in the existing `Debug | macOS | AppleClang | 3 | jit`
+environment without colliding with the PR leg: the nightly runs
+`tur_generic_spec_matrix`, `turi_fixture_tests` and
+`tur_emitted_float_conversions` unsharded, the PR leg's macOS rows for the
+first two carry `[1/4]`, and the float lint does not run there at all. So the
+nightly continues the pre-sharding full-matrix series.
+
+**Verify** on the first scheduled run after this merges: a
+`ci-metrics: N suite rows ... [skip ci]` commit whose rows carry that run's
+`run_id`.

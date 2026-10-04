@@ -4,9 +4,9 @@
 > its predecessors) and the new shape has now been observed on `main`: macOS
 > aux **66 min -> ~16-18 min** (better than the ~27 min projected), and the
 > whole CI run **~2 h -> ~20-35 min** to green. Section 11 has the measured
-> numbers that replace the projections in sections 5.1 and 6.3. The one
-> follow-up left open (nightly rows not plotted) is filed as
-> [`docs/reported/nightly-arm64-timings-not-on-ci-metrics.md`](../reported/nightly-arm64-timings-not-on-ci-metrics.md).
+> numbers that replace the projections in sections 5.1 and 6.3. The last
+> follow-up (nightly rows not plotted) was filed and then fixed the same day:
+> [`nightly-arm64-timings-not-on-ci-metrics`](nightly-arm64-timings-not-on-ci-metrics.md).
 >
 > What landed: `--shard i/N` on both scripts via `tests/shard_util.py` (S1); the
 > matrix ctest timeout at 4500s (S2); `tests/ctest-parts.py` as the single source
@@ -499,8 +499,9 @@ Neither is a gap in S1-S7; both are things to do once the new shape has run.
   `publish-timings` job aggregates one run of `ci.yml` and does not see another
   workflow's artifacts. Wiring the nightly into the `ci-metrics` branch is a
   separate change; until then the full-matrix arm64 durations are retrievable
-  per run but not plotted. **Still open** -- filed as
-  [`nightly-arm64-timings-not-on-ci-metrics`](../reported/nightly-arm64-timings-not-on-ci-metrics.md).
+  per run but not plotted. **Done 2026-10-04** -- `nightly-arm64.yml` now
+  publishes them itself; see
+  [`nightly-arm64-timings-not-on-ci-metrics`](nightly-arm64-timings-not-on-ci-metrics.md).
 
 ### 9.2 What else was worth moving -- measured, then done
 
@@ -605,8 +606,9 @@ macOS time-to-green regresses.
 
 ### 11.4 Nightly arm64
 
-Three scheduled runs (2026-10-02..04), all green, 46-61 min each. Its rows are
-uploaded as an artifact only -- see the open report linked in the header.
+Three scheduled runs (2026-10-02..04), all green, 46-61 min each. Those three
+were artifact-only; from the first nightly after the 2026-10-04 fix its rows
+are published to ci-metrics (the report linked in the header).
 
 ### 11.5 The `test` job timeout
 
