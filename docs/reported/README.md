@@ -2629,6 +2629,13 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 | [panic-location-names-the-runtime-not-the-call-site](panic-location-names-the-runtime-not-the-call-site.md) | medium (UX) | Every compiled panic says `panic at <tmp>/x_tur.c:1127` -- `__FILE__`/`__LINE__` expanded inside `tur_panic` itself (`emit_module.c:14423`), so it names the runtime, never the caller, even under `--debug`. The interpreter prints an empty `panic at`; a failed `:pre` says only `Precondition failed`; `--panic-trace` prints defer-frame pointers, not a stack. The debugging guide carries the workaround (lldb / `tur debug`) |
 | [panicking-if-branch-leaks-cc-uninitialized-warning](panicking-if-branch-leaks-cc-uninitialized-warning.md) | low | An `if` with `panic` in one branch leaves the result temp unset on that path, so `cc` prints `-Wsometimes-uninitialized` on every `tur run`/`build`. `emit_fns.c:6564` already fixes the whole-body version; the branch-level case is uncovered |
 
+## Found executing stdlib-os-surface P0-P2 (filed 2026-10-04)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [ok-nil-unconstructible-in-turmeric](ok-nil-unconstructible-in-turmeric.md) | low | `(Result nil E)` is legal, but Turmeric code cannot build its ok side: `nil` in expression position is `:void`, so `(Ok nil)` is a cc error. Separately, a forward reference to a function returning `(Result nil E)` is a TUR-E0012 kind mismatch at 0:0. Worked around with `io-error/ok-unit` and a self-recursive `fs/walk-names` |
+| [inline-c-builders-cannot-nest-option-in-result](inline-c-builders-cannot-nest-option-in-result.md) | low-medium | `(Result (Option T) E)` stores the `Option` BY VALUE in the ok slot, so `tur_ok_int(tur_some_ptr(s))` from inline-C silently matches neither arm. `file-read-line` nests it in Turmeric instead |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
