@@ -1,0 +1,11 @@
+(1 . 2)
+(rat 1 2)
+(variadic 1 2)
+#t
+#f
+6
+evaluator-apply
+#f
+1
+a
+(squared 3)

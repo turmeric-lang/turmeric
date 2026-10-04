@@ -1019,6 +1019,20 @@ static bool form_mentions_sym(const Form *f, const Symbol *s) {
             if (form_mentions_sym(f->as.list.items[i], s)) return true;
     return false;
 }
+/* Does `f` (a lowered form) use `s` as a value -- anywhere but at the head
+ * of a call?  Quoted data does not count. */
+static bool form_uses_as_value(const Form *f, const Symbol *s) {
+    if (!f) return false;
+    if (f->tag == F_SYM) return f->as.sym == s;
+    if (f->tag == F_QUOTE) return false;
+    if (f->tag == F_LIST || f->tag == F_VEC)
+        for (uint32_t i = 0; i < f->as.list.len; i++) {
+            const Form *x = f->as.list.items[i];
+            if (i == 0 && f->tag == F_LIST && x->tag == F_SYM) continue;   /* the callee */
+            if (form_uses_as_value(x, s)) return true;
+        }
+    return false;
+}
 static void note_all_syms(SL *sl, const Form *f) {
     if (!f) return;
     if (f->tag == F_SYM) { note_mut(sl, f->as.sym); return; }
@@ -1255,6 +1269,9 @@ static const Symbol *caret_spelling(SL *sl, const Symbol *s);
 struct LibSyntax;
 static const Symbol *lib_respelling(SL *sl, const struct LibSyntax *lx, const Symbol *pub);
 static const Symbol *rn_global(SL *sl, const Symbol *s) {
+    /* redefinitions_to_set's name for a standard binding the program
+     * redefines: what the bare name means with no program definition. */
+    if (s->len > 7 && memcmp(s->name, "--std--", 7) == 0) return rn_std(sl, I(sl, s->name + 7));
     for (uint32_t i = 0; i < sl->n_renames; i++)
         if (sl->renames[i].from == s) return sl->renames[i].to;
     /* r7rs-turmeric-syntax-leaks item 4: a `^` identifier, bound or not. */
@@ -3328,6 +3345,24 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
         for (uint32_t k = 0; k < n; k++)
             if (form_sets(sl, rn(sl, names[i]), items[k])) { is_lam[i] = false; break; }
     }
+    /* r7rs-internal-procedure-value-not-eq: an internal procedure the body
+     * hands around as a value -- SICP 3.3.5's `me`, which a connector keeps
+     * and later compares with `eq?` -- is one procedure, so one object.  As
+     * a letrec function each reference made a fresh closure, and `(eq? me
+     * me)` was #f; bound once in a variable (the hoisting below), every
+     * reference reads the same one.  A procedure only ever called stays a
+     * letrec function. */
+    for (uint32_t i = 0; i < ndef; i++) {
+        if (!is_lam[i]) continue;
+        const Symbol *self = rn(sl, names[i]);
+        bool as_value = form_uses_as_value(rest, self);
+        for (uint32_t k = 0; k < ndef && !as_value; k++) as_value = form_uses_as_value(inits[k], self);
+        if (!as_value) continue;
+        is_lam[i] = false;
+        /* As an `any`: a variable of function type is boxed again at each
+         * use that wants a value. */
+        inits[i] = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "::")), inits[i], Sym(sl, sp, sl->t_any));
+    }
     /* letrec* (R7RS 5.3.2): every name a body defines is in scope throughout
      * it.  The nesting below binds a value define INSIDE the definitions
      * before it, so an earlier define whose init mentions a later value
@@ -5177,6 +5212,120 @@ static void user_define_names(SL *sl, const Form *f, FB *out) {
     while (t->tag == F_LIST && t->as.list.len >= 1) t = t->as.list.items[0];  /* (define ((f a) b) ...) */
     if (t->tag == F_SYM) fb_push(out, t);
 }
+/* r7rs-program-redefinition-refused: R7RS 5.3.1 -- at the outermost level of
+ * a program, a definition of a variable that is already bound "has
+ * essentially the same effect as the assignment expression set!".  SICP
+ * redefines procedures as it refines them (make-rat in 2.1.1, then again in
+ * 2.1.2), and the elaborator refuses a second `defn` of one name.  So a name
+ * a program's top level defines more than once is one variable: its first
+ * definition becomes `(define f (lambda ...))` and every later one a
+ * `(set! f ...)`, which collect_muts then sees.  A library body is left
+ * alone (a duplicate definition there is an error, R7RS 5.6.1). */
+static bool srfi_span(Span sp);
+typedef struct { Form **slot; const Symbol *name; } TopDef;
+static void top_defs(SL *sl, Form **slot, TopDef **defs, uint32_t *n, uint32_t *cap) {
+    Form *f = *slot;
+    if (head_is(f, sl->s_begin)) {
+        for (uint32_t i = 1; i < f->as.list.len; i++) top_defs(sl, &f->as.list.items[i], defs, n, cap);
+        return;
+    }
+    if (!head_is(f, sl->s_define) || f->as.list.len < 3) return;
+    Form *t = f->as.list.items[1];
+    const Symbol *name = NULL;
+    if (t->tag == F_SYM) name = t->as.sym;
+    else if (t->tag == F_LIST && t->as.list.len >= 1 && t->as.list.items[0]->tag == F_SYM) name = t->as.list.items[0]->as.sym;
+    if (!name) return;   /* (define ((f a) b) ...) keeps its one meaning */
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 32;
+        *defs = (TopDef *)realloc(*defs, *cap * sizeof **defs);
+        if (!*defs) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*defs)[(*n)++] = (TopDef){ slot, name };
+}
+/* `(define (f . formals) body...)` -> `(lambda formals body...)`; `(define f
+ * e)` -> `e`. */
+static Form *define_value(SL *sl, Form *def) {
+    Form *t = def->as.list.items[1];
+    Span sp = def->span;
+    if (t->tag == F_SYM) return def->as.list.items[2];
+    Form *formals;
+    if (t->as.list.len == 3 && is_sym(t->as.list.items[1], sl->s_dot)) {
+        formals = t->as.list.items[2];
+    } else {
+        formals = List(sl, t->span, t->as.list.items + 1, t->as.list.len - 1);
+    }
+    uint32_t nb = def->as.list.len - 2;
+    Form **items = (Form **)arena_alloc(sl->a, (nb + 2) * sizeof(Form *));
+    items[0] = Sym(sl, sp, sl->s_lambda);
+    items[1] = formals;
+    for (uint32_t i = 0; i < nb; i++) items[2 + i] = def->as.list.items[2 + i];
+    return List(sl, sp, items, nb + 2);
+}
+/* r7rs-saved-standard-procedure-follows-redefinition: a program that defines
+ * a standard procedure's name -- SICP 4.1's `apply`, 2.1.3's `cons` -- gets
+ * the same treatment, with one more definition in front: the variable
+ * starts out holding the standard procedure, so an expression evaluated
+ * before the program's define (`(define apply-in-underlying-scheme apply)`)
+ * gets that, and one evaluated after gets the program's.  The standard
+ * binding is named `--std--<name>`, which rn_global resolves past the
+ * program's respelling.  Returns the forms, with those definitions inserted
+ * after the leading imports (a copy when there are any), and their count. */
+#define STD_BINDING_PREFIX "--std--"
+static bool is_std_procedure_name(SL *sl, const Symbol *s) {
+    for (size_t i = 0; i < N_RENAMES; i++) if (sl->rn_from[i] == s) return true;
+    return false;
+}
+static Form **redefinitions_to_set(SL *sl, Form **forms, uint32_t n, uint32_t *out_n) {
+    TopDef *defs = NULL;
+    uint32_t nd = 0, cap = 0;
+    *out_n = n;
+    if (sl->repl_turn) return forms;   /* a REPL turn redefines through its own session state */
+    for (uint32_t i = 0; i < n; i++) {
+        if (!is_scheme_file(forms[i]) || prelude_span(forms[i]->span) || srfi_span(forms[i]->span)) continue;
+        top_defs(sl, &forms[i], &defs, &nd, &cap);
+    }
+    FB std_inits = {0};
+    for (uint32_t i = 0; i < nd; i++) {
+        bool first = true, again = false;
+        for (uint32_t j = 0; j < i; j++) if (defs[j].name == defs[i].name) first = false;
+        if (!first) continue;
+        for (uint32_t j = i + 1; j < nd; j++) if (defs[j].name == defs[i].name) again = true;
+        bool std = is_std_procedure_name(sl, defs[i].name);
+        if (!again && !std) continue;
+        for (uint32_t j = i; j < nd; j++) {
+            if (defs[j].name != defs[i].name) continue;
+            Form *def = *defs[j].slot;
+            Span sp = def->span;
+            Form *head = Sym(sl, sp, (j == i && !std) ? sl->s_define : sl->s_set);
+            *defs[j].slot = Ln(sl, sp, 3, head, Sym(sl, sp, defs[i].name), define_value(sl, def));
+        }
+        if (std) {
+            Span sp = (*defs[i].slot)->span;
+            char buf[256];
+            snprintf(buf, sizeof buf, STD_BINDING_PREFIX "%s", defs[i].name->name);
+            fb_push(&std_inits, Ln(sl, sp, 3, Sym(sl, sp, sl->s_define), Sym(sl, sp, defs[i].name),
+                                   Sym(sl, sp, I(sl, buf))));
+        }
+    }
+    free(defs);
+    if (std_inits.n == 0) return forms;
+    /* After the program's imports: before its first other form. */
+    uint32_t at = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        at = i;
+        if (!is_scheme_file(forms[i]) || prelude_span(forms[i]->span) || srfi_span(forms[i]->span) ||
+            head_is(forms[i], sl->s_import)) { at = i + 1; continue; }
+        break;
+    }
+    Form **out = (Form **)arena_alloc(sl->a, (n + std_inits.n) * sizeof(Form *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < at; i++) out[k++] = forms[i];
+    for (uint32_t i = 0; i < std_inits.n; i++) out[k++] = std_inits.items[i];
+    for (uint32_t i = at; i < n; i++) out[k++] = forms[i];
+    free(std_inits.items);
+    *out_n = k;
+    return out;
+}
 /* R10: every identifier the user's Scheme code BINDS -- formals, `let`-family
  * and `do` variables, named-let names, `guard` variables.  One named like a
  * Turmeric special form (`return`, `handle`, `perform`, `resume`, ...) was
@@ -6620,6 +6769,15 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
             forms = srfi_expanded.items;
             n = srfi_expanded.n;
         }
+    }
+    {
+        /* The caller's array is not ours to rewrite; the rewritten top level
+         * is a copy (arena-owned, like the forms it holds). */
+        Form **copy = (Form **)arena_alloc(sl.a, (n ? n : 1) * sizeof(Form *));
+        for (uint32_t i = 0; i < n; i++) copy[i] = forms[i];
+        uint32_t nn = n;
+        forms = redefinitions_to_set(&sl, copy, n, &nn);
+        n = nn;
     }
     /* D5's two facts about the unit: does it import (scheme base), and what
      * does it define at top level (a program's defines, a library's body)? */

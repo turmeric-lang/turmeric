@@ -80,3 +80,19 @@ then. `saved` must hold the original procedure.
 `docs/guides/sicp-guide.md` documents this defect in its "Rough edges" list
 (and the workaround in the chapter it affects). When this is fixed, delete
 that entry and any workaround text that only exists because of it.
+
+## Resolution (2026-10-04)
+
+Fixed in the Scheme lowering (`redefinitions_to_set`,
+src/compiler/scheme_lower.c), together with
+[r7rs-program-redefinition-refused](r7rs-program-redefinition-refused.md).
+A program that defines a standard procedure's name now gets what R7RS 5.3.1
+and MIT Scheme give: one top-level variable that starts out holding the
+standard procedure (a `(define <name> --std--<name>)` inserted after the
+program's imports; `rn_global` resolves the `--std--` spelling to the
+standard binding), and the program's own definitions of it become `set!`s.
+An expression evaluated before the program's `define` -- SICP 4.1's
+`(define apply-in-underlying-scheme apply)` -- gets the standard procedure;
+one evaluated after gets the program's. The report's repro prints `#f` and
+`3` on both back ends. Pinned by `tests/fixtures/r7rs-program-redefinition`
+(saved `apply`, redefined `square` and `cons`), on both back ends.
