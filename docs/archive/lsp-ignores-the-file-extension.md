@@ -1,6 +1,7 @@
 # `tur lsp` ignores the file extension when choosing a reader
 
 **Severity:** medium.
+**Status:** RESOLVED (2026-10-03). The analysis scratch file carries the document's extension. See [Resolution](#resolution).
 **Found:** 2026-10-03, against v0.60.1 (and reproduced on v0.59.0).
 **Impact:** every headerless `.scm` and `.tur.sweet` file gets a wall of errors
 from the wrong reader, and no symbols at all.
@@ -80,6 +81,33 @@ latent — but a client that trusts the published URI will attribute an imported
 module's errors to whatever buffer is open. It is presumably why the `"file"`
 key exists; a separate `publishDiagnostics` per URI would be the standard
 shape.
+
+## Resolution
+
+The mechanism was one level more specific than "the analysis path never
+consults the extension". It does consult it: `tur_collect_symbols` hands the
+compiler a file path, and the compiler picks the reader (and for `.scm` the
+language) from that path's extension. But `run_doc_analysis` wrote the buffer
+to a scratch file named `tur_lsp_XXXXXX.tur` and passed *that* path. Every
+document reached the compiler as a `.tur` file. `doc->path` went along only
+as the anchor for spice-include discovery.
+
+The scratch file is now named with the document's own suffix -- `.tur.sweet`
+or `.scm` when `reader_type_from_extension(doc->path)` says so, `.tur`
+otherwise -- so analysis resolves the reader exactly as `tur check` does on
+the real file, and agrees with the formatting handler. A `#lang` line still
+takes over when the extension says plain Turmeric, through the compiler's
+existing precedence.
+
+Pinned in `tests/lsp/r7rs-diagnostics.py`: a headerless `.scm` and a
+headerless `.tur.sweet` analyze clean, and the same Scheme body in a `.tur`
+(the control) still reports. The LSP guide states the rule.
+
+The secondary observation -- other files' diagnostics published under the
+open document's URI -- is real, is not fixed here, and is now its own report:
+[lsp-publishes-other-files-diagnostics-under-one-uri](../reported/lsp-publishes-other-files-diagnostics-under-one-uri.md).
+Checking it turned up a related gap, also filed:
+[lsp-relative-load-resolves-against-scratch-dir](../reported/lsp-relative-load-resolves-against-scratch-dir.md).
 
 ## Client-side consequence
 

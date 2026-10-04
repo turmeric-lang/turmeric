@@ -756,16 +756,102 @@ static void cmd_explain(TuriEnv *env, const char *arg) {
 }
 
 /* -------------------------------------------------------------------------
+ * Evaluating a file into the session without changing the session's reader
+ * ---------------------------------------------------------------------- */
+
+/* The (reader, language) a file reads under on its own: its extension, with
+ * a `#lang` line taking over when the extension says plain Turmeric -- the
+ * precedence every CLI entry point uses (detect_and_adjust_lang).  False when
+ * the file cannot be read; the caller then lets turi_eval_file report it. */
+static bool repl_file_dialect(const char *path, ReaderType *rt_out,
+                              LangDialect *dl_out) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    char head[4096];
+    size_t n = fread(head, 1, sizeof(head), f);
+    fclose(f);
+    const char *src = head;
+    /* A shebang line comes before the directive (turi_eval strips it too). */
+    if (n >= 2 && head[0] == '#' && head[1] == '!') {
+        const char *nl = memchr(head, '\n', n);
+        if (!nl) n = 0, src = head;
+        else { n -= (size_t)(nl + 1 - head); src = nl + 1; }
+    }
+    const char *rest = src;
+    size_t rest_len = n;
+    LangDialect dl = LANG_TURMERIC;
+    ReaderType lang_rt = detect_lang_dialect(src, n, &rest, &rest_len,
+                                             NULL, NULL, &dl);
+    ReaderType ext_rt = reader_type_from_extension(path);
+    ReaderType rt = READER_TURMERIC;
+    if (ext_rt != READER_TURMERIC) rt = ext_rt;
+    else if (rest != src) rt = lang_rt;
+    LangDialect ext_dl = lang_dialect_from_extension(path);
+    if (ext_dl != LANG_TURMERIC) dl = ext_dl;
+    *rt_out = rt;
+    *dl_out = dl;
+    return true;
+}
+
+/* Evaluate `path` into `env` for :run / :reload.
+ *
+ * run-on-sweet-file-switches-the-session-reader: turi_eval_file applies the
+ * file's reader to the SESSION -- it has to, because the session re-reads
+ * its accumulated source under env->reader_type -- so `:run foo.tur.sweet`
+ * left a `turmeric` session reading every later line as sweet-exp, and
+ * `:reload foo.tur.sweet` reset the session to its prelude first, discarding
+ * everything typed before it.  A file whose reader differs from the
+ * session's is evaluated as a `(load "...")` form instead: `load` reads the
+ * file under its own reader, and what the session accumulates is the form,
+ * which reads the same under any of them.
+ *
+ * A file in another LANGUAGE is a different matter: a Scheme file needs the
+ * Scheme prelude and lowering, which a Turmeric session does not have, so it
+ * is declined by name rather than half-run.  Returns an error value then. */
+static TuriValue repl_eval_file_keeping_reader(TuriEnv *env, const char *path,
+                                               const char *verb) {
+    ReaderType  file_rt = READER_TURMERIC;
+    LangDialect file_dl = LANG_TURMERIC;
+    if (!repl_file_dialect(path, &file_rt, &file_dl) ||
+        file_rt == env->reader_type)
+        return turi_eval_file(env, path);
+
+    if (file_dl != env->lang && file_dl != LANG_TURMERIC) {
+        char base[64];
+        lang_base_spelling_of(file_dl, file_rt, base, sizeof(base));
+        fprintf(stderr,
+                "%s: %s is %s, and this session is not -- start one with "
+                "`tur repl --lang %s` to %s it\n",
+                verb, path, base, base, verb);
+        return turi_error("dialect mismatch");
+    }
+
+    Buf form;
+    buf_init(&form);
+    buf_puts(&form, "(load \"");
+    for (const char *p = path; *p; p++) {
+        if (*p == '"' || *p == '\\') buf_putc(&form, '\\');
+        buf_putc(&form, *p);
+    }
+    buf_puts(&form, "\")");
+    buf_putc(&form, '\0');
+    TuriValue v = turi_eval(env, form.data);
+    buf_free(&form);
+    return v;
+}
+
+/* -------------------------------------------------------------------------
  * :reload <file>  — evaluate a source file into the current environment
  * ---------------------------------------------------------------------- */
 
 static void cmd_reload(TuriEnv *env, const char *path) {
-    TuriValue result = turi_eval_file(env, path);
+    TuriValue result = repl_eval_file_keeping_reader(env, path, ":reload");
     if (turi_is_error(result)) {
         const char *msg = turi_error_message(result);
         if (msg &&
             strcmp(msg, "parse error") != 0 &&
-            strcmp(msg, "elaboration error") != 0) {
+            strcmp(msg, "elaboration error") != 0 &&
+            strcmp(msg, "dialect mismatch") != 0) {
             fprintf(stderr, "reload error: %s\n", msg);
         }
     } else {
@@ -913,12 +999,13 @@ static void cmd_run(TuriEnv **env_io, const char *path) {
     printf(";; run: %s\n", path);
     fflush(stdout);
 
-    TuriValue result = turi_eval_file(env, path);
+    TuriValue result = repl_eval_file_keeping_reader(env, path, ":run");
     if (turi_is_error(result)) {
         const char *msg = turi_error_message(result);
         if (msg &&
             strcmp(msg, "parse error") != 0 &&
-            strcmp(msg, "elaboration error") != 0) {
+            strcmp(msg, "elaboration error") != 0 &&
+            strcmp(msg, "dialect mismatch") != 0) {
             fprintf(stderr, "run error: %s\n", msg);
         }
         return;

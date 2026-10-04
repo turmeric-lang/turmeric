@@ -389,9 +389,20 @@ static void run_doc_analysis(LspDoc *doc, LspSink *sink) {
      * hardcoded path resolved to a C:\tmp that does not exist and every
      * analysis silently produced nothing. */
     char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "%s/tur_lsp_XXXXXX.tur",
-             tur_temp_dir());
-    int tmp_fd = mkstemps(tmp_path, 4);
+    /* lsp-ignores-the-file-extension: the scratch file carries the
+     * document's own extension.  The compiler picks the reader (and for
+     * `.scm`, the language) from the extension of the file it opens -- which
+     * is this one -- so a fixed `.tur` analysed every headerless `.scm` and
+     * `.tur.sweet` buffer as plain Turmeric.  on_formatting already resolved
+     * the document's reader from doc->path; this makes analysis agree. */
+    const char *suffix = ".tur";
+    if (reader_type_from_extension(doc->path) == READER_SWEET)
+        suffix = ".tur.sweet";
+    else if (reader_type_from_extension(doc->path) == READER_R7RS)
+        suffix = ".scm";
+    snprintf(tmp_path, sizeof(tmp_path), "%s/tur_lsp_XXXXXX%s",
+             tur_temp_dir(), suffix);
+    int tmp_fd = mkstemps(tmp_path, (int)strlen(suffix));
     if (tmp_fd < 0) {
         lsp_doc_table_free(&dtable);
         return;
@@ -752,8 +763,14 @@ static void on_initialize(const char *id_raw, size_t id_len,
           "\"referencesProvider\":true,"
           "\"workspaceSymbolProvider\":true,"
           "\"documentFormattingProvider\":true,"
+          /* Space, not `(`.  In a lisp nothing names the callee yet at
+           * the instant `(` is typed -- the head comes after it -- so a `(`
+           * trigger could only ever be answered with null.  After the space
+           * that follows the head is the first position with an answer, and
+           * a signature request does not force an analysis (see the
+           * dispatcher), so firing on it is cheap. */
           "\"signatureHelpProvider\":{"
-            "\"triggerCharacters\":[\"(\"],"
+            "\"triggerCharacters\":[\" \"],"
             "\"retriggerCharacters\":[\" \"]"
           "},"
           /* Space was advertised as a completion trigger, which in a lisp
@@ -2220,11 +2237,14 @@ static void on_signature_help(const char *id_raw, size_t id_len,
     int char_0 = (int)lsp_json_int(pos, "character");
 
     LspDoc *doc = lsp_doc_get(uri, strlen(uri));
-    if (!doc || !doc->symbols) {
+    if (!doc) {
         send_response(sink, id_raw, id_len, "null");
         return;
     }
 
+    /* The call position comes from the text alone, so it is found before
+     * deciding whether the index is good enough -- most requests from a
+     * space trigger are not in argument position and end here, at no cost. */
     size_t cursor = lsp_offset_at_pos(doc->text, doc->text_len,
                                       line_0 + 1, char_0 + 1);
     char callee[128];
@@ -2235,7 +2255,14 @@ static void on_signature_help(const char *id_raw, size_t id_len,
         return;
     }
 
+    /* Answer from the index as it stands when it knows the callee; analyze
+     * the pending edit only when it does not (a function defined since the
+     * last analysis, or a document never analyzed). */
     const LspSymbol *sym = find_symbol(doc, callee);
+    if (!sym && doc->dirty) {
+        lsp_flush_dirty(sink);
+        sym = find_symbol(doc, callee);
+    }
 
     /* Same builtin fallback as on_hover: `(println ` and `(+ ` are the calls
      * being typed when signature help is most wanted, and neither has a
@@ -2596,6 +2623,20 @@ bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
             send_error(sink, id_raw, id_len, -32602, "Invalid params");
         else
             on_formatting(id_raw, id_len, params_raw, sink);
+    } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
+        /* Not in the flush group below: signature help reads doc->text,
+         * which didChange updates at once, and needs from doc->symbols only
+         * the callee's type -- which an index one edit old almost always
+         * still has.  on_signature_help flushes itself when it does not.
+         * Keeping the compile off this path is what makes a space trigger
+         * affordable (signature-help-declines-at-its-own-trigger-character). */
+        if (cancel_take(id_raw, id_len)) {
+            send_error(sink, id_raw, id_len, -32800, "Request cancelled");
+        } else if (!params_raw) {
+            send_error(sink, id_raw, id_len, -32602, "Invalid params");
+        } else {
+            on_signature_help(id_raw, id_len, params_raw, sink);
+        }
     } else if (strcmp(method, "textDocument/hover") == 0 ||
                strcmp(method, "textDocument/definition") == 0 ||
                strcmp(method, "textDocument/documentSymbol") == 0 ||
@@ -2604,7 +2645,6 @@ bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
                strcmp(method, "textDocument/rename") == 0 ||
                strcmp(method, "textDocument/references") == 0 ||
                strcmp(method, "workspace/symbol") == 0 ||
-               strcmp(method, "textDocument/signatureHelp") == 0 ||
                strcmp(method, "textDocument/completion") == 0) {
         /* These all read doc->symbols, so any pending edit has to be
          * analyzed first — otherwise the answer describes the buffer as it
@@ -2638,8 +2678,6 @@ bool lsp_dispatch_message(const char *msg, LspSink *sink, int fd_in) {
             on_references(id_raw, id_len, params_raw, sink);
         } else if (strcmp(method, "workspace/symbol") == 0) {
             on_workspace_symbol(id_raw, id_len, params_raw, sink);
-        } else if (strcmp(method, "textDocument/signatureHelp") == 0) {
-            on_signature_help(id_raw, id_len, params_raw, sink);
         } else {
             on_completion(id_raw, id_len, params_raw, sink);
         }

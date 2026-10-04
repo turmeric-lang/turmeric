@@ -162,4 +162,33 @@ elif fmt[0].get("newText") != R7RS_FORMATTED:
 else:
     print("ok   format  : re-indented, every Scheme lexeme kept")
 
+# lsp-ignores-the-file-extension: the extension alone selects the reader (and
+# for `.scm` the language), as it does for the compiler.  The server analysed
+# a scratch copy named `*.tur`, so a headerless `.scm` / `.tur.sweet` buffer
+# was read as plain Turmeric.  The `.tur` row is the control: the same Scheme
+# body with no header and no telling extension MUST still report, or the clean
+# rows prove nothing.
+SCHEME_HEADERLESS = "(define (f x) (* x 2))\n"
+SWEET_HEADERLESS = "defn double [x]\n  {x * 2}\n"
+for label, text, path, want_clean in (
+        ("ext .tur ", SCHEME_HEADERLESS, "/tmp/tur_lsp_ext_ctl.tur", False),
+        ("ext .scm ", SCHEME_HEADERLESS, "/tmp/tur_lsp_ext.scm", True),
+        ("ext sweet", SWEET_HEADERLESS, "/tmp/tur_lsp_ext.tur.sweet", True)):
+    pub, _ = session(text, path)
+    last = pub[-1] if pub else None
+    if last is None:
+        print("FAIL %s: no diagnostics were published at all" % label)
+        ok = False
+    elif want_clean and last:
+        print("FAIL %s: headerless buffer read under the wrong reader: %s"
+              % (label, "; ".join(d.get("message", "")[:60] for d in last[:3])))
+        ok = False
+    elif not want_clean and not last:
+        print("FAIL %s: control reported nothing -- the probe measures nothing"
+              % label)
+        ok = False
+    else:
+        print("ok   %s: %s" % (label, "clean" if want_clean else
+                                "control reports %r" % last[0].get("message", "")[:50]))
+
 sys.exit(0 if ok else 1)

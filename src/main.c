@@ -8337,11 +8337,110 @@ static int is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
-/* tur format [--check|--diff] [file]
+/* The `--lang` vocabulary shared by `tur fmt` and `tur format`: a reader
+ * name, or (lang-flags-take-different-vocabularies) any base `tur dialects`
+ * lists, resolved to its reader -- formatting is a reader concern, so
+ * `saffron` formats as `turmeric` and `saffron/sweet` as `sweet`.  False for
+ * a name neither table knows. */
+static bool fmt_reader_from_lang_name(const char *lang, ReaderType *out) {
+    if (strcmp(lang, "turmeric") == 0 || strcmp(lang, "tur") == 0) {
+        *out = READER_TURMERIC;
+    } else if (strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0 || strcmp(lang, "tursweet") == 0) {
+        *out = READER_SWEET;
+    } else if (strcmp(lang, "curly-infix") == 0) {
+        *out = READER_CURLY_INFIX;
+    } else if (strcmp(lang, "neoteric") == 0) {
+        *out = READER_NEOTERIC;
+    } else if (strcmp(lang, "r7rs") == 0) {
+        /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
+         * (an editor selection) -- re-indented, never reprinted. */
+        *out = READER_R7RS;
+    } else if (strcmp(lang, "r7rs/sweet") == 0) {
+        /* Checked, and kept as written (fmt_format_buffer). */
+        *out = READER_R7RS_SWEET;
+    } else {
+        LangDialect base_dl = LANG_TURMERIC;
+        ReaderType  base_rt = READER_TURMERIC;
+        if (!lang_base_lookup(lang, strlen(lang), &base_dl, &base_rt))
+            return false;
+        (void)base_dl;
+        *out = base_rt;
+    }
+    return true;
+}
+
+/* The tail `tur format` shares across readers: print `out`, or with --check /
+ * --diff compare it against the original `src` instead.  Returns the exit
+ * code. */
+static int format_emit(const char *path, const char *src, size_t len,
+                       Buf *out_buf, bool check_only, bool diff_mode) {
+    int rc = 0;
+    Buf out = *out_buf;
+    if (check_only) {
+        /* Exit 1 if already-formatted output differs from input */
+        bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
+        if (!same) {
+            if (path) fprintf(stderr, "tur: %s is not formatted\n", path);
+            rc = 1;
+        }
+    } else if (diff_mode) {
+        bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
+        if (!same) {
+            /* Write original and formatted to temp files, run diff -u. */
+            char orig_tmp[512];
+            snprintf(orig_tmp, sizeof(orig_tmp), "%s/tur-fmt-orig-XXXXXX", tur_temp_dir());
+            int orig_fd = mkstemp(orig_tmp);
+            if (orig_fd >= 0) {
+                ssize_t _wr1 = write(orig_fd, src, len); (void)_wr1;
+                close(orig_fd);
+            }
+            char new_tmp[512];
+            snprintf(new_tmp, sizeof(new_tmp), "%s/tur-fmt-new-XXXXXX", tur_temp_dir());
+            int new_fd = mkstemp(new_tmp);
+            if (new_fd >= 0) {
+                ssize_t _wr2 = write(new_fd, out.data, out.len); (void)_wr2;
+                close(new_fd);
+            }
+            const char *label = path ? path : "<stdin>";
+            /* WP2 (D-7): `'%s'` is not quoting -- a `'` in the path ends
+             * the argument, and cmd.exe does not read `'` as a quote at
+             * all.  tur_shell_quote is the one that handles both. */
+            Buf diff_cmd; buf_init(&diff_cmd);
+            bool dq = true;
+            buf_puts(&diff_cmd, "diff -u -L ");
+            dq = buf_put_quoted(&diff_cmd, label) && dq;
+            buf_puts(&diff_cmd, " -L ");
+            dq = buf_put_quoted(&diff_cmd, label) && dq;
+            buf_putc(&diff_cmd, ' ');
+            dq = buf_put_quoted(&diff_cmd, orig_tmp) && dq;
+            buf_putc(&diff_cmd, ' ');
+            dq = buf_put_quoted(&diff_cmd, new_tmp) && dq;
+            buf_putc(&diff_cmd, '\0');
+            int diff_rc = dq ? system(diff_cmd.data) : 2;
+            buf_free(&diff_cmd);
+            unlink(orig_tmp);
+            unlink(new_tmp);
+            /* diff exits 1 when files differ, 0 when same */
+            if (diff_rc != 0) rc = 1;
+        }
+    } else {
+        buf_to_file(&out, stdout);
+    }
+    return rc;
+}
+
+/* tur format [--check|--diff] [--lang <dialect>] [file]
  * Read source from file (or stdin if no file given), format it, and write to
  * stdout.  --check: exit 1 if file is not already formatted (no output).
- * --diff: print unified diff if file would change; exit 1 if changed. */
-static int cmd_format(const char *path, bool check_only, bool diff_mode) {
+ * --diff: print unified diff if file would change; exit 1 if changed.
+ *
+ * format-subcommand-shreds-a-sweet-buffer: the reader comes from `--lang`,
+ * else the file's extension, and a `#lang` line is honoured either way.
+ * Anything that is not plain Turmeric goes through fmt_format_document --
+ * the same path as `tur fmt` -- instead of being read under the Turmeric
+ * reader, which printed a sweet buffer one token per line. */
+static int cmd_format(const char *path, bool check_only, bool diff_mode,
+                      bool lang_set, ReaderType force_lang) {
     char  *src = NULL;
     size_t len = 0;
 
@@ -8364,6 +8463,27 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
             src[len++] = (char)c;
         }
         src[len] = '\0';
+    }
+
+    ReaderType rtype = lang_set ? force_lang : reader_type_from_extension(path);
+    {
+        const char *body = src;
+        size_t body_len = len;
+        LangDialect dl = LANG_TURMERIC;
+        (void)detect_lang_dialect(src, len, &body, &body_len, NULL, NULL, &dl);
+        if (rtype != READER_TURMERIC || body != src) {
+            Buf out;
+            int rc;
+            if (fmt_format_document(path ? path : "<stdin>", src, len,
+                                    rtype, &out) != 0) {
+                rc = 1;
+            } else {
+                rc = format_emit(path, src, len, &out, check_only, diff_mode);
+                buf_free(&out);
+            }
+            free(src);
+            return rc;
+        }
     }
 
     SourceFile file = {0};
@@ -8422,55 +8542,8 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
         if (fmt_print(&out, forms, nforms, opts) != 0) {
             fprintf(stderr, "tur: fmt_print failed\n");
             rc = 1;
-        } else if (check_only) {
-            /* Exit 1 if already-formatted output differs from input */
-            bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
-            if (!same) {
-                if (path) fprintf(stderr, "tur: %s is not formatted\n", path);
-                rc = 1;
-            }
-        } else if (diff_mode) {
-            bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
-            if (!same) {
-                /* Write original and formatted to temp files, run diff -u. */
-                char orig_tmp[512];
-                snprintf(orig_tmp, sizeof(orig_tmp), "%s/tur-fmt-orig-XXXXXX", tur_temp_dir());
-                int orig_fd = mkstemp(orig_tmp);
-                if (orig_fd >= 0) {
-                    ssize_t _wr1 = write(orig_fd, src, len); (void)_wr1;
-                    close(orig_fd);
-                }
-                char new_tmp[512];
-                snprintf(new_tmp, sizeof(new_tmp), "%s/tur-fmt-new-XXXXXX", tur_temp_dir());
-                int new_fd = mkstemp(new_tmp);
-                if (new_fd >= 0) {
-                    ssize_t _wr2 = write(new_fd, out.data, out.len); (void)_wr2;
-                    close(new_fd);
-                }
-                const char *label = path ? path : "<stdin>";
-                /* WP2 (D-7): `'%s'` is not quoting -- a `'` in the path ends
-                 * the argument, and cmd.exe does not read `'` as a quote at
-                 * all.  tur_shell_quote is the one that handles both. */
-                Buf diff_cmd; buf_init(&diff_cmd);
-                bool dq = true;
-                buf_puts(&diff_cmd, "diff -u -L ");
-                dq = buf_put_quoted(&diff_cmd, label) && dq;
-                buf_puts(&diff_cmd, " -L ");
-                dq = buf_put_quoted(&diff_cmd, label) && dq;
-                buf_putc(&diff_cmd, ' ');
-                dq = buf_put_quoted(&diff_cmd, orig_tmp) && dq;
-                buf_putc(&diff_cmd, ' ');
-                dq = buf_put_quoted(&diff_cmd, new_tmp) && dq;
-                buf_putc(&diff_cmd, '\0');
-                int diff_rc = dq ? system(diff_cmd.data) : 2;
-                buf_free(&diff_cmd);
-                unlink(orig_tmp);
-                unlink(new_tmp);
-                /* diff exits 1 when files differ, 0 when same */
-                if (diff_rc != 0) rc = 1;
-            }
         } else {
-            buf_to_file(&out, stdout);
+            rc = format_emit(path, src, len, &out, check_only, diff_mode);
         }
         buf_free(&out);
     }
@@ -8864,6 +8937,8 @@ static int usage_fmt(void) {
         "  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/\n"
         "\n"
         "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric  r7rs\n"
+        "  r7rs/sweet, or any base `tur dialects` lists (e.g. saffron, saffron/sweet),\n"
+        "  which formats with that base's reader.\n"
         "  (tursweet is a deprecated alias for sweet-exp)\n"
         "\n"
         "Exit codes:\n"
@@ -8909,23 +8984,10 @@ static int cmd_fmt(int argc, char **argv) {
                 return 2;
             }
             const char *lang = argv[++i];
-            if (strcmp(lang, "turmeric") == 0 || strcmp(lang, "tur") == 0) {
-                force_lang = READER_TURMERIC;
-            } else if (strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0 || strcmp(lang, "tursweet") == 0) {
-                force_lang = READER_SWEET;
-            } else if (strcmp(lang, "curly-infix") == 0) {
-                force_lang = READER_CURLY_INFIX;
-            } else if (strcmp(lang, "neoteric") == 0) {
-                force_lang = READER_NEOTERIC;
-            } else if (strcmp(lang, "r7rs") == 0) {
-                /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
-                 * (an editor selection) -- re-indented, never reprinted. */
-                force_lang = READER_R7RS;
-            } else if (strcmp(lang, "r7rs/sweet") == 0) {
-                /* Checked, and kept as written (fmt_format_buffer). */
-                force_lang = READER_R7RS_SWEET;
-            } else {
-                fprintf(stderr, "tur fmt: unknown dialect '%s'\n", lang);
+            if (!fmt_reader_from_lang_name(lang, &force_lang)) {
+                fprintf(stderr,
+                        "tur fmt: unknown dialect '%s' (expected a reader "
+                        "name or a base `tur dialects` lists)\n", lang);
                 return 2;
             }
             lang_set = true;
@@ -10987,6 +11049,10 @@ static int usage_format(void) {
         "  tur format [file.tur]          format a source file (stdin if no file given)\n"
         "  tur format --check [file.tur]  exit 1 if formatting would change the file\n"
         "  tur format --diff [file.tur]   print unified diff of formatting changes\n"
+        "  tur format --lang <dialect>    read with that dialect (as `tur fmt --lang`);\n"
+        "                                 default: the file's extension and #lang line\n"
+        "\n"
+        "  Prefer `tur fmt`, which also formats in place.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -13688,6 +13754,8 @@ static int tur_main_inner(int argc, char **argv) {
         bool check_only = false;
         bool diff_mode  = false;
         const char *fmt_input = NULL;
+        bool        lang_set  = false;
+        ReaderType  force_lang = READER_TURMERIC;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
                 return usage_format();
@@ -13695,6 +13763,17 @@ static int tur_main_inner(int argc, char **argv) {
                 check_only = true;
             } else if (strcmp(argv[i], "--diff") == 0) {
                 diff_mode = true;
+            } else if (strcmp(argv[i], "--lang") == 0) {
+                if (i + 1 >= argc) return usage_error(usage_format);
+                const char *lang = argv[++i];
+                if (!fmt_reader_from_lang_name(lang, &force_lang)) {
+                    fprintf(stderr,
+                            "tur format: unknown dialect '%s' (expected a "
+                            "reader name or a base `tur dialects` lists)\n",
+                            lang);
+                    return 2;
+                }
+                lang_set = true;
             } else if (argv[i][0] != '-') {
                 if (fmt_input) return usage_error(usage_format);
                 fmt_input = argv[i];
@@ -13703,7 +13782,8 @@ static int tur_main_inner(int argc, char **argv) {
             }
         }
         if (check_only && diff_mode) return usage_error(usage_format);
-        return cmd_format(fmt_input, check_only, diff_mode);
+        return cmd_format(fmt_input, check_only, diff_mode, lang_set,
+                          force_lang);
     }
     if (strcmp(cmd, "fmt") == 0)
         return cmd_fmt(argc, argv);

@@ -36,29 +36,18 @@ directory is worse for triage than no index.
 
 ## Editor integration surfaces (filed 2026-10-03)
 
-Six findings from bringing [Trowel](https://github.com/rjungemann/trowel) --
-the native editor -- onto `v0.60.1` from `v0.46.0`, and teaching it the Saffron
-and R7RS bases. They are grouped because they share a shape: each is a surface
-a *client* consumes (`tur lsp`, `tur fmt`, `tur format`, `:run`, the `--lang`
-flags, the signature-help capability), and each behaves differently from what
-the compiler itself does with the same file. None was found by reading the
-tree; every one was measured against the pinned `v0.60.1` with the commands in
-its own repro, and three of them had already been papered over in the client by
-workarounds written against `v0.42.2`.
-
-The two dialect-reader rows are the ones that matter most: `.scm` and
-`.tur.sweet` are exactly the extensions that make a `#lang` line unnecessary to
-the compiler, so the idiomatic way to write either is the way the language
-server and the legacy formatter mishandle.
+The six findings from bringing [Trowel](https://github.com/rjungemann/trowel)
+onto `v0.60.1` are resolved and archived -- the LSP reader, the two formatter
+sweet paths, the `--lang` vocabulary, `:run`/`:reload` changing the session's
+reader, and the signature-help trigger. See `docs/archive/` under their
+original slugs. Two of them were rewritten when the investigation found the
+filed mechanism was wrong. These two came up while resolving them and are
+still open:
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [lsp-ignores-the-file-extension](lsp-ignores-the-file-extension.md) | medium | `tur lsp` picks its reader from the `#lang` line only, where the compiler honours the extension, so a HEADERLESS `.scm` or `.tur.sweet` -- the idiomatic spelling of both -- is analysed as Turmeric: bogus errors on every line (`define name must be a symbol`, `TUR-E0003 unbound symbol 'defn'`) and `documentSymbol` empty. Isolated with a control: a Scheme body in a `.tur` file produces the same two errors, so it is the extension being ignored and not the header being required. The **formatting handler already resolves this correctly** -- `fmt_format_document` calls `detect_lang_dialect` and prefers the header only when the extension said plain Turmeric (`src/compiler/fmt.c:2235-2240`) -- so the server already contains the right resolution, used by one handler and not the other. Fix: resolve once at didOpen with that precedence. Secondary: a `publishDiagnostics` can carry other files' diagnostics under the open document's URI, distinguished only by a non-standard `"file"` key |
-| [fmt-reprints-sweet-as-s-expressions](fmt-reprints-sweet-as-s-expressions.md) | medium | `tur fmt` on a `turmeric/sweet` or `saffron/sweet` buffer reprints the body as S-EXPRESSIONS while preserving the `#lang turmeric/sweet` header verbatim, so the result is a file whose header contradicts its body -- and it looks like a successful format, which is the part a client cannot work around. `--lang r7rs/sweet` already does the right thing (`src/main.c:8925`, "Checked, and kept as written"), so the two sweet readers disagree and the Scheme one is correct. Fix: treat the Turmeric sweet readers the way the Scheme one is treated, or decline them out loud. Minor, same fix: a `#lang`-carrying `r7rs/sweet` buffer keeps its header but loses the blank line after it |
-| [format-subcommand-shreds-a-sweet-buffer](format-subcommand-shreds-a-sweet-buffer.md) | medium | `tur format` (the legacy stdin/file formatter, no `--lang`) emits a sweet buffer as ONE TOKEN PER LINE, blank-separated -- `defn` / `double` / `[x]` each on their own line. Under the default reader each indented sweet line is a separate top-level form and the printer prints each one. Output is stdout only (there is no in-place mode), so it destroys source only through a client that writes the output back, which is how it was found. Fix: deprecate in favour of `tur fmt --stdin`, or refuse input whose reader it cannot identify rather than reformatting under an assumed one |
-| [run-on-sweet-file-drops-its-definitions](run-on-sweet-file-drops-its-definitions.md) | low-medium | `:run` on a `.tur.sweet` invokes `main` but leaves the file's top-level definitions out of the session, where the same `:run` on a `.tur` keeps them -- so "run this file, then poke at it" works for one spelling and not the other. `load` is the complement for both (definitions land, `main` never runs). Looks like the residue of a worse defect: against v0.42.2 `:run` on a sweet file printed `;; run:` / `;; ready` and did nothing at all, the hazard `repl.c`'s own comment above `repl_preload_stdlib_and_natives` names. The program runs now; the accumulation is the half still missing |
-| [signature-help-declines-at-its-own-trigger-character](signature-help-declines-at-its-own-trigger-character.md) | low-medium | `initialize` advertises `"triggerCharacters":["("]`, and `textDocument/signatureHelp` returns `null` at the `(` and `null` after the callee's name, answering only once the cursor is in ARGUMENT position. Measured at four positions on one call. So the advertised trigger cannot be honoured usefully, and the position that does answer is "after a space" -- most keystrokes in s-expression source, each forcing a didChange and a re-analysis, which is the same cost the capability block cites for NOT advertising space as a completion trigger. Fix: answer at the `(` (the callee is known there, and `activeParameter` would be 0), or stop advertising it |
-| [lang-flags-take-different-vocabularies](lang-flags-take-different-vocabularies.md) | low | `tur repl --lang` takes a BASE that `tur dialects` lists and rejects reader spellings (`sweet-exp`, `scheme`); `tur fmt --lang` takes a READER and rejects the language half (`saffron`, `saffron/sweet`, `scheme`). Both ways round, on the same binary, under the same flag name -- and `tur repl`'s own error points at `tur dialects`, whose output is then unusable with `tur fmt` for four of the ten rows. Arguably not a bug (formatting is a reader concern) but it is a trap for every editor integration. Fix: accept a base in `tur fmt --lang` and resolve it to its reader, or say which vocabulary each flag wants in its help text |
+| [lsp-relative-load-resolves-against-scratch-dir](lsp-relative-load-resolves-against-scratch-dir.md) | medium | `tur lsp` analyzes a scratch copy in the temp dir, so a relative `(load "b.tur")` resolves there and fails with `load: cannot open`, while `tur check` on the real file is clean. Spice includes are already re-anchored on the document's path (`logical_path`); `load` is not. Same shape as the archived extension bug |
+| [lsp-publishes-other-files-diagnostics-under-one-uri](lsp-publishes-other-files-diagnostics-under-one-uri.md) | low-medium | One `publishDiagnostics` carries every diagnostic from a compile, so a loaded file's error is drawn on the open buffer at the other file's line, told apart only by a non-standard `"file"` key (`lsp_build_array`, `src/compiler/diag.c`). Not latent: any `load`/`import` of a broken file shows it. Fix: one publish per URI |
 
 ## Security (filed 2026-09-30)
 

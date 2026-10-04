@@ -2179,10 +2179,15 @@ int fmt_format_buffer(const char *path_label, const char *src, size_t len,
     int rc = 0;
     if (!forms || diag_had_error()) {
         rc = -1;
-    } else if (rtype == READER_R7RS_SWEET) {
+    } else if (rtype == READER_R7RS_SWEET || rtype == READER_SWEET) {
         /* r7rs-sweet-base-dialect-missing: the parse above is the syntax
          * check, and the layout IS the syntax, so the text is kept as
          * written -- re-indenting it as Scheme would change its meaning.
+         * fmt-reprints-sweet-as-s-expressions: the same holds for
+         * turmeric/sweet and saffron/sweet.  Handing their forms to
+         * fmt_print reprinted the buffer as s-expressions -- still legal
+         * sweet-exp, but a different syntax from the one the file was
+         * written in, under a header that still announced sweet.
          * Only the ends are normalized, as fmt_scheme_reindent does: no
          * leading blank lines (the body starts with the newline that ended
          * the `#lang` line, which the caller re-emits) and exactly one

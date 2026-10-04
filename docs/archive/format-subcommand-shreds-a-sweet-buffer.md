@@ -1,6 +1,7 @@
 # `tur format` shreds a sweet-expression buffer
 
 **Severity:** medium.
+**Status:** RESOLVED (2026-10-03). `tur format` resolves the reader from `--lang`, the extension and the `#lang` line. See [Resolution](#resolution).
 **Found:** 2026-10-03, against v0.60.1.
 **Impact:** the legacy stdin formatter destroys sweet-expression source. One
 token per line.
@@ -62,6 +63,31 @@ the printer dutifully prints each one.
 have it refuse input it cannot identify rather than reformatting it under an
 assumed reader. A formatter that can silently destroy its input on a file type
 the compiler supports is worth failing closed.
+
+## Resolution
+
+The reach was wider than the filing said. `cmd_format` hard-coded
+`READER_TURMERIC` even when given a file path, and checked neither the
+extension nor a `#lang` line, so `tur format x.scm` and a `#lang r7rs` `.tur`
+file were read as plain Turmeric too -- not only stdin.
+
+`cmd_format` now takes its reader from `--lang` if given, else the file's
+extension, and sends anything that is not plain Turmeric (by extension or by
+`#lang` line) through `fmt_format_document`, the path `tur fmt` uses. So a
+sweet file is kept as written (see
+[fmt-reprints-sweet-as-s-expressions](fmt-reprints-sweet-as-s-expressions.md))
+and a Scheme file is re-indented. Plain Turmeric keeps its existing path,
+including the manifest reader-macro preload. `--lang` takes the same
+vocabulary as `tur fmt --lang` (one shared helper,
+`fmt_reader_from_lang_name`), and the usage text points at `tur fmt`.
+
+One case is still not detectable: a headerless sweet buffer on stdin with no
+`--lang` has no extension and no directive to go on, and is read as Turmeric.
+A caller piping a sweet buffer must pass `--lang`, as it must to `tur fmt
+--stdin`.
+
+Pinned in `tests/run-fmt.sh` (`format-sweet-file-kept`,
+`format-stdin-lang-sweet`, `format-check-sweet-already-formatted`).
 
 ## Client-side consequence
 

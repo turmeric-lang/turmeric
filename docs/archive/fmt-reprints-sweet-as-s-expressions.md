@@ -1,6 +1,7 @@
 # `tur fmt` reprints sweet-expressions as s-expressions, and keeps the `#lang` header
 
 **Severity:** medium.
+**Status:** RESOLVED (2026-10-03). Sweet buffers are checked and kept as written, as `r7rs/sweet` already was. See [Resolution](#resolution).
 **Found:** 2026-10-03, against v0.60.1.
 **Impact:** formatting a sweet-expression file silently converts it to another
 syntax, and leaves behind a header that contradicts the body.
@@ -58,6 +59,30 @@ a successful format.
 A `#lang`-carrying `r7rs/sweet` buffer is also not quite byte-identical: the
 header survives but the blank line after it is dropped. Minor, and not
 destructive, but worth folding into the same fix.
+
+## Resolution
+
+One correction to the filing first: the converted output was *not* a file
+whose header contradicts its body in the sense of being broken. Parenthesized
+forms are legal sweet-exp, and the reprinted file still ran (`42`). It was a
+silent change of syntax -- the whole point of a sweet file is its layout --
+which is still the defect, but not corruption.
+
+The cause: `fmt_format_buffer` (`src/compiler/fmt.c`) had keep-as-written
+branches for `READER_R7RS_SWEET` and `READER_R7RS` only. `READER_SWEET` --
+which is the reader for both `turmeric/sweet` and `saffron/sweet` -- fell
+through to `fmt_print`, the s-expression printer. It now shares the
+`r7rs/sweet` branch: the parse is the syntax check (an unbalanced buffer still
+fails), and the text comes back with only its ends normalized.
+
+The dropped blank line after a `#lang` header is intended, not fixed: the
+body's leading blank lines are stripped and exactly one newline follows the
+header, which keeps the pass idempotent (`fmt-idempotence-stdlib`).
+
+Pinned in `tests/run-fmt.sh` (`fmt-sweet-kept-as-written`,
+`fmt-sweet-file-keeps-header-and-body`, `fmt-sweet-parse-error-still-reported`).
+The formatter guide's sweet example, which showed the kept layout the
+formatter did not actually produce, now has a section that matches.
 
 ## Client-side consequence
 

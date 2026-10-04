@@ -1,6 +1,7 @@
 # The two `--lang` flags take different vocabularies
 
 **Severity:** low.
+**Status:** RESOLVED (2026-10-03). `tur fmt --lang` and `tur format --lang` also accept every base `tur dialects` lists. See [Resolution](#resolution).
 **Found:** 2026-10-03, against v0.60.1.
 **Impact:** minor, but it is a trap for every editor integration: the correct
 argument depends on which subcommand you are calling.
@@ -56,6 +57,23 @@ Cheapest: have `tur fmt --lang` also accept a base, resolving it to its reader â
 is usable with every `--lang` on the binary. Failing that, the help text for
 each flag could say which vocabulary it wants; `tur fmt --help` currently says
 only `--lang <dialect>`, which is the word `tur dialects` uses for the base.
+
+## Resolution
+
+The cheapest fix, as suggested: after the reader names, `--lang` falls back to
+`lang_base_lookup` -- the table `tur dialects` prints -- and formats with that
+base's reader, so `saffron` formats as `turmeric` and `saffron/sweet` as
+`sweet`. Every row of `tur dialects` is now accepted by every `--lang` on the
+binary. The unknown-dialect error and `tur fmt --help` say so.
+
+`scheme` is still rejected by both commands, consistently: it is not a base
+(the base is `r7rs`) and `tur repl` rejects it too. `tur repl --lang` still
+does not take bare reader names (`sweet-exp`); a session needs a language as
+well as a reader, so a base is the right vocabulary there.
+
+Pinned in `tests/run-fmt.sh` (`fmt-lang-accepts-dialect-bases` walks
+`tur dialects` output, so a new base is covered automatically;
+`fmt-lang-unknown-still-rejected`).
 
 ## Client-side consequence
 
