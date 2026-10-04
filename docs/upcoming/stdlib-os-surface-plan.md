@@ -371,6 +371,15 @@ from the sections above, and why:
   `stderr` / `stdin`: a field takes its C name verbatim, and MinGW defines
   `stdin` as an object-like macro. `process/output` is POSIX-only for now
   (`ENOSYS` on Windows).
-- **Not done:** the turmeric-spices migration PR (P1.5) -- that lives in the
-  other repository and must follow this one promptly, since the retyped
-  functions are a hard break.
+- **P1.5 spices migration: nothing to migrate.** Checked against
+  turmeric-spices `64c8c606` (2026-10-04): no spice loads or imports
+  `stdlib/fs.tur`, `io.tur`, `process.tur` or `env.tur`, and no spice calls a
+  retyped or deprecated name. Every `read-file` / `write-file` /
+  `file-exists?` hit the estimate above counted is a spice-local definition
+  (template fixtures, watch / notebook / plot / plutovg tests), which the
+  stdlib names never shadow because those modules are not auto-loaded. No
+  spice defines `eprintln` / `eprint`. The template, watch, notebook, plot
+  and plutovg shards pass under this branch's compiler
+  (`scripts/run-shard.sh`). Swapping those local helpers for `fs/read-text`
+  et al. is optional cleanup, and can only land after this branch merges
+  (spices CI builds against turmeric `main`).
