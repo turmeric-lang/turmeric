@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.60.1` -- the linux-aarch64 release leg publishes again (v0.60.0 was tagged but never released), the JIT engine and its vendored MIR are on by default, a default `tur build` links the prebuilt runtime preamble instead of recompiling it (10-15% faster builds on Linux and Windows), and `Arrow` composition is specialized at the call's element types.
+**Latest release:** `v0.61.0` -- the JIT engine works on linux-aarch64, `tur emit-c` is ~15x faster on large programs, `#lang r7rs` gains SRFI 216 (SICP Prerequisites), and both HTTP servers bind a named IPv4/IPv6 interface and cap pending connections at 512 by default.
 
 ## What
 

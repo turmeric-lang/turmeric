@@ -2,6 +2,60 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.61.0] -- 2026-10-03
+
+### Added
+
+- **`(srfi 216)` -- SICP Prerequisites for `#lang r7rs`.** `true`, `false`,
+  `nil`, `runtime`, `random` (over SRFI 27), `cons-stream` and the stream
+  primitives, plus a sequential `parallel-execute` / `test-and-set!` until
+  SRFI 18 lands. `(features)` reports `srfi-216`; a clash with SRFI 41's
+  `stream-null?` is a named error.
+- **`httpd-set-bind-addr!` binds a named interface, IPv4 or IPv6.** It takes a
+  numeric address (`"192.168.1.5"`, `"::1"`, `"::"`), wins over
+  `httpd-set-bind-any!`, clears with `""`, and refuses an unparsable address.
+  `httpd-new-pool-with-limit` joins `httpd-new-async-with-limit`.
+
+### Changed
+
+- **`tur emit-c` is ~15x faster on large programs.** Five lookups that were
+  linear in program size are now indexed; the r7rs conformance program went
+  from 130 s to 8.5 s (Debug) with byte-identical output.
+- **Both HTTP servers cap pending connections at 512 by default**, answering
+  503 past the cap instead of growing without limit. `0` still means
+  unlimited when asked for by name. `mw-rate-limit` now keys on the IP itself
+  (8-way set-associative, evicting the stalest window) and never fails open
+  once many distinct IPs have been seen.
+- **Loop invariants prove inside a `frozen` region.** A bounded-index walk
+  over a container discharges both runtime checks there, and a frozen marker
+  no longer declines the loop (`--enable=loop-invariants`).
+- **Editor integration.** LSP diagnostics from a loaded or imported file are
+  anchored on the form that names it, sibling imports and
+  `#use-reader-macros` resolve from the document's own directory, and a
+  headerless `.scm` / `.tur.sweet` is analyzed under its own reader.
+  `tur fmt` / `tur format` keep `turmeric/sweet` and `saffron/sweet` as
+  written and accept `--lang`, and the REPL's `:run` / `:reload` load a
+  file in a different reader without switching the session's.
+
+### Fixed
+
+- **The JIT engine works on linux-aarch64.** Vendored MIR now parses glibc's
+  `<sys/user.h>` with `ucontext_t`'s real layout, so the 0.60.1 `TUR-W0070`
+  fallback on that platform is gone. Separately, a JIT-run program that
+  started threads no longer has its code freed under them when `main`
+  returns.
+- **Try Turmeric loads again.** Pointer-keyed hash mixing used an over-wide
+  shift on wasm32, hanging the worker in `turi_wasm_init`.
+- **Codegen and CPS fixes.** A constrained generic over a pass-by-pointer
+  aggregate compiles; an associated-type projection at a type variable stays
+  unreduced until the call's types are known; a tail-position `let` binding
+  a carrier value (Vec, list, heap ADT) stays on the tail path; several
+  serial-shift / capturing-lambda shapes lower instead of evicting, with two
+  use-after-frees and two chain leaks fixed along the way; a bare extra
+  parameter on a parametric-head Saffron instance is `any`.
+- **The sandboxed interpreter refuses a forged call target**, so an integer
+  ascribed to a function type is no longer re-tagged as a closure.
+
 ## [0.60.1] -- 2026-10-03
 
 `v0.60.0` was tagged but never published: on linux-aarch64 the release
