@@ -1,0 +1,138 @@
+name: Nightly iOS (libturi cross-compile)
+
+# Compile the interpreter library for iOS, every night, and say what breaks.
+#
+# iOS forbids a JIT and does not let an app load a dylib built at runtime, so
+# the tree-walking interpreter (src/turi/, shipped as libturi.a) is the only
+# engine an iOS embedder -- the Godot binding's iOS plan, first -- can use.
+# Nothing else in CI compiles it against an iOS SDK, so the questions
+# docs/reported/turi-ios-readiness-unverified.md leaves open (does the SDK
+# declare ucontext? system()? fork()?) were answered from memory.  This
+# workflow answers them with the compiler.
+#
+# Expect it RED until that report's items are worked: the point of the first
+# runs is the error list, which the job summary and the uploaded log carry.
+# The build keeps going past the first failure (`-k`) so one run lists every
+# translation unit that does not compile, not just the first.
+#
+# Scope is deliberately one step: COMPILE libturi for the device SDK.  It does
+# not link an app, sign anything or run code -- a simulator run comes after
+# this is green (the report's "Finding the turi gaps" step 4).
+#
+# Not on push/pull_request: macOS runners are the scarce pool (see the
+# `exclude` comment in ci.yml), and a nightly costs nobody latency.  The
+# per-PR half of the same concern -- the interpreter built without the JIT --
+# is ci.yml's `interp-nojit` job, on Linux.  Nothing gates on this workflow;
+# this repo's standing position is that a red suite never blocks landing.
+
+on:
+  schedule:
+    # 06:10 UTC daily -- off the hour, and clear of fuzz.yml (04:30), tsan.yml
+    # (05:10), codeql.yml (05:30 Mon) and nightly-arm64.yml (05:40).
+    - cron: "10 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-ios
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  libturi:
+    name: libturi for iOS (arm64, device SDK)
+    runs-on: macos-latest
+    # A Release compile of tur_core's objects and nothing else; minutes, not
+    # tens of them.  The number is a diagnostic, not a budget.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Show the toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphoneos --show-sdk-version
+          cmake --version | head -1
+
+      # TUR_JIT is NOT passed: the top-level CMakeLists.txt must default it OFF
+      # for CMAKE_SYSTEM_NAME=iOS on its own, and the next step checks that it
+      # did.  Release so the Debug ASan/UBSan flags (host-only runtimes) stay
+      # out of a cross build.  STATIC_LIBRARY try-compiles, because an iOS
+      # executable cannot be linked unsigned.
+      - name: Configure (iOS, device SDK)
+        id: configure
+        run: |
+          set -o pipefail
+          cmake -S . -B build-ios \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 2>&1 | tee configure.log
+
+      - name: Verify the JIT defaulted off
+        run: |
+          line=$(grep -E '^TUR_JIT:BOOL=' build-ios/CMakeCache.txt || true)
+          echo "$line"
+          if [ "$line" != "TUR_JIT:BOOL=OFF" ]; then
+            echo "::error::an iOS configure left TUR_JIT on ($line) -- the _tur_jit_default exclusion in CMakeLists.txt is not taking effect, and an iOS libturi would carry an engine the platform forbids."
+            exit 1
+          fi
+
+      # libturi only: `tur` is a host tool and the test executables are host
+      # programs; neither belongs on iOS.  `-k` keeps make going after the
+      # first failing TU so the log lists all of them.
+      - name: Build libturi (keep going)
+        id: build
+        run: |
+          set +e
+          cmake --build build-ios --target libturi -j "$(sysctl -n hw.ncpu)" -- -k > build.log 2>&1
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          tail -40 build.log
+          exit 0
+
+      # The finding, where a reader will look for it: every distinct compiler
+      # error, deduplicated (one header error repeats once per TU that
+      # includes it).
+      - name: Summarize
+        if: always()
+        run: |
+          errs=$(grep -E ': (fatal )?error: ' build.log 2>/dev/null \
+                 | sed -E 's#^.*/(src/[^:]+:[0-9]+):[0-9]+:#\1:#' | sort -u || true)
+          n=$(printf '%s' "$errs" | grep -c . || true)
+          {
+            echo "### libturi for iOS (device SDK)"
+            echo
+            echo "Build exit: ${{ steps.build.outputs.rc || 'did not run' }}; distinct compiler errors: ${n}"
+            echo
+            if [ -n "$errs" ]; then
+              echo '```'
+              printf '%s\n' "$errs" | head -100
+              echo '```'
+            fi
+            echo
+            echo "Triage against docs/reported/turi-ios-readiness-unverified.md."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-ios-${{ github.run_id }}
+          path: |
+            configure.log
+            build.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Fail LAST, so the summary and logs above exist first.
+      - name: Report the build result
+        if: steps.build.outputs.rc != '0'
+        run: |
+          echo "::error::libturi does not compile for iOS (exit ${{ steps.build.outputs.rc }}). The distinct errors are in the job summary and the full log in the nightly-ios artifact; triage them against docs/reported/turi-ios-readiness-unverified.md."
+          exit 1

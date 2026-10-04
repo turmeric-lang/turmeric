@@ -38,8 +38,10 @@ gets the JIT by default and pulls in `cmake/mir.cmake`, `jit_engine.c` and
 `src/turi/jit_ffi.c`. That code would compile, but every use of it would fail
 at runtime on a device.
 
-**Fix direction:** exclude `CMAKE_SYSTEM_NAME STREQUAL "iOS"` (and
-tvOS/visionOS) from `_tur_jit_default`, the same way `EMSCRIPTEN` is excluded.
+**Fixed 2026-10-04:** `_tur_jit_default` now excludes
+`CMAKE_SYSTEM_NAME` iOS/tvOS/watchOS/visionOS, the same way `EMSCRIPTEN` is
+excluded, and `nightly-ios.yml` checks that an iOS configure leaves
+`TUR_JIT:BOOL=OFF` in its cache.
 
 ### 2. Coroutines and effect handlers use `ucontext`
 
@@ -116,21 +118,21 @@ a clear "unsupported on this platform" error.
 
 The list above comes from reading the code. To get one that is complete:
 
-1. **Configure a no-JIT build in CI (prerequisite; useful without iOS).** Add
-   a Linux leg with `-DTUR_JIT=OFF` that builds all targets and runs
-   `tests/run-turi.sh`. This is the configuration iOS would use, minus the SDK,
-   and since `923b803a` no CI job builds it -- the commit message records one
-   manual check that it compiles. Linux jobs start immediately (see the
-   `exclude` comment in `.github/workflows/ci.yml`), so this can run on every
-   PR.
-2. **Track the turi skip count.** `run-turi.sh` reports `P passed, F failed,
-   S skipped of D discovered`. Record S over time, or fail once it goes above a
-   set limit. Growth in S is how gaps (items 4-5) hide.
-3. **Cross-compile smoke test (nightly, macOS).** Configure `libturi` with
-   `-DCMAKE_SYSTEM_NAME=iOS -DTUR_JIT=OFF` against the simulator SDK and
-   build it. This settles items 2, 3 and 6 from the compiler instead of from
-   memory. It belongs in `nightly-arm64.yml`, not per PR, because macOS runners
-   are scarce.
+1. **A no-JIT build in CI -- landed 2026-10-04.** `ci.yml`'s `interp-nojit`
+   job (Linux, every PR) configures `-DTUR_JIT=OFF`, checks the engine really
+   is absent, and runs `tests/run-turi.sh`. Its first local run, on `main` at
+   `1846d17f`: `2581 passed, 0 failed, 930 skipped of 3511 discovered`.
+2. **Track the turi skip count -- partly landed.** The `interp-nojit` job
+   writes the summary line (with S) to its job summary. Nothing fails yet when
+   S grows; a limit is the next step once a few runs give a baseline. Growth
+   in S is how gaps (items 4-5) hide.
+3. **Cross-compile smoke test -- landed 2026-10-04.** `nightly-ios.yml`
+   configures for `CMAKE_SYSTEM_NAME=iOS` against the device SDK, compiles
+   `libturi` with `make -k`, and lists every distinct compiler error in the
+   job summary. This settles items 2, 3 and 6 from the compiler instead of
+   from memory. It is its own workflow, not a job in `nightly-arm64.yml`, so
+   that its expected early red does not hide a red representation suite.
+   Expect it red until the items above are worked.
 4. **Simulator run (later).** Embed `libturi` in a minimal app or XCTest
    target and run a few dozen `run-turi.sh` fixtures through `turi_eval`. The
    simulator does not enforce every device rule (code signing, W^X), so this

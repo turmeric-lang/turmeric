@@ -2633,7 +2633,7 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [turi-ios-readiness-unverified](turi-ios-readiness-unverified.md) | medium (platform readiness) | iOS can only run the tree-walking interpreter (no JIT, no runtime dylibs), and since `TUR_JIT` defaulted ON no CI leg builds turi without the JIT. Six areas to check: `TUR_JIT` defaults ON for an iOS configure, `ucontext` fibers, spice loading via `system()`+`dlopen`, FFI limited to the shape table, inline-C bodies (only C1/MIR runs them), `process/spawn` forks. Apple SDK claims unverified -- step 1 is a `-DTUR_JIT=OFF` CI leg, then an iOS cross-compile nightly |
+| [turi-ios-readiness-unverified](turi-ios-readiness-unverified.md) | medium (platform readiness) | iOS can only run the tree-walking interpreter (no JIT, no runtime dylibs), and since `TUR_JIT` defaulted ON no CI leg builds turi without the JIT. Six areas to check: `TUR_JIT` defaults ON for an iOS configure, `ucontext` fibers, spice loading via `system()`+`dlopen`, FFI limited to the shape table, inline-C bodies (only C1/MIR runs them), `process/spawn` forks. Apple SDK claims unverified. The JIT default is fixed for iOS; the `interp-nojit` CI job (per PR) and `nightly-ios.yml` (libturi cross-compile) landed 2026-10-04 to answer the rest |
 
 ## Filing conventions
 
