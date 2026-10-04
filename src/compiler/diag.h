@@ -703,6 +703,13 @@ void diag_register_file(const SourceFile *file);
  * file is drawn on the document's own `load` line.  A span with line 0 (no
  * source form, e.g. a forced import) records nothing. */
 void diag_set_file_origin(uint16_t file_id, Span origin);
+/* The call site of the outermost macro expansion in progress, and the macro's
+ * name; SPAN_UNKNOWN / NULL when none.  A diagnostic raised inside the
+ * expansion is located in the DEFMACRO's file, so the LSP anchors it on this
+ * call instead -- the code the user actually wrote.  Returns the previous
+ * site so a caller can restore it. */
+Span diag_set_expansion_site(Span site, const char *macro_name,
+                             const char **prev_name);
 /* A fresh file id for a SourceFile a pass reads on its own, outside the
  * elaborator's import/load counter (an R7RS `include`): handed out from the
  * top of the range downwards, so the two never meet. */

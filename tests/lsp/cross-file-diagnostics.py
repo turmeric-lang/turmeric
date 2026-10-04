@@ -210,6 +210,42 @@ try:
         report(False, "transitive import", "no diagnostic for inner-mod.tur "
                "(%r)" % ([d.get("message", "")[:40] for d in last],))
 
+    # -- an error inside a macro's expansion lands on the call ---------------
+    # The error is located in the DEFMACRO's file -- here the auto-loaded
+    # stdlib/map.tur, which the document never names, so there is no `load`
+    # to anchor on.  The call the user wrote is the right place anyway.
+    text = ("#lang saffron\n"
+            "(defn main [] : int\n"
+            "  (let [m (:: (map-new) (Map Sym int))]\n"
+            "    (println (map-get (map-assoc m \"k\" 1) \"k\")))\n"
+            "  0)\n")
+    last = session(os.path.join(work, "mx.tur"), text, work) or []
+    foreign = [d for d in last if "tur-map-kcheck" in d.get("message", "")]
+    if foreign:
+        d = foreign[0]
+        line = text.splitlines()[3]
+        rel = (d.get("relatedInformation") or [{}])[0].get("location", {})
+        report(d["range"]["start"]["line"] == 3
+               and d["range"]["start"]["character"] == line.index("(map-get")
+               and "(expanding map-get)" in d["message"]
+               and rel.get("uri", "").endswith("/stdlib/map.tur"),
+               "macro call anchor", "range %r, message %r, related %r"
+               % (d["range"]["start"], d["message"][:70],
+                  rel.get("uri", "")[-16:]))
+    else:
+        report(False, "macro call anchor", "no diagnostic from map.tur (%r)"
+               % ([d.get("message", "")[:40] for d in last],))
+
+    # -- loading a stdlib file explicitly brings none of its own lint --------
+    # TUR-W0039 skipped the auto-loaded stdlib only; arrow.tur's deliberate
+    # free `arr` / `>>>` fallbacks warned on every `(load "stdlib/arrow.tur")`,
+    # which the LSP then drew on the user's `load` line.
+    text = '(load "stdlib/arrow.tur")\n(defn main [] : int 0)\n'
+    last = session(os.path.join(work, "arrows.tur"), text, ROOT)
+    report(last == [], "explicit stdlib load",
+           "clean" if last == [] else "%r" % ([d.get("message", "")[:60]
+                                                for d in (last or [])],))
+
     # -- a sibling reader-macro file resolves the same way --------------------
     rm_src = os.path.join(ROOT, "tests", "fixtures", "reader-macros-use")
     shutil.copy(os.path.join(rm_src, "macros.tur"), work)

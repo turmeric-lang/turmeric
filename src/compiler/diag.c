@@ -14,6 +14,8 @@
 
 static const SourceFile *files_[MAX_FILES];
 static Span              origins_[MAX_FILES];  /* see diag_set_file_origin */
+static Span              expansion_site_;      /* see diag_set_expansion_site */
+static const char       *expansion_macro_;
 static size_t            file_count_;
 static bool              had_error_;
 static uint64_t          error_serial_;   /* count of SHOWN (uncaptured) errors */
@@ -52,6 +54,15 @@ void diag_set_file_origin(uint16_t file_id, Span origin) {
         origin.file_id >= MAX_FILES || origin.file_id == file_id)
         return;
     origins_[file_id] = origin;
+}
+
+Span diag_set_expansion_site(Span site, const char *macro_name,
+                             const char **prev_name) {
+    Span prev = expansion_site_;
+    if (prev_name) *prev_name = expansion_macro_;
+    expansion_site_  = site;
+    expansion_macro_ = site.line > 0 ? macro_name : NULL;
+    return prev;
 }
 
 uint16_t diag_alloc_file_id(void) {
@@ -3271,6 +3282,12 @@ typedef struct DiagLspEntry {
     char      via[256];
     char      via_parent[256];
     uint32_t  via_line0, via_col_start0, via_col_end0;
+    /* The outermost macro call this diagnostic was raised under
+     * (diag_set_expansion_site), when that call is in another file than the
+     * diagnostic.  Empty otherwise. */
+    char      exp_file[256];
+    char      exp_macro[64];
+    uint32_t  exp_line0, exp_col_start0, exp_col_end0;
 } DiagLspEntry;
 
 static bool          lsp_collect_ = false;
@@ -3321,6 +3338,23 @@ static void lsp_append(DiagLevel level, DiagCode code, Span span, const char *ms
     const SourceFile *f = (span.file_id < MAX_FILES) ? files_[span.file_id] : NULL;
     snprintf(e->file, sizeof(e->file), "%s", f && f->path ? f->path : "");
     snprintf(e->message, sizeof(e->message), "%s", msg ? msg : "");
+
+    e->exp_file[0] = e->exp_macro[0] = '\0';
+    if (expansion_site_.line > 0 && expansion_site_.file_id < MAX_FILES &&
+        expansion_site_.file_id != span.file_id &&
+        files_[expansion_site_.file_id] && files_[expansion_site_.file_id]->path) {
+        snprintf(e->exp_file, sizeof(e->exp_file), "%s",
+                 files_[expansion_site_.file_id]->path);
+        snprintf(e->exp_macro, sizeof(e->exp_macro), "%s",
+                 expansion_macro_ ? expansion_macro_ : "");
+        e->exp_line0      = expansion_site_.line - 1;
+        e->exp_col_start0 = expansion_site_.col_start > 0 ? expansion_site_.col_start - 1 : 0;
+        e->exp_col_end0   = expansion_site_.col_end > 0 ? expansion_site_.col_end - 1 : 0;
+        /* A call spanning lines has an end column on another line. */
+        if (expansion_site_.off_end > expansion_site_.off_start &&
+            e->exp_col_end0 <= e->exp_col_start0)
+            e->exp_col_end0 = e->exp_col_start0 + 1;
+    }
 
     /* Walk the origin chain while the SourceFiles are still alive.  The
      * depth cap only guards a cycle (a file loading itself back). */
@@ -3375,7 +3409,22 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
         if (foreign && e->via[0] && strcmp(e->via, e->file) != 0 &&
             strcmp(e->via, doc_path) != 0)
             via = e->via;
-        if (foreign) {
+        /* Raised inside an expansion of a macro the document calls: the call
+         * is the code the user wrote, and beats any load/import anchor --
+         * the macro's file may not be named in the document at all (the
+         * auto-loaded stdlib). */
+        bool at_call = foreign && e->exp_file[0] &&
+                       strcmp(e->exp_file, doc_path) == 0;
+        if (at_call) via = NULL;
+        if (at_call) {
+            line0 = e->exp_line0; cs0 = e->exp_col_start0; ce0 = e->exp_col_end0;
+            if (ce0 <= cs0) ce0 = cs0 + 1;
+            rel_uri[0] = '\0';
+            bool ignored = false;
+            uint32_t l = 0, c0 = 0, c1 = 1;
+            have_uri = relocate(ctx, e->file, &l, &c0, &c1, &ignored,
+                                rel_uri, sizeof(rel_uri));
+        } else if (foreign) {
             line0 = 0; cs0 = 0; ce0 = 1;
             rel_uri[0] = '\0';
             bool anchored = false;
@@ -3431,6 +3480,8 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
                 }
                 buf_printf(&m, " (via %s)", vshown);
             }
+            if (at_call && e->exp_macro[0])
+                buf_printf(&m, " (expanding %s)", e->exp_macro);
             buf_printf(&m, ": %s", e->message);
             buf_putc(&m, '\0');
             json_escape_string(b, m.data);
@@ -3894,6 +3945,8 @@ void diag_lsp_remap_path(const char *from_path, const char *to_path) {
             snprintf(e->via, sizeof(e->via), "%s", to_path);
         if (strcmp(e->via_parent, from_path) == 0)
             snprintf(e->via_parent, sizeof(e->via_parent), "%s", to_path);
+        if (strcmp(e->exp_file, from_path) == 0)
+            snprintf(e->exp_file, sizeof(e->exp_file), "%s", to_path);
     }
 }
 

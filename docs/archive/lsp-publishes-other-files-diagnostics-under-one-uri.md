@@ -84,7 +84,22 @@ up to the file the document names, and the anchor is the document's `load` /
 `import` of it -- found by the same text scan, with the recorded span as the
 fallback. The message names the step: `in deep.tur:1:29 (via mid.tur): ...`.
 Only a file the chain does not reach (the auto-loaded stdlib) falls back to
-the first line. `tur mcp` and `tur check --json` keep
+the first line.
+
+A sweep of every negative fixture for diagnostics located in a stdlib file
+(2026-10-04) found that this last case is in practice an error inside a MACRO
+EXPANSION: template spans survive expansion, so the error sits in the
+DEFMACRO's file (`stdlib/map.tur` for `map-get`), auto-loaded or not. The
+elaborator now reports the outermost macro call to diag
+(`diag_set_expansion_site`, set and restored in `elab_call.c`), and the LSP
+anchors such an error on that call -- ahead of any `load` anchor, since the
+call is the code the user wrote -- with `(expanding map-get)` in the message.
+
+The same sweep found the only other kind: TUR-W0039 fired on `arrow.tur`'s own
+deliberate `arr` / `>>>` fallback defns whenever the file was loaded
+explicitly, because the lint skipped only the auto-loaded band
+(`is_from_stdlib`). It now also skips bindings whose file is under `stdlib/`
+(`elab_toplevel.c`), so a clean `(load "stdlib/arrow.tur")` is clean. `tur mcp` and `tur check --json` keep
 the old shape: they are not publishing for a document, so the entries keep
 their own coordinates.
 
@@ -92,5 +107,6 @@ Pinned by `tests/lsp/cross-file-diagnostics.py` (ctest
 `lsp_cross_file_diagnostics`): a loaded file's error is anchored on the `load`
 string with the prefix and related location, a sibling import's error on the
 module name, a load-of-a-load and an import-of-an-import on the document's
-own form with `(via ...)` in the message, and an own-file error stays where it
-is (the control).
+own form with `(via ...)` in the message, an auto-loaded stdlib macro's error
+on the call, a clean explicit stdlib load with no diagnostics, and an
+own-file error stays where it is (the control).

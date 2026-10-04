@@ -55,6 +55,9 @@ Behaviours worth knowing about:
   `relatedInformation` so the editor can jump to it. A file the document does
   not name directly -- one loaded by a loaded file -- shows on the document's
   `load` / `import` that leads to it, with `(via mid.tur)` in the message.
+  An error inside a macro's expansion is drawn on the macro call you wrote,
+  with `(expanding map-get)` in the message -- even when the macro lives in
+  the auto-loaded stdlib, which no line of the document names.
   This is clangd's model for errors in an included header: each document's
   analysis publishes only under that document's URI, so two open documents
   never overwrite each other's diagnostics.

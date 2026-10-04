@@ -3569,6 +3569,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             if (!mn) continue;
             Binding *b = scope_lookup(&e.global, mn);
             if (!b || b->is_from_stdlib) continue;
+            /* is_from_stdlib marks the AUTO-loaded band only; a stdlib file
+             * pulled in by an explicit (load "stdlib/arrow.tur") is still
+             * stdlib, and its fallback defns (arr, >>>) are deliberate. */
+            if (elab_file_is_stdlib(b->span.file_id)) continue;
             diag_emit_with_code(DIAG_WARNING, b->span, TUR_W0039_METHOD_DEFN_CLASH,
                 "free defn '%s' shares its name with the method '%s' of typeclass "
                 "'%s'; a bare (%s ...) dispatches to the method when the receiver "
