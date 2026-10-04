@@ -1,0 +1,12 @@
+-- :run
+main ran
+=> 0
+=> 7
+=> 8
+-- :reload
+=> 9
+=> 9
+=> 7
+-- :run scheme
+:run: s.scm is r7rs, and this session is not -- start one with `tur repl --lang r7rs` to :run it
+=> 3

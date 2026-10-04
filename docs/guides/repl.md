@@ -304,6 +304,13 @@ reloaded src/utils.tur
 If the file cannot be opened or contains an error, a diagnostic is printed and
 the session continues.
 
+`:reload` and `:run` never change the session's own reader. A file written for
+another reader -- a `.tur.sweet` file in a plain Turmeric session, say -- is
+read under its own reader, exactly as `(load "file")` would read it, and the
+prompt keeps reading what you type the way it did before. A file in another
+*language* is declined by name: a `.scm` file needs a Scheme session, which
+`tur repl --lang r7rs` starts.
+
 > **Not to be confused with `(reload)`.**
 > `(reload)` (a Turmeric form, no leading colon) rebuilds the *enclosing
 > spice* and refreshes its FFI bindings -- a different mechanism from

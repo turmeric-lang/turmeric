@@ -31,6 +31,19 @@ tur format --check myfile.tur
 tur format --diff myfile.tur
 ```
 
+`tur format` reads with the reader the file's extension selects (`.tur.sweet`
+is sweet-exp, `.scm` is Scheme), and a `#lang` line takes over when the
+extension says plain Turmeric. Input on stdin carries no extension, so name
+its dialect with `--lang` -- the same vocabulary as `tur fmt --lang`, which
+takes a reader name (`sweet`, `neoteric`, `r7rs`, ...) or any base
+`tur dialects` lists (`saffron/sweet`, `turmeric/neoteric`, ...):
+
+```sh
+tur format --lang sweet < buffer.tur.sweet
+```
+
+Prefer `tur fmt`, which has the same `--lang` and also formats in place.
+
 The `--check` flag is useful in CI:
 
 ```sh
@@ -111,6 +124,15 @@ than being expanded to their `(quote ...)` equivalents.
 `` ```c ... ``` `` blocks are emitted verbatim; the formatter does not
 reformat embedded C.
 
+### Dialects whose layout is their syntax
+
+A sweet-exp buffer (`turmeric/sweet`, `saffron/sweet`, `r7rs/sweet`) is
+**checked and kept as written**. Its indentation is part of its meaning, so
+the formatter parses it -- a syntax error still fails the run -- and returns
+the text with only the ends normalized: no leading blank lines and exactly one
+trailing newline. A Scheme (`r7rs`) buffer is re-indented and never reprinted.
+Every other reader goes through the pretty-printer described above.
+
 ## Example
 
 Before formatting:
@@ -129,7 +151,8 @@ defn factorial [n :int] :int
     {n * factorial({n - 1})}
 ```
 
-After `tur format`:
+After `tur format` (a sweet-exp file is kept as written -- see
+[Dialects whose layout is their syntax](#dialects-whose-layout-is-their-syntax)):
 
 ```turmeric
 (defn add [x : int y : int] : int
@@ -144,7 +167,6 @@ After `tur format`:
 ```sweet-exp
 defn add [x :int y :int] :int
   {x + y}
-
 defn factorial [n :int] :int
   if {n <= 1}
     1
@@ -155,6 +177,5 @@ defn factorial [n :int] :int
 
 - `src/compiler/fmt.h` -- Public C API (`fmt_print`, `FmtOptions`)
 - `src/compiler/fmt.c` -- Formatter implementation
-- [vscode-guide.md](vscode-guide.md) -- VS Code extension (registers a document
-  formatter that pipes the buffer through `tur format`; supports
-  `editor.formatOnSave`)
+- [lsp-guide.md](lsp-guide.md) -- `textDocument/formatting` runs the same
+  document formatter as `tur fmt`

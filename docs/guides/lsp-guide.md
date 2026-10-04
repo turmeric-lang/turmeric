@@ -36,7 +36,10 @@ Editors launch it as a subprocess and communicate via stdin/stdout.
 
 When you open or edit a `.tur` file, the server compiles it in check-only mode
 and publishes any parse or type errors back to the editor as diagnostics
-(red underlines, error panel entries, etc.).
+(red underlines, error panel entries, etc.). The document's extension selects
+its reader the way it does for the compiler -- a `.tur.sweet` file is
+sweet-exp and a `.scm` file is Scheme with no `#lang` line needed -- and a
+`#lang` line takes over when the extension says plain Turmeric.
 
 Behaviours worth knowing about:
 
@@ -45,6 +48,12 @@ Behaviours worth knowing about:
   been quiet for ~200ms. Requests that need symbols (hover, completion,
   definition, document symbols) force any pending analysis to run first, so
   this delays diagnostics slightly but never returns a stale answer.
+- **Signature help triggers on space, not `(`.** In a lisp the callee is typed
+  after the paren, so nothing names it yet at the moment `(` is typed; the
+  space after the head is the first position with an answer. A signature
+  request reads the current text and the callee's type from the existing
+  index, and only analyzes the pending edit when that index does not know the
+  callee -- so firing on every space does not cost a compile per keystroke.
 - **Positions are byte offsets.** The server advertises
   `"positionEncoding": "utf-8"` (LSP 3.17), so `character` in a `Position`
   counts UTF-8 bytes rather than the UTF-16 code units the specification
