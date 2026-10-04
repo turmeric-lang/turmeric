@@ -3415,6 +3415,7 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
          * auto-loaded stdlib). */
         bool at_call = foreign && e->exp_file[0] &&
                        strcmp(e->exp_file, doc_path) == 0;
+        bool placed = at_call;
         if (at_call) via = NULL;
         if (at_call) {
             line0 = e->exp_line0; cs0 = e->exp_col_start0; ce0 = e->exp_col_end0;
@@ -3446,8 +3447,30 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
                 line0 = e->via_line0;
                 cs0   = e->via_col_start0;
                 ce0   = e->via_col_end0;
+                anchored = true;
             }
             if (ce0 <= cs0) ce0 = cs0 + 1;
+            placed = anchored;
+        }
+
+        /* A stdlib file is named `stdlib/<file>` wherever it is installed.
+         * When nothing in the document leads to it, it is in practice the
+         * auto-loaded stdlib with an error of its own -- a stdlib bug, or a
+         * stdlib that does not match this compiler.  The user can do nothing
+         * about it in this file, so say so instead of letting it read as
+         * theirs.  `stdlib_dir` is set by resolve_stdlib_root at startup. */
+        char stdlib_shown[300];
+        const char *stdlib_dir = NULL;
+        bool in_stdlib = false;
+        if (foreign) {
+            stdlib_dir = getenv("TUR_STDLIB_DIR");
+            size_t sl = stdlib_dir ? strlen(stdlib_dir) : 0;
+            while (sl > 1 && stdlib_dir[sl - 1] == '/') sl--;
+            if (sl && strncmp(e->file, stdlib_dir, sl) == 0 && e->file[sl] == '/') {
+                snprintf(stdlib_shown, sizeof(stdlib_shown), "stdlib%s",
+                         e->file + sl);
+                in_stdlib = true;
+            }
         }
 
         if (i > 0) buf_putc(b, ',');
@@ -3469,6 +3492,7 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
                 if (strncmp(e->file, doc_path, dl) == 0 && e->file[dl])
                     shown = e->file + dl;
             }
+            if (in_stdlib) shown = stdlib_shown;
             buf_printf(&m, "in %s:%u:%u", shown, e->line0 + 1,
                        e->col_start0 + 1);
             if (via) {
@@ -3483,6 +3507,11 @@ static void lsp_build_array_ex(Buf *b, const char *doc_path,
             if (at_call && e->exp_macro[0])
                 buf_printf(&m, " (expanding %s)", e->exp_macro);
             buf_printf(&m, ": %s", e->message);
+            if (in_stdlib && !placed)
+                buf_printf(&m, "\n  this error is in the standard library, not "
+                           "in this file: check that the stdlib at %s matches "
+                           "this compiler (tur --version), and report it as a "
+                           "stdlib bug if it does", stdlib_dir);
             buf_putc(&m, '\0');
             json_escape_string(b, m.data);
             buf_free(&m);

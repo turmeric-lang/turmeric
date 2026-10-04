@@ -99,7 +99,18 @@ The same sweep found the only other kind: TUR-W0039 fired on `arrow.tur`'s own
 deliberate `arr` / `>>>` fallback defns whenever the file was loaded
 explicitly, because the lint skipped only the auto-loaded band
 (`is_from_stdlib`). It now also skips bindings whose file is under `stdlib/`
-(`elab_toplevel.c`), so a clean `(load "stdlib/arrow.tur")` is clean. `tur mcp` and `tur check --json` keep
+(`elab_toplevel.c`), so a clean `(load "stdlib/arrow.tur")` is clean.
+
+That leaves an error in an auto-loaded stdlib file that no macro call leads
+to -- a genuine stdlib bug, or a `TUR_STDLIB_DIR` pointing at a stdlib from
+another release. It is reachable (plant an error in a copy of the stdlib and
+open a clean file), and it was published as a one-character squiggle at line 0
+reading `in bstd/option.tur:271:32: ...`, which looks like the user's mistake.
+It now marks the document's whole first line, names the file
+`stdlib/option.tur` wherever the stdlib is installed, and adds: "this error is
+in the standard library, not in this file: check that the stdlib at <dir>
+matches this compiler (tur --version), and report it as a stdlib bug if it
+does". Every stdlib file is named `stdlib/<file>` in these messages. `tur mcp` and `tur check --json` keep
 the old shape: they are not publishing for a document, so the entries keep
 their own coordinates.
 
@@ -108,5 +119,6 @@ Pinned by `tests/lsp/cross-file-diagnostics.py` (ctest
 string with the prefix and related location, a sibling import's error on the
 module name, a load-of-a-load and an import-of-an-import on the document's
 own form with `(via ...)` in the message, an auto-loaded stdlib macro's error
-on the call, a clean explicit stdlib load with no diagnostics, and an
+on the call, the stdlib's own error (a broken copy via `TUR_STDLIB_DIR`) on the
+first line with the explanation, a clean explicit stdlib load with no diagnostics, and an
 own-file error stays where it is (the control).

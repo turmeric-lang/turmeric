@@ -57,7 +57,10 @@ Behaviours worth knowing about:
   `load` / `import` that leads to it, with `(via mid.tur)` in the message.
   An error inside a macro's expansion is drawn on the macro call you wrote,
   with `(expanding map-get)` in the message -- even when the macro lives in
-  the auto-loaded stdlib, which no line of the document names.
+  the auto-loaded stdlib, which no line of the document names. An error inside
+  the stdlib itself (a stdlib bug, or a stdlib that does not match the
+  compiler) marks the document's first line and says it is the standard
+  library's, not yours.
   This is clangd's model for errors in an included header: each document's
   analysis publishes only under that document's URI, so two open documents
   never overwrite each other's diagnostics.

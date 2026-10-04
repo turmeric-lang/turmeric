@@ -393,6 +393,16 @@ static bool relocate_foreign_diag(void *ctx, const char *foreign_path,
         *col_start0 = cs;
         *col_end0 = ce;
         *anchored = true;
+    } else {
+        /* No form here names the file.  Mark the whole first line rather
+         * than one character, so a diagnostic the document can only carry
+         * at the top (an error inside the auto-loaded stdlib) is seen. */
+        size_t n = 0;
+        while (n < doc->text_len && doc->text[n] != '\n' && doc->text[n] != '\r')
+            n++;
+        *line0 = 0;
+        *col_start0 = 0;
+        *col_end0 = n > 0 ? (uint32_t)n : 1;
     }
     /* `load` paths are recorded as written (cwd-relative), so resolve before
      * building a URI; a path that no longer resolves gets no related

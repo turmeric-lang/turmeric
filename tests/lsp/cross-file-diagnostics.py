@@ -53,10 +53,10 @@ def find_tur():
 TUR = find_tur()
 
 
-def session(path, text, cwd):
+def session(path, text, cwd, env_extra=None):
     """Open `text` as `path` with the server started in `cwd`; return the last
     published diagnostic set, or None when nothing was published."""
-    env = dict(os.environ, TUR_NO_AUTO_SPICE="1")
+    env = dict(os.environ, TUR_NO_AUTO_SPICE="1", **(env_extra or {}))
     p = subprocess.Popen([TUR, "lsp"], stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          cwd=cwd, env=env)
@@ -228,6 +228,7 @@ try:
         report(d["range"]["start"]["line"] == 3
                and d["range"]["start"]["character"] == line.index("(map-get")
                and "(expanding map-get)" in d["message"]
+               and d["message"].startswith("in stdlib/map.tur:")
                and rel.get("uri", "").endswith("/stdlib/map.tur"),
                "macro call anchor", "range %r, message %r, related %r"
                % (d["range"]["start"], d["message"][:70],
@@ -245,6 +246,35 @@ try:
     report(last == [], "explicit stdlib load",
            "clean" if last == [] else "%r" % ([d.get("message", "")[:60]
                                                 for d in (last or [])],))
+
+    # -- an error inside the auto-loaded stdlib itself ------------------------
+    # No form in the document leads to it, so it can only sit at the top; it
+    # must cover the first line (not one character) and say it is the
+    # stdlib's, not the user's.  A copy of the stdlib with one planted error,
+    # selected by TUR_STDLIB_DIR, stands in for a stdlib bug or a mismatched
+    # install.
+    bstd = os.path.join(work, "broken-stdlib")
+    shutil.copytree(os.path.join(ROOT, "stdlib"), bstd)
+    with open(os.path.join(bstd, "option.tur"), "a") as f:
+        f.write("\n(defn __broken-probe [] : int (undefined-probe-fn 1))\n")
+    text = "(defn main [] : int 0)\n"
+    last = session(os.path.join(work, "clean.tur"), text, work,
+                   {"TUR_STDLIB_DIR": bstd}) or []
+    foreign = [d for d in last if "undefined-probe-fn" in d.get("message", "")]
+    if foreign:
+        d = foreign[0]
+        rng = d["range"]
+        report(rng["start"] == {"line": 0, "character": 0}
+               and rng["end"] == {"line": 0, "character": len(text.rstrip())}
+               and d["message"].startswith("in stdlib/option.tur:")
+               and "in the standard library, not in this file" in d["message"]
+               and d.get("relatedInformation"),
+               "stdlib's own error", "range %r, message %r"
+               % (rng, d["message"][:60]))
+    else:
+        report(False, "stdlib's own error", "nothing from option.tur (%r)"
+               % ([d.get("message", "")[:40] for d in last],))
+    shutil.rmtree(bstd, ignore_errors=True)
 
     # -- a sibling reader-macro file resolves the same way --------------------
     rm_src = os.path.join(ROOT, "tests", "fixtures", "reader-macros-use")
