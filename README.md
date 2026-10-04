@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.61.0` -- the JIT engine works on linux-aarch64, `tur emit-c` is ~15x faster on large programs, `#lang r7rs` gains SRFI 216 (SICP Prerequisites), and both HTTP servers bind a named IPv4/IPv6 interface and cap pending connections at 512 by default.
+**Latest release:** `v0.62.0` -- loop invariants graduate to always-on, `#reads` measures are checked for writes, and LSP diagnostics anchor on the document's own load, import or macro call instead of line 0.
 
 ## What
 

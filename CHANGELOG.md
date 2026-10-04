@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.62.0] -- 2026-10-03
 
 ### Added
 
@@ -11,6 +11,13 @@ All notable changes to Turmeric are documented here.
   elided where the solver proves them, and a proved invariant is a fact after
   the loop. `--enable=loop-invariants` is now a `TUR-W0063` no-op (eligible to
   age out at 0.62.0).
+- **Try Turmeric examples for all three languages.** Eleven new Examples-menu
+  entries covering Turmeric, Saffron and R7RS Scheme: pattern matching over a
+  `defdata`, Option/Result, data literals, `syntax-rules` + named let +
+  `call/cc`, `define-record-type` + `guard`, and the sweet readers.
+- **`examples/reflected-measures`** -- a judged-round scoreboard whose API
+  contracts are `^reflect` measures (Int, Bool and Float); every obligation
+  proves under `--strict-refine`.
 
 ### Changed
 
@@ -22,6 +29,12 @@ All notable changes to Turmeric are documented here.
   measures remain trusted.
 - **`reflected-measures`'s advisory `expires_at` moves to 0.64.0** -- built and
   fuzzed, waiting on a consumer.
+- **LSP diagnostics land where you can see them.** An error in a transitively
+  loaded file anchors on the document's own load/import of it (`in
+  deep.tur:1:29 (via mid.tur): ...`); an error raised inside a macro expansion
+  anchors on the outermost call (`(expanding map-get)`); an error inside the
+  stdlib itself marks the first line and says to check the stdlib dir against
+  `tur --version`. `TUR-W0039` is quiet for explicit stdlib loads.
 
 ### Fixed
 
@@ -30,6 +43,11 @@ All notable changes to Turmeric are documented here.
   returns its argument -- let `(<= (vlen v) 3)` be proved preserved and its
   check elided while `v` grew. The frozen set is now also checked against the
   elaborated loop, so the check stays and fires.
+- **Bool `^reflect` measures scale.** The DNF expansion now unit-propagates
+  before splitting, so a four-element ground list no longer overflows
+  `REFINE_MAX_CUBES` and falls to `TUR-W0372`.
+- **`tur run <file>` honours the enclosing manifest's `:experiments`**, as
+  `tur check` already did.
 
 ## [0.61.0] -- 2026-10-03
 
