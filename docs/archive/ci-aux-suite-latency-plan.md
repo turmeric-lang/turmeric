@@ -1,11 +1,12 @@
 # CI auxiliary-suite latency -- shard on Linux, thin on macOS
 
-> **Status: S1-S7 IMPLEMENTED 2026-10-01, not yet observed in CI.** All seven
-> work items are written and verified locally; the projected durations in this
-> document are still projections, because no run of the new shape has happened
-> yet. First thing to do after this merges is compare the real `ci-metrics`
-> trend against section 5.1 and section 6.3, and correct both tables plus the
-> `ci.yml` job comment to measured numbers.
+> **Status: DONE -- archived 2026-10-04.** S1-S7 landed 2026-10-01 (#1019 and
+> its predecessors) and the new shape has now been observed on `main`: macOS
+> aux **66 min -> ~16-18 min** (better than the ~27 min projected), and the
+> whole CI run **~2 h -> ~20-35 min** to green. Section 11 has the measured
+> numbers that replace the projections in sections 5.1 and 6.3. The one
+> follow-up left open (nightly rows not plotted) is filed as
+> [`docs/reported/nightly-arm64-timings-not-on-ci-metrics.md`](../reported/nightly-arm64-timings-not-on-ci-metrics.md).
 >
 > What landed: `--shard i/N` on both scripts via `tests/shard_util.py` (S1); the
 > matrix ctest timeout at 4500s (S2); `tests/ctest-parts.py` as the single source
@@ -13,8 +14,8 @@
 > `gsm1`/`gsm2` parts on Linux only (S4); `TUR_GSM_SHARD=1/4` inside the macOS
 > `aux` part and `--suite-shard` in the collector (S5);
 > `.github/workflows/nightly-arm64.yml` (S6); the stale comment numbers and a
-> `timeout-minutes: 90` on the `test` job (S7). All four open questions are
-> resolved -- see section 9.
+> `timeout-minutes` on the `test` job (S7, 90 then tightened to 60 from the
+> measurements). All four open questions are resolved -- see section 9.
 >
 > Written in response
 > to "why do the macOS auxiliary suites take 56m currently?" against
@@ -491,15 +492,15 @@ is only the outer fence. Tighten it once the real durations are in the trend.
 
 Neither is a gap in S1-S7; both are things to do once the new shape has run.
 
-- **Correct the projections to measurements.** Sections 5.1 and 6.3 and the
-  `ci.yml` job comment all carry projected durations. The `ci.yml` comment says
-  so in place and asks the next reader to fix it from the trend.
+- **Correct the projections to measurements.** **Done 2026-10-04** -- section
+  11, and the `ci.yml` job comment now quotes measured numbers.
 - **The nightly's timing rows are an artifact, not a trend series.**
   `nightly-arm64.yml` writes `timings.jsonl` and uploads it, but `ci.yml`'s
   `publish-timings` job aggregates one run of `ci.yml` and does not see another
   workflow's artifacts. Wiring the nightly into the `ci-metrics` branch is a
   separate change; until then the full-matrix arm64 durations are retrievable
-  per run but not plotted.
+  per run but not plotted. **Still open** -- filed as
+  [`nightly-arm64-timings-not-on-ci-metrics`](../reported/nightly-arm64-timings-not-on-ci-metrics.md).
 
 ### 9.2 What else was worth moving -- measured, then done
 
@@ -552,3 +553,65 @@ buys only 114s and was left alone rather than spending the review.
   there, and shrinking the cross product is a coverage decision, not a CI one.
 - **The JIT job's 60-minute budget and its macOS gating.** Separate concern,
   separate rationale already in the file.
+
+## 11. Measured outcome (2026-10-04)
+
+Measured over the 48 `main` runs on `origin/ci-metrics` since #1019 merged
+(`8bf814ae`), passing rows only, plus the job timings of two full `ci.yml` runs
+on `main` (`37175928345`, `37189530333`).
+
+### 11.1 Per-suite, against the projections
+
+| suite (leg) | before | projected | **measured median** (max) |
+| --- | --- | --- | --- |
+| `tur_generic_spec_matrix` macOS, shard 1/4 | 2050s | 512s | **458s** (882s) |
+| `tur_generic_spec_matrix` Linux, shard 1/2 | ~1709s | ~855s | **812s** (953s) |
+| `tur_generic_spec_matrix` Linux, shard 2/2 | ~1709s | ~855s | **863s** (1031s) |
+| `tur_emitted_float_conversions` Linux | ~661s | unchanged | **651s** (754s) |
+| `turi_fixture_tests` macOS, sampled 1/4 | 283s | ~71s | **67s** (157s) |
+| `turi_fixture_tests` Linux | -- | unchanged | **197s** (212s) |
+| `tur_shard_partition` Linux only | 261s (macOS) | -- | **189s** (286s) |
+| `lsp_saffron_diagnostics` / `lsp_r7rs_diagnostics` | 60s / 60s | ~1s / ~2s | **1s / 5s** |
+
+Linux "before" values are section 6.1's core-seconds over 4 cores, so they
+are approximate. Every projection held or beat its number. The `--suite-shard` tags are in the
+data as intended: the macOS matrix rows carry `shard_index=1, shard_total=4`,
+so the series reads as a new slice rather than a 4x drop.
+
+### 11.2 Job wall clock
+
+| job | before (#1010 / `main`) | projected | **measured** |
+| --- | --- | --- | --- |
+| Auxiliary suites (macos) | 57m / 66m | ~27m | **15.9m, 17.5m** |
+| Auxiliary suites (ubuntu) | 48m | ~15m | **16.4m, 16.7m** |
+| Generic spec matrix 1/2 (ubuntu) | -- | -- | **11.6m, 15.7m** |
+| Generic spec matrix 2/2 (ubuntu) | -- | -- | **15.6m, 15.8m** |
+| Float conversions (ubuntu) | -- | -- | **6.8m, 11.5m** |
+| whole `ci.yml` run to green | ~2h | -- | **~20m, ~32m** |
+
+macOS aux beat its projection by ~10 min because the follow-ups in section 9.2
+(LSP settle sleep, turi 1/4 sample, `tur_shard_partition` Linux-only) landed in
+the same window and the projection predates them.
+
+### 11.3 The queue went away too
+
+The larger effect is section 3's: macOS jobs no longer wait 40-80 min to
+start. In both sampled runs every macOS job started within ~15 min of the run,
+most within 3 (offsets include the `Classify changed paths` gate). Whether
+that is this plan's shorter macOS jobs freeing slots sooner, or the pool simply
+being less contended this week, two runs cannot say -- section 9 question 1
+found nothing repo-side to control. It is the number to re-check first if
+macOS time-to-green regresses.
+
+### 11.4 Nightly arm64
+
+Three scheduled runs (2026-10-02..04), all green, 46-61 min each. Its rows are
+uploaded as an artifact only -- see the open report linked in the header.
+
+### 11.5 The `test` job timeout
+
+Tightened 90 -> 60 minutes, as section 8 said to once the trend had the
+post-split numbers: the slowest part now measures ~18 min, so 60 is still >3x
+headroom for a cold cache or a slow runner while catching a regression of the
+#1007 kind (67 min) an hour sooner than the old 360-minute default would have.
+

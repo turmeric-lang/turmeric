@@ -31,7 +31,7 @@ name: Nightly arm64
 # exact thing this split exists to avoid.  Nor does a red run block anything:
 # this repo's standing position is that a red suite never blocks landing.
 #
-# Ref docs/upcoming/ci-aux-suite-latency-plan.md S6.
+# Ref docs/archive/ci-aux-suite-latency-plan.md S6.
 
 on:
   schedule:

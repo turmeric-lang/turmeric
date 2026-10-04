@@ -122,7 +122,7 @@ repositories**. The Free plan's 2,000 minutes/month applies only to private
 repos, and there it is billed against multipliers -- macOS 10x, Windows 2x.
 
 That multiplier is why visibility, not plan tier, is the real decision. From
-[ci-aux-suite-latency-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/ci-aux-suite-latency-plan.md),
+[ci-aux-suite-latency-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ci-aux-suite-latency-plan.md),
 the `Auxiliary suites (macos-latest)` job alone runs **56-66 minutes**. Were
 these repos private on a Free org:
 
@@ -815,5 +815,5 @@ Two consequences worth keeping in view:
   considering once the move is done -- a check that the Class A files contain
   no literal owner would keep the one-line property true -- but adding a job
   to the auxiliary suites runs against
-  [ci-aux-suite-latency-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/ci-aux-suite-latency-plan.md),
+  [ci-aux-suite-latency-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ci-aux-suite-latency-plan.md),
   which is actively trying to make that job smaller.

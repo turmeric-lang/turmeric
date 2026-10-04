@@ -27,7 +27,7 @@ jobs:
   # Docs-only gate.  A PR that touches nothing outside docs/ cannot change what
   # the compiler does, so the build-and-suite jobs below are skipped for it --
   # including their macOS legs, which wait on a small shared runner pool (see
-  # docs/upcoming/ci-aux-suite-latency-plan.md section 3).  A skipped job
+  # docs/archive/ci-aux-suite-latency-plan.md section 3).  A skipped job
   # reports "skipped", which is not a failure.
   #
   # Two outputs, because docs/ is not all inert:
@@ -109,13 +109,12 @@ jobs:
     # aux job from 18m12s to 67m28s in ONE merge (#1007, 8bb60d016).  Both are
     # RUN_SERIAL for the same reason as the r7rs pair, and together they were
     # 70% of the job.  `fconv` and `gsm1`/`gsm2` are the answer, and the leg
-    # asymmetry below is the rest of it.  PROJECTED from the pre-change
-    # measurements, not yet observed: macOS aux 66 -> ~27 min, Linux aux
-    # ~15 min with the two suites moved out.  Check them against the real trend
-    # (branch `ci-metrics`, suite-timings-2026.jsonl) once this has run a few
-    # times, and correct this comment to measured numbers then -- the "~13 min"
-    # that used to be here was measured, and went stale in two days anyway, so
-    # a number in this comment is worth only as much as its date.
+    # asymmetry below is the rest of it.  MEASURED 2026-10-04 on main: macOS
+    # aux 66 -> ~16-18 min, Linux aux ~16-17 min, gsm1/gsm2 ~12-16 min, fconv
+    # ~7-12 min (docs/archive/ci-aux-suite-latency-plan.md section 11).  The
+    # "~13 min" that used to be here was measured too, and went stale in two
+    # days, so a number in this comment is worth only as much as its date --
+    # re-check it against branch `ci-metrics` (suite-timings-2026.jsonl).
     #
     # The parts must between them run every registered test, and that is no
     # longer something to verify by hand: every pattern below comes from
@@ -131,14 +130,14 @@ jobs:
     # default, which is why a 67-minute macOS aux job passed quietly instead of
     # saying anything.  A number here is a diagnostic, not a budget.
     #
-    # 90, against a projected ~27 min for the slowest part (macOS aux) plus a
-    # cold-cache build: deliberately loose, because a timeout-minutes kill is the
-    # one outcome with NO diagnostics -- it cancels the job and leaves the
-    # `if: always()` timing uploads pending, so a run killed here tells you less
-    # than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
+    # 60, against a measured ~18 min for the slowest part (macOS aux, 2026-10-04;
+    # was 90 against a ~27 min projection): deliberately loose, because a
+    # timeout-minutes kill is the one outcome with NO diagnostics -- it cancels
+    # the job and leaves the `if: always()` timing uploads pending, so a run
+    # killed here tells you less than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
     # the tight bound and they name the suite; this is only the outer fence.
-    # Tighten it once the post-split durations are in the trend, not before.
-    timeout-minutes: 90
+    # Re-derive it from the trend, not from a projection, if the parts move.
+    timeout-minutes: 60
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
     # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
