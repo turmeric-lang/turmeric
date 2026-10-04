@@ -38,7 +38,7 @@ users already work around the gaps: spice test fixtures hand-roll their own
 
 | Phase | Theme | Breaking? | v1? | Size |
 |---|---|---|---|---|
-| **P0** | Quick wins: stdin lines, handle writes, time resolution, kill | No (additive; one bug fix) | Pre-v1 | ~1-2 days |
+| **P0** | Quick wins: stdin lines, handle writes, time resolution, kill, stderr printing | No (additive; one bug fix) | Pre-v1 | ~1-2 days |
 | **P1** | Typed errors: `IoError`, `Result`/`Option` returns, typed lists | **Yes** | Pre-v1 | ~3-4 days |
 | **P2** | Streaming and traversal: file lines, recursive walk, richer child I/O | No | Pre-v1 (should) | ~3 days |
 | **P3** | POSIX breadth: symlinks/permissions, dates, blocking sockets, signals, misc | No | Post-v1 | open-ended |
@@ -117,6 +117,27 @@ Fixture: two reads around a `sleep-ms 15` differ by >= 15 and < 1000.
 `SigKill`/`SigTerm` map (`TerminateProcess`); the rest return an error code.
 Fixture: spawn `sleep 10`, kill it, and assert `process/wait` reports a
 signaled exit.
+
+### P0.5 Print to stderr
+
+*Added 2026-10-04, found while writing `docs/guides/debugging-guide.md`.*
+The Turmeric dialect has no safe way to write to stderr. `eprintln` /
+`eprint` are named in the emitter's sink list (`emit_core.c`
+`box_reader_result_void_sink`) but are not defined, so a call is
+`unknown function or operator 'eprintln'`. The only route is
+`(load "stdlib/log.tur")` and then `log-warn-direct` / `log-error-direct`,
+which are `#fx{Unsafe IO}` (so they need an `unsafe` block) and add a
+`[WARN]` / `[ERROR]` prefix. A user who wants debug output that stays out of
+stdout has no clean option.
+
+```turmeric
+(defn eprintln [x : A] #fx{IO} : nil)   ; same overloads as println, to stderr
+(defn eprint [x : A] #fx{IO} : nil)
+```
+
+Mirror `println` / `print` exactly (the same per-type dispatch), writing to
+`stderr` and flushing. Fixture: a program printing to both streams, asserting
+each stream separately.
 
 ---
 

@@ -2619,6 +2619,16 @@ hit next; the SICP guide's "Known rough edges" section points at each.
 | [r7rs-program-file-named-with-leading-digit-fails-to-compile](r7rs-program-file-named-with-leading-digit-fails-to-compile.md) | medium | Found adding the first program to turmeric-lang/sicp-corpus: a program named `1.1.scm` (or `9lives.scm`) that imports a user library compiles to C identifiers like `1____fn_333`, and `cc` rejects them. Interpreter fine; `lives9.scm` fine; no library import fine |
 | [turmeric-module-cannot-call-a-scheme-procedure-value](turmeric-module-cannot-call-a-scheme-procedure-value.md) | medium (expressiveness) | A Turmeric module handed a Scheme procedure cannot call it: `[f]` or `[f : any]` then `(f)` is `'f' is not a function or continuation`. The prelude does the same call and compiles. Forces SRFI 18's thread start through a named-export registry |
 
+## Found writing the debugging guides (filed 2026-10-04)
+
+Both found running the commands `docs/guides/debugging-guide.md` documents,
+against `./build/tur` v0.62.0 on macOS/arm64.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [panic-location-names-the-runtime-not-the-call-site](panic-location-names-the-runtime-not-the-call-site.md) | medium (UX) | Every compiled panic says `panic at <tmp>/x_tur.c:1127` -- `__FILE__`/`__LINE__` expanded inside `tur_panic` itself (`emit_module.c:14423`), so it names the runtime, never the caller, even under `--debug`. The interpreter prints an empty `panic at`; a failed `:pre` says only `Precondition failed`; `--panic-trace` prints defer-frame pointers, not a stack. The debugging guide carries the workaround (lldb / `tur debug`) |
+| [panicking-if-branch-leaks-cc-uninitialized-warning](panicking-if-branch-leaks-cc-uninitialized-warning.md) | low | An `if` with `panic` in one branch leaves the result temp unset on that path, so `cc` prints `-Wsometimes-uninitialized` on every `tur run`/`build`. `emit_fns.c:6564` already fixes the whole-body version; the branch-level case is uncovered |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
