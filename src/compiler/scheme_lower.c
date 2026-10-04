@@ -5273,7 +5273,33 @@ static Form *define_value(SL *sl, Form *def) {
 #define STD_BINDING_PREFIX "--std--"
 static bool is_std_procedure_name(SL *sl, const Symbol *s) {
     for (size_t i = 0; i < N_RENAMES; i++) if (sl->rn_from[i] == s) return true;
+    /* An on-demand library's procedure, when the unit imports the library
+     * (mark_ondemand_imports has run): `(scheme eval)`'s `eval`. */
+    for (size_t i = 0; i < N_ONDEMAND; i++)
+        if (sl->od_from[i] == s && sl->od_lib[i] >= 0 && sl->lib_imported[sl->od_lib[i]]) return true;
     return false;
+}
+/* r7rs-redefining-eval-with-scheme-eval-fails-to-compile: which on-demand
+ * libraries the unit imports is known before any form is lowered, so the
+ * passes that decide what a program's own definitions shadow --
+ * redefinitions_to_set and note_stdlib_clashes -- see `(scheme eval)`'s
+ * `eval` as a standard name, as they see `(scheme base)`'s.  The import
+ * lowering sets the same flags again later. */
+static void mark_ondemand_set(SL *sl, const Form *set) {
+    while (set && set->tag == F_LIST && set->as.list.len >= 2 && set->as.list.items[0]->tag == F_SYM &&
+           (!strcmp(set->as.list.items[0]->as.sym->name, "only") || !strcmp(set->as.list.items[0]->as.sym->name, "except") ||
+            !strcmp(set->as.list.items[0]->as.sym->name, "prefix") || !strcmp(set->as.list.items[0]->as.sym->name, "rename")))
+        set = set->as.list.items[1];
+    int li = scheme_lib_index(set);
+    if (li >= 0 && SCHEME_LIBS[li].kind == LIB_ONDEMAND) sl->lib_imported[li] = true;
+}
+static void mark_ondemand_imports(SL *sl, Form *const *forms, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *f = forms[i];
+        if (!is_scheme_file(f) || prelude_span(f->span) || srfi_span(f->span)) continue;
+        if (head_is(f, sl->s_import))
+            for (uint32_t j = 1; j < f->as.list.len; j++) mark_ondemand_set(sl, f->as.list.items[j]);
+    }
 }
 static Form **redefinitions_to_set(SL *sl, Form **forms, uint32_t n, uint32_t *out_n) {
     TopDef *defs = NULL;
@@ -6776,6 +6802,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
         Form **copy = (Form **)arena_alloc(sl.a, (n ? n : 1) * sizeof(Form *));
         for (uint32_t i = 0; i < n; i++) copy[i] = forms[i];
         uint32_t nn = n;
+        mark_ondemand_imports(&sl, copy, n);
         forms = redefinitions_to_set(&sl, copy, n, &nn);
         n = nn;
     }

@@ -254,10 +254,6 @@ it is worth reporting.
 These are known defects, each with an open report. When one is fixed, its
 entry here goes away.
 
-- **Defining `eval` while importing `(scheme eval)`** fails to compile
-  under `tur run` with a C compiler error. Leave `(scheme eval)` out of the
-  import line (SICP does not need it).
-  [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md).
 - **`apply` with more than eight arguments** stops with `apply: more than 8
   arguments is not supported`, even for `+` or `append`. For a sum or a
   maximum over a long list, use `accumulate` (2.2.3) instead of `(apply +

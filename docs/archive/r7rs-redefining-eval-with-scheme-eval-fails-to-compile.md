@@ -52,3 +52,17 @@ rename tables, versus `(scheme base)` names.
 `docs/guides/sicp-guide.md` documents this defect in its "Rough edges" list
 (and the workaround in the chapter it affects). When this is fixed, delete
 that entry and any workaround text that only exists because of it.
+
+## Resolution (2026-10-04)
+
+The program's `eval` was not treated as a standard name it shadows, because
+which on-demand libraries a unit imports was only recorded as the import
+forms were lowered, after the passes that decide that had run. Now
+`mark_ondemand_imports` (src/compiler/scheme_lower.c) records them first, so
+`note_stdlib_clashes` respells the program's `eval` `eval--user`, and
+`redefinitions_to_set` gives it the standard `eval` as its starting value --
+`(define real-eval eval)` before the program's `(define (eval ...))` keeps
+the standard one, as with `apply`
+([r7rs-saved-standard-procedure-follows-redefinition](r7rs-saved-standard-procedure-follows-redefinition.md)).
+Pinned by `tests/fixtures/r7rs-redefine-eval-with-scheme-eval` on both back
+ends.
