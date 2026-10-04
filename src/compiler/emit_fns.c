@@ -3672,8 +3672,7 @@ static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
         gs->ctx->indent = gs->cur_ind;
         char *m = emit_value(gs->ctx, b, pl);
         indent_buf(b, gs->cur_ind);
-        if (pl->type.kind == TY_CSTR) buf_printf(b, "tur_panic(%s);\n", m);
-        else                          buf_puts(b, "tur_panic(\"(non-string panic)\");\n");
+        emit_panic_call(b, e->span, pl->type.kind == TY_CSTR ? m : "\"(non-string panic)\"");
         free(m);
         indent_buf(b, gs->cur_ind); buf_puts(b, "break;\n");
         return;
