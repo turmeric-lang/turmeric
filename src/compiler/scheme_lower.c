@@ -644,6 +644,10 @@ typedef struct SL {
     const Symbol   *s_guard, *s_parameterize, *s_delay, *s_delay_force;
     /* R7: which SCHEME_LIBS rows this unit has imported. */
     bool            lib_imported[N_SCHEME_LIBS];
+    /* Which (scheme ...) libraries the program's own import forms name,
+     * known before lowering sets lib_imported (r7rs-redefining-eval-with-
+     * scheme-eval-fails-to-compile). */
+    bool            lib_named[N_SCHEME_LIBS];
     const Symbol   *od_from[N_ONDEMAND], *od_to[N_ONDEMAND];
     int             od_lib[N_ONDEMAND];
     /* R5: the nine numeric operators -- the Scheme spelling, the binary
@@ -6396,6 +6400,16 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
          * global whether or not the program imports them, so refusing
          * would refuse programs that never imported the name.) */
         if (rn(sl, s) != s) { add_clash(sl, s); continue; }
+        /* ... and so is an on-demand library's name -- `eval` of (scheme
+         * eval) -- once the program imports that library.  rn cannot say so
+         * yet: lib_imported is set as the import is lowered, after this scan,
+         * and from then on the program's `(define (eval ...))` would be
+         * spelled onto the library's own `r7rs-eval`, two C functions of one
+         * name.  SICP 4.1 defines its own `eval`. */
+        bool od_clash = false;
+        for (size_t k = 0; k < N_ONDEMAND && !od_clash; k++)
+            od_clash = sl->od_from[k] == s && sl->od_lib[k] >= 0 && sl->lib_named[sl->od_lib[k]];
+        if (od_clash) { add_clash(sl, s); continue; }
         /* (A name Turmeric reserves for a type is rn'd by type_named_global.) */
         bool clash = false;
         for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
@@ -6604,6 +6618,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
                 set = set->as.list.items[1];
             int li = scheme_lib_index(set);
             if (li >= 0 && strcmp(SCHEME_LIBS[li].name, "base") == 0) fb_push(&sl.base_sets, sets.items[j]);
+            if (li >= 0 && head_is(f, sl.s_import)) sl.lib_named[li] = true;
         }
         free(sets.items);
     }
@@ -6692,14 +6707,25 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
          * imports first, definitions next, and the top-level expressions as
          * the body of a synthesized `main` (the top-level fold does not look
          * inside a module). */
+        /* r7rs-program-file-named-with-leading-digit-fails-to-compile: the
+         * name becomes the C prefix of every definition in the module, so it
+         * must not start with a digit -- SICP readers name files `1.1.scm`
+         * and `3.5-streams.scm`.  Such a stem is prefixed `r7rs-program-`.
+         * Only the LAST dot is the extension: `1.1.scm` is `1-1`, not `1`,
+         * which every other section's file would share. */
         const SourceFile *sf = diag_source_file(first_sp.file_id);
         char mbuf[128] = "r7rs-program";
         if (sf && sf->path) {
             const char *base = strrchr(sf->path, '/');
             base = base ? base + 1 : sf->path;
+            const char *ext = strrchr(base, '.');
+            if (!ext || ext == base) ext = base + strlen(base);
             size_t at = 0;
-            for (const char *p = base; *p && at + 1 < sizeof mbuf; p++) {
-                if (*p == '.') break;
+            if (*base >= '0' && *base <= '9') {
+                memcpy(mbuf, "r7rs-program-", 13);
+                at = 13;
+            }
+            for (const char *p = base; p < ext && at + 1 < sizeof mbuf; p++) {
                 mbuf[at++] = (*p == '-' || *p == '_' || (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
                               (*p >= '0' && *p <= '9')) ? *p : '-';
             }

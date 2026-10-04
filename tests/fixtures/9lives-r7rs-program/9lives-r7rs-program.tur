@@ -1,0 +1,9 @@
+#lang r7rs
+;; r7rs-program-file-named-with-leading-digit-fails-to-compile: a program
+;; that imports a library is wrapped in a module named after its file, and
+;; that name prefixes every C identifier in it.  A file named with a leading
+;; digit (SICP's `1.1.scm`) used to emit `9lives____fn_7` and fail in cc.
+(import (scheme base) (scheme write) (digitlib))
+(define f (lambda (x) (+ x 1)))
+(display (twice (f 1)))
+(newline)

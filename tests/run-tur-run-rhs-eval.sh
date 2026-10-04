@@ -226,4 +226,24 @@ else
   fail "bare-ident RHS: got rc=$RC out=$OUT"
 fi
 
+# ---------------------------------------------------------------------------
+# replace() of an empty string is empty.  The builtin's fill loop never ran
+# for "", so the 1-byte result was never NUL-terminated (a heap over-read;
+# docs/archive/justrun-replace-empty-input-returns-unterminated-buffer.md).
+# ---------------------------------------------------------------------------
+cat > Justfile <<'EOF'
+x := replace("", "a", "b")
+y := replace("banana", "a", "o")
+
+show:
+    @echo "x=[{{x}}] y=[{{y}}]"
+EOF
+OUT="$("$TUR" run show 2>&1)"
+RC=$?
+if [ "$RC" -eq 0 ] && grep -qF 'x=[] y=[bonono]' <<< "$OUT"; then
+  pass "replace of empty string is empty"
+else
+  fail "replace empty: got rc=$RC out=$OUT"
+fi
+
 exit $FAIL
