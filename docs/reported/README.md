@@ -44,6 +44,20 @@ while resolving them are archived too: cross-file diagnostics published under
 one URI, and sibling imports resolved from the LSP's scratch directory. See
 `docs/archive/` under their slugs.
 
+## CodeQL critical alerts (filed 2026-10-03)
+
+All 21 open `critical` CodeQL alerts were checked against `main`
+(`1a84092bb`). Neither row below is the defect CodeQL described. Both are real
+bugs found on the lines it pointed at. Every other critical alert was a false
+positive or was already mitigated (the WP3 `printf` format vetting, and the
+documented WP2 D-2 decision to run recipe bodies through the shell). The
+per-alert verdicts are in the PR that filed these rows.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [justrun-replace-empty-input-returns-unterminated-buffer](justrun-replace-empty-input-returns-unterminated-buffer.md) | low | `replace("", a, b)` in a Justfile returns a 1-byte `malloc` that is never NUL-terminated, a heap over-read (seen as `0xAA` under `MallocScribble`). One-line fix |
+| [justrun-shebang-recipe-breaks-when-tmpdir-has-a-space](justrun-shebang-recipe-breaks-when-tmpdir-has-a-space.md) | low | Shebang recipes `system()` a `$TMPDIR`-derived path, so a space gives exit 127 and shell metacharacters are interpreted. Fix: `execv` the script with no shell in between |
+
 ## Security (filed 2026-09-30)
 
 Findings from [security-audit-plan](../upcoming/security-audit-plan.md) that
