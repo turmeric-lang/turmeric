@@ -457,7 +457,7 @@ function receives a request and returns `option<:int>`:
 import tourist/middleware :refer [use!]
 import stdlib/option :refer [none-value some]
 defn auth-mw [ctx :int] :int
-  if =(req-header(ctx "x-api-key") 0)
+  if {req-header(ctx "x-api-key") = 0}
     some(status(401 text("Unauthorized")))
     none-value()
 tourist(3000 use!(auth-mw) get!("/private" (fn [ctx] text("secret"))))

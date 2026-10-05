@@ -97,9 +97,9 @@ defdata Shape
 defn area [s] :int
   match s
     (Circle r)
-    (* r r)
+    {r * r}
     (Rect w h)
-    (* w h)
+    {w * h}
 ```
 
 Pattern matching is exhaustiveness-checked. If you omit a constructor the
@@ -167,7 +167,7 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
 ```
 
 ---
@@ -259,7 +259,7 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
 
 defn main [] :int
   println(color-to-int((Red)))
@@ -301,9 +301,9 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
     (Mul l r)
-    *(eval-expr(l) eval-expr(r))
+    {eval-expr(l) * eval-expr(r)}
 
 defn main [] :int
   ; (2 + (3 * 4)) = 14
@@ -403,7 +403,7 @@ defn classify [s] :int
   match s
     (Pos n)
     when
-    >(n 100)
+    {n > 100}
     do
       println("big")
       0
@@ -711,9 +711,9 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
     (Mul l r)
-    *(eval-expr(l) eval-expr(r))
+    {eval-expr(l) * eval-expr(r)}
 
 ; Equality witness
 defgadt Equal [a b]

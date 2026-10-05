@@ -278,14 +278,14 @@ Pass a predicate `(fn [frame row-index] :int)` -- return non-zero to keep the ro
 ;; Keep rows where age >= 30
 (let [seniors (filter df (fn [f i]
                            (let [age (column-int64-at (frame-column f "age") i)]
-                             (>= age 30))))]
+                             {age >= 30})))]
   (print-frame seniors))
 ```
 
 ```sweet-exp
 let [seniors (filter df (fn [f i]
                           (let [age (column-int64-at (frame-column f "age") i)]
-                            (>= age 30))))]
+                            {age >= 30})))]
   print-frame(seniors)
 ```
 
@@ -318,8 +318,8 @@ let [uniq distinct(df list("name"))]
 (let [df2 (mutate df "grade" (type-utf8)
             (fn [f i]
               (let [s (column-float64-at (frame-column f "score") i)]
-                (if (>= s 9.0) "A"
-                (if (>= s 7.0) "B" "C")))))]
+                if {s >= 9.0} "A"
+                if {s >= 7.0} "B" "C"))))]
   (print-frame df2))
 ```
 
@@ -327,8 +327,8 @@ let [uniq distinct(df list("name"))]
 let [df2 (mutate df "grade" (type-utf8)
            (fn [f i]
              (let [s (column-float64-at (frame-column f "score") i)]
-               (if (>= s 9.0) "A"
-               (if (>= s 7.0) "B" "C")))))]
+               (if {s >= 9.0} "A"
+               (if {s >= 7.0} "B" "C")))))]
   print-frame(df2)
 ```
 

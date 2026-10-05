@@ -110,10 +110,10 @@ surrounding form decides whether it is read as a binding spec or a value.
 ```
 ```sweet-exp
 defn add [x :int y :int] :int
-  +(x y)
+  {x + y}
 ; [x :int y :int] is a param list
 let [a 1 b 2]
-  +(a b)
+  {a + b}
 ; [a 1 b 2] is a binding vector
 def v [1 2 3]
 ; [1 2 3] is a vec literal
@@ -178,12 +178,12 @@ etc.) dedupe by value:
 
 ```turmeric no-check
 #set{1 1 2}        ; => set with two elements, {1, 2}
-#set{x (+ x x) y}  ; each element expression evaluated exactly once
+#set{x {x + x} y}  ; each element expression evaluated exactly once
 ```
 ```sweet-exp
 #set{1 1 2}
 ; => set with two elements, {1, 2}
-#set{x (+ x x) y}
+#set{x {x + x} y}
 ; each element expression evaluated exactly once
 ```
 

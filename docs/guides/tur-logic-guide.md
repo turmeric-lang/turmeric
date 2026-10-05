@@ -316,7 +316,7 @@ Build a chain of goals with `conjoined`:
 ```sweet-exp
 ;; helper: (conjoin-all gs) folds a cons list of goals with conjoined
 defn conjoin-all [gs : int] : (Goal int)
-  if =(tail(gs) 0)
+  if {tail(gs) = 0}
     (:: (head gs) (Goal int))
     conjoined((:: (head gs) (Goal int)) conjoin-all(tail(gs)))
 ```
@@ -386,7 +386,7 @@ defn range-goal [t : Term lo : int hi : int] : (Goal int)
   ::
     (fn [state : Subst]
       (match logic-walk(t state)
-        (TInt v) (if and(>=(v lo) <=(v hi))
+        (TInt v) (if {{v >= lo} and {v <= hi}}
                    mreturn(state)
                    mzero())
         _        mzero()))                     ; not ground -- fail
@@ -447,7 +447,7 @@ The classic miniKanren `conde` is syntactic sugar over nested `disjoined` /
 ;; (conde [g1 g2 ...] [g3 g4 ...] ...)
 ;; each clause is a conjunction; clauses are disjoined
 defmacro conde [& clauses]
-  if =(tail(clauses) 0)
+  if {tail(clauses) = 0}
     `(conjoin-all ~(head clauses))
     `(disjoined (conjoin-all ~(head clauses))
                 (conde ~@(tail clauses)))

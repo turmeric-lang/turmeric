@@ -123,7 +123,7 @@ defn main [] :int
   let [opts (watch-opts-make 1 150 1 0 1)  ;; recursive, 150 ms debounce
         w    (watch-open-tree "src/" opts)]
     watch-opts-free(opts)
-    loop([] let([ev (watch-next w -1)] if(=(ev 0) 0 do(println(str-concat(watch-kind->cstr(watch-event-kind(ev)) " " watch-event-path(ev))) watch-event-free(ev) recur()))))
+    loop([] let([ev (watch-next w -1)] if({ev = 0} 0 do(println(str-concat(watch-kind->cstr(watch-event-kind(ev)) " " watch-event-path(ev))) watch-event-free(ev) recur()))))
     watch-close(w)
     0
 ```
@@ -277,7 +277,7 @@ import watch/debounce :refer [debounce-batch-new debounce-batch-add
 let [batch debounce-batch-new(300)]  ;; 300 ms window
   loop []
     let [ev watch-next(w 50)]       ;; 50 ms poll step
-      if not=(ev 0)
+      if {ev not= 0}
         do
           debounce-batch-add(batch ev)
           recur()

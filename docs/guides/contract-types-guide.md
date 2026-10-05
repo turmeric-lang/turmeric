@@ -75,12 +75,12 @@ value being checked, not to any name in the surrounding scope.
 (defn divide [x : int, y : int] : int
   :pre  (not= y 0)
   :post (= (* result y) x)
-  (/ x y))
+  {x / y})
 ```
 
 ```sweet-exp
 defn divide [x : int, y : int] : int :pre (not= y 0) :post (= (* result y) x)
-  (/ x y)
+  {x / y}
 ```
 
 - **`:pre`** -- checked at function entry, before any user code runs.

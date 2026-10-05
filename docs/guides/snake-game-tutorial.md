@@ -395,14 +395,14 @@ def KEY_DOWN  264
 defn update-state [^state/GameState s] : state/GameState
   let [speed 5
        new-x if(is-key-down(KEY_RIGHT)
-               +(s.snake-x speed)
+               {s.snake-x + speed}
                if(is-key-down(KEY_LEFT)
-                 -(s.snake-x speed)
+                 {s.snake-x - speed}
                  s.snake-x))
        new-y if(is-key-down(KEY_DOWN)
-               +(s.snake-y speed)
+               {s.snake-y + speed}
                if(is-key-down(KEY_UP)
-                 -(s.snake-y speed)
+                 {s.snake-y - speed}
                  s.snake-y))]
     state/GameState(new-x new-y s.snake-w s.snake-h)
 
@@ -528,10 +528,10 @@ defn draw-state [^state/GameState s]
 defn update-snake [^state/Snake snake] : state/Snake
   let [head vec-get(snake.segments 0)
        new-head (match snake.direction
-                  0 (Segment head.x (- head.y 20))
-                  1 (Segment (+ head.x 20) head.y)
-                  2 (Segment head.x (+ head.y 20))
-                  3 (Segment (- head.x 20) head.y)
+                  0 Segment(head.x {head.y - 20})
+                  1 Segment({head.x + 20} head.y)
+                  2 Segment(head.x {head.y + 20})
+                  3 Segment({head.x - 20} head.y)
                   _ head)]
     state/Snake(vec-conj(vec-rest(snake.segments) new-head) snake.direction)
 
@@ -891,12 +891,12 @@ defclass Collidable [a]
 
 definstance Collidable Segment
   collides? [self other]
-    and(={self.x other.x} ={self.y other.y})
+    {{self.x = other.x} and {self.y = other.y}}
   bounds [self]
     Rectangle(self.x self.y 20 20)
 
 defn segments-collide? [^Segment a ^Segment b] : bool
-  and(={a.x b.x} ={a.y b.y})
+  {{a.x = b.x} and {a.y = b.y}}
 
 defn snake-self-collision? [^Snake snake] : bool
   let [head vec-get(snake.segments 0)
@@ -905,10 +905,7 @@ defn snake-self-collision? [^Snake snake] : bool
 
 defn snake-wall-collision? [^Snake snake ^int width ^int height] : bool
   let [head vec-get(snake.segments 0)]
-    or(<(head.x 0)
-       >=(head.x width)
-       <(head.y 0)
-       >=(head.y height))
+    {{{{head.x < 0} or {head.x >= width}} or {head.y < 0}} or {head.y >= height}}
 
 defstruct GameState
   [snake : Snake
@@ -919,8 +916,7 @@ defn init-state [] : GameState
   GameState(Snake(vec(Segment(400 300) Segment(380 300) Segment(360 300)) 1) 800 600)
 
 defn check-collisions [^GameState state] : bool
-  or(snake-wall-collision?(state.snake state.width state.height)
-     snake-self-collision?(state.snake))
+  {snake-wall-collision?(state.snake state.width state.height) or snake-self-collision?(state.snake)}
 ```
 
 ```turmeric
@@ -1094,7 +1090,7 @@ defn random-food [^int width ^int height] : Food
 
 defn food-collision? [^Snake snake ^Food food] : bool
   let [head vec-get(snake.segments 0)]
-    and(={head.x food.x} ={head.y food.y})
+    {{head.x = food.x} and {head.y = food.y}}
 
 defstruct GameState
   [snake : Snake
@@ -1115,10 +1111,10 @@ definstance Drawable Food
 defn grow-snake [^Snake snake] : Snake
   let [head vec-get(snake.segments 0)
        new-seg (match snake.direction
-                 0 (Segment head.x (- head.y 20))
-                 1 (Segment (+ head.x 20) head.y)
-                 2 (Segment head.x (+ head.y 20))
-                 3 (Segment (- head.x 20) head.y)
+                 0 Segment(head.x {head.y - 20})
+                 1 Segment({head.x + 20} head.y)
+                 2 Segment(head.x {head.y + 20})
+                 3 Segment({head.x - 20} head.y)
                  _ head)]
     Snake(vec-conj(snake.segments new-seg) snake.direction)
 
@@ -1433,10 +1429,10 @@ defn update-snake [^state/Snake snake ^float dt] : state/Snake
   let [speed {200 * dt}
        head vec-get(snake.segments 0)
        new-head (match snake.direction
-                  0 (Segment head.x (- head.y (cast speed int)))
-                  1 (Segment (+ head.x (cast speed int)) head.y)
-                  2 (Segment head.x (+ head.y (cast speed int)))
-                  3 (Segment (- head.x (cast speed int)) head.y)
+                  0 Segment(head.x {head.y - cast(speed int)})
+                  1 Segment({head.x + cast(speed int)} head.y)
+                  2 Segment(head.x {head.y + cast(speed int)})
+                  3 Segment({head.x - cast(speed int)} head.y)
                   _ head)]
     state/Snake(vec-conj(vec-rest(snake.segments) new-head) snake.direction)
 
@@ -1584,13 +1580,13 @@ Make the snake move in a grid (20x20 pixels per cell).
 defn grid-move [^Segment seg ^int dir] : Segment
   match dir
     0
-    Segment(seg.x (- seg.y 20))
+    Segment(seg.x {seg.y - 20})
     1
-    Segment((+ seg.x 20) seg.y)
+    Segment({seg.x + 20} seg.y)
     2
-    Segment(seg.x (+ seg.y 20))
+    Segment(seg.x {seg.y + 20})
     3
-    Segment((- seg.x 20) seg.y)
+    Segment({seg.x - 20} seg.y)
     _
     seg
 

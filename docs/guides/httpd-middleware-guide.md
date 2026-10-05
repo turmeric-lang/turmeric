@@ -186,7 +186,7 @@ section for the full surface.
 ```turmeric
 (let [verify   (fn [u : cstr p : cstr] : int
                  (let [_t "_force-fat-closure"]
-                   (if (= 1 (cstr-eq-const-time u "admin"))
+                   if {1 = cstr-eq-const-time(u "admin")}
                      (cstr-eq-const-time p "s3cret")
                      0)))
       base     (fn [c : ptr<void>] : nil
@@ -200,7 +200,7 @@ section for the full surface.
 ```sweet-exp
 let [verify   (fn [u :cstr p :cstr] :int
                 (let [_t "_force-fat-closure"]
-                  (if (= 1 (cstr-eq-const-time u "admin"))
+                  (if {1 = (cstr-eq-const-time u "admin")}
                     (cstr-eq-const-time p "s3cret")
                     0)))
      base     (fn [c :ptr<void>] :nil

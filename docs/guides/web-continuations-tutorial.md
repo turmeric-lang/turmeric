@@ -370,7 +370,7 @@ expired continuations.
 defn serve-loop [max : int] : int
   let [^mut served 0]
     do
-      while or({max = 0} {served < max})
+      while {{max = 0} or {served < max}}
         do
           httpd/wait!()
           dispatch()
@@ -415,11 +415,11 @@ defn dispatch [] : int
        post? cstr-eq?(httpd/method() "POST")
        path  httpd/path()]
     cond
-      and(get? cstr-eq?(path "/"))
+      {get? and cstr-eq?(path "/")}
       start-flow()
-      and(get? cstr-eq?(path "/entries"))
+      {get? and cstr-eq?(path "/entries")}
       list-entries()
-      and(post? cstr-eq?(path "/submit"))
+      {post? and cstr-eq?(path "/submit")}
       resume-handler()
       else
       send-error(404 "Page not found.")
@@ -628,9 +628,9 @@ Three things the capture grammar dictates, stated once:
     (Some token)
       (let [path (cont-path token)
             age  (file-age-seconds path)]
-        (if (< age 0)
+        if {age < 0}
           (err "Unknown or already used link. Please start over.")
-          (if (> age (cont-ttl-seconds))
+          if {age > cont-ttl-seconds()}
             (err "That link has expired. Please start over.")
             (bytes->serial-cont (cont-from-file path)))))))
 ```
@@ -649,9 +649,9 @@ defn load-continuation [signed : cstr] : (Result serial-cont cstr)
     (Some token)
       (let [path (cont-path token)
             age  (file-age-seconds path)]
-        (if (< age 0)
+        (if {age < 0}
           (err "Unknown or already used link. Please start over.")
-          (if (> age (cont-ttl-seconds))
+          (if {age > (cont-ttl-seconds)}
             (err "That link has expired. Please start over.")
             (bytes->serial-cont (cont-from-file path))))))
 ```
