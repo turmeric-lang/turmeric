@@ -1,0 +1,1 @@
+compiled-only: this is the compiled shape (a static tail call handing on the trampoline arming), at a depth an 8 MiB stack cannot hold; tests/check-r7rs-tail-calls-small-stack.sh runs it there. Under --interpret that depth costs about 1 GiB of retained continuations, and r7rs-tail-call-through-procedure-value covers the interpreter.

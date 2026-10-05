@@ -233,6 +233,16 @@ void turi_run_event_loop(TuriEnv *env);
  * fiber suspends via swapcontext. */
 bool turi_sched_step(TuriEnv *env);
 
+/* Let the other ready fibers run once: from a fiber, re-queue it and switch
+ * to the scheduler; from the main context, one turi_sched_step.  Returns
+ * false only from the main context when nothing at all could run.
+ * r7rs-srfi-18-216-sicp-plan T2: SRFI 18's green threads yield here. */
+bool turi_sched_yield(TuriEnv *env);
+
+/* Spawn a scheduler fiber applying the zero-argument closure `cl` and return
+ * its future (eval.c's eval_spawn_fiber, for natives outside eval.c). */
+TuriValue turi_spawn_fiber(TuriEnv *env, TuriValue cl);
+
 /* Run the event loop until the given future resolves or rejects. */
 TuriValue turi_await_future(TuriEnv *env, TuriFuture *f);
 

@@ -1,7 +1,9 @@
 #lang r7rs
 ;; r7rs-apply-variadic-over-eight-arguments: (apply f lst) of a standard
 ;; variadic procedure takes a list of any length -- it used to stop at eight.
-;; A program's own variadic still stops there (the open half of the report).
+;; So does a program's own variadic (the last line), since
+;; r7rs-apply-long__ spreads any variadic's fixed arguments and hands it the
+;; rest as its rest list.
 (import (scheme base) (scheme write))
 (define (iota-from n) (let loop ((i n) (acc '())) (if (= i 0) acc (loop (- i 1) (cons i acc)))))
 (define l (iota-from 100))
@@ -19,4 +21,4 @@
 (write (apply + 1 2 (iota-from 10))) (newline)
 (write (apply + (iota-from 100000))) (newline)
 (define (sum . xs) (apply + xs))
-(write (guard (e (#t (error-object-message e))) (apply sum (iota-from 20)))) (newline)
+(write (apply sum (iota-from 20))) (newline)

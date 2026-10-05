@@ -1324,6 +1324,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_srfi_prune PROPERTIES TIMEOUT 720)
+# r7rs-tail-call-through-static-call-not-proper: tail calls through
+# procedure values stay proper in a plain 8 MiB stack (the deep-stack
+# thread off), where the program's 1 GiB stack cannot hide a regression.
+add_test(
+  NAME tur_r7rs_tail_calls_small_stack
+  COMMAND bash tests/check-r7rs-tail-calls-small-stack.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_tail_calls_small_stack PROPERTIES TIMEOUT 720)
 # r7rs-programs-compile-slowly: a `#lang r7rs` program builds as two units,
 # the prelude compiled once and cached.  No piece of state may be defined in
 # both, and two programs must link the same cached library object.

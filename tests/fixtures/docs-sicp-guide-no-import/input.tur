@@ -1,0 +1,6 @@
+#lang r7rs
+;; docs/guides/sicp-guide.md, "The top of every file": a file with no import
+;; line gets the standard procedures, so this pasted snippet runs as is.
+;; (docs-sicp-guide-examples has the rest of the guide.)
+(define (square x) (* x x)) (display (square 5))
+(newline)
