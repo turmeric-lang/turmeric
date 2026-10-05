@@ -244,8 +244,8 @@ transaction:
     (while (< i n)
       (do
         (let [d (db-ref db i)]
-          (when (and (= (datum-entity d) entity)
-                     (cstr-eq? (datum-attr d) (cstr->int ":db/retract"))
+          (when (and (and (= (datum-entity d) entity)
+                     (cstr-eq? (datum-attr d) (cstr->int ":db/retract")))
                      (<= (datum-tx d) as-of-tx))
             (match (datum-value d)
               (StrVal s) (when (cstr-eq? s (cstr->int attr)) (set! found true))

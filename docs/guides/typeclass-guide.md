@@ -115,7 +115,7 @@ For example, two `Option` values are equal if their wrapped values are equal:
 (definstance Eq [Option]
   [(Eq A)]
   (eq? [x y]
-    (if {.is-some(x) = .is-some(y)}
+    (if (= (.is-some x) (.is-some y))
       (if (.is-some x) (eq? (.value x) (.value y)) true)
       false)))
 ```

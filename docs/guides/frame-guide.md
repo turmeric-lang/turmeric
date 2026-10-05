@@ -318,8 +318,8 @@ let [uniq distinct(df list("name"))]
 (let [df2 (mutate df "grade" (type-utf8)
             (fn [f i]
               (let [s (column-float64-at (frame-column f "score") i)]
-                if {s >= 9.0} "A"
-                if {s >= 7.0} "B" "C"))))]
+                (if (>= s 9.0) "A"
+                (if (>= s 7.0) "B" "C")))))]
   (print-frame df2))
 ```
 
@@ -327,8 +327,8 @@ let [uniq distinct(df list("name"))]
 let [df2 (mutate df "grade" (type-utf8)
            (fn [f i]
              (let [s (column-float64-at (frame-column f "score") i)]
-               (if {s >= 9.0} "A"
-               (if {s >= 7.0} "B" "C")))))]
+               (if (>= s 9.0) "A"
+               (if (>= s 7.0) "B" "C")))))]
   print-frame(df2)
 ```
 

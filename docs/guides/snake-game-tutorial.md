@@ -858,9 +858,9 @@ Add wall and self-collision detection using pattern matching.
 
 (defn snake-wall-collision? [^Snake snake ^int width ^int height] : bool
   (let [head (vec-get snake.segments 0)]
-    (or (< head.x 0)
-        (>= head.x width)
-        (< head.y 0)
+    (or (or (or (< head.x 0)
+        (>= head.x width))
+        (< head.y 0))
         (>= head.y height))))
 
 ;; Update GameState to include bounds

@@ -129,7 +129,7 @@ reset
   (fn []
     {1 +
        shift(k
-         fiber-suspend(fetch(2) k))}
+         fiber-suspend(fetch(2) k))})
 
 ;; The scheduler later resumes k with the result of fetch(2)
 ```

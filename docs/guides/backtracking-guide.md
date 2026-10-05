@@ -73,9 +73,9 @@ defn ints-upto [lo :int hi :int] :int
 ;; Return all even numbers from 1..10
 let [evens mbind(ints-upto(1 11)
                  (fn [x]
-                   if {mod(x 2) = 0}
+                   (if {mod(x 2) = 0}
                      mreturn(x)
-                     mzero)))]
+                     mzero())))]
   bt-print(run-backtrack(evens))
 
 ; Outputs:

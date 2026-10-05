@@ -628,9 +628,9 @@ Three things the capture grammar dictates, stated once:
     (Some token)
       (let [path (cont-path token)
             age  (file-age-seconds path)]
-        if {age < 0}
+        (if (< age 0)
           (err "Unknown or already used link. Please start over.")
-          if {age > cont-ttl-seconds()}
+          (if (> age (cont-ttl-seconds))
             (err "That link has expired. Please start over.")
             (bytes->serial-cont (cont-from-file path)))))))
 ```
