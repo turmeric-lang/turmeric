@@ -1,5 +1,7 @@
 # An `if` branch that panics puts a C compiler warning on the user's stderr
 
+**RESOLVED 2026-10-04** with fix direction 1. `emit_if_value` (`src/compiler/emit_expr.c`) assigns the merge temp its synthesized zero after a branch that tail-diverges, behind the unwind check, using the temp's recorded C type (`emit_c_zero_of`). Verified with clang: the repro warned before the change and is silent after it. Pinned by the `expected.c` snapshot of `tests/fixtures/panic-in-value-if-branch-no-cc-warning` (a panic in the then-branch and one in the else-branch).
+
 **Severity:** low (noise, but on every build of a very common shape). A
 value-returning function whose `if` has a `panic` in one branch makes `cc`
 print a `-Wsometimes-uninitialized` warning, with emitted-C line numbers,

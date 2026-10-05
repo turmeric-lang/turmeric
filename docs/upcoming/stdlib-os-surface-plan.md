@@ -1,7 +1,8 @@
 # stdlib OS surface -- the fs / io / process / time gaps a typical user hits
 
-> **Status: PROPOSED 2026-10-04.** Its three open questions were answered by
-> the author the same day; see section 7. Written in response to "is the stdlib
+> **Status: P0-P2 IMPLEMENTED 2026-10-04** (P3 open). Its three open questions
+> were answered by the author the same day; see section 7, and section 8 for
+> where the implementation departs from the text below. Written in response to "is the stdlib
 > missing fs, os, or posix-related functions that a typical user would expect
 > to see?" The answer was yes; this is the plan, ordered quick wins and pre-v1
 > work first.
@@ -324,3 +325,61 @@ Ordered by expected demand. None is started before P0-P2 land.
 3. **2026-10-04 -- this plan stays in `docs/upcoming/`**, not
    `docs/upcoming/v1/`. P0 and P1 are still the intended pre-v1 work; P2 may
    slip past v1 if the track needs the time.
+
+## 8. Implementation notes (P0-P2, 2026-10-04)
+
+Landed as three commits on one branch (P0, P1, P2). Where the code departs
+from the sections above, and why:
+
+- **P0.5 `eprintln` / `eprint` are builtins** sharing `println`'s
+  `BS_PRINTLN_*` shapes, with the destination carried in the spec's `c_op`
+  (`builtin_print_stmt` in `src/compiler/builtins.c` spells the C for both
+  emitters; the interpreter honours it too). There was no compiled `print` to
+  mirror -- `print` is unknown outside the docstring table -- so `eprint` is
+  `eprintln` without the newline.
+- **P0.3** the new clocks live in the `time` module as `now-ms` /
+  `monotonic-ns`, so they read `time/now-ms` / `time/monotonic-ns` under a
+  plain `(import time)`.
+- **P0.4** adds `process/child-pid` (a borrow of a `ChildHandle`) -- without it
+  a spawned child's pid was unreachable for `process/kill`.
+- **P1.2 retyped more than the table lists**, on the same reasoning:
+  `file-close` (`(Result nil IoError)`, where buffered write errors surface),
+  `file-write-str`, `process/spawn` (`(Result ChildHandle IoError)`; a missing
+  program is `ENOENT` from spawn via a close-on-exec pipe, not a child exiting
+  127), `process/exec` (returns the `IoError`; it only returns on failure),
+  `process/kill`, and `fs/glob` (a `Result`, not an empty list for a missing
+  directory). `FileHandle` became a linear `defopaque` over the `FILE*`: a
+  struct payload is boxed inside a `Result`, an opaque rides it as one word.
+  `fs/read-text` now reads pipes rather than refusing them.
+- **P1.3** `fs/glob-free` is deprecated in favour of `fs/paths-free`, which
+  frees any `(Vec cstr)` of owned strings the module returns.
+- **P1.4** the duplicates keep their bodies during the deprecation window
+  (rather than becoming wrappers) so their observable behaviour is unchanged
+  until removal; each is `^deprecated` with its replacement named.
+- **The interpreter** overrides the int-encoded internal helpers
+  (`process/spawn-raw`, `process/wait-raw`, `process/child-of-raw`) that the
+  typed wrappers sit on, so `--interpret` keeps spawn/wait parity.
+- **P2.1** `file-read-line` nests `(Ok (Some s))` in Turmeric over a private
+  helper, because inline-C builders cannot produce `(Result (Option T) E)`
+  (`docs/reported/inline-c-builders-cannot-nest-option-in-result.md`).
+- **P2.2** adds `fs/read-dir` (sorted names) and `fs/path-join`, which the walk
+  is built from; the walk is self-recursive because a forward reference to a
+  `(Result nil E)` function trips TUR-E0012, and `(Ok nil)` cannot be written
+  in Turmeric (`io-error/ok-unit` stands in;
+  `docs/reported/ok-nil-unconstructible-in-turmeric.md`).
+- **P2.3** the struct fields are `out` / `err` / `input`, not `stdout` /
+  `stderr` / `stdin`: a field takes its C name verbatim, and MinGW defines
+  `stdin` as an object-like macro. `process/output` is POSIX-only for now
+  (`ENOSYS` on Windows).
+- **P1.5 spices migration: nothing to migrate.** Checked against
+  turmeric-spices `64c8c606` (2026-10-04): no spice loads or imports
+  `stdlib/fs.tur`, `io.tur`, `process.tur` or `env.tur`, and no spice calls a
+  retyped or deprecated name. Every `read-file` / `write-file` /
+  `file-exists?` hit the estimate above counted is a spice-local definition
+  (template fixtures, watch / notebook / plot / plutovg tests), which the
+  stdlib names never shadow because those modules are not auto-loaded. No
+  spice defines `eprintln` / `eprint`. The template, watch, notebook, plot
+  and plutovg shards pass under this branch's compiler
+  (`scripts/run-shard.sh`). Swapping those local helpers for `fs/read-text`
+  et al. is optional cleanup, and can only land after this branch merges
+  (spices CI builds against turmeric `main`).

@@ -65,7 +65,7 @@ Each has a report with a repro. The first blocks SICP 4.1 as printed.
 | Report | Effect on a SICP reader |
 |---|---|
 | [r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md) | `(define apply-in-underlying-scheme apply)` then `(define (apply ...))`: compiled hangs, interpreted `unbound variable: apply--user` |
-| [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../reported/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md) | the evaluator's `eval` plus `(import (scheme eval))`: C compile error |
+| [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md) | the evaluator's `eval` plus `(import (scheme eval))`: C compile error |
 | [r7rs-apply-variadic-over-eight-arguments](../reported/r7rs-apply-variadic-over-eight-arguments.md) | `(apply + long-list)` panics |
 | [r7rs-deep-recursion-segfaults-silently](../archive/r7rs-deep-recursion-segfaults-silently.md) | a 1e6-deep linear recursive process exits 139 with no output, compiled |
 | [turmeric-module-cannot-call-a-scheme-procedure-value](../reported/turmeric-module-cannot-call-a-scheme-procedure-value.md) | not reader-facing; shapes D1 below |
@@ -304,6 +304,6 @@ them.
    [turmeric-lang/sicp-corpus](https://github.com/turmeric-lang/sicp-corpus),
    public, CC BY-SA 4.0, with `run.sh`, CI, `(corpus prelude)` standing in
    for SRFI 216, and section 1.1. Adding 1.1 found
-   [r7rs-program-file-named-with-leading-digit-fails-to-compile](../reported/r7rs-program-file-named-with-leading-digit-fails-to-compile.md),
+   [r7rs-program-file-named-with-leading-digit-fails-to-compile](../archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md),
    which is why its files are named `sec-<section>.scm`.
 5. ~~Name for the extras library~~ **Decided 2026-10-03:** `(sicp extras)`.

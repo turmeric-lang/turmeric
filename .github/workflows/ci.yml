@@ -23,6 +23,21 @@ on:
 permissions:
   contents: read
 
+# Cancel a PR's superseded run.  Without this every push to a PR left its
+# previous run holding runner slots to the end, and the account's concurrent-job
+# limit is shared by every run: on 2026-10-04, 14 overlapping runs between 17:34
+# and 19:08 queued even ubuntu jobs for 20-60 min while the jobs themselves ran
+# at their usual length.  Superseded runs were being cancelled by hand.
+#
+# PR runs group by PR number, so a new push cancels the old run.  `main` runs
+# get a group of their own (the run id), so they are NEVER cancelled or
+# serialized: every merge is tested on its own, and its `publish-timings` rows
+# reach ci-metrics.  (A shared `main` group would also silently drop queued
+# runs -- GitHub keeps only the newest pending run per group.)
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
   # Docs-only gate.  A PR that touches nothing outside docs/ cannot change what
   # the compiler does, so the build-and-suite jobs below are skipped for it --

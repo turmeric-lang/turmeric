@@ -1,0 +1,68 @@
+;; stdlib-os-surface-plan P1: the fs / env / process surface reports failure
+;; through (Result T IoError) and hands back typed (Vec cstr) lists.
+(load "stdlib/fs.tur")
+(load "stdlib/env.tur")
+(load "stdlib/process.tur")
+
+(defn scratch [name : cstr] : cstr
+  ```c
+  /* Run-time scratch dir (see io-stdlib-roundtrip for why not "/tmp").
+   * A fresh buffer per call: the program holds several paths at once. */
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  size_t cap = strlen(d) + strlen(name) + 48;
+  char *buf = (char *)malloc(cap);
+  snprintf(buf, cap, "%s/tur-fs-typed-%d/%s", d, (int)getpid(), name);
+  return buf;
+  ```)
+
+(defn unit [label : cstr r : (Result nil IoError)] : int
+  (match r
+    (Ok _) (do (println label) 0)
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn main [] : int
+  (unit "mkdirp" (fs/mkdirp (scratch "a/b")))
+  ;; mkdirp on an existing tree is still Ok; mkdir is EEXIST
+  (unit "mkdirp again" (fs/mkdirp (scratch "a/b")))
+  (match (fs/mkdir (scratch "a"))
+    (Ok _) (println "mkdir existing?")
+    (Err e) (println (io-error/exists? e)))
+  (unit "write" (fs/write-text (scratch "a/one.txt") "12345"))
+  (unit "copy" (fs/copy (scratch "a/one.txt") (scratch "a/two.txt")))
+  (unit "rename" (fs/rename (scratch "a/two.txt") (scratch "a/three.txt")))
+  (match (fs/stat (scratch "a/three.txt"))
+    (Ok s) (do (println (fs/stat-size s)) (fs/stat-free s))
+    (Err e) (println (io-error/message e)))
+  (match (fs/stat (scratch "a/missing"))
+    (Ok s) (fs/stat-free s)
+    (Err e) (do (println (io-error/not-found? e))
+                (println (io-error/permission? e))
+                (println (= (io-error/code e) (io-error/code (io-error/of-code (io-error/code e)))))))
+  (match (fs/glob (scratch "a") "*.txt")
+    (Ok v) (do (println (vec-len v)) (fs/paths-free v))
+    (Err e) (println (io-error/message e)))
+  (match (fs/glob (scratch "nope") "*")
+    (Ok v) (fs/paths-free v)
+    (Err e) (println (io-error/not-found? e)))
+  (match (fs/rmdir (scratch "a"))
+    (Ok _) (println "rmdir non-empty?")
+    (Err e) (println "rmdir non-empty refused"))
+  (unit "rm" (fs/rm (scratch "a/one.txt")))
+  (unit "rm" (fs/rm (scratch "a/three.txt")))
+  (unit "rmdir" (fs/rmdir (scratch "a/b")))
+  (unit "rmdir" (fs/rmdir (scratch "a")))
+  (unit "rmdir" (fs/rmdir (scratch "")))
+  (let [env (env/all)]
+    (println (> (vec-len env) 0))
+    (env/all-free env))
+  (match (process/capture "printf" "%s|%s" "it's" "a b")
+    (Ok out) (println out)
+    (Err e) (println (io-error/message e)))
+  (match (process/chdir (scratch "not-there"))
+    (Ok _) (println "chdir?")
+    (Err e) (println (io-error/not-found? e)))
+  (match (process/cwd)
+    (Ok d) (println "cwd ok")
+    (Err e) (println (io-error/message e)))
+  0)

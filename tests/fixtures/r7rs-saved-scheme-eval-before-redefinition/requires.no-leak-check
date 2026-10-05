@@ -1,0 +1,1 @@
+Imports (scheme eval), which links the ASan-instrumented libturi into the compiled program; the embedded R7RS evaluator (src/turi/r7rs_embed.c) is process-lifetime and never freed, like the interpreter's closures (see CLAUDE.md leak policy).

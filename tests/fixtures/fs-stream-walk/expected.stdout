@@ -1,0 +1,23 @@
+4
+alpha
+beta
+
+gamma
+alpha
+beta
+
+gamma
+<eof>
+4
+-- walk
+t/a
+t/a/y.txt
+t/b
+t/b/deep
+t/b/deep/x.txt
+t/lines.txt
+-- walk-fn
+t/a
+t/b
+t/b/deep
+true

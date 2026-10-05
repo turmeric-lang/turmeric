@@ -263,7 +263,7 @@ static const char *const BUILTIN_NAMES[] = {
     "import", "export", "extern-c", "extern", "ns",
     "true", "false", "nil", "nil-value",
     "cons", "car", "cdr", "head", "tail",
-    "println", "print", "format",
+    "println", "print", "eprintln", "eprint", "format",
     /* Surface spellings only. `builtins.c` maps these to C operators for
      * codegen (`mod` -> `%`, `=` -> `==`, `not=` -> `!=`); completing the C
      * spelling offers the user an operator the compiler rejects. */

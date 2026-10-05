@@ -9731,6 +9731,7 @@ static int64_t deep_hypanic(int64_t n) {
         if ((n) == (INT64_C(0))) {
             tur_panic_at("input.tur", 9, "boom");
             if (tur_panicking) return ((int64_t)0);
+            __t174 = ((int64_t)0);
         } else {
             int64_t __ps_175 = (deep_hypanic((n) - (INT64_C(1))));
             if (tur_panicking) return ((int64_t)0);

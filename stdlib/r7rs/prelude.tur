@@ -1751,6 +1751,46 @@
     (r7rs-list-tail (r7rs-values-items__ v) i)
     (if (= i 0) (r7rs-list v) (r7rs-list))))
 
+;;; r7rs-apply-std-many__ -- (apply f l) past the dynamic call's eight
+;;; arguments, for the standard variadic procedures: each is computed from the
+;;; list itself, the way its own body computes it from its rest chain, so
+;;; `(apply + lst)` and `(apply append lists)` take a list of any length
+;;; (r7rs-apply-variadic-over-eight-arguments).  The folds are self tail calls,
+;;; so a million-element list costs no stack.  Any other procedure -- a
+;;; program's own `(define (f . xs) ...)` among them -- still stops at eight.
+(defn r7rs-append-list__ [l] : any
+  (if (r7rs-null? l)
+    r7rs-null-value__
+    (if (r7rs-null? (r7rs-cdr l))
+      (r7rs-car l)
+      (r7rs-append2__ (r7rs-car l) (r7rs-append-list__ (r7rs-cdr l))))))
+(defn r7rs-string-append-list-go__ [l out : (Vec int)] : (Vec int)
+  (if (r7rs-null? l)
+    out
+    (let [v (r7rs-cps__ (r7rs-car l))]
+      (r7rs-cps-range-go__ v 0 (vec-len v) out)
+      (r7rs-string-append-list-go__ (r7rs-cdr l) out))))
+(defn r7rs-apply-std-many__ [f l] : any
+  (if (r7rs-eqv? f r7rs-+) (r7rs-fold-num__ r7rs-add2__ l (:: 0 any))
+    (if (r7rs-eqv? f r7rs-*) (r7rs-fold-num__ r7rs-mul2__ l (:: 1 any))
+      (if (r7rs-eqv? f r7rs--) (r7rs-fold-num__ r7rs-sub2__ (r7rs-cdr l) (r7rs-car l))
+        (if (r7rs-eqv? f r7rs-/) (r7rs-fold-num__ r7rs-div2__ (r7rs-cdr l) (r7rs-car l))
+          (if (r7rs-eqv? f r7rs-max)
+            (r7rs-contagion__ (r7rs-fold-num__ r7rs-max2__ (r7rs-cdr l) (r7rs-car l)) l)
+            (if (r7rs-eqv? f r7rs-min)
+              (r7rs-contagion__ (r7rs-fold-num__ r7rs-min2__ (r7rs-cdr l) (r7rs-car l)) l)
+              (if (r7rs-eqv? f r7rs-=) (:: (r7rs-chain-cmp__ r7rs-numeq2__ (r7rs-car l) (r7rs-cdr l)) any)
+                (if (r7rs-eqv? f r7rs-<) (:: (r7rs-chain-cmp__ r7rs-lt2__ (r7rs-car l) (r7rs-cdr l)) any)
+                  (if (r7rs-eqv? f r7rs->) (:: (r7rs-chain-cmp__ r7rs-gt2__ (r7rs-car l) (r7rs-cdr l)) any)
+                    (if (r7rs-eqv? f r7rs-<=) (:: (r7rs-chain-cmp__ r7rs-le2__ (r7rs-car l) (r7rs-cdr l)) any)
+                      (if (r7rs-eqv? f r7rs->=) (:: (r7rs-chain-cmp__ r7rs-ge2__ (r7rs-car l) (r7rs-cdr l)) any)
+                        (if (r7rs-eqv? f r7rs-list) (r7rs-list-copy l)
+                          (if (r7rs-eqv? f r7rs-append) (r7rs-append-list__ l)
+                            (if (r7rs-eqv? f r7rs-string-append)
+                              (r7rs-mk-string__ (r7rs-string-append-list-go__ l (:: (vec-new) (Vec int))))
+                              (if (r7rs-eqv? f r7rs-vector) (:: (r7rs-list->vector l) any)
+                                (if (r7rs-eqv? f r7rs-string) (r7rs-list->string l)
+                                  (r7rs-fail-any__ "apply: more than 8 arguments is supported only for the standard variadic procedures (+, append, max, string-append, ...); pass the rest as a list"))))))))))))))))))
 ;;; r7rs-apply -- call f with the elements of l as its arguments.  Up to four:
 ;;; the compiled back end's dynamic call stops at 4 arguments (emit_dyn_call,
 ;;; the TUR_APPLYn_T table), and the prelude is compiled on both back ends,
@@ -1767,7 +1807,7 @@
                 (if (= n 6) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5))
                   (if (= n 7) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5) (r7rs-list-ref l 6))
                     (if (= n 8) (f (r7rs-list-ref l 0) (r7rs-list-ref l 1) (r7rs-list-ref l 2) (r7rs-list-ref l 3) (r7rs-list-ref l 4) (r7rs-list-ref l 5) (r7rs-list-ref l 6) (r7rs-list-ref l 7))
-                      (r7rs-fail-any__ "apply: more than 8 arguments is not supported; pass the rest as a list"))))))))))))
+                      (r7rs-apply-std-many__ f l))))))))))))
 ;;; r7rs-spread-args__ -- (a b (c d)) to (a b c d): every argument but the
 ;;; last, then the last as the tail.
 (defn r7rs-spread-args-go__ [l last] : any

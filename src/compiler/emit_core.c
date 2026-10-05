@@ -4977,27 +4977,9 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
         spec->shape == BS_PRINTLN_FLOAT32) {
         char *arg = emit_value(ctx, body, args[0]);
         indent_buf(body, ctx->indent);
-        switch (spec->shape) {
-            case BS_PRINTLN_INT:
-                buf_printf(body, "printf(\"%%lld\\n\", (long long)(%s));\n", arg);
-                break;
-            case BS_PRINTLN_FLOAT:
-                buf_printf(body, "printf(\"%%g\\n\", (double)(%s));\n", arg);
-                break;
-            case BS_PRINTLN_BOOL:
-                buf_printf(body, "puts((%s) ? \"true\" : \"false\");\n", arg);
-                break;
-            case BS_PRINTLN_CSTR:
-                buf_printf(body, "puts(%s);\n", arg);
-                break;
-            case BS_PRINTLN_UINT:
-                buf_printf(body, "printf(\"%%llu\\n\", (unsigned long long)(%s));\n", arg);
-                break;
-            case BS_PRINTLN_FLOAT32:
-                buf_printf(body, "printf(\"%%.7g\\n\", (double)(%s));\n", arg);
-                break;
-            default: break;
-        }
+        char *stmt = builtin_print_stmt(spec, spec->shape, arg);
+        buf_printf(body, "%s\n", stmt);
+        free(stmt);
         free(arg);
         return atom_nil();
     }

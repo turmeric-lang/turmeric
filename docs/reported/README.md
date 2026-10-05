@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing #1075's CI (filed 2026-10-04)
+
+Three legs timed out building two new r7rs fixtures. They were not slow
+fixtures: one of them sorts first and paid a cold prelude compile that the
+suite's warm-up should have absorbed.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md) | medium | The "program-independent" cached prelude object is not: fresh-name counters, whole-program CPS decisions and irrelevant `-I` flags reach its text, so 114 r7rs fixtures need 10 objects at 5-14 s each cold, a lambda alone forks a new one, `run.sh`'s warm-up warms the wrong variant, and the cache is never evicted. Importing a library is not the cause |
+
 ## Editor integration surfaces (filed 2026-10-03)
 
 All resolved and archived. These are the six findings from bringing
@@ -55,8 +65,8 @@ per-alert verdicts are in the PR that filed these rows.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [justrun-replace-empty-input-returns-unterminated-buffer](justrun-replace-empty-input-returns-unterminated-buffer.md) | low | `replace("", a, b)` in a Justfile returns a 1-byte `malloc` that is never NUL-terminated, a heap over-read (seen as `0xAA` under `MallocScribble`). One-line fix |
-| [justrun-shebang-recipe-breaks-when-tmpdir-has-a-space](justrun-shebang-recipe-breaks-when-tmpdir-has-a-space.md) | low | Shebang recipes `system()` a `$TMPDIR`-derived path, so a space gives exit 127 and shell metacharacters are interpreted. Fix: `execv` the script with no shell in between |
+| ~~[justrun-replace-empty-input-returns-unterminated-buffer](../archive/justrun-replace-empty-input-returns-unterminated-buffer.md)~~ | low | **RESOLVED 2026-10-04** (archived): the NUL is written before the fill loop; `tests/run-tur-run-rhs-eval.sh` pins it.  Original row: `replace("", a, b)` in a Justfile returns a 1-byte `malloc` that is never NUL-terminated, a heap over-read (seen as `0xAA` under `MallocScribble`). One-line fix |
+| ~~[justrun-shebang-recipe-breaks-when-tmpdir-has-a-space](../archive/justrun-shebang-recipe-breaks-when-tmpdir-has-a-space.md)~~ | low | **RESOLVED 2026-10-04** (archived): the script is `fork`+`execv`'d with no shell; `tests/run-security-driver.sh` case 13 pins it.  Original row: Shebang recipes `system()` a `$TMPDIR`-derived path, so a space gives exit 127 and shell metacharacters are interpreted. Fix: `execv` the script with no shell in between |
 
 ## Security (filed 2026-09-30)
 
@@ -2615,10 +2625,10 @@ hit next; the SICP guide's "Known rough edges" section points at each.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md)~~ | high (blocks SICP 4.1) | **RESOLVED 2026-10-04** (archived): an eager reference from a top-level form ahead of the program's redefinition means the standard procedure; SICP 4.1's evaluator runs as written on both back ends.  Original row: `(define saved apply)` then `(define (apply ...))`: compiled, `saved` *is* the new `apply` (`eq?` is `#t`), so the metacircular evaluator loops forever; interpreted, `unbound variable: apply--user`. Same for `square`. The `<name>--user` respelling (`scheme_lower.c:1200-1235`) reaches references that run before the redefinition |
-| [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md) | medium | `(define (eval e env) ...)` with `(scheme eval)` imported: `cc` rejects the unit, `redefinition of 'r7rs_hyeval'`. Interpreter fine; compiled fine without the import |
-| [r7rs-apply-variadic-over-eight-arguments](r7rs-apply-variadic-over-eight-arguments.md) | medium | `(apply + (list 1 ... 10))` panics on both back ends. The eight-argument ceiling meant for fixed-arity callees (archived r7rs-apply-more-than-four-arguments) is applied to variadic ones too; `r7rs-apply-list__` never checks |
+| ~~[r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md)~~ | medium | **RESOLVED 2026-10-04** (archived): an on-demand library's name the program imports and defines is respelled `--user`; `r7rs-program-redefines-scheme-eval` pins it.  Original row: `(define (eval e env) ...)` with `(scheme eval)` imported: `cc` rejects the unit, `redefinition of 'r7rs_hyeval'`. Interpreter fine; compiled fine without the import |
+| [r7rs-apply-variadic-over-eight-arguments](r7rs-apply-variadic-over-eight-arguments.md) | low (was medium) | **Narrowed 2026-10-04:** the standard variadics (`+`, `append`, `max`, `string-append`, ...) take a list of any length on both back ends. Still open: a program's own variadic applied to more than eight.  Original: `(apply + (list 1 ... 10))` panics on both back ends. The eight-argument ceiling meant for fixed-arity callees (archived r7rs-apply-more-than-four-arguments) is applied to variadic ones too; `r7rs-apply-list__` never checks |
 | ~~[r7rs-deep-recursion-segfaults-silently](../archive/r7rs-deep-recursion-segfaults-silently.md)~~ | medium | **RESOLVED 2026-10-04** (archived): a compiled r7rs program's main runs on a 1 GiB-stack thread (a million-deep recursion prints its answer; twenty million on Linux), and an overflow past that prints `stack overflow: recursion too deep`.  Original row: Non-tail recursion 1,000,000 deep: compiled program exits 139 with no output (100,000 is fine; the interpreter does 1,000,000). No `sigaltstack` handler, so no "stack overflow" message |
-| [r7rs-program-file-named-with-leading-digit-fails-to-compile](r7rs-program-file-named-with-leading-digit-fails-to-compile.md) | medium | Found adding the first program to turmeric-lang/sicp-corpus: a program named `1.1.scm` (or `9lives.scm`) that imports a user library compiles to C identifiers like `1____fn_333`, and `cc` rejects them. Interpreter fine; `lives9.scm` fine; no library import fine |
+| ~~[r7rs-program-file-named-with-leading-digit-fails-to-compile](../archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md)~~ | medium | **RESOLVED 2026-10-04** (archived): a digit-leading stem is prefixed `r7rs-program-`; `9lives-r7rs-program` pins it.  Original row: Found adding the first program to turmeric-lang/sicp-corpus: a program named `1.1.scm` (or `9lives.scm`) that imports a user library compiles to C identifiers like `1____fn_333`, and `cc` rejects them. Interpreter fine; `lives9.scm` fine; no library import fine |
 | [turmeric-module-cannot-call-a-scheme-procedure-value](turmeric-module-cannot-call-a-scheme-procedure-value.md) | medium (expressiveness) | A Turmeric module handed a Scheme procedure cannot call it: `[f]` or `[f : any]` then `(f)` is `'f' is not a function or continuation`. The prelude does the same call and compiles. Forces SRFI 18's thread start through a named-export registry |
 
 ## Found writing the debugging guides (filed 2026-10-04)
@@ -2629,13 +2639,20 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [panic-location-names-the-runtime-not-the-call-site](panic-location-names-the-runtime-not-the-call-site.md) | medium (UX) | **Narrowed 2026-10-04:** a `(panic ...)` names its own `.tur` file and line on both back ends (`panic at boom.tur:3: ...`). Still open: contract failures say only `Precondition failed`, and `--panic-trace` prints raw frame pointers.  Original: Every compiled panic says `panic at <tmp>/x_tur.c:1127` -- `__FILE__`/`__LINE__` expanded inside `tur_panic` itself (`emit_module.c:14423`), so it names the runtime, never the caller, even under `--debug`. The interpreter prints an empty `panic at`; a failed `:pre` says only `Precondition failed`; `--panic-trace` prints defer-frame pointers, not a stack. The debugging guide carries the workaround (lldb / `tur debug`) |
-| [panicking-if-branch-leaks-cc-uninitialized-warning](panicking-if-branch-leaks-cc-uninitialized-warning.md) | low | An `if` with `panic` in one branch leaves the result temp unset on that path, so `cc` prints `-Wsometimes-uninitialized` on every `tur run`/`build`. `emit_fns.c:6564` already fixes the whole-body version; the branch-level case is uncovered |
+| ~~[panicking-if-branch-leaks-cc-uninitialized-warning](../archive/panicking-if-branch-leaks-cc-uninitialized-warning.md)~~ | low | **RESOLVED 2026-10-04** (archived): the diverging branch gives the merge temp its dead zero; `panic-in-value-if-branch-no-cc-warning` pins it.  Original row: An `if` with `panic` in one branch leaves the result temp unset on that path, so `cc` prints `-Wsometimes-uninitialized` on every `tur run`/`build`. `emit_fns.c:6564` already fixes the whole-body version; the branch-level case is uncovered |
 
 ## Found reviewing interpreter rot risk after the JIT default (filed 2026-10-04)
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [turi-ios-readiness-unverified](turi-ios-readiness-unverified.md) | medium (platform readiness) | iOS can only run the tree-walking interpreter (no JIT, no runtime dylibs), and since `TUR_JIT` defaulted ON no CI leg builds turi without the JIT. Six areas to check: `TUR_JIT` defaults ON for an iOS configure, `ucontext` fibers, spice loading via `system()`+`dlopen`, FFI limited to the shape table, inline-C bodies (only C1/MIR runs them), `process/spawn` forks. Apple SDK claims unverified. The JIT default is fixed for iOS; the `interp-nojit` CI job (per PR) and `nightly-ios.yml` (libturi cross-compile) landed 2026-10-04 to answer the rest |
+
+## Found executing stdlib-os-surface P0-P2 (filed 2026-10-04)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [ok-nil-unconstructible-in-turmeric](ok-nil-unconstructible-in-turmeric.md) | low | `(Result nil E)` is legal, but Turmeric code cannot build its ok side: `nil` in expression position is `:void`, so `(Ok nil)` is a cc error. Separately, a forward reference to a function returning `(Result nil E)` is a TUR-E0012 kind mismatch at 0:0. Worked around with `io-error/ok-unit` and a self-recursive `fs/walk-names` |
+| [inline-c-builders-cannot-nest-option-in-result](inline-c-builders-cannot-nest-option-in-result.md) | low-medium | `(Result (Option T) E)` stores the `Option` BY VALUE in the ok slot, so `tur_ok_int(tur_some_ptr(s))` from inline-C silently matches neither arm. `file-read-line` nests it in Turmeric instead |
 
 ## Filing conventions
 

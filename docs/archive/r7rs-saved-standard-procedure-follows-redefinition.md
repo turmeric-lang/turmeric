@@ -73,7 +73,7 @@ then. `saved` must hold the original procedure.
   Simplest correct rule: before the redefining `define` in source order, a
   reference means the standard procedure.
 - Pin with a fixture on both back ends covering `apply`, `eval` (see
-  [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../reported/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md)),
+  [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md)),
   and an ordinary name like `square`; then the SICP 4.1 evaluator itself as a
   corpus test.
 

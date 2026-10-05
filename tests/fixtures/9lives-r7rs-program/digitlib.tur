@@ -1,0 +1,5 @@
+#lang r7rs
+(define-library (digitlib)
+  (export twice)
+  (import (scheme base))
+  (begin (define (twice x) (* 2 x))))

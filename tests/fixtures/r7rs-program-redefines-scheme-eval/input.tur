@@ -1,0 +1,11 @@
+#lang r7rs
+;; r7rs-redefining-eval-with-scheme-eval-fails-to-compile: a program that
+;; imports (scheme eval) and defines its own `eval` (SICP 4.1) used to spell
+;; its definition onto the library's `r7rs-eval` -- two C functions of one
+;; name.  The program's `eval` is its own; `environment` is still R7RS's.
+(import (scheme base) (scheme write) (scheme eval))
+(define (eval e env) 'mine)
+(write (eval 5 0))
+(newline)
+(write (procedure? environment))
+(newline)
