@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """release_prepare.py -- bump the version and draft the release notes.
 
-The non-interactive half of the `/cut-*-release` skills, for
-`.github/workflows/release-prepare.yml`.  It does steps 0-5 of those skills
-(fold `[Unreleased]`, compute NEW, draft the CHANGELOG entry and the README
-"Latest release" line, write the version stamps) and stops: no commit, no tag,
-no deploy.  The human judgment the skill's AskUserQuestion gate used to supply
-moves into review of the PR the workflow opens.
+Steps 0-5 of the `/cut-*-release` skills, non-interactively, for
+`.github/workflows/release-cut.yml`: fold `[Unreleased]`, compute NEW, draft
+the CHANGELOG entry and the README "Latest release" line, write the version
+stamps.  It stops there: no commit, no tag, no deploy.
 
 The CHANGELOG entry and README sentence are drafted by an LLM over the Mistral
 API (OpenAI-compatible chat completions).  Models are tried in order; the first
-whose answer passes validation wins.  If every model fails -- no key, network,
-malformed output -- a rough subject-line draft is written instead and the PR
-body says so, so a release is never blocked on the API.
+whose answer passes validation wins.  Nobody reads the draft before it ships,
+so the validators are the gate: with --strict, a run where no model passes
+exits 2 having written nothing.  Without it, a rough subject-line draft is
+written instead -- a deliberate choice for a provider outage, never a silent
+fallback.
 
 Standard library only: the workflow runs this before any pip install.
 
@@ -22,11 +22,12 @@ Usage:
   --apply        write VERSION, stdlib/VERSION, wasm_glue.h, sw.js,
                  CHANGELOG.md, README.md (default: print the draft only)
   --out DIR      write new_version, pr_body.md, draft.json into DIR
+  --strict       exit 2, writing nothing, if no model produced a valid draft
   --range A..B   commit range to draft from (default vOLD..HEAD); with
                  --old, lets the drafter be evaluated against a past release
 
 Environment:
-  MISTRAL_API_KEY   API key; absent -> rough fallback draft
+  MISTRAL_API_KEY   API key; absent -> rough draft, or exit 2 with --strict
   MISTRAL_BASE_URL  default https://api.mistral.ai/v1
   RELEASE_MODELS    comma-separated model order (default: DEFAULT_MODELS)
 """
@@ -455,30 +456,26 @@ def apply(old, new, date, notes, header, entries):
 
 
 def pr_body(old, new, level, notes, commits):
-    lines = [f"Release prep for **v{new}** ({level} bump from v{old}), opened by "
-             "`release-prepare.yml`.", ""]
+    lines = [f"Release **v{new}** ({level} bump from v{old}), cut by "
+             "`release-cut.yml`. This PR is opened and merged by the workflow "
+             "once Try Turmeric has deployed; it exists because `main` takes "
+             "changes only through a pull request.", ""]
     if notes["model"]:
         lines.append(f"The CHANGELOG entry and README line were drafted by "
-                     f"`{notes['model']}` from the {len(commits)} commits below. "
-                     "**Read them as a draft**: check every claim against the "
-                     "commits, cut anything a user cannot see, and fix the voice.")
+                     f"`{notes['model']}` from the {len(commits)} commits below "
+                     "and passed the validators. Prose fixes are a follow-up "
+                     "commit to `CHANGELOG.md` (and the release body) -- they "
+                     "never need a retag.")
     else:
-        lines.append("> [!WARNING]\n> No model produced a usable draft, so the "
-                     "CHANGELOG entry is the raw commit subjects and the README "
-                     "line is a TODO. **Both need rewriting before merge.**")
+        lines.append("> [!WARNING]\n> Cut with `allow_rough_notes`: no model "
+                     "drafted the notes, so the CHANGELOG entry is the raw commit "
+                     "subjects and the README line is a TODO. Rewrite both in a "
+                     "follow-up commit.")
     if notes["attempts"]:
         lines += ["", "<details><summary>Rejected drafts and failed calls</summary>", ""]
         lines += [f"- `{m}`: {e}" for m, e in notes["attempts"]]
         lines += ["", "</details>"]
-    lines += ["", "## Before merging", "",
-              "- [ ] CHANGELOG entry is accurate, consolidated and user-facing",
-              "- [ ] README \"Latest release\" sentence names the headline change",
-              "- [ ] CI is green",
-              "", "Merging this PR changes `VERSION` on `main`, which fires "
-              "`release-deploy.yml`: Try Turmeric is built, smoke-tested and "
-              "deployed to Cloudflare, and only then is "
-              f"`v{new}` tagged -- which fires `release.yml` for the binaries.",
-              "", f"<details><summary>Commits since v{old}</summary>", ""]
+    lines += ["", f"<details><summary>Commits since v{old}</summary>", ""]
     lines += [f"- {c['sha']} {c['subject']}" for c in commits]
     lines += ["", "</details>", ""]
     return "\n".join(lines)
@@ -496,6 +493,8 @@ def main():
                     help="CHANGELOG to take style examples from")
     ap.add_argument("--models", default=os.environ.get("RELEASE_MODELS", ""))
     ap.add_argument("--date", default=datetime.date.today().isoformat())
+    ap.add_argument("--strict", action="store_true",
+                    help="exit 2, writing nothing, unless a model's draft passed")
     args = ap.parse_args()
 
     old = args.old or read("VERSION").strip()
@@ -519,7 +518,8 @@ def main():
     notes = draft_notes(models, old, new, args.bump, entries[:2], readme_line,
                         unreleased, commits)
 
-    if args.apply:
+    failed = args.strict and not notes["model"]
+    if args.apply and not failed:
         apply(old, new, args.date, notes, header, entries)
     if args.out:
         os.makedirs(args.out, exist_ok=True)
@@ -531,6 +531,12 @@ def main():
             json.dump(notes, f, indent=2)
     print(f"## [{new}] -- {args.date}\n\n{notes['changelog']}\n\n"
           f"README: {notes['readme']}\n\n(model: {notes['model']})")
+    if failed:
+        print("release_prepare: no model produced a valid draft; nothing written "
+              "(--strict).  Attempts:", file=sys.stderr)
+        for m, e in notes["attempts"]:
+            print(f"  {m}: {e}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

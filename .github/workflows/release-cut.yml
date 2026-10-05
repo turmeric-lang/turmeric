@@ -1,0 +1,296 @@
+name: "Release: cut"
+
+# One dispatch cuts a release, no human step -- docs/upcoming/ci-release-workflows-plan.md.
+#
+#   prepare     bump, draft the notes over the Mistral API, VALIDATE (a bad
+#               draft fails here), commit to the scratch branch release/vNEW
+#   deploy-web  build Try Turmeric from that commit, deploy-gate, deploy
+#   publish     open + merge the release PR, tag, dispatch release.yml
+#
+# Nothing a user or a clone can see changes before `publish`: the scratch
+# branch is the only residue of a failed run.  The deploy precedes the tag,
+# the same invariant the `/cut-*-release` skills keep, so a failed deploy never
+# strands a tag.
+#
+# No PAT.  `main` takes changes only through a PR (branch protection, 0
+# approvals), so `publish` opens one and merges it with GITHUB_TOKEN.  A tag
+# pushed with GITHUB_TOKEN triggers no workflow, but a workflow_dispatch made
+# with it does -- so `publish` dispatches release.yml at the tag ref, where its
+# `startsWith(github.ref, 'refs/tags/')` gate lets it publish.
+#
+# Requires the repo setting "Allow GitHub Actions to create and approve pull
+# requests" (for the PR), and secrets MISTRAL_API_KEY, CLOUDFLARE_API_TOKEN,
+# CLOUDFLARE_ACCOUNT_ID.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version component to bump
+        type: choice
+        options: [patch, minor, major]
+        default: minor
+      dry_run:
+        description: Draft the notes and stop -- push, deploy and publish nothing
+        type: boolean
+        default: false
+      allow_rough_notes:
+        description: >-
+          If no model produces valid notes, ship raw commit subjects instead of
+          failing (for an API outage)
+        type: boolean
+        default: false
+      models:
+        description: >-
+          Model order, comma-separated, each MODEL or MODEL@EFFORT (blank = the
+          tool's default order)
+        type: string
+        default: ""
+
+# Two overlapping cuts is the one genuinely unrecoverable mess here.
+concurrency:
+  group: release-cut
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare (${{ inputs.bump }}${{ inputs.dry_run && ', dry run' || '' }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # push the scratch branch
+    outputs:
+      new: ${{ steps.draft.outputs.new }}
+      sha: ${{ steps.commit.outputs.sha }}
+      base: ${{ steps.pre.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # Full history and tags: the draft reads `git log vOLD..HEAD`.
+          fetch-depth: 0
+
+      - name: Preconditions
+        id: pre
+        run: |
+          OLD=$(cat VERSION)
+          LAST=$(git describe --tags --abbrev=0 --match 'v*')
+          echo "VERSION=$OLD  last tag=$LAST  main=$(git rev-parse HEAD)"
+          if [ "$LAST" != "v$OLD" ]; then
+            echo "::error::VERSION ($OLD) does not match the latest tag ($LAST) -- a previous cut did not finish"
+            exit 1
+          fi
+          stale=$(git ls-remote --heads origin 'release/v*' | awk '{print $2}')
+          if [ -n "$stale" ]; then
+            echo "::warning::leftover scratch branch(es) from an earlier cut: $stale"
+          fi
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version + draft release notes
+        id: draft
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          RELEASE_MODELS: ${{ inputs.models }}
+        run: |
+          # Not `inputs.x && '' || '--strict'`: '' is falsy in an expression,
+          # so that always yields --strict.
+          if [ "${{ inputs.allow_rough_notes }}" = true ]; then STRICT=; else STRICT=--strict; fi
+          python3 tools/release_prepare.py --bump "${{ inputs.bump }}" \
+            --apply $STRICT --out "$RUNNER_TEMP/release" | tee "$RUNNER_TEMP/draft.md"
+          NEW=$(cat "$RUNNER_TEMP/release/new_version")
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          {
+            echo "## v$NEW -- drafted release notes"
+            echo
+            echo '```markdown'
+            cat "$RUNNER_TEMP/draft.md"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the draft
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-draft
+          path: ${{ runner.temp }}/release
+          if-no-files-found: ignore
+
+      - name: Commit to the scratch branch
+        id: commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEW: ${{ steps.draft.outputs.new }}
+        run: |
+          BRANCH="release/v$NEW"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$NEW" >/dev/null; then
+            echo "::error::tag v$NEW already exists"
+            exit 1
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git add VERSION stdlib/VERSION src/web/wasm_glue.h web/public/sw.js CHANGELOG.md README.md
+          SUMMARY=$(sed -n 's/^\*\*Latest release:\*\* `v[^`]*` -- //p' README.md)
+          git commit -m "chore: release v$NEW" -m "$SUMMARY"
+          # --force: a scratch branch left by a failed run of THIS version is
+          # stale by definition; the run that made it never published.
+          git push --force origin "$BRANCH"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  deploy-web:
+    name: Build, gate and deploy Try Turmeric
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      # The deploy insists on spices (tools/check-pack-spices.py, the same
+      # check `just deploy-web` runs): genspices.py degrades to zero spice
+      # pages without the sibling checkout, which is fine for CI and wrong for
+      # the site.  Unpinned for the reason recorded at the same clone in ci.yml.
+      - name: Check out turmeric-spices (sibling)
+        run: |
+          git clone --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
+            ../turmeric-spices
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev
+
+      - name: Set up Python (for gendocs)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Python doc deps (markdown)
+        run: python3 -m pip install --require-hashes -r tools/requirements.txt
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
+        with:
+          # Keep in step with ci.yml's web-smoke job.
+          version: 6.0.10
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build native tur (Release; needed for docs)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build -j --target tur
+
+      - name: Generate docs (writes web/public/doc-names.json + docs pack)
+        run: ./build/tur run docs
+
+      - name: The docs pack carries the spices
+        run: python3 tools/check-pack-spices.py web/public/docs-pack/
+
+      - name: Configure + build WASM
+        run: |
+          cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build-wasm -j --target tur_wasm
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      # BLOCKING: a failure here ends the run before the deploy.
+      - name: Deploy-gate smoke test
+        working-directory: web
+        timeout-minutes: 5
+        run: npx playwright test deploy-gate.spec.js --project=desktop
+
+      - name: Build the web bundle
+        working-directory: web
+        run: npm run build
+
+      # `npm run deploy` minus its own rebuild.  The Cloudflare vite plugin
+      # writes the deployable config to dist/<worker name, '-' -> '_'>/.
+      - name: Deploy to Cloudflare
+        working-directory: web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config dist/try_turmeric/wrangler.json
+
+  publish:
+    name: Merge, tag v${{ needs.prepare.outputs.new }}, dispatch release.yml
+    needs: [prepare, deploy-web]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # merge, tag, delete the scratch branch
+      pull-requests: write   # open the release PR
+      actions: write         # dispatch release.yml
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NEW: ${{ needs.prepare.outputs.new }}
+      SHA: ${{ needs.prepare.outputs.sha }}
+      BASE: ${{ needs.prepare.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Merge the release commit into main
+        run: |
+          # The deploy built SHA, whose parent is BASE.  If main moved since,
+          # merging would publish a tree nobody deployed: stop, re-dispatch.
+          git fetch -q origin main
+          if [ "$(git rev-parse origin/main)" != "$BASE" ]; then
+            echo "::error::main moved during the cut ($BASE -> $(git rev-parse origin/main)); re-dispatch. The site is already on v$NEW, which the next cut will redeploy."
+            exit 1
+          fi
+          gh pr create --base main --head "release/v$NEW" \
+            --title "chore: release v$NEW" \
+            --body "$(git log -1 --format=%b "$SHA")
+
+          Opened and merged by \`release-cut.yml\` run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, after Try Turmeric deployed."
+          # --rebase re-creates the commit (new SHA) but with SHA's tree, as
+          # main has not moved; the tree check below is what proves the tag
+          # lands on exactly what was deployed.  Retried: a merge straight
+          # after create can race GitHub's mergeability computation.
+          for i in 1 2 3 4 5 6; do
+            gh pr merge "release/v$NEW" --rebase --delete-branch \
+              --match-head-commit "$SHA" && break
+            [ "$i" = 6 ] && exit 1
+            sleep 10
+          done
+          git fetch -q origin main
+          if [ "$(git rev-parse "origin/main^{tree}")" != "$(git rev-parse "$SHA^{tree}")" ]; then
+            echo "::error::main's tree after the merge differs from the deployed commit -- not tagging"
+            exit 1
+          fi
+
+      - name: Tag and dispatch release.yml
+        run: |
+          # Annotated, not signed -- C-4 in docs/upcoming/security-audit-plan.md.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$NEW" -m "Release v$NEW" origin/main
+          git push origin "v$NEW"
+          # A GITHUB_TOKEN tag push starts no workflow; a dispatch does.
+          gh workflow run release.yml --ref "v$NEW"
+          {
+            echo "## Released v$NEW"
+            echo
+            echo "- main: \`$(git rev-parse --short origin/main)\`"
+            echo "- site: https://turmeric-lang.com"
+            echo "- binaries: release.yml dispatched at \`v$NEW\` -- ${{ github.server_url }}/${{ github.repository }}/actions/workflows/release.yml"
+          } >> "$GITHUB_STEP_SUMMARY"
