@@ -118,11 +118,11 @@ Some things that are worth knowing:
   31 digits. Dividing integers gives an exact fraction, as in the book:
   `(/ 6 4)` is `3/2`. Use a decimal point (`1.0`) when you want a float.
 - **Deep recursion.** 1.2.1 contrasts recursive and iterative processes.
-  Both back ends run a recursive process a million calls deep (compiled, on
-  Linux; on macOS a compiled program's stack is smaller, and `tur
-  --interpret` goes deeper). A recursion that never ends stops with `error:
-  stack overflow (recursion too deep)` -- after using up to a gigabyte of
-  stack on Linux, so expect a short pause. Iterative processes (tail calls) run in
+  Both back ends run a recursive process a million calls deep. A compiled
+  program (`tur run`) goes much further: 1.2.1's linear-recursive sum
+  reaches twenty million calls. Past its limit a compiled program stops
+  with `stack overflow: recursion too deep`.
+  Iterative processes (tail calls) run in
   constant space on both, as the book says they should: a ten-million-step
   iterative loop, or `even?`/`odd?` calling each other a million times, is
   fine.
@@ -245,10 +245,9 @@ it is worth reporting.
 - **`error: Unknown operation -- TABLE frob`**: that is the book's own
   `(error "Unknown operation -- TABLE" m)` working as intended. The message
   is printed, then the objects, and the program stops.
-- **`error: stack overflow (recursion too deep)`**: a recursion that does
-  not reach its base case -- check that the argument gets closer to it on
-  every call. A correct but very deep one on macOS runs further under
-  `tur --interpret`.
+- **`stack overflow: recursion too deep`** under `tur run`: a recursive
+  process went tens of millions of calls deep (see Chapter 1). Make it
+  iterative, as 1.2.1 shows.
 - **Turmeric's own syntax in examples elsewhere** (square brackets in
   `defn`, `:int` types) is the main Turmeric language, not Scheme. In a
   `.scm` file you are always writing plain Scheme.

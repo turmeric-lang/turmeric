@@ -13221,6 +13221,158 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "}\n");
 }
 
+/* r7rs-deep-recursion-segfaults-silently: a Scheme program's frames are C
+ * frames, and SICP 1.2.1's linear recursion (`(sum-to 1000000)`) ran off the
+ * 8 MiB main-thread stack with no message at all -- exit 139, nothing
+ * printed.  So a `#lang r7rs` program's `main` re-enters itself on a thread
+ * with a 1 GiB stack (address space; only what the recursion touches is
+ * committed) and the process exits from there, as returning from main would
+ * have.  That thread also carries a SIGSEGV/SIGBUS handler on an alternate
+ * stack: a fault just past the stack's low end prints `stack overflow:
+ * recursion too deep` before the signal takes the process down as before.
+ *
+ * After the collector's paste.  The new thread takes over the old one's
+ * collector record (tur_gc_hand_over / tur_gc_take_over, r7gc.c), so the
+ * old thread's thread-local roots stay and the registry still holds one
+ * record; the collector and call/cc read the new thread's own stack bounds
+ * (both ask pthreads for the calling thread).  Windows has its own branch
+ * (CreateThread).  Not under `tur jit` (`__MIRC__`), whose engine already runs main on a sized thread
+ * (TUR_JIT_STACK_MB).  In a split build it is written into the program unit
+ * only (emit_split.h).  A failure to make the thread is not an error --
+ * main just runs where it is, as before. */
+static void emit_deep_stack_runtime(Buf *out) {
+    buf_puts(out,
+        "#if !defined(_WIN32) && !defined(__MIRC__)\n"
+        "#include <signal.h>\n"
+        "#include <pthread.h>\n"
+        "#include <unistd.h>\n"
+        "int main(int, char **);\n"
+        "typedef struct { int argc; char **argv; unsigned char *lo; void *gc; } tur_deep_state_t;\n"
+        "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
+        "static void tur_deep_fault(int sig, siginfo_t *si, void *uc) {\n"
+        "    (void)uc;\n"
+        "    unsigned char *a = (unsigned char *)si->si_addr, *lo = tur_deep_state()->lo;\n"
+        "    if (lo && a < lo + 65536 && a + (1 << 20) >= lo) {\n"
+        "        static const char m[] = \"stack overflow: recursion too deep\\n\";\n"
+        "        if (write(2, m, sizeof m - 1) < 0) { }\n"
+        "    }\n"
+        "    signal(sig, SIG_DFL);   /* the fault repeats on return, unhandled */\n"
+        "}\n"
+        "static void *tur_deep_run(void *p) {\n"
+        "    tur_deep_state_t *s = (tur_deep_state_t *)p;\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    tur_gc_take_over(s->gc);   /* the old thread's record, roots and all */\n"
+        "#endif\n"
+        "#if defined(__APPLE__)\n"
+        "    s->lo = (unsigned char *)pthread_get_stackaddr_np(pthread_self()) - pthread_get_stacksize_np(pthread_self());\n"
+        "#elif defined(__GLIBC__)\n"
+        "    {\n"
+        "        extern int pthread_getattr_np(pthread_t, pthread_attr_t *);\n"
+        "        pthread_attr_t a; void *addr = 0; size_t sz = 0;\n"
+        "        if (pthread_getattr_np(pthread_self(), &a) == 0) {\n"
+        "            if (pthread_attr_getstack(&a, &addr, &sz) == 0) s->lo = (unsigned char *)addr;\n"
+        "            pthread_attr_destroy(&a);\n"
+        "        }\n"
+        "    }\n"
+        "#endif\n"
+        "    static unsigned char tur_deep_alt[65536];\n"
+        "    stack_t ss; ss.ss_sp = tur_deep_alt; ss.ss_size = sizeof tur_deep_alt; ss.ss_flags = 0;\n"
+        "    if (s->lo && sigaltstack(&ss, NULL) == 0) {\n"
+        "        struct sigaction sa; memset(&sa, 0, sizeof sa);\n"
+        "        sa.sa_sigaction = tur_deep_fault; sa.sa_flags = SA_SIGINFO | SA_ONSTACK;\n"
+        "        sigemptyset(&sa.sa_mask);\n"
+        "        sigaction(SIGSEGV, &sa, NULL);\n"
+        "        sigaction(SIGBUS, &sa, NULL);\n"
+        "    }\n"
+        "    exit(main(s->argc, s->argv));\n"
+        "}\n"
+        "/* 1 when main ran on the big stack (the process has exited); 0 to run here. */\n"
+        "static __attribute__((unused)) int tur_deep_enter(int argc, char **argv) {\n"
+        "    static int tur_deep_entered;\n"
+        "    if (tur_deep_entered) return 0;\n"
+        "    tur_deep_entered = 1;\n"
+        "    if (getenv(\"TUR_NO_DEEP_STACK\")) return 0;\n"
+        "    tur_deep_state_t *s = tur_deep_state();\n"
+        "    s->argc = argc; s->argv = argv;\n"
+        "    pthread_attr_t at;\n"
+        "    if (pthread_attr_init(&at) != 0) return 0;\n"
+        "    size_t sz = sizeof(void *) >= 8 ? ((size_t)1 << 30) : ((size_t)64 << 20);\n"
+        "    pthread_t t;\n"
+        "    int ok = pthread_attr_setstacksize(&at, sz) == 0;\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    if (ok) { tur_gc_park(); s->gc = tur_gc_hand_over(); }   /* parked in the join, done with the heap */\n"
+        "#endif\n"
+        "    /* Unwrapped: the new thread takes this one's record, not a new one. */\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    ok = ok && tur_gc_raw_pthread_create(&t, &at, tur_deep_run, s) == 0;\n"
+        "#else\n"
+        "    ok = ok && pthread_create(&t, &at, tur_deep_run, s) == 0;\n"
+        "#endif\n"
+        "    pthread_attr_destroy(&at);\n"
+        "    if (!ok) {\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "        tur_gc_take_over(s->gc);   /* no thread: the record comes back here */\n"
+        "#endif\n"
+        "        return 0;\n"
+        "    }\n"
+        "    (pthread_join)(t, NULL);   /* unwrapped; tur_deep_run exits the process */\n"
+        "    return 1;\n"
+        "}\n"
+        "#define TUR_DEEP_STACK_ENTER(argc, argv) do { if (tur_deep_enter((argc), (argv))) return 0; } while (0)\n");
+    buf_puts(out,
+        /* Windows: the same move with the Win32 calls -- no pthreads needed,
+         * and no collector to register with (TUR_GC_ON is 0 there).  The
+         * stack is a RESERVATION (committed as touched), and call/cc reads
+         * the calling thread's TEB, so it follows the move.  The overflow
+         * message comes from a vectored handler for EXCEPTION_STACK_OVERFLOW;
+         * SetThreadStackGuarantee leaves it room to run.  The exception then
+         * goes on unhandled, as before. */
+        "#elif defined(_WIN32) && !defined(__MIRC__)\n"
+        "#include <windows.h>\n"
+        "int main(int, char **);\n"
+        "typedef struct { int argc; char **argv; } tur_deep_state_t;\n"
+        "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
+        "static LONG WINAPI tur_deep_fault(EXCEPTION_POINTERS *ep) {\n"
+        "    if (ep && ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {\n"
+        "        static const char m[] = \"stack overflow: recursion too deep\\n\";\n"
+        "        DWORD w = 0;\n"
+        "        WriteFile(GetStdHandle(STD_ERROR_HANDLE), m, (DWORD)(sizeof m - 1), &w, NULL);\n"
+        "    }\n"
+        "    return EXCEPTION_CONTINUE_SEARCH;\n"
+        "}\n"
+        "static DWORD WINAPI tur_deep_run(LPVOID p) {\n"
+        "    tur_deep_state_t *s = (tur_deep_state_t *)p;\n"
+        "    ULONG g = 65536;\n"
+        "    if (SetThreadStackGuarantee(&g)) AddVectoredExceptionHandler(1, tur_deep_fault);\n"
+        "    exit(main(s->argc, s->argv));\n"
+        "    return 0;\n"
+        "}\n"
+        "static __attribute__((unused)) int tur_deep_enter(int argc, char **argv) {\n"
+        "    static int tur_deep_entered;\n"
+        "    if (tur_deep_entered) return 0;\n"
+        "    tur_deep_entered = 1;\n"
+        "    if (getenv(\"TUR_NO_DEEP_STACK\")) return 0;\n"
+        "    tur_deep_state_t *s = tur_deep_state();\n"
+        "    s->argc = argc; s->argv = argv;\n"
+        "    SIZE_T sz = sizeof(void *) >= 8 ? ((SIZE_T)1 << 30) : ((SIZE_T)64 << 20);\n"
+        "    HANDLE h = CreateThread(NULL, sz, tur_deep_run, s, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);\n"
+        "    if (!h) return 0;\n"
+        "    WaitForSingleObject(h, INFINITE);   /* tur_deep_run exits the process */\n"
+        "    CloseHandle(h);\n"
+        "    return 1;\n"
+        "}\n"
+        "#define TUR_DEEP_STACK_ENTER(argc, argv) do { if (tur_deep_enter((argc), (argv))) return 0; } while (0)\n"
+        "#else\n"
+        "#define TUR_DEEP_STACK_ENTER(argc, argv) ((void)0)\n"
+        "#endif\n");
+}
+
+/* The first statement of every emitted `main` in a `#lang r7rs` build, ahead
+ * of __tur_static_init (emit_deep_stack_runtime). */
+void emit_main_deep_stack_prologue(Buf *out) {
+    if (g_opt_r7rs) buf_puts(out, "    TUR_DEEP_STACK_ENTER(argc, argv);\n");
+}
+
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     /* Prefix that demotes a runtime function to internal linkage in shared mode
      * so it may be replicated into every module TU without a duplicate symbol. */
@@ -14448,6 +14600,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    fprintf(stderr, \"panic (no unwind): %s\\n\", msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
+    /* Not in a split build's library unit: only the program unit has a main,
+     * and the helper's statics must live in one unit (check-r7rs-prelude-split). */
+    if (g_opt_r7rs && !shared && g_emit_split != EMIT_SPLIT_LIB) emit_deep_stack_runtime(out);
 
     /* CPS3: emit tur_cps_cont_t + tur_cps_apply when --cps-path is active */
     if (g_cps_path) {
@@ -19910,6 +20065,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                                 near_miss_main->binding->name->name);
         }
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        emit_main_deep_stack_prologue(out);
         /* S1b: first statement, matching where the constructors used to run
          * (before the Windows stdio mode switch and before g_panic_trace). */
         buf_puts(out, "    __tur_static_init();\n");
@@ -21498,6 +21654,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        emit_main_deep_stack_prologue(out);
         buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */

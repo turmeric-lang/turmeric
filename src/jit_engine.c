@@ -1088,7 +1088,12 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   typedef int (*main_fn) (int, char **, char **);
   struct jit_entry_box box = { (main_fn) main_item->addr, prog_argc, prog_argv, 0 };
 
-  size_t stack_mb = 64;
+  /* r7rs-deep-recursion-segfaults-silently: the same 1 GiB the cc path gives
+   * a `#lang r7rs` main (emit_deep_stack_runtime) -- address space, committed
+   * only as deep as the program recurses.  64 MiB ran SICP 1.2.1's
+   * million-deep linear recursion off the end; MIR frames are larger than
+   * gcc's and it does no sibling-call optimization. */
+  size_t stack_mb = sizeof (void *) >= 8 ? 1024 : 64;
   const char *senv = getenv ("TUR_JIT_STACK_MB");
   if (senv && atoi (senv) > 0) stack_mb = (size_t) atoi (senv);
   pthread_attr_t attr;

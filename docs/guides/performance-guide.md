@@ -649,7 +649,7 @@ How to read it:
   the binary; nothing else is close in steady state.
 - The MIR tier generates good-but-not-gcc code: expect JIT'd loop bodies
   within ~1-2x of cc -O2, not parity, and note the JIT runs the program
-  on a sized entry stack (`TUR_JIT_STACK_MB`, default 64) because
+  on a sized entry stack (`TUR_JIT_STACK_MB`, default 1024 on 64-bit) because
   MIR does not perform gcc's sibling-call optimization -- so a deep
   recursion the cc path survives only because gcc turned the self-call into
   a jump will overflow here.  That is a real difference in what the two

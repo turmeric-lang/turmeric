@@ -15,8 +15,8 @@
 (write (step 1000000 (lambda (v) v)))
 ```
 
-`TUR_STACK_REEXEC=0` with an 8 MiB stack: "stack overflow (recursion too
-deep)", exit 139.  Also `((lambda (m) (loop m k)) (- n 1))` in tail position.
+In an 8 MiB stack (`TUR_NO_DEEP_STACK=1`, so main stays on it): exit 139,
+a stack overflow.  Also `((lambda (m) (loop m k)) (- n 1))` in tail position.
 
 ## Root cause
 
@@ -42,4 +42,4 @@ was never a C tail call at all.
   list lowers as `(let ((x a) ...) body...)`, as R7RS defines `let`.
 
 Fixture: `tests/fixtures/r7rs-tail-call-hand-on-through-static-call`, also run
-in an 8 MiB stack by `tests/check-r7rs-deep-recursion.sh`.
+in an 8 MiB stack by `tests/check-r7rs-tail-calls-small-stack.sh`.

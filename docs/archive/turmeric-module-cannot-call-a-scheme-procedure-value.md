@@ -1,5 +1,24 @@
 # Seam: a Turmeric module cannot call a Scheme procedure it was handed
 
+**Workaround found 2026-10-04 (still open).** Inside an r7rs build, a
+Turmeric module can already call a Scheme procedure through the prelude's
+own `apply`: `(defn call2 [f : any a : any b : any] : any (r7rs-apply f
+(r7rs-list a b)))`. `(call2 (lambda (x y) (list y x)) 1 "two")` gives
+`("two" 1)`, and `(call2 + 3 4)` gives `7`, on both back ends (origin/main
+ab9be034). That covers the SRFI 18 thunk case without the relay. It is not a
+fix: `r7rs-apply` and `r7rs-list` are the prelude's internal names, not a
+documented seam, and a plain `(f)` is still refused.
+
+Why it is refused: `elab_call.c` (the "saffron-lang-plan S4/D4 (G5)" block,
+just above the second "is not a function or continuation" site) turns a call
+through an `any` binding into a dynamic call only when
+`lang_span_is_dynamic(call->span)`. That is true for a `#lang saffron` or
+`#lang r7rs` file, and so for the prelude; it is never true for a `#lang
+turmeric` module. Fix direction 1 is therefore a change to the Turmeric
+language, which belongs behind an `--enable` experiment with a plan
+(CLAUDE.md, "Experimental Compiler Features"). Direction 2 could ship as a
+documented, exported wrapper over `r7rs-apply`.
+
 **Severity:** medium (expressiveness; blocks the obvious SRFI 18 design).
 A Scheme program can pass a procedure to a Turmeric function, but the
 Turmeric function cannot call it. A parameter typed `any`, or left

@@ -11705,6 +11705,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         const Type *mrt = mono_ret ? mono_ret : fn_ret_type(fd);
         bool mvoid = (mrt->kind == TY_NIL);
         buf_puts(file, "int main(int argc, char **argv) {\n");
+        emit_main_deep_stack_prologue(file);
         buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
         if (g_emit_panic_trace)

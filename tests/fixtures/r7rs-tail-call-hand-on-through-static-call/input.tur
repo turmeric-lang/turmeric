@@ -7,8 +7,8 @@
 ;; tail position is a `let`, so a loop written that way is a loop.
 ;;
 ;; Under run.sh the program's own 1 GiB stack would hide a regression, so
-;; tests/check-r7rs-deep-recursion.sh also runs this file in an 8 MiB stack
-;; with TUR_STACK_REEXEC=0.
+;; tests/check-r7rs-tail-calls-small-stack.sh also runs this file in an 8 MiB
+;; stack with the deep-stack thread off (TUR_NO_DEEP_STACK=1).
 (import (scheme base) (scheme write))
 
 (define (step n k)

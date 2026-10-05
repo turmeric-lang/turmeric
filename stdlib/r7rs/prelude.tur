@@ -51,7 +51,6 @@
 (load "stdlib/r7rs/unicode.tur")
 (load "stdlib/r7rs/bignum.tur")
 (load "stdlib/r7rs/numsyntax.tur")
-(load "stdlib/r7rs/stack.tur")
 
 ;;; ---- the types --------------------------------------------------------
 
