@@ -17,7 +17,7 @@
     "@fontsource/iosevka": "^5.3.0",
     "@fontsource/space-grotesk": "^5.3.0",
     "lucide-static": "^1.49.0",
-    "monaco-editor": "^0.45.0",
+    "monaco-editor": "^0.57.0",
     "prismjs": "^1.30.0"
   },
   "devDependencies": {
