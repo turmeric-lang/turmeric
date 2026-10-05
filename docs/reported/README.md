@@ -34,6 +34,18 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found auditing r7rs compile- and run-time cost (filed 2026-10-05)
+
+From [docs/notes/r7rs-performance-audit.md](../notes/r7rs-performance-audit.md),
+which measures every `#lang r7rs` fixture on all three back ends. The cold
+prelude-variant cost it also found is the existing
+[r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md).
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [r7rs-imported-libraries-recompiled-every-build](r7rs-imported-libraries-recompiled-every-build.md) | medium (build time) | An imported SRFI or `(scheme eval)` lands in the uncached program unit, not the cached library unit, so 200-375 library functions are compiled at `-O2` on every build: 2-4 s extra warm, and the 25 slowest r7rs builds |
+| [turi-call-frames-never-reclaimed](turi-call-frames-never-reclaimed.md) | medium (interpreter) | `eval_frame_free` is a no-op, so frames and bindings (87% of the heap) grow ~4 KB per step: four r7rs fixtures peak at 0.7-1 GB and take 9-14 s under the Debug `tur --interpret`; `eval_lookup`'s per-binding `strcmp` walk is another 24% of the time |
+
 ## Found reviewing #1082's deep-recursion fix (filed 2026-10-05)
 
 Follow-ups to PR #1082, which runs a compiled `#lang r7rs` program on a 1 GiB

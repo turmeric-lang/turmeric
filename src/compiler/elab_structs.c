@@ -142,6 +142,16 @@ static bool typekind_is_copy_for_struct(TypeKind k) {
  * the type binding with a TY_FN constructor binding. */
 Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     for (Scope *cur = s; cur; cur = cur->parent) {
+        if (cur->idx) {
+            /* The global scope holds thousands of bindings and every call
+             * head is looked up here: walk only this name's bindings,
+             * newest first, as the scan below would meet them. */
+            for (uint32_t k = scope_idx_newest(cur, name); k; k = cur->prev[k - 1]) {
+                Binding *b = cur->bindings[k - 1];
+                if (b->type.kind == TY_STRUCT || b->type.kind == TY_ADT) return b;
+            }
+            continue;
+        }
         for (uint32_t i = cur->n; i > 0; i--) {
             Binding *b = cur->bindings[i - 1];
             if (b->name == name &&

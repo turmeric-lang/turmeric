@@ -154,6 +154,11 @@ typedef struct Scope {
     uint32_t     *idx;
     uint32_t      idx_cap;
     uint32_t      idx_n;     /* distinct names indexed */
+    /* Alongside idx: prev[i] is `index + 1` of the next-older binding with
+     * bindings[i]'s name (0 = none), so a lookup that wants an OLDER binding
+     * of a name -- scope_lookup_type_def -- walks that name's few bindings
+     * instead of the whole scope.  Sized to `cap`; NULL while idx is. */
+    uint32_t     *prev;
 } Scope;
 
 /* ---- elaborator state ---- */
@@ -1584,6 +1589,7 @@ bool scope_borrow_conflicts(const Scope *s, Binding *binding, BorrowKind kind);
 bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span);
 void scope_add(Scope *s, Binding *b);
 Binding *scope_lookup(Scope *s, const Symbol *name);
+uint32_t scope_idx_newest(const Scope *s, const Symbol *name);
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     Binding **self_exclude, uint32_t n_self_exclude, uint32_t *n_out);
 void elab_register_file_def(Elab *e, Expr *def_expr);
