@@ -73,12 +73,10 @@ A small module, for example `stdlib/dyn.tur` (all names are placeholders):
   `src/compiler/emit_module.c`), or be r7rs-only at first? r7rs-only is enough
   for the use case that filed the original report.
 - **Arity.** `r7rs-apply-list__` calls a procedure with up to 8 arguments.
-  Past 8, `r7rs-apply-std-many__` handles only the standard variadic
-  procedures (`+`, `append`, `max`, ...) and raises "apply: more than 8
-  arguments is supported only for the standard variadic procedures" for
-  anything else. The wrapper inherits that limit; say so in its docstring.
-  (The docstring above `r7rs-apply-list__` still says "Up to four", which the
-  code no longer matches.)
+  Past 8, `r7rs-apply-long__` spreads a variadic procedure's fixed arguments
+  and hands it the rest as its rest list, so any variadic procedure takes a
+  list of any length; a fixed-arity procedure with more than 8 parameters is
+  refused. The wrapper inherits that limit; say so in its docstring.
 - **The interpreter.** `tur --interpret` must give the same results and
   errors. Pin both back ends in `tests/run-r7rs-import.sh`.
 

@@ -1,25 +1,19 @@
 # `#lang r7rs`: `apply` of a variadic procedure refuses a list longer than eight
 
-**Narrowed 2026-10-04: the standard variadic procedures are fixed** (fix
-direction 2). `r7rs-apply-list__` hands a list of more than eight to
-`r7rs-apply-std-many__` (stdlib/r7rs/prelude.tur). That recognises `+`, `*`,
-`-`, `/`, `max`, `min`, `=`, `<`, `>`, `<=`, `>=`, `list`, `append`,
-`string-append`, `vector` and `string` by identity, and computes each from the
-list the way its own body computes it from its rest chain. The folds are
-self tail calls, so `(apply + (iota 1000000))` costs no stack. Both back ends,
-pinned by `tests/fixtures/r7rs-apply-standard-variadic-many`, which also pins
-inexact contagion through `max`/`min`. **Still open:** a program's own
-`(define (f . xs) ...)` applied to more than eight. It now fails with a
-message that says so. That case needs fix direction 1: a primitive that reads
-a closure's fixed count (`__tur_dyn_variadic_fixed`) and calls it with a
-pre-built rest chain, plus its interpreter twin.
+**Resolved 2026-10-05.** Two fixes met: `main` first narrowed it (fix
+direction 2, `r7rs-apply-std-many__`: the standard variadics, recognised by
+identity), and the SICP-plan branch landed fix direction 1 for every
+variadic procedure, the program's own included -- see Resolution below.
+The merge kept direction 1, which covers the standard variadics too; the
+narrowing's fixture `r7rs-apply-standard-variadic-many` (a million-element
+`(apply + ...)`, inexact contagion through `max`/`min`) still pins them.
 
-**Severity:** low (was medium). `(apply + lst)`, `(apply max lst)`, `(apply append
+**Severity:** medium. `(apply + lst)`, `(apply max lst)`, `(apply append
 lists)` and `(apply string-append strs)` are everyday Scheme, and SICP code
 (and its readers' exercise answers) use them on lists of any length. All of
 these callees are variadic and have no arity ceiling, yet `apply` panics
 as soon as the list has nine elements. Both back ends. Found 2026-10-03
-probing SICP code (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+probing SICP code (docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 This is not [r7rs-apply-more-than-four-arguments](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-apply-more-than-four-arguments.md)
 reopened. That report raised the dynamic-call ceiling to eight on purpose,
@@ -71,3 +65,19 @@ applied to 20 elements.
 `docs/guides/sicp-guide.md` documents this defect in its "Rough edges" list
 (and the workaround in the chapter it affects). When this is fixed, delete
 that entry and any workaround text that only exists because of it.
+
+## Resolution (2026-10-04)
+
+Past eight elements, `r7rs-apply-list__` now hands over to
+`r7rs-apply-long__` (stdlib/r7rs/prelude.tur): when `f` is a registered
+variadic (the dynamic call's own `__tur_dyn_reg_variadic` table, read by
+`r7rs-variadic-fixed__`) with no more fixed parameters than elements,
+`r7rs-call-variadic__` spreads the fixed ones and builds the rest chain with
+the runtime's `__tur_dyn_pack_rest`, then calls the closure's thunk -- the
+first direction above. The interpreter's twins spread the whole list
+through the new `turi_call_dynamic` (eval.c), which packs a variadic's rest
+as a dynamic call site does. A fixed-arity procedure with more than eight
+parameters is still refused compiled, with a message that says so. Pinned by
+`tests/fixtures/r7rs-apply-long` on both back ends (`+` over 100,000
+elements, `max`, `append`, `string-append`, a program's own variadic, and
+leading arguments before the list).

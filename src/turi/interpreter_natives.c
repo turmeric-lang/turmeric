@@ -14,6 +14,7 @@
 #include "turi/interpreter_natives.h"
 
 #include "turi/eval.h"
+#include "turi/fiber.h"   /* SRFI 18 twins: turi_sched_yield, turi_spawn_fiber */
 #include "turi/r7rs_embed.h"   /* r7rs-lang-plan T4: eval twins */
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
 #include "turi/docstrings.h"  /* PS3: doc-lookup / doc-print, builtin docs */
@@ -3607,6 +3608,121 @@ static TuriValue native_r7rs_dyn_unset(TuriEnv *env, TuriValue *a, uint32_t n, v
     (void)env; (void)ud;
     return turi_bool(n < 1 || turi_any_identity_payload(a[0]).tag == TURI_NIL);
 }
+/* r7rs-srfi-18-216-sicp-plan T2: twins of stdlib/r7rs/thread.tur, SRFI 18's
+ * C half.  Under the interpreter a thread is a scheduler fiber (green
+ * threads, which SRFI 18 allows): it runs when the running code waits,
+ * sleeps or yields, so the monitor needs no lock -- nothing switches inside
+ * one of 18.scm's critical sections, whose only switch point is the wait.
+ * The dynamic-environment slots above are one set for the process, so each
+ * switch saves the leaving code's, clears them for whoever runs next (a new
+ * thread starts with none, as on an OS thread), and restores them on the
+ * way back. */
+static void r7rs_thread_switch(TuriEnv *env, bool *progress) {
+    TuriValue saved[4];
+    bool      written[4];
+    memcpy(saved, r7rs_dyn_slots, sizeof saved);
+    memcpy(written, r7rs_dyn_written, sizeof written);
+    memset(r7rs_dyn_written, 0, sizeof r7rs_dyn_written);
+    bool p = turi_sched_yield(env);
+    memcpy(r7rs_dyn_slots, saved, sizeof saved);
+    memcpy(r7rs_dyn_written, written, sizeof written);
+    if (progress) *progress = p;
+}
+static double r7rs_thread_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+static double r7rs_arg_float(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n) return 0.0;
+    return a[i].tag == TURI_FLOAT ? a[i].as_float : (double)a[i].as_int;
+}
+/* A short real sleep, for a wait with nothing else to run. */
+static void r7rs_thread_nap(double secs) {
+    if (secs <= 0) return;
+    if (secs > 0.001) secs = 0.001;
+    struct timespec ts = { 0, (long)(secs * 1e9) };
+    nanosleep(&ts, NULL);
+}
+/* r7rs-thread-spawn-c__ [entry thunk]: the entry is the compiled path's. */
+static TuriValue native_r7rs_thread_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2 || a[1].tag != TURI_CLOSURE)
+        return turi_error("thread-start!: the thread's thunk is not a procedure");
+    TuriValue f = turi_spawn_fiber(env, a[1]);
+    return turi_bool(!turi_is_error(f));
+}
+static TuriValue native_r7rs_thread_nop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_nil();
+}
+/* r7rs-thread-wait-c__ [mon deadline]: let the others run once; #t when the
+ * deadline passed.
+ * With no deadline and nothing anywhere able to run, every thread is
+ * waiting: a deadlock, reported rather than spun on (the compiled program
+ * would hang here). */
+static TuriValue native_r7rs_thread_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    double deadline = r7rs_arg_float(a, n, 1);
+    bool progress = true;
+    r7rs_thread_switch(env, &progress);
+    if (deadline >= 0) {
+        double now = r7rs_thread_now();
+        if (now >= deadline) return turi_bool(true);
+        if (!progress) r7rs_thread_nap(deadline - now);
+        return turi_bool(false);
+    }
+    if (!progress)
+        return turi_error("SRFI 18: deadlock: every thread is waiting on a mutex, a condition "
+                          "variable or a join, and none can run (the compiled program would hang here)");
+    return turi_bool(false);
+}
+static TuriValue native_r7rs_thread_sleep(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    double end = r7rs_thread_now() + r7rs_arg_float(a, n, 0);
+    for (;;) {
+        bool progress = true;
+        r7rs_thread_switch(env, &progress);
+        double now = r7rs_thread_now();
+        if (now >= end) break;
+        if (!progress || env->current_fiber) r7rs_thread_nap(end - now);
+    }
+    return turi_nil();
+}
+static TuriValue native_r7rs_thread_yield(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)a; (void)n; (void)ud;
+    r7rs_thread_switch(env, NULL);
+    return turi_nil();
+}
+static TuriValue native_r7rs_thread_now(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_float(r7rs_thread_now());
+}
+/* r7rs-apply-variadic-over-eight-arguments: twins of the prelude's
+ * r7rs-variadic-fixed__ / r7rs-call-variadic__.  The interpreter's call has
+ * no eight-argument ceiling, so the "fixed count" is 0 for any procedure and
+ * the call spreads the whole list; a fixed-arity callee then reports its own
+ * arity error, as a direct call would. */
+static TuriValue native_r7rs_variadic_fixed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(n >= 1 && a[0].tag == TURI_CLOSURE ? 0 : -1);
+}
+static TuriValue native_r7rs_call_variadic(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_error("apply: internal: bad call");
+    int64_t len = r7rs_arg_int(a, n, 2);
+    TuriValue car = turi_env_get(env, "r7rs-car"), cdr = turi_env_get(env, "r7rs-cdr");
+    TuriValue *av = (TuriValue *)malloc((size_t)(len ? len : 1) * sizeof *av);
+    if (!av) return turi_error("apply: out of memory");
+    TuriValue cur = a[3];
+    for (int64_t i = 0; i < len; i++) {
+        av[i] = turi_call(env, car, &cur, 1);
+        cur = turi_call(env, cdr, &cur, 1);
+    }
+    TuriValue r = turi_call_dynamic(env, a[0], av, (uint32_t)len);
+    free(av);
+    return r;
+}
 static TuriValue native_r7rs_same_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_bool(false);
@@ -4486,6 +4602,19 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-dyn-ref__",        native_r7rs_dyn_ref,         NULL);
     turi_env_register_native(env, "r7rs-dyn-set__",        native_r7rs_dyn_set,         NULL);
     turi_env_register_native(env, "r7rs-dyn-unset?__",     native_r7rs_dyn_unset,       NULL);
+    turi_env_register_native(env, "r7rs-variadic-fixed__", native_r7rs_variadic_fixed,  NULL);
+    turi_env_register_native(env, "r7rs-call-variadic__",  native_r7rs_call_variadic,   NULL);
+    /* The inline-C layer of stdlib/r7rs/thread.tur (only an inline-C defn
+     * yields to a native of its name); the monitor is a dummy here. */
+    turi_env_register_native(env, "r7rs-thread-spawn-c__", native_r7rs_thread_spawn,    NULL);
+    turi_env_register_native(env, "r7rs-thread-monitor__", native_r7rs_thread_nop,      NULL);
+    turi_env_register_native(env, "r7rs-thread-lock-c__",  native_r7rs_thread_nop,      NULL);
+    turi_env_register_native(env, "r7rs-thread-unlock-c__", native_r7rs_thread_nop,     NULL);
+    turi_env_register_native(env, "r7rs-thread-notify-c__", native_r7rs_thread_nop,     NULL);
+    turi_env_register_native(env, "r7rs-thread-wait-c__",  native_r7rs_thread_wait,     NULL);
+    turi_env_register_native(env, "r7rs-thread-sleep__",   native_r7rs_thread_sleep,    NULL);
+    turi_env_register_native(env, "r7rs-thread-yield__",   native_r7rs_thread_yield,    NULL);
+    turi_env_register_native(env, "r7rs-thread-now__",     native_r7rs_thread_now,      NULL);
     turi_env_register_native(env, "r7rs-identity-word__",  native_r7rs_identity_word,   NULL);
     turi_env_register_native(env, "r7rs-cstr-hash__",      native_r7rs_cstr_hash,       NULL);
     turi_env_register_native(env, "r7rs-blen__",           native_r7rs_string_length,   NULL);

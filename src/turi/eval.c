@@ -7204,6 +7204,16 @@ typedef struct {
 static bool g_turi_cont_pinned = false;
 #define TURI_DRIVE_FREE(p) do { if (!g_turi_cont_pinned) free(p); } while (0)
 
+/* A DK_CALL_ARG frame evaluates the arguments of an EX_CALL or of an
+ * EX_DYN_CALL (a call through a procedure VALUE -- `(k v)` in CPS code), so
+ * that both get the driver's proper tail calls. */
+static inline uint32_t drive_call_n_args(const Expr *e) {
+    return e->kind == EX_DYN_CALL ? e->as.dyn_call_.n_args : e->as.call_.n_args;
+}
+static inline const Expr *drive_call_arg(const Expr *e, uint32_t i) {
+    return e->kind == EX_DYN_CALL ? e->as.dyn_call_.args[i] : e->as.call_.args[i];
+}
+
 typedef struct DriveReg {
     struct DriveReg *prev;
     DriveCont      **pst;
@@ -7449,7 +7459,7 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
             if (src[i].kind == DK_BUILTIN_ARG)
                 cnt = src[i].expr->as.builtin.n;
             else if (src[i].kind == DK_CALL_ARG)
-                cnt = src[i].expr->as.call_.n_args;
+                cnt = drive_call_n_args(src[i].expr);
             else if (src[i].kind == DK_MAKE_STRUCT)
                 cnt = src[i].expr->as.make_struct_.n_fields;
             else if (src[i].kind == DK_PERFORM_ARG)
@@ -7607,6 +7617,25 @@ static TuriValue *turi_pack_rest_args(TuriEnv *env, const TuriValue *args,
     for (uint32_t i = 0; i < base + fixed; i++) out[i] = args[i];
     out[base + fixed] = tail;
     return out;
+}
+
+/* A call as a dynamic call site makes it: a variadic closure gets the
+ * surplus packed into its rest chain first.  For natives that apply a
+ * procedure to a computed argument list (r7rs-call-variadic__). */
+TuriValue turi_call_dynamic(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n) {
+    if (fn.tag == TURI_CLOSURE && fn.as_closure && !fn.as_closure->native && fn.as_closure->fn &&
+        ((FnDef *)fn.as_closure->fn)->is_variadic) {
+        const FnDef *vfd = (const FnDef *)fn.as_closure->fn;
+        uint32_t skip = fn.as_closure->skip_env_param ? 1u : 0u;
+        uint32_t want = (uint32_t)vfd->n_params - skip;
+        TuriValue *packed = turi_pack_rest_args(env, args, n, 0, want);
+        if (packed) {
+            TuriValue r = turi_call(env, fn, packed, want);
+            free(packed);
+            return r;
+        }
+    }
+    return turi_call(env, fn, args, n);
 }
 
 static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
@@ -8908,6 +8937,52 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 break;
             }
+            case EX_DYN_CALL: {
+                /* A call through a procedure VALUE (`(k v)`, `f : any`).  Same
+                 * work-stack route as EX_CALL, so a tail call through a value
+                 * -- every call in continuation-passing code -- reuses the
+                 * enclosing activation instead of growing the C stack.  The
+                 * callee expression itself is not in tail position. */
+                TuriValue fnv = eval_expr(env, cf, control->as.dyn_call_.fn);
+                if (turi_is_error(fnv) || env_signaled(env)) {
+                    cur = fnv; descending = false; break;
+                }
+                /* Unwrap an `any` box, as eval_expr_impl's EX_DYN_CALL does. */
+                if (fnv.tag == TURI_STRUCT && fnv.as_struct && fnv.as_struct->is_any_box &&
+                    fnv.as_struct->n_fields == 1 && fnv.as_struct->fields)
+                    fnv = fnv.as_struct->fields[0];
+                if (fnv.tag != TURI_CLOSURE || !fnv.as_closure) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg),
+                             "cannot call a %s value -- it is not a function",
+                             turi_any_display_type(fnv) ? turi_any_display_type(fnv)
+                                                        : "non-function");
+                    bool raised;
+                    TuriValue r7 = turi_r7rs_type_error(env, "", "a procedure", fnv, &raised);
+                    if (raised) { cur = r7; descending = false; break; }
+                    turi_runtime_panic(env, msg);
+                    cur = turi_nil(); descending = false; break;
+                }
+                uint32_t n = control->as.dyn_call_.n_args;
+                TuriValue *acc = NULL;
+                if (n > 0) {
+                    acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                    if (!acc) {
+                        result = turi_error("eval: out of memory evaluating call arguments");
+                        goto done;
+                    }
+                }
+                DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_ARG, .expr = control,
+                                         .frame = cf, .last = fnv, .aux = acc,
+                                         .tail = tail }));
+                if (n > 0) {
+                    control = control->as.dyn_call_.args[0];
+                    tail = false;   /* call args are non-tail */
+                } else {
+                    cur = turi_nil(); descending = false;  /* args ready: run handler */
+                }
+                break;
+            }
             case EX_MATCH: {
                 /* A scrutinee that may perform is driven on the work-stack
                  * (DK_MATCH_SCRUT), so its perform reaches the prompt scan;
@@ -9096,7 +9171,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         case DK_BUILTIN_ARG:
                             cnt = wc->frames[i].expr->as.builtin.n; break;
                         case DK_CALL_ARG:
-                            cnt = wc->frames[i].expr->as.call_.n_args; break;
+                            cnt = drive_call_n_args(wc->frames[i].expr); break;
                         case DK_MAKE_STRUCT:
                             cnt = wc->frames[i].expr->as.make_struct_.n_fields; break;
                         case DK_PERFORM_ARG:
@@ -9829,13 +9904,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             }
             case DK_CALL_ARG: {
                 TuriValue *acc = (TuriValue *)top->aux;
-                uint32_t n = top->expr->as.call_.n_args;
+                uint32_t n = drive_call_n_args(top->expr);
+                bool is_dyn = top->expr->kind == EX_DYN_CALL;
                 if (signaled) { TURI_DRIVE_FREE(acc); len--; break; }
                 if (n > 0) {
                     acc[top->index] = cur;
                     top->index++;
                     if (top->index < n) {
-                        control = top->expr->as.call_.args[top->index];
+                        control = (Expr *)drive_call_arg(top->expr, top->index);
                         cf = top->frame; tail = false; descending = true;  /* args non-tail */
                         break;
                     }
@@ -9843,6 +9919,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* All args ready (a zero-arg call reaches here directly with
                  * acc == NULL). */
                 TuriClosure *cl = top->last.as_closure;
+                /* r7rs-lang-plan R6: a VARIADIC callee reached through a
+                 * dynamic call packs the surplus arguments into its rest chain
+                 * here -- a static call site packs at elaboration.  See
+                 * turi_pack_rest_args. */
+                if (is_dyn && !cl->native && cl->fn && ((FnDef *)cl->fn)->is_variadic) {
+                    const FnDef *vfd = (const FnDef *)cl->fn;
+                    uint32_t want = (uint32_t)vfd->n_params - (cl->skip_env_param ? 1u : 0u);
+                    TuriValue *packed = turi_pack_rest_args(env, acc, n, 0, want);
+                    if (packed) { TURI_DRIVE_FREE(acc); acc = packed; n = want; }
+                }
                 /* The runtime-tag re-dispatch that sat here
                  * (gde_reresolve_method_by_value) is retired -- the
                  * carrier-helper dispatch recovery at EX_CALL setup covers its
@@ -9890,7 +9976,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * bind only the callee's declared value params.  See
                  * docs/archive/history/turi-interp-forall-dict-wide-consumer-arity.md. */
                 uint32_t arg_base = 0;
-                if (top->expr->as.call_.is_poly_call && n > effective_params)
+                if (!is_dyn && top->expr->as.call_.is_poly_call && n > effective_params)
                     arg_base = n - effective_params;
                 /* SR2b: baked-representative correction by RUNTIME ctor name.
                  * A dict-carrying method call whose static dispatch stayed
@@ -10020,7 +10106,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
                  * method call inside the body can re-resolve its instance. */
-                if (top->expr->as.call_.n_abi_bindings == 0)
+                if (!is_dyn && top->expr->as.call_.n_abi_bindings == 0)
                     frame_pin_hkt_tyvars_from_args(env, call_frame, fn,
                                                    param_offset, effective_params,
                                                    top->expr, arg_base);
@@ -10031,19 +10117,21 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * exists to serve.  With zero bindings its recording loop is a
                  * no-op, so the previous behaviour is unchanged for every other
                  * call of that shape. */
-                frame_record_abi(env, call_frame, top->frame, top->expr);
+                if (!is_dyn)
+                    frame_record_abi(env, call_frame, top->frame, top->expr);
                 /* set-add-elem-hash-disagrees-with-set-member: a bare-tyvar
                  * parameter whose binding elab left abstract is pinned from
                  * the argument's own static type, BEFORE the constraint
                  * dictionaries below are resolved from the frame's pins. */
-                frame_pin_bare_tyvars_from_args(env, call_frame, fn,
-                                                param_offset, effective_params,
-                                                top->expr, arg_base);
+                if (!is_dyn)
+                    frame_pin_bare_tyvars_from_args(env, call_frame, fn,
+                                                    param_offset, effective_params,
+                                                    top->expr, arg_base);
                 /* Bare-head constrained instance: bind its constraint tyvars
                  * (`(C A)`'s `A`) from the receiver arg's static type so a nested
                  * dispatch inside the body resolves the element's real instance
                  * instead of the baked int-carrier representative. */
-                if (fn->owner_instance && n > 0 && top->expr->as.call_.args)
+                if (!is_dyn && fn->owner_instance && n > 0 && top->expr->as.call_.args)
                     frame_bind_instance_constraint_tyvars(
                         env, call_frame, fn, &top->expr->as.call_.args[0]->type);
                 /* turi-dict-passing-plan (plain constrained generics): with the
@@ -11156,6 +11244,8 @@ static TuriValue eval_spawn_fiber(TuriEnv *env, TuriValue cl_val) {
 
     return turi_future_val(f);
 }
+
+TuriValue turi_spawn_fiber(TuriEnv *env, TuriValue cl) { return eval_spawn_fiber(env, cl); }
 
 /* Wait for the future `fv` to settle and return its value: park the current
  * fiber on it, or pump the event loop from the main context.  DEPR-R0
@@ -13903,7 +13993,7 @@ static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen);
 static size_t promo_wscont_aux_cap(const DriveCont *d) {
     switch (d->kind) {
     case DK_BUILTIN_ARG: return d->expr->as.builtin.n;
-    case DK_CALL_ARG:    return d->expr->as.call_.n_args;
+    case DK_CALL_ARG:    return drive_call_n_args(d->expr);
     case DK_MAKE_STRUCT: return d->expr->as.make_struct_.n_fields;
     default:             return 0;
     }

@@ -26,7 +26,7 @@ untyped, is refused at compile time with `'f' is not a function or
 continuation`. The workaround is the relay shape (the Turmeric side calls a
 *named* Scheme export, which looks the procedure up), which every
 `r7rs-threads-*` fixture uses. Found 2026-10-03 designing SRFI 18
-(docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+(docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 ## Repro
 
@@ -79,3 +79,26 @@ continuation" sites in src/compiler/elab_call.c (around lines 4426 and
 
 Either way, document it in r7rs-guide.md's seam section next to "Each
 argument crossing into a typed Turmeric function is checked".
+
+## Resolution (2026-10-05)
+
+The first direction. The elaborator made a call through an `any` value a
+dynamic call (`saffron_dyn_call_on`) only in a dynamic dialect's file
+(`lang_span_is_dynamic`); it now does in every dialect, both for a binding
+of type `any` and for a call head of that type (src/compiler/elab_call.c).
+The callee's tag is checked at run time, so a value that is not a procedure
+is the same catchable "not a procedure" error Scheme gives, and the result
+is `any`. A parameter left untyped in a Turmeric file is still an `int`
+(the language's default), so the callback is written `[f : any]`.
+
+A plain Turmeric program making such a call then hit a C clash: the
+dynamic-call helpers forward-declared `__tur_any_type_name` `static`, and a
+unit linked against the runtime archive declares it non-static. The forward
+declaration was redundant (the definition or the archive's prototype always
+comes first) and is gone (src/compiler/emit_module.c).
+
+SRFI 18 (stdlib/r7rs/thread.tur) did not need this in the end -- a
+prelude-shaped file calls Scheme procedures already -- but a Turmeric
+library taking a callback from Scheme does. Pinned by
+`tests/fixtures/r7rs-turmeric-calls-scheme-procedure` and
+`tests/fixtures/any-value-call`, on both back ends.

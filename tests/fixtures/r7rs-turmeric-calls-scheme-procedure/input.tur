@@ -1,0 +1,14 @@
+#lang r7rs
+;; docs/archive/turmeric-module-cannot-call-a-scheme-procedure-value.md: a
+;; Turmeric module calls a Scheme procedure it is handed as `any` -- a
+;; thunk, a standard procedure, a lambda of two -- and a value that is not
+;; a procedure is a run-time error `guard` catches, as in Scheme.
+(import (scheme base) (scheme write) (turmeric callit))
+(write (call0 (lambda () 42)))
+(newline)
+(write (call2 + 1 2))
+(newline)
+(write (call2 (lambda (a b) (list a b)) (quote x) "y"))
+(newline)
+(write (guard (e (#t (quote refused))) (call0 5)))
+(newline)

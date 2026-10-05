@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03. Extends docs/archive/r7rs-srfi-plan.md
+Status: done 2026-10-05 -- T0 2026-10-03; T0b, T0a, T1, T2, T3 and T5 2026-10-04; every 2.1a report fixed 2026-10-04/05; T4, the sicp-corpus, through 5.5 on 2026-10-05 (4.3 found two proper-tail-call reports, both fixed). Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -64,11 +64,11 @@ Each has a report with a repro. The first blocks SICP 4.1 as printed.
 
 | Report | Effect on a SICP reader |
 |---|---|
-| [r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md) | `(define apply-in-underlying-scheme apply)` then `(define (apply ...))`: compiled hangs, interpreted `unbound variable: apply--user` |
-| [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md) | the evaluator's `eval` plus `(import (scheme eval))`: C compile error |
-| [r7rs-apply-variadic-over-eight-arguments](../reported/r7rs-apply-variadic-over-eight-arguments.md) | `(apply + long-list)` panics |
-| [r7rs-deep-recursion-segfaults-silently](../archive/r7rs-deep-recursion-segfaults-silently.md) | a 1e6-deep linear recursive process exits 139 with no output, compiled |
-| [turmeric-module-cannot-call-a-scheme-procedure-value](../reported/turmeric-module-cannot-call-a-scheme-procedure-value.md) | not reader-facing; shapes D1 below |
+| ~~[r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md)~~ | **Fixed 2026-10-04.** `(define apply-in-underlying-scheme apply)` then `(define (apply ...))`: compiled hung, interpreted `unbound variable: apply--user` |
+| ~~[r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md)~~ | **Fixed 2026-10-04.** the evaluator's `eval` plus `(import (scheme eval))`: C compile error |
+| ~~[r7rs-apply-variadic-over-eight-arguments](../archive/r7rs-apply-variadic-over-eight-arguments.md)~~ | **Fixed 2026-10-04.** `(apply + long-list)` panics |
+| ~~[r7rs-deep-recursion-segfaults-silently](../archive/r7rs-deep-recursion-segfaults-silently.md)~~ | **Fixed 2026-10-04.** a 1e6-deep linear recursive process exits 139 with no output, compiled |
+| ~~[turmeric-module-cannot-call-a-scheme-procedure-value](../archive/turmeric-module-cannot-call-a-scheme-procedure-value.md)~~ | **Fixed 2026-10-05.** not reader-facing; shapes D1 below |
 
 The student-facing guide, [sicp-guide](../guides/sicp-guide.md), documents
 the first four with workarounds (rename the evaluator's `eval`/`apply` to
@@ -125,26 +125,57 @@ Turmeric side calls back only `thread-entry__`.
 - **Registry access is locked.** The probe's alist was only safe because
   every `register!` happened on the main thread.
 
+**As built (T1-T2, 2026-10-04): simpler than the above.** No registry, no
+callback by name, no pthread mutex per SRFI mutex:
+
+- `stdlib/r7rs/thread.tur` is not a Turmeric module but a prelude-shaped
+  `#lang r7rs` file, like `(scheme time)`'s. Such a file can call a Scheme
+  procedure value, so a new thread's first frame (`r7rs-thread-entry__`)
+  calls its thunk directly. The SRFI table splices it in ahead of
+  `18.scm` (`SRFI_HELPERS` in scheme_lower.c), and 18.scm calls its
+  `r7rs-thread-...__` names, as other SRFI files call prelude internals.
+- **Rooting without a registry.** The thunk is handed from the creator's
+  stack to the child's: the creator waits (parked) until the child has
+  copied it, so it is on a scanned stack at every instant. Threads are
+  detached; a join waits on the thread record, not on `pthread_join`.
+- **One monitor.** Every SRFI 18 mutex, condition variable and join is
+  Scheme state in a record, changed only under one pthread mutex, and every
+  wait is a timed or untimed wait on its one condition variable,
+  re-checked on wake. A condition variable keeps a queue of waiter tokens,
+  so `signal` wakes exactly one and `broadcast` all. Every blocking call is
+  one r7gc.c already routes through a release point.
+- **current-thread** is a parameter: the parameter bindings are per thread
+  (and per fiber), and each new thread binds it first thing.
+- **Abandonment is decided lazily**: a locked mutex whose owner has ended
+  reads as abandoned (`mutex-state`, `mutex-lock!`).
+- **Interpreter (T2):** natives for the inline-C layer of thread.tur (turi
+  overrides only an inline-C defn by name): start is `eval_spawn_fiber`,
+  the monitor is a no-op (fibers switch only at a wait), a wait/sleep/yield
+  is `turi_sched_yield` (fiber.c), and every switch saves, clears and
+  restores turi's process-global dynamic-environment slots, so each green
+  thread has its own handlers and parameter bindings. A wait with nothing
+  able to run anywhere reports a deadlock instead of spinning.
+
 ### D2 -- SRFI 216 is a `library` row over 18 and 27
 
 `stdlib/srfi/216.scm`, written fresh (not the reference, see Section 1).
-`random` is over `(srfi 27)`. **Measured at T0:** the pruner does not drop
-27's top-level state, so every `(srfi 216)` import costs what importing
+`random` is over `(srfi 27)`. **Measured at T0:** the pruner did not drop
+27's top-level state, so every `(srfi 216)` import cost what importing
 `(srfi 27)` does, whether or not the program calls `random`: +142 KB of
-emitted C over a bare program (1.51 MB to 1.65 MB, +9%), and the build stays
-under a second. **Scheduled as stage T0b** (Section 4), not left open.
+emitted C over a bare program (1.51 MB to 1.65 MB, +9%). **Fixed in T0b**
+(Section 4): +1.8 KB unused, +40 KB with `random` called.
 Binding `random` to `stdlib/random.tur` instead, as an earlier draft
 suggested, is not a drop-in: its float functions return `:int` (a scaled
 integer, `rand-float`, `random-next-float!`), and it has no bignum ranges,
-which SICP's Fermat test (1.2.6) reaches with a large `n`. `test-and-set!` locks one private mutex once T3 has threads; until
-then nothing else can run between its test and its set.
+which SICP's Fermat test (1.2.6) reaches with a large `n`. `test-and-set!` runs under SRFI 18's monitor since T3; until
+then nothing else could run between its test and its set.
 
 **`parallel-execute` before SRFI 18 (decided at T0).** Not an error: it
 runs its thunks one after another, in argument order. That is a schedule a
 concurrent run may produce, so every result is one SICP 3.4 allows, and the
 section's code (serializers, mutexes over `test-and-set!`) runs. The cost is
 that no interleaving ever shows; sicp-guide.md says so in its 3.4 entry. T3
-replaces it with real threads.
+replaces it with real threads. **Replaced at T3 (2026-10-04).**
 
 **Conflicts (D5 of the SRFI plan):** `stream-null?` and `the-empty-stream`
 also exist in `(srfi 41)` with different representations; importing both is
@@ -241,7 +272,20 @@ them.
   floor 21); `tests/fixtures/r7rs-srfi-216` runs book-style 1.2.6, 2.2.1, 3.4
   and 3.5 code; `errors/r7rs-srfi-216-41-conflict` pins the refusal. The
   guide's paste-in prelude became `(import (srfi 216))`.
-- **T0b -- `(srfi 216)` stops paying for all of SRFI 27.** Today every
+- **T0b -- `(srfi 216)` stops paying for all of SRFI 27. DONE 2026-10-04.**
+  Direction 1 below, in two parts. The pruner (src/passes/srfi_prune.c,
+  `alloc_only`) now drops a `def` whose initializer is a call that only
+  allocates: literals, lambdas, constructors, local `set!`, and direct calls
+  to non-recursive `stdlib/srfi/` procedures of the same shape or to the
+  prelude's copying constructors (`PURE_PRELUDE`). And SRFI 27 keeps its
+  sources' state in a one-slot vector, so `random-integer`/`random-real`
+  draw from the default state directly rather than through the record's
+  closures (which reach `pseudo-randomize!` and the rest). Measured: an
+  unused `(srfi 216)` import went from +142 KB of C to +1.8 KB (a record
+  typedef and `(scheme time)`'s three procedures), and a program calling
+  `random` from +147 KB to +40 KB. `tests/check-r7rs-srfi-prune.sh` pins
+  both. SRFI 27's own suite: 36 of 36 on both back ends. Original text:
+  Today every
   import adds 142 KB of emitted C (D2), whether or not the program calls
   `random`. **Done when:** a program that imports `(srfi 216)` and never
   calls `random` emits the same C, within noise, as one without the import,
@@ -264,21 +308,67 @@ them.
   (D2) can never show one. The plan is not done until T3 has replaced it
   and the guide's "one after another" caveat is gone. SRFI 18 also stands
   on its own as an R7RS library people expect.
-- **T1 -- SRFI 18, compiled.** D1's two halves; fixture
-  `r7rs-srfi-18` (`requires.compiled` until T2); the stress cases from the
-  existing r7rs-threads fixtures re-expressed through the SRFI API.
-- **T2 -- SRFI 18 under turi.** Native overrides on fibers; drop the
-  `requires.compiled`.
-- **T3 -- 216's thread procedures over 18.** `parallel-execute` starts a
-  thread per thunk and joins them all; `test-and-set!` takes a mutex. The
-  guide's 3.4 entry loses its "one after another" caveat.
+- **T1 -- SRFI 18, compiled. DONE 2026-10-04.** D1's two halves, as built
+  (D1's last part). Fixture `r7rs-srfi-18`: threads, values, uncaught
+  exceptions, join timeouts, owned / not-owned / abandoned / timed-out
+  mutexes, a bounded buffer and a broadcast on condition variables, time
+  objects, the refusals, and eight threads on one mutex allocating between
+  turns (r7rs-threads-stress's shape through the SRFI API). It runs in
+  `tests/run-r7rs-gc.sh` under a collection every 31st allocation
+  (`threads-srfi18`); 30/30 plain runs and a `TUR_GC_TORTURE=1` run
+  matched. An unused `(srfi 18)` import costs only its eight record
+  types' declarations: thread.tur is pruned like an SRFI file, and
+  `make-parameter` with no converter counts as allocation-only.
+- **T2 -- SRFI 18 under turi. DONE 2026-10-04.** Native overrides on
+  fibers (D1's last part); `requires.compiled` dropped, the fixture's
+  output is identical on both back ends.
+- **T3 -- 216's thread procedures over 18. DONE 2026-10-04.**
+  `parallel-execute` starts a thread per thunk and joins them all;
+  `test-and-set!` runs under SRFI 18's monitor and yields when the cell was
+  already set (SICP's mutex spins on it, which would never let the holder
+  run under green threads). Measured: 300 runs of 3.4.1's unserialized
+  `(* x x)` / `(+ x 1)` pair gave 101 (226), 11 (73) and 100 (1). The
+  `r7rs-srfi-216` fixture now checks 40 runs of each, unserialized and
+  serialized, stay inside the book's sets. The guide's "one after
+  another" caveat is gone.
 - **T0a -- `(sicp extras)`** (D4): the library-head change and the file;
   a fixture with the guide's `amb` cases on both back ends. Independent of
-  T0, and the guide's extras block becomes the import.
+  T0, and the guide's extras block becomes the import. **DONE 2026-10-04.**
+  The SRFI table took a named row rather than a third table:
+  `(sicp extras)` maps to `SICP_EXTRAS_NUM` (src/compiler/scheme_lower.c),
+  `lib_label` names it in every message, it is never an `srfi-N` feature,
+  and its definitions are spelled `sicpx--<name>`. `amb` sets its choice
+  point through an exported-to-nobody `amb-set-fail!`, since a macro's
+  expansion cannot `set!` a library's variable. Fixture
+  `r7rs-sicp-extras` (both back ends): 4.3.2's multiple-dwelling puzzle,
+  every Pythagorean triple to 15 by forced failure with exhaustion caught
+  by `guard`, and a fresh search after `amb-reset!`.
 - **T4 -- SICP corpus** in `turmeric-lang/sicp-corpus` (D3), in the
   priority order of D3: the repo, its runner and CI first, then sections.
   Each section that fails gets a report under this repo's `docs/reported/`
   and an xfail marker there.
+  **Priority 1 and 4.1 written 2026-10-04** (sicp-corpus PR #1): 1.1-1.3,
+  2.1-2.3 (no picture language), 3.1, 3.3, 3.4, 3.5, and 4.1.1-4.1.4 as
+  printed (the evaluator's own `eval` and `apply`, its driver loop fed the
+  book's session); `(corpus prelude)` gave way to `(import (srfi 216))`.
+  Writing them found three defects, fixed here the same day:
+  [r7rs-program-redefinition-refused](../archive/r7rs-program-redefinition-refused.md)
+  (every section that refines a procedure),
+  [r7rs-internal-procedure-value-not-eq](../archive/r7rs-internal-procedure-value-not-eq.md)
+  (3.3.5's constraints), and the 2.1a `apply` report. Until they reach
+  `main` the affected sections are xfail there.
+  **The rest written 2026-10-05:** 4.1.5-4.1.7 (the analyzing evaluator),
+  4.2 (the lazy evaluator), 4.3 (the `amb` evaluator as 4.3.3 prints it,
+  on the book's sessions -- the book's own evaluator rather than
+  `(sicp extras)`, which its fixture covers), 4.4 (the query system), 5.2
+  (the simulator, on 5.1's machines) and 5.5 (the compiler on 5.4's
+  explicit-control evaluator, matching the book's stack statistics for
+  interpreted and compiled factorial). 4.3 found
+  [turi-tail-call-through-procedure-value-grows-stack](turi-tail-call-through-procedure-value-grows-stack.md)
+  and
+  [r7rs-tail-call-through-static-call-not-proper](r7rs-tail-call-through-static-call-not-proper.md),
+  both fixed the same day. 5.3 has nothing of its own to run, and 5.4 runs
+  inside 5.5.
 - **T5 -- guides.** `docs/guides/sicp-guide.md` exists (landed with this
   plan) and is written for a student with casual Scheme, not for Turmeric
   users. Each stage keeps it true: T0 replaces its pasted prelude with
@@ -288,7 +378,12 @@ them.
   `tests/fixtures/docs-r7rs-guide-examples` does for r7rs-guide.md; today
   they were checked by hand (extracted verbatim and run, 2026-10-03).
   r7rs-guide.md gets SRFI table rows for 18 and 216 and a pointer to the SICP
-  guide.
+  guide. **Mostly done 2026-10-04:** the guide's examples and stated
+  results are pinned on both back ends in `docs-sicp-guide-examples` (and
+  `docs-sicp-guide-no-import` for the no-import claim); r7rs-guide.md has
+  the 18 and 216 rows, a `(sicp extras)` paragraph and SRFI 18 in its
+  Threads paragraph, all pointing at the SICP guide. What stays open is the
+  standing upkeep: each 2.1a fix deletes its "Rough edges" entry.
 
 ## 5. Open questions
 
@@ -304,6 +399,6 @@ them.
    [turmeric-lang/sicp-corpus](https://github.com/turmeric-lang/sicp-corpus),
    public, CC BY-SA 4.0, with `run.sh`, CI, `(corpus prelude)` standing in
    for SRFI 216, and section 1.1. Adding 1.1 found
-   [r7rs-program-file-named-with-leading-digit-fails-to-compile](../archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md),
+   [r7rs-program-file-named-with-leading-digit-fails-to-compile](../archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md) (fixed 2026-10-04),
    which is why its files are named `sec-<section>.scm`.
 5. ~~Name for the extras library~~ **Decided 2026-10-03:** `(sicp extras)`.

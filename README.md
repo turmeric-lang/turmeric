@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.62.0` -- loop invariants graduate to always-on, `#reads` measures are checked for writes, and LSP diagnostics anchor on the document's own load, import or macro call instead of line 0.
+**Latest release:** `v0.63.0` -- fs / io / process return typed `IoError` results with new line, walk and output helpers, and `#lang r7rs` gains SRFI 18 threads, proper tail calls and million-deep recursion.
 
 ## What
 

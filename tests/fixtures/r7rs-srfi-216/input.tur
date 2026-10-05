@@ -1,5 +1,5 @@
 #lang r7rs
-;; SRFI 216, SICP Prerequisites (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md,
+;; SRFI 216, SICP Prerequisites (docs/archive/r7rs-srfi-18-216-sicp-plan.md,
 ;; stage T0): the names SICP assumes from MIT Scheme, used the way the book
 ;; uses them.  The suite under tests/r7rs/srfi/216 checks each export alone.
 (import (scheme base) (scheme write) (srfi 216))
@@ -83,3 +83,23 @@
 (parallel-execute (protected (lambda () (set! balance (- balance 10))))
                   (protected (lambda () (set! balance (- balance 20)))))
 (display balance) (newline)
+
+;; 3.4.1, Figure 3.29's neighbours: two unserialized procedures on one x can
+;; end at 101, 121, 110, 11 or 100; serialized, only at 101 or 121.  Since
+;; T3 each thunk runs on a thread of its own, so any of those may come up;
+;; the check is that nothing outside the book's sets ever does.
+(define (trial serialize?)
+  (define x 10)
+  (define s (make-serializer))
+  (define (wrap p) (if serialize? (s p) p))
+  (parallel-execute (wrap (lambda () (set! x (* x x))))
+                    (wrap (lambda () (set! x (+ x 1)))))
+  x)
+(define (all-in? allowed n serialize?)
+  (let loop ((i 0))
+    (cond ((= i n) #t)
+          ((memv (trial serialize?) allowed) (loop (+ i 1)))
+          (else #f))))
+(display (list (all-in? '(101 121 110 11 100) 40 #f)
+               (all-in? '(101 121) 40 #t)))
+(newline)
