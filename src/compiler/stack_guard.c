@@ -127,14 +127,14 @@ bool tur_stack_nearly_exhausted(void) {
  * coroutine's stack and overflowed it.  So the flag counts only while the
  * stack pointer is inside the big stack, whose top is recorded beside it. */
 static TUR_THREAD_LOCAL bool tls_on_big_stack;
-static TUR_THREAD_LOCAL const char *tls_big_hi;
+static TUR_THREAD_LOCAL uintptr_t tls_big_hi;   /* an address, not a pointer to deref */
 static TUR_THREAD_LOCAL size_t tls_big_size;
 
 static size_t tur_emit_stack_bytes(void);
 
 static void tur_big_stack_mark(size_t size) {
     volatile char here = 0;
-    tls_big_hi = (const char *)&here;
+    tls_big_hi = (uintptr_t)&here;
     tls_big_size = size;
     tls_on_big_stack = true;
 }
@@ -142,7 +142,7 @@ static void tur_big_stack_mark(size_t size) {
 static bool tur_on_big_stack_now(void) {
     if (!tls_on_big_stack) return false;
     volatile char here = 0;
-    const char *sp = (const char *)&here;
+    uintptr_t sp = (uintptr_t)&here;
     return sp <= tls_big_hi && (size_t)(tls_big_hi - sp) < tls_big_size;
 }
 
