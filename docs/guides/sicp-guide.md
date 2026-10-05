@@ -254,11 +254,6 @@ it is worth reporting.
 These are known defects, each with an open report. When one is fixed, its
 entry here goes away.
 
-- **A file name starting with a digit** (`1.1.scm`, `3.5-streams.scm`)
-  fails under `tur run` with C compiler errors once the file imports a
-  library of your own. Start file names with a letter: `sec-1.1.scm`.
-  `tur --interpret` is not affected.
-  [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-program-file-named-with-leading-digit-fails-to-compile.md).
 - **Very deep recursion in a compiled program** (around a million calls)
   ends the program with no message. Use `tur --interpret`, which handles it.
   [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-deep-recursion-segfaults-silently.md).

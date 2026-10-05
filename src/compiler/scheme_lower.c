@@ -6925,6 +6925,13 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
             const char *base = strrchr(sf->path, '/');
             base = base ? base + 1 : sf->path;
             size_t at = 0;
+            /* r7rs-program-file-named-with-leading-digit-fails-to-compile:
+             * the module name prefixes C identifiers, which may not start
+             * with a digit -- SICP readers name files `1.1.scm`. */
+            if (*base >= '0' && *base <= '9') {
+                memcpy(mbuf, "r7rs-program-", 13);
+                at = 13;
+            }
             for (const char *p = base; *p && at + 1 < sizeof mbuf; p++) {
                 if (*p == '.') break;
                 mbuf[at++] = (*p == '-' || *p == '_' || (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||

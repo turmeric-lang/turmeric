@@ -388,6 +388,6 @@ them.
    [turmeric-lang/sicp-corpus](https://github.com/turmeric-lang/sicp-corpus),
    public, CC BY-SA 4.0, with `run.sh`, CI, `(corpus prelude)` standing in
    for SRFI 216, and section 1.1. Adding 1.1 found
-   [r7rs-program-file-named-with-leading-digit-fails-to-compile](../reported/r7rs-program-file-named-with-leading-digit-fails-to-compile.md),
+   [r7rs-program-file-named-with-leading-digit-fails-to-compile](../archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md) (fixed 2026-10-04),
    which is why its files are named `sec-<section>.scm`.
 5. ~~Name for the extras library~~ **Decided 2026-10-03:** `(sicp extras)`.
