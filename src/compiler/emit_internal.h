@@ -1390,6 +1390,7 @@ void emit_frame_note_parent(const char *frame, const char *parent);
 const char *emit_frame_parent(const char *frame);
 void tcg_reset_group_registry(void);
 bool fn_may_bounce(const struct FnDef *fd);
+const struct FnDef *tb_static_tail_callee(const struct Expr *e);
 void tb_register_fatbox(EmitCtx *ctx, const char *box, const char *fnptr);
 void tb_register_thunk(EmitCtx *ctx, const char *thunk);
 /* r7rs-lang-plan R6: register a boxed variadic fn type's id with its fixed

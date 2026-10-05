@@ -3741,6 +3741,36 @@ static Form *lower(SL *sl, Form *f) {
         sl->expand_depth--;
         return r;
     }
+    /* `((lambda (x ...) body...) a ...)` is `(let ((x a) ...) body...)`, which
+     * is how R7RS defines `let` -- and lowered as a call of a closure value it
+     * was never a C tail call, so a loop written that way grew the stack.
+     * Only a fixed formals list whose length matches; `lambda` must be the
+     * keyword, not a local. */
+    if (head->tag == F_LIST && head->as.list.len >= 3 && !prelude_span(f->span) &&
+        head->as.list.items[0]->tag == F_SYM &&
+        !(sl->scope && scope_lookup(sl->scope, head->as.list.items[0]->as.sym)) &&
+        (global_alias_orig(sl, head->as.list.items[0]->as.sym)
+             ? global_alias_orig(sl, head->as.list.items[0]->as.sym)
+             : head->as.list.items[0]->as.sym) == sl->s_lambda) {
+        const Form *formals = head->as.list.items[1];
+        uint32_t nf = formals->tag == F_LIST ? formals->as.list.len : 0;
+        bool ok = (formals->tag == F_NIL || formals->tag == F_LIST) && nf == f->as.list.len - 1;
+        for (uint32_t i = 0; ok && i < nf; i++)
+            ok = formals->as.list.items[i]->tag == F_SYM &&
+                 !is_sym(formals->as.list.items[i], sl->s_dot);   /* (x . rest) */
+        if (ok) {
+            FB binds = {0};
+            for (uint32_t i = 0; i < nf; i++)
+                fb_push(&binds, Ln(sl, f->span, 2, formals->as.list.items[i], f->as.list.items[i + 1]));
+            FB let = {0};
+            fb_push(&let, Sym(sl, f->span, sl->s_let));
+            fb_push(&let, nf ? fb_list(sl, &binds, f->span) : Nil(sl, f->span));
+            for (uint32_t i = 2; i < head->as.list.len; i++) fb_push(&let, head->as.list.items[i]);
+            Form *lf = fb_list(sl, &let, f->span);
+            Form *r = lower_let(sl, lf);
+            if (r) return r;
+        }
+    }
     if (head->tag == F_SYM) {
         const Symbol *h = hsym;
         Form *r = NULL;

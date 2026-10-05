@@ -1,0 +1,29 @@
+#lang r7rs
+;; Tail calls that mix procedure values and top-level procedures stay proper
+;; when compiled.  A continuation lambda that tail-calls a top-level
+;; procedure, which tail-calls a continuation, is SICP 4.3's amb evaluator
+;; throughout; the lambda used to make the call as an ordinary C call, so the
+;; chain grew the C stack until it overflowed.  And `((lambda (m) ...) x)` in
+;; tail position is a `let`, so a loop written that way is a loop.
+;;
+;; Under run.sh the program's own 1 GiB stack would hide a regression, so
+;; tests/check-r7rs-deep-recursion.sh also runs this file in an 8 MiB stack
+;; with TUR_STACK_REEXEC=0.
+(import (scheme base) (scheme write))
+
+(define (step n k)
+  (if (= n 0) (k 0) (step (- n 1) (lambda (v) (go k v)))))
+(define (go k v) (k (+ v 1)))
+(write (step 300000 (lambda (v) v)))
+(newline)
+
+(define (count-down n k)
+  (if (= n 0) (k 'done) ((lambda (m) (count-down m k)) (- n 1))))
+(write (count-down 300000 (lambda (v) v)))
+(newline)
+
+;; The rewrite is only for a fixed formals list.
+(write ((lambda (x y . z) z) 3 4 5 6))
+(write ((lambda args args) 1 2))
+(write ((lambda () 'none)))
+(newline)

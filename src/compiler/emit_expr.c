@@ -7655,16 +7655,45 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
  * driver's `tur_tb_armed_for` on entry.  Syntactic, over the shapes the tail
  * grammar walks; a tail site the emitter then declines to bounce simply drives
  * instead, which is always correct. */
+/* A static tail call to a bouncer extends the chain: the caller, when armed,
+ * hands the arming on to the callee (emit_tail), so the callee's own dynamic
+ * tail calls can still bounce to the driver below both.  SICP 4.3's amb
+ * evaluator is that shape throughout -- a continuation lambda tail-calls a
+ * top-level procedure that tail-calls a continuation.  Bounded, so mutual
+ * static recursion ends the walk. */
+#define TB_STATIC_HOP_MAX 4
+static bool tb_tail_reaches_dyn_call_d(const Expr *e, int depth);
+const FnDef *tb_static_tail_callee(const Expr *e) {
+    /* Not `is_tail_call`: tco_mark sets that as each body is emitted, and
+     * this is asked of bodies not emitted yet.  The walk only reaches tail
+     * positions; emit_tail arms only a call it emits as a C tail call. */
+    if (!e || e->kind != EX_CALL || !e->as.call_.fn_binding || e->as.call_.ptr_sig)
+        return NULL;
+    const FnDef *cd = e->as.call_.fn_binding->source_fn_def;
+    if (!cd || cd->closure || !cd->body || cd->body->kind == EX_INLINE_C ||
+        !cd->binding || !cd->binding->name || !cd->binding->name->name ||
+        strcmp(cd->binding->name->name, "main") == 0)
+        return NULL;
+    return cd;
+}
 static bool tb_tail_reaches_dyn_call(const Expr *e) {
+    return tb_tail_reaches_dyn_call_d(e, 0);
+}
+static bool tb_tail_reaches_dyn_call_d(const Expr *e, int depth) {
     while (e) {
         switch (e->kind) {
             case EX_DYN_CALL:
                 return e->as.dyn_call_.n_args <= TUR_FAT_SHIM_MAX_ARITY;   /* the trampoline's slots */
+            case EX_CALL: {
+                const FnDef *cd = tb_static_tail_callee(e);
+                return cd && depth < TB_STATIC_HOP_MAX &&
+                       tb_tail_reaches_dyn_call_d(cd->body, depth + 1);
+            }
             case EX_REINTERPRET: e = e->as.reinterpret_.expr; continue;
             case EX_ASCRIBE: e = e->as.ascribe_.inner; continue;
             case EX_IF:
                 if (!e->as.if_.else_or_null) return false;
-                if (tb_tail_reaches_dyn_call(e->as.if_.then_)) return true;
+                if (tb_tail_reaches_dyn_call_d(e->as.if_.then_, depth)) return true;
                 e = e->as.if_.else_or_null;
                 continue;
             case EX_DO:
@@ -7677,7 +7706,7 @@ static bool tb_tail_reaches_dyn_call(const Expr *e) {
                 continue;
             case EX_MATCH:
                 for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
-                    if (tb_tail_reaches_dyn_call(e->as.match_.arms[i].body)) return true;
+                    if (tb_tail_reaches_dyn_call_d(e->as.match_.arms[i].body, depth)) return true;
                 return false;
             default:
                 return false;

@@ -11,6 +11,10 @@
 #     "stack overflow (recursion too deep)", and still dies of SIGSEGV
 #     (exit 139).  Run with TUR_STACK_REEXEC=0, so it overflows the default
 #     stack at once rather than after touching a GiB.
+#   - Tail calls stay proper in an 8 MiB stack with the re-exec off: a
+#     continuation lambda tail-calling a top-level procedure that tail-calls
+#     a continuation, and a tail `((lambda (m) ...) x)`
+#     (tests/fixtures/r7rs-tail-call-hand-on-through-static-call).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 TUR_REL="${TUR:-./build/tur}"
@@ -54,6 +58,16 @@ if [ "$rc" != 139 ]; then
 fi
 if ! grep -q "stack overflow (recursion too deep)" "$TMP/runaway.err"; then
     fail "a runaway recursion said nothing about the stack: '$(head -2 "$TMP/runaway.err")'"
+fi
+
+TAILFIX=tests/fixtures/r7rs-tail-call-hand-on-through-static-call
+if ! "$TUR" build "$TAILFIX/input.tur" -o "$TMP/tail" > "$TMP/tail.build" 2>&1; then
+    fail "tail: tur build failed: $(grep -m1 -i error "$TMP/tail.build")"
+else
+    out="$( (ulimit -s 8192 2>/dev/null; TUR_STACK_REEXEC=0 "$TMP/tail") 2>"$TMP/tail.err")"; rc=$?
+    if [ "$rc" != 0 ] || [ "$out" != "$(cat "$TAILFIX/expected.stdout")" ]; then
+        fail "tail calls in an 8 MiB stack exited $rc: $(head -2 "$TMP/tail.err")"
+    fi
 fi
 
 if [ $FAILED -ne 0 ]; then
