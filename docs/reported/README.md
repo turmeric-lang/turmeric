@@ -2683,6 +2683,17 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 | [ok-nil-unconstructible-in-turmeric](ok-nil-unconstructible-in-turmeric.md) | low | `(Result nil E)` is legal, but Turmeric code cannot build its ok side: `nil` in expression position is `:void`, so `(Ok nil)` is a cc error. Separately, a forward reference to a function returning `(Result nil E)` is a TUR-E0012 kind mismatch at 0:0. Worked around with `io-error/ok-unit` and a self-recursive `fs/walk-names` |
 | [inline-c-builders-cannot-nest-option-in-result](inline-c-builders-cannot-nest-option-in-result.md) | low-medium | `(Result (Option T) E)` stores the `Option` BY VALUE in the ok slot, so `tur_ok_int(tur_some_ptr(s))` from inline-C silently matches neither arm. `file-read-line` nests it in Turmeric instead |
 
+## Module system (filed 2026-10-05)
+
+Found while building the Trowel plugin system, which evaluates Turmeric source
+in-process via `turi_eval`. Slash-qualified module member calls (`Foo/bar`)
+work inside the defining module and inside modules that import `Foo`, but are
+not resolved by the elaborator at the top level (outside any `defmodule`).
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [qualified-module-calls-unresolved-at-toplevel](qualified-module-calls-unresolved-at-toplevel.md) | medium | `elab_lookup_sym` only resolves qualified names when `current_module_name` or `current_module` is set; at the top level both are NULL, so `(Foo/bar)` degrades to TUR-W0040 runtime dispatch. Exported members fail (mangled `Foo__bar` vs runtime lookup `Foo_slbar`); non-exported members succeed (inverted -- they stay in the global env under their bare name). Affects `tur eval`, `tur run`, and `turi_eval` |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
