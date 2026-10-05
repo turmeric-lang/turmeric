@@ -509,6 +509,10 @@ traffic and drop glue rather than collection pauses. Practical consequences:
 - A by-value struct parameter is copied on bind, so a wide struct passed
   through a hot loop is worth passing by pointer or borrowing.
 
+For measured per-feature costs (bytes per `Vec` slot, `Map` entry, `rc`,
+closure, effect) and strategies for using less, see
+[memory-usage-guide.md](memory-usage-guide.md).
+
 See [gc-guide.md](gc-guide.md) for how RC, arenas, and the cycle collector fit
 together, and [ownership-guide.md](ownership-guide.md) for deciding who owns
 what in the first place.

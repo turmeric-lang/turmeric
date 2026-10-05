@@ -44,6 +44,20 @@ suite's warm-up should have absorbed.
 | --- | --- | --- |
 | [r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md) | medium | The "program-independent" cached prelude object is not: fresh-name counters, whole-program CPS decisions and irrelevant `-I` flags reach its text, so 114 r7rs fixtures need 10 objects at 5-14 s each cold, a lambda alone forks a new one, `run.sh`'s warm-up warms the wrong variant, and the cache is never evicted. Importing a library is not the cause |
 
+## Found writing the memory-usage guide (filed 2026-10-05)
+
+Measured with valgrind (memcheck traffic, massif peak) on small probe
+programs; every number is in its report. The arena slab-reuse bug found the
+same day was fixed and archived.
+
+| Report | Severity | Summary |
+| --- | --- | --- |
+| [hamt-nodes-allocated-at-full-array-size](hamt-nodes-allocated-at-full-array-size.md) | medium | A persistent `Map int int` holds ~360 B per entry: bitmap nodes are sized as a full 32-slot node plus their children, and each entry is a 264 B collision node plus a 32 B entry. Fix: size nodes with `offsetof` |
+| [fn-value-call-cps-frames-held-until-outer-entry](fn-value-call-cps-frames-held-until-outer-entry.md) | medium | Calling a function value goes through the `__cps` path and allocates ~200 B of continuation frames per call, reaped only when the outermost direct entry returns, so a tail-recursive loop grows for its whole run (`while` loops stay bounded). `#fx{}` does not help |
+| [closure-let-in-self-tail-loop-leaks](closure-let-in-self-tail-loop-leaks.md) | low (leak) | A capturing closure `let`-bound in a self-tail-recursive body is never dropped: the CPS backedge omits `TUR_CLOSURE_DROP`, which the `rc` defer path does fire |
+| [stdlib-list-null-check-retires-regions](stdlib-list-null-check-retires-regions.md) | low | `tnil?`/`tlength` (and `tcons`) erase a node to `:int`, so any `with-region` that walks a stdlib list retires instead of rewinding |
+| ~~[region-rewind-reuses-only-head-slab](../archive/region-rewind-reuses-only-head-slab.md)~~ | medium | **RESOLVED 2026-10-05** (archived): a rewound region refilled only its head slab and malloc'd the rest again, so a region rewound in a loop grew without bound (9.9 MB at 50 rounds vs 267 KB). `Arena` now keeps emptied slabs on a spare list; pinned by `tests/region_unit.c` check (i) |
+
 ## Editor integration surfaces (filed 2026-10-03)
 
 All resolved and archived. These are the six findings from bringing
