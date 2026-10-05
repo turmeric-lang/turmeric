@@ -12,7 +12,8 @@ set -u
 cd "$(dirname "$0")/.."
 
 fail=0
-for check in tests/check-reported-index.sh tests/check-r7rs-srfi-sync.sh; do
+for check in tests/check-reported-index.sh tests/check-r7rs-srfi-sync.sh \
+             tests/check-running-tests-guide.sh; do
     bash "$check" || fail=1
 done
 exit "$fail"

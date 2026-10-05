@@ -22,7 +22,11 @@ It reads the working tree, so commit the fix before pushing again.
 
 ### Test suites -- `bash tests/run.sh`
 
-`bash tests/run.sh` (the by-value HKT path) is the suite. The legacy
+`bash tests/run.sh` (the by-value HKT path) is the suite. To run one fixture,
+a slice, or another harness, see
+[docs/guides/running-tests-guide.md](docs/guides/running-tests-guide.md) --
+e.g. `TUR_TEST_FILTER='^name$' bash tests/run.sh`. Do not guess variable
+names: an unknown one is silently ignored and the whole suite runs. The legacy
 `TUR_M7_HKT=0` carrier path has been retired -- there is no longer a second
 suite. It is a signal, not a gate: run it when it is useful, read what it
 tells you, and use your judgement about what to do with red -- a red suite

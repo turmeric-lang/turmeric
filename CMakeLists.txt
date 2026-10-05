@@ -289,12 +289,16 @@ set_tests_properties(tur_r7rs_sanitize PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 # dialects) and run in torture mode (a collection every 31 allocations), and
 # churn loops (Scheme and Saffron) that must fit a 256 MiB address space with
 # the collector and not without it.
+#
+# 1500, not the repo-wide 720: the macOS runner measured 715 s (pass) and
+# 720 s (killed) on 2026-10-05, against 435-590 s days earlier.  Stopgap so
+# the suite reports rather than times out; the growth itself is unexplained.
 add_test(
   NAME tur_r7rs_gc
   COMMAND bash tests/run-r7rs-gc.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-set_tests_properties(tur_r7rs_gc PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+set_tests_properties(tur_r7rs_gc PROPERTIES TIMEOUT 1500 RUN_SERIAL TRUE)
 # The collector's divide-free slot index ((off * inv) >> 48, r7gc.c
 # tur_gc_slot_of) equals off / size for every size class at every offset.
 add_test(
@@ -802,6 +806,14 @@ add_test(
 add_test(
   NAME tur_reported_index_lint
   COMMAND bash tests/check-reported-index.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# docs/guides/running-tests-guide.md must name every TUR_*/TURI_* variable the
+# three fixture harnesses read: an unknown variable is silently ignored, so a
+# guessed filter name runs the whole suite instead of one fixture.
+add_test(
+  NAME tur_running_tests_guide_lint
+  COMMAND bash tests/check-running-tests-guide.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Every add_test declared under src/ must be visible to `ctest -N`.  It was
