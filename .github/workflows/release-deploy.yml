@@ -1,0 +1,161 @@
+name: Release (deploy + tag)
+
+# Stage 2 of the CI release cut -- docs/upcoming/ci-release-workflows-plan.md.
+#
+# Fires when a change to VERSION lands on main (the release PR from
+# release-prepare.yml merging).  Builds Try Turmeric from that commit, gates
+# it on the deploy-gate smoke test, deploys it to Cloudflare, and only THEN
+# tags -- the same ordering the `/cut-*-release` skills enforce, so a failed
+# deploy never strands a tag.  The tag push fires release.yml (binaries +
+# GitHub Release), which is unchanged.
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  # Manual re-run hatch: a deploy that failed on a flake can be retried from
+  # the Actions tab against main without another version bump.
+  workflow_dispatch:
+
+concurrency:
+  group: release-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Is this an untagged release?
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      released: ${{ steps.v.outputs.released }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: v
+        run: |
+          TAG="v$(cat VERSION)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$TAG already exists -- nothing to deploy or tag"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-web:
+    name: Build, gate and deploy Try Turmeric
+    needs: check
+    if: needs.check.outputs.released == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The deploy insists on spices (tools/check-pack-spices.py, the same
+      # check `just deploy-web` runs): genspices.py degrades to zero spice
+      # pages without the sibling checkout, which is fine for CI and wrong for
+      # the site.  Unpinned for the reason recorded at the same clone in ci.yml.
+      - name: Check out turmeric-spices (sibling)
+        run: |
+          git clone --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
+            ../turmeric-spices
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev
+
+      - name: Set up Python (for gendocs)
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Python doc deps (markdown)
+        run: python3 -m pip install --require-hashes -r tools/requirements.txt
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
+        with:
+          # Keep in step with ci.yml's web-smoke job.
+          version: 6.0.10
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build native tur (Release; needed for docs)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build -j --target tur
+
+      - name: Generate docs (writes web/public/doc-names.json + docs pack)
+        run: ./build/tur run docs
+
+      - name: The docs pack carries the spices
+        run: python3 tools/check-pack-spices.py web/public/docs-pack/
+
+      - name: Configure + build WASM
+        run: |
+          cmake -S . -B build-wasm -DTUR_WASM=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build build-wasm -j --target tur_wasm
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      # BLOCKING: a failure here ends the job before the deploy step.
+      - name: Deploy-gate smoke test
+        working-directory: web
+        timeout-minutes: 5
+        run: npx playwright test deploy-gate.spec.js --project=desktop
+
+      - name: Build the web bundle
+        working-directory: web
+        run: npm run build
+
+      # `npm run deploy` minus its own rebuild.  The Cloudflare vite plugin
+      # writes the deployable config to dist/<worker name, '-' -> '_'>/.
+      - name: Deploy to Cloudflare
+        working-directory: web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config dist/try_turmeric/wrangler.json
+
+  tag:
+    name: Tag ${{ needs.check.outputs.tag }}
+    needs: [check, deploy-web]
+    runs-on: ubuntu-latest
+    steps:
+      # RELEASE_PAT: a tag pushed with GITHUB_TOKEN does not trigger other
+      # workflows, so release.yml would never build the binaries.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Push the annotated tag
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          # Annotated, not signed -- C-4 in docs/upcoming/security-audit-plan.md.
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::notice::$TAG appeared while deploying; leaving it alone"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Tagged $TAG at $(git rev-parse HEAD); release.yml takes it from here." \
+            | tee -a "$GITHUB_STEP_SUMMARY"

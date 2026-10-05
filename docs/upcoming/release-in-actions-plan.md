@@ -10,6 +10,10 @@
 > major)", the open question of which LM writes the release notes (Cloudflare
 > Workers AI vs. a Mistral API key), and the requirement that docstrings be
 > regenerated as part of the release.
+> **2026-10-05:** [ci-release-workflows-plan](ci-release-workflows-plan.md)
+> was executed instead (review PR, Mistral API), and it measured Mistral --
+> GLM at `reasoning_effort: low` won there too. Section 3.3's "Mistral was not
+> measured" is now answered in that plan's "Model choice".
 > **Type:** Release engineering / CI
 > **Touches:** `.github/workflows/release.yml`, new `release-cut.yml` and
 > `release-build.yml`, new `tools/release/`, the `Justfile` `bump-*` recipes,
