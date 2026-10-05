@@ -1319,6 +1319,14 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_srfi_prune PROPERTIES TIMEOUT 720)
+# r7rs-deep-recursion-segfaults-silently: stdlib/r7rs/stack.tur gives a
+# compiled program a deep stack (Linux) and a message when it runs out.
+add_test(
+  NAME tur_r7rs_deep_recursion
+  COMMAND bash tests/check-r7rs-deep-recursion.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_deep_recursion PROPERTIES TIMEOUT 720)
 # r7rs-programs-compile-slowly: a `#lang r7rs` program builds as two units,
 # the prelude compiled once and cached.  No piece of state may be defined in
 # both, and two programs must link the same cached library object.

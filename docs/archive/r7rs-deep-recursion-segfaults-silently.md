@@ -52,3 +52,27 @@ Whichever lands, the guide's SICP section should say where the limit is.
 `docs/guides/sicp-guide.md` documents this defect in its "Rough edges" list
 (and the workaround in the chapter it affects). When this is fixed, delete
 that entry and any workaround text that only exists because of it.
+
+## Resolution (2026-10-04)
+
+Both directions, in stdlib/r7rs/stack.tur (a C block the prelude loads, so
+every compiled `#lang r7rs` program carries it):
+
+- **Recurse further (Linux).** A startup constructor raises RLIMIT_STACK's
+  soft value to 1 GiB (or the hard limit) and re-executes the program once
+  through /proc/self/exe, so the kernel lays out the address space for the
+  new limit; threads keep an 8 MiB default (`pthread_setattr_default_np`).
+  The report's repro now prints `500000500000`. `TUR_STACK_REEXEC=0` turns it
+  off. macOS fixes a main thread's stack at link time, so it is unchanged
+  there.
+- **Say what happened (Linux and macOS).** A SIGSEGV handler on an
+  alternate stack recognizes a fault within a few pages of the faulting
+  thread's stack pointer and writes `error: stack overflow (recursion too
+  deep)` before letting the signal end the program (still exit 139). A
+  handler the program installed itself is left alone.
+
+Measured: the full fixture suite and `tests/run-r7rs-gc.sh` (threads, fork,
+the `ulimit -v` reclamation cases) pass; each program start pays one extra
+exec. A runaway recursion now touches up to 1 GiB before it stops, where it
+used to stop at 8 MiB. Pinned by `tests/check-r7rs-deep-recursion.sh`
+(ctest `tur_r7rs_deep_recursion`).

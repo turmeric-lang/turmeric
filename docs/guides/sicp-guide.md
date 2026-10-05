@@ -33,8 +33,8 @@ tur run ex1.scm           # compile to a native program, then run it
 tur repl --lang r7rs      # an interactive prompt
 ```
 
-**Which to use.** Start with `tur --interpret`. It runs a file at once and
-handles very deep recursion (see Chapter 1 below). Switch to `tur run` when a
+**Which to use.** Start with `tur --interpret`. It runs a file at once.
+Switch to `tur run` when a
 program is slow, for example the timing exercises in 1.2.6. The first
 `tur run` after installing takes several seconds while Turmeric builds its
 runtime once; later runs take about a second to compile.
@@ -118,9 +118,11 @@ Some things that are worth knowing:
   31 digits. Dividing integers gives an exact fraction, as in the book:
   `(/ 6 4)` is `3/2`. Use a decimal point (`1.0`) when you want a float.
 - **Deep recursion.** 1.2.1 contrasts recursive and iterative processes.
-  The interpreter happily runs a recursive process a million calls deep. A
-  compiled program (`tur run`) handles a hundred thousand but not a
-  million. See "Rough edges" below. Iterative processes (tail calls) run in
+  Both back ends run a recursive process a million calls deep (compiled, on
+  Linux; on macOS a compiled program's stack is smaller, and `tur
+  --interpret` goes deeper). A recursion that never ends stops with `error:
+  stack overflow (recursion too deep)` -- after using up to a gigabyte of
+  stack on Linux, so expect a short pause. Iterative processes (tail calls) run in
   constant space on both, as the book says they should: a ten-million-step
   iterative loop, or `even?`/`odd?` calling each other a million times, is
   fine.
@@ -243,20 +245,18 @@ it is worth reporting.
 - **`error: Unknown operation -- TABLE frob`**: that is the book's own
   `(error "Unknown operation -- TABLE" m)` working as intended. The message
   is printed, then the objects, and the program stops.
-- **A program prints nothing and exits** under `tur run`: probably a very
-  deep recursion (see Chapter 1). Run it with `tur --interpret`.
+- **`error: stack overflow (recursion too deep)`**: a recursion that does
+  not reach its base case -- check that the argument gets closer to it on
+  every call. A correct but very deep one on macOS runs further under
+  `tur --interpret`.
 - **Turmeric's own syntax in examples elsewhere** (square brackets in
   `defn`, `:int` types) is the main Turmeric language, not Scheme. In a
   `.scm` file you are always writing plain Scheme.
 
 ## Rough edges
 
-These are known defects, each with an open report. When one is fixed, its
-entry here goes away.
-
-- **Very deep recursion in a compiled program** (around a million calls)
-  ends the program with no message. Use `tur --interpret`, which handles it.
-  [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-deep-recursion-segfaults-silently.md).
+None known today. When a defect turns up, it gets a report and an entry
+here, which goes away when the fix lands.
 
 ## What is coming
 
