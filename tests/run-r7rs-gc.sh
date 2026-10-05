@@ -90,6 +90,25 @@ dump_stacks() {
 # Standard input is $RD_STDIN (default /dev/null).  It polls every tenth of a
 # second, so a case that finishes at once is not held for a whole second:
 # every fixture in section 1 goes through here.
+# crash_stacks <stdin> <cmd...>: a case that DIED of a signal leaves nothing
+# but its exit status -- a segfault writes no stderr -- so it is run once
+# more under the debugger, with the same environment, and every thread's
+# stack at the fault is printed.  (macOS r7rs-sicp-metacircular-evaluator
+# and r7rs-srfi-35 exited 139 under torture on #1082 with an empty tail.)
+crash_stacks() {
+    local stdin="$1"; shift
+    if command -v gdb > /dev/null 2>&1; then
+        timeout 300 gdb -batch -ex "run < $stdin > /dev/null" -ex "thread apply all bt 30" --args "$@" 2>&1 |
+            grep -E '^(Thread|#|Program|\[)' | head -200
+    elif command -v lldb > /dev/null 2>&1; then
+        # -k: the commands lldb runs when the process stops on a crash.
+        perl -e 'alarm 300; exec @ARGV' lldb --batch -o "process launch -i $stdin -o /dev/null" \
+            -k "thread backtrace all -c 30" -k "quit 1" -- "$@" 2>&1 | head -200
+    else
+        echo "(no gdb or lldb here to print the stacks)"
+    fi
+}
+
 run_deadline() {
     local secs="$1" out="$2" err="$3" pid ticks=0
     shift 3
@@ -142,6 +161,13 @@ one_case() {
         # the message itself past the cut (saffron-class-fn-extra on #1007
         # showed only "panic at /var/folders/.../..._input_tur.c:27").
         tail -6 "$WORK/$name.err" | cut -c1-400 | sed 's/^/    /'
+        if [ "$rc" -gt 128 ] && [ "$rc" != 124 ]; then
+            echo "    --- stdout tail ($(wc -l < "$WORK/$name.out") of $(wc -l < "$dir/expected.stdout") expected lines) ---"
+            tail -3 "$WORK/$name.out" | cut -c1-200 | sed 's/^/    /'
+            echo "    --- stacks at the fault, re-run under the debugger ---"
+            (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" \
+                crash_stacks "$stdin" "$WORK/$name" "${args[@]}") | sed 's/^/    /'
+        fi
     elif ! diff -q "$WORK/$name.out" "$dir/expected.stdout" > /dev/null; then
         echo "FAIL $name -- stdout differs with the collector"
         diff "$WORK/$name.out" "$dir/expected.stdout" | head -6 | sed 's/^/    /'
@@ -149,7 +175,7 @@ one_case() {
         echo "PASS $name"
     fi
 }
-export -f one one_case run_deadline dump_stacks
+export -f one one_case run_deadline dump_stacks crash_stacks
 export TUR WORK TORTURE HOST
 
 printf '%s\n' "${fixtures[@]}" | xargs -P "$(nproc)" -I{} bash -c 'one "$@"' _ {}

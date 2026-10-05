@@ -67,7 +67,7 @@ Each has a report with a repro. The first blocks SICP 4.1 as printed.
 | [r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md) | `(define apply-in-underlying-scheme apply)` then `(define (apply ...))`: compiled hangs, interpreted `unbound variable: apply--user` |
 | [r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md) | the evaluator's `eval` plus `(import (scheme eval))`: C compile error |
 | [r7rs-apply-variadic-over-eight-arguments](../reported/r7rs-apply-variadic-over-eight-arguments.md) | `(apply + long-list)` panics |
-| [r7rs-deep-recursion-segfaults-silently](../reported/r7rs-deep-recursion-segfaults-silently.md) | a 1e6-deep linear recursive process exits 139 with no output, compiled |
+| [r7rs-deep-recursion-segfaults-silently](../archive/r7rs-deep-recursion-segfaults-silently.md) | a 1e6-deep linear recursive process exits 139 with no output, compiled |
 | [turmeric-module-cannot-call-a-scheme-procedure-value](../reported/turmeric-module-cannot-call-a-scheme-procedure-value.md) | not reader-facing; shapes D1 below |
 
 The student-facing guide, [sicp-guide](../guides/sicp-guide.md), documents

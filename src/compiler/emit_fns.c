@@ -6300,6 +6300,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * everything else in main -- that is where the `constructor`
          * attributes it replaces used to run.  Idempotent, so the constructor
          * wrapper emitted alongside the definition is harmless here. */
+        emit_main_deep_stack_prologue(file);
         ctx->indent += 4;
         indent_buf(file, ctx->indent);
         buf_puts(file, "__tur_static_init();\n");
