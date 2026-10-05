@@ -3,7 +3,7 @@
 ;;; Written for Turmeric rather than ported: the reference implementation's
 ;;; `runtime` multiplies by jiffies-per-second where it must divide, and its
 ;;; `parallel-execute` buffers every thread's output until all have finished.
-;;; docs/upcoming/r7rs-srfi-18-216-sicp-plan.md, stage T0.
+;;; docs/archive/r7rs-srfi-18-216-sicp-plan.md, stage T0.
 ;;;
 ;;; `parallel-execute` and `test-and-set!` are over SRFI 18 (stage T3): each
 ;;; thunk runs on a thread of its own, so SICP 3.4's interleavings really

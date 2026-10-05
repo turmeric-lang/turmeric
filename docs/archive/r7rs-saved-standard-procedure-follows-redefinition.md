@@ -12,7 +12,7 @@ variable becomes the *new* `apply`, so the evaluator calls itself forever
 (a hang, no error). Under `tur --interpret` the program dies with
 `unbound variable: apply--user`. Neither back end runs SICP 4.1 as written.
 Not specific to `apply`: `square` does the same. Found 2026-10-03 probing
-SICP code (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+SICP code (docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 ## Repro
 

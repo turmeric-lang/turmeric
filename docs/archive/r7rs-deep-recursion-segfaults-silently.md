@@ -6,7 +6,7 @@ all: no "stack overflow", no Scheme error. A student sees a program that
 printed nothing and exited 139. SICP 1.2.1 teaches exactly this shape
 (the linear recursive process) and invites trying it on large inputs. `tur
 --interpret` answers correctly. Found 2026-10-03 probing SICP code
-(docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+(docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 ## Repro
 

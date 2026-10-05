@@ -1,5 +1,5 @@
 #lang r7rs
-;; SRFI 216, SICP Prerequisites (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md,
+;; SRFI 216, SICP Prerequisites (docs/archive/r7rs-srfi-18-216-sicp-plan.md,
 ;; stage T0): the names SICP assumes from MIT Scheme, used the way the book
 ;; uses them.  The suite under tests/r7rs/srfi/216 checks each export alone.
 (import (scheme base) (scheme write) (srfi 216))

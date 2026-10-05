@@ -5,7 +5,7 @@ same name and `cc` rejects the unit; the user sees a C compiler error, not a
 Scheme one. SICP 4.1 defines its own `eval`, and a reader who has added
 `(scheme eval)` to their imports (to compare against the real one, say)
 hits this. `tur --interpret` is fine. Found 2026-10-03 probing SICP code
-(docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+(docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 ## Repro
 

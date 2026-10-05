@@ -17,7 +17,7 @@
 ;;; collection never waits on a thread that is waiting on SRFI 18.
 ;;;
 ;;; Interpreter twins of these primitives are T2 of
-;;; docs/upcoming/r7rs-srfi-18-216-sicp-plan.md.
+;;; docs/archive/r7rs-srfi-18-216-sicp-plan.md.
 ;;;
 ;;; Since: r7rs-srfi-18-216-sicp-plan T1
 ;; (srfi 18)'s primitives

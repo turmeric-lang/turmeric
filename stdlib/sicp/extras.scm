@@ -10,7 +10,7 @@
 ;;; not per thread: two threads searching at once share them (Racket's are
 ;;; the same).
 ;;;
-;;; docs/upcoming/r7rs-srfi-18-216-sicp-plan.md, D4 and stage T0a.
+;;; docs/archive/r7rs-srfi-18-216-sicp-plan.md, D4 and stage T0a.
 (define-library (sicp extras)
   (export inc dec identity amb amb-reset!)
   (import (scheme base))

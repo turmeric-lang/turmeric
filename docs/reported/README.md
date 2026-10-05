@@ -2606,7 +2606,7 @@ the `turmeric-ci` project; all three are accounted for:
 
 Found running book-style SICP code and an SRFI 18 thread-start prototype
 against `#lang r7rs`, for
-[r7rs-srfi-18-216-sicp-plan](../upcoming/r7rs-srfi-18-216-sicp-plan.md).
+[r7rs-srfi-18-216-sicp-plan](../archive/r7rs-srfi-18-216-sicp-plan.md).
 Chapters 1-3.5 already run on both back ends. These are what a student will
 hit next; the SICP guide's "Known rough edges" section points at each.
 

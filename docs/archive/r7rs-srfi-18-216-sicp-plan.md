@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2, T3 and T5's fixtures done 2026-10-04; every 2.1a report fixed 2026-10-04/05. sicp-corpus through 4.4 and 5.2 done 2026-10-05 (4.3 found two proper-tail-call reports, both fixed). Open: the rest of T4 (5.5). Extends docs/archive/r7rs-srfi-plan.md
+Status: done 2026-10-05 -- T0 2026-10-03; T0b, T0a, T1, T2, T3 and T5 2026-10-04; every 2.1a report fixed 2026-10-04/05; T4, the sicp-corpus, through 5.5 on 2026-10-05 (4.3 found two proper-tail-call reports, both fixed). Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -356,8 +356,19 @@ them.
   (every section that refines a procedure),
   [r7rs-internal-procedure-value-not-eq](../archive/r7rs-internal-procedure-value-not-eq.md)
   (3.3.5's constraints), and the 2.1a `apply` report. Until they reach
-  `main` the affected sections are xfail there. Open: 4.1.5-4.1.7, 4.2,
-  4.3 (with `(sicp extras)`), 4.4, 5.2, 5.5.
+  `main` the affected sections are xfail there.
+  **The rest written 2026-10-05:** 4.1.5-4.1.7 (the analyzing evaluator),
+  4.2 (the lazy evaluator), 4.3 (the `amb` evaluator as 4.3.3 prints it,
+  on the book's sessions -- the book's own evaluator rather than
+  `(sicp extras)`, which its fixture covers), 4.4 (the query system), 5.2
+  (the simulator, on 5.1's machines) and 5.5 (the compiler on 5.4's
+  explicit-control evaluator, matching the book's stack statistics for
+  interpreted and compiled factorial). 4.3 found
+  [turi-tail-call-through-procedure-value-grows-stack](turi-tail-call-through-procedure-value-grows-stack.md)
+  and
+  [r7rs-tail-call-through-static-call-not-proper](r7rs-tail-call-through-static-call-not-proper.md),
+  both fixed the same day. 5.3 has nothing of its own to run, and 5.4 runs
+  inside 5.5.
 - **T5 -- guides.** `docs/guides/sicp-guide.md` exists (landed with this
   plan) and is written for a student with casual Scheme, not for Turmeric
   users. Each stage keeps it true: T0 replaces its pasted prelude with

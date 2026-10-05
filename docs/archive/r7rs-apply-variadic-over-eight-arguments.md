@@ -5,7 +5,7 @@ lists)` and `(apply string-append strs)` are everyday Scheme, and SICP code
 (and its readers' exercise answers) use them on lists of any length. All of
 these callees are variadic and have no arity ceiling, yet `apply` panics
 as soon as the list has nine elements. Both back ends. Found 2026-10-03
-probing SICP code (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+probing SICP code (docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 This is not [r7rs-apply-more-than-four-arguments](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-apply-more-than-four-arguments.md)
 reopened. That report raised the dynamic-call ceiling to eight on purpose,

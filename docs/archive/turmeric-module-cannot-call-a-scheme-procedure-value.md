@@ -7,7 +7,7 @@ untyped, is refused at compile time with `'f' is not a function or
 continuation`. The workaround is the relay shape (the Turmeric side calls a
 *named* Scheme export, which looks the procedure up), which every
 `r7rs-threads-*` fixture uses. Found 2026-10-03 designing SRFI 18
-(docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+(docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 ## Repro
 

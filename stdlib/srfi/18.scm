@@ -1,6 +1,6 @@
 ;;; srfi/18 -- SRFI 18, Multithreading support.
 ;;;
-;;; Written for Turmeric (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md, D1).
+;;; Written for Turmeric (docs/archive/r7rs-srfi-18-216-sicp-plan.md, D1).
 ;;; Threads are OS threads; the C half is stdlib/r7rs/thread.tur, which the
 ;;; import splices in beside this file and which this file calls by its
 ;;; r7rs-thread-...__ names.

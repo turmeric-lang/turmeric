@@ -603,7 +603,7 @@
     ;; through the record, as the reference's values made at load do.  Each
     ;; initializer here only allocates, so src/passes/srfi_prune.c drops
     ;; whichever of them a program does not reach
-    ;; (docs/upcoming/r7rs-srfi-18-216-sicp-plan.md, T0b).
+    ;; (docs/archive/r7rs-srfi-18-216-sicp-plan.md, T0b).
     (define default-random-state-cell
       (mrg32k3a-fresh-state-cell))
 

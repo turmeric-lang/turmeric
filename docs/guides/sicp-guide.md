@@ -263,7 +263,7 @@ here, which goes away when the fix lands.
 [sicp-corpus](https://github.com/turmeric-lang/sicp-corpus) runs the
 book's code against Turmeric every day, so breakage is caught before you
 hit it. See the
-[plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+[plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 ## See also
 
