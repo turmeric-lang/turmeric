@@ -138,7 +138,8 @@ These run close to the 15 s cap with no contention, and `run-turi.sh` runs
 a no-op because a closure may have captured the frame. The fixture's work is
 one 100,000-element list, built and then written, at ~4 KB per step. The
 Debug figure is 2.5x the Release one. Filed as
-[turi-call-frames-never-reclaimed](../reported/turi-call-frames-never-reclaimed.md).
+[turi-call-frames-never-reclaimed](../archive/turi-call-frames-never-reclaimed.md),
+since resolved: see *Follow-up* below.
 
 **CPU.** 24.5% of the instructions (inclusive) are in `eval_lookup`. It finds
 every variable by walking the frame chain and calling `strcmp` on each
@@ -148,6 +149,15 @@ before it reaches the hash table. `strcmp` alone is 11.8%, mostly from
 nearly everywhere. A pointer-equality test before the `strcmp`, or resolving
 a variable's frame depth and slot at elaboration time, would remove most of
 this. The same report covers it.
+
+**Follow-up (2026-10-05): fixed.** Call frames, the let / match-arm frames
+under them, and their bindings now go back to a free list when nothing
+captured them. Lookups compare names by pointer and first byte before
+`strcmp`. Release `--interpret`: `r7rs-write-labels` 394 to 40 MB,
+`r7rs-srfi-14` 491 to 132 MB, `r7rs-apply-long` 329 to 63 MB, `r7rs-srfi-41`
+324 to 78 MB, each 30-40% faster. What is still kept (by-value struct
+argument copies, programs with a re-entrant `call/cc`) is listed in the
+archived report.
 
 ## 3. JIT (`tests/run-jit.sh`)
 
@@ -216,14 +226,14 @@ Debug numbers, so algorithmic fixes show less there.
 | --- | --- | --- | --- |
 | 1 | Make the library unit program-independent (the fix 1 in [r7rs-prelude-library-object-varies-with-the-program](../reported/r7rs-prelude-library-object-varies-with-the-program.md)) | one cold compile per suite instead of ~10 (17-48 CPU-s each), and no fixture waiting on another's lock inside its timer. Most of the 60 s budgets exist for this | medium |
 | 2 | Put imported libraries (SRFIs, `r7rs/eval`, `read`, `file`, ...) in a cached unit: per library, or as a variant of the library unit keyed by the import set | 2-4 s off every SRFI and eval build (cc of 200-375 functions) | medium |
-| 3 | Reclaim interpreter frames that nothing captured, and give `eval_lookup` a pointer-compare fast path | memory flat instead of ~4 KB/step (0.7-1 GB fixtures drop to tens of MB); ~10-20% interpreter CPU | medium / small |
+| 3 | ~~Reclaim interpreter frames that nothing captured, and give `eval_lookup` a pointer-compare fast path~~ **done** | memory flat instead of ~4 KB/step (0.7-1 GB fixtures drop to tens of MB); ~10-20% interpreter CPU | medium / small |
 | 4 | Once (1) holds, key the prelude cache on its *inputs* (tur version, stdlib content hash, autoload set, flags) and skip emitting the library unit on a hit | a split build's front end drops from ~2x `emit-c` to ~1x (0.40 s to ~0.2 s Release) | small, after 1 |
 | 5 | JIT: prune unreachable functions before c2mir, or cache the library's MIR | 2.1 s to well under 1 s for a trivial program under Debug `tur jit` | medium |
 | 6 | Remaining front-end hot spots: refinement path-condition walks, string compares on interned names, the reader | another ~10-15% of the front end | small each |
 | 7 | `(scheme eval)` client: compile with `-fsanitize=address` only (not `undefined`) | 4.6 s to 3.8 s for that compile. Dropping ASan from the client entirely is **not** safe: linked against the sanitized `libturi.a`, `r7rs-eval` then fails with an ASan stack-buffer-overflow report in `ht_find` (stack shadow left by the deep-stack switch) | trivial |
 
 Done here: the two front-end fixes in §4, and the `run.sh` warm-up change
-(the interim fix 3 from the variant report).
+(the interim fix 3 from the variant report). Recommendation 3 followed.
 
 ## Not a problem
 

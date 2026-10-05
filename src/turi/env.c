@@ -88,7 +88,8 @@ static EnvBinding *ht_find(const EnvHashTable *ht, const char *name) {
     for (;;) {
         EnvBinding *b = ht->slots[idx];
         if (!b) return NULL;
-        if (strcmp(b->name, name) == 0) return b;
+        if (b->name == name || (b->name[0] == name[0] && strcmp(b->name, name) == 0))
+            return b;
         idx = (idx + 1u) & mask;
     }
 }

@@ -1107,17 +1107,88 @@ struct EvalFrame {
     EvalFrame    *parent;
     TyvarBind    *tyvars;   /* generic-dict tyvar substitutions (usually NULL) */
     DictBind     *dicts;    /* dict-clone runtime dictionaries (usually NULL) */
+    /* turi-call-frames-never-reclaimed.  `escaped`: something that can outlive
+     * the activation holds this frame or a descendant (a closure, a generator,
+     * an effect continuation, a captured work-stack slice) -- set by
+     * frame_escape, which marks every ancestor too, so escaped => parent
+     * escaped.  `reclaimable`: an activation's call frame (eval_frame_new_call),
+     * whose DK_CALL_RET may hand it back on return when it never escaped. */
+    bool          escaped;
+    bool          reclaimable;
+    /* A call frame's `owned` list: the let / match-arm frames created under it
+     * (eval_frame_new_owned), released with it.  A let in tail position never
+     * gets a completion of its own, so its frame can only go when the
+     * activation does.  `owned_next` links a frame into its owner's list. */
+    EvalFrame    *owned;
+    EvalFrame    *owned_next;
 };
 
 static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
     /* Escaping payload: a closure can capture this frame and outlive the scope
      * that created it, so frames live in env's value pool (reclaimed by
-     * turi_env_free) -- eval_frame_free stays a no-op. */
+     * turi_env_free).  Only an activation's call frame is ever handed back
+     * early (eval_frame_new_call / frame_release). */
     EvalFrame *f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
-    f->bindings = NULL;
-    f->parent   = parent;
-    f->tyvars   = NULL;
-    f->dicts    = NULL;
+    f->bindings    = NULL;
+    f->parent      = parent;
+    f->tyvars      = NULL;
+    f->dicts       = NULL;
+    f->escaped     = false;
+    f->reclaimable = false;
+    f->owned       = NULL;
+    f->owned_next  = NULL;
+    return f;
+}
+
+/* Mark `f` and its ancestors as reachable from something that can outlive the
+ * activation that made them.  Stops at the first frame already marked: every
+ * ancestor of a marked frame is marked. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))   /* inlined into eval_expr_impl, -Wclobbered fires across its setjmp */
+#endif
+static void frame_escape(EvalFrame *f) {
+    for (; f && !f->escaped; f = f->parent) f->escaped = true;
+}
+
+/* TUR_TURI_FRAME_RECLAIM=0 turns reclamation off (for bisecting a suspected
+ * use-after-release; the free lists also hide such a bug from ASan). */
+static int g_turi_frame_reclaim = -1;
+static bool turi_frame_reclaim_on(void) {
+    if (g_turi_frame_reclaim < 0) {
+        const char *v = getenv("TUR_TURI_FRAME_RECLAIM");
+        g_turi_frame_reclaim = !(v && v[0] == '0');
+    }
+    return g_turi_frame_reclaim;
+}
+
+/* An activation's call frame: from the free list when one is there. */
+static EvalFrame *eval_frame_new_call(TuriEnv *env, EvalFrame *parent) {
+    EvalFrame *f = (EvalFrame *)env->frame_free;
+    if (f) env->frame_free = f->parent;
+    else   f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
+    f->bindings    = NULL;
+    f->parent      = parent;
+    f->tyvars      = NULL;
+    f->dicts       = NULL;
+    f->escaped     = false;
+    f->reclaimable = true;
+    f->owned       = NULL;
+    f->owned_next  = NULL;
+    return f;
+}
+
+/* A let / match-arm frame: from the free list when one is there, and linked
+ * to the nearest call-frame ancestor so it is released with that activation.
+ * When that ancestor has already escaped -- or there is none (top level) --
+ * the frame is left in the pool, as before. */
+static EvalFrame *eval_frame_new_owned(TuriEnv *env, EvalFrame *parent) {
+    EvalFrame *owner = parent;
+    while (owner && !owner->reclaimable) owner = owner->parent;
+    if (!owner || owner->escaped) return eval_frame_new(env, parent);
+    EvalFrame *f = eval_frame_new_call(env, parent);
+    f->reclaimable = false;   /* released through its owner only */
+    f->owned_next  = owner->owned;
+    owner->owned   = f;
     return f;
 }
 
@@ -1165,19 +1236,30 @@ static void eval_frame_free(EvalFrame *f) {
 
 static void frame_bind(TuriEnv *env, EvalFrame *f, const char *name, TuriValue value) {
     /* Escaping payload: bindings hang off a frame a closure may capture, so they
-     * live in env's value pool (reclaimed by turi_env_free). */
-    EvalBinding *b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
+     * live in env's value pool (reclaimed by turi_env_free), or come back from
+     * a released call frame (frame_release). */
+    EvalBinding *b = (EvalBinding *)env->binding_free;
+    if (b) env->binding_free = b->next;
+    else   b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
     b->name  = name;
     b->value = value;
     b->next  = f->bindings;
     f->bindings = b;
 }
 
+/* Frame names are interned symbol text nearly everywhere, so the pointer test
+ * settles most hits, and the first-byte test most misses, without a strcmp
+ * call (turi-call-frames-never-reclaimed: the strcmp walk was a quarter of an
+ * r7rs program's interpreted run). */
+static inline bool frame_name_eq(const char *a, const char *b) {
+    return a == b || (a[0] == b[0] && strcmp(a, b) == 0);
+}
+
 /* Returns true and updates the value if the name is found in the frame chain. */
 static bool eval_frame_update(EvalFrame *f, const char *name, TuriValue value) {
     for (EvalFrame *cur = f; cur; cur = cur->parent) {
         for (EvalBinding *b = cur->bindings; b; b = b->next) {
-            if (strcmp(b->name, name) == 0) {
+            if (frame_name_eq(b->name, name)) {
                 b->value = value;
                 return true;
             }
@@ -1189,7 +1271,7 @@ static bool eval_frame_update(EvalFrame *f, const char *name, TuriValue value) {
 static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
     for (EvalFrame *f = frame; f; f = f->parent) {
         for (EvalBinding *b = f->bindings; b; b = b->next) {
-            if (strcmp(b->name, name) == 0) return b->value;
+            if (frame_name_eq(b->name, name)) return b->value;
         }
     }
     /* Module-private resolution: a defn whose body is running inside module M
@@ -3264,6 +3346,7 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
 
     cont->env          = env;
     cont->body_frame   = frame;
+    frame_escape(frame);
     cont->body_expr    = h->body;
     cont->handle_expr  = h;
     cont->handle_frame = frame;
@@ -7204,6 +7287,49 @@ typedef struct {
 static bool g_turi_cont_pinned = false;
 #define TURI_DRIVE_FREE(p) do { if (!g_turi_cont_pinned) free(p); } while (0)
 
+/* turi-call-frames-never-reclaimed: an activation's DK_CALL_RET is done with
+ * its call frame -- it returned, or a tail call replaced it.  Hand the frame
+ * and its bindings back unless something may still reach them: the frame
+ * escaped (frame_escape), it is not a call frame, a re-entrant continuation
+ * exists (its stack image may complete this call again, the same reason
+ * TURI_DRIVE_FREE stops freeing), or a debugger holds activation frames.
+ * The frame's tyvar/dict pins stay in the pool, as everything did before. */
+static void frame_release_one(TuriEnv *env, EvalFrame *f) {
+    EvalBinding *b = f->bindings;
+    while (b) {
+        EvalBinding *next = b->next;
+        b->name  = NULL;
+        b->value = turi_nil();
+        b->next  = (EvalBinding *)env->binding_free;
+        env->binding_free = b;
+        b = next;
+    }
+    f->bindings   = NULL;
+    f->tyvars     = NULL;
+    f->dicts      = NULL;
+    f->owned      = NULL;
+    f->owned_next = NULL;
+    f->parent     = (EvalFrame *)env->frame_free;
+    env->frame_free = f;
+}
+
+static void frame_release(TuriEnv *env, EvalFrame *f) {
+    if (!f || !f->reclaimable || f->escaped || g_turi_cont_pinned ||
+        env->debugger || !turi_frame_reclaim_on())
+        return;
+    f->reclaimable = false;   /* a second release of the same frame is a no-op */
+    /* Nothing under an unescaped frame escaped (frame_escape marks every
+     * ancestor), so its owned frames go with it. */
+    EvalFrame *o = f->owned;
+    f->owned = NULL;
+    frame_release_one(env, f);
+    while (o) {
+        EvalFrame *next = o->owned_next;
+        frame_release_one(env, o);
+        o = next;
+    }
+}
+
 /* A DK_CALL_ARG frame evaluates the arguments of an EX_CALL or of an
  * EX_DYN_CALL (a call through a procedure VALUE -- `(k v)` in CPS code), so
  * that both get the driver's proper tail calls. */
@@ -7412,6 +7538,9 @@ static EvalFrame *clone_frame_bindings(TuriEnv *env, EvalFrame *src, EvalFrame *
     EvalFrame *nf = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
     nf->parent = parent;
     nf->bindings = NULL;
+    nf->escaped = true;        /* part of a resumed continuation slice */
+    nf->reclaimable = false;
+    nf->owned = nf->owned_next = NULL;
     /* Collect src bindings (head-first) then re-prepend in reverse to preserve
      * the original head-first order. */
     size_t n = 0;
@@ -8309,7 +8438,7 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
             if (!pat->is_wildcard && pat->union_member_idx >= 0 &&
                 pat->union_member_idx != (int)tag)
                 continue;
-            EvalFrame *arm_frame = eval_frame_new(env, frame);
+            EvalFrame *arm_frame = eval_frame_new_owned(env, frame);
             if (pat->n_bindings > 0 && pat->bindings[0])
                 frame_bind(env, arm_frame, pat->bindings[0]->name->name, chan);
             if (arm->guard) {
@@ -8332,7 +8461,7 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
         EvalFrame    *arm_frame = NULL;
 
         if (pat->is_wildcard) {
-            matched = true; arm_frame = eval_frame_new(env, frame);
+            matched = true; arm_frame = eval_frame_new_owned(env, frame);
         } else if (pat->is_var && pat->union_member_idx >= 0) {
             bool tag_ok = false;
             if (pat->n_bindings >= 1 && pat->bindings[0]) {
@@ -8352,7 +8481,7 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
                 tag_ok = true;
             }
             if (tag_ok) {
-                matched = true; arm_frame = eval_frame_new(env, frame);
+                matched = true; arm_frame = eval_frame_new_owned(env, frame);
                 if (pat->var_sym) frame_bind(env, arm_frame, pat->var_sym->name, val);
             }
         } else if (pat->is_literal) {
@@ -8365,15 +8494,15 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
             case F_NIL:   matched = (val.tag == TURI_NIL); break;
             default: break;
             }
-            if (matched) arm_frame = eval_frame_new(env, frame);
+            if (matched) arm_frame = eval_frame_new_owned(env, frame);
         } else if (pat->is_var) {
-            matched = true; arm_frame = eval_frame_new(env, frame);
+            matched = true; arm_frame = eval_frame_new_owned(env, frame);
             frame_bind(env, arm_frame, pat->var_sym->name, val);
         } else {
             CtorDef *ctor = pat->ctor;
             if (ctor && val.tag == TURI_STRUCT &&
                 strcmp(val.as_struct->name, ctor->name) == 0) {
-                matched = true; arm_frame = eval_frame_new(env, frame);
+                matched = true; arm_frame = eval_frame_new_owned(env, frame);
                 for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                     Binding *b = pat->bindings[bi];
                     if (b && bi < val.as_struct->n_fields)
@@ -8541,7 +8670,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 env->step_fuel--;
             }
-            EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
+            EvalFrame *call_frame = eval_frame_new_call(env, (EvalFrame *)cl->captured);
             for (uint32_t i = 0; i < n; i++)
                 frame_bind(env, call_frame,
                            fn->params[param_offset + i]->name->name,
@@ -8604,7 +8733,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case EX_LETREC: {
                 /* Owns a fresh frame; bindings then body run in it.  EX_LETREC
                  * pre-binds every name to nil so RHS closures see each other. */
-                EvalFrame *nf = eval_frame_new(env, cf);
+                EvalFrame *nf = eval_frame_new_owned(env, cf);
                 uint32_t   n  = control->as.let_.n;
                 if (control->kind == EX_LETREC) {
                     for (uint32_t i = 0; i < n; i++)
@@ -9188,6 +9317,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 wc->handler        = (HandleExpr *)st[pidx].aux;
                 wc->handler_frame  = st[pidx].frame;
+                frame_escape(st[pidx].frame);
+                for (size_t i = 0; i < nf; i++) frame_escape(wc->frames[i].frame);
                 wc->perf_module    = env->current_module;
                 wc->perf_no_unwind = env->in_no_unwind;
                 wc->perf_defer     = env->defer_stack;
@@ -9800,6 +9931,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
                         *copy = *cur.as_closure;
                         copy->captured = nf;
+                        frame_escape(nf);
                         cur = turi_closure(copy);
                     }
                     eval_frame_update(nf, nm, cur);
@@ -10073,7 +10205,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     }
                     env->step_fuel--;
                 }
-                EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
+                EvalFrame *call_frame = eval_frame_new_call(env, (EvalFrame *)cl->captured);
                 for (uint32_t i = 0; i < effective_params; i++)
                     frame_bind(env, call_frame,
                                fn->params[param_offset + i]->name->name,
@@ -10189,6 +10321,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * chain's end); was_returning / was_no_unwind are recaptured
                      * per iteration, as the retired trampoline loop did. */
                     env->current_module = cl->module;
+                    frame_release(env, ret->frame);   /* the replaced activation */
                     ret->frame         = call_frame;
                     ret->aux           = (void *)env->defer_stack; /* new defer mark */
                     ret->was_returning = env->returning;
@@ -10250,6 +10383,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 env->current_module = top->saved_module;
                 if (env->debugger) turi_dbg_pop(env);
+                frame_release(env, top->frame);
                 cur = ret; len--;   /* pop; propagate the call's value */
                 break;
             }
@@ -10581,7 +10715,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
     /* Turi body: prologue (build call frame, bind args, publish callee state),
      * then drive the body in tail position with an activation seed so its tail
      * calls reuse this activation's DK_CALL_RET. */
-    EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
+    EvalFrame *call_frame = eval_frame_new_call(env, (EvalFrame *)cl->captured);
     for (uint32_t i = 0; i < n_args; i++)
         frame_bind(env, call_frame, fn->params[param_offset + i]->name->name,
                    turi_copy_byvalue_struct_arg(env, args[i]));
@@ -11430,6 +11564,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
             *copy = *_v.as_closure;
             copy->captured = frame;
+            frame_escape(frame);
             _v = turi_closure(copy);
         }
         /* constrained-generic-as-fn-value: a top-level constrained generic
@@ -11501,6 +11636,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
                 *copy = *_v.as_closure;
                 copy->captured = tf;
+                frame_escape(tf);
                 _v = turi_closure(copy);
             }
         }
@@ -11674,6 +11810,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         memset(cl, 0, sizeof(*cl));
         cl->fn       = e->as.fn_.fn;
         cl->captured = frame; /* capture lexical scope */
+        frame_escape(frame);
         return turi_closure(cl);
     }
 
@@ -11683,6 +11820,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         memset(cl, 0, sizeof(*cl));
         cl->fn             = e->as.closure_.closure->fn;
         cl->captured       = frame; /* interpreter uses lexical frame */
+        frame_escape(frame);
         cl->skip_env_param = true;  /* codegen added __env_p as first param */
         /* Retain-on-capture parity: the compiled backend's closure env owns a
          * strong reference to each rc<T> it captures -- codegen stores the handle
@@ -13033,6 +13171,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             frame_bind_constraint_dicts(env, pf, impl_inst->type_param_constraints,
                                         impl_inst->n_type_param_constraints);
             cl->captured = pf;
+            frame_escape(pf);
         }
         TuriValue dres = eval_apply(env, cl, argv, n);
         /* An inline-C instance body declared `: bool` (`Eq [cstr]`'s strcmp)
@@ -13508,6 +13647,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * frame; like a closure, this frame is intentionally not freed (the
          * generator may outlive the creating scope). */
         g->frame   = eval_frame_new(env, frame);
+        frame_escape(g->frame);
         g->started = false;
         g->done    = false;
         return turi_gen_val(g);
@@ -14179,6 +14319,9 @@ static EvalFrame *promo_copy_frame(TuriEnv *env, EvalFrame *f, PromoMap *fwd) {
     nf->parent   = promo_copy_frame(env, f->parent, fwd);
     nf->bindings = promo_copy_bindings(env, f->bindings, fwd);
     nf->tyvars   = promo_copy_tyvars(env, f->tyvars, fwd);
+    nf->escaped     = true;    /* promoted: reachable from a survivor */
+    nf->reclaimable = false;
+    nf->owned = nf->owned_next = NULL;
     return nf;
 }
 
@@ -14721,6 +14864,8 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
 
     /* Everything reachable now lives in value_perm; reclaim the scratch region. */
     arena_reset(&env->value_scratch);
+    env->frame_free   = NULL;   /* their nodes were in scratch */
+    env->binding_free = NULL;
     env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
 
     /* TR3: with the live graph now provably rooted at result+globals, sweep
@@ -16449,7 +16594,7 @@ static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
     if (recv_ty) {
         EvalFrame *tyframe = eval_frame_new(env, NULL);
         frame_bind_instance_constraint_tyvars(env, tyframe, show_impl, recv_ty);
-        if (tyframe->tyvars) cl->captured = tyframe;
+        if (tyframe->tyvars) { cl->captured = tyframe; frame_escape(tyframe); }
     }
 
     TuriValue fn_val = turi_closure(cl);

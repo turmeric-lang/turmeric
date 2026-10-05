@@ -44,7 +44,7 @@ prelude-variant cost it also found is the existing
 | Report | Severity | One line |
 | --- | --- | --- |
 | [r7rs-imported-libraries-recompiled-every-build](r7rs-imported-libraries-recompiled-every-build.md) | medium (build time) | An imported SRFI or `(scheme eval)` lands in the uncached program unit, not the cached library unit, so 200-375 library functions are compiled at `-O2` on every build: 2-4 s extra warm, and the 25 slowest r7rs builds |
-| [turi-call-frames-never-reclaimed](turi-call-frames-never-reclaimed.md) | medium (interpreter) | `eval_frame_free` is a no-op, so frames and bindings (87% of the heap) grow ~4 KB per step: four r7rs fixtures peak at 0.7-1 GB and take 9-14 s under the Debug `tur --interpret`; `eval_lookup`'s per-binding `strcmp` walk is another 24% of the time |
+| ~~[turi-call-frames-never-reclaimed](../archive/turi-call-frames-never-reclaimed.md)~~ | medium (interpreter) | **RESOLVED 2026-10-05** (archived): `--interpret` now hands an activation's call frame, its let / match-arm frames and their bindings back to a free list when nothing captured them, and compares frame names by pointer first; the four 0.3-0.5 GB r7rs fixtures (Release) dropped to 40-132 MB. Pinned by ctest `tur_turi_frame_reclaim` |
 
 ## Found reviewing #1082's deep-recursion fix (filed 2026-10-05)
 

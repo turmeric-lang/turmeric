@@ -305,6 +305,12 @@ typedef struct TuriEnv {
      *    survive a scratch reset (result + globals). Empty until promotion runs. */
     Arena       value_scratch;
     Arena       value_perm;
+    /* turi-call-frames-never-reclaimed: free lists of call frames and frame
+     * bindings handed back when an activation returns with nothing having
+     * captured its frame (eval.c, frame_release).  Their nodes live in
+     * value_scratch, so both lists are emptied whenever it is reset. */
+    void       *frame_free;
+    void       *binding_free;
     /* turi-value-pool-scratch-promotion-plan: opt-in bound on steady-state memory
      * for a single long-lived env (notebook-kernel pattern). When true, turi_eval
      * promotes every escaping value into value_perm and rewinds value_scratch at
