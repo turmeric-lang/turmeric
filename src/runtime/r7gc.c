@@ -1265,26 +1265,65 @@ static void tur_gc_thread_end(tur_gc_thread *t, void *r) {
     tur_gc_self = NULL;
 }
 
-/* The calling thread hands the heap to another thread and will not touch it
- * again: its record leaves the registry now, so a collection neither signals
- * it nor scans its stack.  What only it could reach -- its thread-locals and
- * key values -- it will never read.  r7rs-deep-recursion-segfaults-silently:
- * the process's initial thread, once main has moved to its big-stack thread
- * (emit_module.c, emit_deep_stack_runtime), waits in a plain join; it must
- * not count as a live thread of the program either.  The caller uses the
- * unwrapped pthread_join afterwards: the wrapped one parks, which needs a
- * record. */
-static __attribute__((unused)) void tur_gc_leave_thread(void) {
+/* Moving a running program to another thread: the record GOES WITH it.
+ * r7rs-deep-recursion-segfaults-silently runs a program's main on a
+ * big-stack thread (emit_module.c, emit_deep_stack_runtime).  The thread
+ * that ran static init keeps what it set there -- its thread-locals and its
+ * pthread_setspecific values -- and the collector found those through its
+ * record.  Retiring the record (the first version) dropped them as roots:
+ * fine on Linux, a use-after-free under torture on macOS
+ * (r7rs-sicp-metacircular-evaluator and r7rs-srfi-35 exited 139, an
+ * address-dependent crash that did not reproduce with ASLR off).
+ *
+ * tur_gc_hand_over, on the old thread before it starts the new one: the old
+ * thread's record, which it stops naming as its own; it touches the heap no
+ * more.  tur_gc_take_over, first thing on the new thread: the record now
+ * names this thread and this stack, and this thread's thread-locals join the
+ * old thread's as roots (which stay: the old thread is alive, parked in a
+ * join, and they may hold what static init made).  One record, so a count of
+ * the program's threads does not change.  Other threads can collect between
+ * the two calls -- a module init may already have started workers
+ * (r7rs-threads-share hung here under torture) -- so the record is parked
+ * for the window, as a thread blocked in a join would be.  The new thread is
+ * started with the UNWRAPPED pthread_create (no record of its own) and the
+ * old one waits in the unwrapped join (the wrapped one parks, which needs a
+ * record). */
+/* The unwrapped pthread_create, for the thread take_over moves a record to:
+ * `pthread_create` is an object-like macro below, so a caller cannot reach
+ * libc's by parenthesising the name the way it can `(pthread_join)`. */
+static __attribute__((unused)) int tur_gc_raw_pthread_create(pthread_t *tp, const pthread_attr_t *a,
+                                                             void *(*fn)(void *), void *arg) {
+    return pthread_create(tp, a, fn, arg);
+}
+/* The caller parks first (tur_gc_park, in the frame that then waits in the
+ * join), so a collection in the window leaves the record alone and scans
+ * what the park spilled.  Clearing `tur_gc_self` under `world` keeps a stop
+ * signal sent before the park was seen from landing on a thread whose
+ * handler no longer knows its record, which would never acknowledge it. */
+static __attribute__((unused)) void *tur_gc_hand_over(void) {
     tur_gc_state *G = tur_gc_G;
     tur_gc_thread *t = tur_gc_self;
-    if (!G || !t) return;
+    if (!G || !t) return t;
     pthread_mutex_lock(&G->world);
-    t->done = true;
-    t->n_tls = 0;
-    t->gone = true;
-    tur_gc_retire(t);
-    pthread_mutex_unlock(&G->world);
     tur_gc_self = NULL;
+    pthread_mutex_unlock(&G->world);
+    return t;
+}
+static __attribute__((unused)) void tur_gc_take_over(void *raw) {
+    tur_gc_state *G = tur_gc_G;
+    tur_gc_thread *t = (tur_gc_thread *)raw;
+    if (!G || !t) return;
+    unsigned char *base = tur_gc_stack_base_here();
+    pthread_mutex_lock(&G->world);
+    t->tid = pthread_self();
+    t->has_tid = true;
+    t->stack_base = base;
+    if (!base) TUR_GC_STORE(&G->off, true);   /* a stack it cannot see: keep everything */
+    t->park_depth = 0;                        /* the hand-over's park ends here */
+    TUR_GC_STORE(&t->parked, 0);
+    tur_gc_self = t;
+    tur_rt_tls_roots(tur_gc_add_tls_root);
+    pthread_mutex_unlock(&G->world);
 }
 
 /* Every OS thread the unit starts runs on this trampoline: it records its

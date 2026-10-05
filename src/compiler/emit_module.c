@@ -13227,8 +13227,10 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
  * stack: a fault just past the stack's low end prints `stack overflow:
  * recursion too deep` before the signal takes the process down as before.
  *
- * After the collector's paste, so `pthread_create` is its registering
- * wrapper, and the collector and call/cc read this thread's own stack bounds
+ * After the collector's paste.  The new thread takes over the old one's
+ * collector record (tur_gc_hand_over / tur_gc_take_over, r7gc.c), so the
+ * old thread's thread-local roots stay and the registry still holds one
+ * record; the collector and call/cc read the new thread's own stack bounds
  * (both ask pthreads for the calling thread).  Windows has its own branch
  * (CreateThread).  Not under `tur jit` (`__MIRC__`), whose engine already runs main on a sized thread
  * (TUR_JIT_STACK_MB).  In a split build it is written into the program unit
@@ -13241,7 +13243,7 @@ static void emit_deep_stack_runtime(Buf *out) {
         "#include <pthread.h>\n"
         "#include <unistd.h>\n"
         "int main(int, char **);\n"
-        "typedef struct { int argc; char **argv; unsigned char *lo; } tur_deep_state_t;\n"
+        "typedef struct { int argc; char **argv; unsigned char *lo; void *gc; } tur_deep_state_t;\n"
         "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
         "static void tur_deep_fault(int sig, siginfo_t *si, void *uc) {\n"
         "    (void)uc;\n"
@@ -13254,6 +13256,9 @@ static void emit_deep_stack_runtime(Buf *out) {
         "}\n"
         "static void *tur_deep_run(void *p) {\n"
         "    tur_deep_state_t *s = (tur_deep_state_t *)p;\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    tur_gc_take_over(s->gc);   /* the old thread's record, roots and all */\n"
+        "#endif\n"
         "#if defined(__APPLE__)\n"
         "    s->lo = (unsigned char *)pthread_get_stackaddr_np(pthread_self()) - pthread_get_stacksize_np(pthread_self());\n"
         "#elif defined(__GLIBC__)\n"
@@ -13289,12 +13294,23 @@ static void emit_deep_stack_runtime(Buf *out) {
         "    if (pthread_attr_init(&at) != 0) return 0;\n"
         "    size_t sz = sizeof(void *) >= 8 ? ((size_t)1 << 30) : ((size_t)64 << 20);\n"
         "    pthread_t t;\n"
-        "    int ok = pthread_attr_setstacksize(&at, sz) == 0 && pthread_create(&t, &at, tur_deep_run, s) == 0;\n"
-        "    pthread_attr_destroy(&at);\n"
-        "    if (!ok) return 0;\n"
+        "    int ok = pthread_attr_setstacksize(&at, sz) == 0;\n"
         "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
-        "    tur_gc_leave_thread();   /* this thread is done with the heap */\n"
+        "    if (ok) { tur_gc_park(); s->gc = tur_gc_hand_over(); }   /* parked in the join, done with the heap */\n"
         "#endif\n"
+        "    /* Unwrapped: the new thread takes this one's record, not a new one. */\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    ok = ok && tur_gc_raw_pthread_create(&t, &at, tur_deep_run, s) == 0;\n"
+        "#else\n"
+        "    ok = ok && pthread_create(&t, &at, tur_deep_run, s) == 0;\n"
+        "#endif\n"
+        "    pthread_attr_destroy(&at);\n"
+        "    if (!ok) {\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "        tur_gc_take_over(s->gc);   /* no thread: the record comes back here */\n"
+        "#endif\n"
+        "        return 0;\n"
+        "    }\n"
         "    (pthread_join)(t, NULL);   /* unwrapped; tur_deep_run exits the process */\n"
         "    return 1;\n"
         "}\n"
