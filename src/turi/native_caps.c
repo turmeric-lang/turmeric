@@ -318,6 +318,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "r7rs-big-radix__", 0 },
     { "r7rs-blen__", 0 },
     { "r7rs-bsubstring__", 0 },
+    { "r7rs-call-variadic__", 0 },
     { "r7rs-cont-capture__", 0 },
     { "r7rs-cont-here?__", 0 },
     { "r7rs-cont-null?__", 0 },
@@ -400,6 +401,15 @@ static const TuriNativeCapRow k_rows[] = {
     { "r7rs-string-of-code__", 0 },
     { "r7rs-string-ref-code__", 0 },
     { "r7rs-symbol-plain?__", 0 },
+    { "r7rs-thread-lock-c__", 0 },
+    { "r7rs-thread-monitor__", 0 },
+    { "r7rs-thread-notify-c__", 0 },
+    { "r7rs-thread-now__", 0 },
+    { "r7rs-thread-sleep__", 0 },
+    { "r7rs-thread-spawn-c__", TURI_CAP_ASYNC },                 /* starts a scheduler fiber, same gate as (async ...) */
+    { "r7rs-thread-unlock-c__", 0 },
+    { "r7rs-thread-wait-c__", 0 },
+    { "r7rs-thread-yield__", 0 },
     { "r7rs-toplevel__", 0 },
     { "r7rs-type-error-hook-install__", 0 },
     { "r7rs-uc-map__", 0 },
@@ -410,6 +420,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "r7rs-utf8-at__", 0 },
     { "r7rs-utf8-count__", 0 },
     { "r7rs-utf8-ref__", 0 },
+    { "r7rs-variadic-fixed__", 0 },
     { "random-access-bench", TURI_CAP_FS | TURI_CAP_IO },    /* benchmark helper: temp file + stdout */
     { "reactor-new", TURI_CAP_IO },                          /* epoll/kqueue fd and a blocking poll */
     { "read-async", TURI_CAP_IO },                           /* read(2)/write(2) on a caller-supplied raw fd -- 0/1/2 need no open */

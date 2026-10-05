@@ -67,3 +67,14 @@ is not confirmed.
 (name files starting with a letter). When this is fixed, delete that entry.
 turmeric-lang/sicp-corpus names its files `sec-<section>.scm` because of it;
 that naming can stay.
+
+## Resolution (2026-10-04)
+
+The module a program with imports is wrapped in is named after its file
+(scheme_lower.c, the `needs_module` wrapper); a stem that starts with a
+digit is now prefixed `r7rs-program-` (`1.1.scm` is module
+`r7rs-program-1`), so every C identifier derived from it starts with a
+letter. Pinned by `tests/fixtures/1-r7rs-program-leading-digit` (its own
+file name starts with a digit; it imports a library and has a lambda), on
+both back ends. The second note above (`1.1.scm` and `1.2.scm` both module
+`1`) stands: separate programs are separate units.

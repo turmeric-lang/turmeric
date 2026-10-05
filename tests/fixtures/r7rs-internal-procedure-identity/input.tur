@@ -1,0 +1,41 @@
+#lang r7rs
+;; docs/archive/r7rs-internal-procedure-value-not-eq.md: an internal
+;; procedure used as a value is one procedure (R7RS 5.3.2: an internal
+;; define binds one location), so every reference to it is eq? to every
+;; other.  Compiled, each reference made a new closure, and SICP 3.3.5's
+;; constraint system -- a connector skips the constraint that set it with
+;; `eq?` -- told a constant its own value and died.
+(import (scheme base) (scheme write))
+
+;; Two references in one expression.
+(define (twice)
+  (define (me r) r)
+  (list me me))
+(define l (twice))
+(write (eq? (car l) (cadr l))) (newline)
+
+;; Handed out, then returned.
+(define kept #f)
+(define (constant sink)
+  (define (me request) (error "Unknown request: CONSTANT" request))
+  (sink me)
+  me)
+(define k (constant (lambda (p) (set! kept p))))
+(write (eq? k kept)) (newline)
+
+;; Capturing the frame, compared by a sibling, as SICP's adder is.
+(define (adder seen)
+  (define (process) (seen me))
+  (define (me request) (if (eq? request 'go) (process) 'unknown))
+  me)
+(define registered '())
+(define a (adder (lambda (who) (memq who registered))))
+(set! registered (list a))
+(write (if (a 'go) 'found 'missing)) (newline)
+
+;; Still a procedure, still recursive, still callable through the variable.
+(define (count-down n)
+  (define (loop i acc) (if (= i 0) acc (loop (- i 1) (cons i acc))))
+  (define step loop)
+  (step n '()))
+(write (count-down 5)) (newline)

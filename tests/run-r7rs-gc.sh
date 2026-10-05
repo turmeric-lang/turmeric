@@ -16,10 +16,10 @@
 #      nodes were libc's, unscanned, and the values were freed under them.
 #   3. Threads (docs/archive/r7rs-gc-threads-plan.md, stages A to C): a
 #      program that starts threads runs them in parallel under the
-#      collector, which stops them by signal to collect; ten cases, eight of
-#      them the r7rs-threads-* fixtures under frequent collections (every
-#      allocation, or every 31st for the two long ones), plus a lint over
-#      the release points.
+#      collector, which stops them by signal to collect: a bare thread
+#      start, the r7rs-threads-* fixtures and r7rs-srfi-18 under frequent
+#      collections (every allocation, or every 31st for the long ones),
+#      plus a lint over the release points.
 #   1b. Every compiled `#lang saffron` fixture the same way: since
 #      2026-09-28 the collector is a Saffron program's allocator too
 #      (any-widen-stored-in-an-adt-field-has-no-owner; TUR_SAFFRON_GC=0 opts
@@ -255,6 +255,10 @@ fi | tee -a "$WORK/results"
 #                  per thread and per fiber, kept in a thread-local the
 #                  collector scans and a fiber's block (a collection every
 #                  31st allocation, as for stage C).
+#   threads-srfi18 tests/fixtures/r7rs-srfi-18: SRFI 18's threads, mutexes
+#                  and condition variables (stdlib/srfi/18.scm over
+#                  stdlib/r7rs/thread.tur), eight threads on one mutex
+#                  allocating between turns (every 31st allocation).
 #   threads-lint   every blocking libc call the stdlib and the emitter
 #                  spell is one the collector's release-point macros route
 #                  (src/runtime/r7gc.c); a new one that is not would be a
@@ -337,6 +341,7 @@ fixture_case threads-stress r7rs-threads-stress "nine threads on the heap at onc
 fixture_case threads-lifecycle r7rs-threads-lifecycle "key values are roots, a fork mid-allocation is safe, detached threads leave the registry" 31 | tee -a "$WORK/results"
 fixture_case threads-dynenv r7rs-threads-dynamic-env "five threads each see only their own handlers, wind frames and parameter bindings, and the collector sees all of them" 31 | tee -a "$WORK/results"
 fixture_case threads-fiber-dynenv r7rs-threads-fiber-dynamic-env "a fiber's handlers and parameter bindings move with it from thread to thread" 31 | tee -a "$WORK/results"
+fixture_case threads-srfi18 r7rs-srfi-18 "SRFI 18: threads, mutexes, condition variables and eight threads on one mutex, every value intact" 31 | tee -a "$WORK/results"
 
 # threads-lint: the blocking calls (a broad list; the stdio reads are left
 # out on purpose -- a read from a FILE holds the world, docs/guides/r7rs-guide.md).

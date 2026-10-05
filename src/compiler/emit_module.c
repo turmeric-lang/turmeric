@@ -12657,8 +12657,12 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * interpreter's, including its "value of that type" fallback: the message
      * is user-visible and a fixture can assert it on either back end, so the
      * two must agree word for word rather than approximately. */
+    /* No forward declaration of __tur_any_type_name: the any registry's
+     * definition (or, in a unit linked against the runtime archive, its
+     * non-static prototype) is always emitted ahead of this, and a `static`
+     * one here clashed with the archive's in a plain Turmeric program that
+     * makes a dynamic call (turmeric-module-cannot-call-a-scheme-procedure-value). */
     buf_puts(out,
-        "static const char *__tur_any_type_name(int64_t tag);\n"
         "static inline const char *__tur_dyn_argname(int64_t __t) {\n"
         "    switch (__t) {\n"
         "    case TUR_DYNTAG_INT:   return \"int\";\n"

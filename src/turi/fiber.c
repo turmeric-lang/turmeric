@@ -490,6 +490,22 @@ bool turi_sched_step(TuriEnv *env) {
     return true;
 }
 
+bool turi_sched_yield(TuriEnv *env) {
+    TuriFiber *cur = env->current_fiber;
+    if (!cur) return turi_sched_step(env);
+    cur->state = TURI_FIBER_READY;
+    turi_sched_enqueue(env, cur);
+#if defined(__APPLE__)
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    swapcontext(&cur->ctx, &env->sched_ctx);
+#if defined(__APPLE__)
+#  pragma clang diagnostic pop
+#endif
+    return true;
+}
+
 /* -------------------------------------------------------------------------
  * Main event loop
  * ---------------------------------------------------------------------- */

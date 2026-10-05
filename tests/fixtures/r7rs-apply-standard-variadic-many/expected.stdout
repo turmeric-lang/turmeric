@@ -11,4 +11,4 @@
 #(1 2 3 4 5 6 7 8 9 10)
 58
 5000050000
-"apply: more than 8 arguments is supported only for the standard variadic procedures (+, append, max, string-append, ...); pass the rest as a list"
+210

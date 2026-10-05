@@ -1,0 +1,112 @@
+#lang r7rs
+;; The examples from docs/guides/sicp-guide.md, so they cannot rot (r7rs-
+;; srfi-18-216-sicp-plan T5; the r7rs guide's twin is
+;; docs-r7rs-guide-examples).  Keep it in step with the guide: if an example
+;; changes there, change it here.  Where the guide shows code, it is copied
+;; verbatim; where it states a result, the result is printed next to what
+;; the guide says it is.  The no-import claim is docs-sicp-guide-no-import.
+;;
+;; No requires.* marker: the guide is for both back ends.
+(import (scheme base) (scheme write) (srfi 216) (sicp extras))
+
+(define (show . xs) (for-each display xs) (newline))
+
+;; --- The REPL paragraph: (square 21) is 441 -----------------------------------
+(define (square x) (* x x))
+(show (square 21))
+
+;; --- Definitions the book assumes ---------------------------------------------
+(show (list true false nil))
+(show (exact-integer? (runtime)))
+(show (let ((r (random 10))) (and (exact-integer? r) (<= 0 r 9))))
+(show (let ((r (random 1.0))) (and (inexact? r) (< r 1.0))))
+(define s (cons-stream 1 (error "not evaluated until forced")))
+(show (car s) " " (stream-null? the-empty-stream))
+
+;; --- Extras ---------------------------------------------------------------------
+(show (list (inc 1) (dec 1) (identity 'same)))
+
+;; --- Chapter 1: exact numbers -----------------------------------------------------
+(define (fast-expt b n)
+  (cond ((= n 0) 1)
+        ((even? n) (square (fast-expt b (/ n 2))))
+        (else (* b (fast-expt b (- n 1))))))
+(show (fast-expt 2 100) " " (string-length (number->string (fast-expt 2 100))))
+(show (/ 6 4))
+
+;; --- Chapter 1: iterative processes run in constant space --------------------------
+(define (count-down n) (if (= n 0) 'done (count-down (- n 1))))
+(show (count-down 100000))
+(define (my-even? n) (if (= n 0) true (my-odd? (- n 1))))
+(define (my-odd? n) (if (= n 0) false (my-even? (- n 1))))
+(show (my-even? 100001))
+
+;; --- Chapter 2: put and get, the guide's block verbatim -------------------------------
+(define (make-table)
+  (let ((local-table (list '*table*)))
+    (define (lookup key-1 key-2)
+      (let ((subtable (assoc key-1 (cdr local-table))))
+        (if subtable
+            (let ((record (assoc key-2 (cdr subtable))))
+              (if record (cdr record) false))
+            false)))
+    (define (insert! key-1 key-2 value)
+      (let ((subtable (assoc key-1 (cdr local-table))))
+        (if subtable
+            (let ((record (assoc key-2 (cdr subtable))))
+              (if record
+                  (set-cdr! record value)
+                  (set-cdr! subtable
+                            (cons (cons key-2 value) (cdr subtable)))))
+            (set-cdr! local-table
+                      (cons (list key-1 (cons key-2 value))
+                            (cdr local-table)))))
+      'ok)
+    (define (dispatch m)
+      (cond ((eq? m 'lookup-proc) lookup)
+            ((eq? m 'insert-proc!) insert!)
+            (else (error "Unknown operation -- TABLE" m))))
+    dispatch))
+(define operation-table (make-table))
+(define get (operation-table 'lookup-proc))
+(define put (operation-table 'insert-proc!))
+(show (put 'real-part '(rectangular) car))
+(show ((get 'real-part '(rectangular)) '(3 . 4)) " " (get 'imag-part '(rectangular)))
+(show (guard (e ((error-object? e) (error-object-message e))) ((make-table) 'frob)))
+
+;; --- Chapter 3: 3.4.1's pair, unserialized and serialized ---------------------------
+(define (make-mutex)
+  (let ((cell (list false)))
+    (define (the-mutex m)
+      (cond ((eq? m 'acquire) (if (test-and-set! cell) (the-mutex 'acquire)))
+            ((eq? m 'release) (set-car! cell false))))
+    the-mutex))
+(define (make-serializer)
+  (let ((mutex (make-mutex)))
+    (lambda (p)
+      (define (serialized-p . args)
+        (mutex 'acquire)
+        (let ((val (apply p args)))
+          (mutex 'release)
+          val))
+      serialized-p)))
+(define (pair-once serialize?)
+  (define x 10)
+  (define s (make-serializer))
+  (define (wrap p) (if serialize? (s p) p))
+  (parallel-execute (wrap (lambda () (set! x (* x x))))
+                    (wrap (lambda () (set! x (+ x 1)))))
+  x)
+(show (and (memv (pair-once #f) '(101 121 110 11 100)) #t)
+      " " (and (memv (pair-once #t) '(101 121)) #t))
+
+;; --- Chapter 4: amb before the amb evaluator ------------------------------------------
+(define (require p) (if (not p) (amb)))
+(show (let ((a (amb 1 2 3 4)) (b (amb 1 2 3 4)))
+        (require (= (+ a b) 7))
+        (list a b)))
+(amb-reset!)
+(show (guard (e ((error-object? e) (error-object-message e)))
+        (let ((x (amb 1 2)))
+          (require (> x 5))
+          x)))

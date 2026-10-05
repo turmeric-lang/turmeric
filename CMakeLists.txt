@@ -796,6 +796,14 @@ add_test(
   COMMAND bash tests/check-reported-index.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# docs/guides/running-tests-guide.md must name every TUR_*/TURI_* variable the
+# three fixture harnesses read: an unknown variable is silently ignored, so a
+# guessed filter name runs the whole suite instead of one fixture.
+add_test(
+  NAME tur_running_tests_guide_lint
+  COMMAND bash tests/check-running-tests-guide.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Every add_test declared under src/ must be visible to `ctest -N`.  It was
 # not, for months: enable_testing() ran after add_subdirectory(src), so
 # tur_trail built, passed by hand, and never ran in CI.  The ordering is fixed
@@ -1324,6 +1332,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_srfi_prune PROPERTIES TIMEOUT 720)
+# r7rs-tail-call-through-static-call-not-proper: tail calls through
+# procedure values stay proper in a plain 8 MiB stack (the deep-stack
+# thread off), where the program's 1 GiB stack cannot hide a regression.
+add_test(
+  NAME tur_r7rs_tail_calls_small_stack
+  COMMAND bash tests/check-r7rs-tail-calls-small-stack.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_tail_calls_small_stack PROPERTIES TIMEOUT 720)
 # r7rs-programs-compile-slowly: a `#lang r7rs` program builds as two units,
 # the prelude compiled once and cached.  No piece of state may be defined in
 # both, and two programs must link the same cached library object.

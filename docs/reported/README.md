@@ -2645,18 +2645,20 @@ the `turmeric-ci` project; all three are accounted for:
 
 Found running book-style SICP code and an SRFI 18 thread-start prototype
 against `#lang r7rs`, for
-[r7rs-srfi-18-216-sicp-plan](../upcoming/r7rs-srfi-18-216-sicp-plan.md).
+[r7rs-srfi-18-216-sicp-plan](../archive/r7rs-srfi-18-216-sicp-plan.md).
 Chapters 1-3.5 already run on both back ends. These are what a student will
 hit next; the SICP guide's "Known rough edges" section points at each.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| ~~[r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md)~~ | high (blocks SICP 4.1) | **RESOLVED 2026-10-04** (archived): an eager reference from a top-level form ahead of the program's redefinition means the standard procedure; SICP 4.1's evaluator runs as written on both back ends.  Original row: `(define saved apply)` then `(define (apply ...))`: compiled, `saved` *is* the new `apply` (`eq?` is `#t`), so the metacircular evaluator loops forever; interpreted, `unbound variable: apply--user`. Same for `square`. The `<name>--user` respelling (`scheme_lower.c:1200-1235`) reaches references that run before the redefinition |
-| ~~[r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md)~~ | medium | **RESOLVED 2026-10-04** (archived): an on-demand library's name the program imports and defines is respelled `--user`; `r7rs-program-redefines-scheme-eval` pins it.  Original row: `(define (eval e env) ...)` with `(scheme eval)` imported: `cc` rejects the unit, `redefinition of 'r7rs_hyeval'`. Interpreter fine; compiled fine without the import |
-| [r7rs-apply-variadic-over-eight-arguments](r7rs-apply-variadic-over-eight-arguments.md) | low (was medium) | **Narrowed 2026-10-04:** the standard variadics (`+`, `append`, `max`, `string-append`, ...) take a list of any length on both back ends. Still open: a program's own variadic applied to more than eight.  Original: `(apply + (list 1 ... 10))` panics on both back ends. The eight-argument ceiling meant for fixed-arity callees (archived r7rs-apply-more-than-four-arguments) is applied to variadic ones too; `r7rs-apply-list__` never checks |
+| ~~[r7rs-saved-standard-procedure-follows-redefinition](../archive/r7rs-saved-standard-procedure-follows-redefinition.md)~~ | high (blocks SICP 4.1) | **RESOLVED 2026-10-04** (archived): a program that defines a standard procedure's name gets one variable that starts out holding the standard procedure, and its defines become `set!`s (`redefinitions_to_set`), so a value saved earlier keeps the standard one on both back ends. Pinned by `tests/fixtures/r7rs-program-redefinition` |
+| ~~[r7rs-program-redefinition-refused](../archive/r7rs-program-redefinition-refused.md)~~ | high (every SICP chapter) | **RESOLVED 2026-10-04** (archived; found transcribing SICP 2.1 for sicp-corpus): a second top-level `define` of a program's own name was refused (`defn: ... already defined`); R7RS 5.3.1 makes it a `set!`, and now it is. Pinned by `tests/fixtures/r7rs-program-redefinition` |
+| ~~[r7rs-internal-procedure-value-not-eq](../archive/r7rs-internal-procedure-value-not-eq.md)~~ | high (SICP 3.3.5) | **RESOLVED 2026-10-04** (archived; found transcribing SICP 3.3 for sicp-corpus): compiled, each reference to an internal procedure used as a value made a new closure, so `(eq? me me)` was `#f` and the constraint system failed; such a procedure is now bound once. Pinned by `tests/fixtures/r7rs-internal-procedure-identity` |
+| ~~[r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md)~~ | medium | **RESOLVED 2026-10-04** (archived): on-demand imports are recorded before the clash and redefinition passes, so the program's `eval` is respelled and starts out as the standard one. Pinned by `tests/fixtures/r7rs-redefine-eval-with-scheme-eval` |
+| ~~[r7rs-apply-variadic-over-eight-arguments](../archive/r7rs-apply-variadic-over-eight-arguments.md)~~ | medium | **RESOLVED 2026-10-04** (archived): past eight elements a variadic callee gets its fixed arguments spread and the rest of the list as its rest chain, on both back ends. Pinned by `tests/fixtures/r7rs-apply-long` |
 | ~~[r7rs-deep-recursion-segfaults-silently](../archive/r7rs-deep-recursion-segfaults-silently.md)~~ | medium | **RESOLVED 2026-10-04** (archived): a compiled r7rs program's main runs on a 1 GiB-stack thread (a million-deep recursion prints its answer; twenty million on Linux), and an overflow past that prints `stack overflow: recursion too deep`.  Original row: Non-tail recursion 1,000,000 deep: compiled program exits 139 with no output (100,000 is fine; the interpreter does 1,000,000). No `sigaltstack` handler, so no "stack overflow" message |
-| ~~[r7rs-program-file-named-with-leading-digit-fails-to-compile](../archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md)~~ | medium | **RESOLVED 2026-10-04** (archived): a digit-leading stem is prefixed `r7rs-program-`; `9lives-r7rs-program` pins it.  Original row: Found adding the first program to turmeric-lang/sicp-corpus: a program named `1.1.scm` (or `9lives.scm`) that imports a user library compiles to C identifiers like `1____fn_333`, and `cc` rejects them. Interpreter fine; `lives9.scm` fine; no library import fine |
-| [turmeric-module-cannot-call-a-scheme-procedure-value](turmeric-module-cannot-call-a-scheme-procedure-value.md) | medium (expressiveness) | A Turmeric module handed a Scheme procedure cannot call it: `[f]` or `[f : any]` then `(f)` is `'f' is not a function or continuation`. The prelude does the same call and compiles. Forces SRFI 18's thread start through a named-export registry |
+| ~~[r7rs-program-file-named-with-leading-digit-fails-to-compile](../archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md)~~ | medium | **RESOLVED 2026-10-04** (archived): a program module named after a file whose stem starts with a digit is prefixed `r7rs-program-`. Pinned by `tests/fixtures/1-r7rs-program-leading-digit` |
+| ~~[turmeric-module-cannot-call-a-scheme-procedure-value](../archive/turmeric-module-cannot-call-a-scheme-procedure-value.md)~~ | medium (expressiveness) | **RESOLVED 2026-10-05** (archived): a call through an `any` value is a run-time-checked dynamic call in every dialect, so a Turmeric module calls a Scheme procedure it takes as `[f : any]`. Pinned by `tests/fixtures/r7rs-turmeric-calls-scheme-procedure` and `tests/fixtures/any-value-call` |
 
 ## Found writing the debugging guides (filed 2026-10-04)
 
@@ -2680,6 +2682,17 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 | --- | --- | --- |
 | [ok-nil-unconstructible-in-turmeric](ok-nil-unconstructible-in-turmeric.md) | low | `(Result nil E)` is legal, but Turmeric code cannot build its ok side: `nil` in expression position is `:void`, so `(Ok nil)` is a cc error. Separately, a forward reference to a function returning `(Result nil E)` is a TUR-E0012 kind mismatch at 0:0. Worked around with `io-error/ok-unit` and a self-recursive `fs/walk-names` |
 | [inline-c-builders-cannot-nest-option-in-result](inline-c-builders-cannot-nest-option-in-result.md) | low-medium | `(Result (Option T) E)` stores the `Option` BY VALUE in the ok slot, so `tur_ok_int(tur_some_ptr(s))` from inline-C silently matches neither arm. `file-read-line` nests it in Turmeric instead |
+
+## Module system (filed 2026-10-05)
+
+Found while building the Trowel plugin system, which evaluates Turmeric source
+in-process via `turi_eval`. Slash-qualified module member calls (`Foo/bar`)
+work inside the defining module and inside modules that import `Foo`, but are
+not resolved by the elaborator at the top level (outside any `defmodule`).
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [qualified-module-calls-unresolved-at-toplevel](qualified-module-calls-unresolved-at-toplevel.md) | medium | `elab_lookup_sym` only resolves qualified names when `current_module_name` or `current_module` is set; at the top level both are NULL, so `(Foo/bar)` degrades to TUR-W0040 runtime dispatch. Exported members fail (mangled `Foo__bar` vs runtime lookup `Foo_slbar`); non-exported members succeed (inverted -- they stay in the global env under their bare name). Affects `tur eval`, `tur run`, and `turi_eval` |
 
 ## Filing conventions
 

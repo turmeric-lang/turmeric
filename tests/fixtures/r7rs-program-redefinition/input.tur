@@ -1,0 +1,43 @@
+#lang r7rs
+;; R7RS 5.3.1: at a program's top level, defining a name that is already
+;; bound acts as `set!`.  SICP leans on it everywhere.
+;;   docs/archive/r7rs-program-redefinition-refused.md: a second define of
+;;     the program's own name was refused ("defn: ... already defined").
+;;   docs/archive/r7rs-saved-standard-procedure-follows-redefinition.md: a
+;;     standard procedure the program later redefines was already the
+;;     program's when saved (compiled), or unbound (interpreted).
+(import (scheme base) (scheme write))
+
+;; Its own procedure, redefined: callers defined earlier see the new one
+;; (SICP 2.1.1 -> 2.1.2's make-rat).
+(define (make-rat n d) (cons n d))
+(define (half) (make-rat 1 2))
+(write (half)) (newline)
+(define (make-rat n d) (list 'rat n d))
+(write (half)) (newline)
+(define (make-rat . args) (cons 'variadic args))
+(write (half)) (newline)
+
+;; A variable, redefined.
+(define limit 10)
+(define (over? x) (> x limit))
+(write (over? 11)) (newline)
+(define limit 20)
+(write (over? 11)) (newline)
+
+;; A standard procedure, saved and then redefined (SICP 4.1's apply).
+(define apply-in-underlying-scheme apply)
+(define (apply procedure arguments) 'evaluator-apply)
+(write (apply-in-underlying-scheme + (list 1 2 3))) (newline)
+(write (apply + (list 1 2 3))) (newline)
+(write (eq? apply-in-underlying-scheme apply)) (newline)
+
+;; Used before it is redefined, then redefined twice (SICP 2.1.3's cons).
+(define early (cons 1 2))
+(write (car early)) (newline)
+(define (cons x y) (lambda (m) (if (= m 0) x y)))
+(define (car z) (z 0))
+(write (car (cons 'a 'b))) (newline)
+(define (square x) (* x x))
+(define (square x) (list 'squared x))
+(write (square 3)) (newline)

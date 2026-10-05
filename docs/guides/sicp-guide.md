@@ -93,35 +93,17 @@ whichever ones you define.
 Some exercises use `inc`, `dec` and `identity` as if they already existed,
 and 4.3 is easier to explore with a real `amb` (more on that in Chapter 4
 below). Racket's `#lang sicp` provides these, so course materials often
-assume them. They are not part of SRFI 216. Paste this block under your
-import line if you need them:
+assume them. They are not part of SRFI 216; they are in a library of their
+own. Add it to your import line if you need them:
 
 ```scheme
-;; --- SICP extras ---
-(define (inc x) (+ x 1))
-(define (dec x) (- x 1))
-(define (identity x) x)
-(define (amb-reset!)                   ; start a new search from scratch
-  (set! amb-fail (lambda () (error "amb tree exhausted"))))
-(define amb-fail #f)
-(amb-reset!)
-(define-syntax amb
-  (syntax-rules ()
-    ((_ alt ...)
-     (let ((prev-fail amb-fail))
-       (call/cc
-        (lambda (sk)
-          (call/cc
-           (lambda (fk)
-             (set! amb-fail
-                   (lambda ()
-                     (set! amb-fail prev-fail)
-                     (fk 'fail)))
-             (sk alt)))
-          ...
-          (prev-fail)))))))
-;; --- end of SICP extras ---
+(import (scheme base) (scheme write) (srfi 216) (sicp extras))
 ```
+
+It gives you `inc`, `dec`, `identity`, `amb`, and `amb-reset!` (see
+Chapter 4). As with `(srfi 216)`, defining one of these names yourself is
+refused; import `(except (sicp extras) inc)`, naming whichever ones you
+define.
 
 ## Chapter by chapter
 
@@ -204,12 +186,17 @@ Turmeric's test suite.
   sieve of Eratosthenes give the book's answers.
 - **Concurrency (3.4).** The section's code runs: `parallel-execute`,
   `test-and-set!`, and the serializers and mutexes the book builds from
-  them. For now, though, `parallel-execute` runs its procedures **one after
-  another**, in order, not at the same time. That is one of the orders a
-  real concurrent run could take, so every result you get is one the book
-  says is possible. But you will never see the interleaved results 3.4 is
-  about, so an unserialized bank account will look correct. Reason about
-  those on paper, as the book does.
+  them. `parallel-execute` runs each procedure on a thread of its own, so
+  the interleavings the section is about really happen: run the book's
+  unserialized `(set! x (* x x))` / `(set! x (+ x 1))` pair a few hundred
+  times and you will see the lost updates (11 and 100) next to 101 and
+  121. Serialize the two and only 101 and 121 come up. A program that
+  calls `parallel-execute` gets a different interleaving each run; that is
+  the point. Under `tur --interpret` the threads take turns, switching
+  only when one waits, sleeps or spins on `test-and-set!`, so code with
+  none of those -- like that unserialized pair -- runs one procedure to
+  the end before the next starts. Use `tur run` to watch interleavings.
+  If you want threads directly, `(import (srfi 18))` has them.
 
 ### Chapter 4 -- the metacircular evaluator
 
@@ -221,13 +208,16 @@ its own `eval` and `apply` after saving the real one:
 (define (apply procedure arguments) ...)   ; the evaluator's own apply
 ```
 
-This works as the book writes it, on both back ends: `apply-in-underlying-scheme`
-keeps the standard `apply`, because the program's own `apply` is defined
-only later, and the evaluator's procedures call the new one. A trimmed
-evaluator from 4.1, unrenamed, computes `(fact 20)` through itself.
+This works as printed, on both back ends: `apply-in-underlying-scheme`
+keeps the standard `apply`, and the evaluator's own `apply` and `eval`
+replace them from their definitions on. The book's whole 4.1.1-4.1.4
+evaluator, driver loop included, runs as a test in
+[sicp-corpus](https://github.com/turmeric-lang/sicp-corpus). Defining a
+procedure again, as the book does throughout (`make-rat` in 2.1, `length`
+in 2.2), replaces the old definition, as in the book.
 
-**Trying 4.3's puzzles before building the `amb` evaluator.** With the
-extras block loaded, `amb` works directly in Scheme, so you can run the
+**Trying 4.3's puzzles before building the `amb` evaluator.** With
+`(sicp extras)` imported, `amb` works directly in Scheme, so you can run the
 section's examples (`require`, `an-integer-between`, the
 multiple-dwelling puzzle) as ordinary programs and check your answers to
 the exercises against them. Each `(amb)` with no choices left backtracks to
@@ -251,7 +241,7 @@ it is worth reporting.
 
 - **`unbound variable: nil`**, or `true`, `runtime`, `cons-stream`:
   `(srfi 216)` is missing from the import line. For `inc`, `dec`,
-  `identity` or `amb`, it is the extras block.
+  `identity` or `amb`, it is `(sicp extras)`.
 - **`error: Unknown operation -- TABLE frob`**: that is the book's own
   `(error "Unknown operation -- TABLE" m)` working as intended. The message
   is printed, then the objects, and the program stops.
@@ -264,25 +254,15 @@ it is worth reporting.
 
 ## Rough edges
 
-These are known defects, each with an open report. When one is fixed, its
-entry here goes away.
-
-- **`apply` of your own variadic procedure** (`(define (f . xs) ...)`) to
-  more than eight arguments stops with `apply: more than 8 arguments is
-  supported only for the standard variadic procedures`. The standard ones
-  (`+`, `*`, `max`, `append`, `string-append`, `list`, ...) take a list of
-  any length. For your own, pass the list itself as one argument.
-  [Report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/r7rs-apply-variadic-over-eight-arguments.md).
+None known today. When a defect turns up, it gets a report and an entry
+here, which goes away when the fix lands.
 
 ## What is coming
 
-`parallel-execute` will run its procedures truly at the same time, once
-Turmeric's Scheme has threads (SRFI 18). A built-in `(sicp extras)` library
-will replace the extras block. And
 [sicp-corpus](https://github.com/turmeric-lang/sicp-corpus) runs the
 book's code against Turmeric every day, so breakage is caught before you
 hit it. See the
-[plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-srfi-18-216-sicp-plan.md).
+[plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-srfi-18-216-sicp-plan.md).
 
 ## See also
 

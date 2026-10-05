@@ -1771,6 +1771,43 @@ static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) 
     return true;
 }
 
+/* proper-tail-calls T6: a bouncer's static tail call to another bouncer
+ * (tb_static_tail_callee) hands its arming on.  When this activation was
+ * entered from a trampoline driver, arm the callee just before the call: it
+ * consumes the arming on entry, and a bounce it hands back is this
+ * function's own value, which goes straight to the same driver.  `v` is the
+ * call expression; its arguments are already evaluated temps and plain reads,
+ * except that a second call to the callee inside them would consume the
+ * arming first -- refused.  The callee must be emitted with the entry check
+ * (fn_may_bounce), and return the driver's `tur_tagged_t`. */
+static void emit_tail_hand_on_arming(EmitCtx *ctx, Buf *body, const Expr *e,
+                                     const char *v) {
+    if (!ctx->tb_guard || !v || !ctx->current_fn_ret_ctype ||
+        strcmp(ctx->current_fn_ret_ctype, "tur_tagged_t") != 0)
+        return;
+    const FnDef *cd = tb_static_tail_callee(e);
+    if (!cd || !fn_may_bounce(cd)) return;
+    const char *q = v;
+    while (*q == '(') q++;
+    size_t idlen = 0;
+    while (q[idlen] && (isalnum((unsigned char)q[idlen]) || q[idlen] == '_')) idlen++;
+    if (idlen == 0 || idlen >= 256 || q[idlen] != '(') return;
+    char callee[256];
+    memcpy(callee, q, idlen);
+    callee[idlen] = '\0';
+    const char *rg = emit_sig_lookup_ret_ctype(callee);
+    if (!rg || strcmp(rg, "tur_tagged_t") != 0) return;
+    for (const char *p = strstr(q + idlen, callee); p; p = strstr(p + 1, callee)) {
+        char before = p[-1];
+        char after = p[idlen];
+        if (!(isalnum((unsigned char)before) || before == '_') &&
+            !(isalnum((unsigned char)after) || after == '_'))
+            return;
+    }
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s) tur_tb_armed_for = (void *)%s;\n", ctx->tb_guard, callee);
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -2089,6 +2126,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
             ensure_musttail_macro(ctx);
             emit_musttail_self_pin(body, ctx->indent, ctx->mt_fn_cname);
         }
+        emit_tail_hand_on_arming(ctx, body, e, v);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%sreturn %s;\n", mt ? "TUR_MUSTTAIL " : "", v);
         free(v);

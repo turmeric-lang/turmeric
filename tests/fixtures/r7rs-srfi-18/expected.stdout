@@ -1,0 +1,31 @@
+primordial: primordial #t
+new: answer data
+start returns the thread: #t
+join: 42 42
+started twice: refused
+own name: worker
+values: (1 4 9 16 25)
+uncaught: boom
+an error object: inner failure
+handlers stay home: uncaught-in-thread
+join timeout, default: not-yet
+join timeout, raised: join-timeout
+join, no timeout: late
+terminate: refused
+mutex: #t m not-abandoned
+locked by me: #t
+try from another thread: #f
+unlocked: not-abandoned
+not owned: not-owned
+a not-owned mutex unlocks from any thread: #t not-abandoned
+owner ended: abandoned
+lock it anyway: abandoned-mutex-exception
+and it is mine: #t
+cv: #t cv
+timed wait: #f
+bounded buffer: done 20100
+broadcast: (through through through)
+time: #t #t
+crew: (0 1 2 3 4 5 6 7)
+counter: 4000 entries: 4000
+per thread: (500 500 500 500 500 500 500 500)
