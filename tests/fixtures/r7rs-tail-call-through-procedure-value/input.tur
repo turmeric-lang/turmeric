@@ -1,0 +1,21 @@
+#lang r7rs
+;; Calls through a procedure VALUE in tail position are proper tail calls,
+;; compiled and under `tur --interpret` alike.  Continuation-passing code --
+;; SICP 4.3's amb evaluator -- is nothing but such calls; the interpreter's
+;; work-stack driver used to evaluate them recursively, so a chain of a few
+;; hundred thousand overflowed its stack.
+(import (scheme base) (scheme write))
+
+;; A chain of n continuations, each calling the next in tail position.
+(define (build n k)
+  (if (= n 0)
+      (k 0)
+      (build (- n 1) (lambda (v) (k (+ v 1))))))
+(write (build 200000 (lambda (v) v)))
+(newline)
+
+;; Mutual recursion through procedure values, with a variadic one in the loop.
+(define (ping n pong) (if (= n 0) 'done (pong (- n 1) ping)))
+(define (pong n . rest) (if (= n 0) 'done ((car rest) (- n 1) pong)))
+(write (ping 300000 pong))
+(newline)
