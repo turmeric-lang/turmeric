@@ -301,8 +301,9 @@ static const TuriNativeCapRow k_rows[] = {
     { "popcount", 0 },
     { "pow", 0 },
     { "println-float", TURI_CAP_IO },                        /* writes stdout */
-    { "process/spawn", TURI_CAP_PROC },                      /* fork+execvp */
-    { "process/wait", TURI_CAP_PROC },                       /* waitpid */
+    { "process/child-of-raw", TURI_CAP_PROC },               /* pid -> ChildHandle */
+    { "process/spawn-raw", TURI_CAP_PROC },                  /* fork+execvp */
+    { "process/wait-raw", TURI_CAP_PROC },                   /* waitpid */
     { "promise-fulfill", 0 },
     { "ptr=", 0 },
     { "r7rs-args-head__", 0 },

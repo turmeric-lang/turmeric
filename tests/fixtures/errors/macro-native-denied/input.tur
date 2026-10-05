@@ -3,6 +3,6 @@
 ;; Before WP3 this spawned the process at `tur check` time.
 (defmodule prog
   (defmacro* spawner []
-    (do (process/spawn "true" 0)
+    (do (process/spawn-raw "true" 0)
         (int->syntax 1)))
   (defn main [] : int (println (spawner)) 0))

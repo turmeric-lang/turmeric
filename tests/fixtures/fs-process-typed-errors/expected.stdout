@@ -1,0 +1,22 @@
+mkdirp
+mkdirp again
+true
+write
+copy
+rename
+5
+true
+false
+true
+2
+true
+rmdir non-empty refused
+rm
+rm
+rmdir
+rmdir
+rmdir
+true
+it's|a b
+true
+cwd ok

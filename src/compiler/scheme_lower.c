@@ -682,6 +682,23 @@ typedef struct SL {
     const Symbol   *s_guard, *s_parameterize, *s_delay, *s_delay_force;
     /* R7: which SCHEME_LIBS rows this unit has imported. */
     bool            lib_imported[N_SCHEME_LIBS];
+    /* Which (scheme ...) libraries the program's own import forms name,
+     * known before lowering sets lib_imported (r7rs-redefining-eval-with-
+     * scheme-eval-fails-to-compile). */
+    bool            lib_named[N_SCHEME_LIBS];
+    /* r7rs-saved-standard-procedure-follows-redefinition: a standard name the
+     * program redefines, with the index of the top-level form that does it.
+     * A reference evaluated EAGERLY (deferred == 0) by an earlier top-level
+     * form (cur_top < the index) means the standard procedure -- the one
+     * bound when it runs -- so `(define saved apply)` ahead of the program's
+     * own `apply` keeps R7RS's.  Lambda and promise bodies run later and see
+     * the program's definition, as before. */
+    const Symbol  **early_sym;
+    uint32_t       *early_at;
+    uint32_t        n_early, cap_early;
+    uint32_t        cur_top;
+    uint32_t        deferred;
+    bool            eager_thunk;   /* the next lambda body runs now (a top-level statement) */
     const Symbol   *od_from[N_ONDEMAND], *od_to[N_ONDEMAND];
     int             od_lib[N_ONDEMAND];
     /* R5: the nine numeric operators -- the Scheme spelling, the binary
@@ -2265,6 +2282,7 @@ static const Symbol *lib_hidden(SL *sl, const Symbol *mod, const Symbol *name);
 static Form *lib_rewrite_exports(SL *sl, Form *deflib, const Symbol *mod, const LibScan *ls);
 static void set_clash(SL *sl, const Symbol *from, const Symbol *to);
 static const Symbol *clash_spelling(const SL *sl, const Symbol *s);
+static const Symbol *std_before_redefinition(SL *sl, const Symbol *s, const Symbol *r);
 static Form *rebind_rest(SL *sl, Span sp, const Symbol *rest, Form *body);
 
 /* Is `name` (already renamed) the target of a `set!` anywhere in `f`?
@@ -2423,7 +2441,13 @@ static Form *lower_lambda_parts(SL *sl, Span sp, Form *formals,
         scope_close(sl, saved);
         return Nil(sl, sp);
     }
+    /* A top-level statement's thunk runs at once: its body is as eager as
+     * the statement (r7rs-saved-standard-procedure-follows-redefinition). */
+    uint32_t defer = sl->eager_thunk ? 0 : 1;
+    sl->eager_thunk = false;
+    sl->deferred += defer;
     Form *lowered = lower_body(sl, body, nbody, sp);
+    sl->deferred -= defer;
     lowered = rebind_rest(sl, sp, rest, lowered);
     lowered = rebind_muts(sl, sp, params, lowered);
     scope_close(sl, saved);
@@ -2992,7 +3016,9 @@ static Form *lower_delay(SL *sl, Form *f, bool is_force) {
         err(f, "%s expects one expression", is_force ? "delay-force" : "delay");
         return Nil(sl, sp);
     }
+    sl->deferred++;
     Form *x = lower(sl, f->as.list.items[1]);
+    sl->deferred--;
     if (!is_force) x = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-make-promise")), x);
     return Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-delay-force__")), thunk_of(sl, sp, x));
 }
@@ -3665,6 +3691,10 @@ static Form *lower(SL *sl, Form *f) {
                 return Ln(sl, f->span, 3, Sym(sl, f->span, I(sl, "::")),
                           Sym(sl, f->span, sl->ops_val[op]), Sym(sl, f->span, sl->t_any));
             const Symbol *r = rn(sl, f->as.sym);
+            if (sl->in_user && sl->deferred == 0 && r != f->as.sym) {
+                const Symbol *early = std_before_redefinition(sl, f->as.sym, r);
+                if (early) r = early;
+            }
             /* r7rs-turmeric-syntax-leaks item 8: a Turmeric stdlib name the
              * unit did not import is not bound in Scheme. */
             if (r == f->as.sym && sl->in_user && !scheme_std_visible(sl, r)) {
@@ -4011,7 +4041,11 @@ static void expand_includes(SL *sl, Form *const *forms, uint32_t n, FB *out) {
 static Form *lower_toplevel_stmt(SL *sl, Form *f) {
     Span sp = f->span;
     Form *thunk = Ln(sl, sp, 3, Sym(sl, sp, sl->s_lambda), Ln(sl, sp, 0), f);
-    return lower(sl, Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-toplevel__")), thunk));
+    Form *call = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-toplevel__")), thunk);
+    sl->eager_thunk = sl->deferred == 0;
+    Form *r = lower(sl, call);
+    sl->eager_thunk = false;
+    return r;
 }
 
 static void lower_toplevel_1(SL *sl, Form *f, FB *out);
@@ -4072,8 +4106,10 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
                 scope_close(sl, saved);
                 return;
             }
+            sl->deferred++;
             Form *body = rebind_rest(sl, sp, rest,
                                      lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp));
+            sl->deferred--;
             /* A parameter the body `set!`s is a mutable local, as in a
              * lambda (r7rs-toplevel-define-sets-its-parameter). */
             body = rebind_muts(sl, sp, params, body);
@@ -6607,6 +6643,46 @@ static const Symbol *clash_spelling(const SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return sl->clash_to[i];
     return s;
 }
+static const Symbol *std_meaning(SL *sl, const Symbol *s);
+/* r7rs-saved-standard-procedure-follows-redefinition: what an eager
+ * reference to `s` (spelled `r` by rn) means from the current top-level
+ * form -- the standard procedure when the program redefines `s` only in a
+ * later form, else NULL (rn's answer stands). */
+static const Symbol *std_before_redefinition(SL *sl, const Symbol *s, const Symbol *r) {
+    if (clash_spelling(sl, s) != r) return NULL;
+    for (uint32_t i = 0; i < sl->n_early; i++) {
+        if (sl->early_sym[i] != s) continue;
+        if (sl->cur_top >= sl->early_at[i]) return NULL;
+        const Symbol *std = std_meaning(sl, s);
+        return std != s ? std : NULL;
+    }
+    return NULL;
+}
+/* Record, for each clash name, the first top-level form that defines it. */
+static void note_redefinition_points(SL *sl, Form *const *forms, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        if (!is_scheme_file(forms[i]) || prelude_span(forms[i]->span) || srfi_span(forms[i]->span)) continue;
+        if (head_is(forms[i], sl->s_define_library)) return;   /* a library: not a program */
+        FB names = {0};
+        user_define_names(sl, forms[i], &names);
+        for (uint32_t k = 0; k < names.n; k++) {
+            const Symbol *s = names.items[k]->as.sym;
+            if (clash_spelling(sl, s) == s) continue;
+            bool seen = false;
+            for (uint32_t j = 0; j < sl->n_early && !seen; j++) seen = sl->early_sym[j] == s;
+            if (seen) continue;
+            if (sl->n_early == sl->cap_early) {
+                sl->cap_early = sl->cap_early ? sl->cap_early * 2 : 8;
+                sl->early_sym = (const Symbol **)realloc((void *)sl->early_sym, sl->cap_early * sizeof(Symbol *));
+                sl->early_at = (uint32_t *)realloc(sl->early_at, sl->cap_early * sizeof(uint32_t));
+                if (!sl->early_sym || !sl->early_at) { fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+            sl->early_sym[sl->n_early] = s;
+            sl->early_at[sl->n_early++] = i;
+        }
+        free(names.items);
+    }
+}
 static void add_clash(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return;
     if (sl->n_clash == sl->cap_clash) {
@@ -6643,6 +6719,16 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
          * global whether or not the program imports them, so refusing
          * would refuse programs that never imported the name.) */
         if (rn(sl, s) != s) { add_clash(sl, s); continue; }
+        /* ... and so is an on-demand library's name -- `eval` of (scheme
+         * eval) -- once the program imports that library.  rn cannot say so
+         * yet: lib_imported is set as the import is lowered, after this scan,
+         * and from then on the program's `(define (eval ...))` would be
+         * spelled onto the library's own `r7rs-eval`, two C functions of one
+         * name.  SICP 4.1 defines its own `eval`. */
+        bool od_clash = false;
+        for (size_t k = 0; k < N_ONDEMAND && !od_clash; k++)
+            od_clash = sl->od_from[k] == s && sl->od_lib[k] >= 0 && sl->lib_named[sl->od_lib[k]];
+        if (od_clash) { add_clash(sl, s); continue; }
         /* (A name Turmeric reserves for a type is rn'd by type_named_global.) */
         bool clash = false;
         for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
@@ -6861,6 +6947,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
                 set = set->as.list.items[1];
             int li = scheme_lib_index(set);
             if (li >= 0 && strcmp(SCHEME_LIBS[li].name, "base") == 0) fb_push(&sl.base_sets, sets.items[j]);
+            if (li >= 0 && head_is(f, sl.s_import)) sl.lib_named[li] = true;
         }
         free(sets.items);
     }
@@ -6869,6 +6956,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i])) collect_muts(&sl, forms[i]);
     note_stdlib_clashes(&sl, forms, n);
+    if (!repl_turn) note_redefinition_points(&sl, forms, n);
     FB out = {0}, sforms = {0};
     {
         /* r7rs-procedure-body-forward-reference: the user's forms, in order,
@@ -6905,6 +6993,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
         } else if (is_scheme_file(forms[i])) {
             if (!have_first) { first_sp = forms[i]->span; have_first = true; }
             uint32_t from = sforms.n, lib_from = sl.lib_body.n;
+            sl.cur_top = i;
             sl.in_user = true;
             lower_toplevel(&sl, forms[i], &sforms);
             sl.in_user = false;
@@ -6949,21 +7038,25 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
          * imports first, definitions next, and the top-level expressions as
          * the body of a synthesized `main` (the top-level fold does not look
          * inside a module). */
+        /* r7rs-program-file-named-with-leading-digit-fails-to-compile: the
+         * name becomes the C prefix of every definition in the module, so it
+         * must not start with a digit -- SICP readers name files `1.1.scm`
+         * and `3.5-streams.scm`.  Such a stem is prefixed `r7rs-program-`.
+         * Only the LAST dot is the extension: `1.1.scm` is `1-1`, not `1`,
+         * which every other section's file would share. */
         const SourceFile *sf = diag_source_file(first_sp.file_id);
         char mbuf[128] = "r7rs-program";
         if (sf && sf->path) {
             const char *base = strrchr(sf->path, '/');
             base = base ? base + 1 : sf->path;
+            const char *ext = strrchr(base, '.');
+            if (!ext || ext == base) ext = base + strlen(base);
             size_t at = 0;
-            /* r7rs-program-file-named-with-leading-digit-fails-to-compile:
-             * the module name prefixes C identifiers, which may not start
-             * with a digit -- SICP readers name files `1.1.scm`. */
             if (*base >= '0' && *base <= '9') {
                 memcpy(mbuf, "r7rs-program-", 13);
                 at = 13;
             }
-            for (const char *p = base; *p && at + 1 < sizeof mbuf; p++) {
-                if (*p == '.') break;
+            for (const char *p = base; p < ext && at + 1 < sizeof mbuf; p++) {
                 mbuf[at++] = (*p == '-' || *p == '_' || (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
                               (*p >= '0' && *p <= '9')) ? *p : '-';
             }
@@ -7008,6 +7101,8 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     free((void *)sl.muts);
     free(included.items);
     free((void *)sl.clash_from);
+    free((void *)sl.early_sym);
+    free(sl.early_at);
     free((void *)sl.clash_to);
     free((void *)sl.setters);
     free(sl.macros);

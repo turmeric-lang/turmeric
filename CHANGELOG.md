@@ -2,6 +2,48 @@
 
 All notable changes to Turmeric are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **stdlib OS surface, P0 (stdlib-os-surface-plan).** `io/read-line` /
+  `io/read-stdin` (`(Option cstr)`; `None` at end of input), `file-write` /
+  `file-write-str` / `file-seek` / `file-tell` on `FileHandle` with a
+  `SeekFrom` ADT, `fs/append-text`, `time/now-ms` and `time/monotonic-ns`,
+  `process/kill` over a `Signal` ADT plus `process/child-pid`, and the
+  `eprintln` / `eprint` builtins -- `println`'s overload set, on stderr.
+- **stdlib OS surface, P2.** `fs/read-lines`, `file-read-line`, `fs/read-dir`,
+  `fs/path-join`, `fs/walk` / `fs/walk-fn`, and `process/output` (stdout, stderr and an `ExitStatus`,
+  read concurrently; `ProcOpts` sets stdin, cwd and environment).
+- **`docs/guides/files-and-processes-guide.md`** -- the fs / io / process
+  surface, `IoError`, ownership and the Windows gaps in one page.
+
+### Changed
+
+- **BREAKING -- fs / io / process report failure as `(Result T IoError)`
+  (stdlib-os-surface P1).** `IoError` (new `stdlib/io-error.tur`) carries the
+  errno, with `io-error/message`, `/code`, `/not-found?`, `/exists?`,
+  `/permission?`. Retyped in place, with no deprecation window: `fs/mkdir`,
+  `mkdirp`, `rmdir`, `rm`, `rename`, `copy`, `write-text`, `append-text`
+  (`(Result nil IoError)`); `fs/stat`, `fs/read-text`, `fs/glob` (now a
+  `(Vec cstr)`); `file-open` (`FileHandle` is now a linear opaque), `file-read`,
+  `file-write`, `file-seek`, `file-tell`, `file-close`; `process/spawn`,
+  `process/run` and `process/wait` (an `ExitStatus`: `Exited` / `Signaled`),
+  `process/capture`, `process/cwd`, `process/chdir`, `process/kill`;
+  `env/all` (a `(Vec cstr)`). `process/*` argv is now variadic after the
+  program, which is also argv[0]: `(process/run "/bin/ls" "-l")`.
+  `fs/read-text` reads pipes instead of failing on them, and a missing
+  program is an `Err` from `process/spawn` rather than a child exiting 127.
+- **`get-time-ms` has millisecond resolution.** It was `time(NULL) * 1000`.
+
+### Deprecated
+
+- **Deprecation step of the io.tur cleanup (stdlib-os-surface P1.5).**
+  `read-file`, `write-file` and `file-exists?` (use `fs/read-text`,
+  `fs/write-text`, `fs/exists?`), `file-handle-ok?` (a `FileHandle` is always
+  open now) and `fs/glob-free` (use `fs/paths-free`) warn at every use. The
+  next minor release removes them.
+
 ## [0.62.0] -- 2026-10-03
 
 ### Added

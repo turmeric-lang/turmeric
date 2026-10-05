@@ -1,5 +1,22 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed 2026-10-04: a `(panic ...)` names its own call site** (fix
+directions 1 and 3). Compiled: the preamble's body is now `tur_panic_at(file,
+line, msg)`, and each `panic` site the emitter writes passes its own source
+basename and line as literals (`emit_panic_call`, `src/compiler/emit_expr.c`).
+So `tur run boom.tur` prints `panic at boom.tur:3: division by zero` in every
+build, `--debug` or not. `tur_panic(msg)` stays as the runtime's own entry, and
+its location is still the runtime's. Interpreted: EX_PANIC hands its span to
+`turi_runtime_panic`, which prints the same line, and a typed `panic-with` with
+no catcher prints `panic at boom.tur:N`. Pinned by
+`tests/fixtures/panic-names-its-call-site` (`expected.stderr`, on both back
+ends), and the location literal is in every `expected.c` that has a panic. The
+debugging guide now says the message names the call site. **Still open:**
+direction 2 (a failed `:pre`/`:post` still says only `Precondition failed`,
+without the function or the predicate) and direction 4 (what `--panic-trace` is
+for). A panic raised inside the runtime (a bounds check) still names a
+generated-C line.
+
 **Severity:** medium (user experience). Every compiled panic reports the same
 location -- a line inside the runtime preamble's own `tur_panic` -- whatever
 code panicked. The interpreter prints `panic at` with no location at all, and a

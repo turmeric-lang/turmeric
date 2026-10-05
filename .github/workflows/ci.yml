@@ -23,11 +23,26 @@ on:
 permissions:
   contents: read
 
+# Cancel a PR's superseded run.  Without this every push to a PR left its
+# previous run holding runner slots to the end, and the account's concurrent-job
+# limit is shared by every run: on 2026-10-04, 14 overlapping runs between 17:34
+# and 19:08 queued even ubuntu jobs for 20-60 min while the jobs themselves ran
+# at their usual length.  Superseded runs were being cancelled by hand.
+#
+# PR runs group by PR number, so a new push cancels the old run.  `main` runs
+# get a group of their own (the run id), so they are NEVER cancelled or
+# serialized: every merge is tested on its own, and its `publish-timings` rows
+# reach ci-metrics.  (A shared `main` group would also silently drop queued
+# runs -- GitHub keeps only the newest pending run per group.)
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
   # Docs-only gate.  A PR that touches nothing outside docs/ cannot change what
   # the compiler does, so the build-and-suite jobs below are skipped for it --
   # including their macOS legs, which wait on a small shared runner pool (see
-  # docs/upcoming/ci-aux-suite-latency-plan.md section 3).  A skipped job
+  # docs/archive/ci-aux-suite-latency-plan.md section 3).  A skipped job
   # reports "skipped", which is not a failure.
   #
   # Two outputs, because docs/ is not all inert:
@@ -75,10 +90,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: docs/reported/README.md lists exactly the open reports
-        run: bash tests/check-reported-index.sh
-      - name: r7rs guide SRFI list matches the prelude
-        run: bash tests/check-r7rs-srfi-sync.sh
+      # One entry point, shared with the Claude Code pre-push hook
+      # (.claude/hooks/docs-lint-before-push.sh): add a check to the script,
+      # not a step here.  Today: docs/reported/README.md lists exactly the open
+      # reports, and the r7rs guide's SRFI list matches the prelude.
+      - name: Docs lint checks (tests/check-docs-lint.sh)
+        run: bash tests/check-docs-lint.sh
 
   test:
     needs: changes
@@ -109,13 +126,12 @@ jobs:
     # aux job from 18m12s to 67m28s in ONE merge (#1007, 8bb60d016).  Both are
     # RUN_SERIAL for the same reason as the r7rs pair, and together they were
     # 70% of the job.  `fconv` and `gsm1`/`gsm2` are the answer, and the leg
-    # asymmetry below is the rest of it.  PROJECTED from the pre-change
-    # measurements, not yet observed: macOS aux 66 -> ~27 min, Linux aux
-    # ~15 min with the two suites moved out.  Check them against the real trend
-    # (branch `ci-metrics`, suite-timings-2026.jsonl) once this has run a few
-    # times, and correct this comment to measured numbers then -- the "~13 min"
-    # that used to be here was measured, and went stale in two days anyway, so
-    # a number in this comment is worth only as much as its date.
+    # asymmetry below is the rest of it.  MEASURED 2026-10-04 on main: macOS
+    # aux 66 -> ~16-18 min, Linux aux ~16-17 min, gsm1/gsm2 ~12-16 min, fconv
+    # ~7-12 min (docs/archive/ci-aux-suite-latency-plan.md section 11).  The
+    # "~13 min" that used to be here was measured too, and went stale in two
+    # days, so a number in this comment is worth only as much as its date --
+    # re-check it against branch `ci-metrics` (suite-timings-2026.jsonl).
     #
     # The parts must between them run every registered test, and that is no
     # longer something to verify by hand: every pattern below comes from
@@ -131,14 +147,14 @@ jobs:
     # default, which is why a 67-minute macOS aux job passed quietly instead of
     # saying anything.  A number here is a diagnostic, not a budget.
     #
-    # 90, against a projected ~27 min for the slowest part (macOS aux) plus a
-    # cold-cache build: deliberately loose, because a timeout-minutes kill is the
-    # one outcome with NO diagnostics -- it cancels the job and leaves the
-    # `if: always()` timing uploads pending, so a run killed here tells you less
-    # than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
+    # 60, against a measured ~18 min for the slowest part (macOS aux, 2026-10-04;
+    # was 90 against a ~27 min projection): deliberately loose, because a
+    # timeout-minutes kill is the one outcome with NO diagnostics -- it cancels
+    # the job and leaves the `if: always()` timing uploads pending, so a run
+    # killed here tells you less than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
     # the tight bound and they name the suite; this is only the outer fence.
-    # Tighten it once the post-split durations are in the trend, not before.
-    timeout-minutes: 90
+    # Re-derive it from the trend, not from a projection, if the parts move.
+    timeout-minutes: 60
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
     # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
@@ -769,12 +785,17 @@ jobs:
       # precisely the failure mode that let this gap persist.  Fail loudly
       # instead.  `perl -e alarm` is the portable timeout (macOS runners ship
       # no coreutils `timeout`), matching the smoke check in the `test` job.
+      # Needs a real file: a bare `tur jit` prints "usage: tur jit" whether or
+      # not the engine is compiled in, so matching on the usage line passed a
+      # no-JIT build too.  Only an engine-less build prints "carries no JIT
+      # engine"; a real one runs the probe.
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit 2>&1) || true
+          printf '(defn main [] : int (do (println "jit-ok") 0))\n' > /tmp/jit-probe.tur
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit /tmp/jit-probe.tur 2>&1) || true
           echo "$out"
           case "$out" in
-            *"usage: tur jit"*)
+            *"jit-ok"*)
               echo "JIT engine present." ;;
             *)
               echo "::error::tur was built without the MIR JIT engine -- the JIT suites would self-skip and this job would pass vacuously."
@@ -908,23 +929,21 @@ jobs:
           # any other break in test registration would sail through as a green
           # step that ran no tests -- the same vacuous-pass shape that step
           # exists to prevent.
-          # tur_flags_tests is here as well as in the `test` job, and the
-          # duplication is the point: it is the only harness carrying the
-          # `jit-ffi-*` cases, and EVERY one of them is gated on the engine
-          # being present (`HAS_JIT`), so in the `test` job -- which builds
-          # without -DTUR_JIT=ON -- they all SKIP.  Before this line nothing
-          # in CI ran run-flags.sh against a JIT build on any runner, which
-          # meant the interpreter's whole dynamic-FFI surface (call-ptr,
-          # thunk-backed extern-c, callbacks, struct-by-value) was asserted
-          # only by hand.  The aarch64 HFA refusal in particular is
-          # `#if defined(__aarch64__)` and had NEVER executed anywhere: this
-          # macOS leg is the only arm64 machine in the matrix, so this line
-          # is what turns that case from documentation into a test.
+          # tur_flags_tests is NOT here any more.  It used to be, because its
+          # `jit-ffi-*` cases are gated on the engine (`HAS_JIT`) and the `test`
+          # job built without it, so they all SKIPped there.  Since TUR_JIT
+          # defaulted ON (2026-10-02) the `test` job runs the same Debug + JIT +
+          # ASan build and the same cases (134 passed on Linux, 137 on macOS,
+          # identical in both jobs), including the arm64 HFA refusal on its
+          # macOS leg.  Running it here as well bought no coverage and put two
+          # rows per run into one ci-metrics series (both jit=true now), which
+          # drew the suite as a zig-zag between ~9s and ~28s.
           #
           # --output-junit rides along for the suite-timing trend
           # (docs/archive/suite-timing-trends-plan.md).  These rows carry
-          # jit=true from the build cache, so they form their own series and
-          # are never averaged against the `test` job's jit=false rows.
+          # jit=true, and since TUR_JIT defaulted ON so do the `test` job's: the
+          # two jobs share one ci-metrics environment.  That is why no suite
+          # may run in both -- it would draw two points per run in one series.
           #
           # macos-jit-hang-loses-both-diagnostics: BOUNDED INSIDE THE JOB
           # BUDGET, which is the whole reason the instrumentation above finally
@@ -952,7 +971,7 @@ jobs:
           perl -e 'alarm 2550; exec @ARGV' \
             ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
                 --test-output-size-passed 262144 --test-output-truncation head \
-                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
           rc=${PIPESTATUS[0]}
@@ -1003,6 +1022,103 @@ jobs:
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
+
+  # The interpreter in the configuration that has no JIT to lean on.
+  #
+  # TUR_JIT defaulted ON on 2026-10-02, and from then on every leg above built
+  # with the MIR engine -- so nothing compiled or ran the interpreter the way a
+  # no-JIT platform gets it.  That is not hypothetical: iOS forbids a JIT and
+  # the WASM web REPL has none, and on both the tree-walking interpreter
+  # (src/turi/) is the only engine.  A turi change that quietly leans on
+  # TUR_HAVE_JIT (the c2mir FFI thunks, the C1 inline-C hook) passes every
+  # other leg and only breaks there.  See
+  # docs/reported/turi-ios-readiness-unverified.md.
+  #
+  # Linux only and per PR: Linux runners start immediately (see the `test`
+  # matrix `exclude` comment), and a JIT dependency is cheapest to catch the
+  # day it lands.  The iOS cross-compile half of the same concern is nightly,
+  # in nightly-ios.yml, because it needs a macOS runner.
+  #
+  # Runs tests/run-turi.sh directly, not through ctest, so this job adds no row
+  # to tests/ctest-parts.py: the `test` job still owns turi_fixture_tests, and
+  # this is a second configuration of it, not a part of the partition.
+  interp-nojit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Interpreter without JIT (ubuntu-latest)
+    runs-on: ubuntu-latest
+    # The suite measures ~5 min; 60 leaves room for a cold-cache build and is a
+    # diagnostic, not a budget (same reasoning as the `test` job's number).
+    timeout-minutes: 60
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-nojit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-nojit-${{ runner.os }}-
+
+      - name: Configure (Debug, JIT off)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets: fixtures that fall back to the cc path link libturi.a,
+      # which `--target tur` does not build.
+      - name: Build
+        run: cmake --build build -j
+
+      # The inverse of the `jit` job's presence check.  If -DTUR_JIT=OFF were
+      # ever dropped or overridden, this job would quietly become a second copy
+      # of the `test` job's turi run and report green having tested nothing new.
+      # Needs a real file: a bare `tur jit` prints its usage line whether or
+      # not the engine is compiled in.
+      - name: Verify the JIT engine is absent
+        run: |
+          printf '(defn main [] : int (do (println "hi") 0))\n' > /tmp/nojit-probe.tur
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit /tmp/nojit-probe.tur 2>&1) || true
+          echo "$out"
+          case "$out" in
+            *"carries no JIT engine"*)
+              echo "JIT engine absent, as intended." ;;
+            *)
+              echo "::error::this build carries the MIR JIT engine -- the no-JIT interpreter configuration is not what ran."
+              exit 1 ;;
+          esac
+
+      - name: Interpreter fixture suite (run-turi.sh)
+        run: |
+          set -o pipefail
+          timeout 720 bash tests/run-turi.sh 2>&1 | tee turi.log
+
+      # Skips are where interpreter gaps hide (fixtures with user inline-C are
+      # skipped outright), so record the count where a reader will see it.
+      - name: Record the skip count
+        if: always()
+        run: |
+          line=$(grep -E '^turi fixture summary: ' turi.log | tail -1 || true)
+          echo "${line:-no summary line -- the suite did not finish}"
+          { echo "### Interpreter without JIT"; echo; echo "${line:-no summary line -- the suite did not finish}"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-nojit-${{ runner.os }}-${{ github.sha }}
 
   # cc-path-preamble-split-plan: run the corpus with the WHOLE preamble.
   #
@@ -1577,12 +1693,15 @@ jobs:
       # Same reasoning as the `jit` job: a build that silently lost -DTUR_JIT=ON
       # would pass this job having compiled none of the sources it exists to
       # guard.
+      # Needs a real file -- a bare `tur jit` prints its usage line with or
+      # without the engine (see the `jit` job's copy of this step).
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(timeout 30 ./build-win-jit/tur.exe jit 2>&1) || true
+          printf '(defn main [] : int (do (println "jit-ok") 0))\n' > jit-probe.tur
+          out=$(timeout 30 ./build-win-jit/tur.exe jit jit-probe.tur 2>&1) || true
           echo "$out"
           case "$out" in
-            *"usage: tur jit"*)
+            *"jit-ok"*)
               echo "JIT engine present." ;;
             *)
               echo "::error::tur.exe was built without the MIR JIT engine -- this job would pass having compiled nothing it guards."

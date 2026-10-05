@@ -5,7 +5,8 @@
 (load "stdlib/process.tur")
 
 (defn main [] : int
-  (let [child (process/spawn "/bin/true" 0)]
-    (process/wait child)
-    (process/wait child))
-  0)
+  (match (process/spawn "/bin/true")
+    (Ok child) (do (process/wait child)
+                   (process/wait child)
+                   0)
+    (Err e) 1))

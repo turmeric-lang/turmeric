@@ -85,10 +85,9 @@ In compiled programs, build raw cons lists by one of:
 - **Use a stdlib helper** that *is* compiled -- e.g. `stdlib/args.tur`'s
   `args/parse` linearises the pre-declared `*args*` cons list for you, and
   `stdlib/list.tur` provides typed `Cons`/`tcons` cells.
-- **Pass `0` (the empty list)** where an API accepts an empty cons list. For
-  example `(process/spawn "/bin/true" 0)` spawns with an empty argv -- the
-  idiomatic way to write a *compiled* `process/spawn` call without a list
-  builder. (See `stdlib/process.tur`.)
+- **Pass `0` (the empty list)** where an API accepts an empty cons list.
+  (`stdlib/process.tur` no longer needs this: since stdlib-os-surface P1 its
+  argv is variadic -- `(process/run "/bin/ls" "-l" "/tmp")`.)
 
 See the "CLI Argument Parsing" rule in `CLAUDE.md` for the `*args*` conventions.
 

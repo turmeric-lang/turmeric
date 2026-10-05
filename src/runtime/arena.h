@@ -15,6 +15,11 @@ typedef struct ArenaSlab ArenaSlab;
 
 typedef struct Arena {
     ArenaSlab *head;
+    /* Slabs emptied by arena_reset, waiting to be reused.  The head chain is
+     * where allocations land and what arena_each_used walks; a reset keeps
+     * the head slab there and parks the rest here, so the next generation
+     * refills them before it asks malloc for more. */
+    ArenaSlab *spare;
     size_t default_slab;
     size_t total_bytes;
     size_t total_allocs;

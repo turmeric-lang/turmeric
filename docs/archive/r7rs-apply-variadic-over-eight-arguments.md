@@ -1,5 +1,13 @@
 # `#lang r7rs`: `apply` of a variadic procedure refuses a list longer than eight
 
+**Resolved 2026-10-05.** Two fixes met: `main` first narrowed it (fix
+direction 2, `r7rs-apply-std-many__`: the standard variadics, recognised by
+identity), and the SICP-plan branch landed fix direction 1 for every
+variadic procedure, the program's own included -- see Resolution below.
+The merge kept direction 1, which covers the standard variadics too; the
+narrowing's fixture `r7rs-apply-standard-variadic-many` (a million-element
+`(apply + ...)`, inexact contagion through `max`/`min`) still pins them.
+
 **Severity:** medium. `(apply + lst)`, `(apply max lst)`, `(apply append
 lists)` and `(apply string-append strs)` are everyday Scheme, and SICP code
 (and its readers' exercise answers) use them on lists of any length. All of

@@ -1,0 +1,68 @@
+;; stdlib-os-surface-plan P0.2: file-write / file-write-str / file-seek /
+;; file-tell on a FileHandle, plus fs/append-text -- all reporting through
+;; (Result _ IoError) since P1.
+(load "stdlib/io.tur")
+(load "stdlib/fs.tur")
+
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Run-time scratch dir (see io-stdlib-roundtrip for why not "/tmp"). */
+  static char buf[512];
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof buf, "%s/%s", d, name);
+  return buf;
+  ```)
+
+(defn cstr->ptr [s : cstr] : ptr<void>
+  ```c return (void*)s; ```)
+
+(defn make-buf [n : int] : ptr<void>
+  ```c return calloc(1, (size_t)n); ```)
+
+(defn buf->cstr [p : ptr<void>] : cstr
+  ```c return (const char*)p; ```)
+
+(defn free-buf [p : ptr<void>] : void
+  ```c free(p); ```)
+
+(defn show [r : (Result int IoError)] : int
+  (match r
+    (Ok n) (do (println n) n)
+    (Err e) (do (println (io-error/message e)) -1)))
+
+(defn show-unit [r : (Result nil IoError)] : int
+  (match r
+    (Ok _) (do (println "ok") 0)
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn exercise [fh : FileHandle path : cstr] : int
+  (show (file-write-str fh "hello "))
+  (show (file-write fh (cstr->ptr "world!") 5))
+  (show (file-tell fh))
+  (show (file-seek fh 0 (SeekStart)))
+  (let [buf (make-buf 32)]
+    (show (file-read fh buf 31))
+    (println (buf->cstr buf))
+    (free-buf buf))
+  (show (file-seek fh -5 (SeekEnd)))
+  (show (file-seek fh 2 (SeekCurrent)))
+  ;; a position before the start of the file is an error, not a silent -1
+  (show (file-seek fh -100 (SeekStart)))
+  (show-unit (file-close fh)))
+
+(defn main [] : int
+  (let [path (tmp-path "tur-io-file-write-seek.txt")]
+    (match (file-open path "w+b")
+      (Ok fh) (exercise fh path)
+      (Err e) (do (println (io-error/message e)) 1))
+    (show-unit (fs/append-text path "\nmore"))
+    (match (fs/read-text path)
+      (Ok s) (println s)
+      (Err e) (println (io-error/message e)))
+    (show-unit (fs/rm path))
+    ;; a missing directory reports a typed IoError
+    (match (file-open (tmp-path "no-such-dir/x.txt") "rb")
+      (Ok fh) (show-unit (file-close fh))
+      (Err e) (do (println (io-error/not-found? e)) 0)))
+  0)

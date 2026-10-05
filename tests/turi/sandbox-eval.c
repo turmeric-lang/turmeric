@@ -186,7 +186,7 @@ static void check_grant_admits(void) {
     turi_env_allow(env, TURI_CAP_ENV);
     TuriValue allowed = turi_call(env, fn, &arg, 1);
     turi_env_allow(env, TURI_CAP_IO | TURI_CAP_FS);   /* not enough for proc */
-    TuriValue spawn = turi_call(env, turi_env_get(env, "process/spawn"), NULL, 0);
+    TuriValue spawn = turi_call(env, turi_env_get(env, "process/spawn-raw"), NULL, 0);
     if (denied.tag == TURI_ERROR && allowed.tag == TURI_CSTR &&
         spawn.tag == TURI_ERROR && spawn.as_error &&
         strstr(spawn.as_error, "requires capability proc"))

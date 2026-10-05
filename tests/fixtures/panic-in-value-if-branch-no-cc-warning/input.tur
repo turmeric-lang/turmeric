@@ -1,0 +1,19 @@
+;; panicking-if-branch-leaks-cc-uninitialized-warning: `panic` is not
+;; noreturn on the compiled path, so cc saw the panicking branch fall through
+;; to the merge temp's read with the temp unset and printed
+;; -Wsometimes-uninitialized on the user's stderr.  The emitted branch now
+;; gives the temp a dead zero after the unwind check (see expected.c).
+(defn checked-div [a : int b : int] : int
+  (if (= b 0)
+    (panic "division by zero")
+    (/ a b)))
+
+(defn checked-pos [a : int] : int
+  (if (> a 0)
+    a
+    (panic "not positive")))
+
+(defn main [] : int
+  (println (checked-div 10 2))
+  (println (checked-pos 7))
+  0)

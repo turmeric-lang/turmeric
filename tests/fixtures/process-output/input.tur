@@ -1,0 +1,42 @@
+;; stdlib-os-surface-plan P2.3: process/output collects stdout, stderr and an
+;; ExitStatus, feeding ProcOpts' input on stdin and honouring cwd / env.  The
+;; big-output case writes far more than a pipe buffer to BOTH streams, which
+;; deadlocks a reader that drains one stream before the other.
+(load "stdlib/process.tur")
+
+(defn cstr-len [s : cstr] : int
+  ```c return (int64_t)strlen(s); ```)
+
+(defn show-status [st : ExitStatus] : int
+  (match st
+    (Exited c) (do (println "exited") (println c) 0)
+    (Signaled s) (do (println "signaled") (println (signal->number s)) 0)))
+
+(defn show [r : (Result ProcOutput IoError)] : int
+  (match r
+    (Ok o) (do (println (.out o))
+               (println (.err o))
+               (show-status (.status o)))
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn main [] : int
+  (let [d (process/default-opts)]
+    (show (process/output d "sh" "-c" "echo out; echo err >&2; exit 4"))
+    (show (process/output (ProcOpts (Some "fed via stdin") (None) (None)) "cat"))
+    (show (process/output (ProcOpts (None) (Some "/") (None)) "pwd"))
+    (let [env (:: (vec-new) (Vec cstr))]
+      (vec-push! env "TUR_P2_PROBE=from-opts")
+      (show (process/output (ProcOpts (None) (None) (Some env))
+                            "/bin/sh" "-c" "echo $TUR_P2_PROBE"))
+      (vec-free-o env 0))
+    (match (process/output d "sh" "-c"
+                           "i=0; while [ $i -lt 4000 ]; do echo 0123456789abcdef; echo 0123456789abcdef >&2; i=$((i+1)); done")
+      (Ok o) (do (println (cstr-len (.out o))) (println (cstr-len (.err o))))
+      (Err e) (println (io-error/message e)))
+    (match (process/output d "/no/such/program")
+      (Ok o) (println "ran?")
+      (Err e) (println (io-error/not-found? e)))
+    (match (process/output (ProcOpts (None) (Some "/no/such/dir") (None)) "true")
+      (Ok o) (println "ran?")
+      (Err e) (println (io-error/not-found? e))))
+  0)

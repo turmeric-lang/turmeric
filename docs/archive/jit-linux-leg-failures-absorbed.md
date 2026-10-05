@@ -34,7 +34,7 @@ one of which still had its artifact:
 
 | fixture | runs | kind | owner |
 | --- | --- | --- | --- |
-| `r7rs-threads-lifecycle` | 9 | `(fork-failures 0)` -> `(fork-failures 1)` | [jit-fork-child-inherits-asan-allocator-lock](../reported/jit-fork-child-inherits-asan-allocator-lock.md) (**open**) |
+| `r7rs-threads-lifecycle` | 9 | `(fork-failures 0)` -> `(fork-failures 1)` | [jit-fork-child-inherits-asan-allocator-lock](jit-fork-child-inherits-asan-allocator-lock.md) (resolved 2026-10-04) |
 | `fn-field-carrier-shim-read-typed` | 9 | zero-byte stdout (`@@ -1,7 +0,0 @@`) | [fn-field-carrier-shim-read-typed](fn-field-carrier-shim-read-typed.md) (**resolved**) |
 
 Ordered by recency they interleave as threads (6 oldest), carrier-shim (9),

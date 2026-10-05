@@ -1,5 +1,7 @@
 # `tur run`: shebang recipes fail when `TMPDIR` contains a space or shell metacharacter
 
+**RESOLVED 2026-10-04.** On POSIX the script is run with `fork` + `execv` and no shell in between, so the kernel still honours the shebang and a `$TMPDIR` with a space or `;` is just a path. The Windows branch keeps `system()` but double-quotes the path. Pinned by case 13 of `tests/run-security-driver.sh` (`TMPDIR=".../my tmp;touch PWNED"`: the recipe runs and no `PWNED` appears).
+
 **Severity:** low. A recipe whose body starts with `#!` exits 127 without
 running when `$TMPDIR` contains a space. The same path is handed to `/bin/sh`
 as shell text, so a `TMPDIR` containing `;`, `$(...)` or a backtick runs that

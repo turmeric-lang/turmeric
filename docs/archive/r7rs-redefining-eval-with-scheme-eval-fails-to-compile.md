@@ -1,5 +1,7 @@
 # `#lang r7rs`: defining `eval` in a program that imports `(scheme eval)` fails to compile
 
+**RESOLVED 2026-10-04.** Root cause: `note_stdlib_clashes` decides which standard names the program redefines (and respells `<name>--user`) before any import is lowered. `rn` only maps an on-demand library's name (`eval` -> `r7rs-eval`) once `lib_imported` is set, so `eval` was not seen as standard. Once the import was lowered, the program's `define` was spelled onto `r7rs-eval`, giving two C functions with one name. The pre-scan that collects the unit's import sets now also records the `(scheme ...)` libraries the program imports (`lib_named`). An on-demand name from one of them that the program defines is a clash, the same as a `(scheme base)` name. Both back ends print `mine`, and `environment` is still R7RS's. Pinned by `tests/fixtures/r7rs-program-redefines-scheme-eval`. The `sicp-guide` rough-edges entry is gone.
+
 **Severity:** medium. The compiled back end emits two C functions with the
 same name and `cc` rejects the unit; the user sees a C compiler error, not a
 Scheme one. SICP 4.1 defines its own `eval`, and a reader who has added

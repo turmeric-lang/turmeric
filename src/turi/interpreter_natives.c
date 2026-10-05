@@ -5131,16 +5131,30 @@ static void wk_register_chan_natives(TuriEnv *env) {
  * borrow-accessors and a close+free.  argv is a cons list of cstr pointers
  * ({head,tail} cells), matching the compiled inline-C walk.
  * ---------------------------------------------------------------------- */
+/* stdlib-os-surface-plan P1: process.tur's exported spawn/wait/run are
+ * Turmeric-bodied wrappers over three inline-C helpers, and these natives
+ * override the helpers with the same contracts:
+ *   process/spawn-raw path args -> pid, or -errno (argv = { path, args... })
+ *   process/child-of-raw pid    -> the ChildHandle (identity)
+ *   process/wait-raw child      -> exit code 0..255, 256 + signo when a
+ *                                  signal ended it, or -errno */
 static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
+#if defined(__EMSCRIPTEN__)
+    /* No fork/exec in the browser (and no <sys/wait.h>; see the include
+     * guard at the top of this file). */
+    (void)a; (void)n;
+    return turi_int(-ENOSYS);
+#else
     const char *path = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : NULL;
-    if (!path) return turi_int(-1);
+    if (!path) return turi_int(-EINVAL);
     int64_t argv = (n > 1) ? a[1].as_int : 0;
-    int argc = 0;
+    int argc = 1;
     for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1]) argc++;
     char **args = (char **)malloc((size_t)(argc + 1) * sizeof(char *));
-    if (!args) return turi_int(-1);
-    { int i = 0; for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1])
+    if (!args) return turi_int(-ENOMEM);
+    { int i = 0; args[i++] = (char *)path;
+      for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1])
         args[i++] = (char *)(intptr_t)((int64_t *)(intptr_t)t)[0]; }
     args[argc] = NULL;
 #ifdef _WIN32
@@ -5148,34 +5162,65 @@ static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, vo
      * HANDLE (not a pid) that _cwait() below reaps.  The handle is opaque to
      * callers either way, so ChildHandle keeps its meaning. */
     intptr_t child = _spawnvp(_P_NOWAIT, path, (const char *const *)args);
+    int e = errno;
     free(args);
-    if (child == -1) return turi_int(-1);
+    if (child == -1) return turi_int(-(int64_t)(e ? e : ENOENT));
     return turi_int((int64_t)child);
 #else
+    /* A close-on-exec pipe carries a failed exec's errno back, matching the
+     * compiled helper: a missing program is ENOENT from spawn. */
+    int fds[2];
+    if (pipe(fds) != 0) { int e = errno; free(args); return turi_int(-(int64_t)e); }
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
     pid_t pid = fork();
-    if (pid < 0) { free(args); return turi_int(-1); }
-    if (pid == 0) { execvp(path, args); _exit(127); }
+    if (pid < 0) { int e = errno; close(fds[0]); close(fds[1]); free(args); return turi_int(-(int64_t)e); }
+    if (pid == 0) {
+        close(fds[0]);
+        execvp(path, args);
+        int e = errno;
+        ssize_t wr = write(fds[1], &e, sizeof e);
+        (void)wr;
+        _exit(127);
+    }
+    close(fds[1]);
     free(args);
+    int child_err = 0;
+    ssize_t got;
+    do { got = read(fds[0], &child_err, sizeof child_err); } while (got < 0 && errno == EINTR);
+    close(fds[0]);
+    if (got == (ssize_t)sizeof child_err) {
+        int st;
+        while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+        return turi_int(-(int64_t)child_err);
+    }
     return turi_int((int64_t)pid);
 #endif
+#endif /* __EMSCRIPTEN__ */
+}
+static TuriValue native_process_child_of(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(n > 0 ? a[0].as_int : -1);
 }
 static TuriValue native_process_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n < 1) return turi_int(-1);
+    if (n < 1) return turi_int(-EINVAL);
 #if defined(__EMSCRIPTEN__)
-    /* No process reaping in the browser; process/spawn already returns -1. */
-    return turi_int(-1);
+    /* No process reaping in the browser; process/spawn-raw already fails. */
+    return turi_int(-ECHILD);
 #elif defined(_WIN32)
     /* _cwait yields the child's exit code directly -- there is no POSIX
      * wait-status encoding to unpack, so no WIFEXITED/WEXITSTATUS here. */
     int status = 0;
-    if (_cwait(&status, (intptr_t)a[0].as_int, 0) == -1) return turi_int(-1);
-    return turi_int((int64_t)status);
+    if (_cwait(&status, (intptr_t)a[0].as_int, 0) == -1) return turi_int(-(int64_t)errno);
+    return turi_int((int64_t)(status & 0xff));
 #else
     int status = 0;
-    if (waitpid((pid_t)a[0].as_int, &status, 0) < 0) return turi_int(-1);
+    pid_t r;
+    do { r = waitpid((pid_t)a[0].as_int, &status, 0); } while (r < 0 && errno == EINTR);
+    if (r < 0) return turi_int(-(int64_t)errno);
     if (WIFEXITED(status)) return turi_int((int64_t)WEXITSTATUS(status));
-    return turi_int(-1);
+    if (WIFSIGNALED(status)) return turi_int(256 + (int64_t)WTERMSIG(status));
+    return turi_int(-ECHILD);
 #endif
 }
 static TuriValue native_fs_tmpfile(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -5479,8 +5524,9 @@ static void wk_register_trail_natives(TuriEnv *env) {
 }
 
 static void wk_register_proc_fs_natives(TuriEnv *env) {
-    turi_env_register_native(env, "process/spawn",    native_process_spawn,     NULL);
-    turi_env_register_native(env, "process/wait",     native_process_wait,      NULL);
+    turi_env_register_native(env, "process/spawn-raw",    native_process_spawn,     NULL);
+    turi_env_register_native(env, "process/child-of-raw", native_process_child_of,  NULL);
+    turi_env_register_native(env, "process/wait-raw",     native_process_wait,      NULL);
     turi_env_register_native(env, "fs/tmpfile",       native_fs_tmpfile,        NULL);
     turi_env_register_native(env, "fs/tmpfile-path",  native_fs_tmpfile_path,   NULL);
     turi_env_register_native(env, "fs/tmpfile-fd",    native_fs_tmpfile_fd,     NULL);
