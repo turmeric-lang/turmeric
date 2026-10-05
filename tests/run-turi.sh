@@ -243,6 +243,82 @@ fixture_inline_c_runs() {
     eval "[ \"\${TURI_ICRUN_${key}:-0}\" = \"1\" ]"
 }
 
+# aot-compiled-repl-plan C1 (repl-jit-inline-c, beta): inline-C fixtures that
+# run under --interpret when the interpreter may JIT-compile the inline-C defns
+# it cannot run itself.  On a TUR_JIT build (the default on 64-bit x86-64 and
+# arm64) each runs with --enable=repl-jit-inline-c; on a build with no engine
+# it stays in the carve-out.  Measured 2026-10-04: every one fails without the
+# flag and passes with it, three runs in a row.  An entry belongs here only if
+# that holds -- a fixture that passes only by handing interpreter memory to
+# compiled code is exactly what C1's value boundary refuses.
+TURI_INLINEC_JIT_RUN="
+async-sleep
+backtrack-depth
+backtrack-depth-exceeded
+backtrack-interleave
+backtrack-memory
+backtrack-n-queens
+backtrack-once
+backtrack-sudoku
+closure-slot-ptr-void-param-sinks
+condvar-basic
+cps-backend-ptr
+effect-extern-c-row
+effect-row-capability
+eqmap-cstr-content
+fat-param-direct-call
+fat-param-nullary-closure
+gc-heap-struct-rc
+gde-generic-dict-eq-map
+ghe1-bare-method-dispatch
+global-def-read-by-lifted-lambda
+gmk-map-literal-cstr-key
+grid-basic
+hamt-iteration
+hamt-large
+inline-c-multi-include-hoist
+inline-c-optional-hoisted-include
+inline-c-variadic-definition
+io-deprecated-names
+jit-inline-c-struct-stmtexpr-slot
+letrec-self-in-nested-closure
+letrec-self-recursive-carrier-float-return
+poly-fat-float-closure-eqmap
+poly-fn-typeclass-capturing-closure
+rc-free-queue-deep-cascade
+region-catch-retires-stranded-generation
+rwlock-basic
+sealed-opaque-in-module
+seq-builders-unfold
+seq-core-from-vec
+set-bang-releases-old-rc
+set-cstr-content
+sized-hash-consistency
+sized-sz2-buf-basic
+stm-tmvar-tchan
+typed-state-cell
+unsafe-ascribe-captured-var
+"
+while IFS= read -r _fx; do
+    _fx="${_fx#"${_fx%%[![:space:]]*}"}"; _fx="${_fx%"${_fx##*[![:space:]]}"}"
+    [ -z "$_fx" ] && continue
+    case "$_fx" in \#*) continue ;; esac
+    eval "export TURI_ICJIT_$(printf '%s' "$_fx" | tr '-' '_' | tr '/' '_')=1"
+done <<< "$TURI_INLINEC_JIT_RUN"
+
+# The same probe tests/turi/repl-jit-inline-c.sh uses.
+TURI_HAS_JIT=1
+case "$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)" in
+    *"carries no JIT"*) TURI_HAS_JIT=0 ;;
+esac
+export TURI_HAS_JIT
+
+fixture_inline_c_jit_runs() {
+    [ "$TURI_HAS_JIT" = 1 ] || return 1
+    local key; key="$(printf '%s' "$1" | tr '-' '_' | tr '/' '_')"
+    eval "[ \"\${TURI_ICJIT_${key}:-0}\" = \"1\" ]"
+}
+
 # ---------------------------------------------------------------------------
 # TI8.b/W3 (turi-interpreter-gap-closure-plan): error-fixture coverage under the
 # interpreter.  tests/fixtures/errors/* are negative fixtures that must elaborate
@@ -413,7 +489,11 @@ run_turi_fixture() {
     # a real bug the carve hides; see
     # docs/archive/history/turi-inline-c-silent-miscompiles.md.  Every other fixture is
     # now run for real under --interpret (no allowlist gate).
-    if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
+    local jit_flag=""
+    if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name" &&
+       fixture_inline_c_jit_runs "$name"; then
+        jit_flag="--enable=repl-jit-inline-c"
+    elif fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
         printf 'SKIP %s (inline-c carve-out)\n' "$name"
         echo "SKIP_INLINEC" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
         return
@@ -444,18 +524,18 @@ run_turi_fixture() {
     local rc=0
     if [ -f "$dir/input.stdin" ]; then
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags --interpret "$input" \
+            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     else
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags --interpret "$input" \
+            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     fi
@@ -520,7 +600,7 @@ run_turi_fixture() {
 }
 
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE TUR_MTIME
-export -f run_turi_fixture fixture_inline_c_runs fixture_has_inline_c stamp_check stamp_write stamp_key
+export -f run_turi_fixture fixture_inline_c_runs fixture_inline_c_jit_runs fixture_has_inline_c stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
 export -f run_turi_error_fixture err_in_denyset marker_skip record_result
 

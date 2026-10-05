@@ -24,7 +24,8 @@
  *      hands back the exports manifest with the function's C name.
  *   6. The call: through NAME__ffi, the uniform-signature shim the emitter
  *      writes beside every scalar export, which casts each slot to the real C
- *      parameter type.
+ *      parameter type -- after the value boundary (below) has checked that no
+ *      interpreter memory rides into compiled code in a pointer-shaped slot.
  *
  * Only the defn itself is compiled.  A body that calls another Turmeric
  * definition therefore does not elaborate, and is refused with the compiler's
@@ -299,6 +300,79 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
     e->shim = shim;
 }
 
+/* The value boundary.  The signature check above admits pointer-shaped slots
+ * (ptr<void>, `:int`, an un-annotated parameter), and an interpreter value can
+ * reach compiled code through one as a bare word: compiled code then reads it
+ * with the compiled layout and frees or keeps memory the interpreter allocated
+ * from its own arenas, which takes the REPL process down.  Two checks close
+ * the cases the runtime can see; see the plan's C1 "Supported subset".
+ *
+ * 1. Words compiled code has handed back: every non-zero result of a JIT'd
+ *    call declared `ptr<void>`.  A pointer parameter accepts only these and
+ *    nil -- a handle compiled code made is safe to hand back to compiled
+ *    code.  Only pointer results: recording every int-class one let any
+ *    number a JIT'd call had returned (a counter, an address laundered
+ *    through `:int`) pass as a handle, and grew the table with every
+ *    distinct number.  Open addressing, process-lifetime, like the images
+ *    the handles point into. */
+static int64_t *g_origin = NULL;
+static uint32_t g_n_origin = 0, g_cap_origin = 0;
+
+static uint32_t origin_hash(int64_t w, uint32_t cap) {
+    uint64_t h = (uint64_t)w * 0x9E3779B97F4A7C15ull;
+    return (uint32_t)(h >> 32) & (cap - 1);
+}
+
+static bool origin_has(int64_t w) {
+    if (!g_cap_origin) return false;
+    for (uint32_t i = origin_hash(w, g_cap_origin);;
+         i = (i + 1) & (g_cap_origin - 1)) {
+        if (g_origin[i] == 0) return false;
+        if (g_origin[i] == w) return true;
+    }
+}
+
+static void origin_add(int64_t w) {
+    if (w == 0 || origin_has(w)) return;
+    if ((g_n_origin + 1) * 2 > g_cap_origin) {
+        uint32_t nc = g_cap_origin ? g_cap_origin * 2 : 64;
+        int64_t *na = (int64_t *)calloc(nc, sizeof *na);
+        if (!na) return;
+        for (uint32_t i = 0; i < g_cap_origin; i++) {
+            if (!g_origin[i]) continue;
+            uint32_t j = origin_hash(g_origin[i], nc);
+            while (na[j]) j = (j + 1) & (nc - 1);
+            na[j] = g_origin[i];
+        }
+        free(g_origin);
+        g_origin = na;
+        g_cap_origin = nc;
+    }
+    uint32_t j = origin_hash(w, g_cap_origin);
+    while (g_origin[j]) j = (j + 1) & (g_cap_origin - 1);
+    g_origin[j] = w;
+    g_n_origin++;
+}
+
+/* A parameter declared as a pointer.  (An un-annotated parameter is one
+ * untyped word too, but it carries a number at least as often as a handle, so
+ * it gets only check 2.) */
+static bool handle_param(const FnDef *fn, uint32_t i) {
+    return fn->param_types[i].kind == TY_PTR_VOID;
+}
+
+/* 2. True when W is the address of memory the interpreter owns: its value
+ *    arenas, or a collection it tracks.  Checked for every int-class slot. */
+static bool interp_heap_word(const TuriEnv *env, int64_t w) {
+    if (w == 0) return false;
+    const void *p = (const void *)(intptr_t)w;
+    if (arena_owns(&env->value_scratch, p) || arena_owns(&env->value_perm, p))
+        return true;
+    for (const TuriCollBuf *c = env->coll_bufs; c; c = c->next)
+        if (c->box == p) return true;
+    return false;
+}
+
 bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
                            TuriValue *args, uint32_t n_args, TuriValue *out) {
     if (!g_opt_repl_jit_inline_c || !g_hook || !fn || !fn->binding ||
@@ -356,7 +430,30 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
             else ok = false;
         } else {
             switch (v->tag) {
-                case TURI_INT:  iv[k] = v->as_int; break;
+                case TURI_INT:
+                    if (v->as_int != 0 && handle_param(fn, param_offset + k) &&
+                        !origin_has(v->as_int)) {
+                        result = turi_errorf(
+                            "eval: inline-C defn '%s' argument %u is not a "
+                            "handle compiled code returned; the REPL JIT "
+                            "(repl-jit-inline-c) passes a pointer parameter "
+                            "only a value an earlier JIT'd call returned, or "
+                            "nil", name, (unsigned)k);
+                        ok = false;
+                        goto next_arg;
+                    }
+                    if (interp_heap_word(env, v->as_int)) {
+                        result = turi_errorf(
+                            "eval: inline-C defn '%s' argument %u is a value "
+                            "the interpreter allocated; the REPL JIT "
+                            "(repl-jit-inline-c) cannot hand it to compiled "
+                            "code, which would read, free or keep it as if "
+                            "compiled code had made it", name, (unsigned)k);
+                        ok = false;
+                        goto next_arg;
+                    }
+                    iv[k] = v->as_int;
+                    break;
                 case TURI_BOOL: iv[k] = v->as_bool ? 1 : 0; break;
                 case TURI_CSTR: iv[k] = (int64_t)(intptr_t)v->as_cstr; break;
                 case TURI_NIL:  iv[k] = 0; break;
@@ -367,6 +464,7 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
             result = turi_errorf("eval: inline-C defn '%s' argument %u: the "
                                  "REPL JIT cannot pass this value as a C "
                                  "scalar", name, (unsigned)k);
+    next_arg:;
     }
     if (ok) {
         int64_t out_i = 0;
@@ -380,6 +478,7 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
             case TY_FLOAT:
             case TY_FLOAT32:
             case TY_FLOAT64: result = turi_float(out_f); break;
+            case TY_PTR_VOID: result = turi_int(out_i); origin_add(out_i); break;
             default:         result = turi_int(out_i); break;
         }
     }

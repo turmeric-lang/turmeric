@@ -105,8 +105,16 @@ Limits, each reported as an error value:
 
 - Only the defn itself is compiled, so its body cannot call another Turmeric
   definition.
-- Every parameter and the result must be an `int`-class, `float`, `cstr` or
-  `bool` value; the result may also be unit.
+- Every parameter and the result must be an `int`-class, `float`, `cstr`,
+  `bool` or `ptr<void>` value; the result may also be unit.
+- Interpreter values stay on the interpreter's side. A `ptr<void>` parameter
+  accepts nil or a handle that an earlier compiled call returned, so a
+  `make-cell` / `cell-get` pair works. An argument that is memory the
+  interpreter allocated (a vec it built, say) is refused, whatever the
+  parameter's type.
+- A `cstr` argument is borrowed: the C body may read it, but must not `free` it
+  or keep it after it returns. An `:int` that smuggles a handle in from
+  somewhere else is not checked; give the handle a real type.
 - The inline-C must be the defn's whole body, and the defn must be written
   out, not produced by a macro.
 
