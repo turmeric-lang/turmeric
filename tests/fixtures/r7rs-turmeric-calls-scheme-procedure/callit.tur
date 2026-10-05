@@ -1,0 +1,6 @@
+(defmodule callit
+  (export call0 call2)
+  (defn call0 [f : any] : any
+    (f))
+  (defn call2 [f : any x : any y : any] : any
+    (f x y)))

@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2, T3 and T5's fixtures done 2026-10-04. Open: T4 (the corpus, in turmeric-lang/sicp-corpus) and the 2.1a reports. Extends docs/archive/r7rs-srfi-plan.md
+Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2, T3 and T5's fixtures done 2026-10-04; every 2.1a report fixed 2026-10-04/05. Open: the rest of T4 (sicp-corpus beyond 4.1.4). Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
@@ -68,7 +68,7 @@ Each has a report with a repro. The first blocks SICP 4.1 as printed.
 | ~~[r7rs-redefining-eval-with-scheme-eval-fails-to-compile](../archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md)~~ | **Fixed 2026-10-04.** the evaluator's `eval` plus `(import (scheme eval))`: C compile error |
 | ~~[r7rs-apply-variadic-over-eight-arguments](../archive/r7rs-apply-variadic-over-eight-arguments.md)~~ | **Fixed 2026-10-04.** `(apply + long-list)` panics |
 | ~~[r7rs-deep-recursion-segfaults-silently](../archive/r7rs-deep-recursion-segfaults-silently.md)~~ | **Fixed 2026-10-04.** a 1e6-deep linear recursive process exits 139 with no output, compiled |
-| [turmeric-module-cannot-call-a-scheme-procedure-value](../reported/turmeric-module-cannot-call-a-scheme-procedure-value.md) | not reader-facing; shapes D1 below |
+| ~~[turmeric-module-cannot-call-a-scheme-procedure-value](../archive/turmeric-module-cannot-call-a-scheme-procedure-value.md)~~ | **Fixed 2026-10-05.** not reader-facing; shapes D1 below |
 
 The student-facing guide, [sicp-guide](../guides/sicp-guide.md), documents
 the first four with workarounds (rename the evaluator's `eval`/`apply` to

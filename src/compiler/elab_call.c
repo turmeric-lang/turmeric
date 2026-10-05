@@ -2821,8 +2821,9 @@ static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
 
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     TypeKind head_kind = head_expr->type.kind;
-    if (head_kind == TY_ANY &&
-        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic))
+    /* Any dialect: see the `any` callee in elab_call
+     * (turmeric-module-cannot-call-a-scheme-procedure-value). */
+    if (head_kind == TY_ANY)
         return saffron_dyn_call_on(e, call, head_expr);
     if (head_kind != TY_FN && head_kind != TY_PTR_VOID && head_kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->as.list.items[0]->span,
@@ -7219,7 +7220,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * case rather than an error -- higher-order code is the whole point of the
      * surface syntax.  Resolution moves to runtime, where the value's own tag
      * says whether it is callable and with what arity. */
-    if (fn_type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
+    /* turmeric-module-cannot-call-a-scheme-procedure-value: and in a
+     * Turmeric file too.  `any` is the dynamic type wherever it is written;
+     * a Turmeric function that takes a Scheme procedure as `any` (a
+     * callback, a thunk to run on a thread) calls it the same way, checked
+     * at run time. */
+    if (fn_type.kind == TY_ANY) {
         Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
         fnv->as.var.binding = fn_binding;
         return saffron_dyn_call_on(e, call, fnv);
