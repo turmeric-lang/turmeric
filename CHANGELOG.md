@@ -2,7 +2,7 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.63.0] -- 2026-10-05
 
 ### Added
 
@@ -15,8 +15,13 @@ All notable changes to Turmeric are documented here.
 - **stdlib OS surface, P2.** `fs/read-lines`, `file-read-line`, `fs/read-dir`,
   `fs/path-join`, `fs/walk` / `fs/walk-fn`, and `process/output` (stdout, stderr and an `ExitStatus`,
   read concurrently; `ProcOpts` sets stdin, cwd and environment).
-- **`docs/guides/files-and-processes-guide.md`** -- the fs / io / process
-  surface, `IoError`, ownership and the Windows gaps in one page.
+- **SRFI 18 threads for `#lang r7rs`, on both back ends.** `(srfi 216)`'s
+  `parallel-execute` / `test-and-set!` now run over real threads, and
+  `(sicp extras)` adds `inc`, `dec`, `identity`, `amb` and `amb-reset!`; SICP
+  4.1 runs as printed.
+- **New guides.** Files and processes, memory usage, debugging (for users) and
+  diagnosing (for contributors), channels/select, borrow checking, regex,
+  structured concurrency, and loop invariants.
 
 ### Changed
 
@@ -34,6 +39,13 @@ All notable changes to Turmeric are documented here.
   program, which is also argv[0]: `(process/run "/bin/ls" "-l")`.
   `fs/read-text` reads pipes instead of failing on them, and a missing
   program is an `Err` from `process/spawn` rather than a child exiting 127.
+- **r7rs has proper tail calls and deep recursion.** Compiled programs tail-call
+  through procedure values and `((lambda ...) args)`, the interpreter does the
+  same, and non-tail recursion runs on a 1 GiB stack (Windows
+  included) -- a million frames deep on Linux -- with a named error when it runs out.
+- **The REPL's JIT fallback for inline-C defns is beta** (`repl-jit-inline-c`):
+  it compiles on a real big stack and closes the value boundary.
+- **`panic` names its own call site** on both back ends.
 - **`get-time-ms` has millisecond resolution.** It was `time(NULL) * 1000`.
 
 ### Deprecated
@@ -43,6 +55,16 @@ All notable changes to Turmeric are documented here.
   `fs/write-text`, `fs/exists?`), `file-handle-ok?` (a `FileHandle` is always
   open now) and `fs/glob-free` (use `fs/paths-free`) warn at every use. The
   next minor release removes them.
+
+### Fixed
+
+- **Regions no longer grow when rewound in a loop.**
+- **r7rs conformance fixes.** `apply` of a variadic procedure takes a list of
+  any length; top-level redefinition is `set!` and a saved standard procedure
+  keeps R7RS's value; a program's own `eval` beside `(scheme eval)` compiles;
+  internal procedures are `eq?` to themselves; a program file whose name
+  starts with a digit compiles when it imports a library.
+- **Calling an `any` value is a dynamic call in every dialect.**
 
 ## [0.62.0] -- 2026-10-03
 
