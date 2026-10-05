@@ -185,6 +185,12 @@ export default {
       return proxyMetricsNDJSON(url, 'repo-loc', 'no line counts available');
     }
 
+    // Open plans and reports, one row per push to main. Same shape as the
+    // line counts: a property of the commit, no runner dimension.
+    if (pathname === '/api/ci-docs') {
+      return proxyMetricsNDJSON(url, 'docs-counts', 'no doc counts available');
+    }
+
     // Rewrite try.turmeric-lang.com/* -> turmeric-lang.com/try/*
     // so both URLs serve the same page without a redirect round-trip.
     const response = await env.ASSETS.fetch(request);

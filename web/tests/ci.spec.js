@@ -7,11 +7,12 @@ import { test, expect } from '@playwright/test';
 // silently (a renamed branch, a year rollover), and a fixture would hide it.
 
 test.describe('CI metrics dashboard', () => {
-  // The line-count panel is driven from a FIXTURE, unlike everything else here.
-  // repo-loc-<year>.jsonl is absent from the ci-metrics branch until the first
-  // publish after the panel shipped, so against live data these assertions
-  // would be skipped exactly when they are new -- which is when they are worth
-  // most. The proxy that serves the file keeps its own live test below.
+  // The line-count and docs panels are driven from FIXTURES, unlike everything
+  // else here. repo-loc-<year>.jsonl and docs-counts-<year>.jsonl are absent
+  // from the ci-metrics branch until the first publish after the panels
+  // shipped, so against live data these assertions would be skipped exactly
+  // when they are new -- which is when they are worth most. The proxy that
+  // serves each file keeps its own live test below.
   //
   // Timestamps are relative to now, a few hours apart, so the rows land inside
   // every range the page offers -- including the 7-day default and `1d`.
@@ -34,9 +35,37 @@ test.describe('CI metrics dashboard', () => {
     })).join('\n');
   }
 
+  function docsFixture() {
+    const now = Math.floor(Date.now() / 1000);
+    const rows = [
+      ['aaaaaaa1111111111111111111111111111aaaa1', 28, 25, 10, 15, 3],
+      ['bbbbbbb2222222222222222222222222222bbbb2', 29, 26, 10, 16, 3],
+      ['ccccccc3333333333333333333333333333cccc3', 30, 27, 11, 16, 3],
+      ['ddddddd4444444444444444444444444444dddd4', 30, 29, 11, 16, 3],
+    ];
+    return rows.map(([sha, open_plans, open_reports, active, held, v1], i) => JSON.stringify({
+      ts: now - (rows.length - 1 - i) * 5 * 3600,
+      sha,
+      open_plans,
+      open_reports,
+      active_plans: active,
+      held_plans: held,
+      v1_plans: v1,
+    })).join('\n');
+  }
+
   async function stubLoc(page) {
     const body = locFixture();
     await page.route('**/api/ci-loc*', (route) => route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
+      body,
+    }));
+  }
+
+  async function stubDocs(page) {
+    const body = docsFixture();
+    await page.route('**/api/ci-docs*', (route) => route.fulfill({
       status: 200,
       headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
       body,
@@ -83,14 +112,36 @@ test.describe('CI metrics dashboard', () => {
     expect(row.generated_lines).toBeGreaterThan(row.code_lines);
   });
 
+  test('worker proxies the docs-count NDJSON', async ({ request }) => {
+    const res = await request.get('/api/ci-docs');
+    test.skip(res.status() === 502,
+      'no docs-counts-<year>.jsonl on ci-metrics yet (first publish is pending)');
+
+    expect(res.status()).toBe(200);
+    expect(res.headers()['content-type']).toContain('ndjson');
+    expect(res.headers()['x-metrics-year']).toMatch(/^\d{4}$/);
+
+    const lines = (await res.text()).trim().split('\n');
+    const row = JSON.parse(lines[lines.length - 1]);
+    for (const key of ['ts', 'sha', 'open_plans', 'open_reports', 'active_plans', 'held_plans']) {
+      expect(row).toHaveProperty(key);
+    }
+    expect(row.open_plans).toBeGreaterThanOrEqual(0);
+    expect(row.open_reports).toBeGreaterThanOrEqual(0);
+    // The total is the sum of the three plan buckets.
+    expect(row.open_plans).toBe(row.active_plans + row.held_plans + row.v1_plans);
+  });
+
   test('page renders every section without console errors', async ({ page }) => {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
-    // Stubbed so a legitimately-absent repo-loc file does not show up here as a
-    // 502 in the console. The degraded path has its own test.
+    // Stubbed so a legitimately-absent repo-loc / docs-counts file does not
+    // show up here as a 502 in the console. The degraded paths have their own
+    // tests.
     await stubLoc(page);
+    await stubDocs(page);
     await page.goto('/ci');
 
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
@@ -99,6 +150,10 @@ test.describe('CI metrics dashboard', () => {
     // Shared chrome still renders on this page.
     await expect(page.locator('site-nav nav')).toBeVisible();
     await expect(page.locator('site-footer a[href="/ci"]')).toHaveCount(1);
+
+    // Three tabs, Tests active by default.
+    await expect(page.locator('.ci-tab')).toHaveCount(3);
+    await expect(page.locator('#ci-tab-tests')).toHaveClass(/is-active/);
 
     // Four stat tiles, and a provenance line naming the latest commit.
     await expect(page.locator('#ci-tiles .ci-tile')).toHaveCount(4);
@@ -112,10 +167,19 @@ test.describe('CI metrics dashboard', () => {
     expect(seriesCount).toBeLessThanOrEqual(5);
     await expect(page.locator('#ci-legend .ci-legend-item')).toHaveCount(seriesCount);
 
-    // The line-count chart is a second plot with its own axis and tooltip.
+    // The line-count chart is on the Code tab. Switch to it and verify.
+    await page.locator('#ci-tab-code').click();
     await expect(page.locator('#ci-loc-chart .ci-series-line').first()).toBeVisible();
     await expect(page.locator('#ci-loc-legend .ci-legend-toggle')).toHaveCount(5);
 
+    // The docs chart is on the Reports tab. Switch to it and verify.
+    await page.locator('#ci-tab-reports').click();
+    await expect(page.locator('#ci-docs-chart .ci-series-line').first()).toBeVisible();
+    await expect(page.locator('#ci-docs-legend .ci-legend-toggle')).toHaveCount(4);
+    await expect(page.locator('#ci-docs-tiles .ci-tile')).toHaveCount(4);
+
+    // Back on the Tests tab, the sparkline grid and table are present.
+    await page.locator('#ci-tab-tests').click();
     await expect(page.locator('#ci-sparks .ci-spark').first()).toBeVisible();
     await expect(page.locator('#ci-table tbody tr').first()).toBeVisible();
     await expect(page.locator('#ci-skips').first()).not.toBeEmpty();
@@ -174,7 +238,8 @@ test.describe('CI metrics dashboard', () => {
   });
 
   // The default is the last 7 days, so a bare /ci carries no range param and
-  // `all` is the one that has to be written down.
+  // `all` is the one that has to be written down. The range <select> is in the
+  // shared tab bar, visible on every tab.
   test('range defaults to 7 days, offers 1 day, and only non-defaults hit the URL', async ({ page }) => {
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
@@ -199,8 +264,12 @@ test.describe('CI metrics dashboard', () => {
 
   test('the line-count panel charts product vs test lines', async ({ page }) => {
     await stubLoc(page);
+    await stubDocs(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    // The line-count chart is on the Code tab.
+    await page.locator('#ci-tab-code').click();
 
     // The headline reads the NEWEST row, not the newest in range.
     await expect(page.locator('#ci-loc-sub')).toContainText('407,783 product');
@@ -253,6 +322,7 @@ test.describe('CI metrics dashboard', () => {
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
+    await page.locator('#ci-tab-code').click();
     await expect(page.locator('#ci-loc-chart .ci-empty')).toContainText(/one push/i);
     await expect(page.locator('#ci-loc-chart .ci-series-line')).toHaveCount(0);
     // The headline and the picker still work off that one row.
@@ -273,9 +343,68 @@ test.describe('CI metrics dashboard', () => {
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 
+    await page.locator('#ci-tab-code').click();
     await expect(page.locator('#ci-loc-chart .ci-empty')).toContainText(/unavailable/i);
     await expect(page.locator('#ci-loc-legend')).toBeEmpty();
     // The timings chart is untouched.
+    await page.locator('#ci-tab-tests').click();
+    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('the docs panel charts open plans and reports', async ({ page }) => {
+    await stubLoc(page);
+    await stubDocs(page);
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    await page.locator('#ci-tab-reports').click();
+    await expect(page).toHaveURL(/tab=reports/);
+
+    // The headline reads the NEWEST row.
+    await expect(page.locator('#ci-docs-sub')).toContainText('30 open plans');
+    await expect(page.locator('#ci-docs-sub')).toContainText('29 open reports');
+
+    // Two series by default (open reports + active plans).
+    await expect(page.locator('#ci-docs-chart .ci-series-line')).toHaveCount(2);
+    const legend = page.locator('#ci-docs-legend .ci-legend-toggle');
+    await expect(legend).toHaveCount(4);
+    await expect(legend.nth(0)).toHaveAttribute('aria-pressed', 'true');
+    await expect(legend.nth(1)).toHaveAttribute('aria-pressed', 'true');
+    await expect(legend.nth(2)).toHaveAttribute('aria-pressed', 'false');
+
+    // Tiles show the current counts.
+    await expect(page.locator('#ci-docs-tiles .ci-tile')).toHaveCount(4);
+    await expect(page.locator('#ci-docs-tiles .ci-tile').nth(0)).toContainText('30');
+    await expect(page.locator('#ci-docs-tiles .ci-tile').nth(1)).toContainText('29');
+
+    // Adding held plans adds a third line and records it in the URL.
+    await legend.nth(2).click();
+    await expect(page.locator('#ci-docs-chart .ci-series-line')).toHaveCount(3);
+    await expect(page).toHaveURL(/docs=open_reports%2Cactive_plans%2Cheld_plans/);
+
+    // Its own tooltip, on its own hit area.
+    await page.locator('#ci-docs-hit').hover();
+    const tip = page.locator('#ci-docs-tooltip');
+    await expect(tip).toBeVisible();
+    await expect(tip.locator('.ci-tooltip-head .mono')).toHaveText(/^[0-9a-f]{7}$/);
+  });
+
+  test('a missing docs file costs only its own panel', async ({ page }) => {
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+
+    await page.route('**/api/ci-docs*', (route) => route.fulfill({
+      status: 502, body: 'no doc counts available\n',
+    }));
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    await page.locator('#ci-tab-reports').click();
+    await expect(page.locator('#ci-docs-chart .ci-empty')).toContainText(/unavailable/i);
+    await expect(page.locator('#ci-docs-legend')).toBeEmpty();
+    // The timings chart is untouched.
+    await page.locator('#ci-tab-tests').click();
     await expect(page.locator('#ci-chart .ci-series-line').first()).toBeVisible();
     expect(errors).toEqual([]);
   });
@@ -310,9 +439,13 @@ test.describe('CI metrics dashboard', () => {
     // slowest suite in the default environment, whenever the Linux jit leg
     // is the broadest env. Reading live data, that made this assertion flip
     // from pass to fail with no change to the test. An unselected sparkline
-    // is what "clicking charts a suite" actually means.
-    const target = page.locator('#ci-sparks .ci-spark:not(.is-selected)').first();
-    await expect(target).toBeVisible();
+    // is what "clicking charts a suite" actually means. If every jit suite
+    // is already selected, widen the filter until one is not.
+    let target = page.locator('#ci-sparks .ci-spark:not(.is-selected)').first();
+    if (!await target.isVisible()) {
+      await page.locator('#ci-spark-search').fill('');
+      target = page.locator('#ci-sparks .ci-spark:not(.is-selected)').first();
+    }
     const name = await target.getAttribute('data-suite');
     await target.click();
     await expect(page.locator(`#ci-legend .ci-legend-item[data-suite="${name}"]`)).toHaveCount(1);
@@ -320,6 +453,8 @@ test.describe('CI metrics dashboard', () => {
 
   test('layout does not overflow horizontally at 480px', async ({ page }) => {
     await page.setViewportSize({ width: 480, height: 900 });
+    await stubLoc(page);
+    await stubDocs(page);
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
 

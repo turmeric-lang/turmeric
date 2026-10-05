@@ -87,6 +87,45 @@
   .ci-spinner { animation-duration: 2.4s; }
 }
 
+/* ── TAB BAR ───────────────────────────── */
+
+.ci-tabs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.ci-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.ci-tab {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 8px 18px;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.ci-tab:hover { color: var(--text-sec); }
+.ci-tab.is-active { color: var(--text-primary); background: var(--bg-hover); }
+
+.ci-field--range { min-width: 0; }
+.ci-field--range .ci-select { min-width: 160px; }
+
 /* ── STAT TILES ────────────────────────── */
 /* Headline magnitudes get a number, not a plot. */
 
@@ -600,4 +639,8 @@
   .ci-spark { grid-template-columns: 1fr 72px auto; }
   .ci-spark svg { width: 72px; }
   .ci-tooltip { min-width: 150px; font-size: 11px; }
+
+  /* Stack the tab bar so the tabs and range control sit on separate rows. */
+  .ci-tabs-bar { flex-direction: column; align-items: stretch; }
+  .ci-field--range .ci-select { min-width: 0; width: 100%; }
 }
