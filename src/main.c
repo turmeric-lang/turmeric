@@ -5811,9 +5811,9 @@ static const TurSpiceJitHook g_repl_jit_hook = {
  * function so a diagnostic says which defn it is about, and removed once
  * read.  The image is never freed: the interpreter calls into it for the rest
  * of the process. */
-static int repl_inline_c_jit_build(const char *name, const char *src,
-                                   size_t len, void **out_image,
-                                   char **out_manifest) {
+static int repl_inline_c_jit_build_here(const char *name, const char *src,
+                                        size_t len, void **out_image,
+                                        char **out_manifest) {
     *out_image = NULL;
     *out_manifest = NULL;
 
@@ -5914,6 +5914,30 @@ static int repl_inline_c_jit_build(const char *name, const char *src,
     if (!*out_manifest) return -1;
     *out_image = img;
     return 0;
+}
+
+/* The build runs on a stack of its own.  It is reached in the middle of an
+ * evaluation, which may be on one of turi's small makecontext stacks (a
+ * generator, effect or async body): seq-builders-unfold compiles from a
+ * generator, and elaboration and emit overflowed that stack under ASan. */
+typedef struct {
+    const char *name, *src;
+    size_t len;
+    void **out_image;
+    char **out_manifest;
+} ReplInlineCJitJob;
+
+static int repl_inline_c_jit_job(void *p) {
+    ReplInlineCJitJob *j = (ReplInlineCJitJob *)p;
+    return repl_inline_c_jit_build_here(j->name, j->src, j->len,
+                                        j->out_image, j->out_manifest);
+}
+
+static int repl_inline_c_jit_build(const char *name, const char *src,
+                                   size_t len, void **out_image,
+                                   char **out_manifest) {
+    ReplInlineCJitJob j = { name, src, len, out_image, out_manifest };
+    return tur_run_on_big_stack(repl_inline_c_jit_job, &j);
 }
 
 static const TuriInlineCJitHook g_repl_inline_c_jit_hook = {
