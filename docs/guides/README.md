@@ -106,6 +106,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[substructural-types-guide.md](substructural-types-guide.md)** -- `^linear`, `^affine`, `^relevant` type disciplines
 - **[uniqueness-types-guide.md](uniqueness-types-guide.md)** -- `^unique`: at-most-one-reference ownership
+- **[borrow-checking-and-lifetimes-guide.md](borrow-checking-and-lifetimes-guide.md)** -- How the borrow checker and lifetime elision work, and how to fix the errors they report
 
 ## Error Handling
 
@@ -117,6 +118,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[refinement-types-guide.md](refinement-types-guide.md)** -- Static discharge of `#refine{ x : T | p }`: what gets proved, call-site crossings, `--strict-refine`, and the documented limits
 - **[stateful-refinements-guide.md](stateful-refinements-guide.md)** -- Refinements over mutable state: `#reads` measures and the `frozen` region that makes them congruent
 - **[refinement-solver-internals-guide.md](refinement-solver-internals-guide.md)** -- How the in-house solver chain works (normalization, EUF, Fourier-Motzkin, Nelson-Oppen, cube expansion), and how to debug a specific obligation
+- **[loop-invariants-guide.md](loop-invariants-guide.md)** -- Proving loop properties with `:invariant` annotations on `while` loops
 
 ## Functional Patterns
 
@@ -134,6 +136,8 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[dynamic-vars-guide.md](dynamic-vars-guide.md)** -- Thread-local, dynamically-scoped mutable cells with `defdynamic` and `binding`
 - **[thread-pool-guide.md](thread-pool-guide.md)** -- Bounded POSIX worker-thread pool with back-pressure for fan-out work over `ptr<void>` items
 - **[reactor-guide.md](reactor-guide.md)** -- Lightweight evented I/O with `tur/reactor`
+- **[channels-and-select-guide.md](channels-and-select-guide.md)** -- Buffered channels for inter-fiber communication and multi-channel `select`
+- **[structured-concurrency-guide.md](structured-concurrency-guide.md)** -- `TaskGroup` for scoped task spawning and `Future`/`Promise` for asynchronous results
 
 ## Advanced Control Flow
 
@@ -157,6 +161,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[ecs-guide.md](ecs-guide.md)** -- Building games and simulations with `tur-ecs` and the `tur-ecs-raylib` companion
 - **[ecs-storage-guide.md](ecs-storage-guide.md)** -- How `tur-ecs`'s three component-storage backends (`Dense`, `Sparse`, `Tag`) differ in layout, cost, and ergonomics
 - **[ecs-vs-haskell-ecs.md](ecs-vs-haskell-ecs.md)** -- Side-by-side walk through a small game in apecs (Haskell), aztecs (Haskell), and `tur-ecs`
+- **[regex-guide.md](regex-guide.md)** -- Pure-Turmeric POSIX ERE regex engine -- compile, match, find, and replace
 
 ## Networking and Web
 
@@ -255,12 +260,12 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Language Basics → [structs-guide.md](structs-guide.md), [sum-types-guide.md](sum-types-guide.md), [strings-guide.md](strings-guide.md), [module-system-guide.md](module-system-guide.md), [binding-forms-guide.md](binding-forms-guide.md), [mutable-globals-guide.md](mutable-globals-guide.md), [function-arity-guide.md](function-arity-guide.md), [currying-guide.md](currying-guide.md), [cli-args-guide.md](cli-args-guide.md)
 - Type System → [polymorphism-guide.md](polymorphism-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [row-types-guide.md](row-types-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md), [sized-primitives-guide.md](sized-primitives-guide.md)
 - Advanced Types → [gadts-guide.md](gadts-guide.md), [existential-types-guide.md](existential-types-guide.md), [opaques-guide.md](opaques-guide.md), [advanced-type-system-rationale.md](advanced-type-system-rationale.md)
-- Type Safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md)
+- Type Safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md), [borrow-checking-and-lifetimes-guide.md](borrow-checking-and-lifetimes-guide.md)
 - Error Handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
 - Functional Patterns → [arrows-guide.md](arrows-guide.md), [generators-guide.md](generators-guide.md), [effects-vs-monads.md](effects-vs-monads.md)
-- Concurrency and Async → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md), [thread-pool-guide.md](thread-pool-guide.md), [reactor-guide.md](reactor-guide.md)
+- Concurrency and Async → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md), [thread-pool-guide.md](thread-pool-guide.md), [reactor-guide.md](reactor-guide.md), [channels-and-select-guide.md](channels-and-select-guide.md), [structured-concurrency-guide.md](structured-concurrency-guide.md)
 - Advanced Control Flow → [delimited-control-operators-guide.md](delimited-control-operators-guide.md), [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md), [state-machines-guide.md](state-machines-guide.md)
-- Data Structures and Libraries → [hamt-guide.md](hamt-guide.md), [frame-guide.md](frame-guide.md), [stats-guide.md](stats-guide.md), [json-guide.md](json-guide.md), [schema-guide.md](schema-guide.md), [ecs-guide.md](ecs-guide.md)
+- Data Structures and Libraries → [hamt-guide.md](hamt-guide.md), [frame-guide.md](frame-guide.md), [stats-guide.md](stats-guide.md), [json-guide.md](json-guide.md), [schema-guide.md](schema-guide.md), [ecs-guide.md](ecs-guide.md), [regex-guide.md](regex-guide.md)
 - Networking and Web → [httpd-guide.md](httpd-guide.md), [httpd-middleware-guide.md](httpd-middleware-guide.md), [tourist-routing-guide.md](tourist-routing-guide.md), [websocket-guide.md](websocket-guide.md), [web-stack-guide.md](web-stack-guide.md), [cloudflare-deployment-guide.md](cloudflare-deployment-guide.md)
 - Tutorials → [snake-game-tutorial.md](snake-game-tutorial.md), [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md), [parser-combinators-tutorial.md](parser-combinators-tutorial.md), [datalog-01-concepts.md](datalog-01-concepts.md)
 - Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices)
