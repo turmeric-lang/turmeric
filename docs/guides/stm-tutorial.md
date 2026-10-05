@@ -497,7 +497,7 @@ defn merge-sort-stm [vec]
         stm
           let [left  tvar/read(left-result)
                right tvar/read(right-result)]
-            check and(not(nil?(left)) not(nil?(right)))
+            check {not(nil?(left)) and not(nil?(right))}
             merge(left right)
 ```
 

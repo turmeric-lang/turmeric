@@ -1318,6 +1318,13 @@ jobs:
           set -euo pipefail
           python3 tools/ci/collect-loc.py --explain > repo-loc.jsonl
 
+      # Open plans and reports are a property of the COMMIT, so like the line
+      # counts they are measured here -- once -- and not in a matrix leg.
+      - name: Collect doc counts
+        run: |
+          set -euo pipefail
+          python3 tools/ci/collect-docs.py --explain > docs-counts.jsonl
+
       - name: Merge and publish
         run: |
           set -euo pipefail
@@ -1331,7 +1338,7 @@ jobs:
             exit 0
           fi
           echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
-          bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl
+          bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
 
   windows:
     needs: changes

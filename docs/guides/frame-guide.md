@@ -278,14 +278,14 @@ Pass a predicate `(fn [frame row-index] :int)` -- return non-zero to keep the ro
 ;; Keep rows where age >= 30
 (let [seniors (filter df (fn [f i]
                            (let [age (column-int64-at (frame-column f "age") i)]
-                             (>= age 30))))]
+                             {age >= 30})))]
   (print-frame seniors))
 ```
 
 ```sweet-exp
 let [seniors (filter df (fn [f i]
                           (let [age (column-int64-at (frame-column f "age") i)]
-                            (>= age 30))))]
+                            {age >= 30})))]
   print-frame(seniors)
 ```
 

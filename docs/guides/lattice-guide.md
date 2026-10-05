@@ -311,7 +311,7 @@ definstance Eq [Longest]
 
 definstance Semigroup [Longest]
   combine [x y]
-    if <(cstr-len((:: x cstr)) cstr-len((:: y cstr)))
+    if {cstr-len((:: x cstr)) < cstr-len((:: y cstr))}
       y
       x
 ```

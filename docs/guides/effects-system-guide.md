@@ -131,7 +131,7 @@ with-handler
         resume(k nil)
   do
     perform(Log("tick"))
-    +(perform(Counter()) 1)
+    {perform(Counter()) + 1}
 ;; prints "tick", evaluates to 42
 ```
 

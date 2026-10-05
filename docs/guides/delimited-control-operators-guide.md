@@ -72,9 +72,9 @@ fresh handler scope).
 ```
 ```sweet-exp
 reset
-  (+ 1
-     (shift k
-       k(k(10))))
+  {1 +
+     shift(k
+       k(k(10)))}
 ;; k = (fn [x] {1 + x}), re-delimited on each call
 ;; => {1 + {1 + 10}} = 12, all surfacing inside the reset
 ```
@@ -109,7 +109,7 @@ defn is-zero [n :int] :bool
   reset
     (shift0
       (fn [v :int]
-        =(v 0))
+        {v = 0})
       n)
 ```
 
@@ -170,7 +170,7 @@ defn first-negative [xs :list<int>] :int
   escape
     (fn [exit]
       (for [x xs]
-        (when <(x 0)
+        (when {x < 0}
           exit(x)))  ; unwinds straight to the escape site with x
       0)             ; no negative found
 ```

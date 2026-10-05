@@ -1048,7 +1048,7 @@ async
 ;; Consumer
 let loop []
   let [v chan-recv(ch)]
-    when not=(v :done)
+    when {v not= :done}
       process(v)
       loop()
 

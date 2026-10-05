@@ -162,9 +162,9 @@ defn abs [n :int] :int
 ```sweet-exp
 defn sign [n :int] :int
   cond
-    >(n 0)
+    {n > 0}
     1
-    <(n 0)
+    {n < 0}
     -1
     else
     0
@@ -450,7 +450,7 @@ Arithmetic and comparison read more naturally in infix. `{a + b}` lowers to
 (let [hyp (sqrt (+ (* a a) (* b b)))] hyp)
 ```
 ```sweet-exp
-let [hyp sqrt({*(a a) + *(b b)})] hyp
+let [hyp sqrt({{a * a} + {b * b}})] hyp
 ```
 
 ### Data literals inside sweet-exp

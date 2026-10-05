@@ -77,7 +77,7 @@ defeffect Read-Config [key : cstr] : int
 
 defn lookup-port [key : cstr] #fx{Fail-Lookup Read-Config} : int
   let [v perform(Read-Config(key))]
-    if <(v 0)
+    if {v < 0}
       perform(Fail-Lookup())
       v
 
@@ -124,7 +124,7 @@ defstruct Cfg-Error [what : cstr where : cstr]
 defeffect Throw-Cfg [e : Cfg-Error] : int
 
 defn parse-port [raw : int] #fx{Throw-Cfg} : int
-  if <(raw 0)
+  if {raw < 0}
     perform $ Throw-Cfg $ Cfg-Error "not a number" "http.port"
     raw
 
@@ -288,7 +288,7 @@ as often as it likes:
 defeffect ChooseE [f : (fn [multishot-effect-cont] int)] : int
 
 defn each [k : multishot-effect-cont lo : int hi : int] : int
-  if >(lo hi)
+  if {lo > hi}
     0
     {k(lo) + each(k {lo + 1} hi)}
 
@@ -338,10 +338,10 @@ defeffect Parse-Fail [] : int
 
 defn digit [] #fx{Peek Advance Parse-Fail} : int
   let [c perform(Peek())]
-    if and(>=(c 48) <=(c 57))
+    if {{c >= 48} and {c <= 57}}
       do
         perform(Advance())
-        -(c 48)
+        {c - 48}
       perform(Parse-Fail())
 
 defn main [] : int

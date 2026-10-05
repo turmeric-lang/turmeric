@@ -284,7 +284,7 @@ defn main [] :int
     let [opt __opt_some(5)
          lhs __fmap_option(opt (fn [x] times2(inc(x))))
          rhs __fmap_option(__fmap_option(opt inc) times2)]
-      println(=(__opt_unwrap(lhs) __opt_unwrap(rhs)))  ;; true
+      println({__opt_unwrap(lhs) = __opt_unwrap(rhs)})  ;; true
     0
 ```
 
@@ -402,7 +402,7 @@ let [delta  5
 let [a      2
      b      3
      opt    __opt_some(10)
-     result .fmap(opt (fn [x] {*(x a) + b}))]
+     result .fmap(opt (fn [x] {{x * a} + b}))]
   println(__opt_unwrap(result))  ;; 23
 
 ;; Capturing closure through .bind
@@ -716,7 +716,7 @@ defdata IntList
 defn sum [lst :int] :int
   match lst
     (Cons h t)
-    +(h sum(t))
+    {h + sum(t)}
     (Nil)
     0
 ```
@@ -744,7 +744,7 @@ defn eval-expr [e :int] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
 ```
 
 ### Fix -- fixed-point of a functor
@@ -822,9 +822,9 @@ defn calc-add [a :int b :int] :int free-lift(CalcAdd(a b))
 defn run-op [op :int] :int
   match op
     (CalcAdd a b)
-    +(a b)
+    {a + b}
     (CalcMul a b)
-    *(a b)
+    {a * b}
 
 defn main [] :int
   let [prog calc-add(3 4)]

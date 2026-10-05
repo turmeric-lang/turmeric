@@ -436,8 +436,8 @@ defn safe-get [v :int i :int] :int
 ;; Contract type
 defn classify-score [score : { s : :int | range-contains?(#r{1 <= s <= 5} s) }] :cstr
   cond
-    =(score 5) "excellent"
-    =(score 4) "good"
+    {score = 5} "excellent"
+    {score = 4} "good"
     "average"
 
 ;; Seq iteration over an integer range
@@ -448,7 +448,7 @@ for i seq/from-range(#r{0 <= i < 10})
 defn unit-clamp [x :float] :float
   if float-range-contains?(#r{0.0 <= x <= 1.0} x)
     x
-    if <(x 0.0)
+    if {x < 0.0}
       0.0
       1.0
 

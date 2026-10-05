@@ -158,7 +158,7 @@ schema/optional(schema/str())
 ; null / absent ok
 schema/union(vec-of(schema/int() schema/str()))
 ; first matching arm wins
-schema/transform(schema/int() (fn [x] *(x 2)))
+schema/transform(schema/int() (fn [x] {x * 2}))
 ; decode, then map
 ```
 
@@ -406,7 +406,7 @@ once.
 ```
 ```sweet-exp
 defn double-it [x :int] :int
-  *(x 2)
+  {x * 2}
 ;; pure(double-it) <*> field-of("n", int)  -- on {"n":21} => 42
 schema-decode!(schema/ap(schema/always(double-it) schema/field-of("n" schema/int())) json/decode("{\"n\": 21}"))
 ```

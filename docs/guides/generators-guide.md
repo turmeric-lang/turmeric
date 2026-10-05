@@ -249,7 +249,7 @@ seq-from-vec([1 2 3 4 5])
 seq-of(42)
 seq/repeat("hello")
 seq/repeatedly((fn [] rand-int(100)))
-seq/iterate(1 (fn [x] *(x 2)))
+seq/iterate(1 (fn [x] {x * 2}))
 seq/cycle(seq/range(0 3))
 ```
 
@@ -294,13 +294,13 @@ sequence:
 ```
 
 ```sweet-exp
-seq/map((fn [x] *(x x)) seq/range(1 6))
+seq/map((fn [x] {x * x}) seq/range(1 6))
 seq/filter(even? seq/range(0 10))
 seq/take(3 seq/repeat(7))
 seq/drop(2 seq/range(0 5))
-seq/take-while((fn [x] <(x 5)) seq/range(0 100))
+seq/take-while((fn [x] {x < 5}) seq/range(0 100))
 seq/map-indexed((fn [i x] pair(i x)) seq/range(10 13))
-seq/filter-map((fn [x] if(even?(x) some(*(x 10)) none())) seq/range(0 5))
+seq/filter-map((fn [x] if(even?(x) some({x * 10}) none())) seq/range(0 5))
 seq/flat-map((fn [x] seq/range(0 x)) seq/range(1 4))
 seq/flatten(seq-from-vec([seq/range(0 2) seq/range(5 7)]))
 ```
@@ -374,8 +374,8 @@ seq/flatten(seq-from-vec([seq/range(0 2) seq/range(5 7)]))
 ->>
   seq/range(0 1000)
   seq/filter(even?)
-  seq/map((fn [x] *(x x)))
-  seq/take-while((fn [x] <(x 10000)))
+  seq/map((fn [x] {x * x}))
+  seq/take-while((fn [x] {x < 10000}))
   seq/foldl(0 +)
 ```
 

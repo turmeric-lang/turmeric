@@ -58,9 +58,9 @@ defn eval-expr [e] :int
     (BoolLit b)
     if(b 1 0)
     (Add     l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
     (IsZero  n)
-    if(=(eval-expr(n) 0) 1 0)
+    if({eval-expr(n) = 0} 1 0)
 
 defn main [] :int
   ; (2 + (IsZero 0)) -- only valid at type (Expr ???) mismatch, caught statically
@@ -169,7 +169,7 @@ defn nvec-len [v] :int
     (NNil)
     0
     (NCons _ tl)
-    +(1 nvec-len(tl))
+    {1 + nvec-len(tl)}
 
 ; Head is only callable on non-empty vectors: no NNil arm, and the
 ; return type is int, not (Option int).
@@ -340,7 +340,7 @@ defn use-eq [eq x] :int
     (Refl)
     ; In this arm a = int (from the Refl refinement)
     ; so x : a is the same as x : int
-    +(x 1)
+    {x + 1}
 
 defn main [] :int
   ; Construct a proof that int = int

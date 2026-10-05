@@ -108,9 +108,9 @@ defclass Eq [a]
   eq? [x y] :bool
 
 definstance Eq [int]
-  eq? [x y] =(x y)
+  eq? [x y] {x = y}
 definstance Eq [bool]
-  eq? [x y] =(x y)
+  eq? [x y] {x = y}
 definstance Eq [cstr]
   eq? [x y] :bool
     ```c if (x == NULL && y == NULL) return true;
@@ -131,9 +131,7 @@ halves are equal":
 ```sweet-exp
 definstance Eq [Pair] [(Eq A) (Eq B)]
   eq? [p1 p2]
-    and
-      eq?(.fst(p1) .fst(p2))
-      eq?(.snd(p1) .snd(p2))
+    {eq?(.fst(p1) .fst(p2)) and eq?(.snd(p1) .snd(p2))}
 ```
 
 **Reach for it when** the same operation has many implementations and which
@@ -402,9 +400,7 @@ is, in a small sense, polymorphic over behaviour. This is the original
 ```
 ```sweet-exp
 defn pair-eq? [A B] [p1 : (Pair A B) p2 : (Pair A B) fst-cmp : (-> A A bool) snd-cmp : (-> B B bool)] : bool
-  and
-    fst-cmp(.fst(p1) .fst(p2))
-    snd-cmp(.snd(p1) .snd(p2))
+  {fst-cmp(.fst(p1) .fst(p2)) and snd-cmp(.snd(p1) .snd(p2))}
 ```
 
 **Reach for it when** the per-type behaviour is supplied at the *call site*,

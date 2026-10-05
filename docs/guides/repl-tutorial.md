@@ -227,9 +227,9 @@ Now try a multi-branch form:
 ```sweet-exp
 defn sign [n :int] :int
   cond
-    >(n 0)
+    {n > 0}
     1
-    <(n 0)
+    {n < 0}
     -1
     else
     0

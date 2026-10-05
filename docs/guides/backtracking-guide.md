@@ -66,16 +66,16 @@ the list with `mplus`/`mreturn` (see `ints-upto` below).
 ```sweet-exp
 ;; All integers in [lo, hi) as alternatives
 defn ints-upto [lo :int hi :int] :int
-  if (>= lo hi)
+  if {lo >= hi}
     mzero()
     mplus(mreturn(lo) ints-upto({lo + 1} hi))
 
 ;; Return all even numbers from 1..10
 let [evens mbind(ints-upto(1 11)
                  (fn [x]
-                   (if (= (mod x 2) 0)
-                     (mreturn x)
-                     (mzero))))]
+                   (if {mod(x 2) = 0}
+                     mreturn(x)
+                     mzero())))]
   bt-print(run-backtrack(evens))
 
 ; Outputs:
@@ -114,7 +114,7 @@ backtrack-do
   c
   mreturn({24 - {a + b}})
   _
-  guard((= (* a a) (+ (* b b) (* c c))))
+  guard({{a * a} = {{b * b} + {c * c}}})
   mreturn(list(a b c))
 ```
 

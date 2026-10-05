@@ -78,7 +78,7 @@ For basic types, declare the instance directly:
 ```
 ```sweet-exp
 definstance Eq [int]
-  eq? [x y] =(x y)
+  eq? [x y] {x = y}
 ```
 
 You can also use inline C blocks within instance methods to write high-performance native implementations:
@@ -123,7 +123,7 @@ For example, two `Option` values are equal if their wrapped values are equal:
 definstance Eq [Option]
   [(Eq A)]
   eq? [x y]
-    if (= (.is-some x) (.is-some y))
+    if {(.is-some x) = (.is-some y)}
       if (.is-some x) (eq? (.value x) (.value y)) true
       false
 ```
@@ -134,7 +134,7 @@ Multiple constraints can be specified within the brackets:
 (definstance Eq [Result]
   [(Eq A) (Eq B)]
   (eq? [x y]
-    (if (= (.is-ok x) (.is-ok y))
+    (if {.is-ok(x) = .is-ok(y)}
       (if (.is-ok x)
         (eq? (.ok-val x) (.ok-val y))
         (eq? (.err-val x) (.err-val y)))
@@ -144,7 +144,7 @@ Multiple constraints can be specified within the brackets:
 definstance Eq [Result]
   [(Eq A) (Eq B)]
   eq? [x y]
-    if (= (.is-ok x) (.is-ok y))
+    if {(.is-ok x) = (.is-ok y)}
       if (.is-ok x)
         eq?(.ok-val x) (.ok-val y)
         eq?(.err-val x) (.err-val y)
@@ -503,7 +503,7 @@ You can project associated types in type annotations using the syntax `(Associat
 ```turmeric no-check
 ;; (Elem (Vec int)) reduces to int; (Elem (Vec cstr)) reduces to cstr.
 (defn take-elem-int [x : (Elem (Vec int))] : int
-  (+ x 1))
+  {x + 1})
 
 (defn take-elem-cstr [x : (Elem (Vec cstr))] : cstr
   x)
@@ -511,7 +511,7 @@ You can project associated types in type annotations using the syntax `(Associat
 ```sweet-exp
 ;; (Elem (Vec int)) reduces to int; (Elem (Vec cstr)) reduces to cstr.
 defn take-elem-int [x : (Elem (Vec int))] : int
-  (+ x 1)
+  {x + 1}
 
 defn take-elem-cstr [x : (Elem (Vec cstr))] : cstr
   x
@@ -525,7 +525,7 @@ If a class takes multiple type parameters, project across all of them:
 ```
 ```sweet-exp
 defn bump-acc-int [x : (Acc (Vec int) int)] : int
-  (+ x 1)
+  {x + 1}
 ```
 
 ### Method Signature Propagation
@@ -622,7 +622,7 @@ To declare a default body, simply provide forms after the return type in the `de
 defclass Ord [a]
   lt? [x y] :bool
   lte? [x y] :bool
-    or (.lt? x y) (= x y)
+    {.lt?(x y) or {x = y}}
 ```
 
 When implementing the instance, we can choose to implement `lt?` and completely omit `lte?`, inheriting the default logic:
@@ -633,7 +633,7 @@ When implementing the instance, we can choose to implement `lt?` and completely 
 ```
 ```sweet-exp
 definstance Ord [int]
-  lt? [x y] <(x y)
+  lt? [x y] {x < y}
 ```
 
 ---

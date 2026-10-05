@@ -66,9 +66,9 @@ compile error (TUR-E0042):
 (< 1.5f32 2.0)    ; error TUR-E0042: float32 and float cannot be mixed
 ```
 ```sweet-exp
-+(1i8 2i16)      ; error TUR-E0042: int8 and int16 cannot be mixed
-+(1i32 2)        ; error TUR-E0042: int32 and int (int64) cannot be mixed
-<(1.5f32 2.0)    ; error TUR-E0042: float32 and float cannot be mixed
+{1i8 + 2i16}      ; error TUR-E0042: int8 and int16 cannot be mixed
+{1i32 + 2}        ; error TUR-E0042: int32 and int (int64) cannot be mixed
+{1.5f32 < 2.0}    ; error TUR-E0042: float32 and float cannot be mixed
 ```
 
 To operate on values of different widths, cast one side with `(as type expr)`:
@@ -83,13 +83,13 @@ To operate on values of different widths, cast one side with `(as type expr)`:
 (< 1.5f32 (as float32 2.0)) ; narrow float64 literal to float32
 ```
 ```sweet-exp
-+(1i8 as(int8 2i16))       ; narrow 2i16 to int8
-+(as(int16 1i8) 2i16)      ; widen 1i8 to int16
+{1i8 + as(int8 2i16)}       ; narrow 2i16 to int8
+{as(int16 1i8) + 2i16}      ; widen 1i8 to int16
 
-+(1i32 as(int32 2))        ; narrow canonical int to int32
-+(as(int 1i32) 2)          ; widen int32 to int64
+{1i32 + as(int32 2)}        ; narrow canonical int to int32
+{as(int 1i32) + 2}          ; widen int32 to int64
 
-<(1.5f32 as(float32 2.0))  ; narrow float64 literal to float32
+{1.5f32 < as(float32 2.0)}  ; narrow float64 literal to float32
 ```
 
 ### Rationale
@@ -114,11 +114,11 @@ numeric kind. Both operands must have the same kind:
 (+ 1.5f32 2.5f32)   ; float32 + float32 -> float32
 ```
 ```sweet-exp
-+(10i8 20i8)       ; int8 + int8   -> int8
+{10i8 + 20i8}       ; int8 + int8   -> int8
 mod(100u32 7u32)   ; uint32 mod uint32 -> uint32
-<(1i32 2i32)       ; int32 < int32  -> bool
-=(42u8 42u8)       ; uint8 = uint8  -> bool
-+(1.5f32 2.5f32)   ; float32 + float32 -> float32
+{1i32 < 2i32}       ; int32 < int32  -> bool
+{42u8 = 42u8}       ; uint8 = uint8  -> bool
+{1.5f32 + 2.5f32}   ; float32 + float32 -> float32
 ```
 
 ## Casting with `(as ...)`
@@ -193,7 +193,7 @@ have the same kind, and the result has that kind -- no round-trip through
 bit-and(0xF0u8 0x0Fu8)          ; uint8 & uint8 -> 0u8
 bit-or(65280u16 255u16)         ; uint16 -> 65535u16
 bit-shl(1u8 3u8)                ; uint8 -> 8u8
-+(bit-and(100u16 255u16) 1u16)  ; result is uint16, usable in uint16 ops
+{bit-and(100u16 255u16) + 1u16}  ; result is uint16, usable in uint16 ops
 ```
 
 `bit-shr` on an unsigned kind is a logical shift (0-fills the high bits).

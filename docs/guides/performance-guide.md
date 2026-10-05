@@ -45,7 +45,7 @@ There is no boxing overhead for scalars declared with concrete types:
 defn square [x] :int
   {x * x}
 defn hyp [a b] :float
-  sqrt((+ (* a a) (* b b)))
+  sqrt({{a * a} + {b * b}})
 ```
 
 Avoid leaving numeric expressions untyped in hot loops -- the elaborator may
@@ -76,7 +76,7 @@ Iterative is faster for large N because it avoids stack growth:
 ; iterative -- O(n) time, O(1) space (self-tail-call -> loop; see below)
 defn fib-iter [n] :int
   let loop [i n a 0 b 1]
-    if ={i 0}
+    if {i = 0}
       a
       loop({i - 1} b {a + b})
 
@@ -316,7 +316,7 @@ The Sieve of Eratosthenes benefits from a `vec` (a growable array over a
     (vec-set! flags 1 0)
     (while (<= (* i i) limit)
       (when (= (vec-get flags i) 1)
-        (let [^mut j (* i i)]
+        (let [^mut j {i * i}]
           (while (<= j limit)
             (vec-set! flags j 0)
             (set! j (+ j i)))))
@@ -336,21 +336,21 @@ defn sieve-count [limit : int] : int
        ^mut k  0
        ^mut i  2
        ^mut n  0]
-    while <=(k limit)
+    while {k <= limit}
       vec-push!(flags 1)
       set!(k {k + 1})
     vec-set!(flags 0 0)
     vec-set!(flags 1 0)
-    while <=(*(i i) limit)
-      when =(vec-get(flags i) 1)
-        let [^mut j (* i i)]
-          while <=(j limit)
+    while {{i * i} <= limit}
+      when {vec-get(flags i) = 1}
+        let [^mut j {i * i}]
+          while {j <= limit}
             vec-set!(flags j 0)
             set!(j {j + i})
       set!(i {i + 1})
     set!(k 2)
-    while <=(k limit)
-      when =(vec-get(flags k) 1)
+    while {k <= limit}
+      when {vec-get(flags k) = 1}
         set!(n {n + 1})
       set!(k {k + 1})
     n
@@ -393,10 +393,10 @@ load("stdlib/random.tur")
 defn estimate-pi [samples : int] : float
   let [^mut i      samples
        ^mut inside 0]
-    while >(i 0)
+    while {i > 0}
       let [x {int->float(rand-float()) / 10000.0}
            y {int->float(rand-float()) / 10000.0}]
-        when <=({*(x x) + *(y y)} 1.0)
+        when {{{x * x} + {y * y}} <= 1.0}
           set!(inside {inside + 1})
       set!(i {i - 1})
     {4.0 * {int->float(inside) / int->float(samples)}}

@@ -161,7 +161,7 @@ defn read-file [path :cstr] :cstr @ {Io}
   ...
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
 defn ask-and-add [x :int] :int @ {Ask | e}
-  +(x perform(Ask()))
+  {x + perform(Ask())}
 ```
 
 ### Why these features fit

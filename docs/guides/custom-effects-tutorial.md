@@ -249,9 +249,9 @@ defn get-val [] :int
 ;; Outer handler supplies 10; inner overrides with 42 for its scope.
 println
   (handle
-    (+ (get-val)
-       (handle (get-val)
-         (Val [] k) (resume k 42)))
+    {get-val() +
+       handle(get-val()
+         (Val [] k) resume(k 42))}
     (Val [] k) (resume k 10))
 ; => 52  (10 + 42)
 ```
@@ -642,7 +642,7 @@ defmacro with-warn-log [body]
   (handle body
     ;; Warnings and errors print; every other level is dropped silently.
     (Log [level msg] k)
-      (if (or {level = "warn"} {level = "error"})
+      (if {{level = "warn"} or {level = "error"}}
         (do (println msg) (resume k nil))
         (resume k nil)))
 
