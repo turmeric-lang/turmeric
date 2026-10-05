@@ -307,10 +307,14 @@ static void compile_entry(TuriEnv *env, FnDef *fn, uint32_t param_offset,
  * from its own arenas, which takes the REPL process down.  Two checks close
  * the cases the runtime can see; see the plan's C1 "Supported subset".
  *
- * 1. Words compiled code has handed back: every non-zero int-class result of
- *    a JIT'd call.  A pointer parameter accepts only these and nil -- a handle
- *    compiled code made is safe to hand back to compiled code.  Open
- *    addressing, process-lifetime, like the images the handles point into. */
+ * 1. Words compiled code has handed back: every non-zero result of a JIT'd
+ *    call declared `ptr<void>`.  A pointer parameter accepts only these and
+ *    nil -- a handle compiled code made is safe to hand back to compiled
+ *    code.  Only pointer results: recording every int-class one let any
+ *    number a JIT'd call had returned (a counter, an address laundered
+ *    through `:int`) pass as a handle, and grew the table with every
+ *    distinct number.  Open addressing, process-lifetime, like the images
+ *    the handles point into. */
 static int64_t *g_origin = NULL;
 static uint32_t g_n_origin = 0, g_cap_origin = 0;
 
@@ -474,7 +478,8 @@ bool turi_inline_c_jit_try(TuriEnv *env, FnDef *fn, uint32_t param_offset,
             case TY_FLOAT:
             case TY_FLOAT32:
             case TY_FLOAT64: result = turi_float(out_f); break;
-            default:         result = turi_int(out_i); origin_add(out_i); break;
+            case TY_PTR_VOID: result = turi_int(out_i); origin_add(out_i); break;
+            default:         result = turi_int(out_i); break;
         }
     }
     if (iv != i_inl) free(iv);

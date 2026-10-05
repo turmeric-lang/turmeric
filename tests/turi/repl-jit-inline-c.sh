@@ -201,6 +201,14 @@ out="$(printf '%s\n' \
     '  ```)' \
     '(word-set (vec-new))' \
     '(word-set 12)' \
+    '(defn cell-addr [v : int] : int' \
+    '  ```c' \
+    '  #include <stdlib.h>' \
+    '  int64_t *c = malloc(sizeof *c);' \
+    '  for (int i = 0; i < 1; i++) *c = v;' \
+    '  return (int64_t)(intptr_t)c;' \
+    '  ```)' \
+    '(cell-get (:: (cell-addr 43) ptr<void>))' \
     ':quit' | repl_out --enable=repl-jit-inline-c)"
 has "boundary: a compiled handle round-trips"  "=> 41" "$out"
 has "boundary: nil reaches a pointer param"    "=> -1" "$out"
@@ -210,6 +218,15 @@ has "boundary: session continues"              "=> 9"  "$out"
 has "boundary: interpreter allocation refused at an int param" \
     "is a value the interpreter allocated" "$out"
 has "boundary: a plain number still passes"    "=> 1"  "$out"
+# Only ptr<void> results are handles: an address returned as `:int` and
+# ascribed back to a pointer is refused at the pointer parameter, not read.
+lacks "boundary: an :int result is not a handle" "=> 43" "$out"
+# (The packed existential above is the first such refusal; this is the second.)
+if [ "$(grep -cF "'cell-get' argument 0 is not a handle" <<< "$out")" -ge 2 ]; then
+    echo "PASS: boundary: an :int result is refused"; PASS=$((PASS + 1))
+else
+    echo "FAIL: boundary: an :int result is refused"; FAIL=$((FAIL + 1))
+fi
 
 # --- tur --interpret runs it too --------------------------------------------
 cat > "$WORK/prog.tur" <<'EOF'

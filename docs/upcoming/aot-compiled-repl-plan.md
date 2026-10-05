@@ -249,11 +249,14 @@ not a contract.
 Two call-time checks now close what the runtime can see
 (`src/turi/inline_c_jit.c`, "The value boundary"):
 
-1. **Provenance for pointers.** Every non-zero int-class result of a JIT'd
-   call is recorded. A `ptr<void>` parameter accepts only nil or one of those:
-   a handle compiled code made may go back to compiled code, and nothing else
-   may. (`make-cell` then `cell-get` round-trips; a packed existential is
-   refused.)
+1. **Provenance for pointers.** Every non-zero result of a JIT'd call
+   declared `ptr<void>` is recorded. A `ptr<void>` parameter accepts only nil
+   or one of those: a handle compiled code made may go back to compiled code,
+   and nothing else may. (`make-cell` then `cell-get` round-trips; a packed
+   existential is refused, and so is an address a defn returned as `:int`.)
+   Only pointer results count: recording every int-class result let any
+   number a JIT'd call had returned pass as a handle, and grew the table
+   with every distinct number.
 2. **No interpreter memory in an int-class slot.** A word that addresses the
    interpreter's value arenas (`arena_owns` on `value_scratch`/`value_perm`) or
    a collection it tracks is refused, whatever the parameter's declared type.
