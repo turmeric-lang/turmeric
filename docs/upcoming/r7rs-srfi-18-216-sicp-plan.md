@@ -1,6 +1,6 @@
 # SRFI 18, SRFI 216 and a SICP corpus for `#lang r7rs`
 
-Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2, T3 and T5's fixtures done 2026-10-04; every 2.1a report fixed 2026-10-04/05. sicp-corpus through 4.4 done 2026-10-05 (4.3 found two proper-tail-call reports, both fixed). Open: the rest of T4 (5.2, 5.5). Extends docs/archive/r7rs-srfi-plan.md
+Status: in progress -- T0 done 2026-10-03; T0b, T0a, T1, T2, T3 and T5's fixtures done 2026-10-04; every 2.1a report fixed 2026-10-04/05. sicp-corpus through 4.4 and 5.2 done 2026-10-05 (4.3 found two proper-tail-call reports, both fixed). Open: the rest of T4 (5.5). Extends docs/archive/r7rs-srfi-plan.md
 (the `SRFI_LIBS[]` table, one `stdlib/srfi/<N>.scm` per SRFI, one fixture per
 SRFI); no new mechanism and no new `--enable` (D8 of that plan applies).
 
