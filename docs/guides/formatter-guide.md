@@ -67,6 +67,46 @@ Two-space indentation by default. A form is emitted on one line if it fits
 within the configured line width (default 80 columns); otherwise it is broken
 into a block layout.
 
+### Line breaking
+
+The formatter measures each form's **flat width** -- the column count it would
+occupy if rendered on a single line with no breaks -- and compares it against
+the remaining columns on the current line (`line_width - col`). The decision is
+per-form, not per-file: a form that fits stays inline; one that does not is
+broken into a block layout.
+
+Three things force a break regardless of width:
+
+1. **Interior newlines.** A form whose flat rendering contains a literal newline
+   (a multi-line string, a multi-line inline-C block) is unmeasurable, so every
+   enclosing inline check declines and the form is broken.
+2. **Interior comments.** The flat printer has no way to re-emit comments (the
+   AST carries no comment nodes), so a form whose source span contains a `;`
+   comment is reported as unmeasurable. This prevents the formatter from
+   silently deleting a comment by collapsing the form around it -- and it
+   propagates upward, so a comment inside a vector nested in a call that would
+   itself fit cannot be flattened away one level up.
+3. **Multi-pair `let` / `let*` / `loop`.** A binding vector with two or more
+   pairs is always broken one pair per line, per the house style. This is
+   enforced at measurement time (the form is reported as unmeasurable), so it
+   also propagates: a multi-pair `let` nested inside an `if` test forces the
+   `if` to break too.
+
+### Always-break vs. try-inline-first
+
+Special forms (`if`, `when`, `do`, `case`, `cond`, `handle`, `defn`, `fn`,
+`let` with multiple binding pairs, etc.) have fixed block layouts and **always
+break** -- they never attempt an inline rendering, even if the whole form would
+fit on the line. The layout table below shows the fixed shape each one uses.
+
+The exceptions are `let` / `loop` with a **single binding pair** (or an empty
+binding vector), which try inline first and fall back to the pair-per-line
+layout only on overflow, and `defeffect`, which is usually short enough to fit
+and uses the generic call layout when it does not.
+
+Everything else -- regular function calls, vectors, maps, sets -- tries inline
+first and breaks only when `col + flat_width > line_width`.
+
 ### Special forms
 
 These forms have well-known argument roles and use custom layouts:
