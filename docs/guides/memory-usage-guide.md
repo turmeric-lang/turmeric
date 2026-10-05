@@ -177,7 +177,7 @@ must `map-free`.** A loop that rebinds a map without freeing the previous
 version keeps every version: measured 1.7 KB per insert, all of it leaked.
 Even when you free each old version, a live entry costs about 360 bytes,
 mostly because of how HAMT nodes are sized today
-([hamt-nodes-allocated-at-full-array-size](../reported/hamt-nodes-allocated-at-full-array-size.md)).
+([hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/hamt-nodes-allocated-at-full-array-size.md)).
 
 None of the three containers is freed at scope exit. A compiled `Vec`,
 `MutableMap` or `Map` local that you do not free lives until the process
@@ -218,7 +218,7 @@ costs nothing: its fat box is allocated once, statically.
 
 One shape leaks: a capturing closure `let`-bound inside a function that
 ends in a self tail call (a loop written as recursion) is never freed
-([closure-let-in-self-tail-loop-leaks](../reported/closure-let-in-self-tail-loop-leaks.md)).
+([closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-let-in-self-tail-loop-leaks.md)).
 
 ### Calls through function values, and effects
 
@@ -239,7 +239,7 @@ written:
 
 So a long-running loop that calls through function values, or performs
 effects, should be a `while` loop
-([fn-value-call-cps-frames-held-until-outer-entry](../reported/fn-value-call-cps-frames-held-until-outer-entry.md)).
+([fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md)).
 An `#fx{}` annotation on the function type does not change this today.
 
 ---
@@ -376,7 +376,7 @@ generation retires when, inside the bracket:
 The stdlib list is caught by the third rule today: `tnil?` and `tlength` test
 for the empty list with `(:: l :int)`, so walking a `(Cons A)` inside a
 region retires it
-([stdlib-list-null-check-retires-regions](../reported/stdlib-list-null-check-retires-regions.md)).
+([stdlib-list-null-check-retires-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stdlib-list-null-check-retires-regions.md)).
 Inside regions, use your own `defdata :heap` list and walk it with `match`.
 
 **Check that your regions rewind.** Run the program with
@@ -544,16 +544,16 @@ frees applies to them. `TUR_GC_STATS=1` prints what that collector did. See
 These are open findings that change the numbers above. Each report has a
 repro and the measurements.
 
-- [hamt-nodes-allocated-at-full-array-size](../reported/hamt-nodes-allocated-at-full-array-size.md)
+- [hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/hamt-nodes-allocated-at-full-array-size.md)
   -- `Map` entries cost ~360 B, most of it unused node space.
-- [fn-value-call-cps-frames-held-until-outer-entry](../reported/fn-value-call-cps-frames-held-until-outer-entry.md)
+- [fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md)
   -- calls through function values hold their frames until the outermost
   call returns.
-- [closure-let-in-self-tail-loop-leaks](../reported/closure-let-in-self-tail-loop-leaks.md)
+- [closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-let-in-self-tail-loop-leaks.md)
   -- a closure in a self-tail-recursive body is never freed.
-- [stdlib-list-null-check-retires-regions](../reported/stdlib-list-null-check-retires-regions.md)
+- [stdlib-list-null-check-retires-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stdlib-list-null-check-retires-regions.md)
   -- walking a stdlib list inside a region retires it.
-- [byvalue-recursive-shared-copies-leak](../reported/byvalue-recursive-shared-copies-leak.md)
+- [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
   -- by-value recursive values copied out of a borrow or a container leak.
 
 ## Related
