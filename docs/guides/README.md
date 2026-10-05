@@ -217,6 +217,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 ## Performance
 
+- **[memory-usage-guide.md](memory-usage-guide.md)** -- What each language feature costs in heap memory, measured, what frees it, and strategies for using less
 - **[performance-guide.md](performance-guide.md)** -- Writing fast Turmeric programs -- numerical computation, data structures, string processing, concurrency, memory, recursion, I/O, and benchmarking methodology
 - **[monomorphization-abi-guide.md](monomorphization-abi-guide.md)** -- How Turmeric's end-to-end monomorphization ABI works, why the by-value path replaced the int64 carrier, and how to read `__spec_*` symbols
 - **[jit-guide.md](jit-guide.md)** -- The in-process MIR JIT (`tur jit`) end to end -- what MIR is, how the engine is wired into the build, and what it does differently from the `cc` path (the fallback contract, the permanent constraints, and the inline-C rules that only bite under the JIT)
@@ -265,7 +266,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices)
 - Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [time-travel-tracing-guide.md](time-travel-tracing-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
-- Performance → [performance-guide.md](performance-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
+- Performance → [performance-guide.md](performance-guide.md), [memory-usage-guide.md](memory-usage-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
 - Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
 - Interoperability → [c-integration-guide.md](c-integration-guide.md), [ffi-guide.md](ffi-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)

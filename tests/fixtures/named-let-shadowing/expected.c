@@ -737,6 +737,11 @@ typedef struct ArenaSlab ArenaSlab;
 
 typedef struct Arena {
     ArenaSlab *head;
+    /* Slabs emptied by arena_reset, waiting to be reused.  The head chain is
+     * where allocations land and what arena_each_used walks; a reset keeps
+     * the head slab there and parks the rest here, so the next generation
+     * refills them before it asks malloc for more. */
+    ArenaSlab *spare;
     size_t default_slab;
     size_t total_bytes;
     size_t total_allocs;
@@ -906,6 +911,7 @@ static ArenaSlab *slab_new(size_t cap) {
 
 TUR_RT_API void arena_init(Arena *a, size_t default_slab_size) {
     a->head = NULL;
+    a->spare = NULL;
     a->default_slab = default_slab_size ? default_slab_size : DEFAULT_SLAB;
     a->total_bytes = 0;
     a->total_allocs = 0;
@@ -940,11 +946,20 @@ TUR_RT_API void *arena_alloc_aligned(Arena *a, size_t size, size_t align) {
         }
     }
 
-    /* Need a new slab. Grow if the request is large. The extra `align` bytes
-     * cover worst-case alignment padding at the head of a fresh slab. */
-    size_t cap = a->default_slab;
-    if (size + align > cap) cap = size + align;
-    ArenaSlab *fresh = slab_new(cap);
+    /* Need another slab.  Reuse one a reset emptied when it is big enough --
+     * otherwise a rewound arena refills only its old head slab and mallocs the
+     * rest afresh on every generation, so a region rewound in a loop grows
+     * without bound.  Else grow: the extra `align` bytes cover worst-case
+     * alignment padding at the head of a fresh slab. */
+    ArenaSlab *fresh;
+    if (a->spare && a->spare->cap >= size + align) {
+        fresh = a->spare;
+        a->spare = fresh->next;
+    } else {
+        size_t cap = a->default_slab;
+        if (size + align > cap) cap = size + align;
+        fresh = slab_new(cap);
+    }
     fresh->next = a->head;
     /* The link before the publication, as a signal handler on this thread
      * sees it: the r7rs-gc collector stops a thread anywhere and then walks
@@ -974,8 +989,7 @@ TUR_RT_API char *arena_strdup(Arena *a, const char *s, size_t len) {
     return p;
 }
 
-TUR_RT_API void arena_free(Arena *a) {
-    ArenaSlab *s = a->head;
+static void free_slabs(ArenaSlab *s) {
     while (s) {
         ArenaSlab *next = s->next;
 #ifdef TUR_ARENA_GUARD
@@ -1005,7 +1019,13 @@ TUR_RT_API void arena_free(Arena *a) {
 #endif
         s = next;
     }
+}
+
+TUR_RT_API void arena_free(Arena *a) {
+    free_slabs(a->head);
+    free_slabs(a->spare);
     a->head = NULL;
+    a->spare = NULL;
     a->total_bytes = 0;
     a->total_allocs = 0;
 }
@@ -1041,6 +1061,20 @@ TUR_RT_API void arena_reset(Arena *a) {
 #endif /* !NDEBUG */
         s->used = 0;
     }
+    /* Keep the head slab where allocations land and park the rest on the
+     * spare list (in their existing order, ahead of any older spares), so the
+     * next generation refills them before calling malloc.  The head's link is
+     * cut after the spare list holds the tail: a signal handler walking the
+     * head chain (r7gc) only ever sees empty slabs drop out of it. */
+    if (a->head && a->head->next) {
+        ArenaSlab *tail = a->head->next;
+        ArenaSlab *last = tail;
+        while (last->next) last = last->next;
+        last->next = a->spare;
+        a->spare = tail;
+        atomic_signal_fence(memory_order_seq_cst);
+        a->head->next = NULL;
+    }
     a->total_bytes = 0;
     a->total_allocs = 0;
 }
@@ -1056,6 +1090,9 @@ TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
     if (!p) return false;
     const unsigned char *cp = (const unsigned char *)p;
     for (const ArenaSlab *s = a->head; s; s = s->next) {
+        if (cp >= s->data && cp < s->data + s->cap) return true;
+    }
+    for (const ArenaSlab *s = a->spare; s; s = s->next) {
         if (cp >= s->data && cp < s->data + s->cap) return true;
     }
     return false;
