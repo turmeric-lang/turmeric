@@ -170,6 +170,47 @@ has "refusal: struct parameter named" \
     "takes a parameter of type Pt" "$out"
 has "refusal: session continues again"     "=> 7"  "$out"
 
+# --- The value boundary: interpreter memory never reaches compiled code -----
+# A pointer parameter takes a handle an earlier JIT'd call returned (or nil);
+# an int-class parameter refuses a word that addresses the interpreter's own
+# memory.  Both used to reach compiled code, which read -- and freed --
+# interpreter allocations as its own and took the REPL process down.
+out="$(printf '%s\n' \
+    '(defn make-cell [v : int] : ptr<void>' \
+    '  ```c' \
+    '  #include <stdlib.h>' \
+    '  int64_t *c = malloc(sizeof *c);' \
+    '  for (int i = 0; i < 1; i++) *c = v;' \
+    '  return c;' \
+    '  ```)' \
+    '(defn cell-get [c : ptr<void>] : int' \
+    '  ```c' \
+    '  int64_t s = -1;' \
+    '  for (int i = 0; i < 1; i++) if (c) s = *(int64_t *)c;' \
+    '  return s;' \
+    '  ```)' \
+    '(cell-get (make-cell 41))' \
+    '(cell-get nil)' \
+    '(cell-get (pack 42 (exists [a] [(Show a)] a)))' \
+    '(+ 4 5)' \
+    '(defn word-set [h : int] : int' \
+    '  ```c' \
+    '  int64_t s = 0;' \
+    '  for (int i = 0; i < 1; i++) s = h != 0;' \
+    '  return s;' \
+    '  ```)' \
+    '(word-set (vec-new))' \
+    '(word-set 12)' \
+    ':quit' | repl_out --enable=repl-jit-inline-c)"
+has "boundary: a compiled handle round-trips"  "=> 41" "$out"
+has "boundary: nil reaches a pointer param"    "=> -1" "$out"
+has "boundary: interpreter value refused at a pointer param" \
+    "is not a handle compiled code returned" "$out"
+has "boundary: session continues"              "=> 9"  "$out"
+has "boundary: interpreter allocation refused at an int param" \
+    "is a value the interpreter allocated" "$out"
+has "boundary: a plain number still passes"    "=> 1"  "$out"
+
 # --- tur --interpret runs it too --------------------------------------------
 cat > "$WORK/prog.tur" <<'EOF'
 (defn c-mix [a : int b : int] : int

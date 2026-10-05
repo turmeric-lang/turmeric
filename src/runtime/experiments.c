@@ -445,15 +445,23 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * the in-process MIR engine, on that defn's first call; `tur repl` and
      * `tur --interpret` alike.  Needs a TUR_JIT build (the default on 64-bit
      * x86-64/arm64); without one the hook is absent and today's "inline-C not
-     * supported" error stands.  A prototype: what a compiled defn may reach
-     * (only itself, scalar signatures) is the part expected to move, and C2
-     * (whole compiled turns) may subsume it. */
+     * supported" error stands.
+     *
+     * BETA since 2026-10-04 (prototype 0.59.0-0.62.0).  The surface is frozen
+     * as the plan's C1 "Supported subset": a defn whose whole body is
+     * inline-C, fixed arity, scalar or pointer signature, calling nothing
+     * else; at the call a pointer parameter takes only nil or a handle an
+     * earlier JIT'd call returned, and an int-class parameter refuses a word
+     * addressing the interpreter's own memory.  expires_at moves 0.62.0 ->
+     * 0.65.0 for the soak.  Graduating it is a bet that C2 (whole compiled
+     * turns, post-v1) does not replace it; C2 removes the value boundary
+     * altogether, but C1 stays the cheap path for `tur --interpret`. */
     { "repl-jit-inline-c",
       "the interpreter JIT-compiles an inline-C defn it cannot run, on its first call (needs a TUR_JIT build)",
       "docs/upcoming/aot-compiled-repl-plan.md",
       "0.59.0",                  /* introduced */
-      "0.62.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
+      "0.65.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_BETA,
       &g_opt_repl_jit_inline_c },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */

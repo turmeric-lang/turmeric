@@ -1,15 +1,17 @@
 # Plan: Compiled evaluation at the `tur repl` prompt
 
 > **Status:** C0 landed 2026-09-30. **C1 landed 2026-10-02** behind
-> `--enable=repl-jit-inline-c`. C2 was investigated 2026-10-02 (findings under
-> C2) and is not started. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
+> `--enable=repl-jit-inline-c`, and went **beta on 2026-10-04** (advisory
+> `expires_at` 0.65.0) once its value boundary closed and its surface was
+> frozen as the "Supported subset" under C1. C2 was investigated 2026-10-02 and
+> again 2026-10-04 (findings under C2) and is not started. **Rewritten 2026-09-29.** The 2026-06-28 draft (in
 > git history) proposed compiling each prompt form with a `cc` subprocess into
 > a `.so` and `dlopen`ing it. It predates the in-process MIR JIT (graduated
 > 0.34.0). The JIT and the spice REPL now provide most of the machinery the
 > draft planned to build, and the draft had design flaws this version fixes
 > (see "Why not the 2026-06-28 draft"). The file name is historical: nothing
 > here is ahead-of-time compiled any more.
-> **Last Updated:** 2026-10-02
+> **Last Updated:** 2026-10-04
 > **Track:** post-v1. C0 (a bug fix) and C1 (an experiment) have landed.
 > **Type:** REPL / interpreter (`src/turi/`) / JIT (`src/jit_engine.c`) /
 > emitter (REPL-mode globals).
@@ -141,11 +143,12 @@ The REPL now asks `reader_open_depth` (`src/compiler/reader.c`) whether the
 input is complete, and keeps a blank line typed inside a fence or string.
 C1 and C2 could not be tested at an interactive prompt without it.
 
-### C1 -- JIT the inline-C `defn`s the interpreter cannot run (LANDED 2026-10-02)
+### C1 -- JIT the inline-C `defn`s the interpreter cannot run (LANDED 2026-10-02, BETA 2026-10-04)
 
 The smallest change that closes the gap. The interpreter stays the evaluator,
 and only the inline-C bodies it refuses get compiled. Experiment
-`repl-jit-inline-c` (a prototype, expires 0.62.0); it applies wherever turi
+`repl-jit-inline-c` (a prototype from 0.59.0, beta since 2026-10-04, advisory
+`expires_at` 0.65.0); it applies wherever turi
 runs, so `tur repl` and `tur --interpret` alike. With it on, the `c-mix`
 example above prints `97` at the prompt and under `--interpret`. Try Turmeric
 has no JIT and is unchanged.
@@ -230,25 +233,72 @@ the dynamic FFI's thunks. `TUR_JIT_KEEP_C2MIR=1` restores the old lifetime.
 In a 51-compile session the compile share averages ~155 ms; the interpreter's
 own share of that session is ~700 ms in total.
 
-**Payoff beyond the prompt, measured.** `tests/run-turi.sh` PASS-skips every
-fixture with user inline-C. Of those, 564 have an `expected.stdout` and no args
-or stdin. Under `tur --interpret` they score:
+**The value boundary (found 2026-10-04, fixed).** The signature check above is
+not a safety boundary on its own. A `ptr<void>`, `:int` or un-annotated
+parameter is one machine word, and an interpreter value reaches compiled code
+through it as a bare address: a vec the interpreter's natives built, an
+existential the interpreter packed, a cons list, a Result. Compiled code then
+reads it with the compiled layout, and frees, reallocs or keeps memory the
+interpreter allocated from its own arenas. Measured over the fixture corpus
+(below): **26 fixtures that failed with a clean "inline-C not supported" error
+without the flag crashed the process with it** (SIGABRT from `free` on arena
+memory, or SIGSEGV), and 14 more passed only because the interpreter happened
+to lay a value out the way compiled code reads it (cons cells, Result) -- luck,
+not a contract.
 
-- **Today:** 133 pass. (The skip is coarser than the failures.)
-- **With C1:** 185 pass, 52 more, and no fixture that passed before fails.
+Two call-time checks now close what the runtime can see
+(`src/turi/inline_c_jit.c`, "The value boundary"):
 
-The 379 still failing break down as:
+1. **Provenance for pointers.** Every non-zero int-class result of a JIT'd
+   call is recorded. A `ptr<void>` parameter accepts only nil or one of those:
+   a handle compiled code made may go back to compiled code, and nothing else
+   may. (`make-cell` then `cell-get` round-trips; a packed existential is
+   refused.)
+2. **No interpreter memory in an int-class slot.** A word that addresses the
+   interpreter's value arenas (`arena_owns` on `value_scratch`/`value_perm`) or
+   a collection it tracks is refused, whatever the parameter's declared type.
 
-| Count | Cause |
-| --- | --- |
-| 133 | non-scalar signature |
-| 30 | body calls Turmeric code |
-| 10 | inline-C that is not a whole defn body |
-| 205 | interpreter gaps unrelated to C1 (arrow instances, async/await, ...) |
-| 1 | timeout |
+Each refusal is an error value naming the argument, and the session carries
+on. Together they turn 22 of the 26 crashes into refusals and give up the 14
+lucky passes.
 
-Re-enabling those 52 in `run-turi.sh` (a marker, or running the carve-out with
-the experiment on) is a follow-on.
+**Supported subset (frozen for the beta).**
+
+| | Supported | Refused, cleanly | Outside the subset -- undefined, not detected |
+| --- | --- | --- | --- |
+| Shape | a `defn` whose whole body is inline-C, fixed arity, written out (not by a macro) | a body calling another Turmeric definition; variadic; macro-written; partial inline-C | -- |
+| Parameters | int-class numbers, `float`, `bool`, `cstr` (borrowed), `ptr<void>` holding nil or a JIT'd handle | struct/ADT/closure/collection types by name; at the call, an interpreter value in a pointer slot or interpreter memory in any int-class slot | an `:int` that smuggles a handle from somewhere else (CLAUDE.md "No lazy `:int` stand-ins" already forbids it) |
+| Result | int-class, `float`, `bool`, `cstr`, unit, `ptr<void>` | any other type | -- |
+| Ownership | compiled code reads its arguments | -- | compiled code that `free`s or keeps a `cstr` argument (it belongs to the interpreter) |
+
+The four fixture crashes left are all in the last column:
+`typeclass-unsafe-passbyptr-struct-arg` (`__build [lst : int]` walks an
+interpreter cons list it was handed as `:int`), `re-union-patterns`
+(`str-free` frees an interpreter `cstr`), and `closure-drop-affine-chain-autodrop`
+/ `httpd-mw-fold-many` (an `:int` result that is a compiled-heap handle, later
+dropped by the interpreter's own glue -- the second prints its full expected
+output and aborts at exit). None is reachable from code that types its handles.
+
+**Payoff beyond the prompt, measured 2026-10-04** (Debug, arm64 macOS, `main`
+at `59d1dfe5c`). Of the fixtures with user inline-C, 766 have an
+`expected.stdout` and no args, stdin or flags. Under `tur --interpret`:
+
+| | pass | fail | crash introduced by the flag |
+| --- | --- | --- | --- |
+| no flag | 311 | 455 | -- |
+| C1 as landed (measured at `4fb2606bb`, 760 fixtures) | 370 | 390 | 26 |
+| C1 with the value boundary | 357 | 409 | 4 (the column above) |
+
+No fixture that passes without the flag fails with it. **`run-turi.sh` now runs
+the 46 that pass only with the flag** (`TURI_INLINEC_JIT_RUN`), with
+`--enable=repl-jit-inline-c`, on any build whose `tur` carries the JIT engine;
+without one they stay in the carve-out. Each was checked stable across three
+consecutive runs.
+
+The failures that remain are mostly not C1's to fix: 120 struct/ADT/closure
+signatures, about 20 bodies that call Turmeric code, and the interpreter gaps
+(arrow instances, async/await, task groups) that fail identically without the
+flag.
 
 **Test.** `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`,
 registered on `TUR_JIT` builds, in the `test` job's aux part). It covers:
@@ -260,6 +310,9 @@ registered on `TUR_JIT` builds, in the `test` job's aux part). It covers:
 - a cached second call;
 - redefinition dropping the cache;
 - both refusals;
+- the value boundary: a compiled handle round-trips through `ptr<void>`, nil
+  passes, a packed existential is refused at a pointer parameter, a vec is
+  refused at an `:int` parameter, and a plain number still passes;
 - `--interpret`;
 - no scratch file left behind.
 
@@ -468,6 +521,74 @@ branch of its own.
 2. The slot macro.
 3. The image-memory decision (point 5) before the experiment soaks.
 
+#### Second look: does C1 ship before C2? (2026-10-04)
+
+Measured on a Release build, arm64 macOS (Apple clang), `main` at `59d1dfe5c`.
+The 2026-09-29 table above is x86-64 Linux; the two differ more than expected.
+
+**Latency.** `tur jit --timing-json`, best of 3, each program's `main` calling
+every definition so `jit_prune` keeps them all live:
+
+| live defns | `emit-c` | `compile_ms` | a C2 turn, roughly |
+| --- | --- | --- | --- |
+| 1 | ~22 ms | ~244 ms | ~265 ms |
+| 200 | ~28 ms | ~271 ms | ~300 ms |
+| 800 | ~51 ms | ~431 ms | ~480 ms |
+
+With only `main`'s callees live -- an expression turn, the common case -- the
+compile stays at ~265 ms whatever the definition count, because the prune drops
+the rest. So **the fixed c2mir floor, not the session size, is the cost**, and
+on this platform the floor alone (~245 ms) is over C2's 200 ms budget. That
+makes C4 item 2 ("reduce the fixed c2mir cost") a prerequisite for C2 on macOS,
+not a fallback; on x86-64 Linux, at ~110 ms, it was not.
+
+**Image memory.** A `tur repl --enable=repl-jit-inline-c` session compiling N
+distinct inline-C defns, each called once, peak RSS:
+
+| compiles | wall | peak RSS |
+| --- | --- | --- |
+| 1 | 0.3 s | 76 MB |
+| 50 | 19.2 s | 418 MB |
+| 100 | 31.9 s | 558 MB |
+
+Marginal cost from 50 to 100: ~255 ms and ~2.8 MB per image, linear, with all
+100 results correct. (The Linux measurement under C1 was ~1.6 MB.) C2 keeps one
+image per *turn*, so 1,000 turns is ~3 GB here. That rules out option (c)
+under point 5 above (accept it and document a `:reset` cadence): a session that
+long is ordinary. C2 needs (a) or (b) before it lands. C1 keeps one image per
+distinct compiled defn or redefinition, which grows with what the user writes,
+not with how many turns they type.
+
+**What C2 still costs.** Nothing found here makes it infeasible; every piece has
+a precedent in the tree. The work is:
+
+1. turi: commit a turn without evaluating it (one branch, point 2 above);
+2. the definition table and the synthesized turn entry;
+3. the turn-entry printer -- `Show` dispatch in compiled code, `println` for
+   scalars, `#<Type>` otherwise (point 8);
+4. the emitter's slot-backed globals (point 6), the one emitter change;
+5. the image-memory decision, (a) or (b);
+6. the c2mir floor on macOS (C4 item 2);
+7. the transcript corpus and its diff harness, the acceptance gate.
+
+Items 1-4 are the plan's existing recommendation. Items 5 and 6 are what this
+look added, and both are research rather than plumbing.
+
+**Verdict: ship C1 first.** The two are not competitors:
+
+- C2 replaces C1 only *at the prompt*. `tur --interpret` evaluates a file, not
+  prompt turns, and C2 does not change that; C1 is the only path that runs
+  inline-C there. That is where its measured payoff is: 46 corpus fixtures
+  that `run-turi.sh` could not run before.
+- C2 reuses C1's machinery: `repl_inline_c_jit_build`'s mid-turn compile, the
+  prune, and the quiet-warnings and diagnostic save/restore. Nothing in C1
+  would be undone.
+- C2 has no value boundary, because nothing interpreted ever touches a compiled
+  value. That is C2's real advantage. C1 has a boundary, which is why its
+  surface is a frozen subset. That subset is now explicit and checked, which
+  was the missing piece for beta.
+- C2 is post-v1 and gated on two research items. C1 works today.
+
 ### C3 -- spices in compiled mode
 
 With a spice loaded, a compiled turn needs to call the spice's functions. The
@@ -503,7 +624,7 @@ Only needed if C2 misses its latency budget. Candidates, safest first:
 | Phase | Gate | Lands | Tests |
 | --- | --- | --- | --- |
 | C0 | none (bug fix) | landed 2026-09-30 | `tests/turi/repl-multiline-input.sh`: every repro in the report, piped, asserting on the evaluated output (the failure exits 0) |
-| C1 | `repl-jit-inline-c` | landed 2026-10-02 | `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`, `TUR_JIT` builds): the gate off, loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, a cached second call, redefinition dropping the cache, refusal of a body that calls a Turmeric function and of a struct parameter, `--interpret`. It probes the binary for the JIT and PASS-skips without it |
+| C1 | `repl-jit-inline-c` | landed 2026-10-02; beta 2026-10-04 | `tests/turi/repl-jit-inline-c.sh` (ctest `tur_repl_jit_inline_c`, `TUR_JIT` builds): the gate off, loop and branch bodies, a hoisted `#include`, float/cstr/bool signatures, a cached second call, redefinition dropping the cache, refusal of a body that calls a Turmeric function and of a struct parameter, the value boundary, `--interpret`. It probes the binary for the JIT and PASS-skips without it. `tests/run-turi.sh` runs the 46 corpus fixtures that need it (`TURI_INLINEC_JIT_RUN`) |
 | C2 | `compiled-repl` | post-v1 | Transcript diff: run each transcript in a corpus through the interpreted and the compiled REPL and fail on any difference, as the engine triangle does. See the corpus list below. Latency: a new `benchmarks/repl-turn/` |
 | C3, C4 | as C2 | after C2 | as needed |
 
