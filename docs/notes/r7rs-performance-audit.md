@@ -235,6 +235,54 @@ Debug numbers, so algorithmic fixes show less there.
 Done here: the two front-end fixes in §4, and the `run.sh` warm-up change
 (the interim fix 3 from the variant report). Recommendation 3 followed.
 
+## 6. Compiled code under the collector (`tur_r7rs_gc`), 2026-10-05
+
+The `tur_r7rs_gc` ctest target (`tests/run-r7rs-gc.sh`) hit its 720 s cap.
+It builds every compiled r7rs and Saffron fixture (232) and runs each with
+`TUR_GC_TORTURE=31`, a full collection every 31 allocations. Measured
+serially:
+- **Phase 1:** 923 s of torture runs against 13 s of plain runs, plus 281 s
+  of builds.
+- **Longest case:** `r7rs-tail-call-hand-on-through-static-call` at 292 s
+  (0.17 s plain).
+
+**Where a collection's time went** (callgrind, `r7rs-apply-long`; a byte
+count per root source in an instrumented build):
+- Marking the live heap was ~6 MB a collection. Data/bss was 89 KB, stacks
+  7 KB.
+- About 64 instructions per scanned word.
+- Each candidate pointer cost a hash lookup of its 64 KiB chunk and a 64-bit
+  divide (`(w - base) / size`) for its slot index.
+- The drain looked each object's page up a second time.
+- The sweep visited every slot one by one (8.7%).
+
+**Fixed in src/runtime/r7gc.c (exact rewrites):**
+- **Slot index:** `(off * inv) >> 48` with `inv = 2^48 / size + 1`, exact
+  for every class at every chunk offset (`tests/check-r7gc-slot-of.sh`,
+  ctest `tur_r7gc_slot_of`).
+- **Mark stack:** holds (start, size) pairs, so there is one page lookup per
+  object.
+- **Mark phase:** remembers the last chunk's page, reset each collection.
+- **Sweep:** works a bitmap word at a time with popcount, pushing free slots
+  in the same order as before.
+
+Instructions for the same 402 collections: 19.4 G to 8.4 G. Phase 1 torture
+time: 923 s to 364 s (2.5x); the longest case 292 s to 99 s.
+`tests/run-r7rs-gc.sh`: 249 passed, 0 failed, in 5 m 49 s (it had hit the
+720 s cap).
+
+**Still open:**
+- **The torture interval is quadratic in live size:**
+  [r7rs-gc-torture-quadratic-in-live-heap](../reported/r7rs-gc-torture-quadratic-in-live-heap.md).
+  An opt-in `TUR_GC_TORTURE_SCALE=R` takes the worst case to 0.8 s, and the
+  whole harness to 4 m 04 s; whether the gate should use it is a decision.
+- **Eval programs scan `libturi`'s data:**
+  [r7rs-gc-eval-programs-scan-libturi-data](../reported/r7rs-gc-eval-programs-scan-libturi-data.md).
+  Every collection reads 46 MB, 38 ms against ~8 ms.
+- **Builds:** most of the rest of the harness's time is building 232
+  programs, with ~8 cold prelude variants for the thread fixtures. See §1
+  and §5.
+
 ## Not a problem
 
 - **Run time of compiled programs.** It is a median of 10 ms. The 4e7-call

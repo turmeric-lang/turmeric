@@ -295,6 +295,14 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_gc PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+# The collector's divide-free slot index ((off * inv) >> 48, r7gc.c
+# tur_gc_slot_of) equals off / size for every size class at every offset.
+add_test(
+  NAME tur_r7gc_slot_of
+  COMMAND bash tests/check-r7gc-slot-of.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7gc_slot_of PROPERTIES TIMEOUT 720)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh
