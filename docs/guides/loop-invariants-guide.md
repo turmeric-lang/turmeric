@@ -168,7 +168,7 @@ the body:
 - Rebinds, in a body `let`, a name that is already in scope.
 
 A declined loop reports `TUR-W0372` with "is not analysed statically:
-<reason>". The runtime checks stay.
+`<reason>`". The runtime checks stay.
 
 ### Frozen regions
 
