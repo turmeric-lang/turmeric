@@ -746,6 +746,9 @@ ctest `TIMEOUT` properties so a single hang is killed and *named* first.
 
 ## See also
 
+- [running-tests-guide.md](running-tests-guide.md) -- running the tests:
+  narrowing a run, every harness variable, the fixture markers, and the local
+  command for each CI job.
 - [test-runner-contract.md](test-runner-contract.md) -- stdlib test
   framework contract (assertions, discovery, exit semantics), plus
   "Failures that are not product bugs" (sanitizer-laundered crashes,

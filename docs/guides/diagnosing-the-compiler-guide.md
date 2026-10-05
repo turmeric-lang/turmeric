@@ -164,8 +164,9 @@ TUR_TEST_SUITE=errors      bash tests/run.sh 2>&1    # happy | errors | snapshot
 TUR_FORCE=1                bash tests/run.sh 2>&1    # ignore the stamp cache
 ```
 
-- `tests/run.sh` writes its results to **stderr**; capture with `2>&1`, or the
-  output looks empty.
+- `tests/run.sh` writes its `PASS`/`FAIL` lines and summary to stdout. Every
+  variable that narrows or changes a run is in
+  [running-tests-guide.md](running-tests-guide.md).
 - Run every suite with a 12-minute timeout. A clean full run takes about five
   minutes on four cores.
 - A passing fixture is skipped on the next run unless something it depends on

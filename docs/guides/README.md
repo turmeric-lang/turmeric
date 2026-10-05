@@ -216,6 +216,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[tvm-guide.md](tvm-guide.md)** -- Install, switch between, and pin Turmeric compiler releases the same way nvm does for Node
 - **[compiler-flags-guide.md](compiler-flags-guide.md)** -- Diagnostic and debug flags accepted by `tur`; list of removed `-X` feature flags
 - **[test-runner-contract.md](test-runner-contract.md)** -- Test framework API and contract
+- **[running-tests-guide.md](running-tests-guide.md)** -- Running the tests: which harness runs what, narrowing a run to one fixture, every harness variable, the fixture marker files, and the local command for each CI job
 - **[test-suite-portability-guide.md](test-suite-portability-guide.md)** -- Fixture-suite pitfalls: portability, parallel ctest, sanitizers and heap probes, and which harness actually leak-checks what
 - **[autodoc-guide.md](autodoc-guide.md)** -- Writing `;;;` docstrings and generating API docs with `tools/gendocs.py`
 - **[image-dumps-guide.md](image-dumps-guide.md)** -- Warm-start a Turmeric program by saving and restoring a post-init continuation, Lisp/Smalltalk/pdumper style
