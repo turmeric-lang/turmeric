@@ -161,14 +161,19 @@ passed, 0 failed.
 
 ### What is still kept
 
-- **By-value struct arguments.** `turi_copy_byvalue_struct_arg` copies them
-  into the pool on every call, and those copies are not freed: the copy may
-  be returned or stored. This is ~40% of what `r7rs-srfi-14` still holds.
-- **Tyvar and dictionary pins** on call frames (`frame_record_abi`,
-  `frame_bind_constraint_dicts`).
-- **Programs with a re-entrant `call/cc`.** The first capture pins everything
-  from then on. `r7rs-control` still peaks at 343 MB.
-- **Frames captured by a closure**, together with everything under them, as
-  before. Frames of the synchronous paths (`eval_expr_impl`'s own lets, effect
-  handler frames) are not linked either.
+Each item has an open report:
 
+- **By-value struct arguments.** Copied into the pool on every call and never
+  freed; most are `any` boxes and never-written structs:
+  [turi-immutable-struct-args-copied-per-call](../reported/turi-immutable-struct-args-copied-per-call.md).
+- **Effect continuations.** Each `perform` keeps its continuation, handler
+  frame and captured frames:
+  [turi-effect-perform-keeps-its-continuation](../reported/turi-effect-perform-keeps-its-continuation.md).
+- **Tyvar and dictionary pins, and frames made off the driver's call path:**
+  [turi-call-pins-and-side-frames-not-reclaimed](../reported/turi-call-pins-and-side-frames-not-reclaimed.md).
+- **Programs with a re-entrant `call/cc`.** The first capture switches
+  reclamation off for the rest of the run:
+  [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md),
+  section *2026-10-05*.
+- **Frames captured by a closure**, with everything under them, as before.
+  That is correct until the interpreter can tell a closure is dead.

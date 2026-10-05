@@ -268,3 +268,34 @@ from every recent one, such as a deep walk whose captures are all at
 different depths, is still kept whole. Freeing any of it needs the
 continuation to be a traced or refcounted object, which interpreter values
 are not, so the "Reclaim images" direction is the whole of what remains.
+
+## 2026-10-05: the interpreter's pin now also switches off frame reclamation
+
+The section *The interpreter's pin costs nothing measurable* above no longer
+holds. Since
+[turi-call-frames-never-reclaimed](../archive/turi-call-frames-never-reclaimed.md),
+`tur --interpret` hands an activation's frames back when it returns.
+`frame_release` checks `g_turi_cont_pinned` and does nothing once it is set,
+because a re-entry may complete a call whose frame is in the stack image. So
+a program that stores **one** continuation is back to the old ~4 KB per step
+for the rest of its run:
+
+| `tur --interpret`, Release, 60,000-element list built and summed | peak RSS |
+| --- | --- |
+| no `call/cc` | 47 MB |
+| no `call/cc`, `TUR_TURI_FRAME_RECLAIM=0` | 167 MB |
+| one stored continuation first (`(call/cc (lambda (k) (set! saved k) 0))`) | 214 MB |
+
+`r7rs-control` (343 MB) is this case.
+
+**Direction: a capture epoch instead of a pin.** A re-entry can only
+complete activations that were live when the continuation was captured.
+Keep a global capture counter, bumped by `native_r7rs_cont_capture`, and
+stamp each frame with the counter's value when it is created. `frame_release`
+may then free a frame whose stamp equals the current counter: no capture has
+happened since the frame was made, so no image holds it. Owned frames get
+the same check, each against its own stamp. The same epoch test would let
+`TURI_DRIVE_FREE` free a call's argument accumulator when that call began
+after the last capture. That is the "per-frame capture epoch" the 2026-09-28
+section ruled out as buying nothing. With frames now reclaimed, it buys the
+difference between 214 MB and 47 MB above.
