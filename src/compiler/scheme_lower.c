@@ -536,14 +536,15 @@ static bool is_srfi_libname(const Form *set) {
             strcmp(set->as.list.items[0]->as.sym->name, "srfi") == 0) || is_sicp_libname(set);
 }
 /* How a message names the library numbered `num`: "(srfi N)" or "(sicp
- * extras)".  One of two rotating buffers, so a message may name two. */
-static const char *lib_label(int64_t num) {
-    static char bufs[2][32];
-    static int which = 0;
-    char *b = bufs[which ^= 1];
-    if (num == SICP_EXTRAS_NUM) snprintf(b, sizeof bufs[0], "(sicp extras)");
-    else snprintf(b, sizeof bufs[0], "(srfi %lld)", (long long)num);
-    return b;
+ * extras)".  Returned by value -- `lib_label(n).s` lives to the end of the
+ * full expression -- so one message may name two libraries, and no static
+ * buffer is shared (tests/check-static-cname-buffers.sh). */
+typedef struct { char s[32]; } LibLabel;
+static LibLabel lib_label(int64_t num) {
+    LibLabel l;
+    if (num == SICP_EXTRAS_NUM) snprintf(l.s, sizeof l.s, "(sicp extras)");
+    else snprintf(l.s, sizeof l.s, "(srfi %lld)", (long long)num);
+    return l;
 }
 /* The message for a library name that names no importable library. */
 static const char *bad_libname_msg(const Form *set) {
@@ -6281,7 +6282,7 @@ static void srfi_scan_imports(SL *sl, Form *deflib, FB *from, FB *to) {
             int64_t dep_num = srfi_libname_num(set);
             if (dep_num >= 0 && srfi_importable(srfi_row(dep_num))) {
                 SrfiLib *dep = srfi_lib_of(sl, dep_num);
-                if (!dep) { err(set, "%s: its library file was not found", lib_label(dep_num)); continue; }
+                if (!dep) { err(set, "%s: its library file was not found", lib_label(dep_num).s); continue; }
                 srfi_lib_register(sl, dep);
                 for (uint32_t k = 0; k < dep->exp_pub.n; k++) {
                     const Symbol *in = dep->exp_in.items[k]->as.sym;
@@ -6492,19 +6493,19 @@ static bool srfi_bind(SL *sl, const Symbol *vis, const Symbol *target, int64_t n
         if (sl->srfi_to[i] == target) return true;
         err(at, "'%s' is imported from %s and from %s with different meanings; R7RS 5.2 "
                 "allows one binding per imported name -- rename or prefix one of them",
-            vis->name, lib_label(sl->srfi_by[i]), lib_label(num));
+            vis->name, lib_label(sl->srfi_by[i]).s, lib_label(num).s);
         return false;
     }
     if (std_imported(sl, vis) && is_std_name(sl, vis) && std_meaning(sl, vis) != target) {
         err(at, "'%s' would name both R7RS's own '%s' and %s's; R7RS 5.2 allows one binding per "
                 "imported name -- rename or prefix the SRFI's, or leave R7RS's out with (except (scheme base) %s)",
-            vis->name, vis->name, lib_label(num), vis->name);
+            vis->name, vis->name, lib_label(num).s, vis->name);
         return false;
     }
     if (fb_has_sym(&sl->user_globals, vis)) {
         err(at, "'%s' is imported from %s and also defined by this program (R7RS 5.2); import it "
                 "with (except %s %s) to define your own",
-            vis->name, lib_label(num), lib_label(num), vis->name);
+            vis->name, lib_label(num).s, lib_label(num).s, vis->name);
         return false;
     }
     if (sl->n_srfi == sl->cap_srfi) {
@@ -6565,7 +6566,7 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
     SrfiLib *lib = srfi_lib_of(sl, num);
     if (!lib) {
         err(libname, "%s: its library file %s could not be read -- is the stdlib installed?",
-            lib_label(row->num), row->file);
+            lib_label(row->num).s, row->file);
         return;
     }
     srfi_lib_register(sl, lib);
@@ -6574,10 +6575,10 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
         for (int w = 0; w < 2; w++)
             for (uint32_t i = 0; i < named[w]->n; i++)
                 if (!fb_has_sym(&lib->exp_pub, named[w]->items[i]->as.sym))
-                    err(named[w]->items[i], "%s does not export '%s'", lib_label(row->num), named[w]->items[i]->as.sym->name);
+                    err(named[w]->items[i], "%s does not export '%s'", lib_label(row->num).s, named[w]->items[i]->as.sym->name);
         for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2)
             if (!fb_has_sym(&lib->exp_pub, spec->renames.items[i + 1]->as.sym))
-                err(spec->renames.items[i + 1], "%s does not export '%s'", lib_label(row->num),
+                err(spec->renames.items[i + 1], "%s does not export '%s'", lib_label(row->num).s,
                     spec->renames.items[i + 1]->as.sym->name);
     }
     for (uint32_t k = 0; k < lib->exp_pub.n; k++) {
