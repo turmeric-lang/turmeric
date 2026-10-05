@@ -796,6 +796,14 @@ add_test(
   COMMAND bash tests/check-reported-index.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# docs/guides/running-tests-guide.md must name every TUR_*/TURI_* variable the
+# three fixture harnesses read: an unknown variable is silently ignored, so a
+# guessed filter name runs the whole suite instead of one fixture.
+add_test(
+  NAME tur_running_tests_guide_lint
+  COMMAND bash tests/check-running-tests-guide.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Every add_test declared under src/ must be visible to `ctest -N`.  It was
 # not, for months: enable_testing() ran after add_subdirectory(src), so
 # tur_trail built, passed by hand, and never ran in CI.  The ordering is fixed
