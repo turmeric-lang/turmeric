@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.0` -- fs / io / process return typed `IoError` results with new line, walk and output helpers, and `#lang r7rs` gains SRFI 18 threads, proper tail calls and million-deep recursion.
+**Latest release:** `v0.63.1` -- The interpreter now reclaims call frames and bindings instead of pinning them for the process lifetime, r7rs compilation and GC get faster, and top-level slash-qualified module calls resolve.
 
 ## What
 
