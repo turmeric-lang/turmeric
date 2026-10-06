@@ -67,15 +67,17 @@ const LOC_DEFAULT = ['code_lines', 'test_lines'];
 
 // The open-work series, in palette order. `open_reports` and `active_plans`
 // are the two the panel opens on -- the question is "how much open work, split
-// by kind" -- and `held_plans` / `v1_plans` are there so the breakdown of the
-// plan total is visible without being the default view. The total open_plans
-// is the sum of the three plan buckets; it is not a separate series because a
-// sum line on the same chart as its addends is a visual tautology.
+// by kind" -- and `held_plans` / `v1_plans` / `spices_plans` are there so the
+// breakdown of the plan total is visible without being the default view. The
+// total open_plans is the sum of the four plan buckets; it is not a separate
+// series because a sum line on the same chart as its addends is a visual
+// tautology.
 const DOCS_SERIES = [
-  ['open_reports', 'Open reports', '--chart-1'],
-  ['active_plans', 'Active plans', '--chart-2'],
-  ['held_plans',   'Held plans',   '--chart-3'],
-  ['v1_plans',     'v1 plans',     '--chart-4'],
+  ['open_reports',  'Open reports',  '--chart-1'],
+  ['active_plans',  'Active plans',  '--chart-2'],
+  ['held_plans',    'Held plans',    '--chart-3'],
+  ['v1_plans',      'v1 plans',      '--chart-4'],
+  ['spices_plans',  'Spices plans',  '--chart-5'],
 ];
 const DOCS_DEFAULT = ['open_reports', 'active_plans'];
 
@@ -1041,7 +1043,7 @@ function renderDocsTiles() {
 
   host.innerHTML = [
     tile('', 'clipboard-list', 'Open plans', String(latest.open_plans),
-      `${latest.active_plans} active, ${latest.held_plans} held, ${latest.v1_plans} v1`),
+      `${latest.active_plans} active, ${latest.held_plans} held, ${latest.v1_plans} v1, ${latest.spices_plans} spices`),
     tile('', 'circle-dot', 'Open reports', String(latest.open_reports),
       'Findings in docs/reported/'),
     tile('', 'layers', 'Total open work',

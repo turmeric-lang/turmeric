@@ -10,7 +10,9 @@ The project tracks open work in two directories under `docs/`:
 
   docs/upcoming/   -- plans (work intended but not yet done).  Top-level files
                       are active; `hold/` parks plans waiting on a dependency;
-                      `v1/` holds milestone-scoped plans.
+                      `v1/` holds milestone-scoped plans; `spices/` (with its
+                      own `v1/`) holds plans moved in from turmeric-spices so
+                      all open work lives in one tree.
   docs/reported/   -- open bug reports / findings.  Resolved reports are moved
                       to docs/archive/ (see CLAUDE.md), so everything left here
                       is open by construction.
@@ -100,6 +102,7 @@ def main():
     active_plans = count_md(args.repo, "docs/upcoming")
     held_plans = count_md(args.repo, "docs/upcoming/hold")
     v1_plans = count_md(args.repo, "docs/upcoming/v1")
+    spices_plans = count_md_tree(args.repo, "docs/upcoming/spices")
     open_reports = count_md(args.repo, "docs/reported")
     open_plans = count_md_tree(args.repo, "docs/upcoming")
 
@@ -113,10 +116,11 @@ def main():
         "open_plans": open_plans,
         "open_reports": open_reports,
         # Breakdown so the chart can toggle them in.  The total is the sum:
-        # open_plans == active_plans + held_plans + v1_plans.
+        # open_plans == active_plans + held_plans + v1_plans + spices_plans.
         "active_plans": active_plans,
         "held_plans": held_plans,
         "v1_plans": v1_plans,
+        "spices_plans": spices_plans,
     }
 
     print(json.dumps(row, sort_keys=True))
@@ -127,6 +131,7 @@ def main():
         print(f"{'  active':>12}  {active_plans:>4}", file=sys.stderr)
         print(f"{'  held':>12}  {held_plans:>4}", file=sys.stderr)
         print(f"{'  v1':>12}  {v1_plans:>4}", file=sys.stderr)
+        print(f"{'  spices':>12}  {spices_plans:>4}", file=sys.stderr)
     return 0
 
 
