@@ -2,6 +2,16 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.2] -- 2026-10-06
+
+### Docs
+
+- **Docs site pages show real dates again.** Every guide and spice page had been
+  dated to the release day, which emptied "Recently Updated" and made "Recently
+  Added" alphabetical; page dates now come from the full history.
+- **A Homebrew Cask install tab.** The `brew` commands for tracking main moved
+  out of the Installer tab into their own step-code block with a copy button.
+
 ## [0.63.1] -- 2026-10-06
 
 ### Changed
