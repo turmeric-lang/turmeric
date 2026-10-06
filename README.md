@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.1` -- The interpreter now reclaims call frames and bindings instead of pinning them for the process lifetime, r7rs compilation and GC get faster, and top-level slash-qualified module calls resolve.
+**Latest release:** `v0.63.2` -- The docs site shows real page dates again, and installation gains a dedicated Homebrew Cask tab.
 
 ## What
 
