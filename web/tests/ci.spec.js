@@ -38,12 +38,12 @@ test.describe('CI metrics dashboard', () => {
   function docsFixture() {
     const now = Math.floor(Date.now() / 1000);
     const rows = [
-      ['aaaaaaa1111111111111111111111111111aaaa1', 28, 25, 10, 15, 3],
-      ['bbbbbbb2222222222222222222222222222bbbb2', 29, 26, 10, 16, 3],
-      ['ccccccc3333333333333333333333333333cccc3', 30, 27, 11, 16, 3],
-      ['ddddddd4444444444444444444444444444dddd4', 30, 29, 11, 16, 3],
+      ['aaaaaaa1111111111111111111111111111aaaa1', 28, 25, 10, 15, 3, 0],
+      ['bbbbbbb2222222222222222222222222222bbbb2', 29, 26, 10, 15, 3, 1],
+      ['ccccccc3333333333333333333333333333cccc3', 30, 27, 10, 15, 3, 2],
+      ['ddddddd4444444444444444444444444444dddd4', 30, 29, 10, 14, 3, 3],
     ];
-    return rows.map(([sha, open_plans, open_reports, active, held, v1], i) => JSON.stringify({
+    return rows.map(([sha, open_plans, open_reports, active, held, v1, spices], i) => JSON.stringify({
       ts: now - (rows.length - 1 - i) * 5 * 3600,
       sha,
       open_plans,
@@ -51,6 +51,7 @@ test.describe('CI metrics dashboard', () => {
       active_plans: active,
       held_plans: held,
       v1_plans: v1,
+      spices_plans: spices,
     })).join('\n');
   }
 
@@ -123,13 +124,28 @@ test.describe('CI metrics dashboard', () => {
 
     const lines = (await res.text()).trim().split('\n');
     const row = JSON.parse(lines[lines.length - 1]);
-    for (const key of ['ts', 'sha', 'open_plans', 'open_reports', 'active_plans', 'held_plans']) {
+    for (const key of ['ts', 'sha', 'open_plans', 'open_reports', 'active_plans', 'held_plans', 'v1_plans']) {
       expect(row).toHaveProperty(key);
     }
     expect(row.open_plans).toBeGreaterThanOrEqual(0);
     expect(row.open_reports).toBeGreaterThanOrEqual(0);
-    // The total is the sum of the three plan buckets.
-    expect(row.open_plans).toBe(row.active_plans + row.held_plans + row.v1_plans);
+    // The total open_plans is the recursive count under docs/upcoming, which
+    // is exactly the sum of the per-bucket breakdowns the collector emits
+    // (active + held + v1 + spices) -- but only once a row published AFTER a
+    // new bucket lands carries that bucket.  A row published before the
+    // spices_plans field existed has no spices_plans, so its three buckets
+    // sum to less than the total (the spices plans are in the tree but
+    // uncategorized in that row).  Assert strict equality when every bucket
+    // is present, and the weaker >= while the live row is in transition, so a
+    // stale row does not redden a PR that did not touch the collector.
+    const PLAN_BUCKETS = ['active_plans', 'held_plans', 'v1_plans', 'spices_plans'];
+    const known = PLAN_BUCKETS.filter((k) => k in row);
+    const sum = known.reduce((s, k) => s + row[k], 0);
+    if (known.length === PLAN_BUCKETS.length) {
+      expect(row.open_plans).toBe(sum);
+    } else {
+      expect(row.open_plans).toBeGreaterThanOrEqual(sum);
+    }
   });
 
   test('page renders every section without console errors', async ({ page }) => {
@@ -175,7 +191,7 @@ test.describe('CI metrics dashboard', () => {
     // The docs chart is on the Reports tab. Switch to it and verify.
     await page.locator('#ci-tab-reports').click();
     await expect(page.locator('#ci-docs-chart .ci-series-line').first()).toBeVisible();
-    await expect(page.locator('#ci-docs-legend .ci-legend-toggle')).toHaveCount(4);
+    await expect(page.locator('#ci-docs-legend .ci-legend-toggle')).toHaveCount(5);
     await expect(page.locator('#ci-docs-tiles .ci-tile')).toHaveCount(4);
 
     // Back on the Tests tab, the sparkline grid and table are present.
@@ -256,7 +272,12 @@ test.describe('CI metrics dashboard', () => {
     await expect(page).toHaveURL(/range=1d/);
     // A narrower window is still a window: the chart redraws rather than
     // emptying, because the cutoff is relative to the newest run, not to now.
-    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeVisible();
+    // Live data can leave a single run in a 1-day window, and a one-point
+    // series is a zero-length `M x,y` path that Playwright reports as hidden.
+    // So assert on what is always drawn -- the series path in the DOM and at
+    // least one run marker -- rather than on the line's own visibility.
+    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeAttached();
+    await expect(page.locator('#ci-chart .ci-point, #ci-chart .ci-point-fail').first()).toBeVisible();
 
     await page.locator('#ci-range').selectOption('all');
     await expect(page).toHaveURL(/range=all/);
@@ -368,7 +389,7 @@ test.describe('CI metrics dashboard', () => {
     // Two series by default (open reports + active plans).
     await expect(page.locator('#ci-docs-chart .ci-series-line')).toHaveCount(2);
     const legend = page.locator('#ci-docs-legend .ci-legend-toggle');
-    await expect(legend).toHaveCount(4);
+    await expect(legend).toHaveCount(5);
     await expect(legend.nth(0)).toHaveAttribute('aria-pressed', 'true');
     await expect(legend.nth(1)).toHaveAttribute('aria-pressed', 'true');
     await expect(legend.nth(2)).toHaveAttribute('aria-pressed', 'false');

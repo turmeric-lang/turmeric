@@ -239,9 +239,66 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy --config dist/try_turmeric/wrangler.json
 
+  deploy-spices:
+    name: Build and deploy spices.turmeric-lang.com
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      # Deploys from turmeric-spices main, not the release scratch branch: the
+      # spices site is its own repo, and a spice landing between two turmeric
+      # releases should not wait for the next cut to appear online.  Full
+      # history so genguides can date each guide from git.
+      - name: Check out turmeric-spices
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository_owner }}/turmeric-spices
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Python doc deps (markdown)
+        run: python3 -m pip install markdown
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      # Mirrors the spices repo's `just deploy-web` recipe: render guides +
+      # spice pages, copy them with the static assets into web/dist, deploy.
+      - name: Generate spice docs
+        run: |
+          python3 tools/genguides.py docs/guides/ --out docs/html/guides/
+          python3 tools/genspices.py --out docs/html/ --emit-json docs/html/doc-names-spices.json
+
+      - name: Build web bundle
+        run: |
+          rm -rf web/dist
+          mkdir -p web/dist
+          cp -R docs/html/. web/dist/
+          cp -R web/public/. web/dist/
+          cp -R web/styles web/dist/styles
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Deploy to Cloudflare
+        working-directory: web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config wrangler.jsonc
+
   publish:
     name: Merge, tag v${{ needs.prepare.outputs.new }}, dispatch release.yml
-    needs: [prepare, deploy-web]
+    needs: [prepare, deploy-web, deploy-spices]
     runs-on: ubuntu-latest
     permissions:
       contents: write        # merge, tag, delete the scratch branch
@@ -270,7 +327,7 @@ jobs:
             --title "chore: release v$NEW" \
             --body "$(git log -1 --format=%b "$SHA")
 
-          Opened and merged by \`release-cut.yml\` run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, after Try Turmeric deployed."
+          Opened and merged by \`release-cut.yml\` run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}, after Try Turmeric and the spices site deployed."
           # --rebase re-creates the commit (new SHA) but with SHA's tree, as
           # main has not moved; the tree check below is what proves the tag
           # lands on exactly what was deployed.  Retried: a merge straight
@@ -301,5 +358,6 @@ jobs:
             echo
             echo "- main: \`$(git rev-parse --short origin/main)\`"
             echo "- site: https://turmeric-lang.com"
+            echo "- spices: https://spices.turmeric-lang.com"
             echo "- binaries: release.yml dispatched at \`v$NEW\` -- ${{ github.server_url }}/${{ github.repository }}/actions/workflows/release.yml"
           } >> "$GITHUB_STEP_SUMMARY"

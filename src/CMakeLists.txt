@@ -516,6 +516,13 @@ if(HAVE_EDITLINE)
 endif()
 
 # Inject version string from VERSION file at compile time (E2)
+# file(READ) runs at configure time and does not, by itself, make CMake
+# reconfigure when VERSION changes -- so a version bump followed by an
+# incremental `cmake --build` leaves the compiler binary with the stale
+# TUR_VERSION define (observed: stdlib 0.63.3 vs compiler v0.63.2). Declaring
+# VERSION as a CMAKE_CONFIGURE_DEPENDS forces a reconfigure on any change to
+# it, which re-reads the file and re-emits the define.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION")
 file(READ "${CMAKE_SOURCE_DIR}/VERSION" _TUR_VERSION_RAW)
 string(STRIP "${_TUR_VERSION_RAW}" _TUR_VERSION_STR)
 target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
