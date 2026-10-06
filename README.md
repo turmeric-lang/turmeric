@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.4` -- Docs now include a plan for upcoming notebook documentation and examples.
+**Latest release:** `v0.63.5` -- The spices doc site at spices.turmeric-lang.com now deploys automatically with every release.
 
 ## What
 
