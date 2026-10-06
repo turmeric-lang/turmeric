@@ -2,6 +2,19 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.3] -- 2026-10-06
+
+### Docs
+
+- **The spices site splits Spices and Guides into two tabs.** The Spices tab
+  comes first and is shown by default, and the Guides index now links to the
+  Spices page for spice-specific guides.
+- **The homepage Cask install panel wraps its long `brew tap` line.** The
+  command no longer causes horizontal scrolling in the install step.
+- **Spices plans and reports live in the main Turmeric docs.** Plan and report
+  documents for turmeric-spices moved into `docs/upcoming/spices/`, so plans for
+  both repos are in one place.
+
 ## [0.63.2] -- 2026-10-06
 
 ### Docs
