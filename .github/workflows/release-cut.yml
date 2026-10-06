@@ -148,14 +148,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.sha }}
+          # Full history: the guides index and the docs pack date every page
+          # from git (first commit = added, last = updated).  A shallow clone
+          # gives every page the release commit's date for both, which empties
+          # Recently Updated and turns Recently Added into the alphabetically
+          # first ten pages.
+          fetch-depth: 0
 
       # The deploy insists on spices (tools/check-pack-spices.py, the same
       # check `just deploy-web` runs): genspices.py degrades to zero spice
       # pages without the sibling checkout, which is fine for CI and wrong for
       # the site.  Unpinned for the reason recorded at the same clone in ci.yml.
+      # Full history, not --depth 1, for the same page-dating reason as the
+      # checkout above: gendocs dates the spice pages from this clone's log.
       - name: Check out turmeric-spices (sibling)
         run: |
-          git clone --depth 1 \
+          git clone \
             "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
             ../turmeric-spices
 
