@@ -407,7 +407,7 @@ expected and fails to elaborate.
 > **1 unknown -> TUR-W0372** (so `#reads`+`frozen` is load-bearing). Fixtures:
 > `turmeric-spices/spices/ecs/tests/refined/alive-frozen.tur` (positive) and
 > `.../tests/errors/refined-alive-no-region.tur` (negative); dogfood write-up
-> `turmeric-spices/docs/ecs-re1-refined-aliveness.md`.
+> `docs/upcoming/spices/ecs-re1-refined-aliveness.md`.
 >
 > Getting here required two compiler fixes (both landed, validated, suite 2367/0):
 > (1) a `#reads`-refined param could not codegen -- the impure entry contract was
