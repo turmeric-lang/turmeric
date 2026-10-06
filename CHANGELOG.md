@@ -2,6 +2,33 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.1] -- 2026-10-06
+
+### Changed
+
+- **The interpreter reclaims call frames and bindings.** `tur --interpret` no
+  longer keeps every frame and binding for the life of the process, so
+  long-running loops (a 1e5-element r7rs loop peaked near 1 GB) now hold steady.
+  Storing a continuation still pins memory.
+- **Faster r7rs garbage collection.** The r7gc mark and sweep phases do far
+  fewer lookups per live word, cutting collection cost in compiled r7rs and
+  Saffron programs.
+- **Faster r7rs compilation.** Two quadratic front-end scans were removed, so
+  large `#lang r7rs` units elaborate and emit C noticeably quicker with
+  byte-identical output.
+
+### Fixed
+
+- **Slash-qualified calls resolve at the top level.** `(Module/member ...)`
+  outside any `defmodule` no longer falls to runtime dispatch with `TUR-W0040`;
+  exported members now resolve correctly.
+
+### Docs
+
+- **A running-tests guide.** `docs/guides/running-tests-guide.md` names every
+  `TUR_*` / `TURI_*` filter variable the harnesses read and the local command
+  for each CI job, and is checked against the harnesses so it stays in sync.
+
 ## [0.63.0] -- 2026-10-05
 
 ### Added
