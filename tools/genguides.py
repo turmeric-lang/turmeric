@@ -1939,6 +1939,7 @@ def main() -> None:
     # input order, so the result is identical to the serial loop, not merely
     # equivalent. Threads (not processes) because the work is a subprocess
     # wait, which releases the GIL.
+    packlib.warn_if_shallow(repo_root)
     n_git_workers = min(32, (os.cpu_count() or 4) * 4, max(1, len(md_files)))
     with ThreadPoolExecutor(max_workers=n_git_workers) as ex:
         creation_dates = list(

@@ -24,6 +24,7 @@ import html as _html
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from typing import Iterable
 
@@ -112,6 +113,40 @@ def find_repo_root(start: Path) -> Path | None:
         cur = cur.parent
 
 
+_warned_shallow: set[Path] = set()
+
+
+def warn_if_shallow(repo_root: Path | None) -> None:
+    """Print a stderr warning, once per repo, when `repo_root` is a shallow clone.
+
+    Every page date this module and the guides index derive comes from git
+    history, and a shallow clone has none to give: each page reads as added
+    and last updated by the clone's tip commit. Nothing fails -- the output is
+    just quietly wrong (an empty Recently Updated, a Recently Added that is the
+    alphabetically first pages, all dated today) -- so say so where a build log
+    will show it. Fetch full history (`fetch-depth: 0`, or `git fetch
+    --unshallow`) to fix it.
+    """
+    if repo_root is None:
+        return
+    root = Path(repo_root).resolve()
+    if root in _warned_shallow:
+        return
+    _warned_shallow.add(root)
+    try:
+        proc = subprocess.run(['git', 'rev-parse', '--is-shallow-repository'],
+                              cwd=root, capture_output=True, text=True,
+                              check=False)
+    except OSError:
+        return
+    if proc.stdout.strip() == 'true':
+        print(f'warning: {root} is a shallow git clone, so page dates '
+              '(Recently Added / Recently Updated) will all read as the tip '
+              "commit's date; fetch full history (fetch-depth: 0 or "
+              '`git fetch --unshallow`) to date pages correctly',
+              file=sys.stderr)
+
+
 def git_page_dates(paths: Iterable[Path],
                    repo_root: Path | None) -> dict[Path, dict[str, str]]:
     """Map each path to `{'added': 'YYYY-MM-DD', 'updated': 'YYYY-MM-DD'}`.
@@ -139,6 +174,7 @@ def git_page_dates(paths: Iterable[Path],
     root = Path(repo_root).resolve() if repo_root else None
     if root is None:
         return {}
+    warn_if_shallow(root)
 
     # Query by repo-relative path, answer by the caller's own Path objects:
     # the caller looks results up with the path it passed in, not with whatever
