@@ -34,6 +34,18 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found implementing the notebook docs-and-examples plan (filed 2026-10-05)
+
+The plan ([notebook-docs-examples-plan](../upcoming/notebook-docs-examples-plan.md))
+ships five example notebooks that import `plot`, `linalg`, `stats`, and `frame`
+from cells. None of them can run: the notebook's embedded evaluator never sets
+`module_base_dir`, so every `(import ...)` fails with a generic elaboration
+error.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [notebook-eval-no-module-base-dir](notebook-eval-no-module-base-dir.md) | medium (feature gap) | `session-open` calls `turi_env_new()` but never `turi_env_set_module_base_dir`, so no cell can import an external spice; all five C1 example notebooks and the C2 guide examples fail at the first import |
+
 ## Found auditing r7rs compile- and run-time cost (filed 2026-10-05)
 
 From [docs/notes/r7rs-performance-audit.md](../notes/r7rs-performance-audit.md),
