@@ -1922,6 +1922,11 @@ typedef struct TlRetryCtx {
     int          *rc;
     bool         *tl_deferred;
     FwdGenOrder  *fgo;
+    /* inst_from[k]: does any form at or after k register an instance
+     * (tl_has_definstance_at_or_after over forms[k..]), for k <= nforms.
+     * Computed once: asked per defn, the scan was quadratic in the unit --
+     * 13% of a `#lang r7rs` emit-c, whose unit is the whole stdlib. */
+    const bool   *inst_from;
 } TlRetryCtx;
 
 static Expr *tl_elab_form(TlRetryCtx *c, uint32_t i) {
@@ -1954,7 +1959,7 @@ static void tl_elab_slot(TlRetryCtx *c, uint32_t i, uint32_t pos) {
         if (ff->tag == F_LIST && ff->as.list.len > 0) {
             Form *h = ff->as.list.items[0];
             if (h->tag == F_SYM && h->as.sym == e->sym_defn &&
-                tl_has_definstance_at_or_after(e, c->forms, c->nforms, pos + 1, 0))
+                pos + 1 <= c->nforms && c->inst_from[pos + 1])
                 tl_may_defer = true;
         }
     }
@@ -3346,8 +3351,13 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * generic defn not elaborated yet waits for it (fwd_gen_order_init). */
     FwdGenOrder fgo;
     fwd_gen_order_init(&fgo, &e, forms, nforms);
+    bool *tl_inst_from = (bool *)calloc((size_t)nforms + 1, sizeof(bool));
+    if (!tl_inst_from) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t k = nforms; k > 0; k--)
+        tl_inst_from[k - 1] = tl_inst_from[k] ||
+            tl_has_definstance_at_or_after(&e, forms + (k - 1), 1, 0, 0);
     TlRetryCtx tl_ctx = { &e, forms, nforms, items, stdlib_prefix, &rc,
-                          tl_deferred, &fgo };
+                          tl_deferred, &fgo, tl_inst_from };
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
@@ -3412,6 +3422,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
                         &tl_ctx);
     free(tl_deferred);
     tl_deferred = NULL;
+    free(tl_inst_from);
     fwd_gen_order_free(&fgo);
 
     /* class-and-generic-in-an-instance-less-module: a defn an imported module

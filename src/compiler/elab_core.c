@@ -351,6 +351,7 @@ void scope_init(Scope *s, Scope *parent) {
     s->idx = NULL;
     s->idx_cap = 0;
     s->idx_n = 0;
+    s->prev = NULL;
 }
 
 void scope_free(Scope *s) {
@@ -368,6 +369,8 @@ void scope_free(Scope *s) {
     free(s->idx);
     s->idx = NULL;
     s->idx_cap = s->idx_n = 0;
+    free(s->prev);
+    s->prev = NULL;
 }
 
 /* Phase 12: Check if a binding has an active borrow that conflicts with the requested kind */
@@ -441,9 +444,14 @@ static void scope_idx_put(Scope *s, uint32_t i) {
     const Symbol *name = s->bindings[i]->name;
     uint32_t m = s->idx_cap - 1, h = scope_idx_hash(name) & m;
     while (s->idx[h]) {
-        if (s->bindings[s->idx[h] - 1]->name == name) { s->idx[h] = i + 1; return; }
+        if (s->bindings[s->idx[h] - 1]->name == name) {
+            s->prev[i] = s->idx[h];
+            s->idx[h] = i + 1;
+            return;
+        }
         h = (h + 1) & m;
     }
+    s->prev[i] = 0;
     s->idx[h] = i + 1;
     s->idx_n++;
 }
@@ -454,6 +462,9 @@ static void scope_idx_rebuild(Scope *s, uint32_t cap) {
     free(s->idx);
     s->idx = ni;
     s->idx_cap = cap;
+    uint32_t *np = (uint32_t *)realloc(s->prev, (s->cap ? s->cap : 1) * sizeof *np);
+    if (!np) { fprintf(stderr, "tur: oom\n"); abort(); }
+    s->prev = np;
     s->idx_n = 0;
     for (uint32_t i = 0; i < s->n; i++) scope_idx_put(s, i);   /* oldest first */
 }
@@ -463,6 +474,10 @@ void scope_add(Scope *s, Binding *b) {
         s->cap = s->cap ? s->cap * 2 : 4;
         s->bindings = (Binding **)realloc(s->bindings, s->cap * sizeof(Binding *));
         if (!s->bindings) { fprintf(stderr, "tur: oom\n"); abort(); }
+        if (s->prev) {
+            s->prev = (uint32_t *)realloc(s->prev, s->cap * sizeof *s->prev);
+            if (!s->prev) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
     }
     s->bindings[s->n++] = b;
     if (s->idx) {
@@ -471,6 +486,17 @@ void scope_add(Scope *s, Binding *b) {
     } else if (s->n >= SCOPE_INDEX_MIN) {
         scope_idx_rebuild(s, 128);
     }
+}
+
+/* `index + 1` of the newest binding of `name` in indexed scope `s`, 0 if it
+ * has none.  Older ones follow s->prev. */
+uint32_t scope_idx_newest(const Scope *s, const Symbol *name) {
+    uint32_t m = s->idx_cap - 1, h = scope_idx_hash(name) & m;
+    while (s->idx[h]) {
+        if (s->bindings[s->idx[h] - 1]->name == name) return s->idx[h];
+        h = (h + 1) & m;
+    }
+    return 0;
 }
 
 Binding *scope_lookup(Scope *s, const Symbol *name) {

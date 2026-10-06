@@ -1308,8 +1308,11 @@ done
 # first failed `tur build timed out (>10s)` -- a different one whenever adding
 # fixtures reshuffled shard membership (r7rs-keyword-seed on Windows 2/3).
 # Pay it once here, untimed, with the compiler and environment the fixtures
-# build with; the library unit is program-independent, so every r7rs fixture
-# then hits the cache.
+# build with.  The library unit is NOT program-independent yet
+# (docs/reported/r7rs-prelude-library-object-varies-with-the-program.md): a
+# program that passes a procedure as a value gets a different object than
+# `(display 1)` does, and that is the object most r7rs fixtures link -- so the
+# warm-up passes a lambda to `map`, which lands on it.
 _r7rs_warm=0
 for d in "${HAPPY_DIRS[@]}"; do
     _in="$d/input.tur"
@@ -1320,7 +1323,8 @@ for d in "${HAPPY_DIRS[@]}"; do
     case "$_first" in "#lang r7rs"*) _r7rs_warm=1; break ;; esac
 done
 if [ "$_r7rs_warm" = 1 ]; then
-    printf '#lang r7rs\n(display 1)\n' > "$RESULTS_DIR/r7rs-warm.tur"
+    printf '#lang r7rs\n(import (scheme base) (scheme write))\n(display (map (lambda (x) (+ x 1)) (list 1 2)))\n(newline)\n' \
+        > "$RESULTS_DIR/r7rs-warm.tur"
     CC="$BUILD_CC" "$TUR" build "$RESULTS_DIR/r7rs-warm.tur" \
         -o "$RESULTS_DIR/r7rs-warm.exe" > /dev/null 2>&1 || true
     rm -f "$RESULTS_DIR/r7rs-warm.exe" "$RESULTS_DIR/r7rs-warm.tur"

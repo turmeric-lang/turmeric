@@ -540,6 +540,13 @@ observed:
   `--interpret` fixture times out, check its peak RSS
   (`/proc/<pid>/status` `VmHWM`) before reaching for a bigger timeout. See
   [docs/archive/ci-cps-tramp-turi-timeouts-under-load.md](docs/archive/ci-cps-tramp-turi-timeouts-under-load.md).
+  **Since 2026-10-05** an activation's call frame, its let / match-arm frames
+  and their bindings are handed back when nothing captured them
+  ([turi-call-frames-never-reclaimed](docs/archive/turi-call-frames-never-reclaimed.md)),
+  so ordinary loops no longer grow per step. A closure capture keeps its
+  frames, a re-entrant `call/cc` turns reclamation off for the rest of the
+  run, and by-value struct argument copies are still kept. On the Debug `tur`,
+  ASan's free quarantine (256 MB by default) adds to every peak.
 
 The rule of thumb: **before diagnosing a test failure, check whether anything
 else was building or testing at the same time.** If it was, re-run alone before
