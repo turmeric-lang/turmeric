@@ -1815,6 +1815,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
       <div class="module-heading">
         <h1 style="font-family:system-ui;color:var(--gold)">Guides</h1>
         <div class="module-path guide-count">There are currently {len(all_stems)} tutorials, how-tos, and in-depth feature guides for Turmeric.</div>
+        <p class="module-path">Visit the <a href="https://spices.turmeric-lang.com/">Spices</a> page for spice-specific guides.</p>
       </div>
 {recent_html}
       <div class="index-grid">
