@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.3` -- The spices site now shows Spices and Guides as separate tabs with Spices first, and spices plans and reports are consolidated into the main docs.
+**Latest release:** `v0.63.4` -- Docs now include a plan for upcoming notebook documentation and examples.
 
 ## What
 
