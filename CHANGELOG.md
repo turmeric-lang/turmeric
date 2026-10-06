@@ -2,6 +2,13 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.4] -- 2026-10-06
+
+### Docs
+
+- **New documentation plan for notebooks and examples.** The docs now include a
+  plan covering upcoming notebook documentation and example content.
+
 ## [0.63.3] -- 2026-10-06
 
 ### Docs
