@@ -195,9 +195,7 @@ changed. No commit is made yet.
 git add VERSION stdlib/VERSION src/web/wasm_glue.h web/public/sw.js CHANGELOG.md README.md
 git commit -m "chore: release v<NEW>
 
-<one-paragraph summary>
-
-Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+<one-paragraph summary>"
 ```
 
 Then create an **annotated** tag (not signed):
