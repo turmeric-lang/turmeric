@@ -2,6 +2,14 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.5] -- 2026-10-06
+
+### Changed
+
+- **The spices doc site now deploys automatically on every release.** New spice
+  guides and per-spice pages at spices.turmeric-lang.com go live as soon as a
+  release is cut, instead of waiting on a manual deploy.
+
 ## [0.63.4] -- 2026-10-06
 
 ### Docs
