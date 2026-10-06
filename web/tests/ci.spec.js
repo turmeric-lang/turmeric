@@ -272,7 +272,12 @@ test.describe('CI metrics dashboard', () => {
     await expect(page).toHaveURL(/range=1d/);
     // A narrower window is still a window: the chart redraws rather than
     // emptying, because the cutoff is relative to the newest run, not to now.
-    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeVisible();
+    // Live data can leave a single run in a 1-day window, and a one-point
+    // series is a zero-length `M x,y` path that Playwright reports as hidden.
+    // So assert on what is always drawn -- the series path in the DOM and at
+    // least one run marker -- rather than on the line's own visibility.
+    await expect(page.locator('#ci-chart .ci-series-line').first()).toBeAttached();
+    await expect(page.locator('#ci-chart .ci-point, #ci-chart .ci-point-fail').first()).toBeVisible();
 
     await page.locator('#ci-range').selectOption('all');
     await expect(page).toHaveURL(/range=all/);
