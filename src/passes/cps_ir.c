@@ -1972,6 +1972,16 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * threads the DK via the registry -- never whole-body-delegate to fiber. */
             if (fn && cps_ir_thread_param_has(fn))
                 return false;
+            /* Nor a call through a fat poly-fn PARAM that the `fn_cps` dispatch
+             * covers: it picks the callee's DK-threading entry when the value
+             * has one and the direct entry otherwise, so it is right for every
+             * value the param can hold.  Delegated, the call is always the
+             * direct `f.fn` -- and the param is a thread param only when every
+             * value passed to it is registered, so ONE pure fn-value passed in
+             * another call sent an effectful lambda's `perform` off the
+             * trampoline: "unhandled effect" from a program that compiled. */
+            if (fn && fncps_param_call_ok(fn, e))
+                return false;
             /* An indirect callee with no binding -- e.g. a capability CALL
              * `(.print-line cap "..")` whose callee is a `.field` access yielding
              * an effect-annotated fn.  This was delegatable inside a DELEGATED
@@ -5169,4 +5179,19 @@ void cps_ir_dump_program(Arena *a, Expr *program, FILE *out) {
         cps_ir_print(t, out, 1);
         fputs("cps-end\n", out);
     }
+}
+
+/* Public: does this call through the fn-value PARAM `p` thread the caller's DK
+ * continuation into the callee, so an effectful value's `perform` reaches the
+ * caller's handler?  Mirrors the EX_CALL lowering above: an effectful-row call
+ * threads via the registry when `p` is a thread param (otherwise it is
+ * unsupported, and the E2 taint routes it); an empty-row call threads only
+ * through the fat value's `fn_cps` slot.  Any other call through `p` is a plain
+ * direct call, which an effectful value escapes from. */
+bool cps_ir_param_call_threads(const Binding *p, const Expr *call) {
+    if (!p || !call || call->kind != EX_CALL || call->as.call_.fn_binding != p)
+        return false;
+    if (call_is_effectful_fnvalue(call))
+        return cps_ir_thread_param_has(p) && call_args_pendable(call);
+    return fncps_param_call_ok(p, call);
 }

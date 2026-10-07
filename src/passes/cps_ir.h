@@ -373,5 +373,6 @@ void cps_ir_thread_param_reset(void);
 void cps_ir_callee_cache_reset(void);
 void cps_ir_thread_param_add(const Binding *param);
 bool cps_ir_thread_param_has(const Binding *param);
+bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
 
 #endif

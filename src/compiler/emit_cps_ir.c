@@ -4837,6 +4837,88 @@ static bool threadable_has(const Binding *b) {
     for (int i = 0; i < g_threadable_fn_n; i++) if (g_threadable_fn[i] == b) return true;
     return false;
 }
+static void threadable_remove(const Binding *b) {
+    for (int i = 0; i < g_threadable_fn_n; i++)
+        if (g_threadable_fn[i] == b) {
+            g_threadable_fn[i] = g_threadable_fn[--g_threadable_fn_n];
+            return;
+        }
+}
+
+/* The fn-value binding an argument expression passes, if it is one: a named
+ * fn or lifted lambda (EX_VAR), a lambda or closure literal (its FnDef), or a
+ * let / hoist temp of a capturing closure.  Mirrors param_is_thread_safe. */
+static const Binding *arg_fnval_binding(const Expr *arg) {
+    const Expr *a = peel_fn_value(arg);
+    if (!a) return NULL;
+    if (a->kind == EX_CLOSURE)
+        return (a->as.closure_.closure && a->as.closure_.closure->fn)
+             ? a->as.closure_.closure->fn->binding : NULL;
+    if (a->kind == EX_FN)
+        return a->as.fn_.fn ? a->as.fn_.fn->binding : NULL;
+    if (a->kind != EX_VAR || !a->as.var.binding) return NULL;
+    const Binding *b = a->as.var.binding;
+    if (threadable_has(b)) return b;
+    if (threadable_has(b->closure_fn_binding)) return b->closure_fn_binding;
+    if (threadable_has(b->hoist_closure_fn_binding)) return b->hoist_closure_fn_binding;
+    return b;
+}
+
+typedef struct { const Expr *program; bool withdrew; } UnthreadedUd;
+
+/* Does every call through param `p` in `fd`'s body thread the caller's
+ * continuation (cps_ir_param_call_threads)?  Read after thread params are
+ * registered, since registry threading depends on it. */
+typedef struct { const Binding *p; bool all; } ParamCallsUd;
+static bool param_calls_visit(const Expr *e, void *ud);
+static void param_calls_walk(const Expr *e, ParamCallsUd *u) {
+    if (!e || !u->all) return;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding == u->p
+        && !cps_ir_param_call_threads(u->p, e))
+        u->all = false;
+    cps_visit_children(e, param_calls_visit, u);
+}
+static bool param_calls_visit(const Expr *e, void *ud) {
+    param_calls_walk(e, (ParamCallsUd *)ud);
+    return false;
+}
+static bool param_calls_all_thread(const FnDef *fd, const Binding *p) {
+    if (!p || !fd || !fd->body) return false;
+    ParamCallsUd u = { p, true };
+    param_calls_walk(fd->body, &u);
+    return u.all;
+}
+
+static bool fnval_withdraw_visit(const Expr *e, void *ud);
+
+/* Withdraw every EFFECTFUL threadable fn-value that `e` passes to a parameter
+ * some call through which does not thread (see the caller in ensure_S). */
+static void fnval_withdraw_walk(const Expr *e, UnthreadedUd *u) {
+    if (!e) return;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
+        const FnDef *cfd = fd_for_binding(u->program, e->as.call_.fn_binding);
+        for (uint32_t k = 0; cfd && cfd->params && k < e->as.call_.n_args
+                                 && k < cfd->n_params; k++) {
+            const Binding *fb = arg_fnval_binding(e->as.call_.args[k]);
+            if (!fb || !threadable_has(fb)) continue;
+            if (param_calls_all_thread(cfd, cfd->params[k])) continue;
+            /* Only an effect that ESCAPES the fn-value needs the caller's
+             * handler; one it handles itself (`(fn [] (with-handler ...))`)
+             * runs the same off the trampoline -- the B5 rule below. */
+            const FnDef *vfd = fd_for_binding(u->program, fb);
+            uint64_t lo = 0, hi = 0;
+            if (vfd && vfd->body) fn_net_escaping_acc(vfd->body, &lo, &hi);
+            if (!(lo || hi)) continue;
+            threadable_remove(fb);
+            u->withdrew = true;
+        }
+    }
+    cps_visit_children(e, fnval_withdraw_visit, u);
+}
+static bool fnval_withdraw_visit(const Expr *e, void *ud) {
+    fnval_withdraw_walk(e, (UnthreadedUd *)ud);
+    return false;
+}
 
 /* E2c: which target fn-values are stored as a value in a `make-struct` field
  * in `e`?  An effectful fn-value stored in a struct field is called via
@@ -5328,17 +5410,43 @@ static void ensure_S(const Expr *program) {
     }
     fv_multi_free(&fvm);
     free(tg_fd); free((void *)tg_b); free(tg_eff);
-    /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
-    for (uint32_t i = 0; i < np; i++) {
-        Expr *it = (Expr *)items[i];
-        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
-        FnDef *fd = it->as.fn_def_.fn;
-        for (uint32_t pi = 0; pi < fd->n_params; pi++) {
-            PtClass pc = param_thread_class(fd, pi);
-            if ((pc == PT_NOW || pc == PT_NONTAIL)
-                && param_is_thread_safe(program, fd, pi))
-                cps_ir_thread_param_add(fd->params[pi]);
+    /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe).
+     *
+     * An effectful fn-value counted threadable above is threadable because
+     * every use is an argument at a threadable PARAMETER position -- a class
+     * that reads only how the callee uses the parameter, not how each call
+     * through it is lowered.  An empty-row call threads only through a fat
+     * value's single-argument `fn_cps` slot, and an effectful-row call only via
+     * the registry, which needs the parameter registered -- that is, EVERY
+     * value passed to it registered (param_is_thread_safe), which a pure lambda
+     * or named fn passed in another call is not.  Any other call through the
+     * parameter is a plain direct call, and the effectful fn-value -- neither
+     * threaded nor fiber-tainted -- performed from a fresh root: "unhandled
+     * effect" at run time, from a program that compiled.  Withdraw such a
+     * fn-value (cps_ir_param_call_threads says which calls thread), which
+     * sends it down the E2 taint below like any other unthreadable one, and
+     * re-register: a withdrawal can unthread a parameter another relied on. */
+    for (int round = 0; round < 16; round++) {
+        cps_ir_thread_param_reset();
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = (Expr *)items[i];
+            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+            FnDef *fd = it->as.fn_def_.fn;
+            for (uint32_t pi = 0; pi < fd->n_params; pi++) {
+                PtClass pc = param_thread_class(fd, pi);
+                if ((pc == PT_NOW || pc == PT_NONTAIL)
+                    && param_is_thread_safe(program, fd, pi))
+                    cps_ir_thread_param_add(fd->params[pi]);
+            }
         }
+        UnthreadedUd wu = { program, false };
+        for (uint32_t i = 0; i < np; i++) {
+            const Expr *it = items[i];
+            if (!it) continue;
+            fnval_withdraw_walk((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                                ? it->as.fn_def_.fn->body : it, &wu);
+        }
+        if (!wu.withdrew) break;
     }
 
     /* base_taint: effects performed/handled by any top-level code that is NEVER

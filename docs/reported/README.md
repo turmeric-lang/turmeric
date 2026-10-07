@@ -2725,6 +2725,15 @@ not resolved by the elaborator at the top level (outside any `defmodule`).
 | --- | --- | --- |
 | ~~[qualified-module-calls-unresolved-at-toplevel](../archive/qualified-module-calls-unresolved-at-toplevel.md)~~ | medium | **RESOLVED 2026-10-07** (archived): a top-level `(Foo/bar)` resolves against the module's members (longest module prefix first); a private member is a `not exported` error instead of a runtime dispatch that found it. Pinned by fixtures `module-qualified-call-at-toplevel` and `errors/module-qualified-private-at-toplevel` |
 
+## Found executing the open reports, CPS coloring (filed 2026-10-07)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[cps-coloring-resolves-a-parameter-to-a-same-named-global](../archive/cps-coloring-resolves-a-parameter-to-a-same-named-global.md)~~ | medium | **RESOLVED 2026-10-07** (archived, filed the same day): `cps_find_node`'s C-symbol fallback matched a parameter or local by its bare name, so `(f x)` through a parameter `f` was an edge to a global `f`. A pure global left the caller uncolored (an effectful lambda passed to it was refused), and it was most of why the r7rs library object varied: stdlib `__cons-fmap`'s callback is `f`. 117 fixtures hit it, 40 changed codegen |
+| ~~[cps-effectful-fnval-escapes-through-unthreaded-param](../archive/cps-effectful-fnval-escapes-through-unthreaded-param.md)~~ | high | **RESOLVED 2026-10-07** (archived, filed the same day): a fn-value parameter given an effectful lambda in one call and a pure fn in another was never threaded, so the program compiled and aborted with `unhandled effect`. The `fn_cps` dispatch is no longer delegated, and an effectful value passed to a parameter some call through which does not thread is withdrawn to the E2 taint (a compile-time refusal, never a run-time abort) |
+| [cps-effectful-callback-through-multi-arg-or-untyped-param](cps-effectful-callback-through-multi-arg-or-untyped-param.md) | medium | An effectful lambda through an un-annotated `(fn [int int] int)` or untyped `^fat` parameter is refused ("no lowering here"); it used to compile and abort at run time. The `fn_cps` slot's ABI is one int-class argument, and the registry path needs a declared row. Annotating the row works around it |
+| [cps-let-alias-of-effectful-fn-param-refused](cps-let-alias-of-effectful-fn-param-refused.md) | low | `(let [f g] (f x))` with `g` an fn-value parameter given an effectful lambda is refused; `(g x)` works. Binding the parameter is a value use, so `param_thread_class` is `PT_NONE` and the lambda taints to the fiber |
+
 ## Filing conventions
 
 - One defect per file. If you find yourself writing a second report against a
