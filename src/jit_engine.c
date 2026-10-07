@@ -1093,20 +1093,41 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
    * only as deep as the program recurses.  64 MiB ran SICP 1.2.1's
    * million-deep linear recursion off the end; MIR frames are larger than
    * gcc's and it does no sibling-call optimization. */
+  /* r7rs-deep-stack-size-not-configurable: TUR_MAIN_STACK_MB is the one
+   * name for main's stack on both engines (the cc path reads it in
+   * tur_deep_size, emit_module.c); TUR_JIT_STACK_MB, the older JIT-only
+   * name, still works and wins when both are set. */
   size_t stack_mb = sizeof (void *) >= 8 ? 1024 : 64;
-  const char *senv = getenv ("TUR_JIT_STACK_MB");
-  if (senv && atoi (senv) > 0) stack_mb = (size_t) atoi (senv);
+  const char *senv_name = NULL;
+  static const char *const stack_vars[] = { "TUR_JIT_STACK_MB", "TUR_MAIN_STACK_MB" };
+  for (size_t vi = 0; vi < sizeof stack_vars / sizeof stack_vars[0] && !senv_name; vi++) {
+    const char *senv = getenv (stack_vars[vi]);
+    if (!senv || !*senv) continue;
+    char *end = NULL;
+    unsigned long long mb = strtoull (senv, &end, 10);
+    if (end && *end == '\0' && mb > 0 && mb <= (unsigned long long) (SIZE_MAX >> 20)) {
+      stack_mb = (size_t) mb;
+      senv_name = stack_vars[vi];
+    } else {
+      fprintf (stderr, "tur: jit: ignoring %s=%s (want a positive number of MiB)\n",
+               stack_vars[vi], senv);
+    }
+  }
+  bool stack_asked = senv_name != NULL;
   pthread_attr_t attr;
   pthread_t entry_thread;
   pthread_attr_init (&attr);
-  pthread_attr_setstacksize (&attr, stack_mb * 1024 * 1024);
+  pthread_attr_setstacksize (&attr, stack_mb << 20);
   if (pthread_create (&entry_thread, &attr, jit_run_entry, &box) != 0) {
     pthread_attr_destroy (&attr);
     jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
-    fprintf (stderr, "tur: jit: entry thread create failed\n");
+    if (stack_asked)
+      fprintf (stderr, "tur: jit: cannot make a %zu MiB entry stack (%s)\n", stack_mb, senv_name);
+    else
+      fprintf (stderr, "tur: jit: entry thread create failed\n");
     return TUR_JIT_ERR_RUN;
   }
   double t_run = jit_now_ms ();

@@ -628,6 +628,17 @@ What it does not cover:
   trail`), are not scanned: a Scheme value stored only in a `bt` cell
   through the seam is not seen.
 
+**Recursion depth.** A compiled program's `main` runs on a thread with a
+1 GiB stack (64 MiB on a 32-bit host), so a recursive process can go tens of
+millions of calls deep; past that it stops with `stack overflow: recursion
+too deep`. The stack is address space, committed only as deep as the
+recursion goes, but a runaway recursion touches all of it before the message
+prints. `TUR_MAIN_STACK_MB=N` sets the size in MiB: more for a program that
+needs it, less on a small machine where a missing base case should stop
+sooner. A size that cannot be reserved is reported, and `main` then runs on
+the process's own stack. `tur jit` reads the same variable.
+`TUR_NO_DEEP_STACK=1` keeps `main` on the process's own stack.
+
 ## Where it differs from R7RS
 
 - **String literals are immutable.** R7RS allows this. See Lists,

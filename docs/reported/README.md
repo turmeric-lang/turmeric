@@ -73,7 +73,7 @@ bounded by memory rather than by the C stack, is on hold in
 | Report | Severity | One line |
 | --- | --- | --- |
 | [jit-stack-overflow-has-no-message](jit-stack-overflow-has-no-message.md) | low-medium (diagnostics) | Under `tur jit` a runaway recursion kills `tur` with a bare SIGBUS (exit 138 on macOS) and nothing on stderr, in every dialect, not only r7rs: nothing installs a fault handler on the thread the engine runs `main` on |
-| [r7rs-deep-stack-size-not-configurable](r7rs-deep-stack-size-not-configurable.md) | low | Depends on #1082: the deep stack is a fixed 1 GiB with only an on/off switch, so a runaway recursion commits up to 1 GiB of memory before its message and a program that needs more cannot ask; the JIT has `TUR_JIT_STACK_MB`, the cc path nothing |
+| ~~[r7rs-deep-stack-size-not-configurable](../archive/r7rs-deep-stack-size-not-configurable.md)~~ | low | **RESOLVED 2026-10-07** (archived): `TUR_MAIN_STACK_MB=N` sizes a compiled r7rs `main`'s stack and the JIT's entry stack (`TUR_JIT_STACK_MB` kept as an alias); a bad or unreservable size is reported. Pinned by ctest `tur_r7rs_main_stack_size`, which also pins the overflow message at 16 MiB |
 | [no-public-dynamic-call-for-any-values](no-public-dynamic-call-for-any-values.md) | low-medium (expressiveness) | Turmeric code holding a Scheme procedure as `any` can call it only through the prelude's internal `r7rs-apply`; proposes a documented `stdlib/dyn.tur` (`dyn-call`, `dyn-apply`) instead of making `(f x)` on `any` compile everywhere |
 
 ## Found fixing #1075's CI (filed 2026-10-04)

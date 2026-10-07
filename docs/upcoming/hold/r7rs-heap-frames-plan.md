@@ -134,7 +134,8 @@ graduates (CLAUDE.md, "Experimental Compiler Features").
   (`pthread_get_stackaddr_np` bounds become per-segment bounds) and Windows
   (fibers, or the existing ucontext shim).
 - **H5, the cap and the message.** A configurable total (shared with the
-  size setting from `docs/reported/r7rs-deep-stack-size-not-configurable.md`),
+  size setting, `TUR_MAIN_STACK_MB` --
+  `docs/archive/r7rs-deep-stack-size-not-configurable.md`),
   and the overflow message when the cap is reached, instead of the guard-page
   handler.
 - **H6, the JIT.** The entry check is emitted C, so it compiles under c2mir.

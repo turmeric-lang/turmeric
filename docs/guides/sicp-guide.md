@@ -247,7 +247,10 @@ it is worth reporting.
   is printed, then the objects, and the program stops.
 - **`stack overflow: recursion too deep`** under `tur run`: a recursive
   process went tens of millions of calls deep (see Chapter 1). Make it
-  iterative, as 1.2.1 shows.
+  iterative, as 1.2.1 shows. If it really needs to be that deep,
+  `TUR_MAIN_STACK_MB=4096 tur run file.scm` gives it a 4 GiB stack instead of
+  1 GiB; a smaller number makes a missing base case stop sooner and use
+  less memory on the way.
 - **Turmeric's own syntax in examples elsewhere** (square brackets in
   `defn`, `:int` types) is the main Turmeric language, not Scheme. In a
   `.scm` file you are always writing plain Scheme.
