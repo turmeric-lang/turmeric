@@ -311,6 +311,10 @@ typedef struct TuriEnv {
      * value_scratch, so both lists are emptied whenever it is reset. */
     void       *frame_free;
     void       *binding_free;
+    /* turi-call-pins-and-side-frames-not-reclaimed: the same for a released
+     * frame's tyvar and dictionary pins (eval.c's TyvarBind / DictBind). */
+    void       *tyvar_free;
+    void       *dict_free;
     /* turi-value-pool-scratch-promotion-plan: opt-in bound on steady-state memory
      * for a single long-lived env (notebook-kernel pattern). When true, turi_eval
      * promotes every escaping value into value_perm and rewinds value_scratch at

@@ -24,6 +24,11 @@ within 16 MB of the idle program's.  ASan's free quarantine is turned off for
 this run, so a Debug tur measures live memory rather than recently freed
 memory (78 MB of growth before the fix, none after).
 
+A third pins turi-call-pins-and-side-frames-not-reclaimed: a generic function
+called 300,000 times.  Each call pins its type variables on its frame
+(TyvarBind), and those nodes used to stay behind when the frame was handed
+back -- 51 MB of growth on a Debug tur, none now.  Same 16 MB bound.
+
 usage: python3 tests/check-turi-frame-reclaim.py [TUR]   (default ./build/tur)
 """
 import os
@@ -55,6 +60,14 @@ ARGS_PROGRAM = """#lang r7rs
 """
 ARGS_EXPECTED = "(sym ())\n"
 ARGS_GROWTH_MB = 16
+
+PINS_PROGRAM = """(defn idt [A] [x : A] : A x)
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (idt 1)))))
+(defn main [] : int (println (lp 300000 0)) 0)
+"""
+PINS_EXPECTED = "300000\n"
+PINS_IDLE = "(defn main [] : int (println 1) 0)\n"
 
 
 def run(src, reclaim, asan="detect_leaks=0"):
@@ -89,6 +102,14 @@ def main():
         noq = "detect_leaks=0:quarantine_size_mb=0"
         out_args, st_args, rss_args = run(args, True, noq)
         _, _, rss_idle_noq = run(idle, True, noq)
+        pins = os.path.join(d, "pins.tur")
+        with open(pins, "w") as f:
+            f.write(PINS_PROGRAM)
+        pins_idle = os.path.join(d, "pins_idle.tur")
+        with open(pins_idle, "w") as f:
+            f.write(PINS_IDLE)
+        out_pins, st_pins, rss_pins = run(pins, True, noq)
+        _, _, rss_pins_idle = run(pins_idle, True, noq)
     ok = True
     for label, out, st in (("reclaim on", out_on, st_on),
                            ("reclaim off", out_off, st_off)):
@@ -116,6 +137,18 @@ def main():
         ok = False
     else:
         print("PASS check-turi-frame-reclaim: %s" % amsg)
+    grow_pins = rss_pins - rss_pins_idle
+    pmsg = ("generic calls: peak RSS %.0f MB, %.0f MB idle, growth %.0f MB (bound %d)"
+            % (rss_pins, rss_pins_idle, grow_pins, ARGS_GROWTH_MB))
+    if st_pins != 0 or out_pins != PINS_EXPECTED:
+        print("FAIL check-turi-frame-reclaim: generic-call program printed %r (status %d), want %r"
+              % (out_pins, st_pins, PINS_EXPECTED))
+        ok = False
+    elif grow_pins > ARGS_GROWTH_MB:
+        print("FAIL check-turi-frame-reclaim: %s -- tyvar/dict pins are not handed back" % pmsg)
+        ok = False
+    else:
+        print("PASS check-turi-frame-reclaim: %s" % pmsg)
     return 0 if ok else 1
 
 

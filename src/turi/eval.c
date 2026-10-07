@@ -1227,6 +1227,28 @@ static bool frame_lookup_tyvar(EvalFrame *f, const char *name, Type *out) {
     return false;
 }
 
+/* turi-call-pins-and-side-frames-not-reclaimed: a frame's tyvar and dictionary
+ * pins come from free lists frame_release_one fills, so a generic or
+ * constrained call in a loop no longer leaves its pins in value_scratch.  Each
+ * pin site prepends a FRESH node to its own frame's chain -- frame_record_abi
+ * copies a caller's pin by value, never shares the node -- and lookups copy
+ * the Type out, so a released frame's nodes are referenced by nothing. */
+static TyvarBind *tyvar_bind_alloc(TuriEnv *env) {
+    TyvarBind *tb = (TyvarBind *)env->tyvar_free;
+    if (!tb) return (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+    env->tyvar_free = tb->next;
+    memset(tb, 0, sizeof *tb);
+    return tb;
+}
+
+static DictBind *dict_bind_alloc(TuriEnv *env) {
+    DictBind *db = (DictBind *)env->dict_free;
+    if (!db) return (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+    env->dict_free = db->next;
+    memset(db, 0, sizeof *db);
+    return db;
+}
+
 static void eval_frame_free(EvalFrame *f) {
     /* Frames are intentionally not freed: closures may capture frame pointers
      * and outlive the scope that created them.  Worker processes are short-lived
@@ -6756,7 +6778,7 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
             if (frame_lookup_tyvar(caller, t.as.tyvar_.name, &r)) t = r;
         }
         if (t.kind == TY_TYVAR) continue;  /* still abstract: nothing to pin */
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = ab->name;
         tb->type = t;
         tb->next = callee->tyvars;
@@ -6815,12 +6837,12 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
                 if (hits != 1) continue;
             }
             if (!inst || inst->n_type_args == 0) continue;
-            TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+            TyvarBind *tb = tyvar_bind_alloc(env);
             tb->name = tv->name;
             tb->type = inst->type_args[0];
             tb->next = callee->tyvars;
             callee->tyvars = tb;
-            DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+            DictBind *db = dict_bind_alloc(env);
             db->tc = tc;
             db->inst = inst;
             db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
@@ -6871,7 +6893,7 @@ static void frame_pin_hkt_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
         if (af->kind == TY_TYVAR) continue;   /* argument still abstract */
         Type existing;
         if (frame_lookup_tyvar(callee, pf->as.tyvar_.name, &existing)) continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = pf->as.tyvar_.name;
         tb->type = *af;
         tb->next = callee->tyvars;
@@ -6940,7 +6962,7 @@ static void frame_pin_bare_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
         if (frame_lookup_tyvar(callee, pt->as.tyvar_.name, &existing) &&
             existing.kind != TY_TYVAR)
             continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = pt->as.tyvar_.name;
         tb->type = at;
         tb->next = callee->tyvars;
@@ -6980,7 +7002,7 @@ static void frame_bind_instance_constraint_tyvars(TuriEnv *env, EvalFrame *calle
         if (frame_lookup_tyvar(callee, tc->tyvar->name, &existing) &&
             existing.kind != TY_TYVAR)
             continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = tc->tyvar->name;
         tb->type = bound;
         tb->next = callee->tyvars;
@@ -7079,7 +7101,7 @@ static void frame_bind_one_dict(TuriEnv *env, TypeClassEnv *tc_env,
         }
     }
     if (!inst) return;
-    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+    DictBind *db = dict_bind_alloc(env);
     db->tc    = cls;
     db->inst  = inst;
     db->tyvar = tvname;
@@ -7321,7 +7343,7 @@ static bool g_turi_cont_pinned = false;
  * escaped (frame_escape), it is not a call frame, a re-entrant continuation
  * exists (its stack image may complete this call again, the same reason
  * TURI_DRIVE_FREE stops freeing), or a debugger holds activation frames.
- * The frame's tyvar/dict pins stay in the pool, as everything did before. */
+ * Its tyvar/dict pins go back too (tyvar_bind_alloc / dict_bind_alloc). */
 static void frame_release_one(TuriEnv *env, EvalFrame *f) {
     EvalBinding *b = f->bindings;
     while (b) {
@@ -7333,6 +7355,20 @@ static void frame_release_one(TuriEnv *env, EvalFrame *f) {
         b = next;
     }
     f->bindings   = NULL;
+    TyvarBind *tb = f->tyvars;
+    while (tb) {
+        TyvarBind *next = tb->next;
+        tb->next = (TyvarBind *)env->tyvar_free;
+        env->tyvar_free = tb;
+        tb = next;
+    }
+    DictBind *db = f->dicts;
+    while (db) {
+        DictBind *next = db->next;
+        db->next = (DictBind *)env->dict_free;
+        env->dict_free = db;
+        db = next;
+    }
     f->tyvars     = NULL;
     f->dicts      = NULL;
     f->owned      = NULL;
@@ -10253,8 +10289,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriValue dv = eval_lookup(env, call_frame,
                                                    dp->name->name);
                         if (dv.tag != TURI_INT || dv.as_int == 0) continue;
-                        DictBind *db = (DictBind *)turi_val_alloc(
-                            env, sizeof(DictBind));
+                        DictBind *db = dict_bind_alloc(env);
                         db->tc    = fn->dict_clone_classes[dk2];
                         db->inst  = (struct TypeClassInstance *)(intptr_t)
                                         dv.as_int;
@@ -11645,13 +11680,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 }
                 if (!have) continue;
                 if (!tf) tf = eval_frame_new(env, NULL);
-                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                TyvarBind *tb = tyvar_bind_alloc(env);
                 tb->name = tv->name;
                 tb->type = bound;
                 tb->next = tf->tyvars;
                 tf->tyvars = tb;
                 if (inst) {
-                    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+                    DictBind *db = dict_bind_alloc(env);
                     db->tc = tc;
                     db->inst = inst;
                     db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
@@ -12874,7 +12909,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_EXISTS_OPEN: {
         TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
         if (turi_is_error(packed) || env_signaled(env)) return packed;
-        EvalFrame *ef = eval_frame_new(env, frame);
+        /* turi-call-pins-and-side-frames-not-reclaimed: the body runs here
+         * and now, so the frame lives no longer than the enclosing activation
+         * -- owned by it, released with it unless something captured it. */
+        EvalFrame *ef = eval_frame_new_owned(env, frame);
         if (e->as.exists_open_.var_binding)
             frame_bind(env, ef, e->as.exists_open_.var_binding->name->name, packed);
         TuriValue r = eval_expr(env, ef, e->as.exists_open_.body);
@@ -13190,7 +13228,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 else if (c->type_arg.kind == TY_TYVAR && c->type_arg.as.tyvar_.name)
                     tv = c->type_arg.as.tyvar_.name;
                 if (!tv) continue;
-                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                TyvarBind *tb = tyvar_bind_alloc(env);
                 tb->name = tv;
                 tb->type = any_t;
                 tb->next = pf->tyvars;
@@ -14894,6 +14932,8 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     arena_reset(&env->value_scratch);
     env->frame_free   = NULL;   /* their nodes were in scratch */
     env->binding_free = NULL;
+    env->tyvar_free   = NULL;
+    env->dict_free    = NULL;
     env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
 
     /* TR3: with the live graph now provably rooted at result+globals, sweep
