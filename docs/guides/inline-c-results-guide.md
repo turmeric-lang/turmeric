@@ -219,6 +219,32 @@ these helpers: the payload has to fit the single `int64_t` carrier slot.
 Wrap the value behind an opaque pointer handle (the rtmidi pattern above)
 or construct the `Result` in Turmeric instead.
 
+## Nesting the builders: `(Result (Option T) E)` and friends
+
+The builders compose. A body declared to return a sum whose payload is itself
+a sum builds the inner value first and hands its box to the outer builder:
+
+```turmeric
+(defn read-line-ish [n : int] : (Result (Option cstr) IoError)
+  ```c
+  if (n < 0) return tur_err_int(-n);
+  if (n == 0) return tur_ok_int(tur_none());       /* (Ok (None)) */
+  return tur_ok_int(tur_some_ptr((void *)"line")); /* (Ok (Some "line")) */
+  ```)
+```
+
+The same goes for `(Option (Result T E))`, `(Result (Result T E) E2)` and
+deeper nestings (`tur_ok_int(tur_some_int(tur_some_int(n)))`). The inner
+boxes belong to the outer one: the compiler converts the whole value when it
+reads it back and frees every box, so the same freshness rule applies to each
+level.
+
+Before 2026-10-07 this compiled and silently misbehaved -- the readback treated
+the builders' box as the monomorph's by-value layout, read the inner tag out
+of a pointer, and neither arm of a nested `match` fired
+([docs/archive/inline-c-builders-cannot-nest-option-in-result.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/inline-c-builders-cannot-nest-option-in-result.md)).
+`tests/fixtures/inline-c-result-nested-sum` pins it.
+
 ## A control form around an `if` over these builders
 
 The builders below return the int64 CARRIER, and the consumer bridges it to the

@@ -2710,7 +2710,7 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[ok-nil-unconstructible-in-turmeric](../archive/ok-nil-unconstructible-in-turmeric.md)~~ | low | **RESOLVED 2026-10-07** (archived): `(Ok nil)` (any constructor with a `nil` payload) passes the 0 word, keeping the argument's side effects, and a forward call to a `(Result nil E)` function no longer reads `nil` as an unknown name (TUR-E0012 at 0:0). Pinned by fixture `ok-nil-constructible` |
-| [inline-c-builders-cannot-nest-option-in-result](inline-c-builders-cannot-nest-option-in-result.md) | low-medium | `(Result (Option T) E)` stores the `Option` BY VALUE in the ok slot, so `tur_ok_int(tur_some_ptr(s))` from inline-C silently matches neither arm. `file-read-line` nests it in Turmeric instead |
+| ~~[inline-c-builders-cannot-nest-option-in-result](../archive/inline-c-builders-cannot-nest-option-in-result.md)~~ | low-medium | **RESOLVED 2026-10-07** (archived): composed builders (`tur_ok_int(tur_some_ptr(s))`) now read back correctly -- an inline-C box whose payload nests a sum is converted field by field and its inner boxes freed, on the match/let and argument paths. Pinned by leak-checked fixture `inline-c-result-nested-sum` |
 
 ## Module system (filed 2026-10-05)
 

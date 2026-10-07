@@ -5799,6 +5799,136 @@ static bool carrier_is_inline(TypeKind k) {
     }
 }
 
+/* inline-c-builders-cannot-nest-option-in-result: is `src` the temp of a
+ * fresh inline-C sum box that RM1 frees after its consuming call (the
+ * sum_pending list)?  Such a box has the builders' layout. */
+static bool emit_src_is_pending_sum_box(const EmitCtx *ctx, const char *src) {
+    if (!src || !emit_str_is_bare_ident(src)) return false;
+    for (uint32_t pi = 0; pi < ctx->n_sum_pending; pi++)
+        if (ctx->sum_pending[pi] && strcmp(ctx->sum_pending[pi], src) == 0)
+            return true;
+    return false;
+}
+
+/* inline-c-builders-cannot-nest-option-in-result: read an inline-C body's
+ * OWNED carrier box back into a by-value sum monomorph whose payload is
+ * itself a sum -- `(Result (Option cstr) E)` built as
+ * `tur_ok_int(tur_some_ptr(s))`.  The builders make a 16-byte
+ * `{ tag; word }` box whose word is the INNER builder box, while the
+ * monomorph stores its Option payload BY VALUE (24 bytes), so the plain
+ * `*(T *)box` readback read the inner tag out of a pointer's low bytes:
+ * neither arm of a nested match fired, and nothing said so.
+ *
+ * Here the outer tag is copied, and each payload word whose field type is a
+ * non-heap sum goes through the carrier->concrete bridge as an owned box of
+ * its own (which recurses for deeper nesting, unwraps a niche Option, and
+ * frees the inner box); any other payload is the same bytes the plain
+ * readback copied.  Returns false -- emitting nothing -- when no field nests
+ * a sum, or a constructor has more than one field (no builder makes one), so
+ * every other shape keeps the plain deref.  A null carrier is the zeroed
+ * aggregate, which is None for an Option-shaped outer. */
+static bool emit_nested_sum_box_applies(EmitCtx *ctx, Type concrete_ty) {
+    Type rty = emit_resolve_type(ctx, concrete_ty);
+    AdtDef *adt = NULL;
+    Type args[16];
+    uint8_t nargs = 0;
+    if (!type_extract_adt_app(&rty, &adt, args, &nargs) || !adt ||
+        adt_uses_named_layout(adt) || adt->is_heap || adt->n_ctors < 2)
+        return false;
+    bool any_nested = false;
+    for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+        const CtorDef *c = adt->ctors[ci];
+        if (!c) return false;
+        if (c->n_fields > 1) return false;
+        if (c->n_fields == 0 || !c->fields[0].full_type) continue;
+        Type ft = substitute_adt_app_type_owned(c->fields[0].full_type, adt, args);
+        Type rft = emit_resolve_type(ctx, ft);
+        AdtDef *fd = NULL;
+        Type fargs[16];
+        uint8_t nf = 0;
+        if (type_extract_adt_app(&rft, &fd, fargs, &nf) && fd && !fd->is_heap &&
+            !fd->is_opaque && fd->n_ctors >= 2)
+            any_nested = true;
+        free_struct_app_type(ft);
+    }
+    return any_nested;
+}
+
+static bool emit_readback_nested_sum_box(EmitCtx *ctx, Buf *body,
+                                         const char *cname, Type concrete_ty,
+                                         const char *ctmp, const char *vtmp) {
+    if (!emit_nested_sum_box_applies(ctx, concrete_ty)) return false;
+    Type rty = emit_resolve_type(ctx, concrete_ty);
+    AdtDef *adt = NULL;
+    Type args[16];
+    uint8_t nargs = 0;
+    type_extract_adt_app(&rty, &adt, args, &nargs);
+
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", cname, vtmp);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "memset(&%s, 0, sizeof %s);\n", vtmp, vtmp);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s) {\n", ctmp);
+    ctx->indent += 4;
+    char *nb = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_result_box_t *%s = (tur_result_box_t *)(intptr_t)(%s);\n",
+               nb, ctmp);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.tag = %s->tag;\n", vtmp, nb);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "switch (%s->tag) {\n", nb);
+    for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+        const CtorDef *c = adt->ctors[ci];
+        if (c->n_fields == 0) continue;
+        char *path = adt_field_member_path(adt, c, 0);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "case %u: {\n", (unsigned)c->tag);
+        ctx->indent += 4;
+        Type ft = substitute_adt_app_type_owned(c->fields[0].full_type, adt, args);
+        Type rft = emit_resolve_type(ctx, ft);
+        AdtDef *fd = NULL;
+        Type fargs[16];
+        uint8_t nf = 0;
+        bool nested = type_extract_adt_app(&rft, &fd, fargs, &nf) && fd &&
+                      !fd->is_heap && !fd->is_opaque && fd->n_ctors >= 2;
+        if (nested) {
+            /* The word is the inner builder's box, owned with the outer. */
+            char *w = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = %s->as.ok_val;\n", w, nb);
+            emit_localvar_record_ctype(w, "int64_t");
+            emit_owned_carrier_mark(w);
+            char *iv = emit_carrier_bridge(ctx, body, strdup(w), CK_CARRIER,
+                                           CK_CONCRETE, rft);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s.%s = %s;\n", vtmp, path, iv);
+            emit_owned_carrier_clear(w);
+            free(iv);
+            free(w);
+        } else {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "memcpy(&%s.%s, &%s->as.ok_val, sizeof %s.%s);\n",
+                       vtmp, path, nb, vtmp, path);
+        }
+        free_struct_app_type(ft);
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "break;\n");
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        free(path);
+    }
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    free(nb);
+    ctx->indent -= 4;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    return true;
+}
+
 char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                           char *src_str,
                           CarrierKind src_ck, CarrierKind sink_ck,
@@ -6321,9 +6451,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                          * null carrier (SR3 slice A), so a None allocates
                          * nothing and must not be freed. */
                         char *vtmp = fresh_tmp(ctx);
+                        if (!emit_readback_nested_sum_box(ctx, body, cname,
+                                                          concrete_ty, ctmp, vtmp)) {
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s %s = (%s ? (*(%s *)(intptr_t)(%s)) : %s);\n",
                                    cname, vtmp, ctmp, cname, ctmp, z);
+                        }
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
                                    ctmp, ctmp);
@@ -6333,8 +6466,19 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                         emit_owned_carrier_clear(src_str);
                         free(vtmp);
                     } else {
-                        buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
-                                   ctmp, cname, ctmp, z);
+                        /* A fresh inline-C box headed into an argument (see
+                         * the generic deref below) whose payload nests a sum. */
+                        if (emit_src_is_pending_sum_box(ctx, src_str) &&
+                            emit_nested_sum_box_applies(ctx, concrete_ty)) {
+                            char *nv = fresh_tmp(ctx);
+                            emit_readback_nested_sum_box(ctx, body, cname,
+                                                         concrete_ty, ctmp, nv);
+                            buf_printf(&out, "%s", nv);
+                            free(nv);
+                        } else {
+                            buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
+                                       ctmp, cname, ctmp, z);
+                        }
                     }
                     free(z);
                     free(ctmp);
@@ -6352,9 +6496,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                     buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                                ctmp, src_str);
                     char *vtmp = fresh_tmp(ctx);
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "%s %s = (*(%s *)(intptr_t)(%s));\n",
-                               cname, vtmp, cname, ctmp);
+                    if (!emit_readback_nested_sum_box(ctx, body, cname,
+                                                      concrete_ty, ctmp, vtmp)) {
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (*(%s *)(intptr_t)(%s));\n",
+                                   cname, vtmp, cname, ctmp);
+                    }
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
                                ctmp, ctmp);
@@ -6377,12 +6524,34 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                     buf_printf(&out, "__tur_any_of_carrier((int64_t)(intptr_t)(%s))",
                                src_str);
                 } else {
+                    /* inline-c-builders-cannot-nest-option-in-result: a fresh
+                     * inline-C sum box headed straight into an argument (RM1
+                     * frees the CELL after the call, sum_pending) has the
+                     * builders' layout, not the monomorph's, when its payload
+                     * nests a sum.  Convert it field by field; the conversion
+                     * frees the inner boxes, the pending drain the cell. */
+                    char *nested_v = NULL;
+                    if (emit_src_is_pending_sum_box(ctx, src_str) &&
+                        emit_nested_sum_box_applies(ctx, concrete_ty)) {
+                        {
+                            nested_v = fresh_tmp(ctx);
+                            if (!emit_readback_nested_sum_box(ctx, body, cname,
+                                                              concrete_ty, src_str,
+                                                              nested_v)) {
+                                free(nested_v);
+                                nested_v = NULL;
+                            }
+                        }
+                    }
                     /* Pointer carrier: dereference the heap pointer -- NULL-safely
                      * for a sum whose nullary tag-0 value rides as 0 (Option's
                      * `none`; hkt-generic-none-to-typed-param-segfaults). */
-                    const char *nullsafe =
+                    const char *nullsafe = nested_v ? NULL :
                         ensure_agg_unbox_nullsafe(ctx, concrete_ty, cname);
-                    if (nullsafe)
+                    if (nested_v) {
+                        buf_printf(&out, "%s", nested_v);
+                        free(nested_v);
+                    } else if (nullsafe)
                         buf_printf(&out, "%s((int64_t)(intptr_t)(%s))", nullsafe,
                                    src_str);
                     else
