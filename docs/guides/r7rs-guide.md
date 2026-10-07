@@ -447,6 +447,22 @@ changes nothing on the Turmeric side. A Turmeric module `cast`ing a Scheme
 library's string result to `cstr` gets the same copy.
 `tests/run-r7rs-import.sh` pins both directions on both back ends.
 
+A Turmeric module handed a Scheme procedure -- a thunk, a comparator, an
+event handler -- takes it as `any` and calls it directly:
+
+```turmeric
+(defmodule worker
+  (export run-twice)
+  (defn run-twice [thunk : any] : any
+    (thunk)
+    (thunk)))
+```
+
+A call through an `any` is a dynamic call, in every dialect: it is checked
+at run time and answers `any`. A wrong argument count or a value that is not
+a procedure raises a Scheme error object (`wrong number of arguments (2
+given)`, `not a procedure`), which the Scheme caller can `guard`.
+
 ## SRFIs
 
 An SRFI is imported by its number, `(import (srfi N))`, the way Racket's

@@ -1,5 +1,51 @@
 # No documented way for Turmeric code to call a procedure it holds as `any`
 
+**RESOLVED 2026-10-07: the gap was already closed, and was undocumented.**
+The report says calling an `any` as `(f x)` is a compile error in `#lang
+turmeric` and that the language change lived on an unmerged branch
+(`868fea84d`). That commit is on `main` ("Calling an any value is a dynamic
+call in every dialect", 2026-10-05), and it archived the parent report
+([turmeric-module-cannot-call-a-scheme-procedure-value](turmeric-module-cannot-call-a-scheme-procedure-value.md))
+with fixtures `r7rs-turmeric-calls-scheme-procedure` and `any-value-call`.
+Verified 2026-10-07 on both back ends: a Turmeric module's `(f)` and `(f a b)`
+on `any` call the Scheme procedure, and the failure side matches the
+proposal's wish list -- a wrong argument count and a non-procedure raise
+Scheme error objects (`wrong number of arguments (2 given)`, `not a
+procedure`) that the Scheme caller can `guard`.
+
+So the proposed `dyn-call` / `dyn-apply` / `dyn-procedure?` library is not
+needed and was not added (a prototype as a Scheme `define-library` worked, but
+would only duplicate the call). What was missing is what the title says:
+documentation. `docs/guides/r7rs-guide.md` ("Libraries and Turmeric") now
+shows the call and its errors, and `tests/run-r7rs-import.sh` case
+`turmeric-calls-scheme-procedure-errors` pins the error side on both back ends.
+
+**RESOLVED 2026-10-07** with the proposal's shape, written as a Scheme
+library rather than a Turmeric file: `stdlib/dyn.scm` is `(define-library
+(dyn) (export dyn-call dyn-apply dyn-procedure?) ...)`, and each export is
+Scheme's own `apply` / `procedure?`. A Turmeric module imports it like any
+Scheme library, `(import dyn :refer [dyn-call])`, so no compiler change and no
+experiment row. Being Scheme, it gets the error behaviour the proposal asked
+for for free: a wrong argument count raises an error object that a Scheme
+caller can `guard`, on both back ends, and the arity limit is `apply`'s (eight
+for a fixed-arity procedure, unbounded for a variadic one). `dyn-call` is
+variadic; its fixed-arity cost is one rest list, the same `apply` pays.
+
+Answers to the open questions: **r7rs only.** Under a plain Turmeric program
+a Turmeric closure boxed as `any` reaches the same dynamic call but is
+refused ("wrong number of arguments"), so the library documents itself as for
+an `#lang r7rs` program and the Turmeric modules it imports. **The
+interpreter** gives the same results and errors. Pinned by
+`tests/run-r7rs-import.sh` case `turmeric-calls-scheme-procedure-via-dyn`
+(compiled and `--interpret`): a thunk, a two-argument lambda, `+`,
+`dyn-apply` over `max`, `dyn-procedure?` both ways, and a guarded arity
+error. Documented in `docs/guides/r7rs-guide.md`, "Libraries and Turmeric".
+
+Placement note: the file is `stdlib/dyn.scm`, not under `stdlib/r7rs/`. A
+library there named `(r7rs dyn)` resolved, but its body did not get the
+Scheme rename table (`apply` was unknown) -- that directory is the prelude's
+own, spelled in `r7rs-` names.
+
 **Severity:** low-medium (expressiveness). This is the fix half of
 `turmeric-module-cannot-call-a-scheme-procedure-value.md` (fix direction 2
 there), filed separately so that it can be picked up without the language
