@@ -94,7 +94,7 @@ same day was fixed and archived.
 
 | Report | Severity | Summary |
 | --- | --- | --- |
-| [hamt-nodes-allocated-at-full-array-size](hamt-nodes-allocated-at-full-array-size.md) | medium | A persistent `Map int int` holds ~360 B per entry: bitmap nodes are sized as a full 32-slot node plus their children, and each entry is a 264 B collision node plus a 32 B entry. Fix: size nodes with `offsetof` |
+| ~~[hamt-nodes-allocated-at-full-array-size](../archive/hamt-nodes-allocated-at-full-array-size.md)~~ | medium | **RESOLVED 2026-10-07** (archived): bitmap and collision nodes are allocated at the size of their own arm (`offsetof`), not a full 32-slot node, so a persistent `Map int int` entry fell from ~360 B to ~66 B of peak heap and insert traffic from ~1650 B to ~716 B |
 | [fn-value-call-cps-frames-held-until-outer-entry](fn-value-call-cps-frames-held-until-outer-entry.md) | medium | Calling a function value goes through the `__cps` path and allocates ~200 B of continuation frames per call, reaped only when the outermost direct entry returns, so a tail-recursive loop grows for its whole run (`while` loops stay bounded). `#fx{}` does not help |
 | [closure-let-in-self-tail-loop-leaks](closure-let-in-self-tail-loop-leaks.md) | low (leak) | A capturing closure `let`-bound in a self-tail-recursive body is never dropped: the CPS backedge omits `TUR_CLOSURE_DROP`, which the `rc` defer path does fire |
 | [stdlib-list-null-check-retires-regions](stdlib-list-null-check-retires-regions.md) | low | `tnil?`/`tlength` (and `tcons`) erase a node to `:int`, so any `with-region` that walks a stdlib list retires instead of rewinding |

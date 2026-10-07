@@ -100,7 +100,7 @@ runtime or the codegen changes. Re-measure before you lean on one.
 | `Vec int` slot | 8 B, doubling from 4 (~19 B peak, ~26 B traffic incl. growth copies) | amortised 0 | `vec-free` |
 | `Vec P` slot, `P` wider than 8 B | 8 B slot + a boxed copy of `P` (~53 B peak for a 24 B `P`) | 1 | `vec-free` (frees the boxes too) |
 | `MutableMap int int` entry | 32 B slot at load factor <= 0.75 (~78 B peak, ~105 B traffic) | amortised 0 | `mutmap-free` |
-| `Map int int` entry (persistent HAMT) | **~360 B live**; ~1.65 KB and ~7 allocations of traffic per insert | ~7 per insert | `map-free` of each version you drop |
+| `Map int int` entry (persistent HAMT) | ~66 B live; ~720 B and ~7 allocations of traffic per insert | ~7 per insert | `map-free` of each version you drop |
 | `String` | 16 B header + length + 1 | 1 | `string/release` (refcounted) |
 | `rc<T>` | 72 B control block + a separate block for the value | 2 | last drop |
 | first `rc<T>` in a program | one-time 544 KiB (512 KiB free queue + 32 KiB GC registry) | 2 | process exit |
@@ -158,8 +158,8 @@ Per entry, from smallest to largest:
 | Container | Peak per entry | Mutation | Frees |
 | --- | --- | --- | --- |
 | `Vec int` | ~19 B | in place | `vec-free` |
+| `Map int int` | ~66 B | a new version per insert | `map-free` per version |
 | `MutableMap int int` | ~78 B | in place | `mutmap-free` |
-| `Map int int` | ~360 B | a new version per insert | `map-free` per version |
 
 `Vec` holds a 24-byte header and a buffer of 8-byte slots that doubles when
 full, so a `Vec` can be up to twice as large as its contents. An element
@@ -175,9 +175,13 @@ load factor reaches 0.75.
 makes old versions cheap to keep, but **each version is a separate object you
 must `map-free`.** A loop that rebinds a map without freeing the previous
 version keeps every version: measured 1.7 KB per insert, all of it leaked.
-Even when you free each old version, a live entry costs about 360 bytes,
-mostly because of how HAMT nodes are sized today
-([hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/hamt-nodes-allocated-at-full-array-size.md)).
+When you free each old version, a live entry costs about 66 bytes: a
+24-byte leaf node, a 32-byte entry, and its share of the bitmap nodes above
+it. (Before 2026-10-07 every node was allocated at the size of a full
+32-slot node, and an entry cost ~360 bytes --
+[hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/hamt-nodes-allocated-at-full-array-size.md).)
+What a persistent map still costs is traffic: each insert copies the path
+from the root, about 7 allocations and 720 bytes.
 
 None of the three containers is freed at scope exit. A compiled `Vec`,
 `MutableMap` or `Map` local that you do not free lives until the process
@@ -278,9 +282,11 @@ shape.
 
 If you need an index or a stack, use a `Vec` (~19 B per `int`). If you need
 lookups and mutate in place, use a `MutableMap` (~78 B per entry). Use a
-persistent `Map` (~360 B per entry) when you need its persistence: several
+persistent `Map` (~66 B per live entry) when you need its persistence: several
 versions alive at once, or a value you pass around and must not see change.
-A `Map` used as a mutable table costs about five times a `MutableMap`.
+A `Map` used as a mutable table is no larger than a `MutableMap`, but every
+insert allocates a new path (~7 allocations) and each old version needs its
+own `map-free`.
 
 For a `Vec` of wide structs, two cheaper layouts avoid the per-element box:
 
@@ -544,8 +550,6 @@ frees applies to them. `TUR_GC_STATS=1` prints what that collector did. See
 These are open findings that change the numbers above. Each report has a
 repro and the measurements.
 
-- [hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/hamt-nodes-allocated-at-full-array-size.md)
-  -- `Map` entries cost ~360 B, most of it unused node space.
 - [fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md)
   -- calls through function values hold their frames until the outermost
   call returns.
