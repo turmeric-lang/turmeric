@@ -32,9 +32,12 @@ either links a different library object than `r7rs-named-let-sum`.
 `tests/run.sh`'s warm-up program therefore warms the object every non-`eval`
 fixture links (fix direction 3 is moot).
 
+**Fix direction 4 is done too:** a reused object's mtime is stamped, and
+after compiling a new one the cache drops the oldest beyond 24 that no build
+has used for a day (`prelude_cache_prune`, `src/main.c`).
+
 **Still open:** cause 3 (`-I`/`-D` flags that reach no header still fork the
-key) and fix direction 4 (the cache is never evicted). The original text
-follows.
+key). The original text follows.
 
 **Severity:** medium. Each distinct library object costs a cold compile of
 5-14 s (Debug `tur`, 4 cores, gcc 13). That happens once per variant, not
