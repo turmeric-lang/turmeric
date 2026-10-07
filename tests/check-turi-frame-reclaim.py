@@ -96,7 +96,10 @@ def run(src, reclaim, asan="detect_leaks=0"):
     out = p.stdout.read().decode()
     p.stderr.read()
     _, status, ru = os.wait4(p.pid, 0)
-    return out, status, ru.ru_maxrss / 1024.0   # MB (Linux reports KB)
+    # ru_maxrss is KB on Linux but BYTES on macOS: the absolute growth bounds
+    # below read 272 KiB of growth there as 272 MB.
+    per_mb = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+    return out, status, ru.ru_maxrss / per_mb   # MB
 
 
 def main():
