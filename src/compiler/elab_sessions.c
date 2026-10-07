@@ -177,6 +177,7 @@ static Expr *session_inline_c(Elab *e, const char *code_str, uint32_t code_len,
                                Expr *chan_fallback, Span span) {
     Expr *out = expr_new(e->arena, EX_INLINE_C, ret_type, span);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice(code_str, code_len);
     ic->return_type = ret_type;
     ic->captures = NULL;
@@ -386,6 +387,7 @@ Expr *elab_session_send(Elab *e, const Form *call) {
     char *send_code = (char *)arena_alloc(e->arena, send_len + 1);
     snprintf(send_code, send_len + 1, "%s%s%s", send_pre, word, send_post);
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice(send_code, (uint32_t)send_len);
     ic->return_type = sess_q;
     ic->captures = NULL; ic->n_captures = 0;
@@ -600,6 +602,7 @@ Expr *elab_session_choose_left(Elab *e, const Form *call) {
     static const char choose_left_code[] =
         "({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)0); (void *)__TUR_VAL_0__; })";
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice(choose_left_code, sizeof(choose_left_code) - 1);
     ic->return_type = sess_p;
     ic->captures = NULL; ic->n_captures = 0;
@@ -655,6 +658,7 @@ Expr *elab_session_choose_right(Elab *e, const Form *call) {
     static const char choose_right_code[] =
         "({ tur_session_send_tag(__TUR_VAL_0__, (int64_t)1); (void *)__TUR_VAL_0__; })";
     InlineC *ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(ic, 0, sizeof(InlineC));
     ic->code = strslice(choose_right_code, sizeof(choose_right_code) - 1);
     ic->return_type = sess_q;
     ic->captures = NULL; ic->n_captures = 0;
@@ -753,6 +757,7 @@ Expr *elab_session_recv_timeout(Elab *e, const Form *call) {
         "tur_session_recv_timeout(__TUR_VAL_0__, __TUR_VAL_1__)";
     Expr *rto_out = expr_new(e->arena, EX_INLINE_C, offer_type, call->span);
     InlineC *rto_ic = (InlineC *)arena_alloc(e->arena, sizeof(InlineC));
+    memset(rto_ic, 0, sizeof(InlineC));
     rto_ic->code = strslice(rto_code, sizeof(rto_code) - 1);
     rto_ic->return_type = offer_type;
     rto_ic->captures = NULL; rto_ic->n_captures = 0;
