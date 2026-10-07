@@ -2709,7 +2709,7 @@ against `./build/tur` v0.62.0 on macOS/arm64.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [ok-nil-unconstructible-in-turmeric](ok-nil-unconstructible-in-turmeric.md) | low | `(Result nil E)` is legal, but Turmeric code cannot build its ok side: `nil` in expression position is `:void`, so `(Ok nil)` is a cc error. Separately, a forward reference to a function returning `(Result nil E)` is a TUR-E0012 kind mismatch at 0:0. Worked around with `io-error/ok-unit` and a self-recursive `fs/walk-names` |
+| ~~[ok-nil-unconstructible-in-turmeric](../archive/ok-nil-unconstructible-in-turmeric.md)~~ | low | **RESOLVED 2026-10-07** (archived): `(Ok nil)` (any constructor with a `nil` payload) passes the 0 word, keeping the argument's side effects, and a forward call to a `(Result nil E)` function no longer reads `nil` as an unknown name (TUR-E0012 at 0:0). Pinned by fixture `ok-nil-constructible` |
 | [inline-c-builders-cannot-nest-option-in-result](inline-c-builders-cannot-nest-option-in-result.md) | low-medium | `(Result (Option T) E)` stores the `Option` BY VALUE in the ok slot, so `tur_ok_int(tur_some_ptr(s))` from inline-C silently matches neither arm. `file-read-line` nests it in Turmeric instead |
 
 ## Module system (filed 2026-10-05)

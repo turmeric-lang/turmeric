@@ -929,9 +929,9 @@
     (let [full   (fs/path-join dir (vec-get names i))
           is-dir (fs/walk-dir? full)]
       (f full is-dir)
-      ;; Self-recursion only: a forward reference to a function returning
-      ;; (Result nil IoError) trips TUR-E0012 (see
-      ;; docs/reported/ok-nil-unconstructible-in-turmeric.md).
+      ;; Self-recursive.  (Written so because a forward reference to a
+      ;; function returning (Result nil IoError) used to trip TUR-E0012,
+      ;; fixed 2026-10-07: docs/archive/ok-nil-unconstructible-in-turmeric.md.)
       (let [r (if is-dir
                 (match (fs/read-dir full)
                   (Ok sub)
