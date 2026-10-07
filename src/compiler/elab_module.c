@@ -2238,5 +2238,42 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
         }
     }
 
+    /* qualified-module-calls-unresolved-at-toplevel: `(Foo/bar)` OUTSIDE any
+     * defmodule.  Neither path above runs there (no current module, so no
+     * self-qualification and no imports to search), so the name fell to the
+     * TUR-W0040 runtime dispatch -- an error on the compiled path, and under
+     * the interpreter a lookup of the mangled `Foo_slbar` that misses an
+     * EXPORTED member (`Foo__bar`) while finding a private one by its bare
+     * name: exactly inverted.  The top level is the program's own scope and
+     * sees every module defined or loaded into it, the way it sees `tur/`.
+     * A module's members are globals tagged with their defining module, so
+     * split at each `/` from the right (module names nest: `a/b/f` tries
+     * module `a/b` first) and look for that member of that module. */
+    if (e->current_module == NULL && e->current_module_name == NULL) {
+        for (uint32_t cut = sym_len; cut-- > 1; ) {
+            if (sym_str[cut] != '/' || cut + 1 >= sym_len) continue;
+            const Symbol *mn = symtab_intern(e->st, strslice(sym_str, cut));
+            const Symbol *sym_key =
+                symtab_intern(e->st, strslice(sym_str + cut + 1, sym_len - cut - 1));
+            Binding *member = NULL;
+            for (uint32_t k = 0; k < e->global.n; k++) {
+                Binding *gb = e->global.bindings[k];
+                if (gb->name == sym_key && gb->defining_module_name == mn) {
+                    member = gb; break;
+                }
+            }
+            if (!member) continue;
+            if (member->is_exported) return member;
+            diag_emit(DIAG_ERROR, span,
+                      "symbol '%s' is not exported from module '%s'",
+                      sym_key->name, mn->name);
+            diag_emit(DIAG_NOTE, member->span,
+                      "'%s' is defined here but is private; add it to module '%s''s (export ...) list",
+                      sym_key->name, mn->name);
+            *had_error = true;
+            return NULL;
+        }
+    }
+
     return NULL; /* Not a recognised qualified name; caller handles "unbound" */
 }

@@ -1,5 +1,26 @@
 # Slash-qualified module member calls are unresolved at the top level
 
+**RESOLVED 2026-10-07** by fix direction A. `elab_lookup_sym`
+(`src/compiler/elab_module.c`) now resolves a slash-qualified name at the top
+level (no current module): it splits at each `/` from the right -- module
+names nest, so `geom/vec/dot` tries module `geom/vec` first -- and looks for a
+global whose name is the member and whose `defining_module_name` is the
+module. An exported member is returned, so the call is typed and emitted like
+any other; a private one is the error `symbol 'x' is not exported from module
+'M'` with a note at its definition, the same wording the cross-module path
+uses. The report's suggestion to search `loaded_modules` would not have
+reached the repro: that registry holds imported module files only, while an
+in-file `defmodule`'s members are tagged globals.
+
+Both repros now behave: `tur run` prints `hello`; `tur eval` returns
+`"hello"` for the exported member and reports the private one as not
+exported (it used to return it). Direction B (the runtime-dispatch name) was
+not needed for these paths and was not done. Pinned by
+`tests/fixtures/module-qualified-call-at-toplevel` (compiled and
+`--interpret`) and `tests/fixtures/errors/module-qualified-private-at-toplevel`;
+`tests/run.sh` (3601) and `tests/run-turi.sh` (2650) are green. Documented in
+`docs/guides/module-system-guide.md` (Visibility rules, Common Errors).
+
 **Severity: medium (qualified calls silently degrade to runtime dispatch and
 fail for exported members).** Found 2026-10-05 while building the Trowel
 plugin system, which evaluates Turmeric source in-process via `turi_eval`.

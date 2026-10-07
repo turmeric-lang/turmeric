@@ -2721,7 +2721,7 @@ not resolved by the elaborator at the top level (outside any `defmodule`).
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [qualified-module-calls-unresolved-at-toplevel](qualified-module-calls-unresolved-at-toplevel.md) | medium | `elab_lookup_sym` only resolves qualified names when `current_module_name` or `current_module` is set; at the top level both are NULL, so `(Foo/bar)` degrades to TUR-W0040 runtime dispatch. Exported members fail (mangled `Foo__bar` vs runtime lookup `Foo_slbar`); non-exported members succeed (inverted -- they stay in the global env under their bare name). Affects `tur eval`, `tur run`, and `turi_eval` |
+| ~~[qualified-module-calls-unresolved-at-toplevel](../archive/qualified-module-calls-unresolved-at-toplevel.md)~~ | medium | **RESOLVED 2026-10-07** (archived): a top-level `(Foo/bar)` resolves against the module's members (longest module prefix first); a private member is a `not exported` error instead of a runtime dispatch that found it. Pinned by fixtures `module-qualified-call-at-toplevel` and `errors/module-qualified-private-at-toplevel` |
 
 ## Filing conventions
 
