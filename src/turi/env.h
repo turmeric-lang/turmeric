@@ -691,7 +691,9 @@ void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type);
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);
 
-/* Set (or replace) a global binding by name. */
+/* Set (or replace) a global binding by name.  A new binding keeps the `name`
+ * POINTER for env's lifetime, so it must be a literal or live in env's
+ * sym_arena -- never a stack buffer. */
 void turi_env_set(TuriEnv *env, const char *name, TuriValue value);
 
 /* Helper for debugger: find an EnvBinding in env's globals. */
