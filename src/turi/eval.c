@@ -1419,11 +1419,39 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
  * `:heap` field and stops -- stdlib's `Cons` and `Vec` are both `:heap`, so a
  * list or vector argument is not walked at all.  Depth is therefore the
  * by-value nesting depth of a declared type, which is small and finite. */
+/* turi-immutable-struct-args-copied-per-call: can a write through a copy of
+ * `v` -- or through anything by value inside it -- ever happen?  A copy is only
+ * observable if one can.  Turmeric writes a struct field only with
+ * `(set! (.f x) v)`, which marks the receiver's ADT (AdtDef.field_written), so
+ * a value of an unwritten type, holding only unwritten by-value types, may be
+ * shared.  An `any` box itself is never written (EX_ANY_CAST only reads its
+ * payload), so it is as writable as its payload.  `__rc` and `:heap` values
+ * are shared by design and stop the walk, exactly as the copy does; a struct
+ * with no constructor record is assumed writable. */
+static bool turi_struct_arg_may_be_written(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    const TuriStruct *src = v.as_struct;
+    if (src->name && strcmp(src->name, "__rc") == 0) return false;
+    if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return false;
+    if (!src->is_any_box) {
+        if (!src->ctor || !src->ctor->adt) return true;
+        if (src->ctor->adt->field_written) return true;
+    }
+    for (uint32_t i = 0; i < src->n_fields; i++)
+        if (turi_struct_arg_may_be_written(src->fields[i])) return true;
+    return false;
+}
+
 static TuriValue turi_copy_byvalue_struct_arg(TuriEnv *env, TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return v;
     const TuriStruct *src = v.as_struct;
     if (src->name && strcmp(src->name, "__rc") == 0) return v;   /* rc: shared */
     if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return v;
+    /* turi-immutable-struct-args-copied-per-call: nothing can write through
+     * it, so the copy could never be observed.  r7rs code is all `any`, and
+     * these copies were most of what a run kept -- 1.47 M `Sym` boxes and
+     * 94 K empty lists in r7rs-srfi-14, none ever freed. */
+    if (!turi_struct_arg_may_be_written(v)) return v;
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
     s->name       = src->name;
     s->n_fields   = src->n_fields;

@@ -4382,6 +4382,9 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         }
     }
 
+    /* turi-immutable-struct-args-copied-per-call: this type is written, so
+     * the interpreter must keep copying its by-value arguments. */
+    ((AdtDef *)adt)->field_written = true;
     Expr *out = expr_new(e->arena, EX_SET_FIELD, TYPE_NIL, call->span);
     out->as.set_field_.receiver = receiver;
     out->as.set_field_.value = value;
