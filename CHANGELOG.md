@@ -2,6 +2,16 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.6] -- 2026-10-07
+
+### Fixed
+
+- **Sandboxed handles in `turi` can no longer be forged.** Every place the
+  interpreter re-tags a bare word -- `(:: w cstr)`, by-value struct ascriptions,
+  field reads through bare-int receivers, generator unwraps, STM TVars, and
+  panic payloads -- now checks a handle's provenance, so values outside the
+  sandbox cannot be passed off as sandboxed handles.
+
 ## [0.63.5] -- 2026-10-06
 
 ### Changed

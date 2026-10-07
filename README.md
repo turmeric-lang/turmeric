@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.5` -- The spices doc site at spices.turmeric-lang.com now deploys automatically with every release.
+**Latest release:** `v0.63.6` -- Sandboxed handles in `turi` can no longer be forged: handle provenance is now verified wherever the interpreter re-tags a bare word.
 
 ## What
 
