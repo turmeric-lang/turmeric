@@ -1,0 +1,19 @@
+;; A call through a PARAMETER is a call to whatever the caller passed, even
+;; when a top-level function shares the parameter's name.  The CPS coloring
+;; used to resolve `(f x)` below to the pure global `f` by name, which left
+;; `app` uncolored, so the effectful lambda handed to it was refused with
+;; "this effect operation has no lowering here".  The same capture made the
+;; r7rs library unit depend on whether a program defined something named `f`
+;; (stdlib `__cons-fmap` takes its callback as `f`).
+(defeffect Ask [] :int)
+
+(defn f [x : int] : int (+ x 1))
+
+(defn app [f : (fn [int] int) x : int] : int (f x))
+
+(defn main [] : int
+  (println (handle (app (fn [x : int] : int (+ x (perform (Ask)))) 1)
+             (Ask [] k) (resume k 10)))
+  (println (app f 1))
+  (println (f 1))
+  0)

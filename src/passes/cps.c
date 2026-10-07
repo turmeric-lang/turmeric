@@ -872,6 +872,22 @@ static const char *cps_binding_c_symbol(const Binding *b) {
     return b->name ? b->name->name : NULL;
 }
 
+/* The C symbol a CALL through `b` names, for the lookup side of the fallback
+ * below.  A local or a parameter names a function only through c_export_name
+ * (the named-let alias above).  Otherwise it is a value: `(f x)` through a
+ * parameter `f` calls whatever the caller passed, never the top-level `f` that
+ * happens to share its name.  Matching it by its bare name made `__cons-fmap`'s
+ * callback call an edge to a program's own pure `(define f ...)`, which left a
+ * function that calls an unknown procedure uncolored -- an effectful callback
+ * then had "no lowering here", and the r7rs library unit's text (so its cached
+ * object) depended on whether the program named something `f`. */
+static const char *cps_call_c_symbol(const Binding *b) {
+    if (!b) return NULL;
+    if (b->c_export_name) return b->c_export_name;
+    if (!b->is_global) return NULL;
+    return b->name ? b->name->name : NULL;
+}
+
 /* Find the top-level node whose function binding == b, or -1.
  *
  * The pointer compare is the fast, exact case.  The C-symbol fallback resolves
@@ -954,7 +970,7 @@ static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
             if (g_cps_nidx.bkey[h] == b) return g_cps_nidx.bval[h];
             h = (h + 1) & m;
         }
-        const char *bsym = cps_binding_c_symbol(b);
+        const char *bsym = cps_call_c_symbol(b);
         if (!bsym || !*bsym) return -1;
         h = cps_nidx_str_hash(bsym) & m;
         while (g_cps_nidx.skey[h]) {
@@ -965,7 +981,7 @@ static int cps_find_node(CpsNode *nodes, uint32_t n, const Binding *b) {
     }
     for (uint32_t i = 0; i < n; i++)
         if (nodes[i].fd->binding == b) return (int)i;
-    const char *bsym = cps_binding_c_symbol(b);
+    const char *bsym = cps_call_c_symbol(b);
     if (!bsym || !*bsym) return -1;
     for (uint32_t i = 0; i < n; i++) {
         const char *nsym = cps_binding_c_symbol(nodes[i].fd->binding);
