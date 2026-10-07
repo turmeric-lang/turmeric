@@ -732,12 +732,118 @@ struct jit_entry_box {
   int rc;
 };
 
+/* jit-stack-overflow-has-no-message: a recursion that ran off this thread's
+ * stack used to end `tur` itself with a bare SIGSEGV (SIGBUS on macOS) and
+ * nothing on stderr, in every dialect -- the compiled r7rs path's handler is
+ * emitted behind `!defined(__MIRC__)`, and under the JIT the dying process is
+ * the engine's anyway.  So the entry thread carries the same handler, on an
+ * alternate stack, with the same test and message (runtime/stack_overflow.h):
+ * an overflow prints the line and the fault then repeats with the default
+ * action, so the exit status is what it was.  Any other fault is handed back
+ * to whatever handled the signal before (the default, or ASan's) and repeats
+ * there, so a wild pointer in JIT'd code behaves exactly as it did.  The
+ * handlers are installed for the run and restored after the join. */
+#ifndef _WIN32
+#  include <signal.h>
+#  include <unistd.h>
+#  include "runtime/stack_overflow.h"
+
+static unsigned char *volatile g_jit_entry_lo;  /* low end of the entry stack, or NULL */
+static struct sigaction g_jit_prev_segv, g_jit_prev_bus;
+
+static void jit_entry_fault (int sig, siginfo_t *si, void *uc) {
+  (void) uc;
+  unsigned char *a = (unsigned char *) si->si_addr, *lo = g_jit_entry_lo;
+  if (TUR_STACK_FAULT_IS_OVERFLOW (a, lo)) {
+    static const char m[] = TUR_STACK_OVERFLOW_MSG "\n";
+    if (write (2, m, sizeof m - 1) < 0) { }
+    signal (sig, SIG_DFL);   /* the fault repeats on return, unhandled */
+    return;
+  }
+  sigaction (sig, sig == SIGSEGV ? &g_jit_prev_segv : &g_jit_prev_bus, NULL);
+  if (si->si_code <= 0) raise (sig);   /* sent, not a fault: it will not repeat */
+}
+
+static void jit_entry_fault_install (void) {
+  struct sigaction sa;
+  memset (&sa, 0, sizeof sa);
+  sa.sa_sigaction = jit_entry_fault;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset (&sa.sa_mask);
+  sigaction (SIGSEGV, &sa, &g_jit_prev_segv);
+  sigaction (SIGBUS, &sa, &g_jit_prev_bus);
+}
+
+static void jit_entry_fault_restore (void) {
+  g_jit_entry_lo = NULL;
+  sigaction (SIGSEGV, &g_jit_prev_segv, NULL);
+  sigaction (SIGBUS, &g_jit_prev_bus, NULL);
+}
+
+/* On the entry thread: find its stack's low end and give it an alternate
+ * stack to report from.  Returns the alternate stack to free, or NULL; *old
+ * receives the one it replaced (ASan gives every thread its own, and frees
+ * it at thread exit, so it goes back before the thread ends). */
+static void *jit_entry_guard_enter (stack_t *old) {
+  unsigned char *lo = NULL;
+#  if defined(__APPLE__)
+  lo = (unsigned char *) pthread_get_stackaddr_np (pthread_self ())
+       - pthread_get_stacksize_np (pthread_self ());
+#  elif defined(__GLIBC__)
+  {
+    extern int pthread_getattr_np (pthread_t, pthread_attr_t *);
+    pthread_attr_t a;
+    void *addr = NULL;
+    size_t sz = 0;
+    if (pthread_getattr_np (pthread_self (), &a) == 0) {
+      if (pthread_attr_getstack (&a, &addr, &sz) == 0) lo = (unsigned char *) addr;
+      pthread_attr_destroy (&a);
+    }
+  }
+#  endif
+  if (!lo) return NULL;
+  size_t alt_size = 65536;
+  void *alt = malloc (alt_size);
+  if (!alt) return NULL;
+  stack_t ss;
+  ss.ss_sp = alt;
+  ss.ss_size = alt_size;
+  ss.ss_flags = 0;
+  if (sigaltstack (&ss, old) != 0) {
+    free (alt);
+    return NULL;
+  }
+  g_jit_entry_lo = lo;
+  return alt;
+}
+
+static void jit_entry_guard_leave (void *alt, const stack_t *old) {
+  if (!alt) return;
+  g_jit_entry_lo = NULL;
+  stack_t prev = *old;
+  if (sigaltstack (&prev, NULL) != 0) {
+    stack_t off;
+    memset (&off, 0, sizeof off);
+    off.ss_flags = SS_DISABLE;
+    sigaltstack (&off, NULL);
+  }
+  free (alt);
+}
+#endif
+
 static void *jit_run_entry (void *p) {
   struct jit_entry_box *box = (struct jit_entry_box *) p;
   char *fake_envp[] = {NULL};
+#ifndef _WIN32
+  stack_t old_alt;
+  void *alt = jit_entry_guard_enter (&old_alt);
+#endif
   box->rc = box->fn (box->argc, box->argv, fake_envp);
   jit_atexit_drain ();
   fflush (stdout);
+#ifndef _WIN32
+  jit_entry_guard_leave (alt, &old_alt);
+#endif
   return NULL;
 }
 
@@ -1118,7 +1224,13 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   pthread_t entry_thread;
   pthread_attr_init (&attr);
   pthread_attr_setstacksize (&attr, stack_mb << 20);
+#ifndef _WIN32
+  jit_entry_fault_install ();
+#endif
   if (pthread_create (&entry_thread, &attr, jit_run_entry, &box) != 0) {
+#ifndef _WIN32
+    jit_entry_fault_restore ();
+#endif
     pthread_attr_destroy (&attr);
     jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
@@ -1132,6 +1244,9 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   }
   double t_run = jit_now_ms ();
   pthread_join (entry_thread, NULL);
+#ifndef _WIN32
+  jit_entry_fault_restore ();
+#endif
   g_jit_stat_run_ms = jit_now_ms () - t_run;
   pthread_attr_destroy (&attr);
   jit_timing_mark ("run");

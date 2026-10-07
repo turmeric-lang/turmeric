@@ -245,7 +245,11 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
    functions, and is why single-TU spice emission keeps its `static` linkage
    unchanged. The function pointer is then called on a fresh pthread with a
    `TUR_MAIN_STACK_MB` stack (default 1024 MB on 64-bit, 64 MB on 32-bit; `TUR_JIT_STACK_MB` still works and wins), followed by `jit_atexit_drain`
-   and `fflush(stdout)` **on that same thread**.
+   and `fflush(stdout)` **on that same thread**. On Linux and macOS the
+   thread has an alternate signal stack and a SIGSEGV/SIGBUS handler: a fault
+   at the stack's low end prints `stack overflow: recursion too deep` (the
+   line a compiled r7rs program prints) before the signal ends `tur`; any
+   other fault goes to whatever handled the signal before.
 8. **Teardown**, strictly in this order: `MIR_gen_finish`, `c2mir_finish`,
    `MIR_finish`.
 

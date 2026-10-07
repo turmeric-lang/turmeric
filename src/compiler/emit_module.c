@@ -11202,6 +11202,7 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  * written against, and repeating a system header is harmless. */
 #include "runtime/region_rt_embed.h"
 #include "runtime/experiments.h"   /* experiment_warn_if_used */
+#include "runtime/stack_overflow.h" /* the deep stack's overflow test + message, shared with the JIT */
 
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
@@ -13285,8 +13286,8 @@ static void emit_deep_stack_runtime(Buf *out) {
         "static void tur_deep_fault(int sig, siginfo_t *si, void *uc) {\n"
         "    (void)uc;\n"
         "    unsigned char *a = (unsigned char *)si->si_addr, *lo = tur_deep_state()->lo;\n"
-        "    if (lo && a < lo + 65536 && a + (1 << 20) >= lo) {\n"
-        "        static const char m[] = \"stack overflow: recursion too deep\\n\";\n"
+        "    if (" TUR_STACK_OVERFLOW_STR(TUR_STACK_FAULT_IS_OVERFLOW(a, lo)) ") {\n"
+        "        static const char m[] = \"" TUR_STACK_OVERFLOW_MSG "\\n\";\n"
         "        if (write(2, m, sizeof m - 1) < 0) { }\n"
         "    }\n"
         "    signal(sig, SIG_DFL);   /* the fault repeats on return, unhandled */\n"
@@ -13373,7 +13374,7 @@ static void emit_deep_stack_runtime(Buf *out) {
         "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
         "static LONG WINAPI tur_deep_fault(EXCEPTION_POINTERS *ep) {\n"
         "    if (ep && ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {\n"
-        "        static const char m[] = \"stack overflow: recursion too deep\\n\";\n"
+        "        static const char m[] = \"" TUR_STACK_OVERFLOW_MSG "\\n\";\n"
         "        DWORD w = 0;\n"
         "        WriteFile(GetStdHandle(STD_ERROR_HANDLE), m, (DWORD)(sizeof m - 1), &w, NULL);\n"
         "    }\n"

@@ -1362,6 +1362,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_main_stack_size PROPERTIES TIMEOUT 720)
+# jit-stack-overflow-has-no-message: under `tur jit` a runaway recursion
+# prints the same line as the compiled r7rs path, in every dialect, and a wild
+# pointer does not.  SKIPs on a binary without the JIT engine.
+add_test(
+  NAME tur_jit_stack_overflow_message
+  COMMAND bash tests/check-jit-stack-overflow-message.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_jit_stack_overflow_message PROPERTIES TIMEOUT 720)
 # r7rs-programs-compile-slowly: a `#lang r7rs` program builds as two units,
 # the prelude compiled once and cached.  No piece of state may be defined in
 # both, and two programs must link the same cached library object.
