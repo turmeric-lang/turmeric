@@ -376,14 +376,16 @@ generation retires when, inside the bracket:
   record of scalars, not a node, closure or pointer);
 - a node is stored somewhere that outlives the bracket (`vec-push!` into an
   outer `Vec`, `set!` on a global, `map-assoc` into an outer map);
-- a node is erased to `:int`, `ptr<void>` or `Any` (`(:: node :int)`);
+- a node is erased to `:int`, `ptr<void>` or `Any` (`(:: node :int)`),
+  unless the erased word is only compared with `0` (`(= (:: l :int) 0)`,
+  the null test);
 - a node is passed to a function whose body is inline C.
 
-The stdlib list is caught by the third rule today: `tnil?` and `tlength` test
-for the empty list with `(:: l :int)`, so walking a `(Cons A)` inside a
-region retires it
-([stdlib-list-null-check-retires-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stdlib-list-null-check-retires-regions.md)).
-Inside regions, use your own `defdata :heap` list and walk it with `match`.
+Walking a stdlib `(Cons A)` with `tnil?`, `thead`, `ttail` and `tlength`
+inside a region rewinds. Building one does too with `tcons-of`, but not with
+`tcons`: its tail parameter is the carrier-level `:int`, so passing a typed
+list to it erases the node and the generation retires. Inside regions, build
+with `tcons-of`.
 
 **Check that your regions rewind.** Run the program with
 `TUR_REGION_STATS=1`; it prints one line at exit:
@@ -555,8 +557,6 @@ repro and the measurements.
   call returns.
 - [closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-let-in-self-tail-loop-leaks.md)
   -- a closure in a self-tail-recursive body is never freed.
-- [stdlib-list-null-check-retires-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stdlib-list-null-check-retires-regions.md)
-  -- walking a stdlib list inside a region retires it.
 - [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
   -- by-value recursive values copied out of a borrow or a container leak.
 

@@ -832,6 +832,12 @@ typedef struct EmitCtx {
     /* r7rs-type-errors-are-uncatchable-panics: __tur_any_cast_check_r7 and
      * its hook are written (once per unit) the first time a Scheme cast is. */
     bool         r7rs_cast_helper_emitted;
+    /* stdlib-list-null-check-retires-regions: set by emit_builtin for exactly
+     * the one EX_ASCRIBE operand of `(= (:: node :int) 0)` / `not=`, and
+     * consumed (cleared) by that ascription before it emits its inner.  An
+     * erased word that is only compared with 0 goes nowhere, so its erasure
+     * is not an escape and needs no region note. */
+    bool         region_erasure_compare_only;
 } EmitCtx;
 
 enum {

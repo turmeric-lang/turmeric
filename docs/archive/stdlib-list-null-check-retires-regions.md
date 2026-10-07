@@ -1,5 +1,28 @@
 # Walking a stdlib `(Cons A)` inside `with-region` retires the generation
 
+**RESOLVED 2026-10-07** by the second fix direction: an erasing ascription
+whose only use is a comparison with a literal `0` -- `(= (:: l :int) 0)` or
+`(not= ...)` -- is not noted. The erased word is compared and dropped; it
+reaches no store and no result, so it cannot escape. `emit_builtin`
+(`src/compiler/emit_core.c`) marks exactly that operand with
+`EmitCtx.region_erasure_compare_only`, and the `EX_ASCRIBE` emit
+(`src/compiler/emit_expr.c`) reads and clears the flag before emitting its
+inner, so an erasure nested inside the compared expression is still noted.
+
+Re-measured: the repro now reads `pushes=50 rewinds=50 retires=0`, and so
+does a bracket that only calls `tnil?`. The one emitted change is the
+`TUR_REGION_NOTE_WORDS(&(l), sizeof(l));` at the top of `tnil?`, gone from
+157 fixture snapshots and nothing else; the full suite was otherwise green.
+The stdlib needed no change, and user code with the same null test benefits.
+
+**Still erasing, on purpose:** `tcons`, whose tail parameter is the
+carrier-level `:int` -- passing a typed list to it is the implicit typed-node
+-> `:int` argument the region hooks note. Inside a region, build with
+`tcons-of`; `docs/guides/memory-usage-guide.md` says so. **Not covered:** the
+CPS-IR emitter (`emit_cps_ir.c`) compares ANF atoms, so the same null test in
+a function body that goes through CPS still notes -- a lost saving there,
+never a correctness issue. The stdlib walkers take the direct path.
+
 **Severity: low (a lost saving, never a correctness bug).** `tnil?` and
 `tlength` test for the empty list with `(= (:: l :int) 0)`. That is an
 erasing ascription of a node to `:int`, which notes the node as an escape

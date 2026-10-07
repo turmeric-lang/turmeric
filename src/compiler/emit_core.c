@@ -4990,7 +4990,27 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
      * which gcc cannot prove is written when it cannot bound n>=1). */
     char **arg_strs = (char **)calloc(n ? n : 1, sizeof(char *));
     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
-    for (uint32_t i = 0; i < n; i++) arg_strs[i] = emit_value(ctx, body, args[i]);
+    /* stdlib-list-null-check-retires-regions: `(= (:: l :int) 0)` is how a
+     * typed list (or any `:heap` node) is tested for the empty link, and the
+     * erasing ascription it needs notes the node as an escape -- so every
+     * `with-region` that walked a stdlib list retired instead of rewinding.
+     * A word compared with 0 and dropped escapes nowhere: let that one
+     * ascription skip its note (EX_ASCRIBE reads the flag). */
+    int32_t compare_only_arg = -1;
+    if (spec->shape == BS_BIN_INFIX && n == 2 &&
+        (strcmp(spec->c_op, "==") == 0 || strcmp(spec->c_op, "!=") == 0)) {
+        for (uint32_t i = 0; i < 2; i++) {
+            const Expr *lit = args[1 - i];
+            if (args[i]->kind == EX_ASCRIBE &&
+                lit->kind == EX_INT_LIT && lit->as.i == 0)
+                compare_only_arg = (int32_t)i;
+        }
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        ctx->region_erasure_compare_only = ((int32_t)i == compare_only_arg);
+        arg_strs[i] = emit_value(ctx, body, args[i]);
+        ctx->region_erasure_compare_only = false;
+    }
 
     Buf out; buf_init(&out);
     switch (spec->shape) {

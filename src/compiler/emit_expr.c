@@ -18189,6 +18189,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
          * the ascribed type is a concrete aggregate, insert the bridge so the
          * downstream concrete consumer gets the struct value, not an int64_t. */
         case EX_ASCRIBE: {
+            /* Read and clear before the inner: only THIS erasure is the
+             * compared-with-0 one; one nested inside it is not. */
+            bool compare_only = ctx->region_erasure_compare_only;
+            ctx->region_erasure_compare_only = false;
             char *inner_val = emit_value(ctx, body, e->as.ascribe_.inner);
             /* region-lock-hardening: an ERASING ascription -- a value whose
              * type reaches a region node, ascribed to a type that does not
@@ -18203,7 +18207,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * and costs one compare.  The typed style (a `:copy` sum, a
              * typed `nxt : Link` field, `(Vec Link)`) never takes this path
              * and keeps its rewinds. */
-            if (regions_enabled() && inner_val) {
+            if (regions_enabled() && inner_val && !compare_only) {
                 Type from = emit_resolve_type(ctx, e->as.ascribe_.inner->type);
                 Type to   = emit_resolve_type(ctx, e->type);
                 if (region_ascription_erases_node(ctx, from, to)) {

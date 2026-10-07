@@ -7751,7 +7751,6 @@ static int64_t tnil(void) {
 }
 
 static bool tnil_qu(int64_t l) {
-        TUR_REGION_NOTE_WORDS(&(l), sizeof(l));
         return (l) == (INT64_C(0));
 }
 
