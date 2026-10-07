@@ -684,7 +684,7 @@
 
 (defn serial-resume-owned [k : serial-cont v : int] : int
   ```c
-#ifdef SK_TAG_CALL
+  #ifdef SK_TAG_CALL
   int64_t r = tur_serial_cont_resume((int64_t)(intptr_t)k, v);
   if (k) dk_free((DK *)(intptr_t)k);
   return r;
@@ -708,7 +708,7 @@
 
 (defn serial-cont-free [k : serial-cont] : nil
   ```c
-#ifdef SK_TAG_CALL
+  #ifdef SK_TAG_CALL
   if (k) dk_free((DK *)(intptr_t)k);
 #else
   (void)k;
