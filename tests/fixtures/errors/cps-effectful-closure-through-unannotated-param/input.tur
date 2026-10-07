@@ -1,0 +1,18 @@
+;; A capturing effectful closure passed to an un-annotated fn parameter.  A
+;; call through that parameter threads the caller's continuation only through
+;; the fat value's `fn_cps` slot, which is filled for a global fn of one int
+;; argument and an int result -- not for a closure.  This used to compile and
+;; then abort at run time with "unhandled effect" (the perform ran from a
+;; fresh root); it is now refused here, at compile time.  `tur --interpret`
+;; prints 16.  When
+;; docs/reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md
+;; is fixed this becomes a passing fixture.
+(defeffect Ask [] :int)
+
+(defn app [h : (fn [int] int) x : int] : int (h x))
+
+(defn main [] : int
+  (let [m 5]
+    (println (handle (app (fn [x : int] : int (+ m (+ x (perform (Ask))))) 1)
+               (Ask [] k) (resume k 10))))
+  0)

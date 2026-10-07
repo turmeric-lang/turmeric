@@ -211,6 +211,14 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
 static bool fncps_arg_kind_ok(TypeKind k) {
     return k == TY_INT || k == TY_INT64;
 }
+/* ...and a RESULT the direct fallback can call `f.fn` for with its real C type
+ * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
+ * param's declared result, so calling it through an `int64_t` function type is a
+ * mismatched call -- a -fsanitize=function trap -- and a float result would be
+ * read from the wrong register.  Anything else stays delegated. */
+static bool fncps_result_kind_ok(TypeKind k) {
+    return k == TY_INT || k == TY_INT64 || k == TY_NIL || k == TY_BOOL;
+}
 /* E2 (fat-closure fn-value threading): is a call `(fn arg)` through the poly-fn
  * PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a CONCRETE fat
  * closure -- a bare `:fn` carrier (poly_type NULL) or a typed `:fn` signature
@@ -223,6 +231,7 @@ static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
     if (fn->poly_type && fn->poly_type->kind == TY_FORALL) return false;
     if (e->as.call_.n_args != 1) return false;
     if (e->as.call_.poly_arg_mask) return false;
+    if (!fncps_result_kind_ok(e->type.kind)) return false;
     return fncps_arg_kind_ok(e->as.call_.args[0]->type.kind);
 }
 

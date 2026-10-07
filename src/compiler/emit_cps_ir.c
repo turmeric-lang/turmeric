@@ -4866,6 +4866,29 @@ static const Binding *arg_fnval_binding(const Expr *arg) {
 
 typedef struct { const Expr *program; bool withdrew; } UnthreadedUd;
 
+/* Does the fat closure an argument builds for a poly-fn parameter carry an
+ * `fn_cps` entry?  A call through such a parameter threads ONLY through that
+ * slot (cps_ir_param_call_threads), and the EX_POLY_WRAP emission
+ * (emit_expr.c) fills it for one shape alone: a GLOBAL fn -- named, or a
+ * lifted captureless lambda -- of one int argument and an int result.  Any
+ * other value (a capturing closure, a `void` or float result) is called
+ * through `.fn` from a fresh root, so an effectful one must not count as
+ * threaded. */
+static bool arg_fat_has_fn_cps(const Expr *arg) {
+    const Expr *a = arg;
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a || a->kind != EX_POLY_WRAP) return false;
+    const Expr *inner = a->as.poly_wrap_.inner;
+    while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    const Binding *ib = (inner && inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+    if (ib && ib->source_binding) ib = ib->source_binding;
+    if (!ib || !ib->is_global || ib->type.kind != TY_FN || ib->type.as.fn.arity != 1)
+        return false;
+    TypeKind ak = ib->type.as.fn.arg_kinds[0];
+    TypeKind rk = ib->type.as.fn.result_kind;
+    return (ak == TY_INT || ak == TY_INT64) && (rk == TY_INT || rk == TY_INT64);
+}
+
 /* Does every call through param `p` in `fd`'s body thread the caller's
  * continuation (cps_ir_param_call_threads)?  Read after thread params are
  * registered, since registry threading depends on it. */
@@ -4901,7 +4924,10 @@ static void fnval_withdraw_walk(const Expr *e, UnthreadedUd *u) {
                                  && k < cfd->n_params; k++) {
             const Binding *fb = arg_fnval_binding(e->as.call_.args[k]);
             if (!fb || !threadable_has(fb)) continue;
-            if (param_calls_all_thread(cfd, cfd->params[k])) continue;
+            const Binding *pk = cfd->params[k];
+            if (param_calls_all_thread(cfd, pk)
+                && !(pk && pk->is_poly_fn && !arg_fat_has_fn_cps(e->as.call_.args[k])))
+                continue;
             /* Only an effect that ESCAPES the fn-value needs the caller's
              * handler; one it handles itself (`(fn [] (with-handler ...))`)
              * runs the same off the trampoline -- the B5 rule below. */
@@ -6706,6 +6732,25 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
     }
 }
 
+/* The direct `f.fn` call of a via_fncps fallback, as an int64 carrier
+ * expression.  The closure's wrapper keeps the param's REAL result type, so the
+ * call is spelled with it (fncps_result_kind_ok admits only the kinds below);
+ * an `int64_t (*)(void*, int64_t)` cast of a `void` wrapper is a mismatched
+ * call, which -fsanitize=function traps. */
+static void fncps_direct_call(Buf *out, const char *pf, const char *arg,
+                              const Expr *call) {
+    TypeKind rk = call ? call->type.kind : TY_INT;
+    if (rk == TY_NIL)
+        buf_printf(out, "(((void(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)), (int64_t)0)",
+                   pf, pf, arg);
+    else if (rk == TY_BOOL)
+        buf_printf(out, "((int64_t)((bool(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)))",
+                   pf, pf, arg);
+    else
+        buf_printf(out, "((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s))",
+                   pf, pf, arg);
+}
+
 /* Join a term's atom arguments into a malloc'd "a0, a1, ..." string. */
 static char *atoms_csv(CE *ce, const CAtom *args, uint32_t n) {
     Buf b; buf_init(&b);
@@ -7543,8 +7588,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                         pf, pf, pf, arg, thread);
                 /* Pure fallback: call the direct entry and deliver the result. */
                 Buf pv; buf_init(&pv);
-                buf_printf(&pv, "((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s))",
-                           pf, pf, arg);
+                fncps_direct_call(&pv, pf, arg, t->as.tailcall.call_expr);
                 buf_putc(&pv, '\0');
                 emit_deliver(ce, &t->as.tailcall.kont, pv.data);
                 buf_free(&pv);
@@ -8904,8 +8948,11 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         char *a0 = atom_str(ce, &call->as.tailcall.args[0]);
         ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value heap join */",
                 pf, pf, pf, a0, frame);
-        ce_line(ce, "return dk_run(%s, (intptr_t)((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)));",
-                frame, pf, pf, a0);
+        Buf dc; buf_init(&dc);
+        fncps_direct_call(&dc, pf, a0, call->as.tailcall.call_expr);
+        buf_putc(&dc, '\0');
+        ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc.data);
+        buf_free(&dc);
         free(pf); free(a0);
     } else if (call->as.tailcall.via_registry) {
         /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified

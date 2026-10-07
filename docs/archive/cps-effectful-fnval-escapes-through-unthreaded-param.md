@@ -59,14 +59,30 @@ root its direct entry installs.
   taint, so a shape the backend cannot thread is refused at compile time
   instead of aborting at run time. The same pass covers a parameter dropped
   by `cps_ir_thread_param_add`'s 256-entry cap.
+- The `fn_cps` dispatch threads only a value whose fat closure HAS an
+  `fn_cps` entry, and the EX_POLY_WRAP emission fills it for one shape: a
+  global fn of one `int` argument and an `int` result. So the withdrawal
+  also checks the value passed to a poly-fn parameter
+  (`arg_fat_has_fn_cps`). A capturing closure or a `void` callback that
+  performs used to compile and abort, on `main` too; it is now refused at
+  compile time.
+- The dispatch's pure fallback called `f.fn` through an
+  `int64_t (*)(void*, int64_t)` cast whatever the wrapper returned. That is a
+  mismatched call for a `void` or `bool` wrapper, which CI's
+  `-fsanitize=function` job trapped on four fixtures once the first change
+  routed more calls through it. It is now cast to the real result type
+  (`fncps_direct_call`). A float result, which the cast would read from the
+  wrong register, is not admitted to the dispatch at all
+  (`fncps_result_kind_ok`).
 
 Pinned by `tests/fixtures/cps-effectful-and-pure-fnval-one-param` on all three
 back ends.
 
 ## Still open
 
-Two shapes now get the compile-time refusal where they used to compile and
-then abort. Both are filed as
+Four shapes now get the compile-time refusal where they used to compile and
+then abort. All are filed as
 [cps-effectful-callback-through-multi-arg-or-untyped-param](../reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md):
 an effectful callback through an un-annotated parameter of two or more
-arguments, and one through an untyped `^fat` parameter.
+arguments, one through an untyped `^fat` parameter, a capturing effectful
+closure, and an effectful callback with a `void` (or any non-`int`) result.
