@@ -6,6 +6,14 @@
 WP3, which closed the capability half of the sandbox (S-1) and found this
 underneath it.
 
+**Resolved 2026-10-07.** The value-model channel this report left open is
+closed (see *Resolved: the value-model channel*). Executing it turned up a
+native channel much wider than the direction-1 table covered -- a measured 243
+capability-free natives crashed on a forged argument -- and that is closed and
+pinned too (*Resolved: the native channel, measured*).  What the fix does not
+cover is listed at the end.  The sections in between are the history, kept as
+filed.
+
 **Narrowed 2026-09-30.** The report was filed with two halves. The second, a
 restricted env ending the host process, is fixed (see *Resolved: host exit*
 below). What is open is the first: forged handles.
@@ -195,43 +203,141 @@ Pinned by `forgery/closure-retag` and its control `handles-ok/closure-carrier`
 (a closure pushed into a Vec and called back through a `^fat` parameter) in
 `tests/turi/sandbox-eval.c`.
 
-## Still open: the value-model channel -- direction 2
+## Resolved: the value-model channel (2026-10-07)
 
-Direction 1 guards *the native dispatch*. The forgery below reaches a pointer
-WITHOUT going through it, so the registry does not see it; it is the "erasing
-ascription launders an integer into a handle type" case the *Root cause*
-section already flagged, and it is what direction 2 (tagged handles) closes.
-(The second bullet, continuation resume, is closed -- see above.)
+The interpreter re-tags a bare word as a typed value in its own value model,
+outside any native: `(:: w cstr)` (which needs no type variable -- `(:: 4096
+cstr)` elaborates), a by-value struct ascription (`try_retag_carrier_struct`
+read the word to validate it), a field read through a bare-int receiver
+(`get_field_extract`), `gen-unwrap`, an STM `TVar`, and the `panic-payload-*`
+forms (which read a whole `TuriValue`, tag and pointer, out of the word).  Each
+of those now checks the provenance registry in a restricted env and refuses a
+word nothing recorded under the right kind -- "<thing> is not a live handle of
+the expected kind ... (S-5)".
 
-- **An erasing ascription on a type variable.** A generic body that ascribes a
-  caller integer to its type parameter re-tags it in the interpreter's own value
-  model, then the tree-walker dereferences the result as a struct or a string:
+What makes that possible without tagged handles: a value only loses its tag at
+a few places, and every one of them records it.
 
-  ```
-  (defn mk [A] [x : int] : A (:: x A))
-  (.x (:: (mk 4096) Point))      ; a wild read
-  ```
+- **Entering a native.** `turi_prov_note_args` (now `turi_prov_note_value` per
+  argument) registers every closure, string, struct and generator argument
+  under its kind -- the closure fix of 2026-10-03, generalised.
+- **The interpreter's own stores.** Rest-list cells (`EX_CONS_LIST`: the cell
+  as `CONS`, its head by tag), TVar payloads (new / write / swap / cas /
+  modify), set-literal elements, symbol literals (`SYM`), catch-unwind's Result
+  box and panic payload (`RESULTBOX`, `PANIC`), the generator box `gen-next`
+  hands out (`GENBOX`).
+- **Natives that hand back a string or a box as a bare word** mint it by row
+  (`alloc-str`, the Show instances' `String`s, schema decode outputs, ...).
 
-  The sites are `try_retag_carrier_struct` (which dereferences the word to
-  validate it), the `EX_ASCRIBE` / `EX_REINTERPRET` cstr arms, and
-  `get_field_extract`'s bare-int receiver path, which reads the word as a raw
-  field buffer -- all in `src/turi/eval.c`, none a native.  The call-target
-  re-tag is closed (above); these are not, because a struct carrier and a
-  string are MINTED in too many places (natives build both and hand them back
-  as words) for the closure fix's "register where it loses its tag" to cover.
+So a re-tag succeeds exactly for a word that once was a value of that kind.  A
+field read through a bare int is admitted for a struct that lost its tag (read
+as that struct) or a live native box at least `idx + 1` words long
+(`k_prov_box_words[]`); a field the box's own native keeps (a MutableMap's
+`.storage`) is registered as it is read out.  Pinned by the `forgery/*` and
+`handles-ok/*` value-model cases in `tests/turi/sandbox-eval.c`.
 
-- **Continuation resume.** `(resume-cont! 4096 0)` and the lowered
-  `tur_*_cont_resume` builtins are folded by the CEK driver
-  (`cont_fold_begin` / `ts_cont_resume`), not by the native dispatch, and cast
-  the caller integer to a `TuriCont *`.
+## Resolved: the native channel, measured (2026-10-07)
 
-These need direction 2's tagged handle (a `TURI_HANDLE` value tag carrying kind
-+ pointer, minted by every constructor and checked at every reinterpret,
-including the value-model retag and the continuation fold), because a bare
-`:int` in the value model carries no kind for the registry to check against.
-Until then the sandbox is a boundary against the native handle-forgery channel
-but **not yet a full boundary against hostile code** -- see the T3 status block
-in `docs/guides/security-guide.md`.
+Direction 1's table described the natives someone had written a row for.  A
+sweep that calls **every** capability-free native in a sandbox with a forged
+argument (an integer, a string literal, a float) at each of the first four
+positions, one forked child per native, found 243 that crashed.  The causes,
+and what closed each:
+
+- **The guard trusted any tagged string at a handle position.** A string
+  literal at a Vec position is a Vec header made of the caller's bytes; a
+  float, a bool, a closure or a struct there is the same cast of other bits.
+  `prov_arg_ok` now admits a tagged value only for the kind it is (a string at
+  a `CSTR` position, a struct at `STRUCT`, ...), or where the row says the
+  native reads it through its own API (`TURI_HSIG_STRUCT_OK` / `_CSTR_OK`).
+- **Rows covered 4 positions.** `map-assoc-eq`'s comparator is its fifth
+  argument and was called unchecked.  `TURI_HSIG_MAX_ARGS` is 6, and a
+  described position the call omits is refused.
+- **Natives with no row**, in whole families: Result/Option, json/schema, the
+  r7rs ports / id tables / continuations, sized-buf, the comonad cells,
+  Mock-Time, task groups and promises, seq generators, and every native that
+  reads a C string from an int carrier (`str->sym`, `tur_string_from_cstr`,
+  `__inst_Hash_hash_cstr`, ...).  `k_handle_rows[]` grew from 242 to 400 rows
+  and 25 new kinds -- one per heap layout, because the kind is what keeps one
+  layout from being read as another.
+- **Wrong rows.** `tur_string_slice` / `_slice_cstr` minted a slice as a
+  `String`; `bt-cons` streams and trail cells shared `BTCELL`; gen-arr
+  `{len, cap, data}` and seq-out-vec `{data, len, cap}` shared `GENARR`;
+  `mutmap-eq-storage?` checked for a wrap where it reads a slot table;
+  `seq-val-unwrap` wanted `SEQCELL` for a generator box.
+- **Words a native follows that no row sees**, checked in the native's body
+  with `turi_prov_check`: list links, Result elements of a Vec, `mbind`'s
+  continuation result, schema nodes reached through a union or a rec, JSON
+  node types (one kind covers every node type, so each accessor checks
+  `node[0]`).
+- **Key comparators compare STORED keys**, and the comparator is chosen per
+  call, so a key stored under the int comparator can be strcmp'd by the cstr
+  one.  The interpreter's string and struct comparators (and the `_cstr` HAMT
+  natives, which now run through them in a restricted env) compare an
+  unrecorded word unequal instead of reading it, via `turi_prov_word_live` and
+  the env of the native running on this thread.  The owned-key protocol (`-o`
+  natives' ownership flag, under which the runtime releases stored keys as
+  boxes) is refused outright in a restricted env.
+- **Frees.** `cstr-free` / `r7rs-cstr-free__` free only a string minted as
+  owned (`OWNED_CSTR`); anything else is left alone, since a tagged alias of a
+  freed string cannot be tracked.  `tur_string_cstr` returns an env-pool copy,
+  so a released `String` leaves no dangling tagged string.
+- **NULL**: a kind whose natives always dereference (`BTCELL`, `GENARR`,
+  `SEQVEC`, the r7rs handles) refuses a NULL handle.
+- **Bounds and sizes that were never checked** (sandbox-reachable, so a crash
+  of the host): `cstr-nth`, `gen-arr-get`, `seq-vec-get`, `r7rs-io-byte-ref__`,
+  `r7rs-utf8-at__`, `r7rs-call-variadic__`'s count, big-number radix and zero
+  divisor, number-syntax radix, `bytes-alloc` on a 32-bit `size_t`, a cyclic
+  JSON tree in `json/encode`, a self-referential schema, a generator resumed
+  from inside its own body.  A native allocation in a restricted env is capped
+  at `TURI_PROV_MAX_ALLOC_BYTES` (256 MiB), since step fuel does not meter it.
+- **A capability gap**: the `r7rs-eval-c-*` natives other than eval/load were
+  capability 0 but act on the process-global embedded R7RS env, which holds
+  every capability.  They now need every capability, like eval and load.
+- **The inline-C override path** called a stdlib defn's standing-in native with
+  neither the guard nor the mint/free tracking; both paths now go through
+  `call_native_checked`.
+
+Pinned by `native-sweep` in `tests/turi/sandbox-eval.c` (POSIX; it forks):
+every capability-free native, forged arguments at four positions, every arity
+up to six, and the run fails naming any native that crashes or hangs.
+`SANDBOX_SWEEP_ONLY=<name>` reruns one with its output kept.
+
+The registry was also measured for false refusals, by forcing it on in every
+env and running the whole interpreter suite (`tests/run-turi.sh`): the
+direction-1 table alone failed 115 fixtures that way (81 of them on a quoted
+symbol, `(sym->str 'foo)`); with the tables as they are now, 17 of the 2648
+it runs do, each for a reason listed below (a `String`-keyed map, re-entrant
+`call/cc`) or one a restricted env cannot reach (an inline-C body -- `set-hamt`,
+`seq-new`, a fixture's own -- which a sandbox and the macro env refuse before
+it runs).
+
+## What the fix does not cover
+
+- **The sweep proves single calls.** A native that stores a word and a later
+  native that follows it are covered by the rows and the in-body checks above,
+  read by hand -- not by the sweep.  Direction 2 (tagged handles) remains the
+  structural route, and the only one that would extend the guarantee to an
+  unrestricted env.
+- **Unrestricted envs are unchanged**: an embedder that grants every
+  capability gets no registry, and its programs can still forge handles.  That
+  env is not a sandbox, so this is by design.
+- **Owned-key maps and sets** (`Map String V`, `Set String`) are refused in a
+  restricted env: their key comparator is never handed out there, and the
+  ownership flag is refused.
+- **Scratch promotion** (`turi_env_set_scratch_promotion`) is a no-op in a
+  restricted env: its arena reset would hand registered addresses to the next
+  allocation.
+- **Re-entrant `call/cc`** (`#lang r7rs`) captures a stack image only inside a
+  top-level form's prompt in a restricted env, and restores one only under the
+  same prompt on the same thread; elsewhere it is escape-only.  Outside a
+  prompt the image would run up to the thread's stack base -- the embedder's
+  own frames.
+- **Tagged values are their own proof.** A string, struct or closure value the
+  interpreter holds tagged is trusted.  That is sound only while nothing frees
+  one behind its back -- the reason `cstr-free` and `tur_string_cstr` changed --
+  so a new native that frees an interpreter-visible string or struct needs the
+  same care.
 
 ## Resolved: host exit (2026-09-30)
 
