@@ -313,7 +313,16 @@ const char *turi_caps_describe(TuriCaps caps, char *buf, size_t n);
  * TURI_HK_GENERIC is the catch-all for a pointer handle with no more specific
  * kind (and the kind the caps-drop global seed uses, since it cannot recover a
  * global int's true kind): a forged arbitrary integer is still refused by every
- * kind, and GENERIC never satisfies a native that wants a specific kind. */
+ * kind, and GENERIC never satisfies a native that wants a specific kind.
+ *
+ * The interpreter's own value model re-tags words too -- `(:: w cstr)`, a
+ * by-value struct ascription, a field read through a bare-int receiver, a
+ * call through a fn-typed carrier, gen-unwrap, a TVar, a panic payload -- and
+ * each of those sites checks the same registry.  The words they accept are
+ * recorded where a value LOSES its tag: every closure, string, struct and
+ * generator argument entering a native, and the interpreter's own stores
+ * (rest-list cells, TVar payloads, set literals).  So a re-tag succeeds
+ * exactly for a word that was once a value of that kind. */
 typedef enum TuriHandleKind {
     TURI_HK_NONE = 0,   /* not a handle: a scalar/count/key/opaque word */
     TURI_HK_VEC,        /* native Vec box: int64_t[4] {data,len,cap,track} */
@@ -343,6 +352,43 @@ typedef enum TuriHandleKind {
     TURI_HK_GENERIC,    /* a pointer handle with no more specific kind */
     TURI_HK_CLOSURE,    /* a TuriClosure* that crossed into a native, where an
                          * int64 carrier can drop its tag (turi_prov_note_args) */
+    TURI_HK_CSTR,       /* a NUL-terminated string riding the int64 carrier: a
+                         * TURI_CSTR that lost its tag (a native argument, a
+                         * rest-list cell) or a string a native handed back as a
+                         * bare word.  Also the kind of a native position that
+                         * READS a C string, where a tagged TURI_CSTR is fine */
+    TURI_HK_STRUCT,     /* a TuriStruct* riding the carrier: a by-value struct /
+                         * record ADT that lost its tag the same ways */
+    TURI_HK_GENBOX,     /* &TuriGen::box -- the ptr<void> gen-next hands out and
+                         * gen-unwrap reads the yielded word through */
+    TURI_HK_TVAR,       /* TuriTVar* -- an STM cell (tvar/new) */
+    TURI_HK_PANIC,      /* TuriPanicPayload* -- a caught panic's err payload */
+    TURI_HK_RESULTBOX,  /* raw int64_t[3] {is_ok, ok, err} Result box (catch-
+                         * unwind, result-collect, ...) */
+    TURI_HK_MMSTORAGE,  /* TurMmStorage* -- a MutableMap's slot table, the word
+                         * `(.storage m)` reads out of its { storage } wrapper */
+    TURI_HK_OPTIONBOX,  /* raw int64_t[2] {is_some, value} Option box (json/get) */
+    TURI_HK_BTSTREAM,   /* WkBtCell {value, next} -- a backtracking stream cell
+                         * (bt-cons / mreturn / mplus / mbind); NOT a trail
+                         * TurBtCell, which is TURI_HK_BTCELL */
+    TURI_HK_RESPAIR,    /* int64_t[2] {ok_vec, err_vec} (result-partition) */
+    TURI_HK_SCHEMA,     /* tur_sch_t int64_t[4] {kind, a, b, c} schema node */
+    TURI_HK_SCHERRS,    /* schema-decode error vector {data, len, cap} */
+    TURI_HK_SCHERR,     /* one schema error record int64_t[3] {path, msg, val} */
+    TURI_HK_R7IO,       /* r7rs_io* -- an R7RS port buffer */
+    TURI_HK_R7IDTAB,    /* r7rs_idtab* -- an R7RS identity table */
+    TURI_HK_R7KCONT,    /* R7kCont* -- an R7RS call/cc stack image */
+    TURI_HK_ARGCELL,    /* *args* cell {char *value, next} -- a host-built
+                         * cons whose head is a trusted C string */
+    TURI_HK_IDENTITY,   /* int64_t[1] {value} -- the Identity comonad cell */
+    TURI_HK_PAIR,       /* WkTuple2 {e1, e2} -- the env-pair comonad cell */
+    TURI_HK_SIZEDBUF,   /* TuriSizedBufRep {len, data} -- sized-buf */
+    TURI_HK_MOCKTIME,   /* int64_t[1] {now_ms} -- Mock-Time */
+    TURI_HK_TASKGROUP,  /* WkTaskGroup* -- structured-concurrency task group */
+    TURI_HK_GEN,        /* TuriGen* -- the word behind a TURI_GEN generator */
+    TURI_HK_OWNED_CSTR, /* a malloc'd char* the caller may free(3) */
+    TURI_HK_SEQVEC,     /* seq-out-vec int64_t[3] {data, len, cap} -- NOT a
+                         * gen-arr, which is {len, cap, data} (GENARR) */
     TURI_HK__COUNT
 } TuriHandleKind;
 
@@ -350,12 +396,22 @@ typedef enum TuriHandleKind {
 enum {
     TURI_HSIG_MINT = 1u << 0,  /* result is a freshly-minted handle -> register */
     TURI_HSIG_FREE = 1u << 1,  /* the handle args are freed -> unregister */
+    /* A dual-representation native: a tagged TURI_STRUCT at one of its handle
+     * positions is read through the struct API (turi_struct_field), never cast
+     * to the handle's layout, so the guard admits it.  Without the flag a
+     * struct there is refused -- its header would be read as the handle. */
+    TURI_HSIG_STRUCT_OK = 1u << 2,
+    /* The same for a tagged TURI_CSTR: the native reads a string there (a name
+     * that may arrive as a string or as a :Sym word, say), so it is admitted
+     * at a position whose kind is not TURI_HK_CSTR. */
+    TURI_HSIG_CSTR_OK = 1u << 3,
 };
 
-/* How many leading argument positions a handle signature describes.  A handle
- * argument past this is vanishingly rare (no interpreter native derefs one);
- * the guard treats such positions as non-handles. */
-#define TURI_HSIG_MAX_ARGS 4
+/* How many leading argument positions a handle signature describes.  The
+ * guard treats a position past this as a non-handle, so it must cover the
+ * widest handle-taking native: map-assoc-eq's comparator is its fifth
+ * argument, and with 4 positions it was called through unchecked. */
+#define TURI_HSIG_MAX_ARGS 6
 
 /* One row of the handle-signature table: which leading args are pointer handles
  * (and of what kind), what kind the result is, and mint/free behaviour. */
@@ -389,10 +445,38 @@ void turi_prov_register(TuriEnv *env, TuriHandleKind kind, const void *ptr);
 void turi_prov_forget(TuriEnv *env, const void *ptr);   /* all kinds for ptr */
 bool turi_prov_check(TuriEnv *env, TuriHandleKind kind, const void *ptr);
 
-/* A closure argument entering a native can come back out as a bare int64 --
- * stored in a Vec, a map, a cell -- so register each one as TURI_HK_CLOSURE
- * there.  No-op when provenance is off. */
+/* A closure, string or struct argument entering a native can come back out as
+ * a bare int64 -- stored in a Vec, a map, a cell -- so register each one under
+ * its kind there (TURI_HK_CLOSURE / _CSTR / _STRUCT).  No-op when provenance is
+ * off. */
 void turi_prov_note_args(TuriEnv *env, const TuriValue *args, uint32_t n);
+
+/* The same for one value that drops its tag outside a native call (a rest-list
+ * cell built by the interpreter itself).  No-op when provenance is off. */
+void turi_prov_note_value(TuriEnv *env, TuriValue v);
+
+/* Re-tag an int64 carrier as the C string it holds.  In a provenance-tracked env
+ * the word must be a string that lost its tag (TURI_HK_CSTR, or a GENERIC
+ * pre-restriction global), else the result is a TURI_ERROR: an erasing
+ * ascription `(:: w cstr)` would otherwise hand any integer to strlen.  0 stays
+ * the NULL cstr it always was. */
+TuriValue turi_cstr_from_carrier(TuriEnv *env, int64_t w);
+
+/* The most one native allocation may ask for in a provenance-tracked env.
+ * Step fuel meters evaluation, not a native's own work, so a single
+ * (vec-new-filled n x) could otherwise take the host's memory. */
+#define TURI_PROV_MAX_ALLOC_BYTES ((uint64_t)256 << 20)
+
+/* May a native allocate `count` elements of `elem` bytes?  Always true
+ * outside a provenance-tracked env. */
+bool turi_prov_alloc_ok(TuriEnv *env, int64_t count, size_t elem);
+
+/* For a C callback a native hands words to -- the HAMT key comparators, which
+ * compare STORED keys as well as the caller's: is `w` a live handle of kind k
+ * in the provenance-tracked env whose native is running on this thread?  True
+ * when no such native is running (provenance off).  A CSTR word also passes as
+ * a GENERIC pre-restriction global, like everywhere else. */
+bool turi_prov_word_live(TuriHandleKind k, int64_t w);
 
 /* Re-tag an int64 carrier as the closure it holds.  In a provenance-tracked env
  * the word must be a closure some native was handed (TURI_HK_CLOSURE), else
@@ -404,6 +488,13 @@ TuriValue turi_closure_from_carrier(TuriEnv *env, int64_t w);
  * globals (their pointer-carrying values become GENERIC handles) so a handle
  * minted before the caps dropped is not mistaken for a forgery.  Idempotent. */
 void turi_prov_enable_and_seed(TuriEnv *env);
+
+/* Record (live) or forget the three R7RS standard-port buffers as R7IO
+ * handles in a provenance-tracked env.  They are made while the R7RS prelude
+ * loads, before a restricted env's capabilities drop, so turi_env_allow
+ * records them when I/O is granted and turi_env_deny forgets them when it is
+ * taken away: a cap-free port write reaches stdout only with TURI_CAP_IO. */
+void turi_r7rs_std_ports_prov(TuriEnv *env, bool live);
 
 /* Release the provenance registry (called from turi_env_free). */
 void turi_prov_free(TuriEnv *env);

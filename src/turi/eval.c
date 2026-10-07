@@ -226,6 +226,43 @@ static TuriValue native_caps_denied(TuriEnv *env, const TuriClosure *cl) {
                        need);
 }
 
+/* The one way a native runs: the capability check, then -- in a provenance-
+ * tracked env -- the S-5 handle guard before and the mint/free tracking after.
+ * Shared by the by-name dispatch and the inline-C override (a stdlib defn
+ * whose inline-C body a native stands in for), which used to call the native
+ * with neither.
+ *
+ * g_prov_native_env names the provenance-tracked env whose native is running,
+ * for the C callbacks a native drives (a HAMT key comparator reaches STORED
+ * words the guard never saw; turi_prov_word_live checks them).  It is set on
+ * EVERY native call, not only restricted ones: a panic that longjmps out of a
+ * native skips the restore, and the next call must not inherit it. */
+static _Thread_local TuriEnv *g_prov_native_env;
+
+static TuriValue call_native_checked(TuriEnv *env, TuriClosure *cl,
+                                     TuriValue *args, uint32_t n_args) {
+    if (cl->native_caps & ~env->caps) return native_caps_denied(env, cl);
+    TuriEnv *saved_prov_env = g_prov_native_env;
+    if (!env->provenance_on) {
+        g_prov_native_env = NULL;
+        TuriValue rv = cl->native(env, args, n_args, cl->native_ud);
+        g_prov_native_env = saved_prov_env;
+        return rv;
+    }
+    turi_prov_note_args(env, args, n_args);
+    if (cl->native_handle) {
+        TuriValue pv;
+        if (turi_prov_guard_native(env, cl->native_handle, args, n_args, &pv))
+            return pv;
+    }
+    g_prov_native_env = env;
+    TuriValue rv = cl->native(env, args, n_args, cl->native_ud);
+    g_prov_native_env = saved_prov_env;
+    if (cl->native_handle)
+        turi_prov_track_native(env, cl->native_handle, args, n_args, rv);
+    return rv;
+}
+
 /* =========================================================================
  * security-audit-plan S-5: handle-provenance registry
  *
@@ -326,11 +363,100 @@ void turi_prov_forget(TuriEnv *env, const void *ptr) {
     }
 }
 
+/* A tagged value about to lose its tag -- handed to a native, which may store
+ * it as the bare word its union holds, or written into a rest-list cell.  The
+ * word can come back out later (a Vec read, a map lookup, `head`) and be
+ * re-tagged by an erasing ascription, so record it under the kind that re-tag
+ * will check.  Only the tags something re-tags FROM a word need this: a
+ * closure (the call head), a string (`(:: w cstr)`), a struct (a by-value
+ * record ascription), a generator (the seq natives). */
+void turi_prov_note_value(TuriEnv *env, TuriValue v) {
+    if (!env || !env->provenance_on) return;
+    switch (v.tag) {
+    case TURI_CLOSURE:
+        if (v.as_closure) turi_prov_register(env, TURI_HK_CLOSURE, v.as_closure);
+        break;
+    case TURI_CSTR:
+        if (v.as_cstr) turi_prov_register(env, TURI_HK_CSTR, v.as_cstr);
+        break;
+    case TURI_STRUCT:
+        if (v.as_struct) turi_prov_register(env, TURI_HK_STRUCT, v.as_struct);
+        break;
+    case TURI_GEN:
+        if (v.as_gen) turi_prov_register(env, TURI_HK_GEN, v.as_gen);
+        break;
+    default:
+        break;
+    }
+}
+
 void turi_prov_note_args(TuriEnv *env, const TuriValue *args, uint32_t n) {
     if (!env || !env->provenance_on || !args) return;
-    for (uint32_t i = 0; i < n; i++)
-        if (args[i].tag == TURI_CLOSURE && args[i].as_closure)
-            turi_prov_register(env, TURI_HK_CLOSURE, args[i].as_closure);
+    for (uint32_t i = 0; i < n; i++) turi_prov_note_value(env, args[i]);
+}
+
+/* The refusal every value-model re-tag hands back for a word that no tag-loss
+ * site recorded under the kind it is being re-tagged to. */
+static TuriValue prov_forged_value(const char *what) {
+    return turi_errorf("eval: %s is not a live handle of the expected kind -- a "
+                       "sandboxed %s cannot be forged from an integer (S-5)",
+                       what, what);
+}
+
+/* A string word is live when some tag-loss site recorded it, or when it is a
+ * pre-restriction global the caps-drop seed could only call GENERIC. */
+static bool prov_cstr_live(TuriEnv *env, const void *p) {
+    return turi_prov_check(env, TURI_HK_CSTR, p) ||
+           turi_prov_check(env, TURI_HK_GENERIC, p);
+}
+
+/* How many int64 words a native box of each kind holds, for a field read
+ * through a bare-int receiver (get_field_extract): a live box of a kind listed
+ * here may be read at word idx < words.  0 = never read as a field buffer. */
+static const uint8_t k_prov_box_words[TURI_HK__COUNT] = {
+    [TURI_HK_CONS]      = 2,   /* { head, tail } */
+    [TURI_HK_RESULTBOX] = 3,   /* { is_ok, ok, err } */
+    [TURI_HK_OPTIONBOX] = 2,   /* { is_some, value } (json/get) */
+    [TURI_HK_MUTMAP]    = 1,   /* { storage } -- MutableMap's (.storage m) */
+};
+
+/* The kind of the word a box field holds, when the box's own native keeps it
+ * (so reading it out of a live box yields a genuine handle of that kind). */
+static TuriHandleKind prov_box_field_kind(TuriHandleKind box, uint32_t idx) {
+    if (box == TURI_HK_CONS && idx == 1)   return TURI_HK_CONS;
+    if (box == TURI_HK_MUTMAP && idx == 0) return TURI_HK_MMSTORAGE;
+    return TURI_HK_NONE;
+}
+
+/* Is p a live native box at least idx+1 words long?  Returns its kind (NONE
+ * when it is not). */
+static TuriHandleKind prov_raw_box_covers(TuriEnv *env, const void *p,
+                                          uint32_t idx) {
+    for (int k = 1; k < TURI_HK__COUNT; k++)
+        if (k_prov_box_words[k] > idx &&
+            turi_prov_check(env, (TuriHandleKind)k, p))
+            return (TuriHandleKind)k;
+    return TURI_HK_NONE;
+}
+
+bool turi_prov_word_live(TuriHandleKind k, int64_t w) {
+    TuriEnv *env = g_prov_native_env;
+    if (!env || !env->provenance_on || !w) return true;
+    const void *p = (const void *)(intptr_t)w;
+    return k == TURI_HK_CSTR ? prov_cstr_live(env, p) : turi_prov_check(env, k, p);
+}
+
+bool turi_prov_alloc_ok(TuriEnv *env, int64_t count, size_t elem) {
+    if (!env || !env->provenance_on) return true;
+    if (count < 0) return false;
+    return elem == 0 || (uint64_t)count <= TURI_PROV_MAX_ALLOC_BYTES / elem;
+}
+
+TuriValue turi_cstr_from_carrier(TuriEnv *env, int64_t w) {
+    const char *p = (const char *)(intptr_t)w;
+    if (p && env && env->provenance_on && !prov_cstr_live(env, p))
+        return prov_forged_value("string value");
+    return turi_cstr(p);
 }
 
 TuriValue turi_closure_from_carrier(TuriEnv *env, int64_t w) {
@@ -343,25 +469,82 @@ TuriValue turi_closure_from_carrier(TuriEnv *env, int64_t w) {
     return turi_closure((TuriClosure *)(intptr_t)w);
 }
 
-/* The pointer an int64-carried handle argument holds.  A TURI_CSTR value is a
- * real string pointer produced by the reader / interpreter (never forged from
- * an attacker integer), so it needs no provenance and returns NULL "trusted".
- * Only a TURI_INT carrier is a forgeable pointer to be checked. */
+/* The pointer an int64-carried handle argument holds, for the track side (a
+ * freed handle is forgotten).  Only a TURI_INT carrier names a registered
+ * handle; anything else was refused or admitted by its tag in the guard. */
 static const void *prov_arg_ptr(TuriValue v) {
-    if (v.tag == TURI_CSTR) return NULL;
-    if (v.tag == TURI_INT)  return (const void *)(intptr_t)v.as_int;
-    return NULL;   /* a properly-tagged struct/closure/etc. is not a bare carrier */
+    if (v.tag == TURI_INT) return (const void *)(intptr_t)v.as_int;
+    return NULL;
+}
+
+/* Kinds whose natives dereference the handle unconditionally, so a NULL one
+ * is a NULL dereference rather than the empty value it is for a list, an
+ * option or a comparator.  Refusing NULL there cannot break a working
+ * program: it crashed. */
+static bool prov_kind_nonnull(TuriHandleKind k) {
+    switch (k) {
+    case TURI_HK_BTCELL: case TURI_HK_GENARR: case TURI_HK_SEQVEC:
+    case TURI_HK_R7IO: case TURI_HK_R7IDTAB: case TURI_HK_R7KCONT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Is `v` acceptable at a handle position of kind `k`?  A native casts the
+ * argument's union word to the handle's pointer whatever the tag, so the TAG
+ * decides as much as the registry does:
+ *   - nil, and a 0 word, are the NULL handle -- the empty list, a none, no
+ *     comparator -- except for a kind no native accepts NULL for;
+ *   - a TURI_INT carrier must be a live handle of kind k (a word read as a C
+ *     string also passes as a GENERIC pre-restriction global, whose true kind
+ *     the caps-drop seed could not recover);
+ *   - a tagged value is its own proof only for the kind it IS: a TURI_CSTR
+ *     where a C string is read, a closure or a struct where one is, a
+ *     generator where one is, and a struct / string anywhere in a
+ *     dual-representation native (TURI_HSIG_STRUCT_OK / _CSTR_OK) that reads
+ *     it through the struct API or as a string.  A string literal at a Vec
+ *     position is a Vec header made of the caller's bytes, and a float, a
+ *     bool or a closure there is the same cast of different bits. */
+static bool prov_arg_ok(TuriEnv *env, TuriHandleKind k, uint8_t flags,
+                        TuriValue v) {
+    switch (v.tag) {
+    case TURI_NIL:
+        return !prov_kind_nonnull(k);
+    case TURI_INT: {
+        const void *p = (const void *)(intptr_t)v.as_int;
+        if (!p) return !prov_kind_nonnull(k);
+        if (k == TURI_HK_CSTR) return prov_cstr_live(env, p);
+        return turi_prov_check(env, k, p);
+    }
+    case TURI_CSTR:    return k == TURI_HK_CSTR || !v.as_cstr ||
+                              (flags & TURI_HSIG_CSTR_OK) != 0;
+    /* A comparator position also takes a Turmeric closure, which the native
+     * invokes through turi_call (a non-closure there is refused by turi_call). */
+    case TURI_CLOSURE: return k == TURI_HK_CLOSURE || k == TURI_HK_CMP;
+    case TURI_STRUCT:  return k == TURI_HK_STRUCT ||
+                              (flags & TURI_HSIG_STRUCT_OK) != 0;
+    case TURI_GEN:     return k == TURI_HK_GEN;
+    default:           return false;
+    }
 }
 
 bool turi_prov_guard_native(TuriEnv *env, const TuriNativeHandleRow *sig,
                             const TuriValue *args, uint32_t n, TuriValue *out) {
+    /* A handle position the call does not supply is read by a native that
+     * does not count its arguments from past the end of `args`. */
+    for (uint32_t i = n; i < TURI_HSIG_MAX_ARGS; i++) {
+        if (sig->arg[i] == TURI_HK_NONE) continue;
+        *out = turi_errorf("eval: '%s' arg %u is missing -- a sandboxed native's "
+                           "handle argument is required (S-5)",
+                           sig->name, (unsigned)i + 1);
+        return true;
+    }
     uint32_t lim = n < TURI_HSIG_MAX_ARGS ? n : TURI_HSIG_MAX_ARGS;
     for (uint32_t i = 0; i < lim; i++) {
         TuriHandleKind k = (TuriHandleKind)sig->arg[i];
         if (k == TURI_HK_NONE) continue;
-        const void *p = prov_arg_ptr(args[i]);
-        if (!p) continue;   /* NULL/nil or a trusted cstr carrier */
-        if (!turi_prov_check(env, k, p)) {
+        if (!prov_arg_ok(env, k, sig->flags, args[i])) {
             *out = turi_errorf(
                 "eval: '%s' arg %u is not a live handle of the expected kind -- "
                 "a sandboxed handle cannot be forged from an integer (S-5)",
@@ -383,15 +566,17 @@ void turi_prov_track_native(TuriEnv *env, const TuriNativeHandleRow *sig,
         }
     }
     if ((sig->flags & TURI_HSIG_MINT) && sig->result != TURI_HK_NONE) {
-        const void *p = NULL;
-        if (result.tag == TURI_INT)       p = (const void *)(intptr_t)result.as_int;
-        else if (result.tag == TURI_CSTR) p = NULL;   /* cstr result is trusted */
-        if (p) turi_prov_register(env, (TuriHandleKind)sig->result, p);
+        /* A tagged result is not a carrier: a TURI_CSTR result is registered
+         * only once it loses its tag (turi_prov_note_value). */
+        if (result.tag == TURI_INT && result.as_int)
+            turi_prov_register(env, (TuriHandleKind)sig->result,
+                               (const void *)(intptr_t)result.as_int);
     }
 }
 
 /* Release the provenance registry at env teardown (called from turi_env_free). */
 void turi_prov_free(TuriEnv *env) {
+    if (env && g_prov_native_env == env) g_prov_native_env = NULL;
     if (!env || !env->prov) return;
     TuriProvSet *s = (TuriProvSet *)env->prov;
     free(s->ents);
@@ -1528,6 +1713,11 @@ static bool turi_key_content_eq(TuriValue x, TuriValue y) {
 bool turi_struct_key_eq_c(int64_t a, int64_t b) {
     if (a == b) return true;
     if (!a || !b) return false;
+    /* S-5: both words are dereferenced as TuriStructs, and a key stored under
+     * another comparator (int, say) can be any integer.  Unequal, unread. */
+    if (!turi_prov_word_live(TURI_HK_STRUCT, a) ||
+        !turi_prov_word_live(TURI_HK_STRUCT, b))
+        return false;
     TuriValue x = turi_struct_val((TuriStruct *)(intptr_t)a);
     TuriValue y = turi_struct_val((TuriStruct *)(intptr_t)b);
     return turi_key_content_eq(x, y);
@@ -3067,6 +3257,7 @@ static TuriValue turi_ok_result_box(TuriEnv *env, TuriValue ok_val) {
     /* Escaping payload: the box is returned as a Result carrier. */
     int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
     box[0] = 1; box[1] = ok_val.as_int; box[2] = 0;
+    turi_prov_register(env, TURI_HK_RESULTBOX, box);   /* S-5: a minted box */
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
 }
@@ -3084,6 +3275,10 @@ static TuriValue turi_err_result_box(TuriEnv *env) {
     pp->line     = env->catch_panic_line;
     int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
     box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)pp;
+    /* S-5: the box and the payload it points at are minted handles; the
+     * panic-payload-* forms read a whole TuriValue out of the payload. */
+    turi_prov_register(env, TURI_HK_RESULTBOX, box);
+    turi_prov_register(env, TURI_HK_PANIC, pp);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
 }
@@ -3504,6 +3699,8 @@ struct TuriGen {
     char        *stack;       /* mmap'd / malloc'd coroutine stack */
     bool         started;     /* has the body begun executing? */
     bool         done;        /* has the body run to completion? */
+    bool         running;     /* swapped in right now: a resume from inside its
+                               * own body would re-enter a live stack */
     int64_t      box;         /* storage for the yielded value; gen-next
                                * returns &box as the ptr<void> ABI result */
     TuriValue    box_val;     /* the yielded value itself, tag and all: a
@@ -3608,9 +3805,14 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
     }
 
     /* Swap into the body; the previously-current generator (if any) is
-     * restored when control returns here. */
+     * restored when control returns here.  A generator advanced from inside
+     * its own body (it reached itself through a ^mut binding, say) would swap
+     * into the context it is running on and overwrite its own live stack. */
+    if (g->running)
+        return turi_error("eval: generator resumed while it is already running");
     TuriGen *prev_gen = g_current_gen;
     g_current_gen = g;
+    g->running = true;
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -3619,6 +3821,7 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+    g->running = false;
     g_current_gen = prev_gen;
 
     if (g->done) {
@@ -3629,7 +3832,9 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
         }
         return turi_int(0); /* NULL: exhausted */
     }
-    /* Body yielded; g->box already holds the value. */
+    /* Body yielded; g->box already holds the value.  S-5: the box address is
+     * the ptr<void> gen-unwrap will read through, so it is a minted handle. */
+    turi_prov_register(env, TURI_HK_GENBOX, &g->box);
     return turi_int((int64_t)(intptr_t)&g->box);
 }
 
@@ -4535,6 +4740,15 @@ static TuriTVar *stm_eval_tvar(TuriEnv *env, EvalFrame *frame,
     TuriValue v = eval_expr(env, frame, tvar_expr);
     if (turi_is_error(v) || env_signaled(env)) {
         *err_out = v;
+        return NULL;
+    }
+    /* S-5: every STM op reads and writes through this pointer, and
+     * `(tvar/read (:: 4096 TVar))` made it any integer.  In a provenance-
+     * tracked env it must be a cell tvar/new made. */
+    if (env->provenance_on && v.as_int &&
+        (v.tag != TURI_INT ||
+         !turi_prov_check(env, TURI_HK_TVAR, (const void *)(intptr_t)v.as_int))) {
+        *err_out = prov_forged_value("TVar");
         return NULL;
     }
     return (TuriTVar *)(intptr_t)v.as_int;
@@ -7762,6 +7976,7 @@ static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied
     if (turi_is_error(applied) || env_signaled(env)) {
         *out = applied;                       /* fn signalled: propagate, no commit */
     } else {
+        turi_prov_note_value(env, applied);   /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, s->tv, applied.as_int);
         *out = turi_int(s->old);
     }
@@ -7881,8 +8096,32 @@ TuriValue turi_call_dynamic(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_
     return turi_call(env, fn, args, n);
 }
 
-static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
+static TuriHandleKind prov_raw_box_covers(TuriEnv *env, const void *p,
+                                          uint32_t idx);
+static TuriHandleKind prov_box_field_kind(TuriHandleKind box, uint32_t idx);
+
+static TuriValue get_field_extract(TuriEnv *env, const Expr *e, TuriValue sv) {
     uint32_t idx = e->as.get_field_.field_idx;
+    /* security-audit-plan S-5 (value-model channel): a bare-int receiver is
+     * read below as a field buffer, and `(.x (:: (mk 4096) Hp))` made it any
+     * integer.  In a provenance-tracked env it must be a struct that lost its
+     * tag (read it AS that struct) or a live native box at least idx+1 words
+     * long; anything else is refused before the read. */
+    if (sv.tag == TURI_INT && sv.as_int && env && env->provenance_on) {
+        const void *p = (const void *)(intptr_t)sv.as_int;
+        if (turi_prov_check(env, TURI_HK_STRUCT, p)) {
+            sv = turi_struct_val((TuriStruct *)(intptr_t)sv.as_int);
+        } else {
+            TuriHandleKind box = prov_raw_box_covers(env, p, idx);
+            if (box == TURI_HK_NONE) return prov_forged_value("struct value");
+            /* A field the box's own native keeps (a MutableMap's storage)
+             * is a genuine handle as read; record it for its consumer. */
+            TuriHandleKind fk = prov_box_field_kind(box, idx);
+            int64_t fw = ((const int64_t *)p)[idx];
+            if (fk != TURI_HK_NONE && fw)
+                turi_prov_register(env, fk, (const void *)(intptr_t)fw);
+        }
+    }
     /* Auto-deref an rc<T> receiver: an rc value is a "__rc" wrapper struct
      * { counter-ptr, inner }, so `(.field rc-val)` (and `(.f (.rcfield s))`,
      * where the inner is itself a struct/record ADT) must resolve through the
@@ -7999,8 +8238,8 @@ static TypeKind ascribe_effective_kind(EvalFrame *frame, const Type *ty) {
  * excluded here -- only a bare non-parametric record ADT reaches this), the
  * pointer and its embedded name pointer must be plausible (> 0x1000), the struct
  * name must equal the ascribed type's name, and the field count must match. */
-static TuriValue try_retag_carrier_struct(EvalFrame *frame, const Type *ty,
-                                          TuriValue v) {
+static TuriValue try_retag_carrier_struct(TuriEnv *env, EvalFrame *frame,
+                                          const Type *ty, TuriValue v) {
     if (v.tag != TURI_INT || v.as_int == 0) return v;
     Type rt = *ty;
     if (ty->kind == TY_TYVAR && ty->as.tyvar_.name) {
@@ -8030,6 +8269,14 @@ static TuriValue try_retag_carrier_struct(EvalFrame *frame, const Type *ty,
     if (nf < 2 && !(nf == 1 && d->from_struct_lowering)) return v;
     uintptr_t p = (uintptr_t)(intptr_t)v.as_int;
     if (p < 0x1000) return v;
+    /* security-audit-plan S-5: the plausibility checks below READ the word
+     * (s->name, s->n_fields) to decide whether it is a struct, so a caller
+     * integer was a wild read before any of them could say no.  In a
+     * provenance-tracked env only a struct that lost its tag is dereferenced;
+     * any other word stays a bare int, which a field read then refuses. */
+    if (env && env->provenance_on &&
+        !turi_prov_check(env, TURI_HK_STRUCT, (const void *)p))
+        return v;
     TuriStruct *s = (TuriStruct *)p;
     if ((uintptr_t)s->name < 0x1000) return v;   /* raw carrier: word 0 is not a name ptr */
     if (s->n_fields != nf) return v;
@@ -8109,7 +8356,7 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
          * REINTERPRET, not the ascription whose arm below re-tags a cstr.  The
          * word printed as the string's address. */
         if (rk == TY_CSTR && v.tag == TURI_INT)
-            return turi_cstr((const char *)(intptr_t)v.as_int);
+            return turi_cstr_from_carrier(env, v.as_int);   /* S-5 */
         return v;
     }
     case EX_ASCRIBE:
@@ -8153,13 +8400,14 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
             return v;
         case TY_CSTR:
-            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
+            /* S-5: a word re-tagged as a string must be one that lost its tag. */
+            if (v.tag == TURI_INT) return turi_cstr_from_carrier(env, v.as_int);
             return v;
         default:
             /* By-value struct/ADT ascription: retag an int carrier that is really
              * a TuriStruct* (e.g. a struct Map VALUE) so field access reads it as
              * a struct.  No-op for every other type (guarded). */
-            return try_retag_carrier_struct(frame, &e->type, v);
+            return try_retag_carrier_struct(env, frame, &e->type, v);
         }
     case EX_RETURN:
         env->returning    = true;
@@ -10650,7 +10898,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* SR N2: the receiver evaluated to `cur`; extract the field.
                  * On a control signal (error/return/throw) propagate untouched. */
                 if (signaled) { len--; break; }
-                cur = get_field_extract(top->expr, cur);
+                cur = get_field_extract(env, top->expr, cur);
                 len--;
                 break;
             }
@@ -10771,19 +11019,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
      * security-audit-plan WP3 (S-1): the one capability check every native
      * call passes through -- by name from Turmeric, via turi_call from C, from
      * a HOF native re-entering evaluation, and the inline-C override below. */
-    if (cl->native) {
-        if (cl->native_caps & ~env->caps) return native_caps_denied(env, cl);
-        turi_prov_note_args(env, args, n_args);
-        if (env->provenance_on && cl->native_handle) {
-            TuriValue pv;
-            if (turi_prov_guard_native(env, cl->native_handle, args, n_args, &pv))
-                return pv;
-            TuriValue rv = cl->native(env, args, n_args, cl->native_ud);
-            turi_prov_track_native(env, cl->native_handle, args, n_args, rv);
-            return rv;
-        }
-        return cl->native(env, args, n_args, cl->native_ud);
-    }
+    if (cl->native) return call_native_checked(env, cl, args, n_args);
 
     FnDef *fn = (FnDef *)cl->fn;
     /* EX_CLOSURE adds a synthetic __env_p first param for codegen; skip it. */
@@ -10806,11 +11042,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
         TuriValue native_v = turi_env_get(env, fname);
         if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
             native_v.as_closure->native) {
-            if (native_v.as_closure->native_caps & ~env->caps)
-                return native_caps_denied(env, native_v.as_closure);
-            turi_prov_note_args(env, args, n_args);
-            return native_v.as_closure->native(env, args, n_args,
-                                               native_v.as_closure->native_ud);
+            return call_native_checked(env, native_v.as_closure, args, n_args);
         }
     }
 
@@ -11721,6 +11953,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             StrSlice sl = { s->name, s->len };
             isym = symtab_intern(&env->st, sl);
         }
+        /* S-5: the Symbol* rides the carrier, so a literal is a minted :Sym
+         * handle -- `(sym->str 'foo)` was refused in a sandbox without it. */
+        turi_prov_register(env, TURI_HK_SYM, isym);
         TuriValue v = {0};
         v.tag = TURI_INT;
         v.as_int = (int64_t)(intptr_t)isym;
@@ -12116,6 +12351,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (turi_is_error(iv) || env_signaled(env)) {
                 return iv;
             }
+            turi_prov_note_value(env, iv);   /* S-5: the element drops its tag */
             raw[k++] = iv.as_int;
         }
         /* Sort */
@@ -12168,6 +12404,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             cell[0] = iv.as_int;  /* head: raw value carrier */
             cell[1] = tail;       /* tail: previously-built cell (or nil) */
             tail = (int64_t)(intptr_t)cell;
+            /* S-5: the head drops its tag here and `head`/`tail` walk the cell,
+             * so both are minted handles in a provenance-tracked env. */
+            turi_prov_note_value(env, iv);
+            turi_prov_register(env, TURI_HK_CONS, cell);
         }
         TuriValue v = {0}; v.tag = TURI_INT; v.as_int = tail;
         return v;
@@ -12184,7 +12424,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * box, not just on make-struct TuriStructs.  (Driver path: DK_GET_FIELD.) */
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
         if (turi_is_error(sv) || env_signaled(env)) return sv;
-        return get_field_extract(e, sv);
+        return get_field_extract(env, e, sv);
     }
 
     /* --- Phase DS3: (set! (.field s) v) — struct field write ------------- */
@@ -12863,39 +13103,54 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
     }
 
-    /* --- Phase TI5: panic-payload-* accessors ------------------------------ */
+    /* --- Phase TI5: panic-payload-* accessors ------------------------------
+     * S-5: each reads through the payload word -- panic-payload-value a whole
+     * TuriValue, tag and pointer -- so in a provenance-tracked env the word
+     * must be a payload catch-unwind minted (PANIC_PAYLOAD_GUARD). */
+#define PANIC_PAYLOAD_GUARD(pv)                                               \
+        if ((pv).as_int && env->provenance_on &&                              \
+            ((pv).tag != TURI_INT ||                                          \
+             !turi_prov_check(env, TURI_HK_PANIC,                             \
+                              (const void *)(intptr_t)(pv).as_int)))          \
+            return prov_forged_value("panic payload")
     case EX_PANIC_PAYLOAD_TYPE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_type_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_int(pp ? pp->type_tag : 0);
     }
     case EX_PANIC_PAYLOAD_VALUE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_value_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return pp ? pp->value : turi_nil();
     }
     case EX_PANIC_PAYLOAD_FILE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_file_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_cstr(pp && pp->file ? pp->file : "");
     }
     case EX_PANIC_PAYLOAD_LINE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_line_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_int(pp ? pp->line : 0);
     }
     case EX_PANIC_PAYLOAD_DOWNS: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_downs_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         if (pp && pp->type_tag == (int)e->as.panic_payload_downs_.target_type)
             return pp->value;
         return turi_nil();
     }
+#undef PANIC_PAYLOAD_GUARD
 
     /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
     case EX_RC_OF: {
@@ -13878,6 +14133,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_GEN_UNWRAP: {
         TuriValue pv = eval_expr(env, frame, e->as.gen_unwrap_.ptr_expr);
         if (turi_is_error(pv) || env_signaled(env)) return pv;
+        /* S-5: the read below goes through whatever word p holds, and
+         * `(gen-unwrap 4096)` made it any integer.  In a provenance-tracked env
+         * it must be a box gen-next handed out. */
+        if (pv.as_int && env->provenance_on &&
+            (pv.tag != TURI_INT ||
+             !turi_prov_check(env, TURI_HK_GENBOX, (const void *)(intptr_t)pv.as_int)))
+            return prov_forged_value("generator value");
         int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
         /* generator-in-generic: the element is the enclosing generic's `A`,
          * which the tree-walker never monomorphizes -- there is no kind to
@@ -13906,8 +14168,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
             case TY_BOOL:
                 return turi_bool(bits != 0);
-            case TY_CSTR:
-                return turi_cstr((const char *)(intptr_t)bits);
+            case TY_CSTR: {
+                /* S-5: the yielded value itself is beside the box; a tagged
+                 * string is its own proof, a bare word must be a live one. */
+                if (pv.as_int) {
+                    const TuriGen *og = (const TuriGen *)(
+                        (const char *)(intptr_t)pv.as_int - offsetof(TuriGen, box));
+                    if (og->box_val.tag == TURI_CSTR) return og->box_val;
+                }
+                return turi_cstr_from_carrier(env, bits);
+            }
             default:
                 return turi_int(bits);
         }
@@ -14025,6 +14295,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         turi_env_track_collection(env, tv, tvar_buf_destroy, tvar_buf_scan);
         tv->value   = init.as_int;
         tv->version = 1;
+        /* S-5: the payload drops its tag into the cell; the cell is a handle. */
+        turi_prov_note_value(env, init);
+        turi_prov_register(env, TURI_HK_TVAR, tv);
         return turi_int((int64_t)(intptr_t)tv);
     }
 
@@ -14045,6 +14318,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (!tv) return err;
         TuriValue val = eval_expr(env, frame, e->as.tvar_write_.value);
         if (turi_is_error(val) || env_signaled(env)) return val;
+        turi_prov_note_value(env, val);   /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, tv, val.as_int);
         return turi_nil();
     }
@@ -14058,6 +14332,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue nv = eval_expr(env, frame, e->as.tvar_swap_.new_val);
         if (turi_is_error(nv) || env_signaled(env)) return nv;
         int64_t old = stm_read(g_stm_tx, tv);
+        turi_prov_note_value(env, nv);    /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, tv, nv.as_int);
         return turi_int(old);
     }
@@ -14073,6 +14348,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue nv = eval_expr(env, frame, e->as.tvar_cas_.new_val);
         if (turi_is_error(nv) || env_signaled(env)) return nv;
         if (stm_read(g_stm_tx, tv) == ov.as_int) {
+            turi_prov_note_value(env, nv);   /* S-5: tag dropped into the cell */
             stm_log_write(g_stm_tx, tv, nv.as_int);
             return turi_bool(true);
         }
@@ -14097,6 +14373,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue arg = turi_int(old);
         TuriValue r = turi_call(env, fn, &arg, 1);
         if (turi_is_error(r) || env_signaled(env)) return r;
+        turi_prov_note_value(env, r);     /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, tv, r.as_int);
         return turi_int(old);
     }
@@ -15019,6 +15296,11 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
 
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
+    /* S-5: the handle-provenance registry names scratch addresses (cons
+     * cells, structs, pool strings, result boxes), and a reset hands them to
+     * the next allocation while the registry still vouches for them.  A
+     * provenance-tracked env keeps its scratch; step fuel bounds its size. */
+    if (env->provenance_on) return;
     env->promo_attempts++;   /* TR0: promotion attempted this eval boundary */
     if (!promo_env_quiescent(env)) { env->promo_decline_busy++; return; }
 
@@ -16945,6 +17227,8 @@ void turi_env_set_max_depth(TuriEnv *env, uint32_t depth) {
 void turi_env_allow(TuriEnv *env, TuriCaps cap) {
     if (!env) return;
     env->caps |= cap;
+    if (env->provenance_on && (cap & TURI_CAP_IO))
+        turi_r7rs_std_ports_prov(env, true);
 }
 
 void turi_env_deny(TuriEnv *env, TuriCaps cap) {
@@ -16956,6 +17240,8 @@ void turi_env_deny(TuriEnv *env, TuriCaps cap) {
      * built, so a forged integer handle is refused from here on. */
     if (env->caps != TURI_CAP_ALL)
         turi_prov_enable_and_seed(env);
+    if (env->provenance_on && (cap & TURI_CAP_IO))
+        turi_r7rs_std_ports_prov(env, false);
 }
 
 bool turi_env_has_cap(TuriEnv *env, TuriCaps cap) {

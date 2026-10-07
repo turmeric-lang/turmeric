@@ -95,44 +95,64 @@ static TuriValue native_tur_hamt_get(TuriEnv *e, TuriValue *a, uint32_t n, void 
  * text, distinct pointers) behave like literals.  Same retain-on-no-change
  * quirk as native_tur_hamt_set/del: each persistent binding is freed
  * separately by the interpreter. */
+/* S-5: the runtime's tur_hamt_*_cstr strcmp STORED keys, and another setter
+ * (an explicit-hash one) can have stored any word.  A provenance-tracked env
+ * runs the same operations through the _eq family with the interpreter's
+ * comparator, which compares an unrecorded word unequal instead of reading
+ * it (turi_cstr_key_eq_c, below). */
+static bool turi_cstr_key_eq_c(int64_t a, int64_t b);
+#define CSTR_KEY_EQ ((tur_hamt_keyeq_fn)turi_cstr_key_eq_c)
+
 static TuriValue native_tur_hamt_set_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     if (n < 3) return turi_nil();
     Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
     const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
                                               : (const char *)(intptr_t)a[1].as_int;
+    if (!key) key = "";   /* the hash strlen'd a NULL key */
     void *val       = (a[2].tag == TURI_CSTR) ? (void *)a[2].as_cstr
                                               : (void *)(intptr_t)a[2].as_int;
-    Hamt *r = tur_hamt_set_cstr(m, key, val);
+    Hamt *r = e->provenance_on
+            ? tur_hamt_set_eq(m, tur_hamt_hash_str(key), (void *)key, val, CSTR_KEY_EQ)
+            : tur_hamt_set_cstr(m, key, val);
     if (r == m) tur_hamt_retain(r);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 static TuriValue native_tur_hamt_del_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     if (n < 2) return turi_nil();
     Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
     const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
                                               : (const char *)(intptr_t)a[1].as_int;
-    Hamt *r = tur_hamt_del_cstr(m, key);
+    if (!key) key = "";   /* the hash strlen'd a NULL key */
+    Hamt *r = e->provenance_on
+            ? tur_hamt_del_eq(m, tur_hamt_hash_str(key), (void *)key, CSTR_KEY_EQ)
+            : tur_hamt_del_cstr(m, key);
     if (r == m) tur_hamt_retain(r);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 static TuriValue native_tur_hamt_has_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     if (n < 2) { TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = false; return v; }
     Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
     const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
                                               : (const char *)(intptr_t)a[1].as_int;
-    bool r = tur_hamt_has_cstr(m, key);
+    if (!key) key = "";   /* the hash strlen'd a NULL key */
+    bool r = e->provenance_on
+           ? tur_hamt_has_eq(m, tur_hamt_hash_str(key), (void *)key, CSTR_KEY_EQ)
+           : tur_hamt_has_cstr(m, key);
     TuriValue v = {0}; v.tag = TURI_BOOL; v.as_bool = r; return v;
 }
 static TuriValue native_tur_hamt_get_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     if (n < 2) return turi_nil();
     Hamt *m         = (Hamt *)(intptr_t)a[0].as_int;
     const char *key = (a[1].tag == TURI_CSTR) ? a[1].as_cstr
                                               : (const char *)(intptr_t)a[1].as_int;
-    void *r = tur_hamt_get_cstr(m, key);
+    if (!key) key = "";   /* the hash strlen'd a NULL key */
+    void *r = e->provenance_on
+            ? tur_hamt_get_eq(m, tur_hamt_hash_str(key), (void *)key, CSTR_KEY_EQ)
+            : tur_hamt_get_cstr(m, key);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)r; return v;
 }
 static TuriValue native_tur_hamt_merge(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -365,9 +385,31 @@ static TuriValue native_set_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
  * a Turmeric CLOSURE, thread it through the ctx trampoline exactly like the map
  * _eq_o natives (a raw-int cast + call would be a wild jump).  NULL / non-closure
  * keyeq (int/Sym identity sets) makes the _eq_o path behave like the plain path. */
+/* S-5: the owned-key protocol.  A caller-supplied `owned` flag makes the
+ * runtime treat STORED keys (and values) as refcounted boxes -- retain on a
+ * structural copy, release on removal -- and a key stored by an earlier
+ * un-owned call (or matched by a closure comparator) can be any integer, so
+ * an owned call releases memory the caller named.  Owned keys are only made by
+ * MapKey[String], whose box comparator a sandbox is never handed, so a
+ * provenance-tracked env refuses the flag outright rather than tracking which
+ * map holds which kind of key.  (The by-value value boxing below ORs bit 2 in
+ * itself, around boxes it allocated.) */
+static bool owned_flag_refused(TuriEnv *e, const char *name, int64_t owned,
+                               TuriValue *out) {
+    if (!e || !e->provenance_on || owned == 0) return false;
+    *out = turi_errorf("eval: '%s' owned keys are refused in a sandboxed env -- "
+                       "a stored key could be released as a box it never was (S-5)",
+                       name);
+    return true;
+}
+
 static TuriValue native_set_add_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 5) return n >= 1 ? a[0] : turi_nil();
+    {
+        TuriValue refused;
+        if (owned_flag_refused(e, "set-add-eq-o", a[4].as_int, &refused)) return refused;
+    }
     Hamt *src = set_hamt(a[0]);
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
@@ -385,6 +427,10 @@ static TuriValue native_set_add_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
 static TuriValue native_set_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 5) return turi_bool(false);
+    {
+        TuriValue refused;
+        if (owned_flag_refused(e, "set-has-eq-o?", a[4].as_int, &refused)) return refused;
+    }
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
         return turi_bool(tur_hamt_has_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
@@ -399,6 +445,10 @@ static TuriValue native_set_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
 static TuriValue native_set_del_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 5) return n >= 1 ? a[0] : turi_nil();
+    {
+        TuriValue refused;
+        if (owned_flag_refused(e, "set-del-eq-o", a[4].as_int, &refused)) return refused;
+    }
     Hamt *src = set_hamt(a[0]);
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
@@ -557,6 +607,11 @@ static bool turi_cstr_key_eq_c(int64_t a, int64_t b) {
     const char *q = (const char *)(intptr_t)b;
     if (p == q) return true;
     if (!p || !q) return false;
+    /* S-5: the comparator is chosen per call, so a key stored under the int
+     * comparator can be any integer by the time this one strcmps it.  In a
+     * provenance-tracked env an unrecorded word compares unequal, unread. */
+    if (!turi_prov_word_live(TURI_HK_CSTR, a) || !turi_prov_word_live(TURI_HK_CSTR, b))
+        return false;
     return strcmp(p, q) == 0;
 }
 static bool turi_f32_carrier_eq_c(int64_t a, int64_t b) {
@@ -750,6 +805,10 @@ static TuriValue native_map_assoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, voi
     (void)ud;
     /* (m h key val keyeq owned) */
     if (n < 6) return n >= 1 ? a[0] : turi_nil();
+    {
+        TuriValue refused;
+        if (owned_flag_refused(e, "map-assoc-eq-o", a[5].as_int, &refused)) return refused;
+    }
     Hamt *src = set_hamt(a[0]);
     if (a[4].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[4] };
@@ -788,6 +847,10 @@ static TuriValue native_map_get_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
     (void)ud;
     /* (m h key keyeq owned) */
     if (n < 5) return turi_int(0);
+    {
+        TuriValue refused;
+        if (owned_flag_refused(e, "map-get-eq-o", a[4].as_int, &refused)) return refused;
+    }
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
         void *v = tur_hamt_get_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
@@ -804,6 +867,10 @@ static TuriValue native_map_get_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
 static TuriValue native_map_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 5) return turi_bool(false);
+    {
+        TuriValue refused;
+        if (owned_flag_refused(e, "map-has-eq-o?", a[4].as_int, &refused)) return refused;
+    }
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
         return turi_bool(tur_hamt_has_eq_ctx(set_hamt(a[0]), (uint64_t)a[1].as_int,
@@ -818,6 +885,10 @@ static TuriValue native_map_has_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void 
 static TuriValue native_map_dissoc_eq_o(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 5) return n >= 1 ? a[0] : turi_nil();
+    {
+        TuriValue refused;
+        if (owned_flag_refused(e, "map-dissoc-eq-o", a[4].as_int, &refused)) return refused;
+    }
     Hamt *src = set_hamt(a[0]);
     if (a[3].tag == TURI_CLOSURE) {
         MapTuriEqCtx ctx = { e, a[3] };
@@ -1408,18 +1479,21 @@ static TuriValue native_vec_eq(TuriEnv *env, TuriValue *a, uint32_t n, void *ud)
 
 /* vec-new-filled: allocate a vec of size sz filled with init */
 static TuriValue native_vec_new_filled(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     int64_t sz  = (n > 0) ? a[0].as_int : 0;
     int64_t val = (n > 1) ? a[1].as_int : 0;
     if (sz < 0) sz = 0;
     /* `sz * 8` wrapped for a huge sz and the fill loop overran the block
      * (security audit WP5, M-5). */
-    if ((uint64_t)sz > SIZE_MAX / sizeof(int64_t))
+    if ((uint64_t)sz > SIZE_MAX / sizeof(int64_t) ||
+        !turi_prov_alloc_ok(env, sz, sizeof(int64_t)))
         return turi_errorf("vec-new-filled: size %lld out of range", (long long)sz);
-    int64_t *v = (int64_t *)malloc(3 * sizeof(int64_t));
-    if (!v) return turi_nil();
     int64_t *data = sz > 0 ? (int64_t *)malloc((size_t)sz * sizeof(int64_t)) : NULL;
-    if (sz > 0 && !data) { free(v); return turi_error("vec-new-filled: out of memory"); }
+    if (sz > 0 && !data) return turi_error("vec-new-filled: out of memory");
+    /* Four words, the Vec box layout: vec-free reads v[3] (the tracking slot,
+     * 0 = untracked), which the old 3-word box did not have. */
+    int64_t *v = (int64_t *)calloc(4, sizeof(int64_t));
+    if (!v) { free(data); return turi_nil(); }
     for (int64_t i = 0; i < sz; i++) data[i] = val;
     v[0] = (int64_t)(intptr_t)data; v[1] = sz; v[2] = sz;
     TuriValue ret = {0}; ret.tag = TURI_INT; ret.as_int = (int64_t)(intptr_t)v;
