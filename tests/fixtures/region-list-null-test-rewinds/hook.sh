@@ -17,14 +17,13 @@ set -u
 TMP="$1"
 TUR="${TUR:-./build/tur}"
 
-cat > "$TMP/build.tur" <<'EOF'
-(defn build [n : int acc : (Cons int)] : (Cons int)
-  (if (= n 0) acc (build (- n 1) (tcons-of n acc))))
-EOF
-
+# The helper is written into each program, not `load`ed from "$TMP": on
+# Windows "$TMP" is an MSYS path, which MSYS rewrites in a native program's
+# arguments but not inside a file the program reads.
 prog() {   # prog <name> <bracket-body>
     cat > "$TMP/$1.tur" <<EOF
-(load "$TMP/build.tur")
+(defn build [n : int acc : (Cons int)] : (Cons int)
+  (if (= n 0) acc (build (- n 1) (tcons-of n acc))))
 (defn rounds [k : int acc : int] : int
   (if (= k 0) acc
     (rounds (- k 1) (+ acc (with-region (fn [] : int $2))))))
