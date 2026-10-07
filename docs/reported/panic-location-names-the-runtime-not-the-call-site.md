@@ -1,5 +1,23 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed again 2026-10-07: direction 2 is done.** A failed contract's
+message names the kind of check, the function, where the predicate is
+written, and the predicate's source:
+`Precondition failed in safe-div at boom.tur:2: (not= b 0)`, and likewise
+`Postcondition failed in ...`, `Return contract violated in ...`, `Class
+result contract violated in ...` and `Contract violated by parameter 'd' in
+...` (`rt_contract_message`, `src/compiler/elab_fns.c`, used by the `:pre`
+site, `rt_wrap_return_check` -- early returns included -- and
+`rt_inject_param_checks`; a lambda is `in fn`, an instance method its method
+name).  The old prefix is kept, so every `expected.stderr` that matched it
+still does.  Compiled and `--interpret` print the same message.  Pinned by
+`tests/fixtures/contract-failure-names-its-predicate`; the contract types and
+debugging guides show the new text.  **Still open:** direction 4
+(`--panic-trace`), and the `panic at` prefix of a contract failure and of a
+runtime-raised panic (a bounds check), which still names the runtime helper
+that called `tur_panic` -- the contract's own location is now inside its
+message.
+
 **Narrowed 2026-10-04: a `(panic ...)` names its own call site** (fix
 directions 1 and 3). Compiled: the preamble's body is now `tur_panic_at(file,
 line, msg)`, and each `panic` site the emitter writes passes its own source

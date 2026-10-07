@@ -7,6 +7,16 @@
 #include "mangle.h"
 
 /* ---- file-local helper forward declarations ---- */
+/* panic-location-names-the-runtime-not-the-call-site: an instance method's
+ * name for a failed contract's message -- the head of its `(name [params]
+ * body)` impl form. */
+static const char *rt_impl_method_name(const Form *impl_form) {
+    if (impl_form && impl_form->tag == F_LIST && impl_form->as.list.len > 0 &&
+        impl_form->as.list.items[0]->tag == F_SYM)
+        return impl_form->as.list.items[0]->as.sym->name;
+    return NULL;
+}
+
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
     uint32_t *out_body_start,
     const Symbol **class_type_params, uint8_t n_class_type_params,
@@ -5280,6 +5290,7 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                 rc->ret_var       = rb->refine_return_var;
                 rc->class_ret     = rb->refine_class_ret_pred;
                 rc->class_ret_var = rb->refine_class_ret_var;
+                rc->subject       = rt_impl_method_name(mp->impl_form);
                 e->ret_contract = rc;
             }
         }
@@ -5359,7 +5370,7 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     e, method_body, m_check_fn,
                     mp->method_params, mp->n_method_params,
                     mb->refine_param_preds, mb->refine_param_vars,
-                    idx, n_idx, impl_form->span);
+                    idx, n_idx, rt_impl_method_name(impl_form), impl_form->span);
             }
         }
 
@@ -5378,7 +5389,7 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                 method_body = rt_wrap_return_check(
                     e, method_body, m_check_fn, rb->refine_return_pred,
                     rb->refine_return_var, "Return contract violated",
-                    impl_form->span);
+                    rt_impl_method_name(impl_form), impl_form->span);
                 /* ...and the class's promise on top, when the instance's own
                  * was not proved to imply it.  See the comment where this is
                  * set: a dispatch site relies on the class predicate. */
@@ -5386,7 +5397,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     method_body = rt_wrap_return_check(
                         e, method_body, m_check_fn, rb->refine_class_ret_pred,
                         rb->refine_class_ret_var,
-                        "Class result contract violated", impl_form->span);
+                        "Class result contract violated",
+                        rt_impl_method_name(impl_form), impl_form->span);
             }
         }
 

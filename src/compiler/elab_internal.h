@@ -1131,6 +1131,7 @@ typedef struct RetContract {
     const char        *ret_var;
     const struct Form *class_ret;      /* an instance method: its class's promise */
     const char        *class_ret_var;
+    const char        *subject;        /* who promised it, for the failure message */
 } RetContract;
 
 /* Wrap a returned value in the enclosing function's result checks (see
@@ -1263,7 +1264,7 @@ Type *rt_peel_type_arg_contract(Type *arg_type, Span at);
  * hand-rolled per site. */
 Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
                            const Form *pred, const char *var_name,
-                           const char *fail_msg, Span span);
+                           const char *fail_msg, const char *subject, Span span);
 
 /* CT1: inject an entry check for each `{ v : T | pred }` parameter.  Shared by
  * `defn`, `fn`, and typeclass instance methods so a contract parameter is
@@ -1272,7 +1273,15 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
 Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
                              Binding **params, uint32_t n_params,
                              const Form **ct_preds, const char **ct_vars,
-                             const uint32_t *ct_idx, uint32_t n_ct, Span span);
+                             const uint32_t *ct_idx, uint32_t n_ct,
+                             const char *subject, Span span);
+
+/* panic-location-names-the-runtime-not-the-call-site, direction 2: the text a
+ * failed contract check panics with -- `<what> in <subject>: <predicate>`,
+ * the predicate printed from its source form (long ones elided).  `subject`
+ * names the function, method or `fn`; NULL leaves it out. */
+const char *rt_contract_message(Elab *e, const char *what, const char *subject,
+                                const Form *pred);
 
 /* True when contract checks are being emitted for this build. */
 bool rt_contracts_emitted(void);

@@ -1,0 +1,13 @@
+;; panic-location-names-the-runtime-not-the-call-site, direction 2: a failed
+;; contract names the function, where its predicate is written, and the
+;; predicate itself.  It used to say only `Precondition failed`.  The divisor
+;; comes from the argument count, so no static proof decides the check and
+;; the runtime one stays.
+(defn safe-div [a : int b : int] : int
+  :pre (not= b 0)
+  (/ a b))
+
+(defn main [] : int
+  (println (safe-div 10 2))
+  (println (safe-div 10 (list-length *args*)))
+  0)
