@@ -1084,6 +1084,12 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
  * its narrower set: its free is DEEP (tur_result_box_free walks the payload),
  * which is why err-val is scalar-restricted there and unrestricted here. */
 static bool g_esc_allow_sum_accessors = false;
+/* closure-let-in-self-tail-loop-leaks: when set, the only use that is not an
+ * escape is an invocation -- the `^borrow` / inferred non-retaining parameter
+ * and borrowed-rest relaxations are off.  Those are sound for a free at scope
+ * exit, but not for one at a self tail call's backedge: there the argument is
+ * the next turn's parameter.  File-scope like the flag above. */
+static bool g_esc_call_head_only = false;
 /* dynamic-returned-closure-env-is-never-freed (self application): bit i set
  * admits `b` as argument i of a dynamic call whose CALLEE is `b` itself.  See
  * any_box_binding_escapes_self_apply.  File-scope for the same reason as the
@@ -1264,7 +1270,7 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * no `^borrow` annotation.  Soundness rides the same escape
                      * analysis that set the bit: if the callee let the closure
                      * escape, the bit is clear and the arg is walked as an escape. */
-                    if (arg_is_b && call_dispatch_is_static(cur)) {
+                    if (arg_is_b && call_dispatch_is_static(cur) && !g_esc_call_head_only) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && i < fb->type.as.fn.arity
@@ -1286,7 +1292,7 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * cons builder wrapped in carrier casts (EX_CAST / EX_ASCRIBE /
                      * fat/poly coercions); walk the items, skip an item that peels to
                      * `b` (borrowed, non-escaping), and push the rest. */
-                    if (arg && arg->kind == EX_CONS_LIST) {
+                    if (arg && arg->kind == EX_CONS_LIST && !g_esc_call_head_only) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && fb->type.as.fn.is_variadic
@@ -1595,6 +1601,15 @@ esc_done:
 
 bool closure_binding_escapes(const Expr *e, const Binding *b) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+}
+
+/* closure-let-in-self-tail-loop-leaks: is every use of `b` in `e` a call of
+ * it?  closure_binding_escapes with the argument relaxations off. */
+bool closure_binding_only_invoked(const Expr *e, const Binding *b) {
+    g_esc_call_head_only = true;
+    bool esc = binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+    g_esc_call_head_only = false;
+    return !esc;
 }
 
 /* catch-unwind-thunk-closure-leak: true if the caught-Result binding `b` is used

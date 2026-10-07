@@ -220,9 +220,13 @@ to its drop glue, the code pointer, and the captured values. A closure bound
 in a `let` is freed when the `let` ends. A named `defn` passed as a value
 costs nothing: its fat box is allocated once, statically.
 
-One shape leaks: a capturing closure `let`-bound inside a function that
-ends in a self tail call (a loop written as recursion) is never freed
-([closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-let-in-self-tail-loop-leaks.md)).
+In a loop written as recursion, a closure `let`-bound in the body and only
+ever called is freed at the jump back to the top of the loop. One that the
+body passes on as an argument -- to the loop's own next call, or to a function
+that only calls it -- is kept until the outermost call into the loop returns,
+then freed. (Until 2026-10-07 a closure returned by a call, like `(mk i)`
+below, was never freed in that position:
+[closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/closure-let-in-self-tail-loop-leaks.md).)
 
 ### Calls through function values, and effects
 
@@ -453,8 +457,9 @@ but they are not the same for memory today:
 - When the loop body calls a function value or performs an effect, a `while`
   loop frees the continuation frames each iteration; a recursive loop keeps
   all of them until it returns.
-- A capturing closure `let`-bound in a `while` body is freed each iteration;
-  in a self-tail-recursive body it is never freed.
+- A capturing closure `let`-bound in a `while` body is freed each iteration.
+  In a self-tail-recursive body it is freed each iteration only when the body
+  just calls it; one passed on as an argument is kept until the loop returns.
 
 ```turmeric
 (defn mk [k : int] : (fn [int] int) (fn [x : int] : int (+ x k)))
@@ -555,8 +560,6 @@ repro and the measurements.
 - [fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md)
   -- calls through function values hold their frames until the outermost
   call returns.
-- [closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-let-in-self-tail-loop-leaks.md)
-  -- a closure in a self-tail-recursive body is never freed.
 - [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
   -- by-value recursive values copied out of a borrow or a container leak.
 

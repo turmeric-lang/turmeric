@@ -1027,11 +1027,52 @@ static bool cps_any_closure_env_freeable(const Expr *let, uint32_t idx) {
     return true;
 }
 
+/* closure-let-in-self-tail-loop-leaks: the other shape the direct emitter
+ * drops at a let's scope exit (let_binding_env_freeable) -- a call to a
+ * `returns_fresh_closure` function, the make-scaler `(let [f (mk i)] ...)`.
+ * Every such call mallocs a fresh, uniquely owned env with scalar captures and
+ * a scalar result (the inference checked both), so the only question is the
+ * same escape walk.  On the CPS path the let has no scope exit, so the call
+ * was bound and the env never freed at all: 24 B a turn of a loop.  Only a
+ * call the direct emitter may take whole qualifies -- a colored callee keeps
+ * its continuation threading. */
+static bool safe_to_delegate(CpsB *b, const Expr *e);   /* fwd (defined below) */
+static bool cps_fresh_call_env_freeable(CpsB *b, const Expr *let, uint32_t idx) {
+    const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    if (!init || !bd || init->kind != EX_CALL) return false;
+    if (!init->as.call_.fn_binding || !init->as.call_.fn_binding->returns_fresh_closure)
+        return false;
+    if (!safe_to_delegate(b, let->as.let_.bindings[idx].init)) return false;
+    if (closure_binding_escapes(let->as.let_.body, bd)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (closure_binding_escapes(let->as.let_.bindings[j].init, bd)) return false;
+    }
+    return true;
+}
+
+bool closure_binding_only_invoked(const Expr *e, const Binding *b);
+
+/* closure-let-in-self-tail-loop-leaks: may a backedge free this binder (see
+ * letraw.reap_at_backedge)?  Every use in the let -- body and sibling inits --
+ * must be an invocation. */
+static bool cps_closure_only_invoked(const Expr *let, uint32_t idx) {
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    if (!bd || !closure_binding_only_invoked(let->as.let_.body, bd)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (!closure_binding_only_invoked(let->as.let_.bindings[j].init, bd)) return false;
+    }
+    return true;
+}
+
 static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
     Expr *init = (Expr *)let->as.let_.bindings[idx].init;
-    if (cps_closure_env_freeable(let, idx)) {
+    if (cps_closure_env_freeable(let, idx) || cps_fresh_call_env_freeable(b, let, idx)) {
         CTerm *t = build_letraw(b, init, bx, rest);
         t->as.letraw.reap_env = true;
+        t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
         return t;
     }
     CTerm *t = cps_bind(b, init, bx, rest);

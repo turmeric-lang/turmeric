@@ -6275,6 +6275,16 @@ typedef struct {
     const struct CpsTcg *tcg;
     int          tcg_idx;
     const char  *lbl_pfx;
+    /* closure-let-in-self-tail-loop-leaks: the boundary-reaped closure binders
+     * (letraw reap_env) in scope at this point of the MAIN body (`self_out`).
+     * A self tail call there is a backedge, after which none of them is read
+     * again, so it frees each one then (__dk_reap_closure_now) rather than
+     * leaving a loop to hold one env per turn until its outermost entry
+     * returns.  Pushed and popped around the letraw's body; past the cap a
+     * binder is simply left to the boundary.  A lifted helper copies this
+     * struct but writes elsewhere, so it never reaches the backedge. */
+    char        *loop_reaps[16];
+    uint32_t     n_loop_reaps;
 } CE;
 
 /* ============================================================================
@@ -7620,6 +7630,11 @@ static void emit_term(CE *ce, const CTerm *t) {
                         ce_line(ce, "    %s __tb%u = %.*s;", emit_param_ctype(ce->ctx, sfd, i),
                                 i, (int)(to - from), argv_t + from);
                     }
+                    /* The arguments are computed (they may call a closure
+                     * below); the closures this turn bound are dead now. */
+                    for (uint32_t i = 0; i < ce->n_loop_reaps; i++)
+                        ce_line(ce, "    __dk_reap_closure_now((intptr_t)%s);",
+                                ce->loop_reaps[i]);
                     for (uint32_t i = 0; i < t->as.tailcall.n; i++) {
                         char *pn = name_for_binding(ce->ctx, sfd->params[i]);
                         ce_line(ce, "    %s = __tb%u;", pn, i);
@@ -8207,12 +8222,18 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * reap never double-frees, and never walks -- __dk_reap_ptr is a bare free).
      * A scalar-captured closure frees cleanly; the freeable gate already excluded
      * a non-scalar-returning closure (result could alias the env). */
+    bool loop_reap_pushed = false;
     if (t->as.letraw.reap_env) {
         /* closure-drop-glue: flag-on this env is headered (env[-1] drop-glue),
          * so reap it as a headered closure (kind 2 -> TUR_CLOSURE_DROP: recovers
          * the header, walks owning captures, frees the base) rather than a bare
          * interior free. */
         ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
+        if (t->as.letraw.reap_at_backedge && ce->self_out && ce->out == ce->self_out &&
+            ce->n_loop_reaps < sizeof ce->loop_reaps / sizeof ce->loop_reaps[0]) {
+            ce->loop_reaps[ce->n_loop_reaps++] = strdup(bn);
+            loop_reap_pushed = true;
+        }
     }
     /* dynamic-returned-closure-env-is-never-freed: an `any` binder holding a
      * fresh capturing closure; its payload word is the headered env.
@@ -8237,6 +8258,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);
+    if (loop_reap_pushed) free(ce->loop_reaps[--ce->n_loop_reaps]);
 }
 
 /* struct-temporary-fn-field-box-leaks (the CPS half): a by-value struct
