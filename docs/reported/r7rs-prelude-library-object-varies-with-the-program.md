@@ -1,5 +1,41 @@
 # `#lang r7rs`: the cached prelude object varies with the program, so "first builds" keep happening
 
+**Narrowed 2026-10-07: causes 1 and 2 below are fixed, and so is a fourth
+one this report missed. What is left is cause 3 (flags) and eviction.** On
+the same corpus walk as below (129 `#lang r7rs` fixtures, in order, cold
+cache), the count of library objects went from **10 to 2**: one shared by
+every fixture, and one for programs that import `(scheme eval)`. Those link
+the sanitized libturi, which is part of the cache key by design.
+
+- **Cause 2 was not "a lambda".** Both repro programs below also define `f`,
+  and the CPS coloring resolved stdlib `__cons-fmap`'s callback parameter `f`
+  to the program's global `f` by name. A program defining any global `f`,
+  `g`, `k`, ... compiled that stdlib function differently. Fixed as
+  [cps-coloring-resolves-a-parameter-to-a-same-named-global](../archive/cps-coloring-resolves-a-parameter-to-a-same-named-global.md).
+  `a.tur` and `b.tur` below now link one object.
+- **Cause 1 was downstream of cause 2.** The shifted `__defer_env_N` /
+  `__ps_N` counters were the fresh names the missing CPS twin did not
+  consume. With cause 2 gone, the library text does not differ.
+- **Cause 4: the program's own inline-C directives.** Every `#include` and
+  object-like `#define` lifted from the top of an inline-C block was written
+  into both units, the program's included. A crew module's
+  `#define CREW_WORKERS 8` gave each `r7rs-threads-*` fixture its own object.
+  Each hoisted entry now records whether the stdlib asked for it, and the
+  library unit writes only those (`emit_hoisted_includes`,
+  `src/compiler/emit_module.c`). A program's own file-scope C block was
+  already the client unit's alone in intent; now it is in the library pass
+  too.
+
+`tests/check-r7rs-prelude-split.sh` now builds a program with a global `f`
+and one importing a module whose C block `#define`s a macro, and fails if
+either links a different library object than `r7rs-named-let-sum`.
+`tests/run.sh`'s warm-up program therefore warms the object every non-`eval`
+fixture links (fix direction 3 is moot).
+
+**Still open:** cause 3 (`-I`/`-D` flags that reach no header still fork the
+key) and fix direction 4 (the cache is never evicted). The original text
+follows.
+
 **Severity:** medium. Each distinct library object costs a cold compile of
 5-14 s (Debug `tur`, 4 cores, gcc 13). That happens once per variant, not
 once per `tur` version as the prelude split intended. A user pays it again

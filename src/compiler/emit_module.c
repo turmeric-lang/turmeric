@@ -17816,6 +17816,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
  * docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md. */
 static void emit_hoisted_includes(Buf *out) {
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        /* A split build's library unit carries none of the program: no stdlib
+         * code needs a header or macro only the program's inline-C asked for,
+         * and writing them made the unit's text -- so its cached object --
+         * one per program (a crew module's `#define CREW_WORKERS 8`). */
+        if (g_emit_split == EMIT_SPLIT_LIB && !g_hoisted_stdlib[i]) continue;
         tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
 }
@@ -19332,10 +19337,17 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             if (ic && ic->code.p && ic->code.len > 0) {
                 /* r7rs-programs-compile-slowly: a stdlib block's file-scope
                  * state is the library unit's (emit_split_state at assembly);
-                 * a program's own block is the client's alone. */
-                bool user_block = split_client && split_item_owner(e) == SPLIT_OWN_USER;
-                inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
-                                             &cprelude_dedup, ic->code.p, ic->code.len);
+                 * a program's own block is the client's alone.  The library
+                 * unit carries none of it: no stdlib code can name the
+                 * program's C, and a program block there made the unit's
+                 * text, so its cached object, one per program -- every
+                 * r7rs-threads-* fixture built its own because a crew module
+                 * `#define`d its worker count. */
+                bool user_block = g_emit_split != EMIT_SPLIT_NONE
+                               && split_item_owner(e) == SPLIT_OWN_USER;
+                if (!(user_block && g_emit_split == EMIT_SPLIT_LIB))
+                    inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
+                                                 &cprelude_dedup, ic->code.p, ic->code.len);
             }
         } else {
             /* r7rs-programs-compile-slowly: a stdlib statement would run in

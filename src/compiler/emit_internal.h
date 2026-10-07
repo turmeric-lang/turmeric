@@ -66,6 +66,8 @@ extern bool g_needs_regex_h;
 extern char    **g_hoisted_includes;
 extern uint32_t  g_n_hoisted_includes;
 extern uint32_t  g_cap_hoisted_includes;
+extern bool     *g_hoisted_stdlib;
+extern bool      g_hoist_origin_stdlib;
 
 /* Marker appended to a hoisted `#include` whose author wrote a
  * `tur:optional` comment on the line -- a header that is EXPECTED to be

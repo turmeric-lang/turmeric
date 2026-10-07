@@ -4628,6 +4628,7 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
         /* Same directive.  If this site marks it optional and the stored entry
          * is bare, upgrade the entry: one deliberate per-platform use is enough
          * to make the header's absence expected for the whole TU. */
+        if (g_hoist_origin_stdlib) g_hoisted_stdlib[i] = true;
         if (optional && !hoisted_entry_is_optional(e)) {
             size_t tl = sizeof(TUR_HOIST_OPTIONAL_TAG) - 1;
             char *up = (char *)malloc(n + tl + 1);
@@ -4642,8 +4643,10 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
     if (g_n_hoisted_includes == g_cap_hoisted_includes) {
         uint32_t cap = g_cap_hoisted_includes ? g_cap_hoisted_includes * 2 : 8;
         char **nh = (char **)realloc(g_hoisted_includes, cap * sizeof(char *));
-        if (!nh) { fprintf(stderr, "tur: oom\n"); abort(); }
+        bool *ns = (bool *)realloc(g_hoisted_stdlib, cap * sizeof(bool));
+        if (!nh || !ns) { fprintf(stderr, "tur: oom\n"); abort(); }
         g_hoisted_includes = nh;
+        g_hoisted_stdlib = ns;
         g_cap_hoisted_includes = cap;
     }
     size_t tl = optional ? sizeof(TUR_HOIST_OPTIONAL_TAG) - 1 : 0;
@@ -4652,6 +4655,7 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
     memcpy(copy, line, n);
     if (optional) memcpy(copy + n, TUR_HOIST_OPTIONAL_TAG, tl);
     copy[n + tl] = '\0';
+    g_hoisted_stdlib[g_n_hoisted_includes] = g_hoist_origin_stdlib;
     g_hoisted_includes[g_n_hoisted_includes++] = copy;
 }
 
@@ -4758,11 +4762,13 @@ size_t tur_hoist_top_includes_scan(const char *body, size_t len) {
     return last_consumed;
 }
 
-static char *strip_hoistable_includes(EmitCtx *ctx, char *body) {
+static char *strip_hoistable_includes(EmitCtx *ctx, char *body, bool from_stdlib) {
     (void)ctx;
     if (!body) return body;
     size_t len = strlen(body);
+    g_hoist_origin_stdlib = from_stdlib;
     size_t consumed = tur_hoist_top_includes_scan(body, len);
+    g_hoist_origin_stdlib = false;
     if (consumed > 0) {
         memmove(body, body + consumed, len - consumed + 1);
     }
@@ -4786,7 +4792,8 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
     /* Fast path: no substitution needed. */
     if (ic->n_captures == 0 && ic->n_val_exprs == 0 && !has_ty_template &&
         !has_cname_template) {
-        return strip_hoistable_includes(ctx, strndup(ic->code.p, ic->code.len));
+        return strip_hoistable_includes(ctx, strndup(ic->code.p, ic->code.len),
+                                        ic->from_stdlib);
     }
 
     /* Build capture name array. */
@@ -4947,7 +4954,7 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
     buf_putc(&result, '\0');
     char *out = strdup(result.data);
     buf_free(&result);
-    return strip_hoistable_includes(ctx, out);
+    return strip_hoistable_includes(ctx, out, ic->from_stdlib);
 }
 
 /* ------------ builtin emitters ------------ */

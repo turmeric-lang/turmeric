@@ -920,8 +920,11 @@ Expr *elab_form(Elab *e, Form *f) {
              * inline_c_substitute to strip the lines from the body; dedup
              * makes that idempotent. */
             extern size_t tur_hoist_top_includes_scan(const char *body, size_t len);
+            extern bool g_hoist_origin_stdlib;
             if (f->as.cblock.p) {
+                g_hoist_origin_stdlib = e->in_stdlib_load;
                 (void)tur_hoist_top_includes_scan(f->as.cblock.p, f->as.cblock.len);
+                g_hoist_origin_stdlib = false;
             }
             /* inline-c-cname-module-prefix-plan: resolve __TUR_CNAME_<name>__
              * splices into captures so module-prefixed callees get their exact

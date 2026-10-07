@@ -1308,11 +1308,12 @@ done
 # first failed `tur build timed out (>10s)` -- a different one whenever adding
 # fixtures reshuffled shard membership (r7rs-keyword-seed on Windows 2/3).
 # Pay it once here, untimed, with the compiler and environment the fixtures
-# build with.  The library unit is NOT program-independent yet
-# (docs/reported/r7rs-prelude-library-object-varies-with-the-program.md): a
-# program that passes a procedure as a value gets a different object than
-# `(display 1)` does, and that is the object most r7rs fixtures link -- so the
-# warm-up passes a lambda to `map`, which lands on it.
+# build with.  Since 2026-10-07 every r7rs fixture that does not import
+# `(scheme eval)` links this one object
+# (docs/reported/r7rs-prelude-library-object-varies-with-the-program.md).  An
+# `eval` program links the sanitized libturi, whose flags are part of the cache
+# key, so the first of those still compiles a second object, inside its own
+# timed build.
 _r7rs_warm=0
 for d in "${HAPPY_DIRS[@]}"; do
     _in="$d/input.tur"
