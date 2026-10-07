@@ -657,6 +657,85 @@
   return tur_ok_ptr((void *)(intptr_t)tur_serial_cont_deserialize((int64_t)(intptr_t)b));
 #endif
   ```)
+;;; serial-resume-owned -- resume a rebuilt continuation, then release it.
+;;;
+;;; A continuation from bytes->serial-cont belongs to the program, and a
+;;; resume runs a copy of it, so nothing else ever frees it.  A serial-cont is
+;;; consumed by its resume, which leaves no later point to free it at -- so
+;;; this resumes and frees in one step.  Only for a continuation that
+;;; bytes->serial-cont returned: the one a serial-shift receiver is handed is
+;;; the compiler's to free (serial-resume it), and freeing it here would free
+;;; it twice.  The strings a cstr-env frame was rebuilt with stay allocated,
+;;; since the resumed computation may have returned one of them.
+;;;
+;;; Parameters:
+;;;   k -- a serial-cont from bytes->serial-cont
+;;;   v -- the value to fill the hole with
+;;;
+;;; Returns:
+;;;   The resumed computation's result, as serial-resume.
+;;;
+;;; Example:
+;;;   (match (bytes->serial-cont b)
+;;;     (Ok k)  (serial-resume-owned k 5)
+;;;     (Err m) (do (println m) 0))
+;;;
+;;; Since: 2026-10-07 (serial-cont-escaped-or-deserialized-chain-leaks)
+
+(defn serial-resume-owned [k : serial-cont v : int] : int
+  ```c
+#ifdef SK_TAG_CALL
+  int64_t r = tur_serial_cont_resume((int64_t)(intptr_t)k, v);
+  if (k) dk_free((DK *)(intptr_t)k);
+  return r;
+#else
+  (void)k; (void)v;
+  return 0;
+#endif
+  ```)
+;;; serial-cont-free -- release a rebuilt continuation without resuming it.
+;;;
+;;; For a continuation from bytes->serial-cont that the program decides not to
+;;; resume.  Same restriction as serial-resume-owned: never the receiver's k.
+;;;
+;;; Parameters:
+;;;   k -- a serial-cont from bytes->serial-cont
+;;;
+;;; Example:
+;;;   (match (bytes->serial-cont b) (Ok k) (serial-cont-free k) (Err m) nil)
+;;;
+;;; Since: 2026-10-07 (serial-cont-escaped-or-deserialized-chain-leaks)
+
+(defn serial-cont-free [k : serial-cont] : nil
+  ```c
+#ifdef SK_TAG_CALL
+  if (k) dk_free((DK *)(intptr_t)k);
+#else
+  (void)k;
+#endif
+  ```)
+;;; serial-bytes-free -- release a buffer from serial-cont->bytes.
+;;;
+;;; serial-cont->bytes, save-cont! and cont-from-file return a caller-owned
+;;; malloc'd buffer as a bare ptr<void> (cont-to-file and bytes->serial-cont
+;;; take that form), so bytes-free, which takes the linear Bytes, does not
+;;; apply.  Free it with this once it has been written or rebuilt.  NULL is a
+;;; no-op.
+;;;
+;;; Parameters:
+;;;   b -- a buffer from serial-cont->bytes / save-cont! / cont-from-file
+;;;
+;;; Example:
+;;;   (let [b (serial-cont->bytes k)]
+;;;     (cont-to-file b "/tmp/k.bin")
+;;;     (serial-bytes-free b))
+;;;
+;;; Since: 2026-10-07 (serial-cont-escaped-or-deserialized-chain-leaks)
+
+(defn serial-bytes-free [b : ptr<void>] : nil
+  ```c
+  free(b);
+  ```)
 ;;; serial-resume -- resume a continuation with a value.
 ;;;
 ;;; `(serial-resume k v)` is `(k v)`: the enclosing serial-reset's rest of the

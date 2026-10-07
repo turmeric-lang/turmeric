@@ -1,5 +1,35 @@
 # A serial-cont minted from bytes is never freed
 
+**RESOLVED 2026-10-07** by fix direction 3 (shape 1 was fixed 2026-10-03).
+`stdlib/serial.tur` gives a program three ways to release what a round trip
+made:
+
+- `serial-resume-owned k v` resumes a continuation from `bytes->serial-cont`
+  and then `dk_free`s its chain.  The direction as written ("a
+  `serial-cont-free`") did not fit the type: a `serial-cont` is affine, so
+  `(serial-resume k2 x)` MOVES `k2` and nothing can name it afterwards
+  (TUR-E0005).  Resuming and freeing in one consuming call is the shape that
+  composes.
+- `serial-cont-free k` drops a rebuilt continuation that is never resumed.
+- `serial-bytes-free b` frees a `serial-cont->bytes` / `save-cont!` /
+  `cont-from-file` buffer.  `serial-cont->bytes` keeps returning `ptr<void>`:
+  retyping it as the linear `Bytes` would break every `cont-to-file` caller.
+
+All three are documented as for the program's own values only; the
+receiver's `k` stays the compiler's. Pinned by
+`tests/fixtures/serial-cont-roundtrip-freed` (`requires.leak-check`): a
+round trip resumed and released, and one buffer rebuilt twice with one copy
+dropped and one resumed, leak-clean under `tests/run-leak-check.sh`.
+Documented in `docs/guides/serializable-continuations-guide.md` ("Who frees
+what").
+
+**Left allocated on purpose:** a rebuilt frame whose env was a `cstr` keeps
+its rebuilt string (the deserializer mallocs one per frame).  Freeing it with
+the chain would dangle any copy the resumed computation kept; giving those
+frames an owning env (`dk_frame_owning` with a strdup clone) is the way to
+close it if it matters.  Direction 2 (an owned, cloneable `serial-cont`) stays
+the general answer.
+
 **Narrowed 2026-10-03 (same day): shape 1 is fixed** -- a `k` captured by a
 lambda that the callee only calls is now followed (see *Fixed*).  What is
 left is shape 2: a `serial-cont` minted by `bytes->serial-cont`, and the bytes
