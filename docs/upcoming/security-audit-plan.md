@@ -79,7 +79,8 @@ did find that three documents promise more than the code delivers:
   (`src/turi/env.c:224-251`) includes `process/spawn`, file open/write,
   unlink and raw-fd read/write with no capability check (section 2, S-1).
   **Fixed in WP3**: every native is classified and the dispatch checks it;
-  the guide now names the remaining gap (S-5) instead.
+  the guide now names the remaining gap (S-5) instead -- itself closed
+  2026-10-07.
 - `docs/guides/consuming-spices-guide.md:405` says every fetched spice is
   verified and builds fail on mismatch; the lock hash is trust-on-first-use
   and rewritten on every fetch (`src/compiler/pkg.c:2572-2582`), and only
@@ -138,7 +139,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | S-2 | medium -- **FIXED in WP3** | `extern-c` "known overrides" (`printf`, `printf_s`, `getenv`) skip the FFI cap check the thunk path enforces, and `printf`'s format string is program-controlled (`src/turi/eval.c:360-421`). | |
 | S-3 | low (re-graded by WP3: needs `TURI_CAP_INLINE_C`) -- **FIXED in WP3**; a second emulator, `ic_exec_linked_list_print`, put through the same check by WP5 (section 2d) | The inline-C emulator's snprintf pattern hands the program's format string to `snprintf` with every argument coerced to `long long` -- a `%s` in the body dereferences an integer (`src/turi/eval.c:5532-5535`). | |
 | S-4 | info -- **documented in WP1/WP3** | Try Turmeric's wasm env is `CAP_ALL` by design (`src/web/wasm_glue.c:159-162`); `tests/turi/sandbox-eval.c:37-88` covers only println/async/inline-C. | The security guide records the posture as intentional; the sandbox test now covers every classified native. Section 7 Q4 stays the author's. |
-| S-5 | high (under T3; under T1 for `tur check`) -- **NATIVE CHANNEL FIXED 2026-09-30 (direction 1); value-model channel OPEN** (host-exit half **FIXED** 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` was a wild read and the setters a wild write. At least 204 of the 656 natives do the cast in their own body. **verified** under ASan. **Direction 1 landed:** a per-restricted-env handle-provenance registry (`TuriProvSet` in `src/turi/eval.c`) plus a per-native handle-kind column (`k_handle_rows[]` in `src/turi/native_caps.c`, 242 rows) make the native dispatch refuse a handle argument that no constructor of the matching kind minted -- closing the arbitrary-integer read/write, kind confusion and use-after-free while real handles round-trip. **Continuation resume closed 2026-10-03:** every continuation a capture or copy hands out is registered (`TURI_HK_CONT`) and the resume / clone / serialize builtins, natives and work-stack folds refuse an unregistered one. **Still open:** the value-model channel -- an erasing ascription on a type variable (`(:: x A)` in a generic body, then a call/field read) launders an integer to a pointer without passing through any check; that is direction 2 (tagged handles). Not a capability; see section 2c. The second half as filed -- `panic` and native error paths ending the host -- is fixed: a restricted env's `turi_eval`/`turi_call` return `TURI_ERROR "panic: <msg>"` instead. | [`docs/reported/turi-sandbox-handles-are-forgeable-integers.md`](../reported/turi-sandbox-handles-are-forgeable-integers.md) |
+| S-5 | high (under T3; under T1 for `tur check`) -- **FIXED 2026-10-07** (native channel direction 1 2026-09-30, continuation resume and call targets 2026-10-03, host-exit half 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` was a wild read and the setters a wild write. **verified** under ASan. **Direction 1 (2026-09-30):** a per-restricted-env handle-provenance registry (`TuriProvSet` in `src/turi/eval.c`) plus a per-native handle-kind column (`k_handle_rows[]` in `src/turi/native_caps.c`). **Closed 2026-10-07:** the value-model channel -- every interpreter re-tag of a word (an erasing ascription to `cstr` or a struct, a field read through a bare int, `gen-unwrap`, a `TVar`, a panic payload) checks the registry, and the words it accepts are recorded where a value loses its tag (native arguments, rest-list cells, TVar payloads). Executing the report measured the native channel too: a forked sweep of every capability-free native with forged arguments found **243 that crashed**, from a guard that trusted any tagged string at a handle position, rows limited to 4 positions, whole families with no row, mis-kinded rows (slices minted as Strings, two layouts per kind twice), unchecked stored words (comparators over stored keys, the owned-key flag, list and Vec element links) and unbounded indices. All closed (400 rows, 25 new kinds); the `r7rs-eval-c-*` natives now need every capability, like eval/load. Pinned by `native-sweep` and the `forgery/*` / `handles-ok/*` cases in `tests/turi/sandbox-eval.c`. Not a capability; see section 2c. | [`docs/archive/turi-sandbox-handles-are-forgeable-integers.md`](../archive/turi-sandbox-handles-are-forgeable-integers.md) |
 | S-6 | medium -- **FIXED in WP3**, found by WP3 | `(load "path")` in a sandboxed env read the file and echoed its first token in the unbound-symbol diagnostic: `load` expansion (`src/compiler/elab_toplevel.c`, `load_expand_forms`) had no gate while `import` did. | |
 | S-7 | high -- **FIXED in WP3**, found by WP3 | `r7rs-eval-c-eval__`/`-load__` evaluate text in the process-global embedded R7RS env (`src/turi/r7rs_embed.c`), which is an ordinary `CAP_ALL` env, so any sandbox reached every capability through it. | |
 
@@ -496,7 +497,7 @@ covers them all, which is what made the choke point cheap.
 
 ### Findings the survey did not have
 
-- **S-5 (high, open)** -- handles are forgeable integers; see the row. The
+- **S-5 (high; fixed 2026-10-07)** -- handles are forgeable integers; see the row. The
   capability check is sound and this is underneath it. Its host-exit half was
   fixed in a follow-up the same day. Gating the collection
   natives behind `TURI_CAP_UNSAFE` would make a sandbox without vectors, which
@@ -639,7 +640,8 @@ Handed on, not fixed here:
   check. WP3, landing alongside, classes `flat-get`/`flat-set` `UNSAFE` and
   `r7rs-environ-name__` `ENV`, so a sandbox cannot call them; the two io
   helpers stay pure-classified, and an out-of-range index or a forged handle
-  there is **S-5** (open).
+  there is **S-5** (fixed 2026-10-07: both are guarded handles and the index
+  is bounds-checked).
 
 ### TSan
 
@@ -1515,7 +1517,7 @@ leaves behind run nightly under ASan and UBSan. Its research pass is section
   `-Wformat=2` is clean under gcc and clang.
 
 **Left for others deliberately:** out-of-range indices in pure-classified
-interpreter natives (S-5, open), httpd's body cap and response-writer
+interpreter natives (S-5; fixed 2026-10-07), httpd's body cap and response-writer
 `realloc` (WP4, M-4), and the rest of `serial_cont_from_bytes` (WP4, M-1).
 
 ### WP6 -- Try Turmeric and the web worker (1-2 days) -- DONE 2026-09-30
@@ -1703,7 +1705,9 @@ checklist, not a gate.
      worth promising *then*. Until then the guide says `tur check` expands
      macros, and WP2/WP3 owe the `--no-macros` equivalent that rust-analyzer
      ships as `procMacro.enable`. **Delivered by WP3 as `--no-proc-macros`;**
-     S-1 landed too, so what now defers the promise is S-5.
+     S-1 landed too, so what now deferred the promise was S-5 -- resolved
+     2026-10-07, and the security guide now describes the macro env as
+     capability-denied and handle-checked.
    - **`tur repl` auto-discovery gets no promise** -- it compiles and
      `dlopen`s, which is Gradle-tier. But `TUR_NO_AUTO_SPICE=1` is
      default-allow, which points against where pnpm, Bun, Deno and Neovim have

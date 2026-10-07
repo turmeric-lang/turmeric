@@ -35,6 +35,12 @@
 
 #include "turi/eval.h"
 
+#if !defined(_WIN32)
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 static int failures = 0;
 static int passes   = 0;
 
@@ -340,6 +346,50 @@ static void check_handle_forgery_refused(void) {
     turi_eval(env, "(defn mk-forged [A] [x : int] : A (:: x A))");
     expect_forgery_refused(env, "forgery/closure-retag",
                            "(let [f : (fn [int] int) (mk-forged 4096)] (f 1))");
+    /* The rest of the value-model channel: the same laundering re-typed as a
+     * by-value struct (try_retag_carrier_struct read the word to validate
+     * it), a field read through a bare-int receiver, and a cstr -- which needs
+     * no type variable at all, `(:: 4096 cstr)` elaborates. */
+    turi_eval(env, "(defstruct SbxPoint [x : int y : int])");
+    turi_eval(env, "(defstruct SbxHeap :heap [x : int y : int])");
+    expect_forgery_refused(env, "forgery/struct-retag",
+                           "(.x (:: (mk-forged 4096) SbxPoint))");
+    expect_forgery_refused(env, "forgery/field-read-bare-int",
+                           "(.x (:: 4096 SbxHeap))");
+    expect_forgery_refused(env, "forgery/cstr-ascribe",
+                           "(let [s : cstr (:: 4096 cstr)] (str-concat s \"a\"))");
+    expect_forgery_refused(env, "forgery/cstr-retag",
+                           "(let [s : cstr (mk-forged 4096)] (str-concat s \"a\"))");
+    expect_forgery_refused(env, "forgery/cstr-from-vec-word",
+                           "(let [v (vec-new)] (vec-push! v 4096)"
+                           "  (str-concat (:: (vec-get v 0) cstr) \"x\"))");
+    expect_forgery_refused(env, "forgery/gen-unwrap",     "(gen-unwrap 4096)");
+    expect_forgery_refused(env, "forgery/tvar",
+                           "(atomically (stm (tvar/read (:: 4096 TVar))))");
+    expect_forgery_refused(env, "forgery/panic-payload",  "(panic-payload-value 4096)");
+    /* A tagged value is its own proof only for the kind it is: a string
+     * literal at a Vec position was a Vec header made of the caller's bytes,
+     * and a float, a bool or a closure there the same cast of other bits. */
+    expect_forgery_refused(env, "forgery/cstr-literal-as-vec",
+                           "(vec-get \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\" 0)");
+    expect_forgery_refused(env, "forgery/float-as-vec",   "(vec-get 1.5 0)");
+    expect_forgery_refused(env, "forgery/closure-as-vec",
+                           "(vec-set! (fn [x : int] : int x) 0 4096)");
+    /* map-assoc-eq's comparator is its FIFTH argument -- past the four
+     * positions a handle row used to describe, so it was called unchecked. */
+    expect_forgery_refused(env, "forgery/comparator-arg5",
+                           "(let [c (__inst_MapKey_mk_hycmp_int 0)"
+                           "      m (map-assoc-eq (set-new) 7 1 1 c)]"
+                           "  (map-assoc-eq m 7 2 2 4096))");
+    /* The comparator is chosen per call: a key stored under the int
+     * comparator is strcmp'd by the cstr one.  It must compare unequal, not
+     * read address 4096 (a crash here takes the whole harness down). */
+    TuriValue sk = turi_eval(env,
+        "(let [ci (__inst_MapKey_mk_hycmp_int 0) cs (__inst_MapKey_mk_hycmp_cstr 0)"
+        "      m  (map-assoc-eq (set-new) 7 4096 1 ci)]"
+        "  (map-get-eq m 7 \"a\" cs))");
+    if (sk.tag == TURI_INT && sk.as_int == 0) pass("forgery/stored-key-comparator", NULL);
+    else fail("forgery/stored-key-comparator", "a forged stored key was not compared unequal");
     turi_env_free(env);
 }
 
@@ -388,6 +438,62 @@ static void check_handles_still_round_trip(void) {
                  cr.tag, cr.tag == TURI_ERROR && cr.as_error ? cr.as_error : "-");
         fail("handles-ok/closure-carrier", msg);
     }
+    /* The value-model controls: a string, a struct and a symbol that really
+     * lost their tags -- stored in a Vec, a TVar, a generator, a rest list --
+     * still re-tag, because each was recorded where it lost its tag. */
+    struct { const char *what; const char *src; const char *want; } scases[] = {
+        { "handles-ok/cstr-through-vec",
+          "(let [v (vec-new)] (vec-push! v \"ab\") (str-concat (:: (vec-get v 0) cstr) \"c\"))",
+          "abc" },
+        { "handles-ok/cstr-through-tvar",
+          "(let [t (tvar/new \"s-3\")] (str-concat (:: (atomically (stm (tvar/read t))) cstr) \"!\"))",
+          "s-3!" },
+        { "handles-ok/cstr-through-gen",
+          "(let [g (gen [] (yield \"ab\"))] (str-concat (:: (gen-unwrap (gen-next g)) cstr) \"c\"))",
+          "abc" },
+        { "handles-ok/sym-literal", "(sym->str 'foo)", "foo" },
+    };
+    for (size_t i = 0; i < sizeof scases / sizeof scases[0]; i++) {
+        TuriValue r = turi_eval(env, scases[i].src);
+        if (r.tag == TURI_CSTR && r.as_cstr && strcmp(r.as_cstr, scases[i].want) == 0)
+            pass(scases[i].what, NULL);
+        else {
+            char msg[256];
+            snprintf(msg, sizeof msg, "a live value was wrongly refused (tag %d: %s)",
+                     r.tag, r.tag == TURI_ERROR && r.as_error ? r.as_error : "-");
+            fail(scases[i].what, msg);
+        }
+    }
+    turi_eval(env, "(defstruct SbxP [x : int y : int])");
+    turi_eval(env, "(defn sbx-as [A] [x : int] : A (:: x A))");
+    turi_eval(env, "(defn sbx-first [& xs : int] : int (head xs))");
+    struct { const char *what; const char *src; int64_t want; } icases[] = {
+        /* A struct read back as a bare word is recovered the way a generic
+         * container does it: an ascription to the caller's type variable. */
+        { "handles-ok/struct-through-map",
+          "(let [ci (__inst_MapKey_mk_hycmp_int 0)"
+          "      m  (map-assoc-eq (set-new) 7 1 (SbxP 3 4) ci)"
+          "      p  : SbxP (sbx-as (map-get-eq m 7 1 ci))]"
+          "  (.y p))", 4 },
+        { "handles-ok/struct-through-tvar",
+          "(let [t (tvar/new (SbxP 3 4))"
+          "      p : SbxP (sbx-as (atomically (stm (tvar/read t))))]"
+          "  (.y p))", 4 },
+        { "handles-ok/rest-list-head", "(sbx-first 7 8)", 7 },
+        { "handles-ok/cstr-keyed-map",
+          "(let [c (__inst_MapKey_mk_hycmp_cstr 0) m (map-assoc-eq (set-new) 7 \"a\" 1 c)]"
+          "  (map-get-eq m 7 \"a\" c))", 1 },
+    };
+    for (size_t i = 0; i < sizeof icases / sizeof icases[0]; i++) {
+        TuriValue r = turi_eval(env, icases[i].src);
+        if (r.tag == TURI_INT && r.as_int == icases[i].want) pass(icases[i].what, NULL);
+        else {
+            char msg[256];
+            snprintf(msg, sizeof msg, "a live value was wrongly refused (tag %d: %s)",
+                     r.tag, r.tag == TURI_ERROR && r.as_error ? r.as_error : "-");
+            fail(icases[i].what, msg);
+        }
+    }
     /* A cstr literal is a trusted reader pointer, not a forgeable integer. */
     TuriValue s = turi_eval(env, "(str-concat \"a\" \"b\")");
     if (s.tag == TURI_CSTR && s.as_cstr && strcmp(s.as_cstr, "ab") == 0)
@@ -424,6 +530,88 @@ static void check_handle_table(void) {
     snprintf(detail, sizeof detail, "%zu handle rows", n);
     pass("handle-table", detail);
 }
+
+/* ---- part 6: every native against forged arguments --------------------
+ * The rows above are written by hand, and a native nobody wrote a row for
+ * is a native the guard never sees.  So call EVERY native a sandbox can
+ * reach (capability 0 -- a capped one is refused before it runs) with a
+ * forged argument at each of the first four positions, the others 0 (the
+ * NULL handle every native tolerates): an integer that is not a handle, a
+ * string literal whose bytes would be read as a handle header, and a float
+ * whose bits would be.  Each native runs in a forked child of one sandboxed
+ * env, so a wild read kills the child, not this harness, and is reported by
+ * name.  POSIX only (fork). */
+#if defined(_WIN32)
+static void check_native_sweep(void) {
+    pass("native-sweep", "skipped: needs fork()");
+}
+#else
+/* Natives a crash-sweep cannot judge, because they block or run for as long
+ * as their argument says by design -- not because they are unsafe. */
+static const char *const k_sweep_skip[] = {
+    "r7rs-thread-sleep__",   /* sleeps for its argument */
+    "run-raytracer",         /* a benchmark: renders its argument's size */
+};
+
+static bool sweep_skipped(const char *name) {
+    for (size_t i = 0; i < sizeof k_sweep_skip / sizeof k_sweep_skip[0]; i++)
+        if (strcmp(name, k_sweep_skip[i]) == 0) return true;
+    return false;
+}
+
+static void check_native_sweep(void) {
+    static const char lit[] = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                              "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    TuriEnv *env = turi_env_new_sandboxed();
+    if (!env) { fail("native-sweep", "env alloc"); return; }
+    /* SANDBOX_SWEEP_ONLY=<name> sweeps that one native with its output kept,
+     * to see why it died. */
+    const char *only = getenv("SANDBOX_SWEEP_ONLY");
+    size_t swept = 0, crashed = 0;
+    for (EnvBinding *b = env->globals; b; b = b->next) {
+        if (!turi_value_is_native(b->value) || sweep_skipped(b->name)) continue;
+        if (only && strcmp(only, b->name) != 0) continue;
+        const TuriNativeCapRow *row = turi_native_cap_find(b->name);
+        if (row && row->caps) continue;   /* refused before it runs */
+        swept++;
+        fflush(stdout); fflush(stderr);
+        pid_t pid = fork();
+        if (pid < 0) { fail("native-sweep", "fork failed"); break; }
+        if (pid == 0) {
+            alarm(20);
+            if (!only &&
+                (!freopen("/dev/null", "w", stdout) || !freopen("/dev/null", "w", stderr)))
+                _exit(3);
+            const TuriValue forged[3] = { turi_int(4096), turi_cstr(lit), turi_float(1.5) };
+            for (int f = 0; f < 3; f++)
+                for (uint32_t pos = 0; pos < 4; pos++)
+                    for (uint32_t ar = pos + 1; ar <= 6; ar++) {
+                        TuriValue args[6];
+                        for (uint32_t k = 0; k < ar; k++) args[k] = turi_int(0);
+                        args[pos] = forged[f];
+                        (void)turi_call(env, b->value, args, ar);
+                    }
+            _exit(0);
+        }
+        int st = 0;
+        waitpid(pid, &st, 0);
+        if (WIFSIGNALED(st) || (WIFEXITED(st) && WEXITSTATUS(st) != 0)) {
+            char msg[256];
+            snprintf(msg, sizeof msg, "native '%s' %s on a forged argument in a sandbox",
+                     b->name,
+                     WIFSIGNALED(st) && WTERMSIG(st) == SIGALRM ? "hung" : "crashed");
+            fail("native-sweep", msg);
+            crashed++;
+        }
+    }
+    turi_env_free(env);
+    if (!crashed) {
+        char detail[96];
+        snprintf(detail, sizeof detail, "%zu cap-free natives, none crashed", swept);
+        pass("native-sweep", detail);
+    }
+}
+#endif
 
 /* Re-enable async; I/O must still be denied. */
 static void run_mixed_caps_test(void) {
@@ -515,6 +703,7 @@ int main(void) {
     check_handle_forgery_refused();
     check_handles_still_round_trip();
     check_handle_table();
+    check_native_sweep();
 
     run_mixed_caps_test();
     run_api_smoke_tests();

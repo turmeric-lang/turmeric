@@ -80,26 +80,27 @@ These are different, because an editor runs them on a tree you have merely
 
 > **They do not execute repo-supplied code or shell unless you asked them to.**
 
-Two things stand between that promise and the implementation today.
+Two things bear on that promise today.
 
-#### `tur check` expands macros, and the macro environment is not yet a boundary (open, high)
+#### `tur check` expands macros in a capability-denied, handle-checked environment
 
 `tur check` expands compile-time macros, which is the same exposure Rust has
-with proc macros. The macro environment is capability-denied, and that is now
+with proc macros. The macro environment is capability-denied, and that is
 enforced for every native function as well as the builtins (T3): a
 `defmacro*` body that calls `process/spawn`, deletes a file or reads the
 environment gets a diagnostic, and nothing runs.
 
-It is still not a full boundary against a hostile tree, for the reason T3 gives:
-the native handle-forgery channel is now closed in the macro env too (the
-provenance registry turns on when its capabilities are dropped), but a
-`defmacro*` body can still launder an integer into a pointer through an erasing
-ascription in the interpreter's value model and read or write an arbitrary
-address in the compiler's process (S-5, value-model channel). When that is
-closed too, a genuinely capability-denied macro environment will be a *better*
-story than Rust's, and this guide will promise it.
+It is also memory-checked the way T3 describes: the macro env turns on the
+handle-provenance registry when its capabilities drop, so a `defmacro*` body
+can no longer turn an integer into a pointer -- through a native or through an
+erasing ascription in the interpreter's value model -- and read or write the
+compiler's memory (S-5, resolved 2026-10-07). That makes a capability-denied
+macro environment a *better* story than Rust's, where a proc macro is native
+code with the compiler's full authority. It rests on a per-native table that a
+test sweeps rather than on a type system, so the opt-out below stays for
+anyone who wants no macro-time code at all.
 
-Until then there is an opt-out. The global flag `--no-proc-macros` refuses
+There is an opt-out. The global flag `--no-proc-macros` refuses
 every `defmacro*` with a diagnostic, so no macro-time code runs -- the
 equivalent of turning rust-analyzer's `procMacro.enable` *off*. (rust-analyzer
 ships it **on**, and has since 2021; it also runs `build.rs` on a tree you
@@ -111,9 +112,7 @@ setting is scoped to the editor and `cargo build` always runs proc macros:
 tur --no-proc-macros check src/
 ```
 
-Template `defmacro` still expands, because substitution runs nothing. Without
-the flag, **`tur check` on an untrusted tree is as exposed as `cargo check` on
-an untrusted crate.**
+Template `defmacro` still expands, because substitution runs nothing.
 
 #### `tur repl` auto-discovery compiles and dlopens (open, medium)
 
@@ -214,44 +213,37 @@ classes and the rows that are not pure. `load` and `import` are refused
 outright, and the `extern-c` overrides for `printf`, `getenv` and `exit` need
 FFI like every other `extern-c`.
 
-**Status today: the native handle-forgery channel is closed; the value-model
-channel is not yet (S-5, partly fixed, still open, high).** Most natives take a
-collection, string or continuation handle as a bare integer and cast it to a
-pointer. In a restricted env a per-env **handle-provenance registry** now
-stands between the text and every native's cast: a native that mints a handle
-records it (keyed by handle kind), and a consumer native is refused unless its
-handle argument is a live handle of the matching kind. So the forgery that
-needed no capability -- and every sibling of it -- is now refused rather than a
-wild read/write:
+**Status today: handle forgery is closed (S-5, resolved 2026-10-07).** Most
+natives take a collection, string or continuation handle as a bare integer and
+cast it to a pointer, and the interpreter itself re-types words in places --
+an erasing ascription to `cstr` or a struct, a field read through a bare
+integer, a call through a function-typed word, `gen-unwrap`, a `TVar`, a caught
+panic's payload. In a restricted env one per-env **handle-provenance registry**
+stands in front of all of them. A handle a native mints is recorded under its
+kind; a value that loses its type tag -- handed to a native, stored in a rest
+list or a `TVar` -- is recorded where it loses it; and every cast checks that
+its word is a live handle of the kind it is about to be read as:
 
 ```
-(vec-get 4096 0)   ; => error: not a live handle of the expected kind (S-5)
+(vec-get 4096 0)                                    ; => error: not a live handle of the expected kind (S-5)
+(let [s : cstr (:: 4096 cstr)] (str-concat s "a"))  ; => error: string value is not a live handle ... (S-5)
 ```
 
-Kind confusion (a real Vec replayed where a HAMT is expected, a count replayed
-as a handle) and use-after-free are refused the same way, while a genuinely
-minted vector, map, HAMT or string still round-trips. The registry, the
-per-native handle-signature column it reads (`src/turi/native_caps.c`), and the
-one dispatch hook are described in
-[the S-5 report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md).
+Kind confusion (a Vec where a HAMT is expected, a count replayed as a handle, a
+string literal where a Vec is expected) and use-after-free are refused the same
+way, while a genuinely built vector, map, string, struct or continuation still
+round-trips. Each native's row in `src/turi/native_caps.c` names the handle
+kind of each argument position; natives that follow words no row sees (a
+stored element, a child link) check them themselves.
 
-Continuation resume is closed the same way, although it never passes through
-the native dispatch: every continuation a capture or a copy hands out is
-registered as a continuation handle, and `resume-cont!`, `save-cont!` and the
-`tur_*_cont_resume` / clone / serialize forms -- as builtins and as the CEK
-driver's work-stack fold -- refuse one that is not.
-
-What is **not** yet closed is the narrower *value-model* channel: an erasing
-ascription on a type variable still launders a caller integer into a pointer
-WITHOUT passing through any of those checks (the retag happens in the
-interpreter's own value model, e.g. `(:: x A)` in a generic body followed by a
-field read or a string use). The registry does not see it, because a bare
-`:int` in the value model carries no kind to check against. Closing it is the
-"tagged handles" route (direction 2 in the report). The worst of it -- the same
-integer re-typed as a function and CALLED -- is refused: a closure is
-registered as it enters a native (the only place it can lose its tag), and a
-call through a re-tagged word must name one. What remains is a wild read, not
-a wild jump.
+The coverage is tested, not only asserted: the sandbox test calls **every**
+capability-free native with forged arguments in a forked child and fails on any
+that crashes, and the registry has been run over the whole interpreter fixture
+suite to find legitimate programs it would refuse. The details, and the few
+things it deliberately does not cover -- `String`-keyed maps are refused in a
+restricted env, re-entrant `call/cc` is escape-only outside a top-level form, an
+unrestricted env has no registry at all -- are in
+[the S-5 report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-sandbox-handles-are-forgeable-integers.md).
 
 A panic, by contrast, no longer ends the host. In an environment without
 `TURI_CAP_PROC`, a panic that nothing catches, and the error exits of natives
@@ -259,12 +251,11 @@ like an out-of-bounds `vec-get`, come back to the embedder as a `TURI_ERROR`
 reading `panic: <msg>`, and the environment stays usable. A panicking
 `defmacro*` is an ordinary expansion diagnostic.
 
-Until the value-model channel is closed too, **do not treat
-`Env/new-sandboxed` as a full boundary against hostile code.** It is a sound
-boundary against *careless* code -- a plug-in cannot open a file, spawn a
-process, read the environment, or forge a collection/string handle from an
-integer, however it spells the call -- but a program written to launder an
-integer through an erasing ascription can still corrupt memory.
+`Env/new-sandboxed` is a boundary against code written to escape it, in the
+sense T3 states. It is an in-process boundary, built from a hand-maintained
+per-native table that a test sweeps: an embedder running code from someone it
+does not trust should still run it in a separate, unprivileged process as
+defence in depth, as with any in-process sandbox.
 
 ### Try Turmeric
 
