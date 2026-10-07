@@ -1,5 +1,39 @@
 # `tur --interpret`: every `perform` keeps its continuation, handler frame and the frames it captured (~2.8 KB a perform)
 
+**RESOLVED 2026-10-07** by fix direction 1, the one-shot fast path, for the
+shape it names. `ws_case_is_oneshot_resume` (`src/turi/eval.c`) recognizes a
+clause whose body is exactly `(resume k v)` with an inert `v` -- literals,
+variables other than `k`, and builtin operators over them, so nothing in it
+can perform (no outer multishot handler can re-run the clause) or capture
+`k` -- and a `k` that is not `^multishot`. For such a clause the work-stack
+perform:
+
+- copies the slice into a malloc'd array and leaves it as it was: its frames
+  are not marked escaped and its argument accumulators stay the driver's own;
+- allocates the `TuriWsCont` and the `k` value with malloc, and the case frame
+  as a reclaimable call frame;
+- on the resume, pushes the slice back IN PLACE (no `clone_ws_slice`),
+  re-arms the clause's own disabled prompt when the resume sits directly on
+  it (so the work stack stays flat) instead of stacking a new one, releases
+  the case frame and frees the copy, the continuation and `k`.
+
+It is off while a re-entrant `call/cc` continuation exists, under a debugger,
+and with `TUR_TURI_FRAME_RECLAIM=0`; every other clause shape keeps the
+cloning path. A second resume of a one-shot `k` (which the static shape rules
+out) is an error rather than a re-run of a consumed slice.
+
+Measured on the repro (Release): **200,000 performs peak at 31 MB, from 556
+MB**, in 0.16 s. Compiled and `--interpret` agree on nested handlers, two
+performs in one expression, a parameterized clause, a clause that calls a
+function (slow path) and a `defer` inside the handled body. Pinned by the
+fourth program in `tests/check-turi-frame-reclaim.py` (100,000 performs,
+growth bound 16 MB; 0 MB on Debug and Release). `tests/run-turi.sh` (2652),
+the session/REPL/embed ctests and `tests/run-r7rs-import.sh` are green.
+
+**Not done:** directions 2 and 3 for every other clause shape -- a clause that
+does more than resume, a `^multishot` `k`, or a `k` that escapes still keeps
+its continuation for the life of the process.
+
 **Severity:** medium (interpreter memory). Under `tur --interpret`, an
 effect that is performed and resumed in a loop grows memory by ~2.8 KB per
 perform for the whole run. The call-frame reclamation of 2026-10-05

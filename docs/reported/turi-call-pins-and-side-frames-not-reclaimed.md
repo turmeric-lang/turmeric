@@ -17,7 +17,7 @@ peaks at 42 MB, from 48. Pinned by the third program in
 `tests/check-turi-frame-reclaim.py`. **Still open:** the rest of section 2 --
 the fiber handler case frame, `reset`/`shift` capture frames, the work-stack
 perform's `hf`
-([turi-effect-perform-keeps-its-continuation](turi-effect-perform-keeps-its-continuation.md))
+([turi-effect-perform-keeps-its-continuation](../archive/turi-effect-perform-keeps-its-continuation.md))
 and the defer snapshot -- each of which needs a proof that its continuation
 or `DeferItem` is done with it.
 
@@ -65,7 +65,7 @@ never released:
 | --- | --- |
 | `eval_handle_inner` (eval.c:3279) | the fiber effect path's handler case frame |
 | `ts_capture_and_run` (4115) | `reset`/`shift` capture frames |
-| work-stack perform (9329) | the handler case frame `hf`; see [turi-effect-perform-keeps-its-continuation](turi-effect-perform-keeps-its-continuation.md) |
+| work-stack perform (9329) | the handler case frame `hf`; see [turi-effect-perform-keeps-its-continuation](../archive/turi-effect-perform-keeps-its-continuation.md) |
 | `EX_EXISTS_OPEN` in `eval_expr_impl` (12849) | the opened existential's frame |
 | `EX_DEFER` (12035) | the defer's value snapshot (parentless) |
 | closure/tyvar wrapper frames (11619, 13153, 16595) | parentless frames a closure captures; these escape by construction |

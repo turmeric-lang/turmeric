@@ -29,6 +29,13 @@ called 300,000 times.  Each call pins its type variables on its frame
 (TyvarBind), and those nodes used to stay behind when the frame was handed
 back -- 51 MB of growth on a Debug tur, none now.  Same 16 MB bound.
 
+A fourth pins turi-effect-perform-keeps-its-continuation: 100,000 performs,
+each resumed once by a clause that is just `(resume k 1)`.  Every perform used
+to keep its continuation, a copy of the slice, the handler case frame and the
+frames it captured -- ~2.8 KB a perform, 556 MB for 200,000 on a Release
+tur.  The one-shot fast path runs the slice in place and frees all of it at
+the resume.  Same 16 MB bound.
+
 usage: python3 tests/check-turi-frame-reclaim.py [TUR]   (default ./build/tur)
 """
 import os
@@ -68,6 +75,16 @@ PINS_PROGRAM = """(defn idt [A] [x : A] : A x)
 """
 PINS_EXPECTED = "300000\n"
 PINS_IDLE = "(defn main [] : int (println 1) 0)\n"
+
+PERFORM_PROGRAM = """(defeffect Ask [] :int)
+(defn ask-loop [n : int acc : int] : int
+  (if (= n 0) acc (ask-loop (- n 1) (+ acc (perform (Ask))))))
+(defn run [n : int] : int
+  (handle (ask-loop n 0)
+    (Ask [] k) (resume k 1)))
+(defn main [] : int (println (run 100000)) 0)
+"""
+PERFORM_EXPECTED = "100000\n"
 
 
 def run(src, reclaim, asan="detect_leaks=0"):
@@ -110,6 +127,10 @@ def main():
             f.write(PINS_IDLE)
         out_pins, st_pins, rss_pins = run(pins, True, noq)
         _, _, rss_pins_idle = run(pins_idle, True, noq)
+        perf = os.path.join(d, "perform.tur")
+        with open(perf, "w") as f:
+            f.write(PERFORM_PROGRAM)
+        out_perf, st_perf, rss_perf = run(perf, True, noq)
     ok = True
     for label, out, st in (("reclaim on", out_on, st_on),
                            ("reclaim off", out_off, st_off)):
@@ -149,6 +170,18 @@ def main():
         ok = False
     else:
         print("PASS check-turi-frame-reclaim: %s" % pmsg)
+    grow_perf = rss_perf - rss_pins_idle
+    fmsg = ("performs: peak RSS %.0f MB, %.0f MB idle, growth %.0f MB (bound %d)"
+            % (rss_perf, rss_pins_idle, grow_perf, ARGS_GROWTH_MB))
+    if st_perf != 0 or out_perf != PERFORM_EXPECTED:
+        print("FAIL check-turi-frame-reclaim: perform program printed %r (status %d), want %r"
+              % (out_perf, st_perf, PERFORM_EXPECTED))
+        ok = False
+    elif grow_perf > ARGS_GROWTH_MB:
+        print("FAIL check-turi-frame-reclaim: %s -- a one-shot resume keeps its continuation" % fmsg)
+        ok = False
+    else:
+        print("PASS check-turi-frame-reclaim: %s" % fmsg)
     return 0 if ok else 1
 
 

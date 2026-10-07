@@ -7594,6 +7594,15 @@ struct TuriWsCont {
     const char  *perf_module;
     bool         perf_no_unwind;
     void        *perf_defer;    /* DeferItem* */
+    /* turi-effect-perform-keeps-its-continuation: the one-shot fast path
+     * (ws_case_is_oneshot_resume).  `frames` is then the slice ITSELF -- not
+     * marked escaped, accumulators still the driver's malloc'd ones -- and the
+     * resume pushes it back in place; it, this struct, the k value and the
+     * case frame are all freed there.  `consumed` guards the one resume. */
+    bool         oneshot;
+    bool         consumed;
+    EvalFrame   *case_frame;
+    struct TuriEffectCont *kval;
 };
 
 /* Shallow-copy a frame's bindings into a fresh frame (parent set by caller).
@@ -7664,6 +7673,47 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
             }
         }
     }
+}
+
+/* turi-effect-perform-keeps-its-continuation: an expression that can neither
+ * perform nor capture anything, nor mention `k` -- literals, variables other
+ * than k, and builtin operators over those. */
+static bool ws_resume_value_is_inert(const Expr *e, const Binding *k) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_FLOAT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT:
+            return true;
+        case EX_VAR:
+            return e->as.var.binding != k;
+        case EX_ASCRIBE:
+            return ws_resume_value_is_inert(e->as.ascribe_.inner, k);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!ws_resume_value_is_inert(e->as.builtin.args[i], k)) return false;
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* turi-effect-perform-keeps-its-continuation: is this case's body exactly
+ * `(resume k v)` with an inert `v`?  Then `k` is resumed once, as the whole
+ * body, and goes nowhere else -- nothing in `v` can perform (so no outer
+ * multishot handler can re-run the clause) or capture `k` -- so the captured
+ * slice can be run in place instead of cloned, and everything the capture
+ * allocated freed when the resume dispatches.  A `^multishot` k keeps the
+ * cloning path. */
+static bool ws_case_is_oneshot_resume(const HandleCase *hc) {
+    if (!hc || !hc->k_binding || hc->cont_kind == CK_MULTISHOT) return false;
+    const Expr *b = hc->body;
+    while (b && (b->kind == EX_ASCRIBE || (b->kind == EX_DO && b->as.do_.n == 1)))
+        b = b->kind == EX_ASCRIBE ? b->as.ascribe_.inner : b->as.do_.items[0];
+    if (!b || b->kind != EX_RESUME || !b->as.resume_.resume) return false;
+    const ResumeExpr *re = b->as.resume_.resume;
+    if (!re->k || re->k->kind != EX_VAR || re->k->as.var.binding != hc->k_binding)
+        return false;
+    return ws_resume_value_is_inert(re->value, hc->k_binding);
 }
 
 /* Wrap a work-stack continuation in a TURI_EFFECT_CONT value (discriminated by
@@ -9338,6 +9388,44 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 /* Capture the slice st[pidx+1 .. len-1] as a heap continuation. */
                 size_t nf = (len - 1) - (size_t)pidx;
+                /* turi-effect-perform-keeps-its-continuation: a clause that is
+                 * just `(resume k v)` resumes once, in place.  Not while a
+                 * re-entrant call/cc may complete these calls again, nor under
+                 * a debugger that holds activation frames. */
+                bool oneshot = ws_case_is_oneshot_resume(matched) &&
+                               !g_turi_cont_pinned && !env->debugger &&
+                               turi_frame_reclaim_on();
+                if (oneshot) {
+                    TuriWsCont *wc = (TuriWsCont *)calloc(1, sizeof(TuriWsCont));
+                    TuriEffectCont *kc = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+                    if (!wc || !kc) abort();
+                    kc->ws = wc;
+                    wc->oneshot  = true;
+                    wc->kval     = kc;
+                    wc->n_frames = nf;
+                    if (nf) {
+                        wc->frames = (DriveCont *)malloc(nf * sizeof(DriveCont));
+                        if (!wc->frames) abort();
+                        memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
+                    }
+                    wc->handler        = (HandleExpr *)st[pidx].aux;
+                    wc->handler_frame  = st[pidx].frame;
+                    frame_escape(st[pidx].frame);
+                    wc->perf_module    = env->current_module;
+                    wc->perf_no_unwind = env->in_no_unwind;
+                    wc->perf_defer     = env->defer_stack;
+                    len = (size_t)pidx + 1;
+                    st[pidx].index = 0;   /* disable while its own case body runs */
+                    EvalFrame *hf = eval_frame_new_call(env, st[pidx].frame);
+                    wc->case_frame = hf;
+                    for (uint32_t i = 0; i < matched->n_params && i < n; i++)
+                        frame_bind(env, hf, matched->param_bindings[i]->name->name, pargs[i]);
+                    frame_bind(env, hf, matched->k_binding->name->name, turi_effect_cont(kc));
+                    env->current_module = st[pidx].saved_module;
+                    env->in_no_unwind   = st[pidx].was_no_unwind;
+                    control = matched->body; cf = hf; tail = false;
+                    break;
+                }
                 /* Escaping payload: bound as the multishot k; pool-owned. */
                 TuriWsCont *wc = (TuriWsCont *)turi_val_calloc(env, sizeof(TuriWsCont));
                 wc->n_frames = nf;
@@ -9904,6 +9992,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     break;
                 }
                 TuriWsCont *wc = k.as_cont->ws;
+                if (wc->oneshot && wc->consumed) {
+                    cur = turi_error("eval: resume: a one-shot continuation was resumed twice");
+                    break;
+                }
                 /* Re-install the captured prompt around the resumed slice.  For a
                  * DEEP handler it is re-installed ACTIVE (index = 1), so a perform
                  * of the same effect in the resumed slice is caught again.  For a
@@ -9914,11 +10006,42 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * reaches the nearest ENCLOSING active prompt -- or the fiber path
                  * / unhandled if none.  Mirrors dk_perform's no-reinstall tail. */
                 int reinstall_active = (wc->handler && wc->handler->shallow) ? 0 : 1;
+                if (wc->oneshot && len > 0 && st[len - 1].kind == DK_PROMPT &&
+                    st[len - 1].aux == (void *)wc->handler &&
+                    st[len - 1].frame == wc->handler_frame && st[len - 1].index == 0) {
+                    /* turi-effect-perform-keeps-its-continuation: the resume is
+                     * the clause's whole body and sits right on the clause's
+                     * own (disabled) prompt, so nothing is left to run between
+                     * them: re-arm that prompt for the slice instead of
+                     * stacking a new one above it -- a perform per turn of a
+                     * loop then keeps the work stack flat. */
+                    st[len - 1].index = reinstall_active;
+                } else
                 DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
                                          .frame = wc->handler_frame, .tail = rtl,
                                          .index = reinstall_active,
                                          .saved_module = env->current_module,
                                          .was_no_unwind = env->in_no_unwind }));
+                if (wc->oneshot) {
+                    /* turi-effect-perform-keeps-its-continuation: the slice
+                     * goes back exactly as it was taken -- its frames never
+                     * marked escaped, its accumulators the driver's own -- so
+                     * its activations finish and release as if nothing had
+                     * been performed.  The clause was only this resume, so its
+                     * frame, k and the capture are dead from here. */
+                    for (size_t i = 0; i < wc->n_frames; i++)
+                        DRIVE_PUSH(wc->frames[i]);
+                    env->current_module = wc->perf_module;
+                    env->in_no_unwind   = wc->perf_no_unwind;
+                    env->defer_stack    = wc->perf_defer;
+                    wc->consumed = true;
+                    if (wc->case_frame == rcf) frame_release(env, rcf);
+                    free(wc->frames);
+                    free(wc->kval);
+                    free(wc);
+                    cur = v;
+                    break;
+                }
                 if (wc->n_frames) {
                     DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
                     clone_ws_slice(env, wc->frames, wc->n_frames, clone);
