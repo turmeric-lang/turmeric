@@ -15,12 +15,6 @@ extern bool g_lint_inline_c_unsafe;
 
 /* Phase R5: panic strategy */
 extern bool g_panic_abort;
-/* Compiler-side flag (set from --panic-trace) deciding whether emitted main()
- * turns on the *generated program's* runtime g_panic_trace. Named distinctly
- * from that emitted runtime global so a compiled program which links this
- * header (e.g. via `import turi/eval`) does not collide with its own
- * `static int g_panic_trace`. */
-extern bool g_emit_panic_trace;
 
 /* Phase R6: result/panic linting */
 extern bool g_warn_unused_result;

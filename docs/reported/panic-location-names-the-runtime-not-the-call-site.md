@@ -1,5 +1,14 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed again 2026-10-08: direction 4 is done -- `--panic-trace` is
+retired.**  The flag is accepted and ignored with `TUR-W0050`
+(`src/main.c`), the way `--lint-effects` is; the preamble no longer carries
+`g_panic_trace` or `tur_panic_print_scope_chain`, and no `main` sets it.  It
+printed defer-frame pointers, which named no function and no line; the panic
+line now names the site, and `--debug` + `tur debug` gives a stack.  The
+compiler-flags guide says so.  **Still open:** a panic raised inside the
+runtime (a bounds check) names the runtime helper that called `tur_panic`.
+
 **Narrowed again 2026-10-08: a failed contract's `panic at` names the
 predicate's own site.**  The `:pre`, `:post`, return-refinement, parameter-
 refinement, class-result and loop-invariant checks the elaborator injects now

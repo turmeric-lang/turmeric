@@ -10860,7 +10860,6 @@ static int usage(void) {
         "  --no-r7rs-gc                     build a #lang r7rs program without its collector (TUR_R7RS_GC=0; for a program that starts threads)\n"
         "  --no-saffron-gc                  build a #lang saffron program without the collector (TUR_SAFFRON_GC=0)\n"
         "  --panic-abort                   all panics call abort() directly (Phase R5)\n"
-        "  --panic-trace                   print scope chain on panic (Phase R6)\n"
         "  --warn-unused-result             warn on discarded result values (Phase R6)\n"
         "  --no-warn-unused-result          disable --warn-unused-result (Phase R6)\n"
         "  --lint-panic                     lint panic/must! usage (Phase R6)\n"
@@ -11710,16 +11709,6 @@ static bool parse_debug_build(int argc, char **argv) {
     return false;
 }
 
-/* Phase R6: Handle --panic-trace flag */
-static bool parse_panic_trace(int argc, char **argv) {
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--panic-trace") == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Phase R6: Handle --warn-unused-result flag */
 static bool parse_warn_unused_result(int argc, char **argv) {
     bool enabled = false;
@@ -12476,7 +12465,6 @@ static int tur_main_inner(int argc, char **argv) {
     bool explain_mode = false;
     const char *explain_code = NULL;
     g_panic_abort = parse_panic_abort(argc, argv);
-    g_emit_panic_trace = parse_panic_trace(argc, argv);
     g_warn_unused_result = parse_warn_unused_result(argc, argv);
     g_lint_panic = parse_lint_panic(argc, argv);
     /* Phase C2: --no-contracts strips contract checks (release builds). */
@@ -12538,7 +12526,16 @@ static int tur_main_inner(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "--panic-trace") == 0) {
-            /* Already parsed, remove from argv */
+            /* Retired (panic-location-names-the-runtime-not-the-call-site):
+             * it printed the defer-frame chain as raw pointers, which named
+             * no function and no line.  A panic now names its own .tur file
+             * and line, and `--debug` builds for a debugger's backtrace.
+             * Still accepted so existing scripts keep working; TUR-W0050
+             * says so. */
+            fprintf(stderr, "warning [TUR-W0050]: --panic-trace is retired and "
+                            "does nothing; a panic already names its .tur file "
+                            "and line, and a --debug build gives a debugger "
+                            "backtrace (`tur debug`)\n");
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }

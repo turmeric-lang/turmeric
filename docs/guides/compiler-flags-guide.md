@@ -118,6 +118,14 @@ soft-deprecation hint toward `*-must`. Silence with a
 `;; #lint-panic-allow` comment (top-of-file = whole file;
 immediately-preceding = single call). Off by default.
 
+### `--panic-trace` (retired)
+
+Accepted and ignored, with `TUR-W0050`. It used to print the live
+defer-frame chain as raw pointers when a program panicked -- not a call stack,
+and only when a `defer` was live. A panic now names its own `.tur` file and
+line (`panic at boom.tur:3: ...`); for a stack, build with `--debug` and use
+`tur debug` or lldb (`docs/guides/debugging-guide.md`).
+
 ### `--dump-kinds`
 
 Prints the kind of every bound type to stdout after the kind-checking

@@ -20,7 +20,6 @@ bool g_lint_inline_c_unsafe = false;
 
 /* Phase R5: Panic strategy configuration */
 bool g_panic_abort = false;
-bool g_emit_panic_trace = false;
 
 /* Phase R6: Result/panic linting configuration */
 bool g_warn_unused_result = false;

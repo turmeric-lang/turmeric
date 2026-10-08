@@ -1,5 +1,6 @@
-;; Phase R6: Test --panic-trace flag
-;; When --panic-trace is enabled, panics should print scope chain
+;; Phase R6: a panic two `: !` calls deep names its own site and aborts.
+;; The `--panic-trace` flag this fixture was named for is retired (TUR-W0050):
+;; it printed defer-frame pointers, and the panic line already says where.
 
 (defn inner [] : ! 
   (panic "test panic"))

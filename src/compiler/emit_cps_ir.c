@@ -11987,7 +11987,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* ---- D2b fixed-ABI entry wrapper: int main(int argc, char **argv) ----
      * A delimited zero-arg `main` (cps-backend-direct-lowering-removal-plan D2b)
      * keeps the program's fixed entry ABI: the wrapper reproduces the direct
-     * emitter's `main` prologue (panic-trace flag + the *args* cons build from
+     * emitter's `main` prologue (the *args* cons build from
      * argv, mirroring emit_fns.c / emit_module.c), seeds the root prompt exactly
      * like the generic wrapper below, trampolines into `main__cps`, and returns
      * the delivered value as the process exit code. */
@@ -11998,8 +11998,6 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         emit_main_deep_stack_prologue(file);
         buf_puts(file, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(file);
-        if (g_emit_panic_trace)
-            buf_puts(file, "    g_panic_trace = 1;\n");
         buf_puts(file, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
         buf_puts(file, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
         buf_puts(file, "    g_tur_args = 0;\n");

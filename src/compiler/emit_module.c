@@ -14619,30 +14619,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     
     /* Phase R2: tur_panic - integrated with defer chain */
-    /* Phase R6: Add g_panic_trace flag for scope chain printing */
-    buf_puts(out, "/* Phase R2/R6: tur_panic */\n");
+    buf_puts(out, "/* Phase R2: tur_panic */\n");
     emit_rt_global(out, shared, "int tur_panic_in_progress = 0;\n", "int tur_panic_in_progress");
     emit_rt_global(out, shared, "tur_frame *global_panic_frame = NULL;\n", "tur_frame *global_panic_frame");
-    emit_rt_global(out, shared, "int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */\n", "int g_panic_trace");
     /* CLI-ARGS: g_tur_args holds the *args* list (linked list of argv strings, built in main). */
     emit_rt_global(out, shared, "int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */\n", "int64_t g_tur_args");
     emit_rt_global(out, shared, "const char *g_tur_argv0 = \"\";  /* *argv0*: the program's own name, argv[0] (set in main) */\n", "const char *g_tur_argv0");
     buf_puts(out, "static void tur_panic_set_frame(tur_frame *f) {\n");
     buf_puts(out, "    global_panic_frame = f;\n");
     buf_puts(out, "}\n");
-    buf_puts(out, "static void tur_panic_print_scope_chain(void) {\n");
-    buf_puts(out, "    if (!g_panic_trace || !global_panic_frame) return;\n");
-    buf_puts(out, "    fprintf(stderr, \"  scope chain:\\n\");\n");
-    buf_puts(out, "    tur_frame *frames[64];\n");
-    buf_puts(out, "    int n_frames = 0;\n");
-    buf_puts(out, "    for (tur_frame *cur = global_panic_frame; cur != NULL && n_frames < 64; cur = cur->parent) {\n");
-    buf_puts(out, "        frames[n_frames++] = cur;\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "    for (int i = 0; i < n_frames; i++) {\n");
-    buf_puts(out, "        fprintf(stderr, \"    at frame %p (parent: %p, n_defers: %d)\\n\",\n");
-    buf_puts(out, "                (void*)frames[i], (void*)frames[i]->parent, frames[i]->n);\n");
-    buf_puts(out, "    }\n");
-    buf_puts(out, "}\n\n");
+    buf_puts(out, "\n");
     /* Phase R2: forward decls so plain tur_panic can unwind to a catch-unwind
      * boundary (the payload machinery itself is emitted further below). */
     buf_puts(out, "typedef struct tur_panic_payload tur_panic_payload;\n");
@@ -14712,7 +14698,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", file, line, msg ? msg : \"(no message)\");\n");
-    buf_puts(out, "    tur_panic_print_scope_chain();\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
     buf_puts(out, "    }\n");
@@ -20208,13 +20193,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         buf_puts(out, "int main(int argc, char **argv) {\n");
         emit_main_deep_stack_prologue(out);
         /* S1b: first statement, matching where the constructors used to run
-         * (before the Windows stdio mode switch and before g_panic_trace). */
+         * (before the Windows stdio mode switch). */
         buf_puts(out, "    __tur_static_init();\n");
         emit_win_binary_stdio_prologue(out);
-        /* Phase R6: Set g_panic_trace from compiler flag */
-        if (g_emit_panic_trace) {
-            buf_puts(out, "    g_panic_trace = 1;\n");
-        }
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
         buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
         buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");
@@ -21798,10 +21779,6 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
         emit_main_deep_stack_prologue(out);
         buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
-        /* Phase R6: Set g_panic_trace from compiler flag */
-        if (g_emit_panic_trace) {
-            buf_puts(out, "    g_panic_trace = 1;\n");
-        }
         /* CLI-ARGS: Build *args* list from argv[1..] as a linked list of char* (as int64_t). */
         buf_puts(out, "    /* *args*: build cons list from argv[1..argc-1]; *argv0* is argv[0] */\n");
         buf_puts(out, "    if (argc > 0 && argv[0]) g_tur_argv0 = argv[0];\n");

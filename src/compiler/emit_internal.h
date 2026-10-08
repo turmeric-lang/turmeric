@@ -49,7 +49,6 @@ void emit_split_refuse(const char *why);
 /* Phase R6: Result/panic linting flags (set by main.c) */
 extern bool g_warn_unused_result;
 extern bool g_lint_panic;
-extern bool g_emit_panic_trace;
 /* Phase C2: --no-contracts (controls the TUR_CONTRACTS_ENABLED preamble define) */
 extern bool g_no_contracts;
 /* Debugger Phase 4: --debug emits `#line N "file.tur"` source-map directives. */
