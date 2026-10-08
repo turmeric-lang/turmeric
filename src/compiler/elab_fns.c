@@ -377,14 +377,67 @@ static void rt_diag_impure_pred(Elab *e, const Expr *pred_e, Span span) {
         "check is compiled in becomes observable");
 }
 
+/* The basename of the file `sp` is in, or NULL when it has none. */
+static const char *rt_site_basename(Span sp) {
+    const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
+    if (!path) return NULL;
+    const char *base = path;
+    for (const char *q = path; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+    return base;
+}
+
+/* The -at helper, when the stdlib in use binds it. */
+static Binding *rt_contract_check_at_fn(Elab *e) {
+    return e->sym_tur_contract_check_at
+        ? scope_lookup(&e->global, e->sym_tur_contract_check_at) : NULL;
+}
+
+Expr *rt_contract_check_call(Elab *e, Binding *check_fn, Expr *pred_e,
+                             const char *msg, Span site, Span span) {
+    if (!pred_e || !msg) return NULL;
+    Binding *at_fn = rt_contract_check_at_fn(e);
+    const char *base = at_fn ? rt_site_basename(site) : NULL;
+    if (!base) at_fn = NULL;
+    if (!at_fn && !check_fn) return NULL;
+    uint32_t n = at_fn ? 4 : 2;
+    Expr **args = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
+    args[0] = pred_e;
+    Expr *m = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+    m->as.s.p   = msg;
+    m->as.s.len = (uint32_t)strlen(msg);
+    args[1] = m;
+    if (at_fn) {
+        size_t bl = strlen(base);
+        Expr *f = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+        f->as.s.p   = arena_strdup(e->arena, base, bl);
+        f->as.s.len = (uint32_t)bl;
+        args[2] = f;
+        Expr *l = expr_new(e->arena, EX_INT_LIT, TYPE_INT, span);
+        l->as.i = (int64_t)site.line;
+        args[3] = l;
+    }
+    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
+    check->as.call_.fn_binding    = at_fn ? at_fn : check_fn;
+    check->as.call_.args          = args;
+    check->as.call_.n_args        = n;
+    check->as.call_.fn_expr       = NULL;
+    check->as.call_.dict_arg      = NULL;
+    check->as.call_.is_poly_call  = false;
+    check->as.call_.poly_arg_mask = 0;
+    return check;
+}
+
 const char *rt_contract_message(Elab *e, const char *what, const char *subject,
                                 const Form *pred) {
     Buf b; buf_init(&b);
     buf_puts(&b, what);
     if (subject && *subject) buf_printf(&b, " in %s", subject);
-    /* Where the predicate is written: the panic's own "at" names the runtime
-     * helper that raised it, as a `(panic ...)` site's no longer does. */
-    const char *path = (pred && pred->span.line) ? diag_file_path(pred->span.file_id) : NULL;
+    /* Where the predicate is written -- in the message only when the panic's
+     * own "at" cannot carry it, i.e. when there is no -at helper to call
+     * (rt_contract_check_call). */
+    const char *path = (pred && pred->span.line && !(rt_contract_check_at_fn(e) &&
+                                                     rt_site_basename(pred->span)))
+                     ? diag_file_path(pred->span.file_id) : NULL;
     if (path) {
         const char *base = path;
         for (const char *q = path; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
@@ -469,28 +522,15 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
             check_expr = let_cv;
         }
 
-        Expr **ck_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-        ck_args[0] = check_expr;
-        Expr *ck_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
-        {
-            /* Name the parameter and its predicate, not just "Contract
-             * violated" (panic-location-names-the-runtime-not-the-call-site). */
-            char whatbuf[160];
-            snprintf(whatbuf, sizeof whatbuf, "Contract violated by parameter '%s'",
-                     params[pi]->name ? params[pi]->name->name : "?");
-            const char *m = rt_contract_message(e, whatbuf, subject, ct_preds[ci]);
-            ck_msg->as.s.p = m;
-            ck_msg->as.s.len = (uint32_t)strlen(m);
-        }
-        ck_args[1] = ck_msg;
-        Expr *ck_call = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
-        ck_call->as.call_.fn_binding  = check_fn;
-        ck_call->as.call_.args        = ck_args;
-        ck_call->as.call_.n_args      = 2;
-        ck_call->as.call_.fn_expr     = NULL;
-        ck_call->as.call_.dict_arg    = NULL;
-        ck_call->as.call_.is_poly_call = false;
-        ck_call->as.call_.poly_arg_mask = 0;
+        /* Name the parameter and its predicate, not just "Contract violated"
+         * (panic-location-names-the-runtime-not-the-call-site). */
+        char whatbuf[160];
+        snprintf(whatbuf, sizeof whatbuf, "Contract violated by parameter '%s'",
+                 params[pi]->name ? params[pi]->name->name : "?");
+        const char *m = rt_contract_message(e, whatbuf, subject, ct_preds[ci]);
+        Expr *ck_call = rt_contract_check_call(e, check_fn, check_expr, m,
+                                               ct_preds[ci]->span, span);
+        if (!ck_call) continue;
 
         Expr **do2 = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
         do2[0] = ck_call;
@@ -531,21 +571,9 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     rt_diag_impure_pred(e, pred_e, span);
     pred_e = elab_saffron_truthy(e, pred_e, span);   /* D6, see rt_inject_param_checks */
 
-    Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-    args[0] = pred_e;
-    Expr *msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
     const char *full_msg = rt_contract_message(e, fail_msg, subject, pred);
-    msg->as.s.p   = full_msg;
-    msg->as.s.len = (uint32_t)strlen(full_msg);
-    args[1] = msg;
-    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
-    check->as.call_.fn_binding   = check_fn;
-    check->as.call_.args         = args;
-    check->as.call_.n_args       = 2;
-    check->as.call_.fn_expr      = NULL;
-    check->as.call_.dict_arg     = NULL;
-    check->as.call_.is_poly_call = false;
-    check->as.call_.poly_arg_mask = 0;
+    Expr *check = rt_contract_check_call(e, check_fn, pred_e, full_msg, pred->span, span);
+    if (!check) return body;
 
     Expr *result_var = expr_new(e->arena, EX_VAR, body->type, span);
     result_var->as.var.binding = result_b;
@@ -632,22 +660,8 @@ Expr *elab_loop_invariant_pred(Elab *e, const Form *pred, Span span) {
 Expr *li_contract_check(Elab *e, Expr *pred_e, const char *msg, Span span) {
     if (!pred_e || !msg) return NULL;
     Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
-    if (!check_fn) return NULL;
-    Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-    args[0] = pred_e;
-    Expr *m = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
-    m->as.s.p   = msg;
-    m->as.s.len = (uint32_t)strlen(msg);
-    args[1] = m;
-    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
-    check->as.call_.fn_binding    = check_fn;
-    check->as.call_.args          = args;
-    check->as.call_.n_args        = 2;
-    check->as.call_.fn_expr       = NULL;
-    check->as.call_.dict_arg      = NULL;
-    check->as.call_.is_poly_call  = false;
-    check->as.call_.poly_arg_mask = 0;
-    return check;
+    /* `span` is the invariant's own: the panic names it. */
+    return rt_contract_check_call(e, check_fn, pred_e, msg, span, span);
 }
 
 /* Free symbols of `f` a loop site cares about: every symbol, minus list heads
@@ -11930,25 +11944,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
                 rt_diag_impure_pred(e, pred_e, call->span);
                 pred_e = elab_saffron_truthy(e, pred_e, call->span);   /* D6, see above */
-                if (pred_e) {
-                    /* Build call: (tur-contract-check pred "Precondition failed") */
-                    Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                    check_args[0] = pred_e;
-                    /* String arg */
-                    Expr *msg_e = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
-                    msg_e->as.s.p = rt_contract_message(e, "Precondition failed",
-                                                        name_f->as.sym->name,
-                                                        ct_pre_form);
-                    msg_e->as.s.len = (uint32_t)strlen(msg_e->as.s.p);
-                    check_args[1] = msg_e;
-                    Expr *check_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
-                    check_call->as.call_.fn_binding = check_fn;
-                    check_call->as.call_.args = check_args;
-                    check_call->as.call_.n_args = 2;
-                    check_call->as.call_.fn_expr = NULL;
-                    check_call->as.call_.dict_arg = NULL;
-                    check_call->as.call_.is_poly_call = false;
-                    check_call->as.call_.poly_arg_mask = 0;
+                Expr *check_call = pred_e ? rt_contract_check_call(
+                    e, check_fn, pred_e,
+                    rt_contract_message(e, "Precondition failed",
+                                        name_f->as.sym->name, ct_pre_form),
+                    ct_pre_form->span, call->span) : NULL;
+                if (check_call) {
                     /* Prepend check to body as EX_DO */
                     Expr **do_items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
                     do_items[0] = check_call;

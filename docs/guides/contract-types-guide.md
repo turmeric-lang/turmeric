@@ -271,23 +271,25 @@ binary as code written without contract annotations.
 
 ## Failure Messages
 
-A violated check goes through `tur-contract-check` and the contract handler
-(panic by default). The message says which kind of check failed, in which
-function, where the predicate is written, and what it says:
+A violated check panics at the line its predicate is written on. The message
+says which kind of check failed, in which function, and what the predicate
+says:
 
 ```
-Precondition failed in safe-div at div.tur:2: (not= b 0)
-Postcondition failed in g at g.tur:3: (>= result n)
-Return contract violated in size at shapes.tur:14: (>= r 0)
-Contract violated by parameter 'd' in sdiv at div.tur:9: (not= d 0)
+panic at div.tur:2: Precondition failed in safe-div: (not= b 0)
+panic at g.tur:3: Postcondition failed in g: (>= result n)
+panic at shapes.tur:14: Return contract violated in size: (>= r 0)
+panic at div.tur:9: Contract violated by parameter 'd' in sdiv: (not= d 0)
 ```
 
-A parameter of a lambda is named `in fn`, and an instance method by its
-method name. A predicate longer than 160 characters is cut short with `...`.
-The leading `panic at` still names the runtime function that raised the
-panic, not your code -- the `at <file>:<line>` inside the message is the one
-to read. A contract predicate with side effects is rejected at compile time
-(`contract predicate has side effects; predicates must be pure`).
+The location is the source file's name and line, in a compiled build and
+under `tur --interpret` alike. A parameter of a lambda is named `in fn`, and
+an instance method by its method name. A predicate longer than 160 characters
+is cut short with `...`. An `assert!` / `require!` / `ensure!` written in a
+body is an ordinary call to `tur-contract-check`, so its panic does not name
+your line. A contract predicate with side
+effects is rejected at compile time (`contract predicate has side effects;
+predicates must be pure`).
 
 ---
 

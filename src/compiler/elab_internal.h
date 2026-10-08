@@ -936,6 +936,7 @@ typedef struct Elab {
     const Symbol    *kw_invariant;          /* :invariant (loop-invariants-plan LI0) */
     const Symbol    *sym_result;            /* "result" -- bound name in :post predicates */
     const Symbol    *sym_tur_contract_check; /* tur-contract-check */
+    const Symbol    *sym_tur_contract_check_at; /* tur-contract-check-at */
     /* SS0b: Session type constructor symbols (used in type annotations) */
     const Symbol    *sym_session_type;      /* "Session" — type constructor */
     const Symbol    *sym_session_Send;      /* "Send"    — protocol Send[T, Q] */
@@ -1282,6 +1283,15 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
  * names the function, method or `fn`; NULL leaves it out. */
 const char *rt_contract_message(Elab *e, const char *what, const char *subject,
                                 const Form *pred);
+
+/* The call a contract site makes: `(tur-contract-check-at pred msg "<file>"
+ * <line>)`, the file a basename, so the panic's "at" names where the predicate
+ * is written (`site`), as a `(panic ...)` site's does -- or, where the stdlib in
+ * use binds no -at helper, `(check_fn pred msg)`.  NULL when neither is bound.
+ * rt_contract_message leaves the location out of `msg` exactly when this
+ * spells it in the prefix. */
+Expr *rt_contract_check_call(Elab *e, Binding *check_fn, Expr *pred_e,
+                             const char *msg, Span site, Span span);
 
 /* True when contract checks are being emitted for this build. */
 bool rt_contracts_emitted(void);

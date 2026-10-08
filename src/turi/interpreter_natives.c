@@ -6047,6 +6047,34 @@ TuriValue native_contract_check(TuriEnv *env, TuriValue *args,
     return turi_nil();
 }
 
+/* Native implementation of tur-contract-check-at (bool * cstr * cstr * int ->
+ * void): tur-contract-check, naming the predicate's site the way a compiled
+ * build's `tur_panic_at` does -- `panic at boom.tur:2: msg`. */
+TuriValue native_contract_check_at(TuriEnv *env, TuriValue *args,
+                                   uint32_t n, void *ud) {
+    (void)ud;
+    bool cond = true;
+    if (n >= 1) {
+        TuriValue a = args[0];
+        if (a.tag == TURI_BOOL)      cond = a.as_bool;
+        else if (a.tag == TURI_INT)  cond = (a.as_int != 0);
+        else if (a.tag == TURI_NIL)  cond = false;
+    }
+    if (!cond) {
+        const char *msg = (n >= 2 && args[1].tag == TURI_CSTR && args[1].as_cstr)
+                          ? args[1].as_cstr : "Assertion failed";
+        const char *file = (n >= 3 && args[2].tag == TURI_CSTR && args[2].as_cstr)
+                           ? args[2].as_cstr : NULL;
+        long long line = (n >= 4 && args[3].tag == TURI_INT) ? (long long)args[3].as_int : 0;
+        turi_host_exit_guard(env, msg);
+        if (file && *file) fprintf(stderr, "panic at %s:%lld: %s\n", file, line, msg);
+        else               fprintf(stderr, "panic at\n%s\n", msg);
+        fflush(stderr);
+        exit(1);
+    }
+    return turi_nil();
+}
+
 /* Native implementation of tur-contract-check-inv (obj pred msg -> void).
  * Calls pred(obj); panics if it returns false. */
 TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
@@ -6567,6 +6595,8 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
      * panic on a violated contract under --interpret. */
     turi_env_register_native(env, "tur-contract-check",
                              native_contract_check, NULL);
+    turi_env_register_native(env, "tur-contract-check-at",
+                             native_contract_check_at, NULL);
     turi_env_register_native(env, "tur-contract-check-inv",
                              native_contract_check_inv, NULL);
     turi_env_register_native(env, "contract-enabled?",

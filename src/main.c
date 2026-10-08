@@ -10242,6 +10242,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
             TuriValue sv2 = turi_eval(env,
                 "(defn contract-enabled? [] :bool true)\n"
                 "(defn tur-contract-check [condition :bool msg :cstr] :void nil)\n"
+                "(defn tur-contract-check-at [condition :bool msg :cstr file :cstr line :int] :void nil)\n"
                 "(defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void nil)");
             (void)sv2;
         }
@@ -10250,6 +10251,8 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
          * mode) so that assertions actually check their conditions. */
         turi_env_register_native(env, "tur-contract-check",
                                  native_contract_check, NULL);
+        turi_env_register_native(env, "tur-contract-check-at",
+                                 native_contract_check_at, NULL);
         turi_env_register_native(env, "tur-contract-check-inv",
                                  native_contract_check_inv, NULL);
         turi_env_register_native(env, "contract-enabled?",
