@@ -16113,7 +16113,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * body immediately re-parks on a further pending await, in which case `outer`
      * is threaded onto the new park).  Declared before tur_async_fiber (the async
      * boundary that reads the flag) and __tur_await_body (which sets it). */
-    buf_puts(out, "typedef struct { DK *subk; TurFuture *outer; } TurAsyncPark;\n\n");
+    /* async-parked-body-chains-never-reaped: `seg` is what the parked body
+     * had registered on the DK reap list (and its entry's root prompt), moved
+     * here when it parked, passed on to each later park, and given back to the
+     * list to be reaped once the resumed body settles; `depth` is the entry
+     * depth the await parked at, which names the entry that owns the park (the
+     * innermost one -- the await's shift reached its root). */
+    buf_puts(out, "typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; } TurAsyncPark;\n\n");
     emit_rt_global(out, shared,
                    "int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */\n",
                    "int tur_async_suspended");
@@ -16121,15 +16127,44 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
 
-    /* r7rs-conformance-program-emits-megabytes-of-c: the direct->cps entry
-     * wrapper of a ZERO-parameter colored function (emit_cps_ir.c) is this one
-     * helper plus a two-line shim, not a ~670-byte copy of its body per
-     * function -- 1,557 byte-identical copies in the r7rs conformance program,
-     * each with its own setjmp.  Exactly the inline wrapper's sequence: seed the
-     * root prompt, install the trampoline driver, run the body, copy a boxed
-     * (Tier-C) result out into `out` BEFORE the reap frees its box, then free
-     * the root and reap.  Here, after tur_async_suspended, which it reads. */
+    /* The exit of every direct->CPS entry wrapper (emit_cps_ir.c, and
+     * __dk_enter0 below).  A body that settled frees its root and leaves its
+     * depth; the outermost exit reaps the list.
+     *
+     * async-parked-body-chains-never-reaped: a body that PARKED on a pending
+     * await is not finished, so nothing it registered may be freed yet.  The
+     * entry that owns the park -- the one it parked at the depth of -- hands
+     * its registrations and its root to the park record (__dk_reap_seg_take)
+     * and leaves its depth like any other exit; __tur_async_resume reaps them
+     * once the resumed body settles.  This used to skip the exit altogether,
+     * so the depth never got back to 0 and the reaper was off for the rest of
+     * the thread: every later CPS entry's registrations were kept until exit.
+     * An entry exiting while a park it does not own is pending (an await that
+     * parked a nested entry's root, under direct-style code) keeps that old
+     * behaviour: it frees nothing and holds its depth. */
     if (dk_machine_emitted) {
+        buf_puts(out,
+"__attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {\n"
+"    if (tur_async_suspended) {\n"
+"        TurAsyncPark *p = tur_async_pending_park;\n"
+"        if (!p || p->depth != __dk_entry_depth) return;\n"
+"        __dk_reap_seg_take(&p->seg, mark);\n"
+"        __dk_reap_seg_add(&p->seg, root, 1);\n"
+"        p->depth = -1;  /* owned now: an outer exit is not its owner */\n"
+"        --__dk_entry_depth;\n"
+"        return;\n"
+"    }\n"
+"    dk_free(root);\n"
+"    if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);\n"
+"}\n\n");
+        /* r7rs-conformance-program-emits-megabytes-of-c: the direct->cps entry
+         * wrapper of a ZERO-parameter colored function (emit_cps_ir.c) is this one
+         * helper plus a two-line shim, not a ~670-byte copy of its body per
+         * function -- 1,557 byte-identical copies in the r7rs conformance program,
+         * each with its own setjmp.  Exactly the inline wrapper's sequence: seed the
+         * root prompt, install the trampoline driver, run the body, copy a boxed
+         * (Tier-C) result out into `out` BEFORE the reap frees its box, then free
+         * the root and reap.  Here, after tur_async_suspended, which it reads. */
         buf_puts(out,
 "__attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {\n"
 "    __dk_entry_depth++;\n"
@@ -16141,8 +16176,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
 "    else { __r = __dk_drive_after(); }\n"
 "    g_dk_driver = __dksave;\n"
 "    if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }\n"
-"    if (!tur_async_suspended) dk_free(__root);\n"
-"    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n"
+"    __dk_entry_leave(__root, __dk_reap_mark);\n"
 "    return __r;\n"
 "}\n\n");
     }
@@ -16379,21 +16413,72 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return f->value;\n");
     buf_puts(out, "}\n\n");
 
+    /* async-parked-body-chains-never-reaped: the resume runs as a CPS entry
+     * of its own.  It holds the park's share of the reap list aside -- the
+     * parked copy still shares those envs -- and runs the copy.  Settled, it
+     * puts the share back and leaves like any entry: the outermost exit reaps
+     * all of it, and what the resumed run registered, before the outer future
+     * is fulfilled (the payload is a word -- elab_async_payload_rides_slot --
+     * so it never points into a reaped box).  Parked again at this depth, it
+     * owns the new park and passes the share on to it whole, followed by what
+     * this turn registered.  A nested entry that owns the new park took its
+     * own share already; the rest stays on the list, as that entry's exit
+     * leaves it (__dk_entry_leave). */
     buf_puts(out, "static void __tur_async_resume(TurFuture *inner, int64_t value) {\n");
     buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)inner->on_complete.env;\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
+    buf_puts(out, "    __dk_entry_depth++;\n");
+    buf_puts(out, "    size_t __dk_reap_mark = __dk_reap_n;\n");
     buf_puts(out, "    int64_t r = dk_invoke(rec->subk, value);\n");
+    buf_puts(out, "    dk_free(rec->subk);\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* re-parked on a further pending await: thread the outer future through */\n");
-    buf_puts(out, "        tur_async_pending_park->outer = rec->outer;\n");
+    buf_puts(out, "        TurAsyncPark *np = tur_async_pending_park;\n");
+    buf_puts(out, "        np->outer = rec->outer;\n");
+    buf_puts(out, "        if (np->depth == __dk_entry_depth) {\n");
+    buf_puts(out, "            __dk_reap_seg_move(&np->seg, &rec->seg);\n");
+    buf_puts(out, "            __dk_reap_seg_take(&np->seg, __dk_reap_mark);\n");
+    buf_puts(out, "            np->depth = -1;\n");
+    buf_puts(out, "            --__dk_entry_depth;\n");
+    buf_puts(out, "        } else {\n");
+    buf_puts(out, "            __dk_reap_seg_give(&rec->seg);\n");
+    buf_puts(out, "        }\n");
+    buf_puts(out, "        tur_async_suspended = 0;\n");
+    buf_puts(out, "        tur_async_pending_park = NULL;\n");
     buf_puts(out, "    } else {\n");
+    buf_puts(out, "        tur_async_suspended = 0;\n");
+    buf_puts(out, "        tur_async_pending_park = NULL;\n");
+    buf_puts(out, "        __dk_reap_seg_give(&rec->seg);\n");
+    buf_puts(out, "        if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);\n");
     buf_puts(out, "        tur_future_fulfill(rec->outer, r);\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    tur_async_suspended = 0;\n");
-    buf_puts(out, "    tur_async_pending_park = NULL;\n");
-    buf_puts(out, "    dk_free(rec->subk);\n");
     buf_puts(out, "    free(rec);\n");
+    buf_puts(out, "}\n\n");
+
+    /* async-parked-body-chains-never-reaped: the fast path of a CPS `await`
+     * (emit_await).  A future that is already fulfilled needs no shift: its
+     * value goes straight to the await's continuation, which is how the
+     * continuation runs anyway when __tur_await_body finds the future done,
+     * minus the copy of the whole chain up to the root and the shift's own
+     * nodes.  Anything else -- pending, rejected, null -- takes the shift.
+     * A pending future backed by runnable scheduler fibers is drained first,
+     * as __tur_await_body would drain it after the shift; resolved that way it
+     * takes the fast path too, instead of resuming a copy inline.  The value
+     * is read by a second call rather than through an out-parameter, so the
+     * emitted caller has no address-taken local to keep its own
+     * `return dk_run(...)` from being a tail call. */
+    buf_puts(out, "__attribute__((unused)) static int __tur_await_ready(void *fp) {\n");
+    buf_puts(out, "    TurFuture *f = (TurFuture *)fp;\n");
+    buf_puts(out, "    if (!f) return 0;\n");
+    buf_puts(out, "    tur_future_join_thread(f);\n");
+    buf_puts(out, "    if (tur_scheduler)\n");
+    buf_puts(out, "        while (!tur_future_done(f) && tur_scheduler->run_queue_len > 0)\n");
+    buf_puts(out, "            tur_scheduler_run_one(tur_scheduler);\n");
+    buf_puts(out, "    return f->status == FUTURE_FULFILLED;\n");
+    buf_puts(out, "}\n\n");
+    buf_puts(out, "__attribute__((unused)) static intptr_t __tur_await_value(void *fp) {\n");
+    buf_puts(out, "    return (intptr_t)((TurFuture *)fp)->value;\n");
     buf_puts(out, "}\n\n");
 
     /* F3 (cps-async): the shift body for an `await` lowered to a heap
@@ -16442,6 +16527,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    if (!rec) { fprintf(stderr, \"await: oom\\n\"); abort(); }\n");
     buf_puts(out, "    rec->subk = dk_copy_range(subk, NULL);\n");
     buf_puts(out, "    rec->outer = NULL;  /* patched by the async boundary (tur_async_fiber) */\n");
+    buf_puts(out, "    rec->depth = __dk_entry_depth;  /* the entry whose root this shift reached */\n");
     buf_puts(out, "    f->on_complete.fn = (void (*)(TurFuture *, int64_t))__tur_async_resume;\n");
     buf_puts(out, "    f->on_complete.env = (void *)rec;\n");
     buf_puts(out, "    tur_async_suspended = 1;\n");

@@ -17,9 +17,10 @@
 ;;   lambda      -- a capture-free lambda literal that awaits
 ;;   capturing   -- a lambda that captures a local and awaits
 ;;
-;; Before the fix these printed 90 / 91 / 82 / 580.  Not leak-checked: a
-;; parked body's chains are never reaped
-;; (docs/reported/async-parked-body-chains-never-reaped.md).
+;; Before the fix these printed 90 / 91 / 82 / 580.  Leak-checked since
+;; async-parked-body-chains-never-reaped (docs/archive/) was fixed: a parked
+;; body's registrations are reaped once it settles, and the 49 awaits after
+;; each park, on a fulfilled future, cost no heap.
 
 (defn future-cell [fresh : bool] : ptr<void>
   ```c
@@ -39,6 +40,11 @@
 (defn future-value [f : ptr<void>] : int
   ```c
   return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
   ```)
 
 (defn await-plus [x : int] : int (+ x (await (the-future))))
@@ -71,16 +77,24 @@
   (fresh-future!)
   (let [a (async run-named)]
     (fulfill-future (the-future) 41)
-    (println (future-value a)))       ;; sum of i+41,   i<50 = 1225 + 2050  = 3275
+    (println (future-value a))      ;; sum of i+41,   i<50 = 1225 + 2050  = 3275
+    (free-future a)
+    (free-future (the-future)))
   (fresh-future!)
   (let [b (async run-transitive)]
     (fulfill-future (the-future) 41)
-    (println (future-value b)))       ;; sum of i+42,   i<50 = 1225 + 2100  = 3325
+    (println (future-value b))      ;; sum of i+42,   i<50 = 1225 + 2100  = 3325
+    (free-future b)
+    (free-future (the-future)))
   (fresh-future!)
   (let [c (async run-lambda)]
     (fulfill-future (the-future) 41)
-    (println (future-value c)))       ;; 50 * 82                          = 4100
+    (println (future-value c))      ;; 50 * 82                          = 4100
+    (free-future c)
+    (free-future (the-future)))
   (fresh-future!)
   (let [d (async run-capturing)]
     (fulfill-future (the-future) 41)
-    (println (future-value d))))      ;; sum of 11i+41, i<50 = 13475 + 2050 = 15525
+    (println (future-value d))      ;; sum of 11i+41, i<50 = 13475 + 2050 = 15525
+    (free-future d)
+    (free-future (the-future))))

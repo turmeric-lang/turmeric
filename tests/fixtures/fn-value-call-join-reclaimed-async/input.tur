@@ -5,16 +5,16 @@
 ;; crosses is copied, stays registered, and must still be intact when the copy
 ;; resumes after the outer entry has returned.
 ;;
-;; Not leak-checked: a parked body's chains are never reaped
-;; (docs/reported/async-parked-body-chains-never-reaped.md), which
-;; LeakSanitizer reports here byte for byte the same with or without the early
-;; release.  Built under ASan by hand, this program shows no use-after-free.
+;; Leak-checked (requires.leak-check) since
+;; async-parked-body-chains-never-reaped was fixed: what the parked body had
+;; registered moves to the park and is reaped once the resumed body settles.
 ;;
 ;; work-loop's non-tail call to the colored await-plus is a heap join each
-;; turn.  The first await parks (the future is pending); fulfilling it resumes
-;; the parked copy.  Every later await shifts too, even on the fulfilled
-;; future, so every join here is copied and none is released early (measured:
-;; 0 releases) -- what this pins is that a copied join is left alone.
+;; turn.  The first await parks (the future is pending), which copies the joins
+;; it crosses; fulfilling the future resumes the parked copy, which must still
+;; find them intact -- a copied join is left alone.  Every later await finds
+;; the future fulfilled and takes no shift, so the joins of later turns run
+;; uncopied and are handed back as they run.
 ;;
 ;; The call is direct, not through a function value; the fn-value shapes are
 ;; tests/fixtures/await-through-fn-value
@@ -37,6 +37,11 @@
   return (int64_t)tur_future_get((TurFuture *)f);
   ```)
 
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
 (defn future-pending? [f : ptr<void>] : bool
   ```c
   return ((TurFuture *)f)->status == FUTURE_PENDING;
@@ -55,4 +60,6 @@
       (do
         (fulfill-future (the-future) 41)
         (println (future-value f)))       ;; sum of i+41, i<50 = 1225 + 2050 = 3275
-      (println -1))))
+      (println -1))
+    (free-future f)
+    (free-future (the-future))))

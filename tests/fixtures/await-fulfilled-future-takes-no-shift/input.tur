@@ -1,0 +1,67 @@
+;; async-parked-body-chains-never-reaped: an `await` on a future that is
+;; already fulfilled takes no shift.  Its value goes straight to the await's
+;; continuation, so it allocates nothing that outlives it.  Before, every await
+;; shifted to the entry root: it copied the whole chain up to the root, resumed
+;; the copy one C frame deeper than the last, and left its shift node, frame
+;; node and env unfreed (248 B an await, parked or not).  100,000 awaits in one
+;; async body overflowed the stack (SIGSEGV) even at -O2; now the C compiler
+;; can make the loop's calls sibling calls, and at -O2 it runs flat.  The
+;; counts here stay small so the -O1 ASan build of the leak check, which does
+;; not, still fits its stack.
+;;
+;; Each shape runs 2,000 awaits on one fulfilled future, inside one async
+;; body:
+;;
+;;   trivial    -- the awaited value is the function's result
+;;   straight   -- a straight-line continuation that captures a local (F3.1)
+;;   branching  -- a continuation with a branch and a second await (gap-2)
+;;
+;; Leak-checked (requires.leak-check): nothing is left over.
+
+(defn ready-future [] : ptr<void>
+  ```c
+  static TurFuture *g = NULL;
+  if (!g) { g = tur_future_new(); tur_future_fulfill(g, 1); }
+  return (void *)g;
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn get-one [] : int (await (ready-future)))
+(defn plus-one [x : int] : int (+ x (await (ready-future))))
+(defn branchy [x : int] : int
+  (let [a (await (ready-future))]
+    (if (> x 10)
+      (+ a (await (ready-future)))
+      (- a 1))))
+
+(defn trivial-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (trivial-loop (+ i 1) n (+ acc (get-one)))))
+(defn straight-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (straight-loop (+ i 1) n (+ acc (plus-one i)))))
+(defn branchy-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (branchy-loop (+ i 1) n (+ acc (branchy i)))))
+
+(defn run-trivial [] : int (trivial-loop 0 2000 0))
+(defn run-straight [] : int (straight-loop 0 2000 0))
+(defn run-branchy [] : int (branchy-loop 0 2000 0))
+
+(defn main [] : nil
+  (let [a (async run-trivial)]
+    (println (future-value a))      ;; 2000 * 1
+    (free-future a))
+  (let [b (async run-straight)]
+    (println (future-value b))      ;; sum of i+1, i<2000 = 1999000 + 2000
+    (free-future b))
+  (let [c (async run-branchy)]
+    (println (future-value c))      ;; 11 * 0 + 1989 * 2 = 3978
+    (free-future c))
+  (free-future (ready-future)))

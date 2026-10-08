@@ -1054,6 +1054,67 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    (void)mark;\n"
 "#endif\n"
 "}\n");
+    /* async-parked-body-chains-never-reaped: a parked async body's share of
+     * the reap list.  When a body parks on a pending await, what its entry
+     * registered is still needed -- the parked copy shares those frames' envs,
+     * and a RESET_CONT frame's env can hold the entry's root -- but the entry
+     * has returned, so nothing would ever reap it.  Its entry wrapper used to
+     * leave the list and its own depth count as they were, which switched the
+     * reaper off for the rest of the thread: the depth never got back to 0.
+     *
+     * Instead the owning entry MOVES the registrations past its mark into the
+     * park record (__dk_reap_seg_take), their order kept, and leaves normally.
+     * The resume holds the record's share aside while it runs the parked copy
+     * -- off the list, so no last-entry release can take one of them while a
+     * copy shares it -- then either puts it back on the list to be reaped
+     * with what the run registered (__dk_reap_seg_give, once, when the body
+     * settles) or passes it on whole to the next park (__dk_reap_seg_move),
+     * which appends only that turn's registrations.  A body that parks on
+     * every turn of a long loop so costs amortized O(1) per park, not a copy
+     * of everything it holds.  The arrays are malloc'd, so under the collector
+     * (TUR_GC_ON) the park record, which a future reaches, keeps them
+     * scanned. */
+    buf_puts(out,
+"typedef struct { void **v; unsigned char *kind; size_t n, cap; } __dk_reap_seg;\n"
+"__attribute__((unused)) static void __dk_reap_seg_reserve(__dk_reap_seg *s, size_t k) {\n"
+"    if (s->n + k <= s->cap) return;\n"
+"    size_t c = s->cap ? s->cap : 16;\n"
+"    while (c < s->n + k) c *= 2;\n"
+"    s->v = (void **)realloc(s->v, c * sizeof(void *));\n"
+"    s->kind = (unsigned char *)realloc(s->kind, c);\n"
+"    s->cap = c;\n"
+"}\n"
+"__attribute__((unused)) static void __dk_reap_seg_add(__dk_reap_seg *s, void *p, unsigned char kind) {\n"
+"    __dk_reap_seg_reserve(s, 1);\n"
+"    s->v[s->n] = p; s->kind[s->n] = kind; s->n++;\n"
+"}\n"
+"__attribute__((unused)) static void __dk_reap_seg_take(__dk_reap_seg *s, size_t mark) {\n"
+"    if (mark >= __dk_reap_n) return;\n"
+"    size_t k = __dk_reap_n - mark;\n"
+"    __dk_reap_seg_reserve(s, k);\n"
+"    memcpy(s->v + s->n, __dk_reap_v + mark, k * sizeof(void *));\n"
+"    memcpy(s->kind + s->n, __dk_reap_kind + mark, k);\n"
+"    s->n += k;\n"
+"    for (size_t i = mark; i < __dk_reap_n; i++) __dk_reap_v[i] = NULL;\n"
+"    __dk_reap_n = mark;\n"
+"}\n"
+"/* `from`'s entries go first in `to` (they are the older); `from` is emptied. */\n"
+"__attribute__((unused)) static void __dk_reap_seg_move(__dk_reap_seg *to, __dk_reap_seg *from) {\n"
+"    if (!to->n) { free(to->v); free(to->kind); *to = *from; }\n"
+"    else {\n"
+"        __dk_reap_seg_reserve(from, to->n);\n"
+"        memcpy(from->v + from->n, to->v, to->n * sizeof(void *));\n"
+"        memcpy(from->kind + from->n, to->kind, to->n);\n"
+"        from->n += to->n;\n"
+"        free(to->v); free(to->kind); *to = *from;\n"
+"    }\n"
+"    from->v = NULL; from->kind = NULL; from->n = from->cap = 0;\n"
+"}\n"
+"__attribute__((unused)) static void __dk_reap_seg_give(__dk_reap_seg *s) {\n"
+"    for (size_t i = 0; i < s->n; i++) __dk_reap_push(s->v[i], s->kind[i]);\n"
+"    free(s->v); free(s->kind);\n"
+"    s->v = NULL; s->kind = NULL; s->n = s->cap = 0;\n"
+"}\n");
     /* fn-value-call-cps-frames-held-until-outer-entry: a heap-join frame and
      * its env are registered back to back (__dk_reap_ptr(env), then
      * __dk_reap_node(frame)) and are dead once the frame has run: the join is
@@ -1074,7 +1135,15 @@ void emit_cps_runtime_prelude(Buf *out) {
      * node off the list, the env is the last entry exactly when this release
      * happened, and never when a copy is running (a copied node stays
      * registered above its env).  The slots are cleared because the collector
-     * scans the list's array (TUR_GC_ON). */
+     * scans the list's array (TUR_GC_ON).
+     *
+     * An await's continuation (emit_await) releases its env the same way.  On
+     * the fast path -- the future already fulfilled -- the frame function is
+     * called in place right after the env is registered, so the env is the
+     * last entry.  On the shift path every run is a copy's: one inside the
+     * shift has the frame and shift nodes registered above the env, and a
+     * parked one runs on resume, while the park holds the env off the list
+     * (async-parked-body-chains-never-reaped). */
     buf_puts(out,
 "__attribute__((unused)) static bool __dk_join_release_node(DK *k) {\n"
 "    size_t n = __dk_reap_n;\n"
@@ -1082,6 +1151,21 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        || __dk_reap_kind[n - 1] != 0) return false;\n"
 "    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;\n"
 "    free(k); return true;\n"
+"}\n"
+"/* async-parked-body-chains-never-reaped: an await's shift node, and the\n"
+" * frame it shifts over, once dk_run has returned from the shift: the shift\n"
+" * arm ran (or parked) a COPY of the frame, so neither original is reachable.\n"
+" * Taken back while each is the list's last entry, as a join is; the frame's\n"
+" * env stays registered for the copy that shares it.  NULL frame: the\n"
+" * shift's next is the caller's continuation, not the await's to free. */\n"
+"__attribute__((unused)) static void __dk_await_release(DK *s, DK *f) {\n"
+"    size_t n = __dk_reap_n;\n"
+"    if (tur_dk_pinned || !n || __dk_reap_v[n - 1] != (void *)s || __dk_reap_kind[n - 1] != 0) return;\n"
+"    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;\n"
+"    free(s);\n"
+"    if (!f || !n || __dk_reap_v[n - 1] != (void *)f || __dk_reap_kind[n - 1] != 0) return;\n"
+"    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;\n"
+"    free(f);\n"
 "}\n"
 "__attribute__((unused)) static void __dk_join_release_env(intptr_t env) {\n"
 "    size_t n = __dk_reap_n;\n"

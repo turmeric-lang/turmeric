@@ -1,0 +1,136 @@
+;; async-parked-body-chains-never-reaped: what an async body registered for the
+;; DK reaper before it parked belongs to the park, and is reaped when the
+;; resumed body settles.  The entry it parked in used to skip its exit instead:
+;; it never left its depth, so the depth never got back to 0 and the reaper was
+;; off for the rest of the program -- every later CPS entry's registrations
+;; were kept until exit.  LeakSanitizer cannot see that (the list is a global,
+;; so all of it reads as reachable), which is why the last line prints the
+;; list's length and the entry depth: both are 0 once everything has settled.
+;;
+;;   re-park     -- one body parks on two futures in turn, a branch between
+;;   nested      -- a body awaits another async body that is itself parked
+;;   from-effect -- the resume is driven from inside an effect handler's loop
+;;   every-turn  -- a loop that parks on a fresh future every turn (2,000)
+;;   after       -- an effect loop run after a park is reclaimed as it goes
+;;
+;; Leak-checked (requires.leak-check).
+
+(defn new-future [] : ptr<void>
+  ```c
+  return (void *)tur_future_new();
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+;; Slot i of a small table of futures, created on first use; `fresh` replaces it.
+(defn cell [i : int fresh : bool] : ptr<void>
+  ```c
+  static void *cells[4];
+  if (fresh || !cells[i]) cells[i] = tur_future_new();
+  return cells[i];
+  ```)
+
+(defn reap-state [] : nil
+  ```c
+  printf("reap list %zu, depth %d\n", (size_t)__dk_reap_n, (int)__dk_entry_depth);
+  ```)
+
+;; re-park
+(defn two [x : int] : int
+  (let [a (await (cell 0 false))]
+    (let [b (await (cell 1 false))]
+      (if (> a b) (+ x a) (+ x (* 2 b))))))
+(defn re-park-body [] : int (+ (two 5) (two 7)))
+
+;; nested
+(defn inner-body [] : int (+ 100 (await (cell 0 false))))
+(defn outer-body [] : int
+  (let [f (async inner-body)]
+    (let [v (await f)]
+      (free-future f)
+      (+ 1000 v))))
+
+;; from-effect
+(defeffect Ask [] int)
+(defn ask-plus [x : int] : int (+ x (perform (Ask))))
+(defn parked-body [] : int (+ 1 (await (cell 0 false))))
+(defn driver [i : int n : int acc : int] : int
+  (if (= i n) acc
+    (do (when (= i 3) (fulfill-future (cell 0 false) 41))
+        (driver (+ i 1) n (+ acc (ask-plus i))))))
+(defn run-driver [n : int] : int
+  (handle (driver 0 n 0) (Ask [] k) (resume k 1)))
+
+;; every-turn
+(defn next-value [] : int (await (cell 2 false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+(defn every-turn-body [] : int (sum-values 0 2000 0))
+
+;; after
+(defn eff-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (eff-loop (+ i 1) n (+ acc (ask-plus i)))))
+(defn run-eff [n : int] : int
+  (handle (eff-loop 0 n 0) (Ask [] k) (resume k 1)))
+
+(defn main [] : nil
+  ;; re-park: 5 + 2*10 and 7 + 2*10
+  (cell 0 true) (cell 1 true)
+  (let [f (async re-park-body)]
+    (fulfill-future (cell 0 false) 3)
+    (println (pending? f))                ;; true: parked on the second future
+    (fulfill-future (cell 1 false) 10)
+    (println (future-value f))            ;; 25 + 27 = 52
+    (free-future f))
+  (free-future (cell 0 false)) (free-future (cell 1 false))
+  ;; nested: 1000 + (100 + 7)
+  (cell 0 true)
+  (let [f (async outer-body)]
+    (fulfill-future (cell 0 false) 7)
+    (println (future-value f))            ;; 1107
+    (free-future f))
+  (free-future (cell 0 false))
+  ;; from-effect: the parked body resumes inside run-driver's loop
+  (cell 0 true)
+  (let [f (async parked-body)]
+    (println (run-driver 10))             ;; sum of i+1, i<10 = 55
+    (println (future-value f))            ;; 42
+    (free-future f))
+  (free-future (cell 0 false))
+  ;; every-turn: fulfill the pending future, then replace it, 2,000 times
+  (cell 2 true)
+  (let [f (async every-turn-body)]
+    (while (pending? f)
+      (let [old (cell 2 false)]
+        (cell 2 true)
+        (fulfill-future old 2)
+        (free-future old)))
+    (println (future-value f))            ;; 2000 * 2 = 4000
+    (free-future f))
+  (free-future (cell 2 false))
+  ;; after: one more park, then an effect loop
+  (cell 0 true)
+  (let [f (async parked-body)]
+    (fulfill-future (cell 0 false) 41)
+    (free-future f))
+  (free-future (cell 0 false))
+  (println (run-eff 1000))                ;; 499500 + 1000 = 500500
+  (reap-state))

@@ -2489,12 +2489,67 @@ __attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
     (void)mark;
 #endif
 }
+typedef struct { void **v; unsigned char *kind; size_t n, cap; } __dk_reap_seg;
+__attribute__((unused)) static void __dk_reap_seg_reserve(__dk_reap_seg *s, size_t k) {
+    if (s->n + k <= s->cap) return;
+    size_t c = s->cap ? s->cap : 16;
+    while (c < s->n + k) c *= 2;
+    s->v = (void **)realloc(s->v, c * sizeof(void *));
+    s->kind = (unsigned char *)realloc(s->kind, c);
+    s->cap = c;
+}
+__attribute__((unused)) static void __dk_reap_seg_add(__dk_reap_seg *s, void *p, unsigned char kind) {
+    __dk_reap_seg_reserve(s, 1);
+    s->v[s->n] = p; s->kind[s->n] = kind; s->n++;
+}
+__attribute__((unused)) static void __dk_reap_seg_take(__dk_reap_seg *s, size_t mark) {
+    if (mark >= __dk_reap_n) return;
+    size_t k = __dk_reap_n - mark;
+    __dk_reap_seg_reserve(s, k);
+    memcpy(s->v + s->n, __dk_reap_v + mark, k * sizeof(void *));
+    memcpy(s->kind + s->n, __dk_reap_kind + mark, k);
+    s->n += k;
+    for (size_t i = mark; i < __dk_reap_n; i++) __dk_reap_v[i] = NULL;
+    __dk_reap_n = mark;
+}
+/* `from`'s entries go first in `to` (they are the older); `from` is emptied. */
+__attribute__((unused)) static void __dk_reap_seg_move(__dk_reap_seg *to, __dk_reap_seg *from) {
+    if (!to->n) { free(to->v); free(to->kind); *to = *from; }
+    else {
+        __dk_reap_seg_reserve(from, to->n);
+        memcpy(from->v + from->n, to->v, to->n * sizeof(void *));
+        memcpy(from->kind + from->n, to->kind, to->n);
+        from->n += to->n;
+        free(to->v); free(to->kind); *to = *from;
+    }
+    from->v = NULL; from->kind = NULL; from->n = from->cap = 0;
+}
+__attribute__((unused)) static void __dk_reap_seg_give(__dk_reap_seg *s) {
+    for (size_t i = 0; i < s->n; i++) __dk_reap_push(s->v[i], s->kind[i]);
+    free(s->v); free(s->kind);
+    s->v = NULL; s->kind = NULL; s->n = s->cap = 0;
+}
 __attribute__((unused)) static bool __dk_join_release_node(DK *k) {
     size_t n = __dk_reap_n;
     if (tur_dk_pinned || k->copied || !n || __dk_reap_v[n - 1] != (void *)k
         || __dk_reap_kind[n - 1] != 0) return false;
     __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
     free(k); return true;
+}
+/* async-parked-body-chains-never-reaped: an await's shift node, and the
+ * frame it shifts over, once dk_run has returned from the shift: the shift
+ * arm ran (or parked) a COPY of the frame, so neither original is reachable.
+ * Taken back while each is the list's last entry, as a join is; the frame's
+ * env stays registered for the copy that shares it.  NULL frame: the
+ * shift's next is the caller's continuation, not the await's to free. */
+__attribute__((unused)) static void __dk_await_release(DK *s, DK *f) {
+    size_t n = __dk_reap_n;
+    if (tur_dk_pinned || !n || __dk_reap_v[n - 1] != (void *)s || __dk_reap_kind[n - 1] != 0) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+    free(s);
+    if (!f || !n || __dk_reap_v[n - 1] != (void *)f || __dk_reap_kind[n - 1] != 0) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    free(f);
 }
 __attribute__((unused)) static void __dk_join_release_env(intptr_t env) {
     size_t n = __dk_reap_n;
@@ -3607,10 +3662,24 @@ static int64_t tur_future_get(TurFuture *f) {
     return f->value;
 }
 
-typedef struct { DK *subk; TurFuture *outer; } TurAsyncPark;
+typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; } TurAsyncPark;
 
 static int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */
 static TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */
+
+__attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
+    if (tur_async_suspended) {
+        TurAsyncPark *p = tur_async_pending_park;
+        if (!p || p->depth != __dk_entry_depth) return;
+        __dk_reap_seg_take(&p->seg, mark);
+        __dk_reap_seg_add(&p->seg, root, 1);
+        p->depth = -1;  /* owned now: an outer exit is not its owner */
+        --__dk_entry_depth;
+        return;
+    }
+    dk_free(root);
+    if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);
+}
 
 __attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {
     __dk_entry_depth++;
@@ -3622,8 +3691,7 @@ __attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __r;
 }
 
@@ -3808,17 +3876,46 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
     TurAsyncPark *rec = (TurAsyncPark *)inner->on_complete.env;
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;
+    __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
     int64_t r = dk_invoke(rec->subk, value);
+    dk_free(rec->subk);
     if (tur_async_suspended && tur_async_pending_park) {
         /* re-parked on a further pending await: thread the outer future through */
-        tur_async_pending_park->outer = rec->outer;
+        TurAsyncPark *np = tur_async_pending_park;
+        np->outer = rec->outer;
+        if (np->depth == __dk_entry_depth) {
+            __dk_reap_seg_move(&np->seg, &rec->seg);
+            __dk_reap_seg_take(&np->seg, __dk_reap_mark);
+            np->depth = -1;
+            --__dk_entry_depth;
+        } else {
+            __dk_reap_seg_give(&rec->seg);
+        }
+        tur_async_suspended = 0;
+        tur_async_pending_park = NULL;
     } else {
+        tur_async_suspended = 0;
+        tur_async_pending_park = NULL;
+        __dk_reap_seg_give(&rec->seg);
+        if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);
         tur_future_fulfill(rec->outer, r);
     }
-    tur_async_suspended = 0;
-    tur_async_pending_park = NULL;
-    dk_free(rec->subk);
     free(rec);
+}
+
+__attribute__((unused)) static int __tur_await_ready(void *fp) {
+    TurFuture *f = (TurFuture *)fp;
+    if (!f) return 0;
+    tur_future_join_thread(f);
+    if (tur_scheduler)
+        while (!tur_future_done(f) && tur_scheduler->run_queue_len > 0)
+            tur_scheduler_run_one(tur_scheduler);
+    return f->status == FUTURE_FULFILLED;
+}
+
+__attribute__((unused)) static intptr_t __tur_await_value(void *fp) {
+    return (intptr_t)((TurFuture *)fp)->value;
 }
 
 static intptr_t __tur_await_body(intptr_t env, DK *subk) {
@@ -3858,6 +3955,7 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
     if (!rec) { fprintf(stderr, "await: oom\n"); abort(); }
     rec->subk = dk_copy_range(subk, NULL);
     rec->outer = NULL;  /* patched by the async boundary (tur_async_fiber) */
+    rec->depth = __dk_entry_depth;  /* the entry whose root this shift reached */
     f->on_complete.fn = (void (*)(TurFuture *, int64_t))__tur_async_resume;
     f->on_complete.env = (void *)rec;
     tur_async_suspended = 1;
@@ -7696,8 +7794,7 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
 static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
@@ -8048,8 +8145,7 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
 static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
@@ -8137,8 +8233,7 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
 static void tur_hylist_hyhomog_un_un(int64_t a, int64_t b) {

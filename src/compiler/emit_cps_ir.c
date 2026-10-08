@@ -8890,7 +8890,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                         const CTerm *body, const CHandleCase *hcase,
                         const CapSet *caps) {
     bool has_caps = (caps && caps->n > 0);
-    bool join_release = g_lh_join_release && mode == LH_RESUME_CONT;
+    bool join_release = g_lh_join_release
+                     && (mode == LH_RESUME_CONT || mode == LH_PERFORM_CONT);
     g_lh_join_release = false;
     /* fn-value-fat-normalization (effect-row increment): a lifted helper is its
      * OWN function -- captures arrive through its frame env (`__cap->fN`) as
@@ -11102,13 +11103,41 @@ static bool await_cont_trivial(const CTerm *t) {
  * but shifts to the entry root prompt with the fixed __tur_await_body runtime
  * helper as the shift body (the awaited future rides as the shift's env).  The
  * continuation (bind the awaited value, run the rest) is lifted exactly like a
- * perform continuation (LH_PERFORM_CONT) and threaded as the shift's tail. */
+ * perform continuation (LH_PERFORM_CONT) and threaded as the shift's tail.
+ *
+ * async-parked-body-chains-never-reaped: a future that is already fulfilled
+ * takes no shift.  The value goes straight to the continuation -- the lifted
+ * frame called in place, or the function's own continuation for a trivial
+ * one -- which is what __tur_await_body would have done with it, minus a copy
+ * of the whole chain up to the root and the shift's own nodes.  An await in a
+ * long-running async loop then costs no heap at all once its future is ready.
+ * A pending, rejected or null future takes the shift as before, and its
+ * nodes and env are now registered with the reaper (they were never freed:
+ * 248 B per await, parked or not).  The env is registered BELOW its frame, and
+ * the lifted frame hands it back after reading its captures
+ * (__dk_join_release_env) only when it is the list's last entry -- true on the
+ * fast path, and never while a copy of the frame runs: a copy run inside the
+ * shift has the frame and shift nodes registered above the env, and a parked
+ * copy runs on resume, while the park holds the env off the list.  Once
+ * dk_run returns from the shift those two nodes are unreachable (only copies
+ * of the frame ever ran), and __dk_await_release hands them back if nothing
+ * was registered after them -- the usual case for a park, so a parked body
+ * keeps only the env. */
 static void emit_await(CE *ce, const CTerm *t) {
     char *fut = atom_str(ce, &t->as.await.fut);
     char *fsa = slot_store(ce->ctx, t->as.await.fut.ty, t->as.await.fut.type, fut);
+    /* One block: the slow path declares locals, and an await can be emitted
+     * straight after a label. */
+    ce_line(ce, "{");
+    ce->indent += 4;
     if (await_cont_trivial(t)) {
-        ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, %s), 0);",
+        ce_line(ce, "if (__tur_await_ready((void *)(%s))) return dk_run(%s, __tur_await_value((void *)(%s)));",
+                fsa, ce->cur_k, fsa);
+        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, %s));",
                 fsa, ce->cur_k);
+        ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
+        ce_line(ce, "__dk_await_release(__aws, NULL);");
+        ce_line(ce, "return __awq;");
     } else if (perform_body_ok(t->as.await.body)) {
         /* Straight-line continuation (F3.1): a value-transform frame whose result
          * dk_run delivers to the function's k (frame next = cur_k). */
@@ -11119,11 +11148,17 @@ static void emit_await(CE *ce, const CTerm *t) {
         CapSet cs;
         bool ok = collect_caps(t->as.await.body, t->as.await.x.id, &cs);
         const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+        g_lh_join_release = true;
         emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.await.x.ty, t->as.await.x.type,
                     t->as.await.body, NULL, caps);
+        g_lh_join_release = false;
         free(pxn);
+        /* Ready is asked before the env is registered, so a scheduler drain
+         * inside it cannot register anything above the env. */
+        ce_line(ce, "int __awok = __tur_await_ready((void *)(%s));", fsa);
+        char envv[64];
+        snprintf(envv, sizeof envv, "0");
         if (caps) {
-            char envv[64];
             snprintf(envv, sizeof envv, "__awe%d", id);
             ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
             for (int i = 0; i < cs.n; i++) {
@@ -11131,14 +11166,21 @@ static void emit_await(CE *ce, const CTerm *t) {
                 ce_line(ce, "%s->f%d = %s;", envv, i, cn);
                 free(cn);
             }
-            ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, "
-                        "dk_frame(%s, (intptr_t)%s, %s)), 0);",
-                    fsa, pname, envv, ce->cur_k);
-        } else {
-            ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, "
-                        "dk_frame(%s, 0, %s)), 0);",
-                    fsa, pname, ce->cur_k);
+            ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
         }
+        ce_line(ce, "if (__awok) {");
+        ce_line(ce, "    intptr_t __awr = %s((intptr_t)%s, __tur_await_value((void *)(%s)));",
+                pname, envv, fsa);
+        ce_line(ce, "    if (tur_panicking) return 0;");
+        ce_line(ce, "    return dk_run(%s, __awr);", ce->cur_k);
+        ce_line(ce, "}");
+        ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame(%s, (intptr_t)%s, %s));",
+                pname, envv, ce->cur_k);
+        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
+                fsa);
+        ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
+        ce_line(ce, "__dk_await_release(__aws, __awf);");
+        ce_line(ce, "return __awq;");
     } else {
         /* F3 gap-2: a bounded full CPS continuation (a branch or a further
          * sequential await -- await_cont_reset_ok, checked at admission).  Lift
@@ -11154,7 +11196,8 @@ static void emit_await(CE *ce, const CTerm *t) {
          * emits `dk_run(__kont, v)`, a nested await emits its own shift against
          * __kont, and the value is delivered exactly once.  No cps->cps tail
          * call reaches here (that evicts), so the number of nested dk_invoke
-         * resumes is statically bounded -- no O(N) stack. */
+         * resumes is statically bounded -- no O(N) stack.  On the fast path the
+         * frame is called in place with the real chain as its rest. */
         int id = (*ce->helper_ctr)++;
         char aname[256];
         snprintf(aname, sizeof(aname), "%s_ak%d", ce->fn_cn, id);
@@ -11162,15 +11205,26 @@ static void emit_await(CE *ce, const CTerm *t) {
         CapSet cs;
         bool ok = collect_caps(t->as.await.body, t->as.await.x.id, &cs);
         const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+        g_lh_join_release = true;
         emit_lifted(ce, aname, LH_RESUME_CONT, axn, t->as.await.x.ty, t->as.await.x.type,
                     t->as.await.body, NULL, caps);
+        g_lh_join_release = false;
         free(axn);
-        char *envexpr = emit_cont_env(ce, aname, caps);   /* caps-only env */
-        ce_line(ce, "return dk_run(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, "
-                    "dk_frame_resume_borrow(%s, %s, %s)), 0);",
-                fsa, aname, envexpr, ce->cur_k);
+        ce_line(ce, "int __awok = __tur_await_ready((void *)(%s));", fsa);
+        char *envexpr = emit_cont_env(ce, aname, caps);   /* caps-only env, reaped */
+        ce_line(ce, "if (__awok) return %s(%s, __tur_await_value((void *)(%s)), %s);",
+                aname, envexpr, fsa, ce->cur_k);
+        ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame_resume_borrow(%s, %s, %s));",
+                aname, envexpr, ce->cur_k);
+        ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
+                fsa);
+        ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
+        ce_line(ce, "__dk_await_release(__aws, __awf);");
+        ce_line(ce, "return __awq;");
         free(envexpr);
     }
+    ce->indent -= 4;
+    ce_line(ce, "}");
     free(fsa);
     free(fut);
 }
@@ -12194,16 +12248,12 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_printf(file, "    int __mret = (int)(%s);\n", ld);
             free(ld);
         }
-        /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
-         * lifted continuation copy may still reference __root (a RESET_CONT
-         * await frame carries k=__root in its env); leak it rather than dangle.
-         * tur_async_suspended is always 0 for a synchronous / effect-only body,
-         * so this is byte-identical there.  The reap list is gated the same way:
-         * a parked continuation may still reference a registered chain / env
-         * struct / box, so reaping only runs once the body has actually settled
-         * (docs/archive/cps-delimited-dk-node-leak.md). */
-        buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
-        buf_puts(file, "    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n");
+        /* Free the root and reap (the outermost exit), or -- the body PARKED on
+         * a pending await -- hand both to the park, which frees them once the
+         * resumed body settles: a parked copy may still reference a registered
+         * chain / env struct / box.  __dk_entry_leave (emit_module.c) has the
+         * whole protocol (async-parked-body-chains-never-reaped). */
+        buf_puts(file, "    __dk_entry_leave(__root, __dk_reap_mark);\n");
         if (mvoid) {
             buf_puts(file, "    return 0;\n}\n");
         } else {
@@ -12358,16 +12408,10 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             buf_printf(file, "    %s __ret = %s;\n", rety, ld);
         free(ld);
     }
-    /* cps-async (F3.2/gap-2): if the body PARKED on a pending await, a
-     * lifted continuation copy may still reference __root (a RESET_CONT
-     * await frame carries k=__root in its env); leak it rather than dangle.
-     * tur_async_suspended is always 0 for a synchronous / effect-only body,
-     * so this is byte-identical there.  The reap list is gated the same way:
-     * a parked continuation may still reference a registered chain / env
-     * struct / box, so reaping only runs once the body has actually settled
-     * (docs/archive/cps-delimited-dk-node-leak.md). */
-    buf_puts(file, "    if (!tur_async_suspended) dk_free(__root);\n");
-    buf_puts(file, "    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n");
+    /* Free the root and reap, or hand both to the park the body parked on --
+     * see __dk_entry_leave (emit_module.c, async-parked-body-chains-never-
+     * reaped). */
+    buf_puts(file, "    __dk_entry_leave(__root, __dk_reap_mark);\n");
     if (void_ret) {
         buf_puts(file, "    return;\n}\n");
     } else {
