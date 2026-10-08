@@ -343,7 +343,7 @@ failure mode, for ~40-72 B a call on a path no stdlib function takes. It stays
 where this report always put it: end-to-end monomorphization, which deletes
 the boxes rather than owning them.
 
-## Investigated further 2026-10-08 -- two corrections, one split-out fix
+## Investigated further 2026-10-08 -- the sweep under-counted; the rest is attributed
 
 **1. LeakSanitizer's default roots under-count this sweep.** Its default
 scans every stack and register, and a stale copy of a pointer in a dead frame
@@ -363,26 +363,28 @@ register roots off from now on. Its 127 fixtures pass either way, so the gate
 cost nothing to tighten. Earlier rows in this report were measured with the
 default and may be low by the same mechanism.
 
-**2. The 24 B in two of the `:int`-reader rows is not the `:int` reader.**
+**2. The two `:int`-reader rows with a 24 B closure env are erasure after all.**
+A first pass on 2026-10-08 moved them to a new report. That was wrong:
 `conv-defstruct-option-hkt-instance-bodies` and
-`hkt-stdlib-option-result-instances` each leak the env of a capturing closure
-held in a by-value `(some (fn ...))` local. That is a general gap with no
-`:int` in it: a by-value Option/Result local never released an owning
-payload. It is split out as
+`hkt-stdlib-option-result-instances` both build
+`(:: (some (:: (fn [x : int] : int (+ x bump)) int)) (Option int))`. The
+fixture erases the closure to `int` itself, to exercise the int carrier, so
+its env is the fixture's to own, like the `:int` readers beside it. The same
+investigation did find a real, separate gap: a closure held TYPED in a
+by-value Option/Result local was never released. It is
 [sum-closure-payload-never-dropped](sum-closure-payload-never-dropped.md),
-and its direct shapes (a `match` that only calls the closure, a tag predicate)
-are fixed. These two rows hand the local to `ap`, a shape that is still
-open there, so their bytes do not move yet.
+now fixed for the shapes ordinary code uses, but it does not touch these rows.
 
-With both corrections, this report's own residue is **400 B**:
+So this report's own residue, measured with the stricter roots, is **448 B**:
 
 | Category | Bytes |
 | --- | ---: |
-| `:int` inline-C readers (176 less the two 24 B envs above) | 128 |
+| a fixture's own `:int` inline-C reader / erasing ascription | 176 |
 | dictionary dispatch inside a constrained generic | 256 |
 | `ptr<void>`-erased closure (`option-map-capturing-closure`) | 16 |
 
-plus `colored-generic-erased-carrier-param`'s known 16 B.
+plus `colored-generic-erased-carrier-param`'s known 16 B. Of these, only the
+dictionary-dispatch row is a compiler omission on code that erased nothing.
 
 **3. The dictionary-dispatch row, attributed per allocation** (bind-pure,
 roots off). Each Route B clone call leaks:

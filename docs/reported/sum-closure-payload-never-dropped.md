@@ -19,9 +19,15 @@ holds the env's only reference:
   (stdlib `some` / `ok` / `err` -- asked structurally, so a user function
   named `some` that keeps its argument is not trusted);
 - every use of the local is a `match` whose non-scalar arm binders are only
-  invoked (`closure_binding_escapes`), or an argument to a tag predicate whose
+  invoked (`closure_binding_escapes`), an argument to a tag predicate whose
   whole body is a `match` returning literals (`some?` / `none?` / `ok?` /
-  `err?`).
+  `err?`), or an argument to a statically known callee whose body does the
+  same with its parameter (`fn_param_keeps_no_payload_closure`, memoized per
+  FnDef, recursion read as "keeps"; the callee must have no inline C and a
+  runtime-pure row with no `await`, so a continuation captured inside it
+  cannot call the closure after the caller's `let` has freed it). Option's
+  `ap` instance qualifies, and so do user helpers that match and call.
+- the payload closure itself cannot suspend either (same test).
 
 It works on both the trailing-drop path (`emit_let_value`) and the tail path
 (`let_binding_push_scope_frees`), where the call's value is put in a temp
@@ -31,7 +37,9 @@ Pinned by `tests/fixtures/sum-closure-payload-dropped` (`requires.leak-check`:
 `(some ...)`, `(Some ...)` written directly, an `Ok` arm next to a returned
 `Err` int, `some?` then `match`, and 1000 constructions from a `while`) and
 `tests/fixtures/sum-closure-payload-kept` (shapes that must keep the closure,
-because something else can still reach it).
+because something else can still reach it: returned, an arm returning it,
+callees that store it, return the Option, recurse, or are inline C, and an
+alias).
 
 ## Measured
 
@@ -51,14 +59,12 @@ ASan if the drop ever trusts that mask again.
 
 Each of these still leaks the env, as before. None is freed early.
 
-1. **The local is passed to any other function** -- `(ap ff fa)`,
-   `(fmap ...)`, a user `(call-opt ff 10)`. A callee that only matches and
-   calls the closure would be safe, but nothing infers that today. It needs a
-   per-param "does not keep a closure taken out of this sum" mask. This is the
-   shape of the 24 B env rows in
-   [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md)
-   (`conv-defstruct-option-hkt-instance-bodies`,
-   `hkt-stdlib-option-result-instances`: `(opt-val (ap ff fa))`).
+1. **A dictionary-dispatched callee inside a generic.** The call's
+   `fn_binding` names a representative instance, not the one that runs, so
+   only a statically dispatched call is asked. (Fixed 2026-10-08 for every
+   statically known callee -- a first version of this report pointed at the
+   `:int`-reader rows of carrier-sum-option-boxes-have-no-owner as this shape.
+   They are not: those fixtures erase the closure to `int` themselves.)
 2. **`unwrap` / `unwrap-or`**: the read hands the closure out as a value.
    Freeing would need the result to be only invoked, the same question as
    the arm binder, asked through the call.
@@ -77,8 +83,8 @@ Each of these still leaks the env, as before. None is freed early.
 
 ## Fix directions
 
-- For (1), infer a closure-aware sibling of `nonretain_sum_param_mask`: bit
-  i set when the callee's arm binders of param i are only invoked and the
-  param itself does not escape. `ap` / `fmap` over Option would qualify.
+- For (1), re-resolve the dispatch per monomorph the way
+  `emit_reresolve_method_fndef` does for the sum-box drops, and ask the
+  resolved method.
 - For (3), give `emit_cps_ir.c`'s let lowering the same scope-exit hook the
   closure env and `any` drops already have there.

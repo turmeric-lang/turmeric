@@ -258,7 +258,7 @@ An `#fx{}` annotation on the function type does not change this today.
 | --- | --- | --- |
 | `rc<T>` | the last strong handle drops | freed (unless it is in a cycle and the collector is off) |
 | a capturing closure in a `let` | the `let` ends | freed |
-| a capturing closure as the payload of a by-value `Option`/`Result` local | the `let` ends, when every use is a `match` that only calls it or a `some?`-style tag predicate | otherwise leaked ([sum-closure-payload-never-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sum-closure-payload-never-dropped.md)) |
+| a capturing closure as the payload of a by-value `Option`/`Result` local | the `let` ends, when every use is a `match` that only calls it, a `some?`-style tag predicate, or a call to a function that does the same | otherwise leaked ([sum-closure-payload-never-dropped](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/sum-closure-payload-never-dropped.md)) |
 | a by-value struct with an `rc` or `ref` field | the owning local ends | freed |
 | a by-value recursive `defdata` local | the local ends, when the compiler proves it owns the spine | freed in the proven shapes; otherwise leaked |
 | `Vec`, `MutableMap`, `Map`, `Set` | you call `vec-free` / `mutmap-free` / `map-free` | leaked |
