@@ -4567,6 +4567,31 @@ static int expr_count_all_uses(const Expr *e, const Binding *b) {
 static const Binding *g_ptc_self_bind;
 static uint32_t       g_ptc_self_pi;
 
+/* The `let` aliases of the param being tiered that are in scope at this point of
+ * the walk (cps_ir_fnparam_alias_src).  A call through one is a call through the
+ * param -- the translator inlines it as exactly that (pap_register_let) -- and any
+ * other use of one is a use of the param, so every test below that asks "is this
+ * `p`?" asks it of the aliases too.  Full set: further aliases are not followed
+ * (counted as value-uses), which only ever declines. */
+static const Binding *g_ptc_alias[8];
+static uint32_t       g_ptc_n_alias;
+
+static bool ptc_is_p(const Binding *b, const Binding *p) {
+    if (!b) return false;
+    if (b == p) return true;
+    for (uint32_t i = 0; i < g_ptc_n_alias; i++)
+        if (g_ptc_alias[i] == b) return true;
+    return false;
+}
+
+/* expr_count_all_uses over `p` and its in-scope aliases. */
+static int ptc_count_all_uses(const Expr *e, const Binding *p) {
+    int n = expr_count_all_uses(e, p);
+    for (uint32_t i = 0; i < g_ptc_n_alias; i++)
+        n += expr_count_all_uses(e, g_ptc_alias[i]);
+    return n;
+}
+
 /* Classify how param `p` of a HOF is used, tracking tail position: count its
  * value-uses (escapes -- passed as an arg, stored, bare ref), its tail-position
  * callee-calls, and its non-tail callee-calls.  A call to `p` under a `handle`/
@@ -4580,21 +4605,23 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
     if (!e) return;
     switch (e->kind) {
         case EX_CALL: {
-            bool callee_is_p = e->as.call_.fn_binding == p
+            bool callee_is_p = ptc_is_p(e->as.call_.fn_binding, p)
                 || (e->as.call_.fn_expr && e->as.call_.fn_expr->kind == EX_VAR
-                    && e->as.call_.fn_expr->as.var.binding == p);
+                    && ptc_is_p(e->as.call_.fn_expr->as.var.binding, p));
             if (callee_is_p) { if (tail) (*tailc)++; else (*ntc)++; }
             else ptc_walk(e->as.call_.fn_expr, p, false, val, tailc, ntc);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *a = peel_fn_value(e->as.call_.args[i]);
-                if (a && a->kind == EX_VAR && a->as.var.binding == p) {
+                if (a && a->kind == EX_VAR && ptc_is_p(a->as.var.binding, p)) {
                     /* E2 (cps-tramp-resume): a SELF-recursive call passing param `p`
                      * back at its OWN position is NOT an escape -- it is the same
                      * row-poly fn-value threading through the recursion, so it does
                      * not disqualify `p` as a thread-param (effect-poly-map).  Every
                      * other value-use (stored, passed elsewhere, bare ref) still
-                     * counts. */
-                    if (g_ptc_self_bind
+                     * counts -- an ALIAS passed back too: the translator inlines an
+                     * alias only when its every use is a call. */
+                    if (a->as.var.binding == p
+                        && g_ptc_self_bind
                         && e->as.call_.fn_binding == g_ptc_self_bind
                         && i == g_ptc_self_pi)
                         continue;
@@ -4605,17 +4632,28 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             ptc_walk(e->as.call_.dict_arg, p, false, val, tailc, ntc);
             return;
         }
-        case EX_VAR:  if (e->as.var.binding == p) (*val)++; return;
+        case EX_VAR:  if (ptc_is_p(e->as.var.binding, p)) (*val)++; return;
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++)
                 ptc_walk(e->as.do_.items[i], p, tail && (i + 1 == e->as.do_.n),
                          val, tailc, ntc);
             return;
-        case EX_LET:
-            for (uint32_t i = 0; i < e->as.let_.n; i++)
+        case EX_LET: {
+            /* `(let [f p] ...)` that the translator inlines (every use of `f` a
+             * saturated call) renames `p`: its init is not a value-use, and the
+             * calls through `f` below count as calls through `p`. */
+            uint32_t saved = g_ptc_n_alias;
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                if (g_ptc_n_alias < 8 && cps_ir_let_fnparam_alias(e, i) == p) {
+                    g_ptc_alias[g_ptc_n_alias++] = e->as.let_.bindings[i].binding;
+                    continue;
+                }
                 ptc_walk(e->as.let_.bindings[i].init, p, false, val, tailc, ntc);
+            }
             ptc_walk(e->as.let_.body, p, tail, val, tailc, ntc);
+            g_ptc_n_alias = saved;
             return;
+        }
         case EX_IF:
             ptc_walk(e->as.if_.cond, p, false, val, tailc, ntc);
             ptc_walk(e->as.if_.then_, p, tail, val, tailc, ntc);
@@ -4661,7 +4699,7 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             if (h) {
                 ptc_walk((const Expr *)h->body, p, tail, val, tailc, ntc);
                 for (uint32_t i = 0; i < h->n_cases; i++)
-                    *val += expr_count_all_uses(h->cases[i].body, p);
+                    *val += ptc_count_all_uses(h->cases[i].body, p);
             }
             return;
         }
@@ -4669,7 +4707,7 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             /* Uncovered form (incl. EX_RESET, where a call to p runs under the
              * HOF's own prompt): treat every occurrence of p as a value-use so the
              * param cannot be judged threadable through it. */
-            *val += expr_count_all_uses(e, p);
+            *val += ptc_count_all_uses(e, p);
             return;
     }
 }

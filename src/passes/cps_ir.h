@@ -375,4 +375,11 @@ void cps_ir_thread_param_add(const Binding *param);
 bool cps_ir_thread_param_has(const Binding *param);
 bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
 
+/* cps-let-alias-of-effectful-fn-param-refused: the immutable fn-valued
+ * PARAMETER that binding `i` of `let` only renames -- `(let [f g] ...)` with
+ * every use of `f` a saturated call -- or NULL.  The translator inlines each
+ * such call as a call through the parameter and drops the binding, and the
+ * threading classifier (ptc_walk) counts it as one: one answer for both. */
+const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i);
+
 #endif

@@ -34,6 +34,7 @@ typedef struct PapInline {
     Binding **caps;          /* captured arg bindings, in leftmost-first arg order */
     uint32_t  n_caps;
     uint32_t  rem_arity;     /* args a saturated call to `var` supplies (= target arity - n_caps) */
+    bool      is_alias;      /* `var` only renames the fn PARAM `target` (no caps) */
 } PapInline;
 
 typedef struct CpsB {
@@ -1991,6 +1992,14 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * trampoline: "unhandled effect" from a program that compiled. */
             if (fn && fncps_param_call_ok(fn, e))
                 return false;
+            /* Nor a call through an inlined alias of a fn param: its `let` is
+             * dropped, so the direct emitter would name an undeclared local.
+             * Refused here, it reaches cps_tail / cps_bind, which rewrite it to
+             * the call through the param. */
+            {
+                const PapInline *pe = b ? pap_lookup(b, fn) : NULL;
+                if (pe && pe->is_alias) return false;
+            }
             /* An indirect callee with no binding -- e.g. a capability CALL
              * `(.print-line cap "..")` whose callee is a `.field` access yielding
              * an effect-annotated fn.  This was delegatable inside a DELEGATED
@@ -3055,6 +3064,17 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
  * prelude), so we reference them by fresh EX_VAR nodes; the remaining args come
  * straight from the original `(var rest...)` call. */
 static Expr *pap_build_saturated_call(CpsB *b, const PapInline *pe, const Expr *call) {
+    if (pe->is_alias) {
+        /* A renamed fn param: the same call, made through the param.  Copy the
+         * node whole -- the alias shares the param's representation (is_poly_fn,
+         * fat), so the poly-call flags the elaborator set on it still hold --
+         * and name the param the way a direct `(g x)` does, by fn_binding. */
+        Expr *nc = expr_new(b->a, EX_CALL, call->type, call->span);
+        nc->as.call_ = call->as.call_;
+        nc->as.call_.fn_binding = (Binding *)pe->target;
+        nc->as.call_.fn_expr = NULL;
+        return nc;
+    }
     uint32_t n = pe->n_caps + call->as.call_.n_args;
     Expr **args = arena_alloc(b->a, (n ? n : 1) * sizeof(Expr *));
     for (uint32_t i = 0; i < pe->n_caps; i++) {
@@ -3090,6 +3110,8 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
 /* Register any pap-inlinable let bindings of `let` (a closure whose sole use in
  * the body is a saturated call).  Returns the count pushed (pop with the saved
  * b->n_pap after the let is fully translated). */
+static const Type *fn_alias_sig(const Binding *b);   /* fwd */
+
 static void pap_register_let(CpsB *b, const Expr *let) {
     for (uint32_t i = 0; i < let->as.let_.n && b->n_pap < 32; i++) {
         const Binding *vb = let->as.let_.bindings[i].binding;
@@ -3101,9 +3123,65 @@ static void pap_register_let(CpsB *b, const Expr *let) {
             b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = tgt;
             b->pap[b->n_pap].caps = caps;   b->pap[b->n_pap].n_caps = nc;
             b->pap[b->n_pap].rem_arity = rem;
+            b->pap[b->n_pap].is_alias = false;
+            b->n_pap++;
+            continue;
+        }
+        /* An alias of a fn param is the zero-capture case: a call through it IS
+         * a call through the param.  Without this the binding crossed a slot as
+         * a fat value, and the classifier counted it as the param escaping, so
+         * an effectful callback called through the alias had no lowering
+         * (cps-let-alias-of-effectful-fn-param-refused). */
+        const Binding *src = cps_ir_let_fnparam_alias(let, i);
+        if (src) {
+            b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = src;
+            b->pap[b->n_pap].caps = NULL;   b->pap[b->n_pap].n_caps = 0;
+            b->pap[b->n_pap].rem_arity = fn_alias_sig(src)->as.fn.arity;
+            b->pap[b->n_pap].is_alias = true;
             b->n_pap++;
         }
     }
+}
+
+/* The call signature of a fn-valued binding: its own TY_FN type, or -- for a fat
+ * (is_poly_fn) param, whose binding type is the `tur_poly_fn_t` carrier -- the
+ * TY_FN recorded in poly_type.  NULL for a bare `:fn` carrier or a rank-2 forall,
+ * whose calls cross a different ABI than a plain call through it. */
+static const Type *fn_alias_sig(const Binding *b) {
+    if (b->is_poly_fn)
+        return b->poly_type && b->poly_type->kind == TY_FN ? b->poly_type : NULL;
+    return b->type.kind == TY_FN ? &b->type : NULL;
+}
+
+static const Binding *fnparam_alias_src(const Binding *vb, const Expr *init) {
+    if (!vb || vb->is_mut) return NULL;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_VAR) return NULL;
+    const Binding *src = init->as.var.binding;
+    if (!src || !src->is_param || src->is_global || src->is_mut) return NULL;
+    /* Same representation: the elaborator copies is_poly_fn (and the carrier
+     * type) onto the alias. */
+    if (vb->is_poly_fn != src->is_poly_fn || vb->type.kind != src->type.kind)
+        return NULL;
+    const Type *ss = fn_alias_sig(src), *vs = fn_alias_sig(vb);
+    if (!ss || !vs || ss->as.fn.arity != vs->as.fn.arity) return NULL;
+    return src;
+}
+
+const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
+    if (!let || (let->kind != EX_LET) || i >= let->as.let_.n) return NULL;
+    const Binding *vb = let->as.let_.bindings[i].binding;
+    const Binding *src = fnparam_alias_src(vb, let->as.let_.bindings[i].init);
+    if (!src) return NULL;
+    /* Every use -- in the body, or in a later binding's init, which is
+     * translated while the registration is live -- a saturated call through it:
+     * the alias is never a value, so dropping its binding loses nothing. */
+    uint32_t ar = fn_alias_sig(src)->as.fn.arity;
+    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
+        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    if (closure_binding_escapes(let->as.let_.body, vb)) return NULL;
+    if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
+    return src;
 }
 
 /* Was let-binding `idx` of `let` pap-inlined (registered in [saved, n_pap))?  If

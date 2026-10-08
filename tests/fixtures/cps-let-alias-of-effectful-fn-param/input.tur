@@ -1,0 +1,42 @@
+;; cps-let-alias-of-effectful-fn-param-refused: a call through a `let` alias of
+;; an un-annotated fn parameter is a call through the parameter.  An effectful
+;; callback reaches the caller's handler through the alias exactly as it does
+;; through the parameter itself, in tail and non-tail position, twice, under an
+;; `if`, and from a later binding of the same `let`.
+(defeffect Ask [] :int)
+
+(defn via-let [g : (fn [int] int) x : int] : int
+  (let [f g]
+    (f x)))
+
+(defn nontail [g : (fn [int] int) x : int] : int
+  (let [f g]
+    (+ 1 (f x))))
+
+(defn twice [g : (fn [int] int) x : int] : int
+  (let [f g]
+    (+ (f x) (f (+ x 1)))))
+
+(defn branch [g : (fn [int] int) x : int] : int
+  (let [f g]
+    (if (> x 0) (f x) (- 0 (f (- 0 x))))))
+
+(defn later [g : (fn [int] int) x : int] : int
+  (let [f g
+        y (f x)]
+    (+ y (f 2))))
+
+(defn ask-times [x : int] : int (* x (perform (Ask))))
+
+(defn main [] : int
+  (println (handle (via-let (fn [x : int] : int (* x (perform (Ask)))) 3)
+             (Ask [] k) (resume k 7)))                                 ; 21
+  (println (handle (nontail ask-times 3) (Ask [] k) (resume k 7)))     ; 22
+  (println (handle (twice ask-times 3) (Ask [] k) (resume k 7)))       ; 49
+  (println (handle (branch ask-times 3) (Ask [] k) (resume k 7)))      ; 21
+  (println (handle (branch ask-times -4) (Ask [] k) (resume k 7)))     ; -28
+  (println (handle (later ask-times 5) (Ask [] k) (resume k 7)))       ; 49
+  ;; A pure callback through the same aliases.
+  (println (nontail (fn [x : int] : int (* x 2)) 10))                  ; 21
+  (println (twice (fn [x : int] : int (* x 2)) 10))                    ; 42
+  0)
