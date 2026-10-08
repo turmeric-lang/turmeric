@@ -2308,7 +2308,9 @@ body.split-dragging * {
 .docs-article > * { max-width: 74ch; }
 .docs-article pre,
 .docs-article table,
+.docs-article .table-scroll,
 .docs-article .code-card { max-width: none; }
+.docs-article .table-scroll { max-width: 100%; }
 
 /* A code block in the pane carries a "load into editor" button. Positioning is
    on the <pre>, so the button rides along with a horizontally scrolled block
