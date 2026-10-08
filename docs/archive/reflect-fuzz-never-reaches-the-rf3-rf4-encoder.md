@@ -18,7 +18,7 @@ list and four recursive `^reflect` measures over it with `match`: `fz-len`,
 targets. In mixed runs it has 3% of the slice that was `shape_random`'s, the
 way `shape_loop` was carved out. Float mode uses only dyadic literals, so a
 sum is exact in double and
-[float-proofs-assume-exact-reals](../reported/float-proofs-assume-exact-reals.md)
+[float-proofs-assume-exact-reals](float-proofs-assume-exact-reals.md)
 does not surface as noise.
 
 **Its first 20 cases found a soundness bug**, and it was not in the

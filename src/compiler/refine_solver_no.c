@@ -91,6 +91,8 @@ static bool no_cube_unsat(RefineVC *vc, Arena *a, const VCCube *c,
             VCTerm *lit = c->lits[i];
             VCTerm *at  = refine_lit_atom(lit);
             if (refine_lit_is_neg(lit) && at->op == VC_EQ &&
+                (refine_cube_nan_free(c, at->kids[0]) ||
+                 refine_cube_nan_free(c, at->kids[1])) &&
                 euf_equal(euf, at->kids[0], at->kids[1]))
                 return true;
         }

@@ -9,16 +9,19 @@
 ;; violating its own declared refinement with no panic.  See the sibling
 ;; negative fixture errors/refine-float-measure-not-tightened.
 ;;
-;; Here the sort is right, so ordinary linear REAL arithmetic decides it:
-;; from `norm(v) < 3.25`, `norm(v) - 1.5 < 1.75`.  The literals deliberately
-;; carry non-zero fractional parts -- an integral 3.0/4.0 pair cannot tell a
+;; Here the sort is right, so linear real reasoning decides it: from
+;; `norm(v) < 3.25`, `norm(v) < 3.75`.  It treats `norm(v)` as one real term
+;; and never subtracts from it: arithmetic on a float rounds in double, so
+;; `(- (norm v) 1.5) < 1.75` keeps its runtime check
+;; (float-proofs-assume-exact-reals).  The literals deliberately carry
+;; non-zero fractional parts -- an integral 3.0/4.0 pair cannot tell a
 ;; correctly-sorted proof from a truncating one.
 (defn norm [v : float] #fx{} : float
   (* v 0.5))
 
 (defn headroom [v : #refine{ x : float | (< (norm x) 3.25) }]
-              : #refine{ r : float | (< r 1.75) }
-  (- (norm v) 1.5))
+              : #refine{ r : float | (< r 3.75) }
+  (norm v))
 
 ;; The branch condition IS the callee's precondition, so the crossing
 ;; discharges rather than leaning on `headroom`'s entry check.

@@ -267,7 +267,11 @@ VCTerm *vc_mk(RefineVC *vc, VCOp op, VCTerm **kids, uint32_t n) {
 
         case VC_EQ: case VC_LT: case VC_LE: {
             VCTerm *a = kids[0], *b = kids[1];
-            if (a == b) return vc_bool(vc, op != VC_LT);   /* x=x, x<=x true; x<x false */
+            /* x=x, x<=x true; x<x false.  Not the first two for a real
+             * term: a NaN is unequal to itself (float-proofs-assume-exact-
+             * reals, refine_solver.h); x<x is false for a NaN too. */
+            if (a == b && (op == VC_LT || a->sort != VS_REAL))
+                return vc_bool(vc, op != VC_LT);
             if (is_num_lit(a) && is_num_lit(b)) {
                 double x = num_of(a), y = num_of(b);
                 bool r = op == VC_EQ ? (x == y) : op == VC_LT ? (x < y) : (x <= y);

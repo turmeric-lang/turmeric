@@ -1,0 +1,18 @@
+;; float-proofs-assume-exact-reals: a NaN is on neither side of `<`.  On the
+;; last path of `clamp` the solver knows `(not (< x 0.0))` and
+;; `(not (> x 1.0))`, which over the reals is 0.0 <= x <= 1.0 -- and it used
+;; to prove the return refinement from that and drop the check.  For a NaN
+;; argument both tests are false, `clamp` returns the NaN, and the refinement
+;; is false.  A negated float comparison now counts only for a term some
+;; positive comparison in the same path rules a NaN out for (here, none), so
+;; the check stays and fires.
+(defn clamp [x : float] : #refine{ r : float | (and (>= r 0.0) (<= r 1.0)) }
+  (if (< x 0.0)
+    0.0
+    (if (> x 1.0) 1.0 x)))
+
+(defn main [] : int
+  (println (clamp 0.25))
+  (println (clamp 1.5))
+  (println (clamp (/ 0.0 (- 0.75 0.75))))
+  0)

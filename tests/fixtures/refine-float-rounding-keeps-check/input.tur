@@ -1,0 +1,13 @@
+;; float-proofs-assume-exact-reals: a float is a C double, and arithmetic on
+;; it rounds.  Over exact reals (x + 0.1) - 0.1 = x, so the solver used to
+;; prove this return refinement and drop its runtime check -- but in double
+;; (0.3 + 0.1) - 0.1 is 0.30000000000000004, and `=` on doubles is exact.
+;; Real-sorted `+ - * /` is now opaque to the linear solver, so the
+;; obligation is unknown, the check stays, and it fires.
+(defn g [x : #refine{ v : float | (> v 0.0) }] : #refine{ r : float | (= r x) }
+  (- (+ x 0.1) 0.1))
+
+(defn main [] : int
+  (println (g 0.5))
+  (println (g 0.3))
+  0)

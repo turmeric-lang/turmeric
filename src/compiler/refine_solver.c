@@ -28,6 +28,30 @@ bool refine_caps_any(void) {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Reals are doubles (float-proofs-assume-exact-reals; see refine_solver.h)
+ * ------------------------------------------------------------------------- */
+
+bool refine_real_arith(const VCTerm *t) {
+    if (!t || t->sort != VS_REAL) return false;
+    switch (t->op) {
+        case VC_ADD: case VC_SUB: case VC_MUL: case VC_DIV: case VC_NEG: return true;
+        default: return false;
+    }
+}
+
+bool refine_cube_nan_free(const VCCube *c, const VCTerm *t) {
+    if (!t || t->sort != VS_REAL) return true;
+    if (t->op == VC_CONST_REAL) return true;   /* vc_mk never folds to a NaN */
+    for (uint32_t i = 0; i < c->n; i++) {
+        const VCTerm *l = c->lits[i];
+        if (refine_lit_is_neg(l)) continue;
+        if (l->op != VC_LT && l->op != VC_LE && l->op != VC_EQ) continue;
+        if (l->n == 2 && (l->kids[0] == t || l->kids[1] == t)) return true;
+    }
+    return false;
+}
+
+/* ------------------------------------------------------------------------- *
  * NNF
  * ------------------------------------------------------------------------- */
 
@@ -64,9 +88,15 @@ static VCTerm *nnf(RefineVC *vc, VCTerm *t, bool neg) {
              *
              * Each disequality doubles the cube count, which REFINE_MAX_CUBES
              * bounds; blowing the cap answers Unknown and keeps the runtime
-             * check, as every cap here does. */
+             * check, as every cap here does.
+             *
+             * NOT for a real-sorted side: a NaN is unequal to everything and
+             * on neither side of `<`, so there the split is a strengthening,
+             * and its `a < b` would also pass for evidence that `a` is not
+             * NaN (refine_cube_nan_free). */
             if (neg && t->op == VC_EQ && t->n == 2 &&
-                vc_is_arith(t->kids[0]) && vc_is_arith(t->kids[1])) {
+                vc_is_arith(t->kids[0]) && vc_is_arith(t->kids[1]) &&
+                t->kids[0]->sort != VS_REAL && t->kids[1]->sort != VS_REAL) {
                 VCTerm *lt  = vc_mk2(vc, VC_LT, t->kids[0], t->kids[1]);
                 VCTerm *gt  = vc_mk2(vc, VC_LT, t->kids[1], t->kids[0]);
                 return vc_mk2(vc, VC_AND, vc_not(vc, t),

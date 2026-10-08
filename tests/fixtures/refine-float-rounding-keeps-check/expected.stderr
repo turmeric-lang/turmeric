@@ -1,0 +1,1 @@
+panic at input.tur:7: Return contract violated in g: (= r x)
