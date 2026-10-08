@@ -84,3 +84,36 @@ Two findings that narrow the fix directions, from the repro's emitted C:
 The closure half of the same retention, an only-invoked closure let-bound in
 a main-body loop, is fixed:
 [closure-let-in-self-tail-loop-leaks](../archive/closure-let-in-self-tail-loop-leaks.md).
+
+## A design for direction 1, and why it was not landed (2026-10-08)
+
+Read against the repro's emitted C.  Each iteration of `loop__cps` mallocs
+the join's env, registers it (`__dk_reap_ptr`), builds the resume frame and
+registers that (`__dk_reap_node(dk_frame_resume(loop_j0, env, __kont))`),
+then calls `use1__cps`.  For a pure callback nothing else is registered
+before `dk_run` reaches the frame and tail-calls `loop_j0`, so at the top of
+`loop_j0` -- once it has unpacked its captures -- the reap list's last two
+entries are exactly this frame's env and node.  Popping and freeing them
+there keeps the list, and the heap, flat.
+
+What makes it more than that check is proving nothing else can still reach
+them:
+
+- **Copies share the env.**  `dk_perform`, `shift`, `dk_invoke` and the E7
+  deliveries capture through `dk_copy_range` / `dk_copy_node`, and a
+  `dk_frame_resume` node has no `env_clone`, so a copy of the frame runs
+  `loop_j0` on the SAME env -- possibly more than once (a multi-shot `shift`).
+  Any copy taken after the frame was registered must disable the early free:
+  a "capture mark" (`__dk_reap_n` at the last `dk_copy_node`) below which
+  nothing is freed early would cover these.
+- **`tur_dk_pinned`** (r7rs `call/cc`) already freezes all freeing.
+- **A suspended async computation** keeps its live chain to resume later,
+  without copying it; whether that chain is freed after the resume (which
+  would then walk into a node freed early) was not established.  Nor was it
+  established that no other path hands out the live chain.
+
+A miss is a use-after-free in EMITTED code, and the fixture suite runs
+emitted programs without a sanitizer, so it would pass silently.  Landing
+this wants the capture mark, an audit of every path that holds a `DK *` past
+the call that made it, and a `requires.leak-check` (ASan) fixture over
+effects, `shift`, async and `call/cc` in such a loop.
