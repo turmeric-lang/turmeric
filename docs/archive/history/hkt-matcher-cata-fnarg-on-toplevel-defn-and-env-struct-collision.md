@@ -154,7 +154,7 @@ the folded child matcher `mx` explicitly:
 Apply the matcher-as-cata patch to `spices/regex/src/regex/tree.tur`
 (replace the existing direct-recursion `m` with an algebra over a function
 carrier as sketched in
-`docs/upcoming/spices/u5-regex-matcher-cata-blocker-2026-06-22.md`). Run
+`docs/archive/u5-regex-matcher-cata-blocker-2026-06-22.md`). Run
 `tur run spices/regex/tests/tree_test.tur`. Both edges fire in the same
 emit.
 

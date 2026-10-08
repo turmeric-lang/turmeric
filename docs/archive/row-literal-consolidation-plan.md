@@ -1,5 +1,20 @@
 # Plan: Consolidate Row Literals on `#{...}` (v1)
 
+> **SUPERSEDED -- archived 2026-10-07. Not implemented, and the design went
+> the other way.** Effect rows and type rows are different kinds, so they were
+> split into two explicit spellings instead of merged onto one:
+>
+> - Effect rows moved to `#fx{...}`. `#{...}` in the effect slot is now a
+>   deprecated spelling (`TUR-D0002`, verified on v0.63.5, with
+>   `tools/migrate-fx-rows.py` as the codemod).
+> - Type rows stay `#row{...}`, now ungated (`-Xdata-literals` is a no-op that
+>   warns `TUR-W0050`) and extended with labeled rows, `#row{id : int}`, which
+>   this plan did not anticipate. See
+>   [row-types-guide.md](../guides/row-types-guide.md#rows-are-not-effect-rows).
+>
+> The "one reader form, one AST node" premise is therefore not the direction
+> the language took. The body below is the original proposal, unedited.
+
 > Status: planning
 > Tracks: compiler reader/typer + `-Xdata-literals` surface
 > Replaces: `#row{...}` as the HKT row-type literal

@@ -8,6 +8,17 @@ verified-on: turmeric 0.22.0, main @ 99cc8b3 (post #483 applied-type defdata fie
 
 # Track C U5 — can it be done after the recent turmeric fixes?
 
+> **Archived 2026-10-07 -- the feasibility question is answered and the work
+> it fed has moved on.** The parent plan is archived
+> ([spices-type-features-uplift-plan.md](spices-type-features-uplift-plan.md)),
+> regex shipped, and the c-dsl/glsl carve-out is
+> [u5-c-dsl-glsl-fix-encoded-ir-plan.md](u5-c-dsl-glsl-fix-encoded-ir-plan.md).
+> The last section ("Status of the turmeric reports") predates the
+> function-carrier fix: the "NEW, narrow" function-typed-carrier edge it
+> lists is gone, and what replaced it is described in
+> [u5-regex-matcher-cata-blocker-2026-06-22.md](u5-regex-matcher-cata-blocker-2026-06-22.md).
+> Versions and commit hashes below are as of v0.22.0.
+
 **Short answer: yes, the blocker is fixed.** The `defdata` applied-field
 limitation reported on 2026-06-21 was resolved the same day by turmeric
 **#483** ("Allow applied type constructors in defdata constructor fields",

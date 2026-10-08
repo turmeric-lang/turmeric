@@ -5,7 +5,7 @@
 - **Severity:** low. It affects the `kind` field only; the event fires and
   the path is correct on both platforms.
 - **Found:** 2026-09-09 while fixing the two macOS `spices/watch` failures
-  in `docs/watch-macos-backend-wait-consumed-the-event.md`. Split out
+  in `docs/archive/watch-macos-backend-wait-consumed-the-event.md`. Split out
   because it is a separate finding and is *not* being fixed.
 
 ## The divergence
@@ -81,5 +81,5 @@ what consumers actually branch on.
 - `docs/notebook-watch-semantics.md` section 10 -- the (separate, still accurate)
   limitation that kqueue on a directory does not fire at all for in-place
   content modification of a child file.
-- `docs/watch-macos-backend-wait-consumed-the-event.md` -- the two macOS
+- `docs/archive/watch-macos-backend-wait-consumed-the-event.md` -- the two macOS
   test failures this was found underneath.
