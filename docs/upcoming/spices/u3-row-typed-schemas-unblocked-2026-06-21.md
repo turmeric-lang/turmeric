@@ -143,6 +143,13 @@ U3); they fail with or without `frame/typed` and are out of scope here.
 
 ## Target status (re-verified 2026-09-09, turmeric v0.46.0)
 
+> **Re-checked 2026-10-07 against turmeric-spices `origin/main` (388aa99):
+> nothing has moved.** The table below is current. `spices/http/src/http/`
+> still holds only `client`, `error`, `request`, `response` (no `typed.tur`),
+> and the other four typed modules are unchanged. This file stays in
+> `docs/upcoming/spices/` because exactly one item is still open: the `http`
+> client half of target 3. Do not archive it until that lands or is dropped.
+
 The section that used to sit here listed targets 2, 3 and 4 as outstanding.
 Targets 2 and 3 have since shipped (target 3 except its client half). Current
 state:

@@ -155,7 +155,7 @@ no events on either backend and cannot alter what Linux observes.
 
 The residual create-vs-rename divergence for genuinely new names is left
 in place and documented separately in
-`docs/watch-darwin-fresh-name-is-create.md`.
+`docs/reported/watch-darwin-fresh-name-is-create.md`.
 
 ## Verification
 

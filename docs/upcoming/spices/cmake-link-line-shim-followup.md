@@ -1,6 +1,12 @@
 # `cmake-deps/` shim follow-up: what the turmeric link-line fix makes removable
 
-**Status: partly landed -- updated 2026-08-29.** rjungemann/turmeric#791 is
+**Status: partly landed -- updated 2026-08-29; re-checked 2026-10-07.** Both
+items under "Still outstanding" below are still outstanding on turmeric-spices
+`origin/main`: `spices/postgres/build.tur` still declares `:path
+"../cmake-deps/postgres"` with `:targets ["pq"]` (and its comment still
+explains the `-lPostgreSQL` workaround), and `spices/raygui/cmake-deps/raygui/`
+still carries `raygui_impl.c`. The rest of this document, including the
+sections written before the fix landed, is historical context for those two. rjungemann/turmeric#791 is
 merged to turmeric `main`, so the changes that were gated on it are now done in
 this branch:
 

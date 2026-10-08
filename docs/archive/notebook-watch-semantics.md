@@ -1,5 +1,11 @@
 # Notebook Watch Semantics
 
+> **Archived 2026-10-07 -- the refactor this spec guarded has landed.**
+> `spices/notebook/src/notebook/cli.tur` now imports `watch/watch` and
+> `watch/event` from the `tur-watch` spice (WT7), and the user-facing contract
+> lives in [tur-watch-guide.md](../guides/tur-watch-guide.md). This file is kept
+> as the record of the pre-extraction behavior.
+
 > **Status:** Spec / freeze
 > **Last Updated:** 2026-05-29
 > **Source:** `spices/notebook/src/notebook/cli.tur` (notebook-v0.1.0)
@@ -270,7 +276,7 @@ explicit exclusions:
   following drain nothing to find. Fixed 2026-09-09 by polling the kqueue fd
   instead (`poll(2)` on a kqueue descriptor is level-triggered and
   non-consuming on Darwin, and is already how the tree path treats this same
-  fd). See `docs/watch-macos-backend-wait-consumed-the-event.md`.
+  fd). See `docs/archive/watch-macos-backend-wait-consumed-the-event.md`.
 
 - **"Darwin reported `create` where Linux reported `rename`."** Also not this
   limitation -- the event fired on both. It is a *classification* difference:
@@ -279,4 +285,4 @@ explicit exclusions:
   that arrived by rename from one that arrived by `creat`. The two backends
   agree whenever the destination name already existed, which is what an
   atomic save over a real file is. See
-  `docs/watch-darwin-fresh-name-is-create.md`.
+  `docs/reported/watch-darwin-fresh-name-is-create.md`.

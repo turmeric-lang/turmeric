@@ -172,7 +172,7 @@ different layer from a constrained *defn*'s obligations.
 - Verified against this checkout's `./build/tur` (0.21.0); repros are
   turmeric-side and self-contained.
 - The concrete consumer is the http-handler typeclass plan in the spices repo
-  (`docs/upcoming/v1/http-handler-typeclass-plan.md`): `json-ok` /
+  (`docs/archive/http-handler-typeclass-plan.md`): `json-ok` /
   `json-request` are `^Encode T`-constrained, so a call at an un-`Encode`-able
   payload slips through here rather than failing at the call site. That is a
   symptom of this turmeric-side gap, not a spice bug.

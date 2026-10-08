@@ -1,8 +1,15 @@
 # RM-S0 -- Stateful-refinement dogfooding in `tur-ecs`
 
+> **Archived 2026-10-07 -- the question this answered is closed.** RM-S0
+> recommended Candidate B (frozen regions) and that is what shipped:
+> `spices/ecs/src/ecs/freeze.tur`, plus the RE1 accessors in
+> `ecs/refined-world` and `ecs/sized-refined`. See
+> [ecs-re1-refined-aliveness.md](ecs-re1-refined-aliveness.md) and
+> [stateful-refinements-guide.md](../guides/stateful-refinements-guide.md).
+
 **Date:** 2026-07-26
 **Phase:** RM-S0 of
-[`refine-stateful-measures-plan.md`](../v1/refine-stateful-measures-plan.md)
+[`refine-stateful-measures-plan.md`](refine-stateful-measures-plan.md)
 (gap C2 of the ECS refinement plan).
 **Purpose:** RM-S0 is explicitly *not* an implementation phase. It writes the
 RE1 accessor call sites twice -- once with **epoch arguments** (Candidate A),

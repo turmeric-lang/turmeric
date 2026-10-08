@@ -7,6 +7,11 @@
 > Not on tur-signal's call surface, so it does not gate v1.
 > Measured against turmeric-spices `origin/main` 9d25587 and turmeric
 > `origin/main` 7690314c1.
+> Re-checked 2026-10-07 (turmeric v0.63.5): still nothing landed.
+> `stdlib/httpd.tur` has no `httpd-conn-upgrade!`, `httpd-set-read-timeout!`,
+> `httpd-req-ip`, `mw-secure-headers`, `mw-request-id`, `mw-etag` or
+> `mw-timeout`, and `spices/httpd/src/httpd/` and `spices/tourist/src/tourist/`
+> have the same module list as the plan describes.
 
 ## Motivation
 

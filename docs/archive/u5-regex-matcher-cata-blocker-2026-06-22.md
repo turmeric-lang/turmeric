@@ -9,6 +9,14 @@ plan: docs/archive/spices-type-features-uplift-plan.md (Phase U5)
 
 # U5 regex matcher: can it become one `cata`?
 
+> **Archived 2026-10-07; the surviving defect is now an open report.**
+> Re-run on turmeric **v0.63.5** (macOS, Release build): the "Minimal repro"
+> below still fails at the C compile step with the same three
+> `-Wint-conversion` errors, and writing the capturing `AddF` arm first still
+> compiles and runs. The defect is tracked in
+> [docs/reported/match-result-temp-typed-from-first-arm.md](../reported/match-result-temp-typed-from-first-arm.md).
+> Everything else in this document is unchanged from the 2026-09-09 sweep.
+
 > **RESOLVED 2026-09-09 -- yes, it can.**
 >
 > This document previously reported that a `cata` whose carrier is a function
