@@ -1,5 +1,8 @@
 #include "forms.h"
 
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 Form *form_new(Arena *a, FormTag tag, Span span) {
@@ -226,12 +229,29 @@ static void print_str_escaped(Buf *b, StrSlice s) {
     buf_putc(b, '"');
 }
 
+/* The shortest text that reads back to the same double, with a decimal
+ * point or an exponent so that it reads back as a FLOAT.  defmacro* and the
+ * inline-C JIT re-parse this output, and `%g` handed `2.0` back as the int 2
+ * and 0.30000000000000004 as 0.3; a contract message printed `(>= r 0.0)` as
+ * `(>= r 0)`.  A non-finite value keeps `%g` (there is no literal for it
+ * outside #lang r7rs). */
+static void print_float(Buf *b, double d) {
+    if (!isfinite(d)) { buf_printf(b, "%g", d); return; }
+    char tmp[40];
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(tmp, sizeof tmp, "%.*g", prec, d);
+        if (strtod(tmp, NULL) == d) break;
+    }
+    buf_puts(b, tmp);
+    if (!strpbrk(tmp, ".eE")) buf_puts(b, ".0");
+}
+
 void form_print(Buf *b, const Form *f) {
     switch (f->tag) {
         case F_NIL:  buf_puts(b, "nil"); break;
         case F_BOOL: buf_puts(b, f->as.b ? "true" : "false"); break;
         case F_INT:  buf_printf(b, "%lld", (long long)f->as.i); break;
-        case F_FLOAT: buf_printf(b, "%g", f->as.f); break;
+        case F_FLOAT: print_float(b, f->as.f); break;
         case F_STR:  print_str_escaped(b, f->as.s); break;
         case F_SYM:
             buf_write(b, f->as.sym->name, f->as.sym->len);
