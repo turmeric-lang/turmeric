@@ -188,15 +188,23 @@
 @media (max-width: 900px) {
   .trowel-hero { padding: 120px 24px 60px; }
   .trowel-hero-inner {
-    grid-template-columns: 1fr;
-    gap: 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 36px;
     text-align: center;
   }
-  .trowel-hero-copy { max-width: 620px; margin: 0 auto; }
   .trowel-hero .hero-desc { text-align: center; }
   .trowel-hero .hero-actions { justify-content: center; }
   .trowel-hero .install-hint { justify-content: center; }
-  .trowel-shot { grid-row: 1; max-width: 400px; }
+  /* Heading, then the screenshot, then the rest of the copy: the copy box
+     dissolves so its children order against the shot as flex items. */
+  .trowel-hero-copy { display: contents; }
+  .trowel-hero h1 { order: 1; margin: 18px 0 0; }
+  .trowel-shot { order: 2; max-width: 400px; }
+  .trowel-hero .hero-desc { order: 3; max-width: 620px; margin: 0 auto; }
+  .trowel-hero .hero-actions { order: 4; }
+  .trowel-hero .install-hint { order: 5; }
 
   .trowel-duo { grid-template-columns: 1fr; gap: 44px; padding: 60px 24px; }
 
@@ -228,6 +236,7 @@
       <div class="hero-actions">
         <a href="https://github.com/turmeric-lang/trowel/releases/latest" class="btn-hero btn-hero-primary">Download Trowel <span class="arrow">→</span></a>
         <a href="https://github.com/turmeric-lang/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
+        <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">View the Guides</a>
       </div>
       <div class="install-hint">
         <span>Or install with</span>

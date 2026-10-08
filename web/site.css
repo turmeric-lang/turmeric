@@ -71,6 +71,13 @@ nav {
   gap: 0;
 }
 
+/* The CI dashboard scrolls dense tiles under the bar; let none of them show through. */
+body.page-ci nav {
+  background: rgb(12,10,8);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .nav-logo {
   display: flex;
   align-items: center;

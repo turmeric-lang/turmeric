@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from genguides import (SIDEBAR_DRAWER_JS_SRC, GUIDE_RUNTIME_JS_SRC,
                        font_links, script_tag, sidebar_drawer,
                        guide_runtime, write_page_scripts, GUIDE_CSS,
-                       inject_syntax_toggles, toc_tokens_to_sidebar,
+                       inject_syntax_toggles, wrap_tables, toc_tokens_to_sidebar,
                        build_page_header, build_sidebar, MAIN_SITE)
 from gendocs import render_tree, collect_doc_entries
 import packlib
@@ -225,6 +225,7 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
     )
     body_html = conv.convert(text)
     body_html = inject_syntax_toggles(body_html)
+    body_html = wrap_tables(body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
     sidebar_items = toc_tokens_to_sidebar(toc_tokens)
