@@ -129,9 +129,10 @@
   ```)
 ;;; io-error/ok-unit -- (Ok nil) as a (Result nil IoError).
 ;;;
-;;; Turmeric code cannot spell (Ok nil) today (nil in expression position is
-;;; void; see docs/reported/ok-nil-unconstructible-in-turmeric.md), so
-;;; Turmeric-bodied functions returning (Result nil IoError) return this.
+;;; Written before Turmeric code could spell (Ok nil) itself; since
+;;; 2026-10-07 `(Ok nil)` builds the same value
+;;; (docs/archive/ok-nil-unconstructible-in-turmeric.md).  Kept for the
+;;; functions that already return through it.
 ;;;
 ;;; Returns:
 ;;;   (Ok nil).

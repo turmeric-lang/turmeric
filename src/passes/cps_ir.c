@@ -211,6 +211,14 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
 static bool fncps_arg_kind_ok(TypeKind k) {
     return k == TY_INT || k == TY_INT64;
 }
+/* ...and a RESULT the direct fallback can call `f.fn` for with its real C type
+ * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
+ * param's declared result, so calling it through an `int64_t` function type is a
+ * mismatched call -- a -fsanitize=function trap -- and a float result would be
+ * read from the wrong register.  Anything else stays delegated. */
+static bool fncps_result_kind_ok(TypeKind k) {
+    return k == TY_INT || k == TY_INT64 || k == TY_NIL || k == TY_BOOL;
+}
 /* E2 (fat-closure fn-value threading): is a call `(fn arg)` through the poly-fn
  * PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a CONCRETE fat
  * closure -- a bare `:fn` carrier (poly_type NULL) or a typed `:fn` signature
@@ -223,6 +231,7 @@ static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
     if (fn->poly_type && fn->poly_type->kind == TY_FORALL) return false;
     if (e->as.call_.n_args != 1) return false;
     if (e->as.call_.poly_arg_mask) return false;
+    if (!fncps_result_kind_ok(e->type.kind)) return false;
     return fncps_arg_kind_ok(e->as.call_.args[0]->type.kind);
 }
 
@@ -1027,11 +1036,52 @@ static bool cps_any_closure_env_freeable(const Expr *let, uint32_t idx) {
     return true;
 }
 
+/* closure-let-in-self-tail-loop-leaks: the other shape the direct emitter
+ * drops at a let's scope exit (let_binding_env_freeable) -- a call to a
+ * `returns_fresh_closure` function, the make-scaler `(let [f (mk i)] ...)`.
+ * Every such call mallocs a fresh, uniquely owned env with scalar captures and
+ * a scalar result (the inference checked both), so the only question is the
+ * same escape walk.  On the CPS path the let has no scope exit, so the call
+ * was bound and the env never freed at all: 24 B a turn of a loop.  Only a
+ * call the direct emitter may take whole qualifies -- a colored callee keeps
+ * its continuation threading. */
+static bool safe_to_delegate(CpsB *b, const Expr *e);   /* fwd (defined below) */
+static bool cps_fresh_call_env_freeable(CpsB *b, const Expr *let, uint32_t idx) {
+    const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    if (!init || !bd || init->kind != EX_CALL) return false;
+    if (!init->as.call_.fn_binding || !init->as.call_.fn_binding->returns_fresh_closure)
+        return false;
+    if (!safe_to_delegate(b, let->as.let_.bindings[idx].init)) return false;
+    if (closure_binding_escapes(let->as.let_.body, bd)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (closure_binding_escapes(let->as.let_.bindings[j].init, bd)) return false;
+    }
+    return true;
+}
+
+bool closure_binding_only_invoked(const Expr *e, const Binding *b);
+
+/* closure-let-in-self-tail-loop-leaks: may a backedge free this binder (see
+ * letraw.reap_at_backedge)?  Every use in the let -- body and sibling inits --
+ * must be an invocation. */
+static bool cps_closure_only_invoked(const Expr *let, uint32_t idx) {
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    if (!bd || !closure_binding_only_invoked(let->as.let_.body, bd)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (!closure_binding_only_invoked(let->as.let_.bindings[j].init, bd)) return false;
+    }
+    return true;
+}
+
 static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
     Expr *init = (Expr *)let->as.let_.bindings[idx].init;
-    if (cps_closure_env_freeable(let, idx)) {
+    if (cps_closure_env_freeable(let, idx) || cps_fresh_call_env_freeable(b, let, idx)) {
         CTerm *t = build_letraw(b, init, bx, rest);
         t->as.letraw.reap_env = true;
+        t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
         return t;
     }
     CTerm *t = cps_bind(b, init, bx, rest);
@@ -1930,6 +1980,16 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
             /* E2a: a thread-param call takes the per-node path (cps_tail) so it
              * threads the DK via the registry -- never whole-body-delegate to fiber. */
             if (fn && cps_ir_thread_param_has(fn))
+                return false;
+            /* Nor a call through a fat poly-fn PARAM that the `fn_cps` dispatch
+             * covers: it picks the callee's DK-threading entry when the value
+             * has one and the direct entry otherwise, so it is right for every
+             * value the param can hold.  Delegated, the call is always the
+             * direct `f.fn` -- and the param is a thread param only when every
+             * value passed to it is registered, so ONE pure fn-value passed in
+             * another call sent an effectful lambda's `perform` off the
+             * trampoline: "unhandled effect" from a program that compiled. */
+            if (fn && fncps_param_call_ok(fn, e))
                 return false;
             /* An indirect callee with no binding -- e.g. a capability CALL
              * `(.print-line cap "..")` whose callee is a `.field` access yielding
@@ -5128,4 +5188,19 @@ void cps_ir_dump_program(Arena *a, Expr *program, FILE *out) {
         cps_ir_print(t, out, 1);
         fputs("cps-end\n", out);
     }
+}
+
+/* Public: does this call through the fn-value PARAM `p` thread the caller's DK
+ * continuation into the callee, so an effectful value's `perform` reaches the
+ * caller's handler?  Mirrors the EX_CALL lowering above: an effectful-row call
+ * threads via the registry when `p` is a thread param (otherwise it is
+ * unsupported, and the E2 taint routes it); an empty-row call threads only
+ * through the fat value's `fn_cps` slot.  Any other call through `p` is a plain
+ * direct call, which an effectful value escapes from. */
+bool cps_ir_param_call_threads(const Binding *p, const Expr *call) {
+    if (!p || !call || call->kind != EX_CALL || call->as.call_.fn_binding != p)
+        return false;
+    if (call_is_effectful_fnvalue(call))
+        return cps_ir_thread_param_has(p) && call_args_pendable(call);
+    return fncps_param_call_ok(p, call);
 }

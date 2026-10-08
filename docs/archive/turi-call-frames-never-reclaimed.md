@@ -165,10 +165,10 @@ Each item has an open report:
 
 - **By-value struct arguments.** Copied into the pool on every call and never
   freed; most are `any` boxes and never-written structs:
-  [turi-immutable-struct-args-copied-per-call](../reported/turi-immutable-struct-args-copied-per-call.md).
+  [turi-immutable-struct-args-copied-per-call](turi-immutable-struct-args-copied-per-call.md) (resolved 2026-10-07).
 - **Effect continuations.** Each `perform` keeps its continuation, handler
   frame and captured frames:
-  [turi-effect-perform-keeps-its-continuation](../reported/turi-effect-perform-keeps-its-continuation.md).
+  [turi-effect-perform-keeps-its-continuation](turi-effect-perform-keeps-its-continuation.md) (resolved 2026-10-07 for a tail-resume clause).
 - **Tyvar and dictionary pins, and frames made off the driver's call path:**
   [turi-call-pins-and-side-frames-not-reclaimed](../reported/turi-call-pins-and-side-frames-not-reclaimed.md).
 - **Programs with a re-entrant `call/cc`.** The first capture switches

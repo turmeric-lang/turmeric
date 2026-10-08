@@ -1412,6 +1412,28 @@ static bool frame_lookup_tyvar(EvalFrame *f, const char *name, Type *out) {
     return false;
 }
 
+/* turi-call-pins-and-side-frames-not-reclaimed: a frame's tyvar and dictionary
+ * pins come from free lists frame_release_one fills, so a generic or
+ * constrained call in a loop no longer leaves its pins in value_scratch.  Each
+ * pin site prepends a FRESH node to its own frame's chain -- frame_record_abi
+ * copies a caller's pin by value, never shares the node -- and lookups copy
+ * the Type out, so a released frame's nodes are referenced by nothing. */
+static TyvarBind *tyvar_bind_alloc(TuriEnv *env) {
+    TyvarBind *tb = (TyvarBind *)env->tyvar_free;
+    if (!tb) return (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+    env->tyvar_free = tb->next;
+    memset(tb, 0, sizeof *tb);
+    return tb;
+}
+
+static DictBind *dict_bind_alloc(TuriEnv *env) {
+    DictBind *db = (DictBind *)env->dict_free;
+    if (!db) return (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+    env->dict_free = db->next;
+    memset(db, 0, sizeof *db);
+    return db;
+}
+
 static void eval_frame_free(EvalFrame *f) {
     /* Frames are intentionally not freed: closures may capture frame pointers
      * and outlive the scope that created them.  Worker processes are short-lived
@@ -1604,11 +1626,39 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
  * `:heap` field and stops -- stdlib's `Cons` and `Vec` are both `:heap`, so a
  * list or vector argument is not walked at all.  Depth is therefore the
  * by-value nesting depth of a declared type, which is small and finite. */
+/* turi-immutable-struct-args-copied-per-call: can a write through a copy of
+ * `v` -- or through anything by value inside it -- ever happen?  A copy is only
+ * observable if one can.  Turmeric writes a struct field only with
+ * `(set! (.f x) v)`, which marks the receiver's ADT (AdtDef.field_written), so
+ * a value of an unwritten type, holding only unwritten by-value types, may be
+ * shared.  An `any` box itself is never written (EX_ANY_CAST only reads its
+ * payload), so it is as writable as its payload.  `__rc` and `:heap` values
+ * are shared by design and stop the walk, exactly as the copy does; a struct
+ * with no constructor record is assumed writable. */
+static bool turi_struct_arg_may_be_written(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    const TuriStruct *src = v.as_struct;
+    if (src->name && strcmp(src->name, "__rc") == 0) return false;
+    if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return false;
+    if (!src->is_any_box) {
+        if (!src->ctor || !src->ctor->adt) return true;
+        if (src->ctor->adt->field_written) return true;
+    }
+    for (uint32_t i = 0; i < src->n_fields; i++)
+        if (turi_struct_arg_may_be_written(src->fields[i])) return true;
+    return false;
+}
+
 static TuriValue turi_copy_byvalue_struct_arg(TuriEnv *env, TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return v;
     const TuriStruct *src = v.as_struct;
     if (src->name && strcmp(src->name, "__rc") == 0) return v;   /* rc: shared */
     if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return v;
+    /* turi-immutable-struct-args-copied-per-call: nothing can write through
+     * it, so the copy could never be observed.  r7rs code is all `any`, and
+     * these copies were most of what a run kept -- 1.47 M `Sym` boxes and
+     * 94 K empty lists in r7rs-srfi-14, none ever freed. */
+    if (!turi_struct_arg_may_be_written(v)) return v;
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
     s->name       = src->name;
     s->n_fields   = src->n_fields;
@@ -6942,7 +6992,7 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
             if (frame_lookup_tyvar(caller, t.as.tyvar_.name, &r)) t = r;
         }
         if (t.kind == TY_TYVAR) continue;  /* still abstract: nothing to pin */
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = ab->name;
         tb->type = t;
         tb->next = callee->tyvars;
@@ -7001,12 +7051,12 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
                 if (hits != 1) continue;
             }
             if (!inst || inst->n_type_args == 0) continue;
-            TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+            TyvarBind *tb = tyvar_bind_alloc(env);
             tb->name = tv->name;
             tb->type = inst->type_args[0];
             tb->next = callee->tyvars;
             callee->tyvars = tb;
-            DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+            DictBind *db = dict_bind_alloc(env);
             db->tc = tc;
             db->inst = inst;
             db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
@@ -7057,7 +7107,7 @@ static void frame_pin_hkt_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
         if (af->kind == TY_TYVAR) continue;   /* argument still abstract */
         Type existing;
         if (frame_lookup_tyvar(callee, pf->as.tyvar_.name, &existing)) continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = pf->as.tyvar_.name;
         tb->type = *af;
         tb->next = callee->tyvars;
@@ -7126,7 +7176,7 @@ static void frame_pin_bare_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
         if (frame_lookup_tyvar(callee, pt->as.tyvar_.name, &existing) &&
             existing.kind != TY_TYVAR)
             continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = pt->as.tyvar_.name;
         tb->type = at;
         tb->next = callee->tyvars;
@@ -7166,7 +7216,7 @@ static void frame_bind_instance_constraint_tyvars(TuriEnv *env, EvalFrame *calle
         if (frame_lookup_tyvar(callee, tc->tyvar->name, &existing) &&
             existing.kind != TY_TYVAR)
             continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = tc->tyvar->name;
         tb->type = bound;
         tb->next = callee->tyvars;
@@ -7265,7 +7315,7 @@ static void frame_bind_one_dict(TuriEnv *env, TypeClassEnv *tc_env,
         }
     }
     if (!inst) return;
-    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+    DictBind *db = dict_bind_alloc(env);
     db->tc    = cls;
     db->inst  = inst;
     db->tyvar = tvname;
@@ -7507,7 +7557,7 @@ static bool g_turi_cont_pinned = false;
  * escaped (frame_escape), it is not a call frame, a re-entrant continuation
  * exists (its stack image may complete this call again, the same reason
  * TURI_DRIVE_FREE stops freeing), or a debugger holds activation frames.
- * The frame's tyvar/dict pins stay in the pool, as everything did before. */
+ * Its tyvar/dict pins go back too (tyvar_bind_alloc / dict_bind_alloc). */
 static void frame_release_one(TuriEnv *env, EvalFrame *f) {
     EvalBinding *b = f->bindings;
     while (b) {
@@ -7519,6 +7569,20 @@ static void frame_release_one(TuriEnv *env, EvalFrame *f) {
         b = next;
     }
     f->bindings   = NULL;
+    TyvarBind *tb = f->tyvars;
+    while (tb) {
+        TyvarBind *next = tb->next;
+        tb->next = (TyvarBind *)env->tyvar_free;
+        env->tyvar_free = tb;
+        tb = next;
+    }
+    DictBind *db = f->dicts;
+    while (db) {
+        DictBind *next = db->next;
+        db->next = (DictBind *)env->dict_free;
+        env->dict_free = db;
+        db = next;
+    }
     f->tyvars     = NULL;
     f->dicts      = NULL;
     f->owned      = NULL;
@@ -7744,6 +7808,15 @@ struct TuriWsCont {
     const char  *perf_module;
     bool         perf_no_unwind;
     void        *perf_defer;    /* DeferItem* */
+    /* turi-effect-perform-keeps-its-continuation: the one-shot fast path
+     * (ws_case_is_oneshot_resume).  `frames` is then the slice ITSELF -- not
+     * marked escaped, accumulators still the driver's malloc'd ones -- and the
+     * resume pushes it back in place; it, this struct, the k value and the
+     * case frame are all freed there.  `consumed` guards the one resume. */
+    bool         oneshot;
+    bool         consumed;
+    EvalFrame   *case_frame;
+    struct TuriEffectCont *kval;
 };
 
 /* Shallow-copy a frame's bindings into a fresh frame (parent set by caller).
@@ -7814,6 +7887,47 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
             }
         }
     }
+}
+
+/* turi-effect-perform-keeps-its-continuation: an expression that can neither
+ * perform nor capture anything, nor mention `k` -- literals, variables other
+ * than k, and builtin operators over those. */
+static bool ws_resume_value_is_inert(const Expr *e, const Binding *k) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_FLOAT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT:
+            return true;
+        case EX_VAR:
+            return e->as.var.binding != k;
+        case EX_ASCRIBE:
+            return ws_resume_value_is_inert(e->as.ascribe_.inner, k);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!ws_resume_value_is_inert(e->as.builtin.args[i], k)) return false;
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* turi-effect-perform-keeps-its-continuation: is this case's body exactly
+ * `(resume k v)` with an inert `v`?  Then `k` is resumed once, as the whole
+ * body, and goes nowhere else -- nothing in `v` can perform (so no outer
+ * multishot handler can re-run the clause) or capture `k` -- so the captured
+ * slice can be run in place instead of cloned, and everything the capture
+ * allocated freed when the resume dispatches.  A `^multishot` k keeps the
+ * cloning path. */
+static bool ws_case_is_oneshot_resume(const HandleCase *hc) {
+    if (!hc || !hc->k_binding || hc->cont_kind == CK_MULTISHOT) return false;
+    const Expr *b = hc->body;
+    while (b && (b->kind == EX_ASCRIBE || (b->kind == EX_DO && b->as.do_.n == 1)))
+        b = b->kind == EX_ASCRIBE ? b->as.ascribe_.inner : b->as.do_.items[0];
+    if (!b || b->kind != EX_RESUME || !b->as.resume_.resume) return false;
+    const ResumeExpr *re = b->as.resume_.resume;
+    if (!re->k || re->k->kind != EX_VAR || re->k->as.var.binding != hc->k_binding)
+        return false;
+    return ws_resume_value_is_inert(re->value, hc->k_binding);
 }
 
 /* Wrap a work-stack continuation in a TURI_EFFECT_CONT value (discriminated by
@@ -9522,6 +9636,44 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 /* Capture the slice st[pidx+1 .. len-1] as a heap continuation. */
                 size_t nf = (len - 1) - (size_t)pidx;
+                /* turi-effect-perform-keeps-its-continuation: a clause that is
+                 * just `(resume k v)` resumes once, in place.  Not while a
+                 * re-entrant call/cc may complete these calls again, nor under
+                 * a debugger that holds activation frames. */
+                bool oneshot = ws_case_is_oneshot_resume(matched) &&
+                               !g_turi_cont_pinned && !env->debugger &&
+                               turi_frame_reclaim_on();
+                if (oneshot) {
+                    TuriWsCont *wc = (TuriWsCont *)calloc(1, sizeof(TuriWsCont));
+                    TuriEffectCont *kc = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+                    if (!wc || !kc) abort();
+                    kc->ws = wc;
+                    wc->oneshot  = true;
+                    wc->kval     = kc;
+                    wc->n_frames = nf;
+                    if (nf) {
+                        wc->frames = (DriveCont *)malloc(nf * sizeof(DriveCont));
+                        if (!wc->frames) abort();
+                        memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
+                    }
+                    wc->handler        = (HandleExpr *)st[pidx].aux;
+                    wc->handler_frame  = st[pidx].frame;
+                    frame_escape(st[pidx].frame);
+                    wc->perf_module    = env->current_module;
+                    wc->perf_no_unwind = env->in_no_unwind;
+                    wc->perf_defer     = env->defer_stack;
+                    len = (size_t)pidx + 1;
+                    st[pidx].index = 0;   /* disable while its own case body runs */
+                    EvalFrame *hf = eval_frame_new_call(env, st[pidx].frame);
+                    wc->case_frame = hf;
+                    for (uint32_t i = 0; i < matched->n_params && i < n; i++)
+                        frame_bind(env, hf, matched->param_bindings[i]->name->name, pargs[i]);
+                    frame_bind(env, hf, matched->k_binding->name->name, turi_effect_cont(kc));
+                    env->current_module = st[pidx].saved_module;
+                    env->in_no_unwind   = st[pidx].was_no_unwind;
+                    control = matched->body; cf = hf; tail = false;
+                    break;
+                }
                 /* Escaping payload: bound as the multishot k; pool-owned. */
                 TuriWsCont *wc = (TuriWsCont *)turi_val_calloc(env, sizeof(TuriWsCont));
                 wc->n_frames = nf;
@@ -10088,6 +10240,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     break;
                 }
                 TuriWsCont *wc = k.as_cont->ws;
+                if (wc->oneshot && wc->consumed) {
+                    cur = turi_error("eval: resume: a one-shot continuation was resumed twice");
+                    break;
+                }
                 /* Re-install the captured prompt around the resumed slice.  For a
                  * DEEP handler it is re-installed ACTIVE (index = 1), so a perform
                  * of the same effect in the resumed slice is caught again.  For a
@@ -10098,11 +10254,42 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * reaches the nearest ENCLOSING active prompt -- or the fiber path
                  * / unhandled if none.  Mirrors dk_perform's no-reinstall tail. */
                 int reinstall_active = (wc->handler && wc->handler->shallow) ? 0 : 1;
+                if (wc->oneshot && len > 0 && st[len - 1].kind == DK_PROMPT &&
+                    st[len - 1].aux == (void *)wc->handler &&
+                    st[len - 1].frame == wc->handler_frame && st[len - 1].index == 0) {
+                    /* turi-effect-perform-keeps-its-continuation: the resume is
+                     * the clause's whole body and sits right on the clause's
+                     * own (disabled) prompt, so nothing is left to run between
+                     * them: re-arm that prompt for the slice instead of
+                     * stacking a new one above it -- a perform per turn of a
+                     * loop then keeps the work stack flat. */
+                    st[len - 1].index = reinstall_active;
+                } else
                 DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
                                          .frame = wc->handler_frame, .tail = rtl,
                                          .index = reinstall_active,
                                          .saved_module = env->current_module,
                                          .was_no_unwind = env->in_no_unwind }));
+                if (wc->oneshot) {
+                    /* turi-effect-perform-keeps-its-continuation: the slice
+                     * goes back exactly as it was taken -- its frames never
+                     * marked escaped, its accumulators the driver's own -- so
+                     * its activations finish and release as if nothing had
+                     * been performed.  The clause was only this resume, so its
+                     * frame, k and the capture are dead from here. */
+                    for (size_t i = 0; i < wc->n_frames; i++)
+                        DRIVE_PUSH(wc->frames[i]);
+                    env->current_module = wc->perf_module;
+                    env->in_no_unwind   = wc->perf_no_unwind;
+                    env->defer_stack    = wc->perf_defer;
+                    wc->consumed = true;
+                    if (wc->case_frame == rcf) frame_release(env, rcf);
+                    free(wc->frames);
+                    free(wc->kval);
+                    free(wc);
+                    cur = v;
+                    break;
+                }
                 if (wc->n_frames) {
                     DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
                     clone_ws_slice(env, wc->frames, wc->n_frames, clone);
@@ -10473,8 +10660,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriValue dv = eval_lookup(env, call_frame,
                                                    dp->name->name);
                         if (dv.tag != TURI_INT || dv.as_int == 0) continue;
-                        DictBind *db = (DictBind *)turi_val_alloc(
-                            env, sizeof(DictBind));
+                        DictBind *db = dict_bind_alloc(env);
                         db->tc    = fn->dict_clone_classes[dk2];
                         db->inst  = (struct TypeClassInstance *)(intptr_t)
                                         dv.as_int;
@@ -11852,13 +12038,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 }
                 if (!have) continue;
                 if (!tf) tf = eval_frame_new(env, NULL);
-                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                TyvarBind *tb = tyvar_bind_alloc(env);
                 tb->name = tv->name;
                 tb->type = bound;
                 tb->next = tf->tyvars;
                 tf->tyvars = tb;
                 if (inst) {
-                    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+                    DictBind *db = dict_bind_alloc(env);
                     db->tc = tc;
                     db->inst = inst;
                     db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
@@ -13101,7 +13287,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_EXISTS_OPEN: {
         TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
         if (turi_is_error(packed) || env_signaled(env)) return packed;
-        EvalFrame *ef = eval_frame_new(env, frame);
+        /* turi-call-pins-and-side-frames-not-reclaimed: the body runs here
+         * and now, so the frame lives no longer than the enclosing activation
+         * -- owned by it, released with it unless something captured it. */
+        EvalFrame *ef = eval_frame_new_owned(env, frame);
         if (e->as.exists_open_.var_binding)
             frame_bind(env, ef, e->as.exists_open_.var_binding->name->name, packed);
         TuriValue r = eval_expr(env, ef, e->as.exists_open_.body);
@@ -13417,7 +13606,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 else if (c->type_arg.kind == TY_TYVAR && c->type_arg.as.tyvar_.name)
                     tv = c->type_arg.as.tyvar_.name;
                 if (!tv) continue;
-                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                TyvarBind *tb = tyvar_bind_alloc(env);
                 tb->name = tv;
                 tb->type = any_t;
                 tb->next = pf->tyvars;
@@ -15148,6 +15337,8 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     arena_reset(&env->value_scratch);
     env->frame_free   = NULL;   /* their nodes were in scratch */
     env->binding_free = NULL;
+    env->tyvar_free   = NULL;
+    env->dict_free    = NULL;
     env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
 
     /* TR3: with the live graph now provably rooted at result+globals, sweep

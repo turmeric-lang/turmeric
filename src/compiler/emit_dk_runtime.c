@@ -980,6 +980,24 @@ void emit_cps_runtime_prelude(Buf *out) {
      * the base). */
     buf_puts(out,
 "__attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }\n"
+/* closure-let-in-self-tail-loop-leaks: a CPS self-tail loop's backedge frees
+ * the closures that turn registered, instead of holding one per turn until the
+ * outermost entry returns.  The entry comes OFF the list (order kept, so no
+ * entry's mark moves) before the drop, so the boundary never frees it twice.
+ * Pinned (a kept continuation may still reach it) or not found (the collector
+ * already forgot it), it is left alone. */
+"__attribute__((unused)) static void __dk_reap_closure_now(intptr_t p) {\n"
+"    if (tur_dk_pinned) return;\n"
+"    for (size_t i = __dk_reap_n; i-- > 0; ) {\n"
+"        if (__dk_reap_v[i] == (void *)p && __dk_reap_kind[i] == 2) {\n"
+"            memmove(&__dk_reap_v[i], &__dk_reap_v[i + 1], (__dk_reap_n - i - 1) * sizeof(void *));\n"
+"            memmove(&__dk_reap_kind[i], &__dk_reap_kind[i + 1], __dk_reap_n - i - 1);\n"
+"            __dk_reap_n--;\n"
+"            TUR_CLOSURE_DROP(p);\n"
+"            return;\n"
+"        }\n"
+"    }\n"
+"}\n"
 "static void __dk_reap_run(void) {\n"
 "    for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {\n"
 "        if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);\n"

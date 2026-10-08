@@ -253,7 +253,10 @@ bool turi_env_has_cap(TuriEnv *env, TuriCaps cap);
  * --------------------------------------------------------------------------- */
 
 /* Register a native C function as a named global in env.
- * After this call, Turmeric code can call the function by name. */
+ * After this call, Turmeric code can call the function by name.
+ * The global binding keeps the `name` POINTER, not a copy, so `name` must
+ * outlive env: a literal, or a copy in env's sym_arena -- never a stack
+ * buffer (docs/archive/r7rs-eval-host-procedure-name-on-the-stack.md). */
 void turi_env_register_native(TuriEnv *env, const char *name,
                                TuriNativeFn fn, void *ud);
 

@@ -100,7 +100,7 @@ runtime or the codegen changes. Re-measure before you lean on one.
 | `Vec int` slot | 8 B, doubling from 4 (~19 B peak, ~26 B traffic incl. growth copies) | amortised 0 | `vec-free` |
 | `Vec P` slot, `P` wider than 8 B | 8 B slot + a boxed copy of `P` (~53 B peak for a 24 B `P`) | 1 | `vec-free` (frees the boxes too) |
 | `MutableMap int int` entry | 32 B slot at load factor <= 0.75 (~78 B peak, ~105 B traffic) | amortised 0 | `mutmap-free` |
-| `Map int int` entry (persistent HAMT) | **~360 B live**; ~1.65 KB and ~7 allocations of traffic per insert | ~7 per insert | `map-free` of each version you drop |
+| `Map int int` entry (persistent HAMT) | ~66 B live; ~720 B and ~7 allocations of traffic per insert | ~7 per insert | `map-free` of each version you drop |
 | `String` | 16 B header + length + 1 | 1 | `string/release` (refcounted) |
 | `rc<T>` | 72 B control block + a separate block for the value | 2 | last drop |
 | first `rc<T>` in a program | one-time 544 KiB (512 KiB free queue + 32 KiB GC registry) | 2 | process exit |
@@ -158,8 +158,8 @@ Per entry, from smallest to largest:
 | Container | Peak per entry | Mutation | Frees |
 | --- | --- | --- | --- |
 | `Vec int` | ~19 B | in place | `vec-free` |
+| `Map int int` | ~66 B | a new version per insert | `map-free` per version |
 | `MutableMap int int` | ~78 B | in place | `mutmap-free` |
-| `Map int int` | ~360 B | a new version per insert | `map-free` per version |
 
 `Vec` holds a 24-byte header and a buffer of 8-byte slots that doubles when
 full, so a `Vec` can be up to twice as large as its contents. An element
@@ -175,9 +175,13 @@ load factor reaches 0.75.
 makes old versions cheap to keep, but **each version is a separate object you
 must `map-free`.** A loop that rebinds a map without freeing the previous
 version keeps every version: measured 1.7 KB per insert, all of it leaked.
-Even when you free each old version, a live entry costs about 360 bytes,
-mostly because of how HAMT nodes are sized today
-([hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/hamt-nodes-allocated-at-full-array-size.md)).
+When you free each old version, a live entry costs about 66 bytes: a
+24-byte leaf node, a 32-byte entry, and its share of the bitmap nodes above
+it. (Before 2026-10-07 every node was allocated at the size of a full
+32-slot node, and an entry cost ~360 bytes --
+[hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/hamt-nodes-allocated-at-full-array-size.md).)
+What a persistent map still costs is traffic: each insert copies the path
+from the root, about 7 allocations and 720 bytes.
 
 None of the three containers is freed at scope exit. A compiled `Vec`,
 `MutableMap` or `Map` local that you do not free lives until the process
@@ -216,9 +220,13 @@ to its drop glue, the code pointer, and the captured values. A closure bound
 in a `let` is freed when the `let` ends. A named `defn` passed as a value
 costs nothing: its fat box is allocated once, statically.
 
-One shape leaks: a capturing closure `let`-bound inside a function that
-ends in a self tail call (a loop written as recursion) is never freed
-([closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-let-in-self-tail-loop-leaks.md)).
+In a loop written as recursion, a closure `let`-bound in the body and only
+ever called is freed at the jump back to the top of the loop. One that the
+body passes on as an argument -- to the loop's own next call, or to a function
+that only calls it -- is kept until the outermost call into the loop returns,
+then freed. (Until 2026-10-07 a closure returned by a call, like `(mk i)`
+below, was never freed in that position:
+[closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/closure-let-in-self-tail-loop-leaks.md).)
 
 ### Calls through function values, and effects
 
@@ -278,9 +286,11 @@ shape.
 
 If you need an index or a stack, use a `Vec` (~19 B per `int`). If you need
 lookups and mutate in place, use a `MutableMap` (~78 B per entry). Use a
-persistent `Map` (~360 B per entry) when you need its persistence: several
+persistent `Map` (~66 B per live entry) when you need its persistence: several
 versions alive at once, or a value you pass around and must not see change.
-A `Map` used as a mutable table costs about five times a `MutableMap`.
+A `Map` used as a mutable table is no larger than a `MutableMap`, but every
+insert allocates a new path (~7 allocations) and each old version needs its
+own `map-free`.
 
 For a `Vec` of wide structs, two cheaper layouts avoid the per-element box:
 
@@ -370,14 +380,16 @@ generation retires when, inside the bracket:
   record of scalars, not a node, closure or pointer);
 - a node is stored somewhere that outlives the bracket (`vec-push!` into an
   outer `Vec`, `set!` on a global, `map-assoc` into an outer map);
-- a node is erased to `:int`, `ptr<void>` or `Any` (`(:: node :int)`);
+- a node is erased to `:int`, `ptr<void>` or `Any` (`(:: node :int)`),
+  unless the erased word is only compared with `0` (`(= (:: l :int) 0)`,
+  the null test);
 - a node is passed to a function whose body is inline C.
 
-The stdlib list is caught by the third rule today: `tnil?` and `tlength` test
-for the empty list with `(:: l :int)`, so walking a `(Cons A)` inside a
-region retires it
-([stdlib-list-null-check-retires-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stdlib-list-null-check-retires-regions.md)).
-Inside regions, use your own `defdata :heap` list and walk it with `match`.
+Walking a stdlib `(Cons A)` with `tnil?`, `thead`, `ttail` and `tlength`
+inside a region rewinds. Building one does too with `tcons-of`, but not with
+`tcons`: its tail parameter is the carrier-level `:int`, so passing a typed
+list to it erases the node and the generation retires. Inside regions, build
+with `tcons-of`.
 
 **Check that your regions rewind.** Run the program with
 `TUR_REGION_STATS=1`; it prints one line at exit:
@@ -445,8 +457,9 @@ but they are not the same for memory today:
 - When the loop body calls a function value or performs an effect, a `while`
   loop frees the continuation frames each iteration; a recursive loop keeps
   all of them until it returns.
-- A capturing closure `let`-bound in a `while` body is freed each iteration;
-  in a self-tail-recursive body it is never freed.
+- A capturing closure `let`-bound in a `while` body is freed each iteration.
+  In a self-tail-recursive body it is freed each iteration only when the body
+  just calls it; one passed on as an argument is kept until the loop returns.
 
 ```turmeric
 (defn mk [k : int] : (fn [int] int) (fn [x : int] : int (+ x k)))
@@ -544,15 +557,9 @@ frees applies to them. `TUR_GC_STATS=1` prints what that collector did. See
 These are open findings that change the numbers above. Each report has a
 repro and the measurements.
 
-- [hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/hamt-nodes-allocated-at-full-array-size.md)
-  -- `Map` entries cost ~360 B, most of it unused node space.
 - [fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md)
   -- calls through function values hold their frames until the outermost
   call returns.
-- [closure-let-in-self-tail-loop-leaks](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/closure-let-in-self-tail-loop-leaks.md)
-  -- a closure in a self-tail-recursive body is never freed.
-- [stdlib-list-null-check-retires-regions](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/stdlib-list-null-check-retires-regions.md)
-  -- walking a stdlib list inside a region retires it.
 - [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
   -- by-value recursive values copied out of a borrow or a container leak.
 

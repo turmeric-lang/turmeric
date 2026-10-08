@@ -312,6 +312,13 @@ typedef struct AdtDef {
      * ADT analogue of a :heap StructDef (Vec/Map/Set).  Set by defdata on `:heap`
      * (and by the defstruct->defadt lowering of a `:heap` struct). */
     bool        is_heap;
+    /* turi-immutable-struct-args-copied-per-call: set when the program
+     * elaborates a field write `(set! (.f x) v)` whose receiver is this ADT
+     * (the one EX_SET_FIELD site, elab_set_field).  A value of a type nobody
+     * writes cannot show whether a call copied it, so the interpreter's
+     * by-value argument copy (turi_copy_byvalue_struct_arg) skips it.  Only
+     * the interpreter reads it; the compiled backend copies by C semantics. */
+    bool        field_written;
     /* Phase G1: GADT flag and type parameters */
     bool        is_gadt;         /* true for defgadt, false for defdata */
     /* SR1 (sum-representation-plan): a constructor field names this ADT, so the

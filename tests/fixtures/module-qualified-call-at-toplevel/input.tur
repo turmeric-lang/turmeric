@@ -1,0 +1,20 @@
+;; qualified-module-calls-unresolved-at-toplevel: `(geom/vec/dot ...)` outside
+;; any defmodule.  The elaborator resolved a slash-qualified member only inside
+;; the defining module or through an import, so at the top level it fell to the
+;; TUR-W0040 runtime dispatch: a compile error, and under the interpreter an
+;; EXPORTED member was not found while a private one was.  The top level now
+;; resolves `Module/member` against the module's members -- the module name
+;; here nests, so the split is at the LAST slash -- and a private member is a
+;; visibility error (errors/module-qualified-private-at-toplevel).
+
+(defmodule geom/vec
+  (export dot greet twice)
+  (defn greet [] : cstr "hello")
+  (defn twice [n : int] : int (* n 2))
+  (defn dot [a : int b : int] : int (+ (* a b) 0)))
+
+(defn main [] : int
+  (println (geom/vec/greet))
+  (println (geom/vec/twice 21))
+  (println (geom/vec/dot 3 4))
+  0)

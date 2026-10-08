@@ -545,7 +545,10 @@ observed:
   ([turi-call-frames-never-reclaimed](docs/archive/turi-call-frames-never-reclaimed.md)),
   so ordinary loops no longer grow per step. A closure capture keeps its
   frames, a re-entrant `call/cc` turns reclamation off for the rest of the
-  run, and by-value struct argument copies are still kept. On the Debug `tur`,
+  run, and a by-value struct argument of a type the program writes a field of
+  is still copied and kept (since 2026-10-07 nothing else is copied:
+  [turi-immutable-struct-args-copied-per-call](docs/archive/turi-immutable-struct-args-copied-per-call.md)).
+  On the Debug `tur`,
   ASan's free quarantine (256 MB by default) adds to every peak.
 
 The rule of thumb: **before diagnosing a test failure, check whether anything

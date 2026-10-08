@@ -920,8 +920,11 @@ Expr *elab_form(Elab *e, Form *f) {
              * inline_c_substitute to strip the lines from the body; dedup
              * makes that idempotent. */
             extern size_t tur_hoist_top_includes_scan(const char *body, size_t len);
+            extern bool g_hoist_origin_stdlib;
             if (f->as.cblock.p) {
+                g_hoist_origin_stdlib = e->in_stdlib_load;
                 (void)tur_hoist_top_includes_scan(f->as.cblock.p, f->as.cblock.len);
+                g_hoist_origin_stdlib = false;
             }
             /* inline-c-cname-module-prefix-plan: resolve __TUR_CNAME_<name>__
              * splices into captures so module-prefixed callees get their exact
@@ -1507,6 +1510,12 @@ static bool fwd_type_mentions_tp(const Type *t, const Symbol **tps, uint8_t n_tp
 
 static Type fwd_shallow_type_arg(Elab *e, const Form *af,
                                  const Symbol **tps, uint8_t n_tp) {
+    /* ok-nil-unconstructible-in-turmeric: the reader makes a bare `nil` an
+     * F_NIL, not a symbol, so `(Result nil E)` used to forward-declare as
+     * `(Result _ E)` -- a named tyvar a forward caller then re-instantiated
+     * through a head with no kind, TUR-E0012 at 0:0.  elab_types.c's ET3 arm
+     * reads F_NIL in a type position as the nil type; so does this. */
+    if (af && af->tag == F_NIL) return TYPE_NIL;
     if (af && af->tag == F_LIST) {
         Type *nested = fwd_shallow_result_app(e, af, tps, n_tp);
         if (nested) return *nested;

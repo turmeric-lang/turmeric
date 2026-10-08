@@ -51,6 +51,7 @@
  * on Windows.  The WIFEXITED/WEXITSTATUS uses that remain are applied to a
  * system() return value, and platform_fs.h defines those there. */
 #include <sys/wait.h>
+#include <sys/time.h>   /* utimes: the prelude cache's LRU stamp */
 #endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>     /* SN1: _NSGetExecutablePath for stdlib resolution */
@@ -3301,6 +3302,82 @@ static bool prelude_object_usable(const char *obj, struct stat *st) {
     return true;
 }
 
+/* r7rs-prelude-library-object-varies-with-the-program, fix direction 4: the
+ * prelude cache is pruned least-recently-used first.  A reused object has its
+ * mtime stamped (prelude_object_reuse); after compiling a new one, objects
+ * beyond PRELUDE_CACHE_KEEP are removed oldest first -- but only those no
+ * build has used for PRELUDE_CACHE_IDLE_SECS, so an object a concurrent build
+ * has just chosen (and stamped) is never pulled from under its link.  Every
+ * new `tur` whose library text changed adds an object; nothing removed them,
+ * and a day of work left 42 (89 MB) in one directory. */
+#define PRELUDE_CACHE_KEEP      24
+#define PRELUDE_CACHE_IDLE_SECS (24 * 60 * 60)
+
+static int prelude_object_reuse(const char *obj) {
+#ifndef _WIN32
+    (void)utimes(obj, NULL);
+#else
+    (void)obj;
+#endif
+    return 0;
+}
+
+typedef struct { char name[32]; time_t mtime; } PreludeCacheEnt;
+
+static int prelude_cache_ent_cmp(const void *a, const void *b) {
+    time_t x = ((const PreludeCacheEnt *)a)->mtime, y = ((const PreludeCacheEnt *)b)->mtime;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+static void prelude_cache_prune(const char *dir, const char *keep) {
+#ifndef _WIN32
+    DIR *d = opendir(dir);
+    if (!d) return;
+    PreludeCacheEnt *ents = NULL;
+    size_t n = 0, cap = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        const char *nm = de->d_name;
+        size_t l = strlen(nm);
+        /* Only the cache's own `<16 hex>.o`: never a lock, a kept unit, or a
+         * private `<hash>.<pid>.o` another build is still writing. */
+        if (l != 18 || strcmp(nm + 16, ".o") != 0) continue;
+        bool hex = true;
+        for (size_t i = 0; i < 16; i++) if (!isxdigit((unsigned char)nm[i])) hex = false;
+        if (!hex) continue;
+        char path[1100];
+        snprintf(path, sizeof path, "%s/%s", dir, nm);
+        if (keep && strcmp(path, keep) == 0) continue;
+        struct stat st;
+        if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 32;
+            PreludeCacheEnt *ne = realloc(ents, cap * sizeof *ents);
+            if (!ne) break;
+            ents = ne;
+        }
+        memcpy(ents[n].name, nm, l + 1);
+        ents[n].mtime = st.st_mtime;
+        n++;
+    }
+    closedir(d);
+    if (n + 1 > PRELUDE_CACHE_KEEP) {
+        qsort(ents, n, sizeof *ents, prelude_cache_ent_cmp);
+        size_t excess = n + 1 - PRELUDE_CACHE_KEEP;
+        time_t now = time(NULL);
+        for (size_t i = 0; i < n && excess > 0; i++, excess--) {
+            if (difftime(now, ents[i].mtime) < PRELUDE_CACHE_IDLE_SECS) break;
+            char path[1100];
+            snprintf(path, sizeof path, "%s/%s", dir, ents[i].name);
+            unlink(path);
+        }
+    }
+    free(ents);
+#else
+    (void)dir; (void)keep;
+#endif
+}
+
 /* r7rs-programs-compile-slowly: the object of a split build's library unit
  * (emit_split.h), compiled once and cached by a hash of everything that goes
  * into it -- its text, the compiler and every flag -- under
@@ -3375,7 +3452,7 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     }
     snprintf(obj, obj_cap, "%s/%016llx.o", dir, (unsigned long long)h);
     struct stat st;
-    if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
+    if (prelude_object_usable(obj, &st)) { buf_free(&flags); return prelude_object_reuse(obj); }
 
     /* One compile per library.  The unit exports every stdlib definition, so
      * cc cannot drop the ones no program reaches, and the compile costs more
@@ -3389,12 +3466,12 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     int lock_fd = open(lock, O_CREAT | O_EXCL | O_WRONLY, 0600);
     if (lock_fd < 0 && errno == EEXIST) {
         for (int tick = 0; tick < 1200; tick++) {   /* 100 ms ticks, 120 s */
-            if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
+            if (prelude_object_usable(obj, &st)) { buf_free(&flags); return prelude_object_reuse(obj); }
             if (stat(lock, &st) != 0) break;
             if (difftime(time(NULL), st.st_mtime) > 120) break;
             usleep(100000);
         }
-        if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
+        if (prelude_object_usable(obj, &st)) { buf_free(&flags); return prelude_object_reuse(obj); }
     }
 
     char src[1100], tmp_obj[1100];
@@ -3445,6 +3522,7 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     int ret = 0;
     if (rc != 0 || rename(tmp_obj, obj) != 0) { unlink(tmp_obj); ret = 2; }
     if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
+    if (ret == 0) prelude_cache_prune(dir, obj);
     return ret;
 }
 

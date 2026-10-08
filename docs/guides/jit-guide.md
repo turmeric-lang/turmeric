@@ -244,8 +244,12 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
    rather than calling `dlsym` -- which is what lets it see **static**
    functions, and is why single-TU spice emission keeps its `static` linkage
    unchanged. The function pointer is then called on a fresh pthread with a
-   `TUR_JIT_STACK_MB` stack (default 1024 MB on 64-bit, 64 MB on 32-bit), followed by `jit_atexit_drain`
-   and `fflush(stdout)` **on that same thread**.
+   `TUR_MAIN_STACK_MB` stack (default 1024 MB on 64-bit, 64 MB on 32-bit; `TUR_JIT_STACK_MB` still works and wins), followed by `jit_atexit_drain`
+   and `fflush(stdout)` **on that same thread**. On Linux and macOS the
+   thread has an alternate signal stack and a SIGSEGV/SIGBUS handler: a fault
+   at the stack's low end prints `stack overflow: recursion too deep` (the
+   line a compiled r7rs program prints) before the signal ends `tur`; any
+   other fault goes to whatever handled the signal before.
 8. **Teardown**, strictly in this order: `MIR_gen_finish`, `c2mir_finish`,
    `MIR_finish`.
 
@@ -616,7 +620,8 @@ they are diagnostics rather than semantics.
 | variable | default | effect |
 |---|---|---|
 | `TUR_JIT_GEN` | lazy | `eager` restores whole-program generation (slower start, but generation failures surface while the fallback is still reachable); `interp` is spike instrumentation only |
-| `TUR_JIT_STACK_MB` | 1024 (64 on 32-bit) | entry stack size; MIR does not do gcc's sibling-call optimization, so a deep recursion the `cc` path survives can overflow here |
+| `TUR_MAIN_STACK_MB` | 1024 (64 on 32-bit) | entry stack size in MiB, the same variable that sizes a compiled `#lang r7rs` program's `main` stack; MIR does not do gcc's sibling-call optimization, so a deep recursion the `cc` path survives can overflow here. A value that is not a positive number is reported and ignored |
+| `TUR_JIT_STACK_MB` | unset | the older, JIT-only name for `TUR_MAIN_STACK_MB`; wins when both are set |
 | `TUR_JIT_NO_SPLIT` | unset | skip the S2 preamble splice and compile the full runtime preamble |
 | `TUR_JIT_NO_PRUNE` | unset | hand c2mir every definition the emitter wrote, including the prelude the program never reaches |
 | `TUR_JIT_TIMING` | unset | `1` prints per-phase timings and RSS to **stderr**, so fixture stdout stays byte-comparable |

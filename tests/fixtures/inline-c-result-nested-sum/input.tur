@@ -1,0 +1,79 @@
+;; inline-c-builders-cannot-nest-option-in-result: an inline-C body composes
+;; the builders -- `tur_ok_int(tur_some_ptr(s))` -- for a return type whose
+;; payload is itself a sum.  The builders make a 16-byte {tag; word} box whose
+;; word is the INNER builder's box, but the monomorph stores an Option payload
+;; BY VALUE, so the readback that reinterpreted the box as the monomorph read
+;; the inner tag out of a pointer: neither arm of a nested match fired.  The
+;; readback now converts such a box field by field (recursing for deeper
+;; nesting) and frees the inner boxes; requires.leak-check holds it to that.
+;; Matched directly, let-bound, and passed straight into a typed parameter
+;; (the RM1 argument path), outer Result and outer Option.
+
+(defopaque IoError :int)
+
+(defn read-line-ish [n : int] : (Result (Option cstr) IoError)
+  ```c
+  if (n == 0) return tur_ok_int(tur_none());
+  if (n < 0) return tur_err_int(-n);
+  return tur_ok_int(tur_some_ptr((void *)"line"));
+  ```)
+
+(defn opt-res [n : int] : (Option (Result int cstr))
+  ```c
+  if (n == 0) return tur_none();
+  if (n < 0) return tur_some_int(tur_err_ptr((void *)"neg"));
+  return tur_some_int(tur_ok_int(n + 1));
+  ```)
+
+(defn res-res [n : int] : (Result (Result int cstr) IoError)
+  ```c
+  if (n == 0) return tur_err_int(7);
+  if (n < 0) return tur_ok_int(tur_err_ptr((void *)"inner-err"));
+  return tur_ok_int(tur_ok_int(n));
+  ```)
+
+(defn deep [n : int] : (Result (Option (Option int)) IoError)
+  ```c
+  if (n == 0) return tur_ok_int(tur_some_int(tur_none()));
+  if (n == 1) return tur_ok_int(tur_none());
+  return tur_ok_int(tur_some_int(tur_some_int(n)));
+  ```)
+
+(defn show-line [r : (Result (Option cstr) IoError)] : nil
+  (match r
+    (Ok o) (match o (Some s) (println s) (None) (println "eof"))
+    (Err e) (println (:: e int))))
+
+(defn show-opt-res [r : (Option (Result int cstr))] : nil
+  (match r
+    (Some x) (match x (Ok v) (println v) (Err m) (println m))
+    (None) (println "none")))
+
+(defn show-res-res [r : (Result (Result int cstr) IoError)] : nil
+  (match r
+    (Ok x) (match x (Ok v) (println v) (Err m) (println m))
+    (Err e) (println (:: e int))))
+
+(defn show-deep [r : (Result (Option (Option int)) IoError)] : nil
+  (match r
+    (Ok o) (match o
+             (Some i) (match i (Some v) (println v) (None) (println "in-none"))
+             (None) (println "out-none"))
+    (Err e) (println (:: e int))))
+
+(defn main [] : int
+  ;; matched directly
+  (match (read-line-ish 1)
+    (Ok o) (match o (Some s) (println s) (None) (println "eof"))
+    (Err e) (println (:: e int)))
+  ;; let-bound
+  (let [q (read-line-ish 0)]
+    (match q
+      (Ok o) (match o (Some s) (println s) (None) (println "eof"))
+      (Err e) (println (:: e int))))
+  ;; straight into a typed parameter
+  (show-line (read-line-ish -4))
+  (show-opt-res (opt-res 4)) (show-opt-res (opt-res 0)) (show-opt-res (opt-res -1))
+  (show-res-res (res-res 9)) (show-res-res (res-res 0)) (show-res-res (res-res -1))
+  (show-deep (deep 9)) (show-deep (deep 0)) (show-deep (deep 1))
+  0)

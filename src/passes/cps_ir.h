@@ -276,8 +276,14 @@ struct CTerm {
         /* reap_any_env: the same registration for an `any` binder that holds a
          * fresh capturing closure (cps_any_closure_env_freeable): the env is
          * the tagged value's payload, so it is untagged first. */
+        /* reap_at_backedge (closure-let-in-self-tail-loop-leaks): with
+         * reap_env, the binder is only ever INVOKED -- never an argument, not
+         * even to a parameter that keeps nothing -- so a self tail call in the
+         * main body may free it before jumping back rather than leave it to
+         * the boundary.  An argument of that very call would be the next
+         * turn's live parameter. */
         struct { CVar x; const Expr *e; CTerm *body; bool reap_env;
-                 bool reap_any_env; }                                      letraw;
+                 bool reap_any_env; bool reap_at_backedge; }               letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.
@@ -367,5 +373,6 @@ void cps_ir_thread_param_reset(void);
 void cps_ir_callee_cache_reset(void);
 void cps_ir_thread_param_add(const Binding *param);
 bool cps_ir_thread_param_has(const Binding *param);
+bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
 
 #endif

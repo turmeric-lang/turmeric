@@ -2458,6 +2458,18 @@ __attribute__((unused)) static intptr_t __dk_reap_ptr(intptr_t p) { __dk_reap_pu
  * single-node free at reap -- dk_free would walk into the enclosing chain. */
 __attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 0); return k; }
 __attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }
+__attribute__((unused)) static void __dk_reap_closure_now(intptr_t p) {
+    if (tur_dk_pinned) return;
+    for (size_t i = __dk_reap_n; i-- > 0; ) {
+        if (__dk_reap_v[i] == (void *)p && __dk_reap_kind[i] == 2) {
+            memmove(&__dk_reap_v[i], &__dk_reap_v[i + 1], (__dk_reap_n - i - 1) * sizeof(void *));
+            memmove(&__dk_reap_kind[i], &__dk_reap_kind[i + 1], __dk_reap_n - i - 1);
+            __dk_reap_n--;
+            TUR_CLOSURE_DROP(p);
+            return;
+        }
+    }
+}
 static void __dk_reap_run(void) {
     for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {
         if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);
@@ -7751,7 +7763,6 @@ static int64_t tnil(void) {
 }
 
 static bool tnil_qu(int64_t l) {
-        TUR_REGION_NOTE_WORDS(&(l), sizeof(l));
         return (l) == (INT64_C(0));
 }
 

@@ -4837,6 +4837,114 @@ static bool threadable_has(const Binding *b) {
     for (int i = 0; i < g_threadable_fn_n; i++) if (g_threadable_fn[i] == b) return true;
     return false;
 }
+static void threadable_remove(const Binding *b) {
+    for (int i = 0; i < g_threadable_fn_n; i++)
+        if (g_threadable_fn[i] == b) {
+            g_threadable_fn[i] = g_threadable_fn[--g_threadable_fn_n];
+            return;
+        }
+}
+
+/* The fn-value binding an argument expression passes, if it is one: a named
+ * fn or lifted lambda (EX_VAR), a lambda or closure literal (its FnDef), or a
+ * let / hoist temp of a capturing closure.  Mirrors param_is_thread_safe. */
+static const Binding *arg_fnval_binding(const Expr *arg) {
+    const Expr *a = peel_fn_value(arg);
+    if (!a) return NULL;
+    if (a->kind == EX_CLOSURE)
+        return (a->as.closure_.closure && a->as.closure_.closure->fn)
+             ? a->as.closure_.closure->fn->binding : NULL;
+    if (a->kind == EX_FN)
+        return a->as.fn_.fn ? a->as.fn_.fn->binding : NULL;
+    if (a->kind != EX_VAR || !a->as.var.binding) return NULL;
+    const Binding *b = a->as.var.binding;
+    if (threadable_has(b)) return b;
+    if (threadable_has(b->closure_fn_binding)) return b->closure_fn_binding;
+    if (threadable_has(b->hoist_closure_fn_binding)) return b->hoist_closure_fn_binding;
+    return b;
+}
+
+typedef struct { const Expr *program; bool withdrew; } UnthreadedUd;
+
+/* Does the fat closure an argument builds for a poly-fn parameter carry an
+ * `fn_cps` entry?  A call through such a parameter threads ONLY through that
+ * slot (cps_ir_param_call_threads), and the EX_POLY_WRAP emission
+ * (emit_expr.c) fills it for one shape alone: a GLOBAL fn -- named, or a
+ * lifted captureless lambda -- of one int argument and an int result.  Any
+ * other value (a capturing closure, a `void` or float result) is called
+ * through `.fn` from a fresh root, so an effectful one must not count as
+ * threaded. */
+static bool arg_fat_has_fn_cps(const Expr *arg) {
+    const Expr *a = arg;
+    while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+    if (!a || a->kind != EX_POLY_WRAP) return false;
+    const Expr *inner = a->as.poly_wrap_.inner;
+    while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    const Binding *ib = (inner && inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
+    if (ib && ib->source_binding) ib = ib->source_binding;
+    if (!ib || !ib->is_global || ib->type.kind != TY_FN || ib->type.as.fn.arity != 1)
+        return false;
+    TypeKind ak = ib->type.as.fn.arg_kinds[0];
+    TypeKind rk = ib->type.as.fn.result_kind;
+    return (ak == TY_INT || ak == TY_INT64) && (rk == TY_INT || rk == TY_INT64);
+}
+
+/* Does every call through param `p` in `fd`'s body thread the caller's
+ * continuation (cps_ir_param_call_threads)?  Read after thread params are
+ * registered, since registry threading depends on it. */
+typedef struct { const Binding *p; bool all; } ParamCallsUd;
+static bool param_calls_visit(const Expr *e, void *ud);
+static void param_calls_walk(const Expr *e, ParamCallsUd *u) {
+    if (!e || !u->all) return;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding == u->p
+        && !cps_ir_param_call_threads(u->p, e))
+        u->all = false;
+    cps_visit_children(e, param_calls_visit, u);
+}
+static bool param_calls_visit(const Expr *e, void *ud) {
+    param_calls_walk(e, (ParamCallsUd *)ud);
+    return false;
+}
+static bool param_calls_all_thread(const FnDef *fd, const Binding *p) {
+    if (!p || !fd || !fd->body) return false;
+    ParamCallsUd u = { p, true };
+    param_calls_walk(fd->body, &u);
+    return u.all;
+}
+
+static bool fnval_withdraw_visit(const Expr *e, void *ud);
+
+/* Withdraw every EFFECTFUL threadable fn-value that `e` passes to a parameter
+ * some call through which does not thread (see the caller in ensure_S). */
+static void fnval_withdraw_walk(const Expr *e, UnthreadedUd *u) {
+    if (!e) return;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
+        const FnDef *cfd = fd_for_binding(u->program, e->as.call_.fn_binding);
+        for (uint32_t k = 0; cfd && cfd->params && k < e->as.call_.n_args
+                                 && k < cfd->n_params; k++) {
+            const Binding *fb = arg_fnval_binding(e->as.call_.args[k]);
+            if (!fb || !threadable_has(fb)) continue;
+            const Binding *pk = cfd->params[k];
+            if (param_calls_all_thread(cfd, pk)
+                && !(pk && pk->is_poly_fn && !arg_fat_has_fn_cps(e->as.call_.args[k])))
+                continue;
+            /* Only an effect that ESCAPES the fn-value needs the caller's
+             * handler; one it handles itself (`(fn [] (with-handler ...))`)
+             * runs the same off the trampoline -- the B5 rule below. */
+            const FnDef *vfd = fd_for_binding(u->program, fb);
+            uint64_t lo = 0, hi = 0;
+            if (vfd && vfd->body) fn_net_escaping_acc(vfd->body, &lo, &hi);
+            if (!(lo || hi)) continue;
+            threadable_remove(fb);
+            u->withdrew = true;
+        }
+    }
+    cps_visit_children(e, fnval_withdraw_visit, u);
+}
+static bool fnval_withdraw_visit(const Expr *e, void *ud) {
+    fnval_withdraw_walk(e, (UnthreadedUd *)ud);
+    return false;
+}
 
 /* E2c: which target fn-values are stored as a value in a `make-struct` field
  * in `e`?  An effectful fn-value stored in a struct field is called via
@@ -5328,17 +5436,43 @@ static void ensure_S(const Expr *program) {
     }
     fv_multi_free(&fvm);
     free(tg_fd); free((void *)tg_b); free(tg_eff);
-    /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe). */
-    for (uint32_t i = 0; i < np; i++) {
-        Expr *it = (Expr *)items[i];
-        if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
-        FnDef *fd = it->as.fn_def_.fn;
-        for (uint32_t pi = 0; pi < fd->n_params; pi++) {
-            PtClass pc = param_thread_class(fd, pi);
-            if ((pc == PT_NOW || pc == PT_NONTAIL)
-                && param_is_thread_safe(program, fd, pi))
-                cps_ir_thread_param_add(fd->params[pi]);
+    /* param->value converse: register thread-PARAMS (PT_NOW + thread-safe).
+     *
+     * An effectful fn-value counted threadable above is threadable because
+     * every use is an argument at a threadable PARAMETER position -- a class
+     * that reads only how the callee uses the parameter, not how each call
+     * through it is lowered.  An empty-row call threads only through a fat
+     * value's single-argument `fn_cps` slot, and an effectful-row call only via
+     * the registry, which needs the parameter registered -- that is, EVERY
+     * value passed to it registered (param_is_thread_safe), which a pure lambda
+     * or named fn passed in another call is not.  Any other call through the
+     * parameter is a plain direct call, and the effectful fn-value -- neither
+     * threaded nor fiber-tainted -- performed from a fresh root: "unhandled
+     * effect" at run time, from a program that compiled.  Withdraw such a
+     * fn-value (cps_ir_param_call_threads says which calls thread), which
+     * sends it down the E2 taint below like any other unthreadable one, and
+     * re-register: a withdrawal can unthread a parameter another relied on. */
+    for (int round = 0; round < 16; round++) {
+        cps_ir_thread_param_reset();
+        for (uint32_t i = 0; i < np; i++) {
+            Expr *it = (Expr *)items[i];
+            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+            FnDef *fd = it->as.fn_def_.fn;
+            for (uint32_t pi = 0; pi < fd->n_params; pi++) {
+                PtClass pc = param_thread_class(fd, pi);
+                if ((pc == PT_NOW || pc == PT_NONTAIL)
+                    && param_is_thread_safe(program, fd, pi))
+                    cps_ir_thread_param_add(fd->params[pi]);
+            }
         }
+        UnthreadedUd wu = { program, false };
+        for (uint32_t i = 0; i < np; i++) {
+            const Expr *it = items[i];
+            if (!it) continue;
+            fnval_withdraw_walk((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                                ? it->as.fn_def_.fn->body : it, &wu);
+        }
+        if (!wu.withdrew) break;
     }
 
     /* base_taint: effects performed/handled by any top-level code that is NEVER
@@ -6275,6 +6409,16 @@ typedef struct {
     const struct CpsTcg *tcg;
     int          tcg_idx;
     const char  *lbl_pfx;
+    /* closure-let-in-self-tail-loop-leaks: the boundary-reaped closure binders
+     * (letraw reap_env) in scope at this point of the MAIN body (`self_out`).
+     * A self tail call there is a backedge, after which none of them is read
+     * again, so it frees each one then (__dk_reap_closure_now) rather than
+     * leaving a loop to hold one env per turn until its outermost entry
+     * returns.  Pushed and popped around the letraw's body; past the cap a
+     * binder is simply left to the boundary.  A lifted helper copies this
+     * struct but writes elsewhere, so it never reaches the backedge. */
+    char        *loop_reaps[16];
+    uint32_t     n_loop_reaps;
 } CE;
 
 /* ============================================================================
@@ -6586,6 +6730,25 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
         ce_line(ce, "  return ((%s)__tur_cps_lookup_checked(__e2ab[1], \"%s\"))(%s); }",
                 thin_cast, who, thread);
     }
+}
+
+/* The direct `f.fn` call of a via_fncps fallback, as an int64 carrier
+ * expression.  The closure's wrapper keeps the param's REAL result type, so the
+ * call is spelled with it (fncps_result_kind_ok admits only the kinds below);
+ * an `int64_t (*)(void*, int64_t)` cast of a `void` wrapper is a mismatched
+ * call, which -fsanitize=function traps. */
+static void fncps_direct_call(Buf *out, const char *pf, const char *arg,
+                              const Expr *call) {
+    TypeKind rk = call ? call->type.kind : TY_INT;
+    if (rk == TY_NIL)
+        buf_printf(out, "(((void(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)), (int64_t)0)",
+                   pf, pf, arg);
+    else if (rk == TY_BOOL)
+        buf_printf(out, "((int64_t)((bool(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)))",
+                   pf, pf, arg);
+    else
+        buf_printf(out, "((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s))",
+                   pf, pf, arg);
 }
 
 /* Join a term's atom arguments into a malloc'd "a0, a1, ..." string. */
@@ -7425,8 +7588,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                         pf, pf, pf, arg, thread);
                 /* Pure fallback: call the direct entry and deliver the result. */
                 Buf pv; buf_init(&pv);
-                buf_printf(&pv, "((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s))",
-                           pf, pf, arg);
+                fncps_direct_call(&pv, pf, arg, t->as.tailcall.call_expr);
                 buf_putc(&pv, '\0');
                 emit_deliver(ce, &t->as.tailcall.kont, pv.data);
                 buf_free(&pv);
@@ -7620,6 +7782,11 @@ static void emit_term(CE *ce, const CTerm *t) {
                         ce_line(ce, "    %s __tb%u = %.*s;", emit_param_ctype(ce->ctx, sfd, i),
                                 i, (int)(to - from), argv_t + from);
                     }
+                    /* The arguments are computed (they may call a closure
+                     * below); the closures this turn bound are dead now. */
+                    for (uint32_t i = 0; i < ce->n_loop_reaps; i++)
+                        ce_line(ce, "    __dk_reap_closure_now((intptr_t)%s);",
+                                ce->loop_reaps[i]);
                     for (uint32_t i = 0; i < t->as.tailcall.n; i++) {
                         char *pn = name_for_binding(ce->ctx, sfd->params[i]);
                         ce_line(ce, "    %s = __tb%u;", pn, i);
@@ -8207,12 +8374,18 @@ static void emit_letraw(CE *ce, const CTerm *t) {
      * reap never double-frees, and never walks -- __dk_reap_ptr is a bare free).
      * A scalar-captured closure frees cleanly; the freeable gate already excluded
      * a non-scalar-returning closure (result could alias the env). */
+    bool loop_reap_pushed = false;
     if (t->as.letraw.reap_env) {
         /* closure-drop-glue: flag-on this env is headered (env[-1] drop-glue),
          * so reap it as a headered closure (kind 2 -> TUR_CLOSURE_DROP: recovers
          * the header, walks owning captures, frees the base) rather than a bare
          * interior free. */
         ce_line(ce, "__dk_reap_closure((intptr_t)%s);", bn);
+        if (t->as.letraw.reap_at_backedge && ce->self_out && ce->out == ce->self_out &&
+            ce->n_loop_reaps < sizeof ce->loop_reaps / sizeof ce->loop_reaps[0]) {
+            ce->loop_reaps[ce->n_loop_reaps++] = strdup(bn);
+            loop_reap_pushed = true;
+        }
     }
     /* dynamic-returned-closure-env-is-never-freed: an `any` binder holding a
      * fresh capturing closure; its payload word is the headered env.
@@ -8237,6 +8410,7 @@ static void emit_letraw(CE *ce, const CTerm *t) {
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);
+    if (loop_reap_pushed) free(ce->loop_reaps[--ce->n_loop_reaps]);
 }
 
 /* struct-temporary-fn-field-box-leaks (the CPS half): a by-value struct
@@ -8774,8 +8948,11 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         char *a0 = atom_str(ce, &call->as.tailcall.args[0]);
         ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value heap join */",
                 pf, pf, pf, a0, frame);
-        ce_line(ce, "return dk_run(%s, (intptr_t)((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)));",
-                frame, pf, pf, a0);
+        Buf dc; buf_init(&dc);
+        fncps_direct_call(&dc, pf, a0, call->as.tailcall.call_expr);
+        buf_putc(&dc, '\0');
+        ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc.data);
+        buf_free(&dc);
         free(pf); free(a0);
     } else if (call->as.tailcall.via_registry) {
         /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified

@@ -205,7 +205,9 @@ or shared cell, `set-field!`/`set-deref!`, a closure-env fill, a heap-boxed
 constructor field, an element box, an `rc/of` -- and an **erasing
 ascription** (an ADT or type application that reaches a node, ascribed to
 `:int`, `ptr<void>` or `Any`) notes the value at the point the static walk
-loses it. A by-value aggregate result
+loses it -- except one whose only use is `(= (:: node :int) 0)` or `not=`
+against a literal `0`, the null test, which goes nowhere and is not noted
+(stdlib-list-null-check-retires-regions). A by-value aggregate result
 is noted by its words. A noted word that is region memory flags the generation
 that OWNS it (not only the innermost), which then retires. The macro is
 `((void)0)` under `TUR_REGIONS=0`. **A new store primitive must carry the

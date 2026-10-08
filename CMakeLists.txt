@@ -1353,6 +1353,24 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_tail_calls_small_stack PROPERTIES TIMEOUT 720)
+# r7rs-deep-stack-size-not-configurable: TUR_MAIN_STACK_MB sizes the stack a
+# compiled `#lang r7rs` main runs on; a 16 MiB stack also pins the overflow
+# message, which the default 1 GiB is too large to reach in a test.
+add_test(
+  NAME tur_r7rs_main_stack_size
+  COMMAND bash tests/check-r7rs-main-stack-size.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_main_stack_size PROPERTIES TIMEOUT 720)
+# jit-stack-overflow-has-no-message: under `tur jit` a runaway recursion
+# prints the same line as the compiled r7rs path, in every dialect, and a wild
+# pointer does not.  SKIPs on a binary without the JIT engine.
+add_test(
+  NAME tur_jit_stack_overflow_message
+  COMMAND bash tests/check-jit-stack-overflow-message.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_jit_stack_overflow_message PROPERTIES TIMEOUT 720)
 # r7rs-programs-compile-slowly: a `#lang r7rs` program builds as two units,
 # the prelude compiled once and cached.  No piece of state may be defined in
 # both, and two programs must link the same cached library object.

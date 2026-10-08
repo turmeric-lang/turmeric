@@ -11202,6 +11202,7 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  * written against, and repeating a system header is harmless. */
 #include "runtime/region_rt_embed.h"
 #include "runtime/experiments.h"   /* experiment_warn_if_used */
+#include "runtime/stack_overflow.h" /* the deep stack's overflow test + message, shared with the JIT */
 
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
@@ -13221,6 +13222,34 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "}\n");
 }
 
+/* r7rs-deep-stack-size-not-configurable: the deep stack's size.  1 GiB on a
+ * 64-bit host (64 MiB on 32-bit) unless TUR_MAIN_STACK_MB names another
+ * number of MiB -- the same variable the JIT's entry stack reads
+ * (src/jit_engine.c).  `*asked` says the size came from the variable, so a
+ * thread that cannot be made that size is reported rather than quietly
+ * falling back to the default 8 MiB stack.  A value that is not a positive
+ * number is reported and ignored. */
+static const char TUR_DEEP_SIZE_FN[] =
+    "static size_t tur_deep_size(int *asked) {\n"
+    "    size_t sz = sizeof(void *) >= 8 ? ((size_t)1 << 30) : ((size_t)64 << 20);\n"
+    "    const char *e = getenv(\"TUR_MAIN_STACK_MB\");\n"
+    "    *asked = 0;\n"
+    "    if (e && *e) {\n"
+    "        char *end = 0;\n"
+    "        unsigned long long mb = strtoull(e, &end, 10);\n"
+    "        if (end && *end == 0 && mb > 0 && mb <= (unsigned long long)((size_t)-1 >> 20)) {\n"
+    "            sz = (size_t)mb << 20; *asked = 1;\n"
+    "        } else {\n"
+    "            fprintf(stderr, \"tur: ignoring TUR_MAIN_STACK_MB=%s (want a positive number of MiB)\\n\", e);\n"
+    "        }\n"
+    "    }\n"
+    "    return sz;\n"
+    "}\n"
+    "static void tur_deep_size_failed(size_t sz) {\n"
+    "    fprintf(stderr, \"tur: cannot make a %llu MiB stack for main (TUR_MAIN_STACK_MB); \"\n"
+    "                    \"running it on the default stack\\n\", (unsigned long long)(sz >> 20));\n"
+    "}\n";
+
 /* r7rs-deep-recursion-segfaults-silently: a Scheme program's frames are C
  * frames, and SICP 1.2.1's linear recursion (`(sum-to 1000000)`) ran off the
  * 8 MiB main-thread stack with no message at all -- exit 139, nothing
@@ -13237,23 +13266,28 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
  * record; the collector and call/cc read the new thread's own stack bounds
  * (both ask pthreads for the calling thread).  Windows has its own branch
  * (CreateThread).  Not under `tur jit` (`__MIRC__`), whose engine already runs main on a sized thread
- * (TUR_JIT_STACK_MB).  In a split build it is written into the program unit
- * only (emit_split.h).  A failure to make the thread is not an error --
- * main just runs where it is, as before. */
+ * (TUR_MAIN_STACK_MB there too).  In a split build it is written into the
+ * program unit only (emit_split.h).  A failure to make the thread is not an
+ * error -- main just runs where it is, as before, with a line on stderr when
+ * TUR_MAIN_STACK_MB asked for the size. */
 static void emit_deep_stack_runtime(Buf *out) {
     buf_puts(out,
         "#if !defined(_WIN32) && !defined(__MIRC__)\n"
         "#include <signal.h>\n"
         "#include <pthread.h>\n"
         "#include <unistd.h>\n"
+        "#include <stdio.h>\n"
+        "#include <stdlib.h>\n"
         "int main(int, char **);\n"
-        "typedef struct { int argc; char **argv; unsigned char *lo; void *gc; } tur_deep_state_t;\n"
+        "typedef struct { int argc; char **argv; unsigned char *lo; void *gc; } tur_deep_state_t;\n");
+    buf_puts(out, TUR_DEEP_SIZE_FN);
+    buf_puts(out,
         "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
         "static void tur_deep_fault(int sig, siginfo_t *si, void *uc) {\n"
         "    (void)uc;\n"
         "    unsigned char *a = (unsigned char *)si->si_addr, *lo = tur_deep_state()->lo;\n"
-        "    if (lo && a < lo + 65536 && a + (1 << 20) >= lo) {\n"
-        "        static const char m[] = \"stack overflow: recursion too deep\\n\";\n"
+        "    if (" TUR_STACK_OVERFLOW_STR(TUR_STACK_FAULT_IS_OVERFLOW(a, lo)) ") {\n"
+        "        static const char m[] = \"" TUR_STACK_OVERFLOW_MSG "\\n\";\n"
         "        if (write(2, m, sizeof m - 1) < 0) { }\n"
         "    }\n"
         "    signal(sig, SIG_DFL);   /* the fault repeats on return, unhandled */\n"
@@ -13296,7 +13330,8 @@ static void emit_deep_stack_runtime(Buf *out) {
         "    s->argc = argc; s->argv = argv;\n"
         "    pthread_attr_t at;\n"
         "    if (pthread_attr_init(&at) != 0) return 0;\n"
-        "    size_t sz = sizeof(void *) >= 8 ? ((size_t)1 << 30) : ((size_t)64 << 20);\n"
+        "    int asked;\n"
+        "    size_t sz = tur_deep_size(&asked);\n"
         "    pthread_t t;\n"
         "    int ok = pthread_attr_setstacksize(&at, sz) == 0;\n"
         "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
@@ -13313,6 +13348,7 @@ static void emit_deep_stack_runtime(Buf *out) {
         "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
         "        tur_gc_take_over(s->gc);   /* no thread: the record comes back here */\n"
         "#endif\n"
+        "        if (asked) tur_deep_size_failed(sz);\n"
         "        return 0;\n"
         "    }\n"
         "    (pthread_join)(t, NULL);   /* unwrapped; tur_deep_run exits the process */\n"
@@ -13329,12 +13365,16 @@ static void emit_deep_stack_runtime(Buf *out) {
          * goes on unhandled, as before. */
         "#elif defined(_WIN32) && !defined(__MIRC__)\n"
         "#include <windows.h>\n"
+        "#include <stdio.h>\n"
+        "#include <stdlib.h>\n"
         "int main(int, char **);\n"
-        "typedef struct { int argc; char **argv; } tur_deep_state_t;\n"
+        "typedef struct { int argc; char **argv; } tur_deep_state_t;\n");
+    buf_puts(out, TUR_DEEP_SIZE_FN);
+    buf_puts(out,
         "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
         "static LONG WINAPI tur_deep_fault(EXCEPTION_POINTERS *ep) {\n"
         "    if (ep && ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {\n"
-        "        static const char m[] = \"stack overflow: recursion too deep\\n\";\n"
+        "        static const char m[] = \"" TUR_STACK_OVERFLOW_MSG "\\n\";\n"
         "        DWORD w = 0;\n"
         "        WriteFile(GetStdHandle(STD_ERROR_HANDLE), m, (DWORD)(sizeof m - 1), &w, NULL);\n"
         "    }\n"
@@ -13354,9 +13394,10 @@ static void emit_deep_stack_runtime(Buf *out) {
         "    if (getenv(\"TUR_NO_DEEP_STACK\")) return 0;\n"
         "    tur_deep_state_t *s = tur_deep_state();\n"
         "    s->argc = argc; s->argv = argv;\n"
-        "    SIZE_T sz = sizeof(void *) >= 8 ? ((SIZE_T)1 << 30) : ((SIZE_T)64 << 20);\n"
+        "    int asked;\n"
+        "    SIZE_T sz = tur_deep_size(&asked);\n"
         "    HANDLE h = CreateThread(NULL, sz, tur_deep_run, s, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);\n"
-        "    if (!h) return 0;\n"
+        "    if (!h) { if (asked) tur_deep_size_failed(sz); return 0; }\n"
         "    WaitForSingleObject(h, INFINITE);   /* tur_deep_run exits the process */\n"
         "    CloseHandle(h);\n"
         "    return 1;\n"
@@ -17775,6 +17816,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
  * docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md. */
 static void emit_hoisted_includes(Buf *out) {
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        /* A split build's library unit carries none of the program: no stdlib
+         * code needs a header or macro only the program's inline-C asked for,
+         * and writing them made the unit's text -- so its cached object --
+         * one per program (a crew module's `#define CREW_WORKERS 8`). */
+        if (g_emit_split == EMIT_SPLIT_LIB && !g_hoisted_stdlib[i]) continue;
         tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
 }
@@ -19291,10 +19337,17 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             if (ic && ic->code.p && ic->code.len > 0) {
                 /* r7rs-programs-compile-slowly: a stdlib block's file-scope
                  * state is the library unit's (emit_split_state at assembly);
-                 * a program's own block is the client's alone. */
-                bool user_block = split_client && split_item_owner(e) == SPLIT_OWN_USER;
-                inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
-                                             &cprelude_dedup, ic->code.p, ic->code.len);
+                 * a program's own block is the client's alone.  The library
+                 * unit carries none of it: no stdlib code can name the
+                 * program's C, and a program block there made the unit's
+                 * text, so its cached object, one per program -- every
+                 * r7rs-threads-* fixture built its own because a crew module
+                 * `#define`d its worker count. */
+                bool user_block = g_emit_split != EMIT_SPLIT_NONE
+                               && split_item_owner(e) == SPLIT_OWN_USER;
+                if (!(user_block && g_emit_split == EMIT_SPLIT_LIB))
+                    inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
+                                                 &cprelude_dedup, ic->code.p, ic->code.len);
             }
         } else {
             /* r7rs-programs-compile-slowly: a stdlib statement would run in

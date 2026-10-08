@@ -54,3 +54,33 @@ Workaround: drive the loop with `while`, or keep calls through function
 values out of long-running tail-recursive loops.
 
 Found writing `docs/guides/memory-usage-guide.md` (2026-10-05).
+
+## Investigated 2026-10-07 (not fixed)
+
+Two findings that narrow the fix directions, from the repro's emitted C:
+
+- **Why `use1` is on the CPS path at all.** `cps_color_program`
+  (`src/passes/cps.c`) colors any function that makes an unresolved call
+  (`has_indirect`, CPS0.1 rule 3), and `--dump-cps-coloring` reports a
+  different (may-capture) analysis, which is why it says `uncolored`. The rule
+  does not read the callee's effect row, which is why `#fx{}` changed nothing.
+  An un-annotated `(fn [int] int)` parameter really does admit an effectful
+  function (`(handle (use1 ask-plus 1) (Ask [] k) (resume k 10))` prints 11),
+  while a `(fn [int] #fx{} int)` parameter rejects one with TUR-E0009, so a
+  closed empty row would be a sound reason to skip the coloring -- for effects.
+  But the same coloring is what lets a tail call through a procedure value
+  bounce (proper-tail-calls T6), so an exemption must keep tail-position
+  indirect calls colored, or prove the bounce is not needed there.
+- **Why direction 1 is not a one-liner.** In the repro the self call is not a
+  main-body backedge: `loop__cps` hands `use1__cps` a heap join
+  (`dk_frame_resume(loop_j0, ...)`), and the self call is made from the lifted
+  continuation `loop_j0`. So there is no `__tur_cps_self` jump to drain at,
+  and an iteration mark would have to travel in the join's env. Not every
+  registered node is dead there either: `dk_run_impl` reads `k->next` after a
+  `DKK_FRAME` node's function returns, so only `DKK_RESUME_FRAME` nodes (which
+  it tail-calls) and the envs their continuations have already unpacked are
+  free to go.
+
+The closure half of the same retention, an only-invoked closure let-bound in
+a main-body loop, is fixed:
+[closure-let-in-self-tail-loop-leaks](../archive/closure-let-in-self-tail-loop-leaks.md).

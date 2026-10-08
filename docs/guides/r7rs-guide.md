@@ -48,7 +48,10 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   `tur` takes about 9 s on one core, about 4.5 s on four (it compiles in one
   piece per CPU, up to eight; `TUR_PRELUDE_JOBS=<n>` sets the number), and
   later ones about 1 s (on Linux and macOS; Windows still builds each
-  program as one unit). `TUR_PRELUDE_SPLIT=0` builds the
+  program as one unit). Programs share that one cached object; a Debug `tur`
+  keeps a second for programs that import `(scheme eval)`, which link its
+  sanitized interpreter. The cache keeps its 24 most recently used objects,
+  dropping only those unused for a day. `TUR_PRELUDE_SPLIT=0` builds the
   program as a single C unit instead; `TUR_SHOW_CC=1` shows the two
   compiles, or why a program was built as one unit.
 - **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
@@ -447,6 +450,22 @@ changes nothing on the Turmeric side. A Turmeric module `cast`ing a Scheme
 library's string result to `cstr` gets the same copy.
 `tests/run-r7rs-import.sh` pins both directions on both back ends.
 
+A Turmeric module handed a Scheme procedure -- a thunk, a comparator, an
+event handler -- takes it as `any` and calls it directly:
+
+```turmeric
+(defmodule worker
+  (export run-twice)
+  (defn run-twice [thunk : any] : any
+    (thunk)
+    (thunk)))
+```
+
+A call through an `any` is a dynamic call, in every dialect: it is checked
+at run time and answers `any`. A wrong argument count or a value that is not
+a procedure raises a Scheme error object (`wrong number of arguments (2
+given)`, `not a procedure`), which the Scheme caller can `guard`.
+
 ## SRFIs
 
 An SRFI is imported by its number, `(import (srfi N))`, the way Racket's
@@ -627,6 +646,17 @@ What it does not cover:
 - **Memory libc allocates**, and the backtracking trail's arrays (`stdlib/
   trail`), are not scanned: a Scheme value stored only in a `bt` cell
   through the seam is not seen.
+
+**Recursion depth.** A compiled program's `main` runs on a thread with a
+1 GiB stack (64 MiB on a 32-bit host), so a recursive process can go tens of
+millions of calls deep; past that it stops with `stack overflow: recursion
+too deep`. The stack is address space, committed only as deep as the
+recursion goes, but a runaway recursion touches all of it before the message
+prints. `TUR_MAIN_STACK_MB=N` sets the size in MiB: more for a program that
+needs it, less on a small machine where a missing base case should stop
+sooner. A size that cannot be reserved is reported, and `main` then runs on
+the process's own stack. `tur jit` reads the same variable.
+`TUR_NO_DEEP_STACK=1` keeps `main` on the process's own stack.
 
 ## Where it differs from R7RS
 

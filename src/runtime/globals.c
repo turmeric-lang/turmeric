@@ -79,6 +79,11 @@ bool g_needs_winsock = false;
 char    **g_hoisted_includes = NULL;
 uint32_t  g_n_hoisted_includes = 0;
 uint32_t  g_cap_hoisted_includes = 0;
+/* Parallel to g_hoisted_includes: did the stdlib hoist this entry?  A split
+ * build's library unit writes only those (emit_hoisted_includes).  The scan's
+ * caller says whose code it is scanning in g_hoist_origin_stdlib. */
+bool     *g_hoisted_stdlib = NULL;
+bool      g_hoist_origin_stdlib = false;
 
 /* AR8: Variadic rest parameters -- track if any variadic defn is compiled */
 bool g_has_variadics = false;

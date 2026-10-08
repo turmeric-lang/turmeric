@@ -555,6 +555,34 @@ EOF
 
 run_case "library-standard-names-under-import-sets" prog18.tur "((mine 2) none none 77 9 (abs 5) 5)"
 
+# ---- A Turmeric module calls a Scheme procedure it holds as `any`
+# (no-public-dynamic-call-for-any-values).  `(f a b)` on an `any` is a dynamic
+# call in every dialect (868fea84); what this pins beyond
+# tests/fixtures/r7rs-turmeric-calls-scheme-procedure is the failure side: a
+# wrong argument count and a non-procedure raise Scheme error objects that the
+# Scheme caller can `guard`, on both back ends.
+cat > "$TMP/callit.tur" <<'EOF'
+(defmodule callit
+  (export call0 call2)
+  (defn call0 [f : any] : any (f))
+  (defn call2 [f : any a : any b : any] : any (f a b)))
+EOF
+
+cat > "$TMP/prog19.tur" <<'EOF'
+#lang r7rs
+(import (scheme base) (scheme write) (turmeric callit))
+(define (msg thunk)
+  (guard (e ((error-object? e) (error-object-message e))) (thunk)))
+(write (list (call0 (lambda () 42))
+             (call2 (lambda (x y) (list y x)) 1 "two")
+             (call2 + 3 4)
+             (msg (lambda () (call2 (lambda (x) x) 1 2)))
+             (msg (lambda () (call0 5)))))
+(newline)
+EOF
+
+run_case "turmeric-calls-scheme-procedure-errors" prog19.tur '(42 ("two" 1) 7 "wrong number of arguments (2 given)" "not a procedure")'
+
 if [ $FAILED -ne 0 ]; then
     echo "run-r7rs-import: FAILED"
     exit 1

@@ -11275,6 +11275,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (!_have_fld) ctx->pending_ctor_field_ty = NULL;
                     arg_strs[i] = emit_value(ctx, body, arg);
                     ctx->pending_ctor_field_ty = _saved_fld;
+                    /* ok-nil-unconstructible-in-turmeric: a `nil` payload --
+                     * `(Ok nil)` for a `(Result nil E)` -- emits as the void
+                     * expression `((void)0)`, which no parameter can take, so
+                     * the program failed in cc.  The slot is the word an
+                     * inline-C `tur_ok_int(0)` fills: pass 0, and keep the
+                     * argument's own evaluation for its side effects. */
+                    if (arg && arg_strs[i] &&
+                        emit_resolve_type(ctx, arg->type).kind == TY_NIL) {
+                        Buf nb; buf_init(&nb);
+                        buf_printf(&nb, "((void)(%s), INT64_C(0))", arg_strs[i]);
+                        buf_putc(&nb, '\0');
+                        free(arg_strs[i]);
+                        arg_strs[i] = strdup(nb.data);
+                        buf_free(&nb);
+                    }
                     if (_have_fld) free_struct_app_type(_fld_ty);
                     /* CONV-S1 (seam 2): a `(default-of T)` argument to a
                      * monomorphised ctor whose field type is heterogeneous --
@@ -18189,6 +18204,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
          * the ascribed type is a concrete aggregate, insert the bridge so the
          * downstream concrete consumer gets the struct value, not an int64_t. */
         case EX_ASCRIBE: {
+            /* Read and clear before the inner: only THIS erasure is the
+             * compared-with-0 one; one nested inside it is not. */
+            bool compare_only = ctx->region_erasure_compare_only;
+            ctx->region_erasure_compare_only = false;
             char *inner_val = emit_value(ctx, body, e->as.ascribe_.inner);
             /* region-lock-hardening: an ERASING ascription -- a value whose
              * type reaches a region node, ascribed to a type that does not
@@ -18203,7 +18222,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * and costs one compare.  The typed style (a `:copy` sum, a
              * typed `nxt : Link` field, `(Vec Link)`) never takes this path
              * and keeps its rewinds. */
-            if (regions_enabled() && inner_val) {
+            if (regions_enabled() && inner_val && !compare_only) {
                 Type from = emit_resolve_type(ctx, e->as.ascribe_.inner->type);
                 Type to   = emit_resolve_type(ctx, e->type);
                 if (region_ascription_erases_node(ctx, from, to)) {

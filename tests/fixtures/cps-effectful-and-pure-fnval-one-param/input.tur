@@ -1,0 +1,19 @@
+;; One fn-value parameter receives an effectful lambda in one call and pure
+;; fn-values (a named fn, a lambda) in others.  The effectful lambda counted
+;; as threadable because its use is a call argument at a threadable parameter,
+;; but the parameter itself was never threaded: the pure values passed to it
+;; have no registered CPS entry.  So `app` called `h` directly, the lambda's
+;; `perform` started from a fresh root, and the program -- which compiled --
+;; aborted with "unhandled effect".
+(defeffect Ask [] :int)
+
+(defn g [x : int] : int (+ x 1))
+
+(defn app [h : (fn [int] int) x : int] : int (h x))
+
+(defn main [] : int
+  (println (app g 1))
+  (println (handle (app (fn [x : int] : int (+ x (perform (Ask)))) 1)
+             (Ask [] k) (resume k 10)))
+  (println (app (fn [x : int] : int (* x 3)) 5))
+  0)

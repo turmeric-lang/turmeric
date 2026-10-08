@@ -182,6 +182,11 @@ load boundary.
 ;; Resume a continuation with a value -- the same thing as (k v)
 (serial-resume k v) : int
 
+;; Release what a round trip allocated (see "Who frees what" below)
+(serial-resume-owned k v) : int     ; resume a REBUILT k, then free it
+(serial-cont-free k) : nil          ; free a REBUILT k without resuming it
+(serial-bytes-free b) : nil         ; free a buffer from serial-cont->bytes
+
 ;; File helpers over the bytes
 (cont-to-file b path) : int          ; 1 on success
 (cont-from-file path) : ptr<void>    ; NULL on failure
@@ -190,6 +195,24 @@ load boundary.
 `save-cont!` / `resume-cont!` in `stdlib/workflow.tur` are the older spellings
 of `serial-cont->bytes` and "rebuild then resume" (`resume-cont!` aborts on a
 malformed buffer where `bytes->serial-cont` returns `Err`); both surfaces stay.
+
+### Who frees what
+
+The continuation a `serial-shift` receiver is handed is the compiler's: it is
+freed when the receiver is done with it. Everything a round trip makes is the
+program's:
+
+- the buffer from `serial-cont->bytes` (or `save-cont!`, `cont-from-file`) --
+  free it with `serial-bytes-free` once it is written or rebuilt;
+- a continuation from `bytes->serial-cont` -- resume it with
+  `serial-resume-owned`, which resumes and then frees it (a `serial-cont` is
+  consumed by its resume, so there is no later point to free it at), or drop
+  it with `serial-cont-free`.
+
+Never pass the receiver's own `k` to `serial-resume-owned` or
+`serial-cont-free`: it would be freed twice. A rebuilt frame whose env was a
+`cstr` keeps its rebuilt string allocated, because the resumed computation may
+have kept it.
 
 ### The `serial-cont` Type
 

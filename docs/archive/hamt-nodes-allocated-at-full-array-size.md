@@ -1,5 +1,26 @@
 # HAMT bitmap and leaf nodes are allocated at the size of a full 32-slot node
 
+**RESOLVED 2026-10-07.** `bitmap_node_create` / `bitmap_node_copy` now
+allocate `offsetof(HamtNode, as.bitmap.children) + n * sizeof(HamtNode *)`
+and `collision_node_create` / `collision_node_copy` allocate
+`offsetof(HamtNode, as) + sizeof(HamtNodeCollision)` (24 B), through the
+`HAMT_BITMAP_NODE_SIZE` / `HAMT_COLLISION_NODE_SIZE` macros in
+`src/runtime/hamt.c`. Only the array arm is still allocated at
+`sizeof(HamtNode)`. Nothing writes past a node's popcount (every bitmap node
+is built fresh at its final size, transients included), so no reader needed
+to change.
+
+Re-measured with the repro below (massif peak, minus n = 0, over 10000):
+**66.5 B/entry, down from 361.5**. Allocation traffic per insert fell from
+~1650 B to ~716 B at the same ~6.9 allocations. memcheck is clean on the
+repro, and the `tur_hamt_*` and region ctest targets (ASan) pass.
+`hamt.c` is precompiled into the runtime library rather than pasted into the
+emitted preamble, so no fixture snapshot moved.
+
+The leaf is still a node plus a separately malloc'd `HamtEntry` (24 + 32 B);
+storing a single-entry leaf inline would save one allocation per key. Not
+done: it is a second, smaller saving and touches every collision-chain walk.
+
 **Severity: medium (memory, not correctness).** A persistent `Map int int`
 holds ~360 bytes of live heap per entry, against ~78 for `MutableMap` and ~19
 for a `Vec int`. Most of it is padding no node ever uses.

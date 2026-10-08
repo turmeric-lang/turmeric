@@ -1,5 +1,37 @@
 # `#lang r7rs`: the deep stack's size is fixed at 1 GiB
 
+**RESOLVED 2026-10-07.** `TUR_MAIN_STACK_MB=N` sizes the stack a compiled
+`#lang r7rs` program's `main` runs on, in MiB (`tur_deep_size`, emitted by
+`emit_deep_stack_runtime` in `src/compiler/emit_module.c`, both the pthread
+and the Windows branch). `tur jit` reads the same variable for its entry
+stack (`src/jit_engine.c`); `TUR_JIT_STACK_MB` stays as the older JIT-only
+name and wins when both are set. `TUR_NO_DEEP_STACK=1` is still the off
+switch.
+
+- A value that is not a positive number is reported on stderr
+  (`tur: ignoring TUR_MAIN_STACK_MB=abc ...`) and the default is used. The
+  JIT used to `atoi` it, so an oversized value wrapped.
+- A configured size the host cannot reserve is reported (`tur: cannot make a
+  N MiB stack for main (TUR_MAIN_STACK_MB); running it on the default
+  stack`) and `main` runs where it is, as before. An unconfigured failure
+  stays silent.
+- Measured: with `TUR_MAIN_STACK_MB=16` a runaway recursion prints the
+  overflow message at an 18 MB peak RSS; at 256 the peak is 258 MB. That
+  makes the message testable, so it is pinned now:
+  `tests/check-r7rs-main-stack-size.sh` (ctest `tur_r7rs_main_stack_size`)
+  runs a shallow and a runaway recursion at 16 MiB, a non-numeric value and
+  an unreservable size.
+
+**Not done:** the name. The fix direction suggested `TUR_STACK_MB`, but that
+variable already sizes the compiler's own driver stack (`stack_guard.h`,
+default 256), and the diagnostics that tell a user to raise it are about
+compiling. One variable for both would make raising one silently raise the
+other, so the program's stack got its own name. **Also not done:** a
+build-time default (a `build.tur` key or flag) and a smaller default; the
+default stays 1 GiB, which SICP's twenty-million-deep linear recursion
+needs. Documented in `docs/guides/r7rs-guide.md` (Memory), the SICP guide's
+"When something goes wrong", and the JIT guide's variable table.
+
 **Severity:** low. **Depends on PR #1082** (not on `main` when filed). After
 #1082, a compiled `#lang r7rs` program runs `main` on a thread with a 1 GiB
 stack on 64-bit hosts (64 MiB on 32-bit). The only setting is on or off

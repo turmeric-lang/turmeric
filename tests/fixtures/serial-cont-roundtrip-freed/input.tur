@@ -1,0 +1,39 @@
+;; serial-cont-escaped-or-deserialized-chain-leaks, shape 2: a serial-cont
+;; rebuilt by bytes->serial-cont, and the bytes serial-cont->bytes returned,
+;; belong to the program and nothing freed them.  A serial-cont is consumed by
+;; its resume, so serial-resume-owned resumes and releases in one step,
+;; serial-cont-free drops one that is never resumed, and serial-bytes-free
+;; releases the buffer.  requires.leak-check holds both round trips leak-clean.
+;; (An int-env context frame: a rebuilt cstr-env frame's string is deliberately
+;; left allocated, since a resumed run may have kept it.)
+(load "stdlib/serial.tur")
+
+(defn page [n : int hole : int] : int (+ hole n))
+
+;; rebuilt, resumed, released
+(defn roundtrip [k : serial-cont x : int] : int
+  (let [b (serial-cont->bytes k)]
+    (match (bytes->serial-cont b)
+      (Ok k2)  (let [r (serial-resume-owned k2 x)]
+                 (serial-bytes-free b)
+                 r)
+      (Err m)  (do (println m) (serial-bytes-free b) -1))))
+
+;; one buffer, rebuilt twice: one copy dropped unresumed, the other resumed
+(defn rebuild-twice [k : serial-cont] : int
+  (let [b (serial-cont->bytes k)]
+    (match (bytes->serial-cont b)
+      (Ok k2) (serial-cont-free k2)
+      (Err m) (println m))
+    (let [r (match (bytes->serial-cont b)
+              (Ok k3) (serial-resume-owned k3 9)
+              (Err m) (do (println m) -1))]
+      (serial-bytes-free b)
+      r)))
+
+(defn recv [k : serial-cont] : int (roundtrip k 41))
+
+(defn main [] : int
+  (println (serial-reset (page 1 (serial-shift recv 0))))
+  (println (serial-reset (page 1 (serial-shift rebuild-twice 0))))
+  0)

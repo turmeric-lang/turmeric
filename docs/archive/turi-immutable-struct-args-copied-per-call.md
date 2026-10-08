@@ -1,5 +1,36 @@
 # `tur --interpret`: every call copies `any` boxes and never-written structs, so arguments are most of what an r7rs run keeps
 
+**RESOLVED 2026-10-07** by fix directions 1 and 2 together.
+`turi_copy_byvalue_struct_arg` (`src/turi/eval.c`) now copies an argument only
+when `turi_struct_arg_may_be_written` says a write could reach it: the value's
+ADT has a field write somewhere in the program, or a by-value struct inside it
+does. Turmeric writes a struct field only with `(set! (.f x) v)`, and its one
+construction site (`elab_set_field`, `src/compiler/elab_forms.c`) now sets
+`AdtDef.field_written` on the receiver's ADT. An `any` box is never written
+itself (EX_ANY_CAST only reads its payload), so it is exactly as writable as
+its payload: a box over a symbol, a char or an int is never copied, and a box
+over `R7rsNull` is not either, since no program writes that type. `__rc` and
+`:heap` values stop the walk as before; a struct without a constructor record
+is assumed writable and still copied.
+
+Measured, Release `tur`: `r7rs-srfi-14` peaks at **48 MB, down from 132 MB**,
+same output. A symbol and `'()` passed through 600,000 calls grow peak RSS by
+0 MB (was ~32 MB Release; 78 MB Debug with ASan's quarantine off). The
+compiled backend is untouched and still agrees on write semantics: a `^mut`
+parameter written directly, a by-value field written through its own
+parameter, and a callee's `(let [^mut q p] (set! (.x q) ...))` all leave the
+caller's value alone on both back ends.
+
+Pinned by the second program in `tests/check-turi-frame-reclaim.py` (ctest
+`tur_turi_frame_reclaim`), which bounds that growth at 16 MB, with ASan's free
+quarantine off so a Debug `tur` measures live memory. `tests/run-turi.sh`
+(2652) and `tests/run.sh` (3604) are green.
+
+**Not done:** direction 3 (copy on write). One known looseness of the flag:
+under the REPL, a field write elaborated in a later turn does not reach values
+an earlier turn already passed uncopied. Observing it needs the earlier value
+stored somewhere long-lived and then written through a `^mut` alias.
+
 **Severity:** medium (interpreter memory and time). Under `tur --interpret`,
 every by-value struct argument is deep-copied into the value pool at every
 call. Most copies are of values nothing can write through, such as an `any`

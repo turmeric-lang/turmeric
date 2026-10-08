@@ -1,5 +1,26 @@
 # `tur --interpret`: a call's tyvar/dictionary pins, and frames made off the driver's call path, are never handed back
 
+**Narrowed 2026-10-07: section 1 is fixed, and `EX_EXISTS_OPEN` from
+section 2.** A released frame's `TyvarBind` and `DictBind` chains go onto
+free lists beside `frame_free` / `binding_free` (`env->tyvar_free`,
+`env->dict_free`, emptied with them at a scratch reset), and every pin site
+takes its node from them (`tyvar_bind_alloc` / `dict_bind_alloc`,
+`src/turi/eval.c`). The check the fix asked for holds: each site prepends a
+fresh node to its own frame's chain, `frame_record_abi` copies a caller's pin
+by value, and lookups copy the `Type` out, so nothing points at a released
+frame's nodes. `EX_EXISTS_OPEN`'s frame is now `eval_frame_new_owned`: its
+body runs synchronously, the same shape as a `let` frame.
+
+Measured: a generic function called 300,000 times grew a Debug `tur`'s peak
+RSS by 51 MB (ASan quarantine off) and now by none; `r7rs-srfi-14` (Release)
+peaks at 42 MB, from 48. Pinned by the third program in
+`tests/check-turi-frame-reclaim.py`. **Still open:** the rest of section 2 --
+the fiber handler case frame, `reset`/`shift` capture frames, the work-stack
+perform's `hf`
+([turi-effect-perform-keeps-its-continuation](../archive/turi-effect-perform-keeps-its-continuation.md))
+and the defer snapshot -- each of which needs a proof that its continuation
+or `DeferItem` is done with it.
+
 **Severity:** low (interpreter memory). These are what the 2026-10-05
 call-frame reclamation
 ([turi-call-frames-never-reclaimed](../archive/turi-call-frames-never-reclaimed.md))
@@ -44,7 +65,7 @@ never released:
 | --- | --- |
 | `eval_handle_inner` (eval.c:3279) | the fiber effect path's handler case frame |
 | `ts_capture_and_run` (4115) | `reset`/`shift` capture frames |
-| work-stack perform (9329) | the handler case frame `hf`; see [turi-effect-perform-keeps-its-continuation](turi-effect-perform-keeps-its-continuation.md) |
+| work-stack perform (9329) | the handler case frame `hf`; see [turi-effect-perform-keeps-its-continuation](../archive/turi-effect-perform-keeps-its-continuation.md) |
 | `EX_EXISTS_OPEN` in `eval_expr_impl` (12849) | the opened existential's frame |
 | `EX_DEFER` (12035) | the defer's value snapshot (parentless) |
 | closure/tyvar wrapper frames (11619, 13153, 16595) | parentless frames a closure captures; these escape by construction |
