@@ -9204,8 +9204,15 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
         g_lh_join_release = false;
         char *envexpr = emit_cont_env(ce, jname, caps);   /* caps-only env */
-        snprintf(frame, sizeof frame,
-                 "__dk_reap_node(dk_frame_resume_join(%s, %s, %s))", jname, envexpr, ce->cur_k);
+        /* async-repeated-park-holds-frames-until-settle: a sized env, so a
+         * parked copy of the join owns a copy of it (dk_env_sized). */
+        if (caps)
+            snprintf(frame, sizeof frame,
+                     "__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))",
+                     jname, envexpr, ce->cur_k, jname);
+        else
+            snprintf(frame, sizeof frame,
+                     "__dk_reap_node(dk_frame_resume_join(%s, %s, %s))", jname, envexpr, ce->cur_k);
         free(envexpr);
     } else {
         emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
@@ -11136,7 +11143,7 @@ static void emit_await(CE *ce, const CTerm *t) {
         ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, %s));",
                 fsa, ce->cur_k);
         ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
-        ce_line(ce, "__dk_await_release(__aws, NULL);");
+        ce_line(ce, "__dk_await_release(__aws, NULL, __tur_future_pending((void *)(%s)));", fsa);
         ce_line(ce, "return __awq;");
     } else if (perform_body_ok(t->as.await.body)) {
         /* Straight-line continuation (F3.1): a value-transform frame whose result
@@ -11174,12 +11181,16 @@ static void emit_await(CE *ce, const CTerm *t) {
         ce_line(ce, "    if (tur_panicking) return 0;");
         ce_line(ce, "    return dk_run(%s, __awr);", ce->cur_k);
         ce_line(ce, "}");
-        ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame(%s, (intptr_t)%s, %s));",
-                pname, envv, ce->cur_k);
+        if (caps)
+            ce_line(ce, "DK *__awf = __dk_reap_node(dk_env_sized(dk_frame(%s, (intptr_t)%s, %s), sizeof(%s_env)));",
+                    pname, envv, ce->cur_k, pname);
+        else
+            ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame(%s, (intptr_t)%s, %s));",
+                    pname, envv, ce->cur_k);
         ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
                 fsa);
         ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
-        ce_line(ce, "__dk_await_release(__aws, __awf);");
+        ce_line(ce, "__dk_await_release(__aws, __awf, __tur_future_pending((void *)(%s)));", fsa);
         ce_line(ce, "return __awq;");
     } else {
         /* F3 gap-2: a bounded full CPS continuation (a branch or a further
@@ -11214,12 +11225,16 @@ static void emit_await(CE *ce, const CTerm *t) {
         char *envexpr = emit_cont_env(ce, aname, caps);   /* caps-only env, reaped */
         ce_line(ce, "if (__awok) return %s(%s, __tur_await_value((void *)(%s)), %s);",
                 aname, envexpr, fsa, ce->cur_k);
-        ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame_resume_borrow(%s, %s, %s));",
-                aname, envexpr, ce->cur_k);
+        if (caps)
+            ce_line(ce, "DK *__awf = __dk_reap_node(dk_env_sized(dk_frame_resume_borrow(%s, %s, %s), sizeof(%s_env)));",
+                    aname, envexpr, ce->cur_k, aname);
+        else
+            ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame_resume_borrow(%s, %s, %s));",
+                    aname, envexpr, ce->cur_k);
         ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
                 fsa);
         ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
-        ce_line(ce, "__dk_await_release(__aws, __awf);");
+        ce_line(ce, "__dk_await_release(__aws, __awf, __tur_future_pending((void *)(%s)));", fsa);
         ce_line(ce, "return __awq;");
         free(envexpr);
     }

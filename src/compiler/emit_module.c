@@ -16480,6 +16480,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "__attribute__((unused)) static intptr_t __tur_await_value(void *fp) {\n");
     buf_puts(out, "    return (intptr_t)((TurFuture *)fp)->value;\n");
     buf_puts(out, "}\n\n");
+    /* async-repeated-park-holds-frames-until-settle: asked once an await's
+     * shift has returned.  Only the shift's own park leaves the awaited future
+     * pending -- __tur_await_body resumes inline whenever it finds it done --
+     * so this says whether that shift parked (__dk_await_release). */
+    buf_puts(out, "__attribute__((unused)) static int __tur_future_pending(void *fp) {\n");
+    buf_puts(out, "    return fp && ((TurFuture *)fp)->status == FUTURE_PENDING;\n");
+    buf_puts(out, "}\n\n");
 
     /* F3 (cps-async): the shift body for an `await` lowered to a heap
      * continuation.  `env` is the awaited future; `subk` is the captured
@@ -16525,7 +16532,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    /* pending: park a private copy of the captured continuation on on_complete */\n");
     buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));\n");
     buf_puts(out, "    if (!rec) { fprintf(stderr, \"await: oom\\n\"); abort(); }\n");
-    buf_puts(out, "    rec->subk = dk_copy_range(subk, NULL);\n");
+    /* async-repeated-park-holds-frames-until-settle: the park owns its sized
+     * frames' envs, so the originals' can go when its entry hands off. */
+    buf_puts(out, "    rec->subk = dk_copy_range_owned(subk, NULL);\n");
     buf_puts(out, "    rec->outer = NULL;  /* patched by the async boundary (tur_async_fiber) */\n");
     buf_puts(out, "    rec->depth = __dk_entry_depth;  /* the entry whose root this shift reached */\n");
     buf_puts(out, "    f->on_complete.fn = (void (*)(TurFuture *, int64_t))__tur_async_resume;\n");

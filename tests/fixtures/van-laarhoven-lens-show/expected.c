@@ -2145,8 +2145,12 @@ struct DK {
     bool consumed;     /* (cont? k): a handler-case continuation is unconsumed until
                         * the program `resume`s it; set at the user resume site so
                         * `cont?` can read `!k->consumed` (matches the fiber path). */
-    bool copied;       /* dk_copy_node has copied this node: a copy may share its env */
+    uint8_t ncopy;     /* times dk_copy_node copied this node (255 = many) */
     bool join_once;    /* heap-join frame: may be reclaimed when it runs uncopied */
+    bool orphaned;     /* an original an await's shift ran only as copies */
+    bool orphan_env;   /* ...and the shift that parked was its only copy */
+    bool env_owned;    /* this copy owns a private copy of the env */
+    uint16_t env_size; /* sizeof the env struct, 0 when unknown */
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -2261,12 +2265,25 @@ static DK *dk_hgroup_from_table(const tur_handler_table_t *t, DK *base) {
     }
     return dk_hgroup(head);
 }
+static intptr_t __dk_env_dup(intptr_t env, size_t size) {
+    void *c = malloc(size);
+    memcpy(c, (const void *)env, size);
+    return (intptr_t)c;
+}
+/* Record the size of a frame's env struct, so a parked copy can own a copy
+ * of it.  Not for an E3a owning frame, whose clone glue already copies it. */
+__attribute__((unused)) static DK *dk_env_sized(DK *k, size_t size) {
+    if (k->env && !k->env_clone && size <= 0xFFFF) k->env_size = (uint16_t)size;
+    return k;
+}
 static DK *dk_copy_node(const DK *n);
 static DK *dk_copy_node(const DK *n) {
-    ((DK *)n)->copied = true;
+    if (n->ncopy != 255) ((DK *)n)->ncopy++;
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->tag = n->tag;
     c->env = n->env_clone ? n->env_clone(n->env) : n->env;
     c->env_clone = n->env_clone; c->env_drop = n->env_drop;
+    c->env_size = n->env_size;
+    if (n->env_owned) { c->env = __dk_env_dup(n->env, n->env_size); c->env_owned = true; }
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
     c->tail_resume = n->tail_resume;
@@ -2317,6 +2334,15 @@ static DK *dk_copy_range(const DK *from, const DK *stop) {
     }
     return head;
 }
+/* A copy whose sized frames own their envs (async-repeated-park-holds-
+ * frames-until-settle): a parked continuation, which outlives the entry
+ * that built the originals. */
+__attribute__((unused)) static DK *dk_copy_range_owned(const DK *from, const DK *stop) {
+    DK *head = dk_copy_range(from, stop);
+    for (DK *c = head; c; c = c->next)
+        if (c->env_size && !c->env_owned) { c->env = __dk_env_dup(c->env, c->env_size); c->env_owned = true; }
+    return head;
+}
 static DK *dk_append(DK *a, DK *b) {
     if (!a) return b;
     DK *p = a;
@@ -2326,12 +2352,12 @@ static DK *dk_append(DK *a, DK *b) {
 }
 static int tur_dk_pinned = 0;
 #define TUR_DK_PIN 1
-static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
+static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); else if (k->env_owned) free((void *)k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
  * (dk_free would walk into that continuation and risk a double free).  See
  * docs/archive/cps-delimited-dk-node-leak.md. */
-__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); free(k); }
+__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); else if (k && k->env_owned) free((void *)k->env); free(k); }
 /* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
 typedef intptr_t (*__tur_cps_fn)();
 static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
@@ -2454,8 +2480,10 @@ static void __dk_reap_push(void *p, unsigned char kind) {
 __attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }
 __attribute__((unused)) static intptr_t __dk_reap_ptr(intptr_t p) { __dk_reap_push((void *)p, 0); return p; }
 /* Register a single spliced node (->next points into an enclosing k) for a
- * single-node free at reap -- dk_free would walk into the enclosing chain. */
-__attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 0); return k; }
+ * single-node free at reap -- dk_free would walk into the enclosing chain.
+ * Kind 3, freed like kind 0, but known to be a node: a park's hand-off reads
+ * its `orphaned` flag (__dk_reap_seg_take). */
+__attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 3); return k; }
 __attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }
 __attribute__((unused)) static void __dk_reap_closure_now(intptr_t p) {
     if (tur_dk_pinned) return;
@@ -2502,14 +2530,31 @@ __attribute__((unused)) static void __dk_reap_seg_add(__dk_reap_seg *s, void *p,
     __dk_reap_seg_reserve(s, 1);
     s->v[s->n] = p; s->kind[s->n] = kind; s->n++;
 }
+/* async-repeated-park-holds-frames-until-settle: the originals the parked
+ * await's shift left behind are freed here instead of moving: an `orphaned`
+ * node, and its env too when `orphan_env` says nothing else shared it then
+ * and `ncopy` says nothing copied it since (the entry's code may run on
+ * after a park -- a handler case carrying on with its placeholder).  The env
+ * is registered right before its node (emit_cont_env, then the frame), so it
+ * is the entry just taken; one registered elsewhere stays. */
 __attribute__((unused)) static void __dk_reap_seg_take(__dk_reap_seg *s, size_t mark) {
     if (mark >= __dk_reap_n) return;
     size_t k = __dk_reap_n - mark;
     __dk_reap_seg_reserve(s, k);
-    memcpy(s->v + s->n, __dk_reap_v + mark, k * sizeof(void *));
-    memcpy(s->kind + s->n, __dk_reap_kind + mark, k);
-    s->n += k;
-    for (size_t i = mark; i < __dk_reap_n; i++) __dk_reap_v[i] = NULL;
+    for (size_t i = mark; i < __dk_reap_n; i++) {
+        void *p = __dk_reap_v[i]; unsigned char kd = __dk_reap_kind[i];
+        __dk_reap_v[i] = NULL;
+        if (kd == 3 && !tur_dk_pinned && ((DK *)p)->orphaned) {
+            DK *d = (DK *)p;
+            if (d->orphan_env && d->ncopy == 1 && s->n && s->v[s->n - 1] == (void *)d->env && s->kind[s->n - 1] == 0) {
+                s->n--;
+                free((void *)d->env);
+            }
+            free(d);
+            continue;
+        }
+        s->v[s->n] = p; s->kind[s->n] = kd; s->n++;
+    }
     __dk_reap_n = mark;
 }
 /* `from`'s entries go first in `to` (they are the older); `from` is emptied. */
@@ -2531,25 +2576,44 @@ __attribute__((unused)) static void __dk_reap_seg_give(__dk_reap_seg *s) {
 }
 __attribute__((unused)) static bool __dk_join_release_node(DK *k) {
     size_t n = __dk_reap_n;
-    if (tur_dk_pinned || k->copied || !n || __dk_reap_v[n - 1] != (void *)k
-        || __dk_reap_kind[n - 1] != 0) return false;
+    if (tur_dk_pinned || k->ncopy || !n || __dk_reap_v[n - 1] != (void *)k
+        || __dk_reap_kind[n - 1] != 3) return false;
     __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
     free(k); return true;
 }
 /* async-parked-body-chains-never-reaped: an await's shift node, and the
  * frame it shifts over, once dk_run has returned from the shift: the shift
  * arm ran (or parked) a COPY of the frame, so neither original is reachable.
- * Taken back while each is the list's last entry, as a join is; the frame's
- * env stays registered for the copy that shares it.  NULL frame: the
- * shift's next is the caller's continuation, not the await's to free. */
-__attribute__((unused)) static void __dk_await_release(DK *s, DK *f) {
+ * Taken back while each is the list's last entry, as a join is.  NULL frame:
+ * the shift's next is the caller's continuation, not the await's to free.
+ *
+ * async-repeated-park-holds-frames-until-settle: the same is true of every
+ * original between the shift and the prompt it reached -- only copies of
+ * them run from here on -- so each is marked `orphaned`, for the park's
+ * hand-off to free.  `parked` (the awaited future is still pending, which
+ * only the shift's own park leaves it) means the one copy taken, the shift
+ * arm's, was copied on into the park, which owns its envs; an original that
+ * no other copy was ever taken of (ncopy 1) then shares its env with
+ * nothing: `orphan_env`.  The frame's env goes back here when it is the
+ * list's last entry. */
+__attribute__((unused)) static void __dk_await_release(DK *s, DK *f, int parked) {
+    if (tur_dk_pinned) return;
+    s->orphaned = true;
+    for (DK *p = s->next; p && !(p->kind == DKK_PROMPT && p->tag == s->tag) && p->kind != DKK_DONE; p = p->next) {
+        p->orphaned = true;
+        if (parked && p->ncopy == 1 && p->env_size && !p->env_owned) p->orphan_env = true;
+    }
     size_t n = __dk_reap_n;
-    if (tur_dk_pinned || !n || __dk_reap_v[n - 1] != (void *)s || __dk_reap_kind[n - 1] != 0) return;
+    if (!n || __dk_reap_v[n - 1] != (void *)s || __dk_reap_kind[n - 1] != 3) return;
     __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
     free(s);
-    if (!f || !n || __dk_reap_v[n - 1] != (void *)f || __dk_reap_kind[n - 1] != 0) return;
-    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    if (!f || !n || __dk_reap_v[n - 1] != (void *)f || __dk_reap_kind[n - 1] != 3) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+    intptr_t fe = f->env; bool fe_free = f->orphan_env;
     free(f);
+    if (!fe_free || !n || __dk_reap_v[n - 1] != (void *)fe || __dk_reap_kind[n - 1] != 0) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    free((void *)fe);
 }
 __attribute__((unused)) static void __dk_join_release_env(intptr_t env) {
     size_t n = __dk_reap_n;
@@ -3918,6 +3982,10 @@ __attribute__((unused)) static intptr_t __tur_await_value(void *fp) {
     return (intptr_t)((TurFuture *)fp)->value;
 }
 
+__attribute__((unused)) static int __tur_future_pending(void *fp) {
+    return fp && ((TurFuture *)fp)->status == FUTURE_PENDING;
+}
+
 static intptr_t __tur_await_body(intptr_t env, DK *subk) {
     TurFuture *f = (TurFuture *)(intptr_t)env;
     if (!f) { fprintf(stderr, "await: null future\n"); abort(); }
@@ -3953,7 +4021,7 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
     /* pending: park a private copy of the captured continuation on on_complete */
     TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));
     if (!rec) { fprintf(stderr, "await: oom\n"); abort(); }
-    rec->subk = dk_copy_range(subk, NULL);
+    rec->subk = dk_copy_range_owned(subk, NULL);
     rec->outer = NULL;  /* patched by the async boundary (tur_async_fiber) */
     rec->depth = __dk_entry_depth;  /* the entry whose root this shift reached */
     f->on_complete.fn = (void (*)(TurFuture *, int64_t))__tur_async_resume;
@@ -8287,7 +8355,7 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
         _un_uncons_hyfmap_j0_env *__ce__un_uncons_hyfmap_j0 = (_un_uncons_hyfmap_j0_env *)malloc(sizeof(_un_uncons_hyfmap_j0_env));
         __ce__un_uncons_hyfmap_j0->f0 = __t1;
         __dk_reap_ptr((intptr_t)__ce__un_uncons_hyfmap_j0);
-        return _un_uncons_hyfmap__cps(__t3, f, __dk_reap_node(dk_frame_resume_join(_un_uncons_hyfmap_j0, (intptr_t)__ce__un_uncons_hyfmap_j0, __kont))); /* cps->cps heap join */
+        return _un_uncons_hyfmap__cps(__t3, f, __dk_reap_node(dk_env_sized(dk_frame_resume_join(_un_uncons_hyfmap_j0, (intptr_t)__ce__un_uncons_hyfmap_j0, __kont), sizeof(_un_uncons_hyfmap_j0_env)))); /* cps->cps heap join */
     }
 }
 __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
