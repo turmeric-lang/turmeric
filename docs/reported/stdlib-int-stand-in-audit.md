@@ -1,7 +1,31 @@
 # stdlib: `:int` stand-ins for callbacks and container payloads
 
-**Status:** Reported
-**Severity:** Design defect / expressiveness hole. Highest subset: **38 callback
+**Status:** Reported -- most of it landed; the residue is below.
+**Severity: low-medium (design debt) -- downgraded from "S1 subset high"
+2026-10-08.** What made it high is gone: since 2026-09-28 no
+`^fat <name> : int` callback is left in `stdlib/`, so no Turmeric closure
+parameter has an unchecked shape any more (see "Done 2026-09-28"). S2 landed
+13 of 19 sites (ref, chan, atomic) and S3 landed both items (`json/bool`,
+`either.tur`). What is left, none of it a silent wrong answer:
+
+- **S1, the `ptr<void>` callbacks** (`timer-set`, `scheduler-timeout`,
+  `once-call`, `hamt/map` / `hamt/filter`, `fiber-new`, `register-test`) --
+  raw C code pointers handed to C APIs, not Turmeric closures. They want a C
+  function-pointer type or a fat-to-C trampoline: a design item, not a
+  signature pass.
+- **S2, 6 sites**: `dfs-set` (unblocked 2026-09-25, but `(BtCell A)` breaks
+  every caller that spells bare `BtCell`), `future.tur`'s 4 (a 34-`defn`
+  module redesign -- `(Future A E)`, `future-get` returning `(Result A E)`),
+  and `fiber-yield` (no handle to carry a type). A `float` into any of them is
+  still a loud `TUR-E0001`. A by-value struct no longer fails in cc, as
+  measured below: re-measured 2026-10-08, `(future-of (Pt 42))` checks and
+  runs. The struct is erased into the word, so the type is lost on the way
+  back.
+
+The `TUR_REGION_NOTE` gaps noted under `fiber-yield` are fixed (`fiber.tur`
+carries 2, `future.tur` 4).
+
+**Original severity (2026-09-16):** Design defect / expressiveness hole. Highest subset: **38 callback
 parameters whose signature is entirely unchecked** -- any arity, any argument
 types, any return type is accepted. Second subset: **19 container/cell payload
 parameters declared `:int`**, which cannot carry a `float` at all and accept a
