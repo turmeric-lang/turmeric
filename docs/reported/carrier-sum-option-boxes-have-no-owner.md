@@ -342,3 +342,62 @@ That is three new pieces of ownership plumbing, with a double free as the
 failure mode, for ~40-72 B a call on a path no stdlib function takes. It stays
 where this report always put it: end-to-end monomorphization, which deletes
 the boxes rather than owning them.
+
+## Investigated further 2026-10-08 -- two corrections, one split-out fix
+
+**1. LeakSanitizer's default roots under-count this sweep.** Its default
+scans every stack and register, and a stale copy of a pointer in a dead frame
+keeps a leaked block "reachable". With `LSAN_OPTIONS=use_stacks=0:use_registers=0`
+the same sweep reads **1984 B** against 1857:
+
+| row | default | stack/register roots off |
+| --- | ---: | ---: |
+| `hkt-constrained-byvalue-bind-pure` | 72 | **112** (the second call's closure env and result box) |
+| `re-string` | 516 | 548 |
+| `httpd-req-string-opt` | 109 | 126 |
+| `option-niche-crossings` | 226 | 245 |
+| `option-niche-string` | 22 | 41 |
+
+Every other row is unchanged. `tests/run-leak-check.sh` runs with stack and
+register roots off from now on. Its 127 fixtures pass either way, so the gate
+cost nothing to tighten. Earlier rows in this report were measured with the
+default and may be low by the same mechanism.
+
+**2. The 24 B in two of the `:int`-reader rows is not the `:int` reader.**
+`conv-defstruct-option-hkt-instance-bodies` and
+`hkt-stdlib-option-result-instances` each leak the env of a capturing closure
+held in a by-value `(some (fn ...))` local. That is a general gap with no
+`:int` in it: a by-value Option/Result local never released an owning
+payload. It is split out as
+[sum-closure-payload-never-dropped](sum-closure-payload-never-dropped.md),
+and its direct shapes (a `match` that only calls the closure, a tag predicate)
+are fixed. These two rows hand the local to `ap`, a shape that is still
+open there, so their bytes do not move yet.
+
+With both corrections, this report's own residue is **400 B**:
+
+| Category | Bytes |
+| --- | ---: |
+| `:int` inline-C readers (176 less the two 24 B envs above) | 128 |
+| dictionary dispatch inside a constrained generic | 256 |
+| `ptr<void>`-erased closure (`option-map-capturing-closure`) | 16 |
+
+plus `colored-generic-erased-carrier-param`'s known 16 B.
+
+**3. The dictionary-dispatch row, attributed per allocation** (bind-pure,
+roots off). Each Route B clone call leaks:
+
+- the spill box copying the by-value `x` for the dict-dispatched `bind`;
+- the env of the `(fn [v] (pure ...))` continuation, when `bind` takes the
+  `Some` path;
+- `pure`'s `Some` box, which `main`'s bridge reads back by value.
+
+The clones share one body (`make_dict_clone`, `cf->body = orig->body`, dict
+param bindings memoized on the original), so pinning a clone to its instances
+means either copying the body per clone or resolving each dict-slot call at
+emit. Neither existing mask can then key a free: `bind` returns a pointer, so
+its `nonretain_sum_param_mask` is never set, and its result is "fresh through
+its continuation param", which the clone does not export. The design note
+above stands. One more constraint is now on record: a sum-param mask says
+nothing about closures inside the sum (see the split-out report), so it
+cannot be reused for the continuation's env either.
