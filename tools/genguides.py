@@ -1115,6 +1115,8 @@ GUIDE_CSS = '''\
     .guide-content hr { height:0; border:0; border-top:1px solid var(--border-mid); margin:2rem 0; }
     .guide-content hr:first-child { margin-top:0; }
     .guide-content hr:last-child { margin-bottom:0; }
+    .guide-content .table-scroll { max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; margin-bottom:1rem; }
+    .guide-content .table-scroll table { margin-bottom:0; }
     .guide-content table { border-collapse:collapse; width:100%; margin-bottom:1rem; font-size:0.9rem; }
     .guide-content th { background:var(--bg-surface); border:1px solid var(--border); padding:0.5rem 0.75rem; text-align:left; color:var(--gold-bright); }
     .guide-content td { border:1px solid var(--border); padding:0.5rem 0.75rem; }
@@ -1174,6 +1176,17 @@ def render_task_lists(body_html: str) -> str:
 # swallowing everything after the first `<`.
 _MERMAID_BLOCK_RE = re.compile(
     r'<pre><code class="language-mermaid">(.*?)</code></pre>', re.DOTALL)
+
+
+def wrap_tables(body_html: str) -> str:
+    """Wrap each <table> in a scroll container.
+
+    A table wider than the column scrolls inside its own box instead of
+    stretching the page (and, in the offline docs pane, the whole panel).
+    """
+    return re.sub(r'<table\b.*?</table>',
+                  lambda m: f'<div class="table-scroll">{m.group(0)}</div>',
+                  body_html, flags=re.S)
 
 
 def render_mermaid_blocks(body_html: str) -> str:
@@ -1565,6 +1578,7 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
     fence_errors = unrendered_fences(body_html)
     body_html = inject_syntax_toggles(body_html)
     body_html = render_task_lists(body_html)
+    body_html = wrap_tables(body_html)
     body_html = render_mermaid_blocks(body_html)
     toc_tokens = getattr(conv, 'toc_tokens', [])
 
@@ -1816,6 +1830,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
         <h1 style="font-family:system-ui;color:var(--gold)">Guides</h1>
         <div class="module-path guide-count">There are currently {len(all_stems)} tutorials, how-tos, and in-depth feature guides for Turmeric.</div>
         <p class="module-path">Visit the <a href="https://spices.turmeric-lang.com/">Spices</a> page for spice-specific guides.</p>
+        <p class="module-path">For docs for the Trowel editor, <a href="https://github.com/turmeric-lang/trowel#using-trowel">go here</a>.</p>
       </div>
 {recent_html}
       <div class="index-grid">

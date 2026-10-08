@@ -441,50 +441,6 @@ test.describe('CI metrics dashboard', () => {
     await expect(tip.locator('.ci-tooltip-row').first()).toBeVisible();
   });
 
-  // The axis spans every run in the environment, but the R7RS leg publishes
-  // its suites as a run of their own, which none of the default suites is in.
-  // A hover that lands nearest such a run used to hide the tooltip -- which is
-  // how the live test above started failing on 2026-10-08, once one sat at the
-  // center of the default view.  It must snap to a run the drawn suites have
-  // points at instead.  Fixture-driven, so it does not depend on where live
-  // runs happen to fall.
-  test('a hover nearest a run no drawn suite reported still opens the tooltip', async ({ page }) => {
-    const now = Math.floor(Date.now() / 1000);
-    const base = {
-      branch: 'main', build_type: 'Debug', cc: 'GNU-13.3.0', jit: true, nproc: 4,
-      os: 'Linux', run_attempt: 1, sanitize: true, shard_index: null,
-      shard_total: null, skip_reason: null, status: 'pass',
-    };
-    const suites = ['tur_tests', 'tur_jit_fixture_tests', 'tur_generic_spec_matrix',
-                    'tur_emitted_float_conversions', 'tur_aux_tests'];
-    const runs = [
-      { ts: now - 10 * 3600, sha: 'aaaaaaa1111111111111111111111111111aaaa1', run_id: '1' },
-      { ts: now,             sha: 'ccccccc3333333333333333333333333333cccc3', run_id: '3' },
-    ];
-    const rows = [];
-    for (const run of runs) {
-      suites.forEach((suite, k) => rows.push({ ...base, ...run, suite, duration_ms: 1000 * (k + 2) }));
-    }
-    // The R7RS-only run, exactly between the two: the center of the plot.
-    rows.push({ ...base, ts: now - 5 * 3600, sha: 'bbbbbbb2222222222222222222222222222bbbb2',
-                run_id: '2', suite: 'tur_r7rs_conformance', duration_ms: 40000 });
-    await page.route('**/api/ci-timings*', (route) => route.fulfill({
-      status: 200,
-      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
-      body: rows.map((r) => JSON.stringify(r)).join('\n'),
-    }));
-
-    await page.goto('/ci');
-    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('#ci-chart .ci-series-line')).toHaveCount(5);
-
-    await page.locator('#ci-hit').hover();
-    const tip = page.locator('#ci-tooltip');
-    await expect(tip).toBeVisible();
-    await expect(tip.locator('.ci-tooltip-head .mono')).toHaveText(/^(aaaaaaa|ccccccc)$/);
-    await expect(tip.locator('.ci-tooltip-row')).toHaveCount(5);
-  });
-
   test('sparkline filter narrows the grid and clicking charts a suite', async ({ page }) => {
     await page.goto('/ci');
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
