@@ -41,6 +41,13 @@ bool emit_cps_ir_program_has_emittable(const Expr *program);
  * the cps-backend already emits (else the two declare the same `__cps` symbol
  * with different signatures -- a `conflicting types` error). */
 bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b);
+
+/* cps-effectful-closure-returned-through-empty-row-aborts: the body of an
+ * unthreaded fn-value (a lambda or a named fn used as a value, whose calls
+ * start with no handler in scope) that lets `eff` escape, directly or through
+ * a colored fn it calls -- the reason that effect's performers left the CPS
+ * backend.  NULL when none does.  Valid after the program was classified. */
+const Expr *emit_cps_ir_effect_escaping_fnval(const Symbol *eff);
 /* SR2b: colored generic whose base signature sig-rejects -- needs a monomorph
  * clone (the G3a island path's precondition).  See the definition. */
 bool emit_cps_ir_colored_fn_needs_mono(const struct FnDef *fd);

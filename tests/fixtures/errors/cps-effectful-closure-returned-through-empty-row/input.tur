@@ -1,0 +1,15 @@
+;; cps-effectful-closure-returned-through-empty-row-aborts: `adder` returns a
+;; closure that performs `Ask` through `ask`, at the type `(fn [int] int)`,
+;; which says it performs nothing.  `app1`'s call through `h` therefore starts
+;; with no handler in scope.  This built and then aborted at run time with
+;; "unhandled effect"; now the closure's escaping effect -- its callees' performs
+;; counted -- takes `Ask` off the CPS backend, and the build is refused with a
+;; note naming the closure.  `tur --interpret` runs it (14), hence
+;; requires.compiled.
+(defeffect Ask [] :int)
+(defn ask [] : int (perform (Ask)))
+(defn app1 [h : (fn [int] int) x : int] : int (h x))
+(defn adder [m : int] : (fn [int] int) (fn [x : int] : int (+ m x (ask))))
+(defn main [] : int
+  (println (handle (app1 (adder 3) 1) (Ask [] k) (resume k 10)))
+  0)

@@ -4409,6 +4409,41 @@ static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     expr_collect_effects_acc(e, &acc);
 }
 
+/* cps-effectful-closure-returned-through-empty-row-aborts: a fn-value's
+ * direct entry runs from a fresh root, so a perform in a colored fn it CALLS
+ * escapes it exactly as its own perform would.  Without this,
+ * `(fn [x] (+ x (ask)))` -- `ask` performing `Ask` -- counted as effect-free,
+ * was neither threaded nor fiber-tainted, and aborted with "unhandled effect"
+ * when returned through `(fn [int] int)` and called.
+ *
+ * So, while g_nesc_prog is set (fn_net_escaping), a direct call to a colored
+ * top-level fn adds that fn's NET escaping effects from g_nesc_tab -- in the
+ * call's own context, so a `handle` around the call still discharges them.
+ * The table is the least fixpoint over the call graph (nesc_fixpoint): each
+ * round recomputes every colored fn from the previous round's callee sets.
+ * The sets only grow and `handle` subtraction is monotone, so it converges,
+ * recursion included, at linear cost per round. */
+typedef struct { const FnDef *fd; uint64_t lo, hi; } NescEnt;
+static const Expr *g_nesc_prog = NULL;
+static NescEnt    *g_nesc_tab = NULL;
+static uint32_t    g_nesc_cap = 0;   /* power of two; 0 = no table */
+/* Per effect bit, the first unthreaded fn-value letting it escape (ensure_S),
+ * for the refusal's note (emit_cps_ir_effect_escaping_fnval). */
+static const FnDef *g_fvesc_src[128];
+
+static NescEnt *nesc_find(const FnDef *fd, bool insert) {
+    if (!g_nesc_cap || !fd) return NULL;
+    uint32_t h = (uint32_t)(((uintptr_t)fd >> 4) * 2654435761u) & (g_nesc_cap - 1);
+    for (;; h = (h + 1) & (g_nesc_cap - 1)) {
+        if (g_nesc_tab[h].fd == fd) return &g_nesc_tab[h];
+        if (!g_nesc_tab[h].fd) {
+            if (!insert) return NULL;
+            g_nesc_tab[h].fd = fd;
+            return &g_nesc_tab[h];
+        }
+    }
+}
+
 /* B5 (cps-tramp-resume): the NET escaping effect set of `e` -- the effects
  * PERFORMED in `e` that are NOT discharged by a `handle` enclosing the perform
  * WITHIN `e`.  A self-handling body -- `(fn [] (handle (perform E) (E [x] k)
@@ -4476,6 +4511,11 @@ static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
             NESC(e->as.call_.fn_expr);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) NESC(e->as.call_.args[i]);
             NESC(e->as.call_.dict_arg);
+            if (g_nesc_prog && e->as.call_.fn_binding && !e->as.call_.fn_expr) {
+                const NescEnt *ce =
+                    nesc_find(fd_for_binding(g_nesc_prog, e->as.call_.fn_binding), false);
+                if (ce) { *lo |= ce->lo; *hi |= ce->hi; }
+            }
             return;
         default:
             /* Uncovered form: fall back to the raw union (perform+handle folded),
@@ -4485,6 +4525,65 @@ static void fn_net_escaping_acc(const Expr *e, uint64_t *lo, uint64_t *hi) {
             return;
     }
     #undef NESC
+}
+
+const Expr *emit_cps_ir_effect_escaping_fnval(const Symbol *eff) {
+    if (!eff) return NULL;
+    int idx = effect_tag(eff) - 2;
+    if (idx < 0 || idx >= 128 || !g_fvesc_src[idx]) return NULL;
+    return g_fvesc_src[idx]->body;
+}
+
+/* The net escaping effects of a fn-value's body, its colored callees' included
+ * (see g_nesc_prog).  Needs nesc_fixpoint to have run for `program`. */
+static void fn_net_escaping(const Expr *program, const Expr *body,
+                            uint64_t *lo, uint64_t *hi) {
+    const Expr *saved = g_nesc_prog;
+    g_nesc_prog = program;
+    fn_net_escaping_acc(body, lo, hi);
+    g_nesc_prog = saved;
+}
+
+/* Fill g_nesc_tab with every colored top-level fn's net escaping effects,
+ * callees included: the least fixpoint, from all-empty. */
+static void nesc_fixpoint(const Expr *program, const Expr **items, uint32_t np) {
+    free(g_nesc_tab); g_nesc_tab = NULL; g_nesc_cap = 0;
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        const Expr *it = items[i];
+        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
+            && it->as.fn_def_.fn->cps_colored && it->as.fn_def_.fn->body) n++;
+    }
+    if (!n) return;
+    uint32_t cap = 16;
+    while (cap < 2 * n) cap *= 2;
+    g_nesc_tab = (NescEnt *)calloc(cap, sizeof *g_nesc_tab);
+    g_nesc_cap = cap;
+    /* Program order, updated in place: a callee defined before its caller is
+     * final by the time the caller reads it, so a typical program settles in
+     * one round plus the round that confirms it; only a back edge (recursion,
+     * a forward call) costs more. */
+    NescEnt **order = (NescEnt **)malloc(n * sizeof *order);
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        const Expr *it = items[i];
+        if (it && it->kind == EX_FN_DEF && it->as.fn_def_.fn
+            && it->as.fn_def_.fn->cps_colored && it->as.fn_def_.fn->body) {
+            NescEnt *en = nesc_find(it->as.fn_def_.fn, true);
+            if (k < n) order[k++] = en;
+        }
+    }
+    for (bool changed = true; changed; ) {
+        changed = false;
+        for (uint32_t i = 0; i < k; i++) {
+            NescEnt *en = order[i];
+            uint64_t lo = 0, hi = 0;
+            fn_net_escaping(program, en->fd->body, &lo, &hi);
+            lo |= en->lo; hi |= en->hi;   /* monotone by construction; keep it so */
+            if (lo != en->lo || hi != en->hi) { en->lo = lo; en->hi = hi; changed = true; }
+        }
+    }
+    free(order);
 }
 
 /* A CT_LETRAW (delegated direct-emitted op) that performs NO fiber effect: its
@@ -4904,6 +5003,32 @@ static const Binding *arg_fnval_binding(const Expr *arg) {
 
 typedef struct { const Expr *program; bool withdrew; } UnthreadedUd;
 
+/* Bindings used as a serial-shift receiver.  The reset calls an escaping
+ * receiver OUTWARD, through its `__cps` twin with the reset's continuation
+ * (Rule D keeps it in S), so its callees' performs reach the enclosing
+ * handlers: not a fresh-root fn-value for fn_net_escaping's purpose. */
+static const Binding **g_serial_recv = NULL;
+static uint32_t        g_serial_recv_n = 0, g_serial_recv_cap = 0;
+static bool serial_recv_visit(const Expr *e, void *ud) {
+    if (e && e->kind == EX_SERIAL_SHIFT) {
+        const Binding *b = arg_fnval_binding(e->as.serial_shift_.k_fn);
+        if (b) {
+            if (g_serial_recv_n == g_serial_recv_cap) {
+                g_serial_recv_cap = g_serial_recv_cap ? g_serial_recv_cap * 2 : 8;
+                g_serial_recv = (const Binding **)realloc((void *)g_serial_recv,
+                                    g_serial_recv_cap * sizeof *g_serial_recv);
+            }
+            g_serial_recv[g_serial_recv_n++] = b;
+        }
+    }
+    cps_visit_children(e, serial_recv_visit, ud);
+    return false;
+}
+static bool serial_recv_has(const Binding *b) {
+    for (uint32_t i = 0; i < g_serial_recv_n; i++) if (g_serial_recv[i] == b) return true;
+    return false;
+}
+
 /* Does the fat closure an argument builds for a poly-fn parameter carry an
  * `fn_cps` entry?  A call through such a parameter threads ONLY through that
  * slot (cps_ir_param_call_threads), and the EX_POLY_WRAP emission
@@ -4972,7 +5097,7 @@ static void fnval_withdraw_walk(const Expr *e, UnthreadedUd *u) {
              * runs the same off the trampoline -- the B5 rule below. */
             const FnDef *vfd = fd_for_binding(u->program, fb);
             uint64_t lo = 0, hi = 0;
-            if (vfd && vfd->body) fn_net_escaping_acc(vfd->body, &lo, &hi);
+            if (vfd && vfd->body) fn_net_escaping(u->program, vfd->body, &lo, &hi);
             if (!(lo || hi)) continue;
             threadable_remove(fb);
             u->withdrew = true;
@@ -5350,6 +5475,7 @@ static void ensure_S(const Expr *program) {
     g_fwd_done = false;
     g_eff_n = 0;
     ctg_reset();
+    memset(g_fvesc_src, 0, sizeof g_fvesc_src);
     if (!program || program->kind != EX_PROGRAM) return;
 
     arena_init(&g_arena, 0);
@@ -5391,6 +5517,14 @@ static void ensure_S(const Expr *program) {
             expr_collect_effects(it, &dlo, &dhi);
     }
     g_addr_collecting = false;
+    g_serial_recv_n = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        const Expr *it = items[i];
+        if (!it) continue;
+        serial_recv_visit((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                          ? it->as.fn_def_.fn->body : it, NULL);
+    }
+    nesc_fixpoint(program, items, np);
 
     /* E2 threadability measurement (cps-tramp-resume): decide, for each EFFECTFUL
      * fn-value that today evicts to the fiber (an address-taken named fn or a
@@ -5551,6 +5685,19 @@ static void ensure_S(const Expr *program) {
                  * permanent fiber source so its effect taints and any DK handler-
                  * installer co-classifies to fiber.  Cleared once E2 gives fn-values
                  * a DK-threading (__fn_cps) entry. */
+                /* What an unthreaded fn-value lets escape, its colored callees'
+                 * performs included (fn_net_escaping).  Also added to its
+                 * effect set below, so the effect taints whether or not the
+                 * fn-value was a candidate: a SIG-REJECT capturing lambda
+                 * that only CALLS a performer used to taint nothing. */
+                uint64_t fv_esc_lo = 0, fv_esc_hi = 0;
+                if ((fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
+                    && !threadable_has(fd->binding) && !serial_recv_has(fd->binding))
+                    fn_net_escaping(program, fd->body, &fv_esc_lo, &fv_esc_hi);
+                for (int b = 0; b < 128; b++) {
+                    bool on = b < 64 ? (fv_esc_lo >> b) & 1 : (fv_esc_hi >> (b - 64)) & 1;
+                    if (on && !g_fvesc_src[b]) g_fvesc_src[b] = fd;
+                }
                 if (candidate
                     && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
                     && !threadable_has(fd->binding)) {
@@ -5561,9 +5708,7 @@ static void ensure_S(const Expr *program) {
                      * so it is not a fiber-escape source.  Its interior handle
                      * installs its own DK prompt and CPS-lowers.  A genuinely
                      * escaping perform still taints. */
-                    uint64_t lo = 0, hi = 0;
-                    fn_net_escaping_acc(fd->body, &lo, &hi);
-                    if (lo || hi) { candidate = false; sig_perm = true; }
+                    if (fv_esc_lo || fv_esc_hi) { candidate = false; sig_perm = true; }
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 uint32_t fresh_n = cps_ir_last_fresh_count();
@@ -5614,8 +5759,8 @@ static void ensure_S(const Expr *program) {
                                &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
                                NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL };
                 expr_collect_effects_acc(fd->body, &acc);
-                en->eff_lo = en->perf_lo | en->hand_lo;
-                en->eff_hi = en->perf_hi | en->hand_hi;
+                en->eff_lo = en->perf_lo | en->hand_lo | fv_esc_lo;
+                en->eff_hi = en->perf_hi | en->hand_hi | fv_esc_hi;
                 /* A whole-body-delegated colored fn runs its effects on the FIBER
                  * runtime (direct emitter), so its effects are fiber -- seed them
                  * into the base taint like a non-in_s fn.  This keeps an effect

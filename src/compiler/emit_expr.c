@@ -2,6 +2,7 @@
 #include "emit_internal.h"
 #include "effect.h"     /* E2 fat-fn-value threading: EffectRow kind gate */
 #include "cps_ir.h"     /* E2 fat-fn-value threading: the fn_cps slot ABI */
+#include "emit_cps_ir.h" /* the escaping fn-value behind a no-lowering perform */
 #include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 #include "stack_guard.h" /* emit-depth-guard-loses-race-with-asan-stack */
@@ -16392,6 +16393,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                       "Restructuring so the loop body returns a status and the "
                       "effect is performed after the loop usually avoids them. This is a "
                       "compiler limitation, not a mistake in this expression.");
+            /* cps-effectful-closure-returned-through-empty-row-aborts: when the
+             * eviction is an effectful fn-value whose calls are not threaded,
+             * say which one -- the perform itself is not what is wrong. */
+            if (e->kind == EX_PERFORM && e->as.perform_.perform) {
+                const Symbol *eff = e->as.perform_.perform->effect_name;
+                const Expr *fv = emit_cps_ir_effect_escaping_fnval(eff);
+                if (fv)
+                    diag_emit(DIAG_NOTE, fv->span,
+                              "`%s` escapes this function value: it is returned, "
+                              "stored, or passed where a call through it does not "
+                              "carry the caller's handler, so the call would start "
+                              "with none in scope and the effect could not be "
+                              "lowered for it. Handle `%s` inside it, or pass it "
+                              "straight to the function that calls it.",
+                              eff->name, eff->name);
+            }
             return atom_nil();
         case EX_HANDLE:          return emit_effects_handle(ctx, body, e);
         case EX_HANDLER_LIT:     return emit_effects_handler_lit(ctx, body, e);
