@@ -780,6 +780,14 @@ function wireHover({ host, tooltip, idPrefix, series, xs, sx, fmtY, pad, ih }) {
   const cross = host.querySelector(`#${idPrefix}-cross`);
   if (!svg || !hit) return;
 
+  // Snap only to runs a DRAWN series has a point at.  The axis spans every run
+  // in the environment so it holds still while series are toggled, but a run
+  // only unselected suites reported -- the R7RS leg publishes its suites as a
+  // run of their own -- has nothing to show, and landing on one hid the
+  // tooltip in the middle of the plot.
+  const drawn = new Set(series.flatMap((s) => s.pts.map((p) => p.x)));
+  const snapXs = xs.filter((x) => drawn.has(x));
+
   const hide = () => {
     tooltip.hidden = true;
     cross.setAttribute('opacity', 0);
@@ -792,9 +800,10 @@ function wireHover({ host, tooltip, idPrefix, series, xs, sx, fmtY, pad, ih }) {
     // user units before comparing against the scale.
     const ux = ((ev.clientX - box.left) / box.width) * svg.viewBox.baseVal.width;
 
-    let best = xs[0];
+    if (!snapXs.length) { hide(); return; }
+    let best = snapXs[0];
     let bestD = Infinity;
-    for (const x of xs) {
+    for (const x of snapXs) {
       const d = Math.abs(sx(x) - ux);
       if (d < bestD) { bestD = d; best = x; }
     }
