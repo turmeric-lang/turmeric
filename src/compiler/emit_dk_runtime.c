@@ -636,7 +636,16 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                        * handle's handlers once a re-install flattens the chain */\n"
 "    bool consumed;     /* (cont? k): a handler-case continuation is unconsumed until\n"
 "                        * the program `resume`s it; set at the user resume site so\n"
-"                        * `cont?` can read `!k->consumed` (matches the fiber path). */\n");
+"                        * `cont?` can read `!k->consumed` (matches the fiber path). */\n"
+/* fn-value-call-cps-frames-held-until-outer-entry: `copied` is set on a node
+ * the moment dk_copy_node copies it, so a node that never had it set has no
+ * copy anywhere -- nothing shares its env.  `join_once` marks a heap-join frame
+ * (dk_frame_join / dk_frame_resume_join): the original runs at most once, and
+ * when it does without ever having been copied, dk_run_impl hands it back
+ * (__dk_join_release_node) instead of holding it until the outermost entry
+ * returns.  Neither is copied by dk_copy_node. */
+"    bool copied;       /* dk_copy_node has copied this node: a copy may share its env */\n"
+"    bool join_once;    /* heap-join frame: may be reclaimed when it runs uncopied */\n");
     buf_puts(out,
 "};\n"
 "static DK *dk_new(DKKind kind, DK *next) {\n"
@@ -656,6 +665,17 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n"
 "static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;\n"
+"}\n"
+"/* A heap-join frame (emit_heap_join): the continuation of one non-tail\n"
+" * cps->cps call, spliced onto the caller's chain and registered for a\n"
+" * single-node reap.  See __dk_join_release_node. */\n"
+"__attribute__((unused))\n"
+"static DK *dk_frame_join(DKFrame fn, intptr_t env, DK *next) {\n"
+"    DK *k = dk_frame(fn, env, next); k->join_once = true; return k;\n"
+"}\n"
+"__attribute__((unused))\n"
+"static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {\n"
+"    DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;\n"
 "}\n"
 "/* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing\n"
 " * chain, borrowed.  The one spine then serves every consumer: dk_perform's\n"
@@ -747,6 +767,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "static DK *dk_copy_node(const DK *n);\n");
     buf_puts(out,
 "static DK *dk_copy_node(const DK *n) {\n"
+"    ((DK *)n)->copied = true;\n"
 "    DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->tag = n->tag;\n"
 /* E3a: an owning frame gets an OWNED copy of its env (rc incref / aggregate
  * deep-copy) instead of a shared shallow alias; NULL env_clone keeps the shallow
@@ -1033,6 +1054,42 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    (void)mark;\n"
 "#endif\n"
 "}\n");
+    /* fn-value-call-cps-frames-held-until-outer-entry: a heap-join frame and
+     * its env are registered back to back (__dk_reap_ptr(env), then
+     * __dk_reap_node(frame)) and are dead once the frame has run: the join is
+     * one non-tail call's continuation, delivered exactly once.  Holding them
+     * until the outermost entry returns made a self-tail-recursive loop that
+     * calls through a function value grow by both per iteration.
+     *
+     * The release is taken only when it is provably the last reference:
+     *   - the node was never copied (`copied` unset), so no captured
+     *     continuation, delivery or async park shares its env or will run it;
+     *   - it is the LAST entry on the reap list, so nothing registered after it
+     *     -- a handle chain, a perform's sub, another frame spliced onto it --
+     *     is still outstanding (a released join above it came off the list
+     *     with its own release);
+     *   - nothing pinned DK memory (r7rs call/cc).
+     * Otherwise the boundary reap frees it, as before.  The env goes second,
+     * from inside the frame's function once it has read its captures: with the
+     * node off the list, the env is the last entry exactly when this release
+     * happened, and never when a copy is running (a copied node stays
+     * registered above its env).  The slots are cleared because the collector
+     * scans the list's array (TUR_GC_ON). */
+    buf_puts(out,
+"__attribute__((unused)) static bool __dk_join_release_node(DK *k) {\n"
+"    size_t n = __dk_reap_n;\n"
+"    if (tur_dk_pinned || k->copied || !n || __dk_reap_v[n - 1] != (void *)k\n"
+"        || __dk_reap_kind[n - 1] != 0) return false;\n"
+"    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;\n"
+"    free(k); return true;\n"
+"}\n"
+"__attribute__((unused)) static void __dk_join_release_env(intptr_t env) {\n"
+"    size_t n = __dk_reap_n;\n"
+"    if (tur_dk_pinned || !env || !n || __dk_reap_v[n - 1] != (void *)env\n"
+"        || __dk_reap_kind[n - 1] != 0) return;\n"
+"    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;\n"
+"    free((void *)env);\n"
+"}\n");
     buf_puts(out,
 "static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {\n"
 "    while (k) {\n"
@@ -1042,8 +1099,18 @@ void emit_cps_runtime_prelude(Buf *out) {
 "            /* cps-body-panic-not-propagated: a frame whose body panicked under a\n"
 "             * handler returned by signal; the rest of the chain is the rest of the\n"
 "             * program past the panic and must not run.  Its nodes are reap-owned. */\n"
-"            case DKK_FRAME: v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next; break;\n"
-"            case DKK_RESUME_FRAME: return k->rfn(k->env, v, k->next);\n"
+"            case DKK_FRAME: {\n"
+"                DK *self = k;\n"
+"                v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;\n"
+"                if (self->join_once) __dk_join_release_node(self);\n"
+"                break;\n"
+"            }\n"
+"            case DKK_RESUME_FRAME:\n"
+"                if (k->join_once) {\n"
+"                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
+"                    if (__dk_join_release_node(k)) return rf(renv, v, rest);\n"
+"                }\n"
+"                return k->rfn(k->env, v, k->next);\n"
 "            case DKK_SHIFT:\n"
 "            case DKK_SHIFT0: {\n"
 "                DK *P = k->next;\n"

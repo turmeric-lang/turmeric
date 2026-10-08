@@ -2145,6 +2145,8 @@ struct DK {
     bool consumed;     /* (cont? k): a handler-case continuation is unconsumed until
                         * the program `resume`s it; set at the user resume site so
                         * `cont?` can read `!k->consumed` (matches the fiber path). */
+    bool copied;       /* dk_copy_node has copied this node: a copy may share its env */
+    bool join_once;    /* heap-join frame: may be reclaimed when it runs uncopied */
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -2163,6 +2165,17 @@ static DK *dk_frame_owning(DKFrame fn, intptr_t env,
 }
 static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;
+}
+/* A heap-join frame (emit_heap_join): the continuation of one non-tail
+ * cps->cps call, spliced onto the caller's chain and registered for a
+ * single-node reap.  See __dk_join_release_node. */
+__attribute__((unused))
+static DK *dk_frame_join(DKFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame(fn, env, next); k->join_once = true; return k;
+}
+__attribute__((unused))
+static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;
 }
 /* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
  * chain, borrowed.  The one spine then serves every consumer: dk_perform's
@@ -2250,6 +2263,7 @@ static DK *dk_hgroup_from_table(const tur_handler_table_t *t, DK *base) {
 }
 static DK *dk_copy_node(const DK *n);
 static DK *dk_copy_node(const DK *n) {
+    ((DK *)n)->copied = true;
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->tag = n->tag;
     c->env = n->env_clone ? n->env_clone(n->env) : n->env;
     c->env_clone = n->env_clone; c->env_drop = n->env_drop;
@@ -2475,6 +2489,20 @@ __attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
     (void)mark;
 #endif
 }
+__attribute__((unused)) static bool __dk_join_release_node(DK *k) {
+    size_t n = __dk_reap_n;
+    if (tur_dk_pinned || k->copied || !n || __dk_reap_v[n - 1] != (void *)k
+        || __dk_reap_kind[n - 1] != 0) return false;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    free(k); return true;
+}
+__attribute__((unused)) static void __dk_join_release_env(intptr_t env) {
+    size_t n = __dk_reap_n;
+    if (tur_dk_pinned || !env || !n || __dk_reap_v[n - 1] != (void *)env
+        || __dk_reap_kind[n - 1] != 0) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    free((void *)env);
+}
 static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
     while (k) {
         switch (k->kind) {
@@ -2483,8 +2511,18 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
             /* cps-body-panic-not-propagated: a frame whose body panicked under a
              * handler returned by signal; the rest of the chain is the rest of the
              * program past the panic and must not run.  Its nodes are reap-owned. */
-            case DKK_FRAME: v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next; break;
-            case DKK_RESUME_FRAME: return k->rfn(k->env, v, k->next);
+            case DKK_FRAME: {
+                DK *self = k;
+                v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;
+                if (self->join_once) __dk_join_release_node(self);
+                break;
+            }
+            case DKK_RESUME_FRAME:
+                if (k->join_once) {
+                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
+                    if (__dk_join_release_node(k)) return rf(renv, v, rest);
+                }
+                return k->rfn(k->env, v, k->next);
             case DKK_SHIFT:
             case DKK_SHIFT0: {
                 DK *P = k->next;
@@ -7893,6 +7931,7 @@ typedef struct { int64_t f0; } _un_uncons_hyfmap_j0_env;
 static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__kont) {
     _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
     int64_t __t1 = __cap->f0;
+    __dk_join_release_env((intptr_t)__cap);
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_1001304;
     out_1001304 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
@@ -7920,7 +7959,7 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
         _un_uncons_hyfmap_j0_env *__ce__un_uncons_hyfmap_j0 = (_un_uncons_hyfmap_j0_env *)malloc(sizeof(_un_uncons_hyfmap_j0_env));
         __ce__un_uncons_hyfmap_j0->f0 = __t1;
         __dk_reap_ptr((intptr_t)__ce__un_uncons_hyfmap_j0);
-        return _un_uncons_hyfmap__cps(__t3, f, __dk_reap_node(dk_frame_resume(_un_uncons_hyfmap_j0, (intptr_t)__ce__un_uncons_hyfmap_j0, __kont))); /* cps->cps heap join */
+        return _un_uncons_hyfmap__cps(__t3, f, __dk_reap_node(dk_frame_resume_join(_un_uncons_hyfmap_j0, (intptr_t)__ce__un_uncons_hyfmap_j0, __kont))); /* cps->cps heap join */
     }
 }
 __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {

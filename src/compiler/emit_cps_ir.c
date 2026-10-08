@@ -8871,6 +8871,13 @@ static bool case_reopens(const CTerm *t) {
     return false;
 }
 
+/* fn-value-call-cps-frames-held-until-outer-entry: set by emit_heap_join for
+ * the one emit_lifted call that renders its resume-frame join, and consumed
+ * (cleared) on entry there, so no helper lifted out of the join's body sees
+ * it.  The lifted join hands its env back right after reading its captures --
+ * see __dk_join_release_env in emit_dk_runtime.c for why that is safe. */
+static bool g_lh_join_release = false;
+
 /* Emit one lifted helper into ce->helpers.  `xname` is the incoming value
  * parameter name (reset/perform continuation result var); `xt` its full Type
  * (may be NULL for a scalar) so a Tier C aggregate value-param unboxes.  `hcase`
@@ -8883,6 +8890,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                         const CTerm *body, const CHandleCase *hcase,
                         const CapSet *caps) {
     bool has_caps = (caps && caps->n > 0);
+    bool join_release = g_lh_join_release && mode == LH_RESUME_CONT;
+    g_lh_join_release = false;
     /* fn-value-fat-normalization (effect-row increment): a lifted helper is its
      * OWN function -- captures arrive through its frame env (`__cap->fN`) as
      * raw-named locals, never through the enclosing closure's env pointer.
@@ -8947,6 +8956,11 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                 buf_printf(&tmp, "rc_strong_increment(%s);\n", cn);
             }
             free(cn);
+        }
+        /* Every capture is a local now; nothing below reads the env. */
+        if (join_release) {
+            indent_buf(&tmp, 4);
+            buf_puts(&tmp, "__dk_join_release_env((intptr_t)__cap);\n");
         }
     }
 
@@ -9178,18 +9192,24 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
      * position; register it for a single-node reap at the outermost entry
      * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
+    /* fn-value-call-cps-frames-held-until-outer-entry: the `_join` ctors mark
+     * the node as this one call's continuation, so dk_run_impl may hand it (and
+     * the lifted function its env) back when it runs uncopied, rather than
+     * holding both until the outermost entry returns. */
     char frame[720];
     if (caps || needs_kont) {
+        g_lh_join_release = true;
         emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
+        g_lh_join_release = false;
         char *envexpr = emit_cont_env(ce, jname, caps);   /* caps-only env */
         snprintf(frame, sizeof frame,
-                 "__dk_reap_node(dk_frame_resume(%s, %s, %s))", jname, envexpr, ce->cur_k);
+                 "__dk_reap_node(dk_frame_resume_join(%s, %s, %s))", jname, envexpr, ce->cur_k);
         free(envexpr);
     } else {
         emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
-        snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame(%s, 0, %s))", jname, ce->cur_k);
+        snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame_join(%s, 0, %s))", jname, ce->cur_k);
     }
     free(xn);
 

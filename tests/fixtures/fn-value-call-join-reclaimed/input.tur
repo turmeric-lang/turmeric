@@ -1,0 +1,67 @@
+;; fn-value-call-cps-frames-held-until-outer-entry: a function that calls a
+;; function value is a CPS function, so a non-tail call to it from a
+;; self-tail-recursive loop reifies its continuation as a heap-join frame
+;; (dk_frame_resume_join / dk_frame_join) plus a captured env.  Both used to be
+;; held until the outermost direct entry returned -- ~200 B a turn for the
+;; whole run.  Now dk_run_impl hands the frame back when it runs uncopied and
+;; on top of the reap list, and the frame's function hands back its env.
+;;
+;; The memory shape is measured in the report; what this fixture pins is that
+;; the early release is never TOO early.  (The loops stay short: under the
+;; leak-check's -O1 + ASan the CPS trampoline is not sibling-call optimised,
+;; so a deep loop overflows the C stack there with or without this change.)  requires.leak-check runs it under
+;; ASan, so a frame or env freed while a copy (a captured continuation) can
+;; still run it is a use-after-free here, not a silent pass:
+;;
+;;   loop        -- the report's repro: a pure fn value, released every turn
+;;   loop-clo    -- a capturing closure as the fn value
+;;   loop-val    -- plus1's join has no captures (the value-only DKK_FRAME
+;;                  arm), under loop-val's own resume join
+;;   loop-eff    -- the fn value performs; a one-shot handler outside the
+;;                  loop copies every join it crosses, so none is released
+;;   twice-sum   -- the same under a MULTI-SHOT handler: each join's copies
+;;                  run more than once against the env they share
+;;   loop-inner  -- a multi-shot handle INSIDE each call: plus1's join lies in
+;;                  the captured continuation (copied, run twice), loop-inner's
+;;                  lies beyond the handler (never copied, delivered once)
+
+(defeffect Ask [] : int)
+
+(defn add1 [x : int] : int (+ x 1))
+(defn ask-plus [x : int] : int (+ x (perform (Ask))))
+(defn use1 [f : (fn [int] int) i : int] : int (f i))
+(defn plus1 [f : (fn [int] int) i : int] : int (+ 1 (f i)))
+
+(defn loop [i : int n : int acc : int] : int
+  (if (= i n) acc (loop (+ i 1) n (+ acc (use1 add1 i)))))
+
+(defn loop-clo [i : int n : int acc : int] : int
+  (if (= i n) acc
+    (loop-clo (+ i 1) n (+ acc (use1 (fn [x : int] : int (+ x i)) 2)))))
+
+(defn loop-val [i : int n : int acc : int] : int
+  (if (= i n) acc (loop-val (+ i 1) n (+ acc (plus1 add1 i)))))
+
+(defn loop-eff [i : int n : int acc : int] : int
+  (if (= i n) acc (loop-eff (+ i 1) n (+ acc (use1 ask-plus i)))))
+
+(defn twice-sum [n : int] : int
+  (handle (loop-eff 0 n 0)
+          (Ask [] ^multishot k) (+ (resume k 1) (resume k 2))))
+
+(defn both [x : int] : int
+  (handle (plus1 ask-plus x)
+          (Ask [] ^multishot k) (+ (resume k 1) (resume k 2))))
+
+(defn loop-inner [i : int n : int acc : int] : int
+  (if (= i n) acc (loop-inner (+ i 1) n (+ acc (use1 both i)))))
+
+(defn main [] : int
+  (println (loop 0 2000 0))                           ;; sum of 1+i, i<2000  = 2001000
+  (println (loop-clo 0 1000 0))                       ;; sum of 2+i, i<1000  = 501500
+  (println (loop-val 0 1000 0))                       ;; sum of 2+i, i<1000  = 501500
+  (println (handle (loop-eff 0 100 0)
+                   (Ask [] k) (resume k 10)))         ;; 4950 + 100*10      = 5950
+  (println (twice-sum 3))                             ;; 8 leaves: 8*3 + 36 = 60
+  (println (loop-inner 0 100 0))                      ;; sum of 2i+5, i<100 = 10400
+  0)

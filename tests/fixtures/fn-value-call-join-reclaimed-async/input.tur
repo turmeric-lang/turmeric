@@ -1,0 +1,58 @@
+;; fn-value-call-cps-frames-held-until-outer-entry, async arm (the inline-C
+;; future plumbing keeps it out of fn-value-call-join-reclaimed, which also
+;; runs under --interpret).  A heap-join frame is handed back when it runs
+;; uncopied; a PENDING await parks a COPY of the chain, so every join the park
+;; crosses is copied, stays registered, and must still be intact when the copy
+;; resumes after the outer entry has returned.
+;;
+;; Not leak-checked: a parked body's chains are never reaped (a residual of
+;; compiled-async-heap-continuations-plan), which LeakSanitizer reports here
+;; byte for byte the same with or without the early release.  Built under ASan
+;; by hand, this program shows no use-after-free.
+;;
+;; work-loop's non-tail call to the colored await-plus is a heap join each
+;; turn.  The first await parks (the future is pending); fulfilling it resumes
+;; the parked copy.  Every later await shifts too, even on the fulfilled
+;; future, so every join here is copied and none is released early (measured:
+;; 0 releases) -- what this pins is that a copied join is left alone.
+;;
+;; The call is direct, not through a function value: an await reached through
+;; a fn value parks only the callee's continuation today -- a separate wrong
+;; answer, docs/reported/await-through-fn-value-parks-only-the-callee.md.
+
+(defn the-future [] : ptr<void>
+  ```c
+  static TurFuture *g = NULL;
+  if (!g) g = tur_future_new();
+  return (void *)g;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn future-pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn await-plus [x : int] : int (+ x (await (the-future))))
+
+(defn work-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (work-loop (+ i 1) n (+ acc (await-plus i)))))
+
+(defn work [] : int (work-loop 0 50 0))
+
+(defn main [] : nil
+  (let [f (async work)]
+    (if (future-pending? f)
+      (do
+        (fulfill-future (the-future) 41)
+        (println (future-value f)))       ;; sum of i+41, i<50 = 1225 + 2050 = 3275
+      (println -1))))

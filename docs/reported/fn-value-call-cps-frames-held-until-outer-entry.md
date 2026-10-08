@@ -1,5 +1,12 @@
 # Calling a function value allocates CPS frames that a tail-recursive loop holds until it returns
 
+**Narrowed 2026-10-08: the function-value half is fixed** -- the report's
+repro, a capturing closure, and a capture-free value join all run flat now.
+**What is left** is the effect half: a `perform` / `resume` pair in a
+tail-recursive loop under one `handle` still grows per iteration, because
+`dk_perform` copies and registers the chain above every join it crosses (see
+"Fixed 2026-10-08" at the end).
+
 **Severity: medium (unbounded memory growth in long-running loops).** A
 function that calls a function-typed value is emitted through its `__cps`
 twin, and each such call from a CPS caller allocates two continuation frames
@@ -117,3 +124,67 @@ emitted programs without a sanitizer, so it would pass silently.  Landing
 this wants the capture mark, an audit of every path that holds a `DK *` past
 the call that made it, and a `requires.leak-check` (ASan) fixture over
 effects, `shift`, async and `call/cc` in such a loop.
+
+## Fixed 2026-10-08: the function-value half
+
+Direction 1, but with the release taken where the frame is RUN rather than at
+a backedge, and gated so it can never be early. `emit_heap_join` builds its
+frame with `dk_frame_resume_join` / `dk_frame_join`, which set `join_once`.
+When `dk_run_impl` reaches such a node it hands it back
+(`__dk_join_release_node`) only if all of these hold:
+
+- **It was never copied.** `dk_copy_node` now sets `copied` on every node it
+  copies, so an unset flag means no captured continuation, E7 delivery or
+  async park shares the node's env or will run it. This is the "capture mark"
+  of the 2026-10-08 design note, made exact per node instead of a watermark.
+- **It is the last entry on the reap list.** Nothing registered after it is
+  still outstanding: a `handle` chain, a `perform`'s copied sub, another join
+  spliced onto it, a closure env.
+- **Nothing pinned DK memory** (`tur_dk_pinned`, r7rs `call/cc`).
+
+The node is popped off the list before it is freed, so the boundary reap never
+sees it. The lifted resume function then hands back its env
+(`__dk_join_release_env`) right after reading its captures into locals. With
+the node gone the env is the list's last entry exactly when this release
+happened, and never while a copy runs, because a copied node stays registered
+above its env. Every check is a pointer compare against the list's tail, so a
+join that fails one is left to the boundary reap exactly as before. Popped
+slots are cleared for the collector's scan of the list (`TUR_GC_ON`).
+
+Measured on the report's repro, built at -O2 against the ASan runtime with
+the quarantine off, 3e6 iterations:
+
+| | peak RSS |
+| --- | --- |
+| before (the same C with the `_join` ctors and env release stripped) | 877 MB |
+| after | 11 MB (the same 11 MB at 3e5: flat) |
+
+Release counts from an instrumented build: the repro, a capturing-closure
+argument and a capture-free value join (`dk_frame_join`) release one node per
+turn, and one env per turn where there is an env. A loop whose callee
+`perform`s releases none (every join it crosses is copied), and neither does
+an async loop (every `await` shifts, even on a fulfilled future). Both fall
+back to the boundary reap, unchanged.
+
+Pinned by `tests/fixtures/fn-value-call-join-reclaimed` (`requires.leak-check`:
+the fn-value, closure and value-join loops, and one-shot, outer multi-shot and
+inner multi-shot handlers whose copies run the same joins more than once; all
+ASan-clean, and the same answers under `--interpret`) and
+`tests/fixtures/fn-value-call-join-reclaimed-async` (a pending await parks the
+loop mid-way; not leak-checked, because a parked body's chains are never
+reaped, a pre-existing leak that is byte for byte the same before and after).
+Suite: `run.sh` 3623/0 (the full run's one failure was this fixture's own stale
+snapshot, re-run green), `run-leak-check.sh` 126 / 0 / 3 known-open, the JIT
+over the CPS, effect, multishot and async fixtures 176/0.
+
+### What is left: the effect half
+
+A `perform` in the loop's callee still grows the heap per iteration, and by
+more than the 630 B the original note measured. Under one-shot `(resume k 1)`,
+`(use1 ask-plus i)` in a tail-recursive loop peaks at 87 MB at 1e5 and 858 MB
+at 1e6 (~860 B a turn). `dk_perform` copies the chain from the perform up to
+the handler (marking every join on the way `copied`) and registers the copy
+(`__dk_reap_keep(sub)`) above them, so neither the copy nor the originals can
+come off the list early. Closing it needs the copy's lifetime proved -- for a
+tail-resumed, one-shot case the copy is dead once the resume has delivered --
+which is the same proof the async park and the E7 deliveries would need.
