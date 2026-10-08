@@ -1442,6 +1442,32 @@ static bool cps_fn_has_leftover_effect(const FnDef *fd) {
     return false;
 }
 
+/* await-through-fn-value-parks-only-the-callee: does `e` suspend on an
+ * `await` -- one of its own, or a named callee marked `may_await`?  Nested
+ * function definitions are boundaries (cps_visit_children does not enter
+ * them), so an await inside a lambda or an `(async (fn [] ...))` body is that
+ * lambda's, not the enclosing function's. */
+static bool cps_awaits_visit(const Expr *c, void *ud);
+static bool cps_expr_awaits(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_AWAIT) return true;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
+        const Binding *b = e->as.call_.fn_binding;
+        if (b->source_binding) b = b->source_binding;
+        if (b->source_fn_def && b->source_fn_def->may_await) return true;
+    }
+    return cps_visit_children(e, cps_awaits_visit, NULL);
+}
+static bool cps_awaits_visit(const Expr *c, void *ud) {
+    (void)ud;
+    return cps_expr_awaits(c);
+}
+
+bool cps_fn_may_await(const FnDef *fd) {
+    if (!fd) return false;
+    return fd->may_await || cps_expr_awaits(fd->body);
+}
+
 void cps_color_program(Arena *a, Expr *program) {
     (void)a;
     if (!program || program->kind != EX_PROGRAM) return;
@@ -1534,6 +1560,22 @@ void cps_color_program(Arena *a, Expr *program) {
             if (nodes[i].colored) continue;
             for (uint32_t e = 0; e < nodes[i].n_edges; e++)
                 if (nodes[nodes[i].edges[e]].colored) { nodes[i].colored = true; changed = true; break; }
+        }
+    }
+
+    /* await-through-fn-value-parks-only-the-callee: `may_await` to a fixed
+     * point -- a function whose body awaits, or calls a function that may.
+     * Reset first, like cps_colored, so a re-run starts clean. */
+    for (uint32_t i = 0; i < n; i++) nodes[i].fd->may_await = false;
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (nodes[i].fd->may_await) continue;
+            if (cps_expr_awaits(nodes[i].fd->body)) {
+                nodes[i].fd->may_await = true;
+                changed = true;
+            }
         }
     }
 

@@ -5,10 +5,10 @@
 ;; crosses is copied, stays registered, and must still be intact when the copy
 ;; resumes after the outer entry has returned.
 ;;
-;; Not leak-checked: a parked body's chains are never reaped (a residual of
-;; compiled-async-heap-continuations-plan), which LeakSanitizer reports here
-;; byte for byte the same with or without the early release.  Built under ASan
-;; by hand, this program shows no use-after-free.
+;; Not leak-checked: a parked body's chains are never reaped
+;; (docs/reported/async-parked-body-chains-never-reaped.md), which
+;; LeakSanitizer reports here byte for byte the same with or without the early
+;; release.  Built under ASan by hand, this program shows no use-after-free.
 ;;
 ;; work-loop's non-tail call to the colored await-plus is a heap join each
 ;; turn.  The first await parks (the future is pending); fulfilling it resumes
@@ -16,9 +16,9 @@
 ;; future, so every join here is copied and none is released early (measured:
 ;; 0 releases) -- what this pins is that a copied join is left alone.
 ;;
-;; The call is direct, not through a function value: an await reached through
-;; a fn value parks only the callee's continuation today -- a separate wrong
-;; answer, docs/reported/await-through-fn-value-parks-only-the-callee.md.
+;; The call is direct, not through a function value; the fn-value shapes are
+;; tests/fixtures/await-through-fn-value
+;; (docs/archive/await-through-fn-value-parks-only-the-callee.md).
 
 (defn the-future [] : ptr<void>
   ```c

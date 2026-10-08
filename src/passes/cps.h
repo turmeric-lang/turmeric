@@ -35,6 +35,12 @@ bool cps_expr_contains_effect_op(const Expr *e);
 /* Check if a function definition needs (one-shot) CPS transformation */
 bool cps_fn_needs_transform(const FnDef *fd);
 
+/* await-through-fn-value-parks-only-the-callee: may calling this function
+ * suspend on an `await`?  Its own body awaits, or it calls (by name) a
+ * function cps_color_program marked `may_await`.  Nested lambdas and
+ * `(async ...)` bodies are not this function's suspension.  NULL -> false. */
+bool cps_fn_may_await(const FnDef *fd);
+
 /* Phase B2: Cloneable CPS pass */
 
 /* Check if an expression contains cloneable-shift or cloneable-reset.

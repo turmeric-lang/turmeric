@@ -2,6 +2,7 @@
 #include "emit_internal.h"
 #include "effect.h"     /* E2 fat-fn-value threading: EffectRow kind gate */
 #include "cps_ir.h"     /* E2 fat-fn-value threading: the fn_cps slot ABI */
+#include "cps.h"        /* cps_fn_may_await */
 #include "emit_cps_ir.h" /* the escaping fn-value behind a no-lowering perform */
 #include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
@@ -17307,7 +17308,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             ker = kb->source_fn_def->inferred_effect_row;
                         else if (kb)
                             ker = kb->type.as.fn.effect_row;
-                        if (kb && ker && !effect_row_is_runtime_pure(ker) &&
+                        /* An awaiting lambda needs the slot as much as an
+                         * effectful one: `await` adds nothing to the row
+                         * (await-through-fn-value-parks-only-the-callee). */
+                        bool kfx = (ker && !effect_row_is_runtime_pure(ker))
+                            || (kb && cps_fn_may_await(kb->source_fn_def));
+                        if (kb && kfx &&
                             out.len >= 2 && memcmp(out.data + out.len - 2, " }", 2) == 0) {
                             uint32_t kn = kb->type.as.fn.arity - 1;
                             char *kd = ensure_fncps_env_dispatch(ctx, kn,
@@ -17508,6 +17514,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Runtime-pure rows (only capability tags, e.g. IO from a
                  * `println`) are not CPS-colored and have no `__cps` entry. */
                 bool effectful = er && !effect_row_is_runtime_pure(er);
+                /* await-through-fn-value-parks-only-the-callee: an awaiting fn
+                 * is CPS-colored and suspends to the entry root, but `await`
+                 * adds nothing to its row -- without the slot, a call through
+                 * the value runs it from a fresh root and parks only its own
+                 * rest. */
+                if (!effectful && ib && cps_fn_may_await(ib->source_fn_def))
+                    effectful = true;
                 /* The twin force-declares the wrapped fn's direct entry with an
                  * `int64_t` per parameter (emit_module.c) and dispatches its int64
                  * `__cps` entry, so the wrapped fn's args must each be a plain
