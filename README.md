@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.6` -- Sandboxed handles in `turi` can no longer be forged: handle provenance is now verified wherever the interpreter re-tags a bare word.
+**Latest release:** `v0.63.7` -- `turi` and compiled programs use far less memory (Maps, closures, loops, continuations), and failed contracts now name the function and predicate.
 
 ## What
 

@@ -2,6 +2,66 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.7] -- 2026-10-08
+
+### Added
+
+- **Freeing procedures for round-tripped continuations.** `serial-resume-owned`
+  resumes a continuation rebuilt by `bytes->serial-cont` and frees its chain in
+  one consuming call; `serial-cont-free` drops one never resumed, and
+  `serial-bytes-free` frees the buffer. The serializable continuations guide
+  gains a "Who frees what" section.
+
+### Changed
+
+- **`TUR_MAIN_STACK_MB` now sizes the main stack on both engines.** A compiled
+  `#lang r7rs` program no longer runs `main` on a fixed 1 GiB stack: the size is
+  read from `TUR_MAIN_STACK_MB` (MiB), with `TUR_JIT_STACK_MB` still honored as
+  an alias, and invalid or unreservable values are reported.
+- **`tur jit` reports stack overflow instead of dying on a signal.** A runaway
+  recursion now prints "stack overflow: recursion too deep" on stderr in every
+  dialect; other faults keep their previous handling.
+- **The r7rs prelude cache prunes least-recently-used objects.** Cached library
+  objects beyond 24 that no build has touched for a day are dropped, and a
+  program's own inline-C no longer gives each fixture its own library object, so
+  split builds share one library object where they can.
+
+### Fixed
+
+- **Persistent `Map`s use far less memory.** Bitmap and collision nodes are no
+  longer allocated at full 32-slot size, cutting peak heap per entry on the
+  reported repro from about 361 B to 66 B.
+- **`turi` uses much less memory in loops.** By-value struct arguments are
+  copied only when their type has a writable field, released frames recycle
+  their tyvar and dict pins, and a one-shot `(resume k v)` clause no longer
+  clones its continuation slice per `perform` (the reported repro peaks at 31
+  MB, down from 556).
+- **Let-bound closures no longer leak in self-tail loops.** A capturing closure
+  returned by a `returns_fresh_closure` call and let-bound in a CPS function is
+  now freed; the reported repro goes from 10,000 lost blocks to a 4 KB peak.
+- **`(Ok nil)` and `(Some nil)` construct.** A nil-typed constructor argument no
+  longer emits invalid C, and a call to a `(Result nil E)` function above its
+  definition no longer fails with `TUR-E0012`.
+- **`Module/member` calls resolve at the top level.** A slash-qualified call
+  outside any `defmodule` no longer falls to runtime dispatch: exported members
+  resolve normally and private ones report "not exported from module".
+- **Nested sum readbacks work in inline C.** `tur_ok_int(tur_some_ptr(s))` for a
+  `(Result (Option cstr) E)` no longer silently misreads the inner box, so both
+  arms of a nested match fire.
+- **Failed contracts name the function and predicate.** A panic now reads like
+  "Precondition failed in safe-div at boom.tur:2: (not= b 0)" for `:pre`,
+  `:post`, return refinements, class result contracts and parameter refinements.
+- **Calls through parameters compile correctly under CPS.** A call through a
+  parameter `f` no longer resolves to a same-named global, and an effectful
+  lambda passed through an unthreaded fn-value parameter no longer aborts with
+  "unhandled effect".
+
+### Docs
+
+- **The r7rs guide documents calling an `any` procedure directly.** `(f x)` on
+  an `any` is a dynamic call in every dialect; wrong arity and non-procedure
+  arguments raise guardable Scheme error objects.
+
 ## [0.63.6] -- 2026-10-07
 
 ### Fixed
