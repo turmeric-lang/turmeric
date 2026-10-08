@@ -190,4 +190,12 @@ the handler (marking every join on the way `copied`) and registers the copy
 (`__dk_reap_keep(sub)`) above them, so neither the copy nor the originals can
 come off the list early. Closing it needs the copy's lifetime proved -- for a
 tail-resumed, one-shot case the copy is dead once the resume has delivered --
-which is the same proof the async park and the E7 deliveries would need.
+which is the same proof the E7 deliveries would need.
+
+Inside an async body that parks every turn this is now the whole per-turn
+cost: with the loop's joins freed at each park
+([async-repeated-park-holds-frames-until-settle](../archive/async-repeated-park-holds-frames-until-settle.md)),
+a turn that also performs an effect handled inside the body still keeps
+~785 B until the body settles (200,000 turns: 167 MB, from 205). A parked
+continuation that owns its envs (`dk_copy_range_owned`) and the per-node
+copy count (`DK.ncopy`) that fix brought are pieces this proof can use.

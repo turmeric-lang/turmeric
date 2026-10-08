@@ -150,7 +150,8 @@ six cc fallbacks fall back before the change too).
 
 ### What is left
 
-A body that parks again and again keeps each park's frames until it settles:
-~187 B a turn for the every-turn loop above (it was ~293 B, never freed). A
-server loop that never settles therefore still grows. Filed as
-[async-repeated-park-holds-frames-until-settle](../reported/async-repeated-park-holds-frames-until-settle.md).
+A body that parks again and again kept each park's frames until it settled:
+~187 B a turn for the every-turn loop above (it was ~293 B, never freed).
+Filed as
+[async-repeated-park-holds-frames-until-settle](async-repeated-park-holds-frames-until-settle.md),
+fixed the same day: that loop now runs flat.
