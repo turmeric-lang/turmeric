@@ -1723,7 +1723,12 @@ const char *emit_fn_value_clone_for_current_spec(EmitCtx *ctx, const Binding *vb
 char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
                                     uint32_t arity);
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
-                                 const char *inner_fn);
+                                 const char *inner_fn, const Type *inner_ty);
+char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result);
+/* The lifted lambda of a closure EX_POLY_WRAP whose fat value gets a `fn_cps`
+ * dispatcher (cps_ir_fncps_closure_sig_ok), or NULL.  Asked by the emitter that
+ * fills the slot and by the analysis that relies on it (arg_fat_has_fn_cps). */
+const Binding *emit_poly_wrap_fncps_closure(const Expr *pw);
 /* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the
  * given (result, arg0..argN) method signature, returning its C function name.
  * Returns NULL for the all-int64_t carrier case (caller uses the preamble

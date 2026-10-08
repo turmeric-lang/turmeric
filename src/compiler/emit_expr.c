@@ -1,6 +1,7 @@
 /* emit_expr.c -- expression-position C emission (emit_value and friends). */
 #include "emit_internal.h"
 #include "effect.h"     /* E2 fat-fn-value threading: EffectRow kind gate */
+#include "cps_ir.h"     /* E2 fat-fn-value threading: the fn_cps slot ABI */
 #include "globals.h"    /* g_dump_mono_specs, emit knobs */
 #include "mono_specs.h" /* VBM3: van Laarhoven lens dispatch redirect */
 #include "stack_guard.h" /* emit-depth-guard-loses-race-with-asan-stack */
@@ -2153,6 +2154,27 @@ static Binding *emit_expr_closure_fn_binding(const Expr *expr) {
         default:
             return NULL;
     }
+}
+
+/* The lifted lambda a closure EX_POLY_WRAP packs (the `thunk_binding` its arm
+ * computes below), when its fat value gets a `fn_cps` dispatcher. */
+const Binding *emit_poly_wrap_fncps_closure(const Expr *pw) {
+    if (!pw || pw->kind != EX_POLY_WRAP || pw->as.poly_wrap_.wrapper_binding ||
+        !pw->as.poly_wrap_.is_closure)
+        return NULL;
+    const Binding *tb = emit_expr_closure_fn_binding(pw->as.poly_wrap_.inner);
+    if (!tb) {
+        const Expr *hi = pw->as.poly_wrap_.inner;
+        while (hi && (hi->kind == EX_ASCRIBE || hi->kind == EX_REINTERPRET ||
+                      hi->kind == EX_CAST)) {
+            if (hi->kind == EX_ASCRIBE) hi = hi->as.ascribe_.inner;
+            else if (hi->kind == EX_REINTERPRET) hi = hi->as.reinterpret_.expr;
+            else hi = hi->as.cast_.expr;
+        }
+        if (hi && hi->kind == EX_VAR && hi->as.var.binding)
+            tb = hi->as.var.binding->hoist_closure_fn_binding;
+    }
+    return tb && cps_ir_fncps_closure_sig_ok(&tb->type) ? tb : NULL;
 }
 
 static Type emit_fn_result_type_from_type(Type fn_type) {
@@ -17254,6 +17276,35 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 tmp, tmp);
                         free(wadapt);
                     }
+                    /* E2 (fat-closure fn-value threading), the capturing twin of
+                     * the named-fn fill in the arm below: an EFFECTFUL capturing
+                     * lambda gets a `fn_cps` dispatcher too, so a call through
+                     * an un-annotated poly-fn param threads it onto the
+                     * caller's trampoline.  Every spelling above carries the
+                     * env box as `.env`, which is what the dispatcher keys on
+                     * (ensure_fncps_env_dispatch). */
+                    {
+                        const Binding *kb = emit_poly_wrap_fncps_closure(e);
+                        const struct EffectRow *ker = NULL;
+                        if (kb && kb->source_fn_def && kb->source_fn_def->inferred_effect_row)
+                            ker = kb->source_fn_def->inferred_effect_row;
+                        else if (kb)
+                            ker = kb->type.as.fn.effect_row;
+                        if (kb && ker && !effect_row_is_runtime_pure(ker) &&
+                            out.len >= 2 && memcmp(out.data + out.len - 2, " }", 2) == 0) {
+                            uint32_t kn = kb->type.as.fn.arity - 1;
+                            char *kd = ensure_fncps_env_dispatch(ctx, kn,
+                                                             kb->type.as.fn.result_kind == TY_NIL);
+                            /* Every spelling above ends in " }": the slot goes
+                             * before it, stored at the slot's declared type. */
+                            buf_truncate(&out, out.len - 2);
+                            if (kn == 1)
+                                buf_printf(&out, ", %s }", kd);
+                            else
+                                buf_printf(&out, ", (int64_t(*)(void*,int64_t,struct DK*))%s }", kd);
+                            free(kd);
+                        }
+                    }
                     buf_putc(&out, '\0');
                     char *result = strdup(out.data);
                     buf_free(&out);
@@ -17413,10 +17464,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * `<wrapper>__cps` twin and populate the fat closure's `fn_cps`
              * DK-threading slot, so a call through a fat-closure poly-fn param
              * dispatches the callback onto the caller's trampoline instead of a
-             * fresh root (which would leave the effect unhandled).  Restricted to a
-             * single `int`/`int64` arg + result (the twin's fixed int64 ABI); an
-             * aggregate-result carrier (spill) is excluded. */
+             * fresh root (which would leave the effect unhandled).  Restricted to
+             * the slot's word ABI (cps_ir_fncps_sig_ok); an aggregate-result
+             * carrier (spill) is excluded. */
             char *fn_cps_name = NULL;
+            uint32_t fn_cps_arity = 1;
             if (!spill) {
                 const Expr *inner = e->as.poly_wrap_.inner;
                 while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
@@ -17439,31 +17491,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Runtime-pure rows (only capability tags, e.g. IO from a
                  * `println`) are not CPS-colored and have no `__cps` entry. */
                 bool effectful = er && !effect_row_is_runtime_pure(er);
-                /* The twin force-declares the wrapped fn as `int64_t <fn>(int64_t)`
-                 * (emit_module.c) and dispatches its int64 `__cps` entry, so the
-                 * wrapped fn's arg AND result must both be a plain `int`/`int64`
-                 * (spelled `int64_t` in C).  A wider kind would mismatch the twin's
-                 * forward decl -- exclude it (stays on the delegated direct path). */
+                /* The twin force-declares the wrapped fn's direct entry with an
+                 * `int64_t` per parameter (emit_module.c) and dispatches its int64
+                 * `__cps` entry, so the wrapped fn's args must each be a plain
+                 * `int`/`int64` and its result one the twin can spell
+                 * (cps_ir_fncps_sig_ok -- the same question arg_fat_has_fn_cps
+                 * asks before counting this value as threaded).  Anything else
+                 * would mismatch the twin's forward decl and stays on the
+                 * delegated direct path. */
                 if (ib && ib->is_global && effectful
-                    && ib->type.kind == TY_FN && ib->type.as.fn.arity == 1) {
-                    TypeKind ak = ib->type.as.fn.arg_kinds[0];
-                    TypeKind rk = ib->type.as.fn.result_kind;
-                    bool ak_ok = (ak == TY_INT || ak == TY_INT64);
-                    bool rk_ok = (rk == TY_INT || rk == TY_INT64);
-                    if (ak_ok && rk_ok) {
-                        char *iname = raw_name_for_binding(ib);
-                        char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname);
-                        /* twin==NULL means already emitted -- reuse the name. */
-                        if (twin) { fn_cps_name = twin; }
-                        else {
-                            Buf tn; buf_init(&tn);
-                            buf_printf(&tn, "%s__cps", wn);
-                            buf_putc(&tn, '\0');
-                            fn_cps_name = strdup(tn.data);
-                            buf_free(&tn);
-                        }
-                        free(iname);
+                    && cps_ir_fncps_sig_ok(&ib->type)) {
+                    char *iname = raw_name_for_binding(ib);
+                    char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname, &ib->type);
+                    fn_cps_arity = ib->type.as.fn.arity;
+                    /* twin==NULL means already emitted -- reuse the name. */
+                    if (twin) { fn_cps_name = twin; }
+                    else {
+                        Buf tn; buf_init(&tn);
+                        buf_printf(&tn, "%s__cps", wn);
+                        buf_putc(&tn, '\0');
+                        fn_cps_name = strdup(tn.data);
+                        buf_free(&tn);
                     }
+                    free(iname);
                 }
             }
             /* fnsan-poly-carrier-named-wrapper: a FORALL sink (boxes_aggregate)
@@ -17557,7 +17607,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             }
             Buf out; buf_init(&out);
             const char *slot_fn = spill ? spill : (named_adapt ? named_adapt : wn);
-            if (fn_cps_name)
+            /* The slot's declared type is the one-argument ABI; a twin of any
+             * other arity is stored through a cast and called back at its own
+             * type (emit_cps_ir.c, fncps_slot_call). */
+            if (fn_cps_name && fn_cps_arity != 1)
+                buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s, "
+                                 "(int64_t(*)(void*,int64_t,struct DK*))%s }",
+                           slot_fn, fn_cps_name);
+            else if (fn_cps_name)
                 buf_printf(&out, "(tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))%s, %s }",
                            slot_fn, fn_cps_name);
             else

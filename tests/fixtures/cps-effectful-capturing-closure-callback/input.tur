@@ -1,0 +1,30 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param: an effectful
+;; CAPTURING closure through an un-annotated fn parameter threads the caller's
+;; continuation: its fat value's `fn_cps` slot dispatches on the env box's
+;; lifted entry through the direct->CPS registry.  Literals and a let-bound
+;; closure, arities 0-2, an int or unit result, tail and non-tail; pure
+;; capturing closures through the same parameters.
+(defeffect Ask [] :int)
+(defn ask [] : int (perform (Ask)))
+(defn app0 [h : (fn [] int)] : int (+ 1 (h)))
+(defn app1 [h : (fn [int] int) x : int] : int (h x))
+(defn app1n [h : (fn [int] int) x : int] : int (* 2 (h x)))
+(defn app2 [h : (fn [int int] int) x : int] : int (h x (+ x 1)))
+(defn appv [h : (fn [int] void) x : int] : int (do (h x) (+ x 100)))
+(defn adder [m : int] : (fn [int] int) (fn [x : int] : int (+ m x (ask))))
+(defn main [] : int
+  (let [m 5
+        n 7]
+    (println (handle (app0 (fn [] : int (+ m (ask)))) (Ask [] k) (resume k 10)))               ; 16
+    (println (handle (app1 (fn [x : int] : int (+ m x (ask))) 1) (Ask [] k) (resume k 10)))     ; 16
+    (println (handle (app1n (fn [x : int] : int (+ m x (ask))) 1) (Ask [] k) (resume k 10)))    ; 32
+    (println (handle (app2 (fn [x : int y : int] : int (+ m n x y (ask))) 1) (Ask [] k) (resume k 10))) ; 25
+    (println (handle (appv (fn [x : int] : void (println (+ m x (ask)))) 1) (Ask [] k) (resume k 10)))  ; 16 then 101
+    (let [f (fn [x : int] : int (* n (+ x (ask))))]
+      (println (handle (app1 f 2) (Ask [] k) (resume k 1)))                                      ; 21
+      (println (handle (app1n f 2) (Ask [] k) (resume k 1))))                                    ; 42
+    ;; pure capturing closures through the same params, no handler
+    (println (app1 (fn [x : int] : int (+ m x)) 1))                                              ; 6
+    (println (app2 (fn [x : int y : int] : int (* m x y)) 2))                                    ; 30
+    (println (appv (fn [x : int] : void (println (* n x))) 3)))                                  ; 21 then 103
+  0)

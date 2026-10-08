@@ -1,0 +1,40 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param: an effectful
+;; callback through an un-annotated fn parameter threads the caller's
+;; continuation through the fat closure's `fn_cps` slot at any arity up to
+;; CPS_FNCPS_MAX_ARGS word arguments, with an int, bool or unit result, in tail
+;; and non-tail position; pure values through the same parameters still take
+;; the direct path.
+(defeffect Ask [] :int)
+(defn ask [] : int (perform (Ask)))
+;; arity 0, tail and non-tail
+(defn app0 [h : (fn [] int)] : int (h))
+(defn app0n [h : (fn [] int)] : int (+ 100 (h)))
+;; arity 2 tail / non-tail
+(defn app2 [h : (fn [int int] int) x : int] : int (h x (+ x 1)))
+(defn app2n [h : (fn [int int] int) x : int] : int (* 2 (h x (+ x 1))))
+;; arity 3
+(defn app3 [h : (fn [int int int] int) x : int] : int (h x (+ x 1) (+ x 2)))
+;; bool result, 2 args, used in an if
+(defn appb [h : (fn [int int] bool) x : int] : int (if (h x 3) 1 0))
+;; void result, 2 args
+(defn appv [h : (fn [int int] void) x : int] : int (do (h x 5) (+ x 1)))
+;; named effectful fn of 2 args
+(defn sum-ask [a : int b : int] : int (+ a b (ask)))
+(defn main [] : int
+  (println (handle (app0 ask) (Ask [] k) (resume k 10)))                               ; 10
+  (println (handle (app0 (fn [] : int (* 2 (ask)))) (Ask [] k) (resume k 10)))          ; 20
+  (println (handle (app0n (fn [] : int (* 2 (ask)))) (Ask [] k) (resume k 10)))         ; 120
+  (println (handle (app2 sum-ask 1) (Ask [] k) (resume k 10)))                          ; 13
+  (println (handle (app2n sum-ask 1) (Ask [] k) (resume k 10)))                         ; 26
+  (println (handle (app2n (fn [a : int b : int] : int (- b a)) 1) (Ask [] k) (resume k 10)))  ; 2 pure
+  (println (handle (app3 (fn [a : int b : int c : int] : int (+ a b c (ask))) 1) (Ask [] k) (resume k 10))) ; 16
+  (println (handle (appb (fn [a : int b : int] : bool (> (+ a (ask)) b)) 1) (Ask [] k) (resume k 10)))      ; 1
+  (println (handle (appb (fn [a : int b : int] : bool (> (+ a (ask)) b)) 1) (Ask [] k) (resume k 0)))       ; 0
+  (println (handle (appv (fn [a : int b : int] : void (println (+ a b (ask)))) 1) (Ask [] k) (resume k 10))) ; 16 then 2
+  ;; pure values through the same params, outside any handler
+  (println (app0 (fn [] : int 7)))                                                      ; 7
+  (println (app2 (fn [a : int b : int] : int (* a b)) 3))                               ; 12
+  (println (app3 (fn [a : int b : int c : int] : int (* a b c)) 2))                     ; 24
+  (println (appb (fn [a : int b : int] : bool (< a b)) 1))                              ; 1
+  (println (appv (fn [a : int b : int] : void (println (* a b))) 4))                    ; 20 then 5
+  0)
