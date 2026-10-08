@@ -1854,27 +1854,13 @@ static void tur_frame_fire_chain(tur_frame *f) {
     }
 }
 
-/* Phase R2/R6: tur_panic */
+/* Phase R2: tur_panic */
 static int tur_panic_in_progress = 0;
 static tur_frame *global_panic_frame = NULL;
-static int g_panic_trace = 0;  /* Set by compiler when --panic-trace is used */
 static int64_t g_tur_args = 0;  /* *args*: CLI arguments as list of :cstr (set in main) */
 static const char *g_tur_argv0 = "";  /* *argv0*: the program's own name, argv[0] (set in main) */
 static void tur_panic_set_frame(tur_frame *f) {
     global_panic_frame = f;
-}
-static void tur_panic_print_scope_chain(void) {
-    if (!g_panic_trace || !global_panic_frame) return;
-    fprintf(stderr, "  scope chain:\n");
-    tur_frame *frames[64];
-    int n_frames = 0;
-    for (tur_frame *cur = global_panic_frame; cur != NULL && n_frames < 64; cur = cur->parent) {
-        frames[n_frames++] = cur;
-    }
-    for (int i = 0; i < n_frames; i++) {
-        fprintf(stderr, "    at frame %p (parent: %p, n_defers: %d)\n",
-                (void*)frames[i], (void*)frames[i]->parent, frames[i]->n);
-    }
 }
 
 typedef struct tur_panic_payload tur_panic_payload;
@@ -1913,7 +1899,6 @@ static void tur_panic_at(const char *file, int line, const char *msg) {
         return;
     }
     fprintf(stderr, "panic at %s:%d: %s\n", file, line, msg ? msg : "(no message)");
-    tur_panic_print_scope_chain();
     if (global_panic_frame) {
         tur_frame_fire_chain(global_panic_frame);
     }

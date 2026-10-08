@@ -1,0 +1,16 @@
+;; The other side of errors/cps-effectful-closure-returned-through-empty-row:
+;; a returned closure that HANDLES the effect its callee performs lets nothing
+;; escape, so a call through `(fn [int] int)` needs no handler from the caller
+;; and the program builds and runs.  (A CAPTURING closure of this shape is
+;; still refused -- docs/reported/cps-capturing-closure-with-handle-returned-
+;; refused.md.)
+(defeffect Ask [] :int)
+(defn ask [] : int (perform (Ask)))
+(defn app1 [h : (fn [int] int) x : int] : int (h x))
+(defn make [] : (fn [int] int)
+  (fn [x : int] : int
+    (handle (+ 3 x (ask))
+      (Ask [] k) (resume k 10))))
+(defn main [] : int
+  (println (app1 (make) 1))
+  0)

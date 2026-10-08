@@ -125,12 +125,13 @@ static void test_s2_linear(Arena *a) {
     vc_set_goal(vc, le(vc, add(vc, i, vc_int(vc, 1)), n));
     ok(decide(vc, a) == RT_VALID, "S2: 0 <= i < n |- i+1 <= n");
 
-    /* x >= 0.0 |- 0.5x >= 0.0  over the reals */
+    /* 0.25 <= x < 2.5 |- x < 3.75  over the reals: bounds only */
     vc = vc_new(a);
     VCTerm *r = R(vc, "r");
-    vc_add_hyp(vc, le(vc, vc_real(vc, 0.0), r));
-    vc_set_goal(vc, le(vc, vc_real(vc, 0.0), mul(vc, r, vc_real(vc, 0.5))));
-    ok(decide(vc, a) == RT_VALID, "S2: x >= 0.0 |- 0.5x >= 0.0");
+    vc_add_hyp(vc, le(vc, vc_real(vc, 0.25), r));
+    vc_add_hyp(vc, lt(vc, r, vc_real(vc, 2.5)));
+    vc_set_goal(vc, lt(vc, r, vc_real(vc, 3.75)));
+    ok(decide(vc, a) == RT_VALID, "S2: 0.25 <= x < 2.5 |- x < 3.75");
 
     /* SOUNDNESS: x >= 0 does NOT entail x > 0. */
     vc = vc_new(a);
@@ -143,6 +144,71 @@ static void test_s2_linear(Arena *a) {
     vc = vc_new(a);
     vc_set_goal(vc, lt(vc, vc_int(vc, 0), V(vc, "z")));
     ok(decide(vc, a) != RT_VALID, "S2 soundness: unconstrained z is not positive");
+}
+
+/* float-proofs-assume-exact-reals: a real-sorted term is a C double.  Its
+ * arithmetic rounds and it can be a NaN, so S2 proves only comparisons, and a
+ * negated comparison counts only for a term the cube rules a NaN out for. */
+static void test_reals_are_doubles(Arena *a) {
+    /* x >= 0.0 |- 0.5x >= 0.0: real arithmetic is opaque, so not proved
+     * (it happens to hold in double; the solver no longer reasons about it). */
+    RefineVC *vc = vc_new(a);
+    VCTerm *r = R(vc, "r");
+    vc_add_hyp(vc, le(vc, vc_real(vc, 0.0), r));
+    vc_set_goal(vc, le(vc, vc_real(vc, 0.0), mul(vc, r, vc_real(vc, 0.5))));
+    ok(decide(vc, a) != RT_VALID, "reals: x >= 0.0 |- 0.5x >= 0.0 is not proved");
+
+    /* x > 0.0 |- (x + 0.1) - 0.1 = x: a theorem over the rationals, false
+     * for x = 0.3 in double. */
+    vc = vc_new(a);
+    r = R(vc, "r");
+    vc_add_hyp(vc, lt(vc, vc_real(vc, 0.0), r));
+    vc_set_goal(vc, eq(vc, vc_mk2(vc, VC_SUB, add(vc, r, vc_real(vc, 0.1)), vc_real(vc, 0.1)), r));
+    ok(decide(vc, a) != RT_VALID, "reals: (x + 0.1) - 0.1 = x is not proved");
+
+    /* clamp's last path: !(x < 0.0), !(1.0 < x) |- x <= 1.0.  False for a
+     * NaN, which is on neither side of `<`. */
+    vc = vc_new(a);
+    r = R(vc, "r");
+    vc_add_hyp(vc, vc_not(vc, lt(vc, r, vc_real(vc, 0.0))));
+    vc_add_hyp(vc, vc_not(vc, lt(vc, vc_real(vc, 1.0), r)));
+    vc_set_goal(vc, le(vc, r, vc_real(vc, 1.0)));
+    ok(decide(vc, a) != RT_VALID, "reals: !(x < 0.0), !(1.0 < x) |- x <= 1.0 is not proved (NaN)");
+
+    /* ... and proved once a positive comparison rules the NaN out. */
+    vc = vc_new(a);
+    r = R(vc, "r");
+    vc_add_hyp(vc, lt(vc, vc_real(vc, -5.5), r));
+    vc_add_hyp(vc, vc_not(vc, lt(vc, vc_real(vc, 1.0), r)));
+    vc_set_goal(vc, le(vc, r, vc_real(vc, 1.0)));
+    ok(decide(vc, a) == RT_VALID, "reals: -5.5 < x, !(1.0 < x) |- x <= 1.0");
+
+    /* x = x and x <= x are false for a NaN; vc_mk must not fold them. */
+    vc = vc_new(a);
+    r = R(vc, "r");
+    vc_set_goal(vc, eq(vc, r, r));
+    ok(decide(vc, a) != RT_VALID, "reals: |- x = x is not proved (NaN)");
+    vc = vc_new(a);
+    r = R(vc, "r");
+    vc_set_goal(vc, le(vc, r, r));
+    ok(decide(vc, a) != RT_VALID, "reals: |- x <= x is not proved (NaN)");
+
+    /* x <= y, y <= x |- x = y: both sides NaN-free, S3's exchange decides. */
+    vc = vc_new(a);
+    r = R(vc, "r");
+    VCTerm *s = R(vc, "s");
+    vc_add_hyp(vc, le(vc, r, s));
+    vc_add_hyp(vc, le(vc, s, r));
+    vc_set_goal(vc, eq(vc, r, s));
+    ok(decide(vc, a) == RT_VALID, "reals: x <= y, y <= x |- x = y");
+
+    /* Ints are unchanged: !(n < 0) |- 0 <= n, and n = n folds. */
+    vc = vc_new(a);
+    VCTerm *n = V(vc, "n");
+    vc_add_hyp(vc, vc_not(vc, lt(vc, n, vc_int(vc, 0))));
+    vc_set_goal(vc, le(vc, vc_int(vc, 0), n));
+    ok(decide(vc, a) == RT_VALID, "ints: !(n < 0) |- 0 <= n");
+    ok(eq(vc, n, n)->op == VC_TRUE, "ints: n = n folds to true");
 }
 
 /* S2c-lite (docs/archive/solver-integer-tail-plan.md): the integer phase of
@@ -624,6 +690,7 @@ int main(void) {
     test_constant_folding(&a);
     test_s0_trivial(&a);
     test_s2_linear(&a);
+    test_reals_are_doubles(&a);
     test_s2_integer(&a);
     test_model_search_budget(&a);
     test_s1_euf(&a);

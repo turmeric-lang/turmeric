@@ -369,7 +369,10 @@ bool euf_assert_cube(EufState *st, const VCCube *c) {
     for (uint32_t i = 0; i < c->n; i++) {
         VCTerm *lit = c->lits[i];
         VCTerm *at  = refine_lit_atom(lit);
-        if (refine_lit_is_neg(lit) && at->op == VC_EQ) {
+        /* `x != y` with x, y in one class: a contradiction unless the class
+         * may be NaN, which is unequal to itself (refine_solver.h). */
+        if (refine_lit_is_neg(lit) && at->op == VC_EQ &&
+            (refine_cube_nan_free(c, at->kids[0]) || refine_cube_nan_free(c, at->kids[1]))) {
             if (euf_equal(st, at->kids[0], at->kids[1])) { st->unsat = true; return false; }
         }
         /* A positive and a negative occurrence of congruent atoms. */

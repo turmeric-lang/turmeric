@@ -1084,18 +1084,30 @@ side of the one-directional invariant: the worst outcome is an obligation the
 solver declines to prove, which keeps the runtime check it would have had
 anyway.
 
-- **[deferred] A `float` refinement is proved over exact reals, checked in `double`.**
-  Where IEEE rounding breaks an identity the prover relies on, the proof is
-  about numbers the program never computes: `(- (+ x 0.1) 0.1)` is proved
-  equal to `x`, and is not, for `x = 0.3`. Monotone shapes (a bound scaled by
-  a positive literal, a sum of non-negatives) hold in both worlds; an
-  equality, a strict inequality at a boundary, or anything that can underflow
-  may not. The counterexample search evaluates reals in `double`, so a
-  witness it reports is one the program would reject; it is the proving side
-  that is optimistic. Fix directions, and the one consistent with the
-  soundness invariant, are in
-  [`docs/reported/float-proofs-assume-exact-reals.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/float-proofs-assume-exact-reals.md).
-  Until it is resolved, read a proved float refinement as a claim over reals.
+- **[by design] A `float` refinement is proved only where `double` cannot
+  disagree with the reals.** A `float` is a C double, and the solver decides
+  over exact rationals, so it uses only what the two agree on:
+  - Comparisons, bounds and transitivity between float terms and literals:
+    `0.25 <= x < 2.5` proves `x < 3.75`, and `norm(v) < 3.25` proves
+    `norm(v) < 3.75`.
+  - Not `+ - * /` or negation on a float: each rounds, so the solver treats
+    `(* x 0.25)` as an opaque term. `(- (+ x 0.1) 0.1)` is not proved equal to
+    `x` (it is not, for `x = 0.3`), and neither is the true but rounding-
+    sensitive `x >= 0.0 |- (* x 0.25) >= 0.0`. Both keep their runtime check.
+  - A negated comparison only for a term the same path rules a NaN out for.
+    A NaN is on neither side of `<`, so `(not (< x 0.0))` says nothing about
+    `x` unless a positive comparison on that path mentions it. The two-`if`
+    `clamp` is not proved in range, because for a NaN argument it returns the
+    NaN. Likewise `(= x x)` and `(<= x x)` are not proved for a float `x`.
+
+  The counterexample search evaluates in `double`, so it still refutes
+  concrete calls (`errors/reflect-float-not-tightened`). Fixtures:
+  `refine-float-lra`, `refine-float-measure` (proved),
+  `refine-float-rounding-keeps-check` and `refine-float-nan-keeps-check`
+  (kept and firing). One gap remains: congruence through a float equality
+  (`a = b |- f(a) = f(b)`), which `double` breaks only at signed zero
+  (`0.0 = -0.0`, but `1/0.0` is not `1/-0.0`). See
+  [`docs/archive/float-proofs-assume-exact-reals.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/float-proofs-assume-exact-reals.md).
 - **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
   separate piece of work with real soundness preconditions.

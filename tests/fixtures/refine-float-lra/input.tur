@@ -1,17 +1,26 @@
 ;; RT3/S2: a float refinement discharged over the rationals (QF_UFLRA).
 ;;
-;; Hypothesis: x >= 0.0.  Goal: x * 0.5 >= 0.0.  Multiplication by a LITERAL
-;; stays linear, so Fourier-Motzkin decides it exactly -- no runtime check.
-;; Note the deliberate non-zero fractional literals: an integral 1.0/2.0 test
-;; could not tell a truncating path from a correct one.
-(defn shrink [x : #refine{ v : float | (>= v 0.0) }] : #refine{ r : float | (>= r 0.0) }
-  (* x 0.25))
+;; A float is a C double, so S2 decides only what double cannot round:
+;; bounds, comparisons and transitivity between float terms and literals.
+;; `+ - * /` on a float is opaque to it -- `x >= 0.0 |- x * 0.25 >= 0.0` keeps
+;; its runtime check (float-proofs-assume-exact-reals; the other side is
+;; refine-float-rounding-keeps-check).  Both proofs below need no arithmetic,
+;; so --strict-refine accepts them with no runtime check.  The literals carry
+;; non-zero fractional parts on purpose: an integral 1.0/2.0 test could not
+;; tell a truncating path from a correct one.
+(defn widen [x : #refine{ v : float | (and (>= v 0.25) (< v 2.5)) }]
+            : #refine{ r : float | (and (> r 0.125) (< r 3.75)) }
+  x)
 
-(defn lift [x : #refine{ v : float | (>= v 0.0) }] : #refine{ r : float | (> r 0.0) }
-  (+ x 7.1))
+;; On the `else` path `(not (< a b))` is not needed: `a >= 0.5` is.
+(defn larger [a : #refine{ v : float | (>= v 0.5) }
+              b : #refine{ w : float | (>= w 0.5) }]
+             : #refine{ r : float | (>= r 0.5) }
+  (if (< a b) b a))
 
 (defn main [] : int
-  (println (shrink 8.4))
-  (println (lift 0.0))
+  (println (widen 2.25))
+  (println (larger 0.75 1.25))
+  (println (larger 3.5 0.5))
   (println "refine-float-lra")
   0)

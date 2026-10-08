@@ -287,6 +287,34 @@ static inline VCTerm *refine_lit_atom(VCTerm *l) {
     return refine_lit_is_neg(l) ? l->kids[0] : l;
 }
 
+/* float-proofs-assume-exact-reals: the stages decide over exact rationals,
+ * and a `float` is a C double.  Two places that matters, each closed by one
+ * predicate:
+ *
+ *   ROUNDING.  `+ - * /` and negation of a real-sorted term round in double,
+ *   so `(x + 0.1) - 0.1 = x` is a theorem over the rationals and false for
+ *   x = 0.3.  The LA encoder treats such a node as an opaque variable
+ *   (`refine_real_arith`) instead of interpreting it: comparisons, bounds and
+ *   transitivity between real terms and literals are exact in double, and are
+ *   all S2 still decides for reals.  EUF still sees the node as an
+ *   application, which is sound -- double arithmetic is a function.
+ *
+ *   NaN.  `(not (< x y))` is `y <= x` only when neither side is NaN, and
+ *   `(= x x)` is false for NaN.  A real term is NaN-free in a cube when it is
+ *   a literal or an argument of a POSITIVE comparison literal of that cube
+ *   (which cannot hold for a NaN).  A negated comparison or a disequality is
+ *   used only when its real-sorted arguments are NaN-free
+ *   (`refine_cube_nan_free`); otherwise it is skipped, which for a refuter
+ *   only loses information.  `clamp` written with two `if`s is NOT proved
+ *   in range: for a NaN argument it returns NaN, and the runtime check is
+ *   what says so.
+ *
+ * Not covered: congruence through a real-sorted equality (`a = b |- f(a) =
+ * f(b)`), which double breaks only at signed zero (0.0 = -0.0, and 1/0.0 is
+ * not 1/-0.0). */
+bool refine_real_arith(const VCTerm *t);
+bool refine_cube_nan_free(const VCCube *c, const VCTerm *t);
+
 /* Build the DNF cube set of `hyps AND (not goal)`.  Returns false (and sets
  * out->overflow) when a cap is hit. */
 bool refine_cubes_build(RefineVC *vc, Arena *a, VCCubeSet *out);

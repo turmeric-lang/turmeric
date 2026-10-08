@@ -1,11 +1,65 @@
 # An effectful closure returned through an empty-row fn type compiles, then aborts with `unhandled effect`
 
+**Resolved 2026-10-08 (direction 1, refuse it).**  The build is refused now,
+with a note naming the closure:
+
+```
+repro.tur:2:20: error: this effect operation has no lowering here: ...
+repro.tur:4:60: note: `Ask` escapes this function value: it is returned,
+  stored, or passed where a call through it does not carry the caller's
+  handler, so the call would start with none in scope and the effect could
+  not be lowered for it. Handle `Ask` inside it, or pass it straight to the
+  function that calls it.
+```
+
+A lambda that PERFORMED directly was already refused that way: an
+unthreaded fn-value's net escaping effects (`fn_net_escaping_acc`) taint
+their effect, which takes its performers off the CPS backend.  What this one
+missed was the effect arriving through a CALL: the walk saw `(ask)` and
+nothing in it.  Now a direct call to a colored top-level fn adds that fn's
+net escaping effects, in the call's own context, so a `handle` around the call
+still discharges them (`fn_net_escaping`).  The per-fn sets are the least
+fixpoint over the call graph (`nesc_fixpoint`, program order, updated in
+place), so recursion is exact and the cost is linear per round: a 1,500-deep
+chain of functions each calling the next twice, plus 300 returned closures,
+classifies in 0.7 s.  ensure_S adds an unthreaded fn-value's escaping effects
+to its entry's effect set whether or not it was a candidate -- the capturing
+lambda here was SIG-REJECT, so its taint came only from its direct
+`perform`s, of which it had none.  The withdrawal walk asks the same question
+and gets the same answer.
+
+A named fn used as a serial-shift receiver is excluded: the reset calls it
+outward through its `__cps` twin with the reset's continuation, so its
+callees' performs do reach the enclosing handlers
+(serial-shift-receiver-effect-reaches-handler and -under-if pin that).
+`emit_cps_ir_effect_escaping_fnval` names the fn-value for the note.
+
+Measured: the compiled suite 3621 / 0, the r7rs ctest part 16 / 16, the GC
+harness 249 / 0, the JIT and interpreter slices clean.  The one fixture it
+changed was this report's own bystander: `cps-effectful-capturing-closure-
+callback` carried an unused `adder` of exactly this shape, and a refusal
+taints the whole effect, so it refused the file; `adder` moved to the
+refusal fixture.  That is the coarse part of direction 1, shared with the
+direct-perform case: one escaping closure anywhere refuses every perform of
+its effect.
+
+Pinned by `errors/cps-effectful-closure-returned-through-empty-row`
+(`requires.compiled`: the interpreter runs it) and
+`cps-effectful-closure-returned-handles-its-own-effect` (a returned closure
+that handles its own effect builds and prints 14).
+
+Not covered: a CAPTURING closure that handles its own effect and is
+returned is refused, before and after this change
+([cps-capturing-closure-with-handle-returned-refused](../reported/cps-capturing-closure-with-handle-returned-refused.md)).
+`--strict-effects` still attributes the closure's effect to `adder` itself
+(below); that is a diagnostics wording issue and is not filed.
+
 **Severity: medium.** A miscompile class, not a refusal: a correct program
 builds and then aborts at run time; `tur --interpret` runs it. It needs an
 effectful closure to cross a function boundary as a VALUE whose declared type
 has an empty effect row, which the default (lenient) effect checker accepts.
 Found 2026-10-08 while widening the `fn_cps` slot for
-[cps-effectful-callback-through-multi-arg-or-untyped-param](cps-effectful-callback-through-multi-arg-or-untyped-param.md);
+[cps-effectful-callback-through-multi-arg-or-untyped-param](../reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md);
 it reproduces identically on the compiler before that change.
 
 ## Repro

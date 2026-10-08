@@ -1,0 +1,16 @@
+;; defmacro* hands its synthesized defn to the macro-time evaluator as printed
+;; source (form_print), so every literal in the body has to print back to
+;; itself.  `%g` printed the float 2.0 as the int `2` -- the body then failed
+;; to elaborate, "annotated float, got int" -- and 0.06172835 as 0.0617284,
+;; which would have taken the other branch below.  Doubling is exact, so the
+;; comparison holds only for the literals as written.
+(defmacro* pick [x]
+  (let [k : float 2.0
+        t : float 0.1234567]
+    (if (= t (* k 0.06172835))
+      (syntax-list (sym->syntax "+") x (read-string "0.25"))
+      (syntax-list (sym->syntax "*") x (read-string "1.5")))))
+
+(defn main [] : int
+  (println (pick 2.5))
+  0)

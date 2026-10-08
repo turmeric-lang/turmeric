@@ -23,7 +23,7 @@ void emit_write_inline_c_fns(Buf *out) {
     if (g_inline_c_fns_init) { buf_free(&g_inline_c_fns); g_inline_c_fns_init = false; }
 }
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn CPS lowering */
-#include "globals.h"   /* g_cps_path, g_panic_trace */
+#include "globals.h"   /* g_cps_path */
 
 /* carrier-return-concrete-tail: an `int64_t` (carrier) return fed a value whose
  * emitted C is concrete -- a by-value aggregate or a float kind.  The mixed
@@ -6344,14 +6344,6 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "__tur_static_init();\n");
         ctx->indent -= 4;
         emit_win_binary_stdio_prologue(file);
-    }
-
-    /* Phase R6: Inject g_panic_trace initialization at start of main */
-    if (is_main && g_emit_panic_trace) {
-        ctx->indent += 4;
-        indent_buf(file, ctx->indent);
-        buf_puts(file, "g_panic_trace = 1;\n");
-        ctx->indent -= 4;
     }
 
     /* CLI-ARGS: build *args* cons list from argv[1..argc-1] before user code runs.

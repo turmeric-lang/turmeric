@@ -241,6 +241,11 @@ static LinExp linearize(LaState *st, VCTerm *t, uint32_t depth) {
     if (!t) { e.bad = true; return e; }
     if (depth > LA_MAX_LINEARIZE_DEPTH) { e.bad = true; return e; }
 
+    /* A real-sorted `+ - * /` or negation rounds in double, so it is not the
+     * field operation Fourier-Motzkin would read it as: opaque
+     * (float-proofs-assume-exact-reals, refine_solver.h). */
+    if (refine_real_arith(t)) goto opaque;
+
     switch (t->op) {
         case VC_CONST_INT:  e.konst = rat_of(t->as.i); return e;
         case VC_CONST_REAL: e.konst = rat_of_double(t->as.r);
@@ -278,8 +283,10 @@ static LinExp linearize(LaState *st, VCTerm *t, uint32_t depth) {
         default: break;
     }
 
-    /* Opaque: a variable, an application, a nonlinear product, `mod`, or an
-     * integer division.  This is the purification boundary S3 shares. */
+opaque:;
+    /* Opaque: a variable, an application, a nonlinear product, `mod`, an
+     * integer division, or real arithmetic.  This is the purification
+     * boundary S3 shares. */
     uint32_t v = la_var(st, t);
     if (v == UINT32_MAX) { e.bad = true; return e; }
     e.coef[v] = rat_of(1);
@@ -444,6 +451,9 @@ bool la_assert_cube(LaState *st, const VCCube *c) {
         if (at->n != 2) continue;
         VCTerm *x = at->kids[0], *y = at->kids[1];
         if (!vc_is_arith(x) || !vc_is_arith(y)) continue;
+        /* `!(x<y) => y<=x` is false when either side is a NaN; skip the
+         * literal unless the cube rules that out (refine_solver.h). */
+        if (neg && !(refine_cube_nan_free(c, x) && refine_cube_nan_free(c, y))) continue;
         switch (at->op) {
             case VC_LT:
                 if (neg) la_assert_le(st, y, x, false);   /* !(x<y) => y<=x */

@@ -121,6 +121,7 @@ report's earlier state pinned in `errors/`, now a passing fixture printing
 clean under clang's `-fsanitize=function`.
 
 Found on the way, pre-existing and filed separately:
-[cps-effectful-closure-returned-through-empty-row-aborts](cps-effectful-closure-returned-through-empty-row-aborts.md)
--- an effectful closure returned by a call, `(app1 (adder 3) 1)`, still
-compiles and aborts with `unhandled effect`, as it did before this change.
+[cps-effectful-closure-returned-through-empty-row-aborts](../archive/cps-effectful-closure-returned-through-empty-row-aborts.md)
+-- an effectful closure returned by a call, `(app1 (adder 3) 1)`, compiled
+and aborted with `unhandled effect`, as it did before this change.  Since
+2026-10-08 it is refused at compile time instead.

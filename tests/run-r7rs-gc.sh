@@ -33,9 +33,20 @@
 #      CPS entries dropped their reap registrations).
 #
 # Linux/glibc and macOS (the collector is; elsewhere it is plain malloc).
-#   R7RS_GC_TORTURE=N   the torture interval (default 31, about two minutes on
-#                       four cores; 1 collects on EVERY allocation, the deep run
-#                       to make before touching the collector or its roots).
+#   R7RS_GC_TORTURE=N   the torture interval (default 31; 1 collects on EVERY
+#                       allocation, the deep run to make before touching the
+#                       collector or its roots).
+#   R7RS_GC_TORTURE_SCALE=R
+#                       passed on as TUR_GC_TORTURE_SCALE to every run at an
+#                       interval above 1 (default 64; 0 keeps the interval
+#                       fixed): a program holding a large live heap collects
+#                       every live-objects / R allocations instead of every N,
+#                       so it is not re-marked tens of thousands of times
+#                       (docs/archive/r7rs-gc-torture-quadratic-in-live-heap.md).
+#                       Small heaps -- start-up, the prelude, most fixtures --
+#                       keep the N interval.  The every-allocation cases (seam,
+#                       threads-run and the fixture cases at 1) are never
+#                       scaled, and neither is R7RS_GC_TORTURE=1.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -49,6 +60,8 @@ if [ "$HOST" != "Linux" ] && [ "$HOST" != "Darwin" ]; then
 fi
 TUR="$(cd "$(dirname "$TUR")" && pwd)/$(basename "$TUR")"
 TORTURE="${R7RS_GC_TORTURE:-31}"
+SCALE="${R7RS_GC_TORTURE_SCALE:-64}"
+[ "$TORTURE" = 1 ] && SCALE=0
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -147,15 +160,15 @@ one_case() {
     # in the log: on CI the process is gone by the time anyone looks, and a
     # bare "timed out" cannot tell a deadlock from a cycle walk (the macOS
     # r7rs-threads-lifecycle timeout on #956 left nothing else to go on).
-    (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" RD_STDIN="$stdin" \
-        run_deadline 300 "$WORK/$name.out" "$WORK/$name.err" "$WORK/$name" "${args[@]}") 2> /dev/null
+    (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" \
+        TUR_GC_TORTURE_SCALE="$SCALE" RD_STDIN="$stdin" run_deadline 300 "$WORK/$name.out" "$WORK/$name.err" "$WORK/$name" "${args[@]}") 2> /dev/null
     rc=$?
     want=0; [ -f "$dir/expected.exit" ] && want="$(tr -d '[:space:]' < "$dir/expected.exit")"
     if [ "$rc" = 124 ]; then
-        echo "FAIL $name -- timed out (>300s) under TUR_GC_TORTURE=$TORTURE"
+        echo "FAIL $name -- timed out (>300s) under TUR_GC_TORTURE=$TORTURE TUR_GC_TORTURE_SCALE=$SCALE"
         sed -n '/^--- stacks at the/,$p' "$WORK/$name.err"
     elif { [ "$want" = nonzero ] && [ "$rc" = 0 ]; } || { [ "$want" != nonzero ] && [ "$rc" != "$want" ]; }; then
-        echo "FAIL $name -- exit $rc, expected $want under TUR_GC_TORTURE=$TORTURE; stderr tail:"
+        echo "FAIL $name -- exit $rc, expected $want under TUR_GC_TORTURE=$TORTURE TUR_GC_TORTURE_SCALE=$SCALE; stderr tail:"
         # The whole tail, not one line cut at 120 columns: a panic line
         # starts with the emitted unit's path, and macOS's long $TMPDIR put
         # the message itself past the cut (saffron-class-fn-extra on #1007
@@ -166,7 +179,7 @@ one_case() {
             tail -3 "$WORK/$name.out" | cut -c1-200 | sed 's/^/    /'
             echo "    --- stacks at the fault, re-run under the debugger ---"
             (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" \
-                crash_stacks "$stdin" "$WORK/$name" "${args[@]}") | sed 's/^/    /'
+                TUR_GC_TORTURE_SCALE="$SCALE" crash_stacks "$stdin" "$WORK/$name" "${args[@]}") | sed 's/^/    /'
         fi
     elif ! diff -q "$WORK/$name.out" "$dir/expected.stdout" > /dev/null; then
         echo "FAIL $name -- stdout differs with the collector"
@@ -176,7 +189,7 @@ one_case() {
     fi
 }
 export -f one one_case run_deadline dump_stacks crash_stacks
-export TUR WORK TORTURE HOST
+export TUR WORK TORTURE SCALE HOST
 
 printf '%s\n' "${fixtures[@]}" | xargs -P "$(nproc)" -I{} bash -c 'one "$@"' _ {}
 for d in "${fixtures[@]}"; do cat "$WORK/$(basename "$d").result"; done | tee "$WORK/results"
@@ -312,19 +325,20 @@ else
 fi | tee -a "$WORK/results"
 
 fixture_case() {
-    local tag="$1" dir="tests/fixtures/$2" torture="${4:-1}" want got rc
+    local tag="$1" dir="tests/fixtures/$2" torture="${4:-1}" scale=0 want got rc
+    [ "$torture" != 1 ] && scale="$SCALE"
     if ! "$TUR" build "$dir/input.tur" -o "$WORK/$tag" > "$WORK/$tag.build" 2>&1; then
         echo "FAIL $tag -- build failed: $(grep -m1 -i error "$WORK/$tag.build" | cut -c1-160)"
         return
     fi
-    TUR_GC_TORTURE="$torture" run_deadline 300 "$WORK/$tag.out" "$WORK/$tag.err" "$WORK/$tag"; rc=$?
+    TUR_GC_TORTURE="$torture" TUR_GC_TORTURE_SCALE="$scale" run_deadline 300 "$WORK/$tag.out" "$WORK/$tag.err" "$WORK/$tag"; rc=$?
     got="$(cat "$WORK/$tag.out")"
     want="$(cat "$dir/expected.stdout")"
     if [ "$rc" = 124 ]; then
-        echo "FAIL $tag -- timed out (>300s) under TUR_GC_TORTURE=$torture (a missing root can read as a hang: a freed list walked in a cycle)"
+        echo "FAIL $tag -- timed out (>300s) under TUR_GC_TORTURE=$torture TUR_GC_TORTURE_SCALE=$scale (a missing root can read as a hang: a freed list walked in a cycle)"
         sed -n '/^--- stacks at the/,$p' "$WORK/$tag.err"
     elif [ "$rc" != 0 ]; then
-        echo "FAIL $tag -- exit $rc under TUR_GC_TORTURE=$torture: $(tail -1 "$WORK/$tag.err" | cut -c1-120)"
+        echo "FAIL $tag -- exit $rc under TUR_GC_TORTURE=$torture TUR_GC_TORTURE_SCALE=$scale: $(tail -1 "$WORK/$tag.err" | cut -c1-120)"
     elif [ "$got" != "$want" ]; then
         echo "FAIL $tag -- expected '$want', got '$got'"
     else
@@ -457,5 +471,9 @@ fi
 pass=$(grep -c '^PASS' "$WORK/results")
 fail=$(grep -c '^FAIL' "$WORK/results")
 echo
-echo "r7rs-gc: $pass passed, $fail failed (torture every $TORTURE allocations)"
+if [ "$SCALE" = 0 ]; then
+    echo "r7rs-gc: $pass passed, $fail failed (torture every $TORTURE allocations)"
+else
+    echo "r7rs-gc: $pass passed, $fail failed (torture every $TORTURE allocations, stretched to live objects / $SCALE on a large heap; every allocation where a case says so)"
+fi
 [ "$fail" -eq 0 ]
