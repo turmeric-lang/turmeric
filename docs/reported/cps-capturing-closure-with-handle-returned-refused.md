@@ -51,3 +51,35 @@ in a function the direct emitter owns has no lowering either.
    so it is a candidate and B5 applies.
 2. Failing that, a better diagnostic: name the closure whose `handle` took
    the effect off the backend, as the escaping-closure note does.
+
+## A second shape in the same family (found 2026-10-08)
+
+A function whose `handle` body builds a capturing closure into a local and
+hands it to an effectful callee is refused the same way. Nothing is returned
+here, so this is not the shape above, but `TUR_TRACE_EVICT=1` shows the same
+SIG-REJECT on the handling function, which then taints the callee:
+
+```turmeric
+(defeffect Tick [] : int)
+(defn eff-call [o : (Option (fn [int] int))] : int
+  (let [t (perform (Tick))]
+    (match o (Some f) (+ t (f 1)) (None) t)))
+(defn effect-callee [k : int] : int
+  (handle (let [ff (some (fn [x : int] : int (+ x k)))]
+            (eff-call ff))
+    (Tick [] k2) (resume k2 1)))
+(defn main [] : int (println (effect-callee 40)) 0)
+```
+
+```
+[EVICT] SIG-TAINT              eff=1 eff-call
+[EVICT] SIG-REJECT             eff=1 effect-callee
+ev3.tur:3:11: error: this effect operation has no lowering here: ...
+$ tur --interpret ev3.tur
+42
+```
+
+The same callee called with the closure built OUTSIDE the handling function
+(`(handle (eff-call (some (fn ...))) ...)` in `main`) compiles and prints
+42. Found while writing `sum-closure-payload-kept`, which leaves this shape
+out for that reason; it predates the closure-payload drop work.
