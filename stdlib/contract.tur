@@ -50,7 +50,10 @@
   ;;; The elaborator's :pre / :post / refinement checks call this with the
   ;;; basename and line the predicate is written at, so the panic's "at" names
   ;;; them -- as a `(panic ...)` site's does -- instead of this helper.
-  (defn tur-contract-check-at [condition : bool msg : cstr file : cstr line : int] : void
+  (defn tur-contract-check-at [condition : bool
+                               msg : cstr
+                               file : cstr
+                               line : int] : void
     ```c
     if (!condition) { tur_panic_at((const char*)file, (int)line, (const char*)msg); }
   ```)
