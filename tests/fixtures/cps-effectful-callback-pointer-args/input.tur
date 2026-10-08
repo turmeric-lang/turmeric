@@ -1,0 +1,19 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param: an effectful
+;; callback taking a `cstr` or `ptr<void>` threads the caller's continuation
+;; through the fat closure's `fn_cps` slot.  The slot carries every argument as
+;; its word; the `__poly_N__cps` twin converts it back to the callee's own C
+;; type for the direct call.  Named fns and lambdas, tail and non-tail, and a
+;; pure lambda through the same parameter.
+(defeffect Ask [] :int)
+(defn ask [] : int (perform (Ask)))
+(defn appc [h : (fn [cstr] int) s : cstr] : int (h s))
+(defn appcn [h : (fn [cstr int] int) s : cstr] : int (+ 1 (h s 5)))
+(defn appp [h : (fn [ptr<void>] int) p : ptr<void>] : int (* 2 (h p)))
+(defn shout [s : cstr] : int (do (println s) (ask)))
+(defn main [] : int
+  (println (handle (appc shout "hello") (Ask [] k) (resume k 10)))                        ; hello 10
+  (println (handle (appc (fn [s : cstr] : int (do (println s) (+ 1 (ask)))) "lam") (Ask [] k) (resume k 10))) ; lam 11
+  (println (handle (appcn (fn [s : cstr n : int] : int (do (println s) (+ n (ask)))) "two") (Ask [] k) (resume k 10))) ; two 16
+  (println (handle (appp (fn [p : ptr<void>] : int (ask)) (box 7)) (Ask [] k) (resume k 21)))  ; 42
+  (println (appc (fn [s : cstr] : int (do (println s) 3)) "pure"))                          ; pure 3
+  0)

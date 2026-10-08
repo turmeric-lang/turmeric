@@ -6777,13 +6777,27 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
  * an `int64_t (*)(void*, int64_t)` cast of a `void` wrapper is a mismatched
  * call, which -fsanitize=function traps.  `args` holds the `n` argument atoms'
  * C text; a one-argument call keeps its original spelling. */
+/* The kind of argument `i` of a via_fncps call (fncps_param_call_ok admits
+ * only cps_ir_fncps_arg_ctype's kinds). */
+static TypeKind fncps_arg_kind(const Expr *call, uint32_t i) {
+    return (call && call->kind == EX_CALL && i < call->as.call_.n_args)
+        ? call->as.call_.args[i]->type.kind : TY_INT;
+}
+
 static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
                               uint32_t n, const Expr *call) {
     TypeKind rk = call ? call->type.kind : TY_INT;
     Buf ps, av; buf_init(&ps); buf_init(&av);
     for (uint32_t i = 0; i < n; i++) {
-        buf_puts(&ps, n == 1 ? ",int64_t" : ", int64_t");
-        buf_printf(&av, ", (int64_t)(%s)", args[i]);
+        /* The wrapper `.fn` holds keeps each parameter's own C type. */
+        const char *pc = cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i));
+        if (strcmp(pc, "int64_t") == 0) {
+            buf_puts(&ps, n == 1 ? ",int64_t" : ", int64_t");
+            buf_printf(&av, ", (int64_t)(%s)", args[i]);
+        } else {
+            buf_printf(&ps, ", %s", pc);
+            buf_printf(&av, ", (%s)(intptr_t)(%s)", pc, args[i]);
+        }
     }
     buf_putc(&ps, '\0'); buf_putc(&av, '\0');
     if (rk == TY_NIL)
@@ -6803,15 +6817,27 @@ static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
  * a twin of another arity was stored through a cast (emit_expr.c, EX_POLY_WRAP)
  * and is called back at its own type here. */
 static void fncps_slot_call(Buf *out, const char *pf, char *const *args,
-                            uint32_t n, const char *thread) {
-    if (n == 1) {
+                            uint32_t n, const char *thread, const Expr *call) {
+    /* Every argument crosses as its word: a pointer through intptr_t. */
+    bool all_int = true;
+    for (uint32_t i = 0; i < n; i++)
+        if (strcmp(cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i)), "int64_t") != 0)
+            all_int = false;
+    if (n == 1 && all_int) {
         buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(%s), %s)", pf, pf, args[0], thread);
+        return;
+    }
+    if (n == 1) {
+        buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(intptr_t)(%s), %s)", pf, pf, args[0], thread);
         return;
     }
     buf_printf(out, "((int64_t (*)(void *, ");
     for (uint32_t i = 0; i < n; i++) buf_puts(out, "int64_t, ");
     buf_printf(out, "DK *))%s.fn_cps)(%s.env, ", pf, pf);
-    for (uint32_t i = 0; i < n; i++) buf_printf(out, "(int64_t)(%s), ", args[i]);
+    for (uint32_t i = 0; i < n; i++) {
+        bool word = strcmp(cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i)), "int64_t") == 0;
+        buf_printf(out, word ? "(int64_t)(%s), " : "(int64_t)(intptr_t)(%s), ", args[i]);
+    }
     buf_printf(out, "%s)", thread);
 }
 
@@ -7663,7 +7689,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
                 Buf sc; buf_init(&sc);
-                fncps_slot_call(&sc, pf, av, na, thread);
+                fncps_slot_call(&sc, pf, av, na, thread, t->as.tailcall.call_expr);
                 buf_putc(&sc, '\0');
                 ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value */",
                         pf, sc.data);
@@ -9030,7 +9056,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         uint32_t na = call->as.tailcall.n;
         char **av = fncps_args_str(ce, call->as.tailcall.args, na);
         Buf sc; buf_init(&sc);
-        fncps_slot_call(&sc, pf, av, na, frame);
+        fncps_slot_call(&sc, pf, av, na, frame, call->as.tailcall.call_expr);
         buf_putc(&sc, '\0');
         ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value heap join */",
                 pf, sc.data);

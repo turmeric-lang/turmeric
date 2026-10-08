@@ -1,20 +1,22 @@
 # An effectful callback through a multi-argument or untyped fn parameter is refused
 
 **Narrowed 2026-10-08: shapes 1, 3 and 4 are fixed** -- a callback of up to
-eight word arguments, a capturing closure, and a `bool` or unit result all
-thread now (see "Fixed 2026-10-08" at the end).  **What is left:** shape 2, an
-untyped `^fat` parameter; and a callback whose argument or result is not a word
--- a `cstr` or pointer argument, a `float` argument or result -- which is still
-refused, honestly, at compile time:
+eight arguments (word integers, `cstr` or `ptr<void>`), a capturing closure,
+and a `bool` or unit result all thread now (see "Fixed 2026-10-08" at the
+end).  **What is left:** shape 2, an untyped `^fat` parameter; and a callback
+whose argument or result has neither a word's C spelling nor its register
+class -- a `float` argument or result, a narrow integer or `bool` argument --
+which is still refused, honestly, at compile time:
 
 ```turmeric
-(defn appc [h : (fn [cstr] int) s : cstr] : int (h s))         ;; refused
 (defn appf [h : (fn [int] float) x : int] : float (h x))       ;; refused
+(defn appb [h : (fn [bool] int) b : bool] : int (h b))         ;; refused
 (defn app [^fat h x : int] : int (h x))                        ;; refused
 ```
 
-A capturing closure's result is narrower still: `int` or unit only (a `bool`
-closure's env box holds a widen wrapper, not the lifted entry, in slot 0).
+A capturing closure is narrower still: word-integer arguments and an `int` or
+unit result only (its dispatcher's fallback calls the env box's slot 0, which is
+the lifted entry at those types; a `bool` closure's slot 0 is a widen wrapper).
 
 **Severity: medium.** A compile-time refusal of a correct program; `tur
 --interpret` runs it. Until 2026-10-07 these compiled and then aborted at run
@@ -82,8 +84,10 @@ a cast and called back at its own type, so every indirect call is made at the
 callee's real type (`-fsanitize=function`-clean).
 
 - **One shape question.**  `cps_ir_fncps_sig_ok` (`src/passes/cps_ir.c`) says
-  whether a fn fits the slot: up to `CPS_FNCPS_MAX_ARGS` (8) `int`/`int64`
-  arguments and an `int`/`int64`, `bool` or unit result.  The poly-wrap that
+  whether a fn fits the slot: up to `CPS_FNCPS_MAX_ARGS` (8) arguments, each an
+  `int`/`int64`, a `cstr` or a `ptr<void>` (each crosses the slot as its word,
+  and the twin converts it back to the callee's own C type,
+  `cps_ir_fncps_arg_ctype`), and an `int`/`int64`, `bool` or unit result.  The poly-wrap that
   FILLS the slot (`emit_expr.c`, EX_POLY_WRAP) and the analysis that counts a
   value as threaded only when the slot will be filled (`arg_fat_has_fn_cps`,
   `emit_cps_ir.c`) both ask it, where each used to hard-code "one int argument,
@@ -105,7 +109,9 @@ callee's real type (`-fsanitize=function`-clean).
   spell the threaded and the direct call at any arity, in tail position and in
   the heap join.
 
-Pinned by `tests/fixtures/cps-effectful-callback-multi-arg` (named fns and
+Pinned by `tests/fixtures/cps-effectful-callback-pointer-args` (`cstr` and
+`ptr<void>` arguments, named and lambda, tail and non-tail),
+`tests/fixtures/cps-effectful-callback-multi-arg` (named fns and
 lambdas, arities 0-3, `bool` and unit results, tail and non-tail, pure values
 through the same parameters), `cps-effectful-capturing-closure-callback`
 (literals and a let-bound closure, arities 0-2, `int` and unit results) and

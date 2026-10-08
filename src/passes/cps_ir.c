@@ -202,14 +202,18 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
 
 /* E2 (fat-closure fn-value threading): each argument of a fat-closure fn-value
  * call crosses the `tur_poly_fn_t.fn_cps` ABI as one `int64_t` word.  The
- * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) force-declares the
- * wrapped fn's direct entry with an `int64_t` per parameter, so the wrapped fn's
- * C parameters must be exactly that -- restrict to a plain `int`/`int64` arg.  A
- * wider int-register kind (cstr/ptr/bool/sub-int) has a distinct C spelling that
- * would mismatch the twin's forward declaration, so it stays on the delegated
- * direct path (correct as before, just not newly DK-threaded). */
+ * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) converts each word
+ * back to the wrapped fn's own C parameter type (cps_ir_fncps_arg_ctype) for
+ * its direct call, so the kinds admitted are the ones whose C spelling is known
+ * from the kind alone: a word integer, a `cstr` and a `ptr<void>`.  A narrow
+ * integer, a `bool` or a float has a spelling (or a register class) the word
+ * does not carry, so it stays on the delegated direct path (correct as before,
+ * just not newly DK-threaded). */
 static bool fncps_arg_kind_ok(TypeKind k) {
-    return k == TY_INT || k == TY_INT64;
+    return k == TY_INT || k == TY_INT64 || k == TY_CSTR || k == TY_PTR_VOID;
+}
+const char *cps_ir_fncps_arg_ctype(TypeKind k) {
+    return k == TY_CSTR ? "const char *" : k == TY_PTR_VOID ? "void *" : "int64_t";
 }
 /* ...and a RESULT the direct fallback can call `f.fn` for with its real C type
  * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
@@ -231,8 +235,13 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
     if (!lifted_ty || lifted_ty->kind != TY_FN) return false;
     uint32_t n = lifted_ty->as.fn.arity;
     if (n < 1 || n - 1 > CPS_FNCPS_MAX_ARGS || !lifted_ty->as.fn.arg_kinds) return false;
-    for (uint32_t i = 1; i < n; i++)
-        if (!fncps_arg_kind_ok((TypeKind)lifted_ty->as.fn.arg_kinds[i])) return false;
+    /* Integer arguments only: the dispatcher's registry-miss fallback calls
+     * slot 0 as `int64_t (*)(void *, int64_t...)`, which is the lifted entry's
+     * own type only for word integers. */
+    for (uint32_t i = 1; i < n; i++) {
+        TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i];
+        if (ak != TY_INT && ak != TY_INT64) return false;
+    }
     TypeKind rk = lifted_ty->as.fn.result_kind;
     return rk == TY_INT || rk == TY_INT64 || rk == TY_NIL;
 }

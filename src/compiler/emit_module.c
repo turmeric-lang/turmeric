@@ -3,6 +3,7 @@
 #include "cps.h"        /* D5: cps_expr_contains_cloneable_shift (cloneable prelude gate) */
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
+#include "cps_ir.h"      /* E2: the fn_cps slot ABI (cps_ir_fncps_arg_ctype) */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
@@ -2474,9 +2475,9 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * is emitted ahead of the normal forward decls) and is registered by its own
  * addr-taken CPS-registration constructor.  Returns the malloc'd twin name, or
  * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
- * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: plain `int`/`int64`
- * args and an `int`/`int64`, `bool` or unit result, whose C spelling is exactly
- * the `int64_t <fn>(int64_t, ...)` (or `bool` / `void`) this forward-declares. */
+ * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: `int`/`int64`,
+ * `cstr` and `ptr<void>` args (cps_ir_fncps_arg_ctype spells each) and an
+ * `int`/`int64`, `bool` or unit result -- exactly what this forward-declares. */
 /* Translate the enclosing frame's type bindings -- keyed by the CALLER's tyvar
  * names -- into bindings keyed by the CALLEE's, matched by constraint CLASS.
  *
@@ -2672,16 +2673,25 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     const char *rc = rk == TY_NIL ? "void" : rk == TY_BOOL ? "bool" : "int64_t";
     Buf decl, prm, fwd, cast;
     buf_init(&decl); buf_init(&prm); buf_init(&fwd); buf_init(&cast);
+    /* `fwd` passes each word on as it arrived (the registered `__cps` entry,
+     * or its word adapter for a pointer parameter, takes words); `dir` converts
+     * it to the direct entry's own C parameter type. */
+    Buf dir; buf_init(&dir);
     for (uint32_t i = 0; i < n; i++) {
         char an[24];
         if (n == 1) snprintf(an, sizeof an, "__pwx");
         else        snprintf(an, sizeof an, "__pwx%u", i);
-        buf_printf(&decl, "%sint64_t", i ? ", " : "");
+        const char *pc = cps_ir_fncps_arg_ctype((TypeKind)inner_ty->as.fn.arg_kinds[i]);
+        bool word = strcmp(pc, "int64_t") == 0;
+        buf_printf(&decl, "%s%s", i ? ", " : "", pc);
         buf_printf(&prm, ", int64_t %s", an);
         buf_printf(&fwd, "%s%s", i ? ", " : "", an);
+        if (word) buf_printf(&dir, "%s%s", i ? ", " : "", an);
+        else      buf_printf(&dir, "%s(%s)(intptr_t)%s", i ? ", " : "", pc, an);
         buf_puts(&cast, "int64_t, ");
     }
     buf_putc(&decl, '\0'); buf_putc(&prm, '\0'); buf_putc(&fwd, '\0'); buf_putc(&cast, '\0');
+    buf_putc(&dir, '\0');
     buf_printf(target, "static %s %s(%s);\n", rc, inner_fn, n ? decl.data : "void");
     buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
     buf_puts(target, "    (void)__pwe;\n");
@@ -2690,11 +2700,11 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
                cast.data, fwd.data, n ? ", " : "");
     if (rk == TY_NIL)
         buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (intptr_t)0);\n",
-                   inner_fn, fwd.data);
+                   inner_fn, dir.data);
     else
-        buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(%s));\n", inner_fn, fwd.data);
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(%s));\n", inner_fn, dir.data);
     buf_puts(target, "}\n");
-    buf_free(&decl); buf_free(&prm); buf_free(&fwd); buf_free(&cast);
+    buf_free(&decl); buf_free(&prm); buf_free(&fwd); buf_free(&cast); buf_free(&dir);
     return name;
 }
 
