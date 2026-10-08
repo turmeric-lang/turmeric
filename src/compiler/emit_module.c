@@ -3,6 +3,7 @@
 #include "cps.h"        /* D5: cps_expr_contains_cloneable_shift (cloneable prelude gate) */
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
+#include "cps_ir.h"      /* E2: the fn_cps slot ABI (cps_ir_fncps_arg_ctype) */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
@@ -2465,7 +2466,8 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
 /* E2 (fat-closure fn-value threading): emit a `<wrapper>__cps` twin for a
  * poly-wrap thunk `<wrapper>` (e.g. `__poly_1285`) that boxes an EFFECTFUL named
  * fn `inner_fn` (e.g. `cb`) into a `tur_poly_fn_t`.  The twin has the fat
- * closure's `fn_cps` ABI -- `(void *env, int64_t arg, struct DK *__kont)` -- and
+ * closure's `fn_cps` ABI -- `(void *env, int64_t a0, ..., struct DK *__kont)`,
+ * one word per argument of `inner_ty` -- and
  * DK-threads the call to `inner_fn`'s CPS entry, recovered from the direct->CPS
  * registry (the same channel E2a uses for a fn-value param).  So an effectful
  * callback invoked through a fat-closure param performs on the caller's
@@ -2473,8 +2475,9 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * is emitted ahead of the normal forward decls) and is registered by its own
  * addr-taken CPS-registration constructor.  Returns the malloc'd twin name, or
  * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
- * The caller restricts `inner_fn` to a plain `int`/`int64` arg AND result, whose
- * C spelling is exactly the `int64_t <fn>(int64_t)` this forward-declares. */
+ * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: `int`/`int64`,
+ * `cstr` and `ptr<void>` args (cps_ir_fncps_arg_ctype spells each) and an
+ * `int`/`int64`, `bool` or unit result -- exactly what this forward-declares. */
 /* Translate the enclosing frame's type bindings -- keyed by the CALLER's tyvar
  * names -- into bindings keyed by the CALLEE's, matched by constraint CLASS.
  *
@@ -2635,7 +2638,7 @@ char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
 }
 
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
-                                 const char *inner_fn) {
+                                 const char *inner_fn, const Type *inner_ty) {
     Buf nb; buf_init(&nb);
     buf_puts(&nb, wrapper_name);
     buf_puts(&nb, "__cps");
@@ -2659,17 +2662,102 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     /* thunk_typedefs precedes the normal forward decls, so declare inner_fn's
-     * direct entry ourselves (single int64 arg + int64 return -- the caller's
-     * gate guarantees an int-register-class arg/result).  `__tur_cps_fn` /
+     * direct entry ourselves: an int64 per argument and the result's own
+     * spelling (the caller's gate, cps_ir_fncps_sig_ok, admits only an
+     * int-register-class arg and an int / bool / unit result).  `__tur_cps_fn` /
      * `__tur_cps_lookup` / `dk_run` come from the DK runtime preamble, already
-     * emitted above this section. */
-    buf_printf(target, "static int64_t %s(int64_t);\n", inner_fn);
-    buf_printf(target, "static int64_t %s(void *__pwe, int64_t __pwx, struct DK *__kont) {\n", name);
+     * emitted above this section.  A one-argument twin keeps its original
+     * spelling (`__pwx`). */
+    uint32_t n = inner_ty->as.fn.arity;
+    TypeKind rk = inner_ty->as.fn.result_kind;
+    const char *rc = rk == TY_NIL ? "void" : rk == TY_BOOL ? "bool" : "int64_t";
+    Buf decl, prm, fwd, cast;
+    buf_init(&decl); buf_init(&prm); buf_init(&fwd); buf_init(&cast);
+    /* `fwd` passes each word on as it arrived (the registered `__cps` entry,
+     * or its word adapter for a pointer parameter, takes words); `dir` converts
+     * it to the direct entry's own C parameter type. */
+    Buf dir; buf_init(&dir);
+    for (uint32_t i = 0; i < n; i++) {
+        char an[24];
+        if (n == 1) snprintf(an, sizeof an, "__pwx");
+        else        snprintf(an, sizeof an, "__pwx%u", i);
+        const char *pc = cps_ir_fncps_arg_ctype((TypeKind)inner_ty->as.fn.arg_kinds[i]);
+        bool word = strcmp(pc, "int64_t") == 0;
+        buf_printf(&decl, "%s%s", i ? ", " : "", pc);
+        buf_printf(&prm, ", int64_t %s", an);
+        buf_printf(&fwd, "%s%s", i ? ", " : "", an);
+        if (word) buf_printf(&dir, "%s%s", i ? ", " : "", an);
+        else      buf_printf(&dir, "%s(%s)(intptr_t)%s", i ? ", " : "", pc, an);
+        buf_puts(&cast, "int64_t, ");
+    }
+    buf_putc(&decl, '\0'); buf_putc(&prm, '\0'); buf_putc(&fwd, '\0'); buf_putc(&cast, '\0');
+    buf_putc(&dir, '\0');
+    buf_printf(target, "static %s %s(%s);\n", rc, inner_fn, n ? decl.data : "void");
+    buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
     buf_puts(target, "    (void)__pwe;\n");
     buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)%s);\n", inner_fn);
-    buf_puts(target, "    if (__c) return ((int64_t(*)(int64_t, struct DK *))__c)(__pwx, __kont);\n");
-    buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(__pwx));\n", inner_fn);
+    buf_printf(target, "    if (__c) return ((int64_t(*)(%sstruct DK *))__c)(%s%s__kont);\n",
+               cast.data, fwd.data, n ? ", " : "");
+    if (rk == TY_NIL)
+        buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (intptr_t)0);\n",
+                   inner_fn, dir.data);
+    else
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(%s));\n", inner_fn, dir.data);
     buf_puts(target, "}\n");
+    buf_free(&decl); buf_free(&prm); buf_free(&fwd); buf_free(&cast); buf_free(&dir);
+    return name;
+}
+
+/* E2 (fat-closure fn-value threading), the capturing case: the `fn_cps` slot of
+ * a fat closure built from a capturing lambda of `n` word arguments (a unit
+ * result when `void_result`, else a word).  A closure's env box holds the
+ * lifted entry in slot 0, and a threadable capturing lambda is registered
+ * (emit_cps_ir.c, the E2a registration) as that entry -> its env-taking `__cps`
+ * twin.  So the slot dispatches on the box at run time -- whichever lambda built
+ * it -- exactly as the E2a fat dispatch does.  A miss (a lambda the registry
+ * does not know) is the call an empty slot would have made: slot 0 directly,
+ * its result delivered to the continuation.  Returns the dispatcher's malloc'd
+ * name; it is emitted once per shape. */
+char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result) {
+    Buf nb; buf_init(&nb);
+    buf_printf(&nb, "__tur_fncps_env%s%u", void_result ? "v" : "", n);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf prm, ws, av; buf_init(&prm); buf_init(&ws); buf_init(&av);
+    for (uint32_t i = 0; i < n; i++) {
+        buf_printf(&prm, ", int64_t __pwx%u", i);
+        buf_puts(&ws, ", int64_t");
+        buf_printf(&av, ", __pwx%u", i);
+    }
+    buf_putc(&prm, '\0'); buf_putc(&ws, '\0'); buf_putc(&av, '\0');
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
+    buf_puts(target, "    int64_t __pwf = ((int64_t *)__pwe)[0];\n");
+    buf_puts(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)__pwf);\n");
+    buf_printf(target, "    if (__c) return ((int64_t(*)(void *%s, struct DK *))__c)(__pwe%s, __kont);\n",
+               ws.data, av.data);
+    if (void_result)
+        buf_printf(target, "    ((void(*)(void *%s))(intptr_t)__pwf)(__pwe%s);\n"
+                           "    return dk_run(__kont, (intptr_t)0);\n", ws.data, av.data);
+    else
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)((int64_t(*)(void *%s))(intptr_t)__pwf)(__pwe%s));\n",
+                   ws.data, av.data);
+    buf_puts(target, "}\n");
+    buf_free(&prm); buf_free(&ws); buf_free(&av);
     return name;
 }
 

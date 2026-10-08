@@ -2605,6 +2605,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_invariant = intern_cstr(st, "invariant");
     e->sym_result             = intern_cstr(st, "result");
     e->sym_tur_contract_check = intern_cstr(st, "tur-contract-check");
+    e->sym_tur_contract_check_at = intern_cstr(st, "tur-contract-check-at");
     /* DV0: Dynamic vars */
     e->sym_defdynamic    = intern_cstr(st, "defdynamic");
     e->sym_binding       = intern_cstr(st, "binding");

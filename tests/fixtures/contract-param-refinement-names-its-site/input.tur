@@ -1,0 +1,13 @@
+;; panic-location-names-the-runtime-not-the-call-site: a parameter refinement
+;; that fails at run time panics at the line its predicate is written on.  The
+;; argument comes from the command line (run.args holds one), so no static
+;; proof decides the check and the runtime one stays.
+(defn sum-to [n : int] : int (if (<= n 0) 0 (+ n (sum-to (- n 1)))))
+
+(defn pos [x : #refine{ v : int | (> v 0) }] : int
+  x)
+
+(defn main [] : int
+  (println (pos 3))
+  (println (pos (- (sum-to (list-length *args*)) 1)))
+  0)

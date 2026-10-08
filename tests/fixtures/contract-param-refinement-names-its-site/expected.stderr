@@ -1,0 +1,1 @@
+panic at input.tur:7: Contract violated by parameter 'x' in pos: (> v 0)

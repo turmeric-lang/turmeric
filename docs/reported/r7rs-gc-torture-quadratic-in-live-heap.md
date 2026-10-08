@@ -46,6 +46,25 @@ time is building the 232 programs and the serial thread phase, which includes
 the thread fixtures' cold prelude variants
 ([r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md)).
 
+## Re-measured 2026-10-08, after the root-scan change
+
+`tur_gc_scan` now tests each word against the heap bounds inline instead of
+calling the marker for it
+([r7rs-gc-eval-programs-scan-libturi-data](r7rs-gc-eval-programs-scan-libturi-data.md)).
+That cut a `(scheme eval)` program's per-collection cost 4.6x, where most
+scanned words are not heap addresses; inside a large live heap most words
+ARE, so it moves these programs less (same collection counts, interval 31):
+
+| fixture | before | after |
+| --- | --- | --- |
+| `r7rs-tail-call-hand-on-through-static-call` | 89.8 s | 74.1 s |
+| `r7rs-apply-long` | 27.4 s | 22.7 s |
+| `r7rs-srfi-41` | 34.6 s | 33.4 s |
+
+The whole harness at a fixed 31: 271 s wall on 4 cores, 249 passed.  The
+shape -- quadratic in the live heap -- is unchanged, so the decision below
+still stands.
+
 ## The decision this needs
 
 Turning the knob on in the harness weakens the gate for exactly the programs

@@ -34,6 +34,7 @@ typedef struct PapInline {
     Binding **caps;          /* captured arg bindings, in leftmost-first arg order */
     uint32_t  n_caps;
     uint32_t  rem_arity;     /* args a saturated call to `var` supplies (= target arity - n_caps) */
+    bool      is_alias;      /* `var` only renames the fn PARAM `target` (no caps) */
 } PapInline;
 
 typedef struct CpsB {
@@ -199,17 +200,20 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
     #undef IFC
 }
 
-/* E2 (fat-closure fn-value threading): the single argument of a fat-closure
- * fn-value call crosses the `tur_poly_fn_t.fn_cps` ABI as one `int64_t` word.  The
- * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) force-declares the
- * wrapped fn's direct entry as `int64_t <fn>(int64_t)`, so the wrapped fn's C
- * signature must be exactly that -- restrict to a plain `int`/`int64` arg (and,
- * at the poly-wrap gate, result).  A wider int-register kind (cstr/ptr/bool/
- * sub-int) has a distinct C spelling that would mismatch the twin's forward
- * declaration, so it stays on the delegated direct path (correct as before, just
- * not newly DK-threaded). */
+/* E2 (fat-closure fn-value threading): each argument of a fat-closure fn-value
+ * call crosses the `tur_poly_fn_t.fn_cps` ABI as one `int64_t` word.  The
+ * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) converts each word
+ * back to the wrapped fn's own C parameter type (cps_ir_fncps_arg_ctype) for
+ * its direct call, so the kinds admitted are the ones whose C spelling is known
+ * from the kind alone: a word integer, a `cstr` and a `ptr<void>`.  A narrow
+ * integer, a `bool` or a float has a spelling (or a register class) the word
+ * does not carry, so it stays on the delegated direct path (correct as before,
+ * just not newly DK-threaded). */
 static bool fncps_arg_kind_ok(TypeKind k) {
-    return k == TY_INT || k == TY_INT64;
+    return k == TY_INT || k == TY_INT64 || k == TY_CSTR || k == TY_PTR_VOID;
+}
+const char *cps_ir_fncps_arg_ctype(TypeKind k) {
+    return k == TY_CSTR ? "const char *" : k == TY_PTR_VOID ? "void *" : "int64_t";
 }
 /* ...and a RESULT the direct fallback can call `f.fn` for with its real C type
  * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
@@ -219,20 +223,45 @@ static bool fncps_arg_kind_ok(TypeKind k) {
 static bool fncps_result_kind_ok(TypeKind k) {
     return k == TY_INT || k == TY_INT64 || k == TY_NIL || k == TY_BOOL;
 }
-/* E2 (fat-closure fn-value threading): is a call `(fn arg)` through the poly-fn
- * PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a CONCRETE fat
- * closure -- a bare `:fn` carrier (poly_type NULL) or a typed `:fn` signature
- * (poly_type TY_FN) -- with a single int-register-class NON-poly argument (the
- * `tur_poly_fn_t.fn_cps` ABI is `(void*, int64_t, DK*)`).  A rank-2/3 forall poly
- * param (poly_type TY_FORALL) or a poly-wrapped arg (poly_arg_mask) crosses a
- * different, wider ABI and is excluded (it stays on the delegated direct path). */
+bool cps_ir_fncps_sig_ok(const Type *fn_ty) {
+    if (!fn_ty || fn_ty->kind != TY_FN) return false;
+    uint32_t n = fn_ty->as.fn.arity;
+    if (n > CPS_FNCPS_MAX_ARGS || (n && !fn_ty->as.fn.arg_kinds)) return false;
+    for (uint32_t i = 0; i < n; i++)
+        if (!fncps_arg_kind_ok((TypeKind)fn_ty->as.fn.arg_kinds[i])) return false;
+    return fncps_result_kind_ok(fn_ty->as.fn.result_kind);
+}
+bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
+    if (!lifted_ty || lifted_ty->kind != TY_FN) return false;
+    uint32_t n = lifted_ty->as.fn.arity;
+    if (n < 1 || n - 1 > CPS_FNCPS_MAX_ARGS || !lifted_ty->as.fn.arg_kinds) return false;
+    /* Integer arguments only: the dispatcher's registry-miss fallback calls
+     * slot 0 as `int64_t (*)(void *, int64_t...)`, which is the lifted entry's
+     * own type only for word integers. */
+    for (uint32_t i = 1; i < n; i++) {
+        TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i];
+        if (ak != TY_INT && ak != TY_INT64) return false;
+    }
+    TypeKind rk = lifted_ty->as.fn.result_kind;
+    return rk == TY_INT || rk == TY_INT64 || rk == TY_NIL;
+}
+/* E2 (fat-closure fn-value threading): is a call `(fn args...)` through the
+ * poly-fn PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a
+ * CONCRETE fat closure -- a bare `:fn` carrier (poly_type NULL) or a typed `:fn`
+ * signature (poly_type TY_FN) -- with up to CPS_FNCPS_MAX_ARGS int-register-class
+ * NON-poly arguments (the `tur_poly_fn_t.fn_cps` ABI is `(void*, int64_t...,
+ * DK*)`).  A rank-2/3 forall poly param (poly_type TY_FORALL) or a poly-wrapped
+ * arg (poly_arg_mask) crosses a different, wider ABI and is excluded (it stays
+ * on the delegated direct path). */
 static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
     if (!fn || !fn->is_poly_fn) return false;
     if (fn->poly_type && fn->poly_type->kind == TY_FORALL) return false;
-    if (e->as.call_.n_args != 1) return false;
+    if (e->as.call_.n_args > CPS_FNCPS_MAX_ARGS) return false;
     if (e->as.call_.poly_arg_mask) return false;
     if (!fncps_result_kind_ok(e->type.kind)) return false;
-    return fncps_arg_kind_ok(e->as.call_.args[0]->type.kind);
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!fncps_arg_kind_ok(e->as.call_.args[i]->type.kind)) return false;
+    return true;
 }
 
 /* ---- small allocation helpers ----------------------------------------- */
@@ -1991,6 +2020,14 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * trampoline: "unhandled effect" from a program that compiled. */
             if (fn && fncps_param_call_ok(fn, e))
                 return false;
+            /* Nor a call through an inlined alias of a fn param: its `let` is
+             * dropped, so the direct emitter would name an undeclared local.
+             * Refused here, it reaches cps_tail / cps_bind, which rewrite it to
+             * the call through the param. */
+            {
+                const PapInline *pe = b ? pap_lookup(b, fn) : NULL;
+                if (pe && pe->is_alias) return false;
+            }
             /* An indirect callee with no binding -- e.g. a capability CALL
              * `(.print-line cap "..")` whose callee is a `.field` access yielding
              * an effect-annotated fn.  This was delegatable inside a DELEGATED
@@ -2188,6 +2225,15 @@ static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     CVar x = fresh_cvar(b, e ? &e->type : NULL);
     if (p->n < 32) { p->items[p->n].expr = e; p->items[p->n].x = x; p->n++; }
     return atom_cvar(x);
+}
+
+/* Atomize every argument of a `fn_cps` call, left to right. */
+static CAtom *fncps_atomize_args(CpsB *b, const Expr *e, Pending *pp) {
+    uint32_t n = e->as.call_.n_args;
+    CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+    for (uint32_t i = 0; i < n; i++)
+        args[i] = atomize(b, e->as.call_.args[i], pp);
+    return args;
 }
 
 /* Wrap `core` with the pending bindings, leftmost outermost. */
@@ -3055,6 +3101,17 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
  * prelude), so we reference them by fresh EX_VAR nodes; the remaining args come
  * straight from the original `(var rest...)` call. */
 static Expr *pap_build_saturated_call(CpsB *b, const PapInline *pe, const Expr *call) {
+    if (pe->is_alias) {
+        /* A renamed fn param: the same call, made through the param.  Copy the
+         * node whole -- the alias shares the param's representation (is_poly_fn,
+         * fat), so the poly-call flags the elaborator set on it still hold --
+         * and name the param the way a direct `(g x)` does, by fn_binding. */
+        Expr *nc = expr_new(b->a, EX_CALL, call->type, call->span);
+        nc->as.call_ = call->as.call_;
+        nc->as.call_.fn_binding = (Binding *)pe->target;
+        nc->as.call_.fn_expr = NULL;
+        return nc;
+    }
     uint32_t n = pe->n_caps + call->as.call_.n_args;
     Expr **args = arena_alloc(b->a, (n ? n : 1) * sizeof(Expr *));
     for (uint32_t i = 0; i < pe->n_caps; i++) {
@@ -3090,6 +3147,8 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
 /* Register any pap-inlinable let bindings of `let` (a closure whose sole use in
  * the body is a saturated call).  Returns the count pushed (pop with the saved
  * b->n_pap after the let is fully translated). */
+static const Type *fn_alias_sig(const Binding *b);   /* fwd */
+
 static void pap_register_let(CpsB *b, const Expr *let) {
     for (uint32_t i = 0; i < let->as.let_.n && b->n_pap < 32; i++) {
         const Binding *vb = let->as.let_.bindings[i].binding;
@@ -3101,9 +3160,65 @@ static void pap_register_let(CpsB *b, const Expr *let) {
             b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = tgt;
             b->pap[b->n_pap].caps = caps;   b->pap[b->n_pap].n_caps = nc;
             b->pap[b->n_pap].rem_arity = rem;
+            b->pap[b->n_pap].is_alias = false;
+            b->n_pap++;
+            continue;
+        }
+        /* An alias of a fn param is the zero-capture case: a call through it IS
+         * a call through the param.  Without this the binding crossed a slot as
+         * a fat value, and the classifier counted it as the param escaping, so
+         * an effectful callback called through the alias had no lowering
+         * (cps-let-alias-of-effectful-fn-param-refused). */
+        const Binding *src = cps_ir_let_fnparam_alias(let, i);
+        if (src) {
+            b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = src;
+            b->pap[b->n_pap].caps = NULL;   b->pap[b->n_pap].n_caps = 0;
+            b->pap[b->n_pap].rem_arity = fn_alias_sig(src)->as.fn.arity;
+            b->pap[b->n_pap].is_alias = true;
             b->n_pap++;
         }
     }
+}
+
+/* The call signature of a fn-valued binding: its own TY_FN type, or -- for a fat
+ * (is_poly_fn) param, whose binding type is the `tur_poly_fn_t` carrier -- the
+ * TY_FN recorded in poly_type.  NULL for a bare `:fn` carrier or a rank-2 forall,
+ * whose calls cross a different ABI than a plain call through it. */
+static const Type *fn_alias_sig(const Binding *b) {
+    if (b->is_poly_fn)
+        return b->poly_type && b->poly_type->kind == TY_FN ? b->poly_type : NULL;
+    return b->type.kind == TY_FN ? &b->type : NULL;
+}
+
+static const Binding *fnparam_alias_src(const Binding *vb, const Expr *init) {
+    if (!vb || vb->is_mut) return NULL;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_VAR) return NULL;
+    const Binding *src = init->as.var.binding;
+    if (!src || !src->is_param || src->is_global || src->is_mut) return NULL;
+    /* Same representation: the elaborator copies is_poly_fn (and the carrier
+     * type) onto the alias. */
+    if (vb->is_poly_fn != src->is_poly_fn || vb->type.kind != src->type.kind)
+        return NULL;
+    const Type *ss = fn_alias_sig(src), *vs = fn_alias_sig(vb);
+    if (!ss || !vs || ss->as.fn.arity != vs->as.fn.arity) return NULL;
+    return src;
+}
+
+const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
+    if (!let || (let->kind != EX_LET) || i >= let->as.let_.n) return NULL;
+    const Binding *vb = let->as.let_.bindings[i].binding;
+    const Binding *src = fnparam_alias_src(vb, let->as.let_.bindings[i].init);
+    if (!src) return NULL;
+    /* Every use -- in the body, or in a later binding's init, which is
+     * translated while the registration is live -- a saturated call through it:
+     * the alias is never a value, so dropping its binding loses nothing. */
+    uint32_t ar = fn_alias_sig(src)->as.fn.arity;
+    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
+        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    if (closure_binding_escapes(let->as.let_.body, vb)) return NULL;
+    if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
+    return src;
 }
 
 /* Was let-binding `idx` of `let` pap-inlined (registered in [saved, n_pap))?  If
@@ -4037,15 +4152,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * off the trampoline, escaping an effectful callback's perform).  The
              * emitter picks `fn_cps` when populated (an effectful fn-value) and
              * the direct `f.fn` path otherwise, so a pure fn-value is unchanged.
-             * Restricted to the single-int-arg `tur_poly_fn_t.fn_cps` ABI. */
+             * Restricted to the slot's word ABI (fncps_param_call_ok). */
             if (fncps_param_call_ok(fn, e)) {
                 Pending pp = {0};
-                CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
-                CAtom *args = arena_alloc(b->a, sizeof(CAtom));
-                args[0] = a0;
+                CAtom *args = fncps_atomize_args(b, e, &pp);
                 CTerm *t = new_term(b, CT_TAILCALL);
                 t->as.tailcall.fn = fn; t->as.tailcall.args = args;
-                t->as.tailcall.n = 1; t->as.tailcall.kont = kont;
+                t->as.tailcall.n = e->as.call_.n_args; t->as.tailcall.kont = kont;
                 t->as.tailcall.via_fncps = true;
                 t->as.tailcall.call_expr = e;
                 return fold_pending(b, &pp, t);
@@ -4564,17 +4677,15 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * through a fat-closure poly-fn param reifies the continuation `rest`
              * as a heap join `j(x)` and threads it to the closure's `fn_cps` slot
              * (or the direct `f.fn` path when NULL).  Mirrors the E2a via_registry
-             * non-tail shape (single int-register-class arg). */
+             * non-tail shape (int-register-class args). */
             if (fncps_param_call_ok(fn, e)) {
                 Pending pp = {0};
-                CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
-                CAtom *fargs = arena_alloc(b->a, sizeof(CAtom));
-                fargs[0] = a0;
+                CAtom *fargs = fncps_atomize_args(b, e, &pp);
                 CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
                 CTerm *call = new_term(b, CT_TAILCALL);
                 call->as.tailcall.fn = fn; call->as.tailcall.args = fargs;
-                call->as.tailcall.n = 1; call->as.tailcall.kont = kont_var(j);
+                call->as.tailcall.n = e->as.call_.n_args; call->as.tailcall.kont = kont_var(j);
                 call->as.tailcall.via_fncps = true;
                 call->as.tailcall.call_expr = e;
                 CTerm *t = new_term(b, CT_LETCONT);

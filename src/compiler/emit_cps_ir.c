@@ -4567,6 +4567,31 @@ static int expr_count_all_uses(const Expr *e, const Binding *b) {
 static const Binding *g_ptc_self_bind;
 static uint32_t       g_ptc_self_pi;
 
+/* The `let` aliases of the param being tiered that are in scope at this point of
+ * the walk (cps_ir_fnparam_alias_src).  A call through one is a call through the
+ * param -- the translator inlines it as exactly that (pap_register_let) -- and any
+ * other use of one is a use of the param, so every test below that asks "is this
+ * `p`?" asks it of the aliases too.  Full set: further aliases are not followed
+ * (counted as value-uses), which only ever declines. */
+static const Binding *g_ptc_alias[8];
+static uint32_t       g_ptc_n_alias;
+
+static bool ptc_is_p(const Binding *b, const Binding *p) {
+    if (!b) return false;
+    if (b == p) return true;
+    for (uint32_t i = 0; i < g_ptc_n_alias; i++)
+        if (g_ptc_alias[i] == b) return true;
+    return false;
+}
+
+/* expr_count_all_uses over `p` and its in-scope aliases. */
+static int ptc_count_all_uses(const Expr *e, const Binding *p) {
+    int n = expr_count_all_uses(e, p);
+    for (uint32_t i = 0; i < g_ptc_n_alias; i++)
+        n += expr_count_all_uses(e, g_ptc_alias[i]);
+    return n;
+}
+
 /* Classify how param `p` of a HOF is used, tracking tail position: count its
  * value-uses (escapes -- passed as an arg, stored, bare ref), its tail-position
  * callee-calls, and its non-tail callee-calls.  A call to `p` under a `handle`/
@@ -4580,21 +4605,23 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
     if (!e) return;
     switch (e->kind) {
         case EX_CALL: {
-            bool callee_is_p = e->as.call_.fn_binding == p
+            bool callee_is_p = ptc_is_p(e->as.call_.fn_binding, p)
                 || (e->as.call_.fn_expr && e->as.call_.fn_expr->kind == EX_VAR
-                    && e->as.call_.fn_expr->as.var.binding == p);
+                    && ptc_is_p(e->as.call_.fn_expr->as.var.binding, p));
             if (callee_is_p) { if (tail) (*tailc)++; else (*ntc)++; }
             else ptc_walk(e->as.call_.fn_expr, p, false, val, tailc, ntc);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 const Expr *a = peel_fn_value(e->as.call_.args[i]);
-                if (a && a->kind == EX_VAR && a->as.var.binding == p) {
+                if (a && a->kind == EX_VAR && ptc_is_p(a->as.var.binding, p)) {
                     /* E2 (cps-tramp-resume): a SELF-recursive call passing param `p`
                      * back at its OWN position is NOT an escape -- it is the same
                      * row-poly fn-value threading through the recursion, so it does
                      * not disqualify `p` as a thread-param (effect-poly-map).  Every
                      * other value-use (stored, passed elsewhere, bare ref) still
-                     * counts. */
-                    if (g_ptc_self_bind
+                     * counts -- an ALIAS passed back too: the translator inlines an
+                     * alias only when its every use is a call. */
+                    if (a->as.var.binding == p
+                        && g_ptc_self_bind
                         && e->as.call_.fn_binding == g_ptc_self_bind
                         && i == g_ptc_self_pi)
                         continue;
@@ -4605,17 +4632,28 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             ptc_walk(e->as.call_.dict_arg, p, false, val, tailc, ntc);
             return;
         }
-        case EX_VAR:  if (e->as.var.binding == p) (*val)++; return;
+        case EX_VAR:  if (ptc_is_p(e->as.var.binding, p)) (*val)++; return;
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++)
                 ptc_walk(e->as.do_.items[i], p, tail && (i + 1 == e->as.do_.n),
                          val, tailc, ntc);
             return;
-        case EX_LET:
-            for (uint32_t i = 0; i < e->as.let_.n; i++)
+        case EX_LET: {
+            /* `(let [f p] ...)` that the translator inlines (every use of `f` a
+             * saturated call) renames `p`: its init is not a value-use, and the
+             * calls through `f` below count as calls through `p`. */
+            uint32_t saved = g_ptc_n_alias;
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                if (g_ptc_n_alias < 8 && cps_ir_let_fnparam_alias(e, i) == p) {
+                    g_ptc_alias[g_ptc_n_alias++] = e->as.let_.bindings[i].binding;
+                    continue;
+                }
                 ptc_walk(e->as.let_.bindings[i].init, p, false, val, tailc, ntc);
+            }
             ptc_walk(e->as.let_.body, p, tail, val, tailc, ntc);
+            g_ptc_n_alias = saved;
             return;
+        }
         case EX_IF:
             ptc_walk(e->as.if_.cond, p, false, val, tailc, ntc);
             ptc_walk(e->as.if_.then_, p, tail, val, tailc, ntc);
@@ -4661,7 +4699,7 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             if (h) {
                 ptc_walk((const Expr *)h->body, p, tail, val, tailc, ntc);
                 for (uint32_t i = 0; i < h->n_cases; i++)
-                    *val += expr_count_all_uses(h->cases[i].body, p);
+                    *val += ptc_count_all_uses(h->cases[i].body, p);
             }
             return;
         }
@@ -4669,7 +4707,7 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
             /* Uncovered form (incl. EX_RESET, where a call to p runs under the
              * HOF's own prompt): treat every occurrence of p as a value-use so the
              * param cannot be judged threadable through it. */
-            *val += expr_count_all_uses(e, p);
+            *val += ptc_count_all_uses(e, p);
             return;
     }
 }
@@ -4869,9 +4907,10 @@ typedef struct { const Expr *program; bool withdrew; } UnthreadedUd;
 /* Does the fat closure an argument builds for a poly-fn parameter carry an
  * `fn_cps` entry?  A call through such a parameter threads ONLY through that
  * slot (cps_ir_param_call_threads), and the EX_POLY_WRAP emission
- * (emit_expr.c) fills it for one shape alone: a GLOBAL fn -- named, or a
- * lifted captureless lambda -- of one int argument and an int result.  Any
- * other value (a capturing closure, a `void` or float result) is called
+ * (emit_expr.c) fills it for two shapes: a GLOBAL fn -- named, or a lifted
+ * captureless lambda -- and a capturing lambda LITERAL, each whose signature
+ * fits the slot's ABI (cps_ir_fncps_sig_ok, the gate the fill itself asks).
+ * Any other value (a let-bound closure, a float argument or result) is called
  * through `.fn` from a fresh root, so an effectful one must not count as
  * threaded. */
 static bool arg_fat_has_fn_cps(const Expr *arg) {
@@ -4880,13 +4919,13 @@ static bool arg_fat_has_fn_cps(const Expr *arg) {
     if (!a || a->kind != EX_POLY_WRAP) return false;
     const Expr *inner = a->as.poly_wrap_.inner;
     while (inner && inner->kind == EX_ASCRIBE) inner = inner->as.ascribe_.inner;
+    /* A capturing lambda: its env-box dispatcher (emit_expr.c, the closure arm
+     * of EX_POLY_WRAP -- the same resolver). */
+    if (a->as.poly_wrap_.is_closure)
+        return emit_poly_wrap_fncps_closure(a) != NULL;
     const Binding *ib = (inner && inner->kind == EX_VAR) ? inner->as.var.binding : NULL;
     if (ib && ib->source_binding) ib = ib->source_binding;
-    if (!ib || !ib->is_global || ib->type.kind != TY_FN || ib->type.as.fn.arity != 1)
-        return false;
-    TypeKind ak = ib->type.as.fn.arg_kinds[0];
-    TypeKind rk = ib->type.as.fn.result_kind;
-    return (ak == TY_INT || ak == TY_INT64) && (rk == TY_INT || rk == TY_INT64);
+    return ib && ib->is_global && cps_ir_fncps_sig_ok(&ib->type);
 }
 
 /* Does every call through param `p` in `fd`'s body thread the caller's
@@ -6736,19 +6775,83 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
  * expression.  The closure's wrapper keeps the param's REAL result type, so the
  * call is spelled with it (fncps_result_kind_ok admits only the kinds below);
  * an `int64_t (*)(void*, int64_t)` cast of a `void` wrapper is a mismatched
- * call, which -fsanitize=function traps. */
-static void fncps_direct_call(Buf *out, const char *pf, const char *arg,
-                              const Expr *call) {
+ * call, which -fsanitize=function traps.  `args` holds the `n` argument atoms'
+ * C text; a one-argument call keeps its original spelling. */
+/* The kind of argument `i` of a via_fncps call (fncps_param_call_ok admits
+ * only cps_ir_fncps_arg_ctype's kinds). */
+static TypeKind fncps_arg_kind(const Expr *call, uint32_t i) {
+    return (call && call->kind == EX_CALL && i < call->as.call_.n_args)
+        ? call->as.call_.args[i]->type.kind : TY_INT;
+}
+
+static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
+                              uint32_t n, const Expr *call) {
     TypeKind rk = call ? call->type.kind : TY_INT;
+    Buf ps, av; buf_init(&ps); buf_init(&av);
+    for (uint32_t i = 0; i < n; i++) {
+        /* The wrapper `.fn` holds keeps each parameter's own C type. */
+        const char *pc = cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i));
+        if (strcmp(pc, "int64_t") == 0) {
+            buf_puts(&ps, n == 1 ? ",int64_t" : ", int64_t");
+            buf_printf(&av, ", (int64_t)(%s)", args[i]);
+        } else {
+            buf_printf(&ps, ", %s", pc);
+            buf_printf(&av, ", (%s)(intptr_t)(%s)", pc, args[i]);
+        }
+    }
+    buf_putc(&ps, '\0'); buf_putc(&av, '\0');
     if (rk == TY_NIL)
-        buf_printf(out, "(((void(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)), (int64_t)0)",
-                   pf, pf, arg);
+        buf_printf(out, "(((void(*)(void*%s))%s.fn)(%s.env%s), (int64_t)0)",
+                   ps.data, pf, pf, av.data);
     else if (rk == TY_BOOL)
-        buf_printf(out, "((int64_t)((bool(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s)))",
-                   pf, pf, arg);
+        buf_printf(out, "((int64_t)((bool(*)(void*%s))%s.fn)(%s.env%s))",
+                   ps.data, pf, pf, av.data);
     else
-        buf_printf(out, "((int64_t(*)(void*,int64_t))%s.fn)(%s.env, (int64_t)(%s))",
-                   pf, pf, arg);
+        buf_printf(out, "((int64_t(*)(void*%s))%s.fn)(%s.env%s)",
+                   ps.data, pf, pf, av.data);
+    buf_free(&ps); buf_free(&av);
+}
+
+/* The threaded call through a fat closure's `fn_cps` slot, threading `thread`.
+ * The slot is declared at the one-argument ABI (`tur_poly_fn_t`, emit_module.c);
+ * a twin of another arity was stored through a cast (emit_expr.c, EX_POLY_WRAP)
+ * and is called back at its own type here. */
+static void fncps_slot_call(Buf *out, const char *pf, char *const *args,
+                            uint32_t n, const char *thread, const Expr *call) {
+    /* Every argument crosses as its word: a pointer through intptr_t. */
+    bool all_int = true;
+    for (uint32_t i = 0; i < n; i++)
+        if (strcmp(cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i)), "int64_t") != 0)
+            all_int = false;
+    if (n == 1 && all_int) {
+        buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(%s), %s)", pf, pf, args[0], thread);
+        return;
+    }
+    if (n == 1) {
+        buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(intptr_t)(%s), %s)", pf, pf, args[0], thread);
+        return;
+    }
+    buf_printf(out, "((int64_t (*)(void *, ");
+    for (uint32_t i = 0; i < n; i++) buf_puts(out, "int64_t, ");
+    buf_printf(out, "DK *))%s.fn_cps)(%s.env, ", pf, pf);
+    for (uint32_t i = 0; i < n; i++) {
+        bool word = strcmp(cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i)), "int64_t") == 0;
+        buf_printf(out, word ? "(int64_t)(%s), " : "(int64_t)(intptr_t)(%s), ", args[i]);
+    }
+    buf_printf(out, "%s)", thread);
+}
+
+/* The atom text of a via_fncps call's arguments (malloc'd array of malloc'd
+ * strings; free with fncps_args_free). */
+static char **fncps_args_str(CE *ce, const CAtom *args, uint32_t n) {
+    char **v = (char **)calloc(n ? n : 1, sizeof(char *));
+    if (!v) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < n; i++) v[i] = atom_str(ce, &args[i]);
+    return v;
+}
+static void fncps_args_free(char **v, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) free(v[i]);
+    free(v);
 }
 
 /* Join a term's atom arguments into a malloc'd "a0, a1, ..." string. */
@@ -7581,18 +7684,23 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * direct `f.fn` call, delivering its result to the continuation
                  * exactly as the delegated CT_LETRAW path did. */
                 char *pf = name_for_binding(ce->ctx, t->as.tailcall.fn);
-                char *arg = atom_str(ce, &t->as.tailcall.args[0]);
+                uint32_t na = t->as.tailcall.n;
+                char **av = fncps_args_str(ce, t->as.tailcall.args, na);
                 const char *thread = (t->as.tailcall.kont.kind == KK_PROMPT)
                     ? (ce->cur_k ? ce->cur_k : "__kont") : "__kont";
-                ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value */",
-                        pf, pf, pf, arg, thread);
+                Buf sc; buf_init(&sc);
+                fncps_slot_call(&sc, pf, av, na, thread, t->as.tailcall.call_expr);
+                buf_putc(&sc, '\0');
+                ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value */",
+                        pf, sc.data);
+                buf_free(&sc);
                 /* Pure fallback: call the direct entry and deliver the result. */
                 Buf pv; buf_init(&pv);
-                fncps_direct_call(&pv, pf, arg, t->as.tailcall.call_expr);
+                fncps_direct_call(&pv, pf, av, na, t->as.tailcall.call_expr);
                 buf_putc(&pv, '\0');
                 emit_deliver(ce, &t->as.tailcall.kont, pv.data);
                 buf_free(&pv);
-                free(pf); free(arg);
+                free(pf); fncps_args_free(av, na);
                 break;
             }
             if (t->as.tailcall.via_registry) {
@@ -8945,15 +9053,20 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
          * `frame` to the closure's `fn_cps` slot (an effectful fn-value), or the
          * direct `f.fn` call delivered to `frame` (a pure one). */
         char *pf = name_for_binding(ce->ctx, call->as.tailcall.fn);
-        char *a0 = atom_str(ce, &call->as.tailcall.args[0]);
-        ce_line(ce, "if (%s.fn_cps) return %s.fn_cps(%s.env, (int64_t)(%s), %s); /* E2 threaded fat fn-value heap join */",
-                pf, pf, pf, a0, frame);
+        uint32_t na = call->as.tailcall.n;
+        char **av = fncps_args_str(ce, call->as.tailcall.args, na);
+        Buf sc; buf_init(&sc);
+        fncps_slot_call(&sc, pf, av, na, frame, call->as.tailcall.call_expr);
+        buf_putc(&sc, '\0');
+        ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value heap join */",
+                pf, sc.data);
+        buf_free(&sc);
         Buf dc; buf_init(&dc);
-        fncps_direct_call(&dc, pf, a0, call->as.tailcall.call_expr);
+        fncps_direct_call(&dc, pf, av, na, call->as.tailcall.call_expr);
         buf_putc(&dc, '\0');
         ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc.data);
         buf_free(&dc);
-        free(pf); free(a0);
+        free(pf); fncps_args_free(av, na);
     } else if (call->as.tailcall.via_registry) {
         /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified
          * join `frame` to its CPS entry recovered from the registry. */

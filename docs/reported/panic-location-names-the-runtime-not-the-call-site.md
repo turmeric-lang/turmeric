@@ -1,5 +1,35 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed again 2026-10-08: a failed contract's `panic at` names the
+predicate's own site.**  The `:pre`, `:post`, return-refinement, parameter-
+refinement, class-result and loop-invariant checks the elaborator injects now
+call `tur-contract-check-at` (stdlib/contract.tur) with the basename and line
+the predicate is written at, and it panics through `tur_panic_at` -- so the
+location is `boom.tur:2` rather than a line of the generated C, and the
+message no longer repeats it: `panic at boom.tur:2: Precondition failed in
+safe-div: (not= b 0)`.  One builder, `rt_contract_check_call`
+(`src/compiler/elab_fns.c`), makes every such call; `rt_contract_message`
+keeps the location in the message only if no -at helper is bound.  The
+interpreter's native for it (`native_contract_check_at`) prints the same line
+where it used to print a bare `panic at`.  Pinned by
+`tests/fixtures/contract-failure-names-its-predicate` (`:pre`),
+`contract-post-failure-names-its-site` and
+`contract-param-refinement-names-its-site`, on both engines.
+
+The contract MACROS too: `assert!`, `require!`, `ensure!` and the `-msg!`
+forms expand to `(tur-contract-check cond msg)` written in contract.tur's
+template, so the expanded call's own span is the template's.  `elab_call`
+rewrites that call to the -at form naming the macro use the program wrote
+(`elab_macro_use_site`, over a stack of the expansions in progress, each frame
+its call site and its macro's `defmacro` span): the innermost use that is not
+itself inside the template of the macro expanding around it.  So an `assert!`
+handed to `when` names the `assert!`, and a user macro wrapping
+`require-msg!` names the user macro's use.  Pinned by
+`tests/fixtures/contract-macro-names-its-use`.
+
+**Still open:** a panic raised inside the runtime (a bounds check), and
+direction 4 (`--panic-trace`).
+
 **Narrowed again 2026-10-07: direction 2 is done.** A failed contract's
 message names the kind of check, the function, where the predicate is
 written, and the predicate's source:

@@ -595,6 +595,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "trunc", 0 },
     { "tuple2-eq-carrier?", 0 },
     { "tur-contract-check", 0 },
+    { "tur-contract-check-at", 0 },
     { "tur-contract-check-inv", 0 },
     { "tur-map-homog__", 0 },
     { "tur-sqrt", 0 },

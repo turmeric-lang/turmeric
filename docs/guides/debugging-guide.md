@@ -123,10 +123,10 @@ shows the Turmeric call stack directly, and a `--debug` build under lldb
 stops at the panic with the full stack (see
 [the panic recipe](#finding-where-a-panic-came-from)).
 
-A failed contract is a panic too, and its message names the function, the
-predicate's file and line, and the predicate:
-`Precondition failed in safe-div at boom.tur:2: (not= b 0)`. The same two
-tools find how the call got there.
+A failed contract is a panic too. Its location is the line the predicate is
+written on, and its message names the kind of check, the function and the
+predicate: `panic at boom.tur:2: Precondition failed in safe-div: (not= b 0)`.
+The same two tools find how the call got there.
 Contracts and how to turn them off are covered in the
 [contract types guide](contract-types-guide.md).
 

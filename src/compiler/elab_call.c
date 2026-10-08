@@ -4007,6 +4007,17 @@ static void call_collect_tyvar_names(const Type *t, const char **names, uint8_t 
     }
 }
 
+static bool span_within(Span a, Span d) {
+    return d.off_end > d.off_start && a.file_id == d.file_id &&
+           a.off_start >= d.off_start && a.off_end <= d.off_end;
+}
+
+Span elab_macro_use_site(const Elab *e, Span fallback) {
+    for (const MacroSiteFrame *f = e->macro_site_top; f; f = f->outer)
+        if (!f->outer || !span_within(f->call, f->outer->def)) return f->call;
+    return fallback;
+}
+
 static Expr *elab_call_inner(Elab *e, Form *call);
 
 /* Stack backstop for nested-call elaboration.
@@ -4255,6 +4266,32 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
             Expr *f = expr_new(e->arena, EX_BOOL_LIT, TYPE_BOOL, call->span);
             f->as.b = false;
             return f;
+        }
+    }
+
+    /* panic-location-names-the-runtime-not-the-call-site: `assert!`,
+     * `require!`, `ensure!` and their -msg! forms expand to
+     * `(tur-contract-check cond msg)`, whose panic names the runtime helper.
+     * Rewrite the call to `(tur-contract-check-at cond msg "<file>" <line>)`
+     * naming the macro use the program wrote (elab_macro_use_site; the
+     * expanded form's own span is the template's, in contract.tur), or the
+     * call itself when no macro wrote it, so it panics there, as the
+     * elaborator's own contract checks do (rt_contract_check_call). */
+    Span cc_site = elab_macro_use_site(e, call->span);
+    if (name == e->sym_tur_contract_check && call->as.list.len == 3 &&
+        cc_site.line && e->sym_tur_contract_check_at &&
+        scope_lookup(&e->global, e->sym_tur_contract_check_at)) {
+        const char *path = diag_file_path(cc_site.file_id);
+        if (path) {
+            const char *base = path;
+            for (const char *q = path; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+            Form **items = (Form **)arena_alloc(e->arena, 5 * sizeof(Form *));
+            items[0] = form_sym(e->arena, head->span, e->sym_tur_contract_check_at);
+            items[1] = call->as.list.items[1];
+            items[2] = call->as.list.items[2];
+            items[3] = form_str(e->arena, call->span, base, (uint32_t)strlen(base));
+            items[4] = form_int(e->arena, call->span, (int64_t)cc_site.line);
+            return elab_call(e, form_list(e->arena, call->span, items, 5));
         }
     }
 
@@ -4773,6 +4810,8 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
         if (outermost)
             saved_site = diag_set_expansion_site(call->span, name->name,
                                                  &saved_site_macro);
+        MacroSiteFrame site_frame = { call->span, macro->span, e->macro_site_top };
+        e->macro_site_top = &site_frame;
         e->macro_expand_depth++;
         /* macro-expansion provenance: template spans survive expansion, so an
          * error inside generated code points at the DEFMACRO body -- useless
@@ -4800,6 +4839,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                           name->name);
             if (outermost)
                 (void)diag_set_expansion_site(saved_site, saved_site_macro, NULL);
+            e->macro_site_top = site_frame.outer;
             e->macro_expand_depth--;
             return NULL;
         }
@@ -4885,6 +4925,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                       name->name);
         if (outermost)
             (void)diag_set_expansion_site(saved_site, saved_site_macro, NULL);
+        e->macro_site_top = site_frame.outer;
         e->macro_expand_depth--;
         return out;
     }
