@@ -851,8 +851,17 @@ static void tur_gc_mark_word(uintptr_t w) {
 TUR_GC_NOASAN static void tur_gc_scan(const void *p, size_t n) {
     uintptr_t a = ((uintptr_t)p + sizeof(uintptr_t) - 1) & ~(uintptr_t)(sizeof(uintptr_t) - 1);
     uintptr_t e = (uintptr_t)p + n;
-    for (; a + sizeof(uintptr_t) <= e; a += sizeof(uintptr_t))
-        tur_gc_mark_word(*(const volatile uintptr_t *)a);
+    /* The heap's bounds do not move while the world is stopped (marking
+     * allocates its stack with tur_gc_os, never on the heap), so read them
+     * once.  Almost no word of a large root range -- the data segment of a
+     * program that links libturi is ~46 MB in Debug -- is a heap address, and
+     * testing it in the loop rather than behind tur_gc_mark_word's own check
+     * keeps the call and the two reloads per word off that path. */
+    const uintptr_t lo = tur_gc_G->lo, span = tur_gc_G->hi - lo;
+    for (; a + sizeof(uintptr_t) <= e; a += sizeof(uintptr_t)) {
+        uintptr_t w = *(const volatile uintptr_t *)a;
+        if (w - lo < span) tur_gc_mark_word(w);
+    }
 }
 
 static void tur_gc_scan_cb(const void *p, size_t n, void *ud) { (void)ud; tur_gc_scan(p, n); }

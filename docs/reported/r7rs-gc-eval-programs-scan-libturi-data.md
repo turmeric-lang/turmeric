@@ -1,5 +1,27 @@
 # r7rs-gc: a `(scheme eval)` program's every collection scans `libturi`'s 46 MB of data, which holds no collector pointer
 
+
+**Narrowed 2026-10-08: the scan is ~4.6x cheaper; what it scans is unchanged.**
+`tur_gc_scan` passed every word to `tur_gc_mark_word`, a call that re-read the
+heap's bounds from the collector state for each one, so the per-word cost was
+the call and two reloads -- not the memory.  The bounds cannot move while the
+world is stopped (marking allocates its stack with `tur_gc_os`, never on the
+heap), so the scan reads them once per range and tests each word inline,
+calling into the marker only for a word inside the heap.  Measured on Linux
+x86-64, Debug `tur`, `TUR_GC_TORTURE=31`, same collection counts before and
+after:
+
+| program | collections | without torture | before | after | per collection |
+| --- | --- | --- | --- | --- | --- |
+| `r7rs-eval` | 96 | 0.32-0.36 s | 1.84 s | 0.68 s | 15.8 ms -> 3.4 ms |
+| `r7rs-srfi-64-read-eval` | 172 | 0.33 s | -- | 0.97 s | 3.7 ms |
+| `docs-r7rs-guide-examples` | 343 | 0.28 s | -- | 1.65 s | 4.0 ms |
+| `r7rs-strings` (no libturi) | 26 | 0.004 s | -- | 0.004 s | ~0 |
+
+`tests/run-r7rs-gc.sh`: 249 passed, 0 failed.  The ~46 MB of libturi data and
+bss are still scanned on every collection; fix directions 1 and 2 below are
+what would stop that, and remain open.
+
 **Severity:** low-medium (run time of eval programs; CI time under torture).
 The collector scans the executable's whole writable data and bss as roots
 (`tur_gc_scan_data`, src/runtime/r7gc.c: `__data_start` .. `_end`). A
