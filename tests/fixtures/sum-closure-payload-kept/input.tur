@@ -1,0 +1,60 @@
+;; sum-closure-payload-never-dropped, the other half: by-value Option locals
+;; holding a fresh capturing closure that must NOT be dropped at scope exit,
+;; because something else can still reach the closure.  Each still leaks its
+;; env, as before the drop existed (so this fixture carries no
+;; requires.leak-check); what it pins is that none is freed early.  A free in
+;; `kept-by-callee` was a use-after-free (a segfault even without ASan) during
+;; development: keep-opt's inferred nonretain_sum_param_mask covers the sum
+;; BOX, not a closure taken out of one, so the drop now admits a callee only
+;; when it is a tag predicate.
+;;
+;;   returned        -- the Option leaves the let
+;;   binder-escapes  -- the match arm returns the closure
+;;   passed-on       -- handed to another function
+;;   kept-by-callee  -- handed to a callee that stores the closure it matches out
+;;   aliased         -- `(let [g ff] ...)`
+
+(defn returned [k : int] : (Option (fn [int] int))
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    ff))
+
+(defn binder-escapes [k : int] : (fn [int] int)
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (match ff
+      (Some f) f
+      (None) (fn [x : int] : int x))))
+
+(defn call-opt [o : (Option (fn [int] int)) v : int] : int
+  (match o
+    (Some f) (f v)
+    (None) 0))
+
+(defn passed-on [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (call-opt ff 10)))
+
+(defn keep-opt [o : (Option (fn [int] int)) v : (Vec (fn [int] int))] : int
+  (match o
+    (Some f) (do (vec-push! v f) 1)
+    (None) 0))
+
+(defn kept-by-callee [k : int v : (Vec (fn [int] int))] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (keep-opt ff v)))
+
+(defn aliased [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))
+        g ff]
+    (match g
+      (Some f) (f 3)
+      (None) 0)))
+
+(defn main [] : int
+  (println (match (returned 2) (Some f) (f 40) (None) 0))   ;; 42
+  (println ((binder-escapes 40) 2))                          ;; 42
+  (println (passed-on 32))                                   ;; 42
+  (println (aliased 39))                                     ;; 42
+  (let [v : (Vec (fn [int] int)) (vec-new)]
+    (println (kept-by-callee 40 v))                          ;; 1
+    (println ((vec-get v 0) 2))                              ;; 42 -- the kept closure
+    0))

@@ -3791,6 +3791,238 @@ static bool let_binding_sum_box_freeable(EmitCtx *ctx, const Expr *e,
  * hazard), the accessors deref-COPY (`ok-val` emits
  * `T v = *(T *)(...)`), so the same accessor-whitelist walk that
  * guards the carrier drop guards this one.  Trailing-only. */
+/* sum-closure-payload-never-dropped: a by-value Option/Result local whose
+ * payload is a capturing closure literal.  `(let [cb (some (fn [x] ...))] ...)`
+ * mallocs the closure's env and hands it to the sum; nothing released it at
+ * scope exit -- unlike the same closure let-bound on its own, or stored in a
+ * by-value struct's fn field, which both are.  The drop is the closure's own
+ * header drop (TUR_CLOSURE_DROP) on the live arm, taken only when this local
+ * provably holds the env's one reference:
+ *
+ *   - the init wraps a FRESH closure literal whose env drop is shallow
+ *     (closure_env_drop_is_shallow: scalar captures, no inline C), directly in
+ *     a constructor -- `(Some <closure>)` -- or through a function whose whole
+ *     body is that constructor over its one parameter (stdlib `some` / `ok` /
+ *     `err`), so nothing else saw the closure;
+ *   - every use of the local is one the walk below can vouch for: a `match`
+ *     scrutinee whose non-scalar arm binders are only invoked
+ *     (closure_binding_escapes), or an argument to a tag predicate
+ *     (`some?` / `none?` / `ok?` / `err?`, recognized by shape --
+ *     fn_is_tag_predicate_on).  Anything else -- returned, stored, passed on,
+ *     captured, `unwrap`ped, a var pattern aliasing the whole value -- is an
+ *     escape, and the local keeps today's leak. */
+static const Expr *peel_sum_payload_arg(const Expr *a) {
+    while (a && (a->kind == EX_ASCRIBE || a->kind == EX_FN_TO_FAT ||
+                 a->kind == EX_POLY_TO_FAT || a->kind == EX_POLY_WRAP))
+        a = a->kind == EX_ASCRIBE     ? a->as.ascribe_.inner
+          : a->kind == EX_FN_TO_FAT   ? a->as.fn_to_fat_.inner
+          : a->kind == EX_POLY_TO_FAT ? a->as.poly_to_fat_.inner
+                                      : a->as.poly_wrap_.inner;
+    return a;
+}
+
+/* Does this call build a one-field constructor value directly from its single
+ * argument -- the ctor itself, or a function whose body is exactly that? */
+static bool call_wraps_sole_arg_in_ctor(const Expr *call) {
+    if (!call || call->kind != EX_CALL || call->as.call_.fn_expr ||
+        call->as.call_.n_args != 1)
+        return false;
+    if (call->as.call_.ctor)
+        return call->as.call_.ctor->n_fields == 1;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (fb && fb->source_binding) fb = fb->source_binding;
+    const FnDef *fd = fb ? fb->source_fn_def : NULL;
+    if (!fd || fd->n_params != 1 || !fd->params || !fd->body) return false;
+    const Expr *body = fd->body;
+    while (body && body->kind == EX_ASCRIBE) body = body->as.ascribe_.inner;
+    if (!body || body->kind != EX_CALL || !body->as.call_.ctor ||
+        body->as.call_.ctor->n_fields != 1 || body->as.call_.n_args != 1)
+        return false;
+    const Expr *a = peel_sum_payload_arg(body->as.call_.args[0]);
+    return a && a->kind == EX_VAR && a->as.var.binding == fd->params[0];
+}
+
+static bool sum_closure_payload_escapes_visit(const Expr *c, void *ud);
+typedef struct { const Binding *b; int depth; } SumClosureUd;
+
+static bool sum_payload_scalar_kind(TypeKind k) {
+    switch (k) {
+        case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_NIL:
+        case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Does `fb` only read the TAG of its parameter `pi` -- its whole body a
+ * `match` on that parameter whose arms use no field they bind and answer a
+ * literal?  That is `some?` / `none?` / `ok?` / `err?`.  Asked structurally:
+ * nonretain_sum_param_mask is about keeping the sum's BOX, and a callee that
+ * matches the closure out of an arm and stores it still has that bit set. */
+static bool fn_is_tag_predicate_on(const Binding *fb, uint32_t pi) {
+    if (fb && fb->source_binding) fb = fb->source_binding;
+    const FnDef *fd = fb ? fb->source_fn_def : NULL;
+    if (!fd || !fd->params || pi >= fd->n_params || !fd->body) return false;
+    const Expr *m = fd->body;
+    while (m && m->kind == EX_ASCRIBE) m = m->as.ascribe_.inner;
+    if (!m || m->kind != EX_MATCH) return false;
+    const Expr *sc = m->as.match_.scrutinee;
+    while (sc && sc->kind == EX_ASCRIBE) sc = sc->as.ascribe_.inner;
+    if (!sc || sc->kind != EX_VAR || sc->as.var.binding != fd->params[pi]) return false;
+    for (uint32_t i = 0; i < m->as.match_.n_arms; i++) {
+        const MatchArm *arm = &m->as.match_.arms[i];
+        if (arm->guard || arm->pattern.is_var) return false;
+        const Expr *v = arm->body;
+        while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
+        if (!v || (v->kind != EX_BOOL_LIT && v->kind != EX_INT_LIT)) return false;
+    }
+    return true;
+}
+
+static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int depth) {
+    if (!x) return false;
+    if (depth > 256) return true;
+    switch (x->kind) {
+        case EX_VAR:
+            return x->as.var.binding == b;     /* a bare use nothing vouched for */
+        case EX_CLOSURE: {
+            const struct Closure *c = x->as.closure_.closure;
+            if (!c) return true;
+            for (uint32_t i = 0; i < c->n_captures; i++)
+                if (c->captures[i] == b) return true;
+            return false;
+        }
+        case EX_FN:
+        case EX_FN_DEF:
+            return true;                        /* not walked: be conservative */
+        case EX_MATCH: {
+            const Expr *s = x->as.match_.scrutinee;
+            while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+            if (!s || s->kind != EX_VAR || s->as.var.binding != b) break;
+            for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+                const MatchArm *arm = &x->as.match_.arms[i];
+                const MatchPattern *pat = &arm->pattern;
+                /* closure_binding_escapes reads a NULL expression as an
+                 * escape, so an absent guard is skipped, not walked. */
+                if (pat->is_var && pat->var_binding &&
+                    ((arm->body && closure_binding_escapes(arm->body, pat->var_binding)) ||
+                     (arm->guard && closure_binding_escapes(arm->guard, pat->var_binding))))
+                    return true;
+                for (uint32_t k = 0; k < pat->n_bindings; k++) {
+                    const Binding *pb = pat->bindings[k];
+                    /* A scalar field (an `Err` arm's int) cannot alias the
+                     * env; only a binder that can hold the closure is asked. */
+                    if (!pb || sum_payload_scalar_kind(pb->type.kind)) continue;
+                    if ((arm->body && closure_binding_escapes(arm->body, pb)) ||
+                        (arm->guard && closure_binding_escapes(arm->guard, pb)))
+                        return true;
+                }
+                if (sum_closure_payload_escapes(arm->guard, b, depth + 1) ||
+                    sum_closure_payload_escapes(arm->body, b, depth + 1))
+                    return true;
+            }
+            return false;
+        }
+        case EX_CALL: {
+            const Binding *fb = x->as.call_.fn_binding;
+            if (fb && fb->source_binding) fb = fb->source_binding;
+            if (sum_closure_payload_escapes(x->as.call_.fn_expr, b, depth + 1))
+                return true;
+            for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
+                const Expr *a = x->as.call_.args[i];
+                while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                if (a && a->kind == EX_VAR && a->as.var.binding == b &&
+                    fn_is_tag_predicate_on(fb, i))
+                    continue;                   /* reads only the tag */
+                if (sum_closure_payload_escapes(x->as.call_.args[i], b, depth + 1))
+                    return true;
+            }
+            return sum_closure_payload_escapes(x->as.call_.dict_arg, b, depth + 1);
+        }
+        default:
+            break;
+    }
+    SumClosureUd u = { b, depth + 1 };
+    return cps_visit_children(x, sum_closure_payload_escapes_visit, &u);
+}
+
+static bool sum_closure_payload_escapes_visit(const Expr *c, void *ud) {
+    const SumClosureUd *u = (const SumClosureUd *)ud;
+    return sum_closure_payload_escapes(c, u->b, u->depth);
+}
+
+/* Walk the arms of a by-value sum monomorph for fn-typed (closure) fields;
+ * with `emit`, write the tag-dispatched TUR_CLOSURE_DROP of each.  The same
+ * shape as boxed_struct_payload_walk. */
+static bool sum_closure_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
+                                     Type t, bool emit) {
+    Type rt = emit_resolve_type(ctx, t);
+    AdtDef *def = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(&rt, &def, args, &n_args) || !def) return false;
+    if (def->is_heap || def->n_ctors < 2) return false;
+    bool any = false;
+    if (emit) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "switch (%s.tag) {\n", name);
+    }
+    for (uint32_t ci = 0; ci < def->n_ctors; ci++) {
+        const CtorDef *c = def->ctors[ci];
+        if (!c) continue;
+        bool arm_open = false;
+        for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+            const CtorField *fld = &c->fields[fi];
+            if (!fld->full_type) continue;
+            Type resolved = substitute_adt_app_type_owned(fld->full_type, def, args);
+            bool is_fn = resolved.kind == TY_FN;
+            free_struct_app_type(resolved);
+            if (!is_fn) continue;
+            any = true;
+            if (!emit) return true;
+            if (!arm_open) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "case %u:\n", ci);
+                arm_open = true;
+            }
+            char *mp = adt_field_member_path(def, c, fi);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "    TUR_CLOSURE_DROP(%s.%s);\n", name, mp);
+            free(mp);
+        }
+        if (emit && arm_open) { indent_buf(body, ctx->indent); buf_puts(body, "    break;\n"); }
+    }
+    if (emit) {
+        indent_buf(body, ctx->indent); buf_puts(body, "default: break;\n");
+        indent_buf(body, ctx->indent); buf_puts(body, "}\n");
+    }
+    return any;
+}
+
+static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
+                                             uint32_t i, const LetBindDecl *d) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!b || e->kind != EX_LET || !d->plain || !d->bind_c ||
+        strcmp(d->bind_c, "int64_t") == 0 || strchr(d->bind_c, '*') != NULL)
+        return false;
+    if (!sum_closure_payload_walk(ctx, NULL, NULL, b->type, false)) return false;
+    const Expr *init = e->as.let_.bindings[i].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!call_wraps_sole_arg_in_ctor(init)) return false;
+    const Expr *a = peel_sum_payload_arg(init->as.call_.args[0]);
+    if (!a || a->kind != EX_CLOSURE ||
+        !closure_env_drop_is_shallow(a->as.closure_.closure))
+        return false;
+    if (sum_closure_payload_escapes(e->as.let_.body, b, 0)) return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++)
+        if (j != i && sum_closure_payload_escapes(e->as.let_.bindings[j].init, b, 0))
+            return false;
+    return true;
+}
+
 static bool let_binding_vsp_box_freeable(EmitCtx *ctx, const Expr *e,
                                          uint32_t i, const LetBindDecl *d) {
     const Binding *b = e->as.let_.bindings[i].binding;
@@ -3852,12 +4084,13 @@ bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i) {
     /* RM1 and the value-struct payload box both need the emitted declaration
      * to decide.  Its C type is known now; only the initializer's recorded
      * spelling is not, so this answers as if it were the carrier. */
-    const Expr *fin = e->as.let_.bindings[i].init;
-    while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
-    if (!emit_init_owns_fresh_sum(ctx, fin)) return false;
     LetBindDecl d = { true, emit_binding_repr_c_name(ctx, b->type,
                                                      e->as.let_.bindings[i].init),
                       true };
+    if (d.bind_c && let_binding_sum_closure_freeable(ctx, e, i, &d)) return true;
+    const Expr *fin = e->as.let_.bindings[i].init;
+    while (fin && fin->kind == EX_ASCRIBE) fin = fin->as.ascribe_.inner;
+    if (!emit_init_owns_fresh_sum(ctx, fin)) return false;
     if (!d.bind_c) return true;
     return let_binding_sum_box_freeable(ctx, e, i, &d) ||
            let_binding_vsp_box_freeable(ctx, e, i, &d);
@@ -3912,6 +4145,17 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
         else     emit_boxed_struct_payload_free(ctx, &r, bn, b->type);
         ctx->indent = save_indent;
         /* The emitters end each line in a newline; the channel adds its own. */
+        for (uint32_t k = 0; k < r.len; k++)
+            if (r.data[k] == '\n') r.data[k] = ' ';
+        push_rendered_drop(ctx, &r);
+        buf_free(&r);
+    }
+    if (let_binding_sum_closure_freeable(ctx, e, i, d)) {
+        Buf r; buf_init(&r);
+        int save_indent = ctx->indent;
+        ctx->indent = 0;
+        sum_closure_payload_walk(ctx, &r, bn, b->type, true);
+        ctx->indent = save_indent;
         for (uint32_t k = 0; k < r.len; k++)
             if (r.data[k] == '\n') r.data[k] = ' ';
         push_rendered_drop(ctx, &r);
@@ -3979,6 +4223,11 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     char **vsp_free_names = NULL;
     Type  *vsp_free_types = NULL;
     uint32_t n_vsp_free = 0;
+    /* sum-closure-payload-never-dropped: by-value Option/Result locals whose
+     * live arm holds a fresh capturing closure (name + type pairs). */
+    char **scp_free_names = NULL;
+    Type  *scp_free_types = NULL;
+    uint32_t n_scp_free = 0;
     uint32_t n_any_free = 0;
     uint32_t n_box_free = 0;
     /* local-struct-drop (fn-field): C names + struct C types of let-bound owning
@@ -4110,6 +4359,15 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 vsp_free_types[n_vsp_free] = b->type;
                 n_vsp_free++;
             }
+            if (let_binding_sum_closure_freeable(ctx, e, i, &d)) {
+                scp_free_names = (char **)realloc(scp_free_names,
+                    (n_scp_free + 1) * sizeof(char *));
+                scp_free_types = (Type *)realloc(scp_free_types,
+                    (n_scp_free + 1) * sizeof(Type));
+                scp_free_names[n_scp_free] = name_for_binding(ctx, b);
+                scp_free_types[n_scp_free] = b->type;
+                n_scp_free++;
+            }
         }
         /* Suppress unused-variable warnings even if the body never refs it. */
         indent_buf(body, ctx->indent);
@@ -4236,6 +4494,14 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
     }
     free(vsp_free_names);
     free(vsp_free_types);
+
+    /* sum-closure-payload-never-dropped: release the live arm's closure. */
+    for (uint32_t i = 0; i < n_scp_free; i++) {
+        sum_closure_payload_walk(ctx, body, scp_free_names[i], scp_free_types[i], true);
+        free(scp_free_names[i]);
+    }
+    free(scp_free_names);
+    free(scp_free_types);
 
     /* any-struct-box-leak-per-widen: release the payload box of each
      * non-escaping `any` local now that the body -- its last use -- is emitted. */
