@@ -1,5 +1,15 @@
 # `tur_r7rs_gc`: torture at a fixed interval re-marks a large live heap thousands of times (quadratic), so the suite is minutes of re-marking
 
+**Resolved 2026-10-08 (option 1).** `tests/run-r7rs-gc.sh` now passes
+`TUR_GC_TORTURE_SCALE=64` to every run at an interval above 1: phase 1's
+fixtures and phase 3's every-31 cases.  The every-allocation cases (seam,
+threads-run and the phase 3 cases at 1) stay unscaled, and so does a deep run
+with `R7RS_GC_TORTURE=1`.  `R7RS_GC_TORTURE_SCALE=0` turns the scaling off, and
+the summary line names the scale.  Measured on a 4-core container, Debug `tur`:
+249 passed both ways, 3 m 33 s wall with the scale against 4 m 31 s at a fixed
+31.  The rest of the time is building the programs and the serial thread
+phase.
+
 **Severity:** medium (CI time; the `tur_r7rs_gc` ctest target hit its 720 s
 cap on a 4-core container). `tests/run-r7rs-gc.sh` runs every compiled r7rs
 and Saffron fixture with `TUR_GC_TORTURE=31`, a full collection every 31
@@ -44,13 +54,13 @@ The whole harness: 5 m 49 s at a fixed 31, 4 m 04 s with
 `TUR_GC_TORTURE_SCALE=64` exported, 249 passed either way. The rest of its
 time is building the 232 programs and the serial thread phase, which includes
 the thread fixtures' cold prelude variants
-([r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md)).
+([r7rs-prelude-library-object-varies-with-the-program](../reported/r7rs-prelude-library-object-varies-with-the-program.md)).
 
 ## Re-measured 2026-10-08, after the root-scan change
 
 `tur_gc_scan` now tests each word against the heap bounds inline instead of
 calling the marker for it
-([r7rs-gc-eval-programs-scan-libturi-data](r7rs-gc-eval-programs-scan-libturi-data.md)).
+([r7rs-gc-eval-programs-scan-libturi-data](../reported/r7rs-gc-eval-programs-scan-libturi-data.md)).
 That cut a `(scheme eval)` program's per-collection cost 4.6x, where most
 scanned words are not heap addresses; inside a large live heap most words
 ARE, so it moves these programs less (same collection counts, interval 31):
@@ -89,5 +99,5 @@ Choices:
 
 ## Pinned by
 
-Nothing yet. If option 1 is taken, the harness's summary line should say the
-scale it ran at.
+`tests/run-r7rs-gc.sh` (ctest `tur_r7rs_gc`).  Its summary line says the scale
+it ran at.
