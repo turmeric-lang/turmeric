@@ -771,14 +771,21 @@ function drawLineChart({
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
     role="img" aria-label="${esc(label)}">${parts.join('')}</svg>`;
 
-  wireHover({ host, tooltip, idPrefix, series, xs, sx, fmtY, pad, ih });
+  wireHover({ host, tooltip, idPrefix, series, sx, fmtY, pad, ih });
 }
 
-function wireHover({ host, tooltip, idPrefix, series, xs, sx, fmtY, pad, ih }) {
+function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, pad, ih }) {
   const svg = host.querySelector('svg');
   const hit = host.querySelector(`#${idPrefix}-hit`);
   const cross = host.querySelector(`#${idPrefix}-cross`);
   if (!svg || !hit) return;
+
+  // Snap only to x values a DRAWN series has a point at. The axis spans every
+  // run in the environment, but about a quarter of those carry none of the
+  // selected suites (other jobs in the env upload on their own clock), and
+  // snapping to one of them hid the tooltip over a stretch of plot that still
+  // showed lines -- including, on 2026-10-08's data, the plot's center.
+  const xs = [...new Set(series.flatMap((s) => s.pts.map((p) => p.x)))];
 
   const hide = () => {
     tooltip.hidden = true;
