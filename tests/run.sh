@@ -1112,6 +1112,31 @@ run_happy() {
         fi
     fi
 
+    # unexpected.stderr: the mirror of expected.stderr -- substrings that must
+    # NOT appear (one per line).  Pins the absence of a false diagnostic, e.g.
+    # a TUR-W0033 that used to fire on a clause that runs.
+    if [ -f "$dir/unexpected.stderr" ]; then
+        local present=0
+        while IFS= read -r needle; do
+            [ -z "$needle" ] && continue
+            if grep -F -q "$needle" "$actual_stderr"; then
+                {
+                    echo "FAIL $name — unexpected stderr substring found:"
+                    echo "    $needle"
+                } >> "$log_file"
+                present=1
+            fi
+        done < "$dir/unexpected.stderr"
+        if [ $present -ne 0 ]; then
+            {
+                echo "    actual stderr:"
+                sed 's/^/      /' "$actual_stderr"
+            } >> "$log_file"
+            write_result "FAIL" "$name" "stderr mismatch" "$log_file"
+            return
+        fi
+    fi
+
     stamp_write "$name" "$input"
     write_result "PASS" "$name" "" ""
 }
