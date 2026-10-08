@@ -2,6 +2,40 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.8] -- 2026-10-08
+
+### Deprecated
+
+- **`--panic-trace` is retired.** The flag printed raw defer-frame pointers that
+  named no function or line; it is now accepted and ignored with `TUR-W0050`. A
+  panic already names its own `.tur` file and line, and a `--debug` build gives
+  a debugger stack.
+
+### Fixed
+
+- **Contract failures point at your code.** `:pre`, `:post`, refinements, class
+  result contracts and loop invariants panic at the predicate's own line, and
+  `assert!`, `require!` and `ensure!` name the macro use instead of the runtime
+  helper.
+- **Effectful callbacks through fn parameters compile.** A call through an
+  un-annotated fn value now threads the caller's handler for callbacks with
+  several arguments, capturing closures, bool or unit results, and `cstr` or
+  `ptr<void>` arguments; a `let` alias of an fn parameter works the same way.
+  Previously these were refused at compile time or aborted with "unhandled
+  effect".
+- **Float literals round-trip.** Printed floats now read back as the same value:
+  `2.0` no longer prints as `2`, so a `defmacro*` body binding `: float 2.0`
+  elaborates and contract messages print the literal you wrote.
+- **Float proofs no longer assume exact reals.** The refinement checker treats
+  float arithmetic as opaque and no longer assumes NaN away, so it cannot
+  "prove" `(- (+ x 0.1) 0.1)` equal to `x` and elide a check that would fire.
+- **Escaping effectful closures are refused at compile time.** A closure that
+  performs effects and escapes through an empty-row fn type no longer aborts at
+  run time with "unhandled effect"; the compiler rejects it up front.
+- **GC collections are much faster in `#lang r7rs` eval programs.** A program
+  using `(scheme eval)` scans the runtime's data far more cheaply, cutting
+  per-collection time in the reported repro by about 4.6x.
+
 ## [0.63.7] -- 2026-10-08
 
 ### Added

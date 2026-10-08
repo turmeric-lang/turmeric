@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.7` -- `turi` and compiled programs use far less memory (Maps, closures, loops, continuations), and failed contracts now name the function and predicate.
+**Latest release:** `v0.63.8` -- Contract failures now panic at your predicate or macro's own line, and effectful callbacks through fn parameters -- multi-argument, capturing, or pointer-taking -- compile instead of being refused.
 
 ## What
 
