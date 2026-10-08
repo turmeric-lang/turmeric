@@ -131,13 +131,13 @@ with-handler
         resume(k nil)
   do
     perform(Log("tick"))
-    +(perform(Counter()) 1)
+    {perform(Counter()) + 1}
 ;; prints "tick", evaluates to 42
 ```
 
 Semantics (precedence, the disjoint-effect rule, answer-type agreement, and
 per-case continuation discipline) are specified in
-[first-class-handlers-semantics.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/first-class-handlers-semantics.md).
+[first-class-handlers-semantics.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/first-class-handlers-semantics.md).
 
 - **Overlap is rejected.** Composing two handlers for the *same* effect is a
   compile error (`TUR-E0251`); composition is defined only for disjoint effect
@@ -286,8 +286,13 @@ The row `#fx{e}` is a row variable: `run-twice` performs whatever effects `f` pe
 | Flag | Effect |
 |---|---|
 | `--dump-effects` | Print each top-level `defn`'s inferred effect row after checking |
-| `--lint-effects` | Warn on unannotated `defn`s whose inferred row is non-empty |
-| `--strict-effects` | Under `--strict-effects`, unannotated functions that perform effects get a warning; callers propagate the inferred row |
+| `--strict-effects` | Warn (`TUR-W0030`) on any function -- a `defn`, a `fn` literal, an instance method -- that performs effects but declares no row; also `TUR-W0032` on a row variable that is always concrete. Callers propagate the inferred row either way |
+| `-Werror=strict-effects` | Make the `--strict-effects` warnings errors, so a build can gate on annotations. Implies `--strict-effects` |
+| `--lint-effects` | Deprecated alias for `--strict-effects` (`TUR-W0050`); it was a duplicate of it |
+
+A `fn` literal is named in these messages by where it is -- *anonymous function
+in 'dfs-or'* -- with the span on the literal itself, and the advice spells the
+row to add (`add #fx{Bt} after its parameter vector`).
 
 ### Module-level visibility
 
@@ -348,9 +353,12 @@ A capability effect is a coarse *authority* tag rather than something you
   therefore fails effect-row checking with `TUR-E0009`, exactly like the
   built-in `#fx{Unsafe}`.
 
-The standard library ships five capability tags in
-[`stdlib/effects.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/effects.tur), used to annotate the
-I/O-touching modules:
+Five capability tags are **compiler-known**, like `Unsafe`: they resolve in
+every program, with nothing loaded, and are used to annotate the I/O-touching
+modules. [`stdlib/effects.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/effects.tur)
+re-declares them, which is where their docs live; a declaration of one of these
+names is accepted only when it matches the built-in exactly (`(defeffect FS []
+:nil ^extends IO ^capability)`), and anything else is an error.
 
 | Tag       | Used by                                     |
 |-----------|---------------------------------------------|
@@ -360,8 +368,8 @@ I/O-touching modules:
 | `#fx{Proc}` | `process.tur`, `env.tur`                     |
 | `#fx{Rand}` | `random.tur`                                |
 
-A sixth lives outside `effects.tur`, because the module that uses it is
-autoloaded and `effects.tur` is not:
+A sixth, `Bt`, is an ordinary `^capability` declaration in the autoloaded
+`trail.tur`, next to the trail mutators it annotates:
 
 | Tag       | Declared in       | Used by                                                     |
 |-----------|-------------------|-------------------------------------------------------------|
@@ -371,11 +379,24 @@ autoloaded and `effects.tur` is not:
 state, not an authority over a resource outside the process. See the
 [Backtrackable State Guide](backtrackable-state-guide.md#the-bt-capability).
 
-One trap worth knowing about any tag: an uppercase name in `#fx{...}` that no
-`defeffect` in the compile declares is **silently dropped** at resolution, so
-`#fx{Typo}` checks as `#fx{}`. That is how `#fx{Bt}` sat decorative on the
-trail mutators for a month before `Bt` was declared. If a row you annotated
-seems to have no effect, `--dump-effects` shows what it resolved to.
+Every name in `#fx{...}` must be declared. An uppercase name that no
+`defeffect` in the compile declares (and that is not compiler-known) is
+**`TUR-E0026`**, with a did-you-mean for a near miss and the module to load for
+the `stdlib/effects.tur` names:
+
+```
+error [TUR-E0026]: unknown effect 'Write' in effect row: no defeffect declares
+  it ('Write' is declared in stdlib/effects.tur, which is not autoloaded;
+   add (load "stdlib/effects.tur"))
+```
+
+It used to be dropped silently, so `#fx{Typo}` checked as `#fx{}` -- and a
+caller's `#fx{}` then passed the `TUR-E0009` check the tag existed to buy.
+That is how `#fx{Bt}` sat decorative on the trail mutators for a month before
+`Bt` was declared. The same check caught a stdlib `#fx{FS}` that had never
+resolved and a fixture's `#fx{|e}` (a row variable is just `e`). `#fx{...}`
+holds effects and row variables only: compiler attributes are `^attr`s
+(`^construct`, `^byval`, `(match ^non-exhaustive ...)`).
 
 Discipline stays **opt-in**: a function with no effect-row annotation is never
 checked, so existing code that ignores effect rows keeps compiling. Only when a
@@ -386,38 +407,100 @@ enforce that it has the capabilities of everything it calls.
 (import tur/fs :refer [fs/read-text])
 
 ;; OK: declares the FS capability it relies on.
-(defn load-config [path : cstr] #fx{FS} : cstr
+(defn load-config [path : cstr] #fx{FS} : (Result cstr IoError)
   (fs/read-text path))
 
 ;; ERROR (TUR-E0009): claims purity but reaches the file system.
-(defn load-config-bad [path : cstr] #fx{} : cstr
+(defn load-config-bad [path : cstr] #fx{} : (Result cstr IoError)
   (fs/read-text path))
 
 ;; OK: un-annotated, so the row is not checked at all.
-(defn load-config-unchecked [path : cstr] : cstr
+(defn load-config-unchecked [path : cstr] : (Result cstr IoError)
   (fs/read-text path))
 ```
 ```sweet-exp
 import tur/fs :refer [fs/read-text]
 
 ;; OK: declares the FS capability it relies on.
-defn load-config [path : cstr] #fx{FS} : cstr
+defn load-config [path : cstr] #fx{FS} : (Result cstr IoError)
   fs/read-text(path)
 
 ;; ERROR (TUR-E0009): claims purity but reaches the file system.
-defn load-config-bad [path : cstr] #fx{} : cstr
+defn load-config-bad [path : cstr] #fx{} : (Result cstr IoError)
   fs/read-text(path)
 
 ;; OK: un-annotated, so the row is not checked at all.
-defn load-config-unchecked [path : cstr] : cstr
+defn load-config-unchecked [path : cstr] : (Result cstr IoError)
   fs/read-text(path)
 ```
+
+### Printing: `println` or `(perform (Write s))`?
+
+There are two ways to write a line, and they are not redundant.
+
+- **`println`** is a builtin that declares **`#fx{IO}`**. Printing is tracked:
+  an annotated function that prints must say so, and `#fx{}` means *does not
+  even print*. It is not handleable -- a capability tag is declared, never
+  performed -- so nothing can intercept, redirect or capture what it writes.
+- **`(perform (Write s))`** is an algebraic effect from `stdlib/effects.tur`
+  (`Write ^extends IO`). A handler decides what happens to the line:
+  `with-write` prints it, a test handler can collect it into a buffer, another
+  can drop it.
+
+Reach for `println` for output you are not trying to control, and for
+`perform (Write s)` when a caller should be able to intervene. In Haskell
+terms, `println` is `putStrLn` -- visible in the type as `IO`, concrete --
+and `Write` is an output effect in an effect library, abstract until a
+handler interprets it. (Before `println` carried `#fx{IO}` it was closer to
+`Debug.Trace.trace`: output the types could not see.)
+
+```turmeric
+(load "stdlib/effects.tur")   ; for Write; IO needs no load
+
+;; ERROR (TUR-E0009): prints, so it is not pure.
+(defn add-noisily [a : int b : int] #fx{} : int
+  (println "adding")
+  (+ a b))
+
+;; OK: says it prints.
+(defn add-loudly [a : int b : int] #fx{IO} : int
+  (println "adding")
+  (+ a b))
+
+;; OK: a handler decides where the line goes.
+(defn add-logged [a : int b : int] #fx{Write} : int
+  (perform (Write "adding"))
+  (+ a b))
+```
+```sweet-exp
+load "stdlib/effects.tur"   ; for Write; IO needs no load
+
+;; ERROR (TUR-E0009): prints, so it is not pure.
+defn add-noisily [a : int b : int] #fx{} : int
+  println("adding")
+  {a + b}
+
+;; OK: says it prints.
+defn add-loudly [a : int b : int] #fx{IO} : int
+  println("adding")
+  {a + b}
+
+;; OK: a handler decides where the line goes.
+defn add-logged [a : int b : int] #fx{Write} : int
+  perform(Write("adding"))
+  {a + b}
+```
+
+`IO` is the parent of `Write`, `FS`, `Net`, `Proc` and `Rand`, so `#fx{IO}`
+covers a function that prints and also performs `Write` or reads a file;
+`#fx{Write}` alone does not cover `println`. Unannotated code is unaffected,
+as everywhere else: only a function that declares a row is checked against it.
 
 ### Benefits
 
 - **Polymorphism** -- row variables let higher-order functions propagate caller effects. This holds through `^fat` callback parameters as well: a parameter typed `(fn [T] #fx{E} R)` with a non-empty row is callable, and a named effectful `defn` can be passed as its value (see [Fat Closure Annotation Guide](fat-closure-annotation-guide.md#interaction-with-other-annotations)).
 - **Compile-time checking** -- the compiler verifies that annotated functions do not perform unlisted effects (`TUR-E0009`).
-- **Capability discipline** -- `^capability` tags put inline-C side effects (FS, Net, Proc, Rand) under the same row checking, opt-in per caller.
+- **Capability discipline** -- `^capability` tags put inline-C side effects (FS, Net, Proc, Rand) and printing (`IO`, on `println`) under the same row checking, opt-in per caller.
 - **Auditing** -- `--dump-effects` shows the full effect signature of every function.
 
 ## Integration with Ownership and Defer
@@ -431,7 +514,7 @@ Effects interact with Turmeric's `defer` mechanism:
 
 Delimited control in Turmeric is built on a single **multi-prompt** substrate
 (the Dybvig--Peyton-Jones--Sabry model); see
-[`cps-transform-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md). The operators you
+[`cps-transform-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-transform-plan.md). The operators you
 already use map onto prompts and sub-continuations:
 
 | Operator | Prompt action |
@@ -594,7 +677,7 @@ For a **multi-shot**, cloneable/re-enterable continuation use `call/cc*` instead
 
 ## See Also
 
-- [Whole-Program CPS Transform Plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
+- [Whole-Program CPS Transform Plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the prompt substrate, unbounded capture, and implicit root prompt
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- a heap-reified sub-continuation is a flat chain, directly serializable
 - [Async/Await Guide](async-await-guide.md) -- Effects-based async/await syntax
 - [Logic Programming Guide](logic-programming-guide.md) -- Backtracking via cloneable continuations

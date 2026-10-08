@@ -2,11 +2,14 @@
 
 > **Status:** **In progress** since 2026-09-29, behind
 > `--enable=reflected-measures` (`EXPERIMENTS[]` row, introduced 0.57.0,
-> `expires_at` 0.61.0, prototype). RF0, RF1, RF2, RF3 and RF5 landed in the
+> `expires_at` 0.64.0, prototype -- bumped from 0.61.0 on 2026-10-03: built and fuzzed, waiting on a consumer; see "What graduation waits on"). RF0, RF1, RF2, RF3 and RF5 landed in the
 > first cut (2026-09-29), RF4 and RF6.1 the next day; RF6.2 is deliberately
-> untouched (see "Landed" below). Nothing in the plan is outstanding. Taken off hold by
+> untouched (see "Landed" below). Taken off hold by
 > direct request ("execute the plan"), not by one of the triggers below.
-> **Last Updated:** 2026-09-29
+> **One item is outstanding:** RF3's two-seed fuzz acceptance passes but its
+> population never reaches the RF3/RF4 encoder -- see "What graduation waits
+> on".
+> **Last Updated:** 2026-10-02
 >
 > **RF0 decision (recorded 2026-09-29):** a `^reflect`ed function -- and only
 > such a function -- must be shown total (pure, structurally recursive in one
@@ -14,7 +17,7 @@
 > equation is admitted as an axiom. Program termination and total
 > correctness in general remain **out of scope, permanently**, exactly as
 > [refinement-types-plan.md](../archive/refinement-types-plan.md) and
-> [loop-invariants-plan.md](loop-invariants-plan.md) state; nothing here
+> [loop-invariants-plan.md](../archive/loop-invariants-plan.md) state; nothing here
 > makes an un-annotated non-terminating program fail to compile. The gate is
 > a hard error (`TUR-E0384`) on the definition, never a silent downgrade.
 > **Type:** Compiler / Refinement types
@@ -37,6 +40,12 @@
 | RF6.1 counterexamples with measures | landed 2026-09-30 | `refine_model_search` runs on a VC whose every ufunc is a constructor or a reflected measure and whose unfolding did not run out of fuel (`RefineVC::reflect_model_ok`, flags on `VCUFunc`); a measure application evaluates by reading its own definitional equation (`model_collect_defs` / `model_def_of`), a nullary constructor is a fixed free constant kept out of the printed model. `errors/reflect-len-depth-false` and `errors/reflect-bool-refuted` are now `TUR-E0371` "false for the value given here" |
 | RF6.2 `ENC_MAX_PROPAGATE` as a well-founded budget | not done, by design | the plan says touch it only if a real program hits the depth-4 cutoff; none has |
 | RF6.3 RT4 justification | landed | the return-refinement propagation comment in `enc_measure` now says which half of its partial-correctness argument a total callee makes unconditional |
+
+**2026-10-04:** a Bool measure's `iff` equations used to overflow the cube
+cap at four ground elements; unit propagation in the solver's DNF expansion
+fixed it, so Bool measures now run to the same fuel limit as Int ones
+([reflect-bool-measure-cube-blowup](../archive/reflect-bool-measure-cube-blowup.md)).
+`examples/reflected-measures` is the end-to-end program for the feature.
 
 Three things the first cut settled that the phases below did not predict:
 
@@ -74,10 +83,11 @@ to reflection), and a `match` arm's binders were declared at the result
 refinement's sort instead of their field's, which in a `bool`-returning
 body dropped every `(= t (.tl xs))` as a Bool/Int mismatch -- fixed in
 `rt_prove_paths` as part of this work, since RF4 has nothing to select
-through without those equations. (`(= r true)` as the predicate still
-does not prove where bare `r` does: an equality between two propositions is
-an atom the cube expansion cannot see inside -- the same limitation the
-Bool-measure `iff` encoding works around.) Cost: cube and
+through without those equations. (`(= r true)` as the predicate did not
+prove where bare `r` did -- an equality between two propositions was an atom
+the cube expansion cannot see inside -- until 2026-10-03, when `enc_cmp`
+began encoding a Boolean equality as the `iff` the Bool-measure equation
+already uses.) Cost: cube and
 EUF-term peaks over all 116 pre-existing `refine-*`/`reflect-*` fixtures
 (happy and `errors/`) are **identical before and after** on every fixture
 (max cubes 16, max EUF terms 50; sums 178 and 863; the two new RF4 fixtures
@@ -86,15 +96,22 @@ mentions a reflected measure at a non-ground argument with a tag fact in
 scope. Budget going forward: the same two peaks must not grow on a fixture
 that writes no `^reflect`.
 
-One thing to know about crossings: `rt_collect_path_conds` deliberately
-omits an arm's tag and selector facts for a CALL-SITE crossing (a pattern
-binder that shadows an outer name would inherit its hypotheses in the flat
-namespace), so RF4 fires on return obligations and on crossings only where
-a tag fact reaches the environment some other way. Extending the collector
-with the same shadow veto `let` has is possible and was not done: every
-tag/selector fact is a ufunc, and `refine_model_search` declines any VC
-with one, so pushing them into crossing VCs would turn refuted crossings
-(TUR-E0371 with a model) into unknown ones -- the RF6 item first.
+One thing to know about crossings: since 2026-10-03, `rt_collect_path_conds`
+gives a CALL-SITE crossing an arm's tag and selector facts too, so RF4 fires
+there as it does on return obligations
+([reflect-two-provable-facts-report-as-not-holding](../archive/reflect-two-provable-facts-report-as-not-holding.md)).
+Three guards, because those facts were omitted for real reasons:
+
+- They are added only when the callee's predicate mentions a reflected
+  measure.
+- Within that, they are added only for an arm that connects, transitively,
+  to a variable the argument mentions. Every tag/selector fact is a ufunc,
+  and `refine_model_search` declines a VC carrying one, so adding them to a
+  crossing with a ground, false argument would turn its TUR-E0371 (with a
+  model) into an unknown (`errors/reflect-crossing-ground-false-in-arm`).
+- Any path fact that mentions a name rebound below its level is dropped.
+  This is the flat-namespace hazard. It turned out to be live for nested
+  `let`s already (`errors/refine-crossing-shadowed-let`).
 
 RF6.1's soundness argument, since a spurious refutation would be a wrong
 compile error: the search constructs an interpretation, not a guess. Under
@@ -160,7 +177,7 @@ and **this plan does not reopen either of them**:
 - [refinement-types-plan.md](../archive/refinement-types-plan.md), under
   "Non-goals for this prototype": *"Termination checking or total-correctness
   verification."*
-- [loop-invariants-plan.md](loop-invariants-plan.md), "Explicitly not in
+- [loop-invariants-plan.md](../archive/loop-invariants-plan.md), "Explicitly not in
   scope": *"A refinement says nothing about whether the loop finishes... A
   non-terminating loop with a true invariant is perfectly well-typed. Ranking
   functions / decreasing measures. Same reason."*
@@ -314,7 +331,7 @@ unchanged.
 ### 5. Diagnostic codes: the ones this plan reserved are gone
 
 Write-frames took `TUR-E0381`/`TUR-E0382`. The sibling
-[loop-invariants-plan.md](loop-invariants-plan.md) needs no codes (its
+[loop-invariants-plan.md](../archive/loop-invariants-plan.md) needs no codes (its
 obligations report through `TUR-E0371`/`TUR-W0372` like `:pre`/`:post` do),
 so this plan takes the next free slots: **`TUR-E0383`** (a `^reflect` whose
 function fails the totality gate -- purity, termination, or coverage; the
@@ -506,38 +523,90 @@ justifies the plan alone, each is cheap once RF3 exists:
 
 ---
 
-## Why not now (updated)
+## Why it was held before the first cut (historical)
 
-1. **Still no measured demand.** The 2026-08-02 finding stands: 85+
-   `#refine{}` fixtures, zero whose predicate calls a recursive user
-   function; `stdlib/refine.tur` is nine scalar aliases with no container
-   measure. Unlike the sibling loop-invariants plan (whose trigger the ECS
-   v1 work has partially fired), nothing on the v1 track asks for
-   reflection. The gap was found by reasoning about the design, not by
-   hitting it.
-2. **The decision in RF0 has not been taken.** Elaboration frames it; it
-   still must be made deliberately, in writing, before code is cut.
+These were the three reasons this plan sat unstarted until 2026-09-29. They
+are kept because reason 3 records a correction worth not re-deriving, and
+because reason 1 is still the open question -- see "What graduation waits on"
+below, which supersedes this section for anything forward-looking.
+
+1. **No measured demand.** The 2026-08-02 finding: 85+ `#refine{}` fixtures,
+   zero whose predicate called a recursive user function; `stdlib/refine.tur`
+   nine scalar aliases with no container measure. Unlike the sibling
+   loop-invariants plan (whose trigger the ECS v1 work had partially fired),
+   nothing on the v1 track asked for reflection. The gap was found by
+   reasoning about the design, not by hitting it. **Still true as of
+   2026-10-02** -- re-measured at the v0.59.0 cut: `stdlib/refine.tur` is the
+   same nine scalar `deftype` aliases, and `^reflect` appears in no stdlib
+   file. What changed is that the feature now exists behind the gate, so the
+   question is no longer whether to build it.
+2. ~~The decision in RF0 has not been taken.~~ **Taken 2026-09-29**, and
+   recorded in this file's header: a REFLECTED function must be shown total;
+   program termination in general stays out of scope. `TUR-E0384` is the
+   checker.
 3. ~~The cost is concentrated in a checker the language has never had, and
    the coverage half may be larger than the termination half.~~ **Corrected
    by elaboration:** coverage is the smaller half (already enforced for
    ADT/union scrutinees; RF2 is three rejections), and the checker reuses
    the WF2 deferred-pass shape wholesale. The concentrated cost is RF3's
    encoder work -- the one place both historical soundness bugs lived, hence
-   the fuzz/sabotage weight there.
+   the fuzz/sabotage weight there. **Borne out:** RF3 was the phase that
+   needed `rf_unfold`/`rf_reduce`/`rf_match_pat`, and it is the phase whose
+   fuzz coverage is still open (see below).
 
-## The trigger
+## What graduation waits on
 
-Start this when a real program wants it. Concretely, any one of:
+The row is `prototype`, `introduced 0.57.0`, `expires_at 0.61.0` -- advisory,
+and it never blocks a release. Reviewed at the v0.59.0 cut (2026-10-02); not
+due, nothing changed. Three things stand between here and graduating, in
+order of how much they should weigh:
+
+1. ~~**RF3's fuzz acceptance, as this plan wrote it.**~~ **Discharged
+   2026-10-03.** The 2026-10-02 run passed but never generated a recursive
+   measure, a fuel boundary, or an arm selection
+   ([reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md)).
+   `tests/refine-fuzz-src.py` now has `shape_reflect` (`--only-shape
+   reflect`), and the plan's `--n 400` at two seeds is:
+
+   | run (`--n 400 --mode both`) | seed | cases | proven / refuted | SOUNDNESS | other BUG | suspicious | agree_abort | agree_clean | skip_invalid |
+   | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+   | `--only-shape reflect`, fixed compiler | 11 | 400 | 304 / 2 | **0** | 0 | 0 | 206 | 101 | 91 |
+   | `--only-shape reflect`, fixed compiler | 23 | 400 | 316 / 0 | **0** | 0 | 0 | 203 | 109 | 88 |
+   | `--only-shape reflect`, PR #1034 head (unfixed) | 11 | 400 | 396 / 2 | **23** | 0 | 0 | 183 | 101 | 91 |
+   | `--only-shape reflect`, PR #1034 head (unfixed) | 23 | 400 | 415 / 0 | **26** | 0 | 0 | 177 | 109 | 88 |
+   | mixed population, fixed compiler | 11 | 400 | 412 / 736 | **0** | 0 | 24 | 16 | 4 | 126 |
+   | mixed population, fixed compiler | 23 | 400 | 400 / 776 | **0** | 0 | 18 | 13 | 11 | 120 |
+
+   Its first run found a soundness bug in the selector sorts rather than in
+   reflection
+   ([refine-float-field-selector-declared-int](../archive/refine-float-field-selector-declared-int.md)),
+   fixed the same day. The rows marked "unfixed" are that bug.
+2. **Still no consumer.** Nothing in `stdlib/` or on the v1 track writes
+   `^reflect`. Graduating makes always-on a feature with no caller, which
+   freezes a surface against zero usage evidence. The three triggers below
+   are unchanged and none has fired.
+3. ~~**Two known completeness limits, each a decision about what to freeze.**
+   `(= r true)` stays unknown where bare `r` proves, and an RF4 fact that
+   proves at a return obligation is unknown at a call-site crossing.~~
+   **Resolved 2026-10-03**
+   ([archived report](../archive/reflect-two-provable-facts-report-as-not-holding.md)):
+   a Boolean equality is encoded as an `iff`, and a crossing in a match arm
+   gets the arm's constructor facts behind the guards described under
+   "One thing to know about crossings". RF6.2 (`ENC_MAX_PROPAGATE` as a well-founded budget) remains
+   deliberately not done -- no real program has hit the depth-4 cutoff.
+
+## The trigger for a consumer
+
+The feature is built; what it still lacks is a program that wants it. Any one
+of these would supply one, and would settle item 2 above:
 
 - A structure-indexed type lands in `stdlib/refine.tur` -- a bounded index, a
-  non-empty container, a sortedness predicate -- and someone tries to prove
-  something about it and cannot.
+  non-empty container, a sortedness predicate -- and someone proves something
+  about it.
 - The ECS refinement work wants a measure over a component set or an entity
-  generation and hits the opacity wall.
-- A report is filed with a concrete measure the author wanted unfolded,
-  showing the `TUR-W0372` it produced.
-
-Until then this file is the record, and "no measured demand" is the answer.
+  generation. Before the first cut this was where it "hits the opacity wall";
+  now it would be the first caller.
+- A report is filed with a concrete measure an author wanted unfolded.
 
 ---
 
@@ -581,7 +650,7 @@ Until then this file is the record, and "no measured demand" is the answer.
 - [checked-write-frames-plan.md](../archive/checked-write-frames-plan.md) -- WF2's
   `WriteFrameSite` + deferred resolver is the structural template for RF0/RF1,
   and its sabotage-run convention is the acceptance style RF1/RF3 adopt.
-- [loop-invariants-plan.md](loop-invariants-plan.md) -- the sibling plan;
+- [loop-invariants-plan.md](../archive/loop-invariants-plan.md) -- the sibling plan;
   shares the termination non-goal and the structure-indexed-type trigger, and
   reuses `TUR-E0371`/`TUR-W0372` rather than claiming codes of its own.
 - [../../guides/refinement-types-guide.md](../guides/refinement-types-guide.md)

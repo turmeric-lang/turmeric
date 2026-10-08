@@ -72,9 +72,9 @@ fresh handler scope).
 ```
 ```sweet-exp
 reset
-  (+ 1
-     (shift k
-       k(k(10))))
+  {1 +
+     shift(k
+       k(k(10)))}
 ;; k = (fn [x] {1 + x}), re-delimited on each call
 ;; => {1 + {1 + 10}} = 12, all surfacing inside the reset
 ```
@@ -109,7 +109,7 @@ defn is-zero [n :int] :bool
   reset
     (shift0
       (fn [v :int]
-        =(v 0))
+        {v = 0})
       n)
 ```
 
@@ -170,7 +170,7 @@ defn first-negative [xs :list<int>] :int
   escape
     (fn [exit]
       (for [x xs]
-        (when <(x 0)
+        (when {x < 0}
           exit(x)))  ; unwinds straight to the escape site with x
       0)             ; no negative found
 ```
@@ -213,12 +213,12 @@ their semantics:
    `PASS_CPS`, which compiles down to the `tur_cont` runtime.
 
 The symbol bindings live in
-[`src/compiler/elab_internal.h`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/elab_internal.h) (`sym_shift`,
+[`src/compiler/elab_internal.h`](https://github.com/turmeric-lang/turmeric/blob/main/src/compiler/elab_internal.h) (`sym_shift`,
 `sym_reset`, `sym_shift0`, `sym_call_cc`, `sym_escape`, ...), elaboration in the
 `elab_*` entry points there, and codegen in `src/compiler/emit_internal.h`
 (`emit_effects_shift`, `emit_effects_reset`, `emit_effects_shift0`, ...). The
 runtime structures are in
-[`src/runtime/runtime.h`](https://github.com/rjungemann/turmeric/blob/main/src/runtime/runtime.h) (`tur_cont`,
+[`src/runtime/runtime.h`](https://github.com/turmeric-lang/turmeric/blob/main/src/runtime/runtime.h) (`tur_cont`,
 `tur_cloneable_cont`, `tur_frame`).
 
 ### Abortive shift and the direct/CPS oracle

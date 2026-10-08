@@ -52,6 +52,13 @@ build-release-check/
 !benchmarks/**/*.c
 !benchmarks/*.h
 !benchmarks/**/*.h
+# The vendored MIR sources the JIT engine compiles (tools/update-mir.sh,
+# external/mir/VENDORED.md).  Without these the blanket *.c / *.h above would
+# swallow the whole copy, and a fresh clone would fail to configure with the
+# default TUR_JIT=ON.  tools/update-mir.sh fails if any file it copies is
+# still ignored.
+!external/mir/**/*.c
+!external/mir/**/*.h
 
 # Python bytecode
 __pycache__/

@@ -17,7 +17,7 @@ Found 2026-07-31 while triaging CI on PR #752.
 ## What failed
 
 Run 2197, head `c091889a4`
-(https://github.com/rjungemann/turmeric/actions/runs/30621915696):
+(https://github.com/turmeric-lang/turmeric/actions/runs/30621915696):
 
 | job | ctest target | result |
 | --- | --- | --- |

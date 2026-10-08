@@ -25,7 +25,7 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 
 ```turmeric no-check
 :spices #map{
-  "httpd" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "httpd" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "httpd-v0.1.0"
                :subdir "spices/httpd"}
 }
@@ -33,7 +33,7 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 ```sweet-exp
 :spices
 #map{
-  "httpd" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "httpd" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "httpd-v0.1.0"
                :subdir "spices/httpd"}
 }
@@ -43,13 +43,13 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 
 ```turmeric no-check
 :spices #map{
-  "httpd"    #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "httpd"    #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "httpd-v0.1.0"
                   :subdir "spices/httpd"}
-  "template" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "template" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "template-v0.1.0"
                   :subdir "spices/template"}
-  "tourist"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "tourist"  #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "tourist-v0.1.0"
                   :subdir "spices/tourist"}
 }
@@ -57,13 +57,13 @@ others; `tur-httpd` and `tur-template` have no shared dependency.
 ```sweet-exp
 :spices
 #map{
-  "httpd"    #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "httpd"    #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "httpd-v0.1.0"
                   :subdir "spices/httpd"}
-  "template" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "template" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "template-v0.1.0"
                   :subdir "spices/template"}
-  "tourist"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "tourist"  #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "tourist-v0.1.0"
                   :subdir "spices/tourist"}
 }
@@ -457,7 +457,7 @@ function receives a request and returns `option<:int>`:
 import tourist/middleware :refer [use!]
 import stdlib/option :refer [none-value some]
 defn auth-mw [ctx :int] :int
-  if =(req-header(ctx "x-api-key") 0)
+  if {req-header(ctx "x-api-key") = 0}
     some(status(401 text("Unauthorized")))
     none-value()
 tourist(3000 use!(auth-mw) get!("/private" (fn [ctx] text("secret"))))

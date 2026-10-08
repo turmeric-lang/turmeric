@@ -1722,7 +1722,7 @@ one dishonest failure mode a query surface can have.
   dropped `requires.compiled` and now run under both harnesses with
   byte-identical output, including the `bt-depth` counts that pin the stamp
   discipline. Record:
-  [trail-tur-has-no-turi-natives](https://github.com/rjungemann/turmeric/blob/main/docs/archive/trail-tur-has-no-turi-natives.md).
+  [trail-tur-has-no-turi-natives](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/trail-tur-has-no-turi-natives.md).
   And prepending trail.tur to every compile moved **148 codegen snapshots**,
   regenerated in the same change per the fixture rule.
 

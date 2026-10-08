@@ -311,7 +311,7 @@ definstance Eq [Longest]
 
 definstance Semigroup [Longest]
   combine [x y]
-    if <(cstr-len((:: x cstr)) cstr-len((:: y cstr)))
+    if {cstr-len((:: x cstr)) < cstr-len((:: y cstr))}
       y
       x
 ```
@@ -366,4 +366,4 @@ element type is exactly what a CRDT counter join needs. `Ord [float]` and
 - [Arrows and Signal Processing](arrows-guide.md) -- `Category`'s `comp` is one
   of the hand-rolled combining operations this vocabulary generalizes.
 - The design rationale, including why no bare-primitive instances ship, is in
-  [lattice-vocabulary-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lattice-vocabulary-plan.md).
+  [lattice-vocabulary-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/lattice-vocabulary-plan.md).

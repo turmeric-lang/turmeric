@@ -12,7 +12,7 @@ description: How the compiler proves a refinement predicate at compile time -- t
 > [refinement-types-guide.md](refinement-types-guide.md). For the always-on
 > runtime half see [contract-types-guide.md](contract-types-guide.md). The
 > design of record is
-> [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md).
+> [../archive/refinement-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refinement-types-plan.md).
 
 A contract type `#refine{ x : T | p }` always has a runtime meaning: `p` is
 checked when a value crosses into the type. On top of that, the compiler
@@ -111,7 +111,7 @@ in `refine_collect.h:114`):
   Loop invariants use it, because "the body does not preserve `(>= acc 0)`" is
   not a sentence the generic "refinement on X" reporter can build.
 
-### Loop invariants (experimental, `--enable=loop-invariants`)
+### Loop invariants
 
 `elab_while` parses `:invariant p`, validates it (pure `bool`), injects the two
 runtime checks (entry; last statement of the body) and records a
@@ -415,7 +415,7 @@ closure is a signature-table fixpoint: each round buckets every application by
 rather than being found by an all-pairs compare -- `O(n * arity)` per round.
 Literal conflicts are one pass over a root map. `REFINE_MAX_EUF_TERMS` bounds
 the rest. (Until 2026-09-28 all three were `O(n^2)` scans; see
-[solver-hot-structures-linear-scans](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-hot-structures-linear-scans.md).) Textbook treatment: Harrison; Bradley &
+[solver-hot-structures-linear-scans](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/solver-hot-structures-linear-scans.md).) Textbook treatment: Harrison; Bradley &
 Manna (see References).
 
 **The state is incremental across cubes.** S1 and S3 hold ONE `EufState` and
@@ -834,7 +834,7 @@ emits its own machine-readable per-benchmark line under `TUR_CORPUS_CAPS=1`
 (aggregation lives in the sweep script because each benchmark is decided in a
 forked child). The current numbers, and what they say about which solver
 extensions are worth building, are in
-[../archive/solver-extension-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-extension-plan.md)
+[../archive/solver-extension-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/solver-extension-plan.md)
 under SX0(b).
 
 ### Asking the solver directly -- `tur smt` and `--dump-refine=json`
@@ -1089,7 +1089,7 @@ bash tests/run.sh 2>&1 | grep -E '^(FAIL|summary)'
 
 - [refinement-types-guide.md](refinement-types-guide.md) -- user-facing feature guide.
 - [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half.
-- [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design of record; the RT1..RT7 and S0..S4 phase names used throughout this doc.
+- [../archive/refinement-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design of record; the RT1..RT7 and S0..S4 phase names used throughout this doc.
 - [experimental-flags-guide.md](experimental-flags-guide.md), [effects-system-guide.md](effects-system-guide.md), [compiler-internals.md](compiler-internals.md).
 - Archived decisions: `docs/archive/impure-refinement-predicates-accepted.md`, `docs/archive/class-param-refinement-not-demanded-of-callers.md`, `docs/archive/crossing-shadowed-binder-false-proof.md`.
 - Source: `src/compiler/refine_*.{c,h}`, `src/runtime/experiments.c`, `src/compiler/diag.{c,h}`.

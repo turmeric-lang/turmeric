@@ -16,10 +16,10 @@
 #      nodes were libc's, unscanned, and the values were freed under them.
 #   3. Threads (docs/archive/r7rs-gc-threads-plan.md, stages A to C): a
 #      program that starts threads runs them in parallel under the
-#      collector, which stops them by signal to collect; ten cases, eight of
-#      them the r7rs-threads-* fixtures under frequent collections (every
-#      allocation, or every 31st for the two long ones), plus a lint over
-#      the release points.
+#      collector, which stops them by signal to collect: a bare thread
+#      start, the r7rs-threads-* fixtures and r7rs-srfi-18 under frequent
+#      collections (every allocation, or every 31st for the long ones),
+#      plus a lint over the release points.
 #   1b. Every compiled `#lang saffron` fixture the same way: since
 #      2026-09-28 the collector is a Saffron program's allocator too
 #      (any-widen-stored-in-an-adt-field-has-no-owner; TUR_SAFFRON_GC=0 opts
@@ -90,6 +90,25 @@ dump_stacks() {
 # Standard input is $RD_STDIN (default /dev/null).  It polls every tenth of a
 # second, so a case that finishes at once is not held for a whole second:
 # every fixture in section 1 goes through here.
+# crash_stacks <stdin> <cmd...>: a case that DIED of a signal leaves nothing
+# but its exit status -- a segfault writes no stderr -- so it is run once
+# more under the debugger, with the same environment, and every thread's
+# stack at the fault is printed.  (macOS r7rs-sicp-metacircular-evaluator
+# and r7rs-srfi-35 exited 139 under torture on #1082 with an empty tail.)
+crash_stacks() {
+    local stdin="$1"; shift
+    if command -v gdb > /dev/null 2>&1; then
+        timeout 300 gdb -batch -ex "run < $stdin > /dev/null" -ex "thread apply all bt 30" --args "$@" 2>&1 |
+            grep -E '^(Thread|#|Program|\[)' | head -200
+    elif command -v lldb > /dev/null 2>&1; then
+        # -k: the commands lldb runs when the process stops on a crash.
+        perl -e 'alarm 300; exec @ARGV' lldb --batch -o "process launch -i $stdin -o /dev/null" \
+            -k "thread backtrace all -c 30" -k "quit 1" -- "$@" 2>&1 | head -200
+    else
+        echo "(no gdb or lldb here to print the stacks)"
+    fi
+}
+
 run_deadline() {
     local secs="$1" out="$2" err="$3" pid ticks=0
     shift 3
@@ -142,6 +161,13 @@ one_case() {
         # the message itself past the cut (saffron-class-fn-extra on #1007
         # showed only "panic at /var/folders/.../..._input_tur.c:27").
         tail -6 "$WORK/$name.err" | cut -c1-400 | sed 's/^/    /'
+        if [ "$rc" -gt 128 ] && [ "$rc" != 124 ]; then
+            echo "    --- stdout tail ($(wc -l < "$WORK/$name.out") of $(wc -l < "$dir/expected.stdout") expected lines) ---"
+            tail -3 "$WORK/$name.out" | cut -c1-200 | sed 's/^/    /'
+            echo "    --- stacks at the fault, re-run under the debugger ---"
+            (cd "$dir" && ASAN_OPTIONS=detect_leaks=0 TUR_GC_TORTURE="$TORTURE" \
+                crash_stacks "$stdin" "$WORK/$name" "${args[@]}") | sed 's/^/    /'
+        fi
     elif ! diff -q "$WORK/$name.out" "$dir/expected.stdout" > /dev/null; then
         echo "FAIL $name -- stdout differs with the collector"
         diff "$WORK/$name.out" "$dir/expected.stdout" | head -6 | sed 's/^/    /'
@@ -149,7 +175,7 @@ one_case() {
         echo "PASS $name"
     fi
 }
-export -f one one_case run_deadline dump_stacks
+export -f one one_case run_deadline dump_stacks crash_stacks
 export TUR WORK TORTURE HOST
 
 printf '%s\n' "${fixtures[@]}" | xargs -P "$(nproc)" -I{} bash -c 'one "$@"' _ {}
@@ -229,6 +255,10 @@ fi | tee -a "$WORK/results"
 #                  per thread and per fiber, kept in a thread-local the
 #                  collector scans and a fiber's block (a collection every
 #                  31st allocation, as for stage C).
+#   threads-srfi18 tests/fixtures/r7rs-srfi-18: SRFI 18's threads, mutexes
+#                  and condition variables (stdlib/srfi/18.scm over
+#                  stdlib/r7rs/thread.tur), eight threads on one mutex
+#                  allocating between turns (every 31st allocation).
 #   threads-lint   every blocking libc call the stdlib and the emitter
 #                  spell is one the collector's release-point macros route
 #                  (src/runtime/r7gc.c); a new one that is not would be a
@@ -311,6 +341,7 @@ fixture_case threads-stress r7rs-threads-stress "nine threads on the heap at onc
 fixture_case threads-lifecycle r7rs-threads-lifecycle "key values are roots, a fork mid-allocation is safe, detached threads leave the registry" 31 | tee -a "$WORK/results"
 fixture_case threads-dynenv r7rs-threads-dynamic-env "five threads each see only their own handlers, wind frames and parameter bindings, and the collector sees all of them" 31 | tee -a "$WORK/results"
 fixture_case threads-fiber-dynenv r7rs-threads-fiber-dynamic-env "a fiber's handlers and parameter bindings move with it from thread to thread" 31 | tee -a "$WORK/results"
+fixture_case threads-srfi18 r7rs-srfi-18 "SRFI 18: threads, mutexes, condition variables and eight threads on one mutex, every value intact" 31 | tee -a "$WORK/results"
 
 # threads-lint: the blocking calls (a broad list; the stdio reads are left
 # out on purpose -- a read from a FILE holds the world, docs/guides/r7rs-guide.md).

@@ -545,7 +545,7 @@ per the standing rule it would not block a release if there were.
    refused. `region_field_form_is_scalar` in emit_expr.c; `region-scope-adt-
    result` now reads `retire=1 rewind=2` with the value asserted across the
    pop, and it carries the mutual-recursion case as the negative. Closes
-   [region-walk-refuses-every-adt-result](https://github.com/rjungemann/turmeric/blob/main/docs/archive/region-walk-refuses-every-adt-result.md).
+   [region-walk-refuses-every-adt-result](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/region-walk-refuses-every-adt-result.md).
    **Second batch, PINNED 2026-09-05 (`region-scope-shapes`):** three more
    result shapes REWIND, and it turned out none needed a new walk change --
    the scalar-form widening plus the existing `full_type` walk already admit

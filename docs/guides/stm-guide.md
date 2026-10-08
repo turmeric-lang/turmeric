@@ -400,4 +400,4 @@ that a `retry`/`check`-false with no way to make progress blocks forever under
 - [Threading Guide](threading-guide.md) -- Locks, mutexes, `Arc<T>` for contrast
 - [HAMT Guide](hamt-guide.md) -- Persistent maps suitable for storage inside TVars
 - [Effects System Guide](effects-system-guide.md) -- Exception handling within transactions
-- [src/stm.h](https://github.com/rjungemann/turmeric/blob/main/src/runtime/stm.h) -- Full C API with implementation notes
+- [src/stm.h](https://github.com/turmeric-lang/turmeric/blob/main/src/runtime/stm.h) -- Full C API with implementation notes

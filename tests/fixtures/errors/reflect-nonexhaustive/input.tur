@@ -1,11 +1,11 @@
-;; reflected-measures RF2: `#{NonExhaustive}` is an UNCHECKED promise -- the
+;; reflected-measures RF2: `^non-exhaustive` is an UNCHECKED promise -- the
 ;; programmer asserts coverage by other means -- and a reflected axiom cannot
 ;; rest on one: an unfolding at a value no arm matches would equate the
 ;; application to nothing at all.  Rejected at the coverage gate.
 (defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
 
 (defn ^reflect first-or-zero [xs : Lst] : int
-  (match #{NonExhaustive} xs
+  (match ^non-exhaustive xs
     (Cons h _) h))
 
 (defn main [] : int (println (first-or-zero (Cons 4 (Nil)))) 0)

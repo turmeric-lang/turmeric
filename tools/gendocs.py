@@ -638,8 +638,15 @@ def _parse_def_line(kind, text):
     data (e.g. {'struct_ann': 'linear'} for defstruct with :linear annotation).
     """
     # Match kind name. defeffect may carry a leading ^private/^public visibility
-    # annotation before the effect name: (defeffect ^private Ask [] :int).
-    caret_prefix = r'(?:\^\w+\s+)?' if kind == 'defeffect' else ''
+    # annotation before the effect name: (defeffect ^private Ask [] :int).  A
+    # defn may carry its pre-name attributes -- ^construct, ^byval, ^reflect,
+    # ^deprecated ["message"] -- in any order: (defn ^construct some [A] ...).
+    if kind == 'defeffect':
+        caret_prefix = r'(?:\^\w+\s+)?'
+    elif kind == 'defn':
+        caret_prefix = r'(?:\^[\w-]+\s+(?:"[^"]*"\s+)?)*'
+    else:
+        caret_prefix = ''
     pattern = r'\(\s*' + kind + r'\s+' + caret_prefix + r'([\w/\-!?<>*+]+)'
     m = re.search(pattern, text)
     if not m:

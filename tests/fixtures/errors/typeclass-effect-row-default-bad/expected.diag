@@ -1,2 +1,2 @@
 TUR-E0009
-default_Greet_greeting
+default body of method 'greeting' in class Greet performs effect 'Write'

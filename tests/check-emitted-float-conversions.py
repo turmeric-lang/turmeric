@@ -42,6 +42,12 @@ Usage
 
 Exit 1 if any finding, 0 if clean, 0 with an UNAVAILABLE line if clang is
 missing (the check says so; it never passes silently).
+
+`--shard i/N` (or $TUR_FCONV_SHARD) runs a round-robin slice of `--corpus`,
+1-based; unset runs everything.  Every finding is independent of every other --
+this is a per-program lint with no cross-program state and no baseline -- so a
+shard reports exactly the findings in its own slice.  NOT $TUR_TEST_SHARD; see
+tests/shard_util.py for why each script gets its own variable.
 """
 
 import argparse
@@ -56,6 +62,7 @@ from concurrent.futures import ThreadPoolExecutor
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fconv_lint import (MARK, find_clang, lint_c)  # noqa: E402
+from shard_util import parse_shard, shard_label, shard_slice  # noqa: E402
 
 
 def lint_tur(path, tur, clang, workdir):
@@ -150,7 +157,15 @@ def main():
                     help="inputs are already-emitted C files")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     ap.add_argument("--tur", default=os.path.join(REPO, "build", "tur"))
+    ap.add_argument("--shard", default=os.environ.get("TUR_FCONV_SHARD"),
+                    help='run a round-robin slice of --corpus, as "i/N" '
+                         '(default: $TUR_FCONV_SHARD; unset runs everything)')
     args = ap.parse_args()
+
+    # Not $TUR_TEST_SHARD: collect-suite-timings.py tags timing rows from the
+    # job's environment rather than per test, so that variable in a job running
+    # other suites mislabels their rows too.  See tests/shard_util.py.
+    shard_index, shard_total = parse_shard(args.shard)
 
     clang = find_clang()
     if not clang:
@@ -167,7 +182,14 @@ def main():
     if args.c:
         findings = [(f, lint_c(f, clang)) for f in args.files]
     else:
-        inputs = list(corpus_inputs()) if args.corpus else args.files
+        # The shard slices the CORPUS enumeration only.  An explicit file list
+        # is something a caller typed and expects to be honoured whole; a
+        # sharded `--shard 1/4 a.tur b.tur c.tur d.tur` silently linting one of
+        # the four would be a trap, not a feature.
+        if args.corpus:
+            inputs = shard_slice(list(corpus_inputs()), shard_index, shard_total)
+        else:
+            inputs = args.files
         workdir = tempfile.mkdtemp(prefix="fconv-")
         try:
             with ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -187,8 +209,8 @@ def main():
             print("FINDING %s -- C line %d: %s %s float<->int value conversion"
                   % (os.path.relpath(path, REPO), line, how, kind))
             print("    %s" % text)
-    print("check-emitted-float-conversions: %d program(s) checked, %d finding(s)"
-          % (checked, n))
+    print("check-emitted-float-conversions: %d program(s) checked%s, %d finding(s)"
+          % (checked, shard_label(shard_index, shard_total), n))
     return 1 if n else 0
 
 

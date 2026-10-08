@@ -309,7 +309,7 @@ the constraint witnesses. The record is reference-counted: a local
 pack is auto-dropped at scope exit, and a pack that flows cross-scope
 (returned, passed as an argument, stored) keeps its control block
 alive. See
-[`existential-gc-followup-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/existential-gc-followup-plan.md).
+[`existential-gc-followup-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/existential-gc-followup-plan.md).
 
 ## What is not supported
 

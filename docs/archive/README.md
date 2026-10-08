@@ -78,7 +78,7 @@ active development or consideration. For user-facing guides and tutorials, see
 ### Current Plans (Recently Added)
 
 - **[sandboxed-eval-plan.md](sandboxed-eval-plan.md)** -- SB0--SB4 sandboxed eval implementation; SB1--SB4 close remaining gaps
-- **[turmeric-spices-plan.md](turmeric-spices-plan.md)** -- Official first-party spice monorepo; all seven spices shipped; see [github.com/rjungemann/turmeric-spices](https://github.com/rjungemann/turmeric-spices)
+- **[turmeric-spices-plan.md](turmeric-spices-plan.md)** -- Official first-party spice monorepo; all seven spices shipped; see [github.com/turmeric-lang/turmeric-spices](https://github.com/turmeric-lang/turmeric-spices)
 - **[cross-plan-followups-plan.md](cross-plan-followups-plan.md)** -- Cross-plan follow-up tasks (F3-2..F3-7 dictionary passing, F5 MutableMap, F6 turi fixture gaps, F8 defstruct compound annotations)
 - **[defstruct-field-types-plan.md](defstruct-field-types-plan.md)** -- Residual hardening after F8 landed; `exg5-exists-cycle` and `exg4-pack-into-struct` still blocked
 - **[existential-gc-followup-plan.md](existential-gc-followup-plan.md)** -- GC integration for packed existentials; cycle-construction fixtures blocked on defstruct compound annotations

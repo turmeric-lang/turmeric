@@ -56,7 +56,7 @@ Both spices follow the standard `:spices` declaration in `build.tur`.
 
 ```turmeric
 :spices #map{
-  "ws-client" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "ws-client" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                    :ref    "ws-client-v0.1.0"
                    :subdir "spices/ws-client"}
 }
@@ -66,10 +66,10 @@ Both spices follow the standard `:spices` declaration in `build.tur`.
 
 ```turmeric
 :spices #map{
-  "httpd"     #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "httpd"     #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                    :ref    "httpd-v0.1.0"
                    :subdir "spices/httpd"}
-  "ws-server" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "ws-server" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                    :ref    "ws-server-v0.1.0"
                    :subdir "spices/ws-server"}
 }
@@ -442,7 +442,7 @@ underlying httpd `Conn` to perform the upgrade, and only the Conn-aware
 otherwise a drop-in for `tourist`: same item list, same middleware
 chain, same dispatch). A `ws-route!` served under plain `tourist` has no
 `Conn` to upgrade and answers `400 Bad Request`. See the
-[tourist-ws spice](https://github.com/rjungemann/turmeric-spices/tree/main/spices/tourist-ws)
+[tourist-ws spice](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/tourist-ws)
 for the full API and the REST+WebSocket coexistence fixture.
 
 ## Limitations and gotchas

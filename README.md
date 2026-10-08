@@ -1,8 +1,8 @@
 # Turmeric
 
-[![CI](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/rjungemann/turmeric/actions/workflows/ci.yml)
+[![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.57.0` -- the CPS/effects and `#lang r7rs` runtimes keep their state per thread and per fiber, `#lang r7rs/sweet` reads sweet-expressions over Scheme, loop invariants and reflected measures land behind `--enable=`, and a cold-cache r7rs build is twice as fast.
+**Latest release:** `v0.63.7` -- `turi` and compiled programs use far less memory (Maps, closures, loops, continuations), and failed contracts now name the function and predicate.
 
 ## What
 
@@ -28,8 +28,19 @@ cannot be made. Release assets also carry
 so you can confirm which workflow run built the bytes you have:
 
 ```sh
-gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
+# Releases built before the 2026-10-02 move to the turmeric-lang org
+# (v0.59.0 and earlier) -- note `--owner`, not `--repo`:
+gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
+# Releases built after it:
+gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
 ```
+
+The owner is bound into the signature, so the right flag follows the release's
+**vintage**, not where the repo lives now. A pre-move asset stays recorded
+under the account that owned the repo when it was built, and a transfer does
+not move that record -- so `--repo` fails for those assets under *either* owner
+name. Using the wrong flag reports a verification failure, not a compromised
+download.
 
 On a platform with no prebuilt binary, the installer builds that same release
 tag from source instead (needs `cmake` and a C compiler).
@@ -37,9 +48,19 @@ tag from source instead (needs `cmake` and a C compiler).
 **Building `main` instead (unverified, opt-in):**
 
 ```sh
-brew tap rjungemann/turmeric https://github.com/rjungemann/turmeric
-brew install --HEAD rjungemann/turmeric/turmeric
+# If you tapped this before the move, drop the old tap first -- brew keys its
+# tap cache by name and will otherwise keep serving the stale one:
+brew untap rjungemann/turmeric 2>/dev/null || true
+
+brew tap turmeric-lang/turmeric https://github.com/turmeric-lang/turmeric
+brew install --HEAD turmeric-lang/turmeric/turmeric
 ```
+
+**The tap URL is not optional.** `brew tap user/repo` resolves to
+`github.com/user/homebrew-repo`, and there is no `homebrew-turmeric` repo --
+`Formula/turmeric.rb` lives in this one. Spelling the URL out is what points
+the tap at the right place; without it the tap fails before `install` is
+reached.
 
 The Homebrew formula is **`--HEAD`-only**: it builds whatever is on `main` at
 that moment and verifies no checksum. That is useful for tracking development
@@ -78,14 +99,14 @@ See [`tvm/README.md`](tvm/README.md) for the full command set
 
 **GitHub Codespaces:**
 
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/rjungemann/turmeric)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/turmeric-lang/turmeric)
 
 **Build from source:**
 
 Prerequisites: a C99 compiler and CMake 3.20+.
 
 ```sh
-git clone https://github.com/rjungemann/turmeric.git
+git clone https://github.com/turmeric-lang/turmeric.git
 cd turmeric
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5  # debug + sanitizers
 cmake --build build -j
@@ -505,7 +526,7 @@ Two worth knowing before you use it:
   to catch accidents, not adversaries.
 
 To report a vulnerability, use the
-[private advisory form](https://github.com/rjungemann/turmeric/security/advisories/new)
+[private advisory form](https://github.com/turmeric-lang/turmeric/security/advisories/new)
 rather than a public issue. See [`SECURITY.md`](SECURITY.md).
 
 ## Scoped Features for v1

@@ -280,5 +280,5 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
 For a worked example end-to-end, see
 [parser-combinators-tutorial.md](parser-combinators-tutorial.md)
 sections 4, 5, and 8. The historical design rationale lives in
-[`docs/archive/history/captureless-lambda-abi-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/captureless-lambda-abi-plan.md) and
-[`docs/archive/history/fat-closure-return-position-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fat-closure-return-position-plan.md).
+[`docs/archive/history/captureless-lambda-abi-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/captureless-lambda-abi-plan.md) and
+[`docs/archive/history/fat-closure-return-position-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/fat-closure-return-position-plan.md).

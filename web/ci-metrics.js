@@ -19,9 +19,11 @@
 // incomparable across. The env <select> therefore does not touch that panel.
 
 import './icons.js'; // <t-icon>
+import { GITHUB_URL } from './repo.js';
 
 const API = '/api/ci-timings';
 const LOC_API = '/api/ci-loc';
+const DOCS_API = '/api/ci-docs';
 
 // Fixed categorical order from vars.css. Assigned by suite name, never by
 // rank, so filtering the selection does not repaint the survivors. Five is the
@@ -63,6 +65,22 @@ const LOC_SERIES = [
 ];
 const LOC_DEFAULT = ['code_lines', 'test_lines'];
 
+// The open-work series, in palette order. `open_reports` and `active_plans`
+// are the two the panel opens on -- the question is "how much open work, split
+// by kind" -- and `held_plans` / `v1_plans` / `spices_plans` are there so the
+// breakdown of the plan total is visible without being the default view. The
+// total open_plans is the sum of the four plan buckets; it is not a separate
+// series because a sum line on the same chart as its addends is a visual
+// tautology.
+const DOCS_SERIES = [
+  ['open_reports',  'Open reports',  '--chart-1'],
+  ['active_plans',  'Active plans',  '--chart-2'],
+  ['held_plans',    'Held plans',    '--chart-3'],
+  ['v1_plans',      'v1 plans',      '--chart-4'],
+  ['spices_plans',  'Spices plans',  '--chart-5'],
+];
+const DOCS_DEFAULT = ['open_reports', 'active_plans'];
+
 // ── STATE ───────────────────────────────────────────────────────────────────
 
 const state = {
@@ -91,6 +109,15 @@ const state = {
   // pushes moves 408,000 lines by a few hundred, which is a third of a pixel.
   locMode: 'lines',
   locError: null,
+  // Open plans and reports: same shape as loc -- one NDJSON row per push to
+  // main, no env dimension. Empty until /api/ci-docs has its first row.
+  docs: [],
+  docsKeys: new Set(DOCS_DEFAULT),
+  docsError: null,
+  // Which tab is visible. Tests is the default; the others render their charts
+  // on first reveal so the SVG picks up the real panel width instead of the
+  // 860px fallback a hidden panel forces.
+  tab: 'tests',
 };
 
 // ── FORMATTING ──────────────────────────────────────────────────────────────
@@ -271,6 +298,11 @@ function locRows() {
   return state.loc.filter((r) => r.ts >= cutoff);
 }
 
+function docsRows() {
+  const cutoff = rangeCutoff(state.docs);
+  return state.docs.filter((r) => r.ts >= cutoff);
+}
+
 // suite -> [{ ts, ms, status, sha, run_id }], ascending by ts.
 function bySuite(rows) {
   const m = new Map();
@@ -360,6 +392,8 @@ function readURL() {
     scale: q.get('scale'),
     loc: q.get('loc') ? q.get('loc').split(',').filter(Boolean) : null,
     locMode: q.get('locmode'),
+    docs: q.get('docs') ? q.get('docs').split(',').filter(Boolean) : null,
+    tab: q.get('tab'),
   };
 }
 
@@ -380,6 +414,9 @@ function writeURL() {
   const loc = LOC_SERIES.map(([k]) => k).filter((k) => state.locKeys.has(k));
   if (loc.join(',') !== LOC_DEFAULT.join(',')) q.set('loc', loc.join(','));
   if (state.locMode !== 'lines') q.set('locmode', state.locMode);
+  const docs = DOCS_SERIES.map(([k]) => k).filter((k) => state.docsKeys.has(k));
+  if (docs.join(',') !== DOCS_DEFAULT.join(',')) q.set('docs', docs.join(','));
+  if (state.tab !== 'tests') q.set('tab', state.tab);
   history.replaceState(null, '', q.toString() ? `?${q}` : location.pathname);
 }
 
@@ -453,7 +490,7 @@ function renderProvenance() {
   document.getElementById('ci-provenance').innerHTML = `
     <span>Latest run</span>
     <a class="mono ci-link"
-       href="https://github.com/rjungemann/turmeric/commit/${esc(latest.sha)}">${esc(short)}</a>
+       href="${GITHUB_URL}/commit/${esc(latest.sha)}">${esc(short)}</a>
     <span class="dot-sep">/</span>
     <span>${esc(fmtDateTime(latestTs))}</span>
     <span class="dot-sep">/</span>
@@ -548,14 +585,7 @@ function renderFilters() {
       </div>
     </div>
 
-    <div class="ci-field">
-      <label class="ci-field-label" for="ci-range">Range</label>
-      <select class="ci-select" id="ci-range">
-        ${RANGES.map(([v, l]) => `
-          <option value="${v}"${v === state.range ? ' selected' : ''}>${l}</option>
-        `).join('')}
-      </select>
-    </div>`;
+`;
 
   document.getElementById('ci-env').onchange = (e) => {
     state.env = e.target.value;
@@ -566,11 +596,6 @@ function renderFilters() {
   document.getElementById('ci-add-suite').onchange = (e) => {
     if (!e.target.value) return;
     selectSuite(e.target.value);
-    render();
-  };
-
-  document.getElementById('ci-range').onchange = (e) => {
-    state.range = e.target.value;
     render();
   };
 
@@ -903,7 +928,7 @@ function renderLoc() {
     ? `${esc(fmtCount(latest.code_lines))} product / ${esc(fmtCount(latest.test_lines))} test
        tracked lines at
        <a class="mono ci-link"
-          href="https://github.com/rjungemann/turmeric/commit/${esc(latest.sha ?? '')}"
+          href="${GITHUB_URL}/commit/${esc(latest.sha ?? '')}"
           >${esc((latest.sha ?? '').slice(0, 7))}</a>.
        Blank lines and comments included; committed machine output is counted
        separately.`
@@ -992,6 +1017,129 @@ function renderLocLegend() {
         state.locKeys.add(key);
       }
       renderLoc();
+      writeURL();
+    };
+  }
+}
+
+// ── RENDER: OPEN PLANS AND REPORTS ──────────────────────────────────────────
+
+function renderDocsTiles() {
+  const latest = state.docs[state.docs.length - 1];
+  const host = document.getElementById('ci-docs-tiles');
+  if (!latest) {
+    host.innerHTML = '';
+    return;
+  }
+
+  const tile = (cls, icon, label, value, note) => `
+    <div class="ci-tile ${cls}">
+      <div class="ci-tile-label">
+        ${icon ? `<t-icon name="${icon}"></t-icon>` : ''}${esc(label)}
+      </div>
+      <div class="ci-tile-value">${value}</div>
+      <div class="ci-tile-note">${esc(note)}</div>
+    </div>`;
+
+  host.innerHTML = [
+    tile('', 'clipboard-list', 'Open plans', String(latest.open_plans),
+      `${latest.active_plans} active, ${latest.held_plans} held, ${latest.v1_plans} v1, ${latest.spices_plans} spices`),
+    tile('', 'circle-dot', 'Open reports', String(latest.open_reports),
+      'Findings in docs/reported/'),
+    tile('', 'layers', 'Total open work',
+      String(latest.open_plans + latest.open_reports),
+      'Plans plus reports'),
+    tile('', 'clock', 'Last measured',
+      esc(fmtDate(latest.ts)),
+      esc((latest.sha ?? '').slice(0, 7))),
+  ].join('');
+}
+
+function renderDocs() {
+  const host = document.getElementById('ci-docs-chart');
+  const legend = document.getElementById('ci-docs-legend');
+  const sub = document.getElementById('ci-docs-sub');
+
+  if (state.docsError) {
+    host.innerHTML = `<div class="ci-empty">${esc(state.docsError)}</div>`;
+    legend.innerHTML = '';
+    sub.textContent = '';
+    return;
+  }
+
+  const rows = docsRows();
+  const xs = rows.map((r) => r.ts);
+  const latest = state.docs[state.docs.length - 1];
+
+  sub.innerHTML = latest
+    ? `${esc(latest.open_plans)} open plans / ${esc(latest.open_reports)} open reports
+       at
+       <a class="mono ci-link"
+          href="${GITHUB_URL}/commit/${esc(latest.sha ?? '')}"
+          >${esc((latest.sha ?? '').slice(0, 7))}</a>.
+       Plans live in <code>docs/upcoming/</code>; reports in
+       <code>docs/reported/</code>.`
+    : '';
+
+  if (rows.length < 2) {
+    host.innerHTML = `<div class="ci-empty">
+      ${state.docs.length > rows.length
+        ? 'Only one measurement in this range -- widen it to see a trend.'
+        : 'Only one push has been measured so far. A trend needs two.'}
+    </div>`;
+    renderDocsLegend();
+    return;
+  }
+
+  const series = DOCS_SERIES
+    .filter(([key]) => state.docsKeys.has(key))
+    .map(([key, label, cssVar]) => ({
+      key,
+      label,
+      color: `var(${cssVar})`,
+      pts: rows.map((r) => ({ x: r.ts, y: r[key] ?? 0, sha: r.sha })),
+    }));
+
+  drawLineChart({
+    host,
+    tooltip: document.getElementById('ci-docs-tooltip'),
+    idPrefix: 'ci-docs',
+    series,
+    xs,
+    ticksY: (lo, hi) => decimalTicks(lo, hi, 5),
+    fmtY: fmtCount,
+    fmtTickY: fmtCountTick,
+    footer: `${xs.length} commit${xs.length === 1 ? '' : 's'}`,
+    label: 'Open plans and reports over time',
+  });
+
+  renderDocsLegend();
+}
+
+function renderDocsLegend() {
+  const latest = state.docs[state.docs.length - 1];
+  document.getElementById('ci-docs-legend').innerHTML = DOCS_SERIES.map(
+    ([key, label, cssVar]) => {
+      const on = state.docsKeys.has(key);
+      return `
+        <button type="button" class="ci-legend-item ci-legend-toggle"
+                data-docs="${esc(key)}" aria-pressed="${on}">
+          <span class="swatch" style="background:${on ? `var(${cssVar})` : 'var(--text-dim)'}"></span>
+          ${esc(label)}
+          <span class="count">${esc(latest ? fmtCount(latest[key]) : '--')}</span>
+        </button>`;
+    },
+  ).join('');
+
+  for (const b of document.querySelectorAll('#ci-docs-legend .ci-legend-toggle')) {
+    b.onclick = () => {
+      const key = b.dataset.docs;
+      if (state.docsKeys.has(key)) {
+        if (state.docsKeys.size > 1) state.docsKeys.delete(key);
+      } else {
+        state.docsKeys.add(key);
+      }
+      renderDocs();
       writeURL();
     };
   }
@@ -1211,6 +1359,8 @@ function render() {
   renderFilters();
   renderChart();
   renderLoc();
+  renderDocsTiles();
+  renderDocs();
   renderSparks(stats);
   renderTable(stats);
   renderSkips();
@@ -1249,14 +1399,36 @@ async function fetchNDJSON(url) {
   };
 }
 
+// Show one tab panel and hide the others. Re-renders the newly visible chart
+// so its SVG picks up the real panel width instead of the 860px fallback a
+// hidden panel (clientWidth 0) forces.
+function switchTab(tab) {
+  state.tab = tab;
+  for (const t of document.querySelectorAll('.ci-tab')) {
+    const on = t.dataset.tab === tab;
+    t.classList.toggle('is-active', on);
+    t.setAttribute('aria-selected', on);
+  }
+  for (const p of document.querySelectorAll('.ci-tab-panel')) {
+    p.hidden = p.id !== `ci-panel-${tab}`;
+  }
+  // A chart drawn into a hidden panel has a fallback viewBox width; redraw now
+  // that the panel is visible so it fits the real column.
+  if (tab === 'code') renderLoc();
+  if (tab === 'reports') { renderDocsTiles(); renderDocs(); }
+  writeURL();
+}
+
 async function boot() {
-  // Both files at once, and settled rather than raced: the line counts are a
-  // second, independent file, so they must neither delay the timings nor be
-  // able to take the page down with them. A fresh ci-metrics branch
-  // legitimately has no repo-loc file at all, and that costs one panel.
-  const [timings, loc] = await Promise.allSettled([
+  // All three files at once, and settled rather than raced: the line counts
+  // and doc counts are independent files, so they must neither delay the
+  // timings nor be able to take the page down with them. A fresh ci-metrics
+  // branch legitimately has no repo-loc or docs-counts file at all, and that
+  // costs one panel each.
+  const [timings, loc, docs] = await Promise.allSettled([
     fetchNDJSON(API),
     fetchNDJSON(LOC_API),
+    fetchNDJSON(DOCS_API),
   ]);
 
   if (timings.status === 'rejected') {
@@ -1283,6 +1455,17 @@ async function boot() {
       + ' this panel shipped.';
   }
 
+  if (docs.status === 'fulfilled') {
+    state.docs = docs.value.rows.sort((a, b) => a.ts - b.ts);
+    if (!state.docs.length) {
+      state.docsError = 'No doc counts have been published yet.';
+    }
+  } else {
+    state.docsError = `Doc counts are unavailable (${docs.reason.message}). They are`
+      + ' published on each push to main, starting with the first one after'
+      + ' this panel shipped.';
+  }
+
   state.envs = buildEnvs(state.rows);
 
   const url = readURL();
@@ -1298,6 +1481,11 @@ async function boot() {
     const valid = url.loc.filter((k) => LOC_SERIES.some(([key]) => key === k));
     if (valid.length) state.locKeys = new Set(valid);
   }
+  if (url.docs) {
+    const valid = url.docs.filter((k) => DOCS_SERIES.some(([key]) => key === k));
+    if (valid.length) state.docsKeys = new Set(valid);
+  }
+  if (url.tab && ['tests', 'code', 'reports'].includes(url.tab)) state.tab = url.tab;
 
   const known = new Set(state.rows.map(seriesName));
   state.suites = url.suites
@@ -1317,6 +1505,20 @@ async function boot() {
   wireSegToggle('data-scale', (v) => { state.scale = v; renderChart(); });
   wireSegToggle('data-loc-mode', (v) => { state.locMode = v; renderLoc(); });
 
+  // The range <select> is static HTML shared across all tabs, so it is wired
+  // here rather than in renderFilters (which only owns the Tests-tab controls).
+  const range = document.getElementById('ci-range');
+  range.value = state.range;
+  range.onchange = (e) => {
+    state.range = e.target.value;
+    render();
+  };
+
+  // Tab bar: static HTML, wired here.
+  for (const t of document.querySelectorAll('.ci-tab')) {
+    t.onclick = () => switchTab(t.dataset.tab);
+  }
+
   const search = document.getElementById('ci-spark-search');
   search.addEventListener('input', () => {
     state.sparkFilter = search.value;
@@ -1324,11 +1526,13 @@ async function boot() {
   });
 
   render();
+  switchTab(state.tab);
 
   // Re-render (rather than scale) on resize so text never distorts.
   const redraw = new Map([
     [document.getElementById('ci-chart'), renderChart],
     [document.getElementById('ci-loc-chart'), renderLoc],
+    [document.getElementById('ci-docs-chart'), renderDocs],
   ]);
   let raf = 0;
   const pending = new Set();

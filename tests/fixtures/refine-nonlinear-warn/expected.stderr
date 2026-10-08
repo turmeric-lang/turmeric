@@ -1,3 +1,3 @@
 TUR-W0373
 TUR-W0372
-the predicate (> r 0) does not hold for every input here
+the predicate (> r 0) could not be proved here, which is not evidence that it fails

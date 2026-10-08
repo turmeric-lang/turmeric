@@ -22,7 +22,7 @@ Create a spice when you want to:
 - Share a library across multiple projects.
 - Wrap a C library and expose it as a clean Turmeric API.
 - Contribute to the official
-  [turmeric-spices](https://github.com/rjungemann/turmeric-spices) monorepo.
+  [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices) monorepo.
 - Distribute a library that others can add with `tur add`.
 
 For code shared only within a single project, use the module system -- no
@@ -324,7 +324,7 @@ replace each stub block with `(import <module> :refer [...])`.
 Add Turmeric spice dependencies the same way any project does:
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref math-v0.1.0 --subdir spices/math --name math
 ```
 
@@ -332,7 +332,7 @@ This produces:
 
 ```turmeric no-check
 :spices #map{
-  "math" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "math" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "math-v0.1.0"
               :subdir "spices/math"}
 }
@@ -340,7 +340,7 @@ This produces:
 
 ```sweet-exp
 :spices #map{
-  "math" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "math" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "math-v0.1.0"
               :subdir "spices/math"}
 }
@@ -351,7 +351,7 @@ are not forced to fetch them:
 
 ```turmeric no-check
 :spices #map{
-  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "test" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "test-v0.1.0"
               :subdir "spices/test"
               :optional true}
@@ -360,7 +360,7 @@ are not forced to fetch them:
 
 ```sweet-exp
 :spices #map{
-  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "test" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "test-v0.1.0"
               :subdir "spices/test"
               :optional true}
@@ -473,7 +473,7 @@ entry alongside (or instead of) the local one:
 
 ```turmeric no-check
 :spices #map{
-  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "watch" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "watch-v0.1.0"
                :subdir "spices/watch"}
 }
@@ -481,7 +481,7 @@ entry alongside (or instead of) the local one:
 
 ```sweet-exp
 :spices #map{
-  "watch" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "watch" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "watch-v0.1.0"
                :subdir "spices/watch"}
 }
@@ -598,7 +598,7 @@ When a binding is simpler to write directly in C, use an inline-C block:
 ```
 
 The closing ` ``` ` and its enclosing `)` must be on the same line. See
-the [inline-C style rule](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md) for why.
+the [inline-C style rule](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md) for why.
 
 ### `:cmake-name` and `:targets` overrides
 
@@ -760,12 +760,12 @@ in the manifest.
 > **Caveats.** A binary linked against a Homebrew/apt shared library will fail
 > at runtime on a machine without that library installed; pin the source build
 > (or `--refetch`) for portable artefacts. See
-> [tur-fetch-system-first-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-fetch-system-first-plan.md) for the
+> [tur-fetch-system-first-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/tur-fetch-system-first-plan.md) for the
 > design rationale and open questions.
 
 For the full `:cmake-deps` field reference, the generated `cmake/CMakeLists.txt`
 format, the `spice-deps-manifest.json` schema, and hash locking, see the
-[CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
+[CMake/CPM integration notes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 
@@ -993,7 +993,7 @@ yyjson.
 Add `tur-test` as an optional dependency and place test files in `tests/`:
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref test-v0.1.0 --subdir spices/test --name test
 ```
 
@@ -1068,7 +1068,7 @@ tur add https://github.com/you/tur-mylib --ref v0.1.0
 
 ### Contributing to turmeric-spices
 
-The [turmeric-spices](https://github.com/rjungemann/turmeric-spices) monorepo
+The [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices) monorepo
 accepts spices that meet the bar for the ecosystem. To contribute:
 
 1. Fork the monorepo and add your spice under `spices/<name>/`.
@@ -1086,7 +1086,7 @@ git push --tags
 Consumers use `--subdir spices/<name>` when adding:
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref myspice-v0.1.0 --subdir spices/myspice --name myspice
 ```
 
@@ -1114,7 +1114,7 @@ durably with `:build-dir "<path>"` in `build.tur` (path is relative to
 the manifest dir). Precedence runs CLI flag > env > manifest > default.
 The build dir is auto-created with a `.gitignore` of `*`, so its
 contents never leak into VCS even if the dir itself gets tracked. (See
-[manifest-driven-build-descent-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/manifest-driven-build-descent-plan.md).)
+[manifest-driven-build-descent-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/manifest-driven-build-descent-plan.md).)
 
 `:engine "cc" | "jit" | "interp"` selects the default EXECUTION engine for
 `tur run`, on the same ladder: `--engine` flag > `TUR_ENGINE` env >
@@ -1273,7 +1273,7 @@ but nothing checks it against a requested range yet).
 
 This is **deferred**; until it ships, a spice that wants to be reused as
 a library should be added the normal way with `tur add`. See the
-[global-spice-install plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices)
+[global-spice-install plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/global-spice-install-plan.md#imports-from-global-spices)
 for the full design sketch.
 
 ---

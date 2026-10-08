@@ -6,6 +6,7 @@
 (defstruct Box [v : int])
 (defeffect Tick [] : nil)
 (defn peek-mut [r : &mut int] : int @r)
+(defn see [p : &int] : int @p)
 
 ;; A write through a place expression.
 (defn field-write [n : int] : int
@@ -16,11 +17,29 @@
       (set! i (+ i 1)))
     i))
 
-;; An early exit: `(not c)` does not hold on the `return` path.
+;; An early exit the body composer cannot place: a `return` inside a nested
+;; loop.  (A `return` in the body itself is analysed -- its paths are pruned --
+;; see loop-invariant-nested-and-early-return.)
 (defn early [n : int] : int
   (let [^mut i 0]
     (while (< i n) :invariant (>= i 0)
-      (when (> i 100) (return -1))
+      (let [^mut j 0]
+        (while (< j 2)
+          (when (> i 100) (return -1))
+          (set! j (+ j 1))))
+      (set! i (+ i 1)))
+    i))
+
+;; A nested loop's counter READ after it: its value there is unknown.  (One
+;; nobody reads again is no obstacle -- loop-invariant-nested-and-early-return.)
+(defn nested-read [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+      (let [^mut j 0]
+        (while (< j 2)
+          (set! j (+ j 1)))
+        (set! acc (+ acc j)))
       (set! i (+ i 1)))
     i))
 
@@ -62,11 +81,35 @@
       (set! i (+ i 1)))
     i))
 
+;; A SHARED borrow the code can still NAME.  Only a borrow bound to a name
+;; nothing mentions is exempt from the volatile set (the `(frozen v ...)`
+;; marker -- refine-loop-invariant-reads-frozen).  A named one can still be
+;; handed to an inline-C callee, and one of those does write through a shared
+;; borrow -- measured, which is why the exemption is this narrow.
+(defn named-borrow [n : int lim : int] : int
+  (let [^mut i 0]
+    (let [r (& lim)]
+      (while (< i n) :invariant (>= lim 0)
+        (set! i (+ i 1)))
+      (do (see r) i))))
+
+;; A SHARED borrow taken inside the loop: the loop-local borrow channel is
+;; untouched by that exemption, for either borrow kind.
+(defn borrow-in-loop [n : int lim : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (>= lim 0)
+      (see (& lim))
+      (set! i (+ i 1)))
+    i))
+
 (defn main [] : int
   (println (field-write 3))
   (println (early 3))
+  (println (nested-read 3))
   (println (borrowed 3))
   (println (via-lambda 3))
   (println (via-handler 3))
   (println (shadowing 3))
+  (println (named-borrow 3 7))
+  (println (borrow-in-loop 3 7))
   0)

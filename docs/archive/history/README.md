@@ -69,7 +69,7 @@ Plans whose features have shipped and are documented in [../../guides/](../../gu
 
 ## Completed Spices
 
-- **plutovg-spice-plan.md** -- `tur-plutovg` spice (2D vector graphics via plutovg 1.3); shipped as `plutovg-v0.1.0` in [turmeric-spices](https://github.com/rjungemann/turmeric-spices)
+- **plutovg-spice-plan.md** -- `tur-plutovg` spice (2D vector graphics via plutovg 1.3); shipped as `plutovg-v0.1.0` in [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices)
 
 ## Design References (Kept for Architecture Context)
 

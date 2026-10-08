@@ -88,18 +88,29 @@ Inside the handler:
 |-------------------------------------------|---------------------------------------------------------|
 | `(httpd-new port handler)`                | 4-worker plaintext server                               |
 | `(httpd-new-pool port workers handler)`   | Custom worker count                                     |
+| `(httpd-new-pool-with-limit port workers handler max-pending)` | Custom worker count and pending-connection cap |
 | `(httpd-new-tls port workers handler ctx)`| HTTPS termination -- see [httpd-tls-guide.md](httpd-tls-guide.md) |
 
 A `port` of `0` lets the kernel choose; read it back with
 `(httpd-port h)`. This is the recommended pattern for tests.
+
+Accepted connections wait in a queue for a free worker, each holding a
+descriptor. At most 512 wait (`max-pending` for
+`httpd-new-pool-with-limit`, `0` = unlimited); past that a connection is
+answered `503 Service Unavailable` and closed, as the async server does
+past its in-flight cap.
 
 ### Binding and request limits
 
 Servers listen on **127.0.0.1** unless the program asks for more. To be
 reachable from the network, call `(httpd-set-bind-any! true)` before the
 constructor (or set `TUR_HTTPD_BIND_ANY=1` in the environment); that binds
-`0.0.0.0`. `TUR_BIND_LOOPBACK`, which the test harnesses export, forces
-loopback either way.
+`0.0.0.0`. To name one interface instead -- IPv4 or IPv6 -- call
+`(httpd-set-bind-addr! "192.168.1.5")` (or `"::1"`, or `"::"` for every IPv6
+interface); it wins over `httpd-set-bind-any!`, `""` clears it, and an
+address that does not parse returns `false` and changes nothing.
+`TUR_BIND_LOOPBACK`, which the test harnesses export, forces loopback either
+way -- of the named address's own family.
 
 Before a handler runs, the server refuses, and closes the connection on:
 
@@ -329,4 +340,4 @@ manually) can write to.
 - [reactor-guide.md](reactor-guide.md) -- the event loop the listener runs on
 - [threading-guide.md](threading-guide.md) -- the `Mutex<Queue>` worker dispatch primitive
 - `turmeric-spices/spices/ws-client/` -- client-side WebSocket spice
-- [websocket-server-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/websocket-server-plan.md) -- `ws-server` spice plan; upgrades an httpd connection to a WebSocket session
+- [websocket-server-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/websocket-server-plan.md) -- `ws-server` spice plan; upgrades an httpd connection to a WebSocket session

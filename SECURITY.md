@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 **Report privately, through GitHub:**
-<https://github.com/rjungemann/turmeric/security/advisories/new>
+<https://github.com/turmeric-lang/turmeric/security/advisories/new>
 
 That form is private to the maintainers until an advisory is published. Please
 use it rather than a public issue for anything that looks exploitable.

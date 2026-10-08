@@ -3,11 +3,15 @@
 > **Status:** S1, S2, S4 implemented (2026-08-17); S3 satisfied -- its
 > jit-ffi-c2mir-plan F4/F5 landed 2026-08-18 (follow-ons 2026-08-21, aarch64
 > HFA fixed 2026-08-26), and that plan graduated in 0.38.0 and is archived.
-> **Remaining: S5 only**, still blocked as of 2026-09-28 -- `TUR_JIT` is still
-> OFF by default (`CMakeLists.txt`) and `cc` is still the default REPL engine,
-> so the shape table (`src/runtime/ffi_dispatch_thunk.c`,
-> `tools/gen_ffi_dispatch.py`) is still the live non-JIT rung, and no plan
-> schedules the default flip.  Proposed 2026-08-17.
+> **Remaining: S5 only.**  Its blocker moved on 2026-10-02: `TUR_JIT` now
+> defaults ON on 64-bit x86-64 and arm64 (MIR vendored under `external/mir/`),
+> so default builds and release binaries carry the c2mir thunk provider.  But
+> `-DTUR_JIT=OFF` and the hosts the default leaves off (ppc64, s390x, riscv64)
+> are still supported configurations, and on those the shape table
+> (`src/runtime/ffi_dispatch_thunk.c`, `tools/gen_ffi_dispatch.py`) is still
+> the live non-JIT rung.  Deleting it now means deciding that a non-JIT build
+> loses the interpreter's dynamic FFI -- a decision, no longer a blocker.
+> Proposed 2026-08-17.
 > **Track:** post-v1, incremental -- each phase is independently landable.
 >
 > **Implementation notes:**

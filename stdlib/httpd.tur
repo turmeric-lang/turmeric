@@ -84,14 +84,19 @@
   ```c
   /* __tur_autolink__: -lturi -pthread */
   /* __tur_include__: #include <stdint.h> */
+  /* __tur_include__: #include <string.h> */
+  /* __tur_include__: #include <strings.h> */
   /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: static int64_t httpd_max_body = 8388608; */
   /* __tur_include__: static int httpd_bind_any = 0; */
+  /* __tur_include__: static char httpd_bind_addr_s[64] = {0}; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
   /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; } HttpdConn; */
+  /* __tur_include__: static const char *httpd_mp_find(const char *h, const char *e, const char *n, size_t nl) { if (!h || !e || nl == 0) return 0; for (; h + nl <= e; h++) if (memcmp(h, n, nl) == 0) return h; return 0; } */
+  /* __tur_include__: static int httpd_hdr_param(const char *v, const char *ve, const char *key, char *out, int cap) { size_t kl = strlen(key); const char *q = (const char *)memchr(v, ';', (size_t)(ve - v)); while (q && q < ve) { q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; const char *ks = q; while (q < ve && *q != '=' && *q != ';') q++; const char *ke = q; while (ke > ks && (ke[-1] == ' ' || ke[-1] == '\t')) ke--; if (q >= ve || *q == ';') continue; q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; int hit = (size_t)(ke - ks) == kl && strncasecmp(ks, key, kl) == 0; int n = 0; if (q < ve && *q == '"') { q++; while (q < ve && *q != '"') { if (*q == '\\' && q + 1 < ve) q++; if (hit && n + 1 < cap) out[n++] = *q; q++; } if (q < ve) q++; } else { while (q < ve && *q != ';' && *q != ' ' && *q != '\t') { if (hit && n + 1 < cap) out[n++] = *q; q++; } } if (hit) { out[n] = '\0'; return n; } q = (const char *)memchr(q, ';', (size_t)(ve - q)); } return -1; } */
   /* __tur_include__: static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
   return 0;
   ```)
@@ -221,6 +226,40 @@
   httpd_bind_any = on ? 1 : 0;
   return prev != 0;
   ```)
+;;; httpd-set-bind-addr! -- listen on one address, IPv4 or IPv6.
+;;;
+;;; httpd-set-bind-any! chooses between loopback and every interface; this
+;;; names the interface -- a numeric address like "192.168.1.5", "::1" or
+;;; "::" (every IPv6 interface).  It applies to the servers created after it
+;;; (httpd-new, httpd-new-pool, httpd-new-async, ...) and wins over
+;;; httpd-set-bind-any!.  "" clears it, back to that default.  An address
+;;; that does not parse is refused and the setting is left as it was.
+;;; TUR_BIND_LOOPBACK, which the test harnesses export, still forces loopback
+;;; -- of the address's own family (127.0.0.1 or ::1).
+;;;
+;;; Parameters:
+;;;   addr -- a numeric IPv4 or IPv6 address, or "" to clear
+;;;
+;;; Returns:
+;;;   true if the address was accepted (or cleared), false if it did not parse.
+;;;
+;;; Example:
+;;;   (httpd-set-bind-addr! "::1")
+;;;   (httpd-new 8080 handler)   ; IPv6 loopback only
+;;;
+;;; Since: 2026-10-03 (security-audit-plan WP4 residual)
+
+(defn httpd-set-bind-addr! [addr : cstr] : bool
+  ```c
+  if (!addr) return false;
+  if (!*addr) { httpd_bind_addr_s[0] = '\0'; return true; }
+  if (strlen(addr) >= sizeof httpd_bind_addr_s) return false;
+  unsigned char probe[16];
+  if (inet_pton(AF_INET, addr, probe) != 1 && inet_pton(AF_INET6, addr, probe) != 1)
+      return false;
+  memcpy(httpd_bind_addr_s, addr, strlen(addr) + 1);
+  return true;
+  ```)
 ;;; httpd-bind-addr -- internal: the IPv4 address (host order) to listen on.
 
 (defn httpd-bind-addr [] : int
@@ -229,6 +268,50 @@
   const char *e = getenv("TUR_HTTPD_BIND_ANY");
   int any = httpd_bind_any || (e && *e && strcmp(e, "0") != 0);
   return (int64_t)(any ? INADDR_ANY : INADDR_LOOPBACK);
+  ```)
+;;; httpd-listen-socket -- internal: a bound, listening, non-blocking socket for
+;;; `port` on the configured address (httpd-set-bind-addr!, else loopback or
+;;; every interface per httpd-bind-addr), or -1.  Shared by the constructors.
+
+(defn httpd-listen-socket [port : int] : int
+  ```c
+  #include <fcntl.h>
+  const char *a = httpd_bind_addr_s;
+  int fam = AF_INET;
+  unsigned char a6[16];
+  if (a[0] && inet_pton(AF_INET, a, a6) != 1) {
+      if (inet_pton(AF_INET6, a, a6) != 1) return -1;
+      fam = AF_INET6;
+  }
+  int loop = getenv("TUR_BIND_LOOPBACK") != NULL;
+  struct sockaddr_storage ss;
+  memset(&ss, 0, sizeof ss);
+  socklen_t sl;
+  if (fam == AF_INET) {
+      struct sockaddr_in *s4 = (struct sockaddr_in *)&ss;
+      s4->sin_family = AF_INET;
+      s4->sin_port   = htons((uint16_t)port);
+      /* No explicit address, or forced loopback: exactly the old default. */
+      if (!a[0] || loop) s4->sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
+      else inet_pton(AF_INET, a, &s4->sin_addr);
+      sl = (socklen_t)sizeof *s4;
+  } else {
+      struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)&ss;
+      s6->sin6_family = AF_INET6;
+      s6->sin6_port   = htons((uint16_t)port);
+      if (loop) ((unsigned char *)&s6->sin6_addr)[15] = 1;   /* ::1 */
+      else memcpy(&s6->sin6_addr, a6, 16);
+      sl = (socklen_t)sizeof *s6;
+  }
+  int fd = socket(fam, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  int opt = 1;
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  if (bind(fd, (struct sockaddr *)&ss, sl) < 0) { close(fd); return -1; }
+  if (listen(fd, 128) < 0) { close(fd); return -1; }
+  return fd;
   ```)
 ;;; httpd-status-text -- internal: the reason phrase for a status code.
 
@@ -249,6 +332,7 @@
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
     case 413: return "Payload Too Large";
+    case 414: return "URI Too Long";
     case 429: return "Too Many Requests";
     case 500: return "Internal Server Error";
     case 501: return "Not Implemented";
@@ -277,8 +361,10 @@
 ;;; (an int64_t*), and returns the header block's length in bytes.  A request
 ;;; the server must refuse returns the negated status to answer it with:
 ;;;   -400  malformed, negative or conflicting Content-Length, or both
-;;;         Content-Length and Transfer-Encoding (the request-smuggling shape)
+;;;         Content-Length and Transfer-Encoding (the request-smuggling shape),
+;;;         or a method / version too long for its field
 ;;;   -413  Content-Length above httpd-set-max-body!'s cap
+;;;   -414  a request target too long for the path field
 ;;;   -501  Transfer-Encoding (chunked bodies are not implemented, and reading
 ;;;         the chunks as the next request would desync the connection)
 ;;; Pure over its input: no socket, which is what the fuzz target relies on.
@@ -305,7 +391,10 @@
       char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
       if (sp) {
           int l = (int)(sp - p);
-          if (l > 0 && l < 15) {
+          /* An oversized field used to be left "" and the request served
+           * anyway (security-audit-plan WP4, item 5). */
+          if (l >= 15) return -400;
+          if (l > 0) {
               memcpy(conn->method, p, (size_t)l);
               conn->method[l] = '\0';
           }
@@ -316,7 +405,8 @@
       char *sp = (char *)memchr(p, ' ', (size_t)(line_end - p));
       if (sp) {
           int l = (int)(sp - p);
-          if (l > 0 && l < 1023) {
+          if (l >= 1023) return -414;
+          if (l > 0) {
               memcpy(conn->path, p, (size_t)l);
               conn->path[l] = '\0';
           }
@@ -324,13 +414,15 @@
           char *vlen_end = (char *)memchr(p, '\r', (size_t)(line_end - p));
           if (!vlen_end) vlen_end = line_end;
           int vl = (int)(vlen_end - p);
-          if (vl > 0 && vl < 15) {
+          if (vl >= 15) return -400;
+          if (vl > 0) {
               memcpy(conn->version, p, (size_t)vl);
               conn->version[vl] = '\0';
           }
       } else {
           int l = (int)(line_end - p);
-          if (l > 0 && l < 1023) {
+          if (l >= 1023) return -414;
+          if (l > 0) {
               memcpy(conn->path, p, (size_t)l);
               conn->path[l] = '\0';
           }
@@ -359,8 +451,20 @@
                   while (val < eol && (*val == ' ' || *val == '\t')) val++;
                   int val_len = (int)(eol - val);
                   if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
-                      if (val_len >= 5  && strncasecmp(val, "close", 5) == 0) conn_close = 1;
-                      if (val_len >= 10 && strncasecmp(val, "keep-alive", 10) == 0) conn_keep = 1;
+                      /* A comma-separated token list, each token whole:
+                       * `closed` is not `close` (WP4, item 6). */
+                      const char *t = val;
+                      while (t < eol) {
+                          while (t < eol && (*t == ' ' || *t == '\t' || *t == ',')) t++;
+                          const char *te = t;
+                          while (te < eol && *te != ',') te++;
+                          const char *tt = te;
+                          while (tt > t && (tt[-1] == ' ' || tt[-1] == '\t')) tt--;
+                          size_t tl = (size_t)(tt - t);
+                          if (tl == 5  && strncasecmp(t, "close", 5) == 0) conn_close = 1;
+                          if (tl == 10 && strncasecmp(t, "keep-alive", 10) == 0) conn_keep = 1;
+                          t = te;
+                      }
                   } else if (name_len == 14 && strncasecmp(h, "Content-Length", 14) == 0) {
                       /* The whole value must be decimal digits (optional
                        * trailing blanks): no sign, no "10abc", and no silent
@@ -612,10 +716,16 @@
                        (size_t)(buf_cap - 1 - (size_t)total), 0);
           }
           if (n <= 0) break;
+          /* Resume the terminator search where the last one stopped (less
+           * the terminator's own length): rescanning the whole buffer after
+           * every recv made a peer trickling bytes up to the 256 KiB cap cost
+           * O(n^2) (WP4, item 1). */
+          int scan4 = total > 3 ? total - 3 : 0;
+          int scan2 = total > 1 ? total - 1 : 0;
           total += (int)n;
           buf[total] = '\0';
-          hdr_end = strstr(buf, "\r\n\r\n");
-          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+          hdr_end = strstr(buf + scan4, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
       if (!hdr_end) { free(buf); break; }  /* peer closed, timed out, or oversized */
       /* security-audit-plan M-4: the head is parsed by httpd-parse-head, the
@@ -670,14 +780,15 @@
       free(buf);
       /* Dispatch to handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
-      /* The handler is `(fn [c : ptr<void>] : nil)`, which the emitter lowers
-         to `void (void *, void *)`.  Spelling the conn parameter `int64_t`
-         here made this an indirect call through a mismatched function-pointer
-         type -- UB that -fsanitize=function reports and that CFI / CET-BTI /
-         WASM call_indirect turn into a hard failure.  See
+      /* The handler is `(fn [c : ptr<void>] : nil)`, whose slot 0 is
+         `void (void *, int64_t)`: an untyped `ptr<void>` parameter is the
+         word in a closure slot (fnsan-ptr-void-fn-slot-word).  Spelling it
+         any other way makes this an indirect call through a mismatched
+         function-pointer type -- UB that -fsanitize=function reports and that
+         CFI / CET-BTI / WASM call_indirect turn into a hard failure.  See
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
-      typedef void (*fn1_t)(void *, void *);
-      ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
+      typedef void (*fn1_t)(void *, int64_t);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
       /* Write response. */
       const char *body = conn->resp_body ? conn->resp_body : "";
       int         blen = conn->resp_body ? conn->resp_body_len : 0;
@@ -738,6 +849,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   typedef int64_t (*httpd_tls_wrap_fn)(int64_t, int64_t);
   typedef int64_t (*httpd_tls_handshake_fn)(int64_t);
@@ -802,6 +914,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   int64_t *fat = (int64_t *)env;
   HttpdBlock *hb = (HttpdBlock *)(intptr_t)fat[1];
@@ -818,6 +931,26 @@
       }
       pthread_mutex_lock(&hb->fdq_mtx);
       if (hb->fdq_closed) { pthread_mutex_unlock(&hb->fdq_mtx); close(cfd); break; }
+      /* The pending-connection cap (httpd-new-pool-with-limit; 512 by
+       * default).  Every queued connection holds an fd until a worker frees
+       * up, so an unbounded queue let a flood of connections exhaust the
+       * process's descriptors.  Refuse past the cap with a 503, as the async
+       * server does past its in-flight cap. */
+      if (hb->fdq_max > 0 && hb->fdq_count >= hb->fdq_max) {
+          pthread_mutex_unlock(&hb->fdq_mtx);
+          const char *resp =
+              "HTTP/1.0 503 Service Unavailable\r\n"
+              "Content-Length: 19\r\n"
+              "Connection: close\r\n"
+              "\r\n"
+              "server at capacity\n";
+          (void)send(cfd, resp, strlen(resp), 0);
+          /* Linger rather than close(): closing over the unread request
+           * sends RST, and a client that has not read the 503 yet loses it
+           * (see httpd-async-accept-cb). */
+          (void)tur_reactor_linger_close(hb->reactor, cfd, 2000);
+          continue;
+      }
       /* Grow the queue if full (doubling). */
       if (hb->fdq_count == hb->fdq_cap) {
           int new_cap = hb->fdq_cap * 2;
@@ -843,6 +976,10 @@
   }
   ```)
 ;;; httpd-new-pool -- create an httpd instance with a configurable worker count.
+;;;
+;;; At most 512 accepted connections wait for a free worker; past that a
+;;; connection is answered 503 and closed.  httpd-new-pool-with-limit sets
+;;; another cap.
 ;;;
 ;;; Parameters:
 ;;;   port    -- TCP port to listen on (0 = kernel-assigned)
@@ -878,6 +1015,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   /* `workers * sizeof(pthread_t)` wrapped for a huge count and the first
@@ -887,24 +1025,13 @@
     TUR_CLOSURE_DROP(handler);
     return NULL;
   }
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
-  int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  int flags = fcntl(fd, F_GETFL, 0);
-  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family      = AF_INET;
   /* Loopback unless the program opted in to every interface with
-   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
-   * server that is reachable from the network should be one somebody asked
-   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
-   * loopback. */
-  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
-  addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1, or named one with
+   * httpd-set-bind-addr! (security-audit-plan M-4: a server that is reachable
+   * from the network should be one somebody asked for).  TUR_BIND_LOOPBACK,
+   * which the test suite exports, still forces loopback. */
+  int fd = (int)httpd_hylisten_hysocket(port);
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdBlock *hb = (HttpdBlock *)calloc(1, sizeof(HttpdBlock));
   if (!hb) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   hb->listen_fd = fd;
@@ -912,6 +1039,10 @@
   hb->n_workers = (int)workers;
   /* Initialise the shared queue with a small capacity (will grow). */
   hb->fdq_cap = 16;
+  /* WP4 residual item 3: a default pending-connection cap, the same 512 as
+   * httpd-new-async's in-flight default; httpd-new-pool-with-limit sets
+   * another (0 = unlimited). */
+  hb->fdq_max = 512;
   hb->fdq     = (int *)malloc((size_t)hb->fdq_cap * sizeof(int));
   if (!hb->fdq) { close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   pthread_mutex_init(&hb->fdq_mtx, NULL);
@@ -950,6 +1081,60 @@
       pthread_create(&hb->workers[i], NULL,
                      (void *(*)(void *))httpd_hyworker, (void *)hb);
   }
+  return (void *)hb;
+  ```)
+;;; httpd-new-pool-with-limit -- httpd-new-pool with a pending-connection cap.
+;;;
+;;; Each worker serves one connection at a time; accepted connections wait
+;;; in a queue for a free worker, each holding a descriptor.  When
+;;; `max-pending` connections are already waiting, a new one is answered
+;;; `503 Service Unavailable` and closed instead of queued.
+;;;
+;;; Parameters:
+;;;   port        -- TCP port to listen on (0 = kernel-assigned)
+;;;   workers     -- number of worker threads in the pool (must be > 0)
+;;;   handler     -- fat closure: (fn [conn :ptr<void>] :nil)
+;;;   max-pending -- queued-connection cap (0 = unlimited; httpd-new-pool
+;;;                  uses 512)
+;;;
+;;; Returns:
+;;;   ptr<void> -- opaque Httpd handle, or nil on error
+;;;
+;;; Example:
+;;;   (let [h (httpd-new-pool-with-limit 0 4 handler 64)]
+;;;     (httpd-run h)
+;;;     (httpd-free h))
+;;;
+;;; Since: 2026-10-03 (security-audit-plan WP4 residual)
+
+(defn httpd-new-pool-with-limit [port : int
+                                 workers : int
+                                 ^fat handler : (fn [ptr<void>] nil)
+                                 max-pending : int]
+  #fx{Net}
+  : ptr<void>
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+  } HttpdBlock;
+  /* The handler's ownership passes to httpd-new-pool, which releases it on
+   * every refusal.  The reactor does not run until httpd-run, so no
+   * connection is accepted under the default cap before this one is set. */
+  HttpdBlock *hb = (HttpdBlock *)httpd_hynew_hypool((int64_t)port,
+                                                (int64_t)workers,
+                                                (int64_t)handler);
+  if (!hb) return NULL;
+  hb->fdq_max = max_pending <= 0 ? 0
+              : max_pending > INT32_MAX ? INT32_MAX : (int)max_pending;
   return (void *)hb;
   ```)
 ;;; httpd-new -- create a new httpd instance with the default worker pool size (4).
@@ -1026,6 +1211,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   /* handler is passed ^fat (this fn owns the heap box).  On an early refusal it
    * is never handed to httpd-new-pool, so release it here or it leaks -- via
@@ -1075,12 +1261,15 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
-  struct sockaddr_in addr;
+  struct sockaddr_storage addr;
   socklen_t len = sizeof(addr);
   if (getsockname(hb->listen_fd, (struct sockaddr *)&addr, &len) < 0) return -1;
-  return (int64_t)ntohs(addr.sin_port);
+  if (addr.ss_family == AF_INET6)
+      return (int64_t)ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+  return (int64_t)ntohs(((struct sockaddr_in *)&addr)->sin_port);
   ```)
 ;;; httpd-run -- run the listener reactor until httpd-stop is called.
 ;;;
@@ -1100,6 +1289,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   tur_reactor_run(hb->reactor);
@@ -1125,6 +1315,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
@@ -1163,6 +1354,7 @@
       pthread_cond_t  fdq_cv;
       volatile int stop_flag;
       void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   if (hb->workers) {
@@ -2231,10 +2423,12 @@
 ;;; is reversible and traverses the wire in clear text otherwise.
 ;;;
 ;;; Example:
+;;;   ;; Compare BOTH fields every time and combine the results: returning
+;;;   ;; early on a wrong username tells a caller which usernames exist.
 ;;;   (let [verify (fn [u :cstr p :cstr] :int   ; captures nothing -- fine
-;;;                  (if (= 1 (cstr-eq-const-time u "admin"))
-;;;                    (cstr-eq-const-time p "s3cret")
-;;;                    0))
+;;;                  (let [u-ok (cstr-eq-const-time u "admin")
+;;;                        p-ok (cstr-eq-const-time p "s3cret")]
+;;;                    (* u-ok p-ok)))
 ;;;         composed (compose-middleware base (mw-basic-auth "app" verify))]
 ;;;     (httpd-new 0 composed))
 ;;;
@@ -2293,79 +2487,74 @@
   HttpdConn *c = (HttpdConn *)conn;
   if (c->req_multipart_parts) return 1;
   if (!c->body || c->body_len <= 0) return 0;
-  /* Extract boundary from Content-Type. */
+  /* httpd-residual-request-hardening item 10.  Only a multipart media type
+   * carries parts (RFC 7578), and `boundary` is a PARAMETER of it, matched by
+   * name in any case (httpd_hdr_param) -- not the first "boundary=" anywhere
+   * in the value, which a quoted `charset="boundary=x"` could supply.
+   * RFC 2046 caps a boundary at 70 characters. */
   const char *ct = httpd_hyreq_hyheader((void *)conn, "Content-Type");
   if (!ct || !*ct) return 0;
-  const char *bk = strstr(ct, "boundary=");
-  if (!bk) return 0;
-  bk += 9;
-  /* Boundary may be quoted; strip if so. */
+  while (*ct == ' ' || *ct == '\t') ct++;
+  if (strncasecmp(ct, "multipart/", 10) != 0) return 0;
   char boundary[128];
-  size_t bi = 0;
-  if (*bk == '"') {
-      bk++;
-      while (*bk && *bk != '"' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
-  } else {
-      while (*bk && *bk != ';' && *bk != ' ' && bi + 1 < sizeof(boundary)) boundary[bi++] = *bk++;
-  }
-  boundary[bi] = '\0';
-  if (bi == 0) return 0;
-  /* Build the full delimiter "--<boundary>". */
+  int bi = httpd_hdr_param(ct, ct + strlen(ct), "boundary", boundary,
+                           (int)sizeof(boundary));
+  if (bi <= 0 || bi > 70) return 0;
   char delim[140];
   int dlen = snprintf(delim, sizeof(delim), "--%s", boundary);
-  if (dlen <= 0) return 0;
+  char crlf_delim[144];
+  int cdlen = snprintf(crlf_delim, sizeof(crlf_delim), "\r\n%s", delim);
+  if (dlen <= 0 || cdlen <= 0) return 0;
   HttpdPart *head = NULL;
   HttpdPart *tail = NULL;
   int n_parts = 0;
-  /* Find the first "--<boundary>" in the body. */
-  const char *p   = c->body;
+  /* Every search is bounded by the body's LENGTH (httpd_mp_find), never by a
+   * NUL: an uploaded file may hold NUL bytes, and strstr stopped at the first
+   * one -- truncating the part or losing every part after it. */
   const char *end = c->body + c->body_len;
-  const char *pos = strstr(p, delim);
+  const char *pos = httpd_mp_find(c->body, end, delim, (size_t)dlen);
   if (!pos) return 0;
   pos += dlen;
   while (pos < end && n_parts < 64) {
-      /* Skip optional CRLF; "--" suffix means terminating delimiter. */
+      /* "--" right after the delimiter closes the body. */
       if (pos + 1 < end && pos[0] == '-' && pos[1] == '-') break;
-      while (pos < end && (*pos == '\r' || *pos == '\n')) pos++;
-      /* Parse part headers until blank line. */
+      /* Transport padding, then the CRLF that ends the delimiter line. */
+      while (pos < end && (*pos == ' ' || *pos == '\t')) pos++;
+      if (pos + 1 < end && pos[0] == '\r' && pos[1] == '\n') pos += 2;
+      else break;
+      /* Part headers, up to the blank line.  A header is matched by its
+       * whole field name (up to the colon), and its parameters by name, so
+       * `name=` is never read out of `filename=` and a field called
+       * `Content-Dispositionx` is not Content-Disposition. */
       char *p_name = NULL, *p_filename = NULL, *p_ctype = NULL;
+      int headers_ok = 0;
       while (pos < end) {
-          const char *eol = strstr(pos, "\r\n");
-          if (!eol || eol == pos) {
-              /* Blank line terminates headers. */
-              if (eol == pos) pos += 2;
-              break;
-          }
+          const char *eol = httpd_mp_find(pos, end, "\r\n", 2);
+          if (!eol) break;
+          if (eol == pos) { pos += 2; headers_ok = 1; break; }
           size_t llen = (size_t)(eol - pos);
-          if (llen >= 19 && strncasecmp(pos, "Content-Disposition", 19) == 0) {
-              /* Look for name="..." and filename="..." within this line. */
-              const char *nk = strstr(pos, "name=\"");
-              if (nk && nk < eol) {
-                  nk += 6;
-                  const char *nend = (const char *)memchr(nk, '"', (size_t)(eol - nk));
-                  if (nend) {
-                      size_t nl = (size_t)(nend - nk);
+          const char *colon = (const char *)memchr(pos, ':', llen);
+          if (colon) {
+              size_t fl = (size_t)(colon - pos);
+              while (fl && (pos[fl - 1] == ' ' || pos[fl - 1] == '\t')) fl--;
+              const char *vs = colon + 1;
+              while (vs < eol && (*vs == ' ' || *vs == '\t')) vs++;
+              if (fl == 19 && strncasecmp(pos, "Content-Disposition", 19) == 0) {
+                  char *tmp = (char *)malloc(llen + 1);
+                  if (tmp && httpd_hdr_param(vs, eol, "name", tmp, (int)llen + 1) >= 0) {
                       free(p_name);   /* a repeated header replaces, not leaks */
-                      p_name = (char *)malloc(nl + 1);
-                      if (p_name) { memcpy(p_name, nk, nl); p_name[nl] = '\0'; }
+                      p_name = tmp;
+                  } else {
+                      free(tmp);
                   }
-              }
-              const char *fk = strstr(pos, "filename=\"");
-              if (fk && fk < eol) {
-                  fk += 10;
-                  const char *fend = (const char *)memchr(fk, '"', (size_t)(eol - fk));
-                  if (fend) {
-                      size_t fl = (size_t)(fend - fk);
+                  tmp = (char *)malloc(llen + 1);
+                  if (tmp && httpd_hdr_param(vs, eol, "filename", tmp, (int)llen + 1) >= 0) {
                       free(p_filename);
-                      p_filename = (char *)malloc(fl + 1);
-                      if (p_filename) { memcpy(p_filename, fk, fl); p_filename[fl] = '\0'; }
+                      p_filename = tmp;
+                  } else {
+                      free(tmp);
                   }
-              }
-          } else if (llen >= 12 && strncasecmp(pos, "Content-Type", 12) == 0) {
-              const char *colon = (const char *)memchr(pos, ':', llen);
-              if (colon) {
-                  const char *vs = colon + 1;
-                  while (vs < eol && (*vs == ' ' || *vs == '\t')) vs++;
+              } else if (fl == 12 && strncasecmp(pos, "Content-Type", 12) == 0) {
                   size_t vl = (size_t)(eol - vs);
                   free(p_ctype);
                   p_ctype = (char *)malloc(vl + 1);
@@ -2374,29 +2563,27 @@
           }
           pos = eol + 2;
       }
-      /* Now `pos` points at the part body. Find the next "--<boundary>"
-       * preceded by CRLF (multipart boundaries are always on their own
-       * line within the body). */
-      char crlf_delim[144];
-      snprintf(crlf_delim, sizeof(crlf_delim), "\r\n%s", delim);
-      const char *bend = strstr(pos, crlf_delim);
+      /* Now `pos` points at the part body: it runs to the next CRLF-prefixed
+       * delimiter.  Unterminated headers or body end the walk. */
+      const char *bend = headers_ok
+          ? httpd_mp_find(pos, end, crlf_delim, (size_t)cdlen) : NULL;
       if (!bend) {
-          if (p_name) free(p_name);
-          if (p_filename) free(p_filename);
-          if (p_ctype) free(p_ctype);
+          free(p_name);
+          free(p_filename);
+          free(p_ctype);
           break;
       }
       size_t blen = (size_t)(bend - pos);
       HttpdPart *part = (HttpdPart *)calloc(1, sizeof(HttpdPart));
       if (!part) {
-          if (p_name) free(p_name);
-          if (p_filename) free(p_filename);
-          if (p_ctype) free(p_ctype);
+          free(p_name);
+          free(p_filename);
+          free(p_ctype);
           break;
       }
-      part->name         = p_name     ? p_name     : NULL;
-      part->filename     = p_filename ? p_filename : NULL;
-      part->content_type = p_ctype    ? p_ctype    : NULL;
+      part->name         = p_name;
+      part->filename     = p_filename;
+      part->content_type = p_ctype;
       part->data         = (char *)malloc(blen + 1);
       if (part->data) {
           if (blen > 0) memcpy(part->data, pos, blen);
@@ -2407,7 +2594,7 @@
       if (tail)  tail->next = part;
       tail = part;
       n_parts++;
-      pos = bend + 2 + (size_t)dlen;  /* skip "\r\n" + "--<boundary>" */
+      pos = bend + (size_t)cdlen;  /* skip "\r\n--<boundary>" */
   }
   c->req_multipart_parts = head;
   return head ? 1 : 0;
@@ -2635,10 +2822,13 @@
               break;
           }
           if (n == 0) break;   /* peer closed */
+          /* Resume the search: see httpd-handle's read loop. */
+          int scan4 = total > 3 ? total - 3 : 0;
+          int scan2 = total > 1 ? total - 1 : 0;
           total += (int)n;
           buf[total] = '\0';
-          hdr_end = strstr(buf, "\r\n\r\n");
-          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+          hdr_end = strstr(buf + scan4, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
       if (!hdr_end) { free(buf); break; }
       /* security-audit-plan M-4: the same head parser as httpd-handle. */
@@ -2686,14 +2876,15 @@
       free(buf);
       /* Dispatch handler. */
       int64_t *fat = (int64_t *)(intptr_t)conn->handler;
-      /* The handler is `(fn [c : ptr<void>] : nil)`, which the emitter lowers
-         to `void (void *, void *)`.  Spelling the conn parameter `int64_t`
-         here made this an indirect call through a mismatched function-pointer
-         type -- UB that -fsanitize=function reports and that CFI / CET-BTI /
-         WASM call_indirect turn into a hard failure.  See
+      /* The handler is `(fn [c : ptr<void>] : nil)`, whose slot 0 is
+         `void (void *, int64_t)`: an untyped `ptr<void>` parameter is the
+         word in a closure slot (fnsan-ptr-void-fn-slot-word).  Spelling it
+         any other way makes this an indirect call through a mismatched
+         function-pointer type -- UB that -fsanitize=function reports and that
+         CFI / CET-BTI / WASM call_indirect turn into a hard failure.  See
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
-      typedef void (*fn1_t)(void *, void *);
-      ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)conn);
+      typedef void (*fn1_t)(void *, int64_t);
+      ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
       /* Build the response head (shared with httpd-handle). */
       const char *body = conn->resp_body ? conn->resp_body : "";
       int         blen = conn->resp_body ? conn->resp_body_len : 0;
@@ -2701,39 +2892,45 @@
       char *hbuf = (char *)httpd_hyresp_hyhead((void *)conn, (int64_t)is_http_11, (void *)&hlen64);
       if (!hbuf) { httpd_hyconn_hyrelease((void *)conn); break; }
       int hlen = (int)hlen64;
-      /* Non-blocking write loop -- park on EWOULDBLOCK. */
+      /* Non-blocking write loop -- park on EWOULDBLOCK, 5 s per wait like
+       * the reads.  It used to wait forever, so a client that stopped
+       * reading held its fiber and its in-flight slot (WP4, item 2).  A
+       * write that does not finish closes the connection. */
+      int write_ok = 1;
       {
           int sent = 0;
           while (sent < hlen) {
               ssize_t w = send(fd, hbuf + sent, (size_t)(hlen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);  /* WRITE */
-                      if (ev < 0) break;
+                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);  /* WRITE */
+                      if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
+                  write_ok = 0;
                   break;
               }
               sent += (int)w;
           }
       }
-      if (blen > 0) {
+      if (blen > 0 && write_ok) {
           int sent = 0;
           while (sent < blen) {
               ssize_t w = send(fd, body + sent, (size_t)(blen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, -1);
-                      if (ev < 0) break;
+                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);
+                      if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
+                  write_ok = 0;
                   break;
               }
               sent += (int)w;
           }
       }
       free(hbuf);
-      keep_going = conn->client_keep_alive;
+      keep_going = conn->client_keep_alive && write_ok;
       /* The shared release also frees the multipart parts and attributes,
        * which this path's own cleanup used to leak. */
       httpd_hyconn_hyrelease((void *)conn);
@@ -2855,24 +3052,13 @@
       int   max_in_flight;        /* A4: cap; 0 = unlimited */
       int   in_flight;            /* A4: live request count */
   } HttpdAsync;
-  int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
-  int opt = 1;
-  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  int flags = fcntl(fd, F_GETFL, 0);
-  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family      = AF_INET;
   /* Loopback unless the program opted in to every interface with
-   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1 (security-audit-plan M-4: a
-   * server that is reachable from the network should be one somebody asked
-   * for).  TUR_BIND_LOOPBACK, which the test suite exports, still forces
-   * loopback. */
-  addr.sin_addr.s_addr = htonl((uint32_t)httpd_hybind_hyaddr());
-  addr.sin_port        = htons((uint16_t)port);
-  if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
-  if (listen(fd, 128) < 0) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
+   * httpd-set-bind-any! / TUR_HTTPD_BIND_ANY=1, or named one with
+   * httpd-set-bind-addr! (security-audit-plan M-4: a server that is reachable
+   * from the network should be one somebody asked for).  TUR_BIND_LOOPBACK,
+   * which the test suite exports, still forces loopback. */
+  int fd = (int)httpd_hylisten_hysocket(port);
+  if (fd < 0) { TUR_CLOSURE_DROP(handler); return NULL; }
   HttpdAsync *ha = (HttpdAsync *)calloc(1, sizeof(HttpdAsync));
   if (!ha) { close(fd); TUR_CLOSURE_DROP(handler); return NULL; }
   ha->listen_fd     = fd;
@@ -2906,17 +3092,20 @@
   }
   return (void *)ha;
   ```)
-;;; httpd-new-async -- create an async server with no in-flight cap.
+;;; httpd-new-async -- create an async server capped at 512 in-flight requests.
 ;;;
-;;; Shortcut for `(httpd-new-async-with-limit port handler 0)`.  Use
-;;; the -with-limit variant in production to cap concurrent requests.
+;;; Shortcut for `(httpd-new-async-with-limit port handler 512)`: past 512
+;;; live request fibers a new connection is answered 503 and closed.  512
+;;; sits under the common 1024 open-file soft limit, so a flood is refused
+;;; before it exhausts the process's descriptors.  Use the -with-limit
+;;; variant to choose another cap (0 = unlimited).
 ;;;
 ;;; Since: Phase H8 (A0+A1)
 
 (defn httpd-new-async [port : int ^fat handler : (fn [ptr<void>] nil)]
   #fx{Net}
   : ptr<void>
-  (httpd-new-async-with-limit port handler 0))
+  (httpd-new-async-with-limit port handler 512))
 ;;; httpd-run-async -- drive the async server until stopped.
 ;;;
 ;;; Blocks the calling thread, running the fiber-per-request loop.
@@ -3050,10 +3239,12 @@
   } HttpdAsync;
   if (!h) return 0;
   HttpdAsync *ha = (HttpdAsync *)h;
-  struct sockaddr_in sa;
+  struct sockaddr_storage sa;
   socklen_t sl = sizeof(sa);
   if (getsockname(ha->listen_fd, (struct sockaddr *)&sa, &sl) < 0) return 0;
-  return (int64_t)ntohs(sa.sin_port);
+  if (sa.ss_family == AF_INET6)
+      return (int64_t)ntohs(((struct sockaddr_in6 *)&sa)->sin6_port);
+  return (int64_t)ntohs(((struct sockaddr_in *)&sa)->sin_port);
   ```)
 ;;; httpd-await-readable -- suspend the current fiber until conn fd is readable.
 ;;;
@@ -3271,10 +3462,11 @@
       if (matched) {
           c->route_params = (void *)params;
           int64_t *fat = (int64_t *)(intptr_t)route->handler;
-          /* `(fn [c : ptr<void>] : nil)` lowers to `void (void *, void *)`;
-             see the note in httpd-handle's dispatch. */
-          typedef void (*fn1_t)(void *, void *);
-          ((fn1_t)(intptr_t)fat[0])((void *)fat, (void *)c);
+          /* `(fn [c : ptr<void>] : nil)`'s slot 0 is
+             `void (void *, int64_t)`; see the note in httpd-handle's
+             dispatch. */
+          typedef void (*fn1_t)(void *, int64_t);
+          ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)c);
           /* Free params after handler returns. */
           RouteParam *cur = params;
           while (cur) { RouteParam *nx = cur->next; free(cur); cur = nx; }
@@ -3401,8 +3593,23 @@
   ```c
   HttpdConn *cn = (HttpdConn *)c;
   int status = cn->resp_status ? cn->resp_status : 200;
+  /* The method and path are the client's bytes: escape anything outside
+   * printable ASCII as \xHH, so a request cannot write control sequences
+   * (or a forged second log line) into the log (WP4, item 8). */
+  char m[sizeof cn->method * 4], pth[sizeof cn->path * 4];
+  const char *src[2] = { cn->method, cn->path };
+  char *dst[2] = { m, pth };
+  size_t cap[2] = { sizeof m, sizeof pth };
+  for (int k = 0; k < 2; k++) {
+      size_t o = 0;
+      for (const unsigned char *q = (const unsigned char *)src[k]; *q && o + 5 < cap[k]; q++) {
+          if (*q >= 0x20 && *q < 0x7f && *q != '\\') dst[k][o++] = (char)*q;
+          else o += (size_t)snprintf(dst[k] + o, cap[k] - o, "\\x%02x", *q);
+      }
+      dst[k][o] = '\0';
+  }
   fprintf(stdout, "%s %s -> %d %d %lldms\n",
-          cn->method, cn->path, status, cn->resp_body_len,
+          m, pth, status, cn->resp_body_len,
           (long long)elapsed_ms);
   fflush(stdout);
   ```)
@@ -3975,16 +4182,25 @@
 ;; MW2: mw-rate-limit -- sliding-window per-IP rate limiter
 ;; =============================================================================
 ;;
-;; State: a heap-allocated table of (ip_hash, window_start, count) slots
-;; protected by a pthread_mutex. Slots are addressed by linear probing on
-;; the FNV-1a hash of the client IP. Each mw-rate-limit closure has its
-;; OWN table; multiple instances do not share state.
+;; State: a heap-allocated table of (ip, window_start, count) entries
+;; protected by a pthread_mutex. The table is 8-way set-associative: the
+;; FNV-1a hash of the client IP picks a set of 8 entries, and the IP string
+;; itself is the key, so two IPs whose hashes collide never share a counter.
+;; Each mw-rate-limit closure has its OWN table; multiple instances do not
+;; share state.
 ;;
-;; Sliding window semantics: each slot remembers when its current window
+;; Sliding window semantics: each entry remembers when its current window
 ;; started. A request bumps the count; if (now - window_start) > window_s
 ;; the window resets first. When count > requests, the request is rejected
 ;; with 429 and a `Retry-After` header carrying the seconds until the
 ;; current window ends.
+;;
+;; A new IP takes an empty entry of its set, else one whose window has
+;; already ended (it carries no information), else the entry whose window
+;; started longest ago. So the table never fails open: a flood of distinct
+;; IPs cannot fill it so that every further IP goes unlimited -- under one,
+;; the IPs it evicts merely start a fresh window. Each check touches at most
+;; 8 entries.
 ;;
 ;; This is a single-process limiter -- it does not coordinate across
 ;; multiple server instances. Share the table only within one process.
@@ -4002,14 +4218,15 @@
 (defn httpd-mw-ratelimit-new [requests : int window-s : int] : int
   ```c
   typedef struct {
-      uint32_t ip_hash;
-      int64_t  window_start_s;
+      uint32_t ip_hash;          /* FNV-1a of the whole key; 0 = empty */
       int32_t  count;
+      int64_t  window_start_s;
+      char     ip[48];           /* the key (INET6_ADDRSTRLEN fits) */
   } RLEntry;
   typedef struct {
       pthread_mutex_t mtx;
       RLEntry        *entries;
-      int             capacity;
+      int             capacity;  /* n_sets * 8 */
       int             window_s;
       int             max_requests;
   } RLState;
@@ -4033,7 +4250,7 @@
   /* __tur_include__: static void httpd_rl_cleanup_all(void) { RLReg *r = g_rl_registry; while (r) { RLReg *nx = r->next; if (r->entries) free(r->entries); if (r->st) free(r->st); free(r); r = nx; } g_rl_registry = 0; } */
   RLState *st = (RLState *)calloc(1, sizeof(RLState));
   if (!st) return 0;
-  st->capacity     = 1024;
+  st->capacity     = 256 * 8;   /* 256 sets of 8 ways, 128 KiB */
   st->window_s     = window_s > 0 ? (int)window_s : 1;
   st->max_requests = requests > 0 ? (int)requests : 1;
   st->entries      = (RLEntry *)calloc((size_t)st->capacity, sizeof(RLEntry));
@@ -4058,64 +4275,73 @@
   ```c
   #include <time.h>
   typedef struct {
-      uint32_t ip_hash;
-      int64_t  window_start_s;
+      uint32_t ip_hash;          /* FNV-1a of the whole key; 0 = empty */
       int32_t  count;
+      int64_t  window_start_s;
+      char     ip[48];           /* the key (INET6_ADDRSTRLEN fits) */
   } RLEntry;
   typedef struct {
       pthread_mutex_t mtx;
       RLEntry        *entries;
-      int             capacity;
+      int             capacity;  /* n_sets * 8 */
       int             window_s;
       int             max_requests;
   } RLState;
   if (!state || !ip || !*ip) return 0;
   RLState *st = (RLState *)(intptr_t)state;
-  /* FNV-1a 32-bit hash of the IP cstr. */
+  /* FNV-1a 32-bit hash of the IP cstr: it picks the set and is a fast
+   * pre-check, but the key is the IP itself (the first 47 bytes of a longer
+   * one, whose hash still covers it whole) -- two IPs whose 32-bit hashes
+   * collide used to share one counter. */
   uint32_t h = 2166136261u;
   for (const char *p = ip; *p; p++) {
       h ^= (uint8_t)*p;
       h *= 16777619u;
   }
   if (h == 0) h = 1;  /* reserve 0 for "empty slot" */
+  const int ways = 8;
+  int n_sets = st->capacity / ways;
+  RLEntry *set = &st->entries[(size_t)(h % (uint32_t)n_sets) * (size_t)ways];
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   int64_t now = (int64_t)ts.tv_sec;
   pthread_mutex_lock(&st->mtx);
-  /* Linear probe up to capacity slots. */
-  int idx = (int)(h % (uint32_t)st->capacity);
-  for (int probe = 0; probe < st->capacity; probe++) {
-      RLEntry *e = &st->entries[idx];
-      if (e->ip_hash == 0) {
-          /* Fresh slot. */
-          e->ip_hash        = h;
-          e->window_start_s = now;
-          e->count          = 1;
-          pthread_mutex_unlock(&st->mtx);
-          return 0;
-      }
-      if (e->ip_hash == h) {
-          /* Existing window for this IP. */
-          int64_t age = now - e->window_start_s;
-          if (age >= (int64_t)st->window_s) {
-              e->window_start_s = now;
-              e->count          = 1;
-              pthread_mutex_unlock(&st->mtx);
-              return 0;
-          }
-          e->count++;
-          if (e->count > st->max_requests) {
-              int retry = (int)((int64_t)st->window_s - age);
-              if (retry < 1) retry = 1;
-              pthread_mutex_unlock(&st->mtx);
-              return retry;
-          }
-          pthread_mutex_unlock(&st->mtx);
-          return 0;
-      }
-      idx = (idx + 1) % st->capacity;
+  RLEntry *hit = NULL, *empty = NULL, *ended = NULL, *oldest = NULL;
+  for (int w = 0; w < ways; w++) {
+      RLEntry *e = &set[w];
+      if (e->ip_hash == 0) { if (!empty) empty = e; continue; }
+      if (e->ip_hash == h && strncmp(e->ip, ip, sizeof e->ip - 1) == 0) { hit = e; break; }
+      if (now - e->window_start_s >= (int64_t)st->window_s) { if (!ended) ended = e; }
+      if (!oldest || e->window_start_s < oldest->window_start_s) oldest = e;
   }
-  /* Table full -- fail-open (allow). */
+  if (!hit) {
+      /* A new IP: an empty entry, else one whose window has ended, else the
+       * oldest window in the set.  Never fail open -- a full table used to
+       * allow every IP it could not place. */
+      RLEntry *e = empty ? empty : ended ? ended : oldest;
+      e->ip_hash        = h;
+      e->window_start_s = now;
+      e->count          = 1;
+      strncpy(e->ip, ip, sizeof e->ip - 1);
+      e->ip[sizeof e->ip - 1] = '\0';
+      pthread_mutex_unlock(&st->mtx);
+      return 0;
+  }
+  /* Existing window for this IP. */
+  int64_t age = now - hit->window_start_s;
+  if (age >= (int64_t)st->window_s) {
+      hit->window_start_s = now;
+      hit->count          = 1;
+      pthread_mutex_unlock(&st->mtx);
+      return 0;
+  }
+  hit->count++;
+  if (hit->count > st->max_requests) {
+      int retry = (int)((int64_t)st->window_s - age);
+      if (retry < 1) retry = 1;
+      pthread_mutex_unlock(&st->mtx);
+      return retry;
+  }
   pthread_mutex_unlock(&st->mtx);
   return 0;
   ```)

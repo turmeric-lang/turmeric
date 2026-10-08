@@ -1,0 +1,19 @@
+;; loop-invariant-silently-unverified-outside-a-defn: a `:invariant` loop in a
+;; top-level `(def f (fn ...))` lambda is not analysed -- there is no
+;; definition to anchor its parameter facts to, and the name may be rebound.
+;; It used to keep both runtime checks with NO diagnostic at any strictness
+;; level, so the stats line reported a clean sheet.  It is now declined like
+;; every other runtime-only invariant: TUR-W0372, an error under
+;; --strict-refine.
+(def tally-lambda
+  (fn [n : int] : int
+    (let [^mut acc 0
+          ^mut i   0]
+      (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+        (set! acc (+ acc 1))
+        (set! i   (+ i 1)))
+      acc)))
+
+(defn main [] : int
+  (println (tally-lambda 3))
+  0)

@@ -307,10 +307,10 @@ Lives in `../turmeric-spices/spices/raygui/build.tur`:
   :description "Immediate-mode GUI controls for Turmeric, layered on tur-raylib"
   :license     "MIT"
   :spices #{
-    "raylib" #{:url    "https://github.com/rjungemann/turmeric-spices"
+    "raylib" #{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "raylib-v0.1.0"
               :subdir "spices/raylib"}
-    "test"   #{:url    "https://github.com/rjungemann/turmeric-spices"
+    "test"   #{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "test-v0.1.0"
               :subdir "spices/test"
               :optional true}

@@ -45,6 +45,18 @@ typedef enum UsageState {
     USAGE_USED_MANY,      /* Used two or more times */
 } UsageState;
 
+/* Which compiler mint site a synthesized binding came from (Binding.synth_kind).
+ * Diagnostics use it to say where the fix goes -- a lambda takes its own row,
+ * an instance or default method takes its class method's -- and to skip a
+ * lint on a binding nobody can annotate. */
+typedef enum SynthKind {
+    SYNTH_NONE = 0,          /* a person named it */
+    SYNTH_LAMBDA,            /* lifted `fn` literal, `__fn_N` */
+    SYNTH_INSTANCE_METHOD,   /* `__inst_<Class>_<method>_<type>` */
+    SYNTH_DEFAULT_METHOD,    /* `__default_<Class>_<method>`, a defclass default body */
+    SYNTH_FORWARDING_WRAPPER /* `__poly_N`, forwards to a function passed to a rank-2 param */
+} SynthKind;
+
 /* A Binding is the resolved target of a `let`/`def`/`defn` name introduction.
  * Bindings are owned by the elaborator and live in the arena. */
 struct Binding {
@@ -290,6 +302,16 @@ struct Binding {
      * a source form, are worth hovering, and belong in their own file's
      * outline.  See docs/archive/lsp-completion-internal-symbols.md. */
     bool          is_synthesized;
+    /* What a diagnostic should call a synthesized binding, as a whole noun
+     * phrase: "anonymous function in 'dfs-or'", "method 'eq?' of instance
+     * Eq [int]".  Set at the mint site, where the source facts are still to
+     * hand; NULL otherwise.  Read through binding_fn_describe, never
+     * directly -- printing `name` for a synthesized binding hands the user a
+     * gensym they cannot find in their file
+     * (docs/archive/strict-effects-w0030-names-synthesized-lambdas.md). */
+    const char   *diag_label;
+    /* Which mint site (SynthKind); SYNTH_NONE unless is_synthesized. */
+    uint8_t       synth_kind;
     /* Phase P3: HAMT lowering - whether this binding is ^persistent (immutable map) */
     bool          is_persistent;
     /* LT1: Linear type checking — whether this binding holds a linear value */
@@ -377,7 +399,8 @@ struct Binding {
     bool          is_deprecated;
     const char   *deprecation_message;   /* NUL-terminated, arena-owned, or NULL */
     /* M2a (end-to-end-monomorphization-plan): true if this binding's defn was
-     * annotated with `#{Construct}`. The constructor's body is synthesized by
+     * annotated `(defn ^construct ...)` (formerly `^construct`). The
+     * constructor's body is synthesized by
      * the codegen as a direct by-value struct construction per ABI spec,
      * rather than going through the int64 carrier helper in the inline-C
      * body. The inline-C body is retained as a fallback for the existential /
@@ -386,7 +409,8 @@ struct Binding {
     bool          is_construct_template;
     /* M5 residual-straddle retirement (docs/artifacts/m5-residual-straddle-
      * retirement.md): true if this binding's defn was annotated with
-     * `#{ByVal}`. Forces emit_abi_intern_spec to mint by-value specs for
+     * `(defn ^byval ...)` (formerly `^byval`). Forces emit_abi_intern_spec
+     * to mint by-value specs for
      * TY_APP arg types that would otherwise be rejected by the
      * `arg_types[i].kind == TY_STRUCT` gate at emit_module.c.
      *
@@ -535,6 +559,19 @@ struct Binding {
      * evidence" -- an
      * inline-C body is unwalkable and stays false by design. */
     bool                reads_frame_omits_state;
+    /* reads-frame-verification-ignores-a-callee-write-frame: the WRITE side
+     * of the same promise, from the defn-site walk reads_scan_frame_writes.
+     *   reads_write_mask       -- framed parameters (bit i == param i) the
+     *     body DEMONSTRABLY writes: `set!` through one, or one handed to a
+     *     callee slot a `#writes` frame names.  Positive evidence; TUR-W0383.
+     *   reads_write_unverified -- the walk could not vouch that every use of
+     *     a framed parameter only reads it (set whenever the mask is).  An
+     *     inline-C body is the trust boundary and stays false, exactly as it
+     *     does for reads_frame_omits_state.
+     * The loop-invariant frozen grant -- the consumer with no runtime
+     * backstop -- refuses a `#reads` callee with either set. */
+    uint64_t            reads_write_mask;
+    bool                reads_write_unverified;
     /* R4 slice 2 (trusted-refinement-claims-plan): the read-side mirror of
      * `writes_checked`.  True only when the deferred rf_resolve_read_frames
      * pass saw the WHOLE elaborated body and attributed every read of
@@ -1861,6 +1898,12 @@ struct Expr {
              * thunk. */
             uint64_t        carrier_erased_arg_mask;
             bool            carrier_erased_result;
+            /* fnsan-poly-carrier-named-wrapper: the declared result is an
+             * application headed by a type variable -- the `(m b)` of a
+             * Monad `bind` continuation -- which the carrier base reads as a
+             * word as well.  Separate from carrier_erased_result, whose
+             * readers (the float shims) only ever see a bare variable. */
+            bool            carrier_erased_result_hkt;
         } poly_wrap_;
         struct {
             struct Expr *inner;
@@ -1897,7 +1940,29 @@ struct Expr {
          * closure); the node wraps it in a { boxres shim, inner } box instead
          * of shimming a bare fn pointer.  Only set together with
          * erased_result. */
-        struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat; } fn_to_fat_;
+        /* `sink_fn_type`: the declared fn type of the `^fat` slot the box is
+         * headed for, when it is fully concrete (no type variable): its call
+         * sites cast slot 0 at exactly those types, so the box's shim must be
+         * spelled the same way (fnsan-concrete-sink-bare-fn).  NULL when not
+         * known or erased somewhere. */
+        /* nil_result_word: with inner_is_fat, the closure returns nil and the
+         * sink's declared result is a bare type variable: every consumer of
+         * the slot calls it through the erased `int64_t (*)(void *...)` cast,
+         * so the wrapper's shim calls the closure and answers the zero word
+         * (ensure_nilres_fatshim).  Calling the `void` thunk through that cast
+         * was a -fsanitize=function trap and reads rax garbage. */
+        /* word_params (fnsan-fat-closure-at-tyvar-sink): with inner_is_fat,
+         * the sink's declared fn type has a type variable in a parameter
+         * position.  A callee that reads it erased -- an inline-C body such as
+         * `vec-eq?`, or a carrier base -- calls slot 0 with WORDS there, while
+         * the closure's thunk takes its own types (`double` for `(fn [a :
+         * float ...])`).  When the call's selected callee does read words and
+         * the spellings differ, the emitter wraps the closure in a { adapter,
+         * handle } box whose adapter converts each word (a float by its bits);
+         * otherwise the handle passes through unchanged. */
+        struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat;
+                 bool nil_result_word; bool word_params;
+                 const struct Type *sink_fn_type; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
          * param) into a single-int64 fat-closure handle so a ^fat consumer can
          * fat-call it.  inner is the tur_poly_fn_t value; the emitter heap-boxes
@@ -2093,6 +2158,14 @@ struct Expr {
 Expr *expr_new(Arena *a, ExprKind k, Type t, Span span);
 
 void  expr_print(Buf *b, const Expr *e);   /* debug only */
+
+/* Write what a diagnostic should call the function bound by `b`, as a noun
+ * phrase: "function 'boom'" for a function someone named, the binding's
+ * diag_label ("anonymous function in 'dfs-or'") for one the elaborator named,
+ * and "anonymous function" when there is no binding at all.  Returns `buf`.
+ * Every diagnostic that names a function should go through this rather than
+ * print `b->name->name`, which for a synthesized binding is a gensym. */
+const char *binding_fn_describe(const Binding *b, char *buf, size_t cap);
 
 /* Map a well-known stdlib helper name (e.g. "float->int") to the stdlib file
  * that defines it (e.g. "stdlib/math.tur"), or NULL when there is no hint.

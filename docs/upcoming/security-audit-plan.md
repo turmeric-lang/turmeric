@@ -1,7 +1,10 @@
 # Security audit -- Turmeric as it stands at v0.56.3
 
 > **Status: WP1 and WP2 DONE (2026-09-29); WP3, WP4, WP5 and WP6 DONE
-> (2026-09-30); WP7, WP8 PROPOSED.** Written 2026-09-30
+> (2026-09-30); WP7, WP8 PROPOSED.** WP8's decision is made (2026-10-02):
+> `#fx{Unsafe}` is Option A, pointer arithmetic only -- see open question 3
+> and [effect-row-honesty-plan](effect-row-honesty-plan.md); its lint-default
+> bullet is still open. Written 2026-09-30
 > against `main` @ 81e12de4 (v0.56.3). Section 2 lists what a one-afternoon
 > survey already turned up, so the audit starts from a map, not from zero;
 > every row there is a *candidate* until the work package that owns it
@@ -20,7 +23,7 @@
 > fixes turned out not to exist -- corrected in **section 2b** before the work
 > started. D-1 through D-9 are closed, pinned by `tests/run-security-driver.sh`
 > (27 assertions, ctest `tur_security_driver`). One finding of WP2's own is
-> filed: `docs/reported/buf-puts-breaks-the-incidental-nul-invariant.md`.
+> filed: `docs/archive/buf-puts-breaks-the-incidental-nul-invariant.md`.
 >
 > **WP3 landed 2026-09-30**, branched from WP1's PR (`1d5f533e`). Its research
 > pass is section 2c: S-1 reproduced from an embedder AND from `tur check`
@@ -53,7 +56,7 @@
 > CMake config (`src/CMakeLists.txt:481`) are the tooling this plan builds on.
 > **Related:** [sandboxing-guide](../guides/sandboxing-guide.md) (the
 > promise WP3 audits), [consuming-spices-guide](../guides/consuming-spices-guide.md#security)
-> (the promise WP7 audits), [ci-release-workflows-plan](hold/ci-release-workflows-plan.md)
+> (the promise WP7 audits), [ci-release-workflows-plan](ci-release-workflows-plan.md)
 > and [release-in-actions-plan](release-in-actions-plan.md) (WP7 lands
 > alongside them), `docs/reported/README.md` (where findings go).
 
@@ -76,7 +79,8 @@ did find that three documents promise more than the code delivers:
   (`src/turi/env.c:224-251`) includes `process/spawn`, file open/write,
   unlink and raw-fd read/write with no capability check (section 2, S-1).
   **Fixed in WP3**: every native is classified and the dispatch checks it;
-  the guide now names the remaining gap (S-5) instead.
+  the guide now names the remaining gap (S-5) instead -- itself closed
+  2026-10-07.
 - `docs/guides/consuming-spices-guide.md:405` says every fetched spice is
   verified and builds fail on mismatch; the lock hash is trust-on-first-use
   and rewritten on every fetch (`src/compiler/pkg.c:2572-2582`), and only
@@ -135,7 +139,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | S-2 | medium -- **FIXED in WP3** | `extern-c` "known overrides" (`printf`, `printf_s`, `getenv`) skip the FFI cap check the thunk path enforces, and `printf`'s format string is program-controlled (`src/turi/eval.c:360-421`). | |
 | S-3 | low (re-graded by WP3: needs `TURI_CAP_INLINE_C`) -- **FIXED in WP3**; a second emulator, `ic_exec_linked_list_print`, put through the same check by WP5 (section 2d) | The inline-C emulator's snprintf pattern hands the program's format string to `snprintf` with every argument coerced to `long long` -- a `%s` in the body dereferences an integer (`src/turi/eval.c:5532-5535`). | |
 | S-4 | info -- **documented in WP1/WP3** | Try Turmeric's wasm env is `CAP_ALL` by design (`src/web/wasm_glue.c:159-162`); `tests/turi/sandbox-eval.c:37-88` covers only println/async/inline-C. | The security guide records the posture as intentional; the sandbox test now covers every classified native. Section 7 Q4 stays the author's. |
-| S-5 | high (under T3; under T1 for `tur check`) -- **NATIVE CHANNEL FIXED 2026-09-30 (direction 1); value-model channel OPEN** (host-exit half **FIXED** 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` was a wild read and the setters a wild write. At least 204 of the 656 natives do the cast in their own body. **verified** under ASan. **Direction 1 landed:** a per-restricted-env handle-provenance registry (`TuriProvSet` in `src/turi/eval.c`) plus a per-native handle-kind column (`k_handle_rows[]` in `src/turi/native_caps.c`, 242 rows) make the native dispatch refuse a handle argument that no constructor of the matching kind minted -- closing the arbitrary-integer read/write, kind confusion and use-after-free while real handles round-trip. **Still open:** the value-model channel -- an erasing ascription on a type variable (`(:: x A)` in a generic body, then a call/field read) and continuation resume launder an integer to a pointer without passing through the native dispatch; that is direction 2 (tagged handles). Not a capability; see section 2c. The second half as filed -- `panic` and native error paths ending the host -- is fixed: a restricted env's `turi_eval`/`turi_call` return `TURI_ERROR "panic: <msg>"` instead. | [`docs/reported/turi-sandbox-handles-are-forgeable-integers.md`](../reported/turi-sandbox-handles-are-forgeable-integers.md) |
+| S-5 | high (under T3; under T1 for `tur check`) -- **FIXED 2026-10-07** (native channel direction 1 2026-09-30, continuation resume and call targets 2026-10-03, host-exit half 2026-09-30), found by WP3 | Interpreter handles (vectors, maps, HAMTs, strings, conses, continuations) are bare `TURI_INT`s that natives cast back to pointers unchecked, so `(vec-get 4096 0)` in a sandbox or a `defmacro*` was a wild read and the setters a wild write. **verified** under ASan. **Direction 1 (2026-09-30):** a per-restricted-env handle-provenance registry (`TuriProvSet` in `src/turi/eval.c`) plus a per-native handle-kind column (`k_handle_rows[]` in `src/turi/native_caps.c`). **Closed 2026-10-07:** the value-model channel -- every interpreter re-tag of a word (an erasing ascription to `cstr` or a struct, a field read through a bare int, `gen-unwrap`, a `TVar`, a panic payload) checks the registry, and the words it accepts are recorded where a value loses its tag (native arguments, rest-list cells, TVar payloads). Executing the report measured the native channel too: a forked sweep of every capability-free native with forged arguments found **243 that crashed**, from a guard that trusted any tagged string at a handle position, rows limited to 4 positions, whole families with no row, mis-kinded rows (slices minted as Strings, two layouts per kind twice), unchecked stored words (comparators over stored keys, the owned-key flag, list and Vec element links) and unbounded indices. All closed (400 rows, 25 new kinds); the `r7rs-eval-c-*` natives now need every capability, like eval/load. Pinned by `native-sweep` and the `forgery/*` / `handles-ok/*` cases in `tests/turi/sandbox-eval.c`. Not a capability; see section 2c. | [`docs/archive/turi-sandbox-handles-are-forgeable-integers.md`](../archive/turi-sandbox-handles-are-forgeable-integers.md) |
 | S-6 | medium -- **FIXED in WP3**, found by WP3 | `(load "path")` in a sandboxed env read the file and echoed its first token in the unbound-symbol diagnostic: `load` expansion (`src/compiler/elab_toplevel.c`, `load_expand_forms`) had no gate while `import` did. | |
 | S-7 | high -- **FIXED in WP3**, found by WP3 | `r7rs-eval-c-eval__`/`-load__` evaluate text in the process-global embedded R7RS env (`src/turi/r7rs_embed.c`), which is an ordinary `CAP_ALL` env, so any sandbox reached every capability through it. | |
 
@@ -160,10 +164,10 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | M-1 | high (under T2) | **FIXED (WP4)** -- fixtures `serial-resume-rejects-forged-env`, `image-*`; `tests/image_unit.c`; fuzz targets `fuzz_serial_cont`, `fuzz_image_header`. `tur_serial_cont_deserialize` has **no bounds checks**: frame count, name length, cstr length and env length are trusted from the bytes; raw int64s become frame environments; `__sk_frame_for_tag` takes an unchecked tag (`src/runtime/generated/tur_rt_split.c:2247-2291`; emitted copy `src/compiler/emit_dk_runtime.c:324`). `bytes->serial-cont` validates first but shallowly (`stdlib/serial.tur:598-651`); `resume-cont!` (`stdlib/workflow.tur:61-68`) and `image/blob-resume!` (`stdlib/image.tur:672-677`, via `load-resume-file!` `:699`) skip validation entirely. Image CRC covers the 68-byte header only, and `plen`/`goff` from the file size the `malloc` (`stdlib/image.tur:617-655`, `src/runtime/image.c:136-167`). The guestbook example resumes a continuation from a `POST` token -- this is the one place the project already ships T2 across a network. |
 | M-2 | medium | **FIXED (WP4)** -- fixture `json-decode-hostile-input`; fuzz targets `fuzz_json_compiled`, `fuzz_json_interp`. JSON: input ending in `\` steps past the NUL terminator (compiled `stdlib/json.tur:545-563`; interpreter `src/turi/interpreter_natives.c:1211-1230`); no nesting depth limit (`json.tur:616-660`); no `\u`; error paths leak. |
 | M-3 | medium (under T5) | **FIXED (WP4)** -- ctest `tur_lsp_io_unit`; fuzz target `fuzz_lsp_frame`. LSP framing parses `Content-Length` with an unchecked `atol`; `-1` wraps `body_len + 1` to 0, `malloc(0)`, then a huge `read` -- heap overflow (`src/lsp/lsp_io.c:71-96`, **verified**); `read_headers` grows unbounded (`:40-68`). DAP reuses it (`src/turi/dap.c:818, 1114, 1340`). |
-| M-4 | medium | **FIXED (WP4)**, residue filed as `docs/reported/httpd-residual-request-hardening.md` -- fixture `httpd-request-hardening`; fuzz target `fuzz_httpd_head`. `httpd`: `Content-Length` is `(int)strtol` into `malloc(content_len + 1)` with no cap (`stdlib/httpd.tur:293, 329, 2491`); `Transfer-Encoding` ignored (smuggling behind a proxy); static-file traversal guard is `strstr(path, "..")` with `stat` not `lstat` (`:4143-4200`); binds `INADDR_ANY` by default (`:720`). Multipart (`:2102-2176`) and Basic auth (`:1963, 2014`) unreviewed. |
+| M-4 | medium | **FIXED (WP4)**, residue filed as `docs/archive/httpd-residual-request-hardening.md` (all closed 2026-10-03) -- fixture `httpd-request-hardening`; fuzz target `fuzz_httpd_head`. `httpd`: `Content-Length` is `(int)strtol` into `malloc(content_len + 1)` with no cap (`stdlib/httpd.tur:293, 329, 2491`); `Transfer-Encoding` ignored (smuggling behind a proxy); static-file traversal guard is `strstr(path, "..")` with `stat` not `lstat` (`:4143-4200`); binds `INADDR_ANY` by default (`:720`). Multipart (`:2102-2176`) and Basic auth (`:1963, 2014`) unreviewed. |
 | M-5 | medium | **FIXED by WP5** (section 2d), with 26 more sites the sweep found. `read-async` does `malloc((size_t)bytes + 1)` with an unchecked, possibly negative `int` (`src/turi/fiber.c:763`); `tur_string_substring`/`slice` compute `start + len > n` with signed overflow (`src/runtime/tur_string.c:183, 300`); `n_from_bytes` accepts `len > strlen` (`src/turi/string_native.c:25-30`); `sb_reserve` doubles unchecked (`tur_string.c:238-243`); `bytes-alloc` `malloc(8 + (size_t)n)` with negative `n` (`stdlib/serial.tur:56-62`); `alloca(n * 8)` with user `n` in `stdlib/sized-buf.tur:445, 484` (gated `#fx{Unsafe}`). |
 | M-6 | medium (silent UAF class) | **FIXED by WP5** (section 2d): one survey site confirmed -- as a class, not a site -- three retired, and a second class the survey did not have. Region escape hooks missing, per the CLAUDE.md rule: `tur_hamt_transient_set` (`src/runtime/hamt.c:1879`, from `stdlib/hamt.tur:740`), `tvar/write`/`tvar/swap` (`stdlib/stm.tur:88, 109`; `src/runtime/stm.c` has no note), `sized-buf-set!` (`sized-buf.tur:307`), `sized-matrix-set!` (`:232`), `sized-bitvec-set!` (`sized-bits.tur:139`), `httpd-resp-header-add!` (`httpd.tur:1281`). Each is a candidate use-after-rewind on the default build. |
-| M-7 | info | The effect system is not a security boundary today: `--strict-effects` defaults off and only warns (`src/runtime/globals.c:135`); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. |
+| M-7 | info | The effect system is not a security boundary today, though one half of it is enforced. **Enforced:** calling an `#fx{Unsafe}` function outside `(unsafe ...)` is a hard error unless the caller declares `#fx{Unsafe}` (which propagates); `(unsafe ...)` discharges the obligation and erases the row, by design (Option A, decided in [effect-row-honesty-plan](effect-row-honesty-plan.md) section 3). **Not enforced by default:** `--strict-effects` is opt-in and warns (`-Werror=strict-effects` makes it fail the build); inline-C outside `Unsafe` is a lint behind `--lint-inline-c-unsafe`, default off (`globals.c:19`, `src/compiler/elab_toplevel.c:875`); the deserializers above infer plain rows. Because wrappers erase the row, `Unsafe` cannot answer "what may corrupt memory on bad input". |
 
 ### Web (WP6)
 
@@ -185,7 +189,7 @@ line-by-line during the survey; otherwise a read-only claim awaiting repro.
 | C-4 | medium | Release assets are unsigned: no Sigstore/cosign, no GitHub build-provenance attestation, tags are `git tag -a` not `-s` (`.claude/commands/cut-*-release.md`). `softprops/action-gh-release@v2` runs floating with `contents: write` (`release.yml:338-355`). |
 | C-5 | medium | No workflow pins an action to a SHA; `mymindstorm/setup-emsdk@v14` with `version: latest` (`ci.yml:134, 1470`); `msys2/setup-msys2@v2`; `pip install` unpinned (`ci.yml:105, 1467`; `release.yml:286`); `ci.yml:152-157` clones `turmeric-spices` default branch unpinned and compiles it; `ci.yml` has no top-level `permissions:` (default token scope everywhere except `publish-timings`' `contents: write`, `:762-765`); ccache `restore-keys` prefixes (`:112, 1454`). |
 | C-6 | low | **`inputs.seed` half FIXED (WP4)**, in passing, while adding the parser job to the same file: the seed goes through `env:` with a digits check. The `issues: write` scope is WP7's. `fuzz.yml:75` interpolates `${{ inputs.seed }}` directly into a `run:` block (dispatch-only, so needs write access already; `inputs.n` at `:87` uses the safe `env:` form). Workflow has `issues: write` and `GITHUB_TOKEN` for `gh issue create` (`:41-43, 122+`). |
-| C-7 | low | `cmake/mir.cmake:138-160` fetches MIR from the personal fork `rjungemann/mir.git` (SHA-pinned; JIT-only, default off). `examples/snake` pins raylib by tag. `Dockerfile` uses `ubuntu:22.04` by tag; `.devcontainer/Dockerfile` has two `curl \| bash` installs. |
+| C-7 | low | MIR comes from the personal fork `rjungemann/mir.git`: until 2026-10-02 `cmake/mir.cmake` fetched it at configure time (SHA-pinned; JIT-only, default off); since then a copy is vendored under `external/mir/` (fork commit in `external/mir/UPSTREAM`, re-synced by `tools/update-mir.sh`) and `TUR_JIT` defaults ON, so it ships in every default build. `examples/snake` pins raylib by tag. `Dockerfile` uses `ubuntu:22.04` by tag; `.devcontainer/Dockerfile` has two `curl \| bash` installs. |
 | C-8 | low | Committed to git: `.claude/settings.local.json` (with a broad `Bash(xargs cat *)` allow), a `.claude/projects/.../memory/project_er6.md`, and `TEMP.md`. Missing: `SECURITY.md`, `CODEOWNERS`, `.github/dependabot.yml`, CodeQL/scanning workflow, and any private-vulnerability-reporting setting. |
 
 ## 2a. WP1's verification pass (2026-09-29)
@@ -493,7 +497,7 @@ covers them all, which is what made the choke point cheap.
 
 ### Findings the survey did not have
 
-- **S-5 (high, open)** -- handles are forgeable integers; see the row. The
+- **S-5 (high; fixed 2026-10-07)** -- handles are forgeable integers; see the row. The
   capability check is sound and this is underneath it. Its host-exit half was
   fixed in a follow-up the same day. Gating the collection
   natives behind `TURI_CAP_UNSAFE` would make a sandbox without vectors, which
@@ -532,7 +536,7 @@ necessarily reused before the read).
 | Survey site | Verdict |
 | --- | --- |
 | `sized-buf-set!` | **Confirmed, and it is a class, not a site.** A node stored from inside `with-region` read back the arena poison (`-2387225703656530210`; `rewinds=2 retires=0`). `sized-buf-set!` is a Turmeric-bodied wrapper over `__sized-buf-set!-raw`, and the implicit node -> `:int` erasure was noted only when the *callee* was inline C: inside the wrapper the word is already an `:int`, so the store it forwards to sees no node. Any user wrapper of that shape had the same hole. Fixed in the rule (`elab_call.c`): the erasure is now noted at any callee for a `:heap` node word, constructors excepted. |
-| `tvar/write`, `tvar/swap` | **Retired as a hook gap.** `val : ptr` -- a node reaches it only through an explicit `(:: node ptr)`, which is noted at the ascription. No runtime fixture was possible: a transaction inside any lambda does not compile ([stm-inside-closure-captured-tvar-undeclared](../reported/stm-inside-closure-captured-tvar-undeclared.md), filed). |
+| `tvar/write`, `tvar/swap` | **Retired as a hook gap.** `val : ptr` -- a node reaches it only through an explicit `(:: node ptr)`, which is noted at the ascription. A transaction inside a lambda did not compile when this was written ([stm-inside-closure-captured-tvar-undeclared](../archive/stm-inside-closure-captured-tvar-undeclared.md), since fixed); `tests/fixtures/region-escape-via-store` case 11 now runs it -- a chain written to an outer TVar inside `with-region`, read after the pop. |
 | `tur_hamt_transient_set` | **Missing in C, unreachable today.** The stdlib entry takes `ptr<void>`, noted at the erasure. The C setter now carries the note as `tur_hamt_set` does, and that function's "every public setter funnels through here" comment, which was false, is corrected. |
 | `sized-matrix-set!` | **Retired.** An inline-C callee with an untyped `v`, so the existing implicit-erasure note already covers it (the probe retires). The survey cited `sized-buf.tur:232`; it is `sized-matrix.tur:232`. |
 | `sized-bitvec-set!` | **Retired, false positive.** It sets a bit; no caller word is stored. |
@@ -636,7 +640,8 @@ Handed on, not fixed here:
   check. WP3, landing alongside, classes `flat-get`/`flat-set` `UNSAFE` and
   `r7rs-environ-name__` `ENV`, so a sandbox cannot call them; the two io
   helpers stay pure-classified, and an out-of-range index or a forged handle
-  there is **S-5** (open).
+  there is **S-5** (fixed 2026-10-07: both are guarded handles and the index
+  is bounds-checked).
 
 ### TSan
 
@@ -849,7 +854,7 @@ came from the 60-second pass and the rest from the 10-minute passes:
 ### Deliberately not done here
 
 - The httpd items that need a design choice or are not parser work are filed
-  as `docs/reported/httpd-residual-request-hardening.md`:
+  as `docs/archive/httpd-residual-request-hardening.md` (all closed 2026-10-03):
   - the quadratic header scan
   - async writes that park forever
   - no default in-flight cap
@@ -928,7 +933,7 @@ policy is exactly the one worth not having. The generators changed instead.
   nothing loads; both swallow the `ReferenceError`, so Share reports "Failed to
   encode code" and a `#code=` link decodes to nothing. Not a security defect --
   it removed a vector rather than adding one -- so it is filed as
-  [try-share-links-never-encode](../reported/try-share-links-never-encode.md).
+  [try-share-links-never-encode](../archive/try-share-links-never-encode.md).
 - **The service-worker kill switch could not be built from a clean tree.**
   The Cloudflare plugin builds the Worker as its own Vite environment and that
   bundle closes first, before `dist/client/` exists, so `TUR_SW_KILL=1 npm run
@@ -1415,7 +1420,7 @@ leaves behind run nightly under ASan and UBSan. Its research pass is section
   - Also fixed: the `httpd-set-cookie!` overrun, Basic-auth NUL truncation,
     and the multipart repeated-header leak.
   - Reviewed but deliberately not changed: see
-    `docs/reported/httpd-residual-request-hardening.md`.
+    `docs/archive/httpd-residual-request-hardening.md` (all closed 2026-10-03).
 - [x] **Harnesses.** `tests/fuzz/` has ten libFuzzer targets behind
   `-DTUR_FUZZ=ON`, which is clang only and instruments `tur_core` with
   `-fsanitize=fuzzer-no-link`:
@@ -1512,7 +1517,7 @@ leaves behind run nightly under ASan and UBSan. Its research pass is section
   `-Wformat=2` is clean under gcc and clang.
 
 **Left for others deliberately:** out-of-range indices in pure-classified
-interpreter natives (S-5, open), httpd's body cap and response-writer
+interpreter natives (S-5; fixed 2026-10-07), httpd's body cap and response-writer
 `realloc` (WP4, M-4), and the rest of `serial_cont_from_bytes` (WP4, M-1).
 
 ### WP6 -- Try Turmeric and the web worker (1-2 days) -- DONE 2026-09-30
@@ -1566,7 +1571,7 @@ survey did not have, so read that before this list. What landed:
 | --- | --- |
 | C-1 | **Fixed.** `/install` bootstraps `tvm` (the plan's "or, better") and installs a checksum-verified release; works on Linux, which it never did. `--HEAD` stays as the documented opt-in, so `Formula/turmeric.rb` is unchanged. Answers section 7 question 5. |
 | C-2 | **Fixed.** All three refusals plus `--insecure`; `--from` warns. A mismatch is deliberately not `--insecure`-able. |
-| C-3 | **Mostly fixed.** Drift is detected, `tur build` and `tur audit` verify, and a *third* defect turned up: `tur fetch` was a no-op on a fresh clone. Checking out `:resolved` is filed as [lock-tracks-ref-not-resolved-commit](../reported/lock-tracks-ref-not-resolved-commit.md) -- see the commit for why it was not half-landed. The guide half was already done by WP1. |
+| C-3 | **Fixed.** Drift is detected, `tur build` and `tur audit` verify, and a *third* defect turned up: `tur fetch` was a no-op on a fresh clone. Checking out `:resolved` landed 2026-10-01 ([lock-tracks-ref-not-resolved-commit](../archive/lock-tracks-ref-not-resolved-commit.md)): a fetch checks out the locked commit, fails rather than falling back to `:ref` when it is gone, and `tur fetch --frozen` holds a fetch to the lock. The guide half was already done by WP1. |
 | C-4 | **Fixed.** Sigstore keyless attestation on every asset. Tag signing deliberately not switched on, with the reason recorded in all three `cut-*-release` commands; answers section 7 question 6. |
 | C-5 | **Fixed**, except the `turmeric-spices` clone, which is a recorded deliberate non-pin (same owner, inside the trust boundary; see 2g). 56 actions SHA-pinned, emsdk and pip pinned, both top-level `permissions` blocks added -- the last as defense in depth, not the over-grant the survey described. |
 | C-6 | **Injection half was already fixed** by WP4. The `issues: write` half is a design decision, not a patch: see 2g and section 7 question 8. |
@@ -1613,11 +1618,12 @@ Linux and macOS), and the mermaid pin WP6 handed over in section 2f.
 
 ### WP8 -- Effects as a stated boundary (1 day, decision-heavy)
 
-- Decide what `#fx{Unsafe}` promises (section 7). If it is meant as a
-  trust marker -- "this function can corrupt memory on bad input" -- then
-  the deserializers in M-1/M-5 need it, and the survey's list is the
-  backlog. If it is purely about pointer arithmetic, say so, and the
-  security guide stops mentioning it.
+- ~~Decide what `#fx{Unsafe}` promises (section 7).~~ **DECIDED 2026-10-02:
+  Option A, pointer arithmetic only** ([effect-row-honesty-plan](effect-row-honesty-plan.md)
+  section 3). The marker describes a body, `(unsafe ...)` discharges it and
+  erases the row, so the M-1/M-5 deserializers are not retro-tagged. The
+  security guide says so in one section, "What the effect system does and
+  does not promise", including what *is* enforced.
 - Consider defaulting `--lint-inline-c-unsafe` on once `stdlib/` is clean
   (a follow-on to `docs/reported/stdlib-int-stand-in-audit.md`'s sweep).
 - **Exit:** one paragraph in the security guide, and a decision recorded
@@ -1699,7 +1705,9 @@ checklist, not a gate.
      worth promising *then*. Until then the guide says `tur check` expands
      macros, and WP2/WP3 owe the `--no-macros` equivalent that rust-analyzer
      ships as `procMacro.enable`. **Delivered by WP3 as `--no-proc-macros`;**
-     S-1 landed too, so what now defers the promise is S-5.
+     S-1 landed too, so what now deferred the promise was S-5 -- resolved
+     2026-10-07, and the security guide now describes the macro env as
+     capability-denied and handle-checked.
    - **`tur repl` auto-discovery gets no promise** -- it compiles and
      `dlopen`s, which is Gradle-tier. But `TUR_NO_AUTO_SPICE=1` is
      default-allow, which points against where pnpm, Bun, Deno and Neovim have
@@ -1726,8 +1734,12 @@ checklist, not a gate.
    `bytes->serial-cont/verified` could still be added later without breaking
    anything. It would be the natural home for the HMAC the guestbook
    hand-rolls in inline C, if a second program ever needs one.
-3. **`#fx{Unsafe}` semantics** (WP8): pointer arithmetic only, or "may
-   corrupt memory on bad input"?
+3. ~~**`#fx{Unsafe}` semantics** (WP8): pointer arithmetic only, or "may
+   corrupt memory on bad input"?~~ **ANSWERED 2026-10-02: pointer arithmetic
+   only (Option A).** It is what is built and what every stdlib call site
+   assumes, and `(unsafe ...)`-as-discharge is load-bearing; the two readings
+   are mutually exclusive on one marker. A propagating "tainted input" marker
+   would be a separate feature under its own name.
 4. **Try Turmeric:** keep `CAP_ALL` behind the browser sandbox (proposed),
    or run the wasm env sandboxed too for defence in depth?
 5. **Installer:** keep Homebrew as the primary channel (with a stable

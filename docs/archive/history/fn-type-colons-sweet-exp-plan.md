@@ -6,7 +6,7 @@ description: Close the documented gap in tools/rewrite_fn_type_colons.py so it r
 
 # Plan: fn-type Colon Codemod -- Sweet-Exp Coverage
 
-**Status: LANDED (PR [#322](https://github.com/rjungemann/turmeric/pull/322), commit `f8c12dba`, 2026-06-10).**
+**Status: LANDED (PR [#322](https://github.com/turmeric-lang/turmeric/pull/322), commit `f8c12dba`, 2026-06-10).**
 All phases S1-S5 shipped: slot processors refactored to `_items` form,
 `_walk_implicit_seq` added with sweet-exp auto-detection + `force_sweet`,
 `.tur.sweet` files and ` ```sweet-exp ` markdown fences routed through it,
@@ -20,7 +20,7 @@ signatures, which the current `_walk_implicit_seq` does not reach (still
 This plan closes the **known gap** recorded in the "Drop leading colons
 inside `(fn ...)` types" Phase 2 work (see
 [still-in-flight-plan.md](../still-in-flight-plan.md) and PR
-[#270](https://github.com/rjungemann/turmeric/pull/270)): the
+[#270](https://github.com/turmeric-lang/turmeric/pull/270)): the
 `tools/rewrite_fn_type_colons.py` codemod only finds `(fn ...)` *type*
 expressions that sit inside a **paren-delimited declaration**. A
 *sweet-exp* top-level form -- `defn foo [...] ...` with no enclosing

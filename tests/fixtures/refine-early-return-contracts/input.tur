@@ -1,0 +1,44 @@
+;; early-return-bypasses-return-refinement: an early `return` carries the
+;; enclosing function's result checks, and nothing else's.  Every value here
+;; satisfies its refinement, so all of them pass:
+;;
+;;   - `f`: an early return and the fall-through, both in range;
+;;   - `shadow`: the refinement variable `r` is also a user local AFTER the
+;;     return site -- the check's own binding must not shadow it (12, not 7);
+;;   - `with-lambda`: the lambda's `(return -5)` leaves the LAMBDA, so the
+;;     outer `(>= r 100)` does not apply to it;
+;;   - `size`: an instance method's early return.
+;;
+;; The violating counterparts are refine-early-return-violates-{return,post,
+;; method}.
+(defn f [n : int] : #refine{ r : int | (>= r n) }
+  (when (> n 5) (return (+ n 1)))
+  n)
+
+(defn shadow [n : int] : #refine{ r : int | (>= r 0) }
+  (let [r 7]
+    (when (< n 0) (return 0))
+    (+ r n)))
+
+(defn with-lambda [n : int] : #refine{ r : int | (>= r 100) }
+  (let [g (fn [x : int] : int (when (> x 0) (return -5)) x)]
+    (when (> n 1000) (return n))
+    (if (< (g n) 0) 100 200)))
+
+(defclass Sized [A]
+  (size [a : A] : #refine{ r : int | (>= r 0) }))
+
+(definstance Sized [int]
+  (size [a : int] : #refine{ r : int | (>= r 0) }
+    (when (> a 100) (return 100))
+    a))
+
+(defn main [] : int
+  (println (f 10))
+  (println (f 3))
+  (println (shadow 5))
+  (println (shadow -5))
+  (println (with-lambda 3))
+  (println (size 4))
+  (println (size 400))
+  0)

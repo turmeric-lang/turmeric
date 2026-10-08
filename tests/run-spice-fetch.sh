@@ -235,10 +235,13 @@ else
     bad "fetch re-downloads when spices/ is missing" "$out"
 fi
 
-# 11. upstream moves under a branch-shaped :ref. The fetched tree no longer
-#     matches the pin, so the fetch must FAIL -- and must not rewrite the row,
-#     because a rewritten hash makes the next command agree with the drift and
-#     the failure lasts exactly one run.
+# 11. upstream moves under a branch-shaped :ref.  The lock recorded a commit,
+#     and a fresh fetch checks THAT commit out -- not the branch tip
+#     (lock-tracks-ref-not-resolved-commit).  It used to clone the tip, fail
+#     the integrity check, and leave `--update` (re-pin to the new commit) as
+#     the only way forward: the recorded commit was the one thing `tur fetch`
+#     would not fetch.
+RESOLVED="$(grep -o ':resolved "[^"]*"' tur.lock 2>/dev/null | head -n1)"
 cat >> "$WORK/demo/src/demo.tur" <<'EOF'
 
 (defmodule demo-extra
@@ -248,16 +251,39 @@ EOF
 git -C "$WORK/demo" -c user.email=t@t -c user.name=t commit -qam upstream-moved
 rm -rf spices
 out="$("$TUR_ABS" fetch 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && grep -qi "integrity check failed" <<< "$out"; then
-    ok "fetch refuses upstream content that differs from the pin"
+if [ "$rc" -eq 0 ] && [ -d spices/demo ] && ! grep -q backdoor spices/demo/src/demo.tur; then
+    ok "fetch checks out the pinned commit after the branch moved"
 else
-    bad "fetch refuses upstream content that differs from the pin" "rc=$rc $out"
+    bad "fetch checks out the pinned commit after the branch moved" "rc=$rc $out"
 fi
-if [ "$(grep -o ':sha256 "[^"]*"' tur.lock 2>/dev/null | head -n1)" = "$PINNED" ]; then
-    ok "a refused fetch does not rewrite the pin"
+if [ "$(grep -o ':sha256 "[^"]*"' tur.lock 2>/dev/null | head -n1)" = "$PINNED" ] &&
+   [ "$(grep -o ':resolved "[^"]*"' tur.lock 2>/dev/null | head -n1)" = "$RESOLVED" ]; then
+    ok "a pinned fetch leaves the pin as it was"
 else
-    bad "a refused fetch does not rewrite the pin" "$(cat tur.lock 2>&1)"
+    bad "a pinned fetch leaves the pin as it was" "$(cat tur.lock 2>&1)"
 fi
+
+# 11b. ...and when the pinned commit is GONE from upstream (history rewritten
+#      and collected), the fetch fails rather than quietly taking the branch.
+#      A fallback to :ref would turn the pin back into branch-tracking on
+#      exactly the remotes least worth trusting.  The upstream is restored
+#      afterwards for 12.
+cp -R "$WORK/demo" "$WORK/demo-saved"
+DEMO_BRANCH="$(git -C "$WORK/demo" symbolic-ref --short HEAD)"
+git -C "$WORK/demo" checkout -q --orphan tur-rewritten
+git -C "$WORK/demo" -c user.email=t@t -c user.name=t commit -qm rewritten
+git -C "$WORK/demo" branch -q -D "$DEMO_BRANCH"
+git -C "$WORK/demo" branch -q -m tur-rewritten "$DEMO_BRANCH"
+git -C "$WORK/demo" reflog expire --expire=now --all
+git -C "$WORK/demo" gc -q --prune=now 2>/dev/null
+rm -rf spices
+out="$("$TUR_ABS" fetch 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -qi "cannot be fetched" <<< "$out" && [ ! -d spices/demo ]; then
+    ok "fetch refuses when the pinned commit is gone, and keeps no clone"
+else
+    bad "fetch refuses when the pinned commit is gone, and keeps no clone" "rc=$rc $out"
+fi
+rm -rf "$WORK/demo" && mv "$WORK/demo-saved" "$WORK/demo"
 
 # 12. --update is the deliberate escape hatch the diagnostic names.
 out="$("$TUR_ABS" fetch --update 2>&1)"; rc=$?
@@ -295,6 +321,44 @@ if grep -q "matches tur.lock" <<< "$out"; then
     ok "tur audit is quiet on a clean tree"
 else
     bad "tur audit is quiet on a clean tree" "$out"
+fi
+
+# 16. --frozen (the `npm ci` / `cargo --locked` shape) fetches exactly what the
+#     lock pins and never writes it: a fresh checkout reproduces the pin and
+#     tur.lock is byte-for-byte untouched -- fetched_at included.
+rm -rf spices
+LOCK_BEFORE="$(cat tur.lock)"
+out="$("$TUR_ABS" fetch --frozen 2>&1)"; rc=$?
+if [ "$rc" -eq 0 ] && [ -d spices/demo ] && [ "$(cat tur.lock)" = "$LOCK_BEFORE" ]; then
+    ok "fetch --frozen reproduces the pin and leaves tur.lock untouched"
+else
+    bad "fetch --frozen reproduces the pin and leaves tur.lock untouched" "rc=$rc $out"
+fi
+
+# 17. ...and fails, without writing, when the manifest asks for something the
+#     lock does not pin.
+cp build.tur build.tur.saved
+cat > build.tur <<EOF
+(defpackage app
+  :name    "app"
+  :version "0.1.0"
+  :spices  #map{"demo"  #map{:url "file://$(native "$WORK/demo")"}
+                "demo2" #map{:url "file://$(native "$WORK/demo")"}})
+EOF
+out="$("$TUR_ABS" fetch --frozen 2>&1)"; rc=$?
+if [ "$rc" -ne 0 ] && grep -qi "would change" <<< "$out" && [ "$(cat tur.lock)" = "$LOCK_BEFORE" ]; then
+    ok "fetch --frozen refuses a dependency the lock does not pin"
+else
+    bad "fetch --frozen refuses a dependency the lock does not pin" "rc=$rc $out"
+fi
+mv build.tur.saved build.tur
+
+# 18. --frozen with --update is a usage error, not a silent choice.
+out="$("$TUR_ABS" fetch --frozen --update 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && [ "$(cat tur.lock)" = "$LOCK_BEFORE" ]; then
+    ok "fetch --frozen --update is refused"
+else
+    bad "fetch --frozen --update is refused" "rc=$rc $out"
 fi
 
 echo

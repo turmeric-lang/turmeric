@@ -464,8 +464,8 @@ static void test_hover_falls_back_to_the_builtin_table(void) {
     /* The index is built from Bindings and a compiler builtin has none, so
      * this used to be `{"contents":""}` -- silent on the name a first-time
      * visitor types first. */
-    CHECK(contains(&out, "(println : (fn [int] : nil))"),
-          "hover on a builtin renders its signature");
+    CHECK(contains(&out, "(println : (fn [int] #fx{IO} : nil))"),
+          "hover on a builtin renders its signature, effect row included");
     CHECK(contains(&out, "built-in operator"),
           "hover says the answer came from the operator table, not analysis");
     buf_free(&out);
@@ -482,7 +482,7 @@ static void test_signature_help_falls_back_to_the_builtin_table(void) {
 
     CHECK(contains(&out, "\"signatures\""),
           "signatureHelp answers for a builtin callee");
-    CHECK(contains(&out, "(println : (fn [int] : nil))"),
+    CHECK(contains(&out, "(println : (fn [int] #fx{IO} : nil))"),
           "the builtin's signature reaches the label");
     buf_free(&out);
 }

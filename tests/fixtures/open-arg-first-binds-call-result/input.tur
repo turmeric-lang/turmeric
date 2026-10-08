@@ -1,0 +1,79 @@
+;; open-arg-first-binds-call-result -- an argument that fixes nothing about a
+;; type variable (`(none)`, `(err "e")`, `(vec-new)`) passed BEFORE the one
+;; that does.  The open argument bound the callee's `A` to its own free
+;; variable first, and the later concrete argument did not replace it, so the
+;; call's RESULT typed as `int` while the spec ran at the real type:
+;;
+;;     (get-or (none) 1.5)        printed 1
+;;     (ok-or (err "e") 2.75)     printed 2
+;;     (first-or (vec-new) 9.5)   printed 9
+;;     (get-or (none) "dflt")     printed the string's address
+;;
+;; Silent, because the callee's variable and `(none)`'s are both named `A`
+;; and the rule that keeps the ENCLOSING signature's variable bound let the
+;; coincidence through; under any other name it was "expected A, got float".
+;; The argument order with the concrete argument first was always right.
+;;
+;; Found probing the same axis, and fixed with it: a LET-BOUND `(none)` was
+;; refused after the concrete argument ("expected (Option float), got (Option
+;; A)") and printed 7 for 7.1 before it; `(map-new)` first was refused
+;; ("expected (Map int A), got (Map K V)"); and a let-bound `(none)` at a
+;; uint8/uint16/uint32 payload aborted the compiler (the repr shadow read
+;; `tur_adt_Option__uint8` as a scalar because the name contains "uint").
+
+(defstruct Pt [x : float y : float])
+
+(defn get-or [A] [o : (Option A) d : A] : A
+  (match o
+    (Some v) v
+    (None) d))
+
+(defn get-or-b [B] [o : (Option B) d : B] : B
+  (match o
+    (Some v) v
+    (None) d))
+
+(defn ok-or [A] [r : (Result A cstr) d : A] : A
+  (match r
+    (Ok v) v
+    (Err e) d))
+
+(defn first-or [A] [v : (Vec A) d : A] : A
+  (if (= (vec-len v) 0) d (vec-get v 0)))
+
+(defn or-get [A] [d : A o : (Option A)] : A
+  (match o
+    (Some v) v
+    (None) d))
+
+(defn err-or [A] [r : (Result int A) d : A] : A
+  (match r
+    (Ok q) d
+    (Err e) e))
+
+(defn map-or [A] [m : (Map int A) d : A] : A
+  (if (= (map-count m) 0) d (map-get m 1)))
+
+(defn main [] : int
+  (println (get-or (none) 1.5))
+  (println (get-or-b (none) 7.1))
+  (println (get-or (none) "dflt"))
+  (println (.y (get-or (none) (Pt 7.1 3.25))))
+  (println (ok-or (err "e") 2.75))
+  (println (first-or (vec-new) 9.5))
+  (let [x (get-or (none) 1.5)]
+    (println (+ x 0.25)))
+  ;; the open slot on the error side
+  (println (err-or (ok 1) 6.25))
+  ;; a let-bound open argument, either side of the concrete one
+  (println (let [nn (none)] (get-or nn 7.1)))
+  (println (let [nn (none)] (or-get 7.1 nn)))
+  (println (let [vv (vec-new)] (first-or vv 3.25)))
+  ;; an open argument whose key type is concrete in the parameter
+  (println (map-or (map-new) 8.5))
+  ;; unsigned sub-word payloads through a let-bound open argument
+  (println (let [nn (none)] (get-or nn (:: 200 uint8))))
+  (println (let [nn (none)] (get-or nn (:: 60000 uint16))))
+  ;; the concrete-first order, unchanged
+  (println (get-or (some 4.5) 1.5))
+  0)

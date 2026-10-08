@@ -51,6 +51,7 @@
  * on Windows.  The WIFEXITED/WEXITSTATUS uses that remain are applied to a
  * system() return value, and platform_fs.h defines those there. */
 #include <sys/wait.h>
+#include <sys/time.h>   /* utimes: the prelude cache's LRU stamp */
 #endif
 #ifdef __APPLE__
 #include <mach-o/dyld.h>     /* SN1: _NSGetExecutablePath for stdlib resolution */
@@ -78,6 +79,7 @@
 #include "runtime/rt_split_embed.h" /* S2: committed decls region + hash (TUR_JIT) */
 #include "turi/spice_loader.h" /* J2: the REPL's in-process jit hook */
 #include "turi/jit_ffi.h"      /* jit-ffi-c2mir-plan: dynamic-FFI provider */
+#include "turi/inline_c_jit.h"  /* aot-compiled-repl-plan C1 */
 #include "effect_lower.h" /* Phase 19: Effect lowering */
 #include "expr.h"
 #include "fmt.h"
@@ -707,6 +709,8 @@ static int run_core_passes(PassContext *ctx) {
             effect_env_register_builtin_unsafe(
                 ctx->effect_env, ctx->arena,
                 symtab_intern(ctx->st, strslice(EFFECT_NAME_UNSAFE, 6)));
+            effect_env_register_builtin_capabilities(ctx->effect_env, ctx->arena,
+                                                     ctx->st);
             ctx->prog = effect_lower(ctx->arena, ctx->st,
                                      ctx->prog, ctx->effect_env);
             if (!ctx->prog || diag_had_error()) return 1;
@@ -833,6 +837,9 @@ static bool g_no_abi_cache;
  *                 recompiling the bare runtime sources.  Never links the
  *                 (possibly ASan) full libturi.a on its own, so a default build
  *                 is always behaviorally identical to the old source path.
+ *                 Also takes the preamble split below when
+ *                 preamble_split_auto_applies() says so, and quietly keeps the
+ *                 whole preamble when it does not.
  *   TUR_RT_LIB    (1) -- force the archive link (lean preferred, else libturi.a,
  *                 else a -lturi fallback with a warning); explicit opt-in.
  *   TUR_RT_SOURCE (2) -- force recompiling the bare runtime sources.
@@ -841,7 +848,9 @@ static bool g_no_abi_cache;
  *                 libturt_preamble.a, so the preamble is compiled ONCE rather
  *                 than once per program.  4360 of 8310 emitted lines for a
  *                 one-line program are that preamble, byte-identical every
- *                 time; dropping it measures at 29% off the cc call. */
+ *                 time; dropping it measures at 29% off the cc call.  This
+ *                 mode INSISTS -- it says so when the swap declines -- where
+ *                 AUTO only takes the split when every precondition holds. */
 enum { TUR_RT_AUTO = 0, TUR_RT_LIB = 1, TUR_RT_SOURCE = 2, TUR_RT_SPLIT = 3 };
 static int g_runtime_mode = TUR_RT_AUTO;
 
@@ -936,6 +945,56 @@ static void resolve_rcgc_from_archive(void) {
     emit_set_rcgc_from_archive(found && strcmp(libname, "turt_runtime") == 0);
 }
 
+/* cc-path-preamble-split-plan step 5: does a DEFAULT build (--runtime=auto)
+ * swap the fixed runtime preamble for the decls region and link
+ * libturt_preamble.a?  Measured at 81-86s -> 73s on a tenth of the suite
+ * (Linux, no ccache) and ~10% on the Windows CI shards: the cc call for a
+ * one-line program halves, and nothing else moves.
+ *
+ * Every precondition here is a case where the split would build something
+ * other than what was asked for, so each one keeps the whole preamble instead:
+ *
+ *   - both archives side by side.  The decls region declares the rc<T>/GC
+ *     runtime in its archive posture, so the lean libturt_runtime.a has to be
+ *     on the line as well as libturt_preamble.a -- and a `--target tur` build
+ *     produces neither.  emit_rcgc_from_archive() is the same decision for
+ *     this program's own preamble; if that kept the replica, so does this.
+ *   - no sanitizer in TUR_CC_FLAGS.  The archive is compiled without one, so
+ *     ASan would stop seeing the preamble's heap traffic and TSan its
+ *     atomics -- a silent loss of exactly the coverage that build asked for.
+ *   - not --debug, whose `-g -Og` build should step through the preamble the
+ *     user can see, not an -O2 archive.  Same reason prelude_split_applies
+ *     stays out of it.
+ *   - Linux and Windows only, where CI ran the whole suite under the split for
+ *     weeks before it became the default (the retired `split` and
+ *     `windows-split` jobs; `test` and `windows` run it now).  macOS never
+ *     has; TUR_PREAMBLE_SPLIT=1 opts in there, as TUR_RUNTIME=split always
+ *     could.
+ *
+ * TUR_PREAMBLE_SPLIT=0 turns it off.  The swap itself can still decline (the
+ * hash guard in jit_try_split_preamble, or a `#lang r7rs` program, whose
+ * preamble differs); under AUTO that is quiet, because the whole preamble is
+ * the correct answer then, not a degraded one. */
+static bool preamble_split_auto_applies(void) {
+    const char *e = getenv("TUR_PREAMBLE_SPLIT");
+    if (e && strcmp(e, "0") == 0) return false;
+#if !defined(__linux__) && !defined(_WIN32)
+    if (!e || strcmp(e, "1") != 0) return false;
+#endif
+    if (g_emit_debug_lines) return false;
+    const char *f = getenv("TUR_CC_FLAGS");
+    if (f && strstr(f, "-fsanitize")) return false;
+    if (!emit_rcgc_from_archive()) return false;
+    char libdir[4096], libname[128];
+    if (!locate_runtime_lib(libdir, sizeof(libdir), libname, sizeof(libname)) ||
+        strcmp(libname, "turt_runtime") != 0)
+        return false;
+    char probe[4200];
+    struct stat st;
+    snprintf(probe, sizeof(probe), "%s/libturt_preamble.a", libdir);
+    return stat(probe, &st) == 0 && S_ISREG(st.st_mode);
+}
+
 /* SC4+SC5+SC6 forward decl: auto-append helper used from tur_check_only
  * (called by the LSP server) and the per-file dispatchers.
  *
@@ -950,6 +1009,13 @@ static int auto_append_spice_includes(const char *input,
                                       Ls2ResolverCtx *out_ls2);
 
 static void ls2_resolver_ctx_dispose(Ls2ResolverCtx *ctx);
+
+/* The real path of the document compile_to_c is analysing from a scratch copy
+ * (tur_collect_symbols), or NULL.  Resolution that is relative to the ENTRY
+ * FILE's directory -- a sibling `(import mod)`, a `#use-reader-macros "x.tur"`
+ * -- has to start from the document, not from the temp directory the scratch
+ * copy sits in.  `load` is cwd-relative and is unaffected either way. */
+static const char *g_logical_entry_path = NULL;
 
 int tur_collect_symbols(const char *path, const char *logical_path,
                         LspSymbol *out, int cap, int *count_out) {
@@ -982,8 +1048,13 @@ int tur_collect_symbols(const char *path, const char *logical_path,
     int rm_n = 0;
     char **rm_p = discover_manifest_reader_macros(anchor, &rm_n);
     ls2_resolver_ctx_set(&ls2);
+    /* lsp-sibling-import-resolves-against-scratch-dir: spice includes were
+     * already anchored on the real path (above); the entry file's own
+     * directory has to be too. */
+    g_logical_entry_path = (logical_path && *logical_path) ? logical_path : NULL;
     int rc = compile_to_c(path, &discard, (const char **)inc, n_inc,
                           (const char **)rm_p, rm_n);
+    g_logical_entry_path = NULL;
     ls2_resolver_ctx_set(NULL);
     ls2_resolver_ctx_dispose(&ls2);
     free_reader_macro_paths(rm_p, rm_n);
@@ -1052,8 +1123,15 @@ static int compile_to_c(const char *path, Buf *out_c,
     pkg_manifest_reassert();      /* a broken build.tur likewise: error: + exit 0 is not an error */
     refine_discharge_reset();     /* RT3: once-per-compile refinement stats */
 
+    /* The directory entry-relative paths resolve against: the scratch copy's
+     * own directory is meaningless (see g_logical_entry_path). */
+    char base_dir[4096];
+    dir_of_path(g_logical_entry_path ? g_logical_entry_path : path,
+                base_dir, sizeof(base_dir));
+
     SourceFile file = {0};
     file.path = path;
+    file.base_dir = g_logical_entry_path ? base_dir : NULL;
     file.src = src_adj;
     file.len = len_adj;
     /* How much of the file `src_adj` skipped -- the `#lang` line. Span
@@ -1106,8 +1184,6 @@ static int compile_to_c(const char *path, Buf *out_c,
     if (!forms || diag_had_error()) {
         rc = 1;
     } else {
-        char base_dir[4096];
-        dir_of_path(path, base_dir, sizeof(base_dir));
         PassContext ctx = {0};
         ctx.arena = &arena;
         ctx.st    = &st;
@@ -3040,14 +3116,13 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
 static bool buf_put_quoted(Buf *b, const char *s) {
     char q[9000];
     if (!s || tur_shell_quote(s, q, sizeof q) != 0) return false;
-    /* buf_printf, not buf_puts.  buf_printf reserves n+1 bytes and lets
-     * vsnprintf write its NUL at data[len], so a Buf built entirely out of
-     * buf_printf is incidentally readable as a C string BEFORE anyone appends
-     * an explicit terminator -- and link_command_run does exactly that with
-     * the aux_includes/aux_sources buffers this helper fills.  buf_puts
-     * reserves only n, so switching to it read one byte past the allocation
-     * (caught by ASan in tests/spice-c-sources-tests.sh). */
-    buf_printf(b, "%s", q);
+    /* link_command_run reads the aux_includes/aux_sources buffers this
+     * helper fills as C strings with no explicit terminator.  That is safe
+     * because every Buf append keeps data[len] == '\0' (buf.h).  It used to
+     * hold only for buf_printf, by vsnprintf's arithmetic, so this line had to
+     * be a buf_printf: a buf_puts here read one byte past the allocation
+     * (docs/archive/buf-puts-breaks-the-incidental-nul-invariant.md). */
+    buf_puts(b, q);
     return true;
 }
 
@@ -3227,6 +3302,82 @@ static bool prelude_object_usable(const char *obj, struct stat *st) {
     return true;
 }
 
+/* r7rs-prelude-library-object-varies-with-the-program, fix direction 4: the
+ * prelude cache is pruned least-recently-used first.  A reused object has its
+ * mtime stamped (prelude_object_reuse); after compiling a new one, objects
+ * beyond PRELUDE_CACHE_KEEP are removed oldest first -- but only those no
+ * build has used for PRELUDE_CACHE_IDLE_SECS, so an object a concurrent build
+ * has just chosen (and stamped) is never pulled from under its link.  Every
+ * new `tur` whose library text changed adds an object; nothing removed them,
+ * and a day of work left 42 (89 MB) in one directory. */
+#define PRELUDE_CACHE_KEEP      24
+#define PRELUDE_CACHE_IDLE_SECS (24 * 60 * 60)
+
+static int prelude_object_reuse(const char *obj) {
+#ifndef _WIN32
+    (void)utimes(obj, NULL);
+#else
+    (void)obj;
+#endif
+    return 0;
+}
+
+typedef struct { char name[32]; time_t mtime; } PreludeCacheEnt;
+
+static int prelude_cache_ent_cmp(const void *a, const void *b) {
+    time_t x = ((const PreludeCacheEnt *)a)->mtime, y = ((const PreludeCacheEnt *)b)->mtime;
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+static void prelude_cache_prune(const char *dir, const char *keep) {
+#ifndef _WIN32
+    DIR *d = opendir(dir);
+    if (!d) return;
+    PreludeCacheEnt *ents = NULL;
+    size_t n = 0, cap = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        const char *nm = de->d_name;
+        size_t l = strlen(nm);
+        /* Only the cache's own `<16 hex>.o`: never a lock, a kept unit, or a
+         * private `<hash>.<pid>.o` another build is still writing. */
+        if (l != 18 || strcmp(nm + 16, ".o") != 0) continue;
+        bool hex = true;
+        for (size_t i = 0; i < 16; i++) if (!isxdigit((unsigned char)nm[i])) hex = false;
+        if (!hex) continue;
+        char path[1100];
+        snprintf(path, sizeof path, "%s/%s", dir, nm);
+        if (keep && strcmp(path, keep) == 0) continue;
+        struct stat st;
+        if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        if (n == cap) {
+            cap = cap ? cap * 2 : 32;
+            PreludeCacheEnt *ne = realloc(ents, cap * sizeof *ents);
+            if (!ne) break;
+            ents = ne;
+        }
+        memcpy(ents[n].name, nm, l + 1);
+        ents[n].mtime = st.st_mtime;
+        n++;
+    }
+    closedir(d);
+    if (n + 1 > PRELUDE_CACHE_KEEP) {
+        qsort(ents, n, sizeof *ents, prelude_cache_ent_cmp);
+        size_t excess = n + 1 - PRELUDE_CACHE_KEEP;
+        time_t now = time(NULL);
+        for (size_t i = 0; i < n && excess > 0; i++, excess--) {
+            if (difftime(now, ents[i].mtime) < PRELUDE_CACHE_IDLE_SECS) break;
+            char path[1100];
+            snprintf(path, sizeof path, "%s/%s", dir, ents[i].name);
+            unlink(path);
+        }
+    }
+    free(ents);
+#else
+    (void)dir; (void)keep;
+#endif
+}
+
 /* r7rs-programs-compile-slowly: the object of a split build's library unit
  * (emit_split.h), compiled once and cached by a hash of everything that goes
  * into it -- its text, the compiler and every flag -- under
@@ -3301,7 +3452,7 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     }
     snprintf(obj, obj_cap, "%s/%016llx.o", dir, (unsigned long long)h);
     struct stat st;
-    if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
+    if (prelude_object_usable(obj, &st)) { buf_free(&flags); return prelude_object_reuse(obj); }
 
     /* One compile per library.  The unit exports every stdlib definition, so
      * cc cannot drop the ones no program reaches, and the compile costs more
@@ -3315,12 +3466,12 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     int lock_fd = open(lock, O_CREAT | O_EXCL | O_WRONLY, 0600);
     if (lock_fd < 0 && errno == EEXIST) {
         for (int tick = 0; tick < 1200; tick++) {   /* 100 ms ticks, 120 s */
-            if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
+            if (prelude_object_usable(obj, &st)) { buf_free(&flags); return prelude_object_reuse(obj); }
             if (stat(lock, &st) != 0) break;
             if (difftime(time(NULL), st.st_mtime) > 120) break;
             usleep(100000);
         }
-        if (prelude_object_usable(obj, &st)) { buf_free(&flags); return 0; }
+        if (prelude_object_usable(obj, &st)) { buf_free(&flags); return prelude_object_reuse(obj); }
     }
 
     char src[1100], tmp_obj[1100];
@@ -3371,6 +3522,7 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     int ret = 0;
     if (rc != 0 || rename(tmp_obj, obj) != 0) { unlink(tmp_obj); ret = 2; }
     if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
+    if (ret == 0) prelude_cache_prune(dir, obj);
     return ret;
 }
 
@@ -3467,27 +3619,42 @@ static int cmd_build_once(const char *input, const char *out_path,
         tf = fdopen(fd, "wb");
         memcpy(tmpl, fallback, sizeof(fallback));
     }
-    /* cc-path-preamble-split-plan: under --runtime=split, swap the fixed
-     * runtime preamble for the decls region and link libturt_preamble.a
-     * instead, so the preamble is compiled once rather than once per program.
+    bool wasm_target = target && strcmp(target, "wasm") == 0;
+
+    /* cc-path-preamble-split-plan: swap the fixed runtime preamble for the
+     * decls region and link libturt_preamble.a instead, so the preamble is
+     * compiled once rather than once per program.  The default whenever
+     * preamble_split_auto_applies() holds; --runtime=split forces it.
      *
      * Same swap the JIT does (jit_try_split_preamble), including its hash
      * guard: if the emitted preamble no longer matches the committed
      * artifact the swap DECLINES and we fall back to the full preamble, which
      * is slower but always correct.  A silent disengage is the documented
-     * failure mode on the JIT side, so say so here rather than quietly
-     * producing a build that is not what was asked for. */
+     * failure mode on the JIT side, so an explicit --runtime=split says so
+     * rather than quietly producing a build that is not what was asked for.
+     * (CI's engage probe runs with TUR_JIT_TIMING=1, which reports the
+     * default's declines too.)
+     *
+     * Never for wasm (emcc has no libturt_preamble.a), and not on top of an
+     * r7rs prelude split, whose program unit is already the small half. */
     Buf split_c;
     buf_init(&split_c);
     bool used_split = false;
     if (g_runtime_mode == TUR_RT_SPLIT) {
-        used_split = jit_try_split_preamble(&csrc, &split_c);
-        if (!used_split)
+        if (wasm_target)
+            fprintf(stderr,
+                    "tur build: --runtime=split declined for --target wasm "
+                    "(there is no wasm libturt_preamble.a); using the full "
+                    "preamble\n");
+        else if (!(used_split = jit_try_split_preamble(&csrc, &split_c)))
             fprintf(stderr,
                     "tur build: --runtime=split declined (the emitted preamble "
                     "does not match the committed split artifact -- regenerate "
                     "with tools/gen-runtime-split.py); using the full "
                     "preamble\n");
+    } else if (g_runtime_mode == TUR_RT_AUTO && !wasm_target && !prelude_split &&
+               preamble_split_auto_applies()) {
+        used_split = jit_try_split_preamble(&csrc, &split_c);
     }
     Buf *emit_c = used_split ? &split_c : &csrc;
 
@@ -3533,8 +3700,6 @@ static int cmd_build_once(const char *input, const char *out_path,
         }
     }
     buf_free(&csrc);
-
-    bool wasm_target = target && strcmp(target, "wasm") == 0;
 
     char chosen_out[1024];
     if (!out_path) {
@@ -3611,7 +3776,22 @@ static int cmd_build_once(const char *input, const char *out_path,
      * host link rather than the JIT: it takes `extern int
      * tur_closure_headers_enabled;` instead of the definition (the runtime
      * archive has the definition), and skips the project-header includes whose
-     * strict prototypes conflict with the loose externs the program emits. */
+     * strict prototypes conflict with the loose externs the program emits.
+     *
+     * --gc-sections, because "all-or-nothing" is literal: the archive is ONE
+     * object, so any reference pulled in the whole preamble, where the inline
+     * preamble had let -O2 drop every static function the program never
+     * called.  A one-line program went from 23 KB to 93 KB stripped.  The
+     * archive is built with -ffunction-sections/-fdata-sections, so the linker
+     * can drop the same functions the compiler used to (19 KB stripped -- a
+     * little under the inline build).
+     *
+     * -dead_strip is the Mach-O spelling, and it is needed there for the same
+     * reason: a one-line program measured 58,800 -> 171,896 bytes without it,
+     * and 53,312 with (macOS 27 / Apple clang 21, arm64).  Mach-O strips at
+     * atom granularity, so the archive's section flags are already enough.
+     * Windows is the one arm still linking without it: MinGW's ld has
+     * --gc-sections, but no Windows run has checked a PE link with it. */
     Buf split_flags;
     buf_init(&split_flags);
     if (used_split) {
@@ -3620,6 +3800,11 @@ static int cmd_build_once(const char *input, const char *out_path,
             Buf inj;
             buf_init(&inj);
             buf_printf(&inj, "-lturt_preamble -L%s", libdir);
+#if defined(__APPLE__)
+            buf_puts(&inj, " -Wl,-dead_strip");
+#elif !defined(_WIN32)
+            buf_puts(&inj, " -Wl,--gc-sections");
+#endif
             if (autolink.len > 1) {
                 buf_putc(&inj, ' ');
                 buf_puts(&inj, autolink.data);
@@ -5079,14 +5264,16 @@ static int cmd_jit(int argc, char **argv) {
     char **jit_rm = discover_manifest_reader_macros(input, &jit_rm_n);
     /* The `jit` experiment GRADUATED 2026-08-17 -- `tur jit` no longer needs
      * `--enable=jit`.  The BUILD-TIME gate below is the one that remains: a
-     * default build vendors no MIR and therefore carries no engine. */
+     * build configured -DTUR_JIT=OFF (or on a host the default leaves off)
+     * carries no engine. */
 #ifndef TUR_HAVE_JIT
     (void)passthrough_start;   /* used only by the engine path below */
     (void)timing_json;
     fprintf(stderr,
             "tur: this build carries no JIT engine; reconfigure with "
             "-DTUR_JIT=ON\n"
-            "     (vendors MIR at configure time -- see cmake/mir.cmake)\n");
+            "     (the default on 64-bit x86-64/arm64; MIR is vendored under "
+            "external/mir)\n");
     free_reader_macro_paths(jit_rm, jit_rm_n);
     free(user_inc);
     return 2;
@@ -5460,6 +5647,59 @@ static int repl_jit_shadow_entry(const char *src, const char *link) {
 #endif
 }
 
+/* The image compile the REPL's two in-process builds share (the spice
+ * build below, and C1's inline-C defns): swap in the S2 split preamble when
+ * its hash matches, compile, and on a failed split attempt retry with the
+ * full preamble -- the same ladder as cmd_jit, because the full TU is
+ * self-contained against a hole the hash guard cannot see.
+ *
+ * `prune` drops what nothing live names, as cmd_jit does
+ * (src/compiler/jit_prune.h).  Only for a TU whose every entry point is a
+ * non-static definition: a static export the manifest names but nothing in the
+ * TU calls would be dropped.  The spice build passes false for that reason;
+ * C1's one function is reached through its non-static __ffi shim. */
+static int repl_jit_compile_image(Buf *csrc, const char *autolink, bool prune,
+                                  TurJitImage **out) {
+    Buf split_src;
+    buf_init(&split_src);
+    bool split_used = jit_try_split_preamble(csrc, &split_src);
+    bool reduced_used = split_used;
+    if (prune) {
+        JitPruneStats ps;
+        memset(&ps, 0, sizeof ps);
+        if (split_used) {
+            (void)jit_prune_split_source(&split_src, &ps);
+        } else {
+            buf_write(&split_src, csrc->data, csrc->len);
+            if (jit_prune_full_source(&split_src, &ps)) {
+                reduced_used = true;
+            } else {
+                buf_free(&split_src);
+                buf_init(&split_src);
+            }
+        }
+    }
+
+    static char jinc0[4096], jinc1[4096], jinc2[4096];
+    const char *jincs[3];
+    int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
+                                       jinc1, sizeof(jinc1),
+                                       jinc2, sizeof(jinc2), jincs);
+
+    const Buf *use = reduced_used ? &split_src : csrc;
+    int jrc = tur_jit_compile_image(use->data, use->len, autolink,
+                                    jincs, n_jincs, out);
+    if (jrc != TUR_JIT_OK && reduced_used) {
+        fprintf(stderr,
+                "tur: warning: TUR-W0071: split-runtime path failed; "
+                "retrying with the full preamble\n");
+        jrc = tur_jit_compile_image(csrc->data, csrc->len, autolink,
+                                    jincs, n_jincs, out);
+    }
+    buf_free(&split_src);
+    return jrc;
+}
+
 static int repl_jit_build(const char *build_dir, void **out_image,
                           char **out_manifest) {
     *out_image = NULL;
@@ -5605,33 +5845,11 @@ static int repl_jit_build(const char *build_dir, void **out_image,
 
     /* S2: same hash-gated preamble swap as cmd_jit -- a REPL reload is
      * exactly the loop the split exists for. */
-    Buf split_src;
-    buf_init(&split_src);
-    bool split_used = jit_try_split_preamble(&csrc, &split_src);
-
-    static char jinc0[4096], jinc1[4096], jinc2[4096];
-    const char *jincs[3];
-    int n_jincs = jit_sdk_include_dirs(jinc0, sizeof(jinc0),
-                                       jinc1, sizeof(jinc1),
-                                       jinc2, sizeof(jinc2), jincs);
-
     TurJitImage *img = NULL;
-    const Buf *use = split_used ? &split_src : &csrc;
-    int jrc = tur_jit_compile_image(use->data, use->len,
-                                    autolink.len ? autolink.data : NULL,
-                                    jincs, n_jincs, &img);
-    if (jrc != TUR_JIT_OK && split_used) {
-        /* Same ladder as cmd_jit: the full TU is self-contained against a
-         * hole the hash guard cannot see. */
-        fprintf(stderr,
-                "tur: warning: TUR-W0071: split-runtime path failed; "
-                "retrying with the full preamble\n");
-        jrc = tur_jit_compile_image(csrc.data, csrc.len,
-                                    autolink.len ? autolink.data : NULL,
-                                    jincs, n_jincs, &img);
-    }
+    int jrc = repl_jit_compile_image(&csrc,
+                                     autolink.len ? autolink.data : NULL,
+                                     /*prune=*/false, &img);
     buf_free(&csrc);
-    buf_free(&split_src);
     buf_free(&autolink);
     if (jrc != TUR_JIT_OK) {
         fprintf(stderr,
@@ -5657,6 +5875,151 @@ static void repl_jit_hook_free(void *image) {
 }
 static const TurSpiceJitHook g_repl_jit_hook = {
     repl_jit_build, repl_jit_hook_sym, repl_jit_hook_free,
+};
+
+/* aot-compiled-repl-plan C1: compile ONE inline-C defn the interpreter cannot
+ * run (turi/inline_c_jit.c builds the program text and does the calling).
+ *
+ * Unlike repl_jit_build this runs in the MIDDLE of an evaluation -- inside the
+ * call that needed the function -- so it puts back everything compile_to_c
+ * resets that the interpreter's turn still uses: the diagnostic file registry
+ * (the turn's own source is id 0, and its loaded files keep their ids), the
+ * had-error flag, and the emission flags repl_jit_build also saves.  The
+ * scratch file is the program compile_to_c reads; it is named after the
+ * function so a diagnostic says which defn it is about, and removed once
+ * read.  The image is never freed: the interpreter calls into it for the rest
+ * of the process. */
+static int repl_inline_c_jit_build_here(const char *name, const char *src,
+                                        size_t len, void **out_image,
+                                        char **out_manifest) {
+    *out_image = NULL;
+    *out_manifest = NULL;
+
+    /* TEMP/TMP are what a Windows host sets; /tmp need not exist there. */
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || !*tmp) tmp = getenv("TEMP");
+    if (!tmp || !*tmp) tmp = getenv("TMP");
+    if (!tmp || !*tmp) tmp = "/tmp";
+    char stem[64];
+    size_t o = 0;
+    for (const char *p = name; *p && o + 1 < sizeof stem; p++)
+        stem[o++] = (isalnum((unsigned char)*p) || *p == '-' || *p == '_')
+                    ? *p : '_';
+    stem[o] = '\0';
+    char path[4300];
+    snprintf(path, sizeof path, "%s/tur-repl-jit-%s-XXXXXX.tur", tmp, stem);
+    int fd = mkstemps(path, 4);
+    if (fd < 0) {
+        fprintf(stderr, "tur: repl-jit-inline-c: cannot create %s: %s\n",
+                path, strerror(errno));
+        return -1;
+    }
+    FILE *f = fdopen(fd, "w");
+    bool wrote = f && fwrite(src, 1, len, f) == len;
+    if (f) fclose(f); else close(fd);
+    if (!wrote) {
+        fprintf(stderr, "tur: repl-jit-inline-c: cannot write %s\n", path);
+        unlink(path);
+        return -1;
+    }
+
+    size_t cap = diag_files_capacity();
+    const SourceFile **saved_files =
+        (const SourceFile **)calloc(cap ? cap : 1, sizeof *saved_files);
+    if (!saved_files) { unlink(path); return -1; }
+    size_t n_saved = diag_files_save(saved_files, cap);
+    bool had_error = diag_had_error();
+
+    bool saved_efl = g_emit_for_link;
+    bool saved_interp = g_interpret_mode;
+    bool saved_shims = g_emit_ffi_export_shims;
+    Buf *saved_sink = g_manifest_sink;
+    Buf csrc, manifest;
+    buf_init(&csrc);
+    buf_init(&manifest);
+    /* COMPILED-mode elaboration, as in repl_jit_build: inheriting the
+     * interpreter's g_interpret_mode would select `#?(:turi ...)` branches
+     * into native code.  The __ffi shim is what the interpreter calls. */
+    g_emit_for_link = true;
+    g_interpret_mode = false;
+    g_emit_ffi_export_shims = true;
+    g_manifest_sink = &manifest;
+    int rc = compile_to_c(path, &csrc, NULL, 0, NULL, 0);
+    g_manifest_sink = saved_sink;
+    g_emit_ffi_export_shims = saved_shims;
+    g_interpret_mode = saved_interp;
+    g_emit_for_link = saved_efl;
+    unlink(path);
+
+    TurJitImage *img = NULL;
+    if (rc == 0) {
+        hoist_tur_include_directives(&csrc);
+        /* The image runs __tur_static_init by name, but it is static and, in
+         * a TU with no main, nothing calls it -- so the prune below would drop
+         * it.  One non-static caller keeps it (and what it initializes). */
+        buf_puts(&csrc, "\nvoid __tur_repl_jit_keep_init(void) "
+                        "{ __tur_static_init(); }\n");
+        Buf autolink;
+        buf_init(&autolink);
+        /* c2mir's system-header warnings are noise at a prompt; its errors
+         * (why a body was refused) still print. */
+        bool was_quiet = tur_jit_set_quiet_warnings(true);
+        if (!scan_autolink_markers(&csrc, &autolink)) {
+            rc = -1;
+        } else if (repl_jit_compile_image(&csrc,
+                                          autolink.len ? autolink.data : NULL,
+                                          /*prune=*/true, &img) != TUR_JIT_OK) {
+            rc = -1;
+        }
+        tur_jit_set_quiet_warnings(was_quiet);
+        buf_free(&autolink);
+    }
+    buf_free(&csrc);
+
+    /* Put the turn's diagnostic state back exactly as it was. */
+    diag_reset();
+    diag_files_replace(saved_files, n_saved);
+    free(saved_files);
+    if (had_error) diag_force_had_error();
+
+    if (rc != 0 || !img) {
+        buf_free(&manifest);
+        return -1;
+    }
+    buf_putc(&manifest, '\0');
+    *out_manifest = strdup(manifest.data);
+    buf_free(&manifest);
+    if (!*out_manifest) return -1;
+    *out_image = img;
+    return 0;
+}
+
+/* The build runs on a stack of its own.  It is reached in the middle of an
+ * evaluation, which may be on one of turi's small makecontext stacks (a
+ * generator, effect or async body): seq-builders-unfold compiles from a
+ * generator, and elaboration and emit overflowed that stack under ASan. */
+typedef struct {
+    const char *name, *src;
+    size_t len;
+    void **out_image;
+    char **out_manifest;
+} ReplInlineCJitJob;
+
+static int repl_inline_c_jit_job(void *p) {
+    ReplInlineCJitJob *j = (ReplInlineCJitJob *)p;
+    return repl_inline_c_jit_build_here(j->name, j->src, j->len,
+                                        j->out_image, j->out_manifest);
+}
+
+static int repl_inline_c_jit_build(const char *name, const char *src,
+                                   size_t len, void **out_image,
+                                   char **out_manifest) {
+    ReplInlineCJitJob j = { name, src, len, out_image, out_manifest };
+    return tur_run_on_big_stack(repl_inline_c_jit_job, &j);
+}
+
+static const TuriInlineCJitHook g_repl_inline_c_jit_hook = {
+    repl_inline_c_jit_build, repl_jit_hook_sym,
 };
 #endif /* TUR_HAVE_JIT */
 
@@ -5696,8 +6059,8 @@ static int run_delegate_engine(const char *engine, const char *entry,
     fprintf(stderr,
             "tur run: engine \"jit\" is configured, but this build carries "
             "no JIT engine\n"
-            "     reconfigure with -DTUR_JIT=ON (vendors MIR at configure "
-            "time -- see cmake/mir.cmake),\n"
+            "     reconfigure with -DTUR_JIT=ON (the default on 64-bit "
+            "x86-64/arm64),\n"
             "     or override the engine: --engine cc / TUR_ENGINE=cc\n");
     return 2;
 #else
@@ -5900,22 +6263,14 @@ static int cmd_run(int argc, char **argv) {
         }
         /* RM4: in explicit-file mode, walk up from the file to discover an
          * enclosing build.tur and apply its `:reader-macros [...]` if any.
-         * Mirrors the auto-include discovery a few lines above. */
-        {
-            char *sroot = find_spice_root(explicit_file);
-            if (sroot) {
-                char mp[4096];
-                (void)pkg_resolve_manifest_path(sroot, mp, sizeof(mp));
-                PkgManifest sm; memset(&sm, 0, sizeof(sm));
-                if (pkg_manifest_read(mp, &sm)) {
-                    rm_paths_owned = resolve_manifest_reader_macros(
-                        sroot, &sm, &n_rm_paths);
-                    rm_paths = (const char **)rm_paths_owned;
-                }
-                pkg_manifest_free(&sm);
-                free(sroot);
-            }
-        }
+         * Mirrors the auto-include discovery a few lines above.  The shared
+         * helper also applies the manifest's `:experiments` (and the user
+         * experiments file), which a hand-rolled copy of this walk used to
+         * skip -- so `tur check f.tur` honoured a project's gates and
+         * `tur run f.tur` silently compiled with them off. */
+        rm_paths_owned = discover_manifest_reader_macros(explicit_file,
+                                                         &n_rm_paths);
+        rm_paths = (const char **)rm_paths_owned;
         /* engine-selection-plan E3: a resolved non-cc engine delegates to
          * that engine's own arm; "cc" continues into RUN_ENTRY unchanged. */
         {
@@ -8093,11 +8448,110 @@ static int is_directory(const char *path) {
     return S_ISDIR(st.st_mode);
 }
 
-/* tur format [--check|--diff] [file]
+/* The `--lang` vocabulary shared by `tur fmt` and `tur format`: a reader
+ * name, or (lang-flags-take-different-vocabularies) any base `tur dialects`
+ * lists, resolved to its reader -- formatting is a reader concern, so
+ * `saffron` formats as `turmeric` and `saffron/sweet` as `sweet`.  False for
+ * a name neither table knows. */
+static bool fmt_reader_from_lang_name(const char *lang, ReaderType *out) {
+    if (strcmp(lang, "turmeric") == 0 || strcmp(lang, "tur") == 0) {
+        *out = READER_TURMERIC;
+    } else if (strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0 || strcmp(lang, "tursweet") == 0) {
+        *out = READER_SWEET;
+    } else if (strcmp(lang, "curly-infix") == 0) {
+        *out = READER_CURLY_INFIX;
+    } else if (strcmp(lang, "neoteric") == 0) {
+        *out = READER_NEOTERIC;
+    } else if (strcmp(lang, "r7rs") == 0) {
+        /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
+         * (an editor selection) -- re-indented, never reprinted. */
+        *out = READER_R7RS;
+    } else if (strcmp(lang, "r7rs/sweet") == 0) {
+        /* Checked, and kept as written (fmt_format_buffer). */
+        *out = READER_R7RS_SWEET;
+    } else {
+        LangDialect base_dl = LANG_TURMERIC;
+        ReaderType  base_rt = READER_TURMERIC;
+        if (!lang_base_lookup(lang, strlen(lang), &base_dl, &base_rt))
+            return false;
+        (void)base_dl;
+        *out = base_rt;
+    }
+    return true;
+}
+
+/* The tail `tur format` shares across readers: print `out`, or with --check /
+ * --diff compare it against the original `src` instead.  Returns the exit
+ * code. */
+static int format_emit(const char *path, const char *src, size_t len,
+                       Buf *out_buf, bool check_only, bool diff_mode) {
+    int rc = 0;
+    Buf out = *out_buf;
+    if (check_only) {
+        /* Exit 1 if already-formatted output differs from input */
+        bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
+        if (!same) {
+            if (path) fprintf(stderr, "tur: %s is not formatted\n", path);
+            rc = 1;
+        }
+    } else if (diff_mode) {
+        bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
+        if (!same) {
+            /* Write original and formatted to temp files, run diff -u. */
+            char orig_tmp[512];
+            snprintf(orig_tmp, sizeof(orig_tmp), "%s/tur-fmt-orig-XXXXXX", tur_temp_dir());
+            int orig_fd = mkstemp(orig_tmp);
+            if (orig_fd >= 0) {
+                ssize_t _wr1 = write(orig_fd, src, len); (void)_wr1;
+                close(orig_fd);
+            }
+            char new_tmp[512];
+            snprintf(new_tmp, sizeof(new_tmp), "%s/tur-fmt-new-XXXXXX", tur_temp_dir());
+            int new_fd = mkstemp(new_tmp);
+            if (new_fd >= 0) {
+                ssize_t _wr2 = write(new_fd, out.data, out.len); (void)_wr2;
+                close(new_fd);
+            }
+            const char *label = path ? path : "<stdin>";
+            /* WP2 (D-7): `'%s'` is not quoting -- a `'` in the path ends
+             * the argument, and cmd.exe does not read `'` as a quote at
+             * all.  tur_shell_quote is the one that handles both. */
+            Buf diff_cmd; buf_init(&diff_cmd);
+            bool dq = true;
+            buf_puts(&diff_cmd, "diff -u -L ");
+            dq = buf_put_quoted(&diff_cmd, label) && dq;
+            buf_puts(&diff_cmd, " -L ");
+            dq = buf_put_quoted(&diff_cmd, label) && dq;
+            buf_putc(&diff_cmd, ' ');
+            dq = buf_put_quoted(&diff_cmd, orig_tmp) && dq;
+            buf_putc(&diff_cmd, ' ');
+            dq = buf_put_quoted(&diff_cmd, new_tmp) && dq;
+            buf_putc(&diff_cmd, '\0');
+            int diff_rc = dq ? system(diff_cmd.data) : 2;
+            buf_free(&diff_cmd);
+            unlink(orig_tmp);
+            unlink(new_tmp);
+            /* diff exits 1 when files differ, 0 when same */
+            if (diff_rc != 0) rc = 1;
+        }
+    } else {
+        buf_to_file(&out, stdout);
+    }
+    return rc;
+}
+
+/* tur format [--check|--diff] [--lang <dialect>] [file]
  * Read source from file (or stdin if no file given), format it, and write to
  * stdout.  --check: exit 1 if file is not already formatted (no output).
- * --diff: print unified diff if file would change; exit 1 if changed. */
-static int cmd_format(const char *path, bool check_only, bool diff_mode) {
+ * --diff: print unified diff if file would change; exit 1 if changed.
+ *
+ * format-subcommand-shreds-a-sweet-buffer: the reader comes from `--lang`,
+ * else the file's extension, and a `#lang` line is honoured either way.
+ * Anything that is not plain Turmeric goes through fmt_format_document --
+ * the same path as `tur fmt` -- instead of being read under the Turmeric
+ * reader, which printed a sweet buffer one token per line. */
+static int cmd_format(const char *path, bool check_only, bool diff_mode,
+                      bool lang_set, ReaderType force_lang) {
     char  *src = NULL;
     size_t len = 0;
 
@@ -8120,6 +8574,27 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
             src[len++] = (char)c;
         }
         src[len] = '\0';
+    }
+
+    ReaderType rtype = lang_set ? force_lang : reader_type_from_extension(path);
+    {
+        const char *body = src;
+        size_t body_len = len;
+        LangDialect dl = LANG_TURMERIC;
+        (void)detect_lang_dialect(src, len, &body, &body_len, NULL, NULL, &dl);
+        if (rtype != READER_TURMERIC || body != src) {
+            Buf out;
+            int rc;
+            if (fmt_format_document(path ? path : "<stdin>", src, len,
+                                    rtype, &out) != 0) {
+                rc = 1;
+            } else {
+                rc = format_emit(path, src, len, &out, check_only, diff_mode);
+                buf_free(&out);
+            }
+            free(src);
+            return rc;
+        }
     }
 
     SourceFile file = {0};
@@ -8178,55 +8653,8 @@ static int cmd_format(const char *path, bool check_only, bool diff_mode) {
         if (fmt_print(&out, forms, nforms, opts) != 0) {
             fprintf(stderr, "tur: fmt_print failed\n");
             rc = 1;
-        } else if (check_only) {
-            /* Exit 1 if already-formatted output differs from input */
-            bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
-            if (!same) {
-                if (path) fprintf(stderr, "tur: %s is not formatted\n", path);
-                rc = 1;
-            }
-        } else if (diff_mode) {
-            bool same = (out.len == len) && (memcmp(out.data, src, len) == 0);
-            if (!same) {
-                /* Write original and formatted to temp files, run diff -u. */
-                char orig_tmp[512];
-                snprintf(orig_tmp, sizeof(orig_tmp), "%s/tur-fmt-orig-XXXXXX", tur_temp_dir());
-                int orig_fd = mkstemp(orig_tmp);
-                if (orig_fd >= 0) {
-                    ssize_t _wr1 = write(orig_fd, src, len); (void)_wr1;
-                    close(orig_fd);
-                }
-                char new_tmp[512];
-                snprintf(new_tmp, sizeof(new_tmp), "%s/tur-fmt-new-XXXXXX", tur_temp_dir());
-                int new_fd = mkstemp(new_tmp);
-                if (new_fd >= 0) {
-                    ssize_t _wr2 = write(new_fd, out.data, out.len); (void)_wr2;
-                    close(new_fd);
-                }
-                const char *label = path ? path : "<stdin>";
-                /* WP2 (D-7): `'%s'` is not quoting -- a `'` in the path ends
-                 * the argument, and cmd.exe does not read `'` as a quote at
-                 * all.  tur_shell_quote is the one that handles both. */
-                Buf diff_cmd; buf_init(&diff_cmd);
-                bool dq = true;
-                buf_puts(&diff_cmd, "diff -u -L ");
-                dq = buf_put_quoted(&diff_cmd, label) && dq;
-                buf_puts(&diff_cmd, " -L ");
-                dq = buf_put_quoted(&diff_cmd, label) && dq;
-                buf_putc(&diff_cmd, ' ');
-                dq = buf_put_quoted(&diff_cmd, orig_tmp) && dq;
-                buf_putc(&diff_cmd, ' ');
-                dq = buf_put_quoted(&diff_cmd, new_tmp) && dq;
-                buf_putc(&diff_cmd, '\0');
-                int diff_rc = dq ? system(diff_cmd.data) : 2;
-                buf_free(&diff_cmd);
-                unlink(orig_tmp);
-                unlink(new_tmp);
-                /* diff exits 1 when files differ, 0 when same */
-                if (diff_rc != 0) rc = 1;
-            }
         } else {
-            buf_to_file(&out, stdout);
+            rc = format_emit(path, src, len, &out, check_only, diff_mode);
         }
         buf_free(&out);
     }
@@ -8620,6 +9048,8 @@ static int usage_fmt(void) {
         "  Skips:  build/  .git/  .tur-cache/  .turnb-cache/  .tur-repl-cache/\n"
         "\n"
         "  Dialects for --lang:  turmeric (default)  sweet-exp  curly-infix  neoteric  r7rs\n"
+        "  r7rs/sweet, or any base `tur dialects` lists (e.g. saffron, saffron/sweet),\n"
+        "  which formats with that base's reader.\n"
         "  (tursweet is a deprecated alias for sweet-exp)\n"
         "\n"
         "Exit codes:\n"
@@ -8665,23 +9095,10 @@ static int cmd_fmt(int argc, char **argv) {
                 return 2;
             }
             const char *lang = argv[++i];
-            if (strcmp(lang, "turmeric") == 0 || strcmp(lang, "tur") == 0) {
-                force_lang = READER_TURMERIC;
-            } else if (strcmp(lang, "sweet-exp") == 0 || strcmp(lang, "sweet") == 0 || strcmp(lang, "tursweet") == 0) {
-                force_lang = READER_SWEET;
-            } else if (strcmp(lang, "curly-infix") == 0) {
-                force_lang = READER_CURLY_INFIX;
-            } else if (strcmp(lang, "neoteric") == 0) {
-                force_lang = READER_NEOTERIC;
-            } else if (strcmp(lang, "r7rs") == 0) {
-                /* r7rs-lang-plan R9: a Scheme buffer with no `#lang` line
-                 * (an editor selection) -- re-indented, never reprinted. */
-                force_lang = READER_R7RS;
-            } else if (strcmp(lang, "r7rs/sweet") == 0) {
-                /* Checked, and kept as written (fmt_format_buffer). */
-                force_lang = READER_R7RS_SWEET;
-            } else {
-                fprintf(stderr, "tur fmt: unknown dialect '%s'\n", lang);
+            if (!fmt_reader_from_lang_name(lang, &force_lang)) {
+                fprintf(stderr,
+                        "tur fmt: unknown dialect '%s' (expected a reader "
+                        "name or a base `tur dialects` lists)\n", lang);
                 return 2;
             }
             lang_set = true;
@@ -9565,7 +9982,14 @@ static void wk_apply_flags(const char *flags_str) {
         else if (strcmp(tok, "--dump-sizes")        == 0) g_dump_sizes               = true;
         else if (strcmp(tok, "--dump-refine=json") == 0) g_dump_refine_json         = true;
         else if (strcmp(tok, "--emit-abi-trace")    == 0) g_emit_abi_trace           = true;
-        else if (strcmp(tok, "--lint-effects")      == 0) g_lint_effects             = true;
+        /* --lint-effects: deprecated alias for --strict-effects; the parent
+         * already printed TUR-W0050 for it. */
+        else if (strcmp(tok, "--lint-effects")      == 0) g_strict_effects           = true;
+        else if (strcmp(tok, "--Werror=strict-effects") == 0 ||
+                 strcmp(tok, "-Werror=strict-effects") == 0) {
+            g_werror_strict_effects = true;
+            g_strict_effects        = true;
+        }
         else if (strcmp(tok, "--lint-unsafe")       == 0) { g_lint_unsafe_enabled = true; g_unsafe_warn_nested = true; }
         else if (strncmp(tok, "--lint-unsafe-max-lines=", 24) == 0) {
             g_lint_unsafe_enabled = true;
@@ -9818,6 +10242,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
             TuriValue sv2 = turi_eval(env,
                 "(defn contract-enabled? [] :bool true)\n"
                 "(defn tur-contract-check [condition :bool msg :cstr] :void nil)\n"
+                "(defn tur-contract-check-at [condition :bool msg :cstr file :cstr line :int] :void nil)\n"
                 "(defn tur-contract-check-inv [obj :int pred :int msg :cstr] :void nil)");
             (void)sv2;
         }
@@ -9826,6 +10251,8 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
          * mode) so that assertions actually check their conditions. */
         turi_env_register_native(env, "tur-contract-check",
                                  native_contract_check, NULL);
+        turi_env_register_native(env, "tur-contract-check-at",
+                                 native_contract_check_at, NULL);
         turi_env_register_native(env, "tur-contract-check-inv",
                                  native_contract_check_inv, NULL);
         turi_env_register_native(env, "contract-enabled?",
@@ -10391,7 +10818,7 @@ static int usage(void) {
         "  tur add <path> --path             add a local spice\n"
         "  tur add --workspace <name>        assert a workspace sibling (no manifest entry)\n"
         "  tur add-cmake <url> [--ref <tag>] add a C/CMake dependency\n"
-        "  tur fetch [--update|--dry-run|--refetch]  download/update spices (--refetch bypasses system pkgs)\n"
+        "  tur fetch [--update|--frozen|--dry-run|--refetch]  download/update spices (--frozen: fail if tur.lock would change; --refetch bypasses system pkgs)\n"
         "  tur audit                         list every origin the build fetches code from\n"
         "  tur emit-cmake [--output-dir <d>] generate CMakeLists.txt + config for CMake consumers\n"
         "  tur install <url> [--ref <ref>]   install a spice binary globally\n"
@@ -10416,13 +10843,14 @@ static int usage(void) {
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --strict-effects                 warn on unannotated effectful functions (ER1)\n"
+        "  -Werror=strict-effects           make the --strict-effects warnings errors (implies it)\n"
         "  --strict-refine                  hard-fail refinement obligations the solver cannot prove\n"
         "  --dump-effects                   print inferred effect row for each defn (ER6)\n"
         "  --dump-write-frames              print the checked verdict for each `#writes` frame (G1)\n"
         "  --dump-read-frames               print the verification verdict for each `#reads` frame (R4)\n"
         "  --dump-cps-coloring              print whole-program may-capture coloring per defn (CPS1)\n"
         "  --dump-cps                       print the ANF/CPS IR for each colored defn (CPS2)\n"
-        "  --lint-effects                   advisory warnings for unannotated effectful functions (ER6)\n"
+        "  --lint-effects                   deprecated alias for --strict-effects (TUR-W0050)\n"
         "  --backtrack-depth <N>            cap run-backtrack at N results (0=unlimited) (Phase B5)\n"
         "  --dump-clone-plan                dump cloneable capture plan after CPS (Phase B5)\n"
         "  --dump-cps-coloring              dump CPS coloring (colored/uncolored) per top-level defn (CPS1)\n"
@@ -10485,7 +10913,11 @@ static int usage_build(void) {
         "  --runtime=lib     force the archive link (lean preferred, else libturi.a).\n"
         "                    Set TUR_RUNTIME_LIB to point at the archive if not found.\n"
         "  --runtime=source  force recompiling the runtime sources.\n"
-        "                    TUR_RUNTIME=auto|lib|source seeds the default for a build.\n"
+        "  --runtime=split   insist on the preamble split that auto takes on Linux\n"
+        "                    and Windows when libturt_preamble.a is present: the\n"
+        "                    fixed runtime preamble is linked, not recompiled per\n"
+        "                    program.  TUR_PREAMBLE_SPLIT=0 keeps it inline.\n"
+        "                    TUR_RUNTIME=auto|lib|source|split seeds the default.\n"
         "  --link-flags <f>  (tur link) extra linker flags, e.g. \"-L<dir> -lfoo\"\n"
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
         "                    (defaults to `<out>.manifest`). Lists each export\n"
@@ -10731,6 +11163,10 @@ static int usage_format(void) {
         "  tur format [file.tur]          format a source file (stdin if no file given)\n"
         "  tur format --check [file.tur]  exit 1 if formatting would change the file\n"
         "  tur format --diff [file.tur]   print unified diff of formatting changes\n"
+        "  tur format --lang <dialect>    read with that dialect (as `tur fmt --lang`);\n"
+        "                                 default: the file's extension and #lang line\n"
+        "\n"
+        "  Prefer `tur fmt`, which also formats in place.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -11316,6 +11752,18 @@ static bool parse_werror_inline_c_narrow_params(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--Werror=inline-c-narrow-params") == 0 ||
             strcmp(argv[i], "-Werror=inline-c-narrow-params") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* -Werror=strict-effects promotes the --strict-effects lints (TUR-W0030,
+ * TUR-W0032) to errors.  It implies --strict-effects; main applies that. */
+static bool parse_werror_strict_effects(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--Werror=strict-effects") == 0 ||
+            strcmp(argv[i], "-Werror=strict-effects") == 0) {
             return true;
         }
     }
@@ -12018,6 +12466,9 @@ static int tur_main_inner(int argc, char **argv) {
      * spice FFI ladder can synthesize call thunks at runtime.  JIT builds
      * only; without it every consumer keeps the non-JIT fallback behavior. */
     tur_jit_ffi_install();
+    /* aot-compiled-repl-plan C1: the interpreter's compiler for inline-C
+     * defns it cannot run.  Inert until --enable=repl-jit-inline-c. */
+    turi_set_inline_c_jit_hook(&g_repl_inline_c_jit_hook);
 #endif
 
     /* Phase 8: Check for global flags before command */
@@ -12036,6 +12487,9 @@ static int tur_main_inner(int argc, char **argv) {
     g_werror_deprecated = parse_werror_deprecated(argc, argv);
     /* Phase C: --Werror=inline-c-narrow-params promotes narrow-param warnings */
     g_werror_inline_c_narrow_params = parse_werror_inline_c_narrow_params(argc, argv);
+    /* -Werror=strict-effects: promote the effect-annotation lints to errors. */
+    g_werror_strict_effects = parse_werror_strict_effects(argc, argv);
+    if (g_werror_strict_effects) g_strict_effects = true;
     /* SC4: --no-auto-spice disables enclosing-spice auto-discovery in
      * per-file subcommands (check/emit-c/emit-h/run). */
     g_no_auto_spice = parse_no_auto_spice(argc, argv);
@@ -12109,6 +12563,14 @@ static int tur_main_inner(int argc, char **argv) {
         } else if (strcmp(argv[i], "--Werror=inline-c-narrow-params") == 0 ||
                    strcmp(argv[i], "-Werror=inline-c-narrow-params") == 0) {
             /* Phase C: already parsed into g_werror_inline_c_narrow_params; remove. */
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;
+        } else if (strcmp(argv[i], "--Werror=strict-effects") == 0 ||
+                   strcmp(argv[i], "-Werror=strict-effects") == 0) {
+            /* Already parsed into g_werror_strict_effects; remove. */
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -12318,8 +12780,15 @@ static int tur_main_inner(int argc, char **argv) {
             argc--;
             i--;
         } else if (strcmp(argv[i], "--lint-effects") == 0) {
-            /* ER6: advisory warnings for unannotated effectful functions */
-            g_lint_effects = true;
+            /* Retired: it was a byte-identical copy of --strict-effects
+             * (docs/archive/strict-effects-and-lint-effects-are-
+             * indistinguishable.md).  Still accepted, as an alias, so
+             * existing scripts keep working; TUR-W0050 says so. */
+            fprintf(stderr, "warning [TUR-W0050]: --lint-effects is deprecated; "
+                            "use --strict-effects, which emits the same "
+                            "TUR-W0030 warnings (-Werror=strict-effects makes "
+                            "them errors)\n");
+            g_strict_effects = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -13249,8 +13718,8 @@ static int tur_main_inner(int argc, char **argv) {
                 fprintf(stderr,
                         "tur repl: engine \"jit\" is configured, but this "
                         "build carries no JIT engine\n"
-                        "     reconfigure with -DTUR_JIT=ON (vendors MIR at "
-                        "configure time -- see cmake/mir.cmake),\n"
+                        "     reconfigure with -DTUR_JIT=ON (the default on "
+                        "64-bit x86-64/arm64),\n"
                         "     or override the engine: --engine cc / "
                         "TUR_ENGINE=cc\n");
                 return 2;
@@ -13399,6 +13868,8 @@ static int tur_main_inner(int argc, char **argv) {
         bool check_only = false;
         bool diff_mode  = false;
         const char *fmt_input = NULL;
+        bool        lang_set  = false;
+        ReaderType  force_lang = READER_TURMERIC;
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
                 return usage_format();
@@ -13406,6 +13877,17 @@ static int tur_main_inner(int argc, char **argv) {
                 check_only = true;
             } else if (strcmp(argv[i], "--diff") == 0) {
                 diff_mode = true;
+            } else if (strcmp(argv[i], "--lang") == 0) {
+                if (i + 1 >= argc) return usage_error(usage_format);
+                const char *lang = argv[++i];
+                if (!fmt_reader_from_lang_name(lang, &force_lang)) {
+                    fprintf(stderr,
+                            "tur format: unknown dialect '%s' (expected a "
+                            "reader name or a base `tur dialects` lists)\n",
+                            lang);
+                    return 2;
+                }
+                lang_set = true;
             } else if (argv[i][0] != '-') {
                 if (fmt_input) return usage_error(usage_format);
                 fmt_input = argv[i];
@@ -13414,7 +13896,8 @@ static int tur_main_inner(int argc, char **argv) {
             }
         }
         if (check_only && diff_mode) return usage_error(usage_format);
-        return cmd_format(fmt_input, check_only, diff_mode);
+        return cmd_format(fmt_input, check_only, diff_mode, lang_set,
+                          force_lang);
     }
     if (strcmp(cmd, "fmt") == 0)
         return cmd_fmt(argc, argv);

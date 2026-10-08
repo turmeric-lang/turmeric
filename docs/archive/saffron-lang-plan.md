@@ -30,7 +30,7 @@ stand -- compiled-only clean panics at the witness's checked cast, while
   unannotated `g` never reaches the witness: a class method records it as
   `int` in both dialects, and the instance body's `(g ..)` is already "'g' is
   not a function or continuation".
-- [saffron-dyn-parametric-extra-read-as-class-var](../reported/saffron-dyn-parametric-extra-read-as-class-var.md)
+- [saffron-dyn-parametric-extra-read-as-class-var](saffron-dyn-parametric-extra-read-as-class-var.md)
   (low-medium): an `int` extra on a parametric head is read as the class
   variable and cast to `(Head any..)`. Not only an unannotated one, as S9's
   list says -- a spelled `n : int` panics the same way.

@@ -137,9 +137,11 @@ let [h httpd-new-async-with-limit(8080 handler 100)]
   httpd-async-free(h)
 ```
 
-`(httpd-new-async port handler)` is just sugar for the cap-0 case
-(unlimited).  In production you usually want a cap matched to your
-upstream's tolerance.
+`(httpd-new-async port handler)` is sugar for a cap of **512** -- below the
+common 1024 open-file soft limit, so a connection flood is answered 503
+before it exhausts the process's descriptors.  A cap of `0` means
+unlimited, and has to be asked for by name.  In production you usually
+want a cap matched to your upstream's tolerance.
 
 ---
 
@@ -226,7 +228,7 @@ straight-line Turmeric.
 
 | Defn | Purpose |
 |---|---|
-| `httpd-new-async port handler` | Async server, no in-flight cap. |
+| `httpd-new-async port handler` | Async server, in-flight cap 512. |
 | `httpd-new-async-with-limit port handler max-in-flight` | Async server with cap. |
 | `httpd-run-async h` | Drive the fiber pump; blocks until stopped. |
 | `httpd-stop-async h` | Request a graceful shutdown. |

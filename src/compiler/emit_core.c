@@ -1084,6 +1084,12 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
  * its narrower set: its free is DEEP (tur_result_box_free walks the payload),
  * which is why err-val is scalar-restricted there and unrestricted here. */
 static bool g_esc_allow_sum_accessors = false;
+/* closure-let-in-self-tail-loop-leaks: when set, the only use that is not an
+ * escape is an invocation -- the `^borrow` / inferred non-retaining parameter
+ * and borrowed-rest relaxations are off.  Those are sound for a free at scope
+ * exit, but not for one at a self tail call's backedge: there the argument is
+ * the next turn's parameter.  File-scope like the flag above. */
+static bool g_esc_call_head_only = false;
 /* dynamic-returned-closure-env-is-never-freed (self application): bit i set
  * admits `b` as argument i of a dynamic call whose CALLEE is `b` itself.  See
  * any_box_binding_escapes_self_apply.  File-scope for the same reason as the
@@ -1264,7 +1270,7 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * no `^borrow` annotation.  Soundness rides the same escape
                      * analysis that set the bit: if the callee let the closure
                      * escape, the bit is clear and the arg is walked as an escape. */
-                    if (arg_is_b && call_dispatch_is_static(cur)) {
+                    if (arg_is_b && call_dispatch_is_static(cur) && !g_esc_call_head_only) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && i < fb->type.as.fn.arity
@@ -1286,7 +1292,7 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                      * cons builder wrapped in carrier casts (EX_CAST / EX_ASCRIBE /
                      * fat/poly coercions); walk the items, skip an item that peels to
                      * `b` (borrowed, non-escaping), and push the rest. */
-                    if (arg && arg->kind == EX_CONS_LIST) {
+                    if (arg && arg->kind == EX_CONS_LIST && !g_esc_call_head_only) {
                         const Binding *fb = cur->as.call_.fn_binding;
                         if (fb && fb->type.kind == TY_FN
                             && fb->type.as.fn.is_variadic
@@ -1595,6 +1601,15 @@ esc_done:
 
 bool closure_binding_escapes(const Expr *e, const Binding *b) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+}
+
+/* closure-let-in-self-tail-loop-leaks: is every use of `b` in `e` a call of
+ * it?  closure_binding_escapes with the argument relaxations off. */
+bool closure_binding_only_invoked(const Expr *e, const Binding *b) {
+    g_esc_call_head_only = true;
+    bool esc = binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+    g_esc_call_head_only = false;
+    return !esc;
 }
 
 /* catch-unwind-thunk-closure-leak: true if the caught-Result binding `b` is used
@@ -3547,7 +3562,15 @@ char *emit_reresolve_method_call(EmitCtx *ctx, const Expr *call) {
  * struct params by value).  Without this bridge a genuinely-sized struct
  * receiver passed a `T` to a `const T *` formal -- a hard cc type error that
  * single-field structs only "worked around" by register-class coincidence. */
-bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
+/* constrained-generic-monomorph-passbyptr-arg: the same question for ANY
+ * argument `i` of a dictionary-dispatched call re-resolved in this spec.  The
+ * re-resolved instance method takes every parameter that crosses the
+ * pass-by-ptr threshold as `const T *`, not only the receiver: `(join p q)`
+ * inside `merge-two [T] [(Join T)]` at T := Reg spilled `p` and passed `q` by
+ * value.  An argument typed by a type variable resolves through the spec; a
+ * concrete one is its own type (the representative's binding said nothing
+ * about it). */
+bool emit_reresolved_param_is_by_ptr(EmitCtx *ctx, const Expr *call, uint32_t i) {
     if (!ctx || !ctx->current_abi_specialization || !call ||
         call->kind != EX_CALL) {
         return false;
@@ -3555,25 +3578,26 @@ bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
     const Expr *dict = call->as.call_.dict_arg;
     if (!dict || dict->kind != EX_DICT || !dict->as.dict_.instance) return false;
     if (dict->as.dict_.method_name[0] == '\0') return false;
-    /* The dispatch tyvar must be the receiver argument (arg 0).  A
-     * return-dispatch method carries the tyvar only in its result type and has
-     * no receiver tyvar arg, so it never needs this address-of bridge. */
-    if (call->as.call_.n_args < 1 || !call->as.call_.args) return false;
-    const Expr *recv = call->as.call_.args[0];
-    while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
-    if (!recv || recv->type.kind != TY_TYVAR) return false;
+    if (i >= call->as.call_.n_args || !call->as.call_.args) return false;
+    const Expr *arg = call->as.call_.args[i];
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    if (!arg) return false;
+    /* The receiver (arg 0) keeps its original contract: only a type-variable
+     * receiver needs the bridge (a return-dispatch method has none). */
+    if (i == 0 && arg->type.kind != TY_TYVAR) return false;
 
-    Type resolved = emit_resolve_type(ctx, recv->type);
+    Type resolved = emit_resolve_type(ctx, arg->type);
     if (resolved.kind != TY_STRUCT && resolved.kind != TY_ADT &&
         resolved.kind != TY_APP) {
         return false; /* scalar carrier / still unbound -> int base clone */
     }
     if (!type_struct_pass_by_ptr(resolved)) return false;
 
-    /* Confirm the selected instance method emits the receiver by pointer.  Match
-     * the dict's (mangled) method name against the instance's typeclass methods
-     * to locate the impl FnDef; an inline-C / closure body declares the receiver
-     * by value even above the pass-by-ptr threshold (emit_fns.c §737). */
+    /* Confirm the selected instance method emits the parameter by pointer.
+     * Match the dict's (mangled) method name against the instance's typeclass
+     * methods to locate the impl FnDef; an inline-C / closure body declares
+     * its params by value even above the pass-by-ptr threshold (emit_fns.c
+     * §737). */
     TypeClassInstance *inst = dict->as.dict_.instance;
     const TypeClass *tc = inst->typeclass;
     if (!tc) return false;
@@ -3599,6 +3623,10 @@ bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
         return true;
     }
     return false;
+}
+
+bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call) {
+    return emit_reresolved_param_is_by_ptr(ctx, call, 0);
 }
 
 static char *capture_env_access(EmitCtx *ctx, const Binding *b);
@@ -3931,7 +3959,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
          * fall back to the first entry (top-level / single-spec, unchanged). */
         const char *active_outer = ctx->current_abi_specialization
             ? ctx->current_abi_specialization->clone_name : NULL;
-        /* option-consumer-retype-byvalue step 2: a `#{Construct}` callee
+        /* option-consumer-retype-byvalue step 2: a `^construct` callee
          * (`some`/`none`/`ok`/`err`) emitted inside a spec whose own return is
          * the int64 carrier must produce the carrier box, not a by-value clone.
          * This case arises in a pure-Turmeric `option-map`/`result-map` body
@@ -4012,7 +4040,7 @@ char *emit_call_name(EmitCtx *ctx, const Expr *call, const Binding *b) {
          * only sound disambiguator; an unrecorded 0-arg constructor stays on
          * the carrier callee.
          *
-         * The SAME hazard applies to an N-arg `#{Construct}` callee
+         * The SAME hazard applies to an N-arg `^construct` callee
          * (`(ok x)` / `(err e)` / `(some x)`): its by-value spec and the int64
          * carrier base share identical argument types and differ only in
          * return ABI, so the by-args match cannot tell them apart.  Once a
@@ -4600,6 +4628,7 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
         /* Same directive.  If this site marks it optional and the stored entry
          * is bare, upgrade the entry: one deliberate per-platform use is enough
          * to make the header's absence expected for the whole TU. */
+        if (g_hoist_origin_stdlib) g_hoisted_stdlib[i] = true;
         if (optional && !hoisted_entry_is_optional(e)) {
             size_t tl = sizeof(TUR_HOIST_OPTIONAL_TAG) - 1;
             char *up = (char *)malloc(n + tl + 1);
@@ -4614,8 +4643,10 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
     if (g_n_hoisted_includes == g_cap_hoisted_includes) {
         uint32_t cap = g_cap_hoisted_includes ? g_cap_hoisted_includes * 2 : 8;
         char **nh = (char **)realloc(g_hoisted_includes, cap * sizeof(char *));
-        if (!nh) { fprintf(stderr, "tur: oom\n"); abort(); }
+        bool *ns = (bool *)realloc(g_hoisted_stdlib, cap * sizeof(bool));
+        if (!nh || !ns) { fprintf(stderr, "tur: oom\n"); abort(); }
         g_hoisted_includes = nh;
+        g_hoisted_stdlib = ns;
         g_cap_hoisted_includes = cap;
     }
     size_t tl = optional ? sizeof(TUR_HOIST_OPTIONAL_TAG) - 1 : 0;
@@ -4624,6 +4655,7 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
     memcpy(copy, line, n);
     if (optional) memcpy(copy + n, TUR_HOIST_OPTIONAL_TAG, tl);
     copy[n + tl] = '\0';
+    g_hoisted_stdlib[g_n_hoisted_includes] = g_hoist_origin_stdlib;
     g_hoisted_includes[g_n_hoisted_includes++] = copy;
 }
 
@@ -4730,11 +4762,13 @@ size_t tur_hoist_top_includes_scan(const char *body, size_t len) {
     return last_consumed;
 }
 
-static char *strip_hoistable_includes(EmitCtx *ctx, char *body) {
+static char *strip_hoistable_includes(EmitCtx *ctx, char *body, bool from_stdlib) {
     (void)ctx;
     if (!body) return body;
     size_t len = strlen(body);
+    g_hoist_origin_stdlib = from_stdlib;
     size_t consumed = tur_hoist_top_includes_scan(body, len);
+    g_hoist_origin_stdlib = false;
     if (consumed > 0) {
         memmove(body, body + consumed, len - consumed + 1);
     }
@@ -4758,7 +4792,8 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
     /* Fast path: no substitution needed. */
     if (ic->n_captures == 0 && ic->n_val_exprs == 0 && !has_ty_template &&
         !has_cname_template) {
-        return strip_hoistable_includes(ctx, strndup(ic->code.p, ic->code.len));
+        return strip_hoistable_includes(ctx, strndup(ic->code.p, ic->code.len),
+                                        ic->from_stdlib);
     }
 
     /* Build capture name array. */
@@ -4919,7 +4954,7 @@ char *inline_c_substitute(EmitCtx *ctx, Buf *body, InlineC *ic) {
     buf_putc(&result, '\0');
     char *out = strdup(result.data);
     buf_free(&result);
-    return strip_hoistable_includes(ctx, out);
+    return strip_hoistable_includes(ctx, out, ic->from_stdlib);
 }
 
 /* ------------ builtin emitters ------------ */
@@ -4964,27 +4999,9 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
         spec->shape == BS_PRINTLN_FLOAT32) {
         char *arg = emit_value(ctx, body, args[0]);
         indent_buf(body, ctx->indent);
-        switch (spec->shape) {
-            case BS_PRINTLN_INT:
-                buf_printf(body, "printf(\"%%lld\\n\", (long long)(%s));\n", arg);
-                break;
-            case BS_PRINTLN_FLOAT:
-                buf_printf(body, "printf(\"%%g\\n\", (double)(%s));\n", arg);
-                break;
-            case BS_PRINTLN_BOOL:
-                buf_printf(body, "puts((%s) ? \"true\" : \"false\");\n", arg);
-                break;
-            case BS_PRINTLN_CSTR:
-                buf_printf(body, "puts(%s);\n", arg);
-                break;
-            case BS_PRINTLN_UINT:
-                buf_printf(body, "printf(\"%%llu\\n\", (unsigned long long)(%s));\n", arg);
-                break;
-            case BS_PRINTLN_FLOAT32:
-                buf_printf(body, "printf(\"%%.7g\\n\", (double)(%s));\n", arg);
-                break;
-            default: break;
-        }
+        char *stmt = builtin_print_stmt(spec, spec->shape, arg);
+        buf_printf(body, "%s\n", stmt);
+        free(stmt);
         free(arg);
         return atom_nil();
     }
@@ -4995,7 +5012,27 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
      * which gcc cannot prove is written when it cannot bound n>=1). */
     char **arg_strs = (char **)calloc(n ? n : 1, sizeof(char *));
     if (!arg_strs) { fprintf(stderr, "tur: oom\n"); abort(); }
-    for (uint32_t i = 0; i < n; i++) arg_strs[i] = emit_value(ctx, body, args[i]);
+    /* stdlib-list-null-check-retires-regions: `(= (:: l :int) 0)` is how a
+     * typed list (or any `:heap` node) is tested for the empty link, and the
+     * erasing ascription it needs notes the node as an escape -- so every
+     * `with-region` that walked a stdlib list retired instead of rewinding.
+     * A word compared with 0 and dropped escapes nowhere: let that one
+     * ascription skip its note (EX_ASCRIBE reads the flag). */
+    int32_t compare_only_arg = -1;
+    if (spec->shape == BS_BIN_INFIX && n == 2 &&
+        (strcmp(spec->c_op, "==") == 0 || strcmp(spec->c_op, "!=") == 0)) {
+        for (uint32_t i = 0; i < 2; i++) {
+            const Expr *lit = args[1 - i];
+            if (args[i]->kind == EX_ASCRIBE &&
+                lit->kind == EX_INT_LIT && lit->as.i == 0)
+                compare_only_arg = (int32_t)i;
+        }
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        ctx->region_erasure_compare_only = ((int32_t)i == compare_only_arg);
+        arg_strs[i] = emit_value(ctx, body, args[i]);
+        ctx->region_erasure_compare_only = false;
+    }
 
     Buf out; buf_init(&out);
     switch (spec->shape) {
@@ -5769,6 +5806,136 @@ static bool carrier_is_inline(TypeKind k) {
     }
 }
 
+/* inline-c-builders-cannot-nest-option-in-result: is `src` the temp of a
+ * fresh inline-C sum box that RM1 frees after its consuming call (the
+ * sum_pending list)?  Such a box has the builders' layout. */
+static bool emit_src_is_pending_sum_box(const EmitCtx *ctx, const char *src) {
+    if (!src || !emit_str_is_bare_ident(src)) return false;
+    for (uint32_t pi = 0; pi < ctx->n_sum_pending; pi++)
+        if (ctx->sum_pending[pi] && strcmp(ctx->sum_pending[pi], src) == 0)
+            return true;
+    return false;
+}
+
+/* inline-c-builders-cannot-nest-option-in-result: read an inline-C body's
+ * OWNED carrier box back into a by-value sum monomorph whose payload is
+ * itself a sum -- `(Result (Option cstr) E)` built as
+ * `tur_ok_int(tur_some_ptr(s))`.  The builders make a 16-byte
+ * `{ tag; word }` box whose word is the INNER builder box, while the
+ * monomorph stores its Option payload BY VALUE (24 bytes), so the plain
+ * `*(T *)box` readback read the inner tag out of a pointer's low bytes:
+ * neither arm of a nested match fired, and nothing said so.
+ *
+ * Here the outer tag is copied, and each payload word whose field type is a
+ * non-heap sum goes through the carrier->concrete bridge as an owned box of
+ * its own (which recurses for deeper nesting, unwraps a niche Option, and
+ * frees the inner box); any other payload is the same bytes the plain
+ * readback copied.  Returns false -- emitting nothing -- when no field nests
+ * a sum, or a constructor has more than one field (no builder makes one), so
+ * every other shape keeps the plain deref.  A null carrier is the zeroed
+ * aggregate, which is None for an Option-shaped outer. */
+static bool emit_nested_sum_box_applies(EmitCtx *ctx, Type concrete_ty) {
+    Type rty = emit_resolve_type(ctx, concrete_ty);
+    AdtDef *adt = NULL;
+    Type args[16];
+    uint8_t nargs = 0;
+    if (!type_extract_adt_app(&rty, &adt, args, &nargs) || !adt ||
+        adt_uses_named_layout(adt) || adt->is_heap || adt->n_ctors < 2)
+        return false;
+    bool any_nested = false;
+    for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+        const CtorDef *c = adt->ctors[ci];
+        if (!c) return false;
+        if (c->n_fields > 1) return false;
+        if (c->n_fields == 0 || !c->fields[0].full_type) continue;
+        Type ft = substitute_adt_app_type_owned(c->fields[0].full_type, adt, args);
+        Type rft = emit_resolve_type(ctx, ft);
+        AdtDef *fd = NULL;
+        Type fargs[16];
+        uint8_t nf = 0;
+        if (type_extract_adt_app(&rft, &fd, fargs, &nf) && fd && !fd->is_heap &&
+            !fd->is_opaque && fd->n_ctors >= 2)
+            any_nested = true;
+        free_struct_app_type(ft);
+    }
+    return any_nested;
+}
+
+static bool emit_readback_nested_sum_box(EmitCtx *ctx, Buf *body,
+                                         const char *cname, Type concrete_ty,
+                                         const char *ctmp, const char *vtmp) {
+    if (!emit_nested_sum_box_applies(ctx, concrete_ty)) return false;
+    Type rty = emit_resolve_type(ctx, concrete_ty);
+    AdtDef *adt = NULL;
+    Type args[16];
+    uint8_t nargs = 0;
+    type_extract_adt_app(&rty, &adt, args, &nargs);
+
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s %s;\n", cname, vtmp);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "memset(&%s, 0, sizeof %s);\n", vtmp, vtmp);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s) {\n", ctmp);
+    ctx->indent += 4;
+    char *nb = fresh_tmp(ctx);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "tur_result_box_t *%s = (tur_result_box_t *)(intptr_t)(%s);\n",
+               nb, ctmp);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "%s.tag = %s->tag;\n", vtmp, nb);
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "switch (%s->tag) {\n", nb);
+    for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+        const CtorDef *c = adt->ctors[ci];
+        if (c->n_fields == 0) continue;
+        char *path = adt_field_member_path(adt, c, 0);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "case %u: {\n", (unsigned)c->tag);
+        ctx->indent += 4;
+        Type ft = substitute_adt_app_type_owned(c->fields[0].full_type, adt, args);
+        Type rft = emit_resolve_type(ctx, ft);
+        AdtDef *fd = NULL;
+        Type fargs[16];
+        uint8_t nf = 0;
+        bool nested = type_extract_adt_app(&rft, &fd, fargs, &nf) && fd &&
+                      !fd->is_heap && !fd->is_opaque && fd->n_ctors >= 2;
+        if (nested) {
+            /* The word is the inner builder's box, owned with the outer. */
+            char *w = fresh_tmp(ctx);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "int64_t %s = %s->as.ok_val;\n", w, nb);
+            emit_localvar_record_ctype(w, "int64_t");
+            emit_owned_carrier_mark(w);
+            char *iv = emit_carrier_bridge(ctx, body, strdup(w), CK_CARRIER,
+                                           CK_CONCRETE, rft);
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "%s.%s = %s;\n", vtmp, path, iv);
+            emit_owned_carrier_clear(w);
+            free(iv);
+            free(w);
+        } else {
+            indent_buf(body, ctx->indent);
+            buf_printf(body, "memcpy(&%s.%s, &%s->as.ok_val, sizeof %s.%s);\n",
+                       vtmp, path, nb, vtmp, path);
+        }
+        free_struct_app_type(ft);
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "break;\n");
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        free(path);
+    }
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    free(nb);
+    ctx->indent -= 4;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "}\n");
+    return true;
+}
+
 char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                           char *src_str,
                           CarrierKind src_ck, CarrierKind sink_ck,
@@ -6291,9 +6458,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                          * null carrier (SR3 slice A), so a None allocates
                          * nothing and must not be freed. */
                         char *vtmp = fresh_tmp(ctx);
+                        if (!emit_readback_nested_sum_box(ctx, body, cname,
+                                                          concrete_ty, ctmp, vtmp)) {
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "%s %s = (%s ? (*(%s *)(intptr_t)(%s)) : %s);\n",
                                    cname, vtmp, ctmp, cname, ctmp, z);
+                        }
                         indent_buf(body, ctx->indent);
                         buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
                                    ctmp, ctmp);
@@ -6303,8 +6473,19 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                         emit_owned_carrier_clear(src_str);
                         free(vtmp);
                     } else {
-                        buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
-                                   ctmp, cname, ctmp, z);
+                        /* A fresh inline-C box headed into an argument (see
+                         * the generic deref below) whose payload nests a sum. */
+                        if (emit_src_is_pending_sum_box(ctx, src_str) &&
+                            emit_nested_sum_box_applies(ctx, concrete_ty)) {
+                            char *nv = fresh_tmp(ctx);
+                            emit_readback_nested_sum_box(ctx, body, cname,
+                                                         concrete_ty, ctmp, nv);
+                            buf_printf(&out, "%s", nv);
+                            free(nv);
+                        } else {
+                            buf_printf(&out, "(%s ? (*(%s *)(intptr_t)(%s)) : %s)",
+                                       ctmp, cname, ctmp, z);
+                        }
                     }
                     free(z);
                     free(ctmp);
@@ -6322,9 +6503,12 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                     buf_printf(body, "int64_t %s = (int64_t)(intptr_t)(%s);\n",
                                ctmp, src_str);
                     char *vtmp = fresh_tmp(ctx);
-                    indent_buf(body, ctx->indent);
-                    buf_printf(body, "%s %s = (*(%s *)(intptr_t)(%s));\n",
-                               cname, vtmp, cname, ctmp);
+                    if (!emit_readback_nested_sum_box(ctx, body, cname,
+                                                      concrete_ty, ctmp, vtmp)) {
+                        indent_buf(body, ctx->indent);
+                        buf_printf(body, "%s %s = (*(%s *)(intptr_t)(%s));\n",
+                                   cname, vtmp, cname, ctmp);
+                    }
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "if (%s) free((void *)(intptr_t)(%s));\n",
                                ctmp, ctmp);
@@ -6347,12 +6531,34 @@ char *emit_carrier_bridge(EmitCtx *ctx, Buf *body,
                     buf_printf(&out, "__tur_any_of_carrier((int64_t)(intptr_t)(%s))",
                                src_str);
                 } else {
+                    /* inline-c-builders-cannot-nest-option-in-result: a fresh
+                     * inline-C sum box headed straight into an argument (RM1
+                     * frees the CELL after the call, sum_pending) has the
+                     * builders' layout, not the monomorph's, when its payload
+                     * nests a sum.  Convert it field by field; the conversion
+                     * frees the inner boxes, the pending drain the cell. */
+                    char *nested_v = NULL;
+                    if (emit_src_is_pending_sum_box(ctx, src_str) &&
+                        emit_nested_sum_box_applies(ctx, concrete_ty)) {
+                        {
+                            nested_v = fresh_tmp(ctx);
+                            if (!emit_readback_nested_sum_box(ctx, body, cname,
+                                                              concrete_ty, src_str,
+                                                              nested_v)) {
+                                free(nested_v);
+                                nested_v = NULL;
+                            }
+                        }
+                    }
                     /* Pointer carrier: dereference the heap pointer -- NULL-safely
                      * for a sum whose nullary tag-0 value rides as 0 (Option's
                      * `none`; hkt-generic-none-to-typed-param-segfaults). */
-                    const char *nullsafe =
+                    const char *nullsafe = nested_v ? NULL :
                         ensure_agg_unbox_nullsafe(ctx, concrete_ty, cname);
-                    if (nullsafe)
+                    if (nested_v) {
+                        buf_printf(&out, "%s", nested_v);
+                        free(nested_v);
+                    } else if (nullsafe)
                         buf_printf(&out, "%s((int64_t)(intptr_t)(%s))", nullsafe,
                                    src_str);
                     else

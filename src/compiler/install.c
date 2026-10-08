@@ -214,7 +214,7 @@ static bool inst_rm_tree(const char *path) {
  * no `rm`, and it does not treat '...' as quoting, so the path arrived with
  * the quotes still attached.  A tree walk needs neither a shell nor a quoting
  * rule.  docs/reported/windows-spice-fetch-shell-quoting.md */
-static bool inst_rm_rf(const char *path) {
+bool pkg_rm_rf(const char *path) {
     if (!path || !*path) return false;
     if (!strchr(path, '/')) return false;
     if (strstr(path, "..")) return false; /* defensive */
@@ -962,7 +962,7 @@ int cmd_pkg_uninstall(int argc, char **argv) {
                 char tree[4096];
                 snprintf(tree, sizeof(tree), "%s/%s",
                          spices_dir, ent->d_name);
-                if (inst_rm_rf(tree)) {
+                if (pkg_rm_rf(tree)) {
                     fprintf(stderr, "tur uninstall: removed %s\n", tree);
                 }
             }

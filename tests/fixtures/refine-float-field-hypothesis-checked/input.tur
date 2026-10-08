@@ -1,0 +1,22 @@
+;; A float field's selector is Real-sorted now, so a hypothesis about it is no
+;; longer a contradiction.  Before, `(= (.a v) 0.5)` on `s` said an Int equals
+;; 0.5, `g`'s unrelated `(= r 7)` "proved" from it, the check was elided, and
+;; `g` returned 1.  Now that obligation stays unknown and its runtime check
+;; fires.  `h`, whose goal genuinely follows from the field fact, and `k`, an
+;; Int field, still run.
+(defstruct SP [a : float b : int])
+
+(defn h [s : #refine{ v : SP | (= (.a v) 0.5) }] : #refine{ r : float | (> r 0.25) }
+  (.a s))
+
+(defn k [s : #refine{ v : SP | (>= (.b v) 3) }] : #refine{ r : int | (> r 2) }
+  (.b s))
+
+(defn g [s : #refine{ v : SP | (= (.a v) 0.5) } n : int] : #refine{ r : int | (= r 7) }
+  n)
+
+(defn main [] : int
+  (println (h (SP 0.5 1)))
+  (println (k (SP 0.5 4)))
+  (println (g (SP 0.5 1) 1))
+  0)

@@ -2,7 +2,7 @@
 
 **Status: CLOSED 2026-09-16 -- every row is struck.** Row 5, the last live one,
 was swept in
-[turmeric-spices#74](https://github.com/rjungemann/turmeric-spices/pull/74):
+[turmeric-spices#74](https://github.com/turmeric-lang/turmeric-spices/pull/74):
 `spices/ws-server` holds the broadcast hub mutex as a `Mutex` again, in
 `fixtures/broadcast/server.tur` and `tests/broadcast_test.tur` both, and the six
 `(:: ... Mutex)` casts are gone. That also retired a live "No Lazy `:int`
@@ -102,7 +102,7 @@ fixture prints 55, not 0), and `poly-statement-position-effect` is green.
 ## 5. `ws-server` casts its hub mutex through `:int` -- REMOVED 2026-09-16
 
 **Struck.** Swept in
-[turmeric-spices#74](https://github.com/rjungemann/turmeric-spices/pull/74) --
+[turmeric-spices#74](https://github.com/turmeric-lang/turmeric-spices/pull/74) --
 the direct spelling is restored in both files and the six casts are gone. Two
 blockers had to clear, not the one recorded below: the second,
 `global-def-store-misses-int-ptr-bridge`, was found 2026-09-11 when the first

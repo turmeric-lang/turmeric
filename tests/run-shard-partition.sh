@@ -197,6 +197,81 @@ for case in "${CASES[@]}"; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# The same assertions for tests/run-turi.sh, which is sharded by TUR_TURI_SHARD.
+#
+# A second harness with its own variable needs its own proof: the two slices are
+# computed over different corpora (run-turi.sh walks the same tree but counts
+# `errors/` in one combined ordinal space, and it admits fixtures run-jit.sh does
+# not), so "run-jit's partition holds" says nothing about this one.  Its own
+# enumeration answers, via TURI_TEST_LIST, for the reason in this file's header.
+turi_list() {
+    local out="$1"; shift
+    if env "$@" TURI_TEST_LIST=1 bash tests/run-turi.sh > "$out" 2> "$out.err"; then
+        return 0
+    fi
+    echo "FAIL run-shard-partition -- run-turi.sh exited non-zero while listing"
+    echo "  env: $*"
+    head -6 "$out.err" 2>/dev/null | sed 's/^/    /'
+    echo "  List mode must not need a built interpreter: it answers a question"
+    echo "  about tests/fixtures/ and runs in the non-JIT job too."
+    exit 1
+}
+
+turi_partition() {
+    local n="$1"
+    local full="$WORK/turi-full"
+    turi_list "$full"
+    sort "$full" -o "$full"
+    local total; total=$(wc -l < "$full" | tr -d ' ')
+    if [ "$total" -lt 2 ]; then
+        fail "turi N=$n: enumerated $total fixtures; nothing to partition"
+        return
+    fi
+    : > "$WORK/turi-union"
+    local i
+    for i in $(seq 1 "$n"); do
+        turi_list "$WORK/turi-$n-$i" "TUR_TURI_SHARD=$i/$n"
+        cat "$WORK/turi-$n-$i" >> "$WORK/turi-union"
+    done
+    sort "$WORK/turi-union" -o "$WORK/turi-union"
+    local dupes missing extra
+    dupes=$(uniq -d < "$WORK/turi-union")
+    missing=$(comm -23 "$full" "$WORK/turi-union")
+    extra=$(comm -13 "$full" "$WORK/turi-union")
+    if [ -n "$dupes" ]; then
+        fail "turi N=$n: $(printf '%s\n' "$dupes" | wc -l | tr -d ' ') fixture(s) in more than one shard"
+        printf '%s\n' "$dupes" | head -5 | sed 's/^/    - /'
+    fi
+    if [ -n "$missing" ]; then
+        fail "turi N=$n: $(printf '%s\n' "$missing" | wc -l | tr -d ' ') fixture(s) in NO shard"
+        printf '%s\n' "$missing" | head -5 | sed 's/^/    - /'
+    fi
+    if [ -n "$extra" ]; then
+        fail "turi N=$n: $(printf '%s\n' "$extra" | wc -l | tr -d ' ') fixture(s) in a shard but not in the full run"
+    fi
+    if [ -z "$dupes" ] && [ -z "$missing" ] && [ -z "$extra" ]; then
+        note "  ok  turi N=$n -- $total fixtures partitioned across $n shard(s)"
+    fi
+}
+
+echo
+note "run-turi.sh shard partition (TUR_TURI_SHARD, disjoint + complete):"
+for n in 1 2 3 4 7; do turi_partition "$n"; done
+
+# TUR_TEST_SHARD must NOT shard this harness.  run-turi.sh reads its own variable
+# precisely so the `aux` ctest part can sample it without touching the 160 other
+# suites in the same job; if it ever honored TUR_TEST_SHARD too, setting that for
+# one suite would silently slice this one as well.
+note "run-turi.sh ignores TUR_TEST_SHARD (it has its own variable):"
+turi_list "$WORK/turi-whole"
+turi_list "$WORK/turi-foreign" "TUR_TEST_SHARD=1/4"
+if diff -q <(sort "$WORK/turi-whole") <(sort "$WORK/turi-foreign") >/dev/null; then
+    note "  ok  TUR_TEST_SHARD=1/4 left all $(wc -l < "$WORK/turi-whole" | tr -d ' ') fixtures in the run"
+else
+    fail "TUR_TEST_SHARD=1/4 changed run-turi.sh's selection; it must only honor TUR_TURI_SHARD"
+fi
+
 echo
 if [ "$FAIL" -ne 0 ]; then
     echo "shard partition summary: $FAIL check(s) failed"

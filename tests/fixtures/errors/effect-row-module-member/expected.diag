@@ -1,0 +1,4 @@
+TUR-E0026]: unknown effect 'Typo' in effect row
+function 'loud' performs effect 'IO' but its declared row {} does not include it
+function 'via-sibling' performs effect 'IO' but its declared row {} does not include it
+function 'pinger' performs effect 'Ping' but its declared row {} does not include it

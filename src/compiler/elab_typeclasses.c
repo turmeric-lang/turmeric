@@ -7,6 +7,16 @@
 #include "mangle.h"
 
 /* ---- file-local helper forward declarations ---- */
+/* panic-location-names-the-runtime-not-the-call-site: an instance method's
+ * name for a failed contract's message -- the head of its `(name [params]
+ * body)` impl form. */
+static const char *rt_impl_method_name(const Form *impl_form) {
+    if (impl_form && impl_form->tag == F_LIST && impl_form->as.list.len > 0 &&
+        impl_form->as.list.items[0]->tag == F_SYM)
+        return impl_form->as.list.items[0]->as.sym->name;
+    return NULL;
+}
+
 static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span span,
     uint32_t *out_body_start,
     const Symbol **class_type_params, uint8_t n_class_type_params,
@@ -1049,7 +1059,8 @@ static TypeClassMethod *parse_typeclass_method(Elab *e, Form *method_form, Span 
                     syms[n_valid++] = item->as.sym;
                 }
             }
-            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid);
+            method_effect_row = effect_row_unresolved(e->arena, syms, n_valid,
+                                                      maybe_row->span);
             ret_idx++;
         }
     }
@@ -1777,6 +1788,9 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             for (uint8_t j = 0; j < n_mp; j++)
                 scope_add(&def_scope, mp[j]);
             e->fn_body_depth++;
+            /* A default method is its own function (see Elab.ret_contract). */
+            const RetContract *def_saved_ret_contract = e->ret_contract;
+            e->ret_contract = NULL;
 
             /* Elaborate body forms */
             uint32_t n_body = method_form->as.list.len - body_start;
@@ -1789,6 +1803,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
                     body_items[k] = elab_form(e, method_form->as.list.items[body_start + k]);
                     if (!body_items[k]) {
                         e->fn_body_depth--;
+                        e->ret_contract = def_saved_ret_contract;
                         e->scope = def_scope.parent;
                         scope_free(&def_scope);
                         return NULL;
@@ -1801,6 +1816,7 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             }
 
             e->fn_body_depth--;
+            e->ret_contract = def_saved_ret_contract;
             e->scope = def_scope.parent;
             scope_free(&def_scope);
 
@@ -1813,6 +1829,19 @@ Expr *elab_defclass(Elab *e, const Form *call) {
             memset(def_fd, 0, sizeof(FnDef));
             Binding *def_b = binding_new(e, default_sym, fn_t, false, true,
                                           method_form->span);
+            /* `__default_<Class>_<method>` is the elaborator's name for the
+             * body the user wrote inside the defclass; keep it out of
+             * symbol listings and diagnostics alike. */
+            def_b->is_synthesized = true;
+            def_b->synth_kind = SYNTH_DEFAULT_METHOD;
+            {
+                char lbl[192];
+                int n = snprintf(lbl, sizeof(lbl),
+                                 "default body of method '%s' in class %s",
+                                 method->name->name, name->name);
+                if (n > 0 && (size_t)n < sizeof(lbl))
+                    def_b->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+            }
             def_fd->binding        = def_b;
             def_fd->params         = mp;
             def_fd->n_params       = n_mp;
@@ -2031,11 +2060,73 @@ static bool tc_type_mentions_tyvar(const Type *t) {
  * abstract tyvars.  Recurses through TY_APP so a parametric param type like
  * `(Dense E)` is rewritten too.  Returns the type unchanged when it mentions no
  * class type parameter. */
+/* The function-arrow instance head: `(->)` in `(definstance C [(->)] ...)` is
+ * recorded as an arity-0 TY_FN of kind * -> * -> * (see the is_arrow_head arm
+ * of the definstance head parse). */
+static bool tc_is_arrow_head_marker(const Type *t) {
+    return t && t->kind == TY_FN && t->as.fn.arity == 0 &&
+           t->hkt_kind == KIND_ARROW2;
+}
+
+static Type elab_subst_class_tyvars(Arena *arena, Type t,
+                                    const Symbol **type_params,
+                                    uint8_t n_type_params,
+                                    const Type *type_args,
+                                    uint8_t n_type_args);
+
+/* arrow-instance-closure-erased-to-words: a class method written over a
+ * binary class variable, `(>>> [f : (a b c) g : (a c d)] : (a b d))`, read at
+ * the `(->)` head.  `(a X Y)` is `app(app(a, X), Y)`; with `a := (->)` it is
+ * the function type `(fn [X] Y)`, carried as a fat closure (boxed) -- the
+ * representation an arrow-head parameter already has.  X and Y keep their full
+ * types, so a method whose element types are class-method type variables is a
+ * generic impl the call site specializes, instead of a body fixed at erased
+ * words.  Returns false when `t` is not that shape. */
+static bool elab_subst_arrow_app(Arena *arena, const Type *t,
+                                 const Symbol **type_params, uint8_t n_type_params,
+                                 const Type *type_args, uint8_t n_type_args,
+                                 Type *out) {
+    if (t->kind != TY_APP || !t->as.app.fn || !t->as.app.arg) return false;
+    const Type *inner = t->as.app.fn;
+    if (inner->kind != TY_APP || !inner->as.app.fn || !inner->as.app.arg) return false;
+    const Type *head = inner->as.app.fn;
+    if (head->kind != TY_TYVAR || !head->as.tyvar_.name) return false;
+    bool arrow = false;
+    for (uint8_t k = 0; k < n_type_params && k < n_type_args; k++) {
+        if (type_params[k] && strcmp(type_params[k]->name, head->as.tyvar_.name) == 0) {
+            arrow = tc_is_arrow_head_marker(&type_args[k]);
+            break;
+        }
+    }
+    if (!arrow) return false;
+    Type *x = (Type *)arena_alloc(arena, sizeof(Type));
+    *x = elab_subst_class_tyvars(arena, *inner->as.app.arg, type_params,
+                                 n_type_params, type_args, n_type_args);
+    Type *y = (Type *)arena_alloc(arena, sizeof(Type));
+    *y = elab_subst_class_tyvars(arena, *t->as.app.arg, type_params,
+                                 n_type_params, type_args, n_type_args);
+    /* A type variable rides as the int64 word at the C level, as `(-> A B)`
+     * spells it; the full type says which variable. */
+    TypeKind xk = x->kind == TY_TYVAR ? TY_INT : x->kind;
+    TypeKind yk = y->kind == TY_TYVAR ? TY_INT : y->kind;
+    Type fn = type_fn(&xk, 1, yk);
+    fn.as.fn.arg_full_types = (Type **)arena_alloc(arena, sizeof(Type *));
+    fn.as.fn.arg_full_types[0] = x;
+    fn.as.fn.result_full_type = y;
+    fn.as.fn.boxed = true;
+    *out = fn;
+    return true;
+}
+
 static Type elab_subst_class_tyvars(Arena *arena, Type t,
                                     const Symbol **type_params,
                                     uint8_t n_type_params,
                                     const Type *type_args,
                                     uint8_t n_type_args) {
+    Type arrow_fn;
+    if (elab_subst_arrow_app(arena, &t, type_params, n_type_params,
+                             type_args, n_type_args, &arrow_fn))
+        return arrow_fn;
     if (t.kind == TY_TYVAR && t.as.tyvar_.name) {
         for (uint8_t k = 0; k < n_type_params && k < n_type_args; k++) {
             if (type_params[k] &&
@@ -2176,7 +2267,7 @@ static Type m7_box_hkt_element_fns_ex(Arena *arena, Type t, bool inner_slots) {
 
 /* M7 HKT layer-4 (flag-gated): is this instance-method body genuinely
  * by-value-constructible?  The emit-side per-(f, A) by-value spec only works
- * when the method body constructs its `(f b)` result IN-BODY via `#{Construct}`
+ * when the method body constructs its `(f b)` result IN-BODY via `^construct`
  * calls (`some`/`none`/`ok`/...) -- so its inner constructs recover by value.
  * A body that DELEGATES to a carrier helper (e.g. `Bifunctor [Result]`'s
  * `(result-bimap container ...)`, where `result-bimap` takes a `:int` carrier)
@@ -2221,7 +2312,7 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
              * of the result applied family -- directly, e.g.
              * `(if (some? x) x y)`.  Under the by-value spec the param's type is
              * the by-value `Option__int`, so returning it is already by value;
-             * no in-body `#{Construct}` is needed.  Restrict to the applied
+             * no in-body `^construct` is needed.  Restrict to the applied
              * `(f b)` family (TY_APP) so a bare-element return (the `extract` /
              * Foldable shape, whose result is not an applied type) stays on the
              * uniform carrier path until its own probe hardens it. */
@@ -2252,7 +2343,7 @@ static bool m7_body_constructs_byvalue(const Expr *e) {
 /* M7 HKT layer-4 (flag-gated): is this instance-method body a by-value-safe
  * BARE-ELEMENT return?  The Comonad `extract [w : (f a)] : a` / Foldable shape
  * returns a bare element (`a`, grounding to a scalar/struct), not an applied
- * `(f b)` -- so there is no `#{Construct}` to recover, and m7_body_constructs_
+ * `(f b)` -- so there is no `^construct` to recover, and m7_body_constructs_
  * byvalue (which looks for one) correctly rejects it.  A bare-element body is
  * by-value-safe when its tail merely READS a scalar out of the (now by-value)
  * receiver -- a field access `(.value w)` -- or returns a bare element binding
@@ -2379,6 +2470,27 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
             }
             return;
         case TY_APP:
+            /* arrow-instance-closure-erased-to-words: `(a X Y)` over a binary
+             * class variable, met by a one-argument function -- the `(->)`
+             * head.  X binds to the function's parameter, Y to its result
+             * (the head variable itself is the caller's to bind). */
+            if (act.kind == TY_FN && act.as.fn.arity == 1 &&
+                decl.as.app.fn && decl.as.app.arg &&
+                decl.as.app.fn->kind == TY_APP && decl.as.app.fn->as.app.arg &&
+                decl.as.app.fn->as.app.fn &&
+                decl.as.app.fn->as.app.fn->kind == TY_TYVAR) {
+                Type aa = (act.as.fn.arg_full_types && act.as.fn.arg_full_types[0])
+                          ? *act.as.fn.arg_full_types[0]
+                          : type_from_kind(act.as.fn.arg_kinds[0]);
+                Type ar = act.as.fn.result_full_type
+                          ? *act.as.fn.result_full_type
+                          : type_from_kind(act.as.fn.result_kind);
+                m7_collect_tyvar_bindings(e, *decl.as.app.fn->as.app.arg, aa,
+                                          names, types, n, max);
+                m7_collect_tyvar_bindings(e, *decl.as.app.arg, ar,
+                                          names, types, n, max);
+                return;
+            }
             if (act.kind == TY_APP) {
                 if (decl.as.app.fn && act.as.app.fn)
                     m7_collect_tyvar_bindings(e, *decl.as.app.fn, *act.as.app.fn,
@@ -4593,6 +4705,34 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                      * would emit `__inst_Decode_decode_cstr(const char *)` for
                      * the cstr instance -- silently substituting cstr in where
                      * the user pinned int, and segfaulting at runtime. */
+                    /* saffron-dyn-parametric-extra-read-as-class-var (fix
+                     * direction 2): in a dynamic dialect, a bare EXTRA
+                     * parameter of an instance on a PARAMETRIC head is `any`,
+                     * not the head.  The rewrite below cannot tell `Eq [Vec]`'s
+                     * `y` (another vector) from `Nth [Vec]`'s `n` (an index):
+                     * both are bare in the class and the impl.  Retyped to the
+                     * head, the index made the dynamic witness cast it to
+                     * `(Vec any)` and panic.  As `any` the impl narrows it where
+                     * it is used -- `(vec-get v n)` and `(vec-len y)` both pass
+                     * it through the D5 seam, which casts to what the callee
+                     * takes -- the dialect's own default for a bare parameter,
+                     * and what spelling `n : any` already did.  The receiver
+                     * (parameter 0) keeps the rewrite; a kind-* head, whose
+                     * class variable IS a concrete type, keeps it too. */
+                    else if (param_type.kind == TY_INT && n_method_params > 0 &&
+                        n_type_args > 0 && type_args[0].kind == TY_ADT &&
+                        type_args[0].as.adt_.def &&
+                        type_args[0].as.adt_.def->n_type_params > 0 &&
+                        lang_span_is_dynamic(p->span) &&
+                        !method_is_return_dispatch(tc, &tc->methods[i]) &&
+                        !(tc->methods[i].param_explicit_type &&
+                          n_method_params < tc->methods[i].n_params &&
+                          tc->methods[i].param_explicit_type[n_method_params])) {
+                        memset(&elab_param_type, 0, sizeof(elab_param_type));
+                        elab_param_type.copy_kind = CK_COPY;
+                        elab_param_type.kind = TY_ANY;
+                        param_type = elab_param_type;
+                    }
                     else if (param_type.kind == TY_INT && n_type_args > 0 &&
                         !method_is_return_dispatch(tc, &tc->methods[i]) &&
                         !(tc->methods[i].param_explicit_type &&
@@ -4820,6 +4960,23 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * `__inst_Eq_eq_qu_int` -- keep the mangled name out of every
          * human-facing symbol listing. */
         method_binding->is_synthesized = true;
+        method_binding->synth_kind = SYNTH_INSTANCE_METHOD;
+        /* ...and out of diagnostics, in the words the user did write. */
+        {
+            char args[96] = "";
+            size_t used = 0;
+            for (uint8_t ti = 0; ti < n_type_args && used < sizeof(args); ti++) {
+                int w = snprintf(args + used, sizeof(args) - used, "%s%s",
+                                 ti ? " " : "", type_name(type_args[ti]));
+                if (w < 0) break;
+                used += (size_t)w;
+            }
+            char lbl[224];
+            int n = snprintf(lbl, sizeof(lbl), "method '%s' of instance %s [%s]",
+                             method_name_str, tc_name->name, args);
+            if (n > 0 && (size_t)n < sizeof(lbl))
+                method_binding->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+        }
 
         /* RT1 VARIANCE: an instance may accept MORE than its class signature
          * promises, never less.  The class signature is the contract callers
@@ -5120,6 +5277,23 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
          * method body does not trigger TUR-E0008 (unhandled effect at top level).
          * The handler is expected to be provided at the call site. */
         e->fn_body_depth++;
+        /* early-return-bypasses-return-refinement: a `return` in the method gets
+         * the result checks the whole-body wrap below gives its tail value. */
+        const RetContract *inst_saved_ret_contract = e->ret_contract;
+        e->ret_contract = NULL;
+        {
+            const Binding *rb = mp->method_fd ? mp->method_fd->binding : NULL;
+            if (rb && rb->refine_return_pred && rt_contracts_emitted()) {
+                RetContract *rc = (RetContract *)arena_alloc(e->arena, sizeof(RetContract));
+                memset(rc, 0, sizeof(*rc));
+                rc->ret           = rb->refine_return_pred;
+                rc->ret_var       = rb->refine_return_var;
+                rc->class_ret     = rb->refine_class_ret_pred;
+                rc->class_ret_var = rb->refine_class_ret_var;
+                rc->subject       = rt_impl_method_name(mp->impl_form);
+                e->ret_contract = rc;
+            }
+        }
 
         /* saffron-applied-class-var-result-takes-one-instances-type: push a
          * GROUND applied result (`(Option Pt)`, after the class-variable
@@ -5147,17 +5321,19 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
         Expr *method_body = e_nil(e, impl_form->span);
         uint32_t n_body = impl_form->as.list.len - impl_body_start;
         Type *body_expected = e->expected_type;
+        /* loop-invariants-plan: the loops this body registers, decided below. */
+        uint32_t li_start = e->n_loop_inv_sites;
         if (n_body > 0) {
             if (n_body == 1) {
                 method_body = elab_form(e, impl_form->as.list.items[impl_body_start]);
-                if (!method_body) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                if (!method_body) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->ret_contract = inst_saved_ret_contract; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
             } else {
                 Expr **items = (Expr **)arena_alloc(e->arena, n_body * sizeof(Expr *));
                 for (uint32_t k = 0; k < n_body; k++) {
                     /* Only the tail form produces the result. */
                     e->expected_type = (k + 1 == n_body) ? body_expected : saved_body_expected;
                     items[k] = elab_form(e, impl_form->as.list.items[impl_body_start + k]);
-                    if (!items[k]) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
+                    if (!items[k]) { e->expected_type = saved_body_expected; e->fn_body_depth--; e->ret_contract = inst_saved_ret_contract; e->scope = method_scope.parent; scope_free(&method_scope); return NULL; }
                 }
                 method_body = expr_new(e->arena, EX_DO, items[n_body - 1]->type, impl_form->span);
                 method_body->as.do_.items = items;
@@ -5167,6 +5343,14 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
         e->expected_type = saved_body_expected;
 
         e->fn_body_depth--;
+        e->ret_contract = inst_saved_ret_contract;
+
+        /* loop-invariants-plan: decide this body's `:invariant` loops the way
+         * elab_defn does, before any contract wraps the body. */
+        li_analyze_method_loops(e, li_start, mp->method_params,
+                                mp->n_method_params,
+                                mp->method_fd ? mp->method_fd->binding : NULL,
+                                impl_form, impl_body_start);
 
         /* CT1: inject this instance method's parameter contract checks, while
          * the method scope is still current (the predicate elaborates in it).
@@ -5186,7 +5370,7 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     e, method_body, m_check_fn,
                     mp->method_params, mp->n_method_params,
                     mb->refine_param_preds, mb->refine_param_vars,
-                    idx, n_idx, impl_form->span);
+                    idx, n_idx, rt_impl_method_name(impl_form), impl_form->span);
             }
         }
 
@@ -5205,7 +5389,7 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                 method_body = rt_wrap_return_check(
                     e, method_body, m_check_fn, rb->refine_return_pred,
                     rb->refine_return_var, "Return contract violated",
-                    impl_form->span);
+                    rt_impl_method_name(impl_form), impl_form->span);
                 /* ...and the class's promise on top, when the instance's own
                  * was not proved to imply it.  See the comment where this is
                  * set: a dispatch site relies on the class predicate. */
@@ -5213,7 +5397,8 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                     method_body = rt_wrap_return_check(
                         e, method_body, m_check_fn, rb->refine_class_ret_pred,
                         rb->refine_class_ret_var,
-                        "Class result contract violated", impl_form->span);
+                        "Class result contract violated",
+                        rt_impl_method_name(impl_form), impl_form->span);
             }
         }
 
@@ -6300,6 +6485,11 @@ static void poly_wrap_stamp_carrier_erased(Expr *wrap, const Binding *param) {
     bool res_erased = r ? (r->kind == TY_TYVAR) : (pt->as.fn.result_kind == TY_TYVAR);
     wrap->as.poly_wrap_.carrier_erased_arg_mask = mask;
     wrap->as.poly_wrap_.carrier_erased_result = res_erased;
+    if (r && r->kind == TY_APP) {
+        const Type *h = r;
+        while (h && h->kind == TY_APP) h = h->as.app.fn;
+        wrap->as.poly_wrap_.carrier_erased_result_hkt = h && h->kind == TY_TYVAR;
+    }
 }
 
 /* same-method-name-in-two-classes-dispatches-by-declaration-order: are these
@@ -7342,6 +7532,30 @@ Expr *elab_method_call(Elab *e, const Form *call) {
                         call_out->as.call_.fn_expr = get_field;
                         call_out->as.call_.args = args;
                         call_out->as.call_.n_args = n_args;
+                        /* struct-temporary-fn-field-box-leaks: an UNBOUND owning
+                         * receiver -- `(.run (make-struct S f) x)`, a constructor
+                         * or a call result -- owns the fn-field box the
+                         * constructor made, and with no binding nothing released
+                         * it (a `let`-bound one is freed at scope exit,
+                         * local-struct-drop).  Bind it: `(let [t <recv>] (.run t
+                         * x))` is the same program, and the `let` gives the
+                         * release its owner. */
+                        const Expr *ro = obj;
+                        while (ro && ro->kind == EX_ASCRIBE) ro = ro->as.ascribe_.inner;
+                        if (ro && (ro->kind == EX_CALL || ro->kind == EX_MAKE_STRUCT) &&
+                            elab_type_owns_boxed_fnfield(obj->type)) {
+                            LetBinding *lb = (LetBinding *)arena_alloc(
+                                e->arena, sizeof(LetBinding));
+                            Expr *rv = elab_bind_control_temp(e, obj, lb);
+                            lb->binding->drops_fn_fields = true;
+                            get_field->as.get_field_.struct_expr = rv;
+                            Expr *let_expr = expr_new(e->arena, EX_LET,
+                                                      call_out->type, call->span);
+                            let_expr->as.let_.bindings = lb;
+                            let_expr->as.let_.n = 1;
+                            let_expr->as.let_.body = call_out;
+                            return let_expr;
+                        }
                         return call_out;
                     }
                 }
@@ -8114,7 +8328,14 @@ found_method:;
                      * its unit, so declaration order no longer matters -- and
                      * the advice would now send the reader to move a form that
                      * is already fine.  Reaching here means there is no
-                     * instance ANYWHERE, which is a different problem. */
+                     * instance ANYWHERE, which is a different problem.
+                     *
+                     * Inside an imported module "anywhere" means "anywhere
+                     * yet": the importer's instances register after the import
+                     * is elaborated.  The counter lets the module driver tell
+                     * this failure apart and park the defn until one does
+                     * (elab_noinst_retry, elab_module.c). */
+                    e->noinst_failures++;
                     diag_emit_with_code(DIAG_ERROR, call->span,
                         TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
                         "'%.*s' is a method of typeclass '%s', but this program "
@@ -9109,6 +9330,24 @@ resolved_user_fallback:;
                 cm->return_type.as.tyvar_.name &&
                 strcmp(cm->return_type.as.tyvar_.name, cv) == 0;
             if (recv_is_cv && res_is_cv) result_type = obj->type;
+            /* associated-type-unusable-nullary-and-generic (half 2): a result
+             * that is one of the class's ASSOCIATED types -- `(unwrap [x : a]
+             * : Inner)` -- is the projection at the receiver, `(Inner A)`, not
+             * the representative's binding: that is what a parameter declared
+             * `(Inner A)` holds, and what each instantiation reduces. */
+            else if (recv_is_cv && cm->return_type.kind == TY_TYVAR &&
+                     cm->return_type.as.tyvar_.name &&
+                     obj->type.as.tyvar_.name && rtc->n_assoc_types > 0) {
+                for (uint8_t ak = 0; ak < rtc->n_assoc_types; ak++) {
+                    const Symbol *an = rtc->assoc_type_names[ak];
+                    if (!an || strcmp(an->name, cm->return_type.as.tyvar_.name) != 0)
+                        continue;
+                    Type proj;
+                    if (elab_assoc_projection(e, an, &obj->type, 1, &proj))
+                        result_type = proj;
+                    break;
+                }
+            }
             /* class-var-applied-result-untyped-in-constrained-generic: the
              * same rule for a result that mentions the class variable INSIDE
              * an application -- `(co [x : a] : (Option a))`.  The
@@ -9930,6 +10169,65 @@ resolved_user_fallback:;
             }
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = bi;
+        }
+    }
+    /* arrow-instance-closure-erased-to-words: a method of a `(->)`-headed
+     * instance whose class signature spells the arrows -- `(>>> [f : (a b c)
+     * g : (a c d)] : (a b d))` -- called with concrete functions.  Bind the
+     * method's element variables from the arguments (`b c d := float`) so the
+     * emitter specializes the instance body, and the closure it returns, at
+     * those types, and give the call its grounded result `(fn [b] d)`.
+     * Without it the body ran once at erased words: the closure it built
+     * called `f` and `g` through `int64_t (*)(void *, int64_t)` and the
+     * caller read it back at `(fn [float] float)` -- three indirect calls
+     * through the wrong function type, right only by register luck.  Only a
+     * fully ground solution is attached; anything else keeps the erased path
+     * (an untyped class method has no variables to bind, and is unchanged). */
+    if (best_inst && best_inst->typeclass && best_inst->n_type_args >= 1 &&
+        tc_is_arrow_head_marker(&best_inst->type_args[0]) && m7_cm &&
+        out->as.call_.fn_binding != NULL &&
+        best_inst->typeclass->n_type_params == 1 &&
+        best_inst->typeclass->type_params[0]) {
+        TypeClass *atc = best_inst->typeclass;
+        const Symbol *an[16];
+        Type at[16];
+        uint8_t ann = 0;
+        if (m7_cm->n_params >= 1)
+            m7_collect_tyvar_bindings(e, m7_cm->param_types[0], obj_orig_type,
+                                      an, at, &ann, 16);
+        for (uint32_t i = 0; i < n_args; i++) {
+            uint8_t pidx = (uint8_t)(1 + i);
+            if (pidx >= m7_cm->n_params) break;
+            m7_collect_tyvar_bindings(e, m7_cm->param_types[pidx],
+                                      args_orig_types[i], an, at, &ann, 16);
+        }
+        bool ground = ann > 0 && ann < ABI_TYPE_BINDINGS_MAX;
+        for (uint8_t k = 0; ground && k < ann; k++)
+            if (!an[k] || !elab_type_is_ground(&at[k])) ground = false;
+        Type res = TYPE_INT;
+        if (ground) {
+            const Symbol *sn[17];
+            Type st[17];
+            sn[0] = atc->type_params[0];
+            st[0] = best_inst->type_args[0];
+            for (uint8_t k = 0; k < ann; k++) { sn[1 + k] = an[k]; st[1 + k] = at[k]; }
+            res = elab_subst_class_tyvars(e->arena, m7_cm->return_type, sn,
+                                          (uint8_t)(1 + ann), st, (uint8_t)(1 + ann));
+            ground = res.kind == TY_FN && res.as.fn.arity >= 1 &&
+                     elab_type_is_ground(&res);
+        }
+        if (ground) {
+            AbiTypeBinding *bindings = (AbiTypeBinding *)arena_alloc(
+                e->arena, (size_t)(1 + ann) * sizeof(AbiTypeBinding));
+            bindings[0].name = atc->type_params[0]->name;
+            bindings[0].type = best_inst->type_args[0];
+            for (uint8_t k = 0; k < ann; k++) {
+                bindings[1 + k].name = an[k]->name;
+                bindings[1 + k].type = at[k];
+            }
+            out->as.call_.abi_bindings = bindings;
+            out->as.call_.n_abi_bindings = (uint8_t)(1 + ann);
+            out->type = res;
         }
     }
     /* method-call-control-operand-evicted: a dict-dispatched method call is

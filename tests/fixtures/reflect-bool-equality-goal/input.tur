@@ -1,0 +1,31 @@
+;; reflect-two-provable-facts-report-as-not-holding, half 1: an equality
+;; between propositions is an `iff`.  Encoded as a plain equality atom the
+;; solver's cube expansion could not see inside it, so `(= r true)` stayed
+;; unknown where a bare `r` proved.  It is now the operand itself against a
+;; literal, and the implication pair otherwise.  --strict-refine: this compiles
+;; only because all four prove.
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+
+(defn ^reflect all-pos? [xs : Lst] : bool
+  (match xs
+    (Nil) true
+    (Cons h t) (and (> h 0) (all-pos? t))))
+
+(defn bare [xs : Lst] : #refine{ r : bool | r }
+  (all-pos? (Cons 1 (Nil))))
+
+(defn eq-true [xs : Lst] : #refine{ r : bool | (= r true) }
+  (all-pos? (Cons 1 (Nil))))
+
+(defn eq-false [xs : Lst] : #refine{ r : bool | (= r false) }
+  (all-pos? (Cons -1 (Nil))))
+
+(defn eq-iff [a : int] : #refine{ r : bool | (= r (> a 0)) }
+  (> a 0))
+
+(defn main [] : int
+  (println (bare (Nil)))
+  (println (eq-true (Nil)))
+  (println (eq-false (Nil)))
+  (println (eq-iff 3))
+  0)

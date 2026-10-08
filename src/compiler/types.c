@@ -596,7 +596,12 @@ int fn_type_structurally_compatible(Type actual, Type expected) {
     /* Arity first: a nullary fn has no arg_kinds array at all, so testing that
      * array before the arity would let `(fn [] int)` satisfy `(fn [int] int)`. */
     if (actual.as.fn.arity != expected.as.fn.arity) return 0;
-    if (!actual.as.fn.arg_kinds || !expected.as.fn.arg_kinds) return 1;
+    /* A nullary fn has no arg_kinds array either, and that is not "nothing
+     * to compare": its result still is.  Returning early here let
+     * `(fn [] float)` satisfy `(fn [] int)` -- the result check below never
+     * ran for any nullary function. */
+    if (actual.as.fn.arity > 0 &&
+        (!actual.as.fn.arg_kinds || !expected.as.fn.arg_kinds)) return 1;
     for (uint32_t i = 0; i < actual.as.fn.arity; i++) {
         const Type *af = actual.as.fn.arg_full_types
             ? actual.as.fn.arg_full_types[i] : NULL;
@@ -614,6 +619,17 @@ int fn_type_structurally_compatible(Type actual, Type expected) {
         TypeKind ek = expected.as.fn.result_kind;
         if (!fn_slot_is_wildcard(af, ak) && !fn_slot_is_wildcard(ef, ek) &&
             !fn_slot_same_carrier(ak, ek))
+            return 0;
+        /* word-result-fn-into-nil-slot: a `nil` result is `void` in C, which
+         * is neither carrier, so a word-returning function in a `(fn [...] nil)`
+         * slot is called through the wrong function type (a trap under
+         * -fsanitize=function and WASM's call_indirect).  The reverse -- a
+         * nil-returning function where a word is expected -- is bridged by the
+         * nil_result_word shim, so only this direction is refused.  A written
+         * `: nil` / `: void` makes a defn void (elab_defn), so a function
+         * DECLARED void is never caught by this. */
+        if (!fn_slot_is_wildcard(af, ak) && !fn_slot_is_wildcard(ef, ek) &&
+            ek == TY_NIL && ak != TY_NIL && ak != TY_NEVER)
             return 0;
     }
     return 1;
@@ -4244,6 +4260,25 @@ bool type_is_wide_byval_adt(Type t) {
 bool type_is_b4box_closure_slot(Type t) {
     if (type_is_wide_byval_adt(t)) return true;
     if (t.kind == TY_APP) return adt_app_byval_value_size_bytes(t) > 8;
+    return false;
+}
+
+/* fnsan-ptr-void-fn-slot-word: the closure-slot WORD question.  An untyped
+ * `ptr<void>` and a function value are both pointer-sized handles a program
+ * can erase into one another -- `(:: f :ptr<void>)`, a `(Vec ptr<void>)` of
+ * closures, a `: ptr<void>` result re-ascribed as `(fn [ptr<void>] ...)` --
+ * so the slot-0 signature a closure is DEFINED at and the one a re-ascribing
+ * caller CASTS to must spell the two parameters alike, or the call is an
+ * indirect call through the wrong function type (a -fsanitize=function trap,
+ * a call_indirect trap on WASM).  A function-typed parameter is already the
+ * int64 word in every definition (ER4), and every erased consumer calls slot
+ * 0 at words, so the shared spelling is the word: `int64_t`.  Parameters
+ * only -- a fat function result and a `ptr<void>` result are both `void *`
+ * already.  A typed `ptr<T>`, `ptr<const-void>` and a cfnptr keep their real
+ * C types: they are FFI spellings, not erasure. */
+bool type_is_word_closure_slot(Type t) {
+    if (t.kind == TY_PTR_VOID) return !t.as.ptr.inner && !t.as.ptr.is_const;
+    if (t.kind == TY_FN) return !t.as.fn.cfnptr;
     return false;
 }
 

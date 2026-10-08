@@ -1,0 +1,44 @@
+;; arrow-instance-in-constrained-generic -- `.>>>` / `.<<<` called inside an
+;; `[^Arrow A]` generic, instantiated at function types.
+;;
+;; The receiver in `pipe`'s body is the type variable `A`, so the elaborator
+;; could not bind the class method's element variables, and every spec of
+;; `pipe` called the `Arrow [(->)]` instance's ERASED base: the closure it
+;; returned was `int64_t (*)(void *, int64_t)`, read back at
+;; `(fn [float] float)` or `(fn [cstr] cstr)`.  Right only by register luck --
+;; a trap under -fsanitize=function (tests/run-fnsan.sh) for float and cstr.
+;; The emitter's per-spec scan now binds `{a := (->), b, c, d}` from the
+;; spec-resolved argument types and calls the instance spec, as the
+;; elaborator already did for a direct call at concrete types
+;; (arrow-instance-typed-compose).  Nested generics (`pipe3`) and plain
+;; (non-^fat) lambdas go the same way.
+
+(load "stdlib/arrow.tur")
+(load "stdlib/str-build.tur")
+
+(defn pipe [^Arrow A] [f : A g : A] : A (.>>> f g))
+(defn pipeb [^Arrow A] [f : A g : A] : A (.<<< f g))
+(defn pipe3 [^Arrow A] [f : A g : A h : A] : A (pipe (pipe f g) h))
+
+(defn main [] : int
+  (let [^fat f : (fn [float] #fx{} float) (fn [x : float] : float (+ x 1.25))
+        ^fat g : (fn [float] #fx{} float) (fn [x : float] : float (* x 2.0))
+        ^fat h : (fn [float] #fx{} float) (pipe f g)]
+    (println (h 7.1)))
+  (let [f (fn [x : float] : float (+ x 1.25))
+        g (fn [x : float] : float (* x 2.0))
+        ^fat h2 : (fn [float] #fx{} float) (pipeb f g)
+        ^fat h3 : (fn [float] #fx{} float) (pipe3 f g f)]
+    (println (h2 7.1))
+    (println (h3 7.1)))
+  (let [^fat i : (fn [int] #fx{} int) (fn [x : int] : int (+ x 1))
+        ^fat j : (fn [int] #fx{} int) (fn [x : int] : int (* x 10))
+        ^fat k : (fn [int] #fx{} int) (pipe i j)]
+    (println (k 4)))
+  (let [s (fn [x : cstr] : cstr (str-concat x "!"))
+        t (fn [x : cstr] : cstr (str-concat x "?"))
+        ^fat u : (fn [cstr] #fx{} cstr) (pipe s t)
+        ^fat v : (fn [cstr] #fx{} cstr) (pipe3 s t s)]
+    (println (u "hi"))
+    (println (v "a")))
+  0)

@@ -803,7 +803,7 @@ graphics backend.
 ### Adding the spice
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref glsl-v0.1.0 --subdir spices/glsl --name glsl
 ```
 
@@ -815,7 +815,7 @@ tur add https://github.com/rjungemann/turmeric-spices \
   :version     "0.1.0"
   :description "Lisp-syntax DSL that compiles to GLSL shader source code"
   :license     "MIT"
-  :repository  "https://github.com/rjungemann/turmeric-spices"
+  :repository  "https://github.com/turmeric-lang/turmeric-spices"
 
   :exports {
     "glsl/core"     ["glsl-let" "glsl-set!" "glsl-if" "glsl-for"

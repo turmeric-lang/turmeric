@@ -238,6 +238,12 @@ if [ "$TUR_TSAN" = "1" ]; then
 fi
 export TUR_TSAN
 
+# stress-fixture-tiering-plan: fixtures carrying a `requires.stress` marker are
+# the full-size twins of per-PR fixtures (1e7 where the per-PR one runs 1e6).
+# SKIPPED unless TUR_STRESS=1, which only the nightly sets.
+TUR_STRESS="${TUR_STRESS:-0}"
+export TUR_STRESS
+
 # proper-tail-calls T2b: `requires.musttail` fixtures assert a depth that holds
 # only where the fixture compiler honours `TUR_MUSTTAIL` -- today clang on
 # x86-64 / aarch64; gcc 13 and the JIT's c2mir expand it to nothing, and a
@@ -366,6 +372,10 @@ trap _abort_on_signal INT TERM
 # Optional regex filter for fixture names (relative path under tests/fixtures).
 # Example: TUR_TEST_FILTER='^rc-auto-drop|^rc-ref-conversion$'
 TUR_TEST_FILTER="${TUR_TEST_FILTER:-}"
+# Optional regex of fixture names to leave OUT (applied after the filter).
+# tests/run-fnsan.sh uses it for the fixtures that carry a `known.fnsan`
+# marker, which it then runs on their own and requires to still trap.
+TUR_TEST_EXCLUDE="${TUR_TEST_EXCLUDE:-}"
 
 # Optional named sub-suite for faster developer feedback / CI fan-out.
 # Groups are defined by file/dir presence (robust), not fragile name regexes:
@@ -420,6 +430,9 @@ fi
 
 matches_filter() {
     local fixture_name="$1"
+    if [ -n "$TUR_TEST_EXCLUDE" ] && [[ "$fixture_name" =~ $TUR_TEST_EXCLUDE ]]; then
+        return 1
+    fi
     if [ -z "$TUR_TEST_FILTER" ]; then
         return 0
     fi
@@ -470,9 +483,11 @@ write_result() {
     # so lines from concurrent workers do not interleave.
     if [ "$kind" = "PASS" ]; then
         # A named failing test says so on its PASS line, so a reader of the
-        # log sees the gap is still open; skips stay terse.
+        # log sees the gap is still open; skips stay terse -- except a stress
+        # skip, which the nightly's full-size tier greps for to prove its
+        # fixtures really ran (nightly-arm64.yml).
         case "$detail" in
-            *xfail*) echo "PASS $name $detail" ;;
+            *xfail*|*stress-skipped*) echo "PASS $name $detail" ;;
             *)       echo "PASS $name" ;;
         esac
     elif [ "$kind" = "FAIL" ]; then
@@ -493,10 +508,19 @@ write_result() {
 # elaboration time, not code linked into `tur`: a stdlib-only edit changes
 # neither the binary's mtime nor any fixture file, so without it every stamp
 # stayed valid and the run reported a full green that recompiled nothing
-# (docs/archive/run-sh-stamp-cache-ignores-the-stdlib.md).  What the stamp
-# still does NOT cover: a fixture's `load` of a file outside stdlib/ and
-# outside its own directory, and the C compiler.  TUR_FORCE=1 after changing
-# either.
+# (docs/archive/run-sh-stamp-cache-ignores-the-stdlib.md).
+#
+# The config hash (TUR_CONFIG_HASH, below) is there for the same reason one
+# step further out: two runs can build every fixture DIFFERENTLY from the same
+# sources and the same `tur`.  TUR_PREAMBLE_SPLIT decides whether each program
+# carries the whole runtime preamble or links libturt_preamble.a; CC and
+# TUR_CC_FLAGS pick the compiler and its mode; TUR_REGIONS and friends change
+# codegen.  None of them rebuilds `tur`, so without this an A/B of the two
+# preamble paths ran the second half as pure stamp hits and reported a green
+# it never earned (docs/archive/run-sh-stamp-cache-ignores-the-preamble-split-mode.md).
+# What the stamp still does NOT cover: a fixture's `load` of a file outside
+# stdlib/ and outside its own directory, and a C compiler upgraded in place
+# under the same name AND version string.  TUR_FORCE=1 after changing either.
 # ---------------------------------------------------------------------------
 TUR_FORCE="${TUR_FORCE:-0}"
 TUR_STAMP_CACHE="${TUR_STAMP_CACHE:-tests/.stamp-cache}"
@@ -512,8 +536,18 @@ _tur_hash_file() {
     fi
 }
 
+# GNU first, and only an all-digit answer counts.  This used to try BSD's
+# `stat -f '%m'` first -- but `-f` on GNU stat means "filesystem status": it
+# printed the volume's FREE-BLOCK counts for `tur` (then failed on the file
+# named `%m`), so on Linux every stamp key carried a number that moves with
+# every write to the disk and the cache almost never hit.  Same shape as
+# tests/turi/repl-spice-watch.sh's mtime_of.
 _tur_mtime() {
-    stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"
+    local m
+    m="$(stat -c '%Y' "$1" 2>/dev/null)"
+    case "$m" in ''|*[!0-9]*) m="$(stat -f '%m' "$1" 2>/dev/null)" ;; esac
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    echo "$m"
 }
 
 # Performance optimization: cache the compiler binary modification time once
@@ -534,6 +568,47 @@ _tur_hash_stdin() {
 export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
     while IFS= read -r _f; do printf '%s\n' "$_f"; cat "$_f"; done | _tur_hash_stdin)"
 
+# ...and the build CONFIGURATION, once per run (see the block comment above).
+#
+# The preamble mode is RESOLVED, not read off TUR_PREAMBLE_SPLIT: the split
+# also depends on whether libturt_preamble.a was built, on the platform default,
+# and on -fsanitize in TUR_CC_FLAGS (preamble_split_auto_applies, src/main.c).
+# So ask `tur` -- one probe build, whose link line names -lturt_preamble exactly
+# when the split engaged.  The same probe is how CI's `whole-preamble` job
+# verifies its opt-out.
+TUR_PREAMBLE_MODE=unknown
+_pm_dir="$TUR_TEST_TMPDIR/preamble-probe"
+mkdir -p "$_pm_dir"
+printf '(defn main [] : int 0)\n' > "$_pm_dir/p.tur"
+if _pm_out="$(TUR_SHOW_CC=1 "$TUR" build "$_pm_dir/p.tur" -o "$_pm_dir/p" 2>&1)"; then
+    case "$_pm_out" in
+        *-lturt_preamble*) TUR_PREAMBLE_MODE=split ;;
+        *)                 TUR_PREAMBLE_MODE=whole ;;
+    esac
+fi
+rm -rf "$_pm_dir"
+export TUR_PREAMBLE_MODE
+
+# Every TUR_* variable in the environment is a potential codegen or link knob
+# (TUR_REGIONS, TUR_OPTION_NICHE, TUR_RCGC_FROM_ARCHIVE, TUR_RUNTIME, ...), so
+# hash them ALL rather than a list that goes stale the next time one is added.
+# Excluded: this harness's own bookkeeping and selection variables, which do not
+# change how a fixture is built -- and TUR_TEST_TMPDIR, which is a fresh mktemp
+# every run and would invalidate every stamp.  The C compiler is named by CC and
+# by its version banner (ccache is a launcher, not a compiler, so it is not in
+# the key).  An unrecognised extra variable costs a cold run; a missing one
+# costs a green that never ran, so the list errs on the side of including.
+TUR_CONFIG_HASH="$( {
+    printf 'preamble=%s\n' "$TUR_PREAMBLE_MODE"
+    printf 'cc=%s\n' "${CC:-cc}"
+    "${CC:-cc}" --version 2>/dev/null | head -n 1
+    env | LC_ALL=C sort | grep '^TUR_' | grep -vE \
+        '^TUR_(TEST_[A-Z_]*|FORCE|STAMP_[A-Z_]*|MTIME|STDLIB_HASH|CONFIG_HASH|PREAMBLE_MODE|USE_CCACHE|VERBOSE|SHOW_CC|HOST_WINDOWS|HAS_MUSTTAIL|BIND_LOOPBACK)='
+} | _tur_hash_stdin)"
+export TUR_CONFIG_HASH
+
+echo "run.sh: preamble=$TUR_PREAMBLE_MODE cc=${CC:-cc} config=$TUR_CONFIG_HASH"
+
 stamp_key() {
     local input="$1"
     local dir
@@ -542,7 +617,7 @@ stamp_key() {
     # snapshots invalidates the stamp and forces a fresh codegen check.
     local ec_hash=""
     [ -f "$dir/expected.c" ] && ec_hash="$(_tur_hash_file "$dir/expected.c")"
-    echo "$(_tur_hash_file "$input")-${ec_hash}-${TUR_MTIME}-${TUR_STDLIB_HASH}"
+    echo "$(_tur_hash_file "$input")-${ec_hash}-${TUR_MTIME}-${TUR_STDLIB_HASH}-${TUR_CONFIG_HASH}"
 }
 
 stamp_check() {
@@ -654,6 +729,12 @@ run_happy() {
     # T19: Skip fixtures requiring TSan when TSan is not active.
     if [ -f "$dir/requires.tsan" ] && [ "$TUR_TSAN" != "1" ]; then
         write_result "PASS" "$name" "(tsan-skipped)" ""
+        return
+    fi
+
+    # Full-size stress twin: nightly only (TUR_STRESS=1).
+    if [ -f "$dir/requires.stress" ] && [ "$TUR_STRESS" != "1" ]; then
+        write_result "PASS" "$name" "(stress-skipped)" ""
         return
     fi
 
@@ -1146,10 +1227,10 @@ run_negative_worker() {
 }
 
 export TUR BUILD_CC RESULTS_DIR TUR_EMIT_C_MODE
-export TUR_TEST_FILTER
+export TUR_TEST_FILTER TUR_TEST_EXCLUDE
 export TUR_TEST_SHARD SHARD_INDEX SHARD_TOTAL
 export TUR_FORCE TUR_STAMP_CACHE
-export TUR_TSAN _tur_timeout_bin TUR_MTIME TUR_STDLIB_HASH
+export TUR_TSAN TUR_STRESS _tur_timeout_bin TUR_MTIME TUR_STDLIB_HASH TUR_CONFIG_HASH
 export -f matches_filter matches_shard write_result no_input_fail run_happy run_negative run_happy_worker run_negative_worker
 export -f note_sanitizer
 export -f _tur_hash_file _tur_mtime stamp_key stamp_check stamp_write _run_timed
@@ -1227,8 +1308,12 @@ done
 # first failed `tur build timed out (>10s)` -- a different one whenever adding
 # fixtures reshuffled shard membership (r7rs-keyword-seed on Windows 2/3).
 # Pay it once here, untimed, with the compiler and environment the fixtures
-# build with; the library unit is program-independent, so every r7rs fixture
-# then hits the cache.
+# build with.  Since 2026-10-07 every r7rs fixture that does not import
+# `(scheme eval)` links this one object
+# (docs/reported/r7rs-prelude-library-object-varies-with-the-program.md).  An
+# `eval` program links the sanitized libturi, whose flags are part of the cache
+# key, so the first of those still compiles a second object, inside its own
+# timed build.
 _r7rs_warm=0
 for d in "${HAPPY_DIRS[@]}"; do
     _in="$d/input.tur"
@@ -1239,10 +1324,35 @@ for d in "${HAPPY_DIRS[@]}"; do
     case "$_first" in "#lang r7rs"*) _r7rs_warm=1; break ;; esac
 done
 if [ "$_r7rs_warm" = 1 ]; then
-    printf '#lang r7rs\n(display 1)\n' > "$RESULTS_DIR/r7rs-warm.tur"
+    printf '#lang r7rs\n(import (scheme base) (scheme write))\n(display (map (lambda (x) (+ x 1)) (list 1 2)))\n(newline)\n' \
+        > "$RESULTS_DIR/r7rs-warm.tur"
     CC="$BUILD_CC" "$TUR" build "$RESULTS_DIR/r7rs-warm.tur" \
         -o "$RESULTS_DIR/r7rs-warm.exe" > /dev/null 2>&1 || true
     rm -f "$RESULTS_DIR/r7rs-warm.exe" "$RESULTS_DIR/r7rs-warm.tur"
+fi
+
+# macos-sanitized-libturi-fixture-builds-hit-10s-cap: a program that imports a
+# module autolinking `-lturi` (arc, httpd, reactor, turi/eval, r7rs/eval) links
+# the Debug libturi.a, so the driver compiles it with
+# -fsanitize=address,undefined too.  The FIRST such build of a run pays a cold
+# cost (the 110 MB archive and the sanitizer runtimes into the cache, ~2x a warm
+# build on Linux), and on a loaded macOS runner whichever of these fixtures came
+# first -- arc-basic and arc-weak-upgrade, alphabetically -- timed out at the
+# 10 s build cap.  Pay it once here, untimed, like the r7rs warm-up above, so
+# every one of them builds warm.  Only when the run reaches such a fixture.
+_turi_link_re='\(import (arc|httpd|reactor|turi/eval|r7rs/eval)[ )]|stdlib/(arc|httpd|reactor|turi/eval|r7rs/eval)\.tur|\(scheme eval\)'
+_turi_warm=0
+for d in "${HAPPY_DIRS[@]}"; do
+    if grep -rqE --include='*.tur' "$_turi_link_re" "$d" 2>/dev/null; then
+        _turi_warm=1; break
+    fi
+done
+if [ "$_turi_warm" = 1 ]; then
+    printf '(defmodule turi-warm\n  (import arc :refer [arc-new arc-drop])\n  (defn main [] : int (arc-drop (arc-new 1)) 0))\n' \
+        > "$RESULTS_DIR/turi-warm.tur"
+    CC="$BUILD_CC" "$TUR" build "$RESULTS_DIR/turi-warm.tur" \
+        -o "$RESULTS_DIR/turi-warm.exe" > /dev/null 2>&1 || true
+    rm -f "$RESULTS_DIR/turi-warm.exe" "$RESULTS_DIR/turi-warm.tur"
 fi
 
 HAPPY_XARGS_RC=0

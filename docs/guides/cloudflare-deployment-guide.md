@@ -466,7 +466,7 @@ import "stdlib/str.tur"
 defn greet [name :cstr] :cstr
   str-concat("Hello, " str-concat(name "!"))
 defn tur-handle [method :cstr path :cstr body :cstr] :cstr
-  greet(if(=(cstr-length(body) 0) "world" body))
+  greet(if({cstr-length(body) = 0} "world" body))
 ```
 
 > **`cstr` at the seam, `String` inside.** `tur_handle`'s signature is the

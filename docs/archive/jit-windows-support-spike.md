@@ -334,7 +334,7 @@ Until then `TUR_JIT_GEN=eager` is a working tier on Windows.
 
 ## Resolution 2026-09-05: three defects in MIR's win64 wrapper assembly
 
-Fixed in the fork ([rjungemann/mir#3](https://github.com/rjungemann/mir/pull/3))
+Fixed in the fork ([rjungemann/mir#3](https://github.com/turmeric-lang/mir/pull/3))
 and pinned here. `TUR_JIT_GEN=lazy` -- the **default** tier, which had never
 once worked on Windows -- now runs.
 
@@ -574,7 +574,7 @@ The 61 eager failures decompose almost entirely into classes already tracked:
 ### 1. The lazy-generation fault -- ~~the one blocker that matters~~ RESOLVED
 
 **Fixed 2026-09-05**, see "Resolution" above. Three defects in MIR's win64
-wrapper assembly, all in the fork ([rjungemann/mir#3](https://github.com/rjungemann/mir/pull/3)).
+wrapper assembly, all in the fork ([rjungemann/mir#3](https://github.com/turmeric-lang/mir/pull/3)).
 The default tier went from **0 passed** to **2637 passed, 68 failed** on the
 full corpus, and none of the residue is thunk-related.
 

@@ -1,0 +1,33 @@
+;; cps-evicts-handle-in-operand-positions, fuzz seed 3333 case 121: a `main`
+;; that holds a `handle` was evicted whole ("this effect operation has no
+;; lowering here") because it ALSO called a pure generic whose body applies a
+;; lambda literal on the spot.
+;;
+;; The coloring counted `((fn [] b))` as an unresolved call -- it may reach a
+;; control op -- so the generic was colored; its signature then kept it off
+;; the CPS backend, but `main` still translated the call as cps->cps, with a
+;; join over its fat-closure result that is not slot-representable.  The
+;; applied literal has exactly one callee, its own lifted lambda, so it is an
+;; edge to that lambda's node now: pure here, so the generic stays uncolored.
+;; 7.25 keeps a fraction so a float read as an int would show.
+
+(defeffect Ask [x :cstr] :cstr)
+
+(defn asks [v : cstr] : cstr (perform (Ask v)))
+
+(defn tw [x : bool] : (fn [] bool) (fn [] x))
+
+;; The fuzz case's generic: the applied literal captures a let local.
+(defn via-thunk [A] [x : A] : A
+  (let [a (let [b x] ((fn [] b)))] a))
+
+;; And through the call-head temp the elaborator hoists the literal into.
+(defn via-head [A] [x : A] : A ((fn [] x)))
+
+(defn main [] : int
+  (println (handle (asks "handled") (Ask [x] k) (resume k x)))
+  (println ((via-thunk (tw true))))
+  (println (via-thunk 7.25))
+  (println (via-head "head"))
+  (println ((via-head (tw false))))
+  0)

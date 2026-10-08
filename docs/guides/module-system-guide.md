@@ -181,6 +181,11 @@ defmodule list-utils
 
 - **Same module**: all bindings (public and private) are visible.
 - **Other module, qualified or `:refer`'d**: only exported names are visible.
+- **Top level, outside any `defmodule`**: a module defined in the program is
+  reachable by its qualified names -- `(geom/vec/dot 3 4)` -- with no import,
+  and only its exported names are visible there too. (Before 2026-10-07 a
+  top-level qualified call was unresolved: an error when compiled, and a
+  runtime lookup under the interpreter.)
 - **Stdlib (`tur/...`) bindings**: globally visible -- see Auto-Loaded Stdlib Modules.
 
 ### Macros are exported the same way
@@ -442,6 +447,12 @@ file*, which is always the right place to fix.
 
 Either add `foo` to `mymod`'s `(export ...)` list, or use `mymod/foo`
 inside `mymod` itself (private names can be self-qualified).
+
+### `symbol 'foo' is not exported from module 'mymod'`
+
+A qualified `mymod/foo` -- from another module, or from the top level --
+names a member `mymod` keeps private. Add `foo` to `mymod`'s `(export ...)`
+list, or call it only from inside `mymod`.
 
 ### `exported symbol 'foo' is not defined in this module`
 

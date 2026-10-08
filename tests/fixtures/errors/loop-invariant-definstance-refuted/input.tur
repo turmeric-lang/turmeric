@@ -1,0 +1,19 @@
+;; loop-invariant-silently-unverified-outside-a-defn: now that a `definstance`
+;; method's loop is analysed, a FALSE invariant there is refuted at compile
+;; time, as it would be in a `defn`.  Before, the analysis never ran and this
+;; compiled clean, leaving only the runtime check to catch it.
+(defclass Counted [A]
+  (tally [a : A] : int))
+
+(definstance Counted [int]
+  (tally [a : int] : int
+    (let [^mut acc 0
+          ^mut i   0]
+      (while (< i a) :invariant (>= acc 0)
+        (set! acc (- acc 1))
+        (set! i   (+ i 1)))
+      acc)))
+
+(defn main [] : int
+  (println (tally 3))
+  0)

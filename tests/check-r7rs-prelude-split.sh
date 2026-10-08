@@ -154,6 +154,45 @@ if [ -n "$LIB_A" ] && [ -n "$LIB_B" ] && [ "$LIB_A" != "$LIB_B" ]; then
          "(${LIB_A##*/} vs ${LIB_B##*/}): the cache never hits"
 fi
 
+# r7rs-prelude-library-object-varies-with-the-program: the library unit is the
+# stdlib's alone, so programs that differ only in what THEY define link the
+# same object.  Two that used to fork it: a global named `f` (the CPS coloring
+# resolved stdlib `__cons-fmap`'s callback parameter `f` to it,
+# docs/archive/cps-coloring-resolves-a-parameter-to-a-same-named-global.md),
+# and a module whose C block `#define`s a macro (hoisted into both units).
+d="$TMP/stable"
+mkdir -p "$d"
+cat > "$d/cmod.tur" <<'TUREOF'
+(defmodule cmod
+  (export cmod-n)
+  ```c
+  #define CMOD_N 7
+  ```
+  (defn cmod-n [] : int
+    ```c
+    return CMOD_N;
+    ```))
+TUREOF
+printf '#lang r7rs\n(import (scheme base) (scheme write) (turmeric cmod))\n(display (cmod-n))\n(newline)\n' \
+    > "$d/withc.tur"
+printf '#lang r7rs\n(import (scheme base) (scheme write))\n(define f (lambda (x) (+ x 1)))\n(define (g y) (f y))\n(display (g 1))\n(newline)\n' \
+    > "$d/withf.tur"
+for p in withc:7 withf:2; do
+    name="${p%%:*}"; want="${p##*:}"
+    if ! (cd "$d" && TUR_PRELUDE_SPLIT=1 TUR_SHOW_CC=1 "$TUR" build "$name.tur" -o "$d/$name") \
+            >"$d/$name.log" 2>&1; then
+        fail "stable/$name: build failed"; tail -20 "$d/$name.log" | sed 's/^/    /'; continue
+    fi
+    lib=$(grep '^CC: ' "$d/$name.log" | grep -v ' -c -o ' | tail -1 |
+          grep -o "[^ '\"]*/prelude/[0-9a-f]*\.o" | head -1)
+    if [ -n "$LIB_A" ] && [ "$lib" != "$LIB_A" ]; then
+        fail "stable/$name built its own library unit (${lib##*/} vs ${LIB_A##*/}):" \
+             "something the program defines reached the library unit's text"
+    fi
+    got=$("$d/$name" 2>/dev/null)
+    [ "$got" = "$want" ] || fail "stable/$name printed '$got', not '$want'"
+done
+
 # r7rs-prelude-library-cold-compile: a cold cache compiles the library unit
 # in pieces (emit_split_pieces), one per CPU, and links them into the one
 # object.  Every piece has the unit's declarations and static helpers, so

@@ -72,7 +72,7 @@ locally with its tool present on a Debug/ASan build: both gdb suites pass
 the third is an `errors/` fixture, so the checkout changes nothing there).
 `tur_refine_wasm` could not be run here at first (no `emcc` in the
 container) and failed on its first CI run
-([#846](https://github.com/rjungemann/turmeric/pull/846)): Emscripten prints
+([#846](https://github.com/turmeric-lang/turmeric/pull/846)): Emscripten prints
 a one-time `shared:INFO: (Emscripten: Running sanity checks)` line on a
 fresh install, and the harness treats any compiler output as a failure, so
 the first source compiled "failed" on that line alone while the other nine

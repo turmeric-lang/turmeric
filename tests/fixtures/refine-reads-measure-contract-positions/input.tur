@@ -1,0 +1,50 @@
+;; reads-measure-rejected-in-invariant-and-pre: a `#reads` measure passes the
+;; CT1 purity gate (TUR-E0375) in EVERY contract position, not only in a
+;; parameter refinement.  The measure's body is inline C, so the plain purity
+;; walk calls it impure; `#reads v` is the trusted claim that it only reads
+;; `v`, and a read is not observable however often the check runs.
+;;
+;; Outside a `frozen` region each occurrence is a fresh symbol, so these are
+;; runtime checks (the `:invariant` conjunct over `vlen` is TUR-W0372); all of
+;; them run here and pass.  The negative control -- a raw inline-C accessor
+;; with no `#reads` is still E0375 in all four positions -- is
+;; errors/refine-impure-accessor-contract-positions.
+(defn vlen [^borrow v : (Vec int)] #reads v : int
+  (vec-len v))
+
+;; Parameter refinement: accepted before this fix too.
+(defn at [^borrow v : (Vec int)
+          i : #refine{ x : int | (and (>= x 0) (< x (vlen v))) }] : int
+  (vec-get v i))
+
+;; `:invariant` -- the bounded-index walk loop-invariants-plan motivates.
+(defn sum-all [^borrow v : (Vec int)] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i (vlen v)) :invariant (and (>= i 0) (<= i (vlen v)))
+      (set! acc (+ acc (vec-get v i)))
+      (set! i (+ i 1)))
+    acc))
+
+;; `:pre`
+(defn take-n [^borrow v : (Vec int) n : int] : int
+  :pre (<= n (vlen v))
+  n)
+
+;; `:post`
+(defn last-index [^borrow v : (Vec int)] : int
+  :post (< result (vlen v))
+  (- (vlen v) 1))
+
+;; Return refinement.
+(defn clamp [^borrow v : (Vec int) n : int] : #refine{ r : int | (<= r (vlen v)) }
+  (if (< n (vlen v)) n (vlen v)))
+
+(defn main [] : int
+  (let [v (vec-of 10 20 30)]
+    (println (if (< 1 (vlen v)) (at v 1) -1))
+    (println (sum-all v))
+    (println (take-n v 2))
+    (println (last-index v))
+    (println (clamp v 7)))
+  0)

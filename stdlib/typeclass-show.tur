@@ -282,10 +282,14 @@
 ;; ---------------------------------------------------------------------------
 ;; Convenience wrappers + a compatibility alias.
 ;; ---------------------------------------------------------------------------
+;; show-string-fputs writes to stdout, so it declares #fx{IO}, the same row
+;; as the `println` builtin (effect-row-honesty-plan W4).  It used to say
+;; #fx{FS}, which nothing in scope declared, so it resolved to #fx{} -- the tag
+;; never did anything, and stdout is not FS.
 ;;; show-string-fputs -- internal: write a cstr to stdout with no newline.
 
 (defn show-string-fputs [s : cstr]
-  #fx{FS}
+  #fx{IO}
   : void
   ```c
   fputs((const char *)s, stdout);

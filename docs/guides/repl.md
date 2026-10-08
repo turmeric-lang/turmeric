@@ -71,6 +71,58 @@ To abandon an incomplete expression, enter a blank line.
 
 ---
 
+## Inline-C at the prompt (experimental)
+
+The REPL is the tree-walking interpreter, so it runs an inline-C body only when
+it recognises the shape: a simple `return` of an arithmetic expression, a field
+accessor, a flat constructor. Any other body -- a loop, a branch with two
+returns, a library call -- is `inline-C not supported in interpreter mode`.
+
+On a build with the JIT engine (the default on 64-bit x86-64 and arm64),
+`--enable=repl-jit-inline-c` compiles such a defn instead, the first time it
+is called. Its own source goes through the real compiler and the in-process
+MIR engine, so `#include`s, the C library, and loops all work:
+
+````
+$ tur repl --enable=repl-jit-inline-c
+> (defn count-upper [s : cstr] : int
+    ```c
+    #include <ctype.h>
+    int64_t n = 0;
+    for (const char *p = s; *p; p++) if (isupper((unsigned char)*p)) n++;
+    return n;
+    ```)
+=> #<fn count-upper>
+> (count-upper "Hello Turmeric World")
+=> 3
+````
+
+The first call costs one compile (~135 ms on a Release build); later calls go
+straight to the compiled function, and redefining the defn compiles the new
+body on its next call. `tur --interpret` honours the same flag.
+
+Limits, each reported as an error value:
+
+- Only the defn itself is compiled, so its body cannot call another Turmeric
+  definition.
+- Every parameter and the result must be an `int`-class, `float`, `cstr`,
+  `bool` or `ptr<void>` value; the result may also be unit.
+- Interpreter values stay on the interpreter's side. A `ptr<void>` parameter
+  accepts nil or a handle that an earlier compiled call returned, so a
+  `make-cell` / `cell-get` pair works. An argument that is memory the
+  interpreter allocated (a vec it built, say) is refused, whatever the
+  parameter's type.
+- A `cstr` argument is borrowed: the C body may read it, but must not `free` it
+  or keep it after it returns. An `:int` that smuggles a handle in from
+  somewhere else is not checked; give the handle a real type.
+- The inline-C must be the defn's whole body, and the defn must be written
+  out, not produced by a macro.
+
+The design, and the plan to compile whole turns, are in
+[aot-compiled-repl-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/aot-compiled-repl-plan.md).
+
+---
+
 ## Switching readers with `#lang`
 
 A line beginning with `#lang ` is handled before evaluation and switches the
@@ -259,6 +311,13 @@ reloaded src/utils.tur
 
 If the file cannot be opened or contains an error, a diagnostic is printed and
 the session continues.
+
+`:reload` and `:run` never change the session's own reader. A file written for
+another reader -- a `.tur.sweet` file in a plain Turmeric session, say -- is
+read under its own reader, exactly as `(load "file")` would read it, and the
+prompt keeps reading what you type the way it did before. A file in another
+*language* is declined by name: a `.scm` file needs a Scheme session, which
+`tur repl --lang r7rs` starts.
 
 > **Not to be confused with `(reload)`.**
 > `(reload)` (a Turmeric form, no leading colon) rebuilds the *enclosing

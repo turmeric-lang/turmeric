@@ -104,7 +104,7 @@ template (kept short -- detail belongs in the API docs):
 
 ```turmeric
 :spices {
-  "<name>" {:url    "https://github.com/rjungemann/turmeric-spices"
+  "<name>" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "<name>-v0.1.0"
             :subdir "spices/<name>"}
 }
@@ -128,7 +128,7 @@ import "<name>"
 ## See also
 
 - [API reference](api/)
-- Source: <https://github.com/rjungemann/turmeric-spices/tree/main/spices/<name>>
+- Source: <https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/<name>>
 ```
 
 **Backfill list (~18 spices):** `c-dsl`, `glsl`, `http`, `json`, `math`,

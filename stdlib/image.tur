@@ -316,7 +316,10 @@
       if (!bufs) return 0;
       int64_t total = 8;
       for (int i = 0; i < gn; i++) {
-        bufs[i] = (int64_t *)(intptr_t)TUR_APPLY0(sers[i]);
+        /* `ser` is `(fn [] ptr<void>)`: call slot 0 at that type, not the
+         * int64 one TUR_APPLY0 spells (an indirect call through the wrong
+         * function type; a call_indirect trap on WASM). */
+        bufs[i] = (int64_t *)TUR_APPLY0_T(void *, sers[i]);
         int64_t bl = bufs[i] ? bufs[i][0] : 0;
         total += 8 + (int64_t)strlen(names[i]) + 8 + bl;
       }
@@ -358,7 +361,7 @@
           if (!bb) return restored;
           bb[0] = bl;
           if (bl) memcpy(bb + 1, c, (size_t)bl);
-          (void)TUR_APPLY1(desers[i], (int64_t)(intptr_t)bb);
+          (void)TUR_APPLY1_T(int64_t, int64_t, desers[i], bb);
           free(bb);
           restored++;
           break;

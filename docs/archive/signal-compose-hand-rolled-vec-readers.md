@@ -1,7 +1,7 @@
 # `signal/compose` hand-writes inline-C Vec readers on a stale premise
 
 **Status: RESOLVED 2026-09-16.** Fixed in
-[turmeric-spices#74](https://github.com/rjungemann/turmeric-spices/pull/74).
+[turmeric-spices#74](https://github.com/turmeric-lang/turmeric-spices/pull/74).
 `signal/compose.tur` now has **zero** inline-C blocks: `__vec-get-i` and
 `__vec-len-i` are gone and `__chain-loop` / `effects-chain` call stdlib
 `vec-get` / `vec-len`, confirming the premise -- `vec.tur` is on the shared

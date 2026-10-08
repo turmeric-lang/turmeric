@@ -308,13 +308,22 @@ static bool vc_term_is_ground(const VCTerm *t, uint32_t depth) {
     return true;
 }
 
-static void emit_predicate_note(const RefineObligation *ob, bool closed) {
+/* What the verdict says about the predicate.  Only a REFUTATION is evidence
+ * against the user's code -- a model exists and the predicate fails on it.  An
+ * unknown is the solver declining to decide, so its note must not read as a
+ * claim that the code is wrong (reflect-two-provable-facts-report-as-not-
+ * holding: two provable facts were reported as "does not hold"). */
+typedef enum { PN_UNKNOWN, PN_REFUTED, PN_REFUTED_CLOSED } PredNote;
+
+static void emit_predicate_note(const RefineObligation *ob, PredNote kind) {
     char pred[192];
     render_form(ob->predicate, pred, sizeof(pred));
     if (!pred[0]) return;
     diag_emit(DIAG_NOTE, ob->loc,
-              closed ? "the predicate %s is false for the value given here"
-                     : "the predicate %s does not hold for every input here",
+              kind == PN_REFUTED_CLOSED ? "the predicate %s is false for the value given here"
+            : kind == PN_REFUTED        ? "the predicate %s does not hold for every input here"
+                                        : "the predicate %s could not be proved here, "
+                                          "which is not evidence that it fails",
               pred);
 }
 
@@ -469,10 +478,10 @@ void refine_emit_obligation_notes(const RefineObligation *ob, Arena *a,
                                   bool refuted, bool closed) {
     if (!ob) return;
     if (refuted) {
-        emit_predicate_note(ob, closed);
+        emit_predicate_note(ob, closed ? PN_REFUTED_CLOSED : PN_REFUTED);
         emit_model_note(ob, closed);
     } else {
-        emit_predicate_note(ob, false);
+        emit_predicate_note(ob, PN_UNKNOWN);
     }
     emit_hint(ob, ob->vc, a);
 }
@@ -726,7 +735,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
             }
             diag_emit_with_code(DIAG_ERROR, ob->loc, TUR_E0371_REFINE_NOT_PROVED,
                                 "refinement on %s cannot be proved statically", what);
-            emit_predicate_note(ob, closed);
+            emit_predicate_note(ob, closed ? PN_REFUTED_CLOSED : PN_REFUTED);
             emit_model_note(ob, closed);
             emit_hint(ob, vc, a);
             return false;
@@ -761,7 +770,7 @@ bool refine_discharge_one(RefineObligation *ob, Arena *a) {
                                         "measure -- the crossing must be proven (guard "
                                         "it inside a `frozen` region)"
                                       : "runtime check kept");
-                emit_predicate_note(ob, false);
+                emit_predicate_note(ob, PN_UNKNOWN);
                 emit_hint(ob, vc, a);
             }
             return false;

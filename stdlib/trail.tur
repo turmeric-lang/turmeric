@@ -54,9 +54,9 @@
 ;;; `^capability`, so it is justified by its annotation alone (never TUR-W0031)
 ;;; and propagates from a callee's declared row into the caller's inferred row.
 ;;; It is declared HERE rather than in stdlib/effects.tur because this module
-;;; is autoloaded and effects.tur is not; an effect name that no `defeffect`
-;;; declares resolves to nothing, silently, and that is precisely how the
-;;; annotation was decorative for a month.
+;;; is autoloaded and effects.tur is not.  An effect name that no `defeffect`
+;;; declares used to resolve to nothing, silently -- precisely how the
+;;; annotation was decorative for a month; it is TUR-E0026 now.
 ;;;
 ;;; Returns:
 ;;;   nil (never performed; used only as a #fx{Bt} row annotation)

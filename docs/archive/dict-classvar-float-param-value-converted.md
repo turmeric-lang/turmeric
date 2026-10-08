@@ -10,7 +10,7 @@
 ```
 
 Found 2026-10-01 while sweeping the `-fsanitize=function` traps
-(`docs/reported/emitted-c-indirect-calls-are-not-type-exact.md`): the
+(`docs/archive/emitted-c-indirect-calls-are-not-type-exact.md`): the
 `Show bool` dictionary slot trapped, and the same mechanism with a `double`
 in the slot, which no fixture had, is a wrong answer.
 **RESOLVED 2026-10-01.**

@@ -1,0 +1,20 @@
+#lang r7rs
+;; r7rs-saved-standard-procedure-follows-redefinition: a reference a top-level
+;; form evaluates BEFORE the program redefines a standard name means the
+;; standard procedure; a lambda body (run later) sees the program's own.
+(import (scheme base) (scheme write))
+(define apply-in-underlying-scheme apply)
+(define saved-sq square)
+(write (apply + (list 1 2))) (newline)
+(define (later-sq x) (square x))
+(define (square x) (list 'mine x))
+(define (apply procedure arguments)
+  (if (procedure? procedure)
+      (apply-in-underlying-scheme procedure arguments)
+      'not-a-procedure))
+(write (saved-sq 3)) (newline)
+(write (square 3)) (newline)
+(write (later-sq 3)) (newline)
+(write (apply * (list 2 3 4))) (newline)
+(write (apply 5 '())) (newline)
+(write (eq? apply-in-underlying-scheme apply)) (newline)

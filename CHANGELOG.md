@@ -2,11 +2,606 @@
 
 All notable changes to Turmeric are documented here.
 
-## [Unreleased]
+## [0.63.7] -- 2026-10-08
+
+### Added
+
+- **Freeing procedures for round-tripped continuations.** `serial-resume-owned`
+  resumes a continuation rebuilt by `bytes->serial-cont` and frees its chain in
+  one consuming call; `serial-cont-free` drops one never resumed, and
+  `serial-bytes-free` frees the buffer. The serializable continuations guide
+  gains a "Who frees what" section.
+
+### Changed
+
+- **`TUR_MAIN_STACK_MB` now sizes the main stack on both engines.** A compiled
+  `#lang r7rs` program no longer runs `main` on a fixed 1 GiB stack: the size is
+  read from `TUR_MAIN_STACK_MB` (MiB), with `TUR_JIT_STACK_MB` still honored as
+  an alias, and invalid or unreservable values are reported.
+- **`tur jit` reports stack overflow instead of dying on a signal.** A runaway
+  recursion now prints "stack overflow: recursion too deep" on stderr in every
+  dialect; other faults keep their previous handling.
+- **The r7rs prelude cache prunes least-recently-used objects.** Cached library
+  objects beyond 24 that no build has touched for a day are dropped, and a
+  program's own inline-C no longer gives each fixture its own library object, so
+  split builds share one library object where they can.
+
+### Fixed
+
+- **Persistent `Map`s use far less memory.** Bitmap and collision nodes are no
+  longer allocated at full 32-slot size, cutting peak heap per entry on the
+  reported repro from about 361 B to 66 B.
+- **`turi` uses much less memory in loops.** By-value struct arguments are
+  copied only when their type has a writable field, released frames recycle
+  their tyvar and dict pins, and a one-shot `(resume k v)` clause no longer
+  clones its continuation slice per `perform` (the reported repro peaks at 31
+  MB, down from 556).
+- **Let-bound closures no longer leak in self-tail loops.** A capturing closure
+  returned by a `returns_fresh_closure` call and let-bound in a CPS function is
+  now freed; the reported repro goes from 10,000 lost blocks to a 4 KB peak.
+- **`(Ok nil)` and `(Some nil)` construct.** A nil-typed constructor argument no
+  longer emits invalid C, and a call to a `(Result nil E)` function above its
+  definition no longer fails with `TUR-E0012`.
+- **`Module/member` calls resolve at the top level.** A slash-qualified call
+  outside any `defmodule` no longer falls to runtime dispatch: exported members
+  resolve normally and private ones report "not exported from module".
+- **Nested sum readbacks work in inline C.** `tur_ok_int(tur_some_ptr(s))` for a
+  `(Result (Option cstr) E)` no longer silently misreads the inner box, so both
+  arms of a nested match fire.
+- **Failed contracts name the function and predicate.** A panic now reads like
+  "Precondition failed in safe-div at boom.tur:2: (not= b 0)" for `:pre`,
+  `:post`, return refinements, class result contracts and parameter refinements.
+- **Calls through parameters compile correctly under CPS.** A call through a
+  parameter `f` no longer resolves to a same-named global, and an effectful
+  lambda passed through an unthreaded fn-value parameter no longer aborts with
+  "unhandled effect".
+
+### Docs
+
+- **The r7rs guide documents calling an `any` procedure directly.** `(f x)` on
+  an `any` is a dynamic call in every dialect; wrong arity and non-procedure
+  arguments raise guardable Scheme error objects.
+
+## [0.63.6] -- 2026-10-07
+
+### Fixed
+
+- **Sandboxed handles in `turi` can no longer be forged.** Every place the
+  interpreter re-tags a bare word -- `(:: w cstr)`, by-value struct ascriptions,
+  field reads through bare-int receivers, generator unwraps, STM TVars, and
+  panic payloads -- now checks a handle's provenance, so values outside the
+  sandbox cannot be passed off as sandboxed handles.
+
+## [0.63.5] -- 2026-10-06
+
+### Changed
+
+- **The spices doc site now deploys automatically on every release.** New spice
+  guides and per-spice pages at spices.turmeric-lang.com go live as soon as a
+  release is cut, instead of waiting on a manual deploy.
+
+## [0.63.4] -- 2026-10-06
+
+### Docs
+
+- **New documentation plan for notebooks and examples.** The docs now include a
+  plan covering upcoming notebook documentation and example content.
+
+## [0.63.3] -- 2026-10-06
+
+### Docs
+
+- **The spices site splits Spices and Guides into two tabs.** The Spices tab
+  comes first and is shown by default, and the Guides index now links to the
+  Spices page for spice-specific guides.
+- **The homepage Cask install panel wraps its long `brew tap` line.** The
+  command no longer causes horizontal scrolling in the install step.
+- **Spices plans and reports live in the main Turmeric docs.** Plan and report
+  documents for turmeric-spices moved into `docs/upcoming/spices/`, so plans for
+  both repos are in one place.
+
+## [0.63.2] -- 2026-10-06
+
+### Docs
+
+- **Docs site pages show real dates again.** Every guide and spice page had been
+  dated to the release day, which emptied "Recently Updated" and made "Recently
+  Added" alphabetical; page dates now come from the full history.
+- **A Homebrew Cask install tab.** The `brew` commands for tracking main moved
+  out of the Installer tab into their own step-code block with a copy button.
+
+## [0.63.1] -- 2026-10-06
+
+### Changed
+
+- **The interpreter reclaims call frames and bindings.** `tur --interpret` no
+  longer keeps every frame and binding for the life of the process, so
+  long-running loops (a 1e5-element r7rs loop peaked near 1 GB) now hold steady.
+  Storing a continuation still pins memory.
+- **Faster r7rs garbage collection.** The r7gc mark and sweep phases do far
+  fewer lookups per live word, cutting collection cost in compiled r7rs and
+  Saffron programs.
+- **Faster r7rs compilation.** Two quadratic front-end scans were removed, so
+  large `#lang r7rs` units elaborate and emit C noticeably quicker with
+  byte-identical output.
+
+### Fixed
+
+- **Slash-qualified calls resolve at the top level.** `(Module/member ...)`
+  outside any `defmodule` no longer falls to runtime dispatch with `TUR-W0040`;
+  exported members now resolve correctly.
+
+### Docs
+
+- **A running-tests guide.** `docs/guides/running-tests-guide.md` names every
+  `TUR_*` / `TURI_*` filter variable the harnesses read and the local command
+  for each CI job, and is checked against the harnesses so it stays in sync.
+
+## [0.63.0] -- 2026-10-05
+
+### Added
+
+- **stdlib OS surface, P0 (stdlib-os-surface-plan).** `io/read-line` /
+  `io/read-stdin` (`(Option cstr)`; `None` at end of input), `file-write` /
+  `file-write-str` / `file-seek` / `file-tell` on `FileHandle` with a
+  `SeekFrom` ADT, `fs/append-text`, `time/now-ms` and `time/monotonic-ns`,
+  `process/kill` over a `Signal` ADT plus `process/child-pid`, and the
+  `eprintln` / `eprint` builtins -- `println`'s overload set, on stderr.
+- **stdlib OS surface, P2.** `fs/read-lines`, `file-read-line`, `fs/read-dir`,
+  `fs/path-join`, `fs/walk` / `fs/walk-fn`, and `process/output` (stdout, stderr and an `ExitStatus`,
+  read concurrently; `ProcOpts` sets stdin, cwd and environment).
+- **SRFI 18 threads for `#lang r7rs`, on both back ends.** `(srfi 216)`'s
+  `parallel-execute` / `test-and-set!` now run over real threads, and
+  `(sicp extras)` adds `inc`, `dec`, `identity`, `amb` and `amb-reset!`; SICP
+  4.1 runs as printed.
+- **New guides.** Files and processes, memory usage, debugging (for users) and
+  diagnosing (for contributors), channels/select, borrow checking, regex,
+  structured concurrency, and loop invariants.
+
+### Changed
+
+- **BREAKING -- fs / io / process report failure as `(Result T IoError)`
+  (stdlib-os-surface P1).** `IoError` (new `stdlib/io-error.tur`) carries the
+  errno, with `io-error/message`, `/code`, `/not-found?`, `/exists?`,
+  `/permission?`. Retyped in place, with no deprecation window: `fs/mkdir`,
+  `mkdirp`, `rmdir`, `rm`, `rename`, `copy`, `write-text`, `append-text`
+  (`(Result nil IoError)`); `fs/stat`, `fs/read-text`, `fs/glob` (now a
+  `(Vec cstr)`); `file-open` (`FileHandle` is now a linear opaque), `file-read`,
+  `file-write`, `file-seek`, `file-tell`, `file-close`; `process/spawn`,
+  `process/run` and `process/wait` (an `ExitStatus`: `Exited` / `Signaled`),
+  `process/capture`, `process/cwd`, `process/chdir`, `process/kill`;
+  `env/all` (a `(Vec cstr)`). `process/*` argv is now variadic after the
+  program, which is also argv[0]: `(process/run "/bin/ls" "-l")`.
+  `fs/read-text` reads pipes instead of failing on them, and a missing
+  program is an `Err` from `process/spawn` rather than a child exiting 127.
+- **r7rs has proper tail calls and deep recursion.** Compiled programs tail-call
+  through procedure values and `((lambda ...) args)`, the interpreter does the
+  same, and non-tail recursion runs on a 1 GiB stack (Windows
+  included) -- a million frames deep on Linux -- with a named error when it runs out.
+- **The REPL's JIT fallback for inline-C defns is beta** (`repl-jit-inline-c`):
+  it compiles on a real big stack and closes the value boundary.
+- **`panic` names its own call site** on both back ends.
+- **`get-time-ms` has millisecond resolution.** It was `time(NULL) * 1000`.
+
+### Deprecated
+
+- **Deprecation step of the io.tur cleanup (stdlib-os-surface P1.5).**
+  `read-file`, `write-file` and `file-exists?` (use `fs/read-text`,
+  `fs/write-text`, `fs/exists?`), `file-handle-ok?` (a `FileHandle` is always
+  open now) and `fs/glob-free` (use `fs/paths-free`) warn at every use. The
+  next minor release removes them.
+
+### Fixed
+
+- **Regions no longer grow when rewound in a loop.**
+- **r7rs conformance fixes.** `apply` of a variadic procedure takes a list of
+  any length; top-level redefinition is `set!` and a saved standard procedure
+  keeps R7RS's value; a program's own `eval` beside `(scheme eval)` compiles;
+  internal procedures are `eq?` to themselves; a program file whose name
+  starts with a digit compiles when it imports a library.
+- **Calling an `any` value is a dynamic call in every dialect.**
+
+## [0.62.0] -- 2026-10-03
+
+### Added
+
+- **Loop invariants graduated: `(while c :invariant p ...)` is always on.**
+  The invariant is checked on entry and after every iteration, the checks are
+  elided where the solver proves them, and a proved invariant is a fact after
+  the loop. `--enable=loop-invariants` is now a `TUR-W0063` no-op (eligible to
+  age out at 0.62.0).
+- **Try Turmeric examples for all three languages.** Eleven new Examples-menu
+  entries covering Turmeric, Saffron and R7RS Scheme: pattern matching over a
+  `defdata`, Option/Result, data literals, `syntax-rules` + named let +
+  `call/cc`, `define-record-type` + `guard`, and the sweet readers.
+- **`examples/reflected-measures`** -- a judged-round scoreboard whose API
+  contracts are `^reflect` measures (Int, Bool and Float); every obligation
+  proves under `--strict-refine`.
+
+### Changed
+
+- **`#reads` measures are checked for writes.** A measure written in Turmeric
+  whose body writes a framed parameter -- a store through it, or a call to a
+  callee whose `#writes` frame names it -- draws `TUR-W0383` and backs no
+  proof. The stdlib's Vec mutators (`vec-push!`, `vec-pop!`, `vec-set-o!`,
+  `vec-drop-last-o!`, `vec-free-o`) now declare `#writes [v]`. Inline-C
+  measures remain trusted.
+- **`reflected-measures`'s advisory `expires_at` moves to 0.64.0** -- built and
+  fuzzed, waiting on a consumer.
+- **LSP diagnostics land where you can see them.** An error in a transitively
+  loaded file anchors on the document's own load/import of it (`in
+  deep.tur:1:29 (via mid.tur): ...`); an error raised inside a macro expansion
+  anchors on the outermost call (`(expanding map-get)`); an error inside the
+  stdlib itself marks the first line and says to check the stdlib dir against
+  `tur --version`. `TUR-W0039` is quiet for explicit stdlib loads.
+
+### Fixed
+
+- **A loop invariant over a container could be "proved" through an alias.**
+  Inside a `frozen` region, `(vec-push! (id v) 7)` -- `id` a pure function that
+  returns its argument -- let `(<= (vlen v) 3)` be proved preserved and its
+  check elided while `v` grew. The frozen set is now also checked against the
+  elaborated loop, so the check stays and fires.
+- **Bool `^reflect` measures scale.** The DNF expansion now unit-propagates
+  before splitting, so a four-element ground list no longer overflows
+  `REFINE_MAX_CUBES` and falls to `TUR-W0372`.
+- **`tur run <file>` honours the enclosing manifest's `:experiments`**, as
+  `tur check` already did.
+
+## [0.61.0] -- 2026-10-03
+
+### Added
+
+- **`(srfi 216)` -- SICP Prerequisites for `#lang r7rs`.** `true`, `false`,
+  `nil`, `runtime`, `random` (over SRFI 27), `cons-stream` and the stream
+  primitives, plus a sequential `parallel-execute` / `test-and-set!` until
+  SRFI 18 lands. `(features)` reports `srfi-216`; a clash with SRFI 41's
+  `stream-null?` is a named error.
+- **`httpd-set-bind-addr!` binds a named interface, IPv4 or IPv6.** It takes a
+  numeric address (`"192.168.1.5"`, `"::1"`, `"::"`), wins over
+  `httpd-set-bind-any!`, clears with `""`, and refuses an unparsable address.
+  `httpd-new-pool-with-limit` joins `httpd-new-async-with-limit`.
+
+### Changed
+
+- **`tur emit-c` is ~15x faster on large programs.** Five lookups that were
+  linear in program size are now indexed; the r7rs conformance program went
+  from 130 s to 8.5 s (Debug) with byte-identical output.
+- **Both HTTP servers cap pending connections at 512 by default**, answering
+  503 past the cap instead of growing without limit. `0` still means
+  unlimited when asked for by name. `mw-rate-limit` now keys on the IP itself
+  (8-way set-associative, evicting the stalest window) and never fails open
+  once many distinct IPs have been seen.
+- **Loop invariants prove inside a `frozen` region.** A bounded-index walk
+  over a container discharges both runtime checks there, and a frozen marker
+  no longer declines the loop (`--enable=loop-invariants`).
+- **Editor integration.** LSP diagnostics from a loaded or imported file are
+  anchored on the form that names it, sibling imports and
+  `#use-reader-macros` resolve from the document's own directory, and a
+  headerless `.scm` / `.tur.sweet` is analyzed under its own reader.
+  `tur fmt` / `tur format` keep `turmeric/sweet` and `saffron/sweet` as
+  written and accept `--lang`, and the REPL's `:run` / `:reload` load a
+  file in a different reader without switching the session's.
+
+### Fixed
+
+- **The JIT engine works on linux-aarch64.** Vendored MIR now parses glibc's
+  `<sys/user.h>` with `ucontext_t`'s real layout, so the 0.60.1 `TUR-W0070`
+  fallback on that platform is gone. Separately, a JIT-run program that
+  started threads no longer has its code freed under them when `main`
+  returns.
+- **Try Turmeric loads again.** Pointer-keyed hash mixing used an over-wide
+  shift on wasm32, hanging the worker in `turi_wasm_init`.
+- **Codegen and CPS fixes.** A constrained generic over a pass-by-pointer
+  aggregate compiles; an associated-type projection at a type variable stays
+  unreduced until the call's types are known; a tail-position `let` binding
+  a carrier value (Vec, list, heap ADT) stays on the tail path; several
+  serial-shift / capturing-lambda shapes lower instead of evicting, with two
+  use-after-frees and two chain leaks fixed along the way; a bare extra
+  parameter on a parametric-head Saffron instance is `any`.
+- **The sandboxed interpreter refuses a forged call target**, so an integer
+  ascribed to a function type is no longer re-tagged as a closure.
+
+## [0.60.1] -- 2026-10-03
+
+`v0.60.0` was tagged but never published: on linux-aarch64 the release
+workflow's "run a program through the JIT from the extracted archive" step
+failed, and the release job requires every leg, so `Create Release` was
+skipped and no assets went out. This entry therefore carries everything from
+that tag as well as the fixes since, and the `v0.60.0` tag has been retired.
+
+### Changed
+
+- **The JIT engine is on by default, and MIR is vendored.** `TUR_JIT` defaults
+  ON on 64-bit x86-64 and arm64, with MIR's sources (the three TUs `tur_mir`
+  compiles, 2.7 MB) vendored under `external/mir/` -- no configure step reaches
+  the network. Release archives ship `libtur_mir.a` and run a program through
+  `tur jit` after unpacking, so a host embedding `libturi` has the engine
+  beside it. `tools/update-mir.sh` re-syncs the copy.
+- **A default `tur build` links the prebuilt runtime preamble instead of
+  recompiling it**, on Linux and Windows. `--runtime=auto` swaps the fixed
+  preamble for its decls region and links `libturt_preamble.a` rather than
+  recompiling ~4400 lines in every program: 81-86s -> 73s on a 4-core Linux
+  box over 1/10 of the suite, and 41.1 -> 36.8 min across the Windows CI
+  shards. `auto` quietly keeps the whole preamble when any precondition fails
+  (a sanitizer in `TUR_CC_FLAGS`, `--debug`, wasm, an r7rs prelude split, or
+  either archive missing). `TUR_PREAMBLE_SPLIT=0` opts out; `=1` opts in on
+  macOS, where the split stays opt-in but now links with `-dead_strip`.
+- **A written `: nil` / `: void` makes a defn void.** The body's value used to
+  win, so `(defn noop [x : int] : void (let [_ x] 0))` was emitted as
+  `static int64_t noop(int64_t)`; a body of any other type now runs for effect.
+  Relatedly, a word-result function is refused where a `nil` result is
+  expected -- that mismatch called the function through the wrong C type.
+- **Effect checking reaches code it used to skip.** A `defn` inside a
+  `(defmodule ...)` body, or inside a macro's top-level `(do ...)`, was never
+  resolved or checked, so `#fx{}` on it was a promise nothing read. The
+  `FnDef` index was also a fixed 1024-slot array that silently dropped entries
+  once full, and `#lang r7rs` programs index well past that, so a late
+  callee's inferred effects never reached its callers. An annotation that was
+  silently unchecked may now report a real error.
+- **`stdlib/either.tur` is generic in `(Either L R)`.** `left?`, `right?`,
+  `from-left`, `from-right`, `either`, `either-map` and `either-map-left` take
+  and return `(Either L R)` instead of erasing to `:int`, and
+  `str->int-checked` declares `(Either int int)`. Every caller in the tree
+  passed unchanged, but an `(Either cstr float)` now carries its payloads (the
+  `:int` signatures rejected a float outright), and an int default against an
+  `(Either cstr cstr)` is now `TUR-E0001`.
+- **The repos live in the `turmeric-lang` GitHub org.** Clone URLs, the
+  Homebrew tap and the installer name the new owner. Build provenance is bound
+  to the owner that built the asset, so verification follows a release's
+  vintage: v0.59.0 and earlier need `gh attestation verify <asset> --owner
+  rjungemann`, this release and later `--repo turmeric-lang/turmeric`.
+
+### Fixed
+
+- **The release workflow publishes on linux-aarch64 again.** On glibc aarch64
+  the emitted unit reaches `<ucontext.h>` -> `sys/user.h`, whose
+  `struct user_fpsimd_struct` c2mir cannot parse, so the engine declines every
+  program on that platform until the vendored fork learns `__uint128_t`.
+  Keeping the archive's JIT check strict there published nothing on any
+  platform. The exception is conditional, not an opt-out: on linux-aarch64 a
+  `TUR-W0070` fallback passes only when `libtur_mir.a` is in the extracted
+  archive (asserted first and unconditionally), the program prints the right
+  answer, and the diagnostics name `sys/user.h`. A missing engine, a fallback
+  for any other reason, or the same fallback on any other target still fails.
+- **`Arrow`'s `>>>` / `<<<` are specialized at the call's element types.** The
+  `(->)` instance built its closure once at erased words, calling through
+  `int64_t (*)(void *, int64_t)` while the caller read the result at
+  `(fn [float] float)`. The class now spells its arrows and the instance
+  bodies name the element types; the emitter also binds the instance's element
+  variables per spec inside a `(defn pipe [^Arrow A] ...)` generic, where
+  nothing had bound them and every spec called the erased base. Three further
+  defects behind the same report are fixed: `>>>` returned `ptr<void>`, so the
+  module's own docstring example `((>>> f g) 7.1)` printed
+  `-9223372036854775808`; a direct invoke of any generic's returned closure
+  value-converted a float argument through the generic's carrier; and the
+  type-variable-parameter escape shim boxed an already-fat binding a second
+  time, so `(pipe f g)` for `[^Arrow A]` segfaulted at every element type.
+- **A generator's lifted closure head calls its thunk at the thunk's own
+  return type.** The call site re-derived a pointer result after the head
+  block had already read the recorded `int64_t`, and at `A := bool`/`int8`/
+  `uint8` the slot-0 widen wrapper called the base thunk at the spec-resolved
+  narrow type. Return-type-only and ABI-benign on LP64, so only
+  `-fsanitize=function` saw it.
+- **A dict wrapper spells a pass-by-pointer parameter the way the impl does.**
+  A typeclass method whose result is a by-value ADT forces a per-instance
+  `__dictwrap_*`, whose parameters were spelled by value while the impl and
+  the slot typedef spell `const T *` -- a hard C error at the call and an
+  incompatible-pointer assignment into the slot.
+- **An imported generic now waits for the importer's instances.** A class and
+  a constrained generic over it in one module with the instances in the
+  importer -- the layout a spice takes -- failed `TUR-E0015` "this program
+  declares no 'Box' instance at all" for a program declaring several. Such a
+  defn is parked and retried at the importer's next statement boundary after a
+  new instance registers; whatever is still parked at the end is elaborated
+  for real, so an instance-less program still reports `TUR-E0015`.
+- **`httpd` multipart parsing is strict and NUL-safe.**
+  `httpd-req-multipart-parse` found `boundary=` anywhere in the Content-Type
+  case-sensitively (so a quoted `charset="boundary=YY"` decoyed it and
+  `BOUNDARY=` missed), never checked the media type was multipart, read
+  `name="` out of `filename="`, and matched part headers by prefix. Every
+  search was `strstr`, so a NUL byte in an uploaded file ended the scan and
+  every part was lost. The media type is checked, the boundary bounded at 70
+  per RFC 2046, headers matched by whole field name, and the delimiter line's
+  CRLF required.
+- **A `turi` sandbox cannot forge a continuation handle.** `(resume-cont! 4096
+  0)` and the lowered clone/serialize forms cast a caller integer straight to
+  a `TuriCont *` and walked it as a frame array. A handle has exactly two
+  producers, both of which now register it, and every consumer checks the kind
+  first.
+- **`tur run` no longer hangs on a malformed Justfile shell array.**
+  `parse_shell_array` advanced only by what `parse_value` consumed and never
+  checked it consumed anything, so a `#`, `\n` or `\r` where a value was
+  expected stalled the cursor, appending an empty entry per turn until the
+  allocation reached 2 GB (~268 million turns) -- a denial of service on
+  untrusted Justfile input, found by the `fuzz_justfile` fuzzer.
+- **A class variable mentioned only inside a function-typed parameter counts
+  as reaching a parameter.** `type_mentions_named_tyvar` fell through on
+  `TY_FN`, so a nullary method over such a generic hard-errored.
+- **Refinements and `loop-invariants`:** an early `return` no longer bypasses a
+  return refinement or a `:post` clause, a float field's selector takes its
+  field's sort, `Bool` equality is treated as iff, an unknown note is reported
+  as unknown, and a `#reads` measure passes the CT1 purity gate in every
+  contract position. `loop-invariants` havocs a nested loop's names, prunes an
+  early return's paths, analyses `definstance` methods, and declines
+  top-level lambdas out loud instead of silently.
+- **`with-cancel-guard`** uses the preamble's portable `setjmp`, calls typed
+  closures at their type, and checks nullary results.
+
+### Docs
+
+- **The Homebrew one-liners spell the tap URL out.** `brew` resolves a tap
+  name `user/repo` to `github.com/user/homebrew-repo` with no fallback, and
+  there is no `homebrew-turmeric` repo -- `Formula/turmeric.rb` lives in this
+  one. A bare `brew tap turmeric-lang/turmeric` clones a URL that 404s, so the
+  explicit-URL form is load-bearing and now says so.
+- The guides gained a comparison of Turmeric typeclasses with OCaml's modular
+  implicits, and `genguides` renders fenced code inside blockquotes and list
+  items as code rather than prose.
+
+## [0.59.0] -- 2026-10-02
+
+### Changed
+
+- **`println` declares `#fx{IO}`, so `#fx{}` means "does not even print".**
+  Printing was invisible to the effect system: `println` was a builtin with an
+  empty row. Now a function annotated `#fx{}` that prints is `TUR-E0009`, and
+  an annotated function that prints must name `IO` (which also covers `Write`,
+  `FS`, `Net`, `Proc` and `Rand`, its children). Unannotated code is
+  unaffected. `IO` is a `^capability` -- tracked, never handled -- so for
+  output a handler should be able to intercept, `(perform (Write s))` is still
+  the path; the effects guide now says which to reach for. Under
+  `--strict-effects`, an unannotated function that prints now gets
+  `TUR-W0030`. Saffron's dynamic `println` carries the row too, and hover
+  shows it: `(println : (fn [int] #fx{IO} : nil))`.
+- **`IO`, `FS`, `Net`, `Proc` and `Rand` are compiler-known**, like `Unsafe`:
+  `#fx{IO}` resolves with nothing loaded. `stdlib/effects.tur` keeps its
+  declarations; a `defeffect` of one of these names must match the built-in
+  exactly (`(defeffect FS [] :nil ^extends IO ^capability)`), and anything else
+  is an error.
+- **Compiler attributes moved out of the effect row.** `#fx{...}` now holds
+  effects and row variables only. `(defn ^construct some ...)` replaces
+  `#fx{Construct}`, `(defn ^byval name ...)` replaces `#fx{ByVal}`, and
+  `(match ^non-exhaustive x ...)` replaces `#fx{NonExhaustive}`, which still
+  works with a `TUR-D0004` deprecation warning. An unknown attribute before a
+  defn's name (`(defn ^contruct f ...)`) is an error instead of becoming the
+  function's name.
+- **An undeclared effect name in `#fx{...}` is an error (`TUR-E0026`).** It
+  used to be dropped silently, so `#fx{IO}` in a file that had not loaded
+  `stdlib/effects.tur` checked as `#fx{}`, and a caller's `#fx{}` then passed
+  the `TUR-E0009` check the tag existed to buy. The error names the tag,
+  offers a did-you-mean for a near miss, and says which module to load for
+  the `stdlib/effects.tur` names. It covers every position a row is written:
+  a `defn`, a `fn` literal, a fn-typed parameter, a record field, a class
+  method. The check found four rows in the tree that had never resolved: a
+  stdlib `#fx{FS}` on a stdout writer (now `#fx{IO}` -- stdout is not FS), and
+  three fixtures' undeclared `Write` and `#fx{|e}`.
+- **`--lint-effects` is a deprecated alias for `--strict-effects`
+  (`TUR-W0050`).** It was a byte-identical second copy of the `TUR-W0030`
+  check. `-Werror=strict-effects` is new: it makes the `--strict-effects`
+  warnings errors, and implies the flag.
+- **Effect diagnostics no longer print compiler-made names.** A `fn` literal
+  is *anonymous function in 'dfs-or'* rather than `__fn_38`, an instance
+  method is *method 'eq?' of instance Eq [int]*, and a class default body is
+  *default body of method 'greeting' in class Greet*. A rank-2 wrapper the
+  compiler generates (`__poly_N`) no longer gets its own `TUR-W0030`; the
+  function it wraps already does. `TUR-W0030` spells the row to
+  add (`add #fx{Bt} after its parameter vector`) in the current `#fx{}`
+  syntax rather than the retired `#{}`. `TUR-W0031` is no longer reported on
+  an instance method, whose row is its class method's and cannot be changed
+  from the instance.
+- **A fat closure's slot 0 takes an untyped `ptr<void>` parameter as the
+  word (`int64_t`).**  A function-typed parameter already crossed that way, and
+  a program that erases a closure to `ptr<void>` and calls it back as
+  `(fn [ptr<void>] ...)` needs the two to share one spelling, or the call goes
+  through a function pointer of the wrong type (a WASM `call_indirect` trap).
+  Turmeric code is unaffected; **inline C that calls a closure's slot 0 by
+  hand** must spell such a parameter `int64_t` --
+  `TUR_APPLY1_T(void *, int64_t, f, p)`, not `TUR_APPLY1_T(void *, void *, f,
+  p)`.  The closure's own body still sees a `void *`.  See
+  [docs/guides/value-representations-guide.md](docs/guides/value-representations-guide.md#slot-0s-signature-which-parameters-are-the-word).
+- **Stdlib comparators take a real `(fn [A A] bool)`.** `vec-eq?`,
+  `map-eq-raw?`, `set-eq-cmp?`, `result-eq?`, `pair-eq-carrier?`,
+  `mutmap-eq-storage?` and `map-eq-dynamic` call their comparator's slot 0
+  with each element as a word but declared it an untyped `^fat`, so the
+  comparator was boxed at its own signature: for `(fn [a : float b : float]
+  ...)` the elements went in integer registers and the thunk read xmm
+  registers nobody set. Compiled, `(vec-eq? [7.1] [3.25] cmp)` answered true
+  where `tur --interpret` said false. The Turmeric wrappers `map-eq?`,
+  `map-eq-k?` and `mutmap-eq?` keep an independent type variable, so an
+  erased comparator over a typed map is still accepted.
+
+### Fixed
+
+- **A caller written above a generic callee now sees the callee's real
+  signature.** An arity-only forward declaration produced `TUR-E0709` for a
+  by-value result, "expected int, got float" for a float argument, and a
+  SIGSEGV when a lambda was handed to a later generic higher-order function.
+  Pass 2 now orders a defn after any not-yet-elaborated "lossy" defn it calls
+  (generic, or with a fn-typed parameter), breaking a cycle at its first lossy
+  member. Inside a `defmodule` the same pre-pass had kept every non-scalar
+  declared return -- `(Result Handle cstr)`, `(Option Box)`, a bare `: Box` --
+  as the int-carrier placeholder, which is what broke the `secret`, `valkey`
+  and `tourist-session-valkey` spices. Mutually recursive generics that saw
+  each other's placeholder result are primed before elaboration.
+- **An open argument ahead of the one that fixes a type variable no longer
+  types the result as `int`.** `(get-or (none) 1.5)` against
+  `[o : (Option A) d : A]` printed `1`, and `(err "e")`, `(vec-new)` and
+  `(map-new)` in first position did the same; a `cstr` default printed an
+  address. Such a binding is provisional now and grounded after the loop, so
+  emit monomorphizes it. Also fixed in the same sweep: a catch-all variable
+  arm over `(Option A)` in a generic emitted invalid C at every
+  instantiation, and a `uint8` payload (`(cx nn (:: 200 uint8))`) aborted the
+  compiler.
+- `^fat x : (fn ...)` in a `let` bound to a captureless lambda or a named
+  defn stored a bare code pointer, and the first call took SIGSEGV; bound to a
+  closure-returning call such as `(>>> f g)`, a float call printed garbage.
+- A CPS-emitted tail call into an inline join leaked the fresh sum box it
+  produced itself -- `(ok? (result-map (ok 1) f))` inside a colored function
+  dropped its 16-byte `Ok`.
+- The fixture corpus is clean under clang's `-fsanitize=function`, and a new
+  `fnsan` CI job keeps it that way. A `known.fnsan` marker names a fixture's
+  open report, and such a fixture is run alone and required to still trap, so
+  the list cannot go stale.
+
+### Documentation
+
+- **The security guide is accurate about `#fx{Unsafe}` and proc macros.**
+  `#fx{Unsafe}` is enforced at every call site (only `(unsafe ...)` or an
+  `Unsafe` caller discharges it), and it means "this body does pointer
+  arithmetic", not "this function may corrupt memory on bad input" -- the
+  audit plan's open question 3, answered. `--no-proc-macros` is
+  rust-analyzer's `procMacro.enable` turned off; rust-analyzer ships it on.
+
+## [0.58.0] -- 2026-10-01
 
 ### Security
 
-- **Untrusted-input parsers hardened (security-audit-plan WP4).**
+- **The security audit's remaining work packages landed (WP2, WP5, WP6, WP7).**
+  WP1 and WP3 shipped in the 0.57 line; this release closes the rest of
+  [docs/upcoming/security-audit-plan.md](docs/upcoming/security-audit-plan.md).
+  - **WP2 -- compiler driver and filesystem.** Every command the driver
+    constructs and every path it touches was reviewed against the plan's nine
+    D rows; three of them were wrong as filed and are corrected in the plan's
+    own verification pass. Covered by 27 assertions in ctest
+    `tur_security_driver`.
+  - **WP5 -- runtime memory safety.** Caller-supplied sizes are range-checked
+    before they reach an allocation (M-5, and 26 further sites the sweep
+    found); a wire length is checked against the input before it sizes a
+    `malloc`; two region store-hook gaps are closed and a third class the
+    survey did not have (M-6); format strings are policed under `-Werror`; and
+    the concurrency fixtures run nightly under ThreadSanitizer.
+  - **WP6 -- the web app and the published site.** One Content-Security-Policy
+    (`web/csp.js`) is applied by the dev and preview servers, stamped into the
+    built `_headers`, and set by the worker on its own responses. `escapeHtml`
+    escapes both quote characters, the Try Turmeric console transcript is
+    stored and rehydrated as data rather than HTML, the wasm eval worker has a
+    watchdog and a Stop, and the doc-page generators write their scripts as
+    files instead of inline `<script>` blocks, so every page under
+    `/docs/html/` runs under the policy.
+  - **WP7 -- supply chain.** Release assets carry
+    [build provenance](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations):
+    each one, `sha256sums.txt` included, is signed through Sigstore from the
+    release job's OIDC token, verifiable with
+    `gh attestation verify <asset> --repo rjungemann/turmeric` (C-4). Every
+    GitHub Action is pinned to a SHA, emsdk and pip dependencies are pinned,
+    and each workflow declares its permissions (C-5). Dependabot and CodeQL
+    are on (C-8). `tvm` fails closed when it cannot verify a checksum (C-2),
+    and `/install` bootstraps `tvm` and installs a checksum-verified release
+    rather than building from a moving branch (C-1).
+
+- **A sandboxed interpreter refuses forged handles (S-5, direction 1).**
+  Interpreter handles were bare integers that natives cast back to pointers
+  unchecked, so `(vec-get 4096 0)` inside a sandbox or a `defmacro*` was a wild
+  read and the setters a wild write. A per-restricted-env handle-provenance
+  registry plus a 242-row per-native handle-kind table make the native dispatch
+  reject any handle argument no matching constructor minted, closing the
+  arbitrary read/write, kind confusion and use-after-free while real handles
+  round-trip. A `panic` or native error inside a restricted env now returns
+  `TURI_ERROR` instead of ending the host process. The value-model channel
+  (an erasing ascription, continuation resume) stays open as direction 2.
+
+- **Untrusted-input parsers hardened (WP4).**
   - Serialized continuations are checked inside the runtime on every rebuild
     route: `bytes->serial-cont` returns an `Err`, while `resume-cont!` and
     `image/blob-resume!` panic. A forged buffer could previously hand a
@@ -21,8 +616,10 @@ All notable changes to Turmeric are documented here.
       any `Transfer-Encoding`, before reading a body.
     - It caps bodies at 8 MiB (`httpd-set-max-body!`).
     - It drops response headers that would split the response.
-    - It keeps `mw-static` inside its root, symlinks included.
+    - It keeps `mw-static` inside its root, symlinks included, and sizes its
+      `realpath` buffers without trusting `PATH_MAX`.
     - It fixes a stack overrun in `httpd-set-cookie!`.
+    - Six residual request-path items from WP4's own follow-up report.
   - The reader no longer `free()`s arena memory on `f[x]` in a neoteric or
     sweet-exp file. That was a crash in `tur check` and the language server.
   - `tur run --list` no longer hangs, allocating without bound, on a Justfile
@@ -30,7 +627,16 @@ All notable changes to Turmeric are documented here.
     overflows the stack on deeply nested parentheses: nesting past 256 is a
     parse error.
   - The parsers now run nightly under libFuzzer (`tests/fuzz`,
-    `-DTUR_FUZZ=ON`).
+    `-DTUR_FUZZ=ON`), reporting findings to Sentry.
+
+### Added
+
+- **`tur fetch --frozen`.** The `npm ci` / `cargo --locked` shape: fetch
+  exactly what `tur.lock` pins and fail if anything would move, if a dep is
+  missing from the lock, or if there is no lock at all. `--frozen` and
+  `--update` contradict each other and are refused together. Plain `tur fetch`
+  also **checks out the commit the lock pins** rather than re-resolving the
+  ref it was written from -- a lock that named a branch used to float.
 
 ### Changed
 
@@ -64,6 +670,31 @@ All notable changes to Turmeric are documented here.
 
 ### Fixed
 
+- **P0 representation confusion: the generic-spec matrix is at zero and the
+  emitted-C indirect-call corpus is down from 328 trapping fixtures to 9.**
+  The long-running family where a value crosses between a typed
+  representation and the int64 carrier -- and is read back at the wrong one --
+  is the bulk of this release. Two detectors now police the mechanism rather
+  than the shape: `tests/generic-spec-matrix.py` (ctest
+  `tur_generic_spec_matrix`) walks every PRODUCER x SINK x TYPE cell compiled,
+  interpreted and linted, and its open-cell baseline is now **empty**; and
+  clang's `-fsanitize=function` is armed in all four source fuzzers, where the
+  count of fixtures making an indirect call through a wrongly-typed function
+  pointer fell 328 -> 165 -> 106 -> 66 -> 16 -> 9 across seven sweeps
+  (report-only until it reaches zero; the remaining nine are tracked in
+  [docs/reported/emitted-c-indirect-calls-are-not-type-exact.md](docs/reported/emitted-c-indirect-calls-are-not-type-exact.md)).
+  Several of the crossings were **silently wrong answers**, not just C
+  undefined behavior, whenever the differing type was a `double` or a 16-byte
+  tagged `any`: a dictionary slot converting a class-variable `float`
+  parameter by value, a `tvar` float payload, a rank-2 class method result,
+  a boxed `(Option float32)` read at the wrong offset, and a sub-word payload
+  box. Sixteen reports in this family are archived under `docs/archive/`;
+  the fixes span carrier adapters, fat-box spelling keyed on the callee the
+  call selects, variadic rest shims, runtime callbacks, CPS joins and
+  typed-pointer binders, class-var applied results inside constrained
+  generics, and applied type annotations (which were going unchecked
+  against return, argument and `let` positions).
+
 - **`#lang r7rs`: a re-entrant `call/cc` no longer gives a wrong value when
   the unit also calls `eval`.** Fixed by `7c90e00b8`: the re-entry path's
   thread-local stores were made through a stale address after `setjmp`'s
@@ -71,8 +702,35 @@ All notable changes to Turmeric are documented here.
   read back as a non-number (`error: +: not a number`) or, on another base,
   faulted inside the capture. `(scheme eval)` mattered only because linking
   the embedded interpreter changed where the stale store landed.
-  `tests/fixtures/docs-r7rs-guide-examples` covers it. Report archived at
+  `tests/fixtures/docs-r7rs-guide-examples` covers it. The fix shipped inside
+  0.57.0 undocumented; the note lands here. Report archived at
   [docs/archive/r7rs-reentrant-callcc-wrong-with-eval.md](docs/archive/r7rs-reentrant-callcc-wrong-with-eval.md).
+
+- **Try Turmeric share links encode and decode.** Share has never worked:
+  `pako` was never loaded, so the compressor the encoder called was
+  `undefined`. The codec moved into `web/share-codec.js` with a Playwright
+  spec over a real round trip.
+
+- **Eight more compiler and runtime defects, each with its report archived.**
+  A phantom-parametric `:heap` `let` binding ICEd during representation
+  selection; a transparent `:int` newtype bound in a `let` was freed as a
+  pointer; a refined ADT return type miscompiled; `turi`'s inline-C `bool`
+  return was tagged as an int; `vec-push!` of a by-value struct parameter
+  emitted an unbridged pointer; a Saffron dynamic witness defaulted every
+  function's arity to unary; a `tvar` captured by a closure inside `stm` was
+  reported undeclared; and `musttail` across a by-value aggregate argument
+  dangled on aarch64 (now refused). Closure captures are tracked under every
+  binding form, and `with-handler` over a literal is treated as a `handle`.
+
+- **`Buf` keeps `data[len]` NUL on every append.** `buf_puts` did not, while
+  `main.c` reads the `aux_includes` / `aux_sources` buffers as C strings --
+  a heap overread the fixture suite could not see, because it only compares
+  printed output.
+
+- **The documentation pack.** Deploying a pack built without the spices
+  checkout is refused rather than silently shipping a pack missing every
+  spice page, and a cross-spice README link resolves instead of failing
+  `--strict-links`.
 
 ## [0.57.0] -- 2026-09-30
 

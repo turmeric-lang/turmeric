@@ -1,0 +1,9 @@
+;; fn_type_structurally_compatible returned "compatible" for every NULLARY
+;; function before reaching the result check (a nullary fn has no arg_kinds
+;; array), so a `(fn [] float)` satisfied a `(fn [] int)` parameter and the
+;; callee read the result from the wrong register.
+(defn run-int [^fat body : (fn [] int)] : int (body))
+
+(defn main [] : int
+  (println (run-int (fn [] 7.25)))
+  0)

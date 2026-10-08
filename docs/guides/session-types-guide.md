@@ -8,7 +8,7 @@ description: Model protocols as types, whether the protocol has two participants
 
 > This guide is the user-facing reference for `stdlib/schan.tur` and the
 > broader session-types story; the design record is the archived
-> [`stdlib-session-typed-channels-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/stdlib-session-typed-channels-plan.md).
+> [`stdlib-session-typed-channels-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/stdlib-session-typed-channels-plan.md).
 
 Turmeric supports session types -- a type discipline that statically verifies
 communication protocols between concurrent processes. The feature is enabled
@@ -94,7 +94,7 @@ let [[v b] recv(b)]  ; v = 42, b advances from Recv<int,Close> to Close
 > (`7.25` arrives as `7`); a `cstr` or a delegated endpoint fails to build on
 > macOS; a by-value struct fails to build everywhere. All four type-check, and
 > all four are correct under `tur --interpret`. See
-> [session-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/archive/session-payloads-are-int64-only.md).
+> [session-payloads-are-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/session-payloads-are-int64-only.md).
 
 ### Choice: choose-left, choose-right, offer
 
@@ -272,7 +272,7 @@ every example below uses this pair.
 > with a future for its result. The one shape that still hangs is an `async`
 > body that makes BOTH endpoints and waits on itself; the compiler warns at
 > that site with `TUR-W0043`. See
-> [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
+> [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 ## Multi-Party Session Types (SS5-SS8)
 
@@ -632,7 +632,7 @@ Runnable examples: `tests/fixtures/schan-roundtrip` (single round trip),
 `tests/fixtures/schan-worker-pool` (a request/response served by worker threads
 reading from the wrapped channel), and `tests/fixtures/errors/schan-skip-step`
 (the phantom-mismatch failure). The wrapper sits on top of the low-level
-[`tur/chan`](https://github.com/rjungemann/turmeric/blob/main/stdlib/chan.tur) channels, which keep their untyped surface
+[`tur/chan`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/chan.tur) channels, which keep their untyped surface
 for callers that do not want the protocol discipline.
 
 > **`schan-recv` used to take a cell.** Until 2026-08-20 it returned only the

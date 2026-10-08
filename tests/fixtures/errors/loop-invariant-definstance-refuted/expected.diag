@@ -1,0 +1,2 @@
+TUR-E0371
+the body of the while loop in 'tally' does not preserve its invariant

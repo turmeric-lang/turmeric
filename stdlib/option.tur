@@ -30,7 +30,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn some [A] [x : A] #fx{Construct} : (Option A) (Some x))
+(defn ^construct some [A] [x : A] : (Option A) (Some x))
 ;;; none -- return the none Option[A].
 ;;;
 ;;; Returns:
@@ -43,7 +43,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn none [A] #fx{Construct} : (Option A) (None))
+(defn ^construct none [A] : (Option A) (None))
 ;;; some? -- check whether an Option[A] contains a value.
 ;;;
 ;;; Parameters:

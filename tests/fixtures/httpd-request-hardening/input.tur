@@ -99,6 +99,102 @@
   return h && h->value ? (int64_t)strlen(h->value) : -1;
   ```)
 
+;; WP4's residual items (docs/archive/httpd-residual-request-hardening.md):
+;; the request line and keep-alive decision, printed by length so a 1 KiB path
+;; does not land in expected.stdout.
+(defn parse2 [label : cstr req : cstr] : void
+  ```c
+  HttpdConn *c = (HttpdConn *)calloc(1, sizeof(HttpdConn));
+  size_t n = strlen(req);
+  char *buf = (char *)malloc(n + 1);
+  memcpy(buf, req, n + 1);
+  int64_t clen = -1;
+  int64_t r = httpd_hyparse_hyhead((void *)c, (void *)buf, (int64_t)n, (void *)&clen);
+  if (r < 0) printf("%s: refused %lld\n", label, (long long)-r);
+  else printf("%s: method=%zu path=%zu version=%s keep-alive=%d\n", label,
+              strlen(c->method), strlen(c->path), c->version, c->client_keep_alive);
+  httpd_hyconn_hyrelease((void *)c);
+  free(buf);
+  free(c);
+  ```)
+
+;; A request whose method (kind 0), path (1) or version (2) is n bytes.
+(defn long-req [kind : int n : int] : cstr
+  ```c
+  char *f = (char *)malloc((size_t)n + 1);
+  memset(f, kind == 1 ? 'a' : 'A', (size_t)n);
+  if (kind == 1) f[0] = '/';
+  f[n] = '\0';
+  char *r = (char *)malloc((size_t)n + 64);
+  if (kind == 0) sprintf(r, "%s /x HTTP/1.1\r\n\r\n", f);
+  else if (kind == 1) sprintf(r, "GET %s HTTP/1.1\r\n\r\n", f);
+  else sprintf(r, "GET /x %s\r\n\r\n", f);
+  free(f);
+  return r;
+  ```)
+
+;; mw-log's line for a request with control bytes in its method and path.
+(defn log-line [method : cstr path : cstr] : void
+  ```c
+  HttpdConn *c = (HttpdConn *)calloc(1, sizeof(HttpdConn));
+  snprintf(c->method, sizeof c->method, "%s", method);
+  snprintf(c->path, sizeof c->path, "%s", path);
+  httpd_hymw_hylog_hyemit((void *)c, 5);
+  free(c);
+  ```)
+
+;; WP4 residual item 10: the multipart parser, driven with a body and a
+;; Content-Type of our choosing.  Every '@' in `body` becomes a NUL byte, so a
+;; binary part can be written as a literal.  Prints each part's name, filename
+;; and byte length, or that no part was found.
+(defn mp [label : cstr ctype : cstr body : cstr] : void
+  ```c
+  typedef struct __HttpdPart {
+      char *name; char *filename; char *content_type;
+      char *data; int data_len;
+      struct __HttpdPart *next;
+  } HttpdPart;
+  HttpdConn *c = (HttpdConn *)calloc(1, sizeof(HttpdConn));
+  char head[512];
+  int hn = snprintf(head, sizeof head,
+                    "POST /u HTTP/1.1\r\nContent-Type: %s\r\n\r\n", ctype);
+  int64_t clen = -1;
+  if (httpd_hyparse_hyhead((void *)c, (void *)head, (int64_t)hn, (void *)&clen) < 0) {
+      printf("%s: head refused\n", label);
+      free(c);
+      return;
+  }
+  size_t bl = strlen(body);
+  c->body = (char *)malloc(bl + 1);
+  for (size_t i = 0; i <= bl; i++) c->body[i] = body[i] == '@' ? '\0' : body[i];
+  c->body_len = (int)bl;
+  if (!httpd_hyreq_hymultipart_hyparse((void *)c)) printf("%s: no parts\n", label);
+  for (HttpdPart *pp = (HttpdPart *)c->req_multipart_parts; pp; pp = pp->next)
+      printf("%s: name=%s filename=%s len=%d\n", label,
+             pp->name ? pp->name : "-", pp->filename ? pp->filename : "-",
+             pp->data_len);
+  httpd_hyconn_hyrelease((void *)c);
+  free(c);
+  ```)
+
+;; mw-rate-limit's table, driven without a socket: limit 1 per 60 s, so a
+;; second request from an IP inside its window is refused.
+(defn print-rl [label : cstr r : int] : void
+  ```c printf("%s: %s\n", label, r > 0 ? "429" : "ok"); ```)
+
+(defn rl [label : cstr st : int ip : cstr] : void
+  (print-rl label (httpd-mw-ratelimit-check st ip)))
+
+;; One request each from n distinct IPs.
+(defn rl-flood [st : int n : int] : void
+  ```c
+  char ip[32];
+  for (int64_t i = 0; i < n; i++) {
+      snprintf(ip, sizeof ip, "10.9.%d.%d", (int)(i / 256), (int)(i % 256));
+      (void)httpd_hymw_hyratelimit_hycheck(st, ip);
+  }
+  ```)
+
 (defn main [] : int
   (do
     (parse "get"            "GET /a?b=1 HTTP/1.1\r\nHost: x\r\n\r\n")
@@ -137,6 +233,36 @@
         (serve root "/../secret.txt")
         (serve root "/a\\..\\ok.txt")
         (serve root "/.well-known/none")))
+    ;; WP4 residual: an oversized request-line field is refused, not served
+    ;; with the field left empty.
+    (let [r (long-req 0 14)] (do (parse2 "method 14" r) (free-cstr r)))
+    (let [r (long-req 0 15)] (do (parse2 "method 15" r) (free-cstr r)))
+    (let [r (long-req 1 1022)] (do (parse2 "path 1022" r) (free-cstr r)))
+    (let [r (long-req 1 1023)] (do (parse2 "path 1023" r) (free-cstr r)))
+    (let [r (long-req 2 15)] (do (parse2 "version 15" r) (free-cstr r)))
+    ;; Connection is a token list, matched whole.
+    (parse2 "conn closed"     "GET / HTTP/1.1\r\nConnection: closed\r\n\r\n")
+    (parse2 "conn close"      "GET / HTTP/1.1\r\nConnection: close\r\n\r\n")
+    (parse2 "conn list close" "GET / HTTP/1.1\r\nConnection: Upgrade, close\r\n\r\n")
+    (parse2 "1.0 keep-alive"  "GET / HTTP/1.0\r\nConnection: keep-alive, Upgrade\r\n\r\n")
+    (parse2 "1.0 keep-alives" "GET / HTTP/1.0\r\nConnection: keep-alives\r\n\r\n")
+    ;; mw-log escapes the client's control bytes.
+    (log-line "GE\tT" "/a\r\nGET /forged 200")
+    ;; multipart: the media type must be multipart, `boundary` is a parameter
+    ;; matched by name, `name` is never read out of `filename`, and a NUL in
+    ;; an uploaded file does not end the scan.
+    (mp "mp basic"      "multipart/form-data; boundary=XB"
+        "--XB\r\nContent-Disposition: form-data; name=\"t\"\r\n\r\nhi\r\n--XB--\r\n")
+    (mp "mp not multi"  "text/plain; boundary=XB"
+        "--XB\r\nContent-Disposition: form-data; name=\"t\"\r\n\r\nhi\r\n--XB--\r\n")
+    (mp "mp case"       "Multipart/Form-Data; BOUNDARY=\"XB\""
+        "--XB\r\nContent-Disposition: form-data; name=\"t\"\r\n\r\nhi\r\n--XB--\r\n")
+    (mp "mp decoy"      "multipart/form-data; charset=\"boundary=YY\"; boundary=XB"
+        "--XB\r\nContent-Disposition: form-data; name=\"t\"\r\n\r\nhi\r\n--XB--\r\n")
+    (mp "mp filename"   "multipart/form-data; boundary=XB"
+        "--XB\r\nContent-Disposition: form-data; filename=\"a.bin\"; name=\"up\"\r\n\r\nxyz\r\n--XB--\r\n")
+    (mp "mp nul"        "multipart/form-data; boundary=XB"
+        "--XB\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nab@cd\r\n--XB\r\nContent-Disposition: form-data; name=\"g\"\r\n\r\nzz\r\n--XB--\r\n")
     ;; a cookie far longer than the old 2 KiB stack buffer
     (let [c (new-conn)
           v (long-value 5000)]
@@ -145,4 +271,16 @@
         (println (set-cookie-len c))
         (free-cstr v)
         (free-conn c)))
+    ;; mw-rate-limit: the IP is the key -- 10.0.107.237 and 10.2.219.40 share
+    ;; an FNV-1a hash and used to share a counter -- and a full table evicts
+    ;; rather than failing open (4096 distinct IPs used to leave every later
+    ;; IP unlimited).
+    (let [st (httpd-mw-ratelimit-new 1 60)]
+      (do
+        (rl "rl first"             st "10.0.107.237")
+        (rl "rl again"             st "10.0.107.237")
+        (rl "rl colliding ip"      st "10.2.219.40")
+        (rl-flood st 4096)
+        (rl "rl after flood"       st "192.0.2.7")
+        (rl "rl after flood again" st "192.0.2.7")))
     0))

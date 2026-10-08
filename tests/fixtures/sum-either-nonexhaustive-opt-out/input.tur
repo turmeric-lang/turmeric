@@ -1,12 +1,14 @@
 ; Sum-types plan T8.5: a deliberately non-exhaustive match silenced with the
-; #{NonExhaustive} opt-out marker.  Without the marker this is a hard error
+; ^non-exhaustive opt-out marker.  Without the marker this is a hard error
 ; (see errors/sum-either-nonexhaustive); with it the program compiles and runs.
+; The deprecated #fx{NonExhaustive} spelling is pinned by
+; sum-either-nonexhaustive-legacy-marker.
 (defdata Either :copy [L R]
   (Left L)
   (Right R))
 
 (defn only-right [e : int] : int
-  (match #fx{NonExhaustive} e
+  (match ^non-exhaustive e
     (Right r) r))
 
 (defn main [] : int

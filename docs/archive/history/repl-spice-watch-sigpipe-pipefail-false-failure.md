@@ -22,7 +22,7 @@ repl-spice-watch: 4 passed, 1 failed
 ```
 
 Observed on
-[run 30715409287](https://github.com/rjungemann/turmeric/actions/runs/30715409287/job/91410036267)
+[run 30715409287](https://github.com/turmeric-lang/turmeric/actions/runs/30715409287/job/91410036267)
 (main @ `30ca0f89`, ubuntu-latest, Debug + ASAN). The message is false: the
 help output does mention `tur repl`, every time.
 

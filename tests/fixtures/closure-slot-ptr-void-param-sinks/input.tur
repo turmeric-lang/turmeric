@@ -1,0 +1,60 @@
+;; closure-slot-ptr-void-param-sinks: a function whose parameter is an
+;; untyped ptr<void> reaches slot 0 of a fat box at the WORD spelling
+;; (fnsan-ptr-void-fn-slot-word), whatever produced it -- a capturing closure
+;; built in a top-level `def`, a named defn boxed for a ^fat sink, a local
+;; capturing closure -- and whatever reads it: a ^fat parameter, a generic
+;; HOF at A := ptr<void>, a Vec element, a struct fn field.  The capturing
+;; thunk keeps `void *` in its definition and slot 0 holds a converting
+;; `__tur_slot0_` entry; the defn's typed fatshim converts the word back.
+(defn make-cell [v : int] : ptr<void>
+  ```c
+  int64_t *c = (int64_t *)malloc(sizeof(int64_t));
+  *c = v;
+  return (void *)c;
+  ```)
+(defn read-cell [p : ptr<void>] : int
+  ```c
+  return *(int64_t *)(intptr_t)p;
+  ```)
+
+;; a capturing closure with a ptr<void> param at a top-level def
+(def adder (let [z 100] (fn [p : ptr<void>] : int (+ z (read-cell p)))))
+
+;; a named defn with a ptr<void> param boxed for a ^fat sink
+(defn plus1 [p : ptr<void>] : int (+ 1 (read-cell p)))
+(defn call-fat [^fat h : (fn [ptr<void>] int) p : ptr<void>] : int (h p))
+
+;; a generic HOF at A := ptr<void>
+(defn app [A B] [f : (fn [A] B) x : A] : B (f x))
+
+;; a struct fn field
+(defstruct Holder [run : (fn [ptr<void>] int)])
+
+;; a by-value struct RESULT: the slot-0 entry converts the word parameter
+;; and returns the aggregate as it is (C has no cast to a struct type)
+(defstruct Pt [x : int y : int])
+(defn pt-y [^fat f : (fn [ptr<void>] Pt) p : ptr<void>] : int (.y (f p)))
+
+(defn main [] : int
+  (let [c (make-cell 41)
+        k 3
+        cap (fn [p : ptr<void>] : int (+ k (read-cell p)))]
+    (println (adder c))                        ;; 141
+    (println (call-fat plus1 c))               ;; 42
+    (println (call-fat cap c))                 ;; 44
+    (println (call-fat adder c))               ;; 141
+    (println (app plus1 c))                    ;; 42
+    (println (app cap c))                      ;; 44
+    (let [v (vec-new)]
+      (vec-push! v cap)
+      (vec-push! v plus1)
+      (println ((vec-get v 0) c))              ;; 44
+      (println ((vec-get v 1) c)))             ;; 42
+    (let [h (Holder cap)
+          h2 (Holder plus1)]
+      (println ((.run h) c))                   ;; 44
+      (println ((.run h2) c)))                 ;; 42
+    (let [mkpt (fn [p : ptr<void>] : Pt (Pt k (* k (read-cell p))))]
+      (println (pt-y mkpt c))                  ;; 123
+      (println (.x (mkpt c))))                 ;; 3
+    0))

@@ -18,19 +18,22 @@ permanent constraints, and the harness rules. For how fast it is and when to
 prefer it, see the execution-engine triangle in
 [performance-guide.md](performance-guide.md).
 
-One gate, off by default:
+One gate, at build time, and ON by default on 64-bit x86-64 and arm64:
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON   # build time (fetches MIR)
-tur jit hello.tur                                           # no run-time flag
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug   # TUR_JIT defaults ON here
+tur jit hello.tur                              # no run-time flag
 ```
 
 There is no run-time gate. The `jit` experiment graduated in 0.34.0 and its
 compatibility shim was retired in 0.38.0, so a command line or `build.tur` that
-still says `--enable=jit` is now a hard `TUR-E0310` -- drop the flag. The build-time gate exists because the engine
-vendors MIR at configure time and a default build carries neither the fetch
-nor the dependency. On a binary built without it, `tur jit` says so and
-exits 2.
+still says `--enable=jit` is now a hard `TUR-E0310` -- drop the flag. The build-time gate, `TUR_JIT`, compiles the
+MIR sources vendored under `external/mir/` into `tur`; no configure reaches the
+network. It defaulted OFF until 2026-10-02, when it still cloned MIR at
+configure time. `-DTUR_JIT=OFF` leaves the engine out, and other hosts MIR
+supports (ppc64, s390x, riscv64) opt in with `-DTUR_JIT=ON`. A build directory
+configured before the default changed keeps its cached OFF until reconfigured.
+On a binary built without the engine, `tur jit` says so and exits 2.
 
 `cc` is the default engine; the JIT runs when you invoke `tur jit` directly,
 or when engine selection asks for it (`--engine jit`, `TUR_ENGINE=jit`, or
@@ -114,8 +117,9 @@ The write-up is `docs/archive/mir-interp-tier-plan.md`.
 
 ### MIR is a pinned fork, not upstream
 
-`cmake/mir.cmake` pins `rjungemann/mir`, not `vnmakarov/mir`: upstream master
-plus six fixes that have not landed upstream.
+`external/mir/` is a copy of `turmeric-lang/mir` (formerly `rjungemann/mir`),
+not `vnmakarov/mir`, at the commit `external/mir/UPSTREAM` records: upstream
+master plus fixes that have not landed upstream. `external/mir/VENDORED.md` logs every one; the main ones:
 
 Two are **MIR back-end** bugs -- wrong code or memory corruption:
 
@@ -127,11 +131,16 @@ Two are **MIR back-end** bugs -- wrong code or memory corruption:
   same spilled register in three positions, and the third write smashed the
   caller's frame.
 
-Four are **c2mir front-end** gaps, and three of those are *silent* -- c2mir
+Five are **c2mir front-end** gaps, and three of those are *silent* -- c2mir
 compiles the input and gets the answer wrong:
 
 - aarch64 `__uint128_t` modeled with alignment 8 where AAPCS64 requires 16,
   skewing `ucontext_t` (and with it `FiberBlock`).
+- On Linux aarch64, `__uint128_t` not declared at all, so `<ucontext.h>` --
+  every emitted unit -- failed to parse and `tur jit` always fell back to cc;
+  and GCC `aligned` attributes dropped (glibc's `<sys/cdefs.h>` erases
+  `__attribute__` for a non-GNU compiler), which made glibc's `ucontext_t` 16
+  bytes too small once it did parse.
 - `#pragma pack` accepted and ignored, laying structs out at natural alignment
   -- which the Apple and Windows SDKs rely on heavily.
 - C23 `enum [tag] : type` unparseable, so anything reaching
@@ -140,12 +149,16 @@ compiles the input and gets the answer wrong:
   `<dirent.h>`) unparseable, which surfaced far away as "undeclared identifier"
   at every later `DIR *`.
 
-Repoint with `-DTUR_MIR_GIT_REPOSITORY=... -DTUR_MIR_GIT_TAG=...` when
-equivalents land upstream.
+**Never edit the copy.** Fix MIR in the fork, merge it there, then re-sync with
+`bash tools/update-mir.sh <commit>`, which copies the file list, rewrites
+`UPSTREAM`, and checks the three translation units still compile. To try a MIR
+change first, point a build at a local checkout with
+`-DTUR_MIR_SOURCE_DIR=<dir>`. Point the script back at `vnmakarov/mir` when
+upstream has equivalents of every fix.
 
-**Repinning requires a fresh build directory.** The pin lives in a CMake cache
-variable; an existing build dir silently keeps fetching the old one, even after
-`rm -rf _deps`. This has nearly shipped a binary built from unpatched upstream.
+(The pin used to be a CMake cache variable that an existing build directory
+kept silently, even after `rm -rf _deps`, and that nearly shipped a binary
+built from unpatched upstream. A file in the tree has no such cache.)
 
 ---
 
@@ -158,7 +171,8 @@ variable; an existing build dir silently keeps fetching the old one, even after
 | `src/jit_engine.c` (~700 lines) | **the engine** -- c2mir compile, MIR link, MIR gen, run `main` on a sized-stack thread; also the persistent-image API |
 | `src/jit_engine.h` | public API and embedding contract (`tur_jit_execute`, `TurJitImage`, `TUR_JIT_ERR_*`). Included **unconditionally**; capability is probed with `#ifdef TUR_HAVE_JIT` |
 | `src/main.c` | the driver: `cmd_jit`, `jit_try_split_preamble`, `jit_sdk_include_dirs`, `cmd_emit_rt_split`, and the REPL's `repl_jit_build` hook |
-| `cmake/mir.cmake` | FetchContent of the MIR fork; defines the `tur_mir` static library |
+| `external/mir/`, `tools/update-mir.sh` | the vendored MIR sources (`UPSTREAM` records the fork commit, `VENDORED.md` the fixes) and the script that re-syncs them |
+| `cmake/mir.cmake` | defines the `tur_mir` static library from `external/mir/` (or `TUR_MIR_SOURCE_DIR`) |
 | `src/CMakeLists.txt` | the `tur_jit_obj` object library and how it is wired onto `tur` and `libturi` |
 | `src/runtime/generated/tur_rt_split*.{c,h}`, `src/runtime/rt_split_embed.h` | the S2 split runtime (see below) |
 | `src/runtime/tur_atomics.c`, `src/runtime/tur_tls.c` | host-resident atomics and TLS, because c2mir has neither |
@@ -230,8 +244,12 @@ requirements, so it must be set on the consumer too) and **PUBLIC** on
    rather than calling `dlsym` -- which is what lets it see **static**
    functions, and is why single-TU spice emission keeps its `static` linkage
    unchanged. The function pointer is then called on a fresh pthread with a
-   `TUR_JIT_STACK_MB` stack (default 64 MB), followed by `jit_atexit_drain`
-   and `fflush(stdout)` **on that same thread**.
+   `TUR_MAIN_STACK_MB` stack (default 1024 MB on 64-bit, 64 MB on 32-bit; `TUR_JIT_STACK_MB` still works and wins), followed by `jit_atexit_drain`
+   and `fflush(stdout)` **on that same thread**. On Linux and macOS the
+   thread has an alternate signal stack and a SIGSEGV/SIGBUS handler: a fault
+   at the stack's low end prints `stack overflow: recursion too deep` (the
+   line a compiled r7rs program prints) before the signal ends `tur`; any
+   other fault goes to whatever handled the signal before.
 8. **Teardown**, strictly in this order: `MIR_gen_finish`, `c2mir_finish`,
    `MIR_finish`.
 
@@ -425,7 +443,7 @@ fall back are listed by name in `tests/jit-fallback-baseline.txt` -- a new
 fallback fails the run, a reclaimed one is reported so its line can be
 removed, and `TUR_JIT_FALLBACK_UPDATE=1 bash tests/run-jit.sh` regenerates
 the file. See
-[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md)
+[jit-suite-reports-pass-when-the-engine-is-disabled](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md)
 (a blob URL rather than a relative one because `docs/reported/` is not
 rendered into the pack -- the Justfile's `docs` recipe spells out why).
 
@@ -464,7 +482,7 @@ producing the shape (it builds every such value with statements in the body),
 so today only user inline C could reach it, and
 `tests/fixtures/jit-inline-c-struct-stmtexpr-slot` fails if the MIR pin ever
 drops below the fix. See
-[jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
+[jit-x86-64-struct-valued-statement-expression-miscompiles](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-x86-64-struct-valued-statement-expression-miscompiles.md)
 for the shapes and the sites. On an older pin, a Linux-only `stdout mismatch`
 in the JIT suite on a program that passes under cc is the signature.
 
@@ -602,10 +620,12 @@ they are diagnostics rather than semantics.
 | variable | default | effect |
 |---|---|---|
 | `TUR_JIT_GEN` | lazy | `eager` restores whole-program generation (slower start, but generation failures surface while the fallback is still reachable); `interp` is spike instrumentation only |
-| `TUR_JIT_STACK_MB` | 64 | entry stack size; MIR does not do gcc's sibling-call optimization, so a deep recursion the `cc` path survives can overflow here |
+| `TUR_MAIN_STACK_MB` | 1024 (64 on 32-bit) | entry stack size in MiB, the same variable that sizes a compiled `#lang r7rs` program's `main` stack; MIR does not do gcc's sibling-call optimization, so a deep recursion the `cc` path survives can overflow here. A value that is not a positive number is reported and ignored |
+| `TUR_JIT_STACK_MB` | unset | the older, JIT-only name for `TUR_MAIN_STACK_MB`; wins when both are set |
 | `TUR_JIT_NO_SPLIT` | unset | skip the S2 preamble splice and compile the full runtime preamble |
 | `TUR_JIT_NO_PRUNE` | unset | hand c2mir every definition the emitter wrote, including the prelude the program never reaches |
 | `TUR_JIT_TIMING` | unset | `1` prints per-phase timings and RSS to **stderr**, so fixture stdout stays byte-comparable |
+| `TUR_JIT_KEEP_C2MIR` | unset | `1` keeps a persistent image's C front-end state until the image is freed, instead of releasing it once the image is initialized (bisection only; it costs ~25 MB per resident image) |
 | `TUR_SDK_ROOT` | discovered | root for the runtime headers c2mir needs |
 
 Full corpus results are identical between lazy and eager; lazy saves 23-36% of

@@ -10,7 +10,7 @@
 alongside this report). With that fixed, most of both servers works. What
 remains is recorded here.
 
-Found 2026-09-06 while bringing [Trowel](https://github.com/rjungemann/trowel)
+Found 2026-09-06 while bringing [Trowel](https://github.com/turmeric-lang/trowel)
 up on Windows. Trowel drives `tur lsp`, `tur dap`, `tur format` and `tur repl`,
 which makes it a good exercise of these surfaces -- none of which the Windows CI
 job touches.

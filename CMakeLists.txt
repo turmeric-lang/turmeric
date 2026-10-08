@@ -128,33 +128,57 @@ endif()
 # guards the ordering.
 enable_testing()
 
+# J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`, the
+# `jit` engine of `tur run`/`tur repl`, and the c2mir-backed dynamic FFI the
+# interpreter uses for extern-c).  Since the `jit` experiment graduated
+# (2026-08-17) this is the ONLY gate on `tur jit`: a binary built with it runs
+# `tur jit` unprompted, and one built without it says so.  It does not change
+# the default ENGINE -- `tur run` still resolves to "cc" unless asked.
+#
+# ON by default since 2026-10-02, on the hosts CI exercises the engine on:
+# 64-bit x86-64 and arm64 (Linux, macOS, MinGW).  It used to be OFF because it
+# cloned MIR over the network at configure time; MIR is vendored under
+# external/mir/ now (cmake/mir.cmake), so a default configure still never
+# reaches the network.  MIR also targets ppc64, s390x and riscv64, which no CI
+# leg covers -- -DTUR_JIT=ON opts those in.  An Emscripten toolchain build
+# gets no JIT (MIR's wasm32 target is not wired up as a host engine).
+# Neither do Apple's embedded platforms (iOS, tvOS, watchOS, visionOS): they
+# forbid a JIT outright, so the interpreter is the engine there, and an arm64
+# processor alone must not turn MIR on (docs/reported/turi-ios-readiness-
+# unverified.md).
+#
+# An EXISTING build directory keeps the value it cached, so one configured
+# before this default changed stays OFF until reconfigured with -DTUR_JIT=ON
+# (or rebuilt from a fresh directory).
+#
+# Declared ABOVE add_subdirectory(src), which reads it: declared after, a fresh
+# configure handed src/ an unset TUR_JIT, and only a second configure (which
+# found it in the cache) saw the default.
+set(_tur_jit_default OFF)
+if(NOT EMSCRIPTEN AND CMAKE_SIZEOF_VOID_P EQUAL 8
+   AND NOT CMAKE_SYSTEM_NAME MATCHES "^(iOS|tvOS|watchOS|visionOS)$"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|aarch64|arm64|ARM64)$")
+  set(_tur_jit_default ON)
+endif()
+option(TUR_JIT
+  "build tur with the in-process MIR JIT engine (tur jit; vendored MIR)"
+  ${_tur_jit_default})
+if(TUR_JIT)
+  include(cmake/mir.cmake)   # defines tur_mir from external/mir/
+endif()
+
 add_subdirectory(src)
 
 # ---------------------------------------------------------------------------
 # J0 JIT spike (docs/archive/jit-engine-plan.md) -- OFF by default.
 # ---------------------------------------------------------------------------
-# The spike harness vendors MIR (c2mir + MIR-gen) via FetchContent, which means
-# a network fetch at configure time.  Same posture as the Z3 oracle block
-# above: a default `cmake -S . -B build` -- Debug, Release, or WASM -- must not
-# reach the network and must not grow a dependency, so this is opt-in and the
-# spike binary is never part of `tur`.
+# A scratch harness over the same vendored MIR as TUR_JIT (cmake/mir.cmake);
+# the spike binary is never part of `tur`.
 option(TUR_JIT_SPIKE
-  "build the Phase J0 JIT spike harness (fetches MIR; not part of tur)"
+  "build the Phase J0 JIT spike harness (not part of tur)"
   OFF)
-
-# J1: build `tur` itself with the in-process MIR JIT engine (`tur jit`).
-# Same network posture as the spike: OFF by default, opt-in fetch.  Since the
-# `jit` experiment graduated (2026-08-17) this is the ONLY gate on `tur jit`:
-# the run-time `--enable=jit` requirement is gone, so a binary built with this
-# ON runs `tur jit` unprompted, and one built without it says so.
-option(TUR_JIT
-  "build tur with the in-process MIR JIT engine (tur jit; fetches MIR)"
-  OFF)
-
-if(TUR_JIT_SPIKE OR TUR_JIT)
-  include(cmake/mir.cmake)   # defines tur_mir (guarded; spike re-include is a no-op)
-endif()
 if(TUR_JIT_SPIKE)
+  include(cmake/mir.cmake)   # guarded; a no-op when TUR_JIT already included it
   add_subdirectory(tools/jit-spike)
 endif()
 
@@ -205,6 +229,17 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(lsp_r7rs_diagnostics PROPERTIES TIMEOUT 300)
+# lsp-publishes-other-files-diagnostics-under-one-uri and
+# lsp-sibling-import-resolves-against-scratch-dir: a loaded/imported file's
+# diagnostic lands on the form that names it (with the real location as
+# relatedInformation), and entry-relative resolution starts from the document,
+# not from the temp directory its scratch copy sits in.
+add_test(
+  NAME lsp_cross_file_diagnostics
+  COMMAND bash tests/lsp/run-cross-file-diagnostics.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(lsp_cross_file_diagnostics PROPERTIES TIMEOUT 300)
 
 add_test(NAME source_literal_unit COMMAND tur_source_literal_unit)
 
@@ -254,12 +289,24 @@ set_tests_properties(tur_r7rs_sanitize PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
 # dialects) and run in torture mode (a collection every 31 allocations), and
 # churn loops (Scheme and Saffron) that must fit a 256 MiB address space with
 # the collector and not without it.
+#
+# 1500, not the repo-wide 720: the macOS runner measured 715 s (pass) and
+# 720 s (killed) on 2026-10-05, against 435-590 s days earlier.  Stopgap so
+# the suite reports rather than times out; the growth itself is unexplained.
 add_test(
   NAME tur_r7rs_gc
   COMMAND bash tests/run-r7rs-gc.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
-set_tests_properties(tur_r7rs_gc PROPERTIES TIMEOUT 720 RUN_SERIAL TRUE)
+set_tests_properties(tur_r7rs_gc PROPERTIES TIMEOUT 1500 RUN_SERIAL TRUE)
+# The collector's divide-free slot index ((off * inv) >> 48, r7gc.c
+# tur_gc_slot_of) equals off / size for every size class at every offset.
+add_test(
+  NAME tur_r7gc_slot_of
+  COMMAND bash tests/check-r7gc-slot-of.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7gc_slot_of PROPERTIES TIMEOUT 720)
 add_test(
   NAME tur_cli_tests
   COMMAND bash tests/run-cli.sh
@@ -672,17 +719,42 @@ add_test(
           --baseline tests/generic-spec-matrix.baseline
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# TIMEOUT 4500, raised from 3000 on 2026-10-01: the unsharded suite measured
+# 2050s on the macOS leg, 68% of the old budget, which is not enough headroom
+# for a cold runner or a nightly that adds cells.  CI shards this test
+# (TUR_GSM_SHARD, see .github/workflows/ci.yml), so the budget is now sized for
+# the UNSHARDED run -- a local `ctest` and the nightly arm64 leg -- not for what
+# any one CI job does.
 set_tests_properties(tur_generic_spec_matrix PROPERTIES
-  RUN_SERIAL TRUE TIMEOUT 3000 DEPENDS tur)
-# TUR_TEST_SHARD must partition the corpus: disjoint slices whose union is the
-# whole thing.  Neither half is observable from a sharded run itself -- a shard
-# that silently skipped fixtures, or ran some twice, still prints a clean
-# summary -- so nothing else in the suite would notice.  Enumeration only (it
-# drives run-jit.sh's TUR_TEST_LIST and runs no fixture), so it needs no JIT
-# engine and costs about a minute.
+  RUN_SERIAL TRUE TIMEOUT 4500 DEPENDS tur)
+# TUR_TEST_SHARD (run-jit.sh) and TUR_TURI_SHARD (run-turi.sh) must each
+# partition the corpus: disjoint slices whose union is the whole thing.  Neither
+# half is observable from a sharded run itself -- a shard that silently skipped
+# fixtures, or ran some twice, still prints a clean summary -- so nothing else in
+# the suite would notice.  Two harnesses, two variables, two proofs: their slices
+# are computed over different corpora, so one partition holding says nothing
+# about the other.
+#
+# Enumeration only (it drives each harness's own LIST mode and runs no fixture),
+# so it needs no JIT engine and no interpreter.  NOT "about a minute", as this
+# said until 2026-10-02: measured 114s median on Linux and 261s on macOS (max
+# 416s) before the turi assertions were added.  It is Linux-only now -- its
+# verdict is a function of the fixture tree alone, so the macOS copy re-derived
+# the same answer; see LEG_INVARIANT in tests/ctest-parts.py.
 add_test(
   NAME tur_shard_partition
   COMMAND bash tests/run-shard-partition.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# The same invariant one level up: the `test` job's ctest PARTS must between
+# them run every registered suite.  A suite in no part stops running and CI
+# still goes green -- `--no-tests=error` catches only a pattern that empties a
+# part outright, not one that loses a test from the middle.  That check used to
+# be a sentence in ci.yml telling a human to add up `ctest -N` totals.
+# Enumeration only (`ctest -N`), so it costs no test time and needs no tur.
+add_test(
+  NAME tur_ctest_partition
+  COMMAND python3 tests/ctest-parts.py --check "${CMAKE_BINARY_DIR}"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # `cmd | grep -q` under `set -o pipefail` reports a FALSE failure when the
@@ -734,6 +806,14 @@ add_test(
 add_test(
   NAME tur_reported_index_lint
   COMMAND bash tests/check-reported-index.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+# docs/guides/running-tests-guide.md must name every TUR_*/TURI_* variable the
+# three fixture harnesses read: an unknown variable is silently ignored, so a
+# guessed filter name runs the whole suite instead of one fixture.
+add_test(
+  NAME tur_running_tests_guide_lint
+  COMMAND bash tests/check-running-tests-guide.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 # Every add_test declared under src/ must be visible to `ctest -N`.  It was
@@ -1264,6 +1344,33 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_srfi_prune PROPERTIES TIMEOUT 720)
+# r7rs-tail-call-through-static-call-not-proper: tail calls through
+# procedure values stay proper in a plain 8 MiB stack (the deep-stack
+# thread off), where the program's 1 GiB stack cannot hide a regression.
+add_test(
+  NAME tur_r7rs_tail_calls_small_stack
+  COMMAND bash tests/check-r7rs-tail-calls-small-stack.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_tail_calls_small_stack PROPERTIES TIMEOUT 720)
+# r7rs-deep-stack-size-not-configurable: TUR_MAIN_STACK_MB sizes the stack a
+# compiled `#lang r7rs` main runs on; a 16 MiB stack also pins the overflow
+# message, which the default 1 GiB is too large to reach in a test.
+add_test(
+  NAME tur_r7rs_main_stack_size
+  COMMAND bash tests/check-r7rs-main-stack-size.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_main_stack_size PROPERTIES TIMEOUT 720)
+# jit-stack-overflow-has-no-message: under `tur jit` a runaway recursion
+# prints the same line as the compiled r7rs path, in every dialect, and a wild
+# pointer does not.  SKIPs on a binary without the JIT engine.
+add_test(
+  NAME tur_jit_stack_overflow_message
+  COMMAND bash tests/check-jit-stack-overflow-message.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_jit_stack_overflow_message PROPERTIES TIMEOUT 720)
 # r7rs-programs-compile-slowly: a `#lang r7rs` program builds as two units,
 # the prelude compiled once and cached.  No piece of state may be defined in
 # both, and two programs must link the same cached library object.
@@ -1273,6 +1380,15 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_prelude_split PROPERTIES TIMEOUT 720)
+# turi-call-frames-never-reclaimed: `tur --interpret` hands an activation's
+# call frame (and its let / match-arm frames) back when it returns uncaptured.
+# Runs one program with and without reclamation and asserts peak RSS halves.
+add_test(
+  NAME tur_turi_frame_reclaim
+  COMMAND python3 tests/check-turi-frame-reclaim.py $<TARGET_FILE:tur>
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_turi_frame_reclaim PROPERTIES TIMEOUT 720 DEPENDS tur)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern
@@ -1353,13 +1469,37 @@ if(TUR_JIT)
   # instead, and names which one, which is most of the diagnosis.
   #
   # The numbers are hang bounds, not performance assertions.  Measured off the
-  # ci-metrics branch, tur_jit_fixture_tests runs ~440s median on Linux, ~348s
+  # ci-metrics branch, tur_jit_fixture_tests ran ~440s median on Linux, ~348s
   # on a 5-core mac and ~730s median / ~940s p90 on the 3-core mac CI draws
-  # ~97% of the time; 1500 is ~1.6x that p90.  repl-spice-jit is a short
-  # script.  The workflow also alarms the whole ctest invocation at 2100s, as a
-  # backstop for the case where more than one target runs long at once -- these
-  # per-test values are what catch the single hang, which is what has happened.
+  # ~97% of the time, against a corpus of ~2663 fixtures; 1500 was ~1.6x that
+  # p90.  repl-spice-jit is a short script.
+  #
+  # 2026-10-01: the corpus has outgrown that bound and 1500 was raised to 2400.
+  # It is now 3413 dirs, and the FAST (5-core) draw alone takes 1102s -- above
+  # the old 3-core p90 -- so 1500 had stopped being a hang bound and had become
+  # a throughput assertion that a slow draw fails.  rjungemann/turmeric#1002
+  # tripped it: 2393 dirs in 1500s = 1.6/s against the same hour's green `main`
+  # run at 3.1/s, i.e. work at half speed, not a stall.  2400 is ~1.1x the
+  # ~2140s that slow rate implies for the whole corpus and ~2.2x the fast draw.
+  # See docs/reported/macos-jit-leg-stall-unexplained.md.
+  #
+  # Keep the ordering per-test TIMEOUT < the workflow's whole-ctest alarm <
+  # the job's timeout-minutes: the alarm is the backstop for several targets
+  # running long at once, and only the per-test value NAMES the offender, so
+  # an alarm that can fire first destroys the diagnostic it exists to protect.
+  # Raising this one means raising the alarm in .github/workflows/ci.yml too.
   set_tests_properties(tur_repl_spice_jit PROPERTIES RUN_SERIAL TRUE TIMEOUT 600)
+  # aot-compiled-repl-plan C1: --enable=repl-jit-inline-c compiles an inline-C
+  # defn the interpreter cannot run, at the prompt and under --interpret.  A
+  # short script (a dozen REPL sessions); it runs in the `test` job's aux part,
+  # not the `jit` job, like any newly registered suite (tests/ctest-parts.py).
+  add_test(
+    NAME tur_repl_jit_inline_c
+    COMMAND ${CMAKE_COMMAND} -E env TUR=$<TARGET_FILE:tur>
+            bash tests/turi/repl-jit-inline-c.sh
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_repl_jit_inline_c PROPERTIES TIMEOUT 300)
   # J3 (jit-engine-plan section 5): the full fixture corpus through
   # `tur jit`.  RUN_SERIAL like the other whole-corpus
   # harnesses -- it fans out across nproc internally.  TUR is pinned to
@@ -1372,7 +1512,7 @@ if(TUR_JIT)
             bash tests/run-jit.sh
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
-  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 1500)
+  set_tests_properties(tur_jit_fixture_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 2400)
 endif()
 # Type-checks a curated allowlist of non-auto-loaded stdlib files so
 # regressions in their loadability are caught even when no fixture

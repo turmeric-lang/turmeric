@@ -54,7 +54,7 @@ its own deprecation window.
 
 - **`--strict-effects` is opt-in.** Effect typing is always on, but the
   warnings on unannotated effectful functions fire only when you pass
-  `--strict-effects` explicitly.
+  `--strict-effects` (or `-Werror=strict-effects`) explicitly.
 - **Partial features are always-on at their current completion level.**
   Uniqueness types (UT0--UT3) and sized types (SZ0--SZ9; static
   checking covers folded-constant sizes, runtime assertions cover
@@ -71,7 +71,22 @@ These are real flags, not deprecated.
 
 Emits warnings on functions whose inferred effect row is non-empty but
 whose signature carries no explicit `#fx{...}` annotation or `forall [e]`
-quantification. Opt-in.
+quantification (`TUR-W0030`), and on a declared row variable that is always
+bound to a concrete row (`TUR-W0032`). A `fn` literal is described by its
+enclosing function -- *anonymous function in 'dfs-or'* -- rather than by the
+compiler's internal name for it. Opt-in.
+
+### `-Werror=strict-effects`
+
+Promotes the `--strict-effects` warnings to errors, so a build fails on an
+unannotated effectful function. Implies `--strict-effects`, the way gcc's
+`-Werror=<x>` implies `-W<x>`. `--Werror=strict-effects` is accepted too.
+
+### `--lint-effects` (deprecated)
+
+An alias for `--strict-effects` that prints `TUR-W0050`. It used to be a
+second, byte-identical copy of the `TUR-W0030` check, documented as the
+"advisory" form of a strict flag that could not in fact be made strict.
 
 ### `--keep-contracts`
 
@@ -174,6 +189,6 @@ specialization is best-effort and otherwise silent on fallback.
 
 ## See Also
 
-- [drop-x-flags-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/drop-x-flags-plan.md) -- the
+- [drop-x-flags-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/drop-x-flags-plan.md) -- the
   plan that retired the `-X` flag surface.
 - Per-feature guides linked in the **Removed Feature Flags** table above.

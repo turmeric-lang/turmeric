@@ -484,8 +484,9 @@ bump-patch:
     # sw.js carries a dev/no-build fallback copy of the version; vite rewrites
     # it in dist/, but the literal must track VERSION or an un-built serve gets
     # a stale precache. Matched by shape, not by $OLD, so a bump re-syncs it
-    # even if it has already drifted.
-    sed -i.bak -E "s/tur-try-v1-[0-9]+\.[0-9]+\.[0-9]+/tur-try-v1-$NEW/" web/public/sw.js
+    # even if it has already drifted -- but only on the CACHE_VERSION line,
+    # since the file's comments quote old versions as history.
+    sed -i.bak -E "s/(CACHE_VERSION = 'tur-try-v1-)[0-9]+\.[0-9]+\.[0-9]+/\1$NEW/" web/public/sw.js
     rm -f web/public/sw.js.bak
     git add VERSION src/web/wasm_glue.h web/public/sw.js
     git commit -m "chore: bump version to v$NEW"
@@ -505,8 +506,9 @@ bump-minor:
     # sw.js carries a dev/no-build fallback copy of the version; vite rewrites
     # it in dist/, but the literal must track VERSION or an un-built serve gets
     # a stale precache. Matched by shape, not by $OLD, so a bump re-syncs it
-    # even if it has already drifted.
-    sed -i.bak -E "s/tur-try-v1-[0-9]+\.[0-9]+\.[0-9]+/tur-try-v1-$NEW/" web/public/sw.js
+    # even if it has already drifted -- but only on the CACHE_VERSION line,
+    # since the file's comments quote old versions as history.
+    sed -i.bak -E "s/(CACHE_VERSION = 'tur-try-v1-)[0-9]+\.[0-9]+\.[0-9]+/\1$NEW/" web/public/sw.js
     rm -f web/public/sw.js.bak
     git add VERSION src/web/wasm_glue.h web/public/sw.js
     git commit -m "chore: bump version to v$NEW"
@@ -526,8 +528,9 @@ bump-major:
     # sw.js carries a dev/no-build fallback copy of the version; vite rewrites
     # it in dist/, but the literal must track VERSION or an un-built serve gets
     # a stale precache. Matched by shape, not by $OLD, so a bump re-syncs it
-    # even if it has already drifted.
-    sed -i.bak -E "s/tur-try-v1-[0-9]+\.[0-9]+\.[0-9]+/tur-try-v1-$NEW/" web/public/sw.js
+    # even if it has already drifted -- but only on the CACHE_VERSION line,
+    # since the file's comments quote old versions as history.
+    sed -i.bak -E "s/(CACHE_VERSION = 'tur-try-v1-)[0-9]+\.[0-9]+\.[0-9]+/\1$NEW/" web/public/sw.js
     rm -f web/public/sw.js.bak
     git add VERSION src/web/wasm_glue.h web/public/sw.js
     git commit -m "chore: bump version to v$NEW"

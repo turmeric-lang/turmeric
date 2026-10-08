@@ -138,12 +138,12 @@ Turmeric source file evaluated at build time. The top-level form is
   :tur-version ">=0.32.2"
 
   ;; Turmeric package dependencies
-  ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
+  ;; (first-party spices from https://github.com/turmeric-lang/turmeric-spices)
   :spices #map{
-    "math"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+    "math"  #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                  :ref    "math-v0.1.0"
                  :subdir "spices/math"}
-    "test"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+    "test"  #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                  :ref    "test-v0.1.0"
                  :subdir "spices/test"
                  :optional true}
@@ -188,12 +188,12 @@ defpackage geom
   :tur-version ">=0.32.2"
 
   ;; Turmeric package dependencies
-  ;; (first-party spices from https://github.com/rjungemann/turmeric-spices)
+  ;; (first-party spices from https://github.com/turmeric-lang/turmeric-spices)
   :spices #map{
-    "math"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+    "math"  #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                  :ref    "math-v0.1.0"
                  :subdir "spices/math"}
-    "test"  #map{:url    "https://github.com/rjungemann/turmeric-spices"
+    "test"  #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                  :ref    "test-v0.1.0"
                  :subdir "spices/test"
                  :optional true}
@@ -305,17 +305,17 @@ Local path spices are never written to `tur.lock`.
 
 ### Official first-party spices
 
-The [turmeric-spices](https://github.com/rjungemann/turmeric-spices) monorepo
+The [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices) monorepo
 contains the official first-party spice library: `tur-test`, `tur-math`,
 `tur-sqlite`, `tur-raylib`, `tur-json`, `tur-http`, and `tur-regex`.
 
 Add any of them with `tur add` using the `:subdir` key:
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref http-v0.1.0 --subdir spices/http --name http
 
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref json-v0.1.0 --subdir spices/json --name json
 ```
 
@@ -396,7 +396,7 @@ so it can be parsed by the same reader and diffed cleanly in version control.
              :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
              :sha256     "abc123..."
              :fetched-at "2026-05-14T09:00:00Z"}
-    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+    "math" #{:url        "https://github.com/turmeric-lang/turmeric-spices"
              :ref        "math-v0.1.0"
              :resolved   "d6e7f8a9b0c1..."
              :sha256     "def456..."
@@ -422,7 +422,7 @@ deflockfile
              :resolved   "a1b2c3d4e5f6..."   ;;; full commit SHA
              :sha256     "abc123..."
              :fetched-at "2026-05-14T09:00:00Z"}
-    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+    "math" #{:url        "https://github.com/turmeric-lang/turmeric-spices"
              :ref        "math-v0.1.0"
              :resolved   "d6e7f8a9b0c1..."
              :sha256     "def456..."
@@ -661,7 +661,7 @@ tur add-cmake https://github.com/raysan5/raylib --ref 5.0
 The entry goes into `:cmake-deps` instead of `:spices`.
 
 For projects that need direct control of the CMake build, see
-[cmake-cpm-integration-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
+[cmake-cpm-integration-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 

@@ -1,0 +1,55 @@
+;; reads-measure-rejected-in-invariant-and-pre, the negative control: the CT1
+;; gate narrowed for a `#reads` measure, it did not disappear.  An inline-C
+;; accessor with NO `#reads` annotation is still TUR-E0375 in all four contract
+;; positions -- and so is an impure term beside a `#reads` measure, and an
+;; unannotated wrapper around one: only the measure's own call is exempt, never
+;; its neighbours.
+;;
+;; `raw-len` is local on purpose.  This used to use stdlib's `vec-len`, which
+;; carried no annotation at the time; `vec-len` is `#reads v` now (so a bounded
+;; index walk can discharge -- refine-loop-invariant-frozen-marker-analysed),
+;; and a control for "unannotated accessor" must not depend on which stdlib
+;; functions happen to be annotated today.
+(defn tick [] #fx{} : int
+  ```c
+  static int64_t n = 0;
+  return n++;
+  ```)
+
+(defn raw-len [v : (Vec int)] #fx{} : int
+  ```c
+  struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
+  return (int)vec->len;
+  ```)
+
+(defn vlen [^borrow v : (Vec int)] #reads v : int
+  (vec-len v))
+
+(defn wrapped-vlen [^borrow v : (Vec int)] : int
+  (vlen v))
+
+(defn on-param [^borrow v : (Vec int) i : #refine{ x : int | (< x (raw-len v)) }] : int
+  i)
+
+(defn on-pre [^borrow v : (Vec int) n : int] : int
+  :pre (<= n (raw-len v))
+  n)
+
+(defn on-return [^borrow v : (Vec int) n : int] : #refine{ r : int | (<= r (raw-len v)) }
+  n)
+
+(defn on-invariant [^borrow v : (Vec int)] : int
+  (let [^mut i 0]
+    (while (< i (raw-len v)) :invariant (<= i (raw-len v))
+      (set! i (+ i 1)))
+    i))
+
+(defn beside-reads [^borrow v : (Vec int) n : int] : int
+  :pre (and (<= n (vlen v)) (>= (tick) 0))
+  n)
+
+(defn via-wrapper [^borrow v : (Vec int) n : int] : int
+  :pre (<= n (wrapped-vlen v))
+  n)
+
+(defn main [] : int 0)

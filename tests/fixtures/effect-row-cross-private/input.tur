@@ -3,8 +3,8 @@
 ;;
 ;; provider defines a ^private InternalLog effect. run-internal performs it;
 ;; wrapper handles it so callers see a pure function. main annotates itself
-;; #{} and calls wrapper -- this is accepted because InternalLog is filtered
-;; from main's inferred row at the call-site boundary.
+;; #fx{IO} (it prints; W4) and calls wrapper -- this is accepted because
+;; InternalLog is filtered from main's inferred row at the call-site boundary.
 
 (defmodule provider
   (export wrapper)
@@ -19,6 +19,6 @@
       (run-internal)
       (InternalLog [msg] k) (resume k nil))))
 
-(defn main [] #fx{} : int
+(defn main [] #fx{IO} : int
   (println (wrapper))
   0)

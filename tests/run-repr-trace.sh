@@ -36,6 +36,7 @@ cat > "$tmp/probe.tur" <<'EOF'
     (println (use-carrier top2))
     (println (use-fat (fn [] k))))
   0)
+(defeffect Write [s :cstr] :nil)
 EOF
 
 # Value-position bridges: a Vec of by-value parametric-monomorph elements
@@ -63,6 +64,9 @@ cat > "$tmp/vprobe.tur" <<'EOF'
   0)
 EOF
 
+# `Write` is declared LAST so the checks' line anchors (1:/2:/3:) stay put: an
+# undeclared name in #fx{...} is TUR-E0026, which stops emit-c before any
+# emit-side bridge is traced.
 trace="$("$TUR" emit-c --emit-abi-trace "$tmp/probe.tur" 2>&1 >/dev/null | grep '^repr-trace')"
 vtrace="$("$TUR" emit-c --emit-abi-trace "$tmp/vprobe.tur" 2>&1 >/dev/null | grep '^repr-trace')"
 

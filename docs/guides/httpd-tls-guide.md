@@ -8,12 +8,12 @@ description: How to terminate TLS on an httpd-new server using the tur-tls spice
 
 `stdlib/httpd` ships in the Turmeric tree and is plaintext by default.
 TLS termination is an opt-in capability provided by the
-[`tur-tls`](https://github.com/rjungemann/turmeric-spices/tree/main/spices/tls)
+[`tur-tls`](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/tls)
 spice. This guide shows how to wire the two together so a one-line
 change converts an `httpd-new` server into an `httpd-new-tls` server.
 
 The integration was designed under the constraints in
-[`docs/archive/history/tur-tls-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-tls-plan.md):
+[`docs/archive/history/tur-tls-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/tur-tls-plan.md):
 
 - Zero TLS dependency in a default `tur` install. Programs that do not
   import the spice still link cleanly.
@@ -43,7 +43,7 @@ plaintext-only to TLS-capable.
 ## Generating a server certificate
 
 For local development and CI, the spice ships
-[`tools/gen-cert.sh`](https://github.com/rjungemann/turmeric-spices/blob/main/spices/tls/tools/gen-cert.sh).
+[`tools/gen-cert.sh`](https://github.com/turmeric-lang/turmeric-spices/blob/main/spices/tls/tools/gen-cert.sh).
 It writes a self-signed `test-cert.pem` + `test-key.pem` into a target
 directory and is suitable only for throwaway test runs:
 
@@ -87,7 +87,7 @@ The v0.1.0 line does **not** implement:
 - mTLS / client certificate verification.
 
 These are explicitly punted to follow-ups in the
-[plan's non-goals section](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-tls-plan.md#non-goals).
+[plan's non-goals section](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/tur-tls-plan.md#non-goals).
 
 ---
 
@@ -168,7 +168,7 @@ The three new lines:
   TLS functions and forwards them to `httpd-register-tls-impl`. Call it
   once before any `httpd-new-tls`. Idempotent.
 - **(b)** Build a TLS context, load cert + key. Bytes-for-bytes the
-  shape sketched in the [Quick start](https://github.com/rjungemann/turmeric-spices/blob/main/spices/tls/README.md#quick-start-preview)
+  shape sketched in the [Quick start](https://github.com/turmeric-lang/turmeric-spices/blob/main/spices/tls/README.md#quick-start-preview)
   section of the spice README.
 - **(c)** `httpd-new-tls` is the TLS-aware constructor. Compared to
   `httpd-new-pool` it adds one trailing arg (the ctx) and validates
@@ -227,11 +227,11 @@ real CA-issued cert these flags drop away.
 
 Two fixtures cover the integration:
 
-- [`tur-tls/tests/fixtures/tls-roundtrip`](https://github.com/rjungemann/turmeric-spices/blob/main/spices/tls/tests/fixtures/tls-roundtrip/main.tur)
+- [`tur-tls/tests/fixtures/tls-roundtrip`](https://github.com/turmeric-lang/turmeric-spices/blob/main/spices/tls/tests/fixtures/tls-roundtrip/main.tur)
   -- spice-side mbedTLS round-trip over a socketpair, no HTTP. Asserts
   that `tls-wrap-fd` + `tls-handshake` + `tls-read`/`tls-write` produce
   a clean TLS exchange.
-- [`tests/fixtures/httpd-h5-tls`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/httpd-h5-tls)
+- [`tests/fixtures/httpd-h5-tls`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/httpd-h5-tls)
   -- in-tree integration test for the H5 routing path. Uses plaintext
   passthrough stubs (no real mbedTLS) to verify that `httpd-new-tls`
   refuses to build without ops, then that `wrap_fd` / `handshake` /
@@ -242,8 +242,8 @@ Two fixtures cover the integration:
 
 ## See also
 
-- [tur-tls plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-tls-plan.md) -- design rationale + roadmap.
-- [tur-httpd plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-httpd-plan.md) -- the H1-H7 milestones that
+- [tur-tls plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/tur-tls-plan.md) -- design rationale + roadmap.
+- [tur-httpd plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/tur-httpd-plan.md) -- the H1-H7 milestones that
   this guide composes with.
-- [tur-tls spice README](https://github.com/rjungemann/turmeric-spices/blob/main/spices/tls/README.md).
+- [tur-tls spice README](https://github.com/turmeric-lang/turmeric-spices/blob/main/spices/tls/README.md).
 - [mbedTLS API docs](https://mbed-tls.readthedocs.io/).

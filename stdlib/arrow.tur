@@ -60,7 +60,8 @@
 ;;;   g -- second arrow (B -> C)
 ;;;
 ;;; Returns:
-;;;   A ptr<void> closure (A -> C) that applies f then g.
+;;;   A closure (fn [A] C) that applies f then g.  Typed as a function, not
+;;;   ptr<void>, so the result can be called directly at its element types.
 ;;;
 ;;; Example:
 ;;;   ((>>> (fn [x : float] : float (+ x 1.0))
@@ -68,7 +69,9 @@
 ;;;
 ;;; Since: Phase CA1
 
-(defn >>> [A B C] [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)] : ptr<void>
+(defn >>> [A B C] [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)] : (fn [A]
+                                                                            #fx{}
+                                                                            C)
   (let [fv f
         gv g]
     (fn [x : A] : C (gv (fv x)))))
@@ -489,6 +492,11 @@
 ;;;   arr    -- lift a plain function (b -> c) into an arrow a b c.
 ;;;   >>>    -- left-to-right composition: run the left arrow, then the right.
 ;;;   <<<    -- right-to-left composition (flipped >>>).
+;;;
+;;; `>>>` and `<<<` spell their arrows -- `(a b c)` is the arrow from b to c,
+;;; `(fn [b] c)` at the `(->)` head -- so a call with concrete functions
+;;; specializes the instance at their element types, and the composed closure
+;;; is called at exactly those types.
 ;;;   first  -- act on the first component of a pair, passing the second through.
 ;;;   second -- act on the second component of a pair, passing the first through.
 ;;;
@@ -499,8 +507,8 @@
 (defclass Arrow [a]
   [(Category a)]
   (arr [f] : a)
-  (>>> [f g] : a)
-  (<<< [f g] : a)
+  (>>> [f : (a b c) g : (a c d)] : (a b d))
+  (<<< [f : (a c d) g : (a b c)] : (a b d))
   (first [f] : a)
   (second [f] : a))
 ;;; ArrowZero [a] -- an arrow with a distinguished empty/zero arrow.
@@ -594,8 +602,8 @@
 
 (definstance Arrow [(->)]
   (arr [f] f)
-  (>>> [f g] (fn [x] (g (f x))))
-  (<<< [f g] (fn [x] (f (g x))))
+  (>>> [f g] (fn [x : b] : d (g (f x))))
+  (<<< [f g] (fn [x : b] : d (f (g x))))
   (first [f] (fn [p] (__ac_pair_first f p)))
   (second [f] (fn [p] (__ac_pair_second f p))))
 ;;; ArrowChoice [(->)] -- map an arrow over one arm of an Either, passing the

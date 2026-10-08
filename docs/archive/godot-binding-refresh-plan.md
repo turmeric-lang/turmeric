@@ -1,7 +1,7 @@
 # Turmeric Godot Binding -- Status Refresh, JIT Concerns, and Un-stranding Plan
 
 > **Status:** **complete** -- Steps 0-4 landed 2026-09-07: the branch merged as
-> [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1), and
+> [turmeric-godot#1](https://github.com/turmeric-lang/turmeric-godot/pull/1), and
 > that repo got its **first passing CI run**, green on all four platforms.
 > Step 5 landed 2026-09-10, as neither (a) nor (b) -- per J1, declarations are
 > needed on every route: an exported C ABI (`native_abi.h`, 122 entry points)

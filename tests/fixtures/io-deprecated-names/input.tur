@@ -1,0 +1,8 @@
+;; stdlib-os-surface-plan P1.4/P1.5: the io.tur duplicates of fs/ functions
+;; (read-file, write-file, file-exists?) are deprecated for one release --
+;; they still work, and each use warns with the replacement's name.
+(load "stdlib/io.tur")
+
+(defn main [] : int
+  (println (file-exists? "/no/such/file/anywhere"))
+  0)

@@ -17,7 +17,7 @@ each backend is, when to reach for it, how they compose under the
 For the broader ECS surface (worlds, queries, systems, the row-typed
 `Query` value, the raylib loop), see
 [`ecs-guide.md`](ecs-guide.md). For the long-form design rationale, see
-[`docs/archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
+[`docs/archive/ecs-spice-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
 
 ## The three backends at a glance
 
@@ -327,7 +327,7 @@ Component carries a payload?
   queries, systems, the row-typed `Query` value, raylib loop).
 * [`ecs-vs-haskell-ecs.md`](ecs-vs-haskell-ecs.md) -- comparison with a
   Haskell-style ECS.
-* [`docs/archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md) --
+* [`docs/archive/ecs-spice-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ecs-spice-plan.md) --
   long-form plan and per-slice rationale.
-* [`docs/archive/ecs-sized-world-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-sized-world-plan.md)
+* [`docs/archive/ecs-sized-world-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ecs-sized-world-plan.md)
   -- the sized-world design plan.

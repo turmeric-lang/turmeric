@@ -245,10 +245,47 @@ def find_unpaired_turmeric(text: str) -> list[tuple[int, str]]:
     return unpaired
 
 
+# A fence line sitting inside a blockquote: `>` (possibly nested), then a
+# fence opener or closer and NOTHING else on the line.  The trailing `$` is what
+# keeps this off an inline code SPAN that merely talks about a fence -- e.g.
+# package-management-guide.md's ```` ```turmeric no-manifest-check ```` ...``,
+# where prose follows on the same line.  The info string is word-ish tokens for
+# the same reason: a span's closing backticks never match `[\w.+-]`.
+BLOCKQUOTED_FENCE_RE = re.compile(
+    r'^[ \t]*>[ \t>]*(?:`{3,}|~{3,})[ \t]*'
+    r'(?:[\w.+-]+(?:[ \t]+[\w.+-]+)*)?[ \t]*$'
+)
+
+
+def find_blockquoted_fences(text: str) -> list[int]:
+    """Return the 1-based line number of every fence OPENER inside a
+    blockquote.
+
+    python-markdown's `fenced_code` is a preprocessor whose fence regex anchors
+    at the start of a line, so a fence prefixed by `> ` is invisible to it. The
+    blockquote processor then strips the `> ` and the body is rendered as
+    ordinary markdown: the opening fence becomes literal text, a `#` shell
+    comment becomes an `<h1>`, and `<angle>` placeholders become raw unclosed
+    tags. Indented code blocks are unaffected -- those are core markdown,
+    handled AFTER the blockquote prefix is stripped -- so `>     cmd` is the fix.
+
+    Only openers are reported: the closer is the same construct, and naming
+    both lines would double every diagnostic.
+    """
+    openers: list[int] = []
+    inside = False
+    for i, line in enumerate(text.splitlines(), start=1):
+        if BLOCKQUOTED_FENCE_RE.match(line):
+            if not inside:
+                openers.append(i)
+            inside = not inside
+    return openers
+
+
 def check_file(path: Path, tur_bin: str | None, verbose: bool,
-               strict_unpaired: bool = False) -> tuple[int, int, int, int, int, int]:
+               strict_unpaired: bool = False) -> tuple[int, int, int, int, int, int, int]:
     """Returns (pairs_found, pairs_ok, pairs_failed, unpaired_failed,
-    manifests_found, manifests_failed)."""
+    manifests_found, manifests_failed, blockquoted_fences)."""
     text = path.read_text(encoding='utf-8')
     pairs = find_pairs(text)
     ok = failed = unpaired_failed = 0
@@ -290,7 +327,18 @@ def check_file(path: Path, tur_bin: str | None, verbose: bool,
             elif verbose:
                 print(f'ok    {path}:{line_no} (manifest)')
 
-    return len(pairs), ok, failed, unpaired_failed, manifests, man_failed
+    bq_fences = 0
+    for line_no in find_blockquoted_fences(text):
+        bq_fences += 1
+        print(f'FAIL  {path}:{line_no}')
+        print("      fenced code block inside a blockquote: python-markdown's")
+        print('      fenced_code never sees a fence prefixed by "> ", so the body')
+        print('      renders as prose (# comments become headings, <x> becomes a')
+        print('      raw tag) and the docs build fails on the malformed fragment')
+        print('      use an INDENTED code block instead: ">     cmd"')
+
+    return (len(pairs), ok, failed, unpaired_failed, manifests, man_failed,
+            bq_fences)
 
 
 def collect_md_files(paths: list[str], include_readme: bool) -> list[Path]:
@@ -362,8 +410,9 @@ def main() -> None:
 
     total_pairs = total_ok = total_failed = total_unpaired = 0
     total_manifests = total_man_failed = 0
+    total_bq_fences = 0
     for f in md_files:
-        n, ok, fail, unpaired, manifests, man_failed = check_file(
+        n, ok, fail, unpaired, manifests, man_failed, bq = check_file(
             f, tur_bin, args.verbose, strict_unpaired=args.strict_unpaired,
         )
         total_pairs += n
@@ -372,6 +421,7 @@ def main() -> None:
         total_unpaired += unpaired
         total_manifests += manifests
         total_man_failed += man_failed
+        total_bq_fences += bq
 
     paired_guides = sum(
         1 for f in md_files
@@ -388,12 +438,14 @@ def main() -> None:
         print(f'Unpaired blocks  : {total_unpaired}')
     print(f'Manifests found  : {total_manifests}')
     print(f'Manifests failed : {total_man_failed}')
+    print(f'Blockquoted fences: {total_bq_fences}')
     if tur_bin:
         print(f'Checker          : {tur_bin} (parse-check + manifest dry-run)')
     else:
         print('Checker          : basic only (tur binary not found; skipped parse-check)')
 
-    if total_failed > 0 or total_unpaired > 0 or total_man_failed > 0:
+    if (total_failed > 0 or total_unpaired > 0
+            or total_man_failed > 0 or total_bq_fences > 0):
         sys.exit(1)
     if args.require_pairs and total_pairs == 0:
         print('error: no pairs found', file=sys.stderr)

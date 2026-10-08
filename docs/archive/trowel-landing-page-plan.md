@@ -13,7 +13,7 @@ see output" desktop app. It is built in **C++ with Qt 6** (Scintilla / SciTE for
 the editing surface), and it **bundles the Turmeric compiler** (currently
 Turmeric v0.29.1) so a single download is self-contained -- no separate `tur`
 install and no Finder-launch PATH surprises. Latest release is **v0.0.4**
-(`github.com/rjungemann/trowel/releases`).
+(`github.com/turmeric-lang/trowel/releases`).
 
 > NOTE: Trowel was rewritten off the earlier Lite XL prototype. Ignore the
 > old `tools/trowel/README.md` implementation details (Lua plugin, Lite XL
@@ -105,7 +105,7 @@ dashes).
      Electron.
    - `.hero-actions`: primary "Download for macOS" (links to the latest GitHub
      release DMG) + secondary "Install with Homebrew" (anchors to the download
-     section) and/or "View on GitHub" (`github.com/rjungemann/trowel`).
+     section) and/or "View on GitHub" (`github.com/turmeric-lang/trowel`).
    - **Screenshot, prominent, directly under the hero actions.** Wrap
      `web/public/trowel-screenshot.png` so it reads as the product shot:
      - Option A (recommended): drop it into a `.code-card`-style frame with the
@@ -153,7 +153,7 @@ dashes).
    macOS:
    - Step 01 -- Install: `brew install --cask rjungemann/trowel/trowel` (signed
      + notarized cask), **or** download the `.dmg` from the latest GitHub
-     release (`github.com/rjungemann/trowel/releases`, currently v0.0.4) and
+     release (`github.com/turmeric-lang/trowel/releases`, currently v0.0.4) and
      drag to Applications.
    - Step 02 -- Open a `.tur` file.
    - Step 03 -- Press Run to build + run; output appears in the pane below.

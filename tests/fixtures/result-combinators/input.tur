@@ -62,7 +62,8 @@
   ```c
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res == NULL || !res->is_ok) return r;
-  return (void *)((int64_t (*)(int64_t))f)(res->ok_val);
+  /* f returns a result handle (`ptr<void>`): call it at that type. */
+  return ((void * (*)(int64_t))f)(res->ok_val);
   ```)
 (defn u-result-or [r : ptr<void> alt : ptr<void>] : ptr<void>
   ```c
@@ -74,7 +75,7 @@
   struct { bool is_ok; int64_t ok_val; int64_t err_val; } *res = (void*)r;
   if (res != NULL && res->is_ok) return r;
   int64_t ev = res ? res->err_val : 0;
-  return (void *)((int64_t (*)(int64_t))f)(ev);
+  return ((void * (*)(int64_t))f)(ev);
   ```)
 
 (defn double-it [n : int] : int (* n 2))

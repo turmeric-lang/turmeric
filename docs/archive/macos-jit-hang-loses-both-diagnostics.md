@@ -11,7 +11,7 @@ fix" below.
 **The stall itself is still unexplained**, and cannot be investigated from this
 occurrence -- its evidence is gone, which was the report's whole point. It is
 tracked as its own open finding:
-[docs/reported/macos-jit-leg-stall-unexplained.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/macos-jit-leg-stall-unexplained.md).
+[docs/reported/macos-jit-leg-stall-unexplained.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/macos-jit-leg-stall-unexplained.md).
 The next occurrence will produce a log.
 
 **Severity: medium.** The hang itself gates -- `JIT engine (macos-latest)` is
@@ -27,7 +27,7 @@ Filed 2026-09-28, from rjungemann/turmeric#953.
 
 | | |
 |---|---|
-| Run | [36385448273](https://github.com/rjungemann/turmeric/actions/runs/36385448273), job 108809755220 |
+| Run | [36385448273](https://github.com/turmeric-lang/turmeric/actions/runs/36385448273), job 108809755220 |
 | Step | `Run JIT suites`, started 06:14:54Z |
 | End | job `cancelled` 07:09:17Z by `timeout-minutes: 45` |
 | Wall | ~54 min job, ~48 min in the step |
@@ -45,7 +45,7 @@ in the diff executes there. The other 17 checks on that run passed, including
 
 ## Both diagnostics were lost
 
-[docs/archive/macos-jit-leg-intermittent-45min-hang.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macos-jit-leg-intermittent-45min-hang.md)
+[docs/archive/macos-jit-leg-intermittent-45min-hang.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macos-jit-leg-intermittent-45min-hang.md)
 rebuilt this step in 2026-08-02 so a hang could not be silent again: `tee
 jit-ctest.log | grep --line-buffered` to stream progress to the console, and
 an `Upload JIT ctest log` step with `if: always()` -- "which covers the
@@ -144,7 +144,7 @@ here is its log".
 
 The stall. This occurrence's evidence no longer exists, so there is nothing to
 diagnose from -- see
-[docs/reported/macos-jit-leg-stall-unexplained.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/macos-jit-leg-stall-unexplained.md).
+[docs/reported/macos-jit-leg-stall-unexplained.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/macos-jit-leg-stall-unexplained.md).
 The three structural gaps above are now closed as *gaps*; whether one of them
 was also the *cause* (a `run-flags.sh` jit-ffi case deadlocking, say) is exactly
 what the next occurrence will say and this one cannot.

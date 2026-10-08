@@ -1,0 +1,11 @@
+(defmodule box/cls
+  (export twice quad show-twice)
+  (defclass Box [a]
+    (bx-get [x : a] : int)
+    (bx-put [x : a n : int] : a))
+  (defn twice [A] [(Box A)] [x : A] : int
+    (+ (bx-get x) (bx-get x)))
+  (defn quad [A] [(Box A)] [x : A] : int
+    (+ (twice x) (twice x)))
+  (defn show-twice [A] [(Box A)] [x : A] : A
+    (bx-put x (twice x))))

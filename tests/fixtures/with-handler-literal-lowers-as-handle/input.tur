@@ -1,0 +1,34 @@
+;; `(with-handler (handler (E [p] k) case-body) body)` is `(handle body (E [p]
+;; k) case-body)`: the literal is deep, its cases are the handle's, and building
+;; it does nothing.  It now elaborates to that `handle`, so it lowers wherever a
+;; `handle` does.  As its own node it was refused -- "this effect operation has
+;; no lowering here" -- in two positions a `handle` lowers in:
+;;
+;;   - as a builtin's operand: `(println (with-handler ...))` left `main`
+;;     uncolored, so its `perform` reached the direct emitter;
+;;   - anywhere in a capturing lambda: the lambda's body taints its effect
+;;     through the enclosing `main`.  Before collect_free_vars learned the
+;;     form, the capture was not even seen and this was invalid C ('k_5'
+;;     undeclared).
+;;
+;; A handler VALUE that is not a literal (a parameter, a field) keeps the
+;; with-handler node; fh-* fixtures cover that.
+
+(defeffect Ask [] :int)
+
+(defn run [f : (fn [] int)] : int (f))
+
+(defn main [] : int
+  (let [k 40]
+    ;; capture in the case body
+    (println (run (fn [] : int (with-handler (handler (Ask [] r) (resume r (+ k 2)))
+                                 (perform (Ask))))))                         ; 42
+    ;; capture in the handled body
+    (println (run (fn [] : int (with-handler (handler (Ask [] r) (resume r 3))
+                                 (+ k (perform (Ask)))))))                   ; 43
+    ;; as a builtin's operand
+    (println (with-handler (handler (Ask [] r) (resume r 44)) (perform (Ask))))  ; 44
+    ;; a let init, which already lowered -- unchanged
+    (let [v (with-handler (handler (Ask [] r) (resume r 5)) (+ k (perform (Ask))))]
+      (println v)))                                                          ; 45
+  0)

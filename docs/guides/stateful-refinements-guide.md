@@ -12,7 +12,7 @@ description: Refining predicates over mutable state -- the `frozen` region and t
 > lingering `--enable=refined` was a no-op through 0.37.0 and is a hard
 > `TUR-E0310` from 0.38.0; delete it.) The design
 > of record is
-> [`docs/archive/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md).
+> [`docs/archive/refine-stateful-measures-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md).
 > A `#reads`-refined accessor proves its guarded crossings *and* codegens
 > (see [Codegen and enforcement](#codegen-and-enforcement) -- the impure
 > entry contract is suppressed). Read the
@@ -83,7 +83,7 @@ This is sound by construction, and needs no new machinery:
   arrive by different routes -- an in-frame borrow is visible to the frame, while
   a `^borrow` parameter's aliasing happened in the caller -- and for a while only
   the first was checked (see
-  [docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md)).
+  [docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/borrow-param-passed-as-unique-mut-undiagnosed.md)).
 - `frozen` *borrows*, it does not consume: `w` is usable again after the region,
   so a real `despawn!` outside the region is fine.
 - Read-only accessors take `[^borrow w]` and coexist with the region borrow, so
@@ -123,8 +123,16 @@ argument whose mutable state it reads:
   ...)
 ```
 
-`#reads w` names a `^borrow` parameter. A measure that reads more than one
-borrowed state names them all in one frame, the same way `#writes` does:
+`#reads w` names a parameter whose mutable state the body reads. A `^borrow`
+parameter is the shape the annotation was designed around, and the one every
+example here uses -- but it is **not** a requirement: a BY-VALUE parameter is
+accepted too, and `stdlib/vec.tur`'s `vec-len` / `vec-get` rely on that, since
+a container handle is passed by value. A generic (`[A]`) measure is accepted as
+well. In both cases the frame is live: the measure passes the contract-position
+gate and takes part in the congruence grant exactly as a `^borrow` one does.
+
+A measure that reads more than one borrowed state names them all in one frame,
+the same way `#writes` does:
 
 ```turmeric
 (defn linked? [^borrow w : World ^borrow g : Grid e : Entity] #reads [w g] : bool
@@ -198,10 +206,9 @@ callee's own internal check still runs and aborts on a dead handle at runtime.
 > **The backstop is the accessor's *own* check, not an auto-generated contract.**
 > Read the second row carefully: it is `get-Pos!`'s hand-written `gens[idx]`
 > aliveness compare -- ordinary code in the body -- **not** a runtime contract
-> synthesized from the `#refine{ x | (alive? w x) }` parameter. That refinement
-> *contract* would be impure (`alive?` is impure -- the whole premise), and an
-> impure runtime contract is unemittable (`TUR-E0375`, "predicate has side
-> effects"); the compiler **suppresses** it (see [Codegen and
+> synthesized from the `#refine{ x | (alive? w x) }` parameter. The compiler
+> **suppresses** that entry contract for a `#reads` parameter, because the
+> crossing is the enforcement point (see [Codegen and
 > enforcement](#codegen-and-enforcement)). So a `#reads`-refined accessor gets
 > its safety backstop **only** from the check it writes itself. A minimal
 > accessor whose body is `(.n w)` with no internal guard -- like the
@@ -225,17 +232,72 @@ proof would be unsound, and is out of scope by construction.
 Two consequences of the measure being impure shape how a `#reads`-refined
 function compiles and how its crossings are enforced.
 
-**The entry contract is suppressed (it is unemittable).** An ordinary
-`#refine{ x | p }` parameter injects a runtime *entry contract* -- a
-`(tur-contract-check p ...)` at the top of the callee. For a `#reads` measure
-`p = (alive? w x)` is impure, and an impure contract predicate is a hard error
-(`TUR-E0375`: "contract predicate has side effects; predicates must be pure"),
-because whether the check is compiled in becomes observable. So the injector
-detects a `#reads`-measure predicate and **skips** the entry contract entirely
-(`rt_pred_reads_measure` in `src/compiler/elab_fns.c`). This is what lets a
-`#reads`-refined accessor `build`/`run` at all; the safety backstop is the
-accessor's own internal check (previous section), and non-`#reads` impure
-predicates still get `TUR-E0375` -- the suppression is scoped to the grant.
+**The entry contract is suppressed.** An ordinary `#refine{ x | p }` parameter
+injects a runtime *entry contract* -- a `(tur-contract-check p ...)` at the top
+of the callee. For a `#reads`-measure predicate the injector **skips** it
+(`rt_pred_reads_measure` in `src/compiler/elab_fns.c`): the crossing is where a
+`#reads` refinement is enforced, and the safety backstop is the accessor's own
+internal check (previous section).
+
+**The purity gate accepts a `#reads` measure.** A contract predicate with side
+effects is a hard error (`TUR-E0375`: "contract predicate has side effects;
+predicates must be pure"), because whether the check is compiled in becomes
+observable. A `#reads` measure's body is inline C, so the purity walk alone
+would call it impure. But `#reads` is the claim that it only *reads*, and a read
+is not observable however often the check runs. So the gate
+(`rt_pred_observably_impure`) does not count a call the predicate makes directly
+to a `#reads` measure. Its arguments are still walked, an impure term beside it
+is still `TUR-E0375`, and so is an unannotated function that wraps one. The
+other contract positions -- `:pre`, `:post`, a refined return, and a loop's
+`:invariant` -- therefore accept a `#reads` measure as an ordinary **runtime**
+check. Before 2026-10-03 all four were `TUR-E0375`
+([reads-measure-rejected-in-invariant-and-pre](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/reads-measure-rejected-in-invariant-and-pre.md)).
+
+**A bounded-index loop invariant is PROVED inside a frozen region.** An
+invariant such as `:invariant (and (>= i 0) (<= i (vlen v)))` over a frozen `v`
+discharges on entry and through the body, and both runtime checks are then
+elided. It used to be **declined whole** -- the region's own `(& v)` made `v`
+volatile.
+
+What makes the bound provable is that two occurrences of `(vlen v)` denote the
+same value, and the evidence for that is **not** the borrow. A container's
+mutators take it BY VALUE -- `vec-push!` is `[v : (Vec A) val : A]`, `#fx{}` --
+so a region does not stop a callee growing it and no borrow conflict is
+reported. The evidence is a **write promise** on everything the loop hands `v`
+to, and there are two kinds:
+
+- `#reads v`, which `stdlib/vec.tur`'s `vec-len` and `vec-get` carry. The
+  mutators carry `#writes [v]` instead: that asymmetry is what distinguishes a
+  reader from a writer, because the signatures cannot.
+- a callee the compiler knows is **pure**, which writes nothing by definition
+  -- provided its result is a scalar or is itself only read. A pure function
+  that RETURNS `v` hands back a handle to write through, so
+  `(vec-push! (id v) 7)` withholds the grant.
+
+Hand `v` to anything else inside the loop -- a mutator, or an unannotated
+inline-C callee -- and the grant is withheld for that loop. The bound then
+falls back to "proved on entry, not preserved", its re-establishment check
+stays, and a body that really does grow `v` dies on that check instead of
+compiling to a false proof.
+
+Two further edges:
+
+- **Only the marker shape is exempt from the volatile set** -- a shared borrow
+  bound to a name nothing mentions. Name that borrow and use it, or take a
+  borrow inside the loop, and the loop is declined again (`TUR-W0372`), because
+  a shared borrow handed to an **inline-C callee does get written through**.
+- **A `#reads` measure written in Turmeric is checked for writes; one written
+  in inline C is trusted.** At its definition, every use of a framed parameter
+  in the body must be a read. A store through it, or handing it to a callee
+  whose `#writes` frame names it, is `TUR-W0383` and refuses every grant. A use
+  the walk cannot vouch for -- binding it to a local, returning it, passing it
+  to an unannotated function -- is silent, but that measure no longer backs
+  this grant. An inline-C body cannot be seen into, so its `#reads` stays a
+  trusted claim; the stdlib's are truthful.
+
+The measure's own refined return is a separate obligation, and stays runtime
+checked while its body is inline C (`(>= r 0)` is not provable from
+`vec-len`).
 
 **Enforcement of the crossing lives at compile time, under `--strict-refine`.**
 Because there is no runtime contract for a `#reads` crossing, an *unproven* one
@@ -299,7 +361,7 @@ both are worth knowing.
 about a mutable resource, congruent in a scope where that resource is frozen."
 The same `frozen` + `#reads` pair covers an open file (`(open? conn)`), a
 resizable buffer (`(in-bounds? buf i)` -- the bounds-elimination case
-[`loop-invariants-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md) wants;
+[`loop-invariants-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/loop-invariants-plan.md) wants;
 pinned by
 `tests/fixtures/refine-stateful-resizable-bounds`: the guard proves inside the
 region, `grow!` is `TUR-E0200` there, and without the region the read is
@@ -344,7 +406,7 @@ feature. **Step 2 has landed** (as the `write-frames` experiment, graduated in
 0.37.0) -- `#writes w` / `#writes [a b]` declares which arguments a body may
 write, and a frame on a body with no inline C is *checked* rather than
 believed. See
-[`checked-write-frames-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/checked-write-frames-plan.md).
+[`checked-write-frames-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/checked-write-frames-plan.md).
 
 `#reads` itself is unchanged by it: still trusted where it cannot be checked,
 still refinement-only, still step 1. What a checked `#writes` frame buys today is on the
@@ -416,7 +478,7 @@ saying so beats a message about parameters.
 `#reads` is deliberately **not** part of this. It is the annotation that
 *grants* congruence, so letting it name a global would let a promise about
 mutable global state pay out in proofs -- see
-[`mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mutable-globals-plan.md)
+[`mutable-globals-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/mutable-globals-plan.md)
 sections 12.2 and 12.4, and the `refine-reads-frame-omits-global` fixture pair
 that pins what a broken read-side promise costs.
 
@@ -449,7 +511,7 @@ design -- there is no runtime fallback to fall back to -- so refusing buys a
 diagnostic, not a check. Outside `--strict-refine` the program still compiles
 and still runs the unearned crossing; what changed is that the compiler now
 says so rather than staying silent. Fix the frame. See
-[`trusted-refinement-claims-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/trusted-refinement-claims-plan.md)
+[`trusted-refinement-claims-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/trusted-refinement-claims-plan.md)
 (R2 for the mutable-global evidence, R4 slice 1 for the omitted-parameter
 evidence -- `errors/r4-checked-reads-refuses-param-read` pins the refusal and
 `refine-reads-multi-param-visible-quiet` the fixed frame, while
@@ -502,7 +564,7 @@ verdict would speak about actually exists.
   `^unique ^mut`, and the `TUR-E0200` exclusive-access rule the `frozen` region
   relies on.
 - [Uniqueness Types guide](uniqueness-types-guide.md) -- `^unique` semantics.
-- [`refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)
+- [`refine-stateful-measures-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)
   -- the design record, including why the capability-token approach was retired
   in favour of `frozen` and why `#reads` is trusted.
 - [ECS guide](ecs-guide.md) -- the first consumer; `tur-ecs`'s `ecs/freeze`

@@ -24,11 +24,17 @@
 
 ```c
 /* FileSystem: all callbacks return an error code (0 = success). */
+/* The callback types are spelled exactly as the `c-fn` parameter types of
+ * make-FileSystem emit them (`ptr<u8>` is `uint8_t *`, `ptr<void>` is `void *`,
+ * no `const`): a callback is CALLED through these, and an indirect call
+ * through a pointer of another type is undefined (a -fsanitize=function trap,
+ * a call_indirect trap on WASM).  stdlib/io.tur's Real-FileSystem fills the
+ * same layout and spells its functions the same way. */
 typedef struct __tur_cap_fs {
     int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
-    int (*write_file)(const char* path, const unsigned char* data, int data_len);
+    int (*write_file)(const char* path, unsigned char* data, int data_len);
     int (*delete)(const char* path);
-    int (*list)(const char* path, char** entries, int max_entries, int* out_count);
+    int (*list)(const char* path, void* entries, int max_entries, int* out_count);
 } __tur_cap_fs;
 
 typedef struct __tur_cap_logger {
@@ -99,9 +105,9 @@ typedef struct __tur_cap_time {
   ```c
   __tur_cap_fs* fs = (__tur_cap_fs*)malloc(sizeof(__tur_cap_fs));
   fs->read_file = (int (*)(const char*, unsigned char*, int, int*))read_fn;
-  fs->write_file = (int (*)(const char*, const unsigned char*, int))write_fn;
+  fs->write_file = (int (*)(const char*, unsigned char*, int))write_fn;
   fs->delete = (int (*)(const char*))delete_fn;
-  fs->list = (int (*)(const char*, char**, int, int*))list_fn;
+  fs->list = (int (*)(const char*, void*, int, int*))list_fn;
   return (void*)fs;
   ```)
 ;;; FileSystem-free -- free a FileSystem capability allocated by make-FileSystem.
@@ -316,7 +322,7 @@ typedef struct __tur_cap_time {
 (defn fs-write [fs : FileSystem path : cstr data : ptr<void> data_len : int] : int
   ```c
   __tur_cap_fs* f = (__tur_cap_fs*)fs;
-  return f->write_file(path, (const unsigned char*)data, (int)data_len);
+  return f->write_file(path, (unsigned char*)data, (int)data_len);
   ```)
 ;;; fs-delete -- call delete on a FileSystem capability.
 ;;;
@@ -360,7 +366,7 @@ typedef struct __tur_cap_time {
   ```c
   __tur_cap_fs* f = (__tur_cap_fs*)fs;
   int out_count;
-  return f->list(path, (char**)entries, (int)max_entries, &out_count);
+  return f->list(path, (void*)entries, (int)max_entries, &out_count);
   ```)
 ;;; log-debug -- emit a debug-level log message via a Logger capability.
 ;;;

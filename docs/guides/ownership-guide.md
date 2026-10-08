@@ -31,7 +31,7 @@ first one that fits, not the most general one.
 | A buffer one piece of code mutates and nobody else holds | **By-value / single-owner mutable** -- `vec`, `mutmap`, `grid`, `ref`, `sized-*` | The owner owns the one buffer it mutates. No shared handles, so no back-pointers into shared nodes. |
 | An external resource with exactly-once teardown -- a socket, channel, task group, file | **Linear / affine opaque handle** -- `(defopaque H :linear)` / `:affine` | Single ownership and exactly-once teardown enforced by the type checker. This is the deliberate alternative to refcounting. |
 | Genuinely shared: several live owners, none of which is "the" owner, and the last one out must clean up | **`rc<T>`** | Runtime refcount. Prompt, deterministic release when the last strong handle goes. |
-| A back-edge, parent pointer, or observer inside an `rc<T>` graph | **`weak<T>`** ([stdlib/weak.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur)) | Holds no strong count, so it cannot close a cycle. The forward edges alone decide the lifetime. |
+| A back-edge, parent pointer, or observer inside an `rc<T>` graph | **`weak<T>`** ([stdlib/weak.tur](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/weak.tur)) | Holds no strong count, so it cannot close a cycle. The forward edges alone decide the lifetime. |
 
 ## Where the stdlib actually sits
 
@@ -176,7 +176,7 @@ let [o weak/upgrade(w)]
 
 The full surface is `rc/downgrade`, `weak/upgrade`, `weak/unwrap`,
 `weak/alive?`, and `weak/drop`, documented in
-[stdlib/weak.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur). Two rules are easy to miss:
+[stdlib/weak.tur](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/weak.tur). Two rules are easy to miss:
 
 - The rc handed back by `weak/upgrade` is a **new** strong reference. Drop it.
 - A `weak<T>` in a local binding is **not** released at scope exit -- call
@@ -194,6 +194,6 @@ when you can name which edge is the back-edge, which is most of the time.
 
 - [gc-guide.md](gc-guide.md) -- reference counting, the cycle collector, and the
   stdlib ownership audit
-- [stdlib/weak.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/weak.tur) -- the `weak<T>` API
-- [stdlib/rcchain.tur](https://github.com/rjungemann/turmeric/blob/main/stdlib/rcchain.tur) -- a collection of `rc<A>` the
+- [stdlib/weak.tur](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/weak.tur) -- the `weak<T>` API
+- [stdlib/rcchain.tur](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/rcchain.tur) -- a collection of `rc<A>` the
   cycle collector can trace through, for when the elements can cycle

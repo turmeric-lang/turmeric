@@ -413,10 +413,10 @@ emitted like any other.  Remember the repo style rule: the closing
 ## Limitations, stated plainly
 
 These are design boundaries, not bugs.  Each has a written rationale in
-[row-types-followups-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/hold/row-types-followups-plan.md)
+[row-types-followups-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/hold/row-types-followups-plan.md)
 (R3) and the documents it cites; the forward direction -- procedural
 macros running the full language on turi, with this evaluator frozen --
-is [macro-system-direction-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macro-system-direction-plan.md).
+is [macro-system-direction-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macro-system-direction-plan.md).
 
 - **No compile-time arithmetic.**  The evaluator's logic is `=`/`not`/`if`
   over forms; there is no `+`, `-`, or `<` at expansion time.  Repetition

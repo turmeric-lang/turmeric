@@ -21,7 +21,7 @@ R, DuckDB, and Polars without serialization.
 ## Installing
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref frame-v0.1.0 --subdir spices/frame --name frame
 tur fetch
 ```
@@ -33,7 +33,7 @@ tur fetch
   :name "myapp"
   :version "0.1.0"
   :spices #map{
-    "frame" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+    "frame" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                  :ref    "frame-v0.1.0"
                  :subdir "spices/frame"}
   })
@@ -278,14 +278,14 @@ Pass a predicate `(fn [frame row-index] :int)` -- return non-zero to keep the ro
 ;; Keep rows where age >= 30
 (let [seniors (filter df (fn [f i]
                            (let [age (column-int64-at (frame-column f "age") i)]
-                             (>= age 30))))]
+                             {age >= 30})))]
   (print-frame seniors))
 ```
 
 ```sweet-exp
 let [seniors (filter df (fn [f i]
                           (let [age (column-int64-at (frame-column f "age") i)]
-                            (>= age 30))))]
+                            {age >= 30})))]
   print-frame(seniors)
 ```
 

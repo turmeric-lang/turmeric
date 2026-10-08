@@ -239,7 +239,7 @@ every name against the running program's registry.
 
 **One frame, one env, one int hole.** The capture grammar is a single-scalar-hole chain; a page's state is one `cstr` (or `Serializable` value) and the resume value is an `int`. Pack state, and pass bulky data by reference (an id into the store), not by value.
 
-**Effects stay out of leaves.** Anything the reset context calls must not let an effect escape it (TUR-E0706) -- a leaf runs again every time the page resumes, possibly in another process. A named receiver MAY perform an effect it does not handle: the reset calls it on its own continuation, so the effect reaches the handlers around the `serial-reset` (not under an `if` in the context, and not from a capturing `(fn [k] ...)` receiver; both are still TUR-E0706). The guestbook keeps its page-transition effects in `advance` anyway, and its receivers call the templates and the store directly -- written before either restriction was lifted.
+**Effects stay out of leaves.** Anything the reset context calls must not let an effect escape it (TUR-E0706) -- a leaf runs again every time the page resumes, possibly in another process. A named receiver MAY perform an effect it does not handle: the reset calls it on its own continuation, so the effect reaches the handlers around the `serial-reset` (an `if` in the context and a capturing `(fn [k] ...)` receiver are fine too, as long as the closure captures plain values). The guestbook keeps its page-transition effects in `advance` anyway, and its receivers call the templates and the store directly -- written before those restrictions were lifted.
 
 **Token size.** A guestbook continuation is one frame: a few hundred bytes. Monitor `data/conts/` if a flow captures larger values.
 

@@ -2,7 +2,7 @@
 
 **Status: RESOLVED 2026-08-26.** Fixed properly, in MIR: the aarch64 back end
 now implements the AAPCS64 HFA rule. Pin bumped to
-[`472fa4c6`](https://github.com/rjungemann/mir/commit/472fa4c6fa608ba515e2214e2c2bc8c0e934c8d9)
+[`472fa4c6`](https://github.com/turmeric-lang/mir/commit/472fa4c6fa608ba515e2214e2c2bc8c0e934c8d9)
 (`cmake/mir.cmake`). See "Resolution" below; the original analysis is kept
 intact underneath because it is what made the fix tractable.
 

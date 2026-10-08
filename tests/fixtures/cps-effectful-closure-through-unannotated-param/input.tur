@@ -1,0 +1,18 @@
+;; A capturing effectful closure passed to an un-annotated fn parameter.  A
+;; call through that parameter threads the caller's continuation only through
+;; the fat value's `fn_cps` slot.  Until 2026-10-07 this compiled and then
+;; aborted at run time with "unhandled effect" (the perform ran from a fresh
+;; root); then it was refused at compile time, because the slot was filled only
+;; for a global fn.  Since 2026-10-08 a capturing lambda's fat value carries an
+;; env-box dispatcher in that slot
+;; (docs/reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md),
+;; and this prints 16, as `tur --interpret` does.
+(defeffect Ask [] :int)
+
+(defn app [h : (fn [int] int) x : int] : int (h x))
+
+(defn main [] : int
+  (let [m 5]
+    (println (handle (app (fn [x : int] : int (+ m (+ x (perform (Ask))))) 1)
+               (Ask [] k) (resume k 10))))
+  0)

@@ -42,7 +42,7 @@ builds.
 ## Minimal repro
 
 ```sh
-git clone https://github.com/rjungemann/turmeric-spices /tmp/spices
+git clone https://github.com/turmeric-lang/turmeric-spices /tmp/spices
 cd /tmp/spices && git checkout migrate-cfn-s1-2026-06-14
 cd spices/rtmidi
 CPATH=$(brew --prefix rtmidi)/include LIBRARY_PATH=$(brew --prefix rtmidi)/lib \

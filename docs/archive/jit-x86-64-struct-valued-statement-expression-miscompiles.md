@@ -4,7 +4,7 @@
 driving the Saffron dynamic-surface PR to green.
 
 **Status: RESOLVED 2026-09-29.** The engine fix below landed as
-[rjungemann/mir#5](https://github.com/rjungemann/mir/pull/5), merged into the
+[rjungemann/mir#5](https://github.com/turmeric-lang/mir/pull/5), merged into the
 fork's master as `96c34860`, and `TUR_MIR_GIT_TAG` in `cmake/mir.cmake` now
 pins that commit (with a line in the pin notes above it). MIR carries the
 regression test (`c-tests/new/stmtexpr-struct-slot-overlap.c`: both reported

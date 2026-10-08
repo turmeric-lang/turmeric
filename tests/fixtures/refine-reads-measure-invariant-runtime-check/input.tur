@@ -1,0 +1,18 @@
+;; reads-measure-rejected-in-invariant-and-pre: an `:invariant` over a `#reads`
+;; measure is a real runtime check, not a decoration.  `n <= vlen(v)` cannot be
+;; proved on entry (outside a `frozen` region the measure is a fresh symbol),
+;; so the entry check is kept -- and with n = 5 over a three-element vector it
+;; fails before the first iteration.
+(defn vlen [^borrow v : (Vec int)] #reads v : int
+  (vec-len v))
+
+(defn walk-from [^borrow v : (Vec int) n : int] : int
+  (let [^mut i n]
+    (while (< i (vlen v)) :invariant (<= i (vlen v))
+      (set! i (+ i 1)))
+    i))
+
+(defn main [] : int
+  (let [v (vec-of 1 2 3)]
+    (println (walk-from v 5)))
+  0)

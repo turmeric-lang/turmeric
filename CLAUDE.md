@@ -13,9 +13,20 @@ minimal repro, root cause with file:line when known, fix directions). But
 this is an aid, not a gate -- do not let it stop you from pressing on toward
 v1.
 
+Every file in `docs/reported/` needs a row in `docs/reported/README.md`. CI's
+"Docs lint" job checks that (and the r7rs SRFI table) via
+`tests/check-docs-lint.sh`, which runs in well under a second. A Claude Code
+`PreToolUse` hook (`.claude/hooks/docs-lint-before-push.sh`) runs the same
+script before any `git push` of this repo and blocks the push while it fails.
+It reads the working tree, so commit the fix before pushing again.
+
 ### Test suites -- `bash tests/run.sh`
 
-`bash tests/run.sh` (the by-value HKT path) is the suite. The legacy
+`bash tests/run.sh` (the by-value HKT path) is the suite. To run one fixture,
+a slice, or another harness, see
+[docs/guides/running-tests-guide.md](docs/guides/running-tests-guide.md) --
+e.g. `TUR_TEST_FILTER='^name$' bash tests/run.sh`. Do not guess variable
+names: an unknown one is silently ignored and the whole suite runs. The legacy
 `TUR_M7_HKT=0` carrier path has been retired -- there is no longer a second
 suite. It is a signal, not a gate: run it when it is useful, read what it
 tells you, and use your judgement about what to do with red -- a red suite
@@ -464,7 +475,11 @@ cmake --build build -j --config Debug
 bash tests/run.sh                                                                # compiled-fixture suite
 ```
 
-The built compiler lands at `./build/tur`.
+The built compiler lands at `./build/tur`. It carries the MIR JIT engine
+(`tur jit`): `TUR_JIT` defaults ON on 64-bit x86-64/arm64, compiling the MIR
+sources vendored under `external/mir/` -- no configure reaches the network.
+Never edit `external/mir/` by hand; `external/mir/VENDORED.md` says how to
+change MIR.
 
 ### Test suite size and runtime -- READ BEFORE ASSUMING A HANG
 
@@ -525,6 +540,16 @@ observed:
   `--interpret` fixture times out, check its peak RSS
   (`/proc/<pid>/status` `VmHWM`) before reaching for a bigger timeout. See
   [docs/archive/ci-cps-tramp-turi-timeouts-under-load.md](docs/archive/ci-cps-tramp-turi-timeouts-under-load.md).
+  **Since 2026-10-05** an activation's call frame, its let / match-arm frames
+  and their bindings are handed back when nothing captured them
+  ([turi-call-frames-never-reclaimed](docs/archive/turi-call-frames-never-reclaimed.md)),
+  so ordinary loops no longer grow per step. A closure capture keeps its
+  frames, a re-entrant `call/cc` turns reclamation off for the rest of the
+  run, and a by-value struct argument of a type the program writes a field of
+  is still copied and kept (since 2026-10-07 nothing else is copied:
+  [turi-immutable-struct-args-copied-per-call](docs/archive/turi-immutable-struct-args-copied-per-call.md)).
+  On the Debug `tur`,
+  ASan's free quarantine (256 MB by default) adds to every peak.
 
 The rule of thumb: **before diagnosing a test failure, check whether anything
 else was building or testing at the same time.** If it was, re-run alone before
@@ -727,6 +752,7 @@ PASS-skip it under certain conditions:
 | Marker | Skips when ... |
 | --- | --- |
 | `requires.tsan` | `TUR_TSAN` is not `1` |
+| `requires.stress` | `TUR_STRESS` is not `1`; the fixture is the full-size (e.g. 1e7) twin of a per-PR fixture, run only by `nightly-arm64.yml`. Its skip prints as `PASS <name> (stress-skipped)` |
 | `requires.interp` | (override) forces the interpreter path even under non-TSan |
 | `requires.interp-only` | always under `run.sh` (happy path and `errors/` alike); the fixture asserts a `tur --interpret` behaviour and is owned by `tests/run-turi.sh` |
 | `requires.dedicated-runner` | always under `run.sh`; the fixture is owned by its own ctest target (e.g. `tur_eval_import`) |
@@ -735,9 +761,9 @@ PASS-skip it under certain conditions:
 | `requires.musttail` | the fixture compiler (`$CC`) does not honour `TUR_MUSTTAIL` -- probed once per run with the same gate the emitter writes; today only clang on x86-64/aarch64 passes it |
 | `requires.posix-apis` | `TUR_HOST_WINDOWS=1` (an MSYS2 `MSYSTEM`); the fixture's inline-C needs a POSIX API MinGW lacks -- `pipe()`, `fork()`, `getppid()`. Applies to negative fixtures too |
 
-`tests/run-turi.sh` honours the same five markers (`requires.compiled`,
+`tests/run-turi.sh` honours the same six markers (`requires.compiled`,
 `requires.tur-only`, `requires.dedicated-runner`, `requires.spices`,
-`requires.tsan`) on both its positive pass and its `errors/` pass, through one
+`requires.tsan`, `requires.stress`) on both its positive pass and its `errors/` pass, through one
 helper, and counts every skip: its summary reads `P passed, F failed, S
 skipped of D discovered` and the run fails if those do not add up. It also
 PASS-skips any fixture whose program (own file or one `load` deep) contains
@@ -761,6 +787,12 @@ or timeout still fails. Use it for a gap a plan wants on record as a test
 rather than as prose (first use: r7rs-lang-plan D5's referential-transparency
 gap, since closed and its marker deleted), never to park a regression.
 
+A fixture may also carry `known.fnsan` (not a skip marker): its compiled
+program is a KNOWN trap under clang's `-fsanitize=function`, and the marker's
+first line names the open report.  `tests/run-fnsan.sh` (the `fnsan` CI job)
+leaves it out of the gate run, then runs it alone and FAILS if it no longer
+traps -- delete the marker then.  Never use it to park a new trap.
+
 A fixture may also carry `requires.no-leak-check` (not a skip marker): the
 compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for
 fixtures whose program intentionally registers process-lifetime closures the
@@ -774,7 +806,7 @@ fixtures tagged `requires.spices` run as normal; when absent they auto-skip.
 To enable them, clone the repo next to this one:
 
 ```sh
-git clone https://github.com/rjungemann/turmeric-spices/ ../turmeric-spices
+git clone https://github.com/turmeric-lang/turmeric-spices/ ../turmeric-spices
 ```
 
 ## Sweet-Expression Style

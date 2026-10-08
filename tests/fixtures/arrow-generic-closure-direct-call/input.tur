@@ -1,0 +1,45 @@
+;; arrow-generic-closure-direct-call -- calling the closure a generic returns,
+;; straight off the call, at a non-carrier element type.
+;;
+;; 1. `((>>> f g) 7.1)` printed -9223372036854775808 (the interpreter: 16.7).
+;;    `>>>` was declared `: ptr<void>`, so the call was typed from the
+;;    producing lambda `(fn [x : A] : C ...)` -- its result as C's int64
+;;    carrier.  `>>>` now returns `(fn [A] #fx{} C)`.  This is arrow.tur's own
+;;    docstring example.
+;; 2. With that fixed, the argument still crossed wrong: the invoke targets
+;;    the float spec clone `__fn_N__spec__double_void___double`, but 7.1 had
+;;    been reinterpreted to the carrier `A` for the generic lambda, and C then
+;;    VALUE-converted those bits into the double slot (9.23936e+18).  A
+;;    reinterpret whose source is the clone's declared slot type is dropped.
+;; 3. `pipe` below handed its `^fat` arrows to the `[^Arrow A]` generic, and
+;;    the tyvar-parameter shim boxed the already-fat box: slot 0's fatshim
+;;    called the inner box's address as code (SIGSEGV on main for every
+;;    element type).  Int arrows here; float and cstr arrows through the
+;;    same generic are tests/fixtures/arrow-instance-in-constrained-generic.
+
+(load "stdlib/arrow.tur")
+
+(defn compose2 [A B C] [^fat f : (fn [A] #fx{} B) ^fat g : (fn [B] #fx{} C)] : (fn [A] #fx{} C)
+  (let [fv f
+        gv g]
+    (fn [x : A] : C (gv (fv x)))))
+
+(defn pipe [^Arrow A] [f : A g : A] : A (.>>> f g))
+
+(defn main [] : int
+  (let [f (fn [x : float] : float (+ x 1.25))
+        g (fn [x : float] : float (* x 2.0))
+        n (fn [x : float] : int (if (> x 3.0) 7 1))
+        s (fn [x : int] : cstr (if (> x 3) "big" "small"))]
+    (println ((>>> f g) 7.1))
+    (println ((>>> n s) 7.1))
+    (println ((>>> n s) 2.5))
+    (println ((>>> (fn [x : float] : float (+ x 1.0))
+                   (fn [x : float] : float (* x 2.0))) 3.0))
+    (println ((compose2 f g) 7.1))
+    (println ((compose2 n s) 7.1)))
+  (let [^fat f : (fn [int] #fx{} int) (fn [x : int] : int (+ x 1))
+        ^fat g : (fn [int] #fx{} int) (fn [x : int] : int (* x 10))
+        ^fat h : (fn [int] #fx{} int) (pipe f g)]
+    (println (h 4)))
+  0)

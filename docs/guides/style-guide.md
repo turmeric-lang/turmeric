@@ -214,7 +214,7 @@ fixed-arity helper.
 
 ## Docstring Standard (`;;;`)
 
-See the full standard in [CLAUDE.md](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md#docstring-standard-).
+See the full standard in [CLAUDE.md](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md#docstring-standard-).
 
 Quick reference:
 
@@ -255,7 +255,7 @@ defn fn-name [param :int] :int
 
 ## Indentation
 
-Follow Clojure-style indentation -- see [CLAUDE.md](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md#indentation-style)
+Follow Clojure-style indentation -- see [CLAUDE.md](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md#indentation-style)
 for the full rules.
 
 Key points:

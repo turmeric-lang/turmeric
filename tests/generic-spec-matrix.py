@@ -39,10 +39,26 @@ Usage
     python3 tests/generic-spec-matrix.py [--jobs N] [--tur ./build/tur]
         [--only PRODUCER/SINK/TYPE glob] [--no-interp] [--no-lint]
         [--baseline FILE] [--write-baseline FILE] [--keep DIR]
+        [--shard i/N]
 
 Exit 1 if a cell fails that the baseline does not list (or any cell fails
 when no baseline is given), or if a baseline cell now PASSES (reported as
 FIXED: remove its row, so the baseline can only shrink); 0 otherwise.
+
+Sharding
+--------
+`--shard i/N` (or $TUR_GSM_SHARD) runs a round-robin slice of the live cells,
+1-based, so N invocations cover the matrix exactly once between them.  The
+matrix is 4066 live cells at ~1.5s of CPU each and is RUN_SERIAL under ctest
+(it fans out internally), which makes it a barrier no `-j` can compress -- the
+shard is how CI splits that barrier across jobs.  Unset runs everything, so a
+local `ctest` and the nightly arm64 leg still see the whole matrix.
+
+NOT $TUR_TEST_SHARD: tools/ci/collect-suite-timings.py tags rows from the
+job's ENVIRONMENT, so anything else sharing a job with $TUR_TEST_SHARD gets the
+tag too.  CI deliberately runs a shard of this suite inside the 159-test `aux`
+part, where $TUR_TEST_SHARD would mislabel all 159 other rows.  One variable
+per script keeps both call sites correct without a rule to remember.
 """
 
 import argparse
@@ -57,6 +73,7 @@ from concurrent.futures import ThreadPoolExecutor
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fconv_lint  # noqa: E402
+from shard_util import parse_shard, shard_label, shard_slice  # noqa: E402
 
 # -- types -------------------------------------------------------------------
 # name -> (spelling, literal, render, expected stdout line)
@@ -273,7 +290,22 @@ def main():
     ap.add_argument("--baseline", help="file of known-open cells, one per line")
     ap.add_argument("--write-baseline", help="write the failing cells here")
     ap.add_argument("--keep", help="keep generated programs in this directory")
+    ap.add_argument("--shard", default=os.environ.get("TUR_GSM_SHARD"),
+                    help='run a round-robin slice of the live cells, as "i/N" '
+                         '(default: $TUR_GSM_SHARD; unset runs everything)')
     args = ap.parse_args()
+
+    shard_index, shard_total = parse_shard(args.shard)
+
+    # --write-baseline writes `failing` from THIS invocation, so a sharded run
+    # would silently truncate the baseline to its own quarter of the matrix --
+    # and a baseline that lost rows is a ratchet that went backwards without
+    # saying so.  Refuse instead; regenerate from an unsharded run.
+    if args.write_baseline and shard_total:
+        sys.stderr.write(
+            "generic-spec-matrix: --write-baseline with --shard would write a "
+            "baseline holding only this shard's cells; rerun unsharded\n")
+        return 2
 
     clang = None if args.no_lint else fconv_lint.find_clang()
     if not args.no_lint and not clang:
@@ -284,6 +316,14 @@ def main():
              if fnmatch.fnmatch("%s/%s/%s" % (p, s, t), args.only)]
     n_excluded = sum(1 for c in cells if excluded(c))
     cells = [c for c in cells if not excluded(c)]
+    # Slice the LIVE cells, after --only and after EXCLUDE: the ordinals that
+    # matter are the ones that cost 1.5s each.  The innermost loop above varies
+    # TYPES, and 19 is prime, so no shard count in 2..4 divides it and no shard
+    # can come out correlated with a type -- which is the one way this slice
+    # could be unbalanced, since a struct or pairv cell costs more than an int
+    # one.
+    n_live = len(cells)
+    cells = shard_slice(cells, shard_index, shard_total)
     workdir = args.keep or tempfile.mkdtemp(prefix="gsm-")
     os.makedirs(workdir, exist_ok=True)
     try:
@@ -298,6 +338,13 @@ def main():
         with open(args.baseline) as f:
             known = {l.strip() for l in f if l.strip() and not l.startswith("#")}
 
+    # A shard needs no special case here, and that is worth stating because the
+    # opposite is the natural worry: the loop is over `results` -- the cells
+    # THIS invocation ran -- and asks `key in known`, so a baseline row
+    # belonging to another shard is never examined and never reported as FIXED.
+    # (The reverse reading, iterating `known` and asking whether it passed,
+    # would report every other shard's rows as fixed.  Do not rewrite it that
+    # way.)
     failing, new, fixed = [], [], []
     for r in results:
         key = "%s/%s/%s" % r["cell"]
@@ -318,9 +365,13 @@ def main():
             for k in sorted(failing):
                 f.write(k + "\n")
 
-    print("generic-spec-matrix: %d cells, %d failing (%d new, %d known), %d fixed, "
+    scope = ("%d cells%s of %d live" % (len(results), shard_label(shard_index,
+                                                                 shard_total),
+                                        n_live)
+             if shard_total else "%d cells" % len(results))
+    print("generic-spec-matrix: %s, %d failing (%d new, %d known), %d fixed, "
           "%d excluded as language limitations (see EXCLUDE)"
-          % (len(results), len(failing), len(new), len(failing) - len(new),
+          % (scope, len(failing), len(new), len(failing) - len(new),
              len(fixed), n_excluded))
     # A FIXED cell fails too: the baseline is a ratchet, and a stale row would
     # let the cell regress unnoticed.

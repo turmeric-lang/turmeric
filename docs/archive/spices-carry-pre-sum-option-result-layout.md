@@ -62,7 +62,7 @@ sums") migrated the same two patterns across the stdlib and ~40 fixtures.
 ## Verification
 
 Clone the spices next to this repo
-(`git clone https://github.com/rjungemann/turmeric-spices ../turmeric-spices`)
+(`git clone https://github.com/turmeric-lang/turmeric-spices ../turmeric-spices`)
 and run `bash tests/run.sh` so the `requires.spices` fixtures stop skipping;
 then each spice's own test suite.
 

@@ -101,6 +101,14 @@ struct EffectRow {
         struct {
             const Symbol **sym_names; /* Unresolved symbolic names */
             uint8_t n_sym_names;
+            /* The `#fx{...}` form the names came from, so a name no
+             * `defeffect` declares can be reported where it was written
+             * (TUR-E0026).  Zero for a row with no source form. */
+            Span span;
+            /* Set once this row's unknown names have been reported: a row
+             * object reached through two holders is resolved twice, and
+             * must not be diagnosed twice. */
+            bool unknown_reported;
         } unresolved;
     } as;
 };
@@ -119,8 +127,11 @@ EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right);
 
 /* Create an unresolved (symbolic) effect row from an array of symbol names.
  * Uppercase names will resolve to concrete effects; lowercase to row variables.
- * Must be resolved by effect_row_resolve() before the inference pass runs. */
-EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_sym_names);
+ * Must be resolved by effect_row_resolve() before the inference pass runs.
+ * `span` is the `#fx{...}` form the names were read from (TUR-E0026 points
+ * at it); pass a zero Span when there is none. */
+EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names,
+                                 uint8_t n_sym_names, Span span);
 
 /* ET4: Returns true if `child` is the same as `parent_eff` or is a descendant via ^extends */
 bool effect_is_subeffect(const Effect *child, const Effect *parent_eff);
@@ -134,6 +145,21 @@ void effect_row_format_names(Buf *b, EffectRow *row);
 
 /* Check if an effect row is empty */
 bool effect_row_is_empty(EffectRow *row);
+
+/* True when `row` names nothing a handler could ever see: it is empty, or
+ * every effect in it is a `^capability` tag (an authority annotation that is
+ * never performed and never handled -- IO on `println`, FS, Bt).  The CPS and
+ * emitter gates that ask "can this function perform an effect at runtime?"
+ * use this rather than effect_row_is_empty: a function whose row is {IO}
+ * because it prints is as pure, to a handler, as one whose row is {}.  A row
+ * variable or an unresolved row is not runtime-pure (unknown). */
+bool effect_row_is_runtime_pure(const EffectRow *row);
+
+/* `row` with its `^capability` effects removed (ERK_CONCRETE and ERK_UNION
+ * are filtered; other kinds are returned unchanged).  For the lints that ask
+ * what a body PERFORMS -- an unreachable handler (W0033), an always-concrete
+ * row variable (W0032) -- where a capability tag says nothing. */
+EffectRow *effect_row_without_capabilities(Arena *a, EffectRow *row);
 
 /* Check if an effect row contains a specific effect */
 bool effect_row_contains(EffectRow *row, Effect *effect);
@@ -165,9 +191,19 @@ typedef struct EffectEnv {
 
 /* Resolve an ERK_UNRESOLVED row against the populated effect environment.
  * Uppercase symbol names are looked up in env and become ERK_CONCRETE entries;
- * lowercase symbol names become ERK_VAR entries.  Unknown uppercase names are
- * silently skipped.  Non-UNRESOLVED rows are returned unchanged. */
+ * lowercase symbol names become ERK_VAR entries.  An uppercase name env does
+ * not declare is left out of the result -- it is the CALLER's job to report
+ * it first (effect_row_unknown_names / TUR-E0026), because a dropped name
+ * turns `#fx{IO}` into `#fx{}` and silently stops a caller's `#fx{}` being
+ * checked.  Non-UNRESOLVED rows are returned unchanged. */
 EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a);
+
+/* TUR-E0026: collect the uppercase names in an ERK_UNRESOLVED row that no
+ * effect in `env` declares -- exactly the names effect_row_resolve() would
+ * drop.  Writes at most `cap` of them to `out` and returns how many there are
+ * in total.  Returns 0 for any row that is not ERK_UNRESOLVED. */
+uint8_t effect_row_unknown_names(const EffectRow *row, EffectEnv *env,
+                                 const Symbol **out, uint8_t cap);
 
 EffectEnv *effect_env_new(Arena *a);
 
@@ -199,6 +235,19 @@ bool effect_env_contains(EffectEnv *env, const Symbol *name);
 /* Register built-in `Unsafe` effect (idempotent). */
 Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
                                            const Symbol *unsafe_name);
+
+/* effect-row-honesty-plan W2: the compiler-known capability tags -- IO, and
+ * FS / Net / Proc / Rand `^extends IO` -- registered with their parent links
+ * and is_capability set, so `#fx{IO}` resolves in a program that loads
+ * nothing.  Idempotent.  Every EffectEnv that registers Unsafe registers
+ * these too (elab, PASS_EFFECT_LOWER, the interpreter's session env). */
+void effect_env_register_builtin_capabilities(EffectEnv *env, Arena *a,
+                                              SymbolTable *st);
+
+/* True when `name` is one of those tags; *parent_out (if non-NULL) receives
+ * its built-in parent's name, or NULL for IO.  A `defeffect` of such a name
+ * is accepted only when it declares exactly the built-in (elab_effects.c). */
+bool effect_builtin_capability(const char *name, const char **parent_out);
 
 /* ---------------------------------------------------------------------------
  * Phase P19-4: Effect-row substitution for row-variable unification.

@@ -1,0 +1,13 @@
+;; panic-location-names-the-runtime-not-the-call-site: a panic names the
+;; `.tur` file and line of the `(panic ...)` that raised it.  It used to name
+;; a line inside the runtime preamble's own tur_panic, the same for every
+;; program (compiled), or nothing at all (interpreted).
+(defn checked-div [a : int b : int] : int
+  (if (= b 0)
+    (panic "division by zero")
+    (/ a b)))
+
+(defn main [] : int
+  (println (checked-div 10 2))
+  (println (checked-div 10 0))
+  0)

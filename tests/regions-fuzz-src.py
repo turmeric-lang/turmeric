@@ -413,7 +413,7 @@ def run_arm(tur, build, src, regions_on):
         stats = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
     if "AddressSanitizer" in p.stderr:
         return Outcome("asan", p.stdout, p.stderr, stats)
-    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    if fuzz_arm.is_fnsan_trap(p.returncode):
         return Outcome("fnptr_trap", p.stdout, p.stderr, stats)
     if p.returncode != 0:
         return Outcome("fail", p.stdout, p.stderr, stats)
@@ -448,7 +448,7 @@ def check_program(tur, build, src_text, expected, rewinds, retires):
                 problems.append(msg)
             else:
                 print("  note: " + msg + " (report-only; "
-                      "TUR_FUZZ_FNSAN_STRICT=1 fails on it)", flush=True)
+                      "TUR_FUZZ_FNSAN_STRICT=0 set)", flush=True)
             continue
         if o.status == "fail":
             tail = o.stderr.strip().splitlines()[-1] if o.stderr.strip() else "(no stderr)"
@@ -471,17 +471,19 @@ def self_test(tur, build):
     """The plumbing: the two pinned fixtures must pass both arms and report
     the retire counts their comments promise (every bracket escapes)."""
     ok = True
-    for fx, brackets in (("region-escape-via-store", 11), ("region-escape-via-erasure", 4)):
+    for fx, brackets in (("region-escape-via-store", 12), ("region-escape-via-erasure", 4)):
         d = os.path.join(REPO, "tests", "fixtures", fx)
         with open(os.path.join(d, "input.tur")) as f:
             src = f.read()
         with open(os.path.join(d, "expected.stdout")) as f:
             expected = f.read().splitlines()
-        # store: ten brackets escape and the nested case's inner rewinds
-        # (case 10, the widened field store, arrived with r7rs-lang-plan R3 --
-        # CLAUDE.md's store-hook rule puts every new store in that fixture, so
-        # a new case moves this count too); erasure: all four retire.
-        rw, rt = (1, 10) if fx == "region-escape-via-store" else (0, 4)
+        # store: eleven brackets escape and the nested case's inner rewinds
+        # (case 10, the widened field store, arrived with r7rs-lang-plan R3,
+        # and case 11, tvar/write in a bracket, with
+        # stm-inside-closure-captured-tvar-undeclared -- CLAUDE.md's store-hook
+        # rule puts every new store in that fixture, so a new case moves this
+        # count too); erasure: all four retire.
+        rw, rt = (1, 11) if fx == "region-escape-via-store" else (0, 4)
         problems, on, off = check_program(tur, build, src, expected, rw, rt)
         if problems:
             ok = False

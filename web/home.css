@@ -283,6 +283,12 @@ section {
   position: relative;
 }
 
+.step-code.step-code-wrap {
+  white-space: pre-wrap;
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+}
+
 .step-code .copy-btn {
   position: absolute;
   top: 10px;

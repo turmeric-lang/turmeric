@@ -9,7 +9,7 @@
 ## Overview
 
 Every item here was found by writing a real LSP client against `tur lsp` —
-[Trowel](https://github.com/rjungemann/trowel), the native Turmeric editor —
+[Trowel](https://github.com/turmeric-lang/trowel), the native Turmeric editor —
 and hitting something that had to be worked around in the client rather than
 fixed in the server. That is the value of the list: these are not speculative
 gaps, they are places where a shipping consumer already carries compensating

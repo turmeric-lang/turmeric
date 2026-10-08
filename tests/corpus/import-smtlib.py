@@ -43,14 +43,14 @@ for an environment where the record's host is blocked but a bucket is not.
 
 The import is DONE and its output is published at
 
-    https://github.com/rjungemann/smt-lib-benchmarks
+    https://github.com/turmeric-lang/smt-lib-benchmarks
 
 as `smtlib-2025/`: 25 benchmarks per logic across the eight fragment logics
 (200 files), seed 1, with the CC-BY-4.0 ATTRIBUTION file. It lives in a
 separate repository because the data is too large to check into the turmeric
 tree's history -- NOT because it could not be obtained.
 
-    git clone https://github.com/rjungemann/smt-lib-benchmarks /tmp/smtlib-bench
+    git clone https://github.com/turmeric-lang/smt-lib-benchmarks /tmp/smtlib-bench
     TUR_CORPUS_TIMEOUT=3 ./build/tur_refine_corpus /tmp/smtlib-bench/smtlib-2025
 
 Only re-run this script to produce a DIFFERENT sample (other logics, other

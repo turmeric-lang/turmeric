@@ -1,6 +1,7 @@
 #include "expr.h"
 #include "typeclass.h"  /* Phase 15 */
 
+#include <stdio.h>
 #include <string.h>
 
 Expr *expr_new(Arena *a, ExprKind k, Type t, Span span) {
@@ -10,6 +11,20 @@ Expr *expr_new(Arena *a, ExprKind k, Type t, Span span) {
     e->type = t;
     e->span = span;
     return e;
+}
+
+const char *binding_fn_describe(const Binding *b, char *buf, size_t cap) {
+    if (!buf || cap == 0) return "";
+    if (!b || !b->name)
+        snprintf(buf, cap, "anonymous function");
+    else if (b->is_synthesized && b->diag_label)
+        snprintf(buf, cap, "%s", b->diag_label);
+    else if (b->is_synthesized)
+        /* A mint site that has not set a label yet: still never the gensym. */
+        snprintf(buf, cap, "compiler-generated function");
+    else
+        snprintf(buf, cap, "function '%s'", b->name->name);
+    return buf;
 }
 
 /* Minimal debug printer; not critical to phase 1, but useful when codegen

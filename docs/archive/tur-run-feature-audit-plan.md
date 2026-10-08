@@ -133,7 +133,7 @@ Neither of these is a missing feature.  Both are cases where `tur run` accepts
 input it does not implement and produces a wrong result with no diagnostic,
 which is strictly worse than the clean "install just" refusal the surrounding
 code was designed to give.  Filed as
-[docs/reported/tur-run-silently-ignores-parameterized-attributes.md](https://github.com/rjungemann/turmeric/blob/main/docs/reported/tur-run-silently-ignores-parameterized-attributes.md).
+[docs/reported/tur-run-silently-ignores-parameterized-attributes.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/tur-run-silently-ignores-parameterized-attributes.md).
 
 #### 2.0.1 Parameterized attributes are silently dropped (safety)
 
@@ -501,7 +501,7 @@ feature question below, regardless of how the five criteria score.
 
 - Original tur-run-plan.md: the v0.1.0 scope and phase breakdown (RN0-RN9),
   archived at
-  [docs/archive/history/tur-run-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/tur-run-plan.md)
+  [docs/archive/history/tur-run-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/tur-run-plan.md)
 - `src/compiler/justrun.c`: the current implementation (2050 lines)
 - `tools/just-vs-tur-run.sh`: CI parity test between `just` and `tur run`
 - `tests/run-tur-run-alias.sh`: alias resolution regression test

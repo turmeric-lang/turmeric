@@ -36,7 +36,7 @@
 ;;;   converted to a sum constructor in SR2b -- the dead err arm, and the
 ;;;   `(default-of B)` zero it required, are gone).
 
-(defn ok [A B] [x : A] #fx{Construct} : (Result A B) (Ok x))
+(defn ^construct ok [A B] [x : A] : (Result A B) (Ok x))
 ;;; err -- wrap an error value of type B in a Result[A B].
 ;;;
 ;;; Parameters:
@@ -54,7 +54,7 @@
 ;;; Since: Phase TC1 (made polymorphic as Prereq 3, 2026-06-12; sum
 ;;;   constructor since SR2b -- no more `(default-of A)` for the dead ok arm).
 
-(defn err [A B] [e : B] #fx{Construct} : (Result A B) (Err e))
+(defn ^construct err [A B] [e : B] : (Result A B) (Err e))
 ;;; ok? -- check whether a Result[A B] is ok.
 ;;;
 ;;; Parameters:
@@ -173,7 +173,10 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn result-eq? [r1 : int r2 : int ^borrow ^fat ok-cmp ^borrow ^fat err-cmp]
+(defn result-eq? [A E] [r1 : int
+                        r2 : int
+                        ^borrow ^fat ok-cmp : (fn [A A] bool)
+                        ^borrow ^fat err-cmp : (fn [E E] bool)]
   #fx{}
   : bool
   ```c

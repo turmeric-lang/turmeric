@@ -55,6 +55,52 @@ static bool sink_fn_result_is_hkt_erased(const Type *fn_type, uint32_t idx) {
     return dr && dr->kind == TY_APP && hh && hh->kind == TY_TYVAR;
 }
 
+/* fnsan-nil-closure-into-erased-result: does the callee's declared type for
+ * argument slot `idx` return a bare type variable (`(fn [...] A)`)?  At
+ * `A := nil` no spec clone is made, so the carrier base calls the slot as
+ * returning a word. */
+static bool sink_fn_result_is_bare_tyvar(const Type *fn_type, uint32_t idx) {
+    if (!fn_type || fn_type->kind != TY_FN || !fn_type->as.fn.arg_full_types ||
+        idx >= fn_type->as.fn.arity)
+        return false;
+    const Type *decl = fn_type->as.fn.arg_full_types[idx];
+    if (!decl || decl->kind != TY_FN) return false;
+    const Type *dr = decl->as.fn.result_full_type;
+    return dr ? dr->kind == TY_TYVAR : decl->as.fn.result_kind == TY_TYVAR;
+}
+
+/* fnsan-fat-closure-at-tyvar-sink: does the callee's declared type for
+ * argument slot `idx` take a bare type variable in some PARAMETER position
+ * (`(fn [A A] bool)`)?  A callee that reads the slot erased calls it with
+ * words there. */
+static bool sink_fn_has_tyvar_param(const Type *fn_type, uint32_t idx) {
+    if (!fn_type || fn_type->kind != TY_FN || !fn_type->as.fn.arg_full_types ||
+        idx >= fn_type->as.fn.arity)
+        return false;
+    const Type *decl = fn_type->as.fn.arg_full_types[idx];
+    if (!decl || decl->kind != TY_FN) return false;
+    for (uint32_t k = 0; k < decl->as.fn.arity; k++) {
+        const Type *pt = decl->as.fn.arg_full_types ? decl->as.fn.arg_full_types[k] : NULL;
+        if (pt ? pt->kind == TY_TYVAR
+               : (decl->as.fn.arg_kinds && decl->as.fn.arg_kinds[k] == TY_TYVAR))
+            return true;
+    }
+    return false;
+}
+
+/* ...and is `a` a `^fat` parameter declared with a fn type, being forwarded?
+ * Its reference reads as the opaque `ptr<void>` handle; the binding keeps the
+ * declared `(fn [W W] bool)`, which a spec clone resolves to its own types --
+ * `map-eq?` forwarding its comparator to the inline-C `map-eq-raw?`.  Only
+ * an inline-C callee is asked about it: a Turmeric-bodied one reads the
+ * handle through its own spec or carrier base, which the producer that boxed
+ * it already answered for. */
+static bool arg_is_typed_fat_param(const Expr *a) {
+    return a && a->kind == EX_VAR && a->as.var.binding &&
+           a->as.var.binding->is_fat && a->as.var.binding->is_param &&
+           a->as.var.binding->type.kind == TY_FN;
+}
+
 /* ...and is `t` a by-value aggregate (a concrete ADT monomorph or ADT, not a
  * :heap one) -- the result shape the boxing shim bridges? */
 static bool type_is_byvalue_aggregate_result(Type t) {
@@ -977,6 +1023,23 @@ static Expr *saffron_dyn_fn_adaptor_make(Elab *e, Expr *value) {
  * and `set!`. */
 Expr *elab_fn_value_to_fat(Elab *e, Expr *value) {
     if (!value) return NULL;
+    /* A variable whose BINDING is already fat -- a `^fat` parameter, or a local
+     * the elaborator marked fat -- reads thin in its type, so the type test
+     * below would wrap the fat handle in a second box whose shim calls the
+     * handle as a code pointer: `(set! saved f)` with `f` a `^fat` param, then
+     * `(saved 10)`, jumped into the closure's env.  Same classification the
+     * tail/join walker uses (repr_of_binding for a param, is_fat otherwise). */
+    {
+        const Expr *pv = value;
+        while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+        if (pv && pv->kind == EX_VAR && pv->as.var.binding) {
+            const Binding *vb = pv->as.var.binding;
+            bool fat = vb->is_param
+                ? repr_of_binding(vb, REPR_POS_RESULT) == REPR_FAT_HANDLE
+                : vb->is_fat;
+            if (fat) return value;
+        }
+    }
     if (value->type.kind == TY_FN && !value->type.as.fn.boxed &&
         !value->type.as.fn.cfnptr && value->type.as.fn.arity <= TUR_FAT_SHIM_MAX_ARITY) {
         Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
@@ -1496,6 +1559,28 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
             uint8_t idx = 0;
             if (!expected->as.tyvar_.name) return true;
             if (call_find_type_binding(bindings, *n_bindings, expected->as.tyvar_.name, &idx)) {
+                /* open-arg-first-binds-call-result-as-int: a binding to a
+                 * variable nothing fixed -- an open constructor slot, or the
+                 * free result variable of a return-only generic call such as
+                 * `(none)` -- is provisional, and a later concrete argument
+                 * takes its place.  `(get-or (none) 1.5)` against `[o :
+                 * (Option A) d : A]` bound `A` to `(none)`'s own `A` first;
+                 * the m5 rule below (meant for the ENCLOSING signature's
+                 * variable) then kept it because the names coincided, the
+                 * result typed as `int`, and the float spec's 1.5 printed as
+                 * `1`.  With any other name for the callee's variable it was
+                 * "expected A, got float".  The enclosing signature's own
+                 * variables are fixed in each instantiation and keep the m5
+                 * treatment. */
+                if (bindings[idx].type.kind == TY_TYVAR && actual.kind != TY_TYVAR &&
+                    actual.kind != TY_UNKNOWN &&
+                    (bindings[idx].type.as.tyvar_.open_slot ||
+                     (g_call_cb_elab && bindings[idx].type.as.tyvar_.name &&
+                      !ng_tyvar_in_sig(g_call_cb_elab,
+                                       bindings[idx].type.as.tyvar_.name)))) {
+                    bindings[idx].type = actual;
+                    return true;
+                }
                 /* m5-eq-vec-rewrite-fn-arg-loses-annotation step 2 (fix-i v2):
                  * a prior TYVAR-named binding (from an earlier same-tyvar
                  * actual, e.g. xs:(Vec A) where the outer scope already
@@ -1540,6 +1625,16 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                  * 3))` binds A to float from `d`.  The bare ADT this value used
                  * to be was accepted for any application (KB-022 below). */
                 if (actual.kind == TY_TYVAR && actual.as.tyvar_.open_slot)
+                    return true;
+                /* open-arg-first-binds-call-result-as-int: so does a variable
+                 * that is not the enclosing signature's own -- a let-bound
+                 * `(none)`'s `A` that nothing grounded: `(let [nn (none)] (cx
+                 * 7.1 nn))` against `[d : A o : (Option A)]` was "expected
+                 * (Option float), got (Option A)" while the argument-first
+                 * order was accepted. */
+                if (actual.kind == TY_TYVAR && actual.as.tyvar_.name &&
+                    bindings[idx].type.kind != TY_TYVAR && g_call_cb_elab &&
+                    !ng_tyvar_in_sig(g_call_cb_elab, actual.as.tyvar_.name))
                     return true;
                 return type_eq(bindings[idx].type, actual);
             }
@@ -2726,8 +2821,9 @@ static Expr *saffron_dyn_call_on(Elab *e, const Form *call, Expr *fnv) {
 
 static Expr *elab_call_head_expr(Elab *e, const Form *call, Expr *head_expr) {
     TypeKind head_kind = head_expr->type.kind;
-    if (head_kind == TY_ANY &&
-        (lang_span_is_dynamic(call->span) || e->toplevel_dynamic))
+    /* Any dialect: see the `any` callee in elab_call
+     * (turmeric-module-cannot-call-a-scheme-procedure-value). */
+    if (head_kind == TY_ANY)
         return saffron_dyn_call_on(e, call, head_expr);
     if (head_kind != TY_FN && head_kind != TY_PTR_VOID && head_kind != TY_CONT) {
         diag_emit(DIAG_ERROR, call->as.list.items[0]->span,
@@ -3911,6 +4007,17 @@ static void call_collect_tyvar_names(const Type *t, const char **names, uint8_t 
     }
 }
 
+static bool span_within(Span a, Span d) {
+    return d.off_end > d.off_start && a.file_id == d.file_id &&
+           a.off_start >= d.off_start && a.off_end <= d.off_end;
+}
+
+Span elab_macro_use_site(const Elab *e, Span fallback) {
+    for (const MacroSiteFrame *f = e->macro_site_top; f; f = f->outer)
+        if (!f->outer || !span_within(f->call, f->outer->def)) return f->call;
+    return fallback;
+}
+
 static Expr *elab_call_inner(Elab *e, Form *call);
 
 /* Stack backstop for nested-call elaboration.
@@ -4159,6 +4266,32 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
             Expr *f = expr_new(e->arena, EX_BOOL_LIT, TYPE_BOOL, call->span);
             f->as.b = false;
             return f;
+        }
+    }
+
+    /* panic-location-names-the-runtime-not-the-call-site: `assert!`,
+     * `require!`, `ensure!` and their -msg! forms expand to
+     * `(tur-contract-check cond msg)`, whose panic names the runtime helper.
+     * Rewrite the call to `(tur-contract-check-at cond msg "<file>" <line>)`
+     * naming the macro use the program wrote (elab_macro_use_site; the
+     * expanded form's own span is the template's, in contract.tur), or the
+     * call itself when no macro wrote it, so it panics there, as the
+     * elaborator's own contract checks do (rt_contract_check_call). */
+    Span cc_site = elab_macro_use_site(e, call->span);
+    if (name == e->sym_tur_contract_check && call->as.list.len == 3 &&
+        cc_site.line && e->sym_tur_contract_check_at &&
+        scope_lookup(&e->global, e->sym_tur_contract_check_at)) {
+        const char *path = diag_file_path(cc_site.file_id);
+        if (path) {
+            const char *base = path;
+            for (const char *q = path; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+            Form **items = (Form **)arena_alloc(e->arena, 5 * sizeof(Form *));
+            items[0] = form_sym(e->arena, head->span, e->sym_tur_contract_check_at);
+            items[1] = call->as.list.items[1];
+            items[2] = call->as.list.items[2];
+            items[3] = form_str(e->arena, call->span, base, (uint32_t)strlen(base));
+            items[4] = form_int(e->arena, call->span, (int64_t)cc_site.line);
+            return elab_call(e, form_list(e->arena, call->span, items, 5));
         }
     }
 
@@ -4668,6 +4801,17 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
          * `.method` call with no matching instance) can point the user at where
          * they wrote the macro call rather than at stdlib/macros.tur. */
         if (e->macro_expand_depth == 0) e->macro_call_site_span = call->span;
+        /* The same site, for the LSP (diag_set_expansion_site).  Saved and
+         * restored rather than cleared: a macro-time evaluation runs a nested
+         * elaborator whose depth starts again at 0. */
+        const char *saved_site_macro = NULL;
+        Span saved_site = SPAN_UNKNOWN;
+        bool outermost = e->macro_expand_depth == 0;
+        if (outermost)
+            saved_site = diag_set_expansion_site(call->span, name->name,
+                                                 &saved_site_macro);
+        MacroSiteFrame site_frame = { call->span, macro->span, e->macro_site_top };
+        e->macro_site_top = &site_frame;
         e->macro_expand_depth++;
         /* macro-expansion provenance: template spans survive expansion, so an
          * error inside generated code points at the DEFMACRO body -- useless
@@ -4693,6 +4837,9 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                           "in expansion of macro '%s' -- the diagnostics above "
                           "are inside code this call generated",
                           name->name);
+            if (outermost)
+                (void)diag_set_expansion_site(saved_site, saved_site_macro, NULL);
+            e->macro_site_top = site_frame.outer;
             e->macro_expand_depth--;
             return NULL;
         }
@@ -4776,6 +4923,9 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                       "in expansion of macro '%s' -- the diagnostics above are "
                       "inside code this call generated",
                       name->name);
+        if (outermost)
+            (void)diag_set_expansion_site(saved_site, saved_site_macro, NULL);
+        e->macro_site_top = site_frame.outer;
         e->macro_expand_depth--;
         return out;
     }
@@ -5294,6 +5444,13 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                     bt->as.fn.boxed = true;
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, *bt, fa->span);
                     shim->as.fn_to_fat_.inner = fa;
+                    /* fnsan-concrete-field-sink: a concrete `(fn ...)` field is
+                     * read at exactly its declared types (TUR_APPLY<N>_T), as a
+                     * concrete `^fat` parameter is -- hand the box the same
+                     * sink type, so a small by-value aggregate result gets the
+                     * typed shim rather than the word one. */
+                    if (ft->kind == TY_FN && !call_type_has_named_tyvar(ft))
+                        shim->as.fn_to_fat_.sink_fn_type = ft;
                     call_expr->as.call_.args[fi] = shim;
                 }
 
@@ -6845,6 +7002,105 @@ static Expr *scheme_arity_error(Elab *e, const Form *call, const Binding *fn_bin
     return elab_form(e, form_list(e->arena, call->span, items, n_args + 2));
 }
 
+/* associated-type-unusable-nullary-and-generic (half 2): the unreduced
+ * projections (`(Inner A)`, types.h tyvar_.assoc_of) a callee's signature
+ * mentions. */
+static void call_collect_assoc_projs(const Type *t, const Type **out,
+                                     uint8_t *n, uint8_t cap) {
+    if (!t || *n >= cap) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (t->as.tyvar_.assoc_of && t->as.tyvar_.name) {
+                for (uint8_t i = 0; i < *n; i++)
+                    if (out[i]->as.tyvar_.name == t->as.tyvar_.name) return;
+                out[(*n)++] = t;
+            }
+            return;
+        case TY_APP:
+            call_collect_assoc_projs(t->as.app.fn, out, n, cap);
+            call_collect_assoc_projs(t->as.app.arg, out, n, cap);
+            return;
+        case TY_FN:
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    call_collect_assoc_projs(t->as.fn.arg_full_types[i], out, n, cap);
+            call_collect_assoc_projs(t->as.fn.result_full_type, out, n, cap);
+            return;
+        default:
+            return;
+    }
+}
+
+/* Reduce each projection the callee's signature mentions against this call's
+ * bindings, once every argument is in.  `(Inner A)` with A fixed to a ground
+ * type is the instance's answer -- an argument typed `(Inner A)` must agree
+ * with it, and the binding it adds (by the projection's name) is what
+ * instantiates the result and what the emitter's per-call spec substitutes, so
+ * a by-value associated type gets its real C type in the clone.  At another
+ * type variable (`A := B` inside a generic caller) it becomes `(Inner B)`.
+ * Returns false after reporting. */
+static bool call_bind_assoc_projections(Elab *e, const Form *call,
+                                        const Binding *fn_binding,
+                                        const Type *fn_type,
+                                        CallTypeBinding *bindings,
+                                        uint8_t *n_bindings) {
+    if (!fn_type || fn_type->kind != TY_FN) return true;
+    const Type *projs[16];
+    uint8_t np = 0;
+    call_collect_assoc_projs(fn_type, projs, &np, 16);
+    for (uint8_t pi = 0; pi < np; pi++) {
+        const Type *P = projs[pi];
+        Type a = call_instantiate_type(e, P->as.tyvar_.assoc_arg, bindings, *n_bindings);
+        Type want;
+        if (!call_type_has_named_tyvar(&a)) {
+            const Type *r = typeclass_env_resolve_assoc_type_n(
+                &e->typeclass_env, P->as.tyvar_.assoc_of, &a, 1);
+            if (!r) {
+                Buf ab; buf_init(&ab);
+                type_print(&ab, a);
+                buf_putc(&ab, '\0');
+                diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0015_TYPECLASS_CONSTRAINT_NOT_SATISFIED,
+                    "function '%s': no instance binding for associated type '%s' "
+                    "at %s (its signature mentions %s)",
+                    fn_binding && fn_binding->name ? fn_binding->name->name : "?",
+                    P->as.tyvar_.assoc_of->name, ab.data, P->as.tyvar_.name);
+                buf_free(&ab);
+                return false;
+            }
+            want = *r;
+        } else if (type_eq(a, *P->as.tyvar_.assoc_arg)) {
+            continue;   /* the variable stands for itself (a recursive call) */
+        } else if (!elab_assoc_projection(e, P->as.tyvar_.assoc_of, &a, 1, &want)) {
+            continue;
+        }
+        uint8_t idx = 0;
+        if (call_find_type_binding(bindings, *n_bindings, P->as.tyvar_.name, &idx)) {
+            if (!type_eq(bindings[idx].type, want)) {
+                Buf wb; buf_init(&wb);
+                type_print(&wb, want);
+                buf_putc(&wb, '\0');
+                Buf gb; buf_init(&gb);
+                type_print(&gb, bindings[idx].type);
+                buf_putc(&gb, '\0');
+                diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                    "function '%s': %s is %s here, but an argument gives it %s",
+                    fn_binding && fn_binding->name ? fn_binding->name->name : "?",
+                    P->as.tyvar_.name, wb.data, gb.data);
+                buf_free(&wb);
+                buf_free(&gb);
+                return false;
+            }
+            bindings[idx].type = want;
+            continue;
+        }
+        if (*n_bindings >= 16) return true;
+        bindings[*n_bindings].name = P->as.tyvar_.name;
+        bindings[*n_bindings].type = want;
+        (*n_bindings)++;
+    }
+    return true;
+}
+
 static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) {
     uint32_t n_args = call->as.list.len - 1;
 
@@ -7005,7 +7261,12 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * case rather than an error -- higher-order code is the whole point of the
      * surface syntax.  Resolution moves to runtime, where the value's own tag
      * says whether it is callable and with what arity. */
-    if (fn_type.kind == TY_ANY && lang_span_is_dynamic(call->span)) {
+    /* turmeric-module-cannot-call-a-scheme-procedure-value: and in a
+     * Turmeric file too.  `any` is the dynamic type wherever it is written;
+     * a Turmeric function that takes a Scheme procedure as `any` (a
+     * callback, a thunk to run on a thread) calls it the same way, checked
+     * at run time. */
+    if (fn_type.kind == TY_ANY) {
         Expr *fnv = expr_new(e->arena, EX_VAR, fn_binding->type, call->span);
         fnv->as.var.binding = fn_binding;
         return saffron_dyn_call_on(e, call, fnv);
@@ -7559,6 +7820,10 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
     CallTypeBinding type_bindings[16];
     uint8_t n_type_bindings = 0;
     for (uint8_t bi = 0; bi < 16; bi++) type_bindings[bi].name = NULL;
+    /* open-arg-first-binds-call-result-as-int: arguments to ground after the
+     * loop (allocated on first use). */
+    bool *open_first = NULL;
+    bool *open_first_strict = NULL;   /* accepted before it could be checked */
     /* generic-return-type-not-inferred-from-context: capture the enclosing
      * expected-type channel (pushed by (:: e T), typed-let, or the defn
      * return slot) before clearing it for sub-arg elaboration -- so the
@@ -7878,6 +8143,22 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * box.  A *capturing* closure's value is TY_PTR_VOID (already a fat
              * box) and a boxed TY_FN is left untouched; only a bare, unboxed
              * TY_FN is shimmed.  Mirrors the ^fat auto-shim arity bound (<=5). */
+            /* arrow-instance-closure-erased-to-words (`pipe` over ^fat arrows):
+             * a `^fat` binding, or a fat-normalized parameter, already HOLDS a
+             * { thunk, env } box despite its unboxed static type -- the same
+             * already-fat test the ^fat sink branch makes, asked of the
+             * representation decision (repr_of_binding).  Shimming it here
+             * boxed the box: slot 0's `__tur_fatshim_double_double` then
+             * called the inner box's address as code (SIGSEGV).  Mark the
+             * use boxed instead, keeping its precise signature for M7. */
+            if (args[i]->kind == EX_VAR && args[i]->as.var.binding &&
+                args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed &&
+                (args[i]->as.var.binding->is_fat ||
+                 args[i]->as.var.binding->is_param) &&
+                repr_of_binding(args[i]->as.var.binding, REPR_POS_PARAM) ==
+                    REPR_FAT_HANDLE) {
+                args[i]->type.as.fn.boxed = true;
+            }
             if (args[i]->type.kind == TY_FN && !args[i]->type.as.fn.boxed) {
                 uint32_t inner_arity = args[i]->type.as.fn.arity;
                 if (inner_arity >= 1 && inner_arity <= TUR_FAT_SHIM_MAX_ARITY) {
@@ -8115,6 +8396,27 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                                         type_bindings, &n_type_bindings);
                     g_call_cb_elab = saved_cb_elab;
                 }
+                /* open-arg-first-binds-call-result-as-int: a return-only
+                 * generic call (`(none)`) that no sibling has grounded yet
+                 * bound the variable provisionally; ground it once every
+                 * argument is in (below the loop). */
+                if (arg_ok && expected_full->kind == TY_APP &&
+                    w2_arg_is_free_poly_call(args[i]) &&
+                    !ng_type_names_sig_tyvar(e, &args[i]->type)) {
+                    Type inst_now = call_instantiate_type(e, expected_full,
+                                                          type_bindings, n_type_bindings);
+                    if (call_type_has_named_tyvar(&inst_now)) {
+                        if (!open_first) {
+                            open_first = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                            open_first_strict = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                            for (uint32_t oi = 0; oi < n_args; oi++)
+                                open_first[oi] = open_first_strict[oi] = false;
+                        }
+                        open_first[i] = true;
+                    }
+                }
                 /* nullary-generic-call-under-tyvar-expectation: `(wrap 3
                  * (box-nil))` against `[v : A b : (Box A)]`, or `(make-struct
                  * W 8 (none))` against `(opt (Option A))`.  Arg 1 bound
@@ -8165,6 +8467,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                             args[i]->type = inst;
                             arg_ok = true;
                         }
+                    } else if (inst.kind == TY_APP && i + 1 < n_args &&
+                               !ng_type_names_sig_tyvar(e, &args[i]->type)) {
+                        /* open-arg-first-binds-call-result-as-int: the
+                         * siblings that would ground this parameter come
+                         * LATER -- `(cx (map-new) 7.1)` against `[m : (Map int
+                         * A) d : A]`, whose `K` met the concrete `int` before
+                         * anything bound `A`.  Accept it for now; the pass
+                         * below the loop grounds it, and reports this same
+                         * mismatch if it still does not fit. */
+                        if (!open_first) {
+                            open_first = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                            open_first_strict = (bool *)arena_alloc(
+                                e->arena, (n_args ? n_args : 1) * sizeof(bool));
+                            for (uint32_t oi = 0; oi < n_args; oi++)
+                                open_first[oi] = open_first_strict[oi] = false;
+                        }
+                        open_first[i] = true;
+                        open_first_strict[i] = true;
+                        arg_ok = true;
                     }
                 }
             } else if (arg_ok && expected_arg_kind == TY_APP &&
@@ -9605,6 +9927,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * must be boxed by slot 0's shim. */
                     shim->as.fn_to_fat_.erased_result =
                         sink_fn_result_is_hkt_erased(&fn_type, fn_arg_idx_fat);
+                    {
+                        const Type *sft = (fn_type.as.fn.arg_full_types &&
+                                           fn_arg_idx_fat < fn_type.as.fn.arity)
+                            ? fn_type.as.fn.arg_full_types[fn_arg_idx_fat] : NULL;
+                        if (sft && sft->kind == TY_FN && !call_type_has_named_tyvar(sft))
+                            shim->as.fn_to_fat_.sink_fn_type = sft;
+                    }
                     /* A normalized NOMINAL param never drops its argument --
                      * which is precisely why this shim leaked a box per call --
                      * so its box may be the shared file-scope one.
@@ -9663,6 +9992,51 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         w->as.fn_to_fat_.inner = args[i];
                         w->as.fn_to_fat_.erased_result = true;
                         w->as.fn_to_fat_.inner_is_fat = true;
+                        args[i] = w;
+                    }
+                    /* fnsan-nil-closure-into-erased-result: a capturing
+                     * closure that returns nil, headed for a `(fn [...] A)`
+                     * slot.  Its thunk is `void`; the slot's consumers call it
+                     * as returning the word.  Wrapped the same way, with a
+                     * shim that calls it and answers 0 -- on the stack when the
+                     * sink provably neither keeps nor drops it. */
+                    else if (ak == TY_FN && args[i]->type.as.fn.boxed &&
+                             (args[i]->type.as.fn.result_full_type
+                                  ? args[i]->type.as.fn.result_full_type->kind == TY_NIL
+                                  : args[i]->type.as.fn.result_kind == TY_NIL) &&
+                             sink_fn_result_is_bare_tyvar(&fn_type, fn_arg_idx_fat)) {
+                        Expr *w = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                           args[i]->span);
+                        w->as.fn_to_fat_.inner = args[i];
+                        w->as.fn_to_fat_.inner_is_fat = true;
+                        w->as.fn_to_fat_.nil_result_word = true;
+                        /* The wrapper holds only a borrow of the handle, so
+                         * the proof that the callee neither keeps nor drops
+                         * the argument is all its frame lifetime needs. */
+                        w->as.fn_to_fat_.stack_ok = sink_is_nonretaining;
+                        args[i] = w;
+                    }
+                    /* fnsan-fat-closure-at-tyvar-sink: a capturing closure
+                     * headed for a slot typed `(fn [A A] bool)` -- `vec-eq?`'s
+                     * comparator.  An inline-C body or carrier base calls it
+                     * with words at the `A`s; a `(fn [a : float b : float]
+                     * ...)` thunk read them from xmm registers that held
+                     * nothing (`vec-eq?` answered true for 7.1 vs 3.25).
+                     * Marked here; the emitter wraps it in a word adapter only
+                     * when the selected callee reads words and the closure's
+                     * thunk does not take them.  Only at a sink proven not to
+                     * keep it: the wrapper borrows the handle. */
+                    else if (((ak == TY_FN && args[i]->type.as.fn.boxed) ||
+                              (arg_is_typed_fat_param(args[i]) &&
+                               fn_binding && fn_binding->body_is_inline_c)) &&
+                             sink_is_nonretaining &&
+                             sink_fn_has_tyvar_param(&fn_type, fn_arg_idx_fat)) {
+                        Expr *w = expr_new(e->arena, EX_FN_TO_FAT, TYPE_PTR_VOID,
+                                           args[i]->span);
+                        w->as.fn_to_fat_.inner = args[i];
+                        w->as.fn_to_fat_.inner_is_fat = true;
+                        w->as.fn_to_fat_.word_params = true;
+                        w->as.fn_to_fat_.stack_ok = true;
                         args[i] = w;
                     }
                     /* Pass through unchanged: a fat closure (TY_PTR_VOID), nil, a
@@ -9830,6 +10204,61 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         }
     }
 
+    /* open-arg-first-binds-call-result-as-int: a return-only generic call
+     * argument (`(none)`, `(vec-new)`) checked before the sibling that fixed
+     * its variable -- `(get-or (none) 1.5)` -- is grounded now, the way the
+     * nullary-generic block grounds one checked after it: the substitution is
+     * recorded on the call so emit monomorphizes it, and the grounded type
+     * becomes the argument's.  Left open, the call's bindings said `A :=
+     * float` (or `int`, from an unannotated lambda's parameters) while the
+     * argument still said `(Option A)`, and a CPS caller named a spec that was
+     * never emitted. */
+    if (open_first && fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types) {
+        for (uint32_t i = 0; i < n_args; i++) {
+            if (!open_first[i] || !args[i] || !w2_arg_is_free_poly_call(args[i]))
+                continue;
+            uint32_t pidx = fn_binding->closure_fn_binding ? i + 1 : i;
+            if (pidx >= fn_type.as.fn.arity) continue;
+            const Type *pf = fn_type.as.fn.arg_full_types[pidx];
+            if (!pf || pf->kind != TY_APP) continue;
+            Type inst = call_instantiate_type(e, pf, type_bindings, n_type_bindings);
+            CallTypeBinding ogscratch[16];
+            uint8_t ogn = 0;
+            bool grounded = inst.kind == TY_APP && !call_type_has_named_tyvar(&inst);
+            if (!grounded ||
+                !call_collect_type_bindings(&args[i]->type, inst, ogscratch, &ogn)) {
+                if (!open_first_strict[i]) continue;
+                /* Accepted before its siblings were in, and still does not
+                 * fit: the mismatch the loop would have reported. */
+                Buf eb; buf_init(&eb);
+                type_print(&eb, inst);
+                buf_putc(&eb, '\0');
+                Buf ab; buf_init(&ab);
+                type_print(&ab, args[i]->type);
+                buf_putc(&ab, '\0');
+                diag_emit_with_code(DIAG_ERROR, args[i]->span, TUR_E0001_TYPE_MISMATCH,
+                                    "function '%s' arg %u: expected %s, got %s",
+                                    fn_binding->name->name, i + 1, eb.data, ab.data);
+                buf_free(&eb);
+                buf_free(&ab);
+                return NULL;
+            }
+            if (ogn > 0 && !args[i]->as.call_.abi_bindings) {
+                AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+                    e->arena, ogn * sizeof(AbiTypeBinding));
+                for (uint8_t bi = 0; bi < ogn; bi++) saved[bi] = ogscratch[bi];
+                args[i]->as.call_.abi_bindings   = saved;
+                args[i]->as.call_.n_abi_bindings = ogn;
+            }
+            args[i]->type = inst;
+        }
+    }
+
+    if (fn_type.kind == TY_FN &&
+        !call_bind_assoc_projections(e, call, fn_binding, &fn_type,
+                                     type_bindings, &n_type_bindings))
+        return NULL;
+
     /* S4 (vec-new + vec-push! forward element inference): a generic call whose
      * receiver argument is a *local* let-bound EX_VAR with an under-constrained
      * parameterised type -- e.g. `rs : (Vec A)` from `(vec-new)`, where A was
@@ -9964,7 +10393,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                          type_bindings, &n_type_bindings);
     }
     /* option-consumer-retype-byvalue step 2 (0-arg constructor abi_bindings):
-     * a `#{Construct}` constructor whose declared result is a parameterised
+     * a `^construct` constructor whose declared result is a parameterised
      * TY_APP (`none : (Option A)`, `err : (Result A B)`) and that takes no
      * argument carrying its result tyvar gets no argument-derived bindings.
      * When such a call sits in the return position of an *enclosing* generic
@@ -9980,7 +10409,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * none's `A` -> option-map's `B`).  emit composes it through the active
      * specialization's concrete bindings (B -> int) so `construct_recovered_-
      * byvalue` mints a per-instantiation clone returning `Option__int` by
-     * value.  Gated to `#{Construct}` callees so the broad non-constructor
+     * value.  Gated to `^construct` callees so the broad non-constructor
      * relay case (which the ground-only guard above deliberately keeps on the
      * carrier) is untouched. */
     else if (saved_expected_return && fn_type.kind == TY_FN &&
@@ -9994,7 +10423,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                                          type_bindings, &n_type_bindings);
     }
     /* zero-arg-construct-ground-byvalue-return: the GROUND counterpart of the
-     * step-2 branch above.  A 0-arg `#{Construct}` constructor whose declared
+     * step-2 branch above.  A 0-arg `^construct` constructor whose declared
      * result is a parameterised TY_APP (`none : (Option A)`) sitting in a
      * return position whose expected type is a *ground* (tyvar-free) TY_APP
      * (`(Option BoundedIdx)` -- a monomorphic defn's declared return) gets no
@@ -10009,7 +10438,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
      * (`A -> BoundedIdx`) so `emit_abi_register_call` mints (and records the
      * call Expr* against) a by-value `none__spec__Option__BoundedIdx` clone.
      * Gated to a GROUND expected return so a tyvar-bearing context keeps using
-     * the step-2 (compose-through-spec) path, and to `#{Construct}` callees so
+     * the step-2 (compose-through-spec) path, and to `^construct` callees so
      * a plain relay return is untouched. */
     else if (saved_expected_return && fn_type.kind == TY_FN &&
              fn_binding && fn_binding->is_construct_template &&
@@ -10022,6 +10451,45 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
                                          *saved_expected_return,
                                          type_bindings, &n_type_bindings);
+    }
+    /* generic-call-result-leaks-callee-tyvar-names: a call whose arguments
+     * bound SOME of its result variables but not all -- `(ok (f v))` binds
+     * `ok`'s A and leaves its B, `(err e)` the reverse.  The branches above
+     * all decline (the expected type is the enclosing body's own `(Result B
+     * E)`, and arguments did bind something), so the unbound variable
+     * survived the instantiation below BY NAME and read as the caller's
+     * same-named variable: inside `result-map [A B E]`, `(ok (f v))` was
+     * `(Result B B)` and `(err e)` was `(Result A E)`, and each float spec
+     * assigned a `Result__float__float` into the match's `Result__int__int`
+     * temp (a cc error).  Bind only the still-unbound variables, from the
+     * expected type, on a scratch set adopted whole or not at all. */
+    else if (saved_expected_return && fn_type.kind == TY_FN &&
+             fn_binding && fn_binding->is_global &&
+             n_type_bindings > 0 &&
+             fn_type.as.fn.result_full_type &&
+             fn_type.as.fn.result_full_type->kind == TY_APP &&
+             saved_expected_return->kind == TY_APP &&
+             !type_has_open_slot(saved_expected_return)) {
+        const char *rnames[16];
+        uint8_t n_rnames = 0;
+        call_collect_tyvar_names(fn_type.as.fn.result_full_type, rnames, &n_rnames, 16);
+        bool any_unbound = false;
+        for (uint8_t ri = 0; ri < n_rnames && !any_unbound; ri++) {
+            uint8_t idx = 0;
+            if (!call_find_type_binding(type_bindings, n_type_bindings, rnames[ri], &idx))
+                any_unbound = true;
+        }
+        if (any_unbound) {
+            CallTypeBinding scratch[16];
+            uint8_t n_scratch = n_type_bindings;
+            for (uint8_t s = 0; s < n_scratch; s++) scratch[s] = type_bindings[s];
+            if (call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                           *saved_expected_return,
+                                           scratch, &n_scratch)) {
+                for (uint8_t s = 0; s < n_scratch; s++) type_bindings[s] = scratch[s];
+                n_type_bindings = n_scratch;
+            }
+        }
     }
 
     /* D8 Q3, the third face of one Saffron rule ("an undetermined type
@@ -10075,6 +10543,46 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 n_type_bindings > 0) {
                 result_type = call_instantiate_type(e, fn_type.as.fn.result_full_type,
                                                     type_bindings, n_type_bindings);
+                /* generic-call-result-leaks-callee-tyvar-names: a result
+                 * variable nothing bound -- not an argument, not the expected
+                 * type above -- is still the CALLEE's, so it must not read as
+                 * the enclosing signature's variable of the same spelling:
+                 * `(ok x)` inside `[A B E]` was `(Result B B)`.  Rename it
+                 * apart (`ok.B`, an open slot) in the call's type only; the
+                 * ABI bindings, which say what the call was specialized at,
+                 * are untouched.  Not for a recursive call, whose variables
+                 * ARE the enclosing signature's. */
+                if (fn_binding && fn_binding->is_global && fn_binding->name &&
+                    fn_binding->name != e->current_fn_name &&
+                    e->n_sig_tyvars > 0) {
+                    const char *rn[16];
+                    uint8_t n_rn = 0;
+                    call_collect_tyvar_names(fn_type.as.fn.result_full_type, rn, &n_rn, 16);
+                    /* One instantiation of the callee's own result over both
+                     * sets: renaming the already-substituted type would also
+                     * rename a caller variable a binding put there. */
+                    CallTypeBinding apart[32];
+                    uint8_t n_apart = 0;
+                    for (uint8_t bi = 0; bi < n_type_bindings; bi++)
+                        apart[n_apart++] = type_bindings[bi];
+                    uint8_t n_bound = n_apart;
+                    for (uint8_t ri = 0; ri < n_rn && n_apart < 32; ri++) {
+                        uint8_t idx = 0;
+                        if (call_find_type_binding(type_bindings, n_type_bindings, rn[ri], &idx))
+                            continue;
+                        if (!ng_tyvar_in_sig(e, rn[ri])) continue;
+                        char nm[96];
+                        snprintf(nm, sizeof nm, "%s.%s", fn_binding->name->name, rn[ri]);
+                        const Symbol *ns = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+                        apart[n_apart].name = rn[ri];
+                        apart[n_apart].type = type_tyvar_named(ns->name);
+                        apart[n_apart].type.as.tyvar_.open_slot = true;
+                        n_apart++;
+                    }
+                    if (n_apart > n_bound)
+                        result_type = call_instantiate_type(e, fn_type.as.fn.result_full_type,
+                                                            apart, n_apart);
+                }
             } else {
                 result_type = *fn_type.as.fn.result_full_type;
             }
@@ -11788,6 +12296,18 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     }
 
     Binding *wb = binding_new(e, wsym, wfn_type, false, true, span);
+    /* `__poly_N` forwards to `inner_b`; it has no source form and nobody can
+     * annotate it, so diagnostics describe it by what it wraps (and the
+     * --strict-effects lint skips it -- `inner_b` answers for its own row). */
+    wb->is_synthesized = true;
+    wb->synth_kind = SYNTH_FORWARDING_WRAPPER;
+    {
+        char lbl[160];
+        int n = snprintf(lbl, sizeof(lbl), "rank-2 wrapper for '%s'",
+                         inner_b && inner_b->name ? inner_b->name->name : "?");
+        if (n > 0 && (size_t)n < sizeof(lbl))
+            wb->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+    }
     scope_add(&e->global, wb);
 
     FnDef *wfd = (FnDef *)arena_alloc(e->arena, sizeof(FnDef));

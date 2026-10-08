@@ -52,8 +52,12 @@ File       From                                      Licence
            Sebastian Egner
 
 The files not listed (4, 6, 9, 11, 13, 14, 16, 23, 28, 30, 34, 38, 39, 45,
-61, 66, 69, 87, 98) are export lists, adaptors and implementations written
-for Turmeric.
+61, 66, 69, 87, 98, 216) are export lists, adaptors and implementations
+written for Turmeric.
+
+One test suite here is derived from an SRFI's own tests rather than chibi's:
+tests/r7rs/srfi/216/tests.scm, from SRFI 216's srfi-216-tests.scm,
+Copyright (C) 2020 Vladimir Nikishkin, MIT (SRFI, below).
 
 
 The SRFI licence (MIT)

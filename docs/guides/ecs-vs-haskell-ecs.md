@@ -22,7 +22,7 @@ something we don't have.
 For the introductory tutorial see
 [`ecs-guide.md`](ecs-guide.md). For the long-form plan and its
 load-bearing prereqs see
-[`../archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
+[`../archive/ecs-spice-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
 
 ## The bottom line
 
@@ -260,10 +260,10 @@ A body that did not declare `:writes [Vel]` has no `Vel-write-cap`;
 the `set-Vel!` call name-resolves, but its first argument is unbound.
 
 The Phase I report
-([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md))
+([`docs/archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md))
 walks the implementation. The load-bearing prereq was the parametric
 `:linear` propagation fix
-([`docs/archive/history/parametric-linear-opaque-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/parametric-linear-opaque-not-enforced.md));
+([`docs/archive/history/parametric-linear-opaque-not-enforced.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/parametric-linear-opaque-not-enforced.md));
 without it, `WriteCap<T>` would compile-check fine but its
 single-use discipline would silently drop on every application.
 
@@ -329,7 +329,7 @@ statically on every compile
 impure-measure question -- `alive?` reads mutable world state through
 inline C, which is exactly what congruence must refuse in general -- was
 answered by `#reads` + `frozen` regions
-([`docs/archive/refine-stateful-measures-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)):
+([`docs/archive/refine-stateful-measures-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refine-stateful-measures-plan.md)):
 a `#reads w` measure is congruent while `w` is immutably borrowed, and
 the borrow makes `^unique ^mut` despawn a compile error inside the
 region, which is what makes trusting the guard sound. The
@@ -428,12 +428,12 @@ scheduler ever runs.
 ## Where to look next
 
 - [`ecs-guide.md`](ecs-guide.md) -- the introductory tutorial.
-- [`../archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md)
+- [`../archive/ecs-spice-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ecs-spice-plan.md)
   -- the long-form plan, status, and what's still queued for v2.
-- [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md)
+- [`../archive/history/ecs-defsystem-write-caps-not-enforced.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/ecs-defsystem-write-caps-not-enforced.md)
   -- the Phase I implementation log for the cap-gating surface that
   delivered the headline compile-time-write-set claim.
-- [`../archive/history/ecs-cross-world-systems-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md)
+- [`../archive/history/ecs-cross-world-systems-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md)
   -- the shipped extension of the cap surface to multi-world
   render-extract / client-prediction patterns (`ecs/xsystem`,
   `defmirror`, `XStage`).

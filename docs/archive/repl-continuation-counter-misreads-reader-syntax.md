@@ -54,7 +54,7 @@ so a form containing, for example, a C `for` loop cannot be entered at the
 prompt at all. Every form below compiles and runs from a file.
 
 Filed 2026-09-29 while investigating
-[aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md), whose
+[aot-compiled-repl-plan](../upcoming/aot-compiled-repl-plan.md), whose
 headline feature (inline-C at the prompt) depends on this. Measured on `main`
 at `c6ba4162`, Release `-DTUR_JIT=ON`, `TUR_NO_AUTO_SPICE=1 tur repl`.
 

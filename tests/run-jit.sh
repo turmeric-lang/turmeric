@@ -24,6 +24,9 @@
 #                  engine SKIPs the whole run (exit 0) so this harness is
 #                  safe to invoke against any build.
 #   TUR_TEST_JOBS  parallelism (default: cpu count, capped at 8)
+#   TUR_HEADROOM_TOP  how many fixtures the closing "closest to their timeout
+#                  budget" block lists (default 8).  Set it high to size the
+#                  whole corpus (stress-fixture-tiering-plan T1).
 #   TUR_TEST_SHARD "i/N" -- run only the i-th of N disjoint slices of the
 #                  corpus, so N runners can share it.  Mirrors run.sh: the
 #                  partition is round-robin by discovery ordinal, ordinals are
@@ -44,6 +47,8 @@
 #   requires.dedicated-runner -- owned by its own ctest target; PASS-skip
 #   requires.spices           -- skipped when the sibling checkout is absent
 #   requires.tsan             -- skipped unless TUR_TSAN=1
+#   requires.stress           -- skipped unless TUR_STRESS=1 (nightly-only
+#                                full-size twin of a per-PR fixture)
 #
 # Like tests/run.sh, a fully green run needs a DEBUG-configured tur: the
 # refine-* fixtures depend on Debug-only refinement discharge and fail on
@@ -142,7 +147,16 @@ _tur_hash_file() {
     elif command -v md5sum >/dev/null 2>&1; then md5sum "$1" 2>/dev/null | awk '{print $1}'
     else echo "nohash"; fi
 }
-_tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
+# GNU first, and only an all-digit answer counts: `stat -f` on GNU means
+# "filesystem status" and printed the volume's free-block counts into the
+# stamp key, so on Linux the cache almost never hit (see tests/run.sh).
+_tur_mtime() {
+    local m
+    m="$(stat -c '%Y' "$1" 2>/dev/null)"
+    case "$m" in ''|*[!0-9]*) m="$(stat -f '%m' "$1" 2>/dev/null)" ;; esac
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    echo "$m"
+}
 
 # Stock macOS ships no `timeout(1)` -- Homebrew coreutils installs it as
 # `gtimeout` unless the gnubin path is on PATH.  run.sh has detected this since
@@ -156,13 +170,43 @@ if command -v timeout >/dev/null 2>&1; then _tur_timeout_bin="timeout"
 elif command -v gtimeout >/dev/null 2>&1; then _tur_timeout_bin="gtimeout"; fi
 _run_timed() {
     local secs="$1"; shift
-    if [ "$secs" -le 0 ] || [ -z "$_tur_timeout_bin" ]; then "$@"
-    else "$_tur_timeout_bin" "$secs" "$@"; fi
+    local _t0=$SECONDS _rc=0
+    if [ "$secs" -le 0 ] || [ -z "$_tur_timeout_bin" ]; then "$@" || _rc=$?
+    else "$_tur_timeout_bin" "$secs" "$@" || _rc=$?; fi
+    # Record elapsed-vs-budget for the summary's "closest to their timeout"
+    # block.  The point is to see a fixture CREEPING toward its own
+    # expected.timeout while it still passes, rather than finding out when a
+    # slow runner draw kills it: r7rs-tail-calls sat at ~32 s against a 60 s
+    # bound and died twice (docs/reported/macos-jit-leg-stall-unexplained.md)
+    # before anyone could see the margin was gone.
+    #
+    # `rkey` and `name` are run_jit_fixture's locals, reached by bash's
+    # dynamic scoping -- this function is only ever called from there and
+    # from the error pass, and `${rkey:-}` keeps it inert under `set -u`
+    # anywhere else.  SECONDS has 1 s granularity, which is the right size
+    # for budgets measured in tens of seconds.
+    if [ "$secs" -gt 0 ] && [ -n "${rkey:-}" ] && [ -n "${RESULTS_DIR:-}" ]; then
+        printf '%s %s %s\n' "$((SECONDS - _t0))" "$secs" "${name:-$rkey}" \
+            >> "$RESULTS_DIR/$rkey.time"
+    fi
+    return "$_rc"
 }
 
 export TUR_MTIME="$(_tur_mtime "$TUR")"
 
-stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
+# One hash over stdlib/, as tests/run.sh keys its stamps: the stdlib is data
+# `tur` reads at elaboration time, so a stdlib-only edit changes neither the
+# binary nor any fixture (docs/archive/run-sh-stamp-cache-ignores-the-stdlib.md).
+# This key had no such term; the broken mtime above masked that on Linux.
+_tur_hash_stdin() {
+    if command -v md5 >/dev/null 2>&1; then md5 -q
+    elif command -v md5sum >/dev/null 2>&1; then md5sum | awk '{print $1}'
+    else echo "nohash"; fi
+}
+export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
+    while IFS= read -r _f; do printf '%s\n' "$_f"; cat "$_f"; done | _tur_hash_stdin)"
+
+stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}-${TUR_STDLIB_HASH}"; }
 
 stamp_check() {
     [ "$TUR_FORCE" = "1" ] && return 1
@@ -295,6 +339,9 @@ run_jit_fixture() {
     if [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then
         printf 'SKIP %s (requires.tsan)\n' "$name"
         echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
+    if [ -f "$dir/requires.stress" ] && [ "${TUR_STRESS:-0}" != "1" ]; then
+        printf 'SKIP %s (requires.stress)\n' "$name"
+        echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
     if jit_known_miscompile "$name"; then
         printf 'SKIP %s (known miscompile -- see docs/reported/)\n' "$name"
         echo "SKIP" > "$RESULTS_DIR/$rkey.result"; return; fi
@@ -345,6 +392,22 @@ run_jit_fixture() {
 
     local expected_exit="0"
     [ -f "$dir/expected.exit" ] && expected_exit=$(tr -d '[:space:]' < "$dir/expected.exit")
+
+    # Report a timeout AS a timeout.  timeout(1) exits 124 when it kills the
+    # child, and the partial (usually empty) stdout that leaves behind would
+    # otherwise fall through to the diff below and be reported as "stdout
+    # mismatch" -- a claim about the answer when the only fact is the clock.
+    # run.sh and run-turi.sh each grew this check after that misreport cost a
+    # triage pass (docs/archive/ci-cps-tramp-turi-timeouts-under-load.md);
+    # this harness was missed, and the same misreport cost another one on
+    # 2026-10-01 (see docs/reported/macos-jit-leg-stall-unexplained.md, where
+    # a slow runner's killed r7rs-tail-calls read as a tail-call regression).
+    # This check must stay ahead of the stdout diff.
+    if [ "$rc" -eq 124 ] && [ "$expected_exit" != "124" ]; then
+        echo "FAIL $name -- timed out (>${fixture_timeout}s under the JIT engine)${fell_back:+ (via cc fallback)}"
+        echo "FAIL" > "$RESULTS_DIR/$rkey.result"
+        return
+    fi
 
     if [ -f "$dir/expected.stdout" ]; then
         if ! diff -u "$dir/expected.stdout" "$actual_stdout" > /dev/null 2>&1; then
@@ -597,6 +660,28 @@ else
 fi
 if [ "$FALLBACK" -gt 0 ]; then
     echo "  (of which $FALLBACK passed via the cc fallback -- TUR-W0070)"
+fi
+
+# Fixtures closest to their own expected.timeout.  A per-fixture bound that a
+# slow runner draw can cross is invisible until it does, and this leg draws a
+# ~1.9x slower 3-core macos-latest ~97% of the time -- so "passed" is not the
+# same as "has margin".  Printed unconditionally and cheap: one awk pass over
+# files the run already wrote.
+#
+# An array, not `ls`: nullglob is on (above), so when no fixture wrote a .time
+# file -- every one skipped, or answered from the stamp cache -- the glob is
+# EMPTY.  `ls` with no operand lists the cwd and succeeds, and `cat` with no
+# operand then reads stdin, which hung the harness forever on a terminal or
+# socket stdin.
+_time_files=("$RESULTS_DIR"/*.time)
+if [ "${#_time_files[@]}" -gt 0 ]; then
+    echo "  closest to their timeout budget (elapsed/budget, worst attempt):"
+    cat "${_time_files[@]}" 2>/dev/null \
+      | awk '{ pct = ($2 > 0) ? (100 * $1 / $2) : 0
+               if (pct > best[$3]) { best[$3] = pct; el[$3] = $1; bud[$3] = $2 } }
+             END { for (n in best) printf "%6.0f%%  %9s  %s\n",
+                                         best[n], (el[n] "s/" bud[n] "s"), n }' \
+      | sort -rn | head -"${TUR_HEADROOM_TOP:-8}" | sed 's/^/   /'
 fi
 
 # The fallback ratchet (see the header above RESULTS_DIR).  Only meaningful

@@ -1,0 +1,11 @@
+;; early-return-bypasses-return-refinement: a function that can `return` early
+;; is no longer "proved" from its last body form.  Under --strict-refine the
+;; unknown obligation is an error, naming the reason.  (Before, this compiled
+;; clean under --strict-refine and returned 0 for n = 10.)
+(defn f [n : int] : #refine{ r : int | (>= r n) }
+  (when (> n 5) (return 0))
+  n)
+
+(defn main [] : int
+  (println (f 3))
+  0)

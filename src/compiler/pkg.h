@@ -462,6 +462,14 @@ void pkg_tur_version_reset(void);
  * Returns the resolved commit SHA (heap-allocated) on success, NULL on error.
  * Caller must free() the returned string. */
 char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir);
+/* As pkg_git_fetch, then check out `pinned` (a commit SHA from tur.lock) when
+ * it is non-NULL.  Never falls back to `ref`: if the commit cannot be had, the
+ * clone is removed and NULL returned with a diagnostic, because tracking the
+ * branch instead is exactly what a pin exists to prevent. */
+char *pkg_git_fetch_pinned(const char *url, const char *ref, const char *pinned,
+                           const char *dest_dir);
+/* Recursive delete (install.c).  Refuses a path with no '/' or with "..". */
+bool pkg_rm_rf(const char *path);
 
 /* Resolve current HEAD SHA in an already-cloned directory.
  * Returns heap-allocated SHA string; caller must free(). */

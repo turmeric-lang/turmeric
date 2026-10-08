@@ -88,7 +88,8 @@ static EnvBinding *ht_find(const EnvHashTable *ht, const char *name) {
     for (;;) {
         EnvBinding *b = ht->slots[idx];
         if (!b) return NULL;
-        if (strcmp(b->name, name) == 0) return b;
+        if (b->name == name || (b->name[0] == name[0] && strcmp(b->name, name) == 0))
+            return b;
         idx = (idx + 1u) & mask;
     }
 }
@@ -432,7 +433,7 @@ void turi_env_reset(TuriEnv *env) {
      * The prelude pin goes with it -- this reset drops the preloaded stdlib
      * along with everything else, so there is nothing left to pin; a caller
      * that re-preloads calls turi_env_pin_prelude again. */
-    env->src_acc.len      = 0;
+    buf_truncate(&env->src_acc, 0);
     env->src_pin_len      = 0;
     env->pin_toplevel     = 0;
     env->pin_prog_items   = 0;
@@ -587,7 +588,7 @@ void turi_env_reset_to_prelude(TuriEnv *env) {
      * must not leave the pin pointing past the end of the buffer. */
     size_t pin = (env->src_pin_len < env->src_acc.len) ? env->src_pin_len
                                                        : env->src_acc.len;
-    env->src_acc.len = pin;
+    buf_truncate(&env->src_acc, pin);
 
     if (pin == 0) {
         /* Nothing pinned -- the historical full discard. */

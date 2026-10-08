@@ -136,9 +136,13 @@ let [opts     make-struct(RateLimitOpts 100 60)   ; 100 req / 60 s
 
 Multiple `mw-rate-limit` instances do not share state. Two
 compositions of `mw-rate-limit` each get an independent table; share
-by reusing the same wrapped closure. The table fails open when full
-(more than 1024 distinct IPs in the same window), which is acceptable
-for a v1 limiter.
+by reusing the same wrapped closure. The table holds 2048 IPs, keyed by
+the IP string itself (its hash only picks one of 256 sets of 8). A new IP
+takes an empty entry of its set, else one whose window has ended, else the
+one whose window started longest ago -- so the limiter never fails open:
+a flood of distinct IPs cannot leave every later IP unlimited, it only
+restarts the windows of the IPs it evicts. Each check touches at most 8
+entries.
 
 The client IP comes from [`httpd-req-remote-ip`](#client-ip), which
 caches its result on the `__remote_ip` request attribute so repeated
@@ -196,7 +200,7 @@ section for the full surface.
 ```sweet-exp
 let [verify   (fn [u :cstr p :cstr] :int
                 (let [_t "_force-fat-closure"]
-                  (if (= 1 (cstr-eq-const-time u "admin"))
+                  (if {1 = (cstr-eq-const-time u "admin")}
                     (cstr-eq-const-time p "s3cret")
                     0)))
      base     (fn [c :ptr<void>] :nil
@@ -253,7 +257,7 @@ Notes:
 - Only `Content-Encoding: gzip` is negotiated. Brotli, zstd, and raw
   deflate are out of scope for v0.1.
 
-See also: the [`tur-zlib` README](https://github.com/rjungemann/turmeric-spices/tree/main/spices/zlib).
+See also: the [`tur-zlib` README](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/zlib).
 
 ### mw-recover (MW3)
 
@@ -429,7 +433,7 @@ through any number of middleware wraps.
 ## Not yet shipped
 
 The following items are tracked in
-[`docs/archive/httpd-middleware-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/httpd-middleware-plan.md)
+[`docs/archive/httpd-middleware-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/httpd-middleware-plan.md)
 but not yet in stdlib:
 
 - **`mw-timeout`** -- per-request wall-clock budget. Needs a

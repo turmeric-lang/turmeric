@@ -1,10 +1,11 @@
 ;; FH4.2: applying a handler discharges its effect from the body's effect row.
 ;; do-work performs Write (fully handled by with-handler) and Other (leftover);
-;; its inferred row is exactly {Other}, matching the #{Other} annotation -- proof
-;; that Write was discharged.  main handles Other and returns 0.
+;; its inferred row is exactly {Other IO}, matching the #fx{Other IO} annotation
+;; -- proof that Write was discharged.  (IO because the Write clause prints; W4:
+;; `println` is #fx{IO}.)  main handles Other and returns 0.
 (defeffect Write [s :cstr] :nil)
 (defeffect Other [] :int)
-(defn do-work [] #fx{Other} : int
+(defn do-work [] #fx{Other IO} : int
   (with-handler
     (handler (Write [s] k) (do (println s) (resume k nil)))
     (do (perform (Write "inner")) (perform (Other)))))

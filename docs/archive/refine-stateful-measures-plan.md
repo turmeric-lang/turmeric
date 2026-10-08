@@ -27,7 +27,7 @@ gap C2 -- **satisfied**; that plan's RE1 is complete.
 
 > **Status 2026-07-26 -- RM-S0 done, recommending Candidate B; decision open.**
 > Both surfaces were written and read in `tur-ecs` (full artifact:
-> `turmeric-spices/docs/ecs-rms0-stateful-refinement-dogfood.md`). RM-S0 was run
+> `docs/archive/ecs-rms0-stateful-refinement-dogfood.md`). RM-S0 was run
 > *after* C1/RM-B1 landed, so the epoch surface is now testable rather than
 > hypothetical. Empirical results (`TUR_REFINE_STATS=1 --enable=refined`):
 >
@@ -306,7 +306,7 @@ anyone writes the annotations**.
 
 So RM-S0 is not an implementation phase.
 
-### RM-S0 -- Write both surfaces by hand, in `tur-ecs`, and read them  [DONE 2026-07-26 -- recommends B; see status block + turmeric-spices/docs/ecs-rms0-stateful-refinement-dogfood.md]
+### RM-S0 -- Write both surfaces by hand, in `tur-ecs`, and read them  [DONE 2026-07-26 -- recommends B; see status block + docs/archive/ecs-rms0-stateful-refinement-dogfood.md]
 
 Take the accessor family from
 [the ECS plan's RE1](../upcoming/v1/ecs-refinement-typed-apis-plan.md#re1----strict-aliveness-needs-c2-wants-c1)

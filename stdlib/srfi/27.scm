@@ -517,45 +517,61 @@
     ; as components. The actual state of the generator is stored in the
     ; binding-time environment of make-random-source.
 
+    ;; Turmeric: a source's state lives in a one-slot vector its closures
+    ;; share, and drawing from a state is a procedure of its own, so the
+    ;; default source's `random-integer` and `random-real` reach the
+    ;; generator without reaching the rest of the record (pseudo-randomize!
+    ;; above all).  A program then pays only for what it calls.
+
+    (define (mrg32k3a-integers-from cell n)
+      (cond
+       ((not (and (integer? n) (exact? n) (positive? n)))
+        (error "range must be exact positive integer" n))
+       ((<= n mrg32k3a-m-max)
+        (mrg32k3a-random-integer (vector-ref cell 0) n))
+       (else
+        (mrg32k3a-random-large (vector-ref cell 0) n))))
+
+    (define (mrg32k3a-reals-from cell args)
+      (cond
+       ((null? args)
+        (lambda ()
+          (mrg32k3a-random-real (vector-ref cell 0))))
+       ((null? (cdr args))
+        (let ((unit (car args)))
+          (cond
+           ((not (and (real? unit) (< 0 unit 1)))
+            (error "unit must be real in (0,1)" unit))
+           ((<= (- (/ 1 unit) 1) mrg32k3a-m1)
+            (lambda ()
+              (mrg32k3a-random-real (vector-ref cell 0))))
+           (else
+            (lambda ()
+              (mrg32k3a-random-real-mp (vector-ref cell 0) unit))))))
+       (else
+        (error "illegal arguments" args))))
+
+    (define (make-random-source-in cell)
+      (:random-source-make
+       (lambda ()
+         (mrg32k3a-state-ref (vector-ref cell 0)))
+       (lambda (new-state)
+         (vector-set! cell 0 (mrg32k3a-state-set new-state)))
+       (lambda ()
+         (vector-set! cell 0 (mrg32k3a-randomize-state (vector-ref cell 0))))
+       (lambda (i j)
+         (vector-set! cell 0 (mrg32k3a-pseudo-randomize-state i j)))
+       (lambda ()
+         (lambda (n) (mrg32k3a-integers-from cell n)))
+       (lambda args
+         (mrg32k3a-reals-from cell args))))
+
+    (define (mrg32k3a-fresh-state-cell)
+      (vector (mrg32k3a-pack-state ; make a new copy
+               (list->vector (vector->list mrg32k3a-initial-state)))))
+
     (define (make-random-source)
-      (let ((state (mrg32k3a-pack-state ; make a new copy
-                    (list->vector (vector->list mrg32k3a-initial-state)))))
-        (:random-source-make
-         (lambda ()
-           (mrg32k3a-state-ref state))
-         (lambda (new-state)
-           (set! state (mrg32k3a-state-set new-state)))
-         (lambda ()
-           (set! state (mrg32k3a-randomize-state state)))
-         (lambda (i j)
-           (set! state (mrg32k3a-pseudo-randomize-state i j)))
-         (lambda ()
-           (lambda (n)
-             (cond
-              ((not (and (integer? n) (exact? n) (positive? n)))
-               (error "range must be exact positive integer" n))           
-              ((<= n mrg32k3a-m-max)
-               (mrg32k3a-random-integer state n))
-              (else
-               (mrg32k3a-random-large state n)))))
-         (lambda args
-           (cond
-            ((null? args)
-             (lambda () 
-               (mrg32k3a-random-real state)))
-            ((null? (cdr args))
-             (let ((unit (car args)))
-               (cond
-                ((not (and (real? unit) (< 0 unit 1)))
-                 (error "unit must be real in (0,1)" unit))
-                ((<= (- (/ 1 unit) 1) mrg32k3a-m1)
-                 (lambda () 
-                   (mrg32k3a-random-real state)))
-                (else
-                 (lambda () 
-                   (mrg32k3a-random-real-mp state unit))))))
-            (else
-             (error "illegal arguments" args)))))))
+      (make-random-source-in (mrg32k3a-fresh-state-cell)))
 
     (define random-source? 
       :random-source?)
@@ -582,11 +598,20 @@
 
     ; ---
 
-    (define default-random-source 
-      (make-random-source))
+    ;; Turmeric: the default source and the two procedures over it share
+    ;; one state cell, and the procedures draw from it directly instead of
+    ;; through the record, as the reference's values made at load do.  Each
+    ;; initializer here only allocates, so src/passes/srfi_prune.c drops
+    ;; whichever of them a program does not reach
+    ;; (docs/archive/r7rs-srfi-18-216-sicp-plan.md, T0b).
+    (define default-random-state-cell
+      (mrg32k3a-fresh-state-cell))
 
-    (define random-integer
-      (random-source-make-integers default-random-source))
+    (define default-random-source
+      (make-random-source-in default-random-state-cell))
 
-    (define random-real
-      (random-source-make-reals default-random-source))))
+    (define (random-integer n)
+      (mrg32k3a-integers-from default-random-state-cell n))
+
+    (define (random-real)
+      (mrg32k3a-random-real (vector-ref default-random-state-cell 0)))))

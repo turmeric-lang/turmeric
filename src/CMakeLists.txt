@@ -150,6 +150,10 @@ set(TURI_EVAL_SOURCES
     # provider hook + signature vocabulary.  The c2mir-backed provider itself
     # lives in turi/jit_ffi.c inside tur_jit_obj (JIT builds only).
     turi/jit_ffi_hook.c
+    # aot-compiled-repl-plan C1: compile an inline-C defn the interpreter
+    # cannot run, through a host hook (main.c registers it on a JIT build).
+    # MIR-free, like jit_ffi_hook.c.
+    turi/inline_c_jit.c
 )
 
 # ---------------------------------------------------------------------------
@@ -512,6 +516,13 @@ if(HAVE_EDITLINE)
 endif()
 
 # Inject version string from VERSION file at compile time (E2)
+# file(READ) runs at configure time and does not, by itself, make CMake
+# reconfigure when VERSION changes -- so a version bump followed by an
+# incremental `cmake --build` leaves the compiler binary with the stale
+# TUR_VERSION define (observed: stdlib 0.63.3 vs compiler v0.63.2). Declaring
+# VERSION as a CMAKE_CONFIGURE_DEPENDS forces a reconfigure on any change to
+# it, which re-reads the file and re-emits the define.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION")
 file(READ "${CMAKE_SOURCE_DIR}/VERSION" _TUR_VERSION_RAW)
 string(STRIP "${_TUR_VERSION_RAW}" _TUR_VERSION_STR)
 target_compile_definitions(tur_core PRIVATE TUR_VERSION="${_TUR_VERSION_STR}")
@@ -750,8 +761,13 @@ set_target_properties(turt_preamble PROPERTIES OUTPUT_NAME "turt_preamble")
 target_include_directories(turt_preamble PRIVATE ${TUR_INCLUDE_DIRS})
 # Non-sanitized and warning-quiet for the same reason turt_runtime is: this is
 # emitted C compiled as a library, not tur's own code.
+#
+# One section per function and per object, so a program's link can drop the
+# parts of the preamble it never calls (`tur build` passes --gc-sections on
+# ELF).  The archive is a single object, so without these the linker can only
+# take all of it: a one-line program's code grew 4x under the split.
 target_compile_options(turt_preamble PRIVATE
-    -O2 -std=c99 -fno-strict-aliasing -w
+    -O2 -std=c99 -fno-strict-aliasing -w -ffunction-sections -fdata-sections
 )
 
 # ---------------------------------------------------------------------------
@@ -771,6 +787,14 @@ install(TARGETS libturi
 # It also gates the rc<T>/GC de-dup: without this archive an installed toolchain
 # has nothing to link the collector from, and falls back to the emitted replica.
 install(TARGETS turt_runtime
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT libturi
+)
+
+# cc-path-preamble-split-plan: a default build takes the preamble split only
+# when this archive sits beside libturt_runtime.a, so an install without it
+# would quietly keep recompiling the whole preamble in every program.
+install(TARGETS turt_preamble
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT libturi
 )

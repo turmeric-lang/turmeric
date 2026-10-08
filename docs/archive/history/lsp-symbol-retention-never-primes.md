@@ -4,7 +4,7 @@
 opening a file that already has a syntax error).
 
 Reported from the consumer side by the agent working on
-[Trowel](https://github.com/rjungemann/trowel), the native Turmeric editor,
+[Trowel](https://github.com/turmeric-lang/trowel), the native Turmeric editor,
 against `claude/busy-clarke-6zj9jl` (HEAD `8f341d32e`). Verified here.
 
 ## Status (2026-07-27): FIXED

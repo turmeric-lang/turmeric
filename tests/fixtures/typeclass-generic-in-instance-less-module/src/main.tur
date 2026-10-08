@@ -1,0 +1,19 @@
+(defmodule main
+  (import box/mid :refer [eight])
+  (import box/cls :refer [twice quad show-twice])
+  (defopaque W :int)
+  (defn main [] : int
+    (println (twice (:: 21 W)))
+    (println (quad (:: 1 W)))
+    (println (eight (:: 1 W)))
+    (println (twice (V 3 "v")))
+    (println (.k (show-twice (V 2 "w"))))
+    (println (:: (show-twice (:: 5 W)) int))
+    0)
+  (definstance Box [W]
+    (bx-get [x] (:: x int))
+    (bx-put [x n] (:: n W)))
+  (defstruct V [k : int name : cstr])
+  (definstance Box [V]
+    (bx-get [x] (* (.k x) 100))
+    (bx-put [x n] (V n (.name x)))))

@@ -40,7 +40,8 @@ EffectRow *effect_row_union(Arena *a, EffectRow *left, EffectRow *right) {
 }
 
 /* Create an unresolved (symbolic) effect row from an array of symbol names. */
-EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_sym_names) {
+EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names,
+                                 uint8_t n_sym_names, Span span) {
     if (n_sym_names == 0) return effect_row_empty(a);
     EffectRow *row = arena_alloc(a, sizeof(EffectRow));
     row->kind = ERK_UNRESOLVED;
@@ -49,7 +50,30 @@ EffectRow *effect_row_unresolved(Arena *a, const Symbol **sym_names, uint8_t n_s
         row->as.unresolved.sym_names[i] = sym_names[i];
     }
     row->as.unresolved.n_sym_names = n_sym_names;
+    row->as.unresolved.span = span;
+    row->as.unresolved.unknown_reported = false;
     return row;
+}
+
+/* An uppercase-initial name in a row is an effect; anything else is a row
+ * variable.  effect_row_resolve and effect_row_unknown_names must agree on
+ * this, or a name could be dropped without being reported. */
+static bool row_name_is_effect(const Symbol *name) {
+    return !(name->name[0] >= 'a' && name->name[0] <= 'z');
+}
+
+uint8_t effect_row_unknown_names(const EffectRow *row, EffectEnv *env,
+                                 const Symbol **out, uint8_t cap) {
+    if (!row || row->kind != ERK_UNRESOLVED) return 0;
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < row->as.unresolved.n_sym_names; i++) {
+        const Symbol *name = row->as.unresolved.sym_names[i];
+        if (!name || name->len == 0 || !row_name_is_effect(name)) continue;
+        if (effect_env_lookup(env, name)) continue;
+        if (n < cap) out[n] = name;
+        n++;
+    }
+    return n;
 }
 
 /* Resolve ERK_UNRESOLVED → concrete/var using the populated effect environment. */
@@ -62,7 +86,7 @@ EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a) {
         const Symbol *name = row->as.unresolved.sym_names[i];
         if (!name || name->len == 0) continue;
         /* Lowercase first character → row variable; uppercase → concrete effect. */
-        if (name->name[0] >= 'a' && name->name[0] <= 'z') {
+        if (!row_name_is_effect(name)) {
             EffectRow *var = arena_alloc(a, sizeof(EffectRow));
             var->kind = ERK_VAR;
             var->as.var.var_name = name;
@@ -72,7 +96,9 @@ EffectRow *effect_row_resolve(EffectRow *row, EffectEnv *env, Arena *a) {
             if (eff) {
                 result = effect_row_merge(a, result, effect_row_single(a, eff));
             }
-            /* Unknown uppercase name: silently skip (may be a typo or future effect). */
+            /* Unknown uppercase name: left out.  The caller has already
+             * reported it (TUR-E0026, effect_check.c resolve_declared_row);
+             * there is nothing to resolve it TO. */
         }
     }
     return result;
@@ -93,6 +119,55 @@ bool effect_is_subeffect(const Effect *child, const Effect *parent_eff) {
 bool effect_row_is_empty(EffectRow *row) {
     if (!row) return true;
     return row->kind == ERK_EMPTY;
+}
+
+bool effect_row_is_runtime_pure(const EffectRow *row) {
+    if (!row) return true;
+    switch (row->kind) {
+    case ERK_EMPTY:
+        return true;
+    case ERK_CONCRETE:
+        for (uint8_t i = 0; i < row->as.concrete.n_effects; i++) {
+            const Effect *eff = row->as.concrete.effects[i];
+            if (!eff || !eff->is_capability) return false;
+        }
+        return true;
+    case ERK_UNION:
+        return effect_row_is_runtime_pure(row->as.union_.left) &&
+               effect_row_is_runtime_pure(row->as.union_.right);
+    case ERK_VAR:
+    case ERK_UNRESOLVED:
+        return false;
+    }
+    return false;
+}
+
+EffectRow *effect_row_without_capabilities(Arena *a, EffectRow *row) {
+    if (!row) return row;
+    switch (row->kind) {
+    case ERK_CONCRETE: {
+        uint8_t n = row->as.concrete.n_effects, kept = 0;
+        for (uint8_t i = 0; i < n; i++)
+            if (row->as.concrete.effects[i] && !row->as.concrete.effects[i]->is_capability)
+                kept++;
+        if (kept == n) return row;
+        if (kept == 0) return effect_row_empty(a);
+        Effect **keep = arena_alloc(a, kept * sizeof(Effect *));
+        uint8_t k = 0;
+        for (uint8_t i = 0; i < n; i++)
+            if (row->as.concrete.effects[i] && !row->as.concrete.effects[i]->is_capability)
+                keep[k++] = row->as.concrete.effects[i];
+        return effect_row_concrete(a, keep, kept);
+    }
+    case ERK_UNION: {
+        EffectRow *l = effect_row_without_capabilities(a, row->as.union_.left);
+        EffectRow *r = effect_row_without_capabilities(a, row->as.union_.right);
+        if (l == row->as.union_.left && r == row->as.union_.right) return row;
+        return effect_row_merge(a, l, r);
+    }
+    default:
+        return row;
+    }
 }
 
 /* Helper to compare two effects by pointer (they're arena-allocated) */
@@ -462,6 +537,49 @@ Effect *effect_env_register_builtin_unsafe(EffectEnv *env, Arena *a,
     if (!env || !a || !unsafe_name) return NULL;
     return effect_env_register(env, a, unsafe_name,
                                NULL, NULL, 0, TY_NIL, NULL, false);
+}
+
+/* effect-row-honesty-plan W2: the capability tags the stdlib's I/O modules
+ * are annotated with.  `IO` is the umbrella; the rest `^extends IO`.  They
+ * were declared only in stdlib/effects.tur, which is not autoloaded, so
+ * `#fx{IO}` meant nothing (and, after W1, was TUR-E0026) in exactly the small
+ * programs most likely to write it.  Order matters: a parent precedes its
+ * children. */
+static const struct { const char *name; const char *parent; } k_builtin_caps[] = {
+    { "IO",   NULL },
+    { "FS",   "IO" },
+    { "Net",  "IO" },
+    { "Proc", "IO" },
+    { "Rand", "IO" },
+};
+
+bool effect_builtin_capability(const char *name, const char **parent_out) {
+    if (!name) return false;
+    for (size_t i = 0; i < sizeof(k_builtin_caps) / sizeof(k_builtin_caps[0]); i++) {
+        if (strcmp(name, k_builtin_caps[i].name) == 0) {
+            if (parent_out) *parent_out = k_builtin_caps[i].parent;
+            return true;
+        }
+    }
+    return false;
+}
+
+void effect_env_register_builtin_capabilities(EffectEnv *env, Arena *a,
+                                              SymbolTable *st) {
+    if (!env || !a || !st) return;
+    for (size_t i = 0; i < sizeof(k_builtin_caps) / sizeof(k_builtin_caps[0]); i++) {
+        const char *nm = k_builtin_caps[i].name;
+        const Symbol *sym = symtab_intern(st, strslice(nm, (uint32_t)strlen(nm)));
+        Effect *eff = effect_env_register(env, a, sym, NULL, NULL, 0, TY_NIL,
+                                          NULL, false);
+        if (!eff) continue;
+        eff->is_capability = true;
+        if (k_builtin_caps[i].parent) {
+            const char *pn = k_builtin_caps[i].parent;
+            eff->parent = effect_env_lookup(
+                env, symtab_intern(st, strslice(pn, (uint32_t)strlen(pn))));
+        }
+    }
 }
 
 /* ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ Each spice in `turmeric-spices` should be independently consumable via a
 `:spices` entry of the form:
 
 ```turmeric
-#{:url    "https://github.com/rjungemann/turmeric-spices"
+#{:url    "https://github.com/turmeric-lang/turmeric-spices"
   :ref    "<spice>-v<version>"
   :subdir "spices/<spice>"}
 ```
@@ -181,7 +181,7 @@ tags for Gap 1 -- 34 per-spice tags collapsed to one.
 What landed:
 
 - 5 manifests (`http`, `httpd`, `notebook`, `ecs-raylib`, `tourist`) gained
-  `:url "https://github.com/rjungemann/turmeric-spices" :ref "v0.1.0"
+  `:url "https://github.com/turmeric-lang/turmeric-spices" :ref "v0.1.0"
   :subdir "spices/<sibling>"` alongside their existing `:path` entries.
   8 sibling deps in total. `:path` still wins in workspace dev (verified
   via `tur fetch --dry-run`).

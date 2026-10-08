@@ -10,7 +10,7 @@ description: Attaching `.tur` scripts to Godot 4 nodes -- install, the curated a
 > facades, interpreter and AOT execution, the editor plugin (highlighter,
 > completion, structured validation, and a stack-frame debugger),
 > inspector exports/signals, cross-script calls, and `preload`.
-> **Plan:** [docs/archive/godot-language-binding-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-language-binding-plan.md)
+> **Plan:** [docs/archive/godot-language-binding-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/godot-language-binding-plan.md)
 > **Repo:** `../turmeric-godot/` (sibling to this one)
 
 This guide is for people who want to attach `.tur` scripts to Godot
@@ -28,7 +28,7 @@ for *what works today*.
 ## Install
 
 The binding ships as a GDExtension built from the
-[`turmeric-godot`](https://github.com/rjungemann/turmeric-godot) repo.
+[`turmeric-godot`](https://github.com/turmeric-lang/turmeric-godot) repo.
 Two pieces drop into your project:
 
 1. **`bin/`** -- the per-platform GDExtension shared libraries plus
@@ -232,7 +232,7 @@ Unknown calls in eval mode surface a `TUR-W0040` warning at `_validate`
 time, so a typo shows up in the editor's error list before the script is
 attached. (The runtime-dispatch fallback is preserved for legitimately
 late-bound natives, so it's a warning, not a hard error.) See
-[docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md).
+[docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/eval-mode-unknown-call-deferred-to-runtime.md).
 
 ---
 
@@ -266,7 +266,7 @@ table. The AOT path compiles each script to a shared library via
 the dlsym'd function pointer. Same observable behaviour either way --
 AOT is the optimisation, not a separate language.
 
-Plan reference: [docs/archive/godot-binding-aot-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-binding-aot-plan.md).
+Plan reference: [docs/archive/godot-binding-aot-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/godot-binding-aot-plan.md).
 
 ### Opting in
 
@@ -428,7 +428,7 @@ friends.
    unwrap with `(:: h :int)` at the call boundary.
 
 3. **No Android / iOS / web export.** Desktop only for v1; web is
-   blocked on [`wasm-spices-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/hold/wasm-spices-plan.md).
+   blocked on [`wasm-spices-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/hold/wasm-spices-plan.md).
 
 4. **Generated facade allowlist is 53 of 920 classes.** Grown
    tactically as demos demand; the long tail is editor-internals /
@@ -498,7 +498,7 @@ guidance is "keep it inside one script."
 
 ## Quickstart for a new game
 
-1. `git clone https://github.com/rjungemann/turmeric-godot ../turmeric-godot`
+1. `git clone https://github.com/turmeric-lang/turmeric-godot ../turmeric-godot`
 2. `(cd ../turmeric-godot && python3 -m SCons platform=macos arch=arm64 target=template_debug -j4)`
 3. Copy `examples/spike/bin/` and `examples/spike/addons/` into a
    fresh Godot project.

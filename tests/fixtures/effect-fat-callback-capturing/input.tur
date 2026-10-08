@@ -5,9 +5,15 @@
 ;; 2026-08-16 CPS increment the plain (non-^fat) spelling works too -- see
 ;; effect-capturing-closure-thin-param -- but the ^fat spelling must keep
 ;; working alongside it.
+;; `Write` is declared here so the rows below mean something: before
+;; TUR-E0026 an undeclared name was dropped, and every row in this file
+;; silently resolved to #fx{}.
+(defeffect Write [s :cstr] :nil)
+
 (defn run-cb [^fat body : (fn [] #fx{Write} int)] #fx{Write} : int (body))
 
-(defn main [] #fx{Write} : int
+;; main prints, so its row names IO as well as Write (W4: `println` is #fx{IO}).
+(defn main [] #fx{Write IO} : int
   (let [k 7]
     (println (run-cb (fn [] : int (+ k 1)))))
   0)

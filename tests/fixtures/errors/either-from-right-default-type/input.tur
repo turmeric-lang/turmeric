@@ -1,0 +1,9 @@
+;; stdlib-int-stand-in-audit S3: from-right's default has the Right arm's
+;; type.  Under `dflt : int e : int` an int default against a cstr Either was
+;; accepted, and the call answered a word that was sometimes a string pointer
+;; and sometimes the integer 0.
+(load "stdlib/either.tur")
+(defn main [] : int
+  (let [e : (Either cstr cstr) (Right "seven")]
+    (println (from-right 0 e)))
+  0)

@@ -30,6 +30,9 @@
 #                    tests/run.sh -- see KB-002 in docs/archive/history/known-bugs.md)
 #   TUR_TEST_JOBS    parallelism (default: cpu count, capped at 8)
 #   TUR_FORCE        set to 1 to skip stamp-cache fast-path
+#   TUR_TURI_SHARD   run a round-robin slice, "i/N" 1-based (default: all)
+#   TURI_TEST_LIST   set to 1 to print the fixture names this invocation would
+#                    run, one per line, and exit without running any
 
 set -u
 cd "$(dirname "$0")/.."
@@ -44,7 +47,50 @@ cd "$(dirname "$0")/.."
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "run-turi: $TUR not built; run 'just build' first" >&2; exit 2; }
+LIST_ONLY=0
+if [ "${TURI_TEST_LIST:-0}" = "1" ]; then LIST_ONLY=1; fi
+# List mode answers a question about the CORPUS -- which fixtures a shard would
+# run -- so it must not require a built interpreter.  tests/run-shard-partition.sh
+# calls it from the non-JIT `test` job, where $TUR may be absent entirely.
+if [ "$LIST_ONLY" = "0" ]; then
+    [ -x "$TUR" ] || { echo "run-turi: $TUR not built; run 'just build' first" >&2; exit 2; }
+fi
+
+# Optional sharding, spelled and CLAMPED exactly as tests/run.sh and
+# tests/run-jit.sh do it: 1-based "i/N", a nonsense index snaps into range
+# rather than erroring, and a total of 1 or less means "not sharded".
+#
+# TUR_TURI_SHARD, not TUR_TEST_SHARD: turi_fixture_tests runs inside the 160-test
+# `aux` ctest part, and tools/ci/collect-suite-timings.py tags timing rows from
+# the job's ENVIRONMENT rather than per test -- so TUR_TEST_SHARD there would
+# label all 160 other suites as replicas of a slice they never ran.  One variable
+# per harness keeps every call site correct without a rule to remember; see
+# tests/shard_util.py.
+TUR_TURI_SHARD="${TUR_TURI_SHARD:-}"
+SHARD_INDEX=0
+SHARD_TOTAL=1
+if [ -n "$TUR_TURI_SHARD" ]; then
+    case "$TUR_TURI_SHARD" in
+        */*)
+            shard_left="${TUR_TURI_SHARD%/*}"
+            shard_right="${TUR_TURI_SHARD#*/}"
+            case "$shard_left" in ''|*[!0-9]*) shard_left=1 ;; esac
+            case "$shard_right" in ''|*[!0-9]*) shard_right=1 ;; esac
+            if [ "$shard_right" -lt 1 ]; then shard_right=1; fi
+            if [ "$shard_left" -lt 1 ]; then shard_left=1; fi
+            if [ "$shard_left" -gt "$shard_right" ]; then shard_left="$shard_right"; fi
+            SHARD_TOTAL="$shard_right"
+            SHARD_INDEX=$((shard_left - 1))
+            ;;
+    esac
+fi
+
+matches_shard() {
+    if [ "$SHARD_TOTAL" -le 1 ]; then
+        return 0
+    fi
+    [ $(($1 % SHARD_TOTAL)) -eq "$SHARD_INDEX" ]
+}
 
 PASS=0
 FAIL=0
@@ -71,13 +117,34 @@ _tur_hash_file() {
     elif command -v md5sum >/dev/null 2>&1; then md5sum "$1" 2>/dev/null | awk '{print $1}'
     else echo "nohash"; fi
 }
-_tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
+# GNU first, and only an all-digit answer counts: `stat -f` on GNU means
+# "filesystem status" and printed the volume's free-block counts into the
+# stamp key, so on Linux the cache almost never hit (see tests/run.sh).
+_tur_mtime() {
+    local m
+    m="$(stat -c '%Y' "$1" 2>/dev/null)"
+    case "$m" in ''|*[!0-9]*) m="$(stat -f '%m' "$1" 2>/dev/null)" ;; esac
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    echo "$m"
+}
 
 # Performance optimization: cache the compiler binary modification time once
 # at startup so we do not spawn a redundant stat process for every single fixture.
 export TUR_MTIME="$(_tur_mtime "$TUR")"
 
-stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
+# One hash over stdlib/, as tests/run.sh keys its stamps: the stdlib is data
+# `tur` reads at elaboration time, so a stdlib-only edit changes neither the
+# binary nor any fixture (docs/archive/run-sh-stamp-cache-ignores-the-stdlib.md).
+# This key had no such term; the broken mtime above masked that on Linux.
+_tur_hash_stdin() {
+    if command -v md5 >/dev/null 2>&1; then md5 -q
+    elif command -v md5sum >/dev/null 2>&1; then md5sum | awk '{print $1}'
+    else echo "nohash"; fi
+}
+export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
+    while IFS= read -r _f; do printf '%s\n' "$_f"; cat "$_f"; done | _tur_hash_stdin)"
+
+stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}-${TUR_STDLIB_HASH}"; }
 stamp_check() {
     [ "$TUR_FORCE" = "1" ] && return 1
     local sf="$STAMP_CACHE/$(printf '%s' "$1" | tr '/ ' '__').stamp"
@@ -176,6 +243,82 @@ fixture_inline_c_runs() {
     eval "[ \"\${TURI_ICRUN_${key}:-0}\" = \"1\" ]"
 }
 
+# aot-compiled-repl-plan C1 (repl-jit-inline-c, beta): inline-C fixtures that
+# run under --interpret when the interpreter may JIT-compile the inline-C defns
+# it cannot run itself.  On a TUR_JIT build (the default on 64-bit x86-64 and
+# arm64) each runs with --enable=repl-jit-inline-c; on a build with no engine
+# it stays in the carve-out.  Measured 2026-10-04: every one fails without the
+# flag and passes with it, three runs in a row.  An entry belongs here only if
+# that holds -- a fixture that passes only by handing interpreter memory to
+# compiled code is exactly what C1's value boundary refuses.
+TURI_INLINEC_JIT_RUN="
+async-sleep
+backtrack-depth
+backtrack-depth-exceeded
+backtrack-interleave
+backtrack-memory
+backtrack-n-queens
+backtrack-once
+backtrack-sudoku
+closure-slot-ptr-void-param-sinks
+condvar-basic
+cps-backend-ptr
+effect-extern-c-row
+effect-row-capability
+eqmap-cstr-content
+fat-param-direct-call
+fat-param-nullary-closure
+gc-heap-struct-rc
+gde-generic-dict-eq-map
+ghe1-bare-method-dispatch
+global-def-read-by-lifted-lambda
+gmk-map-literal-cstr-key
+grid-basic
+hamt-iteration
+hamt-large
+inline-c-multi-include-hoist
+inline-c-optional-hoisted-include
+inline-c-variadic-definition
+io-deprecated-names
+jit-inline-c-struct-stmtexpr-slot
+letrec-self-in-nested-closure
+letrec-self-recursive-carrier-float-return
+poly-fat-float-closure-eqmap
+poly-fn-typeclass-capturing-closure
+rc-free-queue-deep-cascade
+region-catch-retires-stranded-generation
+rwlock-basic
+sealed-opaque-in-module
+seq-builders-unfold
+seq-core-from-vec
+set-bang-releases-old-rc
+set-cstr-content
+sized-hash-consistency
+sized-sz2-buf-basic
+stm-tmvar-tchan
+typed-state-cell
+unsafe-ascribe-captured-var
+"
+while IFS= read -r _fx; do
+    _fx="${_fx#"${_fx%%[![:space:]]*}"}"; _fx="${_fx%"${_fx##*[![:space:]]}"}"
+    [ -z "$_fx" ] && continue
+    case "$_fx" in \#*) continue ;; esac
+    eval "export TURI_ICJIT_$(printf '%s' "$_fx" | tr '-' '_' | tr '/' '_')=1"
+done <<< "$TURI_INLINEC_JIT_RUN"
+
+# The same probe tests/turi/repl-jit-inline-c.sh uses.
+TURI_HAS_JIT=1
+case "$("$TUR" jit /nonexistent-tur-jit-probe.tur 2>&1 || true)" in
+    *"carries no JIT"*) TURI_HAS_JIT=0 ;;
+esac
+export TURI_HAS_JIT
+
+fixture_inline_c_jit_runs() {
+    [ "$TURI_HAS_JIT" = 1 ] || return 1
+    local key; key="$(printf '%s' "$1" | tr '-' '_' | tr '/' '_')"
+    eval "[ \"\${TURI_ICJIT_${key}:-0}\" = \"1\" ]"
+}
+
 # ---------------------------------------------------------------------------
 # TI8.b/W3 (turi-interpreter-gap-closure-plan): error-fixture coverage under the
 # interpreter.  tests/fixtures/errors/* are negative fixtures that must elaborate
@@ -235,6 +378,7 @@ done <<< "$TURI_ERRORS_DENY"
 #   requires.dedicated-runner -- owned by its own ctest target
 #   requires.spices           -- needs the sibling ../turmeric-spices checkout
 #   requires.tsan             -- TSan-only fixture
+#   requires.stress           -- nightly-only full-size twin (TUR_STRESS=1)
 # Returns 0 (and has printed + recorded the skip) when the fixture is skipped.
 # ---------------------------------------------------------------------------
 record_result() {   # record_result <name> <kind>
@@ -248,6 +392,7 @@ marker_skip() {     # marker_skip <dir> <name>
     elif [ -f "$dir/requires.spices" ] && [ ! -d "../turmeric-spices" ]; then
         why="requires.spices; sibling checkout absent"
     elif [ -f "$dir/requires.tsan" ] && [ "${TUR_TSAN:-0}" != "1" ]; then why="requires.tsan"
+    elif [ -f "$dir/requires.stress" ] && [ "${TUR_STRESS:-0}" != "1" ]; then why="requires.stress"
     fi
     [ -n "$why" ] || return 1
     printf 'SKIP %s (%s)\n' "$name" "$why"
@@ -344,7 +489,11 @@ run_turi_fixture() {
     # a real bug the carve hides; see
     # docs/archive/history/turi-inline-c-silent-miscompiles.md.  Every other fixture is
     # now run for real under --interpret (no allowlist gate).
-    if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
+    local jit_flag=""
+    if fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name" &&
+       fixture_inline_c_jit_runs "$name"; then
+        jit_flag="--enable=repl-jit-inline-c"
+    elif fixture_has_inline_c "$dir" && ! fixture_inline_c_runs "$name"; then
         printf 'SKIP %s (inline-c carve-out)\n' "$name"
         echo "SKIP_INLINEC" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
         return
@@ -375,18 +524,18 @@ run_turi_fixture() {
     local rc=0
     if [ -f "$dir/input.stdin" ]; then
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags --interpret "$input" \
+            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 < "$dir/input.stdin" > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     else
         if command -v timeout >/dev/null 2>&1; then
-            timeout "$fixture_timeout" "$TUR" $fixture_flags --interpret "$input" \
+            timeout "$fixture_timeout" "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         else
-            "$TUR" $fixture_flags --interpret "$input" \
+            "$TUR" $fixture_flags $jit_flag --interpret "$input" \
                 > "$actual_stdout" 2> "$actual_stderr" || rc=$?
         fi
     fi
@@ -451,7 +600,7 @@ run_turi_fixture() {
 }
 
 export TUR STAMP_CACHE RESULTS_DIR TUR_FORCE TUR_MTIME
-export -f run_turi_fixture fixture_inline_c_runs fixture_has_inline_c stamp_check stamp_write stamp_key
+export -f run_turi_fixture fixture_inline_c_runs fixture_inline_c_jit_runs fixture_has_inline_c stamp_check stamp_write stamp_key
 export -f _tur_hash_file _tur_mtime
 export -f run_turi_error_fixture err_in_denyset marker_skip record_result
 
@@ -471,41 +620,69 @@ done
 # same filter env var works against both tests/run.sh and tests/run-turi.sh.
 # TURI_FILTER wins when both are set.
 TURI_FILTER="${TURI_FILTER:-${TUR_TEST_FILTER:-}}"
+# The ordinal advances on EVERY discovered fixture, not just admitted ones, so
+# shard membership is a property of the corpus rather than of the filter.  A
+# filtered shard run is then a subset of the same slice an unfiltered one takes,
+# which is what makes TURI_FILTER usable to re-run one shard's failure -- the
+# name stays in the slice that ran it.  Same rule as tests/run-jit.sh.
 FILTERED_DIRS=()
+fixture_ordinal=0
 for d in "${ALL_DIRS[@]}"; do
     name="${d#tests/fixtures/}"
-    if [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; then
+    if { [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; } \
+       && matches_shard "$fixture_ordinal"; then
         FILTERED_DIRS+=("$d")
     fi
+    fixture_ordinal=$((fixture_ordinal + 1))
 done
 
+# TI8.b/W3: error-fixture diag pass (tests/fixtures/errors/*).  Honors the same
+# TURI_FILTER so `TURI_FILTER=errors/ ...` narrows to just this pass.
+#
+# Built here, BEFORE the positive pass runs, rather than between the two passes
+# as it used to be: both slices have to be resolved before anything executes for
+# TURI_TEST_LIST to answer "what is in shard i/N?" without running a fixture.
+ERROR_DIRS=()
+error_ordinal=0
+for d in tests/fixtures/errors/*/; do
+    d="${d%/}"; [ -d "$d" ] || continue
+    name="${d#tests/fixtures/}"
+    if { [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; } \
+       && matches_shard "$error_ordinal"; then
+        ERROR_DIRS+=("$d")
+    fi
+    error_ordinal=$((error_ordinal + 1))
+done
+
+# Names only, one per line, `errors/` kept in the path -- the same shape
+# run-jit.sh prints, so tests/run-shard-partition.sh can assert this harness's
+# partition through its REAL enumeration rather than a copy that could drift.
+if [ "$LIST_ONLY" = "1" ]; then
+    for d in "${FILTERED_DIRS[@]+"${FILTERED_DIRS[@]}"}" \
+             "${ERROR_DIRS[@]+"${ERROR_DIRS[@]}"}"; do
+        echo "${d#tests/fixtures/}"
+    done
+    exit 0
+fi
+
 # The census: every directory the two passes are about to walk that carries an
-# input.  The tally below must account for each of these exactly once.
+# input.  The tally below must account for each of these exactly once.  Counted
+# from the already-sharded arrays, so a shard's accounting balances against the
+# fixtures that shard actually runs rather than against the whole corpus.
 DISCOVERED=0
 for d in "${FILTERED_DIRS[@]}"; do
     if [ -f "$d/input.tur" ] || [ -f "$d/$(basename "$d").tur" ]; then
         DISCOVERED=$((DISCOVERED + 1))
     fi
 done
+for d in "${ERROR_DIRS[@]+"${ERROR_DIRS[@]}"}"; do
+    [ -f "$d/input.tur" ] && DISCOVERED=$((DISCOVERED + 1))
+done
 
 if [ ${#FILTERED_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${FILTERED_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_turi_fixture "$@"' _ {} 2>/dev/null
 fi
-
-# TI8.b/W3: error-fixture diag pass (tests/fixtures/errors/*).  Honors the same
-# TURI_FILTER so `TURI_FILTER=errors/ ...` narrows to just this pass.
-ERROR_DIRS=()
-for d in tests/fixtures/errors/*/; do
-    d="${d%/}"; [ -d "$d" ] || continue
-    name="${d#tests/fixtures/}"
-    if [ -z "$TURI_FILTER" ] || printf '%s\n' "$name" | grep -E -q "$TURI_FILTER"; then
-        ERROR_DIRS+=("$d")
-    fi
-done
-for d in "${ERROR_DIRS[@]}"; do
-    [ -f "$d/input.tur" ] && DISCOVERED=$((DISCOVERED + 1))
-done
 if [ ${#ERROR_DIRS[@]} -gt 0 ]; then
     printf '%s\n' "${ERROR_DIRS[@]}" | \
         xargs -P "$JOBS" -I{} bash -c 'run_turi_error_fixture "$@"' _ {} 2>/dev/null

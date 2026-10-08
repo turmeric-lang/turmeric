@@ -1,0 +1,7 @@
+TUR-E0375
+refine-impure-accessor-contract-positions/input.tur:31:1: error [TUR-E0375]
+refine-impure-accessor-contract-positions/input.tur:34:1: error [TUR-E0375]
+refine-impure-accessor-contract-positions/input.tur:38:1: error [TUR-E0375]
+refine-impure-accessor-contract-positions/input.tur:43:41: error [TUR-E0375]
+refine-impure-accessor-contract-positions/input.tur:47:1: error [TUR-E0375]
+refine-impure-accessor-contract-positions/input.tur:51:1: error [TUR-E0375]

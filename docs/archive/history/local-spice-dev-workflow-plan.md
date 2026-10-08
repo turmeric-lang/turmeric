@@ -16,7 +16,7 @@
 
 ```turmeric
 ;; URL-based (works end-to-end, but requires a published ref)
-"ansi" #{:url    "https://github.com/rjungemann/turmeric-spices"
+"ansi" #{:url    "https://github.com/turmeric-lang/turmeric-spices"
          :ref    "ansi-v0.1.4"
          :subdir "spices/ansi"}
 

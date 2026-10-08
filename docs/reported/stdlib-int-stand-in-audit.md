@@ -443,6 +443,17 @@ closures (it reads slot 0 as the thunk) and is the one left that could be
 typed directly; its calling convention (`thunk(closure, 0)`) wants reading
 before choosing the signature.
 
+> **2026-10-03: `with-cancel-guard` typed.**  Read, its convention was
+> wrong as well as loose: each zero-argument closure was called as
+> `int64_t (*)(void *, int64_t)` with a stray `0`, while a `(fn [] nil)`
+> thunk is `void (*)(void *)` -- a `-fsanitize=function` trap on every call.
+> Both parameters are `^fat (fn [] nil)` now and slot 0 is called at exactly
+> that type (`tests/fixtures/cancel-guard-typed-closures`, clean armed).  A
+> word-returning body was still accepted into the `nil` slot -- a general
+> checker gap, filed as
+> [word-result-fn-into-nil-slot](../archive/word-result-fn-into-nil-slot.md)
+> and resolved the same day: it is `TUR-E0001` now.
+
 **S3, `either.tur` -- attempted, NOT landed, and why.**  Making the module
 generic in the `option.tur` / `result.tur` idiom (`left? [L R] [e : (Either
 L R)]`, `from-right [L R] [dflt : R e : (Either L R)] : R`, `either [L R C]`,
@@ -483,8 +494,31 @@ same change: it builds an `Either` in inline C and should declare
 > generic map's by-value monomorph refuses its own arms in C. `(either-map inc
 > (Left 9))` reached cc, where the `int`-typed version runs it. The cause, and
 > `result-map`'s identical failure on `main` for a type-changing function, is
-> [generic-call-result-leaks-callee-tyvar-names](generic-call-result-leaks-callee-tyvar-names.md).
+> [generic-call-result-leaks-callee-tyvar-names](../archive/generic-call-result-leaks-callee-tyvar-names.md).
 > That is the blocker now.
+
+> **2026-10-01: that blocker is resolved** (archived).  A generic map over a
+> private `defdata` with both arm spellings -- constructor arms, and arms
+> through generic constructor helpers -- runs in both engines, including over
+> an open `(Left 9)`; `tests/fixtures/generic-call-result-binds-from-expected`
+> pins it.  The `either.tur` rewrite itself has not been redone.
+
+> **2026-10-02: landed.**  `either.tur` is `(Either L R)` throughout --
+> `left?` / `right?` `[L R]`, `from-left [dflt : L]`, `from-right [dflt : R]`,
+> `either [L R C]`, `either-map [L A B] ... : (Either L B)`,
+> `either-map-left [A B R] ... : (Either B R)` -- and `str->int-checked`
+> declares `(Either int int)`.  Every caller in the tree passed unchanged
+> (suite 3502/0 before the new fixtures; the four snapshot moves are uncalled
+> generics no longer emitted at the carrier).  Both engines agree on a
+> `(Either cstr float)` -- `7.25`, `bad`, a doubled `14.5` through
+> `either-map` -- which the `e : int` signatures rejected outright, and on
+> `(either-map inc (Left 9))`; armed `-fsanitize=function` and the
+> float-conversion lint are clean on it.  An `int` default against a
+> `(Either cstr cstr)` -- accepted before, answering a word that was
+> sometimes a string pointer -- is `TUR-E0001`.  Pinned by
+> `tests/fixtures/either-generic-payloads` and
+> `tests/fixtures/errors/either-from-right-default-type`.  No turmeric-spices
+> file calls these functions.
 
 ## See also
 

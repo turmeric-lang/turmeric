@@ -1,0 +1,59 @@
+;; tail-grammar-skips-and-or-and-carrier-lets (the carrier-`let` half): a
+;; `let` that binds a carrier-ABI value -- a `Vec`, a cons list, a parametric
+;; heap ADT -- used to take the whole `let` off the tail path, so `^tailcall`
+;; refused each loop below with TUR-E0716 and, without the annotation, -O0
+;; overflowed the C stack.  emit_tail's inline `let` arm now shares
+;; emit_let_value's declaration ladder (emit_let_binding_decl) and routes its
+;; scope-exit releases through the backedge's drop channel, so the bail is gone.
+;;
+;; The `flags` file builds this at -O0 (`--debug`): with no inliner to borrow a
+;; pass from, either the emitter produced a `__tur_tailcall:` backedge or this
+;; overflows the C stack long before 1,000,000.  The by-value recursive ADT and
+;; the `:heap` struct were already served; they stay here as the control.
+
+(defdata Lst [] (Cons [hd : int tl : Lst]) (Nil))
+(defdata HBox :heap [A] (HBox [val : A nxt : int]))
+(defstruct HP :heap [x : int y : int])
+
+;; a Vec bound in the let, read by the next iteration's argument
+(defn count-vec [n : int acc : int] : int
+  (let [v (vec-new)]
+    (vec-push! v n)
+    (if (= n 0) acc ^tailcall (count-vec (- n 1) (+ acc (vec-len v))))))
+
+;; a cons list the loop never reads
+(defn count-list [n : int acc : int] : int
+  (let [l (list 1 2 3)]
+    (if (= n 0) acc ^tailcall (count-list (- n 1) (+ acc 1)))))
+
+;; a parametric heap ADT
+(defn count-box [n : int acc : int] : int
+  (let [b (HBox n 0)]
+    (if (= n 0) acc ^tailcall (count-box (- n 1) (+ acc 1)))))
+
+;; a by-value recursive ADT (control)
+(defn count-lst [n : int acc : int] : int
+  (let [xs (Cons 1 (Cons 2 (Nil)))]
+    (if (= n 0) acc ^tailcall (count-lst (- n 1) (+ acc 1)))))
+
+;; a :heap struct (control)
+(defn count-hp [n : int acc : int] : int
+  (let [p (HP n 1)]
+    (if (= n 0) acc ^tailcall (count-hp (- n 1) (+ acc (.y p))))))
+
+;; two carrier bindings, the second read through a `match` arm
+(defn count-two [n : int acc : int] : int
+  (let [v  (vec-new)
+        xs (Cons n (Nil))]
+    (match xs
+      (Cons h t) (if (= h 0) acc ^tailcall (count-two (- n 1) (+ acc (vec-len v))))
+      (Nil) acc)))
+
+(defn main [] : int
+  (println (count-vec 1000000 0))
+  (println (count-list 1000000 0))
+  (println (count-box 1000000 0))
+  (println (count-lst 1000000 0))
+  (println (count-hp 1000000 0))
+  (println (count-two 1000000 0))
+  0)

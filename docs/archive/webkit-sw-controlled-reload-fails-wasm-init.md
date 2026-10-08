@@ -51,7 +51,7 @@ Both reach `Ready` on the `goto` at the top of the test (`gotoTry`,
 `mobile.split-and-pwa.spec.js:3`) and only fail after `page.reload()`.
 
 Observed on CI run
-[33151156197](https://github.com/rjungemann/turmeric/actions/runs/33151156197),
+[33151156197](https://github.com/turmeric-lang/turmeric/actions/runs/33151156197),
 job `Try Turmeric smoke test (browser)`, head `9a6ee5c7`.
 
 ## What is established

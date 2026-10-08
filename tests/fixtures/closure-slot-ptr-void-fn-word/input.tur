@@ -1,0 +1,47 @@
+;; closure-slot-ptr-void-fn-word: an untyped ptr<void> PARAMETER and a
+;; function-typed one share one spelling in a fat closure's slot 0 -- the
+;; int64 word (fnsan-ptr-void-fn-slot-word, emitted-c-indirect-calls-are-
+;; not-type-exact).  A closure whose parameter is a function is erased to
+;; ptr<void> and called back at BOTH its own type and the ptr<void>-ified
+;; one; a closure whose parameter is ptr<void> is re-ascribed with a function
+;; parameter.  Before the decision a function parameter was `int64_t` and a
+;; ptr<void> one `void *`, so one of the two calls was always an indirect
+;; call through the wrong function type (a -fsanitize=function trap, a
+;; call_indirect trap on WASM).  Capturing and captureless (^fat result)
+;; producers both.  Lead with fractional floats.
+(defn scale-by [k : float] : ptr<void>
+  (fn [^fat sig : (fn [float] #fx{} float)] : ptr<void>
+    (fn [t : float] : float (* k (sig t)))))
+(defn neg [] ^fat : ptr<void>
+  (fn [^fat sig : (fn [float] #fx{} float)] : ptr<void>
+    (fn [t : float] : float (- 0.0 (sig t)))))
+
+(defn via-ptr [^fat sf : (fn [ptr<void>] #fx{} ptr<void>)
+               ^fat sig : (fn [float] #fx{} float)] : ptr<void>
+  (sf sig))
+(defn via-fn [^fat sf : (fn [(fn [float] #fx{} float)] #fx{} ptr<void>)
+              ^fat sig : (fn [float] #fx{} float)] : ptr<void>
+  (sf sig))
+
+;; the other direction: a ptr<void>-param closure re-ascribed with a fn param
+(defn ident-sf [] : ptr<void>
+  (let [z 1]
+    (fn [p : ptr<void>] : ptr<void> (if (> z 0) p p))))
+(defn ident-bare [] ^fat : ptr<void>
+  (fn [p : ptr<void>] : ptr<void> p))
+
+(defn main [] : int
+  (let [base (fn [t : float] : float {t + 0.25})
+        ^fat a : (fn [float] #fx{} float) (via-ptr (scale-by 2.0) base)
+        ^fat b : (fn [float] #fx{} float) (via-fn  (scale-by 3.0) base)
+        ^fat c : (fn [float] #fx{} float) (via-ptr (neg) base)
+        ^fat d : (fn [float] #fx{} float) (via-fn  (neg) base)
+        ^fat e : (fn [float] #fx{} float) (via-fn  (ident-sf) base)
+        ^fat f : (fn [float] #fx{} float) (via-fn  (ident-bare) base)]
+    (println (a 7.1))     ;; 14.7
+    (println (b 7.1))     ;; 22.05
+    (println (c 7.1))     ;; -7.35
+    (println (d 7.1))     ;; -7.35
+    (println (e 7.1))     ;; 7.35
+    (println (f 7.1)))    ;; 7.35
+  0)

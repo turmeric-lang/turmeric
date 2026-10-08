@@ -1,1 +1,1 @@
---enable=loop-invariants --strict-refine
+--strict-refine

@@ -94,6 +94,7 @@
 #include "../runtime/globals.h"  /* Gap 7: g_interpret_mode (per-env snapshot) */
 #include "ffi_thunk.h"  /* jit-ffi-c2mir-plan F2: thunk-backed extern-c */
 #include "jit_ffi.h"    /* jit-ffi-c2mir-plan: provider + sig vocabulary */
+#include "inline_c_jit.h"  /* aot-compiled-repl-plan C1 */
 
 /* T1 (turi-eval-trampoline-plan): small inline arg/field buffer with a heap
  * spill above it.  Keeps the per-call scratch off the C stack for the common
@@ -225,6 +226,43 @@ static TuriValue native_caps_denied(TuriEnv *env, const TuriClosure *cl) {
                        need);
 }
 
+/* The one way a native runs: the capability check, then -- in a provenance-
+ * tracked env -- the S-5 handle guard before and the mint/free tracking after.
+ * Shared by the by-name dispatch and the inline-C override (a stdlib defn
+ * whose inline-C body a native stands in for), which used to call the native
+ * with neither.
+ *
+ * g_prov_native_env names the provenance-tracked env whose native is running,
+ * for the C callbacks a native drives (a HAMT key comparator reaches STORED
+ * words the guard never saw; turi_prov_word_live checks them).  It is set on
+ * EVERY native call, not only restricted ones: a panic that longjmps out of a
+ * native skips the restore, and the next call must not inherit it. */
+static _Thread_local TuriEnv *g_prov_native_env;
+
+static TuriValue call_native_checked(TuriEnv *env, TuriClosure *cl,
+                                     TuriValue *args, uint32_t n_args) {
+    if (cl->native_caps & ~env->caps) return native_caps_denied(env, cl);
+    TuriEnv *saved_prov_env = g_prov_native_env;
+    if (!env->provenance_on) {
+        g_prov_native_env = NULL;
+        TuriValue rv = cl->native(env, args, n_args, cl->native_ud);
+        g_prov_native_env = saved_prov_env;
+        return rv;
+    }
+    turi_prov_note_args(env, args, n_args);
+    if (cl->native_handle) {
+        TuriValue pv;
+        if (turi_prov_guard_native(env, cl->native_handle, args, n_args, &pv))
+            return pv;
+    }
+    g_prov_native_env = env;
+    TuriValue rv = cl->native(env, args, n_args, cl->native_ud);
+    g_prov_native_env = saved_prov_env;
+    if (cl->native_handle)
+        turi_prov_track_native(env, cl->native_handle, args, n_args, rv);
+    return rv;
+}
+
 /* =========================================================================
  * security-audit-plan S-5: handle-provenance registry
  *
@@ -243,7 +281,7 @@ typedef struct TuriProvSet {
 } TuriProvSet;
 
 static size_t prov_hash(const void *p) {
-    uintptr_t x = (uintptr_t)p;
+    uint64_t x = (uint64_t)(uintptr_t)p;
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     return (size_t)x;
 }
@@ -325,25 +363,188 @@ void turi_prov_forget(TuriEnv *env, const void *ptr) {
     }
 }
 
-/* The pointer an int64-carried handle argument holds.  A TURI_CSTR value is a
- * real string pointer produced by the reader / interpreter (never forged from
- * an attacker integer), so it needs no provenance and returns NULL "trusted".
- * Only a TURI_INT carrier is a forgeable pointer to be checked. */
+/* A tagged value about to lose its tag -- handed to a native, which may store
+ * it as the bare word its union holds, or written into a rest-list cell.  The
+ * word can come back out later (a Vec read, a map lookup, `head`) and be
+ * re-tagged by an erasing ascription, so record it under the kind that re-tag
+ * will check.  Only the tags something re-tags FROM a word need this: a
+ * closure (the call head), a string (`(:: w cstr)`), a struct (a by-value
+ * record ascription), a generator (the seq natives). */
+void turi_prov_note_value(TuriEnv *env, TuriValue v) {
+    if (!env || !env->provenance_on) return;
+    switch (v.tag) {
+    case TURI_CLOSURE:
+        if (v.as_closure) turi_prov_register(env, TURI_HK_CLOSURE, v.as_closure);
+        break;
+    case TURI_CSTR:
+        if (v.as_cstr) turi_prov_register(env, TURI_HK_CSTR, v.as_cstr);
+        break;
+    case TURI_STRUCT:
+        if (v.as_struct) turi_prov_register(env, TURI_HK_STRUCT, v.as_struct);
+        break;
+    case TURI_GEN:
+        if (v.as_gen) turi_prov_register(env, TURI_HK_GEN, v.as_gen);
+        break;
+    default:
+        break;
+    }
+}
+
+void turi_prov_note_args(TuriEnv *env, const TuriValue *args, uint32_t n) {
+    if (!env || !env->provenance_on || !args) return;
+    for (uint32_t i = 0; i < n; i++) turi_prov_note_value(env, args[i]);
+}
+
+/* The refusal every value-model re-tag hands back for a word that no tag-loss
+ * site recorded under the kind it is being re-tagged to. */
+static TuriValue prov_forged_value(const char *what) {
+    return turi_errorf("eval: %s is not a live handle of the expected kind -- a "
+                       "sandboxed %s cannot be forged from an integer (S-5)",
+                       what, what);
+}
+
+/* A string word is live when some tag-loss site recorded it, or when it is a
+ * pre-restriction global the caps-drop seed could only call GENERIC. */
+static bool prov_cstr_live(TuriEnv *env, const void *p) {
+    return turi_prov_check(env, TURI_HK_CSTR, p) ||
+           turi_prov_check(env, TURI_HK_GENERIC, p);
+}
+
+/* How many int64 words a native box of each kind holds, for a field read
+ * through a bare-int receiver (get_field_extract): a live box of a kind listed
+ * here may be read at word idx < words.  0 = never read as a field buffer. */
+static const uint8_t k_prov_box_words[TURI_HK__COUNT] = {
+    [TURI_HK_CONS]      = 2,   /* { head, tail } */
+    [TURI_HK_RESULTBOX] = 3,   /* { is_ok, ok, err } */
+    [TURI_HK_OPTIONBOX] = 2,   /* { is_some, value } (json/get) */
+    [TURI_HK_MUTMAP]    = 1,   /* { storage } -- MutableMap's (.storage m) */
+};
+
+/* The kind of the word a box field holds, when the box's own native keeps it
+ * (so reading it out of a live box yields a genuine handle of that kind). */
+static TuriHandleKind prov_box_field_kind(TuriHandleKind box, uint32_t idx) {
+    if (box == TURI_HK_CONS && idx == 1)   return TURI_HK_CONS;
+    if (box == TURI_HK_MUTMAP && idx == 0) return TURI_HK_MMSTORAGE;
+    return TURI_HK_NONE;
+}
+
+/* Is p a live native box at least idx+1 words long?  Returns its kind (NONE
+ * when it is not). */
+static TuriHandleKind prov_raw_box_covers(TuriEnv *env, const void *p,
+                                          uint32_t idx) {
+    for (int k = 1; k < TURI_HK__COUNT; k++)
+        if (k_prov_box_words[k] > idx &&
+            turi_prov_check(env, (TuriHandleKind)k, p))
+            return (TuriHandleKind)k;
+    return TURI_HK_NONE;
+}
+
+bool turi_prov_word_live(TuriHandleKind k, int64_t w) {
+    TuriEnv *env = g_prov_native_env;
+    if (!env || !env->provenance_on || !w) return true;
+    const void *p = (const void *)(intptr_t)w;
+    return k == TURI_HK_CSTR ? prov_cstr_live(env, p) : turi_prov_check(env, k, p);
+}
+
+bool turi_prov_alloc_ok(TuriEnv *env, int64_t count, size_t elem) {
+    if (!env || !env->provenance_on) return true;
+    if (count < 0) return false;
+    return elem == 0 || (uint64_t)count <= TURI_PROV_MAX_ALLOC_BYTES / elem;
+}
+
+TuriValue turi_cstr_from_carrier(TuriEnv *env, int64_t w) {
+    const char *p = (const char *)(intptr_t)w;
+    if (p && env && env->provenance_on && !prov_cstr_live(env, p))
+        return prov_forged_value("string value");
+    return turi_cstr(p);
+}
+
+TuriValue turi_closure_from_carrier(TuriEnv *env, int64_t w) {
+    if (w == 0) return turi_int(0);
+    const void *p = (const void *)(intptr_t)w;
+    if (env && env->provenance_on && !turi_prov_check(env, TURI_HK_CLOSURE, p))
+        return turi_error("eval: call target is not a live handle of the "
+                          "expected kind -- a sandboxed function value cannot be "
+                          "forged from an integer (S-5)");
+    return turi_closure((TuriClosure *)(intptr_t)w);
+}
+
+/* The pointer an int64-carried handle argument holds, for the track side (a
+ * freed handle is forgotten).  Only a TURI_INT carrier names a registered
+ * handle; anything else was refused or admitted by its tag in the guard. */
 static const void *prov_arg_ptr(TuriValue v) {
-    if (v.tag == TURI_CSTR) return NULL;
-    if (v.tag == TURI_INT)  return (const void *)(intptr_t)v.as_int;
-    return NULL;   /* a properly-tagged struct/closure/etc. is not a bare carrier */
+    if (v.tag == TURI_INT) return (const void *)(intptr_t)v.as_int;
+    return NULL;
+}
+
+/* Kinds whose natives dereference the handle unconditionally, so a NULL one
+ * is a NULL dereference rather than the empty value it is for a list, an
+ * option or a comparator.  Refusing NULL there cannot break a working
+ * program: it crashed. */
+static bool prov_kind_nonnull(TuriHandleKind k) {
+    switch (k) {
+    case TURI_HK_BTCELL: case TURI_HK_GENARR: case TURI_HK_SEQVEC:
+    case TURI_HK_R7IO: case TURI_HK_R7IDTAB: case TURI_HK_R7KCONT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* Is `v` acceptable at a handle position of kind `k`?  A native casts the
+ * argument's union word to the handle's pointer whatever the tag, so the TAG
+ * decides as much as the registry does:
+ *   - nil, and a 0 word, are the NULL handle -- the empty list, a none, no
+ *     comparator -- except for a kind no native accepts NULL for;
+ *   - a TURI_INT carrier must be a live handle of kind k (a word read as a C
+ *     string also passes as a GENERIC pre-restriction global, whose true kind
+ *     the caps-drop seed could not recover);
+ *   - a tagged value is its own proof only for the kind it IS: a TURI_CSTR
+ *     where a C string is read, a closure or a struct where one is, a
+ *     generator where one is, and a struct / string anywhere in a
+ *     dual-representation native (TURI_HSIG_STRUCT_OK / _CSTR_OK) that reads
+ *     it through the struct API or as a string.  A string literal at a Vec
+ *     position is a Vec header made of the caller's bytes, and a float, a
+ *     bool or a closure there is the same cast of different bits. */
+static bool prov_arg_ok(TuriEnv *env, TuriHandleKind k, uint8_t flags,
+                        TuriValue v) {
+    switch (v.tag) {
+    case TURI_NIL:
+        return !prov_kind_nonnull(k);
+    case TURI_INT: {
+        const void *p = (const void *)(intptr_t)v.as_int;
+        if (!p) return !prov_kind_nonnull(k);
+        if (k == TURI_HK_CSTR) return prov_cstr_live(env, p);
+        return turi_prov_check(env, k, p);
+    }
+    case TURI_CSTR:    return k == TURI_HK_CSTR || !v.as_cstr ||
+                              (flags & TURI_HSIG_CSTR_OK) != 0;
+    /* A comparator position also takes a Turmeric closure, which the native
+     * invokes through turi_call (a non-closure there is refused by turi_call). */
+    case TURI_CLOSURE: return k == TURI_HK_CLOSURE || k == TURI_HK_CMP;
+    case TURI_STRUCT:  return k == TURI_HK_STRUCT ||
+                              (flags & TURI_HSIG_STRUCT_OK) != 0;
+    case TURI_GEN:     return k == TURI_HK_GEN;
+    default:           return false;
+    }
 }
 
 bool turi_prov_guard_native(TuriEnv *env, const TuriNativeHandleRow *sig,
                             const TuriValue *args, uint32_t n, TuriValue *out) {
+    /* A handle position the call does not supply is read by a native that
+     * does not count its arguments from past the end of `args`. */
+    for (uint32_t i = n; i < TURI_HSIG_MAX_ARGS; i++) {
+        if (sig->arg[i] == TURI_HK_NONE) continue;
+        *out = turi_errorf("eval: '%s' arg %u is missing -- a sandboxed native's "
+                           "handle argument is required (S-5)",
+                           sig->name, (unsigned)i + 1);
+        return true;
+    }
     uint32_t lim = n < TURI_HSIG_MAX_ARGS ? n : TURI_HSIG_MAX_ARGS;
     for (uint32_t i = 0; i < lim; i++) {
         TuriHandleKind k = (TuriHandleKind)sig->arg[i];
         if (k == TURI_HK_NONE) continue;
-        const void *p = prov_arg_ptr(args[i]);
-        if (!p) continue;   /* NULL/nil or a trusted cstr carrier */
-        if (!turi_prov_check(env, k, p)) {
+        if (!prov_arg_ok(env, k, sig->flags, args[i])) {
             *out = turi_errorf(
                 "eval: '%s' arg %u is not a live handle of the expected kind -- "
                 "a sandboxed handle cannot be forged from an integer (S-5)",
@@ -365,15 +566,17 @@ void turi_prov_track_native(TuriEnv *env, const TuriNativeHandleRow *sig,
         }
     }
     if ((sig->flags & TURI_HSIG_MINT) && sig->result != TURI_HK_NONE) {
-        const void *p = NULL;
-        if (result.tag == TURI_INT)       p = (const void *)(intptr_t)result.as_int;
-        else if (result.tag == TURI_CSTR) p = NULL;   /* cstr result is trusted */
-        if (p) turi_prov_register(env, (TuriHandleKind)sig->result, p);
+        /* A tagged result is not a carrier: a TURI_CSTR result is registered
+         * only once it loses its tag (turi_prov_note_value). */
+        if (result.tag == TURI_INT && result.as_int)
+            turi_prov_register(env, (TuriHandleKind)sig->result,
+                               (const void *)(intptr_t)result.as_int);
     }
 }
 
 /* Release the provenance registry at env teardown (called from turi_env_free). */
 void turi_prov_free(TuriEnv *env) {
+    if (env && g_prov_native_env == env) g_prov_native_env = NULL;
     if (!env || !env->prov) return;
     TuriProvSet *s = (TuriProvSet *)env->prov;
     free(s->ents);
@@ -1089,17 +1292,88 @@ struct EvalFrame {
     EvalFrame    *parent;
     TyvarBind    *tyvars;   /* generic-dict tyvar substitutions (usually NULL) */
     DictBind     *dicts;    /* dict-clone runtime dictionaries (usually NULL) */
+    /* turi-call-frames-never-reclaimed.  `escaped`: something that can outlive
+     * the activation holds this frame or a descendant (a closure, a generator,
+     * an effect continuation, a captured work-stack slice) -- set by
+     * frame_escape, which marks every ancestor too, so escaped => parent
+     * escaped.  `reclaimable`: an activation's call frame (eval_frame_new_call),
+     * whose DK_CALL_RET may hand it back on return when it never escaped. */
+    bool          escaped;
+    bool          reclaimable;
+    /* A call frame's `owned` list: the let / match-arm frames created under it
+     * (eval_frame_new_owned), released with it.  A let in tail position never
+     * gets a completion of its own, so its frame can only go when the
+     * activation does.  `owned_next` links a frame into its owner's list. */
+    EvalFrame    *owned;
+    EvalFrame    *owned_next;
 };
 
 static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
     /* Escaping payload: a closure can capture this frame and outlive the scope
      * that created it, so frames live in env's value pool (reclaimed by
-     * turi_env_free) -- eval_frame_free stays a no-op. */
+     * turi_env_free).  Only an activation's call frame is ever handed back
+     * early (eval_frame_new_call / frame_release). */
     EvalFrame *f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
-    f->bindings = NULL;
-    f->parent   = parent;
-    f->tyvars   = NULL;
-    f->dicts    = NULL;
+    f->bindings    = NULL;
+    f->parent      = parent;
+    f->tyvars      = NULL;
+    f->dicts       = NULL;
+    f->escaped     = false;
+    f->reclaimable = false;
+    f->owned       = NULL;
+    f->owned_next  = NULL;
+    return f;
+}
+
+/* Mark `f` and its ancestors as reachable from something that can outlive the
+ * activation that made them.  Stops at the first frame already marked: every
+ * ancestor of a marked frame is marked. */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))   /* inlined into eval_expr_impl, -Wclobbered fires across its setjmp */
+#endif
+static void frame_escape(EvalFrame *f) {
+    for (; f && !f->escaped; f = f->parent) f->escaped = true;
+}
+
+/* TUR_TURI_FRAME_RECLAIM=0 turns reclamation off (for bisecting a suspected
+ * use-after-release; the free lists also hide such a bug from ASan). */
+static int g_turi_frame_reclaim = -1;
+static bool turi_frame_reclaim_on(void) {
+    if (g_turi_frame_reclaim < 0) {
+        const char *v = getenv("TUR_TURI_FRAME_RECLAIM");
+        g_turi_frame_reclaim = !(v && v[0] == '0');
+    }
+    return g_turi_frame_reclaim;
+}
+
+/* An activation's call frame: from the free list when one is there. */
+static EvalFrame *eval_frame_new_call(TuriEnv *env, EvalFrame *parent) {
+    EvalFrame *f = (EvalFrame *)env->frame_free;
+    if (f) env->frame_free = f->parent;
+    else   f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
+    f->bindings    = NULL;
+    f->parent      = parent;
+    f->tyvars      = NULL;
+    f->dicts       = NULL;
+    f->escaped     = false;
+    f->reclaimable = true;
+    f->owned       = NULL;
+    f->owned_next  = NULL;
+    return f;
+}
+
+/* A let / match-arm frame: from the free list when one is there, and linked
+ * to the nearest call-frame ancestor so it is released with that activation.
+ * When that ancestor has already escaped -- or there is none (top level) --
+ * the frame is left in the pool, as before. */
+static EvalFrame *eval_frame_new_owned(TuriEnv *env, EvalFrame *parent) {
+    EvalFrame *owner = parent;
+    while (owner && !owner->reclaimable) owner = owner->parent;
+    if (!owner || owner->escaped) return eval_frame_new(env, parent);
+    EvalFrame *f = eval_frame_new_call(env, parent);
+    f->reclaimable = false;   /* released through its owner only */
+    f->owned_next  = owner->owned;
+    owner->owned   = f;
     return f;
 }
 
@@ -1138,6 +1412,28 @@ static bool frame_lookup_tyvar(EvalFrame *f, const char *name, Type *out) {
     return false;
 }
 
+/* turi-call-pins-and-side-frames-not-reclaimed: a frame's tyvar and dictionary
+ * pins come from free lists frame_release_one fills, so a generic or
+ * constrained call in a loop no longer leaves its pins in value_scratch.  Each
+ * pin site prepends a FRESH node to its own frame's chain -- frame_record_abi
+ * copies a caller's pin by value, never shares the node -- and lookups copy
+ * the Type out, so a released frame's nodes are referenced by nothing. */
+static TyvarBind *tyvar_bind_alloc(TuriEnv *env) {
+    TyvarBind *tb = (TyvarBind *)env->tyvar_free;
+    if (!tb) return (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+    env->tyvar_free = tb->next;
+    memset(tb, 0, sizeof *tb);
+    return tb;
+}
+
+static DictBind *dict_bind_alloc(TuriEnv *env) {
+    DictBind *db = (DictBind *)env->dict_free;
+    if (!db) return (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+    env->dict_free = db->next;
+    memset(db, 0, sizeof *db);
+    return db;
+}
+
 static void eval_frame_free(EvalFrame *f) {
     /* Frames are intentionally not freed: closures may capture frame pointers
      * and outlive the scope that created them.  Worker processes are short-lived
@@ -1147,19 +1443,30 @@ static void eval_frame_free(EvalFrame *f) {
 
 static void frame_bind(TuriEnv *env, EvalFrame *f, const char *name, TuriValue value) {
     /* Escaping payload: bindings hang off a frame a closure may capture, so they
-     * live in env's value pool (reclaimed by turi_env_free). */
-    EvalBinding *b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
+     * live in env's value pool (reclaimed by turi_env_free), or come back from
+     * a released call frame (frame_release). */
+    EvalBinding *b = (EvalBinding *)env->binding_free;
+    if (b) env->binding_free = b->next;
+    else   b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
     b->name  = name;
     b->value = value;
     b->next  = f->bindings;
     f->bindings = b;
 }
 
+/* Frame names are interned symbol text nearly everywhere, so the pointer test
+ * settles most hits, and the first-byte test most misses, without a strcmp
+ * call (turi-call-frames-never-reclaimed: the strcmp walk was a quarter of an
+ * r7rs program's interpreted run). */
+static inline bool frame_name_eq(const char *a, const char *b) {
+    return a == b || (a[0] == b[0] && strcmp(a, b) == 0);
+}
+
 /* Returns true and updates the value if the name is found in the frame chain. */
 static bool eval_frame_update(EvalFrame *f, const char *name, TuriValue value) {
     for (EvalFrame *cur = f; cur; cur = cur->parent) {
         for (EvalBinding *b = cur->bindings; b; b = b->next) {
-            if (strcmp(b->name, name) == 0) {
+            if (frame_name_eq(b->name, name)) {
                 b->value = value;
                 return true;
             }
@@ -1171,7 +1478,7 @@ static bool eval_frame_update(EvalFrame *f, const char *name, TuriValue value) {
 static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
     for (EvalFrame *f = frame; f; f = f->parent) {
         for (EvalBinding *b = f->bindings; b; b = b->next) {
-            if (strcmp(b->name, name) == 0) return b->value;
+            if (frame_name_eq(b->name, name)) return b->value;
         }
     }
     /* Module-private resolution: a defn whose body is running inside module M
@@ -1226,14 +1533,14 @@ static TuriValue reword_unbound_call_head(TuriValue fn_val, const Expr *fn_expr)
  * binding is fat / TY_FN / TY_PTR_VOID, i.e. a context where a bare int *is* a
  * closure carrier (closures are heap-allocated and process-lifetime under the
  * interpreter, so the recovered pointer stays valid). */
-static TuriValue recover_carrier_closure(TuriValue fn_val, const Binding *b) {
+static TuriValue recover_carrier_closure(TuriEnv *env, TuriValue fn_val,
+                                         const Binding *b) {
     if (fn_val.tag == TURI_INT && b && fn_val.as_int != 0 &&
-        (b->is_fat || b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID)) {
-        TuriValue r = {0};
-        r.tag        = TURI_CLOSURE;
-        r.as_closure = (TuriClosure *)(intptr_t)fn_val.as_int;
-        return r;
-    }
+        (b->is_fat || b->type.kind == TY_FN || b->type.kind == TY_PTR_VOID))
+        /* turi-sandbox-handles-are-forgeable-integers: in a sandbox the word
+         * must be a closure that really lost its tag in a native; an erasing
+         * ascription `(:: x A)` at A = a fn type re-types ANY integer here. */
+        return turi_closure_from_carrier(env, fn_val.as_int);
     return fn_val;
 }
 
@@ -1319,11 +1626,39 @@ static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n,
  * `:heap` field and stops -- stdlib's `Cons` and `Vec` are both `:heap`, so a
  * list or vector argument is not walked at all.  Depth is therefore the
  * by-value nesting depth of a declared type, which is small and finite. */
+/* turi-immutable-struct-args-copied-per-call: can a write through a copy of
+ * `v` -- or through anything by value inside it -- ever happen?  A copy is only
+ * observable if one can.  Turmeric writes a struct field only with
+ * `(set! (.f x) v)`, which marks the receiver's ADT (AdtDef.field_written), so
+ * a value of an unwritten type, holding only unwritten by-value types, may be
+ * shared.  An `any` box itself is never written (EX_ANY_CAST only reads its
+ * payload), so it is as writable as its payload.  `__rc` and `:heap` values
+ * are shared by design and stop the walk, exactly as the copy does; a struct
+ * with no constructor record is assumed writable. */
+static bool turi_struct_arg_may_be_written(TuriValue v) {
+    if (v.tag != TURI_STRUCT || !v.as_struct) return false;
+    const TuriStruct *src = v.as_struct;
+    if (src->name && strcmp(src->name, "__rc") == 0) return false;
+    if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return false;
+    if (!src->is_any_box) {
+        if (!src->ctor || !src->ctor->adt) return true;
+        if (src->ctor->adt->field_written) return true;
+    }
+    for (uint32_t i = 0; i < src->n_fields; i++)
+        if (turi_struct_arg_may_be_written(src->fields[i])) return true;
+    return false;
+}
+
 static TuriValue turi_copy_byvalue_struct_arg(TuriEnv *env, TuriValue v) {
     if (v.tag != TURI_STRUCT || !v.as_struct) return v;
     const TuriStruct *src = v.as_struct;
     if (src->name && strcmp(src->name, "__rc") == 0) return v;   /* rc: shared */
     if (src->ctor && src->ctor->adt && src->ctor->adt->is_heap) return v;
+    /* turi-immutable-struct-args-copied-per-call: nothing can write through
+     * it, so the copy could never be observed.  r7rs code is all `any`, and
+     * these copies were most of what a run kept -- 1.47 M `Sym` boxes and
+     * 94 K empty lists in r7rs-srfi-14, none ever freed. */
+    if (!turi_struct_arg_may_be_written(v)) return v;
     TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
     s->name       = src->name;
     s->n_fields   = src->n_fields;
@@ -1378,6 +1713,11 @@ static bool turi_key_content_eq(TuriValue x, TuriValue y) {
 bool turi_struct_key_eq_c(int64_t a, int64_t b) {
     if (a == b) return true;
     if (!a || !b) return false;
+    /* S-5: both words are dereferenced as TuriStructs, and a key stored under
+     * another comparator (int, say) can be any integer.  Unequal, unread. */
+    if (!turi_prov_word_live(TURI_HK_STRUCT, a) ||
+        !turi_prov_word_live(TURI_HK_STRUCT, b))
+        return false;
     TuriValue x = turi_struct_val((TuriStruct *)(intptr_t)a);
     TuriValue y = turi_struct_val((TuriStruct *)(intptr_t)b);
     return turi_key_content_eq(x, y);
@@ -2825,8 +3165,22 @@ void turi_host_exit_guard(TuriEnv *env, const char *msg) {
  * is safe -- the returned value is discarded while the signal is in flight.  For
  * a setjmp boundary (or no boundary) the old behaviour is preserved (longjmp /
  * fire-defers-and-exit). */
+/* panic-location-names-the-runtime-not-the-call-site: the `(panic ...)`
+ * node's span, set by EX_PANIC for the one call it makes; every other
+ * runtime panic has none.  Printed as the compiled path prints it --
+ * `panic at boom.tur:3: msg`, the file's basename. */
+static _Thread_local Span g_panic_site;
+static const char *panic_site_base(Span sp) {
+    const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
+    if (!path) return NULL;
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    return base;
+}
 void turi_runtime_panic(TuriEnv *env, const char *msg) {
     const char *s = msg ? msg : "(no message)";
+    Span site = g_panic_site;
+    g_panic_site = SPAN_UNKNOWN;
     if (env->panicking || g_firing_panic_defer) {
         /* Double panic: a defer (or a panic during unwinding) panicked again. */
         host_exit_unwind(env, "double panic");
@@ -2850,6 +3204,8 @@ void turi_runtime_panic(TuriEnv *env, const char *msg) {
     env->panicking = true;
     if (env->in_no_unwind) {
         fprintf(stderr, "panic (no unwind): %s\n", s);
+    } else if (panic_site_base(site)) {
+        fprintf(stderr, "panic at %s:%u: %s\n", panic_site_base(site), site.line, s);
     } else {
         fprintf(stderr, "panic at\npanic: %s\n", s);
     }
@@ -2901,6 +3257,7 @@ static TuriValue turi_ok_result_box(TuriEnv *env, TuriValue ok_val) {
     /* Escaping payload: the box is returned as a Result carrier. */
     int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
     box[0] = 1; box[1] = ok_val.as_int; box[2] = 0;
+    turi_prov_register(env, TURI_HK_RESULTBOX, box);   /* S-5: a minted box */
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
 }
@@ -2918,6 +3275,10 @@ static TuriValue turi_err_result_box(TuriEnv *env) {
     pp->line     = env->catch_panic_line;
     int64_t *box = (int64_t *)turi_val_alloc(env, 3 * sizeof(int64_t));
     box[0] = 0; box[1] = 0; box[2] = (int64_t)(intptr_t)pp;
+    /* S-5: the box and the payload it points at are minted handles; the
+     * panic-payload-* forms read a whole TuriValue out of the payload. */
+    turi_prov_register(env, TURI_HK_RESULTBOX, box);
+    turi_prov_register(env, TURI_HK_PANIC, pp);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)box;
     return v;
 }
@@ -3230,6 +3591,7 @@ static TuriValue eval_handle(TuriEnv *env, EvalFrame *frame,
 
     cont->env          = env;
     cont->body_frame   = frame;
+    frame_escape(frame);
     cont->body_expr    = h->body;
     cont->handle_expr  = h;
     cont->handle_frame = frame;
@@ -3337,6 +3699,8 @@ struct TuriGen {
     char        *stack;       /* mmap'd / malloc'd coroutine stack */
     bool         started;     /* has the body begun executing? */
     bool         done;        /* has the body run to completion? */
+    bool         running;     /* swapped in right now: a resume from inside its
+                               * own body would re-enter a live stack */
     int64_t      box;         /* storage for the yielded value; gen-next
                                * returns &box as the ptr<void> ABI result */
     TuriValue    box_val;     /* the yielded value itself, tag and all: a
@@ -3441,9 +3805,14 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
     }
 
     /* Swap into the body; the previously-current generator (if any) is
-     * restored when control returns here. */
+     * restored when control returns here.  A generator advanced from inside
+     * its own body (it reached itself through a ^mut binding, say) would swap
+     * into the context it is running on and overwrite its own live stack. */
+    if (g->running)
+        return turi_error("eval: generator resumed while it is already running");
     TuriGen *prev_gen = g_current_gen;
     g_current_gen = g;
+    g->running = true;
 #if defined(__APPLE__)
 #  pragma clang diagnostic push
 #  pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -3452,6 +3821,7 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
 #if defined(__APPLE__)
 #  pragma clang diagnostic pop
 #endif
+    g->running = false;
     g_current_gen = prev_gen;
 
     if (g->done) {
@@ -3462,7 +3832,9 @@ static TuriValue gen_advance(TuriEnv *env, TuriGen *g) {
         }
         return turi_int(0); /* NULL: exhausted */
     }
-    /* Body yielded; g->box already holds the value. */
+    /* Body yielded; g->box already holds the value.  S-5: the box address is
+     * the ptr<void> gen-unwrap will read through, so it is a minted handle. */
+    turi_prov_register(env, TURI_HK_GENBOX, &g->box);
     return turi_int((int64_t)(intptr_t)&g->box);
 }
 
@@ -3696,6 +4068,23 @@ static bool ts_arith_op(const char *op) {
            (op[0] == '+' || op[0] == '-' || op[0] == '*' || op[0] == '/');
 }
 
+/* security-audit-plan S-5, the continuation channel: a continuation handle is
+ * the int64 boxing of a TuriCont*, and the resume / clone / serialize paths
+ * cast it straight back.  They are folded by the driver or dispatched as
+ * builtins, NOT through the native dispatch the provenance guard sits on, so
+ * `(resume-cont! 4096 0)` walked address 4096 as a frame array even in a
+ * sandbox.  Every handle a capture or a copy hands out is registered as
+ * TURI_HK_CONT; in a provenance-tracked env one that is not is a forgery.
+ * NULL (0) stays the documented no-op. */
+static bool cont_handle_forged(TuriEnv *env, int64_t h, TuriValue *err) {
+    if (h == 0 || !env || !env->provenance_on) return false;
+    if (turi_prov_check(env, TURI_HK_CONT, (const void *)(intptr_t)h)) return false;
+    *err = turi_errorf(
+        "eval: continuation handle %lld is not a live handle of the expected kind -- a "
+        "sandboxed handle cannot be forged from an integer (S-5)", (long long)h);
+    return true;
+}
+
 static TuriCont *ts_cont_copy(TuriEnv *env, const TuriCont *c) {
     /* Escaping payload: the copy is boxed as an int continuation handle and
      * returned (multi-shot); pool-owned, never freed. */
@@ -3704,6 +4093,7 @@ static TuriCont *ts_cont_copy(TuriEnv *env, const TuriCont *c) {
     d->serial = c->serial;
     d->frames = (TsFrame *)turi_val_alloc(env, sizeof(TsFrame) * (c->n ? c->n : 1));
     if (c->n) memcpy(d->frames, c->frames, sizeof(TsFrame) * c->n);
+    turi_prov_register(env, TURI_HK_CONT, d);   /* S-5: a minted handle */
     return d;
 }
 
@@ -3847,6 +4237,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
     if (strcmp(name, "tur_cloneable_cont_resume") == 0 ||
         strcmp(name, "tur_serial_cont_resume") == 0) {
         if (n < 2 || args[0].as_int == 0) { *out = turi_int(0); return true; }
+        if (cont_handle_forged(env, args[0].as_int, out)) return true;
         TuriCont *c = (TuriCont *)(intptr_t)args[0].as_int;
         *out = ts_cont_resume(env, c, args[1].as_int);
         return true;
@@ -3856,6 +4247,7 @@ static bool ts_try_cont_builtin(TuriEnv *env, const BuiltinSpec *spec,
         strcmp(name, "tur_serial_cont_serialize") == 0 ||
         strcmp(name, "tur_serial_cont_deserialize") == 0) {
         if (n < 1 || args[0].as_int == 0) { *out = turi_int(0); return true; }
+        if (cont_handle_forged(env, args[0].as_int, out)) return true;
         TuriCont *c = (TuriCont *)(intptr_t)args[0].as_int;
         *out = turi_int((int64_t)(intptr_t)ts_cont_copy(env, c));
         return true;
@@ -4174,6 +4566,7 @@ static TuriValue ts_capture_and_run(TuriEnv *env, EvalFrame *frame,
             cont->serial = serial;
             cont->frames = (TsFrame *)turi_val_alloc(env, sizeof(TsFrame) * (n ? n : 1));
             if (n) memcpy(cont->frames, frames, sizeof(TsFrame) * n);
+            turi_prov_register(env, TURI_HK_CONT, cont);   /* S-5: handed out */
             const Expr *kfn = (shift_kind == EX_SERIAL_SHIFT)
                 ? shift->as.serial_shift_.k_fn
                 : shift->as.cloneable_shift_.k_fn;
@@ -4249,6 +4642,8 @@ static TuriValue eval_callcc_escape(TuriEnv *env, EvalFrame *frame,
 static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 1 || args[0].as_int == 0) return turi_int(0);
+    TuriValue forged;
+    if (cont_handle_forged(env, args[0].as_int, &forged)) return forged;
     return turi_int((int64_t)(intptr_t)ts_cont_copy(env, (TuriCont *)(intptr_t)args[0].as_int));
 }
 
@@ -4256,6 +4651,8 @@ static TuriValue native_save_cont(TuriEnv *env, TuriValue *args, uint32_t n, voi
 static TuriValue native_resume_cont(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2 || args[0].as_int == 0) return turi_int(0);
+    TuriValue forged;
+    if (cont_handle_forged(env, args[0].as_int, &forged)) return forged;
     return ts_cont_resume(env, (TuriCont *)(intptr_t)args[0].as_int, args[1].as_int);
 }
 
@@ -4343,6 +4740,15 @@ static TuriTVar *stm_eval_tvar(TuriEnv *env, EvalFrame *frame,
     TuriValue v = eval_expr(env, frame, tvar_expr);
     if (turi_is_error(v) || env_signaled(env)) {
         *err_out = v;
+        return NULL;
+    }
+    /* S-5: every STM op reads and writes through this pointer, and
+     * `(tvar/read (:: 4096 TVar))` made it any integer.  In a provenance-
+     * tracked env it must be a cell tvar/new made. */
+    if (env->provenance_on && v.as_int &&
+        (v.tag != TURI_INT ||
+         !turi_prov_check(env, TURI_HK_TVAR, (const void *)(intptr_t)v.as_int))) {
+        *err_out = prov_forged_value("TVar");
         return NULL;
     }
     return (TuriTVar *)(intptr_t)v.as_int;
@@ -4615,29 +5021,33 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
          * for 2.  Printing is the one place the static type can win without
          * anything downstream depending on the tag.  See
          * docs/archive/ascribe-bool-to-int-prints-differently-per-path.md. */
+        /* stdlib-os-surface-plan P0.5: eprintln / eprint share these
+         * shapes; the destination and newline ride the spec. */
+        FILE *out = builtin_print_to_stderr(spec) ? stderr : stdout;
+        const char *nl = builtin_print_newline(spec) ? "\n" : "";
         if (a.tag == TURI_BOOL) {
             if (spec->shape == BS_PRINTLN_INT) {
-                printf("%lld\n", (long long)(a.as_bool ? 1 : 0)); return turi_nil();
+                fprintf(out, "%lld%s", (long long)(a.as_bool ? 1 : 0), nl); return turi_nil();
             }
             if (spec->shape == BS_PRINTLN_UINT) {
-                printf("%llu\n", (unsigned long long)(a.as_bool ? 1u : 0u)); return turi_nil();
+                fprintf(out, "%llu%s", (unsigned long long)(a.as_bool ? 1u : 0u), nl); return turi_nil();
             }
             if (spec->shape == BS_PRINTLN_FLOAT || spec->shape == BS_PRINTLN_FLOAT32) {
-                printf("%g\n", a.as_bool ? 1.0 : 0.0); return turi_nil();
+                fprintf(out, "%g%s", a.as_bool ? 1.0 : 0.0, nl); return turi_nil();
             }
         }
         switch (a.tag) {
-        case TURI_CSTR:  puts(a.as_cstr ? a.as_cstr : ""); break;
-        case TURI_BOOL:  puts(a.as_bool ? "true" : "false"); break;
-        case TURI_FLOAT: printf("%g\n", a.as_float); break;
+        case TURI_CSTR:  fprintf(out, "%s%s", a.as_cstr ? a.as_cstr : "", nl); break;
+        case TURI_BOOL:  fprintf(out, "%s%s", a.as_bool ? "true" : "false", nl); break;
+        case TURI_FLOAT: fprintf(out, "%g%s", a.as_float, nl); break;
         case TURI_INT:
         default:
             if (spec->shape == BS_PRINTLN_UINT)
-                printf("%llu\n", (unsigned long long)(uint64_t)a.as_int);
+                fprintf(out, "%llu%s", (unsigned long long)(uint64_t)a.as_int, nl);
             else if (spec->shape == BS_PRINTLN_FLOAT32)
-                printf("%.7g\n", a.as_float);
+                fprintf(out, "%.7g%s", a.as_float, nl);
             else
-                printf("%lld\n", (long long)a.as_int);
+                fprintf(out, "%lld%s", (long long)a.as_int, nl);
             break;
         }
         return turi_nil();
@@ -6366,8 +6776,22 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
      * to the clean "inline-C not supported" error. */
     bool sr_has_call = strstr(body, "printf") || strstr(body, "__TUR_CNAME_") ||
                        strstr(body, ")(");
+    /* turi-inline-c-simple-return-takes-first-return: the same rule for control
+     * flow, which the accessor matcher already had (W4: `>1` return declines).
+     * This pattern evaluates the FIRST `return` it finds, so a loop or a second
+     * return means the answer depends on a path it never walks:
+     *   for (int i = 0; i < 2; i++) if (xs[i] % 2 != 0) return 0;
+     *   return 1;
+     * was claimed as `return 0` -- false for every input, rc=0, no warning.
+     * Declining gives the clean "inline-C not supported" error instead (and,
+     * with --enable=repl-jit-inline-c, the compiled answer). */
+    bool sr_has_flow = ic_body_has_word(body, "for") ||
+                       ic_body_has_word(body, "while") ||
+                       ic_body_has_word(body, "do") ||
+                       ic_body_has_word(body, "goto") ||
+                       ic_body_count_sub(body, "return ") > 1;
     if (!has_malloc && !has_arrow && has_return && !has_fptr && !has_switch &&
-        !sr_has_call) {
+        !sr_has_call && !sr_has_flow) {
         const char *r = strstr(body, "return "); if (r) {
             r += 7; r = ic_skip_ws(r);
             int64_t val = 0;
@@ -6568,7 +6992,7 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
             if (frame_lookup_tyvar(caller, t.as.tyvar_.name, &r)) t = r;
         }
         if (t.kind == TY_TYVAR) continue;  /* still abstract: nothing to pin */
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = ab->name;
         tb->type = t;
         tb->next = callee->tyvars;
@@ -6627,12 +7051,12 @@ static void frame_record_abi(TuriEnv *env, EvalFrame *callee, EvalFrame *caller,
                 if (hits != 1) continue;
             }
             if (!inst || inst->n_type_args == 0) continue;
-            TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+            TyvarBind *tb = tyvar_bind_alloc(env);
             tb->name = tv->name;
             tb->type = inst->type_args[0];
             tb->next = callee->tyvars;
             callee->tyvars = tb;
-            DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+            DictBind *db = dict_bind_alloc(env);
             db->tc = tc;
             db->inst = inst;
             db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
@@ -6683,7 +7107,7 @@ static void frame_pin_hkt_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
         if (af->kind == TY_TYVAR) continue;   /* argument still abstract */
         Type existing;
         if (frame_lookup_tyvar(callee, pf->as.tyvar_.name, &existing)) continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = pf->as.tyvar_.name;
         tb->type = *af;
         tb->next = callee->tyvars;
@@ -6752,7 +7176,7 @@ static void frame_pin_bare_tyvars_from_args(TuriEnv *env, EvalFrame *callee,
         if (frame_lookup_tyvar(callee, pt->as.tyvar_.name, &existing) &&
             existing.kind != TY_TYVAR)
             continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = pt->as.tyvar_.name;
         tb->type = at;
         tb->next = callee->tyvars;
@@ -6792,7 +7216,7 @@ static void frame_bind_instance_constraint_tyvars(TuriEnv *env, EvalFrame *calle
         if (frame_lookup_tyvar(callee, tc->tyvar->name, &existing) &&
             existing.kind != TY_TYVAR)
             continue;
-        TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+        TyvarBind *tb = tyvar_bind_alloc(env);
         tb->name = tc->tyvar->name;
         tb->type = bound;
         tb->next = callee->tyvars;
@@ -6891,7 +7315,7 @@ static void frame_bind_one_dict(TuriEnv *env, TypeClassEnv *tc_env,
         }
     }
     if (!inst) return;
-    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+    DictBind *db = dict_bind_alloc(env);
     db->tc    = cls;
     db->inst  = inst;
     db->tyvar = tvname;
@@ -7127,6 +7551,73 @@ typedef struct {
 static bool g_turi_cont_pinned = false;
 #define TURI_DRIVE_FREE(p) do { if (!g_turi_cont_pinned) free(p); } while (0)
 
+/* turi-call-frames-never-reclaimed: an activation's DK_CALL_RET is done with
+ * its call frame -- it returned, or a tail call replaced it.  Hand the frame
+ * and its bindings back unless something may still reach them: the frame
+ * escaped (frame_escape), it is not a call frame, a re-entrant continuation
+ * exists (its stack image may complete this call again, the same reason
+ * TURI_DRIVE_FREE stops freeing), or a debugger holds activation frames.
+ * Its tyvar/dict pins go back too (tyvar_bind_alloc / dict_bind_alloc). */
+static void frame_release_one(TuriEnv *env, EvalFrame *f) {
+    EvalBinding *b = f->bindings;
+    while (b) {
+        EvalBinding *next = b->next;
+        b->name  = NULL;
+        b->value = turi_nil();
+        b->next  = (EvalBinding *)env->binding_free;
+        env->binding_free = b;
+        b = next;
+    }
+    f->bindings   = NULL;
+    TyvarBind *tb = f->tyvars;
+    while (tb) {
+        TyvarBind *next = tb->next;
+        tb->next = (TyvarBind *)env->tyvar_free;
+        env->tyvar_free = tb;
+        tb = next;
+    }
+    DictBind *db = f->dicts;
+    while (db) {
+        DictBind *next = db->next;
+        db->next = (DictBind *)env->dict_free;
+        env->dict_free = db;
+        db = next;
+    }
+    f->tyvars     = NULL;
+    f->dicts      = NULL;
+    f->owned      = NULL;
+    f->owned_next = NULL;
+    f->parent     = (EvalFrame *)env->frame_free;
+    env->frame_free = f;
+}
+
+static void frame_release(TuriEnv *env, EvalFrame *f) {
+    if (!f || !f->reclaimable || f->escaped || g_turi_cont_pinned ||
+        env->debugger || !turi_frame_reclaim_on())
+        return;
+    f->reclaimable = false;   /* a second release of the same frame is a no-op */
+    /* Nothing under an unescaped frame escaped (frame_escape marks every
+     * ancestor), so its owned frames go with it. */
+    EvalFrame *o = f->owned;
+    f->owned = NULL;
+    frame_release_one(env, f);
+    while (o) {
+        EvalFrame *next = o->owned_next;
+        frame_release_one(env, o);
+        o = next;
+    }
+}
+
+/* A DK_CALL_ARG frame evaluates the arguments of an EX_CALL or of an
+ * EX_DYN_CALL (a call through a procedure VALUE -- `(k v)` in CPS code), so
+ * that both get the driver's proper tail calls. */
+static inline uint32_t drive_call_n_args(const Expr *e) {
+    return e->kind == EX_DYN_CALL ? e->as.dyn_call_.n_args : e->as.call_.n_args;
+}
+static inline const Expr *drive_call_arg(const Expr *e, uint32_t i) {
+    return e->kind == EX_DYN_CALL ? e->as.dyn_call_.args[i] : e->as.call_.args[i];
+}
+
 typedef struct DriveReg {
     struct DriveReg *prev;
     DriveCont      **pst;
@@ -7317,6 +7808,15 @@ struct TuriWsCont {
     const char  *perf_module;
     bool         perf_no_unwind;
     void        *perf_defer;    /* DeferItem* */
+    /* turi-effect-perform-keeps-its-continuation: the one-shot fast path
+     * (ws_case_is_oneshot_resume).  `frames` is then the slice ITSELF -- not
+     * marked escaped, accumulators still the driver's malloc'd ones -- and the
+     * resume pushes it back in place; it, this struct, the k value and the
+     * case frame are all freed there.  `consumed` guards the one resume. */
+    bool         oneshot;
+    bool         consumed;
+    EvalFrame   *case_frame;
+    struct TuriEffectCont *kval;
 };
 
 /* Shallow-copy a frame's bindings into a fresh frame (parent set by caller).
@@ -7325,6 +7825,9 @@ static EvalFrame *clone_frame_bindings(TuriEnv *env, EvalFrame *src, EvalFrame *
     EvalFrame *nf = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
     nf->parent = parent;
     nf->bindings = NULL;
+    nf->escaped = true;        /* part of a resumed continuation slice */
+    nf->reclaimable = false;
+    nf->owned = nf->owned_next = NULL;
     /* Collect src bindings (head-first) then re-prepend in reverse to preserve
      * the original head-first order. */
     size_t n = 0;
@@ -7372,7 +7875,7 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
             if (src[i].kind == DK_BUILTIN_ARG)
                 cnt = src[i].expr->as.builtin.n;
             else if (src[i].kind == DK_CALL_ARG)
-                cnt = src[i].expr->as.call_.n_args;
+                cnt = drive_call_n_args(src[i].expr);
             else if (src[i].kind == DK_MAKE_STRUCT)
                 cnt = src[i].expr->as.make_struct_.n_fields;
             else if (src[i].kind == DK_PERFORM_ARG)
@@ -7384,6 +7887,47 @@ static void clone_ws_slice(TuriEnv *env, const DriveCont *src, size_t n, DriveCo
             }
         }
     }
+}
+
+/* turi-effect-perform-keeps-its-continuation: an expression that can neither
+ * perform nor capture anything, nor mention `k` -- literals, variables other
+ * than k, and builtin operators over those. */
+static bool ws_resume_value_is_inert(const Expr *e, const Binding *k) {
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_INT_LIT: case EX_FLOAT_LIT: case EX_BOOL_LIT: case EX_NIL_LIT:
+        case EX_CSTR_LIT: case EX_SYM_LIT:
+            return true;
+        case EX_VAR:
+            return e->as.var.binding != k;
+        case EX_ASCRIBE:
+            return ws_resume_value_is_inert(e->as.ascribe_.inner, k);
+        case EX_BUILTIN:
+            for (uint32_t i = 0; i < e->as.builtin.n; i++)
+                if (!ws_resume_value_is_inert(e->as.builtin.args[i], k)) return false;
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* turi-effect-perform-keeps-its-continuation: is this case's body exactly
+ * `(resume k v)` with an inert `v`?  Then `k` is resumed once, as the whole
+ * body, and goes nowhere else -- nothing in `v` can perform (so no outer
+ * multishot handler can re-run the clause) or capture `k` -- so the captured
+ * slice can be run in place instead of cloned, and everything the capture
+ * allocated freed when the resume dispatches.  A `^multishot` k keeps the
+ * cloning path. */
+static bool ws_case_is_oneshot_resume(const HandleCase *hc) {
+    if (!hc || !hc->k_binding || hc->cont_kind == CK_MULTISHOT) return false;
+    const Expr *b = hc->body;
+    while (b && (b->kind == EX_ASCRIBE || (b->kind == EX_DO && b->as.do_.n == 1)))
+        b = b->kind == EX_ASCRIBE ? b->as.ascribe_.inner : b->as.do_.items[0];
+    if (!b || b->kind != EX_RESUME || !b->as.resume_.resume) return false;
+    const ResumeExpr *re = b->as.resume_.resume;
+    if (!re->k || re->k->kind != EX_VAR || re->k->as.var.binding != hc->k_binding)
+        return false;
+    return ws_resume_value_is_inert(re->value, hc->k_binding);
 }
 
 /* Wrap a work-stack continuation in a TURI_EFFECT_CONT value (discriminated by
@@ -7432,6 +7976,7 @@ static TuriValue tvar_modify_resume(TuriEnv *env, void *state, TuriValue applied
     if (turi_is_error(applied) || env_signaled(env)) {
         *out = applied;                       /* fn signalled: propagate, no commit */
     } else {
+        turi_prov_note_value(env, applied);   /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, s->tv, applied.as_int);
         *out = turi_int(s->old);
     }
@@ -7532,8 +8077,51 @@ static TuriValue *turi_pack_rest_args(TuriEnv *env, const TuriValue *args,
     return out;
 }
 
-static TuriValue get_field_extract(const Expr *e, TuriValue sv) {
+/* A call as a dynamic call site makes it: a variadic closure gets the
+ * surplus packed into its rest chain first.  For natives that apply a
+ * procedure to a computed argument list (r7rs-call-variadic__). */
+TuriValue turi_call_dynamic(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n) {
+    if (fn.tag == TURI_CLOSURE && fn.as_closure && !fn.as_closure->native && fn.as_closure->fn &&
+        ((FnDef *)fn.as_closure->fn)->is_variadic) {
+        const FnDef *vfd = (const FnDef *)fn.as_closure->fn;
+        uint32_t skip = fn.as_closure->skip_env_param ? 1u : 0u;
+        uint32_t want = (uint32_t)vfd->n_params - skip;
+        TuriValue *packed = turi_pack_rest_args(env, args, n, 0, want);
+        if (packed) {
+            TuriValue r = turi_call(env, fn, packed, want);
+            free(packed);
+            return r;
+        }
+    }
+    return turi_call(env, fn, args, n);
+}
+
+static TuriHandleKind prov_raw_box_covers(TuriEnv *env, const void *p,
+                                          uint32_t idx);
+static TuriHandleKind prov_box_field_kind(TuriHandleKind box, uint32_t idx);
+
+static TuriValue get_field_extract(TuriEnv *env, const Expr *e, TuriValue sv) {
     uint32_t idx = e->as.get_field_.field_idx;
+    /* security-audit-plan S-5 (value-model channel): a bare-int receiver is
+     * read below as a field buffer, and `(.x (:: (mk 4096) Hp))` made it any
+     * integer.  In a provenance-tracked env it must be a struct that lost its
+     * tag (read it AS that struct) or a live native box at least idx+1 words
+     * long; anything else is refused before the read. */
+    if (sv.tag == TURI_INT && sv.as_int && env && env->provenance_on) {
+        const void *p = (const void *)(intptr_t)sv.as_int;
+        if (turi_prov_check(env, TURI_HK_STRUCT, p)) {
+            sv = turi_struct_val((TuriStruct *)(intptr_t)sv.as_int);
+        } else {
+            TuriHandleKind box = prov_raw_box_covers(env, p, idx);
+            if (box == TURI_HK_NONE) return prov_forged_value("struct value");
+            /* A field the box's own native keeps (a MutableMap's storage)
+             * is a genuine handle as read; record it for its consumer. */
+            TuriHandleKind fk = prov_box_field_kind(box, idx);
+            int64_t fw = ((const int64_t *)p)[idx];
+            if (fk != TURI_HK_NONE && fw)
+                turi_prov_register(env, fk, (const void *)(intptr_t)fw);
+        }
+    }
     /* Auto-deref an rc<T> receiver: an rc value is a "__rc" wrapper struct
      * { counter-ptr, inner }, so `(.field rc-val)` (and `(.f (.rcfield s))`,
      * where the inner is itself a struct/record ADT) must resolve through the
@@ -7650,8 +8238,8 @@ static TypeKind ascribe_effective_kind(EvalFrame *frame, const Type *ty) {
  * excluded here -- only a bare non-parametric record ADT reaches this), the
  * pointer and its embedded name pointer must be plausible (> 0x1000), the struct
  * name must equal the ascribed type's name, and the field count must match. */
-static TuriValue try_retag_carrier_struct(EvalFrame *frame, const Type *ty,
-                                          TuriValue v) {
+static TuriValue try_retag_carrier_struct(TuriEnv *env, EvalFrame *frame,
+                                          const Type *ty, TuriValue v) {
     if (v.tag != TURI_INT || v.as_int == 0) return v;
     Type rt = *ty;
     if (ty->kind == TY_TYVAR && ty->as.tyvar_.name) {
@@ -7681,6 +8269,14 @@ static TuriValue try_retag_carrier_struct(EvalFrame *frame, const Type *ty,
     if (nf < 2 && !(nf == 1 && d->from_struct_lowering)) return v;
     uintptr_t p = (uintptr_t)(intptr_t)v.as_int;
     if (p < 0x1000) return v;
+    /* security-audit-plan S-5: the plausibility checks below READ the word
+     * (s->name, s->n_fields) to decide whether it is a struct, so a caller
+     * integer was a wild read before any of them could say no.  In a
+     * provenance-tracked env only a struct that lost its tag is dereferenced;
+     * any other word stays a bare int, which a field read then refuses. */
+    if (env && env->provenance_on &&
+        !turi_prov_check(env, TURI_HK_STRUCT, (const void *)p))
+        return v;
     TuriStruct *s = (TuriStruct *)p;
     if ((uintptr_t)s->name < 0x1000) return v;   /* raw carrier: word 0 is not a name ptr */
     if (s->n_fields != nf) return v;
@@ -7760,7 +8356,7 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
          * REINTERPRET, not the ascription whose arm below re-tags a cstr.  The
          * word printed as the string's address. */
         if (rk == TY_CSTR && v.tag == TURI_INT)
-            return turi_cstr((const char *)(intptr_t)v.as_int);
+            return turi_cstr_from_carrier(env, v.as_int);   /* S-5 */
         return v;
     }
     case EX_ASCRIBE:
@@ -7804,13 +8400,14 @@ static TuriValue eval_unary_post(TuriEnv *env, EvalFrame *frame,
             if (v.tag == TURI_FLOAT) return turi_int((int64_t)v.as_float);
             return v;
         case TY_CSTR:
-            if (v.tag == TURI_INT) return turi_cstr((const char *)(intptr_t)v.as_int);
+            /* S-5: a word re-tagged as a string must be one that lost its tag. */
+            if (v.tag == TURI_INT) return turi_cstr_from_carrier(env, v.as_int);
             return v;
         default:
             /* By-value struct/ADT ascription: retag an int carrier that is really
              * a TuriStruct* (e.g. a struct Map VALUE) so field access reads it as
              * a struct.  No-op for every other type (guarded). */
-            return try_retag_carrier_struct(frame, &e->type, v);
+            return try_retag_carrier_struct(env, frame, &e->type, v);
         }
     case EX_RETURN:
         env->returning    = true;
@@ -8203,7 +8800,7 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
             if (!pat->is_wildcard && pat->union_member_idx >= 0 &&
                 pat->union_member_idx != (int)tag)
                 continue;
-            EvalFrame *arm_frame = eval_frame_new(env, frame);
+            EvalFrame *arm_frame = eval_frame_new_owned(env, frame);
             if (pat->n_bindings > 0 && pat->bindings[0])
                 frame_bind(env, arm_frame, pat->bindings[0]->name->name, chan);
             if (arm->guard) {
@@ -8226,7 +8823,7 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
         EvalFrame    *arm_frame = NULL;
 
         if (pat->is_wildcard) {
-            matched = true; arm_frame = eval_frame_new(env, frame);
+            matched = true; arm_frame = eval_frame_new_owned(env, frame);
         } else if (pat->is_var && pat->union_member_idx >= 0) {
             bool tag_ok = false;
             if (pat->n_bindings >= 1 && pat->bindings[0]) {
@@ -8246,7 +8843,7 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
                 tag_ok = true;
             }
             if (tag_ok) {
-                matched = true; arm_frame = eval_frame_new(env, frame);
+                matched = true; arm_frame = eval_frame_new_owned(env, frame);
                 if (pat->var_sym) frame_bind(env, arm_frame, pat->var_sym->name, val);
             }
         } else if (pat->is_literal) {
@@ -8259,15 +8856,15 @@ static int eval_match_resolve_with(TuriEnv *env, EvalFrame *frame, const Expr *e
             case F_NIL:   matched = (val.tag == TURI_NIL); break;
             default: break;
             }
-            if (matched) arm_frame = eval_frame_new(env, frame);
+            if (matched) arm_frame = eval_frame_new_owned(env, frame);
         } else if (pat->is_var) {
-            matched = true; arm_frame = eval_frame_new(env, frame);
+            matched = true; arm_frame = eval_frame_new_owned(env, frame);
             frame_bind(env, arm_frame, pat->var_sym->name, val);
         } else {
             CtorDef *ctor = pat->ctor;
             if (ctor && val.tag == TURI_STRUCT &&
                 strcmp(val.as_struct->name, ctor->name) == 0) {
-                matched = true; arm_frame = eval_frame_new(env, frame);
+                matched = true; arm_frame = eval_frame_new_owned(env, frame);
                 for (uint32_t bi = 0; bi < pat->n_bindings; bi++) {
                     Binding *b = pat->bindings[bi];
                     if (b && bi < val.as_struct->n_fields)
@@ -8402,7 +8999,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     TuriCont *c = (n >= 1 && acc[0].as_int)
                                 ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                    TuriValue forged;
+                    bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
                     TURI_DRIVE_FREE(acc);
+                    if (bad) { cur = forged; descending = false; continue; }
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                     if (rc != 1) { cur = val; descending = false; continue; }
@@ -8432,7 +9032,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 env->step_fuel--;
             }
-            EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
+            EvalFrame *call_frame = eval_frame_new_call(env, (EvalFrame *)cl->captured);
             for (uint32_t i = 0; i < n; i++)
                 frame_bind(env, call_frame,
                            fn->params[param_offset + i]->name->name,
@@ -8495,7 +9095,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case EX_LETREC: {
                 /* Owns a fresh frame; bindings then body run in it.  EX_LETREC
                  * pre-binds every name to nil so RHS closures see each other. */
-                EvalFrame *nf = eval_frame_new(env, cf);
+                EvalFrame *nf = eval_frame_new_owned(env, cf);
                 uint32_t   n  = control->as.let_.n;
                 if (control->kind == EX_LETREC) {
                     for (uint32_t i = 0; i < n; i++)
@@ -8796,8 +9396,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (turi_is_error(fn_val) || env_signaled(env)) {
                     cur = fn_val; descending = false; break;
                 }
-                if (!gde_resolved && control->as.call_.fn_binding)
-                    fn_val = recover_carrier_closure(fn_val, control->as.call_.fn_binding);
+                if (!gde_resolved && control->as.call_.fn_binding) {
+                    fn_val = recover_carrier_closure(env, fn_val,
+                                                     control->as.call_.fn_binding);
+                    if (turi_is_error(fn_val)) { cur = fn_val; descending = false; break; }
+                }
                 if (fn_val.tag != TURI_CLOSURE) {
                     cur = turi_errorf("eval: expected function, got tag %d", fn_val.tag);
                     descending = false; break;
@@ -8819,6 +9422,52 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                          .tail = tail }));
                 if (n > 0) {
                     control = control->as.call_.args[0];
+                    tail = false;   /* call args are non-tail */
+                } else {
+                    cur = turi_nil(); descending = false;  /* args ready: run handler */
+                }
+                break;
+            }
+            case EX_DYN_CALL: {
+                /* A call through a procedure VALUE (`(k v)`, `f : any`).  Same
+                 * work-stack route as EX_CALL, so a tail call through a value
+                 * -- every call in continuation-passing code -- reuses the
+                 * enclosing activation instead of growing the C stack.  The
+                 * callee expression itself is not in tail position. */
+                TuriValue fnv = eval_expr(env, cf, control->as.dyn_call_.fn);
+                if (turi_is_error(fnv) || env_signaled(env)) {
+                    cur = fnv; descending = false; break;
+                }
+                /* Unwrap an `any` box, as eval_expr_impl's EX_DYN_CALL does. */
+                if (fnv.tag == TURI_STRUCT && fnv.as_struct && fnv.as_struct->is_any_box &&
+                    fnv.as_struct->n_fields == 1 && fnv.as_struct->fields)
+                    fnv = fnv.as_struct->fields[0];
+                if (fnv.tag != TURI_CLOSURE || !fnv.as_closure) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg),
+                             "cannot call a %s value -- it is not a function",
+                             turi_any_display_type(fnv) ? turi_any_display_type(fnv)
+                                                        : "non-function");
+                    bool raised;
+                    TuriValue r7 = turi_r7rs_type_error(env, "", "a procedure", fnv, &raised);
+                    if (raised) { cur = r7; descending = false; break; }
+                    turi_runtime_panic(env, msg);
+                    cur = turi_nil(); descending = false; break;
+                }
+                uint32_t n = control->as.dyn_call_.n_args;
+                TuriValue *acc = NULL;
+                if (n > 0) {
+                    acc = (TuriValue *)malloc((size_t)n * sizeof(TuriValue));
+                    if (!acc) {
+                        result = turi_error("eval: out of memory evaluating call arguments");
+                        goto done;
+                    }
+                }
+                DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_ARG, .expr = control,
+                                         .frame = cf, .last = fnv, .aux = acc,
+                                         .tail = tail }));
+                if (n > 0) {
+                    control = control->as.dyn_call_.args[0];
                     tail = false;   /* call args are non-tail */
                 } else {
                     cur = turi_nil(); descending = false;  /* args ready: run handler */
@@ -8901,6 +9550,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* Heap-own the HandleExpr + cases: a captured continuation may
                  * outlive this driver frame, so they cannot live on the C stack. */
                 HandleExpr *h = (HandleExpr *)turi_val_alloc(env, sizeof(HandleExpr));
+                /* Not zeroed by the allocator: `shallow` (which the resume path
+                 * reads to decide whether to re-install this prompt) was
+                 * garbage, a UBSan invalid-bool load on every resume through a
+                 * handler value.  Handler values are deep (F2). */
+                memset(h, 0, sizeof *h);
                 HandleCase *cs = (HandleCase *)turi_val_alloc(env, (size_t)hv->n_cases * sizeof(HandleCase));
                 for (uint8_t i = 0; i < hv->n_cases; i++) cs[i] = *hv->cases[i];
                 h->body = control->as.with_handler_.body;
@@ -8982,6 +9636,44 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 /* Capture the slice st[pidx+1 .. len-1] as a heap continuation. */
                 size_t nf = (len - 1) - (size_t)pidx;
+                /* turi-effect-perform-keeps-its-continuation: a clause that is
+                 * just `(resume k v)` resumes once, in place.  Not while a
+                 * re-entrant call/cc may complete these calls again, nor under
+                 * a debugger that holds activation frames. */
+                bool oneshot = ws_case_is_oneshot_resume(matched) &&
+                               !g_turi_cont_pinned && !env->debugger &&
+                               turi_frame_reclaim_on();
+                if (oneshot) {
+                    TuriWsCont *wc = (TuriWsCont *)calloc(1, sizeof(TuriWsCont));
+                    TuriEffectCont *kc = (TuriEffectCont *)calloc(1, sizeof(TuriEffectCont));
+                    if (!wc || !kc) abort();
+                    kc->ws = wc;
+                    wc->oneshot  = true;
+                    wc->kval     = kc;
+                    wc->n_frames = nf;
+                    if (nf) {
+                        wc->frames = (DriveCont *)malloc(nf * sizeof(DriveCont));
+                        if (!wc->frames) abort();
+                        memcpy(wc->frames, &st[pidx + 1], nf * sizeof(DriveCont));
+                    }
+                    wc->handler        = (HandleExpr *)st[pidx].aux;
+                    wc->handler_frame  = st[pidx].frame;
+                    frame_escape(st[pidx].frame);
+                    wc->perf_module    = env->current_module;
+                    wc->perf_no_unwind = env->in_no_unwind;
+                    wc->perf_defer     = env->defer_stack;
+                    len = (size_t)pidx + 1;
+                    st[pidx].index = 0;   /* disable while its own case body runs */
+                    EvalFrame *hf = eval_frame_new_call(env, st[pidx].frame);
+                    wc->case_frame = hf;
+                    for (uint32_t i = 0; i < matched->n_params && i < n; i++)
+                        frame_bind(env, hf, matched->param_bindings[i]->name->name, pargs[i]);
+                    frame_bind(env, hf, matched->k_binding->name->name, turi_effect_cont(kc));
+                    env->current_module = st[pidx].saved_module;
+                    env->in_no_unwind   = st[pidx].was_no_unwind;
+                    control = matched->body; cf = hf; tail = false;
+                    break;
+                }
                 /* Escaping payload: bound as the multishot k; pool-owned. */
                 TuriWsCont *wc = (TuriWsCont *)turi_val_calloc(env, sizeof(TuriWsCont));
                 wc->n_frames = nf;
@@ -9008,7 +9700,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         case DK_BUILTIN_ARG:
                             cnt = wc->frames[i].expr->as.builtin.n; break;
                         case DK_CALL_ARG:
-                            cnt = wc->frames[i].expr->as.call_.n_args; break;
+                            cnt = drive_call_n_args(wc->frames[i].expr); break;
                         case DK_MAKE_STRUCT:
                             cnt = wc->frames[i].expr->as.make_struct_.n_fields; break;
                         case DK_PERFORM_ARG:
@@ -9025,6 +9717,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 wc->handler        = (HandleExpr *)st[pidx].aux;
                 wc->handler_frame  = st[pidx].frame;
+                frame_escape(st[pidx].frame);
+                for (size_t i = 0; i < nf; i++) frame_escape(wc->frames[i].frame);
                 wc->perf_module    = env->current_module;
                 wc->perf_no_unwind = env->in_no_unwind;
                 wc->perf_defer     = env->defer_stack;
@@ -9546,6 +10240,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     break;
                 }
                 TuriWsCont *wc = k.as_cont->ws;
+                if (wc->oneshot && wc->consumed) {
+                    cur = turi_error("eval: resume: a one-shot continuation was resumed twice");
+                    break;
+                }
                 /* Re-install the captured prompt around the resumed slice.  For a
                  * DEEP handler it is re-installed ACTIVE (index = 1), so a perform
                  * of the same effect in the resumed slice is caught again.  For a
@@ -9556,11 +10254,42 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * reaches the nearest ENCLOSING active prompt -- or the fiber path
                  * / unhandled if none.  Mirrors dk_perform's no-reinstall tail. */
                 int reinstall_active = (wc->handler && wc->handler->shallow) ? 0 : 1;
+                if (wc->oneshot && len > 0 && st[len - 1].kind == DK_PROMPT &&
+                    st[len - 1].aux == (void *)wc->handler &&
+                    st[len - 1].frame == wc->handler_frame && st[len - 1].index == 0) {
+                    /* turi-effect-perform-keeps-its-continuation: the resume is
+                     * the clause's whole body and sits right on the clause's
+                     * own (disabled) prompt, so nothing is left to run between
+                     * them: re-arm that prompt for the slice instead of
+                     * stacking a new one above it -- a perform per turn of a
+                     * loop then keeps the work stack flat. */
+                    st[len - 1].index = reinstall_active;
+                } else
                 DRIVE_PUSH(((DriveCont){ .kind = DK_PROMPT, .aux = (void *)wc->handler,
                                          .frame = wc->handler_frame, .tail = rtl,
                                          .index = reinstall_active,
                                          .saved_module = env->current_module,
                                          .was_no_unwind = env->in_no_unwind }));
+                if (wc->oneshot) {
+                    /* turi-effect-perform-keeps-its-continuation: the slice
+                     * goes back exactly as it was taken -- its frames never
+                     * marked escaped, its accumulators the driver's own -- so
+                     * its activations finish and release as if nothing had
+                     * been performed.  The clause was only this resume, so its
+                     * frame, k and the capture are dead from here. */
+                    for (size_t i = 0; i < wc->n_frames; i++)
+                        DRIVE_PUSH(wc->frames[i]);
+                    env->current_module = wc->perf_module;
+                    env->in_no_unwind   = wc->perf_no_unwind;
+                    env->defer_stack    = wc->perf_defer;
+                    wc->consumed = true;
+                    if (wc->case_frame == rcf) frame_release(env, rcf);
+                    free(wc->frames);
+                    free(wc->kval);
+                    free(wc);
+                    cur = v;
+                    break;
+                }
                 if (wc->n_frames) {
                     DriveCont *clone = (DriveCont *)malloc(wc->n_frames * sizeof(DriveCont));
                     clone_ws_slice(env, wc->frames, wc->n_frames, clone);
@@ -9637,6 +10366,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
                         *copy = *cur.as_closure;
                         copy->captured = nf;
+                        frame_escape(nf);
                         cur = turi_closure(copy);
                     }
                     eval_frame_update(nf, nm, cur);
@@ -9741,13 +10471,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             }
             case DK_CALL_ARG: {
                 TuriValue *acc = (TuriValue *)top->aux;
-                uint32_t n = top->expr->as.call_.n_args;
+                uint32_t n = drive_call_n_args(top->expr);
+                bool is_dyn = top->expr->kind == EX_DYN_CALL;
                 if (signaled) { TURI_DRIVE_FREE(acc); len--; break; }
                 if (n > 0) {
                     acc[top->index] = cur;
                     top->index++;
                     if (top->index < n) {
-                        control = top->expr->as.call_.args[top->index];
+                        control = (Expr *)drive_call_arg(top->expr, top->index);
                         cf = top->frame; tail = false; descending = true;  /* args non-tail */
                         break;
                     }
@@ -9755,6 +10486,16 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* All args ready (a zero-arg call reaches here directly with
                  * acc == NULL). */
                 TuriClosure *cl = top->last.as_closure;
+                /* r7rs-lang-plan R6: a VARIADIC callee reached through a
+                 * dynamic call packs the surplus arguments into its rest chain
+                 * here -- a static call site packs at elaboration.  See
+                 * turi_pack_rest_args. */
+                if (is_dyn && !cl->native && cl->fn && ((FnDef *)cl->fn)->is_variadic) {
+                    const FnDef *vfd = (const FnDef *)cl->fn;
+                    uint32_t want = (uint32_t)vfd->n_params - (cl->skip_env_param ? 1u : 0u);
+                    TuriValue *packed = turi_pack_rest_args(env, acc, n, 0, want);
+                    if (packed) { TURI_DRIVE_FREE(acc); acc = packed; n = want; }
+                }
                 /* The runtime-tag re-dispatch that sat here
                  * (gde_reresolve_method_by_value) is retired -- the
                  * carrier-helper dispatch recovery at EX_CALL setup covers its
@@ -9770,7 +10511,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriCont *c = (n >= 1 && acc[0].as_int)
                                     ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                         int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                        TuriValue forged;
+                        bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
                         TURI_DRIVE_FREE(acc);
+                        if (bad) { cur = forged; len--; break; }
                         ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                         int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                         if (rc != 1) { cur = val; len--; break; }
@@ -9799,7 +10543,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * bind only the callee's declared value params.  See
                  * docs/archive/history/turi-interp-forall-dict-wide-consumer-arity.md. */
                 uint32_t arg_base = 0;
-                if (top->expr->as.call_.is_poly_call && n > effective_params)
+                if (!is_dyn && top->expr->as.call_.is_poly_call && n > effective_params)
                     arg_base = n - effective_params;
                 /* SR2b: baked-representative correction by RUNTIME ctor name.
                  * A dict-carrying method call whose static dispatch stayed
@@ -9896,7 +10640,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     }
                     env->step_fuel--;
                 }
-                EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
+                EvalFrame *call_frame = eval_frame_new_call(env, (EvalFrame *)cl->captured);
                 for (uint32_t i = 0; i < effective_params; i++)
                     frame_bind(env, call_frame,
                                fn->params[param_offset + i]->name->name,
@@ -9916,8 +10660,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         TuriValue dv = eval_lookup(env, call_frame,
                                                    dp->name->name);
                         if (dv.tag != TURI_INT || dv.as_int == 0) continue;
-                        DictBind *db = (DictBind *)turi_val_alloc(
-                            env, sizeof(DictBind));
+                        DictBind *db = dict_bind_alloc(env);
                         db->tc    = fn->dict_clone_classes[dk2];
                         db->inst  = (struct TypeClassInstance *)(intptr_t)
                                         dv.as_int;
@@ -9929,7 +10672,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* generic-dict-dispatch: pin this call's concrete tyvar
                  * substitutions onto the callee frame so a baked-representative
                  * method call inside the body can re-resolve its instance. */
-                if (top->expr->as.call_.n_abi_bindings == 0)
+                if (!is_dyn && top->expr->as.call_.n_abi_bindings == 0)
                     frame_pin_hkt_tyvars_from_args(env, call_frame, fn,
                                                    param_offset, effective_params,
                                                    top->expr, arg_base);
@@ -9940,19 +10683,21 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * exists to serve.  With zero bindings its recording loop is a
                  * no-op, so the previous behaviour is unchanged for every other
                  * call of that shape. */
-                frame_record_abi(env, call_frame, top->frame, top->expr);
+                if (!is_dyn)
+                    frame_record_abi(env, call_frame, top->frame, top->expr);
                 /* set-add-elem-hash-disagrees-with-set-member: a bare-tyvar
                  * parameter whose binding elab left abstract is pinned from
                  * the argument's own static type, BEFORE the constraint
                  * dictionaries below are resolved from the frame's pins. */
-                frame_pin_bare_tyvars_from_args(env, call_frame, fn,
-                                                param_offset, effective_params,
-                                                top->expr, arg_base);
+                if (!is_dyn)
+                    frame_pin_bare_tyvars_from_args(env, call_frame, fn,
+                                                    param_offset, effective_params,
+                                                    top->expr, arg_base);
                 /* Bare-head constrained instance: bind its constraint tyvars
                  * (`(C A)`'s `A`) from the receiver arg's static type so a nested
                  * dispatch inside the body resolves the element's real instance
                  * instead of the baked int-carrier representative. */
-                if (fn->owner_instance && n > 0 && top->expr->as.call_.args)
+                if (!is_dyn && fn->owner_instance && n > 0 && top->expr->as.call_.args)
                     frame_bind_instance_constraint_tyvars(
                         env, call_frame, fn, &top->expr->as.call_.args[0]->type);
                 /* turi-dict-passing-plan (plain constrained generics): with the
@@ -10010,6 +10755,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * chain's end); was_returning / was_no_unwind are recaptured
                      * per iteration, as the retired trampoline loop did. */
                     env->current_module = cl->module;
+                    frame_release(env, ret->frame);   /* the replaced activation */
                     ret->frame         = call_frame;
                     ret->aux           = (void *)env->defer_stack; /* new defer mark */
                     ret->was_returning = env->returning;
@@ -10071,6 +10817,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 }
                 env->current_module = top->saved_module;
                 if (env->debugger) turi_dbg_pop(env);
+                frame_release(env, top->frame);
                 cur = ret; len--;   /* pop; propagate the call's value */
                 break;
             }
@@ -10104,7 +10851,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     TuriCont *c = (n >= 1 && acc[0].as_int)
                                 ? (TuriCont *)(intptr_t)acc[0].as_int : NULL;
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
+                    TuriValue forged;
+                    bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
                     TURI_DRIVE_FREE(acc);
+                    if (bad) { cur = forged; len--; break; }
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
                     if (rc != 1) { cur = val; len--; break; }   /* done / error */
@@ -10148,7 +10898,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 /* SR N2: the receiver evaluated to `cur`; extract the field.
                  * On a control signal (error/return/throw) propagate untouched. */
                 if (signaled) { len--; break; }
-                cur = get_field_extract(top->expr, cur);
+                cur = get_field_extract(env, top->expr, cur);
                 len--;
                 break;
             }
@@ -10269,18 +11019,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
      * security-audit-plan WP3 (S-1): the one capability check every native
      * call passes through -- by name from Turmeric, via turi_call from C, from
      * a HOF native re-entering evaluation, and the inline-C override below. */
-    if (cl->native) {
-        if (cl->native_caps & ~env->caps) return native_caps_denied(env, cl);
-        if (env->provenance_on && cl->native_handle) {
-            TuriValue pv;
-            if (turi_prov_guard_native(env, cl->native_handle, args, n_args, &pv))
-                return pv;
-            TuriValue rv = cl->native(env, args, n_args, cl->native_ud);
-            turi_prov_track_native(env, cl->native_handle, args, n_args, rv);
-            return rv;
-        }
-        return cl->native(env, args, n_args, cl->native_ud);
-    }
+    if (cl->native) return call_native_checked(env, cl, args, n_args);
 
     FnDef *fn = (FnDef *)cl->fn;
     /* EX_CLOSURE adds a synthetic __env_p first param for codegen; skip it. */
@@ -10303,10 +11042,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
         TuriValue native_v = turi_env_get(env, fname);
         if (native_v.tag == TURI_CLOSURE && native_v.as_closure &&
             native_v.as_closure->native) {
-            if (native_v.as_closure->native_caps & ~env->caps)
-                return native_caps_denied(env, native_v.as_closure);
-            return native_v.as_closure->native(env, args, n_args,
-                                               native_v.as_closure->native_ud);
+            return call_native_checked(env, native_v.as_closure, args, n_args);
         }
     }
 
@@ -10374,6 +11110,19 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
                 return inline_result;
             }
         }
+        /* aot-compiled-repl-plan C1: the pattern executor declined, so this
+         * body is about to be "inline-C not supported".  With
+         * --enable=repl-jit-inline-c on a JIT build, compile it instead.
+         * User code only: the stdlib's inline-C is answered by native
+         * overrides (above) or by interpreter intercepts the error path runs
+         * first (the session channel templates, gc_force), and none of it
+         * should be compiled behind the interpreter's back. */
+        if (fn->binding && !fn->binding->is_from_stdlib) {
+            TuriValue jit_result;
+            if (turi_inline_c_jit_try(env, fn, param_offset, args, n_args,
+                                      &jit_result))
+                return jit_result;
+        }
     }
 
     /* Defensive: an empty body evaluates to nil with no scope effects (matches
@@ -10384,7 +11133,7 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
     /* Turi body: prologue (build call frame, bind args, publish callee state),
      * then drive the body in tail position with an activation seed so its tail
      * calls reuse this activation's DK_CALL_RET. */
-    EvalFrame *call_frame = eval_frame_new(env, (EvalFrame *)cl->captured);
+    EvalFrame *call_frame = eval_frame_new_call(env, (EvalFrame *)cl->captured);
     for (uint32_t i = 0; i < n_args; i++)
         frame_bind(env, call_frame, fn->params[param_offset + i]->name->name,
                    turi_copy_byvalue_struct_arg(env, args[i]));
@@ -11048,6 +11797,8 @@ static TuriValue eval_spawn_fiber(TuriEnv *env, TuriValue cl_val) {
     return turi_future_val(f);
 }
 
+TuriValue turi_spawn_fiber(TuriEnv *env, TuriValue cl) { return eval_spawn_fiber(env, cl); }
+
 /* Wait for the future `fv` to settle and return its value: park the current
  * fiber on it, or pump the event loop from the main context.  DEPR-R0
  * (throw-deprecation-plan): a rejection surfaces as a TURI_REJECTION value
@@ -11202,6 +11953,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             StrSlice sl = { s->name, s->len };
             isym = symtab_intern(&env->st, sl);
         }
+        /* S-5: the Symbol* rides the carrier, so a literal is a minted :Sym
+         * handle -- `(sym->str 'foo)` was refused in a sandbox without it. */
+        turi_prov_register(env, TURI_HK_SYM, isym);
         TuriValue v = {0};
         v.tag = TURI_INT;
         v.as_int = (int64_t)(intptr_t)isym;
@@ -11231,6 +11985,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
             *copy = *_v.as_closure;
             copy->captured = frame;
+            frame_escape(frame);
             _v = turi_closure(copy);
         }
         /* constrained-generic-as-fn-value: a top-level constrained generic
@@ -11283,13 +12038,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 }
                 if (!have) continue;
                 if (!tf) tf = eval_frame_new(env, NULL);
-                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                TyvarBind *tb = tyvar_bind_alloc(env);
                 tb->name = tv->name;
                 tb->type = bound;
                 tb->next = tf->tyvars;
                 tf->tyvars = tb;
                 if (inst) {
-                    DictBind *db = (DictBind *)turi_val_alloc(env, sizeof(DictBind));
+                    DictBind *db = dict_bind_alloc(env);
                     db->tc = tc;
                     db->inst = inst;
                     db->tyvar = tv->name;   /* re-keyed onto the CALLEE's name */
@@ -11302,6 +12057,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                     (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
                 *copy = *_v.as_closure;
                 copy->captured = tf;
+                frame_escape(tf);
                 _v = turi_closure(copy);
             }
         }
@@ -11475,6 +12231,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         memset(cl, 0, sizeof(*cl));
         cl->fn       = e->as.fn_.fn;
         cl->captured = frame; /* capture lexical scope */
+        frame_escape(frame);
         return turi_closure(cl);
     }
 
@@ -11484,6 +12241,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         memset(cl, 0, sizeof(*cl));
         cl->fn             = e->as.closure_.closure->fn;
         cl->captured       = frame; /* interpreter uses lexical frame */
+        frame_escape(frame);
         cl->skip_env_param = true;  /* codegen added __env_p as first param */
         /* Retain-on-capture parity: the compiled backend's closure env owns a
          * strong reference to each rc<T> it captures -- codegen stores the handle
@@ -11593,6 +12351,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             if (turi_is_error(iv) || env_signaled(env)) {
                 return iv;
             }
+            turi_prov_note_value(env, iv);   /* S-5: the element drops its tag */
             raw[k++] = iv.as_int;
         }
         /* Sort */
@@ -11645,6 +12404,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             cell[0] = iv.as_int;  /* head: raw value carrier */
             cell[1] = tail;       /* tail: previously-built cell (or nil) */
             tail = (int64_t)(intptr_t)cell;
+            /* S-5: the head drops its tag here and `head`/`tail` walk the cell,
+             * so both are minted handles in a provenance-tracked env. */
+            turi_prov_note_value(env, iv);
+            turi_prov_register(env, TURI_HK_CONS, cell);
         }
         TuriValue v = {0}; v.tag = TURI_INT; v.as_int = tail;
         return v;
@@ -11661,7 +12424,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * box, not just on make-struct TuriStructs.  (Driver path: DK_GET_FIELD.) */
         TuriValue sv = eval_expr(env, frame, e->as.get_field_.struct_expr);
         if (turi_is_error(sv) || env_signaled(env)) return sv;
-        return get_field_extract(e, sv);
+        return get_field_extract(env, e, sv);
     }
 
     /* --- Phase DS3: (set! (.field s) v) — struct field write ------------- */
@@ -12172,6 +12935,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_PANIC: {
         TuriValue msg = eval_expr(env, frame, e->as.panic_.payload);
         const char *s = (msg.tag == TURI_CSTR && msg.as_cstr) ? msg.as_cstr : "(no message)";
+        g_panic_site = e->span;
         turi_runtime_panic(env, s);
         return turi_nil(); /* unreachable: turi_runtime_panic never returns */
     }
@@ -12206,7 +12970,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
         host_exit_unwind(env, "typed panic");
         env->panicking = true;
-        fprintf(stderr, "panic at\n");
+        if (panic_site_base(e->span))
+            fprintf(stderr, "panic at %s:%u\n", panic_site_base(e->span), e->span.line);
+        else
+            fprintf(stderr, "panic at\n");
         fflush(stderr);
         fire_defers_to_mark_by_scope(env, NULL, NULL);
         fflush(stdout);
@@ -12336,39 +13103,54 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         }
     }
 
-    /* --- Phase TI5: panic-payload-* accessors ------------------------------ */
+    /* --- Phase TI5: panic-payload-* accessors ------------------------------
+     * S-5: each reads through the payload word -- panic-payload-value a whole
+     * TuriValue, tag and pointer -- so in a provenance-tracked env the word
+     * must be a payload catch-unwind minted (PANIC_PAYLOAD_GUARD). */
+#define PANIC_PAYLOAD_GUARD(pv)                                               \
+        if ((pv).as_int && env->provenance_on &&                              \
+            ((pv).tag != TURI_INT ||                                          \
+             !turi_prov_check(env, TURI_HK_PANIC,                             \
+                              (const void *)(intptr_t)(pv).as_int)))          \
+            return prov_forged_value("panic payload")
     case EX_PANIC_PAYLOAD_TYPE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_type_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_int(pp ? pp->type_tag : 0);
     }
     case EX_PANIC_PAYLOAD_VALUE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_value_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return pp ? pp->value : turi_nil();
     }
     case EX_PANIC_PAYLOAD_FILE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_file_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_cstr(pp && pp->file ? pp->file : "");
     }
     case EX_PANIC_PAYLOAD_LINE: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_line_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         return turi_int(pp ? pp->line : 0);
     }
     case EX_PANIC_PAYLOAD_DOWNS: {
         TuriValue p = eval_expr(env, frame, e->as.panic_payload_downs_.payload);
         if (turi_is_error(p) || env_signaled(env)) return p;
+        PANIC_PAYLOAD_GUARD(p);
         TuriPanicPayload *pp = (TuriPanicPayload *)(intptr_t)p.as_int;
         if (pp && pp->type_tag == (int)e->as.panic_payload_downs_.target_type)
             return pp->value;
         return turi_nil();
     }
+#undef PANIC_PAYLOAD_GUARD
 
     /* --- Phase 9: rc<T> with shared reference counter in interpreter ------- */
     case EX_RC_OF: {
@@ -12505,7 +13287,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_EXISTS_OPEN: {
         TuriValue packed = eval_expr(env, frame, e->as.exists_open_.packed);
         if (turi_is_error(packed) || env_signaled(env)) return packed;
-        EvalFrame *ef = eval_frame_new(env, frame);
+        /* turi-call-pins-and-side-frames-not-reclaimed: the body runs here
+         * and now, so the frame lives no longer than the enclosing activation
+         * -- owned by it, released with it unless something captured it. */
+        EvalFrame *ef = eval_frame_new_owned(env, frame);
         if (e->as.exists_open_.var_binding)
             frame_bind(env, ef, e->as.exists_open_.var_binding->name->name, packed);
         TuriValue r = eval_expr(env, ef, e->as.exists_open_.body);
@@ -12821,7 +13606,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 else if (c->type_arg.kind == TY_TYVAR && c->type_arg.as.tyvar_.name)
                     tv = c->type_arg.as.tyvar_.name;
                 if (!tv) continue;
-                TyvarBind *tb = (TyvarBind *)turi_val_alloc(env, sizeof(TyvarBind));
+                TyvarBind *tb = tyvar_bind_alloc(env);
                 tb->name = tv;
                 tb->type = any_t;
                 tb->next = pf->tyvars;
@@ -12830,6 +13615,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             frame_bind_constraint_dicts(env, pf, impl_inst->type_param_constraints,
                                         impl_inst->n_type_param_constraints);
             cl->captured = pf;
+            frame_escape(pf);
         }
         TuriValue dres = eval_apply(env, cl, argv, n);
         /* An inline-C instance body declared `: bool` (`Eq [cstr]`'s strcmp)
@@ -13305,6 +14091,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * frame; like a closure, this frame is intentionally not freed (the
          * generator may outlive the creating scope). */
         g->frame   = eval_frame_new(env, frame);
+        frame_escape(g->frame);
         g->started = false;
         g->done    = false;
         return turi_gen_val(g);
@@ -13346,6 +14133,13 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     case EX_GEN_UNWRAP: {
         TuriValue pv = eval_expr(env, frame, e->as.gen_unwrap_.ptr_expr);
         if (turi_is_error(pv) || env_signaled(env)) return pv;
+        /* S-5: the read below goes through whatever word p holds, and
+         * `(gen-unwrap 4096)` made it any integer.  In a provenance-tracked env
+         * it must be a box gen-next handed out. */
+        if (pv.as_int && env->provenance_on &&
+            (pv.tag != TURI_INT ||
+             !turi_prov_check(env, TURI_HK_GENBOX, (const void *)(intptr_t)pv.as_int)))
+            return prov_forged_value("generator value");
         int64_t bits = pv.as_int ? *(int64_t *)(intptr_t)pv.as_int : 0;
         /* generator-in-generic: the element is the enclosing generic's `A`,
          * which the tree-walker never monomorphizes -- there is no kind to
@@ -13374,8 +14168,16 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             }
             case TY_BOOL:
                 return turi_bool(bits != 0);
-            case TY_CSTR:
-                return turi_cstr((const char *)(intptr_t)bits);
+            case TY_CSTR: {
+                /* S-5: the yielded value itself is beside the box; a tagged
+                 * string is its own proof, a bare word must be a live one. */
+                if (pv.as_int) {
+                    const TuriGen *og = (const TuriGen *)(
+                        (const char *)(intptr_t)pv.as_int - offsetof(TuriGen, box));
+                    if (og->box_val.tag == TURI_CSTR) return og->box_val;
+                }
+                return turi_cstr_from_carrier(env, bits);
+            }
             default:
                 return turi_int(bits);
         }
@@ -13493,6 +14295,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         turi_env_track_collection(env, tv, tvar_buf_destroy, tvar_buf_scan);
         tv->value   = init.as_int;
         tv->version = 1;
+        /* S-5: the payload drops its tag into the cell; the cell is a handle. */
+        turi_prov_note_value(env, init);
+        turi_prov_register(env, TURI_HK_TVAR, tv);
         return turi_int((int64_t)(intptr_t)tv);
     }
 
@@ -13513,6 +14318,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         if (!tv) return err;
         TuriValue val = eval_expr(env, frame, e->as.tvar_write_.value);
         if (turi_is_error(val) || env_signaled(env)) return val;
+        turi_prov_note_value(env, val);   /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, tv, val.as_int);
         return turi_nil();
     }
@@ -13526,6 +14332,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue nv = eval_expr(env, frame, e->as.tvar_swap_.new_val);
         if (turi_is_error(nv) || env_signaled(env)) return nv;
         int64_t old = stm_read(g_stm_tx, tv);
+        turi_prov_note_value(env, nv);    /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, tv, nv.as_int);
         return turi_int(old);
     }
@@ -13541,6 +14348,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue nv = eval_expr(env, frame, e->as.tvar_cas_.new_val);
         if (turi_is_error(nv) || env_signaled(env)) return nv;
         if (stm_read(g_stm_tx, tv) == ov.as_int) {
+            turi_prov_note_value(env, nv);   /* S-5: tag dropped into the cell */
             stm_log_write(g_stm_tx, tv, nv.as_int);
             return turi_bool(true);
         }
@@ -13565,6 +14373,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue arg = turi_int(old);
         TuriValue r = turi_call(env, fn, &arg, 1);
         if (turi_is_error(r) || env_signaled(env)) return r;
+        turi_prov_note_value(env, r);     /* S-5: tag dropped into the cell */
         stm_log_write(g_stm_tx, tv, r.as_int);
         return turi_int(old);
     }
@@ -13790,7 +14599,7 @@ static bool promo_check(TuriEnv *env, TuriValue v, PromoMap *seen);
 static size_t promo_wscont_aux_cap(const DriveCont *d) {
     switch (d->kind) {
     case DK_BUILTIN_ARG: return d->expr->as.builtin.n;
-    case DK_CALL_ARG:    return d->expr->as.call_.n_args;
+    case DK_CALL_ARG:    return drive_call_n_args(d->expr);
     case DK_MAKE_STRUCT: return d->expr->as.make_struct_.n_fields;
     default:             return 0;
     }
@@ -13976,6 +14785,9 @@ static EvalFrame *promo_copy_frame(TuriEnv *env, EvalFrame *f, PromoMap *fwd) {
     nf->parent   = promo_copy_frame(env, f->parent, fwd);
     nf->bindings = promo_copy_bindings(env, f->bindings, fwd);
     nf->tyvars   = promo_copy_tyvars(env, f->tyvars, fwd);
+    nf->escaped     = true;    /* promoted: reachable from a survivor */
+    nf->reclaimable = false;
+    nf->owned = nf->owned_next = NULL;
     return nf;
 }
 
@@ -14484,6 +15296,11 @@ static bool elab_session_replay(TuriEnv *env, Arena *arena, Form **forms,
 
 static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     if (!env || !env->scratch_promotion) return;
+    /* S-5: the handle-provenance registry names scratch addresses (cons
+     * cells, structs, pool strings, result boxes), and a reset hands them to
+     * the next allocation while the registry still vouches for them.  A
+     * provenance-tracked env keeps its scratch; step fuel bounds its size. */
+    if (env->provenance_on) return;
     env->promo_attempts++;   /* TR0: promotion attempted this eval boundary */
     if (!promo_env_quiescent(env)) { env->promo_decline_busy++; return; }
 
@@ -14518,6 +15335,10 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
 
     /* Everything reachable now lives in value_perm; reclaim the scratch region. */
     arena_reset(&env->value_scratch);
+    env->frame_free   = NULL;   /* their nodes were in scratch */
+    env->binding_free = NULL;
+    env->tyvar_free   = NULL;
+    env->dict_free    = NULL;
     env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
 
     /* TR3: with the live graph now provably rooted at result+globals, sweep
@@ -14945,6 +15766,8 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             effect_env_register_builtin_unsafe(
                 eff_env, eval_arena,
                 symtab_intern(&env->st, strslice(EFFECT_NAME_UNSAFE, 6)));
+            effect_env_register_builtin_capabilities(eff_env, eval_arena,
+                                                     &env->st);
             env->effect_env = eff_env;
         }
         effect_check_pass(eval_arena, prog, eff_env);
@@ -15148,6 +15971,7 @@ static TuriValue call_run(TuriEnv *env, void *ctx) {
 
 TuriValue turi_call(TuriEnv *env, TuriValue fn, TuriValue *args, uint32_t n_args) {
     if (!env) return turi_error("turi_call: null env");
+    if (fn.tag == TURI_ERROR) return fn;   /* e.g. a refused carrier re-tag */
     if (fn.tag != TURI_CLOSURE || !fn.as_closure)
         return turi_errorf("turi_call: expected closure, got tag %d", fn.tag);
     /* S-5: an embedder (or the macro env) calling straight into a restricted
@@ -16243,7 +17067,7 @@ static const char *turi_call_show_named(TuriEnv *env, const char *type_name,
     if (recv_ty) {
         EvalFrame *tyframe = eval_frame_new(env, NULL);
         frame_bind_instance_constraint_tyvars(env, tyframe, show_impl, recv_ty);
-        if (tyframe->tyvars) cl->captured = tyframe;
+        if (tyframe->tyvars) { cl->captured = tyframe; frame_escape(tyframe); }
     }
 
     TuriValue fn_val = turi_closure(cl);
@@ -16403,6 +17227,8 @@ void turi_env_set_max_depth(TuriEnv *env, uint32_t depth) {
 void turi_env_allow(TuriEnv *env, TuriCaps cap) {
     if (!env) return;
     env->caps |= cap;
+    if (env->provenance_on && (cap & TURI_CAP_IO))
+        turi_r7rs_std_ports_prov(env, true);
 }
 
 void turi_env_deny(TuriEnv *env, TuriCaps cap) {
@@ -16414,6 +17240,8 @@ void turi_env_deny(TuriEnv *env, TuriCaps cap) {
      * built, so a forged integer handle is refused from here on. */
     if (env->caps != TURI_CAP_ALL)
         turi_prov_enable_and_seed(env);
+    if (env->provenance_on && (cap & TURI_CAP_IO))
+        turi_r7rs_std_ports_prov(env, false);
 }
 
 bool turi_env_has_cap(TuriEnv *env, TuriCaps cap) {

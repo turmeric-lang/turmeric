@@ -735,7 +735,7 @@
 ;; carrier and is an allowed Phase 5 bridge crossing.  See
 ;; docs/archive/phase4-carrier-helper-inventory.md.
 
-(defn map-eq-raw? [m1 : int m2 : int ^borrow ^fat val-cmp]
+(defn map-eq-raw? [V] [m1 : int m2 : int ^borrow ^fat val-cmp : (fn [V V] bool)]
   #fx{}
   : bool
   ```c
@@ -770,14 +770,17 @@
 ;;;
 ;;; Since: Phase TM0 (typed surface: TMS3)
 
-(defn map-eq? [K V] [m1 (Map K V) m2 (Map K V) ^fat val-cmp] :bool
+(defn map-eq? [K V W] [m1 (Map K V) m2 (Map K V) ^fat val-cmp : (fn [W W] bool)] :bool
   (map-eq-raw? m1 m2 val-cmp))
 ;;; map-eq-raw-k? -- like map-eq-raw? but compares keys with an explicit
 ;;; carrier comparator (tur_hamt_get_eq) instead of identity.  Threading the
 ;;; MapKey[K] comparator here is what makes structural equality content-correct
 ;;; for :cstr keys (distinct pointers with equal text match).
 
-(defn map-eq-raw-k? [m1 : int m2 : int keyeq ^borrow ^fat val-cmp]
+(defn map-eq-raw-k? [V] [m1 : int
+                         m2 : int
+                         keyeq
+                         ^borrow ^fat val-cmp : (fn [V V] bool)]
   #fx{}
   : bool
   ```c
@@ -810,7 +813,10 @@
 ;;; (mk-cmp (make-struct K 0 ...)) -- so keys equal by content but stored under
 ;;; distinct pointers/boxes compare equal.
 
-(defn map-eq-k? [K V] [m1 (Map K V) m2 (Map K V) keyeq ^fat val-cmp] :bool
+(defn map-eq-k? [K V W] [m1 (Map K V)
+                         m2 (Map K V)
+                         keyeq
+                         ^fat val-cmp : (fn [W W] bool)] :bool
   (map-eq-raw-k? m1 m2 keyeq val-cmp))
 ;;; Eq [Map] -- structural equality using the value type's Eq instance.
 ;; TM0-6: Phase PTC4 -- constrained Eq instance for Map[K V].
@@ -827,7 +833,9 @@
 ;;; is used -- which is correct for :int keys.
 
 
-(defn map-eq-dynamic [m1 : int m2 : int ^borrow ^fat val-cmp] : bool
+(defn map-eq-dynamic [V] [m1 : int
+                          m2 : int
+                          ^borrow ^fat val-cmp : (fn [V V] bool)] : bool
   ;; CRU B-3: val-cmp is a fat closure box; threaded as int64 to the runtime,
   ;; which fat-dispatches it (tur_hamt_eq_dynamic reads slot 0).
   ```c return tur_hamt_eq_dynamic(m1, m2, (int64_t)(intptr_t)val_cmp); ```)

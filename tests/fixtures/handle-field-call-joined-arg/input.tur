@@ -1,0 +1,42 @@
+;; cps-evicts-handle-in-operand-positions item 4 (type fuzzer seed 4444 case
+;; 93): a `handle` body that calls an effectful STRUCT-FIELD fn value with an
+;; argument that is not atomic -- a `let` whose body calls a higher-order
+;; function.  The argument is bound by a join lifted into a DK frame, and the
+;; frame then makes the field call, so it must carry the field-load callee
+;; (`(.run s)`, atomized into a fn-typed temp).  The capture collector
+;; refused a fn-typed temp, so the whole `main` left the CPS backend
+;; (BODY-STRUCT-JOIN) and the `perform` had no lowering.  The callee rides
+;; the frame's env as the same int64 direct-entry word a fn-value PARAM
+;; callee does.
+;;
+;; The two-`handle` mains also pin a second bug found here: the second
+;; `handle`'s body is lifted into the first's continuation, the closure
+;; literal in it got its slot-0 widen wrapper emitted AFTER that lifted frame,
+;; and cc rejected the use ('__tur_widen___fn_N' undeclared).
+;;
+;; Every line matches `tur --interpret`.
+
+(defn apply0 [f : (fn [] bool)] : bool (f))
+(defn apply0i [f : (fn [] int)] : int (f))
+
+(defeffect Flip [x : bool] :bool)
+(defeffect Bump [x : int] :int)
+
+(defstruct FE :copy [run : (fn [bool] bool) #fx{Flip}])
+(defstruct IE :copy [run : (fn [int] int) #fx{Bump}])
+
+(defn flip [v : bool] : bool (perform (Flip v)))
+(defn bump [v : int] : int (+ 1 (perform (Bump v))))
+
+(defn main [] : int
+  ;; the fuzzer's case: the argument is a `let` whose body calls a thin HOF,
+  ;; so it is bound by a join that must carry the field-load callee
+  (println (handle (.run (make-struct FE flip) (let [c false] (apply0 (fn [] c))))
+    (Flip [x] k) (resume k x)))
+  (println (handle (.run (make-struct FE flip) (let [c false] (apply0 (fn [] c))))
+    (Flip [x] k) (resume k (not x))))
+  (println (handle (.run (make-struct IE bump) (let [n 40] (apply0i (fn [] n))))
+    (Bump [x] k) (resume k (+ x 1))))
+  (println (handle (.run (make-struct IE bump) (let [n 1] (apply0i (fn [] n))))
+    (Bump [x] k) (+ 100 (resume k x))))
+  0)

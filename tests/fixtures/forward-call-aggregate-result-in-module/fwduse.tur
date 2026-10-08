@@ -1,0 +1,35 @@
+;; fwduse -- every caller here is written ABOVE the helper it calls, the
+;; shape that typed the forward call as the int64 carrier.  The secret,
+;; valkey and tourist-session-valkey spices hit it with an imported opaque in
+;; a Result; the defmodule pre-pass dropped every non-scalar return, so a
+;; same-module struct, a bare ADT return and (Result int cstr) failed too.
+;; `Box` is not registered when the module's forward decls are made (a module
+;; body has no type pre-pass); those decls settle once its defstruct has.
+(defmodule fwduse
+  (import fwdcore :refer [Handle handle-of])
+  (export pick pick-box pick-maybe pick-int Box)
+
+  (defstruct Box [v : int])
+
+  ;; (Result <imported opaque> cstr), through an if.
+  (defn pick [c : bool] : (Result Handle cstr)
+    (if c (good) (bad)))
+  (defn good [] : (Result Handle cstr) (ok (handle-of 41)))
+  (defn bad [] : (Result Handle cstr) (err "bad"))
+
+  ;; A bare same-module ADT return.
+  (defn pick-box [c : bool] : Box
+    (if c (box-a) (box-b)))
+  (defn box-a [] : Box (Box 1))
+  (defn box-b [] : Box (Box 2))
+
+  ;; (Option <same-module struct>), one arm built here, one forwarded.
+  (defn pick-maybe [c : bool] : (Option Box)
+    (if c (some (box-a)) (no-box)))
+  (defn no-box [] : (Option Box) (none))
+
+  ;; (Result int cstr): no user type at all.
+  (defn pick-int [c : bool] : (Result int cstr)
+    (if c (int-ok) (int-err)))
+  (defn int-ok [] : (Result int cstr) (ok 7))
+  (defn int-err [] : (Result int cstr) (err "int-err")))

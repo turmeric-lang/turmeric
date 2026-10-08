@@ -1,0 +1,14 @@
+;; panic-location-names-the-runtime-not-the-call-site: a failed `:post` panics
+;; at the line its predicate is written on, not inside the runtime helper that
+;; raised it.  `sum-to` is recursive, so the solver answers unknown and the
+;; runtime check stays.
+(defn sum-to [n : int] : int (if (<= n 0) 0 (+ n (sum-to (- n 1)))))
+
+(defn dec [x : int] : int
+  :post (>= result 0)
+  (- (sum-to x) 1))
+
+(defn main [] : int
+  (println (dec 3))
+  (println (dec (list-length *args*)))
+  0)

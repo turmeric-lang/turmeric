@@ -83,7 +83,7 @@ So: blocks fenced ` ```ascii ` get `line-height:1.15`; every other block keeps
 | `docs/upcoming/hold/linalg-spice-followups-plan.md` | `flowchart LR` -- release DAG with the cross-edges |
 | `docs/upcoming/release-in-actions-plan.md` | `flowchart TD` -- seven steps, `subgraph` for the private phase |
 | `docs/upcoming/hold/stats-formula-plan.md` | `flowchart TD` -- module pipeline |
-| `docs/upcoming/hold/aot-compiled-repl-plan.md` | `flowchart TD` -- REPL eval pipeline |
+| `docs/upcoming/aot-compiled-repl-plan.md` | `flowchart TD` -- REPL eval pipeline |
 
 | Retagged ` ```ascii ` | Why it stays |
 | --- | --- |

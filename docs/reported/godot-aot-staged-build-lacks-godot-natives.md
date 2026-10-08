@@ -51,7 +51,7 @@
 >
 > The natives cannot be linked as they stand. Each is
 > `static TuriValue tg_native_export(TuriEnv *, TuriValue *, uint32_t, void *)`
-> ([src/turmeric_language.cpp:326](https://github.com/rjungemann/turmeric-godot/blob/main/src/turmeric_language.cpp))
+> ([src/turmeric_language.cpp:326](https://github.com/turmeric-lang/turmeric-godot/blob/main/src/turmeric_language.cpp))
 > -- the *interpreter's* ABI, file-local, and nothing compiled code can call. So
 > the real work is ~90 exported C entry points with legal names and concrete
 > signatures, each marshalling to the existing implementation. That is the same

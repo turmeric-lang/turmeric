@@ -478,7 +478,7 @@ of any other type are re-raised to the next outer boundary.
 (catch-panic-of :int  (fn [] : int (panic "string panic")))  ;; re-raised
 ```
 
-> See [docs/design/error-handling-rationale.md](https://github.com/rjungemann/turmeric/blob/main/docs/design/error-handling-rationale.md)
+> See [docs/design/error-handling-rationale.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/design/error-handling-rationale.md)
 > for the exception-vs-panic boundary `catch-unwind` is meant to sit on.
 
 ---
@@ -779,11 +779,11 @@ A panic interacts with the effect/continuation machinery as follows:
 
 ## See Also
 
-- [error-handling-rationale.md](https://github.com/rjungemann/turmeric/blob/main/docs/design/error-handling-rationale.md) --
+- [error-handling-rationale.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/design/error-handling-rationale.md) --
   exceptions vs. panic design rationale
 - [effects-system-guide.md](effects-system-guide.md) -- effect handler
   semantics referenced above
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- `--no-contracts`,
   `--warn-unused-result`, and `--lint-panic`
-- [cps-transform-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the CPS
+- [cps-transform-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/cps-transform-plan.md) -- the CPS
   substrate the async runtime is built on

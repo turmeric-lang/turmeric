@@ -40,6 +40,7 @@
 #ifndef TUR_JIT_ENGINE_H
 #define TUR_JIT_ENGINE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Outcomes of a JIT attempt.  Anything other than TUR_JIT_OK means the
@@ -86,7 +87,13 @@ void tur_jit_last_timings(double *compile_ms, double *run_ms);
  * dlsym sees static functions, so the single-TU spice emission needs no
  * linkage changes.  tur_jit_image_free tears the context down; any
  * pointer obtained from the image is dead after that, so the caller must
- * rebind before freeing (the REPL's (reload) order). */
+ * rebind before freeing (the REPL's (reload) order).
+ *
+ * The C front end's state is released as soon as the image is initialized
+ * (TUR_JIT_KEEP_C2MIR=1 keeps it to tur_jit_image_free, as before
+ * 2026-10-02): it was most of an image's resident memory, ~25 MB of parsed
+ * headers and declarations per image, and the REPL keeps images for the whole
+ * session (aot-compiled-repl-plan C1). */
 typedef struct TurJitImage TurJitImage;
 
 /* Returns TUR_JIT_OK and sets *out on success; on failure returns the
@@ -101,5 +108,13 @@ int tur_jit_compile_image(const char *csrc, size_t csrc_len,
 void *tur_jit_image_sym(TurJitImage *img, const char *name);
 
 void tur_jit_image_free(TurJitImage *img);
+
+/* aot-compiled-repl-plan C1: suppress c2mir's WARNINGS (not its errors) for
+ * the compiles that follow, returning the previous setting so a caller can put
+ * it back.  c2mir warns on things the system headers do that it does not model
+ * -- `unknown pragma`, an empty struct -- several lines per compile, which is
+ * tolerable once per `tur jit` run and is not at a REPL prompt that compiles
+ * an inline-C defn on its first call.  Off by default; `tur jit` keeps them. */
+bool tur_jit_set_quiet_warnings(bool quiet);
 
 #endif /* TUR_JIT_ENGINE_H */

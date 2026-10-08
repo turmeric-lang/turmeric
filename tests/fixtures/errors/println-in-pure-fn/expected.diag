@@ -1,0 +1,4 @@
+TUR-E0009]: function 'shout' performs effect 'IO' but its declared row {} does not include it
+TUR-E0009]: function 'relay' performs effect 'IO' but its declared row {} does not include it
+TUR-E0009]: anonymous function in 'make-printer' performs effect 'IO' but its declared row {} does not include it
+TUR-E0009]: effect-row subtype violation: argument's row {IO} is not a subset of parameter's declared row {}

@@ -69,6 +69,8 @@ typedef enum DiagCode {
     /* duplicate-instance-silently-drops-a-user-definstance: a user definstance
      * for a (class, type) the stdlib already covers is rejected, not dropped */
     TUR_E0025_DUPLICATE_INSTANCE,                 /* instance already defined for this class and type */
+    /* effect-row honesty W1: a #fx{...} names an effect no defeffect declares */
+    TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
 
     TUR_E0042_MIXED_WIDTH_ARITH, /* distinct numeric kinds cannot be combined without (as ...) */
     /* ER1: strict-effects warnings */
@@ -304,6 +306,9 @@ typedef enum DiagCode {
      * F_MAP whose provenance is PROV_FX_AT_LEGACY is consumed as an
      * effect row.  Note: this does not affect bare `@x` deref sugar. */
     TUR_D0003_FX_ROW_LEGACY_AT,
+    /* effect-row-honesty-plan W0: `(match #fx{NonExhaustive} x ...)` is
+     * deprecated; the marker is the attribute `^non-exhaustive`. */
+    TUR_D0004_NONEXHAUSTIVE_FX_MARKER,
     /* XF (experimental-flag-mechanism-plan): the `--enable=<name>` surface.
      * E0310 fires at CLI/manifest parse on an unknown experiment name;
      * W0060/W0061 fire once per compile at the first use site of an enabled
@@ -691,6 +696,20 @@ bool diag_use_color(void);
 bool stderr_is_tty(void);
 
 void diag_register_file(const SourceFile *file);
+/* Record that `file_id` was pulled into the compile by the form at `origin`
+ * (the `load` string or the `import` form, a span in the file that names it).
+ * Call after diag_register_file, which clears it.  The LSP follows these
+ * links up to the open document, so an error in a file loaded by a loaded
+ * file is drawn on the document's own `load` line.  A span with line 0 (no
+ * source form, e.g. a forced import) records nothing. */
+void diag_set_file_origin(uint16_t file_id, Span origin);
+/* The call site of the outermost macro expansion in progress, and the macro's
+ * name; SPAN_UNKNOWN / NULL when none.  A diagnostic raised inside the
+ * expansion is located in the DEFMACRO's file, so the LSP anchors it on this
+ * call instead -- the code the user actually wrote.  Returns the previous
+ * site so a caller can restore it. */
+Span diag_set_expansion_site(Span site, const char *macro_name,
+                             const char **prev_name);
 /* A fresh file id for a SourceFile a pass reads on its own, outside the
  * elaborator's import/load counter (an R7RS `include`): handed out from the
  * top of the range downwards, so the two never meet. */
@@ -831,6 +850,28 @@ void diag_lsp_flush(FILE *out);
 
 /* Write just the diagnostics JSON array [...] into buf (no outer wrapper). */
 void diag_lsp_flush_array(struct Buf *buf);
+
+/* lsp-publishes-other-files-diagnostics-under-one-uri: where a diagnostic that
+ * belongs to ANOTHER file should be drawn in the document being published.
+ * Given the foreign file's path, set the 0-based anchor range in the document
+ * (typically the `load` / `import` that pulled the file in) and that file's
+ * `file://` URI, and set `*anchored` when an anchor was found.  Return false
+ * to leave the URI out of the related location.  A file the document does not
+ * name directly is retried through the origin chain (diag_set_file_origin):
+ * first the document's `load` / `import` of the outermost file on the chain,
+ * then that form's recorded span. */
+typedef bool (*DiagLspRelocateFn)(void *ctx, const char *foreign_path,
+                                  uint32_t *line0, uint32_t *col_start0,
+                                  uint32_t *col_end0, bool *anchored,
+                                  char *uri_out, size_t uri_cap);
+
+/* As diag_lsp_flush_array, for a publish addressed to `doc_path`: an entry
+ * from any other file is moved onto the document at the range `relocate`
+ * gives, its message prefixed with the real `path:line:col`, and the real
+ * location attached as LSP `relatedInformation`.  Every entry still carries
+ * its `"file"` key. */
+void diag_lsp_flush_array_for(struct Buf *buf, const char *doc_path,
+                              DiagLspRelocateFn relocate, void *ctx);
 
 void diag_lsp_end(void);
 

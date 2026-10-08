@@ -10,8 +10,8 @@ Turmeric ships two numeric types above the machine primitives:
 
 | Type | Module | Representation | Literal |
 |---|---|---|---|
-| `Rational` | [`stdlib/rational.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/rational.tur) | `num`/`den` pair over `int` (int64), always normalized | `#rat{3/4}` |
-| `Complex` | [`stdlib/complex.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/complex.tur) | `re`/`im` pair over `float` (double) | `#cx{3.25 -1.5}` |
+| `Rational` | [`stdlib/rational.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/rational.tur) | `num`/`den` pair over `int` (int64), always normalized | `#rat{3/4}` |
+| `Complex` | [`stdlib/complex.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/complex.tur) | `re`/`im` pair over `float` (double) | `#cx{3.25 -1.5}` |
 
 Both are `:copy` single-variant record products, so each lowers to a 16-byte C
 struct of two `int64_t` / two `double`. Neither carries an owning field, so
@@ -199,7 +199,7 @@ negatives included -- passes under the MIR engine with zero cc-fallbacks, and
 family never appear in emitter source or generated C.
 
 The one dependency on inline C is the scalar libm layer in
-[`stdlib/math.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/math.tur) -- `sqrt`, `fabs`, `exp`, `sin`,
+[`stdlib/math.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/math.tur) -- `sqrt`, `fabs`, `exp`, `sin`,
 `cos`, `atan2` -- which `complex/abs`, `complex/arg`, and `complex/exp` are built
 on. Each of those has a matching interpreter native so the two engines agree.
 
@@ -243,7 +243,7 @@ one.
 An integer **literal** is exempt and still converts (`(:: 7 :float)` is `7.0`):
 the author wrote a constant, so there is no carried value whose bits could be
 meant. All four functions behave identically compiled and interpreted. See
-[docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).
+[docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).
 
 ## Related
 

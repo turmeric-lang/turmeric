@@ -118,7 +118,7 @@ Two things do not follow from the row:
   thread instead, and `await` joins it, so `(async (fn [] (recv ch)))` behaves
   compiled as it does here. `TUR-W0043` remains for a body that makes both
   endpoints itself:
-  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md)
+  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md)
 - **The interpreter detects session deadlock; the compiled binary hangs.**
   Because the rendezvous is cooperative and single-threaded, a blocked `recv`
   (or an `await` on a task) with nothing runnable is a clean `deadlocked` error
@@ -129,7 +129,7 @@ Two things do not follow from the row:
   and `tests/fixtures/errors/session-deadlock-*-turi`.
 
 The audit behind this row is
-[turi-session-expansion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-session-expansion-plan.md).
+[turi-session-expansion-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-session-expansion-plan.md).
 
 ---
 
@@ -137,7 +137,7 @@ The audit behind this row is
 
 Multishot resume, escaping continuations, and resume through nested handlers
 **all work under `--interpret`**
-([turi-interpreter-delimited-control-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-interpreter-delimited-control-plan.md)):
+([turi-interpreter-delimited-control-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-interpreter-delimited-control-plan.md)):
 capturable handles run on the driver work-stack as a heap-owned `TuriWsCont`
 continuation (the turi analog of `tur`'s heap `DK` chain), captured between the
 `perform` and the matching `DK_PROMPT`. Because the continuation is heap-owned
@@ -149,7 +149,7 @@ Capturing a continuation *through a native / inline-C higher-order-function
 callback* also works: a native HOF that re-applies a closure no longer does so
 on a live C frame -- the callback is reified onto the driver work-stack as an
 explicit resume continuation
-([turi-cek-stackless-reentry-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)),
+([turi-cek-stackless-reentry-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-cek-stackless-reentry-plan.md)),
 so interpreter recursion through driven positions is heap-bounded and
 delimited control composes with native HOFs the same way it does compiled.
 The C-scoped boundary forms (`catch-unwind`, `atomically`, `async`) still
@@ -273,4 +273,4 @@ test leg -- not for production hot loops. When throughput matters, `tur build`
 - [eval-api.md](eval-api.md) -- the libturi C embedding API and sandboxing surface.
 - [repl.md](repl.md) / [repl-tutorial.md](repl-tutorial.md) -- the interactive interpreter.
 - `docs/artifacts/turi-carve-out.txt` / `docs/artifacts/turi-preload-carve-out.txt` -- the machine-checked carve-out lists.
-- [turi-parity-post-v1-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-parity-post-v1-plan.md) -- the phased plan behind this matrix (archived; all phases landed).
+- [turi-parity-post-v1-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-parity-post-v1-plan.md) -- the phased plan behind this matrix (archived; all phases landed).

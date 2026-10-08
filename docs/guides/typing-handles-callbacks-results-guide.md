@@ -13,7 +13,7 @@ counterpart: *why* the rule exists, *what* the right shapes are for
 each case, and *how* to migrate an API that already leans on `:int`.
 
 The companion audit
-([`docs/archive/spices-int-stand-in-audit-2026-06-14.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/spices-int-stand-in-audit-2026-06-14.md))
+([`docs/archive/spices-int-stand-in-audit-2026-06-14.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/spices-int-stand-in-audit-2026-06-14.md))
 caught the pattern across 19 of 35 spices. The audit is the source of
 truth for the historical numbers; this guide is the playbook.
 
@@ -297,5 +297,5 @@ unions, cons cells, struct handles -- gets a real type.
   `Option` patterns at the API boundary.
 - [`c-integration-guide.md`](c-integration-guide.md) -- inline-C,
   `#[used]`, and FFI bridging.
-- [`docs/archive/spices-int-stand-in-audit-2026-06-14.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/spices-int-stand-in-audit-2026-06-14.md)
+- [`docs/archive/spices-int-stand-in-audit-2026-06-14.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/spices-int-stand-in-audit-2026-06-14.md)
   -- the original ecosystem-wide audit with per-spice findings.

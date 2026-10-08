@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CI Metrics -- Turmeric</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Test suite timings and line counts for the Turmeric compiler, published from CI on every push to main. Duration trends, per-suite sparklines, product-vs-test lines of code, and the skip ledger.">
+<meta name="description" content="Test suite timings and line counts for the Turmeric compiler, published from CI on every push to main. Duration trends, per-suite sparklines, product-vs-test lines of code, open plans and reports, and the skip ledger.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
@@ -42,9 +42,9 @@
   <header class="ci-head">
     <h1 class="ci-title">Suite timings</h1>
     <p class="section-desc">
-      Every push to <code>main</code> publishes each ctest suite's wall time, and
-      the commit's tracked line counts, to the
-      <a href="https://github.com/rjungemann/turmeric/tree/ci-metrics" class="ci-link">ci-metrics</a>
+      Every push to <code>main</code> publishes each ctest suite's wall time, the
+      commit's tracked line counts, and its open plan and report counts to the
+      <a href="https://github.com/turmeric-lang/turmeric/tree/ci-metrics" class="ci-link">ci-metrics</a>
       branch.
     </p>
     <div class="ci-provenance" id="ci-provenance"></div>
@@ -58,94 +58,154 @@
 
   <div class="ci-body" id="ci-body" hidden>
 
-    <section class="ci-tiles" id="ci-tiles" aria-label="Latest run summary"></section>
+    <!-- Tab bar + shared range filter. Range applies to every tab, so it
+         lives here rather than inside the Tests-only filter bar. -->
+    <div class="ci-tabs-bar">
+      <div class="ci-tabs" role="tablist" aria-label="CI metric categories">
+        <button type="button" class="ci-tab is-active" role="tab"
+                id="ci-tab-tests" aria-selected="true"
+                aria-controls="ci-panel-tests" data-tab="tests">Tests</button>
+        <button type="button" class="ci-tab" role="tab"
+                id="ci-tab-code" aria-selected="false"
+                aria-controls="ci-panel-code" data-tab="code">Code</button>
+        <button type="button" class="ci-tab" role="tab"
+                id="ci-tab-reports" aria-selected="false"
+                aria-controls="ci-panel-reports" data-tab="reports">Reports</button>
+      </div>
+      <div class="ci-field ci-field--range">
+        <label class="ci-field-label" for="ci-range">Range</label>
+        <select class="ci-select" id="ci-range">
+          <option value="all">All time</option>
+          <option value="90d">Last 90 days</option>
+          <option value="30d">Last 30 days</option>
+          <option value="7d" selected>Last 7 days</option>
+          <option value="1d">Last 24 hours</option>
+        </select>
+      </div>
+    </div>
 
-    <section class="ci-filters" id="ci-filters" aria-label="Filters"></section>
+    <!-- ── Tests tab ─────────────────────────────────────────────────── -->
+    <div class="ci-tab-panel" id="ci-panel-tests" role="tabpanel"
+         aria-labelledby="ci-tab-tests">
 
-    <section class="ci-panel">
-      <div class="ci-panel-head">
-        <div>
-          <h2 class="ci-panel-title">Duration over time</h2>
-          <p class="ci-panel-sub" id="ci-chart-sub"></p>
-        </div>
-        <div class="ci-seg" role="group" aria-label="Y axis scale">
-          <button type="button" class="ci-seg-btn is-active" data-scale="linear">Linear</button>
-          <button type="button" class="ci-seg-btn" data-scale="log">Log</button>
-        </div>
-      </div>
-      <div class="ci-chart-wrap">
-        <div class="ci-chart" id="ci-chart"></div>
-        <div class="ci-tooltip" id="ci-tooltip" hidden></div>
-      </div>
-      <div class="ci-legend" id="ci-legend"></div>
-    </section>
+      <section class="ci-tiles" id="ci-tiles" aria-label="Latest run summary"></section>
 
-    <!-- Outside the environment lock on purpose: a line count is a property of
-         the commit, so it has no (os, cc, nproc) dimension to be incomparable
-         across. The Range filter above still applies. -->
-    <section class="ci-panel">
-      <div class="ci-panel-head">
-        <div>
-          <h2 class="ci-panel-title">Lines of code</h2>
-          <p class="ci-panel-sub" id="ci-loc-sub"></p>
-        </div>
-        <!-- Not Linear/Log: a week moves 400k lines by a few hundred, which no
-             scale makes visible on a shared zero-based axis. "Change" plots a
-             different quantity -- each series against its own first value in
-             range -- which is the only honest way to see it. -->
-        <div class="ci-seg" role="group" aria-label="Line count chart mode">
-          <button type="button" class="ci-seg-btn is-active" data-loc-mode="lines">Lines</button>
-          <button type="button" class="ci-seg-btn" data-loc-mode="change">Change</button>
-        </div>
-      </div>
-      <div class="ci-chart-wrap">
-        <div class="ci-chart" id="ci-loc-chart"></div>
-        <div class="ci-tooltip" id="ci-loc-tooltip" hidden></div>
-      </div>
-      <div class="ci-legend" id="ci-loc-legend"></div>
-    </section>
+      <section class="ci-filters" id="ci-filters" aria-label="Filters"></section>
 
-    <section class="ci-panel">
-      <div class="ci-panel-head">
-        <div>
-          <h2 class="ci-panel-title">All suites</h2>
-          <p class="ci-panel-sub">
-            One sparkline per suite, largest first. Each has its own vertical
-            scale. Click to chart it above.
-          </p>
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Duration over time</h2>
+            <p class="ci-panel-sub" id="ci-chart-sub"></p>
+          </div>
+          <div class="ci-seg" role="group" aria-label="Y axis scale">
+            <button type="button" class="ci-seg-btn is-active" data-scale="linear">Linear</button>
+            <button type="button" class="ci-seg-btn" data-scale="log">Log</button>
+          </div>
         </div>
-        <input type="search" class="ci-input" id="ci-spark-search"
-               placeholder="Filter suites&hellip;" aria-label="Filter suites">
-      </div>
-      <div class="ci-sparks" id="ci-sparks"></div>
-    </section>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-chart"></div>
+          <div class="ci-tooltip" id="ci-tooltip" hidden></div>
+        </div>
+        <div class="ci-legend" id="ci-legend"></div>
+      </section>
 
-    <section class="ci-panel">
-      <div class="ci-panel-head">
-        <div>
-          <h2 class="ci-panel-title">Suite table</h2>
-          <p class="ci-panel-sub">
-            The same data as the chart, in full. Sorted by absolute change
-            across the selected range.
-          </p>
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">All suites</h2>
+            <p class="ci-panel-sub">
+              One sparkline per suite, largest first. Each has its own vertical
+              scale. Click to chart it above.
+            </p>
+          </div>
+          <input type="search" class="ci-input" id="ci-spark-search"
+                 placeholder="Filter suites&hellip;" aria-label="Filter suites">
         </div>
-      </div>
-      <div class="ci-table-wrap">
-        <table class="ci-table" id="ci-table"></table>
-      </div>
-    </section>
+        <div class="ci-sparks" id="ci-sparks"></div>
+      </section>
 
-    <section class="ci-panel">
-      <div class="ci-panel-head">
-        <div>
-          <h2 class="ci-panel-title">Skip ledger</h2>
-          <p class="ci-panel-sub">
-            Suites that did not fully run in the latest build.
-          </p>
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Suite table</h2>
+            <p class="ci-panel-sub">
+              The same data as the chart, in full. Sorted by absolute change
+              across the selected range.
+            </p>
+          </div>
         </div>
-      </div>
-      <div class="ci-skips" id="ci-skips"></div>
-    </section>
+        <div class="ci-table-wrap">
+          <table class="ci-table" id="ci-table"></table>
+        </div>
+      </section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Skip ledger</h2>
+            <p class="ci-panel-sub">
+              Suites that did not fully run in the latest build.
+            </p>
+          </div>
+        </div>
+        <div class="ci-skips" id="ci-skips"></div>
+      </section>
+
+    </div>
+
+    <!-- ── Code tab ───────────────────────────────────────────────────── -->
+    <div class="ci-tab-panel" id="ci-panel-code" role="tabpanel"
+         aria-labelledby="ci-tab-code" hidden>
+
+      <!-- Outside the environment lock on purpose: a line count is a property of
+           the commit, so it has no (os, cc, nproc) dimension to be incomparable
+           across. The Range filter above still applies. -->
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Lines of code</h2>
+            <p class="ci-panel-sub" id="ci-loc-sub"></p>
+          </div>
+          <!-- Not Linear/Log: a week moves 400k lines by a few hundred, which no
+               scale makes visible on a shared zero-based axis. "Change" plots a
+               different quantity -- each series against its own first value in
+               range -- which is the only honest way to see it. -->
+          <div class="ci-seg" role="group" aria-label="Line count chart mode">
+            <button type="button" class="ci-seg-btn is-active" data-loc-mode="lines">Lines</button>
+            <button type="button" class="ci-seg-btn" data-loc-mode="change">Change</button>
+          </div>
+        </div>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-loc-chart"></div>
+          <div class="ci-tooltip" id="ci-loc-tooltip" hidden></div>
+        </div>
+        <div class="ci-legend" id="ci-loc-legend"></div>
+      </section>
+
+    </div>
+
+    <!-- ── Reports tab ───────────────────────────────────────────────── -->
+    <div class="ci-tab-panel" id="ci-panel-reports" role="tabpanel"
+         aria-labelledby="ci-tab-reports" hidden>
+
+      <section class="ci-tiles" id="ci-docs-tiles" aria-label="Open work summary"></section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Open plans and reports</h2>
+            <p class="ci-panel-sub" id="ci-docs-sub"></p>
+          </div>
+        </div>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-docs-chart"></div>
+          <div class="ci-tooltip" id="ci-docs-tooltip" hidden></div>
+        </div>
+        <div class="ci-legend" id="ci-docs-legend"></div>
+      </section>
+
+    </div>
 
   </div>
 

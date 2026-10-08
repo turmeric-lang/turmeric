@@ -64,6 +64,14 @@
   ```)
 ;;; vec-len -- return the number of elements in a Vec[A].
 ;;;
+;;; `#reads v` is the trusted claim that this body only READS the vector it is
+;;; handed.  It lets a refinement over `(vec-len v)` be treated as a function of
+;;; frozen state inside a `frozen` region, so a bounded-index loop invariant can
+;;; discharge.  A mutator (`vec-push!`, `vec-set-o!`, ...) deliberately carries
+;;; no such claim -- that asymmetry is how the frozen grant tells a reader from
+;;; a writer, since the SIGNATURE cannot: both take the vector by value.  See
+;;; docs/guides/stateful-refinements-guide.md.
+;;;
 ;;; Parameters:
 ;;;   v -- Vec[A] pointer
 ;;;
@@ -74,15 +82,17 @@
 ;;;   (vec-len my-vec)  ; => 3
 ;;;
 ;;; Since: Phase TC1
-
 (defn vec-len [A] [v : (Vec A)]
   #fx{}
+  #reads v
   : int
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   return (int)vec->len;
   ```)
 ;;; vec-get -- return the element at index i (bounds-checked).
+;;;
+;;; `#reads v` marks this a reader -- see the note on `vec-len`.
 ;;;
 ;;; Parameters:
 ;;;   v -- Vec[A] pointer
@@ -95,9 +105,9 @@
 ;;;   (vec-get my-vec 0)  ; => first element
 ;;;
 ;;; Since: Phase TC1
-
 (defn vec-get [A] [v : (Vec A) i :int]
   #fx{}
+  #reads v
   :A
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -119,6 +129,7 @@
 
 (defn vec-push! [A] [v : (Vec A) val :A]
   #fx{}
+  #writes v
   :nil
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -163,6 +174,7 @@
 
 (defn vec-pop! [A] [v : (Vec A)]
   #fx{}
+  #writes v
   :A
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -187,6 +199,7 @@
 
 (defn vec-drop-last-o! [A] [v : (Vec A) owned : int]
   #fx{}
+  #writes v
   :void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -250,6 +263,7 @@
 
 (defn vec-set-o! [A] [v : (Vec A) i :int val :A owned :int]
   #fx{}
+  #writes v
   :void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -351,6 +365,7 @@
 
 (defn vec-free-o [A] [v : (Vec A) owned : int]
   #fx{}
+  #writes v
   : void
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
@@ -524,7 +539,7 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn vec-eq? [v1 : int v2 : int ^borrow ^fat cmp-fn]
+(defn vec-eq? [A] [v1 : int v2 : int ^borrow ^fat cmp-fn : (fn [A A] bool)]
   #fx{}
   : bool
   ```c

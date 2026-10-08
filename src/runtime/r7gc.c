@@ -76,6 +76,12 @@
  *                        last collection, and the heap now and at its peak.
  *   TUR_GC_TORTURE=N     collect on every Nth allocation (1 = every one): the
  *                        test mode that turns a missing root into a crash.
+ *   TUR_GC_TORTURE_SCALE=R  with TUR_GC_TORTURE, stretch the interval to
+ *                        the live object count / R when that is longer, so
+ *                        a program holding a large structure is not
+ *                        re-marked every N allocations (quadratic in its
+ *                        size).  Small heaps keep the N interval.  Off (0)
+ *                        by default.
  *   TUR_GC_THRESHOLD=B   bytes allocated between collections (floor; default
  *                        8 MiB, raised to the live size after each one). */
 
@@ -173,6 +179,9 @@ typedef struct tur_gc_page {
     uint32_t  nchunks;    /* 1 for a small page */
     uint32_t  cls;        /* size class, or TUR_GC_NCLASS for large */
     uint32_t  used;       /* slots handed out so far (bump) */
+    uint64_t  inv;        /* 2^48 / size + 1: `(off * inv) >> 48` is `off / size`
+                           * for every offset in a chunk, without a divide
+                           * (tur_gc_slot_of).  0 for a large object. */
     uint64_t *alloc;      /* bit per slot: allocated (to the program, or to a thread's cache) */
     uint64_t *mark;       /* bit per slot: reached this collection */
     struct tur_gc_page *next;   /* every page, for the sweep */
@@ -252,6 +261,9 @@ typedef struct tur_gc_state {
     size_t     n_collect, freed_total;
     unsigned long torture;
     volatile unsigned long torture_count;
+    unsigned long torture_scale;       /* TUR_GC_TORTURE_SCALE; 0 = a fixed interval */
+    volatile unsigned long torture_due; /* torture_count at which the next one is due (scaled) */
+    size_t     live_objs;              /* objects kept by the last collection */
     bool       stats;
     /* threads */
     pthread_mutex_t world;             /* the registry; held by the collector for a collection */
@@ -472,6 +484,8 @@ static void tur_gc_init(void) {
     if ((e = getenv("TUR_GC_THRESHOLD")) && atol(e) > 0) G->floor = (size_t)atol(e);
     G->threshold = G->floor;
     if ((e = getenv("TUR_GC_TORTURE")) && atol(e) > 0) G->torture = (unsigned long)atol(e);
+    if ((e = getenv("TUR_GC_TORTURE_SCALE")) && atol(e) > 0) G->torture_scale = (unsigned long)atol(e);
+    G->torture_due = G->torture;
     G->stats = (e = getenv("TUR_GC_STATS")) && e[0] == '1';
     G->mstack_cap = 1u << 16;
     G->mstack = (uintptr_t *)tur_gc_os(G->mstack_cap * sizeof(uintptr_t));
@@ -557,6 +571,7 @@ static tur_gc_page *tur_gc_new_small(uint32_t cls) {
     pg->base = tur_gc_chunks(1);
     pg->size = tur_gc_class_size[cls];
     pg->nslots = (uint32_t)(TUR_GC_CHUNK / pg->size);
+    pg->inv = ((uint64_t)1 << 48) / pg->size + 1;
     pg->nchunks = 1;
     pg->cls = cls;
     size_t words = (pg->nslots + 63) / 64;
@@ -582,7 +597,8 @@ static void tur_gc_maybe_collect(void) {
     tur_gc_state *G = tur_gc_G;
     if (TUR_GC_LOAD(&G->off)) return;
     if (G->torture) {
-        if (__atomic_add_fetch(&G->torture_count, 1, __ATOMIC_RELAXED) % G->torture == 0)
+        unsigned long n = __atomic_add_fetch(&G->torture_count, 1, __ATOMIC_RELAXED);
+        if (G->torture_scale ? n >= TUR_GC_LOAD(&G->torture_due) : n % G->torture == 0)
             tur_gc_collect_now(false);
         return;
     }
@@ -688,6 +704,16 @@ static void *tur_gc_malloc(size_t n) {
     return n <= TUR_GC_MAXSMALL ? tur_gc_alloc_small(t, n) : tur_gc_alloc_large(n);
 }
 
+/* The slot `w` falls in on page `pg`.  A small page's offsets are below one
+ * chunk (2^16) and its sizes at most 2^15, so the reciprocal is exact: the
+ * error `off * (inv * size - 2^48) / 2^48` is under 2^-17, below the 1/size
+ * a quotient would need to be off by one.  tests/check-r7gc-slot-of.sh
+ * checks every class at every offset.  A large object has one slot. */
+static inline uint32_t tur_gc_slot_of(const tur_gc_page *pg, uintptr_t w) {
+    if (pg->nslots == 1) return 0;
+    return (uint32_t)(((uint64_t)(w - pg->base) * pg->inv) >> 48);
+}
+
 /* The object `p` points into, or NULL: its start, size, page and slot.
  * Under G->heap. */
 static bool tur_gc_find(uintptr_t w, uintptr_t *start, tur_gc_page **pgo, uint32_t *idxo) {
@@ -695,7 +721,7 @@ static bool tur_gc_find(uintptr_t w, uintptr_t *start, tur_gc_page **pgo, uint32
     if (w < G->lo || w >= G->hi) return false;
     tur_gc_page *pg = tur_gc_map_get(w >> 16);
     if (!pg || pg->dead) return false;
-    uint32_t idx = pg->nslots == 1 ? 0 : (uint32_t)((w - pg->base) / pg->size);
+    uint32_t idx = tur_gc_slot_of(pg, w);
     if (idx >= pg->nslots) return false;
     if (!(pg->alloc[idx / 64] & ((uint64_t)1 << (idx % 64)))) return false;
     *start = pg->base + (uintptr_t)idx * (pg->nslots == 1 ? 0 : pg->size);
@@ -783,9 +809,11 @@ static char *tur_gc_strndup(const char *s, size_t m) {
 
 /* ---- marking ------------------------------------------------------------ */
 
-static void tur_gc_push(uintptr_t start) {
+/* The mark stack holds (start, size) pairs, so the drain does not look the
+ * object's page up a second time. */
+static void tur_gc_push(uintptr_t start, uintptr_t size) {
     tur_gc_state *G = tur_gc_G;
-    if (G->mstack_n == G->mstack_cap) {
+    if (G->mstack_n + 2 > G->mstack_cap) {
         size_t nc = G->mstack_cap * 2;
         uintptr_t *ns = (uintptr_t *)tur_gc_os(nc * sizeof(uintptr_t));
         memcpy(ns, G->mstack, G->mstack_n * sizeof(uintptr_t));
@@ -793,22 +821,47 @@ static void tur_gc_push(uintptr_t start) {
         G->mstack = ns; G->mstack_cap = nc;
     }
     G->mstack[G->mstack_n++] = start;
+    G->mstack[G->mstack_n++] = size;
 }
 
+/* The mark phase's chunk -> page lookup, with the last chunk remembered:
+ * consecutive words of an object, and objects allocated together, mostly
+ * point into one chunk.  Valid for one collection only -- no page is made,
+ * released or reused while the world is stopped -- so tur_gc_collect_now
+ * clears it before marking. */
+static uintptr_t   tur_gc_mark_key = (uintptr_t)-1;
+static tur_gc_page *tur_gc_mark_pg;
+
 static void tur_gc_mark_word(uintptr_t w) {
-    uintptr_t start; tur_gc_page *pg; uint32_t idx;
-    if (!tur_gc_find(w, &start, &pg, &idx)) return;
+    tur_gc_state *G = tur_gc_G;
+    if (w < G->lo || w >= G->hi) return;
+    uintptr_t key = w >> 16;
+    tur_gc_page *pg;
+    if (key == tur_gc_mark_key) pg = tur_gc_mark_pg;
+    else { pg = tur_gc_map_get(key); tur_gc_mark_key = key; tur_gc_mark_pg = pg; }
+    if (!pg || pg->dead) return;
+    uint32_t idx = tur_gc_slot_of(pg, w);
+    if (idx >= pg->nslots) return;
     uint64_t bit = (uint64_t)1 << (idx % 64);
-    if (pg->mark[idx / 64] & bit) return;
+    if (!(pg->alloc[idx / 64] & bit) || (pg->mark[idx / 64] & bit)) return;
     pg->mark[idx / 64] |= bit;
-    tur_gc_push(start);
+    tur_gc_push(pg->base + (uintptr_t)idx * (pg->nslots == 1 ? 0 : pg->size), pg->size);
 }
 
 TUR_GC_NOASAN static void tur_gc_scan(const void *p, size_t n) {
     uintptr_t a = ((uintptr_t)p + sizeof(uintptr_t) - 1) & ~(uintptr_t)(sizeof(uintptr_t) - 1);
     uintptr_t e = (uintptr_t)p + n;
-    for (; a + sizeof(uintptr_t) <= e; a += sizeof(uintptr_t))
-        tur_gc_mark_word(*(const volatile uintptr_t *)a);
+    /* The heap's bounds do not move while the world is stopped (marking
+     * allocates its stack with tur_gc_os, never on the heap), so read them
+     * once.  Almost no word of a large root range -- the data segment of a
+     * program that links libturi is ~46 MB in Debug -- is a heap address, and
+     * testing it in the loop rather than behind tur_gc_mark_word's own check
+     * keeps the call and the two reloads per word off that path. */
+    const uintptr_t lo = tur_gc_G->lo, span = tur_gc_G->hi - lo;
+    for (; a + sizeof(uintptr_t) <= e; a += sizeof(uintptr_t)) {
+        uintptr_t w = *(const volatile uintptr_t *)a;
+        if (w - lo < span) tur_gc_mark_word(w);
+    }
 }
 
 static void tur_gc_scan_cb(const void *p, size_t n, void *ud) { (void)ud; tur_gc_scan(p, n); }
@@ -816,9 +869,9 @@ static void tur_gc_scan_cb(const void *p, size_t n, void *ud) { (void)ud; tur_gc
 TUR_GC_NOASAN static void tur_gc_drain(void) {
     tur_gc_state *G = tur_gc_G;
     while (G->mstack_n) {
+        uintptr_t size  = G->mstack[--G->mstack_n];
         uintptr_t start = G->mstack[--G->mstack_n];
-        tur_gc_page *pg = tur_gc_map_get(start >> 16);
-        tur_gc_scan((const void *)start, pg->size);
+        tur_gc_scan((const void *)start, size);
     }
 }
 
@@ -1070,31 +1123,45 @@ TUR_GC_NOASAN static void tur_gc_collect_now(bool if_due) {
         if (pg->dead) continue;
         memset(pg->mark, 0, ((pg->nslots + 63) / 64) * 8);
     }
+    tur_gc_mark_key = (uintptr_t)-1;   /* pages may have changed since the last collection */
+    tur_gc_mark_pg  = NULL;
     tur_gc_mark_roots();
     tur_region_registry_unlock();
     /* Sweep: rebuild every free list from the slots nobody reached. */
     for (int c = 0; c < TUR_GC_NCLASS; c++) G->freelist[c] = NULL;
-    size_t live = 0, freed = 0;
+    size_t live = 0, freed = 0, live_objs = 0;
     for (tur_gc_page *pg = G->pages; pg; pg = pg->next) {
         if (pg->dead) continue;
         if (pg->cls == TUR_GC_NCLASS) {
-            if (pg->mark[0]) live += pg->size;
+            if (pg->mark[0]) { live += pg->size; live_objs++; }
             else { freed += pg->size; tur_gc_release_large(pg); }
             continue;
         }
-        for (uint32_t i = 0; i < pg->used; i++) {
-            uint64_t bit = (uint64_t)1 << (i % 64);
-            void *slot = (void *)(pg->base + (uintptr_t)i * pg->size);
-            if (pg->alloc[i / 64] & bit) {
-                if (pg->mark[i / 64] & bit) { live += pg->size; continue; }
-                pg->alloc[i / 64] &= ~bit;
-                freed += pg->size;
+        /* A bitmap word at a time: the kept slots are allocated AND marked,
+         * every other slot carved so far goes on the free list, lowest
+         * first, as the slot-by-slot loop this replaced pushed them. */
+        for (uint32_t w = 0; (size_t)w * 64 < pg->used; w++) {
+            uint32_t n = pg->used - w * 64;
+            uint64_t carved = n >= 64 ? ~(uint64_t)0 : (((uint64_t)1 << n) - 1);
+            uint64_t a = pg->alloc[w], keep = a & pg->mark[w];
+            live_objs += (size_t)__builtin_popcountll(keep);
+            live  += (size_t)__builtin_popcountll(keep) * pg->size;
+            freed += (size_t)__builtin_popcountll(a & ~keep) * pg->size;
+            pg->alloc[w] = keep;
+            for (uint64_t f = carved & ~keep; f; f &= f - 1) {
+                void *slot = (void *)(pg->base + ((uintptr_t)w * 64 + (uintptr_t)__builtin_ctzll(f)) * pg->size);
+                *(void **)slot = G->freelist[pg->cls];
+                G->freelist[pg->cls] = slot;
             }
-            *(void **)slot = G->freelist[pg->cls];
-            G->freelist[pg->cls] = slot;
         }
     }
     G->live = live;
+    G->live_objs = live_objs;
+    if (G->torture_scale) {
+        unsigned long iv = (unsigned long)(live_objs / G->torture_scale);
+        if (iv < G->torture) iv = G->torture;
+        TUR_GC_STORE(&G->torture_due, TUR_GC_LOAD(&G->torture_count) + iv);
+    }
     G->freed_total += freed;
     G->n_collect++;
     TUR_GC_STORE(&G->since, 0);
@@ -1263,6 +1330,67 @@ static void tur_gc_thread_end(tur_gc_thread *t, void *r) {
     t->n_tls = 0;                        /* its thread-locals die with it */
     pthread_mutex_unlock(&G->world);
     tur_gc_self = NULL;
+}
+
+/* Moving a running program to another thread: the record GOES WITH it.
+ * r7rs-deep-recursion-segfaults-silently runs a program's main on a
+ * big-stack thread (emit_module.c, emit_deep_stack_runtime).  The thread
+ * that ran static init keeps what it set there -- its thread-locals and its
+ * pthread_setspecific values -- and the collector found those through its
+ * record.  Retiring the record (the first version) dropped them as roots:
+ * fine on Linux, a use-after-free under torture on macOS
+ * (r7rs-sicp-metacircular-evaluator and r7rs-srfi-35 exited 139, an
+ * address-dependent crash that did not reproduce with ASLR off).
+ *
+ * tur_gc_hand_over, on the old thread before it starts the new one: the old
+ * thread's record, which it stops naming as its own; it touches the heap no
+ * more.  tur_gc_take_over, first thing on the new thread: the record now
+ * names this thread and this stack, and this thread's thread-locals join the
+ * old thread's as roots (which stay: the old thread is alive, parked in a
+ * join, and they may hold what static init made).  One record, so a count of
+ * the program's threads does not change.  Other threads can collect between
+ * the two calls -- a module init may already have started workers
+ * (r7rs-threads-share hung here under torture) -- so the record is parked
+ * for the window, as a thread blocked in a join would be.  The new thread is
+ * started with the UNWRAPPED pthread_create (no record of its own) and the
+ * old one waits in the unwrapped join (the wrapped one parks, which needs a
+ * record). */
+/* The unwrapped pthread_create, for the thread take_over moves a record to:
+ * `pthread_create` is an object-like macro below, so a caller cannot reach
+ * libc's by parenthesising the name the way it can `(pthread_join)`. */
+static __attribute__((unused)) int tur_gc_raw_pthread_create(pthread_t *tp, const pthread_attr_t *a,
+                                                             void *(*fn)(void *), void *arg) {
+    return pthread_create(tp, a, fn, arg);
+}
+/* The caller parks first (tur_gc_park, in the frame that then waits in the
+ * join), so a collection in the window leaves the record alone and scans
+ * what the park spilled.  Clearing `tur_gc_self` under `world` keeps a stop
+ * signal sent before the park was seen from landing on a thread whose
+ * handler no longer knows its record, which would never acknowledge it. */
+static __attribute__((unused)) void *tur_gc_hand_over(void) {
+    tur_gc_state *G = tur_gc_G;
+    tur_gc_thread *t = tur_gc_self;
+    if (!G || !t) return t;
+    pthread_mutex_lock(&G->world);
+    tur_gc_self = NULL;
+    pthread_mutex_unlock(&G->world);
+    return t;
+}
+static __attribute__((unused)) void tur_gc_take_over(void *raw) {
+    tur_gc_state *G = tur_gc_G;
+    tur_gc_thread *t = (tur_gc_thread *)raw;
+    if (!G || !t) return;
+    unsigned char *base = tur_gc_stack_base_here();
+    pthread_mutex_lock(&G->world);
+    t->tid = pthread_self();
+    t->has_tid = true;
+    t->stack_base = base;
+    if (!base) TUR_GC_STORE(&G->off, true);   /* a stack it cannot see: keep everything */
+    t->park_depth = 0;                        /* the hand-over's park ends here */
+    TUR_GC_STORE(&t->parked, 0);
+    tur_gc_self = t;
+    tur_rt_tls_roots(tur_gc_add_tls_root);
+    pthread_mutex_unlock(&G->world);
 }
 
 /* Every OS thread the unit starts runs on this trampoline: it records its

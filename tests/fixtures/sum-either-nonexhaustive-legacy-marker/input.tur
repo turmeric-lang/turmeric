@@ -1,0 +1,16 @@
+; effect-row-honesty-plan W0: the match opt-out used to be spelled
+; #fx{NonExhaustive}, an attribute borrowing the effect-row brackets.  It is
+; ^non-exhaustive now (sum-either-nonexhaustive-opt-out), and the old spelling
+; is still accepted -- it still opts out -- with TUR-D0004 pointing at the new
+; one.
+(defdata Either :copy [L R]
+  (Left L)
+  (Right R))
+
+(defn only-right [e : int] : int
+  (match #fx{NonExhaustive} e
+    (Right r) r))
+
+(defn main [] : int
+  (println (only-right (Right 88)))
+  0)

@@ -97,9 +97,9 @@ defdata Shape
 defn area [s] :int
   match s
     (Circle r)
-    (* r r)
+    {r * r}
     (Rect w h)
-    (* w h)
+    {w * h}
 ```
 
 Pattern matching is exhaustiveness-checked. If you omit a constructor the
@@ -147,7 +147,7 @@ shared range bounds):
 
 This is exactly the `Bound` GADT that backs `stdlib/range.tur`'s internal
 endpoint representation -- `Inclusive` / `Exclusive` / `Unbounded` range
-bounds (see [`range-gadt-typeclass-migration-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/range-gadt-typeclass-migration-plan.md)).
+bounds (see [`range-gadt-typeclass-migration-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/range-gadt-typeclass-migration-plan.md)).
 
 GADT support is on by default, so no flag is needed. (Passing the legacy
 `-Xgadt` flag still works but prints a deprecation notice.)
@@ -167,7 +167,7 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
 ```
 
 ---
@@ -259,7 +259,7 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
 
 defn main [] :int
   println(color-to-int((Red)))
@@ -301,9 +301,9 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
     (Mul l r)
-    *(eval-expr(l) eval-expr(r))
+    {eval-expr(l) * eval-expr(r)}
 
 defn main [] :int
   ; (2 + (3 * 4)) = 14
@@ -403,7 +403,7 @@ defn classify [s] :int
   match s
     (Pos n)
     when
-    >(n 100)
+    {n > 100}
     do
       println("big")
       0
@@ -711,9 +711,9 @@ defn eval-expr [e] :int
     (Lit n)
     n
     (Add l r)
-    +(eval-expr(l) eval-expr(r))
+    {eval-expr(l) + eval-expr(r)}
     (Mul l r)
-    *(eval-expr(l) eval-expr(r))
+    {eval-expr(l) * eval-expr(r)}
 
 ; Equality witness
 defgadt Equal [a b]
@@ -742,5 +742,5 @@ defn show-type [x : any] :int
   that enables GADT skolem propagation
 - [hkt-guide.md](hkt-guide.md) -- Higher-kinded types; used by `equal-cong`
   and polymorphic GADT indices
-- [`tests/fixtures/gadt-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Working GADT examples
-- [`tests/fixtures/union-types-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing examples
+- [`tests/fixtures/gadt-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- Working GADT examples
+- [`tests/fixtures/union-types-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- Union type and gradual typing examples

@@ -1,0 +1,36 @@
+;; println-io-row -- effect-row-honesty-plan W4: what #fx{IO} on `println`
+;; allows.  Nothing here needs a load: IO is compiler-known (W2).
+;;
+;;   - unannotated code that prints is unchecked, as ever;
+;;   - #fx{IO} admits printing, and covers an FS callee (FS ^extends IO);
+;;   - a row-polymorphic HOF that prints keeps #fx{e}: a capability tag is not
+;;     what flows through the row variable;
+;;   - a Write clause over a body that only prints is still reported
+;;     unreachable (TUR-W0033, expected.stderr).  Write ^extends IO here, and
+;;     IO in the body's row is a tag, not a perform -- it must not make the
+;;     clause look reachable.
+
+(defeffect Write [s :cstr] :nil ^extends IO)
+
+(defn plain [] : int
+  (do (println "plain") 1))
+
+(defn read-config [] #fx{FS} : int 2)
+
+(defn loud [] #fx{IO} : int
+  (do (println "loud") (read-config)))
+
+(defn each-twice [f : (fn [int] #fx{e} int)] #fx{e} : int
+  (do (println "twice")
+      (+ (f 10) (f 20))))
+
+(defn quiet [] : int
+  (handle
+    (do (println "only prints") 0)
+    (Write [s] k) (resume k nil)))
+
+(defn main [] : int
+  (println (+ (plain) (loud)))
+  (println (each-twice (fn [x : int] : int (* x 2))))
+  (println (quiet))
+  0)

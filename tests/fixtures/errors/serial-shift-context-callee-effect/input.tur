@@ -1,0 +1,23 @@
+;; TUR-E0706: an effect performed by a serial-shift CONTEXT callee.
+;;
+;; `page2` is a frame of the captured continuation, so it runs when the
+;; continuation is RESUMED, not when it is captured -- possibly in another
+;; process, from bytes.  Which handlers its `perform` should reach is a
+;; question about what a marshalled continuation's effects mean (the
+;; resumer's? the capturer's?), not a lowering gap, so the shape stays refused
+;; until that is decided (serial-receiver-effect-under-if-closure-or-leaf,
+;; shape 3).  `tur --interpret` runs it (42).
+;;
+;; This directory used to pin shape 1 -- an escaping RECEIVER effect under an
+;; `if` in the context -- which compiles now
+;; (serial-shift-receiver-effect-under-if).
+
+(load "stdlib/serial.tur")
+(defeffect Ask [] :int)
+(defn page2 [env : cstr hole : int] : int (+ hole (perform (Ask))))
+(defn recv [k : serial-cont] : int (k 1))
+(defn run [] : int
+  (serial-reset (page2 "" (serial-shift recv 0))))
+(defn main [] : int
+  (println (handle (run) (Ask [] r) (resume r 41)))
+  0)

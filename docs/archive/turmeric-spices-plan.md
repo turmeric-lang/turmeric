@@ -12,7 +12,7 @@
 ## Overview
 
 `turmeric-spices` is the official monorepo of first-party spices for the
-Turmeric ecosystem. It lives at `https://github.com/rjungemann/turmeric-spices`
+Turmeric ecosystem. It lives at `https://github.com/turmeric-lang/turmeric-spices`
 and is organized as a workspace -- each subdirectory under `spices/` is a
 self-contained package with its own `build.tur`.
 
@@ -62,7 +62,7 @@ Consumers pin to the monorepo URL with a `:subdir` key:
 
 ```turmeric
 :spices {
-  "sqlite" {:url    "https://github.com/rjungemann/turmeric-spices"
+  "sqlite" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "sqlite-v0.1.0"
             :subdir "spices/sqlite"}
 }
@@ -173,7 +173,7 @@ spices/math/src/
   :description "2D/3D vector and matrix math for Turmeric"
   :license     "MIT"
   :spices {
-    "test" {:url    "https://github.com/rjungemann/turmeric-spices"
+    "test" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "test-v0.1.0"
             :subdir "spices/test"
             :optional true}
@@ -241,7 +241,7 @@ spices/sqlite/src/
   :description "SQLite3 bindings for Turmeric"
   :license     "MIT"
   :spices {
-    "test" {:url    "https://github.com/rjungemann/turmeric-spices"
+    "test" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "test-v0.1.0"
             :subdir "spices/test"
             :optional true}
@@ -323,10 +323,10 @@ spices/raylib/src/
   :description "Raylib graphics and input bindings for Turmeric"
   :license     "MIT"
   :spices {
-    "math" {:url    "https://github.com/rjungemann/turmeric-spices"
+    "math" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "math-v0.1.0"
             :subdir "spices/math"}
-    "test" {:url    "https://github.com/rjungemann/turmeric-spices"
+    "test" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "test-v0.1.0"
             :subdir "spices/test"
             :optional true}
@@ -499,7 +499,7 @@ spices/http/src/
   :description "Async HTTP/HTTPS client for Turmeric (async_socket + mbedTLS)"
   :license     "MIT"
   :spices {
-    "json" {:url    "https://github.com/rjungemann/turmeric-spices"
+    "json" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "json-v0.1.0"
             :subdir "spices/json"
             :optional true}
@@ -575,7 +575,7 @@ spices/regex/src/
   :description "PCRE2 regular expression bindings for Turmeric"
   :license     "MIT"
   :spices {
-    "test" {:url    "https://github.com/rjungemann/turmeric-spices"
+    "test" {:url    "https://github.com/turmeric-lang/turmeric-spices"
             :ref    "test-v0.1.0"
             :subdir "spices/test"
             :optional true}

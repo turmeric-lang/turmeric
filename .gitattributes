@@ -29,3 +29,9 @@
 # Fuzz seeds are byte-exact inputs: the HTTP and LSP ones exist to carry
 # CRLF framing, which end-of-line normalization would destroy.
 tests/fuzz/seeds/** -text
+
+# The vendored MIR sources (tools/update-mir.sh) are third-party code: kept
+# byte-identical to the fork commit external/mir/UPSTREAM names (-text: no eol
+# conversion -- one upstream header is CRLF, and a normalized copy would differ
+# from the fork on every re-sync), and out of GitHub's language statistics.
+external/mir/** -text linguist-vendored

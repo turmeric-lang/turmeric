@@ -307,8 +307,14 @@ static TuriValue host_value(int64_t host_id) {
         g_caphosts = cap;
     }
     if (!g_host_set[h]) {
-        char name[64];
-        snprintf(name, sizeof name, "r7rs-host-procedure-%lld__", (long long)host_id);
+        /* The global binding keeps its NAME pointer for the env's lifetime, so
+         * the name lives in the env's symbol arena, not on this stack frame: a
+         * stack buffer here was read back by a later lookup that probed this
+         * binding's slot (ASan stack-buffer-overflow under `tur jit`). */
+        char buf[64];
+        int len = snprintf(buf, sizeof buf, "r7rs-host-procedure-%lld__", (long long)host_id);
+        char *name = (char *)arena_alloc(&g_env->sym_arena, (size_t)len + 1);
+        memcpy(name, buf, (size_t)len + 1);
         turi_env_register_native(g_env, name, host_native, (void *)(intptr_t)host_id);
         TuriValue native = turi_env_get(g_env, name);
         TuriValue wrapped = embed_call(g_host_wrap, &native, 1);

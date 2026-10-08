@@ -72,7 +72,7 @@ defn main [] :int
 load("stdlib/list.tur")
 
 defn print-args [args :int] :void
-  when not(=(args 0))
+  when not({args = 0})
     do
       println (:: list-head(args) :cstr)
       print-args(list-tail(args))

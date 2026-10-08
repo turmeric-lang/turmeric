@@ -13,7 +13,7 @@
 > `516bf0b` sat on an unmerged branch for a month, so the repo's `main` still
 > carried the bug and archiving would have claimed a fix that had not shipped.
 > It landed with
-> [turmeric-godot#1](https://github.com/rjungemann/turmeric-godot/pull/1)
+> [turmeric-godot#1](https://github.com/turmeric-lang/turmeric-godot/pull/1)
 > on 2026-09-07 -- which is also the first CI run that repo ever passed, on all
 > four platforms. See step 4 of
 > [godot-binding-refresh-plan.md](godot-binding-refresh-plan.md).

@@ -12,8 +12,9 @@
 (defn run-write [] #fx{Write} : nil
   (perform (Write "hello from write")))
 
-;;; run-fail-handled -- performs Fail but handles it locally.
-(defn run-fail-handled [] #fx{} : nil
+;;; run-fail-handled -- performs Fail but handles it locally.  The handler
+;;; prints, so the row is #fx{IO}, not #fx{} (W4: `println` is #fx{IO}).
+(defn run-fail-handled [] #fx{IO} : nil
   (handle
     (perform (Fail "oops"))
     (Fail [msg] k) (println msg)))

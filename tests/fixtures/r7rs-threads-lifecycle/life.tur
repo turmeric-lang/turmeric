@@ -67,6 +67,23 @@
     arg)
   (defn life-forks [n : int b : ptr<void> c : ptr<void>] : int
     ```c
+#ifdef TUR_JIT_HOST_ASAN
+    /* The burner below holds ASan's allocator lock while these children
+     * fork, and a child that inherits it held deadlocks on its next malloc
+     * and dies of its own alarm(5) -- counted as a failure that is not one.
+     * ASan's allocator is not fork-safe; glibc's is, so the compiled path
+     * and a Release JIT still run the check below.
+     * docs/archive/jit-fork-child-inherits-asan-allocator-lock.md.
+     *
+     * Reported 55/306 of the ubuntu JIT leg's commits before this skip, all
+     * absorbed by that leg's continue-on-error
+     * (docs/archive/jit-linux-leg-failures-absorbed.md).
+     *
+     * Narrower than the skip this fixture carried before the g_gen_lock fix,
+     * which was on TUR_JIT_ENGINE and so covered every JIT run. */
+    (void)b; (void)c; (void)n;
+    return 0;
+#else
     int fails = 0;
     pthread_mutex_lock(&life_mu); life_burning = 1; pthread_mutex_unlock(&life_mu);
     if (pthread_create(&life_burner_tid, NULL, (void *(*)(void *))b, NULL) != 0) abort();
@@ -84,6 +101,7 @@
     pthread_mutex_lock(&life_mu); life_burning = 0; pthread_mutex_unlock(&life_mu);
     pthread_join(life_burner_tid, NULL);
     return fails;
+#endif
     ```)
   (defn life-fork-run [n : int] : int
     (life-forks n life-burner life-child))

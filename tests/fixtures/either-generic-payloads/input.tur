@@ -1,0 +1,18 @@
+;; stdlib-int-stand-in-audit S3: either.tur is generic in the option.tur /
+;; result.tur idiom -- (Either L R) all the way through -- so a cstr / float
+;; Either carries its payloads, and a map over an open (Left 9) grounds.
+;; Under the old `e : int` signatures a float payload was TUR-E0001.
+(load "stdlib/either.tur")
+(defn inc [x : int] : int (+ x 1))
+(defn main [] : int
+  (println (from-right -1 (fmap (Right 41) inc)))
+  (println (from-right -1 (either-map inc (Left 9))))
+  (println (from-left -1 (either-map inc (Left 9))))
+  (let [e : (Either cstr float) (Right 7.25)
+        g : (Either cstr float) (Left "bad")]
+    (println (from-right 0.5 e))
+    (println (from-left "none" g))
+    (println (from-right 0.5 (either-map (fn [x : float] : float (* x 2.0)) e)))
+    (println (either (fn [s : cstr] : int 0) (fn [x : float] : int 1) e))
+    (println (left? g)))
+  0)

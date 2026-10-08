@@ -23,19 +23,21 @@ dialects, before it believes a clean one.
 
 Usage: saffron-diagnostics.py [path-to-tur]   ($TUR, else build/tur[.exe])
 """
-import json
 import os
 import subprocess
 import sys
-import threading
-import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from jsonrpc_probe import (drain, frame, iter_frames, settle,  # noqa: E402
+                           start_reader)
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-# Analysis runs a full compile of the buffer; on a loaded box that is not
-# instant. Generous rather than tight: a timeout here would read as "no
-# diagnostics", which is the exact failure this file exists to avoid.
-SETTLE_SECONDS = float(os.environ.get("TUR_LSP_SETTLE", "15"))
+# How long to allow the server to finish and be read, NOT a settle time: the
+# analysis is ordered before the exit rather than waited out (jsonrpc_probe).
+# $TUR_LSP_SETTLE still raises it, since a loaded box can take longer to run the
+# compile this triggers -- it just no longer costs 15s when it does not.
+WAIT_SECONDS = float(os.environ.get("TUR_LSP_SETTLE", "30"))
 
 
 def find_tur():
@@ -54,25 +56,12 @@ def find_tur():
 TUR = find_tur()
 
 
-def frame(obj):
-    body = json.dumps(obj).encode("utf-8")
-    return b"Content-Length: %d\r\n\r\n%s" % (len(body), body)
-
-
 def diagnostics_for(text, path):
     """Open `text` as `path` in a live server and return the last published set."""
     p = subprocess.Popen([TUR, "lsp"], stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    buf = bytearray()
-
-    def reader():
-        while True:
-            c = p.stdout.read(1)
-            if not c:
-                break
-            buf.extend(c)
-
-    threading.Thread(target=reader, daemon=True).start()
+    buf, reader = start_reader(p)
+    uri = "file://" + path
 
     for msg in ({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                  "params": {"processId": None, "rootUri": None,
@@ -80,12 +69,16 @@ def diagnostics_for(text, path):
                 {"jsonrpc": "2.0", "method": "initialized", "params": {}},
                 {"jsonrpc": "2.0", "method": "textDocument/didOpen",
                  "params": {"textDocument": {
-                     "uri": "file://" + path, "languageId": "turmeric",
+                     "uri": uri, "languageId": "turmeric",
                      "version": 1, "text": text}}}):
         p.stdin.write(frame(msg))
         p.stdin.flush()
 
-    time.sleep(SETTLE_SECONDS)
+    # Forces the deferred analysis, which publishes before this is answered.
+    # Must come BEFORE shutdown/exit: the server handles one message at a time,
+    # so the flush and its notification are written while the process is still
+    # alive. on_shutdown does not flush, so this request is what does the work.
+    settle(p, uri)
 
     try:
         p.stdin.write(frame({"jsonrpc": "2.0", "id": 2,
@@ -95,28 +88,10 @@ def diagnostics_for(text, path):
         p.stdin.flush()
     except Exception:
         pass
-    try:
-        p.wait(timeout=30)
-    except Exception:
-        p.kill()
+    drain(p, reader, WAIT_SECONDS)
 
-    out = bytes(buf)
     published = []
-    while out:
-        head, sep, rest = out.partition(b"\r\n\r\n")
-        if not sep:
-            break
-        length = None
-        for line in head.split(b"\r\n"):
-            if line.lower().startswith(b"content-length:"):
-                length = int(line.split(b":", 1)[1].strip())
-        if length is None:
-            break
-        body, out = rest[:length], rest[length:]
-        try:
-            obj = json.loads(body.decode("utf-8"))
-        except Exception:
-            continue
+    for obj in iter_frames(bytes(buf)):
         if obj.get("method") == "textDocument/publishDiagnostics":
             published.append(obj["params"].get("diagnostics", []))
     return published

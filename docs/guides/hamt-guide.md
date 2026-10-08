@@ -384,4 +384,4 @@ def config hamt/merge(defaults user-config)
 - [C Integration Guide](c-integration-guide.md) -- Passing C function pointers and inline C
 - [Threading Guide](threading-guide.md) -- Sharing immutable HAMTs across threads safely
 - [STM Guide](stm-guide.md) -- Storing HAMTs inside TVars for concurrent updates
-- [src/runtime/hamt.h](https://github.com/rjungemann/turmeric/blob/main/src/runtime/hamt.h) -- Full C API with inline documentation
+- [src/runtime/hamt.h](https://github.com/turmeric-lang/turmeric/blob/main/src/runtime/hamt.h) -- Full C API with inline documentation

@@ -1,4 +1,7 @@
-;; Phase 15: Typeclass method with effect-row annotation (#{} advisory, ignored in v1)
+;; Phase 15: Typeclass method with an effect-row annotation.  `Write` is
+;; declared here: an undeclared name in #fx{...} is TUR-E0026 (it used to be
+;; dropped silently, which is how this file's row was empty for so long).
+(defeffect Write [s :cstr] :nil)
 
 (defclass IOShow [a]
   (io-show [x] #fx{Write} : cstr))

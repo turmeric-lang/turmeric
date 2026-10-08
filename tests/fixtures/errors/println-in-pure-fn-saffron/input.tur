@@ -1,0 +1,8 @@
+#lang saffron
+;; println-in-pure-fn-saffron -- W4 through Saffron's dynamic dispatch: a
+;; `println` of an `any` value is a dynamic operator node, not a typed builtin
+;; call, and it carries the same #fx{IO}.
+
+(defn show-it [x] #fx{} (println x))
+
+(defn main [] (show-it 7) 0)

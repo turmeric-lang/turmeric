@@ -1,0 +1,23 @@
+;; word-result-fn-into-nil-slot, cause 2: a WRITTEN `: void` / `: nil` makes
+;; the defn void -- the body runs for its effect and its last value is
+;; dropped.  It used to win over the annotation: `noop` below was emitted
+;; `static int64_t noop(int64_t)` and typed `(fn [int] int)`, so it could not
+;; be passed where a `(fn [int] nil)` is expected without being called through
+;; the wrong C function type.
+(defn noop [x : int] : void
+  (let [_ x] 0))
+
+(defn bump [x : int] : nil
+  (println (+ x 1))
+  (+ x 2))
+
+(defn run-it [^fat body : (fn [int] nil)] : nil
+  (body 3))
+
+(defn main [] : int
+  (noop 1)
+  (bump 1)
+  (run-it noop)
+  (run-it bump)
+  (println 7)
+  0)

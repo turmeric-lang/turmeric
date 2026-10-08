@@ -10,7 +10,7 @@ description: `#refine{ x : T | p }` predicates the compiler tries to prove stati
 > experiment gate is gone). No flag is needed.
 > See [contract-types-guide.md](contract-types-guide.md) for the runtime half,
 > and
-> [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md)
+> [../archive/refinement-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refinement-types-plan.md)
 > for the design.
 
 Contract types (`#refine{ x : T | p }`) check their predicate at **runtime**.
@@ -682,7 +682,7 @@ only after the compiler shows the function
   subterm of such. `(f (- n 1))` rejects by design, as does mutual recursion
   and a call through a variable;
 - **covered** -- every `match` is proven exhaustive. ADT and union
-  scrutinees already are (compiling implies it); a `#{NonExhaustive}`
+  scrutinees already are (compiling implies it); a `^non-exhaustive`
   opt-out or a literal-scrutinee `match` with no `_`/variable arm rejects,
   and so does any form the walk does not positively recognise (macros,
   lambdas, `panic`, loops, `set!`).
@@ -704,7 +704,7 @@ its own equation. `(> (len (Cons 1 (Cons 2 (Cons 3 (Nil))))) 3)` is
 is ignored and the measure stays opaque. The plan, with what the first cut
 settled and what is still open (non-ground unfolding, counterexamples
 through a reflected measure), is
-[reflected-measures-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
+[reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
 (the docs pack carries guides, not plans, so the link is by URL).
 
 ---
@@ -749,10 +749,6 @@ A refinement alias takes no type parameters in this prototype.
 
 ## Loop invariants: `(while c :invariant p ...)`
 
-> **Experimental** -- `--enable=loop-invariants` (TUR-W0060 names the plan).
-> Without the flag the annotation still parses and is validated, and nothing
-> acts on it.
-
 A value a `while` loop builds cannot satisfy a refinement on its own: the
 solver does not infer what a loop does, and never will (the same *checking,
 not inference* rule as everywhere else here). You can **write** what the loop
@@ -770,7 +766,9 @@ maintains:
 
 `:invariant` goes directly after the condition, at most once (combine
 predicates with `and`). It must be a pure `bool` -- the same purity gate as any
-contract predicate (`TUR-E0375`).
+contract predicate (`TUR-E0375`). A `#reads` measure passes that gate, so an
+invariant can mention a container's length, as `(<= i (vlen v))`. It is
+runtime-checked: the analysis does not prove one yet.
 
 **It is a contract first.** The invariant is checked on entry and again as the
 last statement of every iteration; a failure panics with
@@ -829,9 +827,24 @@ variables the analysis cannot see is reported (`TUR-W0372`, `is not analysed sta
 both checks:
 
 - an assignment through a place (`(set! (.f s) v)`) or to an atom;
-- an early exit (`return`, `?`, a captured continuation) -- `(not c)` would
-  not hold on that path;
-- a nested loop that assigns, or a body `let` that rebinds a name in scope;
+- an early exit other than `return` (`?`, a captured continuation), a
+  `return` in a nested loop, or one the body composer cannot place (inside a
+  call's argument, a `match` arm);
+- a body `let` that rebinds a name in scope, or a nested loop whose assigned
+  name is read after it (its value there is unknown).
+
+Two shapes look like they should decline and do not:
+
+- **A nested loop is havocked, not declined.** Nothing it assigns has a
+  known value afterwards, but that only matters to code that reads one of
+  those names again. An inner counter (`(let [^mut j 0] (while ...))`) costs
+  nothing. An outer name it assigns leaves only the conjuncts that mention
+  that name unproved.
+- **A `return` in the body is pruned.** The paths through it leave the
+  function, so they owe no re-establishment, and initiation and preservation
+  are still proved. Only the post-loop fact `p AND (not c)` is withheld from
+  the code after the loop, because the condition may still hold where the
+  body returned.
 - a variable the loop depends on that is **borrowed** anywhere in the function
   (`(& x)`, `&mut x` -- a callee can write through it), or **assigned inside a
   lambda or an effect-handler clause** (a call can then change it with no
@@ -840,7 +853,7 @@ both checks:
 
 Termination is not part of any of this: a loop that never ends with a true
 invariant is perfectly well-typed. See
-[docs/upcoming/loop-invariants-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md).
+[docs/archive/loop-invariants-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/loop-invariants-plan.md).
 
 ## The solver
 
@@ -887,6 +900,12 @@ note: the predicate (> r 0) does not hold for every input here
 note: counterexample: x = -2
 help: (> x 0) would discharge it -- e.g. declare x : #refine{ v : int | (> v 0) }
 ```
+
+That predicate note is a claim against your code, so it appears only on a
+refutation, where a counterexample exists. An unknown (`TUR-W0372`) gets a
+different note instead: `the predicate ... could not be proved here, which is
+not evidence that it fails`. The solver declining to decide says nothing about
+whether the code is right.
 
 The `help:` line is **not a heuristic**. It is a second query through the same
 solver seam: a candidate fact is asserted as a hypothesis and the chain is
@@ -1075,7 +1094,7 @@ anyway.
   witness it reports is one the program would reject; it is the proving side
   that is optimistic. Fix directions, and the one consistent with the
   soundness invariant, are in
-  [`docs/reported/float-proofs-assume-exact-reals.md`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/float-proofs-assume-exact-reals.md).
+  [`docs/reported/float-proofs-assume-exact-reals.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/float-proofs-assume-exact-reals.md).
   Until it is resolved, read a proved float refinement as a claim over reals.
 - **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
@@ -1109,7 +1128,7 @@ anyway.
   is the implementation that will actually run. `TUR-W0377` marks a call that
   depends on that leniency; it is a warning rather than an error because the
   call is correct for the instance it resolved to. See
-  [docs/archive/class-param-refinement-not-demanded-of-callers.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/class-param-refinement-not-demanded-of-callers.md)
+  [docs/archive/class-param-refinement-not-demanded-of-callers.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/class-param-refinement-not-demanded-of-callers.md)
   for why that reading was chosen over making the class signature binding on
   callers.
 - **[by design] An argument that cannot be PROVED is not an error; one that is DEFINITELY
@@ -1158,17 +1177,26 @@ anyway.
   than soundness -- the callee's own entry check always remains:
   a caller whose body **assigns** anywhere (a condition naming a reassigned
   variable may no longer hold at the call); a **constructor tag or field
-  selector**, since those arrive with pattern binders; a `let` that binds a
-  **function**, which is not an arithmetic fact; and a call reachable by more
-  than one route, which a macro sharing a node can produce.
+  selector**, except where a reflected measure needs one (below); a `let`
+  that binds a **function**, which is not an arithmetic fact; and a call
+  reachable by more than one route, which a macro sharing a node can produce.
+
+  The constructor exception is for `^reflect` measures. When the callee's
+  predicate mentions a reflected measure, an arm that connects to a variable
+  the argument mentions contributes `(= (#dt/tag s) k)` and its Int-sorted
+  record selectors, so RF4 can select the arm, as it does for a return
+  obligation. It is no wider than that, because those symbols switch off the
+  model search that produces a counterexample. A fact that names a variable
+  rebound further down the path is dropped: at the call, the name means the
+  inner binding.
 - **[by design] A crossing under a shadowing binder is abandoned, not answered.** The
   encoder has one flat namespace, so an argument naming a shadowed variable
   would inherit the outer one's hypotheses -- `(let [x (- x x)] (sdiv 10 x))`
   under `x > 0` once "proved" `x != 0` of a value that is zero. Dropping the
   binding's equation is not enough, because the collision is in the name rather
   than the fact, so the whole crossing is skipped.
-- **[prototype] A `while` loop needs a written `:invariant`** -- behind
-  `--enable=loop-invariants`; see *Loop invariants* above.
+- **A `while` loop needs a written `:invariant`** -- see *Loop invariants*
+  above.
   An unannotated loop is still not analysed: an accumulator it builds is
   Unknown, and there is no invariant *inference* -- inferring facts is the
   thing this design deliberately does not do. An annotated loop whose body
@@ -1205,7 +1233,17 @@ anyway.
   prove -- so an effectful predicate makes behaviour depend on whether its own
   contracts were compiled in. Reported only on PROVEN impurity: a predicate
   calling a function whose body the purity walk does not model (a field read, a
-  loop) is left alone, since a wrong "impure" would reject working code.
+  loop) is left alone, since a wrong "impure" would reject working code. A
+  direct call to a `#reads` measure is not counted either: it only reads, so
+  running it is not observable (see
+  [stateful-refinements-guide](stateful-refinements-guide.md#codegen-and-enforcement)).
+- **[by design] A function that can `return` early is not proved.** Its
+  refined return and `:post` are reported unknown (`TUR-W0372`, "the body can
+  leave early through `return`") and checked at runtime on every exit, the
+  early `return`s included. Proving only the last body form would cover the
+  fall-through path and nothing else. Until 2026-10-03 that is exactly what
+  happened, and the early value went unchecked
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/early-return-bypasses-return-refinement.md)).
 - **[by design] Decisions are memoized within a compilation unit**, keyed by a fingerprint
   of the normalized VC under alpha-renaming, and every hit is confirmed by
   structural comparison before its verdict is reused. Repeating the same
@@ -1250,4 +1288,4 @@ states.
 - [contract-types-guide.md](contract-types-guide.md) -- the always-on runtime half
 - [experimental-flags-guide.md](experimental-flags-guide.md) -- the `--enable=` mechanism
 - [syntax-guide.md](syntax-guide.md) -- `#lang` layers
-- [../archive/refinement-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design, staging, and what is left
+- [../archive/refinement-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/refinement-types-plan.md) -- design, staging, and what is left

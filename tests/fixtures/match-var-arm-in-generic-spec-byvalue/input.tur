@@ -1,0 +1,49 @@
+;; match-var-arm-in-generic-spec-byvalue -- a variable catch-all arm binds the
+;; whole scrutinee.  Inside a generic, the binder's type is the declared
+;; `(Option A)`, which the emitter spelled as the int64 carrier, while the
+;; spec's `__scrut` is the monomorph's by-value aggregate:
+;;
+;;     int64_t other_7 = *__scrut;
+;;
+;; invalid C at EVERY instantiation (int as well as float).  The same arm in a
+;; non-generic defn was fine.  The binder is now declared at the scrutinee's
+;; own C type, on the switch path and on the if-chain path (a guard routes the
+;; match there).  Found while probing forward calls to generic callees.
+
+(defn get-or [A] [o : (Option A) d : A] : A
+  (match o
+    (Some v) v
+    other d))
+
+;; The binder is used, not only bound: it is handed back as the result.
+(defn keep-or [A] [o : (Option A) alt : (Option A)] : (Option A)
+  (match o
+    (Some v) o
+    other alt))
+
+;; A guard sends the match down the if-chain path.
+(defn pos-or [o : (Option float) d : float] : float
+  (match o
+    (Some v) when (> v 0.0) v
+    other d))
+
+(defn guarded-or [A] [o : (Option A) d : A] : A
+  (match o
+    (Some v) when true v
+    other d))
+
+(defn show [o : (Option float)] : nil
+  (match o
+    (Some v) (println v)
+    (None) (println "none")))
+
+(defn main [] : int
+  (println (get-or (some 7.1) 1.5))
+  (println (get-or (:: (none) (Option float)) 1.5))
+  (println (get-or (some 3) 4))
+  (show (keep-or (some 3.25) (some 7.1)))
+  (show (keep-or (:: (none) (Option float)) (some 7.1)))
+  (println (pos-or (some -2.5) 1.5))
+  (println (guarded-or (some 7.1) 1.5))
+  (println (guarded-or (:: (none) (Option float)) 2.25))
+  0)

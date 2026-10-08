@@ -247,8 +247,8 @@ group:
 ```
 ```sweet-exp
 defn run [] :int
-  letrec [even? (fn [n :int] :bool if(=(n 0) true  odd?(-(n 1))))
-          odd?  (fn [n :int] :bool if(=(n 0) false even?(-(n 1))))]
+  letrec [even? (fn [n :int] :bool if({n = 0} true  odd?({n - 1})))
+          odd?  (fn [n :int] :bool if({n = 0} false even?({n - 1})))]
     println $ if(even?(10) "even" "odd")
     0
 ```

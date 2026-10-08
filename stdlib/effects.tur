@@ -17,6 +17,11 @@
 ;; see docs/archive/history/fat-closure-env-leak.md), so prefer fixed-arity helpers
 ;; over inline capturing lambdas in hot handler paths.
 ;; -- IO (parent of Write, Read) -------------------------------------------
+;; IO, FS, Net, Proc and Rand are compiler-known (effect-row-honesty-plan W2):
+;; `#fx{IO}` resolves in every program, with or without this file.  The
+;; declarations below are kept because the docs live on them; the compiler
+;; accepts a declaration of one of these names only when it matches the
+;; built-in exactly, so they cannot drift from what the compiler means.
 ;;; IO -- base effect for all I/O operations.
 ;;;
 ;;; Returns:

@@ -119,8 +119,32 @@ bool tur_stack_nearly_exhausted(void) {
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Set on the spawned stack so a nested call does not spawn a second one. */
+/* Set on the spawned stack so a nested call does not spawn a second one.
+ * The flag is per THREAD, but a thread can leave the big stack without
+ * leaving the thread: turi runs generator, effect and async bodies on small
+ * makecontext stacks.  A JIT compile reached from a generator body
+ * (repl-jit-inline-c, seq-builders-unfold) then ran the whole emit on the
+ * coroutine's stack and overflowed it.  So the flag counts only while the
+ * stack pointer is inside the big stack, whose top is recorded beside it. */
 static TUR_THREAD_LOCAL bool tls_on_big_stack;
+static TUR_THREAD_LOCAL uintptr_t tls_big_hi;   /* an address, not a pointer to deref */
+static TUR_THREAD_LOCAL size_t tls_big_size;
+
+static size_t tur_emit_stack_bytes(void);
+
+static void tur_big_stack_mark(size_t size) {
+    volatile char here = 0;
+    tls_big_hi = (uintptr_t)&here;
+    tls_big_size = size;
+    tls_on_big_stack = true;
+}
+
+static bool tur_on_big_stack_now(void) {
+    if (!tls_on_big_stack) return false;
+    volatile char here = 0;
+    uintptr_t sp = (uintptr_t)&here;
+    return sp <= tls_big_hi && (size_t)(tls_big_hi - sp) < tls_big_size;
+}
 
 typedef struct { int (*fn)(void *); void *arg; int rc; } TurBigStackJob;
 
@@ -148,14 +172,14 @@ static size_t tur_emit_stack_bytes(void) {
 
 static DWORD WINAPI tur_big_stack_thunk(LPVOID p) {
     TurBigStackJob *job = (TurBigStackJob *)p;
-    tls_on_big_stack = true;
+    tur_big_stack_mark(tur_emit_stack_bytes());
     job->rc = job->fn(job->arg);
     return 0;
 }
 
 int tur_run_on_big_stack(int (*fn)(void *), void *arg) {
     if (!fn) return -1;
-    if (tls_on_big_stack) return fn(arg);
+    if (tur_on_big_stack_now()) return fn(arg);
     TurBigStackJob job = { fn, arg, -1 };
     /* dwStackSize with STACK_SIZE_PARAM_IS_A_RESERVATION reserves address
      * space; pages commit on demand. */
@@ -172,14 +196,14 @@ int tur_run_on_big_stack(int (*fn)(void *), void *arg) {
 
 static void *tur_big_stack_thunk(void *p) {
     TurBigStackJob *job = (TurBigStackJob *)p;
-    tls_on_big_stack = true;
+    tur_big_stack_mark(tur_emit_stack_bytes());
     job->rc = job->fn(job->arg);
     return NULL;
 }
 
 int tur_run_on_big_stack(int (*fn)(void *), void *arg) {
     if (!fn) return -1;
-    if (tls_on_big_stack) return fn(arg);
+    if (tur_on_big_stack_now()) return fn(arg);
 
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0) return fn(arg);

@@ -24,8 +24,9 @@
     (fn [x :int] : (fn [int] int)
       (fn [y :int] :int (+ x y)))))
 
+;; The outer closure returns the inner one, so its thin entry returns `void *`.
 (defn call-thin [f x] :int
-  ```c return ((int64_t(*)(int64_t))(intptr_t)f)(x); ```)
+  ```c return (int64_t)(intptr_t)((void *(*)(int64_t))(intptr_t)f)(x); ```)
 (defn call-fat [f x] :int
   ```c return TUR_APPLY1(f, x); ```)
 

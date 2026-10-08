@@ -45,7 +45,7 @@ There is no boxing overhead for scalars declared with concrete types:
 defn square [x] :int
   {x * x}
 defn hyp [a b] :float
-  sqrt((+ (* a a) (* b b)))
+  sqrt({{a * a} + {b * b}})
 ```
 
 Avoid leaving numeric expressions untyped in hot loops -- the elaborator may
@@ -76,7 +76,7 @@ Iterative is faster for large N because it avoids stack growth:
 ; iterative -- O(n) time, O(1) space (self-tail-call -> loop; see below)
 defn fib-iter [n] :int
   let loop [i n a 0 b 1]
-    if ={i 0}
+    if {i = 0}
       a
       loop({i - 1} b {a + b})
 
@@ -188,9 +188,16 @@ are left as ordinary recursive calls -- correct, but not stack-optimized:
 - self-recursive functions with pass-by-pointer struct, function-typed,
   poly-fn, or carrier-ABI (a by-value recursive ADT such as a `(Tree float)`)
   parameters -- a backedge cannot reassign them;
-- a call under a `let` that binds a function value or a carrier-ABI value (a
-  `Vec`, a list, a `:heap` struct, a by-value recursive ADT) -- the whole `let`
-  is off the tail path, whether or not the binding is live at the call;
+- a call under a `let` that binds a function value -- the whole `let` is off
+  the tail path, whether or not the binding is live at the call.  A `let` that
+  binds a carrier-ABI value (a `Vec`, a list, a `:heap` struct, a by-value
+  recursive ADT) **is** in the tail grammar;
+- a call under a `let` whose binding is released when the `let` ends (a
+  by-value recursive spine it owns, a `^mut` cell a closure captured, a caught
+  `Result` box, a fresh `Option`/`Result` box) and is used as more than a plain
+  number while the backedge carries a non-number into the next iteration.  The
+  release moves to the backedge; it can do that only once nothing that leaves
+  the iteration could still point into what it frees;
 - a self-recursive function with an explicit `defer` in the block around the
   call: a `defer` you wrote runs after the call, innermost first, and that
   order is observable, so it cannot move ahead of a backedge;
@@ -262,7 +269,7 @@ each later stage is verified by a fixture that annotates a call and asserts the
 annotation holds at `-O0`.  A tail-call fixture built at `-O2` asserts nothing
 -- clang will inline a small recursive cycle into a loop and the fixture then
 measures the C compiler.  See
-[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md).
+[proper-tail-calls-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md).
 
 **Dynamic tail calls in Saffron.** A call through an `any` in tail position --
 `(f f (- n 1))` where `f` is a function value -- runs in constant stack too.
@@ -282,9 +289,9 @@ existing CPS backend is not a way out either: that backend emits a tail call
 as an ordinary call, a panic check, and a continuation invocation, which was
 measured rather than assumed.
 See
-[proper-tail-calls-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md)
+[proper-tail-calls-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/proper-tail-calls-plan.md)
 for the measurements and the staging, and
-[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md)
+[control-flow-completeness-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md)
 (Phase CF1) for the self-tail-call work that shipped.
 
 ### Prime sieve
@@ -309,7 +316,7 @@ The Sieve of Eratosthenes benefits from a `vec` (a growable array over a
     (vec-set! flags 1 0)
     (while (<= (* i i) limit)
       (when (= (vec-get flags i) 1)
-        (let [^mut j (* i i)]
+        (let [^mut j {i * i}]
           (while (<= j limit)
             (vec-set! flags j 0)
             (set! j (+ j i)))))
@@ -329,21 +336,21 @@ defn sieve-count [limit : int] : int
        ^mut k  0
        ^mut i  2
        ^mut n  0]
-    while <=(k limit)
+    while {k <= limit}
       vec-push!(flags 1)
       set!(k {k + 1})
     vec-set!(flags 0 0)
     vec-set!(flags 1 0)
-    while <=(*(i i) limit)
-      when =(vec-get(flags i) 1)
-        let [^mut j (* i i)]
-          while <=(j limit)
+    while {{i * i} <= limit}
+      when {vec-get(flags i) = 1}
+        let [^mut j {i * i}]
+          while {j <= limit}
             vec-set!(flags j 0)
             set!(j {j + i})
       set!(i {i + 1})
     set!(k 2)
-    while <=(k limit)
-      when =(vec-get(flags k) 1)
+    while {k <= limit}
+      when {vec-get(flags k) = 1}
         set!(n {n + 1})
       set!(k {k + 1})
     n
@@ -386,10 +393,10 @@ load("stdlib/random.tur")
 defn estimate-pi [samples : int] : float
   let [^mut i      samples
        ^mut inside 0]
-    while >(i 0)
+    while {i > 0}
       let [x {int->float(rand-float()) / 10000.0}
            y {int->float(rand-float()) / 10000.0}]
-        when <=({*(x x) + *(y y)} 1.0)
+        when {{{x * x} + {y * y}} <= 1.0}
           set!(inside {inside + 1})
       set!(i {i - 1})
     {4.0 * {int->float(inside) / int->float(samples)}}
@@ -501,6 +508,10 @@ traffic and drop glue rather than collection pauses. Practical consequences:
 - `(gc-auto!)` exists and is strictly opt-in; it is not becoming the default.
 - A by-value struct parameter is copied on bind, so a wide struct passed
   through a hot loop is worth passing by pointer or borrowing.
+
+For measured per-feature costs (bytes per `Vec` slot, `Map` entry, `rc`,
+closure, effect) and strategies for using less, see
+[memory-usage-guide.md](memory-usage-guide.md).
 
 See [gc-guide.md](gc-guide.md) for how RC, arenas, and the cycle collector fit
 together, and [ownership-guide.md](ownership-guide.md) for deciding who owns
@@ -638,7 +649,7 @@ How to read it:
   the binary; nothing else is close in steady state.
 - The MIR tier generates good-but-not-gcc code: expect JIT'd loop bodies
   within ~1-2x of cc -O2, not parity, and note the JIT runs the program
-  on a sized entry stack (`TUR_JIT_STACK_MB`, default 64) because
+  on a sized entry stack (`TUR_MAIN_STACK_MB`, default 1024 on 64-bit) because
   MIR does not perform gcc's sibling-call optimization -- so a deep
   recursion the cc path survives only because gcc turned the self-call into
   a jump will overflow here.  That is a real difference in what the two
@@ -663,7 +674,7 @@ methodology section otherwise describes, and answers a different question:
 not "did this Turmeric change regress," but "how does Turmeric's output
 compare to a native-compiled, a JVM-hosted, and a scripting-language peer
 doing the same work." See
-[performance-comparison/README.md](https://github.com/rjungemann/turmeric/blob/main/performance-comparison/README.md)
+[performance-comparison/README.md](https://github.com/turmeric-lang/turmeric/blob/main/performance-comparison/README.md)
 and its `docs/methodology.md` for the full setup, same-algorithm ground
 rules, and how to run it.
 

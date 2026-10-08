@@ -4,6 +4,7 @@
 
 import Prism from 'prismjs';
 import './icons.js'; // registers the <t-icon> custom element (Lucide set)
+import { GITHUB_URL } from './repo.js';
 
 // ── TURMERIC SYNTAX GRAMMAR ─────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ const LINK_TITLES = {
   '/ci':                                  'Build and test metrics from continuous integration',
   'https://spices.turmeric-lang.com':     'Browse Spice packages -- the Turmeric package registry',
   'https://c.turmeric-lang.com':          'A C interpreter running in your browser',
-  'https://github.com/rjungemann/turmeric': 'Turmeric source code on GitHub',
+  [GITHUB_URL]:                           'Turmeric source code on GitHub',
   'https://phasor.space':                 "Roger Jungemann's site",
 };
 
@@ -114,12 +115,10 @@ const SIDEBAR_GROUPS = [
     ['https://c.turmeric-lang.com',      'C Interpreter'],
   ]],
   ['Community', [
-    ['https://github.com/rjungemann/turmeric', 'GitHub'],
+    [GITHUB_URL,                               'GitHub'],
     ['/ci',                                    'CI Metrics'],
   ]],
 ];
-
-const GITHUB_URL = 'https://github.com/rjungemann/turmeric';
 
 function sidebarGroupsHTML() {
   return SIDEBAR_GROUPS.map(([heading, links]) =>

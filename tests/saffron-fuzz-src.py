@@ -746,7 +746,7 @@ def run_case(tur, path, src):
             kind = "value_conv"
             p = subprocess.CompletedProcess(p.args, 0, p.stdout,
                 "emitted C line %d: %s %s value conversion: %s" % (ln, how, ck, text))
-    elif p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    elif fuzz_arm.is_fnsan_trap(p.returncode):
         kind = "fnptr_trap"
     elif p.returncode in (134, 138, 139) or p.returncode < 0:
         kind = "crash"
@@ -1040,7 +1040,7 @@ def main():
         n_trap = counts.get("FNPTR_TRAP", 0)
         if n_trap:
             print("  fn-pointer traps (report)   : %d   "
-                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
+                  "(TUR_FUZZ_FNSAN_STRICT=0: report-only)" % n_trap)
         print("  known open findings (report): %d" % n_known)
         if findings:
             print("\n  saved to %s" % save_dir)

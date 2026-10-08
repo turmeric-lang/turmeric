@@ -1,0 +1,32 @@
+;; A capturing closure that returns nil, passed where the parameter is
+;; `(fn [...] A)`.  No spec clone is made at `A := nil`, so the carrier base
+;; calls the slot as `int64_t (*)(void *)` -- and the closure's thunk is
+;; `void`.  Natively that read rax garbage as the bracket's (ignored) result;
+;; under clang -fsanitize=function, and on WASM's call_indirect, it traps.
+;; A nil-returning BARE fn had the same mismatch through the generic word
+;; shim.  Both now go through a slot-0 shim that calls the function and
+;; answers the zero word (docs/archive/emitted-c-indirect-calls-are-not-type-exact.md,
+;; region-scope-void-body's row).
+;;
+;; `shout` is a CPS function (the bracket is a `bt-scope`), so its wrapper is
+;; heap-allocated and reaped with the DK entry; `main` is the direct path.
+
+(defn app [A] [^fat f : (fn [] A)] : A (f))
+(defn app-plain [A] [f : (fn [] A)] : A (f))
+(defn app1 [A] [^fat f : (fn [int] A) x : int] : A (f x))
+
+(defn shout [n : int] : void
+  (bt-scope (fn [] (println (+ n 1)))))
+
+(defn main [] : int
+  (let [k 40]
+    (app (fn [] (println (+ k 1))))                  ;; 41
+    (app-plain (fn [] (println (+ k 2))))            ;; 42
+    (app1 (fn [x : int] (println (+ k x))) 3)        ;; 43
+    (shout 43)                                       ;; 44
+    (bt-scope (fn [] (println (+ k 5))))             ;; 45
+    (with-region (fn [] (println (+ k 6))))          ;; 46
+    (app (fn [] (println 47)))                       ;; 47 (bare fn)
+    ;; and a non-nil result through the same slot is untouched
+    (println (app (fn [] (+ k 8)))))                 ;; 48
+  0)

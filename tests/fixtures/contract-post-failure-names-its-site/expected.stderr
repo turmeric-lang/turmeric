@@ -1,0 +1,1 @@
+panic at input.tur:8: Postcondition failed in dec: (>= result 0)

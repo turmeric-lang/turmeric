@@ -632,7 +632,7 @@ The spice manifest lives in `../turmeric-spices/spices/sdf-raylib/build.tur`:
   :version     "0.1.0"
   :description "SDF-based solid modeling with raylib rendering and colored mesh export"
   :license     "MIT"
-  :repository  "https://github.com/rjungemann/turmeric-spices"
+  :repository  "https://github.com/turmeric-lang/turmeric-spices"
 
   :cmake-deps {
     "raylib" {:url     "https://github.com/raysan5/raylib"

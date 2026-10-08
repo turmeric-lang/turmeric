@@ -186,3 +186,21 @@ the classifier and both emitters, and `emit_heap_join` threads the clone's
 twin. Pinned by `cps-colored-generic-clone-join`; the perform-continuation
 argument gate that assumed cps->direct was fixed with it (pinned by
 `cps-perform-continuation-tail-call-byvalue-arg`).
+
+### The producer side (2026-10-02)
+
+The deferred-drop table covered a fresh box that the CPS path DELEGATES to
+`emit_value` (an argument lowered to a `CT_LETRAW`).  It did not cover one the
+CPS emitter writes itself: `(ok? (result-map (ok 1) f))` with `result-map`
+resolved to its carrier BASE -- a cps->direct tail call delivering into an
+inline join -- returned a fresh `Ok` box that nothing queued, and `ok?`
+consumed it without a free (16 bytes, `typed/result-basic`).  It passed only
+because another call in the same file, `(result-map (err 42) ...)`, minted a
+spec at the carrier argument that this call happened to reuse; once that
+argument was grounded to a by-value Result
+([open-arg-first-binds-call-result-as-int](open-arg-first-binds-call-result-as-int.md)),
+the spec was gone and `tur_leak_check` went red.  Pre-existing: the same call
+alone leaked on `main`.  `cps_deferred_note_producer` now registers the drop
+on the letcall binder or the join parameter when elab stamped the call for
+the drop-after-reader free and the callee returns the carrier word; a by-value
+result is reaped at delivery and never registered.

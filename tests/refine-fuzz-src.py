@@ -94,12 +94,24 @@ would PROVE a refinement the runtime violates -- a `BUG_soundness` here.
 That is why the shape's rungs include refinements that are false only for
 NEGATIVE dividends, and why `main`'s literal arguments range over both signs.
 
+Reflected measures at density (reflected-measures RF3/RF4)
+---------------------------------------------------------
+`shape_reflect` is the population the `reflect_if` / `reflect_lie` helper
+kinds could not be: recursive `^reflect` measures over a list, unfolded at
+literals deep enough to cross the fuel limit, RF4 arm selection from a refined
+list parameter, a sabotaged sibling per rung, and the RF1/RF2 rejections.
+`--only-shape reflect` runs it alone, without random helpers or extra targets,
+either of which would reject the case before the measure is reached.  Its
+first run found a soundness bug outside reflection entirely: a `float` record
+field's selector was declared Int, which made every VC that mentioned one
+contradictory (docs/archive/refine-float-field-selector-declared-int.md).
+
 Usage
 -----
     python3 tests/refine-fuzz-src.py [--n 300] [--seed 1] [--jobs 4]
                                      [--mode int|float|both]
                                      [--tur ./build/tur] [--save-dir DIR]
-                                     [--self-test]
+                                     [--only-shape SHAPE] [--self-test]
 
 Exit status is 1 if any BUG class fired, 0 otherwise.  Suspicious cases alone
 never fail the run.
@@ -1038,14 +1050,166 @@ class Gen:
                   "    %s))" % (T, T, ret, binds, bound, inv, body, tail))
         return ["p"], "\n\n".join(pre_lines + [target])
 
+    # Dyadic float literals: every sum of a handful of them is exact in double,
+    # so a reflected `fz-sum` is never a float-rounding question.  That one is
+    # docs/reported/float-proofs-assume-exact-reals.md, a separate known gap,
+    # and it must not show up here as noise.
+    EXACT_FLOATS = ["0.5", "1.25", "2.75", "3.25", "-1.5", "-4.25", "6.5"]
+
+    def shape_reflect(self):
+        """reflected-measures RF3/RF4: recursive `^reflect` measures over a list.
+
+        `reflect_if` / `reflect_lie` put scalar, non-recursive measures into
+        other shapes' programs; they never reach the encoder work RF3 and RF4
+        added (reflect-fuzz-never-reaches-the-rf3-rf4-encoder).  This shape does:
+
+          * recursive unfolding through a `match` -- `fz-len`, `fz-sum`,
+            `fz-allpos?`, `fz-sorted?` (a nested match) -- at constructor-headed
+            literals of depth 0..11, so the default fuel of 8 is crossed in
+            both directions;
+          * a scalar `p` at the head of the list, so the unfolded equation still
+            has a variable in it;
+          * RF4: a match over a list PARAMETER whose refinement is a reflected
+            measure, so the arm is selected from a tag fact;
+          * a SABOTAGED sibling for each rung -- a refinement the measure does
+            not satisfy (off by one, a zeroed head) -- so a wrong unfolding is a
+            BUG_soundness, not a silent agreement;
+          * a non-exhaustive and an impure `^reflect` body, which RF2 and RF1's
+            purity half must REJECT (skip_invalid on both legs)."""
+        T = self.ty
+        z = self._zero()
+        is_int = self.mode == "int"
+
+        def elem(pos=None):
+            if is_int:
+                v = self.rng.randint(1, 6) if pos else self.rng.randint(-6, 6)
+                return str(v)
+            pool = [x for x in self.EXACT_FLOATS if not pos or not x.startswith("-")]
+            return self.rng.choice(pool)
+
+        def num(s):
+            return int(s) if is_int else float(s)
+
+        def lit_of(v):
+            return str(v) if is_int else repr(float(v))
+
+        def lst(elems, head=None):
+            items = ([head] if head else []) + elems
+            out = "(FzNil)"
+            for e in reversed(items):
+                out = "(FzCons %s %s)" % (e, out)
+            return out
+
+        pre = ["(defdata FzLst [] (FzCons [hd : %s tl : FzLst]) (FzNil))" % T,
+               "(defn ^reflect fz-len [xs : FzLst] : int\n"
+               "  (match xs\n    (FzNil) 0\n    (FzCons h t) (+ 1 (fz-len t))))",
+               "(defn ^reflect fz-sum [xs : FzLst] : %s\n"
+               "  (match xs\n    (FzNil) %s\n    (FzCons h t) (+ h (fz-sum t))))" % (T, z),
+               "(defn ^reflect fz-allpos? [xs : FzLst] : bool\n"
+               "  (match xs\n    (FzNil) true\n"
+               "    (FzCons h t) (and (> h %s) (fz-allpos? t))))" % z,
+               "(defn ^reflect fz-sorted? [xs : FzLst] : bool\n"
+               "  (match xs\n    (FzNil) true\n"
+               "    (FzCons h t) (match t\n"
+               "                   (FzNil) true\n"
+               "                   (FzCons h2 _) (and (<= h h2) (fz-sorted? t)))))"]
+        kind = self.rng.choice(["len_ground", "len_param", "sum", "allpos",
+                                "rf4", "rf4", "sorted_rf4", "nonexh", "impure"])
+        ret_ty = "int"
+        pre_cond = None
+        if kind == "len_ground":
+            d = self.rng.randint(0, 11)
+            body = "(fz-len %s)" % lst([elem() for _ in range(d)])
+            pred = self.rng.choice(["(= r %d)" % d, "(= r %d)" % (d + 1),
+                                    "(>= r 0)", "(> r %d)" % d])
+        elif kind == "len_param":
+            d = self.rng.randint(0, 10)
+            body = "(fz-len %s)" % lst([elem() for _ in range(d)], head="p")
+            pred = self.rng.choice(["(= r %d)" % (d + 1), "(= r %d)" % d,
+                                    "(> r 0)", "(< r %d)" % (d + 1)])
+        elif kind == "sum":
+            d = self.rng.randint(0, 9)
+            rest = [elem() for _ in range(d)]
+            s = sum(num(x) for x in rest)
+            body = "(fz-sum %s)" % lst(rest, head="p")
+            off = 1 if is_int else 0.5
+            pred = self.rng.choice(["(= r (+ p %s))" % lit_of(s),
+                                    "(= r (+ p %s))" % lit_of(s + off),
+                                    "(>= r p)", "(> r p)"])
+            ret_ty = T
+        elif kind == "allpos":
+            d = self.rng.randint(0, 9)
+            rest = [elem(pos=self.rng.random() < 0.8) for _ in range(d)]
+            body = "(if (fz-allpos? %s) 1 0)" % lst(rest, head="p")
+            pred = self.rng.choice(["(= r 1)", "(= r 0)", "(>= r 0)"])
+            if self.rng.random() < 0.5:
+                pre_cond = "(> p %s)" % z
+        elif kind in ("rf4", "sorted_rf4"):
+            # A list PARAMETER refined by a measure, and a match over it: the
+            # arm is selected from the tag fact (RF4).  The honest body returns
+            # what the refinement promises; the sabotaged one zeroes (or
+            # bumps) the head, so the measure no longer holds of what it
+            # unfolds -- the return refinement is false at runtime.
+            m = "fz-allpos?" if kind == "rf4" else "fz-sorted?"
+            honest = self.rng.random() < 0.5
+            if kind == "rf4":
+                tail = "(%s t)" % m if honest else "(%s (FzCons (- h h) t))" % m
+            else:
+                tail = ("(match t (FzNil) true (FzCons h2 t2) (%s t))" % m if honest
+                        else "(%s (FzCons (+ h %s) t))" % (m, "100" if is_int else "100.5"))
+            pre.append("(defn inner [xs : #refine{ v : FzLst | (%s v) }]"
+                       " : #refine{ r : bool | r }\n"
+                       "  (match xs\n    (FzNil) true\n    (FzCons h t) %s))" % (m, tail))
+            if kind == "rf4":
+                rest = [elem(pos=True) for _ in range(self.rng.randint(0, 4))]
+            else:
+                vals = sorted(num(elem()) for _ in range(self.rng.randint(0, 4)))
+                rest = [lit_of(v) for v in vals]
+            body = "(if (inner %s) 1 0)" % lst(rest, head="p")
+            pred = self.rng.choice(["(= r 1)", "(>= r 0)"])
+            if self.rng.random() < 0.5:
+                pre_cond = "(> p %s)" % z
+        elif kind == "nonexh":
+            # RF2: `^non-exhaustive` is an unchecked promise the ordinary match
+            # checker accepts, so only the reflection gate stands between it and
+            # an admitted equation.  (A plain non-exhaustive match never got that
+            # far: it is a compile error before any gate runs.)
+            pre.append("(defn ^reflect fz-ne [xs : FzLst] : int\n"
+                       "  (match ^non-exhaustive xs (FzCons h t) (+ 1 (fz-ne t))))")
+            body = "(fz-ne %s)" % lst([elem()], head="p")
+            pred = "(= r 1)"
+        else:  # impure
+            # RF1's purity half: a measure whose body runs inline C.
+            pre.append("(defn fz-tick [] #fx{} : int\n"
+                       "  ```c\n  static int64_t n = 0;\n  return n++;\n  ```)")
+            pre.append("(defn ^reflect fz-imp [xs : FzLst] : int\n"
+                       "  (match xs\n    (FzNil) (fz-tick)\n"
+                       "    (FzCons h t) (+ 1 (fz-imp t))))")
+            body = "(fz-imp %s)" % lst([elem()], head="p")
+            pred = "(= r 1)"
+        target = ("(defn target [p : %s] : #refine{ r : %s | %s }%s\n  %s)"
+                  % (T, ret_ty, pred, "\n  :pre " + pre_cond if pre_cond else "", body))
+        return ["p"], "\n\n".join(pre + [target])
+
     def program(self):
-        lines = self.gen_helpers(self.rng.randint(1, 3))
-        lines += self.gen_bool_helpers(self.rng.randint(1, 2))
+        # `--only-shape reflect` runs the reflected population at density: no
+        # random helpers (a `reflect_lie` helper rejects the whole program on
+        # both legs) and no extra targets (a refuted one does too).  Each would
+        # waste the case before the measure under test is reached.  Mixed runs
+        # keep both, so the reflect slice there shares the usual neighbours.
+        dense = self.only == "reflect"
+        lines = [] if dense else self.gen_helpers(self.rng.randint(1, 3))
+        lines += [] if dense else self.gen_bool_helpers(self.rng.randint(1, 2))
         r = self.rng.random()
         if self.only:
             params, target = getattr(self, "shape_" + self.only)()
-        elif r < 0.07:
+        elif r < 0.04:
             params, target = self.shape_random()
+        elif r < 0.07:
+            # reflected-measures RF3/RF4, carved out of shape_random's slice
+            # the way shape_loop was.  `--only-shape reflect` runs it at
+            # density.
+            params, target = self.shape_reflect()
         elif r < 0.15:
             # loop-invariants-plan LI5: carved out of shape_random's slice, so
             # every other shape keeps the population it had.
@@ -1071,7 +1235,7 @@ class Gen:
         else:
             params, target = self.shape_stateful()
         lines.append(target)
-        extra, extra_names = self.extra_targets()
+        extra, extra_names = ([], []) if dense else self.extra_targets()
         lines += extra
         main = self._main(params)
         calls = "\n".join("  (println (%s %s))" % (n, self.lit()) for n in extra_names)
@@ -1117,11 +1281,10 @@ def run_gate(tur, path, refined):
     # reflected-measures: the `^reflect` helper kinds need the gate on both
     # legs (the reference leg still suppresses discharge, so the equations
     # are asserted into VCs that then decide nothing).
-    # loop-invariants-plan LI5: both legs enable the experiment, so a
-    # generated `:invariant` is ACTED on -- runtime checks in the reference
-    # leg, checks minus proofs in the discharge leg.  Harmless to the other
-    # shapes: each gate only acts where the shape it names is generated.
-    cmd = [tur, "--enable=reflected-measures", "--enable=loop-invariants", "run", path]
+    # loop-invariants-plan LI5: a generated `:invariant` is ACTED on in both
+    # legs (always on since loop-invariants graduated) -- runtime checks in the
+    # reference leg, checks minus proofs in the discharge leg.
+    cmd = [tur, "--enable=reflected-measures", "run", path]
     env = dict(os.environ)
     # See the note in tests/type-fuzz-src.py: a shimmed `python3` (mise, asdf)
     # can re-export another install's TUR_STDLIB_DIR inside this process, which
@@ -1151,7 +1314,7 @@ def run_gate(tur, path, refined):
         return Outcome("clean", p.stdout, proven, refuted)
     # A trapped mismatched function-pointer call.  Without this arm it fell
     # through to "reject" and classify() dropped it as skip_invalid.
-    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    if fuzz_arm.is_fnsan_trap(p.returncode):
         return Outcome("fnptr_trap", p.stdout, proven, refuted)
     # SIGABRT (134) and SIGSEGV (139) both mean the program was built and then
     # died; a contract violation is the 134 case.

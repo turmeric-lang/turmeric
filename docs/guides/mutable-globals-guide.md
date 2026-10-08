@@ -11,7 +11,7 @@ description: def ^mut, what the compiler checks about a global write, and the co
 > no `--enable` flag. `--enable=global-state` was a warning-only no-op through
 > 0.37.0 and is a hard `TUR-E0310` from 0.38.0; delete it. The
 > design of record is
-> [`docs/archive/mutable-globals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mutable-globals-plan.md).
+> [`docs/archive/mutable-globals-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/mutable-globals-plan.md).
 
 ## The form
 

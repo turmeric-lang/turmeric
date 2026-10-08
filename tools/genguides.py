@@ -36,6 +36,15 @@ except ImportError:  # pragma: no cover -- preflight, not a code path
     )
 
 
+# The Turmeric repo on GitHub. Single source of truth for this generator --
+# every rendered page's nav link, link title and "source:" footer derives from
+# it, so a repo transfer (personal account -> org) is a one-line change.
+# web/site.js carries the same constant for the hand-written pages; the comment
+# on SIDEBAR_GROUPS below explains why these two lists are deliberately
+# duplicated rather than shared.
+GITHUB_URL = 'https://github.com/turmeric-lang/turmeric'
+
+
 def get_creation_date(path: Path, repo_root: Path) -> str | None:
     """Return the YYYY-MM-DD date the file was first added to git, or None."""
     try:
@@ -157,7 +166,7 @@ LINK_TITLES = {
     '/ci':                                    'Build and test metrics from continuous integration',
     'https://spices.turmeric-lang.com':       'Browse Spice packages -- the Turmeric package registry',
     'https://c.turmeric-lang.com':            'A C interpreter running in your browser',
-    'https://github.com/rjungemann/turmeric': 'Turmeric source code on GitHub',
+    GITHUB_URL:                               'Turmeric source code on GitHub',
     'https://phasor.space':                   "Roger Jungemann's site",
 }
 
@@ -197,7 +206,7 @@ SIDEBAR_GROUPS = [
         ('https://c.turmeric-lang.com',      'C Interpreter'),
     ]),
     ('Community', [
-        ('https://github.com/rjungemann/turmeric', 'GitHub'),
+        (GITHUB_URL,                               'GitHub'),
         ('/ci',                                    'CI Metrics'),
     ]),
 ]
@@ -255,7 +264,7 @@ def build_page_header(active: str = '', base: str = '', search: str = '',
     )
     cta = ('' if on_try else
            f'\n{indent}    <a href="{_href("/try", base)}" class="btn-gold">Try it</a>')
-    github = 'https://github.com/rjungemann/turmeric'
+    github = GITHUB_URL
     return apply_link_titles(f'''\
 {indent}<header class="site-header">
 {indent}  <button class="hamburger" aria-label="Toggle navigation" aria-expanded="false">
@@ -326,6 +335,67 @@ INDEX_PAGE_HEADER = (build_page_header(active='Guides', search='Filter guides')
 # The guides index's filter box. Loaded from guide-index.js (see script_tag).
 INDEX_FILTER_JS_SRC = '''\
 document.addEventListener('DOMContentLoaded', function(){
+    // ---- Recently Added / Recently Updated tabs ----------------------------
+    // The choice is remembered in localStorage, the same way the guide pages'
+    // turmeric/sweet-exp toggle remembers 'guide-syntax'. A #recently-added or
+    // #recently-updated hash (the sidebar links, an old bookmark) wins over
+    // the stored choice for that visit but is not saved as one.
+    var RECENT_KEY = 'guide-recent-tab';
+    var recentBtns = Array.prototype.slice.call(
+      document.querySelectorAll('.recent-tablist .seg-btn'));
+
+    function selectRecent(slug, focus) {
+      var found = recentBtns.some(function(b){ return b.dataset.recentTab === slug; });
+      if (!found) return false;
+      recentBtns.forEach(function(b){
+        var on = b.dataset.recentTab === slug;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+        var panel = document.getElementById(b.dataset.recentTab);
+        if (panel) panel.hidden = !on;
+        if (on && focus) b.focus();
+      });
+      return true;
+    }
+
+    function rememberRecent(slug) {
+      try { localStorage.setItem(RECENT_KEY, slug); } catch (e) {}
+    }
+
+    function selectFromHash() {
+      return selectRecent(location.hash.slice(1), false);
+    }
+
+    if (recentBtns.length) {
+      if (!selectFromHash()) {
+        var stored = null;
+        try { stored = localStorage.getItem(RECENT_KEY); } catch (e) {}
+        if (stored) selectRecent(stored, false);
+      }
+      window.addEventListener('hashchange', selectFromHash);
+      recentBtns.forEach(function(btn, i){
+        btn.addEventListener('click', function(){
+          selectRecent(btn.dataset.recentTab, false);
+          rememberRecent(btn.dataset.recentTab);
+        });
+        // Arrow / Home / End move between tabs (WAI-ARIA tabs pattern).
+        btn.addEventListener('keydown', function(e){
+          var n = recentBtns.length, j = -1;
+          if (e.key === 'ArrowRight') j = (i + 1) % n;
+          else if (e.key === 'ArrowLeft') j = (i - 1 + n) % n;
+          else if (e.key === 'Home') j = 0;
+          else if (e.key === 'End') j = n - 1;
+          if (j < 0) return;
+          e.preventDefault();
+          var slug = recentBtns[j].dataset.recentTab;
+          selectRecent(slug, true);
+          rememberRecent(slug);
+        });
+      });
+    }
+
+    // ---- Filter box ---------------------------------------------------------
     var input = document.querySelector('.search-input');
     if (!input) return;
 
@@ -333,7 +403,13 @@ document.addEventListener('DOMContentLoaded', function(){
       var q = input.value.trim().toLowerCase();
       var visibleItems = 0;
 
-      document.querySelectorAll('.index-card').forEach(function(card) {
+      // The Recently Added / Updated tabs repeat guides the category cards
+      // already list, and one of them is always a hidden tab, so a search hides
+      // the whole box instead of filtering inside it.
+      var recentBox = document.querySelector('.recent-tabs');
+      if (recentBox) recentBox.style.display = q ? 'none' : 'block';
+
+      document.querySelectorAll('.index-card:not(.recent-tabs)').forEach(function(card) {
         var items = card.querySelectorAll('ul li');
         var shown = 0;
         items.forEach(function(li) {
@@ -349,8 +425,11 @@ document.addEventListener('DOMContentLoaded', function(){
       // Sync sidebar category links with card visibility.
       document.querySelectorAll('.sidebar a[href^="#"]').forEach(function(link) {
         var target = document.getElementById(link.getAttribute('href').slice(1));
+        // A recent-tab panel answers for its whole box: an unselected tab is
+        // hidden, but its sidebar link must stay.
+        var box = target && (target.closest('.recent-tabs') || target);
         link.parentElement.style.display =
-          (!target || target.style.display !== 'none') ? '' : 'none';
+          (!box || box.style.display !== 'none') ? '' : 'none';
       });
 
       var noResults = document.querySelector('.search-no-results');
@@ -1231,6 +1310,153 @@ def widen_nested_fences(text: str) -> str:
     return ''.join(out)
 
 
+_FENCE_LINE_RE = re.compile(r'^( {0,3})(`{3,}|~{3,})([^\n]*)$')
+
+
+def dedent_indented_fences(text: str) -> str:
+    """Move a fence indented by 1-3 spaces to column 0.
+
+    CommonMark lets a fence sit at a list item's content column -- two spaces
+    under `- `, three under `2. ` -- and GitHub renders it inside the item.
+    python-markdown's fenced_code only knows a column-0 fence, and its lists
+    want four-space continuation besides, so such a block rendered as running
+    text -- in sixteen guides when this was written, most often as one
+    inline <code> span flattening the snippet into a sentence.  Dedented, it
+    renders as a code block with its language class (so the turmeric/sweet-exp
+    toggles apply), directly after the list item.
+
+    Only fences OUTSIDE a column-0 fenced block are touched: a turmeric block's
+    inline C legitimately holds indented ``` runs.
+    """
+    lines = text.split('\n')
+    out = []
+    i = 0
+    outer = None                           # (char, len) of an open column-0 fence
+    while i < len(lines):
+        ln = lines[i]
+        m = _FENCE_LINE_RE.match(ln)
+        if outer:
+            if m and not m.group(1) and m.group(2)[0] == outer[0] and \
+               len(m.group(2)) >= outer[1] and not m.group(3).strip():
+                outer = None
+            out.append(ln)
+            i += 1
+            continue
+        if not m:
+            out.append(ln)
+            i += 1
+            continue
+        indent, fence = m.group(1), m.group(2)
+        if not indent:
+            outer = (fence[0], len(fence))
+            out.append(ln)
+            i += 1
+            continue
+        # An indented opening fence: find its closer at the same indent.
+        j = i + 1
+        while j < len(lines):
+            c = _FENCE_LINE_RE.match(lines[j])
+            if c and c.group(1) == indent and c.group(2)[0] == fence[0] and \
+               len(c.group(2)) >= len(fence) and not c.group(3).strip():
+                break
+            j += 1
+        if j >= len(lines):                # unclosed: leave it as it is
+            out.append(ln)
+            i += 1
+            continue
+        n = len(indent)
+        for k in range(i, j + 1):
+            row = lines[k]
+            lead = len(row) - len(row.lstrip(' '))
+            out.append(row[min(n, lead):])
+        i = j + 1
+    return '\n'.join(out)
+
+
+_QUOTED_FENCE_OPEN_RE = re.compile(r'^( {0,3}(?:>[ \t]?)+)(`{3,}|~{3,})[^\n`]*$')
+
+
+def unquote_blockquote_fences(text: str) -> str:
+    """Render a fenced block inside a blockquote as code.
+
+    python-markdown's fenced_code is a preprocessor over the whole text, and it
+    only knows a fence that starts at column 0. Inside a blockquote every line
+    starts with `>`, so the fence is never seen: the opening ```sh renders as a
+    literal paragraph, a `# comment` in the snippet becomes an <h1> -- and a
+    TOC entry -- and `<tag>` reaches the HTML as an element.  The source is
+    ordinary CommonMark (GitHub renders it), so the guide is not what is wrong.
+
+    The blockquote parser DOES recurse into block processing, and an indented
+    code block is a block processor, so the fence is rewritten into that form:
+    same quote prefix, four more spaces per line, a bare quoted line in place of
+    each fence (an indented block cannot interrupt a paragraph).  The info
+    string's language is dropped; nothing in a guide highlights by it outside
+    the turmeric/sweet-exp toggles, which never appear quoted.  An unclosed
+    fence is left alone.
+    """
+    lines = text.split('\n')
+    out = []
+    i = 0
+    while i < len(lines):
+        m = _QUOTED_FENCE_OPEN_RE.match(lines[i])
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        prefix, fence = m.group(1), m.group(2)
+        quote = prefix.rstrip()
+        close_re = re.compile(r'^%s{%d,}[ \t]*$' % (re.escape(fence[0]), len(fence)))
+        body, j, closed = [], i + 1, False
+        while j < len(lines):
+            ln = lines[j]
+            if ln.rstrip() == quote:
+                inner = ''
+            elif ln.startswith(prefix):
+                inner = ln[len(prefix):]
+            else:
+                break                      # the blockquote ended first
+            if close_re.match(inner):
+                closed = True
+                break
+            body.append(inner)
+            j += 1
+        if not closed:
+            out.append(lines[i])
+            i += 1
+            continue
+        out.append(quote)
+        out.extend(quote + '     ' + b if b.strip() else quote for b in body)
+        out.append(quote)
+        i = j + 1
+    return '\n'.join(out)
+
+
+def unrendered_fences(body_html: str) -> list:
+    """Fences the renderer never saw, left in the output as text.
+
+    The signature is a ``` run that STARTS a line of prose -- right after a
+    <p> or <li>, or at the head of a line inside one -- with code spans and
+    <pre> blocks removed first, since backticks legitimately survive there.  A
+    run in the middle of a sentence or a table cell is prose that mentions
+    backticks, not a fence, and is left alone.
+
+    The second signature is the same failure one step later: when the opening
+    fence line is not a fence (an info string fenced_code rejects), the three
+    backticks pair up as an inline code span, so a paragraph OPENS with a
+    <code> that runs across a line break -- the info string and the code,
+    flattened into one sentence.
+
+    Returns a short excerpt per occurrence."""
+    def excerpt(text, m):
+        return text[max(0, m.start() - 40):m.end() + 60].replace('\n', ' ')
+    found = [excerpt(body_html, m)
+             for m in re.finditer(r'<p><code>[^<]*\n', body_html)]
+    prose = re.sub(r'<pre\b.*?</pre>|<code\b.*?</code>', '', body_html, flags=re.S)
+    found += [excerpt(prose, m)
+              for m in re.finditer(r'(?:<p>|<li>|\n)[ \t]*(```)', prose)]
+    return found
+
+
 def _count_toc_entries(tokens: list) -> int:
     return sum(1 + _count_toc_entries(t.get('children', [])) for t in tokens)
 
@@ -1308,6 +1534,9 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
     if meta is None:
         meta = fm_meta
 
+    # First, so the marker stripping below sees a list item's fence too.
+    text = dedent_indented_fences(text)
+
     # Drop every checker marker from an opening fence's info string.
     #
     # `no-check`, `no-manifest-check` and anything check-guide-pairs.py grows
@@ -1322,10 +1551,18 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
                   flags=re.MULTILINE)
     text = strip_manual_toc(text)
     text = widen_nested_fences(text)
+    text = unquote_blockquote_fences(text)
 
     conv = md_lib.Markdown(extensions=['fenced_code', 'tables', 'toc'],
                             extension_configs={'toc': {'permalink': False}})
+    # Keep an ordered list's own first number. A fence inside a list item
+    # (dedented above) ends the list for python-markdown, so the items after
+    # it open a new <ol>, which would otherwise restart at 1. The `lazy_ol`
+    # keyword is ignored by Markdown 3.x, and the sane_lists extension that
+    # sets this also stops `-` and `1.` lists merging, so set it directly.
+    conv.parser.blockprocessors['olist'].LAZY_OL = False
     body_html = conv.convert(text)
+    fence_errors = unrendered_fences(body_html)
     body_html = inject_syntax_toggles(body_html)
     body_html = render_task_lists(body_html)
     body_html = render_mermaid_blocks(body_html)
@@ -1355,6 +1592,7 @@ def build_guide_body(stem: str, src: Path, meta: dict | None = None) -> dict:
         'body': body_html,
         'toc_tokens': toc_tokens,
         'meta': meta,
+        'fence_errors': fence_errors,
     }
 
 
@@ -1426,7 +1664,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set,
     </div>
   </div>
   <footer class="site-footer">
-    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <a href="https://github.com/rjungemann/turmeric/blob/main/docs/guides/{stem}.md"><code>docs/guides/{stem}.md</code></a>
+    Auto-generated by <code>tools/genguides.py</code> &mdash; source: <a href="{GITHUB_URL}/blob/main/docs/guides/{stem}.md"><code>docs/guides/{stem}.md</code></a>
   </footer>
 {guide_runtime()}
 </body>
@@ -1508,29 +1746,42 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     sidebar_html = build_sidebar(
         toc=f'      <h3>Categories</h3>\n      <ul>{sidebar_cats}</ul>')
 
-    def dated_card(entries: list[dict], slug: str, heading: str) -> str:
-        """One of the two dated cards above the category grid, or '' if empty."""
-        if not entries:
-            return ''
-        items = ''.join(
+    def dated_items(entries: list[dict]) -> str:
+        return ''.join(
             f'<li><a href="{r["stem"]}.html">{_fmt_inline(r["label"])}</a>'
             f'<span style="color:var(--text-sec)"> -- {r["date"]}</span></li>'
             for r in entries
         )
-        return f'''\
-      <div class="index-card" style="display:block;margin-bottom:1.5rem" id="{slug}">
-        <h3 style="font-family:system-ui;font-size:0.9rem;margin-bottom:0.5rem">{heading}</h3>
-        <ul style="list-style:none;margin:0">{items}</ul>
-      </div>'''
 
-    # Two cards, same shape, stacked: what arrived, then what changed. The
-    # dates are the two ends of each guide's git history -- first commit and
-    # last -- so a guide can honestly appear in both only when it landed and
-    # was then edited on a later day.
-    recent_html = '\n'.join(filter(None, [
-        dated_card(recent, 'recently-added', 'Recently Added'),
-        dated_card(recent_updated, 'recently-updated', 'Recently Updated'),
-    ]))
+    # What arrived, then what changed, as two tabs of one card. The dates are
+    # the two ends of each guide's git history -- first commit and last -- so a
+    # guide can honestly appear in both only when it landed and was then edited
+    # on a later day. The panel ids keep the old card ids, so the sidebar's
+    # #recently-added / #recently-updated links (and any bookmark of them) still
+    # land here; guide-index.js selects the matching tab. The first tab is
+    # selected server-side, so the page reads correctly with no JS at all.
+    tabs = [(slug, heading, entries) for slug, heading, entries in (
+        ('recently-added', 'Recently Added', recent),
+        ('recently-updated', 'Recently Updated', recent_updated),
+    ) if entries]
+    buttons = ''.join(
+        f'<button class="seg-btn{" active" if i == 0 else ""}" role="tab"'
+        f' id="{slug}-tab" data-recent-tab="{slug}" aria-controls="{slug}"'
+        f' aria-selected="{"true" if i == 0 else "false"}"'
+        f' tabindex="{0 if i == 0 else -1}">{heading}</button>'
+        for i, (slug, heading, _) in enumerate(tabs)
+    )
+    panels = ''.join(
+        f'<ul class="recent-panel" role="tabpanel" id="{slug}"'
+        f' aria-labelledby="{slug}-tab" style="list-style:none;margin:0"'
+        f'{"" if i == 0 else " hidden"}>{dated_items(entries)}</ul>'
+        for i, (slug, _, entries) in enumerate(tabs)
+    )
+    recent_html = f'''\
+      <div class="index-card recent-tabs" style="display:block;margin-bottom:1.5rem">
+        <div class="recent-tablist" role="tablist" aria-label="Recent guide changes">{buttons}</div>
+        {panels}
+      </div>''' if tabs else ''
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -1545,6 +1796,12 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     .index-card ul li {{ margin:0.3rem 0; font-size:0.875rem; }}
     .index-card ul li a {{ color:var(--text-primary); }}
     .index-card ul li a:hover {{ color:var(--gold); }}
+    .recent-tablist {{ display:inline-flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.6rem; font-family:system-ui; font-size:0.8rem; }}
+    .recent-tablist .seg-btn {{ padding:4px 12px; background:transparent; color:var(--text-sec); border:none; cursor:pointer; font:inherit; transition:all 0.14s; }}
+    .recent-tablist .seg-btn + .seg-btn {{ border-left:1px solid var(--border); }}
+    .recent-tablist .seg-btn:hover {{ color:var(--text-primary); }}
+    .recent-tablist .seg-btn.active {{ color:var(--gold-bright); background:var(--bg-hover); }}
+    .recent-tablist .seg-btn:focus-visible {{ outline:2px solid var(--gold); outline-offset:-2px; }}
   </style>
 </head>
 <body>
@@ -1557,7 +1814,8 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
     <div class="content">
       <div class="module-heading">
         <h1 style="font-family:system-ui;color:var(--gold)">Guides</h1>
-        <div class="module-path">Tutorials, how-tos, and in-depth feature guides for Turmeric</div>
+        <div class="module-path guide-count">There are currently {len(all_stems)} tutorials, how-tos, and in-depth feature guides for Turmeric.</div>
+        <p class="module-path">Visit the <a href="https://spices.turmeric-lang.com/">Spices</a> page for spice-specific guides.</p>
       </div>
 {recent_html}
       <div class="index-grid">
@@ -1682,6 +1940,7 @@ def main() -> None:
     # input order, so the result is identical to the serial loop, not merely
     # equivalent. Threads (not processes) because the work is a subprocess
     # wait, which releases the GIL.
+    packlib.warn_if_shallow(repo_root)
     n_git_workers = min(32, (os.cpu_count() or 4) * 4, max(1, len(md_files)))
     with ThreadPoolExecutor(max_workers=n_git_workers) as ex:
         creation_dates = list(
@@ -1747,6 +2006,17 @@ def main() -> None:
     render_index(categories, all_stems, out_dir, recent=recent,
                  recent_updated=recent_updated)
     print(f'Done: {len(md_files)} guides + index → {out_dir}')
+
+    # A fence the renderer never saw turns the rest of its block into prose --
+    # headings out of `#` comments, elements out of `<placeholders>` -- with
+    # no error.  genpack's fragment check only notices when the stray text
+    # happens to look like an unclosed tag, so fail on the cause here.
+    bad = [(doc['stem'], e) for doc in docs for e in doc.get('fence_errors', [])]
+    for stem, excerpt in bad:
+        print(f'error: {stem}.md: a code fence rendered as text: ...{excerpt}...',
+              file=sys.stderr)
+    if bad:
+        sys.exit(f'error: {len(bad)} unrendered code fence(s); see above')
 
     if args.emit_pack:
         emit_pack_guides(docs, guides_dir, Path(args.emit_pack),

@@ -23,7 +23,7 @@
 ;; standard { thunk, env } layout.
 (defn apply-mw [^fat mw : (fn [int] ptr<void>) cur : int] : int
   ```c
-  typedef int64_t (*thunk_t)(void*, int64_t);
+  typedef void *(*thunk_t)(void*, int64_t);   /* the closure's own type */
   int64_t *fat = (int64_t *)(intptr_t)mw;
   thunk_t t = (thunk_t)(intptr_t)fat[0];
   return (int)(intptr_t)t((void*)fat, (int64_t)cur);

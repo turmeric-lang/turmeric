@@ -34,6 +34,7 @@ typedef struct PapInline {
     Binding **caps;          /* captured arg bindings, in leftmost-first arg order */
     uint32_t  n_caps;
     uint32_t  rem_arity;     /* args a saturated call to `var` supplies (= target arity - n_caps) */
+    bool      is_alias;      /* `var` only renames the fn PARAM `target` (no caps) */
 } PapInline;
 
 typedef struct CpsB {
@@ -42,6 +43,10 @@ typedef struct CpsB {
     uint32_t counter;   /* fresh-id source */
     CKont  retk;        /* the function's return continuation (KK_RET) */
     const Binding *cur_fn;   /* binding of the fn being translated (self-call detection) */
+    /* The pending expression fold_pending is binding right now, when its
+     * consuming slot does not retain it (PendItem.reap_ok); NULL otherwise.
+     * The EX_CLOSURE arm reaps a capturing closure's env only for this one. */
+    const Expr *reap_closure_expr;
     bool cur_fn_leaf_fiber;  /* the fn's body indirect-calls a fn-VALUE -> permanently fiber */
     PapInline pap[32];       /* active pap-inline registrations (scoped per-let) */
     uint32_t  n_pap;
@@ -195,31 +200,68 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
     #undef IFC
 }
 
-/* E2 (fat-closure fn-value threading): the single argument of a fat-closure
- * fn-value call crosses the `tur_poly_fn_t.fn_cps` ABI as one `int64_t` word.  The
- * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) force-declares the
- * wrapped fn's direct entry as `int64_t <fn>(int64_t)`, so the wrapped fn's C
- * signature must be exactly that -- restrict to a plain `int`/`int64` arg (and,
- * at the poly-wrap gate, result).  A wider int-register kind (cstr/ptr/bool/
- * sub-int) has a distinct C spelling that would mismatch the twin's forward
- * declaration, so it stays on the delegated direct path (correct as before, just
- * not newly DK-threaded). */
+/* E2 (fat-closure fn-value threading): each argument of a fat-closure fn-value
+ * call crosses the `tur_poly_fn_t.fn_cps` ABI as one `int64_t` word.  The
+ * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) converts each word
+ * back to the wrapped fn's own C parameter type (cps_ir_fncps_arg_ctype) for
+ * its direct call, so the kinds admitted are the ones whose C spelling is known
+ * from the kind alone: a word integer, a `cstr` and a `ptr<void>`.  A narrow
+ * integer, a `bool` or a float has a spelling (or a register class) the word
+ * does not carry, so it stays on the delegated direct path (correct as before,
+ * just not newly DK-threaded). */
 static bool fncps_arg_kind_ok(TypeKind k) {
-    return k == TY_INT || k == TY_INT64;
+    return k == TY_INT || k == TY_INT64 || k == TY_CSTR || k == TY_PTR_VOID;
 }
-/* E2 (fat-closure fn-value threading): is a call `(fn arg)` through the poly-fn
- * PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a CONCRETE fat
- * closure -- a bare `:fn` carrier (poly_type NULL) or a typed `:fn` signature
- * (poly_type TY_FN) -- with a single int-register-class NON-poly argument (the
- * `tur_poly_fn_t.fn_cps` ABI is `(void*, int64_t, DK*)`).  A rank-2/3 forall poly
- * param (poly_type TY_FORALL) or a poly-wrapped arg (poly_arg_mask) crosses a
- * different, wider ABI and is excluded (it stays on the delegated direct path). */
+const char *cps_ir_fncps_arg_ctype(TypeKind k) {
+    return k == TY_CSTR ? "const char *" : k == TY_PTR_VOID ? "void *" : "int64_t";
+}
+/* ...and a RESULT the direct fallback can call `f.fn` for with its real C type
+ * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
+ * param's declared result, so calling it through an `int64_t` function type is a
+ * mismatched call -- a -fsanitize=function trap -- and a float result would be
+ * read from the wrong register.  Anything else stays delegated. */
+static bool fncps_result_kind_ok(TypeKind k) {
+    return k == TY_INT || k == TY_INT64 || k == TY_NIL || k == TY_BOOL;
+}
+bool cps_ir_fncps_sig_ok(const Type *fn_ty) {
+    if (!fn_ty || fn_ty->kind != TY_FN) return false;
+    uint32_t n = fn_ty->as.fn.arity;
+    if (n > CPS_FNCPS_MAX_ARGS || (n && !fn_ty->as.fn.arg_kinds)) return false;
+    for (uint32_t i = 0; i < n; i++)
+        if (!fncps_arg_kind_ok((TypeKind)fn_ty->as.fn.arg_kinds[i])) return false;
+    return fncps_result_kind_ok(fn_ty->as.fn.result_kind);
+}
+bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
+    if (!lifted_ty || lifted_ty->kind != TY_FN) return false;
+    uint32_t n = lifted_ty->as.fn.arity;
+    if (n < 1 || n - 1 > CPS_FNCPS_MAX_ARGS || !lifted_ty->as.fn.arg_kinds) return false;
+    /* Integer arguments only: the dispatcher's registry-miss fallback calls
+     * slot 0 as `int64_t (*)(void *, int64_t...)`, which is the lifted entry's
+     * own type only for word integers. */
+    for (uint32_t i = 1; i < n; i++) {
+        TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i];
+        if (ak != TY_INT && ak != TY_INT64) return false;
+    }
+    TypeKind rk = lifted_ty->as.fn.result_kind;
+    return rk == TY_INT || rk == TY_INT64 || rk == TY_NIL;
+}
+/* E2 (fat-closure fn-value threading): is a call `(fn args...)` through the
+ * poly-fn PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a
+ * CONCRETE fat closure -- a bare `:fn` carrier (poly_type NULL) or a typed `:fn`
+ * signature (poly_type TY_FN) -- with up to CPS_FNCPS_MAX_ARGS int-register-class
+ * NON-poly arguments (the `tur_poly_fn_t.fn_cps` ABI is `(void*, int64_t...,
+ * DK*)`).  A rank-2/3 forall poly param (poly_type TY_FORALL) or a poly-wrapped
+ * arg (poly_arg_mask) crosses a different, wider ABI and is excluded (it stays
+ * on the delegated direct path). */
 static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
     if (!fn || !fn->is_poly_fn) return false;
     if (fn->poly_type && fn->poly_type->kind == TY_FORALL) return false;
-    if (e->as.call_.n_args != 1) return false;
+    if (e->as.call_.n_args > CPS_FNCPS_MAX_ARGS) return false;
     if (e->as.call_.poly_arg_mask) return false;
-    return fncps_arg_kind_ok(e->as.call_.args[0]->type.kind);
+    if (!fncps_result_kind_ok(e->type.kind)) return false;
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!fncps_arg_kind_ok(e->as.call_.args[i]->type.kind)) return false;
+    return true;
 }
 
 /* ---- small allocation helpers ----------------------------------------- */
@@ -263,6 +305,15 @@ static const char *cps_form_name(const Expr *e) {
         case EX_SELECT:        return "EX_SELECT";
         case EX_STM:           return "EX_STM";
         case EX_ATOMICALLY:    return "EX_ATOMICALLY";
+        case EX_RETRY:         return "EX_RETRY";
+        case EX_CHECK:         return "EX_CHECK";
+        case EX_OR_ELSE:       return "EX_OR_ELSE";
+        case EX_TVAR_NEW:      return "EX_TVAR_NEW";
+        case EX_TVAR_READ:     return "EX_TVAR_READ";
+        case EX_TVAR_WRITE:    return "EX_TVAR_WRITE";
+        case EX_TVAR_MODIFY:   return "EX_TVAR_MODIFY";
+        case EX_TVAR_SWAP:     return "EX_TVAR_SWAP";
+        case EX_TVAR_CAS:      return "EX_TVAR_CAS";
         case EX_WITH_HANDLER:  return "EX_WITH_HANDLER";
         case EX_COMPOSE_HANDLERS: return "EX_COMPOSE_HANDLERS";
         case EX_HANDLER_LIT:   return "EX_HANDLER_LIT";
@@ -271,6 +322,10 @@ static const char *cps_form_name(const Expr *e) {
         case EX_CATCH_PANIC_OF:return "EX_CATCH_PANIC_OF";
         case EX_CLONEABLE_SHIFT: return "EX_CLONEABLE_SHIFT";
         case EX_SERIAL_SHIFT:  return "EX_SERIAL_SHIFT";
+        case EX_REINTERPRET:   return "EX_REINTERPRET";
+        case EX_CALL:          return "EX_CALL";
+        case EX_GET_FIELD:     return "EX_GET_FIELD";
+        case EX_DICT:          return "EX_DICT";
         default:               return NULL;   /* caller prints numeric kind */
     }
 }
@@ -279,7 +334,20 @@ static const char *cps_form_name(const Expr *e) {
 static CTerm *unsupported_form(CpsB *b, const Expr *e) {
     CTerm *t = new_term(b, CT_UNSUPPORTED);
     const char *nm = cps_form_name(e);
-    if (nm) {
+    if (nm && e->kind == EX_REINTERPRET) {
+        /* cps-evicts-handle-in-operand-positions: name what the reinterpret
+         * converts and what it wraps -- the wrapped form is the one that made
+         * it non-delegatable. */
+        const Expr *in = e->as.reinterpret_.expr;
+        const char *inm = in ? cps_form_name(in) : NULL;
+        char ib[24];
+        if (!inm) { snprintf(ib, sizeof ib, "EX_#%d", in ? (int)in->kind : -1); inm = ib; }
+        char buf[160];
+        snprintf(buf, sizeof(buf), "unsupported form: EX_REINTERPRET %s -> %s of %s",
+                 typekind_to_string(e->as.reinterpret_.source_kind),
+                 typekind_to_string(e->as.reinterpret_.target_kind), inm);
+        t->as.unsupported.why = arena_strdup(b->a, buf, strlen(buf));
+    } else if (nm) {
         char buf[64];
         snprintf(buf, sizeof(buf), "unsupported form: %s", nm);
         t->as.unsupported.why = arena_strdup(b->a, buf, strlen(buf));
@@ -446,8 +514,78 @@ static CAtom atom_cvar(CVar v) {
  * a colored module member reads as uncolored, so a caller in the same module
  * emits a DIRECT (unthreaded) call instead of the DK-threaded `__cps` call, and
  * an effect performed in the callee escapes the caller's handler. */
+/* r7rs-conformance-program-emits-megabytes-of-c: asked for every call the
+ * translation meets (callee_colored, safe_to_delegate), each answer a scan of
+ * the whole program.  A binding -> FnDef table, rebuilt when the program or
+ * its item count changes -- the same policy as emit_cps_ir.c's
+ * fd_for_binding -- holding the FIRST match the scan below finds. */
+static const Expr     *cfd_prog;
+static uint32_t        cfd_np, cfd_cap;
+static const Binding **cfd_keys;
+static const FnDef   **cfd_vals;
+
+static uint32_t cfd_slot(const Binding *k) {
+    uint64_t x = (uint64_t)(uintptr_t)k;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x & (cfd_cap - 1);
+}
+static void cfd_put(const Binding *k, const FnDef *fd) {
+    uint32_t h = cfd_slot(k);
+    while (cfd_keys[h] && cfd_keys[h] != k) h = (h + 1) & (cfd_cap - 1);
+    if (!cfd_keys[h]) { cfd_keys[h] = k; cfd_vals[h] = fd; }
+}
+static void cfd_build(const Expr *program) {
+    uint32_t np = program->as.program.n, n = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF) n++;
+        else if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) n += it->as.defmodule_.mod->n_body;
+    }
+    uint32_t cap = 16;
+    while (cap < 2 * n + 2) cap <<= 1;
+    free((void *)cfd_keys); free((void *)cfd_vals);
+    cfd_keys = (const Binding **)calloc(cap, sizeof *cfd_keys);
+    cfd_vals = (const FnDef **)calloc(cap, sizeof *cfd_vals);
+    cfd_prog = NULL;
+    if (!cfd_keys || !cfd_vals) {
+        free((void *)cfd_keys); free((void *)cfd_vals);
+        cfd_keys = NULL; cfd_vals = NULL; cfd_cap = 0;
+        return;   /* OOM: callee_fndef scans */
+    }
+    cfd_cap = cap;
+    for (uint32_t i = 0; i < np; i++) {
+        Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->binding)
+            cfd_put(it->as.fn_def_.fn->binding, it->as.fn_def_.fn);
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            DefModule *m = it->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) {
+                Expr *mb = m->body[j];
+                if (mb && mb->kind == EX_FN_DEF && mb->as.fn_def_.fn && mb->as.fn_def_.fn->binding)
+                    cfd_put(mb->as.fn_def_.fn->binding, mb->as.fn_def_.fn);
+            }
+        }
+    }
+    cfd_prog = program;
+    cfd_np = np;
+}
+
+void cps_ir_callee_cache_reset(void) { cfd_prog = NULL; }
+
 static const FnDef *callee_fndef(CpsB *b, const Binding *fn) {
     if (!fn || !b->program || b->program->kind != EX_PROGRAM) return NULL;
+    if (b->program != cfd_prog || b->program->as.program.n != cfd_np || !cfd_keys)
+        cfd_build(b->program);
+    if (cfd_keys) {
+        uint32_t h = cfd_slot(fn);
+        while (cfd_keys[h]) {
+            if (cfd_keys[h] == fn) return cfd_vals[h];
+            h = (h + 1) & (cfd_cap - 1);
+        }
+        return NULL;
+    }
     for (uint32_t i = 0; i < b->program->as.program.n; i++) {
         Expr *it = b->program->as.program.items[i];
         if (!it) continue;
@@ -488,21 +626,27 @@ static bool callee_colored(CpsB *b, const Binding *fn) {
 static bool fn_effect_may_escape(CpsB *b, const Binding *fn) {
     const FnDef *fd = callee_fndef(b, fn);
     if (!fd) return true;
+    /* Runtime-pure, not merely empty: a capability tag (IO from a `println`)
+     * is never performed, so it cannot escape (effect-row-honesty W4). */
     if (fd->binding && fd->binding->type.kind == TY_FN
-        && !effect_row_is_empty(fd->binding->type.as.fn.effect_row))
+        && !effect_row_is_runtime_pure(fd->binding->type.as.fn.effect_row))
         return true;
     if (!fd->inferred_effect_row) return true;   /* never inferred: be safe */
-    return !effect_row_is_empty(fd->inferred_effect_row);
+    return !effect_row_is_runtime_pure(fd->inferred_effect_row);
 }
 
 /* ---- pending bindings (drives atomization order) ---------------------- */
 
-typedef struct { Expr *expr; CVar x; } PendItem;
+/* reap_ok: the item is a call argument whose callee slot does not retain it
+ * (call_slot_nonretaining), so a capturing closure bound here is dead once the
+ * call returns and its env may be reaped at the entry boundary. */
+typedef struct { Expr *expr; CVar x; bool reap_ok; } PendItem;
 typedef struct { PendItem items[32]; uint32_t n; } Pending;
 
 /* forward decls */
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
+static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest);
 
 /* An owning-value operation on a local rc handle (`rc/of`, `rc/clone`, `rc/drop`,
@@ -921,11 +1065,52 @@ static bool cps_any_closure_env_freeable(const Expr *let, uint32_t idx) {
     return true;
 }
 
+/* closure-let-in-self-tail-loop-leaks: the other shape the direct emitter
+ * drops at a let's scope exit (let_binding_env_freeable) -- a call to a
+ * `returns_fresh_closure` function, the make-scaler `(let [f (mk i)] ...)`.
+ * Every such call mallocs a fresh, uniquely owned env with scalar captures and
+ * a scalar result (the inference checked both), so the only question is the
+ * same escape walk.  On the CPS path the let has no scope exit, so the call
+ * was bound and the env never freed at all: 24 B a turn of a loop.  Only a
+ * call the direct emitter may take whole qualifies -- a colored callee keeps
+ * its continuation threading. */
+static bool safe_to_delegate(CpsB *b, const Expr *e);   /* fwd (defined below) */
+static bool cps_fresh_call_env_freeable(CpsB *b, const Expr *let, uint32_t idx) {
+    const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    if (!init || !bd || init->kind != EX_CALL) return false;
+    if (!init->as.call_.fn_binding || !init->as.call_.fn_binding->returns_fresh_closure)
+        return false;
+    if (!safe_to_delegate(b, let->as.let_.bindings[idx].init)) return false;
+    if (closure_binding_escapes(let->as.let_.body, bd)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (closure_binding_escapes(let->as.let_.bindings[j].init, bd)) return false;
+    }
+    return true;
+}
+
+bool closure_binding_only_invoked(const Expr *e, const Binding *b);
+
+/* closure-let-in-self-tail-loop-leaks: may a backedge free this binder (see
+ * letraw.reap_at_backedge)?  Every use in the let -- body and sibling inits --
+ * must be an invocation. */
+static bool cps_closure_only_invoked(const Expr *let, uint32_t idx) {
+    const Binding *bd = let->as.let_.bindings[idx].binding;
+    if (!bd || !closure_binding_only_invoked(let->as.let_.body, bd)) return false;
+    for (uint32_t j = 0; j < let->as.let_.n; j++) {
+        if (j == idx) continue;
+        if (!closure_binding_only_invoked(let->as.let_.bindings[j].init, bd)) return false;
+    }
+    return true;
+}
+
 static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
     Expr *init = (Expr *)let->as.let_.bindings[idx].init;
-    if (cps_closure_env_freeable(let, idx)) {
+    if (cps_closure_env_freeable(let, idx) || cps_fresh_call_env_freeable(b, let, idx)) {
         CTerm *t = build_letraw(b, init, bx, rest);
         t->as.letraw.reap_env = true;
+        t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
         return t;
     }
     CTerm *t = cps_bind(b, init, bx, rest);
@@ -1619,10 +1804,10 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
     bool recv_outward = false;
     const Binding *recv = marshal_named_receiver(b, cur, serial, &recv_outward);
     const Expr *recv_expr = NULL;
-    /* The outward lowering runs the receiver on the reset's own continuation,
-     * so the context must be a straight frame list: an `if` branch point would
-     * need that continuation on both arms. */
-    if (recv_outward && saw_if) SK_REJECT();
+    /* The outward lowering runs the receiver on the reset's own continuation.
+     * An `if` branch point needs that continuation on both arms: the emitter
+     * lifts the rest once and delivers the pure arm into it
+     * (serial-receiver-effect-under-if-closure-or-leaf, shape 1). */
     if (!recv) {
         /* U7: a CLOSURE receiver (capturing or not).  Shape 1 calls it directly at
          * the reset site; Shape 2 threads it through the dk_shift body env -- the
@@ -1642,8 +1827,18 @@ static CTerm *build_marshal_reset(CpsB *b, Expr *e, CVar x, CTerm *rest,
          * threaded through here. */
         const struct Closure *rcl = kf->as.closure_.closure;
         const Binding *rfb = (rcl && rcl->fn) ? rcl->fn->binding : NULL;
-        if (!rfb || (callee_colored(b, rfb) && fn_effect_may_escape(b, rfb)))
-            SK_REJECT();
+        if (!rfb) SK_REJECT();
+        if (callee_colored(b, rfb) && fn_effect_may_escape(b, rfb)) {
+            /* serial-receiver-effect-under-if-closure-or-leaf (shape 2): a
+             * serial closure receiver is called outward too -- through its
+             * env-taking `__cps` twin, which the emitter registers because
+             * this use makes the lambda threadable.  Classification evicts the
+             * function if the twin was not emitted after all (Rule D,
+             * outward_receivers_in_s), so the fallback's TUR-E0706 still
+             * names it then. */
+            if (!serial) SK_REJECT();
+            recv_outward = true;
+        }
     }
 
     CTerm *t = new_term(b, CT_CLONEABLE);
@@ -1815,6 +2010,24 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * threads the DK via the registry -- never whole-body-delegate to fiber. */
             if (fn && cps_ir_thread_param_has(fn))
                 return false;
+            /* Nor a call through a fat poly-fn PARAM that the `fn_cps` dispatch
+             * covers: it picks the callee's DK-threading entry when the value
+             * has one and the direct entry otherwise, so it is right for every
+             * value the param can hold.  Delegated, the call is always the
+             * direct `f.fn` -- and the param is a thread param only when every
+             * value passed to it is registered, so ONE pure fn-value passed in
+             * another call sent an effectful lambda's `perform` off the
+             * trampoline: "unhandled effect" from a program that compiled. */
+            if (fn && fncps_param_call_ok(fn, e))
+                return false;
+            /* Nor a call through an inlined alias of a fn param: its `let` is
+             * dropped, so the direct emitter would name an undeclared local.
+             * Refused here, it reaches cps_tail / cps_bind, which rewrite it to
+             * the call through the param. */
+            {
+                const PapInline *pe = b ? pap_lookup(b, fn) : NULL;
+                if (pe && pe->is_alias) return false;
+            }
             /* An indirect callee with no binding -- e.g. a capability CALL
              * `(.print-line cap "..")` whose callee is a `.field` access yielding
              * an effect-annotated fn.  This was delegatable inside a DELEGATED
@@ -1974,6 +2187,14 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * inline-C as a CT_LETRAW.  Unconditional since cps-tramp-resume
          * graduated (2026-07-19). */
         case EX_INLINE_C:  return true;
+        /* cps-evicts-handle-in-operand-positions: a reinterpret is a pure value
+         * conversion the direct emitter lowers in place, so it is exactly as
+         * delegatable as the value it converts.  A generic call whose result
+         * the elaborator re-typed to its instantiation -- `(g2 "s")` as the
+         * argument of an effectful fn-field call under a `handle` -- is
+         * wrapped in one, and evicted the whole function. */
+        case EX_REINTERPRET:
+            return safe_to_delegate(b, e->as.reinterpret_.expr);
         default:
             return false;   /* conservative: unrecognized form -> not delegatable */
     }
@@ -2006,11 +2227,49 @@ static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     return atom_cvar(x);
 }
 
+/* Atomize every argument of a `fn_cps` call, left to right. */
+static CAtom *fncps_atomize_args(CpsB *b, const Expr *e, Pending *pp) {
+    uint32_t n = e->as.call_.n_args;
+    CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+    for (uint32_t i = 0; i < n; i++)
+        args[i] = atomize(b, e->as.call_.args[i], pp);
+    return args;
+}
+
 /* Wrap `core` with the pending bindings, leftmost outermost. */
 static CTerm *fold_pending(CpsB *b, Pending *p, CTerm *core) {
-    for (int i = (int)p->n - 1; i >= 0; i--)
+    for (int i = (int)p->n - 1; i >= 0; i--) {
+        b->reap_closure_expr = p->items[i].reap_ok ? p->items[i].expr : NULL;
         core = cps_bind(b, p->items[i].expr, p->items[i].x, core);
+        b->reap_closure_expr = NULL;
+    }
     return core;
+}
+
+/* Does argument slot `i` of `call` keep nothing of what it is handed?  The
+ * callee is statically known and its parameter is `^borrow`, or the
+ * elaborator inferred it non-retaining (nonretain_param_mask: the body only
+ * calls it, or passes it to a slot that does the same) -- exactly the slots
+ * the direct emitter's escape walk (binding_escapes_impl) admits. */
+static bool call_slot_nonretaining(const Expr *call, uint32_t i) {
+    if (!call || call->kind != EX_CALL || call->as.call_.fn_expr) return false;
+    if (!call_dispatch_is_static(call)) return false;
+    const Binding *fb = call->as.call_.fn_binding;
+    if (!fb || fb->type.kind != TY_FN) return false;
+    if (i < fb->type.as.fn.arity && fb->type.as.fn.arg_flags &&
+        FN_ARG_FLAG(fb->type.as.fn, i, FA_BORROW))
+        return true;
+    return i < 32 && (fb->nonretain_param_mask & (1u << i));
+}
+
+/* atomize() for argument `i` of `call`, recording whether its slot retains
+ * it (see PendItem.reap_ok). */
+static CAtom atomize_call_arg(CpsB *b, Expr *call, uint32_t i, Pending *p) {
+    uint32_t before = p->n;
+    CAtom a = atomize(b, call->as.call_.args[i], p);
+    if (p->n == before + 1)
+        p->items[before].reap_ok = call_slot_nonretaining(call, i);
+    return a;
 }
 
 static const char *builtin_name(const Expr *e) {
@@ -2842,6 +3101,17 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
  * prelude), so we reference them by fresh EX_VAR nodes; the remaining args come
  * straight from the original `(var rest...)` call. */
 static Expr *pap_build_saturated_call(CpsB *b, const PapInline *pe, const Expr *call) {
+    if (pe->is_alias) {
+        /* A renamed fn param: the same call, made through the param.  Copy the
+         * node whole -- the alias shares the param's representation (is_poly_fn,
+         * fat), so the poly-call flags the elaborator set on it still hold --
+         * and name the param the way a direct `(g x)` does, by fn_binding. */
+        Expr *nc = expr_new(b->a, EX_CALL, call->type, call->span);
+        nc->as.call_ = call->as.call_;
+        nc->as.call_.fn_binding = (Binding *)pe->target;
+        nc->as.call_.fn_expr = NULL;
+        return nc;
+    }
     uint32_t n = pe->n_caps + call->as.call_.n_args;
     Expr **args = arena_alloc(b->a, (n ? n : 1) * sizeof(Expr *));
     for (uint32_t i = 0; i < pe->n_caps; i++) {
@@ -2877,6 +3147,8 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
 /* Register any pap-inlinable let bindings of `let` (a closure whose sole use in
  * the body is a saturated call).  Returns the count pushed (pop with the saved
  * b->n_pap after the let is fully translated). */
+static const Type *fn_alias_sig(const Binding *b);   /* fwd */
+
 static void pap_register_let(CpsB *b, const Expr *let) {
     for (uint32_t i = 0; i < let->as.let_.n && b->n_pap < 32; i++) {
         const Binding *vb = let->as.let_.bindings[i].binding;
@@ -2888,9 +3160,65 @@ static void pap_register_let(CpsB *b, const Expr *let) {
             b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = tgt;
             b->pap[b->n_pap].caps = caps;   b->pap[b->n_pap].n_caps = nc;
             b->pap[b->n_pap].rem_arity = rem;
+            b->pap[b->n_pap].is_alias = false;
+            b->n_pap++;
+            continue;
+        }
+        /* An alias of a fn param is the zero-capture case: a call through it IS
+         * a call through the param.  Without this the binding crossed a slot as
+         * a fat value, and the classifier counted it as the param escaping, so
+         * an effectful callback called through the alias had no lowering
+         * (cps-let-alias-of-effectful-fn-param-refused). */
+        const Binding *src = cps_ir_let_fnparam_alias(let, i);
+        if (src) {
+            b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = src;
+            b->pap[b->n_pap].caps = NULL;   b->pap[b->n_pap].n_caps = 0;
+            b->pap[b->n_pap].rem_arity = fn_alias_sig(src)->as.fn.arity;
+            b->pap[b->n_pap].is_alias = true;
             b->n_pap++;
         }
     }
+}
+
+/* The call signature of a fn-valued binding: its own TY_FN type, or -- for a fat
+ * (is_poly_fn) param, whose binding type is the `tur_poly_fn_t` carrier -- the
+ * TY_FN recorded in poly_type.  NULL for a bare `:fn` carrier or a rank-2 forall,
+ * whose calls cross a different ABI than a plain call through it. */
+static const Type *fn_alias_sig(const Binding *b) {
+    if (b->is_poly_fn)
+        return b->poly_type && b->poly_type->kind == TY_FN ? b->poly_type : NULL;
+    return b->type.kind == TY_FN ? &b->type : NULL;
+}
+
+static const Binding *fnparam_alias_src(const Binding *vb, const Expr *init) {
+    if (!vb || vb->is_mut) return NULL;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_VAR) return NULL;
+    const Binding *src = init->as.var.binding;
+    if (!src || !src->is_param || src->is_global || src->is_mut) return NULL;
+    /* Same representation: the elaborator copies is_poly_fn (and the carrier
+     * type) onto the alias. */
+    if (vb->is_poly_fn != src->is_poly_fn || vb->type.kind != src->type.kind)
+        return NULL;
+    const Type *ss = fn_alias_sig(src), *vs = fn_alias_sig(vb);
+    if (!ss || !vs || ss->as.fn.arity != vs->as.fn.arity) return NULL;
+    return src;
+}
+
+const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
+    if (!let || (let->kind != EX_LET) || i >= let->as.let_.n) return NULL;
+    const Binding *vb = let->as.let_.bindings[i].binding;
+    const Binding *src = fnparam_alias_src(vb, let->as.let_.bindings[i].init);
+    if (!src) return NULL;
+    /* Every use -- in the body, or in a later binding's init, which is
+     * translated while the registration is live -- a saturated call through it:
+     * the alias is never a value, so dropping its binding loses nothing. */
+    uint32_t ar = fn_alias_sig(src)->as.fn.arity;
+    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
+        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    if (closure_binding_escapes(let->as.let_.body, vb)) return NULL;
+    if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
+    return src;
 }
 
 /* Was let-binding `idx` of `let` pap-inlined (registered in [saved, n_pap))?  If
@@ -3444,7 +3772,7 @@ static CTerm *make_continue(CpsB *b) {
  * flag-off (no `consumed` field) keeps the historical direct-emit/unsupported
  * behaviour byte-identical. */
 static const BuiltinSpec s_cont_pred_spec = {
-    "cont?", NULL, 1, 1, {0}, {0}, BS_PREFIX_UNARY, "TUR_DK_CONT_PRED"
+    "cont?", NULL, 1, 1, {0}, {0}, BS_PREFIX_UNARY, "TUR_DK_CONT_PRED", NULL
 };
 static CTerm *build_cont_pred(CpsB *b, Expr *e, CVar x, CTerm *body) {
     Pending p = {0};
@@ -3546,6 +3874,96 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
  * handler clause that eviction had no recovery: the clause's `perform` reached
  * the direct emitter, which aborts.  See
  * docs/archive/handler-clause-statement-if-ices-emitter.md. */
+/* An EX_VAR naming fresh binder y (its Binding synthesized and attached, so
+ * the delegated Expr and the binder's declaration spell the same C name). */
+static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp) {
+    Binding *yb = arena_alloc(b->a, sizeof(Binding));
+    memset(yb, 0, sizeof(Binding));
+    Symbol *ys = arena_alloc(b->a, sizeof(Symbol));
+    memset(ys, 0, sizeof(Symbol));
+    ys->name = y->name;
+    ys->len = (uint32_t)strlen(y->name);
+    yb->name = ys;
+    yb->type = *ty;
+    yb->id = y->id;
+    y->bind = yb;
+    Expr *yv = arena_alloc(b->a, sizeof(Expr));
+    memset(yv, 0, sizeof(Expr));
+    yv->kind = EX_VAR;
+    yv->type = *ty;
+    yv->span = sp;
+    yv->as.var.binding = yb;
+    return yv;
+}
+/* `x := reinterpret(e')` where e' carries control: bind e' to a fresh binder y
+ * of e''s own type (any translation the operand needs), then x from a
+ * synthesized reinterpret of y -- atomic, so delegated to the direct emitter,
+ * which spells the retype (pointer through intptr_t, a narrowing cast). */
+static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    Expr *inner = e->as.reinterpret_.expr;
+    CVar y = fresh_cvar(b, &inner->type);
+    Expr *yv = cvar_expr(b, &y, &inner->type, e->span);
+    Expr *re = arena_alloc(b->a, sizeof(Expr));
+    *re = *e;
+    re->as.reinterpret_.expr = yv;
+    return cps_bind(b, inner, y, build_letraw(b, re, x, rest));
+}
+
+/* cps-evicts-handle-in-operand-positions: an INDIRECT call (a fn value, a
+ * rank-2 poly param) whose arguments are not all literals -- `(l (handle ...))`
+ * -- was refused outright.  The call itself never joins the caller's
+ * delimited-control chain (see the arms that use this), so it is delegatable
+ * once its arguments are: bind each non-atomic argument first, left to right
+ * (any translation its control needs), and delegate the call over binders of
+ * those values.  NULL when an argument cannot be bound that way. */
+static CTerm *delegate_call_atomized(CpsB *b, Expr *e, CVar x, CTerm *rest,
+                                     bool tail) {
+    uint32_t n = e->as.call_.n_args;
+    if (n == 0 || n > 32) return NULL;
+    /* Only for an argument that CARRIES CONTROL (the `handle`): a call whose
+     * arguments are merely non-literal keeps the function's eviction, which
+     * also keeps a TAIL indirect call a tail call -- delegated, it becomes a
+     * bind and a return, and the r7rs programs that recurse through closures
+     * ran out of stack.  And only scalar / pointer binders: a by-value
+     * aggregate argument comes back from a carrier-returning call as a word,
+     * and the binder would need the direct emitter's unbox. */
+    bool any_control = false, all_scalar = true;
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.call_.args[i];
+        const Expr *pa = ascribe_peel(a);
+        if (is_atomic(a) || is_widened_literal(a) || (pa && pa->kind == EX_DICT))
+            continue;
+        if (!safe_to_delegate(b, a)) any_control = true;
+        TypeKind k = a->type.kind;
+        if (!(tierA_scalar_kind(k) || k == TY_FLOAT || k == TY_FLOAT64 ||
+              k == TY_FLOAT32))
+            all_scalar = false;
+    }
+    /* In BIND position nothing is lost by delegating the whole call when its
+     * arguments are themselves delegatable (`(.app s (g "x"))` ahead of a
+     * `handle` in the same body); the tail rule above is about tail calls. */
+    if (!any_control) return tail ? NULL : build_letraw(b, e, x, rest);
+    if (!all_scalar) return NULL;
+    Pending p = {0};
+    Expr **nargs = arena_alloc(b->a, n * sizeof(Expr *));
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.call_.args[i];
+        const Expr *pa = ascribe_peel(a);
+        if (is_atomic(a) || is_widened_literal(a) || (pa && pa->kind == EX_DICT)) {
+            nargs[i] = a;
+            continue;
+        }
+        if (p.n >= 32) return NULL;
+        CVar y = fresh_cvar(b, &a->type);
+        nargs[i] = cvar_expr(b, &y, &a->type, a->span);
+        p.items[p.n].expr = a; p.items[p.n].x = y; p.n++;
+    }
+    Expr *call = arena_alloc(b->a, sizeof(Expr));
+    *call = *e;
+    call->as.call_.args = nargs;
+    return fold_pending(b, &p, build_letraw(b, call, x, rest));
+}
+
 static CTerm *cps_tail_unit(CpsB *b, CKont kont) {
     if (kont.kind == KK_LOOP) return make_continue(b);
     CTerm *t = new_term(b, CT_APPCONT);
@@ -3666,7 +4084,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CTerm *t = new_term(b, CT_TAILCALL);
                     t->as.tailcall.fn = pf; t->as.tailcall.args = args;
                     t->as.tailcall.n = n; t->as.tailcall.kont = kont;
@@ -3687,7 +4105,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CTerm *t = new_term(b, CT_TAILCALL);
                     t->as.tailcall.fn = NULL; t->as.tailcall.fn_atom = fnatom;
                     t->as.tailcall.args = args; t->as.tailcall.n = n;
@@ -3713,6 +4131,11 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     return t;
                 }
                 if (!call_args_literal(e)) {
+                    CVar x = fresh_cvar(b, &e->type);
+                    CTerm *ac = new_term(b, CT_APPCONT);
+                    ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                    CTerm *d = delegate_call_atomized(b, e, x, ac, true);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -3729,15 +4152,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * off the trampoline, escaping an effectful callback's perform).  The
              * emitter picks `fn_cps` when populated (an effectful fn-value) and
              * the direct `f.fn` path otherwise, so a pure fn-value is unchanged.
-             * Restricted to the single-int-arg `tur_poly_fn_t.fn_cps` ABI. */
+             * Restricted to the slot's word ABI (fncps_param_call_ok). */
             if (fncps_param_call_ok(fn, e)) {
                 Pending pp = {0};
-                CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
-                CAtom *args = arena_alloc(b->a, sizeof(CAtom));
-                args[0] = a0;
+                CAtom *args = fncps_atomize_args(b, e, &pp);
                 CTerm *t = new_term(b, CT_TAILCALL);
                 t->as.tailcall.fn = fn; t->as.tailcall.args = args;
-                t->as.tailcall.n = 1; t->as.tailcall.kont = kont;
+                t->as.tailcall.n = e->as.call_.n_args; t->as.tailcall.kont = kont;
                 t->as.tailcall.via_fncps = true;
                 t->as.tailcall.call_expr = e;
                 return fold_pending(b, &pp, t);
@@ -3761,6 +4182,11 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * above: delegate with atomic args, otherwise evict. */
             if (!fn->source_fn_def && !callee_colored(b, fn)) {
                 if (!call_args_literal(e)) {
+                    CVar x = fresh_cvar(b, &e->type);
+                    CTerm *ac = new_term(b, CT_APPCONT);
+                    ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                    CTerm *d = delegate_call_atomized(b, e, x, ac, true);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -3774,7 +4200,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < n; i++)
-                args[i] = atomize(b, e->as.call_.args[i], &p);
+                args[i] = atomize_call_arg(b, e, i, &p);
             if (callee_colored(b, fn)) {
                 CTerm *t = new_term(b, CT_TAILCALL);
                 t->as.tailcall.fn = fn; t->as.tailcall.args = args;
@@ -4124,6 +4550,14 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
+            /* As cps_bind's default arm: a Tier A reinterpret over a control-
+             * bearing operand. */
+            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return cps_bind_reinterp(b, e, x, ac);
+            }
             return unsupported_form(b, e);
         }
     }
@@ -4180,7 +4614,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CVar j = fresh_cvar(b, x.type);
                     j.name = arena_strdup(b->a, "j", 1);
                     CTerm *call = new_term(b, CT_TAILCALL);
@@ -4203,7 +4637,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
                     for (uint32_t i = 0; i < n; i++)
-                        args[i] = atomize(b, e->as.call_.args[i], &pp);
+                        args[i] = atomize_call_arg(b, e, i, &pp);
                     CVar j = fresh_cvar(b, x.type);
                     j.name = arena_strdup(b->a, "j", 1);
                     CTerm *call = new_term(b, CT_TAILCALL);
@@ -4231,6 +4665,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     return t;
                 }
                 if (!call_args_literal(e)) {
+                    CTerm *d = delegate_call_atomized(b, e, x, rest, false);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -4241,17 +4677,15 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * through a fat-closure poly-fn param reifies the continuation `rest`
              * as a heap join `j(x)` and threads it to the closure's `fn_cps` slot
              * (or the direct `f.fn` path when NULL).  Mirrors the E2a via_registry
-             * non-tail shape (single int-register-class arg). */
+             * non-tail shape (int-register-class args). */
             if (fncps_param_call_ok(fn, e)) {
                 Pending pp = {0};
-                CAtom a0 = atomize(b, e->as.call_.args[0], &pp);
-                CAtom *fargs = arena_alloc(b->a, sizeof(CAtom));
-                fargs[0] = a0;
+                CAtom *fargs = fncps_atomize_args(b, e, &pp);
                 CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
                 CTerm *call = new_term(b, CT_TAILCALL);
                 call->as.tailcall.fn = fn; call->as.tailcall.args = fargs;
-                call->as.tailcall.n = 1; call->as.tailcall.kont = kont_var(j);
+                call->as.tailcall.n = e->as.call_.n_args; call->as.tailcall.kont = kont_var(j);
                 call->as.tailcall.via_fncps = true;
                 call->as.tailcall.call_expr = e;
                 CTerm *t = new_term(b, CT_LETCONT);
@@ -4267,6 +4701,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * VALUE callee never takes the named CT_LETCALL arm. */
             if (!fn->source_fn_def && !callee_colored(b, fn)) {
                 if (!call_args_literal(e)) {
+                    CTerm *d = delegate_call_atomized(b, e, x, rest, false);
+                    if (d) return d;
                     CTerm *t = new_term(b, CT_UNSUPPORTED);
                     t->as.unsupported.why = "indirect call (non-atomic args)";
                     return t;
@@ -4277,7 +4713,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             uint32_t n = e->as.call_.n_args;
             CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
             for (uint32_t i = 0; i < n; i++)
-                args[i] = atomize(b, e->as.call_.args[i], &p);
+                args[i] = atomize_call_arg(b, e, i, &p);
             if (callee_colored(b, fn)) {
                 CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
@@ -4487,12 +4923,20 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return unsupported_form(b, e);
         }
         case EX_CLOSURE: {
-            /* B8 slice-3 (probe): delegate a capturing closure with reap_env. */
+            /* B8 slice-3: delegate a capturing closure, reaping its env at the
+             * entry boundary only when the slot consuming it keeps nothing of
+             * it (fold_pending names that expression in reap_closure_expr).
+             * Reaping unconditionally freed the env of a lambda a callee had
+             * stored -- `(keep1 (fn [x] (+ x n)) 3)` with keep1 doing
+             * `(set! saved f)` -- so a later `(saved 10)` jumped through freed
+             * memory.  Anywhere else the env is left to leak, which is safe. */
             const struct Closure *cl = e->as.closure_.closure;
             if (cl && cl->n_captures > 0
                 && !cl->is_shift_receiver && !cl->is_effect_payload) {
+                bool reap = b->reap_closure_expr &&
+                            ascribe_peel(b->reap_closure_expr) == e;
                 CTerm *t = build_letraw(b, e, x, rest);
-                t->as.letraw.reap_env = true;
+                t->as.letraw.reap_env = reap;
                 return t;
             }
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
@@ -4503,6 +4947,13 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * direct emitter (binds x, continues rest). */
             if (safe_to_delegate(b, e))
                 return build_letraw(b, e, x, rest);
+            /* cps-evicts-handle-in-operand-positions: a same-size Tier A
+             * reinterpret is a bit-identical retype whose OPERAND carries a
+             * control op (a generic call with a `handle` in its arguments).
+             * Translate the operand into a binder of its own type, then retype
+             * it into x through a delegated reinterpret of that binder. */
+            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr)
+                return cps_bind_reinterp(b, e, x, rest);
             return unsupported_form(b, e);
         }
     }
@@ -4848,4 +5299,19 @@ void cps_ir_dump_program(Arena *a, Expr *program, FILE *out) {
         cps_ir_print(t, out, 1);
         fputs("cps-end\n", out);
     }
+}
+
+/* Public: does this call through the fn-value PARAM `p` thread the caller's DK
+ * continuation into the callee, so an effectful value's `perform` reaches the
+ * caller's handler?  Mirrors the EX_CALL lowering above: an effectful-row call
+ * threads via the registry when `p` is a thread param (otherwise it is
+ * unsupported, and the E2 taint routes it); an empty-row call threads only
+ * through the fat value's `fn_cps` slot.  Any other call through `p` is a plain
+ * direct call, which an effectful value escapes from. */
+bool cps_ir_param_call_threads(const Binding *p, const Expr *call) {
+    if (!p || !call || call->kind != EX_CALL || call->as.call_.fn_binding != p)
+        return false;
+    if (call_is_effectful_fnvalue(call))
+        return cps_ir_thread_param_has(p) && call_args_pendable(call);
+    return fncps_param_call_ok(p, call);
 }

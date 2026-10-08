@@ -1,0 +1,12 @@
+#lang r7rs
+;; docs/archive/r7rs-redefining-eval-with-scheme-eval-fails-to-compile.md:
+;; a program that imports (scheme eval) and defines its own eval (SICP 4.1)
+;; compiled to two C functions of one name.  The saved standard eval keeps
+;; working after the redefinition.
+(import (scheme base) (scheme write) (scheme eval))
+(define real-eval eval)
+(define (eval e env) (quote mine))
+(write (eval 5 0))
+(newline)
+(write (real-eval (quote (+ 1 2)) (environment (quote (scheme base)))))
+(newline)

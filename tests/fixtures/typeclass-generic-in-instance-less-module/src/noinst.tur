@@ -1,0 +1,6 @@
+(defmodule main
+  (import box/cls :refer [twice])
+  (defopaque W :int)
+  (defn main [] : int
+    (println (twice (:: 1 W)))
+    0))

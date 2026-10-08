@@ -1,0 +1,23 @@
+;; loop-invariant-silently-unverified-outside-a-defn: a `definstance` method's
+;; `:invariant` loop is analysed exactly like a `defn`'s.  It used to be
+;; registered, given both runtime checks, and then never visited -- no proof,
+;; no decline, nothing in the stats line.  The invariant is written in the
+;; instance's body, so the class owning the signature changes nothing about
+;; what can be proved.  The hook checks both checks are elided and the stats
+;; line counts the method's four obligations (two conjuncts x initiation and
+;; preservation) under --strict-refine.
+(defclass Counted [A]
+  (tally [a : A] : int))
+
+(definstance Counted [int]
+  (tally [a : int] : int
+    (let [^mut acc 0
+          ^mut i   0]
+      (while (< i a) :invariant (and (>= acc 0) (>= i 0))
+        (set! acc (+ acc 1))
+        (set! i   (+ i 1)))
+      acc)))
+
+(defn main [] : int
+  (println (tally 3))
+  0)

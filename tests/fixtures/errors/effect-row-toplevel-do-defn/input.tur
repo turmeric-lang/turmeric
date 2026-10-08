@@ -1,0 +1,10 @@
+;; module-members-skip-effect-row-checking: a defn inside a top-level
+;; (do ...) -- the shape a macro expanding to several defns produces -- is
+;; effect-row checked like any other top-level defn.
+
+(do
+  (defn helper [] : int 1)
+  (defn quiet [] #fx{} : int
+    (do (println "x") 0)))
+
+(defn main [] : int (quiet))

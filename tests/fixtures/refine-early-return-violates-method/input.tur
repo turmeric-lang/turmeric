@@ -1,0 +1,14 @@
+;; early-return-bypasses-return-refinement: the same bypass in a `definstance`
+;; method, whose result check is wrapped by the instance-method path.
+(defclass Sized [A]
+  (size [a : A] : #refine{ r : int | (>= r 0) }))
+
+(definstance Sized [int]
+  (size [a : int] : #refine{ r : int | (>= r 0) }
+    (when (< a 0) (return a))
+    a))
+
+(defn main [] : int
+  (println (size 4))
+  (println (size -4))
+  0)

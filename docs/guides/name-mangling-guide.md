@@ -150,10 +150,10 @@ Two consequences for hand-written inline C:
 
 The history of the silent arm this replaced (a uniqueness test on the raw name
 guarding a `#define` on the folded one) is in
-[docs/archive/separator-fold-collides-emitted-c-names.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/separator-fold-collides-emitted-c-names.md).
+[docs/archive/separator-fold-collides-emitted-c-names.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/separator-fold-collides-emitted-c-names.md).
 
 See
-[docs/archive/duplicate-ctor-names-collide-in-emitted-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/duplicate-ctor-names-collide-in-emitted-c.md).
+[docs/archive/duplicate-ctor-names-collide-in-emitted-c.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/duplicate-ctor-names-collide-in-emitted-c.md).
 
 ## The `tur_u_` guard prefix -- names C already owns
 
@@ -237,9 +237,9 @@ manual update is needed when the mangling scheme changes.
 
 ## See also
 
-- Scheme implementation: [`src/compiler/mangle.c`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/mangle.c), [`src/compiler/mangle.h`](https://github.com/rjungemann/turmeric/blob/main/src/compiler/mangle.h)
-- Unit test (oracle + round-trip + injectivity): [`tests/mangle_test.c`](https://github.com/rjungemann/turmeric/blob/main/tests/mangle_test.c) /
+- Scheme implementation: [`src/compiler/mangle.c`](https://github.com/turmeric-lang/turmeric/blob/main/src/compiler/mangle.c), [`src/compiler/mangle.h`](https://github.com/turmeric-lang/turmeric/blob/main/src/compiler/mangle.h)
+- Unit test (oracle + round-trip + injectivity): [`tests/mangle_test.c`](https://github.com/turmeric-lang/turmeric/blob/main/tests/mangle_test.c) /
   `tur_mangle_unit` ctest target
-- Regression fixtures: [`tests/fixtures/mangle-kebab-snake-coexist/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-kebab-snake-coexist) and
-  [`tests/fixtures/mangle-arrow-name-vs-module/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/mangle-arrow-name-vs-module)
-- Plan: [reversible-name-mangling-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/reversible-name-mangling-plan.md)
+- Regression fixtures: [`tests/fixtures/mangle-kebab-snake-coexist/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/mangle-kebab-snake-coexist) and
+  [`tests/fixtures/mangle-arrow-name-vs-module/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/mangle-arrow-name-vs-module)
+- Plan: [reversible-name-mangling-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/reversible-name-mangling-plan.md)

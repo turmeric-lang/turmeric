@@ -13,6 +13,9 @@
 #define MAX_SECONDARY_SPANS 4
 
 static const SourceFile *files_[MAX_FILES];
+static Span              origins_[MAX_FILES];  /* see diag_set_file_origin */
+static Span              expansion_site_;      /* see diag_set_expansion_site */
+static const char       *expansion_macro_;
 static size_t            file_count_;
 static bool              had_error_;
 static uint64_t          error_serial_;   /* count of SHOWN (uncaptured) errors */
@@ -42,7 +45,24 @@ void diag_register_file(const SourceFile *file) {
         abort();
     }
     files_[file->file_id] = file;
+    origins_[file->file_id] = SPAN_UNKNOWN;
     if (file->file_id >= file_count_) file_count_ = (size_t)file->file_id + 1;
+}
+
+void diag_set_file_origin(uint16_t file_id, Span origin) {
+    if (file_id >= MAX_FILES || origin.line == 0 ||
+        origin.file_id >= MAX_FILES || origin.file_id == file_id)
+        return;
+    origins_[file_id] = origin;
+}
+
+Span diag_set_expansion_site(Span site, const char *macro_name,
+                             const char **prev_name) {
+    Span prev = expansion_site_;
+    if (prev_name) *prev_name = expansion_macro_;
+    expansion_site_  = site;
+    expansion_macro_ = site.line > 0 ? macro_name : NULL;
+    return prev;
 }
 
 uint16_t diag_alloc_file_id(void) {
@@ -237,6 +257,7 @@ const char *diag_code_to_string(DiagCode code) {
         /* CF6: async Send-across-await */
         case TUR_E0022_AWAIT_LIVE_NOT_SEND:              return "TUR-E0022";
         case TUR_E0025_DUPLICATE_INSTANCE:               return "TUR-E0025";
+        case TUR_E0026_UNKNOWN_EFFECT_IN_ROW:            return "TUR-E0026";
         /* Phase B: mixed-width numeric arithmetic */
         case TUR_E0042_MIXED_WIDTH_ARITH:                return "TUR-E0042";
         case TUR_E0254_INFINITE_EFFECT_ROW:              return "TUR-E0254";
@@ -363,6 +384,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_D0001_FN_TYPE_COLON:             return "TUR-D0001";
         case TUR_D0002_FX_ROW_LEGACY_HASH:        return "TUR-D0002";
         case TUR_D0003_FX_ROW_LEGACY_AT:          return "TUR-D0003";
+        case TUR_D0004_NONEXHAUSTIVE_FX_MARKER:   return "TUR-D0004";
         /* XF: experimental-flag mechanism */
         case TUR_E0310_UNKNOWN_EXPERIMENT:        return "TUR-E0310";
         case TUR_E0311_UNKNOWN_ENGINE:            return "TUR-E0311";
@@ -424,6 +446,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-E0021") == 0) return TUR_E0021_PRIVATE_EFFECT;
     if (strcmp(s, "TUR-E0022") == 0) return TUR_E0022_AWAIT_LIVE_NOT_SEND;
     if (strcmp(s, "TUR-E0025") == 0) return TUR_E0025_DUPLICATE_INSTANCE;
+    if (strcmp(s, "TUR-E0026") == 0) return TUR_E0026_UNKNOWN_EFFECT_IN_ROW;
     if (strcmp(s, "TUR-E0042") == 0) return TUR_E0042_MIXED_WIDTH_ARITH;
     if (strcmp(s, "TUR-E0254") == 0) return TUR_E0254_INFINITE_EFFECT_ROW;
     if (strcmp(s, "TUR-E0260") == 0) return TUR_E0260_SIZED_TYPE_MISMATCH;
@@ -544,6 +567,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-D0001") == 0) return TUR_D0001_FN_TYPE_COLON;
     if (strcmp(s, "TUR-D0002") == 0) return TUR_D0002_FX_ROW_LEGACY_HASH;
     if (strcmp(s, "TUR-D0003") == 0) return TUR_D0003_FX_ROW_LEGACY_AT;
+    if (strcmp(s, "TUR-D0004") == 0) return TUR_D0004_NONEXHAUSTIVE_FX_MARKER;
     /* XF: experimental-flag mechanism */
     if (strcmp(s, "TUR-E0310") == 0) return TUR_E0310_UNKNOWN_EXPERIMENT;
     if (strcmp(s, "TUR-E0311") == 0) return TUR_E0311_UNKNOWN_ENGINE;
@@ -876,6 +900,32 @@ static const DiagExplanation diag_explanations_[] = {
       "autoload) is not a duplicate in this sense: the same definition arriving\n"
       "through two load paths stays a silent no-op.\n"
     },
+    { TUR_E0026_UNKNOWN_EFFECT_IN_ROW,
+      "TUR-E0026: Unknown effect in an effect row\n"
+      "\n"
+      "An uppercase name inside #fx{...} must be an effect that some\n"
+      "defeffect in the program declares.  (A lowercase name is a row\n"
+      "variable and is not looked up.)  This one is not declared anywhere\n"
+      "the compiler can see.\n"
+      "\n"
+      "Example:\n"
+      "  (defn log-line [] #fx{Write} : int ...)   ;; error: no defeffect Write\n"
+      "\n"
+      "The usual cause is an effect from a module that is not loaded: Write,\n"
+      "Read, Log, Fail and the rest of stdlib/effects.tur are not\n"
+      "autoloaded.  Load it -- (load \"stdlib/effects.tur\") -- or declare the\n"
+      "effect yourself.  (The capability tags IO, FS, Net, Proc and Rand are\n"
+      "compiler-known and need no declaration; Unsafe likewise.)\n"
+      "\n"
+      "Compiler attributes that used to be written in the row are not\n"
+      "effects: Construct is ^construct, ByVal is ^byval, and NonExhaustive\n"
+      "is (match ^non-exhaustive ...).\n"
+      "\n"
+      "This used to be silent: the unknown name was dropped, so #fx{FS}\n"
+      "checked as #fx{}, and a caller's #fx{} -- which should have failed\n"
+      "with TUR-E0009 for calling an FS function -- passed a check that had\n"
+      "quietly stopped happening.\n"
+    },
     { TUR_E0014_NOT_CLONE,
       "TUR-E0014: Captured binding does not implement Clone\n"
       "\n"
@@ -1005,12 +1055,18 @@ static const DiagExplanation diag_explanations_[] = {
       "TUR-W0030: Unannotated effectful function (--strict-effects)\n"
       "\n"
       "Under --strict-effects, every function whose inferred effect row is non-empty\n"
-      "should carry an explicit #{...} annotation. This warning fires when an unannotated\n"
-      "function performs one or more effects.\n"
+      "should carry an explicit #fx{...} annotation. This warning fires when an\n"
+      "unannotated function performs one or more effects -- a defn, a fn literal\n"
+      "(named by where it is: \"anonymous function in 'f'\"), or an instance\n"
+      "method (whose row is its defclass method's).\n"
       "\n"
-      "Fix: add an effect-row annotation to the function, e.g.:\n"
-      "  (defn my-fn [] #{Write} :nil ...)\n"
-      "Or handle the effect inside the function so its row is empty.\n",
+      "Fix: add the effect-row annotation the message spells, e.g.:\n"
+      "  (defn my-fn [] #fx{Write} :nil ...)\n"
+      "  (fn [k] #fx{Bt} (bt-set! c 1))\n"
+      "Or handle the effect inside the function so its row is empty.\n"
+      "\n"
+      "-Werror=strict-effects makes this an error (and implies --strict-effects).\n"
+      "--lint-effects is a deprecated alias for --strict-effects.\n",
     },
     { TUR_W0031_EFFECT_OVER_ANNOTATED,
       "TUR-W0031: Over-annotated effect row\n"
@@ -1018,8 +1074,12 @@ static const DiagExplanation diag_explanations_[] = {
       "The declared effect row contains an effect that the function never actually\n"
       "performs. This may indicate a stale annotation after refactoring.\n"
       "\n"
-      "Fix: remove the unused effect from the #{...} annotation, e.g.:\n"
-      "  (defn my-fn [] #{Write} :nil ...)  ; remove Log if it is never performed\n",
+      "Fix: remove the unused effect from the #fx{...} annotation, e.g.:\n"
+      "  (defn my-fn [] #fx{Write} :nil ...)  ; remove Log if it is never performed\n"
+      "\n"
+      "Not reported for a capability effect (^capability), which the annotation\n"
+      "alone justifies, nor for an instance method, whose row is its class\n"
+      "method's: an instance that performs less than its class allows is normal.\n",
     },
     { TUR_W0032_ROW_VAR_ALWAYS_CONCRETE,
       "TUR-W0032: Row variable is always instantiated to a concrete row\n"
@@ -1030,7 +1090,9 @@ static const DiagExplanation diag_explanations_[] = {
       "allows the compiler to enforce it strictly.\n"
       "\n"
       "Fix: replace the row variable with the concrete effect set, e.g.:\n"
-      "  (defn run-twice [f :(fn [] #{Ask} :int)] #{Ask} :int ...)\n",
+      "  (defn run-twice [f :(fn [] #fx{Ask} :int)] #fx{Ask} :int ...)\n"
+      "\n"
+      "Reported under --strict-effects; -Werror=strict-effects makes it an error.\n",
     },
     { TUR_W0033_UNREACHABLE_HANDLER,
       "TUR-W0033: Handler clause is unreachable\n"
@@ -1905,6 +1967,21 @@ static const DiagExplanation diag_explanations_[] = {
       "read by naming the parameter (`#reads [w g]` -- the grant then\n"
       "requires BOTH frozen at the site).\n"
       "\n"
+      "The frame also promises the body does not CHANGE the named state, and\n"
+      "the same code reports a body seen to break that -- a store through a\n"
+      "framed parameter, or a call handing it to a callee whose `#writes`\n"
+      "frame names it (stdlib's container mutators carry one):\n"
+      "\n"
+      "    (defn liar [v : (Vec int)] #reads v : int\n"
+      "      (do (vec-push! v 7) 0))   ;; TUR-W0383: writes v\n"
+      "\n"
+      "A measure that changes what it measures is not a function of it.  Drop\n"
+      "`#reads`, or stop writing.  A use of a framed parameter that is neither\n"
+      "a read nor a demonstrable write (aliased into a local, returned, passed\n"
+      "to an unannotated callee) is not reported, but such a measure does not\n"
+      "back the loop-invariant frozen grant, which elides a check with no\n"
+      "callee-side backstop.\n"
+      "\n"
       "The same evidence also REFUSES the congruence override, so the\n"
       "crossing must be proven some other way; an undecided one is TUR-W0372\n"
       "(an error under --strict-refine).  Only a demonstrable read does this:\n"
@@ -1934,7 +2011,7 @@ static const DiagExplanation diag_explanations_[] = {
       "                 `(Cons _ t) (+ 1 (len t))`), or a subterm of one.\n"
       "                 Arithmetic on the argument (`(f (- n 1))`), calls\n"
       "                 through variables, and mutual recursion all reject.\n"
-      "  coverage    -- every `match` is proven exhaustive: a `#{NonExhaustive}`\n"
+      "  coverage    -- every `match` is proven exhaustive: a `^non-exhaustive`\n"
       "                 opt-out, or a literal-scrutinee match with no `_` /\n"
       "                 variable arm, rejects.  So does any form the reflection\n"
       "                 walk does not positively recognise (macros, lambdas,\n"
@@ -2561,6 +2638,23 @@ static const DiagExplanation diag_explanations_[] = {
       "Run tools/migrate-fx-rows.py to rewrite a tree.  Removed in a future\n"
       "release.\n",
     },
+    /* effect-row-honesty-plan W0 */
+    { TUR_D0004_NONEXHAUSTIVE_FX_MARKER,
+      "TUR-D0004: `#fx{NonExhaustive}` is deprecated; write `^non-exhaustive`\n"
+      "\n"
+      "The opt-out from match exhaustiveness checking is an attribute of the\n"
+      "match, not an effect, so it no longer borrows the effect-row brackets.\n"
+      "`#fx{...}` now holds effects and row variables only.\n"
+      "\n"
+      "Example triggering this warning:\n"
+      "  (match #fx{NonExhaustive} e (Left l) l)\n"
+      "\n"
+      "Fix:\n"
+      "  (match ^non-exhaustive e (Left l) l)\n"
+      "\n"
+      "The old spelling still opts out, so a program keeps compiling; under\n"
+      "--Werror=deprecated it is an error.  It is removed in a future release.\n",
+    },
     /* XF (experimental-flag-mechanism-plan): unknown --enable= name */
     { TUR_E0310_UNKNOWN_EXPERIMENT,
       "TUR-E0310: unknown experiment\n"
@@ -2754,17 +2848,21 @@ static const DiagExplanation diag_explanations_[] = {
       "  (do (init) (serial-shift k v) (run-loop state))\n"
       "-- or move the non-capturable work outside the serial-reset boundary.\n"
       "\n"
-      "The same code covers the RECEIVER (the function handed the continuation)\n"
-      "in one remaining shape.  A named receiver may perform an effect it does not\n"
+      "The same code covers effects in two remaining places.  A RECEIVER (the\n"
+      "function handed the continuation) may perform an effect it does not\n"
       "handle itself -- the reset then calls it on its own continuation, so the\n"
       "effect reaches the handlers around the serial-reset:\n"
       "  (defn recv [k : serial-cont] : int (k (perform (Ask))))  ; accepted\n"
-      "but only when the context is a straight frame list.  Under an `if` branch\n"
-      "point the receiver still runs from the shift body, outside those handlers,\n"
-      "and an escaping effect has nowhere to go:\n"
-      "  (serial-reset (if c (page \"\" (serial-shift recv 0)) 5))  ; Ask escapes\n"
-      "Hoist the `if` out of the serial-reset, handle the effect inside the\n"
-      "receiver (or a function it calls), or perform it outside the reset.\n",
+      "That holds for a named receiver and for a closure literal capturing\n"
+      "plain values (ints, floats, strings), with or without an `if` in the\n"
+      "context.  A closure receiver capturing anything else, and a CONTEXT\n"
+      "callee an effect escapes, are refused:\n"
+      "  (defn page2 [env : cstr hole : int] : int (+ hole (perform (Ask))))\n"
+      "  (serial-reset (page2 \"\" (serial-shift recv 0)))  ; Ask escapes page2\n"
+      "A context callee runs when the continuation is RESUMED -- possibly in\n"
+      "another process, from bytes -- so which handlers its effect should reach\n"
+      "is not settled.  Handle the effect inside the receiver or the callee (or\n"
+      "a function it calls), or perform it outside the reset.\n",
     },
     /* cloneable-shift-unsupported-context-miscompile (D6a) */
     { TUR_E0710_CLONEABLE_CONTEXT_NOT_CAPTURABLE,
@@ -3193,6 +3291,18 @@ typedef struct DiagLspEntry {
     uint32_t  col_end0;     /* 0-based */
     char      file[256];    /* path copied at emit time (avoids dangling ptr) */
     char      message[512];
+    /* The outermost file on the origin chain (diag_set_file_origin) -- the
+     * one the entry file named -- and the span of the form that named it, in
+     * `via_parent`.  Empty when the file has no recorded origin. */
+    char      via[256];
+    char      via_parent[256];
+    uint32_t  via_line0, via_col_start0, via_col_end0;
+    /* The outermost macro call this diagnostic was raised under
+     * (diag_set_expansion_site), when that call is in another file than the
+     * diagnostic.  Empty otherwise. */
+    char      exp_file[256];
+    char      exp_macro[64];
+    uint32_t  exp_line0, exp_col_start0, exp_col_end0;
 } DiagLspEntry;
 
 static bool          lsp_collect_ = false;
@@ -3243,9 +3353,51 @@ static void lsp_append(DiagLevel level, DiagCode code, Span span, const char *ms
     const SourceFile *f = (span.file_id < MAX_FILES) ? files_[span.file_id] : NULL;
     snprintf(e->file, sizeof(e->file), "%s", f && f->path ? f->path : "");
     snprintf(e->message, sizeof(e->message), "%s", msg ? msg : "");
+
+    e->exp_file[0] = e->exp_macro[0] = '\0';
+    if (expansion_site_.line > 0 && expansion_site_.file_id < MAX_FILES &&
+        expansion_site_.file_id != span.file_id &&
+        files_[expansion_site_.file_id] && files_[expansion_site_.file_id]->path) {
+        snprintf(e->exp_file, sizeof(e->exp_file), "%s",
+                 files_[expansion_site_.file_id]->path);
+        snprintf(e->exp_macro, sizeof(e->exp_macro), "%s",
+                 expansion_macro_ ? expansion_macro_ : "");
+        e->exp_line0      = expansion_site_.line - 1;
+        e->exp_col_start0 = expansion_site_.col_start > 0 ? expansion_site_.col_start - 1 : 0;
+        e->exp_col_end0   = expansion_site_.col_end > 0 ? expansion_site_.col_end - 1 : 0;
+        /* A call spanning lines has an end column on another line. */
+        if (expansion_site_.off_end > expansion_site_.off_start &&
+            e->exp_col_end0 <= e->exp_col_start0)
+            e->exp_col_end0 = e->exp_col_start0 + 1;
+    }
+
+    /* Walk the origin chain while the SourceFiles are still alive.  The
+     * depth cap only guards a cycle (a file loading itself back). */
+    e->via[0] = e->via_parent[0] = '\0';
+    uint16_t cur = span.file_id, top = MAX_FILES;
+    Span top_origin = SPAN_UNKNOWN;
+    for (int d = 0; d < 64 && cur < MAX_FILES && origins_[cur].line > 0; d++) {
+        top = cur;
+        top_origin = origins_[cur];
+        cur = top_origin.file_id;
+    }
+    if (top < MAX_FILES && files_[top] && files_[top]->path &&
+        files_[top_origin.file_id] && files_[top_origin.file_id]->path) {
+        snprintf(e->via, sizeof(e->via), "%s", files_[top]->path);
+        snprintf(e->via_parent, sizeof(e->via_parent), "%s",
+                 files_[top_origin.file_id]->path);
+        e->via_line0      = top_origin.line - 1;
+        e->via_col_start0 = top_origin.col_start > 0 ? top_origin.col_start - 1 : 0;
+        e->via_col_end0   = top_origin.col_end > 0 ? top_origin.col_end - 1 : 0;
+    }
 }
 
-static void lsp_build_array(Buf *b) {
+/* Build the LSP diagnostics array.  With `doc_path` set, entries from another
+ * file are relocated onto the document (see diag_lsp_flush_array_for); with
+ * it NULL, every entry keeps its own coordinates -- the shape the MCP server
+ * and diag_lsp_flush want. */
+static void lsp_build_array_ex(Buf *b, const char *doc_path,
+                               DiagLspRelocateFn relocate, void *ctx) {
     static const int lsp_severity[] = { 1, 2, 3, 4 };
     buf_putc(b, '[');
     for (size_t i = 0; i < lsp_entry_count_; i++) {
@@ -3257,14 +3409,130 @@ static void lsp_build_array(Buf *b) {
          * hand; widen once here instead. */
         unsigned col_end = e->col_end0 > e->col_start0 ? e->col_end0
                                                        : e->col_start0 + 1;
+
+        /* An entry from another file -- a `load`ed or imported module -- has
+         * coordinates that mean nothing in this document.  Published as-is it
+         * underlined whatever sat at that line and column of the open buffer. */
+        bool foreign = doc_path && relocate && e->file[0] &&
+                       strcmp(e->file, doc_path) != 0;
+        uint32_t line0 = e->line0, cs0 = e->col_start0, ce0 = col_end;
+        char rel_uri[1024];
+        bool have_uri = false;
+        /* The file the document names, when it is not e->file itself: the
+         * outermost file on the origin chain, if that chain reaches here. */
+        const char *via = NULL;
+        if (foreign && e->via[0] && strcmp(e->via, e->file) != 0 &&
+            strcmp(e->via, doc_path) != 0)
+            via = e->via;
+        /* Raised inside an expansion of a macro the document calls: the call
+         * is the code the user wrote, and beats any load/import anchor --
+         * the macro's file may not be named in the document at all (the
+         * auto-loaded stdlib). */
+        bool at_call = foreign && e->exp_file[0] &&
+                       strcmp(e->exp_file, doc_path) == 0;
+        bool placed = at_call;
+        if (at_call) via = NULL;
+        if (at_call) {
+            line0 = e->exp_line0; cs0 = e->exp_col_start0; ce0 = e->exp_col_end0;
+            if (ce0 <= cs0) ce0 = cs0 + 1;
+            rel_uri[0] = '\0';
+            bool ignored = false;
+            uint32_t l = 0, c0 = 0, c1 = 1;
+            have_uri = relocate(ctx, e->file, &l, &c0, &c1, &ignored,
+                                rel_uri, sizeof(rel_uri));
+        } else if (foreign) {
+            line0 = 0; cs0 = 0; ce0 = 1;
+            rel_uri[0] = '\0';
+            bool anchored = false;
+            have_uri = relocate(ctx, e->file, &line0, &cs0, &ce0, &anchored,
+                                rel_uri, sizeof(rel_uri));
+            /* lsp-transitive-load-anchors-on-line-one: a file loaded by a
+             * loaded file is not named in the document; anchor on the form
+             * that names the outermost file on its chain instead. */
+            if (!anchored && via) {
+                char via_uri[1024];
+                uint32_t l = 0, c0 = 0, c1 = 1;
+                (void)relocate(ctx, via, &l, &c0, &c1, &anchored,
+                               via_uri, sizeof(via_uri));
+                if (anchored) { line0 = l; cs0 = c0; ce0 = c1; }
+            }
+            /* The text scan missed (a form split across lines, a path spelled
+             * differently): fall back to the span the compiler recorded. */
+            if (!anchored && e->via[0] && strcmp(e->via_parent, doc_path) == 0) {
+                line0 = e->via_line0;
+                cs0   = e->via_col_start0;
+                ce0   = e->via_col_end0;
+                anchored = true;
+            }
+            if (ce0 <= cs0) ce0 = cs0 + 1;
+            placed = anchored;
+        }
+
+        /* A stdlib file is named `stdlib/<file>` wherever it is installed.
+         * When nothing in the document leads to it, it is in practice the
+         * auto-loaded stdlib with an error of its own -- a stdlib bug, or a
+         * stdlib that does not match this compiler.  The user can do nothing
+         * about it in this file, so say so instead of letting it read as
+         * theirs.  `stdlib_dir` is set by resolve_stdlib_root at startup. */
+        char stdlib_shown[300];
+        const char *stdlib_dir = NULL;
+        bool in_stdlib = false;
+        if (foreign) {
+            stdlib_dir = getenv("TUR_STDLIB_DIR");
+            size_t sl = stdlib_dir ? strlen(stdlib_dir) : 0;
+            while (sl > 1 && stdlib_dir[sl - 1] == '/') sl--;
+            if (sl && strncmp(e->file, stdlib_dir, sl) == 0 && e->file[sl] == '/') {
+                snprintf(stdlib_shown, sizeof(stdlib_shown), "stdlib%s",
+                         e->file + sl);
+                in_stdlib = true;
+            }
+        }
+
         if (i > 0) buf_putc(b, ',');
         buf_printf(b,
             "{\"severity\":%d"
             ",\"range\":{\"start\":{\"line\":%u,\"character\":%u}"
                        ",\"end\":{\"line\":%u,\"character\":%u}}",
-            sev, e->line0, e->col_start0, e->line0, col_end);
+            sev, line0, cs0, line0, ce0);
         buf_puts(b, ",\"message\":");
-        json_escape_string(b, e->message);
+        if (foreign) {
+            Buf m;
+            buf_init(&m);
+            /* Name the file relative to the document's directory when it
+             * is under it -- `greeter.tur`, not a 90-character temp path. */
+            const char *shown = e->file;
+            const char *slash = strrchr(doc_path, '/');
+            if (slash) {
+                size_t dl = (size_t)(slash - doc_path) + 1;
+                if (strncmp(e->file, doc_path, dl) == 0 && e->file[dl])
+                    shown = e->file + dl;
+            }
+            if (in_stdlib) shown = stdlib_shown;
+            buf_printf(&m, "in %s:%u:%u", shown, e->line0 + 1,
+                       e->col_start0 + 1);
+            if (via) {
+                const char *vshown = via;
+                if (slash) {
+                    size_t dl = (size_t)(slash - doc_path) + 1;
+                    if (strncmp(via, doc_path, dl) == 0 && via[dl])
+                        vshown = via + dl;
+                }
+                buf_printf(&m, " (via %s)", vshown);
+            }
+            if (at_call && e->exp_macro[0])
+                buf_printf(&m, " (expanding %s)", e->exp_macro);
+            buf_printf(&m, ": %s", e->message);
+            if (in_stdlib && !placed)
+                buf_printf(&m, "\n  this error is in the standard library, not "
+                           "in this file: check that the stdlib at %s matches "
+                           "this compiler (tur --version), and report it as a "
+                           "stdlib bug if it does", stdlib_dir);
+            buf_putc(&m, '\0');
+            json_escape_string(b, m.data);
+            buf_free(&m);
+        } else {
+            json_escape_string(b, e->message);
+        }
         const char *code_str = diag_code_to_string(e->code);
         if (code_str && code_str[0]) {
             buf_puts(b, ",\"code\":");
@@ -3275,9 +3543,24 @@ static void lsp_build_array(Buf *b) {
             buf_puts(b, ",\"file\":");
             json_escape_string(b, e->file);
         }
+        if (foreign && have_uri) {
+            buf_puts(b, ",\"relatedInformation\":[{\"location\":{\"uri\":");
+            json_escape_string(b, rel_uri);
+            buf_printf(b,
+                ",\"range\":{\"start\":{\"line\":%u,\"character\":%u}"
+                           ",\"end\":{\"line\":%u,\"character\":%u}}}",
+                e->line0, e->col_start0, e->line0, col_end);
+            buf_puts(b, ",\"message\":");
+            json_escape_string(b, e->message);
+            buf_puts(b, "}]");
+        }
         buf_putc(b, '}');
     }
     buf_putc(b, ']');
+}
+
+static void lsp_build_array(Buf *b) {
+    lsp_build_array_ex(b, NULL, NULL, NULL);
 }
 
 /* Original snippet rendering (backward compatible) */
@@ -3683,6 +3966,11 @@ void diag_lsp_flush_array(struct Buf *buf) {
     lsp_build_array(buf);
 }
 
+void diag_lsp_flush_array_for(struct Buf *buf, const char *doc_path,
+                              DiagLspRelocateFn relocate, void *ctx) {
+    lsp_build_array_ex(buf, doc_path, relocate, ctx);
+}
+
 void diag_lsp_end(void) {
     lsp_collect_ = false;
     lsp_entry_count_ = 0;
@@ -3694,8 +3982,15 @@ void diag_lsp_end(void) {
 void diag_lsp_remap_path(const char *from_path, const char *to_path) {
     if (!from_path || !to_path) return;
     for (size_t i = 0; i < lsp_entry_count_; i++) {
-        if (strcmp(lsp_entries_[i].file, from_path) == 0)
-            snprintf(lsp_entries_[i].file, sizeof(lsp_entries_[i].file), "%s", to_path);
+        DiagLspEntry *e = &lsp_entries_[i];
+        if (strcmp(e->file, from_path) == 0)
+            snprintf(e->file, sizeof(e->file), "%s", to_path);
+        if (strcmp(e->via, from_path) == 0)
+            snprintf(e->via, sizeof(e->via), "%s", to_path);
+        if (strcmp(e->via_parent, from_path) == 0)
+            snprintf(e->via_parent, sizeof(e->via_parent), "%s", to_path);
+        if (strcmp(e->exp_file, from_path) == 0)
+            snprintf(e->exp_file, sizeof(e->exp_file), "%s", to_path);
     }
 }
 

@@ -1,0 +1,110 @@
+;; forward-call-generic-callee -- every caller here is written ABOVE the
+;; generic defn it calls.  A generic's pass-1 forward decl has its arity but
+;; no parameter types and no type parameters, so the call had nothing to
+;; instantiate `A` from: TUR-E0709 for a by-value result, "expected int, got
+;; float" for a float argument, and a SIGSEGV at run time for a lambda handed
+;; to a later generic HOF (passed bare where the definition takes the fat
+;; carrier).  A later NON-generic defn with a function-typed parameter had
+;; the same hole: its forward decl does not say the parameter is a `:fn`
+;; carrier, so a lambda went in bare -- invalid C (apply-k, bump-opt).  Such
+;; a caller is now elaborated after its callee; a caller of a caller that
+;; waited (main, here) waits too.  Defining every callee first printed the
+;; same lines.  See
+;; docs/archive/forward-call-to-generic-callee-typed-as-placeholder.md.
+
+(defstruct Point [x : float y : float])
+
+(defn main [] : int
+  (match (wrap-once 7.1)
+    (Some v) (println v)
+    (None) (println "none"))
+  (match (wrap-twice 3)
+    (Some inner) (match inner
+                   (Some v) (println v)
+                   (None) (println "inner none"))
+    (None) (println "none"))
+  (println (bump 5))
+  (let [p (flip (Point 7.1 3.25))]
+    (println (.x p))
+    (println (.y p)))
+  (println (same? 7.1 7.1))
+  (println (same? 7.1 3.25))
+  (println (get-or-float (some 8.5)))
+  (println (count-up 3 0.25))
+  (show-bumped)
+  (println (apply-k (fn [y : int] : int (* y 3)) 4))
+  (println (k 3.25))
+  (match (count-opt 3 2.75)
+    (Some v) (println v)
+    (None) (println "none"))
+  0)
+
+;; A by-value (Option float) result over a float argument.
+(defn wrap-once [x : float] : (Option float)
+  (wrap x))
+
+;; The report's shape: (some (wrap x)) at (Option (Option int)).
+(defn wrap-twice [x : int] : (Option (Option int))
+  (some (wrap x)))
+
+;; A lambda handed to a generic HOF defined below: was a SIGSEGV.
+(defn bump [x : int] : int
+  (twice (fn [y : int] : int (+ y 1)) x))
+
+;; A struct through a generic identity.
+(defn flip [p : Point] : Point
+  (ident (Point (.y p) (.x p))))
+
+;; A constrained generic at float.
+(defn same? [a : float b : float] : bool
+  (both-eq? a b))
+
+;; An (Option A) parameter and an A default, at float.
+(defn get-or-float [o : (Option float)] : float
+  (get-or o 1.5))
+
+;; Mutually recursive generics: the cycle keeps source order.
+(defn count-up [n : int x : float] : float
+  (ping n x))
+
+(defn bump-opt [f : (fn [int] int) x : int] : (Option int)
+  (wrap (f x)))
+
+(defn wrap [A] [x : A] : (Option A) (some x))
+
+;; A def is not deferred.  bump-opt is waiting for wrap, so the def
+;; elaborates it first (wrap is done by now): it saw bump-opt's forward
+;; decl otherwise, and passed the lambda bare -- invalid C.
+(def bumped (bump-opt (fn [y : int] : int (+ y 1)) 41))
+(defn show-bumped [] : nil
+  (match bumped
+    (Some v) (println v)
+    (None) (println "none")))
+
+;; main hands apply-k a lambda from above it.  apply-k's own parameter is
+;; named like the generic defined below it: a local, not a call of the
+;; generic, so apply-k keeps its place.
+(defn apply-k [k : (fn [int] int) x : int] : int (k x))
+(defn k [A] [x : A] : A x)
+
+(defn twice [A] [f : (fn [A] A) x : A] : A (f (f x)))
+(defn ident [A] [x : A] : A x)
+(defn both-eq? [A] [(Eq A)] [a : A b : A] : bool (eq? a b))
+(defn get-or [A] [o : (Option A) d : A] : A
+  (match o
+    (Some v) v
+    (None) d))
+(defn ping [A] [n : int x : A] : A (if (= n 0) x (pong (- n 1) x)))
+(defn pong [A] [n : int x : A] : A (if (= n 0) x (ping (- n 1) x)))
+
+;; A cycle whose result is an APPLICATION of the variable: the member
+;; elaborated first called its partner through the pass-1 forward decl,
+;; whose `(Option A)` result is the int placeholder -- "then=(Option A)
+;; else=int".  Each member is now tried speculatively first, which leaves its
+;; declared signature on its binding.
+(defn count-opt [n : int x : float] : (Option float)
+  (ping-opt n x))
+(defn ping-opt [A] [n : int x : A] : (Option A)
+  (if (= n 0) (some x) (pong-opt (- n 1) x)))
+(defn pong-opt [A] [n : int x : A] : (Option A)
+  (if (= n 0) (some x) (ping-opt (- n 1) x)))

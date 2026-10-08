@@ -192,7 +192,7 @@ soundness failure later.
 
 **The import has been run and its output is published.** Unless you are
 producing a *different* sample, do not re-run `import-smtlib.py` -- clone
-[`github.com/rjungemann/smt-lib-benchmarks`](https://github.com/rjungemann/smt-lib-benchmarks)
+[`github.com/turmeric-lang/smt-lib-benchmarks`](https://github.com/turmeric-lang/smt-lib-benchmarks)
 instead. See [The external corpus](#the-external-corpus-not-vendored-here)
 below. The rest of this section is for producing a new sample.
 
@@ -235,11 +235,11 @@ since they would be a viable transport for vendored data:
 ## The external corpus (not vendored here)
 
 A 200-benchmark sample of the real library lives in its own repository:
-**<https://github.com/rjungemann/smt-lib-benchmarks>** (25 per logic, seed 1,
+**<https://github.com/turmeric-lang/smt-lib-benchmarks>** (25 per logic, seed 1,
 from the 2025 release). It is deliberately NOT vendored into this tree.
 
 ```sh
-git clone https://github.com/rjungemann/smt-lib-benchmarks /tmp/smtlib-bench
+git clone https://github.com/turmeric-lang/smt-lib-benchmarks /tmp/smtlib-bench
 TUR_CORPUS_TIMEOUT=3 ./build/tur_refine_corpus /tmp/smtlib-bench/smtlib-2025
 ```
 

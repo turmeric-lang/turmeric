@@ -6,7 +6,7 @@ permanently red, which trains people to ignore that suite).
 Surfaced as the long-standing `tests/run-fmt.sh` failure
 `fmt-bootstrap-stdlib: stdlib is not self-formatted: stdlib/rcvec.tur`.
 Independently confirmed as pre-existing by the agent working on
-[Trowel](https://github.com/rjungemann/trowel) (17 passed / 1 failed both
+[Trowel](https://github.com/turmeric-lang/trowel) (17 passed / 1 failed both
 before and after the `claude/busy-clarke-6zj9jl` formatter refactor).
 
 ## Status (2026-07-27): FIXED

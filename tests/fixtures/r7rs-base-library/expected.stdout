@@ -19,7 +19,7 @@ axbycz
 (#u8(97 98 99) hi café)
 ((2 3) (2 . b) (b))
 (5 0 0.3333333333333333)
-(r7rs exact-closed ratios turmeric srfi-0 srfi-1 srfi-2 srfi-4 srfi-6 srfi-8 srfi-9 srfi-11 srfi-13 srfi-14 srfi-16 srfi-17 srfi-23 srfi-26 srfi-27 srfi-28 srfi-30 srfi-31 srfi-34 srfi-35 srfi-38 srfi-39 srfi-41 srfi-42 srfi-45 srfi-48 srfi-60 srfi-61 srfi-62 srfi-64 srfi-66 srfi-69 srfi-78 srfi-87 srfi-98 srfi-105)
+(r7rs exact-closed ratios turmeric srfi-0 srfi-1 srfi-2 srfi-4 srfi-6 srfi-8 srfi-9 srfi-11 srfi-13 srfi-14 srfi-16 srfi-17 srfi-18 srfi-23 srfi-26 srfi-27 srfi-28 srfi-30 srfi-31 srfi-34 srfi-35 srfi-38 srfi-39 srfi-41 srfi-42 srfi-45 srfi-48 srfi-60 srfi-61 srfi-62 srfi-64 srfi-66 srfi-69 srfi-78 srfi-87 srfi-98 srfi-105 srfi-216)
 "q"
 (#t #f q 7 #f)
 (#t #t #t #t)

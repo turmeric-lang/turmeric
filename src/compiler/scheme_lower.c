@@ -431,6 +431,13 @@ static const char *const ONDEMAND[][3] = {
  * licence, and which test suite exists for it: r7rs-srfi-plan Appendix C
  * (the S0 inventory). */
 enum { SRFI_BUILTIN, SRFI_ALIAS, SRFI_LIBRARY, SRFI_NOLIB, SRFI_NOTPLANNED, SRFI_NOTYET };
+/* r7rs-srfi-18-216-sicp-plan D4: `(sicp extras)` -- Racket's `#lang sicp`
+ * extras (inc, dec, identity, amb) plus amb-reset! -- is not an SRFI, but it
+ * is built in the same way: one file, stdlib/sicp/extras.scm, spliced in
+ * when imported.  It rides the SRFI machinery under this number, which no
+ * SRFI will reach; lib_label names it in messages, it is never a `srfi-N`
+ * feature, and its definitions are spelled sicpx--<name>. */
+#define SICP_EXTRAS_NUM 100000
 typedef struct { int num; int kind; const char *title; const char *file; const char *why; } SrfiRow;
 static const SrfiRow SRFI_LIBS[] = {
     {   0, SRFI_NOLIB,      "Feature-based conditional expansion construct", NULL,
@@ -448,6 +455,7 @@ static const SrfiRow SRFI_LIBS[] = {
     {  14, SRFI_LIBRARY,    "Character-set Library", "stdlib/srfi/14.scm", NULL },
     {  16, SRFI_BUILTIN,    "Syntax for procedures of variable arity", "stdlib/srfi/16.scm", NULL },
     {  17, SRFI_LIBRARY,    "Generalized set!", "stdlib/srfi/17.scm", NULL },
+    {  18, SRFI_LIBRARY,    "Multithreading support", "stdlib/srfi/18.scm", NULL },
     {  19, SRFI_NOTYET,     "Time Data Types and Procedures", NULL, "S8" },
     {  23, SRFI_BUILTIN,    "Error reporting mechanism", "stdlib/srfi/23.scm", NULL },
     {  25, SRFI_NOTYET,     "Multi-dimensional Array Primitives", NULL, "S8" },
@@ -488,8 +496,17 @@ static const SrfiRow SRFI_LIBS[] = {
     {  98, SRFI_BUILTIN,    "An interface to access environment variables", "stdlib/srfi/98.scm", NULL },
     { 105, SRFI_NOLIB,      "Curly-infix-expressions", NULL,
         "`{a + b}` reads in every #lang, #lang r7rs included" },
+    { 216, SRFI_LIBRARY,    "SICP Prerequisites (Portable)", "stdlib/srfi/216.scm", NULL },
+    { SICP_EXTRAS_NUM, SRFI_LIBRARY, "SICP extras", "stdlib/sicp/extras.scm", NULL },
 };
 #define N_SRFI_LIBS (sizeof(SRFI_LIBS) / sizeof(SRFI_LIBS[0]))
+/* r7rs-srfi-18-216-sicp-plan D1: an SRFI whose primitives are C has them in
+ * a prelude-shaped file under stdlib/r7rs/, spliced in ahead of the SRFI's
+ * own (lib_files_of_set), whose definitions the SRFI calls by their
+ * r7rs-...__ names. */
+static const struct { int num; const char *file; } SRFI_HELPERS[] = {
+    { 18, "stdlib/r7rs/thread.tur" },
+};
 static const SrfiRow *srfi_row(int64_t num) {
     for (size_t i = 0; i < N_SRFI_LIBS; i++) if (SRFI_LIBS[i].num == num) return &SRFI_LIBS[i];
     return NULL;
@@ -499,16 +516,39 @@ static bool srfi_importable(const SrfiRow *r) {
 }
 /* `srfi-N` holds in cond-expand: the SRFI is here, importable or always on. */
 static bool srfi_supported(const SrfiRow *r) { return srfi_importable(r) || (r && r->kind == SRFI_NOLIB); }
-/* The N of a `(srfi N)` library name, or -1 when `set` is not one. */
+/* The N of a `(srfi N)` library name -- SICP_EXTRAS_NUM for `(sicp
+ * extras)` -- or -1 when `set` is not one. */
 static int64_t srfi_libname_num(const Form *set) {
     if (!set || set->tag != F_LIST || set->as.list.len != 2) return -1;
     const Form *h = set->as.list.items[0], *n = set->as.list.items[1];
-    if (h->tag != F_SYM || strcmp(h->as.sym->name, "srfi") != 0 || n->tag != F_INT || n->as.i < 0) return -1;
+    if (h->tag != F_SYM) return -1;
+    if (strcmp(h->as.sym->name, "sicp") == 0)
+        return n->tag == F_SYM && strcmp(n->as.sym->name, "extras") == 0 ? SICP_EXTRAS_NUM : -1;
+    if (strcmp(h->as.sym->name, "srfi") != 0 || n->tag != F_INT || n->as.i < 0 || n->as.i >= SICP_EXTRAS_NUM) return -1;
     return n->as.i;
 }
-static bool is_srfi_libname(const Form *set) {
+static bool is_sicp_libname(const Form *set) {
     return set && set->tag == F_LIST && set->as.list.len >= 1 && set->as.list.items[0]->tag == F_SYM &&
-           strcmp(set->as.list.items[0]->as.sym->name, "srfi") == 0;
+           strcmp(set->as.list.items[0]->as.sym->name, "sicp") == 0;
+}
+static bool is_srfi_libname(const Form *set) {
+    return (set && set->tag == F_LIST && set->as.list.len >= 1 && set->as.list.items[0]->tag == F_SYM &&
+            strcmp(set->as.list.items[0]->as.sym->name, "srfi") == 0) || is_sicp_libname(set);
+}
+/* How a message names the library numbered `num`: "(srfi N)" or "(sicp
+ * extras)".  Returned by value -- `lib_label(n).s` lives to the end of the
+ * full expression -- so one message may name two libraries, and no static
+ * buffer is shared (tests/check-static-cname-buffers.sh). */
+typedef struct { char s[32]; } LibLabel;
+static LibLabel lib_label(int64_t num) {
+    LibLabel l;
+    if (num == SICP_EXTRAS_NUM) snprintf(l.s, sizeof l.s, "(sicp extras)");
+    else snprintf(l.s, sizeof l.s, "(srfi %lld)", (long long)num);
+    return l;
+}
+/* The message for a library name that names no importable library. */
+static const char *bad_libname_msg(const Form *set) {
+    return is_sicp_libname(set) ? "the SICP library is (sicp extras)" : "an SRFI is named by its number, e.g. (srfi 1)";
 }
 
 /* The SCHEME_LIBS row of a `(scheme <x>)` library name, or -1. */
@@ -643,6 +683,23 @@ typedef struct SL {
     const Symbol   *s_guard, *s_parameterize, *s_delay, *s_delay_force;
     /* R7: which SCHEME_LIBS rows this unit has imported. */
     bool            lib_imported[N_SCHEME_LIBS];
+    /* Which (scheme ...) libraries the program's own import forms name,
+     * known before lowering sets lib_imported (r7rs-redefining-eval-with-
+     * scheme-eval-fails-to-compile). */
+    bool            lib_named[N_SCHEME_LIBS];
+    /* r7rs-saved-standard-procedure-follows-redefinition: a standard name the
+     * program redefines, with the index of the top-level form that does it.
+     * A reference evaluated EAGERLY (deferred == 0) by an earlier top-level
+     * form (cur_top < the index) means the standard procedure -- the one
+     * bound when it runs -- so `(define saved apply)` ahead of the program's
+     * own `apply` keeps R7RS's.  Lambda and promise bodies run later and see
+     * the program's definition, as before. */
+    const Symbol  **early_sym;
+    uint32_t       *early_at;
+    uint32_t        n_early, cap_early;
+    uint32_t        cur_top;
+    uint32_t        deferred;
+    bool            eager_thunk;   /* the next lambda body runs now (a top-level statement) */
     const Symbol   *od_from[N_ONDEMAND], *od_to[N_ONDEMAND];
     int             od_lib[N_ONDEMAND];
     /* R5: the nine numeric operators -- the Scheme spelling, the binary
@@ -980,6 +1037,20 @@ static bool form_mentions_sym(const Form *f, const Symbol *s) {
             if (form_mentions_sym(f->as.list.items[i], s)) return true;
     return false;
 }
+/* Does `f` (a lowered form) use `s` as a value -- anywhere but at the head
+ * of a call?  Quoted data does not count. */
+static bool form_uses_as_value(const Form *f, const Symbol *s) {
+    if (!f) return false;
+    if (f->tag == F_SYM) return f->as.sym == s;
+    if (f->tag == F_QUOTE) return false;
+    if (f->tag == F_LIST || f->tag == F_VEC)
+        for (uint32_t i = 0; i < f->as.list.len; i++) {
+            const Form *x = f->as.list.items[i];
+            if (i == 0 && f->tag == F_LIST && x->tag == F_SYM) continue;   /* the callee */
+            if (form_uses_as_value(x, s)) return true;
+        }
+    return false;
+}
 static void note_all_syms(SL *sl, const Form *f) {
     if (!f) return;
     if (f->tag == F_SYM) { note_mut(sl, f->as.sym); return; }
@@ -1216,6 +1287,9 @@ static const Symbol *caret_spelling(SL *sl, const Symbol *s);
 struct LibSyntax;
 static const Symbol *lib_respelling(SL *sl, const struct LibSyntax *lx, const Symbol *pub);
 static const Symbol *rn_global(SL *sl, const Symbol *s) {
+    /* redefinitions_to_set's name for a standard binding the program
+     * redefines: what the bare name means with no program definition. */
+    if (s->len > 7 && memcmp(s->name, "--std--", 7) == 0) return rn_std(sl, I(sl, s->name + 7));
     for (uint32_t i = 0; i < sl->n_renames; i++)
         if (sl->renames[i].from == s) return sl->renames[i].to;
     /* r7rs-turmeric-syntax-leaks item 4: a `^` identifier, bound or not. */
@@ -2209,6 +2283,7 @@ static const Symbol *lib_hidden(SL *sl, const Symbol *mod, const Symbol *name);
 static Form *lib_rewrite_exports(SL *sl, Form *deflib, const Symbol *mod, const LibScan *ls);
 static void set_clash(SL *sl, const Symbol *from, const Symbol *to);
 static const Symbol *clash_spelling(const SL *sl, const Symbol *s);
+static const Symbol *std_before_redefinition(SL *sl, const Symbol *s, const Symbol *r);
 static Form *rebind_rest(SL *sl, Span sp, const Symbol *rest, Form *body);
 
 /* Is `name` (already renamed) the target of a `set!` anywhere in `f`?
@@ -2367,7 +2442,13 @@ static Form *lower_lambda_parts(SL *sl, Span sp, Form *formals,
         scope_close(sl, saved);
         return Nil(sl, sp);
     }
+    /* A top-level statement's thunk runs at once: its body is as eager as
+     * the statement (r7rs-saved-standard-procedure-follows-redefinition). */
+    uint32_t defer = sl->eager_thunk ? 0 : 1;
+    sl->eager_thunk = false;
+    sl->deferred += defer;
     Form *lowered = lower_body(sl, body, nbody, sp);
+    sl->deferred -= defer;
     lowered = rebind_rest(sl, sp, rest, lowered);
     lowered = rebind_muts(sl, sp, params, lowered);
     scope_close(sl, saved);
@@ -2936,7 +3017,9 @@ static Form *lower_delay(SL *sl, Form *f, bool is_force) {
         err(f, "%s expects one expression", is_force ? "delay-force" : "delay");
         return Nil(sl, sp);
     }
+    sl->deferred++;
     Form *x = lower(sl, f->as.list.items[1]);
+    sl->deferred--;
     if (!is_force) x = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-make-promise")), x);
     return Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-delay-force__")), thunk_of(sl, sp, x));
 }
@@ -3289,6 +3372,24 @@ static Form *lower_body_inner(SL *sl, Form **items, uint32_t n, Span sp) {
         for (uint32_t k = 0; k < n; k++)
             if (form_sets(sl, rn(sl, names[i]), items[k])) { is_lam[i] = false; break; }
     }
+    /* r7rs-internal-procedure-value-not-eq: an internal procedure the body
+     * hands around as a value -- SICP 3.3.5's `me`, which a connector keeps
+     * and later compares with `eq?` -- is one procedure, so one object.  As
+     * a letrec function each reference made a fresh closure, and `(eq? me
+     * me)` was #f; bound once in a variable (the hoisting below), every
+     * reference reads the same one.  A procedure only ever called stays a
+     * letrec function. */
+    for (uint32_t i = 0; i < ndef; i++) {
+        if (!is_lam[i]) continue;
+        const Symbol *self = rn(sl, names[i]);
+        bool as_value = form_uses_as_value(rest, self);
+        for (uint32_t k = 0; k < ndef && !as_value; k++) as_value = form_uses_as_value(inits[k], self);
+        if (!as_value) continue;
+        is_lam[i] = false;
+        /* As an `any`: a variable of function type is boxed again at each
+         * use that wants a value. */
+        inits[i] = Ln(sl, sp, 3, Sym(sl, sp, I(sl, "::")), inits[i], Sym(sl, sp, sl->t_any));
+    }
     /* letrec* (R7RS 5.3.2): every name a body defines is in scope throughout
      * it.  The nesting below binds a value define INSIDE the definitions
      * before it, so an earlier define whose init mentions a later value
@@ -3591,6 +3692,10 @@ static Form *lower(SL *sl, Form *f) {
                 return Ln(sl, f->span, 3, Sym(sl, f->span, I(sl, "::")),
                           Sym(sl, f->span, sl->ops_val[op]), Sym(sl, f->span, sl->t_any));
             const Symbol *r = rn(sl, f->as.sym);
+            if (sl->in_user && sl->deferred == 0 && r != f->as.sym) {
+                const Symbol *early = std_before_redefinition(sl, f->as.sym, r);
+                if (early) r = early;
+            }
             /* r7rs-turmeric-syntax-leaks item 8: a Turmeric stdlib name the
              * unit did not import is not bound in Scheme. */
             if (r == f->as.sym && sl->in_user && !scheme_std_visible(sl, r)) {
@@ -3666,6 +3771,36 @@ static Form *lower(SL *sl, Form *f) {
         Form *r = lower(sl, x);
         sl->expand_depth--;
         return r;
+    }
+    /* `((lambda (x ...) body...) a ...)` is `(let ((x a) ...) body...)`, which
+     * is how R7RS defines `let` -- and lowered as a call of a closure value it
+     * was never a C tail call, so a loop written that way grew the stack.
+     * Only a fixed formals list whose length matches; `lambda` must be the
+     * keyword, not a local. */
+    if (head->tag == F_LIST && head->as.list.len >= 3 && !prelude_span(f->span) &&
+        head->as.list.items[0]->tag == F_SYM &&
+        !(sl->scope && scope_lookup(sl->scope, head->as.list.items[0]->as.sym)) &&
+        (global_alias_orig(sl, head->as.list.items[0]->as.sym)
+             ? global_alias_orig(sl, head->as.list.items[0]->as.sym)
+             : head->as.list.items[0]->as.sym) == sl->s_lambda) {
+        const Form *formals = head->as.list.items[1];
+        uint32_t nf = formals->tag == F_LIST ? formals->as.list.len : 0;
+        bool ok = (formals->tag == F_NIL || formals->tag == F_LIST) && nf == f->as.list.len - 1;
+        for (uint32_t i = 0; ok && i < nf; i++)
+            ok = formals->as.list.items[i]->tag == F_SYM &&
+                 !is_sym(formals->as.list.items[i], sl->s_dot);   /* (x . rest) */
+        if (ok) {
+            FB binds = {0};
+            for (uint32_t i = 0; i < nf; i++)
+                fb_push(&binds, Ln(sl, f->span, 2, formals->as.list.items[i], f->as.list.items[i + 1]));
+            FB let = {0};
+            fb_push(&let, Sym(sl, f->span, sl->s_let));
+            fb_push(&let, nf ? fb_list(sl, &binds, f->span) : Nil(sl, f->span));
+            for (uint32_t i = 2; i < head->as.list.len; i++) fb_push(&let, head->as.list.items[i]);
+            Form *lf = fb_list(sl, &let, f->span);
+            Form *r = lower_let(sl, lf);
+            if (r) return r;
+        }
     }
     if (head->tag == F_SYM) {
         const Symbol *h = hsym;
@@ -3907,7 +4042,11 @@ static void expand_includes(SL *sl, Form *const *forms, uint32_t n, FB *out) {
 static Form *lower_toplevel_stmt(SL *sl, Form *f) {
     Span sp = f->span;
     Form *thunk = Ln(sl, sp, 3, Sym(sl, sp, sl->s_lambda), Ln(sl, sp, 0), f);
-    return lower(sl, Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-toplevel__")), thunk));
+    Form *call = Ln(sl, sp, 2, Sym(sl, sp, I(sl, "r7rs-toplevel__")), thunk);
+    sl->eager_thunk = sl->deferred == 0;
+    Form *r = lower(sl, call);
+    sl->eager_thunk = false;
+    return r;
 }
 
 static void lower_toplevel_1(SL *sl, Form *f, FB *out);
@@ -3968,8 +4107,10 @@ static void lower_toplevel_1(SL *sl, Form *f, FB *out) {
                 scope_close(sl, saved);
                 return;
             }
+            sl->deferred++;
             Form *body = rebind_rest(sl, sp, rest,
                                      lower_body(sl, f->as.list.items + 2, f->as.list.len - 2, sp));
+            sl->deferred--;
             /* A parameter the body `set!`s is a mutable local, as in a
              * lambda (r7rs-toplevel-define-sets-its-parameter). */
             body = rebind_muts(sl, sp, params, body);
@@ -4397,11 +4538,12 @@ static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
         sl->lib_imported[li] = true;
         return NULL;
     }
-    if (strcmp(head, "srfi") == 0) {
+    if (strcmp(head, "srfi") == 0 || strcmp(head, "sicp") == 0) {
         /* r7rs-srfi-plan D1: an SRFI is a built-in library, like (scheme
-         * ...): srfi_import binds it; it is never a module. */
+         * ...): srfi_import binds it; it is never a module.  So is (sicp
+         * extras). */
         if (srfi_libname_num(set) < 0) {
-            err(set, "an SRFI is named by its number, e.g. (srfi 1)");
+            err(set, "%s", bad_libname_msg(set));
             *ok = false;
         }
         return NULL;
@@ -4747,7 +4889,7 @@ static bool feature_holds(SL *sl, Form *req) {
         if (strncmp(n, "srfi-", 5) == 0 && n[5] >= '0' && n[5] <= '9') {
             char *end = NULL;
             long long num = strtoll(n + 5, &end, 10);
-            return end && *end == '\0' && srfi_supported(srfi_row(num));
+            return end && *end == '\0' && num < SICP_EXTRAS_NUM && srfi_supported(srfi_row(num));
         }
         return false;
     }
@@ -5136,6 +5278,146 @@ static void user_define_names(SL *sl, const Form *f, FB *out) {
     Form *t = f->as.list.items[1];
     while (t->tag == F_LIST && t->as.list.len >= 1) t = t->as.list.items[0];  /* (define ((f a) b) ...) */
     if (t->tag == F_SYM) fb_push(out, t);
+}
+/* r7rs-program-redefinition-refused: R7RS 5.3.1 -- at the outermost level of
+ * a program, a definition of a variable that is already bound "has
+ * essentially the same effect as the assignment expression set!".  SICP
+ * redefines procedures as it refines them (make-rat in 2.1.1, then again in
+ * 2.1.2), and the elaborator refuses a second `defn` of one name.  So a name
+ * a program's top level defines more than once is one variable: its first
+ * definition becomes `(define f (lambda ...))` and every later one a
+ * `(set! f ...)`, which collect_muts then sees.  A library body is left
+ * alone (a duplicate definition there is an error, R7RS 5.6.1). */
+static bool srfi_span(Span sp);
+typedef struct { Form **slot; const Symbol *name; } TopDef;
+static void top_defs(SL *sl, Form **slot, TopDef **defs, uint32_t *n, uint32_t *cap) {
+    Form *f = *slot;
+    if (head_is(f, sl->s_begin)) {
+        for (uint32_t i = 1; i < f->as.list.len; i++) top_defs(sl, &f->as.list.items[i], defs, n, cap);
+        return;
+    }
+    if (!head_is(f, sl->s_define) || f->as.list.len < 3) return;
+    Form *t = f->as.list.items[1];
+    const Symbol *name = NULL;
+    if (t->tag == F_SYM) name = t->as.sym;
+    else if (t->tag == F_LIST && t->as.list.len >= 1 && t->as.list.items[0]->tag == F_SYM) name = t->as.list.items[0]->as.sym;
+    if (!name) return;   /* (define ((f a) b) ...) keeps its one meaning */
+    if (*n == *cap) {
+        *cap = *cap ? *cap * 2 : 32;
+        *defs = (TopDef *)realloc(*defs, *cap * sizeof **defs);
+        if (!*defs) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    (*defs)[(*n)++] = (TopDef){ slot, name };
+}
+/* `(define (f . formals) body...)` -> `(lambda formals body...)`; `(define f
+ * e)` -> `e`. */
+static Form *define_value(SL *sl, Form *def) {
+    Form *t = def->as.list.items[1];
+    Span sp = def->span;
+    if (t->tag == F_SYM) return def->as.list.items[2];
+    Form *formals;
+    if (t->as.list.len == 3 && is_sym(t->as.list.items[1], sl->s_dot)) {
+        formals = t->as.list.items[2];
+    } else {
+        formals = List(sl, t->span, t->as.list.items + 1, t->as.list.len - 1);
+    }
+    uint32_t nb = def->as.list.len - 2;
+    Form **items = (Form **)arena_alloc(sl->a, (nb + 2) * sizeof(Form *));
+    items[0] = Sym(sl, sp, sl->s_lambda);
+    items[1] = formals;
+    for (uint32_t i = 0; i < nb; i++) items[2 + i] = def->as.list.items[2 + i];
+    return List(sl, sp, items, nb + 2);
+}
+/* r7rs-saved-standard-procedure-follows-redefinition: a program that defines
+ * a standard procedure's name -- SICP 4.1's `apply`, 2.1.3's `cons` -- gets
+ * the same treatment, with one more definition in front: the variable
+ * starts out holding the standard procedure, so an expression evaluated
+ * before the program's define (`(define apply-in-underlying-scheme apply)`)
+ * gets that, and one evaluated after gets the program's.  The standard
+ * binding is named `--std--<name>`, which rn_global resolves past the
+ * program's respelling.  Returns the forms, with those definitions inserted
+ * after the leading imports (a copy when there are any), and their count. */
+#define STD_BINDING_PREFIX "--std--"
+static bool is_std_procedure_name(SL *sl, const Symbol *s) {
+    for (size_t i = 0; i < N_RENAMES; i++) if (sl->rn_from[i] == s) return true;
+    /* An on-demand library's procedure, when the unit imports the library
+     * (mark_ondemand_imports has run): `(scheme eval)`'s `eval`. */
+    for (size_t i = 0; i < N_ONDEMAND; i++)
+        if (sl->od_from[i] == s && sl->od_lib[i] >= 0 && sl->lib_imported[sl->od_lib[i]]) return true;
+    return false;
+}
+/* r7rs-redefining-eval-with-scheme-eval-fails-to-compile: which on-demand
+ * libraries the unit imports is known before any form is lowered, so the
+ * passes that decide what a program's own definitions shadow --
+ * redefinitions_to_set and note_stdlib_clashes -- see `(scheme eval)`'s
+ * `eval` as a standard name, as they see `(scheme base)`'s.  The import
+ * lowering sets the same flags again later. */
+static void mark_ondemand_set(SL *sl, const Form *set) {
+    while (set && set->tag == F_LIST && set->as.list.len >= 2 && set->as.list.items[0]->tag == F_SYM &&
+           (!strcmp(set->as.list.items[0]->as.sym->name, "only") || !strcmp(set->as.list.items[0]->as.sym->name, "except") ||
+            !strcmp(set->as.list.items[0]->as.sym->name, "prefix") || !strcmp(set->as.list.items[0]->as.sym->name, "rename")))
+        set = set->as.list.items[1];
+    int li = scheme_lib_index(set);
+    if (li >= 0 && SCHEME_LIBS[li].kind == LIB_ONDEMAND) sl->lib_imported[li] = true;
+}
+static void mark_ondemand_imports(SL *sl, Form *const *forms, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        const Form *f = forms[i];
+        if (!is_scheme_file(f) || prelude_span(f->span) || srfi_span(f->span)) continue;
+        if (head_is(f, sl->s_import))
+            for (uint32_t j = 1; j < f->as.list.len; j++) mark_ondemand_set(sl, f->as.list.items[j]);
+    }
+}
+static Form **redefinitions_to_set(SL *sl, Form **forms, uint32_t n, uint32_t *out_n) {
+    TopDef *defs = NULL;
+    uint32_t nd = 0, cap = 0;
+    *out_n = n;
+    if (sl->repl_turn) return forms;   /* a REPL turn redefines through its own session state */
+    for (uint32_t i = 0; i < n; i++) {
+        if (!is_scheme_file(forms[i]) || prelude_span(forms[i]->span) || srfi_span(forms[i]->span)) continue;
+        top_defs(sl, &forms[i], &defs, &nd, &cap);
+    }
+    FB std_inits = {0};
+    for (uint32_t i = 0; i < nd; i++) {
+        bool first = true, again = false;
+        for (uint32_t j = 0; j < i; j++) if (defs[j].name == defs[i].name) first = false;
+        if (!first) continue;
+        for (uint32_t j = i + 1; j < nd; j++) if (defs[j].name == defs[i].name) again = true;
+        bool std = is_std_procedure_name(sl, defs[i].name);
+        if (!again && !std) continue;
+        for (uint32_t j = i; j < nd; j++) {
+            if (defs[j].name != defs[i].name) continue;
+            Form *def = *defs[j].slot;
+            Span sp = def->span;
+            Form *head = Sym(sl, sp, (j == i && !std) ? sl->s_define : sl->s_set);
+            *defs[j].slot = Ln(sl, sp, 3, head, Sym(sl, sp, defs[i].name), define_value(sl, def));
+        }
+        if (std) {
+            Span sp = (*defs[i].slot)->span;
+            char buf[256];
+            snprintf(buf, sizeof buf, STD_BINDING_PREFIX "%s", defs[i].name->name);
+            fb_push(&std_inits, Ln(sl, sp, 3, Sym(sl, sp, sl->s_define), Sym(sl, sp, defs[i].name),
+                                   Sym(sl, sp, I(sl, buf))));
+        }
+    }
+    free(defs);
+    if (std_inits.n == 0) return forms;
+    /* After the program's imports: before its first other form. */
+    uint32_t at = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        at = i;
+        if (!is_scheme_file(forms[i]) || prelude_span(forms[i]->span) || srfi_span(forms[i]->span) ||
+            head_is(forms[i], sl->s_import)) { at = i + 1; continue; }
+        break;
+    }
+    Form **out = (Form **)arena_alloc(sl->a, (n + std_inits.n) * sizeof(Form *));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i < at; i++) out[k++] = forms[i];
+    for (uint32_t i = 0; i < std_inits.n; i++) out[k++] = std_inits.items[i];
+    for (uint32_t i = at; i < n; i++) out[k++] = forms[i];
+    free(std_inits.items);
+    *out_n = k;
+    return out;
 }
 /* R10: every identifier the user's Scheme code BINDS -- formals, `let`-family
  * and `do` variables, named-let names, `guard` variables.  One named like a
@@ -5966,11 +6248,12 @@ static void lib_syntax_import(SL *sl, LibSyntax *lx, const SchemeImportSpec *spe
  * ------------------------------------------------------------------------- */
 static bool srfi_span(Span sp) {
     const SourceFile *f = diag_source_file(sp.file_id);
-    return f && f->path && strstr(f->path, "stdlib/srfi/") != NULL;
+    return f && f->path && (strstr(f->path, "stdlib/srfi/") != NULL || strstr(f->path, "stdlib/sicp/") != NULL);
 }
 static const Symbol *srfi_spelling(SL *sl, int64_t num, const Symbol *name) {
     char buf[256];
-    snprintf(buf, sizeof buf, "srfi%lld--%s", (long long)num, name->name);
+    if (num == SICP_EXTRAS_NUM) snprintf(buf, sizeof buf, "sicpx--%s", name->name);
+    else snprintf(buf, sizeof buf, "srfi%lld--%s", (long long)num, name->name);
     return I(sl, buf);
 }
 typedef struct SrfiLib {
@@ -5999,7 +6282,7 @@ static void srfi_scan_imports(SL *sl, Form *deflib, FB *from, FB *to) {
             int64_t dep_num = srfi_libname_num(set);
             if (dep_num >= 0 && srfi_importable(srfi_row(dep_num))) {
                 SrfiLib *dep = srfi_lib_of(sl, dep_num);
-                if (!dep) { err(set, "(srfi %lld): its library file was not found", (long long)dep_num); continue; }
+                if (!dep) { err(set, "%s: its library file was not found", lib_label(dep_num).s); continue; }
                 srfi_lib_register(sl, dep);
                 for (uint32_t k = 0; k < dep->exp_pub.n; k++) {
                     const Symbol *in = dep->exp_in.items[k]->as.sym;
@@ -6116,7 +6399,8 @@ static SrfiLib *srfi_lib_of(SL *sl, int64_t num) {
     SrfiLib *lib = srfi_lib_find(sl, num);
     if (lib) return lib;
     char mod[64], path[4096];
-    snprintf(mod, sizeof mod, "srfi/%lld", (long long)num);
+    if (num == SICP_EXTRAS_NUM) snprintf(mod, sizeof mod, "sicp/extras");
+    else snprintf(mod, sizeof mod, "srfi/%lld", (long long)num);
     if (!sl->lib_resolve || !sl->lib_resolve(sl->lib_resolve_ud, mod, path, sizeof path)) return NULL;
     uint32_t nf = 0;
     Form **fs = lib_read_source(sl, path, &nf);
@@ -6136,7 +6420,8 @@ static void srfi_lib_register(SL *sl, SrfiLib *lib) {
 static void srfi_source_forms(SL *sl, Form *deflib, FB *out) {
     int64_t num = deflib->as.list.len >= 2 ? srfi_libname_num(deflib->as.list.items[1]) : -1;
     if (num < 0 || !srfi_importable(srfi_row(num))) {
-        err(deflib, "a file under stdlib/srfi/ holds one (define-library (srfi N) ...) of an importable SRFI");
+        err(deflib, "a file under stdlib/srfi/ holds one (define-library (srfi N) ...) of an importable SRFI "
+                    "(stdlib/sicp/extras.scm, the (sicp extras) one)");
         return;
     }
     /* Spliced twice into one pass: once is enough.  A library already read
@@ -6206,21 +6491,21 @@ static bool srfi_bind(SL *sl, const Symbol *vis, const Symbol *target, int64_t n
     for (uint32_t i = 0; i < sl->n_srfi; i++) {
         if (sl->srfi_from[i] != vis) continue;
         if (sl->srfi_to[i] == target) return true;
-        err(at, "'%s' is imported from (srfi %lld) and from (srfi %lld) with different meanings; R7RS 5.2 "
+        err(at, "'%s' is imported from %s and from %s with different meanings; R7RS 5.2 "
                 "allows one binding per imported name -- rename or prefix one of them",
-            vis->name, (long long)sl->srfi_by[i], (long long)num);
+            vis->name, lib_label(sl->srfi_by[i]).s, lib_label(num).s);
         return false;
     }
     if (std_imported(sl, vis) && is_std_name(sl, vis) && std_meaning(sl, vis) != target) {
-        err(at, "'%s' would name both R7RS's own '%s' and (srfi %lld)'s; R7RS 5.2 allows one binding per "
+        err(at, "'%s' would name both R7RS's own '%s' and %s's; R7RS 5.2 allows one binding per "
                 "imported name -- rename or prefix the SRFI's, or leave R7RS's out with (except (scheme base) %s)",
-            vis->name, vis->name, (long long)num, vis->name);
+            vis->name, vis->name, lib_label(num).s, vis->name);
         return false;
     }
     if (fb_has_sym(&sl->user_globals, vis)) {
-        err(at, "'%s' is imported from (srfi %lld) and also defined by this program (R7RS 5.2); import it "
-                "with (except (srfi %lld) %s) to define your own",
-            vis->name, (long long)num, (long long)num, vis->name);
+        err(at, "'%s' is imported from %s and also defined by this program (R7RS 5.2); import it "
+                "with (except %s %s) to define your own",
+            vis->name, lib_label(num).s, lib_label(num).s, vis->name);
         return false;
     }
     if (sl->n_srfi == sl->cap_srfi) {
@@ -6258,7 +6543,7 @@ static const Symbol *import_visible_name(SL *sl, const SchemeImportSpec *spec, c
 static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Span sp) {
     (void)sp;
     int64_t num = srfi_libname_num(libname);
-    if (num < 0) { err(libname, "an SRFI is named by its number, e.g. (srfi 1)"); return; }
+    if (num < 0) { err(libname, "%s", bad_libname_msg(libname)); return; }
     const SrfiRow *row = srfi_row(num);
     if (!row) {
         err(libname, "(srfi %lld): no such SRFI in #lang r7rs; the SRFI table in docs/guides/r7rs-guide.md "
@@ -6280,8 +6565,8 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
     }
     SrfiLib *lib = srfi_lib_of(sl, num);
     if (!lib) {
-        err(libname, "(srfi %d): its library file %s could not be read -- is the stdlib installed?",
-            row->num, row->file);
+        err(libname, "%s: its library file %s could not be read -- is the stdlib installed?",
+            lib_label(row->num).s, row->file);
         return;
     }
     srfi_lib_register(sl, lib);
@@ -6290,10 +6575,10 @@ static void srfi_import(SL *sl, Form *libname, const SchemeImportSpec *spec, Spa
         for (int w = 0; w < 2; w++)
             for (uint32_t i = 0; i < named[w]->n; i++)
                 if (!fb_has_sym(&lib->exp_pub, named[w]->items[i]->as.sym))
-                    err(named[w]->items[i], "(srfi %d) does not export '%s'", row->num, named[w]->items[i]->as.sym->name);
+                    err(named[w]->items[i], "%s does not export '%s'", lib_label(row->num).s, named[w]->items[i]->as.sym->name);
         for (uint32_t i = 0; i + 1 < spec->renames.n; i += 2)
             if (!fb_has_sym(&lib->exp_pub, spec->renames.items[i + 1]->as.sym))
-                err(spec->renames.items[i + 1], "(srfi %d) does not export '%s'", row->num,
+                err(spec->renames.items[i + 1], "%s does not export '%s'", lib_label(row->num).s,
                     spec->renames.items[i + 1]->as.sym->name);
     }
     for (uint32_t k = 0; k < lib->exp_pub.n; k++) {
@@ -6359,6 +6644,46 @@ static const Symbol *clash_spelling(const SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return sl->clash_to[i];
     return s;
 }
+static const Symbol *std_meaning(SL *sl, const Symbol *s);
+/* r7rs-saved-standard-procedure-follows-redefinition: what an eager
+ * reference to `s` (spelled `r` by rn) means from the current top-level
+ * form -- the standard procedure when the program redefines `s` only in a
+ * later form, else NULL (rn's answer stands). */
+static const Symbol *std_before_redefinition(SL *sl, const Symbol *s, const Symbol *r) {
+    if (clash_spelling(sl, s) != r) return NULL;
+    for (uint32_t i = 0; i < sl->n_early; i++) {
+        if (sl->early_sym[i] != s) continue;
+        if (sl->cur_top >= sl->early_at[i]) return NULL;
+        const Symbol *std = std_meaning(sl, s);
+        return std != s ? std : NULL;
+    }
+    return NULL;
+}
+/* Record, for each clash name, the first top-level form that defines it. */
+static void note_redefinition_points(SL *sl, Form *const *forms, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        if (!is_scheme_file(forms[i]) || prelude_span(forms[i]->span) || srfi_span(forms[i]->span)) continue;
+        if (head_is(forms[i], sl->s_define_library)) return;   /* a library: not a program */
+        FB names = {0};
+        user_define_names(sl, forms[i], &names);
+        for (uint32_t k = 0; k < names.n; k++) {
+            const Symbol *s = names.items[k]->as.sym;
+            if (clash_spelling(sl, s) == s) continue;
+            bool seen = false;
+            for (uint32_t j = 0; j < sl->n_early && !seen; j++) seen = sl->early_sym[j] == s;
+            if (seen) continue;
+            if (sl->n_early == sl->cap_early) {
+                sl->cap_early = sl->cap_early ? sl->cap_early * 2 : 8;
+                sl->early_sym = (const Symbol **)realloc((void *)sl->early_sym, sl->cap_early * sizeof(Symbol *));
+                sl->early_at = (uint32_t *)realloc(sl->early_at, sl->cap_early * sizeof(uint32_t));
+                if (!sl->early_sym || !sl->early_at) { fprintf(stderr, "tur: oom\n"); abort(); }
+            }
+            sl->early_sym[sl->n_early] = s;
+            sl->early_at[sl->n_early++] = i;
+        }
+        free(names.items);
+    }
+}
 static void add_clash(SL *sl, const Symbol *s) {
     for (uint32_t i = 0; i < sl->n_clash; i++) if (sl->clash_from[i] == s) return;
     if (sl->n_clash == sl->cap_clash) {
@@ -6395,6 +6720,16 @@ static void note_stdlib_clashes(SL *sl, Form *const *forms, uint32_t n) {
          * global whether or not the program imports them, so refusing
          * would refuse programs that never imported the name.) */
         if (rn(sl, s) != s) { add_clash(sl, s); continue; }
+        /* ... and so is an on-demand library's name -- `eval` of (scheme
+         * eval) -- once the program imports that library.  rn cannot say so
+         * yet: lib_imported is set as the import is lowered, after this scan,
+         * and from then on the program's `(define (eval ...))` would be
+         * spelled onto the library's own `r7rs-eval`, two C functions of one
+         * name.  SICP 4.1 defines its own `eval`. */
+        bool od_clash = false;
+        for (size_t k = 0; k < N_ONDEMAND && !od_clash; k++)
+            od_clash = sl->od_from[k] == s && sl->od_lib[k] >= 0 && sl->lib_named[sl->od_lib[k]];
+        if (od_clash) { add_clash(sl, s); continue; }
         /* (A name Turmeric reserves for a type is rn'd by type_named_global.) */
         bool clash = false;
         for (uint32_t k = 0; k < lib.n && !clash; k++) clash = lib.items[k]->as.sym == s;
@@ -6578,6 +6913,16 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
             n = srfi_expanded.n;
         }
     }
+    {
+        /* The caller's array is not ours to rewrite; the rewritten top level
+         * is a copy (arena-owned, like the forms it holds). */
+        Form **copy = (Form **)arena_alloc(sl.a, (n ? n : 1) * sizeof(Form *));
+        for (uint32_t i = 0; i < n; i++) copy[i] = forms[i];
+        uint32_t nn = n;
+        mark_ondemand_imports(&sl, copy, n);
+        forms = redefinitions_to_set(&sl, copy, n, &nn);
+        n = nn;
+    }
     /* D5's two facts about the unit: does it import (scheme base), and what
      * does it define at top level (a program's defines, a library's body)? */
     for (uint32_t i = 0; i < n; i++) {
@@ -6603,6 +6948,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
                 set = set->as.list.items[1];
             int li = scheme_lib_index(set);
             if (li >= 0 && strcmp(SCHEME_LIBS[li].name, "base") == 0) fb_push(&sl.base_sets, sets.items[j]);
+            if (li >= 0 && head_is(f, sl.s_import)) sl.lib_named[li] = true;
         }
         free(sets.items);
     }
@@ -6611,6 +6957,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     for (uint32_t i = 0; i < n; i++)
         if (is_scheme_file(forms[i])) collect_muts(&sl, forms[i]);
     note_stdlib_clashes(&sl, forms, n);
+    if (!repl_turn) note_redefinition_points(&sl, forms, n);
     FB out = {0}, sforms = {0};
     {
         /* r7rs-procedure-body-forward-reference: the user's forms, in order,
@@ -6647,6 +6994,7 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
         } else if (is_scheme_file(forms[i])) {
             if (!have_first) { first_sp = forms[i]->span; have_first = true; }
             uint32_t from = sforms.n, lib_from = sl.lib_body.n;
+            sl.cur_top = i;
             sl.in_user = true;
             lower_toplevel(&sl, forms[i], &sforms);
             sl.in_user = false;
@@ -6691,14 +7039,25 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
          * imports first, definitions next, and the top-level expressions as
          * the body of a synthesized `main` (the top-level fold does not look
          * inside a module). */
+        /* r7rs-program-file-named-with-leading-digit-fails-to-compile: the
+         * name becomes the C prefix of every definition in the module, so it
+         * must not start with a digit -- SICP readers name files `1.1.scm`
+         * and `3.5-streams.scm`.  Such a stem is prefixed `r7rs-program-`.
+         * Only the LAST dot is the extension: `1.1.scm` is `1-1`, not `1`,
+         * which every other section's file would share. */
         const SourceFile *sf = diag_source_file(first_sp.file_id);
         char mbuf[128] = "r7rs-program";
         if (sf && sf->path) {
             const char *base = strrchr(sf->path, '/');
             base = base ? base + 1 : sf->path;
+            const char *ext = strrchr(base, '.');
+            if (!ext || ext == base) ext = base + strlen(base);
             size_t at = 0;
-            for (const char *p = base; *p && at + 1 < sizeof mbuf; p++) {
-                if (*p == '.') break;
+            if (*base >= '0' && *base <= '9') {
+                memcpy(mbuf, "r7rs-program-", 13);
+                at = 13;
+            }
+            for (const char *p = base; p < ext && at + 1 < sizeof mbuf; p++) {
                 mbuf[at++] = (*p == '-' || *p == '_' || (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
                               (*p >= '0' && *p <= '9')) ? *p : '-';
             }
@@ -6743,6 +7102,8 @@ Form **scheme_lower_program(Arena *a, SymbolTable *st,
     free((void *)sl.muts);
     free(included.items);
     free((void *)sl.clash_from);
+    free((void *)sl.early_sym);
+    free(sl.early_at);
     free((void *)sl.clash_to);
     free((void *)sl.setters);
     free(sl.macros);
@@ -6787,6 +7148,8 @@ static void lib_files_of_set(const Form *set, const char **out, uint32_t cap, ui
     const SrfiRow *srow = srfi_row(srfi_libname_num(set));
     if (srfi_importable(srow)) {
         for (uint32_t i = 0; i < *n; i++) if (out[i] == srow->file) return;
+        for (size_t h = 0; h < sizeof SRFI_HELPERS / sizeof SRFI_HELPERS[0]; h++)
+            if (SRFI_HELPERS[h].num == srow->num && *n < cap) out[(*n)++] = SRFI_HELPERS[h].file;
         if (*n < cap) out[(*n)++] = srow->file;
         return;
     }

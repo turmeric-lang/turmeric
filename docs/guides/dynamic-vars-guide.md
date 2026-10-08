@@ -286,7 +286,7 @@ defeffect DbEffect query([sql :str] :str)
 
 defn run-tests [] :unit
   (handle
-    (assert! (= (query "SELECT 1") "1"))
+    (assert! {(query "SELECT 1") = "1"})
     [(DbEffect.query sql k) (resume k (mock-db-exec sql))])
 ```
 

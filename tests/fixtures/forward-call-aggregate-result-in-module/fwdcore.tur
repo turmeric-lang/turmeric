@@ -1,0 +1,8 @@
+;; fwdcore -- an opaque handle type for fwduse to return inside a Result.
+(defmodule fwdcore
+  (export Handle handle-of handle-id)
+
+  (defopaque Handle :int)
+
+  (defn handle-of [n : int] : Handle (:: n Handle))
+  (defn handle-id [h : Handle] : int (:: h int)))

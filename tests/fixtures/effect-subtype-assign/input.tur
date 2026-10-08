@@ -1,12 +1,14 @@
-;; ER4: a pure closure passed to a #{Write}-row parameter is accepted.
-;; The closure's inferred row #{} is a subset of the parameter's declared row #{Write}.
+;; ER4: a pure closure passed to a #fx{Write}-row parameter is accepted.
+;; The closure's inferred row #fx{} is a subset of the parameter's declared row
+;; #fx{Write}.  The closure returns its string rather than printing it: a
+;; closure that prints is #fx{IO} (W4: `println` is #fx{IO}), not pure.
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn run-with-write [f :(fn [] #fx{Write} nil)] #fx{Write} : nil
+(defn run-with-write [f :(fn [] #fx{Write} cstr)] #fx{Write} : cstr
   (f))
 
 (defn main [] : int
   (handle
-    (do (run-with-write (fn [] (println "pure"))) 0)
+    (do (println (run-with-write (fn [] "pure"))) 0)
     (Write [msg] k) (do (println msg) (resume k 0))))

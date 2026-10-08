@@ -40,7 +40,7 @@ ref in real projects):
   :name    "my-app"
   :version "0.1.0"
   :spices  #{
-    "thread-pool" #{:url    "https://github.com/rjungemann/turmeric-spices"
+    "thread-pool" #{:url    "https://github.com/turmeric-lang/turmeric-spices"
                     :ref    "main"
                     :subdir "spices/thread-pool"}
   })

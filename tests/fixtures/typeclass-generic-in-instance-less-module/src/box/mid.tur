@@ -1,0 +1,5 @@
+(defmodule box/mid
+  (import box/cls :refer [twice quad])
+  (export eight)
+  (defn eight [A] [(Box A)] [x : A] : int
+    (+ (quad x) (twice x))))

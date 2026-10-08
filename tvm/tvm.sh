@@ -201,8 +201,17 @@ __tvm_sha256() {
   fi
 }
 
+# Single source of truth for the Turmeric repo's GitHub coordinates.  A repo
+# transfer (personal account -> org) is a one-line change here rather than a
+# sweep of the three URLs below.  The specific TVM_* overrides still win, so
+# the test harness -- which points them at file:// trees -- and anyone running
+# a mirror or a fork need no edit at all.
+__tvm_gh_repo() {
+  printf '%s\n' "${TVM_GH_REPO:-turmeric-lang/turmeric}"
+}
+
 __tvm_release_base() {
-  printf '%s\n' "${TVM_RELEASE_BASE_URL:-https://github.com/rjungemann/turmeric/releases/download}"
+  printf '%s\n' "${TVM_RELEASE_BASE_URL:-https://github.com/$(__tvm_gh_repo)/releases/download}"
 }
 
 # Shared refusal for the three ways integrity verification can fail to HAPPEN
@@ -224,7 +233,7 @@ __tvm_verify_refuse() {
 }
 
 __tvm_api_url() {
-  printf '%s\n' "${TVM_API_URL:-https://api.github.com/repos/rjungemann/turmeric/releases}"
+  printf '%s\n' "${TVM_API_URL:-https://api.github.com/repos/$(__tvm_gh_repo)/releases}"
 }
 
 # ---------------------------------------------------------------------------
@@ -370,7 +379,7 @@ __tvm_build_from_source() {
   _vdir="$(__tvm_versions_dir)/$_ver"
   mkdir -p "$(__tvm_cache_dir)/sources"
 
-  _repo="${TVM_SOURCE_REPO:-https://github.com/rjungemann/turmeric.git}"
+  _repo="${TVM_SOURCE_REPO:-https://github.com/$(__tvm_gh_repo).git}"
   if [ ! -d "$_src/.git" ]; then
     __tvm_log "tvm: cloning $_repo ..."
     git clone "$_repo" "$_src" || { __tvm_err "git clone failed"; return 1; }

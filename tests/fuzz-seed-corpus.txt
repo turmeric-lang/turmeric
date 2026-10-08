@@ -55,3 +55,5 @@
 #            case 34  class_nested + class_thru
 type 20260913   # found constrained-generic-float-result-into-generic (case 8)
 type 20260918   # found constrained-generic-float-result-into-generic (case 7)
+type 20261003 400   # found generator-thunk-call-site-returns-void-ptr-not-carrier (case 376);
+#                     400 is the nightly's own --n, where it was found

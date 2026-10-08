@@ -158,7 +158,7 @@ schema/optional(schema/str())
 ; null / absent ok
 schema/union(vec-of(schema/int() schema/str()))
 ; first matching arm wins
-schema/transform(schema/int() (fn [x] *(x 2)))
+schema/transform(schema/int() (fn [x] {x * 2}))
 ; decode, then map
 ```
 
@@ -406,7 +406,7 @@ once.
 ```
 ```sweet-exp
 defn double-it [x :int] :int
-  *(x 2)
+  {x * 2}
 ;; pure(double-it) <*> field-of("n", int)  -- on {"n":21} => 42
 schema-decode!(schema/ap(schema/always(double-it) schema/field-of("n" schema/int())) json/decode("{\"n\": 21}"))
 ```
@@ -480,5 +480,5 @@ struct. See the `schema-hkt-functor`, `schema-hkt-alternative`,
 > you (and `Functor` is loaded globally), so `(load "stdlib/schema.tur")` is
 > enough -- no `(load "stdlib/typeclass.tur")` is required to use the instances.
 
-See [docs/archive/history/schema-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/schema-plan.md) for the full design and the
+See [docs/archive/history/schema-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/schema-plan.md) for the full design and the
 rationale behind the Validation (accumulating) semantics.

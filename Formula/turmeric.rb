@@ -2,7 +2,7 @@ class Turmeric < Formula
   desc "A Lisp that compiles to C99 with typeclasses, algebraic effects, and borrow checking"
   homepage "https://turmeric-lang.com"
   license "MIT"
-  head "https://github.com/rjungemann/turmeric.git", branch: "main"
+  head "https://github.com/turmeric-lang/turmeric.git", branch: "main"
 
   depends_on "cmake" => :build
 

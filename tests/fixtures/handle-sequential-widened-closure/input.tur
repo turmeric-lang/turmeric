@@ -1,0 +1,15 @@
+;; Two sequential `handle`s, the second with a closure literal in its body:
+;; the second body is lifted into the first's continuation frame, and the
+;; closure's slot-0 widen wrapper (a `bool`-returning thunk stored in an
+;; int64 slot) was emitted after that frame -- invalid C,
+;; '__tur_widen___fn_N' undeclared.  Found working
+;; cps-evicts-handle-in-operand-positions item 4.  Matches `tur --interpret`.
+
+(defn apply0 [f : (fn [] bool)] : bool (f))
+(defeffect Flip [x : bool] :bool)
+(defn flip [v : bool] : bool (perform (Flip v)))
+(defn main [] : int
+  (println (handle (flip true) (Flip [x] k) (resume k x)))
+  (println (handle (flip (let [c false] (apply0 (fn [] c))))
+    (Flip [x] k) (resume k (not x))))
+  0)

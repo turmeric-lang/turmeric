@@ -18,7 +18,11 @@ description: Rewritten after refinement types landed. What the shipped `#refine{
 > [the guide](../../guides/refinement-types-guide.md)). So this plan can stop
 > speculating and start measuring. **Everything asserted below about compiler
 > behaviour was checked against `build-release/tur` at VERSION 0.30.8**; each
-> claim carries the probe that establishes it.
+> claim carries the probe that establishes it. **Later probe updates carry
+> their own versions** -- the RE2 phase was re-measured at v0.37.0
+> (2026-08-20 profile), `023013c8` (2026-09-05) and v0.59.0 (2026-10-02);
+> read the dated block quotes in a phase before relying on a 0.30.8 claim
+> about it.
 
 ## What changed, in one paragraph
 
@@ -135,7 +139,7 @@ world whose state lives behind a `:int` handle is not.
 the one that costs real performance rather than real safety: `for-each` lowers
 to a `while` over slot indices, and the bounds facts that would let dense
 storage drop its per-access check live in the loop condition. Waiting on
-[`loop-invariants-plan.md`](../loop-invariants-plan.md), which was on hold
+[`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md), which was on hold
 for want of a demand signal -- **this plan was that signal.**
 
 > **C3 landed (experimental), 2026-09-30.** `(while c :invariant p ...)` ships
@@ -224,7 +228,7 @@ it.
 |---|---|---|---|
 | C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
 | C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
-| C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../loop-invariants-plan.md) -- **LANDED 2026-09-30** behind `--enable=loop-invariants` |
+| C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md) -- **LANDED 2026-09-30** behind `--enable=loop-invariants` |
 
 **C1 is not strictly blocking** -- probe 2 shows the `(= (alive-i w x) 1)`
 encoding proves today. It is blocking on *whether anyone would write it*. An
@@ -286,7 +290,11 @@ question is answered.~~
 > reads a `^mut` global will draw `TUR-W0383` immediately -- that is the
 > trust boundary being reported, not a lint to silence.
 
-**C3 is blocking for RE2 only.** RE1 does not need it.
+**C3 was blocking for RE2 only** (RE1 never needed it), and it landed
+2026-09-30. RE2 is no longer gated on a compiler feature; it is unstarted
+by decision -- see the 2026-10-02 probe update in the RE2 phase, which
+measures the mechanism working and finds the performance justification
+inverted rather than merely unsupported.
 
 ### Spice-side prerequisite: real types at the API surface
 
@@ -399,7 +407,7 @@ expected and fails to elaborate.
 > **1 unknown -> TUR-W0372** (so `#reads`+`frozen` is load-bearing). Fixtures:
 > `turmeric-spices/spices/ecs/tests/refined/alive-frozen.tur` (positive) and
 > `.../tests/errors/refined-alive-no-region.tur` (negative); dogfood write-up
-> `turmeric-spices/docs/ecs-re1-refined-aliveness.md`.
+> `docs/archive/ecs-re1-refined-aliveness.md`.
 >
 > Getting here required two compiler fixes (both landed, validated, suite 2367/0):
 > (1) a `#reads`-refined param could not codegen -- the impure entry contract was
@@ -565,7 +573,7 @@ decisions and not the typing:
   being implemented as an escape hatch, and it should be written before the
   feature, not after.
 
-### RE2 -- Bounded slot indices on sized worlds (needs C3)
+### RE2 -- Bounded slot indices on sized worlds (C3 landed; UNSTARTED by decision)
 
 A sized world knows its capacity at the type level. `sized-dense-get` re-checks
 `0 <= i < cap` on every access; the check is provable from the loop condition
@@ -701,6 +709,200 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 > and a struct copy per store, so its 3.50x is not the grow branch alone.)
 > See `spices/ecs/bench/README.md`.
 
+> **Probe update 2026-10-02 -- C3 LANDED, the mechanism works, and the
+> performance case is INVERTED rather than merely unsupported. RE2 stays
+> unstarted.** C3 (`loop-invariants`) landed 2026-09-30 behind
+> `--enable=loop-invariants`, so probe 6 was re-run for the first time since.
+> All measurements against a v0.59.0 Debug build.
+>
+> **1. The `while` shape now discharges, and the invariant is load-bearing.**
+> Probe 6 measured `0 proven, 1 unknown`. With a written `:invariant` it is an
+> ordinary path-splitting obligation, exactly as this section predicted. Four
+> variants under `--strict-refine`:
+>
+> | variant | obligations | result |
+> |---|---|---|
+> | gate on, guard `(< i cap)`, `:invariant (>= i 0)` | 3 | **3 proven, 0 refuted** |
+> | gate **off** (probe 6's own condition) | 1 | refuted |
+> | `:invariant` removed, gate on | 1 | refuted |
+> | off-by-one guard `(< i (+ cap 1))` | 3 | 2 proven, **1 refuted** |
+>
+> The lower bound rides the invariant and the upper bound rides the loop guard;
+> removing either refutes, and an off-by-one guard refutes, so the proof is not
+> vacuous and C3 is precisely what unblocks it.
+>
+> **2. The bound does not need to be a type-level index -- a preceding VALUE
+> parameter works.** The 2026-09-05 probe above is re-confirmed at 0.59.0:
+> `(< x n)` over a size index is still `unbound symbol 'n'` (identical error and
+> identical "Did you mean 'b'?" help), and the type-level -> refinement-scope
+> bridge is still unbuilt. But it is not needed. A refinement may reference a
+> parameter declared before it:
+>
+> ```turmeric
+> (defn get-at [cap : int
+>               i : #refine{ x : int | (and (>= x 0) (< x cap)) }] : int ...)
+> ```
+>
+> and that is already the shape `sized-for-each` expands to -- `ecs/sized-query`
+> binds `__cap` to `(sized-dense-cap ...)` in a `let` *before* the `while`, so
+> the capacity is a value in scope at every call site in the body. So RE2 needs
+> neither the unbuilt bridge nor the "monomorphic accessor per capacity"
+> fallback proposed above. That part of the 2026-09-05 note is superseded: the
+> parametric shape is reachable today, just parametric in a value rather than in
+> a type index.
+>
+> **3. The decisive new finding: proving the call site removes NO runtime
+> check.** This is what changes the phase's standing, and the 2026-08-20
+> profile did not reach it.
+>
+> | program | contract checks in emitted C |
+> |---|---|
+> | refined accessor, call site fully proved | **6** |
+> | identical code, plain `i : int` | **5** |
+>
+> and the emitted C is **byte-identical with the gate on and off**. The reason
+> is structural: the bound is checked in the **callee's prologue**, not at the
+> call site -- in the probe, inside `get_hyat` itself. A caller-side proof
+> cannot elide a check the callee emits on behalf of every possible caller,
+> and an exported spice accessor has callers that do not exist yet. So adding
+> the refinement *costs* one check per access and the proof buys nothing back.
+>
+> **This is documented design, not a defect**, which is worth stating plainly
+> since it sets the ceiling on RE2 rather than being something to fix on the
+> way. [refinement-types-guide.md](../../guides/refinement-types-guide.md)
+> divides a function's refinements into two roles, and only one of them elides:
+>
+> - a **goal** -- a return refinement or `:post` -- "when proved, **no runtime
+>   check is emitted for it**";
+> - a **hypothesis** -- a parameter's refinement or `:pre` -- which the body may
+>   assume, and which "is still checked at runtime, since it constrains the
+>   caller rather than the body".
+>
+> A parameter refinement is in the second role, so a crossing proof buys
+> *safety* (a provably out-of-range call is `TUR-E0371`, a compile failure
+> rather than a runtime panic) and never *speed*. RE2's payoff is entirely in
+> the first of those. The third mode -- caller owes the proof AND the callee
+> emits no check -- is the one that does not exist, and is exactly what the
+> unchecked-variant sketch below is about.
+>
+> **What this changes.** The 2026-08-20 profile concluded RE2's performance
+> justification does not survive because the cost is the auto-grow guard and
+> the `present[]` write rather than a bounds check. Finding 3 is stronger and
+> more structural: **the bounds check RE2 targets is not eliminable by proving
+> it at all** under the current scheme. RE2's *correctness* justification --
+> compile-time rejection of an out-of-range slot -- is untouched, now verified
+> to work, and cheap to build; it is the only justification left, and it comes
+> at +1 runtime check per access rather than -1.
+>
+> **Decision 2026-10-02: record and leave unstarted.** Nothing here is a
+> blocker; the mechanism is ready. What is absent is a reason to spend the
+> coupling: building RE2 would make `tur-ecs` depend on `--enable=loop-invariants`,
+> a `prototype` row whose surface is expected to move, in exchange for a
+> compile-time guarantee that costs a runtime check. Revisit if the
+> out-of-range-slot guarantee is wanted for its own sake, or if an unchecked
+> accessor variant (below) makes the proof pay.
+>
+> **Consequence for C3's own graduation.** `loop-invariants`' trigger 1 is
+> "RE2's profile shows the per-access bounds re-check is a real cost and the
+> `while` lowering is where the call sites live." The profile shows it is not a
+> real cost, and finding 3 shows proving it changes no code. **RE2 will not be
+> the consumer that fires that trigger**, even if built -- it would consume the
+> correctness path only. The loop-invariants row should not be held open in
+> expectation of RE2.
+>
+> **The unchecked variant: option (c) is the direction.** To make a
+> caller-side proof buy anything at runtime, the callee needs an entry point
+> whose precondition is *assumed* rather than checked -- the third mode the
+> guide's goal/hypothesis split does not currently have. Three shapes were
+> considered; **(c) is the one to pursue**, and (a) and (b) are recorded as
+> rejected so they are not re-proposed.
+>
+> - **(a) Two functions, one `#fx{Unsafe}` -- rejected as a destination.**
+>   Ship `sized-dense-get` (checked) and `sized-dense-get-unchecked`, and have
+>   the macro expand to the latter. Zero compiler work, and `#fx{Unsafe}` is
+>   genuinely enforced -- only `(unsafe ...)` or an already-`Unsafe` caller
+>   discharges it -- so every such call site is marked and the effect system
+>   can enumerate them. What it does not do is connect the proof to the call:
+>   the macro asserts the bound and nothing verifies the assertion. Fine as a
+>   stopgap while a macro is the sole caller; not a place to stop, because the
+>   guarantee degrades silently the moment anyone calls the unchecked form by
+>   hand.
+> - **(b) Elide the callee check when every caller is visible -- rejected as
+>   insufficient.** Sound and needs no new syntax, but it dies exactly where
+>   this is needed: an exported spice accessor's callers are not all visible,
+>   and an indirect call never is. Worth having for its own sake someday;
+>   useless for this.
+> - **(c) Make the proof the authorization -- the direction.** An entry point
+>   declaring a precondition that is **never** checked at runtime and that
+>   every call site must discharge statically or fail to compile. Most of the
+>   machinery exists: the crossing obligation, the solver, `TUR-E0371`, and
+>   `--strict-refine`'s promotion. What is new is a declaration meaning
+>   "refuse to compile rather than fall back to a runtime check".
+>
+> **What (c) has to answer.** Written down now so the first attempt does not
+> rediscover them:
+>
+> 1. **Always-strict, by construction.** The whole point is that there is no
+>    runtime fallback, so this flavour cannot soften under a non-strict build
+>    the way `TUR-W0372` does. An unproved call site is an error at every
+>    strictness level -- which means the declaration is also a promise to the
+>    *caller* that its build will fail, not merely warn.
+> 2. **Virality is the real cost.** The assumed-ness must reach a call site
+>    that can actually prove the bound. An intermediate wrapper
+>    (`(defn helper [cap : int i : int] (get-assumed cap i))`) cannot discharge
+>    it and must declare the precondition itself -- at which point, under
+>    today's rules, the wrapper emits its own runtime check and the cost moves
+>    rather than disappears. Every wrapper in the chain has to be in the
+>    assumed mode. This is the `#reads` propagation problem in a new coat.
+>    *Mitigating observation:* the win concentrates in macro expansion, where
+>    the loop and the access are generated together at the proving site with no
+>    wrapper in between -- which is exactly the ECS `for-each` shape. So (c) is
+>    cheap in the macro case and expensive in the general library case, and a
+>    first cut could legitimately support only the former.
+> 3. **It moves refinement proofs into the memory-safety TCB.** This is the
+>    heaviest consideration and the reason (c) should not be built casually.
+>    Today a solver bug in a *goal* elision means a missing check on a value
+>    the body computed -- bad, contained. A solver bug in an *assumed
+>    precondition* is an unchecked out-of-range index into a buffer: memory
+>    unsafety produced by a prover mistake. Both historical refinement
+>    soundness bugs lived in the encoder, and as of 2026-10-02 the encoder's
+>    newest work (`^reflect`'s RF3/RF4) had no differential fuzz coverage at
+>    all -- see
+>    [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md).
+>    (Closed 2026-10-03 by `shape_reflect`, whose first run found a third
+>    encoder soundness bug -- a float field's selector declared Int -- fixed
+>    the same day.)
+>    **Closing that gap is a prerequisite, not a nicety**, if proofs are going
+>    to be load-bearing for memory safety. A bisection hatch
+>    (`TUR_<NAME>=0` re-enabling every suppressed check) and a harness kept on
+>    the off path are the other half -- per the INVERTS-not-retires rule in
+>    [experimental-flags-guide](../../guides/experimental-flags-guide.md).
+> 4. **Keep the checked entry point.** A caller that cannot prove the bound
+>    needs somewhere to go that is not `unsafe`. Two entry points over one body
+>    is the shape, which makes (a) the fallback *inside* (c) rather than a
+>    rival to it.
+> 5. **A candidate framing worth trying first:** make *defining* such an entry
+>    point `#fx{Unsafe}` while *calling* it is safe exactly when the obligation
+>    discharges. That puts the feature inside machinery that already exists,
+>    makes the audit surface enumerable by the effect system, and states the
+>    asymmetry honestly -- the body does unchecked indexing; the call site has
+>    earned it. It also means a call site that cannot prove the bound falls
+>    back to the ordinary `Unsafe` discharge rules rather than to silence.
+> 6. **Where it lives.** Not in this plan. It is a compiler feature, so per
+>    [CLAUDE.md](../../../CLAUDE.md) it needs its own `docs/upcoming/` plan and
+>    an `EXPERIMENTS[]` row behind `--enable=`, and it belongs beside
+>    [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md),
+>    which already owns "what promise does a refinement rest on, and is the
+>    promise checkable" -- an assumed precondition is a new entry in that
+>    taxonomy rather than a variation on `#reads`.
+>
+> **Sequencing, stated plainly:** (c) only pays off where the eliminated check
+> is a measurable cost, and per the 2026-08-20 profile the ECS bounds check is
+> not one. **So (c) should not be motivated by RE2.** It wants a case where the
+> per-access check demonstrably dominates -- a tight numeric kernel over a
+> refined index is the likely candidate -- plus prerequisite 3 above. RE2
+> remains a consumer that would benefit, not the reason to build it.
+
 ### RE3 -- Documentation (DONE 2026-07-26)
 
 - Fix the two false statements in the table above. *(Landed with the plan
@@ -805,7 +1007,7 @@ work), then RE1 as the dogfooding vehicle, then C3/RE2 only against a profile.
 - [`refinement-types-guide.md`](../../guides/refinement-types-guide.md) -- the surface
 - [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md)
 - [`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md)
-- [`loop-invariants-plan.md`](../loop-invariants-plan.md)
+- [`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md)
 - `docs/guides/ecs-guide.md`, `docs/guides/ecs-vs-haskell-ecs.md`,
   `docs/guides/ecs-storage-guide.md`
 - `docs/guides/substructural-types-guide.md` -- the linear caps C2 leans on

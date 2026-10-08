@@ -75,12 +75,12 @@ value being checked, not to any name in the surrounding scope.
 (defn divide [x : int, y : int] : int
   :pre  (not= y 0)
   :post (= (* result y) x)
-  (/ x y))
+  {x / y})
 ```
 
 ```sweet-exp
 defn divide [x : int, y : int] : int :pre (not= y 0) :post (= (* result y) x)
-  (/ x y)
+  {x / y}
 ```
 
 - **`:pre`** -- checked at function entry, before any user code runs.
@@ -271,12 +271,25 @@ binary as code written without contract annotations.
 
 ## Failure Messages
 
-A violated check goes through `tur-contract-check` and the contract handler
-(panic by default). The message identifies the kind of check: a parameter or
-return `#refine{...}` reports `Contract violated`, `:pre` reports
-`Precondition failed`, and `:post` reports `Postcondition failed`. A contract
-predicate with side effects is rejected at compile time (`contract predicate
-has side effects; predicates must be pure`).
+A violated check panics at the line its predicate is written on. The message
+says which kind of check failed, in which function, and what the predicate
+says:
+
+```
+panic at div.tur:2: Precondition failed in safe-div: (not= b 0)
+panic at g.tur:3: Postcondition failed in g: (>= result n)
+panic at shapes.tur:14: Return contract violated in size: (>= r 0)
+panic at div.tur:9: Contract violated by parameter 'd' in sdiv: (not= d 0)
+```
+
+The location is the source file's name and line, in a compiled build and
+under `tur --interpret` alike. A parameter of a lambda is named `in fn`, and
+an instance method by its method name. A predicate longer than 160 characters
+is cut short with `...`. An `assert!` / `require!` / `ensure!` (or a `-msg!`
+form) panics at the line it is used on -- and when your own macro wraps one, at
+the line your macro is used on. A contract predicate with side
+effects is rejected at compile time (`contract predicate has side effects;
+predicates must be pure`).
 
 ---
 

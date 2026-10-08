@@ -19,10 +19,10 @@ Add `tur-stats` as a dependency in your `build.tur`:
 
 ```turmeric no-check
 :spices #map{
-  "frame" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "frame" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "frame-v0.1.0"
                :subdir "spices/frame"}
-  "stats" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "stats" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "stats-v0.1.0"
                :subdir "spices/stats"}
 }
@@ -30,10 +30,10 @@ Add `tur-stats` as a dependency in your `build.tur`:
 ```sweet-exp
 :spices
 #map{
-  "frame" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "frame" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "frame-v0.1.0"
                :subdir "spices/frame"}
-  "stats" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "stats" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                :ref    "stats-v0.1.0"
                :subdir "spices/stats"}
 }
@@ -42,7 +42,7 @@ Add `tur-stats` as a dependency in your `build.tur`:
 Or from the command line:
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref stats-v0.1.0 --subdir spices/stats --name stats
 ```
 

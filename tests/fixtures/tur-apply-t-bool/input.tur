@@ -1,12 +1,18 @@
 ;; Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1):
-;; round-trip a :int -> :bool closure through TUR_APPLY1_T.  The macro casts
-;; slot 0 to bool (*)(void *, int64_t) and coerces the argument with
-;; (int64_t)(value) -- the closure's declared :bool return is preserved at the
-;; C invocation site instead of being erased to int64_t.
+;; round-trip a :int -> :bool closure through TUR_APPLY1_T, coercing the
+;; argument with (int64_t)(value).
+;;
+;; A NARROW result (bool, int8..int32) comes back from slot 0 widened to
+;; int64_t (narrow-closure-result-read-through-int64-carrier): an erased caller
+;; reads the whole return register, and a `bool` return defines only its low
+;; byte.  So slot 0 is `int64_t (*)(void *, int64_t)` and the typed call names
+;; that result, then narrows -- casting slot 0 to `bool (*)(...)` is an
+;; indirect call through the wrong function type (a -fsanitize=function trap,
+;; a call_indirect trap on WASM).
 
 (defn call-pred [f : ptr<void> x : int] : bool
   ```c
-  return TUR_APPLY1_T(bool, int64_t, f, x);
+  return TUR_APPLY1_T(int64_t, int64_t, f, x) != 0;
   ```)
 
 (defn make-gt [n : int] : ptr<void>

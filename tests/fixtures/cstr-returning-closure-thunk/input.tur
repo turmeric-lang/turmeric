@@ -9,7 +9,7 @@
 ;; `const char * (*)(void *, ...)` and round-trips through TUR_APPLY1_T cleanly.
 
 (defn call-s [f : ptr<void> s : cstr] : cstr
-  ```c return TUR_APPLY1_T(char *, char *, f, s); ```)
+  ```c return TUR_APPLY1_T(const char *, const char *, f, s); ```)
 
 (defn make-pick [n : int] : ptr<void>
   (fn [s : cstr] : cstr (if (> n 0) s "other")))   ;; captures n -> fat closure

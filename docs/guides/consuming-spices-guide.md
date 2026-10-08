@@ -18,7 +18,7 @@ and publish a spice of your own.
 ## Official First-Party Spices
 
 The canonical source for official spices is the
-[turmeric-spices](https://github.com/rjungemann/turmeric-spices) monorepo.
+[turmeric-spices](https://github.com/turmeric-lang/turmeric-spices) monorepo.
 Its packages include:
 
 | Spice | Description | C deps? |
@@ -46,16 +46,16 @@ independently with a per-package tag: `<spice>-vMAJOR.MINOR.PATCH`.
 Use `tur add` with `--subdir` to pull a spice from the monorepo:
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref test-v0.1.0 --subdir spices/test --name test
 
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref math-v0.1.0 --subdir spices/math --name math
 
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref sqlite-v0.1.0 --subdir spices/sqlite --name sqlite
 
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref json-v0.1.0 --subdir spices/json --name json
 ```
 
@@ -158,8 +158,9 @@ defpackage my-app
 ## Fetching and Updating
 
 ```sh
-tur fetch               # download everything in tur.lock
+tur fetch               # download everything in tur.lock, at the pinned commits
 tur fetch --update      # upgrade spices to the latest allowed versions
+tur fetch --frozen      # what CI should run: fail if tur.lock would change
 ```
 
 `tur run` and `tur build` invoke `tur fetch` automatically when any spice
@@ -190,7 +191,7 @@ reproducible across machines and CI runs.
              :resolved   "a1b2c3d4e5f6..."
              :sha256     "abc123..."
              :fetched-at "2026-05-22T09:00:00Z"}
-    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+    "math" #{:url        "https://github.com/turmeric-lang/turmeric-spices"
              :ref        "math-v0.1.0"
              :subdir     "spices/math"
              :resolved   "d6e7f8a9b0c1..."
@@ -211,7 +212,7 @@ deflockfile
              :resolved   "a1b2c3d4e5f6..."
              :sha256     "abc123..."
              :fetched-at "2026-05-22T09:00:00Z"}
-    "math" #{:url        "https://github.com/rjungemann/turmeric-spices"
+    "math" #{:url        "https://github.com/turmeric-lang/turmeric-spices"
              :ref        "math-v0.1.0"
              :subdir     "spices/math"
              :resolved   "d6e7f8a9b0c1..."
@@ -267,7 +268,7 @@ tooling. Optional spices that are absent do not cause a build error.
 
 ```turmeric no-check
 :spices #map{
-  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "test" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "test-v0.1.0"
               :subdir "spices/test"
               :optional true}
@@ -276,7 +277,7 @@ tooling. Optional spices that are absent do not cause a build error.
 
 ```sweet-exp
 :spices #map{
-  "test" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "test" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
               :ref    "test-v0.1.0"
               :subdir "spices/test"
               :optional true}
@@ -396,7 +397,7 @@ CMake deps are also tracked in `tur.lock` with SHA-256 hashes for integrity
 verification. For the generated `cmake/CMakeLists.txt` format, the manifest
 schema, security considerations, and the outbound direction (publishing a
 Turmeric library so CMake projects can consume it), see the
-[CMake/CPM integration notes](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
+[CMake/CPM integration notes](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cmake-cpm-integration-plan.md).
 
 ---
 
@@ -409,15 +410,19 @@ Turmeric library so CMake projects can consume it), see the
   evaporate on the next run. `tur run`, `tur build` and `tur audit` all re-hash
   the trees they are about to use, so an edit made to `spices/` after a fetch
   is caught by whichever you reach for.
-- **It still cannot check out the commit it recorded.** A clone tracks the
-  branch or tag named in `:ref`; `:resolved` is recorded but never used to
-  check out. So a branch-shaped `:ref` re-fetches to wherever that branch now
-  points, and you are asked to approve the change rather than held to the
-  commit you locked. **Prefer a tag over a branch for `:ref`**, and read a new
-  spice before you add it. Tracked as
-  [lock-tracks-ref-not-resolved-commit](https://github.com/rjungemann/turmeric/blob/main/docs/reported/lock-tracks-ref-not-resolved-commit.md);
-  see the [Security Guide](https://github.com/rjungemann/turmeric/blob/main/docs/guides/security-guide.md)
+- **A fetch checks out the commit the lock recorded**, not wherever `:ref`
+  points now. A branch-shaped `:ref` that has moved upstream still gives you
+  the locked commit; `tur fetch --update` is how you take the new one. If the
+  locked commit can no longer be fetched (the history was rewritten), the
+  fetch fails and keeps no clone -- it does not fall back to the branch, which
+  would quietly undo the pin. A tag is still the clearer `:ref`, and read a
+  new spice before you add it. See the
+  [Security Guide](https://github.com/turmeric-lang/turmeric/blob/main/docs/guides/security-guide.md)
   for the promise this is measured against.
+- **`tur fetch --frozen`** fetches exactly what `tur.lock` pins and never
+  writes it: a dependency with no row, or a `:url` / `:ref` / commit / tree
+  that differs from its row, is an error. That is the `npm ci` /
+  `cargo --locked` shape, and the one CI should run.
 - Any `:cmake-deps` entry is a trust decision equivalent to executing build
   scripts from that repository. Audit before adding.
 - `tur audit` lists every origin the build fetches code from -- Turmeric

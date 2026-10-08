@@ -155,22 +155,85 @@ static void expand(CubeAcc *acc, VCTerm **pending, uint32_t n_pending,
         return;
     }
 
-    /* Find the first disjunction still to split on. */
-    for (uint32_t i = 0; i < n_pending; i++) {
-        VCTerm *t = pending[i];
-        if (t->op != VC_OR) continue;
-        VCTerm **rest = (VCTerm **)arena_alloc(acc->arena,
-                                               (n_pending ? n_pending : 1) * sizeof(VCTerm *));
-        uint32_t m = 0;
-        for (uint32_t j = 0; j < n_pending; j++) if (j != i) rest[m++] = pending[j];
-        for (uint32_t d = 0; d < t->n && !acc->overflow; d++) {
-            VCTerm **nxt = (VCTerm **)arena_alloc(acc->arena, (m + 1) * sizeof(VCTerm *));
-            if (m) memcpy(nxt, rest, m * sizeof(VCTerm *));
-            nxt[m] = t->kids[d];
-            expand(acc, nxt, m + 1, conj, n_conj);
+    /* UNIT PROPAGATION before any split.  A literal that is a top-level
+     * conjunct of `pending` lands in every cube this frame produces, so for a
+     * disjunction beside it:
+     *
+     *   - a disjunct that IS such a literal satisfies the disjunction outright.
+     *     Every other branch would only add a literal to the cube that branch
+     *     produces, and a cube that is unsat stays unsat with more literals --
+     *     so the disjunction is dropped with no split.
+     *   - a disjunct that is the COMPLEMENT of such a literal can only produce
+     *     a cube holding `p` and `(not p)`, which is unsatisfiable; it is
+     *     skipped exactly as a `false` literal's cube is below.
+     *
+     * Terms are hash-consed, so both tests are pointer comparisons.  Without
+     * this, a chain of `iff`s -- the equations a Bool `^reflect` measure
+     * unfolds into, `(p1 => p0) and (p0 => p1)` per step -- doubled the cube
+     * count twice per link and a four-element ground list overflowed
+     * REFINE_MAX_CUBES (docs/archive/reflect-bool-measure-cube-blowup.md),
+     * though one literal settles each link.  A disjunction with one live
+     * disjunct left is chosen first: it is a unit, splitting it costs nothing,
+     * and the literal it adds feeds the next one. */
+    {
+        int32_t pick = -1, pick_live = 0;
+        for (uint32_t i = 0; i < n_pending; i++) {
+            VCTerm *t = pending[i];
+            if (t->op != VC_OR) continue;
+            bool sat = false;
+            int32_t live = 0;
+            for (uint32_t d = 0; d < t->n && !sat; d++) {
+                VCTerm *k = t->kids[d];
+                bool dead = (k->op == VC_FALSE);
+                if (k->op == VC_TRUE) sat = true;
+                for (uint32_t j = 0; j < n_pending && !sat && !dead; j++) {
+                    VCTerm *u = pending[j];
+                    if (j == i || u->op == VC_OR || u->op == VC_AND) continue;
+                    if (u == k) sat = true;
+                    else if ((u->op == VC_NOT && u->kids[0] == k) ||
+                             (k->op == VC_NOT && k->kids[0] == u)) dead = true;
+                }
+                if (!dead) live++;
+            }
+            if (sat || live == 0) {
+                /* Satisfied: drop it.  No live disjunct: every cube below is
+                 * unsat, so the whole frame contributes none. */
+                if (live == 0 && !sat) { acc->depth--; return; }
+                VCTerm **rest = (VCTerm **)arena_alloc(acc->arena,
+                                                       (n_pending ? n_pending : 1) * sizeof(VCTerm *));
+                uint32_t m = 0;
+                for (uint32_t j = 0; j < n_pending; j++) if (j != i) rest[m++] = pending[j];
+                expand(acc, rest, m, conj, n_conj);
+                acc->depth--;
+                return;
+            }
+            if (pick < 0 || live < pick_live) { pick = (int32_t)i; pick_live = live; }
         }
-        acc->depth--;
-        return;
+        if (pick >= 0) {
+            VCTerm *t = pending[pick];
+            VCTerm **rest = (VCTerm **)arena_alloc(acc->arena,
+                                                   (n_pending ? n_pending : 1) * sizeof(VCTerm *));
+            uint32_t m = 0;
+            for (uint32_t j = 0; j < n_pending; j++) if (j != (uint32_t)pick) rest[m++] = pending[j];
+            for (uint32_t d = 0; d < t->n && !acc->overflow; d++) {
+                VCTerm *k = t->kids[d];
+                if (k->op == VC_FALSE) continue;
+                bool dead = false;
+                for (uint32_t j = 0; j < m && !dead; j++) {
+                    VCTerm *u = rest[j];
+                    if (u->op == VC_OR || u->op == VC_AND) continue;
+                    if ((u->op == VC_NOT && u->kids[0] == k) ||
+                        (k->op == VC_NOT && k->kids[0] == u)) dead = true;
+                }
+                if (dead) continue;
+                VCTerm **nxt = (VCTerm **)arena_alloc(acc->arena, (m + 1) * sizeof(VCTerm *));
+                if (m) memcpy(nxt, rest, m * sizeof(VCTerm *));
+                nxt[m] = k;
+                expand(acc, nxt, m + 1, conj, n_conj);
+            }
+            acc->depth--;
+            return;
+        }
     }
 
     /* No disjunctions left: everything pending is a literal (or a conjunction

@@ -1,5 +1,5 @@
 ; Sum-types plan T8.4: a non-exhaustive match on Either is a hard error by
-; default (the design keeps exhaustiveness as an error; #{NonExhaustive} is the
+; default (the design keeps exhaustiveness as an error; ^non-exhaustive is the
 ; explicit opt-out -- see sum-either-nonexhaustive-opt-out).
 (defdata Either :copy [L R]
   (Left L)

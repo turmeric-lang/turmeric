@@ -1,0 +1,15 @@
+;; stdlib-int-stand-in-audit: with-cancel-guard took its two closures as
+;; `ptr<void>` and called each as `int64_t (*)(void *, int64_t)` with a stray
+;; 0 -- a zero-argument `(fn [] nil)` closure's thunk is `void (*)(void *)`,
+;; so every call was through the wrong function type (a -fsanitize=function
+;; trap).  The parameters are `^fat (fn [] nil)` now and slot 0 is called at
+;; exactly that type.  No cancellation here: the body runs, cleanup does not.
+(load "stdlib/thread.tur")
+
+(defn main [] #fx{IO} : int
+  (let [n 41]
+    (unsafe
+      (with-cancel-guard (fn [] (println "cleanup"))
+                         (fn [] (println (+ n 1))))))
+  (println "done")
+  0)

@@ -1,0 +1,35 @@
+;; module-members-skip-effect-row-checking: module members whose rows are
+;; honest compile and run once members are effect-row checked.  A member's
+;; inferred row reaches a top-level caller through the call (main declares
+;; #fx{IO} and calls an unannotated member that prints), and a member that
+;; handles its own effect presents a pure row.
+
+(defmodule m
+  (export shout counted pure-sum)
+
+  (defeffect Tick [] :int)
+
+  (defn shout [msg : cstr] #fx{IO} : int
+    (do (println msg) 0))
+
+  ;; Unannotated: inferred {IO}.
+  (defn report [n : int] : int
+    (do (println n) n))
+
+  (defn ticks [] #fx{Tick} : int
+    {(perform (Tick)) + (perform (Tick))})
+
+  ;; Handles Tick, so only report's IO is left.
+  (defn counted [] #fx{IO} : int
+    (report
+      (handle (ticks)
+        (Tick [] k) (resume k 21))))
+
+  (defn pure-sum [a : int b : int] #fx{} : int
+    {a + b}))
+
+(defn main [] #fx{IO} : int
+  (shout "module members are effect-checked")
+  (println (counted))
+  (println (pure-sum 3 4))
+  0)

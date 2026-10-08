@@ -162,9 +162,9 @@ defn abs [n :int] :int
 ```sweet-exp
 defn sign [n :int] :int
   cond
-    >(n 0)
+    {n > 0}
     1
-    <(n 0)
+    {n < 0}
     -1
     else
     0
@@ -220,10 +220,8 @@ types), and `defmacro` (syntax extension). Each has a dedicated guide:
 
 A `while` may carry a written loop invariant directly after its condition --
 `(while (< i n) :invariant (>= i 0) body...)` -- which is checked on entry and
-after every iteration and, when proved, usable after the loop (experimental,
-`--enable=loop-invariants`; see
-[refinement-types-guide.md](refinement-types-guide.md)).  Without the flag it
-parses and is validated, and nothing acts on it.
+after every iteration and, when proved, usable after the loop (see
+[refinement-types-guide.md](refinement-types-guide.md)).
 
 ### Type-annotation syntax
 
@@ -452,7 +450,7 @@ Arithmetic and comparison read more naturally in infix. `{a + b}` lowers to
 (let [hyp (sqrt (+ (* a a) (* b b)))] hyp)
 ```
 ```sweet-exp
-let [hyp sqrt({*(a a) + *(b b)})] hyp
+let [hyp sqrt({{a * a} + {b * b}})] hyp
 ```
 
 ### Data literals inside sweet-exp
@@ -685,7 +683,7 @@ Saffron module links against a Turmeric one in the same program. See
 
 **R7RS** is R7RS-small Scheme, over Saffron's dynamic substrate under a
 Scheme reader
-([r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)).
+([r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)).
 It **graduated in v0.57.0**: `tur dialects` shows it as `stable`,
 `tur experiments` no longer lists a row, the `#lang r7rs` line is all that is
 needed, and no lifecycle warning is printed. Today it has the reader (R1), the core
@@ -814,7 +812,7 @@ still accepted for one minor line, warned once (`TUR-W0064`) and ignored, so a
 file that opted in per-file keeps compiling across the boundary. Drop the
 token; nothing is lost, because what it turned on is now always on. At 0.50.0
 it becomes the same `TUR-E0330` any other trailing token gets. See
-[the decommission plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
+[the decommission plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/lang-layers-decommission-plan.md).
 
 ---
 

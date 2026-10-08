@@ -1,10 +1,12 @@
 ;; ET1-F: handle correctly removes handled effects from the enclosing row.
-;; The inner handle absorbs Write; only Log escapes to the outer handle.
+;; The inner handle absorbs Write; only Log escapes to the outer handle.  The
+;; Write clause prints, so `inner`'s row also names IO -- a capability, which
+;; a handler never sees (W4: `println` is #fx{IO}).
 
 (defeffect Write [s :cstr] :nil)
 (defeffect Log [msg :cstr] :nil)
 
-(defn inner [] #fx{Log} : nil
+(defn inner [] #fx{Log IO} : nil
   (handle
     (do
       (perform (Write "handled internally"))

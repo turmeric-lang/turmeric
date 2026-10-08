@@ -79,6 +79,16 @@
 (defn read-field-any [c : any] : int
   (let [p (cast c AnyCell)] (link-v (cast (.a p) Link))))
 
+;; 11. tvar/write of a chain into a TVar that outlives the bracket.  `val` is
+;;     a `ptr`, so the node arrives through an erasing ascription, which is the
+;;     note (security-audit-plan WP5 retired tvar/write as a hook gap on that
+;;     argument, but could not run it: a transaction inside a lambda did not
+;;     compile -- docs/archive/stm-inside-closure-captured-tvar-undeclared.md).
+(defn store-tvar [tv : ptr n : int] : int
+  (with-region (fn [] (do (atomically (stm (tvar/write tv (:: (build n 0) ptr)))) 1))))
+(defn read-tvar [tv : ptr] : int
+  (chain-sum (:: (atomically (stm (tvar/read tv))) int)))
+
 (defn main [] : int
   (let [c (:: (AnyCell (:: 0 any)) any)]
     (println (store-field-any c 2))                     ;; 1
@@ -109,4 +119,7 @@
   (let [v (:: (vec-new) (Vec Link))]
     (println (store-nested v 2))                        ;; 1
     (println (link-v (vec-get v 0))))                   ;; 10
+  (let [tv (tvar/new 0)]
+    (println (store-tvar tv 5))                         ;; 1
+    (println (read-tvar tv)))                           ;; 15
   0)

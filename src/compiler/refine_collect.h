@@ -100,6 +100,10 @@ typedef struct RefineFnInfo {
      * Mirrors Binding.reads_frame_omits_state.  Refuses the congruence grant;
      * false means "no evidence", never "verified clean". */
     bool         reads_frame_omits_state;
+    /* Mirrors Binding.reads_write_unverified: the measure's body could not be
+     * shown to only READ its framed parameters.  Refuses the loop-invariant
+     * frozen grant (li_name_reads_only). */
+    bool         reads_write_unverified;
     /* WF1/WF2 / #writes: this callee's declared write frame, mirroring the
      * Binding fields of the same names.  `writes_declared` distinguishes "the
      * frame is empty" from "there is no frame" -- see expr.h.  WF3 uses these

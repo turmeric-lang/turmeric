@@ -122,14 +122,14 @@ The default scheduler is single-threaded: all fibers run on one OS thread, avoid
 
 ```sweet-exp
 ;; Surface syntax
-async((+ 1 (await (fetch 2))))
+async({1 + await(fetch(2))})
 
 ;; Desugars to (conceptually)
 reset
   (fn []
-    (+ 1
-       (shift k
-         fiber-suspend(fetch(2) k))))
+    {1 +
+       shift(k
+         fiber-suspend(fetch(2) k))})
 
 ;; The scheduler later resumes k with the result of fetch(2)
 ```

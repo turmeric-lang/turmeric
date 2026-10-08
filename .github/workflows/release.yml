@@ -87,6 +87,17 @@ jobs:
           # failed at the C compile step.  Verified broken on macOS and Windows
           # before this; docs/archive/release-archive-cannot-compile.md.
           cp build/src/libturt_runtime.a dist/lib/
+          # libturt_preamble.a is what lets a default build skip recompiling the
+          # runtime preamble in every program (cc-path-preamble-split-plan).
+          # Without it the build still works -- it keeps the whole preamble --
+          # so a missing copy here would only ever show up as slowness.
+          cp build/src/libturt_preamble.a dist/lib/
+          # TUR_JIT defaults ON (vendored MIR), so libturi.a carries the JIT
+          # engine's image API and links PUBLIC against MIR: a C host that
+          # embeds libturi and calls that API needs libtur_mir.a beside it.
+          # A plain `-lturi` link never pulls the engine's object in.  A hard
+          # cp, so a build that lost the engine fails here rather than shipping.
+          cp build/libtur_mir.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
           cp -R stdlib dist/share/turmeric/
 
@@ -115,6 +126,50 @@ jobs:
           case "$out" in
             *"hello from the archive"*) echo "Archive compiles and runs." ;;
             *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
+          esac
+
+      # TUR_JIT defaults ON, so the shipped binary carries the MIR engine, and
+      # linux-aarch64 is a leg no CI job runs the engine on.  Run the same
+      # program through `tur jit` from the extracted archive.  TUR-W0070 is the
+      # engine falling back to cc, which still prints the right answer -- so it
+      # fails this check rather than passing it vacuously.
+      #
+      # Every leg is held to it, linux-aarch64 included.  That leg failed
+      # v0.60.0: on glibc aarch64 the emitted unit reaches <ucontext.h> ->
+      # sys/procfs.h -> sys/user.h, whose `__uint128_t` c2mir could not parse,
+      # so the engine declined every program; a narrowed exception for that
+      # one fallback stood here until the vendored fork fixed it
+      # (turmeric-lang/mir#6, docs/archive/jit-xopen-source-guard-inert-on-glibc.md).
+      # A TUR-W0070 on any leg is a regression now, not a known gap.
+      - name: Run a program through the JIT from the extracted archive
+        run: |
+          # Whatever happens below, the engine's archive must be in the tarball:
+          # that is the packaging guarantee this step exists for.
+          if [ ! -f verify/lib/libtur_mir.a ]; then
+            echo "::error::libtur_mir.a is missing from the archive -- the shipped engine is not there"
+            exit 1
+          fi
+
+          out=$(cd verify && ./bin/tur jit hello.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::tur jit failed from the extracted archive"
+            exit 1
+          }
+          printf '%s\n' "$out"
+
+          # The answer is checked first and unconditionally -- a fallback that
+          # prints the wrong thing is a different and worse bug.
+          case "$out" in
+            *"hello from the archive"*) ;;
+            *) echo "::error::unexpected output from tur jit"; exit 1 ;;
+          esac
+
+          case "$out" in
+            *TUR-W0070*)
+              echo "::error::the JIT fell back to cc -- the engine did not run"
+              exit 1
+              ;;
+            *) echo "The shipped JIT engine runs." ;;
           esac
 
       - name: Upload artifact
@@ -232,7 +287,10 @@ jobs:
 
           cp build/tur.exe dist/bin/
           cp build/src/libturt_runtime.a dist/lib/
+          cp build/src/libturt_preamble.a dist/lib/
           cp build/src/libturi.a dist/lib/
+          # See the `build` legs: the JIT engine's MIR, for libturi embedders.
+          cp build/libtur_mir.a dist/lib/
           cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
           cp -R stdlib dist/share/turmeric/
 
@@ -263,6 +321,22 @@ jobs:
           case "$out" in
             *"hello from the archive"*) echo "Archive compiles and runs." ;;
             *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
+          esac
+
+      # As on the `build` legs: the shipped engine, from the extracted archive,
+      # with a cc fallback (TUR-W0070) counted as a failure.
+      - name: Run a program through the JIT from the extracted archive
+        run: |
+          out=$(cd verify && ./bin/tur.exe jit hello.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::tur jit failed from the extracted archive"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          case "$out" in
+            *TUR-W0070*) echo "::error::the JIT fell back to cc -- the engine did not run"; exit 1 ;;
+            *"hello from the archive"*) echo "The shipped JIT engine runs." ;;
+            *) echo "::error::unexpected output from tur jit"; exit 1 ;;
           esac
 
       - name: Upload artifact
@@ -377,7 +451,12 @@ jobs:
       # anyone to lose. A consumer verifies with:
       #
       #   gh attestation verify turmeric-<tag>-<target>.tar.gz \
-      #     --repo rjungemann/turmeric
+      #     --repo turmeric-lang/turmeric
+      #
+      # Assets built BEFORE the 2026-10-02 org move need `--owner rjungemann`
+      # instead: the attestation lives in the owning account's index, which a
+      # repo transfer does not move, so `--repo` 404s for those under either
+      # owner name.  Measured on v0.59.0.
       #
       # Placed AFTER the checksums step so sha256sums.txt is attested too, and
       # BEFORE the release is created so a failure here strands the tag rather

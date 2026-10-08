@@ -1,0 +1,160 @@
+#lang r7rs
+;; r7rs-srfi-18-216-sicp-plan T1: SRFI 18 on OS threads.  Threads, joins and
+;; their values, an uncaught exception and a join timeout, mutexes (owned,
+;; not owned, abandoned, timed out), condition variables (a bounded buffer,
+;; a timed wait), time objects, and the refusals.  The stress part -- eight
+;; threads on one mutex-guarded counter and alist, allocating between turns
+;; -- is r7rs-threads-stress's shape through the SRFI API; tests/run-r7rs-gc.sh
+;; runs this under frequent collections too.
+(import (scheme base) (scheme write) (srfi 18))
+
+(define (show . xs) (for-each display xs) (newline))
+
+;; ---- threads ---------------------------------------------------------------
+(show "primordial: " (thread-name (current-thread)) " " (thread? (current-thread)))
+(define t (make-thread (lambda () (* 6 7)) 'answer))
+(thread-specific-set! t 'data)
+(show "new: " (thread-name t) " " (thread-specific t))
+(show "start returns the thread: " (eq? (thread-start! t) t))
+(show "join: " (thread-join! t) " " (thread-join! t))
+(show "started twice: "
+      (guard (e ((error-object? e) 'refused)) (thread-start! t)))
+(show "own name: "
+      (thread-join! (thread-start! (make-thread (lambda () (thread-name (current-thread))) 'worker))))
+(show "values: "
+      (map thread-join!
+           (map (lambda (i) (thread-start! (make-thread (lambda () (* i i)))))
+                '(1 2 3 4 5))))
+
+;; ---- exceptions --------------------------------------------------------------
+(define boom (thread-start! (make-thread (lambda () (raise 'boom)))))
+(show "uncaught: "
+      (guard (e ((uncaught-exception? e) (uncaught-exception-reason e)))
+        (thread-join! boom)))
+(show "an error object: "
+      (guard (e ((uncaught-exception? e) (error-object-message (uncaught-exception-reason e))))
+        (thread-join! (thread-start! (make-thread (lambda () (error "inner failure" 1)))))))
+;; A new thread starts with no handlers: main's does not catch its raise.
+(show "handlers stay home: "
+      (with-exception-handler
+       (lambda (e) 'main-handler)
+       (lambda ()
+         (guard (e ((uncaught-exception? e) 'uncaught-in-thread))
+           (thread-join! (thread-start! (make-thread (lambda () (raise-continuable 'x)))))))))
+(define slow (thread-start! (make-thread (lambda () (thread-sleep! 0.2) 'late))))
+(show "join timeout, default: " (thread-join! slow 0.01 'not-yet))
+(show "join timeout, raised: "
+      (guard (e ((join-timeout-exception? e) 'join-timeout)) (thread-join! slow 0.01)))
+(show "join, no timeout: " (thread-join! slow))
+(show "terminate: "
+      (guard (e ((error-object? e) 'refused))
+        (thread-terminate! (current-thread))))
+
+;; ---- mutexes -------------------------------------------------------------------
+(define m (make-mutex 'm))
+(show "mutex: " (mutex? m) " " (mutex-name m) " " (mutex-state m))
+(mutex-lock! m)
+(show "locked by me: " (eq? (mutex-state m) (current-thread)))
+(show "try from another thread: "
+      (thread-join! (thread-start! (make-thread (lambda () (mutex-lock! m 0.01))))))
+(mutex-unlock! m)
+(show "unlocked: " (mutex-state m))
+(mutex-lock! m #f #f)
+(show "not owned: " (mutex-state m))
+(show "a not-owned mutex unlocks from any thread: "
+      (thread-join! (thread-start! (make-thread (lambda () (mutex-unlock! m)))))
+      " " (mutex-state m))
+(define a (make-mutex 'abandoned))
+(thread-join! (thread-start! (make-thread (lambda () (mutex-lock! a) 'gone))))
+(show "owner ended: " (mutex-state a))
+(show "lock it anyway: "
+      (guard (e ((abandoned-mutex-exception? e) 'abandoned-mutex-exception))
+        (mutex-lock! a)))
+(show "and it is mine: " (eq? (mutex-state a) (current-thread)))
+(mutex-unlock! a)
+
+;; ---- condition variables -------------------------------------------------------
+(define cv (make-condition-variable 'cv))
+(show "cv: " (condition-variable? cv) " " (condition-variable-name cv))
+(mutex-lock! m)
+(show "timed wait: " (mutex-unlock! m cv 0.02))
+
+;; A bounded buffer of four slots: one producer, one consumer.
+(define buf-mutex (make-mutex))
+(define not-full (make-condition-variable))
+(define not-empty (make-condition-variable))
+(define buf '())
+(define (buf-put! x)
+  (mutex-lock! buf-mutex)
+  (if (>= (length buf) 4)
+      (begin (mutex-unlock! buf-mutex not-full) (buf-put! x))
+      (begin
+        (set! buf (append buf (list x)))
+        (condition-variable-signal! not-empty)
+        (mutex-unlock! buf-mutex))))
+(define (buf-take!)
+  (mutex-lock! buf-mutex)
+  (if (null? buf)
+      (begin (mutex-unlock! buf-mutex not-empty) (buf-take!))
+      (let ((x (car buf)))
+        (set! buf (cdr buf))
+        (condition-variable-signal! not-full)
+        (mutex-unlock! buf-mutex)
+        x)))
+(define producer
+  (make-thread (lambda () (let loop ((i 1)) (if (<= i 200) (begin (buf-put! i) (loop (+ i 1))))) 'done)))
+(define consumer
+  (make-thread (lambda () (let loop ((i 0) (sum 0)) (if (= i 200) sum (loop (+ i 1) (+ sum (buf-take!))))))))
+(thread-start! consumer)
+(thread-start! producer)
+(show "bounded buffer: " (thread-join! producer) " " (thread-join! consumer))
+
+;; broadcast wakes every waiter.
+(define gate (make-mutex))
+(define opened (make-condition-variable))
+(define open? #f)
+(define (wait-for-gate)
+  (mutex-lock! gate)
+  (if open?
+      (begin (mutex-unlock! gate) 'through)
+      (begin (mutex-unlock! gate opened) (wait-for-gate))))
+(define waiters (map (lambda (i) (thread-start! (make-thread wait-for-gate))) '(1 2 3)))
+(thread-sleep! 0.02)
+(mutex-lock! gate)
+(set! open? #t)
+(condition-variable-broadcast! opened)
+(mutex-unlock! gate)
+(show "broadcast: " (map thread-join! waiters))
+
+;; ---- time ----------------------------------------------------------------------
+(define t0 (current-time))
+(thread-sleep! (seconds->time (+ (time->seconds t0) 0.02)))
+(show "time: " (time? t0) " " (>= (- (time->seconds (current-time)) (time->seconds t0)) 0.015))
+(thread-yield!)
+
+;; ---- stress ----------------------------------------------------------------------
+(define lock (make-mutex 'stress))
+(define counter 0)
+(define table '())
+(define (filter-id id l)
+  (cond ((null? l) '())
+        ((= (caar l) id) (cons (car l) (filter-id id (cdr l))))
+        (else (filter-id id (cdr l)))))
+(define (churn n) (if (> n 0) (begin (list n n n) (make-vector 8 n) (churn (- n 1)))))
+(define (stress-worker id)
+  (lambda ()
+    (let loop ((i 0))
+      (if (< i 500)
+          (begin
+            (mutex-lock! lock)
+            (set! counter (+ counter 1))
+            (set! table (cons (cons id i) table))
+            (mutex-unlock! lock)
+            (churn 5)
+            (loop (+ i 1)))))
+    id))
+(define crew (map (lambda (id) (thread-start! (make-thread (stress-worker id)))) '(0 1 2 3 4 5 6 7)))
+(show "crew: " (map thread-join! crew))
+(show "counter: " counter " entries: " (length table))
+(show "per thread: "
+      (map (lambda (id) (length (filter-id id table))) '(0 1 2 3 4 5 6 7)))

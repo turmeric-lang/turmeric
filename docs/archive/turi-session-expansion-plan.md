@@ -10,7 +10,7 @@
 > documented and pinned.
 > **Last Updated:** 2026-09-16
 > **Type:** Interpreter / runtime / test coverage
-> **Builds on:** [turi-session-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-session-types-plan.md)
+> **Builds on:** [turi-session-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-session-types-plan.md)
 > (Slices A + A.5 + B + C + D, all landed and archived)
 
 ---
@@ -122,7 +122,7 @@ Replace the stale row with what is true, and name the one real exception:
 Add the same two caveats to
 [session-types-guide.md](../guides/session-types-guide.md), which today shows a
 `spawn` it never defines and says nothing about either backend's limits. Per the
-["no archeology in guides"](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md)
+["no archeology in guides"](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md)
 convention, each caveat is one deletable paragraph linking its report by GitHub URL.
 
 Cost: under an hour. Do this first regardless of what else happens -- the current
@@ -136,7 +136,7 @@ the compiled `pthread_cond_timedwait` returns **Right (timeout)**. Main-context
 `recv-timeout` is correct, which is exactly why no fixture catches it.
 
 Filed as
-[turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
+[turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
 with the mechanism, the in-tree comment that predicted it, and the fix direction:
 arm a `turi_timer_add` future alongside the channel's `recv_waiter` so either the
 deposit or the deadline resumes the fiber. The timer wheel already exists -- it is
@@ -151,7 +151,7 @@ red.
 The blocker for everything downstream. `(async (fn [] (server ch)))` -- the
 obvious way to write a peer -- **hangs the compiled binary forever with no
 diagnostic**, and runs correctly under turi. Filed as
-[compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
+[compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md).
 
 That is why 20+ fixtures and the guide's examples all carry:
 
@@ -193,7 +193,7 @@ Two fixtures also want fixing rather than duplicating:
 
 - `session-timeout-expired-turi` currently passes **vacuously** -- its peer uses
   `(await (sleep-async 200))`, which per
-  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/rjungemann/turmeric/blob/main/docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md)
+  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md)
   never reaches its `send` at all. It prints `timeout` because nothing is ever
   deposited, so it would pass with `recv-timeout` stubbed to always time out.
   Drop the `await` and it becomes a real test.
@@ -210,7 +210,7 @@ interpreter parity, and found two things that are not turi-specific at all. They
 are sequenced here because S3's new fixtures are where they would be pinned.
 
 - **Payloads are int64-only** --
-  [session-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/archive/session-payloads-are-int64-only.md),
+  [session-payloads-are-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/session-payloads-are-int64-only.md),
   **severity high and the most consequential finding of either pass.** A `float`
   payload is silently truncated on the compiled path (`7.25` -> `7`, no
   diagnostic); `cstr` and delegated endpoints fail to build on macOS; by-value
@@ -220,7 +220,7 @@ are sequenced here because S3's new fixtures are where they would be pinned.
   macOS**. Fix the float row first (it is the only silent one); the floor is a
   diagnostic instead of a wrong number.
 - **No multi-party timed receive** --
-  [multi-party-sessions-have-no-timed-receive](https://github.com/rjungemann/turmeric/blob/main/docs/reported/multi-party-sessions-have-no-timed-receive.md).
+  [multi-party-sessions-have-no-timed-receive](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/multi-party-sessions-have-no-timed-receive.md).
   Binary has `recv-timeout`, multi-party has nothing. Sequence it after S1: a
   fiber-context timed receive is broken for binary sessions today, and
   multi-party would inherit the same hole.
@@ -354,7 +354,7 @@ S4 and S5 are hygiene. Do them when something else is already open in
 
 ## See also
 
-- [turi-session-types-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-session-types-plan.md)
+- [turi-session-types-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-session-types-plan.md)
   -- Slices A-D, the runtime this builds on (archived, complete).
 - [turi-parity-guide.md](../guides/turi-parity-guide.md) -- the matrix S0 corrects.
 - [session-types-guide.md](../guides/session-types-guide.md) -- the user guide
@@ -365,6 +365,6 @@ S4 and S5 are hygiene. Do them when something else is already open in
 - `src/compiler/elab_sessions.c`, `src/compiler/elab_forms.c` -- the two places
   the intercepted templates are built.
 - The three reports this plan cites:
-  [turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
-  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/rjungemann/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md),
-  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/rjungemann/turmeric/blob/main/docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md).
+  [turi-fiber-recv-timeout-ignores-its-deadline](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-fiber-recv-timeout-ignores-its-deadline.md),
+  [compiled-async-fiber-deadlocks-on-a-session-op](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md),
+  [awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/awaited-sleep-async-in-a-fiber-drops-the-rest-of-the-body.md).

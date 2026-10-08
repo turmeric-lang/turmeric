@@ -1,0 +1,15 @@
+;; builtin-capability-tag-pure-caller -- the capability-effect-tag report's
+;; repro, with nothing loaded.
+;;
+;; `IO` used to be declared only in stdlib/effects.tur, which is not
+;; autoloaded: the tag was dropped, `maybe-io` resolved to #fx{}, and
+;; `claims-pure`'s #fx{} passed a check it should fail.  Then (W1) it was
+;; TUR-E0026.  Now (W2) `IO` is compiler-known, so the program needs no load
+;; and fails where it should: TUR-E0009, the check the tag exists to buy.
+;; loaded-capability-tag-pure-caller is the same program with effects.tur
+;; loaded -- its matching redeclaration of IO is accepted -- and the same
+;; answer.
+
+(defn maybe-io    [] #fx{IO} : int 0)
+(defn claims-pure [] #fx{}   : int (maybe-io))
+(defn main        [] : int 0)

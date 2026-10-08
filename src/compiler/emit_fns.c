@@ -237,27 +237,111 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
     return same;
 }
 
-/* A let/letrec is tail-transparent for TCO only if every binding is a plain
- * scalar we can declare with `T name = init;`.  fn-typed (incl. letrec global
- * fns), poly-fn, and carrier-ABI bindings force the whole let onto the default
- * (emit_value + return) path.
+/* A let/letrec is tail-transparent for TCO unless one of its bindings is a
+ * shape emit_tail's inline `let` arm cannot serve.  Returns the reason (one of
+ * the TC_LET_* strings below, phrased for the `^tailcall` verifier) or NULL.
  *
- * tail-grammar-skips-and-or-and-carrier-lets: the carrier-ABI arm was audited
- * 2026-09-29 and is still load-bearing.  emit_tail's inline `let` arm repeats
- * only part of emit_let_value's init ladder (the by-value carrier bridge, the
- * recorded-pointer and erased-word casts); dropping the arm sent 21 fixtures'
- * pointer-represented carrier bindings (`tur_adt_Vec__int *` from an int64
- * producer, among others) through the inline arm unbridged -- -Wint-conversion
- * in the emitted C.  Relaxing it wants the two sites to share one per-binding
- * init emission first. */
-static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
+ *   - fn-typed (incl. letrec global fns) and poly-fn bindings: their
+ *     declarations are the fn-pointer / fat-carrier / tur_poly_fn_t arms of the
+ *     shared declaration ladder, and a letrec of them needs the knot.
+ *   - a binding emit_let_value would RELEASE at scope exit (a recursive spine,
+ *     a `^mut` cell, a caught Result box, a fresh sum box, a struct's fn-field
+ *     handles), unless every use of it is a plain scalar read.  The inline arm
+ *     has no trailing code, so the release fires at the backedge or `return`
+ *     instead (let_binding_push_scope_frees) -- after the arguments or the
+ *     value are in temps, but before a next iteration that could still hold
+ *     the binding had it been passed along.  tco_drop_use_ok is the same
+ *     conservative test T4 applies to drop glue.
+ *
+ * tail-grammar-skips-and-or-and-carrier-lets: a carrier-ABI binding (a `Vec`,
+ * a `Cons` list, a parametric heap ADT) used to take the whole `let` off the
+ * tail path.  The bail was load-bearing for two reasons, both gone: the
+ * inline arm repeated only part of emit_let_value's declaration ladder (it
+ * shares emit_let_binding_decl now), and it had no channel for the scope-exit
+ * releases (it pushes them onto the `any` drop channel now). */
+#define TC_LET_FN    "a binding of the enclosing `let` is `fn`-typed or " \
+                     "poly-fn, which takes the whole `let` off the tail path"
+#define TC_LET_DROP  "a binding of the enclosing `let` is released when the " \
+                     "`let` ends (a recursive spine, a `^mut` cell or a fresh " \
+                     "box) and is used as more than a plain number, so its " \
+                     "release cannot move ahead of the call"
+static bool tco_drop_use_ok(const Expr *e, const Binding *b);
+static bool tco_plain_scalar(TypeKind k);
+static bool tco_builtin_short_circuit(const Expr *e);
+
+/* Does every value that LEAVES `e` through its tail structure -- a call's
+ * arguments (a backedge carries them into the next iteration), or the value
+ * itself when it is returned -- have a plain scalar type?  Then nothing that
+ * leaves can alias a local released on the way out, and the release may fire
+ * at the exit instead of after the body: everything else the body does with
+ * the local happens before the exit, exactly as it does before emit_let_value's
+ * trailing release, whose own predicates already vouch for those uses.
+ *
+ * Walks the same structure tco_mark does; a form it does not know is a leaf,
+ * judged by its type.  An explicit `return`/`throw` anywhere in the body, or a
+ * dynamic call, answers no -- the conservative tco_drop_use_ok decides then. */
+static bool tco_tail_values_scalar(const Expr *e) {
+    if (!e) return true;
+    switch (e->kind) {
+        case EX_IF:
+            return tco_tail_values_scalar(e->as.if_.then_) &&
+                   tco_tail_values_scalar(e->as.if_.else_or_null);
+        case EX_DO:
+            return e->as.do_.n == 0 ||
+                   tco_tail_values_scalar(e->as.do_.items[e->as.do_.n - 1]);
+        case EX_LET:
+        case EX_LETREC:
+            return tco_tail_values_scalar(e->as.let_.body);
+        case EX_MATCH:
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!tco_tail_values_scalar(e->as.match_.arms[i].body))
+                    return false;
+            return true;
+        case EX_BUILTIN:
+            if (tco_builtin_short_circuit(e))
+                return tco_tail_values_scalar(
+                    e->as.builtin.args[e->as.builtin.n - 1]);
+            return tco_plain_scalar(e->type.kind);
+        case EX_CALL:
+            if (e->as.call_.fn_expr) return false;
+            for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+                const Expr *a = e->as.call_.args[i];
+                if (!a || !tco_plain_scalar(a->type.kind)) return false;
+            }
+            return e->type.kind == TY_NIL || e->type.kind == TY_NEVER ||
+                   tco_plain_scalar(e->type.kind);
+        case EX_DYN_CALL:
+            return false;
+        default:
+            return e->type.kind == TY_NIL || e->type.kind == TY_NEVER ||
+                   tco_plain_scalar(e->type.kind);
+    }
+}
+
+static const char *tco_let_refusal(EmitCtx *ctx, const Expr *e) {
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
         const Binding *b = e->as.let_.bindings[i].binding;
-        if (!b) return false;
-        if (b->type.kind == TY_FN || b->is_poly_fn) return false;
-        if (type_uses_carrier_abi(emit_resolve_type(ctx, b->type))) return false;
+        if (!b) return TC_LET_FN;
+        if (b->type.kind == TY_FN || b->is_poly_fn) return TC_LET_FN;
     }
-    return true;
+    int values_scalar = -1;   /* computed on first need */
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        if (!let_binding_may_need_scope_free(ctx, e, i)) continue;
+        if (values_scalar < 0)
+            values_scalar = !expr_contains_return_or_throw(e->as.let_.body) &&
+                            tco_tail_values_scalar(e->as.let_.body);
+        if (values_scalar) continue;
+        const Binding *b = e->as.let_.bindings[i].binding;
+        if (!tco_drop_use_ok(e->as.let_.body, b)) return TC_LET_DROP;
+        for (uint32_t j = 0; j < e->as.let_.n; j++)
+            if (j != i && !tco_drop_use_ok(e->as.let_.bindings[j].init, b))
+                return TC_LET_DROP;
+    }
+    return NULL;
+}
+
+static bool tco_let_simple(EmitCtx *ctx, const Expr *e) {
+    return tco_let_refusal(ctx, e) == NULL;
 }
 
 /* proper-tail-calls T2 (T-D2): can this NON-self call in tail position be
@@ -756,9 +840,6 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
                       "grammar -- give it an else branch"
 #define TC_NOT_LAST   "only the LAST form of a `do` block is in tail position"
 #define TC_LET_INIT   "a `let` initializer is evaluated before the body"
-#define TC_LET_HARD   "a binding of the enclosing `let` is `fn`-typed, poly-fn, " \
-                      "or carrier-ABI, which takes the whole `let` off the tail " \
-                      "path"
 #define TC_MATCH_SCR  "the scrutinee of a `match` is evaluated before any arm"
 #define TC_SC_TEST    "only the LAST operand of `and` / `or` is in tail position; " \
                       "the others are tests evaluated before it"
@@ -903,8 +984,8 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
             for (uint32_t i = 0; i < e->as.let_.n; i++)
                 tc_check(ctx, fd, fn_cname, e->as.let_.bindings[i].init,
                          TC_LET_INIT, fn_block);
-            const char *sub = tco_let_simple(ctx, e) ? why
-                                                     : (why ? why : TC_LET_HARD);
+            const char *lr = tco_let_refusal(ctx, e);
+            const char *sub = !lr ? why : (why ? why : lr);
             if (e->as.let_.body && e->as.let_.body->kind == EX_DO)
                 tc_check_do(ctx, fd, fn_cname, e->as.let_.body, e, sub, fn_block);
             else
@@ -1177,7 +1258,7 @@ bool inline_c_returns_byvalue_adt(EmitCtx *ctx, bool body_is_inline_c,
 
 /* M5 straddle (root cause C of m5-suite-residual-6-failures): true when every
  * tail leaf of `e` is a call that emits an int64 carrier value -- a
- * #{Construct} helper (some/ok/err/none) or a typeclass-method impl
+ * ^construct helper (some/ok/err/none) or a typeclass-method impl
  * (__inst_*), both of which return the carrier handle regardless of their
  * declared (Option A)/(Result A B) type.  Used to decide whether a by-value
  * carrier-aggregate return needs a carrier->concrete deref bridge.  Shared
@@ -1231,7 +1312,7 @@ bool fn_body_tail_is_carrier_producer(const Expr *e) {
              * body whose declared return type uses the carrier ABI is lowered
              * with an int64_t C return type, so a tail call to it yields the
              * carrier handle.  A pure-Turmeric wrapper around such a helper
-             * needs the same carrier->by-value bridge that the #{Construct}
+             * needs the same carrier->by-value bridge that the ^construct
              * and __inst_ producers above already get.
              * See docs/archive/history/tail-call-inline-c-carrier-bridge.md. */
             if (b->body_is_inline_c && b->type.kind == TY_FN &&
@@ -1406,7 +1487,7 @@ static bool catch_box_tail_sole_owned(const Expr *fnbody, const Expr *e) {
  * distinct monomorph, so `return <box>` is an int64->struct cc error without a
  * carrier->concrete bridge.  Gating on the catch-box tail structurally --
  * rather than on emit_type_c_name, which reports "int64_t" for a by-value
- * #{Construct} tail (`ok`/`err`/`some`/`none`) too -- is what keeps this from
+ * ^construct tail (`ok`/`err`/`some`/`none`) too -- is what keeps this from
  * mis-firing on the ordinary Result constructors the M4c/M5 branches own. */
 static bool fn_return_needs_carrier_result_bridge(EmitCtx *ctx, const FnDef *fd,
                                                   const Expr *fn_e,
@@ -1690,6 +1771,43 @@ static bool tail_call_musttail_ok(EmitCtx *ctx, const Buf *body, const char *v) 
     return true;
 }
 
+/* proper-tail-calls T6: a bouncer's static tail call to another bouncer
+ * (tb_static_tail_callee) hands its arming on.  When this activation was
+ * entered from a trampoline driver, arm the callee just before the call: it
+ * consumes the arming on entry, and a bounce it hands back is this
+ * function's own value, which goes straight to the same driver.  `v` is the
+ * call expression; its arguments are already evaluated temps and plain reads,
+ * except that a second call to the callee inside them would consume the
+ * arming first -- refused.  The callee must be emitted with the entry check
+ * (fn_may_bounce), and return the driver's `tur_tagged_t`. */
+static void emit_tail_hand_on_arming(EmitCtx *ctx, Buf *body, const Expr *e,
+                                     const char *v) {
+    if (!ctx->tb_guard || !v || !ctx->current_fn_ret_ctype ||
+        strcmp(ctx->current_fn_ret_ctype, "tur_tagged_t") != 0)
+        return;
+    const FnDef *cd = tb_static_tail_callee(e);
+    if (!cd || !fn_may_bounce(cd)) return;
+    const char *q = v;
+    while (*q == '(') q++;
+    size_t idlen = 0;
+    while (q[idlen] && (isalnum((unsigned char)q[idlen]) || q[idlen] == '_')) idlen++;
+    if (idlen == 0 || idlen >= 256 || q[idlen] != '(') return;
+    char callee[256];
+    memcpy(callee, q, idlen);
+    callee[idlen] = '\0';
+    const char *rg = emit_sig_lookup_ret_ctype(callee);
+    if (!rg || strcmp(rg, "tur_tagged_t") != 0) return;
+    for (const char *p = strstr(q + idlen, callee); p; p = strstr(p + 1, callee)) {
+        char before = p[-1];
+        char after = p[idlen];
+        if (!(isalnum((unsigned char)before) || before == '_') &&
+            !(isalnum((unsigned char)after) || after == '_'))
+            return;
+    }
+    indent_buf(body, ctx->indent);
+    buf_printf(body, "if (%s) tur_tb_armed_for = (void *)%s;\n", ctx->tb_guard, callee);
+}
+
 /* Emit `e` in tail position: every path ends in `return <v>;` or a backedge
  * `goto __tur_tailcall;`.  Only invoked for functions tco_mark flagged. */
 static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
@@ -1804,112 +1922,45 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                 indent_buf(body, ctx->indent);
                 buf_puts(body, "{\n");
                 ctx->indent += 4;
+                /* This arm emits a tail-position `let` INLINE rather than
+                 * through emit_let_value, because nothing may follow the body:
+                 * every path through it ends in a `return` or a backedge.  The
+                 * declarations are emit_let_value's own
+                 * (emit_let_binding_decl) -- this arm used to repeat a subset
+                 * of that ladder, one straddle at a time
+                 * (tail-recursive-let-drops-carrier-bridge,
+                 * let-bound-erasing-ascription-int-to-pointer, gcc14-int-
+                 * conversion), which is why a carrier-ABI binding was kept off
+                 * the tail path altogether
+                 * (tail-grammar-skips-and-or-and-carrier-lets).
+                 *
+                 * The releases emit_let_value runs after the body ride the
+                 * `any` scope-drop channel instead, which the backedge and
+                 * every `return` fire -- any-struct-box-leak-per-widen started
+                 * it for `any` locals, and let_binding_push_scope_frees adds the
+                 * rest.  No trailing drop is emitted: anything after the body
+                 * would be dead code. */
+                uint32_t any_mark = ctx->n_any_scope_drops;
                 for (uint32_t i = 0; i < e->as.let_.n; i++) {
                     const Binding *b = e->as.let_.bindings[i].binding;
                     char *bn = name_for_binding(ctx, b);
                     char *iv = emit_value(ctx, body, e->as.let_.bindings[i].init);
-                    const char *bind_c = emit_type_c_name(ctx, b->type);
-                    /* tail-recursive-let-drops-carrier-bridge: this arm emits a
-                     * tail-position `let` INLINE rather than through
-                     * emit_let_value -- see the `any` drop note below -- so the
-                     * carrier->by-value crossing that lives there has to be
-                     * repeated too, and was not.  A binding whose C type is a
-                     * by-value aggregate, initialised by a producer whose C
-                     * return is the int64 carrier (an inline-C body declared
-                     * `: (Result T E)`, a #{Construct} helper, an instance
-                     * method), emitted `T x = <int64_t>;` -- a hard cc error,
-                     * loud but pointing at a generated identifier, and absent
-                     * the moment the recursive call left tail position.  The
-                     * decision is emit_let_init_carrier_bridge_type so the three
-                     * sites that ask it cannot drift apart again. */
-                    Type init_bv = emit_let_init_carrier_bridge_type(
-                        ctx, e->as.let_.bindings[i].init, bind_c, iv);
-                    if (init_bv.kind != TY_UNKNOWN) {
-                        char *bridged = emit_carrier_bridge(ctx, body, iv,
-                                            CK_CARRIER, CK_CONCRETE, init_bv);
-                        iv = bridged;  /* emit_carrier_bridge freed the old iv */
-                    }
-                    /* gcc14-int-conversion (carrier-representation-tracking): the
-                     * REVERSE straddle of the one below -- a bare temp whose
-                     * RECORDED emitted C type is a pointer, initialising an
-                     * `int64_t` binder.  `emit_let_value` bridges this
-                     * (`init_val_recorded_ptr` / `_voidp`); this inline arm did
-                     * not, so a `let` that reached tail position declared
-                     * `int64_t x = <tur_adt_Value *>;` -- a hard error under
-                     * Apple clang's default -Wint-conversion, and the shape
-                     * `examples/datalog/datalog.tur` hit the moment
-                     * proper-tail-calls T2 widened which bodies reach here.
-                     *
-                     * Third face of the same defect the return ladder had, and
-                     * the reason this arm exists at all is the `any`-drop
-                     * bookkeeping a few lines down -- see
-                     * docs/reported/emit-tail-return-path-lacks-carrier-bridges.md,
-                     * whose fix direction covers this arm too. */
-                    bool iv_recorded_ptr = false;
-                    /* ...and the FORWARD straddle, which this arm was still
-                     * missing: a bare temp whose RECORDED emitted C type is the
-                     * int64 carrier, initialising a POINTER binder.  A call
-                     * hoisted behind a panic check spills as
-                     * `int64_t __ps_N = f(...);` (emit_expr.c's `__ps_` hoist,
-                     * which records the temp's ctype), and a binder whose type
-                     * lowers to a pointer -- an opaque handle like thread-pool's
-                     * `(Pool T)`, so `void *` -- then declared
-                     * `void * p = __ps_N;`: a hard error under Apple clang's
-                     * default -Wint-conversion, a bare warning under gcc, which
-                     * is why it read as a macOS-only spice failure.
-                     *
-                     * emit_let_value bridges this at emit_expr.c:3800 on the
-                     * same two facts (`bind_is_ptr_repr` + `init_val_recorded_i64`);
-                     * the arm below is that arm, and `void *` is exactly the case
-                     * emit_let_init_carrier_bridge_type above cannot serve --
-                     * a pointer handle is not a by-value aggregate, so it
-                     * returns TY_UNKNOWN and the plain relabel won.  Fourth face
-                     * of the defect this arm's other two comments describe. */
-                    bool iv_recorded_i64 = false;
-                    bool bind_is_ptr_repr = bind_c && strchr(bind_c, '*') != NULL;
-                    if (bind_c && emit_str_is_bare_ident(iv)) {
-                        const char *lvty = emit_localvar_lookup_ctype(iv);
-                        size_t lL = lvty ? strlen(lvty) : 0;
-                        if (strcmp(bind_c, "int64_t") == 0)
-                            iv_recorded_ptr = lvty && lL >= 1 && lvty[lL - 1] == '*';
-                        iv_recorded_i64 = lvty && strcmp(lvty, "int64_t") == 0;
-                    }
-                    indent_buf(body, ctx->indent);
-                    /* let-bound-erasing-ascription-int-to-pointer: the same
-                     * inline-arm repetition as the bridge above, for the
-                     * int64-word-into-pointer-binder init. */
-                    if (iv_recorded_ptr)
-                        buf_printf(body, "%s %s = (int64_t)(intptr_t)(%s);\n",
-                                   bind_c, bn, iv);
-                    else if (emit_let_init_is_erased_word_to_ptr(
-                            ctx, e->as.let_.bindings[i].init, bind_c))
-                        buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
-                                   bind_c, bn, bind_c, iv);
-                    else if (bind_is_ptr_repr && iv_recorded_i64)
-                        buf_printf(body, "%s %s = (%s)(intptr_t)(%s);\n",
-                                   bind_c, bn, bind_c, iv);
-                    else
-                        buf_printf(body, "%s %s = %s;\n", bind_c, bn, iv);
+                    LetBindDecl d;
+                    iv = emit_let_binding_decl(ctx, body, e, i, bn, iv, &d);
                     indent_buf(body, ctx->indent);
                     buf_printf(body, "(void)%s;\n", bn);
                     free(bn);
                     free(iv);
-                }
-                /* any-struct-box-leak-per-widen: this arm emits a tail-position
-                 * `let` INLINE rather than through emit_let_value, so the `any`
-                 * drop bookkeeping that lives there has to be repeated.  No
-                 * trailing drop is emitted: emit_tail always ends in a `return`
-                 * or a back-edge `goto`, and both of those fire the scope list
-                 * themselves -- anything after would be dead code. */
-                uint32_t any_mark = ctx->n_any_scope_drops;
-                for (uint32_t i = 0; i < e->as.let_.n; i++) {
-                    if (!let_binding_any_freeable(ctx, e, i)) continue;
                     /* union-tagged-union-c-emission 1b: the channel carries the
-                     * drop STATEMENT now, so a union local's plain free reaches
-                     * the early exits this arm is entirely made of. */
-                    char *nm = let_binding_widen_drop_stmt(ctx, e, i);
-                    any_scope_drops_push(ctx, nm);
-                    free(nm);
+                     * drop STATEMENT, so a union local's plain free reaches the
+                     * early exits this arm is entirely made of. */
+                    if (let_binding_any_freeable(ctx, e, i)) {
+                        char *nm = let_binding_widen_drop_stmt(ctx, e, i);
+                        any_scope_drops_push(ctx, nm);
+                        free(nm);
+                    }
+                    if (let_binding_may_need_scope_free(ctx, e, i))
+                        let_binding_push_scope_frees(ctx, e, i, &d);
                 }
                 emit_tail(ctx, body, fn_e, fd, e->as.let_.body, result_kind, is_main);
                 any_scope_drops_pop(ctx, any_mark);
@@ -2075,6 +2126,7 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
             ensure_musttail_macro(ctx);
             emit_musttail_self_pin(body, ctx->indent, ctx->mt_fn_cname);
         }
+        emit_tail_hand_on_arming(ctx, body, e, v);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%sreturn %s;\n", mt ? "TUR_MUSTTAIL " : "", v);
         free(v);
@@ -3658,8 +3710,7 @@ static void cps_emit(GsCtx *gs, Buf *b, const Expr *e, const GsSink *sink) {
         gs->ctx->indent = gs->cur_ind;
         char *m = emit_value(gs->ctx, b, pl);
         indent_buf(b, gs->cur_ind);
-        if (pl->type.kind == TY_CSTR) buf_printf(b, "tur_panic(%s);\n", m);
-        else                          buf_puts(b, "tur_panic(\"(non-string panic)\");\n");
+        emit_panic_call(b, e->span, pl->type.kind == TY_CSTR ? m : "\"(non-string panic)\"");
         free(m);
         indent_buf(b, gs->cur_ind); buf_puts(b, "break;\n");
         return;
@@ -4665,7 +4716,7 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          *
          * instance-method-return-carrier-bridge: also skip the deref when
          * the body tail already emits the struct by value (a post-M2
-         * #{Construct} spec like `(ok (make-struct ...))` lowers to its
+         * ^construct spec like `(ok (make-struct ...))` lowers to its
          * by-value `*__spec__*` clone). */
         Type sink_rt = ctx->current_abi_specialization->result_type;
         char *bridged = emit_carrier_bridge(ctx, out, strdup(ret_val),
@@ -4700,7 +4751,7 @@ static void emit_fn_return_spelling(EmitCtx *ctx, Buf *out, const Expr *fn_e,
          * return is the uniform int64 carrier (a lifted lambda thunk in a
          * poly_fn slot, or a generic carrier base) but the body tail now
          * produces a by-value Option/Result struct (a monomorphized
-         * #{Construct} spec like `some__spec`).  Heap-spill the struct and
+         * ^construct spec like `some__spec`).  Heap-spill the struct and
          * return its pointer as int64 -- the SAME malloc spill the
          * inst_method_carrier_spill path uses, so the carrier consumer
          * (which derefs a {is_some,value}/{is_ok,...} layout) reads it
@@ -5946,7 +5997,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * lower to TY_ADT/TY_APP -- so the population never fired and has been
      * removed.  `needs_box_spill` therefore stays all-false; the rename +
      * heap-spill stanza below remain as an inert safety net for future
-     * inline-C `#{Construct}` bodies that cast a pointer-carried param. */
+     * inline-C `^construct` bodies that cast a pointer-carried param. */
     /* B4 (byvalue-recursive-carrier, slice 2): the inverse of box-spill.  A
      * CLOSURE thunk whose parameter is a WIDE (>8 byte) by-value ADT receives it
      * across the fat-closure boundary as an int64 heap-box POINTER (the value
@@ -6189,7 +6240,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* M2b RETIRED M2a inference (2026-06-13).
      *
      * Background: M2a (generalized from Prereq 6) used shape inference to
-     * synthesize a direct by-value constructor body for `#{Construct}`-
+     * synthesize a direct by-value constructor body for `^construct`-
      * annotated polymorphic constructors with value-struct payloads.  It
      * reconstructed the discriminator-tag + payload-field assignment by
      * matching the param's C type against StructDef type-params, then
@@ -6214,7 +6265,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     bool prereq6_synthesized_body = false;
 
     /* M2b (end-to-end-monomorphization-plan, Plan M2): synthesize a CARRIER
-     * body for any `#{Construct}` polymorphic constructor whose user body is
+     * body for any `^construct` polymorphic constructor whose user body is
      * a `(make-struct …)` expression and which is being emitted in the
      * generic carrier-emit path (no `current_abi_specialization`).  Without
      * this, the make-struct body lowers to `(int64_t){.field = …}` — invalid
@@ -6237,7 +6288,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * for the rationale; this implements that report's option (a). */
     bool m2b_carrier_synth = false;
     /* Fire in TWO contexts:
-     *   (a) generic carrier-only emit (no spec at all) — every #{Construct}
+     *   (a) generic carrier-only emit (no spec at all) — every ^construct
      *       polymorphic defn must always emit a callable fallback symbol;
      *   (b) a spec whose declared result type lowers to the int64 carrier
      *       (typeclass-method dispatch context: the method's signature is
@@ -6246,7 +6297,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * was keyed on the StructDef* in the make-struct node, which is now
      * always NULL (structs lower to ADTs).  The branch never fired, so
      * m2b_carrier_synth stays false and the normal body-emit path handles
-     * every #{Construct} constructor. */
+     * every ^construct constructor. */
 
     {
         /* M2b retirement of the M2a inference path: the shape-inference
@@ -6261,7 +6312,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * for the migration history.
          *
          * The heap-spill stanza below stays: it sets up the `__tur_inbox_X`
-         * pointer for the few inline-C `#{Construct}` bodies that may still
+         * pointer for the few inline-C `^construct` bodies that may still
          * cast their params via `(int64_t)(intptr_t)x`.  Stdlib has none,
          * but the safety net is cheap and future user code can rely on it. */
         {
@@ -6287,6 +6338,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * everything else in main -- that is where the `constructor`
          * attributes it replaces used to run.  Idempotent, so the constructor
          * wrapper emitted alongside the definition is harmless here. */
+        emit_main_deep_stack_prologue(file);
         ctx->indent += 4;
         indent_buf(file, ctx->indent);
         buf_puts(file, "__tur_static_init();\n");
@@ -6358,7 +6410,14 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Phase D: record which params are pbp for field-access and call-site handling. */
     uint32_t saved_n_pbp = ctx->n_pbp_params;
     ctx->n_pbp_params = 0;
-    if (!fd->closure && !body_is_inline_c) {
+    /* constrained-generic-monomorph-passbyptr-arg: an ABI-spec clone spells
+     * its parameters from the spec's argument types, BY VALUE (the
+     * `use_abi_spec` arm of the signature loop), so none of them is a `const
+     * T *` however wide -- registering one sent every use through the pointer
+     * path: `*(y)` on a `tur_adt_Reg y`. */
+    bool spec_params_by_value = ctx->current_abi_specialization &&
+                                ctx->current_abi_specialization->fn == fd;
+    if (!fd->closure && !body_is_inline_c && !spec_params_by_value) {
         for (uint32_t _pi = 0; _pi < fd->n_params; _pi++) {
             Type pty = (e->type.as.fn.arg_full_types && e->type.as.fn.arg_full_types[_pi])
                 ? *e->type.as.fn.arg_full_types[_pi] : fd->param_types[_pi];

@@ -66,6 +66,8 @@ extern bool g_needs_regex_h;
 extern char    **g_hoisted_includes;
 extern uint32_t  g_n_hoisted_includes;
 extern uint32_t  g_cap_hoisted_includes;
+extern bool     *g_hoisted_stdlib;
+extern bool      g_hoist_origin_stdlib;
 
 /* Marker appended to a hoisted `#include` whose author wrote a
  * `tur:optional` comment on the line -- a header that is EXPECTED to be
@@ -307,6 +309,18 @@ typedef struct EmitCtx {
      * ABI with the SELECTED entry point instead of guessing from receiver
      * abstractness (result-monad-bind-typed-boundary-miscompiles). */
     bool  poly_wrap_callee_carrier;
+    /* fnsan-sink-aware-fat-box: while emitting an EX_FN_TO_FAT argument, the
+     * declared fn type of the parameter it is headed for, as the CALLEE that
+     * this call selects reads it -- instantiated through a matched spec, or
+     * the declared type with `fat_box_sink_erased_*` marking the positions a
+     * carrier base / inline-C body reads as words.  NULL otherwise. */
+    const struct Type *fat_box_sink_type;
+    /* Depth of emit_cps_ir_try_fn: >0 while a DK (CPS) body is emitted.  A
+     * continuation may outlive the C frame, so nothing it can reach may live
+     * on that frame's stack. */
+    int in_cps_fn;
+    uint64_t fat_box_sink_erased_mask;
+    bool     fat_box_sink_erased_res;
     /* Phase 2: when emitting a function body, these are the parameter bindings
      * that should use raw names (without ID suffix) when referenced. */
     Binding **fn_params;
@@ -677,7 +691,7 @@ typedef struct EmitCtx {
      * fallback emitted. */
     const Expr  *current_scan_fn;
     /* nested-construct-byvalue (Gap #5): set while the ABI scan descends into the
-     * argument subexpressions of a #{Construct} call that is itself emitting as
+     * argument subexpressions of a ^construct call that is itself emitting as
      * the int64 carrier (no by-value spec).  A nested construct argument under
      * such a carrier consumer must NOT be promoted to a by-value spec, or the
      * carrier consumer (`ok(int64_t)`) would be handed a by-value aggregate
@@ -820,6 +834,12 @@ typedef struct EmitCtx {
     /* r7rs-type-errors-are-uncatchable-panics: __tur_any_cast_check_r7 and
      * its hook are written (once per unit) the first time a Scheme cast is. */
     bool         r7rs_cast_helper_emitted;
+    /* stdlib-list-null-check-retires-regions: set by emit_builtin for exactly
+     * the one EX_ASCRIBE operand of `(= (:: node :int) 0)` / `not=`, and
+     * consumed (cleared) by that ascription before it emits its inner.  An
+     * erased word that is only compared with 0 goes nowhere, so its erasure
+     * is not an escape and needs no region note. */
+    bool         region_erasure_compare_only;
 } EmitCtx;
 
 enum {
@@ -1049,6 +1069,10 @@ bool emit_c_type_is_scalar(const char *cname);
  * rejects it outright ("braces around scalar initializer", c2mir.c:7781), and
  * the panic-propagation return emits one per hoisted call -- 75-139 per TU. */
 char *emit_c_zero_of(const char *cname);
+/* `#lang r7rs`: main's first statement, re-entering on a big stack (emit_module.c). */
+void emit_main_deep_stack_prologue(Buf *out);
+/* `(panic msg)` at `span`: tur_panic_at with the source location (emit_expr.c). */
+void emit_panic_call(Buf *body, Span span, const char *msg);
 bool emit_str_is_bare_ident(const char *s);
 /* cps-let-binder-bridge-lacks-position-check: the single position-level test --
  * is `v` a bare identifier whose RECORDED emitted C type is exactly
@@ -1069,6 +1093,7 @@ const char *match_binder_c_type(const Type *t);
  * (`__tur_any_drop`), 2 = boxed value-struct payload.  `name` is any C
  * expression naming the value; it is parenthesised where the walk needs it. */
 void emit_pending_drop_stmt(EmitCtx *ctx, Buf *body, int kind, const char *name, Type t);
+bool emit_call_owes_sum_drop(EmitCtx *ctx, const Expr *e);
 /* global-def-store-misses-int-ptr-bridge: the int64<->pointer bridge for a
  * STORE (module-level def init, thread-local init return, `set!`).  Returns a
  * malloc'd bridged spelling of `iv` or NULL when no bridge is needed. */
@@ -1122,11 +1147,11 @@ bool emit_fn_body_is_opaque_ptr_over_carrier_result(const FnDef *fd,
  * instead of the shallow struct-only free (see emit_core.c). */
 bool result_err_arm_is_freeable_scalar(const Type *t);
 /* M5 straddle (root cause C): every tail leaf of `e` is a carrier-int64
- * producer call (a #{Construct} helper or an __inst_ method).  Defined in
+ * producer call (a ^construct helper or an __inst_ method).  Defined in
  * emit_fns.c; consumed there and in emit_module.c's forward-decl mirror. */
 bool fn_body_tail_is_carrier_producer(const struct Expr *e);
 /* instance-method-return-carrier-bridge: every tail leaf of `e` already emits a
- * by-value concrete carrier-ABI aggregate (post-M2 #{Construct} spec, make-struct
+ * by-value concrete carrier-ABI aggregate (post-M2 ^construct spec, make-struct
  * literal, by-value var).  Gates off the carrier->concrete return deref so an
  * already-by-value producer is not dereferenced as a heap pointer.  Defined in
  * emit_expr.c. */
@@ -1377,6 +1402,7 @@ void emit_frame_note_parent(const char *frame, const char *parent);
 const char *emit_frame_parent(const char *frame);
 void tcg_reset_group_registry(void);
 bool fn_may_bounce(const struct FnDef *fd);
+const struct FnDef *tb_static_tail_callee(const struct Expr *e);
 void tb_register_fatbox(EmitCtx *ctx, const char *box, const char *fnptr);
 void tb_register_thunk(EmitCtx *ctx, const char *thunk);
 /* r7rs-lang-plan R6: register a boxed variadic fn type's id with its fixed
@@ -1461,6 +1487,7 @@ bool emit_expr_abstract_under_active_spec(EmitCtx *ctx, const Expr *e);
  * takes the receiver by `const T *`, so the by-value receiver arg must be passed
  * by address.  Defined in emit_core.c. */
 bool emit_reresolved_receiver_is_by_ptr(EmitCtx *ctx, const Expr *call);
+bool emit_reresolved_param_is_by_ptr(EmitCtx *ctx, const Expr *call, uint32_t i);
 char *name_for_binding(EmitCtx *ctx, const Binding *b);
 /* WIN1: emit the binary-stdout prologue for a generated main(). Windows opens
  * stdout in text mode, which would turn every 
@@ -1595,6 +1622,19 @@ char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
                               const char **pc, uint8_t n);
 char *ensure_fat_word_adapter_ex(EmitCtx *ctx, const char *rc,
                                  const char **pc, uint8_t n, bool bare);
+void emit_scalar_word_conv(Buf *out, const char *from, const char *to,
+                           const char *v);
+char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
+                                const char *crc, const char **cpc,
+                                const char *arc, const char **apc, uint8_t n);
+extern const char EMIT_ADAPT_BARE_SLOT1[];
+extern const char EMIT_ADAPT_FAT_SLOT1[];
+struct EmitAbiSpecialization;
+Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
+                            const struct EmitAbiSpecialization *spec);
+char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
+                             const char *crc, const char **cpc,
+                             const char *arc, const char **apc, uint8_t n);
 char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
                                    Type *param_types, uint8_t n_params,
                                    const char *rest_c);
@@ -1605,6 +1645,7 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * when the signature does not qualify.  Caller-owned name. */
 char *ensure_boxres_fatshim(EmitCtx *ctx,
                             Type result_type, Type *param_types, uint8_t n_params);
+char *ensure_nilres_fatshim(EmitCtx *ctx, Type *param_types, uint8_t n_params);
 char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
                                Type *param_types, uint8_t n_params,
                                bool inner_is_fat);
@@ -1649,6 +1690,8 @@ char *ensure_bare_fnptr_poly_shim(EmitCtx *ctx, Type result_type,
  * widening wrapper a capturing closure's slot 0 holds for such a result.  See
  * emit_module.c. */
 const char *thunk_result_slot_c_name(Type t);
+const char *thunk_param_slot_c_name(Type t);
+const char *thunk_param_def_c_name(Type t);
 const char *thunk_result_slot_c_spelling(const char *rc);
 char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
                                  Type result_type, Type *param_types,
@@ -1680,7 +1723,12 @@ const char *emit_fn_value_clone_for_current_spec(EmitCtx *ctx, const Binding *vb
 char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
                                     uint32_t arity);
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
-                                 const char *inner_fn);
+                                 const char *inner_fn, const Type *inner_ty);
+char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result);
+/* The lifted lambda of a closure EX_POLY_WRAP whose fat value gets a `fn_cps`
+ * dispatcher (cps_ir_fncps_closure_sig_ok), or NULL.  Asked by the emitter that
+ * fills the slot and by the analysis that relies on it (arg_fat_has_fn_cps). */
+const Binding *emit_poly_wrap_fncps_closure(const Expr *pw);
 /* poly-to-fat-typed-shim-plan: ensure a typed poly-to-fat shim exists for the
  * given (result, arg0..argN) method signature, returning its C function name.
  * Returns NULL for the all-int64_t carrier case (caller uses the preamble
@@ -1737,6 +1785,29 @@ bool let_binding_any_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx);
  * heap box).  The drop channels carry these rather than names so one channel
  * serves both.  Caller frees the returned string. */
 char *let_binding_widen_drop_stmt(EmitCtx *ctx, const Expr *e, uint32_t idx);
+/* tail-grammar-skips-and-or-and-carrier-lets: one let-binding's declaration,
+ * shared by emit_let_value and emit_tail's inline tail-position `let` arm.
+ * `plain` is set for the ordinary `T name = init;` shape (not a generator
+ * frame field, a fn pointer or a poly fn), and then `bind_c` is the declared C
+ * type and `init_recorded_i64` says the initializer's recorded spelling was
+ * the int64 carrier -- what the scope-exit sum-box drops key on. */
+typedef struct {
+    bool        plain;
+    const char *bind_c;
+    bool        init_recorded_i64;
+} LetBindDecl;
+char *emit_let_binding_decl(EmitCtx *ctx, Buf *body, const Expr *e, uint32_t i,
+                            const char *bn, char *iv, LetBindDecl *out);
+/* Could let-binding `i` be given a scope-exit release by emit_let_value (other
+ * than the `any` drop)?  Decided before emission, so it over-approximates the
+ * two decisions that need the emitted declaration. */
+bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i);
+/* Push every scope-exit release emit_let_value would give let-binding `i` onto
+ * the `any` scope-drop channel, which a tail path's backedge and every
+ * `return` fire.  The caller has proved each use of the binding is a plain
+ * scalar read (emit_fns.c, tco_let_refusal), so firing early is safe. */
+void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
+                                  const LetBindDecl *d);
 void emit_temp_decl(EmitCtx *ctx, Buf *body, Type type, const char *name, const char *init_or_null);
 
 /* True when a handle's sole case is the built-in `Unsafe` effect -- a pure

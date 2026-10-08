@@ -1,0 +1,28 @@
+;; stdlib-os-surface-plan P0.4 / P1.2: process/kill delivers a Signal to a
+;; spawned child, and process/wait reports the child as (Signaled SigKill) --
+;; an ExitStatus, so a killed child is never mistaken for exit code 9.
+(load "stdlib/process.tur")
+
+(defn show-status [r : (Result ExitStatus IoError)] : int
+  (match r
+    (Ok st) (match st
+              (Exited c) (do (println "exited") (println c) 0)
+              (Signaled s) (do (println "signaled") (println (signal->number s)) 0))
+    (Err e) (do (println (io-error/message e)) 1)))
+
+(defn main [] : int
+  (match (process/spawn "sleep" "10")
+    (Ok child) (do (match (process/kill (process/child-pid child) (SigKill))
+                     (Ok _) (println "killed")
+                     (Err e) (println (io-error/message e)))
+                   (show-status (process/wait child)))
+    (Err e) (do (println (io-error/message e)) 1))
+  (show-status (process/run "sh" "-c" "exit 3"))
+  ;; a missing program is an error from spawn, not a child exiting 127
+  (match (process/run "/no/such/program")
+    (Ok _) (println "ran?")
+    (Err e) (println (io-error/not-found? e)))
+  (println (signal->number (SigTerm)))
+  (println (signal->number (number->signal 1)))
+  (println (signal->number (SigOther 10)))
+  0)

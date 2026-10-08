@@ -28,16 +28,24 @@ void buf_free(Buf *b) {
     b->cap = 0;
 }
 
+/* Every append reserves one byte past `len` and stores a NUL there without
+ * counting it, so a Buf any of these has written to is always readable as a C
+ * string through `data` (see buf.h).  buf_vprintf got that for free from
+ * vsnprintf; buf_putc/buf_write used to reserve exactly what they appended,
+ * and a buf_puts of one of their Bufs was a heap overread
+ * (docs/archive/buf-puts-breaks-the-incidental-nul-invariant.md). */
 void buf_putc(Buf *b, char c) {
-    if (b->len + 1 > b->cap) grow(b, b->len + 1);
+    if (b->len + 2 > b->cap) grow(b, b->len + 2);
     b->data[b->len++] = c;
+    b->data[b->len] = '\0';
 }
 
 void buf_write(Buf *b, const char *s, size_t n) {
     if (!n) return;
-    if (b->len + n > b->cap) grow(b, b->len + n);
+    if (b->len + n + 1 > b->cap) grow(b, b->len + n + 1);
     memcpy(b->data + b->len, s, n);
     b->len += n;
+    b->data[b->len] = '\0';
 }
 
 void buf_puts(Buf *b, const char *s) {
@@ -57,6 +65,12 @@ void buf_vprintf(Buf *b, const char *fmt, va_list ap) {
     int written = vsnprintf(b->data + b->len, b->cap - b->len, fmt, ap);
     if (written < 0) return;
     b->len += (size_t)written;
+}
+
+void buf_truncate(Buf *b, size_t len) {
+    if (len >= b->len) return;
+    b->len = len;
+    b->data[len] = '\0';
 }
 
 void buf_printf(Buf *b, const char *fmt, ...) {

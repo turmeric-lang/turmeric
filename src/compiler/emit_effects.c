@@ -1477,10 +1477,12 @@ static const FnDef *serial_receiver_with_escaping_effect(EmitCtx *ctx, const Exp
         if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
         const FnDef *fd = it->as.fn_def_.fn;
         if (fd->binding != rb) continue;
+        /* Runtime-pure rows (empty, or only capability tags such as IO
+         * from a `println`) cannot escape: nothing in them is performed. */
         bool declared = fd->binding->type.kind == TY_FN
-            && !effect_row_is_empty(fd->binding->type.as.fn.effect_row);
+            && !effect_row_is_runtime_pure(fd->binding->type.as.fn.effect_row);
         bool inferred = fd->inferred_effect_row
-            && !effect_row_is_empty(fd->inferred_effect_row);
+            && !effect_row_is_runtime_pure(fd->inferred_effect_row);
         return (declared || inferred) ? fd : NULL;
     }
     return NULL;

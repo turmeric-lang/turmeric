@@ -24,7 +24,7 @@ value where an error is expected).
   just 1.54.0 and fails loudly if it finds none.
 
 Found 2026-08-30 while re-verifying
-[docs/archive/tur-run-feature-audit-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/tur-run-feature-audit-plan.md).
+[docs/archive/tur-run-feature-audit-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-run-feature-audit-plan.md).
 Reproduced against `./build/tur` v0.41.0 on darwin.
 
 ## 1. Parameterized attributes are skipped, not refused

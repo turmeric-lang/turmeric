@@ -404,7 +404,7 @@ world with `Pos` and `Vel`", the idiom is a typeclass constraint
 There is no way to fold over a row to derive another type, which is what would
 be needed to build records-as-rows on top of this. The trade-offs of going
 further are recorded in
-[`docs/design/tuple-variadic-vs-hlist.md`](https://github.com/rjungemann/turmeric/blob/main/docs/design/tuple-variadic-vs-hlist.md).
+[`docs/design/tuple-variadic-vs-hlist.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/design/tuple-variadic-vs-hlist.md).
 
 ## Error reference
 

@@ -305,6 +305,16 @@ typedef struct TuriEnv {
      *    survive a scratch reset (result + globals). Empty until promotion runs. */
     Arena       value_scratch;
     Arena       value_perm;
+    /* turi-call-frames-never-reclaimed: free lists of call frames and frame
+     * bindings handed back when an activation returns with nothing having
+     * captured its frame (eval.c, frame_release).  Their nodes live in
+     * value_scratch, so both lists are emptied whenever it is reset. */
+    void       *frame_free;
+    void       *binding_free;
+    /* turi-call-pins-and-side-frames-not-reclaimed: the same for a released
+     * frame's tyvar and dictionary pins (eval.c's TyvarBind / DictBind). */
+    void       *tyvar_free;
+    void       *dict_free;
     /* turi-value-pool-scratch-promotion-plan: opt-in bound on steady-state memory
      * for a single long-lived env (notebook-kernel pattern). When true, turi_eval
      * promotes every escaping value into value_perm and rewinds value_scratch at
@@ -681,7 +691,9 @@ void turi_env_apply_lang(TuriEnv *env, ReaderType reader_type);
 /* Look up a global binding by name.  Returns TURI_ERROR if not found. */
 TuriValue turi_env_get(TuriEnv *env, const char *name);
 
-/* Set (or replace) a global binding by name. */
+/* Set (or replace) a global binding by name.  A new binding keeps the `name`
+ * POINTER for env's lifetime, so it must be a literal or live in env's
+ * sym_arena -- never a stack buffer. */
 void turi_env_set(TuriEnv *env, const char *name, TuriValue value);
 
 /* Helper for debugger: find an EnvBinding in env's globals. */

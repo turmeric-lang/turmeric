@@ -1,0 +1,33 @@
+;; fat-let-of-thin-fn: `^fat x : (fn ...)` in a `let` promises a fat
+;; `{ thunk, env }` handle, and the binding is fat-dispatched and handed to fat
+;; sinks as one.  Two ways it broke, both a compiled-only failure where
+;; `tur --interpret` answered:
+;;
+;;   1. A captureless lambda or a named defn is a bare code pointer, and the
+;;      binding stored it unboxed -- the first fat call read the function's
+;;      own machine code as slot 0 and took SIGSEGV.  It is boxed now, as the
+;;      `^fat` argument sites already box it.
+;;   2. A `^fat` binding of a closure-RETURNING call (`(>>> f g)`) recorded the
+;;      producing lambda and called it directly at the GENERIC lambda's types:
+;;      7.1 went in as its int64 carrier bits and the result printed as an
+;;      int (-9223372036854775808).  The annotation is the call signature now.
+;;
+;; Lead with fractional floats.
+
+(load "stdlib/arrow.tur")
+
+(defn add-quarter [x : float] : float {x + 0.25})
+(defn wrap [^fat f : (fn [float] #fx{} float)] : float (f 7.1))
+
+(defn main [] : int
+  (let [^fat f : (fn [float] #fx{} float) (fn [x : float] : float (+ x 1.25))
+        ^fat g : (fn [float] #fx{} float) (fn [x : float] : float (* x 2.0))
+        ^fat q : (fn [float] #fx{} float) add-quarter
+        ^fat h : (fn [float] #fx{} float) (>>> f g)]
+    (println (wrap f))     ;; 8.35
+    (println (f 3.25))     ;; 4.5
+    (println (wrap q))     ;; 7.35
+    (println (q 3.25))     ;; 3.5
+    (println (h 7.1))      ;; 16.7
+    (println (wrap h)))    ;; 16.7
+  0)

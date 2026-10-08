@@ -1,0 +1,8 @@
+;; turmeric-module-cannot-call-a-scheme-procedure-value: a Turmeric function
+;; calls a procedure it holds as `any`, checked at run time and answering
+;; `any`, as Saffron and Scheme code always could.
+(defn call-any [f : any v : any] : any (f v))
+(defn main [] : int
+  (let [g : any (fn [x : any] : any x)]
+    (println (cast (call-any g (:: 41 any)) int)))
+  0)

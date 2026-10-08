@@ -1,0 +1,28 @@
+;; narrow-fat-value-into-concrete-carrier: a `(fn [] int16)` closure handed
+;; through one fn-typed parameter and on into a second.  The first hop packs
+;; the closure into the `tur_poly_fn_t` carrier with a narrowing adapter (it
+;; can see the lambda); the second packs the RESULT of that first call, whose
+;; lambda it cannot see, and used to put slot 0 in `.fn` raw.  Slot 0 returns
+;; a narrow result widened to the word, while the concrete sink
+;; (`__tur_poly_to_fat0_int16_t`) calls `.fn` at `int16_t (*)(void *)`: an
+;; indirect call through the wrong function type (-fsanitize=function trap,
+;; WASM call_indirect trap).  The adapter is now keyed on the value's type.
+;; Found by the type fuzzer (closure_ret,deep,scalar_int16,through,thunk).
+
+(defn tw [x : int16] : (fn [] int16) (fn [] x))
+
+(defn pass1 [v : (fn [] int16)] : (fn [] int16) v)
+
+(defn passn [n : int v : (fn [] int16)] : (fn [] int16)
+  (if (= n 0) v (passn (- n 1) v)))
+
+(defn twb [b : bool] : (fn [] bool) (fn [] b))
+(defn passb [v : (fn [] bool)] : (fn [] bool) v)
+(defn passbn [n : int v : (fn [] bool)] : (fn [] bool)
+  (if (= n 0) v (passbn (- n 1) v)))
+
+(defn main [] : int
+  (println ((passn 1 (pass1 (tw (:: 2 int16))))))          ;; 2
+  (println ((passn 3 (pass1 (tw (:: -30000 int16))))))     ;; -30000
+  (println (if ((passbn 2 (passb (twb true)))) 1 0))       ;; 1
+  0)

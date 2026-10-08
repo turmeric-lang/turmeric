@@ -299,6 +299,19 @@ static bool elab_field_is_boxed_fnfield(const CtorDef *ctor, uint32_t fi) {
            ctor->fields[fi].full_type->as.fn.boxed;
 }
 
+/* struct-temporary-fn-field-box-leaks: does a by-value value of type `t`
+ * own a BOXED fn-field -- the case local-struct-drop frees at a `let`'s scope
+ * exit?  Exported for the field-call path, which hoists an unbound owning
+ * receiver into a `let` so the same release reaches it. */
+bool elab_type_owns_boxed_fnfield(Type t) {
+    const AdtDef *ad = elab_byval_drop_adt(t);
+    if (!ad) return false;
+    const CtorDef *ctor = ad->ctors[0];
+    for (uint32_t fi = 0; fi < ctor->n_fields; fi++)
+        if (elab_field_is_boxed_fnfield(ctor, fi)) return true;
+    return false;
+}
+
 /* ---- internal define splicing ---- */
 
 /* splice_body_def_head -- is `f` a body-position binding form, and under which
@@ -1313,6 +1326,24 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         if (!init) { rc = -1; break; }
 
+        /* fat-let-of-thin-fn-stores-code-pointer: `^fat` promises a fat
+         * `{ thunk, env }` handle, and the binding is fat-dispatched and
+         * handed to fat sinks as one -- but a captureless lambda or a named
+         * defn is a bare code pointer, and was stored as it was.  The first
+         * fat call read the function's own machine code as slot 0: a SIGSEGV
+         * with no diagnostic, where the interpreter answered.  Box it here,
+         * as the `^fat` argument and `^mut` fn-cell sites already do.  Only a
+         * value that is provably thin: a lifted captureless lambda or a defn
+         * referenced by name. */
+        if (is_fat_ann && init->kind == EX_VAR && init->as.var.binding) {
+            const Binding *ib = init->as.var.binding;
+            if (ib->is_global && !ib->is_fat && !ib->is_poly_fn &&
+                (ib->is_lifted_lambda || ib->source_fn_def) &&
+                init->type.kind == TY_FN && !init->type.as.fn.boxed &&
+                !init->type.as.fn.cfnptr)
+                init = elab_fn_value_to_fat(e, init);
+        }
+
         /* let-binding-void-call-emits-invalid-c: a `:void` init has no value to
          * name.  Left to run, the emitter writes `void x = ...;` -- "variable
          * has incomplete type 'void'", a cc error with no .tur attribution,
@@ -1695,8 +1726,18 @@ Expr *elab_let(Elab *e, const Form *call) {
 
         /* Propagate closure metadata through lets so a binding produced by a
          * closure literal or a closure-returning call remains callable with the
-         * underlying thunk signature. */
-        if (init) {
+         * underlying thunk signature.
+         *
+         * fat-let-of-thin-fn-stores-code-pointer: not through a `^fat x : (fn
+         * ...)` binding.  The annotation IS the call signature (it re-types
+         * the binding above), and a call through it is a fat dispatch at that
+         * signature.  Recording the producing lambda instead made `(h 7.1)`
+         * call the lambda directly at the GENERIC lambda's types -- `(>>> f
+         * g)`'s `(fn [x : A] : C ...)` -- so 7.1 was passed as its carrier
+         * bits to the spec clone's `double` parameter and the result printed
+         * as an int (-9223372036854775808, where the interpreter said 16.7). */
+        bool fat_ann_typed = is_fat_ann && type_ann_form && b->type.kind == TY_FN;
+        if (init && !fat_ann_typed) {
             /* curried-fn-typed-param: distinguish "init *is* a closure value"
              * from "init names a *function* that returns a closure".  When the
              * init is an EX_VAR naming a plain function (TY_FN, no
@@ -4341,6 +4382,9 @@ static Expr *elab_set_field(Elab *e, const Form *call, Form *target) {
         }
     }
 
+    /* turi-immutable-struct-args-copied-per-call: this type is written, so
+     * the interpreter must keep copying its by-value arguments. */
+    ((AdtDef *)adt)->field_written = true;
     Expr *out = expr_new(e->arena, EX_SET_FIELD, TYPE_NIL, call->span);
     out->as.set_field_.receiver = receiver;
     out->as.set_field_.value = value;
@@ -4626,8 +4670,7 @@ Expr *elab_while(Elab *e, const Form *call) {
         inv_e = elab_loop_invariant_pred(e, inv_form, inv_form->span);
         if (!inv_e) return NULL;
     }
-    bool li_on = inv_form && g_opt_loop_invariants;
-    if (li_on) experiment_warn_if_used("loop-invariants");
+    bool li_on = inv_form != NULL;
 
     uint32_t n = call->as.list.len - body_start;
     Expr *body;
@@ -4693,10 +4736,15 @@ Expr *elab_while(Elab *e, const Form *call) {
     out->as.while_.invariant = inv_form;
     if (li_on) {
         LoopInvSite *site = li_register_site(e, call, call->as.list.items[1],
-                                             inv_form, body_start, call->span);
+                                             inv_form, body_start, call->span,
+                                             out);
         if (site) {
             site->entry_check = entry_slot;
             site->body_check  = body_slot;
+            /* The elaborated predicate, for the one contract-position gate
+             * that decides whether eliding those two checks is observable
+             * (li_elision_observable). */
+            site->pred_e      = inv_e;
         }
     }
     if (entry_do) {
@@ -4935,6 +4983,9 @@ Expr *elab_return(Elab *e, const Form *call) {
         /* byvalue-recursive-shared-copies-leak: a result is owned by the
          * caller, so a shared view returned here is cloned. */
         value = elab_own_byval_copy(e, value, NULL);
+        /* The enclosing function's `:post` / refined return, which the
+         * whole-body wrap cannot see a `return` reach. */
+        value = rt_check_returned_value(e, value, call->span);
     }
     
     /* Create EX_RETURN expression */

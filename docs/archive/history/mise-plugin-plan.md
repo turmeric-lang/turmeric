@@ -136,7 +136,7 @@ turmeric_target() {
 
 turmeric_release_url() {
   local version="$1" target="$2"
-  echo "https://github.com/rjungemann/turmeric/releases/download/v${version}/turmeric-v${version}-${target}.tar.gz"
+  echo "https://github.com/turmeric-lang/turmeric/releases/download/v${version}/turmeric-v${version}-${target}.tar.gz"
 }
 
 turmeric_download() {  # url, dest
@@ -205,7 +205,7 @@ if turmeric_download "$url" "$tarball"; then
 else
   # No prebuilt asset for this target -- fall back to a source build.
   echo "no prebuilt asset for $target; building v$v from source" >&2
-  src_url="https://github.com/rjungemann/turmeric/archive/refs/tags/v${v}.tar.gz"
+  src_url="https://github.com/turmeric-lang/turmeric/archive/refs/tags/v${v}.tar.gz"
   turmeric_download "$src_url" "$tarball"
   mkdir -p "$tmp/src"
   tar -xzf "$tarball" -C "$tmp/src" --strip-components=1

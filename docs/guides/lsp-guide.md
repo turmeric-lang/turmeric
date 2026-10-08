@@ -36,7 +36,10 @@ Editors launch it as a subprocess and communicate via stdin/stdout.
 
 When you open or edit a `.tur` file, the server compiles it in check-only mode
 and publishes any parse or type errors back to the editor as diagnostics
-(red underlines, error panel entries, etc.).
+(red underlines, error panel entries, etc.). The document's extension selects
+its reader the way it does for the compiler -- a `.tur.sweet` file is
+sweet-exp and a `.scm` file is Scheme with no `#lang` line needed -- and a
+`#lang` line takes over when the extension says plain Turmeric.
 
 Behaviours worth knowing about:
 
@@ -45,6 +48,32 @@ Behaviours worth knowing about:
   been quiet for ~200ms. Requests that need symbols (hover, completion,
   definition, document symbols) force any pending analysis to run first, so
   this delays diagnostics slightly but never returns a stale answer.
+- **Errors in other files are shown on the line that pulls them in.** An
+  error inside a `load`ed or imported file is drawn on the `load` / `import`
+  form that names that file. Its message starts with the real location (`in
+  lib.tur:1:24: ...`), and the location is also attached as
+  `relatedInformation` so the editor can jump to it. A file the document does
+  not name directly -- one loaded by a loaded file -- shows on the document's
+  `load` / `import` that leads to it, with `(via mid.tur)` in the message.
+  An error inside a macro's expansion is drawn on the macro call you wrote,
+  with `(expanding map-get)` in the message -- even when the macro lives in
+  the auto-loaded stdlib, which no line of the document names. An error inside
+  the stdlib itself (a stdlib bug, or a stdlib that does not match the
+  compiler) marks the document's first line and says it is the standard
+  library's, not yours.
+  This is clangd's model for errors in an included header: each document's
+  analysis publishes only under that document's URI, so two open documents
+  never overwrite each other's diagnostics.
+- **Paths resolve as they do for `tur check`.** A sibling `(import mod)` and
+  `#use-reader-macros "x.tur"` resolve against the document's own directory,
+  and `(load "x.tur")` against the server's working directory -- which is
+  usually the workspace root the editor started it in.
+- **Signature help triggers on space, not `(`.** In a lisp the callee is typed
+  after the paren, so nothing names it yet at the moment `(` is typed; the
+  space after the head is the first position with an answer. A signature
+  request reads the current text and the callee's type from the existing
+  index, and only analyzes the pending edit when that index does not know the
+  callee -- so firing on every space does not cost a compile per keystroke.
 - **Positions are byte offsets.** The server advertises
   `"positionEncoding": "utf-8"` (LSP 3.17), so `character` in a `Position`
   counts UTF-8 bytes rather than the UTF-16 code units the specification

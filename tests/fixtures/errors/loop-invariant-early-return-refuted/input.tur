@@ -1,0 +1,17 @@
+;; loop-invariant-declines-more-than-soundness-requires: a loop with an early
+;; `return` used to be declined whole, so a body that really breaks its
+;; invariant compiled with only the runtime check to catch it.  Its paths
+;; through the `return` are pruned now and the rest are analysed, so the
+;; broken preservation is a compile-time TUR-E0371.
+(defn early-bad [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (>= acc 0)
+      (when (> i 100) (return -1))
+      (set! acc (- acc 1))
+      (set! i   (+ i 1)))
+    acc))
+
+(defn main [] : int
+  (println (early-bad 3))
+  0)

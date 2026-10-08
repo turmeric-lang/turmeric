@@ -10,26 +10,24 @@ The libturi embedding API provides a sandboxed evaluation environment for
 Turmeric code -- REPL widgets, plug-in scripts, user-supplied formulas --
 inside a C host process with I/O, FFI, and unsafe memory operations denied.
 
-> **Do not rely on this as a full boundary against hostile code yet.** Every
-> capability is enforced -- each native function has a row in one
-> [classification table](#capability-classification) and the native dispatch
-> refuses a call the environment has no capability for -- so a sandboxed
-> script cannot open a file, spawn a process, or read the environment, however
-> it spells the call. Memory safety across the native surface is now enforced
-> too: a native takes a collection / string / iterator / continuation handle as
-> a bare integer, and in a restricted env a per-env handle-provenance registry
-> refuses any handle argument that was not minted by a constructor of the
-> matching kind -- so `(vec-get 4096 0)`, a kind-confused replay, and a
-> use-after-free are refused instead of reading or writing an arbitrary address,
-> while a genuinely built collection still round-trips. What is **not** yet kept
-> is the narrower value-model channel: an erasing ascription on a type variable
-> (and continuation resume) can still launder an integer into a pointer without
-> passing through the native dispatch. This is tracked as S-5 in the
-> [security audit plan](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/security-audit-plan.md);
-> the [Security Guide](security-guide.md#t3-the-sandboxed-interpreter) states
-> the promise and where it stands. Treat the sandbox as protection against
-> *careless* code, and against the native handle-forgery channel, but not yet
-> against code written to launder an integer through an erasing ascription.
+> **What the sandbox enforces.** Every capability is enforced -- each native
+> function has a row in one [classification table](#capability-classification)
+> and the native dispatch refuses a call the environment has no capability for
+> -- so a sandboxed script cannot open a file, spawn a process, or read the
+> environment, however it spells the call. Memory safety is enforced too: a
+> native takes a collection / string / iterator / continuation handle as a bare
+> integer, and in a restricted env a per-env handle-provenance registry refuses
+> any handle that was not minted as the kind it is used as -- whether it reaches
+> a native or one of the interpreter's own re-tags (an erasing ascription to
+> `cstr` or a struct, a field read, a call). So `(vec-get 4096 0)`,
+> `(:: 4096 cstr)`, a kind-confused replay and a use-after-free are refused
+> instead of reading or writing an arbitrary address, while a genuinely built
+> collection still round-trips. This was S-5 in the
+> [security audit plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/security-audit-plan.md),
+> resolved 2026-10-07; the [Security Guide](security-guide.md#t3-the-sandboxed-interpreter)
+> states the promise and its limits. It is an in-process boundary: for code from
+> someone you do not trust, also run the embedding in a separate, unprivileged
+> process.
 
 See [eval-api.md](eval-api.md) for the full C embedding API reference.
 
@@ -70,14 +68,14 @@ without restriction.
 The `println` family returns `TURI_ERROR` in a sandboxed environment, and so
 does every native function whose row in the
 [classification table](#capability-classification) names a capability the
-environment does not hold: `process/spawn`, `io-fopen-write`, `r7rs-unlink__`,
+environment does not hold: `process/spawn-raw` (under `process/spawn`), `io-fopen-write`, `r7rs-unlink__`,
 `r7rs-getenv__`, the raw-descriptor `read-async`/`write-async`, and the rest.
 The check is made once, where every native call is dispatched, so a native
 reached by name, through `turi_call`, or from a higher-order native is refused
 the same way:
 
 ```
-eval: 'process/spawn' requires capability proc, which this environment does not hold
+eval: 'process/spawn-raw' requires capability proc, which this environment does not hold
 ```
 
 `(load "path")` is refused alongside `(import ...)`.
@@ -276,6 +274,20 @@ turi_env_register_native_caps(env, "r7rs-getenv__", fake_getenv, NULL,
 
 Only expose native functions you are willing to let untrusted code call.
 
+If your native hands Turmeric a pointer as a bare integer and takes it back
+later, check it on the way back in: the handle table only knows the built-in
+natives, so sandboxed code can pass yours any integer. The registry the
+built-ins use is public (`src/turi/eval.h`) -- record the pointer when you hand
+it out and check it when it returns; both calls do nothing in an unrestricted
+env:
+
+```c
+turi_prov_register(env, TURI_HK_GENERIC, conn);              /* handing it out */
+
+if (!turi_prov_check(env, TURI_HK_GENERIC, (void *)(intptr_t)args[0].as_int))
+    return turi_error("conn: not a live connection");      /* taking it back */
+```
+
 ---
 
 ## Error Handling
@@ -370,7 +382,7 @@ Expected output:
 |---|---|---|---|
 | I/O | `TURI_CAP_IO` | yes | `println`, stdout writers, `read-async`/`write-async` on raw descriptors, pipes, the reactor, the stdio ports |
 | Filesystem | `TURI_CAP_FS` | yes | opening, creating, removing and testing files by path |
-| Process | `TURI_CAP_PROC` | yes | `process/spawn`, `process/wait`, exiting the host process |
+| Process | `TURI_CAP_PROC` | yes | `process/spawn-raw`, `process/wait-raw` (under `process/spawn` / `process/wait` / `process/run`), exiting the host process |
 | Environment | `TURI_CAP_ENV` | yes | `getenv`, `environ` |
 | FFI | `TURI_CAP_FFI` | yes | `dlopen`, `dlsym`, `dlclose`, every `extern-c`, spice reload |
 | Inline-C | `TURI_CAP_INLINE_C` | yes | `` (` ``c ... `` `) `` expressions |
@@ -396,7 +408,7 @@ need no open. About six hundred natives are pure; these are the rest:
 
 | Class | Natives |
 |---|---|
-| `proc` | `process/spawn`, `process/wait`, `r7rs-exit__` |
+| `proc` | `process/spawn-raw`, `process/wait-raw`, `process/child-of-raw`, `r7rs-exit__` |
 | `fs` | `fs/tmpfile`, `fs/tmpfile-path`, `fs/tmpfile-fd`, `fs/tmpfile-free`, `io-fopen-read`, `io-fopen-write`, `io-fread-chunk`, `io-fwrite-chunk`, `io-fclose`, `io-remove`, `write-temp-file`, `json/decode-file!`, `r7rs-io-open__`, `r7rs-file-exists-c__`, `r7rs-unlink__` |
 | `fs`, `io` | `random-access-bench` |
 | `env` | `r7rs-getenv__`, `r7rs-getenv-set?__`, `r7rs-environ-count__`, `r7rs-environ-name__`, `r7rs-environ-value__` |
@@ -404,21 +416,24 @@ need no open. About six hundred natives are pure; these are the rest:
 | `async` | `sleep-async`, `with-timeout`, `async-all2`, `await-val`, `async-race`, `cancel-task`, `task-cancelled?` |
 | `ffi` | `reload` |
 | `unsafe` | `box`, `unbox`, `io-alloc`, `io-free`, `io-buf-new`, `io-buf-free`, `int-val`, `alloc-int`, `alloc-key`, `alloc-str`, `flat-new`, `flat-get`, `flat-set`, `array-get`, `array-set` |
-| every capability | `r7rs-eval-c-eval__`, `r7rs-eval-c-load__` -- they evaluate text in the process-global R7RS `eval` environment, which holds every capability |
+| every capability | `r7rs-eval-c-eval__`, `r7rs-eval-c-load__` -- they evaluate text in the process-global R7RS `eval` environment, which holds every capability -- and the rest of the `r7rs-eval-c-*__` family (`-apply__`, `-push-*__`, `-answer-*__`, `-frame-*__`, `-result-*__`), which act on that same environment |
 
 `unsafe` is given to the natives whose only purpose is to allocate, free or
 dereference a raw address with no typed wrapper. It is not given to the
 collection and string natives, although they take handles as bare integers
 too; a sandbox without vectors and maps would be useless. That gap is not a
-capability's to close -- it is closed for the native surface by the handle
-provenance registry (S-5, direction 1): in a restricted env each collection /
-string / iterator / continuation handle argument is checked against the set of
-handles a constructor of the matching kind actually minted, so a forged integer
-is refused while a real handle round-trips. The per-native handle-kind column
-lives beside this table in `src/turi/native_caps.c`
-(`k_handle_rows[]`); see the
-[S-5 report](https://github.com/rjungemann/turmeric/blob/main/docs/reported/turi-sandbox-handles-are-forgeable-integers.md) for the
-model and for the value-model channel that remains (direction 2).
+capability's to close -- it is closed by the handle provenance registry (S-5):
+in a restricted env each handle argument is checked against the handles minted
+as the kind its position names, so a forged integer -- or a string literal, a
+float or a struct where a vector is expected -- is refused while a real handle
+round-trips. The per-native handle-kind column lives beside this table in
+`src/turi/native_caps.c` (`k_handle_rows[]`), and the sandbox test sweeps every
+capability-free native with forged arguments so a native nobody classified is
+found. The
+[S-5 report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-sandbox-handles-are-forgeable-integers.md)
+has the model and the limits: `String`-keyed maps and sets are refused in a
+restricted env, scratch promotion is off there, and re-entrant `call/cc` is
+escape-only outside a top-level form.
 
 The operations that are not native functions are checked where they are
 evaluated: the `println` builtins and the raw-memory builtins in the builtin

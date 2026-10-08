@@ -1,0 +1,14 @@
+;; early-return-bypasses-return-refinement: `(return 0)` used to leave `f`
+;; with no check at all.  Statically the obligation `(>= r n)` was "proved"
+;; from the LAST body form alone, so the whole-body check was elided; and even
+;; with the check kept, a `return` jumped past it.  `(f 10)` printed 0.  Now
+;; the obligation is reported unknown (TUR-W0372) and the return value is
+;; checked where it leaves.
+(defn f [n : int] : #refine{ r : int | (>= r n) }
+  (when (> n 5) (return 0))
+  n)
+
+(defn main [] : int
+  (println (f 3))
+  (println (f 10))
+  0)

@@ -1,0 +1,65 @@
+;; A constraint tyvar that reaches a parameter ONLY through a function type.
+;;
+;; Sibling of typeclass-nullary-method-newtype-tyvar.  That fixture pins the
+;; representative search admitting a carrier-compatible opaque newtype when the
+;; class tyvar reaches a PARAMETER; this one pins the case where the only such
+;; parameter is function-typed.
+;;
+;; `type_mentions_named_tyvar` (src/compiler/elab_fns.c) handled TY_TYVAR and
+;; TY_APP and fell through on TY_FN, so B below -- which appears nowhere but
+;; inside `^fat f : (fn [A] B)` -- left its cur_fn_constraint_param_mask bit
+;; clear.  The search then refused the newtype and `(mempty)` hard-errored with
+;; "no instance 'Monoid tyvar'", even though the signature plainly is a
+;; parameter type.  The Semigroup half (an explicit accumulator, no `mempty`)
+;; always worked, which is what made the gap specifically about the identity.
+;;
+;; This is `foldMap`'s shape: fold a Vec of UNWRAPPED values, wrapping each one
+;; inside the fold, so three algebras over one carrier read one `(Vec int)`
+;; without three parallel vectors of newtypes.
+;;
+;; Soundness is the same argument the mask already rests on: `(fn [int] Sum)`,
+;; `(fn [int] Product)` and `(fn [int] MaxI)` are distinct Types, so the arg
+;; vector interns three specs and Gap H's `__h<n>` discriminator separates the
+;; identically rendered int64_t signatures.  Verified in emitted C:
+;;
+;;   fold_map__spec__int64_t_tur_adt_Vec__int___int64_t
+;;   fold_map__spec__int64_t_tur_adt_Vec__int___int64_t__h1
+;;   fold_map__spec__int64_t_tur_adt_Vec__int___int64_t__h2
+;;
+;; A tyvar that reaches NO parameter still keeps its hard error -- see
+;; errors/typeclass-nullary-return-only-newtype, which this change leaves
+;; refused.
+(defclass Semigroup [a] (combine [x : a y : a] : a))
+(defclass Monoid    [a] (mempty  []          : a))
+
+(defopaque Sum     :int)
+(defopaque Product :int)
+(defopaque MaxI    :int)
+
+(definstance Semigroup [Sum]     (combine [x y] (:: (+ (:: x int) (:: y int)) Sum)))
+(definstance Monoid    [Sum]     (mempty [] (:: 0 Sum)))
+(definstance Semigroup [Product] (combine [x y] (:: (* (:: x int) (:: y int)) Product)))
+(definstance Monoid    [Product] (mempty [] (:: 1 Product)))
+(definstance Semigroup [MaxI]
+  (combine [x y]
+    (if (> (:: x int) (:: y int)) x y)))
+(definstance Monoid    [MaxI]    (mempty [] (:: -2147483648 MaxI)))
+
+(defn fold-map-from [^Semigroup B A]
+                    [v : (Vec A) ^fat f : (fn [A] B) i : int n : int acc : B] : B
+  (if (>= i n)
+    acc
+    (fold-map-from v f (+ i 1) n (combine acc (f (vec-get v i))))))
+
+;; B is mentioned by no parameter EXCEPT the (fn [A] B) one -- the whole point.
+(defn fold-map [^Semigroup B ^Monoid B A] [v : (Vec A) ^fat f : (fn [A] B)] : B
+  (let [unit : B
+        (mempty)]
+    (fold-map-from v f 0 (vec-len v) unit)))
+
+(defn main [] : int
+  (let [xs (vec-of 1 2 3 4)]
+    (println (:: (fold-map xs (fn [x : int] : Sum     (:: x Sum)))     int))
+    (println (:: (fold-map xs (fn [x : int] : Product (:: x Product))) int))
+    (println (:: (fold-map xs (fn [x : int] : MaxI    (:: x MaxI)))    int)))
+  0)

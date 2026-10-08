@@ -226,12 +226,12 @@
         Open a file and press Run. Trowel is a fast, native desktop app with a live REPL and the Turmeric compiler built right in. There's nothing else to install.
       </p>
       <div class="hero-actions">
-        <a href="https://github.com/rjungemann/trowel/releases/latest" class="btn-hero btn-hero-primary">Download Trowel <span class="arrow">→</span></a>
-        <a href="https://github.com/rjungemann/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
+        <a href="https://github.com/turmeric-lang/trowel/releases/latest" class="btn-hero btn-hero-primary">Download Trowel <span class="arrow">→</span></a>
+        <a href="https://github.com/turmeric-lang/trowel" class="btn-hero btn-hero-secondary">View on GitHub</a>
       </div>
       <div class="install-hint">
         <span>Or install with</span>
-        <span class="install-cmd">brew install --cask rjungemann/trowel/trowel</span>
+        <span class="install-cmd">brew install --cask turmeric-lang/trowel/trowel</span>
       </div>
     </div>
 
@@ -315,14 +315,14 @@
       <div class="dl-os"><span class="dl-glyph"><t-icon name="command"></t-icon></span> macOS</div>
       <span class="dl-tag">Available now</span>
       <p class="dl-note">Native Mac app, signed and notarized. Grab the <code>.dmg</code> from the latest release, or install with Homebrew.</p>
-      <a href="https://github.com/rjungemann/trowel/releases/latest" class="dl-btn">Download .dmg</a>
+      <a href="https://github.com/turmeric-lang/trowel/releases/latest" class="dl-btn">Download .dmg</a>
     </div>
 
     <div class="dl-card">
       <div class="dl-os"><span class="dl-glyph"><t-icon name="terminal"></t-icon></span> Linux</div>
       <span class="dl-tag">Available now</span>
       <p class="dl-note">Portable <code>.AppImage</code>. Download, mark it executable, and run. No install step, and the compiler is bundled in.</p>
-      <a href="https://github.com/rjungemann/trowel/releases/latest" class="dl-btn">Download AppImage</a>
+      <a href="https://github.com/turmeric-lang/trowel/releases/latest" class="dl-btn">Download AppImage</a>
     </div>
 
     <div class="dl-card soon">
@@ -335,7 +335,7 @@
 
   <div class="dl-brew">
     <span>Homebrew:</span>
-    <span class="install-cmd">brew install --cask rjungemann/trowel/trowel</span>
+    <span class="install-cmd">brew install --cask turmeric-lang/trowel/trowel</span>
   </div>
 </div>
 
@@ -348,8 +348,9 @@
     <div class="step-card">
       <div class="step-num">01 -- Install</div>
       <div class="step-title">Install Trowel</div>
-      <div class="step-code">brew install --cask rjungemann/trowel/trowel</div>
-      <p class="step-desc">Or grab the <code>.dmg</code> (macOS) or portable <code>.AppImage</code> (Linux) from the <a href="https://github.com/rjungemann/trowel/releases/latest" style="color:var(--gold);">latest release</a>. The Turmeric compiler is bundled. There's nothing else to install.</p>
+      <div class="step-code">brew tap turmeric-lang/trowel https://github.com/turmeric-lang/trowel
+brew install --cask turmeric-lang/trowel/trowel</div>
+      <p class="step-desc">The tap URL is not optional: the cask lives in the Trowel repo itself, so a bare <code>brew tap turmeric-lang/trowel</code> goes looking for a <code>homebrew-trowel</code> repo that does not exist. Tapped this before the 2026-10-02 move? Run <code>brew untap rjungemann/trowel</code> first &mdash; Homebrew keys its tap cache by name and will otherwise keep serving the old one. Or grab the <code>.dmg</code> (macOS) or portable <code>.AppImage</code> (Linux) from the <a href="https://github.com/turmeric-lang/trowel/releases/latest" style="color:var(--gold);">latest release</a>. The Turmeric compiler is bundled. There's nothing else to install.</p>
     </div>
 
     <div class="step-card">
@@ -385,7 +386,7 @@
     <h2 class="cta-title">Don't forget to bring a <em>Trowel</em></h2>
     <p class="cta-desc">Download Trowel and go from a blank file to running code in minutes.</p>
     <div class="cta-actions">
-      <a href="https://github.com/rjungemann/trowel/releases/latest" class="btn-hero btn-hero-primary">Download Trowel →</a>
+      <a href="https://github.com/turmeric-lang/trowel/releases/latest" class="btn-hero btn-hero-primary">Download Trowel →</a>
       <a href="/docs/html/guides/" class="btn-hero btn-hero-secondary">Read the Guides</a>
     </div>
   </div>

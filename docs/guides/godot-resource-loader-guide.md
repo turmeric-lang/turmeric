@@ -14,7 +14,7 @@ the gap and walks through the loader (and saver) you need to add.
 
 This guide is specific to the `turmeric-godot` binding repo. It lives in this
 repo's `docs/guides/` because the v1 Godot-binding plan
-([`docs/archive/godot-language-binding-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-language-binding-plan.md))
+([`docs/archive/godot-language-binding-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/godot-language-binding-plan.md))
 treats it as part of the G2 deliverable, and the same gotcha will hit anyone
 building a future GDExtension scripting binding from this codebase.
 
@@ -224,7 +224,7 @@ each time someone wires a new scripting binding from this codebase.
 
 ## Related
 
-- [`docs/archive/godot-language-binding-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/godot-language-binding-plan.md)
+- [`docs/archive/godot-language-binding-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/godot-language-binding-plan.md)
   -- v1 plan. The G2 phase ("Lifecycle + Inspector") is where this loader
   graduates from "known-needed" to "implemented."
 - `docs/archive/history/libturi-embed-include-paths.md` and

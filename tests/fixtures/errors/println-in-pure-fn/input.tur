@@ -1,0 +1,28 @@
+;; println-in-pure-fn -- effect-row-honesty-plan W4: `println` declares
+;; #fx{IO}, so #fx{} means "does not even print".
+;;
+;; Before W4 `println` was a builtin with an empty row: the most common effect
+;; in any program was invisible to the effect system, and every line below
+;; compiled.  Each line of expected.diag is one route in: a direct call, a
+;; call through a helper that prints, an annotated `fn` literal, and a printing
+;; callback handed to a parameter whose row promises purity.  run-turi.sh runs
+;; this under --interpret too, which shares the check.
+
+(defn shout [] #fx{} : int
+  (do (println "x") 0))
+
+(defn say [s : cstr] : int
+  (do (println s) 0))
+
+(defn relay [] #fx{} : int
+  (say "y"))
+
+(defn make-printer [] : int
+  ((fn [] #fx{} : int (do (println "z") 0))))
+
+(defn run-pure [f : (fn [] #fx{} int)] : int (f))
+
+(defn hands-over [] : int
+  (run-pure (fn [] : int (do (println "w") 0))))
+
+(defn main [] : int 0)

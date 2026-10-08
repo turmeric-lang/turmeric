@@ -1,0 +1,34 @@
+;; A `handle` over an effectful fn-field call in the operand of a rank-2 call.
+;; Shape (1) of docs/reported/cps-evicts-handle-in-operand-positions.md, and
+;; the type fuzzer's `x_rank2_class` + `fn_field_eff` crossing.
+;;
+;;   - `(l (handle ...))`: a call through a rank-2 poly param is an INDIRECT
+;;     call, which the CPS translator delegated only with literal arguments --
+;;     "indirect call (non-atomic args)", and the function was evicted with its
+;;     performs.  The arguments are now bound first and the call delegated over
+;;     the binders; a constrained forall's dictionary argument (EX_DICT, a
+;;     constant) rides inline.
+;;   - `(ru ri (handle ...))`: the rank-2 ARGUMENT is atomized ahead of the
+;;     handle, so the handle's continuation captured a `tur_poly_fn_t` binder --
+;;     and declared the env field `void *`, invalid C on every compiler.
+
+(defclass R [a] (rm [x : a] : a))
+(definstance R [cstr] (rm [x : cstr] : cstr x))
+(defn ri [a] [(R a)] [x : a] : a (rm x))
+(defn idf [a] [x : a] : a x)
+
+(defeffect Ec [x :cstr] :cstr)
+(defstruct FC :copy [run : (fn [cstr] cstr) #fx{Ec}])
+(defn fc [v : cstr] : cstr (perform (Ec v)))
+
+(defn ru [l (forall [a] [(R a)] (-> a a)) v : cstr] : cstr (l v))
+(defn ru2 [l (forall [a] [(R a)] (-> a a))] : cstr
+  (l (handle (.run (make-struct FC fc) "w") (Ec [x] k) (resume k x))))
+(defn ru3 [l (forall [a] (-> a a))] : cstr
+  (l (handle (.run (make-struct FC fc) "z") (Ec [x] k) (resume k x))))
+
+(defn main [] : int
+  (println (ru ri (handle (.run (make-struct FC fc) "q") (Ec [x] k) (resume k x))))  ; q
+  (println (ru2 ri))                                                                 ; w
+  (println (ru3 idf))                                                                ; z
+  0)

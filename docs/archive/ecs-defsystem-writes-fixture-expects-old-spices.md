@@ -46,7 +46,7 @@ not import `ecs/world`.
 ## Repro
 
 ```sh
-git clone https://github.com/rjungemann/turmeric-spices/ ../turmeric-spices
+git clone https://github.com/turmeric-lang/turmeric-spices/ ../turmeric-spices
 TUR_TEST_FILTER='^errors/ecs-defsystem-writes-unauthorized$' bash tests/run.sh
 ```
 

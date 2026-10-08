@@ -312,6 +312,13 @@ typedef struct AdtDef {
      * ADT analogue of a :heap StructDef (Vec/Map/Set).  Set by defdata on `:heap`
      * (and by the defstruct->defadt lowering of a `:heap` struct). */
     bool        is_heap;
+    /* turi-immutable-struct-args-copied-per-call: set when the program
+     * elaborates a field write `(set! (.f x) v)` whose receiver is this ADT
+     * (the one EX_SET_FIELD site, elab_set_field).  A value of a type nobody
+     * writes cannot show whether a call copied it, so the interpreter's
+     * by-value argument copy (turi_copy_byvalue_struct_arg) skips it.  Only
+     * the interpreter reads it; the compiled backend copies by C semantics. */
+    bool        field_written;
     /* Phase G1: GADT flag and type parameters */
     bool        is_gadt;         /* true for defgadt, false for defdata */
     /* SR1 (sum-representation-plan): a constructor field names this ADT, so the
@@ -943,6 +950,16 @@ typedef struct Type {
              * signature quantifies.  Nothing binds it; it only says "not fixed
              * here".  Copied with the Type, so it survives instantiation. */
             bool open_slot;
+            /* associated-type-unusable-nullary-and-generic (half 2): an
+             * UNREDUCED associated-type projection -- `(Inner A)` at a type
+             * variable, which no instance can answer until the variable is
+             * fixed.  It is a type variable in every other respect (its name
+             * is the printed projection, so two spellings of the same
+             * projection are the same variable), and a call that fixes
+             * `assoc_arg` reduces it through the instance (elab_call.c,
+             * call_bind_assoc_projections).  NULL for an ordinary variable. */
+            const struct Symbol *assoc_of;
+            const struct Type   *assoc_arg;
         } tyvar_;
         /* ET3/FH4.1: Handler type — handler<EffectRow, ValueType, ResultType> */
         struct {
@@ -1998,6 +2015,7 @@ size_t       adt_app_byval_value_size_bytes(Type t);
 /* b4box closure-slot width -- see the definition's comment for why this is
  * separate from type_is_wide_byval_adt (which also drives ADT field layout). */
 bool         type_is_b4box_closure_slot(Type t);
+bool         type_is_word_closure_slot(Type t);
 bool         adt_app_byval_pass_by_ptr(Type t);
 bool         type_is_byvalue_adt_product(Type t);
 /* Phase E: Typed function-pointer typedef registry for unboxed fn struct fields. */

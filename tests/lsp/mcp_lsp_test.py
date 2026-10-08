@@ -646,6 +646,12 @@ def test_lsp_client_gaps() -> None:
               "lsp init: documentFormattingProvider advertised")
         check(isinstance(caps.get("signatureHelpProvider"), dict),
               "lsp init: signatureHelpProvider advertised")
+        # Not `(`: in a lisp the callee is typed AFTER the paren, so a `(`
+        # trigger could only ever be answered with null. The space after the
+        # head is the first position with an answer.
+        sig_triggers = caps.get("signatureHelpProvider", {}).get("triggerCharacters")
+        check(sig_triggers == [" "],
+              f"lsp init: signature-help triggers are [' '] (got {sig_triggers!r})")
         # Space fires on nearly every keystroke in a lisp; neither known client
         # was willing to honor it, so it should not be advertised.
         triggers = caps.get("completionProvider", {}).get("triggerCharacters")
@@ -772,6 +778,24 @@ def test_lsp_client_gaps() -> None:
             check(sig.get("activeParameter") == 1,
                   f"lsp signatureHelp: second argument is active "
                   f"(got {sig.get('activeParameter')!r})")
+
+        # A callee defined only in an edit nothing has analyzed yet: signature
+        # help answers from the index as it stands, so it has to notice the
+        # miss and analyze before answering, not report null.
+        fresh_src = call_src + "\n(defn fresh-fn [a :int b :int c :int] :int a)\n(fresh-fn 1 2 3)\n"
+        srv.call("textDocument/didChange", {
+            "textDocument": {"uri": uri, "version": 6},
+            "contentChanges": [{"text": fresh_src}],
+        }, notification=True)
+        fresh_line = fresh_src.count("\n") - 1
+        r = srv.call("textDocument/signatureHelp", {
+            "textDocument": {"uri": uri},
+            "position": {"line": fresh_line, "character": len("(fresh-fn ")},
+        })
+        sig = r["result"] if r else None
+        check(isinstance(sig, dict) and bool(sig.get("signatures"))
+              and "fresh-fn" in sig["signatures"][0].get("label", ""),
+              f"lsp signatureHelp: callee from an unanalyzed edit (got {sig!r})")
 
         # Outside any call there is nothing to describe.
         r = srv.call("textDocument/signatureHelp", {

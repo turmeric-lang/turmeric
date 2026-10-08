@@ -1,0 +1,28 @@
+;; A `handle` reached through a generic call whose result the elaborator
+;; re-typed to its instantiation -- an `int -> cstr` EX_REINTERPRET around the
+;; call.  The CPS translator neither delegated the reinterpret (safe_to_delegate
+;; had no arm for it) nor decomposed it, so the whole function was evicted and
+;; every `perform` under it was refused: "this effect operation has no lowering
+;; here".  Found as the type fuzzer's fn_field_eff GEN_REJECT shape (2) in
+;; docs/reported/cps-evicts-handle-in-operand-positions.md.
+;;
+;;   - the generic call is the effectful fn field's ARGUMENT (delegatable once
+;;     the reinterpret is: it wraps a pure call);
+;;   - the `handle` is the generic call's own argument (not delegatable: the
+;;     operand is translated into a binder first, then retyped), at a cstr and
+;;     at an int, in a tail and in a `let`.
+
+(defeffect Ec [x :cstr] :cstr)
+(defstruct FC :copy [run : (fn [cstr] cstr) #fx{Ec}])
+(defn fc [v : cstr] : cstr (perform (Ec v)))
+(defeffect Ei [x :int] :int)
+(defn fi [v : int] : int (perform (Ei v)))
+(defn g2 [A] [x : A] : A x)
+
+(defn main [] : int
+  (println (handle (.run (make-struct FC fc) (g2 "s")) (Ec [x] k) (resume k x)))  ; s
+  (println (g2 (handle (.run (make-struct FC fc) "t") (Ec [x] k) (resume k x))))  ; t
+  (println (g2 (handle (fi 41) (Ei [x] k) (resume k {x + 1}))))                   ; 42
+  (let [r (g2 (handle (.run (make-struct FC fc) "u") (Ec [x] k) (resume k x)))]
+    (println r))                                                                  ; u
+  0)

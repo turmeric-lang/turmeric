@@ -43,7 +43,7 @@
 ;; Either[L R] -- binary sum; Left l | Right r.
 ;; :copy -- an Either handle is an immutable tagged scalar pair with no owned
 ;; resources, so it is freely copyable (like a primitive); this matches the
-;; ergonomics of Option/Result, whose APIs erase to the int carrier.
+;; ergonomics of Option/Result.
 
 (defdata Either :copy [L R] (Left L) (Right R))
 ;;; left? -- is this Either a Left?
@@ -60,7 +60,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn left? [e : int] : bool (match e (Left _) true (Right _) false))
+(defn left? [L R] [e : (Either L R)] : bool
+  (match e (Left _) true (Right _) false))
 ;;; right? -- is this Either a Right?
 ;;;
 ;;; Parameters:
@@ -75,7 +76,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn right? [e : int] : bool (match e (Left _) false (Right _) true))
+(defn right? [L R] [e : (Either L R)] : bool
+  (match e (Left _) false (Right _) true))
 ;;; from-left -- extract the Left payload, or a default when e is a Right.
 ;;;
 ;;; Parameters:
@@ -91,7 +93,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn from-left [dflt : int e : int] : int (match e (Left l) l (Right _) dflt))
+(defn from-left [L R] [dflt : L e : (Either L R)] : L
+  (match e (Left l) l (Right _) dflt))
 ;;; from-right -- extract the Right payload, or a default when e is a Left.
 ;;;
 ;;; Parameters:
@@ -107,7 +110,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn from-right [dflt : int e : int] : int (match e (Left _) dflt (Right r) r))
+(defn from-right [L R] [dflt : R e : (Either L R)] : R
+  (match e (Left _) dflt (Right r) r))
 ;;; either -- eliminate an Either by applying one of two functions.
 ;;;
 ;;; The fundamental Either destructor (its catamorphism): runs on-left over
@@ -128,9 +132,9 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn either [^fat on-left : (fn [int] int)
-              ^fat on-right : (fn [int] int)
-              e : int] : int
+(defn either [L R C] [^fat on-left : (fn [L] C)
+                      ^fat on-right : (fn [R] C)
+                      e : (Either L R)] : C
   (match e (Left l) (on-left l) (Right r) (on-right r)))
 ;;; either-map -- map a function over the Right arm (right-biased).
 ;;;
@@ -151,7 +155,7 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn either-map [^fat f : (fn [int] int) e : int] : int
+(defn either-map [L A B] [^fat f : (fn [A] B) e : (Either L A)] : (Either L B)
   (match e (Left l) (Left l) (Right r) (Right (f r))))
 ;;; either-map-left -- map a function over the Left arm.
 ;;;
@@ -171,7 +175,8 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn either-map-left [^fat f : (fn [int] int) e : int] : int
+(defn either-map-left [A B R] [^fat f : (fn [A] B) e : (Either A R)] : (Either B
+                                                                         R)
   (match e (Left l) (Left (f l)) (Right r) (Right r)))
 ;; Functor instance for (Either E) -- right-biased: fmap runs f on the Right
 ;; payload and is the identity on Left.  Either owns this instance (it is its

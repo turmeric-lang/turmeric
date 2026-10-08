@@ -1,7 +1,7 @@
 ---
 title: Sum Types and `Either`
 category: Language Basics
-description: Declaring binary and n-ary sum types with `defdata`, pattern matching with `match`, exhaustiveness behaviour and the `#fx{NonExhaustive}` opt-out, the FFI layout, and the stdlib `Either` module.
+description: Declaring binary and n-ary sum types with `defdata`, pattern matching with `match`, exhaustiveness behaviour and the `^non-exhaustive` opt-out, the FFI layout, and the stdlib `Either` module.
 ---
 
 # Sum Types and `Either`
@@ -238,15 +238,15 @@ match: non-exhaustive patterns -- constructor 'Left' of 'Either' not covered
 This is deliberate: the compiler will not let a new constructor silently slip
 past existing matches.
 
-### Opting out: `#fx{NonExhaustive}`
+### Opting out: `^non-exhaustive`
 
 When you have *proven* a case cannot occur by other means, place the
-`#fx{NonExhaustive}` marker immediately after `match` (before the scrutinee) to
+`^non-exhaustive` marker immediately after `match` (before the scrutinee) to
 suppress the diagnostic:
 
 ```turmeric
 (defn unwrap-right [e : int] : int
-  (match #fx{NonExhaustive} e
+  (match ^non-exhaustive e
     (Right r) r))      ; Left is statically impossible here, by construction
 ```
 
@@ -257,7 +257,7 @@ Sweet-exp equivalent:
 
 defn unwrap-right [e : Ei] : int
   ; Left is statically impossible here, by construction
-  match #fx{NonExhaustive} e
+  match ^non-exhaustive e
     (Right r)
     r
 ```
@@ -265,6 +265,11 @@ defn unwrap-right [e : Ei] : int
 The marker is the *only* escape hatch; without it a non-exhaustive match does
 not compile. Use it sparingly and leave a comment explaining why the missing
 arm is unreachable.
+
+It used to be spelled `#fx{NonExhaustive}`. That spelling still opts out, with
+a `TUR-D0004` deprecation warning (an error under `--Werror=deprecated`):
+`#fx{...}` is the effect row, and this marker is an attribute of the `match`,
+not an effect -- so it moved to the `^attr` form every other attribute uses.
 
 ## The `Either` module
 
@@ -374,8 +379,8 @@ instance.
 
 ## See also
 
-- [sum-types-either-plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md) -- the design plan and ADR.
-- [`stdlib/result.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/result.tur) / `stdlib/option.tur` --
+- [sum-types-either-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md) -- the design plan and ADR.
+- [`stdlib/result.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/result.tur) / `stdlib/option.tur` --
   the unary-payload tagged structs that predate `Either`.
 - [[data-literals-guide]] -- literal construction syntax that composes with
   sum payloads.

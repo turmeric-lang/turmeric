@@ -106,11 +106,11 @@ Two further rules follow from how the frames are marshalled by name:
   (k (perform (Ask))))` under `(handle (run) (Ask [] r) (resume r 41))` works
   compiled as it does interpreted
   (`docs/archive/serial-receiver-effect-cannot-reach-enclosing-handler.md`).
-  Three shapes are still `TUR-E0706`, naming the receiver and the effect: a
-  context with an `if` branch point, a CAPTURING `(fn [k] ...)` receiver (a
-  non-capturing one, or a named function, is fine), and an effect escaping a
-  context callee as above. Hoist the `if` out of the reset, name the
-  receiver, or handle the effect inside it.
+  That holds with an `if` branch point in the context too, and for a
+  capturing `(fn [k] ...)` receiver whose captures are plain values (ints,
+  floats, strings). What is still `TUR-E0706`: a closure receiver
+  capturing anything else (name the receiver instead), and an effect escaping
+  a context callee as above -- handle it inside the callee.
 
 `TUR_TRACE_CORE=1` names the collector rule (`[CTX-REJECT] cps_ir.c:<line>`)
 that rejected a context, which is faster than guessing.
@@ -182,6 +182,11 @@ load boundary.
 ;; Resume a continuation with a value -- the same thing as (k v)
 (serial-resume k v) : int
 
+;; Release what a round trip allocated (see "Who frees what" below)
+(serial-resume-owned k v) : int     ; resume a REBUILT k, then free it
+(serial-cont-free k) : nil          ; free a REBUILT k without resuming it
+(serial-bytes-free b) : nil         ; free a buffer from serial-cont->bytes
+
 ;; File helpers over the bytes
 (cont-to-file b path) : int          ; 1 on success
 (cont-from-file path) : ptr<void>    ; NULL on failure
@@ -190,6 +195,24 @@ load boundary.
 `save-cont!` / `resume-cont!` in `stdlib/workflow.tur` are the older spellings
 of `serial-cont->bytes` and "rebuild then resume" (`resume-cont!` aborts on a
 malformed buffer where `bytes->serial-cont` returns `Err`); both surfaces stay.
+
+### Who frees what
+
+The continuation a `serial-shift` receiver is handed is the compiler's: it is
+freed when the receiver is done with it. Everything a round trip makes is the
+program's:
+
+- the buffer from `serial-cont->bytes` (or `save-cont!`, `cont-from-file`) --
+  free it with `serial-bytes-free` once it is written or rebuilt;
+- a continuation from `bytes->serial-cont` -- resume it with
+  `serial-resume-owned`, which resumes and then frees it (a `serial-cont` is
+  consumed by its resume, so there is no later point to free it at), or drop
+  it with `serial-cont-free`.
+
+Never pass the receiver's own `k` to `serial-resume-owned` or
+`serial-cont-free`: it would be freed twice. A rebuilt frame whose env was a
+`cstr` keeps its rebuilt string allocated, because the resumed computation may
+have kept it.
 
 ### The `serial-cont` Type
 
@@ -461,7 +484,7 @@ functions are excluded (CF7.3), but same-function bindings that happen to be
 in lexical scope may be flagged even if they are dead at the shift point.
 
 Full precision requires the post-1.0 CPS liveness pass (tracked in
-[control-flow-completeness-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md) CF7.5).
+[control-flow-completeness-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/control-flow-completeness-plan.md) CF7.5).
 
 **Workaround:** consume or drop non-Serializable values before the shift point,
 or restructure so only Serializable bindings remain in scope.

@@ -2393,6 +2393,86 @@ char *pkg_git_fetch(const char *url, const char *ref, const char *dest_dir) {
     return pkg_git_resolve(dest_dir);
 }
 
+/* A commit id as tur.lock records it: 40 hex digits (SHA-1) or 64 (SHA-256
+ * repositories).  The value comes out of a file that travels with the
+ * project, so it is checked before it reaches a git command line. */
+static bool pkg_is_commit_id(const char *s) {
+    if (!s) return false;
+    size_t n = 0;
+    for (; s[n]; n++)
+        if (!((s[n] >= '0' && s[n] <= '9') || (s[n] >= 'a' && s[n] <= 'f')))
+            return false;
+    return n == 40 || n == 64;
+}
+
+static int pkg_git_in(const char *dest_dir, const char *args, const char *arg) {
+    Buf cmd; buf_init(&cmd);
+    buf_puts(&cmd, "git -C ");
+    bool ok = pkg_cmd_arg(&cmd, dest_dir);
+    buf_putc(&cmd, ' ');
+    buf_puts(&cmd, args);
+    if (arg) { buf_putc(&cmd, ' '); ok = pkg_cmd_arg(&cmd, arg) && ok; }
+    buf_puts(&cmd, " >" TUR_DEVNULL " 2>&1");
+    buf_putc(&cmd, '\0');
+    int rc = ok ? system(cmd.data) : -1;
+    buf_free(&cmd);
+    return rc;
+}
+
+/* lock-tracks-ref-not-resolved-commit: tur.lock records the commit a fetch
+ * resolved to, but the clone used to be built from the manifest's `:ref`
+ * alone -- so on a fresh checkout a branch-shaped `:ref` took whatever the
+ * branch pointed at NOW, and the only way past the integrity check was
+ * `tur fetch --update`, which re-pins to the new commit.  The recorded commit
+ * was the one thing `tur fetch` would not fetch.
+ *
+ * Clone as before, then move to the pinned commit.  `git clone --branch`
+ * cannot take a SHA, hence the second step.  A depth-1 fetch of the bare SHA
+ * is cheapest, but servers without `uploadpack.allowReachableSHA1InWant` (a
+ * plain `git daemon`, a file:// remote) refuse it; then the branch's history
+ * is fetched in full and the commit looked for there.  Neither step falls back
+ * to the branch tip.  If the commit is gone (history rewritten), that is an
+ * error and the clone is removed, so a later run cannot mistake it for the
+ * pinned tree. */
+char *pkg_git_fetch_pinned(const char *url, const char *ref, const char *pinned,
+                           const char *dest_dir) {
+    char *sha = pkg_git_fetch(url, ref, dest_dir);
+    if (!sha || !pinned) return sha;
+    if (!pkg_is_commit_id(pinned)) {
+        fprintf(stderr,
+            "spice: tur.lock pins '%s' to '%s', which is not a commit id;\n"
+            "  refusing to fetch it.  Re-pin deliberately with: tur fetch --update\n",
+            url, pinned);
+        free(sha);
+        (void)pkg_rm_rf(dest_dir);
+        return NULL;
+    }
+    if (strcmp(sha, pinned) == 0) return sha;
+    free(sha);
+    const char *co = "-c advice.detachedHead=false checkout -q --detach";
+    bool got = pkg_git_in(dest_dir, "fetch -q --depth 1 origin --", pinned) == 0 &&
+               pkg_git_in(dest_dir, co, pinned) == 0;
+    if (!got) {
+        /* Full history of what was cloned; a non-shallow clone just fetches. */
+        if (pkg_git_in(dest_dir, "fetch -q --unshallow origin", NULL) != 0)
+            (void)pkg_git_in(dest_dir, "fetch -q origin", NULL);
+        got = pkg_git_in(dest_dir, co, pinned) == 0;
+    }
+    sha = got ? pkg_git_resolve(dest_dir) : NULL;
+    if (sha && strcmp(sha, pinned) == 0) return sha;
+    free(sha);
+    fprintf(stderr,
+        "spice: tur.lock pins %s (ref: %s) to commit %s,\n"
+        "  and that commit cannot be fetched from it any more -- the history\n"
+        "  was rewritten, or the server will not serve it.  Not falling back to\n"
+        "  the branch: that would silently undo the pin.  If the change is\n"
+        "  expected, re-pin deliberately:\n"
+        "      tur fetch --update\n",
+        url, ref ? ref : "(default)", pinned);
+    (void)pkg_rm_rf(dest_dir);
+    return NULL;
+}
+
 /* ================================================================== */
 /* pkg_fetch_all -- BFS transitive resolution                          */
 /* ================================================================== */
@@ -2882,7 +2962,14 @@ bool pkg_fetch_all(const char *project_dir,
         fprintf(stderr, "spice: fetching '%s' from %s (ref: %s) ...\n",
                 it->name, it->url, it->ref ? it->ref : "(default)");
 
-        char *resolved = pkg_git_fetch(it->url, it->ref, dest);
+        /* Check out the commit the lock recorded, unless the consumer asked
+         * for new content or changed what the dep points at. */
+        const char *pin = NULL;
+        if (le && !update && le->resolved &&
+            ((!le->url && !it->url) || (le->url && it->url && strcmp(le->url, it->url) == 0)) &&
+            ((!le->ref && !it->ref) || (le->ref && it->ref && strcmp(le->ref, it->ref) == 0)))
+            pin = le->resolved;
+        char *resolved = pkg_git_fetch_pinned(it->url, it->ref, pin, dest);
         if (!resolved) {
             if (it->optional) {
                 /* tur-fetch-exit-code-optional-vs-required: an `:optional`
@@ -6247,14 +6334,57 @@ int cmd_pkg_add_cmake(int argc, char **argv) {
 /* CLI: tur fetch                                                       */
 /* ================================================================== */
 
+static int lock_sig_cmp(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/* `tur fetch --frozen`: everything a lock row PINS -- not when it was
+ * fetched -- as one string, entries sorted, so a before/after comparison says
+ * whether the fetch would have changed the lockfile.  Caller frees. */
+static char *lock_pin_signature(const PkgLockFile *lock) {
+    int n = lock ? lock->n_entries : 0;
+    char **rows = (char **)calloc(n ? (size_t)n : 1, sizeof(char *));
+    if (!rows) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (int i = 0; i < n; i++) {
+        const PkgLockEntry *e = &lock->entries[i];
+        Buf b; buf_init(&b);
+        buf_printf(&b, "%s|%d|%s|%s|%s|%s|%s|%s", e->name ? e->name : "",
+                   e->is_cmake ? 1 : 0, e->url ? e->url : "", e->ref ? e->ref : "",
+                   e->resolved ? e->resolved : "", e->sha256 ? e->sha256 : "",
+                   e->resolved_via ? e->resolved_via : "",
+                   e->system_version ? e->system_version : "");
+        for (int t = 0; t < e->n_transitive; t++)
+            buf_printf(&b, "|%s", e->transitive[t] ? e->transitive[t] : "");
+        rows[i] = tur_strdup(b.data ? b.data : "");
+        buf_free(&b);
+    }
+    qsort(rows, (size_t)n, sizeof(char *), lock_sig_cmp);
+    Buf all; buf_init(&all);
+    for (int i = 0; i < n; i++) { buf_puts(&all, rows[i]); buf_putc(&all, '\n'); free(rows[i]); }
+    free(rows);
+    char *r = tur_strdup(all.data ? all.data : "");
+    buf_free(&all);
+    return r;
+}
+
 int cmd_pkg_fetch(int argc, char **argv) {
     bool update  = false;
     bool dry_run = false;
     bool refetch = false;
+    bool frozen  = false;
     for (int i = 2; i < argc; i++) {
         if (strcmp(argv[i], "--update") == 0) update = true;
         else if (strcmp(argv[i], "--dry-run") == 0) dry_run = true;
         else if (strcmp(argv[i], "--refetch") == 0) refetch = true;
+        else if (strcmp(argv[i], "--frozen") == 0) frozen = true;
+    }
+    /* --frozen (the `npm ci` / `cargo --locked` shape): fetch exactly what
+     * tur.lock pins and fail if anything would change it -- a dep with no row,
+     * a moved :ref, a different commit or tree.  The lock is never written.
+     * What CI should run.  lock-tracks-ref-not-resolved-commit. */
+    if (frozen && update) {
+        fprintf(stderr, "tur fetch: --frozen and --update contradict each other\n");
+        return 2;
     }
     /* SF3: --refetch forces the source-build path for :prefer-system deps,
      * bypassing any system find_package copy. pkg_cmake_build reads this env
@@ -6320,7 +6450,14 @@ int cmd_pkg_fetch(int argc, char **argv) {
     memset(&lock, 0, sizeof(lock));
     lock.format_version = 1;
     /* Load existing lock (if any) */
-    pkg_lock_read("tur.lock", &lock);
+    bool had_lock = pkg_lock_read("tur.lock", &lock);
+    if (frozen && !had_lock) {
+        fprintf(stderr, "tur fetch --frozen: no tur.lock to hold the fetch to\n");
+        pkg_lock_free(&lock);
+        pkg_manifest_free(&m);
+        return 2;
+    }
+    char *frozen_sig = frozen ? lock_pin_signature(&lock) : NULL;
 
     /* tur-fetch-exit-code-optional-vs-required: exit status contract --
      *   0  everything fetched (or cached);
@@ -6370,6 +6507,18 @@ int cmd_pkg_fetch(int argc, char **argv) {
     }
     pkg_cmake_deps_free(fetch_deps, n_fetch_deps);
 
+    if (frozen) {
+        char *after = lock_pin_signature(&lock);
+        if (strcmp(after, frozen_sig) != 0) {
+            fprintf(stderr,
+                "tur fetch --frozen: tur.lock would change.  A dependency has no\n"
+                "  row, or its :url / :ref / commit / tree differs from the pin.\n"
+                "  Run `tur fetch` (or `tur fetch --update`) and commit the lock.\n");
+            ok = false;
+        }
+        free(after);
+        free(frozen_sig);
+    } else
     /* Write updated lock file */
     if (!pkg_lock_write("tur.lock", &lock)) ok = false;
 
@@ -6380,7 +6529,8 @@ int cmd_pkg_fetch(int argc, char **argv) {
         fprintf(stderr, "spice: fetch completed with errors\n");
         return 2;
     }
-    printf("spice: lock file written to tur.lock\n");
+    printf(frozen ? "spice: matches tur.lock (frozen)\n"
+                  : "spice: lock file written to tur.lock\n");
     if (optional_failed) {
         fprintf(stderr,
                 "spice: fetch completed; one or more optional deps could not "

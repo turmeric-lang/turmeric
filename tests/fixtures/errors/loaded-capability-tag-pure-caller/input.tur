@@ -1,0 +1,10 @@
+;; loaded-capability-tag-pure-caller -- the twin of
+;; unknown-capability-tag-pure-caller with stdlib/effects.tur loaded: `IO`
+;; resolves, propagates from `maybe-io`'s declared row, and `claims-pure`'s
+;; #fx{} fails TUR-E0009 -- the check the tag exists to buy.
+
+(load "stdlib/effects.tur")
+
+(defn maybe-io    [] #fx{IO} : int 0)
+(defn claims-pure [] #fx{}   : int (maybe-io))
+(defn main        [] : int 0)

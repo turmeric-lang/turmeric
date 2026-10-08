@@ -1,0 +1,122 @@
+;; reads-frame-verification-ignores-a-callee-write-frame: a `#reads p` measure
+;; also promises its body does not CHANGE p, and the loop-invariant frozen grant
+;; leans on that promise with no runtime backstop -- a proved invariant's check
+;; is elided.  So the grant now asks the measure's own body, and withholds
+;; itself unless every use of a framed parameter there is a read it can see.
+;;
+;; Every loop below holds a region marker over `v`, calls a `#reads v` measure
+;; in its body, and keeps a bound the measure is the only thing that could
+;; break.  Entry discharges in every loop (from `vlen`'s refined return):
+;;
+;;   - clean:    `count2` only hands `v` to `vec-len` -- the grant stands, and
+;;               preservation is PROVED.  The positive control.
+;;   - direct:   `liar` calls `vec-push! v`, whose `#writes [v]` names it.
+;;               TUR-W0383, grant withheld.
+;;   - written:  `liar2` reaches a user `#writes [v]` callee.  TUR-W0383.
+;;   - wrapped:  `liar3` reaches an UNANNOTATED callee -- maybe a writer, maybe
+;;               not.  No warning (no evidence), but no grant either.
+;;   - aliased:  `liar4` binds `v` to a local first.  Silent, withheld.
+;;   - returned: `alias-of` hands `v` back; the loop body pushes through the
+;;               result.  Silent, withheld.
+;;   - via-id:   no `#reads` anywhere -- `id` is a plain PURE function that
+;;               returns its argument, and the body pushes through that.  The
+;;               Form-level grant approved a pure callee in any position, so
+;;               this proved `(<= i (vlen v))` preserved and elided the check;
+;;               the typed walk over the elaborated loop now sees a non-scalar
+;;               value flowing into a writer.
+(defn vlen [^borrow v : (Vec int)] #reads v : #refine{ r : int | (>= r 0) }
+  (vec-len v))
+
+(defn count2 [v : (Vec int)] #reads v : int
+  (+ (vec-len v) (vec-len v)))
+
+(defn liar [v : (Vec int)] #reads v : int
+  (do (vec-push! v 7) 0))
+
+(defn push2 [v : (Vec int) val : int] #writes [v] : nil
+  (vec-push! v val))
+
+(defn liar2 [v : (Vec int)] #reads v : int
+  (do (push2 v 7) 0))
+
+(defn grow [v : (Vec int)] : nil
+  (vec-push! v 7))
+
+(defn liar3 [v : (Vec int)] #reads v : int
+  (do (grow v) 0))
+
+(defn liar4 [v : (Vec int)] #reads v : int
+  (let [w v]
+    (do (vec-push! w 7) 0)))
+
+(defn alias-of [v : (Vec int)] #reads v : (Vec int)
+  v)
+
+(defn id [v : (Vec int)] : (Vec int)
+  v)
+
+(defn clean [^borrow v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (and (< i (vlen v)) (< i 3)) :invariant (<= i (vlen v))
+        (count2 v)
+        (set! i (+ i 1)))
+      i)))
+
+(defn direct [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (and (< i (vlen v)) (< i 3)) :invariant (<= i (vlen v))
+        (liar v)
+        (set! i (+ i 1)))
+      i)))
+
+(defn written [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (and (< i (vlen v)) (< i 3)) :invariant (<= i (vlen v))
+        (liar2 v)
+        (set! i (+ i 1)))
+      i)))
+
+(defn wrapped [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (and (< i (vlen v)) (< i 3)) :invariant (<= i (vlen v))
+        (liar3 v)
+        (set! i (+ i 1)))
+      i)))
+
+(defn aliased [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (and (< i (vlen v)) (< i 3)) :invariant (<= i (vlen v))
+        (liar4 v)
+        (set! i (+ i 1)))
+      i)))
+
+(defn returned [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (and (< i (vlen v)) (< i 3)) :invariant (<= i (vlen v))
+        (vec-push! (alias-of v) 7)
+        (set! i (+ i 1)))
+      i)))
+
+(defn via-id [^mut v : (Vec int)] : int
+  (let [__frozen (& v)]
+    (let [^mut i 0]
+      (while (and (< i (vlen v)) (< i 3)) :invariant (<= i (vlen v))
+        (vec-push! (id v) 7)
+        (set! i (+ i 1)))
+      i)))
+
+(defn main [] : int
+  (println (clean (vec-of 1)))
+  (let [^mut a (vec-of 1)] (println (direct a)) (println (vec-len a)))
+  (let [^mut b (vec-of 1)] (println (written b)) (println (vec-len b)))
+  (let [^mut c (vec-of 1)] (println (wrapped c)) (println (vec-len c)))
+  (let [^mut d (vec-of 1)] (println (aliased d)) (println (vec-len d)))
+  (let [^mut g (vec-of 1)] (println (returned g)) (println (vec-len g)))
+  (let [^mut h (vec-of 1)] (println (via-id h)) (println (vec-len h)))
+  0)

@@ -17,14 +17,14 @@ terminal-first TUI, standalone HTML export, and a scriptable `exec` mode.
 Clone `turmeric-spices` next to your `turmeric` checkout:
 
 ```sh
-git clone https://github.com/rjungemann/turmeric-spices ../turmeric-spices
+git clone https://github.com/turmeric-lang/turmeric-spices ../turmeric-spices
 ```
 
 Declare the spice in your project's `build.tur`:
 
 ```turmeric no-check
 :spices #map{
-  "notebook" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "notebook" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "notebook-v0.1.0"
                   :subdir "spices/notebook"}
 }
@@ -32,7 +32,7 @@ Declare the spice in your project's `build.tur`:
 ```sweet-exp
 :spices
 #map{
-  "notebook" #map{:url    "https://github.com/rjungemann/turmeric-spices"
+  "notebook" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
                   :ref    "notebook-v0.1.0"
                   :subdir "spices/notebook"}
 }
@@ -313,6 +313,6 @@ merged onto the built-in map.
 
 ## Further Reading
 
-- [`docs/notebook-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/notebook-spice-plan.md) -- full milestone plan
-- [`../turmeric-spices/spices/notebook/README.md`](https://github.com/rjungemann/turmeric-spices/blob/main/spices/notebook/README.md) -- spice README
+- [`docs/notebook-spice-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/notebook-spice-plan.md) -- full milestone plan
+- [`../turmeric-spices/spices/notebook/README.md`](https://github.com/turmeric-lang/turmeric-spices/blob/main/spices/notebook/README.md) -- spice README
 - [`developing-spices-guide.md`](developing-spices-guide.md) -- how to develop and publish spices

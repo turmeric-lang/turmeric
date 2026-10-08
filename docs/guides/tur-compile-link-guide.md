@@ -87,7 +87,7 @@ share one implementation and cannot drift.
 ## `tur build --runtime=` -- how the runtime gets linked
 
 A program that uses runtime facilities (maps, arc, reactor, ...) needs the
-`src/runtime/*.c` sources linked in. Three modes:
+`src/runtime/*.c` sources linked in. Four modes:
 
 - `--runtime=auto` (the default) -- link the lean, non-sanitized
   `libturt_runtime.a` archive when it is locatable, else transparently fall
@@ -100,6 +100,9 @@ A program that uses runtime facilities (maps, arc, reactor, ...) needs the
   so the binary is unchanged.
 - `--runtime=source` -- force recompiling the bare runtime sources
   (`cc` recompiles `hamt.c` etc. on every build).
+- `--runtime=split` -- what `auto` does, but it insists on the preamble split
+  described [below](#the-runtime-preamble----compiled-once-not-per-program)
+  and says so when the split declines.
 
 ```
 tur build --runtime=lib foo.tur -o foo     # force the archive link
@@ -108,7 +111,7 @@ tur build --runtime=source foo.tur -o foo  # force autolink+recompile sources
 
 The mode also applies to `tur compile` (the `.link` sidecar then records the
 runtime link) and composes with `--split-build`.
-`TUR_RUNTIME=auto|lib|source` in the environment seeds the default for every
+`TUR_RUNTIME=auto|lib|source|split` in the environment seeds the default for every
 build (a CLI `--runtime=` flag still wins), so CI can flip the whole suite
 over with one env var.
 
@@ -133,9 +136,45 @@ or its directory) -> `<tur_exe_dir>/src` -> `<turmeric_root>/build/src`. A
 prefix-installed SDK's `libturi.a` is found automatically once `-lturi` is on
 the line. Set `TUR_RUNTIME_LIB` if your archive lives elsewhere.
 
+### The runtime preamble -- compiled once, not per program
+
+Every emitted translation unit opens with the same runtime preamble, about half
+the C of a one-line program. On Linux and Windows a default `tur build` does not
+hand that preamble to `cc`. It swaps in just the declarations and links the
+definitions from **`libturt_preamble.a`**, which was compiled once when `tur` was
+built. On a one-line program that halves the `cc` call. Across the fixture
+suite it is about 10% of wall-clock.
+
+The swap is all-or-nothing and it fails closed. A build keeps the whole preamble
+inline, which is slower and always correct, whenever any of these holds:
+
+- `libturt_preamble.a` is not next to `libturt_runtime.a`, for example after a
+  `cmake --build build --target tur`, which builds neither archive.
+- `TUR_CC_FLAGS` contains `-fsanitize`. The archive is not instrumented, so
+  ASan or TSan would stop seeing the preamble's code.
+- `--debug` is on, `--target wasm` is set, or `--runtime=lib`/`source` is set.
+- The program is `#lang r7rs`, which has its own prelude split.
+- The compiler's preamble no longer matches the committed split artifact (see
+  `tools/gen-runtime-split.py`).
+- The host is macOS, where the split is not the default yet.
+
+Only builds that compile the whole program in one `cc` call take the split:
+`tur build <file>`, `tur run`, `tur test`, and a project with a single `main`.
+`tur emit-c` always writes the whole, self-contained TU. `tur compile`,
+`--split-build`, `--shared` and separately compiled projects do not swap.
+
+```
+TUR_PREAMBLE_SPLIT=0 tur build foo.tur -o foo  # keep the whole preamble inline
+TUR_PREAMBLE_SPLIT=1 tur build foo.tur -o foo  # opt in on macOS
+tur build --runtime=split foo.tur -o foo       # insist; says so if it declines
+```
+
+To see which way a build went, run it with `TUR_SHOW_CC=1`. The link line names
+`-lturt_preamble` when the build took the split.
+
 ## Why this exists
 
-See [docs/archive/tur-link-and-build-split-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/tur-link-and-build-split-plan.md).
+See [docs/archive/tur-link-and-build-split-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/tur-link-and-build-split-plan.md).
 The short version: splitting the compile from the link makes the object
 compiles cacheable (ccache hits on unchanged runtime sources across every
 fixture and every run) and stops re-compiling the runtime per build -- the

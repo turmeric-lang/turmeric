@@ -1,0 +1,52 @@
+;; generic-call-result-binds-from-expected -- a generic call whose arguments
+;; bind SOME of its result variables but not all, inside a generic body whose
+;; type variables share the callee's names.
+;;
+;; `ok [A B] [x : A] : (Result A B)` binds A from x and leaves its own B.
+;; Inside `result-map [A B E]` that B survived the instantiation BY NAME and
+;; read as result-map's B: `(ok (f v))` was `(Result B B)`, `(err e)` was
+;; `(Result A E)`, and each spec assigned a `Result__float__float` into the
+;; match's `Result__float__int` temp -- a cc error for any `result-map` whose
+;; function changes the ok type.  The emitter then re-captured the name a
+;; second time, rehydrating ok's `B := E` from the enclosing spec's `B`.
+;;
+;; The `Ei` half is the generic `either-map` shape that blocked making
+;; stdlib/either.tur generic: arms routed through generic constructor helpers.
+;;
+;; See docs/archive/generic-call-result-leaks-callee-tyvar-names.md.
+
+(defn half [x : int] : float (/ (as float x) 2.0))
+(defn label [x : float] : cstr (if (> x 3.0) "big" "small"))
+(defn twice [x : float] : float (* x 2.0))
+
+;; A generic relay: result-map's own spec is minted from inside another spec.
+(defn relay [A B E] [r : (Result A E) ^fat f : (fn [A] B)] : (Result B E)
+  (result-map r f))
+
+(defdata Ei :copy [L R] (Lf L) (Rt R))
+(defn ei-left [L R] [x : L] : (Ei L R) (Lf x))
+(defn ei-right [L R] [y : R] : (Ei L R) (Rt y))
+(defn ei-map [L A B] [^fat f : (fn [A] B) e : (Ei L A)] : (Ei L B)
+  (match e (Lf l) (ei-left l) (Rt r) (ei-right (f r))))
+(defn ei-show [e : (Ei int float)] : cstr
+  (match e (Lf l) "left" (Rt r) (if (> r 3.0) "big-right" "small-right")))
+(defn inc [x : int] : int (+ x 1))
+;; The same map with constructor arms, the spelling either.tur uses.
+(defn ei-map2 [L A B] [^fat f : (fn [A] B) e : (Ei L A)] : (Ei L B)
+  (match e (Lf l) (Lf l) (Rt r) (Rt (f r))))
+
+(defn main [] : int
+  (println (ok-val (result-map (:: (Ok 41) (Result int int)) half)))           ; 20.5
+  (println (err-val (result-map (:: (Err 9) (Result int int)) half)))          ; 9
+  (println (ok-val (result-map (:: (Ok 7.1) (Result float int)) label)))       ; big
+  (println (ok-val (result-map (:: (Ok 7.1) (Result float cstr)) twice)))      ; 14.2
+  (println (err-val (result-map (:: (Err "bad") (Result float cstr)) twice)))  ; bad
+  (println (ok-val (relay (:: (Ok 3.25) (Result float int)) label)))           ; big
+  (println (err-val (relay (:: (Err 5) (Result float int)) label)))            ; 5
+  (println (ei-show (ei-map half (:: (Rt 41) (Ei int int)))))                  ; big-right
+  (println (ei-show (ei-map half (:: (Lf 9) (Ei int int)))))                   ; left
+  (println (match (ei-map inc (:: (Lf 9) (Ei int int))) (Lf l) l (Rt r) r))    ; 9
+  (println (match (ei-map inc (:: (Rt 9) (Ei int int))) (Lf l) l (Rt r) r))    ; 10
+  (println (ei-show (ei-map2 half (:: (Rt 41) (Ei int int)))))                 ; big-right
+  (println (match (ei-map2 inc (Lf 9)) (Lf l) l (Rt r) r))                     ; 9
+  0)

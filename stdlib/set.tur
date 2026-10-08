@@ -379,7 +379,7 @@
 ;;;
 ;;; Since: Phase F3-5 (cross-plan-followups)
 
-(defn set-eq-cmp? [a : int b : int ^borrow ^fat cmp-fn]
+(defn set-eq-cmp? [A] [a : int b : int ^borrow ^fat cmp-fn : (fn [A A] bool)]
   #fx{}
   : bool
   ```c

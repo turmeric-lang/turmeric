@@ -1,0 +1,30 @@
+;; module-members-skip-effect-row-checking: a defn inside a (defmodule ...)
+;; body is effect-row checked like a top-level one -- its declared row is
+;; resolved (TUR-E0026 for an undeclared name), inferred and validated
+;; (TUR-E0009), including a row that grows through a call to a sibling member
+;; and a perform of an effect the row omits.
+
+(defmodule m
+  (export loud via-sibling typo pinger)
+
+  (defeffect Ping [] :int)
+
+  ;; println is #fx{IO}; #fx{} promises it does not print.
+  (defn loud [] #fx{} : int
+    (do (println "x") 0))
+
+  ;; noisy is unannotated, so its row is inferred ({IO}); via-sibling's #fx{}
+  ;; must see it through the call.
+  (defn noisy [] : int
+    (do (println "y") 1))
+  (defn via-sibling [] #fx{} : int
+    (noisy))
+
+  ;; No defeffect declares Typo.
+  (defn typo [] #fx{Typo} : int 0)
+
+  ;; Performs Ping, which its row omits.
+  (defn pinger [] #fx{} : int
+    (perform (Ping))))
+
+(defn main [] : int 0)

@@ -332,11 +332,24 @@ VCSort rt_sort_of_kind(TypeKind k) {
  * like a defn's rather than being silently decorative.  Returns the new body
  * (the original when nothing was injected).  Must run while the function's
  * inner scope is still current -- the predicate is elaborated in it. */
-static bool rt_expr_definitely_impure(const Expr *x);
+static bool rt_pred_observably_impure(const Expr *x);
 
 /* C2 (#reads): does this predicate reference a `#reads`-annotated measure?
  * Defined after rt_resolve_fn; forward-declared here for rt_inject_param_checks. */
 static bool rt_pred_reads_measure(Elab *e, const Form *f);
+
+/* loop-invariants / C2: is every occurrence of `name` in `f` at a position
+ * some callee promised not to write?  Defined with the other `li_*` walkers;
+ * forward-declared here because li_register_site builds a loop's frozen set
+ * with it, and registration is the only point where the loop's scope is live
+ * to check an approved callee name against its global. */
+static bool li_name_reads_only(Elab *e, const Form *f, const char *name,
+                               uint32_t depth);
+
+/* The typed half of the same question, over the ELABORATED loop: is every use
+ * of the binding `b` in `x` a read?  Defined beside the `#reads` write walk it
+ * reuses (rw_scan). */
+static bool rw_binding_reads_only(const Expr *x, Binding *b);
 
 /* CT1: a contract predicate whose EVALUATION does something observable.
  *
@@ -356,7 +369,7 @@ static bool rt_pred_reads_measure(Elab *e, const Form *f);
  * refinement experiment off. */
 static void rt_diag_impure_pred(Elab *e, const Expr *pred_e, Span span) {
     (void)e;
-    if (!pred_e || !rt_expr_definitely_impure(pred_e)) return;
+    if (!pred_e || !rt_pred_observably_impure(pred_e)) return;
     diag_emit_with_code(DIAG_ERROR, span, TUR_E0375_REFINE_EFFECTFUL,
         "contract predicate has side effects; predicates must be pure");
     diag_emit(DIAG_NOTE, span,
@@ -364,26 +377,111 @@ static void rt_diag_impure_pred(Elab *e, const Expr *pred_e, Span span) {
         "check is compiled in becomes observable");
 }
 
+/* The basename of the file `sp` is in, or NULL when it has none. */
+static const char *rt_site_basename(Span sp) {
+    const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
+    if (!path) return NULL;
+    const char *base = path;
+    for (const char *q = path; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+    return base;
+}
+
+/* The -at helper, when the stdlib in use binds it. */
+static Binding *rt_contract_check_at_fn(Elab *e) {
+    return e->sym_tur_contract_check_at
+        ? scope_lookup(&e->global, e->sym_tur_contract_check_at) : NULL;
+}
+
+Expr *rt_contract_check_call(Elab *e, Binding *check_fn, Expr *pred_e,
+                             const char *msg, Span site, Span span) {
+    if (!pred_e || !msg) return NULL;
+    Binding *at_fn = rt_contract_check_at_fn(e);
+    const char *base = at_fn ? rt_site_basename(site) : NULL;
+    if (!base) at_fn = NULL;
+    if (!at_fn && !check_fn) return NULL;
+    uint32_t n = at_fn ? 4 : 2;
+    Expr **args = (Expr **)arena_alloc(e->arena, n * sizeof(Expr *));
+    args[0] = pred_e;
+    Expr *m = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+    m->as.s.p   = msg;
+    m->as.s.len = (uint32_t)strlen(msg);
+    args[1] = m;
+    if (at_fn) {
+        size_t bl = strlen(base);
+        Expr *f = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
+        f->as.s.p   = arena_strdup(e->arena, base, bl);
+        f->as.s.len = (uint32_t)bl;
+        args[2] = f;
+        Expr *l = expr_new(e->arena, EX_INT_LIT, TYPE_INT, span);
+        l->as.i = (int64_t)site.line;
+        args[3] = l;
+    }
+    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
+    check->as.call_.fn_binding    = at_fn ? at_fn : check_fn;
+    check->as.call_.args          = args;
+    check->as.call_.n_args        = n;
+    check->as.call_.fn_expr       = NULL;
+    check->as.call_.dict_arg      = NULL;
+    check->as.call_.is_poly_call  = false;
+    check->as.call_.poly_arg_mask = 0;
+    return check;
+}
+
+const char *rt_contract_message(Elab *e, const char *what, const char *subject,
+                                const Form *pred) {
+    Buf b; buf_init(&b);
+    buf_puts(&b, what);
+    if (subject && *subject) buf_printf(&b, " in %s", subject);
+    /* Where the predicate is written -- in the message only when the panic's
+     * own "at" cannot carry it, i.e. when there is no -at helper to call
+     * (rt_contract_check_call). */
+    const char *path = (pred && pred->span.line && !(rt_contract_check_at_fn(e) &&
+                                                     rt_site_basename(pred->span)))
+                     ? diag_file_path(pred->span.file_id) : NULL;
+    if (path) {
+        const char *base = path;
+        for (const char *q = path; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
+        buf_printf(&b, " at %s:%u", base, (unsigned)pred->span.line);
+    }
+    if (pred) {
+        Buf p; buf_init(&p);
+        form_print(&p, pred);
+        buf_putc(&p, '\0');
+        buf_puts(&b, ": ");
+        size_t pl = strlen(p.data);
+        if (pl > 160) { buf_write(&b, p.data, 157); buf_puts(&b, "..."); }
+        else buf_puts(&b, p.data);
+        buf_free(&p);
+    }
+    buf_putc(&b, '\0');
+    size_t n = strlen(b.data);
+    char *out = (char *)arena_alloc(e->arena, n + 1);
+    memcpy(out, b.data, n + 1);
+    buf_free(&b);
+    return out;
+}
+
 Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
                                     Binding **params, uint32_t n_params,
                                     const Form **ct_preds, const char **ct_vars,
                                     const uint32_t *ct_idx, uint32_t n_ct,
-                                    Span span) {
+                                    const char *subject, Span span) {
     if (!check_fn || !body) return body;
     for (uint32_t ci = 0; ci < n_ct; ci++) {
         if (ct_preds[ci] == NULL) continue;
         uint32_t pi = ct_idx[ci];
         if (pi >= n_params || !params[pi]) continue;
         /* C2 (#reads): a param whose refinement is a `#reads`-annotated measure
-         * is statically checked at its CROSSINGS, never at runtime.  The measure
-         * is impure by construction (that is why it needs the grant at all), so a
-         * runtime entry contract for it is impossible -- it would be TUR-E0375,
-         * "predicate has side effects" -- and would in any case defeat the
-         * trusted-congruence grant.  Suppress the entry-check injection here; the
-         * caller-side crossing obligation is the enforcement point (proven ->
-         * elided; unknown -> a kept impure check that is itself E0375, so a caller
-         * that cannot discharge the crossing still fails to compile).  The grant's
-         * soundness is pinned by tests/fixtures/errors/refine-stateful-*. */
+         * is statically checked at its CROSSINGS, never at runtime.  Suppress the
+         * entry-check injection here; the caller-side crossing obligation is the
+         * enforcement point (proven -> elided; unknown -> reported, a warning or
+         * under --strict-refine an error, as a proof-only obligation -- see
+         * `reads_no_runtime` in refine_resolve_call_sites).  This is a choice of
+         * enforcement point, not a purity verdict: the CT1 gate itself accepts a
+         * `#reads` measure in every contract position (rt_pred_observably_impure),
+         * and `:pre`, `:post`, a return refinement and `:invariant` keep their
+         * runtime checks.  The grant's soundness is pinned by
+         * tests/fixtures/errors/refine-stateful-*. */
         if (rt_pred_reads_measure(e, ct_preds[ci])) continue;
         const char *var_nm = ct_vars[ci];
 
@@ -424,20 +522,15 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
             check_expr = let_cv;
         }
 
-        Expr **ck_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-        ck_args[0] = check_expr;
-        Expr *ck_msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
-        ck_msg->as.s.p = "Contract violated";
-        ck_msg->as.s.len = 17;
-        ck_args[1] = ck_msg;
-        Expr *ck_call = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
-        ck_call->as.call_.fn_binding  = check_fn;
-        ck_call->as.call_.args        = ck_args;
-        ck_call->as.call_.n_args      = 2;
-        ck_call->as.call_.fn_expr     = NULL;
-        ck_call->as.call_.dict_arg    = NULL;
-        ck_call->as.call_.is_poly_call = false;
-        ck_call->as.call_.poly_arg_mask = 0;
+        /* Name the parameter and its predicate, not just "Contract violated"
+         * (panic-location-names-the-runtime-not-the-call-site). */
+        char whatbuf[160];
+        snprintf(whatbuf, sizeof whatbuf, "Contract violated by parameter '%s'",
+                 params[pi]->name ? params[pi]->name->name : "?");
+        const char *m = rt_contract_message(e, whatbuf, subject, ct_preds[ci]);
+        Expr *ck_call = rt_contract_check_call(e, check_fn, check_expr, m,
+                                               ct_preds[ci]->span, span);
+        if (!ck_call) continue;
 
         Expr **do2 = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
         do2[0] = ck_call;
@@ -465,7 +558,7 @@ Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
  * and silently not enforced. */
 Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
                            const Form *pred, const char *var_name,
-                           const char *fail_msg, Span span) {
+                           const char *fail_msg, const char *subject, Span span) {
     if (!check_fn || !body || !pred) return body;
     const Symbol *bind_sym = e->sym_result;
     if (var_name)
@@ -478,20 +571,9 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     rt_diag_impure_pred(e, pred_e, span);
     pred_e = elab_saffron_truthy(e, pred_e, span);   /* D6, see rt_inject_param_checks */
 
-    Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-    args[0] = pred_e;
-    Expr *msg = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
-    msg->as.s.p   = fail_msg;
-    msg->as.s.len = (uint32_t)strlen(fail_msg);
-    args[1] = msg;
-    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
-    check->as.call_.fn_binding   = check_fn;
-    check->as.call_.args         = args;
-    check->as.call_.n_args       = 2;
-    check->as.call_.fn_expr      = NULL;
-    check->as.call_.dict_arg     = NULL;
-    check->as.call_.is_poly_call = false;
-    check->as.call_.poly_arg_mask = 0;
+    const char *full_msg = rt_contract_message(e, fail_msg, subject, pred);
+    Expr *check = rt_contract_check_call(e, check_fn, pred_e, full_msg, pred->span, span);
+    if (!check) return body;
 
     Expr *result_var = expr_new(e->arena, EX_VAR, body->type, span);
     result_var->as.var.binding = result_b;
@@ -510,6 +592,34 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
     let_e->as.let_.n = 1;
     let_e->as.let_.body = inner_do;
     return let_e;
+}
+
+/* An early `(return v)` leaves before the whole-body wrap above sees a value,
+ * so `v` gets the same checks at the return itself (early-return-bypasses-
+ * return-refinement).  The predicate is elaborated afresh per site, in a scope
+ * of its own: the result binding must not leak into the code after the
+ * `return`, where it would shadow a user name spelled the same. */
+Expr *rt_check_returned_value(Elab *e, Expr *value, Span span) {
+    const RetContract *rc = e ? e->ret_contract : NULL;
+    if (!rc || !value) return value;
+    Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
+    if (!check_fn) return value;
+    Scope s;
+    scope_init(&s, e->scope);
+    e->scope = &s;
+    if (rc->post)
+        value = rt_wrap_return_check(e, value, check_fn, rc->post, NULL,
+                                     "Postcondition failed", rc->subject, span);
+    if (rc->ret)
+        value = rt_wrap_return_check(e, value, check_fn, rc->ret, rc->ret_var,
+                                     "Return contract violated", rc->subject, span);
+    if (rc->class_ret)
+        value = rt_wrap_return_check(e, value, check_fn, rc->class_ret,
+                                     rc->class_ret_var,
+                                     "Class result contract violated", rc->subject, span);
+    e->scope = s.parent;
+    scope_free(&s);
+    return value;
 }
 
 /* True when contract checks are being emitted for this build.  `--no-contracts`
@@ -536,7 +646,7 @@ Expr *elab_loop_invariant_pred(Elab *e, const Form *pred, Span span) {
     Expr *pred_e = elab_form(e, (Form *)pred);
     if (!pred_e) return NULL;
     rt_diag_impure_pred(e, pred_e, span);
-    if (rt_expr_definitely_impure(pred_e)) return NULL;
+    if (rt_pred_observably_impure(pred_e)) return NULL;
     pred_e = elab_saffron_truthy(e, pred_e, span);   /* D6, as for :pre */
     if (!type_eq(pred_e->type, TYPE_BOOL)) {
         diag_emit(DIAG_ERROR, span,
@@ -550,22 +660,8 @@ Expr *elab_loop_invariant_pred(Elab *e, const Form *pred, Span span) {
 Expr *li_contract_check(Elab *e, Expr *pred_e, const char *msg, Span span) {
     if (!pred_e || !msg) return NULL;
     Binding *check_fn = scope_lookup(&e->global, e->sym_tur_contract_check);
-    if (!check_fn) return NULL;
-    Expr **args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-    args[0] = pred_e;
-    Expr *m = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, span);
-    m->as.s.p   = msg;
-    m->as.s.len = (uint32_t)strlen(msg);
-    args[1] = m;
-    Expr *check = expr_new(e->arena, EX_CALL, TYPE_NIL, span);
-    check->as.call_.fn_binding    = check_fn;
-    check->as.call_.args          = args;
-    check->as.call_.n_args        = 2;
-    check->as.call_.fn_expr       = NULL;
-    check->as.call_.dict_arg      = NULL;
-    check->as.call_.is_poly_call  = false;
-    check->as.call_.poly_arg_mask = 0;
-    return check;
+    /* `span` is the invariant's own: the panic names it. */
+    return rt_contract_check_call(e, check_fn, pred_e, msg, span, span);
 }
 
 /* Free symbols of `f` a loop site cares about: every symbol, minus list heads
@@ -585,7 +681,8 @@ static void li_note_mutable_global(Elab *e, const Form *f, uint32_t depth,
 }
 
 LoopInvSite *li_register_site(Elab *e, const Form *call, const Form *cond,
-                              const Form *inv, uint32_t body_start, Span span) {
+                              const Form *inv, uint32_t body_start, Span span,
+                              const Expr *while_e) {
     if (!e || !call || !inv) return NULL;
     if (e->n_loop_inv_sites == e->cap_loop_inv_sites) {
         uint32_t ncap = e->cap_loop_inv_sites ? e->cap_loop_inv_sites * 2 : 8;
@@ -640,6 +737,63 @@ LoopInvSite *li_register_site(Elab *e, const Form *call, const Form *cond,
         snprintf(buf, sizeof(buf), "the loop reads the mutable global '%s', "
                  "which a call in the body could change", mg);
         site->decline = arena_strdup(e->arena, buf, strlen(buf));
+    }
+
+    /* C2 / #reads: the loop's FROZEN SET -- the shared borrows live here that
+     * the loop's condition and body are promised not to write.  Decided here,
+     * at registration, for two independent reasons: the borrow checker only
+     * knows what is live at this point, and `li_name_reads_only`'s shadow
+     * check needs the loop's scope to ask whether an approved callee name
+     * still resolves to the binding its promise was read off.
+     *
+     * Two carve-outs on the candidates, both the crossing's
+     * (refine_note_call_site) and for its reasons:
+     *
+     *   - a SHADOWED borrow is skipped.  The encoder matches a frozen name by
+     *     spelling, so an inner binding of the same name would otherwise be
+     *     read as frozen when it is not.
+     *   - a MUTABLE GLOBAL is never frozen.  It is written by name rather than
+     *     passed, so borrowing it does not stop a callee's `(set! *g* ...)`.
+     *
+     * And one the crossing does not make: only `BK_IMMUT`.  A `&mut` borrow IS
+     * the write channel a frozen set exists to rule out.
+     *
+     * The invariant is not walked for write promises -- it is gated
+     * non-observably-impure already, so evaluating it cannot write. */
+    {
+        uint32_t nb = 0;
+        for (const Scope *sc = e->scope; sc; sc = sc->parent)
+            for (const ScopeBorrow *bo = sc->borrows; bo; bo = bo->next)
+                if (bo->kind == BK_IMMUT && bo->binding && bo->binding->name) nb++;
+        if (nb) {
+            const char **fz = (const char **)arena_alloc(e->arena,
+                                                         nb * sizeof(char *));
+            uint32_t k = 0;
+            for (const Scope *sc = e->scope; sc; sc = sc->parent)
+                for (const ScopeBorrow *bo = sc->borrows; bo; bo = bo->next) {
+                    if (bo->kind != BK_IMMUT) continue;
+                    Binding *b = bo->binding;
+                    if (!b || !b->name) continue;
+                    if (scope_lookup(e->scope, b->name) != b) continue;
+                    if (b->is_global && b->is_mut) continue;
+                    const char *nm = b->name->name;
+                    if (!li_name_reads_only(e, cond, nm, 0)) continue;
+                    bool ok = true;
+                    for (uint32_t i = body_start; i < call->as.list.len && ok; i++)
+                        ok = li_name_reads_only(e, call->as.list.items[i], nm, 0);
+                    /* The Form walk cannot see what a call RETURNS, so it
+                     * approved `(vec-push! (id v) 7)` -- `id` is pure, and a
+                     * pure callee is safe in any position -- and proved a bound
+                     * the push then broke, with the check elided.  The typed
+                     * walk over the elaborated loop sees that `(id v)` is a
+                     * non-scalar value flowing into a writer's slot.  Both must
+                     * agree; the Form walk stays for the shadow check it makes
+                     * by name. */
+                    if (ok) ok = while_e && rw_binding_reads_only(while_e, b);
+                    if (ok) fz[k++] = nm;
+                }
+            if (k) { site->frozen_names = fz; site->n_frozen = k; }
+        }
     }
     return site;
 }
@@ -704,6 +858,11 @@ typedef struct RtPureCtx {
      * the rest of the walk (a frame opened afterwards loses a memo it could
      * have kept; that is a cost, never a wrong verdict). */
     bool     leaned_missing;
+    /* CT1 gate only (rt_pred_observably_impure): a call the PREDICATE makes
+     * directly to a `#reads` measure is UNKNOWN rather than walked.  Depth 0
+     * only, so every callee's verdict -- and its memo -- is exactly what it
+     * would be without the flag. */
+    bool     reads_exempt;
 } RtPureCtx;
 
 static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x);
@@ -922,9 +1081,13 @@ static RtPurity rt_classify_expr(RtPureCtx *c, const Expr *x) {
     case EX_CALL: {
         /* An indirect call (`fn_expr`) or a rank-2 poly call can land
          * anywhere, so there is no callee to interrogate. */
+        Binding *callee = x->as.call_.fn_binding;
         RtPurity r = (x->as.call_.fn_expr || x->as.call_.is_poly_call)
                    ? RT_P_UNKNOWN
-                   : rt_classify_binding(c, x->as.call_.fn_binding);
+                   : (c->reads_exempt && c->depth == 0 && callee &&
+                      callee->reads_params_mask != 0)
+                   ? RT_P_UNKNOWN
+                   : rt_classify_binding(c, callee);
         for (uint32_t i = 0; i < x->as.call_.n_args; i++)
             r = rt_p_join(r, rt_classify_expr(c, x->as.call_.args[i]));
         return r;
@@ -943,7 +1106,7 @@ static RtPurity rt_classify_binding_top(Binding *b) {
     if (b->refine_purity) return (RtPurity)(b->refine_purity - 1);
     /* The declared-row veto lives in rt_classify_binding itself, so it is
      * memoized and transitive; nothing to add at the top. */
-    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false };
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false, false };
     return rt_classify_binding(&c, b);
 }
 
@@ -956,9 +1119,21 @@ bool rt_binding_is_pure(Binding *b) {
 /* CT1/RT: does evaluating this elaborated predicate DO something observable?
  * Only a proven effect counts -- an unrecognised form answers false, so a
  * predicate the walk cannot model is never diagnosed and never blocks
- * elision on suspicion alone. */
-static bool rt_expr_definitely_impure(const Expr *x) {
-    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false };
+ * elision on suspicion alone.
+ *
+ * C2 (#reads): a direct call to a `#reads` measure does not count.  CT1's
+ * concern is a check whose evaluation changes state, so that compiling it in
+ * or out is observable; a measure that only READS borrowed state is neutral
+ * however often it runs.  Its body is still inline C (that is why it needs the
+ * annotation), so the plain walk calls it IMPURE -- the annotation is the
+ * trusted claim that it is not, the same trust a parameter refinement already
+ * extends to it (TUR-W0383 reports the violations the compiler can see).  The
+ * measure's ARGUMENTS are still walked, so `(vlen (next-vec!))` stays
+ * E0375, and so does an unannotated wrapper around one: only the predicate's
+ * own call sites are exempt.  One gate, so every contract position --
+ * parameter, `:pre`, `:post`/return, `:invariant` -- agrees. */
+static bool rt_pred_observably_impure(const Expr *x) {
+    RtPureCtx c = { { 0 }, 0, UINT32_MAX, RT_PURE_MAX_NODES, false, true };
     return rt_classify_expr(&c, x) == RT_P_IMPURE;
 }
 
@@ -1253,6 +1428,266 @@ static const Binding *reads_scan_unframed_param(const Expr *x,
 #undef RSUP
 }
 
+/* reads-frame-verification-ignores-a-callee-write-frame: does a `#reads`
+ * body only READ its framed parameters?
+ *
+ * The two scans above ask what the body reads.  `#reads p` also promises the
+ * body does not CHANGE p's state -- a measure that grows the vector it
+ * measures is not a function of that vector -- and nothing asked.  That
+ * mattered little while the only consumer of the promise was a call-site
+ * crossing, whose callee entry check is never elided; the loop-invariant
+ * frozen grant has no such backstop, so a false promise there elides a check
+ * that would fail.
+ *
+ * Tri-state, like the WF2 / R4 walks:
+ *   RW_CLEAN   -- every use of a framed parameter is a read this walk can see.
+ *   RW_UNKNOWN -- some use is not: the parameter is aliased into a local,
+ *                 returned, stored, captured, or handed to a callee slot with
+ *                 no read-only promise.  Silent; withholds the loop grant.
+ *   RW_WRITES  -- positive evidence: a field or deref store through it, a raw
+ *                 memory write to it, or a callee slot whose `#writes` frame
+ *                 names it (directly or through a `#reads` callee that itself
+ *                 writes).  TUR-W0383, and every grant refused.
+ *
+ * A callee slot is read-only only when the callee is known PURE, or names that
+ * slot in its own `#reads` frame and its own walk came back clean.  A declared
+ * `#writes` frame that EXCLUDES the slot is not enough: it says the callee does
+ * not write through the argument, not that it does not keep it.
+ *
+ * Inline C is the trust boundary, the same one the reads scans stop at: an
+ * inline-C body uses its parameters in C text this walk cannot see, so it
+ * answers CLEAN and the frame stays as trusted as it was.  What this closes is
+ * the Turmeric body that says one thing and does another in plain sight.
+ *
+ * `allow` is "this expression's VALUE is consumed by a read-only use", so a
+ * framed parameter reaching it is fine.  A scalar-typed value cannot alias
+ * state, so it is always allowed; its sub-expressions are still walked. */
+typedef enum { RW_CLEAN = 0, RW_UNKNOWN = 1, RW_WRITES = 2 } RwVerdict;
+
+typedef struct {
+    Binding  **params;
+    uint32_t   n_params;
+    uint64_t   mask;
+    uint32_t   budget;
+    uint64_t   writes;    /* framed params a RW_WRITES verdict reached */
+} RwCtx;
+
+static RwVerdict rw_worse(RwVerdict a, RwVerdict b) { return a > b ? a : b; }
+
+static bool rw_scalar(const Expr *x) {
+    switch (x->type.kind) {
+    case TY_NIL: case TY_BOOL: case TY_INT: case TY_FLOAT: case TY_NEVER:
+    case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+    case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+    case TY_FLOAT32: case TY_FLOAT64:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* The framed target index `root` is, or -1.  Binding identity, so a shadowing
+ * local is never mistaken for the target. */
+static int rw_framed(const RwCtx *c, const Binding *root) {
+    if (!root) return -1;
+    for (uint32_t i = 0; i < c->n_params && i < 64; i++)
+        if (c->params[i] == root)
+            return (c->mask & (UINT64_C(1) << i)) ? (int)i : -1;
+    return -1;
+}
+
+/* What does `callee` do with the argument in slot j? */
+static RwVerdict rw_slot(Binding *callee, uint32_t j) {
+    if (!callee) return RW_UNKNOWN;
+    if (j < WF_MAX_FRAME_PARAMS && callee->writes_declared &&
+        (callee->writes_param_mask & ((uint32_t)1u << j)))
+        return RW_WRITES;
+    if (j < 64 && (callee->reads_params_mask & (UINT64_C(1) << j))) {
+        if (callee->reads_write_mask & (UINT64_C(1) << j)) return RW_WRITES;
+        if (callee->reads_frame_omits_state || callee->reads_write_unverified)
+            return RW_UNKNOWN;
+        return RW_CLEAN;
+    }
+    return rt_binding_is_pure(callee) ? RW_CLEAN : RW_UNKNOWN;
+}
+
+/* A store through `target`: RW_WRITES when it roots at a framed parameter. */
+static RwVerdict rw_store(RwCtx *c, const Expr *target) {
+    int k = rw_framed(c, reads_read_root(target));
+    if (k < 0) return RW_CLEAN;
+    c->writes |= UINT64_C(1) << k;
+    return RW_WRITES;
+}
+
+static RwVerdict rw_scan(RwCtx *c, const Expr *x, bool allow) {
+#define RWS(sub, a) rw_scan(c, (sub), (a))
+    if (!x) return RW_CLEAN;
+    if (c->budget == 0) return RW_UNKNOWN;
+    c->budget--;
+    if (rw_scalar(x)) allow = true;
+    switch (x->kind) {
+    case EX_NIL_LIT: case EX_BOOL_LIT: case EX_INT_LIT:
+    case EX_FLOAT_LIT: case EX_CSTR_LIT:
+        return RW_CLEAN;
+
+    case EX_VAR:
+        return (allow || rw_framed(c, x->as.var.binding) < 0) ? RW_CLEAN
+                                                               : RW_UNKNOWN;
+
+    case EX_INLINE_C:          /* the trust boundary; see above */
+        return RW_CLEAN;
+
+    case EX_ASCRIBE:     return RWS(x->as.ascribe_.inner, allow);
+    case EX_CAST:        return RWS(x->as.cast_.expr, allow);
+    case EX_REINTERPRET: return RWS(x->as.reinterpret_.expr, allow);
+    case EX_GET_FIELD:   return RWS(x->as.get_field_.struct_expr, allow);
+
+    case EX_BUILTIN: {
+        if (!x->as.builtin.spec) return RW_UNKNOWN;
+        BuiltinShape sh = x->as.builtin.spec->shape;
+        RwVerdict v = RW_CLEAN;
+        bool reads_args = rt_builtin_shape_pure(sh);
+        switch (sh) {
+        case BS_PRINTLN_INT:  case BS_PRINTLN_FLOAT: case BS_PRINTLN_BOOL:
+        case BS_PRINTLN_CSTR: case BS_PRINTLN_UINT:  case BS_PRINTLN_FLOAT32:
+        case BS_PTR_ARITH: case BS_UNSAFE_CAST: case BS_REINTERPRET:
+        case BS_TRANSMUTE: case BS_RAW_MALLOC:
+            reads_args = true;
+            break;
+        case BS_PREFIX_UNARY_FREE:
+        case BS_PTR_WRITE: case BS_ARRAY_SET_UNCHECKED:
+        case BS_RAW_MEMSET: case BS_RAW_FREE: case BS_RAW_REALLOC:
+        case BS_RAW_MEMCPY:
+            /* arg 0 is written; the rest are values that may be stored. */
+            if (x->as.builtin.n >= 1) {
+                v = rw_store(c, x->as.builtin.args[0]);
+                v = rw_worse(v, RWS(x->as.builtin.args[0], true));
+            }
+            for (uint32_t i = 1; i < x->as.builtin.n; i++)
+                v = rw_worse(v, RWS(x->as.builtin.args[i], false));
+            return v;
+        case BS_PTR_DEREF: case BS_ARRAY_GET_UNCHECKED:
+            reads_args = true;
+            break;
+        default:
+            break;
+        }
+        /* A read-only builtin whose result is not a scalar may hand back an
+         * alias of its argument (pointer arithmetic, a cast), so its args are
+         * only as allowed as its own value is. */
+        bool a = reads_args && (allow || rw_scalar(x));
+        for (uint32_t i = 0; i < x->as.builtin.n; i++)
+            v = rw_worse(v, RWS(x->as.builtin.args[i], a));
+        return v;
+    }
+
+    case EX_CALL: {
+        RwVerdict v = RW_CLEAN;
+        Binding *callee = (x->as.call_.fn_expr || x->as.call_.is_poly_call)
+                              ? NULL : x->as.call_.fn_binding;
+        if (x->as.call_.fn_expr) v = RWS(x->as.call_.fn_expr, false);
+        for (uint32_t j = 0; j < x->as.call_.n_args; j++) {
+            const Expr *a = x->as.call_.args[j];
+            int k = rw_framed(c, reads_read_root(a));
+            if (k < 0) { v = rw_worse(v, RWS(a, false)); continue; }
+            RwVerdict sv = rw_slot(callee, j);
+            if (sv == RW_WRITES) c->writes |= UINT64_C(1) << k;
+            /* A read-only callee may still RETURN an alias of what it read,
+             * which is only harmless where the call's own value is. */
+            if (sv == RW_CLEAN && !allow) sv = RW_UNKNOWN;
+            v = rw_worse(v, sv);
+            v = rw_worse(v, RWS(a, true));
+        }
+        return v;
+    }
+
+    case EX_IF:
+        return rw_worse(RWS(x->as.if_.cond, false),
+                        rw_worse(RWS(x->as.if_.then_, allow),
+                                 RWS(x->as.if_.else_or_null, allow)));
+    case EX_DO: {
+        /* A discarded value aliases nothing, so only the last item inherits. */
+        RwVerdict v = RW_CLEAN;
+        for (uint32_t i = 0; i < x->as.do_.n; i++)
+            v = rw_worse(v, RWS(x->as.do_.items[i],
+                                i + 1 < x->as.do_.n ? true : allow));
+        return v;
+    }
+    case EX_LET: case EX_LETREC: {
+        /* A binding's init is an alias the walk does not follow. */
+        RwVerdict v = RWS(x->as.let_.body, allow);
+        for (uint32_t i = 0; i < x->as.let_.n; i++)
+            v = rw_worse(v, RWS(x->as.let_.bindings[i].init, false));
+        return v;
+    }
+    case EX_WHILE:
+        return rw_worse(RWS(x->as.while_.cond, false),
+                        RWS(x->as.while_.body, true));
+    case EX_SET: {
+        RwVerdict v = RWS(x->as.set_.value, false);
+        if (rw_framed(c, x->as.set_.target) >= 0) v = rw_worse(v, RW_UNKNOWN);
+        return v;
+    }
+    case EX_SET_FIELD: {
+        RwVerdict v = rw_store(c, x->as.set_field_.receiver);
+        v = rw_worse(v, RWS(x->as.set_field_.receiver, true));
+        return rw_worse(v, RWS(x->as.set_field_.value, false));
+    }
+    case EX_SET_DEREF: {
+        RwVerdict v = rw_store(c, x->as.set_deref_.ref);
+        v = rw_worse(v, RWS(x->as.set_deref_.ref, true));
+        return rw_worse(v, RWS(x->as.set_deref_.value, false));
+    }
+    case EX_MATCH: {
+        /* Pattern binders alias the scrutinee, so it is not a read-only use. */
+        RwVerdict v = RWS(x->as.match_.scrutinee, false);
+        for (uint32_t i = 0; i < x->as.match_.n_arms; i++) {
+            v = rw_worse(v, RWS(x->as.match_.arms[i].guard, false));
+            v = rw_worse(v, RWS(x->as.match_.arms[i].body, allow));
+        }
+        return v;
+    }
+    case EX_RETURN:
+        return RWS(x->as.return_.value, false);
+    case EX_HANDLE: {
+        const HandleExpr *h = x->as.handle_.handle;
+        if (!h) return RW_UNKNOWN;
+        RwVerdict v = RWS(h->body, allow);
+        for (uint8_t i = 0; i < h->n_cases; i++)
+            v = rw_worse(v, RWS(h->cases[i].body, allow));
+        return v;
+    }
+    case EX_RESUME: {
+        const ResumeExpr *r = x->as.resume_.resume;
+        if (!r) return RW_UNKNOWN;
+        return rw_worse(RWS(r->k, false), RWS(r->value, false));
+    }
+    default:
+        return RW_UNKNOWN;   /* unmodeled: could not see, never clean */
+    }
+#undef RWS
+}
+
+/* Run the walk over a `#reads` body.  The body's own value leaves the
+ * function, so it is NOT a read-only use: a measure that returns its framed
+ * parameter hands the caller a handle to write through. */
+static RwVerdict reads_scan_frame_writes(const Expr *body, Binding **params,
+                                         uint32_t n_params, uint64_t mask,
+                                         uint64_t *writes_out) {
+    RwCtx c = { params, n_params, mask, 4096, 0 };
+    RwVerdict v = rw_scan(&c, body, false);
+    if (writes_out) *writes_out = c.writes;
+    return v;
+}
+
+/* A loop's frozen candidate: every use of `b` in the elaborated `while` is a
+ * read.  The loop's own value is discarded, hence `allow`. */
+static bool rw_binding_reads_only(const Expr *x, Binding *b) {
+    Binding *t[1] = { b };
+    RwCtx c = { t, 1, 1, 4096, 0 };
+    return rw_scan(&c, x, true) == RW_CLEAN;
+}
+
 
 /* RT4: resolve a called function's return refinement for the encoder.  Owned
  * by the elaborator because it is the only side that can look a name up in the
@@ -1373,6 +1808,50 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
             }
             return true;
         }
+        /* A RECORD FIELD SELECTOR `.f`.  Pure like the constructor it reads,
+         * but its SORT is the field's.  Falling through to the abstract-measure
+         * default declared every selector Int, so a `float` field's axiom
+         * `(= (.a (FB 0.5 p)) 0.5)` -- or a written `(= (.a v) 0.5)` hypothesis
+         * -- said an integer equals 0.5: a contradiction, which proved every
+         * goal and elided its check.  `(let [x (FB 0.5 p)] 3)` "proved"
+         * `(= r 7)` and returned 3.
+         *
+         * One sort per name, across every record that has such a field: the
+         * field's own when they agree; Real when Int and Real fields share the
+         * name (an integer is a Real, so this only forgoes integer reasoning);
+         * and no answer when a Bool field shares it with a number -- the
+         * encoder then refuses the mixed equality rather than tightening a
+         * Bool into an Int. */
+        if (name[0] == '.' && name[1] != '\0') {
+            const char *fnm = name + 1;
+            bool any = false, has_int = false, has_real = false, has_bool = false;
+            for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+                const AdtDef *adt = e->adt_defs[ai];
+                if (!adt) continue;
+                for (uint32_t ci = 0; ci < adt->n_ctors; ci++) {
+                    const CtorDef *c = adt->ctors[ci];
+                    if (!c || !c->name || !c->is_record) continue;
+                    for (uint32_t fi = 0; fi < c->n_fields; fi++) {
+                        if (!c->fields[fi].name || strcmp(c->fields[fi].name, fnm) != 0)
+                            continue;
+                        any = true;
+                        VCSort s = rt_sort_of_kind(c->fields[fi].kind);
+                        if (s == VS_REAL)      has_real = true;
+                        else if (s == VS_BOOL) has_bool = true;
+                        else                   has_int  = true;
+                    }
+                }
+            }
+            if (any && !(has_bool && (has_int || has_real))) {
+                out->ret_pred    = NULL;
+                out->ret_var     = NULL;
+                out->param_names = NULL;
+                out->n_params    = 0;
+                out->pure        = true;
+                out->ret_sort    = has_bool ? VS_BOOL : has_real ? VS_REAL : VS_INT;
+                return true;
+            }
+        }
         /* Genuinely nothing: an abstract measure -- an uninterpreted
          * mathematical function, which the language defines as congruent. */
         return false;
@@ -1397,6 +1876,7 @@ bool rt_resolve_fn(void *ud, const char *name, RefineFnInfo *out) {
      * -- unconditional since checked-reads graduated (2026-08-20). */
     out->reads_params_mask      = b->reads_params_mask;
     out->reads_frame_omits_state = b->reads_frame_omits_state;
+    out->reads_write_unverified  = b->reads_write_unverified;
 
     /* WF1/WF2 / #writes: publish the write frame and, crucially, whether it was
      * CHECKED.  A consumer that acts on the frame (WF3, WF4) must gate on
@@ -2634,6 +3114,7 @@ void wf_note_frame_site(Elab *e, Binding *fn, Binding **params, uint32_t n_param
     s->defn_form  = defn_form;
     s->body_start = body_start;
     s->annot      = annot;
+    s->from_stdlib = e->in_stdlib_load || g_turi_stdlib_preload;
 }
 
 void wf_note_image_cache_root(Elab *e, const Symbol *root, Span span) {
@@ -2763,6 +3244,11 @@ void wf_resolve_write_frames(Elab *e) {
         for (uint32_t i = 0; i < e->n_wf_frame_sites; i++) {
             WriteFrameSite *s = &e->wf_frame_sites[i];
             if (!s->fn || !s->fn->writes_declared) continue;
+            /* The stdlib's own frames (the Vec mutators' `#writes [v]`) are
+             * not what a dump of this program is asking about, and the
+             * interpreter elaborates the stdlib more than once, which would
+             * print them once per load. */
+            if (s->from_stdlib) continue;
             /* Recompute the FRAME-ONLY verdict so the two questions stay
              * separable in the output: a fixture needs to tell "the frame did
              * not hold" from "the frame held but the body writes a global". */
@@ -3790,6 +4276,24 @@ static bool rt_return_obligation_proven(Elab *e, const Form *pred,
         refine_caps_delta(&probe_caps, refine_caps(), &caps_before_probes);
         if (split_ok) {
             refine_note_split_proven();
+            /* Record the site as an obligation already decided, so the JSON
+             * dump lists it.  It used to return before any record existed:
+             * a return refinement proved per path appeared in the dump only
+             * when it FAILED, so a consumer could not tell "proved" from "never
+             * checked".  Pre-discharged, so refine_discharge_all skips it and
+             * the stats refine_note_split_proven counted are not counted
+             * twice. */
+            RefineObligation *pob =
+                refine_collect_obligation(&e->refine_obs, pred, var_name, subject,
+                                          rt_sort_of_kind(base_kind),
+                                          type_name(type_simple(base_kind, CK_COPY)),
+                                          loc, env, what, fn_name);
+            if (pob) {
+                pob->discharged = true;
+                pob->proven     = true;
+                pob->decided_by = "RT4 (per-path split)";
+                refine_caps_add_hits(&pob->caps_probe, &probe_caps);
+            }
             env->head = ax_head; env->n_names = ax_names;
             return true;
         }
@@ -4116,6 +4620,147 @@ static bool rt_env_has_name(RefineEnv *env, const Symbol *sym) {
     return false;
 }
 
+/* Does `f` bind a name that `h` mentions?  Binding positions, conservatively:
+ * the names of a `let`/`letrec`/`loop` binding vector; every symbol in any
+ * other vector (`fn` parameters, destructuring -- and vector literals, which
+ * only costs a fact); every symbol in a `match` pattern; and every symbol in a
+ * `handle` clause head.  A false
+ * "yes" drops a fact; a false "no" would let a fact about an OUTER binding be
+ * read as one about the inner binding of the same name. */
+static bool rt_syms_in_mentioned(const Elab *e, const Form *pat, const Form *h,
+                                 uint32_t depth) {
+    if (!pat || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (pat->tag == F_SYM)
+        return pat->as.sym && rt_form_mentions_name(e, h, pat->as.sym->name, 0);
+    if (pat->tag != F_LIST && pat->tag != F_VEC) return false;
+    for (uint32_t i = 0; i < pat->as.list.len; i++)
+        if (rt_syms_in_mentioned(e, pat->as.list.items[i], h, depth + 1)) return true;
+    return false;
+}
+
+static bool rt_rebinds_mentioned(const Elab *e, const Form *f, const Form *h,
+                                 uint32_t depth);
+
+/* A `let`-style binding vector: only the NAMES bind (an init is an ordinary
+ * expression -- `[e __i]` binds `e`, not `__i`); the inits are walked like any
+ * other code.  The shape elab_let accepts: `^ann`* name [type-ann] init. */
+static bool rt_bvec_rebinds(const Elab *e, const Form *bv, const Form *h,
+                            uint32_t depth) {
+    uint32_t i = 0, len = bv->as.list.len;
+    while (i < len) {
+        const Form *cur = bv->as.list.items[i];
+        while (cur->tag == F_SYM && cur->as.sym && cur->as.sym->name[0] == '^') {
+            if (++i >= len) return false;
+            cur = bv->as.list.items[i];
+        }
+        if (rt_syms_in_mentioned(e, cur, h, depth + 1)) return true;
+        i++;
+        if (i < len) {
+            const Form *ann = bv->as.list.items[i];
+            if (ann->tag == F_TYPE_ANN ||
+                (ann->tag == F_KEYWORD && ann->as.sym &&
+                 typekind_from_symbol(ann->as.sym->name) != TY_UNKNOWN))
+                i++;
+        }
+        if (i >= len) return false;
+        if (rt_rebinds_mentioned(e, bv->as.list.items[i++], h, depth + 1)) return true;
+    }
+    return false;
+}
+
+static bool rt_rebinds_mentioned(const Elab *e, const Form *f, const Form *h,
+                                 uint32_t depth) {
+    if (!f || !h || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    {
+        const Form *mx = rt_macro_expansion(e, f);
+        if (mx && rt_rebinds_mentioned(e, mx, h, depth)) return true;
+    }
+    if (f->tag == F_LIST && f->as.list.len >= 3 &&
+        (rt_head_is(f, "let") || rt_head_is(f, "letrec") || rt_head_is(f, "loop"))) {
+        uint32_t bi = 1;
+        if (f->as.list.items[1]->tag == F_SYM && f->as.list.len >= 4) {
+            /* A named `let`: the loop's name binds too. */
+            if (rt_syms_in_mentioned(e, f->as.list.items[1], h, depth + 1)) return true;
+            bi = 2;
+        }
+        if (f->as.list.items[bi]->tag == F_VEC) {
+            if (rt_bvec_rebinds(e, f->as.list.items[bi], h, depth)) return true;
+            for (uint32_t i = bi + 1; i < f->as.list.len; i++)
+                if (rt_rebinds_mentioned(e, f->as.list.items[i], h, depth + 1)) return true;
+            return false;
+        }
+    }
+    if (f->tag == F_VEC)
+        for (uint32_t i = 0; i < f->as.list.len; i++) {
+            const Form *it = f->as.list.items[i];
+            if (it->tag == F_SYM && it->as.sym &&
+                rt_form_mentions_name(e, h, it->as.sym->name, 0))
+                return true;
+        }
+    if (rt_head_is(f, "match")) {
+        uint32_t i = 2;
+        while (i < f->as.list.len) {
+            if (rt_syms_in_mentioned(e, f->as.list.items[i++], h, depth + 1)) return true;
+            if (i + 1 < f->as.list.len && rt_sym_is(f->as.list.items[i], "when")) i += 2;
+            i++;   /* the arm body, walked below */
+        }
+    }
+    if (rt_head_is(f, "handle") || rt_head_is(f, "handle-shallow"))
+        for (uint32_t i = 2; i < f->as.list.len; i += 2)
+            if (rt_syms_in_mentioned(e, f->as.list.items[i], h, depth + 1)) return true;
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_rebinds_mentioned(e, f->as.list.items[i], h, depth + 1)) return true;
+    return false;
+}
+
+/* The names a crossing's match-arm constructor facts must connect to (see the
+ * `match` case of rt_collect_path_conds).  Seeded with every name the call
+ * form mentions and grown bottom-up: a level whose facts mention one adds the
+ * names its facts mention, so an outer arm that binds what an inner match
+ * scrutinizes is reached too. */
+#define RT_CS_REL_MAX 32
+typedef struct RtRel {
+    const char *names[RT_CS_REL_MAX];
+    uint32_t    n;
+} RtRel;
+
+/* Variable names only: a list head is a function or constructor, and a
+ * constructor name is in every pattern, so counting one would connect a
+ * ground `(Cons 2 (Nil))` argument to every `(Cons h t)` arm. */
+static void rt_rel_add_syms(Elab *e, RtRel *rel, const Form *f, uint32_t depth) {
+    if (!f || depth >= RT_CS_PATH_MAX_DEPTH) return;
+    if (f->tag == F_SYM && f->as.sym) {
+        if (elab_lookup_ctor(e, f->as.sym)) return;
+        for (uint32_t i = 0; i < rel->n; i++)
+            if (strcmp(rel->names[i], f->as.sym->name) == 0) return;
+        if (rel->n < RT_CS_REL_MAX) rel->names[rel->n++] = f->as.sym->name;
+        return;
+    }
+    if (f->tag != F_LIST && f->tag != F_VEC) return;
+    for (uint32_t i = (f->tag == F_LIST ? 1 : 0); i < f->as.list.len; i++)
+        rt_rel_add_syms(e, rel, f->as.list.items[i], depth + 1);
+}
+
+static bool rt_rel_mentioned(const Elab *e, const RtRel *rel, const Form *f) {
+    for (uint32_t i = 0; i < rel->n; i++)
+        if (rt_form_mentions_name(e, f, rel->names[i], 0)) return true;
+    return false;
+}
+
+/* Append path fact `h`, collected at a level whose descent toward the target
+ * continues into `below`.  Dropped when `below` rebinds a name `h` mentions:
+ * at the target that name is the INNER binding, and the encoder's one flat
+ * namespace would read `h` as a fact about it.  `(let [x 1] (let [x -5] (f x)))`
+ * put `x = -5` and `x = 1` side by side, a contradiction that "proved" every
+ * crossing under --strict-refine.  Dropping a fact only ever weakens. */
+static void rt_cs_push(const Elab *e, const Form **hyps, uint32_t *n,
+                       const Form *h, const Form *below) {
+    if (rt_rebinds_mentioned(e, below, h, 0)) return;
+    if (*n >= RT_CS_PATH_MAX_HYPS) { refine_caps()->path_hyps_hits++; return; }
+    hyps[(*n)++] = h;
+}
+
 /* `*shadowed` is set when a binder on the path rebinds a name the environment
  * already has hypotheses about.  The caller must then abandon the crossing
  * entirely, not merely drop a fact: the encoder has ONE FLAT NAMESPACE, so the
@@ -4130,7 +4775,8 @@ static bool rt_env_has_name(RefineEnv *env, const Symbol *sym) {
  * program that panics. */
 static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                                   const Form *target, const Form **hyps,
-                                  uint32_t *n, bool *shadowed, uint32_t depth) {
+                                  uint32_t *n, bool *shadowed, RtRel *rel,
+                                  uint32_t depth) {
     if (!node || depth >= RT_CS_PATH_MAX_DEPTH) return false;
     if (rt_form_ident(node, target)) return true;
     if (node->tag != F_LIST && node->tag != F_VEC) return false;
@@ -4143,29 +4789,26 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
     {
         const Form *mx = rt_macro_expansion(e, node);
         if (mx) return rt_collect_path_conds(e, env, mx, target, hyps, n,
-                                             shadowed, depth);   /* lateral hop */
+                                             shadowed, rel, depth);   /* lateral hop */
     }
 
     if (rt_head_is(node, "if") && node->as.list.len == 4) {
         const Form *c = node->as.list.items[1];
-        if (rt_collect_path_conds(e, env, c, target, hyps, n, shadowed, depth + 1))
+        if (rt_collect_path_conds(e, env, c, target, hyps, n, shadowed, rel, depth + 1))
             return true;
         for (uint32_t br = 2; br <= 3; br++) {
             if (!rt_collect_path_conds(e, env, node->as.list.items[br], target,
-                                       hyps, n, shadowed, depth + 1))
+                                       hyps, n, shadowed, rel, depth + 1))
                 continue;
-            if (*n >= RT_CS_PATH_MAX_HYPS) {
-                refine_caps()->path_hyps_hits++;   /* a guard dropped */
-                return true;                        /* deep enough */
-            }
             if (br == 2) {
-                hyps[(*n)++] = c;
+                rt_cs_push(e, hyps, n, c, node->as.list.items[br]);
             } else {
                 Form **notk = (Form **)arena_alloc(e->arena, 2 * sizeof(Form *));
                 notk[0] = form_sym(e->arena, node->span,
                                    symtab_intern(e->st, strslice("not", 3)));
                 notk[1] = (Form *)c;
-                hyps[(*n)++] = form_list(e->arena, node->span, notk, 2);
+                rt_cs_push(e, hyps, n, form_list(e->arena, node->span, notk, 2),
+                           node->as.list.items[br]);
             }
             return true;
         }
@@ -4190,15 +4833,11 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
             binds->as.list.items[0]->as.sym) {
             const Form *x = binds->as.list.items[0];
             const Form *v = binds->as.list.items[1];
-            if (rt_collect_path_conds(e, env, v, target, hyps, n, shadowed, depth + 1))
+            if (rt_collect_path_conds(e, env, v, target, hyps, n, shadowed, rel, depth + 1))
                 return true;
-            if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, depth + 1))
+            if (!rt_collect_path_conds(e, env, body, target, hyps, n, shadowed, rel, depth + 1))
                 return false;
             if (rt_env_has_name(env, x->as.sym)) { *shadowed = true; return true; }
-            if (*n >= RT_CS_PATH_MAX_HYPS) {
-                refine_caps()->path_hyps_hits++;   /* a let-equation dropped */
-                return true;
-            }
             /* A bound FUNCTION is not an arithmetic fact, and asserting it
              * actively costs: the encoder abstracts the lambda to an
              * uninterpreted symbol, and `refine_model_search` declines any VC
@@ -4210,23 +4849,30 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
              * The general shape of that hazard is worth remembering: adding a
              * hypothesis can never make a goal easier to PROVE incorrectly,
              * but it can make it harder to REFUTE. Hypotheses are not free. */
-            if (!rt_head_is(v, "fn")) hyps[(*n)++] = rt_form_eq(e, node->span, x, v);
+            if (!rt_head_is(v, "fn")) rt_cs_push(e, hyps, n, rt_form_eq(e, node->span, x, v), body);
             return true;
         }
         /* A wider binding list: descend without claiming any equation. */
     }
 
     /* (match scrut pat [when g] body ...) -- an arm contributes what selected
-     * it.  Only the two sources that introduce no NAMES are collected here: a
-     * literal pattern's `(= scrut <lit>)` and a guard, verbatim.  A
-     * constructor's tag and its field selectors are deliberately left out --
-     * they come with pattern BINDERS, and a binder that shadows an outer name
-     * would silently inherit its hypotheses in this flat namespace, which is
-     * the unsound direction rather than the imprecise one. */
+     * it: a guard, verbatim; a literal pattern's `(= scrut <lit>)`; and, with
+     * `ctor_facts`, a constructor's tag `(= (#dt/tag scrut) k)` and one
+     * `(= b (.field scrut))` per record binder -- the facts rt_prove_paths
+     * gives a return obligation, spelled the same way so RF4 selects the same
+     * arm from them (reflect-two-provable-facts-report-as-not-holding).
+     *
+     * A binder that shadows a name the environment talks about still abandons
+     * the crossing (below); one rebound deeper on the path drops the facts that
+     * mention it (rt_cs_push).  The constructor facts are opt-in because their
+     * symbols are uninterpreted: `refine_model_search` declines a VC carrying
+     * one, so a crossing that is REFUTED today, with a counterexample, would
+     * degrade to unknown.  The caller asks for them only where the predicate
+     * mentions a reflected measure, which cannot be decided without them. */
     if (rt_head_is(node, "match") && node->as.list.len >= 4) {
         const Form *scrut = node->as.list.items[1];
         const uint32_t len = node->as.list.len;
-        if (rt_collect_path_conds(e, env, scrut, target, hyps, n, shadowed, depth + 1))
+        if (rt_collect_path_conds(e, env, scrut, target, hyps, n, shadowed, rel, depth + 1))
             return true;
         uint32_t i = 2;
         while (i < len) {
@@ -4240,9 +4886,9 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
             const Form *arm = node->as.list.items[i++];
             /* A call inside the guard runs before the arm is chosen. */
             if (guard &&
-                rt_collect_path_conds(e, env, guard, target, hyps, n, shadowed, depth + 1))
+                rt_collect_path_conds(e, env, guard, target, hyps, n, shadowed, rel, depth + 1))
                 return true;
-            if (!rt_collect_path_conds(e, env, arm, target, hyps, n, shadowed, depth + 1))
+            if (!rt_collect_path_conds(e, env, arm, target, hyps, n, shadowed, rel, depth + 1))
                 continue;
             if (pat && (pat->tag == F_LIST || pat->tag == F_VEC))
                 for (uint32_t k = 1; k < pat->as.list.len; k++) {
@@ -4252,14 +4898,48 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
                         return true;
                     }
                 }
-            if (guard) {
-                if (*n < RT_CS_PATH_MAX_HYPS) hyps[(*n)++] = guard;
-                else refine_caps()->path_hyps_hits++;
-            }
-            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT)) {
-                if (*n < RT_CS_PATH_MAX_HYPS)
-                    hyps[(*n)++] = rt_form_eq(e, pat->span, scrut, pat);
-                else refine_caps()->path_hyps_hits++;
+            if (guard) rt_cs_push(e, hyps, n, guard, arm);
+            if (pat && (pat->tag == F_INT || pat->tag == F_FLOAT))
+                rt_cs_push(e, hyps, n, rt_form_eq(e, pat->span, scrut, pat), arm);
+            CtorDef *cd = rel ? rt_pat_ctor(e, pat) : NULL;
+            /* Only when this arm connects to what the call is about: the
+             * scrutinee or a binder is a relevant name.  A ground argument
+             * connects to nothing, so its crossing keeps the model search that
+             * refutes it with a counterexample. */
+            bool connects = cd && (rt_rel_mentioned(e, rel, scrut) ||
+                                   rt_rel_mentioned(e, rel, pat));
+            if (connects) {
+                rt_rel_add_syms(e, rel, scrut, 0);
+                rt_rel_add_syms(e, rel, pat, 0);
+                rt_cs_push(e, hyps, n,
+                           rt_form_eq(e, pat->span,
+                                      rt_form_call1(e, pat->span, RT_DT_TAG_FN, scrut),
+                                      form_int(e->arena, pat->span, (int64_t)cd->tag)),
+                           arm);
+                /* Only a record constructor has a field name to select with,
+                 * and only an Int-sorted field: the binder is not declared in
+                 * this environment, and an undeclared name is read as Int. */
+                for (uint32_t k = 1; cd->is_record && k < pat->as.list.len; k++) {
+                    const Form *b = pat->as.list.items[k];
+                    uint32_t fi = k - 1;
+                    if (b->tag != F_SYM || !b->as.sym || fi >= cd->n_fields ||
+                        !cd->fields[fi].name ||
+                        rt_sort_of_kind(cd->fields[fi].kind) != VS_INT)
+                        continue;
+                    /* `(Pair _ _)` would equate both fields through one name. */
+                    if (b->as.sym->name[0] == '_') continue;
+                    bool dup = false;
+                    for (uint32_t k2 = 1; k2 < pat->as.list.len && !dup; k2++)
+                        dup = k2 != k && pat->as.list.items[k2]->tag == F_SYM &&
+                              pat->as.list.items[k2]->as.sym == b->as.sym;
+                    if (dup) continue;
+                    char acc[128];
+                    snprintf(acc, sizeof(acc), ".%s", cd->fields[fi].name);
+                    rt_cs_push(e, hyps, n,
+                               rt_form_eq(e, b->span, b,
+                                          rt_form_call1(e, b->span, acc, scrut)),
+                               arm);
+                }
             }
             return true;
         }
@@ -4268,7 +4948,7 @@ static bool rt_collect_path_conds(Elab *e, RefineEnv *env, const Form *node,
 
     for (uint32_t i = 0; i < node->as.list.len; i++)
         if (rt_collect_path_conds(e, env, node->as.list.items[i], target, hyps,
-                                  n, shadowed, depth + 1))
+                                  n, shadowed, rel, depth + 1))
             return true;
     return false;
 }
@@ -4385,8 +5065,15 @@ typedef struct LiWalk {
     bool         shadowed;
 } LiWalk;
 
-static bool li_proven(const LoopInvSite *s) {
+/* `p` holds at the top of every iteration: initiation and preservation. */
+static bool li_inductive(const LoopInvSite *s) {
     return s && s->analyzed && s->entry_proven && s->pres_proven;
+}
+
+/* ...and `p AND (not c)` holds after the loop, which also needs every exit to
+ * be the condition going false. */
+static bool li_proven(const LoopInvSite *s) {
+    return li_inductive(s) && !s->early_return;
 }
 
 /* The latest site recorded for `f`, following a macro call to its expansion
@@ -4724,9 +5411,10 @@ static bool li_walk(LiWalk *W, const Form *node, uint32_t depth) {
         uint32_t bs = (len > 3 && it[2]->tag == F_KEYWORD &&
                        it[2]->as.sym == e->kw_invariant) ? 4 : 2;
         if (s) W->touched = true;
-        /* Any number of iterations may already have run. */
+        /* Any number of iterations may already have run.  Inside the loop
+         * only the inductive half is needed: how the loop exits is moot. */
         li_havoc(W, node);
-        bool pv = li_proven(s);
+        bool pv = li_inductive(s);
         if (pv) li_admit(W, s->inv, NULL, NULL);
         if (k < bs) return li_walk(W, it[k], depth + 1);
         if (!rt_form_mentions_set(e, it[1], 0)) li_admit(W, it[1], NULL, NULL);
@@ -4799,6 +5487,88 @@ static bool li_head_runs_in_place(Elab *e, const Form *f) {
     return b && b->type.kind == TY_FN;
 }
 
+/* An INERT shared borrow: `(& x)` bound by a `let` to a name that nothing in
+ * the rest of that `let` ever mentions.  Such a borrow cannot be handed to
+ * anything, which is the whole reason the borrow channel is a channel.
+ *
+ * It is the shape `(frozen v ...)` lowers to -- `(let [__f (& v)] ...)`, a
+ * marker whose only job is to hold the borrow live so the borrow checker
+ * forbids a conflicting `&mut`.  Recorded by FORM IDENTITY (the pointer), so
+ * only the borrow actually bound this way is exempted; a second `(& x)`
+ * elsewhere in the function is untouched.
+ *
+ * Why only this shape, when a shared borrow cannot be assigned through at all
+ * ("cannot assign through immutable borrow; use `&mut T` for mutation")?
+ * Because that is a rule about TURMERIC code, and it is not the only writer.
+ * Measured: an inline-C callee handed `(& x)` writes straight through the
+ * pointer, and `x` changes with nothing in the caller to see --
+ *
+ *     (defn poke [p : &int] : int ```c *(int64_t *)p = 99; return 0; ```)
+ *     (let [^mut x 1] (poke (& x)) (println x))   ;; prints 99
+ *
+ * -- so narrowing the volatile set to `&mut` borrows outright, which is what
+ * reads-measure-rejected-in-invariant-and-pre item 1 proposed, is unsound.  A
+ * borrow nothing can name is the case where that exposure provably cannot
+ * arise: there is no call to hand it to. */
+static bool li_inert_borrows(Elab *e, const Form *f, uint32_t depth,
+                             const Form **out, uint32_t *n) {
+    if (!f) return true;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    const Form *mx = rt_macro_expansion(e, f);
+    if (mx) return li_inert_borrows(e, mx, depth, out, n);
+    if (f->tag == F_LIST && f->as.list.len >= 2 &&
+        (rt_head_is(f, "let") || rt_head_is(f, "let*")) &&
+        f->as.list.items[1] && f->as.list.items[1]->tag == F_VEC) {
+        const Form *bv = f->as.list.items[1];
+        /* ONE binding, and nothing else in the vector.  Deliberately not a
+         * general walk over binding specs: pairing a name with its init means
+         * reimplementing `let`'s spec grammar (`^mut`, `name : T value`) in a
+         * place where getting it wrong the other way -- calling a USED borrow
+         * inert -- is unsound, not merely conservative.  A vector of exactly
+         * `[sym (& sym)]`, or `[sym : T (& sym)]`, cannot be mispaired.
+         *
+         * This is the shape the idiom actually takes: a dedicated marker
+         * `let`, as in refine-stateful-resizable-bounds.  A marker folded in
+         * beside other bindings simply keeps today's conservative answer; to
+         * widen this, reuse `let`'s own spec parser rather than guessing. */
+        uint32_t ni = 0, vi = 1;
+        if (bv->as.list.len == 4 && rt_sym_is(bv->as.list.items[1], ":")) vi = 3;
+        else if (bv->as.list.len != 2) vi = 0;          /* no match */
+        if (vi) {
+            const Form *nm   = bv->as.list.items[ni];
+            const Form *init = bv->as.list.items[vi];
+            if (nm && nm->tag == F_SYM && nm->as.sym &&
+                init && init->tag == F_LIST && init->as.list.len >= 2 &&
+                rt_sym_is(init->as.list.items[0], "&")) {
+                const Form *t = init->as.list.items[1];
+                if (t && t->tag == F_SYM && t->as.sym) {
+                    /* Named anywhere in the `let` body?  Then it can flow
+                     * somewhere, and it stays a channel. */
+                    bool used = false;
+                    for (uint32_t k = 2; k < f->as.list.len && !used; k++)
+                        used = rt_form_mentions_name(e, f->as.list.items[k],
+                                                     nm->as.sym->name, 0);
+                    if (!used) {
+                        if (*n >= LI_MAX_NAMES) return false;
+                        out[(*n)++] = init;
+                    }
+                }
+            }
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!li_inert_borrows(e, f->as.list.items[i], depth + 1, out, n))
+            return false;
+    return true;
+}
+
+static bool li_form_in_set(const Form *f, const Form **set, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++)
+        if (set[i] == f) return true;
+    return false;
+}
+
 /* The VOLATILE names of a body: those something can rebind with no `set!`
  * at the point it happens.  Two channels:
  *
@@ -4810,11 +5580,15 @@ static bool li_head_runs_in_place(Elab *e, const Form *f) {
  *     to an alias before a loop and handed to a writing callee inside it
  *     (`(zap rm)`), where no scan of the loop sees `x` at all.
  *
+ * `inert` exempts the one borrow shape that provably cannot reach a callee
+ * (li_inert_borrows).  Pass NULL / 0 to get the unnarrowed set.
+ *
  * A volatile name is never a fact, and a loop whose invariant, condition or
  * assignments touch one is declined.  False on an assignment symbol this
  * cannot attribute. */
 static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn,
-                              const char **names, uint32_t *n) {
+                              const char **names, uint32_t *n,
+                              const Form **inert, uint32_t n_inert) {
     if (!f) return true;
     if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;
     if (f->tag == F_SYM && f->as.sym) {
@@ -4826,14 +5600,16 @@ static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn
     }
     if (f->tag != F_LIST && f->tag != F_VEC) return true;
     const Form *mx = rt_macro_expansion(e, f);
-    if (mx) return li_lambda_targets(e, mx, depth, in_fn, names, n);
+    if (mx) return li_lambda_targets(e, mx, depth, in_fn, names, n, inert, n_inert);
     /* `(handle e clauses...)`: `e` runs in place, the clauses do not. */
     if (!in_fn && f->tag == F_LIST && f->as.list.len >= 2 &&
         (rt_head_is(f, "handle") || rt_head_is(f, "handle-shallow"))) {
-        if (!li_lambda_targets(e, f->as.list.items[1], depth + 1, false, names, n))
+        if (!li_lambda_targets(e, f->as.list.items[1], depth + 1, false, names, n,
+                               inert, n_inert))
             return false;
         for (uint32_t i = 2; i < f->as.list.len; i++)
-            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, true, names, n))
+            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, true, names, n,
+                                   inert, n_inert))
                 return false;
         return true;
     }
@@ -4842,7 +5618,10 @@ static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn
     if (f->tag == F_LIST && f->as.list.len >= 2 &&
         (rt_sym_is(f->as.list.items[0], "&") || rt_sym_is(f->as.list.items[0], "&mut"))) {
         const Form *t = f->as.list.items[1];
-        if (t && t->tag == F_SYM && t->as.sym) {
+        /* A borrow nothing can name reaches no callee, so it stales nothing
+         * (li_inert_borrows).  `&mut` is never exempt. */
+        if (t && t->tag == F_SYM && t->as.sym &&
+            !li_form_in_set(f, inert, n_inert)) {
             bool of = false;
             li_name_add(t->as.sym->name, names, n, LI_MAX_NAMES, &of);
             if (of) return false;
@@ -4859,24 +5638,34 @@ static bool li_lambda_targets(Elab *e, const Form *f, uint32_t depth, bool in_fn
             if (of) return false;
         }
         for (uint32_t i = 2; i < f->as.list.len; i++)
-            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n))
+            if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n,
+                                   inert, n_inert))
                 return false;
         return true;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++)
-        if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n))
+        if (!li_lambda_targets(e, f->as.list.items[i], depth + 1, in_fn, names, n,
+                               inert, n_inert))
             return false;
     return true;
 }
 
 /* A head that leaves the loop by a path other than the condition going false,
  * or re-enters it from a captured continuation.  `panic` is absent on
- * purpose: it diverges rather than exits. */
-static const char *li_early_exit(Elab *e, const Form *f, uint32_t depth) {
+ * purpose: it diverges rather than exits.
+ *
+ * `return` is the one exit the analysis models: it leaves the whole function,
+ * so the body composer can prune the paths through it (li_compose) and keep
+ * initiation and preservation.  LI_EXIT_ANY finds every exit, LI_EXIT_OTHER
+ * every exit but `return` (whose operands are still searched), and
+ * LI_EXIT_RETURN only `return`. */
+typedef enum { LI_EXIT_ANY, LI_EXIT_OTHER, LI_EXIT_RETURN } LiExitMode;
+
+static const char *li_early_exit(Elab *e, const Form *f, uint32_t depth, LiExitMode mode) {
     if (!f || depth >= RT_SET_SCAN_MAX_DEPTH) return f ? "<too deep>" : NULL;
     if (f->tag != F_LIST && f->tag != F_VEC) return NULL;
     const Form *mx = rt_macro_expansion(e, f);
-    if (mx) return li_early_exit(e, mx, depth);
+    if (mx) return li_early_exit(e, mx, depth, mode);
     if (f->tag == F_LIST && f->as.list.len > 0) {
         static const char *const EXITS[] = {
             "return", "?", "call/cc", "call/cc*", "escape", "shift", "shift0",
@@ -4884,16 +5673,24 @@ static const char *li_early_exit(Elab *e, const Form *f, uint32_t depth) {
         };
         const Form *h = f->as.list.items[0];
         if (h->tag == F_SYM && h->as.sym)
-            for (size_t i = 0; i < sizeof(EXITS) / sizeof(EXITS[0]); i++)
-                if (strcmp(h->as.sym->name, EXITS[i]) == 0) return EXITS[i];
+            for (size_t i = 0; i < sizeof(EXITS) / sizeof(EXITS[0]); i++) {
+                if (strcmp(h->as.sym->name, EXITS[i]) != 0) continue;
+                bool is_return = i == 0;
+                if (mode == LI_EXIT_ANY || (mode == LI_EXIT_OTHER) != is_return)
+                    return EXITS[i];
+            }
         /* A lambda's `return` leaves the lambda, not this loop. */
         if (rt_head_is(f, "fn") || rt_head_is(f, "lambda")) return NULL;
     }
     for (uint32_t i = 0; i < f->as.list.len; i++) {
-        const char *r = li_early_exit(e, f->as.list.items[i], depth + 1);
+        const char *r = li_early_exit(e, f->as.list.items[i], depth + 1, mode);
         if (r) return r;
     }
     return NULL;
+}
+
+static bool li_mentions_return(Elab *e, const Form *f) {
+    return li_early_exit(e, f, 0, LI_EXIT_RETURN) != NULL;
 }
 
 /* ---- the body composer ------------------------------------------------- */
@@ -4924,6 +5721,11 @@ typedef struct LiComp {
     uint32_t           n_inner;
     const char        *why;                   /* decline reason, or NULL */
     char               whybuf[192];
+    /* The image of a name a nested loop assigned: its value after the loop is
+     * unknown, so a later READ of it declines (li_subst).  A sentinel rather
+     * than a fresh symbol, because an unconstrained symbol would be given the
+     * Int sort whatever the local's type. */
+    const Form        *havoc;
 } LiComp;
 
 static const Form *li_decline(LiComp *C, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
@@ -4964,6 +5766,9 @@ static const Form *li_subst(LiComp *C, const LiPath *P, const Form *f, uint32_t 
     if (depth > 64) return li_decline(C, "an assigned expression is nested too deeply%s", "");
     if (f->tag == F_SYM && f->as.sym) {
         const Form *im = li_image(P, f->as.sym->name);
+        if (im && im == C->havoc)
+            return li_decline(C, "'%s' is assigned by a nested loop and read "
+                                 "after it", f->as.sym->name);
         return im ? im : f;
     }
     if (f->tag != F_LIST && f->tag != F_VEC) return f;
@@ -5044,6 +5849,71 @@ static bool li_path_assume(LiComp *C, LiPath *P, const Form *c) {
     return true;
 }
 
+/* Is `nm` bound by a `let` somewhere inside `f`?  Lambdas are not entered:
+ * a name bound there cannot be assigned by the code around it. */
+static bool li_binds_name(Elab *e, const Form *f, const char *nm, uint32_t depth) {
+    if (!f || depth >= RT_SET_SCAN_MAX_DEPTH) return false;
+    if (f->tag != F_LIST && f->tag != F_VEC) return false;
+    const Form *mx = rt_macro_expansion(e, f);
+    if (mx) return li_binds_name(e, mx, nm, depth);
+    if (rt_head_is(f, "fn") || rt_head_is(f, "lambda")) return false;
+    if (rt_head_is(f, "let") && f->as.list.len >= 2) {
+        LiBind b[LI_MAX_BINDS];
+        uint32_t nb = 0;
+        if (li_parse_bvec(f->as.list.items[1], b, LI_MAX_BINDS, &nb))
+            for (uint32_t j = 0; j < nb; j++)
+                if (b[j].name->tag == F_SYM && b[j].name->as.sym &&
+                    strcmp(b[j].name->as.sym->name, nm) == 0)
+                    return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (li_binds_name(e, f->as.list.items[i], nm, depth + 1)) return true;
+    return false;
+}
+
+/* A loop nested in the body.  It runs an unknown number of times, so nothing
+ * it assigns has a known value after it -- but that only matters to code that
+ * READS one of those names afterwards.  So rather than declining the outer
+ * loop, every name it assigns is havocked on every path: a later statement or
+ * the invariant reading one declines then, naming it (li_subst), while the
+ * common shape -- an inner counter nobody reads again -- costs nothing.
+ *
+ * A name it assigns must be an outer local or one a body `let` bound (havocked;
+ * when a `let` inside the nested loop shadows one of those, the havoc covers
+ * the outer one too, which only loses facts), or bound by a `let` inside the
+ * nested loop itself (out of scope after it: nothing to do).  Anything else is
+ * declined, as an outer `set!` of it would be.  A nested loop that can
+ * `return`, or that mutates a cell or writes through a place, is declined. */
+static bool li_compose_nested_loop(LiComp *C, const Form *st, LiPaths *ps, bool ret) {
+    Elab *e = C->e;
+    if (ret) {
+        li_decline(C, "a nested loop in the body can `return`%s", "");
+        return false;
+    }
+    if (rt_form_mentions_name(e, st, "swap!", 0) || rt_form_mentions_name(e, st, "reset!", 0)) {
+        li_decline(C, "a nested loop in the body mutates a cell%s", "");
+        return false;
+    }
+    const char *tg[RT_WF3_MAX_TARGETS];
+    uint32_t nt = 0;
+    if (!rt_collect_set_targets(e, st, 0, tg, &nt)) {
+        li_decline(C, "a nested loop in the body assigns in a way this analysis "
+                      "cannot attribute%s", "");
+        return false;
+    }
+    for (uint32_t k = 0; k < nt; k++) {
+        bool outer = li_is_site_local(C, tg[k]) || li_name_in(tg[k], C->inner, C->n_inner);
+        if (!outer) {
+            if (li_binds_name(e, st, tg[k], 0)) continue;
+            li_decline(C, "a nested loop assigns '%s', which is not a local variable", tg[k]);
+            return false;
+        }
+        for (uint32_t i = 0; i < ps->n; i++)
+            if (!li_set_image(C, ps->p[i], tg[k], C->havoc)) return false;
+    }
+    return true;
+}
+
 static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
     Elab *e = C->e;
     if (!st || C->why) return !C->why;
@@ -5051,11 +5921,25 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
     const Form *mx = rt_macro_expansion(e, st);
     if (mx) return li_compose(C, mx, ps, depth + 1);
     /* No assignment anywhere in it: whatever it does, it cannot rebind a
-     * local (by-value; borrows and lambda cells are declined up front). */
-    if (!rt_form_mentions_set(e, st, 0)) return true;
+     * local (by-value; borrows and lambda cells are declined up front).  A
+     * `return` in it must still be seen -- the paths through it end there. */
+    bool ret = li_mentions_return(e, st);
+    if (!ret && !rt_form_mentions_set(e, st, 0)) return true;
     if (st->tag != F_LIST || st->as.list.len == 0) {
         li_decline(C, "an assignment operator is used as a value in the loop body%s", "");
         return false;
+    }
+    if (rt_head_is(st, "return")) {
+        for (uint32_t i = 1; i < st->as.list.len; i++)
+            if (rt_form_mentions_set(e, st->as.list.items[i], 0) ||
+                li_mentions_return(e, st->as.list.items[i])) {
+                li_decline(C, "the value the loop body returns assigns%s", "");
+                return false;
+            }
+        /* Every path that reaches here leaves the function: it never gets to
+         * the end of the body, so it owes no re-establishment. */
+        ps->n = 0;
+        return true;
     }
     if (rt_head_is(st, "set!") && st->as.list.len == 3) {
         const Form *t   = st->as.list.items[1];
@@ -5067,6 +5951,10 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         const char *tn = t->as.sym->name;
         if (rt_form_mentions_set(e, rhs, 0)) {
             li_decline(C, "the value assigned to '%s' itself assigns", tn);
+            return false;
+        }
+        if (li_mentions_return(e, rhs)) {
+            li_decline(C, "the value assigned to '%s' can `return`", tn);
             return false;
         }
         if (!li_is_site_local(C, tn) && !li_name_in(tn, C->inner, C->n_inner)) {
@@ -5110,6 +5998,10 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
                 li_decline(C, "the initializer of '%s' assigns", bn);
                 return false;
             }
+            if (li_mentions_return(e, b[j].init)) {
+                li_decline(C, "the initializer of '%s' can `return`", bn);
+                return false;
+            }
             if (li_is_site_local(C, bn) || li_name_in(bn, C->inner, C->n_inner)) {
                 li_decline(C, "the loop body's `let` rebinds '%s'", bn);
                 return false;
@@ -5136,6 +6028,10 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         const Form *c2 = st->as.list.items[1];
         if (rt_form_mentions_set(e, c2, 0)) {
             li_decline(C, "a branch condition in the loop body assigns%s", "");
+            return false;
+        }
+        if (li_mentions_return(e, c2)) {
+            li_decline(C, "a branch condition in the loop body can `return`%s", "");
             return false;
         }
         if (ps->n * 2 > LI_MAX_PATHS) {
@@ -5166,14 +6062,16 @@ static bool li_compose(LiComp *C, const Form *st, LiPaths *ps, uint32_t depth) {
         for (uint32_t i = 0; i < ep.n; i++) ps->p[ps->n++] = ep.p[i];
         return true;
     }
-    if (rt_head_is(st, "while")) {
-        li_decline(C, "the loop body contains a nested loop that assigns%s", "");
-        return false;
-    }
-    li_decline(C, "the loop body assigns in a position this analysis does not "
-                  "model (inside `%s`)",
-               (st->as.list.items[0]->tag == F_SYM && st->as.list.items[0]->as.sym)
-                   ? st->as.list.items[0]->as.sym->name : "a call");
+    if (rt_head_is(st, "while"))
+        return li_compose_nested_loop(C, st, ps, ret);
+    const char *in = (st->as.list.items[0]->tag == F_SYM && st->as.list.items[0]->as.sym)
+                   ? st->as.list.items[0]->as.sym->name : "a call";
+    if (ret && !rt_form_mentions_set(e, st, 0))
+        li_decline(C, "the loop can leave early through `return` in a position "
+                      "this analysis does not model (inside `%s`)", in);
+    else
+        li_decline(C, "the loop body assigns in a position this analysis does not "
+                      "model (inside `%s`)", in);
     return false;
 }
 
@@ -5331,6 +6229,14 @@ static bool li_obligation(Elab *e, const LoopInvSite *s, const LiFnCtx *F,
     if (ob) {
         ob->quiet = true;
         ob->runtime_guarded = false;   /* the user's own claim; see the plan */
+        /* C2 / #reads: the names a live shared borrow pins AND the body is
+         * promised not to write (li_frozen_for_site).  Borrow liveness alone
+         * is NOT that promise -- see li_name_reads_only for the measurement
+         * that settled it.  Without a set, every `(vlen v)` in the invariant
+         * encodes as a fresh symbol, so a bound over a container is unknown
+         * after the body even inside a region. */
+        if (s->n_frozen)
+            refine_obligation_set_frozen(ob, s->frozen_names, s->n_frozen);
         proven = refine_discharge_one(ob, e->arena);
         if (!proven && !ob->refuted)
             reason = ob->unknown_reason ? ob->unknown_reason : "the solver returned unknown";
@@ -5390,6 +6296,130 @@ static bool li_obligation(Elab *e, const LoopInvSite *s, const LiFnCtx *F,
     return false;
 }
 
+/* Would eliding this loop's two checks be OBSERVABLE?
+ *
+ * Decided by the ONE contract-position gate (rt_pred_observably_impure), on
+ * the ELABORATED predicate.  That gate's own comment states the design this
+ * restores: "One gate, so every contract position -- parameter, `:pre`,
+ * `:post`/return, `:invariant` -- agrees."  This site was the one left asking
+ * the plain purity walk (rt_pred_is_impure), which calls a `#reads` measure
+ * impure because its body is inline C -- so a PROVED `#reads` invariant still
+ * kept both runtime checks, which is item 3 of
+ * reads-measure-rejected-in-invariant-and-pre.
+ *
+ * The carve-out is the gate's, not a new one, and it is narrow in the way that
+ * matters here: a DIRECT call to a `#reads` measure does not count, because
+ * reading borrowed state is neutral however often it runs -- or never.  A
+ * predicate that CHANGES state still counts, so `(>= (tick) 0)` (the
+ * counter-bumping shape the fuzzer found as an output divergence, which is why
+ * this veto exists at all) still keeps its checks, and so does an unannotated
+ * wrapper around a measure, and so does `(vlen (next-vec!))`.
+ *
+ * Falls back to the Form walk when no elaborated predicate was kept -- that
+ * happens only when contracts are not emitted, where there is no check to
+ * elide in the first place. */
+static bool li_elision_observable(Elab *e, const LoopInvSite *s) {
+    if (s->pred_e) return rt_pred_observably_impure(s->pred_e);
+    return rt_pred_is_impure(e, s->inv);
+}
+
+/* Is every occurrence of `name` in `f` one that a callee has PROMISED not to
+ * write?
+ *
+ * This is the question a loop's frozen set actually turns on, and the reason a
+ * live shared borrow does not answer it.  A crossing's frozen set means "a
+ * shared borrow of x is live at this POINT", which makes two occurrences of a
+ * measure inside one predicate congruent.  A loop needs x unchanged ACROSS THE
+ * BODY, and a borrow does not give that: every stdlib container's mutator
+ * takes the container BY VALUE -- `vec-push!` is `[v : (Vec A) val : A]`,
+ * `#fx{}`, `#writes [v]` -- so there is no conflicting borrow for
+ * TUR-E0200 to reject and the mutation is legal inside the region.  Publishing
+ * the borrow-liveness set alone proved `(<= (vlen v) 3)` preserved by a body
+ * calling `(vec-push! v 7)`; see item 2 of
+ * docs/archive/reads-measure-rejected-in-invariant-and-pre.md.
+ *
+ * So the evidence has to be a WRITE promise, and there are exactly two.
+ * `#reads p` is the trusted one: a measure declared that way claims it reads
+ * p's state and nothing more.  A callee the walk knows is PURE is the proven
+ * one -- `info.pure` means known-pure (that is the bar congruence itself is
+ * held to), and something that writes nothing cannot write this.  A pure
+ * callee is safe in EVERY position; `#reads` only in the positions its mask
+ * names.
+ *
+ * An occurrence therefore counts only as a DIRECT argument -- a bare symbol --
+ * at such a position.  Everything else withholds: a bare mention can be
+ * captured, an argument to an unannotated impure callee can be written
+ * through, and a term inside a constructed value escapes the loop entirely.
+ *
+ * False means "withhold the grant", which is always the safe answer, so every
+ * shape this cannot model answers false -- an overflowing walk, a computed
+ * head, a macro it cannot expand. */
+static bool li_name_reads_only(Elab *e, const Form *f, const char *name,
+                               uint32_t depth) {
+    if (!f) return true;
+    if (depth >= RT_SET_SCAN_MAX_DEPTH) return false;
+    if (f->tag == F_SYM && f->as.sym)
+        return strcmp(f->as.sym->name, name) != 0;
+    if (f->tag != F_LIST && f->tag != F_VEC) return true;
+    const Form *mx = rt_macro_expansion(e, f);
+    if (mx) return li_name_reads_only(e, mx, name, depth + 1);
+    if (f->tag == F_LIST && f->as.list.len > 0) {
+        const Form *h = f->as.list.items[0];
+        if (h && h->tag == F_SYM && h->as.sym) {
+            if (strcmp(h->as.sym->name, name) == 0) return false;
+            /* A head that resolves to nothing -- a special form (`set!`,
+             * `let`, `do`), a builtin, an unannotated callee -- carries a zero
+             * mask, so a bare `name` under it withholds.  That is the intended
+             * reading for every one of them: `(set! v ...)` writes it, a `let`
+             * rebinds it, and an unannotated callee may do either. */
+            RefineFnInfo info;
+            memset(&info, 0, sizeof(info));
+            uint64_t mask = 0;
+            bool pure = false;
+            /* rt_resolve_fn answers from the GLOBAL scope only, so it will
+             * happily hand back stdlib `vec-get`'s `#reads v` for a call that
+             * actually goes to a LOCAL binding of that name.  Measured before
+             * this check existed: a `(let [vec-get (fn ... (vec-push! vv 7))]
+             * ...)` shadow was approved on the global's mask, preservation was
+             * "proved", and the check that would have caught the violated
+             * bound was elided -- the vector really did grow, to 5.
+             *
+             * So a promise counts only if the name still RESOLVES to the
+             * binding it was read off.  This is the reason the whole filter
+             * runs at REGISTRATION: that is the only point where the loop's
+             * scope is live to ask. */
+            if (scope_lookup(e->scope, h->as.sym) ==
+                    scope_lookup(&e->global, h->as.sym) &&
+                rt_resolve_fn(e, h->as.sym->name, &info)) {
+                mask = info.reads_params_mask;
+                pure = info.pure;
+                /* A `#reads` promise the measure's own body was seen to break
+                 * (W0383), or could not be shown to keep, backs nothing here:
+                 * this grant elides a check, with no callee-side backstop.
+                 * See reads_scan_frame_writes. */
+                if (info.reads_frame_omits_state || info.reads_write_unverified)
+                    mask = 0;
+            }
+            for (uint32_t i = 1; i < f->as.list.len; i++) {
+                const Form *a = f->as.list.items[i];
+                if (a && a->tag == F_SYM && a->as.sym &&
+                    strcmp(a->as.sym->name, name) == 0) {
+                    uint32_t p = i - 1;
+                    if (!pure && (p >= 64 || !(mask & (UINT64_C(1) << p))))
+                        return false;
+                    continue;                      /* writes nothing, or reads */
+                }
+                if (!li_name_reads_only(e, a, name, depth + 1)) return false;
+            }
+            return true;
+        }
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (!li_name_reads_only(e, f->as.list.items[i], name, depth + 1))
+            return false;
+    return true;
+}
+
 static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     const char *fn = F->fn_name ? F->fn_name : "?";
     const Form *wf = s->while_form;
@@ -5407,12 +6437,18 @@ static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     const char *A[RT_WF3_MAX_TARGETS];
     uint32_t nA = 0;
     if (!why) {
-        const char *x = li_early_exit(e, loop_do, 0);
+        const char *x = li_early_exit(e, loop_do, 0, LI_EXIT_OTHER);
         if (x) {
             snprintf(whybuf, sizeof(whybuf), "the loop can leave early through `%s`", x);
             why = whybuf;
         }
     }
+    /* A `return` leaves the function, so initiation and preservation still
+     * stand (li_compose prunes the paths through it); only the post-loop fact
+     * is lost, since the condition may still hold where the body returned. */
+    s->early_return = !why && li_mentions_return(e, loop_do);
+    if (s->early_return && li_mentions_return(e, s->cond))
+        why = "the loop condition can `return`";
     if (!why && rt_form_mentions_set(e, s->cond, 0))
         why = "the loop condition assigns";
     if (!why) {
@@ -5429,6 +6465,7 @@ static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     memset(&C, 0, sizeof(C));
     C.e = e;
     C.site = s;
+    C.havoc = form_sym(e->arena, wf->span, symtab_intern(e->st, strslice("~nested-loop~", 13)));
     LiPaths ps;
     ps.n = 1;
     ps.p[0] = (LiPath *)arena_alloc(e->arena, sizeof(LiPath));
@@ -5526,11 +6563,35 @@ static void li_analyze_one(Elab *e, LoopInvSite *s, const LiFnCtx *F) {
     s->entry_proven = entry_ok;
     s->pres_proven  = pres_ok;
 
-    /* Never elide a check that is itself observable (rt_pred_is_impure: a
-     * callee not known pure).  The proof still stands for what follows. */
-    if (rt_pred_is_impure(e, s->inv)) return;
+    /* Never elide a check that is itself observable.  The proof still stands
+     * for what follows either way -- entry_proven / pres_proven are already
+     * set above, so the post-loop fact does not depend on this. */
+    if (li_elision_observable(e, s)) return;
     if (entry_ok && s->entry_check) *s->entry_check = e_nil(e, s->span);
     if (pres_ok && s->body_check)   *s->body_check  = e_nil(e, s->span);
+}
+
+/* The same loop elaborated again (a retry, a specialization): its verdict is
+ * Form-level, so reuse an earlier site's -- and report it once.  False when no
+ * earlier site holds a verdict for this loop. */
+static bool li_reuse_prior(Elab *e, uint32_t i) {
+    LoopInvSite *s = &e->loop_inv_sites[i];
+    LoopInvSite *prior = NULL;
+    for (uint32_t j = 0; j < i && !prior; j++)
+        if (e->loop_inv_sites[j].analyzed &&
+            e->loop_inv_sites[j].while_form == s->while_form)
+            prior = &e->loop_inv_sites[j];
+    if (!prior) return false;
+    s->entry_proven = prior->entry_proven;
+    s->pres_proven  = prior->pres_proven;
+    s->early_return = prior->early_return;
+    s->assigned     = prior->assigned;
+    s->n_assigned   = prior->n_assigned;
+    if (!li_elision_observable(e, s)) {
+        if (s->entry_proven && s->entry_check) *s->entry_check = e_nil(e, s->span);
+        if (s->pres_proven && s->body_check)   *s->body_check  = e_nil(e, s->span);
+    }
+    return true;
 }
 
 void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_params,
@@ -5546,35 +6607,76 @@ void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_param
     F.ct_pre_form = ct_pre_form; F.body = body; F.fn_name = fn_name;
     const char *vol[LI_MAX_NAMES];
     uint32_t nvol = 0;
-    F.vol_unknown = !li_lambda_targets(e, body, 0, false, vol, &nvol);
+    /* A borrow bound to a name nothing mentions cannot reach a callee, so it
+     * is not a staling channel -- the `(frozen v ...)` marker.  An overflowing
+     * or unwalkable scan yields an EMPTY exemption set, which is the
+     * conservative direction (every borrow stays volatile). */
+    const Form *inert[LI_MAX_NAMES];
+    uint32_t n_inert = 0;
+    if (!li_inert_borrows(e, body, 0, inert, &n_inert)) n_inert = 0;
+    F.vol_unknown = !li_lambda_targets(e, body, 0, false, vol, &nvol,
+                                       inert, n_inert);
     F.vol = vol; F.n_vol = nvol;
     for (uint32_t i = from; i < e->n_loop_inv_sites; i++) {
         LoopInvSite *s = &e->loop_inv_sites[i];
         if (s->analyzed) continue;
         s->analyzed = true;
-        /* The same loop elaborated again (a retry, a specialization): its
-         * verdict is Form-level, so reuse it -- and report it once. */
-        LoopInvSite *prior = NULL;
-        for (uint32_t j = 0; j < i && !prior; j++)
-            if (e->loop_inv_sites[j].analyzed &&
-                e->loop_inv_sites[j].while_form == s->while_form)
-                prior = &e->loop_inv_sites[j];
-        if (prior) {
-            s->entry_proven = prior->entry_proven;
-            s->pres_proven  = prior->pres_proven;
-            s->assigned     = prior->assigned;
-            s->n_assigned   = prior->n_assigned;
-            if (!rt_pred_is_impure(e, s->inv)) {
-                if (s->entry_proven && s->entry_check) *s->entry_check = e_nil(e, s->span);
-                if (s->pres_proven && s->body_check)   *s->body_check  = e_nil(e, s->span);
-            }
-            continue;
-        }
+        if (li_reuse_prior(e, i)) continue;
         if (!body) {
             li_report_decline(e, s, fn_name, "the enclosing function has no body");
             continue;
         }
         li_analyze_one(e, s, &F);
+    }
+}
+
+/* A `definstance` method's loops, decided exactly as a `defn`'s are.  The
+ * invariant is written in the instance's body, not inherited from the class,
+ * so the class owning the signature changes nothing about what it can prove.
+ * The method's parameter refinements -- its own, or the class's it inherits --
+ * are the entry facts (indexed by parameter, NULL where there is none). */
+void li_analyze_method_loops(Elab *e, uint32_t from, Binding **params,
+                             uint32_t n_params, const Binding *mb,
+                             const Form *impl_form, uint32_t body_start) {
+    if (!e || from >= e->n_loop_inv_sites || !impl_form) return;
+    const Form *nm = impl_form->as.list.len ? impl_form->as.list.items[0] : NULL;
+    const char *fn = (nm && nm->tag == F_SYM && nm->as.sym) ? nm->as.sym->name : "?";
+    uint32_t idx[MAX_FN_ARITY];
+    uint32_t n_idx = 0;
+    const Form **preds = NULL;
+    const char **vars = NULL;
+    if (mb && mb->refine_param_preds) {
+        n_idx = mb->n_refine_params < MAX_FN_ARITY ? mb->n_refine_params : MAX_FN_ARITY;
+        for (uint32_t i = 0; i < n_idx; i++) idx[i] = i;
+        preds = mb->refine_param_preds;
+        vars  = mb->refine_param_vars;
+    }
+    li_analyze_loops(e, from, params, n_params, preds, vars, idx, n_idx, NULL,
+                     rt_whole_body(e, impl_form, body_start), fn);
+}
+
+/* Every annotated loop no definition analysed: one in a top-level `(def f (fn
+ * ...))` lambda, or in any form elaborated outside a `defn` or `definstance`
+ * method.  Elaboration registered it and gave it both runtime checks; nothing
+ * proved or declined it, so without this sweep the annotation would cost those
+ * checks and verify nothing, with no diagnostic at any strictness level.
+ * Declined explicitly instead -- such a lambda has no definition to anchor its
+ * parameter facts to and may be rebound -- so it is reported, and counted in the
+ * stats line's `declined` column, like any other runtime-only invariant. */
+void li_decline_unanalyzed(Elab *e) {
+    if (!e) return;
+    for (uint32_t i = 0; i < e->n_loop_inv_sites; i++) {
+        LoopInvSite *s = &e->loop_inv_sites[i];
+        if (s->analyzed) continue;
+        s->analyzed = true;
+        if (li_reuse_prior(e, i)) continue;
+        refine_note_invariant_declined();
+        diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING,
+                            s->inv ? s->inv->span : s->span, TUR_W0372_REFINE_UNKNOWN,
+                            "the invariant of this while loop is not analysed "
+                            "statically: it is not inside a `defn` or a "
+                            "`definstance` method (a top-level lambda is not "
+                            "analysed); both runtime checks kept");
     }
 }
 
@@ -5601,7 +6703,7 @@ static bool li_prove_paths_ext(Elab *e, const Form *pred, const char *var_name,
                                RefineEnv *env, Span loc, uint32_t depth,
                                bool *handled) {
     *handled = false;
-    if (!g_opt_loop_invariants || !subject) return false;
+    if (!subject) return false;
 
     if (rt_head_is(subject, "let") && subject->as.list.len >= 3) {
         const Form *bv = subject->as.list.items[1];
@@ -5725,12 +6827,16 @@ static bool li_prove_paths_ext(Elab *e, const Form *pred, const char *var_name,
  * Returns false when the walk has nothing to add, leaving the crossing to the
  * ordinary path. */
 static bool li_cs_path_facts(Elab *e, RefineCallSite *cs, bool *skip) {
-    if (!g_opt_loop_invariants || e->n_loop_inv_sites == 0) return false;
+    if (e->n_loop_inv_sites == 0) return false;
     if (!cs->env || !cs->caller_body || !cs->call_form) return false;
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return false;
     const char *vol[LI_MAX_NAMES];
     uint32_t nvol = 0;
-    if (!li_lambda_targets(e, cs->caller_body, 0, false, vol, &nvol)) return false;
+    /* No exemption here on purpose: this is the CROSSING's path-condition
+     * walk, which the loop change is not about.  Narrowing it would move
+     * call-site behaviour in the same commit for no measured reason. */
+    if (!li_lambda_targets(e, cs->caller_body, 0, false, vol, &nvol, NULL, 0))
+        return false;
     LiFacts facts;
     facts.n = 0;
     LiWalk W;
@@ -5745,12 +6851,102 @@ static bool li_cs_path_facts(Elab *e, RefineCallSite *cs, bool *skip) {
     return true;
 }
 
+/* Does predicate `f` call a `^reflect` measure the encoder can unfold? */
+static bool rt_pred_mentions_reflected(Elab *e, const Form *f, uint32_t depth) {
+    if (!f || depth >= RT_CS_PATH_MAX_DEPTH) return false;
+    if (f->tag != F_LIST || f->as.list.len == 0) return false;
+    const Form *h = f->as.list.items[0];
+    if (h->tag == F_SYM && h->as.sym) {
+        RefineFnInfo info;
+        memset(&info, 0, sizeof(info));
+        if (rt_resolve_fn(e, h->as.sym->name, &info) && info.reflect_body) return true;
+    }
+    for (uint32_t i = 0; i < f->as.list.len; i++)
+        if (rt_pred_mentions_reflected(e, f->as.list.items[i], depth + 1)) return true;
+    return false;
+}
+
 /* Push this crossing's path conditions onto `cs->env`, returning the saved
  * head so the caller can rewind.  Declines -- pushing nothing -- when the body
  * assigns anywhere, since a condition mentioning a reassigned name may no
  * longer hold at the call, and when `call_form` is reachable by more than one
  * route, which a macro that shares a node can produce and which would make
  * "the" path ambiguous. */
+/* r7rs-conformance-program-emits-megabytes-of-c: what rt_push_cs_path_conds
+ * learns from a caller's body alone -- the names it assigns (WF3), and whether
+ * an assigned name is borrowed somewhere that may write it -- memoized per
+ * body for one refine_resolve_call_sites pass.  Each crossing used to walk
+ * its caller's whole body (macro expansions included) for this, so a caller
+ * with N crossings cost N walks: `main` in a large `#lang r7rs` program holds
+ * every top-level form, and this was about 40% of its `emit-c`.  Nothing it
+ * reads changes during the pass (the bodies and the macro table are fixed by
+ * then). */
+typedef struct {
+    const Form  *body;          /* NULL = empty slot */
+    bool         decline;       /* the whole-body decline: return before any fact */
+    uint32_t     nw;
+    const char  *wtgt[RT_WF3_MAX_TARGETS];
+} RtBodyWrites;
+static struct { RtBodyWrites *v; uint32_t cap, n; } g_rt_body_writes;
+
+static void rt_body_writes_reset(void) {
+    free(g_rt_body_writes.v);
+    g_rt_body_writes.v = NULL;
+    g_rt_body_writes.cap = g_rt_body_writes.n = 0;
+}
+
+static const RtBodyWrites *rt_body_writes(Elab *e, const Form *body) {
+    if (g_rt_body_writes.n * 2 + 2 > g_rt_body_writes.cap) {
+        uint32_t ncap = g_rt_body_writes.cap ? g_rt_body_writes.cap * 2 : 64;
+        RtBodyWrites *nv = (RtBodyWrites *)calloc(ncap, sizeof *nv);
+        if (!nv) return NULL;
+        for (uint32_t i = 0; i < g_rt_body_writes.cap; i++) {
+            if (!g_rt_body_writes.v[i].body) continue;
+            uint64_t x = (uint64_t)(uintptr_t)g_rt_body_writes.v[i].body;
+            x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+            uint32_t h = (uint32_t)x & (ncap - 1);
+            while (nv[h].body) h = (h + 1) & (ncap - 1);
+            nv[h] = g_rt_body_writes.v[i];
+        }
+        free(g_rt_body_writes.v);
+        g_rt_body_writes.v = nv;
+        g_rt_body_writes.cap = ncap;
+    }
+    uint64_t x = (uint64_t)(uintptr_t)body;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    uint32_t mask = g_rt_body_writes.cap - 1;
+    uint32_t h = (uint32_t)x & mask;
+    while (g_rt_body_writes.v[h].body) {
+        if (g_rt_body_writes.v[h].body == body) return &g_rt_body_writes.v[h];
+        h = (h + 1) & mask;
+    }
+    RtBodyWrites *w = &g_rt_body_writes.v[h];
+    w->body = body;
+    g_rt_body_writes.n++;
+    /* WF3: an assignment no longer declines the whole body outright.  Collect
+     * what the body assigns, so each hypothesis can be tested against it; a
+     * frame this analysis cannot vouch for (place-expression target, an
+     * unattributable assignment symbol, overflow, too deep) declines. */
+    w->nw = 0;
+    if (!rt_collect_set_targets(e, body, 0, w->wtgt, &w->nw)) {
+        w->decline = true;
+        return w;
+    }
+    /* A borrowed local is the one way a callee could write this frame's slot,
+     * so an assigned name that is also borrowed is not provably disjoint --
+     * unless every borrow of it provably goes nowhere that writes, which is
+     * the question WF2's checked frames made askable.  A body with no checked
+     * frame in reach answers "no" and the guard stays as strict as it was. */
+    for (uint32_t i = 0; i < w->nw; i++)
+        if (rt_form_borrows_name(e, body, w->wtgt[i], 0) &&
+            !wf_borrow_write_free(e, body, w->wtgt[i], 0)) {
+            w->decline = true;
+            return w;
+        }
+    w->decline = false;
+    return w;
+}
+
 static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
                                         bool *skip) {
     RefineHyp *saved = cs->env ? cs->env->head : NULL;
@@ -5758,31 +6954,32 @@ static RefineHyp *rt_push_cs_path_conds(Elab *e, RefineCallSite *cs,
     if (!cs->env || !cs->caller_body || !cs->call_form) return saved;
     if (li_cs_path_facts(e, cs, skip)) return saved;   /* loop-invariants-plan LI3 */
 
-    /* WF3: an assignment no longer declines the whole body outright.  Collect
-     * what the body assigns, so each hypothesis can be tested against it
-     * below; a frame this analysis cannot vouch for (place-expression target,
-     * an unattributable assignment symbol, overflow, too deep) returns false
-     * here and restores the old whole-body decline. */
-    const char *wtgt[RT_WF3_MAX_TARGETS];
-    uint32_t nw = 0;
-    if (!rt_collect_set_targets(e, cs->caller_body, 0, wtgt, &nw)) return saved;
-    /* A borrowed local is the one way a callee could write this frame's slot,
-     * so an assigned name that is also borrowed is not provably disjoint --
-     * unless every borrow of it provably goes nowhere that writes, which is
-     * the question WF2's checked frames made askable.  A body with no checked
-     * frame in reach answers "no" and the guard stays as strict as it was. */
-    for (uint32_t i = 0; i < nw; i++)
-        if (rt_form_borrows_name(e, cs->caller_body, wtgt[i], 0) &&
-            !wf_borrow_write_free(e, cs->caller_body, wtgt[i], 0))
-            return saved;
+    /* What the body assigns, and the whole-body decline (rt_body_writes). */
+    const RtBodyWrites *bw = rt_body_writes(e, cs->caller_body);
+    if (!bw || bw->decline) return saved;
+    const char *const *wtgt = bw->wtgt;
+    uint32_t nw = bw->nw;
 
     if (rt_form_occurrences(e, cs->caller_body, cs->call_form, 0) != 1) return saved;
+
+    /* Match-arm constructor facts only where a reflected measure needs them
+     * (see the `match` case of rt_collect_path_conds for the cost). */
+    bool ctor_facts = false;
+    if (g_opt_reflected_measures && cs->callee && cs->callee->refine_param_preds)
+        for (uint32_t i = 0; i < cs->callee->n_refine_params && !ctor_facts; i++)
+            ctor_facts = rt_pred_mentions_reflected(e, cs->callee->refine_param_preds[i], 0);
+    RtRel rel;
+    rel.n = 0;
+    if (ctor_facts)
+        for (uint32_t i = cs->arg_offset; i < cs->call_form->as.list.len; i++)
+            rt_rel_add_syms(e, &rel, cs->call_form->as.list.items[i], 0);
 
     const Form *hyps[RT_CS_PATH_MAX_HYPS];
     uint32_t n = 0;
     bool shadowed = false;
     bool reached = rt_collect_path_conds(e, cs->env, cs->caller_body,
-                                         cs->call_form, hyps, &n, &shadowed, 0);
+                                         cs->call_form, hyps, &n, &shadowed,
+                                         ctor_facts ? &rel : NULL, 0);
     /* Recorded on every crossing, not only the capped ones: a cap that never
      * fires still has to report how close it came.  Saturates at the limit --
      * see RefineCapStats.path_hyps_peak for why it cannot do better. */
@@ -5851,6 +7048,7 @@ static void rt_lint_class_leniency(Elab *e, RefineCallSite *cs, uint32_t p,
 
 void refine_resolve_call_sites(Elab *e) {
     if (!e) return;
+    rt_body_writes_reset();
     /* Start at THIS turn's crossings.  Zero for a compile and for a session's
      * first turn, so the whole-program path walks everything exactly as before.
      *
@@ -5999,6 +7197,7 @@ void refine_resolve_call_sites(Elab *e) {
         }
         if (cs->env) cs->env->head = cs_saved;
     }
+    rt_body_writes_reset();
 }
 
 /* Phase 2: defn — (defn name [param1 param2 ...] : return-type body...)
@@ -6204,6 +7403,15 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 }
                 const Type *bound = typeclass_env_resolve_assoc_type_n(
                     &e->typeclass_env, head, arg_buf, n_args);
+                /* associated-type-unusable-nullary-and-generic (half 2): `(Inner
+                 * A)` at a signature type variable stays unreduced; a call that
+                 * fixes A reduces it (call_bind_assoc_projections). */
+                Type proj;
+                if (!bound && elab_assoc_projection(e, head, arg_buf, n_args, &proj)) {
+                    Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *out = proj;
+                    return out;
+                }
                 if (!bound) {
                     diag_emit(DIAG_ERROR, form->span,
                               "no instance binding for associated type '%s' at this type",
@@ -6504,6 +7712,29 @@ static bool type_mentions_named_tyvar(const Type *t, const char *name) {
         case TY_APP:
             return type_mentions_named_tyvar(t->as.app.fn, name) ||
                    type_mentions_named_tyvar(t->as.app.arg, name);
+        /* A constraint tyvar can reach a parameter ONLY through a
+         * function-typed parameter -- `fold-map`'s shape, where the Monoid
+         * variable B appears nowhere but inside `^fat f : (fn [A] B)`.  Before
+         * this case such a tyvar was classified return-resolved and its
+         * `cur_fn_constraint_param_mask` bit left clear, so the
+         * return-directed representative search refused a carrier-compatible
+         * opaque newtype and `(mempty)` reported `no instance 'Monoid tyvar'`.
+         * The signature IS a parameter type, so walk it.  Monomorphization
+         * still has something to split on: `(fn [A] Sum)` and `(fn [A]
+         * Product)` are distinct Types, so the arg vector interns two specs
+         * and Gap H's `__h<n>` discriminator separates the identically
+         * rendered `int64_t` signatures -- the same soundness argument the
+         * mask already rests on for a directly-mentioned tyvar.  See
+         * docs/archive/nullary-class-method-unresolvable-over-newtype-tyvar.md
+         * and docs/design/multiple-monoids-across-languages.md. */
+        case TY_FN:
+            if (t->as.fn.arg_full_types) {
+                for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+                    if (type_mentions_named_tyvar(t->as.fn.arg_full_types[i], name))
+                        return true;
+                }
+            }
+            return type_mentions_named_tyvar(t->as.fn.result_full_type, name);
         default:
             return false;
     }
@@ -7402,6 +8633,10 @@ static bool form_vec_has_literal_item(const Form *v) {
 }
 
 Expr *elab_defn(Elab *e, const Form *call) {
+    /* forward-call-to-aggregate-result-types-as-carrier: a module type
+     * elaborated since the last defn may be what a pending forward decl's
+     * return was waiting on; settle those before this body calls them. */
+    if (e->fwd_pending_results) elab_fwd_refresh_pending(e);
     /* Phase R5: Check for #[no-unwind] attribute before name.
      * #[used]: retain with external C linkage (see Binding.retain_c_linkage).
      * Both are bare-symbol attributes and may appear in either order. */
@@ -7454,49 +8689,64 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * comes to believe a predicate is enforced when it is not. */
     bool        is_reflect_attr = false;
     const Form *reflect_annot   = NULL;
-    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_reflect) {
-        is_reflect_attr = true;
-        reflect_annot   = name_f;
-        name_idx++;
-        if (name_idx >= call->as.list.len) {
-            diag_emit(DIAG_ERROR, name_f->span,
-                      "^reflect must be followed by the function name");
-            return NULL;
-        }
-        name_f = call->as.list.items[name_idx];
-    }
-    if (name_f->tag == F_SYM && name_f->as.sym == e->sym_caret_deprecated) {
-        is_deprecated_attr = true;
-        name_idx++;
-        if (name_idx >= call->as.list.len) {
-            diag_emit(DIAG_ERROR, name_f->span,
-                      "^deprecated must be followed by an optional message string "
-                      "and the function name");
-            return NULL;
-        }
-        Form *next = call->as.list.items[name_idx];
-        if (next->tag == F_STR) {
-            char *msg_buf = (char *)arena_alloc(e->arena, next->as.s.len + 1);
-            memcpy(msg_buf, next->as.s.p, next->as.s.len);
-            msg_buf[next->as.s.len] = '\0';
-            deprecation_msg = msg_buf;
+    /* effect-row-honesty W0: `^construct` (M2a) and `^byval` (M5) also sit
+     * here.  They used to be spelled inside the effect row, ^construct /
+     * ^byval, and plucked out before the row was built; an attribute is
+     * not an effect, and the row is now only effects and row variables. */
+    bool defn_has_construct_attr = false;
+    bool defn_has_byval_attr = false;
+    /* The pre-name attributes, in any order. */
+    for (;;) {
+        if (name_f->tag != F_SYM) break;
+        const Symbol *as = name_f->as.sym;
+        if (as == e->sym_caret_reflect && !is_reflect_attr) {
+            is_reflect_attr = true;
+            reflect_annot   = name_f;
+        } else if (as == e->sym_caret_construct && !defn_has_construct_attr) {
+            defn_has_construct_attr = true;
+        } else if (as == e->sym_caret_byval && !defn_has_byval_attr) {
+            defn_has_byval_attr = true;
+        } else if (as == e->sym_caret_deprecated && !is_deprecated_attr) {
+            is_deprecated_attr = true;
             name_idx++;
             if (name_idx >= call->as.list.len) {
-                diag_emit(DIAG_ERROR, next->span,
-                          "^deprecated message must be followed by the function name");
+                diag_emit(DIAG_ERROR, name_f->span,
+                          "^deprecated must be followed by an optional message string "
+                          "and the function name");
                 return NULL;
             }
+            Form *next = call->as.list.items[name_idx];
+            if (next->tag == F_STR) {
+                char *msg_buf = (char *)arena_alloc(e->arena, next->as.s.len + 1);
+                memcpy(msg_buf, next->as.s.p, next->as.s.len);
+                msg_buf[next->as.s.len] = '\0';
+                deprecation_msg = msg_buf;
+                name_idx++;
+                if (name_idx >= call->as.list.len) {
+                    diag_emit(DIAG_ERROR, next->span,
+                              "^deprecated message must be followed by the function name");
+                    return NULL;
+                }
+            }
+            name_f = call->as.list.items[name_idx];
+            continue;
+        } else if (as->len > 1 && as->name[0] == '^' &&
+                   as->name[1] >= 'a' && as->name[1] <= 'z') {
+            /* An attribute this position does not take (or one given twice).
+             * Without this, `(defn ^contruct some ...)` defined a function
+             * named `^contruct` and the real name became its parameters. */
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defn: '%s' is not an attribute a defn takes before its name "
+                      "(those are ^construct, ^byval, ^deprecated, ^reflect, each "
+                      "at most once)", as->name);
+            return NULL;
+        } else {
+            break;
         }
-        name_f = call->as.list.items[name_idx];
-    }
-    if (!is_reflect_attr && name_f->tag == F_SYM &&
-        name_f->as.sym == e->sym_caret_reflect) {
-        is_reflect_attr = true;
-        reflect_annot   = name_f;
         name_idx++;
         if (name_idx >= call->as.list.len) {
             diag_emit(DIAG_ERROR, name_f->span,
-                      "^reflect must be followed by the function name");
+                      "%s must be followed by the function name", as->name);
             return NULL;
         }
         name_f = call->as.list.items[name_idx];
@@ -8899,8 +10149,6 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * Uppercase names are concrete effects; lowercase are row variables.
      * The row is stored as ERK_UNRESOLVED and resolved after PASS_EFFECT_LOWER. */
     EffectRow *declared_effect_row_defn = NULL;
-    bool defn_has_construct_attr = false;
-    bool defn_has_byval_attr = false;
     /* C2 / #reads: captured here, stamped onto the binding alongside the
      * refine_* metadata below.  1-based; 0 = no #reads annotation. */
     uint64_t reads_params_mask_defn = 0;
@@ -8926,21 +10174,16 @@ Expr *elab_defn(Elab *e, const Form *call) {
             for (uint32_t j = 0; j < maybe_row->as.list.len; j++) {
                 Form *item = maybe_row->as.list.items[j];
                 if (item->tag == F_SYM) {
-                    /* M2a: pluck #{Construct} out of the effect row so it
-                     * doesn't leak into PASS_EFFECT_LOWER as a phantom effect. */
-                    if (item->as.sym == e->sym_construct_attr) {
-                        defn_has_construct_attr = true;
-                        continue;
-                    }
-                    /* M5 residual-straddle: pluck #{ByVal} similarly. */
-                    if (item->as.sym == e->sym_byval_attr) {
-                        defn_has_byval_attr = true;
-                        continue;
-                    }
+                    /* `Construct` / `ByVal` are no longer plucked here: they
+                     * are `^construct` / `^byval` before the name now, and
+                     * left in the row they are TUR-E0026 like any other name
+                     * no defeffect declares (with a hint saying where they
+                     * went -- effect_check.c). */
                     syms[n_valid++] = item->as.sym;
                 }
             }
-            declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid);
+            declared_effect_row_defn = effect_row_unresolved(e->arena, syms, n_valid,
+                                                             maybe_row->span);
             body_start++;  /* skip past the effect row map */
         }
     }
@@ -9742,6 +10985,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
         for (uint32_t i = 0; i < n_params; i++) {
             if (params[i]->type.kind != TY_TYVAR ||
                 !params[i]->type.as.tyvar_.name) continue;
+            /* associated-type-unusable-nullary-and-generic (half 2): an
+             * associated-type projection `(Inner A)` is determined by its
+             * argument -- it is not a typo, however often it occurs. */
+            if (params[i]->type.as.tyvar_.assoc_of) continue;
             const char *nm = params[i]->type.as.tyvar_.name;
             bool declared = false;
             for (uint8_t k = 0; k < n_fn_type_params; k++)
@@ -9783,7 +11030,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
 
         /* Reject a bare return type variable with no quantifying binder. */
         if (return_kind == TY_TYVAR && return_tyvar_type &&
-            return_tyvar_type->as.tyvar_.name) {
+            return_tyvar_type->as.tyvar_.name &&
+            !return_tyvar_type->as.tyvar_.assoc_of) {
             const char *rn = return_tyvar_type->as.tyvar_.name;
             bool declared = false;
             for (uint8_t k = 0; k < n_fn_type_params; k++)
@@ -10004,6 +11252,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
         memset(body_expected, 0, sizeof(Type));
         body_expected->kind = TY_ANY;
     }
+    /* early-return-bypasses-return-refinement: a `return` in this body gets
+     * the checks the whole-body wrap below gives the fall-through value. */
+    const RetContract *saved_ret_contract = e->ret_contract;
+    e->ret_contract = NULL;
+    if ((ct_post_form || ct_ret_pred) && rt_contracts_emitted()) {
+        RetContract *rc = (RetContract *)arena_alloc(e->arena, sizeof(RetContract));
+        memset(rc, 0, sizeof(*rc));
+        rc->post    = ct_post_form;
+        rc->ret     = ct_ret_pred;
+        rc->ret_var = ct_ret_var;
+        rc->subject = name_f->as.sym->name;
+        e->ret_contract = rc;
+    }
     if (body_expected) e->expected_type = body_expected;
     {
         /* Internal defines: splice (define name init) into nested let forms. */
@@ -10027,6 +11288,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                 e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
+                e->ret_contract = saved_ret_contract;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -10051,6 +11313,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                 e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
+                e->ret_contract = saved_ret_contract;
                 e->scope = inner.parent;
                 scope_free(&inner);
                 return NULL;
@@ -10076,6 +11339,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     e->cur_fn_n_constraints = saved_cur_fn_n_constraints;
                     e->cur_fn_constraint_param_mask = saved_cur_fn_con_param_mask;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
+                    e->ret_contract = saved_ret_contract;
                     e->scope = inner.parent;
                     scope_free(&inner);
                     return NULL;
@@ -10099,6 +11363,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    e->ret_contract = saved_ret_contract;
     /* nested-defn-accepted-outer-returns-zero: a body whose LAST form is a
      * definition leaves the function with no tail value, and codegen falls back
      * to `return 0;` -- it runs, exits 0, and returns the wrong answer with no
@@ -10613,21 +11878,39 @@ Expr *elab_defn(Elab *e, const Form *call) {
         li_analyze_loops(e, li_start, params, n_params, ct_param_preds,
                          ct_param_varnames, ct_param_param_idx, n_ct_param_preds,
                          ct_pre_form, rt_whole_body(e, call, body_start), rt_fn);
+        /* early-return-bypasses-return-refinement: an early `return` is a
+         * second exit.  Its value never reaches `rt_subject` (the LAST body
+         * form), and the per-path split reads a `do`'s earlier forms as
+         * statements, so a proof of the subject covers the fall-through path
+         * only -- `(when (> n 5) (return 0)) n` "proved" `(>= r n)` and lost its
+         * check.  Not attempted: the obligation is reported unknown and each
+         * `return` carries the runtime check itself (rt_check_returned_value). */
+        bool rt_early_ret = li_mentions_return(e, rt_whole_body(e, call, body_start));
         char rt_what[128];
-        if (ct_ret_pred) {
-            snprintf(rt_what, sizeof(rt_what), "the return value of '%s'", rt_fn);
-            rt_ret_proven = rt_return_obligation_proven(
-                e, ct_ret_pred, ct_ret_var, rt_subject, return_kind, rt_env,
-                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
-                call->span);
-            rt_ret_guaranteed = rt_ret_proven || should_check;
-        }
-        if (ct_post_form) {
-            snprintf(rt_what, sizeof(rt_what), "the postcondition of '%s'", rt_fn);
-            rt_post_proven = rt_return_obligation_proven(
-                e, ct_post_form, "result", rt_subject, return_kind, rt_env,
-                arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
-                call->span);
+        for (int ct_pass = 0; ct_pass < 2; ct_pass++) {
+            const Form *pf = ct_pass == 0 ? ct_ret_pred : ct_post_form;
+            if (!pf) continue;
+            snprintf(rt_what, sizeof(rt_what), ct_pass == 0 ? "the return value of '%s'"
+                                                            : "the postcondition of '%s'", rt_fn);
+            bool pv = false;
+            if (rt_early_ret)
+                diag_emit_with_code(g_strict_refine ? DIAG_ERROR : DIAG_WARNING,
+                                    call->span, TUR_W0372_REFINE_UNKNOWN,
+                                    "refinement on %s could not be decided statically "
+                                    "(the body can leave early through `return`); "
+                                    "runtime check kept", rt_what);
+            else
+                pv = rt_return_obligation_proven(
+                    e, pf, ct_pass == 0 ? ct_ret_var : "result", rt_subject,
+                    return_kind, rt_env,
+                    arena_strdup(e->arena, rt_what, strlen(rt_what)), rt_fn,
+                    call->span);
+            if (ct_pass == 0) {
+                rt_ret_proven = pv;
+                rt_ret_guaranteed = rt_ret_proven || should_check;
+            } else {
+                rt_post_proven = pv;
+            }
         }
         /* RT4: with no DECLARED return refinement, try to infer one from
          * the parameter refinements and the body.  Scope is deliberately
@@ -10636,7 +11919,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * need a path-sensitive join at the merge point, which is deferred.
          * Nothing is emitted for an inferred refinement -- it is extra
          * knowledge published to call sites, not a new runtime check. */
-        if (!ct_ret_pred && n_body == 1 && n_ct_param_preds > 0 &&
+        if (!ct_ret_pred && !rt_early_ret && n_body == 1 && n_ct_param_preds > 0 &&
             n_ct_param_preds <= 4 && rt_subject &&
             (return_kind == TY_INT || return_kind == TY_FLOAT ||
              return_kind == TY_FLOAT32 || return_kind == TY_FLOAT64)) {
@@ -10654,30 +11937,19 @@ Expr *elab_defn(Elab *e, const Form *call) {
             body = rt_inject_param_checks(e, body, check_fn, params, n_params,
                                           ct_param_preds, ct_param_varnames,
                                           ct_param_param_idx, n_ct_param_preds,
-                                          call->span);
+                                          name_f->as.sym->name, call->span);
 
             /* CT1: :pre — prepend (tur-contract-check pre_pred "Precondition failed") */
             if (ct_pre_form && check_fn) {
                 Expr *pred_e = elab_form(e, (Form *)ct_pre_form);
                 rt_diag_impure_pred(e, pred_e, call->span);
                 pred_e = elab_saffron_truthy(e, pred_e, call->span);   /* D6, see above */
-                if (pred_e) {
-                    /* Build call: (tur-contract-check pred "Precondition failed") */
-                    Expr **check_args = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
-                    check_args[0] = pred_e;
-                    /* String arg */
-                    Expr *msg_e = expr_new(e->arena, EX_CSTR_LIT, TYPE_CSTR, call->span);
-                    msg_e->as.s.p = "Precondition failed";
-                    msg_e->as.s.len = 19;
-                    check_args[1] = msg_e;
-                    Expr *check_call = expr_new(e->arena, EX_CALL, TYPE_NIL, call->span);
-                    check_call->as.call_.fn_binding = check_fn;
-                    check_call->as.call_.args = check_args;
-                    check_call->as.call_.n_args = 2;
-                    check_call->as.call_.fn_expr = NULL;
-                    check_call->as.call_.dict_arg = NULL;
-                    check_call->as.call_.is_poly_call = false;
-                    check_call->as.call_.poly_arg_mask = 0;
+                Expr *check_call = pred_e ? rt_contract_check_call(
+                    e, check_fn, pred_e,
+                    rt_contract_message(e, "Precondition failed",
+                                        name_f->as.sym->name, ct_pre_form),
+                    ct_pre_form->span, call->span) : NULL;
+                if (check_call) {
                     /* Prepend check to body as EX_DO */
                     Expr **do_items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
                     do_items[0] = check_call;
@@ -10706,7 +11978,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                     ct_pass == 1 ? ct_ret_var : NULL,
                     ct_pass == 0 ? "Postcondition failed"
                                  : "Return contract violated",
-                    call->span);
+                    name_f->as.sym->name, call->span);
             }
         }
     }
@@ -10779,6 +12051,25 @@ Expr *elab_defn(Elab *e, const Form *call) {
     e->scope = inner.parent;
     scope_free(&inner);
     if (lt1_param_fail || st1_param_fail) return NULL;
+
+    /* word-result-fn-into-nil-slot: a WRITTEN `: nil` / `: void` means the
+     * function returns nothing, whatever its last form computes -- the body
+     * runs for effect.  Letting the body's value win typed
+     * `(defn noop [x : int] : void (let [_ x] 0))` as `(fn [int] int)`, so a
+     * function the programmer declared void was refused by a `(fn [...] nil)`
+     * slot (or, before that slot was checked, called through the wrong C
+     * type). */
+    if (return_annotated && return_kind == TY_NIL && body &&
+        body->type.kind != TY_NIL && body->type.kind != TY_NEVER &&
+        body->kind != EX_INLINE_C) {
+        Expr **items = (Expr **)arena_alloc(e->arena, 2 * sizeof(Expr *));
+        items[0] = body;
+        items[1] = e_nil(e, body->span);
+        Expr *d = expr_new(e->arena, EX_DO, TYPE_NIL, body->span);
+        d->as.do_.items = items;
+        d->as.do_.n = 2;
+        body = d;
+    }
 
     /* Infer return type from body if not specified or polymorphic (TY_TYVAR).
      * For TY_TYVAR (named type variable like :a), use the body's concrete type
@@ -11235,6 +12526,43 @@ Expr *elab_defn(Elab *e, const Form *call) {
             }
         }
     }
+    /* reads-frame-verification-ignores-a-callee-write-frame: `#reads p` also
+     * promises the body does not change p.  Walked here, at the definition,
+     * because the loop-invariant frozen grant that leans hardest on the
+     * promise is decided while later defns are still being elaborated -- and
+     * it only ever sees a measure whose mask is already stamped, i.e. one
+     * that has already passed through here.  Stamped on clones too, for the
+     * same whichever-binding-a-call-resolves-to reason as the evidence above. */
+    b->reads_write_mask       = 0;
+    b->reads_write_unverified = false;
+    if (reads_params_mask_defn != 0 && body) {
+        uint64_t wmask = 0;
+        RwVerdict rv = reads_scan_frame_writes(body, params, n_params,
+                                               reads_params_mask_defn, &wmask);
+        b->reads_write_unverified = rv != RW_CLEAN;
+        if (rv == RW_WRITES && wmask) {
+            b->reads_write_mask        = wmask;
+            b->reads_frame_omits_state = true;   /* refuses every grant */
+            if (!e->bare_fat_spec_active) {
+                const char *pn = "?";
+                for (uint32_t pi = 0; pi < n_params && pi < 64; pi++)
+                    if ((wmask & (UINT64_C(1) << pi)) && params[pi] && params[pi]->name) {
+                        pn = params[pi]->name->name;
+                        break;
+                    }
+                diag_emit_with_code(DIAG_WARNING,
+                                    reads_annot_defn ? reads_annot_defn->span
+                                                     : name_f->span,
+                                    TUR_W0383_READS_FRAME_OMITS_MUTABLE,
+                                    "`#reads %s` is broken: the body writes the state "
+                                    "of '%s' (directly, or through a callee whose "
+                                    "`#writes` frame names it), so two calls this "
+                                    "frame lets the solver treat as one value can "
+                                    "differ; drop `#reads %s`, or stop writing it",
+                                    pn, pn, pn);
+            }
+        }
+    }
     /* WF1 / #writes: same placement rationale as `#reads` -- a write frame is
      * independent of param refinements.  `writes_checked` starts false and is
      * raised by the DEFERRED WF2 pass (wf_resolve_write_frames), which is where
@@ -11444,9 +12772,9 @@ Expr *elab_defn(Elab *e, const Form *call) {
     /* F4: Store ^deprecated attribute on the binding */
     b->is_deprecated = is_deprecated_attr;
     b->deprecation_message = deprecation_msg;
-    /* M2a: propagate #{Construct} marker */
+    /* M2a: propagate ^construct marker */
     b->is_construct_template = defn_has_construct_attr;
-    /* M5 residual-straddle: propagate #{ByVal} marker */
+    /* M5 residual-straddle: propagate ^byval marker */
     b->prefer_byvalue_spec = defn_has_byval_attr;
 
     /* captureless-algebra-arm-thin-through-carrier: when a function returns the
@@ -12078,7 +13406,8 @@ Expr *elab_fn(Elab *e, const Form *call) {
                     syms[n_valid++] = item->as.sym;
                 }
             }
-            declared_effect_row_fn = effect_row_unresolved(e->arena, syms, n_valid);
+            declared_effect_row_fn = effect_row_unresolved(e->arena, syms, n_valid,
+                                                           maybe_row->span);
             body_start = params_idx + 2;
         }
     }
@@ -12324,6 +13653,10 @@ Expr *elab_fn(Elab *e, const Form *call) {
     }
 
     e->fn_body_depth++;
+    /* A lambda's `return` leaves the lambda: the enclosing function's
+     * result checks do not apply to it. */
+    const RetContract *fn_saved_ret_contract = e->ret_contract;
+    e->ret_contract = NULL;
     if (fn_declared_unsafe) e->unsafe_depth++;
     /* Propagate the lambda's declared return type onto the expected-type
      * channel during body elaboration.  Mirrors what elab_defn already does
@@ -12346,6 +13679,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (!body) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
+                e->ret_contract = fn_saved_ret_contract;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
@@ -12357,6 +13691,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
             if (!body) {
                 if (fn_declared_unsafe) e->unsafe_depth--;
                 e->fn_body_depth--;
+                e->ret_contract = fn_saved_ret_contract;
                 e->n_sig_tyvars = saved_n_sig_tyvars;
                 e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                 e->scope = inner.parent;
@@ -12370,6 +13705,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
                 if (!items[i]) {
                     if (fn_declared_unsafe) e->unsafe_depth--;
                     e->fn_body_depth--;
+                    e->ret_contract = fn_saved_ret_contract;
                     e->n_sig_tyvars = saved_n_sig_tyvars;
                     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
                     e->scope = inner.parent;
@@ -12385,6 +13721,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
     e->expected_type = saved_fn_body_expected;
     if (fn_declared_unsafe) e->unsafe_depth--;
     e->fn_body_depth--;
+    e->ret_contract = fn_saved_ret_contract;
     e->n_sig_tyvars = saved_n_sig_tyvars;
     e->fn_entry_outer_scope = saved_fn_entry_outer_scope;
 
@@ -12414,7 +13751,7 @@ Expr *elab_fn(Elab *e, const Form *call) {
         body = rt_inject_param_checks(e, body, ct_check_fn, params, n_params,
                                       ct_param_preds, ct_param_varnames,
                                       ct_param_param_idx, n_ct_param_preds,
-                                      call->span);
+                                      "fn", call->span);
     }
 
     /* Phase 3: Capture analysis - collect free variables in the body */
@@ -12674,6 +14011,18 @@ Expr *elab_fn(Elab *e, const Form *call) {
     /* `__fn_%u` above is a name the elaborator made up; nothing that lists
      * symbols for a human should offer it. */
     b->is_synthesized = true;
+    b->synth_kind = SYNTH_LAMBDA;
+    /* ...and no diagnostic should print it: say where the `fn` is instead.
+     * The span already points at the literal; the enclosing defn is what
+     * lets a reader find it without counting lambdas. */
+    if (e->current_fn_name && e->current_fn_name->name) {
+        char lbl[160];
+        int n = snprintf(lbl, sizeof(lbl), "anonymous function in '%s'",
+                         e->current_fn_name->name);
+        if (n > 0 && (size_t)n < sizeof(lbl))
+            b->diag_label = arena_strdup(e->arena, lbl, (size_t)n);
+    }
+    if (!b->diag_label) b->diag_label = "anonymous function";
     b->returns_closure_fn_binding = expr_closure_fn_binding(body);
 
     /* RT1: publish this lambda's contract parameters on its lifted thunk

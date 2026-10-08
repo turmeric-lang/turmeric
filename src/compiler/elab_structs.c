@@ -142,6 +142,16 @@ static bool typekind_is_copy_for_struct(TypeKind k) {
  * the type binding with a TY_FN constructor binding. */
 Binding *scope_lookup_type_def(Scope *s, const Symbol *name) {
     for (Scope *cur = s; cur; cur = cur->parent) {
+        if (cur->idx) {
+            /* The global scope holds thousands of bindings and every call
+             * head is looked up here: walk only this name's bindings,
+             * newest first, as the scan below would meet them. */
+            for (uint32_t k = scope_idx_newest(cur, name); k; k = cur->prev[k - 1]) {
+                Binding *b = cur->bindings[k - 1];
+                if (b->type.kind == TY_STRUCT || b->type.kind == TY_ADT) return b;
+            }
+            continue;
+        }
         for (uint32_t i = cur->n; i > 0; i--) {
             Binding *b = cur->bindings[i - 1];
             if (b->name == name &&
@@ -1906,7 +1916,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
                     if (item->tag == F_SYM) syms[n_valid++] = item->as.sym;
                 }
                 ctor->fields[fi].effect_row =
-                    effect_row_unresolved(e->arena, syms, n_valid);
+                    effect_row_unresolved(e->arena, syms, n_valid, row_form->span);
             }
 
             /* CONV-S5: a :copy ADT requires every variant's payload to be
@@ -3552,35 +3562,51 @@ Expr *elab_match(Elab *e, const Form *call) {
                   "match requires a scrutinee: (match scrutinee pattern body ...)");
         return NULL;
     }
-    /* Sum-types plan T6: optional `#{NonExhaustive}` opt-out marker.
+    /* Sum-types plan T6: optional `^non-exhaustive` opt-out marker.
      * Placed immediately after `match`, before the scrutinee:
-     *   (match #{NonExhaustive} scrutinee (Left l) ... )
+     *   (match ^non-exhaustive scrutinee (Left l) ... )
      * When present, the non-exhaustiveness diagnostic on a known sum/ADT
      * scrutinee is suppressed -- the programmer asserts they have proven
      * exhaustiveness (or coverage of overlap) by other means.  The marker
      * is spliced out so the rest of the function sees an ordinary match.
-     * The reader lowers `#{...}` to an F_MAP whose items are the contained
-     * symbols (same shape as a defn effect row). */
+     *
+     * It used to be spelled `#fx{NonExhaustive}` -- an attribute borrowing
+     * the effect-row brackets (effect-row-honesty-plan W0).  That spelling is
+     * still accepted, with TUR-D0004 pointing at the new one. */
     bool nonexhaustive_optout = false;
-    if (call->as.list.items[1]->tag == F_MAP) {
-        warn_legacy_fx_row(call->as.list.items[1]);
-        const Form *marker = call->as.list.items[1];
-        const Symbol *sym_nonexh = intern_cstr(e->st, "NonExhaustive");
-        for (uint32_t mi = 0; mi < marker->as.list.len; mi++) {
-            if (marker->as.list.items[mi]->tag == F_SYM &&
-                marker->as.list.items[mi]->as.sym == sym_nonexh) {
-                nonexhaustive_optout = true;
-            } else {
-                diag_emit(DIAG_ERROR, marker->span,
-                          "match: unknown marker in '#{...}'; only "
-                          "'#{NonExhaustive}' is recognised here");
-                return NULL;
+    const Form *m1 = call->as.list.items[1];
+    bool marker_sym = (m1->tag == F_SYM && m1->as.sym == e->sym_caret_non_exhaustive);
+    if (marker_sym || m1->tag == F_MAP) {
+        if (m1->tag == F_MAP) {
+            warn_legacy_fx_row(call->as.list.items[1]);
+            const Form *marker = m1;
+            for (uint32_t mi = 0; mi < marker->as.list.len; mi++) {
+                if (marker->as.list.items[mi]->tag == F_SYM &&
+                    marker->as.list.items[mi]->as.sym == e->sym_non_exhaustive_legacy) {
+                    nonexhaustive_optout = true;
+                } else {
+                    diag_emit(DIAG_ERROR, marker->span,
+                              "match: unknown marker in '#fx{...}'; the only "
+                              "match marker is ^non-exhaustive: "
+                              "(match ^non-exhaustive scrutinee pattern body ...)");
+                    return NULL;
+                }
             }
+            if (nonexhaustive_optout) {
+                diag_emit_with_code(g_werror_deprecated ? DIAG_ERROR : DIAG_WARNING,
+                    marker->span, TUR_D0004_NONEXHAUSTIVE_FX_MARKER,
+                    "'#fx{NonExhaustive}' is deprecated; write "
+                    "(match ^non-exhaustive scrutinee ...) -- it is a match "
+                    "attribute, not an effect");
+                if (g_werror_deprecated) return NULL;
+            }
+        } else {
+            nonexhaustive_optout = true;
         }
         if (call->as.list.len < 3) {
             diag_emit(DIAG_ERROR, call->span,
-                      "match requires a scrutinee after the '#{NonExhaustive}' "
-                      "marker: (match #{NonExhaustive} scrutinee pattern body ...)");
+                      "match requires a scrutinee after the '^non-exhaustive' "
+                      "marker: (match ^non-exhaustive scrutinee pattern body ...)");
             return NULL;
         }
         /* Splice the marker out: rebuild the call form without items[1]. */
@@ -3601,11 +3627,10 @@ Expr *elab_match(Elab *e, const Form *call) {
         if (lower_err) return NULL;
         if (lowered) {
             if (nonexhaustive_optout) {
-                /* Re-attach the marker the splice above removed. */
-                Form *m_items[1];
-                m_items[0] = form_sym(e->arena, call->span,
-                                      intern_cstr(e->st, "NonExhaustive"));
-                Form *marker = form_map(e->arena, call->span, m_items, 1);
+                /* Re-attach the marker the splice above removed, in the
+                 * current spelling (the legacy one was already reported). */
+                Form *marker = form_sym(e->arena, call->span,
+                                        e->sym_caret_non_exhaustive);
                 const Form *inner = lowered;
                 bool wrapped = (inner->as.list.items[0]->tag == F_SYM &&
                                 inner->as.list.items[0]->as.sym == e->sym_let);
@@ -5081,7 +5106,7 @@ Expr *elab_match(Elab *e, const Form *call) {
                               "this GADT instantiation",
                               c->name, adt->name);
                 } else if (nonexhaustive_optout) {
-                    /* T6: programmer opted out with #{NonExhaustive}. */
+                    /* T6: programmer opted out with ^non-exhaustive. */
                 } else {
                     diag_emit(DIAG_ERROR, call->span,
                               "match: non-exhaustive patterns — constructor '%s' of '%s' not covered",

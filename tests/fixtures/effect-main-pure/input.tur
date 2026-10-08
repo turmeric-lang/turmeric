@@ -1,8 +1,11 @@
-;; ER1: main annotated #{} is accepted when all effects are handled before return.
+;; ER1: main's row need not name an effect it handles before returning.  Write
+;; is handled, so it is absent; the row is #fx{IO} rather than #fx{} only
+;; because the handler clause prints (W4: `println` is #fx{IO}, and #fx{}
+;; means "does not even print").  If Write leaked, this would be TUR-E0009.
 
 (defeffect Write [msg :cstr] :nil)
 
-(defn main [] #fx{} : int
+(defn main [] #fx{IO} : int
   (handle
     (perform (Write "hello"))
     (Write [msg] k) (do (println msg) (resume k 0)))

@@ -1,4 +1,5 @@
 import { CONTENT_SECURITY_POLICY } from './csp.js';
+import { GH_REPO } from './repo.js';
 
 // C-1 in docs/upcoming/security-audit-plan.md.
 //
@@ -34,7 +35,7 @@ set -eu
 #
 #   TVM_DIR=~/somewhere   install tvm elsewhere (default ~/.tvm)
 
-REPO="rjungemann/turmeric"
+REPO="${GH_REPO}"
 API="\${TUR_INSTALL_API:-https://api.github.com/repos/\$REPO}"
 RAW="\${TUR_INSTALL_RAW:-https://raw.githubusercontent.com/\$REPO}"
 
@@ -108,14 +109,13 @@ Turmeric \$VER installed.
       tur --help
 
   Other versions:      tvm ls-remote / tvm install <version>
-  Build main instead:  brew install --HEAD rjungemann/turmeric/turmeric
+  Build main instead:  brew install --HEAD \${REPO}/turmeric
   Playground:          https://turmeric-lang.com/try
 
 EOF
 `;
 
-const TIMINGS_BASE =
-  'https://raw.githubusercontent.com/rjungemann/turmeric/ci-metrics';
+const TIMINGS_BASE = `https://raw.githubusercontent.com/${GH_REPO}/ci-metrics`;
 
 // Both files on the `ci-metrics` branch are append-only NDJSON partitioned by
 // year (tools/ci/publish-timings.sh), so one proxy serves both.
@@ -183,6 +183,12 @@ export default {
     // the aggregation the TODO above describes.
     if (pathname === '/api/ci-loc') {
       return proxyMetricsNDJSON(url, 'repo-loc', 'no line counts available');
+    }
+
+    // Open plans and reports, one row per push to main. Same shape as the
+    // line counts: a property of the commit, no runner dimension.
+    if (pathname === '/api/ci-docs') {
+      return proxyMetricsNDJSON(url, 'docs-counts', 'no doc counts available');
     }
 
     // Rewrite try.turmeric-lang.com/* -> turmeric-lang.com/try/*

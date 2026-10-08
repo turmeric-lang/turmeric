@@ -43,6 +43,8 @@ void wk_register_safe_natives(TuriEnv *env);
 void wk_register_typeclass_natives(TuriEnv *env);
 TuriValue native_contract_check(TuriEnv *env, TuriValue *args,
                                 uint32_t n, void *ud);
+TuriValue native_contract_check_at(TuriEnv *env, TuriValue *args,
+                                   uint32_t n, void *ud);
 TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
                                     uint32_t n, void *ud);
 TuriValue native_contract_enabled(TuriEnv *env, TuriValue *args,

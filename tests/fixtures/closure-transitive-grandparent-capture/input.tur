@@ -11,7 +11,8 @@
 ;; (`n_NNN`), and the generated C failed to compile.
 ;;
 ;; Both levels are fat closures here (the middle now captures `n`), so apply
-;; each through the fat protocol.
+;; each through the fat protocol -- at each thunk's own type: the middle one
+;; returns a closure (`void *`), the inner one an int.
 
 (defn adder [n :int] : (fn [int] (fn [int] int))
   (fn [x :int] : (fn [int] int)
@@ -19,9 +20,11 @@
 
 (defn call-fat [f x] :int
   ```c return TUR_APPLY1(f, x); ```)
+(defn call-fat-fn [f x] :int
+  ```c return (int64_t)(intptr_t)TUR_APPLY1_T(void *, int64_t, f, x); ```)
 
 (defn main [] :int
   (let [f1 (adder 100)            ;; middle closure, capturing n = 100
-        f2 (call-fat f1 20)]      ;; inner closure, capturing x = 20 and n = 100
+        f2 (call-fat-fn f1 20)]   ;; inner closure, capturing x = 20 and n = 100
     (println (call-fat f2 3)))    ;; (20 + 3) + 100 = 123
   0)

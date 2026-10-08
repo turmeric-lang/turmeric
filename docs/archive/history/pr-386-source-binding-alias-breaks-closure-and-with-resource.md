@@ -188,6 +188,6 @@ investigate.
 
 ## Cross-references
 
-- PR #386: https://github.com/rjungemann/turmeric/pull/386
+- PR #386: https://github.com/turmeric-lang/turmeric/pull/386
 - `docs/archive/constrained-generic-as-value-bakes-representative.md`
   (the bug #386 fixes; archived in #386's docs hunk)

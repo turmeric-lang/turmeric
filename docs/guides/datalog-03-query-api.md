@@ -82,8 +82,7 @@ A wildcard arm `_ false` handles mismatched constructors (e.g. comparing a
 ```sweet-exp
 defn q-av [a :cstr v :int]
   (fn [d]
-    and(cstr-eq?(datum-attr(d) cstr->int(a))
-        value-eq?(datum-value(d) v)))
+    {cstr-eq?(datum-attr(d) cstr->int(a)) and value-eq?(datum-value(d) v)})
 ```
 
 Usage -- find the entity with age 31:
@@ -187,8 +186,7 @@ transaction number ascending:
 ```sweet-exp
 defn history [db :int entity :int attr :cstr] :ptr<void>
   let [raw db-q(db (fn [d]
-                     and({datum-entity(d) = entity}
-                         cstr-eq?(datum-attr(d) cstr->int(attr)))))]
+                     {{datum-entity(d) = entity} and cstr-eq?(datum-attr(d) cstr->int(attr))}))]
     ; Insertion sort by tx
     let [n rvec-len(raw)]
       ...
@@ -246,8 +244,8 @@ transaction:
     (while (< i n)
       (do
         (let [d (db-ref db i)]
-          (when (and (= (datum-entity d) entity)
-                     (cstr-eq? (datum-attr d) (cstr->int ":db/retract"))
+          (when (and (and (= (datum-entity d) entity)
+                     (cstr-eq? (datum-attr d) (cstr->int ":db/retract")))
                      (<= (datum-tx d) as-of-tx))
             (match (datum-value d)
               (StrVal s) (when (cstr-eq? s (cstr->int attr)) (set! found true))
@@ -264,9 +262,7 @@ defn retracted? [db :int entity :int attr :cstr as-of-tx :int] :bool
     while {i < n}
       do
         let [d db-ref(db i)]
-          when and({datum-entity(d) = entity}
-                   cstr-eq?(datum-attr(d) cstr->int(":db/retract"))
-                   {datum-tx(d) <= as-of-tx})
+          when {{{datum-entity(d) = entity} and cstr-eq?(datum-attr(d) cstr->int(":db/retract"))} and {datum-tx(d) <= as-of-tx}}
             match datum-value(d)
               (StrVal s)
               when cstr-eq?(s cstr->int(attr))

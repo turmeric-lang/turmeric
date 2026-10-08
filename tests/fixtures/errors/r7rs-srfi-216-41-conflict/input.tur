@@ -1,0 +1,6 @@
+#lang r7rs
+;; r7rs-srfi-plan D5 / R7RS 5.2: SRFI 216's stream-null? and the-empty-stream
+;; are SICP's list-based streams; SRFI 41 has its own, over records.  One
+;; name, two meanings: importing both is refused, with the fix.
+(import (scheme base) (srfi 216) (srfi 41))
+(stream-null? the-empty-stream)

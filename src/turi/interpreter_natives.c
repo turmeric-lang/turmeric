@@ -14,6 +14,7 @@
 #include "turi/interpreter_natives.h"
 
 #include "turi/eval.h"
+#include "turi/fiber.h"   /* SRFI 18 twins: turi_sched_yield, turi_spawn_fiber */
 #include "turi/r7rs_embed.h"   /* r7rs-lang-plan T4: eval twins */
 #include "turi/collections_native.h"  /* native_mk_cmp_int / native_mk_box_cstr */
 #include "turi/docstrings.h"  /* PS3: doc-lookup / doc-print, builtin docs */
@@ -158,9 +159,12 @@ static TuriValue native_option_value(TuriEnv *env, TuriValue *a, uint32_t n, voi
 static TuriValue native_option_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     /* A ctor-named TuriStruct is env-pool-owned -- only the legacy raw box is
-     * individually freed. */
+     * individually freed, and never one in the env pool. */
     if (n > 0 && a[0].tag != TURI_STRUCT) {
-        void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p);
+        void *p = (void *)(intptr_t)a[0].as_int;
+        if (p && !arena_owns(&env->value_scratch, p) &&
+            !arena_owns(&env->value_perm, p))
+            free(p);
     }
     return turi_nil();
 }
@@ -388,9 +392,15 @@ static TuriValue native_result_collect(TuriEnv *env, TuriValue *a, uint32_t n, v
     if (!v) return turi_nil();
     int64_t len = v[1];
     int64_t *data = (int64_t *)(intptr_t)v[0];
-    /* Check for first err */
+    /* Check for first err.  S-5: the elements are stored words the guard
+     * never saw; each is followed as a Result box, so in a provenance-tracked
+     * env each must be one (the second loop runs only after this one). */
     for (int64_t i = 0; i < len; i++) {
         int64_t *rp = (int64_t *)(intptr_t)data[i];
+        if (rp && !turi_prov_check(env, TURI_HK_RESULTBOX, rp))
+            return turi_error("eval: 'result-collect' element is not a live "
+                              "handle of the expected kind -- a sandboxed handle "
+                              "cannot be forged from an integer (S-5)");
         if (!rp || rp[0] == 0) {
             int64_t ev = rp ? rp[2] : 0;
             int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
@@ -399,8 +409,9 @@ static TuriValue native_result_collect(TuriEnv *env, TuriValue *a, uint32_t n, v
             TuriValue rv = {0}; rv.tag = TURI_INT; rv.as_int = (int64_t)(intptr_t)out; return rv;
         }
     }
-    /* All ok: create new vec of ok_vals */
-    int64_t *ov = (int64_t *)calloc(3, sizeof(int64_t));
+    /* All ok: create new vec of ok_vals -- four words, the Vec box layout
+     * (vec-free reads v[3], the tracking slot; 0 = untracked). */
+    int64_t *ov = (int64_t *)calloc(4, sizeof(int64_t));
     if (!ov) return turi_nil();
     int64_t *od = len > 0 ? (int64_t *)malloc((size_t)len * sizeof(int64_t)) : NULL;
     ov[0] = (int64_t)(intptr_t)od; ov[1] = len; ov[2] = len;
@@ -408,6 +419,7 @@ static TuriValue native_result_collect(TuriEnv *env, TuriValue *a, uint32_t n, v
         int64_t *rp = (int64_t *)(intptr_t)data[i];
         od[i] = rp[1]; /* ok_val */
     }
+    turi_prov_register(env, TURI_HK_VEC, ov);
     int64_t *out = (int64_t *)malloc(3 * sizeof(int64_t));
     if (!out) { free(od); free(ov); return turi_nil(); }
     out[0] = 1; out[1] = (int64_t)(intptr_t)ov; out[2] = 0;
@@ -421,10 +433,21 @@ static TuriValue native_result_partition(TuriEnv *env, TuriValue *a, uint32_t n,
     if (!v) return turi_nil();
     int64_t len = v[1];
     int64_t *data = (int64_t *)(intptr_t)v[0];
-    /* Allocate ok and err vecs */
-    int64_t *ov = (int64_t *)calloc(3, sizeof(int64_t));
-    int64_t *ev = (int64_t *)calloc(3, sizeof(int64_t));
+    /* S-5: as in result-collect, each element is followed as a Result box. */
+    for (int64_t i = 0; i < len; i++) {
+        int64_t *rp = (int64_t *)(intptr_t)data[i];
+        if (rp && !turi_prov_check(env, TURI_HK_RESULTBOX, rp))
+            return turi_error("eval: 'result-partition' element is not a live "
+                              "handle of the expected kind -- a sandboxed handle "
+                              "cannot be forged from an integer (S-5)");
+    }
+    /* Allocate ok and err vecs -- four words, the Vec box layout (vec-free
+     * reads v[3], the tracking slot; 0 = untracked). */
+    int64_t *ov = (int64_t *)calloc(4, sizeof(int64_t));
+    int64_t *ev = (int64_t *)calloc(4, sizeof(int64_t));
     if (!ov || !ev) { free(ov); free(ev); return turi_nil(); }
+    turi_prov_register(env, TURI_HK_VEC, ov);
+    turi_prov_register(env, TURI_HK_VEC, ev);
     for (int64_t i = 0; i < len; i++) {
         int64_t *rp = (int64_t *)(intptr_t)data[i];
         int64_t *dst = (rp && rp[0] != 0) ? ov : ev;
@@ -470,9 +493,14 @@ static TuriValue native_result_unwrap_err(TuriEnv *env, TuriValue *a, uint32_t n
     return result_field(a[0], 2);
 }
 static TuriValue native_result_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     if (n > 0 && a[0].tag != TURI_STRUCT) {
-        void *p = (void *)(intptr_t)a[0].as_int; if (p) free(p);
+        /* catch-unwind's Result boxes are env-pool memory, not malloc'd: a
+         * free() of one was an invalid free whatever the env. */
+        void *p = (void *)(intptr_t)a[0].as_int;
+        if (p && !arena_owns(&env->value_scratch, p) &&
+            !arena_owns(&env->value_perm, p))
+            free(p);
     }
     return turi_nil();
 }
@@ -538,6 +566,11 @@ static TuriValue native_cstr_nth(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     (void)env; (void)ud;
     const char *s = (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) ? a[0].as_cstr : "";
     int64_t i = (n > 1) ? a[1].as_int : 0;
+    /* S-5: the index was unchecked, and a non-string first argument falls
+     * back to "" -- so `(cstr-nth 0 N)` read any address.  The terminator
+     * (i == len) stays readable, as the compiled contract allows. */
+    if (i < 0 || strnlen(s, (size_t)i) < (size_t)i)
+        return turi_errorf("cstr-nth: index %lld out of range", (long long)i);
     return turi_int((int64_t)(unsigned char)s[i]);
 }
 
@@ -588,7 +621,10 @@ static TuriValue native_cstr_sub(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     if (end > slen) end = slen;
     if (end < start) end = start;
     size_t outlen = (size_t)(end - start);
-    char *out = (char *)malloc(outlen + 1);
+    /* S-5: a provenance-tracked env never frees a string (cstr-free below),
+     * so its substrings come from the env pool rather than leaking. */
+    char *out = env->provenance_on ? (char *)turi_val_alloc(env, outlen + 1)
+                                   : (char *)malloc(outlen + 1);
     if (!out) return turi_nil();
     memcpy(out, s + start, outlen);
     out[outlen] = '\0';
@@ -600,14 +636,30 @@ static TuriValue native_alloc_str(TuriEnv *env, TuriValue *a, uint32_t n, void *
     const char *s = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : "";
     char *p = strdup(s ? s : "");
     if (!p) return turi_nil();
+    /* S-5: the row mints it OWNED_CSTR (cstr-free may free it); it is also a
+     * string, so `(:: w cstr)` of the bare word re-tags. */
+    turi_prov_register(env, TURI_HK_CSTR, p);
     TuriValue v = {0}; v.tag = TURI_INT; v.as_int = (int64_t)(intptr_t)p; return v;
 }
-/* cstr-free: free a cstr or int pointer */
+/* cstr-free: free a cstr or int pointer.
+ *
+ * S-5: in a provenance-tracked env only a string some native minted as
+ * malloc'd and owned (OWNED_CSTR: alloc-str) is freed, and forgotten so a
+ * second free is a no-op.  Anything else -- an interned literal, a forged
+ * integer, a string the env still holds tagged elsewhere -- is left alone: a
+ * tagged alias cannot be tracked, so freeing it would hand the sandbox a
+ * use-after-free.  The cost is a leak bounded by fuel. */
 static TuriValue native_cstr_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     if (n < 1) return turi_nil();
-    void *p = (a[0].tag == TURI_CSTR) ? (void *)a[0].as_cstr : (void *)(intptr_t)a[0].as_int;
-    if (p) free(p);
+    void *p = (a[0].tag == TURI_CSTR) ? (void *)a[0].as_cstr
+            : (a[0].tag == TURI_INT)  ? (void *)(intptr_t)a[0].as_int : NULL;
+    if (!p) return turi_nil();
+    if (env->provenance_on) {
+        if (!turi_prov_check(env, TURI_HK_OWNED_CSTR, p)) return turi_nil();
+        turi_prov_forget(env, p);
+    }
+    free(p);
     return turi_nil();
 }
 /* alloc-int: malloc an int64_t cell, store x, return pointer as int */
@@ -670,11 +722,12 @@ static TuriValue native_flat_set(TuriEnv *env, TuriValue *a, uint32_t n, void *u
  * is a TURI_CLOSURE and a generator is a TURI_GEN; re-implement the bridges over
  * turi_call + turi_gen_advance_val.  A yielded value is boxed as a malloc'd
  * int64 (NULL = exhausted), matching seq-val-some?/seq-val-unwrap. */
-static TuriValue seq_as_closure(TuriValue v) {
+static TuriValue seq_as_closure(TuriEnv *env, TuriValue v) {
     /* A factory/callback passed through an `int` param keeps its TURI_CLOSURE
-     * tag; if it arrived as a raw carrier, rebuild the closure value. */
+     * tag; if it arrived as a raw carrier, rebuild the closure value -- a
+     * checked rebuild, since in a sandbox the carrier may be a forged integer. */
     if (v.tag == TURI_CLOSURE) return v;
-    return turi_closure((TuriClosure *)(intptr_t)v.as_int);
+    return turi_closure_from_carrier(env, v.as_int);
 }
 /* k-apply-raw (stdlib/kleisli.tur): invoke the fat-closure carrier `k` on `x`,
  * returning the int-level Option it produces.  kleisli.tur's body is
@@ -685,7 +738,7 @@ static TuriValue native_k_apply_raw(TuriEnv *env, TuriValue *a, uint32_t n, void
     (void)ud;
     if (n < 2) return turi_int(0);
     TuriValue av = turi_int(a[1].as_int);
-    TuriValue r = turi_call(env, seq_as_closure(a[0]), &av, 1);
+    TuriValue r = turi_call(env, seq_as_closure(env, a[0]), &av, 1);
     if (turi_is_error(r) || env->throwing) return r;  /* propagate callback error */
     /* The arrow body returns an int-level Option.  Under --interpret the
      * Option carrier is dual-rep: `some` may yield either a native int64[2]
@@ -702,7 +755,7 @@ static TuriValue native_seq_iter(TuriEnv *e, TuriValue *a, uint32_t n, void *ud)
     if (n < 1) return turi_nil();
     int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
     if (!s) return turi_nil();
-    return turi_call(e, seq_as_closure(turi_int(s[0])), NULL, 0); /* mk() -> gen */
+    return turi_call(e, seq_as_closure(e, turi_int(s[0])), NULL, 0); /* mk() -> gen */
 }
 static TuriValue native_seq_gen_done(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
@@ -740,30 +793,30 @@ static TuriValue native_seq_gen_to_int(TuriEnv *e, TuriValue *a, uint32_t n, voi
 static TuriValue native_seq_call_fn0(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 1) return turi_int(0);
-    return turi_call(e, seq_as_closure(a[0]), NULL, 0);
+    return turi_call(e, seq_as_closure(e, a[0]), NULL, 0);
 }
 static TuriValue native_seq_call_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_int(0);
-    return turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    return turi_call(e, seq_as_closure(e, a[0]), &a[1], 1);
 }
 static TuriValue native_seq_call_fn2(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 3) return turi_int(0);
     TuriValue args[2] = { a[1], a[2] };
-    return turi_call(e, seq_as_closure(a[0]), args, 2);
+    return turi_call(e, seq_as_closure(e, a[0]), args, 2);
 }
 static TuriValue native_seq_call_bool_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_bool(false);
-    TuriValue r = turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    TuriValue r = turi_call(e, seq_as_closure(e, a[0]), &a[1], 1);
     if (turi_is_error(r) || e->throwing) return r;  /* propagate callback error */
     return turi_bool(r.tag == TURI_BOOL ? r.as_bool : r.as_int != 0);
 }
 static TuriValue native_seq_call_void_fn1(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     if (n < 2) return turi_nil();
-    TuriValue r = turi_call(e, seq_as_closure(a[0]), &a[1], 1);
+    TuriValue r = turi_call(e, seq_as_closure(e, a[0]), &a[1], 1);
     if (turi_is_error(r) || e->throwing) return r;  /* propagate callback error */
     return turi_nil();
 }
@@ -802,7 +855,10 @@ static TuriValue native_gen_arr_get(TuriEnv *e, TuriValue *a, uint32_t n, void *
     (void)e; (void)ud;
     if (n < 2) return turi_int(0);
     int64_t *h = (int64_t *)(intptr_t)a[0].as_int;
-    return turi_int(((int64_t *)(intptr_t)h[2])[a[1].as_int]);
+    int64_t i = a[1].as_int;
+    if (!h || i < 0 || i >= h[0])   /* the index was unchecked */
+        return turi_errorf("gen-arr-get: index %lld out of range", (long long)i);
+    return turi_int(((int64_t *)(intptr_t)h[2])[i]);
 }
 /* seq option box {bool is_some; int64 value} (offset 0 / offset 8 = slot[1]). */
 static TuriValue native_seq_make_some(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -855,7 +911,10 @@ static TuriValue native_seq_vec_get(TuriEnv *e, TuriValue *a, uint32_t n, void *
     (void)e; (void)ud;
     if (n < 2) return turi_int(0);
     int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
-    return turi_int(((int64_t *)(intptr_t)v[0])[a[1].as_int]);
+    int64_t i = a[1].as_int;
+    if (!v || i < 0 || i >= v[1])   /* the index was unchecked */
+        return turi_errorf("seq-vec-get: index %lld out of range", (long long)i);
+    return turi_int(((int64_t *)(intptr_t)v[0])[i]);
 }
 /* seq cons cell / Tuple2: both are {slot0, slot1}. */
 static TuriValue native_seq_make_cell(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
@@ -1000,6 +1059,9 @@ static TuriValue native_json_array_push(TuriEnv *e, TuriValue *a, uint32_t n, vo
     (void)e; (void)ud;
     if (n < 2) return turi_int(0);
     int64_t *node = json_node_ptr(a[0]);
+    /* S-5: one JSON kind covers every node type, so the type is checked
+     * here: an int node's payload is the caller's integer, not a vec. */
+    if (!node || node[0] != 5) return turi_error("json/array-push: not an array node");
     tur_json_vec *v = (tur_json_vec *)(intptr_t)node[1];
     if (v->len >= v->cap) {
         v->cap = v->cap > 0 ? v->cap * 2 : 4;
@@ -1018,6 +1080,7 @@ static TuriValue native_json_object_put(TuriEnv *e, TuriValue *a, uint32_t n, vo
     (void)e; (void)ud;
     if (n < 3) return turi_int(0);
     int64_t *node = json_node_ptr(a[0]);
+    if (!node || node[0] != 6) return turi_error("json/object-put: not an object node");
     const char *key = json_arg_cstr(a[1]);
     int64_t *entry = malloc(3 * sizeof(int64_t));
     entry[0] = (int64_t)(intptr_t)strdup(key ? key : "");
@@ -1053,12 +1116,15 @@ static TuriValue native_json_get_float(TuriEnv *e, TuriValue *a, uint32_t n, voi
 static TuriValue native_json_get_string(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 1 || a[0].as_int == 0) return turi_cstr("");
-    return turi_cstr((const char *)(intptr_t)json_node_ptr(a[0])[1]);
+    int64_t *np = json_node_ptr(a[0]);
+    if (np[0] != 4) return turi_cstr("");   /* S-5: only a string node's payload is a char* */
+    return turi_cstr((const char *)(intptr_t)np[1]);
 }
 static TuriValue native_json_array_len(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     (void)e; (void)ud;
     if (n < 1 || a[0].as_int == 0) return turi_int(0);
     int64_t *node = json_node_ptr(a[0]);
+    if (node[0] != 5) return turi_int(0);   /* S-5: not an array node */
     tur_json_vec *v = (tur_json_vec *)(intptr_t)node[1];
     return turi_int((int64_t)v->len);
 }
@@ -1066,6 +1132,7 @@ static TuriValue native_json_array_get(TuriEnv *e, TuriValue *a, uint32_t n, voi
     (void)e; (void)ud;
     if (n < 2 || a[0].as_int == 0) return turi_int(0);
     int64_t *node = json_node_ptr(a[0]);
+    if (node[0] != 5) return turi_int(0);   /* S-5: not an array node */
     tur_json_vec *v = (tur_json_vec *)(intptr_t)node[1];
     int64_t i = a[1].as_int;
     if (i < 0 || (size_t)i >= v->len) return turi_int(0);
@@ -1078,10 +1145,14 @@ static TuriValue native_json_get(TuriEnv *e, TuriValue *a, uint32_t n, void *ud)
     if (n < 2 || a[0].as_int == 0) return turi_int(0);
     int64_t *node = json_node_ptr(a[0]);
     const char *key = json_arg_cstr(a[1]);
+    if (node[0] != 6 || !key) return turi_int(0);   /* S-5: not an object node */
     int64_t cur = node[1];
     while (cur) {
         int64_t *ent = (int64_t *)(intptr_t)cur;
         if (strcmp((const char *)(intptr_t)ent[0], key) == 0) {
+            /* S-5: the child rides out inside the option box; it is a
+             * genuine node (put's value was JSON-checked), so record it. */
+            turi_prov_register(e, TURI_HK_JSON, (const void *)(intptr_t)ent[1]);
             int64_t *opt = malloc(2 * sizeof(int64_t));
             opt[0] = 1; opt[1] = ent[1];
             return turi_int((int64_t)(intptr_t)opt);
@@ -1099,6 +1170,11 @@ static TuriValue native_json_get_bang(TuriEnv *e, TuriValue *a, uint32_t n, void
     }
     int64_t *node = json_node_ptr(a[0]);
     const char *key = json_arg_cstr(a[1]);
+    if (node[0] != 6 || !key) {   /* S-5: not an object node */
+        turi_host_exit_guard(e, "json/get!: not an object node");
+        fprintf(stderr, "json/get!: not an object node\n");
+        abort();
+    }
     int64_t cur = node[1];
     while (cur) {
         int64_t *ent = (int64_t *)(intptr_t)cur;
@@ -1151,8 +1227,10 @@ static void json_enc_str(tur_json_encbuf *b, const char *s) {
     }
     json_enc_append_c(b, '"');
 }
-static void json_enc_node(int64_t node, tur_json_encbuf *b) {
-    if (!node) { json_enc_append_s(b, "null"); return; }
+/* `depth` bounds the recursion: a built tree can be cyclic --
+ * (json/array-push a a) -- and recursing on it overflowed the C stack. */
+static void json_enc_node(int64_t node, tur_json_encbuf *b, int depth) {
+    if (!node || depth > 256) { json_enc_append_s(b, "null"); return; }
     int64_t *np = (int64_t *)(intptr_t)node;
     int type = (int)np[0];
     char tmp[64];
@@ -1172,7 +1250,7 @@ static void json_enc_node(int64_t node, tur_json_encbuf *b) {
             json_enc_append_c(b, '[');
             for (size_t i = 0; i < v->len; i++) {
                 if (i > 0) json_enc_append_c(b, ',');
-                json_enc_node(v->data[i], b);
+                json_enc_node(v->data[i], b, depth + 1);
             }
             json_enc_append_c(b, ']');
             break;
@@ -1187,7 +1265,7 @@ static void json_enc_node(int64_t node, tur_json_encbuf *b) {
                 first = 0;
                 json_enc_str(b, (const char *)(intptr_t)ent[0]);
                 json_enc_append_c(b, ':');
-                json_enc_node(ent[1], b);
+                json_enc_node(ent[1], b, depth + 1);
                 cur = ent[2];
             }
             json_enc_append_c(b, '}');
@@ -1203,7 +1281,7 @@ static TuriValue native_json_encode(TuriEnv *e, TuriValue *a, uint32_t n, void *
     b.data[0] = '\0';
     b.len = 0;
     b.cap = 256;
-    json_enc_node((n >= 1) ? a[0].as_int : 0, &b);
+    json_enc_node((n >= 1) ? a[0].as_int : 0, &b, 0);
     return turi_cstr(b.data);
 }
 
@@ -1609,13 +1687,15 @@ static char *sch_mkidx(const char *base, int64_t idx) {
  * with one int64-carrier argument, returning the result as an int64 carrier. */
 static int64_t sch_apply1(TuriEnv *env, int64_t fn_carrier, int64_t arg) {
     TuriValue av = turi_int(arg);
-    TuriValue r = turi_call(env, seq_as_closure(turi_int(fn_carrier)), &av, 1);
+    TuriValue r = turi_call(env, seq_as_closure(env, turi_int(fn_carrier)), &av, 1);
     if (turi_is_error(r) || env->throwing) {
         /* returns a raw int64 carrier; promote a value-level error to a throw so
          * the enclosing schema native and the driver propagate it. */
         if (turi_is_error(r)) { env->throwing = true; env->throw_value = r; }
         return 0;
     }
+    /* S-5: a transform's cstr / struct / closure result drops its tag here. */
+    turi_prov_note_value(env, r);
     if (r.tag == TURI_FLOAT) { int64_t b; memcpy(&b, &r.as_float, 8); return b; }
     if (r.tag == TURI_BOOL)  return r.as_bool ? 1 : 0;
     return r.as_int;
@@ -1623,10 +1703,22 @@ static int64_t sch_apply1(TuriEnv *env, int64_t fn_carrier, int64_t arg) {
 
 /* The recursive decoder -- mirrors sch-decode-rec- (schema.tur) bit-for-bit,
  * with TUR_APPLY1 / the kind-14 C call routed through turi_call. */
-static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
-                              const char *path, tur_json_vec *ep) {
+static int64_t sch_decode_rec_d(TuriEnv *env, int64_t schema, int64_t node,
+                                const char *path, tur_json_vec *ep, int depth) {
     tur_sch_t *s = (tur_sch_t *)(intptr_t)schema;
     if (!s) return 0;
+    /* S-5: every schema word this walk follows that a row never saw -- a
+     * union arm read out of a Vec, a rec body a closure returned (s->c) --
+     * meets this one check.  The depth cap stops a rec whose body is itself
+     * ((schema/rec (fn [self] self))) and a union that contains itself. */
+    if (!turi_prov_check(env, TURI_HK_SCHEMA, s)) {
+        sch_push_err(ep, path, "not a live schema handle (S-5)", 0);
+        return 0;
+    }
+    if (depth > 512) {
+        sch_push_err(ep, path, "schema nesting too deep", 0);
+        return 0;
+    }
     char buf[128];
     int64_t jt = sch_jtype(node);
     int64_t jp = node ? sch_jpayload(node) : 0;
@@ -1640,6 +1732,8 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
                 sch_push_err(ep, path, buf, node);
                 return 0;
             }
+            /* S-5: a decoded string rides out as a bare word. */
+            if (s->kind == 0) turi_prov_register(env, TURI_HK_CSTR, (const void *)(intptr_t)jp);
             return jp;
         }
         case 5: { /* literal */
@@ -1657,6 +1751,7 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
                     sch_push_err(ep, path, buf, node);
                     return 0;
                 }
+                turi_prov_register(env, TURI_HK_CSTR, (const void *)(intptr_t)jp);
                 return jp;
             }
         }
@@ -1667,9 +1762,11 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
                 return 0;
             }
             int64_t fcount = s->a;
-            int64_t *fdata = (int64_t *)(intptr_t)s->c;
-            if (fdata) {
-                for (int64_t i = 0; i < fcount; i++) {
+            /* A transform run during the decode can call schema/field on this
+             * schema, which reallocs the field array: re-read it every pass. */
+            if (s->c) {
+                for (int64_t i = 0; i < fcount && i < s->a; i++) {
+                    int64_t *fdata = (int64_t *)(intptr_t)s->c;
                     const char *key = (const char *)(intptr_t)fdata[i * 2];
                     tur_sch_t *fsch = (tur_sch_t *)(intptr_t)fdata[i * 2 + 1];
                     int64_t *on = (int64_t *)(intptr_t)node;
@@ -1686,11 +1783,12 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
                         if (fsch && fsch->kind == 8) { free(fpath); continue; }
                         sch_push_err(ep, fpath, "missing required field", 0);
                     } else {
-                        sch_decode_rec(env, (int64_t)(intptr_t)fsch, found, fpath, ep);
+                        sch_decode_rec_d(env, (int64_t)(intptr_t)fsch, found, fpath, ep, depth + 1);
                     }
                     free(fpath);
                 }
             }
+            turi_prov_register(env, TURI_HK_JSON, (const void *)(intptr_t)node);
             return node;
         }
         case 7: { /* array */
@@ -1701,12 +1799,16 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
             }
             int64_t elem = s->a;
             tur_json_vec *jarr = (tur_json_vec *)(intptr_t)jp;
-            tur_json_vec *out = malloc(sizeof(*out));
-            out->data = NULL; out->len = 0; out->cap = 0;
+            /* Four words, the Vec box layout: the result is read back with
+             * vec-get and freed with vec-free, which reads v[3] (the tracking
+             * slot; 0 = untracked).  tur_json_vec is its {data, len, cap}. */
+            tur_json_vec *out = (tur_json_vec *)calloc(4, sizeof(int64_t));
+            if (!out) return 0;
+            turi_prov_register(env, TURI_HK_VEC, out);
             if (jarr) {
                 for (size_t i = 0; i < jarr->len; i++) {
                     char *ipath = sch_mkidx(path, (int64_t)i);
-                    int64_t dv = sch_decode_rec(env, elem, jarr->data[i], ipath, ep);
+                    int64_t dv = sch_decode_rec_d(env, elem, jarr->data[i], ipath, ep, depth + 1);
                     free(ipath);
                     sch_vpush(out, dv);
                 }
@@ -1715,14 +1817,17 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
         }
         case 8: { /* optional */
             if (jt == 0 || node == 0) return 0;
-            return sch_decode_rec(env, s->a, node, path, ep);
+            return sch_decode_rec_d(env, s->a, node, path, ep, depth + 1);
         }
         case 9: { /* union: first arm that matches wins */
             tur_json_vec *arms = (tur_json_vec *)(intptr_t)s->a;
-            if (!arms || arms->len == 0) return 0;
-            for (size_t i = 0; i < arms->len; i++) {
+            /* S-5: the arms Vec is the caller's -- vec-free'd or grown (by a
+             * transform, mid-loop) -- so it is re-checked every pass. */
+            if (!arms || !turi_prov_check(env, TURI_HK_VEC, arms) || arms->len == 0)
+                return 0;
+            for (size_t i = 0; turi_prov_check(env, TURI_HK_VEC, arms) && i < arms->len; i++) {
                 size_t before = ep->len;
-                int64_t dv = sch_decode_rec(env, arms->data[i], node, path, ep);
+                int64_t dv = sch_decode_rec_d(env, arms->data[i], node, path, ep, depth + 1);
                 if (ep->len == before) return dv;
                 ep->len = before;
             }
@@ -1732,7 +1837,7 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
         }
         case 10: { /* transform / fmap */
             size_t before = ep->len;
-            int64_t dv = sch_decode_rec(env, s->a, node, path, ep);
+            int64_t dv = sch_decode_rec_d(env, s->a, node, path, ep, depth + 1);
             if (ep->len != before) return 0;
             return sch_apply1(env, s->b, dv);
         }
@@ -1740,7 +1845,7 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
             if (s->c == 0) {
                 s->c = sch_apply1(env, s->a, (int64_t)(intptr_t)s);
             }
-            return sch_decode_rec(env, s->c, node, path, ep);
+            return sch_decode_rec_d(env, s->c, node, path, ep, depth + 1);
         }
         case 12: return s->a; /* always */
         case 13: /* never */
@@ -1748,8 +1853,8 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
             return 0;
         case 14: case 16: { /* ap / ap-fat: apply decoded fn arm to arg arm */
             size_t before = ep->len;
-            int64_t fv = sch_decode_rec(env, s->a, node, path, ep);
-            int64_t av = sch_decode_rec(env, s->b, node, path, ep);
+            int64_t fv = sch_decode_rec_d(env, s->a, node, path, ep, depth + 1);
+            int64_t av = sch_decode_rec_d(env, s->b, node, path, ep, depth + 1);
             if (ep->len != before) return 0;
             return sch_apply1(env, fv, av);
         }
@@ -1776,13 +1881,17 @@ static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
                 if (inner && inner->kind == 8) { result = 0; }
                 else { sch_push_err(ep, fpath, "missing required field", 0); result = 0; }
             } else {
-                result = sch_decode_rec(env, (int64_t)(intptr_t)inner, found, fpath, ep);
+                result = sch_decode_rec_d(env, (int64_t)(intptr_t)inner, found, fpath, ep, depth + 1);
             }
             free(fpath);
             return result;
         }
         default: return 0;
     }
+}
+static int64_t sch_decode_rec(TuriEnv *env, int64_t schema, int64_t node,
+                              const char *path, tur_json_vec *ep) {
+    return sch_decode_rec_d(env, schema, node, path, ep, 0);
 }
 
 /* --- schema node constructors (each mallocs int64[4]{kind,a,b,c}) --- */
@@ -1823,6 +1932,9 @@ static TuriValue native_schema_field(TuriEnv *e, TuriValue *a, uint32_t n, void 
     (void)e; (void)ud;
     if (n < 3) return turi_int(0);
     int64_t *s = json_node_ptr(a[0]);
+    /* S-5: only an object schema (kind 6) holds a field array; on any other
+     * kind s[3] is a payload, and data[count*2] an arbitrary write. */
+    if (!s || s[0] != 6) return turi_error("schema/field: not an object schema");
     const char *key = json_arg_cstr(a[1]);
     int64_t count = s[1], cap = s[2];
     int64_t *data = (int64_t *)(intptr_t)s[3];
@@ -1954,6 +2066,7 @@ static TuriValue native_schema_decode(TuriEnv *e, TuriValue *a, uint32_t n, void
         free(errs->data); free(errs);
     } else {
         r[0] = 0; r[1] = 0; r[2] = (int64_t)(intptr_t)errs;
+        turi_prov_register(e, TURI_HK_SCHERRS, errs);   /* S-5: read by schema-decode-errors */
     }
     return turi_int((int64_t)(intptr_t)r);
 }
@@ -2151,9 +2264,15 @@ static TuriValue native_list_length(TuriEnv *env, TuriValue *a, uint32_t n, void
             continue;
         }
         /* carrier representation: a malloc'd { head, tail } box chain (the
-         * untyped cons/head/tail benchmark surface); 0 is nil. */
+         * untyped cons/head/tail benchmark surface); 0 is nil.  S-5: a struct
+         * cell's tail is any value make-struct was given, so in a provenance-
+         * tracked env every link is checked before it is followed. */
         int64_t ptr = node.as_int;
         while (ptr) {
+            if (!turi_prov_check(env, TURI_HK_CONS, (const void *)(intptr_t)ptr))
+                return turi_error("eval: 'list-length' link is not a live handle "
+                                  "of the expected kind -- a sandboxed handle "
+                                  "cannot be forged from an integer (S-5)");
             count++;
             int64_t *cell = (int64_t *)(intptr_t)ptr;
             ptr = cell[1];
@@ -2178,8 +2297,8 @@ static bool free_is_ctor(TuriValue v, const char *name) {
  * carrier holding the TuriClosure* (the carrier-readback case). */
 static TuriValue free_call_fat(TuriEnv *env, TuriValue k, TuriValue arg) {
     if (k.tag == TURI_INT && k.as_int != 0) {
-        TuriClosure *cl = (TuriClosure *)(intptr_t)k.as_int;
-        k.tag = TURI_CLOSURE; k.as_closure = cl;
+        k = turi_closure_from_carrier(env, k.as_int);
+        if (turi_is_error(k)) return k;
     }
     return turi_call(env, k, &arg, 1);
 }
@@ -2302,7 +2421,8 @@ static TuriValue native_sbuf_new_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     int64_t k = (n >= 1) ? a[0].as_int : 0;
     /* The compiled twin's bound (stdlib/sized-buf.tur): `k * 8` wrapped for a
      * huge k, leaving a tiny block under a huge len (security audit WP5). */
-    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t))
+    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t) ||
+        !turi_prov_alloc_ok(env, k, sizeof(int64_t)))
         return turi_errorf("sized-buf-new: length %lld out of range", (long long)k);
     TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
     if (!b) return turi_int(0);
@@ -2314,7 +2434,8 @@ static TuriValue native_sbuf_new_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
 static TuriValue native_sbuf_new_zeroed_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     int64_t k = (n >= 1) ? a[0].as_int : 0;
-    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t))
+    if (k < 0 || (uint64_t)k > SIZE_MAX / sizeof(int64_t) ||
+        !turi_prov_alloc_ok(env, k, sizeof(int64_t)))
         return turi_errorf("sized-buf-new-zeroed: length %lld out of range", (long long)k);
     TuriSizedBufRep *b = (TuriSizedBufRep *)malloc(sizeof(*b));
     if (!b) return turi_int(0);
@@ -2462,6 +2583,7 @@ static TuriValue native_mutmap_set(TuriEnv *env, TuriValue *a, uint32_t n, void 
             ns->slots[idx] = s->slots[i];
             ns->len++;
         }
+        turi_prov_forget(env, s);   /* S-5: a read-out (.storage m) is stale now */
         free(s);
         m->storage = ns;
         s = ns;
@@ -2631,6 +2753,7 @@ static TuriValue native_mutmap_free(TuriEnv *env, TuriValue *a, uint32_t n, void
     (void)env; (void)ud;
     if (n < 1 || a[0].tag != TURI_INT || a[0].as_int == 0) return turi_nil();
     TurMmWrap *m = (TurMmWrap *)(intptr_t)a[0].as_int;
+    turi_prov_forget(env, m->storage);   /* S-5: the FREE row forgets only m */
     if (m->storage) free(m->storage);
     free(m);
     return turi_nil();
@@ -2744,13 +2867,29 @@ static TuriValue native_r7rs_io_new(TuriEnv *env, TuriValue *a, uint32_t n, void
     (void)env; (void)a; (void)n; (void)ud;
     return r7rs_ptr_val(calloc(1, sizeof(r7rs_io)));
 }
+/* The three standard-port buffers, process-global.  r7rs-io-std__ hands them
+ * out, and the R7RS prelude takes them while it loads -- before a macro env
+ * drops its capabilities, so they are not in its provenance registry. */
+static r7rs_io g_r7rs_std[3];
+static r7rs_io *r7rs_std_buf(int64_t k) {
+    static int init = 0;
+    if (!init) {
+        init = 1;
+        g_r7rs_std[0].f = stdin; g_r7rs_std[1].f = stdout; g_r7rs_std[2].f = stderr;
+        g_r7rs_std[0].std = g_r7rs_std[1].std = g_r7rs_std[2].std = 1;
+    }
+    return &g_r7rs_std[k < 0 || k > 2 ? 1 : k];
+}
 static TuriValue native_r7rs_io_std(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    static r7rs_io s[3];
-    static int init = 0;
-    if (!init) { init = 1; s[0].f = stdin; s[1].f = stdout; s[2].f = stderr; s[0].std = s[1].std = s[2].std = 1; }
-    int64_t k = r7rs_arg_int(a, n, 0);
-    return r7rs_ptr_val(&s[k < 0 || k > 2 ? 1 : k]);
+    return r7rs_ptr_val(r7rs_std_buf(r7rs_arg_int(a, n, 0)));
+}
+void turi_r7rs_std_ports_prov(TuriEnv *env, bool live) {
+    for (int k = 0; k < 3; k++) {
+        r7rs_io *b = r7rs_std_buf(k);
+        if (live) turi_prov_register(env, TURI_HK_R7IO, b);
+        else      turi_prov_forget(env, b);
+    }
 }
 static TuriValue native_r7rs_io_open(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -2835,7 +2974,12 @@ static TuriValue native_r7rs_io_len(TuriEnv *env, TuriValue *a, uint32_t n, void
 }
 static TuriValue native_r7rs_io_byte_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    return turi_int((int64_t)r7rs_arg_io(a, n, 0)->p[r7rs_arg_int(a, n, 1)]);
+    r7rs_io *b = r7rs_arg_io(a, n, 0);
+    int64_t i = r7rs_arg_int(a, n, 1);
+    /* The index was unchecked, and a fresh buffer's p is NULL. */
+    if (!b || !b->p || i < 0 || (uint64_t)i >= b->n)
+        return turi_error("r7rs-io-byte-ref__: index out of range");
+    return turi_int((int64_t)b->p[i]);
 }
 static TuriValue native_r7rs_io_flush(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -2865,8 +3009,18 @@ static size_t r7rs_idtab_slot(uintptr_t key, size_t cap) {
  * value holds; the twin of the prelude's inline C.  turi_cstr wraps the
  * pointer without copying, so this is the native's own malloc. */
 static TuriValue native_r7rs_cstr_free(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
-    if (n > 0 && a[0].tag == TURI_CSTR && a[0].as_cstr) free((void *)a[0].as_cstr);
+    (void)ud;
+    if (n < 1 || a[0].tag != TURI_CSTR || !a[0].as_cstr) return turi_nil();
+    /* S-5: the same rule as cstr-free -- a provenance-tracked env frees only
+     * an OWNED_CSTR; a literal (interned in the symbol arena) or a static
+     * diagnostic string was never malloc'd, and a freed string the caller
+     * still holds tagged is a use-after-free. */
+    void *p = (void *)a[0].as_cstr;
+    if (env->provenance_on) {
+        if (!turi_prov_check(env, TURI_HK_OWNED_CSTR, p)) return turi_nil();
+        turi_prov_forget(env, p);
+    }
+    free(p);
     return turi_nil();
 }
 static TuriValue native_r7rs_idtab_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -3100,6 +3254,9 @@ typedef struct R7kCont {
      * that thread's stack.  turi starts no threads of its own today; this
      * keeps the interpreter's answer the compiled prelude's. */
     pthread_t       owner;
+    /* The stack address the image runs up to (r7k_snapshot's `base`): the
+     * top-level form's mark, or the thread's stack base outside any form. */
+    unsigned char  *base;
 } R7kCont;
 /* r7rs-callcc-memory-never-freed: the interpreter cannot tell when a
  * continuation is dead -- it has no collector, and a continuation procedure
@@ -3191,6 +3348,7 @@ static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
     if (!base || base <= lo) return 0;
     c->lo  = lo;
     c->n   = (size_t)(base - lo) & ~(sizeof(uintptr_t) - 1);
+    c->base = base;
     R7kCont *key = r7k_key_find(lo, c->n);
     if (key && c->n / sizeof(uintptr_t) <= UINT32_MAX) {
         size_t nw = c->n / sizeof(uintptr_t), cap = nw / 8;
@@ -3236,8 +3394,14 @@ static void r7k_restore(R7kCont *c) {
     }
     r7k_jump(c);
 }
+static int g_r7k_form_depth;   /* r7rs-toplevel__ prompts live (defined below) */
 static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)a; (void)n; (void)ud;
+    /* S-5: outside a top-level form's prompt the image would run up to the
+     * thread's stack base -- the embedder's own frames -- and a later restore
+     * would overwrite them.  A provenance-tracked env captures no image
+     * there; 0 sends the prelude to its escape-only call/ec. */
+    if (env->provenance_on && g_r7k_form_depth == 0) return turi_int(0);
     R7kCont *volatile c = (R7kCont *)calloc(1, sizeof(R7kCont));
     TuriEnv *volatile venv = env;
     c->owner = pthread_self();
@@ -3311,8 +3475,17 @@ static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, vo
     return turi_nil();
 }
 static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     R7kCont *c = (R7kCont *)(uintptr_t)(r7rs_arg_int(a, n, 0) & ~(int64_t)1);
+    /* S-5: the image is copied over the live stack below its base, so in a
+     * provenance-tracked env it must have been taken under a top-level form
+     * whose mark sits where the current one does, on this thread -- the
+     * frames it overwrites are then this form's, never the embedder's. */
+    if (env->provenance_on &&
+        (!c || g_r7k_form_depth == 0 || c->base != g_r7k_form_base ||
+         !pthread_equal(c->owner, pthread_self())))
+        return turi_error("r7rs-cont-restore__: the continuation was captured "
+                          "under another prompt (S-5)");
     turi_cont_release_drives(c->lo + c->n);
     r7k_restore(c);
 }
@@ -3479,7 +3652,11 @@ static TuriValue native_r7rs_int_to_string_radix(TuriEnv *env, TuriValue *a, uin
 #include "r7rs_numsyntax.inc"
 static void r7rs_numsyn_of(TuriValue *a, uint32_t n, r7rs_ns_result *res) {
     const char *s = r7rs_arg_cstr(a, n, 0);
-    r7rs_ns_parse(s ? s : "", s ? strlen(s) : 0, (int)r7rs_arg_int(a, n, 1), res);
+    /* A radix past 1e9 made the digit loop spin forever (no fuel reaches a
+     * native's inner loop); past 36 it took punctuation for digits. */
+    int64_t radix = r7rs_arg_int(a, n, 1);
+    if (radix < 2 || radix > 36) radix = 10;
+    r7rs_ns_parse(s ? s : "", s ? strlen(s) : 0, (int)radix, res);
 }
 static TuriValue native_r7rs_numsyn_kind(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; r7rs_ns_result res; r7rs_numsyn_of(a, n, &res); free(res.big); return turi_int(res.kind);
@@ -3525,7 +3702,12 @@ static TuriValue native_r7rs_int_ovf(TuriEnv *env, TuriValue *a, uint32_t n, voi
 }
 static TuriValue native_r7rs_big_op(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    return turi_cstr(r7rs_big_op((int)r7rs_arg_int(a, n, 0), r7rs_arg_cstr(a, n, 1), r7rs_arg_cstr(a, n, 2)));
+    int op = (int)r7rs_arg_int(a, n, 0);
+    const char *x = r7rs_arg_cstr(a, n, 1), *y = r7rs_arg_cstr(a, n, 2);
+    /* QUO / REM / MOD by zero read the divisor's top digit of an empty one. */
+    if ((op == R7BN_QUO || op == R7BN_REM || op == R7BN_MOD) && r7rs_big_cmp(y, "0") == 0)
+        return turi_error("big-op: zero divisor");
+    return turi_cstr(r7rs_big_op(op, x, y));
 }
 static TuriValue native_r7rs_big_cmp(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; return turi_int(r7rs_big_cmp(r7rs_arg_cstr(a, n, 0), r7rs_arg_cstr(a, n, 1)));
@@ -3545,7 +3727,12 @@ static TuriValue native_r7rs_float_to_big(TuriEnv *env, TuriValue *a, uint32_t n
     return turi_cstr(r7rs_big_of_float(f));
 }
 static TuriValue native_r7rs_big_radix(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud; return turi_cstr(r7rs_big_radix(r7rs_arg_cstr(a, n, 0), (int)r7rs_arg_int(a, n, 1)));
+    (void)env; (void)ud;
+    /* Radix 1 never shrinks the number (the digit buffer overflowed); 0
+     * divides by zero. */
+    int64_t radix = r7rs_arg_int(a, n, 1);
+    if (radix < 2 || radix > 36) radix = 10;
+    return turi_cstr(r7rs_big_radix(r7rs_arg_cstr(a, n, 0), (int)radix));
 }
 static TuriValue native_r7rs_big_fits(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud; int64_t v; return turi_bool(r7rs_big_fits(r7rs_arg_cstr(a, n, 0), &v) != 0);
@@ -3606,6 +3793,124 @@ static TuriValue native_r7rs_dyn_unset(TuriEnv *env, TuriValue *a, uint32_t n, v
     (void)env; (void)ud;
     return turi_bool(n < 1 || turi_any_identity_payload(a[0]).tag == TURI_NIL);
 }
+/* r7rs-srfi-18-216-sicp-plan T2: twins of stdlib/r7rs/thread.tur, SRFI 18's
+ * C half.  Under the interpreter a thread is a scheduler fiber (green
+ * threads, which SRFI 18 allows): it runs when the running code waits,
+ * sleeps or yields, so the monitor needs no lock -- nothing switches inside
+ * one of 18.scm's critical sections, whose only switch point is the wait.
+ * The dynamic-environment slots above are one set for the process, so each
+ * switch saves the leaving code's, clears them for whoever runs next (a new
+ * thread starts with none, as on an OS thread), and restores them on the
+ * way back. */
+static void r7rs_thread_switch(TuriEnv *env, bool *progress) {
+    TuriValue saved[4];
+    bool      written[4];
+    memcpy(saved, r7rs_dyn_slots, sizeof saved);
+    memcpy(written, r7rs_dyn_written, sizeof written);
+    memset(r7rs_dyn_written, 0, sizeof r7rs_dyn_written);
+    bool p = turi_sched_yield(env);
+    memcpy(r7rs_dyn_slots, saved, sizeof saved);
+    memcpy(r7rs_dyn_written, written, sizeof written);
+    if (progress) *progress = p;
+}
+static double r7rs_thread_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+static double r7rs_arg_float(TuriValue *a, uint32_t n, uint32_t i) {
+    if (i >= n) return 0.0;
+    return a[i].tag == TURI_FLOAT ? a[i].as_float : (double)a[i].as_int;
+}
+/* A short real sleep, for a wait with nothing else to run. */
+static void r7rs_thread_nap(double secs) {
+    if (secs <= 0) return;
+    if (secs > 0.001) secs = 0.001;
+    struct timespec ts = { 0, (long)(secs * 1e9) };
+    nanosleep(&ts, NULL);
+}
+/* r7rs-thread-spawn-c__ [entry thunk]: the entry is the compiled path's. */
+static TuriValue native_r7rs_thread_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 2 || a[1].tag != TURI_CLOSURE)
+        return turi_error("thread-start!: the thread's thunk is not a procedure");
+    TuriValue f = turi_spawn_fiber(env, a[1]);
+    return turi_bool(!turi_is_error(f));
+}
+static TuriValue native_r7rs_thread_nop(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_nil();
+}
+/* r7rs-thread-wait-c__ [mon deadline]: let the others run once; #t when the
+ * deadline passed.
+ * With no deadline and nothing anywhere able to run, every thread is
+ * waiting: a deadlock, reported rather than spun on (the compiled program
+ * would hang here). */
+static TuriValue native_r7rs_thread_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    double deadline = r7rs_arg_float(a, n, 1);
+    bool progress = true;
+    r7rs_thread_switch(env, &progress);
+    if (deadline >= 0) {
+        double now = r7rs_thread_now();
+        if (now >= deadline) return turi_bool(true);
+        if (!progress) r7rs_thread_nap(deadline - now);
+        return turi_bool(false);
+    }
+    if (!progress)
+        return turi_error("SRFI 18: deadlock: every thread is waiting on a mutex, a condition "
+                          "variable or a join, and none can run (the compiled program would hang here)");
+    return turi_bool(false);
+}
+static TuriValue native_r7rs_thread_sleep(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    double end = r7rs_thread_now() + r7rs_arg_float(a, n, 0);
+    for (;;) {
+        bool progress = true;
+        r7rs_thread_switch(env, &progress);
+        double now = r7rs_thread_now();
+        if (now >= end) break;
+        if (!progress || env->current_fiber) r7rs_thread_nap(end - now);
+    }
+    return turi_nil();
+}
+static TuriValue native_r7rs_thread_yield(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)a; (void)n; (void)ud;
+    r7rs_thread_switch(env, NULL);
+    return turi_nil();
+}
+static TuriValue native_r7rs_thread_now(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_float(r7rs_thread_now());
+}
+/* r7rs-apply-variadic-over-eight-arguments: twins of the prelude's
+ * r7rs-variadic-fixed__ / r7rs-call-variadic__.  The interpreter's call has
+ * no eight-argument ceiling, so the "fixed count" is 0 for any procedure and
+ * the call spreads the whole list; a fixed-arity callee then reports its own
+ * arity error, as a direct call would. */
+static TuriValue native_r7rs_variadic_fixed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(n >= 1 && a[0].tag == TURI_CLOSURE ? 0 : -1);
+}
+static TuriValue native_r7rs_call_variadic(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)ud;
+    if (n < 4) return turi_error("apply: internal: bad call");
+    int64_t len = r7rs_arg_int(a, n, 2);
+    /* A huge count overflowed len * sizeof and the loop wrote past av. */
+    if (a[2].tag != TURI_INT || len < 0 || len > (int64_t)UINT32_MAX)
+        return turi_error("apply: internal: bad count");
+    TuriValue car = turi_env_get(env, "r7rs-car"), cdr = turi_env_get(env, "r7rs-cdr");
+    TuriValue *av = (TuriValue *)malloc((size_t)(len ? len : 1) * sizeof *av);
+    if (!av) return turi_error("apply: out of memory");
+    TuriValue cur = a[3];
+    for (int64_t i = 0; i < len; i++) {
+        av[i] = turi_call(env, car, &cur, 1);
+        cur = turi_call(env, cdr, &cur, 1);
+    }
+    TuriValue r = turi_call_dynamic(env, a[0], av, (uint32_t)len);
+    free(av);
+    return r;
+}
 static TuriValue native_r7rs_same_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     if (n < 2) return turi_bool(false);
@@ -3654,7 +3959,12 @@ static TuriValue native_r7rs_utf8_count(TuriEnv *env, TuriValue *a, uint32_t n, 
 }
 static TuriValue native_r7rs_utf8_at(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    const unsigned char *p = (const unsigned char *)r7rs_arg_cstr(a, n, 0) + r7rs_arg_int(a, n, 1);
+    const char *s = r7rs_arg_cstr(a, n, 0);
+    int64_t off = r7rs_arg_int(a, n, 1);
+    /* The offset was unchecked; at or past the end it reads the NUL, as
+     * off == len always did. */
+    if (off < 0 || (uint64_t)off >= strlen(s)) return turi_int(1);
+    const unsigned char *p = (const unsigned char *)s + off;
     int w = *p < 0xC0 ? 1 : *p < 0xE0 ? 2 : *p < 0xF0 ? 3 : 4;
     uint32_t cp = w == 1 ? *p : w == 2 ? (*p & 0x1Fu) : w == 3 ? (*p & 0x0Fu) : (*p & 0x07u);
     int k = 1;
@@ -4485,6 +4795,19 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-dyn-ref__",        native_r7rs_dyn_ref,         NULL);
     turi_env_register_native(env, "r7rs-dyn-set__",        native_r7rs_dyn_set,         NULL);
     turi_env_register_native(env, "r7rs-dyn-unset?__",     native_r7rs_dyn_unset,       NULL);
+    turi_env_register_native(env, "r7rs-variadic-fixed__", native_r7rs_variadic_fixed,  NULL);
+    turi_env_register_native(env, "r7rs-call-variadic__",  native_r7rs_call_variadic,   NULL);
+    /* The inline-C layer of stdlib/r7rs/thread.tur (only an inline-C defn
+     * yields to a native of its name); the monitor is a dummy here. */
+    turi_env_register_native(env, "r7rs-thread-spawn-c__", native_r7rs_thread_spawn,    NULL);
+    turi_env_register_native(env, "r7rs-thread-monitor__", native_r7rs_thread_nop,      NULL);
+    turi_env_register_native(env, "r7rs-thread-lock-c__",  native_r7rs_thread_nop,      NULL);
+    turi_env_register_native(env, "r7rs-thread-unlock-c__", native_r7rs_thread_nop,     NULL);
+    turi_env_register_native(env, "r7rs-thread-notify-c__", native_r7rs_thread_nop,     NULL);
+    turi_env_register_native(env, "r7rs-thread-wait-c__",  native_r7rs_thread_wait,     NULL);
+    turi_env_register_native(env, "r7rs-thread-sleep__",   native_r7rs_thread_sleep,    NULL);
+    turi_env_register_native(env, "r7rs-thread-yield__",   native_r7rs_thread_yield,    NULL);
+    turi_env_register_native(env, "r7rs-thread-now__",     native_r7rs_thread_now,      NULL);
     turi_env_register_native(env, "r7rs-identity-word__",  native_r7rs_identity_word,   NULL);
     turi_env_register_native(env, "r7rs-cstr-hash__",      native_r7rs_cstr_hash,       NULL);
     turi_env_register_native(env, "r7rs-blen__",           native_r7rs_string_length,   NULL);
@@ -4807,6 +5130,9 @@ static TuriValue native_future_cell_free(TuriEnv *env, TuriValue *a, uint32_t n,
     if (n < 1 || !a[0].as_int) return turi_nil();
     WkFutureCell *fc = (WkFutureCell *)(intptr_t)a[0].as_int;
     if (__atomic_sub_fetch(&fc->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        /* S-5: forget the cell when it dies, not on the first drop (the row
+         * has no FREE flag): the Future future-handle shares it lives on. */
+        turi_prov_forget(env, fc);
         pthread_mutex_destroy(&fc->lock);
         pthread_cond_destroy(&fc->ready);
         free(fc);
@@ -4868,7 +5194,8 @@ static TuriValue native_chan_new(TuriEnv *env, TuriValue *a, uint32_t n, void *u
     int64_t cap = (n > 0) ? a[0].as_int : 0;
     if (cap < 1) cap = 1;
     /* `8 * cap` wrapped for a huge cap (security audit WP5, M-5). */
-    if ((uint64_t)cap > SIZE_MAX / sizeof(int64_t))
+    if ((uint64_t)cap > SIZE_MAX / sizeof(int64_t) ||
+        !turi_prov_alloc_ok(env, cap, sizeof(int64_t)))
         return turi_errorf("chan-new: capacity %lld out of range", (long long)cap);
     WkChan *ch = (WkChan *)malloc(sizeof(WkChan));
     if (!ch) return turi_nil();
@@ -5001,16 +5328,30 @@ static void wk_register_chan_natives(TuriEnv *env) {
  * borrow-accessors and a close+free.  argv is a cons list of cstr pointers
  * ({head,tail} cells), matching the compiled inline-C walk.
  * ---------------------------------------------------------------------- */
+/* stdlib-os-surface-plan P1: process.tur's exported spawn/wait/run are
+ * Turmeric-bodied wrappers over three inline-C helpers, and these natives
+ * override the helpers with the same contracts:
+ *   process/spawn-raw path args -> pid, or -errno (argv = { path, args... })
+ *   process/child-of-raw pid    -> the ChildHandle (identity)
+ *   process/wait-raw child      -> exit code 0..255, 256 + signo when a
+ *                                  signal ended it, or -errno */
 static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
+#if defined(__EMSCRIPTEN__)
+    /* No fork/exec in the browser (and no <sys/wait.h>; see the include
+     * guard at the top of this file). */
+    (void)a; (void)n;
+    return turi_int(-ENOSYS);
+#else
     const char *path = (n > 0 && a[0].tag == TURI_CSTR) ? a[0].as_cstr : NULL;
-    if (!path) return turi_int(-1);
+    if (!path) return turi_int(-EINVAL);
     int64_t argv = (n > 1) ? a[1].as_int : 0;
-    int argc = 0;
+    int argc = 1;
     for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1]) argc++;
     char **args = (char **)malloc((size_t)(argc + 1) * sizeof(char *));
-    if (!args) return turi_int(-1);
-    { int i = 0; for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1])
+    if (!args) return turi_int(-ENOMEM);
+    { int i = 0; args[i++] = (char *)path;
+      for (int64_t t = argv; t; t = ((int64_t *)(intptr_t)t)[1])
         args[i++] = (char *)(intptr_t)((int64_t *)(intptr_t)t)[0]; }
     args[argc] = NULL;
 #ifdef _WIN32
@@ -5018,34 +5359,65 @@ static TuriValue native_process_spawn(TuriEnv *env, TuriValue *a, uint32_t n, vo
      * HANDLE (not a pid) that _cwait() below reaps.  The handle is opaque to
      * callers either way, so ChildHandle keeps its meaning. */
     intptr_t child = _spawnvp(_P_NOWAIT, path, (const char *const *)args);
+    int e = errno;
     free(args);
-    if (child == -1) return turi_int(-1);
+    if (child == -1) return turi_int(-(int64_t)(e ? e : ENOENT));
     return turi_int((int64_t)child);
 #else
+    /* A close-on-exec pipe carries a failed exec's errno back, matching the
+     * compiled helper: a missing program is ENOENT from spawn. */
+    int fds[2];
+    if (pipe(fds) != 0) { int e = errno; free(args); return turi_int(-(int64_t)e); }
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
     pid_t pid = fork();
-    if (pid < 0) { free(args); return turi_int(-1); }
-    if (pid == 0) { execvp(path, args); _exit(127); }
+    if (pid < 0) { int e = errno; close(fds[0]); close(fds[1]); free(args); return turi_int(-(int64_t)e); }
+    if (pid == 0) {
+        close(fds[0]);
+        execvp(path, args);
+        int e = errno;
+        ssize_t wr = write(fds[1], &e, sizeof e);
+        (void)wr;
+        _exit(127);
+    }
+    close(fds[1]);
     free(args);
+    int child_err = 0;
+    ssize_t got;
+    do { got = read(fds[0], &child_err, sizeof child_err); } while (got < 0 && errno == EINTR);
+    close(fds[0]);
+    if (got == (ssize_t)sizeof child_err) {
+        int st;
+        while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+        return turi_int(-(int64_t)child_err);
+    }
     return turi_int((int64_t)pid);
 #endif
+#endif /* __EMSCRIPTEN__ */
+}
+static TuriValue native_process_child_of(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    return turi_int(n > 0 ? a[0].as_int : -1);
 }
 static TuriValue native_process_wait(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    if (n < 1) return turi_int(-1);
+    if (n < 1) return turi_int(-EINVAL);
 #if defined(__EMSCRIPTEN__)
-    /* No process reaping in the browser; process/spawn already returns -1. */
-    return turi_int(-1);
+    /* No process reaping in the browser; process/spawn-raw already fails. */
+    return turi_int(-ECHILD);
 #elif defined(_WIN32)
     /* _cwait yields the child's exit code directly -- there is no POSIX
      * wait-status encoding to unpack, so no WIFEXITED/WEXITSTATUS here. */
     int status = 0;
-    if (_cwait(&status, (intptr_t)a[0].as_int, 0) == -1) return turi_int(-1);
-    return turi_int((int64_t)status);
+    if (_cwait(&status, (intptr_t)a[0].as_int, 0) == -1) return turi_int(-(int64_t)errno);
+    return turi_int((int64_t)(status & 0xff));
 #else
     int status = 0;
-    if (waitpid((pid_t)a[0].as_int, &status, 0) < 0) return turi_int(-1);
+    pid_t r;
+    do { r = waitpid((pid_t)a[0].as_int, &status, 0); } while (r < 0 && errno == EINTR);
+    if (r < 0) return turi_int(-(int64_t)errno);
     if (WIFEXITED(status)) return turi_int((int64_t)WEXITSTATUS(status));
-    return turi_int(-1);
+    if (WIFSIGNALED(status)) return turi_int(256 + (int64_t)WTERMSIG(status));
+    return turi_int(-ECHILD);
 #endif
 }
 static TuriValue native_fs_tmpfile(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -5140,6 +5512,14 @@ static TuriValue native_bt_mbind(TuriEnv *env, TuriValue *a, uint32_t n, void *u
         TuriValue arg = turi_int(cell->value);
         TuriValue sub = turi_call(env, a[1], &arg, 1);
         if (turi_is_error(sub) || env->throwing) return sub;  /* propagate callback error */
+        /* S-5: the continuation's result is walked as a stream, and nothing
+         * but the guard on mbind's own arguments ever saw it. */
+        if (env->provenance_on && sub.tag != TURI_NIL && sub.as_int &&
+            (sub.tag != TURI_INT ||
+             !turi_prov_check(env, TURI_HK_BTSTREAM, (const void *)(intptr_t)sub.as_int)))
+            return turi_error("eval: 'mbind' continuation result is not a live handle "
+                              "of the expected kind -- a sandboxed handle cannot be "
+                              "forged from an integer (S-5)");
         WkBtCell *sc = (WkBtCell *)(intptr_t)sub.as_int;
         while (sc) {
             rev = wk_bt_cell(sc->value, rev);
@@ -5349,8 +5729,9 @@ static void wk_register_trail_natives(TuriEnv *env) {
 }
 
 static void wk_register_proc_fs_natives(TuriEnv *env) {
-    turi_env_register_native(env, "process/spawn",    native_process_spawn,     NULL);
-    turi_env_register_native(env, "process/wait",     native_process_wait,      NULL);
+    turi_env_register_native(env, "process/spawn-raw",    native_process_spawn,     NULL);
+    turi_env_register_native(env, "process/child-of-raw", native_process_child_of,  NULL);
+    turi_env_register_native(env, "process/wait-raw",     native_process_wait,      NULL);
     turi_env_register_native(env, "fs/tmpfile",       native_fs_tmpfile,        NULL);
     turi_env_register_native(env, "fs/tmpfile-path",  native_fs_tmpfile_path,   NULL);
     turi_env_register_native(env, "fs/tmpfile-fd",    native_fs_tmpfile_fd,     NULL);
@@ -5421,6 +5802,10 @@ static TuriValue native_bytes_alloc(TuriEnv *env, TuriValue *a, uint32_t n, void
     (void)env; (void)ud;
     int64_t len = (n > 0) ? a[0].as_int : 0;
     if (len < 0) len = 0;
+    /* `8 + len` wraps on a 32-bit size_t (the wasm32 libturi), and the
+     * memset below then runs past a tiny block. */
+    if ((uint64_t)len > SIZE_MAX - sizeof(int64_t) || !turi_prov_alloc_ok(env, len, 1))
+        return turi_errorf("bytes-alloc: length %lld out of range", (long long)len);
     int64_t *buf = (int64_t *)malloc(sizeof(int64_t) + (size_t)len);
     if (!buf) return turi_nil();
     buf[0] = len;
@@ -5662,6 +6047,34 @@ TuriValue native_contract_check(TuriEnv *env, TuriValue *args,
     return turi_nil();
 }
 
+/* Native implementation of tur-contract-check-at (bool * cstr * cstr * int ->
+ * void): tur-contract-check, naming the predicate's site the way a compiled
+ * build's `tur_panic_at` does -- `panic at boom.tur:2: msg`. */
+TuriValue native_contract_check_at(TuriEnv *env, TuriValue *args,
+                                   uint32_t n, void *ud) {
+    (void)ud;
+    bool cond = true;
+    if (n >= 1) {
+        TuriValue a = args[0];
+        if (a.tag == TURI_BOOL)      cond = a.as_bool;
+        else if (a.tag == TURI_INT)  cond = (a.as_int != 0);
+        else if (a.tag == TURI_NIL)  cond = false;
+    }
+    if (!cond) {
+        const char *msg = (n >= 2 && args[1].tag == TURI_CSTR && args[1].as_cstr)
+                          ? args[1].as_cstr : "Assertion failed";
+        const char *file = (n >= 3 && args[2].tag == TURI_CSTR && args[2].as_cstr)
+                           ? args[2].as_cstr : NULL;
+        long long line = (n >= 4 && args[3].tag == TURI_INT) ? (long long)args[3].as_int : 0;
+        turi_host_exit_guard(env, msg);
+        if (file && *file) fprintf(stderr, "panic at %s:%lld: %s\n", file, line, msg);
+        else               fprintf(stderr, "panic at\n%s\n", msg);
+        fflush(stderr);
+        exit(1);
+    }
+    return turi_nil();
+}
+
 /* Native implementation of tur-contract-check-inv (obj pred msg -> void).
  * Calls pred(obj); panics if it returns false. */
 TuriValue native_contract_check_inv(TuriEnv *env, TuriValue *args,
@@ -5784,8 +6197,10 @@ static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *
      * enclosing eval (or, when called from a defmacro* body, the enclosing
      * COMPILE) owns right now -- snapshot the whole registry and the
      * had-error flag, parse under a temporary file entry, put both back.
-     * diag_files_restore deliberately skips id 0, so re-register the saved
-     * entries directly. */
+     * diag_files_restore deliberately skips id 0, so the saved table is put
+     * back whole with diag_files_replace -- which, unlike re-registering
+     * each entry, does not read through them: an entry can point into an
+     * env an embedder has since freed. */
     bool saved_had = diag_had_error();
     const SourceFile *saved_files[DIAG_MAX_FILES];
     size_t n_saved = diag_files_save(saved_files, DIAG_MAX_FILES);
@@ -5803,8 +6218,7 @@ static TuriValue native_read_string(TuriEnv *e, TuriValue *a, uint32_t n, void *
                                           e->reader_macros, &nforms);
     bool bad = (!forms || nforms == 0 || diag_had_error());
     diag_reset();
-    for (size_t i = 0; i < n_saved; i++)
-        if (saved_files[i]) diag_register_file(saved_files[i]);
+    diag_files_replace(saved_files, n_saved);
     if (saved_had) diag_force_had_error();
     if (bad)
         return turi_errorf("read-string: could not parse \"%s\"", src);
@@ -6181,6 +6595,8 @@ void turi_env_register_interpreter_natives(TuriEnv *env) {
      * panic on a violated contract under --interpret. */
     turi_env_register_native(env, "tur-contract-check",
                              native_contract_check, NULL);
+    turi_env_register_native(env, "tur-contract-check-at",
+                             native_contract_check_at, NULL);
     turi_env_register_native(env, "tur-contract-check-inv",
                              native_contract_check_inv, NULL);
     turi_env_register_native(env, "contract-enabled?",

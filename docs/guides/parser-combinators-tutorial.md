@@ -20,12 +20,12 @@ The focus is pedagogy, not micro-optimisation. Every line is idiomatic
 Turmeric with `defdata`, `defgadt`, `match`, and no inline C.
 
 The runnable end-to-end version of every snippet here lives in
-[`tests/fixtures/parsec-tutorial/input.tur`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/parsec-tutorial/input.tur).
+[`tests/fixtures/parsec-tutorial/input.tur`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/parsec-tutorial/input.tur).
 
 > **Note.** The snippets below use the `#\<char>` character-literal
 > syntax (`#\+` reads as `43`, `#\0` as `48`, `#\space` as `32`).
 > That syntax is a v1 legibility slice; see
-> [`docs/archive/legible-char-literals-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/legible-char-literals-plan.md).
+> [`docs/archive/legible-char-literals-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/legible-char-literals-plan.md).
 > A `#\<char>` literal is just an `:int` -- the reader emits the byte
 > code, so it composes with `=` and arithmetic exactly like the raw
 > integer it replaces. The runnable fixture uses `#\` throughout.
@@ -447,7 +447,7 @@ even for a tutorial-sized parser.
   numbers-with-exponents are the hard cases and need only the patterns
   here. See `tests/fixtures/parsec-json-subset/` for a starting
   point.
-- **Production library:** [`stdlib/parsec.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/parsec.tur)
+- **Production library:** [`stdlib/parsec.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/parsec.tur)
   has performance-tuned versions of every combinator plus `pstring`,
   `parse-value`, and friends -- built on top of inline-C for the tight
   loops.
@@ -470,7 +470,7 @@ even for a tutorial-sized parser.
 - [gadts-guide.md](gadts-guide.md) -- `defgadt`, `match`, type refinement
 - [backtracking-guide.md](backtracking-guide.md) -- the list monad and
   nondeterminism (the direction a full-fat combinator library would go)
-- [`stdlib/parsec.tur`](https://github.com/rjungemann/turmeric/tree/main/stdlib/parsec.tur)
+- [`stdlib/parsec.tur`](https://github.com/turmeric-lang/turmeric/tree/main/stdlib/parsec.tur)
   -- the production parser-combinator library
-- [`tests/fixtures/parsec-tutorial/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/parsec-tutorial/)
+- [`tests/fixtures/parsec-tutorial/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/parsec-tutorial/)
   -- the runnable fixture for this tutorial

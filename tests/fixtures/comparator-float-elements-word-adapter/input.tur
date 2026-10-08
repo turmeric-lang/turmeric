@@ -1,0 +1,53 @@
+;; comparator-float-elements-word-adapter -- the stdlib's inline-C
+;; comparator helpers (`vec-eq?`, `map-eq?`, `result-eq?`, `mutmap-eq?`,
+;; `set-eq-cmp?`) call the comparator's slot 0 with each element as a WORD.  A
+;; comparator with typed float parameters was boxed at its own signature, so
+;; `(fn [a : float b : float] ...)` read both arguments from xmm registers the
+;; caller never set: `vec-eq?` and `map-eq?` answered TRUE for 7.1 against
+;; 3.25, compiled, while `tur --interpret` said false.  The comparator
+;; parameters now have a real fn type, `(fn [A A] bool)`, so the box is
+;; spelled at words there: a bare function gets a word adapter, a capturing
+;; closure a { adapter, handle } wrapper.  The `k` closures are the capturing
+;; half -- each line pairs a different-payload verdict (the one that was
+;; wrong) with a same-payload one.
+(load "stdlib/map.tur")
+(load "stdlib/set.tur")
+(load "stdlib/mutmap.tur")
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec float))
+        w (:: (vec-new) (Vec float))
+        k 0.0]
+    (vec-push! v 7.1)
+    (vec-push! w 3.25)
+    (println (vec-eq? v w (fn [a : float b : float] : bool (= a b))))
+    (println (vec-eq? v v (fn [a : float b : float] : bool (= a b))))
+    (println (vec-eq? v w (fn [a : float b : float] : bool (= (+ a k) b))))
+    (println (vec-eq? v v (fn [a : float b : float] : bool (= (+ a k) b)))))
+  (let [v (:: (vec-new) (Vec float32))
+        w (:: (vec-new) (Vec float32))]
+    (vec-push! v (:: 7.1 float32))
+    (vec-push! w (:: 3.25 float32))
+    (println (vec-eq? v w (fn [a : float32 b : float32] : bool (= a b))))
+    (println (vec-eq? w w (fn [a : float32 b : float32] : bool (= a b)))))
+  (let [m1 (map-assoc (map-new) 1 7.1)
+        m2 (map-assoc (map-new) 1 3.25)
+        k 0.0]
+    (println (map-eq? m1 m2 (fn [a : float b : float] : bool (= a b))))
+    (println (map-eq? m1 m1 (fn [a : float b : float] : bool (= a b))))
+    (println (map-eq? m1 m2 (fn [a : float b : float] : bool (= (+ a k) b))))
+    (println (map-eq? m1 m1 (fn [a : float b : float] : bool (= (+ a k) b)))))
+  (let [r1 (:: (ok 7.1) (Result float cstr))
+        r2 (:: (ok 3.25) (Result float cstr))
+        k 0.0]
+    (println (result-eq? r1 r2 (fn [a : float b : float] : bool (= a b))
+                               (fn [a : cstr b : cstr] : bool true)))
+    (println (result-eq? r1 r1 (fn [a : float b : float] : bool (= (+ a k) b))
+                               (fn [a : cstr b : cstr] : bool true))))
+  (let [mm1 (:: (mutmap-new) (MutableMap int float))
+        mm2 (:: (mutmap-new) (MutableMap int float))]
+    (mutmap-set! mm1 1 1 7.1)
+    (mutmap-set! mm2 1 1 3.25)
+    (println (mutmap-eq? mm1 mm2 (fn [a : float b : float] : bool (= a b))))
+    (println (mutmap-eq? mm1 mm1 (fn [a : float b : float] : bool (= a b)))))
+  0)

@@ -1,0 +1,12 @@
+#lang r7rs
+;; r7rs-deep-recursion-segfaults-silently: SICP 1.2.1's linear recursive
+;; process a million calls deep.  Each Scheme frame is a C frame, and this ran
+;; off the 8 MiB main-thread stack with no message (exit 139).  A compiled
+;; r7rs program's main now runs on a 1 GiB-stack thread.  Fixnum-only on
+;; purpose: under run-r7rs-gc.sh's torture (a collection every 31
+;; allocations) each collection scans the whole deep stack, so a million
+;; allocations at this depth would be quadratic.
+(import (scheme base) (scheme write))
+(define (sum-to n) (if (= n 0) 0 (+ n (sum-to (- n 1)))))
+(write (sum-to 1000000))
+(newline)

@@ -1,0 +1,44 @@
+;; associated-type-unusable-nullary-and-generic (half 2): an associated-type
+;; projection at a TYPE VARIABLE, `(Inner A)` inside a generic constrained by
+;; the class that declares `Inner`.  It used to be "no instance binding for
+;; associated type 'Inner' at this type" -- the projection was reduced where
+;; it was parsed, and only a concrete type has an instance.  It stays
+;; unreduced now (a type variable carrying the projection), a call that fixes
+;; A reduces it through the instance, and a method whose class result is the
+;; associated type yields the projection at a type-variable receiver.
+;;
+;; W's Inner is int; P2's is a by-value struct, so the per-call clone has to
+;; see the real C type.  Every line matches `tur --interpret`.
+
+(defclass Box [a]
+  (type Inner : Type)
+  (peel [x : a] : Inner))
+(defopaque W :int)
+(defstruct Pt [x : int y : int])
+(defopaque P2 :int)
+(definstance Box [W] (type Inner = int) (peel [x] (:: x int)))
+(definstance Box [P2] (type Inner = Pt) (peel [x] (make-struct Pt (:: x int) 7)))
+
+(defn take-generic [A] [(Box A)] [x : A d : (Inner A)] : (Inner A) d)
+;; a generic calling a generic: (Inner A) at A := B is (Inner B)
+(defn relay [B] [(Box B)] [x : B d : (Inner B)] : (Inner B) (take-generic x d))
+;; the projection inside a container
+(defn count-all [A] [(Box A)] [x : A ds : (Vec (Inner A))] : int (vec-len ds))
+;; method result compared to a projection-typed parameter
+;; the projection returned through a method on the type variable
+(defn first-or [A] [(Box A)] [x : A ds : (Vec (Inner A))] : (Inner A)
+  (if (> (vec-len ds) 0) (vec-get ds 0) (peel x)))
+
+(defn main [] : int
+  (let [w : W (:: 5 W)
+        p : P2 (:: 3 P2)
+        vs : (Vec int) (vec-new)
+        ps : (Vec Pt) (vec-new)]
+    (vec-push! vs 11)
+    (println (relay w 42))
+    (println (.x (relay p (make-struct Pt 8 8))))
+    (println (count-all w vs))
+    (println (count-all p ps))
+    (println (first-or w vs))
+    (println (.y (first-or p ps))))
+  0)

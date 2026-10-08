@@ -138,7 +138,7 @@ Two caveats:
   process, where the undo is moot. This used to be a real caveat -- the undo
   was skipped on a caught panic, because a `defer` inside a generic function
   was dropped on the compiled path's unwind
-  ([archived report](https://github.com/rjungemann/turmeric/blob/main/docs/archive/defer-in-generic-hof-skipped-on-caught-panic.md));
+  ([archived report](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/defer-in-generic-hof-skipped-on-caught-panic.md));
   `tests/fixtures/bt-scope-panic-undo` pins the fixed behaviour on both back
   ends.
 - **Free cells outside the scope that wrote them.** A trail entry still pointing
@@ -256,7 +256,7 @@ Worth knowing before extending the driver:
 - Recursion is written pass-`k`-through (`dfs-choose-go`) rather than
   goal-returning. When the driver was written, a self-recursive call whose
   fn-typed result fed a `^fat` parameter hit a
-  [codegen bug](https://github.com/rjungemann/turmeric/blob/main/docs/archive/self-recursive-fn-returning-call-into-fat-sink.md),
+  [codegen bug](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/self-recursive-fn-returning-call-into-fat-sink.md),
   since fixed (2026-08-27); the spelling stayed because it is also the one
   that does not capture `k`.
 
@@ -305,7 +305,7 @@ on the mutators for a month checking as `#fx{}` before the declaration existed.
 ## `bt-scope` is also a region, and `with-region` is only a region
 
 On by default since 2026-09-05 (see the
-[regions plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/regions-plan.md);
+[regions plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/regions-plan.md);
 `TUR_REGIONS=0` turns it off for bisection), `bt-scope` does a second thing besides pushing a trail level: it opens an
 arena **generation**, and everything allocated inside that the returned value
 cannot reach is reclaimed in one rewind when the bracket exits. For a solver
@@ -360,4 +360,4 @@ it to explore, not to measure.
 - [Backtracking Guide](backtracking-guide.md) -- the list-monad search surface.
 - [Logic Programming Guide](logic-programming-guide.md) -- relational search and `Subst`.
 - [Delimited Control Operators Guide](delimited-control-operators-guide.md) -- `shift`/`reset`, `call/cc*`.
-- [Solver extension plan](https://github.com/rjungemann/turmeric/blob/main/docs/archive/solver-extension-plan.md) -- design rationale, sections 3.2-3.5.
+- [Solver extension plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/solver-extension-plan.md) -- design rationale, sections 3.2-3.5.

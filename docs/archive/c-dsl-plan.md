@@ -1004,7 +1004,7 @@ ships as a simple spice with no `:cmake-deps`.
 ### Adding the spice
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref c-dsl-v0.1.0 --subdir spices/c-dsl --name c-dsl
 ```
 
@@ -1016,7 +1016,7 @@ tur add https://github.com/rjungemann/turmeric-spices \
   :version     "0.1.0"
   :description "Lisp-syntax DSL that compiles to C99 source code"
   :license     "MIT"
-  :repository  "https://github.com/rjungemann/turmeric-spices"
+  :repository  "https://github.com/turmeric-lang/turmeric-spices"
 
   :exports {
     "c-dsl/core"     ["c-let" "c-const" "c-set!" "c-do" "c-return"

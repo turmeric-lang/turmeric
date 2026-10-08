@@ -77,7 +77,7 @@ float bit-reinterpret note below).
    `(bits->float x)`, and pushing one in is `(float->bits x)`, both from
    `stdlib/bits.tur`; converting a real number is `int->float` / `float->int`
    from `stdlib/math.tur`. See
-   [docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).
+   [docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).
 
 ## Representations: fn-typed values
 
@@ -130,7 +130,7 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
    "neither retains nor drops".  A `^fat` sink WITH inline-C -- the shape
    that can drop -- has the bit clear and keeps its heap box, which is what
    `tests/fixtures/closure-drop-glue-fatshim` pins.
-   ([`fat-sink-shim-box-leaks-per-call`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/fat-sink-shim-box-leaks-per-call.md),
+   ([`fat-sink-shim-box-leaks-per-call`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fat-sink-shim-box-leaks-per-call.md),
    gated by `tests/run-fat-shim-leak.sh`.)
 
    Two predicates, both in `src/compiler/types.c`, and they deliberately
@@ -143,6 +143,37 @@ is chosen (`carrier_ok`, `src/compiler/elab_fns.c` ~3600):
 5. **Struct-field-fat** -- `defstruct` fn-typed fields, normalized to the fat
    representation uniformly after the same bug was fixed there
    (`tests/fixtures/capturing-closure-struct-field/`).
+
+### Slot 0's signature: which parameters are the word
+
+Every fat box is called through slot 0, and the C type a caller casts slot 0
+to must be exactly the type the entry stored there was defined at -- clang's
+`-fsanitize=function` checks that, and WASM's `call_indirect` traps on any
+difference.  So a parameter's **slot spelling** is one decision, made by
+`thunk_param_slot_c_name` (`src/compiler/emit_module.c`), which every
+typed-thunk typedef, hand-built fat-call cast, typed fatshim and adapter
+consults:
+
+| Parameter | Slot spelling | Why |
+| --- | --- | --- |
+| wide (> 8 byte) by-value aggregate | `int64_t` (a box pointer) | b4box: the thunk body loads it at entry |
+| function value (not a cfnptr) | `int64_t` | every definition takes a fn parameter as the word (ER4), and every erased consumer calls at words |
+| untyped `ptr<void>` | `int64_t` | **fnsan-ptr-void-fn-slot-word (2026-10-02).**  A program erases a closure to `ptr<void>` and calls it back as `(fn [ptr<void>] ...)`; for that call to be type-exact the two parameters must share one spelling, and the fn parameter's is the entrenched one |
+| everything else | `type_c_name` | -- |
+
+The `ptr<void>` row is a slot fact, not a definition fact: a closure thunk
+still DEFINES the parameter `void *` (its body, forward, spec and CPS
+declarations all say so), and slot 0 holds a converting `__tur_slot0_<thunk>`
+entry (`ensure_closure_slot0_widen`, the same wrapper that widens a narrow
+result).  A bare defn boxed into a fat value gets a typed fatshim that
+converts the word back (`thunk_param_def_c_name` is the definition side).
+Results are untouched: a `ptr<void>` result and a fat function result are
+both `void *` already.  Runtime C that calls a closure's slot 0 by hand must
+follow the table -- `httpd`'s handler dispatch is `void (*)(void *, int64_t)`,
+`image/register-global!`'s deser is `TUR_APPLY1_T(int64_t, int64_t, ...)`,
+and the reactor's callbacks were already all-word.  A typed `ptr<T>`,
+`ptr<const-void>` and a cfnptr keep their real C types: they are FFI
+spellings, not erasure.
 
 Plus one in-flight form the minimization matrix in
 `docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md` exposed: the
@@ -191,7 +222,7 @@ add the row.
 
 | Open cell (producer -> boundary) | Report |
 | --- | --- |
-| `^Class`-constrained parameter (carrier `int64_t`) -> generated instance method taking a `defdata` ADT by value; instantiating at `int` is a no-op erasure and works | [`typeclass-constrained-param-erases-adt-to-int64`](https://github.com/rjungemann/turmeric/blob/main/docs/reported/typeclass-constrained-param-erases-adt-to-int64.md) |
+| `^Class`-constrained parameter (carrier `int64_t`) -> generated instance method taking a `defdata` ADT by value; instantiating at `int` is a no-op erasure and works | [`typeclass-constrained-param-erases-adt-to-int64`](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/typeclass-constrained-param-erases-adt-to-int64.md) |
 
 The table was empty between 2026-08-21 and these two filings. The pair that
 emptied it closed on the same day, and the `let` merge-temp one is worth a
@@ -221,26 +252,26 @@ the next cell in this family is usually adjacent to one of them.
 
 | Closed cell (producer -> boundary) | Resolution | Report |
 | --- | --- | --- |
-| fn value reaching a `let` merge temp in RESULT position -- the TAIL emitted the fat `{ thunk, env... }` box while the TEMP was declared thin `R (*)(A...)`, so the assignment was `-Wint-conversion` (hard error under GCC >= 14) and the R3 shadow ICE'd on it | the two sites keyed fat-vs-thin off different facts -- `emit_temp_decl` off `type.as.fn.boxed` (a TYPE fact), stage-2 tail normalization off `fn_result_type_is_fat_normalized` (a POSITION fact). `merge_temp_fn_is_fat()` asks `repr_of` in RESULT position instead, and the decl and its ctype mirror both spell the temp from it | [`let-returning-noncapturing-lambda-ices-at-merge-temp`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md) |
-| bare-var tail of a NON-parametric by-value product -> `emit_if` merge temp (the parametric half was already bridged) | position-sensitive, not type-sensitive: `emit_arm_is_recorded_byval_agg()` asks the localvar side table what representation the arm's value actually has HERE, and suppresses the carrier->concrete bridge when it is already the aggregate. A TYPE-level widening regressed ten fixtures because the same type rides the carrier at the vec/map element and assoc-type seams; the recorded type differs there, so those keep their bridge. **SR1 (2026-08-26) added the case that side table cannot answer:** it records LOCALS, and a by-value aggregate PARAMETER is not one, so a sum-typed param returned from an arm (`re-repeat-n`'s `atom : Regex`) was bridged as though it were a carrier. `emit_arm_is_byval_agg_var()` is the second suppressor, and it IS the type-level test this row warns about -- kept safe only by being narrowed to by-value SUMS (the vec/map and assoc-type seams this row names are products) and gated on the seam. Widen it past sums and you should expect the ten fixtures back | [`byvalue-product-tail-var-double-unboxed-nonparametric`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/byvalue-product-tail-var-double-unboxed-nonparametric.md) |
-| four carrier->concrete bridging sites each asking "does this value already HAVE the aggregate representation?" their own way -- the arm sites through a shared predicate, TWO let-binding init sites through separate inline copies of the same three comparisons, and the CPS `letraw` mirror not at all, while its comment claimed "same gate as the direct site" | one copy: `emit_value_is_recorded_as(v, want_ctype)`, taking the wanted C type as a STRING because that is what the binder sites hold; `emit_arm_is_recorded_byval_agg` is a thin Type-taking wrapper for the arm sites. The CPS mirror's missing term was added and is **provably inert** -- across all 2131 fixtures only 33 reach that bridge with a by-value init type, and in every one either the Expr-level predicate already suppresses it or the init is recorded as `int64_t`/pointer/nothing, never the aggregate. Emitted C byte-identical. A consistency repair, not a fix for an observed miscompile | [`cps-let-binder-bridge-lacks-position-check`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/cps-let-binder-bridge-lacks-position-check.md) |
-| a control form (`let`/`do`) wrapping an `if` whose arms are carrier producers -- each arm was bridged carrier->concrete by `emit_if`, then the ENCLOSING form bridged the already-concrete merge temp again (`operand of type 'tur_adt_...' where arithmetic or pointer type is required`). The same `if` as the whole function body was always fine | two halves. `bridge_control_value_to_byvalue_temp` (the do/let companion its own comment already named) gained `emit_arm_is_recorded_byval_agg`, the same one-predicate change that fixed the `emit_if` arms. But the precondition that fix assumed did NOT hold: `emit_if` declares its by-value merge temp with `emit_temp_decl` DIRECTLY, bypassing `emit_control_result_temp_decl`, which is the wrapper that records the temp's emitted C type -- so the temp was by-value but invisible to the side table the predicate consults. Recording it is the other half, and without it the predicate answers false and nothing changes | [`control-form-around-if-double-unboxes-carrier-arms`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md) |
-| `^mut` rebinding of a concrete heap container (merge-temp position) -- carrier where chokepoint 1 says typed pointer, travelling with a spec-materialization hole (a generic call in a `set!` RHS never interned its spec: LINK error past tur check) | chokepoint 1's concrete-heap rule extracted to `emit_repr_concrete_heap_ptr_c_name` and shared by the let-bind decl, the merge-temp decl, and its ctype mirror (the existing int<->ptr bridge reconciles a carrier tail); `emit_abi_scan_expr` gains its missing `EX_SET` case | [`mut-map-reassign-missing-spec-link-error`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/mut-map-reassign-missing-spec-link-error.md) |
-| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (the report's LAST row; concrete and tyvar signatures were already fat-normalized) | the CPS increment (2026-08-16): effect-annotated fn params join `fn_param_type_is_fat_normalized`; the E2a registry call sites dispatch fat (slot 0 = a registered capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the fatshim's stashed bare-fn entry); threadable capturing lambdas are CPS-admitted with the direct thunk's env-unpack preamble; the effect_check walkers peel the shim. Capturing PERFORMING callbacks -- previously no working spelling -- thread the handler chain too. Thin remainder (cfnptr/variadic/arity>5 effectful) keeps a call-site TUR-E0007 | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/poly-result-hof-capturing-closure-sigbus.md) |
-| generic closure return over a type application (struct `Cons`) -- the `(type-app ? ?)` shell at the checker AND the never-emitted `ctor_Cons` at link | Defect A: result-graft recovery at the thunk-type clobber in `elab_call.c` (the binding's own ground `result_full_type` survives the swap; the `elab_fns.c` grounding gate is untouched). Defect B: `inner_app` clone trigger + body-type-derived clone result + head-keyed clone resolution at the thunk direct-call, so the per-spec inner-closure clone is both emitted and the one actually invoked | [`generic-closure-return-type-app`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/generic-closure-return-type-app.md) |
-| typeclass method result at **float** (any width) -> generic (carrier) call argument | producer bit-cast keyed on the method's DECLARED result kind (the same type the consumer keys its reinterpret on -- paired by construction); an int-declared method keeps its value conversion | [`method-result-float-spec-return-value-converts`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/method-result-float-spec-return-value-converts.md) |
-| `float32`-ascribed literal -> any mixed C expression | ascribe elaborator retypes a float literal in place (`(:: 7.1 float32)` == `7.1f32`), so it emits at single precision instead of as the double literal the promotion rules then dominated | [`float32-ascribed-literal-compares-as-double`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-ascribed-literal-compares-as-double.md) |
-| `float32` generic (carrier) call result -> concrete consumer | elaboration: `call_wrap_reinterpret_owning` admits the carrier<->float32 pair (its silent mixed-size bail dropped the requested reinterpret, typing the call `int`); emit's size-mismatch reinterpret arm reads float pairs through the union overlay | [`float32-generic-call-result-printed-as-carrier`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/float32-generic-call-result-printed-as-carrier.md) |
-| `TY_CONTRACT` in type-ARGUMENT position -- the payload kept a live contract type at every downstream boundary | peeled to its base in BOTH type-application loops (`rt_peel_type_arg_contract`), warning `TUR-W0380` that the payload predicate is not enforced; `TY_CONTRACT` then joined `type_has_concrete_codegen_layout` by delegating to its base | [`contract-type-arg-not-peeled-to-base`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/contract-type-arg-not-peeled-to-base.md) |
-| method result (carrier) -> typed `(Result A B)` defn boundary | increment 2: continuation-wrapper ABI paired with the entry point dispatch actually selects | [`result-monad-bind-typed-boundary-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/result-monad-bind-typed-boundary-miscompiles.md) |
-| by-value aggregate returned by a CAPTURING continuation -> int64 `tur_poly_fn_t.fn` carrier sink (nested `bind` / multi-step `do-m`) | signature-keyed fat spill shim: reads the real entry point out of the closure env's `__fn` slot and boxes the aggregate, the fat twin of the row above (which only covered named wrappers) | [`nested-bind-over-result-typed-boundary-segfaults`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/nested-bind-over-result-typed-boundary-segfaults.md) |
-| method result (carrier) -> generic call argument | increment 2 | [`class-method-result-into-generic-invalid-c`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/class-method-result-into-generic-invalid-c.md) |
-| by-value struct -> Vec / Map element slot | increment 3: width-independent boxed element protocol | [`vec-byvalue-struct-element-invalid-c`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/vec-byvalue-struct-element-invalid-c.md) |
-| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | fat-normalization stage 2 | [`fn-typed-value-return-ascribe-miscompiles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md) |
-| fn value read out of a container element, then called | fat-normalization stage 2 | [`fn-payload-in-container-undeclared-temp`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fn-payload-in-container-undeclared-temp.md) |
-| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification | alias provenance in the tail walkers + poly-to-fat at the `if` join | [`fn-value-carrier-fat-seam-residuals`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fn-value-carrier-fat-seam-residuals.md) |
-| closure handle -> `double`-typed element slot | two-types-one-C-name collision, resolved upstream (both findings) | [`concrete-codegen-layout-kind-enumerations-drift`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md) |
-| carrier fn value -> monomorphized-ctor arg slot; carrier value -> pointer-typed fn return | stop re-deriving the emitted C type from a `Type`. The ctor's real param C type is recorded at ADT-app registration and looked up at the call site; the return site asks the typed AST whether the tail emits the carrier instead of sniffing the emitted string | [`macos-int-conversion-carrier-pointer-straddles`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macos-int-conversion-carrier-pointer-straddles.md) |
+| fn value reaching a `let` merge temp in RESULT position -- the TAIL emitted the fat `{ thunk, env... }` box while the TEMP was declared thin `R (*)(A...)`, so the assignment was `-Wint-conversion` (hard error under GCC >= 14) and the R3 shadow ICE'd on it | the two sites keyed fat-vs-thin off different facts -- `emit_temp_decl` off `type.as.fn.boxed` (a TYPE fact), stage-2 tail normalization off `fn_result_type_is_fat_normalized` (a POSITION fact). `merge_temp_fn_is_fat()` asks `repr_of` in RESULT position instead, and the decl and its ctype mirror both spell the temp from it | [`let-returning-noncapturing-lambda-ices-at-merge-temp`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/let-returning-noncapturing-lambda-ices-at-merge-temp.md) |
+| bare-var tail of a NON-parametric by-value product -> `emit_if` merge temp (the parametric half was already bridged) | position-sensitive, not type-sensitive: `emit_arm_is_recorded_byval_agg()` asks the localvar side table what representation the arm's value actually has HERE, and suppresses the carrier->concrete bridge when it is already the aggregate. A TYPE-level widening regressed ten fixtures because the same type rides the carrier at the vec/map element and assoc-type seams; the recorded type differs there, so those keep their bridge. **SR1 (2026-08-26) added the case that side table cannot answer:** it records LOCALS, and a by-value aggregate PARAMETER is not one, so a sum-typed param returned from an arm (`re-repeat-n`'s `atom : Regex`) was bridged as though it were a carrier. `emit_arm_is_byval_agg_var()` is the second suppressor, and it IS the type-level test this row warns about -- kept safe only by being narrowed to by-value SUMS (the vec/map and assoc-type seams this row names are products) and gated on the seam. Widen it past sums and you should expect the ten fixtures back | [`byvalue-product-tail-var-double-unboxed-nonparametric`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/byvalue-product-tail-var-double-unboxed-nonparametric.md) |
+| four carrier->concrete bridging sites each asking "does this value already HAVE the aggregate representation?" their own way -- the arm sites through a shared predicate, TWO let-binding init sites through separate inline copies of the same three comparisons, and the CPS `letraw` mirror not at all, while its comment claimed "same gate as the direct site" | one copy: `emit_value_is_recorded_as(v, want_ctype)`, taking the wanted C type as a STRING because that is what the binder sites hold; `emit_arm_is_recorded_byval_agg` is a thin Type-taking wrapper for the arm sites. The CPS mirror's missing term was added and is **provably inert** -- across all 2131 fixtures only 33 reach that bridge with a by-value init type, and in every one either the Expr-level predicate already suppresses it or the init is recorded as `int64_t`/pointer/nothing, never the aggregate. Emitted C byte-identical. A consistency repair, not a fix for an observed miscompile | [`cps-let-binder-bridge-lacks-position-check`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/cps-let-binder-bridge-lacks-position-check.md) |
+| a control form (`let`/`do`) wrapping an `if` whose arms are carrier producers -- each arm was bridged carrier->concrete by `emit_if`, then the ENCLOSING form bridged the already-concrete merge temp again (`operand of type 'tur_adt_...' where arithmetic or pointer type is required`). The same `if` as the whole function body was always fine | two halves. `bridge_control_value_to_byvalue_temp` (the do/let companion its own comment already named) gained `emit_arm_is_recorded_byval_agg`, the same one-predicate change that fixed the `emit_if` arms. But the precondition that fix assumed did NOT hold: `emit_if` declares its by-value merge temp with `emit_temp_decl` DIRECTLY, bypassing `emit_control_result_temp_decl`, which is the wrapper that records the temp's emitted C type -- so the temp was by-value but invisible to the side table the predicate consults. Recording it is the other half, and without it the predicate answers false and nothing changes | [`control-form-around-if-double-unboxes-carrier-arms`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md) |
+| `^mut` rebinding of a concrete heap container (merge-temp position) -- carrier where chokepoint 1 says typed pointer, travelling with a spec-materialization hole (a generic call in a `set!` RHS never interned its spec: LINK error past tur check) | chokepoint 1's concrete-heap rule extracted to `emit_repr_concrete_heap_ptr_c_name` and shared by the let-bind decl, the merge-temp decl, and its ctype mirror (the existing int<->ptr bridge reconciles a carrier tail); `emit_abi_scan_expr` gains its missing `EX_SET` case | [`mut-map-reassign-missing-spec-link-error`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/mut-map-reassign-missing-spec-link-error.md) |
+| capturing closure -> nominal thin `TY_FN` param whose signature carries an **effect row** (the report's LAST row; concrete and tyvar signatures were already fat-normalized) | the CPS increment (2026-08-16): effect-annotated fn params join `fn_param_type_is_fat_normalized`; the E2a registry call sites dispatch fat (slot 0 = a registered capturing-lambda entry with an env-taking `__cps` twin, slot 1 = the fatshim's stashed bare-fn entry); threadable capturing lambdas are CPS-admitted with the direct thunk's env-unpack preamble; the effect_check walkers peel the shim. Capturing PERFORMING callbacks -- previously no working spelling -- thread the handler chain too. Thin remainder (cfnptr/variadic/arity>5 effectful) keeps a call-site TUR-E0007 | [`poly-result-hof-capturing-closure-sigbus`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/poly-result-hof-capturing-closure-sigbus.md) |
+| generic closure return over a type application (struct `Cons`) -- the `(type-app ? ?)` shell at the checker AND the never-emitted `ctor_Cons` at link | Defect A: result-graft recovery at the thunk-type clobber in `elab_call.c` (the binding's own ground `result_full_type` survives the swap; the `elab_fns.c` grounding gate is untouched). Defect B: `inner_app` clone trigger + body-type-derived clone result + head-keyed clone resolution at the thunk direct-call, so the per-spec inner-closure clone is both emitted and the one actually invoked | [`generic-closure-return-type-app`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/generic-closure-return-type-app.md) |
+| typeclass method result at **float** (any width) -> generic (carrier) call argument | producer bit-cast keyed on the method's DECLARED result kind (the same type the consumer keys its reinterpret on -- paired by construction); an int-declared method keeps its value conversion | [`method-result-float-spec-return-value-converts`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/method-result-float-spec-return-value-converts.md) |
+| `float32`-ascribed literal -> any mixed C expression | ascribe elaborator retypes a float literal in place (`(:: 7.1 float32)` == `7.1f32`), so it emits at single precision instead of as the double literal the promotion rules then dominated | [`float32-ascribed-literal-compares-as-double`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/float32-ascribed-literal-compares-as-double.md) |
+| `float32` generic (carrier) call result -> concrete consumer | elaboration: `call_wrap_reinterpret_owning` admits the carrier<->float32 pair (its silent mixed-size bail dropped the requested reinterpret, typing the call `int`); emit's size-mismatch reinterpret arm reads float pairs through the union overlay | [`float32-generic-call-result-printed-as-carrier`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/float32-generic-call-result-printed-as-carrier.md) |
+| `TY_CONTRACT` in type-ARGUMENT position -- the payload kept a live contract type at every downstream boundary | peeled to its base in BOTH type-application loops (`rt_peel_type_arg_contract`), warning `TUR-W0380` that the payload predicate is not enforced; `TY_CONTRACT` then joined `type_has_concrete_codegen_layout` by delegating to its base | [`contract-type-arg-not-peeled-to-base`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/contract-type-arg-not-peeled-to-base.md) |
+| method result (carrier) -> typed `(Result A B)` defn boundary | increment 2: continuation-wrapper ABI paired with the entry point dispatch actually selects | [`result-monad-bind-typed-boundary-miscompiles`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/result-monad-bind-typed-boundary-miscompiles.md) |
+| by-value aggregate returned by a CAPTURING continuation -> int64 `tur_poly_fn_t.fn` carrier sink (nested `bind` / multi-step `do-m`) | signature-keyed fat spill shim: reads the real entry point out of the closure env's `__fn` slot and boxes the aggregate, the fat twin of the row above (which only covered named wrappers) | [`nested-bind-over-result-typed-boundary-segfaults`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/nested-bind-over-result-typed-boundary-segfaults.md) |
+| method result (carrier) -> generic call argument | increment 2 | [`class-method-result-into-generic-invalid-c`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/class-method-result-into-generic-invalid-c.md) |
+| by-value struct -> Vec / Map element slot | increment 3: width-independent boxed element protocol | [`vec-byvalue-struct-element-invalid-c`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/vec-byvalue-struct-element-invalid-c.md) |
+| closure VALUE -> pass-through return / ascribe-around-let / nested fat HOF | fat-normalization stage 2 | [`fn-typed-value-return-ascribe-miscompiles`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/fn-typed-value-return-ascribe-miscompiles.md) |
+| fn value read out of a container element, then called | fat-normalization stage 2 | [`fn-payload-in-container-undeclared-temp`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/fn-payload-in-container-undeclared-temp.md) |
+| let-ALIASED carrier fn param in tail position; carrier vs boxed-result `if` unification | alias provenance in the tail walkers + poly-to-fat at the `if` join | [`fn-value-carrier-fat-seam-residuals`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/fn-value-carrier-fat-seam-residuals.md) |
+| closure handle -> `double`-typed element slot | two-types-one-C-name collision, resolved upstream (both findings) | [`concrete-codegen-layout-kind-enumerations-drift`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/concrete-codegen-layout-kind-enumerations-drift.md) |
+| carrier fn value -> monomorphized-ctor arg slot; carrier value -> pointer-typed fn return | stop re-deriving the emitted C type from a `Type`. The ctor's real param C type is recorded at ADT-app registration and looked up at the call site; the return site asks the typed AST whether the tail emits the carrier instead of sniffing the emitted string | [`macos-int-conversion-carrier-pointer-straddles`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macos-int-conversion-carrier-pointer-straddles.md) |
 
 A structural note the last closed row exposes: the representation decision today is
 not one function but (at least) three hand-maintained `TypeKind` switches in
@@ -259,7 +290,7 @@ arms and now also checks `type_c_name` exhaustiveness;
 `tests/check-monomorph-name-collision.sh` reads what they emit). The
 position axis -- one `repr-of(type, position)` routine for the per-SITE
 choices -- is staged in
-[docs/archive/repr-decision-function-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/repr-decision-function-plan.md).
+[docs/archive/repr-decision-function-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/repr-decision-function-plan.md).
 
 A strong diagnostic signal that a *bridge exists but is not consulted*: an
 intervening `let` fixing the repro (verified for
@@ -311,7 +342,7 @@ Two guards:
   `-Wincompatible-pointer-types`, so a regression is loud.
 
 Resolved report:
-[docs/archive/c-name-accessors-share-static-buffers.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/c-name-accessors-share-static-buffers.md).
+[docs/archive/c-name-accessors-share-static-buffers.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/c-name-accessors-share-static-buffers.md).
 
 ## Finding more missing cells
 
@@ -352,12 +383,12 @@ than failed. Three seams that are already correct (`perform`/`resume`,
 where every seam fails is distinguishable from a broken emitter.
 
 Open seam cells:
-[router-payloads-are-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/router-payloads-are-int64-only.md),
-[generator-yield-payload-is-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/generator-yield-payload-is-int64-only.md),
-[async-await-payload-is-int64-only](https://github.com/rjungemann/turmeric/blob/main/docs/reported/async-await-payload-is-int64-only.md).
+[router-payloads-are-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/router-payloads-are-int64-only.md),
+[generator-yield-payload-is-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/generator-yield-payload-is-int64-only.md),
+[async-await-payload-is-int64-only](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/async-await-payload-is-int64-only.md).
 The fix convention to reuse rather than reinvent is the `union { double d;
 int64_t i; }` bit-reinterpret the direct/fiber effect path already ships
-([fiber-effect-float-result-truncated](https://github.com/rjungemann/turmeric/blob/main/docs/archive/fiber-effect-float-result-truncated.md)),
+([fiber-effect-float-result-truncated](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fiber-effect-float-result-truncated.md)),
 or `any`'s approach of not riding the slot at all.
 
 The convention-level fix for the closure rows -- normalize every non-carrier
@@ -397,16 +428,18 @@ programs), so every finding is new. Its first corpus run found a live one: a
 2) under a tag `type-of` could not name. When you add a DELIBERATE conversion
 to the emitter, spell it `TUR_AS`; anything else it reports is the bug.
 
-**Mismatched indirect calls** (`tests/fuzz_arm.py`: clang
-`-fsanitize=function` in trap mode, armed in all four source fuzzers and
-proven armed by a canary). It sees a call through a function pointer whose
-type disagrees with the callee's definition -- the thin/fat, int64/double and
+**Mismatched indirect calls** (clang `-fsanitize=function` in trap mode:
+`tests/run-fnsan.sh` over the fixture corpus, the `fnsan` CI job, and
+`tests/fuzz_arm.py` in all four source fuzzers -- each proven armed by a
+canary first). It sees a call through a function pointer whose type disagrees
+with the callee's definition -- the thin/fat, int64/double and
 int64/tagged-`any` confusions of the fn-value rows above. It is exact, so it
-also traps on ABI-benign `bool`/pointer vs `int64_t` mismatches, of which the
-corpus still has some; until that sweep reaches zero a trap is the
-report-only `FNPTR_TRAP` (`TUR_FUZZ_FNSAN_STRICT=1` fails on it). See
-[emitted-c-indirect-calls-are-not-type-exact](https://github.com/rjungemann/turmeric/blob/main/docs/reported/emitted-c-indirect-calls-are-not-type-exact.md)
-for the live count and how to run the sweep.
+also traps on ABI-benign `bool`/pointer vs `int64_t` mismatches. **The corpus
+is at zero** (2026-10-02, after the slot-0 decision in "Slot 0's signature"
+above), so it gates: a fixture trap fails the `fnsan` job and a fuzzer trap is
+the failing `BUG_fnptr_trap` (`TUR_FUZZ_FNSAN_STRICT=0` makes it report-only
+for a session chasing something else). The sweep's history is in
+[emitted-c-indirect-calls-are-not-type-exact](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emitted-c-indirect-calls-are-not-type-exact.md).
 
 **An unresolved type tag** (runtime). A value widened to `any` while its type
 is still a type VARIABLE used to be tagged with the bare `TY_TYVAR` kind, a

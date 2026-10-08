@@ -1,0 +1,17 @@
+;; fn-param-closure-typed-result-shim: a captureless lambda whose parameter
+;; is a function and whose result is a float, returned from a defn and read
+;; by a typed `(fn [(fn [float] float)] float)` sink.  A function-typed
+;; parameter had no concrete C ABI in the typed-thunk predicate, so the box
+;; took the all-word adapter (`int64_t __tur_bare2word_double_int64_t`)
+;; while the caller cast slot 0 to `double (*)(void *, int64_t)`: an
+;; indirect call through the wrong type that read the result from xmm0 by
+;; luck (the adapter's own inner call had left it there).  The box now
+;; takes the typed shim.  Found probing fnsan-ptr-void-fn-slot-word.
+(defn use [^fat h : (fn [(fn [float] float)] float)] : float
+  (h (fn [x : float] : float (+ x 1.0))))
+(defn mk []
+  (fn [^fat g : (fn [float] float)] : float (* 2.0 (g 7.1))))
+(defn main [] : int
+  (println (use (mk)))
+  (println (use (fn [^fat g : (fn [float] float)] : float (g 3.25))))
+  0)

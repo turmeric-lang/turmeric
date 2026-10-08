@@ -161,7 +161,7 @@ defn read-file [path :cstr] :cstr @ {Io}
   ...
 ;; Effect-polymorphic: works with any effect set e that includes Ask.
 defn ask-and-add [x :int] :int @ {Ask | e}
-  +(x perform(Ask()))
+  {x + perform(Ask())}
 ```
 
 ### Why these features fit
@@ -247,9 +247,9 @@ as type-level compile-time integers.
 > across parameters, through `defstruct`/`defopaque` wrappers, and through
 > polymorphic helpers. Sizes only known at run time fall back to runtime
 > assertions. See the archived
-> [sized-types-completion-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-completion-plan.md)
+> [sized-types-completion-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/sized-types-completion-plan.md)
 > (SZ6--SZ9) and
-> [sized-types-cross-param-unification-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sized-types-cross-param-unification-plan.md).
+> [sized-types-cross-param-unification-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/sized-types-cross-param-unification-plan.md).
 
 ```turmeric
 ;; Matrix multiplication: dimensions must be compatible.

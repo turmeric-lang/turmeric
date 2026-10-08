@@ -1,7 +1,9 @@
 ;; Typed Closure Invocation ABI (closure-typed-invocation-abi-plan, Phase 1):
 ;; round-trip a :ptr<void> -> :ptr<void> closure through TUR_APPLY1_T.  The
-;; macro casts slot 0 to void * (*)(void *, void *); the pointer passes through
-;; untouched and the cell it points at survives the call.
+;; macro casts slot 0 to void * (*)(void *, int64_t) -- an untyped ptr<void>
+;; PARAMETER is the word in a closure slot, its result stays void * -- so the
+;; pointer passes through untouched and the cell it points at survives the
+;; call.
 
 (defn make-cell [v : int] : ptr<void>
   ```c
@@ -17,7 +19,7 @@
 
 (defn call-p [f : ptr<void> p : ptr<void>] : ptr<void>
   ```c
-  return TUR_APPLY1_T(void *, void *, f, p);
+  return TUR_APPLY1_T(void *, int64_t, f, p);
   ```)
 
 (defn make-pick [n : int] : ptr<void>

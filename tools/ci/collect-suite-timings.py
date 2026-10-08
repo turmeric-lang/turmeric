@@ -25,16 +25,26 @@ suite that suddenly got faster and started reporting N times per run.  The tag
 is what keeps them N distinct series instead.  Both keys are null on an
 unsharded run, so every row written before sharding existed stays comparable.
 
-The tag describes the JOB, not the suite: a suite that does not itself honor
-TUR_TEST_SHARD still gets it, and its rows are then replicas across shards.
-That is the honest reading -- the collector cannot know which harness sharded
--- and it is why a consumer should group by (suite, shard_index), never sum
-durations across shards without checking.
+$TUR_TEST_SHARD describes the JOB, not the suite: a suite that does not itself
+honor it still gets the tag, and its rows are then replicas across shards.  That
+is the honest reading -- the collector cannot know which harness sharded -- and
+it is why a consumer should group by (suite, shard_index), never sum durations
+across shards without checking.
+
+`--suite-shard SUITE=i/N` is for the case that reading cannot express: one suite
+in the job sliced its own work while the rest of the job ran whole.  The macOS
+`aux` part is exactly that -- it runs a quarter of tur_generic_spec_matrix
+(TUR_GSM_SHARD) alongside 160 suites that run in full -- so $TUR_TEST_SHARD
+there would label all 160 as replicas of a slice they never ran, while leaving
+it untagged makes the matrix's series drop ~4x with nothing in the data saying
+why.  The flag tags that one row and leaves the others alone.
 
 Usage:
     collect-suite-timings.py results-main.xml results-aux.xml > timings.jsonl
     collect-suite-timings.py --build-dir build results-*.xml
     TUR_TEST_SHARD=2/3 collect-suite-timings.py results-jit.xml
+    collect-suite-timings.py --suite-shard tur_generic_spec_matrix=1/4 \
+        results-aux.xml
 """
 
 import argparse
@@ -227,6 +237,10 @@ def main():
                     help="CMake build dir to read config dimensions from (default: build)")
     ap.add_argument("--shard", default=None,
                     help='shard this job ran, as "i/N" (default: $TUR_TEST_SHARD)')
+    ap.add_argument("--suite-shard", action="append", default=[],
+                    metavar="SUITE=i/N",
+                    help="one suite ran a slice while the rest of the job ran "
+                         "whole; tag only that suite's row (repeatable)")
     args = ap.parse_args()
 
     cache = read_cmake_cache(args.build_dir)
@@ -247,6 +261,23 @@ def main():
         "shard_index": shard_index,
         "shard_total": shard_total,
     }
+
+    # --suite-shard is for the case the job-level tag cannot express: ONE suite
+    # in the job ran a slice of its own work while the other 160 ran whole.
+    # $TUR_TEST_SHARD is read from the environment and so applies to every row,
+    # which is right when the job IS a shard and wrong here -- it would label
+    # all 160 other suites as replicas of a slice they never ran.  Without a
+    # per-suite tag the alternative is worse: the row stays untagged while
+    # measuring a quarter of the work, and the series drops ~4x with nothing in
+    # the data to explain it.
+    suite_shards = {}
+    for spec in args.suite_shard:
+        suite, _, which = spec.partition("=")
+        si, st = parse_shard(which)
+        if not suite or not st:
+            warn(f"ignoring --suite-shard {spec!r}: want SUITE=i/N with N>1")
+            continue
+        suite_shards[suite] = (si, st)
 
     seen = {}
     order = []
@@ -277,11 +308,19 @@ def main():
             row.update(census)
         if partial:
             row["partial_skip_reason"] = partial
+        if name in suite_shards:
+            row["shard_index"], row["shard_total"] = suite_shards[name]
         print(json.dumps(row, sort_keys=True))
 
     if not order:
         warn("no testcases found in any input file")
         return 1
+    # A --suite-shard naming a suite this job did not run means the flag and the
+    # ctest patterns have drifted, and the row it was meant to label is now
+    # untagged somewhere else -- say so rather than tagging nothing in silence.
+    for suite in suite_shards:
+        if suite not in seen:
+            warn(f"--suite-shard named {suite!r}, which this job did not run")
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
     where = f" for shard {shard_index}/{shard_total}" if shard_total else ""
     warn(f"emitted {len(order)} suite rows{where} ({summary})")

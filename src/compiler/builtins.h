@@ -54,7 +54,18 @@ struct BuiltinSpec {
     Type           result_type;
     BuiltinShape   shape;
     const char    *c_op;
+    /* effect-row-honesty-plan W4: the builtin's declared effect row, as the
+     * name of one compiler-known `^capability` effect ("IO" on `println`), or
+     * NULL for a pure builtin.  A name rather than an Effect* because the
+     * effect pass resolves it against its own env.  Last field so the
+     * positional initializers that predate it read as NULL. */
+    const char    *effect;
 };
+
+/* The declared effect (see BuiltinSpec.effect) of the builtin `name` --
+ * the same for every overload of it -- or NULL.  For callers that have a
+ * name rather than a spec (a Saffron EX_DYN_OP). */
+const char *builtin_effect_for_name(const char *name);
 
 /* One-time setup. Interns the names of every builtin into `st`. */
 void builtins_init(SymbolTable *st);
@@ -90,6 +101,18 @@ int builtin_describe(const char *name, char *out, size_t cap);
  * -Wliteral-conversion when the divisor is a constant like 8.0. Callers use
  * this to emit a bare `(a) / (b)` for the float rows. */
 bool builtin_div_is_ieee(const BuiltinSpec *spec);
+
+/* stdlib-os-surface-plan P0.5: the print family's destination.  Every
+ * BS_PRINTLN_* row is `println` (stdout, trailing newline) unless its c_op
+ * says otherwise: "stderr" is `eprintln`, "stderr-nonl" is `eprint`. */
+bool builtin_print_to_stderr(const BuiltinSpec *spec);
+bool builtin_print_newline(const BuiltinSpec *spec);
+
+/* The C statement (no indent, no trailing newline) that prints `arg` for a
+ * BS_PRINTLN_* `shape` through `spec`'s destination.  Heap string; the caller
+ * frees it.  Shared by the direct and CPS emitters so both spell it alike. */
+char *builtin_print_stmt(const BuiltinSpec *spec, BuiltinShape shape,
+                         const char *arg);
 
 /* Collect overloads for a builtin name.
  * Returns number of entries written to `out` (up to max_out). */

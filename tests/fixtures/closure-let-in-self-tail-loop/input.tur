@@ -1,0 +1,44 @@
+;; closure-let-in-self-tail-loop-leaks: a capturing closure let-bound in a
+;; self-tail-recursive body.  Calling a function value makes the loop a CPS
+;; function, whose let has no scope exit, so the closure `(mk i)` returned was
+;; never freed: 24 B a turn, all of it lost (requires.leak-check catches that).
+;; Now the env is registered for the DK boundary reap like a closure literal,
+;; and a binder that is only ever INVOKED is freed at the backedge, so the loop
+;; does not hold one env per turn either.
+;;
+;;   loop     -- (mk i) bound, called, the call's result carried    -> drop at the backedge
+;;   loop-lit -- a closure literal bound and called                 -> drop at the backedge
+;;   loop-arg -- the closure is called in the tail call's argument  -> drop after it is called
+;;   loop-mv  -- the closure IS the tail call's argument: the next
+;;               turn's parameter, so it must survive the backedge  -> boundary reap only
+
+(defn mk [k : int] : (fn [int] int) (fn [x : int] : int (+ x k)))
+
+(defn loop [i : int n : int acc : int] : int
+  (if (= i n) acc
+    (let [f (mk i)
+          r (f 1)]
+      (loop (+ i 1) n (+ acc r)))))
+
+(defn loop-lit [i : int n : int acc : int] : int
+  (if (= i n) acc
+    (let [h (fn [x : int] : int (* x i))
+          r (h 2)]
+      (loop-lit (+ i 1) n (+ acc r)))))
+
+(defn loop-arg [i : int n : int acc : int] : int
+  (if (= i n) acc
+    (let [f (mk i)]
+      (loop-arg (+ i 1) n (+ acc (f 1))))))
+
+(defn loop-mv [i : int n : int acc : int g : (fn [int] int)] : int
+  (if (= i n) (+ acc (g 0))
+    (let [f (mk i)]
+      (loop-mv (+ i 1) n (+ acc 1) f))))
+
+(defn main [] : int
+  (println (loop 0 10000 0))          ;; sum of 1+i     = 50005000
+  (println (loop-lit 0 1000 0))       ;; sum of 2i      = 999000
+  (println (loop-arg 0 1000 0))       ;; sum of 1+i     = 500500
+  (println (loop-mv 0 1000 0 (mk 7))) ;; 1000 + (mk 999)(0) = 1999
+  0)

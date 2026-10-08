@@ -477,8 +477,26 @@ static VCTerm *enc_cmp(Enc *E, VCOp op, bool swap, const Form *f) {
             E->fail = "equality compares a proposition with a number";
             return NULL;
         }
-        VCTerm *atom = swap ? vc_mk2(E->vc, op, cur, prev)
-                            : vc_mk2(E->vc, op, prev, cur);
+        VCTerm *atom;
+        if (op == VC_EQ && prev->sort == VS_BOOL) {
+            /* An equality between propositions is an `iff`.  As a VC_EQ atom
+             * the cube expansion cannot see inside it, so `(= r true)` stayed
+             * unknown where a bare `r` proved (reflect-two-provable-facts-
+             * report-as-not-holding) -- the limitation rf_def
+             * already works around for a Bool measure's own equation.  Against
+             * a literal it is the other side itself (or its negation); otherwise
+             * the implication pair, which the expansion splits natively. */
+            if      (cur->op  == VC_TRUE)  atom = prev;
+            else if (cur->op  == VC_FALSE) atom = vc_not(E->vc, prev);
+            else if (prev->op == VC_TRUE)  atom = cur;
+            else if (prev->op == VC_FALSE) atom = vc_not(E->vc, cur);
+            else atom = vc_mk2(E->vc, VC_AND,
+                               vc_mk2(E->vc, VC_IMPLIES, prev, cur),
+                               vc_mk2(E->vc, VC_IMPLIES, cur, prev));
+        } else {
+            atom = swap ? vc_mk2(E->vc, op, cur, prev)
+                        : vc_mk2(E->vc, op, prev, cur);
+        }
         acc = acc ? vc_mk2(E->vc, VC_AND, acc, atom) : atom;
         prev = cur;
     }

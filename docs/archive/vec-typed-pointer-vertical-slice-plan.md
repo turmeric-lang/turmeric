@@ -265,7 +265,7 @@ crossing remains until M4).
    - **Spice (ecs/json) validation.** The plan's validation harness requires the
      `../turmeric-spices/spices/{ecs,json}` roundtrip for any Vec-touching
      change (ecs is the canonical heavy Vec user). **The sibling checkout must be
-     present** (`git clone https://github.com/rjungemann/turmeric-spices/
+     present** (`git clone https://github.com/turmeric-lang/turmeric-spices/
      ../turmeric-spices`); it was absent in the session that built the toolkit,
      which is why 3 was deferred rather than rushed.
    - Interpreter parity: all core vec fns have native overrides in `src/main.c`

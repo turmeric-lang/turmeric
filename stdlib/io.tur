@@ -1,6 +1,10 @@
 ;;; tur/io -- FileSystem capability implementation using libc functions.
 ;;;
-;;; Implements the FileSystem capability typeclass for real I/O.
+;;; Implements the FileSystem capability typeclass for real I/O, the linear
+;;; FileHandle stream API (file-open / file-read / file-write / file-seek /
+;;; file-close), and line-oriented stdin (io/read-line, io/read-stdin).
+;;; Path-level operations live in stdlib/fs.tur: fs/ is the filesystem
+;;; namespace, io/ the stream and handle namespace.
 ;;;
 ;;; Since: Phase 16
 ;; Phase 16: Real FileSystem implementation
@@ -43,6 +47,10 @@
 ;; (stdlib-capability-vtables-uncompilable).
 
 (load "stdlib/capability.tur")
+
+(load "stdlib/effects.tur")
+
+(load "stdlib/io-error.tur")
 
 (defopaque DirListing :ptr<void>)
 
@@ -147,9 +155,9 @@
 #include <dirent.h>
 typedef struct __tur_io_fs {
     int (*read_file)(const char* path, unsigned char* buf, int buf_len, int* out_len);
-    int (*write_file)(const char* path, const unsigned char* data, int data_len);
+    int (*write_file)(const char* path, unsigned char* data, int data_len);
     int (*delete)(const char* path);
-    int (*list)(const char* path, char** entries, int max_entries, int* out_count);
+    int (*list)(const char* path, void* entries, int max_entries, int* out_count);
 } __tur_io_fs;
 
 static int __tur_io_fs_read_file(const char* path, unsigned char* buf, int buf_len, int* out_len) {
@@ -161,7 +169,8 @@ static int __tur_io_fs_read_file(const char* path, unsigned char* buf, int buf_l
     return 0;
 }
 
-static int __tur_io_fs_write_file(const char* path, const unsigned char* data, int data_len) {
+/* Spelled as stdlib/capability.tur's __tur_cap_fs callbacks (see there). */
+static int __tur_io_fs_write_file(const char* path, unsigned char* data, int data_len) {
     FILE* f = fopen(path, "wb");
     if (!f) return -1;
     size_t n = fwrite(data, 1, data_len, f);
@@ -173,7 +182,8 @@ static int __tur_io_fs_delete(const char* path) {
     return remove(path);
 }
 
-static int __tur_io_fs_list(const char* path, char** entries, int max_entries, int* out_count) {
+static int __tur_io_fs_list(const char* path, void* entries_v, int max_entries, int* out_count) {
+    char** entries = (char**)entries_v;
     DIR* d = opendir(path);
     if (!d) return -1;
     struct dirent* entry;
@@ -215,6 +225,9 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; ============================================================================
 ;;; read-file -- read an entire file into a newly allocated buffer.
 ;;;
+;;; Deprecated (stdlib-os-surface P1.4): use fs/read-text; this name is removed
+;;; in the release after the one that deprecated it.
+;;;
 ;;; Parameters:
 ;;;   path -- the filesystem path to open (:cstr).
 ;;;
@@ -231,7 +244,10 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; Sets out_len to the number of bytes read
 
 
-(defn read-file [path : cstr] : ptr<void>
+(defn ^deprecated "use fs/read-text from stdlib/fs.tur"
+  read-file
+  [path : cstr]
+  : ptr<void>
   ```c
   FILE* f = fopen(path, "rb");
   if (!f) return NULL;
@@ -252,6 +268,9 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
   ```)
 ;;; write-file -- write a byte buffer to a file, overwriting any existing content.
 ;;;
+;;; Deprecated (stdlib-os-surface P1.4): use fs/write-text; this name is removed
+;;; in the release after the one that deprecated it.
+;;;
 ;;; Parameters:
 ;;;   path -- the destination filesystem path (:cstr).
 ;;;   data -- pointer to the data to write.
@@ -267,7 +286,10 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; Write data to a file
 ;; Returns 0 on success, non-zero on error
 
-(defn write-file [path : cstr data : ptr<void> len : int] : int
+(defn ^deprecated "use fs/write-text from stdlib/fs.tur, or file-open + file-write for bytes"
+  write-file
+  [path : cstr data : ptr<void> len : int]
+  : int
   ```c
   FILE* f = fopen(path, "wb");
   if (!f) return -1;
@@ -276,6 +298,9 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
   return (n == (size_t)len) ? 0 : -1;
   ```)
 ;;; file-exists? -- test whether a file is accessible for reading.
+;;;
+;;; Deprecated (stdlib-os-surface P1.4): use fs/exists?; this name is removed
+;;; in the release after the one that deprecated it.
 ;;;
 ;;; Parameters:
 ;;;   path -- the filesystem path to check (:cstr).
@@ -289,7 +314,10 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;;; Since: Phase 16
 ;; Check if file exists
 
-(defn file-exists? [path : cstr] : int
+(defn ^deprecated "use fs/exists? from stdlib/fs.tur"
+  file-exists?
+  [path : cstr]
+  : int
   ```c
   FILE* f = fopen(path, "rb");
   if (f) { fclose(f); return 1; }
@@ -362,90 +390,376 @@ static int __tur_io_fs_list(const char* path, char** entries, int max_entries, i
 ;; ============================================================================
 ;; LT4: FileHandle -- resource-safe file handle (move-only)
 ;; ============================================================================
-;;; FileHandle -- a linear (exactly-once) wrapper around a FILE* pointer.
+;;; FileHandle -- a linear (exactly-once) handle over a stdio FILE*.
 ;;;
-;;; Wrapping FILE* in a named struct enforces that file handles are not
-;;; accidentally duplicated.  Marking the struct :linear (CK_LINEAR) means
-;;; every bound FileHandle must be explicitly consumed (e.g. via file-close);
-;;; the compiler emits TUR-E0100 if a linear value is silently dropped.
+;;; :linear (CK_LINEAR) means every bound FileHandle must be explicitly
+;;; consumed by file-close; the compiler emits TUR-E0100 if a linear value is
+;;; silently dropped.  The read/write/seek operations take it ^borrow.
+;;;
+;;; stdlib-os-surface-plan P1: a FileHandle only ever exists for a file that
+;;; opened -- file-open answers (Result FileHandle IoError) -- so there is no
+;;; NULL handle to test for.  (It was a one-field struct around the FILE*; an
+;;; opaque says the same thing and rides a Result payload as one word.)
 ;;;
 ;;; Since: LT4
-
-
-(defstruct FileHandle :linear [ptr : ptr<void>])
+(defopaque FileHandle :ptr<void> :linear)
 ;;; file-open -- open a file and return a move-only FileHandle.
 ;;;
 ;;; Parameters:
 ;;;   path -- filesystem path to open (:cstr).
-;;;   mode -- fopen mode string, e.g. "rb" or "wb" (:cstr).
+;;;   mode -- fopen mode string, e.g. "rb", "wb", "ab" or "r+b" (:cstr).
 ;;;
 ;;; Returns:
-;;;   A FileHandle wrapping the opened FILE*, or a FileHandle with a
-;;;   NULL ptr on error.  Check with file-handle-ok? before using.
+;;;   (Ok fh) -- a FileHandle that must be closed exactly once with
+;;;   file-close -- or (Err e) carrying the errno of the failed fopen.
 ;;;
 ;;; Example:
-;;;   (let [fh (file-open "/etc/hostname" "rb")] ...)
+;;;   (match (file-open "/etc/hostname" "rb")
+;;;     (Ok fh) (file-close fh)
+;;;     (Err e) (Err e))
 ;;;
 ;;; Since: LT4
-
-(defn file-open [path : cstr mode : cstr] : FileHandle
+(defn file-open [path : cstr mode : cstr]
+  #fx{FS}
+  : (Result FileHandle IoError)
   ```c
-  FileHandle fh;
-  fh.ptr = (void*)fopen(path, mode);
-  return fh;
+  #include <errno.h>
+  FILE *f = fopen(path, mode);
+  if (!f) return tur_err_int(errno);
+  return tur_ok_ptr(f);
   ```)
-;;; file-handle-ok? -- return true if the FileHandle is valid (non-NULL).
+;;; file-handle-ok? -- deprecated: a FileHandle is always open now.
+;;;
+;;; file-open reports failure through its Result, so every FileHandle wraps a
+;;; real FILE*.  Kept for one release so old callers still compile.
 ;;;
 ;;; Parameters:
-;;;   fh -- a FileHandle (by value).
+;;;   fh -- a FileHandle (borrowed).
 ;;;
 ;;; Returns:
-;;;   true if the underlying FILE* is non-NULL, false on open failure.
+;;;   true.
 ;;;
 ;;; Example:
-;;;   (file-handle-ok? (file-open "/etc/hostname" "rb"))  ; => true
+;;;   (file-handle-ok? fh)  ; => true
 ;;;
 ;;; Since: LT4
-
-(defn file-handle-ok? [^borrow fh : FileHandle] : bool
+(defn ^deprecated "file-open returns (Result FileHandle IoError); match on it instead"
+  file-handle-ok?
+  [^borrow fh : FileHandle]
+  : bool
   ```c
-  return fh.ptr != NULL;
+  return fh != NULL;
   ```)
 ;;; file-read -- read up to len bytes from fh into buf.
 ;;;
 ;;; Parameters:
-;;;   fh  -- an open FileHandle (by value; does not consume the handle).
+;;;   fh  -- an open FileHandle (borrowed; not consumed).
 ;;;   buf -- destination buffer as ptr<void>.
 ;;;   len -- maximum number of bytes to read.
 ;;;
 ;;; Returns:
-;;;   Number of bytes actually read (int).
+;;;   (Ok n) -- the number of bytes read; 0 at end of file -- or (Err e) on a
+;;;   read error.
 ;;;
 ;;; Example:
-;;;   (file-read fh buf 1024)  ; => 512
+;;;   (file-read fh buf 1024)  ; => (Ok 512)
 ;;;
 ;;; Since: LT4
-
-(defn file-read [^borrow fh : FileHandle buf : ptr<void> len : int] : int
+(defn file-read [^borrow fh : FileHandle buf : ptr<void> len : int]
+  #fx{FS}
+  : (Result int IoError)
   ```c
-  if (!fh.ptr) return -1;
-  return (int)fread(buf, 1, len, (FILE*)fh.ptr);
+  #include <errno.h>
+  if (len < 0) return tur_err_int(EINVAL);
+  FILE *f = (FILE*)fh;
+  size_t n = fread(buf, 1, (size_t)len, f);
+  if (n < (size_t)len && ferror(f)) { clearerr(f); return tur_err_int(errno ? errno : EIO); }
+  return tur_ok_int((int64_t)n);
   ```)
 ;;; file-close -- close a FileHandle and release the underlying FILE*.
 ;;;
 ;;; Parameters:
-;;;   fh -- a FileHandle to close (by value; handle is consumed).
+;;;   fh -- a FileHandle to close (consumed).
 ;;;
 ;;; Returns:
-;;;   0 on success, non-zero on error (mirrors fclose return value).
+;;;   (Ok nil), or (Err e) when flushing buffered writes failed -- the last
+;;;   place a write error can surface, so do not ignore it after writing.
 ;;;
 ;;; Example:
-;;;   (file-close fh)  ; => 0
+;;;   (file-close fh)  ; => (Ok nil)
 ;;;
 ;;; Since: LT4
-
-(defn file-close [fh : FileHandle] : int
+(defn file-close [fh : FileHandle]
+  #fx{FS}
+  : (Result nil IoError)
   ```c
-  if (!fh.ptr) return -1;
-  return fclose((FILE*)fh.ptr);
+  #include <errno.h>
+  if (fclose((FILE*)fh) != 0) return tur_err_int(errno ? errno : EIO);
+  return tur_ok_int(0);
   ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P0.2: write / seek / tell on FileHandle
+;; ============================================================================
+;;; SeekFrom -- the origin a file-seek offset is measured from.
+;;;
+;;; SeekStart is the beginning of the file (SEEK_SET), SeekCurrent the current
+;;; position (SEEK_CUR), SeekEnd the end of the file (SEEK_END).  A tagged
+;;; union rather than an int whence, so a caller cannot pass a stray integer.
+;;;
+;;; Since: stdlib-os-surface P0
+(defdata SeekFrom :copy (SeekStart) (SeekCurrent) (SeekEnd))
+;;; seek-from->whence -- the C whence constant for a SeekFrom.
+(defn seek-from->whence [w : SeekFrom] : int
+  (match w (SeekStart) 0 (SeekCurrent) 1 (SeekEnd) 2))
+;;; file-write -- write len bytes from buf to fh.
+;;;
+;;; Parameters:
+;;;   fh  -- an open FileHandle (borrowed; not consumed).
+;;;   buf -- source buffer as ptr<void>.
+;;;   len -- number of bytes to write.
+;;;
+;;; Returns:
+;;;   (Ok n) with n = len, or (Err e) when fewer bytes could be written.
+;;;
+;;; Example:
+;;;   (file-write fh buf 13)  ; => (Ok 13)
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-write [^borrow fh : FileHandle buf : ptr<void> len : int]
+  #fx{FS}
+  : (Result int IoError)
+  ```c
+  #include <errno.h>
+  if (len < 0) return tur_err_int(EINVAL);
+  size_t n = fwrite(buf, 1, (size_t)len, (FILE*)fh);
+  if (n < (size_t)len) return tur_err_int(errno ? errno : EIO);
+  return tur_ok_int((int64_t)n);
+  ```)
+;;; file-write-str -- write a NUL-terminated string to fh (no newline added).
+;;;
+;;; Parameters:
+;;;   fh -- an open FileHandle (borrowed; not consumed).
+;;;   s  -- the string to write.
+;;;
+;;; Returns:
+;;;   (Ok n) with n = the string's byte length, or (Err e).
+;;;
+;;; Example:
+;;;   (file-write-str fh "hello\n")  ; => (Ok 6)
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-write-str [^borrow fh : FileHandle s : cstr]
+  #fx{FS}
+  : (Result int IoError)
+  ```c
+  #include <errno.h>
+  size_t len = strlen(s);
+  size_t n = fwrite(s, 1, len, (FILE*)fh);
+  if (n < len) return tur_err_int(errno ? errno : EIO);
+  return tur_ok_int((int64_t)n);
+  ```)
+;;; file-seek-raw -- fseek(3) with a C whence constant (internal).
+(defn file-seek-raw [^borrow fh : FileHandle offset : int whence : int]
+  #fx{FS}
+  : (Result int IoError)
+  ```c
+  #include <errno.h>
+  FILE *f = (FILE*)fh;
+  int w = whence == 1 ? SEEK_CUR : whence == 2 ? SEEK_END : SEEK_SET;
+  if (fseek(f, (long)offset, w) != 0) return tur_err_int(errno);
+  long pos = ftell(f);
+  if (pos < 0) return tur_err_int(errno);
+  return tur_ok_int((int64_t)pos);
+  ```)
+;;; file-seek -- move fh's position to offset, measured from whence.
+;;;
+;;; Parameters:
+;;;   fh     -- an open FileHandle (borrowed; not consumed).
+;;;   offset -- byte offset (may be negative with SeekCurrent / SeekEnd).
+;;;   whence -- SeekStart, SeekCurrent or SeekEnd.
+;;;
+;;; Returns:
+;;;   (Ok pos) -- the new absolute position -- or (Err e), e.g. EINVAL for a
+;;;   position before the start of the file or ESPIPE on a pipe.
+;;;
+;;; Example:
+;;;   (file-seek fh 0 (SeekEnd))  ; => (Ok file-size)
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-seek [^borrow fh : FileHandle offset : int whence : SeekFrom]
+  #fx{FS}
+  : (Result int IoError)
+  (file-seek-raw fh offset (seek-from->whence whence)))
+;;; file-tell -- the current byte position of fh.
+;;;
+;;; Parameters:
+;;;   fh -- an open FileHandle (borrowed; not consumed).
+;;;
+;;; Returns:
+;;;   (Ok pos) from the start of the file, or (Err e) (ESPIPE on a pipe).
+;;;
+;;; Example:
+;;;   (file-tell fh)  ; => (Ok 0)
+;;;
+;;; Since: stdlib-os-surface P0
+(defn file-tell [^borrow fh : FileHandle]
+  #fx{FS}
+  : (Result int IoError)
+  ```c
+  #include <errno.h>
+  long pos = ftell((FILE*)fh);
+  if (pos < 0) return tur_err_int(errno);
+  return tur_ok_int((int64_t)pos);
+  ```)
+;; ============================================================================
+;; stdlib-os-surface-plan P2.1: line iteration
+;; ============================================================================
+;; One line reader shared by io/read-line (stdin) and file-read-line (any
+;; FileHandle): getline(3) on POSIX, an fgets loop on Windows (no getline).
+;; Answers a fresh malloc'd line with the newline (and a CR before it)
+;; stripped, or NULL with *err set: 0 at end of input, else the errno.
+```c
+#include <errno.h>
+static char *__tur_io_read_line(FILE *f, int *err) {
+  char *line = NULL;
+  size_t len = 0;
+  *err = 0;
+#ifdef _WIN32
+  size_t cap = 0;
+  char chunk[512];
+  for (;;) {
+    if (!fgets(chunk, (int)sizeof chunk, f)) break;
+    size_t n = strlen(chunk);
+    if (len + n + 1 > cap) {
+      size_t ncap = cap ? cap * 2 : 1024;
+      while (ncap < len + n + 1) ncap *= 2;
+      char *grown = (char *)realloc(line, ncap);
+      if (!grown) { free(line); *err = ENOMEM; return NULL; }
+      line = grown; cap = ncap;
+    }
+    memcpy(line + len, chunk, n + 1);
+    len += n;
+    if (n > 0 && chunk[n - 1] == '\n') break;
+  }
+  if (!line) { if (ferror(f)) { *err = errno ? errno : EIO; clearerr(f); } return NULL; }
+#else
+  size_t cap = 0;
+  errno = 0;
+  ssize_t n = getline(&line, &cap, f);
+  if (n < 0) {
+    free(line);
+    if (ferror(f)) { *err = errno ? errno : EIO; clearerr(f); }
+    return NULL;
+  }
+  len = (size_t)n;
+#endif
+  if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+  if (len > 0 && line[len - 1] == '\r') line[--len] = '\0';
+  return line;
+}
+```
+;; ============================================================================
+;; stdlib-os-surface-plan P0.1: line-oriented stdin
+;; ============================================================================
+;;; io/read-line -- read one line from stdin.
+;;;
+;;; The trailing newline (and a CR before it) is stripped.  The last line of
+;;; input counts even without a trailing newline.  Uses getline(3) on POSIX
+;;; and an fgets loop on Windows, which has no getline.
+;;;
+;;; Returns:
+;;;   (Some line) -- a fresh heap cstr the caller owns (release with free) --
+;;;   or None at end of input.  End of input is not an error.
+;;;
+;;; Example:
+;;;   (match (io/read-line)
+;;;     (Some s) (println s)
+;;;     (None)   (println "<eof>"))
+;;;
+;;; Since: stdlib-os-surface P0
+(defn io/read-line []
+  #fx{IO}
+  : (Option cstr)
+  ```c
+  int err;
+  char *line = __tur_io_read_line(stdin, &err);
+  if (!line) return tur_none();
+  return tur_some_ptr(line);
+  ```)
+;;; io/read-stdin -- read all of stdin into one string.
+;;;
+;;; Reads until end of input, so it works on a pipe or a terminal as well as
+;;; a redirected file.
+;;;
+;;; Returns:
+;;;   (Some text) -- a fresh NUL-terminated heap cstr the caller owns (release
+;;;   with free) -- or None on a read error.  Empty input is (Some "").
+;;;
+;;; Example:
+;;;   (match (io/read-stdin) (Some s) (println s) (None) (println "read failed"))
+;;;
+;;; Since: stdlib-os-surface P0
+(defn io/read-stdin []
+  #fx{IO}
+  : (Option cstr)
+  ```c
+  size_t cap = 4096, len = 0;
+  char *buf = (char *)malloc(cap);
+  if (!buf) return tur_none();
+  for (;;) {
+    if (cap - len < 2) {
+      char *grown = (char *)realloc(buf, cap * 2);
+      if (!grown) { free(buf); return tur_none(); }
+      buf = grown; cap *= 2;
+    }
+    size_t n = fread(buf + len, 1, cap - len - 1, stdin);
+    len += n;
+    if (n == 0) break;
+  }
+  if (ferror(stdin)) { free(buf); return tur_none(); }
+  buf[len] = '\0';
+  return tur_some_ptr(buf);
+  ```)
+;;; file-read-line-raw -- one line, EOF as an errno-0 error (internal).
+;;
+;; (Result (Option cstr) IoError) cannot be built from inline-C (the Option is
+;; stored by value inside the Result; see
+;; docs/reported/inline-c-builders-cannot-nest-option-in-result.md), so this
+;; helper answers (Err 0) at end of file and file-read-line nests in Turmeric.
+(defn file-read-line-raw [^borrow fh : FileHandle]
+  #fx{FS}
+  : (Result cstr IoError)
+  ```c
+  int err;
+  char *line = __tur_io_read_line((FILE *)fh, &err);
+  if (!line) return tur_err_int(err);
+  return tur_ok_ptr(line);
+  ```)
+;;; file-read-line -- read the next line from fh.
+;;;
+;;; The bounded-memory way through a large file: one line per call, with the
+;;; newline (and a CR before it) stripped.  The last line counts without a
+;;; trailing newline.  Shares its reader with io/read-line.
+;;;
+;;; Parameters:
+;;;   fh -- an open FileHandle (borrowed; not consumed).
+;;;
+;;; Returns:
+;;;   (Ok (Some line)) -- a fresh heap cstr the caller owns (release with
+;;;   free); (Ok (None)) at end of file; (Err e) on a read error, so errors
+;;;   are never mistaken for end of file.
+;;;
+;;; Example:
+;;;   (match (file-read-line fh)
+;;;     (Ok o)  (match o (Some s) (println s) (None) (println "<eof>"))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: stdlib-os-surface P2
+(defn file-read-line [^borrow fh : FileHandle]
+  #fx{FS}
+  : (Result (Option cstr) IoError)
+  (match (file-read-line-raw fh)
+    (Ok s)
+    (Ok (Some s))
+    (Err e)
+    (if (= (io-error/code e) 0) (Ok (:: (None) (Option cstr))) (Err e))))

@@ -553,8 +553,11 @@
       return (void *)(intptr_t)out;
   }
   /* Call fn(val) which returns a new FutureCell ptr<void>.
-     fn is a fat closure box: slot 0 = thunk R(*)(void*env, int64_t). */
-  return (void *)(intptr_t)((int64_t (*)(void *, int64_t))(intptr_t)
+     fn is a fat closure box: slot 0 = thunk R(*)(void*env, int64_t), and R
+     is `void *` -- a Future -- so call it at that type: through `int64_t`
+     it is an indirect call through the wrong function type (a
+     -fsanitize=function trap, a call_indirect trap on WASM). */
+  return ((void * (*)(void *, int64_t))(intptr_t)
               ((int64_t *)(intptr_t)fn)[0])((void *)(intptr_t)fn, val);
   ```)
 ;; ---- AW-007: Multi-combinators ----

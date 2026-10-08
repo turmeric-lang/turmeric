@@ -324,28 +324,40 @@ println(run-test(compute(1)))  ;; =&gt; 1</div>
         <button class="install-tab" id="tab-codespaces" role="tab"
                 aria-selected="false" aria-controls="panel-codespaces"
                 data-method="codespaces">Codespaces</button>
+        <button class="install-tab" id="tab-cask" role="tab"
+                aria-selected="false" aria-controls="panel-cask"
+                data-method="cask">Cask</button>
       </div>
 
       <div class="install-panel" id="panel-installer" role="tabpanel"
            aria-labelledby="tab-installer" data-method="installer">
         <div class="step-code">curl -sSf https://turmeric-lang.com/install | sh</div>
-        <p class="step-desc">macOS and Linux. Installs the <a href="https://github.com/rjungemann/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>) and then the latest <strong>release</strong>, whose tarball is checked against that release&rsquo;s <code>sha256sums.txt</code> before it is unpacked &mdash; and the install <strong>stops</strong> rather than continuing if that check cannot be made. Release assets also carry <a href="https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations" style="color:var(--gold);">build provenance</a>, so you can confirm which workflow run produced the bytes you have. On a platform with no prebuilt binary it builds the same release tag from source instead. Afterwards, <code>tvm install</code> and <code>tvm use</code> switch between releases per-shell.</p>
-        <p class="step-desc">Want to track <code>main</code> instead? <code>brew install --HEAD rjungemann/turmeric/turmeric</code> builds the current <code>main</code> and verifies no checksum &mdash; useful for following development, not for an ordinary install.</p>
+        <p class="step-desc">macOS and Linux. Installs the <a href="https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md" style="color:var(--gold);">version manager</a> (<code>tvm</code>) and then the latest <strong>release</strong>, whose tarball is checked against that release&rsquo;s <code>sha256sums.txt</code> before it is unpacked &mdash; and the install <strong>stops</strong> rather than continuing if that check cannot be made.</p>
+        <p class="step-desc">Release assets also carry <a href="https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations" style="color:var(--gold);">build provenance</a>, so you can confirm which workflow run produced the bytes you have.</p>
+        <p class="step-desc">On a platform with no prebuilt binary it builds the same release tag from source instead.</p>
+        <p class="step-desc">Afterwards, <code>tvm install</code> and <code>tvm use</code> switch between releases per-shell.</p>
       </div>
 
       <div class="install-panel" id="panel-docker" role="tabpanel"
            aria-labelledby="tab-docker" data-method="docker" hidden>
-        <div class="step-code">git clone https://github.com/rjungemann/turmeric
+        <div class="step-code">git clone https://github.com/turmeric-lang/turmeric
 cd turmeric
 docker build -t turmeric .
 docker run --rm -it turmeric</div>
-        <p class="step-desc">The <a href="https://github.com/rjungemann/turmeric/blob/main/Dockerfile" style="color:var(--gold);">Dockerfile</a> builds the compiler and stdlib inside the image and drops you at a REPL -- no toolchain on your host.</p>
+        <p class="step-desc">The <a href="https://github.com/turmeric-lang/turmeric/blob/main/Dockerfile" style="color:var(--gold);">Dockerfile</a> builds the compiler and stdlib inside the image and drops you at a REPL -- no toolchain on your host.</p>
       </div>
 
       <div class="install-panel" id="panel-codespaces" role="tabpanel"
            aria-labelledby="tab-codespaces" data-method="codespaces" hidden>
-        <div class="step-code">gh codespace create --repo rjungemann/turmeric</div>
-        <p class="step-desc">Or <a href="https://codespaces.new/rjungemann/turmeric" style="color:var(--gold);">open a Codespace in the browser</a> -- a cloud dev container with the toolchain already built, so there is nothing to install locally.</p>
+        <div class="step-code">gh codespace create --repo turmeric-lang/turmeric</div>
+        <p class="step-desc">Or <a href="https://codespaces.new/turmeric-lang/turmeric" style="color:var(--gold);">open a Codespace in the browser</a> -- a cloud dev container with the toolchain already built, so there is nothing to install locally.</p>
+      </div>
+
+      <div class="install-panel" id="panel-cask" role="tabpanel"
+           aria-labelledby="tab-cask" data-method="cask" hidden>
+        <div class="step-code step-code-wrap">brew tap turmeric-lang/turmeric https://github.com/turmeric-lang/turmeric
+brew install --HEAD turmeric-lang/turmeric/turmeric</div>
+        <p class="step-desc">Want to track <code>main</code> instead? This builds the current <code>main</code> and verifies no checksum &mdash; useful for following development, not for an ordinary install. The tap URL is required.</p>
       </div>
     </div>
 

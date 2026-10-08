@@ -160,7 +160,7 @@
 ;;;
 ;;; Since: Phase sum-types-either
 
-(defn str->int-checked [s : cstr] : int
+(defn str->int-checked [s : cstr] : (Either int int)
   ```c
   const char *cs = (const char *)(intptr_t)s;
   if (!cs || *cs == '\0') return ctor_Left((int64_t)0);

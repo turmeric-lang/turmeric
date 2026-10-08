@@ -33,7 +33,16 @@ FAILED=()
 # Stamp-cache helpers (keyed on hash of generated .tur + mtime of tur binary)
 # ---------------------------------------------------------------------------
 
-_tur_mtime() { stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null || echo "0"; }
+# GNU first, and only an all-digit answer counts: `stat -f` on GNU means
+# "filesystem status" and printed the volume's free-block counts into the
+# stamp key, so on Linux the cache almost never hit (see tests/run.sh).
+_tur_mtime() {
+    local m
+    m="$(stat -c '%Y' "$1" 2>/dev/null)"
+    case "$m" in ''|*[!0-9]*) m="$(stat -f '%m' "$1" 2>/dev/null)" ;; esac
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    echo "$m"
+}
 
 # Performance optimization: cache the compiler binary modification time once
 # at startup so we do not spawn a redundant stat process inside the stamp check loop.
@@ -44,7 +53,18 @@ _tur_hash_file() {
     elif command -v md5sum >/dev/null 2>&1; then md5sum "$1" 2>/dev/null | awk '{print $1}'
     else echo "nohash"; fi
 }
-stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}"; }
+# One hash over stdlib/, as tests/run.sh keys its stamps: the stdlib is data
+# `tur` reads at elaboration time, so a stdlib-only edit changes neither the
+# binary nor any fixture (docs/archive/run-sh-stamp-cache-ignores-the-stdlib.md).
+# This key had no such term; the broken mtime above masked that on Linux.
+_tur_hash_stdin() {
+    if command -v md5 >/dev/null 2>&1; then md5 -q
+    elif command -v md5sum >/dev/null 2>&1; then md5sum | awk '{print $1}'
+    else echo "nohash"; fi
+}
+export TUR_STDLIB_HASH="$(find stdlib -type f 2>/dev/null | LC_ALL=C sort |
+    while IFS= read -r _f; do printf '%s\n' "$_f"; cat "$_f"; done | _tur_hash_stdin)"
+stamp_key() { echo "$(_tur_hash_file "$1")-${TUR_MTIME}-${TUR_STDLIB_HASH}"; }
 stamp_check() {
     [ "$TUR_FORCE" = "1" ] && return 1
     local sf="$STAMP_CACHE/$(printf '%s' "$1" | tr '/ ' '__').stamp"

@@ -35,7 +35,7 @@ This plan introduces:
 Together these let a freshly-installed `tur` user run:
 
 ```sh
-tur install https://github.com/rjungemann/turmeric-spices \
+tur install https://github.com/turmeric-lang/turmeric-spices \
   --ref notebook-v0.1.0 --subdir spices/notebook --name notebook
 tur nb new hello.tur.md
 tur nb tui hello.tur.md
@@ -226,15 +226,15 @@ Default output:
 
 ```
 ~/.local/share/turmeric/spices/
-├── notebook-0.1.0       (https://github.com/rjungemann/turmeric-spices @ notebook-v0.1.0)
+├── notebook-0.1.0       (https://github.com/turmeric-lang/turmeric-spices @ notebook-v0.1.0)
 │   ├── binaries:        tur-nb
 │   └── exports:         notebook/cmark, notebook/cell, notebook/format,
 │                        notebook/session, notebook/cache, notebook/eval,
 │                        notebook/render-md, notebook/render-html, notebook/tui
-├── plot-0.3.1           (https://github.com/rjungemann/turmeric-spices @ plot-v0.3.1)
+├── plot-0.3.1           (https://github.com/turmeric-lang/turmeric-spices @ plot-v0.3.1)
 │   ├── binaries:        tur-plot
 │   └── exports:         plot/render, plot/scales, plot/themes
-└── math-0.1.0           (https://github.com/rjungemann/turmeric-spices @ math-v0.1.0)
+└── math-0.1.0           (https://github.com/turmeric-lang/turmeric-spices @ math-v0.1.0)
     └── exports:         math/vec2, math/vec3, math/mat4
 
 3 spices installed (2 with binaries).
@@ -292,14 +292,14 @@ so `tur list` and `tur upgrade` don't need to re-discover the directory:
 (defstate
   :format-version 1
   :installed {
-    "notebook" {:url      "https://github.com/rjungemann/turmeric-spices"
+    "notebook" {:url      "https://github.com/turmeric-lang/turmeric-spices"
                 :ref      "notebook-v0.1.0"
                 :subdir   "spices/notebook"
                 :resolved "a1b2c3..."
                 :version  "0.1.0"
                 :bin      ["tur-nb"]
                 :installed-at "2026-05-26T14:00:00Z"}
-    "plot"     {:url      "https://github.com/rjungemann/turmeric-spices"
+    "plot"     {:url      "https://github.com/turmeric-lang/turmeric-spices"
                 :ref      "plot-v0.3.1"
                 :subdir   "spices/plot"
                 :resolved "d4e5f6..."

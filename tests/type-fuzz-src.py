@@ -275,7 +275,34 @@ def known_bug_slug(tags):
     # 2026-09-17 -- the slot's type reached the SIGNATURE (gen-unwrap / await
     # declared :int), so bool printed 1 and cstr a raw pointer.  Both read
     # the slot back at the payload's declared type now and have no row here.
+    #
+    # (generator-thunk-call-site-returns-void-ptr-not-carrier: RESOLVED
+    # 2026-10-03 and archived -- the call site and the slot-0 widen wrapper
+    # both follow the lambda's recorded return spelling now.  Its row
+    # {gbody, thunk, closure_ret} is retired, so a regression is a
+    # BUG_fnptr_trap again rather than a KNOWN; the probe below stays as a
+    # FIXED regression row.)
     return None
+
+
+# Probes whose ONLY symptom is a trap from clang's `-fsanitize=function`.
+#
+# Such a program builds, runs, and prints the CORRECT answer -- the mismatch is
+# invisible to everything but the detector.  So on a box where the detector is
+# unavailable (stock macOS: Apple clang does not provide it, and the banner
+# reads `fnsan: UNAVAILABLE`) the probe comes back `clean`, which the FIXED arm
+# below would report as "retire its known_bug_slug row" -- advice to close a
+# report that is still open, on the one kind of box that cannot see it.
+#
+# A row listed here reports UNKNOWN rather than FIXED whenever the run's banner
+# is not ARMED.  It says nothing about boxes that ARE armed: there the row is
+# judged normally, and Linux CI is armed.
+#
+# This is about the SYMPTOM, not the tags: a wrong-ANSWER defect belongs in the
+# 3-tuple form instead, which is visible without any sanitizer.
+TRAP_ONLY_PROBES = frozenset({
+    "generator-thunk-call-site-returns-void-ptr-not-carrier",
+})
 
 
 # Pinned minimal repros, one per open report above, used by --known-probes to
@@ -289,6 +316,27 @@ def known_bug_slug(tags):
 # form is required for any defect whose symptom is a wrong ANSWER; without it
 # such a probe exits 0 and reports FIXED on a build that is still broken.
 KNOWN_PROBES = [
+    # generator-thunk-call-site-returns-void-ptr-not-carrier: FIXED
+    # 2026-10-03, pinned by tests/fixtures/generator-thunk-call-site-carrier.
+    # Kept as a regression probe.  Reduced from the nightly's case 376 at seed
+    # 20261003: a generator yield of an immediately-applied closure inside a
+    # generic body (the generic thunk around it turned out incidental).
+    #
+    # 2-tuple on purpose: the symptom is a TRAP, which run_case classifies
+    # `fnptr_trap` and known_probes already counts as firing.  It is NOT a
+    # wrong-answer defect, so the 3-tuple form would be wrong -- the program
+    # prints the correct `true`.
+    #
+    # Listed in TRAP_ONLY_PROBES above, so on a box without
+    # -fsanitize=function (`fnsan: UNAVAILABLE`) it reports UNKNOWN rather
+    # than a FIXED it could not have observed.
+    ("generator-thunk-call-site-returns-void-ptr-not-carrier",
+     "(defn mk [x : bool] : (fn [] bool) (fn [] x))\n"
+     "(defn thunk [B] [v : B] : (fn [] B) (fn [] v))\n"
+     "(defn gbody [A] [x : A] : A\n"
+     "  ((thunk (gen-unwrap (gen-next (gen [] (yield ((fn [] x)))))))))\n"
+     "(defn main [] : int\n"
+     "  (println ((gbody (mk true))))\n  0)\n"),
     # The tyvar-result and by-value-result rows are FIXED (stage 1 and
     # increment 2 of fn-value-fat-normalization) and pinned by
     # tests/fixtures/fn-value-fat-normalized-{,tyvar-}params/.  They stay here
@@ -309,9 +357,13 @@ KNOWN_PROBES = [
     # entry), and effect-annotated fn params are fat-normalized like every
     # other nominal fn param.  Kept as a FIXED regression probe; pinned by
     # tests/fixtures/effect-capturing-closure-thin-param/.
+    # `Write` is declared (an undeclared row name is TUR-E0026) and main's row
+    # names IO because it prints (`println` is #fx{IO}) -- the same two edits
+    # that fixture got; without them the probe reads `fires (reject)`.
     ("poly-result-hof-capturing-closure-sigbus (effect row)",
+     "(defeffect Write [s :cstr] :nil)\n"
      "(defn run [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))\n"
-     "(defn main [] #fx{Write} : int\n"
+     "(defn main [] #fx{Write IO} : int\n"
      "  (let [k 7] (println (run (fn [] #fx{Write} : int (+ k 1)))))\n  0)\n"),
     # (result-monad-bind-typed-boundary-miscompiles: RESOLVED 2026-07-31,
     # archived; probe retired -- pinned by
@@ -1470,7 +1522,7 @@ def run_case(tur, path, src):
                            "emitted C line %d: %s %s value conversion: %s"
                            % (ln, how, kind, text))
         return Outcome("clean", p.stdout, p.stderr)
-    if p.returncode == fuzz_arm.FNSAN_TRAP_RC:
+    if fuzz_arm.is_fnsan_trap(p.returncode):
         return Outcome("fnptr_trap", p.stdout, p.stderr)
     if p.returncode in (134, 138, 139) or p.returncode < 0:
         return Outcome("crash", p.stdout, p.stderr)
@@ -1706,6 +1758,10 @@ def seam_matrix(tur, workdir):
 
 def known_probes(tur, workdir):
     print("known-probe status (open reports the generator avoids by default):")
+    status = fuzz_arm.armed_env(dict(os.environ))[1]
+    fnsan_armed = status.startswith("fnsan: ARMED")
+    if not fnsan_armed and TRAP_ONLY_PROBES:
+        print("  (%s -- trap-only rows report UNKNOWN)" % status)
     any_fixed = False
     for i, row in enumerate(KNOWN_PROBES):
         label, src = row[0], row[1]
@@ -1722,10 +1778,17 @@ def known_probes(tur, workdir):
                 and out.stdout != expected:
             fired = True
             how = "wrong_output: %r != %r" % (out.stdout, expected)
-        if not fired:
+        if fired:
+            verdict = "fires (%s)" % how
+        elif label in TRAP_ONLY_PROBES and not fnsan_armed:
+            # Not FIXED and not firing: unjudgeable here.  Deliberately does
+            # NOT set any_fixed -- a caller must not read this as a closed
+            # report.
+            verdict = "UNKNOWN -- trap-only, needs -fsanitize=function"
+        else:
             any_fixed = True
-        print("  %-62s %s" % (label, "fires (%s)" % how if fired
-                              else "FIXED -- retire its known_bug_slug row"))
+            verdict = "FIXED -- retire its known_bug_slug row"
+        print("  %-62s %s" % (label, verdict))
     return any_fixed
 
 
@@ -1869,7 +1932,7 @@ def main():
         n_trap = counts.get("FNPTR_TRAP", 0)
         if n_trap:
             print("  fn-pointer traps (report)   : %d   "
-                  "(TUR_FUZZ_FNSAN_STRICT=1 fails on these)" % n_trap)
+                  "(TUR_FUZZ_FNSAN_STRICT=0: report-only)" % n_trap)
         print("  known open reports (report) : %d" % n_known)
         # A seam reject is the elaborator refusing a payload it cannot carry --
         # the outcome the session report asks for -- so it is reported, not

@@ -249,9 +249,9 @@ defn get-val [] :int
 ;; Outer handler supplies 10; inner overrides with 42 for its scope.
 println
   (handle
-    (+ (get-val)
-       (handle (get-val)
-         (Val [] k) (resume k 42)))
+    {get-val() +
+       handle(get-val()
+         (Val [] k) resume(k 42))}
     (Val [] k) (resume k 10))
 ; => 52  (10 + 42)
 ```
@@ -642,7 +642,7 @@ defmacro with-warn-log [body]
   (handle body
     ;; Warnings and errors print; every other level is dropped silently.
     (Log [level msg] k)
-      (if (or {level = "warn"} {level = "error"})
+      (if {{level = "warn"} or {level = "error"}}
         (do (println msg) (resume k nil))
         (resume k nil)))
 
@@ -686,6 +686,6 @@ with-stderr-log
 ### Further reading
 
 - [effects-system-guide.md](effects-system-guide.md) -- algebraic effects reference: effect rows, capability effects, deep vs shallow handlers
-- [`tests/fixtures/effect-*`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- full fixture test suite for every effect feature
-- [`stdlib/future.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/future.tur) -- async/await built on the effect substrate
-- [`stdlib/stm.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/stm.tur) -- STM built on the effect substrate
+- [`tests/fixtures/effect-*`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- full fixture test suite for every effect feature
+- [`stdlib/future.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/future.tur) -- async/await built on the effect substrate
+- [`stdlib/stm.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/stm.tur) -- STM built on the effect substrate

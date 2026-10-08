@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-REPO="${TURMERIC_REPO:-rjungemann/turmeric}"
+REPO="${TURMERIC_REPO:-turmeric-lang/turmeric}"
 REPO_DIR="${TURMERIC_REPO_DIR:-.}"
 WORKFLOW="${WORKFLOW_FILE:-release.yml}"
 POLL_INTERVAL="${POLL_INTERVAL:-20}"

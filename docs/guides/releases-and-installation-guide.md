@@ -25,7 +25,7 @@ of Option 2.
 
 ### Option 1: Version manager (`tvm`)
 
-The bundled [Turmeric Version Manager](https://github.com/rjungemann/turmeric/blob/main/tvm/README.md) installs,
+The bundled [Turmeric Version Manager](https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md) installs,
 caches, and switches between releases per-shell -- the `nvm`/`rustup`
 model. Bootstrap it once from a checkout:
 
@@ -60,20 +60,30 @@ version under `~/.tvm/versions/<v>/`.
 > build provenance, which is signed through Sigstore and names the workflow run
 > that produced the bytes:
 >
-> ```sh
-> gh attestation verify turmeric-<tag>-<target>.tar.gz --repo rjungemann/turmeric
-> ```
+>     # Releases built before the 2026-10-02 move to the turmeric-lang org
+>     # (v0.59.0 and earlier) -- note --owner, not --repo:
+>     gh attestation verify turmeric-<tag>-<target>.tar.gz --owner rjungemann
+>     # Releases built after it:
+>     gh attestation verify turmeric-<tag>-<target>.tar.gz --repo turmeric-lang/turmeric
+>
+> The owner is bound into the signature, so the right flag follows the
+> release's **vintage**, not where the repo lives now. A pre-move asset is
+> recorded under the account that owned the repo when it was built, and a
+> transfer does not move that record -- so `--repo` fails for those assets
+> under *either* owner name and `--owner rjungemann` is the form that works.
+> A failure here means you used the wrong one, not that the download is
+> compromised.
 >
 > When no prebuilt
 asset exists for a tag (older than the prebuild matrix, or an
 unpublished platform), `tvm install --build <v>` falls back to a CMake
-source build. See [`tvm/README.md`](https://github.com/rjungemann/turmeric/blob/main/tvm/README.md) for the full
+source build. See [`tvm/README.md`](https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md) for the full
 command set, including `.tur-version` auto-switching.
 
 ### Option 2: Prebuilt binary from GitHub Releases
 
 For every tag matching `v*` pushed to the repository, a
-[GitHub Release](https://github.com/rjungemann/turmeric/releases) is
+[GitHub Release](https://github.com/turmeric-lang/turmeric/releases) is
 published with four archives and a `sha256sums.txt`:
 
 ```
@@ -129,8 +139,8 @@ Pick the tarball for your platform, verify, and extract:
 # Apple Silicon macOS example. Adjust the URL for your platform/version.
 TAG=v0.36.0
 ARCH=macos-arm64
-curl -fLO "https://github.com/rjungemann/turmeric/releases/download/${TAG}/turmeric-${TAG}-${ARCH}.tar.gz"
-curl -fLO "https://github.com/rjungemann/turmeric/releases/download/${TAG}/sha256sums.txt"
+curl -fLO "https://github.com/turmeric-lang/turmeric/releases/download/${TAG}/turmeric-${TAG}-${ARCH}.tar.gz"
+curl -fLO "https://github.com/turmeric-lang/turmeric/releases/download/${TAG}/sha256sums.txt"
 
 # Verify just the file you downloaded:
 shasum -a 256 -c <(grep "${ARCH}" sha256sums.txt)
@@ -157,7 +167,7 @@ users should use Option 3 or Option 4.
 ```sh
 brew install --HEAD rjungemann/turmeric
 # (if a tap isn't published yet:)
-brew install --HEAD https://raw.githubusercontent.com/rjungemann/turmeric/main/Formula/turmeric.rb
+brew install --HEAD https://raw.githubusercontent.com/turmeric-lang/turmeric/main/Formula/turmeric.rb
 ```
 
 The formula builds from the latest commit on `main` (CMake source build,
@@ -182,7 +192,7 @@ specifically want to build `main`. See the
 ### Option 4: Building from source
 
 ```sh
-git clone https://github.com/rjungemann/turmeric.git
+git clone https://github.com/turmeric-lang/turmeric.git
 cd turmeric
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 cmake --build build -j                    # debug build, lands at build/tur
@@ -259,14 +269,14 @@ tur: cc invocation failed (status 256)
 ```
 
 This is a known limitation, tracked in
-[`docs/release-binaries-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/release-binaries-plan.md) under
+[`docs/release-binaries-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/release-binaries-plan.md) under
 "Discovered during execution: runtime sources also missing". Until it's
 resolved, the `--interpret` and library-embedding paths are the
 fully-supported uses of a downloaded release.
 
 ### Option 5: Docker
 
-The repository ships a [`Dockerfile`](https://github.com/rjungemann/turmeric/blob/main/Dockerfile) that builds `tur` from
+The repository ships a [`Dockerfile`](https://github.com/turmeric-lang/turmeric/blob/main/Dockerfile) that builds `tur` from
 the local source tree and packages it into a self-contained Ubuntu 22.04 image.
 This is the easiest path on Linux if you do not want to install CMake or deal
 with libedit versions.

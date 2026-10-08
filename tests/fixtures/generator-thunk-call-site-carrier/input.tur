@@ -1,0 +1,50 @@
+;; generator-thunk-call-site-carrier -- a closure literal applied inside a
+;; generator body of a generic, where the head temp is lifted into the
+;; generator's state struct and so dispatched FAT through slot 0.  The lambda
+;; is emitted once, at the generic's int64 carrier; two sites disagreed with it.
+;;
+;;   1. the call site re-derived a pointer result from the declared type and
+;;      called the carrier-returning thunk as `void *(*)(void *)` or
+;;      `const char *(*)(void *)` (A := (fn [] bool), A := cstr) -- found by
+;;      the nightly type fuzzer, seed 20261003 case 376;
+;;   2. at A := bool / int8 / uint8 the construction site wrapped slot 0 in a
+;;      widening shim that called the same thunk as `bool (*)(void *)`.
+;;
+;; Both are return-type-only mismatches, ABI-benign on LP64: every line below
+;; printed the right answer before the fix, and only -fsanitize=function
+;; (tests/run-fnsan.sh) trapped.  The interpreter agrees with every line.
+
+(defstruct Pt [x : float y : float])
+
+(defn gbody [A] [x : A] : A
+  (gen-unwrap (gen-next (gen [] (yield ((fn [] x)))))))
+
+(defn garg [A] [x : A] : A
+  (gen-unwrap (gen-next (gen [] (yield ((fn [y : A] y) x))))))
+
+(defn thunk [B] [v : B] : (fn [] B) (fn [] v))
+
+(defn found [A] [x : A] : A
+  ((thunk (gen-unwrap (gen-next (gen [] (yield ((fn [] x)))))))))
+
+(defn mk [x : bool] : (fn [] bool) (fn [] x))
+
+(defn main [] : int
+  ;; the fuzzer's case, reduced
+  (println ((found (mk true))))
+  (println (gbody 7.1))
+  (println (gbody "hi"))
+  (println (gbody true))
+  (println (gbody 42))
+  (println (gbody (:: 7 int8)))
+  (println (gbody (:: 200 uint8)))
+  (println (gbody (:: 3.25 float32)))
+  (println (.x (gbody (Pt 3.25 1.5))))
+  (println (unwrap-or (gbody (some 9)) 0))
+  (println ((gbody (mk false))))
+  (println (garg 7.1))
+  (println (garg "yo"))
+  (println (garg false))
+  (println (.y (garg (Pt 3.25 1.5))))
+  (println ((garg (mk true))))
+  0)

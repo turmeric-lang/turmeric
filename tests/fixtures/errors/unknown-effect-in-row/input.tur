@@ -1,0 +1,36 @@
+;; unknown-effect-in-row -- an uppercase name in #fx{...} that no defeffect
+;; declares is TUR-E0026, in every position a row can be written.
+;;
+;; It used to be dropped silently, so the row checked as #fx{} and the
+;; annotation stopped meaning anything
+;; (docs/archive/capability-effect-tag-silently-resolves-to-empty-row.md).
+;; One line of expected.diag per position: a misspelt effect (with a
+;; did-you-mean), a `fn` literal, a fn-typed parameter, a record field, a class
+;; method, `|e` (neither an effect nor a row variable), and an effects.tur
+;; name used without loading it.
+
+(defeffect Bang [] :nil)
+
+(defn typo [] #fx{Bnag} : int
+  (do (perform (Bang)) 0))
+
+(defn in-lambda [] : int
+  ((fn [] #fx{Quux} : int 1)))
+
+(defn in-param [f : (fn [] #fx{Zork} int)] : int
+  (f))
+
+(defstruct Act [run : fn #fx{Blip}])
+
+(defclass Shower [a]
+  (shw [x : a] #fx{Blorp} : int))
+
+(defn bad-row-var [f : (fn [] #fx{|e} int)] : int
+  (f))
+
+;; `Write` lives in stdlib/effects.tur, which is not loaded here; the hint
+;; says so.  (IO / FS / Net / Proc / Rand are compiler-known and never land
+;; here.)
+(defn logs [] #fx{Write} : int 0)
+
+(defn main [] : int 0)

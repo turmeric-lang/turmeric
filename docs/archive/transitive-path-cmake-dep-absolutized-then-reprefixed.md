@@ -55,7 +55,7 @@ d->path)`) assumes `d->path` is relative, which is true as parsed from
 ## Repro
 
 ```sh
-git clone https://github.com/rjungemann/turmeric-spices
+git clone https://github.com/turmeric-lang/turmeric-spices
 cd turmeric-spices/spices/opengl
 tur fetch          # look at cmake/CMakeLists.txt: the raygui line has .//Users/...
 tur build .        # CMake Error: add_subdirectory given source ... doubled path

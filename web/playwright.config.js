@@ -27,6 +27,23 @@ const ORIGIN = `http://localhost:${PORT}`;
 export default defineConfig({
     testDir: './tests',
     timeout: 60_000,
+    // Retries on CI only, and the number is measured rather than defensive.
+    // From the web_desktop / web_mobile rows on the `ci-metrics` branch over
+    // 266 commits: the suites failed on 42 and 73 of them, which sounds far
+    // too flaky to gate on -- but collapsing CONSECUTIVE failures gives only
+    // 10 and 7 episodes, the longest running 21 and 49 commits. Nearly all of
+    // that is two standing bugs apiece, since fixed. Isolated single-commit
+    // failures, which is the actual flake signal, are 6/266 (2.3%) for
+    // desktop and 5/266 (1.9%) for mobile.
+    //
+    // ~2% is low enough to gate on and too high to gate on undamped: it is
+    // about one spuriously blocked PR in 43. Two retries take an independent
+    // 2% per-test flake to ~1e-5, which is what makes the desktop suite
+    // BLOCKING in ci.yml defensible. Zero locally on purpose -- a flaky test
+    // someone just wrote should fail in front of them, not hide behind a
+    // retry. A test that only passes on retry is still reported `flaky` by
+    // the list reporter, so the signal is not lost either.
+    retries: process.env.CI ? 2 : 0,
     use: {
         baseURL: ORIGIN,
     },

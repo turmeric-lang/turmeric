@@ -920,8 +920,11 @@ Expr *elab_form(Elab *e, Form *f) {
              * inline_c_substitute to strip the lines from the body; dedup
              * makes that idempotent. */
             extern size_t tur_hoist_top_includes_scan(const char *body, size_t len);
+            extern bool g_hoist_origin_stdlib;
             if (f->as.cblock.p) {
+                g_hoist_origin_stdlib = e->in_stdlib_load;
                 (void)tur_hoist_top_includes_scan(f->as.cblock.p, f->as.cblock.len);
+                g_hoist_origin_stdlib = false;
             }
             /* inline-c-cname-module-prefix-plan: resolve __TUR_CNAME_<name>__
              * splices into captures so module-prefixed callees get their exact
@@ -1380,6 +1383,7 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
             sfile->lang        = dialect;
         }
         diag_register_file(sfile);
+        diag_set_file_origin(sfile->file_id, path_f->span);
         /* Transitive-RM (T2): share the entry file's macro registry. */
         uint32_t lf_n = 0;
         bool had_error_before_load = diag_had_error();
@@ -1485,8 +1489,33 @@ static bool fwd_type_is_closed(const Type *t, const Symbol **tps, uint8_t n_tp) 
     }
 }
 
+/* Does a shallow-resolved type name one of the defn's own type parameters? */
+static bool fwd_type_mentions_tp(const Type *t, const Symbol **tps, uint8_t n_tp) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            const char *nm = t->as.tyvar_.name;
+            if (!nm) return false;
+            for (uint8_t i = 0; i < n_tp; i++)
+                if (tps[i] && strcmp(tps[i]->name, nm) == 0) return true;
+            return false;
+        }
+        case TY_APP:
+            return fwd_type_mentions_tp(t->as.app.fn, tps, n_tp) ||
+                   fwd_type_mentions_tp(t->as.app.arg, tps, n_tp);
+        default:
+            return false;
+    }
+}
+
 static Type fwd_shallow_type_arg(Elab *e, const Form *af,
                                  const Symbol **tps, uint8_t n_tp) {
+    /* ok-nil-unconstructible-in-turmeric: the reader makes a bare `nil` an
+     * F_NIL, not a symbol, so `(Result nil E)` used to forward-declare as
+     * `(Result _ E)` -- a named tyvar a forward caller then re-instantiated
+     * through a head with no kind, TUR-E0012 at 0:0.  elab_types.c's ET3 arm
+     * reads F_NIL in a type position as the nil type; so does this. */
+    if (af && af->tag == F_NIL) return TYPE_NIL;
     if (af && af->tag == F_LIST) {
         Type *nested = fwd_shallow_result_app(e, af, tps, n_tp);
         if (nested) return *nested;
@@ -1606,21 +1635,32 @@ Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
     return full_types;
 }
 
-/* r7rs-lang-plan R3: the full TY_APP result type of a defn's COMPOUND return
- * annotation for a pass-1 forward declaration in a DYNAMIC file, or NULL.
- * The defmodule pre-pass kept "other compound types" as the TY_INT
- * placeholder, which was fine while a compound PARAMETER was the same
- * placeholder: once `(defn f [v : (Vec int)] ...)` is forward-declared in
- * full, a forward-declared `(defn g [] : (Vec int) ...)` feeding it has to
- * say `(Vec int)` too, or the call is "expected (Vec int), got int".  Same
- * closedness rule as the parameters. */
+/* The full result type of a defn's NAMED return annotation for the defmodule
+ * pass-1 forward declaration, or NULL.  `ret_f` is the annotation as the
+ * pre-pass left it: a bare symbol / keyword (`: Box`, already unwrapped from
+ * its F_TYPE_ANN) or an F_TYPE_ANN around an application (`: (Result T E)`).
+ *
+ * r7rs-lang-plan R3 introduced this for DYNAMIC files only: a forward-declared
+ * `(defn g [] : (Vec int) ...)` feeding a forward-declared `(Vec int)`
+ * parameter has to say `(Vec int)` too, or the call is "expected (Vec int),
+ * got int".
+ *
+ * forward-call-to-aggregate-result-types-as-carrier: a static file needs it
+ * just as much.  The defmodule pre-pass kept every non-scalar return as the
+ * TY_INT placeholder, so a caller written ABOVE `(defn good [] : (Result
+ * Handle cstr) ...)` typed `(good)` as the int64 carrier and the enclosing
+ * defn tripped TUR-E0709 ("declares return type '(Result Handle cstr)' but its
+ * body returns int").  A bare `: Box` failed the same way.  The top-level
+ * pre-pass has resolved both shapes all along (it runs after RF0 has stubbed
+ * every type); a module body has no RF0, so here only what the shallow
+ * resolver can name completely -- a registered ADT, a scalar, one of the
+ * defn's own type parameters -- is committed.  A leaf naming a type the
+ * module defines further down returns NULL, and the caller records the decl
+ * as pending (elab_fwd_note_pending_result) so it is resolved once that type
+ * is registered. */
 Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
                                     uint32_t params_idx, const Form *ret_f) {
-    if (!ret_f || ret_f->tag != F_TYPE_ANN || ret_f->as.list.len < 1 ||
-        !lang_span_is_dynamic(f->span))
-        return NULL;
-    const Form *app = ret_f->as.list.items[0];
-    if (app->tag != F_LIST) return NULL;
+    if (!ret_f) return NULL;
     const Symbol *tp_syms[MAX_FN_ARITY];
     uint8_t n_tp = 0;
     if (params_idx > name_idx + 1 && f->as.list.items[name_idx + 1]->tag == F_VEC) {
@@ -1630,10 +1670,92 @@ Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
                 tp_syms[n_tp++] = tpv->as.list.items[ti]->as.sym;
         }
     }
+    if (ret_f->tag == F_SYM || ret_f->tag == F_KEYWORD) {
+        /* A bare name: a registered, non-generic ADT names its type
+         * completely.  The defn's own type parameter is not a commitment
+         * (the call instantiates it), and a scalar never reaches here. */
+        const char *nm = ret_f->as.sym->name;
+        for (uint8_t ti = 0; ti < n_tp; ti++)
+            if (tp_syms[ti] && strcmp(tp_syms[ti]->name, nm) == 0) return NULL;
+        for (uint32_t ai = 0; ai < e->n_adt_defs; ai++) {
+            AdtDef *d = e->adt_defs[ai];
+            if (d->n_type_params != 0 || strcmp(d->name, nm) != 0) continue;
+            Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *t = type_adt(d);
+            return t;
+        }
+        return NULL;
+    }
+    if (ret_f->tag != F_TYPE_ANN || ret_f->as.list.len < 1) return NULL;
+    const Form *app = ret_f->as.list.items[0];
+    if (app->tag != F_LIST) return NULL;
     Type *full = fwd_shallow_result_app(e, app, tp_syms, n_tp);
     if (!full || full->kind != TY_APP || !fwd_type_is_closed(full, tp_syms, n_tp))
         return NULL;
+    /* A GENERIC callee's result in a typed file stays the placeholder: the
+     * forward decl carries no parameter types for the call to instantiate
+     * `A` from, so `(some (wrap x))` above `(defn wrap [A] [x : A] : (Option
+     * A) ...)` read an `(Option A)` carrier box as the by-value `(Option
+     * (Option int))` the caller declared -- a wrong answer where the
+     * placeholder is a compile error.  A dynamic file's forward decl carries
+     * its closed parameter types (elab_fwd_param_full_types), so it keeps the
+     * R3 behaviour. */
+    if (!lang_span_is_dynamic(f->span) && fwd_type_mentions_tp(full, tp_syms, n_tp))
+        return NULL;
     return full;
+}
+
+/* forward-call-to-aggregate-result-types-as-carrier: a defmodule forward decl
+ * whose named return could not be resolved at pass 1 because a leaf is a type
+ * the module defines in its own body (a module has no RF0 type pre-pass, so
+ * `Box` is unregistered until its `defstruct` elaborates in pass 2).  Kept on
+ * a list and retried at the start of every defn (elab_fwd_refresh_pending):
+ * a type written above its first user is registered by then, which is the
+ * order the language already asks of a module's types. */
+typedef struct FwdPendingResult {
+    Binding       *b;
+    const Form    *f;
+    const Form    *ret_f;
+    uint32_t       name_idx;
+    uint32_t       params_idx;
+    struct FwdPendingResult *next;
+} FwdPendingResult;
+
+void elab_fwd_note_pending_result(Elab *e, Binding *b, const Form *f,
+                                  uint32_t name_idx, uint32_t params_idx,
+                                  const Form *ret_f) {
+    FwdPendingResult *p =
+        (FwdPendingResult *)arena_alloc(e->arena, sizeof(FwdPendingResult));
+    p->b = b;
+    p->f = f;
+    p->ret_f = ret_f;
+    p->name_idx = name_idx;
+    p->params_idx = params_idx;
+    p->next = (FwdPendingResult *)e->fwd_pending_results;
+    e->fwd_pending_results = p;
+}
+
+void elab_fwd_refresh_pending(Elab *e) {
+    FwdPendingResult **pp = (FwdPendingResult **)&e->fwd_pending_results;
+    while (*pp) {
+        FwdPendingResult *p = *pp;
+        Binding *b = p->b;
+        /* Done with once the defn itself has started: elab_defn's RR1 early
+         * update gives the binding the real declared result from then on. */
+        bool still_fwd = b && b->type.kind == TY_FN && !b->source_fn_def &&
+                         b->type.as.fn.result_kind == TY_INT &&
+                         !b->type.as.fn.result_full_type;
+        if (!still_fwd) { *pp = p->next; continue; }
+        Type *full = elab_fwd_compound_result_type(e, p->f, p->name_idx,
+                                                   p->params_idx, p->ret_f);
+        if (full) {
+            b->type.as.fn.result_kind = full->kind;
+            b->type.as.fn.result_full_type = full;
+            *pp = p->next;
+            continue;
+        }
+        pp = &p->next;
+    }
 }
 
 /* A top-level statement USED to be fold-unsafe when its handle subtree carried a
@@ -1798,6 +1920,438 @@ static bool tl_has_definstance_at_or_after(const Elab *e, Form *const *forms,
     return false;
 }
 
+/* Pass 2's state for elaborating one top-level form out of the main loop's
+ * own position: a flushed defn, or a deferred one's second chance. */
+typedef struct TlRetryCtx {
+    Elab         *e;
+    Form *const  *forms;
+    uint32_t      nforms;
+    Expr        **items;
+    uint32_t      stdlib_prefix;
+    int          *rc;
+    bool         *tl_deferred;
+    FwdGenOrder  *fgo;
+    /* inst_from[k]: does any form at or after k register an instance
+     * (tl_has_definstance_at_or_after over forms[k..]), for k <= nforms.
+     * Computed once: asked per defn, the scan was quadratic in the unit --
+     * 13% of a `#lang r7rs` emit-c, whose unit is the whole stdlib. */
+    const bool   *inst_from;
+} TlRetryCtx;
+
+static Expr *tl_elab_form(TlRetryCtx *c, uint32_t i) {
+    Elab *e = c->e;
+    Form *f = c->forms[i];
+    bool saved_in_stdlib = e->in_stdlib_load;
+    e->in_stdlib_load = (i < c->stdlib_prefix);
+    /* Statement position for the def-position check: this form, and any
+     * form reachable from it through `do` chains, is a statement.  Anything
+     * deeper is an expression subform.  See def_form_is_statement_position. */
+    e->toplevel_stmt = f;
+    e->toplevel_dynamic = lang_span_is_dynamic(f->span);   /* M10 */
+    e->toplevel_scheme  = lang_span_is_scheme(f->span);    /* r7rs R2 */
+    Expr *x = elab_form(e, f);
+    e->toplevel_stmt = NULL;
+    e->toplevel_dynamic = false;
+    e->toplevel_scheme  = false;
+    e->in_stdlib_load = saved_in_stdlib;
+    return x;
+}
+
+/* Pass 2's main-loop treatment of forms[i] at position `pos`: speculative when
+ * it is a defn and a `definstance` follows `pos` (symptom A, below). */
+static void tl_elab_slot(TlRetryCtx *c, uint32_t i, uint32_t pos) {
+    Elab *e = c->e;
+    bool tl_may_defer = false;
+    uint32_t tl_fsd_mark = e->n_file_scope_defs;
+    if (c->tl_deferred) {
+        Form *ff = c->forms[i];
+        if (ff->tag == F_LIST && ff->as.list.len > 0) {
+            Form *h = ff->as.list.items[0];
+            if (h->tag == F_SYM && h->as.sym == e->sym_defn &&
+                pos + 1 <= c->nforms && c->inst_from[pos + 1])
+                tl_may_defer = true;
+        }
+    }
+    if (tl_may_defer) diag_push_capture();
+    c->items[i] = tl_elab_form(c, i);
+    if (tl_may_defer) {
+        uint32_t tl_cerr = diag_pop_capture();
+        if (tl_cerr > 0 || !c->items[i]) {
+            /* Roll back what the failed attempt registered and try again
+             * at the end, with no capture frame, so a failure that is NOT
+             * about instance ordering still reports its real diagnostic. */
+            e->n_file_scope_defs = tl_fsd_mark;
+            c->tl_deferred[i] = true;
+            c->items[i] = NULL;
+            return;
+        }
+    }
+    if (!c->items[i]) *c->rc = -1;   /* keep going to surface more diagnostics */
+    fwd_gen_order_done(c->fgo, i);
+}
+
+/* Elaborate, ahead of position `pos`, every waiting defn `f` names -- each
+ * one's own waiting names first. */
+static void tl_flush(TlRetryCtx *c, const Form *f, uint32_t pos) {
+    uint32_t d;
+    while ((d = fwd_gen_order_next_flush(c->fgo, f)) != UINT32_MAX) {
+        fwd_gen_order_done(c->fgo, d);
+        tl_flush(c, c->forms[d], pos);
+        tl_elab_slot(c, d, pos);
+    }
+}
+
+/* Pass 2's second chance for one deferred top-level form: no capture frame,
+ * so a still-failing body reports for real. */
+static void tl_retry_slot(void *vctx, uint32_t i) {
+    TlRetryCtx *c = (TlRetryCtx *)vctx;
+    c->items[i] = tl_elab_form(c, i);
+    if (!c->items[i]) *c->rc = -1;
+}
+
+/* A speculative attempt at one deferred top-level form, under a capture
+ * frame: kept when it elaborates cleanly, rolled back otherwise (the same
+ * rollback as the symptom-A attempt). */
+static bool tl_probe_slot(void *vctx, uint32_t i) {
+    TlRetryCtx *c = (TlRetryCtx *)vctx;
+    uint32_t mark = c->e->n_file_scope_defs;
+    diag_push_capture();
+    Expr *x = tl_elab_form(c, i);
+    uint32_t cerr = diag_pop_capture();
+    if (cerr == 0 && x) {
+        c->items[i] = x;
+        return true;
+    }
+    c->e->n_file_scope_defs = mark;
+    return false;
+}
+
+/* forward-call-to-generic-callee-typed-as-placeholder.
+ *
+ * A caller elaborated before a GENERIC callee sees only the callee's pass-1
+ * forward decl, which has the arity but no parameter types and no type
+ * parameters (fwd_decl_scan_params records scalar kinds; `x : A` is the
+ * TY_INT placeholder).  Nothing at the call can instantiate `A` from that:
+ * `(wrap x)` above `(defn wrap [A] [x : A] : (Option A) ...)` was TUR-E0709,
+ * a float argument "expected int, got float", and a lambda handed to a later
+ * `(defn twice [A] [f : (fn [A] A) x : A] ...)` was passed bare where the
+ * definition takes the fat carrier -- a SIGSEGV at run time.
+ *
+ * A non-generic callee with a function-typed parameter has the same hole: its
+ * forward decl does not mark the parameter as the `:fn` carrier (FA_POLY_FN),
+ * so a lambda argument is not wrapped into the `tur_poly_fn_t` the definition
+ * takes, and cc rejects the call.  Both are "lossy" callees below.
+ *
+ * So Pass 2 defers such a caller until its callee has been elaborated.  A
+ * defn waits when it CALLS -- `(name ...)` -- a lossy defn of the same
+ * statement list that has not been reached yet, or names (anywhere) a defn
+ * that is itself waiting, whose binding is the forward decl again.  A name
+ * the form binds in a vector (a parameter, a let) is a local, not a call of
+ * the callee.  Every other form keeps its place, and first elaborates any
+ * waiting defn it names (the drivers' flush), so no form sees a forward decl
+ * where it used to see the definition.  A program that never calls a lossy
+ * defn above its definition therefore elaborates exactly as before.  A cycle
+ * (lossy defns that call each other) is broken at its first lossy member,
+ * and that member sees the forward decls every defn saw before.  Stdlib
+ * forms take no part: they neither wait nor hold anything back.  A
+ * dynamic-file defn is not tracked either: its forward decl carries closed
+ * parameter types (elab_fwd_param_full_types).
+ *
+ * The scan is over the unexpanded form, so a call a macro introduces is not
+ * seen (it keeps the old behaviour). */
+enum { FGO_NONE = 0, FGO_LOSSY, FGO_DEFERRED, FGO_LOSSY_DEFERRED, FGO_DONE };
+
+#define FGO_NO_SLOT UINT32_MAX
+
+/* Is the parameter annotation `a` a function type -- `(fn [...] R)`, or the
+ * bare `:fn` carrier? */
+static bool fgo_ann_is_fn_type(const Elab *e, const Form *a) {
+    if (a->tag == F_TYPE_ANN && a->as.list.len >= 1) a = a->as.list.items[0];
+    if (a->tag == F_SYM || a->tag == F_KEYWORD) return a->as.sym == e->sym_fn;
+    return a->tag == F_LIST && a->as.list.len > 0 &&
+           a->as.list.items[0]->tag == F_SYM &&
+           a->as.list.items[0]->as.sym == e->sym_fn;
+}
+
+/* The name of a `(defn ...)` form, or NULL.  `*lossy` says whether a caller
+ * elaborated before it gets a forward decl too lossy to call it through: it
+ * declares type parameters, or a function-typed parameter (the forward decl
+ * has no FA_POLY_FN flag, so a bare function argument is not wrapped into the
+ * `tur_poly_fn_t` the definition takes -- invalid C).  Skips the attributes
+ * elab_defn accepts before the name.  Two vectors after the name are
+ * `[TypeVars] [params]`, the same test the pass-1 forward decl uses. */
+static const Symbol *fgo_defn_name(const Elab *e, const Form *f, bool *lossy) {
+    *lossy = false;
+    if (!f || f->tag != F_LIST || f->as.list.len < 3) return NULL;
+    const Form *h = f->as.list.items[0];
+    if (h->tag != F_SYM || h->as.sym != e->sym_defn) return NULL;
+    uint32_t n = f->as.list.len, k = 1;
+    while (k < n) {
+        const Form *a = f->as.list.items[k];
+        if (a->tag == F_SYM && (a->as.sym == e->sym_no_unwind_attr ||
+                                a->as.sym == e->sym_used_attr ||
+                                a->as.sym == e->sym_caret_reflect)) {
+            k++;
+        } else if (a->tag == F_SYM && a->as.sym == e->sym_caret_deprecated) {
+            k++;
+            if (k < n && f->as.list.items[k]->tag == F_STR) k++;
+        } else if (a->tag == F_LIST && a->as.list.len == 2 &&
+                   a->as.list.items[0]->tag == F_SYM &&
+                   a->as.list.items[0]->as.sym == e->sym_export_as_attr) {
+            k++;
+        } else {
+            break;
+        }
+    }
+    if (k >= n || f->as.list.items[k]->tag != F_SYM) return NULL;
+    if (n > k + 2 && f->as.list.items[k + 1]->tag == F_VEC &&
+        f->as.list.items[k + 2]->tag == F_VEC) {
+        *lossy = true;   /* generic */
+    } else if (k + 1 < n && f->as.list.items[k + 1]->tag == F_VEC) {
+        const Form *pv = f->as.list.items[k + 1];
+        for (uint32_t pi = 0; pi < pv->as.list.len && !*lossy; pi++) {
+            const Form *p = pv->as.list.items[pi];
+            if ((p->tag == F_TYPE_ANN || p->tag == F_KEYWORD) &&
+                fgo_ann_is_fn_type(e, p))
+                *lossy = true;
+        }
+    }
+    return f->as.list.items[k]->as.sym;
+}
+
+static bool fgo_form_has_list_payload(const Form *f) {
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_SET:
+        case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+        case F_TYPE_ANN: case F_CONTRACT_TYPE: case F_READER_COND:
+        case F_RANGE_VAR: case F_MAP_LITERAL: case F_SET_LITERAL:
+        case F_ROW_LITERAL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static uint32_t fgo_probe(const FwdGenOrder *o, const Symbol *s) {
+    uint32_t m = o->cap - 1, i = s->hash & m;
+    while (o->keys[i] && o->keys[i] != s) i = (i + 1) & m;
+    return i;
+}
+
+/* The slot of the tracked defn named `s`, or FGO_NO_SLOT. */
+static uint32_t fgo_slot_of(const FwdGenOrder *o, const Symbol *s) {
+    uint32_t k = fgo_probe(o, s);
+    return o->keys[k] ? o->slot_of[k] : FGO_NO_SLOT;
+}
+
+static bool fgo_state_deferred(uint8_t st) {
+    return st == FGO_DEFERRED || st == FGO_LOSSY_DEFERRED;
+}
+
+void fwd_gen_order_init(FwdGenOrder *o, const Elab *e, Form *const *forms,
+                        uint32_t n) {
+    memset(o, 0, sizeof *o);
+    o->n = n;
+    uint32_t n_defn = 0, n_lossy = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        bool g;
+        if (!fgo_defn_name(e, forms[i], &g)) continue;
+        n_defn++;
+        if (g && !lang_span_is_dynamic(forms[i]->span) &&
+            !elab_file_is_stdlib(forms[i]->span.file_id))
+            n_lossy++;
+    }
+    if (n_lossy == 0) return;
+    o->name   = (const Symbol **)calloc(n, sizeof *o->name);
+    o->state  = (uint8_t *)calloc(n, sizeof *o->state);
+    o->primed = (bool *)calloc(n, sizeof *o->primed);
+    o->cap = 16;
+    while (o->cap < 2 * n_defn + 2) o->cap <<= 1;
+    o->keys    = (const Symbol **)calloc(o->cap, sizeof *o->keys);
+    o->counts  = (uint32_t *)calloc(o->cap, sizeof *o->counts);
+    o->slot_of = (uint32_t *)malloc(o->cap * sizeof *o->slot_of);
+    /* Only the FIRST defn of a name is tracked, as only it gets the pass-1
+     * forward decl (a later one is a redefinition); a stdlib defn's name is
+     * recorded so a user redefinition of it is not tracked either. */
+    for (uint32_t i = 0; i < n; i++) {
+        bool g;
+        const Symbol *nm = fgo_defn_name(e, forms[i], &g);
+        if (!nm) continue;
+        uint32_t k = fgo_probe(o, nm);
+        if (o->keys[k]) continue;
+        o->keys[k] = nm;
+        o->slot_of[k] = FGO_NO_SLOT;
+        if (elab_file_is_stdlib(forms[i]->span.file_id)) continue;
+        o->name[i] = nm;
+        o->slot_of[k] = i;
+        if (g && !lang_span_is_dynamic(forms[i]->span)) {
+            o->state[i] = FGO_LOSSY;
+            o->counts[k] = 1;
+        }
+    }
+}
+
+/* Does `f` bind `s` in a vector -- a parameter, a let or loop binding? */
+static bool fgo_vec_binds(const Form *f, const Symbol *s) {
+    if (!fgo_form_has_list_payload(f)) return false;
+    for (uint32_t k = 0; k < f->as.list.len; k++) {
+        const Form *c = f->as.list.items[k];
+        if (f->tag == F_VEC && c->tag == F_SYM && c->as.sym == s) return true;
+        if (fgo_vec_binds(c, s)) return true;
+    }
+    return false;
+}
+
+/* A call `(name ...)` in `f` of a lossy defn not reached yet, other than
+ * `self`.  `root` is the whole form, for the local-binding check. */
+static bool fgo_calls_pending_lossy(const FwdGenOrder *o, const Form *f,
+                                    const Symbol *self, const Form *root) {
+    if (!fgo_form_has_list_payload(f)) return false;
+    if (f->tag == F_LIST && f->as.list.len > 0 &&
+        f->as.list.items[0]->tag == F_SYM) {
+        const Symbol *h = f->as.list.items[0]->as.sym;
+        uint32_t d = h == self ? FGO_NO_SLOT : fgo_slot_of(o, h);
+        if (d != FGO_NO_SLOT && o->state[d] == FGO_LOSSY &&
+            !fgo_vec_binds(root, h))
+            return true;
+    }
+    for (uint32_t k = 0; k < f->as.list.len; k++)
+        if (fgo_calls_pending_lossy(o, f->as.list.items[k], self, root))
+            return true;
+    return false;
+}
+
+/* The slot of a waiting defn `f` names anywhere, other than `self`, or
+ * FGO_NO_SLOT. */
+static uint32_t fgo_names_deferred(const FwdGenOrder *o, const Form *f,
+                                   const Symbol *self) {
+    if (f->tag == F_SYM) {
+        if (f->as.sym == self) return FGO_NO_SLOT;
+        uint32_t d = fgo_slot_of(o, f->as.sym);
+        return (d != FGO_NO_SLOT && fgo_state_deferred(o->state[d]))
+            ? d : FGO_NO_SLOT;
+    }
+    if (!fgo_form_has_list_payload(f)) return FGO_NO_SLOT;
+    for (uint32_t k = 0; k < f->as.list.len; k++) {
+        uint32_t d = fgo_names_deferred(o, f->as.list.items[k], self);
+        if (d != FGO_NO_SLOT) return d;
+    }
+    return FGO_NO_SLOT;
+}
+
+bool fwd_gen_order_should_defer(const FwdGenOrder *o, Form *const *forms,
+                                uint32_t i) {
+    if (o->cap == 0 || i >= o->n || !o->name[i]) return false;
+    const Symbol *self = o->name[i];
+    return fgo_names_deferred(o, forms[i], self) != FGO_NO_SLOT ||
+           fgo_calls_pending_lossy(o, forms[i], self, forms[i]);
+}
+
+uint32_t fwd_gen_order_next_flush(const FwdGenOrder *o, const Form *f) {
+    if (o->cap == 0 || !o->any_deferred) return FGO_NO_SLOT;
+    return fgo_names_deferred(o, f, NULL);
+}
+
+void fwd_gen_order_defer(FwdGenOrder *o, uint32_t i) {
+    if (o->cap == 0 || i >= o->n || !o->name[i]) return;
+    if (o->state[i] == FGO_LOSSY) {
+        o->state[i] = FGO_LOSSY_DEFERRED;
+    } else {
+        o->state[i] = FGO_DEFERRED;
+        o->counts[fgo_probe(o, o->name[i])]++;
+    }
+    o->any_deferred = true;
+}
+
+static bool fgo_is_deferred(const FwdGenOrder *o, uint32_t i) {
+    return o->cap != 0 && i < o->n && fgo_state_deferred(o->state[i]);
+}
+
+void fwd_gen_order_done(FwdGenOrder *o, uint32_t i) {
+    if (o->cap == 0 || i >= o->n || !o->name[i]) return;
+    if (o->state[i] != FGO_NONE && o->state[i] != FGO_DONE) {
+        uint32_t k = fgo_probe(o, o->name[i]);
+        if (o->counts[k] > 0) o->counts[k]--;
+    }
+    o->state[i] = FGO_DONE;
+}
+
+void fwd_gen_order_drain(FwdGenOrder *o, Form *const *forms, bool *extra,
+                         void (*retry)(void *ctx, uint32_t i),
+                         bool (*probe)(void *ctx, uint32_t i), void *ctx) {
+    uint32_t n = o->n;
+    if (!o->any_deferred) {
+        for (uint32_t i = 0; i < n; i++) {
+            if (!extra || !extra[i]) continue;
+            extra[i] = false;
+            fwd_gen_order_done(o, i);
+            retry(ctx, i);
+        }
+        return;
+    }
+    for (;;) {
+        /* Sweep in source order, taking every form nothing it names is still
+         * waiting for; repeat while that makes progress. */
+        bool progress = false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (!(extra && extra[i]) && !fgo_is_deferred(o, i)) continue;
+            if (fwd_gen_order_should_defer(o, forms, i)) continue;
+            if (extra) extra[i] = false;
+            fwd_gen_order_done(o, i);
+            retry(ctx, i);
+            progress = true;
+        }
+        if (progress) continue;
+        /* Stuck: what is left waits on a cycle.  First PRIME its lossy
+         * members: elaborate each one speculatively.  elab_defn forwards a
+         * defn's declared signature onto its binding before the body (what
+         * lets a generic call itself), and that survives a rolled-back body,
+         * so once every member has been tried, each sees the others' full
+         * signatures instead of the pass-1 placeholder -- `ping`/`pong` with
+         * an `(Option A)` result was "then=(Option A) else=int".  A member
+         * whose attempt succeeds is simply done.  Each slot is primed once. */
+        if (probe) {
+            bool kept = false;
+            for (uint32_t i = 0; i < n; i++) {
+                bool lossy = o->state[i] == FGO_LOSSY_DEFERRED ||
+                             (o->state[i] == FGO_LOSSY && extra && extra[i]);
+                if (!lossy || o->primed[i]) continue;
+                o->primed[i] = true;
+                if (probe(ctx, i)) {
+                    if (extra) extra[i] = false;
+                    fwd_gen_order_done(o, i);
+                    kept = true;
+                }
+            }
+            if (kept) continue;
+        }
+        /* Break the cycle at its first lossy member, so the defns that only
+         * call into the cycle still come after it; with no lossy defn left,
+         * take the first form. */
+        uint32_t pick = n;
+        for (uint32_t i = 0; i < n && pick == n; i++)
+            if (o->state[i] == FGO_LOSSY_DEFERRED ||
+                (o->state[i] == FGO_LOSSY && extra && extra[i]))
+                pick = i;
+        for (uint32_t i = 0; i < n && pick == n; i++)
+            if ((extra && extra[i]) || fgo_is_deferred(o, i)) pick = i;
+        if (pick == n) return;
+        if (extra) extra[pick] = false;
+        fwd_gen_order_done(o, pick);
+        retry(ctx, pick);
+    }
+}
+
+void fwd_gen_order_free(FwdGenOrder *o) {
+    free(o->name);
+    free(o->state);
+    free(o->primed);
+    free(o->keys);
+    free(o->counts);
+    free(o->slot_of);
+    memset(o, 0, sizeof *o);
+}
+
 /* r7rs-procedure-body-forward-reference: Pass 1 also pre-declares every
  * top-level `(def ^mut name : any init)` -- the shape the Scheme lowering
  * gives a variable a `set!` writes or a procedure above it names (R7RS 5.3.1
@@ -1838,6 +2392,42 @@ void elab_pre_declare_any_mut_def(Elab *ep, const Form *f) {
     scope_add(&ep->global, b);
 }
 
+/* The index of a `(defn ...)` form's name: past the bare attribute symbols
+ * (#[no-unwind] / #[used]), an `(export-as "c_name")`, and the `^attr`s
+ * elab_defn takes before the name (^construct, ^byval, ^deprecated
+ * ["message"], ^reflect), in any order.  Every scanner that wants a defn's
+ * name before elab_defn runs goes through this, so a new pre-name attribute
+ * is taught in one place -- the module pre-declare scan used to skip none of
+ * the `^` ones.  Unknown `^attr`s are skipped too: elab_defn reports them.
+ * Returns f->as.list.len when the form has no name. */
+uint32_t elab_defn_name_index(const Elab *ep, const Form *f) {
+    uint32_t n = f->as.list.len;
+    uint32_t i = 1;
+    while (i < n) {
+        const Form *it = f->as.list.items[i];
+        if (it->tag == F_SYM &&
+            (it->as.sym == ep->sym_no_unwind_attr || it->as.sym == ep->sym_used_attr)) {
+            i++;
+            continue;
+        }
+        if (it->tag == F_LIST && it->as.list.len == 2 &&
+            it->as.list.items[0]->tag == F_SYM &&
+            it->as.list.items[0]->as.sym == ep->sym_export_as_attr) {
+            i++;
+            continue;
+        }
+        if (it->tag == F_SYM && it->as.sym->len > 1 && it->as.sym->name[0] == '^') {
+            i++;
+            if (it->as.sym == ep->sym_caret_deprecated && i < n &&
+                f->as.list.items[i]->tag == F_STR)
+                i++;
+            continue;
+        }
+        break;
+    }
+    return i;
+}
+
 void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
         elab_pre_declare_any_mut_def(ep, f);
         if (f->tag == F_LIST && f->as.list.len > 0) {
@@ -1846,45 +2436,8 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                 if (head->as.sym == ep->sym_defn) {
                     /* Parse defn declaration without body */
                     if (f->as.list.len >= 3) {
-                        /* Phase R5: skip optional #[no-unwind] / #[used] bare
-                         * attribute symbols (either order) before the name. */
-                        uint32_t name_idx = 1;
-                        while ((uint32_t)f->as.list.len > name_idx &&
-                               f->as.list.items[name_idx]->tag == F_SYM &&
-                               (f->as.list.items[name_idx]->as.sym == ep->sym_no_unwind_attr ||
-                                f->as.list.items[name_idx]->as.sym == ep->sym_used_attr)) {
-                            name_idx++;
-                        }
-                        /* Phase M6: skip optional (export-as "c_name") attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_LIST &&
-                            f->as.list.items[name_idx]->as.list.len == 2 &&
-                            f->as.list.items[name_idx]->as.list.items[0]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.list.items[0]->as.sym == ep->sym_export_as_attr) {
-                            name_idx += 1; /* skip (export-as "c_name") */
-                        }
-                        /* reflected-measures RF0: skip `^reflect`, in either
-                         * order with ^deprecated (elab_defn accepts both). */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_reflect) {
-                            name_idx += 1;
-                        }
-                        /* F4: skip optional ^deprecated [message] attribute */
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_deprecated) {
-                            name_idx += 1;
-                            if ((uint32_t)f->as.list.len > name_idx &&
-                                f->as.list.items[name_idx]->tag == F_STR) {
-                                name_idx += 1;
-                            }
-                        }
-                        if ((uint32_t)f->as.list.len > name_idx &&
-                            f->as.list.items[name_idx]->tag == F_SYM &&
-                            f->as.list.items[name_idx]->as.sym == ep->sym_caret_reflect) {
-                            name_idx += 1;
-                        }
+                        /* Skip every pre-name attribute (shared helper). */
+                        uint32_t name_idx = elab_defn_name_index(ep, f);
                         if ((uint32_t)f->as.list.len <= name_idx) goto next_form;
                         Form *name_f = f->as.list.items[name_idx];
                         if (name_f->tag == F_SYM) {
@@ -2080,7 +2633,24 @@ void elab_pre_declare_toplevel_defn(Elab *ep, Arena *arena, Form *f) {
                                             (void)tp_kinds;
                                             Type *ann = fwd_shallow_result_app(
                                                 ep, head_f, tp_syms, n_tp);
-                                            if (ann && ann->kind == TY_APP) {
+                                            /* forward-call-to-aggregate-result-
+                                             * types-as-carrier: not a result
+                                             * over the defn's OWN type
+                                             * parameters in a typed file.  The
+                                             * forward decl has no parameter
+                                             * types to instantiate them from,
+                                             * so a caller above `(defn wrap [A]
+                                             * [x : A] : (Option A) ...)` typed
+                                             * `(some (wrap x))` with `A` unbound,
+                                             * no spec was minted, and the
+                                             * `(Option A)` carrier box was read
+                                             * as the caller's by-value `(Option
+                                             * (Option int))`: a silent wrong
+                                             * answer.  The placeholder makes it
+                                             * a compile error instead. */
+                                            if (ann && ann->kind == TY_APP &&
+                                                (lang_span_is_dynamic(f->span) ||
+                                                 !fwd_type_mentions_tp(ann, tp_syms, n_tp))) {
                                                 return_kind = TY_APP;
                                                 fwd_result_full = ann;
                                             }
@@ -2258,6 +2828,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         e.has_defmodule       = false;
         e.current_module_name = NULL;
         e.current_module      = NULL;
+        /* Arena-allocated in an earlier call's arena; a module's pending
+         * forward results never outlive the module anyway. */
+        e.fwd_pending_results = NULL;
         /* PS4: everything defined so far belongs to earlier turns. */
         e.turn_continues_session = true;
         e.turn_start_n_globals   = e.global.n;
@@ -2783,45 +3356,31 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * one takes precisely the old path: no capture, no retry, no change. */
     bool *tl_deferred = (nforms > 0)
         ? (bool *)calloc(nforms, sizeof(bool)) : NULL;
+    /* forward-call-to-generic-callee-typed-as-placeholder: a defn that calls a
+     * generic defn not elaborated yet waits for it (fwd_gen_order_init). */
+    FwdGenOrder fgo;
+    fwd_gen_order_init(&fgo, &e, forms, nforms);
+    bool *tl_inst_from = (bool *)calloc((size_t)nforms + 1, sizeof(bool));
+    if (!tl_inst_from) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t k = nforms; k > 0; k--)
+        tl_inst_from[k - 1] = tl_inst_from[k] ||
+            tl_has_definstance_at_or_after(&e, forms + (k - 1), 1, 0, 0);
+    TlRetryCtx tl_ctx = { &e, forms, nforms, items, stdlib_prefix, &rc,
+                          tl_deferred, &fgo, tl_inst_from };
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
-        bool tl_may_defer = false;
-        uint32_t tl_fsd_mark = e.n_file_scope_defs;
-        if (tl_deferred) {
-            Form *ff = forms[i];
-            if (ff->tag == F_LIST && ff->as.list.len > 0) {
-                Form *h = ff->as.list.items[0];
-                if (h->tag == F_SYM && h->as.sym == e.sym_defn &&
-                    tl_has_definstance_at_or_after(&e, forms, nforms, i + 1, 0))
-                    tl_may_defer = true;
-            }
+        if (fwd_gen_order_should_defer(&fgo, forms, i)) {
+            fwd_gen_order_defer(&fgo, i);
+            items[i] = NULL;
+            goto tl_form_tail;
         }
-        if (tl_may_defer) diag_push_capture();
-        /* Statement position for the def-position check: this form, and any
-         * form reachable from it through `do` chains, is a statement.  Anything
-         * deeper is an expression subform.  See def_form_is_statement_position. */
-        e.toplevel_stmt = forms[i];
-        e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);   /* M10 */
-        e.toplevel_scheme  = lang_span_is_scheme(forms[i]->span);    /* r7rs R2 */
-        items[i] = elab_form(&e, forms[i]);
-        e.toplevel_stmt = NULL;
-        e.toplevel_dynamic = false;
-        e.toplevel_scheme  = false;
-        if (tl_may_defer) {
-            uint32_t tl_cerr = diag_pop_capture();
-            if (tl_cerr > 0 || !items[i]) {
-                /* Roll back what the failed attempt registered and try again
-                 * at the end, with no capture frame, so a failure that is NOT
-                 * about instance ordering still reports its real diagnostic. */
-                e.n_file_scope_defs = tl_fsd_mark;
-                tl_deferred[i] = true;
-                items[i] = NULL;
-                continue;
-            }
-        }
-        if (!items[i]) { rc = -1; /* keep going to surface more diagnostics */ }
+        /* A waiting defn this form names is elaborated first, so the form
+         * sees its definition, as it did when the defn kept its place. */
+        tl_flush(&tl_ctx, forms[i], i);
+        tl_elab_slot(&tl_ctx, i, i);
 
+    tl_form_tail:
         /* Phase M7+: Each (load ...)-spliced file is conceptually its own
          * file, so reset has_defmodule at every file boundary -- not just
          * after stdlib defmodules.  Without this, a user program that
@@ -2865,23 +3424,21 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     /* symptom A, second chance: the defns whose bodies could not resolve a class
      * method the first time round.  Every instance in the unit is registered by
      * now.  No capture frame here -- a still-failing body reports for real. */
-    if (tl_deferred) {
-        e.in_stdlib_load = (stdlib_prefix > 0);
-        for (uint32_t i = 0; i < nforms; i++) {
-            if (i == stdlib_prefix) e.in_stdlib_load = false;
-            if (!tl_deferred[i]) continue;
-            e.toplevel_stmt = forms[i];
-            e.toplevel_dynamic = lang_span_is_dynamic(forms[i]->span);
-            e.toplevel_scheme  = lang_span_is_scheme(forms[i]->span);
-            items[i] = elab_form(&e, forms[i]);
-            e.toplevel_stmt = NULL;
-            e.toplevel_dynamic = false;
-            e.toplevel_scheme  = false;
-            if (!items[i]) rc = -1;
-        }
-        free(tl_deferred);
-        tl_deferred = NULL;
-    }
+    /* forward-call-to-generic-callee-typed-as-placeholder: the defns that
+     * waited for a lossy callee join them, in dependency order
+     * (fwd_gen_order_drain). */
+    fwd_gen_order_drain(&fgo, forms, tl_deferred, tl_retry_slot, tl_probe_slot,
+                        &tl_ctx);
+    free(tl_deferred);
+    tl_deferred = NULL;
+    free(tl_inst_from);
+    fwd_gen_order_free(&fgo);
+
+    /* class-and-generic-in-an-instance-less-module: a defn an imported module
+     * parked for want of an instance gets one last attempt now that every
+     * unit is in -- for real, so a genuinely instance-less program still
+     * reports TUR-E0015 against the defn that needs one. */
+    if (!elab_noinst_retry(&e, true)) rc = -1;
 
     /* class-superclasses SC2/SC4: every defclass and definstance in the unit is
      * registered now, so resolve the superclass preambles (a superclass may be
@@ -3032,6 +3589,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
             if (!mn) continue;
             Binding *b = scope_lookup(&e.global, mn);
             if (!b || b->is_from_stdlib) continue;
+            /* is_from_stdlib marks the AUTO-loaded band only; a stdlib file
+             * pulled in by an explicit (load "stdlib/arrow.tur") is still
+             * stdlib, and its fallback defns (arr, >>>) are deliberate. */
+            if (elab_file_is_stdlib(b->span.file_id)) continue;
             diag_emit_with_code(DIAG_WARNING, b->span, TUR_W0039_METHOD_DEFN_CLASH,
                 "free defn '%s' shares its name with the method '%s' of typeclass "
                 "'%s'; a bare (%s ...) dispatches to the method when the receiver "
@@ -3071,6 +3632,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * where the encoder consumes the verdict -- it unfolds only a TOTAL
      * measure. */
     rf_resolve_reflect_sites(&e);
+    /* loop-invariants-plan: a `:invariant` loop no definition analysed (a
+     * top-level lambda's) is declined out loud rather than left silent. */
+    li_decline_unanalyzed(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);
     /* SX8a: the JSON obligation dump.  Emitted here rather than from the

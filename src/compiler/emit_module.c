@@ -3,6 +3,7 @@
 #include "cps.h"        /* D5: cps_expr_contains_cloneable_shift (cloneable prelude gate) */
 #include "emit_dk_runtime.h" /* U7 step 1: relocated DK runtime prelude emitters */
 #include "emit_cps_ir.h"  /* cps-ir-to-c-backend: colored-fn emittable-set gate */
+#include "cps_ir.h"      /* E2: the fn_cps slot ABI (cps_ir_fncps_arg_ctype) */
 #include "globals.h"   /* Phase I: g_emit_abi_trace */
 #include "mangle.h"    /* tur_mangle_ident (constrained-byval witness thunks) */
 #include "mono_specs.h" /* VBM2b: by-value van Laarhoven lens mono spec registry */
@@ -382,6 +383,21 @@ static bool thunk_type_has_concrete_c_abi(Type t, bool result_pos) {
          * TUR_APPLYn_T cast that this shim is the other half of. */
         case TY_ANY:
             return true;
+        /* fnsan-ptr-void-fn-slot-word: a function-typed PARAMETER is the
+         * word in slot 0 (thunk_param_slot_c_name) and in every definition
+         * (ER4), so it has a concrete C ABI.  Declining sent every function
+         * whose parameter is a function to the generic word shim -- right
+         * for an erased consumer, but a typed caller casts slot 0 at the
+         * real result type: `double (*)(void *, int64_t)` against a shim
+         * returning the word.  A function-valued RESULT is admitted at
+         * type_c_name's spelling, `void *` for a boxed (fat) one and
+         * `int64_t` for a thin one, which is how the definitions return it
+         * and how a typed caller casts it (a captureless lambda returning a
+         * capturing closure, `void *__fn_14(int64_t)`, now gets the typed
+         * shim instead of the word shim a `(fn [ptr<void>] ptr<void>)`
+         * caller misread). */
+        case TY_FN:
+            return type_is_word_closure_slot(t);
         case TY_ADT:
             return t.as.adt_.def != NULL;
         case TY_APP:
@@ -529,8 +545,20 @@ void emit_vl_consumer_mono_name(Buf *out, const char *consumer_name,
  * fatshims -- agree with the thunks by construction.  Narrow aggregates
  * (<= 8 bytes) and results are untouched: both have working by-value
  * conventions. */
-static const char *thunk_param_slot_c_name(Type t) {
+const char *thunk_param_slot_c_name(Type t) {
     if (type_is_b4box_closure_slot(t)) return "int64_t";
+    if (type_is_word_closure_slot(t)) return "int64_t";
+    return type_c_name(t);
+}
+
+/* fnsan-ptr-void-fn-slot-word: the spelling a closure thunk's DEFINITION
+ * gives a parameter, where it differs from the slot.  A function-typed
+ * parameter is the word in both (ER4); an untyped `ptr<void>` is the word in
+ * the slot but `void *` in the definition, which ensure_closure_slot0_widen
+ * and the typed fatshims bridge. */
+const char *thunk_param_def_c_name(Type t) {
+    if (type_is_b4box_closure_slot(t)) return "int64_t";
+    if (t.kind == TY_FN && type_is_word_closure_slot(t)) return "int64_t";
     return type_c_name(t);
 }
 
@@ -1735,6 +1763,184 @@ char *ensure_fat_word_adapter(EmitCtx *ctx, const char *rc,
     return ensure_fat_word_adapter_ex(ctx, rc, pc, n, false);
 }
 
+/* Convert a scalar C value `v` of type `from` to type `to` across the word
+ * boundary the carriers use: a pointer through intptr_t, a float kind as its
+ * BITS (never a value conversion -- 7.1 must not become 7), every other
+ * integer by a plain cast.  Both spellings must pass word_adapter_scalar_ok. */
+void emit_scalar_word_conv(Buf *out, const char *from, const char *to,
+                           const char *v) {
+    size_t FL = strlen(from), TL = strlen(to);
+    bool fp = FL && from[FL - 1] == '*', tp = TL && to[TL - 1] == '*';
+    if (strcmp(from, to) == 0) { buf_puts(out, v); return; }
+    if (tp) {
+        if (fp) buf_printf(out, "(%s)(%s)", to, v);
+        else    buf_printf(out, "(%s)(intptr_t)(%s)", to, v);
+        return;
+    }
+    if (strcmp(to, "double") == 0) {
+        if (strcmp(from, "int64_t") == 0)
+            buf_printf(out, "((union { int64_t i; double d; }){ .i = (%s) }).d", v);
+        else
+            buf_printf(out, "(double)(%s)", v);
+        return;
+    }
+    if (strcmp(to, "float") == 0) {
+        if (strcmp(from, "int64_t") == 0)
+            buf_printf(out, "((union { uint32_t u; float f; }){ .u = (uint32_t)(%s) }).f", v);
+        else
+            buf_printf(out, "(float)(%s)", v);
+        return;
+    }
+    if (strcmp(to, "int64_t") == 0) {
+        if (fp)
+            buf_printf(out, "(int64_t)(intptr_t)(%s)", v);
+        else if (strcmp(from, "double") == 0)
+            buf_printf(out, "((union { double d; int64_t i; }){ .d = (%s) }).i", v);
+        else if (strcmp(from, "float") == 0)
+            buf_printf(out, "(int64_t)((union { float f; uint32_t u; }){ .f = (%s) }).u", v);
+        else
+            buf_printf(out, "(int64_t)(%s)", v);
+        return;
+    }
+    if (fp) buf_printf(out, "(%s)(intptr_t)(%s)", to, v);
+    else    buf_printf(out, "(%s)(%s)", to, v);
+}
+
+/* fnsan-poly-carrier-named-wrapper: a function stored into a carrier slot is
+ * called through the CONSUMER's signature (`arc (*)(void *, apc...)`), but it
+ * is defined at its own (`crc callee(void *, cpc...)`).  This adapter has the
+ * consumer's signature and calls the named callee at its own, converting each
+ * position across the word boundary (emit_scalar_word_conv).  `out` must be a
+ * file-scope buffer that lands after the callee's forward declaration.
+ * Returns NULL when no position differs or one is not a scalar or pointer
+ * (an aggregate is the spill shims' job).  The name is caller-owned. */
+char *ensure_named_call_adapter(EmitCtx *ctx, Buf *out, const char *callee,
+                                const char *crc, const char **cpc,
+                                const char *arc, const char **apc, uint8_t n) {
+    if (!callee) return NULL;
+    return ensure_call_adapter_ex(ctx, out, callee, crc, cpc, arc, apc, n);
+}
+
+static Type emit_abi_instantiate_type(const Type *t,
+                                      const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                      Arena *arena);
+/* A type instantiated through a matched spec's own bindings (the CALLEE's,
+ * not the active spec's that emit_resolve_type applies). */
+Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
+                            const struct EmitAbiSpecialization *spec) {
+    if (!t) return emit_type_from_kind(TY_UNKNOWN);
+    if (!spec || spec->n_bindings == 0) return *t;
+    return emit_abi_instantiate_type(t, spec->bindings, spec->n_bindings,
+                                     ctx->type_arena);
+}
+
+/* `callee` NULL: the callee is slot 0 of the fat box the adapter receives as
+ * its env -- a capturing closure's thunk, called with that box.  `callee`
+ * EMIT_ADAPT_BARE_SLOT1: slot 1 holds a BARE function (an EX_FN_TO_FAT box),
+ * called with no env. */
+const char EMIT_ADAPT_BARE_SLOT1[] = "<bare-slot1>";
+const char EMIT_ADAPT_FAT_SLOT1[] = "<fat-slot1>";
+char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
+                             const char *crc, const char **cpc,
+                             const char *arc, const char **apc, uint8_t n) {
+    if (!ctx || !out || !crc || !arc) return NULL;
+    bool bare1 = callee == EMIT_ADAPT_BARE_SLOT1;
+    /* fnsan-fat-closure-at-tyvar-sink: the env is a { adapter, handle }
+     * wrapper whose slot 1 is a FAT closure handle; call its slot 0 with it. */
+    bool fat1 = callee == EMIT_ADAPT_FAT_SLOT1;
+    if (bare1 || fat1) callee = NULL;
+    /* A `void` callee read through a word-returning slot: a nil-result
+     * function instantiating an erased `(fn [...] A)` (`bt-scope` over a body
+     * run for effect).  The adapter calls it and answers the zero word the
+     * carrier reads as nil.  The other direction is never asked for. */
+    bool void_callee = strcmp(crc, "void") == 0;
+    if (void_callee && strcmp(arc, "void") == 0) void_callee = false;
+    if ((!void_callee && !word_adapter_scalar_ok(crc)) || !word_adapter_scalar_ok(arc))
+        return NULL;
+    bool need = bare1 || strcmp(crc, arc) != 0;   /* bare: the env must go */
+    for (uint8_t i = 0; i < n; i++) {
+        /* A position spelled the same on both sides passes through as it
+         * is, a by-value aggregate included; only a CONVERTED one has to be
+         * a scalar or pointer. */
+        if (cpc[i] && apc[i] && strcmp(cpc[i], apc[i]) == 0 && *cpc[i]) continue;
+        if (!word_adapter_scalar_ok(cpc[i]) || !word_adapter_scalar_ok(apc[i]))
+            return NULL;
+        need = true;
+    }
+    if (!need) return NULL;
+    Buf nb; buf_init(&nb);
+    if (callee) {
+        buf_puts(&nb, "__tur_adapt_");
+        append_sanitized_c_token(&nb, callee);
+    } else {
+        /* Keyed on BOTH signatures: two thunks with one consumer signature
+         * and different own signatures need different adapters. */
+        buf_puts(&nb, bare1 ? "__tur_adapt1_" : fat1 ? "__tur_adapt2_" : "__tur_adapt0_");
+        append_sanitized_c_token(&nb, crc);
+        for (uint8_t i = 0; i < n; i++) {
+            buf_putc(&nb, '_');
+            append_sanitized_c_token(&nb, cpc[i]);
+        }
+        buf_puts(&nb, "_as");
+    }
+    buf_putc(&nb, '_');
+    append_sanitized_c_token(&nb, arc);
+    for (uint8_t i = 0; i < n; i++) {
+        buf_putc(&nb, '_');
+        append_sanitized_c_token(&nb, apc[i]);
+    }
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    buf_printf(out, "static %s %s(void *__e", arc, name);
+    for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s a%u", apc[i], (unsigned)i);
+    const char *bind = void_callee ? "" : " r =";
+    if (callee) {
+        buf_printf(out, ") {\n    %s%s %s(__e", void_callee ? "" : crc, bind, callee);
+    } else if (bare1) {
+        buf_printf(out, ") {\n    %s%s ((%s (*)(", void_callee ? "" : crc, bind, crc);
+        if (n == 0) buf_puts(out, "void");
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, i ? ", %s" : "%s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__e)[1])(");
+    } else if (fat1) {
+        buf_printf(out, ") {\n    void *__h = (void *)(intptr_t)((int64_t *)__e)[1];\n"
+                        "    %s%s ((%s (*)(void *", void_callee ? "" : crc, bind, crc);
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__h)[0])(__h");
+    } else {
+        buf_printf(out, ") {\n    %s%s ((%s (*)(void *", void_callee ? "" : crc, bind, crc);
+        for (uint8_t i = 0; i < n; i++) buf_printf(out, ", %s", cpc[i]);
+        buf_puts(out, "))(intptr_t)((int64_t *)__e)[0])(__e");
+    }
+    for (uint8_t i = 0; i < n; i++) {
+        char an[16];
+        snprintf(an, sizeof an, "a%u", (unsigned)i);
+        if (!bare1 || i) buf_puts(out, ", ");
+        if (strcmp(apc[i], cpc[i]) == 0) buf_puts(out, an);
+        else emit_scalar_word_conv(out, apc[i], cpc[i], an);
+    }
+    if (void_callee) {
+        buf_printf(out, ");\n    return (%s)0;\n}\n", arc);
+        return name;
+    }
+    buf_puts(out, ");\n    return ");
+    emit_scalar_word_conv(out, crc, arc, "r");
+    buf_puts(out, ";\n}\n");
+    return name;
+}
+
 char *ensure_variadic_rest_fatshim(EmitCtx *ctx, Type result_type,
                                    Type *param_types, uint8_t n_params,
                                    const char *rest_c) {
@@ -1863,8 +2069,10 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
                               : adt_app_byval_pass_by_ptr(rp);
             if (type_is_b4box_closure_slot(rp) && rp_pbp)
                 buf_printf(target, "const %s *", type_c_name(rp));
-            else
+            else if (type_is_b4box_closure_slot(rp))
                 buf_puts(target, type_c_name(rp));
+            else
+                buf_puts(target, thunk_param_def_c_name(rp));
         }
     }
     buf_puts(target, "))(intptr_t)((int64_t *)__e)[1])(");
@@ -1882,8 +2090,14 @@ char *ensure_typed_fatshim_ex(EmitCtx *ctx,
             /* by-value callee below the pbp threshold: deref the box. */
             buf_printf(target, "*(%s *)(intptr_t)a%u",
                        type_c_name(rp), (unsigned)i);
-        else
-            buf_printf(target, "a%u", (unsigned)i);
+        else {
+            /* fnsan-ptr-void-fn-slot-word: a `ptr<void>` word back to the
+             * pointer the bare function takes. */
+            char an[16];
+            snprintf(an, sizeof an, "a%u", (unsigned)i);
+            emit_scalar_word_conv(target, thunk_param_slot_c_name(rp),
+                                  thunk_param_def_c_name(rp), an);
+        }
     }
     buf_puts(target, widen ? "));\n}\n" : ");\n}\n");
     return name;
@@ -1905,9 +2119,24 @@ char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
                                  uint8_t n_params) {
     if (!ctx || !out || !thunk_sym) return NULL;
     const char *rc = type_c_name(result_type);
-    if (!narrow_int_carrier(rc)) return NULL;
+    bool narrow = narrow_int_carrier(rc);
+    /* fnsan-ptr-void-fn-slot-word: an untyped `ptr<void>` parameter is the
+     * word in slot 0 (type_is_word_closure_slot), but the thunk's definition
+     * keeps it `void *` -- the body reads it as a pointer, and its forward,
+     * spec and CPS declarations all say so.  The same wrapper that widens a
+     * narrow result converts each such word back to the pointer.  A
+     * function-typed parameter needs nothing: the definition already takes
+     * it as the word (ER4). */
+    bool word_ptr = false;
+    for (uint8_t i = 0; i < n_params && !word_ptr; i++)
+        word_ptr = param_types[i].kind == TY_PTR_VOID &&
+                   type_is_word_closure_slot(param_types[i]);
+    if (!narrow && !word_ptr) return NULL;
+    bool has_ret = result_type.kind != TY_NIL && result_type.kind != TY_NEVER;
+    const char *def_rc = has_ret ? rc : "void";
+    const char *slot_rc = has_ret ? thunk_result_slot_c_name(result_type) : "void";
     Buf nb; buf_init(&nb);
-    buf_puts(&nb, "__tur_widen_");
+    buf_puts(&nb, word_ptr ? "__tur_slot0_" : "__tur_widen_");
     append_sanitized_c_token(&nb, thunk_sym);
     buf_putc(&nb, '\0');
     char *name = strdup(nb.data);
@@ -1924,15 +2153,28 @@ char *ensure_closure_slot0_widen(EmitCtx *ctx, Buf *out, const char *thunk_sym,
     }
     ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
-    buf_printf(out, "static int64_t %s(void *__e", name);
+    buf_printf(out, "static %s %s(void *__e", slot_rc, name);
     for (uint8_t i = 0; i < n_params; i++)
         buf_printf(out, ", %s a%u", thunk_param_slot_c_name(param_types[i]),
                    (unsigned)i);
-    buf_printf(out, ") {\n    return (int64_t)((%s (*)(void *", rc);
+    buf_puts(out, ") {\n    ");
+    /* The cast widens a narrow result; any other result (a pointer, or a
+     * by-value aggregate, which C cannot cast to) is returned as it is. */
+    if (has_ret) {
+        if (strcmp(slot_rc, def_rc) != 0) buf_printf(out, "return (%s)", slot_rc);
+        else buf_puts(out, "return ");
+    }
+    buf_printf(out, "((%s (*)(void *", def_rc);
     for (uint8_t i = 0; i < n_params; i++)
-        buf_printf(out, ", %s", thunk_param_slot_c_name(param_types[i]));
+        buf_printf(out, ", %s", thunk_param_def_c_name(param_types[i]));
     buf_printf(out, "))(intptr_t)%s)(__e", thunk_sym);
-    for (uint8_t i = 0; i < n_params; i++) buf_printf(out, ", a%u", (unsigned)i);
+    for (uint8_t i = 0; i < n_params; i++) {
+        char an[16];
+        snprintf(an, sizeof an, "a%u", (unsigned)i);
+        buf_puts(out, ", ");
+        emit_scalar_word_conv(out, thunk_param_slot_c_name(param_types[i]),
+                              thunk_param_def_c_name(param_types[i]), an);
+    }
     buf_puts(out, ");\n}\n");
     return name;
 }
@@ -2025,6 +2267,46 @@ char *ensure_boxres_fatshim_ex(EmitCtx *ctx, Type result_type,
     }
     buf_puts(target, "    TUR_REGION_NOTE_WORDS(__b, sizeof *__b);\n");
     buf_puts(target, "    return (int64_t)(intptr_t)__b;\n}\n");
+    return name;
+}
+
+/* fnsan-nil-closure-into-erased-result: slot 0 of a { shim, handle } wrapper
+ * around a capturing closure that returns nil, for a slot whose consumers
+ * call it as `int64_t (*)(void *, int64_t...)` (its declared result is a type
+ * variable).  Calls the handle's own slot 0 at its `void` spelling and answers
+ * the zero word that reads back as nil.  All-word parameters only, as the
+ * boxres shim; anything else returns NULL and keeps the handle as it was. */
+char *ensure_nilres_fatshim(EmitCtx *ctx, Type *param_types, uint8_t n_params) {
+    if (!ctx) return NULL;
+    for (uint32_t i = 0; i < n_params; i++) {
+        const char *pc = type_c_name(param_types[i]);
+        if (!pc || strcmp(pc, "int64_t") != 0) return NULL;
+    }
+    char nm[64];
+    snprintf(nm, sizeof nm, "__tur_fatshim_nilres_fat%u", (unsigned)n_params);
+    char *name = strdup(nm);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__e", name);
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", int64_t a%u", (unsigned)i);
+    buf_puts(target, ") {\n");
+    buf_puts(target, "    void *__tur_inner = (void *)(intptr_t)((int64_t *)__e)[1];\n");
+    buf_puts(target, "    ((void (*)(void *");
+    for (uint32_t i = 0; i < n_params; i++) buf_puts(target, ", int64_t");
+    buf_puts(target, "))(intptr_t)((int64_t *)__tur_inner)[0])(__tur_inner");
+    for (uint32_t i = 0; i < n_params; i++) buf_printf(target, ", a%u", (unsigned)i);
+    buf_puts(target, ");\n    return 0;\n}\n");
     return name;
 }
 
@@ -2184,7 +2466,8 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
 /* E2 (fat-closure fn-value threading): emit a `<wrapper>__cps` twin for a
  * poly-wrap thunk `<wrapper>` (e.g. `__poly_1285`) that boxes an EFFECTFUL named
  * fn `inner_fn` (e.g. `cb`) into a `tur_poly_fn_t`.  The twin has the fat
- * closure's `fn_cps` ABI -- `(void *env, int64_t arg, struct DK *__kont)` -- and
+ * closure's `fn_cps` ABI -- `(void *env, int64_t a0, ..., struct DK *__kont)`,
+ * one word per argument of `inner_ty` -- and
  * DK-threads the call to `inner_fn`'s CPS entry, recovered from the direct->CPS
  * registry (the same channel E2a uses for a fn-value param).  So an effectful
  * callback invoked through a fat-closure param performs on the caller's
@@ -2192,8 +2475,9 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * is emitted ahead of the normal forward decls) and is registered by its own
  * addr-taken CPS-registration constructor.  Returns the malloc'd twin name, or
  * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
- * The caller restricts `inner_fn` to a plain `int`/`int64` arg AND result, whose
- * C spelling is exactly the `int64_t <fn>(int64_t)` this forward-declares. */
+ * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: `int`/`int64`,
+ * `cstr` and `ptr<void>` args (cps_ir_fncps_arg_ctype spells each) and an
+ * `int`/`int64`, `bool` or unit result -- exactly what this forward-declares. */
 /* Translate the enclosing frame's type bindings -- keyed by the CALLER's tyvar
  * names -- into bindings keyed by the CALLEE's, matched by constraint CLASS.
  *
@@ -2354,7 +2638,7 @@ char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
 }
 
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
-                                 const char *inner_fn) {
+                                 const char *inner_fn, const Type *inner_ty) {
     Buf nb; buf_init(&nb);
     buf_puts(&nb, wrapper_name);
     buf_puts(&nb, "__cps");
@@ -2378,17 +2662,102 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     /* thunk_typedefs precedes the normal forward decls, so declare inner_fn's
-     * direct entry ourselves (single int64 arg + int64 return -- the caller's
-     * gate guarantees an int-register-class arg/result).  `__tur_cps_fn` /
+     * direct entry ourselves: an int64 per argument and the result's own
+     * spelling (the caller's gate, cps_ir_fncps_sig_ok, admits only an
+     * int-register-class arg and an int / bool / unit result).  `__tur_cps_fn` /
      * `__tur_cps_lookup` / `dk_run` come from the DK runtime preamble, already
-     * emitted above this section. */
-    buf_printf(target, "static int64_t %s(int64_t);\n", inner_fn);
-    buf_printf(target, "static int64_t %s(void *__pwe, int64_t __pwx, struct DK *__kont) {\n", name);
+     * emitted above this section.  A one-argument twin keeps its original
+     * spelling (`__pwx`). */
+    uint32_t n = inner_ty->as.fn.arity;
+    TypeKind rk = inner_ty->as.fn.result_kind;
+    const char *rc = rk == TY_NIL ? "void" : rk == TY_BOOL ? "bool" : "int64_t";
+    Buf decl, prm, fwd, cast;
+    buf_init(&decl); buf_init(&prm); buf_init(&fwd); buf_init(&cast);
+    /* `fwd` passes each word on as it arrived (the registered `__cps` entry,
+     * or its word adapter for a pointer parameter, takes words); `dir` converts
+     * it to the direct entry's own C parameter type. */
+    Buf dir; buf_init(&dir);
+    for (uint32_t i = 0; i < n; i++) {
+        char an[24];
+        if (n == 1) snprintf(an, sizeof an, "__pwx");
+        else        snprintf(an, sizeof an, "__pwx%u", i);
+        const char *pc = cps_ir_fncps_arg_ctype((TypeKind)inner_ty->as.fn.arg_kinds[i]);
+        bool word = strcmp(pc, "int64_t") == 0;
+        buf_printf(&decl, "%s%s", i ? ", " : "", pc);
+        buf_printf(&prm, ", int64_t %s", an);
+        buf_printf(&fwd, "%s%s", i ? ", " : "", an);
+        if (word) buf_printf(&dir, "%s%s", i ? ", " : "", an);
+        else      buf_printf(&dir, "%s(%s)(intptr_t)%s", i ? ", " : "", pc, an);
+        buf_puts(&cast, "int64_t, ");
+    }
+    buf_putc(&decl, '\0'); buf_putc(&prm, '\0'); buf_putc(&fwd, '\0'); buf_putc(&cast, '\0');
+    buf_putc(&dir, '\0');
+    buf_printf(target, "static %s %s(%s);\n", rc, inner_fn, n ? decl.data : "void");
+    buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
     buf_puts(target, "    (void)__pwe;\n");
     buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)%s);\n", inner_fn);
-    buf_puts(target, "    if (__c) return ((int64_t(*)(int64_t, struct DK *))__c)(__pwx, __kont);\n");
-    buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(__pwx));\n", inner_fn);
+    buf_printf(target, "    if (__c) return ((int64_t(*)(%sstruct DK *))__c)(%s%s__kont);\n",
+               cast.data, fwd.data, n ? ", " : "");
+    if (rk == TY_NIL)
+        buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (intptr_t)0);\n",
+                   inner_fn, dir.data);
+    else
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(%s));\n", inner_fn, dir.data);
     buf_puts(target, "}\n");
+    buf_free(&decl); buf_free(&prm); buf_free(&fwd); buf_free(&cast); buf_free(&dir);
+    return name;
+}
+
+/* E2 (fat-closure fn-value threading), the capturing case: the `fn_cps` slot of
+ * a fat closure built from a capturing lambda of `n` word arguments (a unit
+ * result when `void_result`, else a word).  A closure's env box holds the
+ * lifted entry in slot 0, and a threadable capturing lambda is registered
+ * (emit_cps_ir.c, the E2a registration) as that entry -> its env-taking `__cps`
+ * twin.  So the slot dispatches on the box at run time -- whichever lambda built
+ * it -- exactly as the E2a fat dispatch does.  A miss (a lambda the registry
+ * does not know) is the call an empty slot would have made: slot 0 directly,
+ * its result delivered to the continuation.  Returns the dispatcher's malloc'd
+ * name; it is emitted once per shape. */
+char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result) {
+    Buf nb; buf_init(&nb);
+    buf_printf(&nb, "__tur_fncps_env%s%u", void_result ? "v" : "", n);
+    buf_putc(&nb, '\0');
+    char *name = strdup(nb.data);
+    buf_free(&nb);
+    if (!name) { fprintf(stderr, "tur: oom\n"); abort(); }
+    for (uint32_t i = 0; i < ctx->n_fatshim_names; i++)
+        if (strcmp(ctx->fatshim_names[i], name) == 0) return name;
+    if (ctx->n_fatshim_names >= ctx->cap_fatshim_names) {
+        uint32_t new_cap = ctx->cap_fatshim_names ? ctx->cap_fatshim_names * 2 : 8;
+        char **nn = (char **)realloc(ctx->fatshim_names, new_cap * sizeof(char *));
+        if (!nn) { fprintf(stderr, "tur: oom\n"); abort(); }
+        ctx->fatshim_names = nn;
+        ctx->cap_fatshim_names = new_cap;
+    }
+    ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
+    if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
+
+    Buf prm, ws, av; buf_init(&prm); buf_init(&ws); buf_init(&av);
+    for (uint32_t i = 0; i < n; i++) {
+        buf_printf(&prm, ", int64_t __pwx%u", i);
+        buf_puts(&ws, ", int64_t");
+        buf_printf(&av, ", __pwx%u", i);
+    }
+    buf_putc(&prm, '\0'); buf_putc(&ws, '\0'); buf_putc(&av, '\0');
+    Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
+    buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
+    buf_puts(target, "    int64_t __pwf = ((int64_t *)__pwe)[0];\n");
+    buf_puts(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)__pwf);\n");
+    buf_printf(target, "    if (__c) return ((int64_t(*)(void *%s, struct DK *))__c)(__pwe%s, __kont);\n",
+               ws.data, av.data);
+    if (void_result)
+        buf_printf(target, "    ((void(*)(void *%s))(intptr_t)__pwf)(__pwe%s);\n"
+                           "    return dk_run(__kont, (intptr_t)0);\n", ws.data, av.data);
+    else
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)((int64_t(*)(void *%s))(intptr_t)__pwf)(__pwe%s));\n",
+                   ws.data, av.data);
+    buf_puts(target, "}\n");
+    buf_free(&prm); buf_free(&ws); buf_free(&av);
     return name;
 }
 
@@ -3271,7 +3640,7 @@ static Type emit_abi_instantiate_type(const Type *t,
 /* nested-construct-byvalue: structurally unify a generic pattern (carrying named
  * tyvars, e.g. `(Result A B)`) against a concrete type (`Result__Option__cstr__cstr`,
  * a monomorphized struct, or `(Result (Option cstr) cstr)`) and collect the
- * tyvar -> concrete bindings.  Used to recover a #{Construct}'s payload arg types
+ * tyvar -> concrete bindings.  Used to recover a ^construct's payload arg types
  * from its (recovered by-value) concrete result, so a nested `(some (ok-val ...))`
  * built inside a constrained instance body lowers each construct seam to the
  * right by-value element type instead of the int64 carrier representative. */
@@ -5319,10 +5688,133 @@ static bool abi_type_is_int_collapse_of(const Type *c, const Type *t, int depth)
     return type_eq(*c, *t) != 0;
 }
 
+/* arrow-instance-closure-erased-to-words, the per-spec half: bind one class
+ * method parameter's element variables from a spec-resolved argument.  `decl`
+ * is the class's spelling -- `(a X Y)` for an arrow, or a bare variable -- and
+ * `act` the argument's type under the active spec.  Mirrors the elaborator's
+ * m7_collect_tyvar_bindings arrow arm: X binds to a one-argument function's
+ * parameter, Y to its result; the first binding of a name wins. */
+static void emit_abi_arrow_collect(const Type *decl, const Type *act,
+                                   AbiTypeBinding *b, uint8_t *n) {
+    if (!decl || !act) return;
+    if (decl->kind == TY_TYVAR) {
+        if (!decl->as.tyvar_.name || act->kind == TY_TYVAR ||
+            act->kind == TY_UNKNOWN)
+            return;
+        for (uint8_t i = 0; i < *n; i++)
+            if (b[i].name && strcmp(b[i].name, decl->as.tyvar_.name) == 0)
+                return;
+        if (*n < ABI_TYPE_BINDINGS_MAX) {
+            b[*n].name = decl->as.tyvar_.name;
+            b[*n].type = *act;
+            (*n)++;
+        }
+        return;
+    }
+    if (decl->kind == TY_APP && act->kind == TY_FN && act->as.fn.arity == 1 &&
+        decl->as.app.fn && decl->as.app.arg &&
+        decl->as.app.fn->kind == TY_APP && decl->as.app.fn->as.app.arg &&
+        decl->as.app.fn->as.app.fn &&
+        decl->as.app.fn->as.app.fn->kind == TY_TYVAR) {
+        Type aa = (act->as.fn.arg_full_types && act->as.fn.arg_full_types[0])
+                  ? *act->as.fn.arg_full_types[0]
+                  : emit_type_from_kind(act->as.fn.arg_kinds[0]);
+        Type ar = act->as.fn.result_full_type
+                  ? *act->as.fn.result_full_type
+                  : emit_type_from_kind(act->as.fn.result_kind);
+        emit_abi_arrow_collect(decl->as.app.fn->as.app.arg, &aa, b, n);
+        emit_abi_arrow_collect(decl->as.app.arg, &ar, b, n);
+    }
+}
+
+/* arrow-instance-closure-erased-to-words, the per-spec half.  A method of the
+ * `(->)`-headed instance called inside a generic -- `(.>>> f g)` in
+ * `(defn pipe [^Arrow A] [f : A g : A] : A ...)` -- was elaborated against the
+ * type variable `A`, so the elaborator's ground-binding step (the
+ * arrow-instance arm at the end of elab_method_call) had nothing to bind `b c
+ * d` from, and every spec of `pipe` called the instance's erased base: a
+ * closure of `int64_t (*)(void *, int64_t)` read back at `(fn [float] float)`
+ * -- right by register luck, a -fsanitize=function trap.  Under the active
+ * spec the arguments ARE concrete functions, so bind the class method's
+ * element variables from them exactly as the elaborator does for a direct
+ * call: `{a := (->), b, c, d}` in collection order.  Returns false unless
+ * every variable the method mentions grounds. */
+static bool emit_abi_arrow_spec_bindings(EmitCtx *ctx, const Expr *call,
+                                         AbiTypeBinding *out, uint8_t *n_out) {
+    *n_out = 0;
+    if (!ctx || !ctx->current_abi_specialization || !call ||
+        call->kind != EX_CALL || !call->as.call_.fn_binding)
+        return false;
+    const Expr *da = call->as.call_.dict_arg;
+    if (!da || da->kind != EX_DICT || !da->as.dict_.instance ||
+        da->as.dict_.method_name[0] == '\0')
+        return false;
+    const TypeClassInstance *inst = da->as.dict_.instance;
+    const TypeClass *tc = inst->typeclass;
+    if (!tc || tc->n_type_params != 1 || !tc->type_params ||
+        !tc->type_params[0] || inst->n_type_args < 1)
+        return false;
+    const Type *head = &inst->type_args[0];
+    if (!(head->kind == TY_FN && head->as.fn.arity == 0 &&
+          head->hkt_kind == KIND_ARROW2))
+        return false;
+    /* The class method behind the call, through the instance's parallel
+     * method_impls (the dict's method_name is the C-mangled spelling --
+     * `_gt_gt_gt` for `>>>` -- so a name compare would miss every operator). */
+    const TypeClassMethod *m = NULL;
+    for (uint8_t k = 0; k < tc->n_methods && k < inst->n_method_impls; k++)
+        if (inst->method_impls[k] && inst->method_impls[k]->binding ==
+                                         call->as.call_.fn_binding) {
+            m = &tc->methods[k];
+            break;
+        }
+    if (!m || m->n_params != call->as.call_.n_args) return false;
+    /* A call the elaborator grounded already carries `{a := (->), ...}`; one
+     * it could not ground carries at most the class variable, bound to the
+     * receiver's type variable. */
+    for (uint8_t k = 0; k < call->as.call_.n_abi_bindings; k++)
+        if (!emit_abi_type_has_any_tyvar(&call->as.call_.abi_bindings[k].type))
+            return false;
+    AbiTypeBinding eb[ABI_TYPE_BINDINGS_MAX];
+    uint8_t enb = 0;
+    for (uint32_t i = 0; i < m->n_params; i++) {
+        /* The argument reaches the instance's erased base wrapped for its
+         * `tur_poly_fn_t` parameter (EX_POLY_WRAP over `f : A`, typed
+         * `ptr<void>`); the type that says what the spec passes is the one
+         * under it. */
+        const Expr *ax = call->as.call_.args[i];
+        for (int d = 0; ax && d < 8; d++) {
+            if (ax->type.kind == TY_FN || ax->type.kind == TY_TYVAR) break;
+            if (ax->kind == EX_POLY_WRAP) ax = ax->as.poly_wrap_.inner;
+            else if (ax->kind == EX_FN_TO_FAT) ax = ax->as.fn_to_fat_.inner;
+            else if (ax->kind == EX_ASCRIBE) ax = ax->as.ascribe_.inner;
+            else break;
+        }
+        if (!ax) return false;
+        Type act = emit_resolve_type(ctx, ax->type);
+        if (act.kind != TY_FN) return false;
+        emit_abi_arrow_collect(&m->param_types[i], &act, eb, &enb);
+    }
+    if (enb == 0 || enb + 1 > ABI_TYPE_BINDINGS_MAX) return false;
+    for (uint8_t k = 0; k < enb; k++)
+        if (emit_abi_type_has_any_tyvar(&eb[k].type) ||
+            eb[k].type.kind == TY_UNKNOWN)
+            return false;
+    out[0].name = tc->type_params[0]->name;
+    out[0].type = *head;
+    for (uint8_t k = 0; k < enb; k++) out[1 + k] = eb[k];
+    *n_out = (uint8_t)(1 + enb);
+    return true;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
     if (!call || call->kind != EX_CALL || !call->as.call_.fn_binding) return;
+    AbiTypeBinding arrow_bindings[ABI_TYPE_BINDINGS_MAX];
+    uint8_t n_arrow_bindings = 0;
+    bool arrow_spec = !result_type_override &&
+        emit_abi_arrow_spec_bindings(ctx, call, arrow_bindings, &n_arrow_bindings);
     /* MB2.5 (constrained-hkt-forall-mode-b-plan): a class-method call on a
      * HIGHER-KINDED constrained variable inside a constrained rank-2 poly-fn (or
      * its dict-clone) is dispatched through the runtime dict param at emit
@@ -5369,7 +5861,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * box elimination Path B exists for. */
             bool vl_wide_mono_body = ctx->current_abi_specialization &&
                 ctx->current_abi_specialization->is_vl_wide_mono;
-            if (cls_is_hkt && enclosing_dispatches_cls && !vl_wide_mono_body)
+            if (cls_is_hkt && enclosing_dispatches_cls && !vl_wide_mono_body &&
+                !arrow_spec)
                 return;
         }
     }
@@ -5379,7 +5872,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * Mark that instance live now -- its method binding gets a noted carrier call
      * -- so emit_instance_is_live keeps it and the emitted spec body's reference
      * to the re-dispatched callee resolves at link time. */
-    if (ctx->current_abi_specialization && call->as.call_.dict_arg) {
+    if (ctx->current_abi_specialization && call->as.call_.dict_arg && !arrow_spec) {
         Type rresolved = {0}; const Expr *rdict = NULL;
         FnDef *redisp = NULL;
         bool redisp_is_hkt = false;
@@ -5450,7 +5943,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * by-value struct receiver inside a spec.  Attempt the by-value twin
      * redirect before the no-bindings early-return below. */
     if (emit_abi_try_byval_twin_redirect(ctx, call, items, n_items)) return;
-    /* nested-construct-byvalue (Gaps #2/#3): when a nested #{Construct} arg was
+    /* nested-construct-byvalue (Gaps #2/#3): when a nested ^construct arg was
      * already resolved top-down from its enclosing construct's by-value payload
      * field type (the result_type_override recursion below), the normal arg-scan
      * that reaches it afterwards must NOT re-register it -- its own abi_bindings
@@ -5474,6 +5967,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * matters; absence of bindings means there is nothing to specialize. */
     const AbiTypeBinding *bindings = call->as.call_.abi_bindings;
     uint8_t n_bindings = call->as.call_.n_abi_bindings;
+    if (arrow_spec) {
+        bindings = arrow_bindings;
+        n_bindings = n_arrow_bindings;
+    }
 
     /* constrained-defn-monomorphize: a constrained generic defn whose RETURN type
      * is a parametric container -- `(defn rec [A] [(C A)] ... : (Cons A) ...
@@ -5667,7 +6164,25 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * `(Vec A)` through `A -> (Option int)` -> `(Vec (Option int))`),
                  * so skip rehydration here; only a bare scalar/tyvar value is a
                  * genuine carrier collapse. */
-                if (bindings[i].name &&
+                /* generic-call-result-leaks-callee-tyvar-names: nor is a value
+                 * that is the ENCLOSING generic's own variable.  `(ok (f v))`
+                 * inside `result-map [A B E]` records ok's `B := E`; the name
+                 * `B` here is the CALLEE's, and the spec's `B := float` is
+                 * result-map's -- a different variable that happens to share
+                 * the spelling.  The composition below resolves the value
+                 * (`E := int`) by its own name, which is the answer. */
+                bool value_is_spec_tyvar = false;
+                if (bindings[i].type.kind == TY_TYVAR &&
+                    bindings[i].type.as.tyvar_.name) {
+                    for (uint8_t j = 0; j < aspec->n_bindings; j++)
+                        if (aspec->bindings[j].name &&
+                            strcmp(aspec->bindings[j].name,
+                                   bindings[i].type.as.tyvar_.name) == 0) {
+                            value_is_spec_tyvar = true;
+                            break;
+                        }
+                }
+                if (bindings[i].name && !value_is_spec_tyvar &&
                     bindings[i].type.kind != TY_APP &&
                     strcmp(type_c_name(bindings[i].type), "int64_t") == 0) {
                     for (uint8_t j = 0; j < aspec->n_bindings; j++) {
@@ -5734,7 +6249,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     }
 
     if (!bindings || n_bindings == 0) {
-        /* M7 layer-4: a 0-arg `#{Construct}` (`(none)`) in an HKT
+        /* M7 layer-4: a 0-arg `^construct` (`(none)`) in an HKT
          * instance-method body has no abi_bindings of its own, but when scanned
          * inside an active by-value HKT instance-method spec the
          * construct_recovered_byvalue path below recovers it by value from the
@@ -6618,7 +7133,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         }
     }
     /* end-to-end-monomorphization (M2 completion, primitive-payload Result/
-     * Option at the typeclass-dispatch boundary): a #{Construct} constructor
+     * Option at the typeclass-dispatch boundary): a ^construct constructor
      * whose RESULT is a concrete by-value (non-heap) struct -- e.g.
      * `(ok v) : (Result int cstr)` -- should construct the struct directly
      * instead of returning the int64 carrier box and forcing a
@@ -6655,7 +7170,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * pinned the return to the same parametric family promote. */
     bool construct_recovered_byvalue = false;
     {
-        /* CONV-S1: a `#{Construct}` template whose struct lowered to a record
+        /* CONV-S1: a `^construct` template whose struct lowered to a record
          * defadt has a constructor-CALL body (`(Option false x)`, EX_CALL with a
          * resolved ctor), not an EX_MAKE_STRUCT -- `make-struct` rewrote to the
          * auto-bound ctor call.  Recognize both so the by-value result recovery
@@ -6665,7 +7180,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             && (fd->body->kind == EX_MAKE_STRUCT
                 || (fd->body->kind == EX_CALL && fd->body->as.call_.ctor))
             && fd->binding && fd->binding->is_construct_template;
-        /* nested-construct-byvalue (Gaps #2/#3/#5): a nested #{Construct} arg
+        /* nested-construct-byvalue (Gaps #2/#3/#5): a nested ^construct arg
          * whose concrete by-value result type was threaded top-down from the
          * enclosing construct's recovered payload field type (via
          * result_type_override).  Use the override directly -- the construct's
@@ -6770,7 +7285,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
             }
         }
-        /* Phase 5 carrier-bridge deletion: monomorphize a #{Construct} at a
+        /* Phase 5 carrier-bridge deletion: monomorphize a ^construct at a
          * plain call site whose own bindings (or grounded call->type) resolve to
          * a concrete by-value non-heap struct -- `(some 42)` => `(Option int)`. */
         if (!construct_recovered_byvalue && body_is_construct && !borrow_path &&
@@ -6975,7 +7490,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * Other ABI changes (different opaque ints, pointers, type-apps) keep
      * the carrier emit, which compiles cleanly through the int64 path. */
     /* M2b: the same monomorphization-vs-carrier choice applies to
-     * `#{Construct}` polymorphic defns whose body is a `(make-struct …)`.
+     * `^construct` polymorphic defns whose body is a `(make-struct …)`.
      * Their carrier-emit body is synthesized in emit_fns.c to the same
      * `return tur_box_ok((int64_t)(intptr_t)x);` shape the inline-C body
      * produces, so for ABI-neutral specs (no by-value struct in args or
@@ -7013,7 +7528,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 needs_byvalue_spec = true; break;
             }
             /* M5 residual-straddle (docs/artifacts/m5-residual-straddle-
-             * retirement.md): a defn carrying `#{ByVal}` opts into
+             * retirement.md): a defn carrying `^byval` opts into
              * by-value spec interning for *any* aggregate arg type that
              * resolves to a concrete struct application -- including
              * TY_APP (e.g. `(Vec int)` after Path A substitution).  The
@@ -7045,7 +7560,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 }
             }
         }
-        /* zero-arg-construct-ground-byvalue-return: a 0-arg `#{Construct}`
+        /* zero-arg-construct-ground-byvalue-return: a 0-arg `^construct`
          * constructor (`(none)`) called in a ground by-value context resolves
          * `result_type` to a concrete parameterised TY_APP (`(Option
          * BoundedIdx)`) with a real by-value codegen layout -- NOT the int64
@@ -7183,7 +7698,7 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
     emit_abi_record_specialized_call(ctx, call, spec->clone_name);
 
     /* nested-construct-byvalue (Gaps #2/#3): thread each by-value payload field
-     * type down onto a nested #{Construct} argument, so `(ok (some ...))` builds
+     * type down onto a nested ^construct argument, so `(ok (some ...))` builds
      * `Option__cstr` inside `Result__Option__cstr__cstr`.  arg_types[i] already
      * holds the concrete field type (recovered above from the result); recurse
      * BEFORE the normal arg-scan reaches the nested construct so the correct
@@ -7611,7 +8126,7 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
     }
 }
 
-/* CONV-S1 seam 4 (a): register the #{Construct} calls in the VALUE-TAIL of `e`
+/* CONV-S1 seam 4 (a): register the ^construct calls in the VALUE-TAIL of `e`
  * (descending through ascribe / if-then-else / do-last / let-body) with
  * `override` as their result type.  A binding-less return-only-poly construct
  * (`(none)` / `(empty)`) carries an abstract `(Option A)` type of its own; only
@@ -7759,10 +8274,10 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
                     ctx->current_abi_specialization->n_bindings,
                     items, n_items);
             }
-            /* nested-construct-byvalue (Gap #5): if this call is a #{Construct}
+            /* nested-construct-byvalue (Gap #5): if this call is a ^construct
              * that stayed on the int64 carrier (no by-value spec recorded for it
              * under the active outer), suppress by-value promotion of any nested
-             * #{Construct} argument while scanning its args -- the carrier
+             * ^construct argument while scanning its args -- the carrier
              * consumer expects the int64 carrier, not a by-value aggregate. */
             bool saved_suppress = ctx->abi_scan_suppress_construct_byvalue;
             if (e->as.call_.fn_binding &&
@@ -8093,7 +8608,7 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         }
         /* abi-scan-misses-effect-operands: the effect family had no arms, so a
-         * generic or #{Construct} call sitting in a `perform` ARGUMENT or in a
+         * generic or ^construct call sitting in a `perform` ARGUMENT or in a
          * `resume` VALUE was never interned -- `(perform (EO (some 5)))` in a
          * colored function emitted the unspecialized `some(...)` (an implicit
          * declaration) and a handler clause's `(resume k (unwrap-or o 0))`
@@ -8214,7 +8729,7 @@ static const char *abi_trace_clone_name(const EmitCtx *ctx, const Expr *call) {
     }
     const Binding *b = call->kind == EX_CALL ? call->as.call_.fn_binding : NULL;
     /* Mirror emit_call_name / find_matched_abi_spec: a 0-arg or N-arg
-     * `#{Construct}` callee is disambiguated only by the per-Expr* recording
+     * `^construct` callee is disambiguated only by the per-Expr* recording
      * above, never by the structural by-args match (which cannot tell a
      * by-value spec from the carrier base for a constructor). */
     if (call->kind == EX_CALL && b &&
@@ -9190,6 +9705,54 @@ static void emit_abi_forward_decl(Buf *out, const EmitAbiSpecialization *spec) {
     free(_spec_ret);
 }
 
+/* r7rs-conformance-program-emits-megabytes-of-c: a string -> entry-index hash
+ * over the emit side tables below.  Their entries stay where they are, in
+ * insertion order -- only the linear strcmp scan per lookup is replaced, which
+ * was a quarter of `emit-c` on a program of a few thousand functions. */
+typedef struct { uint32_t *slot; uint32_t cap; } StrIdx;   /* slot: index + 1; 0 = empty */
+typedef const char *(*StrIdxKey)(uint32_t i);
+
+static uint32_t stridx_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    for (; *s; s++) { h ^= (uint8_t)*s; h *= 16777619u; }
+    return h;
+}
+
+static void stridx_clear(StrIdx *x) { free(x->slot); x->slot = NULL; x->cap = 0; }
+
+static int64_t stridx_find(const StrIdx *x, const char *k, StrIdxKey key) {
+    if (!x->cap || !k) return -1;
+    uint32_t m = x->cap - 1, h = stridx_hash(k) & m;
+    while (x->slot[h]) {
+        uint32_t i = x->slot[h] - 1;
+        if (strcmp(key(i), k) == 0) return i;
+        h = (h + 1) & m;
+    }
+    return -1;
+}
+
+/* Index entry `i`, the newest of `n` entries (keys are unique). */
+static void stridx_add(StrIdx *x, uint32_t i, uint32_t n, StrIdxKey key) {
+    if ((uint64_t)n * 2 > x->cap) {
+        uint32_t nc = x->cap ? x->cap : 256;
+        while ((uint64_t)n * 2 > nc) nc *= 2;
+        uint32_t *ns = (uint32_t *)calloc(nc, sizeof *ns);
+        if (!ns) { stridx_clear(x); return; }   /* OOM: unindexed, lookups scan */
+        free(x->slot);
+        x->slot = ns;
+        x->cap = nc;
+        for (uint32_t j = 0; j < n; j++) {
+            uint32_t h = stridx_hash(key(j)) & (nc - 1);
+            while (x->slot[h]) h = (h + 1) & (nc - 1);
+            x->slot[h] = j + 1;
+        }
+        return;
+    }
+    uint32_t h = stridx_hash(key(i)) & (x->cap - 1);
+    while (x->slot[h]) h = (h + 1) & (x->cap - 1);
+    x->slot[h] = i + 1;
+}
+
 /* gcc14-int-conversion (carrier-representation-tracking): ground-truth side
  * table of emitted param C-types, keyed by emitted C name.  See emit_internal.h.
  * File-scope (like g_prog / g_cps_path); emit_sig_reset() clears it per program. */
@@ -9206,6 +9769,18 @@ typedef struct EmitSigEntry {
 static EmitSigEntry *g_sig_tab;
 static uint32_t      g_sig_tab_n;
 static uint32_t      g_sig_tab_cap;
+static StrIdx        g_sig_idx;
+static const char *sig_key(uint32_t i) { return g_sig_tab[i].cname; }
+
+/* The entry for `cname`, or NULL. */
+static EmitSigEntry *emit_sig_find(const char *cname) {
+    int64_t i = stridx_find(&g_sig_idx, cname, sig_key);
+    if (i >= 0) return &g_sig_tab[i];
+    if (g_sig_idx.cap) return NULL;   /* indexed: a miss is a miss */
+    for (uint32_t j = 0; j < g_sig_tab_n; j++)
+        if (strcmp(g_sig_tab[j].cname, cname) == 0) return &g_sig_tab[j];
+    return NULL;
+}
 
 /* Superseded ret_ctype strings, retired rather than freed.
  *
@@ -9249,6 +9824,7 @@ void emit_sig_reset(void) {
     g_sig_tab = NULL;
     g_sig_tab_n = 0;
     g_sig_tab_cap = 0;
+    stridx_clear(&g_sig_idx);
     for (uint32_t i = 0; i < g_sig_retired_n; i++) free(g_sig_retired[i]);
     free(g_sig_retired);
     g_sig_retired = NULL;
@@ -9257,8 +9833,8 @@ void emit_sig_reset(void) {
 }
 
 static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) {
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0) return &g_sig_tab[i];
+    EmitSigEntry *found = emit_sig_find(cname);
+    if (found) return found;
     if (g_sig_tab_n == g_sig_tab_cap) {
         uint32_t nc = g_sig_tab_cap ? g_sig_tab_cap * 2 : 64;
         EmitSigEntry *nt = (EmitSigEntry *)realloc(g_sig_tab, nc * sizeof(EmitSigEntry));
@@ -9272,6 +9848,7 @@ static EmitSigEntry *emit_sig_find_or_add(const char *cname, uint32_t n_params) 
     e->param_ctypes = n_params
         ? (char **)calloc(n_params, sizeof(char *)) : NULL;
     e->ret_ctype = NULL;   /* S1: a fresh entry has no recorded return type yet */
+    stridx_add(&g_sig_idx, g_sig_tab_n - 1, g_sig_tab_n, sig_key);
     return e;
 }
 
@@ -9318,18 +9895,16 @@ void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
 
 const char *emit_sig_lookup_ret_ctype(const char *cname) {
     if (!cname) return NULL;
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0) return g_sig_tab[i].ret_ctype;
-    return NULL;
+    const EmitSigEntry *e = emit_sig_find(cname);
+    return e ? e->ret_ctype : NULL;
 }
 
 /* proper-tail-calls T2b: the recorded arity, or -1 when `cname` has no
  * forward declaration on record. */
 int emit_sig_lookup_n_params(const char *cname) {
     if (!cname) return -1;
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0) return (int)g_sig_tab[i].n_params;
-    return -1;
+    const EmitSigEntry *e = emit_sig_find(cname);
+    return e ? (int)e->n_params : -1;
 }
 
 /* proper-tail-calls T2b (docs/archive/proper-tail-calls-plan.md, T-D2):
@@ -9432,10 +10007,8 @@ void emit_musttail_self_pin(Buf *body, int indent, const char *cname) {
 
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx) {
     if (!cname) return NULL;
-    for (uint32_t i = 0; i < g_sig_tab_n; i++)
-        if (strcmp(g_sig_tab[i].cname, cname) == 0)
-            return (idx < g_sig_tab[i].n_params) ? g_sig_tab[i].param_ctypes[idx] : NULL;
-    return NULL;
+    const EmitSigEntry *e = emit_sig_find(cname);
+    return (e && idx < e->n_params) ? e->param_ctypes[idx] : NULL;
 }
 
 /* gcc14-int-conversion (carrier-representation-tracking): the local-variable /
@@ -9446,6 +10019,17 @@ typedef struct EmitLocalVarEntry { char *cname; char *ctype; } EmitLocalVarEntry
 static EmitLocalVarEntry *g_lv_tab;
 static uint32_t           g_lv_tab_n;
 static uint32_t           g_lv_tab_cap;
+static StrIdx             g_lv_idx;
+static const char *lv_key(uint32_t i) { return g_lv_tab[i].cname; }
+
+static EmitLocalVarEntry *emit_localvar_find(const char *cname) {
+    int64_t i = stridx_find(&g_lv_idx, cname, lv_key);
+    if (i >= 0) return &g_lv_tab[i];
+    if (g_lv_idx.cap) return NULL;
+    for (uint32_t j = 0; j < g_lv_tab_n; j++)
+        if (strcmp(g_lv_tab[j].cname, cname) == 0) return &g_lv_tab[j];
+    return NULL;
+}
 
 /* inline-c-option-carrier-box-leaks: the OWNED-CARRIER side table.
  *
@@ -9554,6 +10138,7 @@ void emit_localvar_reset(void) {
     g_lv_tab = NULL;
     g_lv_tab_n = 0;
     g_lv_tab_cap = 0;
+    stridx_clear(&g_lv_idx);
     for (uint32_t i = 0; i < g_own_tab_n; i++) free(g_own_tab[i]);
     free(g_own_tab);
     g_own_tab = NULL;
@@ -9568,12 +10153,12 @@ void emit_localvar_reset(void) {
 
 void emit_localvar_record_ctype(const char *cname, const char *ctype) {
     if (!cname || !ctype) return;
-    for (uint32_t i = 0; i < g_lv_tab_n; i++)
-        if (strcmp(g_lv_tab[i].cname, cname) == 0) {
-            free(g_lv_tab[i].ctype);
-            g_lv_tab[i].ctype = strdup(ctype);
-            return;
-        }
+    EmitLocalVarEntry *found = emit_localvar_find(cname);
+    if (found) {
+        free(found->ctype);
+        found->ctype = strdup(ctype);
+        return;
+    }
     if (g_lv_tab_n == g_lv_tab_cap) {
         uint32_t nc = g_lv_tab_cap ? g_lv_tab_cap * 2 : 256;
         EmitLocalVarEntry *nt =
@@ -9585,13 +10170,13 @@ void emit_localvar_record_ctype(const char *cname, const char *ctype) {
     g_lv_tab[g_lv_tab_n].cname = strdup(cname);
     g_lv_tab[g_lv_tab_n].ctype = strdup(ctype);
     g_lv_tab_n++;
+    stridx_add(&g_lv_idx, g_lv_tab_n - 1, g_lv_tab_n, lv_key);
 }
 
 const char *emit_localvar_lookup_ctype(const char *cname) {
     if (!cname) return NULL;
-    for (uint32_t i = 0; i < g_lv_tab_n; i++)
-        if (strcmp(g_lv_tab[i].cname, cname) == 0) return g_lv_tab[i].ctype;
-    return NULL;
+    const EmitLocalVarEntry *e = emit_localvar_find(cname);
+    return e ? e->ctype : NULL;
 }
 
 /* S1 (jit-engine-plan section 4): see emit_internal.h. */
@@ -10705,6 +11290,7 @@ static bool adt_is_inline_byval_dep(const Expr **items, uint32_t n_items,
  * written against, and repeating a system header is harmless. */
 #include "runtime/region_rt_embed.h"
 #include "runtime/experiments.h"   /* experiment_warn_if_used */
+#include "runtime/stack_overflow.h" /* the deep stack's overflow test + message, shared with the JIT */
 
 static void emit_embedded_runtime_source(Buf *out, const char *what,
                                          const unsigned char *src) {
@@ -12160,8 +12746,12 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * interpreter's, including its "value of that type" fallback: the message
      * is user-visible and a fixture can assert it on either back end, so the
      * two must agree word for word rather than approximately. */
+    /* No forward declaration of __tur_any_type_name: the any registry's
+     * definition (or, in a unit linked against the runtime archive, its
+     * non-static prototype) is always emitted ahead of this, and a `static`
+     * one here clashed with the archive's in a plain Turmeric program that
+     * makes a dynamic call (turmeric-module-cannot-call-a-scheme-procedure-value). */
     buf_puts(out,
-        "static const char *__tur_any_type_name(int64_t tag);\n"
         "static inline const char *__tur_dyn_argname(int64_t __t) {\n"
         "    switch (__t) {\n"
         "    case TUR_DYNTAG_INT:   return \"int\";\n"
@@ -12718,6 +13308,198 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    tur_tb_sentinel_box = TUR_TAG(TUR_TB_BOUNCE, 0);\n"
         "    return &tur_tb_sentinel_box;\n"
         "}\n");
+}
+
+/* r7rs-deep-stack-size-not-configurable: the deep stack's size.  1 GiB on a
+ * 64-bit host (64 MiB on 32-bit) unless TUR_MAIN_STACK_MB names another
+ * number of MiB -- the same variable the JIT's entry stack reads
+ * (src/jit_engine.c).  `*asked` says the size came from the variable, so a
+ * thread that cannot be made that size is reported rather than quietly
+ * falling back to the default 8 MiB stack.  A value that is not a positive
+ * number is reported and ignored. */
+static const char TUR_DEEP_SIZE_FN[] =
+    "static size_t tur_deep_size(int *asked) {\n"
+    "    size_t sz = sizeof(void *) >= 8 ? ((size_t)1 << 30) : ((size_t)64 << 20);\n"
+    "    const char *e = getenv(\"TUR_MAIN_STACK_MB\");\n"
+    "    *asked = 0;\n"
+    "    if (e && *e) {\n"
+    "        char *end = 0;\n"
+    "        unsigned long long mb = strtoull(e, &end, 10);\n"
+    "        if (end && *end == 0 && mb > 0 && mb <= (unsigned long long)((size_t)-1 >> 20)) {\n"
+    "            sz = (size_t)mb << 20; *asked = 1;\n"
+    "        } else {\n"
+    "            fprintf(stderr, \"tur: ignoring TUR_MAIN_STACK_MB=%s (want a positive number of MiB)\\n\", e);\n"
+    "        }\n"
+    "    }\n"
+    "    return sz;\n"
+    "}\n"
+    "static void tur_deep_size_failed(size_t sz) {\n"
+    "    fprintf(stderr, \"tur: cannot make a %llu MiB stack for main (TUR_MAIN_STACK_MB); \"\n"
+    "                    \"running it on the default stack\\n\", (unsigned long long)(sz >> 20));\n"
+    "}\n";
+
+/* r7rs-deep-recursion-segfaults-silently: a Scheme program's frames are C
+ * frames, and SICP 1.2.1's linear recursion (`(sum-to 1000000)`) ran off the
+ * 8 MiB main-thread stack with no message at all -- exit 139, nothing
+ * printed.  So a `#lang r7rs` program's `main` re-enters itself on a thread
+ * with a 1 GiB stack (address space; only what the recursion touches is
+ * committed) and the process exits from there, as returning from main would
+ * have.  That thread also carries a SIGSEGV/SIGBUS handler on an alternate
+ * stack: a fault just past the stack's low end prints `stack overflow:
+ * recursion too deep` before the signal takes the process down as before.
+ *
+ * After the collector's paste.  The new thread takes over the old one's
+ * collector record (tur_gc_hand_over / tur_gc_take_over, r7gc.c), so the
+ * old thread's thread-local roots stay and the registry still holds one
+ * record; the collector and call/cc read the new thread's own stack bounds
+ * (both ask pthreads for the calling thread).  Windows has its own branch
+ * (CreateThread).  Not under `tur jit` (`__MIRC__`), whose engine already runs main on a sized thread
+ * (TUR_MAIN_STACK_MB there too).  In a split build it is written into the
+ * program unit only (emit_split.h).  A failure to make the thread is not an
+ * error -- main just runs where it is, as before, with a line on stderr when
+ * TUR_MAIN_STACK_MB asked for the size. */
+static void emit_deep_stack_runtime(Buf *out) {
+    buf_puts(out,
+        "#if !defined(_WIN32) && !defined(__MIRC__)\n"
+        "#include <signal.h>\n"
+        "#include <pthread.h>\n"
+        "#include <unistd.h>\n"
+        "#include <stdio.h>\n"
+        "#include <stdlib.h>\n"
+        "int main(int, char **);\n"
+        "typedef struct { int argc; char **argv; unsigned char *lo; void *gc; } tur_deep_state_t;\n");
+    buf_puts(out, TUR_DEEP_SIZE_FN);
+    buf_puts(out,
+        "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
+        "static void tur_deep_fault(int sig, siginfo_t *si, void *uc) {\n"
+        "    (void)uc;\n"
+        "    unsigned char *a = (unsigned char *)si->si_addr, *lo = tur_deep_state()->lo;\n"
+        "    if (" TUR_STACK_OVERFLOW_STR(TUR_STACK_FAULT_IS_OVERFLOW(a, lo)) ") {\n"
+        "        static const char m[] = \"" TUR_STACK_OVERFLOW_MSG "\\n\";\n"
+        "        if (write(2, m, sizeof m - 1) < 0) { }\n"
+        "    }\n"
+        "    signal(sig, SIG_DFL);   /* the fault repeats on return, unhandled */\n"
+        "}\n"
+        "static void *tur_deep_run(void *p) {\n"
+        "    tur_deep_state_t *s = (tur_deep_state_t *)p;\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    tur_gc_take_over(s->gc);   /* the old thread's record, roots and all */\n"
+        "#endif\n"
+        "#if defined(__APPLE__)\n"
+        "    s->lo = (unsigned char *)pthread_get_stackaddr_np(pthread_self()) - pthread_get_stacksize_np(pthread_self());\n"
+        "#elif defined(__GLIBC__)\n"
+        "    {\n"
+        "        extern int pthread_getattr_np(pthread_t, pthread_attr_t *);\n"
+        "        pthread_attr_t a; void *addr = 0; size_t sz = 0;\n"
+        "        if (pthread_getattr_np(pthread_self(), &a) == 0) {\n"
+        "            if (pthread_attr_getstack(&a, &addr, &sz) == 0) s->lo = (unsigned char *)addr;\n"
+        "            pthread_attr_destroy(&a);\n"
+        "        }\n"
+        "    }\n"
+        "#endif\n"
+        "    static unsigned char tur_deep_alt[65536];\n"
+        "    stack_t ss; ss.ss_sp = tur_deep_alt; ss.ss_size = sizeof tur_deep_alt; ss.ss_flags = 0;\n"
+        "    if (s->lo && sigaltstack(&ss, NULL) == 0) {\n"
+        "        struct sigaction sa; memset(&sa, 0, sizeof sa);\n"
+        "        sa.sa_sigaction = tur_deep_fault; sa.sa_flags = SA_SIGINFO | SA_ONSTACK;\n"
+        "        sigemptyset(&sa.sa_mask);\n"
+        "        sigaction(SIGSEGV, &sa, NULL);\n"
+        "        sigaction(SIGBUS, &sa, NULL);\n"
+        "    }\n"
+        "    exit(main(s->argc, s->argv));\n"
+        "}\n"
+        "/* 1 when main ran on the big stack (the process has exited); 0 to run here. */\n"
+        "static __attribute__((unused)) int tur_deep_enter(int argc, char **argv) {\n"
+        "    static int tur_deep_entered;\n"
+        "    if (tur_deep_entered) return 0;\n"
+        "    tur_deep_entered = 1;\n"
+        "    if (getenv(\"TUR_NO_DEEP_STACK\")) return 0;\n"
+        "    tur_deep_state_t *s = tur_deep_state();\n"
+        "    s->argc = argc; s->argv = argv;\n"
+        "    pthread_attr_t at;\n"
+        "    if (pthread_attr_init(&at) != 0) return 0;\n"
+        "    int asked;\n"
+        "    size_t sz = tur_deep_size(&asked);\n"
+        "    pthread_t t;\n"
+        "    int ok = pthread_attr_setstacksize(&at, sz) == 0;\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    if (ok) { tur_gc_park(); s->gc = tur_gc_hand_over(); }   /* parked in the join, done with the heap */\n"
+        "#endif\n"
+        "    /* Unwrapped: the new thread takes this one's record, not a new one. */\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "    ok = ok && tur_gc_raw_pthread_create(&t, &at, tur_deep_run, s) == 0;\n"
+        "#else\n"
+        "    ok = ok && pthread_create(&t, &at, tur_deep_run, s) == 0;\n"
+        "#endif\n"
+        "    pthread_attr_destroy(&at);\n"
+        "    if (!ok) {\n"
+        "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
+        "        tur_gc_take_over(s->gc);   /* no thread: the record comes back here */\n"
+        "#endif\n"
+        "        if (asked) tur_deep_size_failed(sz);\n"
+        "        return 0;\n"
+        "    }\n"
+        "    (pthread_join)(t, NULL);   /* unwrapped; tur_deep_run exits the process */\n"
+        "    return 1;\n"
+        "}\n"
+        "#define TUR_DEEP_STACK_ENTER(argc, argv) do { if (tur_deep_enter((argc), (argv))) return 0; } while (0)\n");
+    buf_puts(out,
+        /* Windows: the same move with the Win32 calls -- no pthreads needed,
+         * and no collector to register with (TUR_GC_ON is 0 there).  The
+         * stack is a RESERVATION (committed as touched), and call/cc reads
+         * the calling thread's TEB, so it follows the move.  The overflow
+         * message comes from a vectored handler for EXCEPTION_STACK_OVERFLOW;
+         * SetThreadStackGuarantee leaves it room to run.  The exception then
+         * goes on unhandled, as before. */
+        "#elif defined(_WIN32) && !defined(__MIRC__)\n"
+        "#include <windows.h>\n"
+        "#include <stdio.h>\n"
+        "#include <stdlib.h>\n"
+        "int main(int, char **);\n"
+        "typedef struct { int argc; char **argv; } tur_deep_state_t;\n");
+    buf_puts(out, TUR_DEEP_SIZE_FN);
+    buf_puts(out,
+        "static tur_deep_state_t *tur_deep_state(void) { static tur_deep_state_t tur_deep_st; return &tur_deep_st; }\n"
+        "static LONG WINAPI tur_deep_fault(EXCEPTION_POINTERS *ep) {\n"
+        "    if (ep && ep->ExceptionRecord && ep->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {\n"
+        "        static const char m[] = \"" TUR_STACK_OVERFLOW_MSG "\\n\";\n"
+        "        DWORD w = 0;\n"
+        "        WriteFile(GetStdHandle(STD_ERROR_HANDLE), m, (DWORD)(sizeof m - 1), &w, NULL);\n"
+        "    }\n"
+        "    return EXCEPTION_CONTINUE_SEARCH;\n"
+        "}\n"
+        "static DWORD WINAPI tur_deep_run(LPVOID p) {\n"
+        "    tur_deep_state_t *s = (tur_deep_state_t *)p;\n"
+        "    ULONG g = 65536;\n"
+        "    if (SetThreadStackGuarantee(&g)) AddVectoredExceptionHandler(1, tur_deep_fault);\n"
+        "    exit(main(s->argc, s->argv));\n"
+        "    return 0;\n"
+        "}\n"
+        "static __attribute__((unused)) int tur_deep_enter(int argc, char **argv) {\n"
+        "    static int tur_deep_entered;\n"
+        "    if (tur_deep_entered) return 0;\n"
+        "    tur_deep_entered = 1;\n"
+        "    if (getenv(\"TUR_NO_DEEP_STACK\")) return 0;\n"
+        "    tur_deep_state_t *s = tur_deep_state();\n"
+        "    s->argc = argc; s->argv = argv;\n"
+        "    int asked;\n"
+        "    SIZE_T sz = tur_deep_size(&asked);\n"
+        "    HANDLE h = CreateThread(NULL, sz, tur_deep_run, s, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);\n"
+        "    if (!h) { if (asked) tur_deep_size_failed(sz); return 0; }\n"
+        "    WaitForSingleObject(h, INFINITE);   /* tur_deep_run exits the process */\n"
+        "    CloseHandle(h);\n"
+        "    return 1;\n"
+        "}\n"
+        "#define TUR_DEEP_STACK_ENTER(argc, argv) do { if (tur_deep_enter((argc), (argv))) return 0; } while (0)\n"
+        "#else\n"
+        "#define TUR_DEEP_STACK_ENTER(argc, argv) ((void)0)\n"
+        "#endif\n");
+}
+
+/* The first statement of every emitted `main` in a `#lang r7rs` build, ahead
+ * of __tur_static_init (emit_deep_stack_runtime). */
+void emit_main_deep_stack_prologue(Buf *out) {
+    if (g_opt_r7rs) buf_puts(out, "    TUR_DEEP_STACK_ENTER(argc, argv);\n");
 }
 
 static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
@@ -13408,6 +14190,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the target TypeKind and panics on mismatch (the agreed failure behavior).
      * Declared after tur_panic in the preamble; forward-declare tur_panic here. */
     buf_puts(out, "static void tur_panic(const char *msg);\n");
+    buf_puts(out, "static void tur_panic_at(const char *file, int line, const char *msg);\n");
     /* any-narrowing-broken-for-parametric-receivers: two ids can share a NAME.
      * The box id is interned per instantiation, so `(Option int)` and
      * `(Option float)` are distinct ids -- but `type-of` reports the head name
@@ -13904,7 +14687,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "static inline float   tur_sc_f32_from_bits(int64_t i){ float f; memcpy(&f,&i,sizeof f); return f; }\n");
     emit_rt_global(out, shared, "tur_panic_payload *global_panic_payload;\n", "tur_panic_payload *global_panic_payload");
     buf_puts(out, "static tur_panic_payload *panic_payload_new(int, void *, const char *, int, int);\n");
-    buf_puts(out, "static void tur_panic(const char *msg) {\n");
+    /* panic-location-names-the-runtime-not-the-call-site: the location is a
+     * PARAMETER.  `__FILE__`/`__LINE__` written in this body name the
+     * runtime, never the caller, so a `(panic ...)` site calls tur_panic_at
+     * with its own .tur file and line (emit_panic_call); tur_panic is the
+     * runtime's own entry, whose location is honestly its own. */
+    buf_puts(out, "static void tur_panic_at(const char *file, int line, const char *msg) {\n");
     buf_puts(out, "    if (tur_panic_in_progress) {\n");
     buf_puts(out, "        fprintf(stderr, \"double panic: aborting\\n\");\n");
     buf_puts(out, "        abort();\n");
@@ -13916,14 +14704,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * lives in a different call frame), giving partial unwind for free. */
     buf_printf(out, "    if (tur_handler_chain) {\n");
     /* owns_value = 1: the strdup'd message is a heap block this payload owns. */
-    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, __FILE__, __LINE__, 1);\n", (int)TY_CSTR);
+    buf_printf(out, "        global_panic_payload = panic_payload_new(%d, msg ? strdup(msg) : NULL, file, line, 1);\n", (int)TY_CSTR);
     buf_puts(out, "        if (global_panic_frame) { tur_frame_fire_chain(global_panic_frame); global_panic_frame = NULL; }\n");
     /* Signal transport -- set the flag and RETURN; the caller's per-call-site
      * check propagates it up to the catch-unwind boundary. */
     buf_puts(out, "        tur_panicking = 1;\n");
     buf_puts(out, "        return;\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", __FILE__, __LINE__, msg ? msg : \"(no message)\");\n");
+    buf_puts(out, "    fprintf(stderr, \"panic at %s:%d: %s\\n\", file, line, msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    tur_panic_print_scope_chain();\n");
     buf_puts(out, "    if (global_panic_frame) {\n");
     buf_puts(out, "        tur_frame_fire_chain(global_panic_frame);\n");
@@ -13932,7 +14720,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * abort(), which does not flush stdio streams. */
     buf_puts(out, "    fflush(NULL);\n");
     buf_puts(out, "    abort();\n");
-    buf_puts(out, "}\n\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }\n\n");
 
     /* Phase R5: tur_panic_abort for #[no-unwind] */
     buf_puts(out, "/* Phase R5: tur_panic_abort - no unwinding, immediate abort */\n");
@@ -13940,6 +14729,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    fprintf(stderr, \"panic (no unwind): %s\\n\", msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
+    /* Not in a split build's library unit: only the program unit has a main,
+     * and the helper's statics must live in one unit (check-r7rs-prelude-split). */
+    if (g_opt_r7rs && !shared && g_emit_split != EMIT_SPLIT_LIB) emit_deep_stack_runtime(out);
 
     /* CPS3: emit tur_cps_cont_t + tur_cps_apply when --cps-path is active */
     if (g_cps_path) {
@@ -14935,6 +15727,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    f->parked = 0;\n");
     buf_puts(out, "    if (tur_scheduler) tur_scheduler_enqueue(tur_scheduler, f);\n");
     buf_puts(out, "}\n\n");
+    /* fnsan-timer-callback: the timer wheel calls `void (*)(void *)`.
+     * Handing it `(void(*)(void*))tur_scheduler_unpark` is an indirect call
+     * through the wrong function type (a -fsanitize=function trap, a
+     * call_indirect trap on WASM); this is the callback at the wheel's own
+     * type. */
+    buf_puts(out, "static void tur_scheduler_unpark_cb(void *f) {\n");
+    buf_puts(out, "    tur_scheduler_unpark((FiberBlock *)f);\n");
+    buf_puts(out, "}\n\n");
 
     /* Phase T24: Timer wheel function implementations
      * (structs, globals, and tur_monotonic_ns defined earlier before scheduler) */
@@ -15335,6 +16135,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_global(out, shared,
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
+
+    /* r7rs-conformance-program-emits-megabytes-of-c: the direct->cps entry
+     * wrapper of a ZERO-parameter colored function (emit_cps_ir.c) is this one
+     * helper plus a two-line shim, not a ~670-byte copy of its body per
+     * function -- 1,557 byte-identical copies in the r7rs conformance program,
+     * each with its own setjmp.  Exactly the inline wrapper's sequence: seed the
+     * root prompt, install the trampoline driver, run the body, copy a boxed
+     * (Tier-C) result out into `out` BEFORE the reap frees its box, then free
+     * the root and reap.  Here, after tur_async_suspended, which it reads. */
+    if (dk_machine_emitted) {
+        buf_puts(out,
+"__attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {\n"
+"    __dk_entry_depth++;\n"
+"    size_t __dk_reap_mark = __dk_reap_n;\n"
+"    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n"
+"    int64_t __r;\n"
+"    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n"
+"    if (TUR_SETJMP(__dkjb) == 0) { __r = body(__root); }\n"
+"    else { __r = __dk_drive_after(); }\n"
+"    g_dk_driver = __dksave;\n"
+"    if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }\n"
+"    if (!tur_async_suspended) dk_free(__root);\n"
+"    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }\n"
+"    return __r;\n"
+"}\n\n");
+    }
 
     /* async-panic-task-boundary: a panic inside an (async ...) body must
      * reject THAT task's future, not unwind whoever spawned it.  The body runs
@@ -17078,6 +17904,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
  * docs/archive/jit-s2-split-disengages-on-hoisted-inline-c-include.md. */
 static void emit_hoisted_includes(Buf *out) {
     for (uint32_t i = 0; i < g_n_hoisted_includes; i++) {
+        /* A split build's library unit carries none of the program: no stdlib
+         * code needs a header or macro only the program's inline-C asked for,
+         * and writing them made the unit's text -- so its cached object --
+         * one per program (a crew module's `#define CREW_WORKERS 8`). */
+        if (g_emit_split == EMIT_SPLIT_LIB && !g_hoisted_stdlib[i]) continue;
         tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
 }
@@ -18594,10 +19425,17 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             if (ic && ic->code.p && ic->code.len > 0) {
                 /* r7rs-programs-compile-slowly: a stdlib block's file-scope
                  * state is the library unit's (emit_split_state at assembly);
-                 * a program's own block is the client's alone. */
-                bool user_block = split_client && split_item_owner(e) == SPLIT_OWN_USER;
-                inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
-                                             &cprelude_dedup, ic->code.p, ic->code.len);
+                 * a program's own block is the client's alone.  The library
+                 * unit carries none of it: no stdlib code can name the
+                 * program's C, and a program block there made the unit's
+                 * text, so its cached object, one per program -- every
+                 * r7rs-threads-* fixture built its own because a crew module
+                 * `#define`d its worker count. */
+                bool user_block = g_emit_split != EMIT_SPLIT_NONE
+                               && split_item_owner(e) == SPLIT_OWN_USER;
+                if (!(user_block && g_emit_split == EMIT_SPLIT_LIB))
+                    inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
+                                                 &cprelude_dedup, ic->code.p, ic->code.len);
             }
         } else {
             /* r7rs-programs-compile-slowly: a stdlib statement would run in
@@ -19368,6 +20206,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                                 near_miss_main->binding->name->name);
         }
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        emit_main_deep_stack_prologue(out);
         /* S1b: first statement, matching where the constructors used to run
          * (before the Windows stdio mode switch and before g_panic_trace). */
         buf_puts(out, "    __tur_static_init();\n");
@@ -20956,6 +21795,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");
+        emit_main_deep_stack_prologue(out);
         buf_puts(out, "    __tur_static_init();\n");   /* S1b */
         emit_win_binary_stdio_prologue(out);
         /* Phase R6: Set g_panic_trace from compiler flag */

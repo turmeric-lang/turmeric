@@ -15,7 +15,7 @@ spirit: if you know `nvm install <v>` / `nvm use <v>`, you already know
 
 ## Install
 
-From a checkout of the [turmeric repo](https://github.com/rjungemann/turmeric):
+From a checkout of the [turmeric repo](https://github.com/turmeric-lang/turmeric):
 
 ```sh
 sh tvm/install.sh
@@ -168,7 +168,7 @@ $ tvm which 0.24.0
 ```
 
 `ls-remote` reads
-[the release manifest from GitHub Releases](https://github.com/rjungemann/turmeric/releases)
+[the release manifest from GitHub Releases](https://github.com/turmeric-lang/turmeric/releases)
 and marks each entry `prebuilt` (host-compatible asset exists) or
 `source` (must be installed with `--build`).
 
@@ -288,7 +288,7 @@ and `ls-remote` entries for `install`.
 ## How it works
 
 `tvm` consumes the artifacts published by
-[`.github/workflows/release.yml`](https://github.com/rjungemann/turmeric/blob/main/.github/workflows/release.yml).
+[`.github/workflows/release.yml`](https://github.com/turmeric-lang/turmeric/blob/main/.github/workflows/release.yml).
 Each release ships one tarball per `(os, arch)`:
 
 ```
@@ -333,5 +333,5 @@ exactly `versions/<v>/` -- no leftover state.
 - `tvm/README.md` -- short cheat sheet next to the source.
 - `tvm doctor` -- the first stop for any "why isn't this working"
   question.
-- [Releases page](https://github.com/rjungemann/turmeric/releases) --
+- [Releases page](https://github.com/turmeric-lang/turmeric/releases) --
   what `ls-remote` is reading from.

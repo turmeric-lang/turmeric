@@ -36,7 +36,7 @@ bare call dispatches to the matching instance when the receiver's type selects
 one, and falls back to the bare combinator otherwise -- so a single `(load
 "stdlib/arrow.tur")` gives you both. (A free `defn` and a typeclass method of
 the same name share the value namespace; see
-[`docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).)
+[`docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/typeclass-methods-share-value-namespace-with-defns.md).)
 
 For the function arrow, `arr` lifts a function (the identity up to eta), and
 `>>>` is left-to-right composition; both surfaces compute identical values --
@@ -59,8 +59,8 @@ see `tests/fixtures/arrow-instance-vs-bare`.
 ```sweet-exp
 import stdlib/arrow.tur
 
-let [add1   arr((fn [x] +(x 1)))
-     double arr((fn [x] *(x 2)))]
+let [add1   arr((fn [x] {x + 1}))
+     double arr((fn [x] {x * 2}))]
 
   let [pipeline >>>(add1 double)]
     println pipeline(5)        ; => 12
@@ -101,7 +101,7 @@ passing the other branch unchanged.
 ```sweet-exp
 import stdlib/arrow.tur
 
-let [add1       arr((fn [x] +(x 1)))
+let [add1       arr((fn [x] {x + 1}))
      first-add1 arrow-first(add1)
      p          Pair(5 10)]
   println first-add1(p)                ; => Pair(6, 10)
@@ -212,7 +212,7 @@ name from `Arrow`'s `>>>`, so the two coexist without an operator collision.
 
 `ident` is **nullary** -- there is no argument to dispatch on, so it resolves by
 return-type / unique-instance dispatch (the mechanism from
-[`return-type-dispatch-nullary-arrow-methods-plan`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/return-type-dispatch-nullary-arrow-methods-plan.md)).
+[`return-type-dispatch-nullary-arrow-methods-plan`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/return-type-dispatch-nullary-arrow-methods-plan.md)).
 With only the `(->)` instance in scope, a bare `(ident)` resolves uniquely:
 
 ```turmeric
@@ -270,7 +270,7 @@ unrestricted values and may be reused freely.
 
 `ArrowChoice` routes an arrow over one arm of a binary sum. It builds on the
 `Either` sum type (`stdlib/either.tur`, from
-[`docs/archive/history/sum-types-either-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md));
+[`docs/archive/history/sum-types-either-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/sum-types-either-plan.md));
 `left` acts on `Left` and passes `Right` through, `+++` fans two arrows over the
 two arms, and `|||` collapses both arms to a common result:
 

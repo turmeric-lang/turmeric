@@ -1,0 +1,20 @@
+;; A record field selector `.a` was declared Int in every VC, whatever the
+;; field's type.  For a `float` field the constructor axiom
+;; `(= (.a (FB 0.5 p)) 0.5)` -- asserted for every constructor application in a
+;; return obligation -- then said an integer equals 0.5: a contradiction, which
+;; proved EVERY goal and elided its check.  `f` below "proved" `(= r 7)` and
+;; returned 3.  Found by the reflected shape of tests/refine-fuzz-src.py
+;; (reflect-fuzz-never-reaches-the-rf3-rf4-encoder) as 49 BUG_soundness cases
+;; over two seeds, all float lists; the shape needs no `^reflect` at all.
+;;
+;; The selector now has its field's sort, so the goal is merely unknown, and
+;; --strict-refine says so.
+(defdata FB (FB [a : float b : int]))
+
+(defn f [p : int] : #refine{ r : int | (= r 7) }
+  (let [x (FB 0.5 p)]
+    3))
+
+(defn main [] : int
+  (println (f 1))
+  0)

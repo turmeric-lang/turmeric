@@ -56,7 +56,7 @@ needs reverting.
 2. The `../upcoming/` and `../archive/` links: these are references to internal
    planning notes from published guides, which is a smell in itself. Either
    drop them, or point them at GitHub blob URLs
-   (`https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/...`), which
+   (`https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/...`), which
    is what the guides already do for `CLAUDE.md`.
 3. Once the tree is clean, run the pack build with `--strict-links` in CI so a
    new dead cross-link fails rather than being reported and scrolled past:

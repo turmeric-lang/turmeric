@@ -29,6 +29,7 @@
 #include <pthread.h>
 
 #include "region.h"
+#include "arena.h"
 
 static int failures = 0;
 
@@ -222,6 +223,31 @@ int main(void) {
         check(tur_region_owns(mine), "threads: main still owns its own allocation");
         check(tur_region_pop_checked(t1) == true, "threads: the worker's bracket did not disturb main's");
         check(tur_region_owns(o.node), "threads: the worker's retired node stays owned after main's pop");
+    }
+
+    /* (i) a rewound generation reuses ALL of its slabs.  arena_reset keeps
+     * every slab, but the allocator used to try only the head one, so each
+     * later generation refilled one slab and malloc'd the rest afresh -- a
+     * region rewound per iteration (tur_region_pop_checked pools its arena)
+     * grew without bound.  Fill five slabs exactly, reset, fill again: every
+     * address the second fill hands out must lie in a slab the first used. */
+    {
+        enum { SLAB = 4096, SZ = 1024, PER = SLAB / SZ, N = 5 * PER };
+        Arena a;
+        arena_init(&a, SLAB + 64);   /* room for PER allocs plus head padding */
+        void *first[N];
+        for (int i = 0; i < N; i++) first[i] = arena_alloc(&a, SZ);
+        arena_reset(&a);
+        int inside = 0;
+        for (int i = 0; i < N; i++) {
+            const char *p = (const char *)arena_alloc(&a, SZ);
+            for (int j = 0; j < N; j++) {
+                const char *f = (const char *)first[j];
+                if (p >= f && p < f + SZ) { inside++; break; }
+            }
+        }
+        check(inside == N, "slab reuse: a reset arena refills its own slabs, none malloc'd afresh");
+        arena_free(&a);
     }
 
     tur_region_shutdown();

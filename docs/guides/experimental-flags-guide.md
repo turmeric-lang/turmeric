@@ -17,12 +17,13 @@ every flag carries a hard expiry by which it must graduate or be removed.
 
 > **The registry is small by design.** Run `tur experiments` for the
 > authoritative current set (at the time of writing it holds two rows:
-> `loop-invariants` -- `(while c :invariant p ...)`, see
-> [loop-invariants-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/loop-invariants-plan.md);
-> and `reflected-measures` -- `^reflect` on a defn admits a total measure's
+> `reflected-measures` -- `^reflect` on a defn admits a total measure's
 > defining equation to the refinement solver, see
-> [reflected-measures-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
-> and the refinement guide's "Reflected measures" section); this guide
+> [reflected-measures-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/reflected-measures-plan.md)
+> and the refinement guide's "Reflected measures" section; and
+> `repl-jit-inline-c` -- the interpreter compiles an inline-C defn it cannot
+> run, see [aot-compiled-repl-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/aot-compiled-repl-plan.md)
+> and the REPL guide's "Inline-C at the prompt" section); this guide
 > describes how the mechanism behaves for whatever rows are present.
 
 ## Opting in
@@ -167,7 +168,7 @@ state the harness had been built to prevent, with the two paths swapped.
 What accumulated there in the meantime: a compiler abort, a hard C compile
 error, and a silent wrong answer, none of which touched the default path and all
 of which broke the instrument you reach for when something *else* is already
-wrong. See [docs/archive/sr2-carrier-seam-rotted.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/sr2-carrier-seam-rotted.md).
+wrong. See [docs/archive/sr2-carrier-seam-rotted.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sr2-carrier-seam-rotted.md).
 
 A hatch nobody turns on decays into a hatch nobody notices -- the same lesson as
 `sanitizer-gate-not-armed-in-ci`. If you keep the switch, keep a harness on it.
@@ -248,5 +249,5 @@ automatically from the table.
 
 - [compiler-flags-guide.md](compiler-flags-guide.md) -- diagnostic/debug
   flags and the retired `-X<name>` set.
-- [docs/archive/history/experimental-flag-mechanism-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/experimental-flag-mechanism-plan.md)
+- [docs/archive/history/experimental-flag-mechanism-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/experimental-flag-mechanism-plan.md)
   -- the design plan (XF0--XF6).

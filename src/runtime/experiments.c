@@ -197,8 +197,8 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
      * surfaced (three latent product bugs, all fixed), the harness denylist is
      * empty, and tests/run-jit.sh runs the whole corpus through the engine on
      * both hosts.  The remaining gate is the BUILD-TIME one and it stays:
-     * `-DTUR_JIT=ON` vendors MIR, a default build carries no fetch and no
-     * dependency, and `tur jit` in such a build still says so.  Engine
+     * TUR_JIT (ON by default since 2026-10-02, MIR vendored under
+     * external/mir), and `tur jit` in a build without it still says so.  Engine
      * SELECTION is likewise unchanged and is not a default flip -- `cc` is
      * still what you get unless `--engine jit` / `TUR_ENGINE=jit` /
      * `:engine "jit"` says otherwise, and the REPL's in-process JIT loader now
@@ -428,24 +428,41 @@ static const ExperimentDescriptor EXPERIMENTS[] = {
       "`^reflect` admits a total measure's defining equation to the refinement solver (bounded unfolding)",
       "docs/upcoming/reflected-measures-plan.md",
       "0.57.0",                  /* introduced */
-      "0.61.0",                  /* expires_at -- advisory; never blocks a release */
+      "0.64.0",                  /* expires_at -- advisory; never blocks a release */
       XF_LIFECYCLE_PROTOTYPE,
       &g_opt_reflected_measures },
-    /* loop-invariants (docs/upcoming/loop-invariants-plan.md) -- a `while` may
-     * carry a user-WRITTEN `:invariant <pred>` (checking, never inference).
-     * Follows the `#writes` precedent: the annotation always parses and is
-     * validated (bool, pure); the gate withholds the acting -- the entry and
-     * re-establishment runtime checks, the Hoare initiation/preservation
-     * obligations that elide them, and the post-loop fact `p AND (not c)`.
-     * A prototype: the decline list (place writes, early exits, nested
-     * loops, borrowed locals) is the part expected to move. */
-    { "loop-invariants",
-      "`(while c :invariant p ...)` -- user-written loop invariants: runtime-checked, statically discharged, usable after the loop",
-      "docs/upcoming/loop-invariants-plan.md",
-      "0.57.0",                  /* introduced */
-      "0.58.0",                  /* expires_at -- advisory; never blocks a release */
-      XF_LIFECYCLE_PROTOTYPE,
-      &g_opt_loop_invariants },
+    /* loop-invariants GRADUATED 2026-10-03, in the 0.61 line (introduced
+     * 0.57.0, prototype, advisory expires_at 0.58.0).  `(while c :invariant p
+     * ...)` is always on: the runtime checks, the initiation/preservation
+     * obligations that elide them, and the post-loop fact.  Graduated straight
+     * from prototype -- the decline list a beta would have frozen was closed
+     * out, and the last trust gap (a `#reads` body that writes, and a pure
+     * callee returning an alias into a writer) closed with this change.  No
+     * bisection hatch is kept, so the gate-off fixture retires rather than
+     * inverts.  The name moves to GRADUATED[] below. */
+    /* repl-jit-inline-c (aot-compiled-repl-plan C1) -- the interpreter
+     * compiles an inline-C defn it cannot run, through the real emitter and
+     * the in-process MIR engine, on that defn's first call; `tur repl` and
+     * `tur --interpret` alike.  Needs a TUR_JIT build (the default on 64-bit
+     * x86-64/arm64); without one the hook is absent and today's "inline-C not
+     * supported" error stands.
+     *
+     * BETA since 2026-10-04 (prototype 0.59.0-0.62.0).  The surface is frozen
+     * as the plan's C1 "Supported subset": a defn whose whole body is
+     * inline-C, fixed arity, scalar or pointer signature, calling nothing
+     * else; at the call a pointer parameter takes only nil or a handle an
+     * earlier JIT'd call returned, and an int-class parameter refuses a word
+     * addressing the interpreter's own memory.  expires_at moves 0.62.0 ->
+     * 0.65.0 for the soak.  Graduating it is a bet that C2 (whole compiled
+     * turns, post-v1) does not replace it; C2 removes the value boundary
+     * altogether, but C1 stays the cheap path for `tur --interpret`. */
+    { "repl-jit-inline-c",
+      "the interpreter JIT-compiles an inline-C defn it cannot run, on its first call (needs a TUR_JIT build)",
+      "docs/upcoming/aot-compiled-repl-plan.md",
+      "0.59.0",                  /* introduced */
+      "0.65.0",                  /* expires_at -- advisory; never blocks a release */
+      XF_LIFECYCLE_BETA,
+      &g_opt_repl_jit_inline_c },
     { 0 }, /* sentinel so the array is never zero-length (C forbids that);
             * experiment_count() subtracts it off. */
 };
@@ -537,6 +554,10 @@ static const char *const GRADUATED[] = {
      * enable is exactly what a real adopter's config looks like: it keeps the
      * full migration window.  Eligible to age out at 0.54.0. */
     "class-superclasses",
+    /* graduated 2026-10-03, in the 0.61 line.  Source syntax a user had to
+     * write and enable, so it keeps the full window.  Eligible to age out at
+     * 0.62.0.  See docs/archive/loop-invariants-plan.md. */
+    "loop-invariants",
     NULL,
 };
 

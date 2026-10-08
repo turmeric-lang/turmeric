@@ -8,7 +8,7 @@ carries duplicated error strings and hand-rolled inline C where a one-line
 forward would do.
 
 **Status: RESOLVED 2026-09-15.** Swept in
-[turmeric-spices#71](https://github.com/rjungemann/turmeric-spices/pull/71).
+[turmeric-spices#71](https://github.com/turmeric-lang/turmeric-spices/pull/71).
 
 Three of the four rows swept as filed. The fourth did not: restoring the
 `DecodeMp` forwards turned up a SECOND, distinct defect that the fix for

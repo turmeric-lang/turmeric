@@ -1,0 +1,14 @@
+;; tail-grammar-skips-and-or-and-carrier-lets: a tail-position `let` releases
+;; its locals at the backedge, so one whose release cannot move ahead of the
+;; call keeps the `let` off the tail path.  Here the `^mut` cell `c` is freed
+;; when the `let` ends (mut-cell-is-never-freed), and the closure that reads it
+;; produces a `cstr` the backedge carries into the next iteration -- not a
+;; plain number, so the release is not provably dead by then.
+(defn spin [n : int s : cstr] : int
+  (let [^mut c n]
+    (let [g (fn [] : cstr (if (> c 0) "p" "z"))]
+      (if (= n 0) n ^tailcall (spin (- n 1) (g))))))
+
+(defn main [] : int
+  (println (spin 10 "a"))
+  0)

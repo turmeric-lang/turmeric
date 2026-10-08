@@ -312,8 +312,8 @@ The compiler automatically:
 
 ## See also
 
-- [`tests/fixtures/hrt-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/) -- Working examples of every HRT feature
+- [`tests/fixtures/hrt-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/) -- Working examples of every HRT feature
 - [gadts-guide.md](gadts-guide.md) -- GADTs and equality witnesses; skolem equalities produced
   by GADT `match` arms interact with HRT bidirectional checking to enable type
   refinement without casts
-- [`tests/fixtures/errors/hrt-*/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/errors/) -- Error cases with expected diagnostics
+- [`tests/fixtures/errors/hrt-*/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/errors/) -- Error cases with expected diagnostics

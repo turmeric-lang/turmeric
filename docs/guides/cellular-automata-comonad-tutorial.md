@@ -53,7 +53,7 @@ defclass Comonad [^w]
 
 This comonad library represents its container values as `int64_t` heap handles, so every method returns `:int`. The `fn` argument to `extend` is a Turmeric closure: `(fn [wa] ...)`.
 
-The implementation lives in [`stdlib/comonad.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/comonad.tur), which also provides Identity and Pair comonad instances as examples.
+The implementation lives in [`stdlib/comonad.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/comonad.tur), which also provides Identity and Pair comonad instances as examples.
 
 ---
 
@@ -127,7 +127,7 @@ defn main [] :int
 
 One `(.extend z ca-rule)` call steps the entire automaton forward.
 
-The full Zipper implementation lives in [`stdlib/zipper.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/zipper.tur). See [`tests/fixtures/zipper-comonad/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/zipper-comonad/) for a runnable version.
+The full Zipper implementation lives in [`stdlib/zipper.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/zipper.tur). See [`tests/fixtures/zipper-comonad/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/zipper-comonad/) for a runnable version.
 
 ---
 
@@ -247,7 +247,7 @@ definstance Comonad [gridctx]
 
 Notice: `tmp` is a stack-allocated scratch struct that shares `src->data`. Because `fn` is called synchronously and never stores the pointer, this is safe. Each call gets a fresh `(cx, cy)`.
 
-The full implementation lives in [`stdlib/grid.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/grid.tur).
+The full implementation lives in [`stdlib/grid.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/grid.tur).
 
 ---
 
@@ -342,7 +342,7 @@ let [g0 grid-new(5 5)]
 
 ## Part 6 -- Putting It Together
 
-The full runnable example is in [`examples/cellular-automata.tur`](https://github.com/rjungemann/turmeric/blob/main/examples/cellular-automata.tur). It contains both the imperative version (Part 1) and the comonadic version (Part 2) side by side, so you can compare approaches.
+The full runnable example is in [`examples/cellular-automata.tur`](https://github.com/turmeric-lang/turmeric/blob/main/examples/cellular-automata.tur). It contains both the imperative version (Part 1) and the comonadic version (Part 2) side by side, so you can compare approaches.
 
 To run it:
 
@@ -354,11 +354,11 @@ To run it:
 
 | Fixture | What it verifies |
 |---------|-----------------|
-| [`tests/fixtures/grid-basic/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/grid-basic/) | `grid-new`, `grid-get`, `grid-set`, `grid-clone`, `grid-print` |
-| [`tests/fixtures/grid-comonad/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/grid-comonad/) | `extend conway-rule` on blinker (3 generations) |
-| [`tests/fixtures/game-of-life-blinker/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/game-of-life-blinker/) | Period-2 blinker oscillation |
-| [`tests/fixtures/game-of-life-block/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/game-of-life-block/) | Block still-life stability |
-| [`tests/fixtures/zipper-comonad/`](https://github.com/rjungemann/turmeric/tree/main/tests/fixtures/zipper-comonad/) | Zipper comonad, 1D XOR automaton |
+| [`tests/fixtures/grid-basic/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/grid-basic/) | `grid-new`, `grid-get`, `grid-set`, `grid-clone`, `grid-print` |
+| [`tests/fixtures/grid-comonad/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/grid-comonad/) | `extend conway-rule` on blinker (3 generations) |
+| [`tests/fixtures/game-of-life-blinker/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/game-of-life-blinker/) | Period-2 blinker oscillation |
+| [`tests/fixtures/game-of-life-block/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/game-of-life-block/) | Block still-life stability |
+| [`tests/fixtures/zipper-comonad/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/zipper-comonad/) | Zipper comonad, 1D XOR automaton |
 
 Run all CA-related tests:
 

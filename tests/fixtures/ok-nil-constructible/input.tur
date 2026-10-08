@@ -1,0 +1,42 @@
+;; ok-nil-unconstructible-in-turmeric: `(Ok nil)` for a `(Result nil E)`, built
+;; in Turmeric code.  `nil` emits as the void expression `((void)0)`, which
+;; failed in cc as a constructor argument; it now passes the 0 word an
+;; inline-C `tur_ok_int(0)` would, and still evaluates the argument, so
+;; `(Ok (println ...))` prints.  The same holds for any constructor with a nil
+;; payload.  The second half: a call to a `(Result nil E)` function ABOVE its
+;; definition (mutual recursion) was TUR-E0012 at 0:0, because the forward
+;; declaration read the F_NIL in `(Result nil E)` as an unknown name.
+
+(defopaque Fail :int)
+(defdata Unit1 (MkUnit1 :nil))
+
+(defn probe [n : int] : (Result nil Fail)
+  (if (> n 2)
+    (Ok nil)
+    (Err (:: n Fail))))
+
+(defn probe-loud [n : int] : (Result nil Fail)
+  (if (> n 2) (Ok (println "side effect kept")) (Err (:: n Fail))))
+
+(defn maybe-unit [b : bool] : (Option nil)
+  (if b (Some nil) (None)))
+
+;; mutual recursion: walk-a calls walk-b before walk-b is defined
+(defn walk-a [i : int] : (Result nil Fail)
+  (if (> i 3) (Ok nil) (walk-b (+ i 1))))
+(defn walk-b [i : int] : (Result nil Fail) (walk-a i))
+
+(defn show [r : (Result nil Fail)] : nil
+  (match r
+    (Ok _) (println "ok")
+    (Err e) (println (:: e int))))
+
+(defn main [] : int
+  (show (probe 3))
+  (show (probe 1))
+  (show (probe-loud 5))
+  (match (maybe-unit true) (Some _) (println "some") (None) (println "none"))
+  (match (maybe-unit false) (Some _) (println "some") (None) (println "none"))
+  (match (MkUnit1 nil) (MkUnit1 _) (println "unit1"))
+  (show (walk-a 0))
+  0)

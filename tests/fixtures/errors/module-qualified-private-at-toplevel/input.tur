@@ -1,0 +1,11 @@
+;; qualified-module-calls-unresolved-at-toplevel: a private member named with
+;; its module from the top level is a visibility error, not a runtime-dispatch
+;; that happens to find it by its bare name.
+(defmodule Greeter
+  (export greet)
+  (defn greet [] : cstr "hello")
+  (defn secret [] : cstr "private"))
+
+(defn main [] : int
+  (println (Greeter/secret))
+  0)

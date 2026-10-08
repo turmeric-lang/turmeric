@@ -1,7 +1,7 @@
 ;;; turmeric-mode.el --- Major mode for the Turmeric programming language  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2024 Turmeric Project
-;; URL: https://github.com/rjungemann/turmeric
+;; URL: https://github.com/turmeric-lang/turmeric
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "26.1"))
 ;; Keywords: languages lisp

@@ -1,0 +1,11 @@
+#lang r7rs
+;; docs/archive/r7rs-program-file-named-with-leading-digit-fails-to-compile.md:
+;; a program whose file name starts with a digit (SICP readers write
+;; `1.1.scm`) is wrapped in a module named after the file once it imports a
+;; library, and that name prefixed C identifiers -- `1____fn_7`, which cc
+;; refused.  This file's name starts with a digit, it imports a library, and
+;; it has an anonymous function.
+(import (scheme base) (scheme write) (digitlib))
+(define f (lambda (x) (+ x 1)))
+(display (twice (f 1)))
+(newline)

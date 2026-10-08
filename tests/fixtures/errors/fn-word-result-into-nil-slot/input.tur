@@ -1,0 +1,11 @@
+;; word-result-fn-into-nil-slot, cause 1: a function whose result is a word
+;; is refused by a `(fn [...] nil)` slot.  `nil` is `void` in C, so the call
+;; went through `void (*)(void *)` to an `int64_t (*)(void *)` thunk -- a
+;; SIGILL under -fsanitize=function, harmless on x86-64 only by register luck.
+;; A function DECLARED void is accepted (fn-void-annotation-discards-value).
+(defn run-it [^fat body : (fn [] nil)] : nil (body))
+
+(defn main [] : int
+  (let [n 41]
+    (run-it (fn [] (+ n 1))))
+  0)

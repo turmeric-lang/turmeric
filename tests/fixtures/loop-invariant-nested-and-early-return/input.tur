@@ -1,0 +1,52 @@
+;; loop-invariant-declines-more-than-soundness-requires: two declines were
+;; broader than their own reasons, and both shapes now prove.
+;;
+;; A nested loop that assigns only an inner counter.  The analysis does not
+;; model the inner loop, so every name it assigns is HAVOCKED on each path --
+;; and since nothing after it reads `j`, nothing is lost.  (Reading it after,
+;; or the invariant naming an outer name it assigns, still declines or leaves
+;; that conjunct unproved: loop-invariant-declines.)
+;;
+;; An early `return`.  It leaves the function, so the paths through it are
+;; PRUNED: they never reach the end of the body and owe no re-establishment.
+;; Initiation and preservation stand; only the post-loop fact `p AND (not c)`
+;; is withheld from what follows the loop.  `early-bound` is the case that
+;; needs the pruning -- the `return` path, fallen through, would break the
+;; invariant (i = 100 then i + 1).
+;;
+;; The hook asserts all ten obligations prove under --strict-refine and that no
+;; loop check is emitted.
+(defn nested [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+      (let [^mut j 0]
+        (while (< j 2)
+          (set! j (+ j 1))))
+      (set! acc (+ acc 1))
+      (set! i   (+ i 1)))
+    acc))
+
+(defn early [n : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i n) :invariant (and (>= acc 0) (>= i 0))
+      (when (> i 100) (return -1))
+      (set! acc (+ acc 1))
+      (set! i   (+ i 1)))
+    acc))
+
+(defn early-bound [n : int] : int
+  (let [^mut i 0]
+    (while (< i n) :invariant (<= i 100)
+      (when (>= i 100) (return -1))
+      (set! i (+ i 1)))
+    i))
+
+(defn main [] : int
+  (println (nested 3))
+  (println (early 3))
+  (println (early 300))
+  (println (early-bound 7))
+  (println (early-bound 300))
+  0)

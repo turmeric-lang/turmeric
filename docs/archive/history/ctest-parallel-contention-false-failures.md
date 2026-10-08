@@ -4,7 +4,7 @@
 and, worse, teaches people that red is normal.
 
 Reported by the agent working on
-[Trowel](https://github.com/rjungemann/trowel) (`turi_fixture_tests` fails
+[Trowel](https://github.com/turmeric-lang/trowel) (`turi_fixture_tests` fails
 under `ctest -j4`, passes in isolation). Hit independently here twice, on two
 different targets, from a different cause -- so the pattern is broader than one
 test.

@@ -16,8 +16,8 @@ enforce, and forces every caller to remember the convention.
 You do not have to hand-roll the result struct. Every emitted translation
 unit carries a small set of preamble helpers that build and inspect
 Option/Result values through the **canonical** heap layout -- the same one
-[`stdlib/option.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/option.tur)
-and [`stdlib/result.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/result.tur)
+[`stdlib/option.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/option.tur)
+and [`stdlib/result.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/result.tur)
 use -- so a value built in C flows straight into the stdlib accessors
 (`ok?`, `err?`, `ok-val`, `err-val`, `some?`, `unwrap`) and vice versa.
 
@@ -149,7 +149,7 @@ An `(Option MidiIn)` "open the default port if there is one" variant uses
 
 This is the blessed replacement for two anti-patterns that used to spread
 through spices (see
-[docs/archive/history/no-stdlib-result-builder-for-inline-c.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/no-stdlib-result-builder-for-inline-c.md)):
+[docs/archive/history/no-stdlib-result-builder-for-inline-c.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/no-stdlib-result-builder-for-inline-c.md)):
 
 - **Re-declaring the struct in raw C** -- `struct { bool is_ok; int64_t
   ok_val; int64_t err_val; } *r = malloc(...)` returned as `:ptr<void>`.
@@ -219,6 +219,32 @@ these helpers: the payload has to fit the single `int64_t` carrier slot.
 Wrap the value behind an opaque pointer handle (the rtmidi pattern above)
 or construct the `Result` in Turmeric instead.
 
+## Nesting the builders: `(Result (Option T) E)` and friends
+
+The builders compose. A body declared to return a sum whose payload is itself
+a sum builds the inner value first and hands its box to the outer builder:
+
+```turmeric
+(defn read-line-ish [n : int] : (Result (Option cstr) IoError)
+  ```c
+  if (n < 0) return tur_err_int(-n);
+  if (n == 0) return tur_ok_int(tur_none());       /* (Ok (None)) */
+  return tur_ok_int(tur_some_ptr((void *)"line")); /* (Ok (Some "line")) */
+  ```)
+```
+
+The same goes for `(Option (Result T E))`, `(Result (Result T E) E2)` and
+deeper nestings (`tur_ok_int(tur_some_int(tur_some_int(n)))`). The inner
+boxes belong to the outer one: the compiler converts the whole value when it
+reads it back and frees every box, so the same freshness rule applies to each
+level.
+
+Before 2026-10-07 this compiled and silently misbehaved -- the readback treated
+the builders' box as the monomorph's by-value layout, read the inner tag out
+of a pointer, and neither arm of a nested `match` fired
+([docs/archive/inline-c-builders-cannot-nest-option-in-result.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/inline-c-builders-cannot-nest-option-in-result.md)).
+`tests/fixtures/inline-c-result-nested-sum` pins it.
+
 ## A control form around an `if` over these builders
 
 The builders below return the int64 CARRIER, and the consumer bridges it to the
@@ -239,7 +265,7 @@ Fixed 2026-09-02; both the `let` and `do` wrappers are pinned by
 `tests/fixtures/control-form-around-if-carrier-arms/`. Nothing about how you
 write the inline C changes -- this is recorded because the shape it broke is the
 one this guide recommends, so an older compiler will still reject it. See
-[docs/archive/control-form-around-if-double-unboxes-carrier-arms.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md).
+[docs/archive/control-form-around-if-double-unboxes-carrier-arms.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/control-form-around-if-double-unboxes-carrier-arms.md).
 
 ## See also
 

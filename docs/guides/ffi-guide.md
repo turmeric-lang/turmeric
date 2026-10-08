@@ -14,7 +14,7 @@ covers the **dynamic** way: loading a shared library at runtime with
 pointer with `call-ptr` -- plus what happens to all of this under
 `--interpret` and the REPL, where a JIT-enabled build synthesizes call
 thunks at runtime with c2mir
-([docs/archive/jit-ffi-c2mir-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/jit-ffi-c2mir-plan.md)).
+([docs/archive/jit-ffi-c2mir-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/jit-ffi-c2mir-plan.md)).
 
 Quick orientation:
 

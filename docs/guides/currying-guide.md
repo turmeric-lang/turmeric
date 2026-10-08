@@ -151,7 +151,7 @@ type system is `(-> ...)`; partial-application closures share it with everything
 - **Variadic `defn` is not auto-curried.** A function declared with `& rest` does
   not produce a curried entry point. You can under-saturate up to the fixed
   positional params (returning a variadic closure), but you cannot partially
-  apply *into* the rest slot. See [Function Arity Style Guide](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md#function-arity-style-guide).
+  apply *into* the rest slot. See [Function Arity Style Guide](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md#function-arity-style-guide).
 
 - **No hard arity cap.** There is no fixed limit on positional parameters
   (declaring more than 16 draws the `TUR-W0041` style nudge), and a partial

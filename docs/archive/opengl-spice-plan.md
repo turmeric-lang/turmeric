@@ -38,7 +38,7 @@ graphics stack with no hand-written C or shader strings required.
 ## Adding the Spice
 
 ```sh
-tur add https://github.com/rjungemann/turmeric-spices \
+tur add https://github.com/turmeric-lang/turmeric-spices \
   --ref opengl-v0.1.0 --subdir spices/opengl --name opengl
 ```
 
@@ -59,7 +59,7 @@ tur build
   :version     "0.1.0"
   :description "OpenGL 3.3 Core + GLFW + GLAD bindings for Turmeric"
   :license     "MIT"
-  :repository  "https://github.com/rjungemann/turmeric-spices"
+  :repository  "https://github.com/turmeric-lang/turmeric-spices"
 
   :cmake-deps {
     "glfw" {:url     "https://github.com/glfw/glfw"

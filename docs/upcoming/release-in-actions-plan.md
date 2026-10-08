@@ -10,6 +10,11 @@
 > major)", the open question of which LM writes the release notes (Cloudflare
 > Workers AI vs. a Mistral API key), and the requirement that docstrings be
 > regenerated as part of the release.
+> **2026-10-05:** [ci-release-workflows-plan](ci-release-workflows-plan.md)
+> was executed instead -- one shot like this plan, but notes over the Mistral
+> API and `release.yml` dispatched unchanged rather than extracted. It
+> measured Mistral: GLM at `reasoning_effort: low` won there too. Section 3.3's
+> "Mistral was not measured" is now answered in that plan's "Model choice".
 > **Type:** Release engineering / CI
 > **Touches:** `.github/workflows/release.yml`, new `release-cut.yml` and
 > `release-build.yml`, new `tools/release/`, the `Justfile` `bump-*` recipes,
@@ -319,7 +324,7 @@ belongs in the release commit, regenerated in job 1 alongside the bump.
 
 ```sh
 python3 -m pip install -r tools/requirements.txt
-git clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
+git clone --depth 1 https://github.com/turmeric-lang/turmeric-spices ../turmeric-spices
 python3 tools/genguides.py docs/guides/ --out docs/html/guides/ --emit-pack web/public/docs-pack/
 python3 tools/genspices.py --out docs/html/spices/ \
         --emit-json docs/html/spices/doc-names-spices.json --emit-pack web/public/docs-pack/
@@ -501,7 +506,7 @@ Build      linux-x86_64 ok  linux-aarch64 ok  macos-arm64 ok  windows-x86_64 ok
 Docs       turmeric-docs-v0.55.2.tar.gz (guides + api + spices)
 Deploy     https://turmeric-lang.com  -> 0.55.2
 Publish    main 9c2ae30ad..a1b2c3d4e, tag v0.55.2, release published
-           https://github.com/rjungemann/turmeric/releases/tag/v0.55.2
+           https://github.com/turmeric-lang/turmeric/releases/tag/v0.55.2
 ```
 
 ### 6.3 Reading the result

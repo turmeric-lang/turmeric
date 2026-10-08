@@ -60,7 +60,7 @@ altered the diagnostic.
 ## Repro
 
 ```sh
-git clone --depth 1 https://github.com/rjungemann/turmeric-spices/ ../turmeric-spices
+git clone --depth 1 https://github.com/turmeric-lang/turmeric-spices/ ../turmeric-spices
 bash tests/run.sh 2>&1 | grep ecs-defsystem-writes-unauthorized
 # => FAIL ... diagnostic mismatch
 ```

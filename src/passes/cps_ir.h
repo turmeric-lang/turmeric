@@ -276,8 +276,14 @@ struct CTerm {
         /* reap_any_env: the same registration for an `any` binder that holds a
          * fresh capturing closure (cps_any_closure_env_freeable): the env is
          * the tagged value's payload, so it is untagged first. */
+        /* reap_at_backedge (closure-let-in-self-tail-loop-leaks): with
+         * reap_env, the binder is only ever INVOKED -- never an argument, not
+         * even to a parameter that keeps nothing -- so a self tail call in the
+         * main body may free it before jumping back rather than leave it to
+         * the boundary.  An argument of that very call would be the next
+         * turn's live parameter. */
         struct { CVar x; const Expr *e; CTerm *body; bool reap_env;
-                 bool reap_any_env; }                                      letraw;
+                 bool reap_any_env; bool reap_at_backedge; }               letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.
@@ -363,7 +369,35 @@ void cps_ir_dump_program(Arena *a, Expr *program, FILE *out);
 
 /* E2a: fn-value PARAM bindings whose effectful tail calls thread the DK. */
 void cps_ir_thread_param_reset(void);
+/* Forget the callee_fndef binding -> FnDef table (a new classification). */
+void cps_ir_callee_cache_reset(void);
 void cps_ir_thread_param_add(const Binding *param);
 bool cps_ir_thread_param_has(const Binding *param);
+bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
+
+/* E2 (fat-closure fn-value threading): the `tur_poly_fn_t.fn_cps` slot's ABI is
+ * `int64_t (*)(void *env, int64_t a0, ..., struct DK *)` -- one int64 word per
+ * argument, up to this many.  cps_ir_fncps_sig_ok says whether a fn of type
+ * `fn_ty` fits it: every argument an `int`/`int64`, a `cstr` or a `ptr<void>`
+ * (carried as its word), the result an `int`/`int64`, `bool` or unit.  The poly-wrap that FILLS the slot (emit_expr.c) and the
+ * analysis that relies on it being filled (arg_fat_has_fn_cps) ask this one
+ * question, so the two cannot drift apart. */
+#define CPS_FNCPS_MAX_ARGS 8
+bool cps_ir_fncps_sig_ok(const Type *fn_ty);
+/* The C spelling of an argument kind cps_ir_fncps_sig_ok admits. */
+const char *cps_ir_fncps_arg_ctype(TypeKind k);
+/* The same for a capturing lambda, given its LIFTED type (the env parameter
+ * first): a closure's slot is a dispatcher on the env box's slot 0, which holds
+ * the lifted entry itself only for an `int`/`int64` or unit result (a narrow
+ * result such as `bool` is widened there by a wrapper the registry does not
+ * know), so those are the results it admits. */
+bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty);
+
+/* cps-let-alias-of-effectful-fn-param-refused: the immutable fn-valued
+ * PARAMETER that binding `i` of `let` only renames -- `(let [f g] ...)` with
+ * every use of `f` a saturated call -- or NULL.  The translator inlines each
+ * such call as a call through the parameter and drops the binding, and the
+ * threading classifier (ptc_walk) counts it as one: one answer for both. */
+const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i);
 
 #endif

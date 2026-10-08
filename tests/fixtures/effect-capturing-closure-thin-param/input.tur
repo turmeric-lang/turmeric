@@ -15,13 +15,19 @@
 ;;      the shape that previously had NO working spelling at all (thin and
 ;;      ^fat both died on the CPS-subset eviction).
 (defeffect Ask [] :int)
+;; `Write` is declared so the concrete rows below are not empty; shape 2's row
+;; variable is spelled `e`.  Both used to be silently dropped -- `Write` was
+;; never declared and `|e` is not a row-variable spelling -- so every row here
+;; resolved to #fx{} until TUR-E0026 made an undeclared name an error.
+(defeffect Write [s :cstr] :nil)
 
 (defn run-thunk [body : (fn [] #fx{Write} int)] #fx{Write} : int (body))
-(defn apply1 [f : (fn [int] #fx{|e} int) x : int] #fx{|e} : int (f x))
+(defn apply1 [f : (fn [int] #fx{e} int) x : int] #fx{e} : int (f x))
 (defn apply-cb [f : (fn [] #fx{Ask} int) base : int] #fx{Ask} : int
   (+ (* (f) 2) base))
 
-(defn main [] #fx{Write} : int
+;; main prints, so its row names IO as well as Write (W4: `println` is #fx{IO}).
+(defn main [] #fx{Write IO} : int
   (let [k 7]
     (println (run-thunk (fn [] #fx{Write} : int (+ k 1))))
     (println (apply1 (fn [x : int] : int (+ x k)) 10)))

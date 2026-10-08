@@ -4,7 +4,7 @@
 one -- the coverage is gone and nothing says so).
 
 Reported from the consumer side by the agent working on
-[Trowel](https://github.com/rjungemann/trowel) while running the suite on
+[Trowel](https://github.com/turmeric-lang/trowel) while running the suite on
 macOS. Confirmed here by reading the script and checking `head`'s options.
 
 ## Status (2026-07-27): FIXED

@@ -91,7 +91,7 @@ was open against Windows subprocess behaviour (resolved 2026-09-26).
 ## Repro
 
 Intermittent; no reliable local repro. Seen once in
-[run 35015960062](https://github.com/rjungemann/turmeric/actions/runs/35015960062),
+[run 35015960062](https://github.com/turmeric-lang/turmeric/actions/runs/35015960062),
 job `Windows build + suite 1/3 (MSYS2/UCRT64)`, on `1674153f`. The same job
 passed on `91c31b74` minutes earlier and passed again on re-run.
 

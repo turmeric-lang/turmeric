@@ -2,6 +2,7 @@
 #include "elab_internal.h"
 #include "lang_dialects.h"   /* saffron-dynamic-surface-pass H6: lang_span_is_dynamic */
 #include "mangle.h"
+#include "cps.h"          /* cps_visit_children -- collect_free_vars' fallback */
 #include <string.h>  /* memset for elab_init_state */
 
 /* ---- shared file-scope state (declared in elab_internal.h) ---- */
@@ -347,6 +348,10 @@ void scope_init(Scope *s, Scope *parent) {
     s->n = 0;
     s->cap = 0;
     s->borrows = NULL;
+    s->idx = NULL;
+    s->idx_cap = 0;
+    s->idx_n = 0;
+    s->prev = NULL;
 }
 
 void scope_free(Scope *s) {
@@ -361,6 +366,11 @@ void scope_free(Scope *s) {
     s->bindings = NULL;
     s->n = s->cap = 0;
     s->borrows = NULL;
+    free(s->idx);
+    s->idx = NULL;
+    s->idx_cap = s->idx_n = 0;
+    free(s->prev);
+    s->prev = NULL;
 }
 
 /* Phase 12: Check if a binding has an active borrow that conflicts with the requested kind */
@@ -410,17 +420,96 @@ bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span) {
     return true;
 }
 
+/* r7rs-conformance-program-emits-megabytes-of-c: scope_lookup scanned every
+ * binding of every scope it passed, newest first -- and the global scope holds
+ * every stdlib and program definition, so each lookup of a global name (or of
+ * a special form, which misses) cost thousands of compares: 40% of `emit-c` on
+ * a large `#lang r7rs` program once the passes after it were fixed.  A scope
+ * past SCOPE_INDEX_MIN bindings keeps a hash from name to its NEWEST binding,
+ * which is the one the newest-first scan returns.  Names are interned, so the
+ * key is the Symbol pointer. */
+#define SCOPE_INDEX_MIN 32
+
+/* Mixed at a fixed 64-bit width: a `uintptr_t` is 32 bits on wasm32, where
+ * `>> 33` is an over-wide shift (UB) -- the Try Turmeric worker hung in
+ * turi_wasm_init on it.  On LP64 this is bit-identical (see promo_hash). */
+static uint32_t scope_idx_hash(const Symbol *name) {
+    uint64_t x = (uint64_t)(uintptr_t)name;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x;
+}
+
+/* Point `name`'s slot at binding `i` (newer than any it held). */
+static void scope_idx_put(Scope *s, uint32_t i) {
+    const Symbol *name = s->bindings[i]->name;
+    uint32_t m = s->idx_cap - 1, h = scope_idx_hash(name) & m;
+    while (s->idx[h]) {
+        if (s->bindings[s->idx[h] - 1]->name == name) {
+            s->prev[i] = s->idx[h];
+            s->idx[h] = i + 1;
+            return;
+        }
+        h = (h + 1) & m;
+    }
+    s->prev[i] = 0;
+    s->idx[h] = i + 1;
+    s->idx_n++;
+}
+
+static void scope_idx_rebuild(Scope *s, uint32_t cap) {
+    uint32_t *ni = (uint32_t *)calloc(cap, sizeof *ni);
+    if (!ni) { fprintf(stderr, "tur: oom\n"); abort(); }
+    free(s->idx);
+    s->idx = ni;
+    s->idx_cap = cap;
+    uint32_t *np = (uint32_t *)realloc(s->prev, (s->cap ? s->cap : 1) * sizeof *np);
+    if (!np) { fprintf(stderr, "tur: oom\n"); abort(); }
+    s->prev = np;
+    s->idx_n = 0;
+    for (uint32_t i = 0; i < s->n; i++) scope_idx_put(s, i);   /* oldest first */
+}
+
 void scope_add(Scope *s, Binding *b) {
     if (s->n == s->cap) {
         s->cap = s->cap ? s->cap * 2 : 4;
         s->bindings = (Binding **)realloc(s->bindings, s->cap * sizeof(Binding *));
         if (!s->bindings) { fprintf(stderr, "tur: oom\n"); abort(); }
+        if (s->prev) {
+            s->prev = (uint32_t *)realloc(s->prev, s->cap * sizeof *s->prev);
+            if (!s->prev) { fprintf(stderr, "tur: oom\n"); abort(); }
+        }
     }
     s->bindings[s->n++] = b;
+    if (s->idx) {
+        if ((s->idx_n + 1) * 2 > s->idx_cap) scope_idx_rebuild(s, s->idx_cap * 2);
+        else scope_idx_put(s, s->n - 1);
+    } else if (s->n >= SCOPE_INDEX_MIN) {
+        scope_idx_rebuild(s, 128);
+    }
+}
+
+/* `index + 1` of the newest binding of `name` in indexed scope `s`, 0 if it
+ * has none.  Older ones follow s->prev. */
+uint32_t scope_idx_newest(const Scope *s, const Symbol *name) {
+    uint32_t m = s->idx_cap - 1, h = scope_idx_hash(name) & m;
+    while (s->idx[h]) {
+        if (s->bindings[s->idx[h] - 1]->name == name) return s->idx[h];
+        h = (h + 1) & m;
+    }
+    return 0;
 }
 
 Binding *scope_lookup(Scope *s, const Symbol *name) {
     for (Scope *cur = s; cur; cur = cur->parent) {
+        if (cur->idx) {
+            uint32_t m = cur->idx_cap - 1, h = scope_idx_hash(name) & m;
+            while (cur->idx[h]) {
+                Binding *b = cur->bindings[cur->idx[h] - 1];
+                if (b->name == name) return b;
+                h = (h + 1) & m;
+            }
+            continue;   /* no binding of that name in this scope */
+        }
         for (uint32_t i = cur->n; i > 0; i--) {
             Binding *b = cur->bindings[i - 1];
             if (b->name == name) return b;
@@ -442,6 +531,37 @@ static bool letrec_member_is_recursion(const Binding *b) {
     return true;
 }
 
+/* collect_free_vars' two work stacks.  They were fixed at 256 entries with no
+ * bound check, so a lambda whose body was a `do` of 300 forms overflowed the
+ * heap inside the compiler. */
+typedef struct FvStack { const Expr ***st; int *sp; int *cap; } FvStack;
+
+static void fv_push(const Expr ***st, int *sp, int *cap, const Expr *x) {
+    if (*sp == *cap) {
+        *cap *= 2;
+        const Expr **p = (const Expr **)realloc((void *)*st, (size_t)*cap * sizeof(const Expr *));
+        if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+        *st = p;
+    }
+    (*st)[(*sp)++] = x;
+}
+
+static bool fv_push_visit(const Expr *c, void *ud) {
+    FvStack *s = (FvStack *)ud;
+    fv_push(s->st, s->sp, s->cap, c);
+    return false;
+}
+
+static void fv_add_local(Binding ***defs, uint32_t *n, uint32_t *cap, Binding *b) {
+    if (*n >= *cap) {
+        *cap = *cap ? *cap * 2 : 8;
+        Binding **p = (Binding **)realloc(*defs, *cap * sizeof(Binding *));
+        if (!p) { fprintf(stderr, "tur: oom\n"); abort(); }
+        *defs = p;
+    }
+    (*defs)[(*n)++] = b;
+}
+
 /* Phase 3: Collect free variables in an expression that are not in the given
  * param bindings. Returns a malloc'd list of captured Binding pointers. */
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
@@ -455,9 +575,12 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     Binding **local_defs = NULL;
     uint32_t  n_local = 0, cap_local = 0;
     {
-        const Expr **ls = (const Expr **)malloc(256 * sizeof(const Expr *));
+        int ls_cap = 256;
+        const Expr **ls = (const Expr **)malloc((size_t)ls_cap * sizeof(const Expr *));
+        if (!ls) { fprintf(stderr, "tur: oom\n"); abort(); }
         int lsp = 0;
-        ls[lsp++] = e;
+        FvStack ls_ctx = { &ls, &lsp, &ls_cap };
+        fv_push(&ls, &lsp, &ls_cap, e);
         while (lsp > 0) {
             const Expr *cur = ls[--lsp];
             if (!cur) continue;
@@ -474,120 +597,120 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                             }
                             local_defs[n_local++] = b;
                         }
-                        ls[lsp++] = cur->as.let_.bindings[i].init;
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.let_.bindings[i].init);
                     }
-                    ls[lsp++] = cur->as.let_.body;
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.let_.body);
                     break;
                 case EX_IF:
-                    if (cur->as.if_.else_or_null) ls[lsp++] = cur->as.if_.else_or_null;
-                    ls[lsp++] = cur->as.if_.then_;
-                    ls[lsp++] = cur->as.if_.cond;
+                    if (cur->as.if_.else_or_null) fv_push(&ls, &lsp, &ls_cap, cur->as.if_.else_or_null);
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.if_.then_);
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.if_.cond);
                     break;
                 case EX_DO:
                     for (uint32_t i = cur->as.do_.n; i > 0; i--)
-                        ls[lsp++] = cur->as.do_.items[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.do_.items[i-1]);
                     break;
                 case EX_WHILE:
-                    ls[lsp++] = cur->as.while_.body;
-                    ls[lsp++] = cur->as.while_.cond;
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.while_.body);
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.while_.cond);
                     break;
-                case EX_SET:   ls[lsp++] = cur->as.set_.value;      break;
-                case EX_DEF:   ls[lsp++] = cur->as.def_.init;       break;
+                case EX_SET:   fv_push(&ls, &lsp, &ls_cap, cur->as.set_.value);      break;
+                case EX_DEF:   fv_push(&ls, &lsp, &ls_cap, cur->as.def_.init);       break;
                 case EX_BUILTIN:
                     for (uint32_t i = cur->as.builtin.n; i > 0; i--)
-                        ls[lsp++] = cur->as.builtin.args[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.builtin.args[i-1]);
                     break;
                 case EX_CALL:
                     for (uint32_t i = cur->as.call_.n_args; i > 0; i--)
-                        ls[lsp++] = cur->as.call_.args[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.call_.args[i-1]);
                     break;
-                case EX_FN_DEF:  ls[lsp++] = cur->as.fn_def_.fn->body; break;
+                case EX_FN_DEF:  fv_push(&ls, &lsp, &ls_cap, cur->as.fn_def_.fn->body); break;
                 case EX_RETURN:
-                    if (cur->as.return_.value) ls[lsp++] = cur->as.return_.value;
+                    if (cur->as.return_.value) fv_push(&ls, &lsp, &ls_cap, cur->as.return_.value);
                     break;
-                case EX_PANIC:   ls[lsp++] = cur->as.panic_.payload;   break;
-                case EX_RC_DROP: ls[lsp++] = cur->as.rc_drop_.expr;    break;
-                case EX_DEFER:   ls[lsp++] = cur->as.defer_.body;      break;
-                case EX_RC_OF:   ls[lsp++] = cur->as.rc_of_.expr;      break;
-                case EX_GET_FIELD: ls[lsp++] = cur->as.get_field_.struct_expr; break;
+                case EX_PANIC:   fv_push(&ls, &lsp, &ls_cap, cur->as.panic_.payload);   break;
+                case EX_RC_DROP: fv_push(&ls, &lsp, &ls_cap, cur->as.rc_drop_.expr);    break;
+                case EX_DEFER:   fv_push(&ls, &lsp, &ls_cap, cur->as.defer_.body);      break;
+                case EX_RC_OF:   fv_push(&ls, &lsp, &ls_cap, cur->as.rc_of_.expr);      break;
+                case EX_GET_FIELD: fv_push(&ls, &lsp, &ls_cap, cur->as.get_field_.struct_expr); break;
                 case EX_SET_FIELD:
-                    ls[lsp++] = cur->as.set_field_.value;
-                    ls[lsp++] = cur->as.set_field_.receiver;
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.set_field_.value);
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.set_field_.receiver);
                     break;
                 /* Mirror the main traversal's `any` widen / reader arms, so a
                  * local bound inside one of their operands is registered as
                  * locally defined rather than reported free. */
-                case EX_UNION_INJECT: ls[lsp++] = cur->as.union_inject_.value;  break;
-                case EX_ANY_TYPE_OF:  ls[lsp++] = cur->as.any_type_of_.value;   break;
-                case EX_ANY_IS:       ls[lsp++] = cur->as.any_is_.value;        break;
-                case EX_ANY_CAST:     ls[lsp++] = cur->as.any_cast_.value;      break;
+                case EX_UNION_INJECT: fv_push(&ls, &lsp, &ls_cap, cur->as.union_inject_.value);  break;
+                case EX_ANY_TYPE_OF:  fv_push(&ls, &lsp, &ls_cap, cur->as.any_type_of_.value);   break;
+                case EX_ANY_IS:       fv_push(&ls, &lsp, &ls_cap, cur->as.any_is_.value);        break;
+                case EX_ANY_CAST:     fv_push(&ls, &lsp, &ls_cap, cur->as.any_cast_.value);      break;
                 /* saffron-dynamic-surface-pass H1: the Saffron operator layer's
                  * own nodes, mirrored in the main traversal below. */
                 case EX_DYN_OP:
                     for (uint32_t i = cur->as.dyn_op_.n_args; i > 0; i--)
-                        ls[lsp++] = cur->as.dyn_op_.args[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.dyn_op_.args[i-1]);
                     break;
                 case EX_DYN_CALL:
                     for (uint32_t i = cur->as.dyn_call_.n_args; i > 0; i--)
-                        ls[lsp++] = cur->as.dyn_call_.args[i-1];
-                    ls[lsp++] = cur->as.dyn_call_.fn;
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.dyn_call_.args[i-1]);
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.dyn_call_.fn);
                     break;
-                case EX_DYN_FIELD:  ls[lsp++] = cur->as.dyn_field_.obj;  break;
+                case EX_DYN_FIELD:  fv_push(&ls, &lsp, &ls_cap, cur->as.dyn_field_.obj);  break;
                 case EX_DYN_METHOD:
                     for (uint32_t i = cur->as.dyn_method_.n_args; i > 0; i--)
-                        ls[lsp++] = cur->as.dyn_method_.args[i-1];
-                    ls[lsp++] = cur->as.dyn_method_.obj;
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.dyn_method_.args[i-1]);
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.dyn_method_.obj);
                     break;
                 case EX_MAKE_STRUCT:
                     for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--)
-                        ls[lsp++] = cur->as.make_struct_.field_values[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.make_struct_.field_values[i-1]);
                     break;
                 case EX_SET_LIT:
                     for (uint32_t i = cur->as.set_lit_.n; i > 0; i--)
-                        ls[lsp++] = cur->as.set_lit_.items[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.set_lit_.items[i-1]);
                     break;
                 case EX_CONS_LIST:
                     for (uint32_t i = cur->as.cons_list_.n; i > 0; i--)
-                        ls[lsp++] = cur->as.cons_list_.items[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.cons_list_.items[i-1]);
                     break;
                 /* (:: expr T) is type-erased; descend into the inner expr so any
                  * `let` bindings under an ascription are still collected. */
                 case EX_ASCRIBE:
-                    if (cur->as.ascribe_.inner) ls[lsp++] = cur->as.ascribe_.inner;
+                    if (cur->as.ascribe_.inner) fv_push(&ls, &lsp, &ls_cap, cur->as.ascribe_.inner);
                     break;
                 /* Conversion shims: descend so a `let` nested under one is still
                  * registered as locally defined (mirrors the main traversal). */
                 case EX_REINTERPRET:
-                    if (cur->as.reinterpret_.expr) ls[lsp++] = cur->as.reinterpret_.expr;
+                    if (cur->as.reinterpret_.expr) fv_push(&ls, &lsp, &ls_cap, cur->as.reinterpret_.expr);
                     break;
                 case EX_CAST:
-                    if (cur->as.cast_.expr) ls[lsp++] = cur->as.cast_.expr;
+                    if (cur->as.cast_.expr) fv_push(&ls, &lsp, &ls_cap, cur->as.cast_.expr);
                     break;
                 case EX_FN_TO_FAT:
-                    if (cur->as.fn_to_fat_.inner) ls[lsp++] = cur->as.fn_to_fat_.inner;
+                    if (cur->as.fn_to_fat_.inner) fv_push(&ls, &lsp, &ls_cap, cur->as.fn_to_fat_.inner);
                     break;
                 case EX_POLY_TO_FAT:
-                    if (cur->as.poly_to_fat_.inner) ls[lsp++] = cur->as.poly_to_fat_.inner;
+                    if (cur->as.poly_to_fat_.inner) fv_push(&ls, &lsp, &ls_cap, cur->as.poly_to_fat_.inner);
                     break;
                 case EX_POLY_WRAP:
-                    if (cur->as.poly_wrap_.inner) ls[lsp++] = cur->as.poly_wrap_.inner;
+                    if (cur->as.poly_wrap_.inner) fv_push(&ls, &lsp, &ls_cap, cur->as.poly_wrap_.inner);
                     break;
                 /* GF1: Generator body -- traverse to find local defs */
                 case EX_GEN:
                     if (cur->as.gen_.def && cur->as.gen_.def->body)
-                        ls[lsp++] = cur->as.gen_.def->body;
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.gen_.def->body);
                     break;
                 case EX_YIELD:
-                    if (cur->as.yield_.value) ls[lsp++] = cur->as.yield_.value;
+                    if (cur->as.yield_.value) fv_push(&ls, &lsp, &ls_cap, cur->as.yield_.value);
                     break;
                 case EX_GEN_NEXT:
-                    if (cur->as.gen_next_.gen_expr) ls[lsp++] = cur->as.gen_next_.gen_expr;
+                    if (cur->as.gen_next_.gen_expr) fv_push(&ls, &lsp, &ls_cap, cur->as.gen_next_.gen_expr);
                     break;
                 case EX_GEN_UNWRAP:
-                    if (cur->as.gen_unwrap_.ptr_expr) ls[lsp++] = cur->as.gen_unwrap_.ptr_expr;
+                    if (cur->as.gen_unwrap_.ptr_expr) fv_push(&ls, &lsp, &ls_cap, cur->as.gen_unwrap_.ptr_expr);
                     break;
                 case EX_GEN_DONE:
-                    if (cur->as.gen_done_.gen_expr) ls[lsp++] = cur->as.gen_done_.gen_expr;
+                    if (cur->as.gen_done_.gen_expr) fv_push(&ls, &lsp, &ls_cap, cur->as.gen_done_.gen_expr);
                     break;
                 case EX_HANDLE: {
                     /* Handle case params (effect args + k) are locally defined.
@@ -595,7 +718,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                      * free variables when the handler body is inside an outer
                      * closure (e.g. an async block). */
                     HandleExpr *handle = cur->as.handle_.handle;
-                    ls[lsp++] = handle->body;
+                    fv_push(&ls, &lsp, &ls_cap, handle->body);
                     for (uint8_t ci = 0; ci < handle->n_cases; ci++) {
                         HandleCase *hc = &handle->cases[ci];
                         /* Register k binding as local */
@@ -618,12 +741,12 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                                 local_defs[n_local++] = hc->param_bindings[pi];
                             }
                         }
-                        ls[lsp++] = hc->body;
+                        fv_push(&ls, &lsp, &ls_cap, hc->body);
                     }
                     break;
                 }
                 case EX_MATCH: {
-                    ls[lsp++] = cur->as.match_.scrutinee;
+                    fv_push(&ls, &lsp, &ls_cap, cur->as.match_.scrutinee);
                     for (uint32_t ai = 0; ai < cur->as.match_.n_arms; ai++) {
                         MatchArm *arm = &cur->as.match_.arms[ai];
                         for (uint32_t bi = 0; bi < arm->pattern.n_bindings; bi++) {
@@ -636,8 +759,8 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                                 local_defs[n_local++] = arm->pattern.bindings[bi];
                             }
                         }
-                        if (arm->guard) ls[lsp++] = arm->guard;
-                        if (arm->body)  ls[lsp++] = arm->body;
+                        if (arm->guard) fv_push(&ls, &lsp, &ls_cap, arm->guard);
+                        if (arm->body)  fv_push(&ls, &lsp, &ls_cap, arm->body);
                     }
                     break;
                 }
@@ -655,45 +778,76 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                         }
                         local_defs[n_local++] = cur->as.exists_open_.var_binding;
                     }
-                    if (cur->as.exists_open_.packed) ls[lsp++] = cur->as.exists_open_.packed;
-                    if (cur->as.exists_open_.body)   ls[lsp++] = cur->as.exists_open_.body;
+                    if (cur->as.exists_open_.packed) fv_push(&ls, &lsp, &ls_cap, cur->as.exists_open_.packed);
+                    if (cur->as.exists_open_.body)   fv_push(&ls, &lsp, &ls_cap, cur->as.exists_open_.body);
                     break;
                 case EX_EXISTS_PACK:
-                    if (cur->as.exists_pack_.value) ls[lsp++] = cur->as.exists_pack_.value;
+                    if (cur->as.exists_pack_.value) fv_push(&ls, &lsp, &ls_cap, cur->as.exists_pack_.value);
                     break;
                 case EX_EXISTS_DISPATCH:
                     for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
-                        ls[lsp++] = cur->as.exists_dispatch_.args[i-1];
+                        fv_push(&ls, &lsp, &ls_cap, cur->as.exists_dispatch_.args[i-1]);
                     break;
                 /* Delimited control: descend so a `let` nested under a
                  * shift/reset body is registered as locally defined (matches the
                  * main traversal below). */
                 case EX_RESET:
-                    if (cur->as.reset_.body) ls[lsp++] = cur->as.reset_.body;
+                    if (cur->as.reset_.body) fv_push(&ls, &lsp, &ls_cap, cur->as.reset_.body);
                     break;
                 case EX_SHIFT:
-                    if (cur->as.shift_.k_fn) ls[lsp++] = cur->as.shift_.k_fn;
-                    if (cur->as.shift_.body) ls[lsp++] = cur->as.shift_.body;
+                    if (cur->as.shift_.k_fn) fv_push(&ls, &lsp, &ls_cap, cur->as.shift_.k_fn);
+                    if (cur->as.shift_.body) fv_push(&ls, &lsp, &ls_cap, cur->as.shift_.body);
                     break;
                 case EX_SHIFT0:
-                    if (cur->as.shift0_.k_fn) ls[lsp++] = cur->as.shift0_.k_fn;
-                    if (cur->as.shift0_.body) ls[lsp++] = cur->as.shift0_.body;
+                    if (cur->as.shift0_.k_fn) fv_push(&ls, &lsp, &ls_cap, cur->as.shift0_.k_fn);
+                    if (cur->as.shift0_.body) fv_push(&ls, &lsp, &ls_cap, cur->as.shift0_.body);
                     break;
                 case EX_CLONEABLE_RESET:
-                    if (cur->as.cloneable_reset_.body) ls[lsp++] = cur->as.cloneable_reset_.body;
+                    if (cur->as.cloneable_reset_.body) fv_push(&ls, &lsp, &ls_cap, cur->as.cloneable_reset_.body);
                     break;
                 case EX_CLONEABLE_SHIFT:
-                    if (cur->as.cloneable_shift_.k_fn) ls[lsp++] = cur->as.cloneable_shift_.k_fn;
-                    if (cur->as.cloneable_shift_.body) ls[lsp++] = cur->as.cloneable_shift_.body;
+                    if (cur->as.cloneable_shift_.k_fn) fv_push(&ls, &lsp, &ls_cap, cur->as.cloneable_shift_.k_fn);
+                    if (cur->as.cloneable_shift_.body) fv_push(&ls, &lsp, &ls_cap, cur->as.cloneable_shift_.body);
                     break;
                 case EX_SERIAL_RESET:
-                    if (cur->as.serial_reset_.body) ls[lsp++] = cur->as.serial_reset_.body;
+                    if (cur->as.serial_reset_.body) fv_push(&ls, &lsp, &ls_cap, cur->as.serial_reset_.body);
                     break;
                 case EX_SERIAL_SHIFT:
-                    if (cur->as.serial_shift_.k_fn) ls[lsp++] = cur->as.serial_shift_.k_fn;
-                    if (cur->as.serial_shift_.body) ls[lsp++] = cur->as.serial_shift_.body;
+                    if (cur->as.serial_shift_.k_fn) fv_push(&ls, &lsp, &ls_cap, cur->as.serial_shift_.k_fn);
+                    if (cur->as.serial_shift_.body) fv_push(&ls, &lsp, &ls_cap, cur->as.serial_shift_.body);
                     break;
-                default: break;
+                /* The two forms below the explicit arms do not cover that bind
+                 * a name of their own: a handler value's case params and k, and
+                 * a select clause's received value.  Register them, then let
+                 * the generic enumeration push the operands. */
+                case EX_HANDLER_LIT: {
+                    const HandleExpr *h = cur->as.handler_lit_.handle;
+                    for (uint8_t ci = 0; h && ci < h->n_cases; ci++) {
+                        const HandleCase *hc = &h->cases[ci];
+                        if (hc->k_binding)
+                            fv_add_local(&local_defs, &n_local, &cap_local, hc->k_binding);
+                        for (uint32_t pi = 0; hc->param_bindings && pi < hc->n_params; pi++)
+                            if (hc->param_bindings[pi])
+                                fv_add_local(&local_defs, &n_local, &cap_local, hc->param_bindings[pi]);
+                    }
+                    cps_visit_children(cur, fv_push_visit, &ls_ctx);
+                    break;
+                }
+                case EX_SELECT:
+                    for (uint32_t ci = 0; ci < cur->as.select_.n_clauses; ci++)
+                        if (cur->as.select_.clauses[ci].recv_binding)
+                            fv_add_local(&local_defs, &n_local, &cap_local,
+                                         cur->as.select_.clauses[ci].recv_binding);
+                    cps_visit_children(cur, fv_push_visit, &ls_ctx);
+                    break;
+                /* Every other kind with an evaluated operand: the arms above
+                 * only exist where a kind needs more than its operands
+                 * visited.  This used to be `break`, so a `let` under any
+                 * unlisted form (an `stm` body, a `select` clause) was never
+                 * registered. */
+                default:
+                    cps_visit_children(cur, fv_push_visit, &ls_ctx);
+                    break;
             }
         }
         free(ls);
@@ -704,9 +858,12 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     uint32_t n = 0;
 
     /* Simple recursive traversal using a stack */
-    const Expr **stack = (const Expr **)malloc(256 * sizeof(const Expr *));
+    int stack_cap = 256;
+    const Expr **stack = (const Expr **)malloc((size_t)stack_cap * sizeof(const Expr *));
+    if (!stack) { fprintf(stderr, "tur: oom\n"); abort(); }
     int sp = 0;
-    stack[sp++] = e;
+    FvStack stack_ctx = { &stack, &sp, &stack_cap };
+    fv_push(&stack, &sp, &stack_cap, e);
 
     while (sp > 0) {
         const Expr *cur = stack[--sp];
@@ -756,33 +913,33 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             case EX_LET:
             case EX_LETREC:
                 for (uint32_t i = cur->as.let_.n; i > 0; i--) {
-                    stack[sp++] = cur->as.let_.bindings[i-1].init;
+                    fv_push(&stack, &sp, &stack_cap, cur->as.let_.bindings[i-1].init);
                 }
-                stack[sp++] = cur->as.let_.body;
+                fv_push(&stack, &sp, &stack_cap, cur->as.let_.body);
                 break;
             case EX_IF:
-                if (cur->as.if_.else_or_null) stack[sp++] = cur->as.if_.else_or_null;
-                stack[sp++] = cur->as.if_.then_;
-                stack[sp++] = cur->as.if_.cond;
+                if (cur->as.if_.else_or_null) fv_push(&stack, &sp, &stack_cap, cur->as.if_.else_or_null);
+                fv_push(&stack, &sp, &stack_cap, cur->as.if_.then_);
+                fv_push(&stack, &sp, &stack_cap, cur->as.if_.cond);
                 break;
             case EX_DO:
                 for (uint32_t i = cur->as.do_.n; i > 0; i--) {
-                    stack[sp++] = cur->as.do_.items[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.do_.items[i-1]);
                 }
                 break;
             case EX_WHILE:
-                stack[sp++] = cur->as.while_.body;
-                stack[sp++] = cur->as.while_.cond;
+                fv_push(&stack, &sp, &stack_cap, cur->as.while_.body);
+                fv_push(&stack, &sp, &stack_cap, cur->as.while_.cond);
                 break;
             case EX_SET:
-                stack[sp++] = cur->as.set_.value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.set_.value);
                 break;
             case EX_DEF:
-                stack[sp++] = cur->as.def_.init;
+                fv_push(&stack, &sp, &stack_cap, cur->as.def_.init);
                 break;
             case EX_BUILTIN:
                 for (uint32_t i = cur->as.builtin.n; i > 0; i--) {
-                    stack[sp++] = cur->as.builtin.args[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.builtin.args[i-1]);
                 }
                 break;
             case EX_CALL:
@@ -894,14 +1051,14 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     }
                 }
                 if (cur->as.call_.fn_expr) {
-                    stack[sp++] = cur->as.call_.fn_expr;
+                    fv_push(&stack, &sp, &stack_cap, cur->as.call_.fn_expr);
                 }
                 for (uint32_t i = cur->as.call_.n_args; i > 0; i--) {
-                    stack[sp++] = cur->as.call_.args[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.call_.args[i-1]);
                 }
                 break;
             case EX_FN_DEF:
-                stack[sp++] = cur->as.fn_def_.fn->body;
+                fv_push(&stack, &sp, &stack_cap, cur->as.fn_def_.fn->body);
                 break;
             /* Transitive capture: a nested closure that has already been
              * elaborated is an EX_CLOSURE node whose body no longer exposes
@@ -957,67 +1114,67 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 }
                 break;
             case EX_RC_DROP:
-                stack[sp++] = cur->as.rc_drop_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.rc_drop_.expr);
                 break;
             case EX_DEFER:
-                stack[sp++] = cur->as.defer_.body;
+                fv_push(&stack, &sp, &stack_cap, cur->as.defer_.body);
                 break;
             case EX_RC_OF:
-                stack[sp++] = cur->as.rc_of_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.rc_of_.expr);
                 break;
             case EX_RC_FROM_REF:
-                stack[sp++] = cur->as.rc_from_ref_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.rc_from_ref_.expr);
                 break;
             case EX_REF_FROM_RC:
-                stack[sp++] = cur->as.ref_from_rc_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.ref_from_rc_.expr);
                 break;
             case EX_WEAK:
-                stack[sp++] = cur->as.weak_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.weak_.expr);
                 break;
             case EX_WEAK_UPGRADE:
-                stack[sp++] = cur->as.weak_upgrade_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.weak_upgrade_.expr);
                 break;
             case EX_RC_CLONE:
-                stack[sp++] = cur->as.rc_clone_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.rc_clone_.expr);
                 break;
             case EX_RC_PTR:
-                stack[sp++] = cur->as.rc_ptr_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.rc_ptr_.expr);
                 break;
             case EX_RC_COUNT:
-                stack[sp++] = cur->as.rc_count_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.rc_count_.expr);
                 break;
             case EX_WEAK_PRED:
-                stack[sp++] = cur->as.weak_pred_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.weak_pred_.expr);
                 break;
             case EX_REF_PRED:
-                stack[sp++] = cur->as.ref_pred_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.ref_pred_.expr);
                 break;
             /* Phase 5: ref/deref */
             case EX_REF:
-                stack[sp++] = cur->as.ref_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.ref_.expr);
                 break;
             case EX_DEREF:
-                stack[sp++] = cur->as.deref_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.deref_.expr);
                 break;
             /* Phase 12: Borrow traits */
             case EX_BORROW_IMMUT:
-                stack[sp++] = cur->as.borrow_immut_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.borrow_immut_.expr);
                 break;
             case EX_BORROW_MUT:
-                stack[sp++] = cur->as.borrow_mut_.expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.borrow_mut_.expr);
                 break;
             case EX_SET_DEREF:
-                stack[sp++] = cur->as.set_deref_.ref;
-                stack[sp++] = cur->as.set_deref_.value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.set_deref_.ref);
+                fv_push(&stack, &sp, &stack_cap, cur->as.set_deref_.value);
                 break;
             case EX_MAKE_STRUCT:
                 for (uint32_t i = cur->as.make_struct_.n_fields; i > 0; i--) {
-                    stack[sp++] = cur->as.make_struct_.field_values[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.make_struct_.field_values[i-1]);
                 }
                 break;
             case EX_SET_LIT:
                 for (uint32_t i = cur->as.set_lit_.n; i > 0; i--) {
-                    stack[sp++] = cur->as.set_lit_.items[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.set_lit_.items[i-1]);
                 }
                 break;
             case EX_CONS_LIST:
@@ -1026,15 +1183,15 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                  * captured item is surfaced (a delegated cons-list riding a lifted
                  * CPS continuation env would otherwise miss the capture). */
                 for (uint32_t i = cur->as.cons_list_.n; i > 0; i--) {
-                    stack[sp++] = cur->as.cons_list_.items[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.cons_list_.items[i-1]);
                 }
                 break;
             case EX_GET_FIELD:
-                stack[sp++] = cur->as.get_field_.struct_expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.get_field_.struct_expr);
                 break;
             case EX_SET_FIELD:
-                stack[sp++] = cur->as.set_field_.receiver;
-                stack[sp++] = cur->as.set_field_.value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.set_field_.receiver);
+                fv_push(&stack, &sp, &stack_cap, cur->as.set_field_.value);
                 break;
             /* perform-in-fn-with-any-param-has-no-cps-lowering: the `any` widen
              * and its three readers, for the same reason the catch forms below
@@ -1044,7 +1201,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * after a `perform` is delegated as a CT_LETRAW, whose capture set is
              * exactly this walk's answer, so a missed `v` never rode the env. */
             case EX_UNION_INJECT:
-                stack[sp++] = cur->as.union_inject_.value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.union_inject_.value);
                 break;
             /* saffron-dynamic-surface-pass H1: a captured variable referenced
              * only inside a dynamic operator, call, field read or method
@@ -1057,49 +1214,49 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * all the fixtures had, was not. */
             case EX_DYN_OP:
                 for (uint32_t i = cur->as.dyn_op_.n_args; i > 0; i--)
-                    stack[sp++] = cur->as.dyn_op_.args[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.dyn_op_.args[i-1]);
                 break;
             case EX_DYN_CALL:
                 for (uint32_t i = cur->as.dyn_call_.n_args; i > 0; i--)
-                    stack[sp++] = cur->as.dyn_call_.args[i-1];
-                stack[sp++] = cur->as.dyn_call_.fn;
+                    fv_push(&stack, &sp, &stack_cap, cur->as.dyn_call_.args[i-1]);
+                fv_push(&stack, &sp, &stack_cap, cur->as.dyn_call_.fn);
                 break;
             case EX_DYN_FIELD:
-                stack[sp++] = cur->as.dyn_field_.obj;
+                fv_push(&stack, &sp, &stack_cap, cur->as.dyn_field_.obj);
                 break;
             case EX_DYN_METHOD:
                 for (uint32_t i = cur->as.dyn_method_.n_args; i > 0; i--)
-                    stack[sp++] = cur->as.dyn_method_.args[i-1];
-                stack[sp++] = cur->as.dyn_method_.obj;
+                    fv_push(&stack, &sp, &stack_cap, cur->as.dyn_method_.args[i-1]);
+                fv_push(&stack, &sp, &stack_cap, cur->as.dyn_method_.obj);
                 break;
             case EX_ANY_TYPE_OF:
-                stack[sp++] = cur->as.any_type_of_.value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.any_type_of_.value);
                 break;
             case EX_ANY_IS:
-                stack[sp++] = cur->as.any_is_.value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.any_is_.value);
                 break;
             case EX_ANY_CAST:
-                stack[sp++] = cur->as.any_cast_.value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.any_cast_.value);
                 break;
             /* Phase 19: Algebraic effects */
             case EX_PERFORM:
                 for (uint32_t i = cur->as.perform_.perform->n_args; i > 0; i--) {
-                    stack[sp++] = cur->as.perform_.perform->args[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.perform_.perform->args[i-1]);
                 }
                 break;
             case EX_HANDLE:
-                stack[sp++] = cur->as.handle_.handle->body;
+                fv_push(&stack, &sp, &stack_cap, cur->as.handle_.handle->body);
                 for (uint8_t i = cur->as.handle_.handle->n_cases; i > 0; i--) {
-                    stack[sp++] = cur->as.handle_.handle->cases[i-1].body;
+                    fv_push(&stack, &sp, &stack_cap, cur->as.handle_.handle->cases[i-1].body);
                 }
                 break;
             case EX_RESUME:
-                stack[sp++] = cur->as.resume_.resume->k;
-                stack[sp++] = cur->as.resume_.resume->value;
+                fv_push(&stack, &sp, &stack_cap, cur->as.resume_.resume->k);
+                fv_push(&stack, &sp, &stack_cap, cur->as.resume_.resume->value);
                 break;
             case EX_DISCONTINUE:
-                stack[sp++] = cur->as.discontinue_.discontinue->k;
-                stack[sp++] = cur->as.discontinue_.discontinue->exception;
+                fv_push(&stack, &sp, &stack_cap, cur->as.discontinue_.discontinue->k);
+                fv_push(&stack, &sp, &stack_cap, cur->as.discontinue_.discontinue->exception);
                 break;
             /* (call/cc f) / (escape f): the receiver `f` references enclosing
              * locals, which must be surfaced as free vars of the enclosing scope
@@ -1153,7 +1310,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     }
                     free(sub);
                 } else if (rf) {
-                    stack[sp++] = (Expr *)rf;   /* EX_CLOSURE folds captures */
+                    fv_push(&stack, &sp, &stack_cap, (Expr *)rf);   /* EX_CLOSURE folds captures */
                 }
                 break;
             }
@@ -1183,31 +1340,31 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                     }
                     free(sub);
                 } else {
-                    stack[sp++] = cur->as.callcc_.fn;   /* EX_CLOSURE folds captures */
+                    fv_push(&stack, &sp, &stack_cap, cur->as.callcc_.fn);   /* EX_CLOSURE folds captures */
                 }
                 break;
             }
             /* Phase T21: Async/await */
             case EX_ASYNC:
-                stack[sp++] = cur->as.async_.fn_expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.async_.fn_expr);
                 break;
             case EX_AWAIT:
-                stack[sp++] = cur->as.await_.fut_expr;
+                fv_push(&stack, &sp, &stack_cap, cur->as.await_.fut_expr);
                 break;
             /* Phase 3/4: Return */
             case EX_RETURN:
-                if (cur->as.return_.value) stack[sp++] = cur->as.return_.value;
+                if (cur->as.return_.value) fv_push(&stack, &sp, &stack_cap, cur->as.return_.value);
                 break;
             /* Phase R2: Panic */
             case EX_PANIC:
-                stack[sp++] = cur->as.panic_.payload;
+                fv_push(&stack, &sp, &stack_cap, cur->as.panic_.payload);
                 break;
             case EX_MATCH:
-                stack[sp++] = cur->as.match_.scrutinee;
+                fv_push(&stack, &sp, &stack_cap, cur->as.match_.scrutinee);
                 for (uint32_t ai = cur->as.match_.n_arms; ai > 0; ai--) {
                     MatchArm *arm = &cur->as.match_.arms[ai-1];
-                    if (arm->guard) stack[sp++] = arm->guard;
-                    if (arm->body)  stack[sp++] = arm->body;
+                    if (arm->guard) fv_push(&stack, &sp, &stack_cap, arm->guard);
+                    if (arm->body)  fv_push(&stack, &sp, &stack_cap, arm->body);
                 }
                 break;
             /* SS2: Walk val_exprs so channel EX_VAR nodes are found as free vars */
@@ -1215,7 +1372,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
                 InlineC *ic = cur->as.inline_c_.inline_c;
                 if (ic) {
                     for (uint8_t vi = 0; vi < ic->n_val_exprs; vi++) {
-                        if (ic->val_exprs[vi]) stack[sp++] = ic->val_exprs[vi];
+                        if (ic->val_exprs[vi]) fv_push(&stack, &sp, &stack_cap, ic->val_exprs[vi]);
                     }
                 }
                 break;
@@ -1223,19 +1380,19 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
             /* GF1: Generator forms */
             case EX_GEN:
                 if (cur->as.gen_.def && cur->as.gen_.def->body)
-                    stack[sp++] = cur->as.gen_.def->body;
+                    fv_push(&stack, &sp, &stack_cap, cur->as.gen_.def->body);
                 break;
             case EX_YIELD:
-                if (cur->as.yield_.value) stack[sp++] = cur->as.yield_.value;
+                if (cur->as.yield_.value) fv_push(&stack, &sp, &stack_cap, cur->as.yield_.value);
                 break;
             case EX_GEN_NEXT:
-                if (cur->as.gen_next_.gen_expr) stack[sp++] = cur->as.gen_next_.gen_expr;
+                if (cur->as.gen_next_.gen_expr) fv_push(&stack, &sp, &stack_cap, cur->as.gen_next_.gen_expr);
                 break;
             case EX_GEN_UNWRAP:
-                if (cur->as.gen_unwrap_.ptr_expr) stack[sp++] = cur->as.gen_unwrap_.ptr_expr;
+                if (cur->as.gen_unwrap_.ptr_expr) fv_push(&stack, &sp, &stack_cap, cur->as.gen_unwrap_.ptr_expr);
                 break;
             case EX_GEN_DONE:
-                if (cur->as.gen_done_.gen_expr) stack[sp++] = cur->as.gen_done_.gen_expr;
+                if (cur->as.gen_done_.gen_expr) fv_push(&stack, &sp, &stack_cap, cur->as.gen_done_.gen_expr);
                 break;
             /* (:: expr T) is type-erased at codegen; descend into the inner
              * expr so a variable that only appears under an ascription is still
@@ -1243,7 +1400,7 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * Without this, `(use-raw (:: ch :ptr<void>))` inside a `(fn ...)`
              * misses `ch` and emits the bare local instead of the env access. */
             case EX_ASCRIBE:
-                if (cur->as.ascribe_.inner) stack[sp++] = cur->as.ascribe_.inner;
+                if (cur->as.ascribe_.inner) fv_push(&stack, &sp, &stack_cap, cur->as.ascribe_.inner);
                 break;
             /* Compiler-only conversion shims wrap an inner expr that may be the
              * sole reference to a free variable -- e.g. a `:fn` value passed
@@ -1251,19 +1408,19 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * captured `:fn` boxed into a ^fat sink is wrapped in EX_POLY_TO_FAT.
              * Descend so that variable is still captured. */
             case EX_REINTERPRET:
-                if (cur->as.reinterpret_.expr) stack[sp++] = cur->as.reinterpret_.expr;
+                if (cur->as.reinterpret_.expr) fv_push(&stack, &sp, &stack_cap, cur->as.reinterpret_.expr);
                 break;
             case EX_CAST:
-                if (cur->as.cast_.expr) stack[sp++] = cur->as.cast_.expr;
+                if (cur->as.cast_.expr) fv_push(&stack, &sp, &stack_cap, cur->as.cast_.expr);
                 break;
             case EX_FN_TO_FAT:
-                if (cur->as.fn_to_fat_.inner) stack[sp++] = cur->as.fn_to_fat_.inner;
+                if (cur->as.fn_to_fat_.inner) fv_push(&stack, &sp, &stack_cap, cur->as.fn_to_fat_.inner);
                 break;
             case EX_POLY_TO_FAT:
-                if (cur->as.poly_to_fat_.inner) stack[sp++] = cur->as.poly_to_fat_.inner;
+                if (cur->as.poly_to_fat_.inner) fv_push(&stack, &sp, &stack_cap, cur->as.poly_to_fat_.inner);
                 break;
             case EX_POLY_WRAP:
-                if (cur->as.poly_wrap_.inner) stack[sp++] = cur->as.poly_wrap_.inner;
+                if (cur->as.poly_wrap_.inner) fv_push(&stack, &sp, &stack_cap, cur->as.poly_wrap_.inner);
                 break;
             /* Existential forms.  Without descending here, a variable referenced
              * only inside an `open` scrutinee (`(open (vec-get rs i) [a v] ...)`),
@@ -1273,15 +1430,15 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * undeclared).  The open's `v` binding is registered as a local def
              * in the pre-pass, so its body references to `v` are filtered out. */
             case EX_EXISTS_OPEN:
-                if (cur->as.exists_open_.packed) stack[sp++] = cur->as.exists_open_.packed;
-                if (cur->as.exists_open_.body)   stack[sp++] = cur->as.exists_open_.body;
+                if (cur->as.exists_open_.packed) fv_push(&stack, &sp, &stack_cap, cur->as.exists_open_.packed);
+                if (cur->as.exists_open_.body)   fv_push(&stack, &sp, &stack_cap, cur->as.exists_open_.body);
                 break;
             case EX_EXISTS_PACK:
-                if (cur->as.exists_pack_.value) stack[sp++] = cur->as.exists_pack_.value;
+                if (cur->as.exists_pack_.value) fv_push(&stack, &sp, &stack_cap, cur->as.exists_pack_.value);
                 break;
             case EX_EXISTS_DISPATCH:
                 for (uint32_t i = cur->as.exists_dispatch_.n_args; i > 0; i--)
-                    stack[sp++] = cur->as.exists_dispatch_.args[i-1];
+                    fv_push(&stack, &sp, &stack_cap, cur->as.exists_dispatch_.args[i-1]);
                 break;
             /* Delimited control (reset/shift/shift0, cloneable variants): descend
              * into the delimited body and receiver so a local referenced only
@@ -1290,31 +1447,41 @@ Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
              * their subtrees were invisible -- e.g. a value captured as a
              * cloneable-shift body was never seen by the E4 Clone-capture check. */
             case EX_RESET:
-                if (cur->as.reset_.body) stack[sp++] = cur->as.reset_.body;
+                if (cur->as.reset_.body) fv_push(&stack, &sp, &stack_cap, cur->as.reset_.body);
                 break;
             case EX_SHIFT:
-                if (cur->as.shift_.k_fn) stack[sp++] = cur->as.shift_.k_fn;
-                if (cur->as.shift_.body) stack[sp++] = cur->as.shift_.body;
+                if (cur->as.shift_.k_fn) fv_push(&stack, &sp, &stack_cap, cur->as.shift_.k_fn);
+                if (cur->as.shift_.body) fv_push(&stack, &sp, &stack_cap, cur->as.shift_.body);
                 break;
             case EX_SHIFT0:
-                if (cur->as.shift0_.k_fn) stack[sp++] = cur->as.shift0_.k_fn;
-                if (cur->as.shift0_.body) stack[sp++] = cur->as.shift0_.body;
+                if (cur->as.shift0_.k_fn) fv_push(&stack, &sp, &stack_cap, cur->as.shift0_.k_fn);
+                if (cur->as.shift0_.body) fv_push(&stack, &sp, &stack_cap, cur->as.shift0_.body);
                 break;
             case EX_CLONEABLE_RESET:
-                if (cur->as.cloneable_reset_.body) stack[sp++] = cur->as.cloneable_reset_.body;
+                if (cur->as.cloneable_reset_.body) fv_push(&stack, &sp, &stack_cap, cur->as.cloneable_reset_.body);
                 break;
             case EX_CLONEABLE_SHIFT:
-                if (cur->as.cloneable_shift_.k_fn) stack[sp++] = cur->as.cloneable_shift_.k_fn;
-                if (cur->as.cloneable_shift_.body) stack[sp++] = cur->as.cloneable_shift_.body;
+                if (cur->as.cloneable_shift_.k_fn) fv_push(&stack, &sp, &stack_cap, cur->as.cloneable_shift_.k_fn);
+                if (cur->as.cloneable_shift_.body) fv_push(&stack, &sp, &stack_cap, cur->as.cloneable_shift_.body);
                 break;
             case EX_SERIAL_RESET:
-                if (cur->as.serial_reset_.body) stack[sp++] = cur->as.serial_reset_.body;
+                if (cur->as.serial_reset_.body) fv_push(&stack, &sp, &stack_cap, cur->as.serial_reset_.body);
                 break;
             case EX_SERIAL_SHIFT:
-                if (cur->as.serial_shift_.k_fn) stack[sp++] = cur->as.serial_shift_.k_fn;
-                if (cur->as.serial_shift_.body) stack[sp++] = cur->as.serial_shift_.body;
+                if (cur->as.serial_shift_.k_fn) fv_push(&stack, &sp, &stack_cap, cur->as.serial_shift_.k_fn);
+                if (cur->as.serial_shift_.body) fv_push(&stack, &sp, &stack_cap, cur->as.serial_shift_.body);
                 break;
+            /* Every kind without an arm above: visit its evaluated operands
+             * through the one enumeration that covers them all.  This used to
+             * be `break`, which silently dropped every capture under an
+             * unlisted form -- `(fn [] (atomically (stm (tvar/write tv 5))))`
+             * lifted as captureless and its body named an undeclared `tv`
+             * (docs/archive/stm-inside-closure-captured-tvar-undeclared.md);
+             * `select`, `with-handler` and dynamic `binding` had the same
+             * hole.  Nested functions are not enumerated there either, and
+             * EX_FN_DEF / EX_CLOSURE keep their own arms above. */
             default:
+                cps_visit_children(cur, fv_push_visit, &stack_ctx);
                 break;
         }
     }
@@ -2163,6 +2330,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_cont_pred = intern_cstr(st, "cont?");
     e->sym_effect_unsafe = intern_cstr(st, EFFECT_NAME_UNSAFE);
     effect_env_register_builtin_unsafe(e->effect_env, e->arena, e->sym_effect_unsafe);
+    effect_env_register_builtin_capabilities(e->effect_env, e->arena, st);
     /* ET3: handler type expression and compose-handlers */
     e->sym_handler_type     = intern_cstr(st, "handler");
     e->sym_compose_handlers = intern_cstr(st, "compose-handlers");
@@ -2315,10 +2483,16 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_used_attr = intern_cstr(st, "#used");
     /* Phase M6: (export-as "c_name") attribute head symbol */
     e->sym_export_as_attr = intern_cstr(st, "export-as");
-    /* M2a: #{Construct} polymorphic-constructor synthesis marker */
-    e->sym_construct_attr = intern_cstr(st, "Construct");
-    /* M5 residual-straddle: #{ByVal} prefer-byvalue-spec marker */
-    e->sym_byval_attr = intern_cstr(st, "ByVal");
+    /* M2a: `^construct` polymorphic-constructor synthesis marker, and M5
+     * residual-straddle: `^byval` prefer-byvalue-spec marker.  Both used to
+     * be spelled inside the effect row (^construct / ^byval);
+     * effect-row-honesty-plan W0 moved them onto the defn's attributes. */
+    e->sym_caret_construct = intern_cstr(st, "^construct");
+    e->sym_caret_byval     = intern_cstr(st, "^byval");
+    /* W0: `(match ^non-exhaustive x ...)`, and the deprecated spelling it
+     * replaces, `(match #fx{NonExhaustive} x ...)` (TUR-D0004). */
+    e->sym_caret_non_exhaustive = intern_cstr(st, "^non-exhaustive");
+    e->sym_non_exhaustive_legacy = intern_cstr(st, "NonExhaustive");
     e->sym_panic_payload_value = intern_cstr(st, "panic-payload-value");
     e->sym_panic_payload_file = intern_cstr(st, "panic-payload-file");
     e->sym_panic_payload_line = intern_cstr(st, "panic-payload-line");
@@ -2431,6 +2605,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->kw_invariant = intern_cstr(st, "invariant");
     e->sym_result             = intern_cstr(st, "result");
     e->sym_tur_contract_check = intern_cstr(st, "tur-contract-check");
+    e->sym_tur_contract_check_at = intern_cstr(st, "tur-contract-check-at");
     /* DV0: Dynamic vars */
     e->sym_defdynamic    = intern_cstr(st, "defdynamic");
     e->sym_binding       = intern_cstr(st, "binding");

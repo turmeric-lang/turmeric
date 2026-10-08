@@ -99,6 +99,22 @@ check "flags/unknown-rejected" "2" "$?"
 FP_CEILING=25
 if command -v nm >/dev/null 2>&1; then
     syms=$(nm "$TUR" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' | sort -u)
+    # The JIT engine (TUR_JIT, on by default since 2026-10-02) links the
+    # vendored MIR from external/mir/: third-party C whose names are not ours
+    # to tune the signal set against (`add__func__def`, and on macOS a dozen
+    # `.cold.N` copies of it, each counted).  Measure tur's own C, as the
+    # ceiling was calibrated: drop every symbol libtur_mir.a DEFINES (three
+    # nm fields -- an undefined reference has two), matched on the base name
+    # so the compiler's `.cold.N` / `.part.N` clones go with it.
+    mir_lib="$(dirname "$TUR")/libtur_mir.a"
+    if [ -f "$mir_lib" ]; then
+        mir_syms=$(nm "$mir_lib" 2>/dev/null | awk 'NF == 3 {print $3}' \
+                   | sed 's/^_//; s/\..*$//' | sort -u)
+        syms=$(printf '%s\n' "$syms" \
+               | awk 'NR == FNR { m[$0] = 1; next }
+                      { b = $0; sub(/\..*$/, "", b); if (!(b in m)) print }' \
+                     <(printf '%s\n' "$mir_syms") -)
+    fi
     n_syms=$(printf '%s\n' "$syms" | grep -c . || true)
     if [ "${n_syms:-0}" -lt 1000 ]; then
         echo "SKIP precision-ratchet - nm produced only ${n_syms:-0} symbols (stripped binary?)"

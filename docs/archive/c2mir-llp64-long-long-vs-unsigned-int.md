@@ -7,7 +7,7 @@ Windows JIT's whole-preamble fallback
 ([jit-windows-support-spike](../archive/jit-windows-support-spike.md)).
 
 **Status: RESOLVED 2026-09-28.**
-[rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4) merged into the
+[rjungemann/mir#4](https://github.com/turmeric-lang/mir/pull/4) merged into the
 fork's master as `79cb2905`, and `TUR_MIR_GIT_TAG` in `cmake/mir.cmake` now
 pins that commit (with a line in the pin notes above it). One in-tree user of
 the pattern, the r7rs bignum subtraction, had already been rewritten so it no
@@ -67,7 +67,7 @@ The other `int64_t ... R7BN_BASE` sites in that file are all-`int64_t`, or
 reach a `(uint32_t)` cast whose low 32 bits are the same either way. Nothing
 else in the tree was audited for the pattern.
 
-## Fix ([rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4))
+## Fix ([rjungemann/mir#4](https://github.com/turmeric-lang/mir/pull/4))
 
 Branch `fix/llp64-uint-llong-conversion` off the fork's master (`b7e72a95`, the
 current pin), one commit. It follows C11 6.3.1.8 directly:
@@ -88,7 +88,7 @@ Verified on Windows 11 / MSYS2 UCRT64 with the patched c2mir in
 
 To land it:
 
-1. Merge [rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4). The
+1. Merge [rjungemann/mir#4](https://github.com/turmeric-lang/mir/pull/4). The
    patch is reproduced below for reading without leaving this repo.
 2. Bump `TUR_MIR_GIT_TAG` in `cmake/mir.cmake` to the merge commit, and add a
    line to the pin notes above it.
@@ -169,7 +169,7 @@ index 07fb461a..e5f0fcba 100644
 
 Landed exactly as the three steps above say:
 
-1. [rjungemann/mir#4](https://github.com/rjungemann/mir/pull/4) merged with a
+1. [rjungemann/mir#4](https://github.com/turmeric-lang/mir/pull/4) merged with a
    merge commit, `79cb29058e8c`, on the fork's master. Its own CI (the
    ubuntu, macOS and Windows `test` jobs) was green. The gcc-farm and qemu
    jobs were cancelled because the fork has no self-hosted runners for them,

@@ -1,5 +1,5 @@
 ;; M5 residual-straddle (docs/m5-residual-straddle-retirement.md):
-;; pins the #{ByVal} marker behavior end-to-end.  A #{ByVal}-marked helper
+;; pins the ^byval marker behavior end-to-end.  A ^byval-marked helper
 ;; with a (Vec A) param that's only called from a by-value spec body
 ;; should get a per-receiver-type spec interned AND its carrier-base body
 ;; should be suppressed (no observed carrier call, thanks to
@@ -8,15 +8,14 @@
 ;; end-to-end-monomorphization (Vec typed-pointer slice): Vec is now a :heap
 ;; type, so the per-receiver spec receives `v` as the typed pointer
 ;; `Vec__int *` (not a by-value `Vec__int` struct).  The inline-C body
-;; therefore derefs the header through `v->len` / `v->data`.  The #{ByVal}
+;; therefore derefs the header through `v->len` / `v->data`.  The ^byval
 ;; marker still routes the call through the spec path rather than the int64
 ;; carrier base; under the typed-pointer ABI the spec receiver and the
 ;; carrier both hold the same pointer value, so the marker is ABI-neutral
 ;; here but still exercises the spec-interning + carrier-skip machinery.
 
-(defn vget-marker-byval [A]
+(defn ^byval vget-marker-byval [A]
   [v : (Vec A) i : int]
-  #fx{ByVal}
   : A
   ```c
   if (i >= 0 && (size_t)i < (size_t)v->len) {

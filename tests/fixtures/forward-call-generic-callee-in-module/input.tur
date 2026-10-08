@@ -1,0 +1,51 @@
+;; forward-call-generic-callee-in-module -- the defmodule half of
+;; forward-call-generic-callee: a module body's forward decls come from its
+;; own pre-pass (elab_forward_declare_defns), and a caller above a generic
+;; defn of the same body saw the same arity-only decl.  See
+;; docs/archive/forward-call-to-generic-callee-typed-as-placeholder.md.
+(defmodule prog
+  (export main)
+
+  (defstruct Rec [a : float b : int])
+
+  (defn main [] : int
+    (match (wrap-once 7.1)
+      (Some v) (println v)
+      (None) (println "none"))
+    (println (bump 40))
+    (let [p (keep (Rec 3.25 9))]
+      (println (.a p))
+      (println (.b p)))
+    (println (count-down 4 7.1))
+    (match (count-opt 3 2.75)
+      (Some v) (println v)
+      (None) (println "none"))
+    0)
+
+  (defn wrap-once [x : float] : (Option float)
+    (wrap x))
+
+  (defn bump [x : int] : int
+    (twice (fn [y : int] : int (+ y 1)) x))
+
+  (defn keep [p : Rec] : Rec
+    (ident p))
+
+  ;; Calls into a cycle of generics: the cycle is broken at its first
+  ;; generic member, so this still comes after both.
+  (defn count-down [n : int x : float] : float
+    (ping n x))
+
+  (defn wrap [A] [x : A] : (Option A) (some x))
+  (defn twice [A] [f : (fn [A] A) x : A] : A (f (f x)))
+  (defn ident [A] [x : A] : A x)
+  (defn ping [A] [n : int x : A] : A (if (= n 0) x (pong (- n 1) x)))
+  (defn pong [A] [n : int x : A] : A (if (= n 0) x (ping (- n 1) x)))
+
+  ;; The same cycle with an (Option A) result: primed speculatively first.
+  (defn count-opt [n : int x : float] : (Option float)
+    (ping-opt n x))
+  (defn ping-opt [A] [n : int x : A] : (Option A)
+    (if (= n 0) (some x) (pong-opt (- n 1) x)))
+  (defn pong-opt [A] [n : int x : A] : (Option A)
+    (if (= n 0) (some x) (ping-opt (- n 1) x))))

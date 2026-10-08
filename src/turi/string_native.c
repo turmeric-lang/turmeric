@@ -25,7 +25,7 @@ static TuriValue n_from_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
     return turi_int((int64_t)(intptr_t)tur_string_from_cstr(n >= 1 ? arg_cstr(a[0]) : ""));
 }
 static TuriValue n_from_bytes(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
     const char *src = n >= 1 ? arg_cstr(a[0]) : "";
     int64_t len = n >= 2 ? a[1].as_int : 0;
     /* A cstr VALUE carries no length but its NUL, so a `len` past it read
@@ -35,10 +35,19 @@ static TuriValue n_from_bytes(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
      * NULs, as on the compiled path, and keeps the caller's length. */
     if (n >= 1 && a[0].tag == TURI_CSTR && src && len > 0)
         len = (int64_t)strnlen(src, (size_t)len);
+    /* S-5: in a provenance-tracked env the guard admitted the word only as a
+     * C string (CSTR row) -- never as a sized buffer -- so it is capped at its
+     * NUL too.  A NULL source copied `len` bytes from address 0. */
+    if (!src) len = 0;
+    else if (e->provenance_on && len > 0) len = (int64_t)strnlen(src, (size_t)len);
     return turi_int((int64_t)(intptr_t)tur_string_from_bytes(src, len));
 }
 static TuriValue n_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {
-    (void)e; (void)ud;
+    (void)ud;
+    /* S-5: the bytes belong to the String, which tur_string_release frees,
+     * while a tagged cstr is trusted wherever it goes.  A provenance-tracked
+     * env gets an env-pool copy, so the string it holds cannot dangle. */
+    if (e->provenance_on) return turi_cstr(turi_val_strdup(e, tur_string_cstr(S1)));
     return turi_cstr(tur_string_cstr(S1));
 }
 static TuriValue n_adopt_cstr(TuriEnv *e, TuriValue *a, uint32_t n, void *ud) {

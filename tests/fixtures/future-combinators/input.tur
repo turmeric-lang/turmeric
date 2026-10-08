@@ -106,7 +106,7 @@
     out->value = 0; out->exn = exn; out->is_set = true; out->is_ok = false;
     return (void *)out;
   }
-  return (void *)(intptr_t)((int64_t (*)(int64_t))fn)(val);
+  return ((void * (*)(int64_t))fn)(val);
   ```)
 
 ;; Await both futures; if both ok, return ok(val_a). If either fails, return first error.

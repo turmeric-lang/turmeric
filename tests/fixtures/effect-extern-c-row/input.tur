@@ -2,7 +2,8 @@
 ;; Annotations on extern-c are advisory in v1 — the imported C function
 ;; ignores Turmeric effect semantics. The compiler accepts and discards them.
 
-(defeffect IO [] :nil)
+;; `IO` is a compiler-known capability effect (effect-row-honesty-plan W2),
+;; so it needs no declaration.
 
 ;; Use a custom C function so there's no conflict with system headers.
 ;; The #{IO} row annotation is accepted and silently discarded.

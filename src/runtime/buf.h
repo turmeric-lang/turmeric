@@ -18,6 +18,13 @@
 #  endif
 #endif
 
+/* A growable byte buffer.  Invariant: once anything has been appended,
+ * `data[len] == '\0'` -- every append below reserves the byte and stores the
+ * NUL without counting it in `len`, so `data` can be handed to anything that
+ * takes a C string.  An appended '\0' (`buf_putc(&b, '\0')`) is counted like
+ * any other byte; the terminator after it is still there.  A never-written Buf
+ * has `data == NULL`.  Shorten one with buf_truncate, not by assigning `len`,
+ * or the invariant holds only again after the next append. */
 typedef struct Buf {
     char  *data;
     size_t len;
@@ -31,6 +38,7 @@ void  buf_write(Buf *b, const char *s, size_t n);
 void  buf_puts(Buf *b, const char *s); /* NUL-terminated */
 void  buf_printf(Buf *b, const char *fmt, ...) TUR_PRINTF_FMT(2, 3);
 void  buf_vprintf(Buf *b, const char *fmt, va_list ap) TUR_PRINTF_FMT(2, 0);
+void  buf_truncate(Buf *b, size_t len); /* shorten to len (no-op if longer) */
 int   buf_to_file(const Buf *b, FILE *f); /* returns 0 on success */
 int   buf_to_path(const Buf *b, const char *path); /* write to file by name, returns 0 on success */
 char *tur_strdup(const char *s);

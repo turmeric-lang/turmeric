@@ -242,6 +242,85 @@ int lsp_ident_range_at(const char *text, size_t text_len, size_t off,
 }
 
 /* A drive-qualified Windows path: C:\dir or c:/dir. */
+/* Does `path` end in the path components `tok` (len `tlen`) plus `ext`? */
+static int path_ends_with(const char *path, const char *tok, size_t tlen,
+                          const char *ext) {
+    size_t plen = strlen(path), elen = strlen(ext), clen = tlen + elen;
+    if (clen == 0 || clen > plen) return 0;
+    const char *tail = path + plen - clen;
+    if (memcmp(tail, tok, tlen) != 0 || memcmp(tail + tlen, ext, elen) != 0)
+        return 0;
+    return tail == path || tail[-1] == '/' || tail[-1] == '\\';
+}
+
+static int token_names_path(const char *tok, size_t tlen, const char *path) {
+    if (tlen >= 2 && tok[0] == '.' && tok[1] == '/') { tok += 2; tlen -= 2; }
+    static const char *const exts[] = { "", ".tur", ".tur.sweet", ".scm" };
+    for (size_t i = 0; i < sizeof(exts) / sizeof(exts[0]); i++)
+        if (path_ends_with(path, tok, tlen, exts[i])) return 1;
+    return 0;
+}
+
+int lsp_reference_anchor(const char *text, size_t text_len,
+                         const char *foreign_path, unsigned *line0,
+                         unsigned *col_start0, unsigned *col_end0) {
+    if (!text || !foreign_path || !*foreign_path) return 0;
+    unsigned line = 0;
+    size_t ls = 0;
+    while (ls < text_len) {
+        size_t le = ls;
+        while (le < text_len && text[le] != '\n') le++;
+
+        /* The head: `(load ...` in s-expression source, `load ...` in
+         * sweet-exp, either way the first token of the line. */
+        size_t i = ls;
+        while (i < le && (text[i] == ' ' || text[i] == '\t')) i++;
+        if (i < le && text[i] == '(') i++;
+        size_t hs = i;
+        while (i < le && text[i] != ' ' && text[i] != '\t' &&
+               text[i] != '(' && text[i] != ')' && text[i] != '"') i++;
+        size_t hl = i - hs;
+        int is_ref = (hl == 4 && memcmp(text + hs, "load", 4) == 0) ||
+                     (hl == 6 && memcmp(text + hs, "import", 6) == 0) ||
+                     (hl == 7 && memcmp(text + hs, "include", 7) == 0);
+
+        while (is_ref && i < le) {
+            char c = text[i];
+            if (c == ' ' || c == '\t' || c == '(' || c == ')' ||
+                c == '[' || c == ']' || c == ';') {
+                if (c == ';') break;            /* comment to end of line */
+                i++;
+                continue;
+            }
+            size_t ts = i, cs, cl;
+            if (c == '"') {
+                i++;
+                cs = i;
+                while (i < le && text[i] != '"') i++;
+                cl = i - cs;
+                if (i < le) i++;                /* past the closing quote */
+            } else {
+                cs = i;
+                while (i < le && text[i] != ' ' && text[i] != '\t' &&
+                       text[i] != '(' && text[i] != ')' &&
+                       text[i] != '[' && text[i] != ']') i++;
+                cl = i - cs;
+            }
+            /* `:refer`, `:as` and friends are options, not module names. */
+            if (cl > 0 && text[cs] != ':' &&
+                token_names_path(text + cs, cl, foreign_path)) {
+                *line0      = line;
+                *col_start0 = (unsigned)(ts - ls);
+                *col_end0   = (unsigned)(i - ls);
+                return 1;
+            }
+        }
+        line++;
+        ls = le + 1;
+    }
+    return 0;
+}
+
 static int lsp_has_drive(const char *p) {
     return p && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'))
            && p[1] == ':' && (p[2] == '/' || p[2] == '\\');

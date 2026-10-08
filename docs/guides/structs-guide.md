@@ -778,7 +778,7 @@ Follow the `;;;` convention immediately above the `defstruct` form:
 defstruct Point :copy [x :int y :int]
 ```
 
-See the [docstring standard in CLAUDE.md](https://github.com/rjungemann/turmeric/blob/main/CLAUDE.md) for the full
+See the [docstring standard in CLAUDE.md](https://github.com/turmeric-lang/turmeric/blob/main/CLAUDE.md) for the full
 required-fields table.
 
 ---

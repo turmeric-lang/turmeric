@@ -17,17 +17,65 @@ A major bump signals **breaking changes**. Be extra deliberate about the
 changelog: the **Breaking changes** section is the most important part
 of a major release and should lead the entry.
 
+## The release worktree -- set this up FIRST
+
+**The cut does not run in the user's own checkout.** The repo is **bare**: its
+worktrees are subdirectories of it, and the one the user works in (`personal/`)
+is protected -- `permissions.deny` rules plus a `PreToolUse` hook
+(`~/.claude/hooks/no-personal-worktree.sh`) refuse every read, write and shell
+command that names it, in **every** permission mode, `bypassPermissions`
+included.
+
+Nor is there a worktree sitting on `main` to borrow. `personal/` is on a branch
+literally named `personal`, and the local `main` branch is a leftover pointing
+at the *previous* release's bump commit -- 59 commits behind `origin/main` when
+this was written. So "switch to `main` and pull" is not an option, and dragging
+that stale branch forward under a working tree is precisely the harm the guard
+exists to prevent.
+
+Cut from a fresh **detached** worktree at `origin/main`:
+
+```sh
+ROOT="$(git rev-parse --path-format=absolute --git-common-dir)"   # the bare repo
+WT="$ROOT/release-cut"
+
+git -C "$ROOT" fetch origin main
+git -C "$ROOT" worktree add --detach "$WT" origin/main
+```
+
+Run every step below against that directory: git commands as
+`git -C "$WT" ...`, the file edits in step 5 at absolute paths under `$WT`, and
+`just deploy-web` in step 7 with `$WT` as its working directory. `cd "$WT"` is
+fine -- it is `personal/` alone that is off limits. **Detached HEAD is correct
+and expected**: the branch pointer moves on the server in step 8, never locally.
+
+Two consequences of a *fresh* worktree, worth knowing before you trip over
+them:
+
+- **There is no `./build/tur`.** The experiment-expiry advisory below must read
+  `EXPERIMENTS[]` in `src/runtime/experiments.c` rather than run the binary. It
+  is advisory either way -- do not build the compiler just to satisfy it.
+- **There is no `node_modules/` and no emsdk cache**, so step 7's
+  `just deploy-web` pays for the full `web-deps` install and wasm build.
+  `wrangler`'s credentials live in the user's home directory, so authentication
+  carries over untouched.
+
 ## Preconditions (verify before doing anything destructive)
 
 Run these in parallel and report findings before proceeding:
 
-1. `git status --porcelain` -- working tree must be clean. If not,
-   stop and ask the user to commit or stash.
-2. `git rev-parse --abbrev-ref HEAD` -- must be `main`. If not, stop
-   and ask the user to switch.
-3. `git fetch origin main` followed by `git rev-list --left-right --count origin/main...HEAD`
-   -- local main must not be behind origin. If behind, stop and ask the
-   user to pull.
+1. `git status --porcelain` -- working tree must be clean. A worktree
+   created a moment ago is clean by construction, so anything here means
+   you are pointed at the wrong directory.
+2. `git worktree list` -- confirm you are in the release worktree from the
+   section above and **not** in `personal/`. HEAD is detached; that is the
+   intended state. Do **not** require HEAD to be on `main`, and do not
+   check out or move the local `main` branch to satisfy a branch-name
+   check.
+3. `git rev-parse HEAD` and `git rev-parse origin/main` -- must be equal. A
+   worktree created at `origin/main` straight after a fetch cannot be
+   behind, so an inequality means `main` moved while you were working:
+   stop, remove the worktree, and start the section above again.
 4. `cat VERSION` -- current version (the old version).
 5. `git describe --tags --abbrev=0 --match 'v*'` -- the most recent
    release tag. Should match `v<VERSION>`; if not, surface the mismatch
@@ -204,8 +252,19 @@ decision, not an oversight -- C-4 in
   as of WP7 -- signed through Sigstore with a short-lived certificate minted
   from the release job's OIDC token, binding each asset to the workflow, repo,
   commit and run that built it. `gh attestation verify <asset> --repo
-  rjungemann/turmeric` checks it. That is the signature that protects users,
-  and it needs no key anyone has to hold or rotate.
+  turmeric-lang/turmeric` checks it. That is the signature that protects
+  users, and it needs no key anyone has to hold or rotate.
+  - **The owner is bound into the signature, so verification depends on the
+    asset's vintage -- and the flag changes, not just its value.** Measured
+    on v0.59.0 after the 2026-10-02 org move: `--repo rjungemann/turmeric`
+    and `--repo turmeric-lang/turmeric` both return HTTP 404, because the
+    attestation lives in the owning *account's* index
+    (`users/rjungemann/attestations/...`) and a transfer does not move it,
+    while the repo-scoped endpoint resolves through the current owner. The
+    form that works for a pre-move asset is
+    **`gh attestation verify <asset> --owner rjungemann`** (exit 0).
+    Releases cut from v0.60.0 on use `--repo turmeric-lang/turmeric`. If a
+    user reports a 404 here, it is the wrong flag, not a bad download.
 - A signed **tag** protects something narrower: it proves who cut the release,
   to someone reading the git history. It needs a long-lived GPG or SSH key on
   the release machine, and a key that is lost, leaked, or simply not present
@@ -225,9 +284,10 @@ Only once that probe passes, change the `-a` above to `-s`. Do not switch it
 speculatively: an unsigned release is recoverable, a cut that dies partway
 through is the awkward state this file's step ordering exists to avoid.
 
-The tag exists locally only; nothing is pushed yet. If the web deploy
-in step 7 fails, you can delete the local tag and try again without
-having published a broken release.
+Both the commit and the tag land on **detached HEAD**, which is why nothing
+in this step names a branch. The tag exists locally only; nothing is pushed
+yet. If the web deploy in step 7 fails, you can delete the local tag and try
+again without having published a broken release.
 
 ## Step 7: Build and deploy web
 
@@ -258,9 +318,19 @@ If `just deploy-web` fails:
 Only after a successful deploy:
 
 ```sh
-git push origin main
+git push origin HEAD:main
 git push origin "v<NEW>"
 ```
+
+`HEAD:main` because HEAD is detached: there is no local `main` at this commit
+to push, and the stale local `main` must not be dragged forward just to make
+`git push origin main` work. **Never** `git update-ref refs/heads/main` or
+`git branch -f main` -- that repoints a branch under working trees that have
+not moved, the exact failure the protected-worktree guard exists to prevent.
+
+**The user's own checkout does not move.** Their `personal` branch, and the
+stale local `main`, stay where they were until they pull. Say so when you
+report, or a correctly cut release looks like it never happened locally.
 
 The tag push triggers `.github/workflows/release.yml`, which builds
 the three platform binaries (linux-x86_64, linux-aarch64, macos-arm64),
@@ -283,6 +353,21 @@ just tell them to follow it on the Actions page. Do not block
 waiting for the release workflow to finish -- it takes 1-2 minutes
 per matrix leg and the user can check on it themselves.
 
+**On the first release cut after the 2026-10-02 org move**, verify a published
+asset's attestation once the workflow finishes -- O6 item 4 of
+[docs/upcoming/github-org-move-plan.md](../../docs/upcoming/github-org-move-plan.md),
+the one path no test covers:
+
+```sh
+gh release download "v<NEW>" --repo turmeric-lang/turmeric -p '*macos-arm64.tar.gz'
+gh attestation verify "turmeric-v<NEW>-macos-arm64.tar.gz" --repo turmeric-lang/turmeric
+```
+
+A 404 means the post-move form is `--owner turmeric-lang` instead, and
+`README.md` plus all three `cut-*-release.md` files are documenting the wrong
+command. Report that rather than leaving it wrong -- a verification failure
+here reads to users as a compromised download.
+
 End by reporting:
 - The new version (and that this is a major release)
 - The commit SHA of the bump commit
@@ -290,6 +375,23 @@ End by reporting:
 - The Cloudflare deploy URL or "deployed" confirmation
 - A reminder that the release page will populate with tarballs once
   the workflow finishes (link to releases page)
+- That their own checkout is unchanged -- `main` moved on the server only,
+  and they need to pull to see it
+
+## Step 10: Remove the release worktree
+
+Step 7 leaves roughly 800 MB of `node_modules/`, emsdk output and wasm build
+products in the worktree, and nothing needs it once the tag is pushed:
+
+```sh
+ROOT="$(git rev-parse --path-format=absolute --git-common-dir)"
+git -C "$ROOT" worktree remove --force "$ROOT/release-cut"
+```
+
+`--force` because those build outputs are untracked, and from outside the
+worktree so git is not deleting the directory it is standing in. Do this
+**after** step 9 has reported: if the release workflow fails and a corrected
+tag has to go out, the worktree is where that happens.
 
 ## Things to refuse
 
@@ -303,5 +405,10 @@ End by reporting:
   section is especially important for a major bump.
 - Refuse to use `git push --force` for any step here.
 - Refuse to amend a commit that has already been pushed.
+- Refuse to run any part of the cut inside the user's `personal/` worktree,
+  and refuse to work around the hook that blocks it.
+- Refuse to move a local branch to make a push look like a fast-forward
+  (`git update-ref refs/heads/main`, `git branch -f main`, `git checkout main
+  && git reset --hard origin/main`). Push `HEAD:main` from detached HEAD.
 - Refuse to cut a major release when there are no actual breaking
   changes since the previous tag -- suggest `/cut-minor-release` instead.

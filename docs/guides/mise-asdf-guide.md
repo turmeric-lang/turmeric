@@ -6,11 +6,11 @@ description: Install and switch Turmeric compiler versions with the asdf-turmeri
 
 # Using Turmeric with `mise` or `asdf`
 
-The [`asdf-turmeric`](https://github.com/rjungemann/asdf-turmeric) plugin
+The [`asdf-turmeric`](https://github.com/turmeric-lang/asdf-turmeric) plugin
 installs Turmeric compiler versions from the official GitHub releases and
 plugs into both [`mise`](https://mise.jdx.dev) and
 [`asdf`](https://asdf-vm.com). You do **not** need
-[`tvm`](https://github.com/rjungemann/turmeric/blob/main/tvm/README.md) to use it -- the plugin is a self-contained
+[`tvm`](https://github.com/turmeric-lang/turmeric/blob/main/tvm/README.md) to use it -- the plugin is a self-contained
 installer.
 
 Pick whichever tool you already use; the plugin works the same either way.
@@ -42,7 +42,7 @@ exec $SHELL
 ### Add the plugin and install Turmeric
 
 ```sh
-mise plugin install turmeric https://github.com/rjungemann/asdf-turmeric.git
+mise plugin install turmeric https://github.com/turmeric-lang/asdf-turmeric.git
 mise install turmeric@latest
 ```
 
@@ -86,7 +86,7 @@ exec $SHELL
 ### Add the plugin and install Turmeric
 
 ```sh
-asdf plugin add turmeric https://github.com/rjungemann/asdf-turmeric.git
+asdf plugin add turmeric https://github.com/turmeric-lang/asdf-turmeric.git
 asdf install turmeric latest
 ```
 
@@ -135,4 +135,4 @@ canonical pin; do not also commit a `.tur-version`.
 - **`sha256 mismatch` during install.** The plugin downloaded a
   corrupted tarball. Retry the install; if it persists, the release
   artifacts may have been overwritten -- file an issue on
-  [`turmeric`](https://github.com/rjungemann/turmeric/issues).
+  [`turmeric`](https://github.com/turmeric-lang/turmeric/issues).

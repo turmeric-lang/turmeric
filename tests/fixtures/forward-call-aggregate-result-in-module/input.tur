@@ -1,0 +1,40 @@
+;; forward-call-aggregate-result-in-module -- a call to a helper defined
+;; LATER in the same defmodule, whose declared return is an aggregate, used to
+;; be typed as the int64 carrier: TUR-E0709 "declares return type '(Result
+;; Handle cstr)' but its body returns int".  Defining the helpers first
+;; compiled the identical code.  See
+;; docs/archive/forward-call-to-aggregate-result-types-as-carrier.md.
+(defmodule prog
+  (import fwdcore :refer [Handle handle-id])
+  (import fwduse :refer [pick pick-box pick-maybe pick-int Box])
+
+  (defn show-pick [c : bool] : nil
+    (match (pick c)
+      (Ok h) (println (handle-id h))
+      (Err s) (println s)))
+
+  (defn show-maybe [c : bool] : nil
+    (match (pick-maybe c)
+      (Some b) (println (.v b))
+      (None) (println "none")))
+
+  (defn show-int [c : bool] : nil
+    (match (pick-int c)
+      (Ok n) (println n)
+      (Err s) (println s)))
+
+  ;; The entry module has the same shape: main above its helper.
+  (defn main [] : int
+    (show-pick true)
+    (show-pick false)
+    (println (.v (pick-box true)))
+    (println (.v (pick-box false)))
+    (show-maybe true)
+    (show-maybe false)
+    (show-int true)
+    (show-int false)
+    (println (.v (local-box 3)))
+    0)
+
+  (defn local-box [x : int] : Box
+    (Box (* x 4))))

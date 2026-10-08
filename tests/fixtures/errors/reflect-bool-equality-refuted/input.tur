@@ -1,0 +1,9 @@
+;; reflect-two-provable-facts-report-as-not-holding, half 1's negative
+;; control: the `iff` encoding still refutes a wrong one.  At a = 0 the body is
+;; true and `(> a 0)` is false.
+(defn eq-wrong [a : int] : #refine{ r : bool | (= r (> a 0)) }
+  (>= a 0))
+
+(defn main [] : int
+  (println (eq-wrong 3))
+  0)

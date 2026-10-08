@@ -54,7 +54,7 @@ diverge in one place. A bare `nil` in type position parses as a nil *literal*,
 not a symbol, and two forward-declaration pre-passes only unwrapped the symbol
 shape, so a `: nil` callee that had not been elaborated yet was forward-typed
 `int` and its call sites broke in the emitted C. Fixed 2026-08-29; see
-[docs/archive/forward-referenced-nil-call-bound-to-auto-type.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/forward-referenced-nil-call-bound-to-auto-type.md).
+[docs/archive/forward-referenced-nil-call-bound-to-auto-type.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/forward-referenced-nil-call-bound-to-auto-type.md).
 
 ---
 
@@ -204,7 +204,7 @@ Type annotations work on `let` bindings too:
 let [x : int 42]
   println(x)
 
-let [f : (-> int int) (fn [n] *(n 2))]
+let [f : (-> int int) (fn [n] {n * 2})]
   println(f(21))
 ```
 

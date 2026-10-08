@@ -34,10 +34,10 @@ Add it to your `build.tur` alongside `tourist`:
 
 ```turmeric
 :spices #{
-  "tourist"         #{:url    "https://github.com/rjungemann/turmeric-spices"
+  "tourist"         #{:url    "https://github.com/turmeric-lang/turmeric-spices"
                       :ref    "tourist-v0.2.5"
                       :subdir "spices/tourist"}
-  "tourist-session" #{:url    "https://github.com/rjungemann/turmeric-spices"
+  "tourist-session" #{:url    "https://github.com/turmeric-lang/turmeric-spices"
                       :ref    "tourist-session-v0.1.0"
                       :subdir "spices/tourist-session"}
 }
@@ -296,7 +296,7 @@ time around).
 ## Worked example: login / dashboard / logout
 
 The full flow lives at
-[`examples/login_app.tur`](https://github.com/rjungemann/turmeric-spices/tree/main/spices/tourist-session/examples/login_app.tur)
+[`examples/login_app.tur`](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/tourist-session/examples/login_app.tur)
 in the spice. Run with:
 
 ```sh

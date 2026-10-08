@@ -39,7 +39,7 @@ Syntax highlighting for [Turmeric](https://github.com/fith-lang/fith) `.tur` fil
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/rjungemann/turmeric.git
+git clone https://github.com/turmeric-lang/turmeric.git
 cd turmeric/vscode-syntax-ext
 ```
 
@@ -250,7 +250,7 @@ MIT - See LICENSE file
 
 ## Links
 
-- [Turmeric Language Repository](https://github.com/rjungemann/turmeric)
+- [Turmeric Language Repository](https://github.com/turmeric-lang/turmeric)
 - [Turmeric Language Plan](../docs/turmeric-plan.md)
 - [VSCode Language Extension Docs](https://code.visualstudio.com/api/language-extensions/overview)
 - [TextMate Grammar Guide](https://macromates.com/manual/en/language_grammars)

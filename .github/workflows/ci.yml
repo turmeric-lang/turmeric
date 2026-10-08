@@ -23,14 +23,91 @@ on:
 permissions:
   contents: read
 
+# Cancel a PR's superseded run.  Without this every push to a PR left its
+# previous run holding runner slots to the end, and the account's concurrent-job
+# limit is shared by every run: on 2026-10-04, 14 overlapping runs between 17:34
+# and 19:08 queued even ubuntu jobs for 20-60 min while the jobs themselves ran
+# at their usual length.  Superseded runs were being cancelled by hand.
+#
+# PR runs group by PR number, so a new push cancels the old run.  `main` runs
+# get a group of their own (the run id), so they are NEVER cancelled or
+# serialized: every merge is tested on its own, and its `publish-timings` rows
+# reach ci-metrics.  (A shared `main` group would also silently drop queued
+# runs -- GitHub keeps only the newest pending run per group.)
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 jobs:
+  # Docs-only gate.  A PR that touches nothing outside docs/ cannot change what
+  # the compiler does, so the build-and-suite jobs below are skipped for it --
+  # including their macOS legs, which wait on a small shared runner pool (see
+  # docs/archive/ci-aux-suite-latency-plan.md section 3).  A skipped job
+  # reports "skipped", which is not a failure.
+  #
+  # Two outputs, because docs/ is not all inert:
+  #   code   -- something outside docs/ changed.  Every job runs.
+  #   guides -- something under docs/guides/ changed.  The guides are rendered
+  #             and link-checked by web-smoke (`tur run docs` ends in
+  #             `genpack.py --strict-links`), and checked by check-guides and
+  #             check-spaced-types, so those three still run.
+  # docs-lint (below) always runs: it holds the ctest checks that read docs/
+  # and need no build, which a docs-only PR would otherwise never reach.
+  #
+  # Pushes to main, and anything this step cannot classify, count as code:
+  # main keeps its full run per merge, and the gate fails open.
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      guides: ${{ steps.classify.outputs.guides }}
+    steps:
+      # A pull_request run checks out the merge commit; its first parent is
+      # the base branch tip, so HEAD^1..HEAD is exactly the PR's change.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: classify
+        run: |
+          code=true
+          guides=true
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] \
+             && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
+            echo "$files"
+            grep -qv '^docs/' <<<"$files" || code=false
+            grep -q '^docs/guides/' <<<"$files" || guides=false
+          fi
+          echo "code=$code guides=$guides"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "guides=$guides" >> "$GITHUB_OUTPUT"
+
+  # The ctest checks that read docs/ and need no compiler.  They also run
+  # inside the `test` job's ctest; this copy is what covers a docs-only PR,
+  # where `test` is skipped.  Seconds on ubuntu, so it runs unconditionally.
+  docs-lint:
+    name: Docs lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # One entry point, shared with the Claude Code pre-push hook
+      # (.claude/hooks/docs-lint-before-push.sh): add a check to the script,
+      # not a step here.  Today: docs/reported/README.md lists exactly the open
+      # reports, and the r7rs guide's SRFI list matches the prelude.
+      - name: Docs lint checks (tests/check-docs-lint.sh)
+        run: bash tests/check-docs-lint.sh
+
   test:
-    # Three jobs per OS, split along ctest boundaries: `fixtures` runs the
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # Several jobs per OS, split along ctest boundaries: `fixtures` runs the
     # RUN_SERIAL tur_tests corpus, `r7rs` runs every suite whose name contains
-    # `r7rs`, and `aux` runs the ~155 that are left, both of the latter under
-    # -j.  They only share the build, which ccache reproduces in about a
-    # minute, and running them in parallel takes the macOS leg from ~23 min
-    # (8.5 fixture + 12 auxiliary, back to back) to the longer of the three.
+    # `r7rs`, `fconv` and `gsm1`/`gsm2` run the two expensive serial suites
+    # (Linux only -- see the matrix `exclude` below), and `aux` runs the ~159
+    # that are left, all but `fixtures` under -j.  They only share the build,
+    # which ccache reproduces in about a minute, and running them in parallel
+    # takes the macOS leg from ~23 min (8.5 fixture + 12 auxiliary, back to
+    # back) to the longer of the parts.
     # The fixtures part keeps the "Test (<os>)" check name so
     # required-status-check rules keep matching it.
     #
@@ -40,19 +117,44 @@ jobs:
     # it.  Between 09-19 and 09-29 the macOS aux job's serial chain went from
     # 3.8 min to 18.3 min as those suites landed, and total wall time from
     # ~22 min to ~36 min -- growth that lands entirely on the critical path
-    # and cannot be recovered by -j.  Measured from the ci-metrics trend
-    # (branch `ci-metrics`, suite-timings-2026.jsonl), medians 09-28..09-30:
-    # the split takes the macOS aux part to ~13 min and gives r7rs its own
-    # ~10 min, against the ~28 min they cost together.
+    # and cannot be recovered by -j.  That split gave r7rs its own ~10 min.
     #
-    # The two -R/-E patterns are exact complements -- `-R 'r7rs'` against
-    # `-E '^tur_tests$|r7rs'` -- so the three parts still run every registered
-    # test exactly once.  Verify after adding a suite: `ctest -N` totals must
-    # satisfy all == fixtures + r7rs + aux.  Both patterns carry
-    # `--no-tests=error`, so a drift that empties either one fails the job
-    # instead of passing it vacuously.
+    # The same mechanism then did it again, one layer down, and the budget this
+    # comment used to quote ("~13 min" for aux, measured 09-28..09-30) was
+    # already stale when it was written: tur_generic_spec_matrix and
+    # tur_emitted_float_conversions were registered on 09-30 and took the macOS
+    # aux job from 18m12s to 67m28s in ONE merge (#1007, 8bb60d016).  Both are
+    # RUN_SERIAL for the same reason as the r7rs pair, and together they were
+    # 70% of the job.  `fconv` and `gsm1`/`gsm2` are the answer, and the leg
+    # asymmetry below is the rest of it.  MEASURED 2026-10-04 on main: macOS
+    # aux 66 -> ~16-18 min, Linux aux ~16-17 min, gsm1/gsm2 ~12-16 min, fconv
+    # ~7-12 min (docs/archive/ci-aux-suite-latency-plan.md section 11).  The
+    # "~13 min" that used to be here was measured too, and went stale in two
+    # days, so a number in this comment is worth only as much as its date --
+    # re-check it against branch `ci-metrics` (suite-timings-2026.jsonl).
+    #
+    # The parts must between them run every registered test, and that is no
+    # longer something to verify by hand: every pattern below comes from
+    # tests/ctest-parts.py, and the `tur_ctest_partition` suite asserts against
+    # `ctest -N` that the table is complete and disjoint on BOTH legs.  Add a
+    # suite, or change a part, and that test says whether the split still holds
+    # -- edit the table, never a pattern inline here.  Every part also carries
+    # `--no-tests=error`, so a drift that empties one fails the job instead of
+    # passing it vacuously.
     name: ${{ matrix.job_name }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # This job had NO timeout-minutes and so inherited GitHub's 360-minute
+    # default, which is why a 67-minute macOS aux job passed quietly instead of
+    # saying anything.  A number here is a diagnostic, not a budget.
+    #
+    # 60, against a measured ~18 min for the slowest part (macOS aux, 2026-10-04;
+    # was 90 against a ~27 min projection): deliberately loose, because a
+    # timeout-minutes kill is the one outcome with NO diagnostics -- it cancels
+    # the job and leaves the `if: always()` timing uploads pending, so a run
+    # killed here tells you less than the slow run it replaced.  ctest's own per-test TIMEOUT properties are
+    # the tight bound and they name the suite; this is only the outer fence.
+    # Re-derive it from the trend, not from a projection, if the parts move.
+    timeout-minutes: 60
     # tur-link-and-build-split-plan Phase 5: cache the compiler-build objects
     # across runs. ccache launches every `cc -c` in the cmake build of `tur`
     # (main.c + the runtime/compiler TUs), so an unchanged TU is a cache hit --
@@ -67,18 +169,87 @@ jobs:
       # hits (mirrors CCACHE_NOHASHDIR in tests/run.sh).
       CCACHE_NOHASHDIR: "1"
       CCACHE_BASEDIR: ${{ github.workspace }}
+      # Which leg's part table the ctest steps read from tests/ctest-parts.py.
+      # `matrix`, not `runner`: the runner context is NOT available in a
+      # job-level env block, and `${{ runner.os }}` here would expand to the
+      # empty string rather than erroring -- silently handing both legs the same
+      # wrong part patterns.
+      TUR_CI_LEG: ${{ startsWith(matrix.os, 'macos') && 'macos' || 'linux' }}
+      # gsm1/gsm2 are one sharded test per job, so the job IS that shard and its
+      # timing row should say so.  Set at JOB level, not on the ctest step: the
+      # collect step is a different step and would not see a step-level value,
+      # which is the whole point of setting it.  Empty for every other part.
+      TUR_TEST_SHARD: ${{ matrix.gsm_shard }}
+      # The matrix's own cell slice.  gsm1/gsm2 take it from the matrix.  The
+      # macOS `aux` part takes 1/4 -- per-PR macOS runs a quarter of the cells
+      # and the nightly arm64 leg runs them all, which keeps arm64 coverage of
+      # an ABI-sensitive bug class without adding a macOS job (see the matrix
+      # `exclude` comment).  A quarter is an unbiased 25% sample of every
+      # producer x sink x type, and this family's regressions hit whole rows or
+      # columns rather than isolated cells, so a quarter catches them on the PR.
+      TUR_GSM_SHARD: ${{ matrix.gsm_shard || (startsWith(matrix.os, 'macos') && matrix.part == 'aux' && '1/4') || '' }}
+      # Same shape, same reason, for the interpreter pass over the fixture
+      # corpus: 283s on macOS and -- with the matrix sharded -- the last
+      # RUN_SERIAL barrier left in `aux`.  The compiled path already runs the
+      # same corpus in full on both legs, so a second macOS engine pass over all
+      # of it is the lowest-value serial time in the job.  A quarter per PR, all
+      # of it on the nightly arm64 leg.  run-turi.sh reads THIS variable and
+      # deliberately ignores TUR_TEST_SHARD (tests/run-shard-partition.sh
+      # asserts that), so sampling it cannot touch the 160 other aux suites.
+      TUR_TURI_SHARD: ${{ (startsWith(matrix.os, 'macos') && matrix.part == 'aux') && '1/4' || '' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        part: [fixtures, aux, r7rs]
+        part: [fixtures, aux, r7rs, fconv, gsm1, gsm2]
+        exclude:
+          # The two extra parts are LINUX ONLY, and the reason is the macOS
+          # runner POOL, not macOS CPU.  Measured over two runs on 2026-10-01:
+          # every ubuntu and Windows job in a run starts at t+0, while the five
+          # macOS jobs start at t+40..t+80 min and never more than 2-3 at once
+          # -- and the first 40 minutes cannot be a concurrency limit, because
+          # nothing of ours is running yet.  The repo is public, so this is pool
+          # scarcity.  So splitting a serial barrier into more jobs is the right
+          # move on Linux, where jobs are free and immediate, and the wrong one
+          # on macOS, where a fourth job queues behind the first three and
+          # leaves total occupancy unchanged.  macOS gets LESS WORK instead
+          # (TUR_GSM_SHARD on its aux step, below).
+          - os: macos-latest
+            part: fconv
+          - os: macos-latest
+            part: gsm1
+          - os: macos-latest
+            part: gsm2
         include:
+          # ctest_part names the row in tests/ctest-parts.py to take the pattern
+          # from; it differs from `part` only where one ctest test is split
+          # across several jobs.
           - part: fixtures
             job_name: Test
+            ctest_part: fixtures
           - part: aux
             job_name: Auxiliary suites
+            ctest_part: aux
           - part: r7rs
             job_name: R7RS suites
+            ctest_part: r7rs
+          - part: fconv
+            job_name: Float conversions
+            ctest_part: fconv
+          # Two jobs over one ctest test: tur_generic_spec_matrix is 4066 live
+          # cells at ~1.5s of CPU each and is RUN_SERIAL (it fans out
+          # internally), so it was 51% of the aux job's wall clock on its own.
+          # TUR_GSM_SHARD slices the CELLS; the two shards together run the
+          # whole matrix.  A third shard buys nothing -- the remaining aux part
+          # becomes the floor at two.
+          - part: gsm1
+            job_name: Generic spec matrix 1/2
+            ctest_part: gsm
+            gsm_shard: 1/2
+          - part: gsm2
+            job_name: Generic spec matrix 2/2
+            ctest_part: gsm
+            gsm_shard: 2/2
         # Sharding the fixture corpus itself is still off, but the blockers
         # that kept it off are not blockers any more.  run.sh has always
         # supported it (TUR_TEST_SHARD="i/N" partitions round-robin by fixture
@@ -151,6 +322,10 @@ jobs:
           restore-keys: |
             ccache-test-${{ runner.os }}-
 
+      # The DEFAULT configuration, which carries the MIR JIT engine since
+      # TUR_JIT defaulted ON (2026-10-02) -- so these parts test what ships.
+      # The two engine-only suites that registers are run by the `jit` job, not
+      # here (tests/ctest-parts.py OTHER_JOB).
       - name: Configure (Debug + ASAN)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
@@ -166,7 +341,7 @@ jobs:
       # looks for emcc, and the harness only needs it on PATH at test time.
       - name: Set up Emscripten (for tur_refine_wasm)
         if: matrix.part == 'aux'
-        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           # C-5: an exact SDK version, not `latest`.  This is what `latest`
           # resolved to when the pin was taken, so behaviour is unchanged --
@@ -195,15 +370,19 @@ jobs:
           if [ -x /usr/bin/git ]; then GIT=/usr/bin/git; else GIT=git; fi
           # C-5 asked whether this should be SHA-pinned like the actions above.
           # Deliberately not, and the reason is recorded here rather than left
-          # to look like an oversight: turmeric-spices is the same owner under
-          # the same account, so it sits INSIDE the trust boundary `main`
-          # already draws, not outside it -- pinning it would defend this repo
-          # against itself.  A pin would also mean a SHA in this file that some
-          # human bumps, which goes stale and then gets bumped blind; see the
-          # comment block at the top of cmake/mir.cmake for that failure mode
-          # observed in this repo.  Revisit if the spices repo ever takes
-          # third-party contributions on its default branch.
-          "$GIT" clone --depth 1 https://github.com/rjungemann/turmeric-spices ../turmeric-spices
+          # to look like an oversight: turmeric-spices is owned by whoever owns
+          # this repo -- `github.repository_owner` below makes that true by
+          # construction rather than by convention, and follows a transfer
+          # (personal account -> org) with no edit -- so it sits INSIDE the
+          # trust boundary `main` already draws, not outside it; pinning it
+          # would defend this repo against itself.  A pin would also mean a SHA
+          # in this file that some human bumps, which goes stale and then gets
+          # bumped blind; see the comment block at the top of cmake/mir.cmake
+          # for that failure mode observed in this repo.  Revisit if the spices
+          # repo ever takes third-party contributions on its default branch.
+          "$GIT" clone --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
+            ../turmeric-spices
 
       - name: Smoke check (tur --version must not hang)
         run: |
@@ -224,6 +403,28 @@ jobs:
             *"the Turmeric compiler"*) ;;
             *) echo "::error::unexpected tur --version output"; exit 1 ;;
           esac
+
+      # cc-path-preamble-split-plan: the preamble split is the DEFAULT on Linux
+      # and Windows, and it FAILS CLOSED.  A hash mismatch, a missing
+      # libturt_preamble.a, or any other declined precondition makes a build
+      # quietly keep the whole preamble, and every fixture still passes, slower.
+      # Without this probe, a tree that lost the split would report green here
+      # having run the old path.  Linux only: macOS does not default to the split
+      # yet (cc-path-preamble-split-plan, "Left").
+      - name: Verify the preamble split engages by default
+        if: runner.os == 'Linux' && matrix.part == 'fixtures'
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_SHOW_CC=1 TUR_JIT_TIMING=1 \
+                  ./build/tur build /tmp/splitprobe.tur -o /tmp/splitprobe 2>&1) || true
+          printf '%s\n' "$out"
+          case "$out" in
+            *-lturt_preamble*) ;;
+            *) echo "::error::a default build did not take the preamble split -- see any 'disengaged' reason above (regenerate src/runtime/generated/ with tools/gen-runtime-split.py after a preamble change)"
+               exit 1 ;;
+          esac
+          /tmp/splitprobe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "the default build takes the split and the artifact runs."
 
       - name: Run fixture suite
         if: matrix.part == 'fixtures'
@@ -279,14 +480,16 @@ jobs:
         # its census.
         env:
           TUR_SANITIZER_GATE: "1"
-        run: ctest --output-on-failure --progress --test-dir build -R '^tur_tests$' --output-junit results-main.xml --test-output-size-passed 262144 --test-output-truncation head
+        run: |
+          pattern="$(python3 tests/ctest-parts.py pattern fixtures --leg "$TUR_CI_LEG")"
+          ctest --output-on-failure --progress --test-dir build -R "$pattern" --output-junit results-main.xml --test-output-size-passed 262144 --test-output-truncation head
 
       - name: Run auxiliary suites
         if: matrix.part == 'aux'
-        # Everything except tur_tests, once per OS, in its own job so it
-        # overlaps the fixture corpus instead of following it.
+        # Everything the other parts do not claim, once per OS, in its own job
+        # so it overlaps the fixture corpus instead of following it.
         #
-        # -j: this step runs ~155 targets, so without it wall time is their sum.
+        # -j: this step runs ~160 targets, so without it wall time is their sum.
         # The count must be explicit -- through CMake 3.28 a bare `-j` is
         # accepted silently and does nothing (see the Justfile `test` recipe).
         # getconf _NPROCESSORS_ONLN is portable across the Linux and macOS
@@ -302,9 +505,19 @@ jobs:
         # now carry. The step above is a single RUN_SERIAL target, so -j would
         # do nothing there.
         # --output-junit to a DISTINCT path from the step above -- see the note
-        # there. Each part writes exactly one of the three files; the collect
-        # step globs whichever one this part produced.
-        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E '^tur_tests$|r7rs' --no-tests=error --output-junit results-aux.xml --test-output-size-passed 262144 --test-output-truncation head
+        # there. Each part writes exactly one results-*.xml; the collect step
+        # globs whichever one this part produced.
+        #
+        # The -E pattern comes from tests/ctest-parts.py, which is also what
+        # tur_ctest_partition checks for completeness -- so a pattern and its
+        # check can never disagree. The two legs get DIFFERENT patterns: Linux
+        # excludes both expensive suites (they have their own parts below),
+        # macOS excludes only the float lint and keeps a shard of the matrix
+        # here. See the matrix `exclude` comment for why.
+        run: |
+          pattern="$(python3 tests/ctest-parts.py pattern aux --leg "$TUR_CI_LEG")"
+          echo "aux -E pattern ($TUR_CI_LEG): $pattern"
+          ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -E "$pattern" --no-tests=error --output-junit results-aux.xml --test-output-size-passed 262144 --test-output-truncation head
 
       - name: Run r7rs suites
         if: matrix.part == 'r7rs'
@@ -313,7 +526,7 @@ jobs:
         # tur_r7rs_sanitize) fan out across nproc internally and so must stay
         # RUN_SERIAL, which on ctest's scheduler is a barrier for the whole
         # invocation.  Keeping them here means they only serialize against
-        # each other and the ~155 suites in the `aux` part no longer wait
+        # each other and the ~160 suites in the `aux` part no longer wait
         # behind them.
         #
         # `-R 'r7rs'` matches the substring, not a prefix, on purpose: it picks
@@ -325,7 +538,48 @@ jobs:
         #
         # No Emscripten step gates on this part: tur_refine_wasm is an `aux`
         # suite, and emsdk setup costs about 100 s.
-        run: ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -R 'r7rs' --no-tests=error --output-junit results-r7rs.xml --test-output-size-passed 262144 --test-output-truncation head
+        run: |
+          pattern="$(python3 tests/ctest-parts.py pattern r7rs --leg "$TUR_CI_LEG")"
+          ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --progress --test-dir build -R "$pattern" --no-tests=error --output-junit results-r7rs.xml --test-output-size-passed 262144 --test-output-truncation head
+
+      - name: Run the float-conversion lint
+        if: matrix.part == 'fconv'
+        # tur_emitted_float_conversions on its own, Linux only.  613s measured
+        # on macOS and 19% of the aux job's wall clock, and like the matrix
+        # below it is RUN_SERIAL because it fans out across nproc internally --
+        # so inside `aux` it was a barrier, and the two expensive suites were a
+        # CHAIN against each other.  That is the thing to understand before
+        # reshaping this: pulling both into ONE new part saves only ~16 min of
+        # ~66, because they serialize there exactly as they did in `aux`.  A
+        # part each is what breaks the chain.
+        #
+        # No -j: this part is a single RUN_SERIAL target, which fans out on its
+        # own, so -j would do nothing.  No Emscripten setup either -- that step
+        # gates on `aux` (tur_refine_wasm lives there) and costs ~95s.
+        run: |
+          pattern="$(python3 tests/ctest-parts.py pattern fconv --leg "$TUR_CI_LEG")"
+          ctest --output-on-failure --progress --test-dir build -R "$pattern" --no-tests=error --output-junit results-fconv.xml --test-output-size-passed 262144 --test-output-truncation head
+
+      - name: Run the generic-spec matrix shard
+        if: matrix.ctest_part == 'gsm'
+        # tur_generic_spec_matrix, half the cells per job, Linux only.  1622s on
+        # macOS -- 51% of the aux job's wall clock by itself -- at 4066 live
+        # cells x ~1.5s of CPU, where each cell spawns up to five processes
+        # (check, a full compile-and-link run, interpret, emit-c, a clang lint).
+        # There is no per-cell waste to reclaim; the only lever is how many
+        # cells run per job.
+        #
+        # Both TUR_GSM_SHARD and TUR_TEST_SHARD come from the job env above.
+        # TUR_GSM_SHARD is the slice the script honours; TUR_TEST_SHARD exists
+        # only so collect-suite-timings.py tags the row, and it is safe here for
+        # one reason -- this part runs exactly ONE test, so "the job is that
+        # shard" is true of every row it writes.  Do NOT copy it to a part that
+        # runs other suites too: it tags rows from the environment, so there it
+        # would label all of them as replicas of a slice they never ran.  That
+        # case is what the collector's --suite-shard is for.
+        run: |
+          pattern="$(python3 tests/ctest-parts.py pattern gsm --leg "$TUR_CI_LEG")"
+          ctest --output-on-failure --progress --test-dir build -R "$pattern" --no-tests=error --output-junit results-gsm.xml --test-output-size-passed 262144 --test-output-truncation head
 
       # `always()`, NOT `continue-on-error` on the ctest steps: a suite that
       # regressed into a timeout is exactly the signal this exists to catch, so
@@ -341,14 +595,33 @@ jobs:
           # zero rows and (because the script only warns) a silently empty
           # dashboard -- which is exactly how this would have shipped broken.
           # A glob, not a list of names: each part runs exactly one of the
-          # ctest steps above and so writes exactly one of results-main.xml /
-          # results-aux.xml / results-r7rs.xml.  Naming all three would make
-          # the collector warn about the two this part never wrote, on every
-          # run of every part.  If the glob matches nothing -- a ctest step
-          # that died before writing -- the literal pattern is passed, the
-          # collector warns once, and the empty-file check below reports it.
+          # ctest steps above and so writes exactly one results-*.xml
+          # (results-main / -aux / -r7rs / -fconv / -gsm).  Naming them all
+          # would make the collector warn about the ones this part never wrote,
+          # on every run of every part -- and it is a glob rather than a list
+          # for that reason, so a part added later needs no edit here.  If the
+          # glob matches nothing -- a ctest step that died before writing -- the
+          # literal pattern is passed, the collector warns once, and the
+          # empty-file check below reports it.
+          # The macOS aux part runs a QUARTER of tur_generic_spec_matrix beside
+          # 160 suites that run whole, so the shard belongs to that one row and
+          # not to the job.  $TUR_TEST_SHARD would tag all 161; leaving it off
+          # entirely would drop the matrix's series ~4x with nothing in the data
+          # explaining it.  --suite-shard labels exactly the row that sliced.
+          # A plain string, not an array: macOS ships bash 3.2, where an empty
+          # "${arr[@]}" is an unbound-variable error the moment anything turns
+          # on `set -u`.  Deliberately UNQUOTED below so it splits into two
+          # arguments -- the value is a suite name and an i/N, so it carries no
+          # spaces and no glob characters.
+          suite_shard=
+          if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_GSM_SHARD:-}" ]; then
+            suite_shard="--suite-shard tur_generic_spec_matrix=$TUR_GSM_SHARD"
+          fi
+          if [ "${{ matrix.part }}" = aux ] && [ -n "${TUR_TURI_SHARD:-}" ]; then
+            suite_shard="$suite_shard --suite-shard turi_fixture_tests=$TUR_TURI_SHARD"
+          fi
           python3 tools/ci/collect-suite-timings.py --build-dir build \
-            build/results-*.xml > timings.jsonl || true
+            $suite_shard build/results-*.xml > timings.jsonl || true
           if [ ! -s timings.jsonl ]; then
             echo "::warning::no suite timings collected -- check the ctest --output-junit paths above"
           else
@@ -382,27 +655,44 @@ jobs:
       # Save after everything (incl. the fixture suite, which also feeds ccache
       # via run.sh) regardless of whether the suite passed. The exact key never
       # pre-exists (it embeds the commit SHA), so this always writes a fresh entry.
+      #
+      # Only the three ORIGINAL parts save. Every part builds the same `tur` with
+      # the same flags, and -- per the note above -- no part's exact key ever
+      # pre-exists, so each one's restore is always a `restore-keys` prefix hit on
+      # some OTHER part or run. A part's own saved cache is therefore only ever
+      # read through that prefix, which means three near-identical copies per OS
+      # per sha already serve every part; `fconv` and the two `gsm` jobs saving
+      # three MORE would add 50% to this job's cache entries (6 -> 9 per run) and
+      # buy nothing but eviction pressure against the repo's 10 GB budget, at up
+      # to 500 MB each. They still RESTORE, so their builds stay warm.
       - name: Save ccache
-        if: always()
+        if: always() && (matrix.part == 'fixtures' || matrix.part == 'aux' || matrix.part == 'r7rs')
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-test-${{ runner.os }}-${{ matrix.part }}-${{ github.sha }}
 
   jit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: JIT engine (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # The MIR JIT engine had NO CI coverage at all: the `test` job configures
-    # without -DTUR_JIT=ON, so `tur_jit_fixture_tests` and `tur_repl_spice_jit`
-    # never register (CMakeLists.txt:634-655 gates both on TUR_JIT) and the
-    # whole engine shipped untested on every platform.  Every macOS JIT number
-    # in docs/upcoming/jit-engine-j0-findings.md was hand-measured on someone's
-    # laptop as a result.
+    # The MIR JIT engine had NO CI coverage at all until this job: the `test`
+    # job configured without -DTUR_JIT=ON, so `tur_jit_fixture_tests` and
+    # `tur_repl_spice_jit` never registered (CMakeLists.txt gates both on
+    # TUR_JIT) and the whole engine shipped untested on every platform.  Every
+    # macOS JIT number in docs/upcoming/jit-engine-j0-findings.md was
+    # hand-measured on someone's laptop as a result.
     #
-    # This is a SEPARATE job rather than a flag on `test`, for three reasons:
-    #   1. TUR_JIT makes configure fetch MIR over the network (cmake/mir.cmake
-    #      FetchContent, full clone of a pinned fork).  Folding that into the
-    #      main gate would make a GitHub/network blip fail every PR.
+    # TUR_JIT has defaulted ON since 2026-10-02 (MIR is vendored under
+    # external/mir/), so the `test` job builds the engine too and registers
+    # both suites.  It still does not RUN them: tests/ctest-parts.py lists them
+    # in OTHER_JOB, which names this job, and its --check reads this job's -R
+    # pattern below to confirm the claim.  So the engine's corpus runs here and
+    # only here, for these reasons:
+    #   1. (Retired 2026-10-02.)  TUR_JIT used to make configure clone MIR over
+    #      the network, and folding that into the main gate would have made a
+    #      GitHub/network blip fail every PR.  The vendored copy ended that.
     #   2. tur_jit_fixture_tests re-runs the whole ~2500-fixture corpus through
     #      the engine.  It is fast (~2 min on Apple Silicon, run serially and
     #      fanned out internally), but it is a second full corpus pass and
@@ -420,12 +710,19 @@ jobs:
     #      TUR_TEST_SHARD="i/N" for exactly that, guarded by the
     #      tur_shard_partition test; adding the axis is the gating decision
     #      described on the `test` job above, not a plumbing one.
-    #   3. The `jit` experiment graduated 2026-08-17, but the ENGINE is still
-    #      opt-in at build time (-DTUR_JIT=ON) and `cc` is still the default
-    #      engine, so this leg exercises a configuration most builds do not
-    #      have.  It should not gate merges at the same strength as the AOT
-    #      suite, which covers what everyone actually ships.
-    timeout-minutes: 45
+    #   3. The `jit` experiment graduated 2026-08-17 and every default build now
+    #      carries the engine, but `cc` is still the default ENGINE, so the
+    #      programs people run go through the AOT suite's path.  This leg covers
+    #      the engine itself, which only `tur jit` / `--engine jit` / the REPL
+    #      reach.
+    #
+    # 60, raised from 45 on 2026-10-01: the whole-ctest alarm below went to
+    # 2550s to stay above tur_jit_fixture_tests' raised per-test TIMEOUT, and
+    # this has to clear that alarm plus the build and the uploads.  A
+    # timeout-minutes kill is the one outcome with NO diagnostics (it cancels
+    # the job and leaves the `if: always()` uploads pending), so it stays the
+    # outermost bound by a wide margin.
+    timeout-minutes: 60
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 500M
@@ -469,6 +766,8 @@ jobs:
           restore-keys: |
             ccache-jit-${{ runner.os }}-
 
+      # -DTUR_JIT=ON although it is the default: this job exists to run the
+      # engine, so it must not follow the default if that ever moves.
       - name: Configure (Debug + JIT)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
@@ -486,12 +785,17 @@ jobs:
       # precisely the failure mode that let this gap persist.  Fail loudly
       # instead.  `perl -e alarm` is the portable timeout (macOS runners ship
       # no coreutils `timeout`), matching the smoke check in the `test` job.
+      # Needs a real file: a bare `tur jit` prints "usage: tur jit" whether or
+      # not the engine is compiled in, so matching on the usage line passed a
+      # no-JIT build too.  Only an engine-less build prints "carries no JIT
+      # engine"; a real one runs the probe.
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit 2>&1) || true
+          printf '(defn main [] : int (do (println "jit-ok") 0))\n' > /tmp/jit-probe.tur
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit /tmp/jit-probe.tur 2>&1) || true
           echo "$out"
           case "$out" in
-            *"usage: tur jit"*)
+            *"jit-ok"*)
               echo "JIT engine present." ;;
             *)
               echo "::error::tur was built without the MIR JIT engine -- the JIT suites would self-skip and this job would pass vacuously."
@@ -600,7 +904,7 @@ jobs:
           # STREAMED, not redirected-then-filtered.  This step used to do
           # `ctest > jit-ctest.log` and run the grep afterwards, which is fine
           # for a run that finishes and useless for one that does not: when the
-          # job hits `timeout-minutes: 45` ctest is killed, the grep never runs,
+          # job hits `timeout-minutes: 60` ctest is killed, the grep never runs,
           # and the log dies with the runner -- so a HANG printed literally
           # nothing and there was no way to tell how far it got.  That is not
           # hypothetical; it is how both `main` (f865097db, 2026-08-02 19:52)
@@ -625,52 +929,54 @@ jobs:
           # any other break in test registration would sail through as a green
           # step that ran no tests -- the same vacuous-pass shape that step
           # exists to prevent.
-          # tur_flags_tests is here as well as in the `test` job, and the
-          # duplication is the point: it is the only harness carrying the
-          # `jit-ffi-*` cases, and EVERY one of them is gated on the engine
-          # being present (`HAS_JIT`), so in the `test` job -- which builds
-          # without -DTUR_JIT=ON -- they all SKIP.  Before this line nothing
-          # in CI ran run-flags.sh against a JIT build on any runner, which
-          # meant the interpreter's whole dynamic-FFI surface (call-ptr,
-          # thunk-backed extern-c, callbacks, struct-by-value) was asserted
-          # only by hand.  The aarch64 HFA refusal in particular is
-          # `#if defined(__aarch64__)` and had NEVER executed anywhere: this
-          # macOS leg is the only arm64 machine in the matrix, so this line
-          # is what turns that case from documentation into a test.
+          # tur_flags_tests is NOT here any more.  It used to be, because its
+          # `jit-ffi-*` cases are gated on the engine (`HAS_JIT`) and the `test`
+          # job built without it, so they all SKIPped there.  Since TUR_JIT
+          # defaulted ON (2026-10-02) the `test` job runs the same Debug + JIT +
+          # ASan build and the same cases (134 passed on Linux, 137 on macOS,
+          # identical in both jobs), including the arm64 HFA refusal on its
+          # macOS leg.  Running it here as well bought no coverage and put two
+          # rows per run into one ci-metrics series (both jit=true now), which
+          # drew the suite as a zig-zag between ~9s and ~28s.
           #
           # --output-junit rides along for the suite-timing trend
           # (docs/archive/suite-timing-trends-plan.md).  These rows carry
-          # jit=true from the build cache, so they form their own series and
-          # are never averaged against the `test` job's jit=false rows.
+          # jit=true, and since TUR_JIT defaulted ON so do the `test` job's: the
+          # two jobs share one ci-metrics environment.  That is why no suite
+          # may run in both -- it would draw two points per run in one series.
           #
           # macos-jit-hang-loses-both-diagnostics: BOUNDED INSIDE THE JOB
           # BUDGET, which is the whole reason the instrumentation above finally
           # produces something.  On 2026-09-28 this step hung and was killed by
-          # `timeout-minutes: 45` -- and a timeout-minutes kill does NOT run the
+          # `timeout-minutes: 60` -- and a timeout-minutes kill does NOT run the
           # job's remaining `if: always()` steps, so "Upload JIT ctest log"
           # never ran, the runner took the log with it, and the occurrence was
           # as blind as the ones the tee/grep were added for.  The `if:
           # always()` claim had only ever been exercised on a run that
           # SUCCEEDED.
           #
-          # 35 minutes, against a 13-19 min baseline for this step on recent
-          # `main` runs: comfortably above any observed run, and ~10 minutes
-          # inside the 45 so the uploads below get to run on a step that FAILS
-          # rather than a job that is killed.  `perl -e alarm` rather than
+          # 42.5 minutes, against an 18-22 min baseline for this step on recent
+          # `main` runs: comfortably above any observed run, and ~17 minutes
+          # inside the 60 so the uploads below get to run on a step that FAILS
+          # rather than a job that is killed.  It must also stay ABOVE the
+          # per-test TIMEOUT properties in CMakeLists.txt (2400s for
+          # tur_jit_fixture_tests, raised 2026-10-01 with this) -- only those
+          # name the offending target, so an alarm that fires first destroys
+          # the diagnostic.  `perl -e alarm` rather than
           # `timeout`, because stock macOS ships no coreutils `timeout` -- the
           # same idiom as the engine-present probe above.  It heads the
           # pipeline, so PIPESTATUS[0] carries its 142 (128+SIGALRM) and the
           # step fails; `tee` has already written everything it got.
           set +e
-          perl -e 'alarm 2100; exec @ARGV' \
+          perl -e 'alarm 2550; exec @ARGV' \
             ctest --test-dir build -V --no-tests=error --output-junit results-jit.xml \
                 --test-output-size-passed 262144 --test-output-truncation head \
-                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit|tur_flags_tests)$' 2>&1 \
+                -R '^(tur_jit_fixture_tests|tur_repl_spice_jit)$' 2>&1 \
             | tee jit-ctest.log \
             | grep --line-buffered -aE '^[0-9]+: (FAIL|.*passed,|.*fallback)|^ *Start +[0-9]+:|[0-9]+% tests passed|\*\*\*|Errors while running CTest'
           rc=${PIPESTATUS[0]}
           if [ "$rc" -eq 142 ]; then
-            echo "::error::Run JIT suites exceeded its 35-minute budget and was killed. The partial ctest log is uploaded as an artifact by the next step; the per-test TIMEOUT properties in CMakeLists.txt should normally name the test first."
+            echo "::error::Run JIT suites exceeded its 42.5-minute budget and was killed. The partial ctest log is uploaded as an artifact by the next step; the per-test TIMEOUT properties in CMakeLists.txt should normally name the test first."
           fi
           exit $rc
 
@@ -717,22 +1023,201 @@ jobs:
           path: ${{ github.workspace }}/.ccache
           key: ccache-jit-${{ runner.os }}-${{ github.sha }}
 
-  # cc-path-preamble-split-plan: run the corpus with the split runtime ON.
+  # The interpreter in the configuration that has no JIT to lean on.
   #
-  # Nothing in CI exercised `--runtime=split` at all, so the split PR could go
-  # fully green -- twelve jobs, all passing -- while the feature it adds was
-  # never once executed.  That green attested "the opt-in path does not break
-  # the default path", which is worth knowing and is not what it looked like.
-  # It is the same shape as
-  # docs/archive/jit-suite-reports-pass-when-the-engine-is-disabled.md: a
-  # suite reporting PASS for a path it never took.
+  # TUR_JIT defaulted ON on 2026-10-02, and from then on every leg above built
+  # with the MIR engine -- so nothing compiled or ran the interpreter the way a
+  # no-JIT platform gets it.  That is not hypothetical: iOS forbids a JIT and
+  # the WASM web REPL has none, and on both the tree-walking interpreter
+  # (src/turi/) is the only engine.  A turi change that quietly leans on
+  # TUR_HAVE_JIT (the c2mir FFI thunks, the C1 inline-C hook) passes every
+  # other leg and only breaks there.  See
+  # docs/reported/turi-ios-readiness-unverified.md.
   #
-  # Linux only, deliberately.  The split's failure modes so far are compiler
-  # diagnostics from the emitted C (gcc rejecting what c2mir accepts), not
-  # platform behaviour, so a second OS would mostly buy runtime.  Widen it when
-  # a platform-specific split bug actually shows up.
-  split:
-    name: Split runtime (cc path)
+  # Linux only and per PR: Linux runners start immediately (see the `test`
+  # matrix `exclude` comment), and a JIT dependency is cheapest to catch the
+  # day it lands.  The iOS cross-compile half of the same concern is nightly,
+  # in nightly-ios.yml, because it needs a macOS runner.
+  #
+  # Runs tests/run-turi.sh directly, not through ctest, so this job adds no row
+  # to tests/ctest-parts.py: the `test` job still owns turi_fixture_tests, and
+  # this is a second configuration of it, not a part of the partition.
+  interp-nojit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Interpreter without JIT (ubuntu-latest)
+    runs-on: ubuntu-latest
+    # The suite measures ~5 min; 60 leaves room for a cold-cache build and is a
+    # diagnostic, not a budget (same reasoning as the `test` job's number).
+    timeout-minutes: 60
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-nojit-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-nojit-${{ runner.os }}-
+
+      - name: Configure (Debug, JIT off)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets: fixtures that fall back to the cc path link libturi.a,
+      # which `--target tur` does not build.
+      - name: Build
+        run: cmake --build build -j
+
+      # The inverse of the `jit` job's presence check.  If -DTUR_JIT=OFF were
+      # ever dropped or overridden, this job would quietly become a second copy
+      # of the `test` job's turi run and report green having tested nothing new.
+      # Needs a real file: a bare `tur jit` prints its usage line whether or
+      # not the engine is compiled in.
+      - name: Verify the JIT engine is absent
+        run: |
+          printf '(defn main [] : int (do (println "hi") 0))\n' > /tmp/nojit-probe.tur
+          out=$(perl -e 'alarm 30; exec @ARGV' ./build/tur jit /tmp/nojit-probe.tur 2>&1) || true
+          echo "$out"
+          case "$out" in
+            *"carries no JIT engine"*)
+              echo "JIT engine absent, as intended." ;;
+            *)
+              echo "::error::this build carries the MIR JIT engine -- the no-JIT interpreter configuration is not what ran."
+              exit 1 ;;
+          esac
+
+      - name: Interpreter fixture suite (run-turi.sh)
+        run: |
+          set -o pipefail
+          timeout 720 bash tests/run-turi.sh 2>&1 | tee turi.log
+
+      # Skips are where interpreter gaps hide (fixtures with user inline-C are
+      # skipped outright), so record the count where a reader will see it.
+      - name: Record the skip count
+        if: always()
+        run: |
+          line=$(grep -E '^turi fixture summary: ' turi.log | tail -1 || true)
+          echo "${line:-no summary line -- the suite did not finish}"
+          { echo "### Interpreter without JIT"; echo; echo "${line:-no summary line -- the suite did not finish}"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-nojit-${{ runner.os }}-${{ github.sha }}
+
+  # cc-path-preamble-split-plan: run the corpus with the WHOLE preamble.
+  #
+  # This job used to be `split`, running the suite under TUR_RUNTIME=split when
+  # the split was opt-in.  The split is now the default on Linux and Windows, so
+  # `test` and `windows` run it, and this job covers the path the default left
+  # behind: every program compiling the runtime preamble inline.  That path is
+  # not dead.  A `--target tur` build has no libturt_preamble.a, sanitizer and
+  # --debug builds keep the preamble inline on purpose, and an install without
+  # the archive falls back to it -- all silently, because the fallback is the
+  # correct answer, not a degraded one.  Nothing else on Linux/gcc compiles it.
+  #
+  # Linux only: macOS still defaults to the whole preamble, so its `test` legs
+  # cover it there.
+  whole-preamble:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Whole runtime preamble (cc path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 500M
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      TUR_PREAMBLE_SPLIT: "0"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          # Drop the runner image's Google Chrome apt source and retry the
+          # update once -- see the `test` job's dependency step for why.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome*
+          sudo apt-get update || { sleep 20; sudo apt-get update; }
+          sudo apt-get install -y libedit-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-whole-preamble-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-whole-preamble-${{ runner.os }}-
+
+      # Debug, matching the `test` job: a Release tur elides contract checks,
+      # so contract fixtures fail with the wrong error and this job would be
+      # measuring the build type rather than the preamble.
+      - name: Configure (Debug)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      # ALL targets, so libturt_preamble.a IS present and the probe below shows
+      # TUR_PREAMBLE_SPLIT=0 is what turns the split off -- not a missing file.
+      - name: Build (all targets)
+        run: cmake --build build -j
+
+      # The mirror image of the `test` job's engage probe.  If the opt-out
+      # stopped working, this job would quietly run the split a second time
+      # and report green for a path it never took.
+      - name: Verify the split does NOT engage
+        run: |
+          test -f build/src/libturt_preamble.a || { echo "::error::libturt_preamble.a was not built"; exit 1; }
+          printf '(defn main [] : int 0)\n' > /tmp/wholeprobe.tur
+          out=$(TUR_SHOW_CC=1 ./build/tur build /tmp/wholeprobe.tur -o /tmp/wholeprobe 2>&1) || true
+          printf '%s\n' "$out"
+          case "$out" in
+            *-lturt_preamble*)
+              echo "::error::TUR_PREAMBLE_SPLIT=0 did not keep the whole preamble"
+              exit 1 ;;
+          esac
+          /tmp/wholeprobe || { echo "::error::whole-preamble binary did not run"; exit 1; }
+          echo "the whole preamble is compiled inline and the artifact runs."
+
+      - name: Suite with the whole preamble
+        run: |
+          set -o pipefail
+          bash tests/run.sh 2>&1 | tee /tmp/whole-preamble-run.log
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-whole-preamble-${{ runner.os }}-${{ github.sha }}
+
+  # The fixture corpus under clang's -fsanitize=function (trap mode): every
+  # indirect call the emitted C makes must go through a function pointer of
+  # EXACTLY the callee's type.  WASM's call_indirect traps on any difference,
+  # and on a `double` or a 16-byte `any` the native build answers wrong
+  # silently -- the longest-running wrong-answer family this repo has had.
+  # The corpus reached zero on 2026-10-02 (docs/archive/
+  # emitted-c-indirect-calls-are-not-type-exact.md), so this is a GATE: a
+  # failing fixture here is a new mismatched call.  tests/run-fnsan.sh proves
+  # the detector armed with a canary first, so it cannot pass vacuously.
+  fnsan:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Indirect-call type check (clang -fsanitize=function)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -750,75 +1235,42 @@ jobs:
           # update once -- see the `test` job's dependency step for why.
           sudo rm -f /etc/apt/sources.list.d/google-chrome*
           sudo apt-get update || { sleep 20; sudo apt-get update; }
-          sudo apt-get install -y libedit-dev ccache
+          sudo apt-get install -y libedit-dev ccache clang
 
       - name: Restore ccache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+          key: ccache-fnsan-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            ccache-split-${{ runner.os }}-
+            ccache-fnsan-${{ runner.os }}-
 
-      # Debug, matching the `test` job: a Release tur elides contract checks,
-      # so contract fixtures fail with the wrong error and the baseline below
-      # would be measuring the build type rather than the split.
-      - name: Configure (Debug)
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
-
-      # ALL targets: --runtime=split links libturt_preamble.a, and `tur` alone
-      # never builds it.  A tur-only build fails every fixture at the link with
-      # `cannot find -lturt_preamble`, which reads like a split bug and is not.
-      - name: Build (all targets -- split links libturt_preamble.a)
-        run: cmake --build build -j
-
-      # Load-bearing, and the whole reason this job is worth having.  The split
-      # FAILS CLOSED: on any mismatch it silently emits the full preamble, so
-      # the suite still passes, slower, and nothing says so.  Without this
-      # check a build that lost the split entirely would report a clean green
-      # -- vacuously, having tested the default path twice.
-      - name: Verify the split actually engages
+      # The compiler under test is the ordinary Debug build (gcc, ASan), as
+      # in `test`; only the fixture programs are compiled with clang.
+      - name: Configure + build (Debug)
         run: |
-          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
-          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
-                  ./build/tur build /tmp/splitprobe.tur -o /tmp/splitprobe 2>&1) || true
-          printf '%s\n' "$out"
-          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
-            echo "::error::the split disengaged -- see the reason above (regenerate artifacts with tools/gen-runtime-split.py after a preamble change)"
-            exit 1
-          fi
-          if [ ! -x /tmp/splitprobe ]; then
-            echo "::error::split build produced no executable"
-            exit 1
-          fi
-          /tmp/splitprobe || { echo "::error::split-built binary did not run"; exit 1; }
-          echo "split engaged and the artifact runs."
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build -j
 
-      # Plain "zero failures", like every other suite.
-      #
-      # This used to diff against a committed known-failure baseline, which was
-      # scaffolding while the split still had failures. Both lists reached empty
-      # on 2026-09-07, so the scaffolding went with them -- the investigation
-      # they carried is in
-      # docs/archive/cc-path-split-windows-and-hamt-findings.md.
-      #
-      # Worth one line on how they died, because the bug was in the harness and
-      # not the thing under test: with an empty list,
-      # `grep -vE '^\s*(#|$)' <file>` matches nothing and exits 1, and these
-      # steps run under `bash -e`. All four split legs reported
-      # `2828 passed, 0 failed` and then failed anyway. An empty-set edge case
-      # in a check is worse than no check, so the check is now the simple one.
-      - name: Suite under TUR_RUNTIME=split
+      # The Debug libturi.a is compiled with gcc's ASan, which clang cannot
+      # link against: the fixtures that use it would fail to build and drop
+      # out of the count.  An unsanitized one keeps them in.
+      - name: Build an unsanitized libturi.a
+        run: |
+          cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake --build build-nosan -j --target libturi
+
+      - name: Suite under -fsanitize=function
         run: |
           set -o pipefail
-          TUR_RUNTIME=split bash tests/run.sh 2>&1 | tee /tmp/split-run.log
+          CC=clang TUR_FNSAN_LIB_DIR=build-nosan/src bash tests/run-fnsan.sh 2>&1 | tee /tmp/fnsan-run.log
 
       - name: Save ccache
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-split-${{ runner.os }}-${{ github.sha }}
+          key: ccache-fnsan-${{ runner.os }}-${{ github.sha }}
 
   # Phase 3A/4 of docs/archive/suite-timing-trends-plan.md.
   #
@@ -866,6 +1318,13 @@ jobs:
           set -euo pipefail
           python3 tools/ci/collect-loc.py --explain > repo-loc.jsonl
 
+      # Open plans and reports are a property of the COMMIT, so like the line
+      # counts they are measured here -- once -- and not in a matrix leg.
+      - name: Collect doc counts
+        run: |
+          set -euo pipefail
+          python3 tools/ci/collect-docs.py --explain > docs-counts.jsonl
+
       - name: Merge and publish
         run: |
           set -euo pipefail
@@ -879,9 +1338,11 @@ jobs:
             exit 0
           fi
           echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
-          bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl
+          bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
 
   windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Windows build + suite ${{ matrix.shard }} (MSYS2/UCRT64)
     runs-on: windows-latest
 
@@ -1123,6 +1584,25 @@ jobs:
         if: matrix.shard == '1/3'   # once
         run: TUR=./build-win/tur.exe bash tests/run-install.sh
 
+      # cc-path-preamble-split-plan: the preamble split is the default here, and
+      # it FAILS CLOSED -- a declined swap keeps the whole preamble and every
+      # fixture still passes, slower.  This probe is what notices.  It replaces
+      # the `windows-split` job, which ran the suite under TUR_RUNTIME=split
+      # while the split was opt-in; the suite below now runs it by default.
+      - name: Verify the preamble split engages by default
+        run: |
+          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
+          out=$(TUR_SHOW_CC=1 TUR_JIT_TIMING=1 \
+                  ./build-win/tur.exe build /tmp/splitprobe.tur -o /tmp/splitprobe.exe 2>&1) || true
+          printf '%s\n' "$out"
+          case "$out" in
+            *-lturt_preamble*) ;;
+            *) echo "::error::a default build did not take the preamble split on Windows -- see any 'disengaged' reason above"
+               exit 1 ;;
+          esac
+          /tmp/splitprobe.exe || { echo "::error::split-built binary did not run"; exit 1; }
+          echo "the default build takes the split and the artifact runs."
+
       - name: Fixture suite
         env:
           TUR_TEST_SHARD: ${{ matrix.shard }}
@@ -1151,15 +1631,18 @@ jobs:
           if-no-files-found: ignore
 
   windows-jit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Windows JIT build (MSYS2/UCRT64)
     runs-on: windows-latest
 
     # BUILD + SMOKE, and a separate job rather than a step on `windows:`.
     #
     # Nothing on Windows compiled the JIT sources at all until this existed:
-    # the `windows` job configures without -DTUR_JIT=ON, so src/jit_engine.c and
+    # the `windows` job configured without -DTUR_JIT=ON, so src/jit_engine.c and
     # src/turi/jit_ffi.c were unguarded by CI on the one platform whose headers
-    # differ most.  That is how jit_ffi.c reached main with an unguarded
+    # differ most.  (Since TUR_JIT defaulted ON, 2026-10-02, `windows` builds
+    # the engine as well; this job is still the only one that RUNS it there.)  That is how jit_ffi.c reached main with an unguarded
     # <dlfcn.h>, which MinGW does not ship -- the Windows JIT build was simply
     # broken and no job noticed.
     #
@@ -1169,13 +1652,13 @@ jobs:
     # frames, fixed by tur_sjlj_x64_win.S, and the corpus is now 2702 passed /
     # 0 failed / 70 skipped on Windows
     # (docs/archive/jit-windows-support-spike.md).  Two things keep it off:
-    # runner time (shard it like `windows-split` below -- a third of the corpus
+    # runner time (shard it like `windows` above -- a third of the corpus
     # takes ~5.5 min on a 12-core box), and the fallback ratchet, whose
     # baseline is Linux-generated and would fail on the ~47 fixtures that fall
     # back to cc only on Windows.  See docs/reported/windows-jit-corpus-not-in-ci.md.
     #
     # Separate job so it runs in parallel with `windows:` rather than adding its
-    # MIR fetch and build onto that job's ~30 minutes.
+    # smoke checks onto that job's ~30 minutes.
     defaults:
       run:
         shell: msys2 {0}
@@ -1201,8 +1684,9 @@ jobs:
           cc --version | head -1
           cmake --version | head -1
 
-      # TUR_JIT makes configure fetch MIR over the network (cmake/mir.cmake),
-      # which is why this is not folded into the default Windows build.
+      # -DTUR_JIT=ON although it is the default (vendored MIR, no network):
+      # this job exists to guard the engine, so it must not follow the default
+      # if that ever moves.
       - name: Configure (Debug + JIT)
         run: >-
           cmake -S . -B build-win-jit -G Ninja
@@ -1216,12 +1700,15 @@ jobs:
       # Same reasoning as the `jit` job: a build that silently lost -DTUR_JIT=ON
       # would pass this job having compiled none of the sources it exists to
       # guard.
+      # Needs a real file -- a bare `tur jit` prints its usage line with or
+      # without the engine (see the `jit` job's copy of this step).
       - name: Verify the JIT engine is actually present
         run: |
-          out=$(timeout 30 ./build-win-jit/tur.exe jit 2>&1) || true
+          printf '(defn main [] : int (do (println "jit-ok") 0))\n' > jit-probe.tur
+          out=$(timeout 30 ./build-win-jit/tur.exe jit jit-probe.tur 2>&1) || true
           echo "$out"
           case "$out" in
-            *"usage: tur jit"*)
+            *"jit-ok"*)
               echo "JIT engine present." ;;
             *)
               echo "::error::tur.exe was built without the MIR JIT engine -- this job would pass having compiled nothing it guards."
@@ -1302,114 +1789,9 @@ jobs:
       - name: REPL spice load through the JIT
         run: TUR=./build-win-jit/tur.exe timeout 600 bash tests/turi/repl-spice-jit.sh
 
-  # The split runtime on WINDOWS.  A separate job from `split` (Linux) because
-  # the two disagree, and the disagreement is the point: on Linux exactly one
-  # fixture fails under TUR_RUNTIME=split; on Windows three do, and the extra
-  # two are a real defect (no output, exit 127, while the DEFAULT runtime
-  # passes the same fixture with the same compiler and build).
-  #
-  # That defect was invisible to CI for as long as it existed, which is how it
-  # spent a whole session being mischaracterised as "three failures in the
-  # split" when three was a Windows number and one was the Linux number.
-  #
-  # SHARDED, like the `windows` job and for the same reason: a single Windows
-  # runner takes 28-52 minutes on this corpus and has died outright once.
-  windows-split:
-    name: Windows split runtime ${{ matrix.shard }} (MSYS2/UCRT64)
-    runs-on: windows-latest
-    timeout-minutes: 45
-
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ['1/3', '2/3', '3/3']
-
-    defaults:
-      run:
-        shell: msys2 {0}
-
-    steps:
-      # As in the `windows` job: a CRLF checkout would rewrite the committed
-      # split-runtime artifacts under src/runtime/generated/, which are exactly
-      # what this leg tests.
-      - name: Keep LF line endings
-        shell: bash
-        run: git config --global core.autocrlf input
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            diffutils
-            python
-            git
-
-      # Debug: a Release tur elides contract checks, so contract fixtures fail
-      # with the wrong error and the baseline would be measuring the build type.
-      # Sanitizers are off regardless here -- MinGW ships no ASan runtime.
-      - name: Configure
-        run: >-
-          cmake -S . -B build-win -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-
-      # ALL targets: --runtime=split links libturt_preamble.a, which a
-      # `--target tur` build never produces.  Every fixture would then die at
-      # the link with `cannot find -lturt_preamble`, which reads like a split
-      # bug and is not.
-      - name: Build (all targets -- split links libturt_preamble.a)
-        run: cmake --build build-win -j
-
-      # The split FAILS CLOSED: on a hash mismatch it silently emits the full
-      # preamble and everything still passes, slower.  Without this, a leg that
-      # lost the split would report green having run the default path twice.
-      - name: Verify the split actually engages
-        run: |
-          printf '(defn main [] : int 0)\n' > /tmp/splitprobe.tur
-          out=$(TUR_JIT_TIMING=1 TUR_RUNTIME=split \
-                  ./build-win/tur.exe build /tmp/splitprobe.tur -o /tmp/splitprobe.exe 2>&1) || true
-          printf '%s\n' "$out"
-          if printf '%s\n' "$out" | grep -q 'split.*disengaged'; then
-            echo "::error::the split disengaged on Windows -- see the reason above"
-            exit 1
-          fi
-          [ -f /tmp/splitprobe.exe ] || { echo "::error::split build produced no executable"; exit 1; }
-          /tmp/splitprobe.exe || { echo "::error::split-built binary did not run"; exit 1; }
-          echo "split engaged and the artifact runs."
-
-      # Plain "zero failures", like the Linux leg and every other suite.
-      #
-      # This shard used to assert its failures were a SUBSET of a committed
-      # baseline, with a second step checking the other direction (every listed
-      # name still fails). That scaffolding existed while the split had known
-      # failures; both lists reached empty on 2026-09-07 and it went with them.
-      # The investigation is in
-      # docs/archive/cc-path-split-windows-and-hamt-findings.md -- including the
-      # fact that the second, cheaper check was the one that caught something,
-      # which is worth remembering if a baseline is ever needed again.
-      - name: Suite under TUR_RUNTIME=split (shard ${{ matrix.shard }})
-        env:
-          TUR_TEST_SHARD: ${{ matrix.shard }}
-        run: |
-          set -o pipefail
-          TUR=./build-win/tur.exe TUR_RUNTIME=split bash tests/run.sh 2>&1 \
-            | tee ./split-win.log
-
-      - name: Upload split log
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: split-win-${{ strategy.job-index }}
-          path: ./split-win*.log
-          if-no-files-found: ignore
-
   check-guides:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.guides == 'true'
     name: Check guide toggle pairs
     runs-on: ubuntu-latest
     env:
@@ -1453,6 +1835,8 @@ jobs:
         run: python3 tools/check-guide-pairs.py --tur build/tur docs/guides/
 
   check-spaced-types:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.guides == 'true'
     name: Check spaced-type annotations
     runs-on: ubuntu-latest
     steps:
@@ -1475,6 +1859,8 @@ jobs:
   # detection, tar layouts, `sha256sum` vs `shasum`, and the target triple all
   # differ, and macOS is where the advertised one-liner is most used.
   tvm:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: tvm (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -1504,6 +1890,8 @@ jobs:
         run: sh tvm/tests/install-script.sh
 
   check-snapshots:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Check codegen snapshots
     runs-on: ubuntu-latest
     # Only run when src/codegen/ changed or expected.c files changed.
@@ -1554,6 +1942,8 @@ jobs:
         run: ./build/tur run regen-snapshots -- --check
 
   web-smoke:
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.guides == 'true'
     name: Try Turmeric smoke test (browser)
     runs-on: ubuntu-latest
     # Pre-deploy gate for try.turmeric-lang.com: builds the wasm bundle and
@@ -1599,7 +1989,7 @@ jobs:
         run: python3 -m pip install --require-hashes -r tools/requirements.txt
 
       - name: Set up Emscripten
-        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
           # Pinned to a modern release; bump alongside the wasm build if the
           # emcc surface changes (currently only the -sSTACK_SIZE / INITIAL_MEMORY
@@ -1614,7 +2004,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
@@ -1663,8 +2053,15 @@ jobs:
         continue-on-error: true
         run: npx playwright install --with-deps webkit
 
+      # Step-level timeouts, not a job-level one: a job timeout CANCELS the
+      # job, and then the `!cancelled()` report upload below never runs -- the
+      # failure mode docs/archive/macos-jit-hang-loses-both-diagnostics.md
+      # records.  A step timeout fails the step and the evidence still uploads.
+      # Healthy durations on main: gate 7 s, desktop ~3.5 min, mobile ~2 min.
       - name: Run deploy-gate smoke test
+        id: gate
         working-directory: web
+        timeout-minutes: 5
         run: npx playwright test deploy-gate.spec.js --project=desktop
 
       # docs-offline.spec.js asserts a property of the *built* artefact: the
@@ -1693,14 +2090,29 @@ jobs:
       # rather than left to be discovered. ci.spec.js (the /ci dashboard) was
       # itself an instance of that trap: it existed, passed locally, and had
       # never run here.
-      # Each non-blocking suite also writes JUnit (one <testcase> per test)
-      # for the timings step below, so the suites get /ci rows like every
-      # ctest suite -- including an honest `status: fail` on a run whose job
-      # stayed green (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
-      - name: Run broader smoke suite (desktop, non-blocking)
+      # Each suite also writes JUnit (one <testcase> per test) for the timings
+      # step below, so both get /ci rows like every ctest suite -- including an
+      # honest `status: fail` on a run whose job stayed green, which is still
+      # reachable for mobile
+      # (docs/archive/try-turmeric-browser-suites-green-while-failing.md).
+      #
+      # BLOCKING since 2026-10-02, which is that report's fix direction 6 and
+      # was left to a human on purpose.  What changed is that the condition it
+      # set -- "once the desktop suite is genuinely clean" -- is now true and
+      # measured rather than asserted: the last standing failure was marked in
+      # docs/reported/docs-offline-cold-pane-never-boots.md, and the /ci
+      # history puts the residual ISOLATED flake at 6 commits in 266 (2.3%),
+      # damped by `retries: 2` in playwright.config.js (see the note there).
+      #
+      # If this does block PRs on flake after all, the honest revert is
+      # `continue-on-error: true` back on this step -- not deleting specs from
+      # the path list below, which lowers the failure count by running less and
+      # is the failure mode that report calls "a regression wearing a fix's
+      # clothes".
+      - name: Run broader smoke suite (desktop) -- BLOCKING
         id: desktop
         working-directory: web
-        continue-on-error: true
+        timeout-minutes: 15
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-desktop.xml
         run: npx playwright test --project=desktop --reporter=list,junit
@@ -1711,16 +2123,45 @@ jobs:
           tests/lang-picker.spec.js tests/sw-dev.spec.js tests/trace.spec.js
           tests/security.spec.js tests/ci.spec.js
 
+      # Not the default `success()`, because the desktop step above now
+      # BLOCKS: a desktop failure would skip this step, mobile would produce no
+      # JUnit, and collect-playwright-timings would report web_mobile as `skip`
+      # with "suite did not run" -- so a desktop regression would silently cost
+      # the mobile row too, and the skip ledger would blame the wrong thing.
+      #
+      # Not `always()` either: that also ran it after the deploy gate failed,
+      # and a gate failure is usually a wasm module that never reaches Ready.
+      # Then every mobile test waits out its timeout, three times over with
+      # `retries: 2`, and the job sat "in progress" for most of an hour after
+      # its verdict was already in (PR #1053, 2026-10-03).  The gate is the
+      # precondition the desktop step already skips on; mobile does too.
+      #
+      # Still non-blocking, and NOT because its tests are worse: mobile's
+      # isolated-flake rate (1.9%) is lower than desktop's and its clean streak
+      # is longer.  The blocker is its precondition -- the WebKit download step
+      # above is itself `continue-on-error`, and when that fails the whole
+      # project dies at `browserType.launch: Executable doesn't exist` before
+      # any test body runs (the post-mortem in that step's own comment).
+      # Gating here would turn a third-party download failure into a blocked
+      # PR, which is infrastructure flake, not a test signal.
       - name: Run mobile smoke suite (non-blocking)
         id: mobile
+        if: ${{ !cancelled() && steps.gate.outcome == 'success' }}
         working-directory: web
         continue-on-error: true
+        timeout-minutes: 10
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-mobile.xml
         run: npx playwright test --project=mobile --reporter=list,junit
 
-      # A non-blocking failure must still announce itself: on the job summary
-      # and as a workflow annotation, not five thousand lines down a log.
+      # Mobile still needs this: a non-blocking failure must announce itself on
+      # the job summary and as an annotation, not five thousand lines down a
+      # log.  Desktop no longer depends on it to be noticed -- the job is red
+      # -- but it stays in the table so both are read the same way, and its
+      # annotation is `::error` rather than `::warning` to match.
+      #
+      # `outcome` is the step result BEFORE continue-on-error is applied, so it
+      # reads "failure" for either step regardless of which one gates.
       - name: Report browser suite outcomes
         if: always()
         run: |
@@ -1729,12 +2170,12 @@ jobs:
             echo
             echo "| suite | outcome |"
             echo "|---|---|"
-            echo "| deploy-gate (blocking) | passed |"
-            echo "| desktop (non-blocking) | ${{ steps.desktop.outcome }} |"
+            echo "| deploy-gate (blocking) | ${{ steps.gate.outcome }} |"
+            echo "| desktop (blocking) | ${{ steps.desktop.outcome }} |"
             echo "| mobile (non-blocking) | ${{ steps.mobile.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.desktop.outcome }}" = "failure" ]; then
-            echo "::warning title=Try Turmeric desktop suite failed::non-blocking, but see the playwright-report artifact and the web_desktop row on /ci"
+            echo "::error title=Try Turmeric desktop suite failed::this suite BLOCKS -- see the playwright-report artifact and the web_desktop row on /ci"
           fi
           if [ "${{ steps.mobile.outcome }}" = "failure" ]; then
             echo "::warning title=Try Turmeric mobile suite failed::non-blocking, but see the playwright-report artifact and the web_mobile row on /ci"
@@ -1757,10 +2198,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # `!cancelled()`, not `failure()`: the suites are continue-on-error, so a
-      # failing suite never put the job into a failure state and the report
-      # was uploaded only when nothing had failed -- the one case it was not
-      # needed.  The report is the evidence; upload it every time.
+      # `!cancelled()`, not `failure()`.  Written when BOTH suites were
+      # continue-on-error, so a failing suite never put the job into a failure
+      # state and `failure()` uploaded the report only when nothing had failed
+      # -- the one case it was not needed.  Desktop blocks now, so `failure()`
+      # would cover that one; mobile is still continue-on-error and would still
+      # slip through, and `!cancelled()` covers both without anyone having to
+      # re-derive which suite gates.  The report is the evidence; upload it
+      # every time.
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

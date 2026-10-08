@@ -151,7 +151,7 @@ Conventions worth following:
 > experiment gate) was a warning-only no-op through 0.37.0 and is a hard
 > `TUR-E0310` from 0.38.0 -- a `build.tur` still naming it needs the flag
 > removed. See
-> [sealed-opaque-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/sealed-opaque-plan.md).
+> [sealed-opaque-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/sealed-opaque-plan.md).
 
 `::` is a **coercing** cast, not a checked one. That means a plain
 `defopaque` does *not* encapsulate its handle: any module can unwrap a
@@ -288,22 +288,22 @@ type level without storing it.
 
 | Module | Opaque | Shape |
 |---|---|---|
-| [`stdlib/fd.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/fd.tur) | `Fd` | `:int` -- POSIX file descriptor, `-1` is the error sentinel |
-| [`stdlib/process.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/process.tur) | `Pid`, `ChildHandle` | `:int` (one `:linear`) -- OS process ids |
-| [`stdlib/chan.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/chan.tur) | `Chan`, `AsyncChan` | `:ptr<void> :linear` -- channel control blocks |
-| [`stdlib/future.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/future.tur) | `Promise`, `Future` | `:ptr<void>` with `:linear` / `:affine` -- write end vs read end of the same `FutureCell` |
-| [`stdlib/threadpool.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/threadpool.tur) | `WorkQueueHandle`, `ThreadPoolHandle`, `DynThreadPoolHandle`, `FutureHandle` | `:ptr<void>` -- static and dynamic pools have distinct block layouts and are nominally distinct |
-| [`stdlib/thread.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/thread.tur) | `ThreadHandle` | `:ptr<void>` -- returned by `thread-spawn-fn`; `thread-join` / `-detach` / `cancel-thread` take it |
-| [`stdlib/fiber.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/fiber.tur) | `FiberHandle` | `:ptr<void>` -- consumed by `fiber-resume` / `-free` / scheduler unpark |
-| [`stdlib/mutex.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/mutex.tur), [`stdlib/condvar.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/condvar.tur), [`stdlib/rwlock.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/rwlock.tur) | `Mutex`, `CondVar`, `RwLock` | `:ptr<void>` -- `condvar-wait [c : CondVar m : Mutex]` rejects transposed callers |
-| [`stdlib/taskgroup.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/taskgroup.tur) | `TaskGroup`, `TaskHandle` | `:ptr<void>` -- `task-group-join [group : TaskGroup handle : TaskHandle]` |
-| [`stdlib/reactor.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/reactor.tur) | `Reactor`, `EventSourceId` | mixed -- pointer for the reactor, branded `:int` for the source id |
-| [`stdlib/atomic.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/atomic.tur) | `AtomicCell` | `:ptr<void>` -- pointer to a heap-allocated atomic word |
-| [`stdlib/stm.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/stm.tur) | `TVar` | `:ptr` -- transactional-variable handle, distinct from the boxed `:ptr` values it holds |
-| [`stdlib/timer.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/timer.tur) | `TimerId` | `:int` -- branded handle returned by `reactor-add-timer` |
-| [`stdlib/fs.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/fs.tur) | `StatInfo`, `TmpFile` | `:int` -- stat block vs temp-file handle; cannot be transposed |
-| [`stdlib/io.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/io.tur) | `FileHandle`, `FileStream`, `DirListing`, `FileSystem` | `:ptr<void>` -- `FileHandle` is `:linear`; `FileStream` wraps `FILE*` |
-| [`stdlib/ref.tur`](https://github.com/rjungemann/turmeric/blob/main/stdlib/ref.tur) | `RefHandle` | `:int` -- heap pointer from `ref-new`, distinct from the `Ref` struct |
+| [`stdlib/fd.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/fd.tur) | `Fd` | `:int` -- POSIX file descriptor, `-1` is the error sentinel |
+| [`stdlib/process.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/process.tur) | `Pid`, `ChildHandle` | `:int` (one `:linear`) -- OS process ids |
+| [`stdlib/chan.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/chan.tur) | `Chan`, `AsyncChan` | `:ptr<void> :linear` -- channel control blocks |
+| [`stdlib/future.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/future.tur) | `Promise`, `Future` | `:ptr<void>` with `:linear` / `:affine` -- write end vs read end of the same `FutureCell` |
+| [`stdlib/threadpool.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/threadpool.tur) | `WorkQueueHandle`, `ThreadPoolHandle`, `DynThreadPoolHandle`, `FutureHandle` | `:ptr<void>` -- static and dynamic pools have distinct block layouts and are nominally distinct |
+| [`stdlib/thread.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/thread.tur) | `ThreadHandle` | `:ptr<void>` -- returned by `thread-spawn-fn`; `thread-join` / `-detach` / `cancel-thread` take it |
+| [`stdlib/fiber.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/fiber.tur) | `FiberHandle` | `:ptr<void>` -- consumed by `fiber-resume` / `-free` / scheduler unpark |
+| [`stdlib/mutex.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/mutex.tur), [`stdlib/condvar.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/condvar.tur), [`stdlib/rwlock.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/rwlock.tur) | `Mutex`, `CondVar`, `RwLock` | `:ptr<void>` -- `condvar-wait [c : CondVar m : Mutex]` rejects transposed callers |
+| [`stdlib/taskgroup.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/taskgroup.tur) | `TaskGroup`, `TaskHandle` | `:ptr<void>` -- `task-group-join [group : TaskGroup handle : TaskHandle]` |
+| [`stdlib/reactor.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/reactor.tur) | `Reactor`, `EventSourceId` | mixed -- pointer for the reactor, branded `:int` for the source id |
+| [`stdlib/atomic.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/atomic.tur) | `AtomicCell` | `:ptr<void>` -- pointer to a heap-allocated atomic word |
+| [`stdlib/stm.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/stm.tur) | `TVar` | `:ptr` -- transactional-variable handle, distinct from the boxed `:ptr` values it holds |
+| [`stdlib/timer.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/timer.tur) | `TimerId` | `:int` -- branded handle returned by `reactor-add-timer` |
+| [`stdlib/fs.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/fs.tur) | `StatInfo`, `TmpFile` | `:int` -- stat block vs temp-file handle; cannot be transposed |
+| [`stdlib/io.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/io.tur) | `FileHandle`, `FileStream`, `DirListing`, `FileSystem` | `:ptr<void>` -- `FileHandle` is `:linear`; `FileStream` wraps `FILE*` |
+| [`stdlib/ref.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/ref.tur) | `RefHandle` | `:int` -- heap pointer from `ref-new`, distinct from the `Ref` struct |
 
 Read those modules for the full pattern: a `defopaque` declaration
 immediately followed by the constructor (`*-new`), one or more

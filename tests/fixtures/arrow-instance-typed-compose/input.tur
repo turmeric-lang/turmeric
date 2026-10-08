@@ -1,0 +1,30 @@
+;; arrow-instance-closure-erased-to-words: the Arrow [(->)] instance's >>> and
+;; <<< are specialized at the call's element types, so the closure they return
+;; calls f and g -- and is called -- at exactly those types.  Before, the body
+;; ran once at erased words: three indirect calls through the wrong function
+;; type, right on x86-64 only by register luck (a trap under
+;; -fsanitize=function; tests/run-fnsan.sh runs this fixture armed).
+(load "stdlib/arrow.tur")
+
+(defn main [] : int
+  (let [^fat f : (fn [float] #fx{} float) (fn [x : float] : float (+ x 1.25))
+        ^fat g : (fn [float] #fx{} float) (fn [x : float] : float (* x 2.0))
+        ^fat h : (fn [float] #fx{} float) (.>>> f g)
+        ^fat r : (fn [float] #fx{} float) (.<<< g f)
+        ;; Two element types: a cstr -> cstr then a cstr -> float.
+        ^fat s : (fn [cstr] #fx{} cstr) (fn [x : cstr] : cstr x)
+        ^fat t : (fn [cstr] #fx{} float) (fn [x : cstr] : float 3.25)
+        ^fat u : (fn [cstr] #fx{} float) (.>>> s t)
+        ;; The int arrows the erased body always handled.
+        ^fat a : (fn [int] #fx{} int) (fn [x : int] : int (+ x 1))
+        ^fat b : (fn [int] #fx{} int) (fn [x : int] : int (* x 3))
+        ^fat c : (fn [int] #fx{} int) (.>>> a b)]
+    (println (h 7.1))              ; (7.1 + 1.25) * 2 = 16.7
+    (println (r 7.1))              ; same, flipped
+    (println (u "hello"))          ; 3.25
+    (println (c 4))                ; 15
+    ;; Called straight off the dispatch, no annotation: the call is typed at
+    ;; the grounded (fn [float] float), not the erased (fn [int] int).
+    (println ((.>>> f g) 3.25))    ; 9
+    (println ((.<<< g f) 3.25)))   ; 9
+  0)

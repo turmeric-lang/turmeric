@@ -456,7 +456,7 @@ and it is cheap:
   evidence -- there is none.
 - **Not** loop invariants.  A `while` accumulator is Unknown for a reason
   that has nothing to do with arithmetic; see
-  [hold/loop-invariants-plan.md](../upcoming/loop-invariants-plan.md).
+  [hold/loop-invariants-plan.md](loop-invariants-plan.md).
 - **Not** an incremental simplex.  The S2 rebuild here is the integer
   layer *on top of* FM, behind the same `la_*` seam; SX4 stays parked on
   its own gate.

@@ -1415,7 +1415,17 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
      * re-running the shipped effects example must not fail on the effect the
      * previous run declared.  The builtin Unsafe is never redefinable. */
     bool redefining = false;
-    if (effect_env_contains(e->effect_env, name)) {
+    /* effect-row-honesty-plan W2: IO / FS / Net / Proc / Rand are
+     * compiler-known.  A declaration of one is accepted when it declares
+     * exactly the built-in -- that is what stdlib/effects.tur does, so its
+     * docs stay where they are -- and checked against it once the signature
+     * is parsed, below. */
+    const char *builtin_cap_parent = NULL;
+    bool declaring_builtin_cap =
+        effect_builtin_capability(name->name, &builtin_cap_parent);
+    if (declaring_builtin_cap) {
+        /* fall through: validated after the signature is parsed */
+    } else if (effect_env_contains(e->effect_env, name)) {
         if (name != e->sym_effect_unsafe && elab_prior_turn_effect(e, name)) {
             redefining = true;
         } else {
@@ -1600,6 +1610,24 @@ Expr *elab_defeffect(Elab *e, const Form *call) {
         }
     }
 
+    if (declaring_builtin_cap) {
+        bool parent_ok = builtin_cap_parent
+            ? (parent_name && strcmp(parent_name->name, builtin_cap_parent) == 0)
+            : (parent_name == NULL);
+        if (n_params != 0 || result_type != TY_NIL || !is_capability ||
+            !parent_ok || is_private) {
+            char want[96];
+            snprintf(want, sizeof(want), "(defeffect %s [] :nil%s%s ^capability)",
+                     name->name, builtin_cap_parent ? " ^extends " : "",
+                     builtin_cap_parent ? builtin_cap_parent : "");
+            diag_emit(DIAG_ERROR, name_f->span,
+                      "defeffect: '%s' is a compiler-known capability effect; "
+                      "a declaration of it must match the built-in exactly, "
+                      "%s -- or leave it out, since '%s' needs no declaration",
+                      name->name, want, name->name);
+            return NULL;
+        }
+    }
     if (redefining)
         effect_redefine(effect_env_lookup(e->effect_env, name), param_names,
                         param_types, n_params, result_type,
@@ -2769,7 +2797,8 @@ Expr *elab_handler_lit(Elab *e, const Form *call) {
     {
         /* FH4.1: single-element handled row (unresolved name-set). */
         const Symbol *one[1] = { cases[0].effect_name };
-        htype.as.handler_.handled_row = effect_row_unresolved(e->arena, one, 1);
+        htype.as.handler_.handled_row =
+            effect_row_unresolved(e->arena, one, 1, call->span);
     }
     htype.as.handler_.value_kind  = (eff && eff->constructor->n_params > 0)
         ? eff->constructor->param_types[0] : TY_INT;
@@ -2807,6 +2836,41 @@ Expr *elab_with_handler(Elab *e, const Form *call) {
     Expr *body = elab_form(e, call->as.list.items[2]);
     e->n_handled_effects = saved_n_handled;
     if (!body) return NULL;
+
+    /* `(with-handler (handler (E [p] k) case-body) body)` IS
+     * `(handle body (E [p] k) case-body)`: the literal is deep, its cases are
+     * the handle's, and building it has no effect of its own.  Emit the
+     * `handle`, so the literal form lowers wherever `handle` does.  As an
+     * EX_WITH_HANDLER it was refused in positions a `handle` lowers in -- as
+     * a builtin's operand (`(println (with-handler ...))` left `main`
+     * uncolored) and anywhere inside a capturing lambda (the lambda's body
+     * tainted its effect through the enclosing `main`).  Only when the case
+     * body is answer-typed the way elab_handle_impl would accept it (it
+     * resumes, diverges, or has the body's type); anything else keeps the
+     * with-handler node and its existing lowering. */
+    if (hv->kind == EX_HANDLER_LIT && hv->as.handler_lit_.handle
+        && hv->as.handler_lit_.handle->n_cases > 0) {
+        const HandleExpr *lit = hv->as.handler_lit_.handle;
+        bool answer_ok = true;
+        for (uint8_t ci = 0; ci < lit->n_cases && answer_ok; ci++) {
+            const Expr *cb = lit->cases[ci].body;
+            if (!cb) { answer_ok = false; break; }
+            const Expr *last = cb;
+            if (last->kind == EX_DO && last->as.do_.n > 0)
+                last = last->as.do_.items[last->as.do_.n - 1];
+            answer_ok = last->kind == EX_RESUME
+                     || cb->type.kind == TY_NEVER
+                     || cb->type.kind == body->type.kind;
+        }
+        if (answer_ok) {
+            HandleExpr *h = arena_alloc(e->arena, sizeof(HandleExpr));
+            *h = *lit;                 /* cases, n_cases, shallow = false */
+            h->body = body;
+            Expr *out = expr_new(e->arena, EX_HANDLE, body->type, call->span);
+            out->as.handle_.handle = h;
+            return out;
+        }
+    }
 
     Expr *out = expr_new(e->arena, EX_WITH_HANDLER, body->type, call->span);
     out->as.with_handler_.handler = hv;

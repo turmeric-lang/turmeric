@@ -13,6 +13,7 @@
 #include "hamt.h"
 #include "region.h"   /* region-lock-hardening: the store-side note in tur_hamt_set */
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -203,10 +204,21 @@ static uint32_t popcount32(uint32_t x) {
 #endif
 }
 
+/* Node sizes.  HamtNode is a tagged union whose largest arm is the 32-slot
+ * array, so sizeof(HamtNode) is 264 B on a 64-bit host.  A bitmap node holds
+ * only popcount(bitmap) children and a collision node two words, so each is
+ * allocated at the size of its own arm -- a full-size allocation made every
+ * entry of a persistent map cost ~360 B, most of it padding
+ * (docs/archive/hamt-nodes-allocated-at-full-array-size.md).  Only the array
+ * arm is ever allocated at sizeof(HamtNode). */
+#define HAMT_BITMAP_NODE_SIZE(child_count) \
+    (offsetof(HamtNode, as.bitmap.children) + sizeof(HamtNode *) * (child_count))
+#define HAMT_COLLISION_NODE_SIZE \
+    (offsetof(HamtNode, as) + sizeof(HamtNodeCollision))
+
 static HamtNode *bitmap_node_create(uint32_t bitmap) {
     size_t child_count = popcount32(bitmap);
-    size_t size = sizeof(HamtNode) + sizeof(HamtNode *) * (child_count - 1);
-    HamtNode *n = tur_hamt_node_alloc(size);
+    HamtNode *n = tur_hamt_node_alloc(HAMT_BITMAP_NODE_SIZE(child_count));
     n->type = HAMT_NODE_BITMAP;
     n->as.bitmap.bitmap = bitmap;
     return n;
@@ -223,7 +235,7 @@ static HamtNode *array_node_create(void) {
 
 static HamtNode *collision_node_create(uint32_t hash_prefix,
                                        uint64_t hash, void *key, void *val) {
-    HamtNode *n = tur_hamt_node_alloc(sizeof(HamtNode));
+    HamtNode *n = tur_hamt_node_alloc(HAMT_COLLISION_NODE_SIZE);
     n->type = HAMT_NODE_COLLISION;
     n->as.collision.hash_prefix = hash_prefix;
     n->as.collision.entries = (HamtEntry *)hamt_malloc(sizeof(HamtEntry));
@@ -475,9 +487,7 @@ void tur_hamt_node_release(HamtNode *n) {
 static HamtNode *bitmap_node_copy(HamtNode *src) {
     uint32_t bitmap = src->as.bitmap.bitmap;
     uint32_t child_count = popcount32(bitmap);
-    size_t size = sizeof(HamtNode) + sizeof(HamtNode *) * (child_count - 1);
-
-    HamtNode *dst = tur_hamt_node_alloc(size);
+    HamtNode *dst = tur_hamt_node_alloc(HAMT_BITMAP_NODE_SIZE(child_count));
     dst->type = HAMT_NODE_BITMAP;
     dst->as.bitmap.bitmap = bitmap;
 
@@ -506,7 +516,7 @@ static HamtNode *array_node_copy(HamtNode *src) {
 }
 
 static HamtNode *collision_node_copy(HamtNode *src) {
-    HamtNode *dst = tur_hamt_node_alloc(sizeof(HamtNode));
+    HamtNode *dst = tur_hamt_node_alloc(HAMT_COLLISION_NODE_SIZE);
     dst->type = HAMT_NODE_COLLISION;
     dst->as.collision.hash_prefix = src->as.collision.hash_prefix;
 

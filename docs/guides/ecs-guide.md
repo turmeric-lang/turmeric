@@ -16,7 +16,7 @@ systems.
 
 For the long-form plan, prerequisites, and where each piece of the
 surface came from, see
-[`docs/archive/ecs-spice-plan.md`](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
+[`docs/archive/ecs-spice-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ecs-spice-plan.md).
 
 ## TL;DR
 
@@ -169,7 +169,7 @@ emits `GameWorld-alive?` (`#reads`) + `GameWorld-despawn!`
 emits the cap-gated `get-Pos!` with the refined entity parameter, and
 `(for-each-alive GameWorld w n e body)` iterates with per-entity proofs
 -- all opt-in beside the unchanged forgiving family. See
-[docs/upcoming/v1/ecs-refinement-typed-apis-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/upcoming/v1/ecs-refinement-typed-apis-plan.md).
+[docs/upcoming/v1/ecs-refinement-typed-apis-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/v1/ecs-refinement-typed-apis-plan.md).
 
 ## Queries: `for-each` (imperative)
 
@@ -612,7 +612,7 @@ frame; only the world boxes flip per frame as the sim/render state
 advances.
 
 For the shipped plan and motivation, see
-[docs/archive/history/ecs-cross-world-systems-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md).
+[docs/archive/history/ecs-cross-world-systems-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/ecs-cross-world-systems-plan.md).
 
 ## Sized worlds -- compile-time rectangular iteration
 

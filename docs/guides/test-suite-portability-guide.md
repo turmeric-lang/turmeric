@@ -263,6 +263,74 @@ with a `head` in the pipeline. `tests/run-fmt.sh` carries both guards
 
 ---
 
+## 6a. Which browser suites gate, and reading the one that does not
+
+The browser tests are not their own checks. They are **steps inside one job**,
+`Try Turmeric smoke test (browser)`, and they do not all gate:
+
+| Step | Gates? |
+| --- | --- |
+| `Run deploy-gate smoke test` (`deploy-gate.spec.js`) | **yes** |
+| `Run broader smoke suite (desktop) -- BLOCKING` | **yes**, since 2026-10-02 |
+| `Run mobile smoke suite (non-blocking)` | no -- `continue-on-error: true` |
+
+So **mobile** can exit 1 while the job reports success, and `gh run view`
+renders that step with a green check. Nothing in `gh pr checks` distinguishes
+"mobile ran clean" from "mobile ran red, ignored".
+
+Mobile is not non-blocking because its tests are worse -- measured over 266
+commits its isolated-flake rate is lower than desktop's. It is non-blocking
+because of its **precondition**: the `Install Playwright WebKit` step is itself
+`continue-on-error`, and when that download fails the whole project dies at
+`browserType.launch: Executable doesn't exist` before any test body runs.
+Gating there would convert a third-party download failure into a blocked PR,
+which is infrastructure flake rather than a test signal.
+
+Three places carry mobile's real answer, cheapest first:
+
+1. **The run page's annotations.** The `Report browser suite outcomes` step
+   writes a pass/fail line per suite to the job summary. A failed mobile suite
+   raises a `::warning::`; desktop raises an `::error::`, though a red job is
+   the louder signal there anyway.
+2. **The `playwright-report` artifact**, uploaded `if: ${{ !cancelled() }}`
+   rather than `if: failure()`. That condition predates desktop gating and is
+   still the right one: a `failure()` upload would now catch a desktop failure
+   but would still miss mobile behind `continue-on-error`. It carries the
+   per-test `error-context.md` files.
+3. **`web_desktop` / `web_mobile` on [/ci](https://turmeric-lang.com/ci)**, which
+   is the trend rather than the single run.
+   `tools/ci/collect-playwright-timings.py` publishes `status: "fail"` when any
+   test failed even though the job stayed green, and `status: "skip"` when a
+   suite produced no JUnit at all (the Playwright-install failure mode), so a
+   suite that never ran reaches the skip ledger instead of vanishing.
+
+**A standing failure teaches readers to ignore the annotation**, and that is
+what made gating impossible for as long as it was. When the desktop suite sat
+at `1 failed / 141 passed` on every run, a real new regression would have read
+as `2 failed` -- indistinguishable at a glance. Known-broken browser tests
+therefore get marked `test.fixme` with a pointer to their report (see
+`web/tests/docs-offline.spec.js`), so the count stays meaningful. Note
+`test.fixme` does not self-close the way a fixture's `expected.xfail` does: a
+marked test that starts passing stays silently skipped, so deleting the marker
+is a manual obligation carried by the report.
+
+**The raw fail rate is not the flakiness rate**, and conflating them is what
+keeps a suite non-blocking longer than it needs to be. `web_desktop` had failed
+on 42 of 266 commits (16%) when it was promoted -- a number that reads as far
+too flaky to gate on. But collapsing *consecutive* failures gives only 10
+episodes, two of them 21 and 7 commits long: standing bugs, which fail every
+run until fixed and then stop. Isolated single-commit failures, the actual
+flake signal, were 6 of 266 (2.3%). Before arguing a suite is too flaky to
+gate, separate the two -- the query is one pass over
+`suite-timings-<year>.jsonl` on the `ci-metrics` branch. Residual flake at that
+level is then damped by `retries` in `web/playwright.config.js` (2 on CI, 0
+locally so a freshly written flaky test fails in front of its author).
+
+For the equivalent trap on the `ctest` side -- suites that `bash tests/run.sh`
+does not run at all -- see section 7d and the See-also list.
+
+---
+
 ## 7. Heap probes and sanitizers do not mix
 
 A malloc-probe assertion means nothing under ASan, and it means nothing
@@ -356,9 +424,9 @@ Three things follow, and the first two are the traps:
    unguarded walk fails *worse* than a guarded one: `elab_call -> elab_form`
    had no guard, so deep nesting aborted the compiler with no diagnostic
    whatsoever until one was added. See TUR-E0712,
-   [docs/archive/emit-value-dispatch-unbounded-recursion.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md)
+   [docs/archive/emit-value-dispatch-unbounded-recursion.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-value-dispatch-unbounded-recursion.md)
    and
-   [docs/archive/emit-depth-guard-loses-race-with-asan-stack.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/emit-depth-guard-loses-race-with-asan-stack.md).
+   [docs/archive/emit-depth-guard-loses-race-with-asan-stack.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/emit-depth-guard-loses-race-with-asan-stack.md).
 
 A regression fixture cannot usefully assert the backstop: on the real stack the
 nesting needed to trip it is impractically large, and a fixture tuned to sit
@@ -409,7 +477,7 @@ finding prints one line to stderr and execution continues. This suite compares
 stdout. So a UBSan line was, until 2026-08-25, completely invisible --
 `fat_captures_borrowed` was read out of uninitialized arena memory on 60
 fixtures, on every single run, and nothing ever failed
-([history](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/fat-captures-borrowed-read-uninitialized.md)).
+([history](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/fat-captures-borrowed-read-uninitialized.md)).
 
 `tests/run.sh` now scans each phase's captured stderr for `: runtime error:`
 and reports what it finds after the summary:
@@ -502,7 +570,7 @@ bug.
    and the run is CLEAN. Add one trailing statement and the same program
    reports the leak -- with byte-identical emitted C for the leaking block.
    `ref/from-rc` in
-   [rc-ref-conversion-and-weak-upgrade-leak](https://github.com/rjungemann/turmeric/blob/main/docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md)
+   [rc-ref-conversion-and-weak-upgrade-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md)
    behaves exactly this way. When probing a suspected leak, always put work
    after it.
 
@@ -666,7 +734,7 @@ directories, so instead of a `_run_timed` at each of ~100 call sites it points
 bounds cases added later too. It had **no** bound at all until 2026-09-28,
 which is how a stall in its `jit-ffi-*` cases -- dynamic FFI, callbacks,
 threads -- could reach the CI job's `timeout-minutes`
-([docs/archive/macos-jit-hang-loses-both-diagnostics.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/macos-jit-hang-loses-both-diagnostics.md)).
+([docs/archive/macos-jit-hang-loses-both-diagnostics.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/macos-jit-hang-loses-both-diagnostics.md)).
 
 The CI legs add two outer bounds of their own, because a `timeout-minutes`
 kill **cancels the job** and leaves every remaining `if: always()` step
@@ -678,6 +746,9 @@ ctest `TIMEOUT` properties so a single hang is killed and *named* first.
 
 ## See also
 
+- [running-tests-guide.md](running-tests-guide.md) -- running the tests:
+  narrowing a run, every harness variable, the fixture markers, and the local
+  command for each CI job.
 - [test-runner-contract.md](test-runner-contract.md) -- stdlib test
   framework contract (assertions, discovery, exit semantics), plus
   "Failures that are not product bugs" (sanitizer-laundered crashes,

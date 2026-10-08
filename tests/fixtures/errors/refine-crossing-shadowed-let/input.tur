@@ -1,0 +1,14 @@
+;; A crossing's path facts live in ONE flat namespace, so two bindings of the
+;; same name on the path put `x = -5` and `x = 1` side by side -- a
+;; contradiction, which "proved" (needs-pos x) under --strict-refine for an x
+;; that is -5.  A fact is now dropped when the code below the level that
+;; collected it rebinds a name it mentions: at the call that name is the inner
+;; binding.  (Found adding match-arm binder facts for reflected crossings.)
+(defn needs-pos [v : #refine{ x : int | (> x 0) }] : int v)
+
+(defn f [] : int
+  (let [x 1]
+    (let [x -5]
+      (needs-pos x))))
+
+(defn main [] : int 0)

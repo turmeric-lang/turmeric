@@ -5,7 +5,7 @@
 ;; instead of the positional `union { struct { T _0; } <Ctor>; } as;`, so:
 ;;   (1) hand-written inline-C that reads the by-value monomorph by field name
 ;;       (`b.a + b.b + b.c`) compiles -- this is the TupleN-by-parameter shape;
-;;   (2) a `#fx{ByVal}`-marked `(Vec A)` accessor whose body derefs the named
+;;   (2) a `^byval`-marked `(Vec A)` accessor whose body derefs the named
 ;;       header (`v->len`, `v->data`) compiles, with the marker minting a
 ;;       per-receiver spec (its int64-carrier base is suppressed).
 ;; Both fail to build without the named-monomorph layout (the lowered monomorph
@@ -18,12 +18,11 @@
 (defn sum3 [t : (Box3 int int int)] : int
   ```c return t.a + t.b + t.c; ```)
 
-;; (2) The m5 `#fx{ByVal}` Vec accessor shape: the marker routes the call through
+;; (2) The m5 `^byval` Vec accessor shape: the marker routes the call through
 ;; a per-receiver spec whose `(Vec int)` param is the named-layout typed pointer,
 ;; so the inline-C body's `v->len` / `v->data` resolve.
-(defn vget-byval [A]
+(defn ^byval vget-byval [A]
   [v : (Vec A) i : int]
-  #fx{ByVal}
   : A
   ```c
   if (i >= 0 && (size_t)i < (size_t)v->len) {

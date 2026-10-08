@@ -33,7 +33,7 @@ as `stable`, nothing needs enabling, a project manifest cannot refuse it, and
 no lifecycle warning is printed (`--enable=r7rs` is accepted as a no-op for a
 release, with a TUR-W0063 notice). The stages, design decisions and known gaps
 live in
-[docs/archive/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md).
+[docs/archive/r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md).
 
 The single-file examples in this guide are compiled and run, on both back
 ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
@@ -48,7 +48,10 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   `tur` takes about 9 s on one core, about 4.5 s on four (it compiles in one
   piece per CPU, up to eight; `TUR_PRELUDE_JOBS=<n>` sets the number), and
   later ones about 1 s (on Linux and macOS; Windows still builds each
-  program as one unit). `TUR_PRELUDE_SPLIT=0` builds the
+  program as one unit). Programs share that one cached object; a Debug `tur`
+  keeps a second for programs that import `(scheme eval)`, which link its
+  sanitized interpreter. The cache keeps its 24 most recently used objects,
+  dropping only those unused for a day. `TUR_PRELUDE_SPLIT=0` builds the
   program as a single C unit instead; `TUR_SHOW_CC=1` shows the two
   compiles, or why a program was built as one unit.
 - **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
@@ -447,6 +450,22 @@ changes nothing on the Turmeric side. A Turmeric module `cast`ing a Scheme
 library's string result to `cstr` gets the same copy.
 `tests/run-r7rs-import.sh` pins both directions on both back ends.
 
+A Turmeric module handed a Scheme procedure -- a thunk, a comparator, an
+event handler -- takes it as `any` and calls it directly:
+
+```turmeric
+(defmodule worker
+  (export run-twice)
+  (defn run-twice [thunk : any] : any
+    (thunk)
+    (thunk)))
+```
+
+A call through an `any` is a dynamic call, in every dialect: it is checked
+at run time and answers `any`. A wrong argument count or a value that is not
+a procedure raises a Scheme error object (`wrong number of arguments (2
+given)`, `not a procedure`), which the Scheme caller can `guard`.
+
 ## SRFIs
 
 An SRFI is imported by its number, `(import (srfi N))`, the way Racket's
@@ -473,7 +492,7 @@ kind each one is:
   The import is an error that says so, as in Racket.
 - **not planned**: refused, with the reason.
 - **not yet**: planned, and refused until the stage in parentheses lands
-  ([docs/archive/r7rs-srfi-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-srfi-plan.md)).
+  ([docs/archive/r7rs-srfi-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-srfi-plan.md)).
 
 `only`, `except`, `prefix` and `rename` work on an SRFI as on any library,
 and their names are checked against its export list. One imported name has
@@ -515,6 +534,7 @@ R7RS's own forms already are the SRFI's.
 | 14 | Character-set Library | library | library | Written for Turmeric: a set is an inversion list, so the algebra is one merge and membership a binary search. The standard sets cover all of Unicode, as SRFI 14's 2019 CharsetDefs note defines them (`char-set:letter` is the Alphabetic property, `char-set:punctuation` the P* categories, ...), and each is built the first time a program uses it. `char-set:full` is every Unicode scalar value. The linear-update `!` procedures are the pure ones |
 | 16 | Syntax for procedures of variable arity | built in | re-export | `(scheme case-lambda)` |
 | 17 | Generalized set! | library | library | `(set! (f arg ...) v)` is `((setter f) arg ... v)`. The target is an arm of the lowering's `set!`, on in a unit that imports this SRFI's `set!` under any name, so the export is R7RS's own and the import sits beside `(scheme base)` as one binding. Settable out of the box: `car`, `cdr`, the `c[ad]r` family, `vector-ref`, `string-ref` and `bytevector-u8-ref`. `setter` is keyed on procedure identity, which R7RS 6.1 gives a procedure and this implementation keeps |
+| 18 | Multithreading support | library | library | Threads are OS threads; mutexes, condition variables and joins are built on one monitor, with timeouts (a time object or a number of seconds). `thread-terminate!` is refused: an OS thread cannot be stopped safely from outside. A mutex whose owner has ended reads as abandoned. Under `tur --interpret` threads are green (scheduler fibers, which SRFI 18 allows): they switch when one waits, sleeps or yields |
 | 19 | Time Data Types and Procedures | not yet (S8) | library |  |
 | 23 | Error reporting mechanism | built in | re-export | R7RS `error` is SRFI 23's |
 | 25 | Multi-dimensional Array Primitives | not yet (S8) | library |  |
@@ -552,10 +572,18 @@ R7RS's own forms already are the SRFI's.
 | 87 | => in case clauses | built in | library | R7RS `case` takes `=>` |
 | 98 | An interface to access environment variables | built in | library | re-exports `(scheme process-context)`'s two procedures |
 | 105 | Curly-infix-expressions | no library | no module | `{a + b}` reads in every `#lang` |
+| 216 | SICP Prerequisites (Portable) | library | no module | `true`, `false`, `nil`, `runtime` (microseconds), `random` (over SRFI 27), `cons-stream`, `the-empty-stream`, `stream-null?`. `parallel-execute` runs each thunk on an SRFI 18 thread and joins them all; `test-and-set!` is atomic. See [Working through SICP](sicp-guide.md) |
 
 Each built-in or alias row is one file, `stdlib/srfi/<N>.scm`, holding a
 `(define-library (srfi N) ...)`. `tests/check-r7rs-srfi-sync.sh` checks this
 table, those files, and the compiler's own table against each other.
+
+One more library is built in the same way without being an SRFI:
+`(sicp extras)` (`stdlib/sicp/extras.scm`) has the names Racket's
+`#lang sicp` adds beyond SRFI 216 -- `inc`, `dec`, `identity`, `amb` --
+and `amb-reset!`, which starts a new `amb` search from scratch. It is not
+an `srfi-N` feature; `cond-expand` sees it as `(library (sicp extras))`.
+See [Working through SICP](sicp-guide.md).
 
 ## Memory
 
@@ -573,7 +601,8 @@ build prog.tur`, builds without the collector; the data then stays
 allocated until the process exits, the way a Turmeric `:heap` box does.
 
 **Threads** run in parallel under the collector, and their memory is
-reclaimed too. A program starts them through the seam: `thread-spawn-fn`,
+reclaimed too. A program starts them with SRFI 18 (`(import (srfi 18))`,
+`make-thread` and `thread-start!`), or through the seam: `thread-spawn-fn`,
 `session-spawn`, a task group, a future's timeout, or a Turmeric module's
 own `pthread_create`. Each thread allocates from its own cache of slots. A
 collection stops the other threads by signal wherever they are, the way the
@@ -617,6 +646,17 @@ What it does not cover:
 - **Memory libc allocates**, and the backtracking trail's arrays (`stdlib/
   trail`), are not scanned: a Scheme value stored only in a `bt` cell
   through the seam is not seen.
+
+**Recursion depth.** A compiled program's `main` runs on a thread with a
+1 GiB stack (64 MiB on a 32-bit host), so a recursive process can go tens of
+millions of calls deep; past that it stops with `stack overflow: recursion
+too deep`. The stack is address space, committed only as deep as the
+recursion goes, but a runaway recursion touches all of it before the message
+prints. `TUR_MAIN_STACK_MB=N` sets the size in MiB: more for a program that
+needs it, less on a small machine where a missing base case should stop
+sooner. A size that cannot be reserved is reported, and `main` then runs on
+the process's own stack. `tur jit` reads the same variable.
+`TUR_NO_DEEP_STACK=1` keeps `main` on the process's own stack.
 
 ## Where it differs from R7RS
 
@@ -703,5 +743,5 @@ floor in `tests/run-r7rs-conformance.sh` when the count goes up.
 - [saffron-guide.md](saffron-guide.md) -- the dynamically typed Turmeric
   dialect whose substrate `#lang r7rs` shares.
 - [syntax-guide.md](syntax-guide.md) -- the `#lang` line and every base dialect.
-- [docs/archive/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)
+- [docs/archive/r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)
   -- the plan, stage by stage, with what shipped.

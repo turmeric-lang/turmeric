@@ -457,6 +457,48 @@ else
     fail "$NAME" "a formatted Scheme file changed: $(printf '%s' "$ACTUAL" | head -4 | tr '\n' '|')"
 fi
 
+# ---------------------------------------------------------------------------
+# Test: `#reads` / `#writes` frames survive formatting.
+#
+# Both read as the lists `(reads ...)` / `(writes ...)` and neither has a paren
+# spelling, so printing them as calls produced a file that does NOT COMPILE --
+# `unknown function or operator 'reads'` -- silently, exit 0.  A single-name
+# frame normalizes to the unbracketed spelling; `#writes []` ("writes nothing")
+# must keep its brackets, since a frameless `#writes` is a different claim.
+# ---------------------------------------------------------------------------
+NAME="fmt-frame-annotations-round-trip"
+FRAME_IN='(defn r-one [^borrow v : (Vec int)] #reads v : int (vec-len v))
+(defn r-brk [^borrow v : (Vec int)] #reads [v] : int (vec-len v))
+(defn w-one [v : (Vec int) x : int] #writes v : nil (vec-push! v x))
+(defn w-brk [v : (Vec int) x : int] #writes [v] : nil (vec-push! v x))
+(defn w-none [x : int] #writes [] : int x)'
+FRAME_EXPECTED='(defn r-one [^borrow v : (Vec int)] #reads v : int (vec-len v))
+
+(defn r-brk [^borrow v : (Vec int)] #reads v : int (vec-len v))
+
+(defn w-one [v : (Vec int) x : int] #writes v : nil (vec-push! v x))
+
+(defn w-brk [v : (Vec int) x : int] #writes v : nil (vec-push! v x))
+
+(defn w-none [x : int] #writes [] : int x)'
+ACTUAL=$(printf '%s\n' "$FRAME_IN" | "$TUR" fmt --stdin 2>/dev/null)
+if [ "$ACTUAL" = "$FRAME_EXPECTED" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected:|$(printf '%s' "$FRAME_EXPECTED" | tr '\n' '|')| got:|$(printf '%s' "$ACTUAL" | tr '\n' '|')|"
+fi
+
+NAME="fmt-frame-annotations-still-compile"
+TMPDIR_FR=$(mktemp -d)
+printf '%s\n' "$FRAME_IN" '(defn main [] : int 0)' > "$TMPDIR_FR/fr.tur"
+"$TUR" fmt "$TMPDIR_FR/fr.tur" > /dev/null 2>&1
+if "$TUR" check "$TMPDIR_FR/fr.tur" > /dev/null 2>&1; then
+    pass "$NAME"
+else
+    fail "$NAME" "a formatted file with #reads/#writes no longer compiles: $("$TUR" check "$TMPDIR_FR/fr.tur" 2>&1 | grep -m1 error)"
+fi
+rm -rf "$TMPDIR_FR"
+
 NAME="fmt-r7rs-reindent"
 printf '%s\n' '#lang r7rs' '(define (f x)' '        (if (> x 0)' '     (list x' '  "a' '   b")' '  #f))' \
     '(let ((a 1)' '  (b 2))' '   (g a' '  b))' > "$TMPDIR_R7/ind.tur"
@@ -562,6 +604,103 @@ if [ "$IDEMPOTENT_SEEN" -eq 0 ]; then
     fail "$NAME" "no files checked -- stdlib enumeration produced nothing"
 elif [ "$IDEMPOTENT_FAIL" -eq 0 ]; then
     pass "$NAME"
+fi
+
+# ---------------------------------------------------------------------------
+# fmt-reprints-sweet-as-s-expressions: a sweet buffer is checked and kept as
+# written -- the layout IS the syntax -- as r7rs/sweet always was.  It used to
+# come back as s-expressions under a header still announcing sweet.
+# ---------------------------------------------------------------------------
+NAME="fmt-sweet-kept-as-written"
+SWEET_SRC=$(printf 'defn double [x]\n  {x * 2}\n\ndefn main []\n  println(double(21))\n  0')
+ACTUAL=$(printf '%s\n' "$SWEET_SRC" | "$TUR" fmt --stdin --lang sweet 2>/dev/null)
+if [ "$ACTUAL" = "$SWEET_SRC" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected the sweet buffer unchanged, got '$ACTUAL'"
+fi
+
+NAME="fmt-sweet-file-keeps-header-and-body"
+TMPDIR_SW=$(mktemp -d)
+printf '#lang turmeric/sweet\ndefn double [x]\n  {x * 2}\n' > "$TMPDIR_SW/b.tur.sweet"
+ACTUAL=$("$TUR" fmt --stdout "$TMPDIR_SW/b.tur.sweet" 2>/dev/null)
+EXPECTED=$(printf '#lang turmeric/sweet\ndefn double [x]\n  {x * 2}')
+if [ "$ACTUAL" = "$EXPECTED" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected '$EXPECTED', got '$ACTUAL'"
+fi
+
+NAME="fmt-sweet-parse-error-still-reported"
+printf 'defn f [x]\n  (+ x\n' | "$TUR" fmt --stdin --lang sweet > /dev/null 2>&1
+RC=$?
+if [ "$RC" -ne 0 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected a nonzero exit for an unbalanced sweet buffer"
+fi
+
+# ---------------------------------------------------------------------------
+# format-subcommand-shreds-a-sweet-buffer: `tur format` takes its reader from
+# the extension / `#lang` line (or --lang), instead of printing a sweet
+# buffer one token per line under the Turmeric reader.
+# ---------------------------------------------------------------------------
+NAME="format-sweet-file-kept"
+printf '%s\n' "$SWEET_SRC" > "$TMPDIR_SW/nb.tur.sweet"
+ACTUAL=$("$TUR" format "$TMPDIR_SW/nb.tur.sweet" 2>/dev/null)
+if [ "$ACTUAL" = "$SWEET_SRC" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected the sweet file unchanged, got '$ACTUAL'"
+fi
+
+NAME="format-stdin-lang-sweet"
+ACTUAL=$(printf '%s\n' "$SWEET_SRC" | "$TUR" format --lang sweet 2>/dev/null)
+if [ "$ACTUAL" = "$SWEET_SRC" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected the sweet buffer unchanged, got '$ACTUAL'"
+fi
+
+NAME="format-check-sweet-already-formatted"
+"$TUR" format --check "$TMPDIR_SW/nb.tur.sweet" > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 0 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected exit 0 for --check on a kept-as-written file, got $RC"
+fi
+rm -rf "$TMPDIR_SW"
+
+# ---------------------------------------------------------------------------
+# lang-flags-take-different-vocabularies: `tur fmt --lang` also takes any base
+# `tur dialects` lists, so one vocabulary works for every --lang on the binary.
+# ---------------------------------------------------------------------------
+NAME="fmt-lang-accepts-dialect-bases"
+LANG_FAIL=""
+LANG_SEEN=0
+while IFS= read -r base; do
+    [ -n "$base" ] || continue
+    LANG_SEEN=$((LANG_SEEN+1))
+    case "$base" in r7rs*) INPUT='(display 1)' ;; *sweet) INPUT='println(1)' ;; *) INPUT='(println 1)' ;; esac
+    printf '%s\n' "$INPUT" | "$TUR" fmt --stdin --lang "$base" > /dev/null 2>&1 \
+        || LANG_FAIL="$LANG_FAIL $base"
+done < <("$TUR" dialects 2>/dev/null | awk 'NR>1 && $1 ~ /^[a-z]/ {print $1}')
+if [ "$LANG_SEEN" -eq 0 ]; then
+    fail "$NAME" "no bases checked -- \`tur dialects\` listed nothing"
+elif [ -z "$LANG_FAIL" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "rejected base(s):$LANG_FAIL"
+fi
+
+NAME="fmt-lang-unknown-still-rejected"
+printf '(x)\n' | "$TUR" fmt --stdin --lang no-such-dialect > /dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 2 ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected exit 2 for an unknown dialect, got $RC"
 fi
 
 # ---------------------------------------------------------------------------

@@ -29,7 +29,7 @@ remaining 7.
 
 ## Where the 7 are
 
-Measured on the sample at `github.com/rjungemann/smt-lib-benchmarks`:
+Measured on the sample at `github.com/turmeric-lang/smt-lib-benchmarks`:
 
 | cause | count | logic |
 |---|---|---|
@@ -298,7 +298,7 @@ the macro-counter fix above) stands.
 
 ### What could not be checked here
 
-The external 200-benchmark sample (`github.com/rjungemann/smt-lib-benchmarks`)
+The external 200-benchmark sample (`github.com/turmeric-lang/smt-lib-benchmarks`)
 was not pulled -- this session's GitHub access is scoped to the main repo
 only. So "the four spider_benchmarks files parse" and the real post-fix
 tally still need one sweep run wherever that clone is available. Everything

@@ -1,0 +1,11 @@
+;; associated-type-unusable-nullary-and-generic (half 2): `(Inner A)` at a
+;; type with no `Box` instance has no answer.
+(defclass Box [a]
+  (type Inner : Type)
+  (peel [x : a] : Inner))
+(defopaque W :int)
+(definstance Box [W] (type Inner = int) (peel [x] (:: x int)))
+(defn take-generic [A] [(Box A)] [x : A d : (Inner A)] : (Inner A) d)
+(defn main [] : int
+  (println (take-generic 7 5))
+  0)

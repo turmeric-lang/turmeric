@@ -1,3 +1,3 @@
 TUR-W0372
 argument 1 of 'twice' in 'use-lower'
-the predicate (> x 0) does not hold for every input here
+the predicate (> x 0) could not be proved here, which is not evidence that it fails

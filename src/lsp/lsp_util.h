@@ -65,6 +65,18 @@ int lsp_enclosing_call(const char *text, size_t text_len,
 int lsp_ident_range_at(const char *text, size_t text_len, size_t off,
                        size_t *start, size_t *end);
 
+/* Find the form in `text` that pulled `foreign_path` into the compile: a
+ * `load`, `import` or `include` line naming it, as `"b.tur"`, `b.tur`, or a
+ * module path such as `foo/bar` that resolves to `.../foo/bar.tur`.  The match
+ * is a path-component suffix, so `b.tur` does not match `/x/sub.tur`.
+ *
+ * Returns 1 and the 0-based line and byte-column range of the naming token
+ * (quotes included) on a hit; 0 when no form in `text` names the file -- a
+ * file loaded by another loaded file, or the auto-loaded stdlib. */
+int lsp_reference_anchor(const char *text, size_t text_len,
+                         const char *foreign_path, unsigned *line0,
+                         unsigned *col_start0, unsigned *col_end0);
+
 /* Build a "file://" URI from an absolute filesystem path.
  * Writes into dest[0..dest_cap-1].  Returns dest. */
 char *lsp_path_to_uri(const char *path, char *dest, size_t dest_cap);

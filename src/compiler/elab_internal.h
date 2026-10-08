@@ -146,6 +146,19 @@ typedef struct Scope {
     uint32_t      cap;
     /* Phase 12: Active borrows in this scope */
     ScopeBorrow  *borrows;
+    /* A name -> newest-binding index, built once the scope passes
+     * SCOPE_INDEX_MIN bindings (in practice: the global scope, which holds
+     * every stdlib and program definition).  Maintained by scope_add, the only
+     * way bindings enter a scope; slots hold `index + 1`, 0 = empty.  See
+     * scope_lookup. */
+    uint32_t     *idx;
+    uint32_t      idx_cap;
+    uint32_t      idx_n;     /* distinct names indexed */
+    /* Alongside idx: prev[i] is `index + 1` of the next-older binding with
+     * bindings[i]'s name (0 = none), so a lookup that wants an OLDER binding
+     * of a name -- scope_lookup_type_def -- walks that name's few bindings
+     * instead of the whole scope.  Sized to `cap`; NULL while idx is. */
+    uint32_t     *prev;
 } Scope;
 
 /* ---- elaborator state ---- */
@@ -473,14 +486,19 @@ typedef struct Elab {
     const Symbol *sym_used_attr;
     /* Phase M6: (export-as "c_name") attribute for explicit C symbol naming */
     const Symbol *sym_export_as_attr;
-    /* M2a (end-to-end-monomorphization-plan): #{Construct} marker on a
-     * polymorphic stdlib constructor defn. Picked up in elab_fns.c when the
-     * defn's effect-row map is parsed. */
-    const Symbol *sym_construct_attr;
-    /* M5 residual-straddle retirement: #{ByVal} marker symbol.  See the
+    /* M2a (end-to-end-monomorphization-plan): `^construct` on a polymorphic
+     * stdlib constructor defn, `(defn ^construct some ...)`.  Picked up with
+     * the other pre-name attributes in elab_defn.  (Was `^construct`,
+     * an attribute borrowing the effect row -- effect-row-honesty-plan W0.) */
+    const Symbol *sym_caret_construct;
+    /* M5 residual-straddle retirement: `^byval` (was `^byval`).  See the
      * `prefer_byvalue_spec` comment on Binding in expr.h for the rationale
      * and demolition date. */
-    const Symbol *sym_byval_attr;
+    const Symbol *sym_caret_byval;
+    /* Sum-types T6: `(match ^non-exhaustive x ...)`, and `NonExhaustive`
+     * for the deprecated `(match #fx{NonExhaustive} x ...)` (TUR-D0004). */
+    const Symbol *sym_caret_non_exhaustive;
+    const Symbol *sym_non_exhaustive_legacy;
     const Symbol *sym_panic_payload_type;
     const Symbol *sym_panic_payload_value;
     const Symbol *sym_panic_payload_file;
@@ -615,6 +633,10 @@ typedef struct Elab {
      * call, instead of the macro-body span in stdlib/macros.tur.  Only valid when
      * macro_expand_depth > 0. */
     Span     macro_call_site_span;
+    /* The macro expansions in progress, innermost first: each frame is the
+     * call site and the expanded macro's `defmacro` span, and lives on the C
+     * stack of the expansion it describes.  elab_macro_use_site reads it. */
+    struct MacroSiteFrame *macro_site_top;
     /* Phase U5: Unsafe linting configuration */
     uint32_t unsafe_max_lines;      /* max lines in unsafe block before warning (0 = disabled) */
     bool     unsafe_warn_nested;     /* warn on nested unsafe blocks */
@@ -700,7 +722,7 @@ typedef struct Elab {
     Kind         sig_tyvar_kinds[32];
     uint8_t      n_sig_tyvars;
     /* generic-ctor-over-sig-tyvar-erased: the defn being elaborated is a
-     * `#{Construct}` template (stdlib `some`/`ok`/`err`...), whose bare-ctor
+     * `^construct` template (stdlib `some`/`ok`/`err`...), whose bare-ctor
      * body the emitter types from the spec's RESULT, not its bindings. */
     bool         in_construct_template;
     /* Phase G3: coerce special form */
@@ -768,6 +790,26 @@ typedef struct Elab {
      * emission-registration sites consult this flag (together with
      * separate_compilation) to skip re-registering imported defs. */
     bool             in_imported_module;
+    /* class-and-generic-in-an-instance-less-module: a defn of an IMPORTED
+     * module whose body failed only because a class it dispatches through
+     * has no instance yet -- the class and a constrained generic over it
+     * live in a module that holds none, the instances beside the types in
+     * the importer.  Such a defn is parked (not reported) and retried at the
+     * importer's next statement boundary after a new instance registers
+     * (elab_noinst_retry), with its module context restored; the retried
+     * definition is appended to that module's body.  Whatever is still
+     * parked when the program ends is elaborated once more for real, so its
+     * diagnostics still reach the user. */
+    struct NoInstPending *noinst_pending;
+    uint32_t         n_noinst_pending;
+    uint32_t         cap_noinst_pending;
+    /* The instance-list head at the last retry: an unchanged head means no
+     * instance registered since, so a retry could not succeed. */
+    const struct TypeClassInstance *noinst_seen_head;
+    /* Bumped by the "declares no '<Class>' instance at all" diagnostic, so a
+     * speculative attempt can tell that failure from any other. */
+    uint32_t         noinst_failures;
+    bool             noinst_retrying;
     /* SB2: When true, (import ...) is forbidden (sandboxed environment). */
     bool             sandboxed;
     /* MF3: true while elaborating the auto-loaded stdlib prefix; new global
@@ -888,12 +930,17 @@ typedef struct Elab {
     const Symbol   **forward_type_syms;
     uint32_t         n_forward_type_syms;
     uint32_t         cap_forward_type_syms;
+    /* forward-call-to-aggregate-result-types-as-carrier: defmodule forward
+     * decls whose named return waits on a type the module has not registered
+     * yet (arena-allocated FwdPendingResult list, elab_toplevel.c). */
+    void            *fwd_pending_results;
     /* CT0: Contract keyword symbols */
     const Symbol    *kw_pre;                /* :pre */
     const Symbol    *kw_post;               /* :post */
     const Symbol    *kw_invariant;          /* :invariant (loop-invariants-plan LI0) */
     const Symbol    *sym_result;            /* "result" -- bound name in :post predicates */
     const Symbol    *sym_tur_contract_check; /* tur-contract-check */
+    const Symbol    *sym_tur_contract_check_at; /* tur-contract-check-at */
     /* SS0b: Session type constructor symbols (used in type annotations) */
     const Symbol    *sym_session_type;      /* "Session" — type constructor */
     const Symbol    *sym_session_Send;      /* "Send"    — protocol Send[T, Q] */
@@ -1073,7 +1120,28 @@ typedef struct Elab {
     struct LoopInvSite    *loop_inv_sites;
     uint32_t               n_loop_inv_sites;
     uint32_t               cap_loop_inv_sites;
+    /* The result checks of the function whose body is being elaborated, which
+     * elab_return applies to each `(return v)` -- an early return leaves
+     * before the whole-body wrap (rt_wrap_return_check) ever sees a value.
+     * NULL when there are none, when contracts are not emitted, and inside any
+     * nested function body (a lambda's `return` is the lambda's). */
+    const struct RetContract *ret_contract;
 } Elab;
+
+/* See Elab.ret_contract.  Each predicate is NULL when absent; they are applied
+ * in this order, the same order the whole-body wrap nests them. */
+typedef struct RetContract {
+    const struct Form *post;           /* `:post`, bound as `result` */
+    const struct Form *ret;            /* a refined return type */
+    const char        *ret_var;
+    const struct Form *class_ret;      /* an instance method: its class's promise */
+    const char        *class_ret_var;
+    const char        *subject;        /* who promised it, for the failure message */
+} RetContract;
+
+/* Wrap a returned value in the enclosing function's result checks (see
+ * Elab.ret_contract); `value` unchanged when there are none. */
+struct Expr *rt_check_returned_value(Elab *e, struct Expr *value, Span span);
 
 /* loop-invariants-plan: one `(while c :invariant p body...)`.
  *
@@ -1098,10 +1166,36 @@ typedef struct LoopInvSite {
     /* An elaboration-time decline (the invariant reads a mutable global...),
      * or NULL.  Decided where the bindings are still resolvable. */
     const char         *decline;
+    /* C2 / #reads: the names this loop's obligations may treat as FROZEN, so
+     * two occurrences of a `#reads` measure over one are congruent.  Built at
+     * registration (li_register_site) and nowhere else, because that is the
+     * only point where the loop's scope is live -- which both the borrow
+     * liveness and `li_name_reads_only`'s shadow check need.
+     *
+     * A live shared borrow is NOT what qualifies a name.  Every stdlib
+     * container's mutator takes the container by value, so no borrow conflict
+     * is reported for one, and a loop needs the name unchanged ACROSS the body
+     * rather than at a point.  What qualifies it is a WRITE PROMISE on
+     * everything the condition and body hand it to.  NULL / 0 when nothing
+     * qualifies, which is the common case. */
+    const char        **frozen_names;
+    uint32_t            n_frozen;
+    /* The ELABORATED invariant predicate, back-filled by elab_while beside the
+     * two check slots.  It exists so the elision veto can ask the one
+     * contract-position gate (rt_pred_observably_impure) rather than the plain
+     * purity walk: that gate's `#reads` carve-out is keyed on resolved callee
+     * info, which the Form in `inv` cannot answer.  NULL when contracts are
+     * not emitted (there is then no check to elide). */
+    const struct Expr  *pred_e;
     /* Filled by li_analyze_loops. */
     bool                analyzed;
     bool                entry_proven;
     bool                pres_proven;
+    /* The body can leave through `return`.  Initiation and preservation do
+     * not depend on how the loop exits, so they are still decided (the paths
+     * through a `return` are pruned); only the post-loop fact `p AND (not c)`
+     * is withheld from what follows the loop. */
+    bool                early_return;
     const char        **assigned;     /* names the loop assigns (valid when proven) */
     uint32_t            n_assigned;
 } LoopInvSite;
@@ -1116,7 +1210,8 @@ typedef struct LoopInvSite {
 struct Expr *elab_loop_invariant_pred(Elab *e, const struct Form *pred, Span span);
 struct Expr *li_contract_check(Elab *e, struct Expr *pred_e, const char *msg, Span span);
 LoopInvSite *li_register_site(Elab *e, const struct Form *call, const struct Form *cond,
-                              const struct Form *inv, uint32_t body_start, Span span);
+                              const struct Form *inv, uint32_t body_start, Span span,
+                              const struct Expr *while_e);
 
 /* loop-invariants-plan LI2: decide every loop site recorded since `from`
  * (initiation + preservation), eliding the runtime checks a proof covers.
@@ -1128,6 +1223,17 @@ void li_analyze_loops(Elab *e, uint32_t from, Binding **params, uint32_t n_param
                       const uint32_t *ct_param_param_idx, uint32_t n_ct_param_preds,
                       const struct Form *ct_pre_form, const struct Form *body,
                       const char *fn_name);
+
+/* The same for a `definstance` method: `mb` is the method's binding (its
+ * refinement arrays are the entry facts), `impl_form` the method's form, and
+ * `body_start` the index of its first body form. */
+void li_analyze_method_loops(Elab *e, uint32_t from, Binding **params,
+                             uint32_t n_params, const Binding *mb,
+                             const struct Form *impl_form, uint32_t body_start);
+
+/* After the whole unit: decline (TUR-W0372) every loop site no definition
+ * analysed -- a top-level lambda's -- so none is silently unverified. */
+void li_decline_unanalyzed(Elab *e);
 
 /* CT0: a contract type in ANNOTATION position contributes its BASE type to the
  * signature; the predicate rides separately, as an entry check and (under
@@ -1163,7 +1269,7 @@ Type *rt_peel_type_arg_contract(Type *arg_type, Span at);
  * hand-rolled per site. */
 Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
                            const Form *pred, const char *var_name,
-                           const char *fail_msg, Span span);
+                           const char *fail_msg, const char *subject, Span span);
 
 /* CT1: inject an entry check for each `{ v : T | pred }` parameter.  Shared by
  * `defn`, `fn`, and typeclass instance methods so a contract parameter is
@@ -1172,7 +1278,39 @@ Expr *rt_wrap_return_check(Elab *e, Expr *body, Binding *check_fn,
 Expr *rt_inject_param_checks(Elab *e, Expr *body, Binding *check_fn,
                              Binding **params, uint32_t n_params,
                              const Form **ct_preds, const char **ct_vars,
-                             const uint32_t *ct_idx, uint32_t n_ct, Span span);
+                             const uint32_t *ct_idx, uint32_t n_ct,
+                             const char *subject, Span span);
+
+/* panic-location-names-the-runtime-not-the-call-site, direction 2: the text a
+ * failed contract check panics with -- `<what> in <subject>: <predicate>`,
+ * the predicate printed from its source form (long ones elided).  `subject`
+ * names the function, method or `fn`; NULL leaves it out. */
+const char *rt_contract_message(Elab *e, const char *what, const char *subject,
+                                const Form *pred);
+
+/* The call a contract site makes: `(tur-contract-check-at pred msg "<file>"
+ * <line>)`, the file a basename, so the panic's "at" names where the predicate
+ * is written (`site`), as a `(panic ...)` site's does -- or, where the stdlib in
+ * use binds no -at helper, `(check_fn pred msg)`.  NULL when neither is bound.
+ * rt_contract_message leaves the location out of `msg` exactly when this
+ * spells it in the prefix. */
+Expr *rt_contract_check_call(Elab *e, Binding *check_fn, Expr *pred_e,
+                             const char *msg, Span site, Span span);
+
+/* One macro expansion in progress (Elab.macro_site_top). */
+typedef struct MacroSiteFrame {
+    Span call;                       /* where this macro was used */
+    Span def;                        /* the macro's own `defmacro` form */
+    struct MacroSiteFrame *outer;
+} MacroSiteFrame;
+
+/* The source line a form generated by the macro expansions in progress
+ * belongs to: the innermost macro USE the program wrote -- not one that is
+ * itself inside the template of the macro expanding around it (a user macro
+ * wrapping `require-msg!` names the user macro's use, while a user's
+ * `assert!` passed into a stdlib macro names the `assert!`).  `fallback` when
+ * no expansion is in progress. */
+Span elab_macro_use_site(const Elab *e, Span fallback);
 
 /* True when contract checks are being emitted for this build. */
 bool rt_contracts_emitted(void);
@@ -1255,6 +1393,8 @@ typedef struct WriteFrameSite {
     const Form   *defn_form;   /* the whole `(defn ...)`; the body is a suffix */
     uint32_t      body_start;  /* index of the first body form within defn_form */
     const Form   *annot;       /* the `#writes` form, for the diagnostic span */
+    bool          from_stdlib; /* registered while loading the stdlib (either path);
+                                * left out of --dump-write-frames */
 } WriteFrameSite;
 
 /* Record an annotated function for the deferred WF2 walk. */
@@ -1487,6 +1627,7 @@ bool scope_borrow_conflicts(const Scope *s, Binding *binding, BorrowKind kind);
 bool scope_add_borrow(Scope *s, Binding *binding, BorrowKind kind, Span span);
 void scope_add(Scope *s, Binding *b);
 Binding *scope_lookup(Scope *s, const Symbol *name);
+uint32_t scope_idx_newest(const Scope *s, const Symbol *name);
 Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
     Binding **self_exclude, uint32_t n_self_exclude, uint32_t *n_out);
 void elab_register_file_def(Elab *e, Expr *def_expr);
@@ -1502,15 +1643,63 @@ int elab_expand_module_loads(Elab *e, Arena *arena, SymbolTable *st,
  * self/mutually recurse.  A non-defn form is a no-op. */
 void elab_pre_declare_toplevel_defn(Elab *e, Arena *arena, Form *f);
 void elab_pre_declare_any_mut_def(Elab *e, const Form *f);
+/* forward-call-to-generic-callee-typed-as-placeholder: Pass 2 elaborates a
+ * defn that calls a not-yet-elaborated GENERIC defn of the same statement
+ * list after that callee, since the generic's pass-1 forward decl has no
+ * parameter types to instantiate its type variables from (likewise a callee
+ * with a function-typed parameter, whose forward decl does not mark it as
+ * the `:fn` carrier).  A defn deferred
+ * this way holds back the defns that name it in turn, and any other form
+ * that names it elaborates it first (fwd_gen_order_next_flush).  Shared by
+ * the top-level driver and the defmodule body loop; see elab_toplevel.c. */
+typedef struct FwdGenOrder {
+    const Symbol **name;     /* per slot: the tracked defn's name, or NULL */
+    uint8_t       *state;    /* per slot: FGO_* */
+    bool          *primed;   /* per slot: tried speculatively in a cycle */
+    const Symbol **keys;     /* open-addressed: every defn name in the list */
+    uint32_t      *counts;   /* per key: slots under the name still waiting */
+    uint32_t      *slot_of;  /* per key: the tracked slot, or UINT32_MAX */
+    uint32_t       cap;      /* power of two; 0 = no generic defn, inert */
+    uint32_t       n;
+    bool           any_deferred;
+} FwdGenOrder;
+void fwd_gen_order_init(FwdGenOrder *o, const Elab *e, Form *const *forms,
+                        uint32_t n);
+bool fwd_gen_order_should_defer(const FwdGenOrder *o, Form *const *forms,
+                                uint32_t i);
+void fwd_gen_order_defer(FwdGenOrder *o, uint32_t i);
+/* A waiting defn `f` names, which must be elaborated before `f` is (mark it
+ * done first), or UINT32_MAX. */
+uint32_t fwd_gen_order_next_flush(const FwdGenOrder *o, const Form *f);
+void fwd_gen_order_done(FwdGenOrder *o, uint32_t i);
+/* The second chance: calls `retry(ctx, i)` once for every slot deferred by
+ * the order or flagged in `extra` (the symptom-A instance deferral), clearing
+ * `extra[i]`.  With nothing deferred by the order this is the old single
+ * source-order pass over `extra`.  `probe(ctx, i)` elaborates a slot
+ * speculatively -- true when it succeeded and was kept, false when it was
+ * rolled back -- and is how a cycle of lossy defns is primed (see the
+ * definition). */
+void fwd_gen_order_drain(FwdGenOrder *o, Form *const *forms, bool *extra,
+                         void (*retry)(void *ctx, uint32_t i),
+                         bool (*probe)(void *ctx, uint32_t i), void *ctx);
+void fwd_gen_order_free(FwdGenOrder *o);
 /* r7rs-lang-plan R3: full types for a forward decl's compound parameters in a
  * dynamic file (NULL when none); marks the matching arg_kinds slots TY_APP. */
 Type **elab_fwd_param_full_types(Elab *e, Arena *arena, const Form *f,
                                  uint32_t name_idx, uint32_t params_idx,
                                  uint32_t param_arity, TypeKind *arg_kinds);
-/* r7rs-lang-plan R3: the full TY_APP type of a compound return annotation in a
- * dynamic file (NULL otherwise), for the defmodule pre-pass. */
+/* The full type of a named return annotation -- a bare registered ADT or a
+ * closed application -- for the defmodule pre-pass (NULL when a leaf cannot
+ * be named yet).  See elab_toplevel.c. */
 Type *elab_fwd_compound_result_type(Elab *e, const Form *f, uint32_t name_idx,
                                     uint32_t params_idx, const Form *ret_f);
+/* forward-call-to-aggregate-result-types-as-carrier: record a defmodule
+ * forward decl whose named return names a type not registered yet, and retry
+ * every recorded one (called at the start of each defn). */
+void elab_fwd_note_pending_result(Elab *e, Binding *b, const Form *f,
+                                  uint32_t name_idx, uint32_t params_idx,
+                                  const Form *ret_f);
+void elab_fwd_refresh_pending(Elab *e);
 const Symbol *intern_cstr(SymbolTable *st, const char *s);
 bool binding_mark_moved(Binding *b, Span use_span);
 bool binding_mark_lent(Binding *b, Span use_span);
@@ -1643,6 +1832,8 @@ Expr *elab_own_byval_copy(Elab *e, Expr *v, Binding *local);
  * operand into a `let` so the node above it sees a variable.  The CPS IR can
  * lower a control op in a let INIT but only delegates the nodes below, and a
  * delegated control op reaches the direct emitter, which aborts. */
+/* struct-temporary-fn-field-box-leaks (elab_forms.c). */
+bool elab_type_owns_boxed_fnfield(Type t);
 Expr *elab_bind_control_temp(Elab *e, Expr *value, LetBinding *lb);
 Expr *elab_hoist_control_operands(Elab *e, Expr *node);
 /* union-tagged-union-c-emission: tag a member value flowing into a union slot.
@@ -2086,6 +2277,13 @@ Expr *elab_borrow_mut(Elab *e, const Form *call);
 Expr *elab_defkind(Elab *e, const Form *call);
 Expr *elab_defrec(Elab *e, const Form *call);
 Expr *elab_defalias(Elab *e, const Form *call);
+/* associated-type-unusable-nullary-and-generic (half 2): the UNREDUCED
+ * projection `(assoc arg)` when `arg` mentions a type variable -- a named
+ * TY_TYVAR carrying assoc_of/assoc_arg (types.h), named by the printed
+ * projection.  Returns false (and leaves *out) when the projection is ground
+ * or has more than one argument; the caller then reports it unanswerable. */
+bool elab_assoc_projection(Elab *e, const Symbol *assoc, const Type *args,
+                           uint8_t n_args, Type *out);
 Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
     const Symbol **type_params, Kind *type_param_kinds,
     uint8_t n_type_params);
@@ -2141,6 +2339,11 @@ Expr *elab_definstance(Elab *e, const Form *call);
  * obligation (Half B).  Runs after every form in the unit is registered, from
  * elaborate_program_session.  Returns false when it reported an error. */
 bool elab_typeclass_superclasses_finish(Elab *e);
+/* class-and-generic-in-an-instance-less-module: retry the parked defns (see
+ * Elab.noinst_pending).  `final` elaborates whatever is left for real and
+ * returns false when any still fails; otherwise a retry happens only when an
+ * instance registered since the last one, and always returns true. */
+bool elab_noinst_retry(Elab *e, bool final);
 Expr *elab_method_call(Elab *e, const Form *call);
 /* Phase RT: if `name` is a typeclass method whose dispatch type variable
  * appears only in the return type (a return-only-dispatch method, e.g.
@@ -2214,6 +2417,9 @@ Expr       *elab_binding(Elab *e, const Form *call);
 DynVarEntry *dynvar_lookup(const Elab *e, const Symbol *name);
 
 /* elab_effects.c -- fx-row-syntax-rename-plan Phase 2 deprecation warner */
+/* The index of a `(defn ...)` form's name, past its pre-name attributes
+ * (elab_toplevel.c).  Returns the form's length when there is no name. */
+uint32_t elab_defn_name_index(const Elab *ep, const Form *f);
 void warn_legacy_fx_row(Form *f);
 
 /* elab_sessions.c */

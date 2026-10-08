@@ -29,7 +29,7 @@ Neither reproduced locally.
 
 ## Evidence that it is flake, not breakage
 
-Observed on [PR #836](https://github.com/rjungemann/turmeric/pull/836), whose
+Observed on [PR #836](https://github.com/turmeric-lang/turmeric/pull/836), whose
 entire diff is three markdown files -- no code, no tests, no build files -- and
 whose merge-base *is* `origin/main` (`2da89e84f`), the same commit whose own CI
 run was green.
@@ -120,7 +120,7 @@ Cheap, in order:
 It was not an output-capture race. The harness slept a fixed second after
 starting the REPL and then rewrote `src/lib.tur` with the fixed source. On a
 loaded runner (the auxiliary suites run under `-j`, and on
-[#846](https://github.com/rjungemann/turmeric/pull/846) the `test` job was
+[#846](https://github.com/turmeric-lang/turmeric/pull/846) the `test` job was
 also warming a fresh Emscripten) the REPL had not yet performed its failing
 startup load when the fix landed, so the STARTUP load succeeded
 (`Loaded spice from ... (1 export)`), `(reload)` reported `no changes`, and

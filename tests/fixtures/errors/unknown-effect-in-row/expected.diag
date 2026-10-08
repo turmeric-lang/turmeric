@@ -1,0 +1,7 @@
+TUR-E0026]: unknown effect 'Bnag' in effect row: no defeffect declares it (did you mean 'Bang'?)
+TUR-E0026]: unknown effect 'Quux' in effect row
+TUR-E0026]: unknown effect 'Zork' in effect row
+TUR-E0026]: unknown effect 'Blip' in effect row
+TUR-E0026]: unknown effect 'Blorp' in effect row
+TUR-E0026]: '|e' in effect row is neither an effect nor a row variable
+TUR-E0026]: unknown effect 'Write' in effect row: no defeffect declares it ('Write' is declared in stdlib/effects.tur, which is not autoloaded; add (load "stdlib/effects.tur"))

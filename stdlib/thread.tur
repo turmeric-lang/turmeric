@@ -199,30 +199,36 @@
 ;;;
 ;;; Since: Phase TC1
 
-(defn with-cancel-guard [cleanup : ptr<void> body : ptr<void>]
+(defn with-cancel-guard [^fat cleanup : (fn [] nil) ^fat body : (fn [] nil)]
   #fx{Unsafe}
   : nil
   ```c
   /* Save previous cancel jmpbuf state (supports nested guards) */
   int prev_valid = tur_cancel_jmpbuf_valid;
-  jmp_buf prev_buf;
-  if (prev_valid) memcpy(&prev_buf, &tur_cancel_jmpbuf, sizeof(jmp_buf));
+  /* The preamble's portable buffer and setjmp: on Windows `tur_jmp_buf` is
+   * `void *[30]` driven by tur_sjlj_set, not the CRT `jmp_buf`, so a raw
+   * `setjmp`/`jmp_buf` here does not compile on MinGW (and the sizes the
+   * save/restore copies would differ). */
+  tur_jmp_buf prev_buf;
+  if (prev_valid) memcpy(&prev_buf, &tur_cancel_jmpbuf, sizeof(tur_jmp_buf));
   tur_cancel_jmpbuf_valid = 1;
-  /* Fat-closure calling convention: struct { int64_t __fn; ... }
-   * Call as thunk(closure_ptr, 0) where __fn is the function pointer. */
-  typedef struct { int64_t __fn; } GenericClosure;
-  GenericClosure *body_clos    = (GenericClosure *)(intptr_t)body;
-  GenericClosure *cleanup_clos = (GenericClosure *)(intptr_t)cleanup;
-  int64_t (*body_thunk)(void *, int64_t)    = (int64_t (*)(void *, int64_t))(intptr_t)body_clos->__fn;
-  int64_t (*cleanup_thunk)(void *, int64_t) = (int64_t (*)(void *, int64_t))(intptr_t)cleanup_clos->__fn;
-  if (setjmp(tur_cancel_jmpbuf) == 0) {
-      body_thunk(body_clos, 0);
+  /* Fat-closure calling convention: slot 0 is the thunk, called with the
+   * box.  A `(fn [] nil)` thunk is `void (*)(void *)` -- the exact type, not
+   * a word-taking one (stdlib-int-stand-in-audit: these were `ptr<void>`
+   * and called as `int64_t (*)(void *, int64_t)` with a stray 0, a
+   * -fsanitize=function trap). */
+  void *body_clos    = (void *)(intptr_t)body;
+  void *cleanup_clos = (void *)(intptr_t)cleanup;
+  void (*body_thunk)(void *)    = (void (*)(void *))(intptr_t)((int64_t *)body_clos)[0];
+  void (*cleanup_thunk)(void *) = (void (*)(void *))(intptr_t)((int64_t *)cleanup_clos)[0];
+  if (TUR_SETJMP(tur_cancel_jmpbuf) == 0) {
+      body_thunk(body_clos);
       tur_cancel_jmpbuf_valid = prev_valid;
-      if (prev_valid) memcpy(&tur_cancel_jmpbuf, &prev_buf, sizeof(jmp_buf));
+      if (prev_valid) memcpy(&tur_cancel_jmpbuf, &prev_buf, sizeof(tur_jmp_buf));
   } else {
       tur_cancel_jmpbuf_valid = prev_valid;
-      if (prev_valid) memcpy(&tur_cancel_jmpbuf, &prev_buf, sizeof(jmp_buf));
-      cleanup_thunk(cleanup_clos, 0);
+      if (prev_valid) memcpy(&tur_cancel_jmpbuf, &prev_buf, sizeof(tur_jmp_buf));
+      cleanup_thunk(cleanup_clos);
   }
   ```)
 ;;; __yield-point-impl -- internal: check cancel and exit if cancelled.

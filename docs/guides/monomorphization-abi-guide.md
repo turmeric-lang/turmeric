@@ -83,7 +83,7 @@ small because each spec is tiny.
 | Polymorphic `defn` | `<defn>__spec__<arg-types>` | `option_map__spec__int_int` |
 | Typeclass method via dict | `<class>_<method>__spec__<dict>` | `Functor_fmap__spec__Option` |
 | Constrained-polymorphic HOF | `<defn>__spec__<arg-types>_<dict>` | `bind__spec__int_Option_Result` |
-| `#fx{Construct}` polymorphic ctor | `<ctor>__spec__<carrier-args>` | `some__spec__int` |
+| `^construct` polymorphic ctor | `<ctor>__spec__<carrier-args>` | `some__spec__int` |
 | HKT instance method (by-value) | `<class>_<method>__spec__<F>__<element-types>` | `Functor_fmap__spec__Option__int` |
 
 The spec name is **deterministic**: same call-site types → same spec
@@ -236,7 +236,7 @@ module is whoever declared the originating defn/instance.
   the trailing element-type segment, that's a carrier-path spec --
   legitimate for instances whose body has no by-value rewrite (e.g.
   `Functor[Parser]`) but unexpected for `Option`/`Result`.
-- **Construct-recovery.** `#fx{Construct}` ctors (`ok`, `err`, `some`,
+- **Construct-recovery.** `^construct` ctors (`ok`, `err`, `some`,
   `none`) lower to a spec selected from the **expected** type at the
   call site, not the type of the argument. This is how `(none)` knows
   to emit `none__spec__int` vs `none__spec__cstr`. If a `(none)` call

@@ -49,7 +49,7 @@ it. `tur check` exits 0, `--interpret` silently runs the later definition, and
 same mistake with `def` gets a clean `def: 'x' is already defined`.
 
 Filed 2026-09-29 while investigating
-[aot-compiled-repl-plan](../upcoming/hold/aot-compiled-repl-plan.md). Measured
+[aot-compiled-repl-plan](../upcoming/aot-compiled-repl-plan.md). Measured
 on `main` at `c6ba4162`, Release `-DTUR_JIT=ON`.
 
 ## Repro

@@ -16,8 +16,9 @@
  * whole-archive question), tur_collect_symbols is the real one, and the C text
  * arrives as an in-memory buffer rather than a file.
  *
- * Compiled into `tur` only under -DTUR_JIT=ON (which vendors MIR via
- * cmake/mir.cmake and sets ENABLE_EXPORTS so dlsym can see the runtime).
+ * Compiled into `tur` only under TUR_JIT (ON by default on 64-bit x86-64 and
+ * arm64; it builds the vendored MIR in external/mir via cmake/mir.cmake and
+ * sets ENABLE_EXPORTS so dlsym can see the runtime).
  * Without it, cmd_jit in main.c reports the missing capability.
  */
 
@@ -75,6 +76,13 @@ static double jit_now_ms (void) {
 
 static double g_jit_t0, g_jit_t_prev;
 static int g_jit_timing;   /* TUR_JIT_TIMING=1 */
+static bool g_jit_quiet_warnings;  /* tur_jit_set_quiet_warnings */
+
+bool tur_jit_set_quiet_warnings (bool quiet) {
+  bool was = g_jit_quiet_warnings;
+  g_jit_quiet_warnings = quiet;
+  return was;
+}
 
 static void jit_timing_begin (void) {
   const char *t = getenv ("TUR_JIT_TIMING");
@@ -146,6 +154,29 @@ static const char JIT_PRELUDE[] =
    * r7rs-gc experiment) switches its collector off, since a JIT'd
    * program's globals are not in the data segment it scans. */
   "#define TUR_JIT_ENGINE 1\n"
+  /* The HOST's sanitizer state, passed into the program because the program
+   * cannot see it: c2mir defines neither `__SANITIZE_ADDRESS__` nor
+   * `__has_feature`, so inline C compiled here has no way to tell that the
+   * process it is about to run in is on ASan's allocator.
+   *
+   * That distinction matters for fork().  A child forked while another thread
+   * holds ASan's allocator lock inherits it HELD, and deadlocks on its next
+   * malloc -- glibc's allocator is fork-safe, ASan's is not
+   * (docs/archive/jit-fork-child-inherits-asan-allocator-lock.md).  A
+   * fixture that forks and then allocates can only know to avoid that if we
+   * tell it, so this is the channel.
+   *
+   * Deliberately narrow: this says "the host is sanitized", NOT "skip hard
+   * things".  Only a program that forks and allocates should consult it; the
+   * Release JIT and the compiled path leave it undefined and keep testing
+   * the real fork path. */
+#if defined(__SANITIZE_ADDRESS__)
+  "#define TUR_JIT_HOST_ASAN 1\n"
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+  "#define TUR_JIT_HOST_ASAN 1\n"
+#  endif
+#endif
   /* MIR's Apple/aarch64 prelude spells `#define __arm64__` with NO
    * replacement list (c2mir/aarch64/mirc_aarch64_linux.h:135), where Apple
    * clang defines it as 1.  Every SDK `#if __arm64__` therefore expands to a
@@ -505,6 +536,18 @@ static void jit_set_lazy_gen_interface (MIR_context_t ctx, MIR_item_t func_item)
  * and runs the program alone.) */
 static MIR_context_t g_jit_lazy_ctx;   /* the context still generating lazily */
 
+/* A thread the program started can still be running when its `main` returns
+ * -- a detached worker, or one the program never joins.  A native program
+ * then exits and the thread dies with the process; here the engine would go
+ * on to MIR_finish, freeing the module's code and globals under it.  Seen in
+ * `r7rs-threads-lifecycle` under suite load: a worker's memcpy read a bss
+ * global that MIR_finish's remove_item had just freed.  So once the program
+ * has started a thread, its context is retired, not torn down: it lives, as
+ * a native program's image does, until the process ends, and stays reachable
+ * from g_jit_retired_ctx so LeakSanitizer does not report it. */
+static int g_jit_program_started_threads;
+static MIR_context_t g_jit_retired_ctx __attribute__ ((unused));
+
 static void jit_generate_rest (MIR_context_t ctx) {
   pthread_mutex_lock (&g_gen_lock);
   for (MIR_module_t m = DLIST_HEAD (MIR_module_t, *MIR_get_module_list (ctx)); m != NULL;
@@ -527,6 +570,7 @@ static int jit_pthread_create (pthread_t *tid, const pthread_attr_t *attr,
                                void *(*fn) (void *), void *arg) {
   MIR_context_t ctx = __atomic_exchange_n (&g_jit_lazy_ctx, NULL, __ATOMIC_SEQ_CST);
   if (ctx != NULL) jit_generate_rest (ctx);
+  __atomic_store_n (&g_jit_program_started_threads, 1, __ATOMIC_SEQ_CST);
   return pthread_create (tid, attr, fn, arg);
 }
 
@@ -688,12 +732,118 @@ struct jit_entry_box {
   int rc;
 };
 
+/* jit-stack-overflow-has-no-message: a recursion that ran off this thread's
+ * stack used to end `tur` itself with a bare SIGSEGV (SIGBUS on macOS) and
+ * nothing on stderr, in every dialect -- the compiled r7rs path's handler is
+ * emitted behind `!defined(__MIRC__)`, and under the JIT the dying process is
+ * the engine's anyway.  So the entry thread carries the same handler, on an
+ * alternate stack, with the same test and message (runtime/stack_overflow.h):
+ * an overflow prints the line and the fault then repeats with the default
+ * action, so the exit status is what it was.  Any other fault is handed back
+ * to whatever handled the signal before (the default, or ASan's) and repeats
+ * there, so a wild pointer in JIT'd code behaves exactly as it did.  The
+ * handlers are installed for the run and restored after the join. */
+#ifndef _WIN32
+#  include <signal.h>
+#  include <unistd.h>
+#  include "runtime/stack_overflow.h"
+
+static unsigned char *volatile g_jit_entry_lo;  /* low end of the entry stack, or NULL */
+static struct sigaction g_jit_prev_segv, g_jit_prev_bus;
+
+static void jit_entry_fault (int sig, siginfo_t *si, void *uc) {
+  (void) uc;
+  unsigned char *a = (unsigned char *) si->si_addr, *lo = g_jit_entry_lo;
+  if (TUR_STACK_FAULT_IS_OVERFLOW (a, lo)) {
+    static const char m[] = TUR_STACK_OVERFLOW_MSG "\n";
+    if (write (2, m, sizeof m - 1) < 0) { }
+    signal (sig, SIG_DFL);   /* the fault repeats on return, unhandled */
+    return;
+  }
+  sigaction (sig, sig == SIGSEGV ? &g_jit_prev_segv : &g_jit_prev_bus, NULL);
+  if (si->si_code <= 0) raise (sig);   /* sent, not a fault: it will not repeat */
+}
+
+static void jit_entry_fault_install (void) {
+  struct sigaction sa;
+  memset (&sa, 0, sizeof sa);
+  sa.sa_sigaction = jit_entry_fault;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset (&sa.sa_mask);
+  sigaction (SIGSEGV, &sa, &g_jit_prev_segv);
+  sigaction (SIGBUS, &sa, &g_jit_prev_bus);
+}
+
+static void jit_entry_fault_restore (void) {
+  g_jit_entry_lo = NULL;
+  sigaction (SIGSEGV, &g_jit_prev_segv, NULL);
+  sigaction (SIGBUS, &g_jit_prev_bus, NULL);
+}
+
+/* On the entry thread: find its stack's low end and give it an alternate
+ * stack to report from.  Returns the alternate stack to free, or NULL; *old
+ * receives the one it replaced (ASan gives every thread its own, and frees
+ * it at thread exit, so it goes back before the thread ends). */
+static void *jit_entry_guard_enter (stack_t *old) {
+  unsigned char *lo = NULL;
+#  if defined(__APPLE__)
+  lo = (unsigned char *) pthread_get_stackaddr_np (pthread_self ())
+       - pthread_get_stacksize_np (pthread_self ());
+#  elif defined(__GLIBC__)
+  {
+    extern int pthread_getattr_np (pthread_t, pthread_attr_t *);
+    pthread_attr_t a;
+    void *addr = NULL;
+    size_t sz = 0;
+    if (pthread_getattr_np (pthread_self (), &a) == 0) {
+      if (pthread_attr_getstack (&a, &addr, &sz) == 0) lo = (unsigned char *) addr;
+      pthread_attr_destroy (&a);
+    }
+  }
+#  endif
+  if (!lo) return NULL;
+  size_t alt_size = 65536;
+  void *alt = malloc (alt_size);
+  if (!alt) return NULL;
+  stack_t ss;
+  ss.ss_sp = alt;
+  ss.ss_size = alt_size;
+  ss.ss_flags = 0;
+  if (sigaltstack (&ss, old) != 0) {
+    free (alt);
+    return NULL;
+  }
+  g_jit_entry_lo = lo;
+  return alt;
+}
+
+static void jit_entry_guard_leave (void *alt, const stack_t *old) {
+  if (!alt) return;
+  g_jit_entry_lo = NULL;
+  stack_t prev = *old;
+  if (sigaltstack (&prev, NULL) != 0) {
+    stack_t off;
+    memset (&off, 0, sizeof off);
+    off.ss_flags = SS_DISABLE;
+    sigaltstack (&off, NULL);
+  }
+  free (alt);
+}
+#endif
+
 static void *jit_run_entry (void *p) {
   struct jit_entry_box *box = (struct jit_entry_box *) p;
   char *fake_envp[] = {NULL};
+#ifndef _WIN32
+  stack_t old_alt;
+  void *alt = jit_entry_guard_enter (&old_alt);
+#endif
   box->rc = box->fn (box->argc, box->argv, fake_envp);
   jit_atexit_drain ();
   fflush (stdout);
+#ifndef _WIN32
+  jit_entry_guard_leave (alt, &old_alt);
+#endif
   return NULL;
 }
 
@@ -897,6 +1047,7 @@ static int jit_compile_and_link (const char *csrc, size_t csrc_len,
   struct c2mir_options ops;
   memset (&ops, 0, sizeof ops);
   ops.message_file = stderr;
+  ops.ignore_warnings_p = g_jit_quiet_warnings;
 
   ops.include_dirs_num = (size_t) (n_include_dirs > 0 ? n_include_dirs : 0);
   ops.include_dirs = include_dirs;
@@ -1043,33 +1194,72 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   typedef int (*main_fn) (int, char **, char **);
   struct jit_entry_box box = { (main_fn) main_item->addr, prog_argc, prog_argv, 0 };
 
-  size_t stack_mb = 64;
-  const char *senv = getenv ("TUR_JIT_STACK_MB");
-  if (senv && atoi (senv) > 0) stack_mb = (size_t) atoi (senv);
+  /* r7rs-deep-recursion-segfaults-silently: the same 1 GiB the cc path gives
+   * a `#lang r7rs` main (emit_deep_stack_runtime) -- address space, committed
+   * only as deep as the program recurses.  64 MiB ran SICP 1.2.1's
+   * million-deep linear recursion off the end; MIR frames are larger than
+   * gcc's and it does no sibling-call optimization. */
+  /* r7rs-deep-stack-size-not-configurable: TUR_MAIN_STACK_MB is the one
+   * name for main's stack on both engines (the cc path reads it in
+   * tur_deep_size, emit_module.c); TUR_JIT_STACK_MB, the older JIT-only
+   * name, still works and wins when both are set. */
+  size_t stack_mb = sizeof (void *) >= 8 ? 1024 : 64;
+  const char *senv_name = NULL;
+  static const char *const stack_vars[] = { "TUR_JIT_STACK_MB", "TUR_MAIN_STACK_MB" };
+  for (size_t vi = 0; vi < sizeof stack_vars / sizeof stack_vars[0] && !senv_name; vi++) {
+    const char *senv = getenv (stack_vars[vi]);
+    if (!senv || !*senv) continue;
+    char *end = NULL;
+    unsigned long long mb = strtoull (senv, &end, 10);
+    if (end && *end == '\0' && mb > 0 && mb <= (unsigned long long) (SIZE_MAX >> 20)) {
+      stack_mb = (size_t) mb;
+      senv_name = stack_vars[vi];
+    } else {
+      fprintf (stderr, "tur: jit: ignoring %s=%s (want a positive number of MiB)\n",
+               stack_vars[vi], senv);
+    }
+  }
+  bool stack_asked = senv_name != NULL;
   pthread_attr_t attr;
   pthread_t entry_thread;
   pthread_attr_init (&attr);
-  pthread_attr_setstacksize (&attr, stack_mb * 1024 * 1024);
+  pthread_attr_setstacksize (&attr, stack_mb << 20);
+#ifndef _WIN32
+  jit_entry_fault_install ();
+#endif
   if (pthread_create (&entry_thread, &attr, jit_run_entry, &box) != 0) {
+#ifndef _WIN32
+    jit_entry_fault_restore ();
+#endif
     pthread_attr_destroy (&attr);
     jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
     c2mir_finish (ctx);
     MIR_finish (ctx);
-    fprintf (stderr, "tur: jit: entry thread create failed\n");
+    if (stack_asked)
+      fprintf (stderr, "tur: jit: cannot make a %zu MiB entry stack (%s)\n", stack_mb, senv_name);
+    else
+      fprintf (stderr, "tur: jit: entry thread create failed\n");
     return TUR_JIT_ERR_RUN;
   }
   double t_run = jit_now_ms ();
   pthread_join (entry_thread, NULL);
+#ifndef _WIN32
+  jit_entry_fault_restore ();
+#endif
   g_jit_stat_run_ms = jit_now_ms () - t_run;
   pthread_attr_destroy (&attr);
   jit_timing_mark ("run");
   jit_timing_rss ();
 
   jit_forget_lazy_ctx (ctx);
-  if (g_jit_gen_inited) MIR_gen_finish (ctx);
-  c2mir_finish (ctx);
-  MIR_finish (ctx);
+  if (__atomic_load_n (&g_jit_program_started_threads, __ATOMIC_SEQ_CST)) {
+    g_jit_retired_ctx = ctx;   /* its threads may still be running in it */
+  } else {
+    if (g_jit_gen_inited) MIR_gen_finish (ctx);
+    c2mir_finish (ctx);
+    MIR_finish (ctx);
+  }
 
   if (prog_rc) *prog_rc = box.rc;
   return TUR_JIT_OK;
@@ -1080,7 +1270,20 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
 /* ------------------------------------------------------------------ */
 struct TurJitImage {
   MIR_context_t ctx;
+  int c2mir_live;   /* c2mir_finish still owed (TUR_JIT_KEEP_C2MIR=1) */
 };
+
+/* aot-compiled-repl-plan C1: an image no longer needs the C front end once its
+ * module is loaded, linked and initialized -- generation (lazy or eager) reads
+ * MIR's own IR, and MIR copied every name and literal it kept.  The front end
+ * is the bulk of an image's resident memory (the parsed system headers and the
+ * runtime declarations), and the REPL keeps images for the life of the
+ * session, so it is released here rather than in tur_jit_image_free.
+ * TUR_JIT_KEEP_C2MIR=1 restores the old lifetime, for bisecting. */
+static int jit_image_keeps_c2mir (void) {
+  const char *v = getenv ("TUR_JIT_KEEP_C2MIR");
+  return v != NULL && strcmp (v, "1") == 0;
+}
 
 int tur_jit_compile_image (const char *csrc, size_t csrc_len,
                            const char *autolink,
@@ -1106,15 +1309,19 @@ int tur_jit_compile_image (const char *csrc, size_t csrc_len,
   MIR_item_t init = jit_find_func (ctx, "__tur_static_init");
   if (init != NULL && init->addr != NULL) ((void (*) (void)) init->addr) ();
 
+  int keep_c2mir = jit_image_keeps_c2mir ();
+  if (!keep_c2mir) c2mir_finish (ctx);
+
   TurJitImage *img = (TurJitImage *) malloc (sizeof *img);
   if (!img) {
     jit_forget_lazy_ctx (ctx);
     if (g_jit_gen_inited) MIR_gen_finish (ctx);
-    c2mir_finish (ctx);
+    if (keep_c2mir) c2mir_finish (ctx);
     MIR_finish (ctx);
     return TUR_JIT_ERR_RUN;
   }
   img->ctx = ctx;
+  img->c2mir_live = keep_c2mir;
   *out = img;
   return TUR_JIT_OK;
 }
@@ -1133,7 +1340,7 @@ void tur_jit_image_free (TurJitImage *img) {
   jit_atexit_drain ();
   jit_forget_lazy_ctx (img->ctx);
   MIR_gen_finish (img->ctx);
-  c2mir_finish (img->ctx);
+  if (img->c2mir_live) c2mir_finish (img->ctx);
   MIR_finish (img->ctx);
   free (img);
 }

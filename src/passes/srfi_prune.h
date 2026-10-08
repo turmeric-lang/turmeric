@@ -18,7 +18,9 @@
  * It is conservative in three ways:
  *
  *   - only a definition from a `stdlib/srfi/` file is ever removed, and only
- *     a `defn` or a `def` whose initializer has no side effect;
+ *     a `defn` or a `def` whose initializer has no side effect -- a value, or
+ *     a call that only allocates (r7rs-srfi-18-216-sicp-plan T0b: SRFI 27's
+ *     `default-random-source`; see alloc_only in srfi_prune.c);
  *   - a definition with C linkage (`retain_c_linkage`, `c_export_name`) or
  *     an exported one, when exports are kept, stays;
  *   - the walk models every expression kind.  Should it meet one it does not

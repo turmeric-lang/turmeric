@@ -25,7 +25,7 @@
  *   3. covered     -- every `match` it contains is proven exhaustive.  ADT and
  *                     union scrutinees already are (compiling implies it:
  *                     elab_match's TUR-E0301 / covered[] bitmap); the walk
- *                     rejects the two holes -- a `#{NonExhaustive}` opt-out,
+ *                     rejects the two holes -- a `^non-exhaustive` opt-out,
  *                     and a literal-scrutinee match with no `_`/variable arm
  *                     (the S4-lit path has no coverage check) -- and, default-
  *                     deny, any form it does not positively recognise.
@@ -352,11 +352,13 @@ static bool rf_bind_pattern(RfCtx *c, const Form *pat, int32_t root, bool strict
 static bool rf_walk_match(RfCtx *c, const Form *f) {
     if (f->as.list.len < 2) { rf_reject(c, f, "coverage", "match without a scrutinee"); return false; }
     const Form *scrut = f->as.list.items[1];
-    if (scrut->tag == F_MAP) {
-        /* `#{NonExhaustive}` (or any marker): the opt-out is an unchecked
-         * promise, and a reflected axiom cannot rest on one. */
+    if (scrut->tag == F_MAP ||
+        (scrut->tag == F_SYM && scrut->as.sym == c->e->sym_caret_non_exhaustive)) {
+        /* `^non-exhaustive` (or the deprecated `#fx{NonExhaustive}`, or any
+         * marker): the opt-out is an unchecked promise, and a reflected axiom
+         * cannot rest on one. */
         rf_reject(c, scrut, "coverage",
-                  "a `#{NonExhaustive}` match is not proven exhaustive");
+                  "a `^non-exhaustive` match is not proven exhaustive");
         return false;
     }
     if (!rf_walk(c, scrut)) return false;

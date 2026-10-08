@@ -5,7 +5,7 @@ graduated 2026-08-01 (v0.33.0).** Nothing here is outstanding work. The file is
 archived rather than retired because it remains the **status source** for the
 refinement feature and for the `tests/fixtures/refine-*` corpus -- read it as a
 record, per the two-document note below. Work that builds on it and is still
-open lives in [`loop-invariants-plan.md`](../upcoming/loop-invariants-plan.md)
+open lives in [`loop-invariants-plan.md`](loop-invariants-plan.md)
 (landed 2026-09-29 behind `--enable=loop-invariants`) and
 [`reflected-measures-plan.md`](../upcoming/reflected-measures-plan.md)
 (in progress since 2026-09-29, behind `--enable=reflected-measures`).
@@ -1525,7 +1525,7 @@ never mentions:
 > runner recurses -- rather than an engineering task.
 >
 > **CORRECTION (2026-07-30): this is DONE and has been for a while.** The
-> import lives at **`github.com/rjungemann/smt-lib-benchmarks`** (200
+> import lives at **`github.com/turmeric-lang/smt-lib-benchmarks`** (200
 > benchmarks, 8 logics x 25, produced by `import-smtlib.py --sample 25`). It is
 > a separate repo because the data is too large to check into this tree, NOT
 > because it could not be obtained. Do not re-derive "the library was never
@@ -1816,7 +1816,7 @@ never mentions:
 >   crossings are worth more and need no new syntax.
 >
 >   Placeholder plan, with the sketch and the trigger condition written down:
->   [docs/upcoming/hold/loop-invariants-plan.md](../upcoming/loop-invariants-plan.md).
+>   [docs/upcoming/hold/loop-invariants-plan.md](loop-invariants-plan.md).
 > - ~~**A datatype theory for the VC**~~ -- LANDED IN FULL, see above, and
 >   without the new sort this entry assumed it needed. Arm hypotheses and
 >   constructor axioms both shipped; `(.a (Box p q))` now reduces to `p`. What
@@ -2745,7 +2745,7 @@ scaffold is deleted once all of the following hold:
   file, and a loud report when it keeps fewer than asked.
 
   **The SMT-LIB benchmark library import is DONE.** The sample lives in its own
-  repository -- **`github.com/rjungemann/smt-lib-benchmarks`** -- because the
+  repository -- **`github.com/turmeric-lang/smt-lib-benchmarks`** -- because the
   data is too large to belong in this tree's history, not because it was
   unobtainable. It is `smtlib-2025/`, 25 benchmarks per logic across the eight
   fragment logics (**200 files**), produced by this repo's own importer
@@ -2753,7 +2753,7 @@ scaffold is deleted once all of the following hold:
   CC-BY-4.0 `ATTRIBUTION` file the licence requires:
 
   ```sh
-  git clone https://github.com/rjungemann/smt-lib-benchmarks /tmp/smtlib-bench
+  git clone https://github.com/turmeric-lang/smt-lib-benchmarks /tmp/smtlib-bench
   TUR_CORPUS_TIMEOUT=3 ./build/tur_refine_corpus /tmp/smtlib-bench/smtlib-2025
   ```
 

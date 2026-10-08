@@ -18,7 +18,7 @@ new pure-Turmeric spice in the `turmeric-spices` monorepo. Final shape:
 `tur-signal` is **Tier 1** (pure Turmeric, no `cmake-dep`, no inline-C beyond
 what already exists in the source files for IEEE-754 bit-pattern helpers).
 Modeled after [`tur-frame`](frame-spice-plan.md) and the existing
-[`tur-scscm`](https://github.com/rjungemann/turmeric-spices/tree/main/spices/scscm)
+[`tur-scscm`](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/scscm)
 layout (single spice, nested module sub-tree).
 
 ### Why move it
@@ -76,7 +76,7 @@ matching how `tur-frame` exposes `frame/buffer`, `frame/column`, etc.
   :description "Arrow-based signal processing: SF combinators, DSP, envelopes, synth voices"
   :license     "MIT"
   :spices #{
-    "test" #{:url    "https://github.com/rjungemann/turmeric-spices"
+    "test" #{:url    "https://github.com/turmeric-lang/turmeric-spices"
              :ref    "test-v0.1.0"
              :subdir "spices/test"
              :optional true}

@@ -501,7 +501,7 @@ float->bits(7.1) ; 4619679907765970534  -- the IEEE-754 BITS (stdlib/bits.tur)
 
 (An integer *literal* ascribed to a float still converts -- `(:: 7 :float)` is
 `7.0` -- since a written constant has no carried bit pattern to mean.  See
-[docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).)
+[docs/archive/ascribe-int-to-float-expression-ambiguity.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/ascribe-int-to-float-expression-ambiguity.md).)
 
 All four spellings behave **identically under turi and compiled**.  The
 interpreter registers `float->bits` / `bits->float` as natives, exactly as it
@@ -518,7 +518,7 @@ breaks the carrier read-backs that typed slots, variadic rest collection and the
 cons/HAMT carriers depend on.  Value-preserving was the only self-consistent
 choice for the tagged model as long as one operator had to serve both; splitting
 the spelling removed the need to choose.  See
-[docs/archive/history/turi-map-nonint-value-carrier-ascription.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/turi-map-nonint-value-carrier-ascription.md).
+[docs/archive/history/turi-map-nonint-value-carrier-ascription.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/turi-map-nonint-value-carrier-ascription.md).
 
 **Practical guidance.** Bit-level float work (hashing, representation-exact
 serialization, manual IEEE/NaN-boxing) goes through `float->bits` /
@@ -540,10 +540,10 @@ expression kind" default.  Check for them with `turi_is_error` as usual.
 | Feature | Interpreter behaviour | Why |
 | --- | --- | --- |
 | **User inline-C** (` ```c ... ``` ` bodies) | `inline-C not supported in interpreter mode` | The interpreter has no C compiler.  Stdlib inline-C is covered by registered **natives** (see `turi_env_register_native`) and the simple-shape evaluator; arbitrary user inline-C is not. |
-| **Channels / `select`** | `select is not supported in interpreter mode (channels require native primitives; use the compiled path)` | Turmeric channels are inline-C `pthread` mutex/condvar ring buffers with no native representation in `turi`, so `select` has nothing to select over.  Tracked in [docs/archive/history/turi-select-needs-channel-primitives.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/history/turi-select-needs-channel-primitives.md). |
+| **Channels / `select`** | `select is not supported in interpreter mode (channels require native primitives; use the compiled path)` | Turmeric channels are inline-C `pthread` mutex/condvar ring buffers with no native representation in `turi`, so `select` has nothing to select over.  Tracked in [docs/archive/history/turi-select-needs-channel-primitives.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/turi-select-needs-channel-primitives.md). |
 | **WASM async** | scheduler-dependent error | The WASM build drives async through the host event loop; the standalone interpreter's cooperative scheduler does not cover the WASM async path.  See `src/turi/fiber.c`. |
 | **`call/cc`, context-capturing `serial-shift` / `cloneable-shift`** | clean error | Need genuine continuation capture; deferred to the CPS-transform work.  See `docs/turi-carve-out.txt`. |
-| **Multi-shot `resume` under a non-capturable handle** | `resume: this continuation has already been resumed ...` | A `handle` runs on the work-stack driver -- where a continuation is a heap slice cloned per resume, so multi-shot works -- only when every `perform` it can reach is reached through a form the driver descends: plain control flow (`if`, `do`, `let`, `while`, `match`), `set!`/`return`/ascription operands, field receivers, perform args, resume's `k`, and direct calls.  Reaching one through a native higher-order call, a `catch-unwind`/`reset`/`atomically` boundary, or a match *guard* falls back to a ucontext fiber, which *is* the continuation and so is single-shot.  The second resume reports rather than aborting, and `TURI_TRACE_FIBER_FALLBACK=1` names the form that forced the fallback.  See [docs/archive/turi-ws-capturable-stale-black-box-arms.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/turi-ws-capturable-stale-black-box-arms.md). |
+| **Multi-shot `resume` under a non-capturable handle** | `resume: this continuation has already been resumed ...` | A `handle` runs on the work-stack driver -- where a continuation is a heap slice cloned per resume, so multi-shot works -- only when every `perform` it can reach is reached through a form the driver descends: plain control flow (`if`, `do`, `let`, `while`, `match`), `set!`/`return`/ascription operands, field receivers, perform args, resume's `k`, and direct calls.  Reaching one through a native higher-order call, a `catch-unwind`/`reset`/`atomically` boundary, or a match *guard* falls back to a ucontext fiber, which *is* the continuation and so is single-shot.  The second resume reports rather than aborting, and `TURI_TRACE_FIBER_FALLBACK=1` names the form that forced the fallback.  See [docs/archive/turi-ws-capturable-stale-black-box-arms.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/turi-ws-capturable-stale-black-box-arms.md). |
 
 These are intentional and enforced: `tools/check_turi_parity.py` (wired into
 `tests/run.sh`) checks every `EX_*` kind against `docs/turi-carve-out.txt`, so a

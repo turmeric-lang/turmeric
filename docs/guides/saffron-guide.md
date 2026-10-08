@@ -30,11 +30,11 @@ an ordinary base dialect, on the same footing as `#lang turmeric`, and
 `tur dialects` lists every base as `stable` -- the eight Turmeric and Saffron
 ones, and the two `r7rs` bases, the Scheme dialect that rides the same dynamic
 substrate and graduated alongside it in v0.57.0 (see
-[docs/archive/r7rs-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)).
+[docs/archive/r7rs-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/r7rs-lang-plan.md)).
 
 The dialect is young, though, and parts of the dynamic surface are still being
 built out -- design notes, remaining stages and known gaps live in
-[docs/archive/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/saffron-lang-plan.md).
+[docs/archive/saffron-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/saffron-lang-plan.md).
 
 ## What actually changes
 
@@ -368,7 +368,7 @@ tur run hello.tur
 - [introducing-saffron.md](introducing-saffron.md) -- the tour this guide is the
   reference for: Try Turmeric, printing, flow control, functions, ADTs,
   typeclasses and effects, every example in both syntaxes
-- [docs/archive/saffron-lang-plan.md](https://github.com/rjungemann/turmeric/blob/main/docs/archive/saffron-lang-plan.md) --
+- [docs/archive/saffron-lang-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/saffron-lang-plan.md) --
   the design decisions and their measurements
 - [union-intersection-types-guide.md](union-intersection-types-guide.md) --
   `any`, unions, and gradual typing in typed Turmeric
