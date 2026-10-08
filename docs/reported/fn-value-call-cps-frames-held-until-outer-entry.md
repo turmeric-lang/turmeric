@@ -162,17 +162,20 @@ the quarantine off, 3e6 iterations:
 Release counts from an instrumented build: the repro, a capturing-closure
 argument and a capture-free value join (`dk_frame_join`) release one node per
 turn, and one env per turn where there is an env. A loop whose callee
-`perform`s releases none (every join it crosses is copied), and neither does
-an async loop (every `await` shifts, even on a fulfilled future). Both fall
-back to the boundary reap, unchanged.
+`perform`s releases none (every join it crosses is copied), and neither did
+an async loop, because every `await` shifted, even on a fulfilled future.
+Since 2026-10-08 an await on a fulfilled future takes no shift
+([async-parked-body-chains-never-reaped](../archive/async-parked-body-chains-never-reaped.md)),
+so an async loop's joins are released as they run (1,000,000 turns: 10 MB
+flat); only the joins a pending await's park copies wait for the body to
+settle. The effect loop still falls back to the boundary reap, unchanged.
 
 Pinned by `tests/fixtures/fn-value-call-join-reclaimed` (`requires.leak-check`:
 the fn-value, closure and value-join loops, and one-shot, outer multi-shot and
 inner multi-shot handlers whose copies run the same joins more than once; all
 ASan-clean, and the same answers under `--interpret`) and
 `tests/fixtures/fn-value-call-join-reclaimed-async` (a pending await parks the
-loop mid-way; not leak-checked, because a parked body's chains are never
-reaped, a pre-existing leak that is byte for byte the same before and after).
+loop mid-way; leak-checked since the async report above was fixed).
 Suite: `run.sh` 3623/0 (the full run's one failure was this fixture's own stale
 snapshot, re-run green), `run-leak-check.sh` 126 / 0 / 3 known-open, the JIT
 over the CPS, effect, multishot and async fixtures 176/0.

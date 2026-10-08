@@ -15,8 +15,9 @@ each 50 turns over a parked future. Before the fix they printed 90 / 91 / 82 /
 3626/0, turi 2670/0, JIT over the effect/async/CPS fixtures 312/0,
 leak-check 126/0/3 known.
 
-The leak noted under "Also seen here" is NOT fixed by this. It is open as
-[async-parked-body-chains-never-reaped](../reported/async-parked-body-chains-never-reaped.md).
+The leak noted under "Also seen here" was NOT fixed by this. It was filed as
+[async-parked-body-chains-never-reaped](async-parked-body-chains-never-reaped.md),
+since fixed too (it turned out not to depend on parking).
 
 **Severity: medium-high (silent wrong answer).** A function that `await`s,
 called through a function value from an `async` body, suspends only its own
