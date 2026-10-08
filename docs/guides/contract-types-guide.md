@@ -285,9 +285,9 @@ panic at div.tur:9: Contract violated by parameter 'd' in sdiv: (not= d 0)
 The location is the source file's name and line, in a compiled build and
 under `tur --interpret` alike. A parameter of a lambda is named `in fn`, and
 an instance method by its method name. A predicate longer than 160 characters
-is cut short with `...`. An `assert!` / `require!` / `ensure!` written in a
-body is an ordinary call to `tur-contract-check`, so its panic does not name
-your line. A contract predicate with side
+is cut short with `...`. An `assert!` / `require!` / `ensure!` (or a `-msg!`
+form) panics at the line it is used on -- and when your own macro wraps one, at
+the line your macro is used on. A contract predicate with side
 effects is rejected at compile time (`contract predicate has side effects;
 predicates must be pure`).
 

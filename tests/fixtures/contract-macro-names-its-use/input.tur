@@ -1,0 +1,14 @@
+;; panic-location-names-the-runtime-not-the-call-site: a contract macro
+;; (`assert!`, `require-msg!`, ...) panics at the macro use the program wrote.
+;; Its expansion is a call written in contract.tur's template, so it used to
+;; name the runtime helper.  A user macro that wraps one names ITS use (line
+;; 13 below), not the line of its own definition; an `assert!` handed to a
+;; stdlib macro (`when`) names the `assert!`.
+(defmacro check-pos [x] (require-msg! (> x 0) "must be positive"))
+
+(defn main [] : int
+  (let [n (list-length *args*)]
+    (when (= n 0) (assert! (= n 0)))
+    (println "assert held")
+    (check-pos (- n 1)))
+  0)

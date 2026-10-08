@@ -14,10 +14,21 @@ interpreter's native for it (`native_contract_check_at`) prints the same line
 where it used to print a bare `panic at`.  Pinned by
 `tests/fixtures/contract-failure-names-its-predicate` (`:pre`),
 `contract-post-failure-names-its-site` and
-`contract-param-refinement-names-its-site`, on both engines.  **Still open:**
-an `assert!` / `require!` / `ensure!` written in a body (a plain call to
-`tur-contract-check`, which has no site to pass), a panic raised inside the
-runtime (a bounds check), and direction 4 (`--panic-trace`).
+`contract-param-refinement-names-its-site`, on both engines.
+
+The contract MACROS too: `assert!`, `require!`, `ensure!` and the `-msg!`
+forms expand to `(tur-contract-check cond msg)` written in contract.tur's
+template, so the expanded call's own span is the template's.  `elab_call`
+rewrites that call to the -at form naming the macro use the program wrote
+(`elab_macro_use_site`, over a stack of the expansions in progress, each frame
+its call site and its macro's `defmacro` span): the innermost use that is not
+itself inside the template of the macro expanding around it.  So an `assert!`
+handed to `when` names the `assert!`, and a user macro wrapping
+`require-msg!` names the user macro's use.  Pinned by
+`tests/fixtures/contract-macro-names-its-use`.
+
+**Still open:** a panic raised inside the runtime (a bounds check), and
+direction 4 (`--panic-trace`).
 
 **Narrowed again 2026-10-07: direction 2 is done.** A failed contract's
 message names the kind of check, the function, where the predicate is
