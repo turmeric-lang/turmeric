@@ -3882,6 +3882,77 @@ static bool fn_is_tag_predicate_on(const Binding *fb, uint32_t pi) {
     return true;
 }
 
+static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int depth);
+
+/* Can a call of this function suspend or perform?  A closure taken out of the
+ * sum is freed when the caller's `let` ends; a continuation captured while it
+ * runs and resumed after that would call into a freed env.  Asked of the
+ * callee here and of the payload closure in let_binding_sum_closure_freeable:
+ * a runtime-pure inferred row and no `await`. */
+static bool fndef_cannot_suspend(const FnDef *fd) {
+    if (!fd || !fd->inferred_effect_row) return false;
+    if (!effect_row_is_runtime_pure(fd->inferred_effect_row)) return false;
+    return !cps_fn_may_await(fd);
+}
+
+/* The FnDef behind a callee binding: its source_fn_def link, else the
+ * program's own definition of it -- a top-level / module `defn`, or an
+ * instance's method impl (`__inst_Applicative_ap_Option` carries no link).
+ * The program comes from the EmitCtx let_binding_sum_closure_freeable was
+ * asked with; a one-entry cache covers the repeated question. */
+static EmitCtx *g_scp_ctx = NULL;
+static FnDef *scp_fndef_of(const Binding *fb) {
+    if (!fb) return NULL;
+    if (fb->source_fn_def) return (FnDef *)fb->source_fn_def;
+    static const Binding *last_b = NULL;
+    static FnDef *last_fd = NULL;
+    static const Expr *last_prog = NULL;
+    if (!g_scp_ctx || !g_scp_ctx->program_root) return NULL;
+    if (fb == last_b && last_prog == g_scp_ctx->program_root) return last_fd;
+    uint32_t n = 0;
+    const Expr **items = flatten_program_items(g_scp_ctx->program_root, &n);
+    FnDef *found = NULL;
+    for (uint32_t i = 0; items && i < n && !found; i++) {
+        const Expr *it = items[i];
+        if (!it) continue;
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn &&
+            it->as.fn_def_.fn->binding == fb) {
+            found = it->as.fn_def_.fn;
+        } else if (it->kind == EX_INSTANCE_DEF && it->as.instance_def_.instance) {
+            const TypeClassInstance *inst = it->as.instance_def_.instance;
+            for (uint32_t mi = 0; mi < inst->n_method_impls && !found; mi++)
+                if (inst->method_impls[mi] && inst->method_impls[mi]->binding == fb)
+                    found = inst->method_impls[mi];
+        }
+    }
+    free((void *)items);
+    last_b = fb; last_fd = found; last_prog = g_scp_ctx->program_root;
+    return found;
+}
+
+/* Does `fb` keep nothing of a closure carried in the sum it receives as param
+ * `pi`?  Its body (no inline C, cannot suspend) uses the param only as the
+ * scrutinee of a `match` whose arm binders are only invoked, as an argument to
+ * a tag predicate, or as an argument to a callee this same question answers
+ * for -- the walk is sum_closure_payload_escapes, with the param as the local.
+ * Memoized per FnDef; a recursive question reads the in-progress answer,
+ * which is "keeps", so a self-call never admits itself. */
+static bool fn_param_keeps_no_payload_closure(const Binding *fb, uint32_t pi) {
+    if (fb && fb->source_binding) fb = fb->source_binding;
+    FnDef *fd = scp_fndef_of(fb);
+    if (!fd || !fd->params || pi >= fd->n_params || pi >= 32 || !fd->body)
+        return false;
+    uint32_t bit = 1u << pi;
+    if (fd->sumcl_known & bit) return (fd->sumcl_nonretain & bit) != 0;
+    fd->sumcl_known |= bit;                 /* in progress: "keeps" */
+    bool ok = fndef_cannot_suspend(fd) &&
+              !expr_subtree_has_inline_c(fd->body) &&
+              fd->params[pi] &&
+              !sum_closure_payload_escapes(fd->body, fd->params[pi], 0);
+    if (ok) fd->sumcl_nonretain |= bit;
+    return ok;
+}
+
 static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int depth) {
     if (!x) return false;
     if (depth > 256) return true;
@@ -3934,9 +4005,17 @@ static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int dep
             for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
                 const Expr *a = x->as.call_.args[i];
                 while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+                /* Only a callee known HERE: a dictionary dispatch inside a
+                 * generic names a representative instance, not the one that
+                 * runs (emit_reresolve_method_fndef's whole reason to exist). */
+                bool static_callee = !x->as.call_.dict_arg ||
+                                     call_dispatch_is_static(x);
                 if (a && a->kind == EX_VAR && a->as.var.binding == b &&
-                    fn_is_tag_predicate_on(fb, i))
-                    continue;                   /* reads only the tag */
+                    static_callee &&
+                    (fn_is_tag_predicate_on(fb, i) ||
+                     fn_param_keeps_no_payload_closure(fb, i)))
+                    continue;                   /* reads only the tag, or
+                                                 * only calls what it matches out */
                 if (sum_closure_payload_escapes(x->as.call_.args[i], b, depth + 1))
                     return true;
             }
@@ -4005,6 +4084,7 @@ static bool sum_closure_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
 static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
                                              uint32_t i, const LetBindDecl *d) {
     const Binding *b = e->as.let_.bindings[i].binding;
+    g_scp_ctx = ctx;
     if (!b || e->kind != EX_LET || !d->plain || !d->bind_c ||
         strcmp(d->bind_c, "int64_t") == 0 || strchr(d->bind_c, '*') != NULL)
         return false;
@@ -4014,7 +4094,8 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
     if (!call_wraps_sole_arg_in_ctor(init)) return false;
     const Expr *a = peel_sum_payload_arg(init->as.call_.args[0]);
     if (!a || a->kind != EX_CLOSURE ||
-        !closure_env_drop_is_shallow(a->as.closure_.closure))
+        !closure_env_drop_is_shallow(a->as.closure_.closure) ||
+        !fndef_cannot_suspend(a->as.closure_.closure->fn))
         return false;
     if (sum_closure_payload_escapes(e->as.let_.body, b, 0)) return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++)

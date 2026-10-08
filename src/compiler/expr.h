@@ -1140,6 +1140,12 @@ struct FnDef {
      * the callee's continuation.  Written by cps_color_program; read through
      * cps_fn_may_await. */
     bool           may_await;
+    /* sum-closure-payload-never-dropped: lazily computed, emit side.  Bit i of
+     * sumcl_known says param i has been asked; bit i of sumcl_nonretain says
+     * the body keeps no closure taken out of the sum it receives there (see
+     * fn_param_keeps_no_payload_closure in emit_expr.c). */
+    uint32_t       sumcl_known;
+    uint32_t       sumcl_nonretain;
     /* CPS2: true when this function has been selected for the CPS emission path
      * (set by cps_propagate_coloring; mirrors may_capture but is a separate field
      * so the CPS emitter path can be toggled independently). */

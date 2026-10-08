@@ -10,8 +10,12 @@
 ;;
 ;;   returned        -- the Option leaves the let
 ;;   binder-escapes  -- the match arm returns the closure
-;;   passed-on       -- handed to another function
 ;;   kept-by-callee  -- handed to a callee that stores the closure it matches out
+;;   kept-deeper     -- handed to a callee that hands it to keep-opt
+;;   echoed          -- handed to a callee that returns the Option itself
+;;   recursive       -- handed to a self-recursive callee (never admitted)
+;;   c-callee        -- handed to a callee whose body is inline C (which could
+;;                      stash the closure where no walk can see it)
 ;;   aliased         -- `(let [g ff] ...)`
 
 (defn returned [k : int] : (Option (fn [int] int))
@@ -24,15 +28,6 @@
       (Some f) f
       (None) (fn [x : int] : int x))))
 
-(defn call-opt [o : (Option (fn [int] int)) v : int] : int
-  (match o
-    (Some f) (f v)
-    (None) 0))
-
-(defn passed-on [k : int] : int
-  (let [ff (some (fn [x : int] : int (+ x k)))]
-    (call-opt ff 10)))
-
 (defn keep-opt [o : (Option (fn [int] int)) v : (Vec (fn [int] int))] : int
   (match o
     (Some f) (do (vec-push! v f) 1)
@@ -41,6 +36,37 @@
 (defn kept-by-callee [k : int v : (Vec (fn [int] int))] : int
   (let [ff (some (fn [x : int] : int (+ x k)))]
     (keep-opt ff v)))
+
+(defn kept-deeper [k : int v : (Vec (fn [int] int))] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (+ 1 (keep-opt ff v))))
+
+(defn echo-opt [o : (Option (fn [int] int))] : (Option (fn [int] int)) o)
+
+(defn echoed [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (match (echo-opt ff)
+      (Some f) (f 2)
+      (None) 0)))
+
+(defn count-down [o : (Option (fn [int] int)) n : int] : int
+  (if (= n 0)
+    (match o (Some f) (f 0) (None) 0)
+    (count-down o (- n 1))))
+
+(defn recursive [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (count-down ff 3)))
+
+(defn c-stash [o : (Option (fn [int] int))] : int
+  ```c
+  (void)o;
+  return 1;
+  ```)
+
+(defn c-callee [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (+ 41 (c-stash ff))))
 
 (defn aliased [k : int] : int
   (let [ff (some (fn [x : int] : int (+ x k)))
@@ -52,9 +78,13 @@
 (defn main [] : int
   (println (match (returned 2) (Some f) (f 40) (None) 0))   ;; 42
   (println ((binder-escapes 40) 2))                          ;; 42
-  (println (passed-on 32))                                   ;; 42
   (println (aliased 39))                                     ;; 42
+  (println (echoed 40))                                      ;; 42
+  (println (recursive 42))                                   ;; 42
+  (println (c-callee 40))                                    ;; 1 + 41 = 42
   (let [v : (Vec (fn [int] int)) (vec-new)]
     (println (kept-by-callee 40 v))                          ;; 1
-    (println ((vec-get v 0) 2))                              ;; 42 -- the kept closure
+    (println (kept-deeper 10 v))                             ;; 2
+    (println ((vec-get v 0) 2))                              ;; 42 -- the kept closures
+    (println ((vec-get v 1) 32))                             ;; 42
     0))
