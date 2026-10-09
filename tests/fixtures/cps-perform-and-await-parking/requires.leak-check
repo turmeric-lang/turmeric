@@ -1,0 +1,1 @@
+perform and await in one function, pending futures freed by the driver: nothing else may leak

@@ -2079,6 +2079,8 @@ static bool perform_body_ok(const CTerm *t) {
     }
 }
 
+static bool await_cont_reset_ok(const CTerm *t);   /* fwd (defined below) */
+
 /* Track A (multi-suspension continuations): a perform continuation that is a
  * FULL CPS body containing a NESTED control op (a further `perform`) -- the
  * two-perform shape `(let [a (perform E)] (let [b (perform E)] (+ a b)))`.  It is
@@ -2147,6 +2149,21 @@ static bool perform_cont_reset_ok(const CTerm *t) {
                 if (!atom_ok(&t->as.perform.args[i])) return false;
             return perform_body_ok(t->as.perform.body)
                 || perform_cont_reset_ok(t->as.perform.body);
+        case CT_AWAIT:
+            /* perform-then-await: an `await` in the perform's continuation.  The
+             * resume-frame threads its run-time `__kont`, and emit_await inside
+             * it shifts to the root prompt against that chain -- the capture
+             * extends past the frame into the reinstalled-handler tail, so the
+             * parked continuation carries the handler too, exactly as an await
+             * under an enclosing handle does (cps-await-cont-baked-env).  Its
+             * own continuation is held to the await predicate, which rejects
+             * every tail call: the recursive-await hazard it guards against
+             * (cps-async-recursive-await-eviction) is the same here.  Until
+             * 2026-10-09 a function that performed and then awaited was
+             * refused outright (BODY-STRUCT-CORE on the perform). */
+            return atom_ok(&t->as.await.fut)
+                && (perform_body_ok(t->as.await.body)
+                    || await_cont_reset_ok(t->as.await.body));
         case CT_TAILCALL:
             /* E7 (cps-tramp-resume): admit a TAIL CALL in the perform continuation.
              * It lifts as a RESUME_FRAME whose rfn threads its run-time `rest` (the
@@ -2231,6 +2248,21 @@ static bool await_cont_reset_ok(const CTerm *t) {
             return true;
         case CT_AWAIT:
             return atom_ok(&t->as.await.fut) && await_cont_reset_ok(t->as.await.body);
+        case CT_PERFORM:
+            /* await-then-perform: a `perform` in the await's continuation.  The
+             * gap-2 resume-frame's `next` is the actual enclosing chain
+             * (dk_frame_resume_borrow), so emit_perform inside it hands
+             * dk_perform a frame spliced onto `__kont` and the walk finds the
+             * enclosing handler, in place or in the copy a park resumes.  Its
+             * arguments must be slot atoms (a __Shift receiver or a resumable
+             * payload stays out), and its own continuation is held to THIS
+             * predicate, so no tail call enters an await continuation through
+             * it.  Until 2026-10-09 a function that awaited and then performed
+             * was refused outright (BODY-STRUCT-CORE on the await). */
+            for (uint32_t i = 0; i < t->as.perform.n; i++)
+                if (!atom_ok(&t->as.perform.args[i])) return false;
+            return perform_body_ok(t->as.perform.body)
+                || await_cont_reset_ok(t->as.perform.body);
         default: return false;   /* CT_TAILCALL and any nested control op: evict */
     }
 }

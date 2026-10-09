@@ -1,5 +1,15 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-09 (fourth pass): a function that both performs an effect
+and awaits a future compiles.** Every ordering -- perform then await, await
+then perform, either under the function's own `handle` -- was refused
+outright at compile time ("this effect operation has no lowering here"),
+since neither continuation predicate admitted the other's control op; see
+"perform and await in one function" under "Fixed 2026-10-09". A loop whose
+turn performs and awaits inside ONE function (the recursive call in the
+await's continuation) is still refused, by the recursive-await design; put
+the recursion in the caller.
+
 **Narrowed 2026-10-09 (third pass): the struct-capturing shapes compile, and
 no silent wrong answer is left.** `fn_sig_ok` now admits a capturing lambda
 that may await even when it is not threadable, and a concrete aggregate
@@ -102,6 +112,40 @@ pending future -- overwriting the first park, which leaks (536 B under ASan)
 Pinned by `tests/fixtures/await-below-evicted-caller-or-nontail-resume`
 (leak-checked): the `k` callers, `t<N>` callers, a named and a capturing
 awaiter through a fn parameter, and shape 2.
+
+### perform and await in one function (fourth pass)
+
+`(let [t (perform (Tick))] (let [r (await (async (fn [] : int (+ k 1))))]
+(+ t r)))` was refused: `TUR_TRACE_CORE=1` names the `perform` (kind 10),
+whose continuation predicate (`perform_cont_reset_ok`,
+`src/compiler/emit_cps_ir.c`) admitted a nested `perform` but no `await`;
+the other order named the `await` (kind 11), whose predicate
+(`await_cont_reset_ok`) admitted a further `await` but no `perform`. Both
+continuations lift as the same resume-frame (`LH_RESUME_CONT`) threading a
+run-time `__kont`, and the frame body is emitted by the one term
+dispatcher, so admission was all that was missing:
+
+- a perform continuation admits an `await` whose own continuation passes
+  the await predicate -- the frame's `__kont` is the reinstalled-handler
+  tail, and the await's shift to the root prompt captures past the frame
+  into it, so a parked continuation carries the handler (the spine
+  unification of [cps-await-cont-baked-env](../archive/cps-await-cont-baked-env.md));
+- an await continuation admits a `perform` whose arguments are slot atoms
+  and whose own continuation passes the await predicate -- the frame's
+  `next` is the actual enclosing chain (`dk_frame_resume_borrow`), so
+  `dk_perform` walks it to the handler, in place or in the copy a park
+  resumes.
+
+The await predicate still rejects every tail call, so no recursion enters
+an await continuation through a perform either: a loop whose turn performs
+and awaits must keep its recursive call outside the awaiting function.
+
+Pinned by `tests/fixtures/cps-perform-and-await-ready` (ready futures, so
+`tur --interpret` runs it and agrees: each order, both under a handle, a
+nil-result effect between, a branch, a 100-turn loop, a counting handler)
+and `cps-perform-and-await-parking` (pending futures driven from inline C:
+perform-park-perform-park under a handler inside the async body, park then
+perform under a counting handler, a 50-turn loop; compiled only).
 
 ### Still open
 
