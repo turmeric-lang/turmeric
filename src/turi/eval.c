@@ -1434,6 +1434,7 @@ static DictBind *dict_bind_alloc(TuriEnv *env) {
     return db;
 }
 
+static void frame_release(TuriEnv *env, EvalFrame *f);
 static void eval_frame_free(EvalFrame *f) {
     /* Frames are intentionally not freed: closures may capture frame pointers
      * and outlive the scope that created them.  Worker processes are short-lived
@@ -2996,7 +2997,7 @@ static void fire_defers_to_mark(TuriEnv *env, DeferItem *mark,
         if (dframe) dframe->parent = fallback_frame;
         eval_expr(env, dframe, item->body);
 
-        eval_frame_free(item->snapshot);
+        frame_release(env, item->snapshot);   /* no-op if the body captured it */
         free(item);
     }
 
@@ -3069,7 +3070,7 @@ static void fire_defers_to_mark_by_scope(TuriEnv *env, DeferItem *mark,
             EvalFrame *dframe = item->snapshot;
             if (dframe) dframe->parent = fallback_frame;
             eval_expr(env, dframe, item->body);
-            eval_frame_free(item->snapshot);
+            frame_release(env, item->snapshot);   /* as above */
             free(item);
         }
     }
@@ -12457,8 +12458,11 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* (defer body) — register body to fire at enclosing function exit. */
     case EX_DEFER: {
-        /* Snapshot the captured bindings at defer-call time. */
-        EvalFrame *snap = eval_frame_new(env, NULL);
+        /* Snapshot the captured bindings at defer-call time.  A call frame's
+         * kind, so it is handed back when the defer has fired and nothing
+         * its body made captured it (turi-call-pins-and-side-frames-not-
+         * reclaimed: a defer per call kept ~100 B a call). */
+        EvalFrame *snap = eval_frame_new_call(env, NULL);
         for (uint8_t i = 0; i < e->as.defer_.n_captures; i++) {
             Binding *b = e->as.defer_.captures[i];
             TuriValue v = eval_lookup(env, frame, b->name->name);

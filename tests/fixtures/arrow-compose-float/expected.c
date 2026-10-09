@@ -6356,19 +6356,10 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void);
 static void * _____spec__void___int64_t_int64_t(int64_t, int64_t);
 static double __fn_48__spec__double_void___double(void *, double);
 
+static void __defer_220(void *__env);
 struct __defer_env_214 {int64_t m; };
 
-static void __defer_220(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_215(void *__env) {
-    struct __defer_env_214 *__e = (struct __defer_env_214 *)__env;
-    bool __ps_286 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_286);
-}
-
+static void __defer_215(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -11008,6 +10999,18 @@ static void * _____spec__void___int64_t_int64_t(int64_t f, int64_t g) {
             __t282 = __t285;
         }
         return __t282;
+}
+
+
+static void __defer_220(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_215(void *__env) {
+    struct __defer_env_214 *__e = (struct __defer_env_214 *)__env;
+    bool __ps_286 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_286);
 }
 
 

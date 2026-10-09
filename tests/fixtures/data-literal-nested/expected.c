@@ -6361,19 +6361,10 @@ static int64_t tur_rc_value___spec__int64_t_const_void____h1(const void *);
 static tur_adt_Map__sym__Set__int * map_assoc_eq_o__spec__tur_adt_Map__sym__Set__int___tur_adt_Map__sym__Set__int___int64_t_int64_t_int64_t_int64_t_int64_t(tur_adt_Map__sym__Set__int *, int64_t, int64_t, int64_t, int64_t, int64_t);
 static tur_adt_Map__sym__Set__int * tur_map_kcheck__spec__tur_adt_Map__sym__Set__int___tur_adt_Map__sym__Set__int___const_void__(tur_adt_Map__sym__Set__int *, const void *);
 
+static void __defer_168(void *__env);
 struct __defer_env_162 {int64_t m; };
 
-static void __defer_168(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_163(void *__env) {
-    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_246 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_246);
-}
-
+static void __defer_163(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -10489,6 +10480,18 @@ static tur_adt_Map__sym__Set__int * map_assoc_eq_o__spec__tur_adt_Map__sym__Set_
 
 static tur_adt_Map__sym__Set__int * tur_map_kcheck__spec__tur_adt_Map__sym__Set__int___tur_adt_Map__sym__Set__int___const_void__(tur_adt_Map__sym__Set__int * m, const void * k) {
         return m;
+}
+
+
+static void __defer_168(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_163(void *__env) {
+    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
+    bool __ps_246 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_246);
 }
 
 

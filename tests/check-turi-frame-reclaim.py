@@ -36,6 +36,12 @@ frames it captured -- ~2.8 KB a perform, 556 MB for 200,000 on a Release
 tur.  The one-shot fast path runs the slice in place and frees all of it at
 the resume.  Same 16 MB bound.
 
+A fifth pins the defer snapshot from turi-call-pins-and-side-frames-not-
+reclaimed: a function with a `defer` called 300,000 times.  Each defer
+snapshots its captures in a frame of its own, which used to stay in the pool
+after the defer fired -- 30 MB of growth on a Debug tur, none now.  Same
+16 MB bound.
+
 usage: python3 tests/check-turi-frame-reclaim.py [TUR]   (default ./build/tur)
 """
 import os
@@ -86,6 +92,15 @@ PERFORM_PROGRAM = """(defeffect Ask [] :int)
 """
 PERFORM_EXPECTED = "100000\n"
 
+DEFER_PROGRAM = """(defn f [i : int] : int
+  (defer (+ i 1))
+  i)
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (f i)))))
+(defn main [] : int (println (lp 300000 0)) 0)
+"""
+DEFER_EXPECTED = "45000150000\n"
+
 
 def run(src, reclaim, asan="detect_leaks=0"):
     env = dict(os.environ)
@@ -134,6 +149,10 @@ def main():
         with open(perf, "w") as f:
             f.write(PERFORM_PROGRAM)
         out_perf, st_perf, rss_perf = run(perf, True, noq)
+        dfr = os.path.join(d, "defer.tur")
+        with open(dfr, "w") as f:
+            f.write(DEFER_PROGRAM)
+        out_dfr, st_dfr, rss_dfr = run(dfr, True, noq)
     ok = True
     for label, out, st in (("reclaim on", out_on, st_on),
                            ("reclaim off", out_off, st_off)):
@@ -185,6 +204,18 @@ def main():
         ok = False
     else:
         print("PASS check-turi-frame-reclaim: %s" % fmsg)
+    grow_dfr = rss_dfr - rss_pins_idle
+    dmsg = ("defers: peak RSS %.0f MB, %.0f MB idle, growth %.0f MB (bound %d)"
+            % (rss_dfr, rss_pins_idle, grow_dfr, ARGS_GROWTH_MB))
+    if st_dfr != 0 or out_dfr != DEFER_EXPECTED:
+        print("FAIL check-turi-frame-reclaim: defer program printed %r (status %d), want %r"
+              % (out_dfr, st_dfr, DEFER_EXPECTED))
+        ok = False
+    elif grow_dfr > ARGS_GROWTH_MB:
+        print("FAIL check-turi-frame-reclaim: %s -- a fired defer keeps its snapshot" % dmsg)
+        ok = False
+    else:
+        print("PASS check-turi-frame-reclaim: %s" % dmsg)
     return 0 if ok else 1
 
 

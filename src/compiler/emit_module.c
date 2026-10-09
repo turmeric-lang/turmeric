@@ -20230,7 +20230,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
      * extern-c functions or forward-declared Turmeric functions). */
-    emit_pending_defer_thunks(&ctx, &defer_thunks);
+    Buf defer_thunk_defs; buf_init(&defer_thunk_defs);
+    emit_pending_defer_thunks(&ctx, &defer_thunks, &defer_thunk_defs);
     Buf concrete_adt_apps; buf_init(&concrete_adt_apps);
     type_codegen_emit_adt_apps(&concrete_adt_apps);
     /* SYM1: interned runtime symbol records (struct __tur_sym + one per keyword).
@@ -20257,7 +20258,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      *  3. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
      *  4. extern_decls - user extern-c declarations
      *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  6. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
+     *  6. defer_thunks - defer env structs and thunk prototypes (the thunk
+ *                    bodies follow `file`: they may name its globals)
      *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
      *  8. file        - Turmeric function definitions (can reference handler fns by name)
      *  9. main()      - entry point body
@@ -20320,6 +20322,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
+    /* Defer thunk bodies: after the globals in `file`, which they may name. */
+    if (defer_thunk_defs.len) { buf_write(out, defer_thunk_defs.data, defer_thunk_defs.len); buf_putc(out, '\n'); }
+    buf_free(&defer_thunk_defs);
 
     if (split_lib) {
         /* r7rs-programs-compile-slowly: the library unit has no entry point;
@@ -21855,7 +21860,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * __defer_env_N`.  Written before `file` in the assembly so the thunk
      * functions and their env structs precede the bodies that reference them. */
     Buf impl_defer_thunks; buf_init(&impl_defer_thunks);
-    emit_pending_defer_thunks(&ctx, &impl_defer_thunks);
+    Buf impl_defer_thunk_defs; buf_init(&impl_defer_thunk_defs);
+    emit_pending_defer_thunks(&ctx, &impl_defer_thunks, &impl_defer_thunk_defs);
 
     /* Phase M5: emit module-level defer thunks + atexit constructor. */
     if (n_module_defers > 0) {
@@ -21931,6 +21937,9 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     if (impl_defer_thunks.len) { buf_write(out, impl_defer_thunks.data, impl_defer_thunks.len); buf_putc(out, '\n'); }
     buf_free(&impl_defer_thunks);
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
+    /* Defer thunk bodies: after the globals in `file`, which they may name. */
+    if (impl_defer_thunk_defs.len) { buf_write(out, impl_defer_thunk_defs.data, impl_defer_thunk_defs.len); buf_putc(out, '\n'); }
+    buf_free(&impl_defer_thunk_defs);
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");

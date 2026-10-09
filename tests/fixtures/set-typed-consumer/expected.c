@@ -6279,19 +6279,10 @@ static bool set_eq_full__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_ad
 static bool set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_adt_Set__int *, tur_adt_Set__int *);
 static int64_t set_hamt__spec__int64_t_tur_adt_Set__int__(tur_adt_Set__int *);
 
+static void __defer_168(void *__env);
 struct __defer_env_162 {int64_t m; };
 
-static void __defer_168(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_163(void *__env) {
-    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_215 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_215);
-}
-
+static void __defer_163(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -10192,6 +10183,18 @@ static bool set_eq_driver__spec__bool_tur_adt_Set__int___tur_adt_Set__int__(tur_
 
 static int64_t set_hamt__spec__int64_t_tur_adt_Set__int__(tur_adt_Set__int * s) {
         struct { void *hamt; } *set = (void*)(intptr_t)s; return (int64_t)(intptr_t)set->hamt; 
+}
+
+
+static void __defer_168(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_163(void *__env) {
+    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
+    bool __ps_215 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_215);
 }
 
 

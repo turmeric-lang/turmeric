@@ -2424,23 +2424,29 @@ void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
 }
 
 /* Phase 4 v1: Emit all registered defer thunks to the output buffer */
-void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
+/* `decls` gets each thunk's env struct and prototype, `out` its definition.
+ * The definitions go after the program's file-scope globals, which a defer
+ * body may read or `set!` -- before them, `(defer (set! g ...))` named a
+ * global not yet declared (invalid C) -- and the prototypes before the
+ * bodies that push the thunks. */
+void emit_pending_defer_thunks(EmitCtx *ctx, Buf *decls, Buf *out) {
     /* First pass: emit env struct definitions for thunks with captures */
     DeferThunk *thunk = ctx->pending_defer_thunks;
     while (thunk) {
         if (thunk->env_name) {
             /* Emit env struct type definition */
-            buf_printf(out, "struct %s {", thunk->env_name);
+            buf_printf(decls, "struct %s {", thunk->env_name);
             for (uint8_t i = 0; i < thunk->n_captures; i++) {
-                if (i > 0) buf_puts(out, "; ");
+                if (i > 0) buf_puts(decls, "; ");
                 Binding *captured = thunk->captures[i];
                 char *field = raw_name_for_binding(captured);
-                buf_printf(out, "%s %s",
+                buf_printf(decls, "%s %s",
                            type_c_name(captured->type), field);
                 free(field);
             }
-            buf_puts(out, "; };\n\n");
+            buf_puts(decls, "; };\n\n");
         }
+        buf_printf(decls, "static void %s(void *__env);\n", thunk->name);
         thunk = thunk->next;
     }
     

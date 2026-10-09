@@ -6294,19 +6294,10 @@ static tur_adt_Option__int some__spec__tur_adt_Option__int_int64_t(int64_t);
 static int64_t unwrap__spec__int64_t_tur_adt_Option__int(tur_adt_Option__int);
 static tur_adt_Option__int none__spec__tur_adt_Option__int(void);
 
+static void __defer_168(void *__env);
 struct __defer_env_162 {int64_t m; };
 
-static void __defer_168(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_163(void *__env) {
-    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_192 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_192);
-}
-
+static void __defer_163(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -10216,6 +10207,18 @@ static tur_adt_Option__int none__spec__tur_adt_Option__int(void) {
         tur_adt_Option__int __ps_191 = (ctor_Option_None__int());
         if (tur_panicking) return (tur_adt_Option__int){0};
         return __ps_191;
+}
+
+
+static void __defer_168(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_163(void *__env) {
+    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
+    bool __ps_192 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_192);
 }
 
 

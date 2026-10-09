@@ -1,0 +1,29 @@
+;; A `defer` body that reads or `set!`s a file-scope global.  The compiled
+;; path emitted defer thunk bodies ahead of the program's globals, so
+;; `(defer (set! saved ...))` named `saved` before its declaration: invalid C.
+;; The thunk bodies now follow the globals; their prototypes stay ahead of
+;; the functions that push them.  A defer body that builds a closure over its
+;; snapshot keeps working too (the interpreter now hands a fired defer's
+;; snapshot back unless something captured it).
+
+(def ^mut saved : int 0)
+
+(defn f [i : int] : int
+  (defer (set! saved (+ saved i)))
+  i)
+
+(defn g [i : int v : (Vec (fn [] int))] : int
+  (defer (vec-push! v (fn [] : int (* i 10))))
+  i)
+
+(defn main [] : int
+  (println (+ (f 1) (f 2) (f 3)))   ; 6, and the defers add 1 + 2 + 3
+  (println saved)                   ; 6
+  (let [v : (Vec (fn [] int)) (vec-new)]
+    (g 4 v)
+    (g 5 v)
+    (f 100)
+    (println ((vec-get v 0)))       ; 40
+    (println ((vec-get v 1))))      ; 50
+  (println saved)                   ; 106
+  0)

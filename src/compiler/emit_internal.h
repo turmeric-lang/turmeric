@@ -1414,7 +1414,7 @@ char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
                           Binding **captures, uint8_t n_captures,
                           const char *env_name);
-void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
+void emit_pending_defer_thunks(EmitCtx *ctx, Buf *decls, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
 /* separator-fold-collides-emitted-c-names: injective spelling for ADT and

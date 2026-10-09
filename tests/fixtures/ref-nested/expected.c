@@ -6254,31 +6254,14 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void);
 
 struct __defer_env_182 {void * outer; };
 
+static void __defer_183(void *__env);
 struct __defer_env_179 {void * inner; };
 
+static void __defer_180(void *__env);
+static void __defer_168(void *__env);
 struct __defer_env_162 {int64_t m; };
 
-static void __defer_183(void *__env) {
-    struct __defer_env_182 *__e = (struct __defer_env_182 *)__env;
-    free(__e->outer);
-}
-
-static void __defer_180(void *__env) {
-    struct __defer_env_179 *__e = (struct __defer_env_179 *)__env;
-    free(__e->inner);
-}
-
-static void __defer_168(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_163(void *__env) {
-    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
-    bool __ps_187 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_187);
-}
-
+static void __defer_163(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -10033,6 +10016,28 @@ static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
   v->cap = 0;
   return (tur_adt_Vec__int *)(intptr_t)v;
   
+}
+
+
+static void __defer_183(void *__env) {
+    struct __defer_env_182 *__e = (struct __defer_env_182 *)__env;
+    free(__e->outer);
+}
+
+static void __defer_180(void *__env) {
+    struct __defer_env_179 *__e = (struct __defer_env_179 *)__env;
+    free(__e->inner);
+}
+
+static void __defer_168(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_163(void *__env) {
+    struct __defer_env_162 *__e = (struct __defer_env_162 *)__env;
+    bool __ps_187 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_187);
 }
 
 

@@ -6478,19 +6478,10 @@ static tur_adt_Map__int__Point * tur_map_kcheck__spec__tur_adt_Map__int__Point__
 static tur_adt_Map__int__Point * map_new__spec__tur_adt_Map__int__Point__(void);
 static void show_line__spec__void_tur_adt_Point(tur_adt_Point);
 
+static void __defer_202(void *__env);
 struct __defer_env_196 {int64_t m; };
 
-static void __defer_202(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_197(void *__env) {
-    struct __defer_env_196 *__e = (struct __defer_env_196 *)__env;
-    bool __ps_289 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_289);
-}
-
+static void __defer_197(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -11441,6 +11432,18 @@ static void show_line__spec__void_tur_adt_Point(tur_adt_Point x) {
             puts(__ps_288);
             string_slrelease((void *)(intptr_t)(s_453));
         }
+}
+
+
+static void __defer_202(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_197(void *__env) {
+    struct __defer_env_196 *__e = (struct __defer_env_196 *)__env;
+    bool __ps_289 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_289);
 }
 
 

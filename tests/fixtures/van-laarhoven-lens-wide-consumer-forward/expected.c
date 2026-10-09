@@ -6363,19 +6363,10 @@ static tur_adt_Point * set_px__lens_29dc1a87dc9f86df(int64_t, tur_adt_Point *);
 static tur_adt_Point * tweak__lens_89e16e7f8669ca4e(int64_t, tur_adt_Point *);
 static tur_adt_Point * tweak__lens_29dc1a87dc9f86df(int64_t, tur_adt_Point *);
 
+static void __defer_184(void *__env);
 struct __defer_env_178 {int64_t m; };
 
-static void __defer_184(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_179(void *__env) {
-    struct __defer_env_178 *__e = (struct __defer_env_178 *)__env;
-    bool __ps_229 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_229);
-}
-
+static void __defer_179(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -10361,6 +10352,18 @@ static tur_adt_Point * tweak__lens_89e16e7f8669ca4e(int64_t b, tur_adt_Point * s
 static tur_adt_Point * tweak__lens_29dc1a87dc9f86df(int64_t b, tur_adt_Point * s) {
         TUR_MUSTTAIL_SELF(tweak__lens_29dc1a87dc9f86df);
         TUR_MUSTTAIL return set_px__lens_29dc1a87dc9f86df(b, (tur_adt_Point *)(intptr_t)(s));
+}
+
+
+static void __defer_184(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_179(void *__env) {
+    struct __defer_env_178 *__e = (struct __defer_env_178 *)__env;
+    bool __ps_229 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_229);
 }
 
 

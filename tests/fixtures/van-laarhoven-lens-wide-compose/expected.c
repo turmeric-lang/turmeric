@@ -6445,19 +6445,10 @@ static tur_adt_Identity__Point __fn_56__byval(void *, tur_adt_Point *);
 static tur_adt_Identity__Line line_a_x__mono_19a433877f08106f(int64_t, int64_t);
 static tur_adt_Identity__Point __fn_56__byval(void *, tur_adt_Point *);
 
+static void __defer_207(void *__env);
 struct __defer_env_201 {int64_t m; };
 
-static void __defer_207(void *__env) {
-    untrailed_hyend();
-}
-
-static void __defer_202(void *__env) {
-    struct __defer_env_201 *__e = (struct __defer_env_201 *)__env;
-    bool __ps_275 = (bt_hyundo_hyto_ex(__e->m));
-    /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_275);
-}
-
+static void __defer_202(void *__env);
 
 static bool __inst_Eq_eq_qu_int(int64_t x, int64_t y) {
         return (x) == (y);
@@ -10660,6 +10651,18 @@ static tur_adt_Identity__Line line_a_x__mono_19a433877f08106f(int64_t g, int64_t
         tur_adt_Identity__Line __ps_274 = (line_a__mono_26f1991df1b6def6((int64_t)(intptr_t)(__t273), (int64_t)(intptr_t)(s)));
         if (tur_panicking) return (tur_adt_Identity__Line){0};
         return __ps_274;
+}
+
+
+static void __defer_207(void *__env) {
+    untrailed_hyend();
+}
+
+static void __defer_202(void *__env) {
+    struct __defer_env_201 *__e = (struct __defer_env_201 *)__env;
+    bool __ps_275 = (bt_hyundo_hyto_ex(__e->m));
+    /* panic-return-signal: ret ctype unknown; no propagation here */
+    (void)(__ps_275);
 }
 
 
