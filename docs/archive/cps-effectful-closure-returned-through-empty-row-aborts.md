@@ -50,7 +50,7 @@ that handles its own effect builds and prints 14).
 
 Not covered: a CAPTURING closure that handles its own effect and is
 returned is refused, before and after this change
-([cps-capturing-closure-with-handle-returned-refused](../reported/cps-capturing-closure-with-handle-returned-refused.md)).
+([cps-capturing-closure-with-handle-returned-refused](cps-capturing-closure-with-handle-returned-refused.md)).
 `--strict-effects` still attributes the closure's effect to `adder` itself
 (below); that is a diagnostics wording issue and is not filed.
 

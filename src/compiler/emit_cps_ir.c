@@ -3253,7 +3253,8 @@ static bool fn_sig_ok(const FnDef *fd) {
         /* ...or one that may await: off the CPS path its await parks at the
          * wrong root (await-parks-only-to-the-nearest-c-frame), so the direct
          * path is the one that cannot run it. */
-        if (!threadable_has(fd->binding) && !cps_fn_may_await(fd)) return false;
+        if (!threadable_has(fd->binding) && !cps_fn_may_await(fd)
+            && !cps_fn_installs_handle(fd)) return false;
         for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
             const Binding *cap = fd->closure->captures[ci];
             if (!cap || cap->is_global) continue;
@@ -3958,6 +3959,13 @@ typedef struct {
     /* Multi-target E2 tallies (FvMulti, above): set in place of
      * count_target / count_out / thr_ok / thr_tier by fv_multi_tally. */
     const FvMulti *multi;
+    /* cps-capturing-closure-with-handle-returned-refused: do not descend into
+     * a lambda's body (EX_CLOSURE / EX_FN).  The lambda is lifted to its own
+     * top-level FnDef and classified as its own entry, so the base-taint seed
+     * of an enclosing fn that is never CPS-emitted must not take on what the
+     * LAMBDA performs or handles -- a returned closure's own `handle` made its
+     * effect permanently fiber through the uncolored function that built it. */
+    bool skip_lifted_bodies;
 } EffAcc;
 
 /* E2 param-threading tiers -- how ready a HOF param is to thread the DK to the
@@ -4450,11 +4458,13 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 int sl = fvm_slot(acc->multi, e->as.closure_.closure->fn->binding);
                 if (sl >= 0) acc->multi->total[sl]++;
             }
-            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+            if (e->as.closure_.closure && e->as.closure_.closure->fn
+                && !acc->skip_lifted_bodies)
                 REC(e->as.closure_.closure->fn->body);
             return;
         case EX_FN_DEF: if (e->as.fn_def_.fn) REC(e->as.fn_def_.fn->body); return;
-        case EX_FN:     if (e->as.fn_.fn)     REC(e->as.fn_.fn->body);     return;
+        case EX_FN:     if (e->as.fn_.fn && !acc->skip_lifted_bodies) REC(e->as.fn_.fn->body);
+                        return;
         /* A fn-VALUE USE: referencing a top-level (colored) fn as a value -- to
          * pass it as a higher-order argument, store it, or return it -- means that
          * fn may be CALLED downstream through the value.  Record it as a reachable
@@ -4513,7 +4523,13 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
  * every existing caller uses.  Perform and handle tags fold into the same set. */
 static void expr_collect_effects(const Expr *e, uint64_t *lo, uint64_t *hi) {
     EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
-                   NULL, NULL, NULL, false, NULL };
+                   NULL, NULL, NULL, false, NULL, false };
+    expr_collect_effects_acc(e, &acc);
+}
+/* The same, for the base-taint seed: a lambda's body is its own entry's. */
+static void expr_collect_effects_base(const Expr *e, uint64_t *lo, uint64_t *hi) {
+    EffAcc acc = { lo, hi, lo, hi, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL,
+                   NULL, NULL, NULL, false, NULL, true };
     expr_collect_effects_acc(e, &acc);
 }
 
@@ -4722,7 +4738,7 @@ static bool letraw_effect_free(const CTerm *t) {
      * this gate exists for (its effect would run on the fiber, escaping the
      * handle's DK prompt). */
     EffAcc acc = { &lo, &hi, &lo, &hi, callees, &nc, 64, &ov,
-                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true, NULL };
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true, NULL, false };
     expr_collect_effects_acc(t->as.letraw.e, &acc);
     if (lo || hi || ov) return false;
     for (int i = 0; i < nc; i++)
@@ -4762,7 +4778,7 @@ static int expr_count_all_uses(const Expr *e, const Binding *b) {
     int n = 0;
     uint64_t dl = 0, dh = 0;
     EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL, b, &n, NULL, NULL,
-                   b, &n, NULL, false, NULL };
+                   b, &n, NULL, false, NULL, false };
     expr_collect_effects_acc(e, &acc);
     return n;
 }
@@ -5405,7 +5421,7 @@ static void fv_multi_tally(const Expr *program, FvMulti *m) {
         const Expr *body = (it->kind == EX_FN_DEF && it->as.fn_def_.fn)
                          ? it->as.fn_def_.fn->body : it;
         EffAcc acc = { &dl, &dh, &dl, &dh, NULL, NULL, 0, NULL,
-                       NULL, NULL, program, NULL, NULL, NULL, NULL, false, m };
+                       NULL, NULL, program, NULL, NULL, NULL, NULL, false, m, false };
         expr_collect_effects_acc(body, &acc);
         (void)expr_stores_fnval_in_struct(body, m);
     }
@@ -5946,7 +5962,7 @@ static void ensure_S(const Expr *program) {
                 en->edges = NULL; en->edges_all = false;
                 EffAcc acc = { &en->perf_lo, &en->perf_hi,
                                &en->hand_lo, &en->hand_hi, NULL, NULL, 0, NULL,
-                               NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL };
+                               NULL, NULL, NULL, NULL, NULL, NULL, NULL, false, NULL, false };
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo | fv_esc_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi | fv_esc_hi;
@@ -5965,8 +5981,9 @@ static void ensure_S(const Expr *program) {
                 g_ents_n++;
                 continue;
             }
-            /* uncolored (or binding-less) fn: its effects are always fiber. */
-            if (fd->body) expr_collect_effects(fd->body, &base_lo, &base_hi);
+            /* uncolored (or binding-less) fn: its effects are always fiber --
+             * its own, not those of a lambda it builds (lifted, its own entry). */
+            if (fd->body) expr_collect_effects_base(fd->body, &base_lo, &base_hi);
             continue;
         }
         /* non-fn top-level item (e.g. a def whose init performs). */
@@ -5991,7 +6008,7 @@ static void ensure_S(const Expr *program) {
         uint64_t scratch_lo = 0, scratch_hi = 0;
         EffAcc acc = { &scratch_lo, &scratch_hi, &scratch_lo, &scratch_hi,
                        cbuf, &ncb, CALLEE_CAP, &overflow, NULL, NULL, NULL, NULL,
-                       NULL, NULL, NULL, false, NULL };
+                       NULL, NULL, NULL, false, NULL, false };
         expr_collect_effects_acc(g_ents[i].fd->body, &acc);
         g_ents[i].edges_all = overflow;
         for (int k = 0; k < ncb; k++)

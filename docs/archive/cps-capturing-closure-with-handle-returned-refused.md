@@ -1,13 +1,13 @@
 # A returned capturing closure that handles its own effect is refused
 
-**Narrowed 2026-10-09: the second shape (below) is fixed; the first is
-open.** The second was never about closures: its handling function had a
+**RESOLVED 2026-10-09.** Both shapes compile; see "Fixed: shape 1" at the
+end. The second shape was never about closures: its handling function had a
 parameter named `k`.
 
 **Severity: low** (a refusal, not a miscompile: the build fails with a
 located error, and `tur --interpret` runs the program).  Found 2026-10-08
 while resolving
-[cps-effectful-closure-returned-through-empty-row-aborts](../archive/cps-effectful-closure-returned-through-empty-row-aborts.md);
+[cps-effectful-closure-returned-through-empty-row-aborts](cps-effectful-closure-returned-through-empty-row-aborts.md);
 it reproduces identically on the compiler before that change.
 
 ## Repro
@@ -103,10 +103,30 @@ effect it handles off the backend, so the refusal was certain. Pinned by
 `(defn run-with [k : int] ...)` handling a named callee's `perform` -- refused
 the same way before.
 
-### Still open: shape 1
+### Fixed: shape 1 (2026-10-09)
 
-The returned capturing closure is not in the threadable set, so `fn_sig_ok`
-rejects it before any name rule. Admitting it when it installs a `handle`
-(tried 2026-10-09) only moves the eviction: it is then `SIG-TAINT`, along
-with `ask`, from a permanent fiber source the trace does not name. That
-source is the next thing to find.
+Two changes, both needed:
+
+- **Admission.** A capturing lambda went to the CPS backend only when
+  threadable, i.e. passed to a threading parameter. One that installs a
+  `handle` (`cps_fn_installs_handle`) is admitted too (`fn_sig_ok`,
+  `src/compiler/emit_cps_ir.c`). Evicted, its `handle` took the effect off
+  the backend, because a non-candidate's effect set counts what it handles.
+- **The unnamed permanent source.** With the lambda admitted, it and `ask`
+  were `SIG-TAINT` from the BASE taint: `adder` performs nothing itself, so
+  it is uncolored, and the base-taint seed of an uncolored function
+  (`expr_collect_effects`) descended into the closure literal's body. The
+  lambda's `handle` of `Ask` therefore counted as fiber code. The lambda is
+  lifted to its own top-level FnDef and classified as its own entry, so the
+  seed now leaves its body alone (`expr_collect_effects_base`,
+  `EffAcc.skip_lifted_bodies`).
+
+A returned closure whose effect ESCAPES (no `handle` inside) is still
+refused: it is an unthreaded fn value, a permanent fiber source of its own.
+
+Pinned by `tests/fixtures/cps-returned-capturing-closure-handles-own-effect`.
+It covers the repro, two instances of a closure whose resumed value depends
+on its capture (let-bound, called through a parameter and directly), and the
+same effect performed and handled elsewhere. It equals `tur --interpret`, is
+leak-checked, and passes the JIT harness and fnsan. The fixture suite, the
+leak harness and the fuzzer (seed 3333: 282 ok, no bug) are unchanged.

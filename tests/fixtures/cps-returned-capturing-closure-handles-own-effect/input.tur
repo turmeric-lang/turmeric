@@ -1,0 +1,34 @@
+;; cps-capturing-closure-with-handle-returned-refused (shape 1): a RETURNED
+;; capturing closure that handles its own effect was refused ("no lowering
+;; here").  The lambda was not threadable (it is returned, not passed to a
+;; threading parameter), so it stayed off the CPS backend, and a
+;; non-candidate's effect set counts what it handles.  Worse, the base-taint
+;; seed of the uncolored function that BUILDS it walked into its body, so its
+;; `handle` made `Ask` permanently fiber.  A capturing lambda that installs a
+;; handle is admitted now, and the base-taint seed leaves a lambda's body to
+;; the lambda's own entry.  An escaping effect (no handle inside) stays
+;; refused.  Every line equals `tur --interpret`.
+(defeffect Ask [] :int)
+(defn ask [] : int (perform (Ask)))
+(defn app1 [h : (fn [int] int) x : int] : int (h x))
+
+;; the report's repro
+(defn adder [m : int] : (fn [int] int)
+  (fn [x : int] : int
+    (handle (+ m x (ask))
+      (Ask [] k) (resume k 10))))
+
+;; the resumed value depends on the capture
+(defn scaled [m : int] : (fn [int] int)
+  (fn [x : int] : int
+    (handle (+ m x (ask))
+      (Ask [] k) (resume k (* m 10)))))
+
+(defn main [] : int
+  (println (app1 (adder 3) 1))
+  (let [a (scaled 3)
+        b (scaled 4)]
+    (println (+ (app1 a 1) (app1 b 2) (a 5))))
+  ;; the effect is still performed and handled normally elsewhere
+  (println (handle (+ 1 (ask)) (Ask [] k) (resume k 100)))
+  0)
