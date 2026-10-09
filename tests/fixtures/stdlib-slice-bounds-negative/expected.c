@@ -2140,6 +2140,7 @@ struct DK {
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
     bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
     bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */
+    bool resume_into;    /* case resumes `k` only into the chain: sub needs no markers */
     bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
     int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);
                         * distinguishes this handle's cases from an enclosing
@@ -2153,6 +2154,7 @@ struct DK {
     bool orphan_env;   /* ...and the shift that parked was its only copy */
     bool env_owned;    /* this copy owns a private copy of the env */
     uint16_t env_size; /* sizeof the env struct, 0 when unknown */
+    bool resume_cut;   /* dk_perform's sub: the resumed part ends here */
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -2229,6 +2231,8 @@ static DK *dk_handler_shallow(int tag, DKHandler fn, intptr_t env, DK *next) {
  * the dk_handler ctors: dk_case_delivers(dk_handler(...)). */
 __attribute__((unused))
 static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }
+__attribute__((unused))
+static DK *dk_case_resumes_into(DK *k) { k->case_delivers = true; k->resume_into = true; return k; }
 /* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry
  * driver instead of resuming inline, keeping deep effectful recursion flat. */
 static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
@@ -2303,6 +2307,7 @@ static DK *dk_copy_node(const DK *n) {
     c->tail_inplace = n->tail_inplace;
     c->hgroup = n->hgroup;
     c->case_delivers = n->case_delivers;
+    c->resume_into = n->resume_into;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -2729,6 +2734,21 @@ static intptr_t dk_invoke(DK *sub, intptr_t w) {
     intptr_t r = dk_run_impl(c, w, false);
     dk_free(c); return r;
 }
+__attribute__((unused))
+static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {
+    const DK *cut = sub;
+    while (cut && !cut->resume_cut) cut = cut->next;
+    DK *c = cut && cut != sub ? dk_copy_range(sub, cut) : NULL;
+    if (!c) {   /* not dk_perform's sub: resume it on the C stack */
+        if (!borrow) __dk_reap_node(tail);
+        return dk_run(tail, dk_invoke(sub, v));
+    }
+    DK *last = c;
+    while (last->next) last = last->next;
+    last->next = tail; last->borrow_next = borrow != 0;
+    __dk_reap_keep(c);   /* a tail resume inside may yield past this frame */
+    return dk_run(c, v);
+}
 /* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *
  * A tail-resume handler does not resume inline (which nests ~160 B of C stack
  * per resumed perform -> O(N)); instead dk_perform yields the resumed chain to
@@ -2823,9 +2843,9 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
     }
     DK *sub = dk_copy_range(k, H);
-    DK *tail;
+    DK *tail, *encl;
     if (H->shallow) {
-        tail = dk_copy_enclosing_handlers(H->next);
+        tail = encl = H->resume_into ? dk_done() : dk_copy_enclosing_handlers(H->next);
     } else {
         /* Deep: re-install H AND its consecutive SIBLING handlers -- the rest of
          * this handle's dk_handler group (a multi-effect handle emits one
@@ -2848,8 +2868,10 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
          * `unhandled effect`.  dk_copy_enclosing_handlers(ge) copies the outer
          * HANDLER markers past this handle's continuation frame; with no enclosing
          * handler it is [done], i.e. unchanged from before. */
-        tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));
+        encl = H->resume_into ? dk_done() : dk_copy_enclosing_handlers(ge);
+        tail = dk_append(dk_copy_range(H, ge), encl);
     }
+    encl->resume_cut = true;   /* dk_resume_into: the resumed part ends here */
     sub = dk_append(sub, tail);
     g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
     /* A non-tail deep case that RE-OPENS an outer effect ends its body in that

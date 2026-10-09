@@ -1,5 +1,9 @@
 # An outer effect performed under an inner non-tail `resume` captures only up to the resume
 
+**RESOLVED 2026-10-09 (filed the same day).** Fix direction 1: a case that
+resumes its own `k` non-tail resumes it INTO the chain. See "Resolution" at
+the end.
+
 **Severity: medium-high (silent wrong answer, compiled path only).** Found
 2026-10-09 while resolving
 [effect-copy-path-tail-resume-delivers-out-of-order](../archive/effect-copy-path-tail-resume-delivers-out-of-order.md),
@@ -50,7 +54,7 @@ and captures up to it: `(+ 1 _)` and nothing more. Its case's resume returns
 of `dk_invoke` as the inner resume's result, to run through `(+ 100 _)` and
 `(* 10 _)` after the fact.
 
-[await-parks-only-to-the-nearest-c-frame](await-parks-only-to-the-nearest-c-frame.md)
+[await-parks-only-to-the-nearest-c-frame](../reported/await-parks-only-to-the-nearest-c-frame.md)
 shape 2 is the same mechanism with `await` in place of the outer effect.
 
 ## Fix directions
@@ -68,3 +72,44 @@ shape 2 is the same mechanism with `await` in place of the outer effect.
    resume, whose handler lies outside the resuming handle -- the CPS backend
    already refuses a perform it cannot lower. This needs the effect sets of
    the resumed body, which the colorer has.
+
+## Resolution (2026-10-09)
+
+A handler case that resumes its own `k` non-tail on its own straight-line or
+branch structure (`case_resumes_into`, `src/compiler/emit_cps_ir.c`) now runs
+like a re-opening case: its `__kont` is the handle's real continuation
+(`dk_case_enclosing_real`), it delivers its own value through it, and its
+handler node is marked so `dk_perform` returns that value as is. Each resume
+of `k` in the case body, or in the rest of a resume, is `dk_resume_into`
+(`src/compiler/emit_dk_runtime.c`): the copy of `sub` up to the point where
+the resumed computation ends (`resume_cut`, which `dk_perform` sets on the
+first of the enclosing-handler markers), then a resume-frame holding the rest
+of the case -- lifted from `CT_RESUME`'s body, as `emit_perform` lifts a
+perform's continuation -- whose next is `__kont`. A tail resume continues into
+`__kont` itself. The scan crosses a `perform` in the case (a re-opening case,
+`(+ (perform (Log)) (+ 100 (resume k 1)))`): that perform's continuation is a
+resume-frame whose `__kont` is the case's, and resumes into it the same way. Every capture taken in the resumed part now holds the rest of
+the case and of the program; the repro prints 2060, 42 and 42.
+
+When every use of `k` is such a resume (`term_k_only_resumed`), nothing will
+resume `sub` with `dk_invoke`, so the handler is installed with
+`dk_case_resumes_into` and `dk_perform` ends `sub` at `done` instead of
+copying the enclosing handlers. That copy walks the rest of the chain, which
+under these cases grows a frame a turn (the case's pending rest), so without
+it a loop of 64,000 non-tail resumes under one handle took 61 s; with it,
+0.09 s. A loop of 100,000 used to die of C-stack overflow (`dk_invoke` nested
+a few C frames a turn); at -O2 the resume is a tail call now and it runs, in
+112 MB -- what the turn keeps is
+[effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md).
+
+Also fixed by it: shape 2 of
+[await-parks-only-to-the-nearest-c-frame](../reported/await-parks-only-to-the-nearest-c-frame.md),
+an `await` inside a multi-shot case's non-tail resume (102 for 105).
+
+Still on `dk_invoke`, and so still able to split a capture: a `k` that
+escapes the case -- passed to a function, captured by a lambda, stored -- and
+is resumed there.
+
+Pinned by `tests/fixtures/effect-nontail-resume-under-outer` (non-tail,
+multi-shot, branching, re-performing, re-opening, shallow and float cases, and
+a 2,000-turn loop; leak-checked) and `await-below-evicted-caller-or-nontail-resume`.

@@ -3051,17 +3051,24 @@ static bool handle_delim_ok(const CTerm *t) {
  * serial-shift receiver written the way the guides write one, `(defn recv
  * [k : serial-cont] ...)`, which must be CPS-emitted for its effects to reach
  * the reset's handlers (serial-receiver-effect-cannot-reach-enclosing-handler).
+ * It is lifted for a function that may await (cps_fn_may_await) too, and so
+ * is the defensive `t<N>` rule below: evicted,
+ * such a function calls its awaiter through the direct entry, whose root the
+ * await's park stops at, so the park captured only the part of the async body
+ * below it and the rest carried on with 0 (await-parks-only-to-the-nearest-c-
+ * frame: 600 printed for 2428).
  * A colliding param would
  * shadow or be shadowed by a generated identifier; exclude such a function from
  * CPS candidacy so it falls back to the direct emitter (which owns its own
  * naming).  The `t<N>` branch below is retained defensively: temporaries are now
  * `__t<N>` (caught by the `__` rule), but an un-prefixed `t<N>` param remains
  * cheap to keep off the CPS path. */
-static bool param_name_clashes_cps(const Binding *b) {
+static bool param_name_clashes_cps(const FnDef *fd, const Binding *b) {
     if (!b || !b->name || !b->name->name) return false;
     const char *n = b->name->name;
     if (strcmp(n, "k") == 0)
-        return !(b->type.kind == TY_CONT && b->type.as.cont.flavor == CONT_SERIAL);
+        return !(b->type.kind == TY_CONT && b->type.as.cont.flavor == CONT_SERIAL)
+            && !(fd && cps_fn_may_await(fd));
     /* fn-value-fat-normalization (effect-row increment): a lifted capturing
      * lambda's env param is `__env_p_<id>` -- uniquely numbered, never a name
      * the CPS emitter mints itself.  Admitting it is what lets a capturing
@@ -3070,7 +3077,7 @@ static bool param_name_clashes_cps(const Binding *b) {
     if (n[0] == '_' && n[1] == '_') return true;
     if (n[0] == 't' && n[1] != '\0') {
         for (const char *p = n + 1; *p; p++) if (*p < '0' || *p > '9') return false;
-        return true;   /* t followed by all digits */
+        return !(fd && cps_fn_may_await(fd));   /* t followed by all digits */
     }
     return false;
 }
@@ -3276,7 +3283,7 @@ static bool fn_sig_ok(const FnDef *fd) {
             && !sig_slot_ok(&p->type, p->type.kind)
             && !fn_byval_agg_param_ok(fd, p)
             && !fn_carrier_param_ok(fd, p)) return false;
-        if (param_name_clashes_cps(p)) return false;
+        if (param_name_clashes_cps(fd, p)) return false;
     }
     return true;
 }
@@ -6565,6 +6572,10 @@ typedef struct {
                                      * terminal tail `resume` here emits dk_tail_resume (yield) */
     bool        case_tail_resume;   /* E7: this case was installed with dk_handler_tail (DEEP +
                                      * tail-resume); a SHALLOW case keeps the inline dk_invoke */
+    const Binding *cps_resume_k;    /* the `k` of a case that resumes into the chain
+                                     * (case_resumes_into): set in the case body and the
+                                     * resume-frames emit_resume lifts from it, where a
+                                     * resume of this `k` is dk_resume_into; else NULL */
     /* Full Type a value has when it crosses the slot at each continuation target,
      * so Tier C by-value aggregates box/unbox with their real (monomorphized) C
      * type.  ret_ty = the function's return type (KK_RET); cur_ty = the innermost
@@ -8871,6 +8882,86 @@ static bool case_reopens(const CTerm *t) {
     return false;
 }
 
+/* effect-nontail-resume-under-outer-handler-splits-the-capture: does this case
+ * resume its own `k` NON-tail on its own straight-line/branch structure (where
+ * emit_resume can resume it into the chain, dk_resume_into)?  Such a case runs
+ * with the real enclosing chain as `__kont` and delivers its own value, as a
+ * re-opening case does.  A case that resumes only in tail position keeps its
+ * E7 / dk_invoke path; a resumable-payload or __Shift case binds `k` as a
+ * cloneable cont and is not looked into.  The scan crosses a perform (a
+ * re-opening case): a continuation that resumes is lifted as a resume-frame
+ * (emit_perform's Track A), which resumes into the chain the same way. */
+static bool resume_is_tail(const CTerm *t);
+static bool term_resumes_nontail(const CTerm *t, const Binding *k) {
+    while (t) {
+        switch (t->kind) {
+            case CT_RESUME:
+                if (t->as.resume.k.kind == CA_VAR && t->as.resume.k.var == k
+                    && !resume_is_tail(t)) return true;
+                t = t->as.resume.body; break;
+            case CT_PERFORM: t = t->as.perform.body; break;
+            case CT_LETVAL:  t = t->as.letval.body;  break;
+            case CT_LETPRIM: t = t->as.letprim.body; break;
+            case CT_LETCALL: t = t->as.letcall.body; break;
+            case CT_LETRAW:  t = t->as.letraw.body;  break;
+            case CT_CALLCC:  t = t->as.callcc.body;  break;
+            case CT_IF:
+                return term_resumes_nontail(t->as.if_.then_, k)
+                    || term_resumes_nontail(t->as.if_.else_, k);
+            default: return false;
+        }
+    }
+    return false;
+}
+static bool case_resumes_into(const CHandleCase *c) {
+    return c && c->k && !c->resumable_payload && !is_shift_effect(c->effect)
+        && term_resumes_nontail(c->case_body, c->k);
+}
+/* ...and is that every use of `k`: the continuation of a resume, in the case
+ * body or the rest of a resume or a perform (the resume-frames emit_resume and
+ * emit_perform lift), never a value, never under a join?  Then nothing resumes `k` with
+ * dk_invoke, which needs the enclosing-handler marker copies at the end of
+ * dk_perform's `sub` -- and walking the chain for them each perform is what a
+ * loop of such resumes, whose chain grows a frame a turn, cannot afford. */
+static bool atom_is_binding(const CAtom *a, const Binding *b);
+static bool term_k_only_resumed(const CTerm *t, const Binding *k) {
+    while (t) {
+        switch (t->kind) {
+            case CT_APPCONT: return !atom_is_binding(&t->as.appcont.v, k);
+            case CT_RESUME:
+                if (atom_is_binding(&t->as.resume.v, k)) return false;
+                t = t->as.resume.body; break;
+            case CT_PERFORM:
+                for (uint32_t i = 0; i < t->as.perform.n; i++)
+                    if (atom_is_binding(&t->as.perform.args[i], k)) return false;
+                t = t->as.perform.body; break;
+            case CT_LETVAL:
+                if (atom_is_binding(&t->as.letval.v, k)) return false;
+                t = t->as.letval.body; break;
+            case CT_LETPRIM:
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (atom_is_binding(&t->as.letprim.args[i], k)) return false;
+                t = t->as.letprim.body; break;
+            case CT_LETCALL:
+                if (t->as.letcall.fn == k) return false;
+                for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                    if (atom_is_binding(&t->as.letcall.args[i], k)) return false;
+                t = t->as.letcall.body; break;
+            case CT_IF:
+                if (atom_is_binding(&t->as.if_.cond, k)) return false;
+                return term_k_only_resumed(t->as.if_.then_, k)
+                    && term_k_only_resumed(t->as.if_.else_, k);
+            default: return false;
+        }
+    }
+    return false;
+}
+
+/* Set by emit_resume for the one emit_lifted call that renders the rest of a
+ * resuming-into case as a resume-frame, and consumed (cleared) on entry there:
+ * the frame resumes the same `k` into the chain. */
+static const Binding *g_lh_resume_k = NULL;
+
 /* fn-value-call-cps-frames-held-until-outer-entry: set by emit_heap_join for
  * the one emit_lifted call that renders its resume-frame join, and consumed
  * (cleared) on entry there, so no helper lifted out of the join's body sees
@@ -8893,6 +8984,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     bool join_release = g_lh_join_release
                      && (mode == LH_RESUME_CONT || mode == LH_PERFORM_CONT);
     g_lh_join_release = false;
+    const Binding *resume_k = (mode == LH_RESUME_CONT) ? g_lh_resume_k : NULL;
+    g_lh_resume_k = NULL;
     /* fn-value-fat-normalization (effect-row increment): a lifted helper is its
      * OWN function -- captures arrive through its frame env (`__cap->fN`) as
      * raw-named locals, never through the enclosing closure's env pointer.
@@ -8915,7 +9008,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
      * dk_run(__kont, v), i.e. shift_mode OFF, unlike a plain case whose value
      * returns to dk_perform for delivery.  See
      * docs/archive/cps-case-reopen-marker-kont-truncates-capture.md. */
-    bool reopens = (mode == LH_HANDLER_CASE) && case_reopens(body);
+    bool resumes_into = (mode == LH_HANDLER_CASE) && case_resumes_into(hcase);
+    bool reopens = (mode == LH_HANDLER_CASE) && (case_reopens(body) || resumes_into);
     /* Emit the body into a temporary buffer first, so any nested reset/shift/
      * effect appends its own (inner) helpers ahead of this one in ce->helpers. */
     Buf tmp; buf_init(&tmp);
@@ -8931,6 +9025,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.ret_mode   = (mode == LH_PERFORM_CONT);
     hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
     hc.case_tail_resume  = (mode == LH_HANDLER_CASE) ? ce->case_tail_resume : false;
+    hc.cps_resume_k      = resumes_into ? hcase->k : resume_k;
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding). */
@@ -10974,9 +11069,12 @@ static void emit_handle(CE *ce, const CTerm *t) {
          * time.  Mutually exclusive with dk_handler_tail by construction --
          * case_body_tail_resumes rejects any body containing an interior
          * CT_PERFORM, which is exactly what makes case_reopens true. */
-        bool creopen = case_reopens(t->as.handle.cases[ci].case_body);
+        bool cinto = case_resumes_into(&t->as.handle.cases[ci]);
+        bool creopen = case_reopens(t->as.handle.cases[ci].case_body) || cinto;
         Buf nxt; buf_init(&nxt);
-        if (creopen) buf_puts(&nxt, "dk_case_delivers(");
+        if (cinto && term_k_only_resumed(t->as.handle.cases[ci].case_body, t->as.handle.cases[ci].k))
+            buf_puts(&nxt, "dk_case_resumes_into(");
+        else if (creopen) buf_puts(&nxt, "dk_case_delivers(");
         buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", ctor, tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
         if (creopen) buf_putc(&nxt, ')');
@@ -11127,6 +11225,10 @@ static void emit_perform(CE *ce, const CTerm *t) {
         bool ok = collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
         const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
         g_lh_join_release = true;   /* a join, as the frame above */
+        /* In a case that resumes into the chain (case_resumes_into), a resume
+         * of its `k` in this continuation does too: the frame's __kont is the
+         * case's continuation. */
+        g_lh_resume_k = ce->cps_resume_k;
         emit_lifted(ce, pname, LH_RESUME_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
                     t->as.perform.body, NULL, caps);
         g_lh_join_release = false;
@@ -11318,6 +11420,38 @@ static void emit_resume(CE *ce, const CTerm *t) {
     if (ce->handler_case_mode && ce->case_tail_resume && resume_is_tail(t)) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
         ce_line(ce, "return dk_tail_resume((DK *)(%s), %s);", kk, sv);
+        free(sv); free(kk); free(vv);
+        return;
+    }
+    /* effect-nontail-resume-under-outer-handler-splits-the-capture: a case that
+     * resumes its own `k` into the chain (case_resumes_into) -- in its body or a
+     * resume-frame lifted from it.  The rest of the case after this resume is
+     * lifted as a resume-frame whose next is the case's `__kont` (the handle's
+     * real continuation), and the resumed part runs into it (dk_resume_into),
+     * so a capture taken in the resumed part includes both.  A tail resume
+     * continues into `__kont` itself. */
+    if (ce->cps_resume_k && t->as.resume.k.kind == CA_VAR
+        && t->as.resume.k.var == ce->cps_resume_k) {
+        char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
+        if (resume_is_tail(t)) {
+            ce_line(ce, "return dk_resume_into((DK *)(%s), %s, %s, 1);", kk, sv, ce->cur_k);
+        } else {
+            int id = (*ce->helper_ctr)++;
+            char rname[256];
+            snprintf(rname, sizeof(rname), "%s_rk%d", ce->fn_cn, id);
+            char *rxn = cvar_cname(ce, t->as.resume.x);
+            CapSet cs;
+            bool ok = collect_caps(t->as.resume.body, t->as.resume.x.id, &cs);
+            const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+            g_lh_resume_k = ce->cps_resume_k;
+            emit_lifted(ce, rname, LH_RESUME_CONT, rxn, t->as.resume.x.ty, t->as.resume.x.type,
+                        t->as.resume.body, NULL, caps);
+            free(rxn);
+            char *envexpr = emit_cont_env(ce, rname, caps);   /* caps-only env */
+            ce_line(ce, "return dk_resume_into((DK *)(%s), %s, dk_frame_resume_borrow(%s, %s, %s), 0);",
+                    kk, sv, rname, envexpr, ce->cur_k);
+            free(envexpr);
+        }
         free(sv); free(kk); free(vv);
         return;
     }
@@ -11649,7 +11783,7 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
         bool fn_param_ok = pt->kind == TY_FN;
         if (!p->is_borrow && !fn_param_ok
             && !MONO_SLOT_OK(pt, pt->kind)) return false;
-        if (param_name_clashes_cps(p)) return false;
+        if (param_name_clashes_cps(fd, p)) return false;
     }
     #undef MONO_SLOT_OK
     return true;

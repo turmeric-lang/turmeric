@@ -1,5 +1,10 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-09: both shapes below are fixed, and so are two more found
+on the way; what is left is a may-await function the CPS backend evicts for
+some other reason.** See "Fixed 2026-10-09" at the end for what changed and
+the shape that still gives a wrong answer.
+
 **Severity: medium-high (silent wrong answer), in two narrow shapes.** A
 pending `await` parks by shifting to the nearest root prompt. That is the
 async body's root only while every frame between the await and the body is
@@ -63,3 +68,44 @@ pending future -- overwriting the first park, which leaks (536 B under ASan)
    CPS backend cannot lower already is ("this effect operation has no
    lowering here") -- instead of a park that silently captures half the
    body.
+
+## Fixed 2026-10-09
+
+- **Shape 1.** `param_name_clashes_cps` no longer evicts a function that may
+  await (`cps_fn_may_await`) for a parameter named `k`, nor for the defensive
+  `t<N>` rule. Both rules stay for every other function: lifting the `k` rule
+  outright still leaks `saffron-lambda-arg-env-freed` and
+  `sum-closure-payload-dropped` (re-measured today).
+- **Through a fn parameter.** `(apply3 level3 x)`, with the awaiting `level3`
+  passed to `apply3 [f : (fn [int] int) x : int]`, printed 604 for 2428 once
+  the callers had a `k`: `may_await` followed named callees only, so the
+  caller passing the awaiter was not marked and stayed evicted.
+  `cps_expr_awaits` (`src/passes/cps.c`) now counts a call that passes an
+  awaiting function -- by name, or a lambda whose body awaits -- as one that
+  may await, since its callee may call it.
+- **Shape 2** is fixed by
+  [effect-nontail-resume-under-outer-handler-splits-the-capture](../archive/effect-nontail-resume-under-outer-handler-splits-the-capture.md):
+  a non-tail resume in the case's own body runs into the chain, so the await
+  parks the whole body: 105, and no overwritten park.
+
+Pinned by `tests/fixtures/await-below-evicted-caller-or-nontail-resume`
+(leak-checked): the `k` callers, `t<N>` callers, a named and a capturing
+awaiter through a fn parameter, and shape 2.
+
+### Still open
+
+Any other reason a may-await function is evicted. A capturing lambda whose
+capture is not a primitive is one (`fn_sig_ok`'s closure-capture switch):
+
+```turmeric
+(defstruct P [a : int b : int])
+(defn level2 [m : int] : int
+  (let [p (P m 0)]
+    (* 2 (apply3 (fn [x : int] : int (level3 (+ x (.b p)))) (+ (.a p) 1)))))
+```
+
+prints 604 for 2428 in the shape-1 program. Fix direction 2 below -- refuse
+an evicted may-await function at compile time -- is what would close the
+class; it would also turn programs that only ever await ready futures (no
+park, `__tur_await_ready`) from working into refused, so it wants a
+diagnostic, not a silent eviction rule.

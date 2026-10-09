@@ -1,0 +1,103 @@
+;; await-parks-only-to-the-nearest-c-frame: a pending `await` parks by
+;; shifting to the nearest root.  That is the async body's root only while
+;; every frame between the await and the body is on the DK chain; a C-stack
+;; frame in between made the park capture only the part below it, and the
+;; part above carried on at once with 0.
+;;
+;;   evicted-caller -- a caller with a parameter named `k` was kept off the
+;;                     CPS path (param_name_clashes_cps), so it called the
+;;                     awaiting fn through its direct entry: 600 for 2428.
+;;                     A function that may await is exempt from that rule,
+;;                     and from the defensive `t<N>` one (`t-caller`).
+;;   fn-value-caller -- the same callers, reaching the awaiter through a
+;;                     fn parameter, `(apply3 level3 x)`: a call that passes
+;;                     an awaiting function may await too (604 for 2428).
+;;   nontail-resume -- an await inside a multi-shot handler case's non-tail
+;;                     resume ran on the C stack (dk_invoke): 102 for 105,
+;;                     and the second park overwrote (leaked) the first.  The
+;;                     case now resumes into the chain
+;;                     (effect-nontail-resume-under-outer-handler-splits-the-
+;;                     capture).
+;;
+;; Both bodies await a pending future every turn; the driver fulfills it with
+;; 2 and hands out a fresh one.  Leak-checked (requires.leak-check).
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+;; evicted-caller
+(defn level3 [k : int] : int (+ k (sum-values 0 300 0)))
+(defn level2 [k : int] : int (* 2 (level3 (+ k 1))))
+(defn level1 [k : int] : int (+ 7 (level2 (+ k 1))))
+(defn evicted-caller [] : int (+ (level1 1) (level1 2)))
+
+;; t-caller
+(defn t-level3 [t1 : int] : int (+ t1 (sum-values 0 300 0)))
+(defn t-level2 [t2 : int] : int (* 2 (t-level3 (+ t2 1))))
+(defn t-caller [] : int (+ 7 (t-level2 2)))
+
+;; fn-value-caller
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defn fv-level2 [k : int] : int (* 2 (apply3 level3 (+ k 1))))
+(defn fv-level1 [k : int] : int (+ 7 (fv-level2 (+ k 1))))
+(defn fv-lambda2 [k : int] : int
+  (* 2 (apply3 (fn [x : int] : int (level3 (+ x k -1))) (+ k 1))))
+(defn fn-value-caller [] : int (+ (fv-level1 1) (+ 7 (fv-lambda2 3))))
+
+;; nontail-resume
+(defeffect Choose [] int)
+(defn pick [] : int (perform (Choose)))
+(defn after-pick [c : int] : int (+ c (next-value)))
+(defn nontail-resume [] : int
+  (handle (after-pick (pick))
+    (Choose [] ^multishot kk) (+ (resume kk 1) (resume kk 100))))
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defn main [] : nil
+  (cur-cell true)
+  ;; (7 + 2 * (3 + 600)) + (7 + 2 * (4 + 600)) = 1213 + 1215
+  (println (drive (async evicted-caller)))
+  ;; 7 + 2 * (3 + 600)
+  (println (drive (async t-caller)))
+  ;; (7 + 2 * (3 + 600)) + (7 + 2 * (6 + 600))
+  (println (drive (async fn-value-caller)))
+  ;; (1 + 2) + (100 + 2)
+  (println (drive (async nontail-resume)))
+  (free-future (cur-cell false)))

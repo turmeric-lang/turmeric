@@ -639,7 +639,12 @@ void emit_cps_runtime_prelude(Buf *out) {
  * time -- the measured failure of the naive real-chain conversion was exactly
  * that double delivery.  The flag is a property of the case FN's protocol, so
  * dk_copy_node carries it (a marker copy's case still delivers for itself). */
-"    bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */\n");
+"    bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */\n"
+/* effect-nontail-resume-under-outer-handler-splits-the-capture: a case that
+ * resumes its `k` only into the chain (dk_resume_into, never dk_invoke) gets
+ * a `sub` with no enclosing-handler marker copies -- see dk_case_resumes_into.
+ * Copied with the node, as case_delivers is. */
+"    bool resume_into;    /* case resumes `k` only into the chain: sub needs no markers */\n");
     buf_puts(out,
 "    bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */\n"
 "    int hgroup;        /* re-opening: same-handle sibling group id (0 = ungrouped);\n"
@@ -671,7 +676,14 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    bool orphaned;     /* an original an await's shift ran only as copies */\n"
 "    bool orphan_env;   /* ...and the shift that parked was its only copy */\n"
 "    bool env_owned;    /* this copy owns a private copy of the env */\n"
-"    uint16_t env_size; /* sizeof the env struct, 0 when unknown */\n");
+"    uint16_t env_size; /* sizeof the env struct, 0 when unknown */\n"
+/* effect-nontail-resume-under-outer-handler-splits-the-capture: `resume_cut`
+ * marks where a handler case's continuation (dk_perform's `sub`) stops being
+ * the resumed computation -- the first of the enclosing-handler marker copies
+ * (or the `done`) after the re-installed group.  dk_resume_into resumes the
+ * part before it and continues into the case's own continuation instead.  Not
+ * copied by dk_copy_node: a copy of `sub` (dk_invoke's) runs to its end. */
+"    bool resume_cut;   /* dk_perform's sub: the resumed part ends here */\n");
     buf_puts(out,
 "};\n"
 "static DK *dk_new(DKKind kind, DK *next) {\n"
@@ -749,6 +761,14 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * the dk_handler ctors: dk_case_delivers(dk_handler(...)). */\n"
 "__attribute__((unused))\n"
 "static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }\n");
+    buf_puts(out,
+/* A delivering case whose every use of `k` is a resume into the chain
+ * (emit_handle, term_k_only_resumed): nothing resumes its `sub` with
+ * dk_invoke, so dk_perform ends it at `done` instead of copying the enclosing
+ * handlers -- a walk over the rest of the chain, which a loop of non-tail
+ * resumes grows by a frame a turn. */
+"__attribute__((unused))\n"
+"static DK *dk_case_resumes_into(DK *k) { k->case_delivers = true; k->resume_into = true; return k; }\n");
     buf_puts(out,
 "/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry\n"
 " * driver instead of resuming inline, keeping deep effectful recursion flat. */\n"
@@ -843,6 +863,7 @@ void emit_cps_runtime_prelude(Buf *out) {
  * boundary happened to sit.  case_delivers IS copied: it describes the case
  * fn's delivery protocol, which a re-installed marker copy shares. */
 "    c->case_delivers = n->case_delivers;\n"
+"    c->resume_into = n->resume_into;\n"
 "    c->rfn = n->rfn; return c;\n"
 "}\n"
 "static DK *dk_copy_enclosing_handlers(const DK *from) {\n"
@@ -1375,6 +1396,33 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    intptr_t r = dk_run_impl(c, w, false);\n"
 "    dk_free(c); return r;\n"
 "}\n");
+    /* effect-nontail-resume-under-outer-handler-splits-the-capture: dk_invoke
+     * runs a resume on the C stack and hands its value back, so whatever the
+     * case does after it -- and the handle's continuation after that -- is not
+     * on the chain while the resumed part runs.  An outer handler's capture
+     * taken there stopped at the end of the copy: a non-tail outer case printed
+     * 11060 for 2060, an abortive one 1420 for 42.  A case that resumes its own
+     * `k` in its own body (emit_resume) instead resumes INTO the chain: the
+     * copy of `sub` up to its `resume_cut`, then `tail` -- a resume-frame for
+     * the rest of the case whose next is the handle's real continuation, or,
+     * for a tail resume, that continuation itself (`borrow`).  The case
+     * delivers its own value (case_delivers), so nothing runs after it. */
+    buf_puts(out,
+"__attribute__((unused))\n"
+"static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {\n"
+"    const DK *cut = sub;\n"
+"    while (cut && !cut->resume_cut) cut = cut->next;\n"
+"    DK *c = cut && cut != sub ? dk_copy_range(sub, cut) : NULL;\n"
+"    if (!c) {   /* not dk_perform's sub: resume it on the C stack */\n"
+"        if (!borrow) __dk_reap_node(tail);\n"
+"        return dk_run(tail, dk_invoke(sub, v));\n"
+"    }\n"
+"    DK *last = c;\n"
+"    while (last->next) last = last->next;\n"
+"    last->next = tail; last->borrow_next = borrow != 0;\n"
+"    __dk_reap_keep(c);   /* a tail resume inside may yield past this frame */\n"
+"    return dk_run(c, v);\n"
+"}\n");
     buf_puts(out,
 "/* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *\n"
 " * A tail-resume handler does not resume inline (which nests ~160 B of C stack\n"
@@ -1497,9 +1545,9 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    }\n"
 "    DK *sub = dk_copy_range(k, H);\n");
     buf_puts(out,
-"    DK *tail;\n"
+"    DK *tail, *encl;\n"
 "    if (H->shallow) {\n"
-"        tail = dk_copy_enclosing_handlers(H->next);\n"
+"        tail = encl = H->resume_into ? dk_done() : dk_copy_enclosing_handlers(H->next);\n"
 "    } else {\n"
 "        /* Deep: re-install H AND its consecutive SIBLING handlers -- the rest of\n"
 "         * this handle's dk_handler group (a multi-effect handle emits one\n"
@@ -1527,8 +1575,10 @@ void emit_cps_runtime_prelude(Buf *out) {
 "         * `unhandled effect`.  dk_copy_enclosing_handlers(ge) copies the outer\n"
 "         * HANDLER markers past this handle's continuation frame; with no enclosing\n"
 "         * handler it is [done], i.e. unchanged from before. */\n"
-"        tail = dk_append(dk_copy_range(H, ge), dk_copy_enclosing_handlers(ge));\n"
+"        encl = H->resume_into ? dk_done() : dk_copy_enclosing_handlers(ge);\n"
+"        tail = dk_append(dk_copy_range(H, ge), encl);\n"
 "    }\n"
+"    encl->resume_cut = true;   /* dk_resume_into: the resumed part ends here */\n"
 "    sub = dk_append(sub, tail);\n");
     buf_puts(out,
 "    g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */\n");
