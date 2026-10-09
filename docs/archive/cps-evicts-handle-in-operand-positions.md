@@ -1,7 +1,11 @@
 # The CPS backend still evicts some `handle`s over effectful fn fields
 
+**RESOLVED 2026-10-09.** The last item -- an effectful lambda through an
+UN-annotated fn parameter of a generic, stdlib's `option-map` -- compiles; see
+"The un-annotated generic parameter, fixed" at the end.
+
 **Narrowed 2026-10-09: the float instantiation of item 3 is fixed** (see "The
-float instantiation, fixed" at the end).  **What is left:** an UN-annotated fn
+float instantiation, fixed" at the end).  **What was left:** an UN-annotated fn
 parameter of a generic (stdlib's `option-map` shape).
 
 **Severity: medium.** A legal program is refused at build time with "this
@@ -129,7 +133,7 @@ function emitter flushed AFTER its lifted helpers.  It flushes them first now
 Also found (pre-existing, both back ends; since fixed): a struct TEMPORARY with
 a fn field -- `(.run (make-struct S f) x)` -- leaks its 24-byte fn-field box;
 a let-bound one is freed.  Filed as
-[struct-temporary-fn-field-box-leaks](../archive/struct-temporary-fn-field-box-leaks.md).
+[struct-temporary-fn-field-box-leaks](struct-temporary-fn-field-box-leaks.md).
 
 ## Item 3, reduced and investigated (2026-10-03)
 
@@ -296,3 +300,59 @@ Pinned by `tests/fixtures/generic-hof-effectful-callback-scalar`. It covers:
 Every line equals `tur --interpret`. The fixture is leak-checked, passes the
 JIT harness, runs clean under `-fsanitize=function`, and has no finding from
 `check-emitted-float-conversions.py`.
+
+## The un-annotated generic parameter, fixed (2026-10-09)
+
+`(handle (option-map (some 1) (fn [x : int] : int (perform (E x)))) ...)` and
+its user-written twin, a generic `[A B] [o : (Option A) ^fat f : (fn [A] B)]`,
+compile now, in a program that also passes the same HOF pure values (a named
+function, a pure lambda, a pure capturing lambda).  What the analysis above
+asked for, built:
+
+- **A registry dispatch with a direct fallback.**  `emit_e2a_fat_dispatch`
+  (`src/compiler/emit_cps_ir.c`) tries the box's slot 0 against the registry as
+  before (a registered capturing closure's env-taking twin), then probes slot 1
+  ONLY for a `{ shim, orig }` box -- recognised by its header word at `box[-1]`:
+  the no-op keep glue `__tur_fatbox_keep` of a static or stack box, or NULL for
+  a malloc'd one, which owns nothing; a closure env box always carries its drop
+  glue there, and its slot 1 is its first capture -- and otherwise calls slot 0
+  directly at the fat protocol's slot types (`thunk_param_slot_c_name` /
+  `thunk_result_slot_c_name`, resolved through the active monomorph), delivering
+  the result to the continuation as the DK word.  Slot 0 of either species is
+  callable as `slot0(box, args...)`: a fatshim box's shim, a closure box's
+  lifted entry.  The fallback is spelled when the signature is known and every
+  slot is a scalar or a pointer (`e2a_fallback_ok`); otherwise the checked
+  slot-1 lookup stays.
+- **An empty-row call through a fat thread param threads.**  The CPS
+  translation (`src/passes/cps_ir.c`, `call_through_fat_param`) gives such a
+  call -- a `^fat` param with a fn signature, or a fn-typed param the elaborator
+  fat-normalizes -- the same `via_registry` tail call or heap join an
+  effectful-row call gets, in both tail and bind position, and
+  `cps_ir_param_call_threads` counts it as threading.  The parameter's row says
+  nothing about the value passed, which may perform.
+- **A pure value no longer unthreads the param.**  `param_is_thread_safe` is
+  lenient for a param whose calls can fall back (`e2a_param_fallback_ok`, asked
+  under every monomorph of a generic): an unregistered value flowing in is
+  simply not counted; one threadable effectful value still has to.  A HOF called
+  only with pure values keeps its direct calls.
+- **Constructing a capturing closure performs nothing.**  `letraw_effect_free`
+  read a hoisted capturing lambda literal's body as the binding's own effects,
+  so a handle whose body passed such a lambda to a HOF fell to `term_core_ok`
+  and evicted, where the same lambda without a capture (a global reference)
+  passed; it skips lifted bodies now, as the walk's `calls_only` already skipped
+  references.  And a direct-dispatch `match` in a handle body delivers its arms
+  to the prompt like an `if`'s branches: `delim_ok` and `handle_delim_ok` have
+  the `CT_MATCH` arm.
+
+The slot-1 hazard the analysis named is unreachable in an admitted program -- a
+closure capturing a registered function's address is a value use of that
+function, which unthreads it -- so the header check only guards it.  The
+untyped `^fat` parameter (`(defn app [^fat h x : int] ...)`, no signature to
+spell a fallback from) stays refused; it is shape 2 of
+[cps-effectful-callback-through-multi-arg-or-untyped-param](../reported/cps-effectful-callback-through-multi-arg-or-untyped-param.md).
+
+Pinned by `tests/fixtures/generic-hof-unannotated-fat-param-mixed`
+(leak-checked): a user generic HOF and stdlib `option-map`, each given pure and
+effectful values in one program -- a named function, pure and effectful
+lambdas, a capturing effectful lambda, a float callback pure and effectful, a
+`cstr` result.  Every line equals `tur --interpret`.

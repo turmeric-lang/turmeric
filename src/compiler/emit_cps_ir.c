@@ -2560,10 +2560,21 @@ static bool term_core_ok_impl(const CTerm *t);
  * function, this names the form. */
 static bool term_core_ok(const CTerm *t) {
     bool ok = term_core_ok_impl(t);
-    if (!ok && t && getenv("TUR_TRACE_CORE"))
-        fprintf(stderr, "[CORE-FAIL] kind=%d%s\n", (int)t->kind,
+    if (!ok && t && getenv("TUR_TRACE_CORE")) {
+        fprintf(stderr, "[CORE-FAIL] kind=%d%s", (int)t->kind,
                 t->kind == CT_UNSUPPORTED && t->as.unsupported.why
                     ? t->as.unsupported.why : "");
+        /* An APPCONT fails only on its atom: say which. */
+        if (t->kind == CT_APPCONT) {
+            const CAtom *a = &t->as.appcont.v;
+            fprintf(stderr, " appcont atom kind=%d ty=%d%s%s poly=%d",
+                    (int)a->kind, (int)a->ty,
+                    a->kind == CA_VAR && a->var && a->var->name ? " var=" : "",
+                    a->kind == CA_VAR && a->var && a->var->name ? a->var->name->name : "",
+                    a->kind == CA_VAR && a->var ? (int)a->var->is_poly_fn : -1);
+        }
+        fputc('\n', stderr);
+    }
     return ok;
 }
 static bool term_core_ok_impl(const CTerm *t) {
@@ -2973,6 +2984,15 @@ static bool delim_ok(const CTerm *t) {
                 && delim_ok(t->as.reset.body)
                 && collect_caps(t->as.reset.body, t->as.reset.x.id, &cs);
         }
+        case CT_MATCH:
+            /* A match in the delimited body: each arm is a tail of the body and
+             * may deliver to the prompt -- `(handle (match (f x) (Some v) v ...)
+             * ...)` delivers `v` there -- so the arms take delim_ok, as a CT_IF's
+             * branches do.  The scrutinee is read as the core case reads it. */
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!delim_ok(t->as.match.arms[i].body)) return false;
+            return true;
         default:
             /* Nested handle/perform/resume/unsupported: keep the stricter core
              * admission -- not relaxed by this slice. */
@@ -3075,6 +3095,13 @@ static bool handle_delim_ok(const CTerm *t) {
             }
             return true;
         }
+        case CT_MATCH:
+            /* A match in the handled body: each arm is a tail of it and may
+             * deliver to the handle's prompt (as a CT_IF's branches may). */
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!handle_delim_ok(t->as.match.arms[i].body)) return false;
+            return true;
         default:
             /* Interior control op / anything else: stricter core admission (no
              * KK_PROMPT delivery relaxation). */
@@ -4759,8 +4786,14 @@ static bool letraw_effect_free(const CTerm *t) {
      * delegated CALL to an effectful callee is still rejected: that is the case
      * this gate exists for (its effect would run on the fiber, escaping the
      * handle's DK prompt). */
+    /* skip_lifted_bodies, for the same reason: CONSTRUCTING a capturing
+     * closure literal (`(fn [x] (+ m (perform (E x))))` hoisted into a
+     * `__borrowc` let for a non-retaining parameter) runs none of its body;
+     * walking the body here read the literal as effectful, so a handle whose
+     * body passed such a lambda to a HOF fell to term_core_ok and evicted,
+     * where the same lambda without a capture (a global reference) passed. */
     EffAcc acc = { &lo, &hi, &lo, &hi, callees, &nc, 64, &ov,
-                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true, NULL, false };
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, true, NULL, true };
     expr_collect_effects_acc(t->as.letraw.e, &acc);
     if (lo || hi || ov) return false;
     for (int i = 0; i < nc; i++)
@@ -5463,10 +5496,55 @@ static int fv_multi_tier(const FvMulti *m, int sl) {
 
 /* E2a param->value converse: is EVERY fn-value flowing into param `pi` of `fd` a
  * REGISTERED (threadable) fn-value?  Walks all direct calls to `fd`. */
+/* cps-evicts-handle-in-operand-positions: can every call through fat param
+ * `pi` of `fd` fall back to a direct call of an unregistered value
+ * (e2a_fallback_ok)?  Under every monomorph of a generic, since the clone's
+ * instantiation is what the dispatch spells; a concrete function is asked
+ * once.  When it can, a pure value flowing into the param no longer
+ * disqualifies it as a thread param. */
+static bool fn_sig_has_tyvar_slot(const Type *t);
+static bool e2a_fallback_ok(const Type *sig, uint32_t n);   /* fwd (defined below) */
+static bool e2a_param_fallback_ok(const FnDef *fd, uint32_t pi) {
+    const Binding *p = fd->params ? fd->params[pi] : NULL;
+    if (!p || p->is_poly_fn || p->type.kind != TY_FN) return false;
+    if (!(p->is_fat || fn_param_type_is_fat_normalized(&p->type))) return false;
+    uint32_t n = p->type.as.fn.arity;
+    EmitCtx *ctx = g_emit_ctx;
+    bool generic = false;
+    if (ctx) {
+        for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+            const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+            if (spec->fn != fd || !spec->fn_expr || !spec->clone_name) continue;
+            generic = true;
+            const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
+            ctx->current_abi_specialization = (EmitAbiSpecialization *)spec;
+            g_cps_mono_resolver = ctx;
+            bool ok = e2a_fallback_ok(&p->type, n);
+            g_cps_mono_resolver = NULL;
+            ctx->current_abi_specialization = saved;
+            if (!ok) return false;
+        }
+    }
+    if (generic) return true;
+    if (fn_sig_has_tyvar_slot(&p->type)) return false;
+    return e2a_fallback_ok(&p->type, n);
+}
+static bool fn_sig_has_tyvar_slot(const Type *t) {
+    if (!t || t->kind != TY_FN) return false;
+    if (t->as.fn.result_kind == TY_TYVAR || t->as.fn.result_kind == TY_UNKNOWN) return true;
+    for (uint32_t i = 0; i < t->as.fn.arity; i++) {
+        TypeKind k = (TypeKind)t->as.fn.arg_kinds[i];
+        if (k == TY_TYVAR || k == TY_UNKNOWN) return true;
+    }
+    return false;
+}
+
 static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t pi) {
     if (!program || program->kind != EX_PROGRAM || !fd || !fd->binding) return false;
     uint32_t np = program->as.program.n;
     int seen = 0;
+    /* A pure value is fine where the dispatch can call it directly. */
+    bool lenient = e2a_param_fallback_ok(fd, pi);
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = program->as.program.items[i];
         if (!it) continue;
@@ -5485,11 +5563,13 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
                  * out of the box's slot 0). */
                 if (a && a->kind == EX_CLOSURE) {
                     if (!(a->as.closure_.closure && a->as.closure_.closure->fn
-                          && threadable_has(a->as.closure_.closure->fn->binding)))
+                          && threadable_has(a->as.closure_.closure->fn->binding))) {
+                        if (lenient) continue;
                         return false;
+                    }
                     seen++;
                 } else {
-                if (!a || a->kind != EX_VAR) return false;
+                if (!a || a->kind != EX_VAR) { if (lenient) continue; return false; }
                 /* E2 (cps-tramp-resume): a SELF-recursive call passing fd's OWN
                  * param `pi` back at position `pi` threads the same row-poly
                  * fn-value -- it introduces no new fn-value, so it is trivially
@@ -5500,8 +5580,10 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
                       && a->as.var.binding == fd->params[pi])
                     && !threadable_has(a->as.var.binding)
                     && !threadable_has(a->as.var.binding->closure_fn_binding)
-                    && !threadable_has(a->as.var.binding->hoist_closure_fn_binding))
+                    && !threadable_has(a->as.var.binding->hoist_closure_fn_binding)) {
+                    if (lenient) continue;
                     return false;
+                }
                 seen++;
                 }
             }
@@ -7120,6 +7202,118 @@ static void e2a_cast(char *out, size_t cap, const char *lead, const Type *sig,
     snprintf(out + off, cap - (size_t)off, "DK *)");
 }
 
+/* cps-evicts-handle-in-operand-positions: the fat dispatch's DIRECT FALLBACK.
+ *
+ * A value reaching a fat thread param that the registry does not know -- a
+ * pure fn, a pure closure -- used to be impossible (param_is_thread_safe
+ * required every value registered), so the slot-1 lookup below was CHECKED
+ * and the param was no thread param as soon as one pure value flowed in,
+ * which left an effectful lambda passed elsewhere with no lowering.  Such a
+ * value is now called directly: slot 0 of either box species is callable as
+ * `slot0(box, args...)` at the fat protocol's slot types (a fatshim box's
+ * shim, a closure box's lifted entry), and its result goes to the
+ * continuation as the DK word.  That needs the signature (`sig`) to spell,
+ * resolved through the active monomorph, and every slot a scalar or pointer.
+ *
+ * The slot-1 probe is taken only for a { shim, orig } box, recognised by its
+ * header word: the no-op keep glue `__tur_fatbox_keep` (a static or stack box)
+ * or NULL (a malloc'd one, which owns nothing).  A closure env box always
+ * carries its drop glue there, and its slot 1 is its first capture. */
+static bool atom_ty_is_ptr_carrier(TypeKind k);     /* fwd (defined below) */
+static bool cps_atom_recorded_ptr(const char *a);    /* fwd (defined below) */
+static const Type *e2a_slot_type(const Type *sig, int i, Type *tmp) {
+    const Type *ft = NULL;
+    if (i < 0) ft = sig->as.fn.result_full_type;
+    else if (sig->as.fn.arg_full_types) ft = sig->as.fn.arg_full_types[i];
+    if (!ft) {
+        *tmp = emit_type_from_kind(i < 0 ? sig->as.fn.result_kind
+                                         : (TypeKind)sig->as.fn.arg_kinds[i]);
+        return tmp;
+    }
+    const Type *rt = cps_resolve_ty(ft, tmp);
+    return rt ? rt : ft;
+}
+static bool e2a_slot_kind_ok(TypeKind k, bool result) {
+    switch (k) {
+        case TY_NIL: return result;
+        case TY_FN:  return !result;             /* a fn value: the word */
+        case TY_BOOL: case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_INT64: case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64: case TY_CSTR: case TY_PTR_VOID:
+            return true;
+        default: return false;
+    }
+}
+static bool e2a_fallback_ok(const Type *sig, uint32_t n) {
+    if (!sig || sig->kind != TY_FN || sig->as.fn.arity != n) return false;
+    Type tmp;
+    for (uint32_t i = 0; i < n; i++)
+        if (!e2a_slot_kind_ok(e2a_slot_type(sig, (int)i, &tmp)->kind, false)) return false;
+    return e2a_slot_kind_ok(e2a_slot_type(sig, -1, &tmp)->kind, true);
+}
+/* The fallback's `return` statement: slot 0 called at its slot types, the
+ * result delivered to `thread` as the word. */
+static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint32_t n,
+                               const char *box, const char *thread) {
+    Type tmp;
+    Buf ps, av; buf_init(&ps); buf_init(&av);
+    for (uint32_t i = 0; i < n; i++) {
+        const Type *pt = e2a_slot_type(sig, (int)i, &tmp);
+        const char *pc = thunk_param_slot_c_name(*pt);
+        size_t pL = strlen(pc);
+        char *a = atom_str(ce, &args[i]);
+        TypeKind ak = args[i].ty;
+        if (g_cps_mono_resolver && args[i].type) {
+            Type _r; const Type *rt = cps_resolve_ty(args[i].type, &_r);
+            if (rt) ak = rt->kind;
+        }
+        bool ak_flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
+        buf_printf(&ps, ", %s", pc);
+        if (pc[pL - 1] == '*')
+            buf_printf(&av, ", (%s)(intptr_t)(%s)", pc, a);
+        else if (strcmp(pc, "double") == 0 || strcmp(pc, "float") == 0) {
+            if (ak_flt) buf_printf(&av, ", (%s)(%s)", pc, a);
+            else {
+                /* An erased word holding the float's bits (a generic's argument). */
+                char *v = cps_ir_fncps_value_of(strcmp(pc, "float") == 0 ? TY_FLOAT32 : TY_FLOAT, a);
+                buf_printf(&av, ", %s", v); free(v);
+            }
+        } else if (strcmp(pc, "int64_t") == 0) {
+            if (ak_flt) { char *w = cps_ir_fncps_word_of(ak, a); buf_printf(&av, ", %s", w); free(w); }
+            else if (atom_is_fat_fn(&args[i]) || atom_ty_is_ptr_carrier(ak) || cps_atom_recorded_ptr(a))
+                buf_printf(&av, ", (int64_t)(intptr_t)(%s)", a);
+            else buf_printf(&av, ", (int64_t)(%s)", a);
+        } else
+            buf_printf(&av, ", (%s)(%s)", pc, a);
+        free(a);
+    }
+    buf_putc(&ps, '\0'); buf_putc(&av, '\0');
+    const Type *rt = e2a_slot_type(sig, -1, &tmp);
+    Buf out; buf_init(&out);
+    if (rt->kind == TY_NIL) {
+        buf_printf(&out, "((void (*)(void *%s))(intptr_t)%s[0])((void *)%s%s); return dk_run(%s, (intptr_t)0);",
+                   ps.data, box, box, av.data, thread);
+    } else {
+        const char *rc = thunk_result_slot_c_name(*rt);
+        Buf cl; buf_init(&cl);
+        buf_printf(&cl, "((%s (*)(void *%s))(intptr_t)%s[0])((void *)%s%s)", rc, ps.data, box, box, av.data);
+        buf_putc(&cl, '\0');
+        size_t rL = strlen(rc);
+        if (rt->kind == TY_FLOAT || rt->kind == TY_FLOAT64 || rt->kind == TY_FLOAT32) {
+            char *w = cps_ir_fncps_word_of(rt->kind, cl.data);
+            buf_printf(&out, "return dk_run(%s, (intptr_t)(%s));", thread, w); free(w);
+        } else if (rc[rL - 1] == '*')
+            buf_printf(&out, "return dk_run(%s, (intptr_t)(%s));", thread, cl.data);
+        else
+            buf_printf(&out, "return dk_run(%s, (intptr_t)(int64_t)(%s));", thread, cl.data);
+        buf_free(&cl);
+    }
+    buf_putc(&out, '\0');
+    char *r = strdup(out.data);
+    buf_free(&out); buf_free(&ps); buf_free(&av);
+    return r;
+}
+
 /* Emit the via_registry dispatch for a FAT callee.  Two box species reach an
  * effectful fn slot, distinguishable by which slot the registry knows:
  *
@@ -7136,7 +7330,7 @@ static void e2a_cast(char *out, size_t cap, const char *lead, const Type *sig,
  * into the box.  `argv` is the carrier-cast arg CSV ("" when n == 0) and
  * `thread` the continuation expression. */
 static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
-                                  const char *argv, uint32_t n,
+                                  const CAtom *args, const char *argv, uint32_t n,
                                   const char *thread, const char *tag,
                                   const Type *sig) {
     char env_cast[512];
@@ -7145,16 +7339,25 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
     e2a_cast(thin_cast, sizeof thin_cast, "", sig, n);
     ce_line(ce, "{ int64_t *__e2ab = (int64_t *)(intptr_t)(%s); /* %s (fat callee) */", callee, tag);
     ce_line(ce, "  __tur_cps_fn __e2af = __tur_cps_lookup(__e2ab[0]);");
-    if (n) {
-        ce_line(ce, "  if (__e2af) return ((%s)__e2af)((void *)__e2ab, %s, %s);",
-                env_cast, argv, thread);
-        ce_line(ce, "  return ((%s)__tur_cps_lookup_checked(__e2ab[1], \"%s\"))(%s, %s); }",
-                thin_cast, who, argv, thread);
+    const char *sep = n ? ", " : "";
+    const char *av = n ? argv : "";
+    ce_line(ce, "  if (__e2af) return ((%s)__e2af)((void *)__e2ab, %s%s%s);",
+            env_cast, av, sep, thread);
+    if (args && e2a_fallback_ok(sig, n)) {
+        ensure_fatbox_keep(ce->ctx);
+        /* A { shim, orig } box's header is the keep glue (a static or stack box)
+         * or NULL (a malloc'd one: it owns nothing); a closure env box's is its
+         * drop glue, always.  Only the former has the direct entry in slot 1. */
+        ce_line(ce, "  void *__e2ah = ((void **)__e2ab)[-1];");
+        ce_line(ce, "  if (__e2ah == (void *)__tur_fatbox_keep || __e2ah == NULL) {");
+        ce_line(ce, "    __tur_cps_fn __e2as = __tur_cps_lookup(__e2ab[1]);");
+        ce_line(ce, "    if (__e2as) return ((%s)__e2as)(%s%s%s); }", thin_cast, av, sep, thread);
+        char *fb = e2a_fallback_stmt(ce, sig, args, n, "__e2ab", thread);
+        ce_line(ce, "  %s }", fb);   /* an unregistered value: the direct call */
+        free(fb);
     } else {
-        ce_line(ce, "  if (__e2af) return ((%s)__e2af)((void *)__e2ab, %s);",
-                env_cast, thread);
-        ce_line(ce, "  return ((%s)__tur_cps_lookup_checked(__e2ab[1], \"%s\"))(%s); }",
-                thin_cast, who, thread);
+        ce_line(ce, "  return ((%s)__tur_cps_lookup_checked(__e2ab[1], \"%s\"))(%s%s%s); }",
+                thin_cast, who, av, sep, thread);
     }
 }
 
@@ -8139,8 +8342,9 @@ static void emit_term(CE *ce, const CTerm *t) {
                                                    &t->as.tailcall.fn_atom,
                                                    t->as.tailcall.n);
                 if (e2a_call_is_fat(t->as.tailcall.fn, &t->as.tailcall.fn_atom)) {
-                    emit_e2a_fat_dispatch(ce, pf, pf, argv, t->as.tailcall.n,
-                                          thread, "E2a threaded fn-value", e2sig);
+                    emit_e2a_fat_dispatch(ce, pf, pf, t->as.tailcall.args, argv,
+                                          t->as.tailcall.n, thread,
+                                          "E2a threaded fn-value", e2sig);
                     free(pf); free(argv);
                     break;
                 }
@@ -9716,8 +9920,9 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
                                            &call->as.tailcall.fn_atom,
                                            call->as.tailcall.n);
         if (e2a_call_is_fat(call->as.tailcall.fn, &call->as.tailcall.fn_atom)) {
-            emit_e2a_fat_dispatch(ce, fn, fn, argv_cps, call->as.tailcall.n,
-                                  frame, "E2a threaded fn-value heap join", e2sig);
+            emit_e2a_fat_dispatch(ce, fn, fn, call->as.tailcall.args, argv_cps,
+                                  call->as.tailcall.n, frame,
+                                  "E2a threaded fn-value heap join", e2sig);
             free(argv_cps);
         } else {
         char cast[512];

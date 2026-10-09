@@ -168,6 +168,20 @@ static bool call_is_effectful_fnvalue(const Expr *e) {
     }
     return false;
 }
+/* cps-evicts-handle-in-operand-positions (the un-annotated generic fn param):
+ * is this call's callee a FAT fn-value PARAMETER -- a `^fat` param with a fn
+ * signature, or a fn-typed param the elaborator fat-normalizes -- so that its
+ * EMPTY-row call can thread through the registry when the param is a thread
+ * param?  The parameter's row says nothing about the value passed, which may
+ * perform; an unregistered (pure) value is called directly by the dispatch's
+ * fallback (emit_e2a_fat_dispatch), which needs the signature to spell. */
+static bool call_through_fat_param(const Expr *e) {
+    const Binding *fb = e->as.call_.fn_binding;
+    if (!fb || fb->is_global || fb->is_poly_fn || !fb->is_param || fb->type.kind != TY_FN)
+        return false;
+    return fb->is_fat || fn_param_type_is_fat_normalized(&fb->type);
+}
+
 static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
     e = ascribe_peel(e);
     if (!e || depth > 64) return false;
@@ -4654,6 +4668,25 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return fold_pending(b, &p, t);
         }
         case EX_CALL: {
+            /* An EMPTY-row call through a FAT thread param threads the caller's
+             * continuation the way an effectful-row one does
+             * (call_through_fat_param); the dispatch calls an unregistered --
+             * pure -- value directly. */
+            if (!call_is_effectful_fnvalue(e) && call_through_fat_param(e)
+                && cps_ir_thread_param_has(e->as.call_.fn_binding) && call_args_pendable(e)) {
+                Pending pp = {0};
+                const Binding *pf = e->as.call_.fn_binding;
+                uint32_t n = e->as.call_.n_args;
+                CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                for (uint32_t i = 0; i < n; i++)
+                    args[i] = atomize_call_arg(b, e, i, &pp);
+                CTerm *t = new_term(b, CT_TAILCALL);
+                t->as.tailcall.fn = pf; t->as.tailcall.args = args;
+                t->as.tailcall.n = n; t->as.tailcall.kont = kont;
+                t->as.tailcall.via_registry = true;
+                t->as.tailcall.call_expr = e;
+                return fold_pending(b, &pp, t);
+            }
             /* E2/taint-completeness: an effectful fn-value call cannot thread the
              * DK yet; delegating it to fiber under a DK handle escapes the effect.
              * Evict so the whole fn stays fiber (its effect taints -> the DK
@@ -5208,6 +5241,29 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return fold_pending(b, &p, t);
         }
         case EX_CALL: {
+            /* An empty-row call through a fat thread param, in BIND position:
+             * the continuation `rest` reified as a heap join, threaded to the
+             * value's entry via the registry (see cps_tail). */
+            if (!call_is_effectful_fnvalue(e) && call_through_fat_param(e)
+                && cps_ir_thread_param_has(e->as.call_.fn_binding) && call_args_pendable(e)) {
+                Pending pp = {0};
+                const Binding *pf = e->as.call_.fn_binding;
+                uint32_t n = e->as.call_.n_args;
+                CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                for (uint32_t i = 0; i < n; i++)
+                    args[i] = atomize_call_arg(b, e, i, &pp);
+                CVar j = fresh_cvar(b, x.type);
+                j.name = arena_strdup(b->a, "j", 1);
+                CTerm *call = new_term(b, CT_TAILCALL);
+                call->as.tailcall.fn = pf; call->as.tailcall.args = args;
+                call->as.tailcall.n = n; call->as.tailcall.kont = kont_var(j);
+                call->as.tailcall.via_registry = true;
+                call->as.tailcall.call_expr = e;
+                CTerm *t = new_term(b, CT_LETCONT);
+                t->as.letcont.j = j; t->as.letcont.param = x;
+                t->as.letcont.jbody = rest; t->as.letcont.body = call;
+                return fold_pending(b, &pp, t);
+            }
             /* E2/taint-completeness: evict an effectful fn-value call (see cps_tail). */
             if (call_is_effectful_fnvalue(e)) {
                 /* E2a tier-`nontail`: a thread-param call in BIND position threads the
@@ -5937,5 +5993,9 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call) {
         return false;
     if (call_is_effectful_fnvalue(call))
         return cps_ir_thread_param_has(p) && call_args_pendable(call);
+    /* An empty-row call through a fat thread param threads too (the dispatch
+     * calls an unregistered value directly). */
+    if (call_through_fat_param(call) && cps_ir_thread_param_has(p) && call_args_pendable(call))
+        return true;
     return fncps_param_call_ok(p, call);
 }

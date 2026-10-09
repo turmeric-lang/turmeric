@@ -1,0 +1,45 @@
+;; cps-evicts-handle-in-operand-positions, the last item: an effectful lambda
+;; through an UN-annotated fn parameter of a generic HOF -- stdlib's
+;; `option-map`, `(fn [A] B)` with no row -- was refused ("no lowering here").
+;; An empty-row call through a fat param threaded only via a THREAD param,
+;; and a param was one only when every value passed to it was registered, so
+;; one pure value anywhere in the program (`twice`, a pure lambda) unthreaded
+;; the effectful lambda.  The fat dispatch now falls back to a direct call of
+;; an unregistered value (emit_e2a_fat_dispatch: slot 0 at the slot types),
+;; and probes slot 1 only for a fatshim box (its `__tur_fatbox_keep` header),
+;; so a param receiving one threadable effectful value threads whatever else
+;; flows in.  Constructing a capturing closure literal is no longer read as
+;; performing its body's effects (letraw_effect_free).  Every line equals
+;; `tur --interpret`.
+(defeffect E [x : int] :int)
+(defeffect F [x : float] :float)
+;; a user generic HOF with an un-annotated fat param, called with pure AND effectful values
+(defn gmap [A B] [o : (Option A) ^fat f : (fn [A] B)] : (Option B)
+  (match o (Some v) (some (f v)) (None) (none)))
+(defn twice [x : int] : int (* 2 x))
+(defn unwrap0 [o : (Option int)] : int (match o (Some v) v (None) 0))
+(defn unwrapf [o : (Option float)] : float (match o (Some v) v (None) 0.0))
+(defn unwraps [o : (Option cstr)] : cstr (match o (Some v) v (None) "none"))
+(defn main [] : int
+  ;; pure named fn, pure lambda, pure capturing lambda: the fallback
+  (println (unwrap0 (gmap (some 5) twice)))                                   ; 10
+  (println (unwrap0 (gmap (some 5) (fn [x : int] : int (+ x 1)))))           ; 6
+  (let [k 7] (println (unwrap0 (gmap (some 5) (fn [x : int] : int (+ x k)))))) ; 12
+  ;; effectful lambda, effectful capturing lambda, effectful named fn
+  (println (handle (unwrap0 (gmap (some 1) (fn [x : int] : int (perform (E x)))))
+             (E [x] k) (resume k (+ x 41))))                                 ; 42
+  (let [m 100]
+    (println (handle (unwrap0 (gmap (some 1) (fn [x : int] : int (+ m (perform (E x))))))
+               (E [x] k) (resume k (+ x 41)))))                              ; 142
+  ;; a float callback through the same generic, pure and effectful
+  (println (unwrapf (gmap (some 1.5) (fn [x : float] : float (* x 2.0)))))   ; 3
+  (println (handle (unwrapf (gmap (some 1.5) (fn [x : float] : float (+ x (perform (F x))))))
+             (F [x] k) (resume k (* x 10.0))))                               ; 16.5
+  ;; a cstr result
+  (println (handle (unwraps (gmap (some 3) (fn [x : int] : cstr (if (> (perform (E x)) 40) "big" "small"))))
+             (E [x] k) (resume k (+ x 41))))                                 ; big
+  ;; stdlib option-map, pure and effectful, in one program
+  (println (unwrap0 (option-map (some 20) twice)))                            ; 40
+  (println (handle (unwrap0 (option-map (some 1) (fn [x : int] : int (perform (E x)))))
+             (E [x] k) (resume k (+ x 41))))                                 ; 42
+  0)
