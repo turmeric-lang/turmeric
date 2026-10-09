@@ -1,5 +1,17 @@
 # Aborting fixtures intermittently time out on the Linux JIT leg
 
+**Mitigation landed 2026-10-09, mechanism still unconfirmed.** Next step 2
+below is in `tests/run-jit.sh`, in a form that works without confirming
+step 1 first: when `/proc/sys/kernel/core_pattern` is a pipe, the harness
+sets `RLIMIT_CORE` to 1 -- the kernel's one "do not pipe this dump" value
+(`fs/coredump.c`; 0, which ASan's `disable_coredump` sets, is ignored for a
+pipe) -- and adds `disable_coredump=0` to `ASAN_OPTIONS` so the sanitized
+`tur` keeps it.  A file `core_pattern` is left alone.  It prints
+`run-jit: core dumps piped to '...'` when it applies, so the next
+`JIT engine (ubuntu-latest)` log shows whether the runner pipes cores at
+all; if it does and the clustered timeouts stop, this report can be
+archived; if it does not, the hypothesis is wrong and the line never prints.
+
 **Severity: low (CI noise on a `continue-on-error` leg).** Fixtures whose
 program ends in `abort()` -- a panic, a failed contract, a failed cast --
 sometimes run past `run-jit.sh`'s 15 s budget on `JIT engine (ubuntu-latest)`,

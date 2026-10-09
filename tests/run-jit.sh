@@ -66,6 +66,24 @@ cd "$(dirname "$0")/.."
 # back in with ASAN_OPTIONS=detect_leaks=1.
 export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 
+# jit-linux-aborting-fixtures-time-out: under the JIT the process a fixture's
+# `abort()` kills is the (sanitized, large) tur itself.  Where the kernel pipes
+# core dumps to a handler (`core_pattern` starting with `|`, apport on stock
+# Ubuntu), RLIMIT_CORE does not stop the dump -- ASan's disable_coredump sets
+# it to 0, which a pipe ignores -- and a handler serializing several big cores
+# at once was the suspected cause of aborting fixtures running past the
+# budget in clusters.  A limit of exactly 1 is the kernel's one "do not pipe
+# this dump" (fs/coredump.c), so set it, and keep ASan from resetting it to 0.
+# A file core_pattern is left alone: there a limit of 1 would leave 1-byte
+# cores in the fixture directories.
+_core_pattern="$(cat /proc/sys/kernel/core_pattern 2>/dev/null || true)"
+if [ "${_core_pattern#|}" != "$_core_pattern" ]; then
+    if ulimit -c 1 2>/dev/null; then
+        export ASAN_OPTIONS="$ASAN_OPTIONS:disable_coredump=0"
+        echo "run-jit: core dumps piped to '${_core_pattern%% *}'; RLIMIT_CORE=1 so aborting fixtures skip them"
+    fi
+fi
+
 # Force server fixtures to bind 127.0.0.1 instead of INADDR_ANY -- the same
 # export tests/run.sh:72 makes, and it must match: the stdlib listen path
 # (stdlib/httpd.tur:703) reads this env at RUN time, so a fixture behaves
