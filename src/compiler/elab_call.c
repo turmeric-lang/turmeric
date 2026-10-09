@@ -4067,6 +4067,14 @@ Expr *elab_call(Elab *e, Form *call) {
     g_elab_call_depth++;
     Expr *r = elab_call_inner(e, call);
     g_elab_call_depth--;
+    /* panic-location-names-the-runtime-not-the-call-site: a call written in
+     * a macro's TEMPLATE (`vec-set!` expanding to `vec-set-o!`) carries the
+     * macro use the program wrote, so a panic its callee raises names that
+     * use rather than a line of stdlib/vec.tur; a call the program wrote and
+     * handed to the macro keeps its own position. */
+    if (r && r->kind == EX_CALL && e->macro_site_top &&
+        span_within(r->span, e->macro_site_top->def))
+        r->as.call_.site = elab_macro_use_site(e, r->span);
     return r;
 }
 

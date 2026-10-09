@@ -117,8 +117,11 @@ panic at boom.tur:3: division by zero
 The location is the `(panic ...)` that fired: the source file's name and its
 line. `tur --interpret` prints the same line, with exit code 1. A failed
 `cast` names the cast the same way: `panic at boom.tur:7: cast: any holds
-Point, not Other`. A panic raised inside a runtime helper (a Saffron dynamic
-operator, say) still names a line in the generated C. The location does not say how your code got there. For the
+Point, not Other`. So does a bounds check inside a stdlib accessor -- the
+location is the call that failed, not the accessor's C: `panic at
+boom.tur:9: vec index out of bounds`. A panic raised inside a runtime helper
+the program never calls by name (a Saffron dynamic operator, say) still names
+a line in the generated C. The location does not say how your code got there. For the
 calls that led to it, use either of the next two sections: `tur debug`
 shows the Turmeric call stack directly, and a `--debug` build under lldb
 stops at the panic with the full stack (see

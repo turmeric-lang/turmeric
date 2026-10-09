@@ -1612,6 +1612,13 @@ struct Expr {
         struct { Binding *fn_binding; Expr **args; uint32_t n_args;
                  struct Expr *fn_expr;
                  struct Expr *dict_arg;
+                 /* panic-location-names-the-runtime-not-the-call-site: when
+                  * this call was written in a macro's template (`vec-set!`
+                  * expanding to `vec-set-o!`), the macro use the program
+                  * wrote (elab_macro_use_site); zero otherwise.  A panic the
+                  * callee raises names it (emit_call_site_span), as the
+                  * node's own span would name the template. */
+                 Span site;
                  bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
                  /* Bitmasks over argument index.  64-bit: ordinary parameters
                   * are unbounded (these masks stay 0 for non-poly calls), but a

@@ -4,6 +4,7 @@
 #include "platform_fs.h"  /* strndup() on Windows */
 #include "globals.h"      /* compiler config globals */
 #include "cps.h"          /* cps_visit_children (ownership provenance walk) */
+#include "diag.h"         /* diag_file_path (emit_site_push_text) */
 
 /* ------------ helpers ------------ */
 
@@ -1751,6 +1752,62 @@ static bool inline_c_env_visit(const Expr *x, void *ud) {
 }
 bool closure_body_inline_c_touches_env(const struct Closure *c) {
     return c && c->fn && inline_c_touches_env(c->fn->body, c);
+}
+
+/* panic-location-names-the-runtime-not-the-call-site: does this function
+ * raise a runtime panic itself -- a top-level defn whose inline-C body calls
+ * `tur_panic(` (vec-get's bounds check, grid-set!'s)?  Such a body is given
+ * its caller's site: a direct call sets it around the call
+ * (emit_site_set_text) and the body's `tur_panic` reads it (emit_fns.c).
+ * `tur_panic_at(` carries a site of its own and is not matched; a closure is
+ * entered through a value, with nothing set, so it is left alone. */
+bool fn_def_panics_in_inline_c(const FnDef *fd) {
+    if (!fd || fd->closure || !fd->body || fd->body->kind != EX_INLINE_C) return false;
+    const InlineC *ic = fd->body->as.inline_c_.inline_c;
+    if (!ic || !ic->code.p) return false;
+    static const char needle[] = "tur_panic(";
+    size_t nl = sizeof needle - 1;
+    for (size_t i = 0; i + nl <= ic->code.len; i++)
+        if (memcmp(ic->code.p + i, needle, nl) == 0) return true;
+    return false;
+}
+bool binding_panics_in_inline_c(const Binding *b) {
+    return b && b->is_global && fn_def_panics_in_inline_c(b->source_fn_def);
+}
+
+/* The source position a panic in `call`'s callee should name: the macro use
+ * the program wrote when the call was written in a template (`vec-set!`'s
+ * `vec-set-o!`), else the call's own span. */
+Span emit_call_site_span(const Expr *call) {
+    if (call && call->kind == EX_CALL && call->as.call_.site.line) return call->as.call_.site;
+    return call ? call->span : SPAN_UNKNOWN;
+}
+
+/* `tur_site_set(&__tur_site_N)` for a call at `span`, with the static
+ * `tur_site_t __tur_site_N = { "<file>", <line> }` written at file scope
+ * (thunk_typedefs, which lands after the preamble and ahead of every
+ * function) -- the source's basename, as emit_panic_call spells it, so the
+ * message is the same in every checkout.  NULL for a node with no span, or
+ * with nowhere to put the static (no siting then: the body names the
+ * runtime's line, as before).  Malloc'd. */
+char *emit_site_set_text(EmitCtx *ctx, Span span) {
+    const char *path = span.line ? diag_file_path(span.file_id) : NULL;
+    if (!path || !ctx || !ctx->thunk_typedefs) return NULL;
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    uint32_t id = (uint32_t)ctx->tmp_n++;
+    buf_printf(ctx->thunk_typedefs, "static const tur_site_t __tur_site_%u = { \"", id);
+    for (const char *p = base; *p; p++) {
+        if (*p == '\\' || *p == '"') buf_putc(ctx->thunk_typedefs, '\\');
+        buf_putc(ctx->thunk_typedefs, *p);
+    }
+    buf_printf(ctx->thunk_typedefs, "\", %u };\n", span.line);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "tur_site_set(&__tur_site_%u)", id);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
 }
 
 /* async-capturing-body-env-never-freed: may whoever alone owns this fresh

@@ -15170,12 +15170,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
+            /* panic-location-names-the-runtime-not-the-call-site: a callee
+             * whose inline-C body may panic is handed this call's own site,
+             * set just before the call and cleared just after it, so a
+             * panic in the body names this line (emit_fns.c).  A statement
+             * expression, so the clear follows the call and the value is
+             * still the call's, held in a temp of the callee's emitted
+             * return type (the signature side table -- not `__auto_type`,
+             * which c2mir lacks); a `void` callee has no value to hold, so
+             * it gets a plain comma expression (a void statement expression
+             * trips an assertion in c2mir); a callee the table does not know
+             * is called as before, unsited. */
+            const char *site_rct = binding_panics_in_inline_c(fn_binding)
+                                       ? emit_sig_lookup_ret_ctype(fn_name) : NULL;
+            char *site_set = (site_rct && *site_rct)
+                                 ? emit_site_set_text(ctx, emit_call_site_span(e)) : NULL;
+            bool site_void = site_set && strcmp(site_rct, "void") == 0;
+            if (site_set) {
+                if (site_void) buf_printf(&out, "(%s, ", site_set);
+                else buf_printf(&out, "({ %s; %s __tur_sr = ", site_set, site_rct);
+            }
             buf_printf(&out, "%s(", fn_name);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 if (i > 0) buf_puts(&out, ", ");
                 buf_printf(&out, "%s", arg_strs[i]);
             }
             buf_puts(&out, ")");
+            if (site_set) {
+                if (site_void) buf_puts(&out, ", tur_site_clear())");
+                else buf_puts(&out, "; tur_site_clear(); __tur_sr; })");
+                free(site_set);
+                /* The panic hoist types its `__ps_N` temp from this note; left
+                 * to read the text it finds `({` and falls back to
+                 * `__auto_type`, which c2mir does not know. */
+                note_call_ret(ctx, site_rct);
+            }
             buf_putc(&out, '\0');
             char *result = strdup(out.data);
             buf_free(&out);

@@ -7110,6 +7110,24 @@ static char *callee_name(const Binding *fn) {
     return raw_name_for_binding(fn);   /* malloc'd */
 }
 
+/* panic-location-names-the-runtime-not-the-call-site: around a cps->direct
+ * call to a callee whose inline-C body may panic, the statement that sets
+ * this call's site (`tur_site_set(&__tur_site_N);`), or NULL.  The caller
+ * writes it just before the call line and `tur_site_clear();` just after
+ * (cps_site_clear); the arguments are atoms, so nothing between the two is a
+ * call.  Malloc'd. */
+static char *cps_site_set(CE *ce, const Binding *fb, const Expr *call_expr) {
+    if (!call_expr || !binding_panics_in_inline_c(fb)) return NULL;
+    char *set = emit_site_set_text(ce->ctx, emit_call_site_span(call_expr));
+    if (set) ce_line(ce, "%s;", set);
+    return set;
+}
+static void cps_site_clear(CE *ce, char *set) {
+    if (!set) return;
+    ce_line(ce, "tur_site_clear();");
+    free(set);
+}
+
 /* E2a lookup key for a `via_registry` callee.
  *
  * The registry is keyed on a function's DIRECT ENTRY address
@@ -8204,6 +8222,9 @@ static void emit_term(CE *ce, const CTerm *t) {
              * placeholder, never `x = void_fn(...)` (a C "void value not ignored"
              * error).  Mirrors emit_letraw's nil handling; needed once a nil
              * cps->direct call rides a lifted join/frame body (P6). */
+            /* panic-location-names-the-runtime-not-the-call-site: the site
+             * set / clear bracket the one call line each arm below writes. */
+            char *site_lc = cps_site_set(ce, t->as.letcall.fn, t->as.letcall.call_expr);
             if (t->as.letcall.x.ty == TY_NIL) {
                 ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv);
                 ce_line(ce, "%s = 0;", bn);
@@ -8280,6 +8301,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                 else
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
+            cps_site_clear(ce, site_lc);
             /* A by-value clone result is boxed and reaped above, so only the
              * unresolved callee's carrier word can owe the reader's drop. */
             if (!mclone_lc && !rr_lc && t->as.letcall.x.ty != TY_NIL)
@@ -8609,8 +8631,13 @@ static void emit_term(CE *ce, const CTerm *t) {
                     rgn_id = (int)ce->ctx->tmp_n++;
                     ce_line(ce, "int __tur_rgn_%d = tur_region_push();", rgn_id);
                 }
+                /* panic-location-names-the-runtime-not-the-call-site: the
+                 * site set / clear bracket the call line, before the panic
+                 * check and the delivery (either may leave this body). */
+                char *site_tc = cps_site_set(ce, t->as.tailcall.fn, t->as.tailcall.call_expr);
                 if (crt && (crt->kind == TY_NIL || crt->kind == TY_NEVER)) {
                     ce_line(ce, "%s(%s); /* cps->direct (nil) */", fn, argv_t);
+                    cps_site_clear(ce, site_tc);
                     cps_panic_check(ce);   /* cps-body-panic-not-propagated */
                     cps_deferred_consume_atoms(ce, t->as.tailcall.args, t->as.tailcall.n);
                     emit_deliver(ce, &t->as.tailcall.kont, "0");
@@ -8625,6 +8652,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                         ce_line(ce, "%s %s = %s(%s); /* cps->direct */", drt, tmp, fn, argv_t);
                     else
                         ce_line(ce, "__auto_type %s = %s(%s); /* cps->direct */", tmp, fn, argv_t);
+                    cps_site_clear(ce, site_tc);
                     /* region-escape-through-unhooked-stores item 3: the panic
                      * check returns before the pop below, stranding the
                      * generation; retire it on the panic arm first (as the

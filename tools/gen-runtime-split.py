@@ -71,6 +71,11 @@ TLS = {
     'tur_tb_armed_for': ('void **', 'tur_tls_tb_armed_for_ptr'),
     'tur_tb_root': ('void **', 'tur_tls_tb_root_ptr'),
     'tur_tb_sentinel_box': ('void **', 'tur_tls_tb_sentinel_box_ptr'),
+    # The current panic site (tur_cur_site, panic-location-names-the-runtime-
+    # not-the-call-site) is deliberately NOT here: it is emitted after the end
+    # marker, program-side, where gcc/clang give it a native thread-local
+    # store rather than an accessor call around every vec-get.  Only c2mir
+    # reaches the host's tur_tls_cur_site_ptr, through the emitted #else.
 }
 
 # Functions whose BODY belongs in the decls half, emitted `static inline`, and

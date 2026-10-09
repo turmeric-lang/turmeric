@@ -14870,6 +14870,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }\n\n");
+    /* panic-location-names-the-runtime-not-the-call-site: the current panic
+     * site and tur_panic_sited are PROGRAM-side, after the fixed preamble
+     * (emit_panic_site_slot) -- a thread-local in this region is reached
+     * through a host accessor call in a hosted build. */
 
     /* Phase R5: tur_panic_abort for #[no-unwind] */
     buf_puts(out, "/* Phase R5: tur_panic_abort - no unwinding, immediate abort */\n");
@@ -18235,6 +18239,49 @@ static void emit_hoisted_includes(Buf *out) {
     }
 }
 
+/* panic-location-names-the-runtime-not-the-call-site: a direct call to a
+ * function whose inline-C body may panic (`tur_panic(` in its text --
+ * vec-get's bounds check) sets the thread's current site to its own source
+ * position (a static `tur_site_t` the emitter interns per call,
+ * emit_site_set_text) just before the call and clears it just after, and
+ * `tur_panic` inside such a body is tur_panic_sited (emit_fns.c), which
+ * names that site -- so the location printed is the call's, not the
+ * runtime's.  Two stores per call, nothing on entry; the slot is read only
+ * when a panic happens.  A sited call among the arguments sets and clears
+ * its own before the outer call runs, so the outer then has none and names
+ * the runtime's line, as before -- never another call's; a body entered
+ * through a function value (nothing set) does the same.
+ *
+ * Emitted AFTER the fixed preamble, with the hoisted includes, on purpose.
+ * Nothing in the runtime archive reads the slot, and a thread-local inside
+ * the fixed region is reached through a host accessor CALL in a hosted
+ * build (the decls half takes the accessor branch) -- two calls around
+ * every vec-get.  Here, under gcc/clang, it is a native thread-local store.
+ * c2mir has no thread-locals and takes the host's slot
+ * (src/runtime/tur_tls.c), as the fixed region's do.  Every emitted unit --
+ * the program, a split build's library and client, a `--shared` TU -- gets
+ * its own `static` slot and helpers; a call from one unit into another's
+ * sited body is one more "nothing set". */
+static void emit_panic_site_slot(Buf *out) {
+    buf_puts(out,
+        "/* panic-location-names-the-runtime-not-the-call-site: the source site of\n"
+        " * the direct call to a panicking inline-C body this thread is making --\n"
+        " * set just before the call, cleared just after, read by tur_panic_sited. */\n"
+        "typedef struct { const char *file; int line; } tur_site_t;\n"
+        "#if defined(__GNUC__) || defined(__clang__)\n"
+        "static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;\n"
+        "#else\n"
+        "extern void **tur_tls_cur_site_ptr(void);\n"
+        "#define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())\n"
+        "#endif\n"
+        "static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }\n"
+        "static inline void tur_site_clear(void) { tur_cur_site = NULL; }\n"
+        "static inline void tur_panic_sited(const char *msg) {\n"
+        "    const tur_site_t *s = tur_cur_site;\n"
+        "    if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);\n"
+        "}\n\n");
+}
+
 /* project-mode-rc-runtime-preamble-missing: shared runtime header for the
  * owner-TU design.  Wraps the full runtime preamble (shared mode: globals
  * owner-gated, most functions demoted to static, the rc<T>/GC family
@@ -18251,6 +18298,7 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "#ifndef TUR_RUNTIME_H\n#define TUR_RUNTIME_H\n");
     emit_runtime_preamble(out, NULL, /*shared=*/true);
     emit_hoisted_includes(out);
+    emit_panic_site_slot(out);
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
 }
 
@@ -20399,11 +20447,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         Buf pre; buf_init(&pre);
         emit_runtime_preamble(&pre, program, false);
         emit_hoisted_includes(&pre);
+        emit_panic_site_slot(&pre);
         emit_split_state(pre.data, pre.len, g_emit_split, out);
         buf_free(&pre);
     } else {
         emit_runtime_preamble(out, program, false);
         emit_hoisted_includes(out);
+        emit_panic_site_slot(out);
     }
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be

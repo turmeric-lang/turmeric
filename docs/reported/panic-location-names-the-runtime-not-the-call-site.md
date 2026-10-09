@@ -1,5 +1,47 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed again 2026-10-09: a panic raised in a stdlib inline-C body names
+the call.** `(vec-get v 9)` on line 12 prints `panic at input.tur:12: vec
+index out of bounds` on both engines, where it printed the runtime's own line
+compiled and a bare `panic at` interpreted. Compiled: a direct call to a
+function whose inline-C body calls `tur_panic(` (vec-get, vec-set!, slice-get,
+grid-get/set!, sized-buf-get, the sized-bitvec accessors, json's decoders,
+the arrow loop cell; `fn_def_panics_in_inline_c`) sets the thread's current
+site to a static `{ "input.tur", 12 }` the emitter interns per call just
+before the call and clears it just after -- `({ tur_site_set(&__tur_site_N);
+__auto_type r = vec_get(...); tur_site_clear(); r; })` in the general call
+arm of `emit_expr.c`, a set and a clear statement around the call line in
+the cps->direct arms of `emit_cps_ir.c` -- and `tur_panic` inside such a
+body is `tur_panic_sited`, which names the current site (`emit_fns.c`
+`#define`s it for the body's extent). One slot (`tur_cur_site`, host slot
+`tur_tls_cur_site` under the JIT), not a stack: a sited call among the
+arguments sets and clears its own before the outer call runs, so the outer
+then names the runtime's line as before, never another call's --
+`tests/fixtures/panic-site-nested-sited-args` has such an argument and the
+outer call still names its line, because the inner call's clear precedes
+the outer's set. A call written in a macro's TEMPLATE -- `vec-set!` expands
+to `vec-set-o!` in stdlib/vec.tur -- carries the macro use the program wrote
+(`EX_CALL.site`, set by `elab_call` from `elab_macro_use_site`), so `(vec-set!
+v 9 5)` names the program's line, not vec.tur's; a call the program wrote and
+handed to a macro keeps its own (`vec-bounds-failure-keeps-prior-output`
+pins the macro case). Interpreted: the driver sets `g_panic_site` from the call
+node before a native leaf call and clears it after, so `turi_runtime_panic`
+in `vec-get`'s native prints the same line (`vec-index-out-of-bounds-panics`
+pins both). Cost: two thread-local stores per such call, none at entry -- a
+100,000,000-iteration loop of nothing but `vec-get` went from 0.09 s to
+0.14 s on a 4-core box (the slot is emitted program-side, after the fixed
+preamble, because a thread-local in the fixed region is reached through a
+host accessor CALL in a hosted build, which doubled that loop). **Still
+open:** a panic raised in a runtime helper
+the program never names -- a Saffron dynamic operator
+(`ensure_saffron_dyn_runtime`), a dynamic method dispatch on an `any`
+(`__tur_inst_slot`), the r7rs raising check -- names the helper's line; so
+does a sited body entered through a function value or an instance-method
+dispatch (no site set: the runtime's line, or the enclosing sited call's
+while its arguments are being evaluated, which is the same line), and the
+interpreter's panic from a native reached other than through the driver's
+leaf call.
+
 **Narrowed again 2026-10-09: an index out of bounds is a panic.** `vec-get`,
 `vec-set!`, `vec-get-byval`, `slice-get`, `grid-get`/`grid-set!`,
 `sized-buf-get` and the `sized-bitvec-*` accessors printed their message and

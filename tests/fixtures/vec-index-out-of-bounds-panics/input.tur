@@ -3,7 +3,7 @@
 ;; catchable, and the interpreter's native did the same with _exit(1).  Both
 ;; engines raise a panic now (tur_panic / turi_runtime_panic): a catch-unwind
 ;; in scope catches it, and with none the process dies as any panic does.
-;; The location the compiled panic names is still the runtime's (open).
+;; Both engines name the call that panicked -- `input.tur:12` -- not the runtime.
 (defn main [] : int
   (let [v (vec-of 1 2 3)
         r (catch-unwind (fn [] : int (vec-get v 7)))]

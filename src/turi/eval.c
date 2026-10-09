@@ -10564,8 +10564,17 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         break;
                     }
                     /* Leaf: native / inline-C, dispatched inside eval_apply
-                     * (no driver re-entry).  eval_apply copies args, so free. */
+                     * (no driver re-entry).  eval_apply copies args, so free.
+                     * panic-location-names-the-runtime-not-the-call-site: a
+                     * native that raises a runtime panic (vec-get's bounds
+                     * check, turi_runtime_panic) names this call; the site is
+                     * consumed by the panic or cleared after the call, so no
+                     * later panic inherits it. */
+                    if (cl->native)
+                        g_panic_site = (top->expr->kind == EX_CALL && top->expr->as.call_.site.line)
+                                           ? top->expr->as.call_.site : top->expr->span;
                     cur = eval_apply(env, cl, acc, n);
+                    g_panic_site = SPAN_UNKNOWN;
                     TURI_DRIVE_FREE_EP(acc_epoch, acc); len--;
                     break;
                 }

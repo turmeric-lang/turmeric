@@ -1,0 +1,11 @@
+;; panic-location-names-the-runtime-not-the-call-site: the site a direct call
+;; pushes is a STACK entry, so a sited call among the arguments -- the inner
+;; vec-get here, in bounds -- pops its own site, and the outer, out-of-bounds
+;; vec-get still names this file's line 10, whatever order C evaluates the
+;; arguments in.  Both engines print the same line.
+(defn main [] : int
+  (let [idx (vec-of 0 1 2)
+        v   (vec-of 10 20 30)]
+    (println (vec-get v (vec-get idx 2)))
+    (vec-get v (+ 7 (vec-get idx 0)))
+    0))

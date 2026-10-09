@@ -138,6 +138,13 @@ void **tur_tls_tb_root_ptr (void) { return &tur_tls_tb_root; }
 static __thread _Alignas(16) unsigned char tur_tls_tb_sentinel_box[16];
 void **tur_tls_tb_sentinel_box_ptr (void) { return (void **) tur_tls_tb_sentinel_box; }
 
+/* The current panic site (emit_module.c, panic-location-names-the-runtime-
+ * not-the-call-site): the source position of the direct call to a panicking
+ * inline-C body this thread is making, set just before and cleared just
+ * after.  A pointer to a preamble-private static {file, line} pair. */
+static __thread void *tur_tls_cur_site = 0;
+void **tur_tls_cur_site_ptr (void) { return &tur_tls_cur_site; }
+
 #ifdef _WIN32
 #include <windows.h>
 /* The calling thread's stack base, for the r7rs prelude's call/cc image under
