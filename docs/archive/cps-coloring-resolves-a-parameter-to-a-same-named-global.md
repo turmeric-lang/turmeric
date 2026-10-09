@@ -1,7 +1,7 @@
 # CPS coloring resolved a call through a parameter to a same-named global
 
 **RESOLVED 2026-10-07.** Found and fixed the same day, while working
-[r7rs-prelude-library-object-varies-with-the-program](../reported/r7rs-prelude-library-object-varies-with-the-program.md).
+[r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md).
 
 **Severity was:** medium. A function that calls a function-typed parameter or
 local was left uncolored whenever the program also had a top-level function of
@@ -56,7 +56,7 @@ still registers every node by name, so the named-let alias resolves as before.
 ## Effect on the r7rs library cache
 
 This was most of
-[r7rs-prelude-library-object-varies-with-the-program](../reported/r7rs-prelude-library-object-varies-with-the-program.md).
+[r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md).
 That report's two variant-forking programs both define `f`
 (`(define f (lambda ...))`, `(define (f x) ...)`), so `__cons-fmap` lost its
 CPS twin, and the fresh-name counters shifted after it. Its "a lambda forks the

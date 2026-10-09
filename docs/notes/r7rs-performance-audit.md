@@ -84,7 +84,7 @@ glue). `r7rs-eval` defines 206 more (143 `r7rs_*` from `r7rs/eval.tur` and
 | objects created by one serial pass | 10 (20 MB) | | |
 
 This is
-[r7rs-prelude-library-object-varies-with-the-program](../reported/r7rs-prelude-library-object-varies-with-the-program.md),
+[r7rs-prelude-library-object-varies-with-the-program](../archive/r7rs-prelude-library-object-varies-with-the-program.md),
 reproduced. It is the likeliest cause of the 10 s build timeouts. A cold
 variant costs 17-48 CPU-seconds on a box whose other cores are running
 fixtures. Every other fixture of the same variant then **waits on that
@@ -224,7 +224,7 @@ Debug numbers, so algorithmic fixes show less there.
 
 | # | change | buys | effort |
 | --- | --- | --- | --- |
-| 1 | Make the library unit program-independent (the fix 1 in [r7rs-prelude-library-object-varies-with-the-program](../reported/r7rs-prelude-library-object-varies-with-the-program.md)) | one cold compile per suite instead of ~10 (17-48 CPU-s each), and no fixture waiting on another's lock inside its timer. Most of the 60 s budgets exist for this | medium |
+| 1 | Make the library unit program-independent (the fix 1 in [r7rs-prelude-library-object-varies-with-the-program](../archive/r7rs-prelude-library-object-varies-with-the-program.md)) | one cold compile per suite instead of ~10 (17-48 CPU-s each), and no fixture waiting on another's lock inside its timer. Most of the 60 s budgets exist for this | medium |
 | 2 | Put imported libraries (SRFIs, `r7rs/eval`, `read`, `file`, ...) in a cached unit: per library, or as a variant of the library unit keyed by the import set | 2-4 s off every SRFI and eval build (cc of 200-375 functions) | medium |
 | 3 | ~~Reclaim interpreter frames that nothing captured, and give `eval_lookup` a pointer-compare fast path~~ **done** | memory flat instead of ~4 KB/step (0.7-1 GB fixtures drop to tens of MB); ~10-20% interpreter CPU | medium / small |
 | 4 | Once (1) holds, key the prelude cache on its *inputs* (tur version, stdlib content hash, autoload set, flags) and skip emitting the library unit on a hit | a split build's front end drops from ~2x `emit-c` to ~1x (0.40 s to ~0.2 s Release) | small, after 1 |

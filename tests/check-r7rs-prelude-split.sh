@@ -192,6 +192,20 @@ for p in withc:7 withf:2; do
     got=$("$d/$name" 2>/dev/null)
     [ "$got" = "$want" ] || fail "stable/$name printed '$got', not '$want'"
 done
+# ...nor an `-I` naming a directory with no C header in it (cause 3 of the
+# same report): `tur build -I . p.tur` and `tur build p.tur` compile
+# byte-identical library text, so they must link one object.
+if (cd "$d" && TUR_PRELUDE_SPLIT=1 TUR_SHOW_CC=1 "$TUR" build -I "$d" withf.tur -o "$d/withI") \
+        >"$d/withI.log" 2>&1; then
+    lib=$(grep '^CC: ' "$d/withI.log" | grep -v ' -c -o ' | tail -1 |
+          grep -o "[^ '\"]*/prelude/[0-9a-f]*\.o" | head -1)
+    if [ -n "$LIB_A" ] && [ "$lib" != "$LIB_A" ]; then
+        fail "stable/withI built its own library unit (${lib##*/} vs ${LIB_A##*/}):" \
+             "an -I that supplies no header reached the cache key"
+    fi
+else
+    fail "stable/withI: build failed"; tail -20 "$d/withI.log" | sed 's/^/    /'
+fi
 
 # r7rs-prelude-library-cold-compile: a cold cache compiles the library unit
 # in pieces (emit_split_pieces), one per CPU, and links them into the one

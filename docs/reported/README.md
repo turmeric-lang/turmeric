@@ -61,8 +61,8 @@ error.
 
 From [docs/notes/r7rs-performance-audit.md](../notes/r7rs-performance-audit.md),
 which measures every `#lang r7rs` fixture on all three back ends. The cold
-prelude-variant cost it also found is the existing
-[r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md).
+prelude-variant cost it also found was
+[r7rs-prelude-library-object-varies-with-the-program](../archive/r7rs-prelude-library-object-varies-with-the-program.md) (resolved 2026-10-09).
 
 | Report | Severity | One line |
 | --- | --- | --- |
@@ -94,7 +94,7 @@ suite's warm-up should have absorbed.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md) | medium | **Narrowed 2026-10-07:** 10 library objects across the 129-fixture r7rs corpus -> 2 (one shared, one for `(scheme eval)`'s sanitized link). The "a lambda forks it" cause was the CPS coloring resolving `__cons-fmap`'s parameter `f` to a program's global `f` (the counter shifts followed from it), and the program's own hoisted inline-C `#define`/`#include`s reached the library unit; both fixed and pinned in `check-r7rs-prelude-split.sh`. The cache is now LRU-pruned (24 objects, a day's grace). Still open: `-I`/`-D` flags that reach no header fork the key. Was: The "program-independent" cached prelude object is not: fresh-name counters, whole-program CPS decisions and irrelevant `-I` flags reach its text, so 114 r7rs fixtures need 10 objects at 5-14 s each cold, a lambda alone forks a new one, `run.sh`'s warm-up warms the wrong variant, and the cache is never evicted. Importing a library is not the cause |
+| ~~[r7rs-prelude-library-object-varies-with-the-program](../archive/r7rs-prelude-library-object-varies-with-the-program.md)~~ | medium | **RESOLVED 2026-10-09** (archived): the last cause, `-I` flags, is fixed -- a build's `-I <dir>` enters the prelude cache key only if the directory holds a C header (`dir_may_supply_headers`), so `tur build -I . a.tur` links the object `tur build a.tur` does. Earlier: 10 library objects across the r7rs corpus -> 2 (the CPS coloring's same-named-global edge, a program's inline-C directives in the library unit), and LRU pruning. Pinned by `check-r7rs-prelude-split.sh` (`stable/withI`) |
 
 ## Found writing the memory-usage guide (filed 2026-10-05)
 

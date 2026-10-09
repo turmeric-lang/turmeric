@@ -1,5 +1,9 @@
 # `#lang r7rs`: the cached prelude object varies with the program, so "first builds" keep happening
 
+**RESOLVED 2026-10-09.** Cause 3, the last one, is fixed: an `-I` naming a
+directory that holds no C header no longer reaches the cache key. See
+"Resolution of cause 3" at the end.
+
 **Narrowed 2026-10-07: causes 1 and 2 below are fixed, and so is a fourth
 one this report missed. What is left is cause 3 (flags) and eviction.** On
 the same corpus walk as below (129 `#lang r7rs` fixtures, in order, cold
@@ -156,3 +160,26 @@ is by design.
 
 Nothing yet. A check that builds two programs differing only in a lambda,
 on a fresh `TMPDIR`, and asserts one `prelude/*.o` would pin fix 1.
+
+## Resolution of cause 3 (2026-10-09)
+
+`prelude_split_object` (`src/main.c`) now hashes a copy of the compile flags
+in which a build's own `-I <dir>` appears only if the directory could supply a
+header (`dir_may_supply_headers`): a file named like one (`.h`, `.hh`, `.hpp`,
+`.hxx`, `.inc`, `.def`) up to three levels down, or a directory too large to
+walk (4,000 entries). The usual `-I` -- a Turmeric module path, or `-I .` in
+a project of `.tur` files -- has none, so `tur build -I . a.tur` and `tur
+build a.tur` now link one object; an `-I` with a header in it still gets its
+own. The flag is passed to the compile either way.
+
+Measured on a cold `TMPDIR`: `r7rs-named-let-sum` built plain, then with
+`-I .`, leaves one object (two before); then with `-I hdr` (`hdr/x.h`), two.
+
+What stays in the key on purpose: the `-I`/`-D` tokens a program's own
+`__tur_autolink__` hints add. In the stdlib only `(scheme eval)` has any, and
+an eval program links the sanitized libturi, which is its own object by
+design (the first section above).
+
+Pinned by `tests/check-r7rs-prelude-split.sh`: `stable/withI` builds the
+`withf` program with `-I` on its own (header-free) directory and fails if it
+links a different object.

@@ -1335,7 +1335,7 @@ done
 # Pay it once here, untimed, with the compiler and environment the fixtures
 # build with.  Since 2026-10-07 every r7rs fixture that does not import
 # `(scheme eval)` links this one object
-# (docs/reported/r7rs-prelude-library-object-varies-with-the-program.md).  An
+# (docs/archive/r7rs-prelude-library-object-varies-with-the-program.md).  An
 # `eval` program links the sanitized libturi, whose flags are part of the cache
 # key, so the first of those still compiles a second object, inside its own
 # timed build.
