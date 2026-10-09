@@ -16304,15 +16304,20 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * backend did not take), it has no root of its own: ANY park is below it.
      * The emitter sets this just before such a spawn (emit_async_direct_body);
      * the spawn consumes it. */
-    emit_rt_global(out, shared,
-                   "int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */\n\n",
-                   "int tur_async_direct_body");
+    emit_rt_tls(out, shared,
+                "TUR_THREAD_LOCAL int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */\n\n",
+                "TUR_THREAD_LOCAL int tur_async_direct_body",
+                "tur_async_direct_body", "int *", "tur_tls_async_direct_body_ptr", NULL);
     /* async-capturing-body-env-never-freed: the next closure spawn OWNS its box
      * -- a fresh capturing lambda written at the spawn whose env drop is
      * shallow (emit_async_owns_env) -- and drops it when the body settles. */
-    emit_rt_global(out, shared,
-                   "int tur_async_owns_env = 0;  /* the next closure spawn owns its box */\n\n",
-                   "int tur_async_owns_env");
+    /* Both flags are set and read by one thread between a spawn site and the
+     * spawn it calls, so each is thread-local: a thread-backed body spawning
+     * while another thread spawns must not read the other's flag. */
+    emit_rt_tls(out, shared,
+                "TUR_THREAD_LOCAL int tur_async_owns_env = 0;  /* the next closure spawn owns its box */\n\n",
+                "TUR_THREAD_LOCAL int tur_async_owns_env",
+                "tur_async_owns_env", "int *", "tur_tls_async_owns_env_ptr", NULL);
 
     /* The exit of every direct->CPS entry wrapper (emit_cps_ir.c, and
      * __dk_enter0 below).  A body that settled frees its root and leaves its
@@ -16530,7 +16535,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * which the future is an ordinary completed one.  A panic in the body
      * rejects the future, as for the inline spawns (tur_panicking and the
      * handler chain are thread-local). */
-    buf_puts(out, "typedef struct { int64_t (*call)(void *); void *env; TurFuture *future; } TurAsyncThreadArg;\n\n");
+    /* async-capturing-body-env-never-freed: `own_env` is the closure box the
+     * spawn owns (tur_async_owns_env at the spawn), dropped by the thread once
+     * the body has settled -- it is the body's env, so nothing else reads it
+     * after that, and the drop frees the box alone (the spawn admits only
+     * such an env). */
+    buf_puts(out, "typedef struct { int64_t (*call)(void *); void *env; TurFuture *future; void *own_env; } TurAsyncThreadArg;\n\n");
     buf_puts(out, "static int64_t __tur_async_call_box(void *clos) {\n");
     buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
     buf_puts(out, "    return __fn(clos);\n");
@@ -16542,6 +16552,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = a->call(a->env);\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    void *__own = a->own_env;\n");
     buf_puts(out, "    free(a);\n");
     buf_puts(out, "    if (!tur_async_reject_if_panicking(future)) {\n");
     /* A plain store, like tur_future_fulfill's: every reader of a threaded
@@ -16553,15 +16564,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        future->value = result;\n");
     buf_puts(out, "        future->status = FUTURE_FULFILLED;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    if (__own) TUR_CLOSURE_DROP(__own);\n");
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static TurFuture *tur_async_thread_via(int64_t (*call)(void *), void *env) {\n");
     buf_puts(out, "    TurFuture *future = tur_future_new();\n");
     buf_puts(out, "    if (!tur_scheduler) tur_scheduler = tur_scheduler_new();\n");
+    buf_puts(out, "    int __own = tur_async_owns_env; tur_async_owns_env = 0;\n");
     buf_puts(out, "    TurAsyncThreadArg *a = (TurAsyncThreadArg *)malloc(sizeof(TurAsyncThreadArg));\n");
     buf_puts(out, "    pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));\n");
     buf_puts(out, "    if (!a || !tid) { fprintf(stderr, \"async: out of memory\\n\"); abort(); }\n");
     buf_puts(out, "    a->call = call; a->env = env; a->future = future;\n");
+    buf_puts(out, "    a->own_env = __own ? env : NULL;\n");
     buf_puts(out, "    if (pthread_create(tid, NULL, tur_async_thread_main, a) != 0) {\n");
     buf_puts(out, "        fprintf(stderr, \"async: pthread_create failed\\n\");\n");
     buf_puts(out, "        abort();\n");

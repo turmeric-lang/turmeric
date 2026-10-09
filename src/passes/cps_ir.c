@@ -1075,6 +1075,9 @@ static bool indirect_callee_ok(const Expr *fe) {
  * and every unmodeled control form default to "escapes"), so a `false` result
  * PROVES the binding does not escape `e`. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+/* An inline-C block in the closure's body names one of its captures (an
+ * lvalue into the env box); defined emit-side (emit_core.c). */
+bool closure_body_inline_c_touches_env(const struct Closure *c);
 
 /* Is let-binding `idx` of `let` a capturing closure whose heap fat-env may be
  * freed when the closure dies?  Mirrors the direct emitter's
@@ -1089,7 +1092,6 @@ bool closure_binding_escapes(const Expr *e, const Binding *b);
  *   - the bound name does not escape the let body or any sibling initializer
  *     (closure_binding_escapes is conservative, so a false negative merely keeps
  *     the status-quo leak; it never frees a still-live env). */
-static bool expr_has_inline_c_node(const Expr *e);   /* fwd */
 static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
     const Binding *b = let->as.let_.bindings[idx].binding;
@@ -1105,12 +1107,12 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
         /* As the direct emitter's let_binding_env_freeable (RM1): a by-value
          * aggregate is copied out, a carrier box is a malloc of its own, and a
          * cstr points at characters -- none points into the env unless the
-         * body took its address, which only inline C can do.  Walked exactly
-         * here: a CPS lambda's body performs, which the conservative
-         * expr_subtree_has_inline_c reads as possible inline C. */
+         * body took its address, which only an inline C block naming a
+         * capture can do (closure_body_inline_c_touches_env; the conservative
+         * expr_subtree_has_inline_c reads a `perform` as possible inline C). */
         case TY_APP: case TY_ADT: case TY_CSTR:
             if (!init->as.closure_.closure->fn
-                || expr_has_inline_c_node(init->as.closure_.closure->fn->body))
+                || closure_body_inline_c_touches_env(init->as.closure_.closure))
                 return false;
             break;
         default: return false;   /* non-scalar result may alias the env */
@@ -3551,21 +3553,6 @@ static bool local_closure_type_ok(const Type *t) {
     return fn_alias_kind_concrete(t->kind);
 }
 
-static bool inline_c_visit(const Expr *c, void *ud);
-/* Does `e` hold an inline-C node?  Exact, through the shared operand
- * enumeration, which never enters a nested fn (its body is its own). */
-static bool expr_has_inline_c_node(const Expr *e) {
-    if (!e) return false;
-    if (e->kind == EX_INLINE_C) return true;
-    bool found = false;
-    cps_visit_children(e, inline_c_visit, &found);
-    return found;
-}
-static bool inline_c_visit(const Expr *c, void *ud) {
-    if (expr_has_inline_c_node(c)) { *(bool *)ud = true; return true; }
-    return false;
-}
-
 static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
     if (!let || i >= let->as.let_.n) return NULL;
     /* A `letrec` of one capturing member is the same shape: its lambda reaches
@@ -3614,7 +3601,8 @@ static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
      * release must free nothing the lambda's result can still point into: a
      * scalar result points into nothing, and otherwise the env's drop glue
      * (emit_expr.c) must free the box alone -- no rc, owned fat closure or
-     * Drop-instance capture -- and no inline C may hand out the box. */
+     * Drop-instance capture -- and no inline C block may name a capture (an
+     * lvalue into the box). */
     switch (rk) {
         case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
         case TY_BOOL: case TY_NIL:
@@ -3627,7 +3615,7 @@ static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
                 if (cap->type.kind == TY_RC || cap->is_fat) return NULL;
                 if (c->capture_drop_insts && c->capture_drop_insts[k]) return NULL;
             }
-            if (expr_has_inline_c_node(fd->body)) return NULL;
+            if (closure_body_inline_c_touches_env(c)) return NULL;
     }
     return lam;
 }

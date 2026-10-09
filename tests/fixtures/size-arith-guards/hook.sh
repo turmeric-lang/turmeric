@@ -16,5 +16,7 @@ for c in 0 1 2 3 4 5 6 7 8 9; do
     rc=$?
     set -e
     echo "exit=$rc"
-    head -n 1 "$TMPDIR/err"
+    # An index out of bounds is a panic now: its line names the runtime's own
+    # file and line (not portable), so keep the message after that prefix.
+    head -n 1 "$TMPDIR/err" | sed -E 's/^panic at [^ ]*:[0-9]+: //'
 done

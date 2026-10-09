@@ -79,9 +79,11 @@ Each of these still leaks the env, as before. None is freed early.
    `closure_env_drop_frees_box_only` -- a struct capture is a copy in the box,
    and the glue releases only rc, owned fat and Drop-instance captures.
    Pinned by `sum-closure-payload-dropped`'s `struct-cap`. A closure capturing
-   a `^mut` cell drops its env box too, but the 8 B cell itself still leaks:
-   `mut_cell_escapes` vouches only for a closure bound directly by a freeable
-   `let`, not one wrapped in a sum.)
+   a `^mut` cell drops its env box too, and the 8 B cell is freed at the same
+   exit: `mut_cell_escapes` and `let_binding_mut_cell_freeable` vouch for a
+   closure wrapped in a fresh sum the let drops (`let_init_sum_payload_closure`)
+   as they do for one bound directly -- `mut-cap`, 800 B in 100 allocations
+   before, 0 now.)
 5. **Owning non-closure payloads** -- an `rc` in an Option. The
    `option-rc-payload-turmeric-construction` fixture says outright that
    "nothing releases an Option's payload at scope exit". Not measured here:

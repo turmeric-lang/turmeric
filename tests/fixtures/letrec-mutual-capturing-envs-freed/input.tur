@@ -1,0 +1,30 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused (found on the way):
+;; the members of a mutually recursive `letrec` capture one another, so each
+;; read as escaping into a sibling's env and neither box was ever freed --
+;; 64 B per call of a two-member loop, in every compiled program.  When no
+;; member leaves the body and each member's lambda only CALLS the others, the
+;; group is dead at scope exit and every box is dropped (letrec_members_confined).
+;; Leak-checked: two- and three-member groups, a float capture, 100 calls each.
+(defn ev-od [m : int n : int] : int
+  (letrec [ev (fn [i : int] : int (if (= i 0) (+ m 7) (od (- i 1))))
+           od (fn [i : int] : int (if (= i 0) m (ev (- i 1))))]
+    (ev n)))
+
+(defn three [x : float n : int] : float
+  (letrec [a (fn [i : int] : float (if (= i 0) x (b (- i 1))))
+           b (fn [i : int] : float (if (= i 0) (* 2.0 x) (c (- i 1))))
+           c (fn [i : int] : float (if (= i 0) (* 3.0 x) (a (- i 1))))]
+    (+ (a n) (b n))))
+
+(defn main [] : int
+  (println (ev-od 1 4))       ; 8
+  (println (ev-od 1 3))       ; 1
+  (println (three 0.25 4))    ; 0.25 + 0.75 = 1.0
+  (let [^mut i 0 ^mut s 0 ^mut f 0.0]
+    (while (< i 100)
+      (set! s (+ s (ev-od i 4)))
+      (set! f (+ f (three 0.5 2)))
+      (set! i (+ i 1)))
+    (println s)                ; sum(i+7) = 4950 + 700 = 5650
+    (println f))               ; 100 * (1.5 + 0.5) = 200
+  0)

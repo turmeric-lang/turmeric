@@ -126,8 +126,9 @@
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bitvec-get: index %lld out of bounds\n", (long long)i);
-    exit(1);
+    char __m[96];
+    snprintf(__m, sizeof __m, "sized-bitvec-get: index %lld out of bounds", (long long)i);
+    tur_panic(__m);
   }
   return (b->bits[i / 8] >> (i % 8)) & 1;
   ```)
@@ -151,8 +152,9 @@
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bitvec-set!: index %lld out of bounds\n", (long long)i);
-    exit(1);
+    char __m[96];
+    snprintf(__m, sizeof __m, "sized-bitvec-set!: index %lld out of bounds", (long long)i);
+    tur_panic(__m);
   }
   b->bits[i / 8] |= (uint8_t)(1 << (i % 8));
   return bv;
@@ -177,8 +179,9 @@
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bitvec-clear!: index %lld out of bounds\n", (long long)i);
-    exit(1);
+    char __m[96];
+    snprintf(__m, sizeof __m, "sized-bitvec-clear!: index %lld out of bounds", (long long)i);
+    tur_panic(__m);
   }
   b->bits[i / 8] &= (uint8_t)~(1 << (i % 8));
   return bv;
@@ -203,8 +206,9 @@
   ```c
   struct { int64_t len; uint8_t *bits; } *b = (void*)(intptr_t)bv;
   if (i < 0 || i >= b->len) {
-    fprintf(stderr, "sized-bitvec-toggle!: index %lld out of bounds\n", (long long)i);
-    exit(1);
+    char __m[96];
+    snprintf(__m, sizeof __m, "sized-bitvec-toggle!: index %lld out of bounds", (long long)i);
+    tur_panic(__m);
   }
   b->bits[i / 8] ^= (uint8_t)(1 << (i % 8));
   return bv;

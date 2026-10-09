@@ -76,9 +76,11 @@
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
-    fprintf(stderr, "grid-get: (%lld, %lld) out of bounds in %dx%d\n",
-            (long long)x, (long long)y, grid->width, grid->height);
-    exit(1);
+    char __m[128];
+    snprintf(__m, sizeof __m, "grid-get: (%lld, %lld) out of bounds in %dx%d",
+             (long long)x, (long long)y, grid->width, grid->height);
+    tur_panic(__m);
+    return 0;
   }
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   ```)
@@ -102,9 +104,11 @@
   ```c
   struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
-    fprintf(stderr, "grid-set!: (%lld, %lld) out of bounds in %dx%d\n",
-            (long long)x, (long long)y, grid->width, grid->height);
-    exit(1);
+    char __m[128];
+    snprintf(__m, sizeof __m, "grid-set!: (%lld, %lld) out of bounds in %dx%d",
+             (long long)x, (long long)y, grid->width, grid->height);
+    tur_panic(__m);
+    return;
   }
   TUR_REGION_NOTE(v);   /* region-lock-hardening: see vec-push! */
   grid->data[(size_t)(y * grid->width + x)] = v;

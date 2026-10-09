@@ -2738,6 +2738,51 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
  * The conservative `closure_binding_escapes` check only ever greenlights a free,
  * so a false negative merely preserves the status-quo leak; it never frees a
  * still-live env. */
+bool closure_binding_only_invoked(const Expr *e, const Binding *b);
+
+/* A closure init whose result cannot point into its env: a scalar, or (RM1) a
+ * sum / product / cstr when the body has no inline C. */
+static bool closure_init_result_env_safe(const Binding *b, const Expr *init) {
+    if (!b || b->type.kind != TY_FN || !init || init->kind != EX_CLOSURE) return false;
+    switch (b->type.as.fn.result_kind) {
+        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: return true;
+        case TY_APP: case TY_ADT: case TY_CSTR: {
+            const struct Closure *c = init->as.closure_.closure;
+            return c && c->fn && !expr_subtree_has_inline_c(c->fn->body);
+        }
+        default: return false;
+    }
+}
+
+/* Every member of this letrec is a capturing closure whose result is env-safe,
+ * only ever CALLED by the other members' lambdas, and not escaping the body. */
+static bool letrec_members_confined(const Expr *e) {
+    uint32_t n = e->as.let_.n;
+    for (uint32_t i = 0; i < n; i++) {
+        const Binding *b = e->as.let_.bindings[i].binding;
+        const Expr *init = e->as.let_.bindings[i].init;
+        while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+        if (!b || !init || init->kind != EX_CLOSURE || !init->as.closure_.closure
+            || init->as.closure_.closure->n_captures == 0
+            || init->as.closure_.closure->is_shift_receiver
+            || init->as.closure_.closure->is_effect_payload
+            || !closure_init_result_env_safe(b, init))
+            return false;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        const Binding *b = e->as.let_.bindings[i].binding;
+        if (closure_binding_escapes(e->as.let_.body, b)) return false;
+        for (uint32_t j = 0; j < n; j++) {
+            if (j == i) continue;
+            const Expr *init = e->as.let_.bindings[j].init;
+            while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+            const FnDef *fd = init->as.closure_.closure->fn;
+            if (!fd || !closure_binding_only_invoked(fd->body, b)) return false;
+        }
+    }
+    return true;
+}
+
 static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
@@ -2768,6 +2813,15 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
         fresh_pap = p && p->kind == EX_CLOSURE && init->kind == EX_LET;
     }
     if (init->kind != EX_CLOSURE && !fresh_call && !fresh_pap) return false;
+    /* letrec-mutual-recursion-between-capturing-closures: the members capture
+     * one another, so each is "escaping" into a sibling's env by the walk
+     * below, and neither box was ever freed (64 B a call of the report's
+     * two-member loop).  The group is dead at scope exit when no member leaves
+     * the letrec body and each member's lambda only CALLS the others; the env
+     * drop glue releases no closure capture, so dropping every box is one
+     * free each. */
+    if (e->kind == EX_LETREC && e->as.let_.n > 1)
+        return init->kind == EX_CLOSURE && letrec_members_confined(e);
     if (init->kind == EX_CLOSURE) {
         /* Scalar-result gate: a closure returning a reference/struct/pointer could
          * hand back a value derived from its env; restrict to scalar returns whose
@@ -2810,6 +2864,22 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
  * turn.  Anything this walk does not recognize falls back to the ordinary
  * escape walk, where any mention of the cell counts as an escape. */
 static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth);
+
+/* The EmitCtx the scope-free predicates below run under (set by their entry
+ * points), for the walks that need one but are called without it. */
+static EmitCtx *g_scp_ctx = NULL;
+static bool call_wraps_sole_arg_in_ctor(const Expr *call);
+static const Expr *peel_sum_payload_arg(const Expr *a);
+static bool let_binding_sum_closure_freeable_ctx(EmitCtx *ctx, const Expr *e, uint32_t i);
+
+/* sum-closure-payload-never-dropped: the closure a let-init wraps in a fresh
+ * one-field sum (`(some (fn ...))`), or NULL. */
+static const Expr *let_init_sum_payload_closure(const Expr *init) {
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_CALL || !call_wraps_sole_arg_in_ctor(init)) return NULL;
+    const Expr *pay = peel_sum_payload_arg(init->as.call_.args[0]);
+    return pay && pay->kind == EX_CLOSURE && pay->as.closure_.closure ? pay : NULL;
+}
 
 static bool mut_cell_closure_captures(const Expr *x, const Binding *cell) {
     const struct Closure *c = x->as.closure_.closure;
@@ -2882,6 +2952,19 @@ static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
                         return true;
                     continue;
                 }
+                /* ...or the payload of a fresh sum this let drops at scope
+                 * exit (let_binding_sum_closure_freeable): the same vouching,
+                 * the drop freeing the box alone. */
+                const Expr *pay = let_init_sum_payload_closure(init);
+                if (pay && mut_cell_closure_captures(pay, cell)) {
+                    const struct Closure *c = pay->as.closure_.closure;
+                    if (x->kind != EX_LET || !g_scp_ctx ||
+                        !let_binding_sum_closure_freeable_ctx(g_scp_ctx, x, j))
+                        return true;
+                    if (!c->fn || mut_cell_escapes(c->fn->body, cell, depth + 1))
+                        return true;
+                    continue;
+                }
                 if (mut_cell_escapes(x->as.let_.bindings[j].init, cell, depth + 1))
                     return true;
             }
@@ -2893,9 +2976,10 @@ static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
 
 /* mut-cell-is-never-freed: let-binding `idx` of `e` is a `^mut` cell that is
  * dead at scope exit (see mut_cell_escapes). */
-static bool let_binding_mut_cell_freeable(const Expr *e, uint32_t idx) {
+static bool let_binding_mut_cell_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!b || !b->is_mut_cell || e->kind != EX_LET) return false;
+    if (ctx) g_scp_ctx = ctx;
     for (uint32_t j = idx + 1; j < e->as.let_.n; j++) {
         const Expr *init = e->as.let_.bindings[j].init;
         while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
@@ -2904,6 +2988,15 @@ static bool let_binding_mut_cell_freeable(const Expr *e, uint32_t idx) {
             if (!let_binding_env_freeable(e, j) ||
                 !init->as.closure_.closure->fn ||
                 mut_cell_escapes(init->as.closure_.closure->fn->body, b, 0))
+                return false;
+            continue;
+        }
+        /* A sibling sum holding such a closure, dropped at the same exit. */
+        const Expr *pay = let_init_sum_payload_closure(init);
+        if (pay && mut_cell_closure_captures(pay, b)) {
+            if (!g_scp_ctx || !let_binding_sum_closure_freeable_ctx(g_scp_ctx, e, j) ||
+                !pay->as.closure_.closure->fn ||
+                mut_cell_escapes(pay->as.closure_.closure->fn->body, b, 0))
                 return false;
             continue;
         }
@@ -3900,7 +3993,6 @@ static bool fndef_cannot_suspend(const FnDef *fd) {
  * instance's method impl (`__inst_Applicative_ap_Option` carries no link).
  * The program comes from the EmitCtx let_binding_sum_closure_freeable was
  * asked with; a one-entry cache covers the repeated question. */
-static EmitCtx *g_scp_ctx = NULL;
 static FnDef *scp_fndef_of(const Binding *fb) {
     if (!fb) return NULL;
     if (fb->source_fn_def) return (FnDef *)fb->source_fn_def;
@@ -4108,6 +4200,17 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
     return true;
 }
 
+/* The same, deciding the binding's C spelling itself (as
+ * let_binding_may_need_scope_free does), for a caller with no LetBindDecl. */
+static bool let_binding_sum_closure_freeable_ctx(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!b) return false;
+    LetBindDecl d = { true, emit_binding_repr_c_name(ctx, b->type,
+                                                     e->as.let_.bindings[i].init),
+                      true };
+    return d.bind_c && let_binding_sum_closure_freeable(ctx, e, i, &d);
+}
+
 static bool let_binding_vsp_box_freeable(EmitCtx *ctx, const Expr *e,
                                          uint32_t i, const LetBindDecl *d) {
     const Binding *b = e->as.let_.bindings[i].binding;
@@ -4163,7 +4266,7 @@ bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i) {
     if (!b) return false;
     char *lt = let_binding_locown_type(ctx, b);
     if (lt) { free(lt); return true; }
-    if (let_binding_mut_cell_freeable(e, i) || let_binding_env_freeable(e, i) ||
+    if (let_binding_mut_cell_freeable(ctx, e, i) || let_binding_env_freeable(e, i) ||
         let_binding_box_freeable(e, i) || let_binding_fnfld_freeable(e, i))
         return true;
     /* RM1 and the value-struct payload box both need the emitted declaration
@@ -4212,7 +4315,7 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
         any_scope_drops_push(ctx, st.data);
     }
     buf_free(&st);
-    if (let_binding_mut_cell_freeable(e, i)) {
+    if (let_binding_mut_cell_freeable(ctx, e, i)) {
         Buf c; buf_init(&c);
         buf_printf(&c, "%s((void *)(intptr_t)(%s))",
                    regions_enabled() ? "tur_region_free" : "free", bn);
@@ -4377,7 +4480,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             n_locown++;
         }
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            if (!let_binding_mut_cell_freeable(e, i)) continue;
+            if (!let_binding_mut_cell_freeable(ctx, e, i)) continue;
             cell_free_names = (char **)realloc(cell_free_names,
                                                (n_cell_free + 1) * sizeof(char *));
             cell_free_names[n_cell_free++] =
@@ -15989,7 +16092,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(pbuf, "}\n\n");
                     }
                     indent_buf(body, ctx->indent);
-                    if (!e->as.async_.on_thread && async_spawn_owns_env(fn_expr)) {
+                    if (async_spawn_owns_env(fn_expr)) {
                         buf_puts(body, "tur_async_owns_env = 1;\n");
                         indent_buf(body, ctx->indent);
                     }
@@ -15999,8 +16102,14 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                wname, fn_val);
                 } else if (e->as.async_.on_thread && fn_expr->type.as.fn.boxed) {
                     /* compiled-async-fiber-deadlocks-on-a-session-op: a body
-                     * that drives a session endpoint runs on its own thread. */
+                     * that drives a session endpoint runs on its own thread.
+                     * The thread drops the box the spawn owns once the body
+                     * has settled (tur_async_thread_main). */
                     indent_buf(body, ctx->indent);
+                    if (async_spawn_owns_env(fn_expr)) {
+                        buf_puts(body, "tur_async_owns_env = 1;\n");
+                        indent_buf(body, ctx->indent);
+                    }
                     buf_printf(body, "void *%s = (void *)tur_async_thread_via(__tur_async_call_box, (void *)(intptr_t)%s);\n",
                                tmp, fn_val);
                 } else {

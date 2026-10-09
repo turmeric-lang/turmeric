@@ -112,8 +112,7 @@
   ```c
   struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < (size_t)vec->len) return (int64_t)vec->data[i];
-  fprintf(stderr, "vec index out of bounds\n");
-  exit(1);
+  tur_panic("vec index out of bounds");
   return 0;
   ```)
 ;;; vec-push! -- append an element to the Vec[A].
@@ -280,8 +279,7 @@
     vec->data[i] = (int64_t)val;
     return;
   }
-  fprintf(stderr, "vec-set! index out of bounds\n");
-  exit(1);
+  tur_panic("vec-set! index out of bounds");
   ```)
 ;;; vec-set! -- overwrite the element at index i (freeing any old element box).
 ;;;
@@ -577,8 +575,7 @@
 (defn vec-data-get-checked__ [data : ptr<void> i : int len : int] : int
   ```c
   if (i >= 0 && (size_t)i < (size_t)len) return ((int64_t *)(intptr_t)data)[i];
-  fprintf(stderr, "vec index out of bounds\n");
-  exit(1);
+  tur_panic("vec index out of bounds");
   return 0;
   ```)
 ;;; vec-get-byval -- by-value Vec[A] indexed read (Option C twin of vec-get).

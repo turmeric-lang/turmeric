@@ -99,6 +99,16 @@ env-building protocol the CPS translation does not reproduce.
   in a colored function whose body performs, which used to leak 24 B per
   run: `closure_binding_escapes` reads a `perform` as an escape, so the
   existing freeable test never passed.
+- Found on the way, pre-existing on HEAD, both back ends: a mutually
+  recursive `letrec` of capturing closures never freed its member envs -- the
+  members capture one another, so each read as escaping into a sibling's env
+  (64 B per call of a two-member loop). When no member leaves the body and
+  each member's lambda only calls the others, the group is dead at scope
+  exit and every box is dropped (`letrec_members_confined`,
+  `src/compiler/emit_expr.c`; the drop glue releases no closure capture, so
+  it is one free each). Pinned by `letrec-mutual-capturing-envs-freed`
+  (leak-checked: two- and three-member groups, 100 calls each). The
+  EFFECTFUL mutual `letrec` is still refused (above).
 - Found on the way, pre-existing on HEAD: a mutual-tail-call group's entry
   stub zero-filled the other members' scalar slots as `(int64_t){0}`, which
   the JIT's C front end refuses ("braces around scalar initializer"), so

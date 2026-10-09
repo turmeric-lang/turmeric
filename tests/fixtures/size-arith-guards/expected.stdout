@@ -25,7 +25,7 @@ exit=1
 sized-bitvec-new: length 9223372036854775807 out of range
 == case 8
 7
-exit=1
+exit=134
 grid-set!: (2, 0) out of bounds in 2x2
 == case 9
 true

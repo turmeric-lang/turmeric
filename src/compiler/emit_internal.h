@@ -1380,6 +1380,9 @@ bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
 bool closure_env_drop_is_shallow(const struct Closure *c);
 /* The env's drop frees the box and nothing else (emit_core.c). */
 bool closure_env_drop_frees_box_only(const struct Closure *c);
+/* An inline-C block in the closure's body names one of its captures -- an
+ * lvalue into the env box (emit_core.c). */
+bool closure_body_inline_c_touches_env(const struct Closure *c);
 bool expr_is_fresh_any_closure(const Expr *x);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);

@@ -56,6 +56,12 @@ bool *tur_tls_fiber_cancelled_flag_ptr (void) { return &tur_tls_fiber_cancelled_
 static __thread void *tur_tls_current_thread_state = 0;
 void **tur_tls_current_thread_state_ptr (void) { return &tur_tls_current_thread_state; }
 
+static __thread int tur_tls_async_direct_body = 0;
+int *tur_tls_async_direct_body_ptr (void) { return &tur_tls_async_direct_body; }
+
+static __thread int tur_tls_async_owns_env = 0;
+int *tur_tls_async_owns_env_ptr (void) { return &tur_tls_async_owns_env; }
+
 static __thread jmp_buf tur_tls_cancel_jmpbuf;
 jmp_buf *tur_tls_cancel_jmpbuf_ptr (void) { return &tur_tls_cancel_jmpbuf; }
 

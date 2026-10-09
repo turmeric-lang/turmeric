@@ -73,8 +73,7 @@
   ```c
   struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   if (i >= 0 && (size_t)i < slice->len) return (int64_t)slice->p[i];
-  fprintf(stderr, "tslice index out of bounds\n");
-  exit(1);
+  tur_panic("slice index out of bounds");
   return 0;
   ```)
 ;;; slice-free -- free the Slice[A] header (does NOT free the underlying data).

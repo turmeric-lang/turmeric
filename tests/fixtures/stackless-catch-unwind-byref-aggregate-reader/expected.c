@@ -3777,10 +3777,20 @@ static TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspen
 
 static int tur_async_body_depth = -1;  /* entry depth of the async body's root */
 
-static int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */
+#if defined(__GNUC__) || defined(__clang__)
+static TUR_THREAD_LOCAL int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */
 
-static int tur_async_owns_env = 0;  /* the next closure spawn owns its box */
+#else
+extern int * tur_tls_async_direct_body_ptr(void);
+#define tur_async_direct_body (*tur_tls_async_direct_body_ptr())
+#endif
+#if defined(__GNUC__) || defined(__clang__)
+static TUR_THREAD_LOCAL int tur_async_owns_env = 0;  /* the next closure spawn owns its box */
 
+#else
+extern int * tur_tls_async_owns_env_ptr(void);
+#define tur_async_owns_env (*tur_tls_async_owns_env_ptr())
+#endif
 __attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
     if (tur_async_suspended) {
         TurAsyncPark *p = tur_async_pending_park;
@@ -3910,7 +3920,7 @@ static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {
     return future;
 }
 
-typedef struct { int64_t (*call)(void *); void *env; TurFuture *future; } TurAsyncThreadArg;
+typedef struct { int64_t (*call)(void *); void *env; TurFuture *future; void *own_env; } TurAsyncThreadArg;
 
 static int64_t __tur_async_call_box(void *clos) {
     int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;
@@ -3924,21 +3934,25 @@ static void *tur_async_thread_main(void *p) {
     tur_handler_chain = &__node;
     int64_t result = a->call(a->env);
     tur_handler_chain = __node.parent;
+    void *__own = a->own_env;
     free(a);
     if (!tur_async_reject_if_panicking(future)) {
         future->value = result;
         future->status = FUTURE_FULFILLED;
     }
+    if (__own) TUR_CLOSURE_DROP(__own);
     return NULL;
 }
 
 static TurFuture *tur_async_thread_via(int64_t (*call)(void *), void *env) {
     TurFuture *future = tur_future_new();
     if (!tur_scheduler) tur_scheduler = tur_scheduler_new();
+    int __own = tur_async_owns_env; tur_async_owns_env = 0;
     TurAsyncThreadArg *a = (TurAsyncThreadArg *)malloc(sizeof(TurAsyncThreadArg));
     pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));
     if (!a || !tid) { fprintf(stderr, "async: out of memory\n"); abort(); }
     a->call = call; a->env = env; a->future = future;
+    a->own_env = __own ? env : NULL;
     if (pthread_create(tid, NULL, tur_async_thread_main, a) != 0) {
         fprintf(stderr, "async: pthread_create failed\n");
         abort();
@@ -7815,8 +7829,7 @@ static int64_t vec_hylen(int64_t v) {
 static int64_t vec_hyget(int64_t v, int64_t i) {
         struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (i >= 0 && (size_t)i < (size_t)vec->len) return (int64_t)vec->data[i];
-  fprintf(stderr, "vec index out of bounds\n");
-  exit(1);
+  tur_panic("vec index out of bounds");
   return 0;
   
 }
@@ -7865,8 +7878,7 @@ static int64_t vec_hydata_hyget_un_un(void * data, int64_t i) {
 
 static int64_t vec_hydata_hyget_hychecked_un_un(void * data, int64_t i, int64_t len) {
         if (i >= 0 && (size_t)i < (size_t)len) return ((int64_t *)(intptr_t)data)[i];
-  fprintf(stderr, "vec index out of bounds\n");
-  exit(1);
+  tur_panic("vec index out of bounds");
   return 0;
   
 }
@@ -7912,8 +7924,7 @@ static int64_t slice_hylen(int64_t s) {
 static int64_t slice_hyget(int64_t s, int64_t i) {
         struct { int64_t *p; size_t len; } *slice = (void*)(intptr_t)s;
   if (i >= 0 && (size_t)i < slice->len) return (int64_t)slice->p[i];
-  fprintf(stderr, "tslice index out of bounds\n");
-  exit(1);
+  tur_panic("slice index out of bounds");
   return 0;
   
 }
@@ -8287,9 +8298,11 @@ static int64_t grid_hynew(int64_t width, int64_t height) {
 static int64_t grid_hyget(int64_t g, int64_t x, int64_t y) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
-    fprintf(stderr, "grid-get: (%lld, %lld) out of bounds in %dx%d\n",
-            (long long)x, (long long)y, grid->width, grid->height);
-    exit(1);
+    char __m[128];
+    snprintf(__m, sizeof __m, "grid-get: (%lld, %lld) out of bounds in %dx%d",
+             (long long)x, (long long)y, grid->width, grid->height);
+    tur_panic(__m);
+    return 0;
   }
   return (int64_t)grid->data[(size_t)(y * grid->width + x)];
   
@@ -8298,9 +8311,11 @@ static int64_t grid_hyget(int64_t g, int64_t x, int64_t y) {
 static void grid_hyset_ex(int64_t g, int64_t x, int64_t y, int64_t v) {
         struct { int64_t *data; int width; int height; int cx; int cy; } *grid = (void*)(intptr_t)g;
   if (x < 0 || y < 0 || x >= grid->width || y >= grid->height) {
-    fprintf(stderr, "grid-set!: (%lld, %lld) out of bounds in %dx%d\n",
-            (long long)x, (long long)y, grid->width, grid->height);
-    exit(1);
+    char __m[128];
+    snprintf(__m, sizeof __m, "grid-set!: (%lld, %lld) out of bounds in %dx%d",
+             (long long)x, (long long)y, grid->width, grid->height);
+    tur_panic(__m);
+    return;
   }
   TUR_REGION_NOTE(v);   /* region-lock-hardening: see vec-push! */
   grid->data[(size_t)(y * grid->width + x)] = v;

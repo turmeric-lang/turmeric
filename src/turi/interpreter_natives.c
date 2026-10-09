@@ -2226,8 +2226,8 @@ static TuriValue native_slice_get(TuriEnv *env, TuriValue *a, uint32_t n, void *
     int64_t *s = (int64_t *)(intptr_t)a[0].as_int;
     int64_t  i = a[1].as_int;
     if (!s || i < 0 || i >= s[1]) {
-        turi_host_exit_guard(env, "slice index out of bounds");
-        fprintf(stderr, "slice index out of bounds\n"); fflush(NULL); _exit(1);
+        turi_runtime_panic(env, "slice index out of bounds");
+        return turi_int(0);
     }
     int64_t *data = (int64_t *)(intptr_t)s[0];
     return turi_int(data[i]);

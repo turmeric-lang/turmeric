@@ -1,5 +1,20 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed again 2026-10-09: an index out of bounds is a panic.** `vec-get`,
+`vec-set!`, `vec-get-byval`, `slice-get`, `grid-get`/`grid-set!`,
+`sized-buf-get` and the `sized-bitvec-*` accessors printed their message and
+called `exit(1)`: no `panic at` line, nothing for a `catch-unwind` to catch,
+and the interpreter's natives did the same with `_exit(1)`. Each raises a
+panic now -- `tur_panic` in the stdlib inline C, `turi_runtime_panic` in the
+`vec-get` / `vec-set!` / `slice-get` natives -- so a `catch-unwind` in scope
+catches it and, with none, the process ends as for any panic (`panic at
+...: vec index out of bounds`, then abort). Pinned by
+`tests/fixtures/vec-index-out-of-bounds-panics` on both engines. The
+location the compiled panic names is the runtime's (`tur_panic`'s own
+`__FILE__`/`__LINE__`), and the interpreter's is `panic at` with no site: a
+call made from inline C has no `_at` entry to hand its site to, which is the
+open direction below.
+
 **Narrowed again 2026-10-09: a failed `cast` names the cast.**  Each tag
 check the emitter writes for a `cast` out of `any` now calls
 `__tur_any_cast_check_at(have, want, "<file>", <line>)` with the cast's own

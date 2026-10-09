@@ -1,0 +1,36 @@
+;; async-capturing-body-env-never-freed: a body that drives a session endpoint
+;; runs on its own OS thread (tur_async_thread_via), and that spawn owned
+;; nothing -- its closure box leaked per spawn.  The thread now drops the box
+;; the spawn owns once the body has settled (TurAsyncThreadArg.own_env), for
+;; the bare-box spawn and the typed one alike; and an inline-C block that
+;; names no capture (the session ops' `tur_session_recv(__TUR_VAL_0__)`) no
+;; longer disqualifies the env.  Leak-checked: 50 typed spawns in a loop, one
+;; untyped.
+(load "stdlib/session.tur")
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn await-free [f : ptr<void>] : int
+  (let [v (await f)]
+    (free-future f)
+    v))
+
+(defn round-trip [k : int] : int
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (async (fn [] : int (let [[n r] (recv r)] (close r) (* n 10))))]
+      (let [s (send s k)] (close s))
+      (await-free t))))
+
+(defn main [] :int
+  (let [[s r] (make-session (Send int Close))]
+    (let [t (async (fn [] (let [[n r] (recv r)] (println n) (close r))))]
+      (let [s (send s 42)] (close s) (await t) (free-future t))))
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i 50)
+      (set! acc (+ acc (round-trip i)))
+      (set! i (+ i 1)))
+    (println acc))                       ; 10 * (0 + ... + 49) = 12250
+  0)

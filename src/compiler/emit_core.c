@@ -1719,21 +1719,38 @@ bool closure_env_drop_is_shallow(const struct Closure *c) {
     return heap_caps > 0;                      /* an env block exists */
 }
 
-/* Does `e` hold an inline-C node?  Exact, through the shared operand
- * enumeration (which does not enter a nested fn: its body is its own), where
- * expr_subtree_has_inline_c reads every node it does not model -- a
- * `perform`, an `await` -- as possible inline C. */
-static bool inline_c_node_visit(const Expr *c, void *ud);
-static bool expr_has_inline_c_node(const Expr *e) {
+/* Does an inline-C block in `e` name one of closure `c`'s captures?  Inside a
+ * lifted lambda a captured binding is read from the env box, so a C block
+ * that names it (`__TUR_CAP_N__`) holds an lvalue INTO the box and may take
+ * its address; one that names none -- a stdlib `tur_session_recv(__TUR_VAL_0__)`,
+ * whose sub-expressions are evaluated to values -- cannot reach the box.
+ * Walked exactly, through the shared operand enumeration (which does not
+ * enter a nested fn: its body is its own), where expr_subtree_has_inline_c
+ * reads every node it does not model -- a `perform`, an `await` -- as
+ * possible inline C. */
+typedef struct { const struct Closure *c; bool found; } IcEnvUd;
+static bool inline_c_env_visit(const Expr *x, void *ud);
+static bool inline_c_touches_env(const Expr *e, const struct Closure *c) {
     if (!e) return false;
-    if (e->kind == EX_INLINE_C) return true;
-    bool found = false;
-    cps_visit_children(e, inline_c_node_visit, &found);
-    return found;
+    if (e->kind == EX_INLINE_C) {
+        const InlineC *ic = e->as.inline_c_.inline_c;
+        if (!ic) return true;
+        for (uint8_t i = 0; i < ic->n_captures; i++)
+            for (uint32_t k = 0; k < c->n_captures; k++)
+                if (ic->captures[i] && ic->captures[i] == c->captures[k]) return true;
+        return false;
+    }
+    IcEnvUd u = { c, false };
+    cps_visit_children(e, inline_c_env_visit, &u);
+    return u.found;
 }
-static bool inline_c_node_visit(const Expr *c, void *ud) {
-    if (expr_has_inline_c_node(c)) { *(bool *)ud = true; return true; }
+static bool inline_c_env_visit(const Expr *x, void *ud) {
+    IcEnvUd *u = (IcEnvUd *)ud;
+    if (inline_c_touches_env(x, u->c)) { u->found = true; return true; }
     return false;
+}
+bool closure_body_inline_c_touches_env(const struct Closure *c) {
+    return c && c->fn && inline_c_touches_env(c->fn->body, c);
 }
 
 /* async-capturing-body-env-never-freed: may whoever alone owns this fresh
@@ -1756,7 +1773,7 @@ bool closure_env_drop_frees_box_only(const struct Closure *c) {
         if (cap->type.kind == TY_RC || cap->is_fat) return false;
         if (c->capture_drop_insts && c->capture_drop_insts[i]) return false;
     }
-    return heap_caps > 0 && !expr_has_inline_c_node(c->fn->body);
+    return heap_caps > 0 && !closure_body_inline_c_touches_env(c);
 }
 
 /* dynamic-returned-closure-env-is-never-freed: does `x` evaluate to an `any`
