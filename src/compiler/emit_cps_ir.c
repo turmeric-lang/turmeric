@@ -4826,6 +4826,30 @@ static void ptc_walk(const Expr *e, const Binding *p, bool tail,
  * it.  The tier then records how hard that thread is: PT_NOW (tail-only, scalar
  * carrier), PT_NONTAIL (a non-tail call needs a threaded CT_LETCALL), or PT_E1
  * (an is_poly_fn / capturing param needs E1's carrier ABI first). */
+/* cps-evicts-handle-in-operand-positions, item 3: a colored GENERIC whose base
+ * sig-rejects on its type variables, but every one of whose monomorph clones
+ * has a signature the CPS backend admits (mono_sig_ok).  Those clones are what
+ * run, so its fn parameters tier by how the body uses them, as a concrete
+ * function's do; mono_template_all_admissible decides the body later. */
+static bool mono_sigs_all_ok(const FnDef *fd) {
+    EmitCtx *ctx = g_emit_ctx;
+    if (!ctx || !fd) return false;
+    bool any = false;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++) {
+        const EmitAbiSpecialization *spec = &ctx->abi_specializations[i];
+        if (spec->fn != fd || !spec->fn_expr || !spec->clone_name) continue;
+        any = true;
+        const EmitAbiSpecialization *saved = ctx->current_abi_specialization;
+        ctx->current_abi_specialization = (EmitAbiSpecialization *)spec;
+        g_cps_mono_resolver = ctx;
+        bool ok = mono_sig_ok(fd, spec);
+        g_cps_mono_resolver = NULL;
+        ctx->current_abi_specialization = saved;
+        if (!ok) return false;
+    }
+    return any;
+}
+
 static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
     if (!fd || !fd->cps_colored || !fd->body || !fd->params || pi >= fd->n_params)
         return PT_NONE;
@@ -4836,7 +4860,7 @@ static PtClass param_thread_class(const FnDef *fd, uint32_t pi) {
     ptc_walk(fd->body, p, true, &val, &tc, &ntc);
     g_ptc_self_bind = NULL; g_ptc_self_pi = 0;
     if (val > 0 || (tc + ntc) < 1) return PT_NONE;   /* escapes, or never called */
-    if (!fn_sig_ok(fd)) return PT_E1;                /* is_poly_fn / capturing param */
+    if (!fn_sig_ok(fd) && !mono_sigs_all_ok(fd)) return PT_E1;   /* is_poly_fn / capturing param */
     /* E2a registry threading needs a CONCRETE effect row on the param (row-poly
      * params delegate to a fresh-root direct entry -> escape); tier those PT_E1. */
     /* E2a registry threading needs a CONCRETE effect row on the param.  A ROW-
@@ -5401,6 +5425,37 @@ static bool mono_template_all_admissible(EmitCtx *ctx, const FnDef *fd, CTerm *t
     return any;
 }
 
+/* Is `fd` a generic that nothing reaches -- a signature over type variables,
+ * no ABI clone, no direct (carrier) call recorded by the pre-emit scan
+ * (emit_abi_note_carrier_call), and not taken as a value?  Nothing runs it, so
+ * like a mono-template it must not taint the effects its body touches: an
+ * unused `(defn gapp [B] [f : (fn [B] #fx{E} B) v : B] ...)` used to take E
+ * off the backend for the whole program, so every `perform` of E was refused. */
+static bool fd_sig_has_tyvar(const FnDef *fd) {
+    for (uint32_t i = 0; fd->params && i < fd->n_params; i++) {
+        const Binding *p = fd->params[i];
+        if (!p) continue;
+        if (type_has_unresolved_tyvar(&p->type)) return true;
+        if (p->type.kind == TY_FN) {
+            const Type *ft = &p->type;
+            for (uint32_t j = 0; ft->as.fn.arg_full_types && j < ft->as.fn.arity; j++)
+                if (type_has_unresolved_tyvar(ft->as.fn.arg_full_types[j])) return true;
+            if (type_has_unresolved_tyvar(ft->as.fn.result_full_type)) return true;
+        }
+    }
+    return type_has_unresolved_tyvar(fn_ret_type(fd));
+}
+static bool addr_taken_has(const Binding *b);
+static bool generic_unreached(EmitCtx *ctx, const FnDef *fd) {
+    if (!ctx || !fd || !fd->binding || !fd_sig_has_tyvar(fd)) return false;
+    if (fd->binding->c_export_name || fd->closure) return false;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++)
+        if (ctx->abi_specializations[i].fn == fd) return false;
+    for (uint32_t i = 0; i < ctx->n_carrier_call_bindings; i++)
+        if (ctx->carrier_call_bindings[i] == fd->binding) return false;
+    return !addr_taken_has(fd->binding);
+}
+
 /* Bitset helpers over g_ents indices (word = index>>6, bit = index&63). */
 static inline bool ent_bit(const uint64_t *bs, size_t i) {
     return (bs[i >> 6] >> (i & 63)) & 1u;
@@ -5754,7 +5809,8 @@ static void ensure_S(const Expr *program) {
                  * stands in for its DK monomorphs and must NOT taint its effects.
                  * Only meaningful when it is not itself a direct candidate. */
                 bool mono_tmpl = !candidate
-                    && mono_template_all_admissible(g_emit_ctx, fd, t);
+                    && (mono_template_all_admissible(g_emit_ctx, fd, t)
+                        || generic_unreached(g_emit_ctx, fd));
                 g_ents[g_ents_n].fd = fd;
                 g_ents[g_ents_n].bind = fd->binding;
                 g_ents[g_ents_n].term = t;

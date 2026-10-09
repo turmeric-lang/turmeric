@@ -1688,6 +1688,22 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
             reject_fn_type_contract(e, ret_t, form->as.list.items[idx], "result");
+            /* The return type is the LAST element.  Anything after it used to be
+             * dropped without a word -- notably an effect row written after the
+             * result, `(fn [B] B #fx{E})`, which then typed the parameter as
+             * effect-free (the cps-evicts-handle-in-operand-positions repro
+             * carried one, and its "the row makes no difference" was this). */
+            if (idx + 1 < form->as.list.len) {
+                Form *extra = form->as.list.items[idx + 1];
+                if (extra->tag == F_MAP && !fn_effect_row)
+                    diag_emit(DIAG_ERROR, extra->span,
+                              "'fn' type: the effect row goes before the return type: "
+                              "(fn [params...] #fx{...} :return)");
+                else
+                    diag_emit(DIAG_ERROR, extra->span,
+                              "'fn' type: unexpected form after the return type: "
+                              "(fn [params...] :return)");
+            }
             /* Type variables lower to the int64 carrier for the kind slot. */
             TypeKind ret_kind = ret_t ? (ret_t->kind == TY_TYVAR ? TY_INT : ret_t->kind)
                                       : TY_INT;

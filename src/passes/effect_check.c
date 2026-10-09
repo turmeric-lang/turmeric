@@ -430,8 +430,16 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                     while (pfn && pfn->kind == TY_FORALL) pfn = pfn->as.forall_.body;
                     if (param->poly_type && (!pfn || pfn->kind != TY_FN)) continue;
                 } else continue;
-                /* A written row (`#fx{}` included) is ER2's or TUR-E0009's. */
-                if (pfn && pfn->as.fn.effect_row) continue;
+                /* A written row (`#fx{}` included) is ER2's or TUR-E0009's --
+                 * except a bare row VARIABLE, `(fn [int] #fx{e} int)`: ER2
+                 * binds `e` to the argument's row above, but a call through
+                 * the parameter charges nothing to the callee's own inferred
+                 * row, so unless the callee also declares `#fx{e}` the
+                 * binding reached no one -- the same false TUR-W0033 on a
+                 * handler around the call, found 2026-10-09 writing
+                 * generic-hof-effectful-callback.  Charge it here too. */
+                if (pfn && pfn->as.fn.effect_row
+                    && pfn->as.fn.effect_row->kind != ERK_VAR) continue;
                 /* Peel the shims a fn-value argument rides in: an erased
                  * ascription, the fat normalization, and the poly-fn wrapper
                  * an un-annotated `(fn [int] int)` slot builds. */

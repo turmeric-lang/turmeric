@@ -1,0 +1,46 @@
+;; cps-evicts-handle-in-operand-positions, item 3: a GENERIC higher-order
+;; function whose fn parameter carries an effect row, handed an effectful
+;; callback under a `handle`.  It was "no lowering here" compiled: the generic
+;; only calls its parameter, so no clone was minted for its instantiation; its
+;; base sig-rejects on its type variables, so the callback was tiered `e1` and
+;; never threaded, and the eviction took the effect off the CPS backend.  A
+;; call to a generic with an effectful fn parameter, or one handed an
+;; effectful fn value, now mints the clone, and the parameter tiers by the
+;; clone's signature.  A generic nothing calls no longer taints the effects
+;; its body touches either (`unused-gapp2` below used to take `F` off the
+;; backend for the whole program).
+;;
+;;   named     -- a named performer as the callback
+;;   lambda    -- a lambda literal
+;;   capturing -- a capturing lambda
+;;   pure      -- a pure callback through the same generic
+;;   row-var   -- a row-polymorphic parameter, `#fx{e}`
+
+(defeffect E [x : int] :int)
+(defeffect F [x : float] :float)
+
+(defn gapp [B] [f : (fn [B] #fx{E} B) v : B] : B (f v))
+(defn gpoly [B] [f : (fn [B] #fx{e} B) v : B] : B (f v))
+(defn unused-gapp2 [B] [f : (fn [B] #fx{F} B) v : B] : B (f (f v)))
+
+(defn eff [x : int] : int (perform (E x)))
+(defn pure1 [x : int] : int (* x 3))
+(defn eff-f [x : float] : float (+ 0.5 (perform (F x))))
+
+(defn main [] : int
+  ;; named: 1 + 1
+  (println (handle (gapp eff 1) (E [x] k) (resume k (+ x 1))))
+  ;; lambda: 100 + (1 + 1)
+  (println (handle (gapp (fn [x : int] : int (+ 100 (perform (E x)))) 1)
+             (E [x] k) (resume k (+ x 1))))
+  ;; capturing: 1000 + (1 + 1)
+  (let [m 1000]
+    (println (handle (gapp (fn [x : int] : int (+ m (perform (E x)))) 1)
+               (E [x] k) (resume k (+ x 1)))))
+  ;; pure: 5 * 3
+  (println (gapp pure1 5))
+  ;; row-var: 20 + 2
+  (println (handle (gpoly eff 20) (E [x] k) (resume k (+ x 2))))
+  ;; F is still performed and handled directly: 7.1 * 2 + 0.5
+  (println (handle (eff-f 7.1) (F [x] k) (resume k (* x 2.0))))
+  0)

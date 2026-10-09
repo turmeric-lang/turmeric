@@ -176,39 +176,56 @@ slot store -- and in both cases make an effectful fn-value flowing into an
 empty-row fn parameter taint like the `sig_perm` path does (or refuse it
 under the lenient checker, as `--strict-effects` already would).
 
-## Item 3, taken further (2026-10-09) -- three walls, in order
+## Item 3, taken further (2026-10-09): a written row now works
 
-It is wider than a fuzz residue: stdlib's own generic HOFs hit it.
-`(handle (option-map (some 1) (fn [x : int] : int (perform (E x)))) (E [x] k)
-(resume k (+ x 1)))` is "no lowering here" compiled (`--interpret` gives 2).
-The non-generic empty-row twin, `(defn app [f : (fn [int] int) v : int] ...)`,
-compiles and is right with a named or a lambda callback.
+**First, the repro was wrong, silently.** `(fn [B] B #fx{E})` puts the row
+AFTER the result; the type parser read the result and dropped everything
+after it without a word, so the parameter was effect-free -- which is why
+"the explicit `#fx{E}` row makes no difference" above. The row goes before
+the result, `(fn [B] #fx{E} B)`, and a form after the result is now an error
+naming that (`tests/fixtures/errors/fn-type-row-after-result`).
 
-A prototype (reverted) got through two of the three walls:
+**With the row in place, three things stood in the way, all fixed:**
 
-1. **No clone.** `emit_abi_register_call` (`emit_module.c`) mints a
-   colored generic's clone only when its OWN body suspends
-   (`emit_cps_ir_colored_fn_needs_mono`); `gapp`'s body only calls `f`.
-   Minting one when the call passes an effectful fn value (a named fn or
-   lambda whose inferred row is runtime-impure, or that may await) works:
-   `gapp__spec__int64_t_int64_t_int64_t` is interned and
-   `mono_template_all_admissible` accepts it.
-2. **The callback is tiered `e1`.** `param_thread_class` returns `PT_E1` for
-   any fn whose base `fn_sig_ok` fails, so `eff` was never threadable and
-   perm-tainted `E` (with it `main`, the handler, fell off the backend --
-   `SIG-MAIN` in the trace is that, not main's signature). Asking whether
-   every monomorph's signature is admissible (`mono_sig_ok` over the specs)
-   instead tiers it `now`.
-3. **The call through `f` does not thread.** `fnval_withdraw_walk` then
-   withdraws `eff`, because `cps_ir_param_call_threads` fails for `(f v)`
-   in the generic body: the parameter's binding has NO effect row even when
-   one is written (`(fn [B] B #fx{E})` -- `effect_row` is NULL on the param
-   binding, so `call_is_effectful_fnvalue` says no), and it is not
-   `is_poly_fn`, so the empty-row `fn_cps` path (`fncps_param_call_ok`)
-   refuses too. The non-generic twin's parameter is fat-normalized; the
-   tyvar-typed one is not, and the clone shares the base's Binding.
+1. **No clone.** `emit_abi_register_call` (`emit_module.c`) minted a colored
+   generic's clone only when its OWN body suspends. It now also mints one
+   when the generic has a fn parameter with a non-empty effect row, or the
+   call passes a fn value whose inferred row is runtime-impure or that may
+   await (`emit_abi_fn_has_effectful_fn_param`,
+   `emit_abi_call_passes_effectful_fn`); `mono_template_all_admissible`
+   accepts the clone.
+2. **The callback was tiered `e1`.** `param_thread_class` returned `PT_E1`
+   for any function whose base `fn_sig_ok` fails; a generic whose every
+   clone's signature is admissible (`mono_sigs_all_ok`) now tiers by its
+   body like a concrete function, so the callback threads.
+3. **A generic nothing calls tainted its effects.** An unused
+   `(defn g [B] [f : (fn [B] #fx{F} B) ...])` is SIG-REJECT with `F` in its
+   set, so every `perform` of `F` in the program was refused. A generic with
+   no clone, no carrier call and no address taken (`generic_unreached`) now
+   counts as a mono-template: it stands in for nothing and taints nothing.
 
-So the remaining work is in the elaborator: carry a written effect row onto a
-tyvar fn parameter's binding, and fat-normalize a tyvar fn parameter as a
-concrete one is (or decide it per clone). Walls 1 and 2's changes are small
-and can be re-applied from the description above once wall 3 is down.
+Also fixed on the way, in the effect pass: a call through a ROW-VARIABLE
+parameter, `(fn [int] #fx{e} int)`, charged nothing to the caller unless the
+callee also declared `#fx{e}` itself, so a handler around
+`(gp eff 20)` drew a false TUR-W0033 (generic or not). The argument's row is
+charged at the call now, as it already was for an un-annotated parameter.
+
+Pinned by `tests/fixtures/generic-hof-effectful-callback` (leak-checked): a
+named, a lambda, a capturing lambda and a pure callback through
+`(fn [B] #fx{E} B)`, a row-variable parameter, and an unused generic over
+another effect. `tests/type-fuzz-src.py --n 300 --seed 3333`: 282 ok, 18
+SEAM_REJECT, 0 bugs -- the same as before the change.
+
+### Still open
+
+- **An UN-annotated fn parameter of a generic** -- stdlib's `option-map`,
+  `(handle (option-map (some 1) (fn [x : int] : int (perform (E x)))) ...)`.
+  A concrete function's un-annotated `(fn [int] int)` parameter is
+  fat-normalized (the `tur_poly_fn_t` carrier, whose `fn_cps` slot threads
+  an effectful callback); a type variable in the signature keeps it thin
+  (`repr-trace ... thin-fn tyvar-sig`), and the clone shares the base's
+  Binding, so the call through it threads by neither route.
+- **A float instantiation**, `(gapp2 (fn [x : float] : float (perform (F
+  x))) 7.1)` through `(fn [B] #fx{F} B)`: `main` fails the core check on
+  `EX_REINTERPRET int -> float of EX_CALL`, the result retype around the
+  now-threaded generic call. The non-generic float twin works.

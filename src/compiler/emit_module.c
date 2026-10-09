@@ -5807,6 +5807,62 @@ static bool emit_abi_arrow_spec_bindings(EmitCtx *ctx, const Expr *call,
     return true;
 }
 
+/* cps-evicts-handle-in-operand-positions, item 3: does this call hand the
+ * callee a function value that performs (a runtime-impure inferred row) or may
+ * await?  A generic HOF whose own body only calls its fn parameter --
+ * `(defn gapp [B] [f : (fn [B] #fx{E} B) v : B] : B (f v))` -- performs
+ * nothing itself, so emit_cps_ir_colored_fn_needs_mono asks for no clone; but
+ * the call colors it, its base sig-rejects on its type variables, and
+ * evicted, it took the effect off the CPS backend: the callback's `perform`
+ * had "no lowering here".  The clone this asks for has the concrete signature
+ * the non-generic twin has, which the backend admits. */
+static bool emit_abi_call_passes_effectful_fn(const Expr *call) {
+    for (uint32_t i = 0; i < call->as.call_.n_args; i++) {
+        const Expr *a = call->as.call_.args[i];
+        while (a) {
+            if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+            else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+            else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+            else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+            else if (a->kind == EX_CAST) a = a->as.cast_.expr;
+            else if (a->kind == EX_REINTERPRET) a = a->as.reinterpret_.expr;
+            else break;
+        }
+        if (!a) continue;
+        const FnDef *afd = NULL;
+        if (a->kind == EX_VAR && a->as.var.binding) {
+            const Binding *b = a->as.var.binding;
+            if (b->source_binding) b = b->source_binding;
+            afd = b->source_fn_def;
+            if (!afd && b->closure_fn_binding) afd = b->closure_fn_binding->source_fn_def;
+            if (!afd && b->hoist_closure_fn_binding) afd = b->hoist_closure_fn_binding->source_fn_def;
+        } else if (a->kind == EX_CLOSURE && a->as.closure_.closure) {
+            afd = a->as.closure_.closure->fn;
+        } else if (a->kind == EX_FN) {
+            afd = a->as.fn_.fn;
+        }
+        if (!afd) continue;
+        if ((afd->inferred_effect_row && !effect_row_is_runtime_pure(afd->inferred_effect_row))
+            || cps_fn_may_await(afd))
+            return true;
+    }
+    return false;
+}
+
+/* ...or declares a fn parameter whose effect row is not empty -- a callback
+ * the generic performs through whatever is passed at this call: the row
+ * colors it, so a call with a pure callback needs the clone too. */
+static bool emit_abi_fn_has_effectful_fn_param(const FnDef *fd) {
+    if (!fd || !fd->params) return false;
+    for (uint32_t i = 0; i < fd->n_params; i++) {
+        const Binding *p = fd->params[i];
+        if (!p || p->type.kind != TY_FN) continue;
+        const struct EffectRow *r = p->type.as.fn.effect_row;
+        if (r && r->kind != ERK_EMPTY) return true;
+    }
+    return false;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -7431,7 +7487,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * cannot lower its `perform`.  Mint the clone for exactly this case. */
     if (!abi_changes && !instance_changes && fd && !borrow_path &&
         bindings && n_bindings > 0 &&
-        emit_cps_ir_colored_fn_needs_mono(fd)) {
+        (emit_cps_ir_colored_fn_needs_mono(fd) || emit_abi_call_passes_effectful_fn(call)
+         || emit_abi_fn_has_effectful_fn_param(fd))) {
         abi_changes = true;
     }
     /* SR2b: a generic that RECEIVES a fat closure whose element tyvar
