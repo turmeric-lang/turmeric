@@ -12922,12 +12922,21 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    }\n"
         "}\n");
     buf_puts(out,
-        "static void __tur_dyn_no_operator(int __op, int64_t __t) {\n"
+        "static void __tur_dyn_no_operator(int __op, int64_t __t, const tur_site_t *__site) {\n"
         "    char __m[160];\n"
         "    snprintf(__m, sizeof(__m), \"%s: no operator for a %s argument\",\n"
         "             __tur_dyn_op_name(__op), __tur_dyn_argname(__t));\n"
-        "    tur_panic(__m);\n"
+        "    if (__site) tur_panic_at(__site->file, __site->line, __m); else tur_panic_sited(__m);\n"
         "}\n");
+    /* panic-location-names-the-runtime-not-the-call-site: the operator, not,
+     * println and comparison helpers take the call's site (a static
+     * `tur_site_t`, emit_site_ref_text) as a trailing argument -- one register
+     * on the hit path, nothing stored; the thread-local set/clear a sited
+     * inline-C call uses cost a 10M-turn Saffron arithmetic loop 30% -- and
+     * the panic names it.  The call-arity check and the field miss, which are
+     * statements off the hot path, set the slot around themselves instead and
+     * panic through tur_panic_sited; the slot (emit_panic_site_slot) precedes
+     * this text in the unit.  A NULL site names the runtime's line, as before. */
     /* r7rs-type-errors-are-uncatchable-panics: an operand the dynamic operator
      * has no row for.  In a Scheme program -- whose prelude installs the hook
      * the raising cast check uses (ensure_r7rs_cast_helper) -- it is an R7RS
@@ -12939,10 +12948,10 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "#define TUR_R7RS_TYPE_ERROR_HOOK_DECL 1\n"
         "static tur_tagged_t (*tur_r7rs_type_error_hook)(const char *, const char *, tur_tagged_t);\n"
         "#endif\n"
-        "static void __tur_dyn_bad_operand(int __op, tur_tagged_t __v) {\n"
+        "static void __tur_dyn_bad_operand(int __op, tur_tagged_t __v, const tur_site_t *__site) {\n"
         "    if (tur_r7rs_type_error_hook)\n"
         "        (void)tur_r7rs_type_error_hook(__tur_dyn_op_name(__op), \"a number\", __v);\n"
-        "    __tur_dyn_no_operator(__op, TUR_GETTAG(__v));\n"
+        "    __tur_dyn_no_operator(__op, TUR_GETTAG(__v), __site);\n"
         "}\n");
     buf_puts(out,
         "static inline int __tur_dyn_is_num(int64_t __t) {\n"
@@ -12965,18 +12974,18 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * the interpreter promoted.  An integral literal cannot show that, which is
      * why every probe here leads with 7.1. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_arith(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
+        "static tur_tagged_t __tur_dyn_arith(int __op, tur_tagged_t __a, tur_tagged_t __b, const tur_site_t *__site) {\n"
         "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a, __site); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b, __site); }\n"
         /* `mod` and the bit operators have int rows only in the builtin table,
          * so a float operand finds no overload in the interpreter either.  Same
          * answer here. */
         "    if (__op == TUR_DYNOP_MOD || __op == TUR_DYNOP_BAND ||\n"
         "        __op == TUR_DYNOP_BOR || __op == TUR_DYNOP_BXOR ||\n"
         "        __op == TUR_DYNOP_SHL || __op == TUR_DYNOP_SHR) {\n"
-        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __a); }\n"
-        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __b); }\n"
+        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __a, __site); }\n"
+        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __b, __site); }\n"
         "        {\n"
         "            int64_t __x = TUR_UNTAG(__a), __y = TUR_UNTAG(__b);\n"
         "            switch (__op) {\n"
@@ -13024,7 +13033,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * know which operator it will turn out to be.  The `if` that consumes it
      * goes through __tur_dyn_truthy like any other dynamic condition. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_cmp(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
+        "static tur_tagged_t __tur_dyn_cmp(int __op, tur_tagged_t __a, tur_tagged_t __b, const tur_site_t *__site) {\n"
         "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
         /* `=` on two bools is a real builtin row (TY_BOOL), so it is a real
          * dynamic answer too.  Ordering operators have no bool row. */
@@ -13058,8 +13067,8 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "                 : ((__cx == NULL || __cy == NULL) ? 0 : (strcmp(__cx, __cy) == 0));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __ce : !__ce);\n"
         "    }\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a, __site); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b, __site); }\n"
         "    if (__ta == TUR_DYNTAG_FLOAT || __tb == TUR_DYNTAG_FLOAT) {\n"
         "        double __x = __tur_dyn_f(__a), __y = __tur_dyn_f(__b);\n"
         "        int __r;\n"
@@ -13100,12 +13109,12 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * `not` truthy here would give the two back ends different answers for the
      * same program, which is a worse outcome than either rule. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_not(tur_tagged_t __v) {\n"
+        "static tur_tagged_t __tur_dyn_not(tur_tagged_t __v, const tur_site_t *__site) {\n"
         "    if (TUR_GETTAG(__v) != TUR_DYNTAG_BOOL) {\n"
         "        char __m[160];\n"
         "        snprintf(__m, sizeof(__m), \"not: no operator for a %s argument\",\n"
         "                 __tur_dyn_argname(TUR_GETTAG(__v)));\n"
-        "        tur_panic(__m);\n"
+        "        if (__site) tur_panic_at(__site->file, __site->line, __m); else tur_panic_sited(__m);\n"
         "    }\n"
         "    return TUR_TAG(TUR_DYNTAG_BOOL, TUR_UNTAG(__v) == 0);\n"
         "}\n");
@@ -13132,7 +13141,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * Returns nil rather than void so the node keeps the `any` type the
      * elaborator gave it; a println in value position is rare but legal. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_println(tur_tagged_t __v) {\n"
+        "static tur_tagged_t __tur_dyn_println(tur_tagged_t __v, const tur_site_t *__site) {\n"
         "    int64_t __t = TUR_GETTAG(__v);\n"
         "    if (__t == TUR_DYNTAG_INT)        printf(\"%lld\\n\", (long long)TUR_UNTAG(__v));\n"
         "    else if (__t == TUR_DYNTAG_FLOAT) printf(\"%g\\n\", __tur_dyn_f(__v));\n"
@@ -13144,7 +13153,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        char __m[160];\n"
         "        snprintf(__m, sizeof(__m), \"println: no operator for a %s argument\",\n"
         "                 __tur_dyn_argname(__t));\n"
-        "        tur_panic(__m);\n"
+        "        if (__site) tur_panic_at(__site->file, __site->line, __m); else tur_panic_sited(__m);\n"
         "    }\n"
         "    return TUR_TAG(TUR_DYNTAG_NIL, 0);\n"
         "}\n");
@@ -13173,7 +13182,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "            snprintf(__m, sizeof(__m), \"cannot call this function here "
         "-- it takes a different number of arguments, or parameters this call "
         "site cannot supply\");\n"
-        "        tur_panic(__m);\n"
+        "        tur_panic_sited(__m);\n"
         "    }\n"
         "}\n");
     /* r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md 2b):
@@ -13275,7 +13284,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    char __m[192];\n"
         "    snprintf(__m, sizeof(__m), \"no field '.%s' on a %s value\", __f,\n"
         "             __tur_any_type_name(__tag));\n"
-        "    tur_panic(__m);\n"
+        "    tur_panic_sited(__m);\n"
         "}\n");
     /* proper-tail-calls T6 (docs/archive/proper-tail-calls-plan.md, T-D6):
      * the bounce trampoline for a dynamic call in tail position.
@@ -14366,15 +14375,21 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      *
      * Reports the runtime type NAME rather than the tag: the tag is a hash and
      * means nothing to a reader, and P1's registry already answers this. */
+    /* panic-location-names-the-runtime-not-the-call-site: the dispatch site
+     * passes its own source basename and line (emit_dyn_method), as a cast
+     * check does (__tur_any_cast_check_at); this helper sits in the fixed
+     * preamble, ahead of the program-side site slot, so it takes the location
+     * as arguments.  The location-free entry stays for the runtime's callers. */
     if (g_opt_dynamic_any) {
-    buf_puts(out, "static const void *__tur_inst_slot(const char *cls, const char *meth, "
-                  "int64_t tag, int slot) {\n");
+    buf_puts(out, "static const void *__tur_inst_slot_at(const char *cls, const char *meth, "
+                  "int64_t tag, int slot, const char *file, int line) {\n");
     buf_puts(out, "    const void *__t = __tur_inst_find(cls, tag);\n");
     buf_puts(out, "    char __m[224];\n");
     buf_puts(out, "    if (!__t) {\n");
     buf_puts(out, "        snprintf(__m, sizeof(__m), \"no instance of %s for %s "
                   "(dispatching .%s on an any)\", cls, __tur_any_type_name(tag), meth);\n");
-    buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
+    buf_puts(out, "        if (file) tur_panic_at(file, line, __m); else tur_panic(__m);\n");
+    buf_puts(out, "        return 0;\n    }\n");
     buf_puts(out, "    const void *__f = ((const void **)__t)[slot];\n");
     buf_puts(out, "    if (!__f) {\n");
     buf_puts(out, "        snprintf(__m, sizeof(__m), \"instance %s %s exists but "
@@ -14382,8 +14397,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                   "more than the receiver, or returning the class variable, on a "
                   "non-parametric receiver)\", cls, "
                   "__tur_any_type_name(tag), meth);\n");
-    buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
+    buf_puts(out, "        if (file) tur_panic_at(file, line, __m); else tur_panic(__m);\n");
+    buf_puts(out, "        return 0;\n    }\n");
     buf_puts(out, "    return __f;\n}\n");
+    buf_puts(out, "__attribute__((unused)) static const void *__tur_inst_slot(const char *cls, "
+                  "const char *meth, int64_t tag, int slot) {\n");
+    buf_puts(out, "    return __tur_inst_slot_at(cls, meth, tag, slot, NULL, 0);\n}\n");
     }
     /* panic-location-names-the-runtime-not-the-call-site: a failed cast panics
      * at the CAST -- each check the emitter writes passes its own source
@@ -18305,6 +18324,9 @@ static void emit_panic_site_slot(Buf *out) {
         "static inline void tur_site_clear(void) { tur_cur_site = NULL; }\n"
         "static inline void tur_panic_sited(const char *msg) {\n"
         "    const tur_site_t *s = tur_cur_site;\n"
+        /* A caught panic (catch-unwind) never reaches the call's clear, so the
+         * slot is cleared here: a later unsited panic must not name this site. */
+        "    tur_cur_site = NULL;\n"
         "    if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);\n"
         "}\n\n");
 }

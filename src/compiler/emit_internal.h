@@ -1394,6 +1394,9 @@ bool  fn_def_panics_in_inline_c(const FnDef *fd);
 bool  binding_panics_in_inline_c(const Binding *b);
 Span  emit_call_site_span(const Expr *call);
 char *emit_site_set_text(EmitCtx *ctx, Span span);
+/* `&__tur_site_N` for the same static: the site as an argument, for a helper
+ * that takes one (the dynamic operators) rather than reading the slot. */
+char *emit_site_ref_text(EmitCtx *ctx, Span span);
 /* sum-closure-payload-never-dropped, the CPS half (emit_expr.c): does the
  * let's binding `i` hold a sum whose live arm's closure nothing else reaches
  * (the direct emitter's scope-exit question), and the tag-dispatched

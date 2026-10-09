@@ -5327,6 +5327,7 @@ static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }
 static inline void tur_site_clear(void) { tur_cur_site = NULL; }
 static inline void tur_panic_sited(const char *msg) {
     const tur_site_t *s = tur_cur_site;
+    tur_cur_site = NULL;
     if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);
 }
 

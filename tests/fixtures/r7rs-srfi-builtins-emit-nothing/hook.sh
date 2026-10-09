@@ -5,7 +5,11 @@
 # imports emits the same C, byte for byte.  The program imports what the
 # SRFIs re-export from (scheme case-lambda) and (scheme process-context), so
 # the one difference would be the SRFI imports themselves.  Both copies are
-# named p.tur, in two directories, so the file name cannot differ either.
+# named p.tur, in two directories, so the file name cannot differ either, and
+# both keep the whole import on line 2, so no form moves to another line: a
+# panic site the emitter interns carries the form's line
+# (panic-location-names-the-runtime-not-the-call-site), which is not what
+# this comparison is about.
 set -e
 FIXTURE_DIR="$(cd "$(dirname "$0")" && pwd)"
 TMP="$1"
@@ -25,7 +29,7 @@ BODY='(define (show x) (write x) (newline))
 (show (string? (get-environment-variable "HOME")))'
 printf '#lang r7rs\n(import (scheme base) (scheme write) (scheme case-lambda) (scheme process-context))\n%s\n' \
     "$BODY" > "$TMP/without/p.tur"
-printf '#lang r7rs\n(import (scheme base) (scheme write) (scheme case-lambda) (scheme process-context)\n        (srfi 6) (srfi 9) (srfi 11) (srfi 16) (srfi 23) (srfi 30) (srfi 34) (srfi 39) (srfi 87) (srfi 98))\n%s\n' \
+printf '#lang r7rs\n(import (scheme base) (scheme write) (scheme case-lambda) (scheme process-context) (srfi 6) (srfi 9) (srfi 11) (srfi 16) (srfi 23) (srfi 30) (srfi 34) (srfi 39) (srfi 87) (srfi 98))\n%s\n' \
     "$BODY" > "$TMP/with/p.tur"
 (cd "$TMP/without" && "$TUR" emit-c p.tur > p.c 2>/dev/null)
 (cd "$TMP/with" && "$TUR" emit-c p.tur > p.c 2>/dev/null)

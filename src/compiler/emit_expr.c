@@ -8191,6 +8191,28 @@ static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
  * a lowering that guesses.  Emitting the STATIC operator instead would be a
  * miscompile, not a missing feature: the operands are two-word boxes, so `+`
  * over them would add tag words. */
+/* panic-location-names-the-runtime-not-the-call-site: a dynamic operator's
+ * helper call with this node's site -- the interned static `tur_site_t`'s
+ * address (emit_site_ref_text) -- as its trailing argument, so the helper's
+ * panic names the operator's line rather than the runtime's.  An argument
+ * rather than the thread-local slot: the slot's set and clear around every
+ * operator cost a 10M-turn Saffron arithmetic loop 30%, and a nested operator
+ * among the operands would have cleared it before this call ran.  `lead` is
+ * the opcode text ("3, ") or "", `b` NULL for a one-operand helper.  A node
+ * with no source line passes NULL, and the helper names the runtime's line. */
+static char *dyn_sited_call(EmitCtx *ctx, const Expr *e, const char *helper,
+                            const char *lead, const char *a, const char *b) {
+    char *site = emit_site_ref_text(ctx, e->span);
+    Buf out; buf_init(&out);
+    buf_printf(&out, "%s(%s%s%s%s, %s)", helper, lead, a, b ? ", " : "", b ? b : "",
+               site ? site : "NULL");
+    free(site);
+    buf_putc(&out, '\0');
+    char *r = strdup(out.data);
+    buf_free(&out);
+    return r;
+}
+
 static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     ensure_saffron_dyn_runtime(ctx);
     const char *opn = (e->as.dyn_op_.op && e->as.dyn_op_.op->name)
@@ -8275,15 +8297,14 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     if (n == 1 && (strcmp(opn, "println") == 0 || strcmp(opn, "not") == 0)) {
         char *a = emit_value(ctx, body, args[0]);
-        Buf out; buf_init(&out);
-        buf_printf(&out, "__tur_dyn_%s(%s)",
-                   opn[0] == 'p' ? "println" : "not", a);
-        buf_putc(&out, '\0');
+        char *r = dyn_sited_call(ctx, e, opn[0] == 'p' ? "__tur_dyn_println" : "__tur_dyn_not",
+                                 "", a, NULL);
         free(a);
-        char *r = strdup(out.data);
-        buf_free(&out);
         return r;
     }
+
+    char lead[24];
+    snprintf(lead, sizeof lead, "%d, ", opcode);
 
     /* Arithmetic folds left, matching BS_VARIADIC_FOLD: `(+ a b c)` is
      * `(a + b) + c`, so the dynamic form nests the same way and a mixed
@@ -8292,12 +8313,9 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *acc = emit_value(ctx, body, args[0]);
         for (uint32_t i = 1; i < n; i++) {
             char *rhs = emit_value(ctx, body, args[i]);
-            Buf out; buf_init(&out);
-            buf_printf(&out, "__tur_dyn_arith(%d, %s, %s)", opcode, acc, rhs);
-            buf_putc(&out, '\0');
+            char *nx = dyn_sited_call(ctx, e, "__tur_dyn_arith", lead, acc, rhs);
             free(acc); free(rhs);
-            acc = strdup(out.data);
-            buf_free(&out);
+            acc = nx;
         }
         return acc;
     }
@@ -8305,12 +8323,8 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (is_cmp && n == 2) {
         char *a = emit_value(ctx, body, args[0]);
         char *b = emit_value(ctx, body, args[1]);
-        Buf out; buf_init(&out);
-        buf_printf(&out, "__tur_dyn_cmp(%d, %s, %s)", opcode, a, b);
-        buf_putc(&out, '\0');
+        char *r = dyn_sited_call(ctx, e, "__tur_dyn_cmp", lead, a, b);
         free(a); free(b);
-        char *r = strdup(out.data);
-        buf_free(&out);
         return r;
     }
 
@@ -8523,22 +8537,32 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
      * its statements queued) before the arguments' were, and the check still
      * runs before any argument is read. */
     char *dc = fresh_tmp(ctx);
+    /* panic-location-names-the-runtime-not-the-call-site: the arity check's
+     * "cannot call a ... value" panic names this call's line.  The callee
+     * value is bound before the site is set, and the check -- a statement --
+     * is followed by the clear. */
+    char *dsite = emit_site_set_text(ctx, e->span);
+    const char *dpre = dsite ? dsite : "";
+    const char *dsep = dsite ? "; " : "";
+    const char *dpost = dsite ? " tur_site_clear();" : "";
     if (tail_mode != DYN_TAIL_NONE) {
         /* The trampoline's __tur_tb_invoke packs for a variadic itself; the
          * check here only has to admit one (and panic for anything else). */
         buf_printf(body,
-                   "tur_tagged_t %s = (%s); "
-                   "(void)__tur_dyn_call_arity(%s, %lld, %u);\n",
-                   dc, fnv, dc, (long long)want_id, (unsigned)n);
+                   "tur_tagged_t %s = (%s); %s%s"
+                   "(void)__tur_dyn_call_arity(%s, %lld, %u);%s\n",
+                   dc, fnv, dpre, dsep, dc, (long long)want_id, (unsigned)n, dpost);
+        free(dsite);
     } else {
         /* R6: `-1` is the ordinary call; a fixed count means a registered
          * variadic callee that __tur_dyn_call_var packs for (2b of
          * docs/archive/r7rs-compiled-dynamic-shapes.md).  The arguments are
          * bound once so neither arm re-evaluates them. */
         buf_printf(body,
-                   "tur_tagged_t %s = (%s); "
-                   "int %s_v = __tur_dyn_call_arity(%s, %lld, %u);\n",
-                   dc, fnv, dc, dc, (long long)want_id, (unsigned)n);
+                   "tur_tagged_t %s = (%s); %s%s"
+                   "int %s_v = __tur_dyn_call_arity(%s, %lld, %u);%s\n",
+                   dc, fnv, dpre, dsep, dc, dc, (long long)want_id, (unsigned)n, dpost);
+        free(dsite);
         for (uint32_t i = 0; i < n; i++) {
             char *t = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
@@ -8803,6 +8827,14 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
         return atom_nil();
     }
     indent_buf(body, ctx->indent);
+    /* panic-location-names-the-runtime-not-the-call-site: the miss names
+     * this field access's line (the helper panics through tur_panic_sited). */
+    char *fsite = emit_site_set_text(ctx, e->span);
+    if (fsite) {
+        buf_printf(body, "else { %s; __tur_dyn_no_field(TUR_GETTAG(%s), \"%s\"); tur_site_clear(); }\n",
+                   fsite, ov, fname);
+        free(fsite);
+    } else
     buf_printf(body, "else { __tur_dyn_no_field(TUR_GETTAG(%s), \"%s\"); }\n",
                ov, fname);
     free(ov);
@@ -8873,6 +8905,24 @@ static char *emit_dyn_method(EmitCtx *ctx, Buf *body, const Expr *e) {
      * the arguments, and the slot lookup still runs before any is read. */
     char *dm = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
+    /* panic-location-names-the-runtime-not-the-call-site: the no-instance
+     * panic names this dispatch's line -- the helper sits in the fixed
+     * preamble, ahead of the site slot, so it takes the location as
+     * arguments (as __tur_any_cast_check_at does). */
+    const char *dpath = e->span.line ? diag_file_path(e->span.file_id) : NULL;
+    if (dpath) {
+        const char *dbase = dpath;
+        for (const char *p = dpath; *p; p++) if (*p == '/' || *p == '\\') dbase = p + 1;
+        buf_printf(body,
+            "tur_tagged_t %s = (%s); "
+            "const void *%s_f = __tur_inst_slot_at(\"%s\", \"%s\", TUR_GETTAG(%s), %d, \"",
+            dm, recv, dm, cls, meth, dm, (int)slot);
+        for (const char *p = dbase; *p; p++) {
+            if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+            buf_putc(body, *p);
+        }
+        buf_printf(body, "\", %d);\n", (int)e->span.line);
+    } else
     buf_printf(body,
         "tur_tagged_t %s = (%s); "
         "const void *%s_f = __tur_inst_slot(\"%s\", \"%s\", TUR_GETTAG(%s), %d);\n",

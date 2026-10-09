@@ -1814,6 +1814,21 @@ Span emit_call_site_span(const Expr *call) {
  * with nowhere to put the static (no siting then: the body names the
  * runtime's line, as before).  Malloc'd. */
 char *emit_site_set_text(EmitCtx *ctx, Span span) {
+    char *ref = emit_site_ref_text(ctx, span);
+    if (!ref) return NULL;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "tur_site_set(%s)", ref);
+    buf_putc(&b, '\0');
+    free(ref);
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
+}
+
+/* `&__tur_site_N` for a node at `span` -- the interned static's address, for a
+ * helper that takes the site as an argument (the dynamic operators) rather
+ * than reading the thread-local slot.  The same static, same NULL cases. */
+char *emit_site_ref_text(EmitCtx *ctx, Span span) {
     const char *path = span.line ? diag_file_path(span.file_id) : NULL;
     if (!path || !ctx || !ctx->thunk_typedefs) return NULL;
     const char *base = path;
@@ -1826,7 +1841,7 @@ char *emit_site_set_text(EmitCtx *ctx, Span span) {
     }
     buf_printf(ctx->thunk_typedefs, "\", %u };\n", span.line);
     Buf b; buf_init(&b);
-    buf_printf(&b, "tur_site_set(&__tur_site_%u)", id);
+    buf_printf(&b, "&__tur_site_%u", id);
     buf_putc(&b, '\0');
     char *r = strdup(b.data);
     buf_free(&b);

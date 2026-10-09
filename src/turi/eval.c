@@ -9490,6 +9490,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     bool raised;
                     TuriValue r7 = turi_r7rs_type_error(env, "", "a procedure", fnv, &raised);
                     if (raised) { cur = r7; descending = false; break; }
+                    g_panic_site = control->span;   /* the call's line (panic-location-names-the-runtime-not-the-call-site) */
                     turi_runtime_panic(env, msg);
                     cur = turi_nil(); descending = false; break;
                 }
@@ -13615,6 +13616,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                      "no instance of %s for %s (dispatching .%s on an any)",
                      (tc && tc->name) ? tc->name->name : "?",
                      have ? have : "that value", meth);
+            /* panic-location-names-the-runtime-not-the-call-site: the dispatch's
+             * own line, as the compiled __tur_inst_slot_at names it. */
+            g_panic_site = e->span;
             turi_runtime_panic(env, msg);
             return turi_nil();
         }
@@ -13738,6 +13742,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             const char *tn = turi_any_display_type(ov);
             snprintf(msg, sizeof(msg), "no field '.%s' on a %s value",
                      fname, tn ? tn : "non-struct");
+            g_panic_site = e->span;   /* the access's line (panic-location-names-the-runtime-not-the-call-site) */
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */
         }
@@ -13771,6 +13776,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             bool raised;
             TuriValue r7 = turi_r7rs_type_error(env, "", "a procedure", fnv, &raised);
             if (raised) return r7;
+            g_panic_site = e->span;   /* the call's line (panic-location-names-the-runtime-not-the-call-site) */
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */
         }
@@ -13917,6 +13923,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             bool raised;
             TuriValue r = turi_r7rs_type_error(env, opn, "a number", boxed_first, &raised);
             if (raised) return r;
+            g_panic_site = e->span;   /* the operator's line (panic-location-names-the-runtime-not-the-call-site) */
             turi_runtime_panic(env, msg);
             return turi_nil();  /* unreachable */
         }
@@ -13992,6 +13999,32 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 (k0 == TY_UNKNOWN) ? NULL
                                    : builtin_lookup(e->as.dyn_op_.op,
                                                     type_simple(k0, CK_COPY), n);
+            /* Every operand must be of the kind that selected the overload.
+             * Selecting it from argument 0 alone let `(+ 6 "x")` run the int
+             * `+` over the string's address -- a wrong answer, where the
+             * compiled runtime (__tur_dyn_arith / __tur_dyn_cmp) refuses a
+             * non-numeric operand beside a number, and a non-bool beside a
+             * bool, as "no operator for a <that operand's type> argument".
+             * Refuse the same operand here, named the same way (the two
+             * cstrs of `=` / `not=` are answered below, as before). */
+            if (spec && n > 1) {
+                for (uint32_t i = 1; i < n; i++) {
+                    bool ok = (k0 == TY_INT || k0 == TY_FLOAT)
+                                  ? (vals[i].tag == TURI_INT || vals[i].tag == TURI_FLOAT)
+                                  : (vals[i].tag == vals[0].tag);
+                    if (ok) continue;
+                    spec = NULL;
+                    switch (vals[i].tag) {
+                    case TURI_INT:   k0 = TY_INT;     break;
+                    case TURI_FLOAT: k0 = TY_FLOAT;   break;
+                    case TURI_BOOL:  k0 = TY_BOOL;    break;
+                    case TURI_CSTR:  k0 = TY_CSTR;    break;
+                    case TURI_NIL:   k0 = TY_NIL;     break;
+                    default:         k0 = TY_UNKNOWN; break;
+                    }
+                    break;
+                }
+            }
             /* saffron-dynamic-surface-pass (low): `=` / `not=` on two cstrs
              * answers Eq[cstr]'s comparison (stdlib/typeclass-eq.tur) -- byte
              * for byte, both-NULL equal, a NULL never equal to a non-NULL,
@@ -14049,6 +14082,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 TuriValue r = turi_r7rs_type_error(env,
                     e->as.dyn_op_.op ? e->as.dyn_op_.op->name : "operator", "a number", bad, &raised);
                 if (raised) return r;
+                g_panic_site = e->span;   /* the operator's line (panic-location-names-the-runtime-not-the-call-site) */
                 turi_runtime_panic(env, msg);
                 return turi_nil();  /* unreachable */
             }

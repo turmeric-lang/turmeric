@@ -1,0 +1,15 @@
+#lang saffron
+;; panic-location-names-the-runtime-not-the-call-site: a method dispatched on
+;; an `any` whose type has no instance panics at the dispatch's own line now,
+;; on both back ends, not at the runtime helper's.
+(load "stdlib/rc.tur")
+(defdata Two [a] (Two [l : a r : a]))
+(definstance Foldable [Two]
+  (foldl [t init f] (f (f init (.l t)) (.r t)))
+  (foldr [t init f] (f (.l t) (f (.r t) init))))
+(defn sum-of [t]
+  (.foldl t 0 (fn [acc x] (+ acc x))))
+(defn main []
+  (println (sum-of (Two 1 2)))
+  (println (sum-of 5))
+  0)

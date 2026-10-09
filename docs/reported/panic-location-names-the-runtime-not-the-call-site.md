@@ -1,5 +1,39 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed a third time 2026-10-09: the Saffron dynamic runtime names the
+program's line, on both back ends.** `(+ (* a 2) b)` with `b` a string
+printed `panic at <emitted>.c:2888: +: no operator for a cstr argument`
+compiled and a bare `panic at` interpreted; both print `panic at input.tur:8:
+...` now. Compiled, the operator, comparison, `not` and `println` helpers take
+the call's site -- a static `tur_site_t` the emitter interns per node
+(`emit_site_ref_text`) -- as a trailing argument and panic through
+`tur_panic_at` (`ensure_saffron_dyn_runtime`, `src/compiler/emit_module.c`;
+`dyn_sited_call`, `src/compiler/emit_expr.c`): an argument rather than the
+thread-local slot, because setting and clearing the slot around every
+dynamic operator cost a 10M-turn Saffron arithmetic loop 30% (0.11 s to
+0.15 s), where the argument costs it nothing measurable (0.10-0.11 s to
+0.11-0.12 s, within the run-to-run spread), and because a nested operator
+among the operands would have cleared the slot before the outer call ran.
+The call-arity check (`cannot call a ... value`) and the field miss (`no field
+'.x' on a ...`) are statements off the hot path: they set the slot around
+themselves and the helpers panic through `tur_panic_sited`. The dynamic
+method dispatch on an `any` sits in the fixed preamble, ahead of the slot, so
+it takes the location as arguments (`__tur_inst_slot_at`, as the cast check
+does). Interpreted, each of those panics sets `g_panic_site` to its node's
+span first (`src/turi/eval.c`). Found on the way, interpreter only: `(+ 6
+"x")` did not panic at all -- the overload was selected from argument 0
+alone, so the int `+` ran over the string's address and printed it; every
+operand must now be of the kind that selected the overload, named in the
+refusal as the compiled runtime names it. Pinned by
+`tests/fixtures/saffron-dyn-op-panic-site` (an operand built by a nested
+operator), `saffron-dyn-field-panic-site`, `saffron-dyn-call-panic-site` and
+`saffron-any-dispatch-panic-site`, each asserting the sited line and the full
+message on both engines. **Still open:** the r7rs raising check; a sited
+body entered through a function value or an instance-method dispatch (no
+site set: the runtime's line, or the enclosing sited call's while its
+arguments are being evaluated); and the interpreter's panic from a native
+reached other than through the driver's leaf call.
+
 **Narrowed again 2026-10-09: a panic raised in a stdlib inline-C body names
 the call.** `(vec-get v 9)` on line 12 prints `panic at input.tur:12: vec
 index out of bounds` on both engines, where it printed the runtime's own line
@@ -31,16 +65,13 @@ pins both). Cost: two thread-local stores per such call, none at entry -- a
 100,000,000-iteration loop of nothing but `vec-get` went from 0.09 s to
 0.14 s on a 4-core box (the slot is emitted program-side, after the fixed
 preamble, because a thread-local in the fixed region is reached through a
-host accessor CALL in a hosted build, which doubled that loop). **Still
-open:** a panic raised in a runtime helper
-the program never names -- a Saffron dynamic operator
-(`ensure_saffron_dyn_runtime`), a dynamic method dispatch on an `any`
-(`__tur_inst_slot`), the r7rs raising check -- names the helper's line; so
-does a sited body entered through a function value or an instance-method
-dispatch (no site set: the runtime's line, or the enclosing sited call's
-while its arguments are being evaluated, which is the same line), and the
-interpreter's panic from a native reached other than through the driver's
-leaf call.
+host accessor CALL in a hosted build, which doubled that loop). Still open
+after this pass: a panic raised in a runtime helper the program never names
+-- a Saffron dynamic operator, a dynamic method dispatch on an `any`, the
+r7rs raising check -- named the helper's line (the Saffron ones were fixed
+the same day, above); so does a sited body entered through a function value
+or an instance-method dispatch, and the interpreter's panic from a native
+reached other than through the driver's leaf call.
 
 **Narrowed again 2026-10-09: an index out of bounds is a panic.** `vec-get`,
 `vec-set!`, `vec-get-byval`, `slice-get`, `grid-get`/`grid-set!`,
