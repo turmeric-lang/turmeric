@@ -175,3 +175,40 @@ spec-less base with tyvar-as-word reading in `fn_sig_ok`, `atom_ok` and the
 slot store -- and in both cases make an effectful fn-value flowing into an
 empty-row fn parameter taint like the `sig_perm` path does (or refuse it
 under the lenient checker, as `--strict-effects` already would).
+
+## Item 3, taken further (2026-10-09) -- three walls, in order
+
+It is wider than a fuzz residue: stdlib's own generic HOFs hit it.
+`(handle (option-map (some 1) (fn [x : int] : int (perform (E x)))) (E [x] k)
+(resume k (+ x 1)))` is "no lowering here" compiled (`--interpret` gives 2).
+The non-generic empty-row twin, `(defn app [f : (fn [int] int) v : int] ...)`,
+compiles and is right with a named or a lambda callback.
+
+A prototype (reverted) got through two of the three walls:
+
+1. **No clone.** `emit_abi_register_call` (`emit_module.c`) mints a
+   colored generic's clone only when its OWN body suspends
+   (`emit_cps_ir_colored_fn_needs_mono`); `gapp`'s body only calls `f`.
+   Minting one when the call passes an effectful fn value (a named fn or
+   lambda whose inferred row is runtime-impure, or that may await) works:
+   `gapp__spec__int64_t_int64_t_int64_t` is interned and
+   `mono_template_all_admissible` accepts it.
+2. **The callback is tiered `e1`.** `param_thread_class` returns `PT_E1` for
+   any fn whose base `fn_sig_ok` fails, so `eff` was never threadable and
+   perm-tainted `E` (with it `main`, the handler, fell off the backend --
+   `SIG-MAIN` in the trace is that, not main's signature). Asking whether
+   every monomorph's signature is admissible (`mono_sig_ok` over the specs)
+   instead tiers it `now`.
+3. **The call through `f` does not thread.** `fnval_withdraw_walk` then
+   withdraws `eff`, because `cps_ir_param_call_threads` fails for `(f v)`
+   in the generic body: the parameter's binding has NO effect row even when
+   one is written (`(fn [B] B #fx{E})` -- `effect_row` is NULL on the param
+   binding, so `call_is_effectful_fnvalue` says no), and it is not
+   `is_poly_fn`, so the empty-row `fn_cps` path (`fncps_param_call_ok`)
+   refuses too. The non-generic twin's parameter is fat-normalized; the
+   tyvar-typed one is not, and the clone shares the base's Binding.
+
+So the remaining work is in the elaborator: carry a written effect row onto a
+tyvar fn parameter's binding, and fat-normalize a tyvar fn parameter as a
+concrete one is (or decide it per clone). Walls 1 and 2's changes are small
+and can be re-applied from the description above once wall 3 is down.
