@@ -26,7 +26,7 @@ body finishes with the wrong result and nothing is reported. Calling the same
 function directly gives the right answer.
 
 Found 2026-10-08 while writing the async arm of the
-[fn-value-call-cps-frames-held-until-outer-entry](../reported/fn-value-call-cps-frames-held-until-outer-entry.md)
+[fn-value-call-cps-frames-held-until-outer-entry](fn-value-call-cps-frames-held-until-outer-entry.md)
 fixture. It predates that change: a build with the change stripped prints the
 same numbers.
 

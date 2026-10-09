@@ -35,7 +35,7 @@ in the DK preamble (157 fixtures); no fixture's program code moved.
 **Not covered:** a binder in a lifted continuation (the backedge is then not
 in the main body) and the mutual-recursion group jump keep the boundary reap
 -- freed, but only when the outermost entry returns, the shape
-[fn-value-call-cps-frames-held-until-outer-entry](../reported/fn-value-call-cps-frames-held-until-outer-entry.md)
+[fn-value-call-cps-frames-held-until-outer-entry](fn-value-call-cps-frames-held-until-outer-entry.md)
 describes for continuation frames.
 
 **Severity: low (leak; 24 B per iteration for a one-capture closure).** The

@@ -106,8 +106,9 @@ runtime or the codegen changes. Re-measure before you lean on one.
 | first `rc<T>` in a program | one-time 544 KiB (512 KiB free queue + 32 KiB GC registry) | 2 | process exit |
 | capturing closure | 8 B drop-glue pointer + 8 B code pointer + 8 B per capture | 1 | scope exit (closure drop glue) |
 | named `defn` used as a value | 0 (its fat box is a static) | 0 | -- |
-| a call through a function value | ~200 B of continuation frames | 2 | when the outermost direct-style call returns (see below) |
-| `perform` + `resume` under `handle` | ~630 B | 6 | when the `handle`'s outermost direct-style call returns |
+| a call through a function value | ~200 B of continuation frames | 2 | as they run, else when the outermost direct-style call returns (see below) |
+| `perform` + a tail `resume` under `handle` | the perform's frame and env | 2 | as they run (see below) |
+| `perform` + a non-tail or repeated `resume` | ~630 B | 6 | when the `handle`'s outermost direct-style call returns |
 | region generation | 64 KiB slabs; nodes inside cost their size and no malloc each | 1 per 64 KiB | rewind at bracket exit, if nothing escapes |
 
 A few rows need more than a cell.
@@ -232,23 +233,29 @@ below, was never freed in that position:
 
 A function that calls a function-typed value -- a parameter `f`, a closure
 in a `let`, a field holding a function -- is emitted in continuation-passing
-style, and each such call allocates continuation frames: measured 2
-allocations and about 200 bytes per call. A `perform` handled by `handle`
-costs about 6 allocations and 630 bytes.
+style, and so is one that performs an effect or enters a `handle`. Each such
+call allocates continuation frames: about 2 allocations and 200 bytes for a
+call through a function value; a `perform` handled by `handle` about 6
+allocations.
 
-These frames are freed in batches, when the **outermost** direct-style call
-returns. What that means in practice depends on how the loop around them is
-written:
+Most of them are handed back as soon as they have run. The rest are freed in
+batches, when the **outermost** direct-style call returns. What that means in
+practice depends on what the loop around them does:
 
-| Loop shape | Peak memory |
+| Each iteration... | Peak memory |
 | --- | --- |
-| `while` loop that calls the function each iteration | constant |
-| self-tail-recursive loop that calls it each iteration | grows ~200 B per iteration until the loop returns |
+| calls through a function value | constant |
+| performs an effect whose handler case ends in a tail `(resume k v)` and uses `k` for nothing else | constant |
+| enters a `handle` (and performs inside it, as above) | constant |
+| performs an effect whose case resumes non-tail (`(+ 1 (resume k v))`), or more than once | grows until the outermost call returns |
 
-So a long-running loop that calls through function values, or performs
-effects, should be a `while` loop
-([fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md)).
-An `#fx{}` annotation on the function type does not change this today.
+The last row is what is left of
+[fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fn-value-call-cps-frames-held-until-outer-entry.md):
+a non-tail resume runs a copy of the continuation, and the copies are kept
+([effect-nontail-resume-copies-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-nontail-resume-copies-held-until-outer-entry.md)).
+Writing such a loop as a `while` loop, which calls the function directly once
+per iteration, keeps it constant. An `#fx{}` annotation on the function type
+does not change any of this.
 
 ---
 
@@ -558,9 +565,9 @@ frees applies to them. `TUR_GC_STATS=1` prints what that collector did. See
 These are open findings that change the numbers above. Each report has a
 repro and the measurements.
 
-- [fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md)
-  -- calls through function values hold their frames until the outermost
-  call returns.
+- [effect-nontail-resume-copies-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-nontail-resume-copies-held-until-outer-entry.md)
+  -- an effect resumed non-tail, or more than once, in a loop holds its
+  continuation copies until the outermost call returns.
 - [byvalue-recursive-shared-copies-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-recursive-shared-copies-leak.md)
   -- by-value recursive values copied out of a borrow or a container leak.
 

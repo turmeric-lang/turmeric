@@ -118,12 +118,13 @@ effect and multishot fixtures 440/0.
 
 ### What is left
 
-- **A perform each turn.** The last row: the perform's own copy of its
-  continuation is kept until the body settles (`__dk_reap_keep(sub)` in
-  `dk_perform`), ~785 B a turn here (it was ~975 with the joins).  It is the
-  same retention as the open effect half of
-  [fn-value-call-cps-frames-held-until-outer-entry](../reported/fn-value-call-cps-frames-held-until-outer-entry.md),
-  which outside async is bounded by the outermost entry instead.
+- **A perform each turn** -- the last row -- was the perform's copy of its
+  continuation, kept until the body settled (~785 B a turn).  Fixed
+  2026-10-09 with the effect half of
+  [fn-value-call-cps-frames-held-until-outer-entry](fn-value-call-cps-frames-held-until-outer-entry.md):
+  a one-shot tail resume runs the original chain in place, and a resumed
+  park now runs under a trampoline of its own, so that path is taken inside
+  the body too.  That row is 10 MB now.
 - **Frames whose env size the emitter does not record** -- a perform's
   continuation frame, a reset's -- still share their env with the park, and
   their originals' envs stay in the share until the body settles.  Their

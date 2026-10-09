@@ -65,7 +65,7 @@ trampoline.
 - For: the machinery exists (DK runtime, `cps-tramp-resume`). `call/cc`
   becomes capturing a pointer, with no stack copy. Depth is bounded by memory.
 - Against: a heap allocation per non-tail call, on every call, deep or not.
-  `docs/reported/fn-value-call-cps-frames-held-until-outer-entry.md` shows
+  `docs/archive/fn-value-call-cps-frames-held-until-outer-entry.md` shows
   CPS frames today are only reclaimed when the outermost direct entry
   returns, so a long-running loop grows. Every call from C into Scheme (a
   `qsort` comparator, a thread start) has to enter a trampoline. Expect a
