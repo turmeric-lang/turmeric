@@ -229,6 +229,29 @@ SEAM_REJECT, 0 bugs -- the same as before the change.
   an effectful callback); a type variable in the signature keeps it thin
   (`repr-trace ... thin-fn tyvar-sig`), and the clone shares the base's
   Binding, so the call through it threads by neither route.
+
+  Looked at again 2026-10-09. `option-map`'s `^fat f : (fn [A] B)` is a fat
+  HANDLE, not the `tur_poly_fn_t` carrier (`repr_of_fn_param`), so the
+  `fn_cps` slot is not the channel. The lambda passed is threadable
+  (`[E2-COLOR] thr=Y tier=nontail`), but `(f v)` has an empty row, and an
+  empty-row call through a fat param takes the registry only for a THREAD
+  param: one whose every incoming value is registered (`param_is_thread_safe`).
+  A stdlib HOF called with pure lambdas elsewhere never is one, so
+  `option-map`'s body is delegated whole and the lambda is withdrawn.
+
+  What it needs is a registry dispatch with a DIRECT fallback for an
+  unregistered (pure) value. Mark a param as receiving a threadable effectful
+  value, and give its empty-row calls a `via_registry` tailcall whose miss
+  runs a delegated direct call of the same atomic-argument call (a CT_LETRAW
+  delivering to the same continuation or heap join). One hazard must be
+  answered first: `emit_e2a_fat_dispatch` probes slot 1 of the box when
+  slot 0 misses. That is right for a fatshim box (`{shim, direct-entry}`),
+  but in a pure CAPTURING closure's env box slot 1 is its first capture. A
+  capture that is a registered function's address would be called as the
+  callee. Today the slot-1 lookup is CHECKED and every value is registered,
+  so the probe never reaches a pure closure; with a fallback it would. The
+  fatshim box needs a mark (or its slot 0 a known shim) before slot 1 can be
+  trusted.
 - ~~**A float instantiation**~~ -- fixed 2026-10-09, below.
 
 ## The float instantiation, fixed (2026-10-09)
