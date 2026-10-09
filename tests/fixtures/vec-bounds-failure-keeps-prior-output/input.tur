@@ -1,0 +1,16 @@
+;; A Vec bounds failure ends the program with a message and exit status 1 on
+;; both engines, and keeps what the program printed before it.
+;;
+;; `tur --interpret` used to lose that output when stdout was not a terminal:
+;; its bounds guards ended the process with `_exit(1)`, which skips the stdio
+;; flush the compiled helpers' `exit(1)` does.  And its `vec-set!` out of
+;; range printed vec-get's message and carried on with the write dropped.
+
+(defn main [] : int
+  (let [v (vec-of 1 2 3)]
+    (println (vec-get v 1))
+    (vec-set! v 1 20)
+    (println (vec-get v 1))
+    (vec-set! v 9 5)
+    (println "unreachable"))
+  0)

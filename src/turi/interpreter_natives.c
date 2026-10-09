@@ -2227,7 +2227,7 @@ static TuriValue native_slice_get(TuriEnv *env, TuriValue *a, uint32_t n, void *
     int64_t  i = a[1].as_int;
     if (!s || i < 0 || i >= s[1]) {
         turi_host_exit_guard(env, "slice index out of bounds");
-        fprintf(stderr, "slice index out of bounds\n"); fflush(stderr); _exit(1);
+        fprintf(stderr, "slice index out of bounds\n"); fflush(NULL); _exit(1);
     }
     int64_t *data = (int64_t *)(intptr_t)s[0];
     return turi_int(data[i]);
@@ -2463,7 +2463,7 @@ static TuriValue native_sbuf_get_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int;
     if (b && i >= 0 && i < b->len) return turi_int(b->data[i]);
     turi_host_exit_guard(env, "sized-buf-get: index out of bounds");
-    fprintf(stderr, "sized-buf-get: index out of bounds\n"); _exit(1);
+    fprintf(stderr, "sized-buf-get: index out of bounds\n"); fflush(NULL); _exit(1);
     return turi_int(0);
 }
 static TuriValue native_sbuf_set_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2472,7 +2472,7 @@ static TuriValue native_sbuf_set_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     TuriSizedBufRep *b = sbuf_of(a[0]); int64_t i = a[1].as_int, v = a[2].as_int;
     if (b && i >= 0 && i < b->len) { b->data[i] = v; return a[0]; }
     turi_host_exit_guard(env, "sized-buf-set!: index out of bounds");
-    fprintf(stderr, "sized-buf-set!: index out of bounds\n"); _exit(1);
+    fprintf(stderr, "sized-buf-set!: index out of bounds\n"); fflush(NULL); _exit(1);
     return a[0];
 }
 static TuriValue native_sbuf_fill_raw(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -2490,7 +2490,7 @@ static TuriValue native_sbuf_copy_raw(TuriEnv *env, TuriValue *a, uint32_t n, vo
     if (d->len != s->len) {
         turi_host_exit_guard(env, "sized-buf-copy!: length mismatch");
         fprintf(stderr, "sized-buf-copy!: length mismatch (%lld vs %lld)\n",
-                (long long)d->len, (long long)s->len); _exit(1);
+                (long long)d->len, (long long)s->len); fflush(NULL); _exit(1);
     }
     if (d->len > 0) memcpy(d->data, s->data, (size_t)d->len * sizeof(int64_t));
     return a[0];
@@ -2506,7 +2506,7 @@ static TuriValue native_sbuf_min_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
     TuriSizedBufRep *b = sbuf_of(a[0]);
-    if (!b || b->len == 0) { turi_host_exit_guard(env, "sized-buf-min: empty buffer"); fprintf(stderr, "sized-buf-min: empty buffer\n"); _exit(1); return turi_int(0); }
+    if (!b || b->len == 0) { turi_host_exit_guard(env, "sized-buf-min: empty buffer"); fprintf(stderr, "sized-buf-min: empty buffer\n"); fflush(NULL); _exit(1); return turi_int(0); }
     int64_t m = b->data[0];
     for (int64_t i = 1; i < b->len; i++) if (b->data[i] < m) m = b->data[i];
     return turi_int(m);
@@ -2515,7 +2515,7 @@ static TuriValue native_sbuf_max_raw(TuriEnv *env, TuriValue *a, uint32_t n, voi
     (void)env; (void)ud;
     if (n < 1) return turi_int(0);
     TuriSizedBufRep *b = sbuf_of(a[0]);
-    if (!b || b->len == 0) { turi_host_exit_guard(env, "sized-buf-max: empty buffer"); fprintf(stderr, "sized-buf-max: empty buffer\n"); _exit(1); return turi_int(0); }
+    if (!b || b->len == 0) { turi_host_exit_guard(env, "sized-buf-max: empty buffer"); fprintf(stderr, "sized-buf-max: empty buffer\n"); fflush(NULL); _exit(1); return turi_int(0); }
     int64_t m = b->data[0];
     for (int64_t i = 1; i < b->len; i++) if (b->data[i] > m) m = b->data[i];
     return turi_int(m);
