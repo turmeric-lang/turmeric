@@ -1492,6 +1492,27 @@ bool cps_fn_may_await(const FnDef *fd) {
     return fd->may_await || cps_expr_awaits(fd->body);
 }
 
+/* Does this function's own body install a `handle` (not an `(unsafe ...)`
+ * marker, and not inside a nested function definition)?  Evicted from the CPS
+ * backend, such a function takes every effect it handles off the backend with
+ * it (a non-candidate's effect set counts what it handles), and a perform of
+ * one of those effects anywhere then has no lowering
+ * (cps-capturing-closure-with-handle-returned-refused). */
+static bool cps_installs_handle_visit(const Expr *c, void *ud);
+static bool cps_expr_installs_handle(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_HANDLE && e->as.handle_.handle
+        && !e->as.handle_.handle->is_unsafe_marker) return true;
+    return cps_visit_children(e, cps_installs_handle_visit, NULL);
+}
+static bool cps_installs_handle_visit(const Expr *c, void *ud) {
+    (void)ud;
+    return cps_expr_installs_handle(c);
+}
+bool cps_fn_installs_handle(const FnDef *fd) {
+    return fd && cps_expr_installs_handle(fd->body);
+}
+
 void cps_color_program(Arena *a, Expr *program) {
     (void)a;
     if (!program || program->kind != EX_PROGRAM) return;

@@ -3051,8 +3051,11 @@ static bool handle_delim_ok(const CTerm *t) {
  * serial-shift receiver written the way the guides write one, `(defn recv
  * [k : serial-cont] ...)`, which must be CPS-emitted for its effects to reach
  * the reset's handlers (serial-receiver-effect-cannot-reach-enclosing-handler).
- * It is lifted for a function that may await (cps_fn_may_await) too, and so
- * is the defensive `t<N>` rule below: evicted,
+ * It is lifted for a function that installs a `handle` (cps_fn_installs_handle):
+ * evicted, it took every effect it handles off the backend, so a perform of one
+ * anywhere had no lowering (cps-capturing-closure-with-handle-returned-refused,
+ * shape 2).  And for a function that may await (cps_fn_may_await), as is the
+ * defensive `t<N>` rule below: evicted,
  * such a function calls its awaiter through the direct entry, whose root the
  * await's park stops at, so the park captured only the part of the async body
  * below it and the rest carried on with 0 (await-parks-only-to-the-nearest-c-
@@ -3068,7 +3071,7 @@ static bool param_name_clashes_cps(const FnDef *fd, const Binding *b) {
     const char *n = b->name->name;
     if (strcmp(n, "k") == 0)
         return !(b->type.kind == TY_CONT && b->type.as.cont.flavor == CONT_SERIAL)
-            && !(fd && cps_fn_may_await(fd));
+            && !(fd && (cps_fn_may_await(fd) || cps_fn_installs_handle(fd)));
     /* fn-value-fat-normalization (effect-row increment): a lifted capturing
      * lambda's env param is `__env_p_<id>` -- uniquely numbered, never a name
      * the CPS emitter mints itself.  Admitting it is what lets a capturing

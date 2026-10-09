@@ -1,5 +1,9 @@
 # A returned capturing closure that handles its own effect is refused
 
+**Narrowed 2026-10-09: the second shape (below) is fixed; the first is
+open.** The second was never about closures: its handling function had a
+parameter named `k`.
+
 **Severity: low** (a refusal, not a miscompile: the build fails with a
 located error, and `tur --interpret` runs the program).  Found 2026-10-08
 while resolving
@@ -83,3 +87,26 @@ The same callee called with the closure built OUTSIDE the handling function
 (`(handle (eff-call (some (fn ...))) ...)` in `main`) compiles and prints
 42. Found while writing `sum-closure-payload-kept`, which leaves this shape
 out for that reason; it predates the closure-payload drop work.
+
+### Fixed 2026-10-09: it was the parameter name
+
+`effect-callee`'s parameter is `k`, and `param_name_clashes_cps` keeps every
+function with a parameter named `k` off the CPS backend (a defensive rule,
+load-bearing only for some Saffron self-applying functions and sum-closure
+drops the CPS path does not yet reproduce -- lifting it outright still leaks
+`saffron-lambda-arg-env-freed` and `sum-closure-payload-dropped`, measured
+today). Renamed to `m`, the program compiled and printed 42. A function that
+installs a `handle` (`cps_fn_installs_handle`, `src/passes/cps.c`; an
+`(unsafe ...)` marker does not count) is now exempt: evicted, it took every
+effect it handles off the backend, so the refusal was certain. Pinned by
+`tests/fixtures/handle-fn-with-k-param`, which also has the plain shape --
+`(defn run-with [k : int] ...)` handling a named callee's `perform` -- refused
+the same way before.
+
+### Still open: shape 1
+
+The returned capturing closure is not in the threadable set, so `fn_sig_ok`
+rejects it before any name rule. Admitting it when it installs a `handle`
+(tried 2026-10-09) only moves the eviction: it is then `SIG-TAINT`, along
+with `ask`, from a permanent fiber source the trace does not name. That
+source is the next thing to find.

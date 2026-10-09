@@ -40,6 +40,7 @@ bool cps_fn_needs_transform(const FnDef *fd);
  * function cps_color_program marked `may_await`.  Nested lambdas and
  * `(async ...)` bodies are not this function's suspension.  NULL -> false. */
 bool cps_fn_may_await(const FnDef *fd);
+bool cps_fn_installs_handle(const FnDef *fd);
 
 /* Phase B2: Cloneable CPS pass */
 
