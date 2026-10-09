@@ -1383,6 +1383,9 @@ bool closure_env_drop_frees_box_only(const struct Closure *c);
 /* An inline-C block in the closure's body names one of its captures -- an
  * lvalue into the env box (emit_core.c). */
 bool closure_body_inline_c_touches_env(const struct Closure *c);
+/* closure_binding_escapes for an owner that frees at the outermost DK entry's
+ * exit (the CPS reap list): a `perform` in the scope is not an escape. */
+bool closure_binding_escapes_reaped(const Expr *e, const Binding *b);
 /* panic-location-names-the-runtime-not-the-call-site (emit_core.c): a defn
  * whose inline-C body calls `tur_panic(` is handed its caller's site -- a
  * direct call sets `emit_site_set_text(ctx, span)` before the call and
@@ -1391,6 +1394,12 @@ bool  fn_def_panics_in_inline_c(const FnDef *fd);
 bool  binding_panics_in_inline_c(const Binding *b);
 Span  emit_call_site_span(const Expr *call);
 char *emit_site_set_text(EmitCtx *ctx, Span span);
+/* sum-closure-payload-never-dropped, the CPS half (emit_expr.c): does the
+ * let's binding `i` hold a sum whose live arm's closure nothing else reaches
+ * (the direct emitter's scope-exit question), and the tag-dispatched
+ * entry-boundary reap of that closure. */
+bool  emit_let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e, uint32_t i);
+void  emit_sum_closure_payload_reap(EmitCtx *ctx, Buf *body, const char *name, Type t);
 bool expr_is_fresh_any_closure(const Expr *x);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);

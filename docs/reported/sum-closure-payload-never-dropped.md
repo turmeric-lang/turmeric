@@ -68,10 +68,24 @@ Each of these still leaks the env, as before. None is freed early.
 2. **`unwrap` / `unwrap-or`**: the read hands the closure out as a value.
    Freeing would need the result to be only invoked, the same question as
    the arm binder, asked through the call.
-3. **Lets the CPS backend emits.** A function that calls through the payload
-   is CPS-colored; when its body takes the native CPS path (a `while` loop
-   driving the call, as in a first draft of the fixture), its lets are lowered
-   by `emit_cps_ir.c`, which has no such drop.
+3. ~~**Lets the CPS backend emits.**~~ **Fixed 2026-10-09.** In a function
+   the CPS backend lowers (its body performs), the let's `(some <closure>)` is
+   a cps->direct call (`CT_LETCALL`); the IR builder names the `let` on it
+   (`sum_let`, `cps_bind_let_init`) and the emitter asks the direct emitter's
+   question (`emit_let_binding_sum_closure_freeable`) with one relaxation --
+   a `perform` in the let is not an escape of the arm binder
+   (`closure_binding_escapes_reaped`), since the free waits for the outermost
+   DK entry's exit, after every resume the entry sees -- and registers the
+   live arm's closure with the entry boundary's reap under a tag switch
+   (`emit_letcall_sum_closure_reap`, `__dk_reap_closure`), as a non-escaping
+   closure env or a struct's fn fields are there. 2400 B in 100 allocations
+   before, 0 now. Pinned by `tests/fixtures/sum-closure-payload-dropped-cps`
+   (leak-checked: performed in the arm, in a sibling binding, an `Ok` arm, a
+   `some?` test, 200 times from a performing loop). Found on the way, not
+   this report's: `(let [ff (Some (fn ...))] (match ff (Some f) (f (perform
+   ...))))` -- the constructor written directly -- evicts the function from
+   the CPS backend ("indirect call (non-atomic args)"), where `(some ...)`
+   does not.
 4. **A closure whose drop releases something** -- one capturing an `rc`, a
    fat closure or a Drop instance, or with inline C -- would need its deep
    drop glue and the ownership questions that come with it. (**Narrowed

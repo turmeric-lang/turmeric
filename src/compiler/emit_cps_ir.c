@@ -1278,6 +1278,25 @@ static void cap_add(CapSet *cs, const Binding *b, TypeKind ty, const Type *type)
     cs->owning[cs->n] = needs_clone; cs->n++;
 }
 
+/* The expression that fills capture slot i from the local `cn`.  A fn-typed
+ * slot is the int64 word (cap_ctype below), while the local may be spelled
+ * `void *` -- a match arm's binder for a fat payload (`(Some f)` over a
+ * `(fn [int] int)`), declared `void * f = (void *)__scrut->as.Some._0` --
+ * and `int64_t = void *` is -Wint-conversion, a hard error under clang.
+ * Bridge through intptr_t; for a local already spelled as the word it is a
+ * no-op.  Malloc'd. */
+static char *cap_fill_expr(const CapSet *caps, int i, const char *cn) {
+    if (caps->ty[i] == TY_FN && !caps->polyfn[i]) {
+        Buf b; buf_init(&b);
+        buf_printf(&b, "(int64_t)(intptr_t)(%s)", cn);
+        buf_putc(&b, '\0');
+        char *r = strdup(b.data);
+        buf_free(&b);
+        return r;
+    }
+    return strdup(cn);
+}
+
 /* The C type of capture slot i: a fat closure is `tur_poly_fn_t`, everything
  * else its scalar / by-value-aggregate binder type. */
 static const char *cap_ctype(EmitCtx *ctx, const CapSet *caps, int i) {
@@ -5330,6 +5349,57 @@ static bool fnval_withdraw_visit(const Expr *e, void *ud) {
     return false;
 }
 
+/* cps-local-fn-alias-or-lambda-called-in-place-refused (a value use as well
+ * as calls): the thread LOCALS of a body -- see cps_ir_thread_local_add.  A
+ * `let`-bound immutable local holding a fresh CAPTURING lambda that is
+ * threadable (every value use of it a threadable argument position, so its
+ * env-taking `__cps` twin is registered) and that the body ALSO calls through
+ * the local.  Such a call used to be the lambda's direct entry,
+ * `__fn_N((void *)g, x)`, run from a fresh root: its perform was "unhandled
+ * effect" from a program that compiled.  Left alone: a local the env-call
+ * rewrite already owns (every use a saturated call, cps_ir_let_local_closure)
+ * and one a nested closure captures (that closure's call runs from its own
+ * body, where the local is an env field this registration does not name). */
+typedef struct { const Binding *vb; bool called, captured; } LocalUseUd;
+static bool local_use_visit(const Expr *e, void *ud) {
+    LocalUseUd *u = (LocalUseUd *)ud;
+    if (!e) return false;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding == u->vb) u->called = true;
+    if (e->kind == EX_CLOSURE && e->as.closure_.closure) {
+        const struct Closure *c = e->as.closure_.closure;
+        for (uint32_t k = 0; k < c->n_captures; k++)
+            if (c->captures[k] == u->vb) u->captured = true;
+    }
+    cps_visit_children(e, local_use_visit, ud);
+    return false;
+}
+static bool thread_local_visit(const Expr *e, void *ud) {
+    if (!e) return false;
+    if (e->kind == EX_LET) {
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            const Binding *vb = e->as.let_.bindings[i].binding;
+            if (!vb || vb->is_global || vb->is_param || vb->is_mut || vb->is_poly_fn
+                || vb->type.kind != TY_FN)
+                continue;
+            const Expr *init = e->as.let_.bindings[i].init;
+            while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+            if (!init || init->kind != EX_CLOSURE || !init->as.closure_.closure) continue;
+            const struct Closure *c = init->as.closure_.closure;
+            if (c->n_captures == 0 || c->is_shift_receiver || c->is_effect_payload) continue;
+            const Binding *lam = c->fn ? c->fn->binding : NULL;
+            if (!lam || lam != vb->closure_fn_binding || !threadable_has(lam)) continue;
+            if (cps_ir_let_local_closure(e, i)) continue;
+            LocalUseUd u = { vb, false, false };
+            for (uint32_t j = i + 1; j < e->as.let_.n; j++)
+                local_use_visit(e->as.let_.bindings[j].init, &u);
+            local_use_visit(e->as.let_.body, &u);
+            if (u.called && !u.captured) cps_ir_thread_local_add(vb, true);
+        }
+    }
+    cps_visit_children(e, thread_local_visit, ud);
+    return false;
+}
+
 /* E2c: which target fn-values are stored as a value in a `make-struct` field
  * in `e`?  An effectful fn-value stored in a struct field is called via
  * `(.field obj)` and threaded via the registry (cps_ir.c), so it must be
@@ -5934,6 +6004,7 @@ static void ensure_S(const Expr *program) {
      * re-register: a withdrawal can unthread a parameter another relied on. */
     for (int round = 0; round < 16; round++) {
         cps_ir_thread_param_reset();
+        cps_ir_thread_local_reset();
         for (uint32_t i = 0; i < np; i++) {
             Expr *it = (Expr *)items[i];
             if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
@@ -5944,6 +6015,14 @@ static void ensure_S(const Expr *program) {
                     && param_is_thread_safe(program, fd, pi))
                     cps_ir_thread_param_add(fd->params[pi]);
             }
+        }
+        /* The thread LOCALS (thread_local_visit): a let-bound threadable
+         * capturing lambda the body also calls through the local.  Re-read
+         * each round, since a withdrawal below can unthread the lambda. */
+        for (uint32_t i = 0; i < np; i++) {
+            const Expr *it = items[i];
+            if (!it || it->kind != EX_FN_DEF || !it->as.fn_def_.fn) continue;
+            thread_local_visit(it->as.fn_def_.fn->body, NULL);
         }
         UnthreadedUd wu = { program, false };
         for (uint32_t i = 0; i < np; i++) {
@@ -7109,6 +7188,16 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
 static char *callee_name(const Binding *fn) {
     return raw_name_for_binding(fn);   /* malloc'd */
 }
+/* The spelling of a `via_registry` callee.  A thread LOCAL
+ * (cps_ir_thread_local_add) is a let-bound local of the function being
+ * emitted -- or, in a lifted continuation, the read-out of its captured slot
+ * -- so it takes the local's id-suffixed name, which is how the body and the
+ * frame read-out (emit_lifted) both spell it; a param or global keeps its raw
+ * name.  Malloc'd. */
+static char *registry_callee_name(CE *ce, const Binding *fn) {
+    if (fn && cps_ir_thread_local_has(fn)) return name_for_binding(ce->ctx, fn);
+    return callee_name(fn);
+}
 
 /* panic-location-names-the-runtime-not-the-call-site: around a cps->direct
  * call to a callee whose inline-C body may panic, the statement that sets
@@ -7126,6 +7215,25 @@ static void cps_site_clear(CE *ce, char *set) {
     if (!set) return;
     ce_line(ce, "tur_site_clear();");
     free(set);
+}
+
+/* sum-closure-payload-never-dropped (the CPS half): a `let` binding whose init
+ * is `(some <closure>)` -- a cps->direct call, since the direct emitter's
+ * scope-exit drop never runs in a CPS-lowered body -- registers its live
+ * arm's closure with the entry boundary's reap, under the same vouching the
+ * direct emitter uses (let_binding_sum_closure_freeable: a fresh capturing
+ * closure whose drop frees the box alone, every use of the local a `match`
+ * that only invokes the arm binder or a tag predicate).  Only a binder
+ * declared as the by-value aggregate itself: a carrier word or a pointer
+ * names storage this binder does not own -- as emit_letraw_fnfield_reap. */
+static void emit_letcall_sum_closure_reap(CE *ce, const CTerm *t, const char *bn) {
+    const Expr *let = t->as.letcall.sum_let;
+    uint32_t i = t->as.letcall.sum_let_idx;
+    if (!let || t->as.letcall.x.ty == TY_NIL || t->as.letcall.x.ty == TY_NEVER) return;
+    const char *bct = binder_ctype_full(ce->ctx, t->as.letcall.x.ty, t->as.letcall.x.type);
+    if (!bct || strncmp(bct, "tur_adt_", 8) != 0 || strchr(bct, '*')) return;
+    if (!emit_let_binding_sum_closure_freeable(ce->ctx, let, i)) return;
+    emit_sum_closure_payload_reap(ce->ctx, ce->out, bn, let->as.let_.bindings[i].binding->type);
 }
 
 /* E2a lookup key for a `via_registry` callee.
@@ -7159,6 +7267,10 @@ static const char *e2a_lookup_key(char *out, size_t cap,
 static bool e2a_callee_is_fat(const Binding *fn) {
     if (!fn) return false;
     if (fn->is_fat) return true;
+    /* A let-bound capturing lambda's value is its env box: slot 0 is the
+     * lifted entry the registry maps to the env-taking twin.  A captureless
+     * one's is the direct entry itself, the thin key. */
+    if (cps_ir_thread_local_has(fn)) return cps_ir_thread_local_env_boxed(fn);
     return fn->is_param && fn->type.kind == TY_FN &&
            fn_param_type_is_fat_normalized(&fn->type);
 }
@@ -8302,6 +8414,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                     ce_line(ce, "%s = %s(%s); /* cps->direct */", bn, fn, argv);
             }
             cps_site_clear(ce, site_lc);
+            emit_letcall_sum_closure_reap(ce, t, bn);
             /* A by-value clone result is boxed and reaped above, so only the
              * unresolved callee's carrier word can owe the reader's drop. */
             if (!mclone_lc && !rr_lc && t->as.letcall.x.ty != TY_NIL)
@@ -8353,7 +8466,7 @@ static void emit_term(CE *ce, const CTerm *t) {
                  * handler.  __cps ABI: int64_t (*)(int64_t args..., DK*).  E2c: when
                  * fn == NULL the callee is a struct-field fn-value LOAD carried in
                  * fn_atom -- use its atom expression as the lookup key. */
-                char *pf = t->as.tailcall.fn ? callee_name(t->as.tailcall.fn)
+                char *pf = t->as.tailcall.fn ? registry_callee_name(ce, t->as.tailcall.fn)
                                              : atom_str(ce, &t->as.tailcall.fn_atom);
                 /* E2a carrier ABI: every arg slot is int64_t, so pointer-like args
                  * must be carrier-cast (gcc14-int-conversion). */
@@ -9877,7 +9990,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         : NULL;
     char *fn = call->as.tailcall.fn
         ? (hj_clone && !binding_in_s(call->as.tailcall.fn) ? strdup(hj_clone)
-                                                            : callee_name(call->as.tailcall.fn))
+                                                            : registry_callee_name(ce, call->as.tailcall.fn))
         : atom_str(ce, &call->as.tailcall.fn_atom);  /* E2c: field-load callee */
     char *argv = atoms_csv_call(ce, call->as.tailcall.args, call->as.tailcall.n);
     /* The join frame is spliced onto cur_k and threaded into the callee in tail
@@ -10206,7 +10319,9 @@ static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps) {
     ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", hname, envv, hname, hname);
     for (int i = 0; i < caps->n; i++) {
         char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
-        ce_line(ce, "%s->f%d = %s;", envv, i, cn);
+        char *fe = cap_fill_expr(caps, i, cn);
+        ce_line(ce, "%s->f%d = %s;", envv, i, fe);
+        free(fe);
         free(cn);
     }
     /* The env struct outlives its DK frame (shared read-only across multi-shot
@@ -11791,7 +11906,9 @@ static void emit_perform(CE *ce, const CTerm *t) {
             ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
             for (int i = 0; i < cs.n; i++) {
                 char *cn = cs.b[i] ? name_for_binding(ce->ctx, cs.b[i]) : strdup(cs.cvname[i]);
-                ce_line(ce, "%s->f%d = %s;", envv, i, cn);
+                char *fe = cap_fill_expr(&cs, i, cn);
+                ce_line(ce, "%s->f%d = %s;", envv, i, fe);
+                free(fe);
                 free(cn);
             }
             /* Shared read-only across multi-shot resumes; reaped at the outermost
@@ -11935,7 +12052,9 @@ static void emit_await(CE *ce, const CTerm *t) {
             ce_line(ce, "%s_env *%s = (%s_env *)malloc(sizeof(%s_env));", pname, envv, pname, pname);
             for (int i = 0; i < cs.n; i++) {
                 char *cn = cs.b[i] ? name_for_binding(ce->ctx, cs.b[i]) : strdup(cs.cvname[i]);
-                ce_line(ce, "%s->f%d = %s;", envv, i, cn);
+                char *fe = cap_fill_expr(&cs, i, cn);
+                ce_line(ce, "%s->f%d = %s;", envv, i, fe);
+                free(fe);
                 free(cn);
             }
             ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);

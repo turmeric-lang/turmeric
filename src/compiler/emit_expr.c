@@ -2853,6 +2853,88 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* async-capturing-body-env-never-freed: is binding `idx` of this let a fresh
+ * capturing closure whose ONLY use is as the body of one `async` spawn --
+ * `(let [f (fn [] ...)] (await (async f)))`?  The let cannot drop its env
+ * (the body may still be running, parked) and the spawn owned nothing, so
+ * the box leaked.  When every mention of the binding is that one spawn --
+ * not under a `while` (a spawn per turn would each drop the same box), not
+ * inside a closure, and with no `perform` in the let (a multi-shot resume
+ * could run the spawn twice) -- the SPAWN owns the box
+ * (Binding.spawn_owns_env, read by async_spawn_owns_env) and drops it when
+ * the body settles, as it does a lambda written at the spawn. */
+typedef struct { const Binding *b; int spawns; int others; int in_loop; bool unsafe; } SpawnUseUd;
+static bool spawn_use_visit(const Expr *x, void *ud);
+static void spawn_use_walk(const Expr *x, SpawnUseUd *u) {
+    if (!x || u->unsafe) return;
+    switch (x->kind) {
+        case EX_ASYNC: {
+            const Expr *fe = x->as.async_.fn_expr;
+            while (fe && (fe->kind == EX_ASCRIBE || fe->kind == EX_FN_TO_FAT))
+                fe = fe->kind == EX_ASCRIBE ? fe->as.ascribe_.inner
+                                            : fe->as.fn_to_fat_.inner;
+            if (fe && fe->kind == EX_VAR && fe->as.var.binding == u->b) {
+                if (u->in_loop) u->unsafe = true; else u->spawns++;
+                return;
+            }
+            break;
+        }
+        case EX_VAR:
+            if (x->as.var.binding == u->b) u->others++;
+            return;
+        case EX_CLOSURE: {
+            /* The body is the lambda's own; a capture is the only way in. */
+            const struct Closure *c = x->as.closure_.closure;
+            if (c)
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    if (c->captures[i] == u->b) u->others++;
+            return;
+        }
+        case EX_FN: case EX_FN_DEF: case EX_PERFORM:
+            u->unsafe = true;
+            return;
+        case EX_WHILE:
+            u->in_loop++;
+            cps_visit_children(x, spawn_use_visit, u);
+            u->in_loop--;
+            return;
+        default:
+            break;
+    }
+    cps_visit_children(x, spawn_use_visit, u);
+}
+static bool spawn_use_visit(const Expr *x, void *ud) {
+    spawn_use_walk(x, (SpawnUseUd *)ud);
+    return false;
+}
+static bool let_sole_use_is_spawn(const Expr *e, uint32_t idx) {
+    if (e->kind != EX_LET) return false;
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    const Expr *init = e->as.let_.bindings[idx].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!b || !init || init->kind != EX_CLOSURE) return false;
+    if (b->type.kind != TY_FN || !b->type.as.fn.boxed) return false;
+    const struct Closure *c = init->as.closure_.closure;
+    if (!c || c->n_captures == 0) return false;
+    if (!(closure_env_drop_is_shallow(c) || closure_env_drop_frees_box_only(c))) return false;
+    SpawnUseUd u = { b, 0, 0, 0, false };
+    spawn_use_walk(e->as.let_.body, &u);
+    for (uint32_t j = 0; j < e->as.let_.n; j++)
+        if (j != idx) spawn_use_walk(e->as.let_.bindings[j].init, &u);
+    return !u.unsafe && u.spawns == 1 && u.others == 0;
+}
+/* Mark the let's spawn-owned closures before its body is emitted (the spawn
+ * reads the mark); a binding the let itself drops is never one. */
+static void let_mark_spawn_owned(const Expr *e) {
+    if (!e || e->kind != EX_LET) return;
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        Binding *b = e->as.let_.bindings[i].binding;
+        if (b && !b->spawn_owns_env && !let_binding_env_freeable(e, i) &&
+            let_sole_use_is_spawn(e, i))
+            b->spawn_owns_env = true;
+    }
+}
+
 /* mut-cell-is-never-freed: can the `TurMutCell` bound to `cell` still be
  * reached once the let that binds it exits?  The pointer never appears in user
  * code -- the `^mut` name is an alias whose reads and writes elaborate as
@@ -3938,6 +4020,17 @@ static bool call_wraps_sole_arg_in_ctor(const Expr *call) {
 static bool sum_closure_payload_escapes_visit(const Expr *c, void *ud);
 typedef struct { const Binding *b; int depth; } SumClosureUd;
 
+/* sum-closure-payload-never-dropped (the CPS half): asked for an owner that
+ * frees at the DK entry boundary rather than at scope exit
+ * (emit_let_binding_sum_closure_freeable), a `perform` in the let is not an
+ * escape of an arm binder -- every resume the entry sees runs before the
+ * free (closure_binding_escapes_reaped). */
+static bool g_scp_reap_mode = false;
+static bool scp_binding_escapes(const Expr *e, const Binding *b) {
+    return g_scp_reap_mode ? closure_binding_escapes_reaped(e, b)
+                           : closure_binding_escapes(e, b);
+}
+
 static bool sum_payload_scalar_kind(TypeKind k) {
     switch (k) {
         case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_NIL:
@@ -4071,16 +4164,16 @@ static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int dep
                 /* closure_binding_escapes reads a NULL expression as an
                  * escape, so an absent guard is skipped, not walked. */
                 if (pat->is_var && pat->var_binding &&
-                    ((arm->body && closure_binding_escapes(arm->body, pat->var_binding)) ||
-                     (arm->guard && closure_binding_escapes(arm->guard, pat->var_binding))))
+                    ((arm->body && scp_binding_escapes(arm->body, pat->var_binding)) ||
+                     (arm->guard && scp_binding_escapes(arm->guard, pat->var_binding))))
                     return true;
                 for (uint32_t k = 0; k < pat->n_bindings; k++) {
                     const Binding *pb = pat->bindings[k];
                     /* A scalar field (an `Err` arm's int) cannot alias the
                      * env; only a binder that can hold the closure is asked. */
                     if (!pb || sum_payload_scalar_kind(pb->type.kind)) continue;
-                    if ((arm->body && closure_binding_escapes(arm->body, pb)) ||
-                        (arm->guard && closure_binding_escapes(arm->guard, pb)))
+                    if ((arm->body && scp_binding_escapes(arm->body, pb)) ||
+                        (arm->guard && scp_binding_escapes(arm->guard, pb)))
                         return true;
                 }
                 if (sum_closure_payload_escapes(arm->guard, b, depth + 1) ||
@@ -4126,10 +4219,20 @@ static bool sum_closure_payload_escapes_visit(const Expr *c, void *ud) {
 }
 
 /* Walk the arms of a by-value sum monomorph for fn-typed (closure) fields;
- * with `emit`, write the tag-dispatched TUR_CLOSURE_DROP of each.  The same
- * shape as boxed_struct_payload_walk. */
+ * with `emit`, write the tag-dispatched release of each -- `drop_fmt` with
+ * the field's lvalue for `%s` (TUR_CLOSURE_DROP here; the CPS emitter's
+ * entry-boundary reap through emit_sum_closure_payload_reap).  The same shape
+ * as boxed_struct_payload_walk. */
+static bool sum_closure_payload_walk_fmt(EmitCtx *ctx, Buf *body, const char *name,
+                                         Type t, bool emit, const char *drop_pre,
+                                         const char *drop_post);
 static bool sum_closure_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
                                      Type t, bool emit) {
+    return sum_closure_payload_walk_fmt(ctx, body, name, t, emit, "TUR_CLOSURE_DROP(", ");");
+}
+static bool sum_closure_payload_walk_fmt(EmitCtx *ctx, Buf *body, const char *name,
+                                         Type t, bool emit, const char *drop_pre,
+                                         const char *drop_post) {
     Type rt = emit_resolve_type(ctx, t);
     AdtDef *def = NULL;
     Type args[16];
@@ -4161,7 +4264,7 @@ static bool sum_closure_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
             }
             char *mp = adt_field_member_path(def, c, fi);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "    TUR_CLOSURE_DROP(%s.%s);\n", name, mp);
+            buf_printf(body, "    %s%s.%s%s\n", drop_pre, name, mp, drop_post);
             free(mp);
         }
         if (emit && arm_open) { indent_buf(body, ctx->indent); buf_puts(body, "    break;\n"); }
@@ -4209,6 +4312,22 @@ static bool let_binding_sum_closure_freeable_ctx(EmitCtx *ctx, const Expr *e, ui
                                                      e->as.let_.bindings[i].init),
                       true };
     return d.bind_c && let_binding_sum_closure_freeable(ctx, e, i, &d);
+}
+
+/* The CPS emitter's entry points (sum-closure-payload-never-dropped, the CPS
+ * half): the same question, and the same tag-dispatched walk writing the
+ * entry-boundary reap of each arm's closure in place of the scope-exit drop
+ * -- a CPS scope can end in a tail call, so the reap list owns it, as it owns
+ * a non-escaping closure env there. */
+bool emit_let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    if (!ctx || !e || e->kind != EX_LET || i >= e->as.let_.n) return false;
+    g_scp_reap_mode = true;
+    bool ok = let_binding_sum_closure_freeable_ctx(ctx, e, i);
+    g_scp_reap_mode = false;
+    return ok;
+}
+void emit_sum_closure_payload_reap(EmitCtx *ctx, Buf *body, const char *name, Type t) {
+    sum_closure_payload_walk_fmt(ctx, body, name, t, true, "__dk_reap_closure((intptr_t)", ");");
 }
 
 static bool let_binding_vsp_box_freeable(EmitCtx *ctx, const Expr *e,
@@ -4299,6 +4418,7 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
                                   const LetBindDecl *d) {
     const Binding *b = e->as.let_.bindings[i].binding;
     if (!b) return;
+    let_mark_spawn_owned(e);   /* async-capturing-body-env-never-freed (tail path) */
     char *bn = name_for_binding(ctx, b);
     Buf st; buf_init(&st);
     if (let_binding_env_freeable(e, i)) {
@@ -4362,6 +4482,8 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
 }
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
+    /* async-capturing-body-env-never-freed: before the body is emitted. */
+    let_mark_spawn_owned(e);
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
     
@@ -8820,6 +8942,10 @@ static bool async_spawn_owns_env(const Expr *fn_expr) {
     while (lit && (lit->kind == EX_ASCRIBE || lit->kind == EX_FN_TO_FAT))
         lit = lit->kind == EX_ASCRIBE ? lit->as.ascribe_.inner
                                       : lit->as.fn_to_fat_.inner;
+    /* A let-bound lambda whose only use is this spawn (let_mark_spawn_owned). */
+    if (lit && lit->kind == EX_VAR && lit->as.var.binding &&
+        lit->as.var.binding->spawn_owns_env)
+        return true;
     const struct Closure *lc = (lit && lit->kind == EX_CLOSURE) ? lit->as.closure_.closure : NULL;
     return lc && (closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc));
 }

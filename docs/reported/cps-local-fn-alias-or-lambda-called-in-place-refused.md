@@ -1,14 +1,15 @@
 # An effectful function called through a local name is refused
 
-**Narrowed again 2026-10-09: the capturing shapes are fixed too.** A
-`let`-bound capturing lambda and a one-member capturing `letrec` loop
-compile now when called through the local name (see "Fixed: the capturing
-shapes" below). The captureless shapes were fixed earlier the same day
-(filed the same day). **What is left:**
+**Narrowed a third time 2026-10-09: a CAPTURING lambda used both through
+the local and as a value runs** (see "Fixed: a value use as well as calls"
+below). That shape was worse than this report said: it was not refused, it
+compiled and aborted `tur: unhandled effect (tag 2)` at run time. Before
+that, the same day, the capturing shapes called in place and the
+captureless shapes were fixed. **What is left:**
 
 - a lambda that RETURNS a function;
-- a lambda used both through the local AND as a value (passed on to a
-  higher-order function);
+- a CAPTURELESS lambda used both through the local AND as a value (the
+  capturing one runs now);
 - a capturing lambda called from inside ANOTHER closure (`g` calls `f`, both
   `let`-bound): `g` captures `f`, which is a value use;
 - a capturing `letrec` of more than one member (mutual recursion).
@@ -18,7 +19,8 @@ no lowering here"); `tur --interpret` runs them.
 
 **Severity: low-medium** (was medium). This is a compile-time refusal of a
 correct program, not a wrong answer, and the ordinary idioms (a helper
-lambda, a capturing loop) now compile. Found 2026-10-09 while fixing
+lambda, a capturing loop, a helper both called and handed on) now compile.
+Found 2026-10-09 while fixing
 [effect-row-lost-under-match-cast-letrec](../archive/effect-row-lost-under-match-cast-letrec.md).
 
 ## Repro (still refused)
@@ -27,7 +29,7 @@ lambda, a capturing loop) now compile. Found 2026-10-09 while fixing
 (defeffect Ask [] :int)
 (defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int (h x))
 (defn v1 [] : int
-  (let [g (fn [n : int] : int (+ n (perform (Ask))))]
+  (let [g (fn [n : int] : int (+ n (perform (Ask))))]     ; captureless
     (+ (g 1) (app g 2))))                                 ; also a value
 (defn v2 [m : int] : int
   (let [f (fn [n : int] : int (+ m n (perform (Ask))))
@@ -50,22 +52,84 @@ The rewrite below needs every use of the local to be a saturated call
 (`pap_calls_saturated`). A use as a value -- an argument, or a capture by
 another closure -- means the lambda can be called from where nothing
 threads the caller's continuation, so it stays an fn value; the E2
-threadability tally then decides it, and an alias that is also called
-directly is neither. A `letrec` of several capturing members shares one
-env-building protocol the CPS translation does not reproduce.
+threadability tally then decides it. For a CAPTURING lambda the thread-local
+registration below now covers the call through the local; a captureless one
+is the thin direct-entry value, which the E2 tally reads differently (its
+let alias is an alias target), and its call is still evicted. A `letrec` of
+several capturing members shares one env-building protocol the CPS
+translation does not reproduce.
 
 ## Fix directions
 
-- A value use as well as calls: let the E2a registry carry it. A
-  threadable capturing lambda registers its env-taking `__cps` twin, so the
-  value use can stay threaded while the direct calls take the rewrite below;
-  the tally would have to count the local's calls as threadable uses.
+- A captureless value-and-call local: register it as a thread local too
+  (`cps_ir_thread_local_add(b, false)` -- the thin key, `(intptr_t)g`,
+  which `e2a_lookup_key` already spells), once the tally admits its lambda
+  as threadable with the alias in play.
 - A closure capturing another local closure: when the captured closure is
   only CALLED in the capturing lambda, the call inside is the same env call
   through the env field.
 - A fn-returning lambda: the direct call to its lifted `__fn_N` returns the
   int64 carrier, not the closure (pr-386, `Binding.is_lifted_lambda`), so it
   needs the closure protocol too.
+
+## Fixed (2026-10-09): a value use as well as calls (capturing)
+
+`(let [g (fn [n : int] : int (+ m n (perform (Ask))))] (+ (g 1) (app g 2)))`
+compiled and aborted. The value use `(app g 2)` is a threadable argument
+position, so the E2 tally admitted `__fn_N` as threadable (its env-taking
+`__cps` twin registered against its direct entry) and nothing tainted
+`Ask` to the fiber; but the tally never counts a CALL through the local as
+a use, and the CPS translation lowered `(g 1)` as the direct emitter spells
+it, `__fn_N((void *)g, 1)` -- the lambda's direct entry, which installs a
+fresh root. The `perform` inside found no handler: `tur: unhandled effect
+(tag 2)`, from a program that type-checked and compiled.
+
+- **Thread locals.** Beside the thread PARAMS, the classifier now registers,
+  per round, the thread LOCALS (`thread_local_visit`,
+  `src/compiler/emit_cps_ir.c` -> `cps_ir_thread_local_add`,
+  `src/passes/cps_ir.c`): an immutable `let`-bound local holding a fresh
+  capturing lambda that is threadable and that the let's body (or a later
+  sibling init) also calls through the local. A local the env-call rewrite
+  already owns (every use a saturated call) is left to it; a local a nested
+  closure captures is left alone (that closure's call would run from its
+  own body, where the local is an env field this registration does not
+  name -- the `g` calls `f` shape above, still refused).
+- **The call.** A call through a thread local lowers like an empty-row call
+  through a fat thread param (`call_threads_via_registry`, both the tail and
+  the bind arm): a `via_registry` tailcall, the continuation reified as a
+  heap join when the call is not in tail position. The emitter's fat
+  dispatch (`emit_e2a_fat_dispatch`) reads slot 0 of the env box -- the
+  lifted entry -- looks it up in the E2a registry and calls the env-taking
+  twin with the box, the arguments and the caller's continuation, so the
+  lambda's `perform` reaches the caller's handler. The same effect-row arm
+  that admits a thread-param call admits a thread-local one;
+  `safe_to_delegate` refuses the call (delegated, it would be the direct
+  entry again).
+- **Naming.** The callee is spelled by `name_for_binding`
+  (`registry_callee_name`), the let local's id-suffixed name, which is also
+  how a lifted continuation's frame read-out spells it: when the call sits
+  after a `perform` in the let, the local rides the frame env as the int64
+  scalar the existing E2c capture carries (`cap_add_fn_scalar`).
+- **The box.** The env box is reaped at the DK entry boundary, as a freeable
+  closure's is -- including when the let's body performs:
+  `cps_closure_env_freeable` asked `closure_binding_escapes`, which reads a
+  `perform` as an escape, and so refused every let whose body performed
+  (24 B a run, every CPS-lowered let of a capturing lambda whose let
+  crossed a `perform`, pre-existing). The reap frees at the outermost DK
+  entry's exit, after every resume the entry sees, so it asks the reaped
+  owner's variant (`closure_binding_escapes_reaped`) now.
+- Not changed: a thread local's lambda called from a function the classifier
+  evicts for some other reason still runs from a fresh root -- the same
+  exposure a thread PARAM has, since withdrawal (`fnval_withdraw_walk`)
+  runs before classification.
+
+Pinned by `tests/fixtures/cps-local-closure-value-and-call` (leak-checked;
+every line equals `tur --interpret`): called then passed; the call after a
+`perform` (a captured local in a lifted continuation); the call in tail
+position; called twice and passed twice; a two-parameter lambda; passed to
+a recursive loop that calls it 100 times; the direct call and the threaded
+one sharing one counting handler. Measured: the fixture suite is unchanged
+otherwise (3667 passed, no snapshot moved).
 
 ## Fixed (2026-10-09): the capturing shapes
 

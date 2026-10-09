@@ -1091,6 +1091,9 @@ static bool g_esc_allow_sum_accessors = false;
  * exit, but not for one at a self tail call's backedge: there the argument is
  * the next turn's parameter.  File-scope like the flag above. */
 static bool g_esc_call_head_only = false;
+/* sum-closure-payload-never-dropped (the CPS half): set while
+ * closure_binding_escapes_reaped runs -- a `perform` is then not an escape. */
+static bool g_esc_perform_ok = false;
 /* dynamic-returned-closure-env-is-never-freed (self application): bit i set
  * admits `b` as argument i of a dynamic call whose CALLEE is `b` itself.  See
  * any_box_binding_escapes_self_apply.  File-scope for the same reason as the
@@ -1497,6 +1500,16 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * than risk a double free.  (shift/reset/await/call-cc and the other
              * capture forms are not modeled below and reach `default` -> escape.) */
             case EX_PERFORM:
+                /* sum-closure-payload-never-dropped (the CPS half): a free
+                 * that waits for the outermost DK entry's exit -- the reap
+                 * list -- runs after every resume the entry sees, so for
+                 * such an owner a perform is not an escape; only its
+                 * arguments can carry `b` out (closure_binding_escapes_reaped). */
+                if (g_esc_perform_ok) {
+                    for (uint32_t i = 0; i < cur->as.perform_.perform->n_args; i++)
+                        ESC_PUSH(cur->as.perform_.perform->args[i]);
+                    break;
+                }
                 escapes = true;
                 goto esc_done;
             case EX_HANDLE:
@@ -1602,6 +1615,16 @@ esc_done:
 
 bool closure_binding_escapes(const Expr *e, const Binding *b) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+}
+
+/* The same, for an owner that frees at the outermost DK entry's exit (the CPS
+ * emitter's reap list) rather than at scope exit: a `perform` in the scope is
+ * not an escape, since every resume the entry sees runs before that free. */
+bool closure_binding_escapes_reaped(const Expr *e, const Binding *b) {
+    g_esc_perform_ok = true;
+    bool esc = binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+    g_esc_perform_ok = false;
+    return esc;
 }
 
 /* closure-let-in-self-tail-loop-leaks: is every use of `b` in `e` a call of

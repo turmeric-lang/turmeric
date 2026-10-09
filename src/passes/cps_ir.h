@@ -216,7 +216,14 @@ struct CTerm {
                   * emitter uses -- the CTerm otherwise drops the dispatch dict_arg,
                   * leaving a carrier-erased `(show x)` baked to the int rep. NULL for
                   * synthetic calls with no source Expr. */
-                 const Expr *call_expr; } letcall;
+                 const Expr *call_expr;
+                 /* sum-closure-payload-never-dropped (the CPS half): when this
+                  * call is the init of a `let` binding -- `(some <closure>)` --
+                  * the EX_LET and the binding's index, so the emitter can ask
+                  * the direct emitter's question (let_binding_sum_closure_
+                  * freeable) and reap the live arm's closure at the entry
+                  * boundary.  NULL otherwise. */
+                 const Expr *sum_let; uint32_t sum_let_idx; } letcall;
         /* fn_atom is the callee key when fn == NULL (E2c: a via_registry call
          * whose callee is a struct-field fn-value load `(.f obj)`, not a named
          * binding).  The emitter uses fn_atom's atom_str as the `__tur_cps_lookup`
@@ -385,6 +392,20 @@ void cps_ir_thread_param_reset(void);
 /* Forget the callee_fndef binding -> FnDef table (a new classification). */
 void cps_ir_callee_cache_reset(void);
 void cps_ir_thread_param_add(const Binding *param);
+/* cps-local-fn-alias-or-lambda-called-in-place-refused (a value use as well
+ * as calls): a `let`-bound local holding a fresh capturing lambda that is
+ * threadable -- it flows to a thread param, so its env-taking `__cps` twin
+ * is registered -- and is ALSO called through the local.  Such a call
+ * threads the caller's continuation through the registry, keyed on the env
+ * box's slot 0 (the lifted entry), like an empty-row call through a fat
+ * thread param; a direct call would run the lambda's perform from a fresh
+ * root (`unhandled effect`).  Registered per function by the emitter. */
+void cps_ir_thread_local_reset(void);
+/* `env_boxed`: the local's value is the closure's env box (slot 0 the lifted
+ * entry) -- a capturing lambda -- rather than the direct entry itself. */
+void cps_ir_thread_local_add(const Binding *local, bool env_boxed);
+bool cps_ir_thread_local_has(const Binding *local);
+bool cps_ir_thread_local_env_boxed(const Binding *local);
 bool cps_ir_thread_param_has(const Binding *param);
 bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
 

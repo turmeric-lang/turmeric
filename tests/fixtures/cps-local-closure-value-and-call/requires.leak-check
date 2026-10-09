@@ -1,0 +1,1 @@
+the env box of a let-bound lambda that is both called and passed on is reaped at the entry boundary

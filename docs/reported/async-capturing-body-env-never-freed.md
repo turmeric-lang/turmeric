@@ -1,5 +1,21 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed a fourth time 2026-10-09: a lambda bound to a local first.**
+`(let [body (fn [] ... k ...)] (await (async body)))` leaked the box (32 B a
+spawn): the let could not drop it -- the body may still be running, parked --
+and the spawn owned nothing. When the local's only use is that one spawn
+(every mention of the binding is the spawn's `fn_expr`: not under a `while`,
+where a spawn per turn would each drop the same box; not inside a closure;
+and no `perform` in the let, where a multi-shot resume could run the spawn
+twice), the direct emitter's let marks it (`Binding.spawn_owns_env`,
+`let_mark_spawn_owned`, `src/compiler/emit_expr.c`) and the spawn owns the
+box as it does a lambda written at the spawn (`async_spawn_owns_env`).
+Pinned by `tests/fixtures/async-let-bound-body-env-dropped` (leak-checked:
+inline, parking, a struct capture, 200 spawns from a recursive loop) and
+`async-let-bound-body-env-kept` (the same local spawned twice, from a
+`while`, and from a lambda that captured it: kept, right answers). A let the
+CPS backend lowers is not marked, so that shape still leaks there.
+
 **Narrowed a third time 2026-10-09: the thread-backed spawn drops its box,
 and a session-driving body qualifies.** `tur_async_thread_via` (a body that
 drives a session endpoint runs on its own OS thread) owned nothing; it now
@@ -48,8 +64,8 @@ in 202 allocations before, 0 now).
 **What is left:** a capture whose drop glue releases something -- an `rc`, an
 owned `^fat` closure, a Drop instance -- since the body's result may still
 reference it (a scalar result could not, which would admit those too); a
-lambda bound to a local before the spawn (its `let` owns it); an inline-C
-block in the body that names a capture.
+lambda bound to a local that is spawned more than once, or in a let the CPS
+backend lowers; an inline-C block in the body that names a capture.
 
 **Severity: low (was low-medium; a leak per spawn).** `(async (fn [] ... captured ...))`
 mallocs the lambda's env box, hands it to `tur_async_fiber_closure`, and
