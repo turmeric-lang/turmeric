@@ -156,6 +156,7 @@ removes a check.
 | `expected.stdout` | The program's exact output. Without it the output is not checked at all |
 | `expected.exit` | The expected exit status (default 0) |
 | `expected.stderr` | Substrings that must appear in stderr |
+| `unexpected.stderr` | Substrings that must NOT appear in stderr (`run.sh`), one per line -- pins a false diagnostic's absence |
 | `expected.diag` | Negative fixtures: substrings the compiler's diagnostics must contain, one per line |
 | `expected.c` | Codegen snapshot, compared on every run. `TUR_TEST_SUITE=snapshots` runs only these; regenerate with `tur run regen-snapshots` |
 | `expected.timeout` | Seconds for each of the build and the run (default 10 compiled, 15 interpreted; `0` means unlimited). r7rs fixtures that compile a library or a large program usually need `60`, and the heaviest (`(scheme eval)`, threads, the system libraries) `180` for now, while r7rs build times are being worked on |

@@ -1,0 +1,100 @@
+;; await-through-fn-value-parks-only-the-callee: an `await` reached through a
+;; function value must park the WHOLE async body, not just the callee.
+;; `await` adds nothing to an effect row, so a function value's "is it
+;; effectful?" test (the fn_cps slot fill) used to read an awaiting function as
+;; pure: the call through the value ran it from a fresh root, its await parked
+;; only its own rest, and the caller's loop carried on with a placeholder
+;; (42 where the answer is 83).  Now a function that may await -- its own
+;; await, or a named callee's -- gets the CPS entry an effectful one gets.
+;;
+;; Each shape runs as its own async body over a fresh pending future: its first
+;; await parks the body, fulfilling the future resumes it, and every later
+;; await finds the future fulfilled.  (One future per body: a future's
+;; on_complete holds one parked continuation.)
+;;
+;;   named       -- a named awaiting fn passed by name
+;;   transitive  -- a named fn that awaits only through a named callee
+;;   lambda      -- a capture-free lambda literal that awaits
+;;   capturing   -- a lambda that captures a local and awaits
+;;
+;; Before the fix these printed 90 / 91 / 82 / 580.  Leak-checked since
+;; async-parked-body-chains-never-reaped (docs/archive/) was fixed: a parked
+;; body's registrations are reaped once it settles, and the 49 awaits after
+;; each park, on a fulfilled future, cost no heap.
+
+(defn future-cell [fresh : bool] : ptr<void>
+  ```c
+  static TurFuture *g = NULL;
+  if (fresh || !g) g = tur_future_new();
+  return (void *)g;
+  ```)
+
+(defn the-future [] : ptr<void> (future-cell false))
+(defn fresh-future! [] : ptr<void> (future-cell true))
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn await-plus [x : int] : int (+ x (await (the-future))))
+(defn await-plus-via [x : int] : int (+ 1 (await-plus x)))
+(defn use1 [f : (fn [int] int) i : int] : int (f i))
+
+(defn named [i : int n : int acc : int] : int
+  (if (= i n) acc (named (+ i 1) n (+ acc (use1 await-plus i)))))
+
+(defn transitive [i : int n : int acc : int] : int
+  (if (= i n) acc (transitive (+ i 1) n (+ acc (use1 await-plus-via i)))))
+
+(defn lambda [i : int n : int acc : int] : int
+  (if (= i n) acc
+    (lambda (+ i 1) n
+            (+ acc (use1 (fn [x : int] : int (* 2 (await (the-future)))) i)))))
+
+(defn capturing [i : int n : int acc : int] : int
+  (if (= i n) acc
+    (let [k (* 10 i)]
+      (capturing (+ i 1) n
+                 (+ acc (use1 (fn [x : int] : int (+ x k (await (the-future)))) i))))))
+
+(defn run-named [] : int (named 0 50 0))
+(defn run-transitive [] : int (transitive 0 50 0))
+(defn run-lambda [] : int (lambda 0 50 0))
+(defn run-capturing [] : int (capturing 0 50 0))
+
+(defn main [] : nil
+  (fresh-future!)
+  (let [a (async run-named)]
+    (fulfill-future (the-future) 41)
+    (println (future-value a))      ;; sum of i+41,   i<50 = 1225 + 2050  = 3275
+    (free-future a)
+    (free-future (the-future)))
+  (fresh-future!)
+  (let [b (async run-transitive)]
+    (fulfill-future (the-future) 41)
+    (println (future-value b))      ;; sum of i+42,   i<50 = 1225 + 2100  = 3325
+    (free-future b)
+    (free-future (the-future)))
+  (fresh-future!)
+  (let [c (async run-lambda)]
+    (fulfill-future (the-future) 41)
+    (println (future-value c))      ;; 50 * 82                          = 4100
+    (free-future c)
+    (free-future (the-future)))
+  (fresh-future!)
+  (let [d (async run-capturing)]
+    (fulfill-future (the-future) 41)
+    (println (future-value d))      ;; sum of 11i+41, i<50 = 13475 + 2050 = 15525
+    (free-future d)
+    (free-future (the-future))))

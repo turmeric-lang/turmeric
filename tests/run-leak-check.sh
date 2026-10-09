@@ -123,7 +123,14 @@ for marker in "${marked[@]}"; do
     # a 0-byte expected.stdout and failed every such fixture as a bogus "stdout
     # mismatch".  Three of the first batch of opt-ins (rc-cycle-leak,
     # affine-drop, rc-elision-negative-conditional-drop) are exactly that shape.
-    ASAN_OPTIONS="detect_leaks=1:exitcode=23" "$exe" \
+    # use_stacks=0:use_registers=0: LeakSanitizer's default roots include
+    # every stack and register, so a stale copy of a pointer left in a dead
+    # frame keeps a leaked block "reachable".  Measured 2026-10-08
+    # (carrier-sum-option-boxes-have-no-owner): the default hid 127 B across
+    # the RM1 sweep, and a capturing closure in an `unwrap`ped Option read as
+    # clean.  At exit main has returned, so nothing live is only on a stack.
+    ASAN_OPTIONS="detect_leaks=1:exitcode=23" \
+    LSAN_OPTIONS="use_stacks=0:use_registers=0" "$exe" \
         > "$WORK/$name.out" 2>"$WORK/$name.err"
     rc=$?
 

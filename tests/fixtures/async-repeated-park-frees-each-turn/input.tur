@@ -1,0 +1,73 @@
+;; async-repeated-park-holds-frames-until-settle: a body that parks on every
+;; turn keeps nothing from one turn to the next.  Each park copies the chain
+;; from the await up to the body's root, so it crosses the loop's heap join for
+;; that turn and the callers' joins above it.  Only the copies run after that,
+;; so the ORIGINAL nodes are dead at once, and so are their envs, because the
+;; parked copy owns copies of those (dk_copy_range_owned) -- the park's hand-off
+;; frees both (__dk_reap_seg_take).  They used to stay in the park's share of
+;; the reap list until the body settled: ~187 B a turn, two entries a turn.
+;;
+;; The share's length is read off the pending park record at turn 10 and at
+;; turn 900: 1 at both, the entry's root (before: 27 and 1,807).
+;; LeakSanitizer cannot tell the two apart -- everything is freed by the end
+;; either way -- so this prints it.
+;; Leak-checked (requires.leak-check).
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+;; How many reap-list entries the park waiting on `f` holds.
+(defn parked-share [f : ptr<void>] : int
+  ```c
+  TurFuture *fu = (TurFuture *)f;
+  if (fu->on_complete.fn != (void (*)(TurFuture *, int64_t))__tur_async_resume) return -1;
+  return (int64_t)((TurAsyncPark *)fu->on_complete.env)->seg.n;
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+(defn level3 [m : int] : int (+ m (sum-values 0 1000 0)))
+(defn level2 [m : int] : int (* 2 (level3 (+ m 1))))
+(defn level1 [m : int] : int (+ 7 (level2 (+ m 1))))
+(defn body [] : int (level1 1))
+
+(defn main [] : nil
+  (cur-cell true)
+  (let [f (async body)
+        ^mut turn 0]
+    (while (pending? f)
+      (when (or (= turn 10) (= turn 900))
+        (println (parked-share (cur-cell false))))
+      (let [old (cur-cell false)]
+        (cur-cell true)
+        (fulfill-future old 2)
+        (free-future old))
+      (set! turn (+ turn 1)))
+    (println (future-value f))          ;; 2 * (3 + 2000) + 7 = 4013
+    (free-future f))
+  (free-future (cur-cell false)))

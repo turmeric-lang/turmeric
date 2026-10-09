@@ -11,6 +11,7 @@
 #include "builtins.h"
 #include "diag.h"
 #include "effect.h"
+#include "cps.h"            /* cps_visit_children */
 #include "expr.h"
 #include "globals.h"
 #include "typeclass.h"
@@ -396,6 +397,71 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                             param_row->as.var.var_name->name);
                     }
                 }
+            }
+        }
+
+        /* w0033-unreachable-clause-false-positive-through-fn-value: a fn-typed
+         * parameter with NO row annotation admits an effectful argument (the
+         * CPS coloring threads it, and the callee calls it), but nothing
+         * above carries that argument's effects: ER2 unifies only a
+         * row-VARIABLE param, and a call through an un-annotated param adds
+         * nothing to the callee's own row.  So `(use1 ask-plus 1)` read as
+         * performing nothing -- a handler around it was reported unreachable
+         * (TUR-W0033), and a fn value of a function that only performs that
+         * way was built with no CPS entry, aborting `unhandled effect` when
+         * called through.  Charge the argument's row to this call, as the
+         * callee may invoke it.  Conservative for a callee that only stores
+         * the value: its effect still happens when something calls it. */
+        if (callee && callee->params && callee->n_params > 0 &&
+            e->as.call_.n_args > 0) {
+            uint32_t n_open = callee->n_params < e->as.call_.n_args
+                                ? callee->n_params : e->as.call_.n_args;
+            for (uint32_t pi = 0; pi < n_open; pi++) {
+                Binding *param = callee->params[pi];
+                if (!param) continue;
+                /* An un-annotated `(fn [int] int)` in parameter position is
+                 * a rank-2 poly-fn param (ptr<void> at the C level, its
+                 * signature on poly_type); a bare TY_FN param counts too.
+                 * Either is "open" exactly when no row is written on it. */
+                const Type *pfn = NULL;
+                if (param->type.kind == TY_FN) pfn = &param->type;
+                else if (param->is_poly_fn) {
+                    pfn = param->poly_type;          /* NULL: a bare `: fn` */
+                    while (pfn && pfn->kind == TY_FORALL) pfn = pfn->as.forall_.body;
+                    if (param->poly_type && (!pfn || pfn->kind != TY_FN)) continue;
+                } else continue;
+                /* A written row (`#fx{}` included) is ER2's or TUR-E0009's. */
+                if (pfn && pfn->as.fn.effect_row) continue;
+                /* Peel the shims a fn-value argument rides in: an erased
+                 * ascription, the fat normalization, and the poly-fn wrapper
+                 * an un-annotated `(fn [int] int)` slot builds. */
+                Expr *actual = e->as.call_.args[pi];
+                while (actual &&
+                       (actual->kind == EX_ASCRIBE ||
+                        actual->kind == EX_FN_TO_FAT ||
+                        actual->kind == EX_POLY_WRAP))
+                    actual = actual->kind == EX_ASCRIBE  ? actual->as.ascribe_.inner
+                           : actual->kind == EX_FN_TO_FAT ? actual->as.fn_to_fat_.inner
+                           : actual->as.poly_wrap_.inner;
+                EffectRow *actual_row = NULL;
+                if (actual && actual->kind == EX_CLOSURE &&
+                    actual->as.closure_.closure &&
+                    actual->as.closure_.closure->fn) {
+                    EffectRowSubst *arg_subst = effect_row_subst_new(a);
+                    actual_row = collect_effects_in_expr(
+                        a, actual->as.closure_.closure->fn->body,
+                        effect_row_empty(a), idx, env, arg_subst);
+                } else if (actual && actual->kind == EX_VAR &&
+                           actual->as.var.binding) {
+                    FnDef *arg_fn = fn_index_lookup(idx, actual->as.var.binding);
+                    if (arg_fn && arg_fn->inferred_effect_row)
+                        actual_row = arg_fn->inferred_effect_row;
+                    else if (actual->as.var.binding->type.kind == TY_FN)
+                        actual_row = actual->as.var.binding->type.as.fn.effect_row;
+                }
+                if (actual_row)
+                    row = effect_row_merge(a, row,
+                                           effect_row_apply_subst(actual_row, subst, a));
             }
         }
 
@@ -1271,6 +1337,9 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
     }
 }
 
+typedef struct { Arena *a; FnIndex *idx; EffectEnv *env; } UnreachUd;
+static bool unreach_visit(const Expr *c, void *ud);
+
 /* ---------------------------------------------------------------------------
  * ET1-C: check_unreachable_handlers_in_expr
  * Walk an expression tree; for each EX_HANDLE, recompute the body's inferred
@@ -1380,9 +1449,23 @@ static void check_unreachable_handlers_in_expr(
          * ascription is still checked. */
         check_unreachable_handlers_in_expr(a, e->as.ascribe_.inner, idx, env);
         return;
-    default:
+    default: {
+        /* Every other node: descend through the shared operand enumeration,
+         * so a `handle` inside a builtin's argument (`(println (handle
+         * ...))`), a match arm, or any node without an arm above is still
+         * checked.  This walk used to stop here, which is why the same
+         * unreachable clause warned when let-bound and not when printed. */
+        UnreachUd u = { a, idx, env };
+        cps_visit_children(e, unreach_visit, &u);
         return;
     }
+    }
+}
+
+static bool unreach_visit(const Expr *c, void *ud) {
+    UnreachUd *u = (UnreachUd *)ud;
+    check_unreachable_handlers_in_expr(u->a, (Expr *)c, u->idx, u->env);
+    return false;
 }
 
 /* ---------------------------------------------------------------------------

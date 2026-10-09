@@ -1,0 +1,15 @@
+;; TUR-W0033 inside a builtin's argument: the unreachable-clause walk stopped
+;; at any node it had no arm for, so a `handle` written as `println`'s argument
+;; was never checked -- the same dead `Tell` clause warned when let-bound and
+;; not when printed (found with
+;; w0033-unreachable-clause-false-positive-through-fn-value).  The walk now
+;; descends through every operand.  The program still runs.
+
+(defeffect Ask [] : int)
+(defeffect Tell [] : int)
+
+(defn main [] : int
+  (println (handle (perform (Ask))
+             (Ask [] k) (resume k 1)
+             (Tell [] k) (resume k 2)))
+  0)

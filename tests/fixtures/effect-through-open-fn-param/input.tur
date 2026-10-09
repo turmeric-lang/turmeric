@@ -1,0 +1,42 @@
+;; w0033-unreachable-clause-false-positive-through-fn-value: an effect performed
+;; by a function passed as a value to an UN-ANNOTATED fn parameter (`(fn [int]
+;; int)`, a rank-2 poly-fn param) is the call's effect.  It used to be lost:
+;; the effect pass carried a fn-value argument's row only into a row-VARIABLE
+;; param, so `(use1 ask-plus 1)` read as performing nothing.
+;;
+;;   ask-direct / ask-lambda -- a handler over such a call was reported
+;;                  unreachable (TUR-W0033) although its clause runs;
+;;   via-value -- `wrap` performs only through use1, so it read as pure and
+;;                  its own fn value was built with no CPS entry: calling it
+;;                  through use1 under a handler aborted `unhandled effect`.
+;;
+;; unexpected.stderr pins that no TUR-W0033 fires here.
+
+(defeffect Ask [] : int)
+
+(defn ask-plus [x : int] : int (+ x (perform (Ask))))
+(defn use1 [f : (fn [int] int) i : int] : int (f i))
+(defn wrap [i : int] : int (use1 ask-plus i))
+
+(defn ask-direct [] : int
+  (handle (use1 ask-plus 1)
+    (Ask [] k) (resume k 10)))
+
+(defn ask-lambda [] : int
+  (handle (use1 (fn [x : int] : int (* x (perform (Ask)))) 3)
+    (Ask [] k) (resume k 7)))
+
+(defn ask-wrapped [] : int
+  (handle (wrap 1)
+    (Ask [] k) (resume k 10)))
+
+(defn via-value [] : int
+  (handle (use1 wrap 2)
+    (Ask [] k) (resume k 10)))
+
+(defn main [] : int
+  (println (ask-direct))     ;; 1 + 10 = 11
+  (println (ask-lambda))     ;; 3 * 7  = 21
+  (println (ask-wrapped))    ;; 1 + 10 = 11
+  (println (via-value))      ;; 2 + 10 = 12
+  0)

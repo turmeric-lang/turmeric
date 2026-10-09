@@ -2135,6 +2135,8 @@ struct DK {
     DKKind kind; DKFrame fn; intptr_t env; int tag;
     DKBody body; intptr_t body_env;
     DKHandler handler; intptr_t handler_env; bool shallow;
+    bool tail_inplace; bool inplace_head;
+    bool group_end;
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
     bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
     bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */
@@ -2145,6 +2147,12 @@ struct DK {
     bool consumed;     /* (cont? k): a handler-case continuation is unconsumed until
                         * the program `resume`s it; set at the user resume site so
                         * `cont?` can read `!k->consumed` (matches the fiber path). */
+    uint8_t ncopy;     /* times dk_copy_node copied this node (255 = many) */
+    bool join_once;    /* heap-join frame: may be reclaimed when it runs uncopied */
+    bool orphaned;     /* an original an await's shift ran only as copies */
+    bool orphan_env;   /* ...and the shift that parked was its only copy */
+    bool env_owned;    /* this copy owns a private copy of the env */
+    uint16_t env_size; /* sizeof the env struct, 0 when unknown */
 };
 static DK *dk_new(DKKind kind, DK *next) {
     DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
@@ -2164,6 +2172,17 @@ static DK *dk_frame_owning(DKFrame fn, intptr_t env,
 static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_new(DKK_RESUME_FRAME, next); k->rfn = fn; k->env = env; return k;
 }
+/* A heap-join frame (emit_heap_join): the continuation of one non-tail
+ * cps->cps call, spliced onto the caller's chain and registered for a
+ * single-node reap.  See __dk_join_release_node. */
+__attribute__((unused))
+static DK *dk_frame_join(DKFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame(fn, env, next); k->join_once = true; return k;
+}
+__attribute__((unused))
+static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;
+}
 /* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
  * chain, borrowed.  The one spine then serves every consumer: dk_perform's
  * handler search walks straight into the real enclosing handlers, its capture
@@ -2178,6 +2197,11 @@ static DK *dk_frame_resume(DKResumeFrame fn, intptr_t env, DK *next) {
 __attribute__((unused))
 static DK *dk_frame_resume_borrow(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_frame_resume(fn, env, next); k->borrow_next = true; return k;
+}
+/* A `handle`'s continuation frame (emit_handle): see __dk_group_release. */
+__attribute__((unused))
+static DK *dk_frame_resume_group_end(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame_resume_borrow(fn, env, next); k->group_end = true; return k;
 }
 static DK *dk_prompt(int tag, DK *next) {
     DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;
@@ -2209,6 +2233,12 @@ static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }
  * driver instead of resuming inline, keeping deep effectful recursion flat. */
 static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
     DK *k = dk_handler_impl(tag, fn, env, false, next); k->tail_resume = true; return k;
+}
+/* A dk_handler_tail whose case uses its continuation only for that one tail
+ * resume (emit_handle, case_resumes_k_only_in_tail): see dk_perform. */
+__attribute__((unused))
+static DK *dk_handler_tail_inplace(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_handler_tail(tag, fn, env, next); k->tail_inplace = true; return k;
 }
 /* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at
  * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's
@@ -2248,14 +2278,29 @@ static DK *dk_hgroup_from_table(const tur_handler_table_t *t, DK *base) {
     }
     return dk_hgroup(head);
 }
+static intptr_t __dk_env_dup(intptr_t env, size_t size) {
+    void *c = malloc(size);
+    memcpy(c, (const void *)env, size);
+    return (intptr_t)c;
+}
+/* Record the size of a frame's env struct, so a parked copy can own a copy
+ * of it.  Not for an E3a owning frame, whose clone glue already copies it. */
+__attribute__((unused)) static DK *dk_env_sized(DK *k, size_t size) {
+    if (k->env && !k->env_clone && size <= 0xFFFF) k->env_size = (uint16_t)size;
+    return k;
+}
 static DK *dk_copy_node(const DK *n);
 static DK *dk_copy_node(const DK *n) {
+    if (n->ncopy != 255) ((DK *)n)->ncopy++;
     DK *c = dk_new(n->kind, NULL); c->fn = n->fn; c->tag = n->tag;
     c->env = n->env_clone ? n->env_clone(n->env) : n->env;
     c->env_clone = n->env_clone; c->env_drop = n->env_drop;
+    c->env_size = n->env_size;
+    if (n->env_owned) { c->env = __dk_env_dup(n->env, n->env_size); c->env_owned = true; }
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
     c->tail_resume = n->tail_resume;
+    c->tail_inplace = n->tail_inplace;
     c->hgroup = n->hgroup;
     c->case_delivers = n->case_delivers;
     c->rfn = n->rfn; return c;
@@ -2303,6 +2348,15 @@ static DK *dk_copy_range(const DK *from, const DK *stop) {
     }
     return head;
 }
+/* A copy whose sized frames own their envs (async-repeated-park-holds-
+ * frames-until-settle): a parked continuation, which outlives the entry
+ * that built the originals. */
+__attribute__((unused)) static DK *dk_copy_range_owned(const DK *from, const DK *stop) {
+    DK *head = dk_copy_range(from, stop);
+    for (DK *c = head; c; c = c->next)
+        if (c->env_size && !c->env_owned) { c->env = __dk_env_dup(c->env, c->env_size); c->env_owned = true; }
+    return head;
+}
 static DK *dk_append(DK *a, DK *b) {
     if (!a) return b;
     DK *p = a;
@@ -2312,12 +2366,12 @@ static DK *dk_append(DK *a, DK *b) {
 }
 static int tur_dk_pinned = 0;
 #define TUR_DK_PIN 1
-static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); free(k); k = n; } }
+static void dk_free(DK *k) { if (tur_dk_pinned) return; while (k) { DK *n = k->borrow_next ? NULL : k->next; if (k->env_drop) k->env_drop(k->env); else if (k->env_owned) free((void *)k->env); free(k); k = n; } }
 /* Free a single spliced node without following ->next -- used to reclaim the
  * one-off shift/perform node whose ->next points into an enclosing continuation
  * (dk_free would walk into that continuation and risk a double free).  See
  * docs/archive/cps-delimited-dk-node-leak.md. */
-__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); free(k); }
+__attribute__((unused)) static void dk_free_node(DK *k) { if (tur_dk_pinned) return; if (k && k->env_drop) k->env_drop(k->env); else if (k && k->env_owned) free((void *)k->env); free(k); }
 /* E2a: direct-entry -> CPS-entry registry (probes/e2a-registry-probe.c). */
 typedef intptr_t (*__tur_cps_fn)();
 static struct { intptr_t direct; __tur_cps_fn cps; } __tur_cps_reg[256];
@@ -2440,8 +2494,10 @@ static void __dk_reap_push(void *p, unsigned char kind) {
 __attribute__((unused)) static DK *__dk_reap_keep(DK *k) { __dk_reap_push(k, 1); return k; }
 __attribute__((unused)) static intptr_t __dk_reap_ptr(intptr_t p) { __dk_reap_push((void *)p, 0); return p; }
 /* Register a single spliced node (->next points into an enclosing k) for a
- * single-node free at reap -- dk_free would walk into the enclosing chain. */
-__attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 0); return k; }
+ * single-node free at reap -- dk_free would walk into the enclosing chain.
+ * Kind 3, freed like kind 0, but known to be a node: a park's hand-off reads
+ * its `orphaned` flag (__dk_reap_seg_take). */
+__attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 3); return k; }
 __attribute__((unused)) static intptr_t __dk_reap_closure(intptr_t p) { __dk_reap_push((void *)p, 2); return p; }
 __attribute__((unused)) static void __dk_reap_closure_now(intptr_t p) {
     if (tur_dk_pinned) return;
@@ -2475,6 +2531,142 @@ __attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
     (void)mark;
 #endif
 }
+typedef struct { void **v; unsigned char *kind; size_t n, cap; } __dk_reap_seg;
+__attribute__((unused)) static void __dk_reap_seg_reserve(__dk_reap_seg *s, size_t k) {
+    if (s->n + k <= s->cap) return;
+    size_t c = s->cap ? s->cap : 16;
+    while (c < s->n + k) c *= 2;
+    s->v = (void **)realloc(s->v, c * sizeof(void *));
+    s->kind = (unsigned char *)realloc(s->kind, c);
+    s->cap = c;
+}
+__attribute__((unused)) static void __dk_reap_seg_add(__dk_reap_seg *s, void *p, unsigned char kind) {
+    __dk_reap_seg_reserve(s, 1);
+    s->v[s->n] = p; s->kind[s->n] = kind; s->n++;
+}
+/* async-repeated-park-holds-frames-until-settle: the originals the parked
+ * await's shift left behind are freed here instead of moving: an `orphaned`
+ * node, and its env too when `orphan_env` says nothing else shared it then
+ * and `ncopy` says nothing copied it since (the entry's code may run on
+ * after a park -- a handler case carrying on with its placeholder).  The env
+ * is registered right before its node (emit_cont_env, then the frame), so it
+ * is the entry just taken; one registered elsewhere stays. */
+__attribute__((unused)) static void __dk_reap_seg_take(__dk_reap_seg *s, size_t mark) {
+    if (mark >= __dk_reap_n) return;
+    size_t k = __dk_reap_n - mark;
+    __dk_reap_seg_reserve(s, k);
+    for (size_t i = mark; i < __dk_reap_n; i++) {
+        void *p = __dk_reap_v[i]; unsigned char kd = __dk_reap_kind[i];
+        __dk_reap_v[i] = NULL;
+        if (kd == 3 && !tur_dk_pinned && ((DK *)p)->orphaned) {
+            DK *d = (DK *)p;
+            if (d->orphan_env && d->ncopy == 1 && s->n && s->v[s->n - 1] == (void *)d->env && s->kind[s->n - 1] == 0) {
+                s->n--;
+                free((void *)d->env);
+            }
+            free(d);
+            continue;
+        }
+        s->v[s->n] = p; s->kind[s->n] = kd; s->n++;
+    }
+    __dk_reap_n = mark;
+}
+/* `from`'s entries go first in `to` (they are the older); `from` is emptied. */
+__attribute__((unused)) static void __dk_reap_seg_move(__dk_reap_seg *to, __dk_reap_seg *from) {
+    if (!to->n) { free(to->v); free(to->kind); *to = *from; }
+    else {
+        __dk_reap_seg_reserve(from, to->n);
+        memcpy(from->v + from->n, to->v, to->n * sizeof(void *));
+        memcpy(from->kind + from->n, to->kind, to->n);
+        from->n += to->n;
+        free(to->v); free(to->kind); *to = *from;
+    }
+    from->v = NULL; from->kind = NULL; from->n = from->cap = 0;
+}
+__attribute__((unused)) static void __dk_reap_seg_give(__dk_reap_seg *s) {
+    for (size_t i = 0; i < s->n; i++) __dk_reap_push(s->v[i], s->kind[i]);
+    free(s->v); free(s->kind);
+    s->v = NULL; s->kind = NULL; s->n = s->cap = 0;
+}
+__attribute__((unused)) static bool __dk_join_release_node(DK *k) {
+    size_t n = __dk_reap_n;
+    if (tur_dk_pinned || k->ncopy || !n || __dk_reap_v[n - 1] != (void *)k
+        || __dk_reap_kind[n - 1] != 3) return false;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    free(k); return true;
+}
+/* async-parked-body-chains-never-reaped: an await's shift node, and the
+ * frame it shifts over, once dk_run has returned from the shift: the shift
+ * arm ran (or parked) a COPY of the frame, so neither original is reachable.
+ * Taken back while each is the list's last entry, as a join is.  NULL frame:
+ * the shift's next is the caller's continuation, not the await's to free.
+ *
+ * async-repeated-park-holds-frames-until-settle: the same is true of every
+ * original between the shift and the prompt it reached -- only copies of
+ * them run from here on -- so each is marked `orphaned`, for the park's
+ * hand-off to free.  `parked` (the awaited future is still pending, which
+ * only the shift's own park leaves it) means the one copy taken, the shift
+ * arm's, was copied on into the park, which owns its envs; an original that
+ * no other copy was ever taken of (ncopy 1) then shares its env with
+ * nothing: `orphan_env`.  The frame's env goes back here when it is the
+ * list's last entry. */
+__attribute__((unused)) static void __dk_await_release(DK *s, DK *f, int parked) {
+    if (tur_dk_pinned) return;
+    s->orphaned = true;
+    for (DK *p = s->next; p && !(p->kind == DKK_PROMPT && p->tag == s->tag) && p->kind != DKK_DONE; p = p->next) {
+        p->orphaned = true;
+        if (parked && p->ncopy == 1 && p->env_size && !p->env_owned) p->orphan_env = true;
+    }
+    size_t n = __dk_reap_n;
+    if (!n || __dk_reap_v[n - 1] != (void *)s || __dk_reap_kind[n - 1] != 3) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+    free(s);
+    if (!f || !n || __dk_reap_v[n - 1] != (void *)f || __dk_reap_kind[n - 1] != 3) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+    intptr_t fe = f->env; bool fe_free = f->orphan_env;
+    free(f);
+    if (!fe_free || !n || __dk_reap_v[n - 1] != (void *)fe || __dk_reap_kind[n - 1] != 0) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    free((void *)fe);
+}
+/* fn-value-call-cps-frames-held-until-outer-entry, effect half: a `handle`
+ * registers its handler group -- the case handlers, then its continuation
+ * frame `end` -- as one chain (__dk_reap_keep), held until the outermost
+ * entry.  When the ORIGINAL `end` runs, the handle has exited: only copies of
+ * the group ever run again, and a copy shares nothing with the original but
+ * `end`'s env.  So it is handed back when it is the list's last entry and
+ * `end` was never copied (its env is then unshared, and the frame function
+ * releases it, as a join's does). */
+__attribute__((unused)) static bool __dk_group_release(DK *end) {
+    size_t n = __dk_reap_n;
+    if (tur_dk_pinned || end->ncopy || !n || __dk_reap_kind[n - 1] != 1) return false;
+    DK *h = (DK *)__dk_reap_v[n - 1];
+    intptr_t envs[16]; int ne = 0; bool envs_free = true;
+    const DK *p = h;
+    for (; p && p != end && p->kind == DKK_HANDLER; p = p->next) {
+        if (p->ncopy) envs_free = false;   /* a copy shares its handler env */
+        if (ne < 16) envs[ne++] = p->handler_env; else envs_free = false;
+    }
+    if (p != end) return false;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+    dk_free(h);   /* stops after `end`: its next is borrowed */
+    /* The case envs were registered right before the group, in case order
+     * (emit_handle): they come off the top in reverse, while they match. */
+    for (int i = ne - 1; envs_free && i >= 0; i--) {
+        if (!envs[i]) continue;
+        if (!n || __dk_reap_v[n - 1] != (void *)envs[i] || __dk_reap_kind[n - 1] != 0) break;
+        __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+        free((void *)envs[i]);
+    }
+    return true;
+}
+__attribute__((unused)) static void __dk_join_release_env(intptr_t env) {
+    size_t n = __dk_reap_n;
+    if (tur_dk_pinned || !env || !n || __dk_reap_v[n - 1] != (void *)env
+        || __dk_reap_kind[n - 1] != 0) return;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
+    free((void *)env);
+}
 static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
     while (k) {
         switch (k->kind) {
@@ -2483,8 +2675,23 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
             /* cps-body-panic-not-propagated: a frame whose body panicked under a
              * handler returned by signal; the rest of the chain is the rest of the
              * program past the panic and must not run.  Its nodes are reap-owned. */
-            case DKK_FRAME: v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next; break;
-            case DKK_RESUME_FRAME: return k->rfn(k->env, v, k->next);
+            case DKK_FRAME: {
+                DK *self = k; intptr_t senv = k->env;
+                v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;
+                /* The fn is done with its env, so it can follow the node. */
+                if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);
+                break;
+            }
+            case DKK_RESUME_FRAME:
+                if (k->join_once) {
+                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
+                    if (__dk_join_release_node(k)) return rf(renv, v, rest);
+                }
+                if (k->group_end) {
+                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
+                    if (__dk_group_release(k)) return rf(renv, v, rest);
+                }
+                return k->rfn(k->env, v, k->next);
             case DKK_SHIFT:
             case DKK_SHIFT0: {
                 DK *P = k->next;
@@ -2589,9 +2796,10 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
+        bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */
         if (TUR_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
-            __dk_reap_keep(ch);
+            if (own) __dk_reap_keep(ch);
             /* cps-body-panic-not-propagated: a panic signalled out of the chain
              * abandons this level's pending deliveries (reap-owned, freed at the
              * entry boundary) and returns so the wrapper's caller sees the flag. */
@@ -2600,7 +2808,7 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
             g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
             g_dk_resume_val = r;
         } else {
-            __dk_reap_keep(ch);   /* a pending delivery may still reference it */
+            if (own) __dk_reap_keep(ch);   /* a pending delivery may still reference it */
         }
     }
     g_dk_driver = saved;
@@ -2613,9 +2821,10 @@ static intptr_t __dk_drive_after(void) {
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
+        bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */
         if (TUR_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
-            dk_free(ch);
+            if (own) dk_free(ch);
             if (tur_panicking) { while (g_dk_meta_n > 0) dk_free(g_dk_meta[--g_dk_meta_n]); return r; }
             if (g_dk_meta_n == 0) return r;
             g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
@@ -2634,7 +2843,7 @@ static intptr_t __dk_drive_after(void) {
              * deep loop is unaffected in correctness; it only defers these frees
              * to the entry boundary.  See
              * docs/archive/effect-rec-nested-handler-nonterminates.md. */
-            __dk_reap_keep(ch);   /* was dk_free(ch): premature under nesting */
+            if (own) __dk_reap_keep(ch);   /* was dk_free(ch): premature under nesting */
         }
     }
 }
@@ -2647,6 +2856,11 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
     if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
+    if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
+        k->inplace_head = true;
+        g_dk_case_reopen_hnode = H;
+        return H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */
+    }
     DK *sub = dk_copy_range(k, H);
     DK *tail;
     if (H->shallow) {
@@ -2699,8 +2913,12 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * -- so reaping is `sub`'s sole disposal on both the return and longjmp paths.
      * We reap BEFORE the handler call so a longjmp cannot skip the registration. */
     __dk_reap_keep(sub);
+    /* Read before the case runs: a case can run the handle's continuation
+     * frame itself, which hands the handler group -- H -- back
+     * (__dk_group_release). */
+    bool H_delivers = H->case_delivers; DK *H_next = H->next;
     intptr_t r = H->handler(H->handler_env, arg, sub);
-    return H->case_delivers ? r : dk_run_impl(H->next, r, false);
+    return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
 /* Phase T21: FiberBlock */
 #ifdef __clang__
@@ -3569,10 +3787,24 @@ static int64_t tur_future_get(TurFuture *f) {
     return f->value;
 }
 
-typedef struct { DK *subk; TurFuture *outer; } TurAsyncPark;
+typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; } TurAsyncPark;
 
 static int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */
 static TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */
+
+__attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
+    if (tur_async_suspended) {
+        TurAsyncPark *p = tur_async_pending_park;
+        if (!p || p->depth != __dk_entry_depth) return;
+        __dk_reap_seg_take(&p->seg, mark);
+        __dk_reap_seg_add(&p->seg, root, 1);
+        p->depth = -1;  /* owned now: an outer exit is not its owner */
+        --__dk_entry_depth;
+        return;
+    }
+    dk_free(root);
+    if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(mark);
+}
 
 __attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *out, size_t out_size) {
     __dk_entry_depth++;
@@ -3584,8 +3816,7 @@ __attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __r;
 }
 
@@ -3770,17 +4001,51 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
     TurAsyncPark *rec = (TurAsyncPark *)inner->on_complete.env;
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;
-    int64_t r = dk_invoke(rec->subk, value);
+    __dk_entry_depth++;
+    size_t __dk_reap_mark = __dk_reap_n;
+    rec->subk->inplace_head = true;
+    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value, g_dk_meta_n);
+    dk_free(rec->subk);
     if (tur_async_suspended && tur_async_pending_park) {
         /* re-parked on a further pending await: thread the outer future through */
-        tur_async_pending_park->outer = rec->outer;
+        TurAsyncPark *np = tur_async_pending_park;
+        np->outer = rec->outer;
+        if (np->depth == __dk_entry_depth) {
+            __dk_reap_seg_move(&np->seg, &rec->seg);
+            __dk_reap_seg_take(&np->seg, __dk_reap_mark);
+            np->depth = -1;
+            --__dk_entry_depth;
+        } else {
+            __dk_reap_seg_give(&rec->seg);
+        }
+        tur_async_suspended = 0;
+        tur_async_pending_park = NULL;
     } else {
+        tur_async_suspended = 0;
+        tur_async_pending_park = NULL;
+        __dk_reap_seg_give(&rec->seg);
+        if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);
         tur_future_fulfill(rec->outer, r);
     }
-    tur_async_suspended = 0;
-    tur_async_pending_park = NULL;
-    dk_free(rec->subk);
     free(rec);
+}
+
+__attribute__((unused)) static int __tur_await_ready(void *fp) {
+    TurFuture *f = (TurFuture *)fp;
+    if (!f) return 0;
+    tur_future_join_thread(f);
+    if (tur_scheduler)
+        while (!tur_future_done(f) && tur_scheduler->run_queue_len > 0)
+            tur_scheduler_run_one(tur_scheduler);
+    return f->status == FUTURE_FULFILLED;
+}
+
+__attribute__((unused)) static intptr_t __tur_await_value(void *fp) {
+    return (intptr_t)((TurFuture *)fp)->value;
+}
+
+__attribute__((unused)) static int __tur_future_pending(void *fp) {
+    return fp && ((TurFuture *)fp)->status == FUTURE_PENDING;
 }
 
 static intptr_t __tur_await_body(intptr_t env, DK *subk) {
@@ -3818,8 +4083,9 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
     /* pending: park a private copy of the captured continuation on on_complete */
     TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));
     if (!rec) { fprintf(stderr, "await: oom\n"); abort(); }
-    rec->subk = dk_copy_range(subk, NULL);
+    rec->subk = dk_copy_range_owned(subk, NULL);
     rec->outer = NULL;  /* patched by the async boundary (tur_async_fiber) */
+    rec->depth = __dk_entry_depth;  /* the entry whose root this shift reached */
     f->on_complete.fn = (void (*)(TurFuture *, int64_t))__tur_async_resume;
     f->on_complete.env = (void *)rec;
     tur_async_suspended = 1;
@@ -7500,8 +7766,7 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
 static bool map_hyeq_hydriver(int64_t m1, int64_t m2, int64_t val_cmp) {
@@ -7856,8 +8121,7 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
 static bool cons_hyeq_hygo(int64_t c1, int64_t c2) {
@@ -7904,6 +8168,7 @@ typedef struct { int64_t f0; } _un_uncons_hyfmap_j0_env;
 static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__kont) {
     _un_uncons_hyfmap_j0_env *__cap = (_un_uncons_hyfmap_j0_env *)(intptr_t)env;
     int64_t __t1 = __cap->f0;
+    __dk_join_release_env((intptr_t)__cap);
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_1001304;
     out_1001304 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
@@ -7931,7 +8196,7 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
         _un_uncons_hyfmap_j0_env *__ce__un_uncons_hyfmap_j0 = (_un_uncons_hyfmap_j0_env *)malloc(sizeof(_un_uncons_hyfmap_j0_env));
         __ce__un_uncons_hyfmap_j0->f0 = __t1;
         __dk_reap_ptr((intptr_t)__ce__un_uncons_hyfmap_j0);
-        return _un_uncons_hyfmap__cps(__t3, f, __dk_reap_node(dk_frame_resume(_un_uncons_hyfmap_j0, (intptr_t)__ce__un_uncons_hyfmap_j0, __kont))); /* cps->cps heap join */
+        return _un_uncons_hyfmap__cps(__t3, f, __dk_reap_node(dk_env_sized(dk_frame_resume_join(_un_uncons_hyfmap_j0, (intptr_t)__ce__un_uncons_hyfmap_j0, __kont), sizeof(_un_uncons_hyfmap_j0_env)))); /* cps->cps heap join */
     }
 }
 __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f) {
@@ -7944,8 +8209,7 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
 static void tur_hylist_hyhomog_un_un(int64_t a, int64_t b) {
@@ -9896,8 +10160,7 @@ __attribute__((unused)) static tur_adt_Option__int option_map__spec__tur_adt_Opt
     else { __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     tur_adt_Option__int __ret = __r ? (*(tur_adt_Option__int *)(__r)) : (tur_adt_Option__int){0};
-    if (!tur_async_suspended) dk_free(__root);
-    if (!tur_async_suspended) { if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark); }
+    __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
 static tur_adt_Option__int some__spec__tur_adt_Option__int_int64_t(int64_t x) {

@@ -1,0 +1,42 @@
+;; fn-value-call-cps-frames-held-until-outer-entry, effect half: a perform in
+;; a loop costs nothing that outlives its turn.
+;;
+;; A handler case that resumes its continuation once, in tail position, and
+;; uses it for nothing else (dk_handler_tail_inplace) now resumes the ORIGINAL
+;; chain in place.  It used to resume a copy of the chain up to the handle --
+;; and kept every turn's copy, the frames it copied and their envs until the
+;; outermost entry returned (~835 B a turn).  Run in place, the perform's frame
+;; and the loop's join run uncopied and are handed back as they run.  A
+;; `handle` entered every turn hands its handler group back too, once its
+;; continuation frame has run (__dk_group_release).
+;;
+;;   one-handle  -- a loop of performs under one handle, through a fn value
+;;   per-turn    -- a loop that opens a handle and performs inside it each turn
+;;
+;; Each prints the DK reap list's length at turns 10 and 900: the same at both
+;; (it used to grow by 5 and 6 entries a turn).  Leak-checked
+;; (requires.leak-check).
+
+(defeffect Ask [] int)
+
+(defn reap-len [] : int
+  ```c
+  return (int64_t)__dk_reap_n;
+  ```)
+
+(defn note [i : int] : int
+  (if (or (= i 10) (= i 900)) (do (println (reap-len)) 0) 0))
+
+(defn ask-plus [x : int] : int (+ x (perform (Ask))))
+(defn use1 [f : (fn [int] int) x : int] : int (f x))
+
+(defn one-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (one-loop (+ i 1) n (+ acc (note i) (use1 ask-plus i)))))
+
+(defn step [x : int] : int (handle (ask-plus x) (Ask [] k) (resume k 2)))
+(defn turn-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (turn-loop (+ i 1) n (+ acc (note i) (step i)))))
+
+(defn main [] : nil
+  (println (handle (one-loop 0 1000 0) (Ask [] k) (resume k 1)))   ;; 499500 + 1000
+  (println (turn-loop 0 1000 0)))                                  ;; 499500 + 2000

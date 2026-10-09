@@ -50,9 +50,10 @@ Ranked by what the fixes above cannot bound:
    `_run_timed` wraps the `"$TUR" ... jit "$input"` invocations; harness setup
    and any untimed compile/link is outside it. This was the archived report's
    own point 3 and is still the likeliest home for a 45-minute stall.
-2. **A `jit-ffi-*` case in `run-flags.sh`.** It had no timeout of any kind until
-   2026-09-28, and CI runs it in this leg precisely because it is the only
-   harness whose `jit-ffi-*` cases are not skipped.
+2. ~~**A `jit-ffi-*` case in `run-flags.sh`.**~~ **No longer this leg's:**
+   `tur_flags_tests` left it on 2026-10-04 (f2274b79) and runs in the `test`
+   job now that the JIT is the default. It had no timeout of any kind until
+   2026-09-28.
 3. **Runner size.** `macos-latest` hands out 3-core and 5-core machines and CI
    draws the 3-core one ~97% of the time; `tur_jit_fixture_tests` alone is
    ~730s median / ~940s p90 there. That explains 19 minutes, not 48, so it is
@@ -178,7 +179,8 @@ This is the second time this fixture has been killed by a slow draw; the
 than budgeted around. `r7rs-tail-calls` runs each loop 1e6 deep (4 s under the
 Debug JIT locally, against 23-25 s at 1e7) with a 30 s budget; the 1e7 version
 moved to `r7rs-tail-calls-stress` (`requires.stress`), which only the nightly
-arm64 workflow runs. 1e6 still asserts: the same procedures without the tail
+arm64 workflow runs. (Its budget has since gone to 180 s with the other 13
+heaviest r7rs fixtures, 893b0ec0.) 1e6 still asserts: the same procedures without the tail
 position overflow an 8 MB stack between 250,000 and 300,000 frames.
 
 Measured frequency, one entry per commit from `suite-timings-2026.jsonl` on
@@ -201,6 +203,45 @@ flake) and `fn-field-carrier-shim-read-typed` (resolved).
 `run-jit.sh` now prints the fixtures closest to their own budget in its
 summary, so the next bound to go marginal is visible while it still passes
 rather than when a slow draw kills it.
+
+## 2026-10-08: re-measured -- five quiet days, not yet long enough
+
+No new failure of this leg's suites on `main`, and no stall anywhere, since
+[run 37107254052](https://github.com/turmeric-lang/turmeric/actions/runs/37107254052).
+
+| source | after 37107254052 | result |
+| --- | --- | --- |
+| ci-metrics, `main` | 63 commits (58 on the 3-core draw, 5 on the 5-core) | 0 failed; 3-core p50 / p90 / max 952 / 1176 / 1664 s; 5-core p50 ~410 s |
+| Actions API, `main` + PRs | 170 jobs that ran `Run JIT suites` | 162 green, 7 cancelled, 1 red |
+
+- The red one is PR run 37221280353: `childhandle-linear -- stdout mismatch`,
+  69 s in. macOS has no `/bin/true`; fixed on the branch (4d499dd3) before
+  #1078 merged. A named failure, not a stall.
+- The 7 cancellations are superseding pushes or the 2026-10-03/04 queue
+  cancels, 273-940 s into the step -- every one below the p50. Four `main`
+  runs left no ci-metrics row for the same reason (cancelled 645-733 s in, or
+  before a runner was assigned), checked through the API.
+- The slowest pass, 1664 s on run 37277688268 (69% of `TIMEOUT`), is a
+  uniformly slow draw: `promise-linear` at 685 s, `thread-local-basic` at
+  1312 s, between the 10-01 fast and killed runs, no outsized gap.
+- Nothing reached the 2550 s alarm or `timeout-minutes: 60`.
+
+Per-fixture cost is flat (~0.30 s at the p50), but the corpus grew ~17% in
+three weeks (2973 -> 3484 passing), so the worst draw's ~1.45x headroom under
+`TIMEOUT` will narrow with it.
+
+The Linux JIT leg, for contrast, failed 21 of 73 commits in the same window,
+all of it the aborting-fixture timeouts already filed as
+[jit-linux-aborting-fixtures-time-out](jit-linux-aborting-fixtures-time-out.md);
+macOS shows none of it.
+
+Not seen: the uploaded `jit-ctest-log-macos-latest` artifacts and full log
+downloads (blob storage was unreachable from the measuring session), so the
+"closest to budget" block `run-jit.sh` now prints was not read.
+
+**Still open, on this report's own closure condition.** The last blind stall
+(2026-09-28) followed ~41 quiet days and 227+ `main` commits after the
+2026-08-18 fix; five days does not beat that. Re-measure from mid-November.
 
 ## What would close this
 

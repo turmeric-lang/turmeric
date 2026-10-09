@@ -1,0 +1,41 @@
+;; fn-value-call-cps-frames-held-until-outer-entry, effect half: an inner
+;; handler that tail-resumes, under an outer handler, with the outer effect
+;; performed from inside the inner handle's body.
+;;
+;; The compiled path used to resume the inner handler with a COPY of its
+;; continuation that ended at the handle, and queue the handle's own
+;; continuation to run later, after the copy settled.  An outer case that
+;; resumed non-tail then got its value back before that queued part had run --
+;; `(* 10 _)` below -- did its own work on it, and the queued part ran after,
+;; on the wrong value: 10060, where `--interpret` (and the language) says 1060.
+;; A one-shot tail resume now runs the original chain in place, which is the
+;; whole continuation, in order.
+;;
+;;   non-tail-outer  -- the shape above
+;;   tail-outer      -- the outer case tail-resumes too
+;;   two-inner       -- two inner handles nested, the outer effect from the
+;;                      innermost body
+;;   multishot-outer -- the outer case resumes twice
+
+(defeffect Ask [] int)
+(defeffect Out [] int)
+(defeffect Ask2 [] int)
+
+(defn inner [] : int
+  (handle (+ (perform (Ask)) (perform (Out)))
+    (Ask [] k) (resume k 1)))
+
+(defn two-inner [] : int
+  (handle (* 3 (handle (+ (perform (Ask)) (perform (Ask2)) (perform (Out)))
+                 (Ask [] k) (resume k 1)))
+    (Ask2 [] k) (resume k 20)))
+
+(defn main [] : nil
+  ;; non-tail-outer: (1 + 5) * 10 = 60, then 1000 + 60
+  (println (handle (* 10 (inner)) (Out [] k) (+ 1000 (resume k 5))))
+  ;; tail-outer: (1 + 5) * 10
+  (println (handle (* 10 (inner)) (Out [] k) (resume k 5)))
+  ;; two-inner: 3 * (1 + 20 + 5) = 78, then 1000 + 78
+  (println (handle (two-inner) (Out [] k) (+ 1000 (resume k 5))))
+  ;; multishot-outer: (1 + 1) * 10 + (1 + 2) * 10
+  (println (handle (* 10 (inner)) (Out [] ^multishot k) (+ (resume k 1) (resume k 2)))))

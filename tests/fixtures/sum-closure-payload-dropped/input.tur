@@ -1,0 +1,87 @@
+;; sum-closure-payload-never-dropped: a capturing closure held as the payload
+;; of a by-value Option/Result local was never released -- 24 B per
+;; construction -- although the same closure let-bound on its own, or stored
+;; in a by-value struct's fn field, is.  Now the local drops its live arm's
+;; closure at scope exit when it provably holds the env's only reference: the
+;; payload is a fresh capturing closure literal (scalar captures, no inline C)
+;; wrapped directly in the sum, and every use of the local is a `match` whose
+;; arm binders are only invoked, an argument to a tag predicate (`some?` /
+;; `none?` / `ok?` / `err?`), or an argument to a statically known callee whose
+;; body does the same with it (no inline C, cannot suspend).
+;;
+;; requires.leak-check: every shape here must be clean.  The shapes that must
+;; KEEP their closure are in sum-closure-payload-kept.
+;;
+;;   via-match  -- `(some <closure>)`, matched and called
+;;   via-ctor   -- `(Some <closure>)` written directly
+;;   via-result -- the Ok arm of a Result; the Err arm's int binder is returned
+;;   via-pred   -- `some?` first, then the match
+;;   in-loop    -- via-match 1000 times from a `while`
+;;   passed-on  -- handed to call-opt, which only matches and calls it
+;;   via-ap     -- `(ap ff fa)`: the stdlib Applicative[Option] instance
+;;   chained    -- handed to a helper that hands it to call-opt
+
+(defn via-match [k : int] : int
+  (let [bump k
+        ff (some (fn [x : int] : int (+ x bump)))]
+    (match ff
+      (Some f) (f 41)
+      (None) 0)))
+
+(defn via-ctor [k : int] : int
+  (let [ff (Some (fn [x : int] : int (* x k)))]
+    (match ff
+      (Some f) (f 6)
+      (None) 0)))
+
+(defn via-result [k : int] : int
+  (let [r : (Result (fn [int] int) int) (ok (fn [x : int] : int (- x k)))]
+    (match r
+      (Ok f) (f 100)
+      (Err e) e)))
+
+(defn via-pred [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (if (some? ff)
+      (match ff
+        (Some f) (f 1)
+        (None) 0)
+      -1)))
+
+(defn in-loop [n : int] : int
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i n)
+      (set! acc (+ acc (via-match i)))
+      (set! i (+ i 1)))
+    acc))
+
+(defn call-opt [o : (Option (fn [int] int)) v : int] : int
+  (match o
+    (Some f) (f v)
+    (None) 0))
+
+(defn passed-on [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (call-opt ff 10)))
+
+(defn via-ap [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))
+        fa (some 41)]
+    (unwrap-or (ap ff fa) 0)))
+
+(defn relay [o : (Option (fn [int] int))] : int (+ 1 (call-opt o 1)))
+
+(defn chained [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (relay ff)))
+
+(defn main [] : int
+  (println (via-match 1))       ;; 42
+  (println (via-ctor 7))        ;; 42
+  (println (via-result 58))     ;; 42
+  (println (via-pred 41))       ;; 42
+  (println (in-loop 1000))      ;; 499500 + 41000 = 540500
+  (println (passed-on 32))      ;; 42
+  (println (via-ap 1))          ;; 42
+  (println (chained 40))        ;; 1 + 41 = 42
+  0)

@@ -1,6 +1,16 @@
 # Carrier-riding sum Option/Result boxes have no automatic owner
 
-**Severity: medium (memory growth in long-lived carrier-path programs).**
+**Severity: low-medium -- downgraded from medium 2026-10-08** (see the
+re-measurement at the end). What is left is 408 B across 9 fixtures, from three
+consumers the compiler cannot see through. Only one of them grows with a
+running program: a user-written HKT-constrained generic (`[^Monad m ...]`)
+called from a concrete caller, at ~40-72 B a call. Nothing in `stdlib/` is
+such a generic (no `^Monad` / `^Applicative` / `^Functor` constraint on any
+stdlib defn); 40 fixtures are. The other two are code that erased the box
+itself (`:int` inline-C readers, a `ptr<void>` closure), which owns it by
+CLAUDE.md's own rule.
+
+**Original severity:** medium (memory growth in long-lived carrier-path programs).
 Filed 2026-08-27 during SR2b.
 
 **Narrowed 2026-08-27 (SR3 slice A):** `(none)` no longer allocates -- the
@@ -260,3 +270,136 @@ Also found while re-measuring, and filed separately: rewriting
 `catch-error`
 ([catch-error-ascribed-result-types-handler-by-value](../archive/catch-error-ascribed-result-types-handler-by-value.md)).
 That bug predates this work.
+
+## Re-measured 2026-10-08 -- unchanged, and the one growing row scoped
+
+Same sweep, same procedure (`docs/artifacts/rm1-erased-base-callers.txt`,
+built with `TUR_RUNTIME=source` and `-fsanitize=address`, run with
+`detect_leaks=1`, attributed by first non-allocator frame): **1857 B**, against
+2026-09-28's 1766.
+
+| Category | Rows | Bytes | vs 2026-09-28 |
+|---|---|---:|---|
+| **This report: a fixture's own `:int` inline-C reader or producer** | `hkt-stdlib-result-ok-biased` 64, `conv-defstruct-option-hkt-instance-bodies` 40, `hkt-stdlib-option-result-instances` 40, `typed-slots/coerce-carrier-to-struct` 32 | 176 | same |
+| **This report: dictionary dispatch inside a constrained generic** | `hkt-constrained-byvalue-bind-pure` 72, `hkt-constrained-hole-headed-instance-head` 64, `hkt-constrained-spec-reresolves-instance` 48, `hkt-constrained-byvalue-carrier` 32 | 216 | +16 (one more dict-clone spill in `hole-headed`) |
+| **This report: payload type erased through a `ptr<void>` closure** | `option-map-capturing-closure` | 16 | same |
+| Recursive spine (RM2) | `re-string` 516, `constrained-defn-cons-return-monomorphize` 432, `refined-nonempty` 80 | 1028 | same |
+| String payloads + rig | `option-niche-crossings` 226, `httpd-req-string-opt` 109, `option-niche-string` 22 | 357 | +75 |
+| Test rig | `typed/zipper-basic` | 64 | same |
+
+The `option-niche-crossings` growth is not this report's: 112 B of it is the
+fixture's two let-bound `Vec`s (`probe-vec`, `probe-push`), which it never
+`vec-free`s. Containers are not freed at scope exit, by design
+(memory-usage-guide). The `fn-value-call-cps-frames-held-until-outer-entry`
+fix of the same day frees DK join frames only and moves no row here.
+
+So this report's residue is **408 B** (392 + the extra `hole-headed`
+spill), plus the deliberate 16 B of `colored-generic-erased-carrier-param`,
+which `run-leak-check.sh` still reports as KNOWN against this file.
+
+### The dictionary-dispatch row: what a fix needs, measured against the C
+
+The rows come from Route B (`elab_call.c`, "constrained-hkt-lifted-lambda-
+keeps-representative-instance"). A direct call to an HKT-constrained generic at
+a concrete type constructor goes through a DICT CLONE that loads every method
+from a dictionary parameter. That is correct by construction, and it is
+exactly what hides the instance from the ownership analyses. In
+`bind_then_pure__dict_19__spec_..._Option__int` the clone allocates three
+things it cannot release:
+
+- a spill box for the by-value `x` handed to `bind` as a carrier;
+- the env of the `(fn [v] (pure (+ v 1)))` closure handed to `bind`;
+- and `bind`'s result carrier, which the caller's ascription bridge reads back
+  by value.
+
+**One fact makes a fix tractable that the 2026-09-28 note did not record:
+the clones are per CALL SITE, not shared.** Two calls with identical
+instances get `__dict_19` and `__dict_30`. At its Route B site each clone
+is called with exactly the instances in `insts[]`, so those could be recorded
+on the clone binding ("pinned"). Its dict-slot calls could then be resolved to
+the instance method at emit, the way `emit_reresolve_method_fndef` already
+resolves a monomorph's dispatch for `sum_box_drop_after_dyn`.
+
+Pinning alone does NOT make the frees sound, which is why it was not landed
+here:
+
+- The closure env can go once the pinned `bind`'s `nonretain_param_mask`
+  covers its fn parameter. Option's does (it only calls `f`); a State or Free
+  instance's `bind` returns a closure capturing `f`, so the mask is the only
+  safe key.
+- The spill box cannot simply be freed after the call either. A method may
+  hand its argument straight back as its result. Option's `bind` does not (it
+  answers a fresh `(none)`), but Option's own `alt-or` returns `x`, and a
+  user `bind` may return `ma`. So the free has to be keyed on the pinned
+  method's `nonretain_sum_param_mask`. That mask is set only when the method's
+  result is a non-pointer scalar, and a `bind`'s never is. The result's own
+  free belongs to the caller's bridge, which needs the clone to export a
+  freshness bit (`returns_fresh_sum_box`) it does not compute today.
+- A clone made by the nested-mapper lowering (`make_dict_clone` from the
+  `poly_wrap` path) takes AMBIENT dictionaries and must never be pinned.
+
+That is three new pieces of ownership plumbing, with a double free as the
+failure mode, for ~40-72 B a call on a path no stdlib function takes. It stays
+where this report always put it: end-to-end monomorphization, which deletes
+the boxes rather than owning them.
+
+## Investigated further 2026-10-08 -- the sweep under-counted; the rest is attributed
+
+**1. LeakSanitizer's default roots under-count this sweep.** Its default
+scans every stack and register, and a stale copy of a pointer in a dead frame
+keeps a leaked block "reachable". With `LSAN_OPTIONS=use_stacks=0:use_registers=0`
+the same sweep reads **1984 B** against 1857:
+
+| row | default | stack/register roots off |
+| --- | ---: | ---: |
+| `hkt-constrained-byvalue-bind-pure` | 72 | **112** (the second call's closure env and result box) |
+| `re-string` | 516 | 548 |
+| `httpd-req-string-opt` | 109 | 126 |
+| `option-niche-crossings` | 226 | 245 |
+| `option-niche-string` | 22 | 41 |
+
+Every other row is unchanged. `tests/run-leak-check.sh` runs with stack and
+register roots off from now on. Its 127 fixtures pass either way, so the gate
+cost nothing to tighten. Earlier rows in this report were measured with the
+default and may be low by the same mechanism.
+
+**2. The two `:int`-reader rows with a 24 B closure env are erasure after all.**
+A first pass on 2026-10-08 moved them to a new report. That was wrong:
+`conv-defstruct-option-hkt-instance-bodies` and
+`hkt-stdlib-option-result-instances` both build
+`(:: (some (:: (fn [x : int] : int (+ x bump)) int)) (Option int))`. The
+fixture erases the closure to `int` itself, to exercise the int carrier, so
+its env is the fixture's to own, like the `:int` readers beside it. The same
+investigation did find a real, separate gap: a closure held TYPED in a
+by-value Option/Result local was never released. It is
+[sum-closure-payload-never-dropped](sum-closure-payload-never-dropped.md),
+now fixed for the shapes ordinary code uses, but it does not touch these rows.
+
+So this report's own residue, measured with the stricter roots, is **448 B**:
+
+| Category | Bytes |
+| --- | ---: |
+| a fixture's own `:int` inline-C reader / erasing ascription | 176 |
+| dictionary dispatch inside a constrained generic | 256 |
+| `ptr<void>`-erased closure (`option-map-capturing-closure`) | 16 |
+
+plus `colored-generic-erased-carrier-param`'s known 16 B. Of these, only the
+dictionary-dispatch row is a compiler omission on code that erased nothing.
+
+**3. The dictionary-dispatch row, attributed per allocation** (bind-pure,
+roots off). Each Route B clone call leaks:
+
+- the spill box copying the by-value `x` for the dict-dispatched `bind`;
+- the env of the `(fn [v] (pure ...))` continuation, when `bind` takes the
+  `Some` path;
+- `pure`'s `Some` box, which `main`'s bridge reads back by value.
+
+The clones share one body (`make_dict_clone`, `cf->body = orig->body`, dict
+param bindings memoized on the original), so pinning a clone to its instances
+means either copying the body per clone or resolving each dict-slot call at
+emit. Neither existing mask can then key a free: `bind` returns a pointer, so
+its `nonretain_sum_param_mask` is never set, and its result is "fresh through
+its continuation param", which the clone does not export. The design note
+above stands. One more constraint is now on record: a sum-param mask says
+nothing about closures inside the sum (see the split-out report), so it
+cannot be reused for the continuation's env either.

@@ -1,5 +1,30 @@
 # turmeric-godot AOT: the staged build has no `godot-*` natives, so it cannot compile any real script
 
+**Severity: medium (AOT gaps) -- downgraded from high 2026-10-08.** The title
+is the ORIGINAL defect and no longer holds: since the 2026-09-09 progress note
+below, the stager wraps a script in a `defmodule` that imports `tg-godot`, the
+natives resolve at `dlopen`, and real scripts AOT-compile and run
+(`examples/paddle-pong-tur` passes its 200-frame behavioural test under AOT;
+`examples/aot-bench` runs at 215.9 ns/call against 298.4 interpreted). The
+interpreter path, the default, was never affected. What is left is a list of
+shapes the AOT route cannot compile yet -- each fails at build time, loudly,
+never as a wrong answer:
+
+- the variadic natives (`godot-call{,-v,-f,-b,-c}`, `godot-signal`,
+  `emit-signal`) -- AOT scripts use the `godot-callx-*` family instead;
+- the generated per-class facade (`label/set-text`, ...) is not staged;
+- `godot-connect-typed` (and the prelude's `timer/one-shot` / `after`);
+- `godot-export` inside a hand-written `defmodule` (TUR-E0711);
+- **Windows, not re-measured.** The fix relies on leaving the natives
+  undefined at link time (`-undefined dynamic_lookup` on macOS, the ELF
+  default on Linux). The 2026-09-08 section below measured that a PE DLL
+  cannot link with unresolved symbols at all, and the progress note was
+  measured on macOS only, so expect the staged build to still fail at `ld` on
+  Windows until it gets an import library or the JIT route.
+
+All of this lives in `turmeric-godot`; nothing in this repo needs to change
+for the first four. Details: "What remains" at the end of the progress note.
+
 > **INVESTIGATED 2026-09-07. Fix direction 3 below is WRONG and should not be
 > acted on.** It claims the JIT makes the problem "disappear rather than being
 > solved" because the natives are already in the host's address space. They are
@@ -246,14 +271,16 @@
 >   Cached per source-hash, so it is a cold-start cost, but it scales with
 >   script count.
 
-**Summary:** The AOT path stages a script into a transient project and compiles
+**Original summary (2026-08; superseded by the severity note at the top):**
+The AOT path stages a script into a transient project and compiles
 it with standalone `tur`. But every `godot-*` name is a C++ native the
 GDExtension registers into the *interpreter* env at run time, and standalone
 `tur` has never heard of any of them -- so the staged build fails at the first
 one with `unknown function or operator 'godot-export'`. Any script that touches
 the Godot API, which is every useful script, cannot be AOT-compiled.
 
-**Severity:** High for AOT. The interpreter path is unaffected and works.
+**Original severity:** High for AOT. The interpreter path is unaffected and
+works. (Medium since 2026-10-08 -- see the top of this report.)
 
 **Platform:** Not platform-specific. Found on Windows only because that is where
 the AOT path was first driven end to end; standalone `tur` has no `godot-*`
