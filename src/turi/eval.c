@@ -1300,6 +1300,11 @@ struct EvalFrame {
      * whose DK_CALL_RET may hand it back on return when it never escaped. */
     bool          escaped;
     bool          reclaimable;
+    /* r7rs-callcc-memory-never-freed: the capture epoch this frame was made
+     * in (g_turi_cont_epoch).  A re-entrant call/cc image can complete only
+     * activations that were live at its capture, so a frame made since the
+     * last capture is in no image and may still be handed back. */
+    uint32_t      epoch;
     /* A call frame's `owned` list: the let / match-arm frames created under it
      * (eval_frame_new_owned), released with it.  A let in tail position never
      * gets a completion of its own, so its frame can only go when the
@@ -1307,6 +1312,21 @@ struct EvalFrame {
     EvalFrame    *owned;
     EvalFrame    *owned_next;
 };
+
+/* r7rs-lang-plan T5 / r7rs-callcc-memory-never-freed: a re-entrant
+ * continuation (the R7RS prelude's call/cc, native_r7rs_cont_capture) is a
+ * copy of the C stack, and a re-entry completes again every activation that
+ * was live at the capture -- so nothing such an image can reach may be freed
+ * when its activation first ends.  `g_turi_cont_pinned` says a capture has
+ * happened (the driver's per-call temporaries then stay for the rest of the
+ * run, the interpreter's process-lifetime policy); `g_turi_cont_epoch`
+ * counts the captures.  A frame or a driver temporary stamped with the
+ * CURRENT epoch was made after the last capture: no image holds it, so it
+ * is handed back as if no capture had happened.  One stamped earlier is
+ * kept.  Nothing outside `#lang r7rs`'s call/cc captures, so no other
+ * program sees a difference: the pin is never set and every stamp matches. */
+static bool     g_turi_cont_pinned = false;
+static uint32_t g_turi_cont_epoch  = 0;
 
 static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
     /* Escaping payload: a closure can capture this frame and outlive the scope
@@ -1320,6 +1340,7 @@ static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
     f->dicts       = NULL;
     f->escaped     = false;
     f->reclaimable = false;
+    f->epoch       = g_turi_cont_epoch;
     f->owned       = NULL;
     f->owned_next  = NULL;
     return f;
@@ -1357,6 +1378,7 @@ static EvalFrame *eval_frame_new_call(TuriEnv *env, EvalFrame *parent) {
     f->dicts       = NULL;
     f->escaped     = false;
     f->reclaimable = true;
+    f->epoch       = g_turi_cont_epoch;
     f->owned       = NULL;
     f->owned_next  = NULL;
     return f;
@@ -7518,6 +7540,8 @@ typedef struct {
     const Expr *expr;   /* the EX_IF / EX_DO|EX_PROGRAM / EX_LET / EX_MAKE_STRUCT / EX_CALL */
     EvalFrame  *frame;  /* lexical env: DO/MAKE_STRUCT=enclosing; LET/MATCH=owned */
     uint32_t    index;  /* DO: next item; LET: next binding; MAKE_STRUCT: next field */
+    uint32_t    epoch;  /* g_turi_cont_epoch at the push (DRIVE_PUSH): a call/cc
+                         * image taken before it cannot hold this frame's `aux` */
     TuriValue   last;   /* DO/PROGRAM: last non-defer value; CALL_ARG: callee closure */
     void       *aux;    /* LET_BODY/CALL_RET: DeferItem* defer-stack mark;
                          * MAKE_STRUCT / *_ARG: TuriValue* heap accumulator */
@@ -7549,16 +7573,28 @@ typedef struct {
  * difference: the registry is two pointer stores per drive, and the pin is
  * never set.
  * ------------------------------------------------------------------------- */
-static bool g_turi_cont_pinned = false;
+/* g_turi_cont_pinned / g_turi_cont_epoch are defined beside the frame
+ * allocators (eval_frame_new_call), which stamp the epoch. */
 #define TURI_DRIVE_FREE(p) do { if (!g_turi_cont_pinned) free(p); } while (0)
+/* A temporary hanging off a driver frame (`.aux`, the argument accumulator
+ * malloc'd as the frame was pushed): freed unless a capture has happened
+ * since the push -- an image taken before it cannot hold it.  `ep` is the
+ * frame's epoch read BEFORE the leaf call that completes the frame: a
+ * capture inside that call re-enters here with `top` pointing at the work
+ * stack of the capture (since freed or moved), while a local is restored
+ * with the image and names the right epoch. */
+#define TURI_DRIVE_FREE_EP(ep, p) \
+    do { if (!g_turi_cont_pinned || (ep) == g_turi_cont_epoch) free(p); } while (0)
 
 /* turi-call-frames-never-reclaimed: an activation's DK_CALL_RET is done with
  * its call frame -- it returned, or a tail call replaced it.  Hand the frame
  * and its bindings back unless something may still reach them: the frame
  * escaped (frame_escape), it is not a call frame, a re-entrant continuation
- * exists (its stack image may complete this call again, the same reason
- * TURI_DRIVE_FREE stops freeing), or a debugger holds activation frames.
- * Its tyvar/dict pins go back too (tyvar_bind_alloc / dict_bind_alloc). */
+ * captured since the frame was made may complete this call again (its stack
+ * image holds the frame; r7rs-callcc-memory-never-freed -- a frame made
+ * after the last capture is in no image), or a debugger holds activation
+ * frames.  Its tyvar/dict pins go back too (tyvar_bind_alloc /
+ * dict_bind_alloc). */
 static void frame_release_one(TuriEnv *env, EvalFrame *f) {
     EvalBinding *b = f->bindings;
     while (b) {
@@ -7593,7 +7629,7 @@ static void frame_release_one(TuriEnv *env, EvalFrame *f) {
 }
 
 static void frame_release(TuriEnv *env, EvalFrame *f) {
-    if (!f || !f->reclaimable || f->escaped || g_turi_cont_pinned ||
+    if (!f || !f->reclaimable || f->escaped || f->epoch != g_turi_cont_epoch ||
         env->debugger || !turi_frame_reclaim_on())
         return;
     f->reclaimable = false;   /* a second release of the same frame is a no-op */
@@ -7661,7 +7697,7 @@ struct TuriContState {
     size_t      n_drives;
 };
 
-void turi_cont_pin(void) { g_turi_cont_pinned = true; }
+void turi_cont_pin(void) { g_turi_cont_pinned = true; g_turi_cont_epoch++; }
 
 TuriContState *turi_cont_state_capture(TuriEnv *env) {
     TuriContState *s = (TuriContState *)calloc(1, sizeof *s);
@@ -7828,6 +7864,7 @@ static EvalFrame *clone_frame_bindings(TuriEnv *env, EvalFrame *src, EvalFrame *
     nf->bindings = NULL;
     nf->escaped = true;        /* part of a resumed continuation slice */
     nf->reclaimable = false;
+    nf->epoch = g_turi_cont_epoch;
     nf->owned = nf->owned_next = NULL;
     /* Collect src bindings (head-first) then re-prepend in reverse to preserve
      * the original head-first order. */
@@ -8929,7 +8966,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             if (st != inl) free(st);                                           \
             st = ni; cap = ncap;                                              \
         }                                                                      \
-        st[len++] = (C);                                                       \
+        st[len] = (C);                                                         \
+        st[len++].epoch = g_turi_cont_epoch;                                   \
     } while (0)
 
     DriveReg drive_reg = { g_drive_regs, &st, &len, &cap, inl };   /* T5 */
@@ -10472,9 +10510,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             }
             case DK_CALL_ARG: {
                 TuriValue *acc = (TuriValue *)top->aux;
+                uint32_t acc_epoch = top->epoch;   /* before any leaf call: see TURI_DRIVE_FREE_EP */
                 uint32_t n = drive_call_n_args(top->expr);
                 bool is_dyn = top->expr->kind == EX_DYN_CALL;
-                if (signaled) { TURI_DRIVE_FREE(acc); len--; break; }
+                if (signaled) { TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break; }
                 if (n > 0) {
                     acc[top->index] = cur;
                     top->index++;
@@ -10495,7 +10534,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     const FnDef *vfd = (const FnDef *)cl->fn;
                     uint32_t want = (uint32_t)vfd->n_params - (cl->skip_env_param ? 1u : 0u);
                     TuriValue *packed = turi_pack_rest_args(env, acc, n, 0, want);
-                    if (packed) { TURI_DRIVE_FREE(acc); acc = packed; n = want; }
+                    if (packed) { TURI_DRIVE_FREE_EP(acc_epoch, acc); acc = packed; n = want; }
                 }
                 /* The runtime-tag re-dispatch that sat here
                  * (gde_reresolve_method_by_value) is retired -- the
@@ -10514,7 +10553,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         int64_t w = (n >= 2) ? acc[1].as_int : 0;
                         TuriValue forged;
                         bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
-                        TURI_DRIVE_FREE(acc);
+                        TURI_DRIVE_FREE_EP(acc_epoch, acc);
                         if (bad) { cur = forged; len--; break; }
                         ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                         int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
@@ -10527,7 +10566,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     /* Leaf: native / inline-C, dispatched inside eval_apply
                      * (no driver re-entry).  eval_apply copies args, so free. */
                     cur = eval_apply(env, cl, acc, n);
-                    TURI_DRIVE_FREE(acc); len--;
+                    TURI_DRIVE_FREE_EP(acc_epoch, acc); len--;
                     break;
                 }
                 /* Turi-body closure: shared prologue (arity + step-fuel checks,
@@ -10632,12 +10671,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                           fn->binding ? fn->binding->name->name : "<fn>",
                                           (unsigned)effective_params, (unsigned)(n - arg_base));
-                    TURI_DRIVE_FREE(acc); len--; break;
+                    TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break;
                 }
                 if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as the retired eval_apply_inner charged it */
                     if (env->step_fuel == 0) {
                         cur = turi_error("eval: step fuel exhausted");
-                        TURI_DRIVE_FREE(acc); len--; break;
+                        TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break;
                     }
                     env->step_fuel--;
                 }
@@ -10646,7 +10685,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     frame_bind(env, call_frame,
                                fn->params[param_offset + i]->name->name,
                                turi_copy_byvalue_struct_arg(env, acc[arg_base + i]));
-                TURI_DRIVE_FREE(acc);
+                TURI_DRIVE_FREE_EP(acc_epoch, acc);
                 /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
                  * just bound as ordinary int args carry TypeClassInstance
                  * pointers (the EX_DICT address-only value).  Record them as
@@ -10827,7 +10866,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 const BuiltinSpec *spec = be->as.builtin.spec;
                 uint32_t           n    = be->as.builtin.n;
                 TuriValue         *acc  = (TuriValue *)top->aux;  /* NULL if short-circuit */
-                if (signaled) { if (acc) TURI_DRIVE_FREE(acc); len--; break; }
+                uint32_t           acc_epoch = top->epoch;
+                if (signaled) { if (acc) TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break; }
                 if (spec->shape == BS_AND_SC) {
                     if (!turi_is_truthy(cur)) { cur = turi_bool(false); len--; break; }
                 } else if (spec->shape == BS_OR_SC) {
@@ -10854,7 +10894,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
                     TuriValue forged;
                     bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
-                    TURI_DRIVE_FREE(acc);
+                    TURI_DRIVE_FREE_EP(acc_epoch, acc);
                     if (bad) { cur = forged; len--; break; }
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
@@ -10864,13 +10904,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     have_apply = true;   /* result returns to this DK_CONT_FOLD */
                 } else {
                     cur = eval_builtin(env, spec, acc, n);
-                    TURI_DRIVE_FREE(acc); len--;
+                    TURI_DRIVE_FREE_EP(acc_epoch, acc); len--;
                 }
                 break;
             }
             case DK_MAKE_STRUCT: {
                 TuriValue *fields = (TuriValue *)top->aux;
-                if (signaled) { TURI_DRIVE_FREE(fields); len--; break; }  /* abandon, propagate */
+                uint32_t   fields_epoch = top->epoch;
+                if (signaled) { TURI_DRIVE_FREE_EP(fields_epoch, fields); len--; break; }  /* abandon, propagate */
                 const Expr *me = top->expr;
                 uint32_t    n  = me->as.make_struct_.n_fields;
                 fields[top->index] = cur;
@@ -10881,7 +10922,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else {
                     /* make_struct_val_def copies the fields, so free after. */
                     cur = make_struct_val_def(env, "<struct>", n, fields);
-                    TURI_DRIVE_FREE(fields);
+                    TURI_DRIVE_FREE_EP(fields_epoch, fields);
                     len--;  /* pop; keep returning the struct value */
                 }
                 break;
@@ -14794,6 +14835,7 @@ static EvalFrame *promo_copy_frame(TuriEnv *env, EvalFrame *f, PromoMap *fwd) {
     nf->tyvars   = promo_copy_tyvars(env, f->tyvars, fwd);
     nf->escaped     = true;    /* promoted: reachable from a survivor */
     nf->reclaimable = false;
+    nf->epoch       = g_turi_cont_epoch;
     nf->owned = nf->owned_next = NULL;
     return nf;
 }
