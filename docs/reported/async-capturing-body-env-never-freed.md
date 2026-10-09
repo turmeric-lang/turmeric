@@ -1,5 +1,25 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed a fifth time 2026-10-09: the future of an awaited fresh spawn is
+freed too.** `(await (async ...))` names its `TurFuture` nowhere else, and
+no stdlib call frees a raw spawn future (`future-free` is the typed
+Promise/Future cell's), so every such expression leaked its 56 bytes
+(`tur_future_new`, the calloc this report's measurements set aside as "the
+program never frees"). The await owns that future now: the emitter marks it
+at the await (`__tur_await_own`, `src/compiler/emit_module.c`; the direct
+emitter's `EX_AWAIT` and the CPS `emit_await`, through a `fresh_fut` flag
+`build_await` sets when the awaited expression is a spawn written there),
+and whichever reader takes its value frees it right after --
+`tur_await_future`, `__tur_await_value` on the CPS fast paths,
+`__tur_await_body` when the shift finds it done, and the park's
+`__tur_async_resume` (the value arrives as its argument; `tur_future_fulfill`,
+its caller, touches the future no further). A thread-backed future is joined
+before any reader reads. A future the program holds (`(let [f (async ...)]
+...)`, the fixtures' `drive`) stays the program's. Pinned by
+`tests/fixtures/await-fresh-spawn-future-freed` (leak-checked: the three
+CPS await paths, a struct capture, a captureless body, a float payload, 200
+spawns from a loop, and `main`'s direct-style awaits).
+
 **Narrowed a fourth time 2026-10-09: a lambda bound to a local first.**
 `(let [body (fn [] ... k ...)] (await (async body)))` leaked the box (32 B a
 spawn): the let could not drop it -- the body may still be running, parked --
@@ -93,9 +113,10 @@ Direct leak of 32 byte(s) in 1 object(s) allocated from:
     #1 ... in main__cps ...   <- the env box `malloc(sizeof(void *) + sizeof(struct __env_N))`
 ```
 
-(The 56-byte `tur_future_new` leak in the same report is the future itself,
-which this program never frees. A program that frees its futures, like the
-fixtures' `drive`, shows only the env.)
+(The 56-byte `tur_future_new` leak in the same report was the future itself,
+which this program could not free; since the fifth narrowing above the
+await frees it. A program that holds its futures, like the fixtures'
+`drive`, frees them itself and shows only the env.)
 
 ## Root cause
 

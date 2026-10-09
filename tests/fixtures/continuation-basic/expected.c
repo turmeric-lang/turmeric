@@ -3746,7 +3746,18 @@ struct TurFuture {
     FiberBlock *fiber;  /* The fiber running the async task */
     struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;
     void *thread;       /* pthread_t * of a thread-backed async; joined by await */
+    int owned_by_await; /* an `(await (async ...))`: freed by the reader that takes its value */
 };
+
+static void tur_future_free(TurFuture *f);
+__attribute__((unused)) static void __tur_await_own(void *fp) {
+    if (fp) ((TurFuture *)fp)->owned_by_await = 1;
+}
+static int64_t __tur_future_take(TurFuture *f) {
+    int64_t v = f->value;
+    if (f->owned_by_await) tur_future_free(f);
+    return v;
+}
 
 /* Create a new pending future */
 static TurFuture *tur_future_new(void) {
@@ -3992,9 +4003,10 @@ static int64_t tur_await_future(TurFuture *f) {
              * result: with a catch-unwind in scope this is catchable, and
              * with none tur_panic prints the task's message and aborts. */
             tur_panic(f->error ? f->error : "async task panicked");
+            if (f->owned_by_await) tur_future_free(f);
             return 0;
         }
-        return f->value;
+        return __tur_future_take(f);
     }
     /* Future not ready */
     if (!tur_current_fiber) {
@@ -4015,19 +4027,21 @@ static int64_t tur_await_future(TurFuture *f) {
         /* When we resume, the future should be done */
         if (tur_future_done(f) && f->status == FUTURE_REJECTED) {
             tur_panic(f->error ? f->error : "async task panicked");
+            if (f->owned_by_await) tur_future_free(f);
             return 0;
         }
-        return f->value;
+        return __tur_future_take(f);
     }
     if (f->status == FUTURE_REJECTED) {
         fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
         abort();
     }
-    return f->value;
+    return __tur_future_take(f);
 }
 
 static void __tur_async_resume(TurFuture *inner, int64_t value) {
     TurAsyncPark *rec = (TurAsyncPark *)inner->on_complete.env;
+    if (inner->owned_by_await) tur_future_free(inner);
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;
     __dk_entry_depth++;
@@ -4074,7 +4088,7 @@ __attribute__((unused)) static int __tur_await_ready(void *fp) {
 }
 
 __attribute__((unused)) static intptr_t __tur_await_value(void *fp) {
-    return (intptr_t)((TurFuture *)fp)->value;
+    return (intptr_t)__tur_future_take((TurFuture *)fp);
 }
 
 __attribute__((unused)) static int __tur_future_pending(void *fp) {
@@ -4090,9 +4104,10 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
             /* Same re-raise as tur_await_future; the resumed continuation
              * sees tur_panicking and unwinds through its own checks. */
             tur_panic(f->error ? f->error : "async task panicked");
+            if (f->owned_by_await) tur_future_free(f);
             return dk_invoke(subk, 0);
         }
-        return dk_invoke(subk, f->value);
+        return dk_invoke(subk, __tur_future_take(f));
     }
     /* cps-async graduation: a pending future backed by a RUNNABLE scheduler
      * fiber (e.g. a fiber spawned via tur_scheduler_spawn, or a TaskGroup
@@ -4110,7 +4125,7 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
                 fprintf(stderr, "await: future rejected: %s\n", f->error ? f->error : "unknown");
                 abort();
             }
-            return dk_invoke(subk, f->value);
+            return dk_invoke(subk, __tur_future_take(f));
         }
     }
     if (tur_async_body_depth >= 0 && __dk_entry_depth != tur_async_body_depth) {

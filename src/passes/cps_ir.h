@@ -285,7 +285,11 @@ struct CTerm {
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;
          * body = the continuation.  Emitted as a dk_shift whose body is the fixed
          * __tur_await_body runtime helper (resume-if-ready / park-if-pending). */
-        struct { CAtom fut; CVar x; CTerm *body; }                       await;
+        /* fresh_fut: the awaited expression is a spawn written at the await,
+         * `(await (async ...))`, so nothing else names the future and the
+         * await owns it (emit_await marks it with __tur_await_own; the reader
+         * that takes its value frees it). */
+        struct { CAtom fut; CVar x; CTerm *body; bool fresh_fut; }       await;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
         /* reap_env: e is a freeable, provably-non-escaping capturing closure
          * whose heap fat-env the direct emitter does NOT free at this leaf

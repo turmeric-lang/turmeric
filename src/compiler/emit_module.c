@@ -16230,7 +16230,26 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *fiber;  /* The fiber running the async task */\n");
     buf_puts(out, "    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;\n");
     buf_puts(out, "    void *thread;       /* pthread_t * of a thread-backed async; joined by await */\n");
+    buf_puts(out, "    int owned_by_await; /* an `(await (async ...))`: freed by the reader that takes its value */\n");
     buf_puts(out, "};\n\n");
+    /* await-of-fresh-spawn-future-never-freed: the future of `(await (async
+     * ...))` is named by nothing but that await -- no stdlib call frees a raw
+     * spawn future, so every such expression leaked its 56 bytes.  The emitter
+     * marks it at the await (__tur_await_own; both back ends), and whichever
+     * reader hands its value to the continuation frees it right after:
+     * tur_await_future, __tur_await_value, __tur_await_body, and the park's
+     * __tur_async_resume.  Each reads the value out first; a thread-backed
+     * future is joined before any of them reads.  Never set on a future the
+     * program holds (`(let [f (async ...)] ...)`), which stays the program's. */
+    buf_puts(out, "static void tur_future_free(TurFuture *f);\n");
+    buf_puts(out, "__attribute__((unused)) static void __tur_await_own(void *fp) {\n");
+    buf_puts(out, "    if (fp) ((TurFuture *)fp)->owned_by_await = 1;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int64_t __tur_future_take(TurFuture *f) {\n");
+    buf_puts(out, "    int64_t v = f->value;\n");
+    buf_puts(out, "    if (f->owned_by_await) tur_future_free(f);\n");
+    buf_puts(out, "    return v;\n");
+    buf_puts(out, "}\n\n");
     
     buf_puts(out, "/* Create a new pending future */\n");
     buf_puts(out, "static TurFuture *tur_future_new(void) {\n");
@@ -16605,9 +16624,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "             * result: with a catch-unwind in scope this is catchable, and\n");
     buf_puts(out, "             * with none tur_panic prints the task's message and aborts. */\n");
     buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            if (f->owned_by_await) tur_future_free(f);\n");
     buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
-    buf_puts(out, "        return f->value;\n");
+    buf_puts(out, "        return __tur_future_take(f);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* Future not ready */\n");
     buf_puts(out, "    if (!tur_current_fiber) {\n");
@@ -16628,15 +16648,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        /* When we resume, the future should be done */\n");
     buf_puts(out, "        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            if (f->owned_by_await) tur_future_free(f);\n");
     buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
-    buf_puts(out, "        return f->value;\n");
+    buf_puts(out, "        return __tur_future_take(f);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    if (f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "        fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    return f->value;\n");
+    buf_puts(out, "    return __tur_future_take(f);\n");
     buf_puts(out, "}\n\n");
 
     /* async-parked-body-chains-never-reaped: the resume runs as a CPS entry
@@ -16652,6 +16673,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * leaves it (__dk_entry_leave). */
     buf_puts(out, "static void __tur_async_resume(TurFuture *inner, int64_t value) {\n");
     buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)inner->on_complete.env;\n");
+    /* The awaited future's value arrived as `value`; an await-owned one
+     * (__tur_await_own) is done with here.  tur_future_fulfill, the caller,
+     * touches `inner` no further, and its own caller handed the pointer to
+     * this await alone (a fresh spawn's; a re-park carries it as `outer`). */
+    buf_puts(out, "    if (inner->owned_by_await) tur_future_free(inner);\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    __dk_entry_depth++;\n");
@@ -16716,7 +16742,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return f->status == FUTURE_FULFILLED;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "__attribute__((unused)) static intptr_t __tur_await_value(void *fp) {\n");
-    buf_puts(out, "    return (intptr_t)((TurFuture *)fp)->value;\n");
+    buf_puts(out, "    return (intptr_t)__tur_future_take((TurFuture *)fp);\n");
     buf_puts(out, "}\n\n");
     /* async-repeated-park-holds-frames-until-settle: asked once an await's
      * shift has returned.  Only the shift's own park leaves the awaited future
@@ -16744,9 +16770,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            /* Same re-raise as tur_await_future; the resumed continuation\n");
     buf_puts(out, "             * sees tur_panicking and unwinds through its own checks. */\n");
     buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            if (f->owned_by_await) tur_future_free(f);\n");
     buf_puts(out, "            return dk_invoke(subk, 0);\n");
     buf_puts(out, "        }\n");
-    buf_puts(out, "        return dk_invoke(subk, f->value);\n");
+    buf_puts(out, "        return dk_invoke(subk, __tur_future_take(f));\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* cps-async graduation: a pending future backed by a RUNNABLE scheduler\n");
     buf_puts(out, "     * fiber (e.g. a fiber spawned via tur_scheduler_spawn, or a TaskGroup\n");
@@ -16764,7 +16791,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "                fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
     buf_puts(out, "                abort();\n");
     buf_puts(out, "            }\n");
-    buf_puts(out, "            return dk_invoke(subk, f->value);\n");
+    buf_puts(out, "            return dk_invoke(subk, __tur_future_take(f));\n");
     buf_puts(out, "        }\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    if (tur_async_body_depth >= 0 && __dk_entry_depth != tur_async_body_depth) {\n");

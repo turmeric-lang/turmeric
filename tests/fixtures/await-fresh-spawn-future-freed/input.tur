@@ -1,0 +1,50 @@
+;; await-of-fresh-spawn-future-never-freed: `(await (async ...))` names its
+;; future nowhere else, and no stdlib call frees a raw spawn future, so every
+;; such expression leaked its 56 bytes.  The await owns that future now
+;; (__tur_await_own, both back ends) and the reader that takes its value frees
+;; it: the direct emitter's tur_await_future (main is direct-style), the CPS
+;; fast paths (__tur_await_value) and the shift body (__tur_await_body).  A
+;; future the program holds in a local stays the program's.  Leak-checked.
+(defstruct P [a : int b : int])
+
+;; CPS, the await in tail position (the trivial path)
+(defn tail-await [k : int] : int
+  (await (async (fn [] : int (* k 2)))))
+
+;; CPS, a straight-line continuation (a value-transform frame)
+(defn plus-await [k : int] : int
+  (+ 1 (await (async (fn [] : int (* k 3))))))
+
+;; CPS, two awaits (the bounded full continuation)
+(defn two-awaits [k : int] : int
+  (let [a (await (async (fn [] : int (+ k 1))))
+        b (await (async (fn [] : int (+ k 2))))]
+    (+ a b)))
+
+;; a struct capture in the body
+(defn struct-body [k : int] : int
+  (let [p (P k 1)]
+    (await (async (fn [] : int (+ (.a p) (.b p)))))))
+
+;; a captureless body
+(defn bare-body [] : int
+  (await (async (fn [] : int 41))))
+
+;; a float payload, read back at its type
+(defn float-body [x : float] : float
+  (await (async (fn [] : float (* x 2.5)))))
+
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (tail-await i)))))
+
+(defn main [] : int
+  (println (tail-await 5))
+  (println (plus-await 5))
+  (println (two-awaits 5))
+  (println (struct-body 40))
+  (println (bare-body))
+  (println (float-body 3.1))
+  (println (lp 200 0))
+  ;; main itself is direct-style: tur_await_future takes the value
+  (println (+ (await (async (fn [] : int 7))) (await (async (fn [] : int 8)))))
+  0)

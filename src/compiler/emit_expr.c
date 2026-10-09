@@ -16352,6 +16352,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (await fut) — await a future using shift + scheduler callback */
             char *fut_val = emit_value(ctx, body, e->as.await_.fut_expr);
             char *tmp = fresh_tmp(ctx);
+            /* await-of-fresh-spawn-future-never-freed: a spawn written at the
+             * await -- `(await (async ...))` -- is named by nothing else, so the
+             * await owns its future and the reader frees it (__tur_await_own,
+             * emit_module.c).  A future the program holds is left to it. */
+            const Expr *fx = e->as.await_.fut_expr;
+            while (fx && fx->kind == EX_ASCRIBE) fx = fx->as.ascribe_.inner;
+            if (fx && fx->kind == EX_ASYNC) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "__tur_await_own((void *)(intptr_t)%s);\n", fut_val);
+            }
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t %s = tur_await_future((TurFuture*)(intptr_t)%s);\n", tmp, fut_val);
             free(fut_val);

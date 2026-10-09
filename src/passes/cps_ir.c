@@ -2739,6 +2739,10 @@ static CTerm *build_await(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     t->as.await.fut = atomize(b, e->as.await_.fut_expr, p);
     t->as.await.x = x;
     t->as.await.body = cont;
+    /* await-of-fresh-spawn-future-never-freed: a spawn written at the await
+     * is the await's to free (see cps_ir.h). */
+    const Expr *fx = ascribe_peel(e->as.await_.fut_expr);
+    t->as.await.fresh_fut = fx && fx->kind == EX_ASYNC;
     return t;
 }
 

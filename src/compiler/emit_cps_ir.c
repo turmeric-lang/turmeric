@@ -12051,6 +12051,12 @@ static void emit_await(CE *ce, const CTerm *t) {
      * straight after a label. */
     ce_line(ce, "{");
     ce->indent += 4;
+    /* await-of-fresh-spawn-future-never-freed: a spawn written at the await is
+     * the await's to free; the reader that takes its value does
+     * (__tur_await_value on the fast paths, __tur_await_body / the park's
+     * resume otherwise -- emit_module.c). */
+    if (t->as.await.fresh_fut)
+        ce_line(ce, "__tur_await_own((void *)(%s));", fsa);
     if (await_cont_trivial(t)) {
         ce_line(ce, "if (__tur_await_ready((void *)(%s))) return dk_run(%s, __tur_await_value((void *)(%s)));",
                 fsa, ce->cur_k, fsa);
