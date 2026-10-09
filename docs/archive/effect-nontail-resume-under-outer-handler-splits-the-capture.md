@@ -98,8 +98,13 @@ copying the enclosing handlers. That copy walks the rest of the chain, which
 under these cases grows a frame a turn (the case's pending rest), so without
 it a loop of 64,000 non-tail resumes under one handle took 61 s; with it,
 0.09 s. A loop of 100,000 used to die of C-stack overflow (`dk_invoke` nested
-a few C frames a turn); at -O2 the resume is a tail call now and it runs, in
-112 MB -- what the turn keeps is
+a few C frames a turn). Since nothing in the case runs after such a resume,
+`dk_resume_into` yields the chain to the trampoline driver when there is one,
+as a tail resume does, so the turns take no C stack: 100,000 turns run in
+104 MB and 1,000,000 in 1 GB, and 20,000 under an ASan `-O1` build (which
+overflowed the stack at that count before the yield). What is left nesting is the
+final delivery through the chain of resume-frames, at `-O0`. What the turn
+keeps is
 [effect-nontail-resume-copies-held-until-outer-entry](../reported/effect-nontail-resume-copies-held-until-outer-entry.md).
 
 Also fixed by it: shape 2 of
@@ -112,4 +117,4 @@ is resumed there.
 
 Pinned by `tests/fixtures/effect-nontail-resume-under-outer` (non-tail,
 multi-shot, branching, re-performing, re-opening, shallow and float cases, and
-a 2,000-turn loop; leak-checked) and `await-below-evicted-caller-or-nontail-resume`.
+a 20,000-turn loop; leak-checked) and `await-below-evicted-caller-or-nontail-resume`.

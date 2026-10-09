@@ -21,7 +21,7 @@
 ;;                       continuation
 ;;   shallow-inner    -- a shallow inner handle
 ;;   float-inner      -- a float through the resume and the case's rest
-;;   ticks            -- 2000 non-tail resumes under one handle, each turn's
+;;   ticks            -- 20000 non-tail resumes under one handle, each turn's
 ;;                       rest a frame on the chain; a turn copies no
 ;;                       enclosing-handler markers, so it stays O(1) as the
 ;;                       chain grows
@@ -89,5 +89,5 @@
   (println (handle (* 10 (shallow-inner)) (Out [] k) 42))
   ;; float-inner: 2 * (7.1 + 0.25) = 14.7
   (println (float-inner))
-  ;; ticks: 2000 * 1
-  (println (handle (ticks 2000 0) (Ask [] k) (+ 0 (resume k 1)))))
+  ;; ticks: 20000 * 1
+  (println (handle (ticks 20000 0) (Ask [] k) (+ 0 (resume k 1)))))

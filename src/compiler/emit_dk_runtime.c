@@ -1406,7 +1406,16 @@ void emit_cps_runtime_prelude(Buf *out) {
      * copy of `sub` up to its `resume_cut`, then `tail` -- a resume-frame for
      * the rest of the case whose next is the handle's real continuation, or,
      * for a tail resume, that continuation itself (`borrow`).  The case
-     * delivers its own value (case_delivers), so nothing runs after it. */
+     * delivers its own value (case_delivers), so nothing runs after it --
+     * which is what lets the resume yield the chain to the trampoline driver
+     * (as a tail resume does, dk_tail_resume) instead of running it nested: a
+     * loop of non-tail resumes then takes no C stack per turn for the turns
+     * themselves.  The chain is registered for the boundary reap BEFORE it
+     * runs, whoever runs it, and marked so the driver neither frees nor keeps
+     * it: registered after (by the driver, on a later yield) it sat above
+     * what its run registered and kept the last-entry hand-backs
+     * (__dk_join_release_node, __dk_group_release) from taking them -- 12%
+     * more peak on a loop opening a handle a turn. */
     buf_puts(out,
 "__attribute__((unused))\n"
 "static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {\n"
@@ -1420,7 +1429,12 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    DK *last = c;\n"
 "    while (last->next) last = last->next;\n"
 "    last->next = tail; last->borrow_next = borrow != 0;\n"
-"    __dk_reap_keep(c);   /* a tail resume inside may yield past this frame */\n"
+"    __dk_reap_keep(c);\n"
+"    if (g_dk_driver) {   /* nothing is left to do here: let the driver run it */\n"
+"        c->inplace_head = true;   /* owned by the reap entry above, not the driver */\n"
+"        g_dk_resume_chain = c; g_dk_resume_val = v;\n"
+"        TUR_LONGJMP(*g_dk_driver);\n"
+"    }\n"
 "    return dk_run(c, v);\n"
 "}\n");
     buf_puts(out,

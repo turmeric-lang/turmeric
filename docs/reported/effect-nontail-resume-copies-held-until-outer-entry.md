@@ -30,8 +30,8 @@ About 1,500 B a turn (1,750 before resume-into, 2,250 before 2026-10-09). A
 loop of performs under one handle whose case is `(+ 0 (resume k 1))` costs
 ~1.1 KB a turn. Part of that is inherent there -- each turn's `(+ 0 _)` waits
 for the whole loop, a resume-frame and its env -- and the rest is the copies.
-That loop no longer nests C frames a turn at -O2 (100,000 turns used to die of
-stack overflow); under ASan's -O0-ish frames it still does.
+That loop no longer nests C frames a turn: the resume yields its chain to the
+trampoline driver (100,000 turns used to die of stack overflow).
 
 ## Where it comes from
 

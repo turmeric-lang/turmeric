@@ -2746,7 +2746,12 @@ static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {
     DK *last = c;
     while (last->next) last = last->next;
     last->next = tail; last->borrow_next = borrow != 0;
-    __dk_reap_keep(c);   /* a tail resume inside may yield past this frame */
+    __dk_reap_keep(c);
+    if (g_dk_driver) {   /* nothing is left to do here: let the driver run it */
+        c->inplace_head = true;   /* owned by the reap entry above, not the driver */
+        g_dk_resume_chain = c; g_dk_resume_val = v;
+        TUR_LONGJMP(*g_dk_driver);
+    }
     return dk_run(c, v);
 }
 /* ---- E7: trampolined tail-resume (cps-tramp-resume) -------------------- *
