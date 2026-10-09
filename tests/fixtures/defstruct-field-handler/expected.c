@@ -2135,6 +2135,8 @@ struct DK {
     DKKind kind; DKFrame fn; intptr_t env; int tag;
     DKBody body; intptr_t body_env;
     DKHandler handler; intptr_t handler_env; bool shallow;
+    bool tail_inplace; bool inplace_head;
+    bool group_end;
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
     bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
     bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */
@@ -2196,6 +2198,11 @@ __attribute__((unused))
 static DK *dk_frame_resume_borrow(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_frame_resume(fn, env, next); k->borrow_next = true; return k;
 }
+/* A `handle`'s continuation frame (emit_handle): see __dk_group_release. */
+__attribute__((unused))
+static DK *dk_frame_resume_group_end(DKResumeFrame fn, intptr_t env, DK *next) {
+    DK *k = dk_frame_resume_borrow(fn, env, next); k->group_end = true; return k;
+}
 static DK *dk_prompt(int tag, DK *next) {
     DK *k = dk_new(DKK_PROMPT, next); k->tag = tag; return k;
 }
@@ -2226,6 +2233,12 @@ static DK *dk_case_delivers(DK *k) { k->case_delivers = true; return k; }
  * driver instead of resuming inline, keeping deep effectful recursion flat. */
 static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
     DK *k = dk_handler_impl(tag, fn, env, false, next); k->tail_resume = true; return k;
+}
+/* A dk_handler_tail whose case uses its continuation only for that one tail
+ * resume (emit_handle, case_resumes_k_only_in_tail): see dk_perform. */
+__attribute__((unused))
+static DK *dk_handler_tail_inplace(int tag, DKHandler fn, intptr_t env, DK *next) {
+    DK *k = dk_handler_tail(tag, fn, env, next); k->tail_inplace = true; return k;
 }
 /* Re-opening: stamp the maximal run of consecutive DKK_HANDLER nodes starting at
  * `head` (exactly ONE handle's sibling cases -- the run ends at this handle's
@@ -2287,6 +2300,7 @@ static DK *dk_copy_node(const DK *n) {
     c->body = n->body; c->body_env = n->body_env;
     c->handler = n->handler; c->handler_env = n->handler_env; c->shallow = n->shallow;
     c->tail_resume = n->tail_resume;
+    c->tail_inplace = n->tail_inplace;
     c->hgroup = n->hgroup;
     c->case_delivers = n->case_delivers;
     c->rfn = n->rfn; return c;
@@ -2615,6 +2629,37 @@ __attribute__((unused)) static void __dk_await_release(DK *s, DK *f, int parked)
     __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
     free((void *)fe);
 }
+/* fn-value-call-cps-frames-held-until-outer-entry, effect half: a `handle`
+ * registers its handler group -- the case handlers, then its continuation
+ * frame `end` -- as one chain (__dk_reap_keep), held until the outermost
+ * entry.  When the ORIGINAL `end` runs, the handle has exited: only copies of
+ * the group ever run again, and a copy shares nothing with the original but
+ * `end`'s env.  So it is handed back when it is the list's last entry and
+ * `end` was never copied (its env is then unshared, and the frame function
+ * releases it, as a join's does). */
+__attribute__((unused)) static bool __dk_group_release(DK *end) {
+    size_t n = __dk_reap_n;
+    if (tur_dk_pinned || end->ncopy || !n || __dk_reap_kind[n - 1] != 1) return false;
+    DK *h = (DK *)__dk_reap_v[n - 1];
+    intptr_t envs[16]; int ne = 0; bool envs_free = true;
+    const DK *p = h;
+    for (; p && p != end && p->kind == DKK_HANDLER; p = p->next) {
+        if (p->ncopy) envs_free = false;   /* a copy shares its handler env */
+        if (ne < 16) envs[ne++] = p->handler_env; else envs_free = false;
+    }
+    if (p != end) return false;
+    __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+    dk_free(h);   /* stops after `end`: its next is borrowed */
+    /* The case envs were registered right before the group, in case order
+     * (emit_handle): they come off the top in reverse, while they match. */
+    for (int i = ne - 1; envs_free && i >= 0; i--) {
+        if (!envs[i]) continue;
+        if (!n || __dk_reap_v[n - 1] != (void *)envs[i] || __dk_reap_kind[n - 1] != 0) break;
+        __dk_reap_v[n - 1] = NULL; __dk_reap_n = --n;
+        free((void *)envs[i]);
+    }
+    return true;
+}
 __attribute__((unused)) static void __dk_join_release_env(intptr_t env) {
     size_t n = __dk_reap_n;
     if (tur_dk_pinned || !env || !n || __dk_reap_v[n - 1] != (void *)env
@@ -2631,15 +2676,20 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
              * handler returned by signal; the rest of the chain is the rest of the
              * program past the panic and must not run.  Its nodes are reap-owned. */
             case DKK_FRAME: {
-                DK *self = k;
+                DK *self = k; intptr_t senv = k->env;
                 v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;
-                if (self->join_once) __dk_join_release_node(self);
+                /* The fn is done with its env, so it can follow the node. */
+                if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);
                 break;
             }
             case DKK_RESUME_FRAME:
                 if (k->join_once) {
                     DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
                     if (__dk_join_release_node(k)) return rf(renv, v, rest);
+                }
+                if (k->group_end) {
+                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
+                    if (__dk_group_release(k)) return rf(renv, v, rest);
                 }
                 return k->rfn(k->env, v, k->next);
             case DKK_SHIFT:
@@ -2746,9 +2796,10 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
+        bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */
         if (TUR_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
-            __dk_reap_keep(ch);
+            if (own) __dk_reap_keep(ch);
             /* cps-body-panic-not-propagated: a panic signalled out of the chain
              * abandons this level's pending deliveries (reap-owned, freed at the
              * entry boundary) and returns so the wrapper's caller sees the flag. */
@@ -2757,7 +2808,7 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv, size_t floor) {
             g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
             g_dk_resume_val = r;
         } else {
-            __dk_reap_keep(ch);   /* a pending delivery may still reference it */
+            if (own) __dk_reap_keep(ch);   /* a pending delivery may still reference it */
         }
     }
     g_dk_driver = saved;
@@ -2770,9 +2821,10 @@ static intptr_t __dk_drive_after(void) {
     intptr_t r;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
+        bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */
         if (TUR_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
-            dk_free(ch);
+            if (own) dk_free(ch);
             if (tur_panicking) { while (g_dk_meta_n > 0) dk_free(g_dk_meta[--g_dk_meta_n]); return r; }
             if (g_dk_meta_n == 0) return r;
             g_dk_resume_chain = g_dk_meta[--g_dk_meta_n];
@@ -2791,7 +2843,7 @@ static intptr_t __dk_drive_after(void) {
              * deep loop is unaffected in correctness; it only defers these frees
              * to the entry boundary.  See
              * docs/archive/effect-rec-nested-handler-nonterminates.md. */
-            __dk_reap_keep(ch);   /* was dk_free(ch): premature under nesting */
+            if (own) __dk_reap_keep(ch);   /* was dk_free(ch): premature under nesting */
         }
     }
 }
@@ -2804,6 +2856,11 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
     if (!H || H->kind == DKK_DONE) { fprintf(stderr, "tur: unhandled effect (tag %d)\n", tag); abort(); }
+    if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
+        k->inplace_head = true;
+        g_dk_case_reopen_hnode = H;
+        return H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */
+    }
     DK *sub = dk_copy_range(k, H);
     DK *tail;
     if (H->shallow) {
@@ -2856,8 +2913,12 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * -- so reaping is `sub`'s sole disposal on both the return and longjmp paths.
      * We reap BEFORE the handler call so a longjmp cannot skip the registration. */
     __dk_reap_keep(sub);
+    /* Read before the case runs: a case can run the handle's continuation
+     * frame itself, which hands the handler group -- H -- back
+     * (__dk_group_release). */
+    bool H_delivers = H->case_delivers; DK *H_next = H->next;
     intptr_t r = H->handler(H->handler_env, arg, sub);
-    return H->case_delivers ? r : dk_run_impl(H->next, r, false);
+    return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
 /* Phase T21: FiberBlock */
 #ifdef __clang__
@@ -3942,7 +4003,8 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
     tur_async_pending_park = NULL;
     __dk_entry_depth++;
     size_t __dk_reap_mark = __dk_reap_n;
-    int64_t r = dk_invoke(rec->subk, value);
+    rec->subk->inplace_head = true;
+    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value, g_dk_meta_n);
     dk_free(rec->subk);
     if (tur_async_suspended && tur_async_pending_park) {
         /* re-parked on a further pending await: thread the outer future through */
@@ -9969,7 +10031,7 @@ static int64_t main__cps(DK *__kont) {
     row_8 = __ps_175;
     __t1 = (tur_handler_table_t *)(row_8).h;
     DK *__h0 = __dk_reap_keep(dk_hgroup_from_table((const tur_handler_table_t *)(intptr_t)__t1, dk_frame_resume_borrow(main_hk0, 0, __kont)));
-    return dk_perform(2, (intptr_t)(0), __dk_reap_node(dk_frame(main_pf1, 0, __h0)));
+    return dk_perform(2, (intptr_t)(0), __dk_reap_node(dk_frame_join(main_pf1, 0, __h0)));
 }
 int main(int argc, char **argv) {
     __tur_static_init();

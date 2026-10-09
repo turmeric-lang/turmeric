@@ -16430,7 +16430,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    __dk_entry_depth++;\n");
     buf_puts(out, "    size_t __dk_reap_mark = __dk_reap_n;\n");
-    buf_puts(out, "    int64_t r = dk_invoke(rec->subk, value);\n");
+    /* fn-value-call-cps-frames-held-until-outer-entry, effect half: run the
+     * parked chain itself (a park is resumed once, so it needs no copy) under a
+     * trampoline landing of its own, as an entry does, so a tail resume inside
+     * the resumed body yields -- in place, flat -- even when the resume is
+     * driven from direct-style code with no driver around it.  The park owns
+     * the chain (`inplace_head`: the trampoline neither frees nor keeps it), and
+     * frees it once the run is over, as dk_invoke freed its copy. */
+    buf_puts(out, "    rec->subk->inplace_head = true;\n");
+    buf_puts(out, "    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value, g_dk_meta_n);\n");
     buf_puts(out, "    dk_free(rec->subk);\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* re-parked on a further pending await: thread the outer future through */\n");

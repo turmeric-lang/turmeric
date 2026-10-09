@@ -10805,6 +10805,42 @@ static bool case_body_tail_resumes(const CTerm *t) {
     return false;
 }
 
+/* fn-value-call-cps-frames-held-until-outer-entry, effect half: a TAIL-resume
+ * case (case_body_tail_resumes) whose continuation `k` appears nowhere but as
+ * the continuation of that one tail resume -- not bound, passed, called or
+ * resumed with -- so nothing can resume it again or keep it.  Such a case is
+ * installed with dk_handler_tail_inplace, which lets dk_perform hand it the
+ * original chain instead of a copy.  A LETRAW step (a source expression) or a
+ * resumable-payload case (k is wrapped) is not looked into: false. */
+static bool atom_is_binding(const CAtom *a, const Binding *b) {
+    return a->kind == CA_VAR && a->var == b;
+}
+static bool case_resumes_k_only_in_tail(const CHandleCase *c) {
+    if (!c || !c->k || c->resumable_payload) return false;
+    const CTerm *t = c->case_body;
+    while (t) {
+        switch (t->kind) {
+            case CT_RESUME:
+                return resume_is_tail(t) && atom_is_binding(&t->as.resume.k, c->k)
+                    && !atom_is_binding(&t->as.resume.v, c->k);
+            case CT_LETVAL:
+                if (atom_is_binding(&t->as.letval.v, c->k)) return false;
+                t = t->as.letval.body; break;
+            case CT_LETPRIM:
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (atom_is_binding(&t->as.letprim.args[i], c->k)) return false;
+                t = t->as.letprim.body; break;
+            case CT_LETCALL:
+                if (t->as.letcall.fn == c->k) return false;
+                for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                    if (atom_is_binding(&t->as.letcall.args[i], c->k)) return false;
+                t = t->as.letcall.body; break;
+            default: return false;
+        }
+    }
+    return false;
+}
+
 /* ---- C4: algebraic effects (handle / perform / resume) --------------- *
  * handle mirrors reset: lift the handle continuation to a DKFrame, install a
  * dk_handler (carrying the case as a DKHandler), and run the handled body
@@ -10831,8 +10867,13 @@ static void emit_handle(CE *ce, const CTerm *t) {
     bool ok = collect_caps(t->as.handle.body, t->as.handle.x.id, &cs);
     const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
     char *hxn = cvar_cname(ce, t->as.handle.x);
+    /* Its env goes back as a join's does once the group has been handed back
+     * (__dk_group_release): the env is then the list's last entry, and only
+     * when the frame was never copied. */
+    g_lh_join_release = true;
     emit_lifted(ce, kname, LH_RESUME_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
                 t->as.handle.body, NULL, caps);
+    g_lh_join_release = false;
     free(hxn);
     char *hkenv = emit_cont_env(ce, kname, caps);   /* caps-only env */
 
@@ -10911,7 +10952,10 @@ static void emit_handle(CE *ce, const CTerm *t) {
      * threads the borrowed enclosing chain and a reified copy threads the
      * copy's own tail.  borrow_next keeps this chain's dk_free out of the
      * enclosing chain (which has its own reap owner). */
-    buf_printf(&chain, "dk_frame_resume_borrow(%s, %s, %s)", kname, hkenv, ce->cur_k);
+    /* fn-value-call-cps-frames-held-until-outer-entry, effect half: the
+     * group's end, so the group is handed back when the original runs
+     * (__dk_group_release). */
+    buf_printf(&chain, "dk_frame_resume_group_end(%s, %s, %s)", kname, hkenv, ce->cur_k);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         /* E7: a deep case that reduces to a TAIL resume installs with
@@ -10920,7 +10964,8 @@ static void emit_handle(CE *ce, const CTerm *t) {
         const char *ctor = hctor;
         if (!t->as.handle.shallow
             && case_body_tail_resumes(t->as.handle.cases[ci].case_body))
-            ctor = "dk_handler_tail";
+            ctor = case_resumes_k_only_in_tail(&t->as.handle.cases[ci])
+                 ? "dk_handler_tail_inplace" : "dk_handler_tail";
         /* A RE-OPENING case delivers its own value through the real enclosing
          * chain (emit_lifted gave it dk_case_enclosing_real as `__kont` and
          * turned shift_mode off), so mark its handler node: dk_perform returns
@@ -11024,8 +11069,14 @@ static void emit_perform(CE *ce, const CTerm *t) {
         CapSet cs;
         bool ok = collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
         const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+        /* fn-value-call-cps-frames-held-until-outer-entry, effect half: the
+         * frame is a join (dk_frame_join).  dk_perform copies it, so it never
+         * runs -- unless an in-place tail resume runs the original chain, and
+         * then dk_run_impl hands the node and its env back as it runs. */
+        g_lh_join_release = true;
         emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
                     t->as.perform.body, NULL, caps);
+        g_lh_join_release = false;
         free(pxn);
         if (caps) {
             /* Allocate + populate the env from the enclosing locals (same names).
@@ -11052,10 +11103,10 @@ static void emit_perform(CE *ce, const CTerm *t) {
              * boundary (__dk_reap_node: kind=0, a bare free that does not walk into
              * cur_k) -- reached on both the normal-return and the tail-resume-yield
              * paths -- exactly like the Track-B resume-frame sibling below. */
-            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame(%s, (intptr_t)%s, %s)));",
-                    tag, sa, pname, envv, ce->cur_k);
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_env_sized(dk_frame_join(%s, (intptr_t)%s, %s), sizeof(%s_env))));",
+                    tag, sa, pname, envv, ce->cur_k, pname);
         } else {
-            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame(%s, 0, %s)));",
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_join(%s, 0, %s)));",
                     tag, sa, pname, ce->cur_k);
         }
     } else {
@@ -11074,8 +11125,10 @@ static void emit_perform(CE *ce, const CTerm *t) {
         CapSet cs;
         bool ok = collect_caps(t->as.perform.body, t->as.perform.x.id, &cs);
         const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
+        g_lh_join_release = true;   /* a join, as the frame above */
         emit_lifted(ce, pname, LH_RESUME_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
                     t->as.perform.body, NULL, caps);
+        g_lh_join_release = false;
         free(pxn);
         char *envexpr = emit_cont_env(ce, pname, caps);   /* caps-only env */
         /* The dk_frame_resume node's ->next is ce->cur_k (an enclosing chain), so
@@ -11088,8 +11141,12 @@ static void emit_perform(CE *ce, const CTerm *t) {
          * free that does not walk into cur_k), matching the reset/handle
          * structural-node reaping discipline (docs/archive/cps-resume-frame-node-leak.md,
          * docs/archive/cps-delimited-dk-node-leak.md). */
-        ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));",
-                tag, sa, pname, envexpr, ce->cur_k);
+        if (caps)
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env))));",
+                    tag, sa, pname, envexpr, ce->cur_k, pname);
+        else
+            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_resume_join(%s, %s, %s)));",
+                    tag, sa, pname, envexpr, ce->cur_k);
         free(envexpr);
     }
     free(sa);
