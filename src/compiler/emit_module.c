@@ -16240,6 +16240,23 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_global(out, shared,
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
+    /* await-parks-only-to-the-nearest-c-frame: the entry depth of the running
+     * async body's own root (-1 outside one).  A pending await parks by
+     * shifting to the NEAREST root; when that is a deeper entry's -- a
+     * direct-style frame (a function the CPS backend evicted) stands between
+     * the await and the body -- the park would capture only the part below
+     * it, and the frames above would carry on at once with a dummy 0: a
+     * silent wrong answer.  __tur_await_body refuses that park instead. */
+    emit_rt_global(out, shared,
+                   "int tur_async_body_depth = -1;  /* entry depth of the async body's root */\n\n",
+                   "int tur_async_body_depth");
+    /* ...and when the spawned body is itself direct-style (a function the CPS
+     * backend did not take), it has no root of its own: ANY park is below it.
+     * The emitter sets this just before such a spawn (emit_async_direct_body);
+     * the spawn consumes it. */
+    emit_rt_global(out, shared,
+                   "int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */\n\n",
+                   "int tur_async_direct_body");
 
     /* The exit of every direct->CPS entry wrapper (emit_cps_ir.c, and
      * __dk_enter0 below).  A body that settled frees its root and leaves its
@@ -16345,7 +16362,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
     buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; "
+                  "tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); "
+                  "tur_async_direct_body = 0;\n");
     buf_puts(out, "    int64_t result = fn();\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
     buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
@@ -16376,7 +16397,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
     buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; "
+                  "tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); "
+                  "tur_async_direct_body = 0;\n");
     buf_puts(out, "    int64_t result = __fn(clos);\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
     buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
@@ -16409,7 +16434,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
     buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; "
+                  "tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); "
+                  "tur_async_direct_body = 0;\n");
     buf_puts(out, "    int64_t result = wrap(env);\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
     buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
@@ -16543,6 +16572,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    __dk_entry_depth++;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; tur_async_body_depth = __dk_entry_depth;\n");
     buf_puts(out, "    size_t __dk_reap_mark = __dk_reap_n;\n");
     /* fn-value-call-cps-frames-held-until-outer-entry, effect half: run the
      * parked chain itself (a park is resumed once, so it needs no copy) under a
@@ -16575,6 +16605,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);\n");
     buf_puts(out, "        tur_future_fulfill(rec->outer, r);\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    free(rec);\n");
     buf_puts(out, "}\n\n");
 
@@ -16650,6 +16681,14 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            }\n");
     buf_puts(out, "            return dk_invoke(subk, f->value);\n");
     buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (tur_async_body_depth >= 0 && __dk_entry_depth != tur_async_body_depth) {\n");
+    buf_puts(out, "        fprintf(stderr, \"await: a pending future would park below a direct-style call "
+                  "(a function on the path to this await that the CPS backend could not compile), "
+                  "losing the rest of the async body; refusing to continue. See "
+                  "docs/reported/await-parks-only-to-the-nearest-c-frame.md\\n\");\n");
+    buf_puts(out, "        fflush(stderr);\n");
+    buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* pending: park a private copy of the captured continuation on on_complete */\n");
     buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));\n");

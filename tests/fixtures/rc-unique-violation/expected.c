@@ -3775,6 +3775,10 @@ typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; } Tur
 static int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */
 static TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */
 
+static int tur_async_body_depth = -1;  /* entry depth of the async body's root */
+
+static int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */
+
 __attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
     if (tur_async_suspended) {
         TurAsyncPark *p = tur_async_pending_park;
@@ -3832,7 +3836,9 @@ static TurFuture *tur_async_fiber(int64_t (*fn)(void)) {
     tur_async_pending_park = NULL;
     tur_handler_node __node; __node.parent = tur_handler_chain;
     tur_handler_chain = &__node;
+    int __abd = tur_async_body_depth; tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); tur_async_direct_body = 0;
     int64_t result = fn();
+    tur_async_body_depth = __abd;
     tur_handler_chain = __node.parent;
     if (tur_async_reject_if_panicking(future)) return future;
     if (tur_async_suspended && tur_async_pending_park) {
@@ -3857,7 +3863,9 @@ static TurFuture *tur_async_fiber_closure(void *clos) {
     tur_async_pending_park = NULL;
     tur_handler_node __node; __node.parent = tur_handler_chain;
     tur_handler_chain = &__node;
+    int __abd = tur_async_body_depth; tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); tur_async_direct_body = 0;
     int64_t result = __fn(clos);
+    tur_async_body_depth = __abd;
     tur_handler_chain = __node.parent;
     if (tur_async_reject_if_panicking(future)) return future;
     if (tur_async_suspended && tur_async_pending_park) {
@@ -3879,7 +3887,9 @@ static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {
     tur_async_pending_park = NULL;
     tur_handler_node __node; __node.parent = tur_handler_chain;
     tur_handler_chain = &__node;
+    int __abd = tur_async_body_depth; tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); tur_async_direct_body = 0;
     int64_t result = wrap(env);
+    tur_async_body_depth = __abd;
     tur_handler_chain = __node.parent;
     if (tur_async_reject_if_panicking(future)) return future;
     if (tur_async_suspended && tur_async_pending_park) {
@@ -3985,6 +3995,7 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;
     __dk_entry_depth++;
+    int __abd = tur_async_body_depth; tur_async_body_depth = __dk_entry_depth;
     size_t __dk_reap_mark = __dk_reap_n;
     rec->subk->inplace_head = true;
     int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value);
@@ -4010,6 +4021,7 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
         if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);
         tur_future_fulfill(rec->outer, r);
     }
+    tur_async_body_depth = __abd;
     free(rec);
 }
 
@@ -4062,6 +4074,11 @@ static intptr_t __tur_await_body(intptr_t env, DK *subk) {
             }
             return dk_invoke(subk, f->value);
         }
+    }
+    if (tur_async_body_depth >= 0 && __dk_entry_depth != tur_async_body_depth) {
+        fprintf(stderr, "await: a pending future would park below a direct-style call (a function on the path to this await that the CPS backend could not compile), losing the rest of the async body; refusing to continue. See docs/reported/await-parks-only-to-the-nearest-c-frame.md\n");
+        fflush(stderr);
+        abort();
     }
     /* pending: park a private copy of the captured continuation on on_complete */
     TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));

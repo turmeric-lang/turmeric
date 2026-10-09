@@ -6827,6 +6827,28 @@ static bool region_ascription_erases_node(EmitCtx *ctx, Type from, Type to) {
 }
 
 
+/* await-parks-only-to-the-nearest-c-frame: a spawned body the CPS backend did
+ * not take runs direct-style, with no root of its own, so a pending await
+ * anywhere under it would park at a root BELOW the body and lose the frames
+ * above.  Tell the spawn (tur_async_direct_body), so __tur_await_body refuses
+ * such a park instead of letting the body finish with a dummy 0.  A thunk
+ * this cannot name (an arbitrary fn value) keeps the depth check alone. */
+static void emit_async_direct_body(EmitCtx *ctx, Buf *body, const Expr *fn_expr) {
+    const Expr *f = fn_expr;
+    while (f && (f->kind == EX_ASCRIBE || f->kind == EX_FN_TO_FAT))
+        f = f->kind == EX_ASCRIBE ? f->as.ascribe_.inner : f->as.fn_to_fat_.inner;
+    const Binding *b = NULL;
+    if (f && f->kind == EX_VAR) b = f->as.var.binding;
+    else if (f && f->kind == EX_CLOSURE && f->as.closure_.closure
+             && f->as.closure_.closure->fn)
+        b = f->as.closure_.closure->fn->binding;
+    if (b && !b->is_global && b->closure_fn_binding) b = b->closure_fn_binding;
+    if (!b || !b->is_global || !b->source_fn_def) return;
+    if (emit_cps_ir_emits_binding(ctx->program_root, b)) return;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "tur_async_direct_body = 1;\n");
+}
+
 /* Bind a cast's operand to `cb` and check its tag against `tag`.  A cast in
  * Scheme source (r7rs-type-errors-are-uncatchable-panics) calls the raising
  * check, which names the procedure and the expected type; every other cast
@@ -15895,6 +15917,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              *      variables (same limitation as effect handler bodies). */
             const Expr *fn_expr = e->as.async_.fn_expr;
             char *tmp = fresh_tmp(ctx);
+            if (fn_expr->type.kind == TY_FN && !e->as.async_.on_thread)
+                emit_async_direct_body(ctx, body, fn_expr);
             if (fn_expr->type.kind == TY_FN) {
                 /* Path (a): fn-expr is a function value.  A THIN (bare) fn is a
                  * plain function pointer -- spawn it directly.  A FAT (boxed)

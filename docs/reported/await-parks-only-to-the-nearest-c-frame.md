@@ -1,5 +1,13 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-09 (again): no silent wrong answer is left.** The
+remaining shape is an awaiting function the CPS backend evicts for some other
+reason. It now aborts at the park with a diagnostic instead of finishing with
+a wrong value (see "Refused at run time" at the end). What is left is
+expressiveness: such a program is refused, at run time, where `tur
+--interpret` runs it. Each eviction reason that can hold up an awaiter is
+its own gap; a capturing lambda with a non-primitive capture is the known one.
+
 **Narrowed 2026-10-09: both shapes below are fixed, and so are two more found
 on the way; what is left is a may-await function the CPS backend evicts for
 some other reason.** See "Fixed 2026-10-09" at the end for what changed and
@@ -109,3 +117,40 @@ an evicted may-await function at compile time -- is what would close the
 class; it would also turn programs that only ever await ready futures (no
 park, `__tur_await_ready`) from working into refused, so it wants a
 diagnostic, not a silent eviction rule.
+
+### Refused at run time (2026-10-09)
+
+A pending await parks by shifting to the NEAREST root prompt. The runtime
+now knows which root that should be. Each inline async spawn
+(`tur_async_fiber`, `_closure`, `_via`) records the entry depth of the
+body's own root in `tur_async_body_depth`; a resumed park records its own.
+`__tur_await_body` refuses a park at any other depth: it prints `await: a
+pending future would park below a direct-style call ...` and aborts, rather
+than parking the part below and letting the frames above carry on with a
+dummy 0.
+
+That catches an evicted function anywhere BETWEEN the body and the awaiter.
+It cannot catch an evicted async thunk ITSELF: a direct-style body has no
+root of its own, so its awaiter's entry root sits at exactly the expected
+depth. The emitter covers that case. `emit_async_direct_body`
+(`src/compiler/emit_expr.c`) sets `tur_async_direct_body` just before
+spawning a named thunk the CPS backend did not take (`emit_cps_ir_emits_binding`),
+and the spawn then expects no park at all. A thunk the emitter cannot name
+(an arbitrary fn value) keeps the depth check alone.
+
+Pinned by `tests/fixtures/await-parks-below-evicted-frame-refused` (the
+struct-capture lambda above, between the body and the awaiter: it printed
+604 for 2428) and `await-parks-in-evicted-async-body-refused` (an evicted
+async thunk: 600 for 605). Both expect the abort. When the CPS backend takes
+those lambdas, each prints its right answer and fails its `expected.exit`,
+which is the gap closing. The 83 async/await fixtures and the JIT set show
+no false refusal. The preamble change regenerated the split runtime and moved
+159 `expected.c` snapshots.
+
+Still open: refusing at run time is the honest floor, not the fix. Each
+eviction reason an awaiter can hit wants its own admission, starting with a
+capturing lambda's non-primitive capture (`fn_sig_ok`'s closure-capture
+switch, which keeps a by-value aggregate capture off the CPS path because a
+monomorph clone's env layout is spec-suffixed). A compile-time version of
+the refusal (fix direction 2) would also refuse programs that only ever
+await ready futures.

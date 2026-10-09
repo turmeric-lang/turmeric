@@ -1,0 +1,66 @@
+;; await-parks-only-to-the-nearest-c-frame (what is left): a may-await
+;; function the CPS backend evicts -- here a capturing lambda whose capture is
+;; a struct (fn_sig_ok admits primitive captures only) -- calls the awaiter
+;; through its direct entry, so a pending await's park reaches that entry's
+;; root, not the async body's.  It used to capture only the part below and let
+;; the frames above carry on with 0 (604 for 2428 in this program, silently).
+;; __tur_await_body now refuses a park at any root other than the body's own
+;; (tur_async_body_depth) and aborts with a diagnostic.  When the CPS backend
+;; takes this lambda, the program prints 2428 and this fixture's expected.exit
+;; fails: that is the gap closing -- make it a passing fixture then.
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defstruct P [a : int b : int])
+(defn level2 [m : int] : int
+  (let [p (P m 0)]
+    (* 2 (apply3 (fn [x : int] : int (level3 (+ x (.b p)))) (+ (.a p) 1)))))
+(defn level1 [m : int] : int (+ 7 (level2 (+ m 1))))
+(defn body [] : int (+ (level1 1) (level1 2)))
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (drive (async body)))
+  (free-future (cur-cell false)))

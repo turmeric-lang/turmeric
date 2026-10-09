@@ -1,0 +1,60 @@
+;; await-parks-only-to-the-nearest-c-frame (the async body itself): an
+;; async thunk the CPS backend evicts -- a capturing lambda whose capture is a
+;; struct -- runs direct-style with no root of its own, so its awaiter's
+;; pending park reached the awaiter's entry root at exactly the depth the
+;; body's own root would have had, and the thunk's `(+ (.a p) ...)` frame was
+;; lost: 600 for 605, silently.  The emitter flags such a spawn
+;; (tur_async_direct_body) and __tur_await_body refuses the park.  When the
+;; CPS backend takes this lambda the program prints 605 and expected.exit
+;; fails: make it a passing fixture then.
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defstruct P [a : int b : int])
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+
+
+(defn main [] : nil
+  (cur-cell true)
+  (let [p (P 5 0)]
+    (println (drive (async (fn [] : int (+ (.a p) (sum-values 0 300 0)))))))
+  (free-future (cur-cell false)))
