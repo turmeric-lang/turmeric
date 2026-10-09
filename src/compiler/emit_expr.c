@@ -17868,14 +17868,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * rest. */
                 if (!effectful && ib && cps_fn_may_await(ib->source_fn_def))
                     effectful = true;
-                /* The twin force-declares the wrapped fn's direct entry with an
-                 * `int64_t` per parameter (emit_module.c) and dispatches its int64
-                 * `__cps` entry, so the wrapped fn's args must each be a plain
-                 * `int`/`int64` and its result one the twin can spell
-                 * (cps_ir_fncps_sig_ok -- the same question arg_fat_has_fn_cps
-                 * asks before counting this value as threaded).  Anything else
-                 * would mismatch the twin's forward decl and stays on the
-                 * delegated direct path. */
+                /* The twin force-declares the wrapped fn's direct entry at each
+                 * parameter's own C spelling (emit_module.c) and dispatches its
+                 * `__cps` entry, so the wrapped fn's args and result must each be
+                 * a kind the twin can spell (cps_ir_fncps_sig_ok -- the same
+                 * question arg_fat_has_fn_cps asks before counting this value as
+                 * threaded).  Anything else would mismatch the twin's forward
+                 * decl and stays on the delegated direct path. */
                 if (ib && ib->is_global && effectful
                     && cps_ir_fncps_sig_ok(&ib->type)) {
                     char *iname = raw_name_for_binding(ib);

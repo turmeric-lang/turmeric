@@ -1001,6 +1001,10 @@ void emit_inline_c_raw_locals_collect(const struct Expr *body,
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
+/* Scope a recording to one emitted function (see emit_module.c): the name's
+ * previous spelling, and its restoration. */
+char *emit_localvar_save_ctype(const char *cname);
+void emit_localvar_restore_ctype(const char *cname, char *prev);
 
 /* inline-c-option-carrier-box-leaks: the owned-carrier side table.  A call
  * temp holding a carrier box an inline-C body malloc'd is marked here, and the

@@ -257,9 +257,18 @@ struct CTerm {
         /* B4: `scrut` is the heap-ADT carrier atom; `adt` the ADT def (for the C
          * aggregate name / tag word); `arms` the ctor arms (last may be a
          * ctor==NULL catch-all).  Each arm delivers its body to the enclosing
-         * continuation (tail) or to a join point (bind), like CT_IF. */
+         * continuation (tail) or to a join point (bind), like CT_IF.
+         *
+         * cps-match-on-builtin-sum-evicts: when `direct` is set the match is
+         * any other shape (an Option / Result scrutinee, literal arms, `any`
+         * narrowing) and the DIRECT emitter dispatches it -- `direct` is the
+         * source match over the scrutinee atom, whose pattern tests and
+         * binders it emits -- handing each arm body back through its arm hook
+         * (EmitCtx.match_tail), where arms[i].body is emitted.  `adt` is NULL
+         * then, and each arm's `fields` are the binders its pattern declares. */
         struct { CAtom scrut; const struct AdtDef *adt;
-                 CMatchArm *arms; uint32_t n_arms; }                      match;
+                 CMatchArm *arms; uint32_t n_arms;
+                 const struct Expr *direct; }                             match;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; bool resumable_payload; }           perform;
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;
@@ -378,14 +387,22 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
 /* E2 (fat-closure fn-value threading): the `tur_poly_fn_t.fn_cps` slot's ABI is
  * `int64_t (*)(void *env, int64_t a0, ..., struct DK *)` -- one int64 word per
  * argument, up to this many.  cps_ir_fncps_sig_ok says whether a fn of type
- * `fn_ty` fits it: every argument an `int`/`int64`, a `cstr` or a `ptr<void>`
- * (carried as its word), the result an `int`/`int64`, `bool` or unit.  The poly-wrap that FILLS the slot (emit_expr.c) and the
+ * `fn_ty` fits it: every argument a scalar -- an integer of any width, a
+ * `bool`, a float, a `cstr` or a `ptr<void>` -- carried as its word
+ * (cps_ir_fncps_word_of / cps_ir_fncps_value_of), and a result of the same
+ * kinds or unit.  The poly-wrap that FILLS the slot (emit_expr.c) and the
  * analysis that relies on it being filled (arg_fat_has_fn_cps) ask this one
  * question, so the two cannot drift apart. */
 #define CPS_FNCPS_MAX_ARGS 8
 bool cps_ir_fncps_sig_ok(const Type *fn_ty);
-/* The C spelling of an argument kind cps_ir_fncps_sig_ok admits. */
+/* The C spelling of an argument (or result) kind cps_ir_fncps_sig_ok admits. */
 const char *cps_ir_fncps_arg_ctype(TypeKind k);
+/* A value of kind `k` spelled as the int64 word that crosses the slot, and back
+ * (malloc'd C expressions).  A float crosses as its bits -- the DK slot's
+ * Tier-B convention, so a result delivered by the callee's `__cps` entry reads
+ * back the same way -- a pointer through intptr_t, anything else by a cast. */
+char *cps_ir_fncps_word_of(TypeKind k, const char *value);
+char *cps_ir_fncps_value_of(TypeKind k, const char *word);
 /* The same for a capturing lambda, given its LIFTED type (the env parameter
  * first): a closure's slot is a dispatcher on the env box's slot 0, which holds
  * the lifted entry itself only for an `int`/`int64` or unit result (a narrow

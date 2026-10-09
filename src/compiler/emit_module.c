@@ -2475,9 +2475,9 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * is emitted ahead of the normal forward decls) and is registered by its own
  * addr-taken CPS-registration constructor.  Returns the malloc'd twin name, or
  * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
- * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: `int`/`int64`,
- * `cstr` and `ptr<void>` args (cps_ir_fncps_arg_ctype spells each) and an
- * `int`/`int64`, `bool` or unit result -- exactly what this forward-declares. */
+ * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: scalar args
+ * (cps_ir_fncps_arg_ctype spells each) and a scalar non-pointer or unit
+ * result -- exactly what this forward-declares. */
 /* Translate the enclosing frame's type bindings -- keyed by the CALLER's tyvar
  * names -- into bindings keyed by the CALLEE's, matched by constraint CLASS.
  *
@@ -2662,32 +2662,49 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     /* thunk_typedefs precedes the normal forward decls, so declare inner_fn's
-     * direct entry ourselves: an int64 per argument and the result's own
-     * spelling (the caller's gate, cps_ir_fncps_sig_ok, admits only an
-     * int-register-class arg and an int / bool / unit result).  `__tur_cps_fn` /
+     * direct entry ourselves: each parameter and the result at its own C
+     * spelling (the caller's gate, cps_ir_fncps_sig_ok, admits only scalars,
+     * and cps_ir_fncps_arg_ctype spells each).  `__tur_cps_fn` /
      * `__tur_cps_lookup` / `dk_run` come from the DK runtime preamble, already
      * emitted above this section.  A one-argument twin keeps its original
      * spelling (`__pwx`). */
     uint32_t n = inner_ty->as.fn.arity;
     TypeKind rk = inner_ty->as.fn.result_kind;
-    const char *rc = rk == TY_NIL ? "void" : rk == TY_BOOL ? "bool" : "int64_t";
+    const char *rc = rk == TY_NIL ? "void" : cps_ir_fncps_arg_ctype(rk);
     Buf decl, prm, fwd, cast;
     buf_init(&decl); buf_init(&prm); buf_init(&fwd); buf_init(&cast);
-    /* `fwd` passes each word on as it arrived (the registered `__cps` entry,
-     * or its word adapter for a pointer parameter, takes words); `dir` converts
-     * it to the direct entry's own C parameter type. */
+    /* `fwd` passes each argument on as the registered `__cps` entry takes it
+     * -- a word, except a float, which every E2a call site passes at its own
+     * type (e2a_cast) and the entry, or its `__e2w` word adapter, declares so;
+     * `dir` converts each word to the direct entry's own C parameter type. */
     Buf dir; buf_init(&dir);
     for (uint32_t i = 0; i < n; i++) {
         char an[24];
         if (n == 1) snprintf(an, sizeof an, "__pwx");
         else        snprintf(an, sizeof an, "__pwx%u", i);
-        const char *pc = cps_ir_fncps_arg_ctype((TypeKind)inner_ty->as.fn.arg_kinds[i]);
+        TypeKind ak = (TypeKind)inner_ty->as.fn.arg_kinds[i];
+        const char *pc = cps_ir_fncps_arg_ctype(ak);
+        size_t pL = strlen(pc);
         bool word = strcmp(pc, "int64_t") == 0;
+        bool flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
         buf_printf(&decl, "%s%s", i ? ", " : "", pc);
         buf_printf(&prm, ", int64_t %s", an);
+        if (flt) {
+            char *fv = cps_ir_fncps_value_of(ak, an);
+            buf_printf(&fwd, "%s%s", i ? ", " : "", fv);
+            buf_printf(&dir, "%s%s", i ? ", " : "", fv);
+            buf_printf(&cast, "%s, ", pc);
+            free(fv);
+            continue;
+        }
         buf_printf(&fwd, "%s%s", i ? ", " : "", an);
         if (word) buf_printf(&dir, "%s%s", i ? ", " : "", an);
-        else      buf_printf(&dir, "%s(%s)(intptr_t)%s", i ? ", " : "", pc, an);
+        else if (pc[pL - 1] == '*') buf_printf(&dir, "%s(%s)(intptr_t)%s", i ? ", " : "", pc, an);
+        else {
+            char *nv = cps_ir_fncps_value_of(ak, an);
+            buf_printf(&dir, "%s%s", i ? ", " : "", nv);
+            free(nv);
+        }
         buf_puts(&cast, "int64_t, ");
     }
     buf_putc(&decl, '\0'); buf_putc(&prm, '\0'); buf_putc(&fwd, '\0'); buf_putc(&cast, '\0');
@@ -2701,7 +2718,15 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     if (rk == TY_NIL)
         buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (intptr_t)0);\n",
                    inner_fn, dir.data);
-    else
+    else if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32) {
+        /* Delivered by its bits, as the `__cps` entry delivers it. */
+        Buf cl; buf_init(&cl);
+        buf_printf(&cl, "%s(%s)", inner_fn, dir.data);
+        buf_putc(&cl, '\0');
+        char *w = cps_ir_fncps_word_of(rk, cl.data);
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)(%s));\n", w);
+        free(w); buf_free(&cl);
+    } else
         buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(%s));\n", inner_fn, dir.data);
     buf_puts(target, "}\n");
     buf_free(&decl); buf_free(&prm); buf_free(&fwd); buf_free(&cast); buf_free(&dir);
@@ -10234,6 +10259,30 @@ const char *emit_localvar_lookup_ctype(const char *cname) {
     if (!cname) return NULL;
     const EmitLocalVarEntry *e = emit_localvar_find(cname);
     return e ? e->ctype : NULL;
+}
+
+/* A recording scoped to one emitted function.  A temp's name is unique in the
+ * program, so the table never needs to forget one; a SOURCE name is not -- the
+ * `x` a lifted CPS helper records for its `double x` capture read-out is the
+ * same text as another function's `int64_t x` parameter, and a stale entry
+ * made the carrier bridge there bit-cast an integer as a double.  Save the
+ * name's spelling before recording, and restore it (NULL: forget it) when the
+ * function is done. */
+char *emit_localvar_save_ctype(const char *cname) {
+    const char *c = emit_localvar_lookup_ctype(cname);
+    return c ? strdup(c) : NULL;
+}
+
+void emit_localvar_restore_ctype(const char *cname, char *prev) {
+    if (!cname) { free(prev); return; }
+    EmitLocalVarEntry *e = emit_localvar_find(cname);
+    if (e) {
+        free(e->ctype);
+        e->ctype = prev;      /* NULL reads back as "not recorded" */
+        return;
+    }
+    if (prev) emit_localvar_record_ctype(cname, prev);
+    free(prev);
 }
 
 /* S1 (jit-engine-plan section 4): see emit_internal.h. */

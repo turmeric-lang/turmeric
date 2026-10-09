@@ -524,6 +524,12 @@ static bool atom_ok(const CAtom *a) {
     }
 }
 
+/* A CT_MATCH's scrutinee: the B4 tag dispatch reads it out of a slot; the
+ * direct dispatch (cps-match-on-builtin-sum-evicts) reads it as a C local. */
+static bool match_scrut_ok(const CTerm *t) {
+    return t->as.match.direct || atom_ok(&t->as.match.scrut);
+}
+
 static bool is_println_shape(BuiltinShape s) {
     return s == BS_PRINTLN_INT || s == BS_PRINTLN_BOOL || s == BS_PRINTLN_UINT
         || s == BS_PRINTLN_CSTR || s == BS_PRINTLN_FLOAT || s == BS_PRINTLN_FLOAT32;
@@ -1891,6 +1897,10 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
         case CT_IF:
             return joins_closed_rec(t->as.if_.then_, def, nd)
                 && joins_closed_rec(t->as.if_.else_, def, nd);
+        case CT_MATCH:
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!joins_closed_rec(t->as.match.arms[i].body, def, nd)) return false;
+            return true;
         case CT_LETCONT:
             def[nd] = t->as.letcont.j.id;
             return joins_closed_rec(t->as.letcont.jbody, def, nd + 1)
@@ -1990,6 +2000,11 @@ static bool shift_body_ok(const CTerm *t) {
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && shift_body_ok(t->as.if_.then_) && shift_body_ok(t->as.if_.else_);
+        case CT_MATCH:
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!shift_body_ok(t->as.match.arms[i].body)) return false;
+            return true;
         default: return false;
     }
 }
@@ -2032,6 +2047,11 @@ static bool perform_body_ok(const CTerm *t) {
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && perform_body_ok(t->as.if_.then_) && perform_body_ok(t->as.if_.else_);
+        case CT_MATCH:
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!perform_body_ok(t->as.match.arms[i].body)) return false;
+            return true;
         default: return false;
     }
 }
@@ -2091,6 +2111,11 @@ static bool perform_cont_reset_ok(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && perform_cont_reset_ok(t->as.if_.then_)
                 && perform_cont_reset_ok(t->as.if_.else_);
+        case CT_MATCH:
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!perform_cont_reset_ok(t->as.match.arms[i].body)) return false;
+            return true;
         case CT_PERFORM:
             /* The nested perform's args must be slot atoms; its OWN continuation
              * is emitted straight-line (perform_body_ok -> a value-transform frame
@@ -2176,6 +2201,11 @@ static bool await_cont_reset_ok(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && await_cont_reset_ok(t->as.if_.then_)
                 && await_cont_reset_ok(t->as.if_.else_);
+        case CT_MATCH:
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!await_cont_reset_ok(t->as.match.arms[i].body)) return false;
+            return true;
         case CT_AWAIT:
             return atom_ok(&t->as.await.fut) && await_cont_reset_ok(t->as.await.body);
         default: return false;   /* CT_TAILCALL and any nested control op: evict */
@@ -2232,6 +2262,11 @@ static bool case_loop_body_ok(const CTerm *t) {
             return atom_ok(&t->as.if_.cond)
                 && case_loop_body_ok(t->as.if_.then_)
                 && case_loop_body_ok(t->as.if_.else_);
+        case CT_MATCH:
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!case_loop_body_ok(t->as.match.arms[i].body)) return false;
+            return true;
         case CT_RESUME:
             /* The multi-shot fold: `(resume k i)` each iteration.  dk_invoke
              * re-invokes the same k exactly as the straight-line double-resume
@@ -2343,6 +2378,11 @@ static bool handle_case_ok_rec(const CTerm *t) {
         case CT_IF:
             return atom_ok(&t->as.if_.cond)
                 && handle_case_ok_rec(t->as.if_.then_) && handle_case_ok_rec(t->as.if_.else_);
+        case CT_MATCH:
+            if (!match_scrut_ok(t)) return false;
+            for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                if (!handle_case_ok_rec(t->as.match.arms[i].body)) return false;
+            return true;
         case CT_PERFORM:
             /* Effect re-opening (docs/archive/cps-handler-case-effect-reopening-
              * needs-emission.md): a handler CASE body that itself performs an
@@ -2589,7 +2629,9 @@ static bool term_core_ok_impl(const CTerm *t) {
              * bindings are extracted inline at emit (no cross-slot check needed --
              * a binding that DOES cross into a lifted continuation rides that
              * frame's env via collect_caps, exactly like a `let` binder). */
-            if (!atom_ok(&t->as.match.scrut)) return false;
+            /* A direct-dispatch match reads its scrutinee as an ordinary C
+             * local (the direct emitter's own read), not out of a slot. */
+            if (!t->as.match.direct && !atom_ok(&t->as.match.scrut)) return false;
             for (uint32_t i = 0; i < t->as.match.n_arms; i++)
                 if (!term_core_ok(t->as.match.arms[i].body)) return false;
             return true;
@@ -7006,21 +7048,31 @@ static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
     for (uint32_t i = 0; i < n; i++) {
         /* The wrapper `.fn` holds keeps each parameter's own C type. */
         const char *pc = cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i));
+        size_t pL = strlen(pc);
         if (strcmp(pc, "int64_t") == 0) {
             buf_puts(&ps, n == 1 ? ",int64_t" : ", int64_t");
             buf_printf(&av, ", (int64_t)(%s)", args[i]);
-        } else {
+        } else if (pc[pL - 1] == '*') {
             buf_printf(&ps, ", %s", pc);
             buf_printf(&av, ", (%s)(intptr_t)(%s)", pc, args[i]);
+        } else {
+            buf_printf(&ps, ", %s", pc);
+            buf_printf(&av, ", (%s)(%s)", pc, args[i]);
         }
     }
     buf_putc(&ps, '\0'); buf_putc(&av, '\0');
+    const char *rc = cps_ir_fncps_arg_ctype(rk);
     if (rk == TY_NIL)
         buf_printf(out, "(((void(*)(void*%s))%s.fn)(%s.env%s), (int64_t)0)",
                    ps.data, pf, pf, av.data);
-    else if (rk == TY_BOOL)
-        buf_printf(out, "((int64_t)((bool(*)(void*%s))%s.fn)(%s.env%s))",
-                   ps.data, pf, pf, av.data);
+    else if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32)
+        /* The value at its own type: the delivery stores it into the slot by
+         * its bits (slot_store), or a join parameter of that type takes it. */
+        buf_printf(out, "((%s(*)(void*%s))%s.fn)(%s.env%s)",
+                   rc, ps.data, pf, pf, av.data);
+    else if (strcmp(rc, "int64_t") != 0)
+        buf_printf(out, "((int64_t)((%s(*)(void*%s))%s.fn)(%s.env%s))",
+                   rc, ps.data, pf, pf, av.data);
     else
         buf_printf(out, "((int64_t(*)(void*%s))%s.fn)(%s.env%s)",
                    ps.data, pf, pf, av.data);
@@ -7030,28 +7082,28 @@ static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
 /* The threaded call through a fat closure's `fn_cps` slot, threading `thread`.
  * The slot is declared at the one-argument ABI (`tur_poly_fn_t`, emit_module.c);
  * a twin of another arity was stored through a cast (emit_expr.c, EX_POLY_WRAP)
- * and is called back at its own type here. */
+ * and is called back at its own type here.  Every argument crosses as its word
+ * (cps_ir_fncps_word_of): a pointer through intptr_t, a float as its bits. */
 static void fncps_slot_call(Buf *out, const char *pf, char *const *args,
                             uint32_t n, const char *thread, const Expr *call) {
-    /* Every argument crosses as its word: a pointer through intptr_t. */
-    bool all_int = true;
-    for (uint32_t i = 0; i < n; i++)
-        if (strcmp(cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i)), "int64_t") != 0)
-            all_int = false;
-    if (n == 1 && all_int) {
-        buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(%s), %s)", pf, pf, args[0], thread);
-        return;
-    }
     if (n == 1) {
-        buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(intptr_t)(%s), %s)", pf, pf, args[0], thread);
+        TypeKind k = fncps_arg_kind(call, 0);
+        if (strcmp(cps_ir_fncps_arg_ctype(k), "int64_t") == 0) {
+            buf_printf(out, "%s.fn_cps(%s.env, (int64_t)(%s), %s)", pf, pf, args[0], thread);
+            return;
+        }
+        char *w = cps_ir_fncps_word_of(k, args[0]);
+        buf_printf(out, "%s.fn_cps(%s.env, %s, %s)", pf, pf, w, thread);
+        free(w);
         return;
     }
     buf_printf(out, "((int64_t (*)(void *, ");
     for (uint32_t i = 0; i < n; i++) buf_puts(out, "int64_t, ");
     buf_printf(out, "DK *))%s.fn_cps)(%s.env, ", pf, pf);
     for (uint32_t i = 0; i < n; i++) {
-        bool word = strcmp(cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i)), "int64_t") == 0;
-        buf_printf(out, word ? "(int64_t)(%s), " : "(int64_t)(intptr_t)(%s), ", args[i]);
+        char *w = cps_ir_fncps_word_of(fncps_arg_kind(call, i), args[i]);
+        buf_printf(out, "%s, ", w);
+        free(w);
     }
     buf_printf(out, "%s)", thread);
 }
@@ -8376,7 +8428,81 @@ static void emit_term(CE *ce, const CTerm *t) {
  * continuation, a nested join) ride the enclosing frame the same way a `let`
  * binder does.  A trailing catch-all (ctor == NULL) becomes the final `else`;
  * with no catch-all the (exhaustive, elaborator-guaranteed) fallthrough aborts. */
+/* cps-match-on-builtin-sum-evicts: a direct-dispatch CT_MATCH (see the IR's
+ * match_direct_dispatch_ok).  The direct emitter emits the match -- its
+ * scrutinee read, pattern tests and binders, on every arm shape it has -- and
+ * calls back here at each arm body, the hook proper-tail-calls T3 put there
+ * for emit_tail; the arm's CPS term is emitted in place, into the buffer the
+ * direct emitter is writing, and ends in a `return` or a join's `goto` like
+ * every other CPS arm.  The direct emitter's result temp and `goto <end>`
+ * after each arm stay, unreachable, exactly as on the tail path. */
+typedef struct {
+    CE         *ce;
+    const CTerm *t;
+    uint32_t    n_hooked;
+    bool        dup;
+} CpsDirectMatch;
+
+static void cps_direct_match_arm(EmitCtx *ctx, Buf *body, const Expr *arm_body, void *env) {
+    CpsDirectMatch *dm = (CpsDirectMatch *)env;
+    const CTerm *t = dm->t;
+    const Expr *m = t->as.match.direct;
+    for (uint32_t i = 0; i < t->as.match.n_arms; i++) {
+        if (m->as.match_.arms[i].body != arm_body) continue;
+        CE *ce = dm->ce;
+        Buf *save_out = ce->out;
+        int save_indent = ce->indent;
+        const MatchTailCtx *save_mt = ctx->match_tail;
+        ctx->match_tail = NULL;          /* a nested match is its own */
+        ce->out = body;
+        ce->indent = ctx->indent;
+        emit_term(ce, t->as.match.arms[i].body);
+        ce->out = save_out;
+        ce->indent = save_indent;
+        ctx->match_tail = save_mt;
+        dm->n_hooked++;
+        return;
+    }
+    dm->dup = true;   /* not one of this match's arm bodies */
+}
+
+static void emit_direct_match(CE *ce, const CTerm *t) {
+    EmitCtx *ctx = ce->ctx;
+    CpsDirectMatch dm = { ce, t, 0, false };
+    MatchTailCtx mt = { t->as.match.direct, cps_direct_match_arm, &dm };
+    const MatchTailCtx *save_mt = ctx->match_tail;
+    uint32_t dd_sum = ctx->n_sum_pending, dd_any = ctx->n_any_pending,
+             dd_vsp = ctx->n_vsp_pending;
+    int save_indent = ctx->indent;
+    ctx->indent = ce->indent;
+    ctx->match_tail = &mt;
+    char *v = emit_value(ctx, ce->out, t->as.match.direct);
+    ctx->match_tail = save_mt;
+    ctx->indent = save_indent;
+    /* Every arm must have come back through the hook exactly once: an arm
+     * emitted as a plain value would assign the result temp and fall out of
+     * the match below, into the abort. */
+    if (dm.dup || dm.n_hooked != t->as.match.n_arms) {
+        fprintf(stderr, "tur: internal error: CPS direct-dispatch match emitted %u of "
+                        "%u arms through the arm hook\n", dm.n_hooked, t->as.match.n_arms);
+        abort();
+    }
+    /* Nothing the dispatch itself queued can be dropped after it: every arm
+     * left the function.  The scrutinee is an atom, so nothing is queued. */
+    while (ctx->n_sum_pending > dd_sum) {
+        uint32_t k = --ctx->n_sum_pending;
+        free(ctx->sum_pending[k]);
+        if (ctx->sum_pending_owned[k]) free_struct_app_type(ctx->sum_pending_types[k]);
+    }
+    while (ctx->n_any_pending > dd_any) free(ctx->any_pending[--ctx->n_any_pending]);
+    while (ctx->n_vsp_pending > dd_vsp) free(ctx->vsp_pending[--ctx->n_vsp_pending]);
+    if (v && v[0]) ce_line(ce, "(void)%s;", v);
+    free(v);
+    ce_line(ce, "abort(); /* every arm left through its continuation */");
+}
+
 static void emit_match(CE *ce, const CTerm *t) {
+    if (t->as.match.direct) { emit_direct_match(ce, t); return; }
     const AdtDef *adt = t->as.match.adt;
     char *scrut = atom_str(ce, &t->as.match.scrut);
     char *mn = mangle_adt_name(adt->name);
@@ -8935,6 +9061,10 @@ static bool case_reopens(const CTerm *t) {
             case CT_CALLCC:  t = t->as.callcc.body;  break;
             case CT_IF:
                 return case_reopens(t->as.if_.then_) || case_reopens(t->as.if_.else_);
+            case CT_MATCH:
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    if (case_reopens(t->as.match.arms[i].body)) return true;
+                return false;
             default: return false;
         }
     }
@@ -8967,6 +9097,10 @@ static bool term_resumes_nontail(const CTerm *t, const Binding *k) {
             case CT_IF:
                 return term_resumes_nontail(t->as.if_.then_, k)
                     || term_resumes_nontail(t->as.if_.else_, k);
+            case CT_MATCH:
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    if (term_resumes_nontail(t->as.match.arms[i].body, k)) return true;
+                return false;
             default: return false;
         }
     }
@@ -9010,6 +9144,11 @@ static bool term_k_only_resumed(const CTerm *t, const Binding *k) {
                 if (atom_is_binding(&t->as.if_.cond, k)) return false;
                 return term_k_only_resumed(t->as.if_.then_, k)
                     && term_k_only_resumed(t->as.if_.else_, k);
+            case CT_MATCH:
+                if (atom_is_binding(&t->as.match.scrut, k)) return false;
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    if (!term_k_only_resumed(t->as.match.arms[i].body, k)) return false;
+                return true;
             default: return false;
         }
     }
@@ -9088,6 +9227,10 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding). */
+    /* The read-out's recorded spellings are this helper's alone (see
+     * emit_localvar_save_ctype); restored once its body is emitted. */
+    char *cap_prev_ctype[CC_MAX_CAPS] = {0};
+    char *cap_prev_name[CC_MAX_CAPS] = {0};
     if (has_caps) {
         indent_buf(&tmp, 4);
         buf_printf(&tmp, "%s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
@@ -9099,6 +9242,8 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
              * expressions, keys its bridges on a local's RECORDED spelling;
              * without it a capture declared `tur_adt_Vec__float *` here was
              * passed bare into an inline-C callee's int64 parameter. */
+            cap_prev_ctype[i] = emit_localvar_save_ctype(cn);
+            cap_prev_name[i] = strdup(cn);
             emit_localvar_record_ctype(cn, cap_ctype(ce->ctx, caps, i));
             /* E1 (Option A): an owning capture admitted into a multi-shot
              * continuation is CLONED (increfed) on read-out, so each invocation of
@@ -9255,6 +9400,11 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);
     buf_putc(&tmp, '\0');
+    for (int i = 0; i < CC_MAX_CAPS; i++)
+        if (cap_prev_name[i]) {
+            emit_localvar_restore_ctype(cap_prev_name[i], cap_prev_ctype[i]);
+            free(cap_prev_name[i]);
+        }
 
     /* N6.3: the env struct type (named <name>_env) shared with the alloc site.
      * Caps-only -- no continuation slot (see emit_cont_env). */
@@ -9391,7 +9541,16 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         Buf dc; buf_init(&dc);
         fncps_direct_call(&dc, pf, av, na, call->as.tailcall.call_expr);
         buf_putc(&dc, '\0');
-        ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc.data);
+        /* The join reads its parameter out of the slot: a float by its bits. */
+        TypeKind drk = call->as.tailcall.call_expr
+            ? call->as.tailcall.call_expr->type.kind : TY_INT;
+        if (drk == TY_FLOAT || drk == TY_FLOAT64 || drk == TY_FLOAT32) {
+            char *dw = cps_ir_fncps_word_of(drk, dc.data);
+            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dw);
+            free(dw);
+        } else {
+            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc.data);
+        }
         buf_free(&dc);
         free(pf); fncps_args_free(av, na);
     } else if (call->as.tailcall.via_registry) {

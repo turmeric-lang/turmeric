@@ -1,0 +1,52 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param: an effectful
+;; callback whose argument or result is a float, a float32, a bool or a
+;; narrow integer, called through an un-annotated (empty-row) fn parameter.
+;; Each used to be refused ("this effect operation has no lowering here");
+;; the fn_cps slot carries a float as its bits and a narrow integer or bool
+;; as its word now.  Tail and non-tail (heap join) calls, named fns and
+;; lambdas, and pure values through the same parameters.  Every line equals
+;; `tur --interpret`.
+(defeffect Ask [] :int)
+
+;; -- the parameters: tail calls ...
+(defn appf [h : (fn [int] float) x : int] : float (h x))
+(defn appb [h : (fn [bool] int) b : bool] : int (h b))
+(defn appn [h : (fn [int32] int32) b : int32] : int32 (h b))
+(defn apps [h : (fn [float32] float32) b : float32] : float32 (h b))
+(defn appr [h : (fn [int] bool) x : int] : bool (h x))
+;; ... and non-tail calls, whose result crosses a join
+(defn appg [h : (fn [float int] float) x : float] : float (+ 1.5 (h x 2)))
+(defn appm [h : (fn [int8 float bool] float) x : float] : float
+  (* 2.0 (h (as int8 3) x true)))
+
+;; -- effectful callbacks
+(defn ff [x : int] : float (+ 0.25 (as float (+ x (perform (Ask))))))
+(defn fg [x : float y : int] : float (+ x (as float (+ y (perform (Ask))))))
+(defn fb [b : bool] : int (if b (perform (Ask)) 7))
+(defn fn32 [b : int32] : int32 (+ b (as int32 (perform (Ask)))))
+(defn fs [b : float32] : float32 (+ b (as float32 (perform (Ask)))))
+(defn fr [x : int] : bool (> (+ x (perform (Ask))) 12))
+(defn fm [a : int8 x : float c : bool] : float
+  (if c (+ x (as float (+ (as int a) (perform (Ask))))) x))
+
+;; -- pure callbacks through the same parameters
+(defn pf [x : int] : float (+ 0.5 (as float x)))
+(defn pb [b : bool] : int (if b 1 2))
+
+(defn main [] : int
+  (println (handle (appf ff 1) (Ask [] k) (resume k 10)))
+  (println (handle (appg fg 7.1) (Ask [] k) (resume k 10)))
+  (println (handle (appb fb true) (Ask [] k) (resume k 10)))
+  (println (handle (appb fb false) (Ask [] k) (resume k 10)))
+  (println (handle (appn fn32 (as int32 5)) (Ask [] k) (resume k 10)))
+  (println (handle (apps fs (as float32 2.5)) (Ask [] k) (resume k 10)))
+  (println (handle (appr fr 1) (Ask [] k) (resume k 10)))
+  (println (handle (appr fr 5) (Ask [] k) (resume k 10)))
+  (println (handle (appm fm 0.75) (Ask [] k) (resume k 10)))
+  (println (handle (appf (fn [x : int] : float (+ 0.5 (as float (+ x (perform (Ask)))))) 2)
+             (Ask [] k) (resume k 10)))
+  (println (handle (appg (fn [x : float y : int] : float (* x (as float (+ y (perform (Ask)))))) 3.25)
+             (Ask [] k) (resume k 10)))
+  (println (appf pf 3))
+  (println (appb pb false))
+  0)

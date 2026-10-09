@@ -205,23 +205,86 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
  * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) converts each word
  * back to the wrapped fn's own C parameter type (cps_ir_fncps_arg_ctype) for
  * its direct call, so the kinds admitted are the ones whose C spelling is known
- * from the kind alone: a word integer, a `cstr` and a `ptr<void>`.  A narrow
- * integer, a `bool` or a float has a spelling (or a register class) the word
- * does not carry, so it stays on the delegated direct path (correct as before,
- * just not newly DK-threaded). */
+ * from the kind alone: every scalar.  A float crosses as its bits
+ * (cps_ir_fncps_word_of), the convention the DK slot itself uses, and travels
+ * to the registered `__cps` entry at its own type, as the E2a registry's call
+ * sites pass it (e2a_cast).  Until 2026-10-09 a narrow integer, a `bool` or a
+ * float stayed on the delegated direct path, so an effectful callback of one
+ * was refused. */
 static bool fncps_arg_kind_ok(TypeKind k) {
-    return k == TY_INT || k == TY_INT64 || k == TY_CSTR || k == TY_PTR_VOID;
+    switch (k) {
+        case TY_INT: case TY_INT64: case TY_CSTR: case TY_PTR_VOID:
+        case TY_BOOL:
+        case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+            return true;
+        default:
+            return false;
+    }
 }
 const char *cps_ir_fncps_arg_ctype(TypeKind k) {
-    return k == TY_CSTR ? "const char *" : k == TY_PTR_VOID ? "void *" : "int64_t";
+    switch (k) {
+        case TY_CSTR:     return "const char *";
+        case TY_PTR_VOID: return "void *";
+        case TY_BOOL:     return "bool";
+        case TY_INT8:     return "int8_t";
+        case TY_INT16:    return "int16_t";
+        case TY_INT32:    return "int32_t";
+        case TY_UINT8:    return "uint8_t";
+        case TY_UINT16:   return "uint16_t";
+        case TY_UINT32:   return "uint32_t";
+        case TY_UINT64:   return "uint64_t";
+        case TY_FLOAT: case TY_FLOAT64: return "double";
+        case TY_FLOAT32:  return "float";
+        default:          return "int64_t";
+    }
+}
+static char *fncps_wrap(const char *pre, const char *x, const char *post) {
+    size_t a = strlen(pre), b = strlen(x), c = strlen(post);
+    char *s = (char *)malloc(a + b + c + 1);
+    if (!s) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(s, pre, a); memcpy(s + a, x, b); memcpy(s + a + b, post, c);
+    s[a + b + c] = '\0';
+    return s;
+}
+char *cps_ir_fncps_word_of(TypeKind k, const char *value) {
+    switch (k) {
+        case TY_FLOAT: case TY_FLOAT64:
+            return fncps_wrap("((union { double d; int64_t i; }){ .d = (", value, ") }).i");
+        case TY_FLOAT32:
+            return fncps_wrap("(int64_t)((union { float f; uint32_t u; }){ .f = (", value, ") }).u");
+        case TY_CSTR: case TY_PTR_VOID:
+            return fncps_wrap("(int64_t)(intptr_t)(", value, ")");
+        default:
+            return fncps_wrap("(int64_t)(", value, ")");
+    }
+}
+char *cps_ir_fncps_value_of(TypeKind k, const char *word) {
+    switch (k) {
+        case TY_FLOAT: case TY_FLOAT64:
+            return fncps_wrap("((union { double d; int64_t i; }){ .i = (int64_t)(", word, ") }).d");
+        case TY_FLOAT32:
+            return fncps_wrap("((union { float f; uint32_t u; }){ .u = (uint32_t)(", word, ") }).f");
+        case TY_CSTR:
+            return fncps_wrap("(const char *)(intptr_t)(", word, ")");
+        case TY_PTR_VOID:
+            return fncps_wrap("(void *)(intptr_t)(", word, ")");
+        default: {
+            char pre[32];
+            snprintf(pre, sizeof pre, "(%s)(", cps_ir_fncps_arg_ctype(k));
+            return fncps_wrap(pre, word, ")");
+        }
+    }
 }
 /* ...and a RESULT the direct fallback can call `f.fn` for with its real C type
  * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
  * param's declared result, so calling it through an `int64_t` function type is a
  * mismatched call -- a -fsanitize=function trap -- and a float result would be
- * read from the wrong register.  Anything else stays delegated. */
+ * read from the wrong register.  A pointer result stays delegated. */
 static bool fncps_result_kind_ok(TypeKind k) {
-    return k == TY_INT || k == TY_INT64 || k == TY_NIL || k == TY_BOOL;
+    if (k == TY_NIL) return true;
+    return k != TY_CSTR && k != TY_PTR_VOID && fncps_arg_kind_ok(k);
 }
 bool cps_ir_fncps_sig_ok(const Type *fn_ty) {
     if (!fn_ty || fn_ty->kind != TY_FN) return false;
@@ -647,6 +710,7 @@ typedef struct { PendItem items[32]; uint32_t n; } Pending;
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest);
+static CTerm *cps_bind_cast(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest);
 
 /* An owning-value operation on a local rc handle (`rc/of`, `rc/clone`, `rc/drop`,
@@ -3862,6 +3926,81 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
     return t;
 }
 
+/* cps-match-on-builtin-sum-evicts: may the DIRECT emitter dispatch this match
+ * while its arm bodies stay CPS terms?  match_dk_ok's shape (a tagged ADT the
+ * CPS emitter reads itself) is the only one CT_MATCH could take, so a colored
+ * arm under a match on an `(Option A)`, a `(Result T E)`, an int or string
+ * literal, or an `any` narrowing evicted the whole function -- the most common
+ * way to look at a value an effectful function was handed.  The direct match
+ * emitter already routes every arm body through one hook (EmitCtx.match_tail,
+ * proper-tail-calls T3) on all its arm shapes but a session offer; the CPS
+ * emitter takes that hook here.  What the direct emitter still evaluates must
+ * be delegatable: the scrutinee is bound to an atom first (any control in it
+ * is translated), and a guard must carry none.  A `!`-typed match has no
+ * result temp to declare. */
+static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp);
+static bool match_direct_dispatch_ok(CpsB *b, const Expr *e) {
+    const Expr *scrut = e->as.match_.scrutinee;
+    if (!scrut || e->as.match_.n_arms == 0) return false;
+    if (scrut->type.kind == TY_SESSION_OFFER) return false;
+    if (e->type.kind == TY_NEVER) return false;
+    for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+        const MatchArm *arm = &e->as.match_.arms[i];
+        if (!arm->body) return false;
+        /* A guard is direct-emitted inside the dispatch, so it must be
+         * delegatable -- and the capture analyses would have to read its free
+         * variables, which they do not; leave a guarded match as it was. */
+        if (arm->guard) return false;
+    }
+    return true;
+}
+
+/* Build the direct-dispatch CT_MATCH (see match_direct_dispatch_ok), each arm
+ * delivering to `kont`.  The scrutinee is bound to a fresh binder the copied
+ * match names, unless it is already a variable. */
+static CTerm *build_direct_match_term(CpsB *b, Expr *e, CKont kont) {
+    Expr *scrut = e->as.match_.scrutinee;
+    const Expr *ps = ascribe_peel(scrut);
+    Expr *m = arena_alloc(b->a, sizeof(Expr));
+    *m = *e;
+    CVar y = {0};
+    bool bind_scrut = !(ps && ps->kind == EX_VAR && ps->as.var.binding);
+    if (bind_scrut) {
+        y = fresh_cvar(b, &scrut->type);
+        m->as.match_.scrutinee = cvar_expr(b, &y, &scrut->type, scrut->span);
+    }
+    Pending p = {0};
+    CAtom sa = atomize(b, m->as.match_.scrutinee, &p);
+    CTerm *t = new_term(b, CT_MATCH);
+    t->as.match.scrut = sa;
+    t->as.match.adt = NULL;
+    t->as.match.direct = m;
+    uint32_t n = e->as.match_.n_arms;
+    t->as.match.n_arms = n;
+    CMatchArm *arms = arena_alloc(b->a, n * sizeof(CMatchArm));
+    for (uint32_t i = 0; i < n; i++) {
+        const MatchArm *arm = &e->as.match_.arms[i];
+        const MatchPattern *pat = &arm->pattern;
+        arms[i].ctor = pat->ctor;
+        if (pat->ctor) {
+            arms[i].fields = (const struct Binding **)pat->bindings;
+            arms[i].n_fields = pat->n_bindings;
+        } else if (pat->var_binding) {
+            const struct Binding **one = arena_alloc(b->a, sizeof *one);
+            one[0] = pat->var_binding;
+            arms[i].fields = one;
+            arms[i].n_fields = 1;
+        } else {
+            arms[i].fields = NULL;
+            arms[i].n_fields = 0;
+        }
+        arms[i].body = cps_tail(b, arm->body, kont);
+    }
+    t->as.match.arms = arms;
+    CTerm *r = fold_pending(b, &p, t);
+    return bind_scrut ? cps_bind(b, scrut, y, r) : r;
+}
+
 /* The implicit `else` of a one-armed `if` -- what `(when c body)` desugars to.
  * Such an `if` is nil-typed (the type checker rejects it otherwise: a present
  * else must match the then branch, and a nil then branch is what makes the
@@ -3899,6 +4038,19 @@ static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp) {
  * of e''s own type (any translation the operand needs), then x from a
  * synthesized reinterpret of y -- atomic, so delegated to the direct emitter,
  * which spells the retype (pointer through intptr_t, a narrowing cast). */
+/* The same for a numeric conversion `(as T e')` (EX_CAST) whose operand
+ * carries control -- `(as float (+ x (perform (Ask))))`, which evicted the
+ * whole function (`unsupported form: EX_CAST`): bind e' to a binder of its own
+ * type, then x from a delegated cast of that binder. */
+static CTerm *cps_bind_cast(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    Expr *inner = e->as.cast_.expr;
+    CVar y = fresh_cvar(b, &inner->type);
+    Expr *yv = cvar_expr(b, &y, &inner->type, e->span);
+    Expr *ce = arena_alloc(b->a, sizeof(Expr));
+    *ce = *e;
+    ce->as.cast_.expr = yv;
+    return cps_bind(b, inner, y, build_letraw(b, ce, x, rest));
+}
 static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     Expr *inner = e->as.reinterpret_.expr;
     CVar y = fresh_cvar(b, &inner->type);
@@ -4247,6 +4399,8 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
+            if (match_direct_dispatch_ok(b, e))
+                return build_direct_match_term(b, e, kont);
             return unsupported_form(b, e);
         }
         case EX_LET: {
@@ -4558,6 +4712,12 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return cps_bind_reinterp(b, e, x, ac);
             }
+            if (e->kind == EX_CAST && e->as.cast_.expr) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return cps_bind_cast(b, e, x, ac);
+            }
             return unsupported_form(b, e);
         }
     }
@@ -4766,6 +4926,15 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 return fold_pending(b, &p, t);
             }
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
+            if (match_direct_dispatch_ok(b, e)) {
+                CVar j = fresh_cvar(b, x.type);
+                j.name = arena_strdup(b->a, "j", 1);
+                CTerm *body = build_direct_match_term(b, e, kont_var(j));
+                CTerm *t = new_term(b, CT_LETCONT);
+                t->as.letcont.j = j; t->as.letcont.param = x;
+                t->as.letcont.jbody = rest; t->as.letcont.body = body;
+                return t;
+            }
             return unsupported_form(b, e);
         }
         case EX_LET: {
@@ -4954,6 +5123,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * it into x through a delegated reinterpret of that binder. */
             if (is_tierA_reinterp(e) && e->as.reinterpret_.expr)
                 return cps_bind_reinterp(b, e, x, rest);
+            if (e->kind == EX_CAST && e->as.cast_.expr)
+                return cps_bind_cast(b, e, x, rest);
             return unsupported_form(b, e);
         }
     }
