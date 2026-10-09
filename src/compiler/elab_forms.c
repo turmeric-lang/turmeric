@@ -1312,6 +1312,9 @@ Expr *elab_let(Elab *e, const Form *call) {
         }
         Expr *init = elab_form(e, init_form);
         e->expected_type = prev_expected;
+        /* A projection the annotation reduced hinted this init alone
+         * (associated-type-unusable-nullary-and-generic, half 1). */
+        e->assoc_hint_valid = false;
         e->in_persistent_let = prev_in_persistent_let;
 
         /* Task 2 (Prereq 1): Capture which preceding bindings were newly moved during this init elaboration. */

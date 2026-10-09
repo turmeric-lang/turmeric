@@ -2246,6 +2246,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                               head_sym->name);
                     return NULL;
                 }
+                /* half 1: remember which instance this spelling named, for a
+                 * return-directed method whose result is this associated
+                 * type (elab_try_return_dispatch). */
+                if (n_args == 1) {
+                    e->assoc_hint_name   = head_sym;
+                    e->assoc_hint_arg    = arg_buf[0];
+                    e->assoc_hint_result = *bound;
+                    e->assoc_hint_valid  = true;
+                }
                 Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *out = *bound;
                 return out;
@@ -3090,6 +3099,9 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     /* Elaborate the expression */
     Expr *inner = elab_form(e, expr_form);
     e->expected_type = saved_expected;
+    /* The hint a projection in this ascription left was for this expression
+     * alone (associated-type-unusable-nullary-and-generic, half 1). */
+    e->assoc_hint_valid = false;
     if (!inner) return NULL;
 
     /* any-narrowing-ascription-does-not-compile: `::` cannot narrow OUT of an

@@ -1,10 +1,22 @@
 # An associated type cannot be a nullary method's only class mention, or named at a type variable
 
-**Severity: medium** -- both halves are hard errors at `tur check`, so nothing
-miscompiles. What they cost is the ability to write a class over an associated
-type the way the guide's own shape suggests: one method spelling is
-unreachable and generic code over such a class cannot name the projection, so
-the class is usable only one concrete instance at a time.
+**Narrowed again 2026-10-09: half 1 is fixed.** `(empty [] : Inner)` can be
+called: `(let [z : (Inner W) (empty)] ...)` dispatches to `Box [W]` through the
+projection the annotation spelled, `(:: (empty) Pt)` through the one instance
+that binds `Inner` to `Pt`, and the method is called in a `let`, an
+ascription, a field read and a `defn` body alike, on both back ends. Two
+instances binding `Inner` to the same type refuse a bare ascription with a
+message that says to spell the projection; a call with no expected type at
+all keeps the existing "cannot infer type for return-directed method" (see
+"Fixed 2026-10-09: half 1" at the end). **What is left** is below that: a
+call whose expected type is neither spelled nor unique.
+
+**Severity: low** (was medium) -- a hard error at `tur check` in the one
+shape that is left, so nothing miscompiles. Both halves of the original
+report cost the ability to write a class over an associated type the way the
+guide's own shape suggests: one method spelling was unreachable and generic
+code over such a class could not name the projection, so the class was usable
+only one concrete instance at a time.
 
 **Narrowed again 2026-10-03: half 2 is fixed** -- `(Inner A)` at a type
 variable stays an unreduced projection and each call reduces it (see "Fixed
@@ -146,6 +158,43 @@ Fixtures worth having: a nullary associated-type method called through an
 ascription; a constrained generic taking `(Assoc A)`; and the
 class-in-one-module, instances-in-another layout, which is the shape every
 spice will hit.
+
+## Fixed 2026-10-09: half 1
+
+Return-directed dispatch (`elab_try_return_dispatch`,
+`src/compiler/elab_typeclasses.c`) found a method by looking for a class
+variable in its result and in none of its parameters -- which `(empty [] :
+Inner)` never has: its result is the associated type's own name. So `(empty)`
+was "unknown function or operator" -- unless a stdlib class had a
+return-directed method of the same name, and `Alternative` has an `empty`,
+`(empty [] : (f a))`. The search took the first class with the name, so every
+ascription on `Box`'s `empty` was measured against `(f a)`: that is where
+"ascribed type does not match the result shape" came from, and why the report
+could not see that its own method was never a candidate.
+
+- Every class with a return-only method of the name is a candidate now; a
+  method whose result names one of its class's associated types is one, with
+  the class's first parameter as its dispatch variable. When several classes
+  qualify, the one whose result fits the expected type is chosen (the others'
+  diagnostics no longer apply to it).
+- An associated-type result is dispatched through the instance that binds
+  the associated type to the expected type. The annotation that spelled the
+  projection names the instance: `type_expr_from_form` records the last
+  concrete projection it reduced (`Elab.assoc_hint_*`: `(Inner W)` -> `int`,
+  with `W`), and the dispatch takes `W` when its result is that associated
+  type and the expected type is that reduction; a `let` init or an ascribed
+  expression consumes the hint. A bare type -- `(:: (empty) Pt)` -- selects
+  the one instance binding the associated type to it, and when several do the
+  call is refused: "2 instances of 'Box' bind 'Inner' to int; say which one by
+  spelling the result as the projection, e.g. (:: (empty) (Inner T))".
+- With no expected type at all the call keeps the existing "cannot infer type
+  for return-directed method" refusal.
+
+Pinned by `tests/fixtures/typeclass-assoc-nullary-method` (both engines: the
+projection spelling in a `let` and in a `defn`, a bare ascription at a struct
+type and at `int`, the colliding stdlib name) and
+`tests/fixtures/errors/typeclass-assoc-nullary-method-ambiguous` (two
+instances binding `Inner` to `int`).
 
 ## Fixed 2026-10-03: a constrained generic in an instance-less module
 

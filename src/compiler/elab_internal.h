@@ -674,6 +674,17 @@ typedef struct Elab {
      * elaborator clears it for nested sub-calls so it applies only to the
      * outermost call of the ascribed expression. */
     Type *expected_type;
+    /* associated-type-unusable-nullary-and-generic (half 1): the last concrete
+     * projection a type expression reduced -- `(Inner W)` to `int` -- so a
+     * return-directed method whose result IS that associated type (`(empty []
+     * : Inner)`) can take W's instance from the ascription that spelled it,
+     * where the reduced `int` alone could name several instances.  Set by
+     * type_expr_from_form, consumed by elab_try_return_dispatch, and cleared
+     * once the annotated let init or ascribed expression is elaborated. */
+    const Symbol *assoc_hint_name;
+    Type          assoc_hint_arg;
+    Type          assoc_hint_result;
+    bool          assoc_hint_valid;
     /* saffron-dynamic-surface-pass H10 x call/cc: set while the RECEIVER of a
      * `call/cc` is being elaborated.  elab_fn reads and clears it at entry, so
      * only the immediate receiver lambda sees it: that lambda keeps its
