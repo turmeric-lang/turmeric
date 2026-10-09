@@ -1,5 +1,19 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed again 2026-10-09: a box-only env is dropped, and the typed spawn
+drops too.** An env whose drop glue frees the box alone is now owned by the
+spawn (`closure_env_drop_frees_box_only`, `src/compiler/emit_core.c`): no rc
+capture, no owned `^fat` closure capture, no Drop-instance capture, and no
+inline C in the body (walked exactly, through `cps_visit_children`, where
+`expr_subtree_has_inline_c` reads an `await` as possible inline C). A struct
+capture is a copy in the box, so it qualifies. The typed spawn
+(`tur_async_fiber_via`, a float / bool / pointer body) takes the same
+ownership protocol as `tur_async_fiber_closure`; it owned nothing before.
+`await-in-struct-capturing-async-body` is leak-checked now, and
+`tests/fixtures/async-struct-capturing-body-env-dropped` pins inline and
+parking struct-capturing bodies and a typed float body, 100 spawns of each
+(11,312 B in 303 allocations before, 0 now).
+
 **Narrowed 2026-10-09 (filed the same day): a shallow env is dropped.** A
 fresh capturing lambda written at the spawn, whose env drop is shallow
 (`closure_env_drop_is_shallow`: scalar captures, no inline C), is now owned by
@@ -11,13 +25,13 @@ settles. Pinned by `tests/fixtures/async-capturing-body-env-dropped`
 (leak-checked: inline, parking every turn, and 200 spawns in a loop -- 4848 B
 in 202 allocations before, 0 now).
 
-**What is left:** a capture the shallow test does not take -- a struct (the
-`await-in-struct-capturing-async-body` fixture still leaks its 32 B box), a
-fat closure, an `rc` -- whose drop glue would free what the body's result can
-still reference; a lambda bound to a local before the spawn (its `let` owns
-it); the typed spawn (`tur_async_fiber_via`) and the thread-backed one.
+**What is left:** a capture whose drop glue releases something -- an `rc`, an
+owned `^fat` closure, a Drop instance -- since the body's result may still
+reference it (a scalar result could not, which would admit those too); a
+lambda bound to a local before the spawn (its `let` owns it); the
+thread-backed spawn (`tur_async_thread_via`, `__tur_async_call_box`).
 
-**Severity: low-medium (a leak per spawn).** `(async (fn [] ... captured ...))`
+**Severity: low (was low-medium; a leak per spawn).** `(async (fn [] ... captured ...))`
 mallocs the lambda's env box, hands it to `tur_async_fiber_closure`, and
 nothing frees it afterwards: 32 bytes for a one-struct capture, every time the
 spawn runs. A server that spawns a capturing task per request leaks one box

@@ -1719,6 +1719,46 @@ bool closure_env_drop_is_shallow(const struct Closure *c) {
     return heap_caps > 0;                      /* an env block exists */
 }
 
+/* Does `e` hold an inline-C node?  Exact, through the shared operand
+ * enumeration (which does not enter a nested fn: its body is its own), where
+ * expr_subtree_has_inline_c reads every node it does not model -- a
+ * `perform`, an `await` -- as possible inline C. */
+static bool inline_c_node_visit(const Expr *c, void *ud);
+static bool expr_has_inline_c_node(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_INLINE_C) return true;
+    bool found = false;
+    cps_visit_children(e, inline_c_node_visit, &found);
+    return found;
+}
+static bool inline_c_node_visit(const Expr *c, void *ud) {
+    if (expr_has_inline_c_node(c)) { *(bool *)ud = true; return true; }
+    return false;
+}
+
+/* async-capturing-body-env-never-freed: may whoever alone owns this fresh
+ * closure release its env once the body is done, though the body's result is
+ * still live?  The env's drop glue (emit_expr.c, emit_fns.c) releases only an
+ * rc capture, an owned `^fat` closure capture and a Drop-instance capture,
+ * then frees the box.  With none of those it frees the box alone, which no
+ * value the body computes points into -- unless inline C took an address in
+ * it.  A struct capture is a copy in the box, so it qualifies; the shallow
+ * test above does not take it. */
+bool closure_env_drop_frees_box_only(const struct Closure *c) {
+    if (!c || !c->fn || c->n_captures == 0) return false;
+    if (c->is_shift_receiver || c->is_effect_payload) return false;
+    uint32_t heap_caps = 0;
+    for (uint32_t i = 0; i < c->n_captures; i++) {
+        const Binding *cap = c->captures[i];
+        if (!cap) return false;
+        if (cap->is_global) continue;
+        heap_caps++;
+        if (cap->type.kind == TY_RC || cap->is_fat) return false;
+        if (c->capture_drop_insts && c->capture_drop_insts[i]) return false;
+    }
+    return heap_caps > 0 && !expr_has_inline_c_node(c->fn->body);
+}
+
 /* dynamic-returned-closure-env-is-never-freed: does `x` evaluate to an `any`
  * holding a capturing closure's env that nothing but this value owns?  Two
  * shapes: a widen of a capturing lambda written right here, and a call to a

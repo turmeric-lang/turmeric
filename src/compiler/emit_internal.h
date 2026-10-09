@@ -1378,6 +1378,8 @@ bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
  * a bare free of the env block, and an expression that yields such a closure,
  * freshly built, as an `any` (emit_core.c). */
 bool closure_env_drop_is_shallow(const struct Closure *c);
+/* The env's drop frees the box and nothing else (emit_core.c). */
+bool closure_env_drop_frees_box_only(const struct Closure *c);
 bool expr_is_fresh_any_closure(const Expr *x);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);

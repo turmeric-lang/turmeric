@@ -3888,6 +3888,7 @@ static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {
     if (!tur_scheduler) {
         tur_scheduler = tur_scheduler_new();
     }
+    int __own = tur_async_owns_env; tur_async_owns_env = 0;
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;
     tur_handler_node __node; __node.parent = tur_handler_chain;
@@ -3896,11 +3897,13 @@ static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {
     int64_t result = wrap(env);
     tur_async_body_depth = __abd;
     tur_handler_chain = __node.parent;
-    if (tur_async_reject_if_panicking(future)) return future;
+    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(env); return future; }
     if (tur_async_suspended && tur_async_pending_park) {
         tur_async_pending_park->outer = future;
+        if (__own) tur_async_pending_park->own_env = env;
     } else {
         tur_future_fulfill(future, result);
+        if (__own) TUR_CLOSURE_DROP(env);
     }
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;

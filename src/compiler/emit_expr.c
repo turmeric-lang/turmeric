@@ -8702,6 +8702,21 @@ static const Expr *emit_dict_forwarded_call(EmitCtx *ctx, const Expr *e) {
     return c;
 }
 
+/* async-capturing-body-env-never-freed: does the spawn own `fn_expr`'s box?
+ * A fresh lambda written right at the spawn is the spawn's alone, and it drops
+ * the box when the body settles -- when that frees nothing the body's result
+ * can still point into: the box alone (closure_env_drop_frees_box_only; a
+ * struct capture is a copy in it), or the shallow case. */
+static bool async_spawn_owns_env(const Expr *fn_expr) {
+    if (!fn_expr || fn_expr->type.kind != TY_FN || !fn_expr->type.as.fn.boxed) return false;
+    const Expr *lit = fn_expr;
+    while (lit && (lit->kind == EX_ASCRIBE || lit->kind == EX_FN_TO_FAT))
+        lit = lit->kind == EX_ASCRIBE ? lit->as.ascribe_.inner
+                                      : lit->as.fn_to_fat_.inner;
+    const struct Closure *lc = (lit && lit->kind == EX_CLOSURE) ? lit->as.closure_.closure : NULL;
+    return lc && (closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc));
+}
+
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
     switch (e->kind) {
         case EX_DYN_OP:    return emit_dyn_op(ctx, body, e);
@@ -15970,6 +15985,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(pbuf, "}\n\n");
                     }
                     indent_buf(body, ctx->indent);
+                    if (!e->as.async_.on_thread && async_spawn_owns_env(fn_expr)) {
+                        buf_puts(body, "tur_async_owns_env = 1;\n");
+                        indent_buf(body, ctx->indent);
+                    }
                     buf_printf(body, "void *%s = (void *)%s(%s, (void *)(intptr_t)%s);\n",
                                tmp, e->as.async_.on_thread ? "tur_async_thread_via"
                                                            : "tur_async_fiber_via",
@@ -15983,16 +16002,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {
-                        /* async-capturing-body-env-never-freed: a fresh
-                         * shallow-env lambda written right here is the
-                         * spawn's alone; it drops the box when the body
-                         * settles. */
-                        const Expr *lit = fn_expr;
-                        while (lit && (lit->kind == EX_ASCRIBE || lit->kind == EX_FN_TO_FAT))
-                            lit = lit->kind == EX_ASCRIBE ? lit->as.ascribe_.inner
-                                                          : lit->as.fn_to_fat_.inner;
-                        if (lit && lit->kind == EX_CLOSURE &&
-                            closure_env_drop_is_shallow(lit->as.closure_.closure)) {
+                        if (async_spawn_owns_env(fn_expr)) {
                             buf_puts(body, "tur_async_owns_env = 1;\n");
                             indent_buf(body, ctx->indent);
                         }
