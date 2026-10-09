@@ -1,5 +1,8 @@
 # `match` result temporary is typed from the first arm, so a non-capturing closure there breaks the C
 
+**RESOLVED 2026-10-09.** Fix direction 2: arm types that are one fn type join
+to the fat representation when either arm is fat. See "Resolution" at the end.
+
 **Severity:** low-medium (compile failure with a one-line source workaround).
 `tur check` passes; `cc` rejects the emitted C.
 
@@ -95,3 +98,24 @@ recursion rather than one `re-cata`. It is a code-shape choice today, not a
 blocker: converting needs only a capturing arm before the nullary `EmptyF` arm.
 This is the natural arm order for any nullary-first functor, so it will bite the
 next function-carrier cata too.
+
+## Resolution (2026-10-09)
+
+The root cause was the arm-type join, not the emitter. `match_arm_type_compatible`
+(`src/compiler/elab_structs.c`), which `match` and `if` both join their arms
+through, returned the FIRST arm's type whenever the two were `type_eq` --
+and `type_eq` ignores a fn type's `boxed` flag, which is exactly what tells a
+capture-free lambda's thin code pointer from a capturing lambda's fat box.
+The emitter then declared the result temporary from that type (`int64_t`)
+while each arm, coerced to the function's declared result, stored a `void *`.
+Two arms of one fn type now join to the boxed one when either is boxed, so
+the temporary is `void *` whatever the arm order.
+
+The fixture shows the gate also catches it under gcc: `run.sh`'s emitted-C
+representation check fails the pre-fix build with "emitted C confuses scalar
+representations", so this was never macOS-only in CI terms -- only no fixture
+had the shape.
+
+Pinned by `tests/fixtures/match-fn-result-thin-arm-first`: the report's cata
+repro (capture-free arm first), a three-arm `match` with the capturing arm in
+the middle over float payloads, and the same join through `if`.

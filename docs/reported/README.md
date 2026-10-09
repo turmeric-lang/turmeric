@@ -42,7 +42,7 @@ is a `spices/watch` finding recorded as probably permanent.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [match-result-temp-typed-from-first-arm](match-result-temp-typed-from-first-arm.md) | low-medium (compile failure) | A `match` returning closures types its result temporary from the first arm: a non-capturing closure there gives `int64_t` while every arm builds a `void *` fat box, so `tur check` passes and AppleClang rejects the C (`-Wint-conversion`). Workaround: write a capturing arm first |
+| ~~[match-result-temp-typed-from-first-arm](../archive/match-result-temp-typed-from-first-arm.md)~~ | low-medium (compile failure) | **RESOLVED 2026-10-09** (archived): the arm join (`match_arm_type_compatible`, shared by `match` and `if`) kept the first arm's type when two were `type_eq`, which ignores a fn type's `boxed` flag -- so a capture-free lambda first made the result temp `int64_t` beside `void *` arms. Two arms of one fn type now join to the fat one. Pinned by `match-fn-result-thin-arm-first` |
 | [watch-darwin-fresh-name-is-create](watch-darwin-fresh-name-is-create.md) | low | `spices/watch` on Darwin reports a name that arrived by `rename(2)` as `create`, not `rename`, because the tree layer diffs directory snapshots; Linux reports `rename`. The event and path are correct on both |
 
 ## Found implementing the notebook docs-and-examples plan (filed 2026-10-05)
