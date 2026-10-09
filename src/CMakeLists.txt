@@ -642,6 +642,26 @@ set_target_properties(tur PROPERTIES
 # ---------------------------------------------------------------------------
 add_library(libturi STATIC $<TARGET_OBJECTS:tur_core>)
 set_target_properties(libturi PROPERTIES OUTPUT_NAME "turi")
+# r7rs-gc-eval-programs-scan-libturi-data: a `(scheme eval)` program links
+# libturi, and the collector scans the executable's whole writable data and bss
+# as roots -- ~46 MB of it libturi's (ASan redzones included in Debug), which
+# holds no pointer into the collector's heap: the interpreter allocates with
+# libc, and the eval bridge passes text and integer ids, never a heap address.
+# Moving libturi's data and bss into sections of their own lets the linker
+# bracket them (__start_/__stop_tur_turi_{data,bss}), and the collector skips
+# those ranges (tur_gc_scan_data, runtime/r7gc.c).  ELF only: the weak
+# references read as null wherever the sections do not exist.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_OBJCOPY)
+    add_custom_command(TARGET libturi POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY}
+            --rename-section .data=tur_turi_data
+            --rename-section .data.rel.local=tur_turi_data
+            --rename-section .data.rel=tur_turi_data
+            --rename-section .bss=tur_turi_bss
+            $<TARGET_FILE:libturi>
+        COMMENT "Moving libturi's data and bss into tur_turi_{data,bss}"
+        VERBATIM)
+endif()
 target_include_directories(libturi PUBLIC ${TUR_INCLUDE_DIRS})
 target_link_options(libturi INTERFACE -pthread)
 # RP3: propagate libdl to anyone linking libturi (the REPL helpers

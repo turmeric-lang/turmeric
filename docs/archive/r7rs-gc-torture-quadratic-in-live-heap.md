@@ -60,7 +60,7 @@ the thread fixtures' cold prelude variants
 
 `tur_gc_scan` now tests each word against the heap bounds inline instead of
 calling the marker for it
-([r7rs-gc-eval-programs-scan-libturi-data](../reported/r7rs-gc-eval-programs-scan-libturi-data.md)).
+([r7rs-gc-eval-programs-scan-libturi-data](r7rs-gc-eval-programs-scan-libturi-data.md)).
 That cut a `(scheme eval)` program's per-collection cost 4.6x, where most
 scanned words are not heap addresses; inside a large live heap most words
 ARE, so it moves these programs less (same collection counts, interval 31):

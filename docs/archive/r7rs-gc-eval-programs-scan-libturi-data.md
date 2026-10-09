@@ -1,5 +1,9 @@
 # r7rs-gc: a `(scheme eval)` program's every collection scans `libturi`'s 46 MB of data, which holds no collector pointer
 
+**RESOLVED 2026-10-09 (Linux).** Fix direction 2, by sections: libturi's
+data and bss are moved into sections of their own when the archive is built,
+and the collector skips them. See "Resolution" at the end.
+
 
 **Narrowed 2026-10-08: the scan is ~4.6x cheaper; what it scans is unchanged.**
 `tur_gc_scan` passed every word to `tur_gc_mark_word`, a call that re-read the
@@ -74,3 +78,37 @@ ordinary collection.
 
 Nothing yet. A check could compare per-collection time
 (`TUR_GC_STATS=1`, torture) of an eval program against a plain one.
+
+## Resolution (2026-10-09)
+
+- **The build** (`src/CMakeLists.txt`, a POST_BUILD step on `libturi`, Linux
+  with an `objcopy`): every member's `.data`, `.data.rel.local` and
+  `.data.rel` become `tur_turi_data`, and `.bss` becomes `tur_turi_bss`. Both
+  names are C identifiers, so GNU ld and lld define
+  `__start_tur_turi_{data,bss}` / `__stop_...` for a program that references
+  them. (`.data.rel.ro*` lies below `__data_start`, outside the scan already;
+  the TLS sections are not scanned.)
+- **The collector** (`tur_gc_scan_data`, `src/runtime/r7gc.c`) declares the
+  four symbols weak and scans `__data_start .. _end` minus those two ranges.
+  A program that does not link libturi, or a libturi built without the step,
+  reads them as null and scans as before.
+
+Why this is safe, checked rather than assumed: nothing in libturi's globals
+can point into the collector's heap. The interpreter allocates with libc, and
+the `(scheme eval)` bridge (`stdlib/r7rs/eval.tur`) hands it datum TEXT and
+integer ids for host values and procedures, never a heap address.
+
+Measured (Linux, Debug `tur`, `TUR_GC_TORTURE=31`), `r7rs-eval`: 96
+collections, 0.73-0.84 s before, 0.32-0.47 s after -- the same as the program
+without torture; 42 MiB of the 46 are skipped (the brackets in the linked
+binary: `tur_turi_data` 20 MB, `tur_turi_bss` 24 MB). Same output.
+`tests/run-r7rs-gc.sh` 250 passed (249 plus the new check), and the libturi
+embedding ctests (`tur_eval_*`) pass against the rewritten archive.
+
+Pinned by `tests/run-r7rs-gc.sh` check 5, `libturi-not-a-root`: it builds
+`r7rs-eval` and requires the four brackets (defined only when the collector
+references them) and more than 1 MiB between them.
+
+Not done: macOS. Its scan walks the writable Mach-O segments, and the same
+move would need `__DATA,<section>` names plus `getsectiondata`; the Debug
+cost there is the same 46 MB and is left as it was.

@@ -278,7 +278,7 @@ time: 923 s to 364 s (2.5x); the longest case 292 s to 99 s.
   2026-10-08 the harness runs with it at 64 (every-allocation cases excepted):
   3 m 33 s.
 - **Eval programs scan `libturi`'s data:**
-  [r7rs-gc-eval-programs-scan-libturi-data](../reported/r7rs-gc-eval-programs-scan-libturi-data.md).
+  [r7rs-gc-eval-programs-scan-libturi-data](../archive/r7rs-gc-eval-programs-scan-libturi-data.md).
   Every collection reads 46 MB, 38 ms against ~8 ms.
 - **Builds:** most of the rest of the harness's time is building 232
   programs, with ~8 cold prelude variants for the thread fixtures. See §1
