@@ -3581,14 +3581,16 @@ TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend creat
 int tur_async_body_depth = -1;  /* entry depth of the async body's root */
 
 #if defined(__GNUC__) || defined(__clang__)
-TUR_THREAD_LOCAL int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */
+extern int * tur_tls_async_direct_body_ptr(void);
+#define tur_async_direct_body (*tur_tls_async_direct_body_ptr())
 
 #else
 extern int * tur_tls_async_direct_body_ptr(void);
 #define tur_async_direct_body (*tur_tls_async_direct_body_ptr())
 #endif
 #if defined(__GNUC__) || defined(__clang__)
-TUR_THREAD_LOCAL int tur_async_owns_env = 0;  /* the next closure spawn owns its box */
+extern int * tur_tls_async_owns_env_ptr(void);
+#define tur_async_owns_env (*tur_tls_async_owns_env_ptr())
 
 #else
 extern int * tur_tls_async_owns_env_ptr(void);

@@ -553,7 +553,7 @@ its open report: `run-leak-check.sh` then reports it as `KNOWN` rather than
 failing, and fails if it ever runs *clean*, so the marker cannot outlive the
 bug.
 
-### Two traps, both of which have produced wrong answers here
+### Four traps, each of which has produced wrong answers here
 
 1. **Confirm the instrument before believing a clean result.** ASan silently
    reports nothing when it is not linked -- which is the default for fixtures.
@@ -573,6 +573,25 @@ bug.
    [rc-ref-conversion-and-weak-upgrade-leak](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/rc-ref-conversion-and-weak-upgrade-leak.md)
    behaves exactly this way. When probing a suspected leak, always put work
    after it.
+4. **The leak harness links no host runtime, and the default build does.**
+   `run-leak-check.sh` forces `TUR_RUNTIME=source` (every runtime function
+   compiled into the fixture's own TU), while the default Linux cc path and
+   `tur jit` are HOSTED builds: the program half is compiled against the
+   split runtime (`src/runtime/generated/`, `libturi`) and the two halves
+   share per-thread state only through the host accessors in
+   `src/runtime/tur_tls.c`. A thread-local the generator's table
+   (`tools/gen-runtime-split.py`, `TLS`) does not list gets two slots -- the
+   program writes one, the runtime reads the other -- and a drop keyed on it
+   never happens. `tur_async_owns_env` was such a slot for a day: every
+   leak-checked async fixture ran clean while the default build dropped no
+   async env at all
+   ([async-capturing-body-env-never-freed](../reported/async-capturing-body-env-never-freed.md),
+   the fifth narrowing). When the leak you are chasing is in code that
+   crosses the runtime boundary (a spawn, a handler, a fiber), run the
+   harness once more as `TUR_RUNTIME=split bash tests/run-leak-check.sh`, or
+   check the suspect fixture under `tur jit` with `ASAN_OPTIONS=detect_leaks=1`,
+   and treat a thread-local added to the preamble as unfinished until it is
+   in that table.
 
 ---
 

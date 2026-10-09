@@ -20,6 +20,25 @@ before any reader reads. A future the program holds (`(let [f (async ...)]
 CPS await paths, a struct capture, a captureless body, a float payload, 200
 spawns from a loop, and `main`'s direct-style awaits).
 
+Found on the way, under `tur jit` and any hosted split-runtime build --
+which on Linux is the DEFAULT cc path too (cc-path-preamble-split-plan;
+`tests/run-leak-check.sh` forces `TUR_RUNTIME=source`, the one mode that
+links no host runtime, which is why it never saw this): none of the env
+drops this report records ever happened there. `tur jit` on
+`async-capturing-body-env-dropped` reported 202 leaked blocks of 24 B where
+the source-runtime path reports none. The spawn's ownership flag never reached
+the runtime: `tur_async_owns_env` and `tur_async_direct_body` are
+thread-locals the preamble declares with the same selector as the others,
+but neither was in the split generator's TLS table
+(`tools/gen-runtime-split.py`), which is what makes the RUNTIME half read a
+thread-local through the host accessor (`src/runtime/tur_tls.c`). So the
+hosted program wrote the accessor's slot and the runtime half read a native
+thread-local of its own -- the exact mismatch the generator's comment
+describes for `tur_current_fiber`. The same held for
+`tur_async_direct_body`, which the await-depth refusal reads to place an
+async body's root. Both rows are in the table now; `tur jit` on the async
+fixtures reports no leak and the refusal fixture still refuses.
+
 **Narrowed a fourth time 2026-10-09: a lambda bound to a local first.**
 `(let [body (fn [] ... k ...)] (await (async body)))` leaked the box (32 B a
 spawn): the let could not drop it -- the body may still be running, parked --
