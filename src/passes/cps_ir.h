@@ -416,5 +416,12 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty);
  * such call as a call through the parameter and drops the binding, and the
  * threading classifier (ptc_walk) counts it as one: one answer for both. */
 const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i);
+/* The same for an immutable local holding a GLOBAL fn -- named, or a lifted
+ * captureless lambda -- every use of which is a saturated call: the global,
+ * or NULL. */
+const Binding *cps_ir_let_global_fn_alias(const Expr *let, uint32_t i);
+/* A captureless `letrec` member (global, its lifted lambda in source_binding):
+ * the lambda a call through it calls, or NULL. */
+const Binding *cps_ir_letrec_member_target(const Binding *f);
 
 #endif

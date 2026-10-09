@@ -3985,6 +3985,8 @@ static int fvm_ref_slots(const FvMulti *m, const Expr *a, int out[3]) {
         c[0] = a->as.var.binding;
         c[1] = a->as.var.binding->closure_fn_binding;
         c[2] = a->as.var.binding->hoist_closure_fn_binding;
+        /* A captureless `letrec` member's value IS its lifted lambda. */
+        if (!c[1]) c[1] = cps_ir_letrec_member_target(a->as.var.binding);
     } else if (a && a->kind == EX_CLOSURE && a->as.closure_.closure
                && a->as.closure_.closure->fn) {
         c[0] = a->as.closure_.closure->fn->binding;
@@ -4052,6 +4054,21 @@ static bool serial_closure_recv_escapes(const FnDef *fd) {
     return !effect_row_is_runtime_pure(fd->inferred_effect_row);
 }
 static const Expr *peel_fn_value(const Expr *e);
+
+/* The globals the walk below found held by a rewritten alias (see its EX_LET
+ * arm); read by direct_only_add's caller.  Program-lifetime, like the walk's
+ * other side tables. */
+static const Binding *g_alias_target[256];
+static int            g_alias_target_n;
+static void alias_target_add(const Binding *b) {
+    for (int i = 0; i < g_alias_target_n; i++) if (g_alias_target[i] == b) return;
+    if (g_alias_target_n < (int)(sizeof(g_alias_target)/sizeof(g_alias_target[0])))
+        g_alias_target[g_alias_target_n++] = b;
+}
+static bool alias_target_has(const Binding *b) {
+    for (int i = 0; i < g_alias_target_n; i++) if (g_alias_target[i] == b) return true;
+    return false;
+}
 
 static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
     if (!e) return;
@@ -4131,7 +4148,26 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     ? (lb->closure_fn_binding ? lb->closure_fn_binding
                                               : lb->hoist_closure_fn_binding)
                     : NULL;
-                if (init && init->kind == EX_CLOSURE && lb_lam &&
+                /* cps-local-fn-alias-or-lambda-called-in-place-refused: an
+                 * immutable local holding a global fn, only ever called -- the
+                 * translator rewrites each call to a direct one, so the init is
+                 * a callee, not a value use (and not an address taken). */
+                const Binding *ga = (e->kind == EX_LET && init
+                                     && peel_fn_value(init)
+                                     && peel_fn_value(init)->kind == EX_VAR)
+                    ? cps_ir_let_global_fn_alias(e, i) : NULL;
+                /* ...and a captureless `letrec` member, whose name is the
+                 * lifted lambda's global (cps_ir_letrec_member_target): a value
+                 * use of the MEMBER counts as one of the lambda (fvm_ref_slots),
+                 * so the init itself is none. */
+                if (!ga && e->kind == EX_LETREC && lb && init
+                    && peel_fn_value(init) && peel_fn_value(init)->kind == EX_VAR
+                    && peel_fn_value(init)->as.var.binding == cps_ir_letrec_member_target(lb))
+                    ga = cps_ir_letrec_member_target(lb);
+                if (ga) {
+                    eff_acc_add_callee(acc, ga);
+                    alias_target_add(ga);
+                } else if (init && init->kind == EX_CLOSURE && lb_lam &&
                     init->as.closure_.closure &&
                     init->as.closure_.closure->fn &&
                     init->as.closure_.closure->fn->binding == lb_lam) {
@@ -4152,8 +4188,12 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
             /* Direct call -> record the callee; indirect call -> overflow (may
              * reach any colored peer).  fn_expr is NULL for a resolved direct
              * call, non-NULL only for the indirect/higher-order case. */
-            if (e->as.call_.fn_binding) eff_acc_add_callee(acc, e->as.call_.fn_binding);
-            else if (e->as.call_.fn_expr) {
+            if (e->as.call_.fn_binding) {
+                /* A call through a captureless `letrec` member calls its lifted
+                 * lambda (the CPS translator rewrites it so). */
+                const Binding *lt = cps_ir_letrec_member_target(e->as.call_.fn_binding);
+                eff_acc_add_callee(acc, lt ? lt : e->as.call_.fn_binding);
+            } else if (e->as.call_.fn_expr) {
                 /* Effect subtyping / capability field (docs/reported/
                  * cps-effect-subtype-capability-pure-fn-in-effectful-field.md):
                  * a call THROUGH a lowered `.field` capability access (fn_expr is
@@ -5050,6 +5090,23 @@ static bool threadable_has(const Binding *b) {
     for (int i = 0; i < g_threadable_fn_n; i++) if (g_threadable_fn[i] == b) return true;
     return false;
 }
+/* cps-local-fn-alias-or-lambda-called-in-place-refused: lifted lambdas that are
+ * never a VALUE -- every use is a call through an immutable local alias the
+ * CPS translator rewrites to a direct call (cps_ir_let_global_fn_alias).  Such
+ * a lambda is a function with a generated name, not a fn value: nothing calls
+ * it from a fresh root, so it is no fiber source. */
+static const Binding *g_direct_only_fn[256];
+static int            g_direct_only_fn_n;
+static void direct_only_add(const Binding *b) {
+    for (int i = 0; i < g_direct_only_fn_n; i++) if (g_direct_only_fn[i] == b) return;
+    if (g_direct_only_fn_n < (int)(sizeof(g_direct_only_fn)/sizeof(g_direct_only_fn[0])))
+        g_direct_only_fn[g_direct_only_fn_n++] = b;
+}
+static bool direct_only_has(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_direct_only_fn_n; i++) if (g_direct_only_fn[i] == b) return true;
+    return false;
+}
 static void threadable_remove(const Binding *b) {
     for (int i = 0; i < g_threadable_fn_n; i++)
         if (g_threadable_fn[i] == b) {
@@ -5641,6 +5698,8 @@ static void ensure_S(const Expr *program) {
      * address-taken pre-pass (it needs the full g_addr_taken set) and before
      * classification. */
     g_threadable_fn_n = 0;
+    g_direct_only_fn_n = 0;
+    g_alias_target_n = 0;     /* refilled by the tally walk below */
     cps_ir_thread_param_reset();
     bool trace = getenv("TUR_TRACE_EVICT") != NULL;
     /* Every target first, then one tally walk for all of them (FvMulti), then
@@ -5680,6 +5739,11 @@ static void ensure_S(const Expr *program) {
          * So a colored pure lambda proceeds to the threadability check. */
         int total = fvm.total[sl], ok = fvm.ok[sl], tier = fv_multi_tier(&fvm, sl);
         bool thr = total >= 1 && total == ok;
+        /* No value use at all, and called through an alias the translator
+         * rewrites to a direct call: not a fn value (see direct_only_add). */
+        if (total == 0 && !fvm.stored[sl] && fd->binding->is_lifted_lambda
+            && alias_target_has(fd->binding))
+            direct_only_add(fd->binding);
         /* E2a: a concrete captureless fn-value is threaded onto the DK -- tier
          * `now` (tail call) OR tier `nontail` (a non-tail call, reified as a
          * heap-join frame threaded to its __cps).  Covers BOTH a lifted lambda
@@ -5799,7 +5863,8 @@ static void ensure_S(const Expr *program) {
                  * that only CALLS a performer used to taint nothing. */
                 uint64_t fv_esc_lo = 0, fv_esc_hi = 0;
                 if ((fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
-                    && !threadable_has(fd->binding) && !serial_recv_has(fd->binding))
+                    && !threadable_has(fd->binding) && !serial_recv_has(fd->binding)
+                    && !direct_only_has(fd->binding))
                     fn_net_escaping(program, fd->body, &fv_esc_lo, &fv_esc_hi);
                 for (int b = 0; b < 128; b++) {
                     bool on = b < 64 ? (fv_esc_lo >> b) & 1 : (fv_esc_hi >> (b - 64)) & 1;
@@ -5807,7 +5872,7 @@ static void ensure_S(const Expr *program) {
                 }
                 if (candidate
                     && (fd->binding->is_lifted_lambda || addr_taken_has(fd->binding))
-                    && !threadable_has(fd->binding)) {
+                    && !threadable_has(fd->binding) && !direct_only_has(fd->binding)) {
                     /* B5: perm-taint only on the NET ESCAPING effect -- a perform
                      * this fn-value DISCHARGES internally (a self-handling body,
                      * e.g. the `(fn [] (handle (perform E) (E ...)))` async closure

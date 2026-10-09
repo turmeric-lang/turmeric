@@ -2098,6 +2098,19 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * handle that discharged the fn-value's whole effect row; no handle is
              * delegated any more (see P5's note above), so it never is. */
             if (!fn) return false;
+            /* cps-local-fn-alias-or-lambda-called-in-place-refused: a call
+             * through an immutable local holding a colored global -- a lifted
+             * lambda, which has no source_binding -- performs what the global
+             * performs.  Delegated, it would run the global's direct entry from
+             * a fresh root; refused here, cps_tail / cps_bind rewrite it to the
+             * direct call (pap_register_let) or lower it as a fn-value call. */
+            if (!fn->is_global && fn->widen_fn_alias
+                && callee_colored(b, fn->widen_fn_alias))
+                return false;
+            {
+                const Binding *lt = cps_ir_letrec_member_target(fn);
+                if (lt && callee_colored(b, lt)) return false;
+            }
             if (callee_colored(b, fn)) {
                 /* A colored GLOBAL callee whose effects are ALL discharged by the
                  * enclosing delegated handle runs entirely under the local fiber
@@ -3096,6 +3109,8 @@ static bool pap_extract(const Expr *init, const Binding **target,
  *
  * This leaf is the WHOLE fix -- verified by disabling it and keeping everything
  * else, which reproduces the failure exactly. */
+typedef struct { const Binding *var; uint32_t rem_arity; bool ok; } PapSatUd;
+static bool pap_sat_visit(const Expr *c, void *ud);
 static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_arity) {
     e = ascribe_peel(e);
     if (!e) return true;
@@ -3154,10 +3169,31 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
             return pap_calls_saturated(e->as.reinterpret_.expr, var, rem_arity);
         case EX_ASCRIBE:
             return pap_calls_saturated(e->as.ascribe_.inner, var, rem_arity);
-        default:
-            /* Unmodeled form: conservatively refuse to inline (sound). */
+        case EX_MATCH:
+            if (!pap_calls_saturated(e->as.match_.scrutinee, var, rem_arity)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!pap_calls_saturated(e->as.match_.arms[i].guard, var, rem_arity)
+                    || !pap_calls_saturated(e->as.match_.arms[i].body, var, rem_arity))
+                    return false;
+            return true;
+        /* A nested fn definition may capture `var` -- a use as a value the
+         * enumeration below would not see (it does not enter fn bodies). */
+        case EX_FN: case EX_CLOSURE: case EX_FN_DEF:
             return false;
+        default: {
+            /* Every other node: its evaluated operands, through the shared
+             * enumeration -- a bare `var` among them is the EX_VAR leaf above,
+             * a value use. */
+            PapSatUd u = { var, rem_arity, true };
+            cps_visit_children(e, pap_sat_visit, &u);
+            return u.ok;
+        }
     }
+}
+static bool pap_sat_visit(const Expr *c, void *ud) {
+    PapSatUd *u = (PapSatUd *)ud;
+    if (!pap_calls_saturated(c, u->var, u->rem_arity)) { u->ok = false; return true; }
+    return false;
 }
 
 /* Build the saturated call that a pap-var call inlines to: `(TARGET cap0 ...
@@ -3203,6 +3239,14 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
         const Expr *fe = ascribe_peel(e->as.call_.fn_expr);
         if (fe && fe->kind == EX_VAR) callee = fe->as.var.binding;
     }
+    const Binding *lt = cps_ir_letrec_member_target(callee);
+    if (lt && e->as.call_.n_args == lt->type.as.fn.arity) {
+        Expr *nc = expr_new(b->a, EX_CALL, e->type, e->span);
+        nc->as.call_ = e->as.call_;
+        nc->as.call_.fn_binding = (Binding *)lt;
+        nc->as.call_.fn_expr = NULL;
+        return nc;
+    }
     const PapInline *pe = pap_lookup(b, callee);
     if (!pe || e->as.call_.n_args != pe->rem_arity) return e;
     return pap_build_saturated_call(b, pe, e);
@@ -3234,6 +3278,7 @@ static void pap_register_let(CpsB *b, const Expr *let) {
          * an effectful callback called through the alias had no lowering
          * (cps-let-alias-of-effectful-fn-param-refused). */
         const Binding *src = cps_ir_let_fnparam_alias(let, i);
+        if (!src) src = cps_ir_let_global_fn_alias(let, i);
         if (src) {
             b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = src;
             b->pap[b->n_pap].caps = NULL;   b->pap[b->n_pap].n_caps = 0;
@@ -3266,6 +3311,82 @@ static const Binding *fnparam_alias_src(const Binding *vb, const Expr *init) {
         return NULL;
     const Type *ss = fn_alias_sig(src), *vs = fn_alias_sig(vb);
     if (!ss || !vs || ss->as.fn.arity != vs->as.fn.arity) return NULL;
+    return src;
+}
+
+/* cps-local-fn-alias-or-lambda-called-in-place-refused: a GLOBAL function held
+ * by an immutable local -- a named fn (`(let [g via-adt] ...)`) or the lifted
+ * `__fn_N` of a captureless lambda (`(let [g (fn [n] ...)] ...)`) -- whose
+ * every use is a saturated call.  A call through it IS a direct call to the
+ * global.  A generic target is left out (a call through the local carries no
+ * instantiation), and so is one whose result is a function: a lifted lambda
+ * that returns a closure is callable only through the closure protocol on the
+ * local (pr-386, Binding.is_lifted_lambda). */
+static bool fn_alias_kind_concrete(TypeKind k) {
+    return k != TY_TYVAR && k != TY_APP && k != TY_FORALL && k != TY_UNKNOWN;
+}
+static bool global_fn_target_ok(const Binding *src) {
+    if (!src || !src->is_global || src->is_mut || src->is_poly_fn || src->is_fat
+        || src->closure_fn_binding || src->type.kind != TY_FN)
+        return false;
+    if (src->type.as.fn.result_kind == TY_FN) return false;
+    const FnDef *fd = src->source_fn_def;
+    if (!fd || fd->closure || fd->constraints.n_constraints > 0) return false;
+    for (uint32_t k = 0; k < fd->n_params; k++) {
+        const Binding *pk = fd->params ? fd->params[k] : NULL;
+        if (!pk || !fn_alias_kind_concrete(pk->type.kind)) return false;
+    }
+    return fn_alias_kind_concrete(src->type.as.fn.result_kind);
+}
+static const Binding *global_fn_alias_src(const Binding *vb, const Expr *init) {
+    if (!vb || vb->is_mut || vb->is_poly_fn || vb->is_fat || vb->type.kind != TY_FN)
+        return NULL;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_VAR) return NULL;
+    const Binding *src = init->as.var.binding;
+    if (!global_fn_target_ok(src)) return NULL;
+    if (src->type.as.fn.arity != vb->type.as.fn.arity) return NULL;
+    return src;
+}
+
+/* A captureless `letrec` member: elab_letrec lifts its lambda to a global
+ * `__fn_N`, marks the member itself global (its calls are direct C calls) and
+ * names the lambda in source_binding.  A call through the member -- from the
+ * `letrec` body or the lambda's own self-call -- is a direct call to the
+ * lambda.  NULL for anything else. */
+const Binding *cps_ir_letrec_member_target(const Binding *f) {
+    if (!f || !f->is_letrec_binding || !f->is_global || f->is_mut || f->is_poly_fn)
+        return NULL;
+    const Binding *src = f->source_binding;
+    if (!global_fn_target_ok(src) || !src->is_lifted_lambda) return NULL;
+    if (f->type.kind != TY_FN || f->type.as.fn.arity != src->type.as.fn.arity) return NULL;
+    return src;
+}
+
+/* Is every member of this `letrec` such a global (so the group binds names,
+ * not values, and its body is all there is to translate)? */
+static bool letrec_all_global_members(const Expr *e) {
+    if (!e || e->kind != EX_LETREC || e->as.let_.n == 0) return false;
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *f = e->as.let_.bindings[i].binding;
+        const Expr *init = ascribe_peel(e->as.let_.bindings[i].init);
+        const Binding *src = cps_ir_letrec_member_target(f);
+        if (!src || !init || init->kind != EX_VAR || init->as.var.binding != src)
+            return false;
+    }
+    return true;
+}
+
+const Binding *cps_ir_let_global_fn_alias(const Expr *let, uint32_t i) {
+    if (!let || (let->kind != EX_LET) || i >= let->as.let_.n) return NULL;
+    const Binding *vb = let->as.let_.bindings[i].binding;
+    const Binding *src = global_fn_alias_src(vb, let->as.let_.bindings[i].init);
+    if (!src) return NULL;
+    uint32_t ar = src->type.as.fn.arity;
+    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
+        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    if (closure_binding_escapes(let->as.let_.body, vb)) return NULL;
+    if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
     return src;
 }
 
@@ -4153,6 +4274,9 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     }
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
+    /* A `letrec` of captureless members binds global names, not values. */
+    if (e && e->kind == EX_LETREC && letrec_all_global_members(e))
+        return cps_tail(b, e->as.let_.body, kont);
     if (!e) {
         /* cps-while-native: a null (unit) loop-body tail is the back-edge. */
         if (kont.kind == KK_LOOP) return make_continue(b);
@@ -4735,6 +4859,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     e = pap_maybe_rewrite(b, e);
+    if (e->kind == EX_LETREC && letrec_all_global_members(e))
+        return cps_bind(b, e->as.let_.body, x, rest);
     if (is_atomic(e)) {
         CTerm *t = new_term(b, CT_LETVAL);
         t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;

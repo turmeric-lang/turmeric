@@ -78,7 +78,6 @@ Pinned by `tests/fixtures/effect-row-under-match-and-cast`, which uses
 `unexpected.stderr: TUR-W0033`. It has a user-ADT match, an Option match, an
 `as` cast, a literal match, and a fn value whose only `perform` is under a
 match, passed through an un-annotated parameter. The let-alias and `letrec`
-shapes are still refused by the CPS backend, so they cannot be fixtures yet.
-That is
-[cps-local-fn-alias-or-lambda-called-in-place-refused](../reported/cps-local-fn-alias-or-lambda-called-in-place-refused.md),
-and its repro no longer warns.
+shapes compile as of the same day
+([cps-local-fn-alias-or-lambda-called-in-place-refused](../reported/cps-local-fn-alias-or-lambda-called-in-place-refused.md)),
+and `cps-local-fn-alias-called-in-place` carries the same `unexpected.stderr`.
