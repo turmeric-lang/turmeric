@@ -1,0 +1,40 @@
+;; cps-match-on-builtin-sum-evicts (guards): a `match` with a `when` guard and
+;; a colored arm.  The direct emitter dispatches it (pattern tests, binders and
+;; the guard) and hands each arm body back to the CPS emitter; the guard's
+;; enclosing reads ride a lifted continuation like the scrutinee does.  Every
+;; line equals `tur --interpret`.
+(defeffect Ask [] :int)
+
+(defn g1 [o : (Option int) lim : int] : int
+  (match o
+    (Some v) when (> v lim) (+ v (perform (Ask)))
+    (Some v) (- v 1)
+    (None) 0))
+
+;; the guard reads `lim` after a perform: `lim` crosses into the lifted
+;; continuation that holds the match
+(defn g2 [o : (Option int) lim : int] : int
+  (let [a (perform (Ask))]
+    (match o
+      (Some v) when (> (+ v a) lim) (+ a v (perform (Ask)))
+      (Some v) v
+      (None) a)))
+
+;; literal arms with a guard on the catch-all binder
+(defn g3 [n : int] : int
+  (match n
+    0 (perform (Ask))
+    m when (> m 100) (+ m (perform (Ask)))
+    m (* m 2)))
+
+(defn main [] : int
+  (println (handle (g1 (some 5) 3) (Ask [] k) (resume k 10)))
+  (println (handle (g1 (some 2) 3) (Ask [] k) (resume k 10)))
+  (println (handle (g1 (none) 3) (Ask [] k) (resume k 10)))
+  (println (handle (g2 (some 5) 12) (Ask [] k) (resume k 10)))
+  (println (handle (g2 (some 1) 12) (Ask [] k) (resume k 10)))
+  (println (handle (g2 (none) 12) (Ask [] k) (resume k 10)))
+  (println (handle (g3 0) (Ask [] k) (resume k 10)))
+  (println (handle (g3 150) (Ask [] k) (resume k 10)))
+  (println (handle (g3 7) (Ask [] k) (resume k 10)))
+  0)

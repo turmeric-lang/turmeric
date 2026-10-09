@@ -268,7 +268,11 @@ struct CTerm {
          * then, and each arm's `fields` are the binders its pattern declares. */
         struct { CAtom scrut; const struct AdtDef *adt;
                  CMatchArm *arms; uint32_t n_arms;
-                 const struct Expr *direct; }                             match;
+                 const struct Expr *direct;
+                 /* The direct dispatch's guards read these enclosing
+                  * variables (each arm's own binders excluded): the capture
+                  * and mutation walks visit them like the scrutinee. */
+                 CAtom *guard_vars; uint32_t n_guard_vars; }              match;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; bool resumable_payload; }           perform;
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;

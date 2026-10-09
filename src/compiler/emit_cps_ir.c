@@ -969,6 +969,8 @@ static bool has_capture_rec(const CTerm *t, uint32_t exclude,
                 || has_capture_rec(t->as.if_.else_, exclude, bound, nb);
         case CT_MATCH:
             CC_ATOM(&t->as.match.scrut);
+            for (uint32_t gi = 0; gi < t->as.match.n_guard_vars; gi++)
+                CC_ATOM(&t->as.match.guard_vars[gi]);
             for (uint32_t ai = 0; ai < t->as.match.n_arms; ai++) {
                 const CMatchArm *arm = &t->as.match.arms[ai];
                 uint32_t nnb = nb;
@@ -1456,6 +1458,8 @@ static void collect_caps_rec(const CTerm *t, uint32_t exclude,
              * bindings are locally bound (extracted from the scrutinee at emit),
              * so add them to the bound set before walking the arm body. */
             COL_ATOM(&t->as.match.scrut);
+            for (uint32_t gi = 0; gi < t->as.match.n_guard_vars; gi++)
+                COL_ATOM(&t->as.match.guard_vars[gi]);
             for (uint32_t ai = 0; ai < t->as.match.n_arms && cs->ok; ai++) {
                 const CMatchArm *arm = &t->as.match.arms[ai];
                 uint32_t nnb = nb;
@@ -6549,6 +6553,8 @@ static void case_mut_scan(const CTerm *t, uint32_t *bound, int nb) {
             case_mut_scan(t->as.if_.else_, bound, nb); return;
         case CT_MATCH:
             MUT_A(&t->as.match.scrut);
+            for (uint32_t gi = 0; gi < t->as.match.n_guard_vars; gi++)
+                MUT_A(&t->as.match.guard_vars[gi]);
             for (uint32_t ai = 0; ai < t->as.match.n_arms; ai++) {
                 const CMatchArm *arm = &t->as.match.arms[ai];
                 int nnb = nb;
@@ -9238,6 +9244,8 @@ static bool term_k_only_resumed(const CTerm *t, const Binding *k) {
                     && term_k_only_resumed(t->as.if_.else_, k);
             case CT_MATCH:
                 if (atom_is_binding(&t->as.match.scrut, k)) return false;
+                for (uint32_t gi = 0; gi < t->as.match.n_guard_vars; gi++)
+                    if (atom_is_binding(&t->as.match.guard_vars[gi], k)) return false;
                 for (uint32_t i = 0; i < t->as.match.n_arms; i++)
                     if (!term_k_only_resumed(t->as.match.arms[i].body, k)) return false;
                 return true;

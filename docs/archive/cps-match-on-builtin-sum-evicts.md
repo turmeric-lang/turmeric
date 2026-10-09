@@ -116,4 +116,14 @@ capture record (four findings before). Every line equals `tur --interpret`.
 The three fixtures are leak-checked, pass the JIT harness and run clean
 under `-fsanitize=function`.
 
-Not covered: a match with a guard is still evicted when an arm is colored.
+**Guards, the same day.** A guarded match first stayed evicted: the guard is
+direct-emitted inside the dispatch, and the capture analyses did not read
+its variables. `match_direct_dispatch_ok` now admits a guard that is
+delegatable and writes nothing (`expr_writes`). `build_direct_match_term`
+records each guard's enclosing reads (`collect_free_vars`, its arm's binders
+excluded) as `match.guard_vars`. The capture check, capture collection, the
+clause mutation scan and `term_k_only_resumed` visit them as they visit the
+scrutinee. Pinned by `tests/fixtures/cps-match-guarded-colored-arm`, which
+covers an Option match with a guarded colored arm, a guard reading a variable
+that crosses into the lifted continuation after a perform, and a guarded
+binder arm on an int scrutinee.

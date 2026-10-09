@@ -9,6 +9,12 @@
 #include "builtins.h"
 #include "globals.h"
 
+/* The elaborator's free-variable walker (elab_internal.h): a direct-dispatch
+ * match's guard reads (build_direct_match_term). */
+Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
+                            Binding **self_exclude, uint32_t n_self_exclude,
+                            uint32_t *n_out);
+
 /* =========================================================================
  * CPS2 (cps-transform-plan): ANF/CPS translation for colored functions.
  *
@@ -4060,6 +4066,7 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
  * is translated), and a guard must carry none.  A `!`-typed match has no
  * result temp to declare. */
 static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp);
+static bool expr_writes(const Expr *e);
 static bool match_direct_dispatch_ok(CpsB *b, const Expr *e) {
     const Expr *scrut = e->as.match_.scrutinee;
     if (!scrut || e->as.match_.n_arms == 0) return false;
@@ -4069,11 +4076,27 @@ static bool match_direct_dispatch_ok(CpsB *b, const Expr *e) {
         const MatchArm *arm = &e->as.match_.arms[i];
         if (!arm->body) return false;
         /* A guard is direct-emitted inside the dispatch, so it must be
-         * delegatable -- and the capture analyses would have to read its free
-         * variables, which they do not; leave a guarded match as it was. */
-        if (arm->guard) return false;
+         * delegatable, and it must not write: the capture and mutation walks
+         * see its reads (match.guard_vars), not a store. */
+        if (arm->guard && (!safe_to_delegate(b, arm->guard) || expr_writes(arm->guard)))
+            return false;
     }
     return true;
+}
+
+/* Does `e` store anywhere (a `set!` of any shape, a `def`)? */
+static bool expr_writes_visit(const Expr *c, void *ud) { (void)ud; return expr_writes(c); }
+static bool expr_writes(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_SET: case EX_SET_DEREF: case EX_SET_FIELD: case EX_DEF:
+            return true;
+        case EX_FN: case EX_CLOSURE: case EX_FN_DEF:
+            return false;     /* a definition runs nothing here */
+        default:
+            return cps_visit_children(e, expr_writes_visit, NULL);
+    }
 }
 
 /* Build the direct-dispatch CT_MATCH (see match_direct_dispatch_ok), each arm
@@ -4116,6 +4139,32 @@ static CTerm *build_direct_match_term(CpsB *b, Expr *e, CKont kont) {
             arms[i].n_fields = 0;
         }
         arms[i].body = cps_tail(b, arm->body, kont);
+        /* The guard's enclosing reads (its arm's binders are its own). */
+        if (arm->guard) {
+            uint32_t nfv = 0;
+            Binding **fv = collect_free_vars(arm->guard, (Binding **)arms[i].fields,
+                                             (uint8_t)(arms[i].n_fields > 255 ? 255 : arms[i].n_fields),
+                                             NULL, 0, &nfv);
+            for (uint32_t k = 0; k < nfv; k++) {
+                const Binding *gb = fv[k];
+                if (!gb || gb->is_global) continue;
+                bool dup = false;
+                for (uint32_t j = 0; j < t->as.match.n_guard_vars; j++)
+                    if (t->as.match.guard_vars[j].var == gb) dup = true;
+                if (dup) continue;
+                if (t->as.match.n_guard_vars % 8 == 0) {
+                    CAtom *ng = arena_alloc(b->a, (t->as.match.n_guard_vars + 8) * sizeof(CAtom));
+                    if (t->as.match.n_guard_vars)
+                        memcpy(ng, t->as.match.guard_vars, t->as.match.n_guard_vars * sizeof(CAtom));
+                    t->as.match.guard_vars = ng;
+                }
+                CAtom *ga = &t->as.match.guard_vars[t->as.match.n_guard_vars++];
+                memset(ga, 0, sizeof *ga);
+                ga->kind = CA_VAR; ga->var = gb;
+                ga->ty = gb->type.kind; ga->type = &gb->type;
+            }
+            free(fv);
+        }
     }
     t->as.match.arms = arms;
     CTerm *r = fold_pending(b, &p, t);
