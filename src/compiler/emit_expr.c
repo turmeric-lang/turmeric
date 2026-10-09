@@ -6834,10 +6834,27 @@ static bool region_ascription_erases_node(EmitCtx *ctx, Type from, Type to) {
 static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
                                      const char *cb, const char *inner, int64_t tag) {
     if (!e->as.any_cast_.scheme_raise) {
+        /* panic-location-names-the-runtime-not-the-call-site: the check
+         * names the cast's own site, as emit_panic_call does for `panic`. */
+        const char *path = e->span.line ? diag_file_path(e->span.file_id) : NULL;
+        if (!path) {
+            buf_printf(body,
+                "tur_tagged_t %s = (%s); "
+                "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+                cb, inner, cb, (long long)tag);
+            return;
+        }
+        const char *base = path;
+        for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
         buf_printf(body,
             "tur_tagged_t %s = (%s); "
-            "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+            "__tur_any_cast_check_at(TUR_GETTAG(%s), %lld, \"",
             cb, inner, cb, (long long)tag);
+        for (const char *p = base; *p; p++) {
+            if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+            buf_putc(body, *p);
+        }
+        buf_printf(body, "\", %u);\n", e->span.line);
         return;
     }
     ensure_r7rs_cast_helper(ctx);

@@ -1,5 +1,25 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed again 2026-10-09: a failed `cast` names the cast.**  Each tag
+check the emitter writes for a `cast` out of `any` now calls
+`__tur_any_cast_check_at(have, want, "<file>", <line>)` with the cast's own
+basename and line (`emit_any_cast_bind_check`, `src/compiler/emit_expr.c`),
+and the preamble's check panics through `tur_panic_at`; the location-free
+`__tur_any_cast_check` stays for the runtime's own callers (the r7rs raising
+check).  The interpreter's cast failure sets the same site
+(`g_panic_site`, `src/turi/eval.c`), so both engines print `panic at
+input.tur:13: cast: any holds Point, not Other`.  157 `expected.c`
+snapshots moved (the check's call and the preamble's two new lines);
+`tests/fixtures/any-cast-wrong-type-panics` pins the line on both engines.
+**Still open:** a panic raised inside a runtime helper the program calls
+rather than writes -- a Saffron dynamic operator (`ensure_saffron_dyn_runtime`),
+a dynamic method dispatch on an `any` (`__tur_inst_slot`), the panics in
+stdlib inline-C bodies (`json/decode-file!`, the arrow loop cell) -- still
+names the helper's line in the generated C.  A vec index out of bounds
+prints `vec index out of bounds` and exits, with no `panic at` line at all.
+Each needs the call site handed to the helper (an `_at` entry, as the cast
+check has), or a thread-local site the emitter sets before the call.
+
 **Narrowed again 2026-10-08: direction 4 is done -- `--panic-trace` is
 retired.**  The flag is accepted and ignored with `TUR-W0050`
 (`src/main.c`), the way `--lint-effects` is; the preamble no longer carries

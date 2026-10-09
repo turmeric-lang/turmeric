@@ -14338,7 +14338,17 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
     buf_puts(out, "    return __f;\n}\n");
     }
+    /* panic-location-names-the-runtime-not-the-call-site: a failed cast panics
+     * at the CAST -- each check the emitter writes passes its own source
+     * basename and line (emit_any_cast_bind_check), as a `(panic ...)` site
+     * does.  The location-free entry stays for the runtime's own callers. */
+    buf_puts(out, "static void __tur_any_cast_check_at(int64_t have, int64_t want, "
+                  "const char *file, int line);\n");
     buf_puts(out, "static void __tur_any_cast_check(int64_t have, int64_t want) {\n");
+    buf_puts(out, "    __tur_any_cast_check_at(have, want, NULL, 0);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void __tur_any_cast_check_at(int64_t have, int64_t want, "
+                  "const char *file, int line) {\n");
     buf_puts(out, "    if (have != want) {\n");
     buf_puts(out, "        char __m[192];\n");
     buf_puts(out, "        const char *__hn = __tur_any_type_name(have);\n");
@@ -14367,7 +14377,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        else\n");
     buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
                   "different instantiation of %s\", __hn);\n");
-    buf_puts(out, "        tur_panic(__m);\n");
+    buf_puts(out, "        if (file) tur_panic_at(file, line, __m); else tur_panic(__m);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
     /* Phase HRT2: existential type — opaque void* wrapping any boxed value */

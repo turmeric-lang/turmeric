@@ -3167,8 +3167,8 @@ void turi_host_exit_guard(TuriEnv *env, const char *msg) {
  * a setjmp boundary (or no boundary) the old behaviour is preserved (longjmp /
  * fire-defers-and-exit). */
 /* panic-location-names-the-runtime-not-the-call-site: the `(panic ...)`
- * node's span, set by EX_PANIC for the one call it makes; every other
- * runtime panic has none.  Printed as the compiled path prints it --
+ * node's span, set by EX_PANIC for the one call it makes, and a failed
+ * `cast`'s; every other runtime panic has none.  Printed as the compiled path prints it --
  * `panic at boom.tur:3: msg`, the file's basename. */
 static _Thread_local Span g_panic_site;
 static const char *panic_site_base(Span sp) {
@@ -13487,6 +13487,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 snprintf(msg, sizeof(msg), "cast: any holds %s, not %s",
                          have ? have : "a value of a different type",
                          type_name(e->type));
+                /* panic-location-names-the-runtime-not-the-call-site: the
+                 * cast's own site, as the compiled check names it. */
+                g_panic_site = e->span;
                 turi_runtime_panic(env, msg);
             }
             return turi_nil(); /* unreachable: turi_runtime_panic never returns */
