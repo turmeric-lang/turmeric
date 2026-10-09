@@ -294,10 +294,11 @@ char *cps_ir_fncps_value_of(TypeKind k, const char *word) {
  * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
  * param's declared result, so calling it through an `int64_t` function type is a
  * mismatched call -- a -fsanitize=function trap -- and a float result would be
- * read from the wrong register.  A pointer result stays delegated. */
+ * read from the wrong register.  A pointer result crosses as its word, through
+ * intptr_t, both ways. */
 static bool fncps_result_kind_ok(TypeKind k) {
     if (k == TY_NIL) return true;
-    return k != TY_CSTR && k != TY_PTR_VOID && fncps_arg_kind_ok(k);
+    return fncps_arg_kind_ok(k);
 }
 bool cps_ir_fncps_sig_ok(const Type *fn_ty) {
     if (!fn_ty || fn_ty->kind != TY_FN) return false;
@@ -311,15 +312,28 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
     if (!lifted_ty || lifted_ty->kind != TY_FN) return false;
     uint32_t n = lifted_ty->as.fn.arity;
     if (n < 1 || n - 1 > CPS_FNCPS_MAX_ARGS || !lifted_ty->as.fn.arg_kinds) return false;
-    /* Integer arguments only: the dispatcher's registry-miss fallback calls
-     * slot 0 as `int64_t (*)(void *, int64_t...)`, which is the lifted entry's
-     * own type only for word integers. */
+    /* The dispatcher (ensure_fncps_env_dispatch) keys the registry on the env
+     * box's slot 0 and, on a miss, calls slot 0 at its own type -- so slot 0
+     * must BE the lifted entry the registry knows.  It is for every scalar
+     * but two: an untyped `ptr<void>` parameter is the word in the slot and
+     * `void *` in the definition, and a narrow-integer result comes back
+     * widened (thunk_param_slot_c_name / thunk_result_slot_c_name); either
+     * puts a widening wrapper in slot 0 (ensure_closure_slot0_widen). */
     for (uint32_t i = 1; i < n; i++) {
         TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i];
-        if (ak != TY_INT && ak != TY_INT64) return false;
+        /* ...and the registry hit calls the twin with every non-float kind as
+         * the word, which a `uint64_t` parameter's twin does not declare (its
+         * E2a registration has no word adapter for it). */
+        if (!fncps_arg_kind_ok(ak) || ak == TY_PTR_VOID || ak == TY_UINT64) return false;
     }
-    TypeKind rk = lifted_ty->as.fn.result_kind;
-    return rk == TY_INT || rk == TY_INT64 || rk == TY_NIL;
+    switch (lifted_ty->as.fn.result_kind) {
+        case TY_NIL: case TY_INT: case TY_INT64: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+        case TY_CSTR: case TY_PTR_VOID:
+            return true;
+        default:
+            return false;
+    }
 }
 /* E2 (fat-closure fn-value threading): is a call `(fn args...)` through the
  * poly-fn PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a
@@ -1075,6 +1089,7 @@ bool closure_binding_escapes(const Expr *e, const Binding *b);
  *   - the bound name does not escape the let body or any sibling initializer
  *     (closure_binding_escapes is conservative, so a false negative merely keeps
  *     the status-quo leak; it never frees a still-live env). */
+static bool expr_has_inline_c_node(const Expr *e);   /* fwd */
 static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
     const Binding *b = let->as.let_.bindings[idx].binding;
@@ -1087,6 +1102,17 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     switch (b->type.as.fn.result_kind) {
         case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
         case TY_BOOL: case TY_NIL: break;
+        /* As the direct emitter's let_binding_env_freeable (RM1): a by-value
+         * aggregate is copied out, a carrier box is a malloc of its own, and a
+         * cstr points at characters -- none points into the env unless the
+         * body took its address, which only inline C can do.  Walked exactly
+         * here: a CPS lambda's body performs, which the conservative
+         * expr_subtree_has_inline_c reads as possible inline C. */
+        case TY_APP: case TY_ADT: case TY_CSTR:
+            if (!init->as.closure_.closure->fn
+                || expr_has_inline_c_node(init->as.closure_.closure->fn->body))
+                return false;
+            break;
         default: return false;   /* non-scalar result may alias the env */
     }
     if (closure_binding_escapes(let->as.let_.body, b)) return false;

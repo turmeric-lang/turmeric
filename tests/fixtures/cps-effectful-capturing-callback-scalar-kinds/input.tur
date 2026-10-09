@@ -1,0 +1,36 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param: an effectful
+;; CAPTURING lambda passed to an un-annotated fn parameter threads through the
+;; fat closure's `fn_cps` slot, whose dispatcher keys the registry on the env
+;; box's slot 0 -- and it took word integers and an `int` or unit result only.
+;; The dispatcher is typed per signature now: a float, `bool`, narrow-integer
+;; or `cstr` argument, and a float or pointer result, cross as words and are
+;; converted for the registered twin (a float at its own type) and for slot 0
+;; (each at its C type).  `f4`'s lambda also has a parameter named `k`, which
+;; kept an effectful function off the CPS backend (param_name_clashes_cps).
+;; Every line equals `tur --interpret`.
+(defeffect Ask [] :int)
+
+(defn appf [h : (fn [float] float) x : float] : float (h x))
+(defn appc [h : (fn [int] cstr) x : int] : cstr (h x))
+(defn appb [h : (fn [bool int] int) x : int] : int (+ (h true x) (h false x)))
+(defn app2 [h : (fn [float int] float) x : float] : float (* 2.0 (h x 3)))
+(defn apps [h : (fn [cstr int8] int) s : cstr] : int (h s (as int8 4)))
+
+(defn f1 [m : float] : float
+  (appf (fn [y : float] : float (+ m y (as float (perform (Ask))))) 0.25))
+(defn f2 [s : cstr] : cstr
+  (appc (fn [n : int] : cstr (if (> (+ n (perform (Ask))) 10) s "small")) 3))
+(defn f3 [m : int] : int
+  (appb (fn [b : bool n : int] : int (if b (+ m n (perform (Ask))) m)) 1))
+(defn f4 [m : float] : float
+  (app2 (fn [y : float k : int] : float (+ m y (as float (+ k (perform (Ask)))))) 0.5))
+(defn f5 [m : int] : int
+  (apps (fn [s : cstr n : int8] : int (do (println s) (+ m (as int n) (perform (Ask))))) "go"))
+
+(defn main [] : int
+  (println (handle (f1 1.5) (Ask [] k) (resume k 10)))     ; 11.75
+  (println (handle (f2 "big") (Ask [] k) (resume k 10)))   ; big
+  (println (handle (f3 5) (Ask [] k) (resume k 10)))       ; 21
+  (println (handle (f4 0.25) (Ask [] k) (resume k 10)))    ; 27.5
+  (println (handle (f5 2) (Ask [] k) (resume k 10)))       ; go, then 16
+  0)

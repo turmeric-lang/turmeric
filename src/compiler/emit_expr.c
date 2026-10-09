@@ -4093,8 +4093,12 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
     while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
     if (!call_wraps_sole_arg_in_ctor(init)) return false;
     const Expr *a = peel_sum_payload_arg(init->as.call_.args[0]);
+    /* The drop frees the env box alone (a struct or `^mut` capture leaves
+     * nothing for its glue to release), which no value the closure computes
+     * points into -- the shallow case and more. */
     if (!a || a->kind != EX_CLOSURE ||
-        !closure_env_drop_is_shallow(a->as.closure_.closure) ||
+        !(closure_env_drop_is_shallow(a->as.closure_.closure) ||
+          closure_env_drop_frees_box_only(a->as.closure_.closure)) ||
         !fndef_cannot_suspend(a->as.closure_.closure->fn))
         return false;
     if (sum_closure_payload_escapes(e->as.let_.body, b, 0)) return false;
@@ -17727,8 +17731,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (kb && kfx &&
                             out.len >= 2 && memcmp(out.data + out.len - 2, " }", 2) == 0) {
                             uint32_t kn = kb->type.as.fn.arity - 1;
-                            char *kd = ensure_fncps_env_dispatch(ctx, kn,
-                                                             kb->type.as.fn.result_kind == TY_NIL);
+                            char *kd = ensure_fncps_env_dispatch(ctx, &kb->type);
                             /* Every spelling above ends in " }": the slot goes
                              * before it, stored at the slot's declared type. */
                             buf_truncate(&out, out.len - 2);

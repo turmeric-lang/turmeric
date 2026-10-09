@@ -2734,18 +2734,42 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
 }
 
 /* E2 (fat-closure fn-value threading), the capturing case: the `fn_cps` slot of
- * a fat closure built from a capturing lambda of `n` word arguments (a unit
- * result when `void_result`, else a word).  A closure's env box holds the
- * lifted entry in slot 0, and a threadable capturing lambda is registered
- * (emit_cps_ir.c, the E2a registration) as that entry -> its env-taking `__cps`
- * twin.  So the slot dispatches on the box at run time -- whichever lambda built
- * it -- exactly as the E2a fat dispatch does.  A miss (a lambda the registry
- * does not know) is the call an empty slot would have made: slot 0 directly,
- * its result delivered to the continuation.  Returns the dispatcher's malloc'd
- * name; it is emitted once per shape. */
-char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result) {
+ * a fat closure built from a capturing lambda of type `lifted_ty` (its env
+ * parameter first; cps_ir_fncps_closure_sig_ok admitted it).  A closure's env
+ * box holds the lifted entry in slot 0, and a threadable capturing lambda is
+ * registered (emit_cps_ir.c, the E2a registration) as that entry -> its
+ * env-taking `__cps` twin.  So the slot dispatches on the box at run time --
+ * whichever lambda built it -- exactly as the E2a fat dispatch does.  A miss
+ * (a lambda the registry does not know) is the call an empty slot would have
+ * made: slot 0 directly, its result delivered to the continuation.
+ *
+ * Every argument arrives as its word (cps_ir_fncps_word_of at the call).  The
+ * registered twin takes a float at its own type and every other kind as the
+ * word (its `__e2w` adapter, for a pointer or a narrow integer); slot 0 takes
+ * each at its own C type.  The result goes to the continuation as its word.
+ * An all-word-integer shape keeps the name it always had.  Returns the
+ * dispatcher's malloc'd name; it is emitted once per shape. */
+char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty) {
+    uint32_t n = lifted_ty->as.fn.arity - 1;
+    TypeKind rk = lifted_ty->as.fn.result_kind;
+    bool void_result = rk == TY_NIL;
+    bool plain = rk == TY_NIL || rk == TY_INT || rk == TY_INT64;
+    for (uint32_t i = 0; i < n; i++) {
+        TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i + 1];
+        if (ak != TY_INT && ak != TY_INT64) plain = false;
+    }
     Buf nb; buf_init(&nb);
     buf_printf(&nb, "__tur_fncps_env%s%u", void_result ? "v" : "", n);
+    if (!plain) {
+        /* One letter per kind: the shape's own dispatcher. */
+        buf_putc(&nb, '_');
+        for (uint32_t i = 0; i <= n; i++) {
+            TypeKind k = i < n ? (TypeKind)lifted_ty->as.fn.arg_kinds[i + 1] : rk;
+            if (i == n) buf_putc(&nb, '_');
+            buf_printf(&nb, "%d", (int)k);
+            if (i + 1 < n) buf_putc(&nb, 'x');
+        }
+    }
     buf_putc(&nb, '\0');
     char *name = strdup(nb.data);
     buf_free(&nb);
@@ -2762,27 +2786,50 @@ char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result) {
     ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
 
-    Buf prm, ws, av; buf_init(&prm); buf_init(&ws); buf_init(&av);
+    /* prm: the dispatcher's word params.  hs/ha: the twin's spelling and
+     * arguments.  ss/sa: slot 0's. */
+    Buf prm, hs, ha, ss, sa;
+    buf_init(&prm); buf_init(&hs); buf_init(&ha); buf_init(&ss); buf_init(&sa);
     for (uint32_t i = 0; i < n; i++) {
-        buf_printf(&prm, ", int64_t __pwx%u", i);
-        buf_puts(&ws, ", int64_t");
-        buf_printf(&av, ", __pwx%u", i);
+        TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i + 1];
+        char an[24];
+        snprintf(an, sizeof an, "__pwx%u", i);
+        buf_printf(&prm, ", int64_t %s", an);
+        const char *pc = cps_ir_fncps_arg_ctype(ak);
+        bool flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
+        if (strcmp(pc, "int64_t") == 0) {
+            buf_puts(&hs, ", int64_t"); buf_printf(&ha, ", %s", an);
+            buf_puts(&ss, ", int64_t"); buf_printf(&sa, ", %s", an);
+            continue;
+        }
+        char *v = cps_ir_fncps_value_of(ak, an);
+        if (flt) { buf_printf(&hs, ", %s", pc); buf_printf(&ha, ", %s", v); }
+        else     { buf_puts(&hs, ", int64_t");   buf_printf(&ha, ", %s", an); }
+        buf_printf(&ss, ", %s", pc); buf_printf(&sa, ", %s", v);
+        free(v);
     }
-    buf_putc(&prm, '\0'); buf_putc(&ws, '\0'); buf_putc(&av, '\0');
+    buf_putc(&prm, '\0'); buf_putc(&hs, '\0'); buf_putc(&ha, '\0');
+    buf_putc(&ss, '\0'); buf_putc(&sa, '\0');
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
     buf_puts(target, "    int64_t __pwf = ((int64_t *)__pwe)[0];\n");
     buf_puts(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)__pwf);\n");
     buf_printf(target, "    if (__c) return ((int64_t(*)(void *%s, struct DK *))__c)(__pwe%s, __kont);\n",
-               ws.data, av.data);
-    if (void_result)
+               hs.data, ha.data);
+    if (void_result) {
         buf_printf(target, "    ((void(*)(void *%s))(intptr_t)__pwf)(__pwe%s);\n"
-                           "    return dk_run(__kont, (intptr_t)0);\n", ws.data, av.data);
-    else
-        buf_printf(target, "    return dk_run(__kont, (intptr_t)((int64_t(*)(void *%s))(intptr_t)__pwf)(__pwe%s));\n",
-                   ws.data, av.data);
+                           "    return dk_run(__kont, (intptr_t)0);\n", ss.data, sa.data);
+    } else {
+        const char *rc = cps_ir_fncps_arg_ctype(rk);
+        Buf cl; buf_init(&cl);
+        buf_printf(&cl, "((%s(*)(void *%s))(intptr_t)__pwf)(__pwe%s)", rc, ss.data, sa.data);
+        buf_putc(&cl, '\0');
+        char *w = cps_ir_fncps_word_of(rk, cl.data);
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)(%s));\n", w);
+        free(w); buf_free(&cl);
+    }
     buf_puts(target, "}\n");
-    buf_free(&prm); buf_free(&ws); buf_free(&av);
+    buf_free(&prm); buf_free(&hs); buf_free(&ha); buf_free(&ss); buf_free(&sa);
     return name;
 }
 

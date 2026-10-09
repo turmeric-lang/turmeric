@@ -3115,9 +3115,16 @@ static bool handle_delim_ok(const CTerm *t) {
 static bool param_name_clashes_cps(const FnDef *fd, const Binding *b) {
     if (!b || !b->name || !b->name->name) return false;
     const char *n = b->name->name;
+    /* A parameter named `k` keeps a function off the backend, for the leaks
+     * noted at handle-fn-with-k-param -- but not a function that may await,
+     * installs a handle, or whose effects may leave it: evicted, its own
+     * performs (or its colored callees') have no lowering, so the refusal
+     * would be certain. */
     if (strcmp(n, "k") == 0)
         return !(b->type.kind == TY_CONT && b->type.as.cont.flavor == CONT_SERIAL)
-            && !(fd && (cps_fn_may_await(fd) || cps_fn_installs_handle(fd)));
+            && !(fd && (cps_fn_may_await(fd) || cps_fn_installs_handle(fd)
+                        || (fd->inferred_effect_row
+                            && !effect_row_is_runtime_pure(fd->inferred_effect_row))));
     /* fn-value-fat-normalization (effect-row increment): a lifted capturing
      * lambda's env param is `__env_p_<id>` -- uniquely numbered, never a name
      * the CPS emitter mints itself.  Admitting it is what lets a capturing
@@ -7192,6 +7199,9 @@ static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
         /* The value at its own type: the delivery stores it into the slot by
          * its bits (slot_store), or a join parameter of that type takes it. */
         buf_printf(out, "((%s(*)(void*%s))%s.fn)(%s.env%s)",
+                   rc, ps.data, pf, pf, av.data);
+    else if (rc[strlen(rc) - 1] == '*')
+        buf_printf(out, "((int64_t)(intptr_t)((%s(*)(void*%s))%s.fn)(%s.env%s))",
                    rc, ps.data, pf, pf, av.data);
     else if (strcmp(rc, "int64_t") != 0)
         buf_printf(out, "((int64_t)((%s(*)(void*%s))%s.fn)(%s.env%s))",

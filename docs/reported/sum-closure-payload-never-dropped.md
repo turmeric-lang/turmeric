@@ -72,9 +72,16 @@ Each of these still leaks the env, as before. None is freed early.
    is CPS-colored; when its body takes the native CPS path (a `while` loop
    driving the call, as in a first draft of the fixture), its lets are lowered
    by `emit_cps_ir.c`, which has no such drop.
-4. **A non-shallow closure** -- one capturing a `^mut` cell, an `rc`, a fat
-   closure, or with inline C -- would need its deep drop glue and the
-   ownership questions that come with it.
+4. **A closure whose drop releases something** -- one capturing an `rc`, a
+   fat closure or a Drop instance, or with inline C -- would need its deep
+   drop glue and the ownership questions that come with it. (**Narrowed
+   2026-10-09:** a closure whose env drop frees the box alone is dropped now,
+   `closure_env_drop_frees_box_only` -- a struct capture is a copy in the box,
+   and the glue releases only rc, owned fat and Drop-instance captures.
+   Pinned by `sum-closure-payload-dropped`'s `struct-cap`. A closure capturing
+   a `^mut` cell drops its env box too, but the 8 B cell itself still leaks:
+   `mut_cell_escapes` vouches only for a closure bound directly by a freeable
+   `let`, not one wrapped in a sum.)
 5. **Owning non-closure payloads** -- an `rc` in an Option. The
    `option-rc-payload-turmeric-construction` fixture says outright that
    "nothing releases an Option's payload at scope exit". Not measured here:

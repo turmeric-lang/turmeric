@@ -1,32 +1,51 @@
 # An effectful callback through a multi-argument or untyped fn parameter is refused
 
-**Narrowed 2026-10-09: scalar arguments and results thread.** A `float`,
-`float32`, `bool` or narrow-integer argument or result now crosses the
-`fn_cps` slot (see "Fixed 2026-10-09" at the end). **What is left:**
+**Narrowed 2026-10-09: scalar arguments and results thread, pointer
+results and capturing closures of those kinds too.**
+
+- A `float`, `float32`, `bool` or narrow-integer argument or result crosses
+  the `fn_cps` slot (see "Fixed 2026-10-09" at the end).
+- A `cstr` or `ptr<void>` RESULT crosses as its word through `intptr_t`, and
+  the direct fallback (`fncps_direct_call`) calls the wrapper at its real
+  pointer result type. Pinned by
+  `tests/fixtures/cps-effectful-callback-pointer-result`.
+- A CAPTURING closure's dispatcher (`ensure_fncps_env_dispatch`) is typed
+  per signature: it converts each word for the registered twin (a float at
+  its own type, every other kind as the word its `__e2w` adapter takes) and
+  for slot 0 (each at its C type), and delivers a float or pointer result as
+  its word. Every scalar kind is admitted except an untyped `ptr<void>`
+  argument and a narrow-integer or `bool` RESULT: either puts a widening
+  wrapper in slot 0, which the registry does not know. Pinned by
+  `tests/fixtures/cps-effectful-capturing-callback-scalar-kinds`.
+- Found on the way: a function with a parameter named `k` is kept off the
+  CPS backend (`param_name_clashes_cps`, for leaks in some pure shapes), so
+  an effectful lambda `(fn [y : float k : int] ...)` was refused. A function
+  whose effects may leave it is exempt now, as a handle-installer already
+  was: evicted, its performs had no lowering anyway.
+- Also found on the way, pre-existing and not CPS-specific in kind: a
+  capturing closure with a `cstr` or aggregate result, handed to a
+  non-retaining fn parameter inside a CPS function, leaked its env (24 B per
+  call). `cps_closure_env_freeable` took scalar results only; it now takes
+  what the direct emitter's `let_binding_env_freeable` takes (a `cstr`,
+  by-value aggregate or carrier result, no inline C), walking the body
+  exactly for inline C.
+
+All three fixtures are leak-checked, pass the JIT harness and run clean under
+`-fsanitize=function`. **What is left:**
 
 - shape 2, an untyped `^fat` parameter;
 - an aggregate (struct or ADT) argument or result;
-- a pointer (`cstr`, `ptr<void>`) RESULT;
-- a capturing closure with a non-integer argument or result.
-
-Each is still refused, honestly, at compile time:
-
-```turmeric
-(defn app [^fat h x : int] : int (h x))                        ;; refused
-(defdata Sh (Circle int) (Sq int))
-(defn apps [h : (fn [Sh] int) s : Sh] : int (h s))             ;; refused
-```
+- a capturing closure with an untyped `ptr<void>` argument or a
+  narrow-integer / `bool` result.
 
 **Narrowed 2026-10-08: shapes 1, 3 and 4 are fixed.** That covers a callback
 of up to eight arguments (word integers, `cstr` or `ptr<void>`), a capturing
 closure, and a `bool` or unit result.
 
-A capturing closure is narrower still: word-integer arguments and an `int` or
-unit result only. Its dispatcher's fallback calls the env box's slot 0, which
-is the lifted entry only at those types; a `bool` closure's slot 0 is a widen
-wrapper.
+(At that point a capturing closure was narrower still: word-integer
+arguments and an `int` or unit result only. Widened 2026-10-09, above.)
 
-**Severity: medium.** A compile-time refusal of a correct program; `tur
+**Severity: low-medium** (was medium). A compile-time refusal of a correct program; `tur
 --interpret` runs it. Until 2026-10-07 these compiled and then aborted at run
 time with `unhandled effect` (on `main` too). The fix for
 [cps-effectful-fnval-escapes-through-unthreaded-param](../archive/cps-effectful-fnval-escapes-through-unthreaded-param.md)

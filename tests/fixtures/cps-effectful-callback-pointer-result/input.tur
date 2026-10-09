@@ -1,0 +1,25 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param: an effectful
+;; callback returning a POINTER (`cstr`, `ptr<void>`) through an un-annotated
+;; fn parameter was refused ("no lowering here"): the `fn_cps` slot took any
+;; scalar result but a pointer.  A pointer crosses as its word through
+;; intptr_t both ways now -- the slot's continuation reads it back, and the
+;; direct fallback calls the wrapper at its real result type.  Every line
+;; equals `tur --interpret`.
+(defeffect Ask [] :int)
+
+(defn app [h : (fn [int] cstr) x : int] : cstr (h x))
+(defn app2 [h : (fn [float int] cstr) x : float] : cstr (h x 2))
+
+(defn pick [x : int] : cstr (if (> (+ x (perform (Ask))) 10) "big" "small"))
+(defn pick2 [x : float n : int] : cstr
+  (if (> (+ x (as float (+ n (perform (Ask))))) 12.5) "hi" "lo"))
+
+(defn main [] : int
+  (println (handle (app pick 3) (Ask [] k) (resume k 10)))                         ; big
+  (println (handle (do (println (app pick 0)) (app pick 1)) (Ask [] k) (resume k 10)))  ; small big
+  (println (handle (app2 pick2 0.75) (Ask [] k) (resume k 10)))                    ; hi
+  (println (handle (app2 pick2 0.25) (Ask [] k) (resume k 10)))                    ; lo
+  (println (handle (app (fn [x : int] : cstr (if (> (+ x (perform (Ask))) 100) "big" "small")) 3)
+                   (Ask [] k) (resume k 10)))                                       ; small
+  (println (app (fn [x : int] : cstr "pure") 1))                                    ; pure
+  0)
