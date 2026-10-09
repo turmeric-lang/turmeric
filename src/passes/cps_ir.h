@@ -427,5 +427,9 @@ const Binding *cps_ir_let_global_fn_alias(const Expr *let, uint32_t i);
 /* A captureless `letrec` member (global, its lifted lambda in source_binding):
  * the lambda a call through it calls, or NULL. */
 const Binding *cps_ir_letrec_member_target(const Binding *f);
+/* An immutable local bound to a fresh CAPTURING lambda, every use of which is
+ * a saturated call: the lifted lambda (a call through the local is a call to
+ * it with the env box first), or NULL. */
+const Binding *cps_ir_let_local_closure(const Expr *let, uint32_t i);
 
 #endif

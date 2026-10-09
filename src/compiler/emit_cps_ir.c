@@ -3222,6 +3222,7 @@ static bool fn_carrier_param_ok(const FnDef *fd, const Binding *p) {
 }
 
 static bool threadable_has(const Binding *b);
+static bool direct_only_has(const Binding *b);
 
 static bool fn_sig_ok(const FnDef *fd) {
     /* Return crosses the slot (Tier A/B scalar or Tier C boxed aggregate).  A
@@ -3253,8 +3254,12 @@ static bool fn_sig_ok(const FnDef *fd) {
         /* ...or one that may await: off the CPS path its await parks at the
          * wrong root (await-parks-only-to-the-nearest-c-frame), so the direct
          * path is the one that cannot run it. */
+        /* ...or one only ever called through a local the translator rewrites
+         * to its own CPS call (cps_ir_let_local_closure): no fresh root calls
+         * it, so admitting it threads the caller's continuation into it. */
         if (!threadable_has(fd->binding) && !cps_fn_may_await(fd)
-            && !cps_fn_installs_handle(fd)) return false;
+            && !cps_fn_installs_handle(fd) && !direct_only_has(fd->binding))
+            return false;
         for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
             const Binding *cap = fd->closure->captures[ci];
             if (!cap || cap->is_global) continue;
@@ -4188,6 +4193,16 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                     && peel_fn_value(init) && peel_fn_value(init)->kind == EX_VAR
                     && peel_fn_value(init)->as.var.binding == cps_ir_letrec_member_target(lb))
                     ga = cps_ir_letrec_member_target(lb);
+                /* ...and a local (or one-member `letrec`) holding a fresh
+                 * CAPTURING lambda, only ever called: each call becomes the
+                 * lambda's own call, the env box first
+                 * (cps_ir_let_local_closure).  The lambda is a callee of this
+                 * function; its body's effects still collect here. */
+                const Binding *lc = !ga ? cps_ir_let_local_closure(e, i) : NULL;
+                if (lc) {
+                    eff_acc_add_callee(acc, lc);
+                    alias_target_add(lc);
+                }
                 if (ga) {
                     eff_acc_add_callee(acc, ga);
                     alias_target_add(ga);
@@ -12315,6 +12330,20 @@ static CpsTcg *ctg_of(const FnDef *fd, int *idx) {
     return NULL;
 }
 
+/* A C spelling of a scalar (a pointer, or an integer / float / bool kind). */
+static bool ctype_is_scalar(const char *c) {
+    if (!c || !*c) return false;
+    size_t L = strlen(c);
+    if (c[L - 1] == '*') return true;
+    static const char *const k[] = {
+        "int64_t", "double", "float", "bool", "int8_t", "int16_t", "int32_t",
+        "uint8_t", "uint16_t", "uint32_t", "uint64_t", "intptr_t",
+    };
+    for (size_t i = 0; i < sizeof k / sizeof k[0]; i++)
+        if (strcmp(c, k[i]) == 0) return true;
+    return false;
+}
+
 static void ctg_emit_signature(Buf *out, const CpsTcg *g, bool named) {
     buf_printf(out, "static int64_t %s(int%s", g->name, named ? " __tcg_st" : "");
     for (uint32_t k = 0; k < g->n_slots; k++) {
@@ -12639,14 +12668,16 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     const char *saved_cps_ret_ctype = ctx->current_fn_ret_ctype;
     ctx->current_fn_ret_ctype = "int64_t";
     /* cps-self-tail-call-relies-on-sibling-call: a self tail call in this
-     * body may jump back to here.  Not for a closure (its env is param 0), a
-     * monomorph (the call names the generic), the program entry, or a param
-     * the body keeps in a cell or as a loop-carried variable -- rebinding
-     * the bare name would not reach those. */
+     * body may jump back to here.  Not for a monomorph (the call names the
+     * generic), the program entry, or a param the body keeps in a cell or as a
+     * loop-carried variable -- rebinding the bare name would not reach those.
+     * A closure's self call is its `letrec` member's recursive call
+     * (cps_self_env_call), which passes the env parameter on unchanged, so
+     * its env read-out above the label stays right. */
     bool self_backedge = false;
     size_t body_start = body_buf.len;
     {
-        bool ok = !mono_emit && !fd->closure && !fn_is_d2b_main(fd) && !fn_is_main(fd);
+        bool ok = !mono_emit && !fn_is_d2b_main(fd) && !fn_is_main(fd);
         for (uint32_t i = 0; ok && i < fd->n_params; i++)
             ok = fd->params[i] && !fd->params[i]->is_poly_fn &&
                  !is_byref_mut(fd->params[i]) && !is_loop_carried(fd->params[i]);
@@ -12737,7 +12768,11 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                     buf_printf(file, ", %s", pn);
                     free(pn);
                 } else {
-                    buf_printf(file, ", (%s){0}", grp->slot_ctype[grp->slot_base[m] + k]);
+                    /* A scalar slot's zero is a cast, not `(T){0}`: braces
+                     * around a scalar initializer are a GNU C leniency the
+                     * JIT's C front end refuses (TUR-W0070, a cc fallback). */
+                    const char *zc = grp->slot_ctype[grp->slot_base[m] + k];
+                    buf_printf(file, ctype_is_scalar(zc) ? ", (%s)0" : ", (%s){0}", zc);
                 }
             }
         buf_puts(file, ", __kont);\n}\n");

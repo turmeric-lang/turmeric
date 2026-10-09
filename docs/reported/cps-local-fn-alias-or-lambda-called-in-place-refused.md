@@ -1,61 +1,129 @@
 # An effectful function called through a local name is refused
 
-**Narrowed 2026-10-09 (filed the same day): every captureless shape is
-fixed.** A `let`-bound captureless lambda, a `let` alias of a named
-function, and a captureless `letrec` member (a loop, mutual recursion) all
-compile now when called through the local name. See "Fixed" below. **What
-is left:**
+**Narrowed again 2026-10-09: the capturing shapes are fixed too.** A
+`let`-bound capturing lambda and a one-member capturing `letrec` loop
+compile now when called through the local name (see "Fixed: the capturing
+shapes" below). The captureless shapes were fixed earlier the same day
+(filed the same day). **What is left:**
 
-- a CAPTURING lambda called through its local name, whether `let`-bound or
-  a `letrec` loop that reads an outer local;
 - a lambda that RETURNS a function;
-- a lambda used both through the alias AND as a value (passed on to a
-  higher-order function).
+- a lambda used both through the local AND as a value (passed on to a
+  higher-order function);
+- a capturing lambda called from inside ANOTHER closure (`g` calls `f`, both
+  `let`-bound): `g` captures `f`, which is a value use;
+- a capturing `letrec` of more than one member (mutual recursion).
 
 Each is still refused, honestly, at compile time ("this effect operation has
 no lowering here"); `tur --interpret` runs them.
 
-**Severity: medium.** This is a compile-time refusal of a correct program,
-not a wrong answer. A capturing `letrec` loop that performs is an ordinary
-idiom. Found 2026-10-09 while fixing
+**Severity: low-medium** (was medium). This is a compile-time refusal of a
+correct program, not a wrong answer, and the ordinary idioms (a helper
+lambda, a capturing loop) now compile. Found 2026-10-09 while fixing
 [effect-row-lost-under-match-cast-letrec](../archive/effect-row-lost-under-match-cast-letrec.md).
 
 ## Repro (still refused)
 
 ```turmeric
 (defeffect Ask [] :int)
-(defn c1 [m : int] : int (let [g (fn [n : int] : int (+ m n (perform (Ask))))] (g 3)))
-(defn c2 [m : int] : int
-  (letrec [loop (fn [i : int] : int (if (= i 0) (+ m (perform (Ask))) (loop (- i 1))))]
-    (loop 3)))
+(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int (h x))
+(defn v1 [] : int
+  (let [g (fn [n : int] : int (+ n (perform (Ask))))]
+    (+ (g 1) (app g 2))))                                 ; also a value
+(defn v2 [m : int] : int
+  (let [f (fn [n : int] : int (+ m n (perform (Ask))))
+        g (fn [n : int] : int (* 2 (f n)))]               ; g captures f
+    (g 1)))
+(defn v3 [m : int] : int
+  (letrec [ev (fn [i : int] : int (if (= i 0) (+ m (perform (Ask))) (od (- i 1))))
+           od (fn [i : int] : int (if (= i 0) m (ev (- i 1))))]
+    (ev 4)))
 (defn main [] : int
-  (println (handle (c1 5) (Ask [] k) (resume k 10)))   ; 18
-  (println (handle (c2 5) (Ask [] k) (resume k 10)))   ; 15
+  (println (handle (v1) (Ask [] k) (resume k 10)))     ; 23
+  (println (handle (v2 5) (Ask [] k) (resume k 10)))   ; 32
+  (println (handle (v3 1) (Ask [] k) (resume k 10)))   ; 11
   0)
 ```
 
 ## Root cause (what is left)
 
-A capturing lambda is a closure: its call through the local goes through
-the closure protocol on the env box, not to a global entry. The fixed
-shapes' rewrite to a direct call does not apply to it. The E2 threadability
-tally sees the `let` / `letrec` init as a value use of the lifted lambda, so
-the lambda is not threadable and becomes a permanent fiber source
-(`SIG-TAINT`). A `letrec` member also has no `EX_LETREC` translation when it
-is not global.
+The rewrite below needs every use of the local to be a saturated call
+(`pap_calls_saturated`). A use as a value -- an argument, or a capture by
+another closure -- means the lambda can be called from where nothing
+threads the caller's continuation, so it stays an fn value; the E2
+threadability tally then decides it, and an alias that is also called
+directly is neither. A `letrec` of several capturing members shares one
+env-building protocol the CPS translation does not reproduce.
 
 ## Fix directions
 
-- Thread the call through the local closure the way E2a threads a capturing
-  lambda passed as an argument. A threadable capturing lambda already
-  registers its env-taking `__cps` twin. A call through a local binding of
-  that closure could dispatch through the registry (`via_registry`, the
-  `emit_e2a_fat_dispatch` path) instead of the direct `.fn` call. The tally
-  would then count such a use as threadable, and a capturing `letrec` loop
-  is the same call made from inside its own body.
+- A value use as well as calls: let the E2a registry carry it. A
+  threadable capturing lambda registers its env-taking `__cps` twin, so the
+  value use can stay threaded while the direct calls take the rewrite below;
+  the tally would have to count the local's calls as threadable uses.
+- A closure capturing another local closure: when the captured closure is
+  only CALLED in the capturing lambda, the call inside is the same env call
+  through the env field.
 - A fn-returning lambda: the direct call to its lifted `__fn_N` returns the
   int64 carrier, not the closure (pr-386, `Binding.is_lifted_lambda`), so it
   needs the closure protocol too.
+
+## Fixed (2026-10-09): the capturing shapes
+
+- **The call.** A capturing closure's value is its env box, and its lifted
+  lambda takes that box as its first parameter; the direct emitter already
+  spells a call through the local `__fn_N((void *)g, x)`. An immutable local
+  bound to a fresh capturing lambda whose every use is a saturated call
+  (`cps_ir_let_local_closure`, `src/passes/cps_ir.c`) is registered with the
+  alias machinery as an env call (`PapInline.is_env_call`): each `(g x)`
+  becomes `(__fn_N g x)`, the lambda's own CPS call, which threads the
+  continuation. Unlike the captureless alias the binding stays, since the
+  box is still built. Only a lambda whose effects may leave it qualifies (its
+  declared or inferred row is not runtime-pure); a pure one keeps the direct
+  path. `safe_to_delegate` refuses the `let` (and the calls) so it is not
+  delegated whole.
+- **The classifier.** The tally records the lambda as a callee and an alias
+  target, so it is direct-only (no fn value), and `fn_sig_ok` admits a
+  direct-only capturing lambda (`src/compiler/emit_cps_ir.c`).
+- **`letrec`.** A one-member `letrec` whose lambda reaches itself only by
+  saturated self-calls is lowered like the `let`. Inside the lambda, a call
+  through the member is a call of the lambda with its own env parameter
+  (`cps_self_env_call`, mirroring the direct emitter's `tco_is_self_call`),
+  and a self tail call in a closure's `__cps` body is now a backedge, as it
+  already was for a named function: 1,000,000 performing turns run in flat
+  C stack.
+- **The box.** The let's env box is reaped at the DK entry boundary, like a
+  freeable closure. Every use being a call, it never leaves the let; a
+  scalar result points into nothing, and otherwise the drop glue must free
+  the box alone (no rc, owned fat closure or Drop-instance capture, no
+  inline C). This also frees the box of a PURE capturing lambda let-bound
+  in a colored function whose body performs, which used to leak 24 B per
+  run: `closure_binding_escapes` reads a `perform` as an escape, so the
+  existing freeable test never passed.
+- Found on the way, pre-existing on HEAD: a mutual-tail-call group's entry
+  stub zero-filled the other members' scalar slots as `(int64_t){0}`, which
+  the JIT's C front end refuses ("braces around scalar initializer"), so
+  `cps-local-fn-alias-called-in-place` fell back to cc under `tur jit`. A
+  scalar slot's zero is now a cast.
+
+Pinned by `tests/fixtures/cps-capturing-local-lambda-called-in-place`
+(leak-checked). It covers:
+- tail, non-tail and repeated calls;
+- float and struct captures;
+- a box crossing a `perform` in the caller;
+- calls under `match` and `if`;
+- a nil result;
+- a lambda whose only effect is a colored callee's;
+- a lambda built on every loop turn;
+- cstr, struct and Option results;
+- `letrec` loops (tail, non-tail, float, nested in a capturing lambda).
+
+`tests/fixtures/cps-capturing-letrec-loop-deep` (compiled only) runs
+1,000,000 performing turns of a capturing `letrec` loop. Every line equals
+`tur --interpret`. Both pass the JIT harness and run clean under
+`-fsanitize=function`. Measured: the fixture suite is unchanged otherwise
+(3655 passed, no snapshot moved), `check-emitted-float-conversions.py
+--corpus` reports none, and the source type fuzzer at seed 3333 is at its
+baseline (282 ok, 0 bugs).
 
 ## Fixed (2026-10-09): the captureless shapes
 

@@ -1,0 +1,107 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused, the capturing shapes:
+;; an effectful CAPTURING lambda called through a local name -- `let`-bound,
+;; or a one-member `letrec` loop that reads an outer local -- was refused
+;; ("no lowering here"): its init counted as a value use, so the lambda was
+;; taken for an escaping fn value.  A call through the local is now the
+;; lambda's own CPS call with the env box as its first argument, a `letrec`
+;; lambda's recursive call threads its own env, and the box is freed when the
+;; entry is done.  Every line equals `tur --interpret`.
+(defeffect Ask [] :int)
+(defeffect Tell [int] :nil)
+(defstruct P [a : int b : int])
+
+;; tail, non-tail, called twice
+(defn t1 [m : int] : int (let [g (fn [n : int] : int (+ m n (perform (Ask))))] (g 3)))
+(defn t2 [m : int] : int (let [g (fn [n : int] : int (+ m n (perform (Ask))))] (+ 100 (g 3))))
+(defn t3 [m : int] : int (let [g (fn [n : int] : int (+ m n (perform (Ask))))] (+ (g 1) (g 2))))
+;; a float capture and result, a struct capture
+(defn t4 [x : float] : float
+  (let [g (fn [y : float] : float (+ x y (as float (perform (Ask)))))]
+    (g 0.25)))
+(defn t5 [p : P] : int (let [g (fn [n : int] : int (+ (.a p) (.b p) n (perform (Ask))))] (g 1)))
+;; a zero-argument lambda; the box crosses a perform in the caller
+(defn t6 [m : int] : int
+  (let [g      (fn [] : int (* m (perform (Ask))))
+        before (perform (Ask))]
+    (+ before (g))))
+;; calls under a match arm and an if
+(defn t7 [o : (Option int) m : int] : int
+  (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+    (match o
+      (Some v) (g v)
+      (None) (if (> m 0) (g 0) -1))))
+;; a nil result performing another effect
+(defn t8 [m : int] : int
+  (let [g (fn [n : int] : nil (perform (Tell (+ m n))))]
+    (g 1)
+    (g 2)
+    m))
+;; a lambda whose only effect is a colored callee's
+(defn ask2 [] : int (* 2 (perform (Ask))))
+(defn t9 [m : int] : int (let [g (fn [n : int] : int (+ m n (ask2)))] (g 1)))
+;; built on every turn of a loop
+(defn t10 [m : int] : int
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i 1000)
+      (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+        (set! acc (+ acc (g i))))
+      (set! i (+ i 1)))
+    acc))
+;; non-scalar results: a cstr, a struct, an Option
+(defn t11 [s : cstr] : cstr
+  (let [g (fn [n : int] : cstr (if (> (+ n (perform (Ask))) 0) s "neg"))]
+    (g 3)))
+(defn t12 [p : P] : P
+  (let [g (fn [n : int] : P (P (+ (.a p) n (perform (Ask))) (.b p)))]
+    (g 3)))
+(defn t13 [m : int] : int
+  (let [g (fn [n : int] : (Option int) (if (> (+ n (perform (Ask))) m) (some n) (none)))]
+    (match (g 3)
+      (Some v) v
+      (None) -1)))
+
+;; a letrec loop reading an outer local, performing on every turn
+(defn r1 [m : int n : int] : int
+  (letrec [loop (fn [i : int acc : int] : int
+                  (if (= i 0) acc (loop (- i 1) (+ acc m (perform (Ask))))))]
+    (loop n 0)))
+;; non-tail recursion, in operand position
+(defn r2 [m : int] : int
+  (+ 1000
+     (letrec [sum (fn [i : int] : int (if (= i 0) (perform (Ask)) (+ m (sum (- i 1)))))]
+       (sum 10))))
+;; a float capture, called twice
+(defn r3 [x : float] : float
+  (letrec [f (fn [i : int] : float (if (= i 0) (+ x (as float (perform (Ask)))) (f (- i 1))))]
+    (+ (f 2) (f 3))))
+;; a letrec inside a capturing let lambda
+(defn r4 [m : int] : int
+  (let [g (fn [n : int] : int
+            (letrec [go (fn [i : int] : int (if (= i 0) (+ n m (perform (Ask))) (go (- i 1))))]
+              (go n)))]
+    (g 4)))
+
+(defn main [] : int
+  (println (handle (t1 5) (Ask [] k) (resume k 10)))              ; 18
+  (println (handle (t2 5) (Ask [] k) (resume k 10)))              ; 118
+  (println (handle (t3 5) (Ask [] k) (resume k 10)))              ; 33
+  (println (handle (t4 0.5) (Ask [] k) (resume k 7)))             ; 7.75
+  (println (handle (t5 (P 1 2)) (Ask [] k) (resume k 10)))        ; 14
+  (println (handle (t6 3) (Ask [] k) (resume k 10)))              ; 40
+  (println (handle (t7 (some 4) 1) (Ask [] k) (resume k 10)))     ; 15
+  (println (handle (t7 (none) 1) (Ask [] k) (resume k 10)))       ; 11
+  (println (handle (t8 5) (Tell [v] k) (do (println v) (resume k nil))))
+  (println (handle (t9 5) (Ask [] k) (resume k 10)))              ; 26
+  (println (handle (t10 1) (Ask [] k) (resume k 1)))              ; 501500
+  (println (handle (t11 "pos") (Ask [] k) (resume k 10)))         ; pos
+  (let [p (handle (t12 (P 1 2)) (Ask [] k) (resume k 10))]
+    (println (.a p))                                              ; 14
+    (println (.b p)))                                             ; 2
+  (println (handle (t13 5) (Ask [] k) (resume k 10)))             ; 3
+  (println (handle (t13 50) (Ask [] k) (resume k 10)))            ; -1
+  (println (handle (r1 2 1000) (Ask [] k) (resume k 1)))          ; 3000
+  (println (handle (r2 3) (Ask [] k) (resume k 10)))              ; 1040
+  (println (handle (r3 0.25) (Ask [] k) (resume k 7)))            ; 14.5
+  (println (handle (r4 1) (Ask [] k) (resume k 10)))              ; 15
+  0)
