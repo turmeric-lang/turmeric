@@ -7040,7 +7040,15 @@ static const Type *e2a_callee_sig(const Binding *fn, const CAtom *fn_atom,
 }
 static const char *e2a_param_ctype(const Type *sig, uint32_t i) {
     if (!sig || i >= sig->as.fn.arity) return "int64_t";
-    switch ((TypeKind)sig->as.fn.arg_kinds[i]) {
+    TypeKind k = (TypeKind)sig->as.fn.arg_kinds[i];
+    /* In a colored generic's monomorph a parameter typed by the type variable
+     * is the instantiation's: a `(fn [B] B)` parameter at B := float takes a
+     * double, as the callee's registered entry declares it. */
+    if (g_cps_mono_resolver && sig->as.fn.arg_full_types && sig->as.fn.arg_full_types[i]) {
+        Type _r; const Type *rt = cps_resolve_ty(sig->as.fn.arg_full_types[i], &_r);
+        if (rt) k = rt->kind;
+    }
+    switch (k) {
         case TY_FLOAT: case TY_FLOAT64: return "double";
         case TY_FLOAT32:                return "float";
         default:                        return "int64_t";
@@ -7287,7 +7295,15 @@ static char *atoms_csv_call_cps(CE *ce, const CAtom *args, uint32_t n) {
     for (uint32_t i = 0; i < n; i++) {
         if (i) buf_puts(&b, ", ");
         char *a = atom_str(ce, &args[i]);
-        if (!atom_is_fat_fn(&args[i]) && atom_ty_is_ptr_carrier(args[i].ty))
+        /* In a colored generic's monomorph an argument typed by the type
+         * variable has the instantiation's C type -- a `const char *` at
+         * T := cstr -- so read its kind through the active spec. */
+        TypeKind ak = args[i].ty;
+        if (g_cps_mono_resolver && args[i].type) {
+            Type _r; const Type *rt = cps_resolve_ty(args[i].type, &_r);
+            if (rt) ak = rt->kind;
+        }
+        if (!atom_is_fat_fn(&args[i]) && atom_ty_is_ptr_carrier(ak))
             buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         else
             buf_puts(&b, a);
@@ -7492,6 +7508,17 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             ce_line(ce, "*__aggbox_%d = %s;", abx, a);
             ce_line(ce, "TUR_REGION_NOTE_WORDS(__aggbox_%d, sizeof *__aggbox_%d);", abx, abx);
             buf_printf(&b, "(int64_t)(intptr_t)__aggbox_%d", abx);
+        }
+        else if (arg_cty && strcmp(arg_cty, "int64_t") == 0 && pty &&
+                 (strcmp(pty, "double") == 0 || strcmp(pty, "float") == 0)) {
+            /* ...and the reverse: a monomorph clone's float parameter given the
+             * erased carrier word a generic call site holds (the elaborator
+             * erases the argument for the generic base; the clone takes the
+             * instantiation).  The word IS the float's bits. */
+            if (strcmp(pty, "float") == 0)
+                buf_printf(&b, "((union { float f; uint32_t u; }){ .u = (uint32_t)(%s) }).f", a);
+            else
+                buf_printf(&b, "((union { double d; int64_t i; }){ .i = (int64_t)(%s) }).d", a);
         }
         else if (param_is_i64 && arg_cty &&
                  (strcmp(arg_cty, "double") == 0 || strcmp(arg_cty, "float") == 0)) {

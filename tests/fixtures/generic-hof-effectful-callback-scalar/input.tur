@@ -1,0 +1,32 @@
+;; cps-evicts-handle-in-operand-positions (the float instantiation): a colored
+;; generic higher-order function with an annotated effect row, instantiated
+;; at a float, float32, bool or cstr, was refused -- the erased result's
+;; retype around the threaded call had no lowering -- and once admitted, its
+;; monomorph clone passed a float through the int64 carrier.  Tail and
+;; non-tail calls, lambdas and named functions.  Every line equals
+;; `tur --interpret`.
+(defeffect F [x : float] :float)
+(defeffect S [x : float32] :float32)
+(defeffect B [x : bool] :bool)
+(defeffect C [x : cstr] :cstr)
+
+(defn gapp [T] [f : (fn [T] #fx{F S B C} T) x : T] #fx{F S B C} : T (f x))
+(defn gapp2 [T] [f : (fn [T T] #fx{F S B C} T) x : T y : T] #fx{F S B C} : T (f x y))
+
+(defn twice-f [x : float] : float (perform (F x)))
+(defn neg-b [x : bool] : bool (perform (B x)))
+
+(defn main [] : int
+  (println (handle (gapp (fn [x : float] : float (perform (F x))) 7.1)
+             (F [x] k) (resume k (* x 2.0))))
+  (println (handle (+ 0.5 (gapp twice-f 3.25))
+             (F [x] k) (resume k (* x 2.0))))
+  (println (handle (gapp (fn [x : float32] : float32 (perform (S x))) (as float32 2.5))
+             (S [x] k) (resume k (+ x (as float32 1.25)))))
+  (println (handle (gapp neg-b true)
+             (B [x] k) (resume k (not x))))
+  (println (handle (gapp (fn [s : cstr] : cstr (perform (C s))) "in")
+             (C [s] k) (resume k "out")))
+  (println (handle (gapp2 (fn [a : float b : float] : float (+ a (perform (F b)))) 1.5 2.25)
+             (F [x] k) (resume k (* x 2.0))))
+  0)

@@ -4830,7 +4830,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             }
             /* As cps_bind's default arm: a Tier A reinterpret over a control-
              * bearing operand. */
-            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr) {
+            if (e->kind == EX_REINTERPRET && e->as.reinterpret_.expr) {
                 CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
@@ -5242,12 +5242,15 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * direct emitter (binds x, continues rest). */
             if (safe_to_delegate(b, e))
                 return build_letraw(b, e, x, rest);
-            /* cps-evicts-handle-in-operand-positions: a same-size Tier A
-             * reinterpret is a bit-identical retype whose OPERAND carries a
-             * control op (a generic call with a `handle` in its arguments).
-             * Translate the operand into a binder of its own type, then retype
-             * it into x through a delegated reinterpret of that binder. */
-            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr)
+            /* cps-evicts-handle-in-operand-positions: a reinterpret whose
+             * OPERAND carries a control op (a generic call with a `handle` in
+             * its arguments, or a colored generic's erased result).  Translate
+             * the operand into a binder of its own type, then retype it into x
+             * through a delegated reinterpret of that binder -- the direct
+             * emitter spells the retype, including an int64 carrier read back
+             * as the double it holds (the float instantiation; until
+             * 2026-10-09 only a same-size Tier A retype took this path). */
+            if (e->kind == EX_REINTERPRET && e->as.reinterpret_.expr)
                 return cps_bind_reinterp(b, e, x, rest);
             if (e->kind == EX_CAST && e->as.cast_.expr)
                 return cps_bind_cast(b, e, x, rest);

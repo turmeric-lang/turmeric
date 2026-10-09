@@ -1,5 +1,9 @@
 # The CPS backend still evicts some `handle`s over effectful fn fields
 
+**Narrowed 2026-10-09: the float instantiation of item 3 is fixed** (see "The
+float instantiation, fixed" at the end).  **What is left:** an UN-annotated fn
+parameter of a generic (stdlib's `option-map` shape).
+
 **Severity: medium.** A legal program is refused at build time with "this
 effect operation has no lowering here". This is an expressiveness gap, not a
 miscompile. It is what remains of the type fuzzer's `GEN_REJECT`s after
@@ -225,7 +229,47 @@ SEAM_REJECT, 0 bugs -- the same as before the change.
   an effectful callback); a type variable in the signature keeps it thin
   (`repr-trace ... thin-fn tyvar-sig`), and the clone shares the base's
   Binding, so the call through it threads by neither route.
-- **A float instantiation**, `(gapp2 (fn [x : float] : float (perform (F
-  x))) 7.1)` through `(fn [B] #fx{F} B)`: `main` fails the core check on
-  `EX_REINTERPRET int -> float of EX_CALL`, the result retype around the
-  now-threaded generic call. The non-generic float twin works.
+- ~~**A float instantiation**~~ -- fixed 2026-10-09, below.
+
+## The float instantiation, fixed (2026-10-09)
+
+`(gapp2 (fn [x : float] : float (perform (F x))) 7.1)` through
+`(fn [B] #fx{F} B)` had three gaps. Only the first refused; the other two
+were miscompiles behind it, found by admitting the call. The program
+segfaulted then.
+
+- **The result retype.** The erased generic's int64 result comes back to a
+  float through a NON-Tier-A reinterpret (`int -> float`). The bind and tail
+  paths decomposed only a Tier A reinterpret over a control-bearing operand.
+  Now any reinterpret does (`cps_bind_reinterp`, `src/passes/cps_ir.c`): the
+  operand is bound to a binder of its own type, and the direct emitter spells
+  the retype of that binder.
+- **The argument into the clone.** The elaborator erases a generic call's
+  arguments for the base, so `main` held 7.1 as its carrier bits. The cps->cps
+  call to the monomorph clone `gapp2__spec__double_...(int64_t f, double x,
+  ...)` passed those bits to `double x`, which C converts numerically.
+  `atoms_csv_call_typed_offs` (`src/compiler/emit_cps_ir.c`) now reads an
+  int64 atom given to a clone's `double` / `float` parameter back by its bits,
+  the reverse of the existing float-into-carrier rule.
+- **The fn-value call inside the clone.** The E2a dispatch cast the callee's
+  parameter from the signature's KIND, which is the type variable, so it
+  spelled `int64_t`, and C converted the double numerically.
+  `e2a_param_ctype` now resolves the parameter's full type through the active
+  monomorph (`g_cps_mono_resolver`).
+
+Found on the way and fixed: the `cstr` instantiation of the same generic did
+not build under clang. Its E2a dispatch passed the `const char *` argument
+into the `int64_t` slot bare (`-Wint-conversion`; gcc only warned).
+`atoms_csv_call_cps` now reads the argument's kind through the active
+monomorph too. It was reachable before this change: a `cstr` result retype is
+Tier A.
+
+Pinned by `tests/fixtures/generic-hof-effectful-callback-scalar`. It covers:
+- `float`, `float32`, `bool` and `cstr` instantiations;
+- a named function and lambdas;
+- a non-tail call;
+- a two-argument float callback.
+
+Every line equals `tur --interpret`. The fixture is leak-checked, passes the
+JIT harness, runs clean under `-fsanitize=function`, and has no finding from
+`check-emitted-float-conversions.py`.
