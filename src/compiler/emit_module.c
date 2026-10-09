@@ -16233,7 +16233,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * list to be reaped once the resumed body settles; `depth` is the entry
      * depth the await parked at, which names the entry that owns the park (the
      * innermost one -- the await's shift reached its root). */
-    buf_puts(out, "typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; } TurAsyncPark;\n\n");
+    /* async-capturing-body-env-never-freed: `own_env` is the closure box the
+     * spawned body runs in when the spawn owns it (tur_async_owns_env), carried
+     * from park to park and dropped once the body settles. */
+    buf_puts(out, "typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; void *own_env; } TurAsyncPark;\n\n");
     emit_rt_global(out, shared,
                    "int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */\n",
                    "int tur_async_suspended");
@@ -16257,6 +16260,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     emit_rt_global(out, shared,
                    "int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */\n\n",
                    "int tur_async_direct_body");
+    /* async-capturing-body-env-never-freed: the next closure spawn OWNS its box
+     * -- a fresh capturing lambda written at the spawn whose env drop is
+     * shallow (emit_async_owns_env) -- and drops it when the body settles. */
+    emit_rt_global(out, shared,
+                   "int tur_async_owns_env = 0;  /* the next closure spawn owns its box */\n\n",
+                   "int tur_async_owns_env");
 
     /* The exit of every direct->CPS entry wrapper (emit_cps_ir.c, and
      * __dk_enter0 below).  A body that settled frees its root and leaves its
@@ -16393,6 +16402,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_scheduler = tur_scheduler_new();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
+    buf_puts(out, "    int __own = tur_async_owns_env; tur_async_owns_env = 0;\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
@@ -16403,11 +16413,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int64_t result = __fn(clos);\n");
     buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
-    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(clos); return future; }\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        tur_async_pending_park->outer = future;\n");
+    buf_puts(out, "        if (__own) tur_async_pending_park->own_env = clos;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_future_fulfill(future, result);\n");
+    buf_puts(out, "        if (__own) TUR_CLOSURE_DROP(clos);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
@@ -16588,6 +16600,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        /* re-parked on a further pending await: thread the outer future through */\n");
     buf_puts(out, "        TurAsyncPark *np = tur_async_pending_park;\n");
     buf_puts(out, "        np->outer = rec->outer;\n");
+    buf_puts(out, "        np->own_env = rec->own_env;\n");
     buf_puts(out, "        if (np->depth == __dk_entry_depth) {\n");
     buf_puts(out, "            __dk_reap_seg_move(&np->seg, &rec->seg);\n");
     buf_puts(out, "            __dk_reap_seg_take(&np->seg, __dk_reap_mark);\n");
@@ -16604,6 +16617,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        __dk_reap_seg_give(&rec->seg);\n");
     buf_puts(out, "        if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);\n");
     buf_puts(out, "        tur_future_fulfill(rec->outer, r);\n");
+    buf_puts(out, "        if (rec->own_env) TUR_CLOSURE_DROP(rec->own_env);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    free(rec);\n");

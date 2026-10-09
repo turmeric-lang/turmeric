@@ -15983,6 +15983,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {
+                        /* async-capturing-body-env-never-freed: a fresh
+                         * shallow-env lambda written right here is the
+                         * spawn's alone; it drops the box when the body
+                         * settles. */
+                        const Expr *lit = fn_expr;
+                        while (lit && (lit->kind == EX_ASCRIBE || lit->kind == EX_FN_TO_FAT))
+                            lit = lit->kind == EX_ASCRIBE ? lit->as.ascribe_.inner
+                                                          : lit->as.fn_to_fat_.inner;
+                        if (lit && lit->kind == EX_CLOSURE &&
+                            closure_env_drop_is_shallow(lit->as.closure_.closure)) {
+                            buf_puts(body, "tur_async_owns_env = 1;\n");
+                            indent_buf(body, ctx->indent);
+                        }
                         buf_printf(body, "void *%s = (void *)tur_async_fiber_closure((void *)(intptr_t)%s);\n", tmp, fn_val);
                     } else {
                         buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);

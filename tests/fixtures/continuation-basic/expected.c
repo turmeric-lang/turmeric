@@ -3784,7 +3784,7 @@ static int64_t tur_future_get(TurFuture *f) {
     return f->value;
 }
 
-typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; } TurAsyncPark;
+typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; void *own_env; } TurAsyncPark;
 
 static int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */
 static TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */
@@ -3792,6 +3792,8 @@ static TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspen
 static int tur_async_body_depth = -1;  /* entry depth of the async body's root */
 
 static int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */
+
+static int tur_async_owns_env = 0;  /* the next closure spawn owns its box */
 
 __attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
     if (tur_async_suspended) {
@@ -3873,6 +3875,7 @@ static TurFuture *tur_async_fiber_closure(void *clos) {
         tur_scheduler = tur_scheduler_new();
     }
     int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;
+    int __own = tur_async_owns_env; tur_async_owns_env = 0;
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;
     tur_handler_node __node; __node.parent = tur_handler_chain;
@@ -3881,11 +3884,13 @@ static TurFuture *tur_async_fiber_closure(void *clos) {
     int64_t result = __fn(clos);
     tur_async_body_depth = __abd;
     tur_handler_chain = __node.parent;
-    if (tur_async_reject_if_panicking(future)) return future;
+    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(clos); return future; }
     if (tur_async_suspended && tur_async_pending_park) {
         tur_async_pending_park->outer = future;
+        if (__own) tur_async_pending_park->own_env = clos;
     } else {
         tur_future_fulfill(future, result);
+        if (__own) TUR_CLOSURE_DROP(clos);
     }
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;
@@ -4018,6 +4023,7 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
         /* re-parked on a further pending await: thread the outer future through */
         TurAsyncPark *np = tur_async_pending_park;
         np->outer = rec->outer;
+        np->own_env = rec->own_env;
         if (np->depth == __dk_entry_depth) {
             __dk_reap_seg_move(&np->seg, &rec->seg);
             __dk_reap_seg_take(&np->seg, __dk_reap_mark);
@@ -4034,6 +4040,7 @@ static void __tur_async_resume(TurFuture *inner, int64_t value) {
         __dk_reap_seg_give(&rec->seg);
         if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);
         tur_future_fulfill(rec->outer, r);
+        if (rec->own_env) TUR_CLOSURE_DROP(rec->own_env);
     }
     tur_async_body_depth = __abd;
     free(rec);

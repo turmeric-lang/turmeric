@@ -1,5 +1,22 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed 2026-10-09 (filed the same day): a shallow env is dropped.** A
+fresh capturing lambda written at the spawn, whose env drop is shallow
+(`closure_env_drop_is_shallow`: scalar captures, no inline C), is now owned by
+the spawn. The emitter sets `tur_async_owns_env` before
+`tur_async_fiber_closure`. A body that settles inline drops its box there; a
+body that parks hands the box to the park (`TurAsyncPark.own_env`, carried
+through each re-park), and `__tur_async_resume` drops it once the body
+settles. Pinned by `tests/fixtures/async-capturing-body-env-dropped`
+(leak-checked: inline, parking every turn, and 200 spawns in a loop -- 4848 B
+in 202 allocations before, 0 now).
+
+**What is left:** a capture the shallow test does not take -- a struct (the
+`await-in-struct-capturing-async-body` fixture still leaks its 32 B box), a
+fat closure, an `rc` -- whose drop glue would free what the body's result can
+still reference; a lambda bound to a local before the spawn (its `let` owns
+it); the typed spawn (`tur_async_fiber_via`) and the thread-backed one.
+
 **Severity: low-medium (a leak per spawn).** `(async (fn [] ... captured ...))`
 mallocs the lambda's env box, hands it to `tur_async_fiber_closure`, and
 nothing frees it afterwards: 32 bytes for a one-struct capture, every time the
