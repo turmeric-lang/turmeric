@@ -96,8 +96,8 @@ static __thread void *tur_tls_r7k_form_base = 0;
 void **tur_tls_r7k_form_base_ptr (void) { return &tur_tls_r7k_form_base; }
 
 /* The DK runtime's per-thread state (emit_dk_runtime.c): the reap registry,
- * the CPS entry depth, and the trampoline's landing, resume chain and value
- * and meta-stack.  Shared, CPS entries on two threads reallocated one
+ * the CPS entry depth, and the trampoline's landing, resume chain and
+ * value.  Shared, CPS entries on two threads reallocated one
  * registry between them, a worker's exit freed the other threads' live
  * chains, and a worker's entry replaced the landing another thread's
  * tail-resume jumped to (docs/archive/dk-reap-list-shared-across-threads.md). */
@@ -117,12 +117,6 @@ static __thread void *tur_tls_dk_resume_chain = 0;
 void **tur_tls_dk_resume_chain_ptr (void) { return &tur_tls_dk_resume_chain; }
 static __thread intptr_t tur_tls_dk_resume_val = 0;
 intptr_t *tur_tls_dk_resume_val_ptr (void) { return &tur_tls_dk_resume_val; }
-static __thread void *tur_tls_dk_meta = 0;
-void **tur_tls_dk_meta_ptr (void) { return &tur_tls_dk_meta; }
-static __thread size_t tur_tls_dk_meta_n = 0;
-size_t *tur_tls_dk_meta_n_ptr (void) { return &tur_tls_dk_meta_n; }
-static __thread size_t tur_tls_dk_meta_cap = 0;
-size_t *tur_tls_dk_meta_cap_ptr (void) { return &tur_tls_dk_meta_cap; }
 
 /* The dynamic tail-call trampoline (emit_module.c, proper-tail-calls T6): its
  * descriptor, the function it has armed, the driver's root and the sentinel

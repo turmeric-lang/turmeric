@@ -15110,7 +15110,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
          * threads): realloc'd (collected) arrays and a chain in flight. */
         r7gc_note_tls_root("__dk_reap_v");
         r7gc_note_tls_root("__dk_reap_kind");
-        r7gc_note_tls_root("g_dk_meta");
         r7gc_note_tls_root("g_dk_resume_chain");
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
@@ -15414,19 +15413,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
     buf_puts(out, "    tur_current_fiber = f;\n");
     buf_puts(out, "    f->arg = arg;\n");
-    /* CPS/DK: g_dk_driver (the current DK entry-driver landing) and the DK
-     * meta-stack depth are STACK-DISCIPLINED -- they name a setjmp buffer / frame
-     * on the CURRENT C stack.  A resumed fiber runs on its own stack and may
+    /* CPS/DK: g_dk_driver (the current DK entry-driver landing) is
+     * STACK-DISCIPLINED -- it names a setjmp buffer on the CURRENT C stack.  A resumed fiber runs on its own stack and may
      * install its own DK handle (setting g_dk_driver to a buffer ON THE FIBER
      * STACK), then YIELD out mid-handle without restoring it (the yield is a
      * swapcontext, not a return, so the fiber wrapper's `g_dk_driver = __dksave`
      * never runs).  Left unrestored, the resumer's next dk_perform longjmps into
      * the fiber's (possibly freed) stack -> SIGSEGV / "longjmp causes uninitialized
-     * stack frame".  Save the resumer's driver + meta depth across the swapcontext
-     * and restore them when control returns, so the fiber's driver never leaks
-     * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
-     * only path since cps-tramp-resume graduated (2026-07-19). */
-    buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+     * stack frame".  Save the resumer's driver across the swapcontext and
+     * restore it when control returns, so the fiber's driver never leaks out.
+     * The trampoline path declares g_dk_driver and is the only path since
+     * cps-tramp-resume graduated (2026-07-19). */
+    buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver;\n");
     /* dk-reap-list-shared-across-threads: the CPS entry depth and the reap
      * registry follow the stack too, but a fiber's outlive a yield -- it can
      * yield inside a CPS entry and finish that entry later, on whichever
@@ -15471,7 +15469,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    memcpy(f->r7dyn, &tur_r7rs_dyn, sizeof f->r7dyn);\n");
         buf_puts(out, "    tur_r7rs_dyn = _r7dyn;\n");
     }
-    buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
+    buf_puts(out, "    g_dk_driver = _dk_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
     buf_puts(out, "}\n\n");
@@ -16438,7 +16436,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the chain (`inplace_head`: the trampoline neither frees nor keeps it), and
      * frees it once the run is over, as dk_invoke freed its copy. */
     buf_puts(out, "    rec->subk->inplace_head = true;\n");
-    buf_puts(out, "    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value, g_dk_meta_n);\n");
+    buf_puts(out, "    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value);\n");
     buf_puts(out, "    dk_free(rec->subk);\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* re-parked on a further pending await: thread the outer future through */\n");

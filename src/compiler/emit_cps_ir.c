@@ -10920,8 +10920,9 @@ static void emit_handle(CE *ce, const CTerm *t) {
         const CapSet *ccaps = (cok && ccs.n > 0) ? &ccs : NULL;
         /* E7: emit_resume yields (dk_tail_resume) ONLY for a case installed with
          * dk_handler_tail -- a DEEP tail-resume.  A SHALLOW case keeps the inline
-         * dk_invoke (its dk_perform never queues an H->next delivery to trampoline).
-         * Must agree with the per-case ctor decision below. */
+         * dk_invoke (its dk_perform hands it a continuation that stops at the
+         * handle, so it cannot be trampolined).  Must agree with the per-case
+         * ctor decision below. */
         bool save_ctr = ce->case_tail_resume;
         ce->case_tail_resume = !t->as.handle.shallow
             && case_body_tail_resumes(t->as.handle.cases[ci].case_body);
@@ -11308,9 +11309,9 @@ static void emit_resume(CE *ce, const CTerm *t) {
     /* E7: a TAIL resume directly inside a handler case yields to the entry driver
      * (dk_tail_resume) instead of resuming inline (dk_invoke) -- the trampoline
      * keeps deep effectful recursion flat.  dk_perform installed this case with
-     * dk_handler_tail (case_body_tail_resumes agrees), so it queued the H->next
-     * delivery and this yield hands off the resumed chain; the value is delivered
-     * by the driver, so nothing follows here. */
+     * dk_handler_tail (case_body_tail_resumes agrees), so the chain it handed
+     * the case runs on past the handle and this yield hands it off; the value is
+     * delivered by the driver, so nothing follows here. */
     /* (cont? k) support: mark k consumed at the user resume site so a later
      * `cont?` on the same k reads false (matches the fiber path). */
     ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);
@@ -12305,7 +12306,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     buf_puts(file, "    size_t __dk_reap_mark = __dk_reap_n;\n");
         buf_puts(file, "    DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());\n");
         /* E7: install the trampoline driver.  A tail-resume longjmps here; the
-         * else-branch runs the meta-stack trampoline to completion. */
+         * else-branch runs the trampoline to completion. */
         if (!mvoid) buf_puts(file, "    int64_t __r;\n");
         buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
         buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(__root); }\n",
