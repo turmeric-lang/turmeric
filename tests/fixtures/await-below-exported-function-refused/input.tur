@@ -1,12 +1,11 @@
-;; await-parks-only-to-the-nearest-c-frame (the async body itself): an
-;; async thunk the CPS backend evicts -- a capturing lambda whose capture is a
-;; struct -- runs direct-style with no root of its own, so its awaiter's
-;; pending park reached the awaiter's entry root at exactly the depth the
-;; body's own root would have had, and the thunk's `(+ (.a p) ...)` frame was
-;; lost: 600 for 605, silently.  The emitter flags such a spawn
-;; (tur_async_direct_body) and __tur_await_body refuses the park.  When the
-;; CPS backend takes this lambda the program prints 605 and expected.exit
-;; fails: make it a passing fixture then.
+;; await-parks-only-to-the-nearest-c-frame: an awaiting function reached
+;; through a function the CPS backend cannot take -- here one exported under a
+;; fixed C name (`export-as`), which keeps the C ABI and so stays direct-style
+;; -- parks at the nearest root, the awaiter's own entry, not the async
+;; body's.  That used to capture only the part below and let the exported
+;; function and everything above it carry on with a dummy 0 (a silent wrong
+;; answer).  __tur_await_body now refuses a park at any root but the body's
+;; own (tur_async_body_depth) and aborts with a diagnostic.
 
 (defn cur-cell [fresh : bool] : ptr<void>
   ```c
@@ -40,7 +39,9 @@
   (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
 
 
-(defstruct P [a : int b : int])
+(defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
+(defn (export-as "lvl2_export") level2 [m : int] : int (* 2 (level3 (+ m 1))))
+(defn body [] : int (+ 7 (level2 1)))
 (defn drive [f : ptr<void>] : int
   (while (pending? f)
     (let [old (cur-cell false)]
@@ -55,6 +56,5 @@
 
 (defn main [] : nil
   (cur-cell true)
-  (let [p (P 5 0)]
-    (println (drive (async (fn [] : int (+ (.a p) (sum-values 0 300 0)))))))
+  (println (drive (async body)))
   (free-future (cur-cell false)))

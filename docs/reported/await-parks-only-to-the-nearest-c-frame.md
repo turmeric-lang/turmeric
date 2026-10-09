@@ -1,12 +1,15 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
-**Narrowed 2026-10-09 (again): no silent wrong answer is left.** The
-remaining shape is an awaiting function the CPS backend evicts for some other
-reason. It now aborts at the park with a diagnostic instead of finishing with
-a wrong value (see "Refused at run time" at the end). What is left is
-expressiveness: such a program is refused, at run time, where `tur
---interpret` runs it. Each eviction reason that can hold up an awaiter is
-its own gap; a capturing lambda with a non-primitive capture is the known one.
+**Narrowed 2026-10-09 (third pass): the struct-capturing shapes compile, and
+no silent wrong answer is left.** `fn_sig_ok` now admits a capturing lambda
+that may await even when it is not threadable, and a concrete aggregate
+capture (no type variable in it). The report's remaining repro prints 2428,
+and the same lambda as the async body itself prints 605. For any function
+that still stays off the CPS path between an async body and its await (an
+`export-as` function, which keeps its C ABI), the await now refuses to park
+and aborts with a diagnostic instead of losing the body (see "Refused at run
+time" at the end). What is left is that refusal for such programs; `tur
+--interpret` runs them.
 
 **Narrowed 2026-10-09: both shapes below are fixed, and so are two more found
 on the way; what is left is a may-await function the CPS backend evicts for
@@ -138,19 +141,35 @@ spawning a named thunk the CPS backend did not take (`emit_cps_ir_emits_binding`
 and the spawn then expects no park at all. A thunk the emitter cannot name
 (an arbitrary fn value) keeps the depth check alone.
 
-Pinned by `tests/fixtures/await-parks-below-evicted-frame-refused` (the
-struct-capture lambda above, between the body and the awaiter: it printed
-604 for 2428) and `await-parks-in-evicted-async-body-refused` (an evicted
-async thunk: 600 for 605). Both expect the abort. When the CPS backend takes
-those lambdas, each prints its right answer and fails its `expected.exit`,
-which is the gap closing. The 83 async/await fixtures and the JIT set show
-no false refusal. The preamble change regenerated the split runtime and moved
-159 `expected.c` snapshots.
+Pinned by `tests/fixtures/await-below-exported-function-refused`: an
+`export-as` function between the body and the awaiter, which expects the
+abort. The two struct-capture shapes were refusal fixtures for an hour and
+became passing ones once the lambdas were admitted (below):
+`await-below-struct-capturing-lambda` (2428, leak-checked) and
+`await-in-struct-capturing-async-body` (605; its async env box leaks,
+pre-existing,
+[async-capturing-body-env-never-freed](async-capturing-body-env-never-freed.md)).
+The 83 async/await fixtures and the JIT set show no false refusal. The
+preamble change regenerated the split runtime and moved 159 `expected.c`
+snapshots.
+
+**The struct-capture shapes, admitted.** Two `fn_sig_ok` rules kept them
+direct-style:
+- A capturing lambda went to the CPS backend only when threadable. One that
+  may await (`cps_fn_may_await`) is admitted too: off the CPS path its await
+  parks at the wrong root, so the direct path is the one that cannot run it.
+- The closure-capture switch took primitives only. A concrete aggregate
+  capture is admitted too: a `defstruct` / `defdata` type with no type
+  parameter and no type variable. The switch's stated hazard is a
+  spec-suffixed env layout, but that belongs to a monomorph clone of the
+  lambda, and `mono_sig_ok` never CPS-emits one.
+
+The fixture suite, the leak-check harness, the JIT closure/async set and
+fnsan show no regression.
 
 Still open: refusing at run time is the honest floor, not the fix. Each
-eviction reason an awaiter can hit wants its own admission, starting with a
-capturing lambda's non-primitive capture (`fn_sig_ok`'s closure-capture
-switch, which keeps a by-value aggregate capture off the CPS path because a
-monomorph clone's env layout is spec-suffixed). A compile-time version of
-the refusal (fix direction 2) would also refuse programs that only ever
-await ready futures.
+eviction reason an awaiter can still hit wants its own admission or a
+compile-time diagnostic: an `export-as` function (its C ABI is fixed, so
+that one stays a refusal), a generic or rank-2 capture, a poly-fn parameter.
+A compile-time version of the refusal (fix direction 2) would also refuse
+programs that only ever await ready futures.

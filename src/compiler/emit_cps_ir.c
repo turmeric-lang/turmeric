@@ -3250,7 +3250,10 @@ static bool fn_sig_ok(const FnDef *fd) {
      * capture is still rejected: its env field is the 16-byte fat struct and
      * the body's `.fn/.env` dispatch has no CPS spelling here yet. */
     if (fd->closure) {
-        if (!threadable_has(fd->binding)) return false;
+        /* ...or one that may await: off the CPS path its await parks at the
+         * wrong root (await-parks-only-to-the-nearest-c-frame), so the direct
+         * path is the one that cannot run it. */
+        if (!threadable_has(fd->binding) && !cps_fn_may_await(fd)) return false;
         for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
             const Binding *cap = fd->closure->captures[ci];
             if (!cap || cap->is_global) continue;
@@ -3268,6 +3271,15 @@ static bool fn_sig_ok(const FnDef *fd) {
             switch (cap->type.kind) {
                 case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_FLOAT32:
                 case TY_FLOAT64: case TY_CSTR: case TY_FN: case TY_PTR_VOID:
+                    break;
+                case TY_STRUCT: case TY_ADT:
+                    /* await-parks-only-to-the-nearest-c-frame: a CONCRETE
+                     * aggregate (no type variable anywhere in it) has one env
+                     * layout -- the spec-suffixed layouts above belong to a
+                     * monomorph clone, which mono_sig_ok never CPS-emits. */
+                    if (type_has_unresolved_tyvar(&cap->type)) return false;
+                    if (cap->type.kind == TY_ADT && cap->type.as.adt_.def
+                        && cap->type.as.adt_.def->n_type_params > 0) return false;
                     break;
                 default:
                     return false;
