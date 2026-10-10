@@ -15,6 +15,13 @@
 # rejected and two retry loops racing each other for the tip; one commit
 # carrying all files cannot half-land.
 #
+# Each publish also rewrites `suite-timings-recent.jsonl`: the last RECENT_DAYS
+# days of rows, taken from the full log.  /ci opens on a 7-day range, and the
+# full log is 40+ MB -- the page spent minutes downloading rows it then threw
+# away.  The recent file is derived (never appended to), so it cannot drift from
+# the log; the page falls back to the full log for ranges the window cannot
+# cover.
+#
 # Deliberate deviation from the plan: it specified a force-push.  A force-push
 # can silently discard rows another run appended between our fetch and our push,
 # which is the one outcome an append-only metrics log must never have.  The
@@ -26,6 +33,8 @@ set -euo pipefail
 BRANCH="${TIMINGS_BRANCH:-ci-metrics}"
 ATTEMPTS="${TIMINGS_PUSH_ATTEMPTS:-5}"
 YEAR="$(date -u +%Y)"
+RECENT_DAYS="${TIMINGS_RECENT_DAYS:-8}"
+RECENT_FILE="suite-timings-recent.jsonl"
 
 INPUT=""
 LOC_INPUT=""
@@ -127,6 +136,8 @@ while [ "$attempt" -le "$ATTEMPTS" ]; do
 Data-only branch. No source, no build, no CI.
 
 `suite-timings-<year>.jsonl` holds one JSON object per CTest suite per CI run.
+`suite-timings-recent.jsonl` is the last few days of that log, rewritten on
+every publish, so /ci can open without downloading the whole year.
 `repo-loc-<year>.jsonl` holds one object per CI run with the tracked line counts
 of the commit, split product / test / bench / example / generated.
 `docs-counts-<year>.jsonl` holds one object per CI run with the counts of open
@@ -146,9 +157,28 @@ EOF
     [ -n "$LOC_ABS" ] && cat "$LOC_ABS" >> "$WT/$LOC_FILE"
     [ -n "$DOCS_ABS" ] && cat "$DOCS_ABS" >> "$WT/$DOCS_FILE"
 
+    # Window anchored on the newest row (as the page's range filter is), not on
+    # wall-clock, so a quiet week still yields a non-empty file.  A torn
+    # line is skipped.
+    python3 - "$WT/$FILE" "$WT/$RECENT_FILE" "$RECENT_DAYS" <<'PYEOF'
+import json, sys
+src, dst, days = sys.argv[1], sys.argv[2], int(sys.argv[3])
+rows = []
+with open(src) as f:
+    for line in f:
+        try:
+            rows.append((json.loads(line)["ts"], line))
+        except (ValueError, KeyError):
+            pass  # a torn line is dropped, as the page does
+if rows:
+    cutoff = max(ts for ts, _ in rows) - days * 86400
+    with open(dst, "w") as out:
+        out.writelines(l if l.endswith("\n") else l + "\n" for ts, l in rows if ts >= cutoff)
+PYEOF
+
     (
         cd "$WT"
-        git add "$FILE" README.md 2>/dev/null || git add "$FILE"
+        git add "$FILE" "$RECENT_FILE" README.md 2>/dev/null || git add "$FILE"
         [ -n "$LOC_ABS" ] && git add "$LOC_FILE"
         [ -n "$DOCS_ABS" ] && git add "$DOCS_FILE"
         if git diff --cached --quiet; then
