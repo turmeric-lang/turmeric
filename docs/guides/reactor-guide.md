@@ -29,7 +29,7 @@ runs *outside* the fiber scheduler, or for dedicated non-fiber threads.
 ## Quick start
 
 ```turmeric
-(import reactor)
+(load "stdlib/reactor.tur")
 
 (defn main [] : int
   (let [r (reactor-new)]
@@ -42,7 +42,7 @@ runs *outside* the fiber scheduler, or for dedicated non-fiber threads.
 ```
 
 ```sweet-exp
-import reactor
+load "stdlib/reactor.tur"
 
 defn main [] :int
   let [r reactor-new()]
@@ -63,10 +63,10 @@ The simplest pattern: register sources, run the loop, clean up.
 This is the pattern used by the `tur/httpd` listener thread.
 
 ```turmeric
-(import reactor)
+(load "stdlib/reactor.tur")
 
 ;; accept-loop is a plain OS thread entry point -- no fibers required.
-(defn start-listener [listen-fd : int stop-ch : ptr<void>] : nil
+(defn start-listener [listen-fd : int ^borrow stop-ch : (Chan int)] : nil
   (let [r (reactor-new)]
     ;; Accept connections: each READ event means accept() will not block.
     (reactor-add-fd r listen-fd READ
@@ -86,10 +86,10 @@ This is the pattern used by the `tur/httpd` listener thread.
 ```
 
 ```sweet-exp
-import reactor
+load "stdlib/reactor.tur"
 
 ;; accept-loop is a plain OS thread entry point -- no fibers required.
-defn start-listener [listen-fd :int stop-ch :ptr<void>] :nil
+defn start-listener [listen-fd :int ^borrow stop-ch :(Chan int)] :nil
   let [r reactor-new()]
     ;; Accept connections: each READ event means accept() will not block.
     reactor-add-fd r listen-fd READ
@@ -115,11 +115,11 @@ calls `reactor-wake` after `chan-send` so the blocking poll returns
 promptly.
 
 ```turmeric
-(import reactor)
-(import chan)
+(load "stdlib/reactor.tur")
+(load "stdlib/chan.tur")
 
 ;; In the reactor thread:
-(defn run-with-stop [stop-ch : ptr<void>] : nil
+(defn run-with-stop [^borrow stop-ch : (Chan int)] : nil
   (let [r (reactor-new)]
     ;; ... register fd sources, timers, etc. ...
 
@@ -132,17 +132,17 @@ promptly.
     (reactor-free r)))
 
 ;; From any other thread (safe because reactor-wake is thread-safe):
-(defn request-shutdown [stop-ch : ptr<void> ^borrow r : Reactor] : nil
+(defn request-shutdown [^borrow stop-ch : (Chan int) ^borrow r : Reactor] : nil
   (chan-send stop-ch 1)
   (reactor-wake r))
 ```
 
 ```sweet-exp
-import reactor
-import chan
+load "stdlib/reactor.tur"
+load "stdlib/chan.tur"
 
 ;; In the reactor thread:
-defn run-with-stop [stop-ch :ptr<void>] :nil
+defn run-with-stop [^borrow stop-ch :(Chan int)] :nil
   let [r reactor-new()]
     ;; ... register fd sources, timers, etc. ...
 
@@ -156,7 +156,7 @@ defn run-with-stop [stop-ch :ptr<void>] :nil
     reactor-free r
 
 ;; From any other thread (safe because reactor-wake is thread-safe):
-defn request-shutdown [stop-ch :ptr<void> ^borrow r :Reactor] :nil
+defn request-shutdown [^borrow stop-ch :(Chan int) ^borrow r :Reactor] :nil
   chan-send stop-ch 1
   reactor-wake r
 ```
@@ -165,7 +165,7 @@ The key constraint: `reactor-add-chan` is one-shot. If you need a
 persistent channel watcher, re-register from inside the callback:
 
 ```turmeric
-(defn watch-chan-loop [^borrow r : Reactor ch : ptr<void>] : nil
+(defn watch-chan-loop [^borrow r : Reactor ^borrow ch : (Chan int)] : nil
   (reactor-add-chan r ch
     (fn [id v user] : nil
       (handle-message v)
@@ -175,7 +175,7 @@ persistent channel watcher, re-register from inside the callback:
 ```
 
 ```sweet-exp
-defn watch-chan-loop [^borrow r :Reactor ch :ptr<void>] :nil
+defn watch-chan-loop [^borrow r :Reactor ^borrow ch :(Chan int)] :nil
   reactor-add-chan r ch
     (fn [id v user] :nil
       (handle-message v)
@@ -205,7 +205,7 @@ remaining sources, or when `reactor-stop` is called.
 
 ;; Echo one line from each of two pipe read-ends, concurrently, on a single
 ;; thread -- no global scheduler involved.
-(defn serve [g : ptr<void> read-fd : int] : nil
+(defn serve [^borrow g : LocalFiberGroup read-fd : int] : nil
   ;; Park until the fd is readable (or 5s elapses), then handle it.
   (let [ev (local-park-fd g read-fd READ 5000)]
     (if (= ev -2)
@@ -226,10 +226,15 @@ remaining sources, or when `reactor-stop` is called.
 ```
 
 `local-park-fd` returns the fired event mask, `-2` on timeout, or `-1`
-if called outside a group fiber. `local-park-chan` returns the received
-value (same `-1` out-of-fiber rule); as with `reactor-add-chan`, a
-same-thread sender should call `reactor-wake` after `chan-send` so the
-pump's blocking poll returns promptly.
+if called outside a group fiber. `local-park-chan` borrows a `(Chan A)`
+(`local-park-async-chan` an `(AsyncChan A)`). It returns `(some v)` with the
+received value, typed `A`, so a float channel yields its float, or `(none)`
+outside a group fiber.
+
+A value already in the channel when a fiber parks (or when `reactor-add-chan`
+registers) is delivered on the next poll. One sent after that needs the
+sender to call `reactor-wake` after `chan-send`, so that the pump's blocking
+poll returns promptly. This is as with `reactor-add-chan`.
 
 A `LocalFiberGroup` follows the same threading rules as the reactor: the
 group, its reactor, and every fiber live on one thread. Freeing the
@@ -262,7 +267,8 @@ tracked separately in
 | `reactor-add-timer` | source-id | One-shot timer; auto-deactivates after firing. |
 | `reactor-add-interval` | source-id | Repeating timer; stays active until `reactor-remove`. |
 | `reactor-add-signal` | source-id | Catch an OS signal. Not available on WASM. |
-| `reactor-add-chan` | source-id | One-shot channel watcher. Re-register for persistence. |
+| `reactor-add-chan` | source-id | One-shot watcher on a borrowed `(Chan A)`. Re-register for persistence. Keep the channel alive while the watch is live. |
+| `reactor-add-async-chan` | source-id | The same, on a borrowed `(AsyncChan A)`. |
 
 ### Running
 
@@ -277,12 +283,13 @@ tracked separately in
 
 | Function | Returns | Notes |
 |---|---|---|
-| `local-fiber-group-new` | group | Create a fiber group bound to a reactor. One group per reactor; not thread-safe. |
-| `local-fiber-group-free` | nil | Free the group; cancels any still-parked fiber (source removed, stack freed). |
+| `local-fiber-group-new` | `LocalFiberGroup` | Create a fiber group bound to a reactor. One group per reactor; not thread-safe. The handle is `:linear`, like the `Reactor`. |
+| `local-fiber-group-free` | nil | Free the group, its one consumer; cancels any still-parked fiber (source removed, stack freed). |
 | `local-spawn` | fiber-id / -1 | Spawn a fiber `(fn [user :ptr<void>] :nil)`; runs on the next pump tick. |
 | `reactor-run-fibers` | #completed / -1 | Pump the group until empty + no sources, or `reactor-stop`. -1 if re-entered. |
 | `local-park-fd` | events / -2 / -1 | Park the running fiber on an fd; -2 on timeout, -1 if not in a group fiber. |
-| `local-park-chan` | value / -1 | Park the running fiber on a channel; -1 if not in a group fiber. |
+| `local-park-chan` | `(Option A)` | Park the running fiber on a borrowed `(Chan A)`; `(none)` if not in a group fiber. |
+| `local-park-async-chan` | `(Option A)` | The same, on a borrowed `(AsyncChan A)`. |
 
 ### Event mask constants
 
@@ -304,7 +311,7 @@ Each source type uses a distinct callback arity:
 ;; reactor-add-timer, reactor-add-interval:
 (fn [id : int user : ptr<void>] : nil ...)
 
-;; reactor-add-chan:
+;; reactor-add-chan, reactor-add-async-chan:
 (fn [id : int value : int user : ptr<void>] : nil ...)
 
 ;; local-spawn (fiber body):
@@ -313,8 +320,17 @@ Each source type uses a distinct callback arity:
 
 `id` is the source id returned at registration. `events` is a bitmask of
 `READ | WRITE | ERROR | HUP`. For signal callbacks, `events` carries the
-signal number. For channel callbacks, `value` is the int64 dequeued from
-the channel.
+signal number. For channel callbacks, `value` is the channel's carrier word,
+dequeued for you: the int itself for a `(Chan int)`. For another element type,
+leave the slot untyped and convert in the body: `(:: v cstr)` for a word-sized
+element, `(bits->float v)` for a float.
+
+Keep every callback slot untyped, `int`, or `ptr<void>`. The reactor calls a
+callback as `(env, int64, int64, int64)`, and those three spellings are the
+ones whose boxed C type matches exactly. A `float` slot is a compile error,
+because it would read a register the reactor never loaded. A `cstr` slot
+compiles and runs on x86-64 and arm64, but its C type differs from the one it
+is called through, which is a `-fsanitize=function` trap.
 
 ## Threading model
 
@@ -328,11 +344,11 @@ To hand work across threads: use a channel and call `reactor-wake` after
 
 ## Linking
 
-Programs that import `reactor` must link against `libturi`:
+Programs that load `stdlib/reactor.tur` must link against `libturi`:
 
 ```turmeric
-;; The autolink hint is included when you (import reactor).
-;; For standalone files without import, add this defn:
+;; The autolink hint is included when you (load "stdlib/reactor.tur").
+;; For standalone files that only declare the tur_reactor_* externs, add:
 (defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
@@ -340,8 +356,8 @@ Programs that import `reactor` must link against `libturi`:
 ```
 
 ```sweet-exp
-;; The autolink hint is included when you import reactor.
-;; For standalone files without import, add this defn:
+;; The autolink hint is included when you load "stdlib/reactor.tur".
+;; For standalone files that only declare the tur_reactor_* externs, add:
 defn reactor-link [] :int
   ```c /* __tur_autolink__: -lturi */
   return 0;

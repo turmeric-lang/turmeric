@@ -24,33 +24,25 @@
 (defn null-ptr [] : ptr<void>
   ```c return NULL; ```)
 
-;; Borrow a Chan and hand back its raw ptr<void> representation without
-;; consuming the linear handle.  A linear Chan cannot be aliased across two
-;; fiber closures, so main keeps sole ownership of `ch` (freeing it once at the
-;; end) and lends this non-linear raw pointer to both fibers instead.
-;; stdlib-int-stand-in-audit S2: Chan is (Chan A) now, and a parametric opaque
-;; rides the int64 carrier even though its repr is :ptr<void> -- hence the
-;; intptr_t hop rather than a bare (void *) cast.
-(defn chan-raw [A] [^borrow ch : (Chan A)] : ptr<void>
-  ```c return (void *)(intptr_t)ch; ```)
-
 (defn main [] : int
-  (let [r   (reactor-new)
-        g   (local-fiber-group-new r)
-        ch  (chan-new 4)
-        chp (chan-raw ch)]
-    ;; Receiver: park until a value arrives.  local-park-chan (tur/reactor) is
-    ;; not yet handle-typed (Tier 2), so it takes the channel's ptr<void>
-    ;; representation -- the borrowed raw pointer `chp`, captured by env.
+  (let [r  (reactor-new)
+        g  (local-fiber-group-new r)
+        ch : (Chan int) (chan-new 4)]
+    ;; Receiver: park until a value arrives.  local-park-chan borrows the
+    ;; channel, so both fiber closures capture `ch` itself -- a read-only
+    ;; capture of a linear value is legal -- and main still frees it once at
+    ;; the end.  (It used to take a ptr<void>, so this fixture lent both
+    ;; fibers a raw pointer and re-cast it to a Chan for the send.)
     (local-spawn g
       (fn [user] : nil
-        (print-got (local-park-chan g chp)))
+        (match (local-park-chan g ch)
+          (Some v) (print-got v)
+          (None)   (print-got -1)))
       (null-ptr))
-    ;; Sender: send then wake so the poll returns and the bridge fires.  The
-    ;; raw pointer is reinterpreted back to a Chan for the (borrowing) send.
+    ;; Sender: send then wake so the poll returns and the bridge fires.
     (local-spawn g
       (fn [user] : nil
-        (chan-send (:: chp Chan) 99)
+        (chan-send ch 99)
         (print-sent 99)
         (reactor-wake r))
       (null-ptr))

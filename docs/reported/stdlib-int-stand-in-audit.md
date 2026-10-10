@@ -420,6 +420,66 @@ malloc'd cell (`promise-fulfill`, `promise-fail`, `future-of`,
 `future-error-of`). Both are independent of the typing work and are cheap to
 fix on their own.
 
+## Done 2026-10-10 -- `reactor-add-chan`'s channel, and a limit on typing C-called callbacks
+
+`reactor-add-chan` took its channel as a bare `ch : ptr<void>`. Getting one
+from a linear `(Chan A)` took an erasing ascription, which consumes the
+handle, so a caller kept a raw view and re-typed it to send on and free it. It
+is now `[A] [^borrow r : Reactor ^borrow ch : (Chan A) ...]`, with
+`reactor-add-async-chan` for `(AsyncChan A)`. `reactor.tur` loads `chan.tur`
+for the types.
+
+The callback's value slot deliberately stays `int`, not `A`. reactor.c calls
+every callback as `(env, int64, int64, int64)`, and a closure keeps its
+declared C parameter types. A `(fn [int A ptr<void>] nil)` instantiated at
+float therefore read its double from a float register reactor.c never loaded:
+measured `0.25` and then `-1.7e260` under gcc for `7.1 + 0.25`, and an
+fnsan trap against an instrumented libturi. The `int` slot keeps the
+structural float-vs-word refusal. The same limit bounds S2's `future.tur`
+redesign: a callback that C code calls cannot have a type-variable slot until
+something bridges the carrier word to the slot's real type.
+
+**`local-park-chan`, the same day.** It took `ch : ptr<void>` too, and
+returned an `int` with `-1` as its not-in-a-fiber sentinel, which a received
+`-1` could not be told apart from. It now borrows a `(Chan A)` and returns
+`(Option A)`; `local-park-async-chan` is the `AsyncChan` twin. libturi gained
+`tur_local_park_chan_status`, which returns the status separately from the
+value; the old single-return entry is kept for ABI compatibility. Unlike a
+reactor callback's argument, the value here is a return, so the compiler's
+carrier-to-`A` conversion applies: a float channel yields its float.
+
+Found on the way and fixed: a channel watch, or a fiber park, on a channel
+that already held a value never fired. `cap_timeout` computed io_poll's
+timeout from timers alone, and `tick_chans` only runs after io_poll returns,
+so with no timer and no `reactor-wake` the poll blocked forever. This
+reproduces on v0.63.9. `cap_timeout` now returns 0 while a watched channel
+holds a value (`reactor-chan-watch-nonempty`).
+
+**The fiber group handle, the same day.** `g` was a bare `ptr<void>` across
+the driver (`local-fiber-group-new` / `-free`, `local-spawn`, `local-park-*`,
+`reactor-run-fibers`), so the `Reactor` itself type-checked where the group
+belonged, and a dropped or doubly freed group was invisible. It is now
+`(defopaque LocalFiberGroup :ptr<void> :linear)`, the `Reactor`'s
+discipline: `local-fiber-group-free` consumes it and everything else
+borrows. A fiber body that uses `g` captures it read-only, so it stays an
+ordinary closure. No existing caller passed the group through a `ptr<void>`
+helper, so all six fiber fixtures pass unchanged. `httpd` reaches its group
+only in inline C and is unaffected. Pinned by `errors/local-fiber-group-dropped`
+(TUR-E0100), `-use-after-free` (TUR-E0101) and `-wrong-handle` (a Reactor
+where the group is expected).
+
+## Done 2026-10-10 -- five plain `cb : int` reactor callbacks S1 did not count
+
+S1 measured `^fat <name> : int` and `<name> : ptr<void>`. A callback spelled
+plain `cb : int` (no `^fat`) matched neither pattern, and `stdlib/reactor.tur`
+had five: `reactor-add-fd`, `-timer`, `-interval`, `-signal`, `-chan`. They
+were worse than unchecked. A captureless lambda arrived as a bare C function
+pointer, and reactor.c called it through a fat box's slot 0 (SIGSEGV). They
+are now `^fat cb : (fn [int int ptr<void>] nil)` / `(fn [int ptr<void>] nil)`,
+as `local-spawn`'s body already was. See
+[nil-argument-to-ptr-param-emits-void-expression](../archive/nil-argument-to-ptr-param-emits-void-expression.md).
+A future sweep should grep for bare `<name> : int` callback parameters as well.
+
 ## Done 2026-09-28 -- S1's `^fat : int` class is gone, and one checker hole found on the way
 
 **S1, `^fat <name> : int` -- zero left in `stdlib/`** (was 24; httpd's 17

@@ -1,0 +1,33 @@
+;; nil-argument-to-ptr-param-emits-void-expression: a literal `nil` passed for
+;; a ptr<void> parameter is the null pointer -- the reactor's `user-data`
+;; idiom.  The checker always accepted it, but the emitter spliced the unit
+;; placeholder `((void)0)` into the call (a cc error), a constructor
+;; sequenced it into a `(void, 0)` comma expression clang rejects, and the
+;; interpreter passed a nil that was not 0.  The elaborator now rewrites the
+;; literal to the `0` null literal every back end already handles.
+;;
+;; Pure Turmeric, so tests/run-turi.sh runs it too.  The inline-C and
+;; extern-c callees are in nil-arg-to-ptr-param-inline-c.
+;;
+;; Expected output:
+;;   true
+;;   7
+;;   true
+;;   true
+
+(defstruct Holder [tag : int p : ptr<void>])
+
+(defn is-null-ptr? [p : ptr<void>] : bool (= (:: p :int) 0))
+
+(defn main [] : int
+  ;; A Turmeric callee.
+  (println (is-null-ptr? nil))
+  ;; A constructor field.
+  (let [h (Holder 7 nil)]
+    (println (. h tag))
+    (println (is-null-ptr? (. h p))))
+  ;; A capturing closure called through its fat box.
+  (let [k 1
+        f (fn [p : ptr<void>] : bool (and (= k 1) (is-null-ptr? p)))]
+    (println (f nil)))
+  0)

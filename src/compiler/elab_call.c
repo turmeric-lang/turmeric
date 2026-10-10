@@ -8210,8 +8210,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             /* Allow passing an ascribed poly type (from ::) where rank-2 is expected. */
             arg_ok = true;
         }
-        if (!arg_ok && expected_arg_kind == TY_PTR_VOID && args[i]->type.kind == TY_NIL) {
-            /* Allow nil as a null pointer for ptr<void> parameters. */
+        if (!arg_ok && expected_arg_kind == TY_PTR_VOID &&
+            args[i]->kind == EX_NIL_LIT) {
+            /* Allow the `nil` literal as a null pointer for a ptr<void>
+             * parameter -- the reactor's `user-data` idiom.
+             * nil-argument-to-ptr-param-emits-void-expression: accepting it
+             * was not enough, because every back end then lowered the nil
+             * as the unit value -- the emitter spliced `((void)0)` into the
+             * call (a cc error), a constructor sequenced it into a
+             * `(void, 0)` comma expression clang rejects, and the
+             * interpreter passed a nil that is not 0.  Rewrite it to the `0`
+             * literal the sibling rule below accepts, so all of them see
+             * the one null spelling they already handle.
+             *
+             * Only the literal: any other :void-typed argument (a void call,
+             * a `do` ending in nil) is a statement, not a null pointer, and
+             * now gets the ordinary argument type error instead of cc's. */
+            Expr *null_lit = expr_new(e->arena, EX_INT_LIT,
+                                      type_from_kind(TY_INT), args[i]->span);
+            null_lit->as.i = 0;
+            args[i] = null_lit;
             arg_ok = true;
         }
         if (!arg_ok && expected_arg_kind == TY_PTR_VOID &&

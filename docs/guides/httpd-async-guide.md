@@ -109,10 +109,12 @@ defn slow-handler [c :ptr<void>] :nil
   httpd-resp-body!(c "ok")
 ```
 
-Need a channel? The underlying `local-park-chan` from
-[`stdlib/reactor.tur`](reactor-guide.md) is available directly; we did
-not wrap it in an `httpd-await-chan` form because the handler already
-has access to the fiber group via the conn.
+Need a channel? There is no `httpd-await-chan` yet. `local-park-chan` from
+[`stdlib/reactor.tur`](reactor-guide.md) parks a fiber on a channel, but it
+takes the `LocalFiberGroup`, and a handler cannot reach the conn's group from
+Turmeric: it is a field of the C conn struct, which the `httpd-await-*` forms
+read in their inline C. An `httpd-await-chan` built the same way, over
+`tur_local_park_chan_status`, is the way to add one.
 
 ---
 

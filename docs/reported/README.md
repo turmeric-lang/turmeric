@@ -34,6 +34,28 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found typing reactor-add-chan's channel (filed 2026-10-10)
+
+`tests/run-fnsan.sh` was cited as evidence that reactor callbacks match
+reactor.c's call types. It could not show that: the indirect calls are made
+inside libturi, which the gate linked uninstrumented. Fixed the same day.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[fnsan-job-does-not-instrument-libturi](../archive/fnsan-job-does-not-instrument-libturi.md)~~ | low-medium (gate gap) | **RESOLVED 2026-10-10** (archived): the fnsan job builds its libturi.a with clang and `-fsanitize=function -fsanitize-trap=function`, so the reactor's and fiber group's calls into callbacks are checked; `run-fnsan.sh` documents the same build. The CI step's commands, run from a clean tree: 3685 passed, 0 failed, and a deliberately mismatched reactor callback now traps |
+
+## Found refining the nng async plan (filed 2026-10-10)
+
+Spiking [nng-async-plan](../upcoming/spices/nng-async-plan.md) against v0.63.9
+turned up one compiler defect. The reactor guide's examples were affected by
+it. It is resolved, along with a second defect fixing it exposed. Implementing
+the plan's NG-C turned up a test-coverage gap in spices CI, which is open.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[nil-argument-to-ptr-param-emits-void-expression](../archive/nil-argument-to-ptr-param-emits-void-expression.md)~~ | low-medium (compile failure) | **RESOLVED 2026-10-10** (archived): a literal `nil` at a `ptr<void>` parameter is rewritten to the `0` null literal every back end already handles, so it compiles on every call shape and is 0 under `--interpret` too; any other `:void` argument is now `TUR-E0001`. Fixing it exposed a captureless reactor callback crashing in `call_tur_timer_cb`: the five `reactor-add-*` wrappers took `cb : int`, so a bare C function pointer was called as a fat box. They are `^fat` now, like `local-spawn`. The reactor guide's examples run as written. Pinned by `nil-arg-to-ptr-param`, `nil-arg-to-ptr-param-inline-c`, `errors/nil-nonliteral-arg-to-ptr-param`, `reactor-captureless-callbacks`, `reactor-fd-captureless` |
+| [spice-suites-without-libturi-run-unsanitized](spice-suites-without-libturi-run-unsanitized.md) | low-medium (coverage gap) | A sanitized `tur` adds `-fsanitize` to a program only when it links `libturi` (`main.c:2989`), so in spices CI only the suites that pull in libturi (e.g. through the reactor) run under LeakSanitizer. A deliberate `nng_msg` leak in `nng/ctx` passes the suite and is caught with `TUR_CC_FLAGS=-fsanitize=address,undefined`. Forcing it on fails two older nng suites on test-side leaks |
+
 ## Found auditing the spices plans (filed 2026-10-07)
 
 Both rows were carried out of `docs/upcoming/spices/` when its resolved plans

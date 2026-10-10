@@ -1,0 +1,10 @@
+;; nil-argument-to-ptr-param-emits-void-expression: only the literal `nil` is
+;; a null pointer.  Any other :void-typed argument -- here a void call -- is a
+;; statement, and gets the ordinary argument type error.  It used to be
+;; accepted and then fail in cc ("invalid use of void expression").
+
+(defn is-null-ptr? [p : ptr<void>] : bool (= (:: p :int) 0))
+
+(defn main [] : int
+  (println (is-null-ptr? (println "side effect")))
+  0)

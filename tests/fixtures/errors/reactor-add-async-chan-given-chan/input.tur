@@ -1,0 +1,18 @@
+;; Chan and AsyncChan share a ChanBlock layout but are nominally distinct.
+;; With the channel typed, passing a synchronous Chan to
+;; reactor-add-async-chan is a type error -- the bare ptr<void> it replaced
+;; accepted either, and anything else that was a pointer.
+
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r  (reactor-new)
+        ch (chan-new 2)]
+    (chan-send ch 1)
+    (reactor-add-async-chan r ch
+      (fn [id v user] : nil (println v))
+      nil)
+    (reactor-poll r 0)
+    (reactor-free r)
+    (chan-free ch)
+    0))

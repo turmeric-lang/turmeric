@@ -1,0 +1,12 @@
+;; local-fiber-group-free is the group's one consumer; spawning into a freed
+;; group is a use after free.
+
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)
+        g (local-fiber-group-new r)]
+    (local-fiber-group-free g)
+    (local-spawn g (fn [u] : nil (println "never")) nil)
+    (reactor-free r))
+  0)

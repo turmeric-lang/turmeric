@@ -1,0 +1,22 @@
+;; nil-argument-to-ptr-param-emits-void-expression: `nil` for a ptr<void>
+;; parameter of an inline-C callee and of an extern-c function reaches C as
+;; NULL.  Before the fix both emitted `((void)0)` as the argument and cc
+;; rejected the call.  The pure-Turmeric shapes are in nil-arg-to-ptr-param.
+;;
+;; Expected output:
+;;   1
+;;   freed-null
+
+(defn take-ptr [p : ptr<void>] : int
+  ```c
+  return p == NULL ? 1 : 0;
+  ```)
+
+;; free(NULL) is a defined no-op, so this only has to compile and run.
+(extern-c free [p :ptr] :void)
+
+(defn main [] : int
+  (println (take-ptr nil))
+  (free nil)
+  (println "freed-null")
+  0)
