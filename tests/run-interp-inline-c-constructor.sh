@@ -14,6 +14,11 @@
 #      random-n, two allocations and a sampling loop -- was "constructed" as a
 #      fat pointer over its first argument and returned a wrong value silently.
 #      It declines now, and the clean "inline-C not supported" error fires.
+#   3. A field whose value the evaluator could not compute was stored as 0:
+#      plot-walkthrough's `xy` cell puns two doubles through a union
+#      (`ux.d = x; p->head = ux.i;`), the `ux.d` statement was skipped, and
+#      six scatter points became one at (0, 0).  An unevaluable field value,
+#      or an assignment the model would skip, now declines the body.
 #
 # This needs its OWN runner rather than a fixture: tests/run-turi.sh PASS-skips
 # every program containing a user inline-C block (the TI7 carve-out), so no
@@ -87,6 +92,20 @@ cat > "$TMP/fat.tur" <<'EOF'
   0)
 EOF
 
+cat > "$TMP/pun.tur" <<'EOF'
+(defn xy [x : float y : float] : int
+  ```c
+  typedef struct { int64_t head; int64_t tail; } Cons;
+  Cons *p = malloc(sizeof(*p));
+  union { double d; int64_t i; } ux, uy; ux.d = x; uy.d = y;
+  p->head = ux.i; p->tail = uy.i;
+  return (int64_t)(intptr_t)p;
+  ```)
+(defn main [] : int
+  (println (xy 1.5 2.5))
+  0)
+EOF
+
 # 1. The free that pairs with an emulated constructor does not crash.
 out=$("$TUR" --interpret "$TMP/pair.tur" 2>&1); rc=$?
 if [ $rc -eq 0 ] && [ "$out" = "1" ]; then
@@ -104,6 +123,17 @@ if echo "$out" | grep -q "inline-C not supported"; then
     echo "PASS loop body with ->p1/->length declines under --interpret"
 else
     echo "FAIL loop body with ->p1/->length was claimed under --interpret"
+    echo "$out" | head -3 | sed 's/^/    /'
+    FAILED=1
+fi
+
+# 2b. A constructor whose field values come through a union pun declines,
+#     rather than storing 0 for the fields it cannot evaluate.
+out=$("$TUR" --interpret "$TMP/pun.tur" 2>&1)
+if echo "$out" | grep -q "inline-C not supported"; then
+    echo "PASS union-punned constructor declines under --interpret"
+else
+    echo "FAIL union-punned constructor was claimed under --interpret"
     echo "$out" | head -3 | sed 's/^/    /'
     FAILED=1
 fi

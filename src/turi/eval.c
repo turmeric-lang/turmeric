@@ -5879,11 +5879,14 @@ static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
             int elen=(int)(p-expr_start);
             while (elen>0&&(expr_start[elen-1]==' '||expr_start[elen-1]=='\t'||
                             expr_start[elen-1]=='\n'||expr_start[elen-1]=='\r')) elen--;
+            /* A value the evaluator cannot compute declines the body: storing
+             * 0 for it (`p->head = ux.i;`, a union pun) built a struct with a
+             * zero field and the program went on with it, silently. */
             int64_t fval=0;
-            if (elen>0&&elen<(int)sizeof(expr_buf)) {
-                memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
-                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
-            }
+            if (elen<=0||elen>=(int)sizeof(expr_buf)) return turi_nil();
+            memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
+            if (!ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body))
+                return turi_nil();
             field_vals[n_fields++]=fval;
             if(*p) p++;
             continue;
@@ -5910,10 +5913,10 @@ static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
             while(elen>0&&(expr_start[elen-1]==' '||expr_start[elen-1]=='\t'||
                            expr_start[elen-1]=='\n'||expr_start[elen-1]=='\r')) elen--;
             int64_t fval=0;
-            if (elen>0&&elen<(int)sizeof(expr_buf)) {
-                memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
-                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
-            }
+            if (elen<=0||elen>=(int)sizeof(expr_buf)) return turi_nil();
+            memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
+            if (!ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body))
+                return turi_nil();
             /* idx must match n_fields (sequential) */
             if ((long long)n_fields==idx) field_vals[n_fields++]=fval;
             else if (idx>=0&&idx<IC_MAX_FIELDS) {
@@ -5925,13 +5928,19 @@ static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
             continue;
         }
 
-        /* Skip other statements */
+        /* Skip other statements -- a declaration, an OOM guard, a call.  An
+         * assignment is not skippable: whatever it writes (`ux.d = x;`, a
+         * local a later field reads) is state this model does not keep, so
+         * the body declines rather than build the struct without it. */
         int d2=0;
         while(*p&&(*p!=';'||d2>0)) {
             if(*p=='(') d2++; else if(*p==')') d2--;
             else if(*p=='"') {p++;while(*p&&*p!='"'){if(*p=='\\')p++;p++;}}
             else if(*p=='{') d2++;
             else if(*p=='}') { if(d2>0) d2--; else break; }
+            else if(*p=='=' && d2==0 && p[1]!='=' &&
+                    !(p>body && (p[-1]=='='||p[-1]=='!'||p[-1]=='<'||p[-1]=='>')))
+                return turi_nil();
             p++;
         }
         if(*p==';') p++;

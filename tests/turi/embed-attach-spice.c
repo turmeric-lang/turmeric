@@ -15,6 +15,8 @@
  *                 its interpreted defn runs
  *   answer     -- shadowed by a host native: the bare name keeps the host's,
  *                 the qualified name reaches the export
+ *   greet / even-word? -- a :cstr and a :bool return come back as a string
+ *                 and a boolean, not as the bare word
  *
  * Needs a `tur` to build the image: TUR_BIN (ctest sets it), else ./build/tur.
  * Linked with ENABLE_EXPORTS (-rdynamic): the image resolves the runtime it
@@ -65,7 +67,8 @@ static TuriValue native_seven(TuriEnv *env, TuriValue *args, uint32_t n, void *u
 
 static const char *FIXTURE =
     "(defmodule afx/core\n"
-    "  (export add-loop wrapped box-new box-get box-free tagged-id Pt pt-sum answer)\n"
+    "  (export add-loop wrapped box-new box-get box-free tagged-id Pt pt-sum answer\n"
+    "          greet even-word?)\n"
     "  (defn add-loop [a : int b : int] : int\n"
     "    ```c\n"
     "    int64_t s = a;\n"
@@ -104,7 +107,19 @@ static const char *FIXTURE =
     "  (defn tagged-id [n] [t : (Tagged n)] : (Tagged n) t)\n"
     "  (defstruct Pt [x : int y : int])\n"
     "  (defn pt-sum [p : Pt] : int (+ (. p x) (. p y)))\n"
-    "  (defn answer [] : int 42))\n";
+    "  (defn answer [] : int 42)\n"
+    "  (defn greet [] : cstr\n"
+    "    ```c\n"
+    "    static const char *const g[] = { \"hello\", \"world\" };\n"
+    "    for (int i = 0; i < 1; i++) {}\n"
+    "    return g[0];\n"
+    "    ```)\n"
+    "  (defn even-word? [n : int] : bool\n"
+    "    ```c\n"
+    "    int64_t m = n;\n"
+    "    for (; m >= 2; m -= 2) {}\n"
+    "    return m == 0;\n"
+    "    ```))\n";
 
 int main(void) {
     turi_init(false);
@@ -153,9 +168,9 @@ int main(void) {
     turi_env_set_toplevel_imports(env, true);
     turi_env_set_search_path_for(env, note);
     int n = turi_env_attach_spice_for_module(env, "afx/core", tur);
-    /* add-loop wrapped box-new box-get box-free answer -- not tagged-id (no
-     * definition), not pt-sum (a struct it cannot marshal). */
-    CHECK(n == 6, "attach: binds the six exports the FFI can marshal");
+    /* add-loop wrapped box-new box-get box-free answer greet even-word? --
+     * not tagged-id (no definition), not pt-sum (a struct it cannot marshal). */
+    CHECK(n == 8, "attach: binds the eight exports the FFI can marshal");
     CHECK(turi_env_attach_spice_for_module(env, "afx/core", tur) == 0,
           "attach: a module an attached image provides is not loaded twice");
     CHECK(turi_env_attach_spice_for_module(env, "no/such-module", tur) == 0,
@@ -174,6 +189,11 @@ int main(void) {
           "attached: a struct-parameter export is left to the interpreter");
     CHECK(is_int(turi_eval(env, "(afx/core/answer)"), 42),
           "attached: the qualified name reaches the export");
+    TuriValue g = turi_eval(env, "(afx/core/greet)");
+    CHECK(g.tag == TURI_CSTR && g.as_cstr && strcmp(g.as_cstr, "hello") == 0,
+          "attached: a :cstr export returns the string");
+    TuriValue ev = turi_eval(env, "(afx/core/even-word? 6)");
+    CHECK(ev.tag == TURI_BOOL && ev.as_bool, "attached: a :bool export returns a boolean");
     turi_eval(env, "(defn wrapped [x : int] : int 0)");
     CHECK(is_int(turi_eval(env, "(wrapped 5)"), 0),
           "attached: a cell's own defn of the same name takes over");
@@ -187,7 +207,7 @@ int main(void) {
           "attach: a directory with no build.tur above it is an error");
     char spice[1100];
     snprintf(spice, sizeof(spice), "%s/afx", root);
-    CHECK(turi_env_attach_spice(sh, spice, tur) == 6, "attach by root: same six bindings");
+    CHECK(turi_env_attach_spice(sh, spice, tur) == 8, "attach by root: same eight bindings");
     CHECK(is_int(turi_eval(sh, "(answer)"), 7),
           "attach: a host-bound bare name is not clobbered");
     CHECK(is_int(turi_eval(sh, "(afx/core/answer)"), 42),

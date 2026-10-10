@@ -441,6 +441,7 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
     e->name = name;
     e->mangled = mangled;
     e->ret_class = ret_class;
+    e->ret_tag = 0;
     e->n_args = n_args;
     e->is_variadic = is_variadic;
     e->rest_class = rest_class;
@@ -556,6 +557,8 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
            && *ret_end != '\n' && *ret_end != '\r') ret_end++;
     *ret_end = '\0';
     char ret_class = class_for_tag(p, /*is_return=*/true);
+    char ret_tag = strcmp(p, ":cstr") == 0 ? 'c'
+                 : strcmp(p, ":bool") == 0 ? 'b' : 0;
     /* Resolve the symbol -- J2 in-process images resolve through the jit
      * hook's MIR item lookup; the dlopen path keeps dlsym.  Either way a
      * miss is a hard error: the manifest and the image have drifted out of
@@ -611,9 +614,11 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
         }
     }
     /* Ownership of arg_classes transfers to the export. */
-    return append_export(img, module, name, mangled, ret_class,
-                          arg_classes, n_args, is_variadic, rest_class,
-                          fn_ptr, ffi_shim);
+    int arc = append_export(img, module, name, mangled, ret_class,
+                            arg_classes, n_args, is_variadic, rest_class,
+                            fn_ptr, ffi_shim);
+    if (arc == 0) img->exports[img->n_exports - 1].ret_tag = ret_tag;
+    return arc;
 }
 
 /* J2: parse manifest TEXT (the jit hook returns it in memory; there is no

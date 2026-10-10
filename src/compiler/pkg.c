@@ -4164,6 +4164,14 @@ bool pkg_gen_cmake_deps(const char *project_dir,
     fprintf(f, "cmake_minimum_required(VERSION 3.20)\n");
     fprintf(f, "project(SpiceDeps)\n\n");
     fprintf(f, "include(FetchContent)\n\n");
+    /* A static dep is linked into the spice's `tur build --shared` image as
+     * well as into executables -- the image `tur repl` and a notebook cell
+     * (turi_env_attach_spice) load -- and an archive built without -fPIC
+     * cannot be: plot's image failed on plutovg's ("relocation R_X86_64_TPOFF32
+     * ... recompile with -fPIC").  A cache default, so a dep's :options can
+     * still turn it off. */
+    fprintf(f, "set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "
+               "\"Static deps link into tur build --shared images too\")\n\n");
     /* SF3: when set, :prefer-system deps skip find_package and always fetch
      * from source. `tur fetch --refetch` passes -DTUR_FETCH_FORCE_FETCH=ON. */
     fprintf(f, "option(TUR_FETCH_FORCE_FETCH "

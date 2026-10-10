@@ -293,7 +293,18 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
             }
         }
         switch (e->ret_class) {
-            case 'i': result = turi_int(out_i);   break;
+            /* A :cstr export returned a pointer the compiled code owns, a
+             * :bool one a 0/1 word: hand them back as what they are, so
+             * `(println (test->str r))` prints the string, not its address. */
+            case 'i':
+                if (e->ret_tag == 'c')
+                    result = out_i ? turi_cstr((const char *)(intptr_t)out_i)
+                                   : turi_nil();
+                else if (e->ret_tag == 'b')
+                    result = turi_bool(out_i != 0);
+                else
+                    result = turi_int(out_i);
+                break;
             case 'f': result = turi_float(out_f); break;
             case 'v': result = turi_nil();        break;
             default:  result = turi_error("ffi: internal: bad ret class"); break;

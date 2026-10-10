@@ -9,8 +9,8 @@ was fixed (2026-10-10) every import in them resolves; the first call into the
 spice then fails, cleanly, with the interpreter's inline-C refusal.
 
 Filed 2026-10-10, closing that report. **Narrowed the same day** (see the
-end): stats and frame cells now run their spices compiled; linalg and plot
-still cannot.
+end): stats, frame and plot cells now run their spices compiled; linalg
+still cannot, nor can a cell's `defn` be handed to plot as a callback.
 
 ## Repro
 
@@ -67,9 +67,9 @@ existed (`stdlib/math`), `linalg-walkthrough` referred `mat-print` /
 `vec-print` from `linalg/mat` / `linalg/vec` instead of `linalg/fmt`, and
 `stats-walkthrough` / `plot-walkthrough` called `(rng-make 42)` where
 `rng-make` takes a seed and a stream -- which `tur check` accepted, passing the
-partial application to `rnorm`'s `rng : int`. Still open: `plot-walkthrough`
-calls the `#fx{Unsafe}` `image-hook-record-path` from a top-level form without
-`(unsafe ...)`.
+partial application to `rnorm`'s `rng : int`. `plot-walkthrough` also called
+the `#fx{Unsafe}` `image-hook-record-path` from a top-level form without
+`(unsafe ...)` (fixed with the narrowing below).
 
 ## Fix directions
 
@@ -140,6 +140,36 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
   name `rng/rng-make`, so no export of a nested module had its own name --
   in `tur repl` too.
 
+### Later the same day: plot
+
+- **Static cmake-deps are built position-independent.** plot's image did
+  not link -- `libplutovg.a` was not `-fPIC` (`relocation R_X86_64_TPOFF32
+  ... recompile with -fPIC`). The CMake `tur fetch` generates
+  (`pkg_gen_cmake_deps`, `src/compiler/pkg.c`) now defaults
+  `CMAKE_POSITION_INDEPENDENT_CODE ON`, so any spice's static dep can go
+  into a `--shared` image.
+- **`notebook/image` runs as a session native.** It is the notebook's own
+  module, so there is no image to attach; the session registers
+  `image-hook-record-path` itself.
+- **The inline-C constructor emulation stored 0 for what it could not
+  evaluate.** `plot-walkthrough`'s scatter and histogram cells build points
+  with an inline-C `defn` that puns doubles through a union (`ux.d = x;
+  p->head = ux.i;`): `try_exec_simple_inline_c` skipped the `ux.d`
+  statement, could not evaluate `ux.i`, kept 0, and six points drew as one
+  at (0, 0) -- silently. A field value it cannot evaluate, or an assignment
+  it would skip, now declines the body (`ic_exec_constructor`,
+  `src/turi/eval.c`; `tests/run-interp-inline-c-constructor.sh`). The
+  examples build their points with `cons` and `float->bits` instead.
+- **A `:cstr` or `:bool` export returned its bare word.** The binder read
+  every int-class result back as an integer, so `(test->str r)` was an
+  address; the manifest's return tag now picks a string or a boolean
+  (`TurSpiceExport.ret_tag`).
+- Two plot bugs the walkthrough showed, fixed in the spice (compiled
+  programs had them too): every x tick was labelled with a y value (the
+  label buffers were block-local and the y block reused the x block's
+  storage), and a discrete histogram's category labels were the bar
+  pointers printed as text.
+
 ## Still open
 
 1. **linalg.** Its API passes `defstruct mat` by value. Those exports have no
@@ -147,12 +177,11 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
    interpreted and reach inline C. What closes it is marshalling an
    interpreted record to its C layout on the call path; the callback path
    already does that (`tur_ffi_cb_ctx_set_agg`, `src/turi/ffi_thunk.c`).
-2. **plot.** Its image does not link: `libplutovg.a` is not built
-   position-independent (`relocation R_X86_64_TPOFF32 against
-   'stbi__g_failure_reason' can not be used when making a shared object;
-   recompile with -fPIC`). The plutovg spice's cmake-dep wants
-   `CMAKE_POSITION_INDEPENDENT_CODE ON`. Its cells also call `notebook/image`,
-   which runs interpreted.
+2. **A cell's `defn` as a callback.** plot's `function` takes its callback
+   as an untyped (so `:int`) parameter; a cell's `defn` is an interpreter
+   closure with no C address to pass. `plot-walkthrough`'s first cell and
+   the FFI callback path (`tur_ffi_cb_ctx_new`, which needs the parameter's
+   function type) both want plot to type it `(fn [float] float)`.
 3. **A spice whose `src/` imports a `:spices` dep cannot be imaged.**
    `tur_spice_image_load` runs `tur build --shared <root>/src`, and a build of
    a directory with no `build.tur` in it does not read the manifest: the
@@ -164,7 +193,9 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
 4. **stats' frame helpers crash, compiled too** -- a layout bug of stats',
    not the notebook's:
    [stats-frame-interop-reads-a-stale-frame-layout](stats-frame-interop-reads-a-stale-frame-layout.md).
-   The examples' `ols-frame` cells are left in place, marked as such.
-5. `plot-walkthrough` calls the `#fx{Unsafe}` `image-hook-record-path` from a
-   top-level form without `(unsafe ...)` (from the original filing).
+   The examples' `ols-frame` cells are left in place, marked `eval=false`.
+
+(The original filing's last example bug -- `plot-walkthrough` calling the
+`#fx{Unsafe}` `image-hook-record-path` outside `(unsafe ...)` -- is fixed in
+the example.)
 

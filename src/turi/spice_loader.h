@@ -56,6 +56,9 @@ typedef struct TurSpiceExport {
     void    *fn_ptr;      /* dlsym'd address */
     TurFfiShimFn ffi_shim; /* dlsym'd `<mangled>__ffi` shim, or NULL (old .so) */
     char     ret_class;
+    char     ret_tag;     /* 'c' for a :cstr return, 'b' for :bool, else 0: the
+                           * int-class word the shim returns is handed back as
+                           * a string / boolean, not as the bare word */
     char    *arg_classes; /* heap array of length n_args (NULL iff n_args == 0) */
     uint32_t n_args;      /* unbounded -- no fixed arity cap; for a variadic
                            * export this INCLUDES the trailing rest-list slot
