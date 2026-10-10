@@ -876,11 +876,24 @@ int64_t tur_reactor_add_chan(void *rp, void *chan,
 /* Timer helpers                                                        */
 /* ------------------------------------------------------------------ */
 
+static bool chan_has_value(void *chan);
+
 static int64_t cap_timeout(TurReactor *r, int64_t timeout_ms) {
     int64_t t = now_ms();
     for (size_t i = 0; i < r->sources_len; i++) {
         TurReactorSource *src = r->sources[i];
         if (!src || !src->active) continue;
+        /* A channel watch is delivered by tick_chans, which runs only after
+         * io_poll returns -- and nothing makes io_poll return for a channel:
+         * the sender's reactor-wake is the only signal.  So a watch registered
+         * on a channel that ALREADY holds a value (a value sent before the
+         * watch, or a fiber re-parking on a channel the sender filled while it
+         * ran) blocked io_poll forever with the value sitting there.  Do not
+         * block while a watched channel can be delivered now. */
+        if (src->kind == TUR_RSRC_CHAN) {
+            if (chan_has_value(src->chan_ptr)) return 0;
+            continue;
+        }
         if (src->kind != TUR_RSRC_TIMER_ONESHOT &&
             src->kind != TUR_RSRC_TIMER_INTERVAL) continue;
 
@@ -937,6 +950,14 @@ typedef struct {
     void           *recv_waiters;
     void           *send_waiters;
 } TurChanBlock;
+
+static bool chan_has_value(void *chan) {
+    TurChanBlock *c = (TurChanBlock *)chan;
+    pthread_mutex_lock(&c->lock);
+    bool ready = c->count > 0;
+    pthread_mutex_unlock(&c->lock);
+    return ready;
+}
 
 static int tick_chans(TurReactor *r) {
     int fired = 0;
@@ -1369,7 +1390,13 @@ int64_t tur_local_park_fd(void *gp, int64_t fd, int64_t events,
     return lf->park_result;
 }
 
-int64_t tur_local_park_chan(void *gp, void *chan) {
+/* local-park-chan's real entry.  Returns 0 and stores the received value in
+ * *value_out, or TUR_LOCAL_NOT_IN_FIBER (no group, not inside a fiber of it,
+ * or the watch could not be registered) and leaves *value_out alone.  The
+ * status is separate from the value because a channel carries any int64 --
+ * folding "not in a fiber" into the value, as tur_local_park_chan does, makes
+ * a received -1 indistinguishable from the error. */
+int tur_local_park_chan_status(void *gp, void *chan, int64_t *value_out) {
     LocalFiberGroup *g = (LocalFiberGroup *)gp;
     if (!g) return TUR_LOCAL_NOT_IN_FIBER;
     LocalFiber *lf = g->current;
@@ -1391,5 +1418,15 @@ int64_t tur_local_park_chan(void *gp, void *chan) {
      * Like all reactor channel watchers, prompt delivery on the same thread
      * needs a reactor-wake after the chan-send (see reactor-add-chan). */
     tur_fiber_yield(lf->fiber, NULL);
-    return lf->park_result;
+    if (value_out) *value_out = lf->park_result;
+    return 0;
+}
+
+/* The original single-return form, kept for ABI compatibility: the value, or
+ * TUR_LOCAL_NOT_IN_FIBER (-1), which a received -1 cannot be told apart from. */
+int64_t tur_local_park_chan(void *gp, void *chan) {
+    int64_t v = TUR_LOCAL_NOT_IN_FIBER;
+    if (tur_local_park_chan_status(gp, chan, &v) != 0)
+        return TUR_LOCAL_NOT_IN_FIBER;
+    return v;
 }

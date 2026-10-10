@@ -89,7 +89,16 @@ int64_t tur_local_park_fd(void *group, int64_t fd, int64_t events,
 /**
  * Park the currently-running fiber on channel `chan` (a ChanBlock *), resuming
  * with the received value when one is available. Same in-fiber requirement as
- * tur_local_park_fd. Returns the received value, or -1 if not in a fiber.
+ * tur_local_park_fd. Returns 0 and stores the value in *value_out, or -1 (not
+ * in a fiber of this group, or the watch could not be registered) and leaves
+ * *value_out alone. This is what stdlib local-park-chan calls.
+ */
+int tur_local_park_chan_status(void *group, void *chan, int64_t *value_out);
+
+/**
+ * The single-return form: the received value, or -1 if not in a fiber. A
+ * received -1 is indistinguishable from the error; prefer
+ * tur_local_park_chan_status.
  */
 int64_t tur_local_park_chan(void *group, void *chan);
 

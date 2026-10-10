@@ -1,0 +1,41 @@
+;; A channel watch registered on a channel that ALREADY holds a value is
+;; delivered.  It used to hang: channel sources are drained by tick_chans,
+;; which runs only after io_poll returns, and cap_timeout computed io_poll's
+;; timeout from timers alone -- so with no timer and no reactor-wake the poll
+;; blocked forever with the value sitting in the channel.  Reproduces on
+;; v0.63.9 with both reactor-run and the local fiber driver.
+;;
+;; Expected output:
+;;   5
+;;   6
+;;   1
+
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  ;; reactor-add-chan + reactor-run on a pre-filled channel.
+  (let [r  (reactor-new)
+        ci : (Chan int) (chan-new 4)]
+    (chan-send ci 5)
+    (reactor-add-chan r ci
+      (fn [id v user] : nil (println v))
+      nil)
+    (reactor-run r)
+    (reactor-free r)
+    (chan-free ci))
+  ;; local-park-chan from a fiber on a pre-filled channel.
+  (let [r  (reactor-new)
+        g  (local-fiber-group-new r)
+        ci : (Chan int) (chan-new 4)]
+    (chan-send ci 6)
+    (local-spawn g
+      (fn [u] : nil
+        (match (local-park-chan g ci)
+          (Some v) (println v)
+          (None)   (println "none")))
+      nil)
+    (println (reactor-run-fibers g))
+    (local-fiber-group-free g)
+    (chan-free ci)
+    (reactor-free r))
+  0)

@@ -439,10 +439,25 @@ structural float-vs-word refusal. The same limit bounds S2's `future.tur`
 redesign: a callback that C code calls cannot have a type-variable slot until
 something bridges the carrier word to the slot's real type.
 
-**Residue:** `local-park-chan` still takes `ch : ptr<void>`, and returns an
-`int` with `-1` as its not-in-a-fiber sentinel, which a received `-1` cannot
-be told apart from. Typing the channel there wants the return reshaped too
-(an `(Option int)`), so it was left as is.
+**`local-park-chan`, the same day.** It took `ch : ptr<void>` too, and
+returned an `int` with `-1` as its not-in-a-fiber sentinel, which a received
+`-1` could not be told apart from. It now borrows a `(Chan A)` and returns
+`(Option A)`; `local-park-async-chan` is the `AsyncChan` twin. libturi gained
+`tur_local_park_chan_status`, which returns the status separately from the
+value; the old single-return entry is kept for ABI compatibility. Unlike a
+reactor callback's argument, the value here is a return, so the compiler's
+carrier-to-`A` conversion applies: a float channel yields its float.
+
+Found on the way and fixed: a channel watch, or a fiber park, on a channel
+that already held a value never fired. `cap_timeout` computed io_poll's
+timeout from timers alone, and `tick_chans` only runs after io_poll returns,
+so with no timer and no `reactor-wake` the poll blocked forever. This
+reproduces on v0.63.9. `cap_timeout` now returns 0 while a watched channel
+holds a value (`reactor-chan-watch-nonempty`).
+
+Still `ptr<void>`: the fiber group handle `g` (`local-fiber-group-new`,
+`local-spawn`, `local-park-*`, `reactor-run-fibers`). That wants a
+`LocalFiberGroup` opaque across the whole driver, which is a separate pass.
 
 ## Done 2026-10-10 -- five plain `cb : int` reactor callbacks S1 did not count
 

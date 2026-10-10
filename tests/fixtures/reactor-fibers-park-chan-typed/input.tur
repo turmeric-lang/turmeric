@@ -1,0 +1,64 @@
+;; local-park-chan returns (Option A): (some v) with the received value, or
+;; (none) outside a group fiber.  It used to return an int, the value or -1
+;; when not in a fiber, so a received -1 read exactly like the error; it also
+;; took the channel as a ptr<void> pried out of the linear handle.
+;;
+;; The value is a RETURN, so the compiler converts the carrier word to A as it
+;; does for chan-recv: a float channel yields its float (7.1 + 0.25 = 7.35).
+;; Contrast reactor-add-chan, whose callback must take the raw word
+;; (reactor-chan-typed).
+;;
+;; The receiver re-parks on channels the sender has already filled, which used
+;; to hang the driver (reactor-chan-watch-nonempty).
+;;
+;; Expected output:
+;;   none
+;;   -1
+;;   7.35
+;;   a string
+;;   99
+;;   2
+
+(load "stdlib/reactor.tur")
+
+(defn show-int [o : (Option int)] : nil
+  (match o
+    (Some v) (println v)
+    (None)   (println "none")))
+
+(defn main [] : int
+  (let [r  (reactor-new)
+        g  (local-fiber-group-new r)
+        ci : (Chan int) (chan-new 4)
+        cf : (Chan float) (chan-new 4)
+        cs : (Chan cstr) (chan-new 4)
+        ca : (AsyncChan int) (async-chan-new 4)]
+    ;; Outside a group fiber: (none), not a value.
+    (show-int (local-park-chan g ci))
+    (local-spawn g
+      (fn [u] : nil
+        (do (show-int (local-park-chan g ci))
+            (match (local-park-chan g cf)
+              (Some f) (println (+ f 0.25))
+              (None)   (println "none"))
+            (match (local-park-chan g cs)
+              (Some s) (println s)
+              (None)   (println "none"))
+            (show-int (local-park-async-chan g ca))))
+      nil)
+    (local-spawn g
+      (fn [u] : nil
+        (do (chan-send ci -1)
+            (chan-send cf 7.1)
+            (chan-send cs "a string")
+            (async-chan-send ca 99)
+            (reactor-wake r)))
+      nil)
+    (println (reactor-run-fibers g))
+    (local-fiber-group-free g)
+    (chan-free ci)
+    (chan-free cf)
+    (chan-free cs)
+    (async-chan-free ca)
+    (reactor-free r)
+    0))

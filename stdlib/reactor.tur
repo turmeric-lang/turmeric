@@ -379,8 +379,10 @@
 ;;; been removed with reactor-remove, or the reactor has been freed.
 ;;;
 ;;; Delivery latency: the channel is checked on every reactor-poll /
-;;; reactor-run iteration. For prompt wakeup after chan-send, call
-;;; reactor-wake from the sending thread.
+;;; reactor-run iteration, and a channel that already holds a value never
+;;; lets the poll block, so a value sent before the watch is delivered on the
+;;; next poll. For prompt wakeup after a chan-send made once the watch is
+;;; live, call reactor-wake from the sending thread.
 ;;;
 ;;; The value reaches cb as the channel's carrier word, typed :int.  For a
 ;;; (Chan int) that is the int itself.  For another element type, leave the
@@ -550,7 +552,8 @@
 ;;   local-spawn             [g body user-data]         -- int (fiber id)
 ;;   reactor-run-fibers      [g]                         -- int (completed)
 ;;   local-park-fd           [g fd events timeout-ms]    -- int (events|-2|-1)
-;;   local-park-chan         [g ch]                      -- int (value|-1)
+;;   local-park-chan         [g ch]                      -- (Option A)
+;;   local-park-async-chan   [g ch]                      -- (Option A)
 
 
 (extern-c tur_local_fiber_group_new [r :ptr] :ptr)
@@ -696,22 +699,66 @@
 ;;; As with reactor-add-chan, prompt same-thread delivery requires the sender
 ;;; to call reactor-wake after chan-send (the driver otherwise blocks in poll).
 ;;;
-;;; Must be called from inside a fiber spawned into g. Outside of one it
-;;; returns -1 and leaves the caller running.
+;;; The channel is borrowed, so the caller keeps the handle; keep it alive
+;;; until the fiber has resumed. Must be called from inside a fiber spawned
+;;; into g. Outside of one it returns (none) and leaves the caller running.
 ;;;
 ;;; Parameters:
 ;;;   g  -- group handle
-;;;   ch -- channel handle (ptr<void> from chan-new or async-chan-new)
+;;;   ch -- the channel to park on (borrowed; an AsyncChan takes local-park-async-chan)
 ;;;
 ;;; Returns:
-;;;   int -- the received value, or -1 if not in a fiber
+;;;   (Option A) -- (some v) with the received value, or (none) if not in a group fiber
 ;;;
 ;;; Example:
-;;;   (local-park-chan g ch)  ; => the next value sent on ch
+;;;   (match (local-park-chan g ch)
+;;;     (Some v) (handle v)
+;;;     (None)   (not-in-a-fiber))
+;;;
+;;; Since: Phase F5
+;; This used to be `[g : ptr<void> ch : ptr<void>] : int`, returning the value
+;; or -1 when not in a fiber.  The ptr<void> channel had to be pried out of a
+;; linear (Chan A) with a consuming ascription (the stand-in reactor-add-chan
+;; also had), and a received -1 read exactly like the error.  The status now
+;; comes back separately from tur_local_park_chan_status, so the result can be
+;; an (Option A).  Unlike a reactor callback's argument, this value is a
+;; RETURN: the compiler converts the carrier word to A here exactly as it does
+;; for chan-recv, so a float channel yields its float.
+
+(defn local-park-chan [A] [g : ptr<void> ^borrow ch : (Chan A)]
+  #fx{}
+  : (Option A)
+  ```c
+  extern int tur_local_park_chan_status(void *, void *, int64_t *);
+  int64_t v = 0;
+  if (tur_local_park_chan_status(g, (void *)(intptr_t)ch, &v) != 0)
+      return tur_none();
+  return tur_some_int(v);
+  ```)
+;;; local-park-async-chan -- local-park-chan for an AsyncChan.
+;;;
+;;; The same park over the same ChanBlock layout; only the handle type
+;;; differs.
+;;;
+;;; Parameters:
+;;;   g  -- group handle
+;;;   ch -- the channel to park on (borrowed)
+;;;
+;;; Returns:
+;;;   (Option A) -- (some v) with the received value, or (none) if not in a group fiber
+;;;
+;;; Example:
+;;;   (local-park-async-chan g jobs)  ; => (some job)
 ;;;
 ;;; Since: Phase F5
 
-(defn local-park-chan [g : ptr<void> ch : ptr<void>]
+(defn local-park-async-chan [A] [g : ptr<void> ^borrow ch : (AsyncChan A)]
   #fx{}
-  : int
-  (tur_local_park_chan g ch))
+  : (Option A)
+  ```c
+  extern int tur_local_park_chan_status(void *, void *, int64_t *);
+  int64_t v = 0;
+  if (tur_local_park_chan_status(g, (void *)(intptr_t)ch, &v) != 0)
+      return tur_none();
+  return tur_some_int(v);
+  ```)

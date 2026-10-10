@@ -226,10 +226,15 @@ remaining sources, or when `reactor-stop` is called.
 ```
 
 `local-park-fd` returns the fired event mask, `-2` on timeout, or `-1`
-if called outside a group fiber. `local-park-chan` returns the received
-value (same `-1` out-of-fiber rule); as with `reactor-add-chan`, a
-same-thread sender should call `reactor-wake` after `chan-send` so the
-pump's blocking poll returns promptly.
+if called outside a group fiber. `local-park-chan` borrows a `(Chan A)`
+(`local-park-async-chan` an `(AsyncChan A)`). It returns `(some v)` with the
+received value, typed `A`, so a float channel yields its float, or `(none)`
+outside a group fiber.
+
+A value already in the channel when a fiber parks (or when `reactor-add-chan`
+registers) is delivered on the next poll. One sent after that needs the
+sender to call `reactor-wake` after `chan-send`, so that the pump's blocking
+poll returns promptly. This is as with `reactor-add-chan`.
 
 A `LocalFiberGroup` follows the same threading rules as the reactor: the
 group, its reactor, and every fiber live on one thread. Freeing the
@@ -283,7 +288,8 @@ tracked separately in
 | `local-spawn` | fiber-id / -1 | Spawn a fiber `(fn [user :ptr<void>] :nil)`; runs on the next pump tick. |
 | `reactor-run-fibers` | #completed / -1 | Pump the group until empty + no sources, or `reactor-stop`. -1 if re-entered. |
 | `local-park-fd` | events / -2 / -1 | Park the running fiber on an fd; -2 on timeout, -1 if not in a group fiber. |
-| `local-park-chan` | value / -1 | Park the running fiber on a channel; -1 if not in a group fiber. |
+| `local-park-chan` | `(Option A)` | Park the running fiber on a borrowed `(Chan A)`; `(none)` if not in a group fiber. |
+| `local-park-async-chan` | `(Option A)` | The same, on a borrowed `(AsyncChan A)`. |
 
 ### Event mask constants
 
