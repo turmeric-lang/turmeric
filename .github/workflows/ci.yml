@@ -1254,10 +1254,17 @@ jobs:
 
       # The Debug libturi.a is compiled with gcc's ASan, which clang cannot
       # link against: the fixtures that use it would fail to build and drop
-      # out of the count.  An unsanitized one keeps them in.
-      - name: Build an unsanitized libturi.a
+      # out of the count.  One without ASan keeps them in.
+      #
+      # It is built with clang and -fsanitize=function itself, because that
+      # check runs at the CALL SITE: the reactor invoking a source's callback
+      # and the fiber group resuming a body are indirect calls made inside
+      # libturi, and with a gcc-built libturi none of them was ever checked
+      # (docs/archive/fnsan-job-does-not-instrument-libturi.md).  Trap mode
+      # needs no UBSan runtime, so nothing extra is linked.
+      - name: Build libturi.a without ASan, under -fsanitize=function
         run: |
-          cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER=clang "-DCMAKE_C_FLAGS=-fsanitize=function -fsanitize-trap=function"
           cmake --build build-nosan -j --target libturi
 
       - name: Suite under -fsanitize=function

@@ -206,9 +206,9 @@
 ;; box the reactor owns and frees at teardown, and lets the checker hold the
 ;; callback to the arity reactor.c calls it with.  For these int / ptr<void>
 ;; slots the shim's entry is the all-int64_t signature reactor.c's TurFdCbFn /
-;; TurTimerCbFn typedefs call through -- verified against a libturi built with
-;; clang -fsanitize=function, which the default fnsan run does not use
-;; (docs/reported/fnsan-job-does-not-instrument-libturi.md).
+;; TurTimerCbFn typedefs call through -- checked by tests/run-fnsan.sh, whose
+;; libturi is built under -fsanitize=function so the reactor's own calls are
+;; checked (docs/archive/fnsan-job-does-not-instrument-libturi.md).
 ;; See docs/archive/nil-argument-to-ptr-param-emits-void-expression.md.
 
 (defn reactor-add-fd [^borrow r : Reactor

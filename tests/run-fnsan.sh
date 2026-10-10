@@ -16,12 +16,19 @@
 #
 # Two things this needs that the default suite does not:
 #   * clang.  GCC has no equivalent.  CC overrides the choice.
-#   * an UNSANITIZED libturi.a.  The Debug build's is compiled with gcc's ASan,
-#     which clang cannot link against, so the fixtures that link -lturi would
-#     fail to build and quietly drop out of the count.  Point
-#     TUR_FNSAN_LIB_DIR at one (default build-nosan/src):
-#       cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF
+#   * a libturi.a WITHOUT ASan, itself built under -fsanitize=function.  The
+#     Debug build's is compiled with gcc's ASan, which clang cannot link
+#     against, so the fixtures that link -lturi would fail to build and
+#     quietly drop out of the count.  And the check runs at the CALL SITE, so
+#     a libturi compiled without it leaves every callback libturi invokes --
+#     a reactor source, a fiber body -- unchecked
+#     (docs/archive/fnsan-job-does-not-instrument-libturi.md).  Point
+#     TUR_FNSAN_LIB_DIR at one (default build-nosan/src), built as CI does:
+#       cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF \
+#             -DCMAKE_C_COMPILER=clang \
+#             "-DCMAKE_C_FLAGS=-fsanitize=function -fsanitize-trap=function"
 #       cmake --build build-nosan -j --target libturi
+#     A plain gcc build still links and runs; it just checks less.
 #
 # The detector is proven ARMED before the suite runs: a canary with one
 # mismatched and one matched indirect call must trap on the first and run the
@@ -49,8 +56,9 @@ if ! command -v "$CC" >/dev/null 2>&1; then
   exit 1
 fi
 if [ ! -f "$LIB_DIR/libturi.a" ]; then
-  echo "FAIL run-fnsan: no unsanitized libturi.a in $LIB_DIR"
-  echo "  cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF"
+  echo "FAIL run-fnsan: no ASan-free libturi.a in $LIB_DIR"
+  echo "  cmake -S . -B build-nosan -DCMAKE_BUILD_TYPE=Debug -DTUR_DEBUG_SANITIZE=OFF \\"
+  echo "        -DCMAKE_C_COMPILER=clang \"-DCMAKE_C_FLAGS=-fsanitize=function -fsanitize-trap=function\""
   echo "  cmake --build build-nosan -j --target libturi"
   exit 1
 fi

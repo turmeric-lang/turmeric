@@ -1,5 +1,9 @@
 # The fnsan gate never checks a callback that libturi calls
 
+**RESOLVED 2026-10-10.** Fix direction 1: the fnsan job builds its libturi.a
+with clang and `-fsanitize=function -fsanitize-trap=function`. See
+"Resolution" at the end.
+
 **Severity: low-medium (a gap in a gate; no wrong answer in the corpus today).**
 **Discovered:** 2026-10-10, retyping `reactor-add-chan` (v0.63.9 + `main`).
 
@@ -75,3 +79,25 @@ docstring now say to keep callback slots untyped, `int` or `ptr<void>`.
    lower every word-sized slot to `int64_t` when the box is headed into a
    carrier-convention caller (an `:int` callback parameter of libturi), as it
    already does for `ptr<void>`. Then a `v : cstr` slot is exact too.
+
+## Resolution (2026-10-10)
+
+ci.yml's fnsan job now configures `build-nosan` with
+`-DCMAKE_C_COMPILER=clang "-DCMAKE_C_FLAGS=-fsanitize=function -fsanitize-trap=function"`.
+`tests/run-fnsan.sh`'s header, and its hint when no library is found, give
+the same command, so a local run checks what CI checks. A plain gcc
+`build-nosan` still links; it just checks less.
+
+Verified by running the CI step's commands as written, from a clean
+`build-nosan`:
+
+- The library builds under clang with no warnings.
+- `CC=clang TUR_FNSAN_LIB_DIR=build-nosan/src bash tests/run-fnsan.sh`
+  gives `summary: 3685 passed, 0 failed`, armed.
+- The repro above traps (`Illegal instruction`) against that library.
+
+Direction 2 is left as is. The fat shim still keeps a `cstr` slot as
+`const char *`, so a reactor callback written `v : cstr` is a mismatch. The
+difference is that the gate now catches it. The reactor guide and the
+`reactor-add-chan` docstring say to keep callback slots untyped, `int` or
+`ptr<void>`.

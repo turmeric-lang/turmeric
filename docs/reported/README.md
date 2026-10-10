@@ -37,12 +37,12 @@ directory is worse for triage than no index.
 ## Found typing reactor-add-chan's channel (filed 2026-10-10)
 
 `tests/run-fnsan.sh` was cited as evidence that reactor callbacks match
-reactor.c's call types. It cannot show that: the indirect calls are made inside
-libturi, which the gate links uninstrumented.
+reactor.c's call types. It could not show that: the indirect calls are made
+inside libturi, which the gate linked uninstrumented. Fixed the same day.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [fnsan-job-does-not-instrument-libturi](fnsan-job-does-not-instrument-libturi.md) | low-medium (gate gap) | `-fsanitize=function` checks at the call site, and the fnsan job's `libturi.a` is gcc-built without it, so a callback libturi calls (reactor sources, fiber bodies) is never checked: a deliberately float-mismatched reactor callback prints a wrong `0.5` there and traps against a clang-instrumented libturi. The whole corpus is clean against the instrumented build (the one failure was a same-day fixture's `v : cstr` slot, fixed before landing), so turning it on is a two-flag CI change |
+| ~~[fnsan-job-does-not-instrument-libturi](../archive/fnsan-job-does-not-instrument-libturi.md)~~ | low-medium (gate gap) | **RESOLVED 2026-10-10** (archived): the fnsan job builds its libturi.a with clang and `-fsanitize=function -fsanitize-trap=function`, so the reactor's and fiber group's calls into callbacks are checked; `run-fnsan.sh` documents the same build. The CI step's commands, run from a clean tree: 3685 passed, 0 failed, and a deliberately mismatched reactor callback now traps |
 
 ## Found refining the nng async plan (filed 2026-10-10)
 

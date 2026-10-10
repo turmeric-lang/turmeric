@@ -148,7 +148,10 @@ nothing checked them. Re-run against a libturi built with clang and
 new, are still clean. A deliberately mismatched callback traps there, so the
 check is live. Against the uninstrumented libturi, the same mismatch runs and
 prints a wrong value. See the reactor-add-chan follow-up in
-[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md).
+[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md). The gate
+itself was fixed the same day: the fnsan job's libturi is now built under
+`-fsanitize=function`
+([fnsan-job-does-not-instrument-libturi](fnsan-job-does-not-instrument-libturi.md)).
 
 - `nil-arg-to-ptr-param`: Turmeric callee, constructor field, capturing
   closure. Pure Turmeric, so `run-turi.sh` runs it too (it prints `true`
