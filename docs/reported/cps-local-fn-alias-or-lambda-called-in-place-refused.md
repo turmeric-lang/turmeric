@@ -102,11 +102,34 @@ tail position, the call after a `perform`, passed only, a 100-turn loop, and
 one counting handler shared by the direct and threaded calls. No snapshot
 moved (3678 passed).
 
-Found on the way, not this report's: a higher-order function that is never
-called, `(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int (h
-x))`, taints `Ask` for the whole program -- its parameter has no value to be
-thread-safe with -- so an unrelated function performing `Ask` is refused
-until `app` is deleted.
+Found on the way and fixed the same day, two more refusals of correct
+programs (neither was filed):
+
+- **An unused higher-order function tainted its effect for the whole
+  program.** `(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int
+  (h x))`, never called: its parameter has no value to thread, so `(h x)` is a
+  whole-body delegation, which seeds the base taint -- and every `(perform
+  (Ask))` elsewhere was refused until `app` was deleted. A user function
+  nothing reaches (no call, no value reference, not exported or `export-as`,
+  not `main` or an instance method, its name in no inline C) now taints
+  nothing (`fn_unreached`, the concrete twin of `generic_unreached`). Pinned
+  by `cps-unused-hof-does-not-taint`.
+- **A pure higher-order call inside a handler clause.** `(Ask [] k) (resume k
+  (app dbl 5))` refused the whole program: `app` is colored (it calls through
+  its fn parameter), so the call was a `CT_TAILCALL`, which the case grammar
+  does not admit. Inside a case, a colored callee with a runtime-pure row that
+  cannot await now runs on its direct entry (`case_call_runs_direct`,
+  `src/passes/cps_ir.c`). Pinned by `cps-handler-clause-calls-pure-hof`
+  (leak-checked; `^fat` parameter, a `let` in the clause, a self-handling
+  colored callee).
+
+Also seen, not fixed: a call through a global `def` alias of a higher-order
+function, `(def f app)` then `(f (fn [n] ...) 1)`, is refused, with a
+spurious TUR-W0033 ("handler clause ... is unreachable") and a 37-byte leak in
+`tur` itself (`fatbox_intern`, `src/compiler/emit_module.c`): the struct-copied
+`EmitCtx`s the direct emitter makes for handler functions and thunks
+(`emit_effects.c`, `emit_expr.c`) hand back only `tmp_n`, so an entry they
+intern is dropped by the parent.
 
 ## Fixed (2026-10-09): a value use as well as calls (capturing)
 

@@ -1,0 +1,29 @@
+;; A user function nothing reaches -- no call, no value reference, not
+;; exported, its name in no inline C -- never runs, so its effects taint
+;; nothing.  `app` below is such a higher-order function: its effectful
+;; parameter has no value to thread, so its `(h x)` is a whole-body
+;; delegation, and that used to seed `Ask` into the fiber taint for the whole
+;; program.  Every `(perform (Ask))` elsewhere was then refused ("this effect
+;; operation has no lowering here") until `app` was deleted.
+(defeffect Ask [] :int)
+
+(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int
+  (h x))
+
+(defn twice [h : (fn [] #fx{Ask} int)] #fx{Ask} : int
+  (+ (h) (h)))
+
+;; a plain performer: 10 + 10 = 20
+(defn ask2 [] : int
+  (+ (perform (Ask)) (perform (Ask))))
+
+;; a handler that counts: 1 + 2 + 3 = 6
+(defn count3 [] : int
+  (let [^mut c 0]
+    (handle (+ (perform (Ask)) (+ (perform (Ask)) (perform (Ask))))
+      (Ask [] k) (do (set! c (+ c 1)) (resume k c)))))
+
+(defn main [] : int
+  (println (handle (ask2) (Ask [] k) (resume k 10)))
+  (println (count3))
+  0)

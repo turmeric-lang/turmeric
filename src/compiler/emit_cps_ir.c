@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "cps_ir.h"
 #include "cps.h"
@@ -12,6 +13,7 @@
 #include "arena.h"
 #include "expr.h"
 #include "effect.h"   /* E2 taint: credit indirect fn-value effect rows */
+#include "mangle.h"   /* fn_unreached: the C spelling of a name */
 
 /* The elaborator's complete free-variable walker (backs the closure-capture
  * pass).  Reused here to find every enclosing var a delegated *composite*
@@ -5905,6 +5907,94 @@ static bool generic_unreached(EmitCtx *ctx, const FnDef *fd) {
     return !addr_taken_has(fd->binding);
 }
 
+/* A concrete function nothing can reach: no direct call to it anywhere in the
+ * program, its address never taken, not `main`, not exported (by a module or
+ * `export-as` -- a caller may live in another unit), not an instance method
+ * (dictionary dispatch is not a direct call), and its name in no inline-C
+ * text (a conservative substring test: `__TUR_CNAME_`, or a C caller).  It
+ * never runs, so what it would perform or handle taints nothing -- the
+ * concrete twin of generic_unreached.  An unused higher-order function whose
+ * effectful parameter has no value to thread used to taint its effect for the
+ * whole program, so an unrelated `(perform (Ask))` was refused until the
+ * helper was deleted (cps-local-fn-alias-or-lambda-called-in-place-refused). */
+typedef struct {
+    const Binding **called; uint32_t n_called, cap_called;
+    const InlineC **ic;     uint32_t n_ic, cap_ic;
+} ReachRefs;
+static ReachRefs g_reach_refs;
+static bool g_reach_refs_ready;
+static bool reach_refs_visit(const Expr *e, void *ud) {
+    ReachRefs *r = (ReachRefs *)ud;
+    if (!e) return false;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
+        if (r->n_called == r->cap_called) {
+            r->cap_called = r->cap_called ? r->cap_called * 2 : 256;
+            r->called = (const Binding **)realloc((void *)r->called,
+                                                  r->cap_called * sizeof *r->called);
+        }
+        r->called[r->n_called++] = e->as.call_.fn_binding;
+    } else if (e->kind == EX_INLINE_C && e->as.inline_c_.inline_c) {
+        if (r->n_ic == r->cap_ic) {
+            r->cap_ic = r->cap_ic ? r->cap_ic * 2 : 64;
+            r->ic = (const InlineC **)realloc((void *)r->ic, r->cap_ic * sizeof *r->ic);
+        }
+        r->ic[r->n_ic++] = e->as.inline_c_.inline_c;
+    }
+    cps_visit_children(e, reach_refs_visit, ud);
+    return false;
+}
+static void reach_refs_reset(void) {
+    free((void *)g_reach_refs.called);
+    free((void *)g_reach_refs.ic);
+    memset(&g_reach_refs, 0, sizeof g_reach_refs);
+    g_reach_refs_ready = false;
+}
+static bool fn_unreached(const Expr *program, const FnDef *fd) {
+    const Binding *b = fd ? fd->binding : NULL;
+    if (!b || !b->name || !program || program->kind != EX_PROGRAM) return false;
+    /* User code only: a stdlib helper may be reached by a call the emitter
+     * synthesizes (a special form's runtime), which is no EX_CALL. */
+    if (b->is_from_stdlib || b->is_lifted_lambda || b->is_exported || b->c_export_name
+        || b->is_instance_method || b->retain_c_linkage || fd->closure || fn_is_main(fd)
+        || addr_taken_has(b))
+        return false;
+    if (!g_reach_refs_ready) {
+        for (uint32_t i = 0; i < program->as.program.n; i++) {
+            const Expr *it = program->as.program.items[i];
+            if (!it) continue;
+            reach_refs_visit((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                             ? it->as.fn_def_.fn->body : it, &g_reach_refs);
+        }
+        g_reach_refs_ready = true;
+    }
+    for (uint32_t i = 0; i < g_reach_refs.n_called; i++)
+        if (g_reach_refs.called[i] == b) return false;
+    /* The C spellings that could call it: the mangled identifier (as a whole
+     * identifier -- any module prefix ends in `_`, which is part of one, so a
+     * prefixed spelling is caught by its unprefixed tail below) and the
+     * source name, either bare or inside `__TUR_CNAME_<name>__`. */
+    char mangled[512];
+    tur_mangle_ident(b->name->name, mangled, sizeof mangled);
+    const char *spell[2] = { mangled, b->name->name };
+    for (uint32_t i = 0; i < g_reach_refs.n_ic; i++) {
+        StrSlice c = g_reach_refs.ic[i]->code;
+        if (!c.p) continue;
+        for (int w = 0; w < 2; w++) {
+            size_t nl = strlen(spell[w]);
+            if (!nl) continue;
+            for (size_t k = 0; k + nl <= c.len; k++) {
+                if (memcmp(c.p + k, spell[w], nl) != 0) continue;
+                char after = k + nl < c.len ? c.p[k + nl] : '\0';
+                if (isalnum((unsigned char)after) || (after == '_' && !(k + nl + 1 < c.len
+                        && c.p[k + nl + 1] == '_')))
+                    continue;   /* `append`, `app_x` -- a longer identifier */
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 /* Bitset helpers over g_ents indices (word = index>>6, bit = index&63). */
 static inline bool ent_bit(const uint64_t *bs, size_t i) {
     return (bs[i >> 6] >> (i & 63)) & 1u;
@@ -6050,6 +6140,7 @@ static void ensure_S(const Expr *program) {
     g_threadable_fn_n = 0;
     g_direct_only_fn_n = 0;
     g_alias_target_n = 0;     /* refilled by the tally walk below */
+    reach_refs_reset();       /* fn_unreached's walk, refilled on first use */
     thin_alias_collect(program);
     cps_ir_thread_param_reset();
     bool trace = getenv("TUR_TRACE_EVICT") != NULL;
@@ -6294,6 +6385,14 @@ static void ensure_S(const Expr *program) {
                 expr_collect_effects_acc(fd->body, &acc);
                 en->eff_lo = en->perf_lo | en->hand_lo | fv_esc_lo;
                 en->eff_hi = en->perf_hi | en->hand_hi | fv_esc_hi;
+                /* Never runs, so it taints nothing (fn_unreached) -- neither as
+                 * an evicted fn nor through a whole-body delegation's seeding of
+                 * the base taint below. */
+                if (fn_unreached(program, fd)) {
+                    en->perf_lo = en->perf_hi = en->hand_lo = en->hand_hi = 0;
+                    en->eff_lo = en->eff_hi = 0;
+                    en->sig_perm = false;
+                }
                 /* A whole-body-delegated colored fn runs its effects on the FIBER
                  * runtime (direct emitter), so its effects are fiber -- seed them
                  * into the base taint like a non-in_s fn.  This keeps an effect
@@ -6480,6 +6579,7 @@ static void ensure_S(const Expr *program) {
         free(pf);
     }
 
+    reach_refs_reset();
     g_ents_ctx = g_emit_ctx;   /* G3b: record the ctx this classification used */
 }
 
