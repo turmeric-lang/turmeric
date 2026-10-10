@@ -128,7 +128,7 @@ nothing in the unit does arithmetic on the type.  It is *not* measured here --
 this container is x86-64 and no CI job runs the engine on aarch64 -- so the
 release workflow's archive JIT step (or an `ubuntu-24.04-arm` probe run) is the
 check.  User inline C that does arithmetic on `__uint128_t` stays a separate,
-larger gap ([c2mir-rejects-uint128](../reported/c2mir-rejects-uint128.md)).
+larger gap ([c2mir-rejects-uint128](c2mir-rejects-uint128.md)).
 
 ## Fix directions
 
@@ -165,7 +165,7 @@ That leaves:
    Originally: **teach c2mir `__uint128_t`**.
    It fixes this *and* user inline C on arm64, and it disturbs none of the
    carefully-ordered include dance. See
-   [c2mir-rejects-uint128](../reported/c2mir-rejects-uint128.md),
+   [c2mir-rejects-uint128](c2mir-rejects-uint128.md),
    `external/mir/VENDORED.md`, and the layout prior art in
    `docs/archive/history/jit-arm64-uint128-align-struct-layout-skew.md`.
 2. **Emit `<ucontext.h>` only when the program needs `FiberBlock`.** The unit
@@ -232,6 +232,6 @@ The release workflow's linux-aarch64 exception ("narrowed rather than off")
 said to delete it when the fork fix landed; it is deleted, so a TUR-W0070 on
 any leg fails the release again.  `VERSION` already reads 0.60.1, so the next
 cut carries the fix; the `v0.60.0` tag still has no release behind it.
-User inline C that does arithmetic on `__uint128_t` is still a gap --
-[c2mir-rejects-uint128](../reported/c2mir-rejects-uint128.md), narrowed to
-that.
+User inline C that does arithmetic on `__uint128_t` was still a gap --
+[c2mir-rejects-uint128](c2mir-rejects-uint128.md), narrowed to
+that, and resolved 2026-10-10.

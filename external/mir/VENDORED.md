@@ -179,4 +179,49 @@ full history mirrored there) plus three fixes on fix/make-one-ret-distinct-targe
     c-tests/new/attr-aligned-member.c.  Not tested on macOS or MinGW
     headers, which the `__attribute__` change reaches where they use the
     same erase idiom.
+
+  d9f75585 (turmeric-lang/mir#7, not merged yet -- move the pin to its
+    merge commit) -- c2mir had no 128-bit integer:
+    x86-64 did not declare __uint128_t at all and aarch64 declared it as a
+    layout-only struct, so user inline C doing arithmetic on one failed to
+    parse and `tur jit` fell back to cc with TUR-W0070
+    (docs/archive/c2mir-rejects-uint128.md).  __int128 is now a keyword,
+    __int128_t, __uint128_t and __SIZEOF_INT128__ are predefined on every
+    target (the aarch64 stand-in is gone; the layout is the same), and
+    every operation is lowered to 64-bit MIR with no runtime library:
+    carries, the full 64x64 product from 32-bit halves, shift-subtract
+    division, correctly rounded float conversions.  Constants fold in two
+    64-bit halves.  An __int128 argument or result travels as two 64-bit
+    ones -- self-consistent, and native code agrees except where its ABI
+    moves an argument (AAPCS64's even register pair; x86-64 putting it on
+    the stack when one register is left).  Unsupported uses (bit-fields,
+    switch, va_arg, variadic arguments) are diagnosed, so they fall back
+    rather than miscompile.  Covered by c-tests/new/int128-ops.c and
+    int128-misc.c there, tests/fixtures/jit-uint128-arith here.  Defining
+    __SIZEOF_INT128__ also sends mir-hash.h down its __uint128_t path in
+    the self-compiled c2mir of the bootstrap tests.
+
+  8056049 (turmeric-lang/mir#8, stacked on #7) -- c2mir converted to _Bool
+    by casting to MIR_T_U8, keeping the low 8 bits: `bool b = 256L` and
+    `(bool) 0.5` were false in initialization, assignment, compound
+    assignment, ++/--, casts, arguments and returns, in generated code, the
+    interpreter and the constant folder alike, and a _Bool bit-field stored
+    bit 0 of the int-converted value.  Silent wrong answers under `tur jit`
+    only (docs/archive/c2mir-bool-conversion-truncates.md).  The __int128
+    conversion hook (gen_conv_if) now compares with zero for a _Bool target,
+    the assignment code converts ++/--/compound results to the left side's
+    type, cast_value folds with != 0, and a _Bool bit-field keeps its type.
+    Covered by c-tests/new/bool-conversion.c there,
+    tests/fixtures/jit-inline-c-bool-conversion here.
+
+  d81ebcc3 (turmeric-lang/mir#9, stacked on #8) -- an element of a union's
+    array member got its element type's alias, not the union's, so MIR-gen
+    let `u.words[0]` read memory from before `u.ld = x`: wrong answers in
+    generated code on every target (the interpreter ignores aliases), and
+    put_ldouble in mir.c -- exactly that shape -- made a self-compiled c2mir
+    write every non-zero long double constant as 0
+    (docs/archive/mir-x86-64-long-double-union-pun.md).  N_IND keeps the
+    union alias; the __int128 change's ld_pow2 workaround is removed.
+    Covered by c-tests/new/union-array-member-alias.c there,
+    tests/fixtures/jit-inline-c-union-array-pun here.
 ```

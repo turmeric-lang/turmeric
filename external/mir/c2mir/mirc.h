@@ -24,7 +24,12 @@ static const char mirc[]
     "#define __signed signed\n"
     "#define __signed__ signed\n"
     "#define __volatile volatile\n"
-    "#define __volatile__ volatile\n";
+    "#define __volatile__ volatile\n"
+    "\n"
+    "/* GCC's 128-bit integers: __int128 is a keyword, these are predefined:  */\n"
+    "#define __SIZEOF_INT128__ 16\n"
+    "typedef __int128 __int128_t;\n"
+    "typedef unsigned __int128 __uint128_t;\n";
 
 #include "mirc_iso646.h"
 #include "mirc_stdalign.h"

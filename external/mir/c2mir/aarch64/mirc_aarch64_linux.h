@@ -141,11 +141,8 @@ static char aarch64_mirc[]
     "extern float __nan (void);\n"
     "#define _Float16 short\n"
 #endif
-    /* A layout-only stand-in for the 128-bit integer c2mir lacks, 16-aligned
-       as AAPCS64 requires.  Needed on every aarch64 OS, not only Apple:
-       glibc's <sys/user.h> -- reached from <ucontext.h> through
-       <sys/procfs.h> -- declares `__uint128_t vregs[32];`, which without it
-       is a syntax error at the enclosing struct. */
-    "typedef struct {_Alignas(16) unsigned long hi; unsigned long lo;} __uint128_t;\n"
+    /* __uint128_t, which glibc's <sys/user.h> (reached from <ucontext.h>
+       through <sys/procfs.h>) and the Darwin signal-context headers embed in
+       structs, is a real 16-aligned integer type now: see mirc.h.  */
     "\n"
     "void *alloca (unsigned long);\n";
