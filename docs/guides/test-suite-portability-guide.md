@@ -585,7 +585,7 @@ bug.
    never happens. `tur_async_owns_env` was such a slot for a day: every
    leak-checked async fixture ran clean while the default build dropped no
    async env at all
-   ([async-capturing-body-env-never-freed](../reported/async-capturing-body-env-never-freed.md),
+   ([async-capturing-body-env-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/async-capturing-body-env-never-freed.md),
    the fifth narrowing). When the leak you are chasing is in code that
    crosses the runtime boundary (a spawn, a handler, a fiber), run the
    harness once more as `TUR_RUNTIME=split bash tests/run-leak-check.sh`, or

@@ -80,7 +80,9 @@ _core_pattern="$(cat /proc/sys/kernel/core_pattern 2>/dev/null || true)"
 if [ "${_core_pattern#|}" != "$_core_pattern" ]; then
     if ulimit -c 1 2>/dev/null; then
         export ASAN_OPTIONS="$ASAN_OPTIONS:disable_coredump=0"
-        echo "run-jit: core dumps piped to '${_core_pattern%% *}'; RLIMIT_CORE=1 so aborting fixtures skip them"
+        # stderr: under TUR_TEST_LIST stdout is the fixture list and nothing
+        # else (the shard-partition check reads it line by line).
+        echo "run-jit: core dumps piped to '${_core_pattern%% *}'; RLIMIT_CORE=1 so aborting fixtures skip them" >&2
     fi
 fi
 

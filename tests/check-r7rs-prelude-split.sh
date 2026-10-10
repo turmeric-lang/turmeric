@@ -217,16 +217,24 @@ fi
 # times than in the whole one, and the program must print its expected
 # output.  (Once where the whole unit has none is not a fork: exported from
 # piece 0, a static the whole unit's optimizer dropped stays.)
+# A panic site (`static const tur_site_t __tur_site_N = { "file", line }`,
+# emit_site_ref_text) is read-only, but its string pointer needs a relocation,
+# so it lands in .data.rel.ro and nm reports it as data.  A copy in each piece
+# that names it forks nothing -- every copy holds the same file and line -- so
+# it is not counted.
 counted_data() {   # defined_data, one line per definition, piece prefix off
     if [ "$(uname -s)" = Darwin ]; then
         nm -m "$1" 2>/dev/null |
             awk '/\(__DATA,__(data|bss|common|thread_vars|thread_bss)\)/ {
                      n = $NF; sub(/\.[0-9]+$/, "", n); sub(/^_tur_sp_/, "_", n)
+                     if (n ~ /^___tur_site_[0-9]+$/) next
                      if (n ~ /^_/) print n }' | sort
     else
         nm "$1" 2>/dev/null |
             awk '$2 ~ /^[BbDdGgSs]$/ && $3 ~ /./ {
-                     n = $3; sub(/\.[0-9]+$/, "", n); sub(/^tur_sp_/, "", n); print n }' | sort
+                     n = $3; sub(/\.[0-9]+$/, "", n); sub(/^tur_sp_/, "", n)
+                     if (n ~ /^__tur_site_[0-9]+$/) next
+                     print n }' | sort
     fi
 }
 PF=r7rs-type-errors-raise

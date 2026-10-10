@@ -15,6 +15,9 @@ for c in 0 1 2 3 4 5 6 7 8 9; do
     echo "piped" | ASAN_OPTIONS=detect_leaks=0 "$TMPDIR/prog" "$c" 2> "$TMPDIR/err"
     rc=$?
     set -e
+    # A panic ends in abort(): 134 (SIGABRT) on Linux and macOS, 3 under the
+    # Windows C runtime.  Say which kind of exit it was, not the number.
+    case "$rc" in 134|3) rc=abort ;; esac
     echo "exit=$rc"
     # An index out of bounds is a panic now: its line names the runtime's own
     # file and line (not portable), so keep the message after that prefix.
