@@ -172,6 +172,11 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
   the manifest, which the loader then rejected as stale. Shared builds now
   list only the project's own modules, and the loader builds the root with
   the new `tur build --shared --bundle-deps`, which links the deps' code in.
+- **plot's image did not build from the spice root**: a project build puts
+  `plutovg.h` on the include path and the runtime header hoists it, and
+  plot's hand-written `extern void* plutovg_...` stand-ins then conflicted
+  with the real prototypes. They are guarded by the header's own
+  `PLUTOVG_H` now (turmeric-spices).
 - Two plot bugs the walkthrough showed, fixed in the spice (compiled
   programs had them too): every x tick was labelled with a y value (the
   label buffers were block-local and the y block reused the x block's
@@ -205,10 +210,12 @@ solves and the least-squares fit print what numpy gives.
    closure with no C address to pass. `plot-walkthrough`'s first cell and
    the FFI callback path (`tur_ffi_cb_ctx_new`, which needs the parameter's
    function type) both want plot to type it `(fn [float] float)`.
-2. **stats' frame helpers crash, compiled too** -- a layout bug of stats',
-   not the notebook's:
-   [stats-frame-interop-reads-a-stale-frame-layout](stats-frame-interop-reads-a-stale-frame-layout.md).
-   The examples' `ols-frame` cells are left in place, marked `eval=false`.
+
+(stats' frame helpers crashed, compiled too -- a layout bug of stats', filed
+and fixed the same day:
+[stats-frame-interop-reads-a-stale-frame-layout](../archive/stats-frame-interop-reads-a-stale-frame-layout.md).
+The examples' `ols-frame` cells run again, unwrapping the result with
+`(head (tail ...))`.)
 
 (The original filing's last example bug -- `plot-walkthrough` calling the
 `#fx{Unsafe}` `image-hook-record-path` outside `(unsafe ...)` -- is fixed in

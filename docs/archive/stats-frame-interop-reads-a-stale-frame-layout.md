@@ -1,5 +1,9 @@
 # stats reads and builds frames with a layout frame does not use: `ols-frame` segfaults
 
+> **RESOLVED 2026-10-10** (turmeric-spices): stats declares frame's real
+> layout and builds every column through frame's buffer protocol, so it reads
+> what frame makes and frame frees what it makes. See *Resolution* at the end.
+
 **Severity:** medium (crash). Every stats function that takes or returns a
 `frame` handle -- `ols-frame` (stats/regress), the frame-shaped helpers in
 stats/cov and stats/fmt (`fit-coefs-frame`) -- casts it to a struct of
@@ -8,7 +12,7 @@ notebook cell, `ols-frame` on a frame `read-csv-string` returned dereferences
 garbage.
 
 Filed 2026-10-10, found running the notebook examples
-([notebook-cells-cannot-call-inline-c-spices](notebook-cells-cannot-call-inline-c-spices.md)).
+([notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md)).
 
 ## Repro
 
@@ -96,3 +100,44 @@ describes.
 3. **Typed handles.** A `defopaque Frame` in frame, used in stats'
    signatures, would have made the mismatch a type error at the first
    cross-spice call.
+
+## Resolution
+
+In `turmeric-spices/spices/stats` (direction 2 -- the declarations stay in
+stats, but now say what frame does):
+
+- One canonical declaration block in every stats module that touches a
+  frame: frame's header order `{schema, n_cols, n_rows, columns}` and a
+  schema of field POINTERS (`__stats_fields_new` allocates them the way
+  `schema-free` releases them). `test.tur`'s variant (`fields_ptr`) is gone,
+  and the `__test_result_t` typedef is guarded, so stats/fmt and stats/test
+  compile in one unit.
+- `__stats_frame_buf` allocates every column buffer stats builds -- values,
+  utf8 offsets and bytes -- with frame's 16-byte header, 64-byte alignment,
+  so `frame-free` / `column-free` release stats' frames and columns.
+- Bugs the first frame-driven test found once nothing crashed:
+  - `ols-frame` and `predict-frame` read predictors as `double`, so an
+    integer column (what frame infers for a CSV's whole numbers) was
+    denormals and every fit "rank-deficient"; `frame-cor` gave NaN the
+    same way. Numeric columns of any width are read as doubles now
+    (`__stats_col_f64`).
+  - `ols-frame` left `(Intercept)` out of the fit's names, one row short of
+    its coefficients: `print-fit` labelled the intercept with the first
+    predictor, and `predict-frame` skipped that predictor as the intercept.
+  - `train-test-split` copied float64 columns and treated every other
+    column as utf8; it copies by frame's element width now (bool bit-packed,
+    utf8 by row), and gives the copied schema its own field names rather
+    than sharing the source's (a double free once both frames are freed).
+  - `sample_test` built its frame by hand in the old layout; it reads one
+    with frame now.
+
+Pinned by `spices/stats/tests/stats/frame_interop_test.tur` (7 cases: each
+frame-taking function on a `read-csv-string` frame, every stats-built frame
+freed through `frame-free`; ASan-clean when its C is built sanitized). The
+notebook's `stats-walkthrough` and `data-analysis` run their `ols-frame`
+cells again.
+
+Still true and not taken on here: stats' handles are all `:int`
+(direction 3), and stats keeps its own copy of the layout rather than
+calling frame's accessors (direction 1).
+
