@@ -1,6 +1,9 @@
 # Plan: test `tur-scscm` against hcsynth and scsynth, and write its guide
 
-> Status: draft -- not started. Baseline measured 2026-10-10 (below).
+> Status: T0-T5 done 2026-10-10 (section 2a), with three items open: the
+> hcsynth CI leg (waits on a hypercollider release), a live-playback smoke
+> test, and the hypercollider PRs merging. Baseline measured 2026-10-10
+> (section 2).
 > Scope: `spices/scscm/` in turmeric-spices; hosts are hypercollider
 > (`hclang`/`hcsynth`) and stock SuperCollider (`sclang`/`scsynth`).
 > Type: spice / test infrastructure / documentation.
@@ -78,6 +81,65 @@ hypercollider's build tree). `scsynth`/`sclang` are not installed.
 (offline render), `--scsynth-host/--scsynth-port` (forward OSC to a real
 `scsynth`), `--no-server-boot`, `--lang scscm|scd`, `--scscm-debug`.
 
+## 2a. Results (2026-10-10)
+
+Work landed in three PRs: turmeric-lang/turmeric-spices#94 (the spice, its
+tests, CI and guide), rjungemann/hypercollider#2 (on top of #1: hclang boots
+and renders), and this plan's update.
+
+**The golden files are not `lhc.js`'s output.** With stock SuperCollider
+3.13 available, its parser settles what section 2 could only read off the
+first differing line: **19 of `lhc.js`'s 21 outputs do not parse**, nor did
+19 of the old spice's. `lhc.js`'s failures include `*(a, b, c)`, `{ ... }()`,
+`var` after a statement, a hyphen kept in call position, `'foo`,
+`|a, ...rest|` and `__args`. Several more parse but do the wrong thing: an
+Event passed positionally where a keyword argument was meant (`doneAction`
+lands in `EnvGen`'s `levelScale`), `Synth("x", (freq: 440))` (no controls
+reach the synth), and `Pbind.new([...])` (throws). So section 3 is decided
+as (1) for the *language* -- hypercollider's syntax and what its reference
+documents each form to mean -- but the golden is the spice's output once a
+real sclang accepts it. All 19 corpus programs that are valid scscm now
+parse; the other two (`basics`, Overtone-syntax `synths`) are recorded as
+invalid inputs. Per-program table:
+turmeric-spices `spices/scscm/tests/corpus/README.md`.
+
+| Task | State | Where (turmeric-spices unless noted) |
+|---|---|---|
+| T0 | done | SuperCollider 3.13 from Ubuntu 24.04's archive (headless sclang: `QT_QPA_PLATFORM=offscreen`, plus `QTWEBENGINE_DISABLE_SANDBOX=1` as root). hclang built from source with emsdk 5.0.5 on hypercollider's fix branch; v0.1.6 does not boot either. |
+| T1 | done | `spices/scscm/tests/corpus/` (21 programs, regen script, pinned commit), `corpus_test.tur`, `compile_test.tur` (50 cases), `check-sclang.sh` |
+| T2 | done, narrower | `tests/host/render.sh`: hcsynth renders the 2 programs that sound immediately. hclang's `--output` capture has no clock, so `Pbind.play` / `(in ...)` never fire there. Comparing with `lhc.js` WAVs was dropped: its output does not parse. |
+| T3 | offline done; live open | Stock sclang runs the program against a recording stand-in for the server address (`capture.scd`), and `scsynth -N` renders it: 8 programs pass. scsynth and hcsynth agree to 0.0006 RMS per 0.1 s window at the same block size. Live smoke not run (no audio device). |
+| T4 | scsynth leg done | `.github/workflows/scscm-hosts.yml` (sclang parse + scsynth audio, SuperCollider pinned in `tests/host/HOSTS`). The hcsynth leg waits on a hypercollider release that boots. |
+| T5 | done | `docs/guides/scscm-guide.md`; README rewritten; SC6 marked out of scope |
+
+Tolerances, from measurement: pitch within 2% (interpolated zero
+crossings measure a held sine to 0.1 Hz); level within 15% of the expected
+value; two renders agree when every 0.1 s window's RMS is within 5% and its
+pitch within 2%. hcsynth must render with `--block-size 64`: its default
+512-sample block also sets its control rate, and the first 100 ms of an
+envelope then differ from scsynth's by 7%.
+
+Spice bugs found and fixed on the way: the defmacro table pointed into the
+AST `compile-text` frees (a use-after-free on the next compile), `tokenize`
+freed a lex error's message before returning it, parse errors were bare
+integers, and the README's own `defmacro` example compiled to
+`\+(5, 1)`.
+
+hypercollider findings (fixed in #2 unless noted):
+- two more class-library parse errors (`Quarks.sc`, `String.sc`);
+- the Node CLI installed its OSC bridge as `__hc_wasm_*` while the WASM
+  side reads `__sc_wasm_*`, so `--output` captured 0 packets;
+- hcsynth repeated the last 512-sample block after the last synth freed;
+- CI ran a test file that does not exist, and the lhc.js bundle lacked a
+  module;
+- the class-library pack was not rebuilt when a class file changed, and
+  the native CI cache key omitted the class library;
+- not fixed: the WAMR native `hclang_native` dies with `filesystem_error`
+  on class-extension files; with `--classlib-dir` the embedded pack still
+  shadows the directory; hypercollider writes version-3 SynthDefs, which
+  stock scsynth 3.13 does not load, so `--scsynth-host` forwarding to a
+  3.13 scsynth cannot work.
+
 ## 3. Decision needed first: which dialect is canonical?
 
 The spice README documents bracket parameters (`(defsynth name [p] body)`,
@@ -95,6 +157,9 @@ close the gap:
 
 This plan assumes (1). If you choose (2), T1's golden files become the spice's
 own and T2-T4 still apply unchanged (they test sclang, not scscm).
+
+*Decided 2026-10-10:* (1) for the language, with the golden taken from the
+spice once a real sclang accepts it rather than from `lhc.js` (section 2a).
 
 ## 4. Tasks
 
@@ -198,9 +263,13 @@ guide").
 - **Dialect ownership (section 3).** Blocks T1's golden files.
 - **Two compilers to keep in step.** The spice and `lhc.js` will drift again
   unless the corpus runs in both repos' CI. Consider hypercollider running the
-  spice's corpus, or a shared corpus repo.
+  spice's corpus, or a shared corpus repo. Since 2026-10-10 they differ on
+  purpose wherever `lhc.js` emits sclang that does not parse; closing that
+  needs `lhc.js` fixed to the same rules (the guide's section 3 lists them).
 - **hypercollider is a moving host.** The v0.1.5 tarball fails to boot; T0 may
-  uncover more. T2/T3 cannot start until it does.
+  uncover more. T2/T3 cannot start until it does. (It did: six fixes, in
+  section 2a. v0.1.6 does not boot either; CI's hcsynth leg waits on a
+  release that does.)
 - **Cross-engine tolerance** is a judgment call; pick it from measurement, write
   it down.
 - **GPL.** SuperCollider and hypercollider are GPL-3.0; the spice is MIT. Running
