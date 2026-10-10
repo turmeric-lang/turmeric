@@ -2,6 +2,54 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.64.0] -- 2026-10-10
+
+### Added
+
+- **`#dedent"""..."""` string literal.** A Swift-style triple-quoted, verbatim
+  (no escapes) string: the closer's indentation is stripped from every line,
+  `#`-escalation lets the body contain `"""`, and it reads as a plain static
+  cstr with no load needed.
+- **Typed channel and fiber-group APIs.** `reactor-add-chan` now borrows a
+  `(Chan A)` (with a new `reactor-add-async-chan` for `(AsyncChan A)`),
+  `local-park-chan` returns `(Option A)` instead of an ambiguous int, and the
+  fiber group handle is a linear `LocalFiberGroup` that `local-fiber-group-free`
+  consumes.
+- **Embedders run spices compiled.** `turi_env_attach_spice` builds a spice with
+  `tur build --shared`, dlopens it and binds its exports as natives, so a
+  notebook cell or embedded session calls inline-C spices compiled; embedder
+  imports resolve like `tur run`, and a session may import at the top level.
+- **`tur build --shared --bundle-deps`.** Links `:spices` deps into the library
+  so it loads on its own, and a dep's exports no longer pollute the project's
+  manifest.
+- **Spice FFI passes records and typed results.** A by-value record export
+  (linalg's `mat`) crosses as its C bytes, and `:cstr` or `:bool` exports come
+  back as strings and booleans instead of bare words.
+- **`tur jit` handles `__int128`.** Inline C doing 128-bit integer arithmetic
+  now runs under jit instead of falling back to the cc path.
+
+### Changed
+
+- **`nil` at a `ptr<void>` parameter is the null pointer.** A literal `nil` now
+  compiles to `0` on every backend instead of a cc error or a non-zero unit; any
+  other void-typed argument is refused with `TUR-E0001`.
+
+### Fixed
+
+- **Effect threading refusals.** A captureless lambda bound to a local and
+  called through its name, an unused higher-order function (which used to taint
+  every `perform` of its effect), and a pure HOF call inside a handler clause
+  all compile and run.
+- **Interpreter inline-C is honest.** The inline-C executor no longer frees pool
+  memory with libc `free`, and a constructor body it cannot model (union puns,
+  skipped statements) is declined instead of silently building zeroed values.
+- **Two silent `tur jit` wrong answers.** A conversion to `_Bool` no longer
+  keeps only the low 8 bits, and a union member read back through an array
+  member of the same union no longer sees stale memory.
+- **Try Turmeric loads offline.** The service worker's cache lookups honored
+  `Vary: Origin` and missed the precached bundles, so a cold reload never
+  reached the app; the offline pane now boots with the origin stopped.
+
 ## [0.63.9] -- 2026-10-10
 
 ### Fixed
