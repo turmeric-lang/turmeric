@@ -188,11 +188,18 @@ JS-backed native, so this is glue work in the compiler repo, plus an async
 story (a native that waits on the audio runtime must not block the worker that
 holds the interpreter).
 
-### B5. Tests and CI
+### B5. Tests (no CI yet)
 
-Playwright against a stubbed `AudioContext` for everything except sound itself;
-the compile stages tested against the corpus; one manual real-audio checklist.
-Port 3000 is the developer's own server -- the suite already picks its own.
+HyperREPL has **no CI for now** -- a decision, not an omission; add it when the
+project has something worth gating. Until then the tests are run by hand:
+Playwright against a stubbed `AudioContext` for everything except sound itself,
+the compile stages against the testing plan's corpus, and one manual real-audio
+checklist. Keep them runnable with one command so adding CI later is a workflow
+file, not a rewrite. Port 3000 is the developer's own server -- use a free port.
+
+Without CI, nothing re-checks that the shipped WASM matches the submodule pin, so
+the deploy step (below) must build from the pin itself and record the commit it
+used in the deployed page.
 
 ## 6. Constraints that will bite
 
@@ -200,8 +207,8 @@ Port 3000 is the developer's own server -- the suite already picks its own.
 - **Cross-origin isolation (COOP/COEP):** a separate repo means a separate
   deployment, and the host must be able to send `Cross-Origin-Opener-Policy:
   same-origin` / `Cross-Origin-Embedder-Policy: require-corp` if the hypercollider
-  build needs `SharedArrayBuffer` (not established; check in B0). GitHub Pages
-  cannot set response headers; Cloudflare (as Try uses) can. Every subresource
+  build needs `SharedArrayBuffer` (not established; check in B0). HyperREPL
+  deploys to **Cloudflare** (decided; as Try does), which can set the headers. Every subresource
   must then be same-origin or send CORP, so the artifacts are served from the
   same site, not fetched from a release URL.
 - **No live `scsynth` from the page** by default. A strict CSP with `connect-src
@@ -241,7 +248,11 @@ Port 3000 is the developer's own server -- the suite already picks its own.
    the pin is the source offer (a clone at that commit is the corresponding
    source) and bumping hypercollider is one visible diff. HyperREPL's build runs
    the Emscripten build of the submodule (or consumes a release built from that
-   same commit and checks it against the pin). Open: the deployment host
-   (Cloudflare vs Pages, see the COOP/COEP note) and whether CI builds the WASM or
-   a release artifact is consumed.
+   same commit and checks it against the pin). Deployment is **Cloudflare**
+   (decided) and there is **no CI** yet (decided). So the WASM is built locally
+   from the submodule pin and deployed by hand (`wrangler`); the deploy script
+   should refuse to run with a dirty submodule or a pin that differs from what was
+   built, and stamp the pinned commit into the page footer as the source link.
+   Open: whether to consume a hypercollider release artifact instead of building
+   the WASM locally.
 4. **Is O1-first acceptable** as a stepping stone to ship sound early?
