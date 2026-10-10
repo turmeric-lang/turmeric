@@ -81,6 +81,25 @@ const DOCS_SERIES = [
 ];
 const DOCS_DEFAULT = ['open_reports', 'active_plans'];
 
+// Count series that come from the same docs-counts rows but are not "open
+// work": guides (Turmeric's own, and the spices repo's) and the spice count.
+// Fixed, not toggleable -- each chart has one or two lines, so a picker would
+// be more chrome than data. The spice fields are null on a row published
+// without the spices checkout; such rows are dropped from these charts rather
+// than plotted as a collapse to zero.
+const GUIDE_SERIES = [
+  ['turmeric_guides', 'Turmeric guides', '--chart-1'],
+  ['spice_guides',    'Spice guides',    '--chart-2'],
+];
+const SPICE_SERIES = [
+  ['spices', 'Spices', '--chart-1'],
+];
+
+const TABS = ['tests', 'counts', 'code', 'spices', 'reports'];
+
+// Ranges the 8-day recent window can answer. Anything wider needs the full log.
+const RECENT_RANGES = ['1d', '7d'];
+
 // ── STATE ───────────────────────────────────────────────────────────────────
 
 const state = {
@@ -118,6 +137,10 @@ const state = {
   // on first reveal so the SVG picks up the real panel width instead of the
   // 860px fallback a hidden panel forces.
   tab: 'tests',
+  // True while `rows` is only the recent window (/api/ci-timings?window=recent)
+  // rather than the full year. The full log is 40+ MB; the page opens on 7 days.
+  windowed: false,
+  countsFilter: '',
 };
 
 // ── FORMATTING ──────────────────────────────────────────────────────────────
@@ -301,6 +324,16 @@ function locRows() {
 function docsRows() {
   const cutoff = rangeCutoff(state.docs);
   return state.docs.filter((r) => r.ts >= cutoff);
+}
+
+// The newest docs row that actually carries `key`, for the headline numbers:
+// the newest row may predate the field (published before it shipped) or lack the
+// spices checkout, and "--" there is more honest than a zero.
+function latestDocWith(key) {
+  for (let i = state.docs.length - 1; i >= 0; i--) {
+    if (state.docs[i][key] != null) return state.docs[i];
+  }
+  return null;
 }
 
 // suite -> [{ ts, ms, status, sha, run_id }], ascending by ts.
@@ -495,7 +528,9 @@ function renderProvenance() {
     <span>${esc(fmtDateTime(latestTs))}</span>
     <span class="dot-sep">/</span>
     <span>${state.rows.length.toLocaleString()} rows on
-      <span class="mono">suite-timings-${esc(state.year ?? '')}.jsonl</span></span>`;
+      <span class="mono">${state.windowed
+        ? 'suite-timings-recent.jsonl'
+        : `suite-timings-${esc(state.year ?? '')}.jsonl`}</span></span>`;
 }
 
 function renderTiles() {
@@ -1039,6 +1074,9 @@ function renderDocsTiles() {
     return;
   }
 
+  const latestGuides = latestDocWith('turmeric_guides');
+  const latestSpiceGuides = latestDocWith('spice_guides');
+
   const tile = (cls, icon, label, value, note) => `
     <div class="ci-tile ${cls}">
       <div class="ci-tile-label">
@@ -1056,6 +1094,12 @@ function renderDocsTiles() {
     tile('', 'layers', 'Total open work',
       String(latest.open_plans + latest.open_reports),
       'Plans plus reports'),
+    tile('', 'book-open', 'Turmeric guides',
+      latestGuides ? String(latestGuides.turmeric_guides) : '--',
+      'In docs/guides/'),
+    tile('', 'book-open', 'Spice guides',
+      latestSpiceGuides ? String(latestSpiceGuides.spice_guides) : '--',
+      latestSpiceGuides ? 'In the turmeric-spices repo' : 'Not measured yet'),
     tile('', 'clock', 'Last measured',
       esc(fmtDate(latest.ts)),
       esc((latest.sha ?? '').slice(0, 7))),
@@ -1150,6 +1194,184 @@ function renderDocsLegend() {
       writeURL();
     };
   }
+}
+
+// ── RENDER: TEST CASE COUNTS ────────────────────────────────────────────────
+//
+// The harness suites (tur_tests, turi_fixture_tests, ...) print their own
+// pass/fail/skip census and the collector lifts it into the row, so the count of
+// test CASES per suite is already in the timing data -- no new collection. Suites
+// that are one ctest entry with no internal census (most of the ~170) carry no
+// counts and are listed as such by the footnote, not as zero.
+
+function latestCounts() {
+  const rows = state.rows.filter((r) => envKey(r) === state.env);
+  const latestTs = rows.reduce((m, r) => Math.max(m, r.ts), 0);
+  const latest = rows.filter((r) => r.ts === latestTs);
+  return {
+    latestTs,
+    suites: latest.filter((r) => r.discovered != null),
+    uncounted: latest.filter((r) => r.discovered == null).length,
+  };
+}
+
+function renderCounts() {
+  const { suites, uncounted, latestTs } = latestCounts();
+  const sum = (k) => suites.reduce((a, r) => a + (r[k] ?? 0), 0);
+  const env = state.envs.find((e) => e.key === state.env);
+
+  const tile = (icon, label, value, note) => `
+    <div class="ci-tile">
+      <div class="ci-tile-label"><t-icon name="${icon}"></t-icon>${esc(label)}</div>
+      <div class="ci-tile-value">${value}</div>
+      <div class="ci-tile-note">${esc(note)}</div>
+    </div>`;
+
+  document.getElementById('ci-counts-tiles').innerHTML = [
+    tile('layers', 'Test cases', fmtCount(sum('discovered')),
+      `Discovered across ${suites.length} counting suites`),
+    tile('circle-check', 'Passed', fmtCount(sum('passed')), 'In the latest run'),
+    tile('circle-minus', 'Skipped', fmtCount(sum('skipped')), 'Not run in the latest run'),
+    tile(sum('failed') ? 'circle-x' : 'circle-check', 'Failed',
+      fmtCount(sum('failed')), 'In the latest run'),
+  ].join('');
+
+  document.getElementById('ci-counts-sub').textContent = latestTs
+    ? `${env ? env.label : ''} -- ${fmtDateTime(latestTs)}. ${uncounted} further `
+      + 'suites are a single ctest entry with no internal case count.'
+    : '';
+
+  const q = state.countsFilter.trim().toLowerCase();
+  const shown = suites
+    .filter((r) => !q || seriesName(r).toLowerCase().includes(q))
+    .sort((a, b) => b.discovered - a.discovered);
+  const peak = Math.max(1, ...suites.map((r) => r.discovered));
+
+  const table = document.getElementById('ci-counts-table');
+  if (!shown.length) {
+    table.innerHTML = '<tbody><tr><td><div class="ci-empty">No suites match.</div></td></tr></tbody>';
+    return;
+  }
+  const pct = (n) => `${((n ?? 0) / peak * 100).toFixed(2)}%`;
+  table.innerHTML = `
+    <thead><tr>
+      <th scope="col">Suite</th><th scope="col">Cases</th>
+      <th scope="col">Passed</th><th scope="col">Skipped</th>
+      <th scope="col">Failed</th><th scope="col">Share of largest</th>
+    </tr></thead>
+    <tbody>${shown.map((r) => `
+      <tr>
+        <td title="${esc(seriesName(r))}">${esc(seriesName(r))}</td>
+        <td>${esc(fmtCount(r.discovered))}</td>
+        <td>${esc(fmtCount(r.passed ?? 0))}</td>
+        <td>${esc(fmtCount(r.skipped ?? 0))}</td>
+        <td>${esc(fmtCount(r.failed ?? 0))}</td>
+        <td><div class="ci-count-bar" aria-hidden="true">
+          <span class="pass" style="width:${pct(r.passed)}"></span>
+          <span class="skip" style="width:${pct(r.skipped)}"></span>
+          <span class="fail" style="width:${pct(r.failed)}"></span>
+        </div></td>
+      </tr>`).join('')}</tbody>`;
+}
+
+// ── RENDER: SPICES AND GUIDES ───────────────────────────────────────────────
+
+// One fixed-series trend chart over the docs-counts rows. Rows whose field is
+// null (published without the spices checkout, or before the field existed) are
+// left out of that series rather than drawn as zero.
+function drawCountChart({ prefix, defs, unit, label, host, legend }) {
+  const rows = docsRows().filter((r) => defs.some(([k]) => r[k] != null));
+  if (state.docsError) {
+    host.innerHTML = `<div class="ci-empty">${esc(state.docsError)}</div>`;
+    legend.innerHTML = '';
+    return;
+  }
+  const latestOf = (k) => latestDocWith(k)?.[k];
+  legend.innerHTML = defs.map(([key, name, cssVar]) => `
+    <span class="ci-legend-item">
+      <span class="swatch" style="background:var(${cssVar})"></span>${esc(name)}
+      <span class="count">${esc(latestOf(key) != null ? fmtCount(latestOf(key)) : '--')}</span>
+    </span>`).join('');
+
+  if (rows.length < 2) {
+    host.innerHTML = `<div class="ci-empty">${rows.length
+      ? 'Only one measurement in this range -- widen it to see a trend.'
+      : 'Not measured yet. These counts start with the first push after they shipped.'}</div>`;
+    return;
+  }
+  drawLineChart({
+    host,
+    tooltip: document.getElementById(`${prefix}-tooltip`),
+    idPrefix: prefix,
+    // A series with no measured point at all (the spice guides, before the
+    // spices checkout existed) is left out: the chart reads pts[i].y.
+    series: defs
+      .map(([key, name, cssVar]) => ({
+        key,
+        label: name,
+        color: `var(${cssVar})`,
+        pts: rows.filter((r) => r[key] != null).map((r) => ({ x: r.ts, y: r[key], sha: r.sha })),
+      }))
+      .filter((s) => s.pts.length),
+    xs: rows.map((r) => r.ts),
+    ticksY: (lo, hi) => decimalTicks(lo, hi, 5),
+    fmtY: fmtCount,
+    fmtTickY: fmtCountTick,
+    footer: `${rows.length} ${unit}${rows.length === 1 ? '' : 's'}`,
+    label,
+  });
+}
+
+function renderGuides() {
+  const sub = document.getElementById('ci-guides-sub');
+  const t = latestDocWith('turmeric_guides');
+  const s = latestDocWith('spice_guides');
+  sub.innerHTML = t
+    ? `${esc(t.turmeric_guides)} Turmeric guides in <code>docs/guides/</code>`
+      + (s ? `; ${esc(s.spice_guides)} spice guides in the turmeric-spices repo.` : '.')
+    : '';
+  drawCountChart({
+    prefix: 'ci-guides', defs: GUIDE_SERIES, unit: 'commit',
+    label: 'Guide counts over time',
+    host: document.getElementById('ci-guides-chart'),
+    legend: document.getElementById('ci-guides-legend'),
+  });
+}
+
+function renderSpices() {
+  const latest = latestDocWith('spices');
+  const guides = latestDocWith('spice_guides');
+  const tile = (icon, label, value, note) => `
+    <div class="ci-tile">
+      <div class="ci-tile-label"><t-icon name="${icon}"></t-icon>${esc(label)}</div>
+      <div class="ci-tile-value">${value}</div>
+      <div class="ci-tile-note">${esc(note)}</div>
+    </div>`;
+  document.getElementById('ci-spices-tiles').innerHTML = [
+    tile('package', 'Spices', latest ? String(latest.spices) : '--',
+      latest ? 'Libraries in the turmeric-spices repo' : 'Not measured yet'),
+    tile('book-open', 'Spice guides', guides ? String(guides.spice_guides) : '--',
+      'Guides in the turmeric-spices repo'),
+    tile('clipboard-list', 'Spice plans', String(state.docs.at(-1)?.spices_plans ?? '--'),
+      'Open plans filed under docs/upcoming/spices/'),
+  ].join('');
+
+  document.getElementById('ci-spices-sub').innerHTML = latest
+    ? `${esc(latest.spices)} spices at
+       <a class="mono ci-link" href="${GITHUB_URL}/commit/${esc(latest.sha ?? '')}"
+          >${esc((latest.sha ?? '').slice(0, 7))}</a>.`
+    : '';
+  drawCountChart({
+    prefix: 'ci-spices', defs: SPICE_SERIES, unit: 'commit',
+    label: 'Spice count over time',
+    host: document.getElementById('ci-spices-chart'),
+    legend: document.getElementById('ci-spices-legend'),
+  });
+
+  const names = latestDocWith('spice_names')?.spice_names ?? [];
+  document.getElementById('ci-spices-list').innerHTML = names.length
+    ? names.map((n) => `<span>${esc(n)}</span>`).join('')
+    : '<div class="ci-empty">Not measured yet.</div>';
 }
 
 // ── RENDER: SPARKLINE GRID ──────────────────────────────────────────────────
@@ -1368,6 +1590,9 @@ function render() {
   renderLoc();
   renderDocsTiles();
   renderDocs();
+  renderGuides();
+  renderSpices();
+  renderCounts();
   renderSparks(stats);
   renderTable(stats);
   renderSkips();
@@ -1421,9 +1646,22 @@ function switchTab(tab) {
   }
   // A chart drawn into a hidden panel has a fallback viewBox width; redraw now
   // that the panel is visible so it fits the real column.
+  if (tab === 'counts') renderCounts();
   if (tab === 'code') renderLoc();
-  if (tab === 'reports') { renderDocsTiles(); renderDocs(); }
+  if (tab === 'spices') renderSpices();
+  if (tab === 'reports') { renderDocsTiles(); renderDocs(); renderGuides(); }
   writeURL();
+}
+
+// Replace the recent window with the full year, keeping the selected
+// environment. Only reachable from a wide range or an aged-out shared link.
+async function loadFull() {
+  const full = await fetchNDJSON(API);
+  if (!full.rows.length) throw new Error('empty');
+  state.rows = full.rows;
+  state.year = full.year;
+  state.windowed = false;
+  state.envs = buildEnvs(state.rows);
 }
 
 async function boot() {
@@ -1432,8 +1670,23 @@ async function boot() {
   // timings nor be able to take the page down with them. A fresh ci-metrics
   // branch legitimately has no repo-loc or docs-counts file at all, and that
   // costs one panel each.
+  //
+  // Timings: the recent window first. The full year is 40+ MB and the page opens
+  // on 7 days, so downloading it all up front was most of the load time. A missing
+  // window (the publisher has not written one yet) falls back to the full log.
+  const firstUrl = new URLSearchParams(location.search).get('range');
+  const wantsFull = firstUrl && !RECENT_RANGES.includes(firstUrl);
+  const fetchTimings = async () => {
+    if (!wantsFull) {
+      try {
+        const recent = await fetchNDJSON(`${API}?window=recent`);
+        if (recent.rows.length) return { ...recent, windowed: true };
+      } catch { /* fall through to the full log */ }
+    }
+    return { ...(await fetchNDJSON(API)), windowed: false };
+  };
   const [timings, loc, docs] = await Promise.allSettled([
-    fetchNDJSON(API),
+    fetchTimings(),
     fetchNDJSON(LOC_API),
     fetchNDJSON(DOCS_API),
   ]);
@@ -1446,6 +1699,7 @@ async function boot() {
 
   state.year = timings.value.year;
   state.rows = timings.value.rows;
+  state.windowed = timings.value.windowed;
   if (!state.rows.length) {
     fail('No timing rows have been published yet.');
     return;
@@ -1476,6 +1730,16 @@ async function boot() {
   state.envs = buildEnvs(state.rows);
 
   const url = readURL();
+  // A shared link can name an environment or suite the recent window has already
+  // aged out. Rather than silently open on a different one, fetch the full log.
+  if (state.windowed) {
+    const missingEnv = url.env && !state.envs.some((e) => e.key === url.env);
+    const known0 = new Set(state.rows.map(seriesName));
+    const missingSuite = (url.suites ?? []).some((n) => n && !known0.has(n));
+    if (missingEnv || missingSuite) {
+      try { await loadFull(); } catch { /* keep the window; defaults apply */ }
+    }
+  }
   state.env = state.envs.some((e) => e.key === url.env) ? url.env : state.envs[0].key;
   if (url.range && RANGES.some(([v]) => v === url.range)) state.range = url.range;
   if (url.scale === 'log') state.scale = 'log';
@@ -1492,7 +1756,7 @@ async function boot() {
     const valid = url.docs.filter((k) => DOCS_SERIES.some(([key]) => key === k));
     if (valid.length) state.docsKeys = new Set(valid);
   }
-  if (url.tab && ['tests', 'code', 'reports'].includes(url.tab)) state.tab = url.tab;
+  if (url.tab && TABS.includes(url.tab)) state.tab = url.tab;
 
   const known = new Set(state.rows.map(seriesName));
   state.suites = url.suites
@@ -1516,8 +1780,22 @@ async function boot() {
   // here rather than in renderFilters (which only owns the Tests-tab controls).
   const range = document.getElementById('ci-range');
   range.value = state.range;
-  range.onchange = (e) => {
+  range.onchange = async (e) => {
     state.range = e.target.value;
+    if (state.windowed && !RECENT_RANGES.includes(state.range)) {
+      range.disabled = true;
+      document.getElementById('ci-provenance').textContent = 'Loading full history…';
+      try {
+        await loadFull();
+      } catch (err) {
+        // Stay on what we have: the window covers 7 days, so say so and snap back.
+        state.range = DEFAULT_RANGE;
+        range.value = state.range;
+        document.getElementById('ci-provenance').textContent =
+          `Could not load the full history (${err.message}).`;
+      }
+      range.disabled = false;
+    }
     render();
   };
 
@@ -1525,6 +1803,12 @@ async function boot() {
   for (const t of document.querySelectorAll('.ci-tab')) {
     t.onclick = () => switchTab(t.dataset.tab);
   }
+
+  const countsSearch = document.getElementById('ci-counts-search');
+  countsSearch.addEventListener('input', () => {
+    state.countsFilter = countsSearch.value;
+    renderCounts();
+  });
 
   const search = document.getElementById('ci-spark-search');
   search.addEventListener('input', () => {
@@ -1540,6 +1824,8 @@ async function boot() {
     [document.getElementById('ci-chart'), renderChart],
     [document.getElementById('ci-loc-chart'), renderLoc],
     [document.getElementById('ci-docs-chart'), renderDocs],
+    [document.getElementById('ci-guides-chart'), renderGuides],
+    [document.getElementById('ci-spices-chart'), renderSpices],
   ]);
   let raf = 0;
   const pending = new Set();

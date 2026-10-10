@@ -1327,6 +1327,17 @@ jobs:
 
       # Open plans and reports are a property of the COMMIT, so like the line
       # counts they are measured here -- once -- and not in a matrix leg.
+      # Spices and spice guides live in the sibling repo, so the doc counts need
+      # it checked out next to this one (collect-docs.py looks for
+      # ../turmeric-spices).  Best-effort: a failed clone costs the spice fields
+      # of one row (they are null, "not measured"), not the publish.
+      - name: Check out turmeric-spices (sibling, for counts)
+        continue-on-error: true
+        run: |
+          git clone --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
+            ../turmeric-spices
+
       - name: Collect doc counts
         run: |
           set -euo pipefail

@@ -66,8 +66,14 @@
                 id="ci-tab-tests" aria-selected="true"
                 aria-controls="ci-panel-tests" data-tab="tests">Tests</button>
         <button type="button" class="ci-tab" role="tab"
+                id="ci-tab-counts" aria-selected="false"
+                aria-controls="ci-panel-counts" data-tab="counts">Test count</button>
+        <button type="button" class="ci-tab" role="tab"
                 id="ci-tab-code" aria-selected="false"
                 aria-controls="ci-panel-code" data-tab="code">Code</button>
+        <button type="button" class="ci-tab" role="tab"
+                id="ci-tab-spices" aria-selected="false"
+                aria-controls="ci-panel-spices" data-tab="spices">Spices</button>
         <button type="button" class="ci-tab" role="tab"
                 id="ci-tab-reports" aria-selected="false"
                 aria-controls="ci-panel-reports" data-tab="reports">Reports</button>
@@ -154,6 +160,28 @@
 
     </div>
 
+    <!-- ── Test count tab ────────────────────────────────────────────── -->
+    <div class="ci-tab-panel" id="ci-panel-counts" role="tabpanel"
+         aria-labelledby="ci-tab-counts" hidden>
+
+      <section class="ci-tiles" id="ci-counts-tiles" aria-label="Test case summary"></section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Test cases by suite</h2>
+            <p class="ci-panel-sub" id="ci-counts-sub"></p>
+          </div>
+          <input type="search" class="ci-input" id="ci-counts-search"
+                 placeholder="Filter suites&hellip;" aria-label="Filter suites by name">
+        </div>
+        <div class="ci-table-wrap">
+          <table class="ci-table" id="ci-counts-table"></table>
+        </div>
+      </section>
+
+    </div>
+
     <!-- ── Code tab ───────────────────────────────────────────────────── -->
     <div class="ci-tab-panel" id="ci-panel-code" role="tabpanel"
          aria-labelledby="ci-tab-code" hidden>
@@ -185,6 +213,38 @@
 
     </div>
 
+    <!-- ── Spices tab ─────────────────────────────────────────────────── -->
+    <div class="ci-tab-panel" id="ci-panel-spices" role="tabpanel"
+         aria-labelledby="ci-tab-spices" hidden>
+
+      <section class="ci-tiles" id="ci-spices-tiles" aria-label="Spice summary"></section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Spices over time</h2>
+            <p class="ci-panel-sub" id="ci-spices-sub"></p>
+          </div>
+        </div>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-spices-chart"></div>
+          <div class="ci-tooltip" id="ci-spices-tooltip" hidden></div>
+        </div>
+        <div class="ci-legend" id="ci-spices-legend"></div>
+      </section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Spices in the latest build</h2>
+            <p class="ci-panel-sub">Every directory under <code>spices/</code> with a manifest.</p>
+          </div>
+        </div>
+        <div class="ci-skip-suites" id="ci-spices-list"></div>
+      </section>
+
+    </div>
+
     <!-- ── Reports tab ───────────────────────────────────────────────── -->
     <div class="ci-tab-panel" id="ci-panel-reports" role="tabpanel"
          aria-labelledby="ci-tab-reports" hidden>
@@ -203,6 +263,20 @@
           <div class="ci-tooltip" id="ci-docs-tooltip" hidden></div>
         </div>
         <div class="ci-legend" id="ci-docs-legend"></div>
+      </section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Guides</h2>
+            <p class="ci-panel-sub" id="ci-guides-sub"></p>
+          </div>
+        </div>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-guides-chart"></div>
+          <div class="ci-tooltip" id="ci-guides-tooltip" hidden></div>
+        </div>
+        <div class="ci-legend" id="ci-guides-legend"></div>
       </section>
 
     </div>

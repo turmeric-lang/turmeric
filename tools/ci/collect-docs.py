@@ -22,9 +22,16 @@ count.  A `README.md` in either directory is an index, not a finding or a
 plan, so it is excluded too.  Only `.md` files are counted: a stray image or
 marker is not a plan.
 
+It also counts guides and spices, which live in two repos: Turmeric guides in
+this one (docs/guides/), spices and spice guides in the sibling turmeric-spices
+checkout (spices/*/build.tur; docs/guides/ and spices/*/docs/guides/).  When the
+spices checkout is absent those fields are null rather than 0, so /ci can say
+"not measured" instead of charting a collapse to zero.
+
 Usage:
     collect-docs.py                      # one JSON object on stdout
     collect-docs.py --repo /path/to/repo
+    collect-docs.py --spices-repo /path/to/turmeric-spices
     collect-docs.py --explain            # per-bucket breakdown to stderr
 """
 
@@ -90,11 +97,36 @@ def count_md_tree(repo, subdir):
     return n
 
 
+def spice_names(spices_repo):
+    """Sorted names of the spices: each directory under spices/ with a manifest."""
+    base = os.path.join(spices_repo, "spices")
+    if not os.path.isdir(base):
+        return None
+    return sorted(
+        d for d in os.listdir(base)
+        if os.path.isfile(os.path.join(base, d, "build.tur"))
+        or os.path.isfile(os.path.join(base, d, "build.tur.sweet"))
+    )
+
+
+def count_spice_guides(spices_repo):
+    """Guides in the spices repo: top-level docs/guides plus each spice's own."""
+    n = count_md_tree(spices_repo, "docs/guides")
+    base = os.path.join(spices_repo, "spices")
+    if os.path.isdir(base):
+        for d in os.listdir(base):
+            n += count_md_tree(base, os.path.join(d, "docs/guides"))
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default=".", help="repository root (default: cwd)")
+    ap.add_argument("--spices-repo", default=None,
+                    help="turmeric-spices checkout (default: ../turmeric-spices "
+                         "relative to --repo, if present)")
     ap.add_argument("--explain", action="store_true",
                     help="write a per-bucket breakdown to stderr")
     args = ap.parse_args()
@@ -105,6 +137,12 @@ def main():
     spices_plans = count_md_tree(args.repo, "docs/upcoming/spices")
     open_reports = count_md(args.repo, "docs/reported")
     open_plans = count_md_tree(args.repo, "docs/upcoming")
+
+    spices_repo = args.spices_repo or os.path.join(
+        os.path.abspath(args.repo), "..", "turmeric-spices")
+    names = spice_names(spices_repo) if os.path.isdir(spices_repo) else None
+    turmeric_guides = count_md_tree(args.repo, "docs/guides")
+    spice_guides = count_spice_guides(spices_repo) if names is not None else None
 
     row = {
         "sha": git_sha(args.repo),
@@ -121,6 +159,12 @@ def main():
         "held_plans": held_plans,
         "v1_plans": v1_plans,
         "spices_plans": spices_plans,
+        # Guides and spices.  The spice fields are null when the spices repo
+        # was not checked out, which is "not measured", not "zero".
+        "turmeric_guides": turmeric_guides,
+        "spice_guides": spice_guides,
+        "spices": len(names) if names is not None else None,
+        "spice_names": names,
     }
 
     print(json.dumps(row, sort_keys=True))
@@ -132,6 +176,10 @@ def main():
         print(f"{'  held':>12}  {held_plans:>4}", file=sys.stderr)
         print(f"{'  v1':>12}  {v1_plans:>4}", file=sys.stderr)
         print(f"{'  spices':>12}  {spices_plans:>4}", file=sys.stderr)
+        print(f"{'guides':>12}  {turmeric_guides:>4}", file=sys.stderr)
+        print(f"{'spice guides':>12}  {spice_guides!s:>4}", file=sys.stderr)
+        print(f"{'spices':>12}  {len(names) if names is not None else None!s:>4}",
+              file=sys.stderr)
     return 0
 
 
