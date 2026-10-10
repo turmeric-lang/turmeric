@@ -253,6 +253,6 @@ used in the deployed page.
    from the submodule pin and deployed by hand (`wrangler`); the deploy script
    should refuse to run with a dirty submodule or a pin that differs from what was
    built, and stamp the pinned commit into the page footer as the source link.
-   Open: whether to consume a hypercollider release artifact instead of building
-   the WASM locally.
+   The WASM is built **locally** from the submodule (decided); consuming a
+   hypercollider release artifact instead is a later option, not a current one.
 4. **Is O1-first acceptable** as a stepping stone to ship sound early?
