@@ -2375,18 +2375,35 @@
 (defn httpd-req-cookie [conn : ptr<void> name : cstr] : cstr
   ```c
   if (!conn || !name || !*name) return "";
-  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
-  const char *cookie_hdr = NULL;
-  while (h) {
-      if (h->name && strcasecmp(h->name, "Cookie") == 0) {
-          cookie_hdr = h->value ? h->value : "";
-          break;
-      }
-      h = h->next;
-  }
-  if (!cookie_hdr) return "";
+  char *out = (char *)httpd_hycookie_hyparse_hyraw(httpd_hyreq_hyheader_hyraw(conn, "Cookie"), name);
+  /* httpd-request-accessor-cstr-leak: the value lives on the per-request
+   * owned-cstr list, so httpd-handle's cleanup frees it at request end. */
+  return out ? httpd_conn_own_cstr((HttpdConn *)conn, out) : "";
+  ```)
+;;; httpd-req-header-raw -- internal: a request header's value, or NULL when
+;;; the request has no such header (case-insensitive name).  Borrowed.
+(defn httpd-req-header-raw [conn : ptr<void> name : cstr] : cstr
+  ```c
+  if (!conn || !name) return NULL;
+  for (HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers; h; h = h->next)
+      if (h->name && strcasecmp(h->name, name) == 0) return h->value ? h->value : "";
+  return NULL;
+  ```)
+;;; httpd-cookie-parse-raw -- internal: one cookie's value out of a Cookie
+;;; header value.
+;;;
+;;; The walk every cookie accessor shares (httpd-req-cookie, httpd-string's
+;;; httpd-req-cookie-raw, tourist's req-cookie): `name=value` pairs separated
+;;; by `;` and optional blanks, names compared case-sensitively (RFC 6265).
+;;;
+;;; Returns a fresh malloc'd copy of the value (a present-empty cookie is a
+;;; fresh ""), which the caller frees, or NULL when `header` is NULL or the
+;;; cookie is absent.
+(defn httpd-cookie-parse-raw [header : cstr name : cstr] : cstr
+  ```c
+  if (!header || !name || !*name) return NULL;
   size_t nlen = strlen(name);
-  const char *p = cookie_hdr;
+  const char *p = header;
   while (*p) {
       /* Skip leading whitespace / separators. */
       while (*p == ' ' || *p == '\t' || *p == ';') p++;
@@ -2404,17 +2421,13 @@
       }
       if (klen == nlen && strncmp(kstart, name, nlen) == 0) {
           char *out = (char *)malloc(vlen + 1);
-          if (!out) return "";
+          if (!out) return NULL;
           if (vlen > 0) memcpy(out, vstart, vlen);
           out[vlen] = '\0';
-          /* httpd-request-accessor-cstr-leak: register the fresh malloc on the
-           * per-request owned-cstr list so httpd-handle's cleanup frees it at
-           * request end -- the docstring's "per-call ownership; do not free"
-           * contract is now actually implemented. */
-          return httpd_conn_own_cstr((HttpdConn *)conn, out);
+          return out;
       }
   }
-  return "";
+  return NULL;
   ```)
 ;;; CookieOpts -- fully-specified Set-Cookie attributes.
 ;;;
@@ -2502,12 +2515,29 @@
 (defn httpd-set-cookie! [conn : ptr<void> opts : CookieOpts] : nil
   ```c
   if (!conn) return;
+  char *buf = (char *)httpd_hycookie_hyformat(opts);
+  if (!buf) return;
+  __TUR_CNAME_httpd-resp-header-add!__((void *)conn, "Set-Cookie", buf);
+  free(buf);
+  ```)
+;;; httpd-cookie-format -- internal: the Set-Cookie header value for a
+;;; CookieOpts.
+;;;
+;;; `name=value` then Path, Domain, Max-Age, Secure, HttpOnly and SameSite as
+;;; CookieOpts says.  Shared by httpd-set-cookie! and tourist's set-cookie!.
+;;;
+;;; Returns a fresh malloc'd string the caller frees, or NULL when the name is
+;;; empty or memory ran out.
+;;;
+;;; Since: tourist-on-stdlib-httpd H5
+(defn httpd-cookie-format [opts : CookieOpts] : cstr
+  ```c
   const char *cname  = opts.name      ? opts.name      : "";
   const char *cval   = opts.value     ? opts.value     : "";
   const char *cpath  = opts.path      ? opts.path      : "";
   const char *cdom   = opts.domain    ? opts.domain    : "";
   const char *csame  = opts.same_site ? opts.same_site : "";
-  if (!*cname) return;
+  if (!*cname) return NULL;
   /* Sized to the attributes rather than a fixed 2 KiB: the old buffer summed
    * snprintf's would-be lengths into n, so once name=value passed 2 KiB,
    * sizeof(buf) - n wrapped and the next attribute was written past the end
@@ -2515,7 +2545,7 @@
   size_t cap = strlen(cname) + strlen(cval) + strlen(cpath) + strlen(cdom)
              + strlen(csame) + 128;
   char *buf = (char *)malloc(cap);
-  if (!buf) return;
+  if (!buf) return NULL;
   size_t n = 0;
   #define HTTPD_COOKIE_ADD(...) do { \
       int w_ = snprintf(buf + n, cap - n, __VA_ARGS__); \
@@ -2529,8 +2559,7 @@
   if (opts.http_only)      HTTPD_COOKIE_ADD("; HttpOnly");
   if (*csame)              HTTPD_COOKIE_ADD("; SameSite=%s", csame);
   #undef HTTPD_COOKIE_ADD
-  __TUR_CNAME_httpd-resp-header-add!__((void *)conn, "Set-Cookie", buf);
-  free(buf);
+  return buf;
   ```)
 ;; =============================================================================
 ;; M3: Body parsers -- URL-encoded forms + JSON
@@ -2578,10 +2607,27 @@
   ```c
   if (!conn || !field || !*field) return "";
   HttpdConn *c = (HttpdConn *)conn;
-  if (!c->body || c->body_len <= 0) return "";
+  char *out = (char *)httpd_hyform_hyparse_hyraw((void *)c->body, (int64_t)c->body_len, field);
+  /* httpd-request-accessor-cstr-leak: register on the per-request
+   * owned-cstr list so httpd-handle's cleanup frees it at request end. */
+  return out ? httpd_conn_own_cstr(c, out) : "";
+  ```)
+;;; httpd-form-parse-raw -- internal: one field of a URL-encoded body.
+;;;
+;;; The walk every form accessor shares (httpd-req-form, httpd-string's
+;;; httpd-req-form-raw, tourist's form-param): `name=value` pairs separated by
+;;; `&`, the value percent-decoded with `+` as a space.  Names are compared as
+;;; written (case-sensitive, not decoded).
+;;;
+;;; Returns a fresh malloc'd decoded value (a present-empty field is a fresh
+;;; ""), which the caller frees, or NULL when the body is empty or the field
+;;; is absent.
+(defn httpd-form-parse-raw [body : ptr<void> len : int field : cstr] : cstr
+  ```c
+  if (!body || len <= 0 || !field || !*field) return NULL;
   size_t flen = strlen(field);
-  const char *p   = c->body;
-  const char *end = c->body + c->body_len;
+  const char *p   = (const char *)body;
+  const char *end = p + len;
   while (p < end) {
       const char *kstart = p;
       while (p < end && *p != '=' && *p != '&') p++;
@@ -2597,7 +2643,7 @@
       if (klen == flen && strncmp(kstart, field, flen) == 0) {
           size_t vlen = vend ? (size_t)(vend - vstart) : 0;
           char *out = (char *)malloc(vlen + 1);
-          if (!out) return "";
+          if (!out) return NULL;
           size_t oi = 0;
           for (size_t i = 0; i < vlen; i++) {
               char ch = vstart[i];
@@ -2614,13 +2660,11 @@
               }
           }
           out[oi] = '\0';
-          /* httpd-request-accessor-cstr-leak: register on the per-request
-           * owned-cstr list so httpd-handle's cleanup frees it at request end. */
-          return httpd_conn_own_cstr(c, out);
+          return out;
       }
       if (p < end && *p == '&') p++;
   }
-  return "";
+  return NULL;
   ```)
 ;;; httpd-req-json -- lazily parse the request body as JSON.
 ;;;
@@ -3063,49 +3107,11 @@
 (defn httpd-mw-basic-auth-check [conn : ptr<void> verifier : int] : int
   ```c
   if (!conn || !verifier) return 0;
-  const char *hdr = httpd_hyreq_hyheader((void *)conn, "Authorization");
-  if (!hdr || !*hdr) return 0;
-  /* Must start with "Basic ", case-insensitive. */
-  if (strncasecmp(hdr, "Basic ", 6) != 0) return 0;
-  const char *b64 = hdr + 6;
-  while (*b64 == ' ') b64++;
-  size_t blen = strlen(b64);
-  if (blen == 0) return 0;
-  /* Base64-decode into a per-call heap buffer.  Output size <= input size. */
-  /* Designated initializers with ranges ([0 ... 255] = -1) are a GNU
-   * extension that c2mir cannot parse, which pushed every httpd program to
-   * the JIT's cc fallback.  Build the table at runtime instead. */
-  signed char tab[256];
-  for (int i = 0; i < 256; i++) tab[i] = -1;
-  for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');
-  for (int i = 'a'; i <= 'z'; i++) tab[i] = (signed char)(i - 'a' + 26);
-  for (int i = '0'; i <= '9'; i++) tab[i] = (signed char)(i - '0' + 52);
-  tab[(int)'+'] = 62;
-  tab[(int)'/'] = 63;
-  char *raw = (char *)malloc(blen + 1);
+  char *raw = (char *)httpd_hybasic_hyauth_hydecode_hyraw(httpd_hyreq_hyheader_hyraw(conn, "Authorization"));
   if (!raw) return 0;
-  size_t   out  = 0;
-  uint32_t buf  = 0;
-  int      bits = 0;
-  for (size_t i = 0; i < blen; i++) {
-      char ch = b64[i];
-      if (ch == '=' || ch == ' ' || ch == '\r' || ch == '\n') continue;
-      signed char v = tab[(unsigned char)ch];
-      if (v < 0) { free(raw); return 0; }   /* malformed */
-      buf = (buf << 6) | (uint32_t)v;
-      bits += 6;
-      if (bits >= 8) {
-          bits -= 8;
-          raw[out++] = (char)((buf >> bits) & 0xFFu);
-      }
-  }
-  raw[out] = '\0';
-  /* A decoded NUL would truncate the user or password the verifier sees
-   * ("secret\0junk" checked as "secret"): refuse the header instead. */
-  if (memchr(raw, '\0', out)) { free(raw); return 0; }
-  /* Split on the first ':' -- everything before is user, after is pass. */
-  char *colon = (char *)memchr(raw, ':', out);
-  if (!colon) { free(raw); return 0; }
+  /* Split on the first ':' -- everything before is user, after is pass
+   * (httpd-basic-auth-decode-raw guarantees there is one). */
+  char *colon = strchr(raw, ':');
   *colon = '\0';
   const char *user = raw;
   const char *pass = colon + 1;
@@ -3118,6 +3124,57 @@
   if (ok) __TUR_CNAME_httpd-set-attr!__((void *)conn, "user", user);
   free(raw);
   return (int)(ok ? 1 : 0);
+  ```)
+;;; httpd-basic-auth-decode-raw -- internal: the `user:pass` an Authorization
+;;; header carries.
+;;;
+;;; Accepts `Basic <base64>` (scheme case-insensitive).  Shared by
+;;; mw-basic-auth and tourist's basic-auth.  Returns a fresh malloc'd
+;;; `user:pass` string the caller frees, or NULL when the header is NULL, not
+;;; Basic, not valid base64, has no ':' in it, or decodes to a NUL byte (which
+;;; would let "secret\0junk" be checked as "secret").
+;;;
+;;; Since: tourist-on-stdlib-httpd H5
+(defn httpd-basic-auth-decode-raw [hdr : cstr] : cstr
+  ```c
+  if (!hdr || !*hdr) return NULL;
+  /* Must start with "Basic ", case-insensitive. */
+  if (strncasecmp(hdr, "Basic ", 6) != 0) return NULL;
+  const char *b64 = hdr + 6;
+  while (*b64 == ' ') b64++;
+  size_t blen = strlen(b64);
+  if (blen == 0) return NULL;
+  /* Designated initializers with ranges ([0 ... 255] = -1) are a GNU
+   * extension that c2mir cannot parse, which pushed every httpd program to
+   * the JIT's cc fallback.  Build the table at runtime instead. */
+  signed char tab[256];
+  for (int i = 0; i < 256; i++) tab[i] = -1;
+  for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');
+  for (int i = 'a'; i <= 'z'; i++) tab[i] = (signed char)(i - 'a' + 26);
+  for (int i = '0'; i <= '9'; i++) tab[i] = (signed char)(i - '0' + 52);
+  tab[(int)'+'] = 62;
+  tab[(int)'/'] = 63;
+  /* Output size <= input size. */
+  char *raw = (char *)malloc(blen + 1);
+  if (!raw) return NULL;
+  size_t   out  = 0;
+  uint32_t buf  = 0;
+  int      bits = 0;
+  for (size_t i = 0; i < blen; i++) {
+      char ch = b64[i];
+      if (ch == '=' || ch == ' ' || ch == '\r' || ch == '\n') continue;
+      signed char v = tab[(unsigned char)ch];
+      if (v < 0) { free(raw); return NULL; }   /* malformed */
+      buf = (buf << 6) | (uint32_t)v;
+      bits += 6;
+      if (bits >= 8) {
+          bits -= 8;
+          raw[out++] = (char)((buf >> bits) & 0xFFu);
+      }
+  }
+  raw[out] = '\0';
+  if (memchr(raw, '\0', out) || !memchr(raw, ':', out)) { free(raw); return NULL; }
+  return raw;
   ```)
 ;;; httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate.
 
@@ -5267,6 +5324,36 @@
 
 (defn httpd-mw-static-try [conn : ptr<void> root : cstr] : int
   ```c
+  if (!conn) return 0;
+  return __TUR_CNAME_httpd-static-serve!__(conn, root, ((HttpdConn *)conn)->path) ? 1 : 0;
+  ```)
+;;; httpd-static-serve! -- answer a request with a file under a root directory.
+;;;
+;;; mw-static's file serving, for callers that pick the path themselves (a
+;;; framework mapping `/assets/*` onto a directory, say).  `rel` is joined onto
+;;; `root` (its query string ignored); the file must resolve, symlinks and all,
+;;; to a regular file inside `root`, and no segment of `rel` may start with '.'
+;;; (`.well-known` excepted) or contain a backslash.  A hit sets status 200,
+;;; the body (binary-safe), `Content-Type` from the extension and a strong
+;;; `ETag` of `"<size hex>-<mtime hex>"`; an `If-None-Match` naming that tag
+;;; (or `*`) gets 304 with the ETag and no body.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   root -- filesystem directory to serve from
+;;;   rel  -- the path to look up under it, e.g. "/css/site.css"
+;;;
+;;; Returns:
+;;;   bool -- true when it answered (200 or 304), false on a miss (nothing
+;;;           written).
+;;;
+;;; Example:
+;;;   (when (not (httpd-static-serve! c "./public" "/index.html"))
+;;;     (httpd-resp-status! c 404))
+;;;
+;;; Since: tourist-on-stdlib-httpd H5
+(defn httpd-static-serve! [conn : ptr<void> root : cstr rel : cstr] : bool
+  ```c
   #include <sys/stat.h>
   #include <fcntl.h>
   #include <unistd.h>
@@ -5275,8 +5362,7 @@
   #define O_NOFOLLOW 0
   #endif
   if (!conn || !root || !*root) return 0;
-  HttpdConn *c = (HttpdConn *)conn;
-  const char *rp = c->path;
+  const char *rp = rel;
   if (!rp || !*rp) return 0;
   /* security-audit-plan M-4.  The request path is used up to its query
    * string, and refused outright when any segment starts with '.' (".", "..",
@@ -5341,7 +5427,23 @@
            (unsigned long long)sb.st_mtime);
   /* Conditional request: If-None-Match. */
   const char *inm = httpd_hyreq_hyheader((void *)conn, "If-None-Match");
-  if (inm && *inm && strcmp(inm, etag) == 0) {
+  int inm_hit = 0;
+  if (inm && *inm) {
+      /* A list of tags, or `*`; W/ is ignored (weak comparison). */
+      const char *q = inm;
+      size_t el = strlen(etag);
+      while (*q && !inm_hit) {
+          while (*q == ' ' || *q == '\t' || *q == ',') q++;
+          const char *ts = q;
+          while (*q && *q != ',') q++;
+          const char *te = q;
+          while (te > ts && (te[-1] == ' ' || te[-1] == '\t')) te--;
+          if (te - ts == 1 && *ts == '*') inm_hit = 1;
+          if (te - ts >= 2 && (ts[0] == 'W' || ts[0] == 'w') && ts[1] == '/') ts += 2;
+          if ((size_t)(te - ts) == el && memcmp(ts, etag, el) == 0) inm_hit = 1;
+      }
+  }
+  if (inm_hit) {
       close(ffd);
       __TUR_CNAME_httpd-resp-status!__((void *)conn, 304);
       __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
@@ -5361,12 +5463,10 @@
   close(ffd);
   if (got != sz) { free(buf); return 0; }
   buf[got] = '\0';
-  /* Hand the buffer to __TUR_CNAME_httpd-resp-body!__ which strdups its arg; free ours. */
   __TUR_CNAME_httpd-resp-status!__((void *)conn, 200);
-  /* __TUR_CNAME_httpd-resp-body!__ uses strlen so binary files with embedded NULs are
-   * truncated. The mw-static API ships as a "small static files" surface;
-   * binary safety is a future enhancement. */
-  __TUR_CNAME_httpd-resp-body!__((void *)conn, buf);
+  /* Binary-safe: the body is the file's bytes, NULs included (it used to go
+   * through httpd-resp-body!, whose strlen cut a binary file short). */
+  __TUR_CNAME_httpd-resp-body-bytes!__((void *)conn, (void *)buf, (int64_t)got);
   free(buf);
   {
       /* The type comes from the path without its query string. */

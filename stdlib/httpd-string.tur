@@ -40,43 +40,8 @@
 
 (defn httpd-req-cookie-raw [conn : ptr<void> name : cstr] : cstr
   ```c
-  if (!conn || !name || !*name) return NULL;
-  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
-  const char *cookie_hdr = NULL;
-  while (h) {
-      if (h->name && strcasecmp(h->name, "Cookie") == 0) {
-          cookie_hdr = h->value ? h->value : "";
-          break;
-      }
-      h = h->next;
-  }
-  if (!cookie_hdr) return NULL;
-  size_t nlen = strlen(name);
-  const char *p = cookie_hdr;
-  while (*p) {
-      /* Skip leading whitespace / separators. */
-      while (*p == ' ' || *p == '\t' || *p == ';') p++;
-      if (!*p) break;
-      const char *kstart = p;
-      while (*p && *p != '=' && *p != ';') p++;
-      size_t klen = (size_t)(p - kstart);
-      const char *vstart = NULL;
-      size_t vlen = 0;
-      if (*p == '=') {
-          p++;
-          vstart = p;
-          while (*p && *p != ';') p++;
-          vlen = (size_t)(p - vstart);
-      }
-      if (klen == nlen && strncmp(kstart, name, nlen) == 0) {
-          char *out = (char *)malloc(vlen + 1);
-          if (!out) return NULL;
-          if (vlen > 0) memcpy(out, vstart, vlen);
-          out[vlen] = '\0';
-          return out;
-      }
-  }
-  return NULL;
+  if (!conn) return NULL;
+  return httpd_hycookie_hyparse_hyraw(httpd_hyreq_hyheader_hyraw(conn, "Cookie"), name);
   ```)
 ;;; httpd-req-cookie-opt -- read a cookie value as an optional owned String.
 ;;;
@@ -110,49 +75,9 @@
 
 (defn httpd-req-form-raw [conn : ptr<void> field : cstr] : cstr
   ```c
-  if (!conn || !field || !*field) return NULL;
+  if (!conn) return NULL;
   HttpdConn *c = (HttpdConn *)conn;
-  if (!c->body || c->body_len <= 0) return NULL;
-  size_t flen = strlen(field);
-  const char *p   = c->body;
-  const char *end = c->body + c->body_len;
-  while (p < end) {
-      const char *kstart = p;
-      while (p < end && *p != '=' && *p != '&') p++;
-      size_t klen = (size_t)(p - kstart);
-      const char *vstart = NULL;
-      const char *vend   = NULL;
-      if (p < end && *p == '=') {
-          p++;
-          vstart = p;
-          while (p < end && *p != '&') p++;
-          vend = p;
-      }
-      if (klen == flen && strncmp(kstart, field, flen) == 0) {
-          size_t vlen = vend ? (size_t)(vend - vstart) : 0;
-          char *out = (char *)malloc(vlen + 1);
-          if (!out) return NULL;
-          size_t oi = 0;
-          for (size_t i = 0; i < vlen; i++) {
-              char ch = vstart[i];
-              if (ch == '+') {
-                  out[oi++] = ' ';
-              } else if (ch == '%' && i + 2 < vlen) {
-                  char hex[3] = { vstart[i+1], vstart[i+2], '\0' };
-                  /* strtoul rejects bad hex -> 0; that's fine here. */
-                  unsigned long uv = strtoul(hex, NULL, 16);
-                  out[oi++] = (char)uv;
-                  i += 2;
-              } else {
-                  out[oi++] = ch;
-              }
-          }
-          out[oi] = '\0';
-          return out;
-      }
-      if (p < end && *p == '&') p++;
-  }
-  return NULL;
+  return httpd_hyform_hyparse_hyraw((void *)c->body, (int64_t)c->body_len, field);
   ```)
 ;;; httpd-req-form-opt -- look up a URL-encoded form field as an optional String.
 ;;;

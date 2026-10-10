@@ -239,13 +239,19 @@ let [composed mw-static("./public" router-mw(r))]
 The response carries a `Content-Type` derived from the file extension
 (small built-in table covering HTML / CSS / JS / JSON / TXT / common
 image formats / WASM) and an `ETag` of the form `"<size>-<mtime>"`
-(both in hex). A subsequent request carrying a matching
-`If-None-Match` short-circuits with `304 Not Modified` and an empty
-body -- the file is `stat`'d but never `read`.
+(both in hex). A subsequent request whose `If-None-Match` names that tag
+(in a list, with or without `W/`, or `*`) short-circuits with
+`304 Not Modified` and an empty body -- the file is `stat`'d but never
+`read`. The body is binary-safe (it used to stop at the first NUL byte).
+
+The file serving itself is `httpd-static-serve! conn root rel`, for callers
+that choose the path -- a framework mapping `/assets/*` onto a directory
+(tourist's `serve-static!` is built on it). It returns `true` when it
+answered, and applies the same guards: the resolved file must sit inside
+`root`, and no segment may start with `.` (`.well-known` excepted).
 
 Files are read fully into memory. For very large files use a
-streaming backend instead -- the public surface today returns a
-buffered body via `httpd-resp-body!`.
+streaming backend instead.
 
 ### mw-basic-auth + request attrs
 
