@@ -56,6 +56,14 @@ the plan's NG-C turned up a test-coverage gap in spices CI, which is open.
 | ~~[nil-argument-to-ptr-param-emits-void-expression](../archive/nil-argument-to-ptr-param-emits-void-expression.md)~~ | low-medium (compile failure) | **RESOLVED 2026-10-10** (archived): a literal `nil` at a `ptr<void>` parameter is rewritten to the `0` null literal every back end already handles, so it compiles on every call shape and is 0 under `--interpret` too; any other `:void` argument is now `TUR-E0001`. Fixing it exposed a captureless reactor callback crashing in `call_tur_timer_cb`: the five `reactor-add-*` wrappers took `cb : int`, so a bare C function pointer was called as a fat box. They are `^fat` now, like `local-spawn`. The reactor guide's examples run as written. Pinned by `nil-arg-to-ptr-param`, `nil-arg-to-ptr-param-inline-c`, `errors/nil-nonliteral-arg-to-ptr-param`, `reactor-captureless-callbacks`, `reactor-fd-captureless` |
 | [spice-suites-without-libturi-run-unsanitized](spice-suites-without-libturi-run-unsanitized.md) | low-medium (coverage gap) | A sanitized `tur` adds `-fsanitize` to a program only when it links `libturi` (`main.c:2989`), so in spices CI only the suites that pull in libturi (e.g. through the reactor) run under LeakSanitizer. A deliberate `nng_msg` leak in `nng/ctx` passes the suite and is caught with `TUR_CC_FLAGS=-fsanitize=address,undefined`. Forcing it on fails two older nng suites on test-side leaks |
 
+## Found writing the prob spice guide (filed 2026-10-10)
+
+Reproduced on v0.55.1 and v0.63.9; the repro is a spices program, so it needs a
+`turmeric-spices` checkout.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [emitted-c-signed-overflow-no-fwrapv](emitted-c-signed-overflow-no-fwrapv.md) | high (silently wrong results) | The driver's default `cc` flags have no `-fwrapv`, so the emitted C's signed `int64_t` multiply in a wrapping hash (`prob/hash.tur`) is undefined behavior and the optimizer acts on it: `tur-prob`'s Count-Min returned 0 for every key. Correct at `-O0` or with `-fwrapv`; UBSan flags the multiplications; the spice's own tests pass either way. Workaround: `TUR_CC_FLAGS` with `-fwrapv` |
 ## Found auditing the spices plans (filed 2026-10-07)
 
 Both rows were carried out of `docs/upcoming/spices/` when its resolved plans
