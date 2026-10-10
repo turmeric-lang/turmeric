@@ -37,11 +37,12 @@ directory is worse for triage than no index.
 ## Found refining the nng async plan (filed 2026-10-10)
 
 Spiking [nng-async-plan](../upcoming/spices/nng-async-plan.md) against v0.63.9
-turned up one compiler defect. The reactor guide's examples are affected by it.
+turned up one compiler defect. The reactor guide's examples were affected by
+it. It is resolved, along with a second defect fixing it exposed.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [nil-argument-to-ptr-param-emits-void-expression](nil-argument-to-ptr-param-emits-void-expression.md) | low-medium (compile failure) | `tur check` accepts `nil` for a `ptr<void>` parameter, then the emitter splices in the unit placeholder `((void)0)` and cc rejects the call. Every reactor-guide example that passes `nil` as `user-data` hits it (12 sites, both syntaxes). Workaround: `(:: 0 :ptr<void>)` |
+| ~~[nil-argument-to-ptr-param-emits-void-expression](../archive/nil-argument-to-ptr-param-emits-void-expression.md)~~ | low-medium (compile failure) | **RESOLVED 2026-10-10** (archived): a literal `nil` at a `ptr<void>` parameter is rewritten to the `0` null literal every back end already handles, so it compiles on every call shape and is 0 under `--interpret` too; any other `:void` argument is now `TUR-E0001`. Fixing it exposed a captureless reactor callback crashing in `call_tur_timer_cb`: the five `reactor-add-*` wrappers took `cb : int`, so a bare C function pointer was called as a fat box. They are `^fat` now, like `local-spawn`. The reactor guide's examples run as written. Pinned by `nil-arg-to-ptr-param`, `nil-arg-to-ptr-param-inline-c`, `errors/nil-nonliteral-arg-to-ptr-param`, `reactor-captureless-callbacks`, `reactor-fd-captureless` |
 
 ## Found auditing the spices plans (filed 2026-10-07)
 

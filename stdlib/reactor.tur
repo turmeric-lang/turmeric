@@ -193,10 +193,21 @@
 ;;; Since: Phase R2
 
 
+;; ^fat on cb (the same fix local-spawn's body got): a captureless callback is
+;; a bare C function pointer, not a heap fat-closure box, and reactor.c calls
+;; every cb through its fat box's slot 0 -- so a captureless lambda passed as
+;; a plain `cb : int` was called through its own code bytes (SIGSEGV in
+;; call_tur_*_cb).  Typing cb `^fat` auto-shims it into a heap { fatshim, fn }
+;; box the reactor owns and frees at teardown, and lets the checker hold the
+;; callback to the arity reactor.c calls it with.  The shim's entry is the
+;; all-int64_t carrier signature reactor.c's TurFdCbFn / TurTimerCbFn typedefs
+;; call through (checked by tests/run-fnsan.sh).
+;; See docs/archive/nil-argument-to-ptr-param-emits-void-expression.md.
+
 (defn reactor-add-fd [^borrow r : Reactor
                       fd : int
                       events : int
-                      cb : int
+                      ^fat cb : (fn [int int ptr<void>] nil)
                       user-data : ptr<void>]
   #fx{}
   : EventSourceId
@@ -270,7 +281,7 @@
 
 (defn reactor-add-timer [^borrow r : Reactor
                          delay-ms : int
-                         cb : int
+                         ^fat cb : (fn [int ptr<void>] nil)
                          user-data : ptr<void>]
   #fx{}
   : EventSourceId
@@ -304,7 +315,7 @@
 (defn reactor-add-interval [^borrow r : Reactor
                             first-ms : int
                             interval-ms : int
-                            cb : int
+                            ^fat cb : (fn [int ptr<void>] nil)
                             user-data : ptr<void>]
   #fx{}
   : EventSourceId
@@ -343,7 +354,7 @@
 
 (defn reactor-add-signal [^borrow r : Reactor
                           signum : int
-                          cb : int
+                          ^fat cb : (fn [int int ptr<void>] nil)
                           user-data : ptr<void>]
   #fx{}
   : EventSourceId
@@ -377,7 +388,7 @@
 
 (defn reactor-add-chan [^borrow r : Reactor
                         ch : ptr<void>
-                        cb : int
+                        ^fat cb : (fn [int int ptr<void>] nil)
                         user-data : ptr<void>]
   #fx{}
   : EventSourceId

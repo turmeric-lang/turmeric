@@ -420,6 +420,18 @@ malloc'd cell (`promise-fulfill`, `promise-fail`, `future-of`,
 `future-error-of`). Both are independent of the typing work and are cheap to
 fix on their own.
 
+## Done 2026-10-10 -- five plain `cb : int` reactor callbacks S1 did not count
+
+S1 measured `^fat <name> : int` and `<name> : ptr<void>`. A callback spelled
+plain `cb : int` (no `^fat`) matched neither pattern, and `stdlib/reactor.tur`
+had five: `reactor-add-fd`, `-timer`, `-interval`, `-signal`, `-chan`. They
+were worse than unchecked. A captureless lambda arrived as a bare C function
+pointer, and reactor.c called it through a fat box's slot 0 (SIGSEGV). They
+are now `^fat cb : (fn [int int ptr<void>] nil)` / `(fn [int ptr<void>] nil)`,
+as `local-spawn`'s body already was. See
+[nil-argument-to-ptr-param-emits-void-expression](../archive/nil-argument-to-ptr-param-emits-void-expression.md).
+A future sweep should grep for bare `<name> : int` callback parameters as well.
+
 ## Done 2026-09-28 -- S1's `^fat : int` class is gone, and one checker hole found on the way
 
 **S1, `^fat <name> : int` -- zero left in `stdlib/`** (was 24; httpd's 17

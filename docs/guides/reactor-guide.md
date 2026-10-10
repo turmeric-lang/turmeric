@@ -29,7 +29,7 @@ runs *outside* the fiber scheduler, or for dedicated non-fiber threads.
 ## Quick start
 
 ```turmeric
-(import reactor)
+(load "stdlib/reactor.tur")
 
 (defn main [] : int
   (let [r (reactor-new)]
@@ -42,7 +42,7 @@ runs *outside* the fiber scheduler, or for dedicated non-fiber threads.
 ```
 
 ```sweet-exp
-import reactor
+load "stdlib/reactor.tur"
 
 defn main [] :int
   let [r reactor-new()]
@@ -63,7 +63,7 @@ The simplest pattern: register sources, run the loop, clean up.
 This is the pattern used by the `tur/httpd` listener thread.
 
 ```turmeric
-(import reactor)
+(load "stdlib/reactor.tur")
 
 ;; accept-loop is a plain OS thread entry point -- no fibers required.
 (defn start-listener [listen-fd : int stop-ch : ptr<void>] : nil
@@ -86,7 +86,7 @@ This is the pattern used by the `tur/httpd` listener thread.
 ```
 
 ```sweet-exp
-import reactor
+load "stdlib/reactor.tur"
 
 ;; accept-loop is a plain OS thread entry point -- no fibers required.
 defn start-listener [listen-fd :int stop-ch :ptr<void>] :nil
@@ -115,8 +115,8 @@ calls `reactor-wake` after `chan-send` so the blocking poll returns
 promptly.
 
 ```turmeric
-(import reactor)
-(import chan)
+(load "stdlib/reactor.tur")
+(load "stdlib/chan.tur")
 
 ;; In the reactor thread:
 (defn run-with-stop [stop-ch : ptr<void>] : nil
@@ -138,8 +138,8 @@ promptly.
 ```
 
 ```sweet-exp
-import reactor
-import chan
+load "stdlib/reactor.tur"
+load "stdlib/chan.tur"
 
 ;; In the reactor thread:
 defn run-with-stop [stop-ch :ptr<void>] :nil
@@ -328,11 +328,11 @@ To hand work across threads: use a channel and call `reactor-wake` after
 
 ## Linking
 
-Programs that import `reactor` must link against `libturi`:
+Programs that load `stdlib/reactor.tur` must link against `libturi`:
 
 ```turmeric
-;; The autolink hint is included when you (import reactor).
-;; For standalone files without import, add this defn:
+;; The autolink hint is included when you (load "stdlib/reactor.tur").
+;; For standalone files that only declare the tur_reactor_* externs, add:
 (defn reactor-link [] : int
   ```c /* __tur_autolink__: -lturi */
   return 0;
@@ -340,8 +340,8 @@ Programs that import `reactor` must link against `libturi`:
 ```
 
 ```sweet-exp
-;; The autolink hint is included when you import reactor.
-;; For standalone files without import, add this defn:
+;; The autolink hint is included when you load "stdlib/reactor.tur".
+;; For standalone files that only declare the tur_reactor_* externs, add:
 defn reactor-link [] :int
   ```c /* __tur_autolink__: -lturi */
   return 0;

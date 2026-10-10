@@ -1,0 +1,60 @@
+;; reactor-add-fd with a captureless callback and `nil` user-data -- the
+;; reactor guide's accept-loop shape.  Before the fix the `nil` emitted
+;; `((void)0)` (a cc error), and with a null pointer spelled out instead the
+;; captureless callback crashed the reactor, because the wrapper's `cb : int`
+;; passed a bare C function pointer where reactor.c expects a fat box.  See
+;; reactor-captureless-callbacks for the other wrappers.
+;;
+;; Expected output:
+;;   readable events=1
+;;   poll-count=1
+
+(load "stdlib/reactor.tur")
+
+(defn make-pipe [] : ptr<void>
+  ```c
+  int *fds = (int *)malloc(2 * sizeof(int));
+  if (pipe(fds) < 0) { free(fds); return NULL; }
+  return (void *)fds;
+  ```)
+
+(defn pipe-read-fd [p : ptr<void>] : int
+  ```c
+  return (int64_t)((int *)p)[0];
+  ```)
+
+(defn pipe-write-byte [p : ptr<void>] : nil
+  ```c
+  char b = 1;
+  (void)!write(((int *)p)[1], &b, 1);
+  ```)
+
+(defn pipe-close [p : ptr<void>] : nil
+  ```c
+  close(((int *)p)[0]);
+  close(((int *)p)[1]);
+  free(p);
+  ```)
+
+(defn print-events [events : int] : nil
+  ```c
+  printf("readable events=%lld\n", (long long)events);
+  ```)
+
+(defn print-poll-count [n : int] : nil
+  ```c
+  printf("poll-count=%lld\n", (long long)n);
+  ```)
+
+(defn main [] : int
+  (let [p (make-pipe)
+        r (reactor-new)]
+    (pipe-write-byte p)
+    (reactor-add-fd r (pipe-read-fd p) READ
+      (fn [id events user] : nil (print-events events))
+      nil)
+    (let [n (reactor-poll r 200)]
+      (print-poll-count n)
+      (reactor-free r)
+      (pipe-close p)
+      0)))

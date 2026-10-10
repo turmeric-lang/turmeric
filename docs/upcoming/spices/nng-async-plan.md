@@ -4,8 +4,9 @@
 > below was spiked end to end against tur v0.63.9 and nng v1.12.4 (see
 > "Spike record"). The spike code was not committed.
 > Tracks: `docs/archive/nng-spice-plan.md` NG5 follow-ups (aio + ctx, reactor fd).
-> Scope: `spices/nng/` in turmeric-spices. No compiler change is needed. One
-> compiler defect was found and filed (see "Found on the way").
+> Scope: `spices/nng/` in turmeric-spices. No compiler change is needed. Two
+> compiler/stdlib defects were found on the way and are fixed (see "Found on
+> the way").
 > Builds on: `tur-nng` 0.1.0 (NG0-NG4, shipped), nng pinned v1.12.4.
 > Needs: tur >= v0.63.7 for `(Result (Option T) E)` from inline C (the nested
 > builders fix).
@@ -41,7 +42,7 @@ of substance, so a reviewer of revision 1 can see what moved and why.
 | 17 | `nng_close` blocks while contexts are open | The header says so. The 1.12.4 code reaps idle contexts and waits only for in-progress API calls. A later `nng_ctx_close` returns `NNG_ECLOSED` (spiked) | `ctx-close` returns `(Result nil int)`; order is advice, not a deadlock |
 | 18 | Opaque named `Ctx` | `tourist/types.tur` already owns `Ctx`, and opaque names resolve globally (the reason `Buf` became `Payload`) | `NngCtx` |
 | 19 | An `Aio` is one-thread, like a `Socket` | nng socket calls take the socket's locks, so they are safe across threads. What is not shareable is a stateful protocol's one global context: a second pending REP receive is `NNG_ESTATE` (`rep.c:438`), and a second REQ send cancels the first | Motivation for NG-C rewritten |
-| 20 | Examples | The aio example imported `recv-aio` from `nng/msg`. The ctx example sent with no message. The reactor loop never terminated. Every example passed `nil` as `ptr<void>` user-data, which does not compile (report below) | All examples rewritten and spiked |
+| 20 | Examples | The aio example imported `recv-aio` from `nng/msg`. The ctx example sent with no message. The reactor loop never terminated. Every example passed `nil` as `ptr<void>` user-data, which did not compile on v0.63.9 (fixed since; see "Found on the way") | All examples rewritten and spiked |
 | 21 | Poll fds and contexts can coexist | nng documents poll fds as unsupported on a socket with contexts in use (`nng_ctx.5`) | Stated as a per-socket rule |
 
 ---
@@ -343,7 +344,7 @@ Canonical reactor loop (spiked):
             (fn [id events user] : nil
               (do (set! seen (drain sub seen))
                   (when (>= seen want) (reactor-stop r))))
-            (:: 0 :ptr<void>))]   ;; not `nil` -- see "Found on the way"
+            (:: 0 :ptr<void>))]   ;; `nil` from the release after v0.63.9
   (reactor-run r)
   (reactor-remove r src)
   (reactor-free r)
@@ -796,10 +797,18 @@ each one.
 
 ### Found on the way
 
-- [nil-argument-to-ptr-param-emits-void-expression](../../reported/nil-argument-to-ptr-param-emits-void-expression.md):
-  `tur check` accepts `nil` for a `ptr<void>` parameter, and cc then rejects
-  `((void)0)`. Every reactor-guide example hits it. This plan's examples spell
-  the null user-data `(:: 0 :ptr<void>)`.
+Both are **resolved** on `main` after v0.63.9 and archived in
+[nil-argument-to-ptr-param-emits-void-expression](../../archive/nil-argument-to-ptr-param-emits-void-expression.md):
+
+- `tur check` accepted `nil` for a `ptr<void>` parameter, and cc then rejected
+  `((void)0)`. A literal `nil` there is now the null pointer.
+- A captureless callback passed to a `reactor-add-*` wrapper crashed the
+  reactor, because the wrapper took `cb : int`. The callbacks are `^fat` now.
+
+This plan's examples spell the null user-data `(:: 0 :ptr<void>)`, so they
+also run on v0.63.9, which is what `install-tur.sh` fetches today. From the
+next release, `nil` is the idiomatic spelling. Every reactor callback in this
+plan captures something, so the second defect never reached them.
 
 ---
 

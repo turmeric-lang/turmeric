@@ -1,0 +1,53 @@
+;; Captureless callbacks through the stdlib reactor-add-* wrappers, each with
+;; `nil` user-data -- the shape every reactor-guide example uses.
+;;
+;; Two defects stood behind that shape (both in
+;; docs/archive/nil-argument-to-ptr-param-emits-void-expression.md):
+;;   1. `nil` for the `user-data : ptr<void>` argument emitted `((void)0)`, so
+;;      none of these calls compiled.
+;;   2. Each wrapper took its callback as a plain `cb : int`, so a captureless
+;;      lambda arrived as a bare C function pointer and reactor.c called it
+;;      through its fat box's slot 0: SIGSEGV in call_tur_timer_cb.  The
+;;      callbacks are `^fat` now, like local-spawn's body, which boxes them.
+;; The older reactor fixtures capture a sentinel to get a real fat box and go
+;; through the raw tur_reactor_* externs, so neither defect reached them.
+;; reactor-fd-captureless covers reactor-add-fd (it needs a pipe).
+;;
+;; Expected output:
+;;   hello from timer
+;;   tick
+;;   tick
+;;   tick
+;;   42
+
+(load "stdlib/reactor.tur")
+(load "stdlib/chan.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)]
+    ;; The reactor guide's Quick start, as written there.
+    (reactor-add-timer r 0
+      (fn [id user] : nil (println "hello from timer"))
+      nil)
+    (reactor-run r)
+    ;; An interval with a 0 ms period fires once per poll until removed.
+    (let [iv (reactor-add-interval r 0 0
+               (fn [id user] : nil (println "tick"))
+               nil)]
+      (reactor-poll r 0)
+      (reactor-poll r 0)
+      (reactor-poll r 0)
+      (reactor-remove r iv))
+    ;; A one-shot channel watcher.  reactor-add-chan takes the channel as a
+    ;; raw ptr<void>, and converting a linear (Chan A) to one consumes it, so
+    ;; hold the raw view and re-type it for chan-send / chan-free.
+    (let [chp (:: (chan-new 4) :ptr<void>)]
+      (reactor-add-chan r chp
+        (fn [id v user] : nil (println v))
+        nil)
+      (let [ch (:: chp (Chan int))]
+        (chan-send ch 42)
+        (reactor-poll r 0)
+        (reactor-free r)
+        (chan-free ch)))
+    0))
