@@ -39,7 +39,9 @@ static int small_struct_p (c2m_ctx_t c2m_ctx, struct type *type, int struct_only
   struct type_offset sub_members[MAX_MEMBERS];
   int sub_n;
 
-  if (!struct_only_p && scalar_type_p (type)) {
+  if (!struct_only_p && int128_type_p (type)) {
+    return FALSE; /* not a register-sized member: the generic path */
+  } else if (!struct_only_p && scalar_type_p (type)) {
     mir_type = get_mir_type (c2m_ctx, type);
     members[0].type = mir_type == MIR_T_I8    ? MIR_T_U8
                       : mir_type == MIR_T_I16 ? MIR_T_U16

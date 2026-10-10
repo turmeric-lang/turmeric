@@ -107,6 +107,12 @@ static int classify_arg (c2m_ctx_t c2m_ctx, struct type *type, MIR_type_t types[
   }
 
   assert (scalar_type_p (type));
+#ifndef _WIN32
+  if (int128_type_p (type)) { /* two INTEGER eightbytes, as for a struct of two longs */
+    types[0] = types[1] = MIR_T_I64;
+    return 2;
+  }
+#endif
   switch (mir_type = get_mir_type (c2m_ctx, type)) {
   case MIR_T_F:
   case MIR_T_D: types[0] = MIR_T_D; return 1;

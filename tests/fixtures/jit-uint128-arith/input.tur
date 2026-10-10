@@ -1,0 +1,70 @@
+;; jit-uint128-arith: user inline C doing ARITHMETIC on __uint128_t and
+;; __int128 runs under the MIR engine (`tur jit`), not through the cc fallback.
+;;
+;; c2mir had no 128-bit integer -- x86-64 did not declare __uint128_t at all
+;; and aarch64 declared a layout-only struct -- so any program whose inline C
+;; did arithmetic on one hit TUR-W0070 and quietly ran through cc instead
+;; (docs/archive/c2mir-rejects-uint128.md).  The expected output alone would
+;; pass through that fallback too, so the real assertion is that this fixture
+;; is NOT in tests/jit-fallback-baseline.txt: tests/run-jit.sh fails a fixture
+;; that falls back without being listed there.
+;;
+;; Each function takes a different path through c2mir's lowering of 128-bit
+;; values to pairs of 64-bit ones: a widening multiply, a high-half multiply,
+;; division and remainder by a 64-bit value, signed division, and a constant
+;; folded at compile time.
+
+;; The report's repro: widen, multiply, narrow.
+(defn widen [x : int] : int
+  ```c
+  __uint128_t v = (__uint128_t)x;
+  v = v * 3u;
+  return (int64_t)v;
+  ```)
+
+;; The high 64 bits of a full 64x64 product -- the mulhi idiom of hash and
+;; PRNG code.
+(defn mulhi [a : int b : int] : int
+  ```c
+  __uint128_t p = (__uint128_t)(uint64_t)a * (uint64_t)b;
+  return (int64_t)(uint64_t)(p >> 64);
+  ```)
+
+;; The decimal digit sum of 2^n, n < 128: repeated 128-bit division by 10.
+(defn digit-sum-of-pow2 [n : int] : int
+  ```c
+  __uint128_t v = (__uint128_t)1 << n;
+  int64_t sum = 0;
+  while (v != 0) {
+    sum += (int64_t)(v % 10);
+    v /= 10;
+  }
+  return sum;
+  ```)
+
+;; Signed division truncates toward zero; the remainder takes the dividend's
+;; sign.  Packed so one call checks both.
+(defn signed-divmod [a : int b : int] : int
+  ```c
+  __int128 x = (__int128)a << 70;
+  __int128 q = x / b, r = x % b;
+  return (int64_t)(q >> 64) * 1000 + (int64_t)r;
+  ```)
+
+;; A static constant folded in 128 bits, reduced mod a prime.
+(defn folded-constant [] : int
+  ```c
+  static const __uint128_t k = ((__uint128_t)1 << 100) + 12345;
+  return (int64_t)(k % 1000000007u);
+  ```)
+
+(defn main [] : int
+  (println (widen 14))
+  (println (mulhi 4294967296 4294967296))
+  (println (mulhi -1 -1))
+  (println (digit-sum-of-pow2 100))
+  (println (digit-sum-of-pow2 127))
+  (println (signed-divmod -7 2))
+  (println (signed-divmod 7 -3))
+  (println (folded-constant))
+  0)

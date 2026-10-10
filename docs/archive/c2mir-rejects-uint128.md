@@ -1,5 +1,11 @@
 # c2mir cannot parse `__uint128_t`, so inline C using it never reaches the JIT
 
+**RESOLVED 2026-10-10** in the fork (turmeric-lang/mir `d9f75585`, branch
+`claude/c2mir-rejects-uint128-hmemc3`) and re-synced into `external/mir/` --
+see *Resolution* at the end.  c2mir now has `__int128` and `unsigned __int128`
+as real types and lowers every operation on them to 64-bit MIR, so the repro
+below runs under the engine with no `TUR-W0070`.
+
 **Narrowed 2026-10-03: the aarch64 system-header half is fixed** -- the fork
 declares the 16-aligned stand-in on Linux aarch64 too, and glibc's
 `ucontext_t` now has gcc's layout there
@@ -97,3 +103,57 @@ cheap, separate fix the header problem needs.
   does.
 - The aarch64 header consequence no longer depends on this: it was fixed on
   its own (the sibling report, now archived).
+
+## Resolution
+
+Fixed in the fork as the report's own subject asked -- a frontend-plus-backend
+feature, not a parser fix -- in one commit, `d9f75585` ("c2mir: support
+__int128 and unsigned __int128").  Pinned here at that branch commit; move the
+pin to its merge commit once it is merged into the fork's `master`, as
+`VENDORED.md` describes.
+
+- **Front end.** `__int128` is a keyword that combines with `signed` and
+  `unsigned` the way `int` does, and `mirc.h` predefines `__int128_t`,
+  `__uint128_t` and `__SIZEOF_INT128__` for every target.  That replaces the
+  aarch64 layout-only struct with the real 16-byte, 16-aligned type, so the
+  `<sys/user.h>` and Darwin signal-context layouts the sibling report needed
+  are unchanged (`c-tests/new/aarch64-linux-uint128-user-h.c` still checks
+  them).  Constants fold in two 64-bit halves, so static data such as
+  `((__uint128_t)hi << 64) | lo` works.
+- **Generator.** An `__int128` lvalue is a 16-byte memory operand and an rvalue
+  a pair of 64-bit temporaries.  Every operator is plain 64-bit MIR with no
+  runtime library: add/sub with carry, the full 64x64 product from 32-bit
+  halves, branching shifts that never shift by 64 or more, hardware division
+  when both operands fit in 64 bits and shift-subtract otherwise, two-word
+  comparisons, and correctly rounded conversions to and from float, double and
+  long double.
+- **Calls.** An `__int128` argument or result travels as two 64-bit ones.
+  JIT code always agrees with itself, and with native code on a result and on
+  an argument passed in registers -- except where the native ABI moves one
+  (AAPCS64 starts it at an even register; x86-64 puts it wholly on the stack
+  when only one register is left).  Turmeric never passes `__int128` across
+  the native boundary: the runtime has no such function.
+- **Rejected with a diagnostic, so `tur jit` falls back to cc rather than
+  miscompiling:** `__int128` bit-fields, `switch` on one, `va_arg` of one or
+  passing one with no parameter (variadic or unprototyped), an `__int128` enum
+  base, asm register variables, and `__int128` operands of
+  `__builtin_*_overflow`.
+
+**Verification.**  The fork's new `c-tests/new/int128-ops.c` checksums every
+operator over a table of edge values, at run time and constant-folded, and
+`int128-misc.c` covers folding, calls, struct members, compound assignment with
+mixed types and the float conversions; their expected output is gcc's, and
+aarch64 gcc produces the identical files.  On x86-64 the whole c2mir suite
+(1092 tests) passes with `-ei`, `-eg`, `-O0` and `-O3`, and the bootstrap tests
+pass -- they now exercise the lowering for real, because `mir-hash.h` takes its
+`__uint128_t` path inside the self-compiled c2mir.  A cross-built aarch64 `c2m`
+under qemu-user passes both new tests with `-ei`, `-eg` and `-O3`, and the suite
+apart from two x86-only tests that qemu's host `uname -m` let through.  Here,
+`tests/fixtures/jit-uint128-arith` is the repro plus a high-half multiply,
+128-bit division by 10, signed division and a folded constant; it is not in
+`tests/jit-fallback-baseline.txt`, so `tests/run-jit.sh` fails if it ever falls
+back again.
+
+Two pre-existing c2mir/MIR bugs turned up on the way and are filed rather than
+fixed here: [c2mir-bool-conversion-truncates](../reported/c2mir-bool-conversion-truncates.md)
+and [mir-x86-64-long-double-union-pun](../reported/mir-x86-64-long-double-union-pun.md).
