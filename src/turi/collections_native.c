@@ -1339,10 +1339,10 @@ static TuriValue native_vec_get(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
     int64_t  i = a[1].as_int;
     if (!v || i < 0 || i >= v[1]) {
-        turi_host_exit_guard(env, "vec index out of bounds");
-        fprintf(stderr, "vec index out of bounds\n");
-        fflush(stderr);
-        _exit(1);
+        /* A panic, as the compiled helper's: catchable, and ends the process
+         * like any other with no catcher (panic-location-names-the-runtime). */
+        turi_runtime_panic(env, "vec index out of bounds");
+        return turi_int(0);
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
     return vec_retag_cell(v, (size_t)i, data[i]);
@@ -1390,8 +1390,9 @@ static TuriValue native_vec_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud
     int64_t *v = (int64_t *)(intptr_t)a[0].as_int;
     int64_t  i = a[1].as_int;
     if (!v || i < 0 || i >= v[1]) {
-        fprintf(stderr, "vec index out of bounds\n");
-        return turi_nil();
+        /* As the compiled vec-set-o!: a panic, the write dropped. */
+        turi_runtime_panic(env, "vec-set! index out of bounds");
+        return turi_int(0);
     }
     int64_t *data = (int64_t *)(intptr_t)v[0];
     data[i] = a[2].as_int;

@@ -56,6 +56,12 @@ bool *tur_tls_fiber_cancelled_flag_ptr (void) { return &tur_tls_fiber_cancelled_
 static __thread void *tur_tls_current_thread_state = 0;
 void **tur_tls_current_thread_state_ptr (void) { return &tur_tls_current_thread_state; }
 
+static __thread int tur_tls_async_direct_body = 0;
+int *tur_tls_async_direct_body_ptr (void) { return &tur_tls_async_direct_body; }
+
+static __thread int tur_tls_async_owns_env = 0;
+int *tur_tls_async_owns_env_ptr (void) { return &tur_tls_async_owns_env; }
+
 static __thread jmp_buf tur_tls_cancel_jmpbuf;
 jmp_buf *tur_tls_cancel_jmpbuf_ptr (void) { return &tur_tls_cancel_jmpbuf; }
 
@@ -96,8 +102,8 @@ static __thread void *tur_tls_r7k_form_base = 0;
 void **tur_tls_r7k_form_base_ptr (void) { return &tur_tls_r7k_form_base; }
 
 /* The DK runtime's per-thread state (emit_dk_runtime.c): the reap registry,
- * the CPS entry depth, and the trampoline's landing, resume chain and value
- * and meta-stack.  Shared, CPS entries on two threads reallocated one
+ * the CPS entry depth, and the trampoline's landing, resume chain and
+ * value.  Shared, CPS entries on two threads reallocated one
  * registry between them, a worker's exit freed the other threads' live
  * chains, and a worker's entry replaced the landing another thread's
  * tail-resume jumped to (docs/archive/dk-reap-list-shared-across-threads.md). */
@@ -117,12 +123,6 @@ static __thread void *tur_tls_dk_resume_chain = 0;
 void **tur_tls_dk_resume_chain_ptr (void) { return &tur_tls_dk_resume_chain; }
 static __thread intptr_t tur_tls_dk_resume_val = 0;
 intptr_t *tur_tls_dk_resume_val_ptr (void) { return &tur_tls_dk_resume_val; }
-static __thread void *tur_tls_dk_meta = 0;
-void **tur_tls_dk_meta_ptr (void) { return &tur_tls_dk_meta; }
-static __thread size_t tur_tls_dk_meta_n = 0;
-size_t *tur_tls_dk_meta_n_ptr (void) { return &tur_tls_dk_meta_n; }
-static __thread size_t tur_tls_dk_meta_cap = 0;
-size_t *tur_tls_dk_meta_cap_ptr (void) { return &tur_tls_dk_meta_cap; }
 
 /* The dynamic tail-call trampoline (emit_module.c, proper-tail-calls T6): its
  * descriptor, the function it has armed, the driver's root and the sentinel
@@ -137,6 +137,13 @@ static __thread void *tur_tls_tb_root = 0;
 void **tur_tls_tb_root_ptr (void) { return &tur_tls_tb_root; }
 static __thread _Alignas(16) unsigned char tur_tls_tb_sentinel_box[16];
 void **tur_tls_tb_sentinel_box_ptr (void) { return (void **) tur_tls_tb_sentinel_box; }
+
+/* The current panic site (emit_module.c, panic-location-names-the-runtime-
+ * not-the-call-site): the source position of the direct call to a panicking
+ * inline-C body this thread is making, set just before and cleared just
+ * after.  A pointer to a preamble-private static {file, line} pair. */
+static __thread void *tur_tls_cur_site = 0;
+void **tur_tls_cur_site_ptr (void) { return &tur_tls_cur_site; }
 
 #ifdef _WIN32
 #include <windows.h>

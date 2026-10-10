@@ -200,6 +200,12 @@ struct Binding {
      * there exactly as it did before local fn-field drops existed) while
      * uncolored functions release it. */
     bool          drops_fn_fields;
+    /* async-capturing-body-env-never-freed: this let-bound fresh capturing
+     * closure's only use is as the body of one `async` spawn, so the SPAWN
+     * owns its env box (tur_async_owns_env, dropped when the body settles)
+     * and the let does not drop it (set by the direct emitter's let, read at
+     * the spawn: async_spawn_owns_env). */
+    bool          spawn_owns_env;
     /* byvalue-recursive-adt-boxes-are-never-freed: this local is a by-value
      * recursive ADT that does not escape, so the direct emitter frees its SPINE
      * at scope exit (`drop_localowned_<T>(&xs)`).  Emitted directly rather than as
@@ -1612,6 +1618,13 @@ struct Expr {
         struct { Binding *fn_binding; Expr **args; uint32_t n_args;
                  struct Expr *fn_expr;
                  struct Expr *dict_arg;
+                 /* panic-location-names-the-runtime-not-the-call-site: when
+                  * this call was written in a macro's template (`vec-set!`
+                  * expanding to `vec-set-o!`), the macro use the program
+                  * wrote (elab_macro_use_site); zero otherwise.  A panic the
+                  * callee raises names it (emit_call_site_span), as the
+                  * node's own span would name the template. */
+                 Span site;
                  bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
                  /* Bitmasks over argument index.  64-bit: ordinary parameters
                   * are unbounded (these masks stay 0 for non-poly calls), but a

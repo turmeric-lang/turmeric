@@ -1,0 +1,75 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused: a let-bound
+;; capturing lambda that performs, used BOTH as a value (passed to a
+;; higher-order function whose parameter threads it) AND called through the
+;; local.  The value use makes the lambda threadable, so its effect is not
+;; tainted to the fiber; the direct call used to be its direct entry from a
+;; fresh root -- "unhandled effect" from a program that compiled.  Now the
+;; call threads the caller's continuation through the registry, keyed on the
+;; env box, like a call through a fat thread parameter.
+(defeffect Ask [] :int)
+
+(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int
+  (h x))
+
+(defn app2 [h : (fn [int int] #fx{Ask} int) x : int y : int] #fx{Ask} : int
+  (h x y))
+
+(defn lp [h : (fn [int] #fx{Ask} int) i : int acc : int] #fx{Ask} : int
+  (if (= i 0)
+    acc
+    (lp h (- i 1) (+ acc (h i)))))
+
+;; called, then passed: 0+1+10 + 0+2+10 = 23
+(defn v1 [m : int] : int
+  (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+    (+ (g 1) (app g 2))))
+
+;; the call sits after a perform, in a lifted continuation that must capture
+;; the local: 10 + (5+1+10) + (5+2+10) = 43
+(defn v2 [m : int] : int
+  (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+    (+ (perform (Ask)) (g 1) (app g 2))))
+
+;; the call in tail position, after the value use: 7+5+10 = 22
+(defn v3 [m : int] : int
+  (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+    (do (app g 2)
+        (g 5))))
+
+;; called twice, passed twice: 11+12+13+14 = 50
+(defn v4 [m : int] : int
+  (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+    (+ (g 1) (g 2) (app g 3) (app g 4))))
+
+;; two parameters: (1*2+3+10) + (4*5+3+10) = 15 + 33 = 48
+(defn v5 [m : int] : int
+  (let [g (fn [a : int b : int] : int (+ (* a b) m (perform (Ask))))]
+    (+ (g 1 2) (app2 g 4 5))))
+
+;; passed to a loop that calls it 100 times, and called once here:
+;; (0+1+10) + sum_{i=1..100} (i + 10) = 11 + 5050 + 1000 = 6061
+(defn v6 [m : int] : int
+  (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+    (+ (g 1) (lp g 100 0))))
+
+;; the handler's answer depends on how often it was asked: the direct call
+;; and the threaded one share one handler.  v1 asks twice: 100 + 101 -> 0+1+100
+;; + 0+2+101 = 204
+(defn v7 [m : int] : int
+  (let [g (fn [n : int] : int (+ m n (perform (Ask))))]
+    (+ (g 1) (app g 2))))
+
+(defn count-asks [m : int] : int
+  (let [^mut c 99]
+    (handle (v7 m)
+      (Ask [] k) (do (set! c (+ c 1)) (resume k c)))))
+
+(defn main [] : int
+  (println (handle (v1 0) (Ask [] k) (resume k 10)))
+  (println (handle (v2 5) (Ask [] k) (resume k 10)))
+  (println (handle (v3 7) (Ask [] k) (resume k 10)))
+  (println (handle (v4 0) (Ask [] k) (resume k 10)))
+  (println (handle (v5 3) (Ask [] k) (resume k 10)))
+  (println (handle (v6 0) (Ask [] k) (resume k 10)))
+  (println (count-asks 0))
+  0)

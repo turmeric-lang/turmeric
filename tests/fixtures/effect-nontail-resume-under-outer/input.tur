@@ -1,0 +1,93 @@
+;; effect-nontail-resume-under-outer-handler-splits-the-capture: an inner
+;; handler case that resumes NON-tail -- it has work left after the resume --
+;; under an outer handler, with the outer effect performed in the resumed part.
+;;
+;; The compiled path used to run such a resume on the C stack (dk_invoke): a
+;; copy of the continuation up to the inner handle, its value handed back to
+;; the case.  The rest of the case and the handle's continuation were not on
+;; the chain while the copy ran, so the outer capture stopped at the end of
+;; the copy: a non-tail outer case printed 11060 for 2060, and an abortive one
+;; -- an exception-style handler -- 1420 for 42.  The case now resumes into
+;; the chain: the rest of the case is a frame after the resumed part, and the
+;; handle's continuation after that.
+;;
+;;   non-tail-inner   -- (+ 100 (resume k 1)), non-tail and abortive outer
+;;   multishot-inner  -- (+ (resume k 1) (resume k 2)): Out is performed once
+;;                       per resume, so the outer case runs twice
+;;   if-inner         -- one tail branch, one non-tail branch
+;;   again-inner      -- the resumed part performs the inner effect again
+;;   reopen-inner     -- the case performs an outer effect (Log) before its
+;;                       non-tail resume: the resume is in the perform's
+;;                       continuation
+;;   shallow-inner    -- a shallow inner handle
+;;   float-inner      -- a float through the resume and the case's rest
+;;   ticks            -- 20000 non-tail resumes under one handle, each turn's
+;;                       rest a frame on the chain; a turn copies no
+;;                       enclosing-handler markers, so it stays O(1) as the
+;;                       chain grows
+
+(defeffect Ask [] int)
+(defeffect Out [] int)
+(defeffect Getf [] float)
+(defeffect Log [] int)
+
+(defn non-tail-inner [] : int
+  (handle (+ (perform (Ask)) (perform (Out)))
+    (Ask [] k) (+ 100 (resume k 1))))
+
+(defn multishot-inner [] : int
+  (handle (+ (perform (Ask)) (perform (Out)))
+    (Ask [] ^multishot k) (+ (resume k 1) (resume k 2))))
+
+(defn if-inner [c : bool] : int
+  (handle (+ (perform (Ask)) (perform (Out)))
+    (Ask [] k) (if c (resume k 1) (* 3 (resume k 2)))))
+
+(defn again-inner [] : int
+  (handle (+ (perform (Ask)) (+ (perform (Ask)) (perform (Out))))
+    (Ask [] k) (+ 100 (resume k 1))))
+
+(defn reopen-inner [] : int
+  (handle (+ (perform (Ask)) (perform (Out)))
+    (Ask [] k) (+ (perform (Log)) (+ 100 (resume k 1)))))
+
+(defn shallow-inner [] : int
+  (handle-shallow (+ (perform (Ask)) (perform (Out)))
+    (Ask [] k) (+ 100 (resume k 1))))
+
+(defn float-inner [] : float
+  (handle (+ (perform (Getf)) 0.25)
+    (Getf [] k) (* 2.0 (resume k 7.1))))
+
+(defn ticks [n : int acc : int] : int
+  (if (= n 0) acc (ticks (- n 1) (+ acc (perform (Ask))))))
+
+(defn main [] : nil
+  ;; non-tail-inner: (1 + 5) + 100 = 106, * 10 = 1060, + 1000
+  (println (handle (* 10 (non-tail-inner)) (Out [] k) (+ 1000 (resume k 5))))
+  (println (handle (* 10 (non-tail-inner)) (Out [] k) 42))
+  ;; tail-outer: 1060
+  (println (handle (* 10 (non-tail-inner)) (Out [] k) (resume k 5)))
+  ;; multishot-inner: the second Out runs inside the first's resume:
+  ;; (1 + 5) + (2 + 5) = 13, * 10 = 130, + 1000 = 1130, + 1000 = 2130
+  (println (handle (* 10 (multishot-inner)) (Out [] k) (+ 1000 (resume k 5))))
+  (println (handle (* 10 (multishot-inner)) (Out [] k) 42))
+  ;; if-inner: (1 + 5) * 10 + 1000 = 1060; 3 * (2 + 5) * 10 + 1000 = 1210
+  (println (handle (* 10 (if-inner true)) (Out [] k) (+ 1000 (resume k 5))))
+  (println (handle (* 10 (if-inner false)) (Out [] k) (+ 1000 (resume k 5))))
+  (println (handle (* 10 (if-inner false)) (Out [] k) 42))
+  ;; again-inner: 1 + 1 + 5 = 7, + 100 + 100 = 207, * 10 = 2070, + 1000
+  (println (handle (* 10 (again-inner)) (Out [] k) (+ 1000 (resume k 5))))
+  (println (handle (* 10 (again-inner)) (Out [] k) 42))
+  ;; reopen-inner: Log gives 0, then as non-tail-inner
+  (println (handle (handle (* 10 (reopen-inner)) (Out [] k) (+ 1000 (resume k 5)))
+             (Log [] k) (resume k 0)))
+  (println (handle (handle (* 10 (reopen-inner)) (Out [] k) 42)
+             (Log [] k) (resume k 0)))
+  ;; shallow-inner: as non-tail-inner
+  (println (handle (* 10 (shallow-inner)) (Out [] k) (+ 1000 (resume k 5))))
+  (println (handle (* 10 (shallow-inner)) (Out [] k) 42))
+  ;; float-inner: 2 * (7.1 + 0.25) = 14.7
+  (println (float-inner))
+  ;; ticks: 20000 * 1
+  (println (handle (ticks 20000 0) (Ask [] k) (+ 0 (resume k 1)))))

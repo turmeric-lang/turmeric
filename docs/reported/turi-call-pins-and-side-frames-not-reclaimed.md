@@ -1,5 +1,16 @@
 # `tur --interpret`: a call's tyvar/dictionary pins, and frames made off the driver's call path, are never handed back
 
+**Narrowed 2026-10-09: the defer snapshot is fixed.** `EX_DEFER`'s snapshot
+is a call frame now (`eval_frame_new_call`, parentless), and both places a
+`DeferItem` fires release it after its body (`frame_release`, a no-op if the
+body captured it -- a closure over the snapshot escapes it, as any capture
+does). A function with a `defer` called 300,000 times grew a Debug `tur` by
+30 MB and now by none; `tests/check-turi-frame-reclaim.py`'s fifth program
+pins it, and `tests/fixtures/defer-body-names-a-global` runs a defer body that
+captures its snapshot in a closure called after the defer fired. Left: the
+fiber handler case frame, `reset`/`shift` capture frames and the work-stack
+perform's `hf`.
+
 **Narrowed 2026-10-07: section 1 is fixed, and `EX_EXISTS_OPEN` from
 section 2.** A released frame's `TyvarBind` and `DictBind` chains go onto
 free lists beside `frame_free` / `binding_free` (`env->tyvar_free`,

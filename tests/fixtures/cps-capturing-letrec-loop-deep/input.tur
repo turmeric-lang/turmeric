@@ -1,0 +1,17 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused: a capturing `letrec`
+;; loop that performs on every one of 1,000,000 turns.  Its recursive call is
+;; the lambda's own CPS call with its env passed on, and a self tail call in a
+;; `__cps` body is a backedge -- for a closure too now -- so the C stack does
+;; not grow with the turn count (the sibling-call optimization the plain
+;; `return f__cps(...)` relied on is off at -O1).  Compiled only: the
+;; interpreter's resume nests per perform at this depth.
+(defeffect Ask [] :int)
+
+(defn count-up [m : int n : int] : int
+  (letrec [loop (fn [i : int acc : int] : int
+                  (if (= i 0) acc (loop (- i 1) (+ acc m (perform (Ask))))))]
+    (loop n 0)))
+
+(defn main [] : int
+  (println (handle (count-up 2 1000000) (Ask [] k) (resume k 1)))   ; 3000000
+  0)

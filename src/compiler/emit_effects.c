@@ -472,7 +472,7 @@ char *emit_effects_handle(EmitCtx *ctx, Buf *body, const Expr *e) {
                 /* Use bctx so name_for_binding resolves handle captures correctly */
                 EmitCtx thunk_ctx = bctx;
                 thunk_ctx.pending_defer_thunks = new_thunks;
-                emit_pending_defer_thunks(&thunk_ctx, &inner_pending);
+                emit_pending_defer_thunks(&thunk_ctx, &inner_pending, &inner_pending);
                 /* emit_pending_defer_thunks freed the new thunks; ctx unchanged */
             }
         }

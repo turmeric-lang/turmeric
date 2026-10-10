@@ -216,7 +216,14 @@ struct CTerm {
                   * emitter uses -- the CTerm otherwise drops the dispatch dict_arg,
                   * leaving a carrier-erased `(show x)` baked to the int rep. NULL for
                   * synthetic calls with no source Expr. */
-                 const Expr *call_expr; } letcall;
+                 const Expr *call_expr;
+                 /* sum-closure-payload-never-dropped (the CPS half): when this
+                  * call is the init of a `let` binding -- `(some <closure>)` --
+                  * the EX_LET and the binding's index, so the emitter can ask
+                  * the direct emitter's question (let_binding_sum_closure_
+                  * freeable) and reap the live arm's closure at the entry
+                  * boundary.  NULL otherwise. */
+                 const Expr *sum_let; uint32_t sum_let_idx; } letcall;
         /* fn_atom is the callee key when fn == NULL (E2c: a via_registry call
          * whose callee is a struct-field fn-value load `(.f obj)`, not a named
          * binding).  The emitter uses fn_atom's atom_str as the `__tur_cps_lookup`
@@ -257,15 +264,32 @@ struct CTerm {
         /* B4: `scrut` is the heap-ADT carrier atom; `adt` the ADT def (for the C
          * aggregate name / tag word); `arms` the ctor arms (last may be a
          * ctor==NULL catch-all).  Each arm delivers its body to the enclosing
-         * continuation (tail) or to a join point (bind), like CT_IF. */
+         * continuation (tail) or to a join point (bind), like CT_IF.
+         *
+         * cps-match-on-builtin-sum-evicts: when `direct` is set the match is
+         * any other shape (an Option / Result scrutinee, literal arms, `any`
+         * narrowing) and the DIRECT emitter dispatches it -- `direct` is the
+         * source match over the scrutinee atom, whose pattern tests and
+         * binders it emits -- handing each arm body back through its arm hook
+         * (EmitCtx.match_tail), where arms[i].body is emitted.  `adt` is NULL
+         * then, and each arm's `fields` are the binders its pattern declares. */
         struct { CAtom scrut; const struct AdtDef *adt;
-                 CMatchArm *arms; uint32_t n_arms; }                      match;
+                 CMatchArm *arms; uint32_t n_arms;
+                 const struct Expr *direct;
+                 /* The direct dispatch's guards read these enclosing
+                  * variables (each arm's own binders excluded): the capture
+                  * and mutation walks visit them like the scrutinee. */
+                 CAtom *guard_vars; uint32_t n_guard_vars; }              match;
         struct { const Symbol *effect; CAtom *args; uint32_t n;
                  CVar x; CTerm *body; bool resumable_payload; }           perform;
         /* F3 await: fut = the awaited future atom; x = the awaited value binding;
          * body = the continuation.  Emitted as a dk_shift whose body is the fixed
          * __tur_await_body runtime helper (resume-if-ready / park-if-pending). */
-        struct { CAtom fut; CVar x; CTerm *body; }                       await;
+        /* fresh_fut: the awaited expression is a spawn written at the await,
+         * `(await (async ...))`, so nothing else names the future and the
+         * await owns it (emit_await marks it with __tur_await_own; the reader
+         * that takes its value frees it). */
+        struct { CAtom fut; CVar x; CTerm *body; bool fresh_fut; }       await;
         struct { CAtom k; CAtom v; CVar x; CTerm *body; }                 resume;
         /* reap_env: e is a freeable, provably-non-escaping capturing closure
          * whose heap fat-env the direct emitter does NOT free at this leaf
@@ -372,20 +396,42 @@ void cps_ir_thread_param_reset(void);
 /* Forget the callee_fndef binding -> FnDef table (a new classification). */
 void cps_ir_callee_cache_reset(void);
 void cps_ir_thread_param_add(const Binding *param);
+/* cps-local-fn-alias-or-lambda-called-in-place-refused (a value use as well
+ * as calls): a `let`-bound local holding a fresh capturing lambda that is
+ * threadable -- it flows to a thread param, so its env-taking `__cps` twin
+ * is registered -- and is ALSO called through the local.  Such a call
+ * threads the caller's continuation through the registry, keyed on the env
+ * box's slot 0 (the lifted entry), like an empty-row call through a fat
+ * thread param; a direct call would run the lambda's perform from a fresh
+ * root (`unhandled effect`).  Registered per function by the emitter. */
+void cps_ir_thread_local_reset(void);
+/* `env_boxed`: the local's value is the closure's env box (slot 0 the lifted
+ * entry) -- a capturing lambda -- rather than the direct entry itself. */
+void cps_ir_thread_local_add(const Binding *local, bool env_boxed);
+bool cps_ir_thread_local_has(const Binding *local);
+bool cps_ir_thread_local_env_boxed(const Binding *local);
 bool cps_ir_thread_param_has(const Binding *param);
 bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
 
 /* E2 (fat-closure fn-value threading): the `tur_poly_fn_t.fn_cps` slot's ABI is
  * `int64_t (*)(void *env, int64_t a0, ..., struct DK *)` -- one int64 word per
  * argument, up to this many.  cps_ir_fncps_sig_ok says whether a fn of type
- * `fn_ty` fits it: every argument an `int`/`int64`, a `cstr` or a `ptr<void>`
- * (carried as its word), the result an `int`/`int64`, `bool` or unit.  The poly-wrap that FILLS the slot (emit_expr.c) and the
+ * `fn_ty` fits it: every argument a scalar -- an integer of any width, a
+ * `bool`, a float, a `cstr` or a `ptr<void>` -- carried as its word
+ * (cps_ir_fncps_word_of / cps_ir_fncps_value_of), and a result of the same
+ * kinds or unit.  The poly-wrap that FILLS the slot (emit_expr.c) and the
  * analysis that relies on it being filled (arg_fat_has_fn_cps) ask this one
  * question, so the two cannot drift apart. */
 #define CPS_FNCPS_MAX_ARGS 8
 bool cps_ir_fncps_sig_ok(const Type *fn_ty);
-/* The C spelling of an argument kind cps_ir_fncps_sig_ok admits. */
+/* The C spelling of an argument (or result) kind cps_ir_fncps_sig_ok admits. */
 const char *cps_ir_fncps_arg_ctype(TypeKind k);
+/* A value of kind `k` spelled as the int64 word that crosses the slot, and back
+ * (malloc'd C expressions).  A float crosses as its bits -- the DK slot's
+ * Tier-B convention, so a result delivered by the callee's `__cps` entry reads
+ * back the same way -- a pointer through intptr_t, anything else by a cast. */
+char *cps_ir_fncps_word_of(TypeKind k, const char *value);
+char *cps_ir_fncps_value_of(TypeKind k, const char *word);
 /* The same for a capturing lambda, given its LIFTED type (the env parameter
  * first): a closure's slot is a dispatcher on the env box's slot 0, which holds
  * the lifted entry itself only for an `int`/`int64` or unit result (a narrow
@@ -399,5 +445,16 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty);
  * such call as a call through the parameter and drops the binding, and the
  * threading classifier (ptc_walk) counts it as one: one answer for both. */
 const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i);
+/* The same for an immutable local holding a GLOBAL fn -- named, or a lifted
+ * captureless lambda -- every use of which is a saturated call: the global,
+ * or NULL. */
+const Binding *cps_ir_let_global_fn_alias(const Expr *let, uint32_t i);
+/* A captureless `letrec` member (global, its lifted lambda in source_binding):
+ * the lambda a call through it calls, or NULL. */
+const Binding *cps_ir_letrec_member_target(const Binding *f);
+/* An immutable local bound to a fresh CAPTURING lambda, every use of which is
+ * a saturated call: the lifted lambda (a call through the local is a call to
+ * it with the env box first), or NULL. */
+const Binding *cps_ir_let_local_closure(const Expr *let, uint32_t i);
 
 #endif

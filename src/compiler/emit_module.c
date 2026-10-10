@@ -2475,9 +2475,9 @@ char *ensure_carrier_fatshim(EmitCtx *ctx,
  * is emitted ahead of the normal forward decls) and is registered by its own
  * addr-taken CPS-registration constructor.  Returns the malloc'd twin name, or
  * NULL if already emitted (deduped) -- caller uses `<wrapper>__cps` either way.
- * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: `int`/`int64`,
- * `cstr` and `ptr<void>` args (cps_ir_fncps_arg_ctype spells each) and an
- * `int`/`int64`, `bool` or unit result -- exactly what this forward-declares. */
+ * The caller restricts `inner_fn` to cps_ir_fncps_sig_ok: scalar args
+ * (cps_ir_fncps_arg_ctype spells each) and a scalar non-pointer or unit
+ * result -- exactly what this forward-declares. */
 /* Translate the enclosing frame's type bindings -- keyed by the CALLER's tyvar
  * names -- into bindings keyed by the CALLEE's, matched by constraint CLASS.
  *
@@ -2662,32 +2662,49 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
 
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     /* thunk_typedefs precedes the normal forward decls, so declare inner_fn's
-     * direct entry ourselves: an int64 per argument and the result's own
-     * spelling (the caller's gate, cps_ir_fncps_sig_ok, admits only an
-     * int-register-class arg and an int / bool / unit result).  `__tur_cps_fn` /
+     * direct entry ourselves: each parameter and the result at its own C
+     * spelling (the caller's gate, cps_ir_fncps_sig_ok, admits only scalars,
+     * and cps_ir_fncps_arg_ctype spells each).  `__tur_cps_fn` /
      * `__tur_cps_lookup` / `dk_run` come from the DK runtime preamble, already
      * emitted above this section.  A one-argument twin keeps its original
      * spelling (`__pwx`). */
     uint32_t n = inner_ty->as.fn.arity;
     TypeKind rk = inner_ty->as.fn.result_kind;
-    const char *rc = rk == TY_NIL ? "void" : rk == TY_BOOL ? "bool" : "int64_t";
+    const char *rc = rk == TY_NIL ? "void" : cps_ir_fncps_arg_ctype(rk);
     Buf decl, prm, fwd, cast;
     buf_init(&decl); buf_init(&prm); buf_init(&fwd); buf_init(&cast);
-    /* `fwd` passes each word on as it arrived (the registered `__cps` entry,
-     * or its word adapter for a pointer parameter, takes words); `dir` converts
-     * it to the direct entry's own C parameter type. */
+    /* `fwd` passes each argument on as the registered `__cps` entry takes it
+     * -- a word, except a float, which every E2a call site passes at its own
+     * type (e2a_cast) and the entry, or its `__e2w` word adapter, declares so;
+     * `dir` converts each word to the direct entry's own C parameter type. */
     Buf dir; buf_init(&dir);
     for (uint32_t i = 0; i < n; i++) {
         char an[24];
         if (n == 1) snprintf(an, sizeof an, "__pwx");
         else        snprintf(an, sizeof an, "__pwx%u", i);
-        const char *pc = cps_ir_fncps_arg_ctype((TypeKind)inner_ty->as.fn.arg_kinds[i]);
+        TypeKind ak = (TypeKind)inner_ty->as.fn.arg_kinds[i];
+        const char *pc = cps_ir_fncps_arg_ctype(ak);
+        size_t pL = strlen(pc);
         bool word = strcmp(pc, "int64_t") == 0;
+        bool flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
         buf_printf(&decl, "%s%s", i ? ", " : "", pc);
         buf_printf(&prm, ", int64_t %s", an);
+        if (flt) {
+            char *fv = cps_ir_fncps_value_of(ak, an);
+            buf_printf(&fwd, "%s%s", i ? ", " : "", fv);
+            buf_printf(&dir, "%s%s", i ? ", " : "", fv);
+            buf_printf(&cast, "%s, ", pc);
+            free(fv);
+            continue;
+        }
         buf_printf(&fwd, "%s%s", i ? ", " : "", an);
         if (word) buf_printf(&dir, "%s%s", i ? ", " : "", an);
-        else      buf_printf(&dir, "%s(%s)(intptr_t)%s", i ? ", " : "", pc, an);
+        else if (pc[pL - 1] == '*') buf_printf(&dir, "%s(%s)(intptr_t)%s", i ? ", " : "", pc, an);
+        else {
+            char *nv = cps_ir_fncps_value_of(ak, an);
+            buf_printf(&dir, "%s%s", i ? ", " : "", nv);
+            free(nv);
+        }
         buf_puts(&cast, "int64_t, ");
     }
     buf_putc(&decl, '\0'); buf_putc(&prm, '\0'); buf_putc(&fwd, '\0'); buf_putc(&cast, '\0');
@@ -2701,7 +2718,15 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     if (rk == TY_NIL)
         buf_printf(target, "    %s(%s);\n    return dk_run(__kont, (intptr_t)0);\n",
                    inner_fn, dir.data);
-    else
+    else if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32) {
+        /* Delivered by its bits, as the `__cps` entry delivers it. */
+        Buf cl; buf_init(&cl);
+        buf_printf(&cl, "%s(%s)", inner_fn, dir.data);
+        buf_putc(&cl, '\0');
+        char *w = cps_ir_fncps_word_of(rk, cl.data);
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)(%s));\n", w);
+        free(w); buf_free(&cl);
+    } else
         buf_printf(target, "    return dk_run(__kont, (intptr_t)%s(%s));\n", inner_fn, dir.data);
     buf_puts(target, "}\n");
     buf_free(&decl); buf_free(&prm); buf_free(&fwd); buf_free(&cast); buf_free(&dir);
@@ -2709,18 +2734,42 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
 }
 
 /* E2 (fat-closure fn-value threading), the capturing case: the `fn_cps` slot of
- * a fat closure built from a capturing lambda of `n` word arguments (a unit
- * result when `void_result`, else a word).  A closure's env box holds the
- * lifted entry in slot 0, and a threadable capturing lambda is registered
- * (emit_cps_ir.c, the E2a registration) as that entry -> its env-taking `__cps`
- * twin.  So the slot dispatches on the box at run time -- whichever lambda built
- * it -- exactly as the E2a fat dispatch does.  A miss (a lambda the registry
- * does not know) is the call an empty slot would have made: slot 0 directly,
- * its result delivered to the continuation.  Returns the dispatcher's malloc'd
- * name; it is emitted once per shape. */
-char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result) {
+ * a fat closure built from a capturing lambda of type `lifted_ty` (its env
+ * parameter first; cps_ir_fncps_closure_sig_ok admitted it).  A closure's env
+ * box holds the lifted entry in slot 0, and a threadable capturing lambda is
+ * registered (emit_cps_ir.c, the E2a registration) as that entry -> its
+ * env-taking `__cps` twin.  So the slot dispatches on the box at run time --
+ * whichever lambda built it -- exactly as the E2a fat dispatch does.  A miss
+ * (a lambda the registry does not know) is the call an empty slot would have
+ * made: slot 0 directly, its result delivered to the continuation.
+ *
+ * Every argument arrives as its word (cps_ir_fncps_word_of at the call).  The
+ * registered twin takes a float at its own type and every other kind as the
+ * word (its `__e2w` adapter, for a pointer or a narrow integer); slot 0 takes
+ * each at its own C type.  The result goes to the continuation as its word.
+ * An all-word-integer shape keeps the name it always had.  Returns the
+ * dispatcher's malloc'd name; it is emitted once per shape. */
+char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty) {
+    uint32_t n = lifted_ty->as.fn.arity - 1;
+    TypeKind rk = lifted_ty->as.fn.result_kind;
+    bool void_result = rk == TY_NIL;
+    bool plain = rk == TY_NIL || rk == TY_INT || rk == TY_INT64;
+    for (uint32_t i = 0; i < n; i++) {
+        TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i + 1];
+        if (ak != TY_INT && ak != TY_INT64) plain = false;
+    }
     Buf nb; buf_init(&nb);
     buf_printf(&nb, "__tur_fncps_env%s%u", void_result ? "v" : "", n);
+    if (!plain) {
+        /* One letter per kind: the shape's own dispatcher. */
+        buf_putc(&nb, '_');
+        for (uint32_t i = 0; i <= n; i++) {
+            TypeKind k = i < n ? (TypeKind)lifted_ty->as.fn.arg_kinds[i + 1] : rk;
+            if (i == n) buf_putc(&nb, '_');
+            buf_printf(&nb, "%d", (int)k);
+            if (i + 1 < n) buf_putc(&nb, 'x');
+        }
+    }
     buf_putc(&nb, '\0');
     char *name = strdup(nb.data);
     buf_free(&nb);
@@ -2737,27 +2786,50 @@ char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result) {
     ctx->fatshim_names[ctx->n_fatshim_names++] = strdup(name);
     if (!ctx->fatshim_names[ctx->n_fatshim_names - 1]) { fprintf(stderr, "tur: oom\n"); abort(); }
 
-    Buf prm, ws, av; buf_init(&prm); buf_init(&ws); buf_init(&av);
+    /* prm: the dispatcher's word params.  hs/ha: the twin's spelling and
+     * arguments.  ss/sa: slot 0's. */
+    Buf prm, hs, ha, ss, sa;
+    buf_init(&prm); buf_init(&hs); buf_init(&ha); buf_init(&ss); buf_init(&sa);
     for (uint32_t i = 0; i < n; i++) {
-        buf_printf(&prm, ", int64_t __pwx%u", i);
-        buf_puts(&ws, ", int64_t");
-        buf_printf(&av, ", __pwx%u", i);
+        TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i + 1];
+        char an[24];
+        snprintf(an, sizeof an, "__pwx%u", i);
+        buf_printf(&prm, ", int64_t %s", an);
+        const char *pc = cps_ir_fncps_arg_ctype(ak);
+        bool flt = ak == TY_FLOAT || ak == TY_FLOAT64 || ak == TY_FLOAT32;
+        if (strcmp(pc, "int64_t") == 0) {
+            buf_puts(&hs, ", int64_t"); buf_printf(&ha, ", %s", an);
+            buf_puts(&ss, ", int64_t"); buf_printf(&sa, ", %s", an);
+            continue;
+        }
+        char *v = cps_ir_fncps_value_of(ak, an);
+        if (flt) { buf_printf(&hs, ", %s", pc); buf_printf(&ha, ", %s", v); }
+        else     { buf_puts(&hs, ", int64_t");   buf_printf(&ha, ", %s", an); }
+        buf_printf(&ss, ", %s", pc); buf_printf(&sa, ", %s", v);
+        free(v);
     }
-    buf_putc(&prm, '\0'); buf_putc(&ws, '\0'); buf_putc(&av, '\0');
+    buf_putc(&prm, '\0'); buf_putc(&hs, '\0'); buf_putc(&ha, '\0');
+    buf_putc(&ss, '\0'); buf_putc(&sa, '\0');
     Buf *target = ctx->thunk_typedefs ? ctx->thunk_typedefs : ctx->file;
     buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
     buf_puts(target, "    int64_t __pwf = ((int64_t *)__pwe)[0];\n");
     buf_puts(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)__pwf);\n");
     buf_printf(target, "    if (__c) return ((int64_t(*)(void *%s, struct DK *))__c)(__pwe%s, __kont);\n",
-               ws.data, av.data);
-    if (void_result)
+               hs.data, ha.data);
+    if (void_result) {
         buf_printf(target, "    ((void(*)(void *%s))(intptr_t)__pwf)(__pwe%s);\n"
-                           "    return dk_run(__kont, (intptr_t)0);\n", ws.data, av.data);
-    else
-        buf_printf(target, "    return dk_run(__kont, (intptr_t)((int64_t(*)(void *%s))(intptr_t)__pwf)(__pwe%s));\n",
-                   ws.data, av.data);
+                           "    return dk_run(__kont, (intptr_t)0);\n", ss.data, sa.data);
+    } else {
+        const char *rc = cps_ir_fncps_arg_ctype(rk);
+        Buf cl; buf_init(&cl);
+        buf_printf(&cl, "((%s(*)(void *%s))(intptr_t)__pwf)(__pwe%s)", rc, ss.data, sa.data);
+        buf_putc(&cl, '\0');
+        char *w = cps_ir_fncps_word_of(rk, cl.data);
+        buf_printf(target, "    return dk_run(__kont, (intptr_t)(%s));\n", w);
+        free(w); buf_free(&cl);
+    }
     buf_puts(target, "}\n");
-    buf_free(&prm); buf_free(&ws); buf_free(&av);
+    buf_free(&prm); buf_free(&hs); buf_free(&ha); buf_free(&ss); buf_free(&sa);
     return name;
 }
 
@@ -5807,6 +5879,62 @@ static bool emit_abi_arrow_spec_bindings(EmitCtx *ctx, const Expr *call,
     return true;
 }
 
+/* cps-evicts-handle-in-operand-positions, item 3: does this call hand the
+ * callee a function value that performs (a runtime-impure inferred row) or may
+ * await?  A generic HOF whose own body only calls its fn parameter --
+ * `(defn gapp [B] [f : (fn [B] #fx{E} B) v : B] : B (f v))` -- performs
+ * nothing itself, so emit_cps_ir_colored_fn_needs_mono asks for no clone; but
+ * the call colors it, its base sig-rejects on its type variables, and
+ * evicted, it took the effect off the CPS backend: the callback's `perform`
+ * had "no lowering here".  The clone this asks for has the concrete signature
+ * the non-generic twin has, which the backend admits. */
+static bool emit_abi_call_passes_effectful_fn(const Expr *call) {
+    for (uint32_t i = 0; i < call->as.call_.n_args; i++) {
+        const Expr *a = call->as.call_.args[i];
+        while (a) {
+            if (a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+            else if (a->kind == EX_FN_TO_FAT) a = a->as.fn_to_fat_.inner;
+            else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+            else if (a->kind == EX_POLY_WRAP) a = a->as.poly_wrap_.inner;
+            else if (a->kind == EX_CAST) a = a->as.cast_.expr;
+            else if (a->kind == EX_REINTERPRET) a = a->as.reinterpret_.expr;
+            else break;
+        }
+        if (!a) continue;
+        const FnDef *afd = NULL;
+        if (a->kind == EX_VAR && a->as.var.binding) {
+            const Binding *b = a->as.var.binding;
+            if (b->source_binding) b = b->source_binding;
+            afd = b->source_fn_def;
+            if (!afd && b->closure_fn_binding) afd = b->closure_fn_binding->source_fn_def;
+            if (!afd && b->hoist_closure_fn_binding) afd = b->hoist_closure_fn_binding->source_fn_def;
+        } else if (a->kind == EX_CLOSURE && a->as.closure_.closure) {
+            afd = a->as.closure_.closure->fn;
+        } else if (a->kind == EX_FN) {
+            afd = a->as.fn_.fn;
+        }
+        if (!afd) continue;
+        if ((afd->inferred_effect_row && !effect_row_is_runtime_pure(afd->inferred_effect_row))
+            || cps_fn_may_await(afd))
+            return true;
+    }
+    return false;
+}
+
+/* ...or declares a fn parameter whose effect row is not empty -- a callback
+ * the generic performs through whatever is passed at this call: the row
+ * colors it, so a call with a pure callback needs the clone too. */
+static bool emit_abi_fn_has_effectful_fn_param(const FnDef *fd) {
+    if (!fd || !fd->params) return false;
+    for (uint32_t i = 0; i < fd->n_params; i++) {
+        const Binding *p = fd->params[i];
+        if (!p || p->type.kind != TY_FN) continue;
+        const struct EffectRow *r = p->type.as.fn.effect_row;
+        if (r && r->kind != ERK_EMPTY) return true;
+    }
+    return false;
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -7431,7 +7559,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
      * cannot lower its `perform`.  Mint the clone for exactly this case. */
     if (!abi_changes && !instance_changes && fd && !borrow_path &&
         bindings && n_bindings > 0 &&
-        emit_cps_ir_colored_fn_needs_mono(fd)) {
+        (emit_cps_ir_colored_fn_needs_mono(fd) || emit_abi_call_passes_effectful_fn(call)
+         || emit_abi_fn_has_effectful_fn_param(fd))) {
         abi_changes = true;
     }
     /* SR2b: a generic that RECEIVES a fat closure whose element tyvar
@@ -10179,6 +10308,30 @@ const char *emit_localvar_lookup_ctype(const char *cname) {
     return e ? e->ctype : NULL;
 }
 
+/* A recording scoped to one emitted function.  A temp's name is unique in the
+ * program, so the table never needs to forget one; a SOURCE name is not -- the
+ * `x` a lifted CPS helper records for its `double x` capture read-out is the
+ * same text as another function's `int64_t x` parameter, and a stale entry
+ * made the carrier bridge there bit-cast an integer as a double.  Save the
+ * name's spelling before recording, and restore it (NULL: forget it) when the
+ * function is done. */
+char *emit_localvar_save_ctype(const char *cname) {
+    const char *c = emit_localvar_lookup_ctype(cname);
+    return c ? strdup(c) : NULL;
+}
+
+void emit_localvar_restore_ctype(const char *cname, char *prev) {
+    if (!cname) { free(prev); return; }
+    EmitLocalVarEntry *e = emit_localvar_find(cname);
+    if (e) {
+        free(e->ctype);
+        e->ctype = prev;      /* NULL reads back as "not recorded" */
+        return;
+    }
+    if (prev) emit_localvar_record_ctype(cname, prev);
+    free(prev);
+}
+
 /* S1 (jit-engine-plan section 4): see emit_internal.h. */
 bool emit_c_type_is_scalar(const char *cname) {
     if (!cname || !*cname) return false;
@@ -11417,6 +11570,21 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
     buf_puts(out, "}\n");
     buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
+    /* A pointer whose provenance the optimizer must not follow.  A spawn's
+     * `env` is a closure box or a bare thunk pointer (tur_async_fiber_via), and
+     * the drop guarded by the ownership flag only ever runs on a box.  With the
+     * whole preamble in one unit gcc inlines the spawn into its caller, sees the
+     * drop reachable with a FUNCTION behind `env`, and stops with "arrays of
+     * functions are not meaningful" (plus -Warray-bounds / -Wfree-nonheap-object
+     * on a path that never runs).  An empty asm hides where the pointer came
+     * from; it emits no instruction.  c2mir defines neither macro and takes the
+     * plain cast. */
+    buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+    buf_puts(out, "#define TUR_OPAQUE_PTR(p) __extension__ ({ void *__op = (void *)(intptr_t)(p); "
+                  "__asm__(\"\" : \"+r\"(__op)); __op; })\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#define TUR_OPAQUE_PTR(p) ((void *)(intptr_t)(p))\n");
+    buf_puts(out, "#endif\n");
     /* async/reactor: the precompiled reactor/fiber group in libturi owns callback
      * closure boxes and frees them at teardown, but cannot name the per-program
      * tur_closure_drop.  libturi defines a WEAK `tur_closure_headers_enabled = 0`;
@@ -12769,12 +12937,21 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    }\n"
         "}\n");
     buf_puts(out,
-        "static void __tur_dyn_no_operator(int __op, int64_t __t) {\n"
+        "static void __tur_dyn_no_operator(int __op, int64_t __t, const tur_site_t *__site) {\n"
         "    char __m[160];\n"
         "    snprintf(__m, sizeof(__m), \"%s: no operator for a %s argument\",\n"
         "             __tur_dyn_op_name(__op), __tur_dyn_argname(__t));\n"
-        "    tur_panic(__m);\n"
+        "    if (__site) tur_panic_at(__site->file, __site->line, __m); else tur_panic_sited(__m);\n"
         "}\n");
+    /* panic-location-names-the-runtime-not-the-call-site: the operator, not,
+     * println and comparison helpers take the call's site (a static
+     * `tur_site_t`, emit_site_ref_text) as a trailing argument -- one register
+     * on the hit path, nothing stored; the thread-local set/clear a sited
+     * inline-C call uses cost a 10M-turn Saffron arithmetic loop 30% -- and
+     * the panic names it.  The call-arity check and the field miss, which are
+     * statements off the hot path, set the slot around themselves instead and
+     * panic through tur_panic_sited; the slot (emit_panic_site_slot) precedes
+     * this text in the unit.  A NULL site names the runtime's line, as before. */
     /* r7rs-type-errors-are-uncatchable-panics: an operand the dynamic operator
      * has no row for.  In a Scheme program -- whose prelude installs the hook
      * the raising cast check uses (ensure_r7rs_cast_helper) -- it is an R7RS
@@ -12786,10 +12963,10 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "#define TUR_R7RS_TYPE_ERROR_HOOK_DECL 1\n"
         "static tur_tagged_t (*tur_r7rs_type_error_hook)(const char *, const char *, tur_tagged_t);\n"
         "#endif\n"
-        "static void __tur_dyn_bad_operand(int __op, tur_tagged_t __v) {\n"
+        "static void __tur_dyn_bad_operand(int __op, tur_tagged_t __v, const tur_site_t *__site) {\n"
         "    if (tur_r7rs_type_error_hook)\n"
         "        (void)tur_r7rs_type_error_hook(__tur_dyn_op_name(__op), \"a number\", __v);\n"
-        "    __tur_dyn_no_operator(__op, TUR_GETTAG(__v));\n"
+        "    __tur_dyn_no_operator(__op, TUR_GETTAG(__v), __site);\n"
         "}\n");
     buf_puts(out,
         "static inline int __tur_dyn_is_num(int64_t __t) {\n"
@@ -12812,18 +12989,18 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * the interpreter promoted.  An integral literal cannot show that, which is
      * why every probe here leads with 7.1. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_arith(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
+        "static tur_tagged_t __tur_dyn_arith(int __op, tur_tagged_t __a, tur_tagged_t __b, const tur_site_t *__site) {\n"
         "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a, __site); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b, __site); }\n"
         /* `mod` and the bit operators have int rows only in the builtin table,
          * so a float operand finds no overload in the interpreter either.  Same
          * answer here. */
         "    if (__op == TUR_DYNOP_MOD || __op == TUR_DYNOP_BAND ||\n"
         "        __op == TUR_DYNOP_BOR || __op == TUR_DYNOP_BXOR ||\n"
         "        __op == TUR_DYNOP_SHL || __op == TUR_DYNOP_SHR) {\n"
-        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __a); }\n"
-        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __b); }\n"
+        "        if (__ta != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __a, __site); }\n"
+        "        if (__tb != TUR_DYNTAG_INT) { __tur_dyn_bad_operand(__op, __b, __site); }\n"
         "        {\n"
         "            int64_t __x = TUR_UNTAG(__a), __y = TUR_UNTAG(__b);\n"
         "            switch (__op) {\n"
@@ -12871,7 +13048,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * know which operator it will turn out to be.  The `if` that consumes it
      * goes through __tur_dyn_truthy like any other dynamic condition. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_cmp(int __op, tur_tagged_t __a, tur_tagged_t __b) {\n"
+        "static tur_tagged_t __tur_dyn_cmp(int __op, tur_tagged_t __a, tur_tagged_t __b, const tur_site_t *__site) {\n"
         "    int64_t __ta = TUR_GETTAG(__a), __tb = TUR_GETTAG(__b);\n"
         /* `=` on two bools is a real builtin row (TY_BOOL), so it is a real
          * dynamic answer too.  Ordering operators have no bool row. */
@@ -12905,8 +13082,8 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "                 : ((__cx == NULL || __cy == NULL) ? 0 : (strcmp(__cx, __cy) == 0));\n"
         "        return TUR_TAG(TUR_DYNTAG_BOOL, __op == TUR_DYNOP_EQ ? __ce : !__ce);\n"
         "    }\n"
-        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a); }\n"
-        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b); }\n"
+        "    if (!__tur_dyn_is_num(__ta)) { __tur_dyn_bad_operand(__op, __a, __site); }\n"
+        "    if (!__tur_dyn_is_num(__tb)) { __tur_dyn_bad_operand(__op, __b, __site); }\n"
         "    if (__ta == TUR_DYNTAG_FLOAT || __tb == TUR_DYNTAG_FLOAT) {\n"
         "        double __x = __tur_dyn_f(__a), __y = __tur_dyn_f(__b);\n"
         "        int __r;\n"
@@ -12947,12 +13124,12 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * `not` truthy here would give the two back ends different answers for the
      * same program, which is a worse outcome than either rule. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_not(tur_tagged_t __v) {\n"
+        "static tur_tagged_t __tur_dyn_not(tur_tagged_t __v, const tur_site_t *__site) {\n"
         "    if (TUR_GETTAG(__v) != TUR_DYNTAG_BOOL) {\n"
         "        char __m[160];\n"
         "        snprintf(__m, sizeof(__m), \"not: no operator for a %s argument\",\n"
         "                 __tur_dyn_argname(TUR_GETTAG(__v)));\n"
-        "        tur_panic(__m);\n"
+        "        if (__site) tur_panic_at(__site->file, __site->line, __m); else tur_panic_sited(__m);\n"
         "    }\n"
         "    return TUR_TAG(TUR_DYNTAG_BOOL, TUR_UNTAG(__v) == 0);\n"
         "}\n");
@@ -12979,7 +13156,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
      * Returns nil rather than void so the node keeps the `any` type the
      * elaborator gave it; a println in value position is rare but legal. */
     buf_puts(out,
-        "static tur_tagged_t __tur_dyn_println(tur_tagged_t __v) {\n"
+        "static tur_tagged_t __tur_dyn_println(tur_tagged_t __v, const tur_site_t *__site) {\n"
         "    int64_t __t = TUR_GETTAG(__v);\n"
         "    if (__t == TUR_DYNTAG_INT)        printf(\"%lld\\n\", (long long)TUR_UNTAG(__v));\n"
         "    else if (__t == TUR_DYNTAG_FLOAT) printf(\"%g\\n\", __tur_dyn_f(__v));\n"
@@ -12991,7 +13168,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "        char __m[160];\n"
         "        snprintf(__m, sizeof(__m), \"println: no operator for a %s argument\",\n"
         "                 __tur_dyn_argname(__t));\n"
-        "        tur_panic(__m);\n"
+        "        if (__site) tur_panic_at(__site->file, __site->line, __m); else tur_panic_sited(__m);\n"
         "    }\n"
         "    return TUR_TAG(TUR_DYNTAG_NIL, 0);\n"
         "}\n");
@@ -13020,7 +13197,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "            snprintf(__m, sizeof(__m), \"cannot call this function here "
         "-- it takes a different number of arguments, or parameters this call "
         "site cannot supply\");\n"
-        "        tur_panic(__m);\n"
+        "        tur_panic_sited(__m);\n"
         "    }\n"
         "}\n");
     /* r7rs-lang-plan R6 (docs/archive/r7rs-compiled-dynamic-shapes.md 2b):
@@ -13122,7 +13299,7 @@ void ensure_saffron_dyn_runtime(EmitCtx *ctx) {
         "    char __m[192];\n"
         "    snprintf(__m, sizeof(__m), \"no field '.%s' on a %s value\", __f,\n"
         "             __tur_any_type_name(__tag));\n"
-        "    tur_panic(__m);\n"
+        "    tur_panic_sited(__m);\n"
         "}\n");
     /* proper-tail-calls T6 (docs/archive/proper-tail-calls-plan.md, T-D6):
      * the bounce trampoline for a dynamic call in tail position.
@@ -14213,15 +14390,21 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      *
      * Reports the runtime type NAME rather than the tag: the tag is a hash and
      * means nothing to a reader, and P1's registry already answers this. */
+    /* panic-location-names-the-runtime-not-the-call-site: the dispatch site
+     * passes its own source basename and line (emit_dyn_method), as a cast
+     * check does (__tur_any_cast_check_at); this helper sits in the fixed
+     * preamble, ahead of the program-side site slot, so it takes the location
+     * as arguments.  The location-free entry stays for the runtime's callers. */
     if (g_opt_dynamic_any) {
-    buf_puts(out, "static const void *__tur_inst_slot(const char *cls, const char *meth, "
-                  "int64_t tag, int slot) {\n");
+    buf_puts(out, "static const void *__tur_inst_slot_at(const char *cls, const char *meth, "
+                  "int64_t tag, int slot, const char *file, int line) {\n");
     buf_puts(out, "    const void *__t = __tur_inst_find(cls, tag);\n");
     buf_puts(out, "    char __m[224];\n");
     buf_puts(out, "    if (!__t) {\n");
     buf_puts(out, "        snprintf(__m, sizeof(__m), \"no instance of %s for %s "
                   "(dispatching .%s on an any)\", cls, __tur_any_type_name(tag), meth);\n");
-    buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
+    buf_puts(out, "        if (file) tur_panic_at(file, line, __m); else tur_panic(__m);\n");
+    buf_puts(out, "        return 0;\n    }\n");
     buf_puts(out, "    const void *__f = ((const void **)__t)[slot];\n");
     buf_puts(out, "    if (!__f) {\n");
     buf_puts(out, "        snprintf(__m, sizeof(__m), \"instance %s %s exists but "
@@ -14229,10 +14412,24 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
                   "more than the receiver, or returning the class variable, on a "
                   "non-parametric receiver)\", cls, "
                   "__tur_any_type_name(tag), meth);\n");
-    buf_puts(out, "        tur_panic(__m); return 0;\n    }\n");
+    buf_puts(out, "        if (file) tur_panic_at(file, line, __m); else tur_panic(__m);\n");
+    buf_puts(out, "        return 0;\n    }\n");
     buf_puts(out, "    return __f;\n}\n");
+    buf_puts(out, "__attribute__((unused)) static const void *__tur_inst_slot(const char *cls, "
+                  "const char *meth, int64_t tag, int slot) {\n");
+    buf_puts(out, "    return __tur_inst_slot_at(cls, meth, tag, slot, NULL, 0);\n}\n");
     }
+    /* panic-location-names-the-runtime-not-the-call-site: a failed cast panics
+     * at the CAST -- each check the emitter writes passes its own source
+     * basename and line (emit_any_cast_bind_check), as a `(panic ...)` site
+     * does.  The location-free entry stays for the runtime's own callers. */
+    buf_puts(out, "static void __tur_any_cast_check_at(int64_t have, int64_t want, "
+                  "const char *file, int line);\n");
     buf_puts(out, "static void __tur_any_cast_check(int64_t have, int64_t want) {\n");
+    buf_puts(out, "    __tur_any_cast_check_at(have, want, NULL, 0);\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static void __tur_any_cast_check_at(int64_t have, int64_t want, "
+                  "const char *file, int line) {\n");
     buf_puts(out, "    if (have != want) {\n");
     buf_puts(out, "        char __m[192];\n");
     buf_puts(out, "        const char *__hn = __tur_any_type_name(have);\n");
@@ -14261,7 +14458,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        else\n");
     buf_puts(out, "            snprintf(__m, sizeof(__m), \"cast: any holds a "
                   "different instantiation of %s\", __hn);\n");
-    buf_puts(out, "        tur_panic(__m);\n");
+    buf_puts(out, "        if (file) tur_panic_at(file, line, __m); else tur_panic(__m);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "}\n");
     /* Phase HRT2: existential type — opaque void* wrapping any boxed value */
@@ -14707,6 +14904,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n");
     buf_puts(out, "static void tur_panic(const char *msg) { tur_panic_at(__FILE__, __LINE__, msg); }\n\n");
+    /* panic-location-names-the-runtime-not-the-call-site: the current panic
+     * site and tur_panic_sited are PROGRAM-side, after the fixed preamble
+     * (emit_panic_site_slot) -- a thread-local in this region is reached
+     * through a host accessor call in a hosted build. */
 
     /* Phase R5: tur_panic_abort for #[no-unwind] */
     buf_puts(out, "/* Phase R5: tur_panic_abort - no unwinding, immediate abort */\n");
@@ -15110,7 +15311,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
          * threads): realloc'd (collected) arrays and a chain in flight. */
         r7gc_note_tls_root("__dk_reap_v");
         r7gc_note_tls_root("__dk_reap_kind");
-        r7gc_note_tls_root("g_dk_meta");
         r7gc_note_tls_root("g_dk_resume_chain");
     }
     /* Base-shift escape-reset context (direct-reset-shift-degrades fix): the
@@ -15414,19 +15614,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *_prev = tur_current_fiber;\n");
     buf_puts(out, "    tur_current_fiber = f;\n");
     buf_puts(out, "    f->arg = arg;\n");
-    /* CPS/DK: g_dk_driver (the current DK entry-driver landing) and the DK
-     * meta-stack depth are STACK-DISCIPLINED -- they name a setjmp buffer / frame
-     * on the CURRENT C stack.  A resumed fiber runs on its own stack and may
+    /* CPS/DK: g_dk_driver (the current DK entry-driver landing) is
+     * STACK-DISCIPLINED -- it names a setjmp buffer on the CURRENT C stack.  A resumed fiber runs on its own stack and may
      * install its own DK handle (setting g_dk_driver to a buffer ON THE FIBER
      * STACK), then YIELD out mid-handle without restoring it (the yield is a
      * swapcontext, not a return, so the fiber wrapper's `g_dk_driver = __dksave`
      * never runs).  Left unrestored, the resumer's next dk_perform longjmps into
      * the fiber's (possibly freed) stack -> SIGSEGV / "longjmp causes uninitialized
-     * stack frame".  Save the resumer's driver + meta depth across the swapcontext
-     * and restore them when control returns, so the fiber's driver never leaks
-     * out.  The trampoline path declares g_dk_driver / g_dk_meta_n and is the
-     * only path since cps-tramp-resume graduated (2026-07-19). */
-    buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver; size_t _dk_meta_save = g_dk_meta_n;\n");
+     * stack frame".  Save the resumer's driver across the swapcontext and
+     * restore it when control returns, so the fiber's driver never leaks out.
+     * The trampoline path declares g_dk_driver and is the only path since
+     * cps-tramp-resume graduated (2026-07-19). */
+    buf_puts(out, "    tur_jmp_buf *_dk_save = g_dk_driver;\n");
     /* dk-reap-list-shared-across-threads: the CPS entry depth and the reap
      * registry follow the stack too, but a fiber's outlive a yield -- it can
      * yield inside a CPS entry and finish that entry later, on whichever
@@ -15471,7 +15670,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
         buf_puts(out, "    memcpy(f->r7dyn, &tur_r7rs_dyn, sizeof f->r7dyn);\n");
         buf_puts(out, "    tur_r7rs_dyn = _r7dyn;\n");
     }
-    buf_puts(out, "    g_dk_driver = _dk_save; g_dk_meta_n = _dk_meta_save;\n");
+    buf_puts(out, "    g_dk_driver = _dk_save;\n");
     buf_puts(out, "    tur_current_fiber = _prev;\n");
     buf_puts(out, "    return f->result;\n");
     buf_puts(out, "}\n\n");
@@ -16065,7 +16264,26 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    FiberBlock *fiber;  /* The fiber running the async task */\n");
     buf_puts(out, "    struct { void (*fn)(TurFuture *, int64_t); void *env; } on_complete;\n");
     buf_puts(out, "    void *thread;       /* pthread_t * of a thread-backed async; joined by await */\n");
+    buf_puts(out, "    int owned_by_await; /* an `(await (async ...))`: freed by the reader that takes its value */\n");
     buf_puts(out, "};\n\n");
+    /* await-of-fresh-spawn-future-never-freed: the future of `(await (async
+     * ...))` is named by nothing but that await -- no stdlib call frees a raw
+     * spawn future, so every such expression leaked its 56 bytes.  The emitter
+     * marks it at the await (__tur_await_own; both back ends), and whichever
+     * reader hands its value to the continuation frees it right after:
+     * tur_await_future, __tur_await_value, __tur_await_body, and the park's
+     * __tur_async_resume.  Each reads the value out first; a thread-backed
+     * future is joined before any of them reads.  Never set on a future the
+     * program holds (`(let [f (async ...)] ...)`), which stays the program's. */
+    buf_puts(out, "static void tur_future_free(TurFuture *f);\n");
+    buf_puts(out, "__attribute__((unused)) static void __tur_await_own(void *fp) {\n");
+    buf_puts(out, "    if (fp) ((TurFuture *)fp)->owned_by_await = 1;\n");
+    buf_puts(out, "}\n");
+    buf_puts(out, "static int64_t __tur_future_take(TurFuture *f) {\n");
+    buf_puts(out, "    int64_t v = f->value;\n");
+    buf_puts(out, "    if (f->owned_by_await) tur_future_free(f);\n");
+    buf_puts(out, "    return v;\n");
+    buf_puts(out, "}\n\n");
     
     buf_puts(out, "/* Create a new pending future */\n");
     buf_puts(out, "static TurFuture *tur_future_new(void) {\n");
@@ -16119,13 +16337,44 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * list to be reaped once the resumed body settles; `depth` is the entry
      * depth the await parked at, which names the entry that owns the park (the
      * innermost one -- the await's shift reached its root). */
-    buf_puts(out, "typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; } TurAsyncPark;\n\n");
+    /* async-capturing-body-env-never-freed: `own_env` is the closure box the
+     * spawned body runs in when the spawn owns it (tur_async_owns_env), carried
+     * from park to park and dropped once the body settles. */
+    buf_puts(out, "typedef struct { DK *subk; TurFuture *outer; __dk_reap_seg seg; int depth; void *own_env; } TurAsyncPark;\n\n");
     emit_rt_global(out, shared,
                    "int tur_async_suspended = 0;      /* set by __tur_await_body when it parks */\n",
                    "int tur_async_suspended");
     emit_rt_global(out, shared,
                    "TurAsyncPark *tur_async_pending_park = NULL;  /* the park the last suspend created */\n\n",
                    "TurAsyncPark *tur_async_pending_park");
+    /* await-parks-only-to-the-nearest-c-frame: the entry depth of the running
+     * async body's own root (-1 outside one).  A pending await parks by
+     * shifting to the NEAREST root; when that is a deeper entry's -- a
+     * direct-style frame (a function the CPS backend evicted) stands between
+     * the await and the body -- the park would capture only the part below
+     * it, and the frames above would carry on at once with a dummy 0: a
+     * silent wrong answer.  __tur_await_body refuses that park instead. */
+    emit_rt_global(out, shared,
+                   "int tur_async_body_depth = -1;  /* entry depth of the async body's root */\n\n",
+                   "int tur_async_body_depth");
+    /* ...and when the spawned body is itself direct-style (a function the CPS
+     * backend did not take), it has no root of its own: ANY park is below it.
+     * The emitter sets this just before such a spawn (emit_async_direct_body);
+     * the spawn consumes it. */
+    emit_rt_tls(out, shared,
+                "TUR_THREAD_LOCAL int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */\n\n",
+                "TUR_THREAD_LOCAL int tur_async_direct_body",
+                "tur_async_direct_body", "int *", "tur_tls_async_direct_body_ptr", NULL);
+    /* async-capturing-body-env-never-freed: the next closure spawn OWNS its box
+     * -- a fresh capturing lambda written at the spawn whose env drop is
+     * shallow (emit_async_owns_env) -- and drops it when the body settles. */
+    /* Both flags are set and read by one thread between a spawn site and the
+     * spawn it calls, so each is thread-local: a thread-backed body spawning
+     * while another thread spawns must not read the other's flag. */
+    emit_rt_tls(out, shared,
+                "TUR_THREAD_LOCAL int tur_async_owns_env = 0;  /* the next closure spawn owns its box */\n\n",
+                "TUR_THREAD_LOCAL int tur_async_owns_env",
+                "tur_async_owns_env", "int *", "tur_tls_async_owns_env_ptr", NULL);
 
     /* The exit of every direct->CPS entry wrapper (emit_cps_ir.c, and
      * __dk_enter0 below).  A body that settled frees its root and leaves its
@@ -16231,7 +16480,11 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
     buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; "
+                  "tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); "
+                  "tur_async_direct_body = 0;\n");
     buf_puts(out, "    int64_t result = fn();\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
     buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
@@ -16258,17 +16511,24 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        tur_scheduler = tur_scheduler_new();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
+    buf_puts(out, "    int __own = tur_async_owns_env; tur_async_owns_env = 0;\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
     buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; "
+                  "tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); "
+                  "tur_async_direct_body = 0;\n");
     buf_puts(out, "    int64_t result = __fn(clos);\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
-    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(clos); return future; }\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        tur_async_pending_park->outer = future;\n");
+    buf_puts(out, "        if (__own) tur_async_pending_park->own_env = clos;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_future_fulfill(future, result);\n");
+    buf_puts(out, "        if (__own) TUR_CLOSURE_DROP(clos);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
@@ -16286,22 +16546,32 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * a bool widened, a pointer cast); `env` is the bare fn pointer or the
      * closure box, whichever the wrapper expects.  Same future / F3.2
      * suspend handling as the two spawns above. */
+    /* async-capturing-body-env-never-freed: `env` is owned exactly as in
+     * tur_async_fiber_closure -- only ever a closure box, which the emitter
+     * says (tur_async_owns_env) for a fresh lambda written at the spawn. */
     buf_puts(out, "static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {\n");
     buf_puts(out, "    TurFuture *future = tur_future_new();\n");
     buf_puts(out, "    if (!tur_scheduler) {\n");
     buf_puts(out, "        tur_scheduler = tur_scheduler_new();\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    int __own = tur_async_owns_env; tur_async_owns_env = 0;\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    tur_handler_node __node; __node.parent = tur_handler_chain;\n");
     buf_puts(out, "    tur_handler_chain = &__node;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; "
+                  "tur_async_body_depth = __dk_entry_depth + (tur_async_direct_body ? 0 : 1); "
+                  "tur_async_direct_body = 0;\n");
     buf_puts(out, "    int64_t result = wrap(env);\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
-    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) return future;\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(TUR_OPAQUE_PTR(env)); return future; }\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        tur_async_pending_park->outer = future;\n");
+    buf_puts(out, "        if (__own) tur_async_pending_park->own_env = env;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_future_fulfill(future, result);\n");
+    buf_puts(out, "        if (__own) TUR_CLOSURE_DROP(TUR_OPAQUE_PTR(env));\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
@@ -16322,7 +16592,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * which the future is an ordinary completed one.  A panic in the body
      * rejects the future, as for the inline spawns (tur_panicking and the
      * handler chain are thread-local). */
-    buf_puts(out, "typedef struct { int64_t (*call)(void *); void *env; TurFuture *future; } TurAsyncThreadArg;\n\n");
+    /* async-capturing-body-env-never-freed: `own_env` is the closure box the
+     * spawn owns (tur_async_owns_env at the spawn), dropped by the thread once
+     * the body has settled -- it is the body's env, so nothing else reads it
+     * after that, and the drop frees the box alone (the spawn admits only
+     * such an env). */
+    buf_puts(out, "typedef struct { int64_t (*call)(void *); void *env; TurFuture *future; void *own_env; } TurAsyncThreadArg;\n\n");
     buf_puts(out, "static int64_t __tur_async_call_box(void *clos) {\n");
     buf_puts(out, "    int64_t (*__fn)(void *) = *(int64_t (**)(void *))clos;\n");
     buf_puts(out, "    return __fn(clos);\n");
@@ -16334,6 +16609,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    tur_handler_chain = &__node;\n");
     buf_puts(out, "    int64_t result = a->call(a->env);\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
+    buf_puts(out, "    void *__own = a->own_env;\n");
     buf_puts(out, "    free(a);\n");
     buf_puts(out, "    if (!tur_async_reject_if_panicking(future)) {\n");
     /* A plain store, like tur_future_fulfill's: every reader of a threaded
@@ -16345,15 +16621,18 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        future->value = result;\n");
     buf_puts(out, "        future->status = FUTURE_FULFILLED;\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    if (__own) TUR_CLOSURE_DROP(__own);\n");
     buf_puts(out, "    return NULL;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "static TurFuture *tur_async_thread_via(int64_t (*call)(void *), void *env) {\n");
     buf_puts(out, "    TurFuture *future = tur_future_new();\n");
     buf_puts(out, "    if (!tur_scheduler) tur_scheduler = tur_scheduler_new();\n");
+    buf_puts(out, "    int __own = tur_async_owns_env; tur_async_owns_env = 0;\n");
     buf_puts(out, "    TurAsyncThreadArg *a = (TurAsyncThreadArg *)malloc(sizeof(TurAsyncThreadArg));\n");
     buf_puts(out, "    pthread_t *tid = (pthread_t *)malloc(sizeof(pthread_t));\n");
     buf_puts(out, "    if (!a || !tid) { fprintf(stderr, \"async: out of memory\\n\"); abort(); }\n");
     buf_puts(out, "    a->call = call; a->env = env; a->future = future;\n");
+    buf_puts(out, "    a->own_env = __own ? env : NULL;\n");
     buf_puts(out, "    if (pthread_create(tid, NULL, tur_async_thread_main, a) != 0) {\n");
     buf_puts(out, "        fprintf(stderr, \"async: pthread_create failed\\n\");\n");
     buf_puts(out, "        abort();\n");
@@ -16379,9 +16658,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "             * result: with a catch-unwind in scope this is catchable, and\n");
     buf_puts(out, "             * with none tur_panic prints the task's message and aborts. */\n");
     buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            if (f->owned_by_await) tur_future_free(f);\n");
     buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
-    buf_puts(out, "        return f->value;\n");
+    buf_puts(out, "        return __tur_future_take(f);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* Future not ready */\n");
     buf_puts(out, "    if (!tur_current_fiber) {\n");
@@ -16402,15 +16682,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        /* When we resume, the future should be done */\n");
     buf_puts(out, "        if (tur_future_done(f) && f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            if (f->owned_by_await) tur_future_free(f);\n");
     buf_puts(out, "            return 0;\n");
     buf_puts(out, "        }\n");
-    buf_puts(out, "        return f->value;\n");
+    buf_puts(out, "        return __tur_future_take(f);\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    if (f->status == FUTURE_REJECTED) {\n");
     buf_puts(out, "        fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
     buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
-    buf_puts(out, "    return f->value;\n");
+    buf_puts(out, "    return __tur_future_take(f);\n");
     buf_puts(out, "}\n\n");
 
     /* async-parked-body-chains-never-reaped: the resume runs as a CPS entry
@@ -16426,9 +16707,15 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * leaves it (__dk_entry_leave). */
     buf_puts(out, "static void __tur_async_resume(TurFuture *inner, int64_t value) {\n");
     buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)inner->on_complete.env;\n");
+    /* The awaited future's value arrived as `value`; an await-owned one
+     * (__tur_await_own) is done with here.  tur_future_fulfill, the caller,
+     * touches `inner` no further, and its own caller handed the pointer to
+     * this await alone (a fresh spawn's; a re-park carries it as `outer`). */
+    buf_puts(out, "    if (inner->owned_by_await) tur_future_free(inner);\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");
     buf_puts(out, "    __dk_entry_depth++;\n");
+    buf_puts(out, "    int __abd = tur_async_body_depth; tur_async_body_depth = __dk_entry_depth;\n");
     buf_puts(out, "    size_t __dk_reap_mark = __dk_reap_n;\n");
     /* fn-value-call-cps-frames-held-until-outer-entry, effect half: run the
      * parked chain itself (a park is resumed once, so it needs no copy) under a
@@ -16438,12 +16725,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * the chain (`inplace_head`: the trampoline neither frees nor keeps it), and
      * frees it once the run is over, as dk_invoke freed its copy. */
     buf_puts(out, "    rec->subk->inplace_head = true;\n");
-    buf_puts(out, "    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value, g_dk_meta_n);\n");
+    buf_puts(out, "    int64_t r = (int64_t)__dk_drive_bounded(rec->subk, (intptr_t)value);\n");
     buf_puts(out, "    dk_free(rec->subk);\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        /* re-parked on a further pending await: thread the outer future through */\n");
     buf_puts(out, "        TurAsyncPark *np = tur_async_pending_park;\n");
     buf_puts(out, "        np->outer = rec->outer;\n");
+    buf_puts(out, "        np->own_env = rec->own_env;\n");
     buf_puts(out, "        if (np->depth == __dk_entry_depth) {\n");
     buf_puts(out, "            __dk_reap_seg_move(&np->seg, &rec->seg);\n");
     buf_puts(out, "            __dk_reap_seg_take(&np->seg, __dk_reap_mark);\n");
@@ -16460,7 +16748,9 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "        __dk_reap_seg_give(&rec->seg);\n");
     buf_puts(out, "        if (--__dk_entry_depth == 0) __dk_reap_run(); else __dk_reap_drop_to(__dk_reap_mark);\n");
     buf_puts(out, "        tur_future_fulfill(rec->outer, r);\n");
+    buf_puts(out, "        if (rec->own_env) TUR_CLOSURE_DROP(rec->own_env);\n");
     buf_puts(out, "    }\n");
+    buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    free(rec);\n");
     buf_puts(out, "}\n\n");
 
@@ -16486,7 +16776,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    return f->status == FUTURE_FULFILLED;\n");
     buf_puts(out, "}\n\n");
     buf_puts(out, "__attribute__((unused)) static intptr_t __tur_await_value(void *fp) {\n");
-    buf_puts(out, "    return (intptr_t)((TurFuture *)fp)->value;\n");
+    buf_puts(out, "    return (intptr_t)__tur_future_take((TurFuture *)fp);\n");
     buf_puts(out, "}\n\n");
     /* async-repeated-park-holds-frames-until-settle: asked once an await's
      * shift has returned.  Only the shift's own park leaves the awaited future
@@ -16514,9 +16804,10 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "            /* Same re-raise as tur_await_future; the resumed continuation\n");
     buf_puts(out, "             * sees tur_panicking and unwinds through its own checks. */\n");
     buf_puts(out, "            tur_panic(f->error ? f->error : \"async task panicked\");\n");
+    buf_puts(out, "            if (f->owned_by_await) tur_future_free(f);\n");
     buf_puts(out, "            return dk_invoke(subk, 0);\n");
     buf_puts(out, "        }\n");
-    buf_puts(out, "        return dk_invoke(subk, f->value);\n");
+    buf_puts(out, "        return dk_invoke(subk, __tur_future_take(f));\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* cps-async graduation: a pending future backed by a RUNNABLE scheduler\n");
     buf_puts(out, "     * fiber (e.g. a fiber spawned via tur_scheduler_spawn, or a TaskGroup\n");
@@ -16534,8 +16825,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "                fprintf(stderr, \"await: future rejected: %s\\n\", f->error ? f->error : \"unknown\");\n");
     buf_puts(out, "                abort();\n");
     buf_puts(out, "            }\n");
-    buf_puts(out, "            return dk_invoke(subk, f->value);\n");
+    buf_puts(out, "            return dk_invoke(subk, __tur_future_take(f));\n");
     buf_puts(out, "        }\n");
+    buf_puts(out, "    }\n");
+    buf_puts(out, "    if (tur_async_body_depth >= 0 && __dk_entry_depth != tur_async_body_depth) {\n");
+    buf_puts(out, "        fprintf(stderr, \"await: a pending future would park below a direct-style call "
+                  "(a function on the path to this await that the CPS backend could not compile), "
+                  "losing the rest of the async body; refusing to continue. See "
+                  "docs/reported/await-parks-only-to-the-nearest-c-frame.md\\n\");\n");
+    buf_puts(out, "        fflush(stderr);\n");
+    buf_puts(out, "        abort();\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    /* pending: park a private copy of the captured continuation on on_complete */\n");
     buf_puts(out, "    TurAsyncPark *rec = (TurAsyncPark *)calloc(1, sizeof(TurAsyncPark));\n");
@@ -18001,6 +18300,52 @@ static void emit_hoisted_includes(Buf *out) {
     }
 }
 
+/* panic-location-names-the-runtime-not-the-call-site: a direct call to a
+ * function whose inline-C body may panic (`tur_panic(` in its text --
+ * vec-get's bounds check) sets the thread's current site to its own source
+ * position (a static `tur_site_t` the emitter interns per call,
+ * emit_site_set_text) just before the call and clears it just after, and
+ * `tur_panic` inside such a body is tur_panic_sited (emit_fns.c), which
+ * names that site -- so the location printed is the call's, not the
+ * runtime's.  Two stores per call, nothing on entry; the slot is read only
+ * when a panic happens.  A sited call among the arguments sets and clears
+ * its own before the outer call runs, so the outer then has none and names
+ * the runtime's line, as before -- never another call's; a body entered
+ * through a function value (nothing set) does the same.
+ *
+ * Emitted AFTER the fixed preamble, with the hoisted includes, on purpose.
+ * Nothing in the runtime archive reads the slot, and a thread-local inside
+ * the fixed region is reached through a host accessor CALL in a hosted
+ * build (the decls half takes the accessor branch) -- two calls around
+ * every vec-get.  Here, under gcc/clang, it is a native thread-local store.
+ * c2mir has no thread-locals and takes the host's slot
+ * (src/runtime/tur_tls.c), as the fixed region's do.  Every emitted unit --
+ * the program, a split build's library and client, a `--shared` TU -- gets
+ * its own `static` slot and helpers; a call from one unit into another's
+ * sited body is one more "nothing set". */
+static void emit_panic_site_slot(Buf *out) {
+    buf_puts(out,
+        "/* panic-location-names-the-runtime-not-the-call-site: the source site of\n"
+        " * the direct call to a panicking inline-C body this thread is making --\n"
+        " * set just before the call, cleared just after, read by tur_panic_sited. */\n"
+        "typedef struct { const char *file; int line; } tur_site_t;\n"
+        "#if defined(__GNUC__) || defined(__clang__)\n"
+        "static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;\n"
+        "#else\n"
+        "extern void **tur_tls_cur_site_ptr(void);\n"
+        "#define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())\n"
+        "#endif\n"
+        "static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }\n"
+        "static inline void tur_site_clear(void) { tur_cur_site = NULL; }\n"
+        "static inline void tur_panic_sited(const char *msg) {\n"
+        "    const tur_site_t *s = tur_cur_site;\n"
+        /* A caught panic (catch-unwind) never reaches the call's clear, so the
+         * slot is cleared here: a later unsited panic must not name this site. */
+        "    tur_cur_site = NULL;\n"
+        "    if (s) tur_panic_at(s->file, s->line, msg); else tur_panic(msg);\n"
+        "}\n\n");
+}
+
 /* project-mode-rc-runtime-preamble-missing: shared runtime header for the
  * owner-TU design.  Wraps the full runtime preamble (shared mode: globals
  * owner-gated, most functions demoted to static, the rc<T>/GC family
@@ -18017,6 +18362,7 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "#ifndef TUR_RUNTIME_H\n#define TUR_RUNTIME_H\n");
     emit_runtime_preamble(out, NULL, /*shared=*/true);
     emit_hoisted_includes(out);
+    emit_panic_site_slot(out);
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
 }
 
@@ -20165,17 +20511,20 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         Buf pre; buf_init(&pre);
         emit_runtime_preamble(&pre, program, false);
         emit_hoisted_includes(&pre);
+        emit_panic_site_slot(&pre);
         emit_split_state(pre.data, pre.len, g_emit_split, out);
         buf_free(&pre);
     } else {
         emit_runtime_preamble(out, program, false);
         emit_hoisted_includes(out);
+        emit_panic_site_slot(out);
     }
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
      * emitted after extern_decls and fwd_decls (defer bodies may call
      * extern-c functions or forward-declared Turmeric functions). */
-    emit_pending_defer_thunks(&ctx, &defer_thunks);
+    Buf defer_thunk_defs; buf_init(&defer_thunk_defs);
+    emit_pending_defer_thunks(&ctx, &defer_thunks, &defer_thunk_defs);
     Buf concrete_adt_apps; buf_init(&concrete_adt_apps);
     type_codegen_emit_adt_apps(&concrete_adt_apps);
     /* SYM1: interned runtime symbol records (struct __tur_sym + one per keyword).
@@ -20202,7 +20551,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      *  3. concrete_adt_apps - monomorphized polymorphic ADT typedefs + ctor fns
      *  4. extern_decls - user extern-c declarations
      *  5. fwd_decls   - Turmeric function forward declarations (visible to handlers)
-     *  6. defer_thunks - defer body functions (may call extern-c or Turmeric fns)
+     *  6. defer_thunks - defer env structs and thunk prototypes (the thunk
+ *                    bodies follow `file`: they may name its globals)
      *  7. pending_handler_fns - effect handler functions (can call Turmeric fns)
      *  8. file        - Turmeric function definitions (can reference handler fns by name)
      *  9. main()      - entry point body
@@ -20265,6 +20615,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
 
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
+    /* Defer thunk bodies: after the globals in `file`, which they may name. */
+    if (defer_thunk_defs.len) { buf_write(out, defer_thunk_defs.data, defer_thunk_defs.len); buf_putc(out, '\n'); }
+    buf_free(&defer_thunk_defs);
 
     if (split_lib) {
         /* r7rs-programs-compile-slowly: the library unit has no entry point;
@@ -21800,7 +22153,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
      * __defer_env_N`.  Written before `file` in the assembly so the thunk
      * functions and their env structs precede the bodies that reference them. */
     Buf impl_defer_thunks; buf_init(&impl_defer_thunks);
-    emit_pending_defer_thunks(&ctx, &impl_defer_thunks);
+    Buf impl_defer_thunk_defs; buf_init(&impl_defer_thunk_defs);
+    emit_pending_defer_thunks(&ctx, &impl_defer_thunks, &impl_defer_thunk_defs);
 
     /* Phase M5: emit module-level defer thunks + atexit constructor. */
     if (n_module_defers > 0) {
@@ -21876,6 +22230,9 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     if (impl_defer_thunks.len) { buf_write(out, impl_defer_thunks.data, impl_defer_thunks.len); buf_putc(out, '\n'); }
     buf_free(&impl_defer_thunks);
     if (file.len) { buf_write(out, file.data, file.len); buf_putc(out, '\n'); }
+    /* Defer thunk bodies: after the globals in `file`, which they may name. */
+    if (impl_defer_thunk_defs.len) { buf_write(out, impl_defer_thunk_defs.data, impl_defer_thunk_defs.len); buf_putc(out, '\n'); }
+    buf_free(&impl_defer_thunk_defs);
     if (!separate_compilation && !user_has_main) {
         /* Only generate main() if user didn't define one (single-file mode) */
         buf_puts(out, "int main(int argc, char **argv) {\n");

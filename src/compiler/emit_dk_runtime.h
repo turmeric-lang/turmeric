@@ -34,7 +34,7 @@
  * gated on preamble_uses_base_delimited().
  *
  * Always includes E7's trampolined tail-resume machinery (struct DK tail_resume
- * field, dk_handler_tail, the meta-stack + dk_tail_resume + __dk_drive_after,
+ * field, dk_handler_tail, dk_tail_resume + __dk_drive_after,
  * and dk_perform's yield branch).  This used to be a `tramp` parameter with an
  * `_ex` spelling, defaulting off; cps-tramp-resume graduated 2026-07-19, the
  * only caller passed the always-true g_opt_cps_tramp_resume, and the

@@ -66,14 +66,25 @@ TLS = {
     'g_dk_driver': ('void **', 'tur_tls_dk_driver_ptr'),
     'g_dk_resume_chain': ('void **', 'tur_tls_dk_resume_chain_ptr'),
     'g_dk_resume_val': ('intptr_t *', 'tur_tls_dk_resume_val_ptr'),
-    'g_dk_meta': ('void **', 'tur_tls_dk_meta_ptr'),
-    'g_dk_meta_n': ('size_t *', 'tur_tls_dk_meta_n_ptr'),
-    'g_dk_meta_cap': ('size_t *', 'tur_tls_dk_meta_cap_ptr'),
     # The dynamic tail-call trampoline's state (emit_module.c).
     'tur_tb_desc': ('void **', 'tur_tls_tb_desc_ptr'),
     'tur_tb_armed_for': ('void **', 'tur_tls_tb_armed_for_ptr'),
     'tur_tb_root': ('void **', 'tur_tls_tb_root_ptr'),
     'tur_tb_sentinel_box': ('void **', 'tur_tls_tb_sentinel_box_ptr'),
+    # The async spawn flags (async-capturing-body-env-never-freed, await-parks-
+    # only-to-the-nearest-c-frame): the program half sets each just before a
+    # spawn and the runtime half's tur_async_fiber* reads and clears it.  Left
+    # out of this table, the runtime half kept a native thread-local of its
+    # own while the hosted program wrote the accessor's slot, so under `tur
+    # jit` no async body env was ever dropped and a direct-style body's root
+    # depth was off by one.
+    'tur_async_direct_body': ('int *', 'tur_tls_async_direct_body_ptr'),
+    'tur_async_owns_env': ('int *', 'tur_tls_async_owns_env_ptr'),
+    # The current panic site (tur_cur_site, panic-location-names-the-runtime-
+    # not-the-call-site) is deliberately NOT here: it is emitted after the end
+    # marker, program-side, where gcc/clang give it a native thread-local
+    # store rather than an accessor call around every vec-get.  Only c2mir
+    # reaches the host's tur_tls_cur_site_ptr, through the emitted #else.
 }
 
 # Functions whose BODY belongs in the decls half, emitted `static inline`, and

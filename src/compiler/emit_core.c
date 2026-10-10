@@ -4,6 +4,7 @@
 #include "platform_fs.h"  /* strndup() on Windows */
 #include "globals.h"      /* compiler config globals */
 #include "cps.h"          /* cps_visit_children (ownership provenance walk) */
+#include "diag.h"         /* diag_file_path (emit_site_push_text) */
 
 /* ------------ helpers ------------ */
 
@@ -1090,6 +1091,9 @@ static bool g_esc_allow_sum_accessors = false;
  * exit, but not for one at a self tail call's backedge: there the argument is
  * the next turn's parameter.  File-scope like the flag above. */
 static bool g_esc_call_head_only = false;
+/* sum-closure-payload-never-dropped (the CPS half): set while
+ * closure_binding_escapes_reaped runs -- a `perform` is then not an escape. */
+static bool g_esc_perform_ok = false;
 /* dynamic-returned-closure-env-is-never-freed (self application): bit i set
  * admits `b` as argument i of a dynamic call whose CALLEE is `b` itself.  See
  * any_box_binding_escapes_self_apply.  File-scope for the same reason as the
@@ -1496,6 +1500,16 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
              * than risk a double free.  (shift/reset/await/call-cc and the other
              * capture forms are not modeled below and reach `default` -> escape.) */
             case EX_PERFORM:
+                /* sum-closure-payload-never-dropped (the CPS half): a free
+                 * that waits for the outermost DK entry's exit -- the reap
+                 * list -- runs after every resume the entry sees, so for
+                 * such an owner a perform is not an escape; only its
+                 * arguments can carry `b` out (closure_binding_escapes_reaped). */
+                if (g_esc_perform_ok) {
+                    for (uint32_t i = 0; i < cur->as.perform_.perform->n_args; i++)
+                        ESC_PUSH(cur->as.perform_.perform->args[i]);
+                    break;
+                }
                 escapes = true;
                 goto esc_done;
             case EX_HANDLE:
@@ -1601,6 +1615,16 @@ esc_done:
 
 bool closure_binding_escapes(const Expr *e, const Binding *b) {
     return binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+}
+
+/* The same, for an owner that frees at the outermost DK entry's exit (the CPS
+ * emitter's reap list) rather than at scope exit: a `perform` in the scope is
+ * not an escape, since every resume the entry sees runs before that free. */
+bool closure_binding_escapes_reaped(const Expr *e, const Binding *b) {
+    g_esc_perform_ok = true;
+    bool esc = binding_escapes_impl(e, b, /*allow_box_accessors=*/false, NULL);
+    g_esc_perform_ok = false;
+    return esc;
 }
 
 /* closure-let-in-self-tail-loop-leaks: is every use of `b` in `e` a call of
@@ -1717,6 +1741,134 @@ bool closure_env_drop_is_shallow(const struct Closure *c) {
         if (!fresh_closure_capture_kind_ok(cap->type.kind)) return false;
     }
     return heap_caps > 0;                      /* an env block exists */
+}
+
+/* Does an inline-C block in `e` name one of closure `c`'s captures?  Inside a
+ * lifted lambda a captured binding is read from the env box, so a C block
+ * that names it (`__TUR_CAP_N__`) holds an lvalue INTO the box and may take
+ * its address; one that names none -- a stdlib `tur_session_recv(__TUR_VAL_0__)`,
+ * whose sub-expressions are evaluated to values -- cannot reach the box.
+ * Walked exactly, through the shared operand enumeration (which does not
+ * enter a nested fn: its body is its own), where expr_subtree_has_inline_c
+ * reads every node it does not model -- a `perform`, an `await` -- as
+ * possible inline C. */
+typedef struct { const struct Closure *c; bool found; } IcEnvUd;
+static bool inline_c_env_visit(const Expr *x, void *ud);
+static bool inline_c_touches_env(const Expr *e, const struct Closure *c) {
+    if (!e) return false;
+    if (e->kind == EX_INLINE_C) {
+        const InlineC *ic = e->as.inline_c_.inline_c;
+        if (!ic) return true;
+        for (uint8_t i = 0; i < ic->n_captures; i++)
+            for (uint32_t k = 0; k < c->n_captures; k++)
+                if (ic->captures[i] && ic->captures[i] == c->captures[k]) return true;
+        return false;
+    }
+    IcEnvUd u = { c, false };
+    cps_visit_children(e, inline_c_env_visit, &u);
+    return u.found;
+}
+static bool inline_c_env_visit(const Expr *x, void *ud) {
+    IcEnvUd *u = (IcEnvUd *)ud;
+    if (inline_c_touches_env(x, u->c)) { u->found = true; return true; }
+    return false;
+}
+bool closure_body_inline_c_touches_env(const struct Closure *c) {
+    return c && c->fn && inline_c_touches_env(c->fn->body, c);
+}
+
+/* panic-location-names-the-runtime-not-the-call-site: does this function
+ * raise a runtime panic itself -- a top-level defn whose inline-C body calls
+ * `tur_panic(` (vec-get's bounds check, grid-set!'s)?  Such a body is given
+ * its caller's site: a direct call sets it around the call
+ * (emit_site_set_text) and the body's `tur_panic` reads it (emit_fns.c).
+ * `tur_panic_at(` carries a site of its own and is not matched; a closure is
+ * entered through a value, with nothing set, so it is left alone. */
+bool fn_def_panics_in_inline_c(const FnDef *fd) {
+    if (!fd || fd->closure || !fd->body || fd->body->kind != EX_INLINE_C) return false;
+    const InlineC *ic = fd->body->as.inline_c_.inline_c;
+    if (!ic || !ic->code.p) return false;
+    static const char needle[] = "tur_panic(";
+    size_t nl = sizeof needle - 1;
+    for (size_t i = 0; i + nl <= ic->code.len; i++)
+        if (memcmp(ic->code.p + i, needle, nl) == 0) return true;
+    return false;
+}
+bool binding_panics_in_inline_c(const Binding *b) {
+    return b && b->is_global && fn_def_panics_in_inline_c(b->source_fn_def);
+}
+
+/* The source position a panic in `call`'s callee should name: the macro use
+ * the program wrote when the call was written in a template (`vec-set!`'s
+ * `vec-set-o!`), else the call's own span. */
+Span emit_call_site_span(const Expr *call) {
+    if (call && call->kind == EX_CALL && call->as.call_.site.line) return call->as.call_.site;
+    return call ? call->span : SPAN_UNKNOWN;
+}
+
+/* `tur_site_set(&__tur_site_N)` for a call at `span`, with the static
+ * `tur_site_t __tur_site_N = { "<file>", <line> }` written at file scope
+ * (thunk_typedefs, which lands after the preamble and ahead of every
+ * function) -- the source's basename, as emit_panic_call spells it, so the
+ * message is the same in every checkout.  NULL for a node with no span, or
+ * with nowhere to put the static (no siting then: the body names the
+ * runtime's line, as before).  Malloc'd. */
+char *emit_site_set_text(EmitCtx *ctx, Span span) {
+    char *ref = emit_site_ref_text(ctx, span);
+    if (!ref) return NULL;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "tur_site_set(%s)", ref);
+    buf_putc(&b, '\0');
+    free(ref);
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
+}
+
+/* `&__tur_site_N` for a node at `span` -- the interned static's address, for a
+ * helper that takes the site as an argument (the dynamic operators) rather
+ * than reading the thread-local slot.  The same static, same NULL cases. */
+char *emit_site_ref_text(EmitCtx *ctx, Span span) {
+    const char *path = span.line ? diag_file_path(span.file_id) : NULL;
+    if (!path || !ctx || !ctx->thunk_typedefs) return NULL;
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    uint32_t id = (uint32_t)ctx->tmp_n++;
+    buf_printf(ctx->thunk_typedefs, "static const tur_site_t __tur_site_%u = { \"", id);
+    for (const char *p = base; *p; p++) {
+        if (*p == '\\' || *p == '"') buf_putc(ctx->thunk_typedefs, '\\');
+        buf_putc(ctx->thunk_typedefs, *p);
+    }
+    buf_printf(ctx->thunk_typedefs, "\", %u };\n", span.line);
+    Buf b; buf_init(&b);
+    buf_printf(&b, "&__tur_site_%u", id);
+    buf_putc(&b, '\0');
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
+}
+
+/* async-capturing-body-env-never-freed: may whoever alone owns this fresh
+ * closure release its env once the body is done, though the body's result is
+ * still live?  The env's drop glue (emit_expr.c, emit_fns.c) releases only an
+ * rc capture, an owned `^fat` closure capture and a Drop-instance capture,
+ * then frees the box.  With none of those it frees the box alone, which no
+ * value the body computes points into -- unless inline C took an address in
+ * it.  A struct capture is a copy in the box, so it qualifies; the shallow
+ * test above does not take it. */
+bool closure_env_drop_frees_box_only(const struct Closure *c) {
+    if (!c || !c->fn || c->n_captures == 0) return false;
+    if (c->is_shift_receiver || c->is_effect_payload) return false;
+    uint32_t heap_caps = 0;
+    for (uint32_t i = 0; i < c->n_captures; i++) {
+        const Binding *cap = c->captures[i];
+        if (!cap) return false;
+        if (cap->is_global) continue;
+        heap_caps++;
+        if (cap->type.kind == TY_RC || cap->is_fat) return false;
+        if (c->capture_drop_insts && c->capture_drop_insts[i]) return false;
+    }
+    return heap_caps > 0 && !closure_body_inline_c_touches_env(c);
 }
 
 /* dynamic-returned-closure-env-is-never-freed: does `x` evaluate to an `any`
@@ -2424,23 +2576,29 @@ void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
 }
 
 /* Phase 4 v1: Emit all registered defer thunks to the output buffer */
-void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out) {
+/* `decls` gets each thunk's env struct and prototype, `out` its definition.
+ * The definitions go after the program's file-scope globals, which a defer
+ * body may read or `set!` -- before them, `(defer (set! g ...))` named a
+ * global not yet declared (invalid C) -- and the prototypes before the
+ * bodies that push the thunks. */
+void emit_pending_defer_thunks(EmitCtx *ctx, Buf *decls, Buf *out) {
     /* First pass: emit env struct definitions for thunks with captures */
     DeferThunk *thunk = ctx->pending_defer_thunks;
     while (thunk) {
         if (thunk->env_name) {
             /* Emit env struct type definition */
-            buf_printf(out, "struct %s {", thunk->env_name);
+            buf_printf(decls, "struct %s {", thunk->env_name);
             for (uint8_t i = 0; i < thunk->n_captures; i++) {
-                if (i > 0) buf_puts(out, "; ");
+                if (i > 0) buf_puts(decls, "; ");
                 Binding *captured = thunk->captures[i];
                 char *field = raw_name_for_binding(captured);
-                buf_printf(out, "%s %s",
+                buf_printf(decls, "%s %s",
                            type_c_name(captured->type), field);
                 free(field);
             }
-            buf_puts(out, "; };\n\n");
+            buf_puts(decls, "; };\n\n");
         }
+        buf_printf(decls, "static void %s(void *__env);\n", thunk->name);
         thunk = thunk->next;
     }
     

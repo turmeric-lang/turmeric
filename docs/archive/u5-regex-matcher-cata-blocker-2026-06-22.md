@@ -13,8 +13,9 @@ plan: docs/archive/spices-type-features-uplift-plan.md (Phase U5)
 > Re-run on turmeric **v0.63.5** (macOS, Release build): the "Minimal repro"
 > below still fails at the C compile step with the same three
 > `-Wint-conversion` errors, and writing the capturing `AddF` arm first still
-> compiles and runs. The defect is tracked in
-> [docs/reported/match-result-temp-typed-from-first-arm.md](../reported/match-result-temp-typed-from-first-arm.md).
+> compiles and runs. The defect was tracked in
+> [match-result-temp-typed-from-first-arm](match-result-temp-typed-from-first-arm.md),
+> resolved 2026-10-09: either arm order compiles now.
 > Everything else in this document is unchanged from the 2026-09-09 sweep.
 
 > **RESOLVED 2026-09-09 -- yes, it can.**

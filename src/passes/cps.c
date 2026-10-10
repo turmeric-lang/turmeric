@@ -1446,15 +1446,39 @@ static bool cps_fn_has_leftover_effect(const FnDef *fd) {
  * `await` -- one of its own, or a named callee marked `may_await`?  Nested
  * function definitions are boundaries (cps_visit_children does not enter
  * them), so an await inside a lambda or an `(async (fn [] ...))` body is that
- * lambda's, not the enclosing function's. */
+ * lambda's, not the enclosing function's -- but a CALL that passes such a
+ * function as an argument may await, since its callee may call it
+ * (await-parks-only-to-the-nearest-c-frame: `(apply3 level3 x)` with an
+ * awaiting `level3`). */
 static bool cps_awaits_visit(const Expr *c, void *ud);
+static bool cps_expr_awaits(const Expr *e);
+static bool cps_binding_may_await(const Binding *b) {
+    if (!b) return false;
+    if (b->source_binding) b = b->source_binding;
+    return b->source_fn_def && b->source_fn_def->may_await;
+}
+static bool cps_fnvalue_arg_awaits(const Expr *arg) {
+    arg = cps_peel_fnvalue_arg(arg);
+    if (!arg) return false;
+    if (arg->kind == EX_VAR && arg->as.var.binding) {
+        const Binding *b = arg->as.var.binding;
+        return cps_binding_may_await(b)
+            || cps_binding_may_await(b->closure_fn_binding)
+            || cps_binding_may_await(b->hoist_closure_fn_binding);
+    }
+    if (arg->kind == EX_CLOSURE && arg->as.closure_.closure && arg->as.closure_.closure->fn) {
+        const FnDef *lfd = arg->as.closure_.closure->fn;
+        return lfd->may_await || cps_expr_awaits(lfd->body);
+    }
+    return false;
+}
 static bool cps_expr_awaits(const Expr *e) {
     if (!e) return false;
     if (e->kind == EX_AWAIT) return true;
-    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
-        const Binding *b = e->as.call_.fn_binding;
-        if (b->source_binding) b = b->source_binding;
-        if (b->source_fn_def && b->source_fn_def->may_await) return true;
+    if (e->kind == EX_CALL) {
+        if (cps_binding_may_await(e->as.call_.fn_binding)) return true;
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            if (cps_fnvalue_arg_awaits(e->as.call_.args[i])) return true;
     }
     return cps_visit_children(e, cps_awaits_visit, NULL);
 }
@@ -1466,6 +1490,27 @@ static bool cps_awaits_visit(const Expr *c, void *ud) {
 bool cps_fn_may_await(const FnDef *fd) {
     if (!fd) return false;
     return fd->may_await || cps_expr_awaits(fd->body);
+}
+
+/* Does this function's own body install a `handle` (not an `(unsafe ...)`
+ * marker, and not inside a nested function definition)?  Evicted from the CPS
+ * backend, such a function takes every effect it handles off the backend with
+ * it (a non-candidate's effect set counts what it handles), and a perform of
+ * one of those effects anywhere then has no lowering
+ * (cps-capturing-closure-with-handle-returned-refused). */
+static bool cps_installs_handle_visit(const Expr *c, void *ud);
+static bool cps_expr_installs_handle(const Expr *e) {
+    if (!e) return false;
+    if (e->kind == EX_HANDLE && e->as.handle_.handle
+        && !e->as.handle_.handle->is_unsafe_marker) return true;
+    return cps_visit_children(e, cps_installs_handle_visit, NULL);
+}
+static bool cps_installs_handle_visit(const Expr *c, void *ud) {
+    (void)ud;
+    return cps_expr_installs_handle(c);
+}
+bool cps_fn_installs_handle(const FnDef *fd) {
+    return fd && cps_expr_installs_handle(fd->body);
 }
 
 void cps_color_program(Arena *a, Expr *program) {

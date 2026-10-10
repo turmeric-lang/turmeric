@@ -1,5 +1,15 @@
 # `#lang r7rs`: a re-entrant `call/cc` keeps a copy of the stack forever under `--interpret`
 
+**Narrowed 2026-10-09: a capture no longer pins the frames made after it.**
+The 2026-10-05 regression below is fixed: `frame_release` and the driver's
+argument accumulators are keyed on a capture EPOCH rather than the pin, so a
+program that stores one continuation runs its later loops at the usual
+per-step cost (990 MB -> 148 MB on the Debug tur, against 133 MB with no
+`call/cc`; `check-turi-frame-reclaim.py` pins it). What is left is what was
+left on 2026-09-28 -- the images themselves, and the frames and temporaries
+that were live at a capture -- plus the two smaller residues noted at the
+end of the 2026-10-09 section.
+
 **Narrowed 2026-09-28.** What is left is one case: under `tur --interpret`,
 a `call/cc` whose continuation may outlive the call keeps its stack image for
 the life of the process. That is a continuation that is stored, returned, or
@@ -299,3 +309,58 @@ the same check, each against its own stamp. The same epoch test would let
 after the last capture. That is the "per-frame capture epoch" the 2026-09-28
 section ruled out as buying nothing. With frames now reclaimed, it buys the
 difference between 214 MB and 47 MB above.
+
+## 2026-10-09: the capture epoch, done
+
+`turi_cont_pin` still sets the pin, and now also bumps a counter,
+`g_turi_cont_epoch` (src/turi/eval.c, beside the frame allocators). Every
+frame is stamped with the counter when it is made (`EvalFrame.epoch`, set by
+`eval_frame_new` / `eval_frame_new_call`), and `frame_release` hands a frame
+back only when its stamp equals the current counter: no capture has happened
+since the frame was made, so no stack image holds its activation. A frame
+that was live at a capture keeps an older stamp and is kept for the rest of
+the run, as every frame was before.
+
+The driver's per-frame temporaries got the same test where the frame is at
+hand. `DRIVE_PUSH` stamps each work-stack entry (`DriveCont.epoch`), and the
+argument accumulators of `DK_CALL_ARG`, `DK_BUILTIN_ARG` and
+`DK_MAKE_STRUCT` are freed through `TURI_DRIVE_FREE_EP` against the epoch
+read at the top of the case -- read BEFORE the leaf call, because the native
+that captures is itself such a leaf: the capture re-enters the case with
+`top` pointing at the work stack of the capture (since freed or moved by a
+later realloc), while a local is restored with the image and names the right
+epoch. The first attempt read `top->epoch` after the call and was a
+use-after-free in every re-entering fixture.
+
+Why the stamp is enough: an image is a copy of the C stack and of each
+drive's work stack as they were at the capture, so the only frames and
+accumulators it can name are ones that existed then, and every one of those
+carries a stamp older than the counter the capture left behind. A frame made
+later is reached only through a closure, a generator or an effect
+continuation, which `frame_escape` already marks and `frame_release` already
+refuses.
+
+| `tur --interpret`, Debug/ASan (`quarantine_size_mb=0`), 60,000-element list built and summed | before | after |
+| --- | --- | --- |
+| no `call/cc` | 133 MB | 133 MB |
+| one stored continuation first, re-entered once (the list built and summed twice) | 990 MB | 148 MB |
+
+`tests/check-turi-frame-reclaim.py` (ctest `tur_turi_frame_reclaim`) runs
+that second program and bounds its growth over idle at twice the plain
+program's growth plus 16 MB (50 MB against a bound of 84 today; 890 before).
+The 32 `call/cc` / control / generator fixtures agree with their expected
+output under `run-turi.sh`.
+
+Two small residues stay with the pin, each conservative rather than wrong:
+
+- The temporaries that are not tied to a work-stack frame -- a perform's
+  argument array handed back through `pargs_heap`, the `apply_args` of a
+  native-resume fold, a cloned slice -- are still never freed after a
+  capture (`TURI_DRIVE_FREE`). None grows with an ordinary loop.
+- The one-shot in-place resume of an effect (`ws_case_is_oneshot_resume`)
+  stays off once a capture has happened: whether a capture will happen
+  inside the case body cannot be known at the perform.
+
+The images are unchanged: a continuation that may outlive its `call/cc`
+still keeps its (delta) image, and only a traced or counted continuation
+could free it.

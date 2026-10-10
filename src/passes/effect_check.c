@@ -241,6 +241,11 @@ static EffectRow *remove_handler_effects(EffectRow *row, Expr *hv, Arena *a) {
     return row;
 }
 
+typedef struct {
+    Arena *a; EffectRow *row; const FnIndex *idx; EffectEnv *env; EffectRowSubst *subst;
+} CollectUd;
+static bool collect_visit(const Expr *c, void *ud);
+
 static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                                           EffectRow *row,
                                           const FnIndex *idx,
@@ -331,6 +336,30 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
         }
 
         FnDef *callee = fn_index_lookup(idx, e->as.call_.fn_binding);
+        /* A call through an immutable local that holds a global fn --
+         * `(let [g (fn [n] (+ n (perform (Ask))))] (g 3))`, whose lambda lifts
+         * to a file-scope `__fn_N` -- performs what that fn performs.  The
+         * alias (widen_fn_alias, elab_forms.c) is set only when nothing can
+         * retarget the local. */
+        if (!callee && e->as.call_.fn_binding &&
+            e->as.call_.fn_binding->widen_fn_alias)
+            callee = fn_index_lookup(idx, e->as.call_.fn_binding->widen_fn_alias);
+        /* A captureless `letrec` member is lifted to a global and keeps it as
+         * its source_binding (elab_letrec). */
+        if (!callee && e->as.call_.fn_binding &&
+            e->as.call_.fn_binding->source_binding)
+            callee = fn_index_lookup(idx, e->as.call_.fn_binding->source_binding);
+        /* ...and a call through a local CLOSURE binding (a `let` or `letrec`
+         * capturing lambda) performs what its lifted body performs.  Only the
+         * row: the lifted entry's parameters lead with the env, so its
+         * parameter list does not line up with this call's arguments. */
+        if (!callee && e->as.call_.fn_binding &&
+            e->as.call_.fn_binding->closure_fn_binding) {
+            FnDef *cfd = fn_index_lookup(idx, e->as.call_.fn_binding->closure_fn_binding);
+            if (cfd && cfd->inferred_effect_row)
+                row = effect_row_merge(a, row,
+                                       effect_row_apply_subst(cfd->inferred_effect_row, subst, a));
+        }
 
         /* ER2: Row-variable unification at call sites.
          * For each function-typed parameter that carries a row variable,
@@ -430,8 +459,16 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                     while (pfn && pfn->kind == TY_FORALL) pfn = pfn->as.forall_.body;
                     if (param->poly_type && (!pfn || pfn->kind != TY_FN)) continue;
                 } else continue;
-                /* A written row (`#fx{}` included) is ER2's or TUR-E0009's. */
-                if (pfn && pfn->as.fn.effect_row) continue;
+                /* A written row (`#fx{}` included) is ER2's or TUR-E0009's --
+                 * except a bare row VARIABLE, `(fn [int] #fx{e} int)`: ER2
+                 * binds `e` to the argument's row above, but a call through
+                 * the parameter charges nothing to the callee's own inferred
+                 * row, so unless the callee also declares `#fx{e}` the
+                 * binding reached no one -- the same false TUR-W0033 on a
+                 * handler around the call, found 2026-10-09 writing
+                 * generic-hof-effectful-callback.  Charge it here too. */
+                if (pfn && pfn->as.fn.effect_row
+                    && pfn->as.fn.effect_row->kind != ERK_VAR) continue;
                 /* Peel the shims a fn-value argument rides in: an erased
                  * ascription, the fat normalization, and the poly-fn wrapper
                  * an un-annotated `(fn [int] int)` slot builds. */
@@ -807,9 +844,28 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
          * declared-row check (TUR-E0009). */
         return collect_effects_in_expr(a, e->as.ascribe_.inner, row, idx, env, subst);
 
-    default:
-        return row;
+    default: {
+        /* effect-row-lost-under-match-cast-letrec: every other node walks its
+         * evaluated operands through the shared enumeration
+         * (cps_visit_children, src/passes/cps.c), as the TUR-W0033 walk below
+         * already does.  This arm used to return `row` unchanged, so a
+         * `perform` under any node without an arm above -- a `match` arm, an
+         * `(as float ...)`, a `letrec` -- was left out of the inferred row:
+         * a false TUR-W0033 on the handler around the call, and a fn value of
+         * such a function looked pure to everything that asks its row (the
+         * poly-wrap's `fn_cps` slot, the open-param charging above).  Nested
+         * fn definitions are not enumerated; EX_CLOSURE keeps its arm. */
+        CollectUd u = { a, row, idx, env, subst };
+        cps_visit_children(e, collect_visit, &u);
+        return u.row;
     }
+    }
+}
+
+static bool collect_visit(const Expr *c, void *ud) {
+    CollectUd *u = (CollectUd *)ud;
+    u->row = collect_effects_in_expr(u->a, (Expr *)c, u->row, u->idx, u->env, u->subst);
+    return false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1019,6 +1075,10 @@ static int effect_row_check_unannotated(FnDef *fd, EffectRow *declared,
 
 /* ER1: Recursively find EX_CLOSURE nodes with declared effect rows and check them.
  * Collect each closure body's effects and validate against its declared row. */
+typedef struct { Arena *a; const FnIndex *idx; EffectEnv *env; int rc; } CheckUd;
+static bool check_closures_visit(const Expr *c, void *ud);
+static bool check_call_site_rows_visit(const Expr *c, void *ud);
+
 static int check_closures_in_expr(Arena *a, Expr *e,
                                    const FnIndex *idx,
                                    EffectEnv *env) {
@@ -1147,9 +1207,21 @@ static int check_closures_in_expr(Arena *a, Expr *e,
         /* Ascription is erased at codegen; descend into the inner expression. */
         return check_closures_in_expr(a, e->as.ascribe_.inner, idx, env);
 
-    default:
-        return 0;
+    default: {
+        /* Every other node: descend through the shared operand enumeration,
+         * so an annotated closure under a `match` arm, a call argument or any
+         * node without an arm above still has its row checked. */
+        CheckUd u = { a, idx, env, 0 };
+        cps_visit_children(e, check_closures_visit, &u);
+        return u.rc;
     }
+    }
+}
+
+static bool check_closures_visit(const Expr *c, void *ud) {
+    CheckUd *u = (CheckUd *)ud;
+    u->rc |= check_closures_in_expr(u->a, (Expr *)c, u->idx, u->env);
+    return false;
 }
 
 /* ER4: Walk an expression tree and check function-argument effect-row subtyping.
@@ -1332,9 +1404,21 @@ static int check_call_site_rows_in_expr(Arena *a, Expr *e,
         /* Ascription is erased at codegen; descend into the inner expression. */
         return check_call_site_rows_in_expr(a, e->as.ascribe_.inner, idx, env);
 
-    default:
-        return 0;
+    default: {
+        /* Every other node: descend through the shared operand enumeration,
+         * so a call under a `match` arm or any node without an arm above is
+         * still checked. */
+        CheckUd u = { a, idx, env, 0 };
+        cps_visit_children(e, check_call_site_rows_visit, &u);
+        return u.rc;
     }
+    }
+}
+
+static bool check_call_site_rows_visit(const Expr *c, void *ud) {
+    CheckUd *u = (CheckUd *)ud;
+    u->rc |= check_call_site_rows_in_expr(u->a, (Expr *)c, u->idx, u->env);
+    return false;
 }
 
 typedef struct { Arena *a; FnIndex *idx; EffectEnv *env; } UnreachUd;

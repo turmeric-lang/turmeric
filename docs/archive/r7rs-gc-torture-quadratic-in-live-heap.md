@@ -54,13 +54,13 @@ The whole harness: 5 m 49 s at a fixed 31, 4 m 04 s with
 `TUR_GC_TORTURE_SCALE=64` exported, 249 passed either way. The rest of its
 time is building the 232 programs and the serial thread phase, which includes
 the thread fixtures' cold prelude variants
-([r7rs-prelude-library-object-varies-with-the-program](../reported/r7rs-prelude-library-object-varies-with-the-program.md)).
+([r7rs-prelude-library-object-varies-with-the-program](r7rs-prelude-library-object-varies-with-the-program.md)).
 
 ## Re-measured 2026-10-08, after the root-scan change
 
 `tur_gc_scan` now tests each word against the heap bounds inline instead of
 calling the marker for it
-([r7rs-gc-eval-programs-scan-libturi-data](../reported/r7rs-gc-eval-programs-scan-libturi-data.md)).
+([r7rs-gc-eval-programs-scan-libturi-data](r7rs-gc-eval-programs-scan-libturi-data.md)).
 That cut a `(scheme eval)` program's per-collection cost 4.6x, where most
 scanned words are not heap addresses; inside a large live heap most words
 ARE, so it moves these programs less (same collection counts, interval 31):

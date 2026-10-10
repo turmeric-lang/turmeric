@@ -1,0 +1,12 @@
+#lang saffron
+;; panic-location-names-the-runtime-not-the-call-site: a dynamic operator
+;; with no row for its operand used to panic at the runtime helper's line;
+;; it names the operator's own line now, on both back ends.  The operand
+;; that is wrong is built by a nested dynamic operator, whose own site is
+;; set and cleared before this one is set.
+(defn add-all [a b]
+  (+ (* a 2) b))
+(defn main []
+  (println (add-all 1 2))
+  (println (add-all 3 "x"))
+  0)

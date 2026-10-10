@@ -100,8 +100,7 @@
   ```c
   struct { int64_t len; int64_t *data; } *buf = (void*)(intptr_t)b;
   if (i >= 0 && i < buf->len) return buf->data[i];
-  fprintf(stderr, "sized-buf-get: index out of bounds\n");
-  exit(1);
+  tur_panic("sized-buf-get: index out of bounds");
   return 0;
   ```)
 

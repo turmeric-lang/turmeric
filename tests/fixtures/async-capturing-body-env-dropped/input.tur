@@ -1,0 +1,68 @@
+;; async-capturing-body-env-never-freed: a capturing lambda spawned with
+;; `(async ...)` runs in a closure box `{thunk, captures...}` that nothing
+;; freed -- one box per spawn.  A fresh lambda written at the spawn whose env
+;; drop is shallow is the spawn's to own now: it drops the box when the body
+;; settles inline, or hands it to the park so the resume drops it when the
+;; body settles there.  Leak-checked (requires.leak-check): inline bodies,
+;; bodies that park every turn, and 200 spawns in a loop.
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+
+
+(defn spawn-inline [k : int] : int
+  (let [f (async (fn [] : int (* k 2)))]
+    (drive f)))
+
+(defn main [] : nil
+  (cur-cell true)
+  (let [k 5]
+    (println (drive (async (fn [] : int (+ k 1)))))
+    (println (drive (async (fn [] : int (+ k (sum-values 0 300 0)))))))
+  (let [^mut acc 0
+        ^mut i   0]
+    (while (< i 200)
+      (set! acc (+ acc (spawn-inline i)))
+      (set! i (+ i 1)))
+    (println acc))
+  (free-future (cur-cell false)))

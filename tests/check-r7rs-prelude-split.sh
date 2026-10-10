@@ -192,6 +192,20 @@ for p in withc:7 withf:2; do
     got=$("$d/$name" 2>/dev/null)
     [ "$got" = "$want" ] || fail "stable/$name printed '$got', not '$want'"
 done
+# ...nor an `-I` naming a directory with no C header in it (cause 3 of the
+# same report): `tur build -I . p.tur` and `tur build p.tur` compile
+# byte-identical library text, so they must link one object.
+if (cd "$d" && TUR_PRELUDE_SPLIT=1 TUR_SHOW_CC=1 "$TUR" build -I "$d" withf.tur -o "$d/withI") \
+        >"$d/withI.log" 2>&1; then
+    lib=$(grep '^CC: ' "$d/withI.log" | grep -v ' -c -o ' | tail -1 |
+          grep -o "[^ '\"]*/prelude/[0-9a-f]*\.o" | head -1)
+    if [ -n "$LIB_A" ] && [ "$lib" != "$LIB_A" ]; then
+        fail "stable/withI built its own library unit (${lib##*/} vs ${LIB_A##*/}):" \
+             "an -I that supplies no header reached the cache key"
+    fi
+else
+    fail "stable/withI: build failed"; tail -20 "$d/withI.log" | sed 's/^/    /'
+fi
 
 # r7rs-prelude-library-cold-compile: a cold cache compiles the library unit
 # in pieces (emit_split_pieces), one per CPU, and links them into the one
@@ -203,16 +217,24 @@ done
 # times than in the whole one, and the program must print its expected
 # output.  (Once where the whole unit has none is not a fork: exported from
 # piece 0, a static the whole unit's optimizer dropped stays.)
+# A panic site (`static const tur_site_t __tur_site_N = { "file", line }`,
+# emit_site_ref_text) is read-only, but its string pointer needs a relocation,
+# so it lands in .data.rel.ro and nm reports it as data.  A copy in each piece
+# that names it forks nothing -- every copy holds the same file and line -- so
+# it is not counted.
 counted_data() {   # defined_data, one line per definition, piece prefix off
     if [ "$(uname -s)" = Darwin ]; then
         nm -m "$1" 2>/dev/null |
             awk '/\(__DATA,__(data|bss|common|thread_vars|thread_bss)\)/ {
                      n = $NF; sub(/\.[0-9]+$/, "", n); sub(/^_tur_sp_/, "_", n)
+                     if (n ~ /^___tur_site_[0-9]+$/) next
                      if (n ~ /^_/) print n }' | sort
     else
         nm "$1" 2>/dev/null |
             awk '$2 ~ /^[BbDdGgSs]$/ && $3 ~ /./ {
-                     n = $3; sub(/\.[0-9]+$/, "", n); sub(/^tur_sp_/, "", n); print n }' | sort
+                     n = $3; sub(/\.[0-9]+$/, "", n); sub(/^tur_sp_/, "", n)
+                     if (n ~ /^__tur_site_[0-9]+$/) next
+                     print n }' | sort
     fi
 }
 PF=r7rs-type-errors-raise

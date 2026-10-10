@@ -1,0 +1,33 @@
+;; cps-capturing-closure-with-handle-returned-refused, shape 2: a function
+;; with a parameter named `k` was kept off the CPS backend
+;; (param_name_clashes_cps), and evicted, it took every effect its `handle`
+;; handles off the backend with it -- so the callee's `perform` had "no
+;; lowering here" and the program was refused.  Renaming the parameter made
+;; it compile.  A function that installs a handle is exempt from the rule.
+;;
+;;   effect-callee -- the report's shape: a capturing closure built inside
+;;                    the handle, passed in an Option to an effectful callee
+;;   run-with      -- the plain shape: the handled callee is a named function
+
+(defeffect Tick [] : int)
+(defeffect Ask [] : int)
+
+(defn eff-call [o : (Option (fn [int] int))] : int
+  (let [t (perform (Tick))]
+    (match o (Some f) (+ t (f 1)) (None) t)))
+
+(defn effect-callee [k : int] : int
+  (handle (let [ff (some (fn [x : int] : int (+ x k)))]
+            (eff-call ff))
+    (Tick [] k2) (resume k2 1)))
+
+(defn ask [] : int (perform (Ask)))
+
+(defn run-with [k : int] : int
+  (handle (+ k (ask))
+    (Ask [] r) (resume r 10)))
+
+(defn main [] : int
+  (println (effect-callee 40))   ; 1 + (1 + 40)
+  (println (run-with 5))         ; 5 + 10
+  0)

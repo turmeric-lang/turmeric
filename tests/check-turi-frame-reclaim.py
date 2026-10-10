@@ -36,6 +36,21 @@ frames it captured -- ~2.8 KB a perform, 556 MB for 200,000 on a Release
 tur.  The one-shot fast path runs the slice in place and frees all of it at
 the resume.  Same 16 MB bound.
 
+A fifth pins the defer snapshot from turi-call-pins-and-side-frames-not-
+reclaimed: a function with a `defer` called 300,000 times.  Each defer
+snapshots its captures in a frame of its own, which used to stay in the pool
+after the defer fired -- 30 MB of growth on a Debug tur, none now.  Same
+16 MB bound.
+
+A sixth pins r7rs-callcc-memory-never-freed's capture epoch: the first
+program again, run after ONE re-entrant `call/cc` whose continuation is
+stored (and re-entered once, so the list is built and summed twice).  The
+capture used to pin the interpreter -- frame_release did nothing for the rest
+of the run, ~4 KB a step again (990 MB on a Debug tur against 133 without the
+call/cc).  Frames made after the last capture are in no stack image, so they
+are handed back as before; the program's growth over idle must stay within
+twice the plain program's growth plus the same 16 MB.
+
 usage: python3 tests/check-turi-frame-reclaim.py [TUR]   (default ./build/tur)
 """
 import os
@@ -86,6 +101,34 @@ PERFORM_PROGRAM = """(defeffect Ask [] :int)
 """
 PERFORM_EXPECTED = "100000\n"
 
+DEFER_PROGRAM = """(defn f [i : int] : int
+  (defer (+ i 1))
+  i)
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (f i)))))
+(defn main [] : int (println (lp 300000 0)) 0)
+"""
+DEFER_EXPECTED = "45000150000\n"
+
+CALLCC_PROGRAM = """#lang r7rs
+(import (scheme base) (scheme write))
+(define saved #f)
+(define hits 0)
+(define (step x) (let ((y (+ x 1))) (let ((z (* y 1))) z)))
+(define (build n)
+  (let lp ((i 0) (acc '()))
+    (if (= i n) acc (lp (step i) (cons i acc)))))
+(define (sum l) (if (null? l) 0 (+ (car l) (sum (cdr l)))))
+(define v (call/cc (lambda (k) (set! saved k) 0)))
+(set! hits (+ hits 1))
+(let ((l (build 60000)))
+  (display (sum l)) (newline)
+  (display (length (map step l))) (newline))
+(if (< hits 2) (saved 1))
+(display (list 'hits hits 'v v)) (newline)
+"""
+CALLCC_EXPECTED = EXPECTED + EXPECTED + "(hits 2 v 1)\n"
+
 
 def run(src, reclaim, asan="detect_leaks=0"):
     env = dict(os.environ)
@@ -134,6 +177,15 @@ def main():
         with open(perf, "w") as f:
             f.write(PERFORM_PROGRAM)
         out_perf, st_perf, rss_perf = run(perf, True, noq)
+        dfr = os.path.join(d, "defer.tur")
+        with open(dfr, "w") as f:
+            f.write(DEFER_PROGRAM)
+        out_dfr, st_dfr, rss_dfr = run(dfr, True, noq)
+        cc = os.path.join(d, "callcc.tur")
+        with open(cc, "w") as f:
+            f.write(CALLCC_PROGRAM)
+        out_cc, st_cc, rss_cc = run(cc, True, noq)
+        _, _, rss_on_noq = run(src, True, noq)
     ok = True
     for label, out, st in (("reclaim on", out_on, st_on),
                            ("reclaim off", out_off, st_off)):
@@ -185,6 +237,32 @@ def main():
         ok = False
     else:
         print("PASS check-turi-frame-reclaim: %s" % fmsg)
+    grow_dfr = rss_dfr - rss_pins_idle
+    dmsg = ("defers: peak RSS %.0f MB, %.0f MB idle, growth %.0f MB (bound %d)"
+            % (rss_dfr, rss_pins_idle, grow_dfr, ARGS_GROWTH_MB))
+    if st_dfr != 0 or out_dfr != DEFER_EXPECTED:
+        print("FAIL check-turi-frame-reclaim: defer program printed %r (status %d), want %r"
+              % (out_dfr, st_dfr, DEFER_EXPECTED))
+        ok = False
+    elif grow_dfr > ARGS_GROWTH_MB:
+        print("FAIL check-turi-frame-reclaim: %s -- a fired defer keeps its snapshot" % dmsg)
+        ok = False
+    else:
+        print("PASS check-turi-frame-reclaim: %s" % dmsg)
+    grow_cc, grow_base = rss_cc - rss_idle_noq, rss_on_noq - rss_idle_noq
+    cc_bound = 2 * grow_base + ARGS_GROWTH_MB
+    cmsg = ("after a call/cc: peak RSS %.0f MB, %.0f MB idle, growth %.0f MB "
+            "(plain program %.0f MB; bound %.0f)"
+            % (rss_cc, rss_idle_noq, grow_cc, grow_base, cc_bound))
+    if st_cc != 0 or out_cc != CALLCC_EXPECTED:
+        print("FAIL check-turi-frame-reclaim: call/cc program printed %r (status %d), want %r"
+              % (out_cc, st_cc, CALLCC_EXPECTED))
+        ok = False
+    elif grow_cc > cc_bound:
+        print("FAIL check-turi-frame-reclaim: %s -- a capture pins every later frame" % cmsg)
+        ok = False
+    else:
+        print("PASS check-turi-frame-reclaim: %s" % cmsg)
     return 0 if ok else 1
 
 

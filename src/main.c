@@ -3378,6 +3378,50 @@ static void prelude_cache_prune(const char *dir, const char *keep) {
 #endif
 }
 
+/* r7rs-prelude-library-object-varies-with-the-program, cause 3: could a
+ * build's `-I <dir>` change the library unit's compile?  Only by supplying a
+ * header, so a directory with no C header in it (a Turmeric module path, the
+ * usual `-I`, or `-I .` in a project of `.tur` files) cannot, and it stays
+ * out of the cache key -- it gave `tur build -I . a.tur` and `tur build
+ * a.tur` two objects of byte-identical text, a cold compile each.  A header
+ * is a file named like one (.h, .hh, .hpp, .hxx, .inc, .def), looked for up
+ * to three levels down; a directory too big to walk counts as supplying one.
+ * The `-I` is still passed to the compile either way. */
+static bool dir_may_supply_headers_rec(const char *dir, int depth, int *budget) {
+#ifndef _WIN32
+    DIR *d = opendir(dir);
+    if (!d) return false;
+    bool found = false;
+    struct dirent *de;
+    while (!found && (de = readdir(d)) != NULL) {
+        if (--*budget < 0) { found = true; break; }
+        const char *nm = de->d_name;
+        if (nm[0] == '.') continue;
+        char path[2048];
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", dir, nm) >= sizeof path) continue;
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (depth < 3 && dir_may_supply_headers_rec(path, depth + 1, budget)) found = true;
+        } else {
+            static const char *const hdr_ext[] = { ".h", ".hh", ".hpp", ".hxx", ".inc", ".def" };
+            const char *dot = strrchr(nm, '.');
+            for (size_t k = 0; dot && k < sizeof hdr_ext / sizeof hdr_ext[0]; k++)
+                if (strcmp(dot, hdr_ext[k]) == 0) { found = true; break; }
+        }
+    }
+    closedir(d);
+    return found;
+#else
+    (void)dir; (void)depth; (void)budget;
+    return true;
+#endif
+}
+static bool dir_may_supply_headers(const char *dir) {
+    int budget = 4000;
+    return dir_may_supply_headers_rec(dir, 0, &budget);
+}
+
 /* r7rs-programs-compile-slowly: the object of a split build's library unit
  * (emit_split.h), compiled once and cached by a hash of everything that goes
  * into it -- its text, the compiler and every flag -- under
@@ -3415,19 +3459,30 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
             }
         }
     }
+    /* The key's flags are the compile's, less an `-I` that can supply no
+     * header (dir_may_supply_headers). */
+    Buf keyflags; buf_init(&keyflags);
+    buf_write(&keyflags, flags.data, flags.len);
     for (int i = 0; i < n_include_dirs; i++) {
         if (include_dirs[i] && include_dirs[i][0]) {
             buf_puts(&flags, " -I");
             if (!buf_put_quoted(&flags, include_dirs[i])) {
                 buf_free(&flags);
+                buf_free(&keyflags);
                 return 2;
+            }
+            if (dir_may_supply_headers(include_dirs[i])) {
+                buf_puts(&keyflags, " -I");
+                (void)buf_put_quoted(&keyflags, include_dirs[i]);
             }
         }
     }
     buf_putc(&flags, '\0');
+    buf_putc(&keyflags, '\0');
 
     Buf key; buf_init(&key);
-    buf_printf(&key, "%s\n%s\n%s\n", TUR_VERSION, cc, flags.data);
+    buf_printf(&key, "%s\n%s\n%s\n", TUR_VERSION, cc, keyflags.data);
+    buf_free(&keyflags);
     buf_write(&key, lib_c->data, lib_c->len);
     uint64_t h = tur_hamt_hash_xxh64(key.data, key.len);
     buf_free(&key);

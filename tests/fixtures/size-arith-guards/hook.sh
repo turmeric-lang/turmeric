@@ -15,6 +15,14 @@ for c in 0 1 2 3 4 5 6 7 8 9; do
     echo "piped" | ASAN_OPTIONS=detect_leaks=0 "$TMPDIR/prog" "$c" 2> "$TMPDIR/err"
     rc=$?
     set -e
+    # A panic ends in abort(): 134 (SIGABRT) on Linux and macOS.  UCRT's
+    # abort() goes through __fastfail (0xC0000409), which MSYS2 bash reports
+    # as 127 (docs/archive/win32-fiber-multishot-abort.md); 3 is its _exit
+    # fallback where fastfail is unavailable.  Say which kind of exit it was,
+    # not the number.
+    case "$rc" in 134|127|3) rc=abort ;; esac
     echo "exit=$rc"
-    head -n 1 "$TMPDIR/err"
+    # An index out of bounds is a panic now: its line names the runtime's own
+    # file and line (not portable), so keep the message after that prefix.
+    head -n 1 "$TMPDIR/err" | sed -E 's/^panic at [^ ]*:[0-9]+: //'
 done

@@ -9,6 +9,12 @@
 #include "builtins.h"
 #include "globals.h"
 
+/* The elaborator's free-variable walker (elab_internal.h): a direct-dispatch
+ * match's guard reads (build_direct_match_term). */
+Binding **collect_free_vars(const Expr *e, Binding **params, uint8_t n_params,
+                            Binding **self_exclude, uint32_t n_self_exclude,
+                            uint32_t *n_out);
+
 /* =========================================================================
  * CPS2 (cps-transform-plan): ANF/CPS translation for colored functions.
  *
@@ -35,6 +41,10 @@ typedef struct PapInline {
     uint32_t  n_caps;
     uint32_t  rem_arity;     /* args a saturated call to `var` supplies (= target arity - n_caps) */
     bool      is_alias;      /* `var` only renames the fn PARAM `target` (no caps) */
+    /* `var` holds a fresh capturing closure of the lifted lambda `target`
+     * (cps_ir_let_local_closure): a call through it is `(target var rest...)`,
+     * the env box first.  The binding is KEPT -- the box is still built. */
+    bool      is_env_call;
 } PapInline;
 
 typedef struct CpsB {
@@ -43,6 +53,7 @@ typedef struct CpsB {
     uint32_t counter;   /* fresh-id source */
     CKont  retk;        /* the function's return continuation (KK_RET) */
     const Binding *cur_fn;   /* binding of the fn being translated (self-call detection) */
+    const FnDef   *cur_fd;   /* ...and its FnDef (a lifted lambda's env parameter) */
     /* The pending expression fold_pending is binding right now, when its
      * consuming slot does not retain it (PendItem.reap_ok); NULL otherwise.
      * The EX_CLOSURE arm reaps a capturing closure's env only for this one. */
@@ -86,6 +97,8 @@ static int loop_var_index(CpsB *b, const Binding *bd) {
     return -1;
 }
 
+static bool cps_self_env_call(const CpsB *b, const Binding *callee);   /* fwd */
+
 static const PapInline *pap_lookup(CpsB *b, const Binding *v) {
     if (!v) return NULL;
     for (int i = (int)b->n_pap - 1; i >= 0; i--)
@@ -107,6 +120,32 @@ void cps_ir_thread_param_add(const Binding *p) {
 bool cps_ir_thread_param_has(const Binding *p) {
     if (!p) return false;
     for (int i = 0; i < g_thread_params_n; i++) if (g_thread_params[i] == p) return true;
+    return false;
+}
+/* cps-local-fn-alias-or-lambda-called-in-place-refused: the let-bound locals
+ * holding a threadable capturing lambda that is also called through the
+ * local (see cps_ir.h). */
+static struct { const Binding *b; bool env_boxed; } g_thread_locals[256];
+static int g_thread_locals_n = 0;
+void cps_ir_thread_local_reset(void) { g_thread_locals_n = 0; }
+void cps_ir_thread_local_add(const Binding *b, bool env_boxed) {
+    if (!b) return;
+    for (int i = 0; i < g_thread_locals_n; i++) if (g_thread_locals[i].b == b) return;
+    if (g_thread_locals_n < 256) {
+        g_thread_locals[g_thread_locals_n].b = b;
+        g_thread_locals[g_thread_locals_n].env_boxed = env_boxed;
+        g_thread_locals_n++;
+    }
+}
+bool cps_ir_thread_local_has(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_thread_locals_n; i++) if (g_thread_locals[i].b == b) return true;
+    return false;
+}
+bool cps_ir_thread_local_env_boxed(const Binding *b) {
+    if (!b) return false;
+    for (int i = 0; i < g_thread_locals_n; i++)
+        if (g_thread_locals[i].b == b) return g_thread_locals[i].env_boxed;
     return false;
 }
 
@@ -155,6 +194,35 @@ static bool call_is_effectful_fnvalue(const Expr *e) {
     }
     return false;
 }
+/* cps-evicts-handle-in-operand-positions (the un-annotated generic fn param):
+ * is this call's callee a FAT fn-value PARAMETER -- a `^fat` param with a fn
+ * signature, or a fn-typed param the elaborator fat-normalizes -- so that its
+ * EMPTY-row call can thread through the registry when the param is a thread
+ * param?  The parameter's row says nothing about the value passed, which may
+ * perform; an unregistered (pure) value is called directly by the dispatch's
+ * fallback (emit_e2a_fat_dispatch), which needs the signature to spell. */
+static bool call_through_fat_param(const Expr *e) {
+    const Binding *fb = e->as.call_.fn_binding;
+    if (!fb || fb->is_global || fb->is_poly_fn || !fb->is_param || fb->type.kind != TY_FN)
+        return false;
+    return fb->is_fat || fn_param_type_is_fat_normalized(&fb->type);
+}
+/* cps-local-fn-alias-or-lambda-called-in-place-refused: a call through a
+ * let-bound local holding a threadable capturing lambda (cps_ir_thread_local_add)
+ * -- its env box is the fat value the registry dispatch reads slot 0 of. */
+static bool call_through_thread_local(const Expr *e) {
+    const Binding *fb = e->as.call_.fn_binding;
+    if (!fb || fb->is_global || fb->is_param || fb->is_poly_fn || fb->type.kind != TY_FN)
+        return false;
+    return cps_ir_thread_local_has(fb);
+}
+/* Either: an empty-row call that threads through the registry anyway. */
+static bool call_threads_via_registry(const Expr *e) {
+    if (call_through_fat_param(e) && cps_ir_thread_param_has(e->as.call_.fn_binding))
+        return true;
+    return call_through_thread_local(e);
+}
+
 static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
     e = ascribe_peel(e);
     if (!e || depth > 64) return false;
@@ -205,23 +273,87 @@ static bool expr_has_indirect_fnvalue_call(const Expr *e, int depth) {
  * `__poly_N__cps` twin the poly-wrap emits (emit_module.c) converts each word
  * back to the wrapped fn's own C parameter type (cps_ir_fncps_arg_ctype) for
  * its direct call, so the kinds admitted are the ones whose C spelling is known
- * from the kind alone: a word integer, a `cstr` and a `ptr<void>`.  A narrow
- * integer, a `bool` or a float has a spelling (or a register class) the word
- * does not carry, so it stays on the delegated direct path (correct as before,
- * just not newly DK-threaded). */
+ * from the kind alone: every scalar.  A float crosses as its bits
+ * (cps_ir_fncps_word_of), the convention the DK slot itself uses, and travels
+ * to the registered `__cps` entry at its own type, as the E2a registry's call
+ * sites pass it (e2a_cast).  Until 2026-10-09 a narrow integer, a `bool` or a
+ * float stayed on the delegated direct path, so an effectful callback of one
+ * was refused. */
 static bool fncps_arg_kind_ok(TypeKind k) {
-    return k == TY_INT || k == TY_INT64 || k == TY_CSTR || k == TY_PTR_VOID;
+    switch (k) {
+        case TY_INT: case TY_INT64: case TY_CSTR: case TY_PTR_VOID:
+        case TY_BOOL:
+        case TY_INT8: case TY_INT16: case TY_INT32:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+            return true;
+        default:
+            return false;
+    }
 }
 const char *cps_ir_fncps_arg_ctype(TypeKind k) {
-    return k == TY_CSTR ? "const char *" : k == TY_PTR_VOID ? "void *" : "int64_t";
+    switch (k) {
+        case TY_CSTR:     return "const char *";
+        case TY_PTR_VOID: return "void *";
+        case TY_BOOL:     return "bool";
+        case TY_INT8:     return "int8_t";
+        case TY_INT16:    return "int16_t";
+        case TY_INT32:    return "int32_t";
+        case TY_UINT8:    return "uint8_t";
+        case TY_UINT16:   return "uint16_t";
+        case TY_UINT32:   return "uint32_t";
+        case TY_UINT64:   return "uint64_t";
+        case TY_FLOAT: case TY_FLOAT64: return "double";
+        case TY_FLOAT32:  return "float";
+        default:          return "int64_t";
+    }
+}
+static char *fncps_wrap(const char *pre, const char *x, const char *post) {
+    size_t a = strlen(pre), b = strlen(x), c = strlen(post);
+    char *s = (char *)malloc(a + b + c + 1);
+    if (!s) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(s, pre, a); memcpy(s + a, x, b); memcpy(s + a + b, post, c);
+    s[a + b + c] = '\0';
+    return s;
+}
+char *cps_ir_fncps_word_of(TypeKind k, const char *value) {
+    switch (k) {
+        case TY_FLOAT: case TY_FLOAT64:
+            return fncps_wrap("((union { double d; int64_t i; }){ .d = (", value, ") }).i");
+        case TY_FLOAT32:
+            return fncps_wrap("(int64_t)((union { float f; uint32_t u; }){ .f = (", value, ") }).u");
+        case TY_CSTR: case TY_PTR_VOID:
+            return fncps_wrap("(int64_t)(intptr_t)(", value, ")");
+        default:
+            return fncps_wrap("(int64_t)(", value, ")");
+    }
+}
+char *cps_ir_fncps_value_of(TypeKind k, const char *word) {
+    switch (k) {
+        case TY_FLOAT: case TY_FLOAT64:
+            return fncps_wrap("((union { double d; int64_t i; }){ .i = (int64_t)(", word, ") }).d");
+        case TY_FLOAT32:
+            return fncps_wrap("((union { float f; uint32_t u; }){ .u = (uint32_t)(", word, ") }).f");
+        case TY_CSTR:
+            return fncps_wrap("(const char *)(intptr_t)(", word, ")");
+        case TY_PTR_VOID:
+            return fncps_wrap("(void *)(intptr_t)(", word, ")");
+        default: {
+            char pre[32];
+            snprintf(pre, sizeof pre, "(%s)(", cps_ir_fncps_arg_ctype(k));
+            return fncps_wrap(pre, word, ")");
+        }
+    }
 }
 /* ...and a RESULT the direct fallback can call `f.fn` for with its real C type
  * (emit_cps_ir.c, fncps_direct_call): the closure's wrapper returns exactly the
  * param's declared result, so calling it through an `int64_t` function type is a
  * mismatched call -- a -fsanitize=function trap -- and a float result would be
- * read from the wrong register.  Anything else stays delegated. */
+ * read from the wrong register.  A pointer result crosses as its word, through
+ * intptr_t, both ways. */
 static bool fncps_result_kind_ok(TypeKind k) {
-    return k == TY_INT || k == TY_INT64 || k == TY_NIL || k == TY_BOOL;
+    if (k == TY_NIL) return true;
+    return fncps_arg_kind_ok(k);
 }
 bool cps_ir_fncps_sig_ok(const Type *fn_ty) {
     if (!fn_ty || fn_ty->kind != TY_FN) return false;
@@ -235,15 +367,28 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
     if (!lifted_ty || lifted_ty->kind != TY_FN) return false;
     uint32_t n = lifted_ty->as.fn.arity;
     if (n < 1 || n - 1 > CPS_FNCPS_MAX_ARGS || !lifted_ty->as.fn.arg_kinds) return false;
-    /* Integer arguments only: the dispatcher's registry-miss fallback calls
-     * slot 0 as `int64_t (*)(void *, int64_t...)`, which is the lifted entry's
-     * own type only for word integers. */
+    /* The dispatcher (ensure_fncps_env_dispatch) keys the registry on the env
+     * box's slot 0 and, on a miss, calls slot 0 at its own type -- so slot 0
+     * must BE the lifted entry the registry knows.  It is for every scalar
+     * but two: an untyped `ptr<void>` parameter is the word in the slot and
+     * `void *` in the definition, and a narrow-integer result comes back
+     * widened (thunk_param_slot_c_name / thunk_result_slot_c_name); either
+     * puts a widening wrapper in slot 0 (ensure_closure_slot0_widen). */
     for (uint32_t i = 1; i < n; i++) {
         TypeKind ak = (TypeKind)lifted_ty->as.fn.arg_kinds[i];
-        if (ak != TY_INT && ak != TY_INT64) return false;
+        /* ...and the registry hit calls the twin with every non-float kind as
+         * the word, which a `uint64_t` parameter's twin does not declare (its
+         * E2a registration has no word adapter for it). */
+        if (!fncps_arg_kind_ok(ak) || ak == TY_PTR_VOID || ak == TY_UINT64) return false;
     }
-    TypeKind rk = lifted_ty->as.fn.result_kind;
-    return rk == TY_INT || rk == TY_INT64 || rk == TY_NIL;
+    switch (lifted_ty->as.fn.result_kind) {
+        case TY_NIL: case TY_INT: case TY_INT64: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT64: case TY_FLOAT32:
+        case TY_CSTR: case TY_PTR_VOID:
+            return true;
+        default:
+            return false;
+    }
 }
 /* E2 (fat-closure fn-value threading): is a call `(fn args...)` through the
  * poly-fn PARAM `fn` a candidate for `fn_cps` DK-threading?  It must be a
@@ -647,6 +792,7 @@ typedef struct { PendItem items[32]; uint32_t n; } Pending;
 static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont);
 static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest);
+static CTerm *cps_bind_cast(CpsB *b, Expr *e, CVar x, CTerm *rest);
 static CTerm *build_letraw(CpsB *b, Expr *e, CVar x, CTerm *rest);
 
 /* An owning-value operation on a local rc handle (`rc/of`, `rc/clone`, `rc/drop`,
@@ -984,6 +1130,10 @@ static bool indirect_callee_ok(const Expr *fe) {
  * and every unmodeled control form default to "escapes"), so a `false` result
  * PROVES the binding does not escape `e`. */
 bool closure_binding_escapes(const Expr *e, const Binding *b);
+bool closure_binding_escapes_reaped(const Expr *e, const Binding *b);
+/* An inline-C block in the closure's body names one of its captures (an
+ * lvalue into the env box); defined emit-side (emit_core.c). */
+bool closure_body_inline_c_touches_env(const struct Closure *c);
 
 /* Is let-binding `idx` of `let` a capturing closure whose heap fat-env may be
  * freed when the closure dies?  Mirrors the direct emitter's
@@ -996,8 +1146,12 @@ bool closure_binding_escapes(const Expr *e, const Binding *b);
  *     P3.d -- exclude it so its env is never reaped twice),
  *   - the closure returns a SCALAR (its result can never alias the env), and
  *   - the bound name does not escape the let body or any sibling initializer
- *     (closure_binding_escapes is conservative, so a false negative merely keeps
- *     the status-quo leak; it never frees a still-live env). */
+ *     (closure_binding_escapes_reaped is conservative, so a false negative
+ *     merely keeps the status-quo leak; it never frees a still-live env).  The
+ *     free is the outermost DK entry's exit (the reap list), after every
+ *     resume the entry sees, so a `perform` in the let is not an escape --
+ *     the plain closure_binding_escapes read it as one and refused every let
+ *     whose body performed, 24 B a run. */
 static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
     const Binding *b = let->as.let_.bindings[idx].binding;
@@ -1010,12 +1164,23 @@ static bool cps_closure_env_freeable(const Expr *let, uint32_t idx) {
     switch (b->type.as.fn.result_kind) {
         case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
         case TY_BOOL: case TY_NIL: break;
+        /* As the direct emitter's let_binding_env_freeable (RM1): a by-value
+         * aggregate is copied out, a carrier box is a malloc of its own, and a
+         * cstr points at characters -- none points into the env unless the
+         * body took its address, which only an inline C block naming a
+         * capture can do (closure_body_inline_c_touches_env; the conservative
+         * expr_subtree_has_inline_c reads a `perform` as possible inline C). */
+        case TY_APP: case TY_ADT: case TY_CSTR:
+            if (!init->as.closure_.closure->fn
+                || closure_body_inline_c_touches_env(init->as.closure_.closure))
+                return false;
+            break;
         default: return false;   /* non-scalar result may alias the env */
     }
-    if (closure_binding_escapes(let->as.let_.body, b)) return false;
+    if (closure_binding_escapes_reaped(let->as.let_.body, b)) return false;
     for (uint32_t j = 0; j < let->as.let_.n; j++) {
         if (j == idx) continue;
-        if (closure_binding_escapes(let->as.let_.bindings[j].init, b)) return false;
+        if (closure_binding_escapes_reaped(let->as.let_.bindings[j].init, b)) return false;
     }
     return true;
 }
@@ -1105,9 +1270,21 @@ static bool cps_closure_only_invoked(const Expr *let, uint32_t idx) {
     return true;
 }
 
+/* A local closure only ever called in place (cps_ir_let_local_closure) is
+ * reaped at the DK entry boundary like a freeable one: every use is a
+ * saturated call, so the box never leaves the let (a sibling or body `perform`,
+ * which closure_binding_escapes must read as an escape, cannot hand it
+ * anywhere).  The predicate itself checks that the reap frees nothing the
+ * result can point into. */
+static const Binding *local_closure_shape(const Expr *let, uint32_t i);   /* fwd */
+static bool cps_local_closure_env_freeable(const Expr *let, uint32_t idx) {
+    return local_closure_shape(let, idx) != NULL;
+}
+
 static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx, CTerm *rest) {
     Expr *init = (Expr *)let->as.let_.bindings[idx].init;
-    if (cps_closure_env_freeable(let, idx) || cps_fresh_call_env_freeable(b, let, idx)) {
+    if (cps_closure_env_freeable(let, idx) || cps_fresh_call_env_freeable(b, let, idx)
+        || cps_local_closure_env_freeable(let, idx)) {
         CTerm *t = build_letraw(b, init, bx, rest);
         t->as.letraw.reap_env = true;
         t->as.letraw.reap_at_backedge = cps_closure_only_invoked(let, idx);
@@ -1119,6 +1296,24 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
     if (t && t->kind == CT_LETRAW && t->as.letraw.e == init &&
         t->as.letraw.x.id == bx.id && cps_any_closure_env_freeable(let, idx))
         t->as.letraw.reap_any_env = true;
+    /* sum-closure-payload-never-dropped (the CPS half): an init that is a
+     * call -- `(some <closure>)` -- lowers to a CT_LETCALL below the terms
+     * that atomize its arguments (the closure's own letraw).  Name the let on
+     * it, so the emitter can ask whether the binding's live arm holds a
+     * closure nothing else reaches and reap it (emit_letcall_sum_closure_reap). */
+    for (CTerm *u = t; u; ) {
+        if (u->kind == CT_LETCALL && u->as.letcall.call_expr == init &&
+            u->as.letcall.x.id == bx.id) {
+            u->as.letcall.sum_let = let;
+            u->as.letcall.sum_let_idx = idx;
+            break;
+        }
+        if (u->kind == CT_LETRAW)       u = u->as.letraw.body;
+        else if (u->kind == CT_LETCALL) u = u->as.letcall.body;
+        else if (u->kind == CT_LETPRIM) u = u->as.letprim.body;
+        else if (u->kind == CT_LETVAL)  u = u->as.letval.body;
+        else break;
+    }
     return t;
 }
 
@@ -2007,8 +2202,9 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
         case EX_CALL: {
             const Binding *fn = e->as.call_.fn_binding;
             /* E2a: a thread-param call takes the per-node path (cps_tail) so it
-             * threads the DK via the registry -- never whole-body-delegate to fiber. */
-            if (fn && cps_ir_thread_param_has(fn))
+             * threads the DK via the registry -- never whole-body-delegate to fiber.
+             * A call through a threadable let-bound lambda likewise. */
+            if (fn && (cps_ir_thread_param_has(fn) || cps_ir_thread_local_has(fn)))
                 return false;
             /* Nor a call through a fat poly-fn PARAM that the `fn_cps` dispatch
              * covers: it picks the callee's DK-threading entry when the value
@@ -2027,6 +2223,10 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
             {
                 const PapInline *pe = b ? pap_lookup(b, fn) : NULL;
                 if (pe && pe->is_alias) return false;
+                /* ...nor through a local closure of a colored lambda: delegated,
+                 * the call runs the lambda's direct entry from a fresh root. */
+                if (pe && pe->is_env_call) return false;
+                if (cps_self_env_call(b, fn)) return false;
             }
             /* An indirect callee with no binding -- e.g. a capability CALL
              * `(.print-line cap "..")` whose callee is a `.field` access yielding
@@ -2034,6 +2234,19 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * handle that discharged the fn-value's whole effect row; no handle is
              * delegated any more (see P5's note above), so it never is. */
             if (!fn) return false;
+            /* cps-local-fn-alias-or-lambda-called-in-place-refused: a call
+             * through an immutable local holding a colored global -- a lifted
+             * lambda, which has no source_binding -- performs what the global
+             * performs.  Delegated, it would run the global's direct entry from
+             * a fresh root; refused here, cps_tail / cps_bind rewrite it to the
+             * direct call (pap_register_let) or lower it as a fn-value call. */
+            if (!fn->is_global && fn->widen_fn_alias
+                && callee_colored(b, fn->widen_fn_alias))
+                return false;
+            {
+                const Binding *lt = cps_ir_letrec_member_target(fn);
+                if (lt && callee_colored(b, lt)) return false;
+            }
             if (callee_colored(b, fn)) {
                 /* A colored GLOBAL callee whose effects are ALL discharged by the
                  * enclosing delegated handle runs entirely under the local fiber
@@ -2082,8 +2295,14 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
                 if (!safe_to_delegate(b, e->as.do_.items[i])) return false;
             return true;
         case EX_LET:
-            for (uint32_t i = 0; i < e->as.let_.n; i++)
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
                 if (!safe_to_delegate(b, e->as.let_.bindings[i].init)) return false;
+                /* A local closure of a colored lambda: its calls become the
+                 * lambda's CPS calls (pap_register_let), which delegating the
+                 * let whole would turn back into fresh-root direct calls. */
+                const Binding *lc = cps_ir_let_local_closure(e, i);
+                if (lc && callee_colored(b, lc)) return false;
+            }
             return safe_to_delegate(b, e->as.let_.body);
         case EX_WHILE:
             return safe_to_delegate(b, e->as.while_.cond)
@@ -2520,6 +2739,10 @@ static CTerm *build_await(CpsB *b, Expr *e, CVar x, CTerm *cont, Pending *p) {
     t->as.await.fut = atomize(b, e->as.await_.fut_expr, p);
     t->as.await.x = x;
     t->as.await.body = cont;
+    /* await-of-fresh-spawn-future-never-freed: a spawn written at the await
+     * is the await's to free (see cps_ir.h). */
+    const Expr *fx = ascribe_peel(e->as.await_.fut_expr);
+    t->as.await.fresh_fut = fx && fx->kind == EX_ASYNC;
     return t;
 }
 
@@ -3032,6 +3255,8 @@ static bool pap_extract(const Expr *init, const Binding **target,
  *
  * This leaf is the WHOLE fix -- verified by disabling it and keeping everything
  * else, which reproduces the failure exactly. */
+typedef struct { const Binding *var; uint32_t rem_arity; bool ok; } PapSatUd;
+static bool pap_sat_visit(const Expr *c, void *ud);
 static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_arity) {
     e = ascribe_peel(e);
     if (!e) return true;
@@ -3090,10 +3315,31 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
             return pap_calls_saturated(e->as.reinterpret_.expr, var, rem_arity);
         case EX_ASCRIBE:
             return pap_calls_saturated(e->as.ascribe_.inner, var, rem_arity);
-        default:
-            /* Unmodeled form: conservatively refuse to inline (sound). */
+        case EX_MATCH:
+            if (!pap_calls_saturated(e->as.match_.scrutinee, var, rem_arity)) return false;
+            for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
+                if (!pap_calls_saturated(e->as.match_.arms[i].guard, var, rem_arity)
+                    || !pap_calls_saturated(e->as.match_.arms[i].body, var, rem_arity))
+                    return false;
+            return true;
+        /* A nested fn definition may capture `var` -- a use as a value the
+         * enumeration below would not see (it does not enter fn bodies). */
+        case EX_FN: case EX_CLOSURE: case EX_FN_DEF:
             return false;
+        default: {
+            /* Every other node: its evaluated operands, through the shared
+             * enumeration -- a bare `var` among them is the EX_VAR leaf above,
+             * a value use. */
+            PapSatUd u = { var, rem_arity, true };
+            cps_visit_children(e, pap_sat_visit, &u);
+            return u.ok;
+        }
     }
+}
+static bool pap_sat_visit(const Expr *c, void *ud) {
+    PapSatUd *u = (PapSatUd *)ud;
+    if (!pap_calls_saturated(c, u->var, u->rem_arity)) { u->ok = false; return true; }
+    return false;
 }
 
 /* Build the saturated call that a pap-var call inlines to: `(TARGET cap0 ...
@@ -3101,6 +3347,25 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
  * prelude), so we reference them by fresh EX_VAR nodes; the remaining args come
  * straight from the original `(var rest...)` call. */
 static Expr *pap_build_saturated_call(CpsB *b, const PapInline *pe, const Expr *call) {
+    if (pe->is_env_call) {
+        /* `(var rest...)` -> `(target var rest...)`: the lifted lambda's first
+         * parameter is its env, and the closure's value IS the env box -- the
+         * direct emitter spells the same call `__fn_N((void *)var, rest...)`. */
+        uint32_t n = call->as.call_.n_args + 1;
+        Expr **args = arena_alloc(b->a, n * sizeof(Expr *));
+        Expr *v = expr_new(b->a, EX_VAR, pe->var->type, call->span);
+        v->as.var.binding = (Binding *)pe->var;
+        args[0] = v;
+        for (uint32_t i = 0; i < call->as.call_.n_args; i++)
+            args[i + 1] = call->as.call_.args[i];
+        Expr *nc = expr_new(b->a, EX_CALL, call->type, call->span);
+        nc->as.call_.fn_binding = (Binding *)pe->target;
+        nc->as.call_.fn_expr = NULL;
+        nc->as.call_.args = args;
+        nc->as.call_.n_args = n;
+        nc->as.call_.dict_arg = NULL;
+        return nc;
+    }
     if (pe->is_alias) {
         /* A renamed fn param: the same call, made through the param.  Copy the
          * node whole -- the alias shares the param's representation (is_poly_fn,
@@ -3132,12 +3397,56 @@ static Expr *pap_build_saturated_call(CpsB *b, const PapInline *pe, const Expr *
 
 /* If `e` is a saturated call to a pap-registered var, rewrite it to the
  * underlying saturated call; otherwise return `e` unchanged. */
+/* A recursive call of the lambda being translated, made through the `letrec`
+ * member that holds it: the direct emitter threads the CURRENT env into it
+ * (emit_fns.c, tco_is_self_call), so it is a call of the lambda itself with
+ * its own env parameter -- which, translated, threads the continuation.  Left
+ * a call through the member, it would be delegated to the lambda's direct
+ * entry, a fresh root. */
+static bool cps_self_env_call(const CpsB *b, const Binding *callee) {
+    return b && callee && b->cur_fn && b->cur_fd && b->cur_fd->closure
+        && b->cur_fd->n_params >= 1 && !callee->is_global
+        && callee->closure_fn_binding == b->cur_fn;
+}
+
+/* The `letrec` cps_tail / cps_bind lower like a `let` of a local closure. */
+static bool letrec_local_closure(CpsB *b, const Expr *e) {
+    if (!e || e->kind != EX_LETREC) return false;
+    const Binding *lc = cps_ir_let_local_closure(e, 0);
+    return lc && callee_colored(b, lc);
+}
+
 static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
     if (!e || e->kind != EX_CALL) return e;
     const Binding *callee = e->as.call_.fn_binding;
     if (!callee && e->as.call_.fn_expr) {
         const Expr *fe = ascribe_peel(e->as.call_.fn_expr);
         if (fe && fe->kind == EX_VAR) callee = fe->as.var.binding;
+    }
+    if (cps_self_env_call(b, callee) && e->as.call_.n_args + 1 == b->cur_fd->n_params) {
+        uint32_t n = e->as.call_.n_args + 1;
+        Expr **args = arena_alloc(b->a, n * sizeof(Expr *));
+        const Binding *envp = b->cur_fd->params[0];
+        Expr *v = expr_new(b->a, EX_VAR, envp->type, e->span);
+        v->as.var.binding = (Binding *)envp;
+        args[0] = v;
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            args[i + 1] = e->as.call_.args[i];
+        Expr *nc = expr_new(b->a, EX_CALL, e->type, e->span);
+        nc->as.call_.fn_binding = (Binding *)b->cur_fn;
+        nc->as.call_.fn_expr = NULL;
+        nc->as.call_.args = args;
+        nc->as.call_.n_args = n;
+        nc->as.call_.dict_arg = NULL;
+        return nc;
+    }
+    const Binding *lt = cps_ir_letrec_member_target(callee);
+    if (lt && e->as.call_.n_args == lt->type.as.fn.arity) {
+        Expr *nc = expr_new(b->a, EX_CALL, e->type, e->span);
+        nc->as.call_ = e->as.call_;
+        nc->as.call_.fn_binding = (Binding *)lt;
+        nc->as.call_.fn_expr = NULL;
+        return nc;
     }
     const PapInline *pe = pap_lookup(b, callee);
     if (!pe || e->as.call_.n_args != pe->rem_arity) return e;
@@ -3149,10 +3458,18 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
  * b->n_pap after the let is fully translated). */
 static const Type *fn_alias_sig(const Binding *b);   /* fwd */
 
-static void pap_register_let(CpsB *b, const Expr *let) {
-    for (uint32_t i = 0; i < let->as.let_.n && b->n_pap < 32; i++) {
+/* Returns false when a binding whose calls MUST be rewritten (an alias of a
+ * global, a local closure) found the table full: the caller evicts rather
+ * than delegate a call the classifier counted as rewritten. */
+static bool pap_register_let(CpsB *b, const Expr *let) {
+    for (uint32_t i = 0; i < let->as.let_.n; i++) {
         const Binding *vb = let->as.let_.bindings[i].binding;
         const Binding *tgt; Binding **caps; uint32_t nc, rem; const Expr *pl;
+        if (b->n_pap >= 32) {
+            if (cps_ir_let_global_fn_alias(let, i) || cps_ir_let_local_closure(let, i))
+                return false;
+            continue;
+        }
         if (vb
             && pap_extract(let->as.let_.bindings[i].init, &tgt, &caps, &nc, &rem, &pl)
             && !closure_binding_escapes(let->as.let_.body, vb)
@@ -3161,6 +3478,7 @@ static void pap_register_let(CpsB *b, const Expr *let) {
             b->pap[b->n_pap].caps = caps;   b->pap[b->n_pap].n_caps = nc;
             b->pap[b->n_pap].rem_arity = rem;
             b->pap[b->n_pap].is_alias = false;
+            b->pap[b->n_pap].is_env_call = false;
             b->n_pap++;
             continue;
         }
@@ -3170,14 +3488,30 @@ static void pap_register_let(CpsB *b, const Expr *let) {
          * an effectful callback called through the alias had no lowering
          * (cps-let-alias-of-effectful-fn-param-refused). */
         const Binding *src = cps_ir_let_fnparam_alias(let, i);
+        if (!src) src = cps_ir_let_global_fn_alias(let, i);
         if (src) {
             b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = src;
             b->pap[b->n_pap].caps = NULL;   b->pap[b->n_pap].n_caps = 0;
             b->pap[b->n_pap].rem_arity = fn_alias_sig(src)->as.fn.arity;
             b->pap[b->n_pap].is_alias = true;
+            b->pap[b->n_pap].is_env_call = false;
+            b->n_pap++;
+            continue;
+        }
+        /* A local capturing closure of a colored lambda: each call becomes the
+         * lambda's own CPS call, threading the continuation.  An uncolored one
+         * keeps the closure protocol (the direct emitter's call). */
+        const Binding *lc = cps_ir_let_local_closure(let, i);
+        if (lc && callee_colored(b, lc)) {
+            b->pap[b->n_pap].var = vb;      b->pap[b->n_pap].target = lc;
+            b->pap[b->n_pap].caps = NULL;   b->pap[b->n_pap].n_caps = 0;
+            b->pap[b->n_pap].rem_arity = vb->type.as.fn.arity;
+            b->pap[b->n_pap].is_alias = false;
+            b->pap[b->n_pap].is_env_call = true;
             b->n_pap++;
         }
     }
+    return true;
 }
 
 /* The call signature of a fn-valued binding: its own TY_FN type, or -- for a fat
@@ -3205,6 +3539,188 @@ static const Binding *fnparam_alias_src(const Binding *vb, const Expr *init) {
     return src;
 }
 
+/* cps-local-fn-alias-or-lambda-called-in-place-refused: a GLOBAL function held
+ * by an immutable local -- a named fn (`(let [g via-adt] ...)`) or the lifted
+ * `__fn_N` of a captureless lambda (`(let [g (fn [n] ...)] ...)`) -- whose
+ * every use is a saturated call.  A call through it IS a direct call to the
+ * global.  A generic target is left out (a call through the local carries no
+ * instantiation), and so is one whose result is a function: a lifted lambda
+ * that returns a closure is callable only through the closure protocol on the
+ * local (pr-386, Binding.is_lifted_lambda). */
+static bool fn_alias_kind_concrete(TypeKind k) {
+    return k != TY_TYVAR && k != TY_APP && k != TY_FORALL && k != TY_UNKNOWN;
+}
+static bool global_fn_target_ok(const Binding *src) {
+    if (!src || !src->is_global || src->is_mut || src->is_poly_fn || src->is_fat
+        || src->closure_fn_binding || src->type.kind != TY_FN)
+        return false;
+    if (src->type.as.fn.result_kind == TY_FN) return false;
+    const FnDef *fd = src->source_fn_def;
+    if (!fd || fd->closure || fd->constraints.n_constraints > 0) return false;
+    for (uint32_t k = 0; k < fd->n_params; k++) {
+        const Binding *pk = fd->params ? fd->params[k] : NULL;
+        if (!pk || !fn_alias_kind_concrete(pk->type.kind)) return false;
+    }
+    return fn_alias_kind_concrete(src->type.as.fn.result_kind);
+}
+static const Binding *global_fn_alias_src(const Binding *vb, const Expr *init) {
+    if (!vb || vb->is_mut || vb->is_poly_fn || vb->is_fat || vb->type.kind != TY_FN)
+        return NULL;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_VAR) return NULL;
+    const Binding *src = init->as.var.binding;
+    if (!global_fn_target_ok(src)) return NULL;
+    if (src->type.as.fn.arity != vb->type.as.fn.arity) return NULL;
+    return src;
+}
+
+/* A captureless `letrec` member: elab_letrec lifts its lambda to a global
+ * `__fn_N`, marks the member itself global (its calls are direct C calls) and
+ * names the lambda in source_binding.  A call through the member -- from the
+ * `letrec` body or the lambda's own self-call -- is a direct call to the
+ * lambda.  NULL for anything else. */
+const Binding *cps_ir_letrec_member_target(const Binding *f) {
+    if (!f || !f->is_letrec_binding || !f->is_global || f->is_mut || f->is_poly_fn)
+        return NULL;
+    const Binding *src = f->source_binding;
+    if (!global_fn_target_ok(src) || !src->is_lifted_lambda) return NULL;
+    if (f->type.kind != TY_FN || f->type.as.fn.arity != src->type.as.fn.arity) return NULL;
+    return src;
+}
+
+/* Is every member of this `letrec` such a global (so the group binds names,
+ * not values, and its body is all there is to translate)? */
+static bool letrec_all_global_members(const Expr *e) {
+    if (!e || e->kind != EX_LETREC || e->as.let_.n == 0) return false;
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        const Binding *f = e->as.let_.bindings[i].binding;
+        const Expr *init = ascribe_peel(e->as.let_.bindings[i].init);
+        const Binding *src = cps_ir_letrec_member_target(f);
+        if (!src || !init || init->kind != EX_VAR || init->as.var.binding != src)
+            return false;
+    }
+    return true;
+}
+
+const Binding *cps_ir_let_global_fn_alias(const Expr *let, uint32_t i) {
+    if (!let || (let->kind != EX_LET) || i >= let->as.let_.n) return NULL;
+    const Binding *vb = let->as.let_.bindings[i].binding;
+    const Binding *src = global_fn_alias_src(vb, let->as.let_.bindings[i].init);
+    if (!src) return NULL;
+    uint32_t ar = src->type.as.fn.arity;
+    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
+        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    if (closure_binding_escapes(let->as.let_.body, vb)) return NULL;
+    if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
+    return src;
+}
+
+/* cps-local-fn-alias-or-lambda-called-in-place-refused, the capturing shape:
+ * an immutable local bound to a fresh CAPTURING lambda, whose every use is a
+ * saturated call.  The closure's value is its env box, and the lifted lambda
+ * takes that box as its first parameter, so a call through the local is a
+ * call to the lambda -- the direct emitter spells it `__fn_N((void *)g, x)`.
+ * For a colored lambda the translator makes it the lambda's CPS call
+ * (pap_register_let, is_env_call), threading the continuation; the binding
+ * stays, since the box is still built.  The lambda is then no fn value: no
+ * fresh root ever calls it, which is what lets the classifier admit it.  A
+ * generic lambda and one whose result is a function are left out, as for
+ * the captureless alias above. */
+/* A lambda's parameter or result type, free of type variables: a type
+ * application only with a concrete head and arguments (`(Option int)`), since
+ * a call through the local carries no instantiation. */
+static bool local_closure_type_ok(const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_APP)
+        return local_closure_type_ok(t->as.app.fn) && local_closure_type_ok(t->as.app.arg);
+    return fn_alias_kind_concrete(t->kind);
+}
+
+static const Binding *local_closure_shape(const Expr *let, uint32_t i) {
+    if (!let || i >= let->as.let_.n) return NULL;
+    /* A `letrec` of one capturing member is the same shape: its lambda reaches
+     * itself by a self-call, which threads its own env (cps_self_env_call),
+     * never by a capture of the member. */
+    bool rec = let->kind == EX_LETREC;
+    if (!(let->kind == EX_LET || (rec && let->as.let_.n == 1))) return NULL;
+    const Binding *vb = let->as.let_.bindings[i].binding;
+    if (!vb || vb->is_global || vb->is_param || vb->is_mut || vb->is_poly_fn
+        || vb->type.kind != TY_FN)
+        return NULL;
+    const Expr *init = ascribe_peel(let->as.let_.bindings[i].init);
+    if (!init || init->kind != EX_CLOSURE || !init->as.closure_.closure) return NULL;
+    const struct Closure *c = init->as.closure_.closure;
+    if (c->n_captures == 0 || c->is_shift_receiver || c->is_effect_payload) return NULL;
+    for (uint32_t k = 0; k < c->n_captures; k++)
+        if (c->captures[k] == vb) return NULL;
+    const FnDef *fd = c->fn;
+    const Binding *lam = fd ? fd->binding : NULL;
+    if (!lam || lam != vb->closure_fn_binding || !lam->is_lifted_lambda
+        || lam->type.kind != TY_FN)
+        return NULL;
+    uint32_t ar = vb->type.as.fn.arity;
+    if (fd->n_params != ar + 1 || lam->type.as.fn.arity != ar + 1) return NULL;
+    if (fd->constraints.n_constraints > 0) return NULL;
+    for (uint32_t k = 1; k < fd->n_params; k++)
+        if (!fd->params[k] || fd->params[k]->is_poly_fn
+            || !local_closure_type_ok(&fd->params[k]->type))
+            return NULL;
+    TypeKind rk = lam->type.as.fn.result_kind;
+    if (rk == TY_FN) return NULL;
+    /* The binding's full result type: the FnDef's return_type of a lambda
+     * can still read a body-typed `(Option ?)` where the annotation says
+     * `(Option int)`. */
+    const Type *rft = lam->type.as.fn.result_full_type;
+    if (rk == TY_APP ? !rft || !local_closure_type_ok(rft) : !fn_alias_kind_concrete(rk))
+        return NULL;
+    /* Every use a saturated call: pap_calls_saturated reads any other use --
+     * an argument, a capture by a nested fn, a stored value -- as a refusal,
+     * so the box never leaves the let. */
+    for (uint32_t j = i + 1; j < let->as.let_.n; j++)
+        if (!pap_calls_saturated(let->as.let_.bindings[j].init, vb, ar)) return NULL;
+    if (!pap_calls_saturated(let->as.let_.body, vb, ar)) return NULL;
+    if (rec && !pap_calls_saturated(fd->body, vb, ar)) return NULL;
+    /* The box is reaped at the DK entry boundary (cps_bind_let_init), so its
+     * release must free nothing the lambda's result can still point into: a
+     * scalar result points into nothing, and otherwise the env's drop glue
+     * (emit_expr.c) must free the box alone -- no rc, owned fat closure or
+     * Drop-instance capture -- and no inline C block may name a capture (an
+     * lvalue into the box). */
+    switch (rk) {
+        case TY_INT: case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+        case TY_BOOL: case TY_NIL:
+            break;
+        default:
+            for (uint32_t k = 0; k < c->n_captures; k++) {
+                const Binding *cap = c->captures[k];
+                if (!cap) return NULL;
+                if (cap->is_global) continue;
+                if (cap->type.kind == TY_RC || cap->is_fat) return NULL;
+                if (c->capture_drop_insts && c->capture_drop_insts[k]) return NULL;
+            }
+            if (closure_body_inline_c_touches_env(c)) return NULL;
+    }
+    return lam;
+}
+
+/* The rewrite is for a lambda whose effects may leave it: a pure one gains
+ * nothing from a CPS entry, and it keeps the direct path it always had (its
+ * calls stay closure calls; a `letrec` of it keeps the direct lowering). */
+static bool local_lambda_effectful(const FnDef *fd) {
+    if (fd->binding && fd->binding->type.kind == TY_FN
+        && !effect_row_is_runtime_pure(fd->binding->type.as.fn.effect_row))
+        return true;
+    return fd->inferred_effect_row
+        && !effect_row_is_runtime_pure(fd->inferred_effect_row);
+}
+
+const Binding *cps_ir_let_local_closure(const Expr *let, uint32_t i) {
+    const Binding *lam = local_closure_shape(let, i);
+    if (!lam) return NULL;
+    const Expr *init = ascribe_peel(let->as.let_.bindings[i].init);
+    return local_lambda_effectful(init->as.closure_.closure->fn) ? lam : NULL;
+}
+
 const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
     if (!let || (let->kind != EX_LET) || i >= let->as.let_.n) return NULL;
     const Binding *vb = let->as.let_.bindings[i].binding;
@@ -3226,7 +3742,7 @@ const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
 static bool pap_binding_inlined(CpsB *b, const Expr *let, uint32_t idx, uint32_t saved) {
     const Binding *vb = let->as.let_.bindings[idx].binding;
     for (uint32_t j = saved; j < b->n_pap; j++)
-        if (b->pap[j].var == vb) return true;
+        if (b->pap[j].var == vb) return !b->pap[j].is_env_call;
     return false;
 }
 
@@ -3862,6 +4378,124 @@ static CTerm *build_match_term(CpsB *b, Expr *e, CAtom scrut, CKont kont) {
     return t;
 }
 
+/* cps-match-on-builtin-sum-evicts: may the DIRECT emitter dispatch this match
+ * while its arm bodies stay CPS terms?  match_dk_ok's shape (a tagged ADT the
+ * CPS emitter reads itself) is the only one CT_MATCH could take, so a colored
+ * arm under a match on an `(Option A)`, a `(Result T E)`, an int or string
+ * literal, or an `any` narrowing evicted the whole function -- the most common
+ * way to look at a value an effectful function was handed.  The direct match
+ * emitter already routes every arm body through one hook (EmitCtx.match_tail,
+ * proper-tail-calls T3) on all its arm shapes but a session offer; the CPS
+ * emitter takes that hook here.  What the direct emitter still evaluates must
+ * be delegatable: the scrutinee is bound to an atom first (any control in it
+ * is translated), and a guard must carry none.  A `!`-typed match has no
+ * result temp to declare. */
+static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp);
+static bool expr_writes(const Expr *e);
+static bool match_direct_dispatch_ok(CpsB *b, const Expr *e) {
+    const Expr *scrut = e->as.match_.scrutinee;
+    if (!scrut || e->as.match_.n_arms == 0) return false;
+    if (scrut->type.kind == TY_SESSION_OFFER) return false;
+    if (e->type.kind == TY_NEVER) return false;
+    for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
+        const MatchArm *arm = &e->as.match_.arms[i];
+        if (!arm->body) return false;
+        /* A guard is direct-emitted inside the dispatch, so it must be
+         * delegatable, and it must not write: the capture and mutation walks
+         * see its reads (match.guard_vars), not a store. */
+        if (arm->guard && (!safe_to_delegate(b, arm->guard) || expr_writes(arm->guard)))
+            return false;
+    }
+    return true;
+}
+
+/* Does `e` store anywhere (a `set!` of any shape, a `def`)? */
+static bool expr_writes_visit(const Expr *c, void *ud) { (void)ud; return expr_writes(c); }
+static bool expr_writes(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e) return false;
+    switch (e->kind) {
+        case EX_SET: case EX_SET_DEREF: case EX_SET_FIELD: case EX_DEF:
+            return true;
+        case EX_FN: case EX_CLOSURE: case EX_FN_DEF:
+            return false;     /* a definition runs nothing here */
+        default:
+            return cps_visit_children(e, expr_writes_visit, NULL);
+    }
+}
+
+/* Build the direct-dispatch CT_MATCH (see match_direct_dispatch_ok), each arm
+ * delivering to `kont`.  The scrutinee is bound to a fresh binder the copied
+ * match names, unless it is already a variable. */
+static CTerm *build_direct_match_term(CpsB *b, Expr *e, CKont kont) {
+    Expr *scrut = e->as.match_.scrutinee;
+    const Expr *ps = ascribe_peel(scrut);
+    Expr *m = arena_alloc(b->a, sizeof(Expr));
+    *m = *e;
+    CVar y = {0};
+    bool bind_scrut = !(ps && ps->kind == EX_VAR && ps->as.var.binding);
+    if (bind_scrut) {
+        y = fresh_cvar(b, &scrut->type);
+        m->as.match_.scrutinee = cvar_expr(b, &y, &scrut->type, scrut->span);
+    }
+    Pending p = {0};
+    CAtom sa = atomize(b, m->as.match_.scrutinee, &p);
+    CTerm *t = new_term(b, CT_MATCH);
+    t->as.match.scrut = sa;
+    t->as.match.adt = NULL;
+    t->as.match.direct = m;
+    uint32_t n = e->as.match_.n_arms;
+    t->as.match.n_arms = n;
+    CMatchArm *arms = arena_alloc(b->a, n * sizeof(CMatchArm));
+    for (uint32_t i = 0; i < n; i++) {
+        const MatchArm *arm = &e->as.match_.arms[i];
+        const MatchPattern *pat = &arm->pattern;
+        arms[i].ctor = pat->ctor;
+        if (pat->ctor) {
+            arms[i].fields = (const struct Binding **)pat->bindings;
+            arms[i].n_fields = pat->n_bindings;
+        } else if (pat->var_binding) {
+            const struct Binding **one = arena_alloc(b->a, sizeof *one);
+            one[0] = pat->var_binding;
+            arms[i].fields = one;
+            arms[i].n_fields = 1;
+        } else {
+            arms[i].fields = NULL;
+            arms[i].n_fields = 0;
+        }
+        arms[i].body = cps_tail(b, arm->body, kont);
+        /* The guard's enclosing reads (its arm's binders are its own). */
+        if (arm->guard) {
+            uint32_t nfv = 0;
+            Binding **fv = collect_free_vars(arm->guard, (Binding **)arms[i].fields,
+                                             (uint8_t)(arms[i].n_fields > 255 ? 255 : arms[i].n_fields),
+                                             NULL, 0, &nfv);
+            for (uint32_t k = 0; k < nfv; k++) {
+                const Binding *gb = fv[k];
+                if (!gb || gb->is_global) continue;
+                bool dup = false;
+                for (uint32_t j = 0; j < t->as.match.n_guard_vars; j++)
+                    if (t->as.match.guard_vars[j].var == gb) dup = true;
+                if (dup) continue;
+                if (t->as.match.n_guard_vars % 8 == 0) {
+                    CAtom *ng = arena_alloc(b->a, (t->as.match.n_guard_vars + 8) * sizeof(CAtom));
+                    if (t->as.match.n_guard_vars)
+                        memcpy(ng, t->as.match.guard_vars, t->as.match.n_guard_vars * sizeof(CAtom));
+                    t->as.match.guard_vars = ng;
+                }
+                CAtom *ga = &t->as.match.guard_vars[t->as.match.n_guard_vars++];
+                memset(ga, 0, sizeof *ga);
+                ga->kind = CA_VAR; ga->var = gb;
+                ga->ty = gb->type.kind; ga->type = &gb->type;
+            }
+            free(fv);
+        }
+    }
+    t->as.match.arms = arms;
+    CTerm *r = fold_pending(b, &p, t);
+    return bind_scrut ? cps_bind(b, scrut, y, r) : r;
+}
+
 /* The implicit `else` of a one-armed `if` -- what `(when c body)` desugars to.
  * Such an `if` is nil-typed (the type checker rejects it otherwise: a present
  * else must match the then branch, and a nil then branch is what makes the
@@ -3899,6 +4533,19 @@ static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp) {
  * of e''s own type (any translation the operand needs), then x from a
  * synthesized reinterpret of y -- atomic, so delegated to the direct emitter,
  * which spells the retype (pointer through intptr_t, a narrowing cast). */
+/* The same for a numeric conversion `(as T e')` (EX_CAST) whose operand
+ * carries control -- `(as float (+ x (perform (Ask))))`, which evicted the
+ * whole function (`unsupported form: EX_CAST`): bind e' to a binder of its own
+ * type, then x from a delegated cast of that binder. */
+static CTerm *cps_bind_cast(CpsB *b, Expr *e, CVar x, CTerm *rest) {
+    Expr *inner = e->as.cast_.expr;
+    CVar y = fresh_cvar(b, &inner->type);
+    Expr *yv = cvar_expr(b, &y, &inner->type, e->span);
+    Expr *ce = arena_alloc(b->a, sizeof(Expr));
+    *ce = *e;
+    ce->as.cast_.expr = yv;
+    return cps_bind(b, inner, y, build_letraw(b, ce, x, rest));
+}
 static CTerm *cps_bind_reinterp(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     Expr *inner = e->as.reinterpret_.expr;
     CVar y = fresh_cvar(b, &inner->type);
@@ -4001,6 +4648,24 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
     }
     e = (Expr *)ascribe_peel(e);
     e = pap_maybe_rewrite(b, e);
+    /* A `letrec` of captureless members binds global names, not values. */
+    if (e && e->kind == EX_LETREC && letrec_all_global_members(e))
+        return cps_tail(b, e->as.let_.body, kont);
+    /* A `letrec` of one capturing member, only ever called: lowered like a
+     * `let` of a local closure (cps_ir_let_local_closure) -- its calls, and
+     * its lambda's own self-calls (cps_self_env_call), are the lambda's CPS
+     * calls. */
+    if (e && letrec_local_closure(b, e)) {
+        uint32_t saved_pap = b->n_pap;
+        if (!pap_register_let(b, e)) {
+            b->n_pap = saved_pap;
+            return unsupported_form(b, e);
+        }
+        CTerm *rest = cps_tail(b, e->as.let_.body, kont);
+        rest = cps_bind_let_init(b, e, 0, cvar_of_binding(e->as.let_.bindings[0].binding), rest);
+        b->n_pap = saved_pap;
+        return rest;
+    }
     if (!e) {
         /* cps-while-native: a null (unit) loop-body tail is the back-edge. */
         if (kont.kind == KK_LOOP) return make_continue(b);
@@ -4072,14 +4737,36 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             return fold_pending(b, &p, t);
         }
         case EX_CALL: {
+            /* An EMPTY-row call through a FAT thread param threads the caller's
+             * continuation the way an effectful-row one does
+             * (call_through_fat_param); the dispatch calls an unregistered --
+             * pure -- value directly. */
+            if (!call_is_effectful_fnvalue(e) && call_threads_via_registry(e)
+                && call_args_pendable(e)) {
+                Pending pp = {0};
+                const Binding *pf = e->as.call_.fn_binding;
+                uint32_t n = e->as.call_.n_args;
+                CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                for (uint32_t i = 0; i < n; i++)
+                    args[i] = atomize_call_arg(b, e, i, &pp);
+                CTerm *t = new_term(b, CT_TAILCALL);
+                t->as.tailcall.fn = pf; t->as.tailcall.args = args;
+                t->as.tailcall.n = n; t->as.tailcall.kont = kont;
+                t->as.tailcall.via_registry = true;
+                t->as.tailcall.call_expr = e;
+                return fold_pending(b, &pp, t);
+            }
             /* E2/taint-completeness: an effectful fn-value call cannot thread the
              * DK yet; delegating it to fiber under a DK handle escapes the effect.
              * Evict so the whole fn stays fiber (its effect taints -> the DK
              * handler-installer co-classifies to fiber). */
             if (call_is_effectful_fnvalue(e)) {
-                /* E2a: a tier-`now` thread-param call THREADS the DK via the registry. */
+                /* E2a: a tier-`now` thread-param call THREADS the DK via the registry.
+                 * A call through a threadable let-bound lambda likewise
+                 * (cps_ir_thread_local_add). */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && cps_ir_thread_param_has(pf) && call_args_pendable(e)) {
+                if (pf && (cps_ir_thread_param_has(pf) || cps_ir_thread_local_has(pf))
+                    && call_args_pendable(e)) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -4089,6 +4776,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     t->as.tailcall.fn = pf; t->as.tailcall.args = args;
                     t->as.tailcall.n = n; t->as.tailcall.kont = kont;
                     t->as.tailcall.via_registry = true;
+                    t->as.tailcall.call_expr = e;
                     return fold_pending(b, &pp, t);
                 }
                 /* E2c: an effectful fn-value stored in a STRUCT FIELD, called via
@@ -4247,11 +4935,16 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return build_letraw(b, e, x, ac);
             }
+            if (match_direct_dispatch_ok(b, e))
+                return build_direct_match_term(b, e, kont);
             return unsupported_form(b, e);
         }
         case EX_LET: {
             uint32_t saved_pap = b->n_pap;
-            pap_register_let(b, e);
+            if (!pap_register_let(b, e)) {
+                b->n_pap = saved_pap;
+                return unsupported_form(b, e);
+            }
             CTerm *rest = cps_tail(b, e->as.let_.body, kont);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
                 if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {
@@ -4552,11 +5245,17 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
             }
             /* As cps_bind's default arm: a Tier A reinterpret over a control-
              * bearing operand. */
-            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr) {
+            if (e->kind == EX_REINTERPRET && e->as.reinterpret_.expr) {
                 CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
                 return cps_bind_reinterp(b, e, x, ac);
+            }
+            if (e->kind == EX_CAST && e->as.cast_.expr) {
+                CVar x = fresh_cvar(b, &e->type);
+                CTerm *ac = new_term(b, CT_APPCONT);
+                ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
+                return cps_bind_cast(b, e, x, ac);
             }
             return unsupported_form(b, e);
         }
@@ -4575,6 +5274,19 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
     e = (Expr *)ascribe_peel(e);
     if (!e) return rest;
     e = pap_maybe_rewrite(b, e);
+    if (e->kind == EX_LETREC && letrec_all_global_members(e))
+        return cps_bind(b, e->as.let_.body, x, rest);
+    if (letrec_local_closure(b, e)) {
+        uint32_t saved_pap = b->n_pap;
+        if (!pap_register_let(b, e)) {
+            b->n_pap = saved_pap;
+            return unsupported_form(b, e);
+        }
+        CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
+        r = cps_bind_let_init(b, e, 0, cvar_of_binding(e->as.let_.bindings[0].binding), r);
+        b->n_pap = saved_pap;
+        return r;
+    }
     if (is_atomic(e)) {
         CTerm *t = new_term(b, CT_LETVAL);
         t->as.letval.x = x; t->as.letval.v = atom_of(e); t->as.letval.body = rest;
@@ -4602,6 +5314,29 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             return fold_pending(b, &p, t);
         }
         case EX_CALL: {
+            /* An empty-row call through a fat thread param, in BIND position:
+             * the continuation `rest` reified as a heap join, threaded to the
+             * value's entry via the registry (see cps_tail). */
+            if (!call_is_effectful_fnvalue(e) && call_threads_via_registry(e)
+                && call_args_pendable(e)) {
+                Pending pp = {0};
+                const Binding *pf = e->as.call_.fn_binding;
+                uint32_t n = e->as.call_.n_args;
+                CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
+                for (uint32_t i = 0; i < n; i++)
+                    args[i] = atomize_call_arg(b, e, i, &pp);
+                CVar j = fresh_cvar(b, x.type);
+                j.name = arena_strdup(b->a, "j", 1);
+                CTerm *call = new_term(b, CT_TAILCALL);
+                call->as.tailcall.fn = pf; call->as.tailcall.args = args;
+                call->as.tailcall.n = n; call->as.tailcall.kont = kont_var(j);
+                call->as.tailcall.via_registry = true;
+                call->as.tailcall.call_expr = e;
+                CTerm *t = new_term(b, CT_LETCONT);
+                t->as.letcont.j = j; t->as.letcont.param = x;
+                t->as.letcont.jbody = rest; t->as.letcont.body = call;
+                return fold_pending(b, &pp, t);
+            }
             /* E2/taint-completeness: evict an effectful fn-value call (see cps_tail). */
             if (call_is_effectful_fnvalue(e)) {
                 /* E2a tier-`nontail`: a thread-param call in BIND position threads the
@@ -4609,7 +5344,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                  * threading it to the fn-value's __cps (via the registry).  Same shape
                  * as a colored-callee non-tail call (below), but via_registry. */
                 const Binding *pf = e->as.call_.fn_binding;
-                if (pf && cps_ir_thread_param_has(pf) && call_args_pendable(e)) {
+                if (pf && (cps_ir_thread_param_has(pf) || cps_ir_thread_local_has(pf))
+                    && call_args_pendable(e)) {
                     Pending pp = {0};
                     uint32_t n = e->as.call_.n_args;
                     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
@@ -4621,6 +5357,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     call->as.tailcall.fn = pf; call->as.tailcall.args = args;
                     call->as.tailcall.n = n; call->as.tailcall.kont = kont_var(j);
                     call->as.tailcall.via_registry = true;
+                    call->as.tailcall.call_expr = e;
                     CTerm *t = new_term(b, CT_LETCONT);
                     t->as.letcont.j = j; t->as.letcont.param = x;
                     t->as.letcont.jbody = rest; t->as.letcont.body = call;
@@ -4766,11 +5503,23 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 return fold_pending(b, &p, t);
             }
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
+            if (match_direct_dispatch_ok(b, e)) {
+                CVar j = fresh_cvar(b, x.type);
+                j.name = arena_strdup(b->a, "j", 1);
+                CTerm *body = build_direct_match_term(b, e, kont_var(j));
+                CTerm *t = new_term(b, CT_LETCONT);
+                t->as.letcont.j = j; t->as.letcont.param = x;
+                t->as.letcont.jbody = rest; t->as.letcont.body = body;
+                return t;
+            }
             return unsupported_form(b, e);
         }
         case EX_LET: {
             uint32_t saved_pap = b->n_pap;
-            pap_register_let(b, e);
+            if (!pap_register_let(b, e)) {
+                b->n_pap = saved_pap;
+                return unsupported_form(b, e);
+            }
             CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
                 if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {
@@ -4947,13 +5696,18 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * direct emitter (binds x, continues rest). */
             if (safe_to_delegate(b, e))
                 return build_letraw(b, e, x, rest);
-            /* cps-evicts-handle-in-operand-positions: a same-size Tier A
-             * reinterpret is a bit-identical retype whose OPERAND carries a
-             * control op (a generic call with a `handle` in its arguments).
-             * Translate the operand into a binder of its own type, then retype
-             * it into x through a delegated reinterpret of that binder. */
-            if (is_tierA_reinterp(e) && e->as.reinterpret_.expr)
+            /* cps-evicts-handle-in-operand-positions: a reinterpret whose
+             * OPERAND carries a control op (a generic call with a `handle` in
+             * its arguments, or a colored generic's erased result).  Translate
+             * the operand into a binder of its own type, then retype it into x
+             * through a delegated reinterpret of that binder -- the direct
+             * emitter spells the retype, including an int64 carrier read back
+             * as the double it holds (the float instantiation; until
+             * 2026-10-09 only a same-size Tier A retype took this path). */
+            if (e->kind == EX_REINTERPRET && e->as.reinterpret_.expr)
                 return cps_bind_reinterp(b, e, x, rest);
+            if (e->kind == EX_CAST && e->as.cast_.expr)
+                return cps_bind_cast(b, e, x, rest);
             return unsupported_form(b, e);
         }
     }
@@ -4994,6 +5748,7 @@ CTerm *cps_ir_translate_fn(Arena *a, Expr *program, FnDef *fd) {
     b.a = a; b.program = program; b.counter = 0;
     b.retk.kind = KK_RET; b.retk.id = 0; b.retk.ty = fd->return_type.kind;
     b.cur_fn = fd->binding;
+    b.cur_fd = fd;
     b.cur_fn_leaf_fiber = expr_has_indirect_fnvalue_call(fd->body, 0);
     b.n_pap = 0;
     b.n_loop = 0;   /* cps-while-native: not inside a loop body */
@@ -5313,5 +6068,9 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call) {
         return false;
     if (call_is_effectful_fnvalue(call))
         return cps_ir_thread_param_has(p) && call_args_pendable(call);
+    /* An empty-row call through a fat thread param threads too (the dispatch
+     * calls an unregistered value directly). */
+    if (call_through_fat_param(call) && cps_ir_thread_param_has(p) && call_args_pendable(call))
+        return true;
     return fncps_param_call_ok(p, call);
 }

@@ -641,7 +641,9 @@ TuriValue turi_any_identity_payload(TuriValue v);
 
 /* r7rs-lang-plan T5: the interpreter's side of a re-entrant continuation (the
  * R7RS prelude's call/cc copies the C stack; see eval.c).  `turi_cont_pin`
- * stops the driver from freeing per-call temporaries for the rest of the run;
+ * records a capture: frames and per-call temporaries made before it are
+ * never freed (an image may complete their activations again), while those
+ * made after the last capture are handed back as usual (the capture epoch);
  * a capture saves the env's dynamic-extent fields, the evaluator's boundary
  * stacks and the drivers' heap work stacks, and a re-entry puts them back
  * (after the stack image is restored). */

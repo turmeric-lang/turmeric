@@ -1,0 +1,45 @@
+;; effect-copy-path-tail-resume-delivers-out-of-order: an inner handler whose
+;; case tail-resumes but touches its continuation first -- here an alias,
+;; `(let [k2 k] ...)` -- under an outer handler, with the outer effect
+;; performed from inside the inner handle's body.
+;;
+;; Such a case cannot be resumed in place (it may keep `k`), so it resumes a
+;; COPY.  The copy used to end at the handle, with the handle's own
+;; continuation -- `(* 10 _)` below -- queued to run once the copy settled.
+;; An outer capture taken inside the copy then stopped short of it: a non-tail
+;; outer case got its value back before `(* 10 _)` had run (10060 for 1060),
+;; and an abortive one had its value run through `(* 10 _)` afterwards (420
+;; for 42).  The copy now runs on past the handle, as the original does.
+;;
+;;   non-tail-outer  -- the outer case works after its resume
+;;   abort-outer     -- the outer case never resumes
+;;   tail-outer      -- the outer case tail-resumes too
+;;   two-inner       -- two aliasing inner handles nested, the outer effect
+;;                      from the innermost body; non-tail and abortive outer
+;;   multishot-outer -- the outer case resumes twice
+
+(defeffect Ask [] int)
+(defeffect Out [] int)
+(defeffect Ask2 [] int)
+
+(defn inner [] : int
+  (handle (+ (perform (Ask)) (perform (Out)))
+    (Ask [] k) (let [k2 k] (resume k2 1))))
+
+(defn two-inner [] : int
+  (handle (* 3 (handle (+ (perform (Ask)) (perform (Ask2)) (perform (Out)))
+                 (Ask [] k) (let [k2 k] (resume k2 1))))
+    (Ask2 [] k) (let [k3 k] (resume k3 20))))
+
+(defn main [] : nil
+  ;; non-tail-outer: (1 + 5) * 10 = 60, then 1000 + 60
+  (println (handle (* 10 (inner)) (Out [] k) (+ 1000 (resume k 5))))
+  ;; abort-outer: the handle's value is the case's, untouched
+  (println (handle (* 10 (inner)) (Out [] k) 42))
+  ;; tail-outer: (1 + 5) * 10
+  (println (handle (* 10 (inner)) (Out [] k) (resume k 5)))
+  ;; two-inner: 3 * (1 + 20 + 5) = 78, then 1000 + 78
+  (println (handle (two-inner) (Out [] k) (+ 1000 (resume k 5))))
+  (println (handle (two-inner) (Out [] k) 7))
+  ;; multishot-outer: (1 + 1) * 10 + (1 + 2) * 10
+  (println (handle (* 10 (inner)) (Out [] ^multishot k) (+ (resume k 1) (resume k 2)))))

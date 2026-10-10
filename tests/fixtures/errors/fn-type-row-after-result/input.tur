@@ -1,0 +1,7 @@
+;; A `(fn ...)` type's return type is its last element.  An effect row written
+;; AFTER it -- `(fn [B] B #fx{E})` -- used to be dropped without a word, so the
+;; parameter was typed effect-free.  It is an error now, naming where the row
+;; goes.
+(defeffect E [x : int] :int)
+(defn gapp [B] [f : (fn [B] B #fx{E}) v : B] : B (f v))
+(defn main [] : int 0)

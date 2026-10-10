@@ -1,0 +1,1 @@
+async-capturing-body-env-never-freed: a let-bound lambda whose only use is one spawn is the spawn's to own.

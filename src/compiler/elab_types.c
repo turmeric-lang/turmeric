@@ -1688,6 +1688,22 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
             Type *ret_t = type_expr_from_form(e, form->as.list.items[idx],
                                                rec_name, type_params, type_param_kinds, n_type_params);
             reject_fn_type_contract(e, ret_t, form->as.list.items[idx], "result");
+            /* The return type is the LAST element.  Anything after it used to be
+             * dropped without a word -- notably an effect row written after the
+             * result, `(fn [B] B #fx{E})`, which then typed the parameter as
+             * effect-free (the cps-evicts-handle-in-operand-positions repro
+             * carried one, and its "the row makes no difference" was this). */
+            if (idx + 1 < form->as.list.len) {
+                Form *extra = form->as.list.items[idx + 1];
+                if (extra->tag == F_MAP && !fn_effect_row)
+                    diag_emit(DIAG_ERROR, extra->span,
+                              "'fn' type: the effect row goes before the return type: "
+                              "(fn [params...] #fx{...} :return)");
+                else
+                    diag_emit(DIAG_ERROR, extra->span,
+                              "'fn' type: unexpected form after the return type: "
+                              "(fn [params...] :return)");
+            }
             /* Type variables lower to the int64 carrier for the kind slot. */
             TypeKind ret_kind = ret_t ? (ret_t->kind == TY_TYVAR ? TY_INT : ret_t->kind)
                                       : TY_INT;
@@ -2229,6 +2245,15 @@ Type *type_expr_from_form(Elab *e, const Form *form, const Symbol *rec_name,
                               "no instance binding for associated type '%s' at this type",
                               head_sym->name);
                     return NULL;
+                }
+                /* half 1: remember which instance this spelling named, for a
+                 * return-directed method whose result is this associated
+                 * type (elab_try_return_dispatch). */
+                if (n_args == 1) {
+                    e->assoc_hint_name   = head_sym;
+                    e->assoc_hint_arg    = arg_buf[0];
+                    e->assoc_hint_result = *bound;
+                    e->assoc_hint_valid  = true;
                 }
                 Type *out = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *out = *bound;
@@ -3074,6 +3099,9 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
     /* Elaborate the expression */
     Expr *inner = elab_form(e, expr_form);
     e->expected_type = saved_expected;
+    /* The hint a projection in this ascription left was for this expression
+     * alone (associated-type-unusable-nullary-and-generic, half 1). */
+    e->assoc_hint_valid = false;
     if (!inner) return NULL;
 
     /* any-narrowing-ascription-does-not-compile: `::` cannot narrow OUT of an

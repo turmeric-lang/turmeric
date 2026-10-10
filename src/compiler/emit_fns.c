@@ -6693,8 +6693,18 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
                 free(pn);
             }
         }
+        /* panic-location-names-the-runtime-not-the-call-site: a body that
+         * calls `tur_panic(` panics through tur_panic_sited, which names the
+         * site its direct caller set around the call (the general call arm
+         * in emit_expr.c, the cps->direct arms), so `(vec-get v 9)` names
+         * the program's line.  Nothing happens at entry; a body entered with
+         * no site set (through a function value) names the runtime's own
+         * line, as before. */
+        bool sited = fn_def_panics_in_inline_c(fd);
+        if (sited) buf_puts(file, "#define tur_panic(m) tur_panic_sited(m)\n");
         /* Inline C body - emit as-is (it contains its own return statements) */
         emit_stmt(ctx, file, fd->body);
+        if (sited) buf_puts(file, "#undef tur_panic\n");
     } else if (result_kind == TY_NIL && !is_main && !tco_eligible) {
         /* void function - emit body as statements */
         emit_stmt(ctx, file, fd->body);

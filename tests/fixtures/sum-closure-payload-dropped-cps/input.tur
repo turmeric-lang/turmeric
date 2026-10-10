@@ -1,0 +1,61 @@
+;; sum-closure-payload-never-dropped (the CPS half): a capturing closure held
+;; as the payload of a by-value Option/Result local, in a function the CPS
+;; backend lowers (its body performs), was never released -- the direct
+;; emitter's scope-exit drop does not run there.  The let's `(some <closure>)`
+;; is a cps->direct call; its live arm's closure is now registered with the
+;; entry boundary's reap (__dk_reap_closure under a tag switch), as a
+;; non-escaping closure env or a struct's fn fields are, under the same
+;; vouching the direct emitter uses (let_binding_sum_closure_freeable).
+;;
+;; requires.leak-check: every shape here must be clean.
+;;
+;;   via-match   -- `(some <closure>)`, matched and called with a performed value
+;;   via-sibling -- a sibling binding of the same `let` performs
+;;   via-result  -- the Ok arm of a Result; the Err arm's int binder is returned
+;;   via-pred    -- `some?` first, then the match
+;;   in-loop     -- via-match 200 times from a performing loop
+;;
+;; Not here: `(Some <closure>)` written as the constructor itself -- the CPS
+;; backend evicts a function that then calls the arm binder ("indirect call
+;; (non-atomic args)"), a gap of its own; the direct shapes are in
+;; sum-closure-payload-dropped.
+(defeffect Ask [] :int)
+
+(defn via-match [k : int] : int
+  (let [bump k
+        ff (some (fn [x : int] : int (+ x bump)))]
+    (match ff
+      (Some f) (f (perform (Ask)))
+      (None) 0)))
+
+(defn via-sibling [k : int] : int
+  (let [ff (some (fn [x : int] : int (* x k)))
+        v (perform (Ask))]
+    (match ff
+      (Some f) (f v)
+      (None) 0)))
+
+(defn via-result [k : int] : int
+  (let [r : (Result (fn [int] int) int) (ok (fn [x : int] : int (- x k)))]
+    (match r
+      (Ok f) (+ (f 100) (perform (Ask)))
+      (Err e) e)))
+
+(defn via-pred [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (if (some? ff)
+      (match ff
+        (Some f) (f (perform (Ask)))
+        (None) 0)
+      -1)))
+
+(defn in-loop [n : int acc : int] : int
+  (if (= n 0) acc (in-loop (- n 1) (+ acc (via-match n)))))
+
+(defn main [] : int
+  (println (handle (via-match 3) (Ask [] k) (resume k 10)))
+  (println (handle (via-sibling 6) (Ask [] k) (resume k 7)))
+  (println (handle (via-result 5) (Ask [] k) (resume k 1)))
+  (println (handle (via-pred 2) (Ask [] k) (resume k 40)))
+  (println (handle (in-loop 200 0) (Ask [] k) (resume k 1)))
+  0)

@@ -1,0 +1,47 @@
+;; async-capturing-body-env-never-freed: the shapes a let-bound lambda must
+;; NOT hand to the spawn (async-let-bound-body-env-dropped has the one it
+;; does) -- each spawns the same closure value more than once, so a spawn
+;; that dropped the box would leave the next spawn a freed env.  Not
+;; leak-checked: these keep the box, as before.  The answers must be right.
+;;
+;;   twice     -- the same local spawned twice in sequence
+;;   in-while  -- spawned from a `while` body
+;;   captured  -- spawned inside a lambda that captured it, called twice
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn drive [f : ptr<void>] : int
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defn twice [k : int] : int
+  (let [body (fn [] : int (* k 2))]
+    (+ (drive (async body)) (drive (async body)))))
+
+(defn in-while [k : int] : int
+  (let [body (fn [] : int (+ k 1))
+        ^mut i 0
+        ^mut acc 0]
+    (while (< i 3)
+      (set! acc (+ acc (drive (async body))))
+      (set! i (+ i 1)))
+    acc))
+
+(defn captured [k : int] : int
+  (let [body (fn [] : int (* k 3))
+        go   (fn [] : int (drive (async body)))]
+    (+ (go) (go))))
+
+(defn main [] : nil
+  (println (twice 5))
+  (println (in-while 10))
+  (println (captured 7)))

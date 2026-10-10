@@ -5860,6 +5860,25 @@ static bool rt_type_mentions_tyvar(const Type *t, const char *name) {
     }
 }
 
+/* associated-type-unusable-nullary-and-generic (half 1): how many instances of
+ * `tc` that implement method `midx` bind associated type `ak` to `expected`?
+ * `*only` (when given) is the last one found -- the instance, when the count
+ * is one. */
+static int rt_assoc_return_instances(const TypeClassEnv *env, const TypeClass *tc,
+                                     uint8_t midx, uint8_t ak, const Type *expected,
+                                     TypeClassInstance **only) {
+    int n = 0;
+    for (TypeClassInstance *it = env->instances; it; it = it->next) {
+        if (it->typeclass != tc) continue;
+        if (midx >= it->n_method_impls || !it->method_impls[midx]) continue;
+        if (ak >= it->n_assoc_types || !it->assoc_types) continue;
+        if (!type_eq(it->assoc_types[ak], *expected)) continue;
+        n++;
+        if (only) *only = it;
+    }
+    return n;
+}
+
 /* Phase RT: walk a method's declared return type in parallel with the expected
  * type, binding the dispatch tyvar `rv` to the corresponding subtree of the
  * expected type.  Handles the bare case (return == `a`, binds a := expected)
@@ -5971,12 +5990,29 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     /* Find a return-only-dispatch method named `name`: one of the class's type
      * parameters appears in the method's return type but in none of its
      * parameter types, so the instance can only be picked from the expected
-     * result type. */
+     * result type.
+     *
+     * associated-type-unusable-nullary-and-generic (half 1): a method whose
+     * result is one of its class's ASSOCIATED types -- `(empty [] : Inner)` --
+     * mentions no class variable at all, so this search passed it by:
+     * `(empty)` was "unknown function or operator", unless a stdlib class had
+     * a return-directed method of the same name (Alternative's `empty`), which
+     * was then taken for it, since the first class with the name won.  Every
+     * class with a return-only method of the name is a candidate now, an
+     * associated-type result included (assoc_idx >= 0: its dispatch variable
+     * is the class's first parameter, bound through the instance that binds
+     * the associated type to the expected type), and when there are several
+     * the one whose result fits the expected type is chosen. */
     TypeClass *tc = NULL;
     uint8_t midx = 0;
     const TypeClassMethod *meth = NULL;
     const char *disp_tv = NULL;
-    for (TypeClass *c = env->typeclasses; c != NULL && !meth; c = c->next) {
+    int assoc_idx = -1;
+    typedef struct { TypeClass *tc; uint8_t midx; const TypeClassMethod *meth;
+                     const char *disp_tv; int assoc_idx; } RtCand;
+    RtCand cands[8];
+    int n_cands = 0;
+    for (TypeClass *c = env->typeclasses; c != NULL; c = c->next) {
         for (uint8_t mi = 0; mi < c->n_methods; mi++) {
             const TypeClassMethod *m = &c->methods[mi];
             if (!(m->name->len == name->len &&
@@ -6007,25 +6043,56 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                 }
             }
             if (any_tp_in_param) continue;
+            const char *dtv = NULL;
             for (uint8_t ti = 0; ti < c->n_type_params; ti++) {
                 const Symbol *tp = c->type_params[ti];
                 if (!tp) continue;
                 if (!rt_type_mentions_tyvar(&m->return_type, tp->name)) continue;
-                bool in_param = false;
-                for (uint32_t pi = 0; pi < m->n_params; pi++) {
-                    if (rt_type_mentions_tyvar(&m->param_types[pi], tp->name)) {
-                        in_param = true;
+                dtv = tp->name;   /* no class parameter is in a param (above) */
+                break;
+            }
+            int aidx = -1;
+            if (!dtv && m->return_type.kind == TY_TYVAR && m->return_type.as.tyvar_.name &&
+                c->n_type_params > 0 && c->type_params[0]) {
+                for (uint8_t ai = 0; ai < c->n_assoc_types; ai++) {
+                    const Symbol *an = c->assoc_type_names[ai];
+                    if (an && strcmp(an->name, m->return_type.as.tyvar_.name) == 0) {
+                        aidx = ai;
                         break;
                     }
                 }
-                if (in_param) continue;
-                tc = c; midx = mi; meth = m; disp_tv = tp->name;
-                break;
+                if (aidx >= 0) dtv = c->type_params[0]->name;
             }
-            if (meth) break;
+            if (!dtv) continue;
+            if (n_cands < 8) {
+                cands[n_cands].tc = c; cands[n_cands].midx = mi; cands[n_cands].meth = m;
+                cands[n_cands].disp_tv = dtv; cands[n_cands].assoc_idx = aidx;
+                n_cands++;
+            }
         }
     }
-    if (!meth) return NULL;  /* not a return-only-dispatch method */
+    if (n_cands == 0) return NULL;  /* not a return-only-dispatch method */
+    int chosen = 0;
+    if (n_cands > 1 && e->expected_type) {
+        for (int ci = 0; ci < n_cands; ci++) {
+            const RtCand *k = &cands[ci];
+            bool fits;
+            if (k->assoc_idx >= 0) {
+                const Symbol *an = k->tc->assoc_type_names[k->assoc_idx];
+                fits = (e->assoc_hint_valid && e->assoc_hint_name == an &&
+                        type_eq(e->assoc_hint_result, *e->expected_type))
+                    || rt_assoc_return_instances(env, k->tc, k->midx, (uint8_t)k->assoc_idx,
+                                                 e->expected_type, NULL) > 0;
+            } else {
+                Type scratch;
+                fits = rt_unify_return(&k->meth->return_type, e->expected_type,
+                                       k->disp_tv, &scratch);
+            }
+            if (fits) { chosen = ci; break; }
+        }
+    }
+    tc = cands[chosen].tc; midx = cands[chosen].midx; meth = cands[chosen].meth;
+    disp_tv = cands[chosen].disp_tv; assoc_idx = cands[chosen].assoc_idx;
     if (handled) *handled = true;
 
     /* Arrow head: if this class has a function-arrow instance and the call has
@@ -6071,6 +6138,48 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                       "type ascription, e.g. (:: (%s ...) T)",
                       name->name, name->name);
             return NULL;
+        }
+    } else if (assoc_idx >= 0) {
+        /* half 1: the result is the class's associated type, so the expected
+         * type is an instance's BINDING of it, not the dispatch variable.  The
+         * ascription that spelled the projection names the instance
+         * (`(let [z : (Inner W) (empty)] ...)`: the hint type_expr_from_form
+         * left); a bare type (`(:: (empty) int)`) selects the one instance
+         * binding the associated type to it, and refuses when several do. */
+        const Symbol *an = tc->assoc_type_names[assoc_idx];
+        if (e->assoc_hint_valid && e->assoc_hint_name == an &&
+            type_eq(e->assoc_hint_result, *e->expected_type)) {
+            bound = e->assoc_hint_arg;
+            e->assoc_hint_valid = false;
+            inst = typeclass_env_lookup_instance(env, tc, &bound, 1);
+            if (!inst) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "no instance '%s %s'", tc->name->name, type_name(bound));
+                return NULL;
+            }
+        } else {
+            TypeClassInstance *only = NULL;
+            int n = rt_assoc_return_instances(env, tc, midx, (uint8_t)assoc_idx,
+                                              e->expected_type, &only);
+            if (n == 1) {
+                inst = only;
+                bound = only->type_args[0];
+            } else if (n == 0) {
+                diag_emit(DIAG_ERROR, call->span,
+                          "no instance of '%s' binds its associated type '%s' to %s, "
+                          "which '%s' would have to return here",
+                          tc->name->name, an->name, type_name(*e->expected_type),
+                          name->name);
+                return NULL;
+            } else {
+                diag_emit(DIAG_ERROR, call->span,
+                          "%d instances of '%s' bind '%s' to %s; say which one by "
+                          "spelling the result as the projection, e.g. "
+                          "(:: (%s) (%s T))",
+                          n, tc->name->name, an->name, type_name(*e->expected_type),
+                          name->name, an->name);
+                return NULL;
+            }
         }
     } else {
         /* Bind the dispatch tyvar from the expected type (bare or structured). */

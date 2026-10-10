@@ -1,0 +1,39 @@
+;; associated-type-unusable-nullary-and-generic (half 1): a method whose only
+;; class mention is an associated type in its result -- `(empty [] : Inner)`
+;; -- could not be called: dispatch read the first parameter's type, there is
+;; none, and return-directed dispatch looked for a class variable in the
+;; result, which names none.  Worse, `empty` is also the stdlib Alternative
+;; class's return-directed method, and the first class with the name won, so
+;; every ascription was measured against `(f a)`.  Now every class with a
+;; return-only method of the name is a candidate; an associated-type result
+;; is dispatched through the instance that binds it to the expected type --
+;; named by the projection the ascription spelled (`(Inner W)`), or the one
+;; instance binding it to a bare type (`(:: (empty) int)`).  Both engines.
+(defclass Box [a]
+  (type Inner : Type)
+  (empty [] : Inner)
+  (unwrap [x : a] : Inner))
+(defopaque W :int)
+(defopaque V :int)
+(defstruct Pt [x : int y : int])
+(definstance Box [W] (type Inner = int) (empty [] 7) (unwrap [x] (:: x int)))
+(definstance Box [V] (type Inner = Pt) (empty [] (Pt 3 4)) (unwrap [x] (Pt (:: x int) 1)))
+
+;; the projection names the instance
+(defn w-empty [] : int
+  (let [z : (Inner W) (empty)]
+    z))
+
+;; a bare type: the one instance binding Inner to Pt
+(defn v-empty-y [] : int
+  (.y (:: (empty) Pt)))
+
+(defn main [] : int
+  (println (w-empty))
+  (println (:: (empty) int))
+  (let [p : (Inner V) (empty)]
+    (println (.x p)))
+  (println (v-empty-y))
+  (println (unwrap (:: 5 W)))
+  (println (.x (unwrap (:: 9 V))))
+  0)

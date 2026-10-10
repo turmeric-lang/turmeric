@@ -1,0 +1,83 @@
+;; async-capturing-body-env-never-freed: the spawn owned only a SHALLOW env
+;; box (scalar captures), so a lambda capturing a struct still leaked its box
+;; per spawn, and the typed spawn (a float or bool body, through a wrapper at
+;; the thunk's real prototype) owned none at all.  An env whose drop glue
+;; frees the box alone -- no rc, owned fat closure or Drop-instance capture --
+;; is owned now, a struct capture being a copy in the box, and the typed spawn
+;; drops it the same way, inline or at the park's resume.  Leak-checked
+;; (requires.leak-check): inline and parking struct-capturing bodies, a typed
+;; float body, 100 spawns of each in a loop.
+(defstruct P [a : int b : int])
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+
+
+(defn spawn-struct [p : P k : int] : int
+  (drive (async (fn [] : int (+ (.a p) (.b p) k)))))
+
+(defn spawn-struct-parks [p : P] : int
+  (drive (async (fn [] : int (+ (.a p) (sum-values 0 20 0))))))
+
+(defn spawn-float [p : P x : float] : float
+  (let [f (async (fn [] : float (+ x (as float (.b p)))))
+        v (await f)]
+    (free-future f)
+    v))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (spawn-struct (P 1 2) 3))          ; 6
+  (println (spawn-struct-parks (P 5 0)))      ; 45
+  (println (spawn-float (P 0 2) 0.25))        ; 2.25
+  (let [^mut acc  0
+        ^mut accf 0.0
+        ^mut i    0]
+    (while (< i 100)
+      (set! acc (+ acc (spawn-struct (P i 1) 0)))
+      (set! acc (+ acc (spawn-struct-parks (P 1 0))))
+      (set! accf (+ accf (spawn-float (P 0 i) 0.5)))
+      (set! i (+ i 1)))
+    (println acc)                             ; 9150
+    (println accf))                           ; 5000
+  (free-future (cur-cell false)))

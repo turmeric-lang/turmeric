@@ -1,0 +1,61 @@
+;; match-result-temp-typed-from-first-arm: a `match` (or `if`) whose result
+;; is a function value, with a capture-free lambda arm before a capturing
+;; one.  The arms joined to the FIRST arm's type, a thin code pointer, so the
+;; result temporary was `int64_t` while every arm stored a `void *` fat box:
+;; `-Wint-conversion` errors under clang (warnings under gcc).  Two arms of
+;; one fn type now join to the fat representation.
+;;
+;;   cata     -- the report's repro: a function-carrier algebra over a
+;;               nullary-first functor
+;;   scaler   -- three arms, the capturing one in the middle; float payloads
+;;   pick     -- the same join through `if`
+
+(load "stdlib/typeclass-functor.tur")
+
+(defdata ExprF :copy [a] (LitF :int) (AddF a a))
+(defdata Expr  :copy (Roll (ExprF Expr)))
+
+(definstance Functor [ExprF]
+  (fmap [c g]
+    (match c
+      (LitF n)   (LitF n)
+      (AddF x y) (AddF (g x) (g y)))))
+
+(defn unroll-e [e : Expr] : (ExprF Expr) (match e (Roll l) l))
+
+(defn cata [B] [alg : (fn [(ExprF B)] B) e : Expr] : B
+  (alg (:: (fmap (unroll-e e) (fn [c : Expr] : B (cata alg c))) (ExprF B))))
+
+(defn lit [n : int] : Expr (Roll (LitF n)))
+(defn add [x : Expr y : Expr] : Expr (Roll (AddF x y)))
+
+;; Each literal adds itself to the running state; the capture-free arm is first.
+(defn alg [l : (ExprF (fn [(fn [int] int) int] int))]
+         : (fn [(fn [int] int) int] int)
+  (match l
+    (LitF n)   (fn [k : (fn [int] int) s : int] : int (k (+ s 1)))
+    (AddF x y) (fn [k : (fn [int] int) s : int] : int
+                 (x (fn [s2 : int] : int (y k s2)) s))))
+
+(defdata Sh (Circle :float) (Sq :float) (Tri :float :float))
+
+(defn scaler [s : Sh k : float] : (fn [float] float)
+  (match s
+    (Circle r) (fn [x : float] : float (* x 2.5))
+    (Sq a)     (fn [x : float] : float (* x a k))
+    (Tri a b)  (fn [x : float] : float (+ x 0.25))))
+
+(defn pick [c : bool k : float] : (fn [float] float)
+  (if c
+    (fn [x : float] : float (* x 2.5))
+    (fn [x : float] : float (* x k))))
+
+(defn main [] : int
+  ;; three literals, each adding 1
+  (println ((cata alg (add (lit 3) (add (lit 4) (lit 5)))) (fn [r : int] : int r) 0))
+  (println ((scaler (Circle 1.0) 3.0) 7.1))   ; 17.75
+  (println ((scaler (Sq 2.0) 3.0) 7.1))       ; 42.6
+  (println ((scaler (Tri 1.0 0.5) 3.0) 7.1))  ; 7.35
+  (println ((pick true 3.0) 7.1))             ; 17.75
+  (println ((pick false 3.0) 7.1))            ; 21.3
+  0)

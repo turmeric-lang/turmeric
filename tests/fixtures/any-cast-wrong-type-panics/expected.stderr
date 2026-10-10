@@ -1,1 +1,2 @@
 cast: any holds Point, not Other
+panic at input.tur:13: cast: any holds Point, not Other

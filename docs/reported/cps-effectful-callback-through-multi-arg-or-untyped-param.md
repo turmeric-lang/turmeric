@@ -1,24 +1,51 @@
 # An effectful callback through a multi-argument or untyped fn parameter is refused
 
-**Narrowed 2026-10-08: shapes 1, 3 and 4 are fixed** -- a callback of up to
-eight arguments (word integers, `cstr` or `ptr<void>`), a capturing closure,
-and a `bool` or unit result all thread now (see "Fixed 2026-10-08" at the
-end).  **What is left:** shape 2, an untyped `^fat` parameter; and a callback
-whose argument or result has neither a word's C spelling nor its register
-class -- a `float` argument or result, a narrow integer or `bool` argument --
-which is still refused, honestly, at compile time:
+**Narrowed 2026-10-09: scalar arguments and results thread, pointer
+results and capturing closures of those kinds too.**
 
-```turmeric
-(defn appf [h : (fn [int] float) x : int] : float (h x))       ;; refused
-(defn appb [h : (fn [bool] int) b : bool] : int (h b))         ;; refused
-(defn app [^fat h x : int] : int (h x))                        ;; refused
-```
+- A `float`, `float32`, `bool` or narrow-integer argument or result crosses
+  the `fn_cps` slot (see "Fixed 2026-10-09" at the end).
+- A `cstr` or `ptr<void>` RESULT crosses as its word through `intptr_t`, and
+  the direct fallback (`fncps_direct_call`) calls the wrapper at its real
+  pointer result type. Pinned by
+  `tests/fixtures/cps-effectful-callback-pointer-result`.
+- A CAPTURING closure's dispatcher (`ensure_fncps_env_dispatch`) is typed
+  per signature: it converts each word for the registered twin (a float at
+  its own type, every other kind as the word its `__e2w` adapter takes) and
+  for slot 0 (each at its C type), and delivers a float or pointer result as
+  its word. Every scalar kind is admitted except an untyped `ptr<void>`
+  argument and a narrow-integer or `bool` RESULT: either puts a widening
+  wrapper in slot 0, which the registry does not know. Pinned by
+  `tests/fixtures/cps-effectful-capturing-callback-scalar-kinds`.
+- Found on the way: a function with a parameter named `k` is kept off the
+  CPS backend (`param_name_clashes_cps`, for leaks in some pure shapes), so
+  an effectful lambda `(fn [y : float k : int] ...)` was refused. A function
+  whose effects may leave it is exempt now, as a handle-installer already
+  was: evicted, its performs had no lowering anyway.
+- Also found on the way, pre-existing and not CPS-specific in kind: a
+  capturing closure with a `cstr` or aggregate result, handed to a
+  non-retaining fn parameter inside a CPS function, leaked its env (24 B per
+  call). `cps_closure_env_freeable` took scalar results only; it now takes
+  what the direct emitter's `let_binding_env_freeable` takes (a `cstr`,
+  by-value aggregate or carrier result, no inline C), walking the body
+  exactly for inline C.
 
-A capturing closure is narrower still: word-integer arguments and an `int` or
-unit result only (its dispatcher's fallback calls the env box's slot 0, which is
-the lifted entry at those types; a `bool` closure's slot 0 is a widen wrapper).
+All three fixtures are leak-checked, pass the JIT harness and run clean under
+`-fsanitize=function`. **What is left:**
 
-**Severity: medium.** A compile-time refusal of a correct program; `tur
+- shape 2, an untyped `^fat` parameter;
+- an aggregate (struct or ADT) argument or result;
+- a capturing closure with an untyped `ptr<void>` argument or a
+  narrow-integer / `bool` result.
+
+**Narrowed 2026-10-08: shapes 1, 3 and 4 are fixed.** That covers a callback
+of up to eight arguments (word integers, `cstr` or `ptr<void>`), a capturing
+closure, and a `bool` or unit result.
+
+(At that point a capturing closure was narrower still: word-integer
+arguments and an `int` or unit result only. Widened 2026-10-09, above.)
+
+**Severity: low-medium** (was medium). A compile-time refusal of a correct program; `tur
 --interpret` runs it. Until 2026-10-07 these compiled and then aborted at run
 time with `unhandled effect` (on `main` too). The fix for
 [cps-effectful-fnval-escapes-through-unthreaded-param](../archive/cps-effectful-fnval-escapes-through-unthreaded-param.md)
@@ -125,3 +152,48 @@ Found on the way, pre-existing and filed separately:
 -- an effectful closure returned by a call, `(app1 (adder 3) 1)`, compiled
 and aborted with `unhandled effect`, as it did before this change.  Since
 2026-10-08 it is refused at compile time instead.
+
+## Fixed 2026-10-09: scalar arguments and results
+
+The slot's kinds are now every scalar (`fncps_arg_kind_ok`,
+`src/passes/cps_ir.c`), and a result is any scalar but a pointer
+(`fncps_result_kind_ok`). Each argument crosses as its int64 word,
+`cps_ir_fncps_word_of`, and is read back by `cps_ir_fncps_value_of`. A float
+crosses as its bits, which is the DK slot's own Tier-B convention, so a
+result the callee's `__cps` entry delivers reads back the same way. A narrow
+integer or `bool` crosses by a cast.
+
+- **Call site** (`fncps_slot_call`, `src/compiler/emit_cps_ir.c`): it passes
+  the words. The direct fallback (`fncps_direct_call`) calls the wrapper at
+  each parameter's and the result's own C type. A float result is delivered
+  at its own type and stored into the slot by its bits; in the heap join it
+  is bit-cast before `dk_run`.
+- **Twin** (`ensure_poly_wrap_cps_thunk`, `src/compiler/emit_module.c`): it
+  forward-declares the direct entry at each own C spelling. It passes a
+  float to the registered `__cps` entry at its own type, as every E2a call
+  site does (`e2a_cast`); everything else goes as a word, which the
+  `__e2w` adapter converts for a narrow or pointer parameter. A float result
+  of the direct fallback is delivered by its bits.
+
+Integer and pointer twins are byte-identical to before, so no snapshot moved.
+
+Found on the way and fixed under
+[cps-match-on-builtin-sum-evicts](../archive/cps-match-on-builtin-sum-evicts.md):
+a numeric `(as float ...)` around a `perform` evicted its function, and a
+lifted helper's float capture stayed recorded under its source name for the
+rest of the program. The latter bit-cast an integer `x` in the prelude's
+`vec-eq-loop`. Separately,
+[effect-row-lost-under-match-cast-letrec](../archive/effect-row-lost-under-match-cast-letrec.md):
+the probe callbacks' rows were empty because their `perform` sat under an
+`as`.
+
+Pinned by `tests/fixtures/cps-effectful-callback-scalar-kinds`. It covers:
+- `float`, `float32`, `bool`, `int8` and `int32` arguments and results;
+- a three-argument mix;
+- tail and heap-join calls;
+- named functions and lambdas;
+- pure callbacks through the same parameters.
+
+Every line equals `tur --interpret`. The fixture is leak-checked, passes the
+JIT harness, runs clean under `-fsanitize=function`, and has no finding from
+`check-emitted-float-conversions.py`.

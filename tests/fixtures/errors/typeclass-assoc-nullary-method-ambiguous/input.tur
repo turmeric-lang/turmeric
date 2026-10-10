@@ -1,0 +1,13 @@
+;; associated-type-unusable-nullary-and-generic (half 1): two instances bind
+;; the associated type to the same type, so a bare ascription cannot say
+;; which `empty` is meant; the projection spelling can.
+(defclass Box [a]
+  (type Inner : Type)
+  (empty [] : Inner))
+(defopaque W :int)
+(defopaque V :int)
+(definstance Box [W] (type Inner = int) (empty [] 7))
+(definstance Box [V] (type Inner = int) (empty [] 8))
+(defn main [] : int
+  (println (:: (empty) int))
+  0)

@@ -1,0 +1,81 @@
+;; cps-match-on-builtin-sum-evicts: a `match` whose arm performs (or calls a
+;; colored function), on a scrutinee the CPS backend's own tag dispatch does
+;; not read -- an (Option A), a (Result T E), int literals -- evicted the
+;; whole function: "this effect operation has no lowering here".  The direct
+;; emitter now dispatches such a match and hands each arm body back to the
+;; CPS emitter.  Tail and bind position, a computed scrutinee, a nil-typed
+;; match, a match after a perform (its scrutinee crossing into the lifted
+;; continuation), a nested match, and a match in a handler clause.  Every
+;; line equals `tur --interpret`.
+(defeffect Ask [] :int)
+(defeffect Log [msg : cstr] :nil)
+
+(defn m1 [o : (Option int)] : int
+  (match o
+    (Some v) (+ v (perform (Ask)))
+    (None) 0))
+
+(defn m2 [o : (Result int int)] : int
+  (let [r (match o
+            (Ok v) (+ v (perform (Ask)))
+            (Err e) (- e (perform (Ask))))]
+    (* r 2)))
+
+(defn m4 [n : int] : int
+  (match n
+    1 (perform (Ask))
+    2 (+ 100 (perform (Ask)))
+    _ 5))
+
+(defn find [q : int] : (Option int) (if (> q 0) (some (* q 3)) (none)))
+(defn m5 [q : int] : int
+  (match (find q)
+    (Some v) (+ v (perform (Ask)))
+    (None) -1))
+
+(defn m6 [o : (Option int)] : int
+  (do
+    (match o
+      (Some v) (perform (Log "some"))
+      (None) nil)
+    7))
+
+(defn m7 [o : (Option int)] : int
+  (let [a (perform (Ask))]
+    (match o
+      (Some v) (+ a v (perform (Ask)))
+      (None) a)))
+
+(defn m8 [o : (Option int) p : (Option int)] : int
+  (match o
+    (Some v) (match p
+               (Some w) (+ v w (perform (Ask)))
+               (None) (- v (perform (Ask))))
+    (None) 0))
+
+(defeffect Pick [o : (Option int)] :int)
+(defn ask-pick [o : (Option int)] : int (+ 1 (perform (Pick o))))
+(defn m9 [o : (Option int)] : int
+  (handle (ask-pick o)
+    (Pick [x] k) (match x
+                   (Some v) (resume k (+ v (perform (Ask))))
+                   (None) (resume k 0))))
+
+(defn main [] : int
+  (println (handle (m1 (some 1)) (Ask [] k) (resume k 10)))
+  (println (handle (m1 (none)) (Ask [] k) (resume k 10)))
+  (println (handle (m2 (ok 2)) (Ask [] k) (resume k 10)))
+  (println (handle (m2 (err 50)) (Ask [] k) (resume k 10)))
+  (println (handle (m4 1) (Ask [] k) (resume k 10)))
+  (println (handle (m4 2) (Ask [] k) (resume k 10)))
+  (println (handle (m4 3) (Ask [] k) (resume k 10)))
+  (println (handle (m5 4) (Ask [] k) (resume k 10)))
+  (println (handle (m5 0) (Ask [] k) (resume k 10)))
+  (println (handle (m6 (some 1)) (Log [m] k) (do (println m) (resume k nil))))
+  (println (handle (m7 (some 5)) (Ask [] k) (resume k 10)))
+  (println (handle (m7 (none)) (Ask [] k) (resume k 10)))
+  (println (handle (m8 (some 5) (some 6)) (Ask [] k) (resume k 10)))
+  (println (handle (m8 (some 5) (none)) (Ask [] k) (resume k 10)))
+  (println (handle (m9 (some 4)) (Ask [] k) (resume k 10)))
+  (println (handle (m9 (none)) (Ask [] k) (resume k 10)))
+  0)

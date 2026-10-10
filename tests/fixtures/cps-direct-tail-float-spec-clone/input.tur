@@ -1,0 +1,27 @@
+;; A colored generic instantiated at float gets a spec clone that returns a
+;; real `double` (`with_region__spec__double_int64_t`).  Called in TAIL
+;; position of a CPS-lowered function, its result is delivered into a join
+;; whose local is the carrier word, and the reader unpacks that word as the
+;; float's bits.  The delivery assigned the double straight in, so C
+;; converted the VALUE (1.5 -> 1) and the reader saw the bits of the
+;; integer 1: 4.94066e-324.  Found by the regions source fuzzer; the
+;; delivery now hands over the bits, as the non-tail (letcall) arm does.
+
+(defn scaled [n : int] : float
+  (with-region (fn [] (* 1.5 (as float n)))))
+
+(defn pick [n : int] : float
+  (if (> n 2)
+    (with-region (fn [] (* 0.25 (as float n))))
+    (with-region (fn [] (+ 7.1 (as float n))))))
+
+(defn scaled32 [n : int] : float32
+  (with-region (fn [] (as float32 (* 2.5 (as float n))))))
+
+(defn main [] : int
+  (println (scaled 1))
+  (println (scaled 3))
+  (println (pick 5))
+  (println (pick 1))
+  (println (scaled32 3))
+  0)

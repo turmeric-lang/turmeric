@@ -20,6 +20,11 @@
 ;;   passed-on  -- handed to call-opt, which only matches and calls it
 ;;   via-ap     -- `(ap ff fa)`: the stdlib Applicative[Option] instance
 ;;   chained    -- handed to a helper that hands it to call-opt
+;;   struct-cap -- a closure capturing a struct: its drop frees the env box
+;;                 alone (closure_env_drop_frees_box_only), 100 times
+;;   mut-cap    -- a closure capturing a `^mut` cell: the box is dropped and
+;;                 the 8 B cell freed at the same exit (mut_cell_escapes
+;;                 vouches for a sum-wrapped closure too), 100 times
 
 (defn via-match [k : int] : int
   (let [bump k
@@ -75,6 +80,35 @@
   (let [ff (some (fn [x : int] : int (+ x k)))]
     (relay ff)))
 
+(defstruct Pt [a : int b : int])
+
+(defn struct-cap [p : Pt k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x (.a p) (.b p) k)))]
+    (match ff
+      (Some f) (f 30)
+      (None) 0)))
+
+(defn struct-cap-loop [n : int] : int
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i n)
+      (set! acc (+ acc (struct-cap (Pt 4 8) 0)))
+      (set! i (+ i 1)))
+    acc))
+
+(defn mut-cap [k : int] : int
+  (let [^mut acc k
+        ff       (some (fn [x : int] : int (do (set! acc (+ acc x)) acc)))]
+    (match ff
+      (Some f) (+ (f 1) (f 2))
+      (None) 0)))
+
+(defn mut-cap-loop [n : int] : int
+  (let [^mut i 0 ^mut acc 0]
+    (while (< i n)
+      (set! acc (+ acc (mut-cap 10)))
+      (set! i (+ i 1)))
+    acc))
+
 (defn main [] : int
   (println (via-match 1))       ;; 42
   (println (via-ctor 7))        ;; 42
@@ -84,4 +118,6 @@
   (println (passed-on 32))      ;; 42
   (println (via-ap 1))          ;; 42
   (println (chained 40))        ;; 1 + 41 = 42
+  (println (struct-cap-loop 100)) ;; 100 * 42 = 4200
+  (println (mut-cap-loop 100))    ;; 100 * (11 + 13) = 2400
   0)

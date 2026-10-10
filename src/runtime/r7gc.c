@@ -898,9 +898,36 @@ TUR_GC_NOASAN static void tur_gc_scan_data(void) {
 #else
 extern char __data_start[] __attribute__((weak));
 extern char _end[] __attribute__((weak));
+/* libturi's data and bss, which a `(scheme eval)` program links: the build
+ * moves them into sections of their own (src/CMakeLists.txt), so the linker
+ * brackets them.  Nothing in them points into this heap -- the interpreter
+ * allocates with libc, and the eval bridge hands it text and integer ids --
+ * so they are skipped: ~46 MB a collection in a Debug build
+ * (r7rs-gc-eval-programs-scan-libturi-data).  Null when not linked. */
+extern char __start_tur_turi_data[] __attribute__((weak));
+extern char __stop_tur_turi_data[] __attribute__((weak));
+extern char __start_tur_turi_bss[] __attribute__((weak));
+extern char __stop_tur_turi_bss[] __attribute__((weak));
 TUR_GC_NOASAN static void tur_gc_scan_data(void) {
     uintptr_t ds = (uintptr_t)&__data_start[0], de = (uintptr_t)&_end[0];
-    if (ds && de > ds) tur_gc_scan((const void *)ds, (size_t)(de - ds));
+    if (!ds || de <= ds) return;
+    uintptr_t skip[2][2] = {
+        { (uintptr_t)&__start_tur_turi_data[0], (uintptr_t)&__stop_tur_turi_data[0] },
+        { (uintptr_t)&__start_tur_turi_bss[0], (uintptr_t)&__stop_tur_turi_bss[0] },
+    };
+    if (skip[0][0] > skip[1][0]) {   /* in address order */
+        uintptr_t t0 = skip[0][0], t1 = skip[0][1];
+        skip[0][0] = skip[1][0]; skip[0][1] = skip[1][1];
+        skip[1][0] = t0; skip[1][1] = t1;
+    }
+    uintptr_t at = ds;
+    for (int i = 0; i < 2; i++) {
+        uintptr_t s0 = skip[i][0], s1 = skip[i][1];
+        if (!s0 || s1 <= s0 || s1 <= at || s0 >= de) continue;
+        if (s0 > at) tur_gc_scan((const void *)at, (size_t)(s0 - at));
+        at = s1;
+    }
+    if (de > at) tur_gc_scan((const void *)at, (size_t)(de - at));
 }
 #endif
 /* The region runtime: live and retired generations on every thread are

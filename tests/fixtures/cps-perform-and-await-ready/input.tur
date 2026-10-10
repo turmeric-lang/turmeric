@@ -1,0 +1,73 @@
+;; A function that both performs an effect and awaits a future used to be
+;; refused outright ("this effect operation has no lowering here"): the
+;; perform's continuation could not hold an await, nor the await's a perform
+;; (perform_cont_reset_ok / await_cont_reset_ok, emit_cps_ir.c).  Both are
+;; resume-frames threading a run-time continuation, so each now admits the
+;; other.  Ready futures only (no inline C), so `tur --interpret` runs this too.
+(defeffect Tick [] :int)
+(defeffect Log [msg : int] :nil)
+
+;; perform, then await
+(defn p-then-a [k : int] : int
+  (let [t (perform (Tick))]
+    (let [r (await (async (fn [] : int (+ k 1))))]
+      (+ t r))))
+
+;; await, then perform
+(defn a-then-p [k : int] : int
+  (let [r (await (async (fn [] : int (+ k 1))))]
+    (+ r (perform (Tick)))))
+
+;; await, perform, await
+(defn a-p-a [k : int] : int
+  (let [a (await (async (fn [] : int (+ k 1))))
+        t (perform (Tick))
+        b (await (async (fn [] : int (* k 2))))]
+    (+ a t b)))
+
+;; perform, await, perform, with a nil-result effect in between
+(defn p-a-p [k : int] : int
+  (let [t (perform (Tick))]
+    (perform (Log t))
+    (let [r (await (async (fn [] : int (+ k t))))]
+      (perform (Log r))
+      (+ r (perform (Tick))))))
+
+;; the await in operand position after a perform, under the handle itself
+(defn under-handle [k : int] : int
+  (handle (+ (perform (Tick)) (await (async (fn [] : int (* k 3)))))
+    (Tick [] kk) (resume kk 100)))
+
+;; a branch: the await only on one side of the perform's answer
+(defn branchy [k : int] : int
+  (let [t (perform (Tick))]
+    (if (> t 5)
+      (await (async (fn [] : int (+ k t))))
+      (- k t))))
+
+;; a loop that performs and awaits on every turn (the recursion is in the
+;; caller, not inside an await continuation)
+(defn turn [i : int] : int
+  (let [t (perform (Tick))]
+    (await (async (fn [] : int (+ i t))))))
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (turn i)))))
+
+(defn count-ticks [] : int
+  (let [^mut n 0]
+    (handle (do (p-then-a 1) (a-then-p 1) (a-p-a 1) n)
+      (Tick [] kk) (do (set! n (+ n 1)) (resume kk 10)))))
+
+(defn main [] : int
+  (println (handle (p-then-a 3) (Tick [] k) (resume k 10)))
+  (println (handle (a-then-p 3) (Tick [] k) (resume k 10)))
+  (println (handle (a-p-a 3) (Tick [] k) (resume k 10)))
+  (println (handle (p-a-p 3)
+             (Tick [] k) (resume k 10)
+             (Log [m] k) (do (println m) (resume k nil))))
+  (println (under-handle 2))
+  (println (handle (branchy 4) (Tick [] k) (resume k 10)))
+  (println (handle (branchy 4) (Tick [] k) (resume k 1)))
+  (println (handle (lp 100 0) (Tick [] k) (resume k 10)))
+  (println (count-ticks))
+  0)

@@ -1,5 +1,113 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Narrowed a third time 2026-10-09: the Saffron dynamic runtime names the
+program's line, on both back ends.** `(+ (* a 2) b)` with `b` a string
+printed `panic at <emitted>.c:2888: +: no operator for a cstr argument`
+compiled and a bare `panic at` interpreted; both print `panic at input.tur:8:
+...` now. Compiled, the operator, comparison, `not` and `println` helpers take
+the call's site -- a static `tur_site_t` the emitter interns per node
+(`emit_site_ref_text`) -- as a trailing argument and panic through
+`tur_panic_at` (`ensure_saffron_dyn_runtime`, `src/compiler/emit_module.c`;
+`dyn_sited_call`, `src/compiler/emit_expr.c`): an argument rather than the
+thread-local slot, because setting and clearing the slot around every
+dynamic operator cost a 10M-turn Saffron arithmetic loop 30% (0.11 s to
+0.15 s), where the argument costs it nothing measurable (0.10-0.11 s to
+0.11-0.12 s, within the run-to-run spread), and because a nested operator
+among the operands would have cleared the slot before the outer call ran.
+The call-arity check (`cannot call a ... value`) and the field miss (`no field
+'.x' on a ...`) are statements off the hot path: they set the slot around
+themselves and the helpers panic through `tur_panic_sited`. The dynamic
+method dispatch on an `any` sits in the fixed preamble, ahead of the slot, so
+it takes the location as arguments (`__tur_inst_slot_at`, as the cast check
+does). Interpreted, each of those panics sets `g_panic_site` to its node's
+span first (`src/turi/eval.c`). Found on the way, interpreter only: `(+ 6
+"x")` did not panic at all -- the overload was selected from argument 0
+alone, so the int `+` ran over the string's address and printed it; every
+operand must now be of the kind that selected the overload, named in the
+refusal as the compiled runtime names it. Pinned by
+`tests/fixtures/saffron-dyn-op-panic-site` (an operand built by a nested
+operator), `saffron-dyn-field-panic-site`, `saffron-dyn-call-panic-site` and
+`saffron-any-dispatch-panic-site`, each asserting the sited line and the full
+message on both engines. **Still open:** the r7rs raising check; a sited
+body entered through a function value or an instance-method dispatch (no
+site set: the runtime's line, or the enclosing sited call's while its
+arguments are being evaluated); and the interpreter's panic from a native
+reached other than through the driver's leaf call.
+
+**Narrowed again 2026-10-09: a panic raised in a stdlib inline-C body names
+the call.** `(vec-get v 9)` on line 12 prints `panic at input.tur:12: vec
+index out of bounds` on both engines, where it printed the runtime's own line
+compiled and a bare `panic at` interpreted. Compiled: a direct call to a
+function whose inline-C body calls `tur_panic(` (vec-get, vec-set!, slice-get,
+grid-get/set!, sized-buf-get, the sized-bitvec accessors, json's decoders,
+the arrow loop cell; `fn_def_panics_in_inline_c`) sets the thread's current
+site to a static `{ "input.tur", 12 }` the emitter interns per call just
+before the call and clears it just after -- `({ tur_site_set(&__tur_site_N);
+__auto_type r = vec_get(...); tur_site_clear(); r; })` in the general call
+arm of `emit_expr.c`, a set and a clear statement around the call line in
+the cps->direct arms of `emit_cps_ir.c` -- and `tur_panic` inside such a
+body is `tur_panic_sited`, which names the current site (`emit_fns.c`
+`#define`s it for the body's extent). One slot (`tur_cur_site`, host slot
+`tur_tls_cur_site` under the JIT), not a stack: a sited call among the
+arguments sets and clears its own before the outer call runs, so the outer
+then names the runtime's line as before, never another call's --
+`tests/fixtures/panic-site-nested-sited-args` has such an argument and the
+outer call still names its line, because the inner call's clear precedes
+the outer's set. A call written in a macro's TEMPLATE -- `vec-set!` expands
+to `vec-set-o!` in stdlib/vec.tur -- carries the macro use the program wrote
+(`EX_CALL.site`, set by `elab_call` from `elab_macro_use_site`), so `(vec-set!
+v 9 5)` names the program's line, not vec.tur's; a call the program wrote and
+handed to a macro keeps its own (`vec-bounds-failure-keeps-prior-output`
+pins the macro case). Interpreted: the driver sets `g_panic_site` from the call
+node before a native leaf call and clears it after, so `turi_runtime_panic`
+in `vec-get`'s native prints the same line (`vec-index-out-of-bounds-panics`
+pins both). Cost: two thread-local stores per such call, none at entry -- a
+100,000,000-iteration loop of nothing but `vec-get` went from 0.09 s to
+0.14 s on a 4-core box (the slot is emitted program-side, after the fixed
+preamble, because a thread-local in the fixed region is reached through a
+host accessor CALL in a hosted build, which doubled that loop). Still open
+after this pass: a panic raised in a runtime helper the program never names
+-- a Saffron dynamic operator, a dynamic method dispatch on an `any`, the
+r7rs raising check -- named the helper's line (the Saffron ones were fixed
+the same day, above); so does a sited body entered through a function value
+or an instance-method dispatch, and the interpreter's panic from a native
+reached other than through the driver's leaf call.
+
+**Narrowed again 2026-10-09: an index out of bounds is a panic.** `vec-get`,
+`vec-set!`, `vec-get-byval`, `slice-get`, `grid-get`/`grid-set!`,
+`sized-buf-get` and the `sized-bitvec-*` accessors printed their message and
+called `exit(1)`: no `panic at` line, nothing for a `catch-unwind` to catch,
+and the interpreter's natives did the same with `_exit(1)`. Each raises a
+panic now -- `tur_panic` in the stdlib inline C, `turi_runtime_panic` in the
+`vec-get` / `vec-set!` / `slice-get` natives -- so a `catch-unwind` in scope
+catches it and, with none, the process ends as for any panic (`panic at
+...: vec index out of bounds`, then abort). Pinned by
+`tests/fixtures/vec-index-out-of-bounds-panics` on both engines. The
+location the compiled panic names is the runtime's (`tur_panic`'s own
+`__FILE__`/`__LINE__`), and the interpreter's is `panic at` with no site: a
+call made from inline C has no `_at` entry to hand its site to, which is the
+open direction below.
+
+**Narrowed again 2026-10-09: a failed `cast` names the cast.**  Each tag
+check the emitter writes for a `cast` out of `any` now calls
+`__tur_any_cast_check_at(have, want, "<file>", <line>)` with the cast's own
+basename and line (`emit_any_cast_bind_check`, `src/compiler/emit_expr.c`),
+and the preamble's check panics through `tur_panic_at`; the location-free
+`__tur_any_cast_check` stays for the runtime's own callers (the r7rs raising
+check).  The interpreter's cast failure sets the same site
+(`g_panic_site`, `src/turi/eval.c`), so both engines print `panic at
+input.tur:13: cast: any holds Point, not Other`.  157 `expected.c`
+snapshots moved (the check's call and the preamble's two new lines);
+`tests/fixtures/any-cast-wrong-type-panics` pins the line on both engines.
+**Still open:** a panic raised inside a runtime helper the program calls
+rather than writes -- a Saffron dynamic operator (`ensure_saffron_dyn_runtime`),
+a dynamic method dispatch on an `any` (`__tur_inst_slot`), the panics in
+stdlib inline-C bodies (`json/decode-file!`, the arrow loop cell) -- still
+names the helper's line in the generated C.  A vec index out of bounds
+prints `vec index out of bounds` and exits, with no `panic at` line at all.
+Each needs the call site handed to the helper (an `_at` entry, as the cast
+check has), or a thread-local site the emitter sets before the call.
+
 **Narrowed again 2026-10-08: direction 4 is done -- `--panic-trace` is
 retired.**  The flag is accepted and ignored with `TUR-W0050`
 (`src/main.c`), the way `--lint-effects` is; the preamble no longer carries

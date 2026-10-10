@@ -1001,6 +1001,10 @@ void emit_inline_c_raw_locals_collect(const struct Expr *body,
 void emit_localvar_reset(void);
 void emit_localvar_record_ctype(const char *cname, const char *ctype);
 const char *emit_localvar_lookup_ctype(const char *cname);
+/* Scope a recording to one emitted function (see emit_module.c): the name's
+ * previous spelling, and its restoration. */
+char *emit_localvar_save_ctype(const char *cname);
+void emit_localvar_restore_ctype(const char *cname, char *prev);
 
 /* inline-c-option-carrier-box-leaks: the owned-carrier side table.  A call
  * temp holding a carrier box an inline-C body malloc'd is marked here, and the
@@ -1374,6 +1378,31 @@ bool any_box_binding_escapes_self_apply(const Expr *e, const Binding *b,
  * a bare free of the env block, and an expression that yields such a closure,
  * freshly built, as an `any` (emit_core.c). */
 bool closure_env_drop_is_shallow(const struct Closure *c);
+/* The env's drop frees the box and nothing else (emit_core.c). */
+bool closure_env_drop_frees_box_only(const struct Closure *c);
+/* An inline-C block in the closure's body names one of its captures -- an
+ * lvalue into the env box (emit_core.c). */
+bool closure_body_inline_c_touches_env(const struct Closure *c);
+/* closure_binding_escapes for an owner that frees at the outermost DK entry's
+ * exit (the CPS reap list): a `perform` in the scope is not an escape. */
+bool closure_binding_escapes_reaped(const Expr *e, const Binding *b);
+/* panic-location-names-the-runtime-not-the-call-site (emit_core.c): a defn
+ * whose inline-C body calls `tur_panic(` is handed its caller's site -- a
+ * direct call sets `emit_site_set_text(ctx, span)` before the call and
+ * `tur_site_clear()` after it; the body's `tur_panic` reads it. */
+bool  fn_def_panics_in_inline_c(const FnDef *fd);
+bool  binding_panics_in_inline_c(const Binding *b);
+Span  emit_call_site_span(const Expr *call);
+char *emit_site_set_text(EmitCtx *ctx, Span span);
+/* `&__tur_site_N` for the same static: the site as an argument, for a helper
+ * that takes one (the dynamic operators) rather than reading the slot. */
+char *emit_site_ref_text(EmitCtx *ctx, Span span);
+/* sum-closure-payload-never-dropped, the CPS half (emit_expr.c): does the
+ * let's binding `i` hold a sum whose live arm's closure nothing else reaches
+ * (the direct emitter's scope-exit question), and the tag-dispatched
+ * entry-boundary reap of that closure. */
+bool  emit_let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e, uint32_t i);
+void  emit_sum_closure_payload_reap(EmitCtx *ctx, Buf *body, const char *name, Type t);
 bool expr_is_fresh_any_closure(const Expr *x);
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
@@ -1414,7 +1443,7 @@ char *fresh_defer_env(EmitCtx *ctx);
 void register_defer_thunk(EmitCtx *ctx, const char *name, const Expr *body,
                           Binding **captures, uint8_t n_captures,
                           const char *env_name);
-void emit_pending_defer_thunks(EmitCtx *ctx, Buf *out);
+void emit_pending_defer_thunks(EmitCtx *ctx, Buf *decls, Buf *out);
 char *mangle_dynvar_name(const char *name);
 char *mangle_field_name(const char *name);
 /* separator-fold-collides-emitted-c-names: injective spelling for ADT and
@@ -1723,7 +1752,7 @@ char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
                                     uint32_t arity);
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
                                  const char *inner_fn, const Type *inner_ty);
-char *ensure_fncps_env_dispatch(EmitCtx *ctx, uint32_t n, bool void_result);
+char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty);
 /* The lifted lambda of a closure EX_POLY_WRAP whose fat value gets a `fn_cps`
  * dispatcher (cps_ir_fncps_closure_sig_ok), or NULL.  Asked by the emitter that
  * fills the slot and by the analysis that relies on it (arg_fat_has_fn_cps). */

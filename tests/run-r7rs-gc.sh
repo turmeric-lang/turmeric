@@ -31,6 +31,9 @@
 #      NOT fit, or the check proves nothing and fails.  A million guards and
 #      call/cc escapes must fit too (reclaim-escapes; 397 MB before nested
 #      CPS entries dropped their reap registrations).
+#   5. libturi's data is not a root (Linux): a `(scheme eval)` program's
+#      libturi data and bss sit in tur_turi_{data,bss}, bracketed by the
+#      linker, and the collector skips them.
 #
 # Linux/glibc and macOS (the collector is; elsewhere it is plain malloc).
 #   R7RS_GC_TORTURE=N   the torture interval (default 31; 1 collects on EVERY
@@ -466,6 +469,39 @@ else
 fi | tee -a "$WORK/results"
 else
     echo "PASS reclaim (skipped on $HOST: no address-space limit to test under)" | tee -a "$WORK/results"
+fi
+
+# 5. libturi's data is not a root (Linux): a `(scheme eval)` program links
+#    libturi, whose data and bss -- ~46 MB in Debug, and nothing in them
+#    points into the heap -- the collector scanned on every collection
+#    (docs/archive/r7rs-gc-eval-programs-scan-libturi-data.md).  The build
+#    moves them into tur_turi_{data,bss}; the linker defines the bracketing
+#    symbols only for a program whose collector references them, so their
+#    presence (and the span between them) pins both halves.
+if [ "$HOST" = "Linux" ] && command -v nm > /dev/null 2>&1; then
+    skipped=""
+    if "$TUR" build tests/fixtures/r7rs-eval/input.tur -o "$WORK/libturi-skip" > "$WORK/libturi-skip.build" 2>&1; then
+        declare -A brk=()
+        while read -r addr _ sym; do
+            case "$sym" in
+                __start_tur_turi_data|__stop_tur_turi_data|__start_tur_turi_bss|__stop_tur_turi_bss)
+                    brk[$sym]=$((16#$addr)) ;;
+            esac
+        done < <(nm "$WORK/libturi-skip")
+        if [ "${#brk[@]}" -ne 4 ]; then
+            skipped="missing"
+        else
+            skipped=$(( brk[__stop_tur_turi_data] - brk[__start_tur_turi_data]
+                      + brk[__stop_tur_turi_bss]  - brk[__start_tur_turi_bss] ))
+        fi
+    fi
+    if [ -z "$skipped" ] || [ "$skipped" = "missing" ]; then
+        echo "FAIL libturi-not-a-root -- r7rs-eval has no tur_turi_{data,bss} brackets (got '${skipped:-build failed}')"
+    elif [ "$skipped" -lt 1048576 ]; then
+        echo "FAIL libturi-not-a-root -- the skipped span is only $skipped bytes"
+    else
+        echo "PASS libturi-not-a-root ($((skipped / 1048576)) MiB of libturi data and bss skipped)"
+    fi | tee -a "$WORK/results"
 fi
 
 pass=$(grep -c '^PASS' "$WORK/results")

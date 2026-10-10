@@ -1,0 +1,53 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused: an effectful function
+;; called through a LOCAL name -- a let-bound captureless lambda, a let alias of
+;; a named function, a captureless letrec member (a loop, mutual recursion) --
+;; was refused: the init was a value use, so the function was taken for an
+;; escaping fn value and its effect tainted everything ("no lowering here").
+;; A call through such a name is a direct call now.  Every line equals
+;; `tur --interpret`.
+(defeffect Ask [] :int)
+(defeffect Tick [] :nil)
+
+(defn add-ask [n : int] : int (+ n (perform (Ask))))
+(defn half-ask [x : float] : float (* 0.5 (+ x (as float (perform (Ask))))))
+
+;; a let-bound lambda, tail and non-tail, called twice
+(defn l1 [] : int (let [g (fn [n : int] : int (+ n (perform (Ask))))] (g 3)))
+(defn l1b [] : int
+  (let [g (fn [n : int] : int (* n (perform (Ask))))]
+    (+ (g 2) (g 3))))
+;; a let alias of a named function, and of one with a float result
+(defn l3 [] : int (let [g add-ask] (g 2)))
+(defn l3f [] : float (let [h half-ask] (+ 1.25 (h 7.1))))
+;; a letrec loop that performs on every turn
+(defn l2 [n : int] : int
+  (letrec [loop (fn [i : int acc : int] : int
+                  (if (= i 0)
+                    acc
+                    (do (perform (Tick))
+                        (loop (- i 1) (+ acc i)))))]
+    (loop n 0)))
+;; mutual recursion between two members
+(defn l4 [n : int] : int
+  (letrec [ev (fn [i : int] : int (if (= i 0) (perform (Ask)) (od (- i 1))))
+           od (fn [i : int] : int (if (= i 0) 0 (ev (- i 1))))]
+    (ev n)))
+;; a call through the local name under a match arm
+(defn l5 [o : (Option int)] : int
+  (let [g (fn [n : int] : int (+ n (perform (Ask))))]
+    (match o
+      (Some v) (g v)
+      (None) -1)))
+
+(defn main [] : int
+  (println (handle (l1) (Ask [] k) (resume k 10)))
+  (println (handle (l1b) (Ask [] k) (resume k 10)))
+  (println (handle (l3) (Ask [] k) (resume k 10)))
+  (println (handle (l3f) (Ask [] k) (resume k 10)))
+  (let [ticks 0]
+    (println (handle (l2 100000) (Tick [] k) (resume k nil))))
+  (println (handle (l4 7) (Ask [] k) (resume k 10)))
+  (println (handle (l4 6) (Ask [] k) (resume k 10)))
+  (println (handle (l5 (some 4)) (Ask [] k) (resume k 10)))
+  (println (handle (l5 (none)) (Ask [] k) (resume k 10)))
+  0)

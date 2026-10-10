@@ -1,0 +1,11 @@
+#lang saffron
+;; panic-location-names-the-runtime-not-the-call-site: a field read on an
+;; `any` holding no such field panics at the field access's own line now,
+;; on both back ends, not at the runtime helper's.
+(defstruct P [x : int y : int])
+(defn get-x [o]
+  (.x o))
+(defn main []
+  (println (get-x (P 3 4)))
+  (println (get-x 5))
+  0)

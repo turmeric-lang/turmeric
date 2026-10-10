@@ -1,0 +1,1 @@
+sum-closure-payload-never-dropped: a sum-wrapped closure payload in a CPS-lowered function is reaped at the entry boundary.

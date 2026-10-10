@@ -1,0 +1,91 @@
+;; A function that both performs an effect and awaits a PENDING future: the
+;; await parks the async body from inside a perform's continuation (and a
+;; perform runs from inside a parked await's continuation).  Both used to be
+;; refused outright; see cps-perform-and-await-ready for the ready-future
+;; shapes, which the interpreter runs too.  This one drives pending futures
+;; with inline C (the driver of async-repeated-park-frees-each-turn), so it is
+;; compiled only.  Every answer is the one the arithmetic says.
+(defeffect Tick [] :int)
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+;; awaits the current pending cell; the driver fulfills it with 2
+(defn next-value [] : int (await (cur-cell false)))
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+;; perform, park, perform, park, under a handler inside the body:
+;; 10 + 2 + 10 + 2 + k
+(defn work [k : int] : int
+  (handle (let [t (perform (Tick))
+                a (next-value)
+                u (perform (Tick))
+                b (next-value)]
+            (+ t a u b k))
+    (Tick [] kk) (resume kk 10)))
+(defn spawn-work [k : int] : int
+  (drive (async (fn [] : int (work k)))))
+
+;; park first, then perform, with a handler whose answer counts its calls:
+;; 2 + 1 + 2 + 2 + k + 2
+(defn counted [k : int] : int
+  (let [^mut n 0]
+    (handle (let [a (next-value)
+                  t (perform (Tick))
+                  b (next-value)
+                  u (perform (Tick))]
+              (+ a t b u k n))
+      (Tick [] kk) (do (set! n (+ n 1)) (resume kk n)))))
+(defn spawn-counted [k : int] : int
+  (drive (async (fn [] : int (counted k)))))
+
+;; fifty turns, each performing then parking; the recursion stays in the
+;; caller (a tail call inside an await's continuation is refused by design):
+;; 50 * (1 + 2)
+(defn turn [i : int] : int
+  (let [t (perform (Tick))]
+    (+ t (next-value))))
+(defn lp [i : int n : int acc : int] : int
+  (if (= i n) acc (lp (+ i 1) n (+ acc (turn i)))))
+(defn spawn-loop [] : int
+  (drive (async (fn [] : int (handle (lp 0 50 0) (Tick [] kk) (resume kk 1))))))
+
+(defn main [] : int
+  (cur-cell true)
+  (println (spawn-work 5))
+  (println (spawn-counted 3))
+  (println (spawn-loop))
+  0)

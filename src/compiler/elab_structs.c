@@ -3036,7 +3036,16 @@ static bool arm_arg_join(Elab *e, Type a, Type b, Type *out) {
 }
 
 static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
-    if (type_eq(a, b)) { *out = a; return true; }
+    if (type_eq(a, b)) {
+        /* match-result-temp-typed-from-first-arm: two arms of one fn type, a
+         * capture-free lambda (a thin code pointer) and a capturing one (a fat
+         * box), join to the FAT representation -- every arm is boxed to it
+         * on the way into the result.  Keeping the first arm's made the result
+         * temporary `int64_t` beside the arms' `void *` boxes: invalid C under
+         * clang when the capture-free arm came first. */
+        *out = (a.kind == TY_FN && b.kind == TY_FN && !a.as.fn.boxed && b.as.fn.boxed) ? b : a;
+        return true;
+    }
     /* `!` (TY_NEVER) is bottom: an arm that diverges -- `(panic ...)`, a
      * `return`, a call to a `!`-returning function -- produces no value, so it
      * is compatible with any peer arm and contributes nothing to the result

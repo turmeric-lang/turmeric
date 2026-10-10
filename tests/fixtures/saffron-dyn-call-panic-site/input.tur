@@ -1,0 +1,10 @@
+#lang saffron
+;; panic-location-names-the-runtime-not-the-call-site: calling an `any` that
+;; holds no function panics at the call's own line now, on both back ends,
+;; not at the runtime helper's.
+(defn call-it [f]
+  (f 1))
+(defn main []
+  (println (call-it (fn [x] (+ x 1))))
+  (println (call-it 5))
+  0)

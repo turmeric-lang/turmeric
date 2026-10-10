@@ -1,0 +1,59 @@
+;; await-parks-only-to-the-nearest-c-frame (the async body itself): an
+;; async thunk that captures a struct was evicted -- a capturing lambda was
+;; CPS-admitted only when threadable, and fn_sig_ok took primitive captures
+;; only -- so it ran direct-style with no root of its own, and its
+;; awaiter's park lost the thunk's `(+ (.a p) ...)` frame: 600 for 605,
+;; silently.  A capturing lambda that may await is admitted now, with a
+;; concrete aggregate capture.  An evicted thunk is refused at the park
+;; (tur_async_direct_body) rather than losing the body.
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+
+(defstruct P [a : int b : int])
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+
+
+(defn main [] : nil
+  (cur-cell true)
+  (let [p (P 5 0)]
+    (println (drive (async (fn [] : int (+ (.a p) (sum-values 0 300 0)))))))
+  (free-future (cur-cell false)))

@@ -1,0 +1,33 @@
+;; effect-row-lost-under-match-cast-letrec: the effect pass's row walk had no
+;; arm for `match`, `as` or ~50 other node kinds and read each as "performs
+;; nothing", so a `perform` under one was left out of the function's inferred
+;; row.  A handler around a call to it then warned TUR-W0033 ("handler clause
+;; is unreachable") on a clause that runs, and a fn value of such a function
+;; looked pure to everything that asks its row.  Each handler below runs.
+(defeffect Ask [] :int)
+(defdata Sh (Circle int) (Sq int))
+
+(defn via-adt [s : Sh] : int
+  (match s
+    (Circle r) (+ r (perform (Ask)))
+    (Sq e) e))
+(defn via-option [o : (Option int)] : int
+  (match o
+    (Some v) (+ v (perform (Ask)))
+    (None) 0))
+(defn via-cast [] : float (+ 0.5 (as float (perform (Ask)))))
+(defn via-literal [n : int] : int
+  (match n
+    1 (perform (Ask))
+    _ n))
+;; a fn value of a function whose only perform is under a match, through an
+;; un-annotated parameter (its row is what fills the fat value's fn_cps slot)
+(defn app1 [h : (fn [int] int) n : int] : int (h n))
+
+(defn main [] : int
+  (println (handle (via-adt (Circle 1)) (Ask [] k) (resume k 10)))
+  (println (handle (via-option (some 3)) (Ask [] k) (resume k 10)))
+  (println (handle (via-cast) (Ask [] k) (resume k 7)))
+  (println (handle (via-literal 1) (Ask [] k) (resume k 10)))
+  (println (handle (app1 via-literal 1) (Ask [] k) (resume k 12)))
+  0)

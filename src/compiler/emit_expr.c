@@ -2738,6 +2738,51 @@ static char *bridge_control_result_int_ptr(EmitCtx *ctx, char *v, Type ltype,
  * The conservative `closure_binding_escapes` check only ever greenlights a free,
  * so a false negative merely preserves the status-quo leak; it never frees a
  * still-live env. */
+bool closure_binding_only_invoked(const Expr *e, const Binding *b);
+
+/* A closure init whose result cannot point into its env: a scalar, or (RM1) a
+ * sum / product / cstr when the body has no inline C. */
+static bool closure_init_result_env_safe(const Binding *b, const Expr *init) {
+    if (!b || b->type.kind != TY_FN || !init || init->kind != EX_CLOSURE) return false;
+    switch (b->type.as.fn.result_kind) {
+        case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_NIL: return true;
+        case TY_APP: case TY_ADT: case TY_CSTR: {
+            const struct Closure *c = init->as.closure_.closure;
+            return c && c->fn && !expr_subtree_has_inline_c(c->fn->body);
+        }
+        default: return false;
+    }
+}
+
+/* Every member of this letrec is a capturing closure whose result is env-safe,
+ * only ever CALLED by the other members' lambdas, and not escaping the body. */
+static bool letrec_members_confined(const Expr *e) {
+    uint32_t n = e->as.let_.n;
+    for (uint32_t i = 0; i < n; i++) {
+        const Binding *b = e->as.let_.bindings[i].binding;
+        const Expr *init = e->as.let_.bindings[i].init;
+        while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+        if (!b || !init || init->kind != EX_CLOSURE || !init->as.closure_.closure
+            || init->as.closure_.closure->n_captures == 0
+            || init->as.closure_.closure->is_shift_receiver
+            || init->as.closure_.closure->is_effect_payload
+            || !closure_init_result_env_safe(b, init))
+            return false;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        const Binding *b = e->as.let_.bindings[i].binding;
+        if (closure_binding_escapes(e->as.let_.body, b)) return false;
+        for (uint32_t j = 0; j < n; j++) {
+            if (j == i) continue;
+            const Expr *init = e->as.let_.bindings[j].init;
+            while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+            const FnDef *fd = init->as.closure_.closure->fn;
+            if (!fd || !closure_binding_only_invoked(fd->body, b)) return false;
+        }
+    }
+    return true;
+}
+
 static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     const Expr *init = e->as.let_.bindings[idx].init;
     const Binding *b = e->as.let_.bindings[idx].binding;
@@ -2768,6 +2813,15 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
         fresh_pap = p && p->kind == EX_CLOSURE && init->kind == EX_LET;
     }
     if (init->kind != EX_CLOSURE && !fresh_call && !fresh_pap) return false;
+    /* letrec-mutual-recursion-between-capturing-closures: the members capture
+     * one another, so each is "escaping" into a sibling's env by the walk
+     * below, and neither box was ever freed (64 B a call of the report's
+     * two-member loop).  The group is dead at scope exit when no member leaves
+     * the letrec body and each member's lambda only CALLS the others; the env
+     * drop glue releases no closure capture, so dropping every box is one
+     * free each. */
+    if (e->kind == EX_LETREC && e->as.let_.n > 1)
+        return init->kind == EX_CLOSURE && letrec_members_confined(e);
     if (init->kind == EX_CLOSURE) {
         /* Scalar-result gate: a closure returning a reference/struct/pointer could
          * hand back a value derived from its env; restrict to scalar returns whose
@@ -2799,6 +2853,88 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
     return true;
 }
 
+/* async-capturing-body-env-never-freed: is binding `idx` of this let a fresh
+ * capturing closure whose ONLY use is as the body of one `async` spawn --
+ * `(let [f (fn [] ...)] (await (async f)))`?  The let cannot drop its env
+ * (the body may still be running, parked) and the spawn owned nothing, so
+ * the box leaked.  When every mention of the binding is that one spawn --
+ * not under a `while` (a spawn per turn would each drop the same box), not
+ * inside a closure, and with no `perform` in the let (a multi-shot resume
+ * could run the spawn twice) -- the SPAWN owns the box
+ * (Binding.spawn_owns_env, read by async_spawn_owns_env) and drops it when
+ * the body settles, as it does a lambda written at the spawn. */
+typedef struct { const Binding *b; int spawns; int others; int in_loop; bool unsafe; } SpawnUseUd;
+static bool spawn_use_visit(const Expr *x, void *ud);
+static void spawn_use_walk(const Expr *x, SpawnUseUd *u) {
+    if (!x || u->unsafe) return;
+    switch (x->kind) {
+        case EX_ASYNC: {
+            const Expr *fe = x->as.async_.fn_expr;
+            while (fe && (fe->kind == EX_ASCRIBE || fe->kind == EX_FN_TO_FAT))
+                fe = fe->kind == EX_ASCRIBE ? fe->as.ascribe_.inner
+                                            : fe->as.fn_to_fat_.inner;
+            if (fe && fe->kind == EX_VAR && fe->as.var.binding == u->b) {
+                if (u->in_loop) u->unsafe = true; else u->spawns++;
+                return;
+            }
+            break;
+        }
+        case EX_VAR:
+            if (x->as.var.binding == u->b) u->others++;
+            return;
+        case EX_CLOSURE: {
+            /* The body is the lambda's own; a capture is the only way in. */
+            const struct Closure *c = x->as.closure_.closure;
+            if (c)
+                for (uint32_t i = 0; i < c->n_captures; i++)
+                    if (c->captures[i] == u->b) u->others++;
+            return;
+        }
+        case EX_FN: case EX_FN_DEF: case EX_PERFORM:
+            u->unsafe = true;
+            return;
+        case EX_WHILE:
+            u->in_loop++;
+            cps_visit_children(x, spawn_use_visit, u);
+            u->in_loop--;
+            return;
+        default:
+            break;
+    }
+    cps_visit_children(x, spawn_use_visit, u);
+}
+static bool spawn_use_visit(const Expr *x, void *ud) {
+    spawn_use_walk(x, (SpawnUseUd *)ud);
+    return false;
+}
+static bool let_sole_use_is_spawn(const Expr *e, uint32_t idx) {
+    if (e->kind != EX_LET) return false;
+    const Binding *b = e->as.let_.bindings[idx].binding;
+    const Expr *init = e->as.let_.bindings[idx].init;
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!b || !init || init->kind != EX_CLOSURE) return false;
+    if (b->type.kind != TY_FN || !b->type.as.fn.boxed) return false;
+    const struct Closure *c = init->as.closure_.closure;
+    if (!c || c->n_captures == 0) return false;
+    if (!(closure_env_drop_is_shallow(c) || closure_env_drop_frees_box_only(c))) return false;
+    SpawnUseUd u = { b, 0, 0, 0, false };
+    spawn_use_walk(e->as.let_.body, &u);
+    for (uint32_t j = 0; j < e->as.let_.n; j++)
+        if (j != idx) spawn_use_walk(e->as.let_.bindings[j].init, &u);
+    return !u.unsafe && u.spawns == 1 && u.others == 0;
+}
+/* Mark the let's spawn-owned closures before its body is emitted (the spawn
+ * reads the mark); a binding the let itself drops is never one. */
+static void let_mark_spawn_owned(const Expr *e) {
+    if (!e || e->kind != EX_LET) return;
+    for (uint32_t i = 0; i < e->as.let_.n; i++) {
+        Binding *b = e->as.let_.bindings[i].binding;
+        if (b && !b->spawn_owns_env && !let_binding_env_freeable(e, i) &&
+            let_sole_use_is_spawn(e, i))
+            b->spawn_owns_env = true;
+    }
+}
+
 /* mut-cell-is-never-freed: can the `TurMutCell` bound to `cell` still be
  * reached once the let that binds it exits?  The pointer never appears in user
  * code -- the `^mut` name is an alias whose reads and writes elaborate as
@@ -2810,6 +2946,22 @@ static bool let_binding_env_freeable(const Expr *e, uint32_t idx) {
  * turn.  Anything this walk does not recognize falls back to the ordinary
  * escape walk, where any mention of the cell counts as an escape. */
 static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth);
+
+/* The EmitCtx the scope-free predicates below run under (set by their entry
+ * points), for the walks that need one but are called without it. */
+static EmitCtx *g_scp_ctx = NULL;
+static bool call_wraps_sole_arg_in_ctor(const Expr *call);
+static const Expr *peel_sum_payload_arg(const Expr *a);
+static bool let_binding_sum_closure_freeable_ctx(EmitCtx *ctx, const Expr *e, uint32_t i);
+
+/* sum-closure-payload-never-dropped: the closure a let-init wraps in a fresh
+ * one-field sum (`(some (fn ...))`), or NULL. */
+static const Expr *let_init_sum_payload_closure(const Expr *init) {
+    while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+    if (!init || init->kind != EX_CALL || !call_wraps_sole_arg_in_ctor(init)) return NULL;
+    const Expr *pay = peel_sum_payload_arg(init->as.call_.args[0]);
+    return pay && pay->kind == EX_CLOSURE && pay->as.closure_.closure ? pay : NULL;
+}
 
 static bool mut_cell_closure_captures(const Expr *x, const Binding *cell) {
     const struct Closure *c = x->as.closure_.closure;
@@ -2882,6 +3034,19 @@ static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
                         return true;
                     continue;
                 }
+                /* ...or the payload of a fresh sum this let drops at scope
+                 * exit (let_binding_sum_closure_freeable): the same vouching,
+                 * the drop freeing the box alone. */
+                const Expr *pay = let_init_sum_payload_closure(init);
+                if (pay && mut_cell_closure_captures(pay, cell)) {
+                    const struct Closure *c = pay->as.closure_.closure;
+                    if (x->kind != EX_LET || !g_scp_ctx ||
+                        !let_binding_sum_closure_freeable_ctx(g_scp_ctx, x, j))
+                        return true;
+                    if (!c->fn || mut_cell_escapes(c->fn->body, cell, depth + 1))
+                        return true;
+                    continue;
+                }
                 if (mut_cell_escapes(x->as.let_.bindings[j].init, cell, depth + 1))
                     return true;
             }
@@ -2893,9 +3058,10 @@ static bool mut_cell_escapes(const Expr *x, const Binding *cell, int depth) {
 
 /* mut-cell-is-never-freed: let-binding `idx` of `e` is a `^mut` cell that is
  * dead at scope exit (see mut_cell_escapes). */
-static bool let_binding_mut_cell_freeable(const Expr *e, uint32_t idx) {
+static bool let_binding_mut_cell_freeable(EmitCtx *ctx, const Expr *e, uint32_t idx) {
     const Binding *b = e->as.let_.bindings[idx].binding;
     if (!b || !b->is_mut_cell || e->kind != EX_LET) return false;
+    if (ctx) g_scp_ctx = ctx;
     for (uint32_t j = idx + 1; j < e->as.let_.n; j++) {
         const Expr *init = e->as.let_.bindings[j].init;
         while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
@@ -2904,6 +3070,15 @@ static bool let_binding_mut_cell_freeable(const Expr *e, uint32_t idx) {
             if (!let_binding_env_freeable(e, j) ||
                 !init->as.closure_.closure->fn ||
                 mut_cell_escapes(init->as.closure_.closure->fn->body, b, 0))
+                return false;
+            continue;
+        }
+        /* A sibling sum holding such a closure, dropped at the same exit. */
+        const Expr *pay = let_init_sum_payload_closure(init);
+        if (pay && mut_cell_closure_captures(pay, b)) {
+            if (!g_scp_ctx || !let_binding_sum_closure_freeable_ctx(g_scp_ctx, e, j) ||
+                !pay->as.closure_.closure->fn ||
+                mut_cell_escapes(pay->as.closure_.closure->fn->body, b, 0))
                 return false;
             continue;
         }
@@ -3845,6 +4020,17 @@ static bool call_wraps_sole_arg_in_ctor(const Expr *call) {
 static bool sum_closure_payload_escapes_visit(const Expr *c, void *ud);
 typedef struct { const Binding *b; int depth; } SumClosureUd;
 
+/* sum-closure-payload-never-dropped (the CPS half): asked for an owner that
+ * frees at the DK entry boundary rather than at scope exit
+ * (emit_let_binding_sum_closure_freeable), a `perform` in the let is not an
+ * escape of an arm binder -- every resume the entry sees runs before the
+ * free (closure_binding_escapes_reaped). */
+static bool g_scp_reap_mode = false;
+static bool scp_binding_escapes(const Expr *e, const Binding *b) {
+    return g_scp_reap_mode ? closure_binding_escapes_reaped(e, b)
+                           : closure_binding_escapes(e, b);
+}
+
 static bool sum_payload_scalar_kind(TypeKind k) {
     switch (k) {
         case TY_INT: case TY_BOOL: case TY_FLOAT: case TY_NIL:
@@ -3900,7 +4086,6 @@ static bool fndef_cannot_suspend(const FnDef *fd) {
  * instance's method impl (`__inst_Applicative_ap_Option` carries no link).
  * The program comes from the EmitCtx let_binding_sum_closure_freeable was
  * asked with; a one-entry cache covers the repeated question. */
-static EmitCtx *g_scp_ctx = NULL;
 static FnDef *scp_fndef_of(const Binding *fb) {
     if (!fb) return NULL;
     if (fb->source_fn_def) return (FnDef *)fb->source_fn_def;
@@ -3979,16 +4164,16 @@ static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int dep
                 /* closure_binding_escapes reads a NULL expression as an
                  * escape, so an absent guard is skipped, not walked. */
                 if (pat->is_var && pat->var_binding &&
-                    ((arm->body && closure_binding_escapes(arm->body, pat->var_binding)) ||
-                     (arm->guard && closure_binding_escapes(arm->guard, pat->var_binding))))
+                    ((arm->body && scp_binding_escapes(arm->body, pat->var_binding)) ||
+                     (arm->guard && scp_binding_escapes(arm->guard, pat->var_binding))))
                     return true;
                 for (uint32_t k = 0; k < pat->n_bindings; k++) {
                     const Binding *pb = pat->bindings[k];
                     /* A scalar field (an `Err` arm's int) cannot alias the
                      * env; only a binder that can hold the closure is asked. */
                     if (!pb || sum_payload_scalar_kind(pb->type.kind)) continue;
-                    if ((arm->body && closure_binding_escapes(arm->body, pb)) ||
-                        (arm->guard && closure_binding_escapes(arm->guard, pb)))
+                    if ((arm->body && scp_binding_escapes(arm->body, pb)) ||
+                        (arm->guard && scp_binding_escapes(arm->guard, pb)))
                         return true;
                 }
                 if (sum_closure_payload_escapes(arm->guard, b, depth + 1) ||
@@ -4034,10 +4219,20 @@ static bool sum_closure_payload_escapes_visit(const Expr *c, void *ud) {
 }
 
 /* Walk the arms of a by-value sum monomorph for fn-typed (closure) fields;
- * with `emit`, write the tag-dispatched TUR_CLOSURE_DROP of each.  The same
- * shape as boxed_struct_payload_walk. */
+ * with `emit`, write the tag-dispatched release of each -- `drop_fmt` with
+ * the field's lvalue for `%s` (TUR_CLOSURE_DROP here; the CPS emitter's
+ * entry-boundary reap through emit_sum_closure_payload_reap).  The same shape
+ * as boxed_struct_payload_walk. */
+static bool sum_closure_payload_walk_fmt(EmitCtx *ctx, Buf *body, const char *name,
+                                         Type t, bool emit, const char *drop_pre,
+                                         const char *drop_post);
 static bool sum_closure_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
                                      Type t, bool emit) {
+    return sum_closure_payload_walk_fmt(ctx, body, name, t, emit, "TUR_CLOSURE_DROP(", ");");
+}
+static bool sum_closure_payload_walk_fmt(EmitCtx *ctx, Buf *body, const char *name,
+                                         Type t, bool emit, const char *drop_pre,
+                                         const char *drop_post) {
     Type rt = emit_resolve_type(ctx, t);
     AdtDef *def = NULL;
     Type args[16];
@@ -4069,7 +4264,7 @@ static bool sum_closure_payload_walk(EmitCtx *ctx, Buf *body, const char *name,
             }
             char *mp = adt_field_member_path(def, c, fi);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "    TUR_CLOSURE_DROP(%s.%s);\n", name, mp);
+            buf_printf(body, "    %s%s.%s%s\n", drop_pre, name, mp, drop_post);
             free(mp);
         }
         if (emit && arm_open) { indent_buf(body, ctx->indent); buf_puts(body, "    break;\n"); }
@@ -4093,8 +4288,12 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
     while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
     if (!call_wraps_sole_arg_in_ctor(init)) return false;
     const Expr *a = peel_sum_payload_arg(init->as.call_.args[0]);
+    /* The drop frees the env box alone (a struct or `^mut` capture leaves
+     * nothing for its glue to release), which no value the closure computes
+     * points into -- the shallow case and more. */
     if (!a || a->kind != EX_CLOSURE ||
-        !closure_env_drop_is_shallow(a->as.closure_.closure) ||
+        !(closure_env_drop_is_shallow(a->as.closure_.closure) ||
+          closure_env_drop_frees_box_only(a->as.closure_.closure)) ||
         !fndef_cannot_suspend(a->as.closure_.closure->fn))
         return false;
     if (sum_closure_payload_escapes(e->as.let_.body, b, 0)) return false;
@@ -4102,6 +4301,33 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
         if (j != i && sum_closure_payload_escapes(e->as.let_.bindings[j].init, b, 0))
             return false;
     return true;
+}
+
+/* The same, deciding the binding's C spelling itself (as
+ * let_binding_may_need_scope_free does), for a caller with no LetBindDecl. */
+static bool let_binding_sum_closure_freeable_ctx(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!b) return false;
+    LetBindDecl d = { true, emit_binding_repr_c_name(ctx, b->type,
+                                                     e->as.let_.bindings[i].init),
+                      true };
+    return d.bind_c && let_binding_sum_closure_freeable(ctx, e, i, &d);
+}
+
+/* The CPS emitter's entry points (sum-closure-payload-never-dropped, the CPS
+ * half): the same question, and the same tag-dispatched walk writing the
+ * entry-boundary reap of each arm's closure in place of the scope-exit drop
+ * -- a CPS scope can end in a tail call, so the reap list owns it, as it owns
+ * a non-escaping closure env there. */
+bool emit_let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    if (!ctx || !e || e->kind != EX_LET || i >= e->as.let_.n) return false;
+    g_scp_reap_mode = true;
+    bool ok = let_binding_sum_closure_freeable_ctx(ctx, e, i);
+    g_scp_reap_mode = false;
+    return ok;
+}
+void emit_sum_closure_payload_reap(EmitCtx *ctx, Buf *body, const char *name, Type t) {
+    sum_closure_payload_walk_fmt(ctx, body, name, t, true, "__dk_reap_closure((intptr_t)", ");");
 }
 
 static bool let_binding_vsp_box_freeable(EmitCtx *ctx, const Expr *e,
@@ -4159,7 +4385,7 @@ bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i) {
     if (!b) return false;
     char *lt = let_binding_locown_type(ctx, b);
     if (lt) { free(lt); return true; }
-    if (let_binding_mut_cell_freeable(e, i) || let_binding_env_freeable(e, i) ||
+    if (let_binding_mut_cell_freeable(ctx, e, i) || let_binding_env_freeable(e, i) ||
         let_binding_box_freeable(e, i) || let_binding_fnfld_freeable(e, i))
         return true;
     /* RM1 and the value-struct payload box both need the emitted declaration
@@ -4192,6 +4418,7 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
                                   const LetBindDecl *d) {
     const Binding *b = e->as.let_.bindings[i].binding;
     if (!b) return;
+    let_mark_spawn_owned(e);   /* async-capturing-body-env-never-freed (tail path) */
     char *bn = name_for_binding(ctx, b);
     Buf st; buf_init(&st);
     if (let_binding_env_freeable(e, i)) {
@@ -4208,7 +4435,7 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
         any_scope_drops_push(ctx, st.data);
     }
     buf_free(&st);
-    if (let_binding_mut_cell_freeable(e, i)) {
+    if (let_binding_mut_cell_freeable(ctx, e, i)) {
         Buf c; buf_init(&c);
         buf_printf(&c, "%s((void *)(intptr_t)(%s))",
                    regions_enabled() ? "tur_region_free" : "free", bn);
@@ -4255,6 +4482,8 @@ void let_binding_push_scope_frees(EmitCtx *ctx, const Expr *e, uint32_t i,
 }
 
 static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
+    /* async-capturing-body-env-never-freed: before the body is emitted. */
+    let_mark_spawn_owned(e);
     /* Phase 3/4: Check if body contains return or throw first */
     bool body_has_return_or_throw = expr_contains_return_or_throw(e->as.let_.body);
     
@@ -4373,7 +4602,7 @@ static char *emit_let_value(EmitCtx *ctx, Buf *body, const Expr *e) {
             n_locown++;
         }
         for (uint32_t i = 0; i < e->as.let_.n; i++) {
-            if (!let_binding_mut_cell_freeable(e, i)) continue;
+            if (!let_binding_mut_cell_freeable(ctx, e, i)) continue;
             cell_free_names = (char **)realloc(cell_free_names,
                                                (n_cell_free + 1) * sizeof(char *));
             cell_free_names[n_cell_free++] =
@@ -6827,6 +7056,28 @@ static bool region_ascription_erases_node(EmitCtx *ctx, Type from, Type to) {
 }
 
 
+/* await-parks-only-to-the-nearest-c-frame: a spawned body the CPS backend did
+ * not take runs direct-style, with no root of its own, so a pending await
+ * anywhere under it would park at a root BELOW the body and lose the frames
+ * above.  Tell the spawn (tur_async_direct_body), so __tur_await_body refuses
+ * such a park instead of letting the body finish with a dummy 0.  A thunk
+ * this cannot name (an arbitrary fn value) keeps the depth check alone. */
+static void emit_async_direct_body(EmitCtx *ctx, Buf *body, const Expr *fn_expr) {
+    const Expr *f = fn_expr;
+    while (f && (f->kind == EX_ASCRIBE || f->kind == EX_FN_TO_FAT))
+        f = f->kind == EX_ASCRIBE ? f->as.ascribe_.inner : f->as.fn_to_fat_.inner;
+    const Binding *b = NULL;
+    if (f && f->kind == EX_VAR) b = f->as.var.binding;
+    else if (f && f->kind == EX_CLOSURE && f->as.closure_.closure
+             && f->as.closure_.closure->fn)
+        b = f->as.closure_.closure->fn->binding;
+    if (b && !b->is_global && b->closure_fn_binding) b = b->closure_fn_binding;
+    if (!b || !b->is_global || !b->source_fn_def) return;
+    if (emit_cps_ir_emits_binding(ctx->program_root, b)) return;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "tur_async_direct_body = 1;\n");
+}
+
 /* Bind a cast's operand to `cb` and check its tag against `tag`.  A cast in
  * Scheme source (r7rs-type-errors-are-uncatchable-panics) calls the raising
  * check, which names the procedure and the expected type; every other cast
@@ -6834,10 +7085,27 @@ static bool region_ascription_erases_node(EmitCtx *ctx, Type from, Type to) {
 static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
                                      const char *cb, const char *inner, int64_t tag) {
     if (!e->as.any_cast_.scheme_raise) {
+        /* panic-location-names-the-runtime-not-the-call-site: the check
+         * names the cast's own site, as emit_panic_call does for `panic`. */
+        const char *path = e->span.line ? diag_file_path(e->span.file_id) : NULL;
+        if (!path) {
+            buf_printf(body,
+                "tur_tagged_t %s = (%s); "
+                "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+                cb, inner, cb, (long long)tag);
+            return;
+        }
+        const char *base = path;
+        for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
         buf_printf(body,
             "tur_tagged_t %s = (%s); "
-            "__tur_any_cast_check(TUR_GETTAG(%s), %lld);\n",
+            "__tur_any_cast_check_at(TUR_GETTAG(%s), %lld, \"",
             cb, inner, cb, (long long)tag);
+        for (const char *p = base; *p; p++) {
+            if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+            buf_putc(body, *p);
+        }
+        buf_printf(body, "\", %u);\n", e->span.line);
         return;
     }
     ensure_r7rs_cast_helper(ctx);
@@ -7923,6 +8191,28 @@ static void ce0_trace_elem_read(EmitCtx *ctx, const Expr *e,
  * a lowering that guesses.  Emitting the STATIC operator instead would be a
  * miscompile, not a missing feature: the operands are two-word boxes, so `+`
  * over them would add tag words. */
+/* panic-location-names-the-runtime-not-the-call-site: a dynamic operator's
+ * helper call with this node's site -- the interned static `tur_site_t`'s
+ * address (emit_site_ref_text) -- as its trailing argument, so the helper's
+ * panic names the operator's line rather than the runtime's.  An argument
+ * rather than the thread-local slot: the slot's set and clear around every
+ * operator cost a 10M-turn Saffron arithmetic loop 30%, and a nested operator
+ * among the operands would have cleared it before this call ran.  `lead` is
+ * the opcode text ("3, ") or "", `b` NULL for a one-operand helper.  A node
+ * with no source line passes NULL, and the helper names the runtime's line. */
+static char *dyn_sited_call(EmitCtx *ctx, const Expr *e, const char *helper,
+                            const char *lead, const char *a, const char *b) {
+    char *site = emit_site_ref_text(ctx, e->span);
+    Buf out; buf_init(&out);
+    buf_printf(&out, "%s(%s%s%s%s, %s)", helper, lead, a, b ? ", " : "", b ? b : "",
+               site ? site : "NULL");
+    free(site);
+    buf_putc(&out, '\0');
+    char *r = strdup(out.data);
+    buf_free(&out);
+    return r;
+}
+
 static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     ensure_saffron_dyn_runtime(ctx);
     const char *opn = (e->as.dyn_op_.op && e->as.dyn_op_.op->name)
@@ -8007,15 +8297,14 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
 
     if (n == 1 && (strcmp(opn, "println") == 0 || strcmp(opn, "not") == 0)) {
         char *a = emit_value(ctx, body, args[0]);
-        Buf out; buf_init(&out);
-        buf_printf(&out, "__tur_dyn_%s(%s)",
-                   opn[0] == 'p' ? "println" : "not", a);
-        buf_putc(&out, '\0');
+        char *r = dyn_sited_call(ctx, e, opn[0] == 'p' ? "__tur_dyn_println" : "__tur_dyn_not",
+                                 "", a, NULL);
         free(a);
-        char *r = strdup(out.data);
-        buf_free(&out);
         return r;
     }
+
+    char lead[24];
+    snprintf(lead, sizeof lead, "%d, ", opcode);
 
     /* Arithmetic folds left, matching BS_VARIADIC_FOLD: `(+ a b c)` is
      * `(a + b) + c`, so the dynamic form nests the same way and a mixed
@@ -8024,12 +8313,9 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
         char *acc = emit_value(ctx, body, args[0]);
         for (uint32_t i = 1; i < n; i++) {
             char *rhs = emit_value(ctx, body, args[i]);
-            Buf out; buf_init(&out);
-            buf_printf(&out, "__tur_dyn_arith(%d, %s, %s)", opcode, acc, rhs);
-            buf_putc(&out, '\0');
+            char *nx = dyn_sited_call(ctx, e, "__tur_dyn_arith", lead, acc, rhs);
             free(acc); free(rhs);
-            acc = strdup(out.data);
-            buf_free(&out);
+            acc = nx;
         }
         return acc;
     }
@@ -8037,12 +8323,8 @@ static char *emit_dyn_op(EmitCtx *ctx, Buf *body, const Expr *e) {
     if (is_cmp && n == 2) {
         char *a = emit_value(ctx, body, args[0]);
         char *b = emit_value(ctx, body, args[1]);
-        Buf out; buf_init(&out);
-        buf_printf(&out, "__tur_dyn_cmp(%d, %s, %s)", opcode, a, b);
-        buf_putc(&out, '\0');
+        char *r = dyn_sited_call(ctx, e, "__tur_dyn_cmp", lead, a, b);
         free(a); free(b);
-        char *r = strdup(out.data);
-        buf_free(&out);
         return r;
     }
 
@@ -8255,22 +8537,32 @@ static char *emit_dyn_call(EmitCtx *ctx, Buf *body, const Expr *e) {
      * its statements queued) before the arguments' were, and the check still
      * runs before any argument is read. */
     char *dc = fresh_tmp(ctx);
+    /* panic-location-names-the-runtime-not-the-call-site: the arity check's
+     * "cannot call a ... value" panic names this call's line.  The callee
+     * value is bound before the site is set, and the check -- a statement --
+     * is followed by the clear. */
+    char *dsite = emit_site_set_text(ctx, e->span);
+    const char *dpre = dsite ? dsite : "";
+    const char *dsep = dsite ? "; " : "";
+    const char *dpost = dsite ? " tur_site_clear();" : "";
     if (tail_mode != DYN_TAIL_NONE) {
         /* The trampoline's __tur_tb_invoke packs for a variadic itself; the
          * check here only has to admit one (and panic for anything else). */
         buf_printf(body,
-                   "tur_tagged_t %s = (%s); "
-                   "(void)__tur_dyn_call_arity(%s, %lld, %u);\n",
-                   dc, fnv, dc, (long long)want_id, (unsigned)n);
+                   "tur_tagged_t %s = (%s); %s%s"
+                   "(void)__tur_dyn_call_arity(%s, %lld, %u);%s\n",
+                   dc, fnv, dpre, dsep, dc, (long long)want_id, (unsigned)n, dpost);
+        free(dsite);
     } else {
         /* R6: `-1` is the ordinary call; a fixed count means a registered
          * variadic callee that __tur_dyn_call_var packs for (2b of
          * docs/archive/r7rs-compiled-dynamic-shapes.md).  The arguments are
          * bound once so neither arm re-evaluates them. */
         buf_printf(body,
-                   "tur_tagged_t %s = (%s); "
-                   "int %s_v = __tur_dyn_call_arity(%s, %lld, %u);\n",
-                   dc, fnv, dc, dc, (long long)want_id, (unsigned)n);
+                   "tur_tagged_t %s = (%s); %s%s"
+                   "int %s_v = __tur_dyn_call_arity(%s, %lld, %u);%s\n",
+                   dc, fnv, dpre, dsep, dc, dc, (long long)want_id, (unsigned)n, dpost);
+        free(dsite);
         for (uint32_t i = 0; i < n; i++) {
             char *t = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
@@ -8535,6 +8827,14 @@ static char *emit_dyn_field(EmitCtx *ctx, Buf *body, const Expr *e) {
         return atom_nil();
     }
     indent_buf(body, ctx->indent);
+    /* panic-location-names-the-runtime-not-the-call-site: the miss names
+     * this field access's line (the helper panics through tur_panic_sited). */
+    char *fsite = emit_site_set_text(ctx, e->span);
+    if (fsite) {
+        buf_printf(body, "else { %s; __tur_dyn_no_field(TUR_GETTAG(%s), \"%s\"); tur_site_clear(); }\n",
+                   fsite, ov, fname);
+        free(fsite);
+    } else
     buf_printf(body, "else { __tur_dyn_no_field(TUR_GETTAG(%s), \"%s\"); }\n",
                ov, fname);
     free(ov);
@@ -8605,6 +8905,24 @@ static char *emit_dyn_method(EmitCtx *ctx, Buf *body, const Expr *e) {
      * the arguments, and the slot lookup still runs before any is read. */
     char *dm = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
+    /* panic-location-names-the-runtime-not-the-call-site: the no-instance
+     * panic names this dispatch's line -- the helper sits in the fixed
+     * preamble, ahead of the site slot, so it takes the location as
+     * arguments (as __tur_any_cast_check_at does). */
+    const char *dpath = e->span.line ? diag_file_path(e->span.file_id) : NULL;
+    if (dpath) {
+        const char *dbase = dpath;
+        for (const char *p = dpath; *p; p++) if (*p == '/' || *p == '\\') dbase = p + 1;
+        buf_printf(body,
+            "tur_tagged_t %s = (%s); "
+            "const void *%s_f = __tur_inst_slot_at(\"%s\", \"%s\", TUR_GETTAG(%s), %d, \"",
+            dm, recv, dm, cls, meth, dm, (int)slot);
+        for (const char *p = dbase; *p; p++) {
+            if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+            buf_putc(body, *p);
+        }
+        buf_printf(body, "\", %d);\n", (int)e->span.line);
+    } else
     buf_printf(body,
         "tur_tagged_t %s = (%s); "
         "const void *%s_f = __tur_inst_slot(\"%s\", \"%s\", TUR_GETTAG(%s), %d);\n",
@@ -8661,6 +8979,25 @@ static const Expr *emit_dict_forwarded_call(EmitCtx *ctx, const Expr *e) {
     c->as.call_.dict_fwd_params = NULL;
     c->as.call_.dict_fwd_n = 0;
     return c;
+}
+
+/* async-capturing-body-env-never-freed: does the spawn own `fn_expr`'s box?
+ * A fresh lambda written right at the spawn is the spawn's alone, and it drops
+ * the box when the body settles -- when that frees nothing the body's result
+ * can still point into: the box alone (closure_env_drop_frees_box_only; a
+ * struct capture is a copy in it), or the shallow case. */
+static bool async_spawn_owns_env(const Expr *fn_expr) {
+    if (!fn_expr || fn_expr->type.kind != TY_FN || !fn_expr->type.as.fn.boxed) return false;
+    const Expr *lit = fn_expr;
+    while (lit && (lit->kind == EX_ASCRIBE || lit->kind == EX_FN_TO_FAT))
+        lit = lit->kind == EX_ASCRIBE ? lit->as.ascribe_.inner
+                                      : lit->as.fn_to_fat_.inner;
+    /* A let-bound lambda whose only use is this spawn (let_mark_spawn_owned). */
+    if (lit && lit->kind == EX_VAR && lit->as.var.binding &&
+        lit->as.var.binding->spawn_owns_env)
+        return true;
+    const struct Closure *lc = (lit && lit->kind == EX_CLOSURE) ? lit->as.closure_.closure : NULL;
+    return lc && (closure_env_drop_is_shallow(lc) || closure_env_drop_frees_box_only(lc));
 }
 
 static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
@@ -15009,12 +15346,41 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
+            /* panic-location-names-the-runtime-not-the-call-site: a callee
+             * whose inline-C body may panic is handed this call's own site,
+             * set just before the call and cleared just after it, so a
+             * panic in the body names this line (emit_fns.c).  A statement
+             * expression, so the clear follows the call and the value is
+             * still the call's, held in a temp of the callee's emitted
+             * return type (the signature side table -- not `__auto_type`,
+             * which c2mir lacks); a `void` callee has no value to hold, so
+             * it gets a plain comma expression (a void statement expression
+             * trips an assertion in c2mir); a callee the table does not know
+             * is called as before, unsited. */
+            const char *site_rct = binding_panics_in_inline_c(fn_binding)
+                                       ? emit_sig_lookup_ret_ctype(fn_name) : NULL;
+            char *site_set = (site_rct && *site_rct)
+                                 ? emit_site_set_text(ctx, emit_call_site_span(e)) : NULL;
+            bool site_void = site_set && strcmp(site_rct, "void") == 0;
+            if (site_set) {
+                if (site_void) buf_printf(&out, "(%s, ", site_set);
+                else buf_printf(&out, "({ %s; %s __tur_sr = ", site_set, site_rct);
+            }
             buf_printf(&out, "%s(", fn_name);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 if (i > 0) buf_puts(&out, ", ");
                 buf_printf(&out, "%s", arg_strs[i]);
             }
             buf_puts(&out, ")");
+            if (site_set) {
+                if (site_void) buf_puts(&out, ", tur_site_clear())");
+                else buf_puts(&out, "; tur_site_clear(); __tur_sr; })");
+                free(site_set);
+                /* The panic hoist types its `__ps_N` temp from this note; left
+                 * to read the text it finds `({` and falls back to
+                 * `__auto_type`, which c2mir does not know. */
+                note_call_ret(ctx, site_rct);
+            }
             buf_putc(&out, '\0');
             char *result = strdup(out.data);
             buf_free(&out);
@@ -15878,6 +16244,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              *      variables (same limitation as effect handler bodies). */
             const Expr *fn_expr = e->as.async_.fn_expr;
             char *tmp = fresh_tmp(ctx);
+            if (fn_expr->type.kind == TY_FN && !e->as.async_.on_thread)
+                emit_async_direct_body(ctx, body, fn_expr);
             if (fn_expr->type.kind == TY_FN) {
                 /* Path (a): fn-expr is a function value.  A THIN (bare) fn is a
                  * plain function pointer -- spawn it directly.  A FAT (boxed)
@@ -15929,19 +16297,33 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(pbuf, "}\n\n");
                     }
                     indent_buf(body, ctx->indent);
+                    if (async_spawn_owns_env(fn_expr)) {
+                        buf_puts(body, "tur_async_owns_env = 1;\n");
+                        indent_buf(body, ctx->indent);
+                    }
                     buf_printf(body, "void *%s = (void *)%s(%s, (void *)(intptr_t)%s);\n",
                                tmp, e->as.async_.on_thread ? "tur_async_thread_via"
                                                            : "tur_async_fiber_via",
                                wname, fn_val);
                 } else if (e->as.async_.on_thread && fn_expr->type.as.fn.boxed) {
                     /* compiled-async-fiber-deadlocks-on-a-session-op: a body
-                     * that drives a session endpoint runs on its own thread. */
+                     * that drives a session endpoint runs on its own thread.
+                     * The thread drops the box the spawn owns once the body
+                     * has settled (tur_async_thread_main). */
                     indent_buf(body, ctx->indent);
+                    if (async_spawn_owns_env(fn_expr)) {
+                        buf_puts(body, "tur_async_owns_env = 1;\n");
+                        indent_buf(body, ctx->indent);
+                    }
                     buf_printf(body, "void *%s = (void *)tur_async_thread_via(__tur_async_call_box, (void *)(intptr_t)%s);\n",
                                tmp, fn_val);
                 } else {
                     indent_buf(body, ctx->indent);
                     if (fn_expr->type.as.fn.boxed) {
+                        if (async_spawn_owns_env(fn_expr)) {
+                            buf_puts(body, "tur_async_owns_env = 1;\n");
+                            indent_buf(body, ctx->indent);
+                        }
                         buf_printf(body, "void *%s = (void *)tur_async_fiber_closure((void *)(intptr_t)%s);\n", tmp, fn_val);
                     } else {
                         buf_printf(body, "void *%s = (void *)tur_async_fiber((int64_t(*)(void))(intptr_t)%s);\n", tmp, fn_val);
@@ -16020,6 +16402,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             /* (await fut) — await a future using shift + scheduler callback */
             char *fut_val = emit_value(ctx, body, e->as.await_.fut_expr);
             char *tmp = fresh_tmp(ctx);
+            /* await-of-fresh-spawn-future-never-freed: a spawn written at the
+             * await -- `(await (async ...))` -- is named by nothing else, so the
+             * await owns its future and the reader frees it (__tur_await_own,
+             * emit_module.c).  A future the program holds is left to it. */
+            const Expr *fx = e->as.await_.fut_expr;
+            while (fx && fx->kind == EX_ASCRIBE) fx = fx->as.ascribe_.inner;
+            if (fx && fx->kind == EX_ASYNC) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "__tur_await_own((void *)(intptr_t)%s);\n", fut_val);
+            }
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t %s = tur_await_future((TurFuture*)(intptr_t)%s);\n", tmp, fut_val);
             free(fut_val);
@@ -17663,8 +18055,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (kb && kfx &&
                             out.len >= 2 && memcmp(out.data + out.len - 2, " }", 2) == 0) {
                             uint32_t kn = kb->type.as.fn.arity - 1;
-                            char *kd = ensure_fncps_env_dispatch(ctx, kn,
-                                                             kb->type.as.fn.result_kind == TY_NIL);
+                            char *kd = ensure_fncps_env_dispatch(ctx, &kb->type);
                             /* Every spelling above ends in " }": the slot goes
                              * before it, stored at the slot's declared type. */
                             buf_truncate(&out, out.len - 2);
@@ -17868,14 +18259,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * rest. */
                 if (!effectful && ib && cps_fn_may_await(ib->source_fn_def))
                     effectful = true;
-                /* The twin force-declares the wrapped fn's direct entry with an
-                 * `int64_t` per parameter (emit_module.c) and dispatches its int64
-                 * `__cps` entry, so the wrapped fn's args must each be a plain
-                 * `int`/`int64` and its result one the twin can spell
-                 * (cps_ir_fncps_sig_ok -- the same question arg_fat_has_fn_cps
-                 * asks before counting this value as threaded).  Anything else
-                 * would mismatch the twin's forward decl and stays on the
-                 * delegated direct path. */
+                /* The twin force-declares the wrapped fn's direct entry at each
+                 * parameter's own C spelling (emit_module.c) and dispatches its
+                 * `__cps` entry, so the wrapped fn's args and result must each be
+                 * a kind the twin can spell (cps_ir_fncps_sig_ok -- the same
+                 * question arg_fat_has_fn_cps asks before counting this value as
+                 * threaded).  Anything else would mismatch the twin's forward
+                 * decl and stays on the delegated direct path. */
                 if (ib && ib->is_global && effectful
                     && cps_ir_fncps_sig_ok(&ib->type)) {
                     char *iname = raw_name_for_binding(ib);
