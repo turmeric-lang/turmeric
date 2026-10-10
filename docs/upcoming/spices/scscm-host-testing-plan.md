@@ -135,11 +135,19 @@ hypercollider findings (fixed in #2 unless noted):
   the native CI cache key omitted the class library;
 - `hclang --scsynth-host` closed its socket before the sends went out, so
   nothing reached the server;
-- not fixed: the WAMR native `hclang_native` dies with `filesystem_error`
-  on class-extension files; with `--classlib-dir` the embedded pack still
-  shadows the directory; hypercollider writes version-3 SynthDefs, which
-  stock scsynth 3.13 accepts but does not load (verified live), so
-  `--scsynth-host` forwarding to a 3.13 scsynth cannot play.
+- the WAMR native `hclang_native` did not boot: the WASI shim's directory
+  walk reused stale per-fd cookies (the `filesystem_error`), and the host's
+  `invoke_iiiijj` import shifted its arguments, which crashed boot for some
+  environments and not others;
+- the quarks CLI tests never ran a script (`--script -` is not read by
+  either CLI), and with them running: WASM `Pipe`, `systemCmd`,
+  `unixCmdGetStdOut` and `--extra-class-path` were broken on one host or
+  both, and the WASM job's `help_out.scsyndef` fixture was missing;
+- not fixed: with `--classlib-dir` the embedded pack still shadows the
+  directory; `hc_bundle.js`'s standalone bundles never call `main()`;
+  hypercollider writes version-3 SynthDefs, which stock scsynth 3.13
+  accepts but does not load (verified live), so `--scsynth-host`
+  forwarding to a 3.13 scsynth cannot play.
 
 ## 3. Decision needed first: which dialect is canonical?
 
