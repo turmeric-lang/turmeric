@@ -38,7 +38,14 @@ the sketch below:
   `(Option String)` payload in a `:heap` sum does not compile);
   `ParseError` is `[kind msg line col]` with `parse-error-pos`, and
   `ParseErrorKind` is a `:heap` sum (a struct holding an opaque beside an
-  aggregate does not compile).
+  aggregate does not compile). Every `:heap` constructor call allocates a
+  node nothing frees, so the parsers build errors from four shared nodes
+  (`(syntax-kind)` ... `(io-kind)`). A failed parse then costs the 32-byte
+  `ParseError` box (48 B of heap) and no kind node: 80 B down to 48 B.
+  The box itself goes away once `ParseError` can be by value, which needs
+  the opaque-sibling fix above. It also needed
+  `sum-payload-box-leaks-at-match` (now fixed), since a by-value struct in a
+  `Result`'s `Err` was boxed and never freed by a `match`.
 - **`SaxParser` is a `:copy` struct** of the C handle and the handler, so no
   Turmeric word is stored in C memory and no region note is needed.
 - **HTML** never fails (`html-parse : Document`); caps live in `HtmlOpts`
