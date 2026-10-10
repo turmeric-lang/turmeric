@@ -663,13 +663,14 @@ void turi_env_preload_stdlib(TuriEnv *env, const char *stdlib_root);
  * the spice at or above `spice_root` as a shared library (`tur build --shared`,
  * cached under `<root>/.tur-repl-cache/` and rebuilt when a source is newer),
  * loads it, and binds each export the FFI layer can marshal -- scalars,
- * :cstr, pointers and `defopaque` handles -- as a native under its
- * module-qualified name, and under its bare name too unless something (a
- * stdlib function, a definition of the session's) already holds that.
- * Importing the module afterwards keeps the compiled export, whatever its
- * body: a Turmeric wrapper over private inline-C helpers runs compiled too.
- * A definition the session makes itself still wins.  An export that takes or
- * returns a struct is left unbound, so its interpreted defn keeps running.
+ * :cstr, pointers, `defopaque` handles and by-value records -- as a native
+ * under its module-qualified name, and under its bare name too unless
+ * something (a stdlib function, a definition of the session's) already holds
+ * that.  Importing the module afterwards keeps the compiled export, whatever
+ * its body: a Turmeric wrapper over private inline-C helpers runs compiled
+ * too.  A definition the session makes itself still wins.  An export with a
+ * record slot is callable once its module is imported (the import supplies
+ * the record's layout).
  *
  * The HOST must export its symbols to the image (link with `-rdynamic`, CMake
  * ENABLE_EXPORTS): the image resolves the runtime it shares with libturi

@@ -20886,6 +20886,11 @@ static const char *manifest_type_tag(TypeKind k) {
     }
 }
 
+static const Type *ffi_shim_param_type(const Expr *e, const FnDef *fd,
+                                       uint32_t j);
+static const Type *ffi_shim_result_type(const Expr *e, const FnDef *fd);
+static char ffi_shim_class_for_type(const Type *t, bool is_return);
+
 /* RP1: append a manifest line per exported defn. See emit.h for format. */
 static int emit_exports_manifest_inner(Buf *out, const Expr *program) {
     if (!program || program->kind != EX_PROGRAM) {
@@ -20923,7 +20928,10 @@ static int emit_exports_manifest_inner(Buf *out, const Expr *program) {
                    mod_name, (int)b->name->len, b->name->name, mangled);
         for (uint32_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, " ");
-            buf_puts(out, manifest_type_tag(fd->param_types[j].kind));
+            if (ffi_shim_class_for_type(ffi_shim_param_type(e, fd, j), false) == 's')
+                buf_puts(out, ":record");
+            else
+                buf_puts(out, manifest_type_tag(fd->param_types[j].kind));
         }
         if (e->type.as.fn.is_variadic) {
             if (fd->n_params > 0) buf_puts(out, " ");
@@ -20931,7 +20939,10 @@ static int emit_exports_manifest_inner(Buf *out, const Expr *program) {
         }
         buf_puts(out, ") -> ");
         TypeKind ret = e->type.as.fn.result_kind;
-        buf_puts(out, manifest_type_tag(ret));
+        if (ffi_shim_class_for_type(ffi_shim_result_type(e, fd), true) == 's')
+            buf_puts(out, ":record");
+        else
+            buf_puts(out, manifest_type_tag(ret));
         buf_putc(out, '\n');
         free(mangled);
     }
@@ -21005,6 +21016,15 @@ static char ffi_shim_class_for_type(const Type *t, bool is_return) {
                       : t->kind == TY_APP ? type_adt_app_def(t)
                                           : NULL;
     if (def && def->is_opaque) return 'i';
+    /* A by-value record (a non-parametric flat product -- linalg's `mat`):
+     * class 's'.  The slot carries a POINTER to the record's bytes, which
+     * the interpreter packs from its record value; the shim hands the callee
+     * that pointer or the record it points at, as the callee's own ABI
+     * takes it, and copies a record result into the buffer the caller's
+     * *out_i names.  Spelled :record in the manifest. */
+    if (t->kind == TY_ADT && def && !def->is_heap && def->n_type_params == 0 &&
+        !type_is_transparent_int_newtype(*t) && adt_is_byvalue_product(def))
+        return 's';
     return ffi_shim_class_for_kind(t->kind, is_return);
 }
 
@@ -21064,7 +21084,7 @@ static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
         /* The result KIND alone reads a bare TY_ADT for an opaque handle. */
         char ret_cls = ffi_shim_class_for_type(ffi_shim_result_type(e, fd),
                                                /*is_return=*/true);
-        if (ret_cls != 'i')
+        if (ret_cls != 'i' && ret_cls != 's')
             ret_cls = ffi_shim_class_for_kind(e->type.as.fn.result_kind,
                                               /*is_return=*/true);
         if (ret_cls == '?') continue;
@@ -21084,16 +21104,27 @@ static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
                    "int64_t *out_i, double *out_f) {\n",
                    mangled);
         buf_puts(out, "    ");
-        if (ret_cls == 'i')      buf_puts(out, "*out_i = (int64_t)(intptr_t)");
+        const char *ret_cty = ret_cls == 's'
+            ? type_c_name(*ffi_shim_result_type(e, fd)) : NULL;
+        if (ret_cls == 's')      buf_printf(out, "%s __r = ", ret_cty);
+        else if (ret_cls == 'i') buf_puts(out, "*out_i = (int64_t)(intptr_t)");
         else if (ret_cls == 'f') buf_puts(out, "*out_f = (double)");
         /* ret 'v': call for effect, no assignment. */
         buf_printf(out, "%s(", mangled);
+        bool inline_c_body = fd->body && fd->body->kind == EX_INLINE_C;
         for (uint32_t j = 0; j < fd->n_params; j++) {
             if (j > 0) buf_puts(out, ", ");
             const Type *pty = ffi_shim_param_type(e, fd, j);
             char cls = ffi_shim_class_for_type(pty, /*is_return=*/false);
             const char *cty = type_c_name(*pty);
-            if (cls == 'f') {
+            if (cls == 's') {
+                /* The callee's own rule (emit_fns.c): a large record is
+                 * taken as `const T *`, a small one by value. */
+                if (!fd->closure && !inline_c_body && type_struct_pass_by_ptr(*pty))
+                    buf_printf(out, "(const %s *)(intptr_t)iv[%u]", cty, (unsigned)j);
+                else
+                    buf_printf(out, "*(const %s *)(intptr_t)iv[%u]", cty, (unsigned)j);
+            } else if (cls == 'f') {
                 buf_printf(out, "(%s)fv[%u]", cty, (unsigned)j);
             } else {
                 /* intptr_t intermediate makes both int->int and int->pointer
@@ -21102,6 +21133,8 @@ static void emit_ffi_export_shims(const EmitCtx *ctx, Buf *out,
             }
         }
         buf_puts(out, ");\n");
+        if (ret_cls == 's')
+            buf_puts(out, "    memcpy((void *)(intptr_t)*out_i, &__r, sizeof __r);\n");
         /* Silence -Wunused-parameter for buffers this shim never touches
          * (an all-int export never reads fv/out_f, a :void one never writes). */
         buf_puts(out, "    (void)iv; (void)fv; (void)out_i; (void)out_f;\n");

@@ -2255,6 +2255,17 @@ static AggFieldClass agg_field_class_in(const AggRec *owner, const CtorField *f,
     AggFieldClass cls = AGGF_SCALAR;
 
     const AdtDef *ad_adt = (ft.kind == TY_ADT) ? ft.as.adt_.def : NULL;
+    /* A :heap ADT -- `(Vec float)`, a lowered collection -- and an opaque
+     * handle are one pointer-sized word in the record's C layout (the
+     * emitter declares the field `int64_t`), so they ride as a word, ahead of
+     * the by-value-product test an app of a :heap ADT also passes.  linalg's
+     * `mat` holds its `(Vec float)` that way. */
+    if ((ad_adt && (ad_adt->is_heap || ad_adt->is_opaque)) ||
+        (ft.kind == TY_APP && type_is_heap_adt(ft))) {
+        if (out_kind) *out_kind = TY_INT;
+        if (!out_owned) free_struct_app_type(ft);
+        return AGGF_SCALAR;
+    }
     /* Mirrors adt_field_is_inline_byval_d's own conditions per kind: a :heap
      * ADT is a typed pointer, and drop glue would make the owner non-trivially
      * copyable, so neither inlines. */
@@ -11991,6 +12002,57 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     return eval_expr_impl(env, frame, e);
 }
 
+/* notebook-cells-cannot-call-inline-c-spices: a spice export that takes or
+ * returns a by-value record crosses the FFI as the record's C bytes.  The
+ * manifest says only `:record`; the module's own defn, evaluated by the
+ * import, says which -- so when an import keeps such a native, hand it the
+ * layout of its whole signature (agg_sig_build, as an aggregate extern-c
+ * does) and the record def of each slot.  An opaque handle is a word there,
+ * not an aggregate. */
+static Type ffi_rec_slot_type(Type t) {
+    if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
+        return TYPE_INT;
+    return t;
+}
+
+static void ffi_note_export_records(const Expr *e, const FnDef *fd,
+                                    TuriClosure *cl) {
+    uint32_t n = fd->n_params;
+    bool have_fn = e->type.kind == TY_FN;
+    Type *pt = (Type *)calloc(n ? n : 1, sizeof(Type));
+    size_t *arg_at = (size_t *)calloc(n ? n : 1, sizeof(size_t));
+    const AdtDef **defs = (const AdtDef **)calloc((size_t)n + 1, sizeof(*defs));
+    char *sig = NULL;
+    if (!pt || !arg_at || !defs) goto fail;
+    for (uint32_t j = 0; j < n; j++) {
+        const Type *full = (have_fn && e->type.as.fn.arg_full_types &&
+                            j < e->type.as.fn.arity)
+                         ? e->type.as.fn.arg_full_types[j] : NULL;
+        Type t = full ? *full
+               : (fd->params && fd->params[j]) ? fd->params[j]->type
+                                               : fd->param_types[j];
+        pt[j] = ffi_rec_slot_type(t);
+        defs[1 + j] = extern_slot_agg_def(pt[j]);
+    }
+    {
+        Type rt = (have_fn && e->type.as.fn.result_full_type)
+                ? *e->type.as.fn.result_full_type : fd->return_type;
+        rt = ffi_rec_slot_type(rt);
+        defs[0] = extern_slot_agg_def(rt);
+        sig = agg_sig_build(rt, pt, n, arg_at);
+    }
+    free(pt);
+    pt = NULL;
+    if (sig && tur_ffi_native_note_records(cl->native, cl->native_ud, sig,
+                                           arg_at, defs, n))
+        return;
+fail:
+    free(pt);
+    free(sig);
+    free(arg_at);
+    free(defs);
+}
+
 static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     if (!e) return turi_nil();
 
@@ -12271,6 +12333,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
                 const char *smod = tur_ffi_native_spice_module(
                     nat.as_closure->native, nat.as_closure->native_ud);
                 if (smod && strcmp(smod, modname) == 0) {
+                    if (tur_ffi_native_wants_records(nat.as_closure->native,
+                                                     nat.as_closure->native_ud))
+                        ffi_note_export_records(e, fndef, nat.as_closure);
                     TuriValue bare = turi_env_get(env, fname);
                     if (bare.tag != TURI_CLOSURE ||
                         bare.as_closure != nat.as_closure)

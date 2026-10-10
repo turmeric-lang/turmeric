@@ -11,8 +11,11 @@
  *   tagged-id  -- generic only in a phantom index, never instantiated: no
  *                 definition in the image, so it must not have a shim either
  *                 (a shim calling it left the .so undloadable)
- *   pt-sum     -- a struct parameter the FFI cannot marshal: left unbound, so
- *                 its interpreted defn runs
+ *   pt-sum / pt-make / b3-sum / b3-make -- by-value records as parameter
+ *                 and result, small (passed by value) and large (`const T *`):
+ *                 packed from the session's record value, rebuilt from the
+ *                 compiled result -- each through a private inline-C helper, so
+ *                 only the compiled path can answer
  *   answer     -- shadowed by a host native: the bare name keeps the host's,
  *                 the qualified name reaches the export
  *   greet / even-word? -- a :cstr and a :bool return come back as a string
@@ -72,7 +75,7 @@ static const char *FIXTURE =
     "(defmodule afx/core\n"
     "  (import afdep/util :refer [twice])\n"
     "  (export add-loop wrapped box-new box-get box-free tagged-id Pt pt-sum answer\n"
-    "          greet even-word? dep-twice)\n"
+    "          greet even-word? dep-twice B3 pt-make b3-sum b3-make)\n"
     "  (defn dep-twice [x : int] : int (+ 1 (twice x)))\n"
     "  (defn add-loop [a : int b : int] : int\n"
     "    ```c\n"
@@ -111,7 +114,11 @@ static const char *FIXTURE =
     "  (defopaque Tagged [n] :int)\n"
     "  (defn tagged-id [n] [t : (Tagged n)] : (Tagged n) t)\n"
     "  (defstruct Pt [x : int y : int])\n"
-    "  (defn pt-sum [p : Pt] : int (+ (. p x) (. p y)))\n"
+    "  (defn pt-sum [p : Pt] : int (+ (__triple-raw (. p x)) (. p y)))\n"
+    "  (defn pt-make [x : int y : int] : Pt (Pt (__triple-raw x) y))\n"
+    "  (defstruct B3 [a : int b : int c : int])\n"
+    "  (defn b3-sum [r : B3] : int (+ (__triple-raw (. r a)) (+ (. r b) (. r c))))\n"
+    "  (defn b3-make [a : int b : int c : int] : B3 (B3 (__triple-raw a) b c))\n"
     "  (defn answer [] : int 42)\n"
     "  (defn greet [] : cstr\n"
     "    ```c\n"
@@ -171,7 +178,8 @@ int main(void) {
     char note[1024];
     snprintf(note, sizeof(note), "%s/afx/notes/walkthrough.tur.md", root);
     const char *imp =
-        "(import afx/core :refer [add-loop wrapped box-new box-get box-free Pt pt-sum answer])";
+        "(import afx/core :refer [add-loop wrapped box-new box-get box-free Pt pt-sum answer\n"
+    "                         pt-make B3 b3-sum b3-make])";
 
     /* Control: without the image, the first inline-C call is the refusal. */
     TuriEnv *ctl = turi_env_new();
@@ -188,9 +196,9 @@ int main(void) {
     turi_env_set_search_path_for(env, note);
     int n = turi_env_attach_spice_for_module(env, "afx/core", tur);
     /* add-loop wrapped box-new box-get box-free answer greet even-word?
-     * dep-twice -- not tagged-id (no definition), not pt-sum (a struct it
-     * cannot marshal), not the dep's `twice` (not this spice's export). */
-    CHECK(n == 9, "attach: binds the nine exports the FFI can marshal");
+     * dep-twice pt-sum pt-make b3-sum b3-make -- not tagged-id (no
+     * definition), not the dep's `twice` (not this spice's export). */
+    CHECK(n == 13, "attach: binds the thirteen exports the FFI can marshal");
     CHECK(turi_env_attach_spice_for_module(env, "afx/core", tur) == 0,
           "attach: a module an attached image provides is not loaded twice");
     CHECK(turi_env_attach_spice_for_module(env, "no/such-module", tur) == 0,
@@ -205,8 +213,14 @@ int main(void) {
     CHECK(is_int(turi_eval(env,
               "(let [b (box-new 7)] (let [s (box-get b)] (box-free b) s))"), 14),
           "attached: an opaque-handle API round-trips through the image");
-    CHECK(is_int(turi_eval(env, "(pt-sum (Pt 3 4))"), 7),
-          "attached: a struct-parameter export is left to the interpreter");
+    CHECK(is_int(turi_eval(env, "(pt-sum (Pt 3 4))"), 13),
+          "attached: a small record argument crosses by value");
+    CHECK(is_int(turi_eval(env, "(let [p (pt-make 2 5)] (+ (* 100 (. p x)) (. p y)))"), 605),
+          "attached: a small record result comes back as a record");
+    CHECK(is_int(turi_eval(env, "(b3-sum (B3 3 20 100))"), 129),
+          "attached: a large record argument crosses as a pointer");
+    CHECK(is_int(turi_eval(env, "(b3-sum (b3-make 1 20 100))"), 129),
+          "attached: a large record result feeds the next call");
     CHECK(is_int(turi_eval(env, "(afx/core/answer)"), 42),
           "attached: the qualified name reaches the export");
     CHECK(is_int(turi_eval(env, "(afx/core/dep-twice 20)"), 41),
@@ -229,7 +243,7 @@ int main(void) {
           "attach: a directory with no build.tur above it is an error");
     char spice[1100];
     snprintf(spice, sizeof(spice), "%s/afx", root);
-    CHECK(turi_env_attach_spice(sh, spice, tur) == 9, "attach by root: same nine bindings");
+    CHECK(turi_env_attach_spice(sh, spice, tur) == 13, "attach by root: same thirteen bindings");
     CHECK(is_int(turi_eval(sh, "(answer)"), 7),
           "attach: a host-bound bare name is not clobbered");
     CHECK(is_int(turi_eval(sh, "(afx/core/answer)"), 42),

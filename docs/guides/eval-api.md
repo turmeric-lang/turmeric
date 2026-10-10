@@ -407,8 +407,10 @@ first call is the clean `inline-C not supported in interpreter mode` error.
 binds its exports as natives:
 
 - An export binds when the FFI layer can marshal every slot: integers, floats,
-  `:bool`, `:cstr`, pointers and `defopaque` handles. One that takes or
-  returns a struct stays unbound, so its interpreted defn still runs.
+  `:bool`, `:cstr`, pointers, `defopaque` handles and by-value records
+  (`defstruct`). A record crosses as its C bytes, packed from the session's
+  record value against the layout its module declares, so an export with a
+  record slot is callable once its module has been imported.
 - Each binds under its module-qualified name (`stats/dist/dnorm`), and under
   its bare name unless something already holds that -- a stdlib function, a
   definition of the session's own, an earlier image's export.

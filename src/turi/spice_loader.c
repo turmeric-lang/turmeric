@@ -402,6 +402,8 @@ static char class_for_tag(const char *tag, bool is_return) {
      || strcmp(tag, ":never")  == 0) {
         return 'i';
     }
+    /* A by-value record: its bytes cross through a pointer (ffi_thunk.c). */
+    if (strcmp(tag, ":record") == 0) return 's';
     if (strcmp(tag, ":float")   == 0
      || strcmp(tag, ":float32") == 0
      || strcmp(tag, ":float64") == 0) {

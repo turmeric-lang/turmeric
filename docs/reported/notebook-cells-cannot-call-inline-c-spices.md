@@ -9,8 +9,8 @@ was fixed (2026-10-10) every import in them resolves; the first call into the
 spice then fails, cleanly, with the interpreter's inline-C refusal.
 
 Filed 2026-10-10, closing that report. **Narrowed the same day** (see the
-end): stats, frame and plot cells now run their spices compiled; linalg
-still cannot, nor can a cell's `defn` be handed to plot as a callback.
+end): stats, frame, plot and linalg cells now run their spices compiled;
+what is left is a cell's `defn` handed to compiled code as a callback.
 
 ## Repro
 
@@ -178,19 +178,34 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
   storage), and a discrete histogram's category labels were the bar
   pointers printed as text.
 
+### Later still: linalg -- records across the FFI
+
+linalg's API passes `defstruct mat` / `lavec` / `lufac` by value, so none of
+it had a shim and every call reached inline C interpreted. A by-value record
+slot is now FFI class `s`, spelled `:record` in the manifest
+(`ffi_shim_class_for_type`, `src/compiler/emit_module.c`): the slot carries a
+pointer to the record's C bytes, and the shim hands the callee that pointer
+or the record it points at -- `const T *` or by value, by the emitter's own
+rule (`type_struct_pass_by_ptr`) -- and copies a record result into a buffer
+the caller supplies. The manifest does not say WHICH record; the module's
+own defn does, so when an import keeps such a native the interpreter notes
+the layout of its signature (`ffi_note_export_records`, `src/turi/eval.c`,
+reusing the aggregate extern-c machinery: `agg_sig_build`, then
+`tur_eval_agg_to_bytes` / `tur_eval_agg_from_bytes` per call in
+`ffi_native_shim`). Called before its module is imported, such an export
+says so instead of guessing. The aggregate layout also learned that a
+`:heap` ADT field (`mat`'s `(Vec float)`) or an opaque one is a word, as the
+emitter declares it. Every `linalg-walkthrough` cell runs: the product, the
+solves and the least-squares fit print what numpy gives.
+
 ## Still open
 
-1. **linalg.** Its API passes `defstruct mat` by value. Those exports have no
-   shim (by design: there is no C struct to hand over), so they stay
-   interpreted and reach inline C. What closes it is marshalling an
-   interpreted record to its C layout on the call path; the callback path
-   already does that (`tur_ffi_cb_ctx_set_agg`, `src/turi/ffi_thunk.c`).
-2. **A cell's `defn` as a callback.** plot's `function` takes its callback
+1. **A cell's `defn` as a callback.** plot's `function` takes its callback
    as an untyped (so `:int`) parameter; a cell's `defn` is an interpreter
    closure with no C address to pass. `plot-walkthrough`'s first cell and
    the FFI callback path (`tur_ffi_cb_ctx_new`, which needs the parameter's
    function type) both want plot to type it `(fn [float] float)`.
-3. **stats' frame helpers crash, compiled too** -- a layout bug of stats',
+2. **stats' frame helpers crash, compiled too** -- a layout bug of stats',
    not the notebook's:
    [stats-frame-interop-reads-a-stale-frame-layout](stats-frame-interop-reads-a-stale-frame-layout.md).
    The examples' `ols-frame` cells are left in place, marked `eval=false`.

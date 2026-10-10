@@ -79,6 +79,7 @@ static const char *class_name(char c) {
         case 'f': return ":float-class";
         case 'F': return ":float32-class";
         case 'v': return ":void";
+        case 's': return "a record";
         default:  return "<unknown>";
     }
 }
@@ -96,7 +97,23 @@ static const char *class_name(char c) {
  * by the export count. */
 typedef struct FfiBindingUd {
     const TurSpiceExport *export_;
+    /* An export with a by-value record slot (class 's'): the layout sig of
+     * its whole signature, each parameter's offset into it, and the record
+     * def of each slot ([0] the result, [1 + k] parameter k; NULL for a
+     * scalar slot).  Noted by the interpreter when the module's own defn is
+     * evaluated (tur_ffi_native_note_records) -- the manifest says only
+     * :record, the module's source says which record. */
+    char                  *rec_sig;
+    size_t                *rec_arg_at;
+    const struct AdtDef  **rec_defs;
 } FfiBindingUd;
+
+static bool ffi_export_has_records(const TurSpiceExport *e) {
+    if (e->ret_class == 's') return true;
+    for (uint32_t k = 0; k < e->n_args; k++)
+        if (e->arg_classes[k] == 's') return true;
+    return false;
+}
 
 /* ffi-spices-integration-plan S2: build the rest-list for a variadic
  * export.  Mirrors the compiled call sites' EX_CONS_LIST emission exactly:
@@ -174,6 +191,20 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
     }
     uint32_t nslots = e->n_args;   /* what the callee's C signature takes */
 
+    /* A record slot crosses as a pointer to the record's C bytes, which only
+     * the export's own shim knows how to hand on, packed against the layout
+     * the module's declared types give. */
+    bool has_rec = ffi_export_has_records(e);
+    if (has_rec && !bud->rec_sig)
+        return turi_errorf(
+            "ffi: '%s/%s' takes or returns a record; import its module first "
+            "so the session knows the record's layout",
+            e->module, e->name);
+    if (has_rec && !e->ffi_shim)
+        return turi_errorf(
+            "ffi: '%s/%s' takes or returns a record and its image has no "
+            "__ffi shim -- rebuild the spice", e->module, e->name);
+
     /* Marshal args -- abort on the first mismatch with a per-arg diagnostic so
      * the user knows exactly which value was wrong.  Small arities use inline
      * scratch; wider ones spill to the heap (no fixed arity cap here).  A single
@@ -193,9 +224,35 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
     }
 
     TuriValue result;
+    void **rec_bufs = has_rec ? (void **)calloc((size_t)nslots + 1, sizeof(void *))
+                              : NULL;
+    if (has_rec && !rec_bufs) {
+        free(i_heap); free(f_heap);
+        return turi_error("ffi: out of memory marshalling call");
+    }
     for (uint32_t k = 0; k < fixed; k++) {
         char cls = e->arg_classes[k];
-        if (cls == 'i') {
+        if (cls == 's') {
+            const char *at = bud->rec_sig + bud->rec_arg_at[k];
+            size_t size = 0, align = 0;
+            const struct AdtDef *def = bud->rec_defs[1 + k];
+            if (!def || !tur_jit_ffi_struct_layout(at, &size, &align, NULL, NULL,
+                                                    0, NULL)) {
+                result = turi_errorf("ffi: '%s/%s' arg %u: no C layout for its "
+                                     "record type", e->module, e->name, k);
+                goto cleanup;
+            }
+            rec_bufs[1 + k] = calloc(1, size ? size : 1);
+            if (!rec_bufs[1 + k] ||
+                !tur_eval_agg_to_bytes(def, at, args[k], rec_bufs[1 + k])) {
+                result = turi_errorf(
+                    "ffi: '%s/%s' arg %u: expected a record, got %s",
+                    e->module, e->name, k, tag_name(args[k].tag));
+                goto cleanup;
+            }
+            i_vals[k] = (int64_t)(intptr_t)rec_bufs[1 + k];
+            f_vals[k] = 0.0;
+        } else if (cls == 'i') {
             if (marshal_arg_i(&args[k], &i_vals[k]) != 0) {
                 result = turi_errorf(
                     "ffi: '%s/%s' arg %u: expected %s, got %s",
@@ -238,12 +295,29 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
     {
         int64_t out_i = 0;
         double  out_f = 0.0;
+        /* A record result: the shim copies it into the buffer *out_i names. */
+        if (e->ret_class == 's') {
+            size_t size = 0, align = 0;
+            if (!bud->rec_defs[0] ||
+                !tur_jit_ffi_struct_layout(bud->rec_sig, &size, &align, NULL,
+                                           NULL, 0, NULL)) {
+                result = turi_errorf("ffi: '%s/%s': no C layout for its "
+                                     "record result", e->module, e->name);
+                goto cleanup;
+            }
+            rec_bufs[0] = calloc(1, size ? size : 1);
+            if (!rec_bufs[0]) {
+                result = turi_error("ffi: out of memory marshalling call");
+                goto cleanup;
+            }
+            out_i = (int64_t)(intptr_t)rec_bufs[0];
+        }
         /* Fallback ladder (jit-ffi-c2mir-plan section 2.4).  Step 1: a JIT
          * build synthesizes the exact-signature thunk at runtime -- any
          * arity, any int/float mix, no shape table.  A provider failure
          * (c2mir error) falls through to the shim/table rungs rather than
          * erroring, so a JIT build is never WORSE than a non-JIT one. */
-        const TurJitFfiProvider *jp = tur_jit_ffi_provider();
+        const TurJitFfiProvider *jp = has_rec ? NULL : tur_jit_ffi_provider();
         TurJitFfiThunkFn jt = NULL;
         if (jp) {
             char sig[TUR_SPICE_ARITY_FASTPATH + 3];
@@ -306,12 +380,20 @@ static TuriValue ffi_native_shim(TuriEnv *env, TuriValue *args, uint32_t n,
                     result = turi_int(out_i);
                 break;
             case 'f': result = turi_float(out_f); break;
+            case 's':
+                result = tur_eval_agg_from_bytes(env, bud->rec_defs[0],
+                                                 bud->rec_sig, rec_bufs[0]);
+                break;
             case 'v': result = turi_nil();        break;
             default:  result = turi_error("ffi: internal: bad ret class"); break;
         }
     }
 
 cleanup:
+    if (rec_bufs) {
+        for (uint32_t k = 0; k <= nslots; k++) free(rec_bufs[k]);
+        free(rec_bufs);
+    }
     free(i_heap);
     free(f_heap);
     return result;
@@ -595,6 +677,9 @@ typedef struct FfiOwnedUd {
 static void ffi_owned_ud_free(void *p) {
     FfiOwnedUd *o = (FfiOwnedUd *)p;
     if (!o) return;
+    free(o->ud.rec_sig);
+    free(o->ud.rec_arg_at);
+    free(o->ud.rec_defs);
     free(o->qkey);
     free(o);
 }
@@ -614,9 +699,10 @@ uint32_t tur_ffi_install_spice_bindings_owned(TuriEnv *env, TurSpiceImage *img) 
          * opaque handle, so its presence is the test. */
         if (!e->ffi_shim) continue;
         bool marshalable = e->ret_class == 'i' || e->ret_class == 'f'
-                        || e->ret_class == 'v';
+                        || e->ret_class == 'v' || e->ret_class == 's';
         for (uint32_t k = 0; marshalable && k < e->n_args; k++)
-            marshalable = e->arg_classes[k] == 'i' || e->arg_classes[k] == 'f';
+            marshalable = e->arg_classes[k] == 'i' || e->arg_classes[k] == 'f'
+                       || e->arg_classes[k] == 's';
         if (!marshalable) continue;
         FfiOwnedUd *o = (FfiOwnedUd *)calloc(1, sizeof(*o));
         if (!o) continue;
@@ -642,6 +728,25 @@ uint32_t tur_ffi_install_spice_bindings_owned(TuriEnv *env, TurSpiceImage *img) 
         bound++;
     }
     return bound;
+}
+
+bool tur_ffi_native_wants_records(TuriNativeFn fn, const void *ud) {
+    if (fn != ffi_native_shim || !ud) return false;
+    const FfiBindingUd *bud = (const FfiBindingUd *)ud;
+    return bud->export_ && !bud->rec_sig && ffi_export_has_records(bud->export_);
+}
+
+bool tur_ffi_native_note_records(TuriNativeFn fn, void *ud, char *sig,
+                                 size_t *arg_at, const struct AdtDef **defs,
+                                 uint32_t n_params) {
+    if (fn != ffi_native_shim || !ud) return false;
+    FfiBindingUd *bud = (FfiBindingUd *)ud;
+    if (!bud->export_ || bud->rec_sig || n_params != bud->export_->n_args)
+        return false;
+    bud->rec_sig    = sig;
+    bud->rec_arg_at = arg_at;
+    bud->rec_defs   = defs;
+    return true;
 }
 
 const char *tur_ffi_native_spice_module(TuriNativeFn fn, const void *ud) {
