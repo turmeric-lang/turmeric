@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.9` -- Effectful callbacks now compile through generic HOFs and fn values -- including `option-map`, pointer results, and functions mixing `perform` with `await` -- and panics from casts, bounds checks, and Saffron operators name your own call site.
+**Latest release:** `v0.64.0` -- Adds Swift-style `#dedent"""..."""` string literals, typed `(Chan A)` / `LocalFiberGroup` APIs for the reactor and fiber groups, and embedder support for running spices compiled via `turi_env_attach_spice`.
 
 ## What
 
