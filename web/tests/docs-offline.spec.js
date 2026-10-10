@@ -112,11 +112,15 @@ async function waitForPackCached(page, timeout = 120_000) {
 }
 
 async function waitForController(page) {
-    await page.waitForFunction(async () => {
-        if (!('serviceWorker' in navigator)) return false;
-        const reg = await navigator.serviceWorker.getRegistration('/');
-        return !!reg && !!navigator.serviceWorker.controller;
-    }, null, { timeout: 30_000 });
+    // Synchronous on purpose. waitForFunction tests what the predicate returns
+    // for truthiness and never awaits it, so an `async` predicate hands back a
+    // Promise -- always truthy -- and the wait passes on its first poll
+    // whatever the answer is. This one did, until 2026-10-10.
+    //
+    // The same budget as waitForPackCached: sw.js claims the page in
+    // `activate`, which follows an `install` that precaches the whole pack.
+    await page.waitForFunction(() => !!navigator.serviceWorker?.controller,
+                               null, { timeout: 120_000 });
 }
 
 test.describe('offline docs', () => {
@@ -142,23 +146,7 @@ test.describe('offline docs', () => {
         expect(status.missing).toEqual([]);
     });
 
-    // KNOWN FAILURE, marked so the suite's failure count stays meaningful:
-    // docs/reported/docs-offline-cold-pane-never-boots.md.  Step 1 passes (the
-    // pack reaches the cache -- the test above asserts exactly that); step 2
-    // does not, because with the origin stopped a reload never boots the app
-    // from cache, and the wait below times out after 30s on every run.
-    //
-    // This describe block is `mode: 'serial'`, so leaving it failing also took
-    // the two tests AFTER it down with it -- three of the four offline-docs
-    // assertions went unexercised, not one.  A skip costs one assertion; a
-    // failure here cost three and made "1 failed" the suite's permanent
-    // baseline, which is what stopped the count from meaning anything.
-    //
-    // Unlike a fixture's `expected.xfail`, `test.fixme` does NOT fail when the
-    // gap closes -- a fixed app would just stay silently skipped.  So whoever
-    // fixes the service-worker path must delete this marker by hand; the report
-    // stays open in docs/reported/ to carry that obligation.
-    test.fixme('docs browse offline on a cold pane', async ({ page }) => {
+    test('docs browse offline on a cold pane', async ({ page }) => {
         // 1. One online load. The docs pane is never opened.
         await page.goto(`${ORIGIN}/try/?sw=1`);
         await waitForController(page);

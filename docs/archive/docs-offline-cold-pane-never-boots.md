@@ -4,12 +4,17 @@
 more down with it. Nothing is red: the step is `continue-on-error`, so the job is
 green and only a workflow annotation says otherwise.
 
-> **Marked `test.fixme` on 2026-10-02 -- still OPEN, still not diagnosed.**
-> The marker stops this from being the desktop suite's permanent baseline (see
-> "Marked, not fixed" at the end); it does not fix anything, and the two tests
-> this was taking down with it now run. Whoever fixes the service-worker path
-> must delete the marker by hand -- `test.fixme` does not fail when the gap
-> closes, so nothing else will notice.
+> **RESOLVED 2026-10-10.** A `Vary` mismatch, not a missing precache entry.
+> `vite preview` answers every request with `Vary: Origin`. sw.js precaches
+> the shell's hashed bundles with a bare `fetch(url)`, which sends no Origin,
+> but the shell loads them as `crossorigin` module script and stylesheets,
+> which do. Offline, `caches.match(request)` honoured the Vary and missed
+> four entries that were in the precache, so the shell HTML came back with no
+> JS or CSS and `window.turmericApp` never appeared. Every page-facing lookup
+> in sw.js now passes `{ ignoreVary: true }`. The `test.fixme` (marked
+> 2026-10-02) is deleted, and all four offline-docs tests run and pass. Details
+> in *Resolution* at the end, including a second defect found on the way:
+> `waitForController` could never fail.
 
 Filed 2026-10-01, found while adding `tests/ci.spec.js` to the desktop suite's
 file list (rjungemann/turmeric#1009) -- the annotation fired on that PR and
@@ -131,3 +136,103 @@ This also clears the precondition that
 fix direction 6 named -- "do not leave the suite permanently red as the reason
 it can never be flipped". Whether to then drop `continue-on-error` from the
 desktop step is still the policy call that report left to a human.
+
+## Resolution (2026-10-10)
+
+### Reproduced
+
+On a local production build: native `tur`, `tur run docs`, the wasm module
+built with emsdk 6.0.10 (CI's pin), then `npm run build`. With the `fixme`
+removed, the test failed at the same `waitForFunction`, with the same 30s
+timeout, and the same two tests did not run. So this was never a CI-only
+artefact.
+
+### Mechanism
+
+What a throwaway diagnostic spec (same server and steps, with console, failed
+requests, and a lightly instrumented copy of `dist/client/sw.js`) showed after
+`stopServer()` and `page.reload()`:
+
+- **The navigation was answered.** The page came back titled "Try Turmeric"
+  from the precached `/try/` (via `networkFirst`'s shell fallback), and the
+  worker's fetch handler was running. So lead 2 (navigation miss) and lead 3
+  (the worker not surviving the reload) were both ruled out.
+- **Four subresources failed with `net::ERR_FAILED`:** `/assets/try-<hash>.js`,
+  `/assets/site-<hash>.js`, `/assets/site-<hash>.css` and
+  `/assets/try-<hash>.css`. Every one was a `cacheFirst` miss, and the
+  precache listing taken just before the server stopped held all four. So
+  lead 1 was ruled out too: `precacheShellAssets` finds and caches the hashed
+  bundles (and the fonts) correctly under `dist/client/`. The static
+  `/main.js`, `/styles.css`, `/site.css` and `/site.js` rows in
+  `PRECACHE_URLS` do 404 in a production build, but those are dev-server
+  paths and the misses are harmless.
+- **The misses were exactly the `crossorigin` tags.** The non-crossorigin
+  subresources were served from cache: `/turmeric.js`, `/pwa-shell.js`, and
+  `/docs-pack/guide.{css,js}`.
+
+The reason: every response from `vite preview` carries `Vary: Origin`. That
+is its CORS middleware, and `curl -sI` shows the header whether or not the
+request sends an Origin. The Cache API honours `Vary`: a stored entry matches
+only if the headers it names are the same on the stored request and the
+incoming one. The stored request here is the worker's own `fetch(url)`, a
+same-origin GET that sends no Origin, so its header list in the precache is
+empty. The incoming requests come from `<script type="module" crossorigin>`
+and `<link rel="stylesheet" crossorigin>`. Those are cors-mode, and Chromium
+sends `Origin: http://localhost:3111` with them. The headers differ, the
+lookup misses, the network is gone, `respondWith` rejects, and the main
+module never runs. `window.turmericApp` is assigned at that module's top
+level, so it never appears.
+
+Why only a **cold** boot shows it: online, the miss falls through to the
+network, and `cacheFirst` stores the response in the runtime cache keyed by
+the page's own request, Origin header included. The next lookup then
+matches. A cold offline boot is the case that depends on the precache entry
+alone, because the first visit was uncontrolled and the runtime cache never
+saw those requests. That is the case `precacheShellAssets` exists for, and
+the case this test exercises.
+
+**Production: not established.** turmeric-lang.com was not reachable from the
+sandbox this was diagnosed in. Cloudflare's static-asset serving is not known
+to send `Vary: Origin`, so the live site may never have had this defect. The
+fix is right either way. Any host or intermediary that adds a `Vary` on a
+header the worker's `fetch(url)` does not send would bring the defect back,
+and honouring `Vary` buys this worker nothing: the precache is keyed by URL
+by construction.
+
+### Fix
+
+`web/public/sw.js`: a `MATCH = { ignoreVary: true }` constant, used by every
+lookup that answers a page's request. That means `cacheFirst`, both lookups in
+`networkFirst`, and the two `/try/` shell fallbacks. It applies when matching,
+so entries that are already cached benefit without being fetched again.
+
+### The test could not see what it was waiting for
+
+`waitForController` was an `async` predicate passed to `page.waitForFunction`.
+Playwright's poller does `const success = predicate(); if (success) ...`
+(playwright-core's `coreBundle.js`) and never awaits the result. An `async`
+predicate's Promise is truthy, so the wait passed on its first poll whether
+or not the page had a controller, and it could not have failed. It is now a
+synchronous `!!navigator.serviceWorker?.controller`. Its budget is now
+waitForPackCached's 120s, because sw.js claims the page in `activate`, and
+`activate` follows an `install` that precaches the whole pack.
+`sw-dev.spec.js` had the same pattern in two waits. Those are now
+`expect.poll` over a helper that returns -1 while the page is between
+documents. The teardown under test ends in a reload, which the no-op wait
+had never had to survive, and `expect.poll` does not retry a callback that
+throws.
+
+### Verification
+
+Run with the container's Chromium 141 (`launchOptions.executablePath`), not
+Playwright 1.63's pinned 153. CI uses the pinned build.
+
+- `tests/docs-offline.spec.js`: 4/4. `--repeat-each=3 --workers=1`: 12/12.
+- **Counter-check:** with the pre-fix `dist/client/sw.js` copied back into
+  the same build, the new spec fails at the same wait (now line 159), with
+  2 tests not run.
+- `tests/sw-dev.spec.js`: 15/15 under `--repeat-each=5`.
+- Do not stress this spec with `--repeat-each` across several workers. Every
+  copy shares port 3111 and kills "its" server, so one copy's `stopServer`
+  cuts another's install short ("pack never finished caching" with the end
+  of the alphabet missing). CI runs one copy.
