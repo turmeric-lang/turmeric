@@ -1,8 +1,8 @@
 # Plan: a browser scscm REPL on hcsynth, with Saffron as the default language
 
 > Status: draft -- not started. Facts below were read from the tree on 2026-10-10.
-> Scope: a **new public GPL-3.0 repo in the turmeric-lang org** (name TBD,
-> e.g. `scscm-repl`) holding the REPL; `spices/scscm/` (turmeric-spices) supplies
+> Scope: a **new public GPL-3.0 repo in the turmeric-lang org** named
+> **HyperREPL** (`turmeric-lang/hyper-repl`, working name) holding the REPL; `spices/scscm/` (turmeric-spices) supplies
 > the compiler; the hypercollider browser build supplies the audio runtime.
 > Try Turmeric (`web/`) is a reference for patterns, not the host. No compiler
 > change in the MVP.
@@ -144,7 +144,7 @@ sclang positions (hypercollider's source-map phase H4 is not done).
 ### B1. `scscm.wasm` (O2)
 
 A tiny Turmeric entry point exporting `scscm_compile`, built with the existing
-`tur` -> C -> `emcc` path into the new repo's `public/scscm/`. Runs in its own Worker
+`tur` -> C -> `emcc` path into HyperREPL's `public/scscm/`. Runs in its own Worker
 (consistent with the eval worker; a pathological input cannot freeze the page).
 **Done when** the testing plan's corpus compiles identically through the WASM
 module and the native build, in a Playwright test.
@@ -169,7 +169,7 @@ browser (manual) and a Playwright test passes against a stubbed `AudioContext`.
 
 ### B3. The page
 
-The page lives in the new repo (section 7), not in `web/`. It borrows Try's
+The page lives in HyperREPL (section 7), not in `web/`. It borrows Try's
 patterns (Monaco setup, theme, the share codec in `web/share-codec.js`, the eval
 Worker and its watchdog) by copying what it needs -- the sources are MIT, so
 they can be included in a GPL-3.0 work -- rather than depending on Try's build.
@@ -206,7 +206,7 @@ Port 3000 is the developer's own server -- the suite already picks its own.
   same site, not fetched from a release URL.
 - **No live `scsynth` from the page** by default. A strict CSP with `connect-src
   'self'` (as Try has) blocks a WebSocket to hypercollider's local OSC bridge. The
-  new repo sets its own CSP; allowing `ws://localhost` is a separate, deliberate
+  HyperREPL sets its own CSP; allowing `ws://localhost` is a separate, deliberate
   choice and not part of the MVP.
 - **First-sound latency:** ~2.1 MB gzipped plus class-library startup. Show
   progress, and measure time-to-sound before promising a number.
@@ -236,8 +236,12 @@ Port 3000 is the developer's own server -- the suite already picks its own.
    Turmeric's own repos and Try stay MIT; turmeric-lang.com only links out.
    (Not legal advice.)
 2. **Which reading of "Saffron default"** (section 0).
-3. **Where the artifacts live and who rebuilds them** when hypercollider changes:
-   vendored into the new repo, fetched at build time from a pinned hypercollider
-   release with a checksum, or a git submodule (a submodule also gives the source
-   offer for free). Repo name and deployment host (Cloudflare vs Pages) are open.
+3. **Where the artifacts live -- decided: a git submodule.** hypercollider is a
+   submodule of HyperREPL pinned at the commit the shipped WASM is built from, so
+   the pin is the source offer (a clone at that commit is the corresponding
+   source) and bumping hypercollider is one visible diff. HyperREPL's build runs
+   the Emscripten build of the submodule (or consumes a release built from that
+   same commit and checks it against the pin). Open: the deployment host
+   (Cloudflare vs Pages, see the COOP/COEP note) and whether CI builds the WASM or
+   a release artifact is consumed.
 4. **Is O1-first acceptable** as a stepping stone to ship sound early?
