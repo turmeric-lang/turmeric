@@ -1,0 +1,47 @@
+;; A handler clause that calls a PURE higher-order function before resuming.
+;; Such a function is colored -- it calls through its fn parameter -- so the
+;; call was threaded as a cps->cps tail call, which the handler-case grammar
+;; does not admit: the enclosing function was evicted and every `perform` of
+;; the effect was refused ("this effect operation has no lowering here").
+;; With a runtime-pure row the callee can perform nothing that escapes it,
+;; so inside a clause it now runs on its direct entry.
+(defeffect Ask [] :int)
+(defeffect Inner [] :int)
+
+(defn app [f : (fn [int] int) x : int] : int (f x))
+(defn callf [^fat f : (fn [int] int) x : int] : int (f x))
+(defn dbl [x : int] : int (* x 2))
+(defn inc [x : int] : int (+ x 1))
+
+;; colored because it installs a handler, but its row is pure
+(defn self-handled [] : int
+  (handle (+ 1 (perform (Inner)))
+    (Inner [] k) (resume k 41)))
+
+(defn body [] : int (+ (perform (Ask)) 1))
+
+;; the call is the resumed value: 10 + 1 = 11
+(defn c1 [] : int
+  (handle (body) (Ask [] k) (resume k (app dbl 5))))
+
+;; a `let` in the clause, then a resume: (2 + 1) + 1 = 4
+(defn c2 [] : int
+  (handle (body)
+    (Ask [] k) (let [v (app inc 1)] (resume k (+ v 1)))))
+
+;; a ^fat parameter: 14 + 1 = 15
+(defn c3 [] : int
+  (handle (body) (Ask [] k) (resume k (callf dbl 7))))
+
+;; a colored callee that handles its own effect: 42 + 1 = 43
+(defn c4 [] : int
+  (handle (body) (Ask [] k) (resume k (self-handled))))
+
+;; and the same functions called outside any clause, after the handles
+(defn main [] : int
+  (println (c1))
+  (println (c2))
+  (println (c3))
+  (println (c4))
+  (println (+ (app dbl 8) (callf inc 9)))
+  0)

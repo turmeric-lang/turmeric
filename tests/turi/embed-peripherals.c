@@ -9,6 +9,8 @@
  *   Gap 6 -- closure origin-env tag (debug-only; exercised, not assert-tripped)
  *   Gap 7 -- turi_env_set_interpret_mode (per-env mode snapshot)
  *   Gap 8 -- turi_env_set_shared_spice_image (borrowed image not double-freed)
+ *   Gap 9 -- turi_env_set_search_path_for (imports resolve as `tur run` would)
+ *            and turi_env_set_toplevel_imports (a turn may import)
  *
  * Compile with:
  *   cmake --build build --target tur_embed_peripherals
@@ -18,6 +20,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "turi/eval.h"
 
@@ -295,6 +299,149 @@ static void test_typed_native(void) {
     tur_native_sig_clear();
 }
 
+/* --- Gap 9: an embedder's imports resolve the way `tur run <file>` does -- */
+/* The notebook spice evaluates cells for a .tur.md file and could import
+ * nothing: the env searched only the process cwd and the stdlib
+ * (docs/archive/notebook-eval-no-module-base-dir.md).  Build a workspace in a
+ * scratch dir -- a spice `app` with a module of its own, a `:path` dep `dep`,
+ * a workspace sibling `sib`, and a module beside the note -- and import all
+ * four through one call. */
+static void write_file(const char *dir, const char *rel, const char *text) {
+    char p[1024];
+    snprintf(p, sizeof(p), "%s/%s", dir, rel);
+    FILE *f = fopen(p, "w");
+    if (!f) { fprintf(stderr, "FAIL [cannot write %s]\n", p); failures++; return; }
+    fputs(text, f);
+    fclose(f);
+}
+
+/* MinGW's mkdir takes no mode, and its CRT does not promise mkdtemp; the
+ * Windows job builds this harness but does not run it. */
+#if defined(_WIN32)
+#include <direct.h>
+#define EP_MKDIR(p) _mkdir(p)
+static char *ep_mkdtemp(char *tmpl) {
+    if (!_mktemp(tmpl)) return NULL;
+    return _mkdir(tmpl) == 0 ? tmpl : NULL;
+}
+#else
+#define EP_MKDIR(p) mkdir((p), 0755)
+#define ep_mkdtemp mkdtemp
+#endif
+
+static void make_dir(const char *dir, const char *rel) {
+    char p[1024];
+    snprintf(p, sizeof(p), "%s/%s", dir, rel);
+    EP_MKDIR(p);
+}
+
+static void test_search_path_for(void) {
+    char root[512];
+#if defined(_WIN32)
+    const char *tmp = getenv("TEMP") ? getenv("TEMP") : ".";
+#else
+    const char *tmp = "/tmp";
+#endif
+    snprintf(root, sizeof(root), "%s/tur-embed-search-XXXXXX", tmp);
+    if (!ep_mkdtemp(root)) { CHECK(0, "mkdtemp for the search-path workspace"); return; }
+    const char *dirs[] = { "ws", "ws/app", "ws/app/src", "ws/app/src/app",
+                           "ws/app/notes", "ws/dep", "ws/dep/src", "ws/dep/src/dep",
+                           "ws/sib", "ws/sib/src", "ws/sib/src/sib", "loose" };
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) make_dir(root, dirs[i]);
+    write_file(root, "ws/build.tur",
+               "(defpackage ws :name \"ws\" :members [\"app\" \"sib\"])\n");
+    write_file(root, "ws/app/build.tur",
+               "(defpackage app :name \"app\"\n"
+               "  :spices #map{\"dep\" #map{:path \"../dep\"}})\n");
+    write_file(root, "ws/dep/build.tur", "(defpackage dep :name \"dep\")\n");
+    write_file(root, "ws/sib/build.tur", "(defpackage sib :name \"sib\")\n");
+    write_file(root, "ws/app/src/app/core.tur",
+               "(defmodule app/core (export core-val) (defn core-val [] : int 30))\n");
+    write_file(root, "ws/dep/src/dep/lib.tur",
+               "(defmodule dep/lib (export dep-val) (defn dep-val [] : int 7))\n");
+    write_file(root, "ws/sib/src/sib/util.tur",
+               "(defmodule sib/util (export sib-val) (defn sib-val [] : int 4))\n");
+    write_file(root, "ws/app/notes/beside.tur",
+               "(defmodule beside (export beside-val) (defn beside-val [] : int 1))\n");
+
+    char note[1024];
+    snprintf(note, sizeof(note), "%s/ws/app/notes/walkthrough.tur.md", root);
+    const char *prog =
+        "(import app/core :refer [core-val])\n"
+        "(import dep/lib :refer [dep-val])\n"
+        "(import sib/util :refer [sib-val])\n"
+        "(import beside :refer [beside-val])\n"
+        "(+ (core-val) (+ (dep-val) (+ (sib-val) (beside-val))))\n";
+
+    /* Controls: without the search path nothing outside the cwd and stdlib
+     * resolves, and without toplevel imports a bare `(import ...)` is still
+     * the defmodule error it is in a compiled file. */
+    TuriEnv *bare = turi_env_new();
+    turi_env_set_toplevel_imports(bare, true);
+    TuriValue vb = turi_eval(bare, "(import dep/lib :refer [dep-val]) (dep-val)");
+    CHECK(turi_is_error(vb), "search path: a bare env cannot import a spice module");
+    turi_env_free(bare);
+    TuriEnv *strict = turi_env_new();
+    turi_env_set_search_path_for(strict, note);
+    TuriValue vs = turi_eval(strict, "(import dep/lib :refer [dep-val]) (dep-val)");
+    CHECK(turi_is_error(vs), "toplevel imports: off by default");
+    TuriValue vm = turi_eval(strict,
+        "(defmodule probe (import dep/lib :refer [dep-val])"
+        " (export probe-val) (defn probe-val [] : int (dep-val)))");
+    CHECK(!turi_is_error(vm), "search path: a defmodule's import resolves without them");
+    turi_env_free(strict);
+
+    TuriEnv *env = turi_env_new();
+    turi_env_set_toplevel_imports(env, true);
+    int n = turi_env_set_search_path_for(env, note);
+    CHECK(n == 3, "search path: own src/, the :path dep and the workspace sibling");
+    TuriValue v = turi_eval(env, prog);
+    CHECK(!turi_is_error(v) && v.tag == TURI_INT && v.as_int == 42,
+          "search path: all four imports resolve (30+7+4+1)");
+    /* The Jupyter model: a referred name and an alias outlive their turn, and
+     * re-running an import turn is harmless. */
+    TuriValue v1 = turi_eval(env, "(import dep/lib :as d)");
+    TuriValue v3 = turi_eval(env, "(+ (d/dep-val) (core-val))");
+    CHECK(!turi_is_error(v1) && !turi_is_error(v3) && v3.as_int == 37,
+          "toplevel imports: :as and :refer resolve on a later turn");
+    TuriValue v4 = turi_eval(env, prog);
+    CHECK(!turi_is_error(v4) && v4.as_int == 42, "toplevel imports: a re-run turn");
+    TuriValue v5 = turi_eval(env, "(import dep/lib :refer [no-such])");
+    CHECK(turi_is_error(v5), "toplevel imports: an unexported :refer is an error");
+
+    /* It survives a reset, and a second call replaces the owned list. */
+    turi_env_reset(env);
+    TuriValue v2 = turi_eval(env, "(import dep/lib :refer [dep-val]) (dep-val)");
+    CHECK(!turi_is_error(v2) && v2.as_int == 7, "search path: survives turi_env_reset");
+    n = turi_env_set_search_path_for(env, note);
+    CHECK(n == 3, "search path: a second call replaces the list");
+
+    /* Outside any build.tur only the base dir is set. */
+    char loose[1024];
+    snprintf(loose, sizeof(loose), "%s/loose/x.tur", root);
+    n = turi_env_set_search_path_for(env, loose);
+    CHECK(n == 0, "search path: no enclosing build.tur adds no dirs");
+    n = turi_env_set_search_path_for(env, NULL);
+    CHECK(n == 0, "search path: NULL clears it");
+    turi_env_free(env);
+
+    /* Leave nothing behind. */
+    const char *files[] = { "ws/build.tur", "ws/app/build.tur", "ws/dep/build.tur",
+                            "ws/sib/build.tur", "ws/app/src/app/core.tur",
+                            "ws/dep/src/dep/lib.tur", "ws/sib/src/sib/util.tur",
+                            "ws/app/notes/beside.tur" };
+    char p[1024];
+    for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        snprintf(p, sizeof(p), "%s/%s", root, files[i]);
+        unlink(p);
+    }
+    for (size_t i = sizeof(dirs) / sizeof(dirs[0]); i-- > 0;) {
+        snprintf(p, sizeof(p), "%s/%s", root, dirs[i]);
+        rmdir(p);
+    }
+    rmdir(root);
+}
+
 int main(void) {
     turi_init(false);
 
@@ -307,6 +454,7 @@ int main(void) {
     test_closure_origin_same_env();
     test_interpret_mode();
     test_shared_spice_image();
+    test_search_path_for();
 
     if (failures == 0) {
         printf("\nAll embed-peripheral tests passed.\n");

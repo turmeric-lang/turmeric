@@ -2764,6 +2764,8 @@ void elab_session_free(ElabSession *session) {
         free(e->macros);
         free(e->macro_expansion_stack);
         free(e->loaded_modules);
+        free((void *)e->toplevel_alias_names);
+        free((void *)e->toplevel_alias_modules);
         free(e->dynvar_entries);
         free(e->active_dynvar_bindings);
         free((void *)e->load_expanded_paths);
@@ -2844,6 +2846,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     }
     e.user_macros = user_macros;
     e.module_base_dir = module_base_dir ? module_base_dir : ".";
+    e.toplevel_imports = g_elab_toplevel_imports;
     /* stdlib fallback: TUR_STDLIB_DIR env var, else "stdlib" */
     {
         const char *sdir = getenv("TUR_STDLIB_DIR");
@@ -3674,6 +3677,8 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         free(e.macros);
         free(e.macro_expansion_stack);
         free(e.loaded_modules); /* Phase M2 */
+        free((void *)e.toplevel_alias_names);
+        free((void *)e.toplevel_alias_modules);
         free(e.dynvar_entries);
         free(e.active_dynvar_bindings);
         free((void *)e.load_expanded_paths);

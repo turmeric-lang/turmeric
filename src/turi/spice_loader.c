@@ -352,7 +352,7 @@ static int run_build(const char *tur_bin, const char *root,
      * the user sees the actual diagnostic from the compiler. */
     char cmd[20000];
     snprintf(cmd, sizeof(cmd),
-             "%s build --shared %s -o %s --manifest %s >" TUR_DEVNULL " 2>&1",
+             "%s build --shared --bundle-deps %s -o %s --manifest %s >" TUR_DEVNULL " 2>&1",
              q_bin, q_root, q_lib, q_mf);
     /* cmd.exe eats the outer quote pair of a /c string, so give it one of
      * ours to eat -- otherwise a quoted program plus quoted arguments comes
@@ -368,7 +368,7 @@ static int run_build(const char *tur_bin, const char *root,
     fprintf(stderr,
             "tur repl: spice rebuild failed; replaying with full output:\n");
     snprintf(cmd, sizeof(cmd),
-             "%s build --shared %s -o %s --manifest %s",
+             "%s build --shared --bundle-deps %s -o %s --manifest %s",
              q_bin, q_root, q_lib, q_mf);
     if (tur_shell_command(cmd, wrapped, sizeof(wrapped)) != 0) return -1;
     int _sys_ret = system(wrapped); (void)_sys_ret;
@@ -402,6 +402,8 @@ static char class_for_tag(const char *tag, bool is_return) {
      || strcmp(tag, ":never")  == 0) {
         return 'i';
     }
+    /* A by-value record: its bytes cross through a pointer (ffi_thunk.c). */
+    if (strcmp(tag, ":record") == 0) return 's';
     if (strcmp(tag, ":float")   == 0
      || strcmp(tag, ":float32") == 0
      || strcmp(tag, ":float64") == 0) {
@@ -441,6 +443,7 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
     e->name = name;
     e->mangled = mangled;
     e->ret_class = ret_class;
+    e->ret_tag = 0;
     e->n_args = n_args;
     e->is_variadic = is_variadic;
     e->rest_class = rest_class;
@@ -462,15 +465,19 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
 static int parse_manifest_line(TurSpiceImage *img, char *line) {
     char *p = skip_ws(line);
     if (*p == '\0' || *p == '#') return 0;     /* blank / comment */
-    /* module */
-    char *slash = strchr(p, '/');
+    /* `<module>/<name> -> ...`, where a module name nests (`stats/rng`):
+     * the name is what follows the LAST slash before the arrow.  Splitting
+     * at the first one bound `stats/rng/rng-make` as module `stats`, name
+     * `rng/rng-make`, so no export of a nested module had its own name. */
+    char *arrow = strstr(p, " -> ");
+    if (!arrow) return -1;
+    char *slash = NULL;
+    for (char *q = p; q < arrow; q++) if (*q == '/') slash = q;
     if (!slash) return -1;
     *slash = '\0';
     char *module = strdup(p);
     p = skip_ws(slash + 1);
     /* name (up to ` -> `) */
-    char *arrow = strstr(p, " -> ");
-    if (!arrow) { free(module); return -1; }
     *arrow = '\0';
     /* defn name may have trailing whitespace */
     char *end = arrow;
@@ -552,6 +559,8 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
            && *ret_end != '\n' && *ret_end != '\r') ret_end++;
     *ret_end = '\0';
     char ret_class = class_for_tag(p, /*is_return=*/true);
+    char ret_tag = strcmp(p, ":cstr") == 0 ? 'c'
+                 : strcmp(p, ":bool") == 0 ? 'b' : 0;
     /* Resolve the symbol -- J2 in-process images resolve through the jit
      * hook's MIR item lookup; the dlopen path keeps dlsym.  Either way a
      * miss is a hard error: the manifest and the image have drifted out of
@@ -607,9 +616,11 @@ static int parse_manifest_line(TurSpiceImage *img, char *line) {
         }
     }
     /* Ownership of arg_classes transfers to the export. */
-    return append_export(img, module, name, mangled, ret_class,
-                          arg_classes, n_args, is_variadic, rest_class,
-                          fn_ptr, ffi_shim);
+    int arc = append_export(img, module, name, mangled, ret_class,
+                            arg_classes, n_args, is_variadic, rest_class,
+                            fn_ptr, ffi_shim);
+    if (arc == 0) img->exports[img->n_exports - 1].ret_tag = ret_tag;
+    return arc;
 }
 
 /* J2: parse manifest TEXT (the jit hook returns it in memory; there is no
@@ -778,7 +789,13 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
 
 subprocess_path:
     if (needs_rebuild(build_dir, lib_path, tur_bin)) {
-        if (run_build(tur_bin, build_dir, lib_path, manifest_path) != 0) {
+        /* Build the ROOT, with its :spices deps linked in.  Given `<root>/src`
+         * -- a directory with no build.tur -- `tur build` never read the
+         * manifest, so a spice whose sources import a dep (notebook's tui.tur
+         * imports ansi/term) failed "module not found"; and a plain --shared
+         * build of the root leaves the deps' code out, which an image dlopen'd
+         * on its own cannot do without.  build_dir stays the freshness root. */
+        if (run_build(tur_bin, root, lib_path, manifest_path) != 0) {
             free(root);
             return -1;
         }

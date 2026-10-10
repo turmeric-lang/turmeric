@@ -217,6 +217,7 @@ set(TUR_CORE_SOURCES
     compiler/forms.c
     compiler/span_audit.c
     compiler/pkg.c
+    compiler/spice_search.c
     compiler/justrun.c
     compiler/global.c
     compiler/install.c
@@ -1129,6 +1130,28 @@ target_link_options(tur_embed_peripherals PRIVATE -pthread
 set_target_properties(tur_embed_peripherals PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+
+# notebook-cells-cannot-call-inline-c-spices: turi_env_attach_spice harness.
+# ENABLE_EXPORTS (-rdynamic): the spice image it dlopens resolves the runtime
+# it shares with the host against this executable, as any embedder's must.
+# POSIX hosts only, like the REPL spice tests (dlopen'd .so, mkdtemp).
+if(NOT WIN32)
+add_executable(tur_embed_attach_spice ${CMAKE_SOURCE_DIR}/tests/turi/embed-attach-spice.c)
+target_include_directories(tur_embed_attach_spice PRIVATE ${TUR_INCLUDE_DIRS})
+target_link_libraries(tur_embed_attach_spice PRIVATE libturi)
+target_compile_options(tur_embed_attach_spice PRIVATE
+    -Wall -Wextra -Wno-unused-parameter ${TUR_CSTD} -pthread
+    $<$<CONFIG:Debug>:   -Og -g ${TUR_ASAN_FLAGS} -DTUR_DEBUG=1>
+    $<$<CONFIG:Release>: -O2 -DNDEBUG>
+)
+target_link_options(tur_embed_attach_spice PRIVATE -pthread
+    $<$<CONFIG:Debug>:   ${TUR_ASAN_FLAGS}>
+)
+set_target_properties(tur_embed_attach_spice PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    ENABLE_EXPORTS ON
+)
+endif()
 
 # ---------------------------------------------------------------------------
 # SB0: tur_eval_sandbox -- sandboxed environment test harness

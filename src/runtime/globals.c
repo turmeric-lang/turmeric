@@ -196,6 +196,7 @@ bool g_symbols_enabled = true;
 
 /* INT-2: --interpret mode — true when running tur --interpret. */
 bool g_interpret_mode = false;
+bool g_elab_toplevel_imports = false;  /* turi_env_set_toplevel_imports */
 
 /* `tur expand`: dump macro expansions during elaboration. */
 bool g_dump_expansion = false;

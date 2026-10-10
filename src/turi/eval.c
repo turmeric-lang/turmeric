@@ -2255,6 +2255,17 @@ static AggFieldClass agg_field_class_in(const AggRec *owner, const CtorField *f,
     AggFieldClass cls = AGGF_SCALAR;
 
     const AdtDef *ad_adt = (ft.kind == TY_ADT) ? ft.as.adt_.def : NULL;
+    /* A :heap ADT -- `(Vec float)`, a lowered collection -- and an opaque
+     * handle are one pointer-sized word in the record's C layout (the
+     * emitter declares the field `int64_t`), so they ride as a word, ahead of
+     * the by-value-product test an app of a :heap ADT also passes.  linalg's
+     * `mat` holds its `(Vec float)` that way. */
+    if ((ad_adt && (ad_adt->is_heap || ad_adt->is_opaque)) ||
+        (ft.kind == TY_APP && type_is_heap_adt(ft))) {
+        if (out_kind) *out_kind = TY_INT;
+        if (!out_owned) free_struct_app_type(ft);
+        return AGGF_SCALAR;
+    }
     /* Mirrors adt_field_is_inline_byval_d's own conditions per kind: a :heap
      * ADT is a typed pointer, and drop glue would make the owner non-trivially
      * copyable, so neither inlines. */
@@ -5551,9 +5562,19 @@ static int ic_common_field_idx(const char *fname, size_t flen) {
     return -1;
 }
 
-/* Execute free pattern */
-static TuriValue ic_exec_free(TuriValue *args, uint32_t n_args) {
-    if (n_args >= 1) { void *p = (void*)(intptr_t)args[0].as_int; if (p) free(p); }
+/* Execute free pattern.  The constructor pattern below builds its "malloc"
+ * in the env's value pool (turi_val_alloc), so the free that pairs with it
+ * must not hand that pointer to libc: a `(dist-free (dist-normal 0.0 1.0))`
+ * pair was an AddressSanitizer bad-free (heap corruption without one).  Only
+ * memory the pool does not own is the program's own malloc to release --
+ * native_option_free (interpreter_natives.c) draws the same line. */
+static TuriValue ic_exec_free(TuriEnv *env, TuriValue *args, uint32_t n_args) {
+    if (n_args >= 1) {
+        void *p = (void*)(intptr_t)args[0].as_int;
+        if (p && !arena_owns(&env->value_scratch, p) &&
+            !arena_owns(&env->value_perm, p))
+            free(p);
+    }
     return turi_nil();
 }
 
@@ -5640,6 +5661,19 @@ static bool ic_body_has_word(const char *body, const char *kw) {
         bool l = (p == body) || (!isalnum((unsigned char)p[-1]) && p[-1] != '_');
         bool r = (!isalnum((unsigned char)p[n]) && p[n] != '_');
         if (l && r) return true;
+    }
+    return false;
+}
+
+/* True if `body` writes or reads a struct field named exactly `field` through
+ * `->` (`s->p`, not `s->p1`). */
+static bool ic_body_has_field(const char *body, const char *field) {
+    size_t n = strlen(field);
+    for (const char *p = strstr(body, "->"); p; p = strstr(p + 2, "->")) {
+        const char *f = p + 2;
+        while (*f == ' ' || *f == '\t') f++;
+        if (strncmp(f, field, n) == 0 && !isalnum((unsigned char)f[n]) && f[n] != '_')
+            return true;
     }
     return false;
 }
@@ -5756,9 +5790,15 @@ static int ic_constructor_leading_guard(const char *body, const char *limit,
 static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
                                       TuriValue *args, uint32_t n_args,
                                       FnDef *fn, uint32_t param_offset) {
-    /* Special case: string fat-pointer constructor (->p and ->len via strlen/while) */
+    /* Special case: string fat-pointer constructor (->p and ->len via strlen/while).
+     * The fields are matched as whole names: as bare substrings `dist->p1` and
+     * `out->length` read as `->p` and `->len`, and stats' random-n -- two
+     * allocations and a sampling loop -- was "constructed" as a fat pointer
+     * over its first argument, strlen and all. */
     if ((strstr(body,"strlen")||strstr(body,"while")) &&
-         strstr(body,"->p") && strstr(body,"->len") && n_args >= 1) {
+         ic_body_has_field(body, "p") && ic_body_has_field(body, "len") &&
+         n_args >= 1 && !ic_body_has_word(body, "for") &&
+         ic_body_count_sub(body, "malloc(") + ic_body_count_sub(body, "calloc(") <= 1) {
         const char *cstr = (args[0].tag==TURI_CSTR) ? args[0].as_cstr
                                                      : (const char*)(intptr_t)args[0].as_int;
         size_t len = cstr ? strlen(cstr) : 0;
@@ -5850,11 +5890,14 @@ static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
             int elen=(int)(p-expr_start);
             while (elen>0&&(expr_start[elen-1]==' '||expr_start[elen-1]=='\t'||
                             expr_start[elen-1]=='\n'||expr_start[elen-1]=='\r')) elen--;
+            /* A value the evaluator cannot compute declines the body: storing
+             * 0 for it (`p->head = ux.i;`, a union pun) built a struct with a
+             * zero field and the program went on with it, silently. */
             int64_t fval=0;
-            if (elen>0&&elen<(int)sizeof(expr_buf)) {
-                memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
-                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
-            }
+            if (elen<=0||elen>=(int)sizeof(expr_buf)) return turi_nil();
+            memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
+            if (!ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body))
+                return turi_nil();
             field_vals[n_fields++]=fval;
             if(*p) p++;
             continue;
@@ -5881,10 +5924,10 @@ static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
             while(elen>0&&(expr_start[elen-1]==' '||expr_start[elen-1]=='\t'||
                            expr_start[elen-1]=='\n'||expr_start[elen-1]=='\r')) elen--;
             int64_t fval=0;
-            if (elen>0&&elen<(int)sizeof(expr_buf)) {
-                memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
-                ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body);
-            }
+            if (elen<=0||elen>=(int)sizeof(expr_buf)) return turi_nil();
+            memcpy(expr_buf,expr_start,(size_t)elen); expr_buf[elen]='\0';
+            if (!ic_eval_assign_expr(expr_buf,fn,param_offset,args,n_args,&fval,body))
+                return turi_nil();
             /* idx must match n_fields (sequential) */
             if ((long long)n_fields==idx) field_vals[n_fields++]=fval;
             else if (idx>=0&&idx<IC_MAX_FIELDS) {
@@ -5896,13 +5939,19 @@ static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
             continue;
         }
 
-        /* Skip other statements */
+        /* Skip other statements -- a declaration, an OOM guard, a call.  An
+         * assignment is not skippable: whatever it writes (`ux.d = x;`, a
+         * local a later field reads) is state this model does not keep, so
+         * the body declines rather than build the struct without it. */
         int d2=0;
         while(*p&&(*p!=';'||d2>0)) {
             if(*p=='(') d2++; else if(*p==')') d2--;
             else if(*p=='"') {p++;while(*p&&*p!='"'){if(*p=='\\')p++;p++;}}
             else if(*p=='{') d2++;
             else if(*p=='}') { if(d2>0) d2--; else break; }
+            else if(*p=='=' && d2==0 && p[1]!='=' &&
+                    !(p>body && (p[-1]=='='||p[-1]=='!'||p[-1]=='<'||p[-1]=='>')))
+                return turi_nil();
             p++;
         }
         if(*p==';') p++;
@@ -6738,7 +6787,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
      * also computes/returns a value or fat-dispatches a closure (those merely
      * happen to contain a `*_free(` token and must not be reduced to free(arg0)). */
     if (has_free && !has_malloc && !has_return && !has_fptr) {
-        *out = ic_exec_free(args, n_args);
+        *out = ic_exec_free(env, args, n_args);
         return ic_claim("free", fn, out);
     }
 
@@ -11953,6 +12002,57 @@ static TuriValue eval_expr(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     return eval_expr_impl(env, frame, e);
 }
 
+/* notebook-cells-cannot-call-inline-c-spices: a spice export that takes or
+ * returns a by-value record crosses the FFI as the record's C bytes.  The
+ * manifest says only `:record`; the module's own defn, evaluated by the
+ * import, says which -- so when an import keeps such a native, hand it the
+ * layout of its whole signature (agg_sig_build, as an aggregate extern-c
+ * does) and the record def of each slot.  An opaque handle is a word there,
+ * not an aggregate. */
+static Type ffi_rec_slot_type(Type t) {
+    if (t.kind == TY_ADT && t.as.adt_.def && t.as.adt_.def->is_opaque)
+        return TYPE_INT;
+    return t;
+}
+
+static void ffi_note_export_records(const Expr *e, const FnDef *fd,
+                                    TuriClosure *cl) {
+    uint32_t n = fd->n_params;
+    bool have_fn = e->type.kind == TY_FN;
+    Type *pt = (Type *)calloc(n ? n : 1, sizeof(Type));
+    size_t *arg_at = (size_t *)calloc(n ? n : 1, sizeof(size_t));
+    const AdtDef **defs = (const AdtDef **)calloc((size_t)n + 1, sizeof(*defs));
+    char *sig = NULL;
+    if (!pt || !arg_at || !defs) goto fail;
+    for (uint32_t j = 0; j < n; j++) {
+        const Type *full = (have_fn && e->type.as.fn.arg_full_types &&
+                            j < e->type.as.fn.arity)
+                         ? e->type.as.fn.arg_full_types[j] : NULL;
+        Type t = full ? *full
+               : (fd->params && fd->params[j]) ? fd->params[j]->type
+                                               : fd->param_types[j];
+        pt[j] = ffi_rec_slot_type(t);
+        defs[1 + j] = extern_slot_agg_def(pt[j]);
+    }
+    {
+        Type rt = (have_fn && e->type.as.fn.result_full_type)
+                ? *e->type.as.fn.result_full_type : fd->return_type;
+        rt = ffi_rec_slot_type(rt);
+        defs[0] = extern_slot_agg_def(rt);
+        sig = agg_sig_build(rt, pt, n, arg_at);
+    }
+    free(pt);
+    pt = NULL;
+    if (sig && tur_ffi_native_note_records(cl->native, cl->native_ud, sig,
+                                           arg_at, defs, n))
+        return;
+fail:
+    free(pt);
+    free(sig);
+    free(arg_at);
+    free(defs);
+}
+
 static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
     if (!e) return turi_nil();
 
@@ -12210,6 +12310,40 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         /* The key whose existing native (if any) must not be clobbered. For a
          * private defn that is the qualified key; otherwise the bare name. */
         const char *primary_key = qkey ? qkey : fname;
+
+        /* notebook-cells-cannot-call-inline-c-spices: an export bound from the
+         * spice's compiled image (turi_env_attach_spice, `tur repl` spice
+         * auto-discovery) is this very defn, compiled -- keep it whatever the
+         * body's shape.  The inline-C rule below covers only a body that IS
+         * inline-C; frame's `read-csv-string` is a Turmeric wrapper over
+         * private inline-C helpers, so importing frame/csv replaced the working
+         * native with a closure whose first call the interpreter refused.
+         * Keyed on the defining module, so a same-named defn the user writes
+         * in a cell still takes over.  The export is found under its
+         * qualified name, which the binder always registers (the bare name
+         * only when nothing else held it); the import then publishes it under
+         * the bare name exactly as it would have published the closure. */
+        if (modname && exported) {
+            char qname[512];
+            int qn = snprintf(qname, sizeof qname, "%s/%s", modname, fname);
+            TuriValue nat = (qn > 0 && (size_t)qn < sizeof qname)
+                          ? turi_env_get(env, qname) : turi_nil();
+            if (nat.tag == TURI_CLOSURE && nat.as_closure &&
+                nat.as_closure->native) {
+                const char *smod = tur_ffi_native_spice_module(
+                    nat.as_closure->native, nat.as_closure->native_ud);
+                if (smod && strcmp(smod, modname) == 0) {
+                    if (tur_ffi_native_wants_records(nat.as_closure->native,
+                                                     nat.as_closure->native_ud))
+                        ffi_note_export_records(e, fndef, nat.as_closure);
+                    TuriValue bare = turi_env_get(env, fname);
+                    if (bare.tag != TURI_CLOSURE ||
+                        bare.as_closure != nat.as_closure)
+                        turi_env_set(env, fname, nat);
+                    return nat; /* keep the compiled export */
+                }
+            }
+        }
 
         /* If the body is inline-C and a native override is already registered
          * under the primary key, keep the native rather than overwriting it. */
@@ -14536,6 +14670,8 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src, const char *
      * for the other.  A NULL env falls through to turi_eval_impl's own guard. */
     bool saved_mode = g_interpret_mode;
     if (env) g_interpret_mode = env->interpret_mode;
+    bool saved_toplevel_imports = g_elab_toplevel_imports;
+    g_elab_toplevel_imports = env && env->toplevel_imports;
     /* r7rs-lang-plan R9: where the pinned preload ends in the `<eval>` text
      * this call elaborates (g_synthetic_user_from_line, globals.h). */
     uint32_t saved_user_line = g_synthetic_user_from_line;
@@ -14553,6 +14689,7 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src, const char *
     }
 
     g_interpret_mode = saved_mode;
+    g_elab_toplevel_imports = saved_toplevel_imports;
     g_synthetic_user_from_line = saved_user_line;
     return r;
 }

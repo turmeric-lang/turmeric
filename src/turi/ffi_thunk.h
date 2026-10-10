@@ -38,6 +38,32 @@ extern "C" {
  * with NULL img -- returns 0. */
 uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img);
 
+/* The same, for an image an embedder attaches (turi_env_attach_spice): the
+ * per-export user data and qualified names are freed with the env instead of
+ * leaked at process exit, and an export the shim cannot marshal (a struct
+ * return or argument) is left unbound, so its interpreted defn still runs.
+ * Returns the number bound. */
+uint32_t tur_ffi_install_spice_bindings_owned(TuriEnv *env, TurSpiceImage *img);
+
+/* The defmodule a native was bound from, when it is a spice-image export
+ * installed by either function above; NULL for any other native.  The
+ * interpreter asks so that evaluating the spice's own source (an `import` of
+ * the module) does not replace the compiled export with its interpreted defn. */
+const char *tur_ffi_native_spice_module(TuriNativeFn fn, const void *ud);
+
+/* A spice-image native whose export takes or returns a by-value record
+ * (manifest :record) needs the record's layout, which only the module's own
+ * declared types give.  wants_records is true until it has one; note_records
+ * hands it the layout sig of the whole signature (agg_sig_build's shape), each
+ * parameter's offset into it, and the record def per slot ([0] the result,
+ * [1 + k] parameter k, NULL for a scalar), taking ownership of the three
+ * malloc'd arrays when it returns true. */
+struct AdtDef;
+bool tur_ffi_native_wants_records(TuriNativeFn fn, const void *ud);
+bool tur_ffi_native_note_records(TuriNativeFn fn, void *ud, char *sig,
+                                 size_t *arg_at, const struct AdtDef **defs,
+                                 uint32_t n_params);
+
 /* jit-ffi-c2mir-plan F2: bind `name` to a thunk-backed native that calls
  * the resolved C function `fn` with the signature described by `ret_class`
  * + `arg_classes[n]` (the 'i'/'f'/'F'/'v' vocabulary of turi/jit_ffi.h).

@@ -1013,6 +1013,16 @@ add_test(
   COMMAND bash tests/run-interp-inline-c-opaque.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# turi-inline-c-constructor-free-pair: the interpreter's inline-C `free(`
+# pattern handed an emulated constructor's value-pool pointer to libc free (an
+# ASan bad-free), and the fat-pointer constructor case read `d->p1` /
+# `out->length` as `->p` / `->len` and miscompiled a loop body.  Own runner for
+# the same TI7 carve-out reason as above.
+add_test(
+  NAME tur_interp_inline_c_constructor
+  COMMAND bash tests/run-interp-inline-c-constructor.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # turi-show-instance-with-inline-c-body-prints-a-pointer: a USER `Show [float]`
 # whose `show` body is inline-C printed a heap pointer under --interpret with no
 # diagnostic.  The interpreter's stdlib natives are registered under the mangled
@@ -1771,6 +1781,20 @@ add_test(
 set_tests_properties(tur_embed_peripherals PROPERTIES
   ENVIRONMENT "${TUR_LEAK_HARNESS_ASAN}"
 )
+# notebook-cells-cannot-call-inline-c-spices: an embedder attaches a spice's
+# compiled image (turi_env_attach_spice) and calls the exports the interpreter
+# cannot run.  Builds its fixture spice's image with the in-tree tur.
+if(NOT WIN32)
+  add_test(
+    NAME tur_embed_attach_spice
+    COMMAND "${CMAKE_BINARY_DIR}/tur_embed_attach_spice"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_embed_attach_spice PROPERTIES
+    ENVIRONMENT "TUR_BIN=$<TARGET_FILE:tur>;${TUR_LEAK_HARNESS_ASAN}"
+    DEPENDS tur
+  )
+endif()
 # turi-env-owned-value-arena-pool-plan: env-teardown leak harness. Unlike the
 # other turi targets (which default detect_leaks=0 because the interpreter
 # never frees its process-lifetime closures), this one runs with leak

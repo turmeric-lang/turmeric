@@ -1,18 +1,20 @@
 # An effectful function called through a local name is refused
 
+**Narrowed a fourth time 2026-10-10: a CAPTURELESS lambda used through the
+local and as a value runs too** (see "Fixed 2026-10-10" below), and so does
+one only ever passed on. **What is left:**
+
+- a lambda that RETURNS a function;
+- a lambda (capturing or not) called from inside ANOTHER closure (`g` calls
+  `f`, both `let`-bound): `g` captures `f`, which is a value use;
+- a capturing `letrec` of more than one member (mutual recursion).
+
 **Narrowed a third time 2026-10-09: a CAPTURING lambda used both through
 the local and as a value runs** (see "Fixed: a value use as well as calls"
 below). That shape was worse than this report said: it was not refused, it
 compiled and aborted `tur: unhandled effect (tag 2)` at run time. Before
 that, the same day, the capturing shapes called in place and the
-captureless shapes were fixed. **What is left:**
-
-- a lambda that RETURNS a function;
-- a CAPTURELESS lambda used both through the local AND as a value (the
-  capturing one runs now);
-- a capturing lambda called from inside ANOTHER closure (`g` calls `f`, both
-  `let`-bound): `g` captures `f`, which is a value use;
-- a capturing `letrec` of more than one member (mutual recursion).
+captureless shapes were fixed.
 
 Each is still refused, honestly, at compile time ("this effect operation has
 no lowering here"); `tur --interpret` runs them.
@@ -28,9 +30,6 @@ Found 2026-10-09 while fixing
 ```turmeric
 (defeffect Ask [] :int)
 (defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int (h x))
-(defn v1 [] : int
-  (let [g (fn [n : int] : int (+ n (perform (Ask))))]     ; captureless
-    (+ (g 1) (app g 2))))                                 ; also a value
 (defn v2 [m : int] : int
   (let [f (fn [n : int] : int (+ m n (perform (Ask))))
         g (fn [n : int] : int (* 2 (f n)))]               ; g captures f
@@ -40,7 +39,6 @@ Found 2026-10-09 while fixing
            od (fn [i : int] : int (if (= i 0) m (ev (- i 1))))]
     (ev 4)))
 (defn main [] : int
-  (println (handle (v1) (Ask [] k) (resume k 10)))     ; 23
   (println (handle (v2 5) (Ask [] k) (resume k 10)))   ; 32
   (println (handle (v3 1) (Ask [] k) (resume k 10)))   ; 11
   0)
@@ -61,16 +59,77 @@ translation does not reproduce.
 
 ## Fix directions
 
-- A captureless value-and-call local: register it as a thread local too
-  (`cps_ir_thread_local_add(b, false)` -- the thin key, `(intptr_t)g`,
-  which `e2a_lookup_key` already spells), once the tally admits its lambda
-  as threadable with the alias in play.
 - A closure capturing another local closure: when the captured closure is
   only CALLED in the capturing lambda, the call inside is the same env call
   through the env field.
 - A fn-returning lambda: the direct call to its lifted `__fn_N` returns the
   int64 carrier, not the closure (pr-386, `Binding.is_lifted_lambda`), so it
   needs the closure protocol too.
+
+## Fixed (2026-10-10): a value use as well as calls (captureless)
+
+`(let [g (fn [n : int] : int (+ n (perform (Ask))))] (+ (g 1) (app g 2)))`
+was refused. A captureless lambda's value is its direct entry, so the let's
+init is a bare `EX_VAR` naming the lifted `__fn_N`, and `g` carries no
+`closure_fn_binding`: the E2 tally counted the init as the lambda's one
+value use -- unthreadable (`uses=1 ok=0`) -- and never saw `(app g 2)`,
+which is a use of `g`. `__fn_N` stayed unthreadable, its effect tainted, and
+every function performing it was refused.
+
+- **The alias.** Before the tally, `thin_alias_collect`
+  (`src/compiler/emit_cps_ir.c`) records each immutable local bound to a
+  captureless lifted lambda that no nested closure captures and that is not
+  the all-calls rewrite's (`cps_ir_let_global_fn_alias`). The tally reads
+  such a local's value uses as the lambda's (`fvm_ref_slots`), not its init;
+  so do the withdrawal (`arg_fnval_binding`) and the parameter's thread
+  safety (`param_is_thread_safe`), so a value passed where a call through it
+  does not thread still withdraws the lambda.
+- **The call.** When the body also calls through the local, it is a thin
+  thread local (`cps_ir_thread_local_add(vb, false)` in
+  `thread_local_visit`): the call goes through the registry keyed on the
+  entry address (`e2a_lookup_key`'s `(intptr_t)g`), which already existed for
+  this case.
+- **The binding.** `let g = __fn_N` is a `CT_LETVAL` with a `TY_FN` binder,
+  which the core check refused; `letval_thin_fn_local_ok` admits it for such
+  an alias, and the emitter spells the conversion
+  (`g = (int64_t)(intptr_t)__fn_N;`).
+
+Captured, stored in a struct, or returned, the alias stays out of the table
+and those programs are refused at compile time as before. Pinned by
+`tests/fixtures/cps-local-thin-lambda-value-and-call` (leak-checked; every
+line equals `tur --interpret`): called then passed, passed then called in
+tail position, the call after a `perform`, passed only, a 100-turn loop, and
+one counting handler shared by the direct and threaded calls. No snapshot
+moved (3678 passed).
+
+Found on the way and fixed the same day, two more refusals of correct
+programs (neither was filed):
+
+- **An unused higher-order function tainted its effect for the whole
+  program.** `(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int
+  (h x))`, never called: its parameter has no value to thread, so `(h x)` is a
+  whole-body delegation, which seeds the base taint -- and every `(perform
+  (Ask))` elsewhere was refused until `app` was deleted. A user function
+  nothing reaches (no call, no value reference, not exported or `export-as`,
+  not `main` or an instance method, its name in no inline C) now taints
+  nothing (`fn_unreached`, the concrete twin of `generic_unreached`). Pinned
+  by `cps-unused-hof-does-not-taint`.
+- **A pure higher-order call inside a handler clause.** `(Ask [] k) (resume k
+  (app dbl 5))` refused the whole program: `app` is colored (it calls through
+  its fn parameter), so the call was a `CT_TAILCALL`, which the case grammar
+  does not admit. Inside a case, a colored callee with a runtime-pure row that
+  cannot await now runs on its direct entry (`case_call_runs_direct`,
+  `src/passes/cps_ir.c`). Pinned by `cps-handler-clause-calls-pure-hof`
+  (leak-checked; `^fat` parameter, a `let` in the clause, a self-handling
+  colored callee).
+
+Also seen, not fixed: a call through a global `def` alias of a higher-order
+function, `(def f app)` then `(f (fn [n] ...) 1)`, is refused, with a
+spurious TUR-W0033 ("handler clause ... is unreachable") and a 37-byte leak in
+`tur` itself (`fatbox_intern`, `src/compiler/emit_module.c`): the struct-copied
+`EmitCtx`s the direct emitter makes for handler functions and thunks
+(`emit_effects.c`, `emit_expr.c`) hand back only `tmp_n`, so an entry they
+intern is dropped by the parent.
 
 ## Fixed (2026-10-09): a value use as well as calls (capturing)
 

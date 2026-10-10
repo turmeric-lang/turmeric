@@ -213,6 +213,22 @@ SAME_TURN_OUT="$(printf '%s\n' '(defn g [] : int 1) (defn g [] : int 2)' \
 check "two defns of one name in one turn are rejected" \
       "defn: 'g' is already defined" "$SAME_TURN_OUT"
 
+# --- A top-level (import ...) at the prompt (notebook-eval-no-module-base-dir) ---
+# One turn imports, a later turn calls what it referred or aliased.  It used to
+# be "import is only allowed inside defmodule" at the prompt.
+IMP_DIR="$(mktemp -d)"
+mkdir -p "$IMP_DIR/mods"
+printf '%s\n' '(defmodule mods/sq (export sq) (defn sq [x : int] : int {x * x}))' \
+    > "$IMP_DIR/mods/sq.tur"
+REPL_ABS="$(cd "$(dirname "$REPL")" && pwd)/$(basename "$REPL")"
+IMP_OUT="$(cd "$IMP_DIR" && printf '%s\n' '(import mods/sq :refer [sq])' '(sq 7)' \
+           | TUR_NO_AUTO_SPICE=1 "$REPL_ABS" repl 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')"
+check_last "top-level import :refer, called on a later turn" '=> 49' "$IMP_OUT"
+IMP_AS_OUT="$(cd "$IMP_DIR" && printf '%s\n' '(import mods/sq :as m)' '(m/sq 6)' \
+              | TUR_NO_AUTO_SPICE=1 "$REPL_ABS" repl 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')"
+check_last "top-level import :as, called on a later turn" '=> 36' "$IMP_AS_OUT"
+rm -rf "$IMP_DIR"
+
 echo ""
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

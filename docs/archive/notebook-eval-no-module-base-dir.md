@@ -1,5 +1,61 @@
 # Notebook `session-eval` never sets `module_base_dir`, so `(import ...)` fails in every cell
 
+**RESOLVED 2026-10-10.** A cell imports the way a REPL turn would, and the
+module search is the one `tur run <notebook>` would use. Three walls stood in
+front of the first import, not one -- the report named only the first:
+
+- **No search path.** libturi gained `turi_env_set_search_path_for(env, path)`
+  (`src/turi/eval.h`): the module base dir becomes the notebook's directory and
+  the extra search dirs become the enclosing spice's `src/`, each `:spices`
+  dep's `src/` on disk, and the workspace siblings' `src/`. That walk-up moved
+  out of `src/main.c` (`find_spice_root` / `auto_append_spice_includes`) into
+  tur_core as `src/compiler/spice_search.c`, so the per-file commands and an
+  embedder share one copy; main.c keeps its LS2 bookkeeping on hooks. The
+  manifest reader gives up when `diag_had_error()` is already set -- as it is
+  after a failed cell -- so the call runs it on a clean diag slate and puts the
+  session's back.
+- **A top-level `(import ...)` was an error everywhere** ("import is only
+  allowed inside defmodule"), the REPL included (its guide listed it as a v1
+  limit). `turi_env_set_toplevel_imports(env, true)` makes one legal on an env
+  that asks: `:refer`, `:as` (kept per session, `Elab.toplevel_alias_*`) and
+  `:for-macros`, through the same `elab_apply_import` a defmodule header now
+  uses. Off by default, so a file's imports still belong to its defmodule on
+  every back end; `tur repl` turns it on.
+- **No stdlib.** A bare `turi_env_new` env has only the elaborator builtins, so
+  a spice module naming `(Vec float)` did not elaborate.
+  `turi_env_preload_stdlib(env, root)` runs the `--interpret` program preload
+  (not the REPL's Show slice, which loads stdlib `String` globally and then a
+  module defining its own -- frame/ownstr -- cannot export it). The notebook
+  bakes its root in with the autolink hint `-DTUR_NB_STDLIB=@TUR_STDLIB_ROOT@`.
+
+The notebook (`turmeric-spices`, `spices/notebook/src/notebook/session.tur`)
+opens a session per file with `session-open-for path` -- all five callers --
+and `session-reset` re-applies the configuration to its fresh env; against an
+older libturi it falls back to `turi_env_set_module_base_dir` behind
+`#ifdef TURI_HAS_SEARCH_PATH_FOR`.
+
+Pinned by `tests/turi/embed-peripherals.c` Gap 9 (a scratch workspace: own
+`src/`, a `:path` dep, a workspace sibling and a module beside the note, all
+imported top-level; `:as` and `:refer` on a later turn; a re-run turn; reset;
+the controls -- a bare env, and toplevel imports off), `tests/turi/repl-smoke.sh`
+(`:refer` and `:as` at the prompt), and the notebook's own
+`tests/session_test.tur` case 5 (import in one cell, call in the next, across
+a reset). `math-walkthrough` checks clean; it loaded a module that never existed
+(`stdlib/math`), now `(load "stdlib/math.tur")`.
+
+**What is still in the way of the other example notebooks** is a different
+wall, filed as
+[notebook-cells-cannot-call-inline-c-spices](../reported/notebook-cells-cannot-call-inline-c-spices.md):
+their imports resolve now, but `plot`, `linalg`, `stats` and `frame` do their
+work in inline-C bodies, which the interpreter does not run. Running them
+also turned up two inline-C executor defects, fixed with this:
+`ic_exec_free` handed an emulated constructor's value-pool pointer to libc
+`free` (an ASan bad-free in `(dist-free (dist-normal ...))`), and the
+fat-pointer constructor case read `d->p1` / `out->length` as `->p` / `->len`
+and miscompiled stats' `random-n` (`tests/run-interp-inline-c-constructor.sh`).
+
+**Status at filing:** open.
+
 **Severity:** medium (feature gap). The notebook's embedded evaluator cannot
 resolve imports, so every example notebook that uses an external spice --
 `plot`, `linalg`, `stats`, `frame` -- fails at the first cell. The notebook

@@ -931,6 +931,17 @@ typedef struct Elab {
      * so that map-new (which has no first arg to inspect) can be lowered to
      * hamt/new even though is_persistent_map would otherwise be false. */
     bool             in_persistent_let;
+    /* notebook-eval-no-module-base-dir: a top-level `(import ...)` is legal in
+     * an interactive session that asks for it (turi_env_set_toplevel_imports:
+     * the REPL, a notebook) -- the Jupyter model, where one cell imports and
+     * the next calls.  Copied from g_elab_toplevel_imports per call.  Each
+     * `:as` alias such an import names is kept here (malloc'd, parallel
+     * arrays) so `alias/name` resolves on later turns. */
+    bool             toplevel_imports;
+    const Symbol   **toplevel_alias_names;
+    const Symbol   **toplevel_alias_modules;
+    uint32_t         n_toplevel_aliases;
+    uint32_t         cap_toplevel_aliases;
     /* PR5-3-D: Effects brought into scope via :refer [(effect Name)] imports */
     Effect      **referred_effects;
     uint32_t      n_referred_effects;
@@ -2217,6 +2228,9 @@ Binding *make_dict_clone(Elab *e, Binding *inner_b, Span span);
 /* elab_module.c */
 Expr *elab_load(Elab *e, const Form *call);
 Expr *elab_defmodule(Elab *e, const Form *call);
+/* A top-level `(import ...)`: legal only when e->toplevel_imports is set (an
+ * interactive session); an error naming defmodule otherwise. */
+Expr *elab_toplevel_import(Elab *e, const Form *call);
 Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error);
 
 /* elab_structs.c */

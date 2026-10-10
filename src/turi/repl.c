@@ -194,6 +194,8 @@ static void repl_diag_sink(struct TuriEnv *env, int level, const char *code,
 static void repl_configure_env(TuriEnv *env) {
     if (!env) return;
     turi_env_set_diag_sink(env, repl_diag_sink, env);
+    /* `(import m :refer [f])` at the prompt, then `(f ...)` on the next turn. */
+    turi_env_set_toplevel_imports(env, true);
     const char *off = getenv("TUR_NO_SCRATCH_PROMOTION");
     if (!(off && *off && strcmp(off, "0") != 0))
         turi_env_set_scratch_promotion(env, true);

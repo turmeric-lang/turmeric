@@ -617,6 +617,81 @@ void turi_env_set_diag_sink(TuriEnv *env, TuriDiagSinkFn cb, void *ud);
  * to configure env->module_base_dir. */
 void turi_env_set_module_base_dir(TuriEnv *env, const char *path);
 
+/* Resolve `(import ...)` the way `tur run <path>` would for a program whose
+ * source lives at `path` (a file; a notebook or script the embedder is about
+ * to evaluate).  The module base dir becomes path's directory, and the extra
+ * search dirs become the enclosing spice's src/, every `:spices` dep's src/
+ * that is on disk, and the src/ of each workspace sibling -- the walk-up the
+ * per-file commands do.  Outside any `build.tur` only the base dir is set.
+ * The env owns what this builds (turi_env_free frees it); a later call
+ * replaces it, and NULL clears both.  Returns the number of extra dirs found,
+ * or -1 on allocation failure.  Survives turi_env_reset.
+ * TURI_HAS_SEARCH_PATH_FOR lets an embedder that must also build against an
+ * older libturi fall back to turi_env_set_module_base_dir.
+ * See docs/archive/notebook-eval-no-module-base-dir.md */
+#define TURI_HAS_SEARCH_PATH_FOR 1
+int turi_env_set_search_path_for(TuriEnv *env, const char *path);
+
+/* Let source evaluated on `env` use `(import ...)` at the top level, outside
+ * any defmodule -- the interactive-session model a REPL or a notebook wants,
+ * where one turn imports and the next calls what it referred.  `:refer`,
+ * `:as` and `:for-macros` all work, and a referred name stays bound for the
+ * rest of the session.  Off by default: a program's imports belong to its
+ * defmodule, as they do when the same file is compiled.  `tur repl` turns it
+ * on.  Defined alongside TURI_HAS_SEARCH_PATH_FOR. */
+void turi_env_set_toplevel_imports(TuriEnv *env, bool on);
+
+/* Load the standard library into a fresh `env` the way `tur --interpret`
+ * does for a program: the core macros (`when`/`cond`/`for`/...), the typed
+ * collections (Vec, Map, Set, Option, Result, ...) and the interpreter's
+ * natives for stdlib functions whose bodies are inline C.  A bare
+ * turi_env_new env has only the elaborator builtins, so a module that names
+ * `(Vec float)` does not elaborate in it.  (Not the REPL's Show slice, and
+ * not json/schema, which `--interpret` adds on top.)  The stdlib directory is
+ * $TUR_STDLIB_DIR when set, else `stdlib_root`, else a cwd-relative `stdlib`;
+ * when TUR_STDLIB_DIR is unset and `stdlib_root` is given, it is exported as
+ * TUR_STDLIB_DIR, which a module import's stdlib fallback reads.  A program
+ * `tur build`s can bake its root in with the autolink hint
+ * `-DNAME=@TUR_STDLIB_ROOT@`.  Call once, before the first turi_eval.
+ * Defined alongside TURI_HAS_SEARCH_PATH_FOR. */
+void turi_env_preload_stdlib(TuriEnv *env, const char *stdlib_root);
+
+/* Run a spice's compiled code for the calls the interpreter cannot make.  The
+ * interpreter does not execute inline-C bodies beyond a few simple shapes, so
+ * a session that imports a spice whose functions are inline C (most native
+ * bindings, numeric kernels) can name them but not call them.  This builds
+ * the spice at or above `spice_root` as a shared library (`tur build --shared`,
+ * cached under `<root>/.tur-repl-cache/` and rebuilt when a source is newer),
+ * loads it, and binds each export the FFI layer can marshal -- scalars,
+ * :cstr, pointers, `defopaque` handles and by-value records -- as a native
+ * under its module-qualified name, and under its bare name too unless
+ * something (a stdlib function, a definition of the session's) already holds
+ * that.  Importing the module afterwards keeps the compiled export, whatever
+ * its body: a Turmeric wrapper over private inline-C helpers runs compiled
+ * too.  A definition the session makes itself still wins.  An export with a
+ * record slot is callable once its module is imported (the import supplies
+ * the record's layout).
+ *
+ * The HOST must export its symbols to the image (link with `-rdynamic`, CMake
+ * ENABLE_EXPORTS): the image resolves the runtime it shares with libturi
+ * (tur_string_release, ...) against the executable.
+ * `tur_bin` NULL means $TUR_BIN, else `tur` on PATH.  The env owns the image.
+ * Returns the number of exports bound, 0 when that spice is already attached,
+ * or -1 after printing why the build or load failed -- once: the env records
+ * the failure and answers -1 without rebuilding for the rest of its life.
+ * See docs/reported/notebook-cells-cannot-call-inline-c-spices.md */
+#define TURI_HAS_ATTACH_SPICE 1
+int turi_env_attach_spice(TuriEnv *env, const char *spice_root, const char *tur_bin);
+
+/* turi_env_attach_spice for the spice that provides `module_name` (e.g.
+ * "stats/dist"): the module is looked up where an import would find it,
+ * the stdlib aside -- the base dir, then the extra search dirs.  Returns 0
+ * when it is not found, not inside a spice, or already provided by an image
+ * the env holds.  An embedder calls it for each module a turn imports, before
+ * evaluating the turn. */
+int turi_env_attach_spice_for_module(TuriEnv *env, const char *module_name,
+                                     const char *tur_bin);
+
 /* Internal: true when v is a native-closure binding (used by turi_env_reset to
  * tell embedder/builtin natives from turi_eval-created defns). */
 bool turi_value_is_native(TuriValue v);

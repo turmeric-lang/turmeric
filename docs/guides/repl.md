@@ -477,8 +477,11 @@ $ tur repl                    # nothing changed -- instant load
 
 ### Building the spice in process (`--engine jit`)
 
-By default the loader shells out to `tur build --shared` and `dlopen`s the
-result -- the `.tur-repl-cache/` flow above. On a binary built with
+By default the loader shells out to `tur build --shared --bundle-deps` on
+the spice root and `dlopen`s the result -- the `.tur-repl-cache/` flow above.
+`--bundle-deps` links each `:spices` dep's modules into the library, so a
+spice whose sources import a dep loads on its own; only the spice's own
+exports are bound at the prompt. On a binary built with
 `-DTUR_JIT=ON`, the whole spice can instead be compiled as one translation
 unit **in process** through the MIR engine, skipping the subprocess, the
 `.so`, and the `dlopen`:
@@ -606,10 +609,10 @@ error: ffi: 'sh/add42' expects 1 arg, got 0
 - **Struct / ADT returns** can't yet be reconstructed on the
   interpreter side. The error suggests sticking to primitive
   (`:int` / `:float` / `:cstr` / etc.) returns for now.
-- **(import M :refer [...])** at REPL top level still hits the
-  elaborator's "import is only allowed inside defmodule" restriction.
-  Since spice exports are pre-bound at load time, you don't need to
-  import them -- call them directly.
+- **Spice exports are pre-bound**, so you don't need to import them --
+  call them directly. A top-level `(import M :refer [...])` (or `:as`)
+  does work at the prompt since 2026-10-10, for a module the REPL can
+  find: one under the cwd, or in the stdlib.
 
 ### Troubleshooting
 

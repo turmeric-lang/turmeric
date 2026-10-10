@@ -780,6 +780,20 @@ static bool fn_effect_may_escape(CpsB *b, const Binding *fn) {
     return !effect_row_is_runtime_pure(fd->inferred_effect_row);
 }
 
+/* A call in a handler CASE body to a colored callee that can perform nothing
+ * escaping it -- `(resume k (app dbl 5))` with `app` a pure higher-order
+ * function, colored only because it calls through its fn parameter.  The case
+ * grammar (handle_case_ok) has no CT_TAILCALL, so threading the call evicted
+ * the enclosing function and every `perform` of the effect with it.  Run it on
+ * its direct entry instead: with a runtime-pure row, the fresh root it enters
+ * is never asked to handle anything (fn_effect_may_escape), and a callee that
+ * may await keeps the threaded call. */
+static bool case_call_runs_direct(CpsB *b, const Binding *fn) {
+    if (!b->in_handler_case || fn_effect_may_escape(b, fn)) return false;
+    const FnDef *fd = callee_fndef(b, fn);
+    return fd && !fd->may_await;
+}
+
 /* ---- pending bindings (drives atomization order) ---------------------- */
 
 /* reap_ok: the item is a call argument whose callee slot does not retain it
@@ -4855,7 +4869,8 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * delegated to the direct emitter, which resolves the monomorphized
              * callee name (constructors, specialized fns) the CPS backend's own
              * naming does not.  Colored callees still thread the continuation. */
-            if (!callee_colored(b, fn) && call_args_delegatable(b, e)) {
+            if ((!callee_colored(b, fn) || case_call_runs_direct(b, fn))
+                && call_args_delegatable(b, e)) {
                 CVar x = fresh_cvar(b, &e->type);
                 CTerm *ac = new_term(b, CT_APPCONT);
                 ac->as.appcont.kont = kont; ac->as.appcont.v = atom_cvar(x);
@@ -5432,7 +5447,8 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             }
             /* cps->direct call to an uncolored callee with atomic args: delegate
              * to the direct emitter (monomorphized callee names). */
-            if (!callee_colored(b, fn) && call_args_delegatable(b, e))
+            if ((!callee_colored(b, fn) || case_call_runs_direct(b, fn))
+                && call_args_delegatable(b, e))
                 return build_letraw(b, e, x, rest);
             /* all-any-fn-param-is-unusable: see the tail-position twin -- a fn
              * VALUE callee never takes the named CT_LETCALL arm. */

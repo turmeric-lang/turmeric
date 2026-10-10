@@ -1,0 +1,1 @@
+a captureless lambda's alias is threaded; nothing is allocated per call that is not reaped

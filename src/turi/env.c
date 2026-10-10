@@ -9,8 +9,11 @@
 #include "interpreter_natives.h"  /* option/result/str/math/seq/json/... natives */
 #include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
 #include "../compiler/lang_dialects.h"  /* lang_traits: the session language's prelude */
+#include "../compiler/spice_search.h"   /* turi_env_set_search_path_for */
+#include "ffi_thunk.h"   /* turi_env_attach_spice: tur_ffi_install_spice_bindings_owned */
 
 #include <limits.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -291,6 +294,8 @@ TuriEnv *turi_env_new_sandboxed(void) {
     return env;
 }
 
+static void env_drop_owned_include_dirs(TuriEnv *env);  /* below */
+
 void turi_env_free(TuriEnv *env) {
     if (!env) return;
 
@@ -319,6 +324,21 @@ void turi_env_free(TuriEnv *env) {
         }
         env->retired_spice_images = NULL;
     }
+    {
+        struct TurSpiceImageNode *n = env->attached_spice_images;
+        while (n) {
+            struct TurSpiceImageNode *next = n->next;
+            if (n->image) tur_spice_image_free(n->image);
+            free(n);
+            n = next;
+        }
+        env->attached_spice_images = NULL;
+    }
+    for (int i = 0; i < env->n_failed_spice_roots; i++)
+        free(env->failed_spice_roots[i]);
+    free(env->failed_spice_roots);
+    env->failed_spice_roots = NULL;
+    env->n_failed_spice_roots = 0;
 
     /* Debugger Phase 2: drop any attached debugger state. */
     if (env->debugger) {
@@ -401,6 +421,7 @@ void turi_env_free(TuriEnv *env) {
         free((void *)env->module_base_dir);
         env->module_base_dir = NULL;
     }
+    env_drop_owned_include_dirs(env);
 
     /* Gap 5: fire native ud finalizers in LIFO order, then free the nodes. */
     {
@@ -507,6 +528,181 @@ void turi_env_set_module_base_dir(TuriEnv *env, const char *path) {
     } else {
         env->module_base_dir = NULL;  /* default (".") */
     }
+}
+
+/* Free an include list turi_env_set_search_path_for built.  A borrowed one
+ * (include_dirs_owned false) is the embedder's and is left alone. */
+static void env_drop_owned_include_dirs(TuriEnv *env) {
+    if (env->include_dirs_owned) {
+        for (int i = 0; i < env->n_include_dirs; i++)
+            free((void *)env->include_dirs[i]);
+        free((void *)env->include_dirs);
+    }
+    env->include_dirs       = NULL;
+    env->n_include_dirs     = 0;
+    env->include_dirs_owned = false;
+}
+
+/* The spice root at or above directory `dir` (spice_find_root takes a file:
+ * name one inside it). */
+static char *spice_find_root_dir(const char *dir) {
+    size_t n = strlen(dir);
+    char *probe = (char *)malloc(n + 3);
+    if (!probe) return NULL;
+    memcpy(probe, dir, n);
+    memcpy(probe + n, "/.", 3);
+    char *root = spice_find_root(probe);
+    free(probe);
+    return root;
+}
+
+int turi_env_attach_spice(TuriEnv *env, const char *spice_root, const char *tur_bin) {
+    if (!env || !spice_root) return -1;
+    /* One image per spice: an attached root (or the REPL's own) is kept. */
+    char *root = spice_find_root_dir(spice_root);
+    if (!root) {
+        fprintf(stderr, "turi: no build.tur at or above '%s'\n", spice_root);
+        return -1;
+    }
+    for (struct TurSpiceImageNode *n = env->attached_spice_images; n; n = n->next) {
+        const char *r = n->image ? tur_spice_image_root(n->image) : NULL;
+        if (r && strcmp(r, root) == 0) { free(root); return 0; }
+    }
+    if (env->spice_image && tur_spice_image_root(env->spice_image)
+        && strcmp(tur_spice_image_root(env->spice_image), root) == 0) {
+        free(root);
+        return 0;
+    }
+    for (int i = 0; i < env->n_failed_spice_roots; i++) {
+        if (strcmp(env->failed_spice_roots[i], root) == 0) {
+            free(root);
+            return -1;
+        }
+    }
+    if (!tur_bin || !*tur_bin) tur_bin = getenv("TUR_BIN");
+    TurSpiceImage *img = NULL;
+    int rc = tur_spice_image_load(root, tur_bin, &img);
+    if (rc != 0 || !img) {
+        char **grown = (char **)realloc(env->failed_spice_roots,
+            (size_t)(env->n_failed_spice_roots + 1) * sizeof *grown);
+        if (grown) {
+            env->failed_spice_roots = grown;
+            env->failed_spice_roots[env->n_failed_spice_roots++] = root;
+        } else {
+            free(root);
+        }
+        return -1;
+    }
+    free(root);
+    struct TurSpiceImageNode *node = (struct TurSpiceImageNode *)malloc(sizeof *node);
+    if (!node) { tur_spice_image_free(img); return -1; }
+    node->image = img;
+    node->next  = env->attached_spice_images;
+    env->attached_spice_images = node;
+    return (int)tur_ffi_install_spice_bindings_owned(env, img);
+}
+
+/* True when an image this env already holds exports from `module_name` --
+ * the REPL's own spice or one attached earlier -- so a turn importing the
+ * module needs neither the file search nor a second load. */
+static bool env_image_provides_module(const TurSpiceImage *img,
+                                      const char *module_name) {
+    if (!img) return false;
+    uint32_t n = tur_spice_image_count(img);
+    for (uint32_t i = 0; i < n; i++) {
+        const TurSpiceExport *e = tur_spice_image_at(img, i);
+        if (e && e->module && strcmp(e->module, module_name) == 0) return true;
+    }
+    return false;
+}
+
+int turi_env_attach_spice_for_module(TuriEnv *env, const char *module_name,
+                                     const char *tur_bin) {
+    if (!env || !module_name || !*module_name) return -1;
+    if (env_image_provides_module(env->spice_image, module_name)) return 0;
+    for (struct TurSpiceImageNode *n = env->attached_spice_images; n; n = n->next)
+        if (env_image_provides_module(n->image, module_name)) return 0;
+    /* Where `(import module_name)` would find it, stdlib aside: the base
+     * dir, then each extra search dir, first match winning as it does for
+     * the elaborator. */
+    char path[4096];
+    const char *base = env->module_base_dir ? env->module_base_dir : ".";
+    for (int i = -1; i < env->n_include_dirs; i++) {
+        const char *dir = i < 0 ? base : env->include_dirs[i];
+        if (!dir) continue;
+        int n = snprintf(path, sizeof path, "%s/%s.tur", dir, module_name);
+        if (n <= 0 || (size_t)n >= sizeof path) continue;
+        FILE *f = fopen(path, "rb");
+        if (!f) continue;
+        fclose(f);
+        char *root = spice_find_root(path);
+        if (!root) return 0;            /* not inside a spice */
+        int rc = turi_env_attach_spice(env, root, tur_bin);
+        free(root);
+        return rc;
+    }
+    return 0;
+}
+
+void turi_env_set_toplevel_imports(TuriEnv *env, bool on) {
+    if (env) env->toplevel_imports = on;
+}
+
+int turi_env_set_search_path_for(TuriEnv *env, const char *path) {
+    if (!env) return -1;
+    env_drop_owned_include_dirs(env);
+    if (!path) {
+        turi_env_set_module_base_dir(env, NULL);
+        return 0;
+    }
+
+    /* The importing file's directory: what `tur run <path>` searches first. */
+    const char *sep = strrchr(path, '/');
+#ifdef _WIN32
+    const char *bs = strrchr(path, '\\');
+    if (bs && (!sep || bs > sep)) sep = bs;
+#endif
+    if (sep) {
+        size_t n = (size_t)(sep - path);
+        if (n == 0) n = 1;  /* "/x.tur" -> "/" */
+        char *dir = (char *)malloc(n + 1);
+        if (!dir) return -1;
+        memcpy(dir, path, n);
+        dir[n] = '\0';
+        turi_env_set_module_base_dir(env, dir);
+        free(dir);
+    } else {
+        turi_env_set_module_base_dir(env, NULL);  /* "." */
+    }
+
+    /* Then the enclosing spice's src/, its :spices deps and its workspace
+     * siblings -- the list the per-file commands build. */
+    char **inc = NULL, **owned = NULL;
+    int    n_inc = 0, n_owned = 0;
+    /* The manifest reader runs on the diag layer: it gives up when
+     * diag_had_error() is already set -- as it still is after a turn that
+     * failed -- and it registers its stack-local SourceFile as file 0.  Run
+     * it on a clean slate and put the session's table and flag back. */
+    const SourceFile *saved_files[DIAG_MAX_FILES];
+    size_t n_saved = diag_files_save(saved_files,
+                                     sizeof(saved_files) / sizeof(saved_files[0]));
+    bool saved_error = diag_had_error();
+    diag_reset();
+    int rc = spice_search_append(path, &inc, &n_inc, &owned, &n_owned, NULL);
+    diag_reset();
+    diag_files_replace(saved_files, n_saved);
+    if (saved_error) diag_force_had_error();
+    if (rc != 0) {
+        for (int i = 0; i < n_owned; i++) free(owned[i]);
+        free(owned);
+        free(inc);
+        return -1;
+    }
+    free(owned);  /* every entry of `inc` is owned; the env keeps them */
+    env->include_dirs       = (const char **)inc;
+    env->n_include_dirs     = n_inc;
+    env->include_dirs_owned = inc != NULL;
+    return n_inc;
 }
 
 void turi_env_register_native_ex(TuriEnv *env, const char *name,

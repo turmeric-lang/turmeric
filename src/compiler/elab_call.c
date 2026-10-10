@@ -4431,11 +4431,7 @@ static Expr *elab_call_inner(Elab *e, Form *call) {
                   "export is only allowed inside defmodule");
         return NULL;
     }
-    if (name == e->sym_import) {
-        diag_emit(DIAG_ERROR, call->span,
-                  "import is only allowed inside defmodule");
-        return NULL;
-    }
+    if (name == e->sym_import) return elab_toplevel_import(e, call);
     /* Phase N: numeric cast */
     if (name == e->sym_as) return elab_as_cast(e, call);
     /* IT4: gradual typing */

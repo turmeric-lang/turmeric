@@ -508,6 +508,15 @@ typedef struct TuriEnv {
      * strdup'd module/defn name strings via the globals hash table.
      * Freed in turi_env_free in reverse order. Opaque list node. */
     struct TurSpiceImageNode *retired_spice_images;
+    /* Images attached with turi_env_attach_spice (an embedder running a
+     * spice's compiled code for the calls the interpreter cannot make).
+     * Owned: freed by turi_env_free, LIFO.  Opaque list node. */
+    struct TurSpiceImageNode *attached_spice_images;
+    /* Spice roots whose image failed to build or load: tried once per env, so
+     * a cell importing a broken spice ten times reports one failure, not ten
+     * rebuilds.  Owned strings, freed by turi_env_free. */
+    char **failed_spice_roots;
+    int    n_failed_spice_roots;
     /* Module-private name resolution (interpreter parity with the compiled
      * per-module mangling). `defining_mod` is the DefModule* whose body is
      * currently being evaluated (set by EX_DEFMODULE), so EX_FN_DEF can tell
@@ -533,6 +542,14 @@ typedef struct TuriEnv {
      * (heap-owned, freed by turi_env_free).  Direct field assignments by the CLI
      * leave this false and retain their existing borrowed-pointer semantics. */
     bool        module_base_dir_owned;
+    /* True when include_dirs (the array AND its strings) was built by
+     * turi_env_set_search_path_for, so turi_env_free frees it.  A direct
+     * assignment (the CLI) leaves it false and keeps the borrowed contract
+     * documented on the field. */
+    bool        include_dirs_owned;
+    /* A top-level `(import ...)` is legal on this env (an interactive
+     * session); see turi_env_set_toplevel_imports. */
+    bool        toplevel_imports;
     /* Gap 5: list of (free_fn, ud) finalizers for natives registered via
      * turi_env_register_native_ex.  Each fires once, in LIFO order, from
      * turi_env_free -- so an embedder can let a native's `ud` lifetime ride
