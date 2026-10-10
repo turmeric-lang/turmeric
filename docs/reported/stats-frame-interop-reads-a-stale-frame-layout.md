@@ -46,8 +46,8 @@ struct __frame_schema { int64_t n_fields; int64_t *fields; };   /* fields[i] -> 
 struct __frame_field  { char *name; int64_t type_tag; int64_t nullable; };
 ```
 
-stats re-declares it, in `src/stats/regress.tur:25`, `cov.tur:34` and
-`fmt.tur:43`, as:
+stats re-declares it, in `src/stats/regress.tur:25`, `cov.tur:34`,
+`fmt.tur:43` and three more files, as:
 
 ```c
 struct __frame  { int64_t nrows; int64_t ncols; int64_t schema_ptr; int64_t *columns; };
@@ -63,17 +63,33 @@ that as a schema. The frames stats *builds* (cov's correlation matrix,
 fmt's `fit-coefs-frame`) have the same wrong shape, so frame's own
 accessors misread them in turn.
 
+The buffers disagree as well as the headers. frame allocates a column's
+`values` 64-byte aligned behind a 16-byte header that holds the raw
+pointer, and `frame-free` / `column-free` read it back from `values - 16`
+(`spices/frame/src/frame/column.tur:78`, `frame.tur:298`). stats builds its
+columns over a plain buffer -- `rnorm`'s values start 8 bytes into it
+(`src/stats/dist.tur:696`) -- so freeing a stats column or frame with
+frame's free hands libc a pointer it never returned. Swapping the struct
+fields into frame's order would fix the reads and leave this.
+
+The same layout is declared in `sample.tur:24`, `summary.tur:36` and
+`test.tur:66` too; every stats function that touches a frame is affected,
+and no stats test builds one with frame, which is how it drifted.
+
 Every handle here is `:int`, so the type checker never sees a frame cross
 the spice boundary -- the hazard CLAUDE.md's "No lazy `:int` stand-ins" rule
 describes.
 
 ## Fix directions
 
-1. **Use frame's accessors, not its struct.** stats depends on frame
-   (`:spices`); `frame-nrows`, `frame-column`, `frame-schema` and the schema
-   field accessors are exported. Reading through them removes the duplicate
-   layout outright, and building output frames through `frame` / `schema` /
-   `field` does the same for the constructors.
+1. **Use frame's accessors and constructors, not its struct.** stats
+   depends on frame (`:spices`); `frame-nrows`, `frame-column`,
+   `frame-schema` and the schema field accessors are exported. Reading
+   through them removes the duplicate layout outright, and building columns
+   and frames through frame's `column-*` / `frame` / `schema` / `field`
+   gives them frame's buffer protocol, which a layout fix alone does not.
+   A stats test that reads a CSV with frame and passes it to each
+   frame-taking function would have caught both halves.
 2. **At least share the declaration.** If the C path has to stay, one header
    both spices include (frame shipping it) keeps the layouts from drifting
    again; the `__test_result_t` collision wants the same treatment.
