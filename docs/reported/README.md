@@ -34,6 +34,25 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found implementing the XML/HTML parsers plan (filed 2026-10-10)
+
+Building `tur-dom-core`, `tur-xml` and `tur-html` in turmeric-spices for
+[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on v0.64.0.
+Each is worked around in the spices (the workaround is cited at the site);
+every repro below was re-run as written on v0.64.0. Five are emitted-C type
+mismatches that gcc only warns about, so they pass Linux CI and fail macOS --
+build with `CC=clang` to see them.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cond-bare-symbol-test-folds-later-equality](cond-bare-symbol-test-folds-later-equality.md) | high (silent miscompile) | `(cond flag "s" (= rc 0) "zero" :else "other")` returns `"other"` for `rc` 0: the emitted C has `if (false)` for the equality. The equivalent nested `if` is correct |
+| [struct-field-with-opaque-sibling-lowered-to-int](struct-field-with-opaque-sibling-lowered-to-int.md) | medium (compile failure) | A struct with a `defopaque` field and a struct or by-value sum field lays the aggregate out as `int64_t`, so `(.line (.pos e))` does not compile |
+| [heap-adt-arg-to-closure-cross-module-missing-cast](heap-adt-arg-to-closure-cross-module-missing-cast.md) | medium (clang-only compile failure) | Passing a `:heap` value whose type is imported to a closure emits no cast to the closure's `int64_t` parameter |
+| [heap-adt-niche-option-some-payload-missing-cast](heap-adt-niche-option-some-payload-missing-cast.md) | medium (clang-only compile failure) | `(C s (Some s))` for a `:heap` constructor with a niche `(Option S)` field passes `int64_t` to its `void *` parameter; a non-niche `Option` field fails differently |
+| [forward-call-typed-list-arg-cast-to-int64](forward-call-typed-list-arg-cast-to-int64.md) | medium (clang-only compile failure) | A call to a function defined later in the file whose parameter is a `(Cons N)` casts the argument to `int64_t` |
+| [closure-set-of-captured-mut-opaque-undeclared](closure-set-of-captured-mut-opaque-undeclared.md) | medium (compile failure) | `set!` of a captured `^mut` opaque inside a closure emits the original local's name, undeclared there; an `int` `^mut` is promoted to a shared cell and works |
+| [cps-while-discarded-cps-call-loses-captures](cps-while-discarded-cps-call-loses-captures.md) | medium (compile failure) | A `while` loop that discards the result of `html-sax-feed!` loses the enclosing function's parameters in its CPS join; binding the result works. Repro needs turmeric-spices |
+
 ## Found typing reactor-add-chan's channel (filed 2026-10-10)
 
 `tests/run-fnsan.sh` was cited as evidence that reactor callbacks match
