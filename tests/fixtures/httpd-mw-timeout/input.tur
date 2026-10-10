@@ -1,0 +1,206 @@
+;; httpd-mw-timeout -- mw-timeout answers 503 when a handler overruns
+;; (tourist-on-stdlib-httpd-plan H4).
+;;
+;;   1. A fast handler's whole response comes through: status, a header it
+;;      set, the body, and what it read from the request (the body, a
+;;      header, an attribute an outer middleware set).
+;;   2. A slow handler: the client gets 503 at the deadline, well before the
+;;      handler finishes.  The late handler runs to completion on its own
+;;      thread and its response goes nowhere.
+;;   3. The server is still serving afterwards.
+
+(load "stdlib/httpd.tur")
+
+;; --- raw HTTP client helpers (one request per connection) -------------------
+
+;; Send `req` (which carries Connection: close) and return everything the
+;; server wrote until it closed; free with raw-release.
+(defn raw-send [port : int req : cstr] : cstr
+  ```c
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  size_t cap = 8192, got = 0;
+  char *buf = (char *)malloc(cap);
+  buf[0] = '\0';
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return buf;
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return buf; }
+  size_t rl = strlen(req), sent = 0;
+  while (sent < rl) {
+      ssize_t w = send(fd, req + sent, rl - sent, 0);
+      if (w <= 0) break;
+      sent += (size_t)w;
+  }
+  for (;;) {
+      if (got + 1 >= cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+      ssize_t n = recv(fd, buf + got, cap - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  close(fd);
+  return buf;
+  ```)
+
+(defn raw-release [r : cstr] : nil
+  ```c free((void *)r); ```)
+
+;; The status code of a raw response (0 when there was none).
+(defn raw-status [r : cstr] : int
+  ```c return strlen(r) > 12 ? (int64_t)atoi(r + 9) : 0; ```)
+
+;; Every value of header `name` in the head of `r`, joined with " | ", or
+;; "(absent)".  The string lives until the next call.
+(defn raw-header [r : cstr name : cstr] : cstr
+  ```c
+  static char out[4096];
+  size_t o = 0;
+  out[0] = '\0';
+  const char *end = strstr(r, "\r\n\r\n");
+  if (!end) end = r + strlen(r);
+  size_t nl = strlen(name);
+  const char *p = strstr(r, "\r\n");
+  while (p && p < end) {
+      const char *line = p + 2;
+      const char *eol = strstr(line, "\r\n");
+      if (!eol || line >= end) break;
+      if ((size_t)(eol - line) > nl && strncasecmp(line, name, nl) == 0 && line[nl] == ':') {
+          const char *v = line + nl + 1;
+          while (*v == ' ') v++;
+          o += (size_t)snprintf(out + o, sizeof out - o, "%s%.*s", o ? " | " : "", (int)(eol - v), v);
+      }
+      p = eol;
+  }
+  return o ? out : "(absent)";
+  ```)
+
+;; The bytes after the head.
+(defn raw-body [r : cstr] : cstr
+  ```c
+  const char *b = strstr(r, "\r\n\r\n");
+  return b ? b + 4 : "";
+  ```)
+
+;; `METHOD path HTTP/1.1`, Host, the `extra` header lines (each ending in
+;; \r\n), Connection: close, and `body` with its Content-Length when it is
+;; not empty.  Returns what raw-send does.
+(defn raw-request [port : int method : cstr path : cstr extra : cstr body : cstr] : cstr
+  ```c
+  size_t bl = strlen(body);
+  size_t cap = strlen(method) + strlen(path) + strlen(extra) + bl + 160;
+  char *req = (char *)malloc(cap);
+  if (bl)
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+               method, path, extra, bl, body);
+  else
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sConnection: close\r\n\r\n", method, path, extra);
+  char *r = (char *)raw_hysend(port, req);
+  free(req);
+  return r;
+  ```)
+
+;; Print `label status=N`.
+(defn show-status [label : cstr r : cstr] : nil
+  ```c printf("%s status=%d\n", label, (int)raw_hystatus(r)); fflush(stdout); ```)
+
+;; Print `  name=value` for a response header (every value, or "(absent)").
+(defn show-header [r : cstr name : cstr] : nil
+  ```c printf("  %s=%s\n", name, raw_hyheader(r, name)); fflush(stdout); ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn path-is? [c : ptr<void> p : cstr] : bool
+  ```c return strcmp(httpd_hyreq_hypath(c), p) == 0; ```)
+
+(defn sleep-ms [ms : int] : nil
+  ```c usleep((useconds_t)ms * 1000u); ```)
+
+(defn now-ms [] : int
+  ```c
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+  ```)
+
+;; Count of late handlers that ran to the end.
+(defn late-done [mode : int] : int
+  ```c
+  static int64_t n = 0;
+  if (mode) __atomic_add_fetch(&n, 1, __ATOMIC_SEQ_CST);
+  return __atomic_load_n(&n, __ATOMIC_SEQ_CST);
+  ```)
+
+;; Echo what the handler could see of the request.
+(defn echo-request [c : ptr<void>] : nil
+  ```c
+  char b[512];
+  snprintf(b, sizeof b, "body=%s x-in=%s attr=%s",
+           __TUR_CNAME_httpd-req-body__(c), httpd_hyreq_hyheader(c, "X-In"),
+           httpd_hyreq_hyattr(c, "outer"));
+  __TUR_CNAME_httpd-resp-body!__(c, b);
+  ```)
+
+(defn show [label : cstr r : cstr] : nil
+  ```c
+  printf("%s: status=%d x-handler=%s body=[%s]\n", label, (int)raw_hystatus(r),
+         raw_hyheader(r, "X-Handler"), raw_hybody(r));
+  fflush(stdout);
+  ```)
+
+;; An outer middleware that sets an attribute before calling next.
+(defn mw-outer [^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_n next]
+    (fn [c : ptr<void>] : nil
+      (httpd-set-attr! c "outer" "set-before")
+      (httpd-call _n c))))
+
+(defn main [] : int
+  (let [base   (fn [c : ptr<void>] : nil
+                 (if (path-is? c "/slow")
+                   (do (sleep-ms 1500)
+                       (httpd-resp-header! c "X-Handler" "slow")
+                       (late-done 1)
+                       (httpd-resp-body! c "late"))
+                   (do (httpd-resp-status! c 201)
+                       (httpd-resp-header! c "X-Handler" "fast")
+                       (echo-request c))))
+        h      (httpd-new-pool 0 2 (mw-outer (mw-timeout 300 base)))
+        port   (httpd-port h)
+        server (spawn-server h)]
+    (let [r (raw-request port "POST" "/fast" "X-In: hdr\r\n" "payload")]
+      (show "fast" r)
+      (raw-release r))
+    (let [t0 (now-ms)
+          r  (raw-request port "GET" "/slow" "" "")
+          dt (- (now-ms) t0)]
+      (show "slow" r)
+      (println (if (< dt 1200) "slow answered before the handler finished: yes"
+                               "slow answered before the handler finished: no"))
+      (println (if (= (late-done 0) 0) "late handler still running then: yes"
+                                       "late handler still running then: no"))
+      (raw-release r))
+    (let [r (raw-request port "POST" "/fast" "X-In: again\r\n" "second")]
+      (show "after" r)
+      (raw-release r))
+    ;; Let the late handler finish before httpd-free releases its closure.
+    (sleep-ms 1600)
+    (println (if (= (late-done 0) 1) "late handler finished: yes" "late handler finished: no"))
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h))
+  (println "done")
+  0)

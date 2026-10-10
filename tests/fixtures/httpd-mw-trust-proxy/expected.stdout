@@ -1,0 +1,27 @@
+loopback, 10.0.0.0/8, ::1: accepted
+uniquelocal,linklocal: accepted
+10.0.0.0/33: refused
+bogus: refused
+-- trusting nothing
+forged: 200 ip=127.0.0.1 proto=http
+-- trusting loopback
+no header: 200 ip=127.0.0.1 proto=http
+one hop: 200 ip=203.0.113.7 proto=http
+rightmost untrusted: 200 ip=203.0.113.7 proto=http
+trusted hop skipped: 200 ip=203.0.113.7 proto=http
+all trusted: 200 ip=127.0.0.9 proto=http
+ipv6 hop: 200 ip=2001:db8::1 proto=http
+unparsable: 200 ip=127.0.0.1 proto=http
+unparsable left: 200 ip=203.0.113.7 proto=http
+proto https: 200 ip=203.0.113.7 proto=https
+proto junk: 200 ip=127.0.0.1 proto=http
+-- rate limit and log behind the proxy
+client A 1: 200 ip=203.0.113.7 proto=http
+client A 2: 200 ip=203.0.113.7 proto=http
+client A 3: 429 Too Many Requests
+client B 1: 200 ip=203.0.113.8 proto=http
+GET / -> 200 25 TIMEms ip=203.0.113.7
+GET / -> 200 25 TIMEms ip=203.0.113.7
+GET / -> 429 17 TIMEms ip=203.0.113.7
+GET / -> 200 25 TIMEms ip=203.0.113.8
+done

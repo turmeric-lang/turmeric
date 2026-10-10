@@ -80,6 +80,12 @@ Inside the handler:
 - `httpd-resp-status-get` reads back the status set so far (useful for
   middleware).
 
+The server frames the response: it writes `Content-Length` itself (a
+handler-set one is dropped). A `1xx`, `204` or `304` response has no body by
+definition, so it gets no `Content-Length` and any body the handler set is not
+sent; a `HEAD` request gets the headers a GET would -- `Content-Length`
+included -- and no body.
+
 ---
 
 ## Constructors
