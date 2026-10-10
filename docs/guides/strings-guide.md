@@ -161,6 +161,31 @@ with `TUR-W0064` for one minor line, then becomes an error) and
 comment-only no-op, deleted at age-out). Delete either one where you find it;
 what they enabled is now unconditional.
 
+## Indent-aware multi-line literals -- `#dedent{...}`
+
+Opt-in, for text that should be indented to match the surrounding code without
+that indent landing in the string:
+
+```turmeric no-check
+#use-reader-macros "stdlib/dedent-reader.tur"
+(load "stdlib/dedent.tur")
+
+(println #dedent{
+    Usage: tool [options]
+      -h  show help
+  })
+;; prints "Usage: tool [options]\n  -h  show help"
+```
+
+It expands to `(cstr-dedent "<body>")`. Leading blank lines are ignored, the
+first non-blank line sets the indent, every line loses up to that much (a
+shallower line goes to column 0), and trailing blank lines and the final
+newline are dropped. The body is a raw reader body: braces must balance (or be
+escaped `\{` `\}`) and a backslash is consumed, so write `\\` for one. The
+result is a heap-allocated `cstr`. In a `#lang sweet-exp` file define the macro
+inline with `reader-macros/define 'dedent :raw-brace '(cstr-dedent $body)`; see
+`tests/fixtures/dedent-reader-sweet`.
+
 ## Zero-copy slicing -- `StringSlice` (opt-in)
 
 `string/substring` copies. When you want ranged access *without* copying -- walk

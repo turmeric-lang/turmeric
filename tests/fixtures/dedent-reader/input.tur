@@ -1,0 +1,52 @@
+; #dedent{...}: indent-aware multi-line literal (stdlib/dedent-reader.tur).
+; Leading blank lines are ignored, the first real line sets the indent, and
+; every line loses that much; the closing-brace line contributes nothing.
+#use-reader-macros "stdlib/dedent-reader.tur"
+(load "stdlib/dedent.tur")
+
+(defn show [label : cstr s : cstr] : int
+  (println label)
+  (println s)
+  0)
+
+(defn main [] : int
+  ; basic: relative indentation survives, source indentation does not
+  (show "basic " #dedent{
+      Usage: tool [options]
+        -h  show help
+        -v  verbose
+    })
+  ; several leading blank lines
+  (show "blanks " #dedent{
+
+
+      a
+      b
+    })
+  ; a line indented less than the first is stripped to column 0
+  (show "less   " #dedent{
+        deep
+      shallow
+    })
+  ; interior blank line kept (as empty), trailing blank lines dropped
+  (show "gap    " #dedent{
+      one
+
+      two
+
+
+    })
+  ; nested braces balance; a backslash-escaped brace is literal
+  (show "braces " #dedent{
+      f(x) { return {1}; }
+      close \} here
+    })
+  ; empty and whitespace-only bodies
+  (show "empty  " #dedent{})
+  (show "blank  " #dedent{
+    })
+  ; text on the brace line: its indent is the one space after the brace
+  (show "inline " #dedent{ hi
+      there
+    })
+  0)

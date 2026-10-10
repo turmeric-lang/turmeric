@@ -1,0 +1,77 @@
+;;; tur/dedent -- indent-aware multi-line text for the `#dedent{...}` literal.
+;;;
+;;; `cstr-dedent` is the function behind `#dedent{...}` (see
+;;; `stdlib/dedent-reader.tur`).  The reader hands it the raw body between the
+;;; braces, newlines and indentation intact, and it returns the text with the
+;;; source indentation removed:
+;;;
+;;;   1. leading blank (whitespace-only) lines are dropped, so the line break
+;;;      right after `{` does not appear in the result;
+;;;   2. the first non-blank line sets the indent -- its run of leading spaces
+;;;      and tabs;
+;;;   3. every line loses up to that many leading whitespace bytes (a line
+;;;      indented LESS than the first is stripped to column 0, never errors);
+;;;   4. trailing blank lines are dropped, as is the final newline, so the
+;;;      line holding the closing `}` does not appear either.
+;;;
+;;; Lines are joined with "\n"; a "\r" before a "\n" is removed.  Whitespace
+;;; is counted in bytes, so a tab is one unit of indent -- do not mix tabs and
+;;; spaces within one literal.
+;;;
+;;; Not autoloaded: `(load "stdlib/dedent.tur")` for the function and
+;;; `#use-reader-macros "stdlib/dedent-reader.tur"` for the syntax.
+;;;
+;;; Since: Phase B1
+;; dedent for multi-line text
+;;; cstr-dedent -- strip the common leading indent from a multi-line cstr.
+;;;
+;;; Parameters:
+;;;   s -- NUL-terminated multi-line text, typically a `#dedent{...}` body
+;;;
+;;; Returns:
+;;;   A freshly heap-allocated cstr with the indent removed as described in
+;;;   the module header.  The caller frees it with `cstr-free`.
+;;;
+;;; Example:
+;;;   (cstr-dedent "\n    a\n      b\n  ")  ; => "a\n  b"
+;;;
+;;; Since: Phase B1
+(defn cstr-dedent [s : cstr] : cstr
+  ```c
+  const char *src = (const char *)(intptr_t)s;
+  size_t n = strlen(src);
+  char *out = (char *)malloc(n + 1);
+  size_t o = 0;
+  /* Pass 1: find the first non-blank line and its indent. */
+  size_t p = 0, indent = 0, first = n;
+  while (p < n) {
+    size_t q = p;
+    while (q < n && (src[q] == ' ' || src[q] == '\t')) q++;
+    if (q < n && src[q] != '\n' && src[q] != '\r') { indent = q - p; first = p; break; }
+    while (q < n && src[q] != '\n') q++;
+    p = (q < n) ? q + 1 : n;
+  }
+  /* Pass 2: copy each line from `first`, minus up to `indent` leading
+   * whitespace bytes and any trailing CR; blank lines become empty. */
+  p = first;
+  size_t kept = 0;  /* output length up to the last non-blank line */
+  while (p < n) {
+    size_t e = p;
+    while (e < n && src[e] != '\n') e++;
+    size_t b = p, k = 0;
+    while (b < e && k < indent && (src[b] == ' ' || src[b] == '\t')) { b++; k++; }
+    size_t t = e;
+    if (t > b && src[t - 1] == '\r') t--;
+    size_t w = t;
+    while (w > b && (src[w - 1] == ' ' || src[w - 1] == '\t')) w--;
+    if (w > b) {            /* non-blank line: keep its own trailing space */
+      memcpy(out + o, src + b, t - b);
+      o += t - b;
+      kept = o;
+    }
+    if (e < n) out[o++] = '\n';
+    p = (e < n) ? e + 1 : n;
+  }
+  out[kept] = '\0';
+  return (const char *)out;
+  ```)

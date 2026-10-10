@@ -1,0 +1,6 @@
+basic
+Usage: tool [options]
+  -h  show help
+nested
+if x { y }
+  z

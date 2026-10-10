@@ -1,0 +1,24 @@
+basic 
+Usage: tool [options]
+  -h  show help
+  -v  verbose
+blanks 
+a
+b
+less   
+deep
+shallow
+gap    
+one
+
+two
+braces 
+f(x) { return {1}; }
+close } here
+empty  
+
+blank  
+
+inline 
+hi
+     there

@@ -1,0 +1,23 @@
+#lang sweet-exp
+; #dedent{...} under sweet-exp: the reader dispatch sits below the indentation
+; layer, so the body reaches the macro verbatim.  The macro is defined inline
+; because `#use-reader-macros` is not recognized in a sweet-exp file (see
+; docs/reported/use-reader-macros-rejected-under-sweet-exp.md).
+reader-macros/define 'dedent :raw-brace '(cstr-dedent $body)
+load "stdlib/dedent.tur"
+
+defn show [label : cstr s : cstr] : int
+  println(label)
+  println(s)
+  0
+
+defn main [] : int
+  show "basic" #dedent{
+      Usage: tool [options]
+        -h  show help
+    }
+  show "nested" #dedent{
+      if x { y }
+        z
+    }
+  0

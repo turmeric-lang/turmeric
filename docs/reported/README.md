@@ -44,6 +44,7 @@ is a `spices/watch` finding recorded as probably permanent.
 | --- | --- | --- |
 | ~~[match-result-temp-typed-from-first-arm](../archive/match-result-temp-typed-from-first-arm.md)~~ | low-medium (compile failure) | **RESOLVED 2026-10-09** (archived): the arm join (`match_arm_type_compatible`, shared by `match` and `if`) kept the first arm's type when two were `type_eq`, which ignores a fn type's `boxed` flag -- so a capture-free lambda first made the result temp `int64_t` beside `void *` arms. Two arms of one fn type now join to the fat one. Pinned by `match-fn-result-thin-arm-first` |
 | [watch-darwin-fresh-name-is-create](watch-darwin-fresh-name-is-create.md) | low | `spices/watch` on Darwin reports a name that arrived by `rename(2)` as `create`, not `rename`, because the tree layer diffs directory snapshots; Linux reports `rename`. The event and path are correct on both |
+| [use-reader-macros-rejected-under-sweet-exp](use-reader-macros-rejected-under-sweet-exp.md) | low | `#use-reader-macros "..."` in a `#lang sweet-exp` file fails with "unexpected character '#'"; the directive is only tried at top level of the plain reader, after the sweet preprocessor has rewritten the line. Workaround: inline `reader-macros/define` |
 
 ## Found implementing the notebook docs-and-examples plan (filed 2026-10-05)
 
