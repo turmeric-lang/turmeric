@@ -34,6 +34,15 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found refining the nng async plan (filed 2026-10-10)
+
+Spiking [nng-async-plan](../upcoming/spices/nng-async-plan.md) against v0.63.9
+turned up one compiler defect. The reactor guide's examples are affected by it.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [nil-argument-to-ptr-param-emits-void-expression](nil-argument-to-ptr-param-emits-void-expression.md) | low-medium (compile failure) | `tur check` accepts `nil` for a `ptr<void>` parameter, then the emitter splices in the unit placeholder `((void)0)` and cc rejects the call. Every reactor-guide example that passes `nil` as `user-data` hits it (12 sites, both syntaxes). Workaround: `(:: 0 :ptr<void>)` |
+
 ## Found auditing the spices plans (filed 2026-10-07)
 
 Both rows were carried out of `docs/upcoming/spices/` when its resolved plans
