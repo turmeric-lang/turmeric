@@ -311,8 +311,9 @@ Left to a human at the time, with the caveat "do not leave the suite
 permanently red as the reason it can never be flipped". That is exactly what
 had happened: `docs-offline.spec.js`'s cold-pane test became a standing failure
 and held the desktop suite at `1 failed` for 21 consecutive commits. Marking it
-(docs/reported/docs-offline-cold-pane-never-boots.md) restored a clean baseline,
-and the desktop step is now BLOCKING.
+(docs/archive/docs-offline-cold-pane-never-boots.md) restored a clean baseline,
+and the desktop step is now BLOCKING. The test itself was fixed and un-marked
+on 2026-10-10: a `Vary: Origin` mismatch in sw.js's cache lookups.
 
 The decision was made on this report's own `/ci` data rather than on the raw
 fail rate, which would have argued the other way: 42 failures in 266 commits

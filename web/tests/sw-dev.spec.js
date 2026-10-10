@@ -16,6 +16,21 @@ async function registrations(page) {
     });
 }
 
+/**
+ * registrations() for expect.poll: -1 while a navigation has the page between
+ * documents. The teardown under test ends by reloading the page, so a poll that
+ * lands mid-reload is expected and must be asked again, not fail the test --
+ * expect.poll does not retry a callback that throws.
+ */
+async function polledRegistrations(page) {
+    try {
+        return await registrations(page);
+    } catch (err) {
+        if (/Execution context was destroyed|navigat/i.test(String(err))) return -1;
+        throw err;
+    }
+}
+
 test.describe('service worker on localhost', () => {
 
     test('is not registered by a plain visit', async ({ page }) => {
@@ -29,20 +44,17 @@ test.describe('service worker on localhost', () => {
 
     test('?sw=1 opts back in, and a plain visit then tears it down', async ({ page }) => {
         await page.goto('/try/?sw=1');
-        await page.waitForFunction(async () => {
-            const regs = await navigator.serviceWorker.getRegistrations();
-            return regs.length > 0;
-        }, null, { timeout: 30_000 });
+        // expect.poll, not waitForFunction: waitForFunction never awaits its
+        // predicate, so an `async` one returns a Promise -- truthy -- and the
+        // wait passed on its first poll whatever the registration count was.
+        await expect.poll(() => polledRegistrations(page), { timeout: 30_000 }).toBeGreaterThan(0);
         await page.waitForFunction(() => !!navigator.serviceWorker.controller,
                                    null, { timeout: 30_000 });
 
         // Now the situation the report described: a dev server visit with a
         // worker already installed. It should clean up after itself.
         await page.goto('/try/');
-        await page.waitForFunction(async () => {
-            const regs = await navigator.serviceWorker.getRegistrations();
-            return regs.length === 0;
-        }, null, { timeout: 30_000 });
+        await expect.poll(() => polledRegistrations(page), { timeout: 30_000 }).toBe(0);
 
         // And having torn it down, the page reloads once so what is on screen
         // is the real files rather than the copies the removed worker served.

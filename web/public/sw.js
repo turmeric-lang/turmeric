@@ -380,6 +380,24 @@ async function fetchFromNetwork(request) {
     }
 }
 
+/**
+ * Options for every lookup that answers a page's request: ignore `Vary`.
+ *
+ * The precache is keyed by URL alone. The worker fetches each entry itself with
+ * a bare `fetch(url)`, so the request stored beside it carries none of the
+ * headers the page will later send. A `Vary` on the stored response then
+ * compares headers that were never part of what was cached, and the lookup
+ * misses an entry that is sitting right there.
+ *
+ * `vite preview` -- what the offline spec serves from -- answers everything
+ * with `Vary: Origin`, and the shell's `crossorigin` module script and
+ * stylesheets are cors-mode requests that send an Origin header. Online the
+ * miss falls through to the network and nobody sees it; offline the shell HTML
+ * comes back and its JS and CSS fail, so the app never boots. That is what
+ * docs/archive/docs-offline-cold-pane-never-boots.md was.
+ */
+const MATCH = { ignoreVary: true };
+
 async function networkFirst(request) {
     const cache = await caches.open(RUNTIME);
     try {
@@ -387,18 +405,19 @@ async function networkFirst(request) {
         if (fresh && fresh.ok) cache.put(request, fresh.clone());
         return fresh;
     } catch (e) {
-        const cached = await cache.match(request) || await caches.match(request);
+        const cached = await cache.match(request, MATCH)
+                    || await caches.match(request, MATCH);
         if (cached) return cached;
         const url = new URL(request.url);
         if (url.pathname.startsWith('/docs/')) return docsOfflinePage(url);
-        const shell = await caches.match('/try/');
+        const shell = await caches.match('/try/', MATCH);
         if (shell) return shell;
         throw e;
     }
 }
 
 async function cacheFirst(request) {
-    const cached = await caches.match(request);
+    const cached = await caches.match(request, MATCH);
     if (cached) {
         // Background revalidate; ignore failure (offline).
         fetchFromNetwork(request).then(async (res) => {
@@ -417,7 +436,7 @@ async function cacheFirst(request) {
         }
         return fresh;
     } catch (e) {
-        const fallback = await caches.match('/try/');
+        const fallback = await caches.match('/try/', MATCH);
         if (fallback && isHtmlNavigation(request)) return fallback;
         throw e;
     }

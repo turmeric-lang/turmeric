@@ -2099,8 +2099,9 @@ jobs:
       # BLOCKING since 2026-10-02, which is that report's fix direction 6 and
       # was left to a human on purpose.  What changed is that the condition it
       # set -- "once the desktop suite is genuinely clean" -- is now true and
-      # measured rather than asserted: the last standing failure was marked in
-      # docs/reported/docs-offline-cold-pane-never-boots.md, and the /ci
+      # measured rather than asserted: the last standing failure was marked
+      # (and on 2026-10-10 fixed) in
+      # docs/archive/docs-offline-cold-pane-never-boots.md, and the /ci
       # history puts the residual ISOLATED flake at 6 commits in 266 (2.3%),
       # damped by `retries: 2` in playwright.config.js (see the note there).
       #
