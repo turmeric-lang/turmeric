@@ -26,7 +26,10 @@ submodule would have needed `--recursive` everywhere and checks out the whole
 **Do not edit these files by hand.** The next sync reverts the edit silently.
 
 1. Make the fix in the fork, with a test under its `c-tests/` or `mir-tests/`,
-   and merge it there.
+   and merge it there. **Keep PRs against the fork to one at a time** and batch
+   fixes into it: the fork's matrix runs on every push to any branch and is slow,
+   and a few PRs in a row occupy the shared runners for hours. See the "MIR fork"
+   rule in `CLAUDE.md`.
 2. Re-sync: `bash tools/update-mir.sh <commit>`. The script copies the file list,
    rewrites `UPSTREAM`, and checks that the three TUs still compile from the copy.
 3. Add the fix to the log below, rebuild with `-DTUR_JIT=ON`, and run

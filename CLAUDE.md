@@ -479,7 +479,8 @@ The built compiler lands at `./build/tur`. It carries the MIR JIT engine
 (`tur jit`): `TUR_JIT` defaults ON on 64-bit x86-64/arm64, compiling the MIR
 sources vendored under `external/mir/` -- no configure reaches the network.
 Never edit `external/mir/` by hand; `external/mir/VENDORED.md` says how to
-change MIR.
+change MIR, and the "MIR fork" rule below limits how many PRs you may open
+against it.
 
 ### Test suite size and runtime -- READ BEFORE ASSUMING A HANG
 
@@ -604,6 +605,31 @@ tur run web-dev  # run web dev server
 upstream `just` binary still works against the same Justfile if you prefer it,
 but it is not required. See
 [docs/guides/tur-run-guide.md](docs/guides/tur-run-guide.md).
+
+## MIR fork (`turmeric-lang/mir`): at most one PR at a time -- STRICT RULE
+
+`turmeric-lang/mir` runs a six-job test matrix (aarch64, apple-aarch64, riscv64,
+ppc64le, s390x, AMD64-Linux-OSX-Windows) on **every push to any branch**, not
+only on PRs (seen: pushes to `master` and to `claude/*` branches each queue all
+six). Several are non-x86 jobs that queue for a long time. One PR is fine;
+**three in a row saturate the GitHub Actions runners for hours, and nothing else
+gets run** -- every other repo's CI queues behind it.
+
+- **One PR open against the fork at a time.** Do not open another until the
+  first has merged or been closed.
+- **Batch.** Collect every MIR fix you need into one branch and one PR rather
+  than one PR per fix.
+- **Do not push scratch branches** to the fork to "see what CI says". Each push
+  starts the whole matrix. Build and test locally first
+  (`cmake -DTUR_MIR_SOURCE_DIR=<checkout> ...`, see
+  [external/mir/VENDORED.md](external/mir/VENDORED.md)), and push once.
+- **Push each branch once it is ready, not after every commit.** Amend or squash
+  locally; a follow-up push re-runs everything.
+- **If the queue is already deep,** cancel stale runs for superseded commits
+  (`gh run list -R turmeric-lang/mir --status queued` /
+  `gh run cancel <id> -R turmeric-lang/mir`) instead of letting them drain.
+
+This applies to every agent and every session; it is not specific to one task.
 
 ## Per-file Commands Inside a Spice
 

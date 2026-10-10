@@ -15,6 +15,9 @@ the highest-risk constraints:
   Never create or scaffold `./spices/` in this repo.
 - Use `;;;` docstrings for documented Turmeric definitions and keep fixture
   files ASCII-only.
+- At most one PR open against `turmeric-lang/mir` at a time, and no scratch
+  branches pushed to it: its CI runs on every push and several PRs in a row
+  starve all other CI for hours. Batch MIR fixes into one PR (see `CLAUDE.md`).
 - Prefer sweet-expression style in new `.tur.sweet` files, following the
   formatting and indentation rules documented in `CLAUDE.md`.
 
