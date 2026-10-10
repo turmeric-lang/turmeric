@@ -49,13 +49,14 @@ is a `spices/watch` finding recorded as probably permanent.
 
 The plan ([notebook-docs-examples-plan](../upcoming/notebook-docs-examples-plan.md))
 ships five example notebooks that import `plot`, `linalg`, `stats`, and `frame`
-from cells. None of them can run: the notebook's embedded evaluator never sets
-`module_base_dir`, so every `(import ...)` fails with a generic elaboration
-error.
+from cells. Until 2026-10-10 none of them could run: every `(import ...)`
+failed with a generic elaboration error. The imports resolve now; what still
+stops four of the five is the second row.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [notebook-eval-no-module-base-dir](notebook-eval-no-module-base-dir.md) | medium (feature gap) | `session-open` calls `turi_env_new()` but never `turi_env_set_module_base_dir`, so no cell can import an external spice; all five C1 example notebooks and the C2 guide examples fail at the first import |
+| ~~[notebook-eval-no-module-base-dir](../archive/notebook-eval-no-module-base-dir.md)~~ | medium (feature gap) | **RESOLVED 2026-10-10** (archived): three walls, not one. libturi gained `turi_env_set_search_path_for` (the `tur run <file>` walk-up -- own `src/`, `:spices` deps, workspace siblings -- moved out of `main.c` into `src/compiler/spice_search.c`), `turi_env_set_toplevel_imports` (a top-level `(import ...)` with `:refer`/`:as`/`:for-macros` in a session that asks; `tur repl` does) and `turi_env_preload_stdlib` (the `--interpret` program preload). The notebook opens `session-open-for path`; a cell imports and the next calls. Pinned by `embed-peripherals.c` Gap 9, `repl-smoke.sh`, the notebook's `session_test.tur` case 5. Two inline-C executor defects found on the way are fixed with it (`run-interp-inline-c-constructor.sh`) |
+| [notebook-cells-cannot-call-inline-c-spices](notebook-cells-cannot-call-inline-c-spices.md) | medium (feature gap) | **Filed 2026-10-10.** The example notebooks' imports resolve now, but `plot`/`linalg`/`stats`/`frame` do their work in inline C, which the interpreter declines ("inline-C not supported"); the `repl-jit-inline-c` route is unreachable from an embedder (its compile hook lives in `src/main.c`). `math-walkthrough` checks clean |
 
 ## Found auditing r7rs compile- and run-time cost (filed 2026-10-05)
 

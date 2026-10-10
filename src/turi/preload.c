@@ -5,14 +5,20 @@
  * (src/web/wasm_glue.c) share one load list.
  */
 
+#ifndef _DEFAULT_SOURCE
+#  define _DEFAULT_SOURCE   /* setenv */
+#endif
 #include "turi/preload.h"
 
 #include "turi/eval.h"
 #include "buf.h"
 #include "source_literal.h"
 #include "runtime/globals.h"   /* saffron-lang-plan S6: g_lang_prelude */
+#include "turi/collections_native.h"   /* turi_register_collection_natives */
+#include "turi/interpreter_natives.h" /* turi_env_register_interpreter_natives */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Resolve NULL/"" to the legacy cwd-relative default. */
@@ -270,4 +276,36 @@ void turi_env_preload_typeclasses(TuriEnv *env, const char *stdlib_root) {
      * backing Vec/Set/Map types. */
     preload_one(env, preload_root(stdlib_root), "typeclass-show.tur");
     g_turi_stdlib_preload = saved_preload;
+}
+
+void turi_env_preload_stdlib(TuriEnv *env, const char *stdlib_root) {
+    if (!env) return;
+    /* $TUR_STDLIB_DIR first, as for `tur` itself and the R7RS embed. */
+    const char *root = getenv("TUR_STDLIB_DIR");
+    if (!root || !*root) root = stdlib_root;
+    if (root && *root && !getenv("TUR_STDLIB_DIR")) {
+        /* A module import's stdlib fallback and the stdlib's own
+         * `(load "stdlib/...")` forms resolve through TUR_STDLIB_DIR
+         * (elab_toplevel.c, reader.c), which `tur` exports for itself; an
+         * embedder that names its root gets the same (r7rs_embed.c does too). */
+#ifdef _WIN32
+        _putenv_s("TUR_STDLIB_DIR", root);
+#else
+        setenv("TUR_STDLIB_DIR", root, 1);
+#endif
+    }
+    /* The program preload `tur --interpret` runs (src/main.c cmd_eval), in
+     * its order; see each helper's comment in preload.h for why it sits where
+     * it does.  Not the REPL's Show slice (turi_env_preload_typeclasses): it
+     * loads stdlib `String` into the global scope, where a module that
+     * defines its own (frame/ownstr) can no longer export it. */
+    turi_env_preload_macros(env, root);
+    turi_env_preload_native_stubs(env);
+    turi_env_preload_collections(env, root);
+    /* A `#lang` switch truncates back to here, not to an empty session. */
+    turi_env_pin_prelude(env);
+    /* The native shims win over the inline-C bodies just loaded; the
+     * collection registry is re-asserted for the same reason (vec-new-filled). */
+    turi_env_register_interpreter_natives(env);
+    turi_register_collection_natives(env);
 }

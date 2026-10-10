@@ -102,6 +102,7 @@
 /* Phase PKG-1: Spice package manager */
 #include "pkg.h"
 #include "global.h"   /* tur_installed_spice_dir: :global spice deps */
+#include "spice_search.h"  /* find_spice_root / auto_append_spice_includes */
 /* RN0-RN7: Justfile-compatible task runner */
 #include "justrun.h"
 /* Global configuration variables — defined in globals.c */
@@ -2251,7 +2252,8 @@ static const char *resolve_turmeric_root(char *out, size_t cap) {
  * back C:\dir\sub -- so a walk-up that steps with strrchr(p, '/') alone finds
  * no separator, stops on its first iteration, and reports "not found" for the
  * entire platform.  Three loops below had that bug independently; this is the
- * one place to fix it.
+ * one place to fix it in main.c (two of those loops now live in
+ * src/compiler/spice_search.c, whose ss_last_path_sep is the same split).
  *
  * Fourth instance of the class, after find_stdlib_beside_exe,
  * rewrite_autolink_relative_paths and lsp.c's spice_root_of.  They all fail the
@@ -4021,76 +4023,11 @@ static char *find_project_root(const char *start) {
     return NULL;
 }
 
-/* SC3: maximum number of parent directories find_spice_root walks before
- * giving up.  The deepest known intra-spice file is `<root>/src/<mod>/x.tur`
- * (3 levels above the spice root); 16 leaves ample headroom for worktrees,
- * nested temp checkouts, and `node_modules`-style nesting without ever
- * climbing all the way to `/` on a filesystem that has no `build.tur`. */
-#define TUR_SPICE_WALK_MAX 16
-
-/* SC3: walk up from `file_path`'s directory looking for a sibling
- * `build.tur`.  Returns a heap-allocated absolute path to the directory
- * containing the manifest (the spice root), or NULL if no build.tur is
- * found within TUR_SPICE_WALK_MAX steps.
- *
- * The plan calls for an absolute result so callers don't have to worry
- * about cwd drift between resolution and use.  We canonicalize the
- * starting directory via realpath() when possible; on failure we fall
- * back to a cwd-prefixed path so a relative input file still resolves
- * predictably. */
+/* SC3: walk up from `file_path`'s directory to the enclosing `build.tur`.
+ * Lives in tur_core (src/compiler/spice_search.c) so that libturi embedders
+ * share it; see spice_find_root for the contract. */
 static char *find_spice_root(const char *file_path) {
-    if (!file_path) return NULL;
-
-    char raw_dir[4096];
-    dir_of_path(file_path, raw_dir, sizeof(raw_dir));
-
-    /* Canonicalize.  realpath() requires the path to exist; for a file
-     * the caller is about to read, the directory always exists, so this
-     * should generally succeed.  If it fails (e.g. permissions), fall
-     * back to cwd-prefixing for a relative path. */
-    char dir[4096];
-    if (realpath(raw_dir, dir) == NULL) {
-        if (raw_dir[0] == '/') {
-            strncpy(dir, raw_dir, sizeof(dir) - 1);
-            dir[sizeof(dir) - 1] = '\0';
-        } else {
-            char cwd[4096];
-            if (!getcwd(cwd, sizeof(cwd))) return NULL;
-            int n;
-            if (raw_dir[0] == '.' && raw_dir[1] == '\0') {
-                n = snprintf(dir, sizeof(dir), "%s", cwd);
-            } else {
-                n = snprintf(dir, sizeof(dir), "%s/%s", cwd, raw_dir);
-            }
-            if (n < 0 || (size_t)n >= sizeof(dir)) return NULL;
-        }
-    }
-
-    /* `dir` came through realpath() just above, which on Windows returns a
-     * backslash path even when the caller passed forward slashes -- so before
-     * last_path_sep this loop never advanced past depth 0.
-     * auto_append_spice_includes then contributed no include paths at all and
-     * every `(import sibling)` inside a spice went unresolved.
-     *
-     * `tur check` hid it: the importing file's own directory is already on the
-     * search path, so a sibling in the SAME directory resolved anyway and the
-     * command looked fine.  The LSP cannot lean on that -- it analyses a scratch
-     * copy in the temp directory, whose neighbours are other scratch files --
-     * which is why go-to-definition, completion and rename across modules all
-     * came back empty on Windows while `tur check` said nothing was wrong. */
-    for (int steps = 0; steps < TUR_SPICE_WALK_MAX; steps++) {
-        char candidate[4096];
-        if (pkg_resolve_manifest_path(dir, candidate, sizeof(candidate))) {
-            size_t dl = strlen(dir);
-            char *res = (char *)malloc(dl + 1);
-            if (res) memcpy(res, dir, dl + 1);
-            return res;
-        }
-        char *slash = last_path_sep(dir);
-        if (!slash || slash == dir) break;
-        *slash = '\0';
-    }
-    return NULL;
+    return spice_find_root(file_path);
 }
 
 /* XF1 (experimental-flag-mechanism-plan): merge an enclosing spice's
@@ -4164,31 +4101,6 @@ static char **discover_manifest_reader_macros(const char *input_path,
     return out;
 }
 
-/* Append `path` (taken by ownership of a strdup'd copy of `s`) to both
- * the active include list and the owned-pointers ledger.  The owned
- * ledger lets the caller free each strdup'd path after the compile
- * completes.  Returns 0 on success, -1 on allocation failure (no
- * partial state -- both arrays untouched). */
-static int append_inc_owned(const char *s,
-                            char ***inc, int *n_inc,
-                            char ***owned, int *n_owned) {
-    char *copy = strdup(s);
-    if (!copy) return -1;
-    char **bigger_inc = (char **)realloc(*inc, (size_t)(*n_inc + 1) * sizeof(char *));
-    if (!bigger_inc) { free(copy); return -1; }
-    *inc = bigger_inc;
-    char **bigger_own = (char **)realloc(*owned, (size_t)(*n_owned + 1) * sizeof(char *));
-    if (!bigger_own) {
-        /* Roll back the inc realloc growth so caller's view is consistent. */
-        free(copy);
-        return -1;
-    }
-    *owned = bigger_own;
-    (*inc)[(*n_inc)++]   = copy;
-    (*owned)[(*n_owned)++] = copy;
-    return 0;
-}
-
 /* SC4+SC5: auto-discover the enclosing spice and append both its own
  * `src/` (SC4) and every `:spices` dep's `src/` (SC5) to the include
  * list.  Each appended path is strdup'd; the returned `*owned` array
@@ -4246,6 +4158,32 @@ static int ls2_prime_producer_array(Ls2ResolverCtx *ls2, int n_existing) {
     return 0;
 }
 
+/* LS2: the SpiceSearchHooks auto_append_spice_includes hands the walk.
+ * `ud` is the caller's Ls2ResolverCtx, or NULL when it keeps none. */
+static void ls2_on_search_add(void *ud, int n_inc, const char *dir,
+                              const char *producer) {
+    Ls2ResolverCtx *ls2 = (Ls2ResolverCtx *)ud;
+    (void)ls2_push_producer(ls2, n_inc, producer);
+    if (producer && ls2 && ls2->debug_resolver) {
+        fprintf(stderr,
+                "tur: resolver: added workspace sibling '%s' src/ -> %s\n",
+                producer, dir);
+    }
+}
+
+/* LS2: snapshot the consumer's declared :spices names so the elaborator can
+ * suppress the warning when a workspace sibling is already redeclared via
+ * :spices. */
+static void ls2_on_search_manifest(void *ud, const PkgManifest *m) {
+    Ls2ResolverCtx *ls2 = (Ls2ResolverCtx *)ud;
+    if (!ls2 || m->n_spices <= 0) return;
+    ls2->declared_spices = (const char **)calloc((size_t)m->n_spices, sizeof(char *));
+    if (!ls2->declared_spices) return;
+    for (int i = 0; i < m->n_spices; i++)
+        ls2->declared_spices[i] = strdup(m->spices[i].name);
+    ls2->n_declared_spices = m->n_spices;
+}
+
 static int auto_append_spice_includes(const char *input,
                                       char ***inc, int *n_inc,
                                       char ***owned, int *n_owned,
@@ -4263,181 +4201,16 @@ static int auto_append_spice_includes(const char *input,
     }
     if (g_no_auto_spice || !input) return 0;
 
-    char *root = find_spice_root(input);
-    if (!root) return 0;
+    /* SC4 + SC5 + LS2: the walk itself is spice_search_append
+     * (src/compiler/spice_search.c), shared with libturi embedders; the LS2
+     * bookkeeping rides on its hooks. */
+    SpiceSearchHooks hooks = {
+        .on_add      = ls2_on_search_add,
+        .on_manifest = ls2_on_search_manifest,
+        .ud          = out_ls2,
+    };
+    (void)spice_search_append(input, inc, n_inc, owned, n_owned, &hooks);
 
-    /* SC4: own src/ (always preferred over deps on name collision). */
-    char own_src[4096];
-    int n = snprintf(own_src, sizeof(own_src), "%s/src", root);
-    if (n > 0 && (size_t)n < sizeof(own_src)) {
-        struct stat st;
-        if (stat(own_src, &st) == 0 && S_ISDIR(st.st_mode)) {
-            if (append_inc_owned(own_src, inc, n_inc, owned, n_owned) == 0)
-                (void)ls2_push_producer(out_ls2, *n_inc, NULL);
-        }
-    }
-
-    /* SC5: parse the manifest and append every fetched `:spices` dep's
-     * src/.  Layout mirrors the convention used by cmd_run's project
-     * mode: spices/<name>-<ref>/src/  (preferred), or spices/<name>/src/
-     * for unversioned, or <root>/<s->path>/src/ for local-path deps.
-     * If a `:subdir` is set (monorepo sub-package), descend into it
-     * first, then look for src/.  If no src/ exists, fall back to the
-     * dep dir itself so the user gets *some* search path. */
-    char manifest_path[4096];
-    if (pkg_resolve_manifest_path(root, manifest_path, sizeof(manifest_path))) {
-        PkgManifest m;
-        memset(&m, 0, sizeof(m));
-        if (pkg_manifest_read(manifest_path, &m)) {
-            char spices_dir[4096];
-            snprintf(spices_dir, sizeof(spices_dir), "%s/spices", root);
-            for (int i = 0; i < m.n_spices; i++) {
-                const PkgSpice *s = &m.spices[i];
-                char dep_dir[4096];
-                /* global-spice-library-consumption: `#{:global true}` resolves
-                 * from the `tur install` registry, not from <root>/spices. */
-                bool from_global = false;
-                if (s->is_global) {
-                    if (!tur_installed_spice_dir(s->name, dep_dir,
-                                                 sizeof(dep_dir), NULL, NULL))
-                        continue;
-                    from_global = true;
-                } else if (s->path) {
-                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s", root, s->path);
-                } else if (s->ref) {
-                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s-%s",
-                             spices_dir, s->name, s->ref);
-                } else {
-                    snprintf(dep_dir, sizeof(dep_dir), "%s/%s",
-                             spices_dir, s->name);
-                }
-                if (s->subdir && !from_global) {
-                    char joined[4096];
-                    snprintf(joined, sizeof(joined), "%s/%s", dep_dir, s->subdir);
-                    strncpy(dep_dir, joined, sizeof(dep_dir) - 1);
-                    dep_dir[sizeof(dep_dir) - 1] = '\0';
-                }
-                char dep_src[4096];
-                snprintf(dep_src, sizeof(dep_src), "%s/src", dep_dir);
-                struct stat ss;
-                const char *chosen = (stat(dep_src, &ss) == 0 && S_ISDIR(ss.st_mode))
-                                     ? dep_src : dep_dir;
-                /* Only add the path if it actually exists on disk.  A
-                 * missing fetched dep (offline run, etc.) shouldn't
-                 * pollute the include path with bogus dirs. */
-                if (stat(chosen, &ss) == 0 && S_ISDIR(ss.st_mode)) {
-                    if (append_inc_owned(chosen, inc, n_inc, owned, n_owned) == 0)
-                        (void)ls2_push_producer(out_ls2, *n_inc, NULL);
-                }
-            }
-            /* LS2: snapshot the consumer's declared :spices names so the
-             * elaborator can suppress the warning when a workspace
-             * sibling is already redeclared via :spices. */
-            if (out_ls2 && m.n_spices > 0) {
-                out_ls2->declared_spices =
-                    (const char **)calloc((size_t)m.n_spices, sizeof(char *));
-                if (out_ls2->declared_spices) {
-                    for (int i = 0; i < m.n_spices; i++) {
-                        out_ls2->declared_spices[i] = strdup(m.spices[i].name);
-                    }
-                    out_ls2->n_declared_spices = m.n_spices;
-                }
-            }
-            pkg_manifest_free(&m);
-        }
-    }
-
-    /* LS2 (local-spice-dev-workflow-plan): workspace member auto-resolution.
-     *
-     * Walk ancestors of `root` looking for any directory containing a
-     * `build.tur` whose `:members [...]` list names our spice (matched by
-     * comparing the resolved absolute path of `<workspace>/<member>` to
-     * `root`).  When found, add every *other* member's `src/` to the
-     * include path.  Workspace membership is the consent boundary:
-     * sibling members can import each other without an explicit :spices
-     * entry; external publication still uses URL deps.
-     *
-     * Optional one-time warning when an undeclared sibling is consulted is
-     * a future extension (see plan §2); resolution itself is the load-
-     * bearing change.
-     */
-    {
-        char anc[4096];
-        size_t rlen = strlen(root);
-        if (rlen + 1 < sizeof(anc)) {
-            memcpy(anc, root, rlen + 1);
-            for (int up = 0; up < TUR_SPICE_WALK_MAX; up++) {
-                char *last = strrchr(anc, '/');
-                if (!last || last == anc) break;
-                *last = '\0';
-
-                char ws_manifest[4096];
-                if (!pkg_resolve_manifest_path(anc, ws_manifest,
-                                               sizeof(ws_manifest)))
-                    continue;
-
-                PkgManifest wm;
-                memset(&wm, 0, sizeof(wm));
-                bool ok = pkg_manifest_read(ws_manifest, &wm);
-                if (ok && wm.n_members > 0) {
-                    /* Self-detection: locate the member entry whose
-                     * absolute path matches `root`.  Only proceed if the
-                     * current spice is itself a listed member of this
-                     * candidate workspace. */
-                    const char *self_member_path = NULL;
-                    for (int i = 0; i < wm.n_members; i++) {
-                        char mp[4096];
-                        int mn = snprintf(mp, sizeof(mp), "%s/%s",
-                                          anc, wm.members[i]);
-                        if (mn <= 0 || (size_t)mn >= sizeof(mp)) continue;
-                        char real_mp[4096];
-                        if (realpath(mp, real_mp) == NULL) continue;
-                        if (strcmp(real_mp, root) == 0) {
-                            self_member_path = wm.members[i];
-                            break;
-                        }
-                    }
-                    if (self_member_path) {
-                        for (int i = 0; i < wm.n_members; i++) {
-                            if (strcmp(wm.members[i], self_member_path) == 0)
-                                continue;
-                            char sib_src[4096];
-                            int sn = snprintf(sib_src, sizeof(sib_src),
-                                              "%s/%s/src",
-                                              anc, wm.members[i]);
-                            if (sn <= 0 || (size_t)sn >= sizeof(sib_src))
-                                continue;
-                            struct stat sst;
-                            if (stat(sib_src, &sst) == 0
-                                && S_ISDIR(sst.st_mode)) {
-                                if (append_inc_owned(sib_src,
-                                                     inc, n_inc,
-                                                     owned, n_owned) == 0) {
-                                    (void)ls2_push_producer(out_ls2, *n_inc,
-                                                            wm.members[i]);
-                                    if (out_ls2 && out_ls2->debug_resolver) {
-                                        fprintf(stderr,
-                                            "tur: resolver: added workspace "
-                                            "sibling '%s' src/ -> %s\n",
-                                            wm.members[i], sib_src);
-                                    }
-                                }
-                            }
-                        }
-                        pkg_manifest_free(&wm);
-                        break;
-                    }
-                }
-                pkg_manifest_free(&wm);
-                /* Any build.tur (workspace or not) terminates the walk so
-                 * we don't accidentally treat a non-workspace ancestor's
-                 * project as the enclosing workspace. */
-                if (ok) break;
-            }
-        }
-    }
-
-    free(root);
     /* LS2: finalize ctx — set length to current *n_inc and allocate the
      * per-include warned[] dedup array so the elaborator can mark slots
      * after firing the first warning. */

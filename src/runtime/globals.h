@@ -159,6 +159,12 @@ extern bool g_symbols_enabled;
 /* INT-2: --interpret mode flag — set by cmd_eval before elaboration. */
 extern bool g_interpret_mode;
 
+/* notebook-eval-no-module-base-dir: a top-level `(import ...)` (outside any
+ * defmodule) is legal in this elaboration.  Set for the length of a turi_eval
+ * on an env that asked for it (turi_env_set_toplevel_imports); false for every
+ * compile, so a file's imports still belong to its defmodule. */
+extern bool g_elab_toplevel_imports;
+
 /* `tur expand`: print each macro expansion (outside stdlib load) to stdout
  * as it happens during elaboration.  Set by cmd_expand in main.c; read at
  * the expansion site in elab_call.c. */

@@ -14565,6 +14565,8 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src, const char *
      * for the other.  A NULL env falls through to turi_eval_impl's own guard. */
     bool saved_mode = g_interpret_mode;
     if (env) g_interpret_mode = env->interpret_mode;
+    bool saved_toplevel_imports = g_elab_toplevel_imports;
+    g_elab_toplevel_imports = env && env->toplevel_imports;
     /* r7rs-lang-plan R9: where the pinned preload ends in the `<eval>` text
      * this call elaborates (g_synthetic_user_from_line, globals.h). */
     uint32_t saved_user_line = g_synthetic_user_from_line;
@@ -14582,6 +14584,7 @@ static TuriValue turi_eval_with_sink(TuriEnv *env, const char *src, const char *
     }
 
     g_interpret_mode = saved_mode;
+    g_elab_toplevel_imports = saved_toplevel_imports;
     g_synthetic_user_from_line = saved_user_line;
     return r;
 }

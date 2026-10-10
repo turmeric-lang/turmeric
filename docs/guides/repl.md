@@ -606,10 +606,10 @@ error: ffi: 'sh/add42' expects 1 arg, got 0
 - **Struct / ADT returns** can't yet be reconstructed on the
   interpreter side. The error suggests sticking to primitive
   (`:int` / `:float` / `:cstr` / etc.) returns for now.
-- **(import M :refer [...])** at REPL top level still hits the
-  elaborator's "import is only allowed inside defmodule" restriction.
-  Since spice exports are pre-bound at load time, you don't need to
-  import them -- call them directly.
+- **Spice exports are pre-bound**, so you don't need to import them --
+  call them directly. A top-level `(import M :refer [...])` (or `:as`)
+  does work at the prompt since 2026-10-10, for a module the REPL can
+  find: one under the cwd, or in the stdlib.
 
 ### Troubleshooting
 

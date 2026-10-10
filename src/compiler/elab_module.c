@@ -1378,6 +1378,164 @@ bool elab_scheme_stdlib_file(void *ud, const char *name, char *out, size_t cap) 
     return true;
 }
 
+/* M2: load one `(import ...)` and inject its :refer symbols (bindings,
+ * macros, effects) into the global scope.  The import list of a defmodule
+ * header runs through here, and so does a top-level import in a session that
+ * allows one (elab_toplevel_import).  false after a diagnostic. */
+static bool elab_apply_import(Elab *e, const ImportSpec *imp) {
+    if (imp->for_macros) {
+        /* Stage 3: macro-time-only import -- evaluate the module into
+         * the macro env; no runtime load, no scope injection. */
+        char mpath[4096];
+        if (!elab_module_resolve_path(e, imp->module_name,
+                                      mpath, sizeof(mpath))) {
+            diag_emit(DIAG_ERROR, imp->span,
+                      ":for-macros module '%s' not found (searched the "
+                      "importing file's directory, the stdlib, and the "
+                      "-I include dirs)",
+                      imp->module_name->name);
+            return false;
+        }
+        if (!elab_macro_env_import(e, imp->module_name, mpath, imp->span)) {
+            return false;
+        }
+        return true;
+    }
+    ElabModule *loaded = elab_load_module(e, imp->module_name, imp->span);
+    if (!loaded) {
+        return false;
+    }
+    /* :refer — add each referred symbol (binding or macro) to the current scope. */
+    for (uint32_t k = 0; k < imp->n_refer; k++) {
+        const Symbol *ref_sym = imp->refer_syms[k];
+
+        /* First check bindings. */
+        Binding *ref_b = NULL;
+        for (uint32_t m = 0; m < loaded->n_exports; m++) {
+            if (loaded->exports[m]->name == ref_sym) {
+                ref_b = loaded->exports[m];
+                break;
+            }
+        }
+        if (ref_b) {
+            scope_add(&e->global, ref_b);
+            continue;
+        }
+
+        /* Phase M4: Check exported macros. */
+        MacroDef *ref_macro = NULL;
+        for (uint32_t m = 0; m < loaded->n_exported_macros; m++) {
+            if (loaded->exported_macros[m]->name == ref_sym) {
+                ref_macro = loaded->exported_macros[m];
+                break;
+            }
+        }
+        if (ref_macro) {
+            /* Inject an alias that is visible everywhere via is_referred,
+             * but keeps defining_module_name so private helpers of the
+             * original module remain accessible during expansion. */
+            MacroDef *alias = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
+            *alias = *ref_macro;
+            alias->is_referred = true;
+            /* Check for name collision with existing global macros.
+             *
+             * The SAME macro arriving by a second path is not a collision.
+             * Macro registration is global, so a diamond -- top imports
+             * both low and mid, and mid also refers low's macro -- used to
+             * report low's macro as conflicting with itself. Re-exporting
+             * a macro via (export-from ...) hits the identical shape. A
+             * macro is identified by (defining module, name); a module
+             * cannot define two macros with one name, so matching both
+             * means it is one definition reached twice. Keep the existing
+             * registration and move on.
+             *
+             * A genuine collision -- two DIFFERENT modules exporting the
+             * same macro name -- still errors, which is the case the
+             * check was written for. */
+            MacroDef *prior = elab_lookup_macro(e, ref_sym);
+            if (prior != NULL) {
+                if (prior->defining_module_name
+                    == ref_macro->defining_module_name) {
+                    continue;
+                }
+                diag_emit(DIAG_ERROR, imp->span,
+                          "macro '%s' from module '%s' conflicts with an existing macro",
+                          ref_sym->name, imp->module_name->name);
+                if (prior->defining_module_name)
+                    diag_emit(DIAG_NOTE, imp->span,
+                              "the macro already in scope is defined by "
+                              "module '%s' -- two different modules cannot "
+                              "supply the same macro name",
+                              prior->defining_module_name->name);
+                return false;
+            }
+            elab_register_macro(e, alias);
+            continue;
+        }
+
+        diag_emit(DIAG_ERROR, imp->span,
+                  "symbol '%s' is not exported from module '%s'",
+                  ref_sym->name, imp->module_name->name);
+        return false;
+    }
+
+    /* PR5-3-D: Process :refer [(effect Name)] imports. */
+    for (uint32_t k = 0; k < imp->n_refer_effects; k++) {
+        const Symbol *ref_eff_sym = imp->refer_effect_syms[k];
+        Effect *ref_eff = NULL;
+        for (uint32_t m = 0; m < loaded->n_exported_effects; m++) {
+            if (loaded->exported_effects[m]->name == ref_eff_sym) {
+                ref_eff = loaded->exported_effects[m];
+                break;
+            }
+        }
+        if (!ref_eff) {
+            diag_emit(DIAG_ERROR, imp->span,
+                      "effect '%s' is not exported from module '%s'",
+                      ref_eff_sym->name, imp->module_name->name);
+            return false;
+        }
+        /* Add to referred_effects so the visibility guard allows access. */
+        if (e->n_referred_effects >= e->cap_referred_effects) {
+            e->cap_referred_effects = e->cap_referred_effects ? e->cap_referred_effects * 2 : 4;
+            e->referred_effects = (Effect **)realloc(e->referred_effects,
+                                  e->cap_referred_effects * sizeof(Effect *));
+        }
+        e->referred_effects[e->n_referred_effects++] = ref_eff;
+    }
+    return true;
+}
+
+Expr *elab_toplevel_import(Elab *e, const Form *call) {
+    if (!e->toplevel_imports || e->scope != &e->global
+        || e->current_module != NULL || e->current_module_name != NULL) {
+        diag_emit(DIAG_ERROR, call->span,
+                  "import is only allowed inside defmodule");
+        return NULL;
+    }
+    ImportSpec imp;
+    if (!parse_import_spec(e, call, &imp)) return NULL;
+    if (!elab_apply_import(e, &imp)) return NULL;
+    if (imp.alias) {
+        if (e->n_toplevel_aliases >= e->cap_toplevel_aliases) {
+            uint32_t cap = e->cap_toplevel_aliases ? e->cap_toplevel_aliases * 2 : 4;
+            const Symbol **names = (const Symbol **)realloc(
+                (void *)e->toplevel_alias_names, cap * sizeof(Symbol *));
+            if (!names) { fprintf(stderr, "tur: oom\n"); abort(); }
+            e->toplevel_alias_names = names;
+            const Symbol **mods = (const Symbol **)realloc(
+                (void *)e->toplevel_alias_modules, cap * sizeof(Symbol *));
+            if (!mods) { fprintf(stderr, "tur: oom\n"); abort(); }
+            e->toplevel_alias_modules = mods;
+            e->cap_toplevel_aliases = cap;
+        }
+        e->toplevel_alias_names[e->n_toplevel_aliases]   = imp.alias;
+        e->toplevel_alias_modules[e->n_toplevel_aliases] = imp.module_name;
+        e->n_toplevel_aliases++;
+    }
+    return e_nil(e, call->span);
+}
+
 Expr *elab_defmodule(Elab *e, const Form *call) {
     /* Only valid at the top level */
     if (e->scope != &e->global) {
@@ -1630,138 +1788,10 @@ Expr *elab_defmodule(Elab *e, const Form *call) {
 
     /* M2: Process imports — load each referenced module and inject :refer symbols. */
     for (uint32_t j = 0; j < mod->n_imports; j++) {
-        const ImportSpec *imp = &mod->imports[j];
-        if (imp->for_macros) {
-            /* Stage 3: macro-time-only import -- evaluate the module into
-             * the macro env; no runtime load, no scope injection. */
-            char mpath[4096];
-            if (!elab_module_resolve_path(e, imp->module_name,
-                                          mpath, sizeof(mpath))) {
-                diag_emit(DIAG_ERROR, imp->span,
-                          ":for-macros module '%s' not found (searched the "
-                          "importing file's directory, the stdlib, and the "
-                          "-I include dirs)",
-                          imp->module_name->name);
-                e->current_module_name = NULL;
-                e->current_module = NULL;
-                return NULL;
-            }
-            if (!elab_macro_env_import(e, imp->module_name, mpath, imp->span)) {
-                e->current_module_name = NULL;
-                e->current_module = NULL;
-                return NULL;
-            }
-            continue;
-        }
-        ElabModule *loaded = elab_load_module(e, imp->module_name, imp->span);
-        if (!loaded) {
+        if (!elab_apply_import(e, &mod->imports[j])) {
             e->current_module_name = NULL;
             e->current_module = NULL;
             return NULL;
-        }
-        /* :refer — add each referred symbol (binding or macro) to the current scope. */
-        for (uint32_t k = 0; k < imp->n_refer; k++) {
-            const Symbol *ref_sym = imp->refer_syms[k];
-
-            /* First check bindings. */
-            Binding *ref_b = NULL;
-            for (uint32_t m = 0; m < loaded->n_exports; m++) {
-                if (loaded->exports[m]->name == ref_sym) {
-                    ref_b = loaded->exports[m];
-                    break;
-                }
-            }
-            if (ref_b) {
-                scope_add(&e->global, ref_b);
-                continue;
-            }
-
-            /* Phase M4: Check exported macros. */
-            MacroDef *ref_macro = NULL;
-            for (uint32_t m = 0; m < loaded->n_exported_macros; m++) {
-                if (loaded->exported_macros[m]->name == ref_sym) {
-                    ref_macro = loaded->exported_macros[m];
-                    break;
-                }
-            }
-            if (ref_macro) {
-                /* Inject an alias that is visible everywhere via is_referred,
-                 * but keeps defining_module_name so private helpers of the
-                 * original module remain accessible during expansion. */
-                MacroDef *alias = (MacroDef *)arena_alloc(e->arena, sizeof(MacroDef));
-                *alias = *ref_macro;
-                alias->is_referred = true;
-                /* Check for name collision with existing global macros.
-                 *
-                 * The SAME macro arriving by a second path is not a collision.
-                 * Macro registration is global, so a diamond -- top imports
-                 * both low and mid, and mid also refers low's macro -- used to
-                 * report low's macro as conflicting with itself. Re-exporting
-                 * a macro via (export-from ...) hits the identical shape. A
-                 * macro is identified by (defining module, name); a module
-                 * cannot define two macros with one name, so matching both
-                 * means it is one definition reached twice. Keep the existing
-                 * registration and move on.
-                 *
-                 * A genuine collision -- two DIFFERENT modules exporting the
-                 * same macro name -- still errors, which is the case the
-                 * check was written for. */
-                MacroDef *prior = elab_lookup_macro(e, ref_sym);
-                if (prior != NULL) {
-                    if (prior->defining_module_name
-                        == ref_macro->defining_module_name) {
-                        continue;
-                    }
-                    diag_emit(DIAG_ERROR, imp->span,
-                              "macro '%s' from module '%s' conflicts with an existing macro",
-                              ref_sym->name, imp->module_name->name);
-                    if (prior->defining_module_name)
-                        diag_emit(DIAG_NOTE, imp->span,
-                                  "the macro already in scope is defined by "
-                                  "module '%s' -- two different modules cannot "
-                                  "supply the same macro name",
-                                  prior->defining_module_name->name);
-                    e->current_module_name = NULL;
-                    e->current_module = NULL;
-                    return NULL;
-                }
-                elab_register_macro(e, alias);
-                continue;
-            }
-
-            diag_emit(DIAG_ERROR, imp->span,
-                      "symbol '%s' is not exported from module '%s'",
-                      ref_sym->name, imp->module_name->name);
-            e->current_module_name = NULL;
-            e->current_module = NULL;
-            return NULL;
-        }
-
-        /* PR5-3-D: Process :refer [(effect Name)] imports. */
-        for (uint32_t k = 0; k < imp->n_refer_effects; k++) {
-            const Symbol *ref_eff_sym = imp->refer_effect_syms[k];
-            Effect *ref_eff = NULL;
-            for (uint32_t m = 0; m < loaded->n_exported_effects; m++) {
-                if (loaded->exported_effects[m]->name == ref_eff_sym) {
-                    ref_eff = loaded->exported_effects[m];
-                    break;
-                }
-            }
-            if (!ref_eff) {
-                diag_emit(DIAG_ERROR, imp->span,
-                          "effect '%s' is not exported from module '%s'",
-                          ref_eff_sym->name, imp->module_name->name);
-                e->current_module_name = NULL;
-                e->current_module = NULL;
-                return NULL;
-            }
-            /* Add to referred_effects so the visibility guard allows access. */
-            if (e->n_referred_effects >= e->cap_referred_effects) {
-                e->cap_referred_effects = e->cap_referred_effects ? e->cap_referred_effects * 2 : 4;
-                e->referred_effects = (Effect **)realloc(e->referred_effects,
-                                      e->cap_referred_effects * sizeof(Effect *));
-            }
-            e->referred_effects[e->n_referred_effects++] = ref_eff;
         }
     }
 
@@ -2250,6 +2280,28 @@ Binding *elab_lookup_sym(Elab *e, const Symbol *sym, Span span, bool *had_error)
      * split at each `/` from the right (module names nest: `a/b/f` tries
      * module `a/b` first) and look for that member of that module. */
     if (e->current_module == NULL && e->current_module_name == NULL) {
+        /* A session's top-level `(import m :as a)`: `a/name` is m's export.
+         * The latest import of an alias wins. */
+        for (uint32_t i = e->n_toplevel_aliases; i-- > 0; ) {
+            const Symbol *alias = e->toplevel_alias_names[i];
+            if (sym_len <= alias->len + 1 || sym_str[alias->len] != '/'
+                || memcmp(sym_str, alias->name, alias->len) != 0)
+                continue;
+            const Symbol *mn = e->toplevel_alias_modules[i];
+            const Symbol *sym_key = symtab_intern(
+                e->st, strslice(sym_str + alias->len + 1, sym_len - alias->len - 1));
+            ElabModule *loaded = elab_find_loaded_module(e, mn);
+            if (loaded) {
+                for (uint32_t m = 0; m < loaded->n_exports; m++)
+                    if (loaded->exports[m]->name == sym_key)
+                        return loaded->exports[m];
+            }
+            diag_emit(DIAG_ERROR, span,
+                      "symbol '%s' is not exported from module '%s'",
+                      sym_key->name, mn->name);
+            *had_error = true;
+            return NULL;
+        }
         for (uint32_t cut = sym_len; cut-- > 1; ) {
             if (sym_str[cut] != '/' || cut + 1 >= sym_len) continue;
             const Symbol *mn = symtab_intern(e->st, strslice(sym_str, cut));

@@ -217,6 +217,7 @@ set(TUR_CORE_SOURCES
     compiler/forms.c
     compiler/span_audit.c
     compiler/pkg.c
+    compiler/spice_search.c
     compiler/justrun.c
     compiler/global.c
     compiler/install.c

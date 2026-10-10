@@ -9,6 +9,7 @@
 #include "interpreter_natives.h"  /* option/result/str/math/seq/json/... natives */
 #include "../runtime/globals.h"  /* g_interpret_mode (libturi-embed-interpret-mode-flag) */
 #include "../compiler/lang_dialects.h"  /* lang_traits: the session language's prelude */
+#include "../compiler/spice_search.h"   /* turi_env_set_search_path_for */
 
 #include <limits.h>
 #include <stdlib.h>
@@ -291,6 +292,8 @@ TuriEnv *turi_env_new_sandboxed(void) {
     return env;
 }
 
+static void env_drop_owned_include_dirs(TuriEnv *env);  /* below */
+
 void turi_env_free(TuriEnv *env) {
     if (!env) return;
 
@@ -401,6 +404,7 @@ void turi_env_free(TuriEnv *env) {
         free((void *)env->module_base_dir);
         env->module_base_dir = NULL;
     }
+    env_drop_owned_include_dirs(env);
 
     /* Gap 5: fire native ud finalizers in LIFO order, then free the nodes. */
     {
@@ -507,6 +511,80 @@ void turi_env_set_module_base_dir(TuriEnv *env, const char *path) {
     } else {
         env->module_base_dir = NULL;  /* default (".") */
     }
+}
+
+/* Free an include list turi_env_set_search_path_for built.  A borrowed one
+ * (include_dirs_owned false) is the embedder's and is left alone. */
+static void env_drop_owned_include_dirs(TuriEnv *env) {
+    if (env->include_dirs_owned) {
+        for (int i = 0; i < env->n_include_dirs; i++)
+            free((void *)env->include_dirs[i]);
+        free((void *)env->include_dirs);
+    }
+    env->include_dirs       = NULL;
+    env->n_include_dirs     = 0;
+    env->include_dirs_owned = false;
+}
+
+void turi_env_set_toplevel_imports(TuriEnv *env, bool on) {
+    if (env) env->toplevel_imports = on;
+}
+
+int turi_env_set_search_path_for(TuriEnv *env, const char *path) {
+    if (!env) return -1;
+    env_drop_owned_include_dirs(env);
+    if (!path) {
+        turi_env_set_module_base_dir(env, NULL);
+        return 0;
+    }
+
+    /* The importing file's directory: what `tur run <path>` searches first. */
+    const char *sep = strrchr(path, '/');
+#ifdef _WIN32
+    const char *bs = strrchr(path, '\\');
+    if (bs && (!sep || bs > sep)) sep = bs;
+#endif
+    if (sep) {
+        size_t n = (size_t)(sep - path);
+        if (n == 0) n = 1;  /* "/x.tur" -> "/" */
+        char *dir = (char *)malloc(n + 1);
+        if (!dir) return -1;
+        memcpy(dir, path, n);
+        dir[n] = '\0';
+        turi_env_set_module_base_dir(env, dir);
+        free(dir);
+    } else {
+        turi_env_set_module_base_dir(env, NULL);  /* "." */
+    }
+
+    /* Then the enclosing spice's src/, its :spices deps and its workspace
+     * siblings -- the list the per-file commands build. */
+    char **inc = NULL, **owned = NULL;
+    int    n_inc = 0, n_owned = 0;
+    /* The manifest reader runs on the diag layer: it gives up when
+     * diag_had_error() is already set -- as it still is after a turn that
+     * failed -- and it registers its stack-local SourceFile as file 0.  Run
+     * it on a clean slate and put the session's table and flag back. */
+    const SourceFile *saved_files[DIAG_MAX_FILES];
+    size_t n_saved = diag_files_save(saved_files,
+                                     sizeof(saved_files) / sizeof(saved_files[0]));
+    bool saved_error = diag_had_error();
+    diag_reset();
+    int rc = spice_search_append(path, &inc, &n_inc, &owned, &n_owned, NULL);
+    diag_reset();
+    diag_files_replace(saved_files, n_saved);
+    if (saved_error) diag_force_had_error();
+    if (rc != 0) {
+        for (int i = 0; i < n_owned; i++) free(owned[i]);
+        free(owned);
+        free(inc);
+        return -1;
+    }
+    free(owned);  /* every entry of `inc` is owned; the env keeps them */
+    env->include_dirs       = (const char **)inc;
+    env->n_include_dirs     = n_inc;
+    env->include_dirs_owned = inc != NULL;
+    return n_inc;
 }
 
 void turi_env_register_native_ex(TuriEnv *env, const char *name,
