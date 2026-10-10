@@ -5316,6 +5316,7 @@
   if (strcasecmp(ext, "svg") == 0)  return "image/svg+xml";
   if (strcasecmp(ext, "ico") == 0)  return "image/x-icon";
   if (strcasecmp(ext, "wasm")== 0)  return "application/wasm";
+  if (strcasecmp(ext, "pdf") == 0)  return "application/pdf";
   return "application/octet-stream";
   ```)
 ;;; httpd-mw-static-try -- internal: attempt to serve `path` from `root`
