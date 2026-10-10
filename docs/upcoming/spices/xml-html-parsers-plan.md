@@ -1,9 +1,69 @@
 # Plan: DOM and SAX Parser Spices for XML and HTML
 
-> Status: planning (2026-10-07).
-> Spices: `tur-xml` and `tur-html` (new, first-party, in `turmeric-spices`)
+> Status: implemented (2026-10-10), P0-P7, in one turmeric-spices PR on
+> branch `claude/xml-html-parsers-plan-si0hmx`; see "Outcome" below.
+> Spices: `tur-xml`, `tur-html` and `tur-dom-core` (new, first-party, in
+> `turmeric-spices`)
 > Pattern to follow: `spices/json` (vendored C library via `:cmake-deps`,
 > typed handles over an `:int` carrier, a self-contained `ownstr` module).
+
+## Outcome (2026-10-10)
+
+All phases landed together. What was decided, and where the code differs from
+the sketch below:
+
+- **P0.** expat **R_2_9_0** (2026-10-05; carries CVE-2026-102633 and
+  CVE-2026-77214) and lexbor **v3.0.1**. Both build on Linux under gcc and
+  clang; the macOS leg is CI's. expat needs a `cmake-deps/expat` shim (its
+  `CMakeLists.txt` lives in `expat/`, which a `:url` dep cannot reach);
+  lexbor's shim compiles only core, dom, ns, tag and html (~37k of ~390k
+  lines). No throwaway spice: the version functions are the real
+  `xml-backend-version` / `html-backend-version`.
+- **P4 folded into P3.** `tur-dom-core` is its own spice from the start --
+  an arena-owned C tree (`c/dom/turdom.c`, iterative walks only) that both
+  parsers build into, with the node API, both serializers and `dom-equal?`.
+  `SaxEvent` lives there too, so XML and HTML SAX share it literally.
+- **The DOM is built on the SAX layer in C.** expat's callbacks record
+  events into a queue; the Turmeric SAX driver drains it into `SaxEvent`s and
+  the DOM builder drains the same queue into the tree. Text is coalesced
+  across tokens and chunks, which is what makes P2's chunk invariance hold.
+- **Constant memory needed regions.** Events and attribute cells are `:heap`
+  nodes delivered inside a per-chunk `with-region`: 36 MB of XML streams in a
+  4 MB process. Event `String`s are borrowed for the handler call
+  (`retain` keeps one), not handed over -- handing them over leaks every
+  ignored event.
+- **Type-shape changes forced by compiler bugs** (each filed under
+  `docs/reported/`, see the 2026-10-10 section of its index):
+  `Doctype` carries its ids as `String`s, empty when absent (an
+  `(Option String)` payload in a `:heap` sum does not compile);
+  `ParseError` is `[kind msg line col]` with `parse-error-pos`, and
+  `ParseErrorKind` is a `:heap` sum (a struct holding an opaque beside an
+  aggregate does not compile). Every `:heap` constructor call allocates a
+  node nothing frees, so the parsers build errors from four shared nodes
+  (`(syntax-kind)` ... `(io-kind)`). A failed parse then costs the 32-byte
+  `ParseError` box (48 B of heap) and no kind node: 80 B down to 48 B.
+  The box itself goes away once `ParseError` can be by value, which needs
+  the opaque-sibling fix above. It also needed
+  `sum-payload-box-leaks-at-match` (now fixed), since a by-value struct in a
+  `Result`'s `Err` was boxed and never freed by a `match`.
+- **`SaxParser` is a `:copy` struct** of the C handle and the handler, so no
+  Turmeric word is stored in C memory and no region note is needed.
+- **HTML** never fails (`html-parse : Document`); caps live in `HtmlOpts`
+  (depth 512, flattened Blink-style rather than truncated; 64 MiB on the
+  `-opts`/file paths). `html/sax` is tokenizer-level and switches raw-text
+  states by tag name itself.
+- **lexbor bug.** Its tokenizer mishandles a chunk boundary inside the
+  `[CDATA[` and DOCTYPE `PUBLIC`/`SYSTEM` lookaheads; the push path holds back
+  the first unclosed `<` tail. Found by the fuzz pass.
+- **Testing.** The W3C suite could not be vendored: James Clark's `xmltest`
+  licence permits redistributing only the unmodified archive. `tur-xml`'s
+  `fixtures/run.sh` fetches the official tarball (SHA-256 pinned) and runs
+  every `valid/sa` (canonical XML compared byte for byte) and `not-wf/sa`
+  document. html5lib's tree-construction tests moved to WPT in June 2026; the
+  slice is vendored (MIT) from the last html5lib-tests commit that had them,
+  `9329e646`, ~1700 cases with 5 newer-than-lexbor known failures. Both spices
+  have a mutation fuzz pass (one-shot vs push, SAX vs DOM, reparse), clean
+  under ASan+UBSan.
 
 ## Motivation
 
@@ -91,7 +151,8 @@ type, not the exact spelling. In particular a handler is a typed
 **Handler as a typeclass.** Consider a `SaxHandler` class (`on-start`,
 `on-end`, `on-chars`, ...) as a second front door for callers who want one
 instance per consumer instead of one big `match`. It is additive, so defer it
-until P3 and decide from usage.
+until P3 and decide from usage. *(2026-10-10: deferred; nothing in the
+tests or guides wanted it.)*
 
 ## Ownership and lifetime
 
@@ -144,7 +205,9 @@ XML parsers are a classic attack surface, so the defaults are the safe ones:
 | P6 | `tur-html/sax`: tokenizer-level events for HTML (no tree) | Same event vocabulary as XML SAX, plus `Doctype` |
 | P7 | Guides: one for each spice, plus a "choosing SAX or DOM" section in the XML guide; `;;;` docstrings on every export | `tools/gendocs.py` and `tools/genspices.py` render both without warnings |
 
-Each phase lands as its own PR off `main`; P1 is useful alone.
+The phases are an ordering of the work, not a PR boundary: the whole plan is
+expected to land as a single PR in `turmeric-spices`. Each phase's gate still
+has to hold before the next phase builds on it.
 
 ## Testing
 
@@ -152,7 +215,8 @@ Each phase lands as its own PR off `main`; P1 is useful alone.
   using the `test` spice.
 - A conformance corpus: the W3C XML Conformance Test Suite (valid / not-wf /
   invalid sets) for P1, html5lib-tests for P5. Vendor only a curated slice
-  and record the upstream commit so it is reproducible.
+  and record the upstream commit so it is reproducible. *(As built: the W3C
+  slice is fetched and checksum-pinned instead -- see Outcome.)*
 - A fuzz pass (libFuzzer or a simple mutation loop over the corpus) for both
   SAX entry points before the first release. Parsers of untrusted input should
   not ship unfuzzed.
@@ -164,18 +228,31 @@ Each phase lands as its own PR off `main`; P1 is useful alone.
 
 1. **Backend license posture.** expat (MIT) and lexbor (Apache-2.0) are both
    permissive; confirm Apache-2.0's patent/NOTICE terms are acceptable for the
-   spices repo's MIT license before vendoring lexbor.
+   spices repo's MIT license before vendoring lexbor. *Answered: neither is
+   vendored -- both are fetched and built by `tur fetch` -- so no NOTICE file
+   is redistributed. The test data is the licence question that mattered (see
+   Outcome).*
 2. **Where does `Node` text live for HTML?** lexbor stores UTF-8 internally;
    confirm `node-text` can return a borrowed `cstr` for single text nodes and
-   only allocates a `String` when concatenating.
+   only allocates a `String` when concatenating. *Answered: the HTML tree is
+   copied into dom-core's arena, so a single node's data is the borrowed
+   `node-value : (Option cstr)`, and `node-text` (always a concatenation,
+   DOM `textContent`) returns an owned `String` -- for both formats.*
 3. **Callback style for SAX.** A closure per call (above) versus a pull
    iterator over `seq`. A pull API is nicer to compose but needs a coroutine
    or a buffered event queue; the closure form is the simplest correct P1.
-   Revisit once `seq` over effects is settled.
+   Revisit once `seq` over effects is settled. *Answered: closures, as
+   sketched. The buffered event queue exists anyway (it is how the C
+   callbacks hand events to Turmeric), so a pull iterator is now a small
+   addition when `seq` is ready.*
 4. **Streaming HTML.** lexbor can tokenize incrementally; whether P6 exposes a
    push parser like P2 depends on whether anyone needs it before P5 ships.
+   *Answered: exposed (`html-sax-parser-new` / `html-sax-feed!` /
+   `html-sax-finish!`); it cost little once the XML driver existed, and its
+   chunk-invariance test is what found the lexbor bug.*
 5. **Is a pure-Turmeric tokenizer worth it later?** Only if the C dependency
    becomes a portability problem (WASM, for the web REPL). Not a v1 concern.
+   *Unchanged.*
 
 ## Non-goals
 

@@ -1,0 +1,29 @@
+; sum-payload-match-whole-value-arm-kept -- a `match` on a fresh
+; (Result T S) whose arm binds the WHOLE scrutinee must not free S's payload
+; box: the arm binder still holds it.  The value read through that binder
+; after the match is the assertion; a premature free reads a released box.
+; Not leak-checked: the kept box has no owner yet, by design (see
+; docs/reported/sum-payload-box-leaks-at-match.md).
+
+(defstruct Er :copy [line : int col : int])
+(defopaque Doc :ptr<void> :non-null)
+
+(defn parse [i : int] : (Result Doc Er)
+  (Err (Er i 7)))
+
+(defn line-of [r : (Result Doc Er)] : int
+  (match r
+    (Ok d)  0
+    (Err e) (.line e)))
+
+(defn keep [i : int] : (Result Doc Er)
+  (match (parse i)
+    (Ok d) (parse 0)
+    r      r))
+
+(defn main [] : int
+  (let [a (keep 41)
+        b (keep 42)]
+    (println (line-of a))
+    (println (line-of b)))
+  0)
