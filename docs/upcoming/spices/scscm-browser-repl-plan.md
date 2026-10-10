@@ -1,8 +1,11 @@
 # Plan: a browser scscm REPL on hcsynth, with Saffron as the default language
 
 > Status: draft -- not started. Facts below were read from the tree on 2026-10-10.
-> Scope: `web/` (Try Turmeric), `spices/scscm/` (turmeric-spices), and the
-> hypercollider browser build. No compiler change in the MVP.
+> Scope: a **new public GPL-3.0 repo in the turmeric-lang org** (name TBD,
+> e.g. `scscm-repl`) holding the REPL; `spices/scscm/` (turmeric-spices) supplies
+> the compiler; the hypercollider browser build supplies the audio runtime.
+> Try Turmeric (`web/`) is a reference for patterns, not the host. No compiler
+> change in the MVP.
 > Type: web / spice integration.
 > Depends on: T0-T3 of [`scscm-host-testing-plan.md`](scscm-host-testing-plan.md)
 > (a booting hclang/hcsynth, and a spice that emits valid sclang).
@@ -141,7 +144,7 @@ sclang positions (hypercollider's source-map phase H4 is not done).
 ### B1. `scscm.wasm` (O2)
 
 A tiny Turmeric entry point exporting `scscm_compile`, built with the existing
-`tur` -> C -> `emcc` path into `web/public/scscm/`. Runs in its own Worker
+`tur` -> C -> `emcc` path into the new repo's `public/scscm/`. Runs in its own Worker
 (consistent with the eval worker; a pathological input cannot freeze the page).
 **Done when** the testing plan's corpus compiles identically through the WASM
 module and the native build, in a Playwright test.
@@ -157,18 +160,20 @@ the spice's own `Sx` type, not `turi` values, so it is a model, not a reuse.
 
 A module that lazily fetches `hclang`/`hcsynth` on the first Run (never at page
 load), starts the `AudioContext` from a user gesture, wires the worklet, exposes
-`evalSclang(text)` and a post window. Same-origin hosting satisfies `connect-src
-'self'` and `worker-src 'self'`, and the worklet module loads under `script-src
-'self'`. The multi-MB artifacts must stay **out of the service worker's precache**
-(`web/public/sw.js`); cache them at runtime with their own versioned key.
+`evalSclang(text)` and a post window. Serving everything same-origin keeps a strict CSP
+(`connect-src 'self'`, `worker-src 'self'`, worklet under `script-src 'self'`)
+possible. The multi-MB artifacts must stay **out of any service worker's precache**
+(Try's `web/public/sw.js` is the cautionary example); cache them at runtime with their own versioned key.
 **Done when** `evalSclang('{ SinOsc.ar(440) * 0.1 }.play')` is audible in a real
 browser (manual) and a Playwright test passes against a stubbed `AudioContext`.
 
 ### B3. The page
 
-A `/scscm` page (not a mode of `/try`: it needs different chrome and lazy
-assets) that reuses Try's Monaco setup, theme and share codec
-(`web/share-codec.js`). Default buffer starts with `#lang saffron`; Run executes
+The page lives in the new repo (section 7), not in `web/`. It borrows Try's
+patterns (Monaco setup, theme, the share codec in `web/share-codec.js`, the eval
+Worker and its watchdog) by copying what it needs -- the sources are MIT, so
+they can be included in a GPL-3.0 work -- rather than depending on Try's build.
+turmeric-lang.com links to it. Default buffer starts with `#lang saffron`; Run executes
 the section 4 pipeline; a Stop button silences everything; a few example
 programs; scscm syntax highlighting is a later nicety. **Done when** the examples
 make sound and the page passes the existing layout/CSP specs.
@@ -192,12 +197,17 @@ Port 3000 is the developer's own server -- the suite already picks its own.
 ## 6. Constraints that will bite
 
 - **Autoplay:** audio can only start from a user gesture; Run is that gesture.
-- **COEP `require-corp`:** every subresource must be same-origin or send CORP.
-  Fine if the artifacts are hosted here; fatal if they are fetched from a release
-  URL, which `connect-src 'self'` forbids anyway.
-- **No live `scsynth` from the page.** `connect-src 'self'` blocks a WebSocket to
-  hypercollider's local OSC bridge. That is a deliberate boundary; relaxing it is
-  a separate, security-reviewed change and not part of this plan.
+- **Cross-origin isolation (COOP/COEP):** a separate repo means a separate
+  deployment, and the host must be able to send `Cross-Origin-Opener-Policy:
+  same-origin` / `Cross-Origin-Embedder-Policy: require-corp` if the hypercollider
+  build needs `SharedArrayBuffer` (not established; check in B0). GitHub Pages
+  cannot set response headers; Cloudflare (as Try uses) can. Every subresource
+  must then be same-origin or send CORP, so the artifacts are served from the
+  same site, not fetched from a release URL.
+- **No live `scsynth` from the page** by default. A strict CSP with `connect-src
+  'self'` (as Try has) blocks a WebSocket to hypercollider's local OSC bridge. The
+  new repo sets its own CSP; allowing `ws://localhost` is a separate, deliberate
+  choice and not part of the MVP.
 - **First-sound latency:** ~2.1 MB gzipped plus class-library startup. Show
   progress, and measure time-to-sound before promising a number.
 - **Memory:** two WASM runtimes and a worklet heap alongside Try's interpreter;
@@ -207,13 +217,27 @@ Port 3000 is the developer's own server -- the suite already picks its own.
 
 ## 7. Open questions
 
-1. **Licensing.** hypercollider and SuperCollider are GPL-3.0; Turmeric and
-   `tur-scscm` are MIT. Serving the GPL WASM from turmeric-lang.com is
-   distribution, and needs a corresponding-source offer at least; whether the
-   page JS that drives it is a combined work is a legal question, not a technical
-   one. Decide before B2 ships anything public. (Not legal advice; this is a flag.)
+1. **Licensing -- decided.** hypercollider carries the same licensing as
+   SuperCollider (GPL; its `COPYING` is GPL-3.0). The REPL is a **public
+   GPL-3.0 repo in the turmeric-lang org**, so the combined bundle (REPL page,
+   `scscm.wasm`, hclang/hcsynth WASM) is one GPL-3.0 work; the MIT inputs (the
+   `tur-scscm` spice, the Turmeric runtime it links, patterns copied from Try)
+   stay MIT in their own repos and may be included in it. Requirements that follow:
+   - the README carries the attribution and license notices: SuperCollider and
+     hypercollider (GPL), the sc3-plugins and their authors
+     (`hypercollider/docs/SC3_PLUGINS_LICENSES.md` is the source list), STK's
+     permissive license notice, and the MIT notices for `tur-scscm`, Turmeric and
+     any copied Try code;
+   - a `COPYING` (GPL-3.0) at the repo root, and per-file headers on new files;
+   - the corresponding source is available: hypercollider pinned at the exact
+     commit the shipped WASM was built from, plus the build scripts, linked from
+     the page and the README;
+   - the shipped WASM is reproducible from those pins (B0's artifact decision).
+   Turmeric's own repos and Try stay MIT; turmeric-lang.com only links out.
+   (Not legal advice.)
 2. **Which reading of "Saffron default"** (section 0).
 3. **Where the artifacts live and who rebuilds them** when hypercollider changes:
-   vendored into `web/public/`, fetched at build time from a pinned release with a
-   checksum, or a submodule.
+   vendored into the new repo, fetched at build time from a pinned hypercollider
+   release with a checksum, or a git submodule (a submodule also gives the source
+   offer for free). Repo name and deployment host (Cloudflare vs Pages) are open.
 4. **Is O1-first acceptable** as a stepping stone to ship sound early?
