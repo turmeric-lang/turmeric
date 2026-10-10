@@ -366,6 +366,11 @@ static void tur_closure_drop(void *__h) {
     if (__d) __d(__h); else free((void *)__hdr);
 }
 #define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))
+#if defined(__GNUC__) || defined(__clang__)
+#define TUR_OPAQUE_PTR(p) __extension__ ({ void *__op = (void *)(intptr_t)(p); __asm__("" : "+r"(__op)); __op; })
+#else
+#define TUR_OPAQUE_PTR(p) ((void *)(intptr_t)(p))
+#endif
 int tur_closure_headers_enabled = 1;
 typedef struct { int tag; union { char __none; int64_t value; } as; } tur_option_t;
 typedef struct { int tag; union { int64_t ok_val; int64_t err_val; } as; } tur_result_box_t;
@@ -3932,13 +3937,13 @@ static TurFuture *tur_async_fiber_via(int64_t (*wrap)(void *), void *env) {
     int64_t result = wrap(env);
     tur_async_body_depth = __abd;
     tur_handler_chain = __node.parent;
-    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(env); return future; }
+    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(TUR_OPAQUE_PTR(env)); return future; }
     if (tur_async_suspended && tur_async_pending_park) {
         tur_async_pending_park->outer = future;
         if (__own) tur_async_pending_park->own_env = env;
     } else {
         tur_future_fulfill(future, result);
-        if (__own) TUR_CLOSURE_DROP(env);
+        if (__own) TUR_CLOSURE_DROP(TUR_OPAQUE_PTR(env));
     }
     tur_async_suspended = 0;
     tur_async_pending_park = NULL;

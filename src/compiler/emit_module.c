@@ -11570,6 +11570,21 @@ static void emit_closure_fat_runtime(Buf *out, bool guarded) {
     buf_puts(out, "    if (__d) __d(__h); else free((void *)__hdr);\n");
     buf_puts(out, "}\n");
     buf_puts(out, "#define TUR_CLOSURE_DROP(h) tur_closure_drop((void *)(intptr_t)(h))\n");
+    /* A pointer whose provenance the optimizer must not follow.  A spawn's
+     * `env` is a closure box or a bare thunk pointer (tur_async_fiber_via), and
+     * the drop guarded by the ownership flag only ever runs on a box.  With the
+     * whole preamble in one unit gcc inlines the spawn into its caller, sees the
+     * drop reachable with a FUNCTION behind `env`, and stops with "arrays of
+     * functions are not meaningful" (plus -Warray-bounds / -Wfree-nonheap-object
+     * on a path that never runs).  An empty asm hides where the pointer came
+     * from; it emits no instruction.  c2mir defines neither macro and takes the
+     * plain cast. */
+    buf_puts(out, "#if defined(__GNUC__) || defined(__clang__)\n");
+    buf_puts(out, "#define TUR_OPAQUE_PTR(p) __extension__ ({ void *__op = (void *)(intptr_t)(p); "
+                  "__asm__(\"\" : \"+r\"(__op)); __op; })\n");
+    buf_puts(out, "#else\n");
+    buf_puts(out, "#define TUR_OPAQUE_PTR(p) ((void *)(intptr_t)(p))\n");
+    buf_puts(out, "#endif\n");
     /* async/reactor: the precompiled reactor/fiber group in libturi owns callback
      * closure boxes and frees them at teardown, but cannot name the per-program
      * tur_closure_drop.  libturi defines a WEAK `tur_closure_headers_enabled = 0`;
@@ -16550,13 +16565,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    int64_t result = wrap(env);\n");
     buf_puts(out, "    tur_async_body_depth = __abd;\n");
     buf_puts(out, "    tur_handler_chain = __node.parent;\n");
-    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(env); return future; }\n");
+    buf_puts(out, "    if (tur_async_reject_if_panicking(future)) { if (__own) TUR_CLOSURE_DROP(TUR_OPAQUE_PTR(env)); return future; }\n");
     buf_puts(out, "    if (tur_async_suspended && tur_async_pending_park) {\n");
     buf_puts(out, "        tur_async_pending_park->outer = future;\n");
     buf_puts(out, "        if (__own) tur_async_pending_park->own_env = env;\n");
     buf_puts(out, "    } else {\n");
     buf_puts(out, "        tur_future_fulfill(future, result);\n");
-    buf_puts(out, "        if (__own) TUR_CLOSURE_DROP(env);\n");
+    buf_puts(out, "        if (__own) TUR_CLOSURE_DROP(TUR_OPAQUE_PTR(env));\n");
     buf_puts(out, "    }\n");
     buf_puts(out, "    tur_async_suspended = 0;\n");
     buf_puts(out, "    tur_async_pending_park = NULL;\n");

@@ -5606,10 +5606,20 @@ static int fv_multi_tier(const FvMulti *m, int sl) {
  * disqualifies it as a thread param. */
 static bool fn_sig_has_tyvar_slot(const Type *t);
 static bool e2a_fallback_ok(const Type *sig, uint32_t n);   /* fwd (defined below) */
+
+/* Is fn param binding `p` carried as a FAT handle?  A `^fat` param always is;
+ * a normalized fn param is too (the elab call-site shim boxes every value
+ * flowing in).  The one place this file asks it of a param, so the dispatch
+ * (e2a_callee_is_fat) and the fallback check below cannot disagree. */
+static bool fn_param_binding_is_fat(const Binding *p) {
+    return p->is_fat ||
+           (p->type.kind == TY_FN && fn_param_type_is_fat_normalized(&p->type));
+}
+
 static bool e2a_param_fallback_ok(const FnDef *fd, uint32_t pi) {
     const Binding *p = fd->params ? fd->params[pi] : NULL;
     if (!p || p->is_poly_fn || p->type.kind != TY_FN) return false;
-    if (!(p->is_fat || fn_param_type_is_fat_normalized(&p->type))) return false;
+    if (!fn_param_binding_is_fat(p)) return false;
     uint32_t n = p->type.as.fn.arity;
     EmitCtx *ctx = g_emit_ctx;
     bool generic = false;
@@ -7303,8 +7313,7 @@ static bool e2a_callee_is_fat(const Binding *fn) {
      * lifted entry the registry maps to the env-taking twin.  A captureless
      * one's is the direct entry itself, the thin key. */
     if (cps_ir_thread_local_has(fn)) return cps_ir_thread_local_env_boxed(fn);
-    return fn->is_param && fn->type.kind == TY_FN &&
-           fn_param_type_is_fat_normalized(&fn->type);
+    return fn->is_param && fn_param_binding_is_fat(fn);
 }
 
 /* The same question for either callee spelling.  An E2c struct-field LOAD
@@ -8046,6 +8055,9 @@ static bool cty_is_int_word(const char *cty) {
 static bool cty_word_straddle(const char *a, const char *b) {
     return (cty_is_ptr(a) && cty_is_int_word(b)) || (cty_is_int_word(a) && cty_is_ptr(b));
 }
+static bool cty_is_float_scalar(const char *cty) {
+    return cty && (strcmp(cty, "double") == 0 || strcmp(cty, "float") == 0);
+}
 
 /* The C type of the SLOT that a delivery to `kont` lands in: the join local's
  * declared type (KK_VAR), or -- for the one-word DK slot -- the type the
@@ -8055,6 +8067,23 @@ static const char *deliver_slot_cty(CE *ce, const CKont *kont) {
     if (kont->kind == KK_VAR) return join_param_cty(ce, kont->id);
     const Type *vty = deliver_ty(ce, kont);
     return vty ? binder_ctype_full(ce->ctx, vty->kind, vty) : NULL;
+}
+
+/* Does a delivery to `kont` store its value as a WORD without converting a
+ * float to its bits on the way?  An inline join whose local is the int64
+ * carrier takes a raw assignment; every other target goes through
+ * slot_store, which packs the bits only when the slot's own kind is a float
+ * -- the same resolution slot_store makes.  When this is true, a `double`
+ * handed over must be turned into its bits first, or C's assignment
+ * converts the VALUE (1.5 -> 1) and the reader's bit reinterpretation of
+ * that integer is a denormal. */
+static bool deliver_slot_takes_raw_word(CE *ce, const CKont *kont, const char *slot_cty) {
+    if (kont->kind == KK_VAR && slot_cty) return cty_is_int_word(slot_cty);
+    TypeKind k = kont->ty;
+    const Type *vty = deliver_ty(ce, kont);
+    Type _r; const Type *rt = cps_resolve_ty(vty, &_r);
+    if (rt && rt != vty) k = rt->kind;
+    return k != TY_FLOAT && k != TY_FLOAT64 && k != TY_FLOAT32;
 }
 
 /* Deliver value-string `v` to continuation `kont`.  A Tier C by-value aggregate
@@ -8862,6 +8891,17 @@ static void emit_term(CE *ce, const CTerm *t) {
                         buf_putc(&bx, '\0');
                         emit_deliver(ce, &t->as.tailcall.kont, bx.data);
                         buf_free(&bx);
+                    } else if (cty_is_float_scalar(drt) &&
+                               deliver_slot_takes_raw_word(ce, &t->as.tailcall.kont, slot_cty)) {
+                        /* A spec clone instantiated at float returns a real
+                         * `double` (`with_region__spec__double_int64_t`) while
+                         * the join it feeds is the carrier word its reader
+                         * unpacks as bits.  Hand over the bits -- the same
+                         * bridge the letcall arm takes for this callee. */
+                        char *w = cps_ir_fncps_word_of(strcmp(drt, "float") == 0 ? TY_FLOAT32
+                                                                                 : TY_FLOAT, tmp);
+                        emit_deliver(ce, &t->as.tailcall.kont, w);
+                        free(w);
                     } else if (cty_word_straddle(drt, slot_cty)) {
                         /* An erasing ascription `(:: (f) :int)` over a callee
                          * that returns a concrete pointer (`tur_adt_Vec__int *`)
