@@ -1,9 +1,8 @@
 # Plan: test `tur-scscm` against hcsynth and scsynth, and write its guide
 
-> Status: T0-T5 done 2026-10-10 (section 2a), with three items open: the
-> hcsynth CI leg (waits on a hypercollider release), a live-playback smoke
-> test, and the hypercollider PRs merging. Baseline measured 2026-10-10
-> (section 2).
+> Status: T0-T5 done 2026-10-10 (section 2a), with two items open: the
+> hcsynth CI leg (waits on a hypercollider release) and the hypercollider
+> PRs merging. Baseline measured 2026-10-10 (section 2).
 > Scope: `spices/scscm/` in turmeric-spices; hosts are hypercollider
 > (`hclang`/`hcsynth`) and stock SuperCollider (`sclang`/`scsynth`).
 > Type: spice / test infrastructure / documentation.
@@ -85,7 +84,7 @@ hypercollider's build tree). `scsynth`/`sclang` are not installed.
 
 Work landed in three PRs: turmeric-lang/turmeric-spices#94 (the spice, its
 tests, CI and guide), rjungemann/hypercollider#2 (on top of #1: hclang boots
-and renders), and this plan's update.
+and renders), and turmeric-lang/turmeric#1136 (this update).
 
 **The golden files are not `lhc.js`'s output.** With stock SuperCollider
 3.13 available, its parser settles what section 2 could only read off the
@@ -108,7 +107,7 @@ turmeric-spices `spices/scscm/tests/corpus/README.md`.
 | T0 | done | SuperCollider 3.13 from Ubuntu 24.04's archive (headless sclang: `QT_QPA_PLATFORM=offscreen`, plus `QTWEBENGINE_DISABLE_SANDBOX=1` as root). hclang built from source with emsdk 5.0.5 on hypercollider's fix branch; v0.1.6 does not boot either. |
 | T1 | done | `spices/scscm/tests/corpus/` (21 programs, regen script, pinned commit), `corpus_test.tur`, `compile_test.tur` (50 cases), `check-sclang.sh` |
 | T2 | done, narrower | `tests/host/render.sh`: hcsynth renders the 2 programs that sound immediately. hclang's `--output` capture has no clock, so `Pbind.play` / `(in ...)` never fire there. Comparing with `lhc.js` WAVs was dropped: its output does not parse. |
-| T3 | offline done; live open | Stock sclang runs the program against a recording stand-in for the server address (`capture.scd`), and `scsynth -N` renders it: 8 programs pass. scsynth and hcsynth agree to 0.0006 RMS per 0.1 s window at the same block size. Live smoke not run (no audio device). |
+| T3 | done | Offline: stock sclang runs the program against a recording stand-in for the server address (`capture.scd`), and `scsynth -N` renders it: 8 programs pass. scsynth and hcsynth agree to 0.0006 RMS per 0.1 s window at the same block size. Live, by hand, on JACK's dummy driver: a program that adds a SynthDef and plays it at once loses that note (the add is asynchronous), so the guide gives `(. s sync)` in a routine (`examples/beep-live.scscm`). `hclang --scsynth-host` delivered no packets until hypercollider #2, and still cannot play on scsynth 3.13 (version-3 SynthDefs). |
 | T4 | scsynth leg done | `.github/workflows/scscm-hosts.yml` (sclang parse + scsynth audio, SuperCollider pinned in `tests/host/HOSTS`). The hcsynth leg waits on a hypercollider release that boots. |
 | T5 | done | `docs/guides/scscm-guide.md`; README rewritten; SC6 marked out of scope |
 
@@ -134,11 +133,13 @@ hypercollider findings (fixed in #2 unless noted):
   module;
 - the class-library pack was not rebuilt when a class file changed, and
   the native CI cache key omitted the class library;
+- `hclang --scsynth-host` closed its socket before the sends went out, so
+  nothing reached the server;
 - not fixed: the WAMR native `hclang_native` dies with `filesystem_error`
   on class-extension files; with `--classlib-dir` the embedded pack still
   shadows the directory; hypercollider writes version-3 SynthDefs, which
-  stock scsynth 3.13 does not load, so `--scsynth-host` forwarding to a
-  3.13 scsynth cannot work.
+  stock scsynth 3.13 accepts but does not load (verified live), so
+  `--scsynth-host` forwarding to a 3.13 scsynth cannot play.
 
 ## 3. Decision needed first: which dialect is canonical?
 
