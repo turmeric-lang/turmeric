@@ -542,12 +542,19 @@
 ;; ---- Local fiber driver (Phase F2-F7) ----
 ;;
 ;; A local fiber group runs cooperative fibers on top of one reactor without
-;; starting the global scheduler. The group handle is an opaque ptr<void>
-;; (same convention as the reactor handle). One group is bound to one reactor
-;; for its lifetime and must not be shared across threads.
+;; starting the global scheduler. One group is bound to one reactor for its
+;; lifetime and must not be shared across threads.
+;;
+;; The group handle is a LocalFiberGroup, :linear like the Reactor: it owns the
+;; fibers' stacks and park state, so it must be torn down exactly once with
+;; local-fiber-group-free. Every other operation borrows it, so a fiber body
+;; that only uses `g` captures it read-only and stays an ordinary closure.
+;; It used to be a bare ptr<void>, so any pointer -- the Reactor itself, a
+;; channel -- type-checked in its place, and a dropped or doubly freed group
+;; was invisible to the checker.
 ;;
 ;; API:
-;;   local-fiber-group-new   [r]                       -- ptr<void> (group)
+;;   local-fiber-group-new   [r]                       -- LocalFiberGroup
 ;;   local-fiber-group-free  [g]                        -- nil
 ;;   local-spawn             [g body user-data]         -- int (fiber id)
 ;;   reactor-run-fibers      [g]                         -- int (completed)
@@ -555,6 +562,9 @@
 ;;   local-park-chan         [g ch]                      -- (Option A)
 ;;   local-park-async-chan   [g ch]                      -- (Option A)
 
+
+;;; LocalFiberGroup -- a linear handle to a fiber group bound to one reactor.
+(defopaque LocalFiberGroup :ptr<void> :linear)
 
 (extern-c tur_local_fiber_group_new [r :ptr] :ptr)
 
@@ -577,7 +587,7 @@
 ;;;   r -- reactor handle returned by reactor-new
 ;;;
 ;;; Returns:
-;;;   ptr<void> -- opaque local-fiber-group handle, or nil on error
+;;;   LocalFiberGroup -- the group handle; null only when r is (reactor-new's WASM case) or allocation fails
 ;;;
 ;;; Example:
 ;;;   (let [r (reactor-new)
@@ -590,8 +600,8 @@
 
 (defn local-fiber-group-new [^borrow r : Reactor]
   #fx{}
-  : ptr<void>
-  (tur_local_fiber_group_new (:: r :ptr<void>)))
+  : LocalFiberGroup
+  (:: (tur_local_fiber_group_new (:: r :ptr<void>)) :LocalFiberGroup))
 ;;; local-fiber-group-free -- free a fiber group and cancel any parked fibers.
 ;;;
 ;;; Any fiber still parked is cancelled: its park source is removed from the
@@ -606,10 +616,10 @@
 ;;;
 ;;; Since: Phase F2
 
-(defn local-fiber-group-free [g : ptr<void>]
+(defn local-fiber-group-free [g : LocalFiberGroup]
   #fx{}
   : nil
-  (tur_local_fiber_group_free g))
+  (tur_local_fiber_group_free (:: g :ptr<void>)))
 ;;; local-spawn -- spawn a fiber into a group.
 ;;;
 ;;; The fiber first runs on the next reactor-run-fibers tick. The body is a
@@ -635,12 +645,12 @@
 ;; for captureless bodies too, and (b) every body is a heap box the fiber group
 ;; can own and free at teardown (tur_local_disown_body opts a caller out).
 
-(defn local-spawn [g : ptr<void>
+(defn local-spawn [^borrow g : LocalFiberGroup
                    ^fat body : (fn [ptr<void>] nil)
                    user-data : ptr<void>]
   #fx{}
   : int
-  (tur_local_spawn g body user-data))
+  (tur_local_spawn (:: g :ptr<void>) body user-data))
 ;;; reactor-run-fibers -- drive the reactor and pump the group's fibers.
 ;;;
 ;;; Runs until either the group is empty and the bound reactor has no
@@ -663,7 +673,10 @@
 ;;;
 ;;; Since: Phase F3
 
-(defn reactor-run-fibers [g : ptr<void>] #fx{} : int (tur_reactor_run_fibers g))
+(defn reactor-run-fibers [^borrow g : LocalFiberGroup]
+  #fx{}
+  : int
+  (tur_reactor_run_fibers (:: g :ptr<void>)))
 ;;; local-park-fd -- park the running fiber until an fd is ready.
 ;;;
 ;;; Registers fd on the bound reactor for events (a READ/WRITE bitmask) and
@@ -688,10 +701,13 @@
 ;;;
 ;;; Since: Phase F4
 
-(defn local-park-fd [g : ptr<void> fd : int events : int timeout-ms : int]
+(defn local-park-fd [^borrow g : LocalFiberGroup
+                     fd : int
+                     events : int
+                     timeout-ms : int]
   #fx{}
   : int
-  (tur_local_park_fd g fd events timeout-ms))
+  (tur_local_park_fd (:: g :ptr<void>) fd events timeout-ms))
 ;;; local-park-chan -- park the running fiber until a channel has a value.
 ;;;
 ;;; Registers ch on the bound reactor (one-shot) and suspends the current
@@ -725,13 +741,13 @@
 ;; RETURN: the compiler converts the carrier word to A here exactly as it does
 ;; for chan-recv, so a float channel yields its float.
 
-(defn local-park-chan [A] [g : ptr<void> ^borrow ch : (Chan A)]
+(defn local-park-chan [A] [^borrow g : LocalFiberGroup ^borrow ch : (Chan A)]
   #fx{}
   : (Option A)
   ```c
   extern int tur_local_park_chan_status(void *, void *, int64_t *);
   int64_t v = 0;
-  if (tur_local_park_chan_status(g, (void *)(intptr_t)ch, &v) != 0)
+  if (tur_local_park_chan_status((void *)(intptr_t)g, (void *)(intptr_t)ch, &v) != 0)
       return tur_none();
   return tur_some_int(v);
   ```)
@@ -752,13 +768,14 @@
 ;;;
 ;;; Since: Phase F5
 
-(defn local-park-async-chan [A] [g : ptr<void> ^borrow ch : (AsyncChan A)]
+(defn local-park-async-chan [A] [^borrow g : LocalFiberGroup
+                                 ^borrow ch : (AsyncChan A)]
   #fx{}
   : (Option A)
   ```c
   extern int tur_local_park_chan_status(void *, void *, int64_t *);
   int64_t v = 0;
-  if (tur_local_park_chan_status(g, (void *)(intptr_t)ch, &v) != 0)
+  if (tur_local_park_chan_status((void *)(intptr_t)g, (void *)(intptr_t)ch, &v) != 0)
       return tur_none();
   return tur_some_int(v);
   ```)

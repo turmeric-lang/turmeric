@@ -1,0 +1,12 @@
+;; A LocalFiberGroup is :linear: it owns its fibers' stacks and park state, so
+;; it must be torn down exactly once with local-fiber-group-free.  When the
+;; group was a bare ptr<void>, walking away from one was invisible.
+
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)
+        g (local-fiber-group-new r)]
+    (reactor-run-fibers g)
+    (reactor-free r))
+  0)

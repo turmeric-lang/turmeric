@@ -455,9 +455,18 @@ so with no timer and no `reactor-wake` the poll blocked forever. This
 reproduces on v0.63.9. `cap_timeout` now returns 0 while a watched channel
 holds a value (`reactor-chan-watch-nonempty`).
 
-Still `ptr<void>`: the fiber group handle `g` (`local-fiber-group-new`,
-`local-spawn`, `local-park-*`, `reactor-run-fibers`). That wants a
-`LocalFiberGroup` opaque across the whole driver, which is a separate pass.
+**The fiber group handle, the same day.** `g` was a bare `ptr<void>` across
+the driver (`local-fiber-group-new` / `-free`, `local-spawn`, `local-park-*`,
+`reactor-run-fibers`), so the `Reactor` itself type-checked where the group
+belonged, and a dropped or doubly freed group was invisible. It is now
+`(defopaque LocalFiberGroup :ptr<void> :linear)`, the `Reactor`'s
+discipline: `local-fiber-group-free` consumes it and everything else
+borrows. A fiber body that uses `g` captures it read-only, so it stays an
+ordinary closure. No existing caller passed the group through a `ptr<void>`
+helper, so all six fiber fixtures pass unchanged. `httpd` reaches its group
+only in inline C and is unaffected. Pinned by `errors/local-fiber-group-dropped`
+(TUR-E0100), `-use-after-free` (TUR-E0101) and `-wrong-handle` (a Reactor
+where the group is expected).
 
 ## Done 2026-10-10 -- five plain `cb : int` reactor callbacks S1 did not count
 

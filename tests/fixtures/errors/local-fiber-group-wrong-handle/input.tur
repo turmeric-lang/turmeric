@@ -1,0 +1,14 @@
+;; The fiber driver takes a LocalFiberGroup, not any pointer.  As a bare
+;; ptr<void> it accepted the Reactor itself -- an easy slip, since the group
+;; is made from one -- and tur_reactor_run_fibers then read a TurReactor as a
+;; LocalFiberGroup.
+
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r (reactor-new)
+        g (local-fiber-group-new r)]
+    (reactor-run-fibers r)
+    (local-fiber-group-free g)
+    (reactor-free r))
+  0)

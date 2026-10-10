@@ -205,7 +205,7 @@ remaining sources, or when `reactor-stop` is called.
 
 ;; Echo one line from each of two pipe read-ends, concurrently, on a single
 ;; thread -- no global scheduler involved.
-(defn serve [g : ptr<void> read-fd : int] : nil
+(defn serve [^borrow g : LocalFiberGroup read-fd : int] : nil
   ;; Park until the fd is readable (or 5s elapses), then handle it.
   (let [ev (local-park-fd g read-fd READ 5000)]
     (if (= ev -2)
@@ -283,8 +283,8 @@ tracked separately in
 
 | Function | Returns | Notes |
 |---|---|---|
-| `local-fiber-group-new` | group | Create a fiber group bound to a reactor. One group per reactor; not thread-safe. |
-| `local-fiber-group-free` | nil | Free the group; cancels any still-parked fiber (source removed, stack freed). |
+| `local-fiber-group-new` | `LocalFiberGroup` | Create a fiber group bound to a reactor. One group per reactor; not thread-safe. The handle is `:linear`, like the `Reactor`. |
+| `local-fiber-group-free` | nil | Free the group, its one consumer; cancels any still-parked fiber (source removed, stack freed). |
 | `local-spawn` | fiber-id / -1 | Spawn a fiber `(fn [user :ptr<void>] :nil)`; runs on the next pump tick. |
 | `reactor-run-fibers` | #completed / -1 | Pump the group until empty + no sources, or `reactor-stop`. -1 if re-entered. |
 | `local-park-fd` | events / -2 / -1 | Park the running fiber on an fd; -2 on timeout, -1 if not in a group fiber. |
