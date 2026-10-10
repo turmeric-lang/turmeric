@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.63.8` -- Contract failures now panic at your predicate or macro's own line, and effectful callbacks through fn parameters -- multi-argument, capturing, or pointer-taking -- compile instead of being refused.
+**Latest release:** `v0.63.9` -- Effectful callbacks now compile through generic HOFs and fn values -- including `option-map`, pointer results, and functions mixing `perform` with `await` -- and panics from casts, bounds checks, and Saffron operators name your own call site.
 
 ## What
 
