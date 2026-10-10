@@ -1013,6 +1013,16 @@ add_test(
   COMMAND bash tests/run-interp-inline-c-opaque.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# turi-inline-c-constructor-free-pair: the interpreter's inline-C `free(`
+# pattern handed an emulated constructor's value-pool pointer to libc free (an
+# ASan bad-free), and the fat-pointer constructor case read `d->p1` /
+# `out->length` as `->p` / `->len` and miscompiled a loop body.  Own runner for
+# the same TI7 carve-out reason as above.
+add_test(
+  NAME tur_interp_inline_c_constructor
+  COMMAND bash tests/run-interp-inline-c-constructor.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # turi-show-instance-with-inline-c-body-prints-a-pointer: a USER `Show [float]`
 # whose `show` body is inline-C printed a heap pointer under --interpret with no
 # diagnostic.  The interpreter's stdlib natives are registered under the mangled

@@ -5551,9 +5551,19 @@ static int ic_common_field_idx(const char *fname, size_t flen) {
     return -1;
 }
 
-/* Execute free pattern */
-static TuriValue ic_exec_free(TuriValue *args, uint32_t n_args) {
-    if (n_args >= 1) { void *p = (void*)(intptr_t)args[0].as_int; if (p) free(p); }
+/* Execute free pattern.  The constructor pattern below builds its "malloc"
+ * in the env's value pool (turi_val_alloc), so the free that pairs with it
+ * must not hand that pointer to libc: a `(dist-free (dist-normal 0.0 1.0))`
+ * pair was an AddressSanitizer bad-free (heap corruption without one).  Only
+ * memory the pool does not own is the program's own malloc to release --
+ * native_option_free (interpreter_natives.c) draws the same line. */
+static TuriValue ic_exec_free(TuriEnv *env, TuriValue *args, uint32_t n_args) {
+    if (n_args >= 1) {
+        void *p = (void*)(intptr_t)args[0].as_int;
+        if (p && !arena_owns(&env->value_scratch, p) &&
+            !arena_owns(&env->value_perm, p))
+            free(p);
+    }
     return turi_nil();
 }
 
@@ -5640,6 +5650,19 @@ static bool ic_body_has_word(const char *body, const char *kw) {
         bool l = (p == body) || (!isalnum((unsigned char)p[-1]) && p[-1] != '_');
         bool r = (!isalnum((unsigned char)p[n]) && p[n] != '_');
         if (l && r) return true;
+    }
+    return false;
+}
+
+/* True if `body` writes or reads a struct field named exactly `field` through
+ * `->` (`s->p`, not `s->p1`). */
+static bool ic_body_has_field(const char *body, const char *field) {
+    size_t n = strlen(field);
+    for (const char *p = strstr(body, "->"); p; p = strstr(p + 2, "->")) {
+        const char *f = p + 2;
+        while (*f == ' ' || *f == '\t') f++;
+        if (strncmp(f, field, n) == 0 && !isalnum((unsigned char)f[n]) && f[n] != '_')
+            return true;
     }
     return false;
 }
@@ -5756,9 +5779,15 @@ static int ic_constructor_leading_guard(const char *body, const char *limit,
 static TuriValue ic_exec_constructor(TuriEnv *env, const char *body,
                                       TuriValue *args, uint32_t n_args,
                                       FnDef *fn, uint32_t param_offset) {
-    /* Special case: string fat-pointer constructor (->p and ->len via strlen/while) */
+    /* Special case: string fat-pointer constructor (->p and ->len via strlen/while).
+     * The fields are matched as whole names: as bare substrings `dist->p1` and
+     * `out->length` read as `->p` and `->len`, and stats' random-n -- two
+     * allocations and a sampling loop -- was "constructed" as a fat pointer
+     * over its first argument, strlen and all. */
     if ((strstr(body,"strlen")||strstr(body,"while")) &&
-         strstr(body,"->p") && strstr(body,"->len") && n_args >= 1) {
+         ic_body_has_field(body, "p") && ic_body_has_field(body, "len") &&
+         n_args >= 1 && !ic_body_has_word(body, "for") &&
+         ic_body_count_sub(body, "malloc(") + ic_body_count_sub(body, "calloc(") <= 1) {
         const char *cstr = (args[0].tag==TURI_CSTR) ? args[0].as_cstr
                                                      : (const char*)(intptr_t)args[0].as_int;
         size_t len = cstr ? strlen(cstr) : 0;
@@ -6738,7 +6767,7 @@ static bool try_exec_simple_inline_c(TuriEnv *env,
      * also computes/returns a value or fat-dispatches a closure (those merely
      * happen to contain a `*_free(` token and must not be reduced to free(arg0)). */
     if (has_free && !has_malloc && !has_return && !has_fptr) {
-        *out = ic_exec_free(args, n_args);
+        *out = ic_exec_free(env, args, n_args);
         return ic_claim("free", fn, out);
     }
 
