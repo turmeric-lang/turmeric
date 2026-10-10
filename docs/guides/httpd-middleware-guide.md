@@ -246,13 +246,19 @@ let [verify   (fn [u :cstr p :cstr] :int
 
 `mw-compress` gzips the response body when the client sends
 `Accept-Encoding: gzip`, sets `Content-Encoding: gzip` plus
-`Vary: Accept-Encoding`, and is otherwise a no-op. The codec lives in
-the `tur/zlib` spice (`../turmeric-spices/spices/zlib`); install it
-into your workspace, then `(load "stdlib/httpd-compress.tur")` from
-your program.
+`Vary: Accept-Encoding`, and is otherwise a no-op. It is the
+`httpd-compress` module, and the codec is the `tur/zlib` spice: declare the
+spice in your `build.tur`, import the module, and it resolves like any other
+spice import -- from an installed toolchain too.
+
+```turmeric no-check
+:spices #map{"tur-zlib" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
+                             :ref    "v0.1.0"
+                             :subdir "spices/zlib"}}
+```
 
 ```turmeric
-(load "stdlib/httpd-compress.tur")
+(import httpd-compress :refer [mw-compress])
 
 (let [base     (fn [c : ptr<void>] : nil
                  (httpd-resp-status! c 200)
@@ -262,7 +268,7 @@ your program.
 ```
 
 ```sweet-exp
-load "stdlib/httpd-compress.tur"
+import httpd-compress :refer [mw-compress]
 
 let [base     (fn [c :ptr<void>] :nil
                  httpd-resp-status!(c 200)
@@ -270,6 +276,11 @@ let [base     (fn [c :ptr<void>] :nil
      composed compose-middleware(base mw-log mw-compress)]
   httpd-new(0 composed)
 ```
+
+The `import` goes inside your program's `defmodule`. (Before
+tourist-on-stdlib-httpd H4 this was `(load "stdlib/httpd-compress.tur")`, which
+loaded the spice from a path relative to a side-by-side turmeric-spices
+checkout.)
 
 Notes:
 

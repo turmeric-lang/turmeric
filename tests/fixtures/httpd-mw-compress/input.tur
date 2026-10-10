@@ -14,13 +14,23 @@
 ;;   gzip-status=200
 ;;   gzip-content-encoding=gzip
 ;;   gzip-vary=Accept-Encoding
-;;   gzip-decoded-ok=1
 ;;   plain-status=200
 ;;   plain-content-encoding=(none)
+;;   gzip-decoded-ok=1
 ;;   done
+;;
+;; httpd-compress is a module importing tur/zlib, which resolves through this
+;; directory's build.tur (a :path dep on the sibling turmeric-spices checkout,
+;; whose zlib needs a `tur fetch` there first).  Run by hand:
+;;   tur run tests/fixtures/httpd-mw-compress/input.tur
 
-(load "stdlib/httpd-compress.tur")
+(load "stdlib/httpd.tur")
 (load "stdlib/chan.tur")
+
+
+(defmodule gztest
+  (import httpd-compress :refer [mw-compress])
+  (import tur/zlib       :refer [gzip-decode gzip-buf-data gzip-buf-len gzip-buf-free])
 
 (defn print-tag [s : cstr] : nil
   ```c printf("%s\n", s); ```)
@@ -43,6 +53,8 @@
 
 (defn client-worker [arg : ptr<void>] : ptr<void>
   ```c
+  /* __tur_include__: static unsigned char g_gz[8192]; */
+  /* __tur_include__: static int g_gz_len = 0; */
   #include <time.h>
   struct timespec ts = { 0, 30000000L };
   nanosleep(&ts, NULL);
@@ -114,21 +126,14 @@
               printf("gzip-vary=(none)\n");
           }
       }
-      /* Decompress and compare. */
+      /* Keep the compressed body; main decodes it through tur/zlib. */
       {
           int clen = 0;
           const char *cl = strcasestr(buf, "\r\nContent-Length: ");
           if (cl) clen = atoi(cl + 18);
-          void *dec = gzip_decode((void *)(buf + hdr_end_off), clen);
-          if (!dec) { printf("gzip-decoded-ok=0\n"); }
-          else {
-              const char *dd = (const char *)gzip_buf_data(dec);
-              int dl = (int)gzip_buf_len(dec);
-              const char *want = big_hybody();
-              int wlen = (int)big_hybody_hylen();
-              int ok = (dl == wlen) && (memcmp(dd, want, (size_t)dl) == 0);
-              printf("gzip-decoded-ok=%d\n", ok ? 1 : 0);
-              gzip_buf_free(dec);
+          if (hdr_end_off >= 0 && clen > 0 && clen <= (int)sizeof g_gz) {
+              memcpy(g_gz, buf + hdr_end_off, (size_t)clen);
+              g_gz_len = clen;
           }
       }
   }
@@ -172,7 +177,7 @@
 (defn spawn-server [h : ptr<void>] : ptr<void>
   ```c
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  pthread_create(t, NULL, (void *(*)(void *))gztest__run_hyserver, (void *)h);
   return (void *)t;
   ```)
 
@@ -181,22 +186,40 @@
   int64_t *p = (int64_t *)malloc(sizeof(int64_t));
   *p = (int64_t)port;
   pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
-  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
+  pthread_create(t, NULL, (void *(*)(void *))gztest__client_hyworker, (void *)p);
   return (void *)t;
   ```)
 
 (defn join-thread [t : ptr<void>] : nil
   ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
 
-(defn done-tick [ch : Chan] : nil
-  (chan-send ch 1))
+(defn gz-bytes [] : ptr<void>
+  ```c return (void *)g_gz; ```)
+
+(defn gz-len [] : int
+  ```c return (int64_t)g_gz_len; ```)
+
+(defn same-bytes? [a : ptr<void> alen : int b : cstr blen : int] : bool
+  ```c return alen == blen && memcmp(a, b, (size_t)alen) == 0; ```)
+
+(defn gz-null? [p : ptr<void>] : bool
+  ```c return p == NULL; ```)
+
+;; Decode what the client received and compare with the original body.
+(defn decoded-ok? [] : bool
+  (let [dec (gzip-decode (gz-bytes) (gz-len))]
+    (if (gz-null? dec)
+      false
+      (let [ok (same-bytes? (gzip-buf-data dec) (gzip-buf-len dec) (big-body) (big-body-len))]
+        (gzip-buf-free dec)
+        ok))))
 
 (defn main [] : int
   (let [donech   (chan-new 2)
         base     (fn [c : ptr<void>] : nil
                    (httpd-resp-status! c 200)
                    (httpd-resp-body!   c (big-body))
-                   (done-tick donech))
+                   (chan-send donech 1))
         composed (compose-middleware base mw-compress)
         h        (httpd-new-pool 0 1 composed)
         port     (httpd-port h)
@@ -207,7 +230,10 @@
     (httpd-stop h)
     (join-thread server)
     (join-thread client)
+    (println (if (decoded-ok?) "gzip-decoded-ok=1" "gzip-decoded-ok=0"))
     (println "done")
     (httpd-free h)
     (chan-free donech)
     0))
+
+) ;; end defmodule gztest
