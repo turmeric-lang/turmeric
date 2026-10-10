@@ -1,9 +1,6 @@
-; #dedent{...}: indent-aware multi-line literal (stdlib/dedent-reader.tur).
-; Leading blank lines are ignored, the first real line sets the indent, and
-; every line loses that much; the closing-brace line contributes nothing.
-#use-reader-macros "stdlib/dedent-reader.tur"
-(load "stdlib/dedent.tur")
-
+; #dedent"""...""": indent-aware, verbatim multi-line string literal.  The
+; closing delimiter's indent is what gets stripped; the line break before it
+; is not part of the string.  No load or #use-reader-macros is needed.
 (defn show [label : cstr s : cstr] : int
   (println label)
   (println s)
@@ -11,42 +8,51 @@
 
 (defn main [] : int
   ; basic: relative indentation survives, source indentation does not
-  (show "basic " #dedent{
+  (show "basic" #dedent"""
       Usage: tool [options]
         -h  show help
-        -v  verbose
-    })
-  ; several leading blank lines
-  (show "blanks " #dedent{
+      """)
+  ; code is verbatim: braces, quotes and backslashes need no escaping
+  (show "code" #dedent"""
+      int main(void) {
+          printf("a\tb\n");
+          return 0;
+      }
+      """)
+  ; leading blank lines are dropped
+  (show "blanks" #dedent"""
 
 
       a
       b
-    })
-  ; a line indented less than the first is stripped to column 0
-  (show "less   " #dedent{
-        deep
-      shallow
-    })
-  ; interior blank line kept (as empty), trailing blank lines dropped
-  (show "gap    " #dedent{
+      """)
+  ; interior blank line kept, whitespace-only lines become empty
+  (show "gap" #dedent"""
       one
-
+   
       two
+      """)
+  ; a blank line before the closer gives a final newline
+  (show "final-newline" #dedent"""
+      a
 
-
-    })
-  ; nested braces balance; a backslash-escaped brace is literal
-  (show "braces " #dedent{
-      f(x) { return {1}; }
-      close \} here
-    })
-  ; empty and whitespace-only bodies
-  (show "empty  " #dedent{})
-  (show "blank  " #dedent{
-    })
-  ; text on the brace line: its indent is the one space after the brace
-  (show "inline " #dedent{ hi
-      there
-    })
+      """)
+  ; an indented closer strips less: the extra indent stays in the string
+  (show "closer-left" #dedent"""
+        kept
+      """)
+  ; a closer inline after text: the first line sets the indent
+  (show "inline-closer" #dedent"""
+      first
+        second""")
+  ; hash escalation lets the body contain three quotes
+  (show "hashes" #dedent#"""
+      say """hi"""
+      """#)
+  (show "hashes2" #dedent##"""
+      "#" and """# stay
+      """##)
+  ; empty body
+  (show "empty" #dedent"""
+      """)
   0)

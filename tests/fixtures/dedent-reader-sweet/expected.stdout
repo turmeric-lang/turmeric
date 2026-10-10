@@ -1,6 +1,6 @@
 basic
 Usage: tool [options]
   -h  show help
-nested
+code
 if x { y }
-  z
+  z("q")

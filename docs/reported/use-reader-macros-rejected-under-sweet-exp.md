@@ -7,7 +7,7 @@ source; the workaround is to write the `reader-macros/define` form inline.
 
 ```turmeric no-check
 #lang sweet-exp
-#use-reader-macros "stdlib/dedent-reader.tur"
+#use-reader-macros "stdlib/string-reader.tur"
 ```
 
 `tur run` reports `error: unexpected character '#' (0x23)` at the directive.
@@ -19,7 +19,7 @@ The same two lines in a plain `.tur` file work. An inline
 `try_consume_use_directive` (`src/compiler/reader.c`) is tried only between
 top-level forms of the plain reader. Under sweet-exp the preprocessor has
 already rewritten the source, so the directive line no longer sits at top level
-as a bare `#...` token. Found while adding `tests/fixtures/dedent-reader-sweet`.
+as a bare `#...` token. Found while writing the first `#dedent` fixture.
 
 ## Fix directions
 

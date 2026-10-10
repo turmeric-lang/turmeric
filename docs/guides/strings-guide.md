@@ -161,30 +161,42 @@ with `TUR-W0064` for one minor line, then becomes an error) and
 comment-only no-op, deleted at age-out). Delete either one where you find it;
 what they enabled is now unconditional.
 
-## Indent-aware multi-line literals -- `#dedent{...}`
+## Indent-aware multi-line literals -- `#dedent"""..."""`
 
-Opt-in, for text that should be indented to match the surrounding code without
-that indent landing in the string:
+For text -- usually code -- that should be indented to match the surrounding
+source without that indent landing in the string. Always available, no `load`
+and no `#use-reader-macros`; it reads as an ordinary string literal, so the
+result is a static `cstr`.
 
 ```turmeric no-check
-#use-reader-macros "stdlib/dedent-reader.tur"
-(load "stdlib/dedent.tur")
-
-(println #dedent{
-    Usage: tool [options]
-      -h  show help
-  })
-;; prints "Usage: tool [options]\n  -h  show help"
+(println #dedent"""
+    int main(void) {
+        printf("hi\n");
+        return 0;
+    }
+    """)
 ```
 
-It expands to `(cstr-dedent "<body>")`. Leading blank lines are ignored, the
-first non-blank line sets the indent, every line loses up to that much (a
-shallower line goes to column 0), and trailing blank lines and the final
-newline are dropped. The body is a raw reader body: braces must balance (or be
-escaped `\{` `\}`) and a backslash is consumed, so write `\\` for one. The
-result is a heap-allocated `cstr`. In a `#lang sweet-exp` file define the macro
-inline with `reader-macros/define 'dedent :raw-brace '(cstr-dedent $body)`; see
-`tests/fixtures/dedent-reader-sweet`.
+The body is **verbatim**: no escapes, so `\n`, `{`, `}` and single `"` need
+nothing. Rules (Swift's):
+
+- The text starts on the line after the opening `"""`; leading blank lines are
+  dropped.
+- If the closing `"""` is alone on its line, **its** indentation is stripped
+  from every line, and the line break before it is not part of the string.
+  Put a blank line before it for a final `\n`. A closer indented less than
+  the text leaves the extra indent in the string.
+- If the closer follows text on the same line, the first non-blank line sets
+  the indent instead.
+- A non-blank line indented less than that is an error. Whitespace-only lines
+  become empty, `\r` before `\n` is dropped, and indentation is matched byte
+  for byte (do not mix tabs and spaces).
+- To put `"""` inside the body, add `#`s to both ends: `#dedent#"""..."""#`,
+  `#dedent##"""..."""##`, as many as it takes.
+
+`tests/fixtures/dedent-reader` covers each rule and
+`tests/fixtures/errors/dedent-*` the diagnostics. It works under
+`#lang sweet-exp` too (`tests/fixtures/dedent-reader-sweet`).
 
 ## Zero-copy slicing -- `StringSlice` (opt-in)
 

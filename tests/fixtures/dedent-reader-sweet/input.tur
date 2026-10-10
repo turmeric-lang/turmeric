@@ -1,10 +1,6 @@
 #lang sweet-exp
-; #dedent{...} under sweet-exp: the reader dispatch sits below the indentation
-; layer, so the body reaches the macro verbatim.  The macro is defined inline
-; because `#use-reader-macros` is not recognized in a sweet-exp file (see
-; docs/reported/use-reader-macros-rejected-under-sweet-exp.md).
-reader-macros/define 'dedent :raw-brace '(cstr-dedent $body)
-load "stdlib/dedent.tur"
+; #dedent"""...""" under sweet-exp: the body reaches the reader verbatim, so
+; its own indentation is never taken for sweet-exp block structure.
 
 defn show [label : cstr s : cstr] : int
   println(label)
@@ -12,12 +8,12 @@ defn show [label : cstr s : cstr] : int
   0
 
 defn main [] : int
-  show "basic" #dedent{
+  show "basic" #dedent"""
       Usage: tool [options]
         -h  show help
-    }
-  show "nested" #dedent{
+      """
+  show "code" #dedent"""
       if x { y }
-        z
-    }
+        z("q")
+      """
   0

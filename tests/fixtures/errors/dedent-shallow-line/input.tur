@@ -1,0 +1,6 @@
+(defn main [] : int
+  (println #dedent"""
+      ok
+    shallow
+      """)
+  0)

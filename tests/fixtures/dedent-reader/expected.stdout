@@ -1,24 +1,29 @@
-basic 
+basic
 Usage: tool [options]
   -h  show help
-  -v  verbose
-blanks 
+code
+int main(void) {
+    printf("a\tb\n");
+    return 0;
+}
+blanks
 a
 b
-less   
-deep
-shallow
-gap    
+gap
 one
 
 two
-braces 
-f(x) { return {1}; }
-close } here
-empty  
+final-newline
+a
 
-blank  
+closer-left
+  kept
+inline-closer
+first
+  second
+hashes
+say """hi"""
+hashes2
+"#" and """# stay
+empty
 
-inline 
-hi
-     there
