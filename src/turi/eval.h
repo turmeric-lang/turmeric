@@ -656,6 +656,41 @@ void turi_env_set_toplevel_imports(TuriEnv *env, bool on);
  * Defined alongside TURI_HAS_SEARCH_PATH_FOR. */
 void turi_env_preload_stdlib(TuriEnv *env, const char *stdlib_root);
 
+/* Run a spice's compiled code for the calls the interpreter cannot make.  The
+ * interpreter does not execute inline-C bodies beyond a few simple shapes, so
+ * a session that imports a spice whose functions are inline C (most native
+ * bindings, numeric kernels) can name them but not call them.  This builds
+ * the spice at or above `spice_root` as a shared library (`tur build --shared`,
+ * cached under `<root>/.tur-repl-cache/` and rebuilt when a source is newer),
+ * loads it, and binds each export the FFI layer can marshal -- scalars,
+ * :cstr, pointers and `defopaque` handles -- as a native under its
+ * module-qualified name, and under its bare name too unless something (a
+ * stdlib function, a definition of the session's) already holds that.
+ * Importing the module afterwards keeps the compiled export, whatever its
+ * body: a Turmeric wrapper over private inline-C helpers runs compiled too.
+ * A definition the session makes itself still wins.  An export that takes or
+ * returns a struct is left unbound, so its interpreted defn keeps running.
+ *
+ * The HOST must export its symbols to the image (link with `-rdynamic`, CMake
+ * ENABLE_EXPORTS): the image resolves the runtime it shares with libturi
+ * (tur_string_release, ...) against the executable.
+ * `tur_bin` NULL means $TUR_BIN, else `tur` on PATH.  The env owns the image.
+ * Returns the number of exports bound, 0 when that spice is already attached,
+ * or -1 after printing why the build or load failed -- once: the env records
+ * the failure and answers -1 without rebuilding for the rest of its life.
+ * See docs/reported/notebook-cells-cannot-call-inline-c-spices.md */
+#define TURI_HAS_ATTACH_SPICE 1
+int turi_env_attach_spice(TuriEnv *env, const char *spice_root, const char *tur_bin);
+
+/* turi_env_attach_spice for the spice that provides `module_name` (e.g.
+ * "stats/dist"): the module is looked up where an import would find it,
+ * the stdlib aside -- the base dir, then the extra search dirs.  Returns 0
+ * when it is not found, not inside a spice, or already provided by an image
+ * the env holds.  An embedder calls it for each module a turn imports, before
+ * evaluating the turn. */
+int turi_env_attach_spice_for_module(TuriEnv *env, const char *module_name,
+                                     const char *tur_bin);
+
 /* Internal: true when v is a native-closure binding (used by turi_env_reset to
  * tell embedder/builtin natives from turi_eval-created defns). */
 bool turi_value_is_native(TuriValue v);

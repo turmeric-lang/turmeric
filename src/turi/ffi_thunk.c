@@ -571,6 +571,74 @@ uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img) {
     return count;
 }
 
+/* notebook-cells-cannot-call-inline-c-spices: the same bindings for a spice
+ * an embedder attaches (turi_env_attach_spice), with nothing leaked -- each
+ * export's user data and its qualified name are one allocation the env frees
+ * at turi_env_free, through one finalizer (a second binding of the same
+ * export shares the user data and registers none). */
+typedef struct FfiOwnedUd {
+    FfiBindingUd ud;      /* first: ffi_native_shim reads it as FfiBindingUd */
+    char        *qkey;
+} FfiOwnedUd;
+
+static void ffi_owned_ud_free(void *p) {
+    FfiOwnedUd *o = (FfiOwnedUd *)p;
+    if (!o) return;
+    free(o->qkey);
+    free(o);
+}
+
+uint32_t tur_ffi_install_spice_bindings_owned(TuriEnv *env, TurSpiceImage *img) {
+    if (!env || !img) return 0;
+    uint32_t count = tur_spice_image_count(img), bound = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        const TurSpiceExport *e = tur_spice_image_at(img, i);
+        if (!e) continue;
+        /* Only what the shim can marshal: a struct-shaped export left
+         * unbound keeps its interpreted defn, which may well run (pure
+         * Turmeric), where a bound one could only report the FFI limit.
+         * The manifest classes alone cannot tell: it spells a struct
+         * parameter :any, which reads as class 'i'.  The emitter writes a
+         * `__ffi` shim only for an export whose every slot is a scalar or an
+         * opaque handle, so its presence is the test. */
+        if (!e->ffi_shim) continue;
+        bool marshalable = e->ret_class == 'i' || e->ret_class == 'f'
+                        || e->ret_class == 'v';
+        for (uint32_t k = 0; marshalable && k < e->n_args; k++)
+            marshalable = e->arg_classes[k] == 'i' || e->arg_classes[k] == 'f';
+        if (!marshalable) continue;
+        FfiOwnedUd *o = (FfiOwnedUd *)calloc(1, sizeof(*o));
+        if (!o) continue;
+        o->ud.export_ = e;
+        size_t qlen = strlen(e->module) + 1 + strlen(e->name) + 1;
+        o->qkey = (char *)malloc(qlen);
+        if (o->qkey) snprintf(o->qkey, qlen, "%s/%s", e->module, e->name);
+        if (!o->qkey) { free(o); continue; }
+        /* The embedder asked for a spice, not for any one name: a bare name
+         * something already holds -- a stdlib function, a cell's own defn, an
+         * earlier image's export -- keeps it, and this export answers to its
+         * qualified name (and to the bare one once its module is imported:
+         * see EX_FN_DEF in eval.c).  The finalizer rides whichever
+         * registration comes first. */
+        if (turi_env_get(env, e->name).tag == TURI_ERROR) {
+            turi_env_register_native_ex(env, e->name, ffi_native_shim, o,
+                                        ffi_owned_ud_free);
+            turi_env_register_native(env, o->qkey, ffi_native_shim, o);
+        } else {
+            turi_env_register_native_ex(env, o->qkey, ffi_native_shim, o,
+                                        ffi_owned_ud_free);
+        }
+        bound++;
+    }
+    return bound;
+}
+
+const char *tur_ffi_native_spice_module(TuriNativeFn fn, const void *ud) {
+    if (fn != ffi_native_shim || !ud) return NULL;
+    const FfiBindingUd *bud = (const FfiBindingUd *)ud;
+    return bud->export_ ? bud->export_->module : NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* jit-ffi-c2mir-plan F5: callbacks (C calling back into Turmeric)     */
 /* ------------------------------------------------------------------ */

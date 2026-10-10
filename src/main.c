@@ -1068,6 +1068,47 @@ int tur_collect_symbols(const char *path, const char *logical_path,
     return rc;
 }
 
+/* RP1: keep only the exports.manifest lines appended since `from` whose C
+ * symbol the emitted unit `c_src` defines.  emit_exports_manifest lists every
+ * exported defn, but a generic one with no symbol of its own (a phantom
+ * `[n]` length, a `[^&cols]` row: only its monomorphs are emitted, under
+ * their own names) left the loader a line it could not dlsym -- and the
+ * loader rejects the whole library as "stale exports.manifest", so no export
+ * of frame or linalg could be bound at all.  An unlisted export stays the
+ * host's to interpret. */
+static void manifest_keep_defined(Buf *manifest, size_t from, const Buf *c_src) {
+    if (!manifest || !c_src || !c_src->data || from >= manifest->len) return;
+    Buf kept;
+    buf_init(&kept);
+    const char *p = manifest->data + from, *end = manifest->data + manifest->len;
+    while (p < end) {
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        const char *le = nl ? nl + 1 : end;
+        const char *arrow = strstr(p, " -> ");
+        const char *colons = arrow ? strstr(arrow, " :: ") : NULL;
+        bool keep = true;
+        if (arrow && colons && colons < le) {
+            const char *m = arrow + 4;
+            size_t ml = (size_t)(colons - m);
+            keep = false;
+            for (const char *q = c_src->data; (q = strstr(q, "(")) != NULL; q++) {
+                if ((size_t)(q - c_src->data) < ml) continue;
+                const char *s0 = q - ml;
+                if (memcmp(s0, m, ml) != 0) continue;
+                if (s0 > c_src->data && (isalnum((unsigned char)s0[-1]) || s0[-1] == '_'))
+                    continue;
+                keep = true;
+                break;
+            }
+        }
+        if (keep) buf_write(&kept, p, (size_t)(le - p));
+        p = le;
+    }
+    manifest->len = from;
+    if (kept.len) buf_write(manifest, kept.data, kept.len);
+    buf_free(&kept);
+}
+
 /* Reads a .tur file and emits its C source into `out_c`. Returns 0 on success,
  * nonzero on error (diagnostics already emitted).
  * include_dirs/n_include_dirs: additional module search paths for (import ...).
@@ -1252,9 +1293,11 @@ static int compile_to_c(const char *path, Buf *out_c,
             /* J2: the REPL's in-process spice build wants the exports
              * manifest from this same single-TU compile (the sink is set
              * only around that call; every other caller leaves it NULL). */
-            if (rc == 0 && g_manifest_sink
-                && emit_exports_manifest(g_manifest_sink, ctx.prog) != 0)
-                rc = 1;
+            if (rc == 0 && g_manifest_sink) {
+                size_t mfrom = g_manifest_sink->len;
+                if (emit_exports_manifest(g_manifest_sink, ctx.prog) != 0) rc = 1;
+                else manifest_keep_defined(g_manifest_sink, mfrom, out_c);
+            }
         }
     }
 
@@ -1563,9 +1606,10 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
          * and is safe to run after emit_implementation (which doesn't
          * mutate the program). Skip on prior error to avoid surfacing
          * incomplete manifest entries. */
-        if (rc == 0 && out_manifest
-            && emit_exports_manifest(out_manifest, ctx.prog) != 0) {
-            rc = 1;
+        if (rc == 0 && out_manifest) {
+            size_t mfrom = out_manifest->len;
+            if (emit_exports_manifest(out_manifest, ctx.prog) != 0) rc = 1;
+            else manifest_keep_defined(out_manifest, mfrom, out_c);
         }
     }
 

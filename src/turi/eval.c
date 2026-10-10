@@ -12240,6 +12240,37 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * private defn that is the qualified key; otherwise the bare name. */
         const char *primary_key = qkey ? qkey : fname;
 
+        /* notebook-cells-cannot-call-inline-c-spices: an export bound from the
+         * spice's compiled image (turi_env_attach_spice, `tur repl` spice
+         * auto-discovery) is this very defn, compiled -- keep it whatever the
+         * body's shape.  The inline-C rule below covers only a body that IS
+         * inline-C; frame's `read-csv-string` is a Turmeric wrapper over
+         * private inline-C helpers, so importing frame/csv replaced the working
+         * native with a closure whose first call the interpreter refused.
+         * Keyed on the defining module, so a same-named defn the user writes
+         * in a cell still takes over.  The export is found under its
+         * qualified name, which the binder always registers (the bare name
+         * only when nothing else held it); the import then publishes it under
+         * the bare name exactly as it would have published the closure. */
+        if (modname && exported) {
+            char qname[512];
+            int qn = snprintf(qname, sizeof qname, "%s/%s", modname, fname);
+            TuriValue nat = (qn > 0 && (size_t)qn < sizeof qname)
+                          ? turi_env_get(env, qname) : turi_nil();
+            if (nat.tag == TURI_CLOSURE && nat.as_closure &&
+                nat.as_closure->native) {
+                const char *smod = tur_ffi_native_spice_module(
+                    nat.as_closure->native, nat.as_closure->native_ud);
+                if (smod && strcmp(smod, modname) == 0) {
+                    TuriValue bare = turi_env_get(env, fname);
+                    if (bare.tag != TURI_CLOSURE ||
+                        bare.as_closure != nat.as_closure)
+                        turi_env_set(env, fname, nat);
+                    return nat; /* keep the compiled export */
+                }
+            }
+        }
+
         /* If the body is inline-C and a native override is already registered
          * under the primary key, keep the native rather than overwriting it. */
         if (fndef->body && fndef->body->kind == EX_INLINE_C) {

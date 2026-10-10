@@ -1781,6 +1781,20 @@ add_test(
 set_tests_properties(tur_embed_peripherals PROPERTIES
   ENVIRONMENT "${TUR_LEAK_HARNESS_ASAN}"
 )
+# notebook-cells-cannot-call-inline-c-spices: an embedder attaches a spice's
+# compiled image (turi_env_attach_spice) and calls the exports the interpreter
+# cannot run.  Builds its fixture spice's image with the in-tree tur.
+if(NOT WIN32)
+  add_test(
+    NAME tur_embed_attach_spice
+    COMMAND "${CMAKE_BINARY_DIR}/tur_embed_attach_spice"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+  set_tests_properties(tur_embed_attach_spice PROPERTIES
+    ENVIRONMENT "TUR_BIN=$<TARGET_FILE:tur>;${TUR_LEAK_HARNESS_ASAN}"
+    DEPENDS tur
+  )
+endif()
 # turi-env-owned-value-arena-pool-plan: env-teardown leak harness. Unlike the
 # other turi targets (which default detect_leaks=0 because the interpreter
 # never frees its process-lifetime closures), this one runs with leak

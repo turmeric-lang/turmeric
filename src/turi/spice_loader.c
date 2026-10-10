@@ -462,15 +462,19 @@ static int append_export(TurSpiceImage *img, char *module, char *name,
 static int parse_manifest_line(TurSpiceImage *img, char *line) {
     char *p = skip_ws(line);
     if (*p == '\0' || *p == '#') return 0;     /* blank / comment */
-    /* module */
-    char *slash = strchr(p, '/');
+    /* `<module>/<name> -> ...`, where a module name nests (`stats/rng`):
+     * the name is what follows the LAST slash before the arrow.  Splitting
+     * at the first one bound `stats/rng/rng-make` as module `stats`, name
+     * `rng/rng-make`, so no export of a nested module had its own name. */
+    char *arrow = strstr(p, " -> ");
+    if (!arrow) return -1;
+    char *slash = NULL;
+    for (char *q = p; q < arrow; q++) if (*q == '/') slash = q;
     if (!slash) return -1;
     *slash = '\0';
     char *module = strdup(p);
     p = skip_ws(slash + 1);
     /* name (up to ` -> `) */
-    char *arrow = strstr(p, " -> ");
-    if (!arrow) { free(module); return -1; }
     *arrow = '\0';
     /* defn name may have trailing whitespace */
     char *end = arrow;

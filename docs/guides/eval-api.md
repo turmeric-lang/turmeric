@@ -394,6 +394,58 @@ It is not the REPL's preload: that adds the `Show` slice, which puts stdlib
 `String` in the global scope, where a module that defines a `String` of its
 own can no longer export it.
 
+### `int turi_env_attach_spice(TuriEnv *env, const char *spice_root, const char *tur_bin)`
+
+Runs a spice's **compiled** code for the calls the interpreter cannot make.
+The interpreter executes an inline-C body only when it is one of a few simple
+shapes (a flat constructor, a field read, a `free`), so a session that imports
+a spice of native bindings or numeric kernels can name its functions but its
+first call is the clean `inline-C not supported in interpreter mode` error.
+`turi_env_attach_spice` builds the spice at or above `spice_root` the way
+`tur repl` builds the spice it starts in -- `tur build --shared`, cached under
+`<root>/.tur-repl-cache/`, rebuilt when a source is newer -- loads it, and
+binds its exports as natives:
+
+- An export binds when the FFI layer can marshal every slot: integers, floats,
+  `:bool`, `:cstr`, pointers and `defopaque` handles. One that takes or
+  returns a struct stays unbound, so its interpreted defn still runs.
+- Each binds under its module-qualified name (`stats/dist/dnorm`), and under
+  its bare name unless something already holds that -- a stdlib function, a
+  definition of the session's own, an earlier image's export.
+- Importing the module afterwards keeps the compiled export whatever its
+  body, so a Turmeric wrapper over private inline-C helpers runs compiled
+  too. A definition the session writes itself still takes over.
+
+Returns the number of exports bound, 0 when that spice is already attached,
+or -1 after printing why the build or load failed. A failure is recorded: the
+env answers -1 for that spice without rebuilding for the rest of its life
+(make a new env to retry). `tur_bin` NULL means `$TUR_BIN`, else `tur` on
+`PATH`. The env owns the image and frees it in `turi_env_free`.
+
+**Link the host with `-rdynamic`** (CMake `ENABLE_EXPORTS ON`; in a
+`tur build`-ed program, add it to the autolink hint). The image resolves the
+runtime it shares with libturi -- `tur_string_release` and friends -- against
+the executable, and without the flag `dlopen` fails on the first such symbol.
+
+### `int turi_env_attach_spice_for_module(TuriEnv *env, const char *module_name, const char *tur_bin)`
+
+`turi_env_attach_spice` for whichever spice provides `module_name`, looked up
+where an `(import module_name)` would find it (the base dir, then the extra
+search dirs; the stdlib is not a spice). Returns 0 when the module is not
+found, is not inside a spice, or is already provided by an image the env
+holds. Call it for each module a turn imports, before evaluating the turn;
+the notebook does:
+
+```c
+#ifdef TURI_HAS_ATTACH_SPICE
+turi_env_attach_spice_for_module(env, "stats/dist", NULL);
+#endif
+TuriValue v = turi_eval(env, "(import stats/dist :refer [dnorm]) (dnorm 0.0 0.0 1.0)");
+```
+
+`TURI_HAS_ATTACH_SPICE` is defined by `turi/eval.h` from the release that
+added both functions.
+
 ### `void turi_env_register_native_ex(...)` -- native ud that the env owns
 
 ```c

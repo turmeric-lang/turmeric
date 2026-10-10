@@ -38,6 +38,19 @@ extern "C" {
  * with NULL img -- returns 0. */
 uint32_t tur_ffi_install_spice_bindings(TuriEnv *env, TurSpiceImage *img);
 
+/* The same, for an image an embedder attaches (turi_env_attach_spice): the
+ * per-export user data and qualified names are freed with the env instead of
+ * leaked at process exit, and an export the shim cannot marshal (a struct
+ * return or argument) is left unbound, so its interpreted defn still runs.
+ * Returns the number bound. */
+uint32_t tur_ffi_install_spice_bindings_owned(TuriEnv *env, TurSpiceImage *img);
+
+/* The defmodule a native was bound from, when it is a spice-image export
+ * installed by either function above; NULL for any other native.  The
+ * interpreter asks so that evaluating the spice's own source (an `import` of
+ * the module) does not replace the compiled export with its interpreted defn. */
+const char *tur_ffi_native_spice_module(TuriNativeFn fn, const void *ud);
+
 /* jit-ffi-c2mir-plan F2: bind `name` to a thunk-backed native that calls
  * the resolved C function `fn` with the signature described by `ret_class`
  * + `arg_classes[n]` (the 'i'/'f'/'F'/'v' vocabulary of turi/jit_ffi.h).

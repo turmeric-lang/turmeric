@@ -508,6 +508,15 @@ typedef struct TuriEnv {
      * strdup'd module/defn name strings via the globals hash table.
      * Freed in turi_env_free in reverse order. Opaque list node. */
     struct TurSpiceImageNode *retired_spice_images;
+    /* Images attached with turi_env_attach_spice (an embedder running a
+     * spice's compiled code for the calls the interpreter cannot make).
+     * Owned: freed by turi_env_free, LIFO.  Opaque list node. */
+    struct TurSpiceImageNode *attached_spice_images;
+    /* Spice roots whose image failed to build or load: tried once per env, so
+     * a cell importing a broken spice ten times reports one failure, not ten
+     * rebuilds.  Owned strings, freed by turi_env_free. */
+    char **failed_spice_roots;
+    int    n_failed_spice_roots;
     /* Module-private name resolution (interpreter parity with the compiled
      * per-module mangling). `defining_mod` is the DefModule* whose body is
      * currently being evaluated (set by EX_DEFMODULE), so EX_FN_DEF can tell
