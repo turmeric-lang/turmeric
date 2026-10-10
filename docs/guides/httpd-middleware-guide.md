@@ -68,10 +68,42 @@ let [composed compose-middleware(base
   httpd-new(0 composed)
 ```
 
-The macro expands to `(mw-log (mw-cors ((mw-basic-auth "app" verify) base)))`
+The macro expands to `(mw-log (mw-cors (mw-basic-auth "app" verify base)))`
 -- the **leftmost middleware is the outermost wrapper**, its
 pre-processing runs first, its post-processing runs last (Ring /
-Rack ordering).
+Rack ordering). A middleware written as a call form, like
+`(mw-basic-auth "app" verify)`, gets the wrapped handler appended as its last
+argument, so every layer is a direct call and any number of configured
+middleware compose. (Before H4 it expanded to `((mw-basic-auth "app" verify)
+base)`, which type-checked for one such form but not two.)
+
+Order matters for two reasons. A middleware only sees what reaches it: put
+`mw-trust-proxy` outside everything that reads the client address
+(`mw-rate-limit`, `mw-log`). And a panic skips the post-processing of every
+layer it unwinds through, so put `mw-log` *outside* `mw-recover` to log the
+recovered 500:
+
+```turmeric
+(compose-middleware base
+                    (mw-trust-proxy tp)    ; client address for everything inside
+                    mw-log                 ; logs the 500 mw-recover makes
+                    mw-recover
+                    (mw-cors-opts cors)
+                    (mw-rate-limit limits))
+```
+
+```sweet-exp
+compose-middleware(base
+                   mw-trust-proxy(tp)    ; client address for everything inside
+                   mw-log                ; logs the 500 mw-recover makes
+                   mw-recover
+                   mw-cors-opts(cors)
+                   mw-rate-limit(limits))
+```
+
+The same stack runs around a whole [tourist](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/tourist)
+app through `tourist-opts`, or around a typed spices/httpd handler through
+`server-wrap` and `server-start-wrapped`.
 
 `compose-middleware-of` is the runtime variadic form for chains built
 dynamically (e.g. from a config flag). Each argument must be a *fat*

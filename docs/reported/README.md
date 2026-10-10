@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found putting tourist on stdlib httpd (filed 2026-10-10)
+
+Two compiler defects met while wiring stdlib httpd middleware under tourist
+(tourist-on-stdlib-httpd-plan H4). Both have workarounds in the spices.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [module-export-and-loaded-global-share-c-name](module-export-and-loaded-global-share-c-name.md) | medium (compile failure / wrong signature) | A module export and a same-named global from a `load`ed file are emitted under one module-qualified C name (`conflicting types for 'm__b__foo_hyfree'`); without the `load`, a `:refer`'d import is type-checked against the global's signature. Hit by tourist's `router-free` vs stdlib httpd's; tourist renamed it `pattern-free` |
+| [defer-skipped-on-panic-in-cps-function](defer-skipped-on-panic-in-cps-function.md) | medium (cleanup skipped) | A `defer` in a CPS-converted function runs only on the normal exit; a caught panic returns past it. Direct functions fire it. Leaked tourist's per-request ctx under `mw-recover`; worked around with an inline-C guard |
+
 ## Found typing reactor-add-chan's channel (filed 2026-10-10)
 
 `tests/run-fnsan.sh` was cited as evidence that reactor callbacks match

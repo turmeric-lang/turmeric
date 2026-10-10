@@ -4512,12 +4512,16 @@
 ;;; ends up as the OUTERMOST wrapper -- its pre-hook runs first and its
 ;;; post-hook runs last.
 ;;;
-;;; Each `mw_i` must be name-callable with one argument: typically a defn
-;;; like `mw-log` (shape `(defn mw-log [next :int] ... (fn [c] ...))`), or
-;;; a partially applied form like `(mw-cors opts)` that itself returns a
-;;; one-arg function. Bare closure VALUES are not directly callable in
-;;; Turmeric -- use a defn (or wrap such a value in a defn) before passing
-;;; it through compose-middleware.
+;;; Each `mw_i` is either a name callable with one argument -- typically a
+;;; defn like `mw-log` (shape `(defn mw-log [next :int] ... (fn [c] ...))`)
+;;; -- or a call form missing its last argument, like `(mw-cors-opts opts)`,
+;;; which gets the wrapped downstream handler appended as that argument:
+;;; `(compose-middleware base (mw-cors-opts o) (mw-rate-limit r))` is
+;;; `(mw-cors-opts o (mw-rate-limit r base))`.  That makes every layer a
+;;; direct call, so each `^fat next` parameter accepts the handler the layer
+;;; inside it returned.  (It used to expand to `((mw-cors-opts o) inner)`,
+;;; which type-checked for one such form but not for two.)  A `(fn ...)`
+;;; literal is called with the handler instead.
 ;;;
 ;;; Example:
 ;;;   (let [composed (compose-middleware base mw-log)]
@@ -4533,7 +4537,11 @@
 (defmacro compose-middleware [base & mws]
   (if (empty? mws)
     base
-    (list (first mws) (list compose-middleware base ~@(rest mws)))))
+    (if (list? (first mws))
+      (if (= (first (first mws)) (str->sym "fn"))
+        `(~(first mws) (compose-middleware ~base ~@(rest mws)))
+        `(~@(first mws) (compose-middleware ~base ~@(rest mws))))
+      `(~(first mws) (compose-middleware ~base ~@(rest mws))))))
 ;;; Handler -- an owned, composed request-handler onion (the result of
 ;;; `compose-middleware-of` / a folded middleware chain).
 ;;;
