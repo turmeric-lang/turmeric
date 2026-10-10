@@ -315,15 +315,35 @@ static void write_file(const char *dir, const char *rel, const char *text) {
     fclose(f);
 }
 
+/* MinGW's mkdir takes no mode, and its CRT does not promise mkdtemp; the
+ * Windows job builds this harness but does not run it. */
+#if defined(_WIN32)
+#include <direct.h>
+#define EP_MKDIR(p) _mkdir(p)
+static char *ep_mkdtemp(char *tmpl) {
+    if (!_mktemp(tmpl)) return NULL;
+    return _mkdir(tmpl) == 0 ? tmpl : NULL;
+}
+#else
+#define EP_MKDIR(p) mkdir((p), 0755)
+#define ep_mkdtemp mkdtemp
+#endif
+
 static void make_dir(const char *dir, const char *rel) {
     char p[1024];
     snprintf(p, sizeof(p), "%s/%s", dir, rel);
-    mkdir(p, 0755);
+    EP_MKDIR(p);
 }
 
 static void test_search_path_for(void) {
-    char root[] = "/tmp/tur-embed-search-XXXXXX";
-    if (!mkdtemp(root)) { CHECK(0, "mkdtemp for the search-path workspace"); return; }
+    char root[512];
+#if defined(_WIN32)
+    const char *tmp = getenv("TEMP") ? getenv("TEMP") : ".";
+#else
+    const char *tmp = "/tmp";
+#endif
+    snprintf(root, sizeof(root), "%s/tur-embed-search-XXXXXX", tmp);
+    if (!ep_mkdtemp(root)) { CHECK(0, "mkdtemp for the search-path workspace"); return; }
     const char *dirs[] = { "ws", "ws/app", "ws/app/src", "ws/app/src/app",
                            "ws/app/notes", "ws/dep", "ws/dep/src", "ws/dep/src/dep",
                            "ws/sib", "ws/sib/src", "ws/sib/src/sib", "loose" };
