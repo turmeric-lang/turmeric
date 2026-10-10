@@ -137,9 +137,18 @@ same text.
 
 All four positive fixtures carry `requires.leak-check` and are clean under
 LeakSanitizer (`tests/run-leak-check.sh`), so the boxed callbacks are freed at
-`reactor-free`. The reactor fixtures, old and new, are clean under
-`tests/run-fnsan.sh`: the auto-generated shims match reactor.c's
-`TurFdCbFn` / `TurTimerCbFn`.
+`reactor-free`.
+
+**Correction (same day):** this section first said the fnsan run proved the
+shims match reactor.c's `TurFdCbFn` / `TurTimerCbFn`. It did not prove that.
+`tests/run-fnsan.sh` links an uninstrumented `libturi.a`, both locally and in
+CI, and the reactor's calls into callbacks are made from inside libturi, so
+nothing checked them. Re-run against a libturi built with clang and
+`-fsanitize=function -fsanitize-trap=function`, the reactor fixtures, old and
+new, are still clean. A deliberately mismatched callback traps there, so the
+check is live. Against the uninstrumented libturi, the same mismatch runs and
+prints a wrong value. See the reactor-add-chan follow-up in
+[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md).
 
 - `nil-arg-to-ptr-param`: Turmeric callee, constructor field, capturing
   closure. Pure Turmeric, so `run-turi.sh` runs it too (it prints `true`
@@ -154,11 +163,11 @@ LeakSanitizer (`tests/run-leak-check.sh`), so the boxed callbacks are freed at
 - `reactor-fd-captureless` (`requires.posix-apis`): `reactor-add-fd`, the
   same way.
 
-### Left as is
+### Left as is, then fixed
 
-`reactor-add-chan` takes its channel as a raw `ptr<void>`, and converting a
-linear `(Chan A)` to one consumes it. So a caller holds the raw view and
-re-types it for `chan-send` / `chan-free`, as `reactor-captureless-callbacks`
-does. That is the stdlib `:int` / `ptr<void>` stand-in debt
-[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md) tracks,
-not this defect.
+`reactor-add-chan` took its channel as a raw `ptr<void>`, and converting a
+linear `(Chan A)` to one consumes it. So a caller had to hold the raw view and
+re-type it for `chan-send` / `chan-free`. Fixed the same day: it now borrows a
+`(Chan A)`, and `reactor-add-async-chan` borrows an `(AsyncChan A)`.
+`reactor-captureless-callbacks` passes its channel directly. See
+[stdlib-int-stand-in-audit](../reported/stdlib-int-stand-in-audit.md).

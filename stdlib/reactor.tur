@@ -39,10 +39,15 @@
 ;;   reactor-add-interval  [r first-ms interval-ms cb ud]       -- EventSourceId
 ;;   reactor-add-signal    [r signum cb user-data]              -- EventSourceId
 ;;   reactor-add-chan      [r ch cb user-data]                  -- EventSourceId
+;;   reactor-add-async-chan [r ch cb user-data]                 -- EventSourceId
 ;;   reactor-poll          [r timeout-ms]                       -- int
 ;;   reactor-run           [r]                                  -- nil
 ;;   reactor-stop          [r]                                  -- nil
 ;;   reactor-wake          [r]                                  -- nil
+;; reactor-add-chan / reactor-add-async-chan watch a typed (Chan A) /
+;; (AsyncChan A), so the channel types come from chan.tur.  load is
+;; idempotent, so a program that also loads chan.tur itself is fine.
+(load "stdlib/chan.tur")
 ;; ---- Autolink hint ----
 ;;; reactor/autolink-hint -- ensure programs importing reactor link against libturi.
 (defn reactor/autolink-hint [] : int
@@ -199,9 +204,11 @@
 ;; a plain `cb : int` was called through its own code bytes (SIGSEGV in
 ;; call_tur_*_cb).  Typing cb `^fat` auto-shims it into a heap { fatshim, fn }
 ;; box the reactor owns and frees at teardown, and lets the checker hold the
-;; callback to the arity reactor.c calls it with.  The shim's entry is the
-;; all-int64_t carrier signature reactor.c's TurFdCbFn / TurTimerCbFn typedefs
-;; call through (checked by tests/run-fnsan.sh).
+;; callback to the arity reactor.c calls it with.  For these int / ptr<void>
+;; slots the shim's entry is the all-int64_t signature reactor.c's TurFdCbFn /
+;; TurTimerCbFn typedefs call through -- verified against a libturi built with
+;; clang -fsanitize=function, which the default fnsan run does not use
+;; (docs/reported/fnsan-job-does-not-instrument-libturi.md).
 ;; See docs/archive/nil-argument-to-ptr-param-emits-void-expression.md.
 
 (defn reactor-add-fd [^borrow r : Reactor
@@ -362,17 +369,32 @@
     :EventSourceId))
 ;;; reactor-add-chan -- watch a channel for one incoming value (one-shot).
 ;;;
-;;; Fires at most once: when a value is available the callback receives
-;;; (source-id, value, user-data) and the source is deactivated. Re-register
-;;; from the callback for a persistent channel watcher.
+;;; Fires at most once: when a value is available the reactor dequeues it, the
+;;; callback receives (source-id, value, user-data), and the source is
+;;; deactivated. Re-register from the callback for a persistent channel
+;;; watcher.
+;;;
+;;; The channel is borrowed, but the reactor goes on reading it after this call
+;;; returns: keep it alive -- do not chan-free it -- until the watch has fired,
+;;; been removed with reactor-remove, or the reactor has been freed.
 ;;;
 ;;; Delivery latency: the channel is checked on every reactor-poll /
 ;;; reactor-run iteration. For prompt wakeup after chan-send, call
 ;;; reactor-wake from the sending thread.
 ;;;
+;;; The value reaches cb as the channel's carrier word, typed :int.  For a
+;;; (Chan int) that is the int itself.  For another element type, leave the
+;;; slot untyped and convert in the body: (:: v cstr) for a word-sized element,
+;;; (bits->float v) for a float.  Do not annotate the slot with the element
+;;; type.  reactor.c calls cb as (env, int64, int64, int64): a `v : float`
+;;; slot would read a register it never loaded, so it is refused at compile
+;;; time; a `v : cstr` slot compiles and runs on x86-64 / arm64, but the boxed
+;;; callback's C type then differs from the one it is called through (a
+;;; -fsanitize=function trap).  `int` and `ptr<void>` slots are exact.
+;;;
 ;;; Parameters:
 ;;;   r         -- reactor handle
-;;;   ch        -- channel handle (ptr<void> from chan-new or async-chan-new)
+;;;   ch        -- the channel to watch (borrowed; an AsyncChan takes reactor-add-async-chan)
 ;;;   cb        -- closure: (fn [id :int value :int user :ptr<void>] :nil)
 ;;;   user-data -- opaque value forwarded to cb
 ;;;
@@ -385,14 +407,59 @@
 ;;;     nil)
 ;;;
 ;;; Since: Phase R6
+;; The channel used to be a bare `ch : ptr<void>`.  Getting one out of a
+;; linear (Chan A) took an erasing ascription, which consumes the handle, so a
+;; caller had to keep a raw ptr<void> view and re-type it for chan-send /
+;; chan-free, and nothing stopped a Chan / AsyncChan mix-up.  ^borrow keeps
+;; the caller's handle; the ascription below is this wrapper's own C-ABI
+;; boundary.
+;;
+;; The callback's value slot stays the carrier word, NOT `A`: reactor.c calls
+;; every cb as (env, int64, int64, int64), and a closure keeps its declared C
+;; parameter types, so a `(fn [int A ptr<void>] nil)` instantiated at float
+;; would read its double from a float register reactor.c never loaded (a
+;; silent wrong value).  The `int` slot gets the float-vs-word check the
+;; structural fn-type rule already makes, so that is a compile error instead.
 
-(defn reactor-add-chan [^borrow r : Reactor
-                        ch : ptr<void>
-                        ^fat cb : (fn [int int ptr<void>] nil)
-                        user-data : ptr<void>]
+(defn reactor-add-chan [A] [^borrow r : Reactor
+                            ^borrow ch : (Chan A)
+                            ^fat cb : (fn [int int ptr<void>] nil)
+                            user-data : ptr<void>]
   #fx{}
   : EventSourceId
-  (:: (tur_reactor_add_chan (:: r :ptr<void>) ch cb user-data) :EventSourceId))
+  (:: (tur_reactor_add_chan (:: r :ptr<void>) (:: ch :ptr<void>) cb user-data)
+    :EventSourceId))
+;;; reactor-add-async-chan -- reactor-add-chan for an AsyncChan.
+;;;
+;;; The same one-shot watch over the same ChanBlock layout; only the handle
+;;; type differs. The keep-alive rule and the carrier-word value are the same
+;;; as reactor-add-chan's: do not async-chan-free the channel while the watch
+;;; is live.
+;;;
+;;; Parameters:
+;;;   r         -- reactor handle
+;;;   ch        -- the channel to watch (borrowed)
+;;;   cb        -- closure: (fn [id :int value :int user :ptr<void>] :nil)
+;;;   user-data -- opaque value forwarded to cb
+;;;
+;;; Returns:
+;;;   EventSourceId -- source id (>= 0), or -1 on error (unwrap with (:: id :int))
+;;;
+;;; Example:
+;;;   (reactor-add-async-chan r jobs
+;;;     (fn [id job user] :nil (run-job job))
+;;;     nil)
+;;;
+;;; Since: Phase R6
+
+(defn reactor-add-async-chan [A] [^borrow r : Reactor
+                                  ^borrow ch : (AsyncChan A)
+                                  ^fat cb : (fn [int int ptr<void>] nil)
+                                  user-data : ptr<void>]
+  #fx{}
+  : EventSourceId
+  (:: (tur_reactor_add_chan (:: r :ptr<void>) (:: ch :ptr<void>) cb user-data)
+    :EventSourceId))
 ;; ---- Running ----
 ;;; reactor-poll -- poll for events once, dispatching ready callbacks.
 ;;;

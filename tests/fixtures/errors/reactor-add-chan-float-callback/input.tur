@@ -1,0 +1,19 @@
+;; reactor-add-chan's callback receives the channel's carrier word, and
+;; reactor.c calls it with integer-register arguments.  A float-typed value
+;; slot would read its double from a register reactor.c never loaded -- a
+;; silent wrong value -- so it is refused.  Read a float channel's word with
+;; bits->float instead (reactor-chan-typed).
+
+(load "stdlib/reactor.tur")
+
+(defn main [] : int
+  (let [r  (reactor-new)
+        cf (chan-new 2)]
+    (chan-send cf 7.1)
+    (reactor-add-chan r cf
+      (fn [id : int v : float user : ptr<void>] : nil (println v))
+      nil)
+    (reactor-poll r 0)
+    (reactor-free r)
+    (chan-free cf)
+    0))

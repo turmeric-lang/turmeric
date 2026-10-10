@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found typing reactor-add-chan's channel (filed 2026-10-10)
+
+`tests/run-fnsan.sh` was cited as evidence that reactor callbacks match
+reactor.c's call types. It cannot show that: the indirect calls are made inside
+libturi, which the gate links uninstrumented.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fnsan-job-does-not-instrument-libturi](fnsan-job-does-not-instrument-libturi.md) | low-medium (gate gap) | `-fsanitize=function` checks at the call site, and the fnsan job's `libturi.a` is gcc-built without it, so a callback libturi calls (reactor sources, fiber bodies) is never checked: a deliberately float-mismatched reactor callback prints a wrong `0.5` there and traps against a clang-instrumented libturi. The whole corpus is clean against the instrumented build (the one failure was a same-day fixture's `v : cstr` slot, fixed before landing), so turning it on is a two-flag CI change |
+
 ## Found refining the nng async plan (filed 2026-10-10)
 
 Spiking [nng-async-plan](../upcoming/spices/nng-async-plan.md) against v0.63.9

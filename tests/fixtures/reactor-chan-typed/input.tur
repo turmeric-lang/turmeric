@@ -1,0 +1,58 @@
+;; reactor-add-chan / reactor-add-async-chan take the caller's typed channel
+;; by ^borrow.  They used to take a bare `ch : ptr<void>`, and the only way to
+;; get one from a linear (Chan A) -- an erasing ascription -- consumed the
+;; handle, so the caller could no longer send on it or free it.
+;;
+;; The callback's value is the channel's carrier word, typed :int.  Every
+;; slot stays untyped (or int / ptr<void>) and the body converts:
+;; (:: v cstr) for a word-sized element, bits->float for a float.  A float
+;; slot is refused at compile time (errors/reactor-add-chan-float-callback),
+;; because reactor.c calls the callback with integer-register arguments.  A
+;; `v : cstr` slot would compile but differ in C type from the call through
+;; reactor.c -- a -fsanitize=function trap against an instrumented libturi,
+;; which is how this fixture's first version was caught.
+;;
+;; Expected output:
+;;   typed cstr
+;;   7.1
+;;   42
+;;   99
+;;   still mine
+;;   3
+
+(load "stdlib/reactor.tur")
+(load "stdlib/bits.tur")
+
+(defn main [] : int
+  (let [r  (reactor-new)
+        cs (chan-new 2)
+        cf (chan-new 2)
+        ci (chan-new 2)
+        ca (async-chan-new 2)]
+    (chan-send cs "typed cstr")
+    (chan-send cf 7.1)
+    (chan-send ci 41)
+    (async-chan-send ca 99)
+    (reactor-add-chan r cs
+      (fn [id v user] : nil (println (:: v cstr)))
+      nil)
+    (reactor-add-chan r cf
+      (fn [id v user] : nil (println (bits->float v)))
+      nil)
+    (reactor-add-chan r ci
+      (fn [id v user] : nil (println (+ v 1)))
+      nil)
+    (reactor-add-async-chan r ca
+      (fn [id v user] : nil (println v))
+      nil)
+    (reactor-poll r 0)
+    ;; The watches were borrows: every handle is still the caller's.
+    (chan-send ci 3)
+    (println "still mine")
+    (println (chan-recv ci))
+    (reactor-free r)
+    (chan-free cs)
+    (chan-free cf)
+    (chan-free ci)
+    (async-chan-free ca)
+    0))

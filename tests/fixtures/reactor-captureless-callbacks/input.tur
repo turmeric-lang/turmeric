@@ -21,7 +21,6 @@
 ;;   42
 
 (load "stdlib/reactor.tur")
-(load "stdlib/chan.tur")
 
 (defn main [] : int
   (let [r (reactor-new)]
@@ -38,16 +37,14 @@
       (reactor-poll r 0)
       (reactor-poll r 0)
       (reactor-remove r iv))
-    ;; A one-shot channel watcher.  reactor-add-chan takes the channel as a
-    ;; raw ptr<void>, and converting a linear (Chan A) to one consumes it, so
-    ;; hold the raw view and re-type it for chan-send / chan-free.
-    (let [chp (:: (chan-new 4) :ptr<void>)]
-      (reactor-add-chan r chp
+    ;; A one-shot channel watcher.  The channel is borrowed, so the handle
+    ;; is still the caller's to send on and free.
+    (let [ch (chan-new 4)]
+      (reactor-add-chan r ch
         (fn [id v user] : nil (println v))
         nil)
-      (let [ch (:: chp (Chan int))]
-        (chan-send ch 42)
-        (reactor-poll r 0)
-        (reactor-free r)
-        (chan-free ch)))
+      (chan-send ch 42)
+      (reactor-poll r 0)
+      (reactor-free r)
+      (chan-free ch))
     0))
