@@ -17,6 +17,9 @@
  *                 the qualified name reaches the export
  *   greet / even-word? -- a :cstr and a :bool return come back as a string
  *                 and a boolean, not as the bare word
+ *   dep-twice  -- calls into a :spices dep (afdep/util): the image is built
+ *                 from the spice root with the dep linked in, and the dep's
+ *                 exports are not the image's
  *
  * Needs a `tur` to build the image: TUR_BIN (ctest sets it), else ./build/tur.
  * Linked with ENABLE_EXPORTS (-rdynamic): the image resolves the runtime it
@@ -67,8 +70,10 @@ static TuriValue native_seven(TuriEnv *env, TuriValue *args, uint32_t n, void *u
 
 static const char *FIXTURE =
     "(defmodule afx/core\n"
+    "  (import afdep/util :refer [twice])\n"
     "  (export add-loop wrapped box-new box-get box-free tagged-id Pt pt-sum answer\n"
-    "          greet even-word?)\n"
+    "          greet even-word? dep-twice)\n"
+    "  (defn dep-twice [x : int] : int (+ 1 (twice x)))\n"
     "  (defn add-loop [a : int b : int] : int\n"
     "    ```c\n"
     "    int64_t s = a;\n"
@@ -143,7 +148,21 @@ int main(void) {
     make_dir(root, "broken");
     make_dir(root, "broken/src");
     make_dir(root, "broken/src/brk");
-    write_file(root, "afx/build.tur", "(defpackage afx :name \"afx\")\n");
+    write_file(root, "afx/build.tur",
+               "(defpackage afx :name \"afx\"\n"
+               "  :spices #map{\"afdep\" #map{:path \"../afdep\"}})\n");
+    make_dir(root, "afdep");
+    make_dir(root, "afdep/src");
+    make_dir(root, "afdep/src/afdep");
+    write_file(root, "afdep/build.tur", "(defpackage afdep :name \"afdep\")\n");
+    write_file(root, "afdep/src/afdep/util.tur",
+               "(defmodule afdep/util (export twice)\n"
+               "  (defn twice [x : int] : int\n"
+               "    ```c\n"
+               "    int64_t r = 0;\n"
+               "    for (int i = 0; i < 2; i++) r += x;\n"
+               "    return r;\n"
+               "    ```))\n");
     write_file(root, "afx/src/afx/core.tur", FIXTURE);
     write_file(root, "broken/build.tur", "(defpackage brk :name \"brk\")\n");
     write_file(root, "broken/src/brk/core.tur",
@@ -168,9 +187,10 @@ int main(void) {
     turi_env_set_toplevel_imports(env, true);
     turi_env_set_search_path_for(env, note);
     int n = turi_env_attach_spice_for_module(env, "afx/core", tur);
-    /* add-loop wrapped box-new box-get box-free answer greet even-word? --
-     * not tagged-id (no definition), not pt-sum (a struct it cannot marshal). */
-    CHECK(n == 8, "attach: binds the eight exports the FFI can marshal");
+    /* add-loop wrapped box-new box-get box-free answer greet even-word?
+     * dep-twice -- not tagged-id (no definition), not pt-sum (a struct it
+     * cannot marshal), not the dep's `twice` (not this spice's export). */
+    CHECK(n == 9, "attach: binds the nine exports the FFI can marshal");
     CHECK(turi_env_attach_spice_for_module(env, "afx/core", tur) == 0,
           "attach: a module an attached image provides is not loaded twice");
     CHECK(turi_env_attach_spice_for_module(env, "no/such-module", tur) == 0,
@@ -189,6 +209,8 @@ int main(void) {
           "attached: a struct-parameter export is left to the interpreter");
     CHECK(is_int(turi_eval(env, "(afx/core/answer)"), 42),
           "attached: the qualified name reaches the export");
+    CHECK(is_int(turi_eval(env, "(afx/core/dep-twice 20)"), 41),
+          "attached: an export calling into a :spices dep runs compiled");
     TuriValue g = turi_eval(env, "(afx/core/greet)");
     CHECK(g.tag == TURI_CSTR && g.as_cstr && strcmp(g.as_cstr, "hello") == 0,
           "attached: a :cstr export returns the string");
@@ -207,7 +229,7 @@ int main(void) {
           "attach: a directory with no build.tur above it is an error");
     char spice[1100];
     snprintf(spice, sizeof(spice), "%s/afx", root);
-    CHECK(turi_env_attach_spice(sh, spice, tur) == 8, "attach by root: same eight bindings");
+    CHECK(turi_env_attach_spice(sh, spice, tur) == 9, "attach by root: same nine bindings");
     CHECK(is_int(turi_eval(sh, "(answer)"), 7),
           "attach: a host-bound bare name is not clobbered");
     CHECK(is_int(turi_eval(sh, "(afx/core/answer)"), 42),

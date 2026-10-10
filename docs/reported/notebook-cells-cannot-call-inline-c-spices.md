@@ -164,6 +164,14 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
   every int-class result back as an integer, so `(test->str r)` was an
   address; the manifest's return tag now picks a string or a boolean
   (`TurSpiceExport.ret_tag`).
+- **A spice whose `src/` imports a `:spices` dep could not be imaged** --
+  in `tur repl` either. The loader built `<root>/src`, a directory with no
+  `build.tur`, so the manifest's deps never reached the include path
+  (notebook: `module 'ansi/term' not found`); and a `--shared` build of the
+  root compiled the deps only for their headers yet listed their exports in
+  the manifest, which the loader then rejected as stale. Shared builds now
+  list only the project's own modules, and the loader builds the root with
+  the new `tur build --shared --bundle-deps`, which links the deps' code in.
 - Two plot bugs the walkthrough showed, fixed in the spice (compiled
   programs had them too): every x tick was labelled with a y value (the
   label buffers were block-local and the y block reused the x block's
@@ -182,15 +190,7 @@ What it took beyond the API -- each a defect the `tur repl` path shared:
    closure with no C address to pass. `plot-walkthrough`'s first cell and
    the FFI callback path (`tur_ffi_cb_ctx_new`, which needs the parameter's
    function type) both want plot to type it `(fn [float] float)`.
-3. **A spice whose `src/` imports a `:spices` dep cannot be imaged.**
-   `tur_spice_image_load` runs `tur build --shared <root>/src`, and a build of
-   a directory with no `build.tur` in it does not read the manifest: the
-   notebook spice itself fails `module 'ansi/term' not found`. Building the
-   root instead bundles the deps, but then the manifest lists dep exports
-   (`test__assert__assert_hyeq`) the image does not define, and the loader
-   rejects it as stale. The same limit holds for `tur repl` started in such
-   a spice.
-4. **stats' frame helpers crash, compiled too** -- a layout bug of stats',
+3. **stats' frame helpers crash, compiled too** -- a layout bug of stats',
    not the notebook's:
    [stats-frame-interop-reads-a-stale-frame-layout](stats-frame-interop-reads-a-stale-frame-layout.md).
    The examples' `ols-frame` cells are left in place, marked `eval=false`.

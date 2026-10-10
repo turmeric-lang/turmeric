@@ -477,8 +477,11 @@ $ tur repl                    # nothing changed -- instant load
 
 ### Building the spice in process (`--engine jit`)
 
-By default the loader shells out to `tur build --shared` and `dlopen`s the
-result -- the `.tur-repl-cache/` flow above. On a binary built with
+By default the loader shells out to `tur build --shared --bundle-deps` on
+the spice root and `dlopen`s the result -- the `.tur-repl-cache/` flow above.
+`--bundle-deps` links each `:spices` dep's modules into the library, so a
+spice whose sources import a dep loads on its own; only the spice's own
+exports are bound at the prompt. On a binary built with
 `-DTUR_JIT=ON`, the whole spice can instead be compiled as one translation
 unit **in process** through the MIR engine, skipping the subprocess, the
 `.so`, and the `dlopen`:

@@ -6919,8 +6919,12 @@ static char **collect_used_attr_modules(const char *entry_path,
  * n_own are compiled only to generate headers (so importers can #include
  * them) but their .c files are excluded from the link step.  Pass n_files
  * (== n_own) when there are no dep-only files. */
+/* `tur build --shared --bundle-deps`: link each :spices dep's modules into
+ * the library (see cmd_build_project's n_own). */
+static bool g_build_bundle_deps = false;
+
 static int cmd_build_multi_files(char **tur_files, int n_files,
-                                 int n_own,
+                                 int n_own, int n_exported,
                                  const char *dir, const char *src_root,
                                  const char **file_src_roots,
                                  const char *out_path,
@@ -7073,7 +7077,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         if (compile_to_implementation(tur_files[i], &c_out, mod_names[i],
                                       inc, n_inc,
                                       (const char **)rm_p, rm_n,
-                                      manifest_ptr,
+                                      i < n_exported ? manifest_ptr : NULL,
                                       NULL, 0,
                                       &all_borrow[i], &all_n_borrow[i]) != 0) {
             fprintf(stderr, "tur: failed to compile %s to implementation\n", tur_files[i]);
@@ -7187,7 +7191,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         if (compile_to_implementation(tur_files[i], &c_out, mod_names[i],
                                       inc, n_inc,
                                       (const char **)rm_p, rm_n,
-                                      manifest_ptr,
+                                      i < n_exported ? manifest_ptr : NULL,
                                       forced_for[i], n_forced_for[i],
                                       NULL, NULL) != 0) {
             fprintf(stderr, "tur: failed to recompile %s to implementation (pass 2)\n", tur_files[i]);
@@ -7605,7 +7609,7 @@ static int cmd_build_multi(const char *dir, const char *out_path, bool shared,
      * tells the user to run.  Project mode passes its own resolved path here;
      * this is the bare-directory equivalent. */
     const char *self_inc[1] = { dir };
-    int rc = cmd_build_multi_files(tur_files, n_files, n_files, dir, dir, NULL,
+    int rc = cmd_build_multi_files(tur_files, n_files, n_files, n_files, dir, dir, NULL,
                                    out_path, shared, manifest_path, self_inc, 1,
                                    build_dir);
     free(build_dir);
@@ -7989,14 +7993,18 @@ static int cmd_build_project(const char *root_in, const char *out_path,
     }
 
     /* n_own = project's own modules (link these); n_all - n_own = dep modules
-     * compiled only for header generation (shared mode skips their link). */
-    int n_own = shared ? n_files : n_all;
+     * compiled only for header generation (shared mode skips their link).
+     * --bundle-deps links them into the library too -- the self-contained
+     * image `tur repl` and a notebook dlopen, which have no other copy of a
+     * dep's code to resolve against.  Either way only the project's own
+     * modules are the library's exports: a dep's are not in its manifest. */
+    int n_own = (shared && !g_build_bundle_deps) ? n_files : n_all;
     char *build_dir = resolve_build_dir(root, cli_build_dir);
     int rc;
     if (!build_dir) {
         rc = 2;
     } else {
-        rc = cmd_build_multi_files(all_files, n_all, n_own, root, src_root,
+        rc = cmd_build_multi_files(all_files, n_all, n_own, n_files, root, src_root,
                                    all_roots, out_path, shared, manifest_path,
                                    inc, n_inc, build_dir);
         free(build_dir);
@@ -10793,6 +10801,10 @@ static int usage_build(void) {
         "  --manifest <p>    (with --shared) write exports.manifest to <p>\n"
         "                    (defaults to `<out>.manifest`). Lists each export\n"
         "                    as `<mod>/<defn> -> <mangled> :: (:args) -> :ret`.\n"
+        "  --bundle-deps     (with --shared, on a project) link each :spices dep's\n"
+        "                    modules into the library as well, so it loads with\n"
+        "                    nothing else beside it; the manifest still lists only\n"
+        "                    the project's own exports.\n"
         "  --target wasm     compile to WebAssembly via emcc (requires Emscripten)\n"
         "  --debug           emit `#line` directives mapping the generated C back\n"
         "                    to `.tur` source, and compile single-file builds with\n"
@@ -13203,6 +13215,8 @@ static int tur_main_inner(int argc, char **argv) {
                 out = argv[++i];
             } else if (strcmp(argv[i], "--shared") == 0) {
                 shared = true;
+            } else if (strcmp(argv[i], "--bundle-deps") == 0) {
+                g_build_bundle_deps = true;
             } else if (strcmp(argv[i], "--split-build") == 0) {
                 split_build = 1;
             } else if (strcmp(argv[i], "--no-split-build") == 0) {
@@ -13260,6 +13274,10 @@ static int tur_main_inner(int argc, char **argv) {
         }
         if (manifest_out && !shared) {
             fprintf(stderr, "tur build: --manifest requires --shared\n");
+            free(build_inc); return 1;
+        }
+        if (g_build_bundle_deps && !shared) {
+            fprintf(stderr, "tur build: --bundle-deps requires --shared\n");
             free(build_inc); return 1;
         }
         /* Check if input is a directory - use multi-file build */

@@ -352,7 +352,7 @@ static int run_build(const char *tur_bin, const char *root,
      * the user sees the actual diagnostic from the compiler. */
     char cmd[20000];
     snprintf(cmd, sizeof(cmd),
-             "%s build --shared %s -o %s --manifest %s >" TUR_DEVNULL " 2>&1",
+             "%s build --shared --bundle-deps %s -o %s --manifest %s >" TUR_DEVNULL " 2>&1",
              q_bin, q_root, q_lib, q_mf);
     /* cmd.exe eats the outer quote pair of a /c string, so give it one of
      * ours to eat -- otherwise a quoted program plus quoted arguments comes
@@ -368,7 +368,7 @@ static int run_build(const char *tur_bin, const char *root,
     fprintf(stderr,
             "tur repl: spice rebuild failed; replaying with full output:\n");
     snprintf(cmd, sizeof(cmd),
-             "%s build --shared %s -o %s --manifest %s",
+             "%s build --shared --bundle-deps %s -o %s --manifest %s",
              q_bin, q_root, q_lib, q_mf);
     if (tur_shell_command(cmd, wrapped, sizeof(wrapped)) != 0) return -1;
     int _sys_ret = system(wrapped); (void)_sys_ret;
@@ -787,7 +787,13 @@ int tur_spice_image_load(const char *start_dir, const char *tur_bin,
 
 subprocess_path:
     if (needs_rebuild(build_dir, lib_path, tur_bin)) {
-        if (run_build(tur_bin, build_dir, lib_path, manifest_path) != 0) {
+        /* Build the ROOT, with its :spices deps linked in.  Given `<root>/src`
+         * -- a directory with no build.tur -- `tur build` never read the
+         * manifest, so a spice whose sources import a dep (notebook's tui.tur
+         * imports ansi/term) failed "module not found"; and a plain --shared
+         * build of the root leaves the deps' code out, which an image dlopen'd
+         * on its own cannot do without.  build_dir stays the freshness root. */
+        if (run_build(tur_bin, root, lib_path, manifest_path) != 0) {
             free(root);
             return -1;
         }
