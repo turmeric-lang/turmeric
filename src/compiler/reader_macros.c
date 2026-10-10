@@ -29,6 +29,7 @@ static const ReservedPrefix kReserved[] = {
     { "lang", 0   },  /* #lang directive */
     /* Built-in named string macros: cannot be redefined by user macros. */
     { "rx",   '"' },  /* #rx"..." regex literal */
+    { "dedent", '"' },  /* #dedent"""...""" indent-aware string literal */
     { NULL,   0   },
 };
 

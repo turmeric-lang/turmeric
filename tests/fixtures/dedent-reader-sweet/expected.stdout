@@ -1,0 +1,6 @@
+basic
+Usage: tool [options]
+  -h  show help
+code
+if x { y }
+  z("q")

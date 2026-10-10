@@ -1,0 +1,19 @@
+#lang sweet-exp
+; #dedent"""...""" under sweet-exp: the body reaches the reader verbatim, so
+; its own indentation is never taken for sweet-exp block structure.
+
+defn show [label : cstr s : cstr] : int
+  println(label)
+  println(s)
+  0
+
+defn main [] : int
+  show "basic" #dedent"""
+      Usage: tool [options]
+        -h  show help
+      """
+  show "code" #dedent"""
+      if x { y }
+        z("q")
+      """
+  0

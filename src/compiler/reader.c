@@ -3430,6 +3430,140 @@ static Form *expand_datum_template(Reader *r, const Form *t,
     return form_clone_with_span(r->arena, t, call_site);
 }
 
+/* `#dedent"""..."""` -- indent-aware, verbatim multi-line string literal.
+ *
+ * Reader is positioned just past `#dedent`, at the first `#` of an optional
+ * hash run or at the opening `"""`.  `#dedent#"""..."""#` (any number of
+ * hashes, matched on both ends) lets the body contain `"""`.  The body is
+ * VERBATIM: no escapes, so code with `\n`, `{`, `}` and `"` needs nothing.
+ *
+ *   - the opening line must be blank; the text starts on the next line;
+ *   - leading blank lines are dropped;
+ *   - if the closing delimiter is alone on its line, ITS indentation is the
+ *     amount stripped (Swift's rule) and the line break before it is not part
+ *     of the string -- put a blank line before it for a final "\n";
+ *   - otherwise (closer inline after text) the first non-blank line sets it;
+ *   - every non-blank line must start with exactly that indent (an error
+ *     otherwise); whitespace-only lines become empty;
+ *   - a CR before a LF is dropped.
+ * The result is an ordinary string literal, so it is a static cstr. */
+static Form *read_dedent_literal(Reader *r, uint32_t call_line,
+                                 uint32_t call_col, size_t call_off) {
+    Span site = span_from_to(r, call_line, call_col, call_off, r->pos);
+    const char *src = r->src;
+    size_t p = r->pos;
+    size_t hashes = 0;
+    while (p < r->len && src[p] == '#') { hashes++; p++; }
+    if (p + 3 > r->len || src[p] != '"' || src[p + 1] != '"'
+        || src[p + 2] != '"') {
+        diag_emit(DIAG_ERROR, site,
+                  "#dedent expects '\"\"\"' (optionally after '#'s) "
+                  "to open the string");
+        r->error = true;
+        return NULL;
+    }
+    size_t body_start = p + 3;
+    size_t body_end = 0;
+    bool   found = false;
+    for (size_t q = body_start; q + 3 + hashes <= r->len; ++q) {
+        if (src[q] != '"' || src[q + 1] != '"' || src[q + 2] != '"') continue;
+        size_t h = 0;
+        while (h < hashes && src[q + 3 + h] == '#') h++;
+        if (h == hashes) { body_end = q; found = true; break; }
+    }
+    if (!found) {
+        diag_emit(DIAG_ERROR, site,
+                  "unterminated #dedent string (missing closing '\"\"\"' "
+                  "followed by %zu '#')", hashes);
+        r->error = true;
+        return NULL;
+    }
+    /* The opening line is blank; the text starts after its newline. */
+    size_t nl = body_start;
+    while (nl < body_end && (src[nl] == ' ' || src[nl] == '\t'
+                             || src[nl] == '\r')) nl++;
+    if (nl >= body_end || src[nl] != '\n') {
+        diag_emit(DIAG_ERROR, site,
+                  "#dedent text must start on the line after the opening "
+                  "'\"\"\"'");
+        r->error = true;
+        return NULL;
+    }
+    size_t text_start = nl + 1;
+
+    /* The last line: alone with the closer, or the closer follows text. */
+    size_t ls = body_end;
+    while (ls > text_start && src[ls - 1] != '\n') ls--;
+    bool own_line = true;
+    for (size_t i = ls; i < body_end; ++i) {
+        if (src[i] != ' ' && src[i] != '\t') { own_line = false; break; }
+    }
+    size_t region_end = body_end;
+    if (own_line) region_end = (ls > text_start) ? ls - 1 : text_start;
+
+    /* Indent: the closer's, else the first non-blank line's. */
+    const char *indent = src + ls;
+    size_t indent_len = own_line ? body_end - ls : 0;
+    if (!own_line) {
+        size_t a = text_start;
+        while (a < region_end) {
+            size_t e = a;
+            while (e < region_end && src[e] != '\n') e++;
+            size_t w = a;
+            while (w < e && (src[w] == ' ' || src[w] == '\t')) w++;
+            if (w < e && !(src[w] == '\r' && w + 1 == e)) {
+                indent = src + a;
+                indent_len = w - a;
+                break;
+            }
+            a = e + 1;
+        }
+    }
+
+    char  *buf = (char *)arena_alloc_aligned(r->arena, region_end - text_start + 1, 1);
+    size_t o = 0;
+    bool   started = false;
+    size_t a = text_start;
+    uint32_t lineno = 1;
+    while (a <= region_end) {
+        size_t e = a;
+        while (e < region_end && src[e] != '\n') e++;
+        size_t t = e;
+        if (t > a && src[t - 1] == '\r') t--;
+        size_t w = a;
+        while (w < t && (src[w] == ' ' || src[w] == '\t')) w++;
+        bool blank = (w == t);
+        if (blank && !started) {
+            /* a leading blank line is dropped */
+        } else {
+            if (started) buf[o++] = '\n';
+            started = true;
+            if (!blank) {
+                if (t - a < indent_len || memcmp(src + a, indent, indent_len) != 0) {
+                    diag_emit(DIAG_ERROR, site,
+                              "#dedent line %u of the string is indented "
+                              "less than the %s",
+                              (unsigned)lineno,
+                              own_line ? "closing '\"\"\"'" : "first line");
+                    r->error = true;
+                    return NULL;
+                }
+                memcpy(buf + o, src + a + indent_len, t - a - indent_len);
+                o += t - a - indent_len;
+            }
+        }
+        lineno++;
+        if (e >= region_end) break;
+        a = e + 1;
+    }
+    buf[o] = '\0';
+
+    size_t stop = body_end + 3 + hashes;
+    while (r->pos < stop) advance(r);
+    return form_str(r->arena, span_from_to(r, call_line, call_col, call_off, r->pos),
+                    buf, (uint32_t)o);
+}
+
 /* User-macro dispatch hook. Called from read_form when it sees a '#'.
  *
  * Returns:
@@ -3469,6 +3603,13 @@ static Form *try_read_user_macro(Reader *r) {
     if (delim_char == '(' || delim_char == '[' || delim_char == '{'
         || delim_char == '"') {
         try_delim = delim_char;
+    }
+
+    /* Built-in `#dedent"""..."""` / `#dedent#"""..."""#` (see
+     * read_dedent_literal).  `dedent` is reserved so no user macro shadows it. */
+    if ((delim_char == '"' || delim_char == '#') && name.len == 6
+        && memcmp(name.p, "dedent", 6) == 0) {
+        return read_dedent_literal(r, call_line, call_col, call_off);
     }
 
     /* Built-in named string macro: #rx"..." → (re/compile "..."). The name

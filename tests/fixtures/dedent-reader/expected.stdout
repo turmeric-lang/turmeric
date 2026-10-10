@@ -1,0 +1,29 @@
+basic
+Usage: tool [options]
+  -h  show help
+code
+int main(void) {
+    printf("a\tb\n");
+    return 0;
+}
+blanks
+a
+b
+gap
+one
+
+two
+final-newline
+a
+
+closer-left
+  kept
+inline-closer
+first
+  second
+hashes
+say """hi"""
+hashes2
+"#" and """# stay
+empty
+
