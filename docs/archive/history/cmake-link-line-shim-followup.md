@@ -1,6 +1,35 @@
 # `cmake-deps/` shim follow-up: what the turmeric link-line fix makes removable
 
-**Status: partly landed -- updated 2026-08-29; re-checked 2026-10-07.** Both
+**Status: done -- 2026-10-10.** Both items that were outstanding are done in
+turmeric-lang/turmeric-spices#95; the only shim left is opengl's, for glad
+(a code generator), which this audit always expected to stay.
+
+- **postgres** is a `:prefer-system` dep with `:cmake-name "PostgreSQL"`,
+  `:targets ["PostgreSQL::PostgreSQL"]` and no `:url`; the `pq` re-export
+  target and `cmake-deps/postgres/` are gone. The Homebrew keg-only probe
+  became `:options #map{:PostgreSQL_ROOT "/opt/homebrew/opt/libpq"}`, which
+  needed a compiler change: a `:prefer-system` dep's `:options` used to be
+  written only inside the fetch fallback, i.e. after the `find_package` they
+  were meant to steer. They now land before it. The same change makes a
+  `:prefer-system` dep with no `:url` system-only: when nothing is found,
+  configure stops on a message naming the dep and the package, instead of an
+  empty `FetchContent_Declare` failing on "No download info given",
+  `--refetch` no longer skips its `find_package`, and `tur audit` lists it as
+  system-only rather than as unpinned forever. Tests SF4/SF5 in
+  `tests/spice-resolver-tests.sh`. What the static hint loses against the
+  shim's `brew --prefix libpq`: an Intel Mac or a custom Homebrew prefix,
+  which sets `PostgreSQL_ROOT` in the environment instead (FindPostgreSQL
+  reads it).
+- **raygui** vendors `raygui.h` 4.0 under `c/raygui/` and lists
+  `raygui_impl.c` in `:c-sources` -- the destination guessed below, and no
+  compiler change was needed. One trap, worth knowing for any single-header
+  library moved this way: `raygui/core.tur`'s inline-C also defined
+  `RAYGUI_IMPLEMENTATION`. Under the shim that was harmless -- whenever it took
+  effect, the archive member holding the other copy was simply never pulled --
+  but a `:c-sources` object is always linked, so `tur build` failed on a
+  duplicate of every `Gui*` symbol. Exactly one TU may define it.
+
+**Previous status: partly landed -- updated 2026-08-29; re-checked 2026-10-07.** Both
 items under "Still outstanding" below are still outstanding on turmeric-spices
 `origin/main`: `spices/postgres/build.tur` still declares `:path
 "../cmake-deps/postgres"` with `:targets ["pq"]` (and its comment still
