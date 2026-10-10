@@ -66,3 +66,23 @@ Other spices were not measured.
 3. **Per spice:** a `build.tur` key or a `tur-test-flags`-style directive that
    adds the cc flags. This is the smallest blast radius, but each spice
    remembers on its own, which is how a gap like this one opens.
+
+## Update 2026-10-10: the httpd stack is now covered
+
+tourist-on-stdlib-httpd-plan H2 moved turmeric-spices' `httpd` spice onto
+`stdlib/httpd.tur`, which links libturi.  Every suite that imports it --
+`httpd`, `tourist`, `tourist-session`, `tourist-ws`, `ws-server` -- now runs
+under ASan/UBSan with leak detection on a Debug `tur`, with no flag.  The
+switch found only test-side leaks, fixed on the same branch:
+
+- the `http` client spice had no way to free a response at all; it gained
+  `http-result-free` and `request-free`, and the httpd tests use them;
+- `json`'s derived encoders leaked two cons cells per field per encode
+  (fixed in `__json-obj-build` / `__json-arr-build`);
+- handler strings, routes (`route-free` now drops the route's handler) and
+  reader-thread arguments the tests never freed.
+
+One suppression remains, scoped to `httpd/tests/json_codec_test.tur`'s JSON
+handler: a derived `DecodeJson`'s `(ok struct)` box, the dictionary-dispatched
+residue of [carrier-sum-option-boxes-have-no-owner](carrier-sum-option-boxes-have-no-owner.md).
+The other spices are unchanged by this; fix direction 1 still stands for them.

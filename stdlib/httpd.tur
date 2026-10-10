@@ -73,10 +73,6 @@
 ;;   httpd-conn-close!   -- the transport of a handed-off connection
 ;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
 (load "stdlib/json.tur")
-;; mw-cors owns its config strings as Drop-typeclass String captures so the
-;; closure drop-glue releases them (Model R); needs the String API.
-
-(load "stdlib/string.tur")
 
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: the httpd server constructors (which bind+listen) and
@@ -462,7 +458,11 @@
                   int name_len = (int)(colon - h);
                   char *val = colon + 1;
                   while (val < eol && (*val == ' ' || *val == '\t')) val++;
-                  int val_len = (int)(eol - val);
+                  /* The field value excludes trailing whitespace as well as
+                   * leading (RFC 9110 5.5). */
+                  const char *vend = eol;
+                  while (vend > val && (vend[-1] == ' ' || vend[-1] == '\t')) vend--;
+                  int val_len = (int)(vend - val);
                   if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
                       /* A comma-separated token list, each token whole:
                        * `closed` is not `close` (WP4, item 6). */
@@ -2027,6 +2027,24 @@
   ```c
   ((HttpdConn *)conn)->resp_status = (int)status;
   ```)
+;;; httpd-resp-close! -- close the connection after this response.
+;;;
+;;; The response goes out with `Connection: close` and the server closes the
+;;; connection instead of waiting for another keep-alive request.  A
+;;; `Connection` header a handler sets itself does not do this (the server
+;;; owns that header); this does.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Example:
+;;;   (httpd-resp-close! c)
+;;;
+;;; Since: tourist-on-stdlib-httpd H2
+(defn httpd-resp-close! [conn : ptr<void>] : nil
+  ```c
+  if (conn) ((HttpdConn *)conn)->client_keep_alive = 0;
+  ```)
 ;;; httpd-resp-body! -- set the HTTP response body (copies the string).
 ;;;
 ;;; Since: Phase H1
@@ -2238,6 +2256,51 @@
   if (!t) { c->resp_headers = nh; return; }
   while (t->next) t = t->next;
   t->next = nh;
+  ```)
+;;; httpd-resp-vary! -- add a token to the response's Vary header, once.
+;;;
+;;; `Vary` lists the request headers a response depends on, and several
+;;; middleware add to it (CORS adds `Origin`, compression `Accept-Encoding`).
+;;; This merges: the token is appended to an existing Vary value unless it is
+;;; already listed (case-insensitive), and a `Vary: *` is left alone.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   token -- a header name, e.g. "Origin"
+;;;
+;;; Example:
+;;;   (httpd-resp-vary! c "Accept-Encoding")
+;;;   (httpd-resp-vary! c "Origin")          ; Vary: Accept-Encoding, Origin
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn httpd-resp-vary! [conn : ptr<void> token : cstr] : nil
+  ```c
+  if (!conn || !token || !*token) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  size_t tl = strlen(token);
+  for (HttpdHeader *h = (HttpdHeader *)c->resp_headers; h; h = h->next) {
+      if (!h->name || strcasecmp(h->name, "Vary") != 0) continue;
+      const char *v = h->value ? h->value : "";
+      const char *p = v;
+      while (*p) {
+          while (*p == ' ' || *p == '\t' || *p == ',') p++;
+          const char *s = p;
+          while (*p && *p != ',') p++;
+          const char *e = p;
+          while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+          if (((size_t)(e - s) == tl && strncasecmp(s, token, tl) == 0) ||
+              ((size_t)(e - s) == 1 && *s == '*')) return;
+      }
+      size_t vl = strlen(v);
+      char *nv = (char *)malloc(vl + tl + 3);
+      if (!nv) return;
+      if (vl) { memcpy(nv, v, vl); memcpy(nv + vl, ", ", 2); vl += 2; }
+      memcpy(nv + vl, token, tl + 1);
+      free(h->value);
+      h->value = nv;
+      return;
+  }
+  __TUR_CNAME_httpd-resp-header-add!__(conn, "Vary", token);
   ```)
 ;; =============================================================================
 ;; M2: Cookie middleware (depends on M0)
@@ -2630,30 +2693,44 @@
 ;;      Access-Control-Allow-Origin (and Allow-Credentials / Expose-Headers
 ;;      when configured).
 ;;
-;; Caveat: `allow-origin = "*"` combined with `allow-credentials = 1` is
-;; INVALID per the CORS spec.  Browsers reject the response and the
-;; request fails.  Either echo the request's `Origin:` or list specific
-;; origins when credentials are required.
+;; Allowed origins (tourist-on-stdlib-httpd-plan H4): `allow-origin` is "*"
+;; (any origin), or one origin, or a comma-separated list of them.  A listed
+;; origin is matched EXACTLY against the request's `Origin` and echoed back --
+;; with `Vary: Origin`, because the answer now depends on the request -- and a
+;; request from any other origin gets no Access-Control-Allow-Origin at all,
+;; which is how a browser is told no.
+;;
+;; `allow-origin = "*"` combined with credentials is INVALID per the CORS spec
+;; (browsers reject the response).  `cors-opts` refuses to build such options;
+;; mw-cors-with / mw-cors-opts handed them anyway drop the credentials (fail
+;; closed) and say so on stderr.
+;;
+;; The middleware copies its configuration into a heap block of its own when
+;; it is built, so the caller's strings may be computed and freed afterwards.
+;; Like mw-rate-limit's table, the block lives until process exit (an atexit
+;; hook frees it): a middleware instance lives as long as the server it is
+;; composed into.
 ;;; CorsOpts -- mw-cors configuration.
 ;;;
 ;;; Field conventions:
-;;;   allow-origin      -- single value; "*" for any (no credentials),
-;;;                        or a specific origin
+;;;   allow-origin      -- "*" for any origin (no credentials), or one origin,
+;;;                        or a comma-separated list of origins, each matched
+;;;                        exactly and echoed back with `Vary: Origin`
 ;;;   allow-methods     -- comma-separated list emitted on preflight
 ;;;   allow-headers     -- comma-separated list emitted on preflight
 ;;;   expose-headers    -- comma-separated list emitted on normal responses
 ;;;                        (or "" to omit)
-;;;   allow-credentials -- 0 / 1; emits Allow-Credentials: true on both paths
+;;;   allow-credentials -- emit Allow-Credentials: true (not with "*")
 ;;;   max-age           -- preflight cache lifetime in seconds, or -1 to omit
 ;;;
-;;; Since: Phase H8 (M4)
-
+;;; Since: Phase H8 (M4); origin list and bool credentials since
+;;; tourist-on-stdlib-httpd H4
 (defstruct CorsOpts
   [allow-origin : cstr
    allow-methods : cstr
    allow-headers : cstr
    expose-headers : cstr
-   allow-credentials : int
+   allow-credentials : bool
    max-age : int])
 ;;; default-cors-opts -- permissive defaults suitable for development.
 ;;;
@@ -2661,15 +2738,108 @@
 ;;; no expose-headers, no credentials, no max-age.  Tighten for prod.
 ;;;
 ;;; Since: Phase H8 (M4)
-
 (defn default-cors-opts [] : CorsOpts
   (make-struct CorsOpts
     "*"
     "GET, POST, PUT, DELETE, OPTIONS"
     "Content-Type"
     ""
-    0
+    false
     -1))
+;;; cors-blank? -- internal: is this string NULL, empty or all blanks?
+(defn cors-blank? [s : cstr] : bool
+  ```c
+  if (!s) return true;
+  while (*s == ' ' || *s == '\t') s++;
+  return *s == '\0';
+  ```)
+;;; cors-wildcard? -- internal: is this allow-origin the "*" wildcard?
+(defn cors-wildcard? [allow-origin : cstr] : bool
+  ```c
+  if (!allow_origin) return false;
+  const char *p = allow_origin;
+  while (*p == ' ' || *p == '\t') p++;
+  if (*p != '*') return false;
+  p++;
+  while (*p == ' ' || *p == '\t') p++;
+  return *p == '\0';
+  ```)
+;;; cors-opts -- build a CorsOpts, refusing an invalid combination.
+;;;
+;;; The checked counterpart of `(make-struct CorsOpts ...)`: credentials with
+;;; the "*" origin is an error (the CORS spec forbids it and browsers reject
+;;; the response), as is an empty allow-origin.
+;;;
+;;; Parameters:
+;;;   allow-origin      -- "*", one origin, or a comma-separated list
+;;;   allow-methods     -- comma-separated methods for preflight
+;;;   allow-headers     -- comma-separated request headers for preflight
+;;;   expose-headers    -- comma-separated response headers, or ""
+;;;   allow-credentials -- send Access-Control-Allow-Credentials: true
+;;;   max-age           -- preflight cache seconds, or -1
+;;;
+;;; Returns:
+;;;   (Result CorsOpts cstr) -- ok(opts), or err(reason).
+;;;
+;;; Example:
+;;;   (cors-opts "https://app.example.com, https://admin.example.com"
+;;;              "GET, POST" "Content-Type" "" true 600)
+;;;   (cors-opts "*" "GET" "" "" true -1)   ; => err
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn cors-opts [allow-origin : cstr
+                 allow-methods : cstr
+                 allow-headers : cstr
+                 expose-headers : cstr
+                 allow-credentials : bool
+                 max-age : int] : (Result CorsOpts cstr)
+  (cond
+    (cors-blank? allow-origin)
+      (err "cors-opts: allow-origin is empty")
+    (and allow-credentials (cors-wildcard? allow-origin))
+      (err "cors-opts: allow-origin \"*\" cannot be combined with credentials")
+    :else
+      (ok (make-struct CorsOpts allow-origin allow-methods allow-headers
+                       expose-headers allow-credentials max-age))))
+;;; CorsConfig -- internal: one mw-cors instance's own copy of its settings.
+;;;
+;;; A heap block `HttpdCorsCfg` (see httpd-cors-config-new) that lives until
+;;; process exit.
+(defopaque CorsConfig :int)
+;;; httpd-cors-config-new -- internal: copy CORS settings into a heap block.
+;;;
+;;; Credentials with the "*" origin are dropped (fail closed) with a line on
+;;; stderr.  The block is registered for release at process exit.
+(defn httpd-cors-config-new [allow-origin : cstr
+                             allow-methods : cstr
+                             allow-headers : cstr
+                             expose-headers : cstr
+                             allow-credentials : bool
+                             max-age : int] : CorsConfig
+  ```c
+  /* __tur_include__: typedef struct __HttpdCorsCfg { char *origin; char *methods; char *headers; char *expose; int creds; int wildcard; int64_t max_age; struct __HttpdCorsCfg *next; } HttpdCorsCfg; */
+  /* __tur_include__: static HttpdCorsCfg *g_cors_registry = 0; */
+  /* __tur_include__: static int g_cors_atexit = 0; */
+  /* __tur_include__: static void httpd_cors_cleanup_all(void) { HttpdCorsCfg *c = g_cors_registry; while (c) { HttpdCorsCfg *nx = c->next; free(c->origin); free(c->methods); free(c->headers); free(c->expose); free(c); c = nx; } g_cors_registry = 0; } */
+  HttpdCorsCfg *c = (HttpdCorsCfg *)calloc(1, sizeof *c);
+  if (!c) return 0;
+  c->origin  = strdup(allow_origin   ? allow_origin   : "*");
+  c->methods = strdup(allow_methods  ? allow_methods  : "");
+  c->headers = strdup(allow_headers  ? allow_headers  : "");
+  c->expose  = strdup(expose_headers ? expose_headers : "");
+  c->wildcard = __TUR_CNAME_cors-wildcard?__(c->origin ? c->origin : "*") ? 1 : 0;
+  c->creds   = allow_credentials ? 1 : 0;
+  c->max_age = max_age;
+  if (c->creds && c->wildcard) {
+      fprintf(stderr, "httpd: mw-cors: allow-origin \"*\" cannot be combined with "
+                      "credentials; serving without Access-Control-Allow-Credentials\n");
+      c->creds = 0;
+  }
+  c->next = g_cors_registry;
+  g_cors_registry = c;
+  if (!g_cors_atexit) { atexit(httpd_cors_cleanup_all); g_cors_atexit = 1; }
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; httpd-mw-cors-is-preflight -- internal: 1 iff this is a CORS preflight.
 
 (defn httpd-mw-cors-is-preflight [conn : ptr<void>] : int
@@ -2679,133 +2849,102 @@
   if (!m || strcmp(m, "OPTIONS") != 0) return 0;
   return __TUR_CNAME_httpd-req-header?__((void *)conn, "Access-Control-Request-Method");
   ```)
-;;; httpd-mw-cors-emit-preflight -- internal: write the preflight response.
-;;;
-;;; Takes primitive fields rather than a CorsOpts value.  This originally
-;;; side-stepped a closure-capture codegen bug with by-pointer defstruct
-;;; params (the inner closure env stored the caller's `const CorsOpts *`
-;;; into a by-value field).  That bug is now fixed (see
-;;; docs/archive/history/stdlib-type-erasure-cleanup-plan.md A5/B5), so a future
-;;; refactor may capture a `CorsOpts` directly; the primitive surface is
-;;; retained for now to keep this change scoped to the codegen fix.
-
-(defn httpd-mw-cors-emit-preflight [conn : ptr<void>
-                                    allow-origin : cstr
-                                    allow-methods : cstr
-                                    allow-headers : cstr
-                                    allow-credentials : int
-                                    max-age : int] : nil
+;;; httpd-mw-cors-allow-origin -- internal: set Access-Control-Allow-Origin
+;;; (and Allow-Credentials) for this request per the config; returns true
+;;; when the origin was allowed.  A listed-origin config always adds
+;;; `Vary: Origin`, allowed or not, since the answer depends on it.
+(defn httpd-mw-cors-allow-origin [conn : ptr<void> cfg : CorsConfig] : bool
   ```c
-  if (!conn) return;
+  HttpdCorsCfg *c = (HttpdCorsCfg *)(intptr_t)cfg;
+  if (!conn || !c) return false;
+  if (c->wildcard) {
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin", "*");
+      return true;
+  }
+  __TUR_CNAME_httpd-resp-vary!__((void *)conn, "Origin");
+  const char *origin = httpd_hyreq_hyheader((void *)conn, "Origin");
+  if (!origin || !*origin) return false;
+  size_t ol = strlen(origin);
+  const char *p = c->origin;
+  int hit = 0;
+  while (*p && !hit) {
+      while (*p == ' ' || *p == '\t' || *p == ',') p++;
+      const char *s = p;
+      while (*p && *p != ',') p++;
+      const char *e = p;
+      while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+      if ((size_t)(e - s) == ol && memcmp(s, origin, ol) == 0) hit = 1;
+  }
+  if (!hit) return false;
+  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin", origin);
+  if (c->creds)
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Credentials", "true");
+  return true;
+  ```)
+;;; httpd-mw-cors-preflight -- internal: answer a preflight (204).
+(defn httpd-mw-cors-preflight [conn : ptr<void> cfg : CorsConfig] : nil
+  ```c
+  HttpdCorsCfg *c = (HttpdCorsCfg *)(intptr_t)cfg;
+  if (!conn || !c) return;
   __TUR_CNAME_httpd-resp-status!__((void *)conn, 204);
   __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
-  const char *ao = allow_origin  ? allow_origin  : "*";
-  const char *am = allow_methods ? allow_methods : "";
-  const char *ah = allow_headers ? allow_headers : "";
-  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin",  ao);
-  if (*am) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Methods", am);
-  if (*ah) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Headers", ah);
-  if (allow_credentials) {
-      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Credentials", "true");
-  }
-  if (max_age >= 0) {
+  if (!httpd_hymw_hycors_hyallow_hyorigin((void *)conn, cfg)) return;
+  if (*c->methods) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Methods", c->methods);
+  if (*c->headers) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Headers", c->headers);
+  if (c->max_age >= 0) {
       char buf[32];
-      snprintf(buf, sizeof(buf), "%lld", (long long)max_age);
+      snprintf(buf, sizeof(buf), "%lld", (long long)c->max_age);
       __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Max-Age", buf);
   }
   ```)
 ;;; httpd-mw-cors-decorate -- internal: decorate a normal-flow response.
-
-(defn httpd-mw-cors-decorate [conn : ptr<void>
-                              allow-origin : cstr
-                              expose-headers : cstr
-                              allow-credentials : int] : nil
+(defn httpd-mw-cors-decorate [conn : ptr<void> cfg : CorsConfig] : nil
   ```c
-  if (!conn) return;
-  const char *ao = allow_origin   ? allow_origin   : "*";
-  const char *eh = expose_headers ? expose_headers : "";
-  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin", ao);
-  if (*eh) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Expose-Headers", eh);
-  if (allow_credentials) {
-      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Credentials", "true");
-  }
+  HttpdCorsCfg *c = (HttpdCorsCfg *)(intptr_t)cfg;
+  if (!conn || !c) return;
+  if (!httpd_hymw_hycors_hyallow_hyorigin((void *)conn, cfg)) return;
+  if (*c->expose)
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Expose-Headers", c->expose);
   ```)
 ;;; mw-cors-with -- CORS middleware factory (positional args).
 ;;;
 ;;; (mw-cors-with ao am ah eh ac ma) is a one-arg function suitable for
 ;;; compose-middleware: given a downstream handler `next`, returns a
 ;;; wrapped handler that either short-circuits a preflight or decorates
-;;; the normal response.
-;;;
-;;; For a struct-valued, curry-friendly equivalent, use `mw-cors-opts`:
-;;; `(mw-cors-opts opts)` partially applies a `CorsOpts` value and returns a
-;;; one-arg middleware usable directly in `compose-middleware`.  The curried
-;;; `__pap` env that captures the `CorsOpts` value once triggered a codegen
-;;; bug (a struct stored into an `int64_t` env field); that bug is now fixed
-;;; (stdlib-type-erasure-cleanup-plan A5/B5).
+;;; the normal response.  `mw-cors-opts` is the CorsOpts-valued form.
 ;;;
 ;;; See `CorsOpts` / `default-cors-opts` for field semantics.
 ;;;
 ;;; Example:
 ;;;   (compose-middleware base
-;;;     (mw-cors-with "https://app.example.com"
+;;;     (mw-cors-with "https://app.example.com, https://admin.example.com"
 ;;;                   "GET, POST, OPTIONS"
 ;;;                   "Content-Type, Authorization"
-;;;                   "" 1 60))
+;;;                   "" true 60))
 ;;;
-;;; Since: Phase H8 (M4)
-;;; httpd-cors-own-str -- internal: heap-copy a cstr for a server-lifetime
-;;; capture, preserving NULL.
-;;;
-;;; mw-cors-with stores its origin/methods/headers strings in a middleware
-;;; closure that lives for the whole server run.  Capturing the caller's cstr
-;;; BY BORROW dangles if the caller passed a computed/freed buffer (see
-;;; string-adoption-stdlib-plan.md, items 2/3).  This returns an OWNED String
-;;; (a refcounted copy) the closure keeps for its lifetime.  Under
-;;; With closure-drop-glue (graduated 2026-07-22) the String is a Drop-typeclass capture, so the
-;;; closure's drop-glue releases it when the middleware is torn down (Model R);
-;;; flag-off it lives to process exit, as before.
-
-(defn httpd-cors-own-str [s : cstr] : String (string/from-cstr s))
-
+;;; Since: Phase H8 (M4); origin list and bool credentials since
+;;; tourist-on-stdlib-httpd H4
 (defn mw-cors-with [allow-origin : cstr
                     allow-methods : cstr
                     allow-headers : cstr
                     expose-headers : cstr
-                    allow-credentials : int
+                    allow-credentials : bool
                     max-age : int
                     ^fat next : (fn [ptr<void>] nil)] : ptr<void>
-  ;; Own the captured strings so the server-lifetime closure never holds a
-  ;; borrowed pointer into a caller buffer that may be freed (the dangling
-  ;; hazard when allow-origin/headers are computed rather than literals).  The
-  ;; owned String captures are Drop-released by the closure drop-glue (Model R);
-  ;; the emit helpers take a borrowed `cstr` view via string/to-cstr.
-  (let [_ao (httpd-cors-own-str allow-origin)
-        _am (httpd-cors-own-str allow-methods)
-        _ah (httpd-cors-own-str allow-headers)
-        _eh (httpd-cors-own-str expose-headers)
-        _ac allow-credentials
-        _ma max-age
-        _n  next]
+  (let [_cfg (httpd-cors-config-new allow-origin allow-methods allow-headers
+                                    expose-headers allow-credentials max-age)
+        _n   next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-cors-is-preflight c))
-        (httpd-mw-cors-emit-preflight c
-          (string/to-cstr _ao)
-          (string/to-cstr _am)
-          (string/to-cstr _ah)
-          _ac
-          _ma)
+        (httpd-mw-cors-preflight c _cfg)
         (do
           (httpd-call _n c)
-          (httpd-mw-cors-decorate c
-            (string/to-cstr _ao)
-            (string/to-cstr _eh)
-            _ac))))))
+          (httpd-mw-cors-decorate c _cfg))))))
 ;;; mw-cors -- CORS middleware with permissive defaults.
 ;;;
 ;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
 ;;; `*`, standard methods, Content-Type allowed, no credentials.  Use
-;;; `mw-cors-with` for customised settings.
+;;; `mw-cors-opts` for customised settings.
 ;;;
 ;;; Example:
 ;;;   (compose-middleware base mw-cors)
@@ -2817,7 +2956,7 @@
     "GET, POST, PUT, DELETE, OPTIONS"
     "Content-Type"
     ""
-    0
+    false
     -1
     next))
 ;;; mw-cors-opts -- CORS middleware factory configured by a CorsOpts struct.
@@ -2828,22 +2967,21 @@
 ;;;
 ;;;   (compose-middleware base (mw-cors-opts my-opts))
 ;;;
-;;; This is the struct-valued counterpart to the positional `mw-cors-with`.
-;;; The curried partial application captures the `CorsOpts` value in the
-;;; auto-generated `__pap` env; that codegen path was once broken (a struct
-;;; stored into an `int64_t` env field) and is now fixed
-;;; (stdlib-type-erasure-cleanup-plan A5/B5).
+;;; Build `opts` with `cors-opts` to have an invalid combination refused up
+;;; front; options that slip through (made with make-struct) are served
+;;; fail-closed as described in the section notes.
 ;;;
 ;;; Parameters:
-;;;   opts -- a CorsOpts value (see `default-cors-opts`)
-;;;   next -- downstream handler closure (fat-closure :int)
+;;;   opts -- a CorsOpts value (see `default-cors-opts`, `cors-opts`)
+;;;   next -- downstream handler closure
 ;;;
 ;;; Returns:
 ;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
 ;;;   compose-middleware.
 ;;;
 ;;; Example:
-;;;   (let [opts     (default-cors-opts)
+;;;   (let [opts     (ok-val (cors-opts "https://app.example.com" "GET, POST"
+;;;                                     "Content-Type" "" true 600))
 ;;;         composed (compose-middleware base (mw-cors-opts opts))]
 ;;;     (httpd-new 0 composed))
 ;;;

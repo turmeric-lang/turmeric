@@ -86,7 +86,7 @@ entry links to its docstring in the source for the full surface.
 | Name                      | Purpose                                          | Phase |
 |---------------------------|--------------------------------------------------|-------|
 | `mw-log`                  | One line per request -- method, path, status, body bytes, elapsed ms | M1 |
-| `mw-cors` / `mw-cors-with`| CORS preflight + Access-Control-Allow-Origin decoration | M4 |
+| `mw-cors` / `mw-cors-opts` / `mw-cors-with` | CORS preflight + Access-Control-Allow-Origin decoration, origin allow-list | M4 |
 | `mw-basic-auth`           | HTTP Basic Auth via user verifier closure; publishes `"user"` attr on success | M5 |
 | `mw-json-body`            | Pre-parse JSON request body; 400 on malformed input | M3 |
 | `mw-body-size`            | Reject requests with Content-Length above a cap (413) | MW1 |
@@ -94,6 +94,37 @@ entry links to its docstring in the source for the full surface.
 | `mw-static`               | Fall back to static files when `next` returned 404 (with ETag + 304) | MW2 |
 | `mw-compress` / `mw-compress-with` | gzip the response body when client sends `Accept-Encoding: gzip` (requires `tur/zlib` spice) | M6 |
 | `mw-recover`              | Catch a downstream panic and respond 500; the server keeps serving | MW3 |
+
+### mw-cors (M4)
+
+Answers a preflight (`OPTIONS` with `Access-Control-Request-Method`) with 204
+and the Access-Control-Allow-* headers, without calling `next`, and decorates
+every other response. `allow-origin` in `CorsOpts` is `"*"`, one origin, or a
+comma-separated list: a listed origin is matched exactly against the request's
+`Origin` and echoed back, with `Vary: Origin` (merged into any `Vary` already
+set, never repeated); any other origin gets no Access-Control-Allow-Origin,
+which is how a browser is told no. `allow-credentials` is a `bool`.
+
+```turmeric
+(let [opts     (ok-val (cors-opts "https://app.example.com, https://admin.example.com"
+                                  "GET, POST" "Content-Type" "" true 600))
+      composed (compose-middleware base (mw-cors-opts opts))]
+  (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [opts     ok-val(cors-opts("https://app.example.com, https://admin.example.com"
+                               "GET, POST" "Content-Type" "" true 600))
+     composed compose-middleware(base mw-cors-opts(opts))]
+  httpd-new(0 composed)
+```
+
+`cors-opts` returns `(Result CorsOpts cstr)` and refuses `"*"` with
+credentials, which the CORS spec forbids. Options built with `make-struct`
+that combine them anyway are served without Allow-Credentials (a line goes to
+stderr). The middleware copies its configuration when it is built, so the
+strings may be computed and freed afterwards. `mw-cors` is the permissive
+development default (`default-cors-opts`).
 
 ### mw-body-size (MW1)
 
@@ -391,6 +422,12 @@ defn mw-require-https [next :int] :ptr<void>
           httpd-resp-status!(c 400)
           httpd-resp-body!(c "HTTPS required"))))
 ```
+
+Pick the header setter by what the header means, because a route or another
+middleware may have set it already: `httpd-resp-header!` replaces (one-valued
+headers such as `Content-Type`, `ETag`), `httpd-resp-header-add!` appends
+(`Set-Cookie`), and `httpd-resp-vary!` adds a token to `Vary` only if it is not
+listed yet -- several middleware add to `Vary`, and repeating it is wrong.
 
 Use request attrs to thread context downstream:
 

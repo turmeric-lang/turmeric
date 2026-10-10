@@ -64,7 +64,7 @@
   /* Replace the response body with the compressed bytes (binary-safe). */
   __TUR_CNAME_httpd-resp-body-bytes!__((void *)conn, data, dlen);
   __TUR_CNAME_httpd-resp-header!__((void *)conn, "Content-Encoding", "gzip");
-  __TUR_CNAME_httpd-resp-header-add!__((void *)conn, "Vary", "Accept-Encoding");
+  __TUR_CNAME_httpd-resp-vary!__((void *)conn, "Accept-Encoding");
   gzip_buf_free(buf);
   ```)
 ;; -----------------------------------------------------------------------------
