@@ -27,6 +27,15 @@ fixture dir on a Linux `-DCMAKE_BUILD_TYPE=Debug -DTUR_JIT=ON` build (GCC
 13.3), `ASAN_OPTIONS=detect_leaks=0`, 4 concurrent, all printed the expected
 three lines and exited 0 (2026-10-04).
 
+**Re-checked 2026-10-10.** 200 more runs, 8 concurrent on 4 cores (twice
+oversubscribed, nearer CI's contention than the 40 above), Debug `tur` with
+`TUR_JIT=ON` (GCC 13.3), `ASAN_OPTIONS=detect_leaks=0`: every one exited 0
+and printed the expected three lines. The job's own console log (job
+`111278778064`) holds nothing beyond the FAIL line and the summary -- the
+fixture's output went only to the artifact below. The artifact is still
+listed as unexpired, but its download host (`*.blob.core.windows.net`) was
+not reachable from that sandbox, so it is still unread.
+
 **Next step.** The full output is in that run's `jit-ctest-log-ubuntu-latest`
 artifact (ID 11283599190, 90-day retention): look for the
 `r7rs-threads-lifecycle` block and any `ERROR: AddressSanitizer` /
