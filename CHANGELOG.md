@@ -2,6 +2,50 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.63.9] -- 2026-10-10
+
+### Fixed
+
+- **Effectful callbacks compile through generic HOFs and fn values.** An
+  effectful lambda passed to `option-map`, a callback with scalar, `cstr` or
+  `ptr<void>` results, a guarded match with a colored arm, a capturing closure
+  called through its local name, and a function mixing `perform` with `await`
+  all compile and run instead of being refused with "no lowering here" or
+  aborting with "unhandled effect".
+- **`await` through a function value no longer gives a silent wrong answer.** An
+  awaiting function passed as a value used to be called through its direct
+  entry, so its `await` parked only its own rest and the caller carried on with
+  a placeholder; it now parks the whole body.
+- **Panics name your call site.** A failed cast out of `any`, a bounds failure
+  in `vec-get` and the other inline-C accessors, and a Saffron dynamic operator
+  error all print `panic at input.tur:12` on both engines instead of a runtime
+  file or a bare `panic at`. An index out of bounds is now a catchable panic
+  everywhere, not an abort.
+- **Effectful loops stop growing.** A self-tail loop calling through a function
+  value, a tail `resume` loop under one `handle`, and an async body that parks
+  every turn all free their per-turn frames and envs as they run, where before
+  each held roughly 200-850 B a turn for the whole run.
+- **Async spawns and awaited futures are freed.** A capturing `(async ...)`
+  body's env box is dropped when the body settles on every backend, including
+  `tur jit`, and `(await (async ...))` no longer leaks the spawn's future.
+- **`turi`'s `call/cc` memory regression is fixed.** After one re-entrant
+  capture, frames were never released again; a program storing one continuation
+  now pins only the frames live at the capture. A `defer`'s snapshot is also
+  released once it fires.
+- **A match over two fn-typed arms compiles.** The result was typed from the
+  first arm, so a capture-free arm first emitted thin C against fat boxes; arms
+  now join to the boxed representation.
+- **A nullary method returning only an associated type is callable.** `(empty)`
+  on a class like `(defclass Box [a] (type Inner : Type) (empty [] : Inner)
+  ...)` no longer fails with "unknown function or operator".
+- **`turi` keeps printed output on a bounds failure, and `vec-set!` reports
+  itself.** A failing bounds check no longer loses everything already printed
+  when stdout is piped, and `vec-set!` out of range prints its own message.
+- **`#lang r7rs` eval programs collect faster, and the prelude cache ignores a
+  header-less `-I`.** A `(scheme eval)` program's collector no longer scans
+  libturi's static data, and `tur build -I .` shares one cached prelude object
+  with `tur build` when the directory holds no C header.
+
 ## [0.63.8] -- 2026-10-08
 
 ### Deprecated
