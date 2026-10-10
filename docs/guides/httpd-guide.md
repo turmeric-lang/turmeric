@@ -119,10 +119,18 @@ Before a handler runs, the server refuses, and closes the connection on:
 | `Content-Length` that is not plain decimal digits, or repeated with different values | 400 |
 | `Content-Length` together with `Transfer-Encoding` | 400 |
 | `Transfer-Encoding` alone (chunked bodies are not implemented) | 501 |
-| `Content-Length` above the body cap (8 MiB by default; `httpd-set-max-body!`) | 413 |
+| `Content-Length` above the body cap (8 MiB by default; `httpd-set-max-body!`, or `httpd-server-set-max-body!` for one server) | 413 |
+| A request head still incomplete when the read timeout runs out | 408 |
+| A request head larger than 256 KiB | 431 |
 | A body shorter than its `Content-Length` (timeout or peer close) | dropped, no answer |
 
 The body cap is checked before anything is allocated for the body.
+The read timeout (5 s by default; `httpd-set-read-timeout!` for the process,
+`httpd-server-set-read-timeout!` for one pool server) bounds the whole request
+head, not each read, so a client that trickles bytes cannot hold a worker; it
+also bounds each read of a body and, on a TLS server, the handshake. The two
+per-server setters let two servers in one process differ; call them before
+`httpd-run`.
 `mw-body-size` is a lower, per-route limit that runs inside the handler chain,
 after the body has been read.
 
@@ -248,15 +256,71 @@ HTTP/1.1 keep-alive is on by default. A worker loops on the same socket
 until:
 
 - The client sends `Connection: close`.
-- A 5-second `SO_RCVTIMEO` fires (no data within the idle window). The async
-  server (`httpd-new-async`) applies the same 5-second bound to each wait
-  while reading a request.
+- The next request head does not arrive within the read timeout (5 s by
+  default; see "Binding and request limits"). An idle connection is closed
+  without a word; one that sent part of a head is answered 408. The async
+  server (`httpd-new-async`) applies the same deadline.
 - The peer closes the socket.
 
 HTTP/1.0 connections close after one request unless the client sends
-`Connection: keep-alive`. No tuning knobs are exposed in v1; if you need
-a different idle bound, set it on the listen socket before calling
-`httpd-run`.
+`Connection: keep-alive`. A client may pipeline: bytes that arrive behind
+one request are kept and parsed as the next.
+
+---
+
+## Connection upgrade (WebSocket)
+
+A handler can take the connection away from a pool server
+(`httpd-new`, `httpd-new-pool`, `httpd-new-tls`). Two shapes:
+
+```turmeric
+;; 1. The server writes the response, then hands the connection off.
+(httpd-resp-status! c 101)
+(httpd-resp-header! c "Upgrade" "websocket")
+(httpd-resp-header! c "Sec-WebSocket-Accept" accept)
+(httpd-conn-upgrade! c (fn [c2 : ptr<void>] : nil
+                         (run-session c2)        ; httpd-conn-read / -write
+                         (httpd-conn-close! c2)))
+
+;; 2. The handler has already written its own response and keeps the socket.
+(when (httpd-conn-detach! c)
+  (httpd-conn-write c reply reply-len)
+  (httpd-conn-close! c))
+```
+```sweet-exp
+;; 1. The server writes the response, then hands the connection off.
+httpd-resp-status!(c 101)
+httpd-resp-header!(c "Upgrade" "websocket")
+httpd-resp-header!(c "Sec-WebSocket-Accept" accept)
+httpd-conn-upgrade! c
+  (fn [c2 : ptr<void>] : nil
+    (run-session c2)
+    (httpd-conn-close! c2))
+
+;; 2. The handler has already written its own response and keeps the socket.
+when httpd-conn-detach!(c)
+  httpd-conn-write(c reply reply-len)
+  httpd-conn-close!(c)
+```
+
+With `httpd-conn-upgrade!` the server writes the handler's response with no
+framing of its own -- no `Content-Length`, no `Connection: keep-alive`, no
+default `Content-Type`, no body (it adds `Connection: Upgrade` to a 101 that
+lacks one) -- and then calls the callback on the same worker, with the conn
+still alive. From then on the callback owns the socket and its TLS state; the
+server neither reads another request from it nor closes it.
+`httpd-conn-fd` / `httpd-conn-tls` expose the transport, `httpd-conn-read` /
+`httpd-conn-write` move bytes over either plaintext or TLS (through the
+registered ops), and `httpd-conn-close!` sends the TLS close_notify, frees the
+TLS state and closes the fd. A handed-off socket has no read timeout.
+
+The callback blocks its worker for as long as it runs, so size the pool for
+the sessions you expect. Bytes a client sends after the upgrade request but
+before it reads the 101 are not passed on (a WebSocket client must wait for
+the 101 anyway). The async server cannot hand a connection off yet: both
+functions return `false`, one line goes to stderr, and a 101 the handler sets
+anyway is answered 501 -- so is a 101 set without `httpd-conn-upgrade!` on any
+server (500). The `ws-server` spice is built on this.
 
 ---
 

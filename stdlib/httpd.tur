@@ -64,6 +64,13 @@
 ;;   httpd-req-body-len [conn :ptr<void>]                -- int
 ;;   httpd-resp-status! [conn :ptr<void> status :int]    -- nil
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
+;;   httpd-set-read-timeout!        [ms :int]            -- int (previous)
+;;   httpd-server-set-read-timeout! [h ms]               -- nil (one server)
+;;   httpd-server-set-max-body!     [h n]                -- nil (one server)
+;;   httpd-conn-upgrade! [conn on-upgrade :(fn [ptr<void>] nil)] -- bool
+;;   httpd-conn-detach!  [conn]                          -- bool
+;;   httpd-conn-fd / httpd-conn-tls / httpd-conn-read / httpd-conn-write /
+;;   httpd-conn-close!   -- the transport of a handed-off connection
 ;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
 (load "stdlib/json.tur")
 ;; mw-cors owns its config strings as Drop-typeclass String captures so the
@@ -86,15 +93,17 @@
   /* __tur_include__: #include <stdint.h> */
   /* __tur_include__: #include <string.h> */
   /* __tur_include__: #include <strings.h> */
+  /* __tur_include__: #include <errno.h> */
   /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: static int64_t httpd_max_body = 8388608; */
+  /* __tur_include__: static int64_t httpd_read_timeout_ms = 5000; */
   /* __tur_include__: static int httpd_bind_any = 0; */
   /* __tur_include__: static char httpd_bind_addr_s[64] = {0}; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
-  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; } HttpdConn; */
+  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; int upgrade; int64_t on_upgrade; int has_max_body; int64_t max_body; } HttpdConn; */
   /* __tur_include__: static const char *httpd_mp_find(const char *h, const char *e, const char *n, size_t nl) { if (!h || !e || nl == 0) return 0; for (; h + nl <= e; h++) if (memcmp(h, n, nl) == 0) return h; return 0; } */
   /* __tur_include__: static int httpd_hdr_param(const char *v, const char *ve, const char *key, char *out, int cap) { size_t kl = strlen(key); const char *q = (const char *)memchr(v, ';', (size_t)(ve - v)); while (q && q < ve) { q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; const char *ks = q; while (q < ve && *q != '=' && *q != ';') q++; const char *ke = q; while (ke > ks && (ke[-1] == ' ' || ke[-1] == '\t')) ke--; if (q >= ve || *q == ';') continue; q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; int hit = (size_t)(ke - ks) == kl && strncasecmp(ks, key, kl) == 0; int n = 0; if (q < ve && *q == '"') { q++; while (q < ve && *q != '"') { if (*q == '\\' && q + 1 < ve) q++; if (hit && n + 1 < cap) out[n++] = *q; q++; } if (q < ve) q++; } else { while (q < ve && *q != ';' && *q != ' ' && *q != '\t') { if (hit && n + 1 < cap) out[n++] = *q; q++; } } if (hit) { out[n] = '\0'; return n; } q = (const char *)memchr(q, ';', (size_t)(ve - q)); } return -1; } */
   /* __tur_include__: static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
@@ -318,6 +327,7 @@
 (defn httpd-status-text [status : int] : cstr
   ```c
   switch (status) {
+    case 101: return "Switching Protocols";
     case 200: return "OK";
     case 201: return "Created";
     case 204: return "No Content";
@@ -331,9 +341,11 @@
     case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
+    case 408: return "Request Timeout";
     case 413: return "Payload Too Large";
     case 414: return "URI Too Long";
     case 429: return "Too Many Requests";
+    case 431: return "Request Header Fields Too Large";
     case 500: return "Internal Server Error";
     case 501: return "Not Implemented";
     case 503: return "Service Unavailable";
@@ -363,7 +375,8 @@
 ;;;   -400  malformed, negative or conflicting Content-Length, or both
 ;;;         Content-Length and Transfer-Encoding (the request-smuggling shape),
 ;;;         or a method / version too long for its field
-;;;   -413  Content-Length above httpd-set-max-body!'s cap
+;;;   -413  Content-Length above the body cap (httpd-server-set-max-body! for
+;;;         this server, else httpd-set-max-body!'s)
 ;;;   -414  a request target too long for the path field
 ;;;   -501  Transfer-Encoding (chunked bodies are not implemented, and reading
 ;;;         the chunks as the next request would desync the connection)
@@ -518,7 +531,8 @@
   conn->client_keep_alive = (conn_keep && !conn_close);
   if (bad_cl) return -400;
   if (have_te) return have_cl ? -400 : -501;
-  if (big_cl || content_len > httpd_max_body) return -413;
+  int64_t cap = conn->has_max_body ? conn->max_body : httpd_max_body;
+  if (big_cl || content_len > cap) return -413;
   *out_clen = content_len;
   return hdrs_total;
   ```)
@@ -542,16 +556,29 @@
   int blen = conn->resp_body ? conn->resp_body_len : 0;
   const char *ver  = is11 ? "HTTP/1.1" : "HTTP/1.0";
   const char *chdr = conn->client_keep_alive ? "keep-alive" : "close";
-  int has_content_type = 0;
+  /* H1 connection upgrade: the response hands the connection off (a 101, or
+   * a 2xx tunnel), so the server writes no framing of its own -- no
+   * Content-Length (RFC 9110 forbids it on 1xx), no Connection: keep-alive,
+   * no default Content-Type -- and no body.  The handler's own headers
+   * (Upgrade, Sec-WebSocket-Accept, ...) carry the response. */
+  int upgrading = (conn->upgrade == 1);
+  int has_content_type = 0, has_connection = 0;
   for (HttpdHeader *rh = (HttpdHeader *)conn->resp_headers; rh; rh = rh->next) {
-      if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) { has_content_type = 1; break; }
+      if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) has_content_type = 1;
+      if (rh->name && strcasecmp(rh->name, "Connection") == 0) has_connection = 1;
   }
   size_t cap = 1024, len = 0;
   char *hb = (char *)malloc(cap);
   if (!hb) return NULL;
-  int n = snprintf(hb, cap, "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n%s",
+  int n;
+  if (upgrading) {
+      n = snprintf(hb, cap, "%s %d %s\r\n%s", ver, status, stxt,
+                   (status == 101 && !has_connection) ? "Connection: Upgrade\r\n" : "");
+  } else {
+      n = snprintf(hb, cap, "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n%s",
                    ver, status, stxt, blen, chdr,
                    has_content_type ? "" : "Content-Type: text/plain; charset=utf-8\r\n");
+  }
   if (n < 0 || (size_t)n >= cap) { free(hb); return NULL; }
   len = (size_t)n;
   for (HttpdHeader *rh = (HttpdHeader *)conn->resp_headers; rh; rh = rh->next) {
@@ -581,16 +608,40 @@
   *out_len = (int64_t)len;
   return hb;
   ```)
+;;; httpd-resp-finalize -- internal: last word on the status before the head is built.
+;;;
+;;; A `101 Switching Protocols` is only honest on a connection that is really
+;;; being handed off.  One set without httpd-conn-upgrade! (a handler bug) is
+;;; answered 500, and one whose upgrade the server refused (the async server,
+;;; which cannot hand off a connection yet) is answered 501 -- in both cases
+;;; with an explanatory body and the connection closed, so the client never
+;;; believes it upgraded.
+
+(defn httpd-resp-finalize [c : ptr<void>] : nil
+  ```c
+  HttpdConn *conn = (HttpdConn *)c;
+  if (!conn || conn->resp_status != 101 || conn->upgrade == 1) return;
+  int refused = (conn->upgrade == 3);
+  conn->resp_status = refused ? 501 : 500;
+  __TUR_CNAME_httpd-resp-body!__((void *)conn, refused
+      ? "connection upgrade is not supported by this server"
+      : "101 Switching Protocols without httpd-conn-upgrade!");
+  conn->client_keep_alive = 0;
+  ```)
 ;;; httpd-conn-release -- internal: free everything a request attached to conn.
 ;;;
 ;;; The body, the response body, both header lists, the cached JSON body, the
-;;; multipart parts, the attribute list and the owned accessor strings.  Leaves
-;;; conn reusable (every freed field is reset).
+;;; multipart parts, the attribute list, the owned accessor strings and an
+;;; upgrade callback that never ran.  Leaves conn reusable (every freed field
+;;; is reset).
 
 (defn httpd-conn-release [c : ptr<void>] : nil
   ```c
   HttpdConn *conn = (HttpdConn *)c;
   if (!conn) return;
+  /* H1: an upgrade callback that never ran (the 101 could not be written)
+   * is still owned by the conn. */
+  if (conn->on_upgrade) { TUR_CLOSURE_DROP(conn->on_upgrade); conn->on_upgrade = 0; }
   if (conn->body)      { free(conn->body); conn->body = NULL; }
   if (conn->resp_body) { free(conn->resp_body); conn->resp_body = NULL; }
   for (int which = 0; which < 2; which++) {
@@ -662,23 +713,35 @@
 ;;; HTTP/1.1 keep-alive semantics:
 ;;;   - HTTP/1.1: connection kept alive unless Connection: close.
 ;;;   - HTTP/1.0: connection closed unless Connection: keep-alive.
-;;;   - A SO_RCVTIMEO of 5 seconds bounds idle keep-alive holding time.
+;;;   - Each request head must arrive whole within the read timeout
+;;;     (`read-ms`, else httpd-set-read-timeout!'s, 5 s by default); that
+;;;     also bounds how long an idle keep-alive connection is held.  A head
+;;;     that is still incomplete at the deadline is answered 408, one larger
+;;;     than 256 KiB is answered 431, and an idle connection is just closed.
+;;;   - Bytes a client pipelined behind one request are kept for the next.
 ;;;
 ;;; When `tls` is non-zero it is an opaque TLS connection handle obtained
 ;;; from the spice's tls-wrap-fd + tls-handshake; reads and writes are
 ;;; routed through the registered TLS ops instead of recv/send.
 ;;;
-;;; Since: Phase H1 (TLS path: Phase H5)
+;;; A handler that called httpd-conn-upgrade! gets its response written and
+;;; then the connection handed to its callback; one that called
+;;; httpd-conn-detach! has taken the connection already.  Either way this
+;;; function neither closes the fd nor releases the TLS state afterwards.
+;;;
+;;; `max-body` is the server's own body cap (-1: httpd-set-max-body!'s).
+;;;
+;;; Since: Phase H1 (TLS path: Phase H5; upgrade, deadline: tourist-on-stdlib-httpd H1)
 
-(defn httpd-handle [fd : int handler : int tls : int] : nil
+(defn httpd-handle [fd : int handler : int tls : int max-body : int read-ms : int] : nil
   ```c
-  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
-  typedef void    (*httpd_tls_void_fn)(int64_t);
-  /* 5 second receive timeout bounds idle keep-alive connections. */
-  struct timeval tv;
-  tv.tv_sec = 5; tv.tv_usec = 0;
-  setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  typedef void (*httpd_tls_void_fn)(int64_t);
+  int64_t rto = read_ms > 0 ? read_ms : httpd_read_timeout_ms;
+  if (rto < 1) rto = 1;
   int keep_going = 1;
+  int handed_off = 0;     /* upgraded or detached: the fd is not ours to close */
+  char *carry = NULL;     /* bytes read past the end of the previous request */
+  int   carry_len = 0;
   while (keep_going) {
       HttpdConn _conn;
       HttpdConn *conn = &_conn;
@@ -686,20 +749,38 @@
       conn->fd = (int)fd;
       conn->handler = (int64_t)handler;
       conn->tls = (int64_t)tls;
+      if (max_body >= 0) { conn->has_max_body = 1; conn->max_body = max_body; }
       /* M0: grow the read buffer on demand so large header blocks no
        * longer truncate at 8 KB. Start at 8 KB; double until headers fit
-       * or a hard cap is reached (defends against runaway headers). */
+       * or the 256 KiB cap is reached (431 past it). */
       size_t buf_cap = 8192;
       size_t buf_max = 262144;  /* 256 KB hard cap on header block */
+      while (buf_cap < (size_t)carry_len + 1 && buf_cap < buf_max) buf_cap *= 2;
       char  *buf     = (char *)malloc(buf_cap);
       if (!buf) break;
       buf[0] = '\0';
       int total = 0;
       ssize_t n;
       char *hdr_end = NULL;
+      int oversized = 0, timed_out = 0;
+      if (carry_len > 0) {
+          /* A pipelined request, read (at least in part) with the last one. */
+          memcpy(buf, carry, (size_t)carry_len);
+          total = carry_len;
+          buf[total] = '\0';
+          free(carry);
+          carry = NULL;
+          carry_len = 0;
+          hdr_end = strstr(buf, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+      }
+      /* The whole head must arrive by the deadline.  A per-recv timeout let a
+       * peer that trickled one byte every few seconds hold the worker for as
+       * long as it liked (slow loris). */
+      int64_t deadline = httpd_hymw_hymono_hyms() + rto;
       while (!hdr_end) {
           if ((size_t)total + 1 >= buf_cap) {
-              if (buf_cap >= buf_max) break;
+              if (buf_cap >= buf_max) { oversized = 1; break; }
               size_t new_cap = buf_cap * 2;
               if (new_cap > buf_max) new_cap = buf_max;
               char *nb = (char *)realloc(buf, new_cap);
@@ -707,14 +788,16 @@
               buf = nb;
               buf_cap = new_cap;
           }
-          if (conn->tls && httpd_tls_ops.read_fn) {
-              n = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
-                      conn->tls, (int64_t)(intptr_t)(buf + total),
-                      (int64_t)(buf_cap - 1 - (size_t)total));
-          } else {
-              n = recv(conn->fd, buf + total,
-                       (size_t)(buf_cap - 1 - (size_t)total), 0);
-          }
+          int64_t rem = deadline - httpd_hymw_hymono_hyms();
+          if (rem <= 0) { timed_out = 1; break; }
+          struct timeval tv;
+          tv.tv_sec = (time_t)(rem / 1000);
+          tv.tv_usec = (suseconds_t)((rem % 1000) * 1000);
+          setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+          errno = 0;
+          n = (ssize_t)httpd_hyconn_hyread((void *)conn, (void *)(buf + total),
+                                           (int64_t)(buf_cap - 1 - (size_t)total));
+          if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { timed_out = 1; break; }
           if (n <= 0) break;
           /* Resume the terminator search where the last one stopped (less
            * the terminator's own length): rescanning the whole buffer after
@@ -727,45 +810,57 @@
           hdr_end = strstr(buf + scan4, "\r\n\r\n");
           if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
-      if (!hdr_end) { free(buf); break; }  /* peer closed, timed out, or oversized */
+      if (!hdr_end) {
+          /* Peer closed, or an idle keep-alive connection timed out: nothing
+           * to answer.  A head that outgrew the cap, or was still arriving at
+           * the deadline, gets a status the client can act on (it used to be
+           * dropped without a word). */
+          int st = oversized ? 431 : (timed_out && total > 0) ? 408 : 0;
+          if (st) {
+              char eb[160];
+              int64_t el = httpd_hyerror_hyresponse(st, (void *)eb, (int64_t)sizeof eb);
+              (void)httpd_hyconn_hywrite((void *)conn, (void *)eb, el);
+              if (!tls) httpd_hylinger_hydrain(fd);
+          }
+          free(buf);
+          break;
+      }
       /* security-audit-plan M-4: the head is parsed by httpd-parse-head, the
        * one parser both server paths share, which also validates the
-       * Content-Length against httpd-set-max-body!'s cap BEFORE anything is
-       * allocated for the body. */
+       * Content-Length against the body cap BEFORE anything is allocated for
+       * the body. */
       int64_t content_len = 0;
       int64_t hdrs_total = httpd_hyparse_hyhead((void *)conn, (void *)buf,
                                                 (int64_t)total, (void *)&content_len);
       if (hdrs_total < 0) {
           char eb[160];
           int64_t el = httpd_hyerror_hyresponse(-hdrs_total, (void *)eb, (int64_t)sizeof eb);
-          if (conn->tls && httpd_tls_ops.write_fn) {
-              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)eb, el);
-          } else {
-              send(conn->fd, eb, (size_t)el, 0);
-          }
+          (void)httpd_hyconn_hywrite((void *)conn, (void *)eb, el);
+          if (!tls) httpd_hylinger_hydrain(fd);
           free(buf);
           httpd_hyconn_hyrelease((void *)conn);
           break;
       }
       int is_http_11 = (strstr(conn->version, "1.1") != NULL);
-      /* Read body if Content-Length present. */
+      /* Read body if Content-Length present.  Each read may wait up to the
+       * read timeout. */
+      int64_t body_in_buf = 0;
       if (content_len > 0) {
-          int64_t body_in_buf = (int64_t)total - hdrs_total;
+          body_in_buf = (int64_t)total - hdrs_total;
           if (body_in_buf < 0) body_in_buf = 0;
           if (body_in_buf > content_len) body_in_buf = content_len;
           conn->body = (char *)malloc((size_t)content_len + 1);
           if (!conn->body) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
           if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
+          struct timeval tv;
+          tv.tv_sec = (time_t)(rto / 1000);
+          tv.tv_usec = (suseconds_t)((rto % 1000) * 1000);
+          setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
           int64_t got = body_in_buf;
           while (got < content_len) {
-              ssize_t r;
-              if (conn->tls && httpd_tls_ops.read_fn) {
-                  r = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
-                          conn->tls, (int64_t)(intptr_t)(conn->body + got), content_len - got);
-              } else {
-                  r = recv(conn->fd, conn->body + got, (size_t)(content_len - got), 0);
-              }
+              ssize_t r = (ssize_t)httpd_hyconn_hyread((void *)conn,
+                                                       (void *)(conn->body + got),
+                                                       content_len - got);
               if (r <= 0) break;
               got += (int64_t)r;
           }
@@ -775,6 +870,18 @@
            * not a request: drop the connection rather than hand the handler
            * a truncated one. */
           if (got < content_len) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
+      }
+      /* Pipelining: whatever followed this request in the buffer is the start
+       * of the next one.  It used to be freed with the buffer, so a client
+       * that sent two requests back to back lost the second. */
+      {
+          int64_t used = hdrs_total + body_in_buf;
+          if ((int64_t)total > used) {
+              carry_len = (int)((int64_t)total - used);
+              carry = (char *)malloc((size_t)carry_len);
+              if (carry) memcpy(carry, buf + used, (size_t)carry_len);
+              else carry_len = 0;
+          }
       }
       /* Read buffer is no longer needed past this point. */
       free(buf);
@@ -789,39 +896,54 @@
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
       typedef void (*fn1_t)(void *, int64_t);
       ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
-      /* Write response. */
+      if (conn->upgrade == 2) {
+          /* httpd-conn-detach!: the handler wrote its own response on the
+           * raw transport and owns the connection now. */
+          handed_off = 1;
+          httpd_hyconn_hyrelease((void *)conn);
+          break;
+      }
+      httpd_hyresp_hyfinalize((void *)conn);
+      int upgrading = (conn->upgrade == 1);
+      /* Write response (an upgrade response carries no body). */
       const char *body = conn->resp_body ? conn->resp_body : "";
-      int         blen = conn->resp_body ? conn->resp_body_len : 0;
+      int         blen = (conn->resp_body && !upgrading) ? conn->resp_body_len : 0;
       int64_t hlen = 0;
+      int write_ok = 0;
       char *hbuf = (char *)httpd_hyresp_hyhead((void *)conn, (int64_t)is_http_11, (void *)&hlen);
       if (!hbuf) {
           /* fall back to a minimal status-only response */
           char tiny[160];
           int64_t tl = httpd_hyerror_hyresponse(500, (void *)tiny, (int64_t)sizeof tiny);
-          if (conn->tls && httpd_tls_ops.write_fn) {
-              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)tiny, tl);
-          } else {
-              send(conn->fd, tiny, (size_t)tl, 0);
-          }
+          (void)httpd_hyconn_hywrite((void *)conn, (void *)tiny, tl);
           keep_going = 0;
       } else {
-          if (conn->tls && httpd_tls_ops.write_fn) {
-              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)hbuf, hlen);
-              if (blen > 0) {
-                  ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                      conn->tls, (int64_t)(intptr_t)body, (int64_t)blen);
-              }
-          } else {
-              send(conn->fd, hbuf, (size_t)hlen, 0);
-              if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
-          }
+          write_ok = httpd_hyconn_hywrite((void *)conn, (void *)hbuf, hlen) == hlen;
+          if (write_ok && blen > 0)
+              write_ok = httpd_hyconn_hywrite((void *)conn, (void *)body, (int64_t)blen) == blen;
           free(hbuf);
-          keep_going = conn->client_keep_alive;
+          keep_going = conn->client_keep_alive && write_ok;
       }
+      if (upgrading && write_ok) {
+          /* httpd-conn-upgrade!: the response is out, and the connection
+           * belongs to the callback from here on.  It runs with the conn
+           * still alive, so the request accessors keep working; the socket
+           * loses the server's read timeout first. */
+          int64_t cb = conn->on_upgrade;
+          conn->on_upgrade = 0;
+          handed_off = 1;
+          httpd_hyconn_hyclear_hytimeout((int64_t)fd);
+          ((fn1_t)(intptr_t)((int64_t *)(intptr_t)cb)[0])((void *)(intptr_t)cb,
+                                                          (int64_t)(intptr_t)conn);
+          TUR_CLOSURE_DROP(cb);
+          httpd_hyconn_hyrelease((void *)conn);
+          break;
+      }
+      if (upgrading) keep_going = 0;   /* the 101 never went out: just close */
       httpd_hyconn_hyrelease((void *)conn);
   }
+  if (carry) free(carry);
+  if (handed_off) return;
   if (tls && httpd_tls_ops.shutdown) {
       ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)((int64_t)tls);
   }
@@ -850,6 +972,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   typedef int64_t (*httpd_tls_wrap_fn)(int64_t, int64_t);
   typedef int64_t (*httpd_tls_handshake_fn)(int64_t);
@@ -870,6 +994,14 @@
       pthread_mutex_unlock(&hb->fdq_mtx);
       int64_t tls = 0;
       if (hb->tls_ctx && httpd_tls_ops.wrap_fd && httpd_tls_ops.handshake) {
+          /* The handshake is bounded by the read timeout too: a client that
+           * connected and said nothing used to hold the worker forever. */
+          int64_t hto = hb->read_timeout_ms > 0 ? hb->read_timeout_ms : httpd_read_timeout_ms;
+          if (hto < 1) hto = 1;
+          struct timeval htv;
+          htv.tv_sec = (time_t)(hto / 1000);
+          htv.tv_usec = (suseconds_t)((hto % 1000) * 1000);
+          setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &htv, sizeof(htv));
           tls = ((httpd_tls_wrap_fn)(intptr_t)httpd_tls_ops.wrap_fd)(
                     (int64_t)(intptr_t)hb->tls_ctx, (int64_t)fd);
           if (tls == 0) { close(fd); continue; }
@@ -882,7 +1014,8 @@
               continue;
           }
       }
-      httpd_hyhandle((int64_t)fd, hb->handler, tls);
+      httpd_hyhandle((int64_t)fd, hb->handler, tls, hb->max_body,
+                     (int64_t)hb->read_timeout_ms);
   }
   return NULL;
   ```)
@@ -915,6 +1048,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   int64_t *fat = (int64_t *)env;
   HttpdBlock *hb = (HttpdBlock *)(intptr_t)fat[1];
@@ -1016,6 +1151,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   /* `workers * sizeof(pthread_t)` wrapped for a huge count and the first
@@ -1043,6 +1180,8 @@
    * httpd-new-async's in-flight default; httpd-new-pool-with-limit sets
    * another (0 = unlimited). */
   hb->fdq_max = 512;
+  hb->max_body = -1;          /* httpd-set-max-body!'s, until overridden */
+  hb->read_timeout_ms = 0;    /* httpd-set-read-timeout!'s, until overridden */
   hb->fdq     = (int *)malloc((size_t)hb->fdq_cap * sizeof(int));
   if (!hb->fdq) { close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   pthread_mutex_init(&hb->fdq_mtx, NULL);
@@ -1125,6 +1264,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   /* The handler's ownership passes to httpd-new-pool, which releases it on
    * every refusal.  The reactor does not run until httpd-run, so no
@@ -1212,6 +1353,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   /* handler is passed ^fat (this fn owns the heap box).  On an early refusal it
    * is never handed to httpd-new-pool, so release it here or it leaks -- via
@@ -1262,6 +1405,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   struct sockaddr_storage addr;
@@ -1290,6 +1435,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   tur_reactor_run(hb->reactor);
@@ -1316,6 +1463,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
@@ -1355,6 +1504,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   if (hb->workers) {
@@ -1392,6 +1543,416 @@
   pthread_mutex_destroy(&hb->fdq_mtx);
   pthread_cond_destroy(&hb->fdq_cv);
   free(hb);
+  ```)
+;; =============================================================================
+;; Server settings: read timeout and per-server limits
+;; (docs/upcoming/spices/tourist-on-stdlib-httpd-plan.md H1)
+;; =============================================================================
+;;; httpd-set-read-timeout! -- set how long the server waits on a client.
+;;;
+;;; A request head must arrive whole within this time (else 408), each read
+;;; of a request body may wait this long, an idle keep-alive connection is
+;;; closed after it, and on a TLS server it bounds the handshake.  The
+;;; default is 5000 ms.  This is the process-wide value; a pool server can
+;;; carry its own with httpd-server-set-read-timeout!.  The async server
+;;; uses it for every park on a client read or write.
+;;;
+;;; Parameters:
+;;;   ms -- the timeout in milliseconds (clamped to [1, 3600000])
+;;;
+;;; Returns:
+;;;   The previous timeout in milliseconds.
+;;;
+;;; Example:
+;;;   (httpd-set-read-timeout! 30000)   ; slow clients get 30 s
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-set-read-timeout! [ms : int] : int
+  ```c
+  int64_t prev = httpd_read_timeout_ms;
+  if (ms < 1) ms = 1;
+  if (ms > 3600000) ms = 3600000;
+  httpd_read_timeout_ms = ms;
+  return prev;
+  ```)
+;;; httpd-server-set-read-timeout! -- give one pool server its own read timeout.
+;;;
+;;; Overrides httpd-set-read-timeout! for the server `h` (from httpd-new,
+;;; httpd-new-pool, httpd-new-pool-with-limit or httpd-new-tls), so two
+;;; servers in one process can differ.  Call it before httpd-run.
+;;;
+;;; Parameters:
+;;;   h  -- a pool server handle
+;;;   ms -- the timeout in milliseconds (clamped to [1, 3600000]); 0 goes
+;;;         back to following httpd-set-read-timeout!
+;;;
+;;; Example:
+;;;   (httpd-server-set-read-timeout! h 500)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-server-set-read-timeout! [h : ptr<void> ms : int] : nil
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
+  } HttpdBlock;
+  if (!h) return;
+  if (ms < 0) ms = 0;
+  if (ms > 3600000) ms = 3600000;
+  ((HttpdBlock *)h)->read_timeout_ms = (int)ms;
+  ```)
+;;; httpd-server-set-max-body! -- give one pool server its own body cap.
+;;;
+;;; Overrides httpd-set-max-body! for the server `h`: a request whose
+;;; Content-Length exceeds it is answered 413 before any of the body is read.
+;;; Call it before httpd-run.
+;;;
+;;; Parameters:
+;;;   h -- a pool server handle
+;;;   n -- the cap in bytes (clamped to [0, 2^31 - 2]); negative goes back to
+;;;        following httpd-set-max-body!
+;;;
+;;; Example:
+;;;   (httpd-server-set-max-body! h 1048576)   ; 1 MiB for this server
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-server-set-max-body! [h : ptr<void> n : int] : nil
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
+  } HttpdBlock;
+  if (!h) return;
+  if (n > 2147483646) n = 2147483646;   /* conn->body_len is an int */
+  ((HttpdBlock *)h)->max_body = n < 0 ? -1 : n;
+  ```)
+;;; httpd-linger-drain -- internal: half-close fd and read what the peer is
+;;; still sending, briefly, so the close that follows does not reset the
+;;; connection over unread data (a reset can discard the error response the
+;;; client has not read yet).  Bounded to 256 KiB and 500 ms.
+(defn httpd-linger-drain [fd : int] : nil
+  ```c
+  shutdown((int)fd, SHUT_WR);
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = 100000;
+  setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  int64_t until = httpd_hymw_hymono_hyms() + 500;
+  size_t drained = 0;
+  char sink[4096];
+  while (drained < 262144 && httpd_hymw_hymono_hyms() < until) {
+      ssize_t r = recv((int)fd, sink, sizeof sink, 0);
+      if (r <= 0) break;
+      drained += (size_t)r;
+  }
+  ```)
+;; =============================================================================
+;; Connection upgrade (tourist-on-stdlib-httpd-plan H1)
+;; =============================================================================
+;;
+;; A handler can take the connection away from the server -- the WebSocket
+;; shape.  Two ways:
+;;
+;;   (httpd-conn-upgrade! c on-upgrade)  -- the server writes the response the
+;;       handler built (normally a 101 and its Upgrade headers; no
+;;       Content-Length, no body), then, instead of reading the next keep-alive
+;;       request or closing, calls `on-upgrade` with the conn.  From then on the
+;;       callback owns the socket and its TLS state: httpd-conn-read,
+;;       httpd-conn-write and httpd-conn-close! work on either transport.
+;;   (httpd-conn-detach! c)              -- the handler has already written its
+;;       own response over httpd-conn-fd / httpd-conn-tls and keeps the
+;;       connection; the server writes nothing and closes nothing.
+;;
+;; Only the pool servers (httpd-new, httpd-new-pool, httpd-new-tls) can hand a
+;; connection off.  The async server refuses: both functions return false,
+;; one line goes to stderr, and a 101 the handler sets anyway is answered 501
+;; -- the connection is never silently dropped.
+;;
+;; The socket a handler takes over has no read timeout (the server clears its
+;; own) and is blocking.  Bytes a client sent after the upgrade request but
+;; before reading the 101 are not passed on; a WebSocket client must wait for
+;; the 101 anyway (RFC 6455 4.1).
+;;; httpd-conn-fd -- the client socket behind a request.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   The file descriptor, or -1 once httpd-conn-close! has closed it.
+;;;
+;;; Example:
+;;;   (httpd-conn-fd c)   ; => 7
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-fd [conn : ptr<void>] : int
+  ```c
+  if (!conn) return -1;
+  return (int64_t)((HttpdConn *)conn)->fd;
+  ```)
+;;; httpd-conn-tls -- the TLS state behind a request, or NULL on plaintext.
+;;;
+;;; The handle the registered TLS implementation's wrap op returned for this
+;;; connection (with tls/httpd from the tls spice: a `tls_conn_t*`).
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   The TLS handle, or NULL for a plaintext connection.
+;;;
+;;; Example:
+;;;   (httpd-conn-tls c)   ; => NULL on a plaintext connection
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-tls [conn : ptr<void>] : ptr<void>
+  ```c
+  if (!conn) return NULL;
+  return (void *)(intptr_t)((HttpdConn *)conn)->tls;
+  ```)
+;;; httpd-conn-read -- read up to `len` raw bytes from the connection.
+;;;
+;;; Goes through the registered TLS ops on a TLS connection, recv(2)
+;;; otherwise.  Meant for a connection that has been handed off; during an
+;;; ordinary request the server has already read the request.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;   buf  -- destination buffer
+;;;   len  -- its capacity in bytes
+;;;
+;;; Returns:
+;;;   Bytes read (> 0), 0 when the peer closed, negative on error or timeout.
+;;;
+;;; Example:
+;;;   (httpd-conn-read c buf 4096)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-read [conn : ptr<void> buf : ptr<void> len : int] : int
+  ```c
+  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || !buf || len <= 0 || c->fd < 0) return -1;
+  if (c->tls && httpd_tls_ops.read_fn)
+      return ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
+                 c->tls, (int64_t)(intptr_t)buf, len);
+  ssize_t n;
+  do { n = recv(c->fd, buf, (size_t)len, 0); } while (n < 0 && errno == EINTR);
+  return (int64_t)n;
+  ```)
+;;; httpd-conn-write -- write all `len` bytes to the connection.
+;;;
+;;; Loops over short writes (a TLS record carries at most 16 KiB).  Goes
+;;; through the registered TLS ops on a TLS connection, send(2) otherwise.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;   buf  -- source bytes (may contain NUL)
+;;;   len  -- byte count
+;;;
+;;; Returns:
+;;;   `len` once everything is written, -1 on error.
+;;;
+;;; Example:
+;;;   (httpd-conn-write c frame frame-len)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-write [conn : ptr<void> buf : ptr<void> len : int] : int
+  ```c
+  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || c->fd < 0 || len < 0 || (len > 0 && !buf)) return -1;
+  const char *p = (const char *)buf;
+  int64_t sent = 0;
+  while (sent < len) {
+      int64_t w;
+      if (c->tls && httpd_tls_ops.write_fn) {
+          w = ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                  c->tls, (int64_t)(intptr_t)(p + sent), len - sent);
+      } else {
+          ssize_t r = send(c->fd, p + sent, (size_t)(len - sent), 0);
+          if (r < 0 && errno == EINTR) continue;
+          w = (int64_t)r;
+      }
+      if (w <= 0) return -1;
+      sent += w;
+  }
+  return len;
+  ```)
+;;; httpd-conn-clear-timeout -- internal: drop the server's SO_RCVTIMEO from
+;;; a socket it is handing to someone else.
+(defn httpd-conn-clear-timeout [fd : int] : nil
+  ```c
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = 0;
+  setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  ```)
+;;; httpd-upgrade-refuse -- internal: the async server cannot hand a
+;;; connection off yet.  Marks the conn (httpd-resp-finalize answers a 101
+;;; with 501) and says why on stderr, once per process.
+(defn httpd-upgrade-refuse [c : ptr<void>] : nil
+  ```c
+  static int warned = 0;
+  if (!warned) {
+      warned = 1;
+      fprintf(stderr, "httpd: connection upgrade is not supported by the async "
+                      "server (httpd-new-async); serve it from httpd-new-pool\n");
+  }
+  if (c) ((HttpdConn *)c)->upgrade = 3;
+  ```)
+;;; httpd-conn-upgrade! -- hand the connection to `on-upgrade` after this response.
+;;;
+;;; Call from a handler, after setting the response that accepts the upgrade
+;;; (for a WebSocket: status 101 plus `Upgrade`, `Connection` and
+;;; `Sec-WebSocket-Accept` headers).  When the handler returns the server
+;;; writes that response -- without a Content-Length or a body -- and then,
+;;; on the same worker thread, calls `on-upgrade` with the conn.  The request
+;;; accessors still work inside the callback.  From then on the callback owns
+;;; the socket and its TLS state: the server neither reads another request
+;;; from it nor closes it.  Release them with httpd-conn-close! (or, for a
+;;; transport kept past the callback, with the TLS spice's own shutdown/free
+;;; and close(2)).
+;;;
+;;; The callback blocks its worker for as long as it runs.  If the response
+;;; cannot be written the callback is not called and the connection is
+;;; closed as usual.  Only pool servers can hand a connection off; on the
+;;; async server this returns false (see the section notes).
+;;;
+;;; Parameters:
+;;;   conn       -- connection handle from the worker
+;;;   on-upgrade -- (fn [ptr<void>] nil), called with the conn; owned by the
+;;;                 server from this call on (dropped after it runs)
+;;;
+;;; Returns:
+;;;   true when the hand-off is scheduled, false when it was refused.
+;;;
+;;; Example:
+;;;   (httpd-resp-status! c 101)
+;;;   (httpd-resp-header! c "Upgrade" "websocket")
+;;;   (httpd-resp-header! c "Sec-WebSocket-Accept" accept)
+;;;   (httpd-conn-upgrade! c (fn [c2 : ptr<void>] : nil
+;;;                            (run-session c2)
+;;;                            (httpd-conn-close! c2)))
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-upgrade! [conn : ptr<void> ^fat on-upgrade : (fn [ptr<void>] nil)] : bool
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || c->fiber_group || c->upgrade == 2 || c->fd < 0) {
+      if (c && c->fiber_group) httpd_hyupgrade_hyrefuse((void *)c);
+      if (on_upgrade) TUR_CLOSURE_DROP(on_upgrade);
+      return false;
+  }
+  if (c->on_upgrade) TUR_CLOSURE_DROP(c->on_upgrade);
+  c->on_upgrade = on_upgrade;
+  c->upgrade = 1;
+  return true;
+  ```)
+;;; httpd-conn-detach! -- take the connection over, effective now.
+;;;
+;;; For a handler that writes its own response straight to the transport
+;;; (httpd-conn-fd / httpd-conn-tls, or httpd-conn-write) and keeps using the
+;;; connection.  When the handler returns the server writes nothing, reads
+;;; nothing more and closes nothing: the fd and its TLS state belong to the
+;;; caller, who must release them (httpd-conn-close!).  The socket loses the
+;;; server's read timeout at once.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   true when the connection is now the caller's, false when refused (the
+;;;   async server, a conn already handed off, or a closed one).
+;;;
+;;; Example:
+;;;   (when (httpd-conn-detach! c)
+;;;     (httpd-conn-write c reply reply-len)
+;;;     (httpd-conn-close! c))
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-detach! [conn : ptr<void>] : bool
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || c->fd < 0) return false;
+  if (c->fiber_group) { httpd_hyupgrade_hyrefuse((void *)c); return false; }
+  if (c->upgrade == 2) return false;
+  if (c->on_upgrade) { TUR_CLOSURE_DROP(c->on_upgrade); c->on_upgrade = 0; }
+  c->upgrade = 2;
+  httpd_hyconn_hyclear_hytimeout((int64_t)c->fd);
+  return true;
+  ```)
+;;; httpd-conn-upgraded? -- has this connection been (or will it be) handed off?
+;;;
+;;; True after httpd-conn-upgrade! or httpd-conn-detach! succeeded.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;
+;;; Returns:
+;;;   true when the server will not write a response of its own framing or
+;;;   close the connection.
+;;;
+;;; Example:
+;;;   (when (httpd-conn-upgraded? c) (println "hijacked"))
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-upgraded? [conn : ptr<void>] : bool
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
+  return c && (c->upgrade == 1 || c->upgrade == 2);
+  ```)
+;;; httpd-conn-close! -- release a connection that has been handed off.
+;;;
+;;; Sends the TLS close_notify and frees the TLS state (when there is one)
+;;; and closes the socket.  Only acts on a conn the caller owns -- inside an
+;;; httpd-conn-upgrade! callback, or after httpd-conn-detach! -- because
+;;; during an ordinary request the server owns the descriptor and closing it
+;;; under the server is a double close.  Idempotent.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;
+;;; Returns:
+;;;   true when it closed the connection, false when there was nothing of
+;;;   the caller's to close.
+;;;
+;;; Example:
+;;;   (httpd-conn-close! c)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-close! [conn : ptr<void>] : bool
+  ```c
+  typedef void (*httpd_tls_void_fn)(int64_t);
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || !(c->upgrade == 1 || c->upgrade == 2) || c->fd < 0) return false;
+  if (c->tls) {
+      if (httpd_tls_ops.shutdown) ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)(c->tls);
+      if (httpd_tls_ops.free_fn)  ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.free_fn)(c->tls);
+      c->tls = 0;
+  }
+  close(c->fd);
+  c->fd = -1;
+  return true;
   ```)
 ;;; httpd-req-method -- return the HTTP method from the parsed request.
 ;;;
@@ -2784,6 +3345,9 @@
       fcntl(fd, F_SETFL, cflags | O_NONBLOCK);
   }
   int keep_going = 1;
+  int64_t rto = httpd_read_timeout_ms > 0 ? httpd_read_timeout_ms : 5000;
+  char *carry = NULL;     /* bytes read past the end of the previous request */
+  int   carry_len = 0;
   while (keep_going) {
       HttpdConn _conn;
       HttpdConn *conn = &_conn;
@@ -2794,14 +3358,31 @@
       /* --- Read until end-of-headers --- */
       size_t buf_cap = 8192;
       size_t buf_max = 262144;
+      while (buf_cap < (size_t)carry_len + 1 && buf_cap < buf_max) buf_cap *= 2;
       char  *buf     = (char *)malloc(buf_cap);
       if (!buf) break;
       buf[0] = '\0';
       int total = 0;
       char *hdr_end = NULL;
+      int oversized = 0, timed_out = 0;
+      if (carry_len > 0) {
+          /* A pipelined request: see httpd-handle. */
+          memcpy(buf, carry, (size_t)carry_len);
+          total = carry_len;
+          buf[total] = '\0';
+          free(carry);
+          carry = NULL;
+          carry_len = 0;
+          hdr_end = strstr(buf, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+      }
+      /* The whole head must arrive within the read timeout, as in
+       * httpd-handle (a per-park timeout let a trickling client hold its
+       * fiber indefinitely). */
+      int64_t deadline = httpd_hymw_hymono_hyms() + rto;
       while (!hdr_end) {
           if ((size_t)total + 1 >= buf_cap) {
-              if (buf_cap >= buf_max) break;
+              if (buf_cap >= buf_max) { oversized = 1; break; }
               size_t new_cap = buf_cap * 2;
               if (new_cap > buf_max) new_cap = buf_max;
               char *nb = (char *)realloc(buf, new_cap);
@@ -2812,11 +3393,11 @@
           ssize_t n = recv(fd, buf + total, buf_cap - 1 - (size_t)total, 0);
           if (n < 0) {
               if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                  /* Park until readable, 5 s per wait as the blocking
-                   * pool's SO_RCVTIMEO -- it used to wait forever, so a
-                   * client that sent half a request held its fiber. */
-                  int ev = (int)tur_local_park_fd(group, fd, 1, 5000);
-                  if (ev < 0) break;   /* timeout (-2) or driver error */
+                  int64_t rem = deadline - httpd_hymw_hymono_hyms();
+                  if (rem <= 0) { timed_out = 1; break; }
+                  int ev = (int)tur_local_park_fd(group, fd, 1, rem);
+                  if (ev == -2) { timed_out = 1; break; }
+                  if (ev < 0) break;   /* driver error */
                   continue;
               }
               break;
@@ -2830,7 +3411,17 @@
           hdr_end = strstr(buf + scan4, "\r\n\r\n");
           if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
-      if (!hdr_end) { free(buf); break; }
+      if (!hdr_end) {
+          /* 431 / 408 as in httpd-handle; an idle or closed peer gets none. */
+          int st = oversized ? 431 : (timed_out && total > 0) ? 408 : 0;
+          if (st) {
+              char eb[160];
+              int64_t el = httpd_hyerror_hyresponse(st, (void *)eb, (int64_t)sizeof eb);
+              (void)send(fd, eb, (size_t)el, 0);
+          }
+          free(buf);
+          break;
+      }
       /* security-audit-plan M-4: the same head parser as httpd-handle. */
       int64_t content_len = 0;
       int64_t hdrs_total = httpd_hyparse_hyhead((void *)conn, (void *)buf,
@@ -2847,8 +3438,9 @@
       }
       int is_http_11 = (strstr(conn->version, "1.1") != NULL);
       /* Body (await on EWOULDBLOCK; content_len is capped by parse-head). */
+      int64_t body_in_buf = 0;
       if (content_len > 0) {
-          int64_t body_in_buf = (int64_t)total - hdrs_total;
+          body_in_buf = (int64_t)total - hdrs_total;
           if (body_in_buf < 0) body_in_buf = 0;
           if (body_in_buf > content_len) body_in_buf = content_len;
           conn->body = (char *)malloc((size_t)content_len + 1);
@@ -2859,8 +3451,8 @@
               ssize_t r = recv(fd, conn->body + got, (size_t)(content_len - got), 0);
               if (r < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      /* 5 s per wait, as the blocking pool's SO_RCVTIMEO. */
-                      int ev = (int)tur_local_park_fd(group, fd, 1, 5000);
+                      /* The read timeout per wait, as the blocking pool. */
+                      int ev = (int)tur_local_park_fd(group, fd, 1, rto);
                       if (ev < 0) break;   /* timeout (-2) or driver error */
                       continue;
                   }
@@ -2872,6 +3464,16 @@
           conn->body[got] = '\0';
           conn->body_len = (int)got;
           if (got < content_len) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
+      }
+      /* Pipelining: keep what followed this request (see httpd-handle). */
+      {
+          int64_t used = hdrs_total + body_in_buf;
+          if ((int64_t)total > used) {
+              carry_len = (int)((int64_t)total - used);
+              carry = (char *)malloc((size_t)carry_len);
+              if (carry) memcpy(carry, buf + used, (size_t)carry_len);
+              else carry_len = 0;
+          }
       }
       free(buf);
       /* Dispatch handler. */
@@ -2885,6 +3487,9 @@
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
       typedef void (*fn1_t)(void *, int64_t);
       ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
+      /* A 101 here means an upgrade this server refused (httpd-conn-upgrade!
+       * cannot hand a fiber's connection off yet): answer it 501. */
+      httpd_hyresp_hyfinalize((void *)conn);
       /* Build the response head (shared with httpd-handle). */
       const char *body = conn->resp_body ? conn->resp_body : "";
       int         blen = conn->resp_body ? conn->resp_body_len : 0;
@@ -2903,7 +3508,7 @@
               ssize_t w = send(fd, hbuf + sent, (size_t)(hlen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);  /* WRITE */
+                      int ev = (int)tur_local_park_fd(group, fd, 2, rto);  /* WRITE */
                       if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
@@ -2919,7 +3524,7 @@
               ssize_t w = send(fd, body + sent, (size_t)(blen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);
+                      int ev = (int)tur_local_park_fd(group, fd, 2, rto);
                       if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
@@ -2935,6 +3540,7 @@
        * which this path's own cleanup used to leak. */
       httpd_hyconn_hyrelease((void *)conn);
   }
+  if (carry) free(carry);
   close(fd);
   /* A4: release the in-flight slot. */
   if (async) async->in_flight--;

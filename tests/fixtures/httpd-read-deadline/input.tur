@@ -1,0 +1,171 @@
+;; httpd-read-deadline -- read timeout, header cap, pipelining and the
+;; per-server body cap of the pool server (tourist-on-stdlib-httpd-plan H1).
+;;
+;; One server with a 300 ms read timeout and a 16-byte body cap, set per
+;; server.  One client thread, one connection per case:
+;;
+;;   idle        -- connects and says nothing: closed, no response.
+;;   partial     -- half a request head, then silence: 408.
+;;   slow-loris  -- one byte every 50 ms, forever: 408 by the deadline.  A
+;;                  per-read timeout never fires on this client; the head as
+;;                  a whole has to arrive in time.
+;;   oversized   -- 300 KiB of header lines with no blank line: 431.
+;;   pipelined   -- two requests in one write: both answered, in order.
+;;   body-cap    -- Content-Length 17 is refused 413; 16 is served.
+;;
+;; The client records each outcome; main prints them after joining.
+
+(load "stdlib/httpd.tur")
+
+(defn client-worker [arg : ptr<void>] : ptr<void>
+  ```c
+  /* __tur_include__: char g_dl_report[4096]; */
+  #include <time.h>
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  size_t rl = 0;
+  #define REP(...) (rl += (size_t)snprintf(g_dl_report + rl, sizeof g_dl_report - rl, __VA_ARGS__))
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  static char big[320 * 1024];
+  char buf[4096];
+  int fd;
+  size_t got;
+  struct timespec t0, t1, nap = { 0, 50000000L };
+  #define CONNECT() do { fd = socket(AF_INET, SOCK_STREAM, 0); \
+      connect(fd, (struct sockaddr *)&addr, sizeof(addr)); } while (0)
+  #define READ_ALL() do { got = 0; for (;;) { \
+      ssize_t n_ = recv(fd, buf + got, sizeof buf - 1 - got, 0); \
+      if (n_ <= 0) break; got += (size_t)n_; } buf[got] = '\0'; } while (0)
+  #define STATUS() (strncmp(buf, "HTTP/1.1 ", 9) == 0 ? atoi(buf + 9) : 0)
+  #define MS() ((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000)
+  /* idle */
+  CONNECT();
+  READ_ALL();
+  REP("idle: %s\n", got == 0 ? "closed without a response" : buf);
+  close(fd);
+  /* partial head */
+  CONNECT();
+  send(fd, "GET / HTTP/1.1\r\nHost: x\r\n", 25, 0);
+  READ_ALL();
+  REP("partial: %d\n", STATUS());
+  close(fd);
+  /* slow loris */
+  CONNECT();
+  {
+      struct timeval tv = { 0, 20000 };
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+  }
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  const char *drip = "GET / HTTP/1.1\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  got = 0;
+  for (size_t i = 0; i < strlen(drip) && got == 0; i++) {
+      if (send(fd, drip + i, 1, MSG_NOSIGNAL) < 0) break;
+      nanosleep(&nap, NULL);
+      ssize_t n = recv(fd, buf, sizeof buf - 1, 0);
+      if (n > 0) { got = (size_t)n; buf[got] = '\0'; }
+      if (n == 0) break;
+  }
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  REP("slow-loris: %d within-deadline=%s\n", got ? STATUS() : 0,
+      (MS() < 2000) ? "yes" : "no");
+  close(fd);
+  /* oversized head */
+  CONNECT();
+  memset(big, 'a', sizeof big);
+  memcpy(big, "GET / HTTP/1.1\r\n", 16);
+  for (size_t i = 16; i + 100 < sizeof big; i += 100) { memcpy(big + i, "X-P: ", 5); big[i + 98] = '\r'; big[i + 99] = '\n'; }
+  {
+      size_t sent = 0;
+      while (sent < sizeof big - 200) {
+          ssize_t w = send(fd, big + sent, sizeof big - 200 - sent, MSG_NOSIGNAL);
+          if (w <= 0) break;
+          sent += (size_t)w;
+      }
+  }
+  READ_ALL();
+  REP("oversized: %d\n", STATUS());
+  close(fd);
+  /* pipelined */
+  CONNECT();
+  const char *two = "GET /a HTTP/1.1\r\nHost: x\r\n\r\nGET /b HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+  send(fd, two, strlen(two), 0);
+  READ_ALL();
+  {
+      int n200 = 0;
+      for (char *p = buf; (p = strstr(p, "HTTP/1.1 200")); p++) n200++;
+      REP("pipelined: %d responses, a-first=%s\n", n200,
+          (strstr(buf, "path=/a") && strstr(buf, "path=/b") && strstr(buf, "path=/a") < strstr(buf, "path=/b")) ? "yes" : "no");
+  }
+  close(fd);
+  /* per-server body cap */
+  CONNECT();
+  const char *p17 = "POST /big HTTP/1.1\r\nHost: x\r\nContent-Length: 17\r\n\r\n01234567890123456";
+  send(fd, p17, strlen(p17), 0);
+  READ_ALL();
+  REP("body-17: %d\n", STATUS());
+  close(fd);
+  CONNECT();
+  const char *p16 = "POST /ok HTTP/1.1\r\nHost: x\r\nContent-Length: 16\r\nConnection: close\r\n\r\n0123456789012345";
+  send(fd, p16, strlen(p16), 0);
+  READ_ALL();
+  REP("body-16: %d\n", STATUS());
+  close(fd);
+  return NULL;
+  ```)
+
+(defn client-report [] : nil
+  ```c
+  extern char g_dl_report[];
+  fputs(g_dl_report, stdout);
+  ```)
+
+(defn path-body [path : cstr] : cstr
+  ```c
+  static __thread char b[1100];
+  snprintf(b, sizeof b, "path=%s", path);
+  return b;
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (let [h (httpd-new-pool 0 2
+            (fn [c : ptr<void>] : nil
+              (httpd-resp-status! c 200)
+              (httpd-resp-body! c (path-body (httpd-req-path c)))))]
+    (httpd-server-set-read-timeout! h 300)
+    (httpd-server-set-max-body! h 16)
+    (let [port   (httpd-port h)
+          server (spawn-server h)
+          client (spawn-client port)]
+      (join-thread client)
+      (client-report)
+      (httpd-stop h)
+      (join-thread server)
+      (httpd-free h)
+      (println "done")
+      0)))

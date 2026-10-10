@@ -1,0 +1,214 @@
+;; httpd-conn-upgrade -- a handler takes the connection away from the pool
+;; server (tourist-on-stdlib-httpd-plan H1).
+;;
+;; One worker, one client thread, three connections in sequence:
+;;
+;;   1. GET /up with `Upgrade: echo`.  The handler answers 101 and calls
+;;      httpd-conn-upgrade!.  The worker writes the 101 (no Content-Length,
+;;      no body), then runs the callback, which reads "ping" off the raw
+;;      connection and writes "PONG".  The callback does NOT close: it hands
+;;      the fd to the main thread and returns.  The main thread waits a beat
+;;      -- long enough for a buggy worker to close or reuse the fd -- then
+;;      writes "late" on it and closes it.  The client must read all of it:
+;;      the worker neither closed the fd nor read it as a second request.
+;;   2. GET /raw.  The handler calls httpd-conn-detach!, writes its own bytes
+;;      with httpd-conn-write and closes with httpd-conn-close!; the server
+;;      adds nothing.
+;;   3. GET /plain, a normal request: the single worker is free again.
+;;
+;; The client records what it saw; main prints it after joining, so the
+;; output order is fixed.
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn path-is? [a : cstr b : cstr] : bool
+  ```c return strcmp(a, b) == 0; ```)
+
+(defn handoff-cell [mode : int v : int] : int
+  ```c
+  static int64_t fd = -1;
+  if (mode) fd = v;
+  return fd;
+  ```)
+
+(defn client-report [] : nil
+  ```c
+  extern char g_upg_report[];
+  fputs(g_upg_report, stdout);
+  ```)
+
+(defn client-worker [arg : ptr<void>] : ptr<void>
+  ```c
+  /* __tur_include__: char g_upg_report[4096]; */
+  #include <time.h>
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  char *rep = g_upg_report;
+  size_t rl = 0;
+  #define REP(...) (rl += (size_t)snprintf(rep + rl, 4096 - rl, __VA_ARGS__))
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  char buf[2048];
+  /* 1. upgrade */
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { REP("connect failed\n"); return NULL; }
+  const char *r1 = "GET /up HTTP/1.1\r\nHost: x\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n";
+  send(fd, r1, strlen(r1), 0);
+  size_t got = 0;
+  char *end = NULL;
+  while (!end && got < sizeof buf - 1) {
+      ssize_t n = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n; buf[got] = '\0';
+      end = strstr(buf, "\r\n\r\n");
+  }
+  if (!end) { REP("no 101 head\n"); close(fd); return NULL; }
+  *end = '\0';
+  char *eol = strstr(buf, "\r\n");
+  if (eol) *eol = '\0';
+  REP("status-line=%s\n", buf);
+  REP("has-upgrade-header=%s\n", (eol && strstr(eol + 2, "Upgrade: echo")) ? "yes" : "no");
+  REP("has-content-length=%s\n", (eol && strstr(eol + 2, "Content-Length")) ? "yes" : "no");
+  REP("has-connection-upgrade=%s\n", (eol && strstr(eol + 2, "Connection: Upgrade")) ? "yes" : "no");
+  /* Anything after the head belongs to the upgraded protocol (none yet). */
+  size_t extra = got - (size_t)((end + 4) - buf);
+  send(fd, "ping", 4, 0);
+  char tail[64];
+  size_t tl = 0;
+  if (extra > 0 && extra < sizeof tail) { memcpy(tail, end + 4, extra); tl = extra; }
+  for (;;) {
+      ssize_t n = recv(fd, tail + tl, sizeof tail - 1 - tl, 0);
+      if (n <= 0) break;
+      tl += (size_t)n;
+  }
+  tail[tl] = '\0';
+  REP("after-upgrade=%s\n", tail);
+  close(fd);
+  /* 2. detach */
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+  const char *r2 = "GET /raw HTTP/1.1\r\nHost: x\r\n\r\n";
+  send(fd, r2, strlen(r2), 0);
+  got = 0;
+  for (;;) {
+      ssize_t n = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  for (size_t i = 0; i < got; i++) if (buf[i] == '\r' || buf[i] == '\n') buf[i] = '|';
+  REP("raw=[%s]\n", buf);
+  close(fd);
+  /* 3. plain */
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+  const char *r3 = "GET /plain HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+  send(fd, r3, strlen(r3), 0);
+  got = 0;
+  for (;;) {
+      ssize_t n = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  eol = strstr(buf, "\r\n");
+  if (eol) *eol = '\0';
+  REP("plain-status=%s\n", buf);
+  char *body = eol ? strstr(eol + 2, "\r\n\r\n") : NULL;
+  REP("plain-body=%s\n", body ? body + 4 : "");
+  close(fd);
+  #undef REP
+  return NULL;
+  ```)
+
+;; The upgrade callback: echo one message in upper case, then hand the fd to
+;; the main thread without closing it.
+(defn echo-upper [c : ptr<void>] : int
+  ```c
+  char b[16];
+  int64_t n = httpd_hyconn_hyread(c, (void *)b, 4);
+  if (n <= 0) return 0;
+  for (int64_t i = 0; i < n; i++) if (b[i] >= 'a' && b[i] <= 'z') b[i] -= 32;
+  return httpd_hyconn_hywrite(c, (void *)b, n);
+  ```)
+
+(defn write-late-and-close [fd : int] : nil
+  ```c
+  #include <time.h>
+  struct timespec ts = { 0, 100000000L };   /* 100 ms */
+  nanosleep(&ts, NULL);
+  ssize_t w = send((int)fd, "late", 4, 0);
+  printf("late-write=%s\n", w == 4 ? "ok" : "failed");
+  close((int)fd);
+  ```)
+
+(defn raw-reply [c : ptr<void>] : int
+  ```c
+  const char *r = "HTTP/1.0 200 OK\r\n\r\nself-written";
+  return httpd_hyconn_hywrite(c, (void *)r, (int64_t)strlen(r));
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (let [handed (chan-new 4)
+        h      (httpd-new-pool 0 1
+                 (fn [c : ptr<void>] : nil
+                   (let [path (httpd-req-path c)]
+                     (cond
+                       (path-is? path "/up")
+                         (do
+                           (httpd-resp-status! c 101)
+                           (httpd-resp-header! c "Upgrade" "echo")
+                           (println (if (httpd-conn-upgrade! c
+                                          (fn [c2 : ptr<void>] : nil
+                                            (echo-upper c2)
+                                            (handoff-cell 1 (httpd-conn-fd c2))
+                                            (chan-send handed 1)))
+                                      "upgrade=scheduled"
+                                      "upgrade=refused")))
+                       (path-is? path "/raw")
+                         (when (httpd-conn-detach! c)
+                           (raw-reply c)
+                           (println (if (httpd-conn-close! c) "detached-close=ok" "detached-close=no")))
+                       :else
+                         (do
+                           (httpd-resp-status! c 200)
+                           (httpd-resp-body! c "ok"))))))
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (chan-recv handed)
+    (write-late-and-close (handoff-cell 0 0))
+    (join-thread client)
+    (client-report)
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h)
+    (chan-free handed)
+    (println "done")
+    0))

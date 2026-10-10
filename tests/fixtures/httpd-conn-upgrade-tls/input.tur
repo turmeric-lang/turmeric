@@ -1,0 +1,225 @@
+;; httpd-conn-upgrade-tls -- httpd-conn-upgrade! over the TLS hook table
+;; (tourist-on-stdlib-httpd-plan H1, "same over TLS").
+;;
+;; The registered "TLS" ops are stubs that XOR every byte with 0x5a on the
+;; wire, so a client that does the same can only make sense of the
+;; conversation if every read and write -- the request, the 101, and the bytes
+;; exchanged AFTER the hand-off through httpd-conn-read / httpd-conn-write --
+;; went through the ops rather than straight to the socket.
+;;
+;; Connection 1 upgrades.  The callback reads "ping", answers "PONG", and
+;; releases the transport with httpd-conn-close!, which must call the stub
+;; shutdown + free exactly once; the worker must not call them again or close
+;; the fd.  Connection 2 is a plain request on the same single worker, whose
+;; TLS state the worker releases as usual.
+;;
+;; Every server-side print happens on the one worker thread, in order; the
+;; client reports through a result slot that main prints after joining.
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn print-line [s : cstr] : nil
+  ```c printf("%s\n", s); fflush(stdout); ```)
+
+(defn path-is? [a : cstr b : cstr] : bool
+  ```c return strcmp(a, b) == 0; ```)
+
+;; ---- stub TLS ops: the "TLS handle" is a malloc'd int holding the fd ----
+
+(defn stub-wrap-fd [ctx : int fd : int] : int
+  ```c
+  /* __tur_include__: #include <stdlib.h> */
+  (void)ctx;
+  print_hyline("wrap_fd-called");
+  int *h = (int *)malloc(sizeof(int));
+  if (!h) return 0;
+  *h = (int)fd;
+  return (int64_t)(intptr_t)h;
+  ```)
+
+(defn stub-handshake [h : int] : int
+  ```c
+  print_hyline("handshake-called");
+  return h == 0 ? -1 : 0;
+  ```)
+
+(defn stub-read [h : int buf : int len : int] : int
+  ```c
+  if (h == 0) return -1;
+  ssize_t n = recv(*(int *)(intptr_t)h, (void *)(intptr_t)buf, (size_t)len, 0);
+  for (ssize_t i = 0; i < n; i++) ((unsigned char *)(intptr_t)buf)[i] ^= 0x5a;
+  return (int64_t)n;
+  ```)
+
+(defn stub-write [h : int buf : int len : int] : int
+  ```c
+  if (h == 0) return -1;
+  unsigned char tmp[4096];
+  size_t n = (size_t)len < sizeof tmp ? (size_t)len : sizeof tmp;
+  for (size_t i = 0; i < n; i++) tmp[i] = ((const unsigned char *)(intptr_t)buf)[i] ^ 0x5a;
+  return (int64_t)send(*(int *)(intptr_t)h, tmp, n, 0);
+  ```)
+
+(defn stub-shutdown [h : int] : void
+  ```c if (h) print_hyline("shutdown-called"); ```)
+
+(defn stub-free [h : int] : void
+  ```c
+  if (!h) return;
+  print_hyline("free-called");
+  free((void *)(intptr_t)h);
+  ```)
+
+(defn fn-ptr-wrap-fd   [] : int ```c return (int64_t)(intptr_t)&stub_hywrap_hyfd;   ```)
+(defn fn-ptr-handshake [] : int ```c return (int64_t)(intptr_t)&stub_hyhandshake; ```)
+(defn fn-ptr-read      [] : int ```c return (int64_t)(intptr_t)&stub_hyread;      ```)
+(defn fn-ptr-write     [] : int ```c return (int64_t)(intptr_t)&stub_hywrite;     ```)
+(defn fn-ptr-shutdown  [] : int ```c return (int64_t)(intptr_t)&stub_hyshutdown;  ```)
+(defn fn-ptr-free      [] : int ```c return (int64_t)(intptr_t)&stub_hyfree;      ```)
+
+(defn fake-ctx [] : int
+  ```c return (int64_t)(intptr_t)"DUMMY_TLS_CTX"; ```)
+
+;; ---- the upgrade callback ----------------------------------------------
+
+(defn echo-upper [c : ptr<void>] : int
+  ```c
+  char b[16];
+  int64_t n = httpd_hyconn_hyread(c, (void *)b, 4);
+  if (n <= 0) return 0;
+  for (int64_t i = 0; i < n; i++) if (b[i] >= 'a' && b[i] <= 'z') b[i] -= 32;
+  return httpd_hyconn_hywrite(c, (void *)b, n);
+  ```)
+
+;; ---- client ---------------------------------------------------------------
+
+(defn client-worker [arg : ptr<void>] : ptr<void>
+  ```c
+  /* __tur_include__: char g_tls_report[2048]; */
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  size_t rl = 0;
+  #define REP(...) (rl += (size_t)snprintf(g_tls_report + rl, sizeof g_tls_report - rl, __VA_ARGS__))
+  #define XOR(p, n) do { for (size_t i_ = 0; i_ < (size_t)(n); i_++) ((unsigned char *)(p))[i_] ^= 0x5a; } while (0)
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  char buf[2048];
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { REP("connect failed\n"); return NULL; }
+  char req[256];
+  int rq = snprintf(req, sizeof req, "GET /up HTTP/1.1\r\nHost: x\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n");
+  XOR(req, rq);
+  send(fd, req, (size_t)rq, 0);
+  size_t got = 0;
+  char *end = NULL;
+  while (!end && got < sizeof buf - 1) {
+      ssize_t n = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+      if (n <= 0) break;
+      XOR(buf + got, n);
+      got += (size_t)n; buf[got] = '\0';
+      end = strstr(buf, "\r\n\r\n");
+  }
+  if (!end) { REP("no 101 head\n"); close(fd); return NULL; }
+  char *eol = strstr(buf, "\r\n");
+  *eol = '\0';
+  REP("status-line=%s\n", buf);
+  char ping[4] = { 'p', 'i', 'n', 'g' };
+  XOR(ping, 4);
+  send(fd, ping, 4, 0);
+  char tail[64];
+  size_t tl = 0;
+  for (;;) {
+      ssize_t n = recv(fd, tail + tl, sizeof tail - 1 - tl, 0);
+      if (n <= 0) break;
+      XOR(tail + tl, n);
+      tl += (size_t)n;
+  }
+  tail[tl] = '\0';
+  REP("after-upgrade=%s\n", tail);
+  close(fd);
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  connect(fd, (struct sockaddr *)&addr, sizeof(addr));
+  rq = snprintf(req, sizeof req, "GET /hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+  XOR(req, rq);
+  send(fd, req, (size_t)rq, 0);
+  got = 0;
+  for (;;) {
+      ssize_t n = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+      if (n <= 0) break;
+      XOR(buf + got, n);
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  char *body = strstr(buf, "\r\n\r\n");
+  REP("plain-body=%s\n", body ? body + 4 : "(none)");
+  close(fd);
+  #undef REP
+  #undef XOR
+  return NULL;
+  ```)
+
+(defn client-report [] : nil
+  ```c
+  extern char g_tls_report[];
+  fputs(g_tls_report, stdout);
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (httpd-register-tls-impl
+    (fn-ptr-wrap-fd) (fn-ptr-handshake)
+    (fn-ptr-read) (fn-ptr-write)
+    (fn-ptr-shutdown) (fn-ptr-free))
+  (let [h      (httpd-new-tls 0 1
+                 (fn [c : ptr<void>] : nil
+                   (if (path-is? (httpd-req-path c) "/up")
+                     (do
+                       (httpd-resp-status! c 101)
+                       (httpd-resp-header! c "Upgrade" "echo")
+                       (httpd-conn-upgrade! c
+                         (fn [c2 : ptr<void>] : nil
+                           (print-line "callback-start")
+                           (echo-upper c2)
+                           (print-line (if (httpd-conn-close! c2) "callback-closed" "callback-close-failed"))
+                           (print-line (if (httpd-conn-close! c2) "second-close=closed" "second-close=no-op"))))
+                       (print-line "upgrade-requested"))
+                     (do
+                       (print-line "plain-request")
+                       (httpd-resp-status! c 200)
+                       (httpd-resp-body! c "TLS-OK"))))
+                 (fake-ctx))
+        port   (httpd-port h)
+        server (spawn-server h)
+        client (spawn-client port)]
+    (join-thread client)
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h)
+    (client-report)
+    (println "done")
+    0))
