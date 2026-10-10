@@ -68,9 +68,11 @@ has already cost a closed PR (mir#8, 2026-10-10). So:
   description with "Contains #N's commits; merge after #N." The diff shows
   #N's commits until #N merges; that is the accepted cost. It is also the only
   way to get CI here -- `ci.yml` runs only for PRs into `main`.
-- **Never delete, recreate or restore a branch** to repair a PR. If a PR closes
-  anyway, tell the user, and open a replacement from the same head against the
-  default branch.
+- **Never delete, recreate or restore a branch** to repair a PR. Claude Code
+  sessions cannot delete remote branches (the git proxy answers HTTP 403, which
+  `git push --delete` reports as "Everything up-to-date"), so a recreated branch
+  is left for the user to clean up. If a PR closes anyway, tell the user, and
+  open a replacement from the same head against the default branch.
 
 ## Test Suite Timeout -- STRICT RULE
 
