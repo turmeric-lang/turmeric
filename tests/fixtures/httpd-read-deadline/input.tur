@@ -30,6 +30,10 @@
   addr.sin_family      = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   addr.sin_port        = htons((uint16_t)port);
+  /* MSG_NOSIGNAL is Linux's; httpd-run ignores SIGPIPE process-wide anyway. */
+  #ifndef MSG_NOSIGNAL
+  #define MSG_NOSIGNAL 0
+  #endif
   static char big[320 * 1024];
   char buf[4096];
   int fd;
@@ -56,8 +60,14 @@
   /* slow loris */
   CONNECT();
   {
+      /* 20 ms receive timeout: a DWORD of milliseconds on winsock. */
+      #ifdef _WIN32
+      DWORD tv = 20;
+      setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+      #else
       struct timeval tv = { 0, 20000 };
       setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+      #endif
   }
   clock_gettime(CLOCK_MONOTONIC, &t0);
   const char *drip = "GET / HTTP/1.1\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

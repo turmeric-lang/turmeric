@@ -810,14 +810,15 @@
           }
           int64_t rem = deadline - httpd_hymw_hymono_hyms();
           if (rem <= 0) { timed_out = 1; break; }
-          struct timeval tv;
-          tv.tv_sec = (time_t)(rem / 1000);
-          tv.tv_usec = (suseconds_t)((rem % 1000) * 1000);
-          setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+          httpd_hyset_hyrcvtimeo(fd, rem);
           errno = 0;
           n = (ssize_t)httpd_hyconn_hyread((void *)conn, (void *)(buf + total),
                                            (int64_t)(buf_cap - 1 - (size_t)total));
-          if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) { timed_out = 1; break; }
+          /* A receive timeout is EAGAIN on POSIX and WSAETIMEDOUT (errno
+           * untouched) on Windows; a failed read past the deadline is one
+           * either way. */
+          if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                        httpd_hymw_hymono_hyms() >= deadline)) { timed_out = 1; break; }
           if (n <= 0) break;
           /* Resume the terminator search where the last one stopped (less
            * the terminator's own length): rescanning the whole buffer after
@@ -872,10 +873,7 @@
           conn->body = (char *)malloc((size_t)content_len + 1);
           if (!conn->body) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
           if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
-          struct timeval tv;
-          tv.tv_sec = (time_t)(rto / 1000);
-          tv.tv_usec = (suseconds_t)((rto % 1000) * 1000);
-          setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+          httpd_hyset_hyrcvtimeo(fd, rto);
           int64_t got = body_in_buf;
           while (got < content_len) {
               ssize_t r = (ssize_t)httpd_hyconn_hyread((void *)conn,
@@ -1021,10 +1019,7 @@
            * connected and said nothing used to hold the worker forever. */
           int64_t hto = hb->read_timeout_ms > 0 ? hb->read_timeout_ms : httpd_read_timeout_ms;
           if (hto < 1) hto = 1;
-          struct timeval htv;
-          htv.tv_sec = (time_t)(hto / 1000);
-          htv.tv_usec = (suseconds_t)((hto % 1000) * 1000);
-          setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &htv, sizeof(htv));
+          httpd_hyset_hyrcvtimeo((int64_t)fd, hto);
           tls = ((httpd_tls_wrap_fn)(intptr_t)httpd_tls_ops.wrap_fd)(
                     (int64_t)(intptr_t)hb->tls_ctx, (int64_t)fd);
           if (tls == 0) { close(fd); continue; }
@@ -1675,11 +1670,11 @@
 ;;; client has not read yet).  Bounded to 256 KiB and 500 ms.
 (defn httpd-linger-drain [fd : int] : nil
   ```c
+  #ifndef SHUT_WR
+  #define SHUT_WR 1   /* winsock's SD_SEND */
+  #endif
   shutdown((int)fd, SHUT_WR);
-  struct timeval tv;
-  tv.tv_sec = 0;
-  tv.tv_usec = 100000;
-  setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  httpd_hyset_hyrcvtimeo(fd, 100);
   int64_t until = httpd_hymw_hymono_hyms() + 500;
   size_t drained = 0;
   char sink[4096];
@@ -1825,10 +1820,24 @@
 ;;; a socket it is handing to someone else.
 (defn httpd-conn-clear-timeout [fd : int] : nil
   ```c
+  httpd_hyset_hyrcvtimeo(fd, 0);
+  ```)
+;;; httpd-set-rcvtimeo -- internal: set a socket's receive timeout to `ms`
+;;; milliseconds (0 = none).  POSIX takes a struct timeval; winsock takes a
+;;; DWORD of milliseconds, and reads a timeval's first word as one (5 s
+;;; became 5 ms).
+(defn httpd-set-rcvtimeo [fd : int ms : int] : nil
+  ```c
+  if (ms < 0) ms = 0;
+  #ifdef _WIN32
+  DWORD t = (DWORD)ms;
+  setsockopt((SOCKET)fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&t, sizeof t);
+  #else
   struct timeval tv;
-  tv.tv_sec = 0;
-  tv.tv_usec = 0;
+  tv.tv_sec = (time_t)(ms / 1000);
+  tv.tv_usec = (long)((ms % 1000) * 1000);
   setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  #endif
   ```)
 ;;; httpd-upgrade-refuse -- internal: the async server cannot hand a
 ;;; connection off yet.  Marks the conn (httpd-resp-finalize answers a 101
