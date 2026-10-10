@@ -1,0 +1,46 @@
+;; jit-inline-c-bool-conversion: an inline-C body declared `: bool` returns C's
+;; answer for a value wider than a byte, under the MIR engine too.
+;;
+;; c2mir converted to _Bool by keeping the low 8 bits, so under `tur jit` a
+;; body returning a mask like `x & 256`, or a double like 0.5, came back false
+;; while the cc path said true -- the same program, two answers, no diagnostic
+;; (docs/archive/c2mir-bool-conversion-truncates.md).  tests/run-jit.sh runs
+;; this fixture on the engine and compares its output, so a regression fails.
+
+(defn has-bit8 [x : int] : bool
+  ```c
+  return x & 256;
+  ```)
+
+(defn nonzero-double [d : float] : bool
+  ```c
+  return d;
+  ```)
+
+(defn stored-flag [x : int] : bool
+  ```c
+  struct { bool b; bool bit : 1; } f;
+  f.b = x;
+  f.bit = x;
+  return f.b && f.bit;
+  ```)
+
+(defn bumped [] : int
+  ```c
+  bool t = 0;
+  t += 256;
+  int a = t;
+  t -= 2;
+  int b = t;
+  return a * 10 + b;
+  ```)
+
+(defn main [] : int
+  (println (has-bit8 256))
+  (println (has-bit8 255))
+  (println (nonzero-double 0.5))
+  (println (nonzero-double 0.0))
+  (println (stored-flag 512))
+  (println (stored-flag 0))
+  (println (bumped))
+  0)

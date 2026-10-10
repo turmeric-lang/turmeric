@@ -6697,19 +6697,6 @@ static c128_t c128_divmod (c128_t a, c128_t b, int div_p, int signed_p) {
   return neg_a ? c128_neg (r) : r;
 }
 
-/* 2^N as a long double.  Built at run time on purpose, so that this file has
-   no non-zero long double literal: c2mir compiles itself in the bootstrap
-   tests, and MIR's generator miscompiles the long double type pun in
-   put_ldouble (mir.c), so the self-compiled c2mir writes every such constant
-   into binary MIR as 0.  Even the 1 is converted from an int at run time.  */
-static mir_ldouble ld_pow2 (int n) {
-  int one = 1;
-  mir_ldouble r = one;
-
-  for (; n > 0; n--) r += r;
-  return r;
-}
-
 /* The truth value of constant E.  */
 static int const_true_p (struct expr *e) {
   if (floating_type_p (e->type)) return e->c.d_val != 0.0;
@@ -6727,7 +6714,7 @@ static mir_ldouble c128_to_float (c128_t a, int signed_p, enum basic_type to) {
   if (neg) a = c128_neg (a);
   if (to == TP_LDOUBLE && sizeof (mir_ldouble) > sizeof (double)) {
     /* both halves are exact in a long double wider than double */
-    r = (mir_ldouble) a.hi * ld_pow2 (64) + (mir_ldouble) a.lo;
+    r = (mir_ldouble) a.hi * 18446744073709551616.0L + (mir_ldouble) a.lo;
   } else {
     for (; a.hi != 0; n++) { /* shift into 64 bits, keeping a sticky bit */
       st |= a.lo & 1;
@@ -6736,7 +6723,7 @@ static mir_ldouble c128_to_float (c128_t a, int signed_p, enum basic_type to) {
     }
     a.lo |= st;
     r = to == TP_FLOAT ? (mir_ldouble) (float) a.lo : (mir_ldouble) (double) a.lo;
-    r *= ld_pow2 (n);
+    for (; n > 0; n--) r *= 2;
   }
   return neg ? -r : r;
 }
@@ -6746,8 +6733,8 @@ static c128_t c128_from_float (mir_ldouble d) {
   mir_ldouble m = d < 0 ? -d : d;
   c128_t r;
 
-  r.hi = (mir_ullong) (m / ld_pow2 (64));
-  r.lo = (mir_ullong) (m - (mir_ldouble) r.hi * ld_pow2 (64));
+  r.hi = (mir_ullong) (m / 18446744073709551616.0L);
+  r.lo = (mir_ullong) (m - (mir_ldouble) r.hi * 18446744073709551616.0L);
   return d < 0 ? c128_neg (r) : r;
 }
 
@@ -6798,7 +6785,10 @@ static void cast_value (struct expr *to_e, struct expr *from_e, struct type *to)
   case TP: to_e->c.mto = (cast) from_e->c.mfrom; break;
 #define BASIC_FROM_CONV(mfrom)                                                           \
   switch (to->u.basic_type) {                                                            \
-    CONV (TP_BOOL, mir_bool, u_val, mfrom) CONV (TP_UCHAR, mir_uchar, u_val, mfrom);     \
+    CONV (TP_UCHAR, mir_uchar, u_val, mfrom);                                            \
+  case TP_BOOL: /* not through mir_bool, a uint8_t on every target: 256 is true */       \
+    to_e->c.u_val = from_e->c.mfrom != 0;                                                \
+    break;                                                                               \
     CONV (TP_USHORT, mir_ushort, u_val, mfrom) CONV (TP_UINT, mir_uint, u_val, mfrom);   \
     CONV (TP_ULONG, mir_ulong, u_val, mfrom) CONV (TP_ULLONG, mir_ullong, u_val, mfrom); \
     CONV (TP_SCHAR, mir_char, i_val, mfrom);                                             \
@@ -9554,8 +9544,11 @@ static void check (c2m_ctx_t c2m_ctx, node_t r, node_t context) {
       decl = sym.def_node->attr;
       *e->type = *decl->decl_spec.type;
       e->u.lvalue_node = sym.def_node;
+      /* A bit-field narrower than int reads as int -- except a _Bool one,
+         which stays _Bool so that storing into it converts to _Bool
+         (nonzero is 1) rather than truncating to its one bit.  */
       if ((width = NL_EL (sym.def_node->u.ops, 3))->code != N_IGNORE && e->type->mode == TM_BASIC
-          && (width_expr = width->attr)->const_p
+          && e->type->u.basic_type != TP_BOOL && (width_expr = width->attr)->const_p
           && width_expr->c.i_val < (mir_llong) sizeof (mir_int) * MIR_CHAR_BIT)
         e->type->u.basic_type = TP_INT;
     }
@@ -11109,7 +11102,7 @@ static op_t val_gen (c2m_ctx_t c2m_ctx, node_t r) {
   return gen (c2m_ctx, r, NULL, NULL, TRUE, NULL, NULL);
 }
 
-static op_t i128_conv_if (c2m_ctx_t c2m_ctx, op_t op, struct type *from, struct type *to);
+static op_t gen_conv_if (c2m_ctx_t c2m_ctx, op_t op, struct type *from, struct type *to);
 static op_t i128_const (c2m_ctx_t c2m_ctx, uint64_t lo, uint64_t hi);
 
 static int push_const_val (c2m_ctx_t c2m_ctx, node_t r, op_t *res) {
@@ -11522,8 +11515,8 @@ static void gen_bin_op (c2m_ctx_t c2m_ctx, node_t r, op_t *op1, op_t *op2, op_t 
   *op1 = val_gen (c2m_ctx, NL_HEAD (r->u.ops));
   *op2 = val_gen (c2m_ctx, NL_EL (r->u.ops, 1));
   /* an __int128 operand of a floating or pointer operation, or a shift count */
-  *op1 = i128_conv_if (c2m_ctx, *op1, ((struct expr *) NL_HEAD (r->u.ops)->attr)->type, e->type);
-  *op2 = i128_conv_if (c2m_ctx, *op2, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, e->type);
+  *op1 = gen_conv_if (c2m_ctx, *op1, ((struct expr *) NL_HEAD (r->u.ops)->attr)->type, e->type);
+  *op2 = gen_conv_if (c2m_ctx, *op2, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, e->type);
   *op1 = promote (c2m_ctx, *op1, t, FALSE);
   *op2 = promote (c2m_ctx, *op2, t, FALSE);
   *res = get_new_temp (c2m_ctx, t);
@@ -11537,8 +11530,8 @@ static void gen_cmp_op (c2m_ctx_t c2m_ctx, node_t r, struct type *type, op_t *op
   *op1 = val_gen (c2m_ctx, NL_HEAD (r->u.ops));
   *op2 = val_gen (c2m_ctx, NL_EL (r->u.ops, 1));
   /* an __int128 compared with a floating value */
-  *op1 = i128_conv_if (c2m_ctx, *op1, ((struct expr *) NL_HEAD (r->u.ops)->attr)->type, type);
-  *op2 = i128_conv_if (c2m_ctx, *op2, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, type);
+  *op1 = gen_conv_if (c2m_ctx, *op1, ((struct expr *) NL_HEAD (r->u.ops)->attr)->type, type);
+  *op2 = gen_conv_if (c2m_ctx, *op2, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, type);
   *op1 = promote (c2m_ctx, *op1, t, FALSE);
   *op2 = promote (c2m_ctx, *op2, t, FALSE);
   *res = get_new_temp (c2m_ctx, res_t);
@@ -11841,7 +11834,7 @@ static void i128_float_to_u64 (c2m_ctx_t c2m_ctx, MIR_op_t dst, MIR_op_t y, MIR_
   MIR_context_t ctx = c2m_ctx->ctx;
   MIR_label_t big = MIR_new_label (ctx), done = MIR_new_label (ctx);
   MIR_op_t two63 = (t == MIR_T_D ? MIR_new_double_op (ctx, 9223372036854775808.0)
-                                 : MIR_new_ldouble_op (ctx, ld_pow2 (63)));
+                                 : MIR_new_ldouble_op (ctx, 9223372036854775808.0L));
   MIR_op_t z = get_new_temp (c2m_ctx, t).mir_op;
 
   i128_emit3 (c2m_ctx, t == MIR_T_D ? MIR_DBGE : MIR_LDBGE, i128_label_op (c2m_ctx, big), y, two63);
@@ -11870,7 +11863,7 @@ static op_t i128_from_float (c2m_ctx_t c2m_ctx, op_t op, MIR_type_t t, int signe
   x = get_new_temp (c2m_ctx, t).mir_op;
   h = get_new_temp (c2m_ctx, t).mir_op;
   two64 = (t == MIR_T_D ? MIR_new_double_op (ctx, 18446744073709551616.0)
-                        : MIR_new_ldouble_op (ctx, ld_pow2 (64)));
+                        : MIR_new_ldouble_op (ctx, 18446744073709551616.0L));
   i128_emit2 (c2m_ctx, tp_mov (t), x, op.mir_op);
   i128_emit2 (c2m_ctx, MIR_MOV, s, i128_int (c2m_ctx, 0));
   if (signed_p) { /* convert |x| and negate the result when x < 0 */
@@ -11888,7 +11881,7 @@ static op_t i128_from_float (c2m_ctx_t c2m_ctx, op_t op, MIR_type_t t, int signe
      has no more significant bits than x.  */
   i128_emit3 (c2m_ctx, t == MIR_T_D ? MIR_DMUL : MIR_LDMUL, h, x,
               t == MIR_T_D ? MIR_new_double_op (ctx, 1.0 / 18446744073709551616.0)
-                           : MIR_new_ldouble_op (ctx, ld_pow2 (0) / ld_pow2 (64)));
+                           : MIR_new_ldouble_op (ctx, 1.0L / 18446744073709551616.0L));
   i128_float_to_u64 (c2m_ctx, i128_hi (c2m_ctx, res), h, t);
   i128_emit2 (c2m_ctx, t == MIR_T_D ? MIR_UI2D : MIR_UI2LD, h, i128_hi (c2m_ctx, res));
   i128_emit3 (c2m_ctx, t == MIR_T_D ? MIR_DMUL : MIR_LDMUL, h, h, two64);
@@ -11915,7 +11908,7 @@ static MIR_op_t i128_u_to_float (c2m_ctx_t c2m_ctx, op_t a, MIR_type_t t) {
     MIR_op_t h = get_new_temp (c2m_ctx, t).mir_op;
 
     i128_emit2 (c2m_ctx, MIR_UI2LD, h, i128_hi (c2m_ctx, a));
-    i128_emit3 (c2m_ctx, MIR_LDMUL, h, h, MIR_new_ldouble_op (ctx, ld_pow2 (64)));
+    i128_emit3 (c2m_ctx, MIR_LDMUL, h, h, MIR_new_ldouble_op (ctx, 18446744073709551616.0L));
     i128_emit2 (c2m_ctx, MIR_UI2LD, res, i128_lo (a));
     i128_emit3 (c2m_ctx, MIR_LDADD, res, res, h);
     return res;
@@ -12013,12 +12006,55 @@ static op_t i128_conv (c2m_ctx_t c2m_ctx, op_t op, struct type *from, struct typ
   return i128_to_int (c2m_ctx, op, get_mir_type (c2m_ctx, to));
 }
 
+static int bool_type_p (const struct type *type) {
+  return type->mode == TM_BASIC && type->u.basic_type == TP_BOOL;
+}
+
+/* OP, a scalar of type FROM, converted to _Bool: 0 when it compares equal to
+   zero and 1 otherwise (C11 6.3.1.2).  The usual cast to _Bool's MIR type,
+   MIR_T_U8, would keep the low 8 bits instead -- (_Bool) 256 was 0 -- and
+   would truncate a floating value first -- (_Bool) 0.5 was 0.  */
+static op_t gen_to_bool (c2m_ctx_t c2m_ctx, op_t op, struct type *from) {
+  gen_ctx_t gen_ctx = c2m_ctx->gen_ctx;
+  MIR_context_t ctx = c2m_ctx->ctx;
+  MIR_type_t t = get_mir_type (c2m_ctx, from);
+  op_t res;
+
+  assert (scalar_type_p (from) && !int128_type_p (from));
+  switch (op.mir_op.mode) { /* a constant: fold it */
+  case MIR_OP_INT:
+  case MIR_OP_UINT: return new_op (NULL, MIR_new_int_op (ctx, op.mir_op.u.u != 0));
+  case MIR_OP_FLOAT: return new_op (NULL, MIR_new_int_op (ctx, op.mir_op.u.f != 0.0f));
+  case MIR_OP_DOUBLE: return new_op (NULL, MIR_new_int_op (ctx, op.mir_op.u.d != 0.0));
+  case MIR_OP_LDOUBLE: return new_op (NULL, MIR_new_int_op (ctx, op.mir_op.u.ld != 0.0));
+  case MIR_OP_REF:
+  case MIR_OP_STR: op = force_reg (c2m_ctx, op, MIR_POINTER_TYPE); break; /* an address */
+  default: break;
+  }
+  res = get_new_temp (c2m_ctx, MIR_T_I32);
+  if (t == MIR_T_F) {
+    emit3 (c2m_ctx, MIR_FNE, res.mir_op, op.mir_op, MIR_new_float_op (ctx, 0.0f));
+  } else if (t == MIR_T_D) {
+    emit3 (c2m_ctx, MIR_DNE, res.mir_op, op.mir_op, MIR_new_double_op (ctx, 0.0));
+  } else if (t == MIR_T_LD) {
+    emit3 (c2m_ctx, MIR_LDNE, res.mir_op, op.mir_op, MIR_new_ldouble_op (ctx, 0.0));
+  } else {
+    t = promote_mir_int_type (t);
+    op = promote (c2m_ctx, op, t, FALSE);
+    emit3 (c2m_ctx, t == MIR_T_I32 || t == MIR_T_U32 ? MIR_NES : MIR_NE, res.mir_op, op.mir_op,
+           zero_op.mir_op);
+  }
+  return res;
+}
+
 /* OP of type FROM, about to be converted to type TO by the caller's usual
-   cast: convert it here instead when either type is __int128, because the
-   usual cast knows only MIR types.  */
-static op_t i128_conv_if (c2m_ctx_t c2m_ctx, op_t op, struct type *from, struct type *to) {
-  if (!int128_type_p (from) && !int128_type_p (to)) return op;
-  return i128_conv (c2m_ctx, op, from, to);
+   cast, which knows only MIR types: do here the conversions that cast gets
+   wrong -- to or from __int128, and to _Bool.  */
+static op_t gen_conv_if (c2m_ctx_t c2m_ctx, op_t op, struct type *from, struct type *to) {
+  if (int128_type_p (from) || int128_type_p (to)) return i128_conv (c2m_ctx, op, from, to);
+  if (bool_type_p (to) && !bool_type_p (from) && scalar_type_p (from))
+    return gen_to_bool (c2m_ctx, op, from);
+  return op;
 }
 
 /* LO:HI = A * B, the full 128-bit product of 64-bit values, from 32-bit
@@ -13225,7 +13261,7 @@ static void gen_initializer (c2m_ctx_t c2m_ctx, size_t init_start, op_t var,
     init_el = VARR_GET (init_el_t, init_els, init_start);
     val = val_gen (c2m_ctx, init_el.init);
     t = get_op_type (c2m_ctx, var);
-    val = i128_conv_if (c2m_ctx, val, ((struct expr *) init_el.init->attr)->type, init_el.el_type);
+    val = gen_conv_if (c2m_ctx, val, ((struct expr *) init_el.init->attr)->type, init_el.el_type);
     val = cast (c2m_ctx, val, get_mir_type (c2m_ctx, init_el.el_type), FALSE);
     emit_scalar_assign (c2m_ctx, var, &val, t, FALSE);
   } else if (local_p) { /* local variable initialization: */
@@ -13269,8 +13305,8 @@ static void gen_initializer (c2m_ctx_t c2m_ctx, size_t init_start, op_t var,
                                                     ? init_el.container_type
                                                     : init_el.el_type),
                                   0);
-        val = i128_conv_if (c2m_ctx, val, ((struct expr *) init_el.init->attr)->type,
-                            init_el.el_type);
+        val
+          = gen_conv_if (c2m_ctx, val, ((struct expr *) init_el.init->attr)->type, init_el.el_type);
         val = cast (c2m_ctx, val, get_mir_type (c2m_ctx, init_el.el_type), FALSE);
         emit_scalar_assign (c2m_ctx, new_op (init_el.member_decl, mem), &val, t,
                             i == init_start || rel_offset == init_el.offset);
@@ -13584,8 +13620,8 @@ static op_t gen_i128_assign_op (c2m_ctx_t c2m_ctx, node_t r) {
     val = i128_arith (c2m_ctx, r->code, signed_integer_type_p (ct), op1, op2);
   } else { /* a floating or pointer operation with an __int128 operand */
     t = get_mir_type (c2m_ctx, ct);
-    op1 = promote (c2m_ctx, i128_conv_if (c2m_ctx, op1, lt, ct), t, TRUE);
-    op2 = promote (c2m_ctx, i128_conv_if (c2m_ctx, op2, rt, ct), t, FALSE);
+    op1 = promote (c2m_ctx, gen_conv_if (c2m_ctx, op1, lt, ct), t, TRUE);
+    op2 = promote (c2m_ctx, gen_conv_if (c2m_ctx, op2, rt, ct), t, FALSE);
     val = get_new_temp (c2m_ctx, t);
     emit_bin_op (c2m_ctx, r, ct, val, op1, op2);
   }
@@ -13593,7 +13629,7 @@ static op_t gen_i128_assign_op (c2m_ctx_t c2m_ctx, node_t r) {
     val = i128_conv (c2m_ctx, val, ct, lt);
     i128_store (c2m_ctx, var, val);
   } else {
-    val = i128_conv_if (c2m_ctx, val, ct, lt);
+    val = gen_conv_if (c2m_ctx, val, ct, lt);
     t = promote_mir_int_type (get_op_type (c2m_ctx, var));
     val = cast (c2m_ctx, val, get_mir_type (c2m_ctx, lt), FALSE);
     emit_scalar_assign (c2m_ctx, var, &val, t, FALSE);
@@ -13895,8 +13931,8 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
     t = get_op_type (c2m_ctx, var);
     op2 = gen (c2m_ctx, NL_EL (r->u.ops, 1), NULL, NULL, t != MIR_T_UNDEF,
                t != MIR_T_UNDEF ? NULL : &var, NULL);
-    op2 = i128_conv_if (c2m_ctx, op2, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type,
-                        ((struct expr *) r->attr)->type);
+    op2 = gen_conv_if (c2m_ctx, op2, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type,
+                       ((struct expr *) r->attr)->type);
     if ((!val_p && true_label == NULL) || t == MIR_T_UNDEF) {
       res = var;
       val = op2;
@@ -13908,6 +13944,9 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
   assign: /* t/val is promoted type/new value of assign expression */
     if (scalar_type_p (((struct expr *) r->attr)->type)) {
       assert (t != MIR_T_UNDEF);
+      if (r->code != N_ASSIGN) /* ++, -- or a compound assignment: VAL is of type2 */
+        val = gen_conv_if (c2m_ctx, val, ((struct expr *) r->attr)->type2,
+                           ((struct expr *) r->attr)->type);
       val = cast (c2m_ctx, val, get_mir_type (c2m_ctx, ((struct expr *) r->attr)->type), FALSE);
       emit_scalar_assign (c2m_ctx, var, &val, t, FALSE);
       if ((val_p || true_label != NULL) && r->code != N_POST_INC && r->code != N_POST_DEC)
@@ -13953,13 +13992,29 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
   }
   case N_IND: {
     MIR_type_t ind_t;
+    MIR_alias_t alias;
     node_t arr = NL_HEAD (r->u.ops);
     struct type *el_type = ((struct expr *) r->attr)->type;
     struct type *arr_type = ((struct expr *) arr->attr)->type;
     mir_size_t size = type_size (c2m_ctx, el_type);
 
     t = get_mir_type (c2m_ctx, el_type);
-    op1 = val_gen (c2m_ctx, arr);
+    alias = get_type_alias (c2m_ctx, el_type);
+    if (arr_type->mode == TM_PTR && arr_type->arr_type != NULL) { /* an array object */
+      /* An element of an array that lives in a union keeps the union's alias,
+         as a scalar member does (N_FIELD): `u.ld = x; ... u.words[0]` reads
+         back what was stored.  With the element type's own alias the two
+         accesses looked independent to the generator, which then read the
+         words from before the store -- 0 for every long double that
+         put_ldouble wrote.  */
+      op1 = gen (c2m_ctx, arr, NULL, NULL, FALSE, NULL, NULL);
+      if (op1.mir_op.mode == MIR_OP_MEM && op1.mir_op.u.mem.alias != 0
+          && MIR_alias_name (ctx, op1.mir_op.u.mem.alias)[0] == 'U')
+        alias = op1.mir_op.u.mem.alias;
+      op1 = force_val (c2m_ctx, op1, TRUE);
+    } else {
+      op1 = val_gen (c2m_ctx, arr);
+    }
     op2 = val_gen (c2m_ctx, NL_EL (r->u.ops, 1));
     ind_t = get_mir_type (c2m_ctx, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type);
     if (int128_type_p (((struct expr *) NL_EL (r->u.ops, 1)->attr)->type)) {
@@ -13988,8 +14043,8 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
     res = op1;
     res.decl = NULL;
     if (res.mir_op.mode == MIR_OP_REG)
-      res.mir_op = MIR_new_alias_mem_op (ctx, t, 0, res.mir_op.u.reg, 0, 1,
-                                         get_type_alias (c2m_ctx, el_type), arr_type->antialias);
+      res.mir_op
+        = MIR_new_alias_mem_op (ctx, t, 0, res.mir_op.u.reg, 0, 1, alias, arr_type->antialias);
     if (res.mir_op.u.mem.base == 0 && size == 1) {
       res.mir_op.u.mem.base = op2.mir_op.u.reg;
     } else if (res.mir_op.u.mem.index == 0 && size <= MIR_MAX_SCALE) {
@@ -14152,7 +14207,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
     if (!void_p) {
       if (t != MIR_T_UNDEF) {
         res = get_new_temp (c2m_ctx, t);
-        op1 = i128_conv_if (c2m_ctx, op1, ((struct expr *) true_expr->attr)->type, cond_res_type);
+        op1 = gen_conv_if (c2m_ctx, op1, ((struct expr *) true_expr->attr)->type, cond_res_type);
         op1 = cast (c2m_ctx, op1, t, FALSE);
         emit2 (c2m_ctx, tp_mov (t), res.mir_op, op1.mir_op);
       } else if (desirable_dest == NULL) {
@@ -14169,7 +14224,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
     op1 = gen (c2m_ctx, false_expr, NULL, NULL, !void_p && t != MIR_T_UNDEF, NULL, NULL);
     if (!void_p) {
       if (t != MIR_T_UNDEF) {
-        op1 = i128_conv_if (c2m_ctx, op1, ((struct expr *) false_expr->attr)->type, cond_res_type);
+        op1 = gen_conv_if (c2m_ctx, op1, ((struct expr *) false_expr->attr)->type, cond_res_type);
         op1 = cast (c2m_ctx, op1, t, FALSE);
         emit2 (c2m_ctx, tp_mov (t), res.mir_op, op1.mir_op);
       } else if (desirable_dest == NULL) {
@@ -14195,8 +14250,9 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
       res.decl = NULL;
       res.mir_op.mode = MIR_OP_UNDEF;
     } else if (int128_type_p (type)
-               || int128_type_p (((struct expr *) NL_EL (r->u.ops, 1)->attr)->type)) {
-      res = i128_conv (c2m_ctx, op1, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, type);
+               || int128_type_p (((struct expr *) NL_EL (r->u.ops, 1)->attr)->type)
+               || bool_type_p (type)) {
+      res = gen_conv_if (c2m_ctx, op1, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, type);
     } else {
       t = get_mir_type (c2m_ctx, type);
       res = cast (c2m_ctx, op1, t, TRUE);
@@ -14504,7 +14560,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
           assert (param->code == N_SPEC_DECL || param->code == N_TYPE);
           decl_spec = get_param_decl_spec (param);
           arg_type = decl_spec->type;
-          op2 = i128_conv_if (c2m_ctx, op2, e->type, arg_type);
+          op2 = gen_conv_if (c2m_ctx, op2, e->type, arg_type);
           if (!int128_type_p (arg_type)) {
             t = get_mir_type (c2m_ctx, arg_type);
             t = promote_mir_int_type (t);
@@ -15126,8 +15182,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
     val = gen (c2m_ctx, NL_EL (r->u.ops, 1), NULL, NULL, !ret_by_addr_p && scalar_p,
                !ret_by_addr_p || scalar_p ? NULL : &var, NULL);
     if (!ret_by_addr_p && scalar_p) {
-      val
-        = i128_conv_if (c2m_ctx, val, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, ret_type);
+      val = gen_conv_if (c2m_ctx, val, ((struct expr *) NL_EL (r->u.ops, 1)->attr)->type, ret_type);
       t = get_mir_type (c2m_ctx, ret_type);
       t = promote_mir_int_type (t);
       val = promote (c2m_ctx, val, t, FALSE);

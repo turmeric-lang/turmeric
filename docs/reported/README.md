@@ -2769,13 +2769,13 @@ not resolved by the elaborator at the top level (outside any `defmodule`).
 
 ## Found executing c2mir-rejects-uint128 (filed 2026-10-10)
 
-Both are pre-existing in the MIR fork and reproduce at its base `3c0d8c84`;
-the `__int128` work only surfaced them.
+Both were pre-existing in the MIR fork (they reproduce at its base `3c0d8c84`);
+the `__int128` work only surfaced them.  Both resolved the same day.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [c2mir-bool-conversion-truncates](c2mir-bool-conversion-truncates.md) | medium-high | Under `tur jit` a conversion to `_Bool` keeps the low 8 bits instead of testing against zero: `bool b = 256L` is false, so is `(bool) 0.5`, in assignment, casts, arguments and `return` alike (interpreter and constant folding too).  `cast` knows only MIR types and `_Bool` is `MIR_T_U8`; `cast_value` folds through a `uint8_t`.  The C-type-aware hook the `__int128` change added at every conversion site is the place to fix it |
-| [mir-x86-64-long-double-union-pun](mir-x86-64-long-double-union-pun.md) | medium | MIR's x86-64 generator reads 0 back from a long double stored into a union and read as two `uint64_t` (the interpreter is right).  That is `put_ldouble`'s shape, so a self-compiled c2mir writes every non-zero long double constant into binary MIR as 0 -- which is why c2mir.c now builds its powers of two at run time (`ld_pow2`) |
+| ~~[c2mir-bool-conversion-truncates](../archive/c2mir-bool-conversion-truncates.md)~~ | medium-high | **RESOLVED 2026-10-10** (archived): conversion to `_Bool` now compares with zero at every conversion site (`gen_conv_if`/`gen_to_bool`), after `++`/`--`/compound assignment, in the constant folder, and into a `_Bool` bit-field (turmeric-lang/mir#8).  Pinned by `tests/fixtures/jit-inline-c-bool-conversion` |
+| ~~[mir-x86-64-long-double-union-pun](../archive/mir-x86-64-long-double-union-pun.md)~~ | medium | **RESOLVED 2026-10-10** (archived): not the generator -- c2mir tagged an element of a union's array member with its element type's alias instead of the union's, so MIR-gen let the read see memory from before the store.  `N_IND` keeps the union alias (turmeric-lang/mir#9); c2mir.c's long double literals are back.  Pinned by `tests/fixtures/jit-inline-c-union-array-pun` |
 
 ## Filing conventions
 

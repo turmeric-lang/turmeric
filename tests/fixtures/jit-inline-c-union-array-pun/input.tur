@@ -1,0 +1,44 @@
+;; jit-inline-c-union-array-pun: inline C reading a union member back through
+;; an array member of the same union sees what was stored, under the MIR
+;; engine too.
+;;
+;; c2mir gave a scalar member access the union's alias but an array element
+;; its element type's, so MIR's optimizer took `u.d = x` and `u.w[1]` for
+;; independent accesses and read the words from before the store -- under
+;; `tur jit` only; the cc path and c2mir's interpreter were right
+;; (docs/archive/mir-x86-64-long-double-union-pun.md).  IEEE doubles have the
+;; same layout on every host this runs on, so the words are fixed values.
+
+(defn high-word [d : float] : int
+  ```c
+  union { double d; uint32_t w[2]; } u;
+  u.w[0] = u.w[1] = 0;
+  u.d = d;
+  return (int64_t)u.w[1];
+  ```)
+
+(defn from-words [hi : int] : float
+  ```c
+  union { double d; uint32_t w[2]; } u;
+  u.d = 0.0;
+  u.w[0] = 0;
+  u.w[1] = (uint32_t)hi;
+  return u.d;
+  ```)
+
+(defn long-double-round-trip [] : int
+  ```c
+  union { long double ld; uint64_t u[2]; } a, b;
+  a.u[0] = a.u[1] = 0;
+  b.u[0] = b.u[1] = 0;
+  a.ld = 18446744073709551616.0L;
+  b.u[0] = a.u[0];
+  b.u[1] = a.u[1];
+  return b.ld == a.ld;
+  ```)
+
+(defn main [] : int
+  (println (high-word 1.5))
+  (println (from-words 1079574528))
+  (println (long-double-round-trip))
+  0)

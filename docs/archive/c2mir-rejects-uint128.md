@@ -155,5 +155,5 @@ apart from two x86-only tests that qemu's host `uname -m` let through.  Here,
 back again.
 
 Two pre-existing c2mir/MIR bugs turned up on the way and are filed rather than
-fixed here: [c2mir-bool-conversion-truncates](../reported/c2mir-bool-conversion-truncates.md)
-and [mir-x86-64-long-double-union-pun](../reported/mir-x86-64-long-double-union-pun.md).
+fixed there (both since resolved): [c2mir-bool-conversion-truncates](c2mir-bool-conversion-truncates.md)
+and [mir-x86-64-long-double-union-pun](mir-x86-64-long-double-union-pun.md).

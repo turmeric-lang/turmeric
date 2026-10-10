@@ -1,5 +1,9 @@
 # c2mir converts to `_Bool` by truncating to 8 bits, so `bool b = 256` is false under `tur jit`
 
+**RESOLVED 2026-10-10** in the fork (turmeric-lang/mir `8056049`,
+turmeric-lang/mir#8) and re-synced into `external/mir/` -- see *Resolution*
+at the end.
+
 **Severity: medium-high -- a silent wrong answer.**  Under the JIT engine,
 converting a value wider than a byte to `_Bool`/`bool` keeps its low 8 bits
 instead of testing it against zero.  Any inline C that returns, assigns or
@@ -69,3 +73,29 @@ headers (`c2mir/<arch>/c<arch>.h`) define as `uint8_t`, so `(bool) 256` folds to
   (`external/mir/VENDORED.md`).  A turmeric fixture whose inline C returns
   `(x & 256)` as `: bool` would pin it on the JIT path; `tests/run-jit.sh`
   compares output, so a wrong `false` fails it.
+
+## Resolution
+
+Fixed in the fork by fix directions 1 and 2, commit `8056049` ("c2mir: convert
+to _Bool by comparing with zero", turmeric-lang/mir#8, stacked on the
+`__int128` change #7 whose conversion hook it extends):
+
+- `i128_conv_if` is now `gen_conv_if` and also converts to `_Bool`, with
+  `gen_to_bool` comparing against zero (`NE`/`NES`/`FNE`/`DNE`/`LDNE`;
+  constants folded on the spot).  It runs at every conversion site: casts,
+  initialization, assignment, arguments, `return`.
+- The assignment code now converts the value of `++`, `--` and a compound
+  assignment from the operation's type (`type2`) to the left side's, which it
+  never did -- `t += 256` on a `_Bool` stored 0.
+- `cast_value` folds a `_Bool` target with `!= 0` instead of through
+  `mir_bool`.
+- One case the report missed: a bit-field narrower than `int` reads as `int`,
+  so `f.bit = 256L` on a `_Bool` bit-field converted to `int` and stored bit 0.
+  A `_Bool` bit-field now keeps its type, so the store converts to `_Bool`.
+
+Covered in the fork by `c-tests/new/bool-conversion.c` (every source type in
+every context, run time and folded, against gcc; on the unfixed fork its first
+line printed `init 0 0 0 128 0 0 0 0 0 40 0 0` -- raw bytes in `_Bool`
+objects), and here by `tests/fixtures/jit-inline-c-bool-conversion`, whose
+inline-C `: bool` bodies return a mask, a double and a stored flag; before the
+fix `tur jit` printed `false` for every one.
