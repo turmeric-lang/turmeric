@@ -124,8 +124,9 @@ workaround with real work:
   has to compile it. `:link-libs []` expresses the link side, not the compile
   side. Candidate for `:c-sources`, which is a redesign rather than a deletion.
 
-Tracked in the spices repo at `docs/cmake-link-line-shim-followup.md`
-(branch `claude/cmake-link-line-followup`, PR #61).
+Tracked in [cmake-link-line-shim-followup.md](cmake-link-line-shim-followup.md)
+(now done; originally in the spices repo at `docs/cmake-link-line-shim-followup.md`,
+branch `claude/cmake-link-line-followup`, turmeric-lang/turmeric-spices#61).
 
 That audit is now partly superseded by the follow-on fixes below: a
 raylib-backed spice builds and runs on macOS with **no shim at all**, so the
