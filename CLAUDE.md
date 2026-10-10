@@ -52,6 +52,26 @@ If you find a resolved report sitting in `docs/reported/` (or a stray
 `docs/reported/history/`), relocate it to `docs/archive/` (or
 `docs/archive/history/`); do not duplicate an already-archived report.
 
+## Pull Requests -- Merged Branches Are Deleted -- STRICT RULE
+
+**Deleting a PR's branch when it merges is the default workflow**, here and in
+the MIR fork (turmeric-lang/mir). GitHub then **closes** every PR whose base
+was that branch -- it does not retarget it -- and the closed PR cannot be
+reopened until the branch is recreated. Stacking a PR on another PR's branch
+has already cost a closed PR (mir#8, 2026-10-10). So:
+
+- **Every PR targets the default branch**: `main` here, `master` in
+  turmeric-lang/mir. Never set a PR's base to another PR's branch, not even
+  for a moment.
+- **A change that depends on an open PR**: branch from that PR's branch, so its
+  commits come along, but still target the default branch, and open the
+  description with "Contains #N's commits; merge after #N." The diff shows
+  #N's commits until #N merges; that is the accepted cost. It is also the only
+  way to get CI here -- `ci.yml` runs only for PRs into `main`.
+- **Never delete, recreate or restore a branch** to repair a PR. If a PR closes
+  anyway, tell the user, and open a replacement from the same head against the
+  default branch.
+
 ## Test Suite Timeout -- STRICT RULE
 
 **Every single test suite run, NO EXCEPTIONS, MUST be invoked with a 12
