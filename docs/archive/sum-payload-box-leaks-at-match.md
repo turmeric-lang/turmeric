@@ -3,9 +3,10 @@
 **Severity: medium** (unbounded memory growth on the default build; no
 miscompile, no use-after-free).
 
-**Status: OPEN.** Found 2026-10-10 measuring the error path of the
+**Resolved 2026-10-10** -- all three gaps, below. Found the same day measuring
+the error path of the
 turmeric-spices XML/HTML parsers on `tur` v0.64.0. It belongs to the class
-[value-struct-payload-sum-monomorph-box-has-no-owner](../archive/value-struct-payload-sum-monomorph-box-has-no-owner.md)
+[value-struct-payload-sum-monomorph-box-has-no-owner](value-struct-payload-sum-monomorph-box-has-no-owner.md)
 closed for its 9 fixtures. Those were all freed at a reader call, an argument
 to a non-retaining callee, or statement position. The consumer here is the
 one that report never measured: a `match` written at the use site.
@@ -106,3 +107,51 @@ would lose 32 bytes, plus the 32 the rest of this class already costs.
    newly-freed `let` falls off the TCO path.
 3. Make `fresh_sum_walk` see through `(let [r <fresh>] ... r)` when `r` does
    not otherwise escape the `let`.
+
+## Resolution (2026-10-10)
+
+All three, each keyed on `adt_field_is_ros_pointer_box`, the one predicate the
+typedef, the constructor and every existing drop of this class already use.
+
+1. **A fresh scrutinee** (`match_scrut_owns_vsp_box`, emit_expr.c). When the
+   scrutinee is a fresh producer call (`emit_init_owns_fresh_sum`, so a
+   copying reader of one counts too), the scrutinee is a by-value aggregate
+   the match bound itself (not pbp, not niche, not bridged from the carrier
+   word), and no arm binds the whole scrutinee, then the arm that answers frees
+   the live arm's box (`boxed_struct_payload_walk` over `__scrut`). The free
+   runs after the binders' deref-copies and the guard, and before the body.
+   A failing guard falls through to an arm that reads the box again, and a
+   tail-position arm ends in its own `return` or backedge. Both arm paths
+   (if-chain and switch) carry it.
+2. **A let-bound scrutinee** (`vsp_box_binding_escapes`, emit_core.c). The
+   payload-box let-scope walk counts `(match b ...)` with no `is_var` arm as a
+   read (`match_copies_out_of_b`). Only this walk does: the carrier-sum walk's
+   binders may borrow, so it still treats the scrutinee as an escape. The tail
+   admission does the same for a binding whose only release is this box
+   (`let_binding_scope_free_is_vsp_only` gating `tco_drop_use_ok`). Without
+   that, a newly-freed `let` in a self-recursive function fell off the TCO
+   path.
+3. **A returned let binding** (`fresh_let_binding_returned`, elab_fns.c).
+   `(let [r <fresh>] ... r)`, with the tail peeled through `do` and
+   ascriptions, is fresh when `r`'s init is, `r` is not `^mut`, and
+   `sum_box_binding_escapes_except` (the tail set aside) finds no other
+   escape. `(let [r (parse i)] (vec-push! store r) r)` stays not-fresh.
+
+The repro now reports `All heap blocks were freed`, as do all six leaking rows
+of the consumer table. It also holds inside a function that performs an effect
+(`(let [a (perform (Ask))] (+ a (match (parse i) ...)))` was 16,000 B lost on
+v0.64.0) and inside one that calls through a closure.
+
+**Not freed, by design:** an arm that binds the whole scrutinee,
+`(match (parse i) (Ok d) ... r (keep r))`. The binder then holds the box,
+and nothing yet follows where `r` goes.
+
+Pinned by `tests/fixtures/sum-payload-match-consumer-freed`
+(`requires.leak-check`). It covers every freed shape, a guard fall-through,
+tail recursion 100000 deep through both a direct and a let-bound match (the
+latter with a struct tail value), and the refused shapes (a stored binding, a
+stashing producer), whose values are read back through a global `Vec` under
+ASan. Before the fix it reported 3,200,128 bytes leaked in 200,008
+allocations. `tests/fixtures/sum-payload-match-whole-value-arm-kept` asserts
+the value read through a whole-value arm. Suite 3703/0, leak-check 169/0 (3
+known-open, unchanged).

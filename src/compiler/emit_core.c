@@ -1085,6 +1085,14 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
  * its narrower set: its free is DEEP (tur_result_box_free walks the payload),
  * which is why err-val is scalar-restricted there and unrestricted here. */
 static bool g_esc_allow_sum_accessors = false;
+/* sum-payload-box-leaks-at-match (fix 2): a `match` on a bare `b` is a READ
+ * when the box being freed is a by-value monomorph's value-struct payload.
+ * Every binder of that pointer-box slot is a deref-copy (emit_expr.c's
+ * `match_field_is_ros_pointer_box` branch), so only an arm binding the whole
+ * scrutinee can alias the box.  Set by vsp_box_binding_escapes alone: the
+ * carrier walk's binders may BORROW (the SR4 pbp read), so it keeps treating
+ * the scrutinee as an escape. */
+static bool g_esc_copying_match_ok = false;
 /* closure-let-in-self-tail-loop-leaks: when set, the only use that is not an
  * escape is an invocation -- the `^borrow` / inferred non-retaining parameter
  * and borrowed-rest relaxations are off.  Those are sound for a free at scope
@@ -1569,7 +1577,8 @@ static bool binding_escapes_impl_x(const Expr *e, const Binding *b,
                 ESC_PUSH(cur->as.poly_wrap_.inner);
                 break;
             case EX_MATCH:
-                ESC_PUSH(cur->as.match_.scrutinee);
+                if (!(g_esc_copying_match_ok && match_copies_out_of_b(cur, b)))
+                    ESC_PUSH(cur->as.match_.scrutinee);
                 for (uint32_t i = 0; i < cur->as.match_.n_arms; i++) {
                     ESC_PUSH(cur->as.match_.arms[i].guard);
                     ESC_PUSH(cur->as.match_.arms[i].body);
@@ -1651,6 +1660,43 @@ bool catch_box_binding_escapes(const Expr *e, const Binding *b) {
 bool sum_box_binding_escapes(const Expr *e, const Binding *b) {
     g_esc_allow_sum_accessors = true;
     bool r = binding_escapes_impl(e, b, /*allow_box_accessors=*/true, NULL);
+    g_esc_allow_sum_accessors = false;
+    return r;
+}
+
+/* sum-payload-box-leaks-at-match (fix 3): the sum walk with one use -- the
+ * producer's returned tail -- set aside, for elab's freshness question about
+ * `(let [r <fresh>] ... r)`. */
+bool sum_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                    const Expr *ignore) {
+    g_esc_allow_sum_accessors = true;
+    bool r = binding_escapes_impl(e, b, /*allow_box_accessors=*/true, ignore);
+    g_esc_allow_sum_accessors = false;
+    return r;
+}
+
+/* sum-payload-box-leaks-at-match: is `m` a match on the bare binding `b` with
+ * no arm binding the whole scrutinee?  Patterns are flat (a constructor arm
+ * binds its fields, nothing nests), so `is_var` is the only whole-value
+ * binder. */
+bool match_copies_out_of_b(const Expr *m, const Binding *b) {
+    if (!m || m->kind != EX_MATCH || !b) return false;
+    const Expr *s = m->as.match_.scrutinee;
+    while (s && (s->kind == EX_ASCRIBE || s->kind == EX_REINTERPRET))
+        s = s->kind == EX_ASCRIBE ? s->as.ascribe_.inner : s->as.reinterpret_.expr;
+    if (!s || s->kind != EX_VAR || s->as.var.binding != b) return false;
+    for (uint32_t i = 0; i < m->as.match_.n_arms; i++)
+        if (m->as.match_.arms[i].pattern.is_var) return false;
+    return true;
+}
+
+/* sum-payload-box-leaks-at-match (fix 2): the sum walk for a by-value
+ * monomorph's value-struct payload box, where a copying match is a read. */
+bool vsp_box_binding_escapes(const Expr *e, const Binding *b) {
+    g_esc_allow_sum_accessors = true;
+    g_esc_copying_match_ok = true;
+    bool r = binding_escapes_impl(e, b, /*allow_box_accessors=*/true, NULL);
+    g_esc_copying_match_ok = false;
     g_esc_allow_sum_accessors = false;
     return r;
 }

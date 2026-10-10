@@ -266,6 +266,9 @@ static bool tco_is_self_call(FnDef *fd, const char *fn_cname, const Expr *call) 
                      "box) and is used as more than a plain number, so its " \
                      "release cannot move ahead of the call"
 static bool tco_drop_use_ok(const Expr *e, const Binding *b);
+/* Set by tco_let_refusal around a binding whose only release is the
+ * value-struct payload box (let_binding_scope_free_is_vsp_only). */
+static bool g_tco_copying_match_ok = false;
 static bool tco_plain_scalar(TypeKind k);
 static bool tco_builtin_short_circuit(const Expr *e);
 
@@ -332,10 +335,13 @@ static const char *tco_let_refusal(EmitCtx *ctx, const Expr *e) {
                             tco_tail_values_scalar(e->as.let_.body);
         if (values_scalar) continue;
         const Binding *b = e->as.let_.bindings[i].binding;
-        if (!tco_drop_use_ok(e->as.let_.body, b)) return TC_LET_DROP;
-        for (uint32_t j = 0; j < e->as.let_.n; j++)
+        g_tco_copying_match_ok = let_binding_scope_free_is_vsp_only(ctx, e, i);
+        bool ok = tco_drop_use_ok(e->as.let_.body, b);
+        for (uint32_t j = 0; ok && j < e->as.let_.n; j++)
             if (j != i && !tco_drop_use_ok(e->as.let_.bindings[j].init, b))
-                return TC_LET_DROP;
+                ok = false;
+        g_tco_copying_match_ok = false;
+        if (!ok) return TC_LET_DROP;
     }
     return NULL;
 }
@@ -610,7 +616,13 @@ static bool tco_drop_use_ok(const Expr *e, const Binding *b) {
                 if (!tco_drop_use_ok(e->as.builtin.args[i], b)) return false;
             return true;
         case EX_MATCH:
-            if (!tco_drop_use_ok(e->as.match_.scrutinee, b)) return false;
+            /* sum-payload-box-leaks-at-match: for a binding whose only release
+             * is its value-struct payload box, a match that copies out of it
+             * is a read -- the binders are deref-copies, gone from the box
+             * before the release fires at the exit. */
+            if (!(g_tco_copying_match_ok && match_copies_out_of_b(e, b)) &&
+                !tco_drop_use_ok(e->as.match_.scrutinee, b))
+                return false;
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++)
                 if (!tco_drop_use_ok(e->as.match_.arms[i].guard, b) ||
                     !tco_drop_use_ok(e->as.match_.arms[i].body, b))

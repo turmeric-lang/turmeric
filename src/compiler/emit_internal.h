@@ -1335,6 +1335,10 @@ bool expr_subtree_has_inline_c(const Expr *e);
  * argument is not an escape.  See emit_core.c. */
 bool catch_box_binding_escapes(const Expr *e, const Binding *b);
 bool sum_box_binding_escapes(const Expr *e, const Binding *b);
+/* sum-payload-box-leaks-at-match: a match on bare `b` with no whole-value arm,
+ * and the payload-box escape walk that counts such a match as a read. */
+bool match_copies_out_of_b(const Expr *m, const Binding *b);
+bool vsp_box_binding_escapes(const Expr *e, const Binding *b);
 /* RM1: the read-only Option/Result accessor family -- shared between the
  * escape walk's whitelist and elab_call.c's drop-after stamp so the two
  * cannot drift. */
@@ -1830,6 +1834,9 @@ char *emit_let_binding_decl(EmitCtx *ctx, Buf *body, const Expr *e, uint32_t i,
  * than the `any` drop)?  Decided before emission, so it over-approximates the
  * two decisions that need the emitted declaration. */
 bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i);
+/* sum-payload-box-leaks-at-match: is that release ONLY the value-struct
+ * payload box (so a copying match on the binding is a read)? */
+bool let_binding_scope_free_is_vsp_only(EmitCtx *ctx, const Expr *e, uint32_t i);
 /* Push every scope-exit release emit_let_value would give let-binding `i` onto
  * the `any` scope-drop channel, which a tail path's backedge and every
  * `return` fire.  The caller has proved each use of the binding is a plain

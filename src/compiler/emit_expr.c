@@ -4340,9 +4340,11 @@ static bool let_binding_vsp_box_freeable(EmitCtx *ctx, const Expr *e,
     const Expr *win = e->as.let_.bindings[i].init;
     while (win && win->kind == EX_ASCRIBE) win = win->as.ascribe_.inner;
     if (!emit_init_owns_fresh_sum(ctx, win)) return false;
-    if (sum_box_binding_escapes(e->as.let_.body, b)) return false;
+    /* sum-payload-box-leaks-at-match (fix 2): `(let [r (parse i)] (match r
+     * ...))` -- a copying match on `r` is a read of this box, not an escape. */
+    if (vsp_box_binding_escapes(e->as.let_.body, b)) return false;
     for (uint32_t j = 0; j < e->as.let_.n; j++)
-        if (j != i && sum_box_binding_escapes(e->as.let_.bindings[j].init, b))
+        if (j != i && vsp_box_binding_escapes(e->as.let_.bindings[j].init, b))
             return false;
     return true;
 }
@@ -4401,6 +4403,28 @@ bool let_binding_may_need_scope_free(EmitCtx *ctx, const Expr *e, uint32_t i) {
     if (!d.bind_c) return true;
     return let_binding_sum_box_freeable(ctx, e, i, &d) ||
            let_binding_vsp_box_freeable(ctx, e, i, &d);
+}
+
+/* sum-payload-box-leaks-at-match (fix 2, tail half): is binding i's ONLY
+ * scope release the value-struct payload box?  tco_let_refusal asks so it can
+ * admit a copying match on that binding, which it otherwise refuses for every
+ * release kind -- correctly for a recursive spine, whose binders may borrow. */
+bool let_binding_scope_free_is_vsp_only(EmitCtx *ctx, const Expr *e, uint32_t i) {
+    const Binding *b = e->as.let_.bindings[i].binding;
+    if (!b) return false;
+    char *lt = let_binding_locown_type(ctx, b);
+    if (lt) { free(lt); return false; }
+    if (let_binding_mut_cell_freeable(ctx, e, i) || let_binding_env_freeable(e, i) ||
+        let_binding_box_freeable(e, i) || let_binding_fnfld_freeable(e, i))
+        return false;
+    LetBindDecl d = { true, emit_binding_repr_c_name(ctx, b->type,
+                                                     e->as.let_.bindings[i].init),
+                      true };
+    if (!d.bind_c) return false;
+    if (let_binding_sum_closure_freeable(ctx, e, i, &d) ||
+        let_binding_sum_box_freeable(ctx, e, i, &d))
+        return false;
+    return let_binding_vsp_box_freeable(ctx, e, i, &d);
 }
 
 /* Render a statement emitter's output as ONE statement for the drop channel
@@ -6465,6 +6489,38 @@ static bool adt_app_has_boxed_struct_payload(EmitCtx *ctx, Type t) {
 static void emit_boxed_struct_payload_free(EmitCtx *ctx, Buf *body,
                                            const char *name, Type t) {
     boxed_struct_payload_walk(ctx, body, name, t, true, NULL);
+}
+
+/* sum-payload-box-leaks-at-match (fix 1): does this match own its scrutinee's
+ * boxed value-struct payload?  `(match (parse i) (Ok d) ... (Err e) ...)`
+ * hoists a fresh producer into the match's own temp, and nothing else ever
+ * sees that value -- so the arm box is dead once the arm that answers has
+ * read its binders out of it.
+ *
+ * Every binder of a pointer-box slot is a deref-COPY on a by-value scrutinee
+ * (the `match_field_is_ros_pointer_box` branch runs before the SR4 borrow
+ * branch can), so after the binders the only thing that could still point at
+ * the box is a binder of the WHOLE scrutinee -- an `is_var` arm.  Patterns are
+ * flat, so that is the one case to refuse.  A call already stamped for the
+ * drop-after-consumer free is someone else's to release. */
+static bool match_scrut_owns_vsp_box(EmitCtx *ctx, const Expr *m, Type scrut_ty) {
+    const Expr *s = m->as.match_.scrutinee;
+    while (s && s->kind == EX_ASCRIBE) s = s->as.ascribe_.inner;
+    if (!s || s->kind != EX_CALL) return false;
+    if (emit_call_drop_after_stamped(ctx, s)) return false;
+    if (!emit_init_owns_fresh_sum(ctx, s)) return false;
+    if (!adt_app_has_boxed_struct_payload(ctx, scrut_ty)) return false;
+    for (uint32_t i = 0; i < m->as.match_.n_arms; i++)
+        if (m->as.match_.arms[i].pattern.is_var) return false;
+    return true;
+}
+
+/* ... and its free, at the top of the arm that answers: after the binders
+ * and the guard, before the body.  Before the body rather than after the
+ * switch, because a tail-position arm ends in its own `return` or backedge. */
+static void emit_match_arm_vsp_free(EmitCtx *ctx, Buf *body, Type scrut_ty,
+                                    const char *access) {
+    boxed_struct_payload_walk(ctx, body, NULL, scrut_ty, true, access);
 }
 
 /* RM1: free an erased sum-carrier cell.  Shallow by default (the accessors
@@ -20462,14 +20518,24 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * Emitting above the fork puts the bridge's temp in the enclosing
              * scope rather than the match's own block: a longer lifetime than
              * the readers need, never a shorter one. */
+            bool scrut_bridged = false;
             if (adt_byval && !adt_byval_pbp &&
                 emit_str_is_bare_ident(scrut_val)) {
                 const char *svty = emit_localvar_lookup_ctype(scrut_val);
-                if (svty && strcmp(svty, "int64_t") == 0)
+                if (svty && strcmp(svty, "int64_t") == 0) {
                     scrut_val = emit_carrier_bridge(ctx, body, scrut_val,
                                                     CK_CARRIER, CK_CONCRETE,
                                                     scrut_ty);
+                    scrut_bridged = true;
+                }
             }
+            /* sum-payload-box-leaks-at-match (fix 1).  Only an aggregate the
+             * match bound itself: a pbp param is borrowed, a niche Option has
+             * no box, and a scrutinee bridged from the carrier word leaves the
+             * cell to the bridge's own ownership rules. */
+            bool vsp_owned = adt_byval && !adt_byval_pbp && !adt_niche &&
+                             !scrut_bridged &&
+                             match_scrut_owns_vsp_box(ctx, e, scrut_ty);
 
             if (has_any_guard || adt_flat || adt_niche) {
                 /* Phase G4: Emit as if-chain with goto for guard fallthrough */
@@ -20809,6 +20875,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         free(gv);
                         ctx->indent += 4;
                     }
+
+                    if (vsp_owned)
+                        emit_match_arm_vsp_free(ctx, body, scrut_ty, "__scrut.");
 
                     /* Emit body */
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
@@ -21252,6 +21321,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                         free(_mctor);
                     }
+
+                    /* The switch path takes no guards (has_any_guard routes to
+                     * the if-chain), so the binders are the last thing to read
+                     * the box. */
+                    if (vsp_owned)
+                        emit_match_arm_vsp_free(ctx, body, scrut_ty, "__scrut->");
 
                     /* Emit body */
                     /* A `!`-typed arm body (a `(panic ...)` arm) produces no value: emit it
