@@ -1,8 +1,10 @@
 # Plan: `tur-nng` Async Interface (NG5: poll fds, aio, contexts)
 
-> Status: draft, revision 2 (2026-10-10). Not started in the spice. The design
-> below was spiked end to end against tur v0.63.9 and nng v1.12.4 (see
-> "Spike record"). The spike code was not committed.
+> Status: revision 2 (2026-10-10). NG-A, NG-B and NG-C are implemented on the
+> turmeric-spices branch `claude/async-nng-spice-plan-qfbicy` (not yet merged).
+> See "Implementation record" for where the code departs from this text. The
+> design was first spiked end to end against tur v0.63.9 and nng v1.12.4 (see
+> "Spike record").
 > Tracks: `docs/archive/nng-spice-plan.md` NG5 follow-ups (aio + ctx, reactor fd).
 > Scope: `spices/nng/` in turmeric-spices. No compiler change is needed. Two
 > compiler/stdlib defects were found on the way and are fixed (see "Found on
@@ -210,7 +212,11 @@ operation inherits the socket's (or context's) `set-recv-timeout-ms` /
 `set-send-timeout-ms` (`nni_aio_normalize_timeout`, `socket.c:843`). A context
 copies its socket's timeouts at `ctx-open` (`socket.c:1367`).
 `aio-set-timeout` overrides the inherited timeout, and the override persists
-across reuse:
+across reuse. nng resolves `NNG_DURATION_DEFAULT` by **overwriting** the aio's
+timeout with the socket's on the first submit (`nni_aio_normalize_timeout`,
+`aio.c:690`), so a reused slot would keep the first socket's value for good.
+The box therefore records the slot's setting and re-applies it on every submit,
+which makes "inherit" true per operation:
 
 | Value | Meaning |
 | --- | --- |
@@ -230,8 +236,9 @@ safe:
 1. Remove the reactor source for any `PollFd` before closing its owner. A
    stale epoll registration on a reused fd number is the hazard.
 2. `aio-free` cancels and waits for an in-flight op.
-3. `ctx-close` precedes `close`. The reverse order gives `NNG_ECLOSED` from
-   `ctx-close`.
+3. `ctx-close` precedes `close`. In the reverse order every call on the
+   context in between is `NNG_ECLOSED`, and the late `ctx-close` does
+   nothing.
 
 ---
 
@@ -547,9 +554,10 @@ Canonical uses (each spiked):
   return tur_ok_int((int64_t)c.id);
   ```)
 
-;;; ctx-close -- the linear consumer. NNG_ECLOSED if the socket closed first
-;;; (harmless: the socket already reaped it).
-(defn ctx-close [c : NngCtx] : (Result nil int) ...)
+;;; ctx-close -- the linear consumer. Returns nil, like `close`: its only
+;;; error is NNG_ECLOSED after the socket closed, which means there is
+;;; nothing left to close (the socket already reaped it).
+(defn ctx-close [c : NngCtx] : nil ...)
 
 ;;; Blocking ops: nng_ctx_sendmsg / nng_ctx_recvmsg, copy semantics as v0.
 (defn ctx-send-payload [^borrow c : NngCtx b : Payload] #fx{Net} : (Result nil int) ...)
@@ -809,6 +817,35 @@ This plan's examples spell the null user-data `(:: 0 :ptr<void>)`, so they
 also run on v0.63.9, which is what `install-tur.sh` fetches today. From the
 next release, `nil` is the idiomatic spelling. Every reactor callback in this
 plan captures something, so the second defect never reached them.
+
+---
+
+## Implementation record (2026-10-10)
+
+NG-A, NG-B and NG-C are on the turmeric-spices branch
+`claude/async-nng-spice-plan-qfbicy`, one commit each. Together they add 82
+assertions in 8 suites and nine compile-fail fixtures, green on tur v0.63.9
+(release) and on a sanitized Debug tur from `main`.
+
+Where the code departs from the text above:
+
+- **Aio timeouts are re-applied on every submit** (D6). This was found while
+  checking D6 against nng's source, not in the spike. The regression test
+  submits once while the socket waits forever, then again after a 50 ms socket
+  timeout. It fails, rather than hangs, against the plain nng behaviour.
+- **`ctx-close` returns `nil`**, not `(Result nil int)`. See the API block.
+- **The README's concurrency example was wrong before this plan.**
+  `(thread-spawn (fn [] ...))` is only the elaborator's Send check, and it
+  starts no thread. The README and guide now point at contexts instead. The
+  threaded-server test moves each context into its worker through the
+  `thread-spawn-fn` argument: the main thread opens it, the worker closes it.
+- **Leak coverage is narrower than the phase tests assumed.** A sanitized tur
+  adds `-fsanitize` to an emitted program only when that program links
+  `libturi`. So the reactor-using `poll_test` and `aio_test` run under
+  LeakSanitizer in spices CI, and `ctx_test` does not. It was checked by hand
+  with `TUR_CC_FLAGS=-fsanitize=address,undefined`: clean, and a deliberate
+  `nng_msg` leak is caught. See
+  [spice-suites-without-libturi-run-unsanitized](../../reported/spice-suites-without-libturi-run-unsanitized.md).
 
 ---
 
