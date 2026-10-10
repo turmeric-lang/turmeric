@@ -1,0 +1,68 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused: a let-bound
+;; CAPTURELESS lambda that performs, used as a value (passed to a
+;; higher-order function whose parameter threads it) and called through the
+;; local.  Its value is the lambda's direct entry, a thin fn pointer, so the
+;; local is an alias of the lifted `__fn_N`: the E2 tally used to count the
+;; let's init as the lambda's one (unthreadable) value use and never see the
+;; alias's own uses, so the effect tainted and every function here was
+;; refused ("this effect operation has no lowering here").  Now the alias's
+;; uses are the lambda's, and a call through it threads the caller's
+;; continuation through the registry, keyed on the entry address.
+(defeffect Ask [] :int)
+
+(defn app [h : (fn [int] #fx{Ask} int) x : int] #fx{Ask} : int
+  (h x))
+
+(defn lp [h : (fn [int] #fx{Ask} int) i : int acc : int] #fx{Ask} : int
+  (if (= i 0)
+    acc
+    (lp h (- i 1) (+ acc (h i)))))
+
+;; called, then passed: (1+10) + (2+10) = 23
+(defn v1 [] : int
+  (let [g (fn [n : int] : int (+ n (perform (Ask))))]
+    (+ (g 1) (app g 2))))
+
+;; passed, then called in tail position: (3*10)*10 = 300
+(defn v2 [] : int
+  (let [g (fn [n : int] : int (* n (perform (Ask))))]
+    (let [a (app g 3)]
+      (g a))))
+
+;; the call sits after a perform, so the local rides a lifted continuation:
+;; 10 + (10-4) + (10-5) = 21
+(defn v3 [] : int
+  (let [g (fn [n : int] : int (- (perform (Ask)) n))]
+    (let [p (perform (Ask))]
+      (+ p (+ (g 4) (app g 5))))))
+
+;; passed only, never called: 7+10 = 17
+(defn v4 [] : int
+  (let [g (fn [n : int] : int (+ n (perform (Ask))))]
+    (app g 7)))
+
+;; called twice and passed to a loop that calls it 100 times:
+;; 11 + 11 + 100*11 = 1122
+(defn v5 [] : int
+  (let [g (fn [n : int] : int (+ 1 (perform (Ask))))]
+    (+ (g 0) (+ (g 0) (lp g 100 0)))))
+
+;; the direct call and the threaded one share one handler, so the answer
+;; depends on how often it was asked: (1+100) + (2+101) = 204
+(defn v6 [] : int
+  (let [g (fn [n : int] : int (+ n (perform (Ask))))]
+    (+ (g 1) (app g 2))))
+
+(defn count-asks [] : int
+  (let [^mut c 99]
+    (handle (v6)
+      (Ask [] k) (do (set! c (+ c 1)) (resume k c)))))
+
+(defn main [] : int
+  (println (handle (v1) (Ask [] k) (resume k 10)))
+  (println (handle (v2) (Ask [] k) (resume k 10)))
+  (println (handle (v3) (Ask [] k) (resume k 10)))
+  (println (handle (v4) (Ask [] k) (resume k 10)))
+  (println (handle (v5) (Ask [] k) (resume k 10)))
+  (println (count-asks))
+  0)

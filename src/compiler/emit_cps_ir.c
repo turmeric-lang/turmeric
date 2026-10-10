@@ -2602,6 +2602,24 @@ static bool letraw_ok(const CTerm *t) {
     return true;
 }
 
+/* cps-local-fn-alias-or-lambda-called-in-place-refused: `let g = __fn_N`
+ * binding a captureless lambda's alias (thin_alias_target) whose lambda is
+ * threadable -- a thin thread local when the body calls it, a value it
+ * passes on otherwise.  The direct entry is a bare int64 fn-ptr that rides a
+ * slot the way the atom does (atom_ok's E2a-pass case). */
+static const Binding *thin_alias_target(const Binding *b);   /* below */
+static bool threadable_has(const Binding *b);                  /* below */
+static bool letval_thin_fn_local_ok(const CTerm *t) {
+    const CVar *x = &t->as.letval.x;
+    const CAtom *v = &t->as.letval.v;
+    if (x->ty != TY_FN || !x->bind || x->bind->is_poly_fn || x->bind->is_fat) return false;
+    if (v->kind != CA_VAR || !v->var || !v->var->is_lifted_lambda || v->var->is_poly_fn)
+        return false;
+    if (cps_ir_thread_local_has(x->bind))
+        return !cps_ir_thread_local_env_boxed(x->bind);
+    return thin_alias_target(x->bind) == v->var && threadable_has(v->var);
+}
+
 /* Recursively check that every node lies in the C1 core subset.  Does not
  * consult the emittable set -- the cps->cps join clause is handled separately
  * by the fixpoint (needs_heap_join). */
@@ -2634,7 +2652,8 @@ static bool term_core_ok_impl(const CTerm *t) {
         case CT_APPCONT:
             return t->as.appcont.kont.kind != KK_PROMPT && atom_ok(&t->as.appcont.v);
         case CT_LETVAL:
-            return (slot_ok_t(t->as.letval.x.type, t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL)
+            return (slot_ok_t(t->as.letval.x.type, t->as.letval.x.ty) || t->as.letval.x.ty == TY_NIL
+                    || letval_thin_fn_local_ok(t))
                 && atom_ok(&t->as.letval.v)
                 && term_core_ok(t->as.letval.body);
         case CT_LETPRIM: {
@@ -4078,6 +4097,26 @@ static const Expr  *peel_fn_value(const Expr *e);
 static const FnDef *fd_for_binding(const Expr *program, const Binding *b);
 static PtClass      param_thread_class(const FnDef *fd, uint32_t pi);
 
+/* cps-local-fn-alias-or-lambda-called-in-place-refused (a captureless lambda
+ * used as a value as well as called): the immutable locals bound to the
+ * lifted entry of a CAPTURELESS lambda -- `(let [g (fn [n] ...)] ...)`, whose
+ * init is a bare EX_VAR naming `__fn_N` -- that no nested closure captures.
+ * Such a local IS the lambda's value (the thin direct entry), so the E2 tally
+ * reads its value uses as the lambda's (fvm_ref_slots, arg_fnval_binding) and
+ * its init as none, and a call through it threads as a thin thread local
+ * (thread_local_visit).  A local that is only ever called is the
+ * cps_ir_let_global_fn_alias rewrite's, not this table's; a captured one stays
+ * out (the capturing closure's call runs from its own body). */
+static const Binding *g_thin_alias_local[256];
+static const Binding *g_thin_alias_lam[256];
+static int            g_thin_alias_n;
+static const Binding *thin_alias_target(const Binding *b) {
+    if (!b) return NULL;
+    for (int i = 0; i < g_thin_alias_n; i++)
+        if (g_thin_alias_local[i] == b) return g_thin_alias_lam[i];
+    return NULL;
+}
+
 static int fvm_slot(const FvMulti *m, const Binding *b) {
     if (!m || !b || !m->cap) return -1;
     uint64_t x = (uint64_t)(uintptr_t)b;
@@ -4101,6 +4140,8 @@ static int fvm_ref_slots(const FvMulti *m, const Expr *a, int out[3]) {
         c[2] = a->as.var.binding->hoist_closure_fn_binding;
         /* A captureless `letrec` member's value IS its lifted lambda. */
         if (!c[1]) c[1] = cps_ir_letrec_member_target(a->as.var.binding);
+        /* ...and so is a captureless lambda's let alias's. */
+        if (!c[1]) c[1] = thin_alias_target(a->as.var.binding);
     } else if (a && a->kind == EX_CLOSURE && a->as.closure_.closure
                && a->as.closure_.closure->fn) {
         c[0] = a->as.closure_.closure->fn->binding;
@@ -4291,6 +4332,14 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                 if (ga) {
                     eff_acc_add_callee(acc, ga);
                     alias_target_add(ga);
+                } else if (acc->multi && lb && thin_alias_target(lb)) {
+                    /* A captureless lambda's let alias: the init is the
+                     * lambda's value, not a use of it -- the alias's own uses
+                     * are (fvm_ref_slots).  Its effects still collect. */
+                    const FvMulti *saved_multi = acc->multi;
+                    acc->multi = NULL;
+                    REC(init);
+                    acc->multi = saved_multi;
                 } else if (init && init->kind == EX_CLOSURE && lb_lam &&
                     init->as.closure_.closure &&
                     init->as.closure_.closure->fn &&
@@ -5269,6 +5318,7 @@ static const Binding *arg_fnval_binding(const Expr *arg) {
     if (threadable_has(b)) return b;
     if (threadable_has(b->closure_fn_binding)) return b->closure_fn_binding;
     if (threadable_has(b->hoist_closure_fn_binding)) return b->hoist_closure_fn_binding;
+    if (threadable_has(thin_alias_target(b))) return thin_alias_target(b);
     return b;
 }
 
@@ -5415,6 +5465,18 @@ static bool thread_local_visit(const Expr *e, void *ud) {
                 continue;
             const Expr *init = e->as.let_.bindings[i].init;
             while (init && init->kind == EX_ASCRIBE) init = init->as.ascribe_.inner;
+            /* A captureless lambda's alias (thin_alias_target): its value is
+             * the direct entry itself, the registry's thin key. */
+            const Binding *thin = thin_alias_target(vb);
+            if (thin) {
+                if (!threadable_has(thin)) continue;
+                LocalUseUd u = { vb, false, false };
+                for (uint32_t j = i + 1; j < e->as.let_.n; j++)
+                    local_use_visit(e->as.let_.bindings[j].init, &u);
+                local_use_visit(e->as.let_.body, &u);
+                if (u.called && !u.captured) cps_ir_thread_local_add(vb, false);
+                continue;
+            }
             if (!init || init->kind != EX_CLOSURE || !init->as.closure_.closure) continue;
             const struct Closure *c = init->as.closure_.closure;
             if (c->n_captures == 0 || c->is_shift_receiver || c->is_effect_payload) continue;
@@ -5430,6 +5492,45 @@ static bool thread_local_visit(const Expr *e, void *ud) {
     }
     cps_visit_children(e, thread_local_visit, ud);
     return false;
+}
+
+/* Fill the thin-alias table (thin_alias_target) for the whole program. */
+static bool thin_alias_visit(const Expr *e, void *ud) {
+    if (!e) return false;
+    if (e->kind == EX_LET) {
+        for (uint32_t i = 0; i < e->as.let_.n; i++) {
+            const Binding *vb = e->as.let_.bindings[i].binding;
+            if (!vb || vb->is_global || vb->is_param || vb->is_mut || vb->is_poly_fn
+                || vb->is_fat || vb->type.kind != TY_FN || vb->closure_fn_binding)
+                continue;
+            const Expr *init = peel_fn_value(e->as.let_.bindings[i].init);
+            if (!init || init->kind != EX_VAR || !init->as.var.binding) continue;
+            const Binding *lam = init->as.var.binding;
+            if (!lam->is_lifted_lambda || lam->closure_fn_binding) continue;
+            if (cps_ir_let_global_fn_alias(e, i)) continue;   /* only ever called */
+            LocalUseUd u = { vb, false, false };
+            for (uint32_t j = i + 1; j < e->as.let_.n; j++)
+                local_use_visit(e->as.let_.bindings[j].init, &u);
+            local_use_visit(e->as.let_.body, &u);
+            if (u.captured) continue;
+            if (g_thin_alias_n < (int)(sizeof g_thin_alias_local / sizeof g_thin_alias_local[0])) {
+                g_thin_alias_local[g_thin_alias_n] = vb;
+                g_thin_alias_lam[g_thin_alias_n]   = lam;
+                g_thin_alias_n++;
+            }
+        }
+    }
+    cps_visit_children(e, thin_alias_visit, ud);
+    return false;
+}
+static void thin_alias_collect(const Expr *program) {
+    g_thin_alias_n = 0;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        thin_alias_visit((it->kind == EX_FN_DEF && it->as.fn_def_.fn)
+                         ? it->as.fn_def_.fn->body : it, NULL);
+    }
 }
 
 /* E2c: which target fn-values are stored as a value in a `make-struct` field
@@ -5692,7 +5793,8 @@ static bool param_is_thread_safe(const Expr *program, const FnDef *fd, uint32_t 
                       && a->as.var.binding == fd->params[pi])
                     && !threadable_has(a->as.var.binding)
                     && !threadable_has(a->as.var.binding->closure_fn_binding)
-                    && !threadable_has(a->as.var.binding->hoist_closure_fn_binding)) {
+                    && !threadable_has(a->as.var.binding->hoist_closure_fn_binding)
+                    && !threadable_has(thin_alias_target(a->as.var.binding))) {
                     if (lenient) continue;
                     return false;
                 }
@@ -5948,6 +6050,7 @@ static void ensure_S(const Expr *program) {
     g_threadable_fn_n = 0;
     g_direct_only_fn_n = 0;
     g_alias_target_n = 0;     /* refilled by the tally walk below */
+    thin_alias_collect(program);
     cps_ir_thread_param_reset();
     bool trace = getenv("TUR_TRACE_EVICT") != NULL;
     /* Every target first, then one tally walk for all of them (FvMulti), then
@@ -8307,6 +8410,11 @@ static void emit_term(CE *ce, const CTerm *t) {
                         bn, byref_cell_ptr_ctype(ce->ctx, cb),
                         byref_cell_ctype(ce->ctx, cb), bn, v);
                 ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", bn);
+            } else if (t->as.letval.x.ty == TY_FN && t->as.letval.v.kind == CA_VAR
+                       && t->as.letval.v.var && t->as.letval.v.var->is_global) {
+                /* A thin fn local (letval_thin_fn_local_ok) is an int64 slot
+                 * holding a function's address: spell the conversion. */
+                ce_line(ce, "%s = (int64_t)(intptr_t)%s;", bn, v);
             } else {
                 ce_line(ce, "%s = %s;", bn, v);
             }
