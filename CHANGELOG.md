@@ -2,6 +2,55 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.64.1] -- 2026-10-11
+
+### Added
+
+- **`httpd` connection upgrade and raw conn access.** `httpd-conn-upgrade!`
+  hands a live socket to a handler after a 101, `httpd-conn-detach!` lets a
+  handler keep the transport, and `httpd-conn-fd` / `-read` / `-write` /
+  `-close!` work over plaintext or TLS. Whole-head reads honor a deadline with
+  408/431 responses.
+- **Express-shaped `httpd` middleware.** `mw-secure-headers`, `mw-request-id`
+  with `httpd-req-id`, `mw-trust-proxy` with `httpd-req-ip` / `httpd-req-proto`,
+  ETags, timeouts, a CORS origin allow-list with `httpd-resp-vary!` and
+  `httpd-resp-close!`, and `mw-static` file serving (`.pdf` included).
+- **`httpd` parse and format helpers.** `httpd-cookie-parse-raw`,
+  `httpd-form-parse-raw`, `httpd-cookie-format`, `httpd-basic-auth-decode-raw`
+  and `httpd-static-serve!` work on any request, not just a conn.
+- **`Char` and character literals.** The auto-loaded `char` module defines
+  `Char` with `char=?`, `digit?`, `char-upcase` and friends; `#\A` reads as a
+  `Char` (not an int), and `tur fmt` writes it back as `#\A`.
+
+### Changed
+
+- **BREAKING -- `parsec` returns typed results.** `item` / `pchar` satisfy
+  `(Parser Char)`, `many` is `(Parser (List A))`, `pstring` is `(Parser
+  String)`, and `run-parser-full` returns `(Option A)`. New combinators
+  `spaces`, `token`, `between`, `sep-by`, `sep-by1`; `parse-value`,
+  `parse-result-count`, `print-char-list` and `run-parser-full-c` are gone.
+
+### Fixed
+
+- **A match frees its struct-payload box.** Matching a fresh `(Result T S)` or
+  `(Option S)` with a by-value struct payload no longer leaks the payload's box,
+  for direct, let-bound and producer-returned scrutinees.
+- **`compose-middleware` accepts configured middleware.** A chain with two or
+  more call-form middleware like `(mw-a x)` no longer fails `TUR-E0001`; each
+  layer is now a direct call.
+- **`httpd-compress` imports `tur/zlib` properly.** It loaded the zlib spice by
+  a checkout-relative path and called a C name that no longer existed, so it did
+  not compile; it is now a normal spice import resolved from `:spices`.
+- **`httpd` builds and times out on Windows.** Receive timeouts go through
+  `httpd-set-rcvtimeo` (winsock wants milliseconds, not a timeval), and the
+  half-close uses winsock's `SD_SEND`.
+- **`mw-log-to` calls its sink at the right C type.** A `(fn [cstr] nil)` sink
+  was called through an `int64_t`-widened signature, which trapped under clang's
+  function sanitizer.
+- **`:prefer-system` `:options` steer the search.** Options like
+  `#map{:PostgreSQL_ROOT "/opt/homebrew/opt/libpq"}` now reach `find_package`,
+  so a keg-only Homebrew dep is found without a shim.
+
 ## [0.64.0] -- 2026-10-10
 
 ### Added
