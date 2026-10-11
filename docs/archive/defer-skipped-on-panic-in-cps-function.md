@@ -87,12 +87,16 @@ and:
 - gives every lifted continuation frame (perform / join / reset / handle /
   await continuations) an unwinder helper `<name>_unw(env)` that fires the
   same bodies from the frame's env, attached with `__dk_with_unwind`. The
-  DK runtime clears a frame's unwinder before running it (`dk_run_impl`: a
-  run frame fires its own) and, when a panicking entry leaves,
-  `__dk_entry_leave` sweeps the entry's registrations newest-first and fires
-  what is left (`__dk_reap_unwind`): the frames the panic abandoned before
-  they ran. A copy of a frame (a stored continuation) never inherits the
-  unwinder.
+  DK runtime walks the chain a panic abandons and fires each unwinder once,
+  innermost first (`__dk_panic_abandon`): from `dk_run_impl` when a frame or
+  a shift body returns by signal, from `dk_perform` when a handler case
+  returns by signal, and from every panic return the CPS emitter writes in a
+  body that holds its chain (`__dk_panic_abandon(__kont)` ahead of the
+  fires). A frame the driver runs has its unwinder cleared first (it fires
+  its own), and a copy of a frame never inherits one -- so the originals a
+  perform copies for its handler, which never run, are never fired: a
+  resumed continuation's defers run exactly once, in the copy, and a frame
+  abandoned by something other than a panic is never walked.
 - keeps each defer owned by exactly one place: a frame that exists before
   the code being emitted runs (a join, reset or handle continuation created
   earlier in the body) owns the fires in its body, and nothing emitted after
@@ -112,9 +116,11 @@ emit_expr.c); `tur_panic_in_progress` stays set, so a defer body that panics
 is the double panic it always was.
 
 **Not covered.** A continuation frame abandoned by something other than a
-panic -- an abortive handler that never resumes, an escape -- keeps its
-unwinder and its defers do not run (as before); a later panic in the same
-entry then fires them at that entry's exit. A `defer` inside a `let` body
+panic -- an abortive handler that never resumes, an escape -- still does not
+run its defers, and a later panic does not run them late either (fixture
+case 10); that is
+[cps-defer-skipped-on-abortive-effect](../reported/cps-defer-skipped-on-abortive-effect.md).
+A `defer` inside a `let` body
 whose enclosing `do` also carries defers still evicts the function from the
 CPS backend (`BODY-TAINT`), which predates this change: the block then has
 no lowering for its `perform` at all, a hard error rather than a skipped

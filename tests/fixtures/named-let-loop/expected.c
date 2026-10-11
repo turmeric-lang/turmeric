@@ -2196,6 +2196,12 @@ static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;
 }
 __attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(intptr_t)) { k->unwind = u; return k; }
+__attribute__((unused)) static void __dk_panic_abandon(DK *k) {
+    for (; k; k = k->next) {
+        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }
+        if (k->kind == DKK_DONE) break;
+    }
+}
 /* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
  * chain, borrowed.  The one spine then serves every consumer: dk_perform's
  * handler search walks straight into the real enclosing handlers, its capture
@@ -2521,16 +2527,6 @@ static void __dk_reap_run(void) {
     free(__dk_reap_v); free(__dk_reap_kind);
     __dk_reap_v = NULL; __dk_reap_kind = NULL; __dk_reap_n = __dk_reap_cap = 0;
 }
-__attribute__((unused)) static void __dk_reap_unwind(size_t mark) {
-    size_t n = __dk_reap_n;
-    for (size_t i = n; i > mark; i--) {
-        if (!__dk_reap_v[i - 1] || __dk_reap_kind[i - 1] != 3) continue;
-        DK *d = (DK *)__dk_reap_v[i - 1];
-        if (!d->unwind) continue;
-        void (*u)(intptr_t) = d->unwind; d->unwind = NULL;
-        u(d->env);
-    }
-}
 __attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
 #if defined(TUR_GC_ON) && TUR_GC_ON
     /* A re-entered continuation can bring back an entry whose mark is past
@@ -2689,7 +2685,7 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
             case DKK_FRAME: {
                 DK *self = k; intptr_t senv = k->env;
                 k->unwind = NULL;   /* a run frame fires its own pending defers */
-                v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;
+                v = k->fn(k->env, v); if (tur_panicking) { __dk_panic_abandon(k->next); return 0; } k = k->next;
                 /* The fn is done with its env, so it can follow the node. */
                 if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);
                 break;
@@ -2718,7 +2714,8 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                 sub = dk_append(sub, tail);
                 intptr_t bodyval = k->body(k->body_env, sub);
                 dk_free(sub);
-                if (to_root || tur_panicking) return bodyval;
+                if (tur_panicking) { __dk_panic_abandon(k->next); return bodyval; }
+                if (to_root) return bodyval;
                 k = P->next; v = bodyval; break;
             }
         }
@@ -2863,12 +2860,16 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
         k->inplace_head = true;
         g_dk_case_reopen_hnode = H;
-        return H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */
+        { intptr_t r0 = H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */
+          if (tur_panicking) __dk_panic_abandon(k);
+          return r0; }
     }
     if (H->tail_resume && !H->shallow && g_dk_driver) {
         DK *sub = dk_copy_range(k, NULL);
         g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
-        return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
+        { intptr_t r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
+          if (tur_panicking) __dk_panic_abandon(k);
+          return r0; }
     }
     DK *sub = dk_copy_range(k, H);
     DK *tail, *encl;
@@ -2920,6 +2921,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * (__dk_group_release). */
     bool H_delivers = H->case_delivers; DK *H_next = H->next;
     intptr_t r = H->handler(H->handler_env, arg, sub);
+    if (tur_panicking) { __dk_panic_abandon(k); return r; }   /* the case panicked: the perform's chain never runs */
     return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
 /* Phase T21: FiberBlock */
@@ -3822,7 +3824,6 @@ extern int * tur_tls_async_owns_env_ptr(void);
 #define tur_async_owns_env (*tur_tls_async_owns_env_ptr())
 #endif
 __attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
-    if (tur_panicking) __dk_reap_unwind(mark);   /* defer-skipped-on-panic-in-cps-function */
     if (tur_async_suspended) {
         TurAsyncPark *p = tur_async_pending_park;
         if (!p || p->depth != __dk_entry_depth) return;
@@ -7944,25 +7945,46 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
     bool __t2;
 __tur_cps_self:;
     bool __ps_99 = (hamt_sliter_hyadvance_ex((void *)(intptr_t)(iter)));
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     __t0 = __ps_99;
     if (__t0) {
         int64_t __ps_100 = (hamt_sliter_hycur_hyhash((void *)(intptr_t)(iter)));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         h_1001051 = __ps_100;
         void * __ps_101 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         k_1001052 = __ps_101;
         bool __ps_102 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t1 = __ps_102;
         if (__t1) {
             int64_t __ps_103 = (map_hyiter_hycur_hyval_hyas((void *)(intptr_t)(iter)));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             int64_t __ps_104 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             bool __ps_105 = (((bool)((int64_t (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_103, __ps_104)));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             __t2 = __ps_105;
             if (__t2) {
                 {   /* cps->cps self tail call: a backedge */
@@ -8300,10 +8322,16 @@ static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
     int64_t __t5;
     if (__t3) {
         int64_t __ps_128 = (list_hytail(l1));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t4 = __ps_128;
         int64_t __ps_129 = (list_hytail(l2));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t5 = __ps_129;
         return list_hyeq_qu__cps(__t4, __t5, (int64_t)(intptr_t)cmp_fn, __kont); /* cps->cps */
     } else {
@@ -8317,25 +8345,40 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
     int64_t __t6;
     int64_t __t7;
     bool __ps_123 = (null_qu(l1));
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     __t0 = __ps_123;
     if (__t0) {
         bool __ps_124 = (null_qu(l2));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t1 = __ps_124;
         return dk_run(__kont, (intptr_t)(__t1));
     } else {
         bool __ps_125 = (null_qu(l2));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t2 = __ps_125;
         if (__t2) {
             return dk_run(__kont, (intptr_t)(false));
         } else {
             int64_t __ps_126 = (list_hyhead(l1));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             __t6 = __ps_126;
             int64_t __ps_127 = (list_hyhead(l2));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             __t7 = __ps_127;
             list_hyeq_qu_j0_env *__ce_list_hyeq_qu_j0 = (list_hyeq_qu_j0_env *)malloc(sizeof(list_hyeq_qu_j0_env));
             __ce_list_hyeq_qu_j0->f0 = l1;
@@ -8414,7 +8457,10 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_1001357;
     out_1001357 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     return dk_run(__kont, (intptr_t)(out_1001357));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
@@ -8422,18 +8468,30 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     int64_t __t1;
     int64_t __t3;
     bool __ps_139 = (null_qu(cell));
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     __t0 = __ps_139;
     if (__t0) {
         return dk_run(__kont, (intptr_t)(INT64_C(0)));
     } else {
         int64_t __ps_140 = (list_hyhead(cell));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         int64_t __ps_141 = ((*( tur_thunk_int64_t_int64_t_t *)(f))(f, __ps_140));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t1 = __ps_141;
         int64_t __ps_142 = (list_hytail(cell));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t3 = __ps_142;
         _un_uncons_hyfmap_j0_env *__ce__un_uncons_hyfmap_j0 = (_un_uncons_hyfmap_j0_env *)malloc(sizeof(_un_uncons_hyfmap_j0_env));
         __ce__un_uncons_hyfmap_j0->f0 = __t1;

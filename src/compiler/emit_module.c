@@ -16552,7 +16552,6 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     if (dk_machine_emitted) {
         buf_puts(out,
 "__attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {\n"
-"    if (tur_panicking) __dk_reap_unwind(mark);   /* defer-skipped-on-panic-in-cps-function */\n"
 "    if (tur_async_suspended) {\n"
 "        TurAsyncPark *p = tur_async_pending_park;\n"
 "        if (!p || p->depth != __dk_entry_depth) return;\n"

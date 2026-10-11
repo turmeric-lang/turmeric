@@ -68,6 +68,27 @@
     (+ (perform (Ask)) (boom x))
     0))
 
+;; 9. A resumed perform earlier in the SAME entry, then a panic: the resumed
+;;    continuation ran as a copy, and its original frame never ran -- the
+;;    panic must not fire that original's defer a second time.
+(defn cps-resumed-then-panic [x : int] : int
+  (let [a (handle (cps-no-panic 0) (Ask [] k) (resume k 1))]
+    (+ a (boom x))))
+
+;; 10. An abortive handler (never resumes) abandons a frame with a pending
+;;     defer, then a panic in the same entry.  The abandoned defer does not
+;;     run (docs/reported/cps-defer-skipped-on-abortive-effect.md), and the
+;;     panic must not run it late either.
+(defeffect Abort [] : int)
+
+(defn cps-aborted [] : int
+  (defer (note "cps-aborted: must not print"))
+  (+ 1 (perform (Abort))))
+
+(defn cps-abort-then-panic [x : int] : int
+  (let [a (handle (cps-aborted) (Abort [] k) 0)]
+    (+ a (boom x))))
+
 ;; 8. No panic: the defer runs exactly once, at the normal exit.
 (defn cps-no-panic [x : int] : int
   (defer (note "cps-no-panic: defer ran"))
@@ -105,6 +126,14 @@
   (let [r (catch-unwind (fn [] : int (handle (cps-no-panic x) (Ask [] k) (resume k 1))))]
     (note (if (err? r) "cps-no-panic: caught" "cps-no-panic: no panic"))))
 
+(defn run-resumed-then-panic [x : int] : int
+  (let [r (catch-unwind (fn [] : int (cps-resumed-then-panic x)))]
+    (note (if (err? r) "cps-resumed-then-panic: caught" "cps-resumed-then-panic: no panic"))))
+
+(defn run-abort-then-panic [x : int] : int
+  (let [r (catch-unwind (fn [] : int (cps-abort-then-panic x)))]
+    (note (if (err? r) "cps-abort-then-panic: caught" "cps-abort-then-panic: no panic"))))
+
 (defn main [] : int
   (run-direct 1)
   (run-order 0)
@@ -115,4 +144,6 @@
   (run-order 1)
   (run-captured 1)
   (run-no-panic 0)
+  (run-resumed-then-panic 1)
+  (run-abort-then-panic 1)
   0)

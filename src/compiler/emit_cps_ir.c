@@ -1161,6 +1161,9 @@ static uint64_t    g_pend_unfirable;
 static uint64_t    g_pend_downstream;
 static bool        g_pend_firing;      /* a fire is being written: its own checks stay plain */
 static Buf        *g_pend_out;         /* the buffer the walk writes; a lifted closure body is another */
+static const char *g_pend_k;           /* ce->cur_k at the point being written: the chain a panic abandons */
+static bool        g_pend_k_ok;        /* g_pend_k names a chain in scope (not a perform continuation,
+                                        * a handler case or a shift body: the driver / dk_perform walk theirs) */
 static char        g_last_unw[320];    /* emit_lifted: the unwinder it emitted, or "" */
 
 static bool cps_pend_any_firable(void) {
@@ -1174,7 +1177,7 @@ static bool cps_pend_any_firable(void) {
  * expression, whose locals are not the body's -- that one keeps the ordinary
  * panic return, with its own frame fires). */
 static bool cps_pend_hook_pending(Buf *body) {
-    return body == g_pend_out && cps_pend_any_firable();
+    return body == g_pend_out && ((g_pend_k_ok && g_pend_k) || cps_pend_any_firable());
 }
 /* Write the fires at ctx->indent into `body`: the signal cleared, each pending
  * body LIFO, the signal raised again.  Also the unwinder's body. */
@@ -1194,7 +1197,16 @@ static void cps_pend_fire(EmitCtx *ctx, Buf *body) {
     g_pend_firing = false;
 }
 static void cps_pend_hook_fire(EmitCtx *ctx, Buf *body) {
-    cps_pend_fire(ctx, body);
+    /* This function's pending defers first, then the chain this return
+     * abandons: its never-run frames fire their own (the frames downstream in
+     * THIS function -- the block's later defers, declared earlier -- and its
+     * callers' within the entry).  Innermost first, as the direct emitter's
+     * frame chain unwinds. */
+    if (cps_pend_any_firable()) cps_pend_fire(ctx, body);
+    if (g_pend_k_ok && g_pend_k) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__dk_panic_abandon(%s);\n", g_pend_k);
+    }
 }
 /* The entries whose free variables `caps` does not carry: unfirable in a
  * helper whose env is `caps` (NULL: no env). */
@@ -8644,8 +8656,10 @@ static void emit_term(CE *ce, const CTerm *t) {
     uint64_t saved_mask = g_pend_unfirable;
     uint64_t saved_down = g_pend_downstream;
     Buf *saved_out = g_pend_out;
+    const char *saved_k = g_pend_k;
     memcpy(saved, g_pend, sizeof(const Expr *) * (size_t)g_n_pend);
     g_pend_out = ce->out;
+    g_pend_k = ce->cur_k;
     if (t->defer_push && g_n_pend < PD_MAX) g_pend[g_n_pend++] = t->defer_push;
     if (t->defer_pop) {
         for (int i = 0; i < g_n_pend; i++) {
@@ -8663,6 +8677,7 @@ static void emit_term(CE *ce, const CTerm *t) {
     g_pend_unfirable = saved_mask;
     g_pend_downstream = saved_down;
     g_pend_out = saved_out;
+    g_pend_k = saved_k;
     memcpy(g_pend, saved, sizeof(const Expr *) * (size_t)saved_n);
 }
 static void emit_term_inner(CE *ce, const CTerm *t) {
@@ -10153,8 +10168,12 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     uint64_t pend_saved_mask = g_pend_unfirable;
     uint64_t pend_saved_down = g_pend_downstream;
     bool     pend_frame      = (mode == LH_PERFORM_CONT || mode == LH_RESUME_CONT);
+    bool     pend_saved_k_ok = g_pend_k_ok;
     if (!pend_frame) g_n_pend = 0;
     else g_pend_unfirable |= pend_unfirable_for(caps);
+    /* Only a resume-frame helper holds its chain (`__kont`); the others
+     * return by signal to the driver / dk_perform, which walk the chain. */
+    g_pend_k_ok = (mode == LH_RESUME_CONT);
     bool join_release = g_lh_join_release
                      && (mode == LH_RESUME_CONT || mode == LH_PERFORM_CONT);
     g_lh_join_release = false;
@@ -10456,6 +10475,7 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     g_n_pend = pend_saved_n;
     g_pend_unfirable = pend_saved_mask;
     g_pend_downstream = pend_saved_down;
+    g_pend_k_ok = pend_saved_k_ok;
     ce->ctx->closure = saved_lh_closure;
     ce->ctx->env_var_name = saved_lh_env_var;
 }
@@ -10780,10 +10800,13 @@ static void emit_loop(CE *ce, const CTerm *t) {
     /* defer-skipped-on-panic-in-cps-function: the loop helper is a callee of
      * the chain; the frame that continues the loop carries the fires. */
     int loop_pend_saved = g_n_pend;
+    bool loop_k_ok_saved = g_pend_k_ok;
     g_n_pend = 0;
+    g_pend_k_ok = true;   /* the helper holds its chain in `__kont` */
     emit_binder_decls(&hc, t->as.loop.body);
     emit_term(&hc, t->as.loop.body);
     g_n_pend = loop_pend_saved;
+    g_pend_k_ok = loop_k_ok_saved;
     g_loop_inv = saved_inv;
     buf_putc(&tmp, '\0');
 
@@ -12632,7 +12655,7 @@ static void emit_await(CE *ce, const CTerm *t) {
         ce_line(ce, "if (__awok) {");
         ce_line(ce, "    intptr_t __awr = %s((intptr_t)%s, __tur_await_value((void *)(%s)));",
                 pname, envv, fsa);
-        ce_line(ce, "    if (tur_panicking) return 0;");
+        ce_line(ce, "    if (tur_panicking) { __dk_panic_abandon(%s); return 0; }", ce->cur_k);
         ce_line(ce, "    return dk_run(%s, __awr);", ce->cur_k);
         ce_line(ce, "}");
         if (caps)
@@ -13339,11 +13362,15 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     uint64_t pend_saved_mask = g_pend_unfirable;
     uint64_t pend_saved_down = g_pend_downstream;
     Buf *pend_saved_out = g_pend_out;
+    const char *pend_saved_k = g_pend_k;
+    bool pend_saved_k_ok = g_pend_k_ok;
     memcpy(pend_saved, g_pend, sizeof(const Expr *) * (size_t)g_n_pend);
     g_n_pend = 0; g_pend_unfirable = 0; g_pend_downstream = 0;
+    g_pend_k_ok = true;   /* a `__cps` body holds its chain in `__kont` */
     bool r = emit_cps_ir_try_fn_impl(ctx, file, e);
     g_n_pend = pend_saved_n; g_pend_unfirable = pend_saved_mask;
     g_pend_downstream = pend_saved_down; g_pend_out = pend_saved_out;
+    g_pend_k = pend_saved_k; g_pend_k_ok = pend_saved_k_ok;
     memcpy(g_pend, pend_saved, sizeof(const Expr *) * (size_t)pend_saved_n);
     if (ctx) ctx->in_cps_fn = prev;
     return r;

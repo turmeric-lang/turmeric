@@ -6351,6 +6351,19 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
         indent_buf(body, ctx->indent);
         buf_puts(body, "if (tur_panicking) {\n");
         ctx->indent += 4;
+        /* This function's own frames first (a whole-body delegation keeps the
+         * direct emitter's tur_frame inside a `__cps` body): innermost scope,
+         * before the pending stack and the chain walk the hook writes. */
+        if (ctx->frame_var) {
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "tur_panicking = 0;\n");
+            for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_frame_fire_lifo(&%s);\n", f);
+            }
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "tur_panicking = 1;\n");
+        }
         g_cps_panic_fire(ctx, body);
         indent_buf(body, ctx->indent);
         if (rt && strcmp(rt, "void") == 0) {

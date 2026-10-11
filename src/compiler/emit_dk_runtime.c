@@ -634,12 +634,20 @@ void emit_cps_runtime_prelude(Buf *out) {
 /* defer-skipped-on-panic-in-cps-function: a frame that never runs because a
  * panic abandoned its chain still owes the `defer`s pending in the function it
  * continues.  The emitter hands such a frame an unwinder (__dk_with_unwind)
- * that fires them from the frame's env; a frame that RUNS fires them itself
- * at its own panic checks, so dk_run_impl clears the field before calling the
- * frame (a run frame is never unwound twice), and __dk_reap_unwind fires what
- * is left when a panicking entry leaves.  A copy never inherits it (dk_new
- * zeroes; dk_copy_node leaves it): a stored continuation's re-run has its own
- * exits. */
+ * that fires them from the frame's env.  __dk_panic_abandon walks the chain
+ * a panic abandons -- from the panicking point down to the entry's root --
+ * and fires each unwinder once, innermost first; it is called wherever a
+ * panic leaves a chain unrun: a frame returning by signal to dk_run_impl, a
+ * shift body, a handler case returning by signal to dk_perform, and every
+ * panic return the CPS emitter writes in a body that knows its chain.  A
+ * frame that RUNS fires them itself at its own panic checks, so dk_run_impl
+ * clears the field before calling it.  A copy never inherits it (dk_new
+ * zeroes; dk_copy_node leaves it): the originals a perform copies for its
+ * handler (dk_perform) never run and are never downstream of a later panic,
+ * so a resumed continuation's defers run exactly once, in the copy; and a
+ * frame abandoned by something other than a panic (an abortive handler, an
+ * escape) is never walked, so its defers do not run -- see
+ * docs/reported/cps-defer-skipped-on-abortive-effect.md. */
 "    void (*unwind)(intptr_t env);\n"
 /* Re-opening delivery protocol (cps-case-reopen-marker-kont-truncates-capture):
  * a handler whose case RE-OPENS an outer effect runs with the REAL enclosing
@@ -727,6 +735,17 @@ void emit_cps_runtime_prelude(Buf *out) {
 "}\n");
     buf_puts(out,
 "__attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(intptr_t)) { k->unwind = u; return k; }\n"
+/* The chain a panic abandons: fire each never-run frame's unwinder once,
+ * innermost first (chain order), down to the entry's root.  Walking an
+ * already-walked chain again (a nested driver, then its caller) finds the
+ * fields cleared.  An unwinder runs with the signal cleared and raises it
+ * again (the emitter writes that into it). */
+"__attribute__((unused)) static void __dk_panic_abandon(DK *k) {\n"
+"    for (; k; k = k->next) {\n"
+"        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }\n"
+"        if (k->kind == DKK_DONE) break;\n"
+"    }\n"
+"}\n"
 "/* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing\n"
 " * chain, borrowed.  The one spine then serves every consumer: dk_perform's\n"
 " * handler search walks straight into the real enclosing handlers, its capture\n"
@@ -1129,25 +1148,6 @@ void emit_cps_runtime_prelude(Buf *out) {
  * this does nothing, and the outermost exit frees everything, as before.
  * The list and the mark are the calling thread's (or fiber's), so this holds
  * with any number of threads. */
-/* defer-skipped-on-panic-in-cps-function: a panicking entry's exit.  Every
- * frame the entry registered that never ran (its unwinder is still set) is a
- * continuation the panic abandoned, and the `defer`s pending in it have not
- * fired: fire them, newest registration first -- the innermost continuation,
- * the order the direct emitter's frame chain unwinds in.  Only single-node
- * registrations (kind 3) are frames the emitter hands an unwinder.  An
- * unwinder may itself enter the machine (a defer body calling a colored
- * function); such an entry registers above `n` and leaves again, so the walk
- * down from `n` is unaffected. */
-"__attribute__((unused)) static void __dk_reap_unwind(size_t mark) {\n"
-"    size_t n = __dk_reap_n;\n"
-"    for (size_t i = n; i > mark; i--) {\n"
-"        if (!__dk_reap_v[i - 1] || __dk_reap_kind[i - 1] != 3) continue;\n"
-"        DK *d = (DK *)__dk_reap_v[i - 1];\n"
-"        if (!d->unwind) continue;\n"
-"        void (*u)(intptr_t) = d->unwind; d->unwind = NULL;\n"
-"        u(d->env);\n"
-"    }\n"
-"}\n"
 "__attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {\n"
 "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
 "    /* A re-entered continuation can bring back an entry whose mark is past\n"
@@ -1360,7 +1360,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "            case DKK_FRAME: {\n"
 "                DK *self = k; intptr_t senv = k->env;\n"
 "                k->unwind = NULL;   /* a run frame fires its own pending defers */\n"
-"                v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;\n"
+"                v = k->fn(k->env, v); if (tur_panicking) { __dk_panic_abandon(k->next); return 0; } k = k->next;\n"
 "                /* The fn is done with its env, so it can follow the node. */\n"
 "                if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);\n"
 "                break;\n"
@@ -1389,7 +1389,8 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                sub = dk_append(sub, tail);\n"
 "                intptr_t bodyval = k->body(k->body_env, sub);\n"
 "                dk_free(sub);\n"
-"                if (to_root || tur_panicking) return bodyval;\n"
+"                if (tur_panicking) { __dk_panic_abandon(k->next); return bodyval; }\n"
+"                if (to_root) return bodyval;\n"
 "                k = P->next; v = bodyval; break;\n"
 "            }\n"
 "        }\n"
@@ -1569,7 +1570,9 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {\n"
 "        k->inplace_head = true;\n"
 "        g_dk_case_reopen_hnode = H;\n"
-"        return H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */\n"
+"        { intptr_t r0 = H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */\n"
+"          if (tur_panicking) __dk_panic_abandon(k);\n"
+"          return r0; }\n"
 "    }\n");
     /* effect-copy-path-tail-resume-delivers-out-of-order: the copy branch.  A
      * deep tail-resume case that may keep `k` gets a COPY of the whole chain --
@@ -1588,7 +1591,9 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    if (H->tail_resume && !H->shallow && g_dk_driver) {\n"
 "        DK *sub = dk_copy_range(k, NULL);\n"
 "        g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */\n"
-"        return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
+"        { intptr_t r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
+"          if (tur_panicking) __dk_panic_abandon(k);\n"
+"          return r0; }\n"
 "    }\n"
 "    DK *sub = dk_copy_range(k, H);\n");
     buf_puts(out,
@@ -1648,6 +1653,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "     * (__dk_group_release). */\n"
 "    bool H_delivers = H->case_delivers; DK *H_next = H->next;\n"
 "    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
+"    if (tur_panicking) { __dk_panic_abandon(k); return r; }   /* the case panicked: the perform's chain never runs */\n"
 /* case_delivers: a re-opening case already delivered its value through the
  * real chain (its __kont = dk_case_enclosing_real covers H->next); `r` is the
  * value that bubbled back from that delivery, so deliver it AGAIN and the rest
