@@ -474,6 +474,8 @@ typedef struct Elab {
     const Symbol *sym_hkt_Monad;
     const Symbol *sym_hkt_Traversable;
     const Symbol *sym_hkt_Foldable;
+    /* parsec-guide-plan P2: the stdlib type a `#\A` literal elaborates to */
+    const Symbol *sym_Char;
     /* Phase R2: Panic */
     const Symbol *sym_panic;
     const Symbol *sym_panic_with;

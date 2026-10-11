@@ -1,0 +1,19 @@
+;; parsec tutorial, step 2 -- your first character parser.
+;; The source of truth for docs/guides/parsec-tutorial.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+(defn main [] : int
+  ;; pchar matches one specific character; parse-first runs a parser over
+  ;; the whole input and hands back its value.
+  (show-line (parse-first (pchar #\H) "H"))                ; #\H
+  ;; That value is a Char, not an int.
+  (println (char->int (parse-first (pchar #\H) "H")))      ; 72
+  ;; "Hello" has input left over after the H, so there is no full parse...
+  (println (some? (run-parser-full (pchar #\H) "Hello")))  ; false
+  ;; ...but run-parser shows the partial one, and where it stopped.
+  (let [rs (run-parser (pchar #\H) "Hello")]
+    (println (list-count rs))                              ; 1
+    (show-line (parse-result-value (list-first rs)))       ; #\H
+    (show-line (parse-result-rest (list-first rs))))       ; ello
+  0)

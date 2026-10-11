@@ -45,6 +45,10 @@ typedef enum LiteralSuffix {
     LIT_SUF_U64,       /* u64 → uint64 */
     LIT_SUF_F32,       /* f32 → float32 */
     LIT_SUF_F64,       /* f64 → float64 */
+    /* parsec-guide-plan P2: not a spelled suffix but the mark a `#\A`
+     * character literal leaves on its F_INT, so the elaborator types it as
+     * `Char` (stdlib/char.tur) and the formatter prints it back as `#\A`. */
+    LIT_SUF_CHAR,
 } LiteralSuffix;
 
 typedef enum FormTag {

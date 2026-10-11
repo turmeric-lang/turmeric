@@ -38,6 +38,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Test: --stdin keeps character literals as characters.  A `#\A` reads as a
+# marked F_INT; printing its code (`65`) would also change its type from Char
+# to int (parsec-guide-plan P2).
+# ---------------------------------------------------------------------------
+NAME="fmt-stdin-char-literals"
+INPUT='(f #\A #\space #\newline #\( #\\ #\u1f #\u0)'
+EXPECTED='(f #\A #\space #\newline #\( #\\ #\u1f #\null)'
+ACTUAL=$(printf '%s\n' "$INPUT" | "$TUR" fmt --stdin 2>/dev/null)
+if [ "$ACTUAL" = "$EXPECTED" ]; then
+    pass "$NAME"
+else
+    fail "$NAME" "expected '$EXPECTED', got '$ACTUAL'"
+fi
+
+# ---------------------------------------------------------------------------
 # Test: --stdin exit code is 0 on success
 # ---------------------------------------------------------------------------
 NAME="fmt-stdin-exit-ok"

@@ -162,6 +162,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[ecs-storage-guide.md](ecs-storage-guide.md)** -- How `tur-ecs`'s three component-storage backends (`Dense`, `Sparse`, `Tag`) differ in layout, cost, and ergonomics
 - **[ecs-vs-haskell-ecs.md](ecs-vs-haskell-ecs.md)** -- Side-by-side walk through a small game in apecs (Haskell), aztecs (Haskell), and `tur-ecs`
 - **[regex-guide.md](regex-guide.md)** -- Pure-Turmeric POSIX ERE regex engine -- compile, match, find, and replace
+- **[parsec-guide.md](parsec-guide.md)** -- Reference for the stdlib `tur/parsec` parser combinators -- typed `Char` / `List` / `Option` / `String` results, `do-m`, `alt-or`, `fmap`, runners, common patterns
 
 ## Networking and Web
 
@@ -183,6 +184,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[snake-game-tutorial.md](snake-game-tutorial.md)** -- Building the snake game example
 - **[web-continuations-tutorial.md](web-continuations-tutorial.md)** -- Multi-page web forms using serializable continuations (guestbook example)
 - **[web-emscripten-tutorial.md](web-emscripten-tutorial.md)** -- Compile a Turmeric project to WebAssembly and run it in a browser
+- **[parsec-tutorial.md](parsec-tutorial.md)** -- Step-by-step introduction to the stdlib `tur/parsec` library, from one character to a key=value parser
 - **[parser-combinators-tutorial.md](parser-combinators-tutorial.md)** -- Build parser combinators from scratch on top of the backtracking (list) monad
 - **[datalog-01-concepts.md](datalog-01-concepts.md)** -- Datalog Pt. 1: concepts -- create a database and a query system to go with it
 - **[datalog-02-minimal-impl.md](datalog-02-minimal-impl.md)** -- Datalog Pt. 2: minimal implementation
@@ -266,9 +268,9 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Functional Patterns → [arrows-guide.md](arrows-guide.md), [generators-guide.md](generators-guide.md), [effects-vs-monads.md](effects-vs-monads.md)
 - Concurrency and Async → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md), [thread-pool-guide.md](thread-pool-guide.md), [reactor-guide.md](reactor-guide.md), [channels-and-select-guide.md](channels-and-select-guide.md), [structured-concurrency-guide.md](structured-concurrency-guide.md)
 - Advanced Control Flow → [delimited-control-operators-guide.md](delimited-control-operators-guide.md), [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md), [state-machines-guide.md](state-machines-guide.md)
-- Data Structures and Libraries → [hamt-guide.md](hamt-guide.md), [frame-guide.md](frame-guide.md), [stats-guide.md](stats-guide.md), [json-guide.md](json-guide.md), [schema-guide.md](schema-guide.md), [ecs-guide.md](ecs-guide.md), [regex-guide.md](regex-guide.md)
+- Data Structures and Libraries → [hamt-guide.md](hamt-guide.md), [frame-guide.md](frame-guide.md), [stats-guide.md](stats-guide.md), [json-guide.md](json-guide.md), [schema-guide.md](schema-guide.md), [ecs-guide.md](ecs-guide.md), [regex-guide.md](regex-guide.md), [parsec-guide.md](parsec-guide.md)
 - Networking and Web → [httpd-guide.md](httpd-guide.md), [httpd-middleware-guide.md](httpd-middleware-guide.md), [tourist-routing-guide.md](tourist-routing-guide.md), [websocket-guide.md](websocket-guide.md), [web-stack-guide.md](web-stack-guide.md), [cloudflare-deployment-guide.md](cloudflare-deployment-guide.md)
-- Tutorials → [snake-game-tutorial.md](snake-game-tutorial.md), [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md), [parser-combinators-tutorial.md](parser-combinators-tutorial.md), [datalog-01-concepts.md](datalog-01-concepts.md)
+- Tutorials → [snake-game-tutorial.md](snake-game-tutorial.md), [minikanren-1-relations-and-queries.md](minikanren-1-relations-and-queries.md), [parsec-tutorial.md](parsec-tutorial.md), [parser-combinators-tutorial.md](parser-combinators-tutorial.md), [datalog-01-concepts.md](datalog-01-concepts.md)
 - Package Management → [package-management-guide.md](package-management-guide.md), [consuming-spices-guide.md](consuming-spices-guide.md), [developing-spices-guide.md](developing-spices-guide.md), [using-turmeric-from-cmake.md](using-turmeric-from-cmake.md), [mise-asdf-guide.md](mise-asdf-guide.md), [turmeric-spices](https://github.com/turmeric-lang/turmeric-spices)
 - Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [time-travel-tracing-guide.md](time-travel-tracing-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)

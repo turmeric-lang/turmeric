@@ -10090,6 +10090,11 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
                 "typeclass-monad.tur",
                 "typeclass-monaderror.tur",
                 "typeclass-bifunctor.tur",
+                /* parsec-guide-plan: the Char a `#\A` literal elaborates to
+                 * (its Eq/Ord instances need those class stubs). */
+                "typeclass-eq.tur",
+                "typeclass-ord.tur",
+                "char.tur",
                 /* Bug-5 follow-up: result.tur preloaded so ok/ok?/ok-val are
                  * globally available in the worker eval path too. */
                 "result.tur",

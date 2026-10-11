@@ -31,6 +31,9 @@ static const char *const autoload_files_[] = {
     "typeclass-monad.tur",
     "typeclass-monaderror.tur",
     "typeclass-bifunctor.tur",
+    /* parsec-guide-plan P1/P2: the Char type a `#\A` literal elaborates to.
+     * After the Eq/Ord stubs, whose classes it instantiates. */
+    "char.tur",
     "map.tur",
     "vec.tur",
     "slice.tur",

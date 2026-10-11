@@ -1,0 +1,16 @@
+;; parsec tutorial, step 4 -- alternatives with alt-or.
+;; The source of truth for docs/guides/parsec-tutorial.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+(defn yes-or-no [] : (Parser Char)
+  (alt-or (pchar #\Y) (pchar #\N)))
+
+(defn main [] : int
+  (show-line (parse-first (yes-or-no) "Y"))               ; #\Y
+  (show-line (parse-first (yes-or-no) "N"))               ; #\N
+  (println (some? (run-parser-full (yes-or-no) "Q")))     ; false
+  ;; Full backtracking: both branches read the same input, and every
+  ;; success is kept -- here both (pchar #\a) and (item) match "a".
+  (println (list-count (run-parser (alt-or (pchar #\a) (item)) "a")))  ; 2
+  0)

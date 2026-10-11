@@ -159,6 +159,31 @@ Double-quoted UTF-8 text. Standard C escape sequences apply (`\n`, `\t`, `\\`,
 "line one\nline two"
 ```
 
+### Character -- `#\`
+
+`#\` followed by one character, a name, or a `u` hex escape is a character
+literal of type `Char` (`stdlib/char.tur`, auto-loaded). A `Char` is not an
+`:int`: compare with `char=?`, classify with `digit?` / `alpha?` / `space?`,
+and cross explicitly with `char->int` / `int->char`.
+
+| Spelling | Character |
+|---|---|
+| `#\A`, `#\+`, `#\(` | that character (printable ASCII) |
+| `#\space` `#\newline` `#\tab` `#\return` `#\null` `#\backspace` `#\delete` `#\escape` `#\alarm` | the named control or space character |
+| `#\u41` | code point 0x41 (1-4 hex digits, at most `#\uFF`) |
+
+The character must be followed by a delimiter: `#\a2` is an error, not
+`#\a` then `2`.
+
+```turmeric
+(char->int #\A)   ; => 65
+(digit? #\7)      ; => true
+```
+```sweet-exp
+char->int(#\A)   ; => 65
+digit?(#\7)      ; => true
+```
+
 ### Keyword -- `:`
 
 A colon followed immediately by a name produces a keyword (an interned

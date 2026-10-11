@@ -1,0 +1,261 @@
+;;; tur/char -- Char, a character code point that is not an int.
+;;;
+;;; A `Char` holds one character code (an ASCII / Latin-1 byte today; the
+;;; carrier is a full int64 so wider code points fit later).  It is a
+;;; `defopaque` over `:int`, so it costs nothing at runtime but cannot be mixed
+;;; with a raw integer: `(pchar 65)` is a type error, `(pchar #\A)` is not.
+;;;
+;;; The reader's `#\A` literal (and `#\space`, `#\newline`, `#\u41`, ...) has
+;;; type `Char`.  Cross to and from integers explicitly with `char->int` /
+;;; `int->char`; ask about a character with `digit?`, `alpha?`, `space?` and
+;;; friends; compare with `char=?` / `char<?` or the `Eq` / `Ord` instances.
+;;;
+;;; Auto-loaded, like option.tur and list.tur, so `#\A` types the same way in
+;;; every program.  `char->string` lives in stdlib/string.tur (it builds an
+;;; owned `String`), and `Show [Char]` in stdlib/typeclass-show.tur.
+;;;
+;;; Since: parsec-guide-plan P1
+;; Char lowers to int64_t in the C ABI; the newtype keeps it nominally distinct.
+;;; Char -- a character code point, distinct from int.
+;;;
+;;; Since: parsec-guide-plan P1
+(defopaque Char :int)
+;;; int->char -- the character with the given code.
+;;;
+;;; Parameters:
+;;;   i -- a character code (65 is `A`)
+;;;
+;;; Returns:
+;;;   The Char whose code is i.
+;;;
+;;; Example:
+;;;   (char=? (int->char 65) #\A)  ; => true
+;;;
+;;; Since: parsec-guide-plan P1
+(defn int->char [i : int] : Char (:: i Char))
+;;; char->int -- the code of a character.
+;;;
+;;; Parameters:
+;;;   c -- the character
+;;;
+;;; Returns:
+;;;   c's character code as an int.
+;;;
+;;; Example:
+;;;   (char->int #\A)  ; => 65
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char->int [c : Char] : int (:: c :int))
+;;; char-lit -- int -> Char, the conversion a `#\A` literal stands for.
+;;;
+;;; The reader types a char literal as Char directly, so nothing calls this on
+;;; its behalf; it is spelled here so generated code and macros that hold a
+;;; character code can name the same conversion.  Prefer `int->char`.
+;;;
+;;; Parameters:
+;;;   i -- a character code
+;;;
+;;; Returns:
+;;;   The Char whose code is i.
+;;;
+;;; Example:
+;;;   (char->int (char-lit 65))  ; => 65
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char-lit [i : int] : Char (:: i Char))
+;;; char=? -- are two characters the same?
+;;;
+;;; Parameters:
+;;;   a -- a character
+;;;   b -- another character
+;;;
+;;; Returns:
+;;;   true when a and b have the same code.
+;;;
+;;; Example:
+;;;   (char=? #\a #\a)  ; => true
+;;;   (char=? #\a #\A)  ; => false
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char=? [a : Char b : Char] : bool (= (char->int a) (char->int b)))
+;;; char<? -- does a sort strictly before b (by code)?
+;;;
+;;; Parameters:
+;;;   a -- a character
+;;;   b -- another character
+;;;
+;;; Returns:
+;;;   true when a's code is less than b's.
+;;;
+;;; Example:
+;;;   (char<? #\a #\b)  ; => true
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char<? [a : Char b : Char] : bool (< (char->int a) (char->int b)))
+;;; char-between? -- is c within the inclusive range [lo, hi]?
+;;;
+;;; Parameters:
+;;;   c  -- the character to test
+;;;   lo -- the lowest accepted character
+;;;   hi -- the highest accepted character
+;;;
+;;; Returns:
+;;;   true when lo <= c <= hi by code.
+;;;
+;;; Example:
+;;;   (char-between? #\q #\a #\z)  ; => true
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char-between? [c : Char lo : Char hi : Char] : bool
+  (let [n (char->int c)] (and (>= n (char->int lo)) (<= n (char->int hi)))))
+;;; digit? -- is c an ASCII decimal digit, `0` through `9`?
+;;;
+;;; Parameters:
+;;;   c -- the character to test
+;;;
+;;; Returns:
+;;;   true for `0`..`9`.
+;;;
+;;; Example:
+;;;   (digit? #\7)  ; => true
+;;;   (digit? #\x)  ; => false
+;;;
+;;; Since: parsec-guide-plan P1
+(defn digit? [c : Char] : bool (char-between? c #\0 #\9))
+;;; upper? -- is c an ASCII upper-case letter?
+;;;
+;;; Parameters:
+;;;   c -- the character to test
+;;;
+;;; Returns:
+;;;   true for `A`..`Z`.
+;;;
+;;; Example:
+;;;   (upper? #\Q)  ; => true
+;;;
+;;; Since: parsec-guide-plan P1
+(defn upper? [c : Char] : bool (char-between? c #\A #\Z))
+;;; lower? -- is c an ASCII lower-case letter?
+;;;
+;;; Parameters:
+;;;   c -- the character to test
+;;;
+;;; Returns:
+;;;   true for `a`..`z`.
+;;;
+;;; Example:
+;;;   (lower? #\q)  ; => true
+;;;
+;;; Since: parsec-guide-plan P1
+(defn lower? [c : Char] : bool (char-between? c #\a #\z))
+;;; alpha? -- is c an ASCII letter?
+;;;
+;;; Parameters:
+;;;   c -- the character to test
+;;;
+;;; Returns:
+;;;   true for `a`..`z` and `A`..`Z`.
+;;;
+;;; Example:
+;;;   (alpha? #\k)  ; => true
+;;;   (alpha? #\5)  ; => false
+;;;
+;;; Since: parsec-guide-plan P1
+(defn alpha? [c : Char] : bool (or (upper? c) (lower? c)))
+;;; alnum? -- is c an ASCII letter or digit?
+;;;
+;;; Parameters:
+;;;   c -- the character to test
+;;;
+;;; Returns:
+;;;   true when (alpha? c) or (digit? c).
+;;;
+;;; Example:
+;;;   (alnum? #\5)  ; => true
+;;;   (alnum? #\-)  ; => false
+;;;
+;;; Since: parsec-guide-plan P1
+(defn alnum? [c : Char] : bool (or (alpha? c) (digit? c)))
+;;; space? -- is c ASCII whitespace?
+;;;
+;;; Parameters:
+;;;   c -- the character to test
+;;;
+;;; Returns:
+;;;   true for space, tab, newline, carriage return, vertical tab and form
+;;;   feed.
+;;;
+;;; Example:
+;;;   (space? #\tab)  ; => true
+;;;
+;;; Since: parsec-guide-plan P1
+(defn space? [c : Char] : bool
+  (or (char=? c #\space) (char-between? c #\tab #\return)))
+;;; punct? -- is c printable ASCII punctuation?
+;;;
+;;; Parameters:
+;;;   c -- the character to test
+;;;
+;;; Returns:
+;;;   true for the printable, non-space ASCII characters that are neither
+;;;   letters nor digits (`!`, `(`, `-`, `@`, `~`, ...).
+;;;
+;;; Example:
+;;;   (punct? #\!)  ; => true
+;;;   (punct? #\a)  ; => false
+;;;
+;;; Since: parsec-guide-plan P1
+(defn punct? [c : Char] : bool (and (char-between? c #\! #\~) (not (alnum? c))))
+;;; char-upcase -- the upper-case form of an ASCII lower-case letter.
+;;;
+;;; Parameters:
+;;;   c -- the character to convert
+;;;
+;;; Returns:
+;;;   The matching upper-case letter, or c unchanged when it is not `a`..`z`.
+;;;
+;;; Example:
+;;;   (char->int (char-upcase #\a))  ; => 65
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char-upcase [c : Char] : Char
+  (if (lower? c) (int->char (- (char->int c) 32)) c))
+;;; char-downcase -- the lower-case form of an ASCII upper-case letter.
+;;;
+;;; Parameters:
+;;;   c -- the character to convert
+;;;
+;;; Returns:
+;;;   The matching lower-case letter, or c unchanged when it is not `A`..`Z`.
+;;;
+;;; Example:
+;;;   (char->int (char-downcase #\A))  ; => 97
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char-downcase [c : Char] : Char
+  (if (upper? c) (int->char (+ (char->int c) 32)) c))
+;;; char->digit -- the numeric value of a decimal digit character.
+;;;
+;;; Parameters:
+;;;   c -- a digit character, `0`..`9`
+;;;
+;;; Returns:
+;;;   0..9 for a digit; -1 for any other character.
+;;;
+;;; Example:
+;;;   (char->digit #\7)  ; => 7
+;;;   (char->digit #\x)  ; => -1
+;;;
+;;; Since: parsec-guide-plan P1
+(defn char->digit [c : Char] : int
+  (if (digit? c) (- (char->int c) (char->int #\0)) -1))
+;;; Eq [Char] -- characters are equal when their codes are.
+
+(definstance Eq [Char] (eq? [x y] (char=? x y)))
+;;; Ord [Char] -- characters order by code.
+
+(definstance Ord [Char]
+  (lt? [x y] (< (char->int x) (char->int y)))
+  (lte? [x y] (<= (char->int x) (char->int y)))
+  (gt? [x y] (> (char->int x) (char->int y)))
+  (gte? [x y] (>= (char->int x) (char->int y))))

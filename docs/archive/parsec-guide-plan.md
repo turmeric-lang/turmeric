@@ -1,8 +1,81 @@
+---
+title: Parsec tutorial and guide (typed parsec) -- Plan
+category: Planning
+description: Retype stdlib/parsec.tur from raw ints to Char / List / Option / String results, make the #\A literal a Char, and write the first tutorial and reference guide for tur/parsec. Executed 2026-10-11.
+---
+
 # Plan: Updated Parser Combinators Tutorial and Guide (v1)
 
-> Status: planning
+> Status: **DONE 2026-10-11** (archived). See "Execution 2026-10-11" directly
+> below for what landed and where it departs from the phases. Originally
+> **revised 2026-10-07** against turmeric v0.63.5.
+
+## Execution 2026-10-11
+
+Landed in one change. The "decision needed before P1" below was taken as
+**option 2**: `Char` exists and `#\A` reads as one.
+
+| Phase | Landed as |
+|---|---|
+| P1 `Char` | `stdlib/char.tur`, **auto-loaded**: `(defopaque Char :int)`, `int->char`, `char->int`, `char-lit`, `char=?`, `char<?`, `char-between?`, `digit?`, `alpha?`, `alnum?`, `space?`, `upper?`, `lower?`, `punct?`, `char-upcase`, `char-downcase`, `char->digit`, `Eq [Char]`, `Ord [Char]`. `char->string` and `builder/push-char!` live in `string.tur` (they build a `String`), `Show [Char]` (renders `#\A`) in `typeclass-show.tur`. No `Hash [Char]`: it broke every `any`-keyed map -- docs/reported/hash-instance-on-int-opaque-breaks-any-key-maps.md |
+| P2 `#\A` | The reader marks a char literal's `F_INT` with `LIT_SUF_CHAR`; the elaborator types it as the `Char` opaque (plain `int` where no `Char` is in scope, e.g. `--no-auto-stdlib`); `tur fmt` writes it back as `#\A` instead of its code (it used to print `65`). **Breaking:** `(= c #\+)` with an `int` `c`, `(- #\7 #\0)` and `(println #\A)` no longer type-check -- use `char=?`, `char->int`, `char->digit`. Migrated: `char-literals`, `parsec-tutorial`, `sweet-lexemes-not-structure`, parser-combinators-tutorial.md |
+| P3 | `item`, `pchar`, new `satisfy` are `Char`-typed; `pchar-int` is the deprecated int form |
+| P4 | `optional : (Parser (Option A))` -- `Option`, not a new `Maybe`, per the revision. Biased as the plan specifies (some on a match, none otherwise; one result) |
+| P5 | `many` / `many1 : (Parser (List A))` over `list-typed.tur`'s `List`, which parsec now loads. `list-typed.tur` gained `list-nil`, `list-cons`, `list-first`, `list-rest`, `list-foldl`, `list-map`, `list-reverse`, `list->string` (named `->string`: `str` is the borrowed view type) |
+| P6 | `pstring : cstr -> (Parser String)`, a fresh owned `String` per match |
+| P7 | `parse-first : A` (panics `parse failed at: "<rest>" (after "<read>")`), `run-parser-full : (Option A)`. `run-parser : (List (ParseResult A))` instead of `(List (Pair A String))`, with `parse-result-value` / `parse-result-rest`: a by-value `Pair` does not survive the parser's carrier (docs/reported/byvalue-aggregate-erased-to-dangling-stack-address.md). Removed: `parse-value`, `parse-result-count`, `print-char-list`, `char-list-length`, `run-parser-full-c` |
+| P8 | Instances unchanged. Compiler work so the guide's code needs no annotations: an un-annotated lambda param is typed from a method's (`.bind`, `.fmap`) or generic HOF's fn parameter instantiated from the earlier arguments -- `(do-m c (item) ...)` binds `c : Char` (ground element types only; generic defns keep the carrier default because of docs/reported/generic-hkt-method-lambda-with-tyvar-param-not-emitted.md); a lambda body expects that parameter's result, not the whole fn type; `do-m` takes `& ^syntax forms`, so a nested `do-m` step expands. Also added `spaces`, `token`, `between`, `sep-by`, `sep-by1` |
+| P9 | One fixture per tutorial step, `tests/fixtures/parsec-guide-step{2..8}-*`, plus `parsec-guide-patterns` and `parsec-guide-parse-first-fails`; `bash tests/run.sh` gates them (no spices job -- nothing in turmeric-spices calls parsec). `hkt-stdlib-parser-instances` migrated |
+| Guides | docs/guides/parsec-tutorial.md, docs/guides/parsec-guide.md |
+
+Open questions, as settled: (1) `#\A` is a `Char`. (2) `list->string` is in
+`list-typed.tur`. (3) `parse-first` names where it stopped. (4) `sep-by` is a
+library combinator, empty case `list-nil`.
 > Tracks: `stdlib/parsec.tur` typeclass migration
-> Replaces: no existing guide (this is the first user-facing parsec guide)
+> Replaces: no existing guide for `stdlib/parsec.tur` (this is the first one;
+> [parser-combinators-tutorial.md](../guides/parser-combinators-tutorial.md)
+> now exists, but it builds a small combinator library from scratch rather than
+> documenting `stdlib/parsec`)
+> Location note: this is a turmeric-repo stdlib plan, not a spice plan. It sits
+> under `docs/upcoming/spices/v1/` for historical reasons; the `vendor/tur`,
+> `scripts/install-tur.sh` and `spices/...` paths in it are from a spices-repo
+> vantage and do not apply (see P9).
+
+## Revision 2026-10-07
+
+What changed in turmeric since this plan was written, and what it does to the
+phases:
+
+| Original assumption | Reality on v0.63.5 | Effect |
+|---|---|---|
+| `#\A` reader syntax does not exist (P2) | Landed (`docs/archive/legible-char-literals-plan.md`), but a `#\A` literal **is an `:int`**, not a `Char` | P2 is done, with different semantics. A `Char` newtype (P1) would reject `#\A` unless the reader changes, so P1 needs a decision first (below) |
+| `maybe.tur` is net-new (P4) | `stdlib/option.tur` ships `(defdata Option :copy [A] (None) (Some A))` | Do **not** add `Maybe`. Use `(Option A)` / `option<A>` everywhere the plan says `Maybe`; `just`/`nothing` become `Some`/`None` |
+| `(List A)` must be added to `list.tur` (P5) | `stdlib/list-typed.tur` already defines `(defopaque List [A] :int)` with `list-of`; it is **opt-in** (`load`) because `List` is a common user type name | P5 is "re-type `many`/`many1` against `list-typed`", not "add a type". Decide whether parsec should force that load |
+| `string.tur` may need creating (P6) | `stdlib/string.tur` ships an owned, refcounted `String` (plus `StringBuilder`), and `cstr` is the borrowed form | No new module. `pstring` should take `cstr` (a borrowed literal) and return `String`, not take `String` |
+| `Monad [Parser]` is at `parsec.tur:874` (P8) | The `Functor`/`Applicative`/`Monad`/`Alternative` instances exist at about lines 877-911, `do-m` is in `stdlib/macros.tur`, and `alt-or` is the `Alternative` method | P8 reduces to auditing the instances against the new result types |
+| The repo has `char.tur`, `maybe.tur`, `string.tur` as gaps | Only `char.tur` is still absent | Of P1/P4/P5/P6 only P1 is net-new code |
+| `parsec` tests live in a spice (`spices/parsec-examples`) | They are compiled fixtures: `tests/fixtures/parsec-{basic,full,json-subset,many,or,sequence,tutorial}` | P9's test matrix goes there, and `bash tests/run.sh` is the gate, not a spices CI job |
+
+**Still true, and now the strongest argument for the plan:**
+`stdlib/parsec.tur` is still the "magic int" API (`item`, `pchar`, `pstring`,
+`many`, `many1` and `optional` all return `(Parser int)`; `run-parser` and
+`run-parser-full` return `int`). That is the typed-handle defect the repo's
+"no lazy `:int` stand-ins" rule exists to prevent, so the typed surface is
+worth doing independently of the guide.
+
+**Decision needed before P1.** `#\A` is an `:int`, so there are two coherent
+shapes and the plan must pick one:
+
+1. **Keep characters as `int`** and give `pchar` / `satisfy` an `int` argument.
+   Cheapest, matches the reader, and `Char` is skipped. Rejects the plan's
+   `(Parser Char)` goal.
+2. **Add `Char` and make `#\A` read as a `Char`.** Honors the plan's intent
+   but changes the reader and every existing `#\` use (including the
+   `parsec-tutorial` fixture and the tutorial doc) from `:int` to `Char`.
+
+Recommendation: option 2 only if the reader change is wanted for its own sake;
+otherwise ship the `Option` / `List` / `String` result typing now (P4-P7) and
+leave the character type for a separate plan. Nothing in P4-P7 depends on P1.
 
 ## Motivation
 
@@ -33,11 +106,13 @@ target API; the implementation team delivers it.
 These changes must land before the guide examples can be tested. They are
 ordered by dependency: each task assumes the previous ones are in place.
 
-Current state inventory (`vendor/tur/stdlib/`): `parsec.tur` exists at 888
-lines with the legacy raw-`int` API; `list.tur` exists at 273 lines but does
-not yet expose a typed `(List A)` surface to parsec; `char.tur`, `maybe.tur`,
-and `string.tur` do **not** exist and are net-new modules. The compiler
-reader does not yet accept `#\A` literal syntax.
+Current state inventory (turmeric `stdlib/`, revised 2026-10-07; the original
+read `vendor/tur/stdlib/` from a spices checkout): `parsec.tur` is about 910
+lines with the legacy raw-`int` API; `list-typed.tur` provides an opt-in
+`(List A)`; `option.tur` provides `(Option A)`; `string.tur` provides an owned
+`String`; `char.tur` does **not** exist. The reader accepts `#\A`, as an `:int`.
+The phase text below is the original plan, with a **[REVISED]** note where
+the inventory above changes it.
 
 ### P1 — `Char` newtype and module (`stdlib/char.tur`, net-new)
 
@@ -62,6 +137,12 @@ mixed with raw `int` at call sites.
 - Building a parser with `(satisfy digit?)` typechecks.
 
 ### P2 — `#\A` reader syntax (compiler-side, tracked here for sequencing)
+
+**[REVISED 2026-10-07] DONE, with different semantics.** The reader accepts
+`#\A`, `#\space`, `#\newline` and the rest, but a char literal reads as an
+`:int` byte code, not `(char-lit 65)` / `Char`. The tasks below about filing a
+tracking issue and bumping `TUR_VERSION` are obsolete. Whether to go further and
+read `#\A` as a `Char` is the open decision at the top of this plan.
 
 The Scheme-style char literal `#\A` must desugar to `(char-lit 65)` so the
 guide can write `(pchar #\A)` instead of `(pchar (int->char 65))`.
@@ -106,6 +187,12 @@ Replace the raw-int character primitives with `Char`-typed versions.
 
 ### P4 — `Maybe A` module and typed `optional` (`stdlib/maybe.tur`, net-new)
 
+**[REVISED 2026-10-07]** Do not create `maybe.tur`. `stdlib/option.tur` already
+has `(Option A)` with `Some` / `None`, `some?` and `none?`; use it. `optional`
+becomes `(Parser (Option A))`, and every `just` / `nothing` below reads `Some` /
+`None`. The Functor/Applicative/Monad instances for `Option` are the stdlib's,
+not new work.
+
 **Tasks**
 - Create `stdlib/maybe.tur` with `(defopaque (Maybe A) :ptr<void>)` backed
   by a tagged cell (tag 0 = nothing, tag 1 = just + value pointer).
@@ -125,6 +212,13 @@ Replace the raw-int character primitives with `Char`-typed versions.
 - No call site needs to check `(= r 0)` for absence.
 
 ### P5 — Typed `List A` surface for `many` / `many1` (`stdlib/list.tur` + `parsec.tur`)
+
+**[REVISED 2026-10-07]** `(List A)` exists: `stdlib/list-typed.tur`
+(`(defopaque List [A] :int)`, `list-of`). It is opt-in because `List` is a
+common user type name, so the real task is re-typing `many` / `many1` to
+`(Parser (List A))` and deciding whether `parsec.tur` loads `list-typed.tur`
+itself (which puts `List` in every parsec user's namespace). Skip the
+"add `defopaque List`" task.
 
 `list.tur` already implements the cons-list operations but the parser
 combinators return a raw `int` cell pointer. Re-expose the existing cells
@@ -152,6 +246,11 @@ behind the `(List A)` newtype and re-type the parser combinators.
   `(null? result)` true.
 
 ### P6 — `String` module and typed `pstring` (`stdlib/string.tur`, net-new or extend)
+
+**[REVISED 2026-10-07]** `stdlib/string.tur` exists: an owned, refcounted
+`String` (`:ptr<void>`, non-null) distinct from the borrowed `cstr`. Do not
+define `(defopaque String :cstr)`. `pstring` keeps its `cstr` argument and
+returns `(Parser String)`, which owns the matched bytes.
 
 **Tasks**
 - Create `stdlib/string.tur` (or extend if a stub exists) with
@@ -214,6 +313,13 @@ current stdlib.
   the rebuilt `parsec.tur`.
 
 ### P9 — Test matrix and migration
+
+**[REVISED 2026-10-07]** Wrong repo vantage: parsec is turmeric stdlib, so
+there is no `spices/parsec-examples`, `scripts/install-tur.sh` or spices CI
+step. Put one fixture per tutorial step beside the existing
+`tests/fixtures/parsec-*` fixtures and gate on `bash tests/run.sh`. The `rg`
+audits should run over `stdlib/`, `tests/fixtures/` and the spices checkout
+(`regex`, `c-dsl`, `scscm` are likeliest to call parsec).
 
 **Tasks**
 - Add `spices/parsec-examples/` (or extend the existing parsec test spice)
@@ -581,8 +687,8 @@ signature or idiom.
 
 ## Open questions
 
-1. **Char literal syntax** -- settled as `#\A` (Scheme style). The compiler
-   team implements the reader rule; no further action needed here.
+1. **Char literal syntax** -- settled as `#\A` and implemented, reading as an
+   `:int`. Whether it should read as a `Char` is the open decision at the top.
 
 2. **`list->str` location** -- stdlib `tur/list`, `tur/char`, or `tur/parsec`?
    The guide imports it from `tur/list` for now; relocate if needed.

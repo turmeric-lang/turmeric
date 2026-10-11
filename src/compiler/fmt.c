@@ -125,6 +125,28 @@ static void fmt_num_literal(Buf *b, const Form *f) {
         }
         buf_write(b, tmp, (size_t)n);
         if (!floaty) buf_puts(b, ".0");
+    } else if (f->lit_suffix == LIT_SUF_CHAR) {
+        /* parsec-guide-plan P2: a `#\A` literal reads back as an F_INT; write
+         * it as the character it was rather than its code, which would also
+         * change its type from Char to int.  Names match the reader's table. */
+        int64_t v = f->as.i;
+        const char *name = NULL;
+        switch (v) {
+            case 32:  name = "space";     break;
+            case 10:  name = "newline";   break;
+            case 9:   name = "tab";       break;
+            case 13:  name = "return";    break;
+            case 0:   name = "null";      break;
+            case 8:   name = "backspace"; break;
+            case 127: name = "delete";    break;
+            case 27:  name = "escape";    break;
+            case 7:   name = "alarm";     break;
+            default:  break;
+        }
+        if (name)                 buf_printf(b, "#\\%s", name);
+        else if (v > 32 && v < 127) buf_printf(b, "#\\%c", (char)v);
+        else                      buf_printf(b, "#\\u%llx", (unsigned long long)v);
+        return;
     } else {
         buf_printf(b, "%lld", (long long)f->as.i);
     }

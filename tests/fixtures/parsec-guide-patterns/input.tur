@@ -1,0 +1,46 @@
+;; parsec reference guide, "Common patterns" -- every snippet in that section.
+;; The source of truth for docs/guides/parsec-guide.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+;; A natural number.
+(defn nat-p [] : (Parser int)
+  (fmap (many1 (satisfy digit?))
+        (fn [ds] (list-foldl ds 0 (fn [acc c] {{acc * 10} + (char->digit c)})))))
+
+;; An integer with an optional leading minus.
+(defn int-p [] : (Parser int)
+  (do-m
+    sign (optional (pchar #\-))
+    n    (nat-p)
+    (pure (if (some? sign) (- 0 n) n))))
+
+;; A bracketed, comma-separated list of integers, whitespace allowed after
+;; every token: "[1, -2, 30]".
+(defn int-list-p [] : (Parser (List int))
+  (between (token (pchar #\[))
+           (pchar #\])
+           (sep-by (token (int-p)) (token (pchar #\,)))))
+
+;; A keyword from a fixed set.
+(defn bool-p [] : (Parser bool)
+  (alt-or (fmap (pstring "true") (fn [_s] true))
+          (fmap (pstring "false") (fn [_s] false))))
+
+(defn sum [xs : (List int)] : int
+  (list-foldl xs 0 (fn [acc x] (+ acc x))))
+
+(defn main [] : int
+  (println (parse-first (nat-p) "42"))                       ; 42
+  (println (parse-first (int-p) "-17"))                      ; -17
+  (println (list-count (parse-first (spaces) " \t ")))       ; 3
+  (show-line (parse-first (token (pchar #\x)) "x   "))       ; #\x
+  (println (parse-first (between (pchar #\() (pchar #\)) (nat-p)) "(7)"))  ; 7
+  (println (sum (parse-first (sep-by (nat-p) (pchar #\,)) "1,2,3")))      ; 6
+  (println (list-empty? (parse-first (sep-by (nat-p) (pchar #\,)) "")))   ; true
+  (let [xs (parse-first (int-list-p) "[1, -2, 30]")]
+    (println (list-count xs))                                ; 3
+    (println (sum xs)))                                      ; 29
+  (println (parse-first (bool-p) "true"))                    ; true
+  (println (parse-first (bool-p) "false"))                   ; false
+  0)

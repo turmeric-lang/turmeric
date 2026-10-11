@@ -1,0 +1,19 @@
+;; parsec tutorial, step 7 -- transforming results with fmap.
+;; The source of truth for docs/guides/parsec-tutorial.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+;; One digit, as its numeric value.
+(defn digit-value [] : (Parser int)
+  (fmap (satisfy digit?) char->digit))
+
+;; A natural number: one or more digits, folded into an int.
+(defn nat-p [] : (Parser int)
+  (fmap (many1 (satisfy digit?))
+        (fn [ds] (list-foldl ds 0 (fn [acc c] {{acc * 10} + (char->digit c)})))))
+
+(defn main [] : int
+  (println (parse-first (digit-value) "7"))        ; 7
+  (println (parse-first (nat-p) "42"))             ; 42
+  (println (+ 1 (parse-first (nat-p) "2026")))     ; 2027
+  0)

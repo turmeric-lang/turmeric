@@ -44,6 +44,18 @@ Two compiler defects met while wiring stdlib httpd middleware under tourist
 | [module-export-and-loaded-global-share-c-name](module-export-and-loaded-global-share-c-name.md) | medium (compile failure / wrong signature) | A module export and a same-named global from a `load`ed file are emitted under one module-qualified C name (`conflicting types for 'm__b__foo_hyfree'`); without the `load`, a `:refer`'d import is type-checked against the global's signature. Hit by tourist's `router-free` vs stdlib httpd's; tourist renamed it `pattern-free` |
 | [defer-skipped-on-panic-in-cps-function](defer-skipped-on-panic-in-cps-function.md) | medium (cleanup skipped) | A `defer` in a CPS-converted function runs only on the normal exit; a caught panic returns past it. Direct functions fire it. Leaked tourist's per-request ctx under `mw-recover`; worked around with an inline-C guard |
 
+## Found executing the parsec guide plan (filed 2026-10-11)
+
+Typing `stdlib/parsec.tur` (`Char`, `List`, `Option`, `String` results) and
+writing its tutorial and guide turned up three compiler defects. Each is worked
+around in the shipped code and documented in the guide.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [byvalue-aggregate-erased-to-dangling-stack-address](byvalue-aggregate-erased-to-dangling-stack-address.md) | high (silent wrong values) | A by-value aggregate erased into an `int64` carrier slot is passed as the address of a stack temporary (`emit_carrier_bridge`); a callee that retains it -- `Applicative [Parser]`'s `pure` captures it in the parser closure -- reads a dead frame. `(pure (pair 1 2))` in a parser reads back garbage. Workaround: one-word results (`:heap` struct, `String`, `List`) |
+| [generic-hkt-method-lambda-with-tyvar-param-not-emitted](generic-hkt-method-lambda-with-tyvar-param-not-emitted.md) | medium (cc failure) | Inside a generic `defn`, a lambda whose param is typed by the signature's tyvar and is passed to `bind` / `fmap` is referenced but never emitted (`__poly_N` / `__fn_N` undeclared). Reproduces with `Option` on `main`. Why `do-m` binder inference is limited to ground types |
+| [hash-instance-on-int-opaque-breaks-any-key-maps](hash-instance-on-int-opaque-breaks-any-key-maps.md) | low-medium (compile failure) | A `Hash` instance on an int-backed opaque stops `(hash k)` on an `any` key from selecting `Hash [any]`, so every `any`-keyed map (`#map{...}` in Saffron) fails TUR-E0020. Why `Char` has no `Hash` instance |
+
 ## Found implementing the XML/HTML parsers plan (filed 2026-10-10)
 
 Building `tur-dom-core`, `tur-xml` and `tur-html` in turmeric-spices for

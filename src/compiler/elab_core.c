@@ -2471,6 +2471,7 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->sym_hkt_Monad        = intern_cstr(st, "Monad");
     e->sym_hkt_Traversable  = intern_cstr(st, "Traversable");
     e->sym_hkt_Foldable     = intern_cstr(st, "Foldable");
+    e->sym_Char = intern_cstr(st, "Char");
     /* Phase R2: Panic */
     e->sym_panic = intern_cstr(st, "panic");
     e->sym_panic_with = intern_cstr(st, "panic-with");

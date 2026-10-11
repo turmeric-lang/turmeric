@@ -1,0 +1,12 @@
+;; parsec reference guide, "Running parsers" -- parse-first on input that does
+;; not parse panics, naming where the longest partial parse stopped.
+;; The source of truth for docs/guides/parsec-guide.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+(defn main [] : int
+  (println "before")
+  ;; "AB": (pchar #\A) reads the A and stops, so there is no full parse.
+  (show-line (parse-first (pchar #\A) "AB"))
+  (println "not reached")
+  0)

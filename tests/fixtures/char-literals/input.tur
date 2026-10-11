@@ -1,36 +1,42 @@
-;; Legible character literals (#\a) -- reader emits a plain :int byte code.
-;; See docs/archive/legible-char-literals-plan.md.
+;; Legible character literals (#\a).  The reader marks the byte code and the
+;; elaborator types it as `Char` (stdlib/char.tur, auto-loaded), so a char
+;; literal is no longer a bare :int -- cross with char->int / int->char.
+;; See docs/archive/legible-char-literals-plan.md and
+;; docs/upcoming/spices/parsec-guide-plan.md (P2).
 
 (defn main [] : int
   ;; Base form: printable ASCII.
-  (println #\A)        ;; 65
-  (println #\a)        ;; 97
-  (println #\0)        ;; 48
-  (println #\+)        ;; 43
-  (println #\-)        ;; 45
-  (println #\*)        ;; 42
-  (println #\/)        ;; 47
-  (println #\()        ;; 40
-  (println #\))        ;; 41
-  (println #\;)        ;; 59
-  (println #\")        ;; 34
-  (println #\\)        ;; 92
+  (println (char->int #\A))        ;; 65
+  (println (char->int #\a))        ;; 97
+  (println (char->int #\0))        ;; 48
+  (println (char->int #\+))        ;; 43
+  (println (char->int #\-))        ;; 45
+  (println (char->int #\*))        ;; 42
+  (println (char->int #\/))        ;; 47
+  (println (char->int #\())        ;; 40
+  (println (char->int #\)))        ;; 41
+  (println (char->int #\;))        ;; 59
+  (println (char->int #\"))        ;; 34
+  (println (char->int #\\))        ;; 92
   ;; Named form.
-  (println #\space)    ;; 32
-  (println #\newline)  ;; 10
-  (println #\tab)      ;; 9
-  (println #\return)   ;; 13
-  (println #\null)     ;; 0
-  (println #\backspace);; 8
-  (println #\delete)   ;; 127
-  (println #\escape)   ;; 27
+  (println (char->int #\space))    ;; 32
+  (println (char->int #\newline))  ;; 10
+  (println (char->int #\tab))      ;; 9
+  (println (char->int #\return))   ;; 13
+  (println (char->int #\null))     ;; 0
+  (println (char->int #\backspace));; 8
+  (println (char->int #\delete))   ;; 127
+  (println (char->int #\escape))   ;; 27
   ;; Codepoint escape.
-  (println #\u41)      ;; 65
-  (println #\uFF)      ;; 255
-  (println #\u0)       ;; 0
-  ;; Char literal is just an :int -- composes with = and arithmetic.
-  (println (= #\a 97))         ;; true
-  (println (- #\7 #\0))        ;; 7  (ASCII '7' - '0')
-  ;; A char literal reads exactly like the equivalent numeric literal.
-  (println (if (= #\+ 43) #\y #\n))  ;; 121 (ASCII 'y')
+  (println (char->int #\u41))      ;; 65
+  (println (char->int #\uFF))      ;; 255
+  (println (char->int #\u0))       ;; 0
+  ;; A char literal is a Char: compare with char=? (or Eq's eq?), and cross
+  ;; to an int explicitly for arithmetic.
+  (println (char=? #\a (int->char 97)))           ;; true
+  (println (- (char->int #\7) (char->int #\0)))   ;; 7  (ASCII '7' - '0')
+  (println (char->int (if (char=? #\+ (int->char 43)) #\y #\n)))  ;; 121 (ASCII 'y')
+  ;; Bound to a name, it stays a Char.
+  (let [c #\q]
+    (println (lower? c)))                         ;; true
   0)

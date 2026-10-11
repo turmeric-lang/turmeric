@@ -174,6 +174,8 @@ void turi_env_preload_collections(TuriEnv *env, const char *stdlib_root) {
         "typeclass-hash.tur", "typeclass-applicative.tur",
         "typeclass-alternative.tur", "typeclass-monad.tur",
         "typeclass-monaderror.tur", "typeclass-bifunctor.tur",
+        /* parsec-guide-plan: the Char a `#\A` literal elaborates to. */
+        "char.tur",
         "hamt.tur", "set.tur", "map.tur",
         "vec.tur", "slice.tur", "option.tur", "result.tur",
         "pair.tur", "tuple.tur", "list.tur", "grid.tur", "zipper.tur",
