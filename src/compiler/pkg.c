@@ -4208,23 +4208,45 @@ bool pkg_gen_cmake_deps(const char *project_dir,
              * `if (NOT <cmake-name>_FOUND)` guard so a system copy short-
              * circuits the clone + source build entirely. */
             const char *cn = d->cmake_name; /* guaranteed non-NULL (SF0) */
-            fprintf(f, "if (NOT TUR_FETCH_FORCE_FETCH)\n");
+            /* Options go in the cache BEFORE find_package, not only in the
+             * fallback: a find module reads its hints from there.  Homebrew
+             * keeps libpq keg-only, so FindPostgreSQL finds nothing on macOS
+             * unless `PostgreSQL_ROOT` points at the keg -- and written only
+             * in the fallback, that hint arrived after the search it was for.
+             * The fallback still sees them: they are cache entries. */
+            emit_cmake_opts(f, d, d->opts, d->n_opts, "", false);
+            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "", true);
+            /* No :url means system-only (libpq has no repo to build from), so
+             * there is nothing for --refetch to prefer over the system copy. */
+            if (d->url) fprintf(f, "if (NOT TUR_FETCH_FORCE_FETCH)\n");
+            const char *in = d->url ? "    " : "";
             if (d->cmake_version)
-                fprintf(f, "    find_package(%s %s QUIET)\n", cn,
+                fprintf(f, "%sfind_package(%s %s QUIET)\n", in, cn,
                         d->cmake_version);
             else
-                fprintf(f, "    find_package(%s QUIET)\n", cn);
-            fprintf(f, "endif()\n");
+                fprintf(f, "%sfind_package(%s QUIET)\n", in, cn);
+            if (d->url) fprintf(f, "endif()\n");
             fprintf(f, "if (NOT %s_FOUND)\n", cn);
-            fprintf(f, "    FetchContent_Declare(%s\n", d->name);
-            if (d->url) fprintf(f, "      GIT_REPOSITORY \"%s\"\n", d->url);
-            if (d->ref) fprintf(f, "      GIT_TAG        \"%s\"\n", d->ref);
-            fprintf(f, "    )\n");
-            emit_cmake_opts(f, d, d->opts, d->n_opts, "    ", false);
-            emit_cmake_opts(f, d, d->wasm_opts, d->n_wasm_opts, "    ", true);
-            fprintf(f, "    FetchContent_MakeAvailable(%s)\n", d->name);
-            fprintf(f, "    set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n",
-                    d->name);
+            if (d->url) {
+                fprintf(f, "    FetchContent_Declare(%s\n", d->name);
+                fprintf(f, "      GIT_REPOSITORY \"%s\"\n", d->url);
+                if (d->ref) fprintf(f, "      GIT_TAG        \"%s\"\n", d->ref);
+                fprintf(f, "    )\n");
+                fprintf(f, "    FetchContent_MakeAvailable(%s)\n", d->name);
+                fprintf(f, "    set(_%s_resolved_via \"fetch\" CACHE INTERNAL \"\")\n",
+                        d->name);
+            } else {
+                /* An empty FetchContent_Declare used to stand here, and the
+                 * error it produced ("No download info given for
+                 * '<name>-populate'") named neither the package nor the fact
+                 * that it was looked for on the system. */
+                fprintf(f, "    message(FATAL_ERROR \"spice: cmake-dep '%s': "
+                           "find_package(%s) found no system copy, and the dep "
+                           "declares no :url to build one from. Install it with "
+                           "the system package manager, or set the %s_ROOT "
+                           "environment variable to its prefix.\")\n",
+                        d->name, cn, cn);
+            }
             fprintf(f, "else()\n");
             fprintf(f, "    set(_%s_resolved_via \"system\" CACHE INTERNAL \"\")\n",
                     d->name);
@@ -6824,6 +6846,14 @@ int cmd_pkg_audit(int argc, char **argv) {
     if (m.n_cmake_deps == 0) printf("  (none)\n");
     for (int i = 0; i < m.n_cmake_deps; i++) {
         const PkgCmakeDep *cd = &m.cmake_deps[i];
+        if (cd->prefer_system && !cd->url && !cd->path) {
+            /* System-only: no download and no build script from anywhere but
+             * the system, so nothing for tur.lock to pin -- reporting it as
+             * unpinned would nag about a step `tur fetch` can never take. */
+            printf("  %-6s %-22s system only  find_package(%s)\n", "cmake",
+                   cd->name, cd->cmake_name);
+            continue;
+        }
         audit_print_origin("cmake", cd->name, cd->url, cd->ref, cd->path, NULL,
                            audit_lock_entry(have_lock ? &lock : NULL,
                                             cd->name, true),

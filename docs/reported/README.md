@@ -44,6 +44,27 @@ Two compiler defects met while wiring stdlib httpd middleware under tourist
 | [module-export-and-loaded-global-share-c-name](module-export-and-loaded-global-share-c-name.md) | medium (compile failure / wrong signature) | A module export and a same-named global from a `load`ed file are emitted under one module-qualified C name (`conflicting types for 'm__b__foo_hyfree'`); without the `load`, a `:refer`'d import is type-checked against the global's signature. Hit by tourist's `router-free` vs stdlib httpd's; tourist renamed it `pattern-free` |
 | [defer-skipped-on-panic-in-cps-function](defer-skipped-on-panic-in-cps-function.md) | medium (cleanup skipped) | A `defer` in a CPS-converted function runs only on the normal exit; a caught panic returns past it. Direct functions fire it. Leaked tourist's per-request ctx under `mw-recover`; worked around with an inline-C guard |
 
+## Found implementing the XML/HTML parsers plan (filed 2026-10-10)
+
+Building `tur-dom-core`, `tur-xml` and `tur-html` in turmeric-spices for
+[xml-html-parsers-plan](../upcoming/spices/xml-html-parsers-plan.md) on v0.64.0.
+Each is worked around in the spices (the workaround is cited at the site);
+every repro below was re-run as written on v0.64.0. Five are emitted-C type
+mismatches that gcc only warns about, so they pass Linux CI and fail macOS --
+build with `CC=clang` to see them.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cond-bare-symbol-test-folds-later-equality](cond-bare-symbol-test-folds-later-equality.md) | high (silent miscompile) | `(cond flag "s" (= rc 0) "zero" :else "other")` returns `"other"` for `rc` 0: the emitted C has `if (false)` for the equality. The equivalent nested `if` is correct |
+| [struct-field-with-opaque-sibling-lowered-to-int](struct-field-with-opaque-sibling-lowered-to-int.md) | medium (compile failure) | A struct with a `defopaque` field and a struct or by-value sum field lays the aggregate out as `int64_t`, so `(.line (.pos e))` does not compile |
+| [heap-adt-arg-to-closure-cross-module-missing-cast](heap-adt-arg-to-closure-cross-module-missing-cast.md) | medium (clang-only compile failure) | Passing a `:heap` value whose type is imported to a closure emits no cast to the closure's `int64_t` parameter |
+| ~~[sum-payload-box-leaks-at-match](../archive/sum-payload-box-leaks-at-match.md)~~ | medium (leak) | **RESOLVED 2026-10-10** (archived): a `match` on a fresh `(Result T Struct)` now frees the payload box in the arm that answers (after binders and guard, before the body). A let-bound scrutinee is freed at scope exit (a copying match is a read, and the tail admission agrees), and `(let [r <fresh>] ... r)` counts as fresh. A whole-value arm (`r (keep r)`) keeps the box, by design. Pinned by `sum-payload-match-consumer-freed` (leak-checked) and `sum-payload-match-whole-value-arm-kept` |
+| [heap-adt-def-global-read-missing-cast](heap-adt-def-global-read-missing-cast.md) | medium (clang-only compile failure) | `(def a-node (A))` for a `:heap` `K` is an `int64_t` global, and `(if c b-node a-node)` assigns it to a `tur_adt_K *` temp with no cast |
+| [heap-adt-niche-option-some-payload-missing-cast](heap-adt-niche-option-some-payload-missing-cast.md) | medium (clang-only compile failure) | `(C s (Some s))` for a `:heap` constructor with a niche `(Option S)` field passes `int64_t` to its `void *` parameter; a non-niche `Option` field fails differently |
+| [forward-call-typed-list-arg-cast-to-int64](forward-call-typed-list-arg-cast-to-int64.md) | medium (clang-only compile failure) | A call to a function defined later in the file whose parameter is a `(Cons N)` casts the argument to `int64_t` |
+| [closure-set-of-captured-mut-opaque-undeclared](closure-set-of-captured-mut-opaque-undeclared.md) | medium (compile failure) | `set!` of a captured `^mut` opaque inside a closure emits the original local's name, undeclared there; an `int` `^mut` is promoted to a shared cell and works |
+| [cps-while-discarded-cps-call-loses-captures](cps-while-discarded-cps-call-loses-captures.md) | medium (compile failure) | A `while` loop that discards the result of `html-sax-feed!` loses the enclosing function's parameters in its CPS join; binding the result works. Repro needs turmeric-spices |
+
 ## Found typing reactor-add-chan's channel (filed 2026-10-10)
 
 `tests/run-fnsan.sh` was cited as evidence that reactor callbacks match

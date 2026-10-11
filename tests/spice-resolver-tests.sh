@@ -1328,6 +1328,100 @@ else
 fi
 rm -f "$SF2B_ERR"; rm -rf "$SF2B"
 
+# SF4: :options reach find_package.  A find module reads its hints
+# (PostgreSQL_ROOT, OPENSSL_ROOT_DIR) from the cache, and the generator used to
+# write a :prefer-system dep's options only inside the fetch fallback -- after
+# the search they were meant to steer.  Here the system copy sits at a prefix
+# nothing else searches, so only the :options hint can find it; when it does
+# not, the fallback hits the bogus :url and the fetch fails.
+SF4=$(mktemp -d)
+mkdir -p "$SF4/fk/lib/cmake/HintDep" "$SF4/fk/include"
+: >"$SF4/fk/lib/libhintdep.a"
+cat >"$SF4/fk/lib/cmake/HintDep/HintDepConfig.cmake" <<'EOF'
+add_library(HintDep::hintdep STATIC IMPORTED)
+set_target_properties(HintDep::hintdep PROPERTIES
+  IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../libhintdep.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include")
+set(HintDep_FOUND TRUE)
+EOF
+cat >"$SF4/build.tur" <<EOF
+(defpackage sf4
+  :name "sf4"
+  :cmake-deps #map{
+    "hintdep" #map{:prefer-system true :cmake-name "HintDep"
+                   :targets ["HintDep::hintdep"]
+                   :url "https://example.invalid/never-fetched" :ref "v1"
+                   :options #map{:HintDep_ROOT "$SF4/fk"}}
+  })
+EOF
+SF4_ERR=$(mktemp)
+( cd "$SF4" && "$TUR_ABS" fetch ) >/dev/null 2>"$SF4_ERR"
+sf4_rc=$?
+if [ "$sf4_rc" -eq 0 ] \
+   && grep -qF '"resolved_via": "system"' "$SF4/cmake/spice-deps-manifest.json"; then
+    echo "PASS SF4: :prefer-system :options reach find_package as hints"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SF4: :options hint did not reach find_package"
+    echo "  exit: $sf4_rc"
+    echo "  stderr:"; sed 's/^/    /' "$SF4_ERR"
+    FAIL=$((FAIL + 1))
+    FAILED+=("SF4: :prefer-system :options as find hints")
+fi
+rm -f "$SF4_ERR"; rm -rf "$SF4"
+
+# SF5: a :prefer-system dep with no :url is system-only (libpq: there is no
+# repo to build it from).  Not found, the configure must stop on a message
+# naming the dep and the package -- an empty FetchContent_Declare used to stand
+# there, failing on "No download info given for 'x-populate'".  Found, it
+# resolves via the system even under --refetch, which has nothing to fetch.
+SF5=$(mktemp -d)
+mkdir -p "$SF5/fk/lib/cmake/SysOnly" "$SF5/fk/include"
+: >"$SF5/fk/lib/libsysonly.a"
+cat >"$SF5/fk/lib/cmake/SysOnly/SysOnlyConfig.cmake" <<'EOF'
+add_library(SysOnly::sysonly STATIC IMPORTED)
+set_target_properties(SysOnly::sysonly PROPERTIES
+  IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../libsysonly.a"
+  INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include")
+set(SysOnly_FOUND TRUE)
+EOF
+cat >"$SF5/build.tur" <<'EOF'
+(defpackage sf5
+  :name "sf5"
+  :cmake-deps #map{
+    "sysonly" #map{:prefer-system true :cmake-name "SysOnly"
+                   :targets ["SysOnly::sysonly"]}
+  })
+EOF
+SF5_ERR=$(mktemp)
+( cd "$SF5" && "$TUR_ABS" fetch ) >"$SF5_ERR" 2>&1
+sf5_missing_rc=$?
+rm -rf "$SF5/cmake" "$SF5/tur.lock"
+( cd "$SF5" && CMAKE_PREFIX_PATH="$SF5/fk" "$TUR_ABS" fetch --refetch ) \
+    >>"$SF5_ERR" 2>&1
+sf5_found_rc=$?
+# Nothing is downloaded, so there is nothing to pin: `tur audit` must not
+# report it as unpinned forever.
+SF5_AUD=$( cd "$SF5" && "$TUR_ABS" audit 2>&1 )
+if [ "$sf5_missing_rc" -ne 0 ] \
+   && grep -qF "cmake-dep 'sysonly': find_package(SysOnly) found no system copy" "$SF5_ERR" \
+   && ! grep -qF 'No download info' "$SF5_ERR" \
+   && [ "$sf5_found_rc" -eq 0 ] \
+   && grep -qF '"resolved_via": "system"' "$SF5/cmake/spice-deps-manifest.json" \
+   && printf '%s\n' "$SF5_AUD" | grep -qF 'system only  find_package(SysOnly)' \
+   && ! printf '%s\n' "$SF5_AUD" | grep -qF 'NOT IN tur.lock'; then
+    echo "PASS SF5: a :prefer-system dep with no :url is system-only"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL SF5: system-only :prefer-system dep mishandled"
+    echo "  exit (not installed): $sf5_missing_rc  exit (--refetch, installed): $sf5_found_rc"
+    echo "  output:"; sed 's/^/    /' "$SF5_ERR"
+    echo "  audit:"; printf '%s\n' "$SF5_AUD" | sed 's/^/    /'
+    FAIL=$((FAIL + 1))
+    FAILED+=("SF5: system-only :prefer-system dep")
+fi
+rm -f "$SF5_ERR"; rm -rf "$SF5"
+
 # docs/archive/spice-guides-bare-brace-manifest-syntax.md follow-up: `tur add`
 # spliced the new entry into the existing :spices map by reading
 # `old_map->tag == F_MAP` only.  `#map{...}` reads as F_MAP_LITERAL, so the
