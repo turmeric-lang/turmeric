@@ -1,7 +1,12 @@
 # Performance audit -- Turmeric as it stands at v0.64.1
 
-> **Status: PROPOSED.** Written 2026-10-11 against `main` @ 9a03eb48
-> (v0.64.1) from a half-day survey of the tree: the benchmark harnesses, the
+> **Status: PROPOSED; the author's five decisions are in (2026-10-11), see
+> section 8.** Baseline is `m7i.xlarge`; `--release` will mean `-O3` over
+> an unchanged `-O2` default; the CPS coloring of fn-value calls (R-1) is
+> incidental, so it is WP2's lead item and D-1 is settled now; CI tracking
+> stays on hosted runners; attention is split between compile latency and
+> runtime, leaning runtime when in doubt. Written 2026-10-11 against `main`
+> @ 9a03eb48 (v0.64.1) from a half-day survey of the tree: the benchmark harnesses, the
 > four performance guides, the open and archived reports, CI, and the
 > runtime/codegen sources. Section 2 lists what the survey turned up, so the
 > audit starts from a map rather than from zero; every row there is a
@@ -119,13 +124,13 @@ E = engines, W = web, D = documentation disagreement.
 
 | ID | Claim | Evidence | Status |
 | --- | --- | --- | --- |
-| R-1 | **Any call through a function value colors the enclosing function CPS, and coloring spreads to its callers.** A CPS function pays ~2 allocations / ~200 B of continuation frames per fn-value call. Constructors, inline-C and `extern-c` callees are the only exceptions. The blast radius over a real program is unknown. | `src/passes/cps.c:1051-1086`, `2335-2340`; memory-usage-guide "Calls through function values, and effects" | verified (mechanism); unmeasured (radius) |
+| R-1 | **Any call through a function value colors the enclosing function CPS, and coloring spreads to its callers.** A CPS function pays ~2 allocations / ~200 B of continuation frames per fn-value call. Constructors, inline-C and `extern-c` callees are the only exceptions. The blast radius over a real program is unknown. **Author (2026-10-11): the rule is incidental, likely vestigial from the trampoline work, not a soundness contract.** So this is WP2's lead item: measure the radius, then price a lowering where a fn-value call whose callee has an empty effect row stays direct-style. | `src/passes/cps.c:1051-1086`, `2335-2340`; memory-usage-guide "Calls through function values, and effects" | verified (mechanism); unmeasured (radius); **decided: a cost, not a contract** |
 | R-2 | **`rc` increment/decrement, `tur_region_note_escape` and `tur_region_alloc_or_malloc` are out-of-line calls into a static archive, and nothing passes `-flto`.** Every `vec-push!`/`vec-set!` makes one such call when regions are on. | `src/runtime/rc.h:247`, `region.c:222`, `region.c:332`; `src/main.c:3851` default flags | verified (shape); unmeasured (cost) |
 | R-3 | **`tur_region_owns` walks every live AND retired generation and each one's slab list on every node free.** Retired generations accumulate for the life of the process, so a free gets slower the longer a program runs. | `src/runtime/region.c:337-344` | verified; unmeasured |
 | R-4 | **Every `rc` allocation registers with the cycle collector's global registry even when the collector is off** (the default). | `src/runtime/rc.c:170` -> `gc.c` `gc_register_block` | verified; unmeasured |
 | R-5 | **HAMT transients are not in place.** `tur_hamt_transient_set` runs `node_has` then the persistent `node_insert`, so it path-copies and traverses twice; only the shell allocation is saved. The guide says "mutate in place". | `src/runtime/hamt.c:1895-1923`; hamt-guide.md:264 | verified; unmeasured |
 | R-6 | `Vec` growth is `malloc` + copy loop + `free`, not `realloc`. | `stdlib/vec.tur:136-141` | verified; unmeasured (likely small) |
-| R-7 | **Emitted programs are built at `-O2 -fno-strict-aliasing -fwrapv` with no `-O3`, `-march` or LTO option, and `tur run --release` is parsed and ignored.** | `src/main.c:195`, `:3851`, `:6011` (`(void)release;`) | verified |
+| R-7 | **Emitted programs are built at `-O2 -fno-strict-aliasing -fwrapv` with no `-O3`, `-march` or LTO option, and `tur run --release` is parsed and ignored.** **Author (2026-10-11): the default stays `-O2`; `--release` adds `-O3`; `-march=native` is never on by default** (it produces binaries that will not run elsewhere). WP2's sweep decides whether `-O3` buys anything here. | `src/main.c:195`, `:3851`, `:6011` (`(void)release;`) | verified; **policy decided** |
 | R-8 | `musttail` is honoured only by clang on x86-64/aarch64; gcc and the JIT get no guarantee for non-self, non-fused tail calls, and a CPS self-loop survives only through gcc's `-O2` sibling-call optimization. | `emit_module.c:10218-10232`; [cps-self-call-through-join-grows-the-stack](../reported/cps-self-call-through-join-grows-the-stack.md) | doc / reported |
 | R-9 | `string/concat` copies both inputs; a loop that concatenates is quadratic (~5 KB traffic per appended character at 10k appends). Documented, with `StringBuilder` as the answer; worth a census of how often stdlib and examples do it anyway. | memory-usage-guide "Strings" | doc |
 | R-10 | Async tasks each `malloc` a 1 MB fiber stack and switch through `swapcontext`-shaped glue; hand-written `fiber_ctx_{x64,arm64}.S` exist and are compiled in. Which path a task actually takes, and what a switch costs, is unmeasured. | `emit_module.c:15727-15750`, `src/async/fiber.c:21`, `src/CMakeLists.txt:399-401` | partly verified; unmeasured |
@@ -172,7 +177,7 @@ E = engines, W = web, D = documentation disagreement.
 
 | ID | Claim | Where |
 | --- | --- | --- |
-| D-1 | effects-system-guide says hot direct-style code "pays no trampoline or allocation cost"; memory-usage-guide and `cps.c` say any fn-value call colors the function. | effects-system-guide.md:540 vs memory-usage-guide.md:232-262 |
+| D-1 | effects-system-guide says hot direct-style code "pays no trampoline or allocation cost"; memory-usage-guide and `cps.c` say any fn-value call colors the function. **Settled 2026-10-11 toward the memory guide:** the coloring is real and incidental (R-1), so the effects guide's sentence is wrong today and should say so, with a pointer to R-1's fix when it lands. Can be fixed before WP2 measures anything. | effects-system-guide.md:540 vs memory-usage-guide.md:232-262 |
 | D-2 | async-await-guide says fibers have no separate OS stack; the emitter `malloc`s 1 MB per `FiberBlock`. | async-await-guide.md:56 vs emit_module.c:15727 |
 | D-3 | hamt-guide says transients mutate in place; they path-copy (R-5). | hamt-guide.md:264 |
 | D-4 | performance-guide says mutual recursion is not turned into a loop (line ~530) and documents T5 fusion of mutual groups (lines 158-176). | performance-guide.md |
@@ -313,8 +318,11 @@ through R-11.
   states what fraction of the corpus could benefit before anyone builds it.
 - **R-7 flags sweep.** `-O2` (today) vs `-O3` vs `-O2 -march=native` vs
   `-O2 -flto` on the corpus, gcc and clang, with the output-parity check the
-  triangle runner already does. This tells the author what `tur run
-  --release` should mean when it stops being a no-op.
+  triangle runner already does. The policy is decided (section 8: `-O2`
+  stays the default, `--release` adds `-O3`, `-march=native` never by
+  default); the sweep says what `-O3` is worth on this codebase and whether
+  LTO belongs in `--release` too. Wiring `--release` to the flags is a small
+  change this package may land once the sweep has the number.
 - **R-8**: count the fixtures and corpus functions whose tail calls fall into
   the gcc-no-guarantee gap, under `^tailcall`.
 - **R-10**: measure a fiber switch and a task spawn; confirm which switch
@@ -396,6 +404,9 @@ hosted runner is a quiet machine.
   shape: `(program, engine, metric, value, os, cc, nproc)`. Add compile
   time (from WP1's `--timings`) and emitted binary size as two more metrics
   on the same programs.
+  Hosted runners are the only runners (section 8, decision 4); the bench
+  box is for short-lived project work, not a standing runner, so the plan
+  never assumes a quiet dedicated machine in CI.
 - Plot them on `/ci` as a third panel beside suite timings and line count.
   Plot the nightly arm64 suite rows that are already uploaded and never
   shown.
@@ -414,8 +425,9 @@ and how to read it. **Effort:** medium; reuses the whole timing pipeline.
 
 **Goal.** Make the guides agree with the code and with each other.
 
-- Resolve D-1 to D-5 in the direction the measurements point (D-1 waits on
-  WP2's R-1 census; the rest can land as soon as WP0 does).
+- Resolve D-1 to D-5. All five are decided or mechanical and can land as
+  soon as WP0 does; D-1 states the coloring as a current cost with a pointer
+  to R-1, and is reworded again when R-1's fix lands.
 - performance-guide.md: refresh the triangle (WP4), add a "Profiling" section
   that documents `perf | tur demangle`, `--timings` (WP1) and the runtime
   counters in section 1, and replace the "refcounted, not tracing" sentence
@@ -438,11 +450,14 @@ WP0 baseline ---+--> WP1 compile latency (--timings) --+
 ```
 
 WP0 first; it is cheap and every other package reads its numbers. WP1-WP5
-are independent of one another and can run in parallel sessions. WP6 wants
-WP1's `--timings` for its compile-time row but can start its runtime rows
-from WP0 alone. WP7's D-1 waits on WP2; everything else in WP7 can land
-early. Nothing here blocks the v1 track; each package is a PR from `main`
-that stands alone.
+are independent of one another and can run in parallel sessions. The
+author's priority (section 8, decision 5) is a balance of compile latency
+and runtime, leaning runtime when in doubt: so WP2 and WP1 start together
+after WP0, WP2's R-1 census is the first measurement taken, and when one
+session has to choose, it picks WP2. WP6 wants WP1's `--timings` for its
+compile-time row but can start its runtime rows from WP0 alone. WP7's D-1 to
+D-5 can all land early. Nothing here blocks the v1 track; each package is a
+PR from `main` that stands alone.
 
 ## 6. Method and tooling
 
@@ -489,26 +504,30 @@ that stands alone.
 - performance-guide.md's triangle and memory-usage-guide.md's cost table are
   regenerated from checked-in harnesses, dated, and say which.
 
-## 8. Open questions for the author
+## 8. Decisions (2026-10-11)
 
-1. **Which instance type is the baseline?** The plan assumes the bench
-   box's default, `m7i.xlarge` on x86-64 Linux, because `perf` and callgrind
-   are there and it matches the CI runners. The nightly is arm64 Linux and
-   can get a column if wanted. A bigger box (`c7i.2xlarge`) makes
-   the suites faster but changes the `nproc`-dependent numbers, so pick once.
-2. **What should `tur run --release` mean** once it stops being a no-op
-   (R-7)? WP2's flag sweep gives the data; the choice between "`-O2`, same
-   as today" and "`-O3 -march=native`, user opted in" is a policy call.
-3. **Is the R-1 coloring rule a cost to reduce or a contract to document?**
-   If a fn-value call is meant to color its caller for soundness reasons the
-   survey did not find, WP2's census is still worth having but D-1 resolves
-   toward the memory guide, not the effects guide.
-4. **Does CI performance tracking belong on hosted runners at all**, or
-   should WP6 wait for a self-hosted runner? The plan hedges with nightly,
-   serial, >1 s programs and warnings instead of gates; a dedicated box
-   would make PR-level tracking possible.
-5. **Priority between compile latency and runtime throughput.** The
-   triangle says the front end dominates one-shot latency on every engine;
-   the two C baselines in `benchmarks/` and the JIT notes say steady state is
-   within 1-2x of hand-written C where it has been checked. If v1's story is "fast edit-run loop", WP1 and C-1 lead; if it
-   is "fast programs", WP2 does.
+The five questions the first draft put to the author, and the answers. Each
+is folded into the section it affects above; this is the record.
+
+1. **Baseline instance type: `m7i.xlarge`** (x86-64, 4 vCPU, 16 GiB), the
+   bench box default. It matches the CI runners' shape so suite timings stay
+   comparable, and `perf` and callgrind are mature there. The nightly's
+   arm64 can be a column; it is not the reference.
+2. **`tur run --release`:** the default stays `-O2`; `--release` adds `-O3`;
+   `-march=native` is never on by default. WP2's flag sweep (R-7) decides
+   whether `-O3` is worth anything here and whether LTO joins it.
+3. **CPS coloring of fn-value calls (R-1) is incidental**, likely vestigial
+   from the trampoline work, not a soundness contract. It is WP2's lead item
+   and D-1 is settled toward the memory guide now.
+4. **CI performance tracking stays on hosted runners.** There is no budget
+   for a standing dedicated runner; the bench box is for short-lived project
+   work like this audit. WP6's shape (nightly, serial, programs over one
+   second, warnings not gates) stands, and per-PR tracking is not planned.
+5. **Compile latency vs runtime throughput: a balance, leaning runtime when
+   in doubt.** WP1 and WP2 start together after WP0; WP2 wins a tie.
+
+Nothing remains open that this plan needs the author for before WP0 starts.
+Two things outside the plan do: the AWS account bootstrap for the bench box
+(`infra/bench-box/scripts/bootstrap-account.sh`, run once with admin
+credentials, choosing the one region), and any new question a work package
+raises, which goes in that package's artifact.
