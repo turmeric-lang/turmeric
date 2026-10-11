@@ -198,6 +198,33 @@ Docs in progress.
 '''
 
 
+_MD_LINK_RE = re.compile(r'(\]\()([^)\s#:]+\.md)(#[^)\s]*)?(\))')
+
+
+def absolutize_repo_links(text: str, spice_dir: Path) -> str:
+    """Point a README's relative `.md` links at GitHub when the pack cannot hold them.
+
+    A spice README links its repo-level guide as `../../docs/guides/x-guide.md`
+    and its test notes as `tests/corpus/README.md`. Neither is a pack page, so
+    left relative they fail `genpack --strict-links`. A sibling spice's
+    `../<name>/README.md` is kept: genpack resolves that into the pack.
+    """
+    def fix(m: re.Match) -> str:
+        href = m.group(2)
+        target = (spice_dir / href).resolve()
+        try:
+            rel = target.relative_to(SPICES_REPO.resolve())
+        except ValueError:
+            return m.group(0)
+        if not target.is_file():
+            return m.group(0)
+        if target.name == 'README.md' and target.parent.parent == (SPICES_REPO / 'spices').resolve():
+            return m.group(0)
+        return f'{m.group(1)}{GITHUB_BASE}/blob/main/{rel.as_posix()}{m.group(3) or ""}{m.group(4)}'
+
+    return _MD_LINK_RE.sub(fix, text)
+
+
 def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
                       pack_dir: Path | None = None) -> dict | None:
     """Render docs/html/spices/<name>/index.html from the spice's README.md.
@@ -217,6 +244,7 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
         text = STUB_FRONT_PAGE.format(name=meta['name'], github=GITHUB_BASE)
         source_label = '(no README -- stub)'
 
+    text = absolutize_repo_links(text, meta['path'])
     text = re.sub(r'^(`{3,})(turmeric|sweet-exp)\s+no-check\b[^\n]*', r'\1\2', text,
                   flags=re.MULTILINE)
     conv = md_lib.Markdown(
