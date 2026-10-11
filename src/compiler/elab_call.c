@@ -8444,8 +8444,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * Both lower to int64_t at runtime.  This arises when a function
              * parameter is annotated with a parameterised type like (Equal a b)
              * (which parses as TY_APP) and the caller passes a GADT constructor
-             * value such as Refl (which has type TY_ADT). */
-            arg_ok = true;
+             * value such as Refl (which has type TY_ADT).
+             *
+             * adt-arg-accepted-at-any-applied-param: only a value of the SAME
+             * type constructor.  The allowance used to take any ADT at all, and
+             * nothing after it compared the heads for a ground parameter (the
+             * GS2 check below runs only when the parameter names a tyvar), so
+             * `(f (P 3))` against `[v : (Vec int)]` type-checked for every
+             * user struct or `defdata` P, and the callee read P's words as a
+             * Vec.  A parameter whose full type is not recorded keeps the old
+             * allowance. */
+            uint32_t g4_fai = fn_binding && fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *g4_decl = (fn_type.kind == TY_FN && fn_type.as.fn.arg_full_types &&
+                                   g4_fai < fn_type.as.fn.arity)
+                ? fn_type.as.fn.arg_full_types[g4_fai] : NULL;
+            const AdtDef *g4_head = (g4_decl && g4_decl->kind == TY_APP)
+                ? type_adt_app_def(g4_decl) : NULL;
+            const AdtDef *g4_arg = args[i]->type.as.adt_.def;
+            arg_ok = !g4_head || !g4_arg || g4_arg == g4_head ||
+                     (g4_arg->name && g4_head->name &&
+                      strcmp(g4_arg->name, g4_head->name) == 0);
         }
         if (!arg_ok && expected_arg_kind == TY_APP && args[i]->type.kind == TY_TYVAR) {
             /* Phase HKT/G4: Allow passing a TY_TYVAR where TY_APP is expected.
