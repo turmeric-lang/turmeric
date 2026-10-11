@@ -119,6 +119,13 @@ typedef enum FxProvenance {
      * Turmeric meaning (the prelude is written with them); as quoted data
      * they are the symbols a Scheme program means -- `(symbol? 'nil)`. */
     PROV_SCHEME_WORD,
+    /* cond-bare-symbol-test-folds-later-equality: stamps the F_UNQUOTE node
+     * substitute_params wraps around a macro ARGUMENT it substitutes into a
+     * template.  The argument is the caller's code, i.e. data to the
+     * compile-time evaluator: it is spliced into the expansion verbatim and
+     * never evaluated or inspected by it.  Lives only between substitution
+     * and the end of elab_expand_macro, which strips every one. */
+    PROV_MACRO_ARG,
 } FxProvenance;
 
 struct Form;
