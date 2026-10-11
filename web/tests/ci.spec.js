@@ -241,8 +241,8 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('site-nav nav')).toBeVisible();
     await expect(page.locator('site-footer a[href="/ci"]')).toHaveCount(1);
 
-    // Five tabs, Tests active by default.
-    await expect(page.locator('.ci-tab')).toHaveCount(5);
+    // Four tabs, Tests active by default.
+    await expect(page.locator('.ci-tab')).toHaveCount(4);
     await expect(page.locator('#ci-tab-tests')).toHaveClass(/is-active/);
 
     // Four stat tiles, and a provenance line naming the latest commit.
