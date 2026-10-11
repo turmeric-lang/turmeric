@@ -1,0 +1,114 @@
+; sum-payload-match-consumer-freed -- a `match` that consumes a fresh
+; (Result T S) / (Option S) frees S's payload box (S a by-value struct, stored
+; boxed by the ros pointer-box rule).  docs/reported/sum-payload-box-leaks-at-match.md
+;
+; Leak-checked: every shape below must free its box, and every value that is
+; KEPT (pushed to `store`, returned by a stashing producer) must still read
+; back intact -- under ASan a premature free is a use-after-free.
+
+(defstruct Er :copy [line : int col : int])
+(defstruct Pt :copy [x : int y : int])
+(defopaque Doc :ptr<void> :non-null)
+
+(def store (:: (vec-new) (Vec (Result Doc Er))))
+
+(defn parse [i : int] : (Result Doc Er)
+  (Err (Er i 7)))
+
+(defn find [i : int] : (Option Pt)
+  (if (> i 0) (Some (Pt i (* i 2))) (None)))
+
+;; fix 3: a producer that returns a let binding after its own cleanup
+(defn parse-via-let [i : int] : (Result Doc Er)
+  (let [r (parse i)]
+    (println "cleanup")
+    r))
+
+;; fix 3, refused: the binding is also stored, so the result is NOT fresh
+(defn parse-stash [i : int] : (Result Doc Er)
+  (let [r (parse i)]
+    (vec-push! store r)
+    r))
+
+(defn line-of [r : (Result Doc Er)] : int
+  (match r
+    (Ok d)  0
+    (Err e) (.line e)))
+
+;; fix 1: the scrutinee is the fresh call
+(defn direct [i : int] : int
+  (match (parse i)
+    (Ok d)  0
+    (Err e) (.col e)))
+
+(defn direct-wild [i : int] : int
+  (match (parse i)
+    (Ok d)  0
+    (Err _) 1))
+
+(defn direct-option [i : int] : int
+  (match (find i)
+    (Some p) (+ (.x p) (.y p))
+    (None)   -1))
+
+;; fix 1 under a guard: a failing guard falls through to an arm that reads
+;; the box again, so the free waits for the arm that answers
+(defn guarded [i : int] : int
+  (match (parse i)
+    (Err e) when (> (.line e) 5) (+ 1000 (.line e))
+    (Err e) (.line e)
+    (Ok d)  0))
+
+;; fix 2: the scrutinee is a let binding
+(defn let-bound [i : int] : int
+  (let [r (parse i)]
+    (match r
+      (Ok d)  0
+      (Err e) (.line e))))
+
+;; fix 2, refused: the binding is stored as well as matched
+(defn let-bound-stored [i : int] : int
+  (let [r (parse i)]
+    (vec-push! store r)
+    (match r
+      (Ok d)  0
+      (Err e) (.line e))))
+
+;; tail position: each arm frees before its backedge
+(defn walk [i : int acc : int] : int
+  (if (= i 0)
+    acc
+    (match (parse i)
+      (Ok d)  (walk (- i 1) acc)
+      (Err e) (walk (- i 1) (+ acc (.col e))))))
+
+;; tail position through a let-bound match whose tail value is a struct
+(defn walk-er [i : int acc : Er] : Er
+  (if (= i 0)
+    acc
+    (let [r (parse i)]
+      (match r
+        (Ok d)  (walk-er (- i 1) acc)
+        (Err e) (walk-er (- i 1) (Er (+ (.line acc) 1) (.col e)))))))
+
+(defn main [] : int
+  (println (direct 3))
+  (println (direct-wild 3))
+  (println (direct-option 4))
+  (println (direct-option 0))
+  (println (guarded 3))
+  (println (guarded 9))
+  (println (let-bound 4))
+  (println (let-bound-stored 5))
+  (println (line-of (parse-via-let 6)))
+  (println (match (parse-via-let 7) (Ok d) 0 (Err e) (.line e)))
+  (println (line-of (parse-stash 8)))
+  (println (walk 100000 0))
+  (println (.line (walk-er 100000 (Er 0 0))))
+  (let [^mut i 0
+        ^mut s 0]
+    (while (< i (vec-len store))
+      (set! s (+ s (line-of (vec-get store i))))
+      (set! i (+ i 1)))
+    (println s))
+  0)
