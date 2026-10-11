@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found writing the signal spice's pitch and sequencing examples (filed 2026-10-11)
+
+A generic `cycle` (a closure returning the next value of a list) compiled
+with `-Wint-conversion` warnings, which gcc 14 and clang 15+ reject. The
+spice ships a concrete `(Vec float)` version.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [generic-closure-carrier-bridges-missing](generic-closure-carrier-bridges-missing.md) | medium (compile failure on gcc 14 / clang 15+) | Two missing carrier bridges around a closure a generic returns: (1) calling a LET-BOUND one dispatches to the shared carrier thunk and hands its `int64_t` result to a `cstr` consumer unconverted (`puts(__ps)`); applying it at once is fine. (2) In a float per-spec clone, a typed capture (`tur_adt_Vec__float *`) is passed to the generic carrier `vec_hyget(int64_t, ...)` with no `intptr_t` cast. gcc 13 warns and prints the right values. Workaround: write the function at a concrete type |
+
 ## Found writing the signal spice's filter and modulation guide (filed 2026-10-11)
 
 Adding buffers and guide examples to turmeric-spices' `signal` spice turned
