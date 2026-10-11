@@ -133,11 +133,11 @@
   fputs(g_dl_report, stdout);
   ```)
 
-(defn path-body [path : cstr] : cstr
+(defn reply-path [c : ptr<void>] : nil
   ```c
-  static __thread char b[1100];
-  snprintf(b, sizeof b, "path=%s", path);
-  return b;
+  char b[1100];
+  snprintf(b, sizeof b, "path=%s", __TUR_CNAME_httpd-req-path__(c));
+  __TUR_CNAME_httpd-resp-body!__(c, b);
   ```)
 
 (defn run-server [h : ptr<void>] : ptr<void>
@@ -166,7 +166,7 @@
   (let [h (httpd-new-pool 0 2
             (fn [c : ptr<void>] : nil
               (httpd-resp-status! c 200)
-              (httpd-resp-body! c (path-body (httpd-req-path c)))))]
+              (reply-path c)))]
     (httpd-server-set-read-timeout! h 300)
     (httpd-server-set-max-body! h 16)
     (let [port   (httpd-port h)
