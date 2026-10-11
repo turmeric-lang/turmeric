@@ -17896,8 +17896,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * reads it directly below. */
                     bool fld_wide_boxed = fld_aggregate && adt &&
                         adt->n_type_params > 0 &&
-                        type_is_wide_byval_adt(fld_rty) &&
-                        !adt_field_is_ros_pointer_box(adt, &fld_rty);
+                        adt_field_is_wide_box(adt, &fld_rty);
                     if (fld_wide_boxed) {
                         buf_printf(&hb, "(*(%s *)(intptr_t)(((%s)(intptr_t)(%s))->%s))",
                                    emit_type_c_name(ctx, fld_rty), heap_recv_cn, sv, mp);
