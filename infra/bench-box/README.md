@@ -56,9 +56,97 @@ mid-benchmark; it is not wired in.
   [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
   for `ssh.sh` and `pull.sh`.
 - Node.js 20+ (`npm ci` runs on first `up`).
-- The account/region bootstrapped for CDK: `cd infra/bench-box && npx cdk bootstrap`.
-- Your IAM user needs CloudFormation, EC2, IAM (to create the instance role),
-  SSM `StartSession`, and `ssm:GetParameter` on the Canonical AMI parameter.
+- The account set up once by `scripts/bootstrap-account.sh`, run by a human
+  with admin credentials. The next section says what it does and why; the
+  short version is that the CDK app deploys through roles it creates, so the
+  credentials that run `up`/`down` day to day never need EC2 or IAM
+  permissions of their own.
+
+## Credentials and permissions
+
+**Recommendation in one paragraph.** Never give anything a key with EC2 or
+IAM permissions. Bootstrap the account once, as yourself, with
+`scripts/bootstrap-account.sh`: it installs a *scoped* CloudFormation
+execution policy (`iam/cfn-exec-policy.json`) under a CDK qualifier of its
+own, so CloudFormation, not the caller, holds the power to create instances,
+and it can create them only in one region, only of allowlisted types, and
+with an instance role that must carry a permissions boundary limiting it to
+the SSM agent (`iam/instance-boundary.json`). The thing that runs
+`up`/`ssh`/`pull`/`down` then needs only `iam/operator-policy.json`: assume
+the three CDK roles, describe instances, open SSM sessions to boxes tagged
+`Purpose=bench-box`, stop/start those boxes. For a human, attach that as an
+IAM Identity Center permission set and use short-lived SSO credentials. For a
+Claude Code cloud environment or a CI job, which cannot do SSO, create the
+dedicated user `turmeric-bench-operator` with that one policy and one access
+key (`--create-user`), store the key in the consumer's secret store, and put
+a tagged monthly budget behind it (`--budget you@example.com`).
+
+### What each policy lets happen
+
+| Policy | Attached to | Can | Cannot |
+| --- | --- | --- | --- |
+| `TurmericBenchBoxOperator` (`iam/operator-policy.json`) | the human's permission set, or the `turmeric-bench-operator` user | assume `cdk-benchbox-{deploy,file-publishing,lookup}-role` (which is how `cdk deploy`/`destroy` work); `ec2:Describe*`; `ssm:StartSession` to instances tagged `Purpose=bench-box` with the shell, SSH and port-forward documents; stop/start/reboot those instances; end its own sessions | call `ec2:RunInstances`, `TerminateInstances`, or any `iam:*` directly; open a session to an untagged instance; act outside `${REGION}` (except STS, which is global) |
+| `TurmericBenchBoxCfnExec` (`iam/cfn-exec-policy.json`) | the CDK CloudFormation execution role (`cdk-benchbox-cfn-exec-role-*`) | `ec2:*` in `${REGION}`; read the Canonical AMI SSM parameters; create/delete roles and instance profiles named `TurmericBenchBox-*`, and only with the boundary attached; pass such a role to EC2 | run an instance type outside the allowlist (`Deny` on `ec2:RunInstances`, edit the list in the file); create NAT gateways, VPNs, transit gateways, fleets, reservations, dedicated hosts; create or modify any role not named `TurmericBenchBox-*`; remove or swap a boundary; anything outside EC2/IAM/that one SSM path |
+| `TurmericBenchBoxInstanceBoundary` (`iam/instance-boundary.json`) | every role the stack creates (the stack applies it via `permissionsBoundaryName`) | the SSM agent's calls (`ssm:UpdateInstanceInformation`, `ssmmessages:*Channel`, `ec2messages:*`) | anything else, whatever policy a future stack change attaches |
+
+The blast radius of a leaked operator key is therefore: deploy or destroy
+*this* stack's shape in one region (an allowlisted EC2 instance with an
+SSM-only role), and shell into a box that already has the tag. It cannot
+read S3, touch other stacks, mint credentials, or run a GPU fleet. The
+remaining cost exposure is bounded by the instance-type allowlist times the
+budget alert.
+
+### Why a separate CDK qualifier
+
+Plain `cdk bootstrap` creates a `CDKToolkit` stack whose execution role has
+`AdministratorAccess`, and every CDK app in the account shares it. Changing
+its policy to scope this app would scope every other app too. The bootstrap
+script uses `--qualifier benchbox --toolkit-stack-name CDKToolkit-benchbox`,
+so the bench box gets its own roles and bucket (`cdk-benchbox-*`) and leaves
+an existing toolkit alone; `cdk.json` sets
+`@aws-cdk/core:bootstrapQualifier` to match. Nothing else in the account is
+affected.
+
+### Setting it up
+
+```sh
+cd infra/bench-box
+AWS_PROFILE=admin AWS_REGION=us-east-1 scripts/bootstrap-account.sh \
+    --create-user --budget you@example.com --budget-usd 25
+```
+
+Pick the one region the box may live in; it is baked into every policy. The
+script is idempotent. `--create-user` prints the access key **once**, to the
+terminal; store it directly into the consumer and nowhere else. For a Claude
+Code cloud environment that means the environment's settings (the cloud
+environment menu in the session's title bar, then Edit), as the three
+variables `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`;
+a new session picks them up. The environment's network access also has to
+reach AWS: `*.amazonaws.com` under Allowed domains, or a broader level
+(`sts`, `cloudformation`, `ec2`, `ssm`, `ssmmessages`, `iam` and the
+`cdk-benchbox-assets-*` S3 bucket are the endpoints the scripts touch).
+
+The budget filters on the `Purpose=bench-box` cost-allocation tag, which has
+to be activated once in the Billing console (Cost allocation tags) and
+starts filtering about a day later; until then it reads zero.
+
+### Hygiene
+
+- **Rotate the operator key** every 90 days or when a session that held it
+  ends badly: `aws iam create-access-key`, update the consumer, then
+  `aws iam delete-access-key` on the old id. There is never a reason for the
+  user to hold two keys for longer than that swap.
+- **Kill switch:** `aws iam attach-user-policy --user-name
+  turmeric-bench-operator --policy-arn arn:aws:iam::aws:policy/AWSDenyAll`
+  stops the key cold without deleting anything; detach to restore. The
+  budget's 100% alert is the cue.
+- **Audit:** every deploy, session and stop/start lands in CloudTrail under
+  the operator principal; `scripts/status.sh` answers the cheaper question
+  of whether anything is running right now.
+- **Do not widen the operator policy to make a script work.** If `up.sh`
+  fails with `AccessDenied`, the missing permission belongs either in the
+  CloudFormation execution policy (a resource the stack creates) or is a sign
+  that a role name or tag drifted from the patterns above. Fix the pattern.
 
 ## Knobs
 
@@ -135,6 +223,10 @@ infra/bench-box/
   scripts/pull.sh           rsync a results directory back
   scripts/down.sh           destroy
   scripts/status.sh         what is running in the account
+  scripts/bootstrap-account.sh   once, as admin: policies, scoped CDK bootstrap, operator user, budget
+  iam/operator-policy.json       what up/ssh/pull/down need (and nothing more)
+  iam/cfn-exec-policy.json       what CloudFormation may create for this stack
+  iam/instance-boundary.json     ceiling on any role the stack creates
   cdk.json                  defaults for every knob
 ```
 

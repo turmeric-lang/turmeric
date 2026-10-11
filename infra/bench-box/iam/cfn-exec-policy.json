@@ -1,0 +1,95 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Ec2InOneRegion",
+      "Effect": "Allow",
+      "Action": "ec2:*",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "${REGION}" } }
+    },
+    {
+      "Sid": "OnlyAllowlistedInstanceTypes",
+      "Effect": "Deny",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:*:*:instance/*",
+      "Condition": {
+        "StringNotLike": {
+          "ec2:InstanceType": [
+            "m7i.xlarge", "m7i.2xlarge", "c7i.xlarge", "c7i.2xlarge",
+            "m7g.xlarge", "m7g.2xlarge", "c7g.xlarge", "c7g.2xlarge",
+            "m7a.xlarge", "c7a.xlarge"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NoExpensiveEc2Side",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:*Vpn*", "ec2:*TransitGateway*", "ec2:*Reserved*", "ec2:*CapacityReservation*",
+        "ec2:*Fleet*", "ec2:PurchaseHostReservation", "ec2:AllocateHosts",
+        "ec2:*ClientVpn*", "ec2:*NatGateway*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AmiParameter",
+      "Effect": "Allow",
+      "Action": ["ssm:GetParameters", "ssm:GetParameter"],
+      "Resource": "arn:aws:ssm:${REGION}::parameter/aws/service/canonical/ubuntu/*"
+    },
+    {
+      "Sid": "CdkAssets",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetBucketLocation", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::cdk-benchbox-assets-${ACCOUNT_ID}-${REGION}",
+        "arn:aws:s3:::cdk-benchbox-assets-${ACCOUNT_ID}-${REGION}/*"
+      ]
+    },
+    {
+      "Sid": "CreateInstanceRoleOnlyWithBoundary",
+      "Effect": "Allow",
+      "Action": "iam:CreateRole",
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/TurmericBenchBox-*",
+      "Condition": {
+        "StringEquals": { "iam:PermissionsBoundary": "arn:aws:iam::${ACCOUNT_ID}:policy/TurmericBenchBoxInstanceBoundary" }
+      }
+    },
+    {
+      "Sid": "ManageInstanceRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
+        "iam:AttachRolePolicy", "iam:DetachRolePolicy",
+        "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy",
+        "iam:UpdateRoleDescription", "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/TurmericBenchBox-*"
+    },
+    {
+      "Sid": "NeverLoosenTheBoundary",
+      "Effect": "Deny",
+      "Action": ["iam:DeleteRolePermissionsBoundary", "iam:PutRolePermissionsBoundary"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "InstanceProfile",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile", "iam:UntagInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:instance-profile/TurmericBenchBox-*"
+    },
+    {
+      "Sid": "PassInstanceRoleToEc2Only",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/TurmericBenchBox-*",
+      "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+    }
+  ]
+}

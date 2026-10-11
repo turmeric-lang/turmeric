@@ -691,3 +691,7 @@ bench-box-pull path dest="":
 # List bench boxes in the account (running or stopped).
 bench-box-status:
     bash {{BENCH}}/scripts/status.sh
+
+# Once, as an admin: IAM policies, scoped CDK bootstrap, optional operator user + budget.
+bench-box-bootstrap *args:
+    bash {{BENCH}}/scripts/bootstrap-account.sh {{args}}

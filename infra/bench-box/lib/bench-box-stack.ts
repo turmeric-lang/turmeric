@@ -20,6 +20,13 @@ export interface BenchBoxStackProps extends cdk.StackProps {
   readonly maxUptimeHours: number;
   /** Optional OpenSSH public key appended to ubuntu's authorized_keys. */
   readonly sshPublicKey?: string;
+  /**
+   * Optional name of a customer-managed policy applied as the permissions
+   * boundary of every role in this stack.  The scoped CloudFormation
+   * execution policy in iam/cfn-exec-policy.json refuses iam:CreateRole
+   * without it, so the stack can never mint a role wider than the boundary.
+   */
+  readonly permissionsBoundaryName?: string;
 }
 
 /**
@@ -41,6 +48,12 @@ export class BenchBoxStack extends cdk.Stack {
 
     cdk.Tags.of(this).add('Project', 'turmeric');
     cdk.Tags.of(this).add('Purpose', 'bench-box');
+
+    if (props.permissionsBoundaryName) {
+      iam.PermissionsBoundary.of(this).apply(
+        iam.ManagedPolicy.fromManagedPolicyName(this, 'InstanceBoundary', props.permissionsBoundaryName),
+      );
+    }
 
     const vpc = new ec2.Vpc(this, 'Vpc', {
       maxAzs: 1,

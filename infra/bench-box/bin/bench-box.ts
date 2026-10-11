@@ -35,6 +35,10 @@ new BenchBoxStack(app, 'TurmericBenchBox', {
   // Optional: scripts/up.sh passes the caller's public key so plain `ssh`
   // (through the SSM proxy) works.  Without it, `aws ssm start-session` still does.
   sshPublicKey: app.node.tryGetContext('sshPublicKey'),
+  // Name of the IAM permissions boundary every role this stack creates must
+  // carry (iam/instance-boundary.json, created by scripts/bootstrap-account.sh).
+  // Empty disables it, for an account bootstrapped the plain way.
+  permissionsBoundaryName: app.node.tryGetContext('permissionsBoundaryName') || undefined,
 });
 
 app.synth();
