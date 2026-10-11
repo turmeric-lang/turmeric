@@ -1189,16 +1189,34 @@ static void cps_pend_fire(EmitCtx *ctx, Buf *body) {
      * ABORTIVE handler abandoned (__dk_abort_abandon) it is clear, and a forced
      * `= 1` would turn the abort into a panic.  A deferred body that panics
      * leaves it set on either path. */
-    buf_puts(body, "{ int __pk = tur_panicking; tur_panicking = 0;   /* defer-skipped-on-panic-in-cps-function: pending defers */\n");
+    /* Each body fires in its own `do { } while (0)`, with the direct emitter's
+     * per-call-site signal check spelled `break` (panic_signal_is_break, the
+     * stackless trampoline's mode): a deferred body that panics leaves that
+     * one body, not the fire, so the bodies declared before it still run --
+     * as tur_frame_fire_lifo runs every closure of a direct frame -- and the
+     * panic is raised again after the last one.  On the panic path a body
+     * that panics is the double panic it always was (tur_panic_in_progress). */
+    buf_puts(body, "{ int __pk = tur_panicking, __pd = 0; tur_panicking = 0;   /* defer-skipped-on-panic-in-cps-function: pending defers */\n");
+    bool saved_break = ctx->panic_signal_is_break;
     for (int i = g_n_pend - 1; i >= 0; i--) {
         if ((g_pend_unfirable | g_pend_downstream) & (1ull << i)) continue;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "do {\n");
+        ctx->indent += 4;
+        ctx->panic_signal_is_break = true;
         char *rhs = emit_value(ctx, body, g_pend[i]);
+        ctx->panic_signal_is_break = saved_break;
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)(%s);\n", rhs ? rhs : "0");
         free(rhs);
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "} while (0);\n");
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "if (tur_panicking) { __pd = 1; tur_panicking = 0; }\n");
     }
     indent_buf(body, ctx->indent);
-    buf_puts(body, "if (__pk) tur_panicking = 1; }\n");
+    buf_puts(body, "if (__pk || __pd) tur_panicking = 1; }\n");
     g_pend_firing = false;
 }
 static void cps_pend_hook_fire(EmitCtx *ctx, Buf *body) {
@@ -3616,8 +3634,17 @@ static bool fn_sig_ok(const FnDef *fd) {
          * value and only ever resumed or marshalled through a plain runtime
          * call, never threaded through a slot -- so, like a ^borrow handle,
          * it keeps an effectful receiver CPS-emittable. */
+        /* cps-escape-receiver-with-handle-evicts: an `escape` receiver's `k`
+         * (CONT_ESCAPE, the tur_escape_cont address as the int64 carrier) is
+         * the same shape -- passed by value, consumed only by a plain
+         * tur_escape_resume call that longjmps to its landing.  Rejecting it
+         * made the receiver a permanently sig-rejected fn, and every function
+         * sharing an effect with it (one it installs a `handle` for) was
+         * evicted with it: a `handle` inside an escape receiver was a hard
+         * "no lowering for perform" error. */
         bool serial_k_ok = p->type.kind == TY_CONT &&
-                           p->type.as.cont.flavor == CONT_SERIAL;
+                           (p->type.as.cont.flavor == CONT_SERIAL ||
+                            p->type.as.cont.flavor == CONT_ESCAPE);
         if (!p->is_borrow && !fn_param_ok && !serial_k_ok
             && !sig_slot_ok(&p->type, p->type.kind)
             && !fn_byval_agg_param_ok(fd, p)

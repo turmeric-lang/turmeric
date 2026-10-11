@@ -123,6 +123,33 @@
   (defer (boom))
   (+ 1 (perform (Abort))))
 
+;; 18. An `escape` whose receiver installs the handle, and whose case invokes
+;;     the escape: the longjmp discards the perform's C frame, and the
+;;     landing fires the defer pending in the abandoned continuation.
+(defn w18 [] : int
+  (defer (note "w18: defer ran"))
+  (+ 1 (perform (Ask))))
+(defn w18-run [] : int
+  (+ 100 (escape (fn [k] (handle (w18) (Ask [] k2) (k 7))))))
+
+;; 19. The escape continuation is passed to a function that installs the
+;;     handle: the same landing, one C frame further out.
+(defn w19 [] : int
+  (defer (note "w19: defer ran"))
+  (+ 1 (perform (Ask))))
+(defn w19-handle [esc : escape-cont] : int
+  (handle (w19) (Ask [] k) (esc 7)))
+(defn w19-run [] : int
+  (+ 100 (escape (fn [k] (w19-handle k)))))
+
+;; 17. Three defers, the middle one panics: the other two still run, LIFO,
+;;     as a direct frame runs every closure of its chain; then the panic.
+(defn w17 [] : int
+  (defer (note "w17: first declared, fires last"))
+  (defer (boom))
+  (defer (note "w17: third declared, fires first"))
+  (+ 1 (perform (Abort))))
+
 (defn run1 [] : int
   (note (if (= 0 (handle (w1) (Abort [] k) 0)) "1: handle -> 0" "1: ?")))
 (defn run2 [] : int
@@ -163,9 +190,16 @@
 (defn run16 [] : int
   (let [r (catch-unwind (fn [] : int (handle (w16) (Abort [] k) 0)))]
     (note (if (err? r) "16: caught" "16: no panic"))))
+(defn run18 [] : int
+  (note (if (= 107 (w18-run)) "18: escape -> 107" "18: ?")))
+(defn run19 [] : int
+  (note (if (= 107 (w19-run)) "19: escape -> 107" "19: ?")))
+(defn run17 [] : int
+  (let [r (catch-unwind (fn [] : int (handle (w17) (Abort [] k) 0)))]
+    (note (if (err? r) "17: caught" "17: no panic"))))
 
 (defn main [] : int
   (run1) (run2) (run3) (run4) (run5) (run6) (run7) (run8)
-  (run9) (run10) (run11) (run12) (run13) (run14) (run15) (run16)
+  (run9) (run10) (run11) (run12) (run13) (run14) (run15) (run16) (run17) (run18) (run19)
   (note "done")
   0)

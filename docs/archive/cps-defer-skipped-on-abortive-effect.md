@@ -107,14 +107,25 @@ end gets a host slot (`tur_tls_dk_pend_perform_ptr`).
 
 **Escapes.** An `escape` landing fires the records the longjmp jumped over
 (`__dk_escape_abandon`): a perform whose case invoked the escape is dead
-unless the case copied its `k`.  No fixture reaches that path today -- a
-`handle` inside an escape receiver evicts the receiver, and an escape
-continuation cannot be called from a function it was passed to -- so the
-landing is pinned only by the existing escape fixtures (no records to fire)
-and the probe during the fix.
+unless the case copied its `k`.  Reaching it needed one more fix: an
+escape receiver's `k` (a `CONT_ESCAPE` continuation, the landing's address
+as the int64 carrier) failed the CPS signature gate (`fn_sig_ok`), which
+made the receiver a permanently sig-rejected function and evicted every
+function sharing an effect with it -- so a `handle` inside an escape
+receiver was a hard "no lowering for perform" error.  The gate now admits
+it as it admits a `serial-cont` (passed by value, consumed only by a plain
+runtime call); fixture cases 18 and 19 cover the receiver installing the
+handle and the continuation passed to a function that does.  Found on the
+way and filed separately: an `escape` written directly in `main` is an
+internal error
+([escape-in-main-reaches-direct-emitter](../reported/escape-in-main-reaches-direct-emitter.md)).
 
-**Not covered.** On the abort path, a deferred body that panics stops the
-remaining fires of that frame (the direct emitter runs them all at a normal
-exit): the unwinder's fires are inline statements, each followed by the
-ordinary panic-signal return, as on the panic path where a second panic is
-a double panic anyway.  Narrow enough to note here rather than file.
+**A deferred body that panics.** The fire helper (`cps_pend_fire`) runs
+each body in its own `do { } while (0)` with the per-call-site signal check
+spelled `break` (the stackless trampoline's `panic_signal_is_break` mode),
+so a body that panics leaves only its own fire and the bodies declared
+before it still run, LIFO, as a direct frame runs every closure of its
+chain; the panic is raised again after the last one (fixture case 17).
+The split runtime needed `g_dk_pend_perform` in the generator's TLS table
+(`tools/gen-runtime-split.py`) so both halves share the one host slot, as
+the driver landing does.

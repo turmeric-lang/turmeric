@@ -1796,7 +1796,8 @@ __attribute__((unused)) __tur_cps_fn __tur_cps_lookup_checked(intptr_t direct,
  * tur_fiber_block_resume), since it can resume on another thread. */
 typedef struct DKPendPerform { DK *k; const DK *H; DK *sub; struct DKPendPerform *up; } DKPendPerform;
 #if defined(__GNUC__) || defined(__clang__)
-TUR_THREAD_LOCAL DKPendPerform *g_dk_pend_perform;
+extern void ** tur_tls_dk_pend_perform_ptr(void);
+#define g_dk_pend_perform (*(DKPendPerform * *)tur_tls_dk_pend_perform_ptr())
 extern void ** tur_tls_dk_reap_v_ptr(void);
 #define __dk_reap_v (*(void ** *)tur_tls_dk_reap_v_ptr())
 extern void ** tur_tls_dk_reap_kind_ptr(void);

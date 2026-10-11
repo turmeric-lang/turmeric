@@ -42,4 +42,11 @@ w14: defer ran
 w15: defer ran
 15: handle -> 43
 16: caught
+w17: third declared, fires first
+w17: first declared, fires last
+17: caught
+w18: defer ran
+18: escape -> 107
+w19: defer ran
+19: escape -> 107
 done
