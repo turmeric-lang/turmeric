@@ -17734,6 +17734,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * return an int64 from a `void *` function. */
                     buf_printf(&hb, "(%s)(intptr_t)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                fld_rcty, adt_mn, sv, mp);
+                } else if (ctor && e->as.get_field_.field_idx < ctor->n_fields &&
+                           !adt_is_byvalue_product(adt) &&
+                           (adt_field_is_inline_byval(
+                                &ctor->fields[e->as.get_field_.field_idx]) ||
+                            emit_type_is_byvalue_adt(ctx, fld_rty)) &&
+                           cty && strncmp(cty, "tur_adt_", 8) == 0 &&
+                           strchr(cty, '*') == NULL) {
+                    /* struct-field-with-opaque-sibling-lowered-to-int: a CARRIER
+                     * record (an opaque field keeps `(defstruct Er [msg : S pos
+                     * : Pos])` off the by-value ABI, so every slot is the int64
+                     * word) stores a by-value aggregate field BOXED -- the
+                     * constructor's CONV-S1/B3 field-store crossing, which
+                     * inlines a field only when the OWNER is a by-value product
+                     * -- and the match binder unboxes it (B3).  The `.field`
+                     * read is the third party to that contract: deref the box.
+                     * adt_field_is_inline_byval alone answers for the field, not
+                     * the owner.  Reading the slot raw left `(.line (.pos e))`
+                     * applying `.line` to an int64_t. */
+                    buf_printf(&hb, "(*(%s *)(intptr_t)(((tur_adt_%s *)(intptr_t)(%s))->%s))",
+                               cty, adt_mn, sv, mp);
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                cty, adt_mn, sv, mp);

@@ -1,0 +1,40 @@
+;; struct-field-with-opaque-sibling-lowered-to-int: a `defopaque` field keeps a
+;; struct off the by-value ABI, so its other fields are int64 slots and a
+;; by-value aggregate field (a struct, a by-value defdata) is stored BOXED.
+;; The constructor boxed it and a match unboxed it, but `(.pos e)` read the slot
+;; raw: `(.line (.pos e))` was "request for member line in something not a
+;; structure".  Field order, `:copy`, and `:non-null` on the opaque do not matter.
+
+(defopaque S :ptr<void>)
+(defopaque T :ptr<void> :non-null)
+(defstruct Pos :copy [line : int col : int])
+(defdata K (Ka int) (Kb int int))
+(defstruct Er :copy [msg : S pos : Pos])
+(defstruct Er2 [pos : Pos msg : T])
+(defstruct Er3 :copy [msg : S kind : K])
+(defn __s [] : ptr<void>
+  ```c
+  return (void*)"x";
+  ```)
+(defn show [s : S] : cstr
+  ```c
+  return (const char *)s;
+  ```)
+(defn pos-sum [p : Pos] : int (+ (.line p) (.col p)))
+(defn kind-val [k : K] : int (match k (Ka a) a (Kb a b) (* a b)))
+(defn mk [] : Er (Er (:: (__s) S) (Pos 3 4)))
+(defn mk2 [] : Er2 (Er2 (Pos 5 6) (:: (__s) T)))
+(defn mk3 [k : K] : Er3 (Er3 (:: (__s) S) k))
+(defn main [] : int
+  (let [e (mk)]
+    (println (.line (.pos e)))         ; 3
+    (println (.col (.pos e)))          ; 4
+    (println (pos-sum (.pos e)))       ; 7
+    (let [p (.pos e)] (println (.col p)))  ; 4
+    (println (show (.msg e))))         ; x
+  (let [e2 (mk2)]
+    (println (.col (.pos e2))))        ; 6
+  (println (kind-val (.kind (mk3 (Kb 2 5)))))   ; 10
+  (let [k (.kind (mk3 (Ka 9)))]
+    (println (kind-val k)))            ; 9
+  0)
