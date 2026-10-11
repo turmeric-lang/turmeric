@@ -2441,9 +2441,35 @@ static bool m7_body_returns_byvalue_element(const Expr *e) {
  * collected bindings feed elab_subst_class_tyvars to refine the HKT result
  * `(Option b)` to a ground `(Option int)` at the call site.  Names are interned
  * so they compare by Symbol identity the same way elab_subst_class_tyvars does. */
+/* generic-hkt-method-lambda-with-tyvar-param-not-emitted: is `t` one of the
+ * enclosing defn's own kind-`*` signature type variables (`A` in
+ * `(defn w [A] [o : (Option A)] ...)`)?  Such a variable is not a free
+ * inference variable: every specialization of the enclosing generic pins it,
+ * so a binding to it is resolvable at emit time. */
+static bool m7_is_star_sig_tyvar(const Elab *e, const Type *t) {
+    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name) return false;
+    for (uint8_t i = 0; i < e->n_sig_tyvars && i < 32; i++)
+        if (e->sig_tyvars[i] && strcmp(e->sig_tyvars[i], t->as.tyvar_.name) == 0)
+            return e->sig_tyvar_kinds[i] == KIND_STAR;
+    return false;
+}
+
+static void m7_collect_tyvar_bindings_x(Elab *e, Type decl, Type act,
+                                        const Symbol **names, Type *types,
+                                        uint8_t *n, uint8_t max, bool sig_ok);
+
 static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
                                       const Symbol **names, Type *types,
                                       uint8_t *n, uint8_t max) {
+    m7_collect_tyvar_bindings_x(e, decl, act, names, types, n, max, false);
+}
+
+/* `sig_ok`: also accept an actual that is the enclosing defn's own kind-`*`
+ * signature variable (m7_is_star_sig_tyvar) -- a SYMBOLIC binding the emitter
+ * composes through the enclosing specialization. */
+static void m7_collect_tyvar_bindings_x(Elab *e, Type decl, Type act,
+                                        const Symbol **names, Type *types,
+                                        uint8_t *n, uint8_t max, bool sig_ok) {
     switch (decl.kind) {
         case TY_TYVAR:
             /* A free-tyvar ACTUAL carries no grounding information (e.g. the
@@ -2455,7 +2481,8 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
              * and the result would never ground.  (This also leaves the genuine
              * `ap` caveat -- `(ap (none) (some 41))`, where NO arg grounds `b` --
              * un-grounded, so it still falls back to carrier dispatch.) */
-            if (act.kind == TY_TYVAR) return;
+            if (act.kind == TY_TYVAR && !(sig_ok && m7_is_star_sig_tyvar(e, &act)))
+                return;
             if (decl.as.tyvar_.name) {
                 for (uint8_t i = 0; i < *n; i++)
                     if (names[i] && strcmp(names[i]->name, decl.as.tyvar_.name) == 0)
@@ -2485,19 +2512,19 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
                 Type ar = act.as.fn.result_full_type
                           ? *act.as.fn.result_full_type
                           : type_from_kind(act.as.fn.result_kind);
-                m7_collect_tyvar_bindings(e, *decl.as.app.fn->as.app.arg, aa,
-                                          names, types, n, max);
-                m7_collect_tyvar_bindings(e, *decl.as.app.arg, ar,
-                                          names, types, n, max);
+                m7_collect_tyvar_bindings_x(e, *decl.as.app.fn->as.app.arg, aa,
+                                            names, types, n, max, sig_ok);
+                m7_collect_tyvar_bindings_x(e, *decl.as.app.arg, ar,
+                                            names, types, n, max, sig_ok);
                 return;
             }
             if (act.kind == TY_APP) {
                 if (decl.as.app.fn && act.as.app.fn)
-                    m7_collect_tyvar_bindings(e, *decl.as.app.fn, *act.as.app.fn,
-                                              names, types, n, max);
+                    m7_collect_tyvar_bindings_x(e, *decl.as.app.fn, *act.as.app.fn,
+                                                names, types, n, max, sig_ok);
                 if (decl.as.app.arg && act.as.app.arg)
-                    m7_collect_tyvar_bindings(e, *decl.as.app.arg, *act.as.app.arg,
-                                              names, types, n, max);
+                    m7_collect_tyvar_bindings_x(e, *decl.as.app.arg, *act.as.app.arg,
+                                                names, types, n, max, sig_ok);
             }
             return;
         case TY_FN:
@@ -2511,7 +2538,7 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
                     Type aa = (act.as.fn.arg_full_types && act.as.fn.arg_full_types[i])
                               ? *act.as.fn.arg_full_types[i]
                               : type_from_kind(act.as.fn.arg_kinds[i]);
-                    m7_collect_tyvar_bindings(e, da, aa, names, types, n, max);
+                    m7_collect_tyvar_bindings_x(e, da, aa, names, types, n, max, sig_ok);
                 }
                 Type dr = decl.as.fn.result_full_type
                           ? *decl.as.fn.result_full_type
@@ -2519,7 +2546,7 @@ static void m7_collect_tyvar_bindings(Elab *e, Type decl, Type act,
                 Type ar2 = act.as.fn.result_full_type
                            ? *act.as.fn.result_full_type
                            : type_from_kind(act.as.fn.result_kind);
-                m7_collect_tyvar_bindings(e, dr, ar2, names, types, n, max);
+                m7_collect_tyvar_bindings_x(e, dr, ar2, names, types, n, max, sig_ok);
             }
             return;
         default:
@@ -2614,6 +2641,29 @@ static bool m7_params_mention_under_app_of(const TypeClassMethod *cm,
  * return) while the dispatch dict references a dropped carrier base, a hard cc
  * error.  Detecting the free tyvar lets the caller fall back to the uniform
  * carrier dispatch instead. */
+/* Does every type variable in `t` name one of the enclosing defn's kind-`*`
+ * signature variables (m7_is_star_sig_tyvar)?  True for a ground type. */
+static bool m7_type_only_sig_tyvars(const Elab *e, Type t) {
+    switch (t.kind) {
+        case TY_TYVAR:
+            return m7_is_star_sig_tyvar(e, &t);
+        case TY_APP:
+            return (!t.as.app.fn || m7_type_only_sig_tyvars(e, *t.as.app.fn)) &&
+                   (!t.as.app.arg || m7_type_only_sig_tyvars(e, *t.as.app.arg));
+        case TY_FN: {
+            if (t.as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t.as.fn.arity; i++)
+                    if (t.as.fn.arg_full_types[i] &&
+                        !m7_type_only_sig_tyvars(e, *t.as.fn.arg_full_types[i]))
+                        return false;
+            return !t.as.fn.result_full_type ||
+                   m7_type_only_sig_tyvars(e, *t.as.fn.result_full_type);
+        }
+        default:
+            return true;
+    }
+}
+
 static bool m7_type_has_free_tyvar(Type t) {
     switch (t.kind) {
         case TY_TYVAR:
@@ -9054,9 +9104,21 @@ resolved_user_fallback:;
     const Symbol *lam_bn[16];
     Type lam_bt[16];
     uint8_t lam_nb = 0;
+    /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: on a STATIC
+     * dispatch (concrete receiver head) the element may be the enclosing
+     * defn's own signature variable -- `(do-m v p ...)` with `p : (Parser A)`
+     * types `v : A`.  Such a lambda is emitted per specialization now, so it
+     * no longer has to fall back to the carrier default. */
+    bool lam_sig_ok = false;
+    {
+        const Type *hh = &obj->type;
+        while (hh && hh->kind == TY_APP) hh = hh->as.app.fn;
+        lam_sig_ok = hh && hh->kind == TY_ADT && hh->as.adt_.def &&
+                     e->n_sig_tyvars > 0;
+    }
     if (lam_cm && lam_cm->n_params >= 1)
-        m7_collect_tyvar_bindings(e, lam_cm->param_types[0], obj->type,
-                                  lam_bn, lam_bt, &lam_nb, 16);
+        m7_collect_tyvar_bindings_x(e, lam_cm->param_types[0], obj->type,
+                                    lam_bn, lam_bt, &lam_nb, 16, lam_sig_ok);
     for (uint32_t i = 0; i < n_args; i++) {
         Form *af = call->as.list.items[2 + i];
         Type *lam_push = NULL;
@@ -9078,14 +9140,15 @@ resolved_user_fallback:;
                 if (!ak) continue;
                 Type at = elab_subst_class_tyvars(e->arena, *ak, lam_bn, lam_nb,
                                                   lam_bt, lam_nb);
-                /* Only a GROUND element type types the param.  One still
-                 * naming a type variable -- the `A` of an enclosing
-                 * `(defn token [A] ...)` -- keeps the carrier default it
-                 * always had: a lambda capturing such a param inside another
-                 * lambda is not emitted (the `__fn_N undeclared` cc error), so
-                 * typing it would turn working generic parsers into broken
-                 * ones. */
-                if (tc_type_mentions_tyvar(&at)) continue;
+                /* Only a GROUND element type types the param -- or, on a
+                 * static dispatch, one naming only the enclosing defn's own
+                 * signature variables (the `A` of `(defn token [A] ...)`),
+                 * whose nested capturing lambdas are emitted per
+                 * specialization (generic-hkt-method-lambda-with-tyvar-param-
+                 * not-emitted).  Any other variable keeps the carrier
+                 * default. */
+                if (tc_type_mentions_tyvar(&at) &&
+                    !(lam_sig_ok && m7_type_only_sig_tyvars(e, at))) continue;
                 afts[k] = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *afts[k] = at;
             }
@@ -10328,6 +10391,67 @@ resolved_user_fallback:;
             }
             out->as.call_.abi_bindings = bindings;
             out->as.call_.n_abi_bindings = total;
+        }
+        /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a STATIC
+         * HKT dispatch (concrete receiver head, `Option`) inside a generic defn
+         * whose element is that defn's own type variable --
+         * `(bind o (fn [v : A] : (Option A) ...))` with `o : (Option A)`.  The
+         * collector above skips every tyvar actual, so `a`/`b` stayed unbound,
+         * nothing was attached, and the spec clone of the enclosing generic
+         * could recover only `b` (from its own result): it minted
+         * `bind__spec__<Option int>_int64_t_int64_t`, a receiver at the
+         * carrier that disagreed with the by-value continuation.  Bind the
+         * element variables symbolically to the signature variable (`a -> A`,
+         * `b -> A`) -- the same move G6(c) makes for fmap's bare `b` -- so emit
+         * composes them through the enclosing specialization (`A -> int`) and
+         * reaches the spec a ground call picks.  The carrier base of the
+         * enclosing generic sees an unresolved tyvar and stays on the carrier. */
+        if (is_hkt && m7_body_byvalue_ok && !m7_byvalue_grounded && m7_cm &&
+            m7_result_is_applied && e->n_sig_tyvars > 0 &&
+            tc->n_type_params >= 1 && tc->type_params[0]) {
+            const Type *hh = &obj_orig_type;
+            while (hh && hh->kind == TY_APP) hh = hh->as.app.fn;
+            bool head_concrete = hh && hh->kind == TY_ADT && hh->as.adt_.def;
+            bool class_var_bound = false;
+            for (uint8_t k = 0; k < m7_nb; k++)
+                if (m7_bind_names[k] &&
+                    strcmp(m7_bind_names[k]->name, tc->type_params[0]->name) == 0)
+                    { class_var_bound = true; break; }
+            if (head_concrete && class_var_bound) {
+                uint8_t before = m7_nb;
+                if (m7_cm->n_params >= 1)
+                    m7_collect_tyvar_bindings_x(e, m7_cm->param_types[0],
+                                                obj_orig_type, m7_bind_names,
+                                                m7_bind_types, &m7_nb, 16, true);
+                for (uint32_t i = 0; i < n_args; i++) {
+                    uint8_t pidx = (uint8_t)(1 + i);
+                    if (pidx >= m7_cm->n_params) break;
+                    m7_collect_tyvar_bindings_x(e, m7_cm->param_types[pidx],
+                                                args_orig_types[i], m7_bind_names,
+                                                m7_bind_types, &m7_nb, 16, true);
+                }
+                if (m7_nb > before) {
+                    m7_symbolic_elem = true;
+                    /* The result is now known up to the signature variable --
+                     * `(Option A)` -- where it was the def-less `(? ?)` shell,
+                     * which no generic consumer (`(unwrap-or (bind ...) d)`)
+                     * accepts.  Commit it: the carrier base reads `(Option A)`
+                     * as the carrier the base `bind` returns, and each
+                     * specialization resolves it to the by-value type the
+                     * bindings just attached make its `bind` spec return. */
+                    const Type *rft = best_method->binding->type.as.fn.result_full_type;
+                    if (!rft) rft = &m7_cm->return_type;
+                    Type sub = elab_subst_class_tyvars(
+                        e->arena, *rft, m7_bind_names, m7_nb, m7_bind_types, m7_nb);
+                    const Type *sh = &sub;
+                    while (sh && sh->kind == TY_APP) sh = sh->as.app.fn;
+                    if (out->type.kind == TY_APP &&
+                        (!out->type.as.app.fn || !out->type.as.app.arg) &&
+                        sub.kind == TY_APP && sh && sh->kind == TY_ADT &&
+                        sh->as.adt_.def && m7_type_only_sig_tyvars(e, sub))
+                        out->type = sub;
+                }
+            }
         }
         /* M7 layer-4 prep: for an HKT class, attach the class var
          * (`g -> Option`) plus the element tyvars collected by layers 1+3

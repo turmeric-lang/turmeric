@@ -4600,6 +4600,10 @@ static char *emit_reresolve_fn_value(EmitCtx *ctx, const Binding *b) {
     return NULL;
 }
 
+char *emit_fn_value_spec_clone(EmitCtx *ctx, const Binding *b) {
+    return emit_reresolve_fn_value(ctx, b);
+}
+
 char *atom_var(EmitCtx *ctx, const Binding *b) {
     char *reresolved = emit_reresolve_fn_value(ctx, b);
     if (reresolved) return reresolved;

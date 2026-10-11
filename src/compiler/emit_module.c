@@ -5935,6 +5935,81 @@ static bool emit_abi_fn_has_effectful_fn_param(const FnDef *fd) {
     return false;
 }
 
+/* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a passed-closure
+ * clone (`__fn_N__spec__...`, linked by emit_abi_register_call's inner_passed
+ * path) whose own body PASSES a capturing closure in turn -- the nested
+ * continuation of `(bind o (fn [v : A] ... (bind q (fn [w : A] ... v))))`.
+ * The outer spec links only the closures ITS body passes, so the nested one
+ * was built from its never-emitted base (`'__fn_N' undeclared`).  Link every
+ * closure the clone's body passes to the clone, exactly as the outer spec's
+ * extras are linked, and recurse into each fresh one.  `clone_idx` indexes
+ * ctx->abi_specializations (which interning may reallocate). */
+static void emit_abi_link_nested_passed_closures(
+        EmitCtx *ctx, uint32_t clone_idx, const Expr *body,
+        const Expr **items, uint32_t n_items, uint32_t depth) {
+    if (!body || depth > 8) return;
+    AbiTypeBinding cb[ABI_TYPE_BINDINGS_MAX];
+    uint8_t ncb = ctx->abi_specializations[clone_idx].n_bindings;
+    if (ncb == 0 || ncb > ABI_TYPE_BINDINGS_MAX) return;
+    memcpy(cb, ctx->abi_specializations[clone_idx].bindings,
+           ncb * sizeof(AbiTypeBinding));
+    Binding *found[TUR_EXTRA_INNER_CLOSURE_MAX + 1];
+    uint8_t n_found = 0;
+    emit_collect_passed_spec_closures(body, cb, ncb, ctx->type_arena, found,
+                                      TUR_EXTRA_INNER_CLOSURE_MAX + 1, &n_found);
+    for (uint8_t ci = 0; ci < n_found; ci++) {
+        Binding *xclo = found[ci];
+        if (emit_inner_closure_spec_for_binding(
+                ctx, &ctx->abi_specializations[clone_idx], xclo))
+            continue;                                   /* already linked */
+        const Expr *xexpr = emit_abi_find_fn_expr(items, n_items, xclo);
+        if (!xexpr || xexpr->kind != EX_FN_DEF || !xexpr->as.fn_def_.fn) continue;
+        FnDef *xfd = xexpr->as.fn_def_.fn;
+        if (xfd->n_params == 0 || xfd->n_params > MAX_FN_ARITY)
+            continue;
+        Type xargs[MAX_FN_ARITY];
+        uint32_t xn = xfd->n_params;
+        for (uint8_t i = 0; i < xn; i++) {
+            if (i == 0) { xargs[i] = xfd->param_types[0]; continue; }
+            const Type *aft = (xclo->type.as.fn.arg_full_types &&
+                               i < xclo->type.as.fn.arity)
+                ? xclo->type.as.fn.arg_full_types[i] : NULL;
+            xargs[i] = emit_abi_instantiate_type(
+                aft ? aft : &xfd->param_types[i], cb, ncb, ctx->type_arena);
+        }
+        Type xres = xclo->type.as.fn.result_full_type
+            ? emit_abi_instantiate_type(xclo->type.as.fn.result_full_type,
+                                        cb, ncb, ctx->type_arena)
+            : emit_type_from_kind(xclo->type.as.fn.result_kind);
+        uint32_t x_before = ctx->n_abi_specializations;
+        EmitAbiSpecialization *xspec = emit_abi_intern_spec(
+            ctx, xclo, xexpr, xfd, cb, ncb, xargs, (uint8_t)xn, xres, NULL, false);
+        bool x_is_new = ctx->n_abi_specializations != x_before;
+        emit_assign_inner_env_override(ctx, xfd, xres, xspec);
+        uint32_t x_idx = (uint32_t)(xspec - ctx->abi_specializations);
+        ctx->abi_specializations[x_idx].is_passed_closure_clone = true;
+        EmitAbiSpecialization *osp = &ctx->abi_specializations[clone_idx];
+        if (osp->inner_closure_spec_idx < 0)
+            osp->inner_closure_spec_idx = (int32_t)x_idx;
+        else if (osp->n_extra_inner_closure_spec_idx < TUR_EXTRA_INNER_CLOSURE_MAX)
+            osp->extra_inner_closure_spec_idx[
+                osp->n_extra_inner_closure_spec_idx++] = (int32_t)x_idx;
+        if (x_is_new && xfd->body) {
+            const EmitAbiSpecialization *saved_c = ctx->current_abi_specialization;
+            bool saved_in = saved_c >= ctx->abi_specializations &&
+                            saved_c < ctx->abi_specializations + ctx->n_abi_specializations;
+            uint32_t saved_ci = saved_in
+                ? (uint32_t)(saved_c - ctx->abi_specializations) : 0;
+            ctx->current_abi_specialization = &ctx->abi_specializations[x_idx];
+            emit_abi_scan_expr(ctx, xfd->body, items, n_items);
+            ctx->current_abi_specialization = saved_in
+                ? &ctx->abi_specializations[saved_ci] : saved_c;
+            emit_abi_link_nested_passed_closures(ctx, x_idx, xfd->body,
+                                                 items, n_items, depth + 1);
+        }
+    }
+}
+
 static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                                    const Expr **items, uint32_t n_items,
                                    const Type *result_type_override) {
@@ -6059,7 +6134,18 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
              * `fmap` with a by-value aggregate.  Mirror the MB2.5 carve-out: fall
              * through to the intern below so the rehydrated `f := <functor>`
              * bindings mint `__inst_Functor_fmap_<F>__spec__...`. */
-            if (!(ctx->current_abi_specialization &&
+            /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: nor when
+             * the re-dispatch lands on the very method the call already names
+             * and elab attached element bindings to it (a STATIC HKT dispatch
+             * whose element is the enclosing generic's variable).  Nothing is
+             * rewritten there; the bindings say which by-value spec this
+             * specialization needs, and the continuation it is handed returns
+             * by value -- the intern below must run. */
+            bool same_method_with_elems =
+                redisp_is_hkt && redisp->binding == call->as.call_.fn_binding &&
+                call->as.call_.n_abi_bindings > 1;
+            if (!same_method_with_elems &&
+                !(ctx->current_abi_specialization &&
                   ctx->current_abi_specialization->is_vl_wide_mono)) {
                 emit_abi_note_carrier_call(ctx, redisp->binding);
                 return;
@@ -7997,6 +8083,10 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 emit_abi_scan_expr(ctx, inner_fd->body, items, n_items);
                 ctx->current_abi_specialization = saved_in
                     ? &ctx->abi_specializations[saved_ci] : saved_c;
+                if (inner_passed)
+                    emit_abi_link_nested_passed_closures(ctx, inner_idx,
+                                                         inner_fd->body,
+                                                         items, n_items, 0);
             }
         }
     }
@@ -8064,6 +8154,8 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                 emit_abi_scan_expr(ctx, xfd->body, items, n_items);
                 ctx->current_abi_specialization = saved_in
                     ? &ctx->abi_specializations[saved_ci] : saved_c;
+                emit_abi_link_nested_passed_closures(ctx, x_idx, xfd->body,
+                                                     items, n_items, 0);
             }
         }
     }
@@ -8134,6 +8226,16 @@ static bool emit_abi_fn_value_signature(EmitCtx *ctx, const Binding *vb,
         out_args[a] = full
             ? emit_abi_instantiate_type(full, bindings, n_bindings, ctx->type_arena)
             : vfd->param_types[a];
+        /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a rank-2
+         * wrapper's tyvar parameter takes the element the way a typed `:fn`
+         * call passes it -- natively, except a by-value aggregate, which
+         * crosses as a word pointing at it (emit_expr's poly-call arg loop
+         * boxes it) and which the wrapper's inner call derefs back
+         * (poly_agg_arg_mask).  So the clone keeps the carrier there. */
+        if (vb->synth_kind == SYNTH_FORWARDING_WRAPPER &&
+            generic_arg.kind == TY_TYVAR &&
+            emit_type_is_byvalue_adt(ctx, out_args[a]))
+            out_args[a] = emit_type_from_kind(TY_INT);
         if (strcmp(type_c_name(generic_arg), type_c_name(out_args[a])) != 0)
             abi_changes = true;
     }
@@ -8148,10 +8250,20 @@ static bool emit_abi_fn_value_signature(EmitCtx *ctx, const Binding *vb,
     return abi_changes;
 }
 
+static bool emit_abi_scan_one_fn_value(EmitCtx *ctx, Binding *vb,
+                                       const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                       const Expr **items, uint32_t n_items);
+
 static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
                                     const AbiTypeBinding *bindings, uint8_t n_bindings,
                                     const Expr **items, uint32_t n_items) {
     if (!call || call->kind != EX_CALL || !bindings || n_bindings == 0) return;
+    /* `bindings` is usually the active spec's own array, which interning a
+     * clone below may reallocate -- read it from a copy. */
+    if (n_bindings > ABI_TYPE_BINDINGS_MAX) n_bindings = ABI_TYPE_BINDINGS_MAX;
+    AbiTypeBinding local_b[ABI_TYPE_BINDINGS_MAX];
+    memcpy(local_b, bindings, n_bindings * sizeof(AbiTypeBinding));
+    bindings = local_b;
     for (uint32_t i = 0; i < call->as.call_.n_args; i++) {
         const Expr *arg = call->as.call_.args[i];
         /* EX_POLY_WRAP too -- see the matching note in
@@ -8166,19 +8278,47 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
                 : (arg->kind == EX_FN_TO_FAT) ? arg->as.fn_to_fat_.inner
                                               : arg->as.poly_wrap_.inner;
         }
-        (void)poly_wrapped;
+        /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: the rank-2
+         * wrapper elab minted for a lambda typed by the ENCLOSING generic's
+         * variable (`(fn [v : A] : (Option A) ...)` handed to `bind`) is itself
+         * generic -- its result is `(Option A)` -- and the pack site names it as
+         * a VALUE.  Clone it under this specialization like any other generic
+         * fn value, so the pack site (EX_POLY_WRAP, emit_expr.c) can name a
+         * wrapper whose result is the by-value `(Option int)` the specialized
+         * instance method reads back.  Its body's call to the lambda then
+         * specializes from the clone's result. */
+        if (poly_wrapped && poly_wrapped->as.poly_wrap_.wrapper_binding &&
+            !poly_wrapped->as.poly_wrap_.is_closure) {
+            Binding *wb = poly_wrapped->as.poly_wrap_.wrapper_binding;
+            /* No clone (the specialization leaves its ABI alone): the pack
+             * site names the base wrapper, which a generic body's wrapper is
+             * dropped without (emit_abi_fn_skip_generic) unless noted. */
+            if (!emit_abi_scan_one_fn_value(ctx, wb, bindings, n_bindings,
+                                            items, n_items))
+                emit_abi_note_carrier_call(ctx, wb);
+        }
         if (!arg || arg->kind != EX_VAR) continue;
         if (arg->type.kind != TY_FN && !(arg->as.var.binding &&
                                          arg->as.var.binding->type.kind == TY_FN))
             continue;
-        Binding *vb = arg->as.var.binding;
+        emit_abi_scan_one_fn_value(ctx, arg->as.var.binding, bindings, n_bindings,
+                                   items, n_items);
+    }
+}
+
+/* One generic fn VALUE `vb` met under the active bindings: clone it when the
+ * bindings change its ABI or the instance it dispatches to. */
+static bool emit_abi_scan_one_fn_value(EmitCtx *ctx, Binding *vb,
+                                       const AbiTypeBinding *bindings, uint8_t n_bindings,
+                                       const Expr **items, uint32_t n_items) {
+    {
         if (!vb || vb->type.kind != TY_FN || !vb->is_global || vb->closure_fn_binding)
-            continue;
+            return false;
 
         const Expr *vfn_expr = emit_abi_find_fn_expr(items, n_items, vb);
-        if (!vfn_expr || !vfn_expr->as.fn_def_.fn) continue;
+        if (!vfn_expr || !vfn_expr->as.fn_def_.fn) return false;
         FnDef *vfd = vfn_expr->as.fn_def_.fn;
-        if (vfd->closure || !vfd->body) continue;
+        if (vfd->closure || !vfd->body) return false;
         /* Per-instantiation monomorphization: see emit_abi_register_call's
          * matching comment.  Drop the no-marker bail; the `if (!abi_changes)
          * continue;` below already handles the int-carried case. */
@@ -8213,7 +8353,7 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
                 g_bhd_detect_return_dispatch = saved_detect;
             }
         }
-        if (!abi_changes && !instance_changes) continue;
+        if (!abi_changes && !instance_changes) return false;
 
         /* Per-instantiation monomorphization: skip inline-C bodies without
          * `__TUR_TY_<NAME>__` markers unless a slot escapes the carrier ABI
@@ -8231,7 +8371,7 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
                 v_result.kind == TY_STRUCT &&
                 !type_uses_carrier_abi(v_result))
                 needs_byvalue_spec = true;
-            if (!needs_byvalue_spec) continue;
+            if (!needs_byvalue_spec) return false;
         }
 
         uint32_t before = ctx->n_abi_specializations;
@@ -8252,6 +8392,7 @@ static void emit_abi_scan_fn_values(EmitCtx *ctx, const Expr *call,
             emit_abi_scan_expr(ctx, vfd->body, items, n_items);
             ctx->current_abi_specialization = saved;
         }
+        return child != NULL;
     }
 }
 
@@ -9697,6 +9838,23 @@ static bool emit_abi_carrier_relay_walk(EmitCtx *ctx, const Expr *enclosing_fn,
             }
             break;
         }
+        case EX_POLY_WRAP:
+            /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a
+             * rank-2 argument -- `bind`'s continuation -- reaches its callee
+             * through EX_POLY_WRAP, which hid the closure inside it from the
+             * EX_CLOSURE case below.  And the elab-minted wrapper `__poly_N`
+             * the pack site names is itself generic when the lambda it
+             * forwards to is typed by the enclosing generic's variable, so it
+             * is dropped like the thunks above unless noted.  (Inside a
+             * specialization emit_abi_scan_fn_values clones or notes it.) */
+            if (e->as.poly_wrap_.wrapper_binding && !e->as.poly_wrap_.is_closure &&
+                !emit_abi_has_carrier_call(ctx, e->as.poly_wrap_.wrapper_binding)) {
+                emit_abi_note_carrier_call(ctx, e->as.poly_wrap_.wrapper_binding);
+                changed = true;
+            }
+            changed |= emit_abi_carrier_relay_walk(ctx, enclosing_fn,
+                                                   e->as.poly_wrap_.inner, items, n_items);
+            break;
         case EX_VAR:
             /* Same reasoning for a captureless lifted lambda referenced by
              * address (a bare `__fn_N` fn-pointer value handed to a caller). */

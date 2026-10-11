@@ -13575,7 +13575,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool pbp = (pt.kind == TY_ADT && pt.as.adt_.def)
                                    ? adt_byval_pass_by_ptr(pt.as.adt_.def)
                                    : adt_app_byval_pass_by_ptr(pt);
-                    if (pbp) {
+                    /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a
+                     * TYVAR parameter (the enclosing generic's element) is a word
+                     * pointing at an aggregate only where it resolves to one. */
+                    if (fn_binding->type.as.fn.arg_full_types[i]->kind == TY_TYVAR &&
+                        !emit_type_is_byvalue_adt(ctx, pt)) {
+                        /* native element: pass it through untouched */
+                    } else if (pbp) {
                         Buf c; buf_init(&c);
                         buf_printf(&c, "((const %s *)(intptr_t)(%s))",
                                    emit_type_c_name(ctx, pt), raw);
@@ -18433,6 +18439,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (variant) { free(wn); wn = variant; wn_is_variant = true; }
                     }
                 }
+            }
+            /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a
+             * wrapper that is itself generic (it forwards to a lambda typed by
+             * the enclosing generic's variable) was cloned under this
+             * specialization by emit_abi_scan_fn_values; name that clone, whose
+             * result is the specialization's by-value type. */
+            if (!wn_is_variant) {
+                char *wclone = emit_fn_value_spec_clone(
+                    ctx, e->as.poly_wrap_.wrapper_binding);
+                if (wclone) { free(wn); wn = wclone; }
             }
             /* M7: if the wrapper RETURNS a by-value aggregate (a Monad/HKT
              * continuation returning `(m b)`), it cannot be cast to the int64

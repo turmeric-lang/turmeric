@@ -12301,6 +12301,29 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
         snprintf(apname, sizeof(apname), "__poly_x%u_%u", i, elab_fresh_id(e));
         const Symbol *apsym = symtab_intern(e->st, strslice(apname, (uint32_t)strlen(apname)));
         Type apt = type_from_kind(real_arg_kinds[i]);
+        /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a lifted
+         * lambda whose parameter is the ENCLOSING defn's own type variable
+         * (`(fn [v : A] ...)` inside `(defn w [A] ...)`) -- keep that variable
+         * on the wrapper's parameter.  The base wrapper still spells it as the
+         * int64 carrier, but the per-specialization clone the emitter mints
+         * (emit_abi_scan_fn_values) then takes the element at its own type
+         * (`double`), which is how a by-value instance-method spec invokes the
+         * continuation.  A named generic fn's tyvars are its own quantifier,
+         * not the enclosing one, so it keeps the carrier. */
+        if (real_arg_kinds[i] == TY_INT && inner_is_plain_fn &&
+            inner_b->is_lifted_lambda && i < inner_b->type.as.fn.arity &&
+            inner_b->type.as.fn.arg_full_types &&
+            inner_b->type.as.fn.arg_full_types[i] &&
+            inner_b->type.as.fn.arg_full_types[i]->kind == TY_TYVAR &&
+            inner_b->type.as.fn.arg_full_types[i]->as.tyvar_.name) {
+            const char *tn = inner_b->type.as.fn.arg_full_types[i]->as.tyvar_.name;
+            for (uint8_t k = 0; k < e->n_sig_tyvars && k < 32; k++)
+                if (e->sig_tyvars[k] && strcmp(e->sig_tyvars[k], tn) == 0) {
+                    if (e->sig_tyvar_kinds[k] == KIND_STAR)
+                        apt = *inner_b->type.as.fn.arg_full_types[i];
+                    break;
+                }
+        }
         Binding *apb = binding_new(e, apsym, apt, false, false, span);
         wparams[argbase + i] = apb;
         wparam_types[argbase + i] = apt;
@@ -12325,7 +12348,7 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
     uint64_t call_poly_mask = 0;
     uint64_t call_agg_mask = 0;
     for (uint32_t i = 0; i < inner_arity; i++) {
-        Expr *av = expr_new(e->arena, EX_VAR, type_from_kind(real_arg_kinds[i]), span);
+        Expr *av = expr_new(e->arena, EX_VAR, arg_bs[i]->type, span);
         av->as.var.binding = arg_bs[i];
         call_args[i] = av;
         /* Phase HRT3: if inner_b's param i is a poly fn, the wrapper receives it as int64_t
@@ -12346,6 +12369,13 @@ Binding *make_poly_wrapper_ex(Elab *e, Binding *inner_b, uint8_t inner_arity,
                       (aft->kind == TY_ADT && aft->as.adt_.def &&
                        !aft->as.adt_.def->is_heap &&
                        adt_is_byvalue_product(aft->as.adt_.def)))) {
+                call_agg_mask |= ARG_IDX_BIT(i);
+            }
+            /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: the
+             * enclosing-tyvar parameter kept above is an aggregate in some
+             * specializations; the emitter derefs it only in those. */
+            else if (aft && aft->kind == TY_TYVAR &&
+                     arg_bs[i]->type.kind == TY_TYVAR) {
                 call_agg_mask |= ARG_IDX_BIT(i);
             }
         }
