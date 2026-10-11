@@ -23,23 +23,22 @@
 (load "stdlib/httpd.tur")
 
 (defmodule httpd-compress
-  (import tur/zlib :refer [gzip-encode gzip-buf-data gzip-buf-len gzip-buf-free])
+  (import tur/zlib
+    :refer
+    [gzip-encode gzip-buf-data gzip-buf-len gzip-buf-free])
   (export mw-compress mw-compress-with httpd-mw-compress-step)
-
-;; -----------------------------------------------------------------------------
-;; Internal: the post-processing step.  The negotiation reads the conn in C;
-;; the gzip work goes through tur/zlib's exported functions, so the spice owns
-;; the codec and its buffers.
-;; -----------------------------------------------------------------------------
-;;; httpd-mw-compress-wanted? -- internal: should this response be gzipped?
-;;;
-;;; True when the body is at least `min-bytes`, the handler did not encode it
-;;; already, and the client's Accept-Encoding names gzip.
-
-
-(defn httpd-mw-compress-wanted? [conn : ptr<void> min-bytes : int] : bool
-  ```c
-  if (!conn) return 0;
+  ;; -----------------------------------------------------------------------------
+  ;; Internal: the post-processing step.  The negotiation reads the conn in C;
+  ;; the gzip work goes through tur/zlib's exported functions, so the spice owns
+  ;; the codec and its buffers.
+  ;; -----------------------------------------------------------------------------
+  ;;; httpd-mw-compress-wanted? -- internal: should this response be gzipped?
+  ;;;
+  ;;; True when the body is at least `min-bytes`, the handler did not encode it
+  ;;; already, and the client's Accept-Encoding names gzip.
+  (defn httpd-mw-compress-wanted? [conn : ptr<void> min-bytes : int] : bool
+    ```c
+    if (!conn) return 0;
   HttpdConn *c = (HttpdConn *)conn;
   if (!c->resp_body || c->resp_body_len < (int)min_bytes) return 0;
   /* Skip if handler already produced an encoded body. */
@@ -61,85 +60,78 @@
   if (!found) return 0;
   return 1;
   ```)
-
-;;; httpd-mw-compress-body -- internal: the response body and its length,
-;;; for handing to gzip-encode.
-(defn httpd-mw-compress-body [conn : ptr<void>] : ptr<void>
-  ```c
-  return (void *)((HttpdConn *)conn)->resp_body;
+  ;;; httpd-mw-compress-body -- internal: the response body and its length,
+  ;;; for handing to gzip-encode.
+  (defn httpd-mw-compress-body [conn : ptr<void>] : ptr<void>
+    ```c
+    return (void *)((HttpdConn *)conn)->resp_body;
   ```)
-
-(defn httpd-mw-compress-body-len [conn : ptr<void>] : int
-  ```c
-  return (int64_t)((HttpdConn *)conn)->resp_body_len;
+  (defn httpd-mw-compress-body-len [conn : ptr<void>] : int
+    ```c
+    return (int64_t)((HttpdConn *)conn)->resp_body_len;
   ```)
-
-(defn httpd-mw-compress-null? [p : ptr<void>] : bool
-  ```c return p == NULL; ```)
-
-;;; httpd-mw-compress-step -- internal: post-processing gzip pass.
-;;;
-;;; When the client accepts gzip AND the response is not already encoded
-;;; AND the body is at least `min-bytes`, gzip the body (tur/zlib) and set
-;;; Content-Encoding: gzip and Vary: Accept-Encoding.  Otherwise a no-op.
-;;;
-;;; Since: Phase H8 (M6)
-(defn httpd-mw-compress-step [conn : ptr<void> min-bytes : int] : nil
-  (when (httpd-mw-compress-wanted? conn min-bytes)
-    (let [buf (gzip-encode (httpd-mw-compress-body conn) (httpd-mw-compress-body-len conn))]
-      (when (not (httpd-mw-compress-null? buf))
-        ;; Replace the body with the compressed bytes (binary-safe).
-        (httpd-resp-body-bytes! conn (gzip-buf-data buf) (gzip-buf-len buf))
-        (httpd-resp-header! conn "Content-Encoding" "gzip")
-        (httpd-resp-vary! conn "Accept-Encoding")
-        (gzip-buf-free buf)))))
-;; -----------------------------------------------------------------------------
-;; The middleware factories
-;; -----------------------------------------------------------------------------
-;;; mw-compress-with -- gzip the response body when the client accepts gzip.
-;;;
-;;; Inspects Accept-Encoding for "gzip"; when present AND the response body
-;;; length exceeds `min-bytes` AND the response is not already compressed,
-;;; gzips the body via tur/zlib, sets Content-Encoding: gzip + Vary:
-;;; Accept-Encoding, and rewrites the response body to the compressed
-;;; bytes.  Content-Length is recomputed by the writer from the new
-;;; resp_body_len.  Other paths pass through unchanged.
-;;;
-;;; Skips entries whose handler already set a Content-Encoding header
-;;; (preserves caller intent; do not double-gzip).
-;;;
-;;; Should be installed as the OUTERMOST post-processing middleware so it
-;;; sees the final body produced by the handler + any inner middleware.
-;;;
-;;; Parameters:
-;;;   min-bytes -- minimum response body size to compress (typical: 256)
-;;;   next      -- downstream handler closure (fat-closure :int)
-;;;
-;;; Returns:
-;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
-;;;   compose-middleware.
-;;;
-;;; Example:
-;;;   (compose-middleware base mw-log (mw-compress-with 256))
-;;;
-;;; Since: Phase H8 (M6)
-
-
-(defn mw-compress-with [min-bytes : int ^fat next : (fn [ptr<void>] nil)] : ptr<void>
-  (let [_min min-bytes
-        _n   next]
-    (fn [c : ptr<void>] : nil (httpd-call _n c) (httpd-mw-compress-step c _min))))
-;;; mw-compress -- mw-compress-with default 256-byte threshold.
-;;;
-;;; `(mw-compress next)` is equivalent to `(mw-compress-with 256 next)`.
-;;;
-;;; Example:
-;;;   (compose-middleware base mw-log mw-compress)
-;;;
-;;; Since: Phase H8 (M6)
-
-
-(defn mw-compress [^fat next : (fn [ptr<void>] nil)] : ptr<void>
-  (mw-compress-with 256 next))
-
-) ;; end defmodule httpd-compress
+  (defn httpd-mw-compress-null? [p : ptr<void>] : bool
+    ```c return p == NULL; ```)
+  ;;; httpd-mw-compress-step -- internal: post-processing gzip pass.
+  ;;;
+  ;;; When the client accepts gzip AND the response is not already encoded
+  ;;; AND the body is at least `min-bytes`, gzip the body (tur/zlib) and set
+  ;;; Content-Encoding: gzip and Vary: Accept-Encoding.  Otherwise a no-op.
+  ;;;
+  ;;; Since: Phase H8 (M6)
+  (defn httpd-mw-compress-step [conn : ptr<void> min-bytes : int] : nil
+    (when (httpd-mw-compress-wanted? conn min-bytes)
+      (let [buf (gzip-encode (httpd-mw-compress-body conn)
+                  (httpd-mw-compress-body-len conn))]
+        (when (not (httpd-mw-compress-null? buf))
+          ;; Replace the body with the compressed bytes (binary-safe).
+          (httpd-resp-body-bytes! conn (gzip-buf-data buf) (gzip-buf-len buf))
+          (httpd-resp-header! conn "Content-Encoding" "gzip")
+          (httpd-resp-vary! conn "Accept-Encoding")
+          (gzip-buf-free buf)))))
+  ;; -----------------------------------------------------------------------------
+  ;; The middleware factories
+  ;; -----------------------------------------------------------------------------
+  ;;; mw-compress-with -- gzip the response body when the client accepts gzip.
+  ;;;
+  ;;; Inspects Accept-Encoding for "gzip"; when present AND the response body
+  ;;; length exceeds `min-bytes` AND the response is not already compressed,
+  ;;; gzips the body via tur/zlib, sets Content-Encoding: gzip + Vary:
+  ;;; Accept-Encoding, and rewrites the response body to the compressed
+  ;;; bytes.  Content-Length is recomputed by the writer from the new
+  ;;; resp_body_len.  Other paths pass through unchanged.
+  ;;;
+  ;;; Skips entries whose handler already set a Content-Encoding header
+  ;;; (preserves caller intent; do not double-gzip).
+  ;;;
+  ;;; Should be installed as the OUTERMOST post-processing middleware so it
+  ;;; sees the final body produced by the handler + any inner middleware.
+  ;;;
+  ;;; Parameters:
+  ;;;   min-bytes -- minimum response body size to compress (typical: 256)
+  ;;;   next      -- downstream handler closure (fat-closure :int)
+  ;;;
+  ;;; Returns:
+  ;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
+  ;;;   compose-middleware.
+  ;;;
+  ;;; Example:
+  ;;;   (compose-middleware base mw-log (mw-compress-with 256))
+  ;;;
+  ;;; Since: Phase H8 (M6)
+  (defn mw-compress-with [min-bytes : int ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+    (let [_min min-bytes
+          _n   next]
+      (fn [c : ptr<void>] : nil
+        (httpd-call _n c)
+        (httpd-mw-compress-step c _min))))
+  ;;; mw-compress -- mw-compress-with default 256-byte threshold.
+  ;;;
+  ;;; `(mw-compress next)` is equivalent to `(mw-compress-with 256 next)`.
+  ;;;
+  ;;; Example:
+  ;;;   (compose-middleware base mw-log mw-compress)
+  ;;;
+  ;;; Since: Phase H8 (M6)
+  (defn mw-compress [^fat next : (fn [ptr<void>] nil)] : ptr<void>
+    (mw-compress-with 256 next))) ;; end defmodule httpd-compress

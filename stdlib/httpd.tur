@@ -753,7 +753,11 @@
 ;;;
 ;;; Since: Phase H1 (TLS path: Phase H5; upgrade, deadline: tourist-on-stdlib-httpd H1)
 
-(defn httpd-handle [fd : int handler : int tls : int max-body : int read-ms : int] : nil
+(defn httpd-handle [fd : int
+                    handler : int
+                    tls : int
+                    max-body : int
+                    read-ms : int] : nil
   ```c
   typedef void (*httpd_tls_void_fn)(int64_t);
   int64_t rto = read_ms > 0 ? read_ms : httpd_read_timeout_ms;
@@ -1887,7 +1891,8 @@
 ;;;                            (httpd-conn-close! c2)))
 ;;;
 ;;; Since: tourist-on-stdlib-httpd H1
-(defn httpd-conn-upgrade! [conn : ptr<void> ^fat on-upgrade : (fn [ptr<void>] nil)] : bool
+(defn httpd-conn-upgrade! [conn : ptr<void>
+                           ^fat on-upgrade : (fn [ptr<void>] nil)] : bool
   ```c
   HttpdConn *c = (HttpdConn *)conn;
   if (!c || c->fiber_group || c->upgrade == 2 || c->fd < 0) {
@@ -2869,14 +2874,15 @@
                  expose-headers : cstr
                  allow-credentials : bool
                  max-age : int] : (Result CorsOpts cstr)
-  (cond
-    (cors-blank? allow-origin)
-      (err "cors-opts: allow-origin is empty")
-    (and allow-credentials (cors-wildcard? allow-origin))
-      (err "cors-opts: allow-origin \"*\" cannot be combined with credentials")
-    :else
-      (ok (make-struct CorsOpts allow-origin allow-methods allow-headers
-                       expose-headers allow-credentials max-age))))
+  (cond (cors-blank? allow-origin)                            (err "cors-opts: allow-origin is empty")
+        (and allow-credentials (cors-wildcard? allow-origin)) (err "cors-opts: allow-origin \"*\" cannot be combined with credentials")
+        :else                                                 (ok (make-struct CorsOpts
+                                                                    allow-origin
+                                                                    allow-methods
+                                                                    allow-headers
+                                                                    expose-headers
+                                                                    allow-credentials
+                                                                    max-age))))
 ;;; CorsConfig -- internal: one mw-cors instance's own copy of its settings.
 ;;;
 ;;; A heap block `HttpdCorsCfg` (see httpd-cors-config-new) that lives until
@@ -3007,15 +3013,17 @@
                     allow-credentials : bool
                     max-age : int
                     ^fat next : (fn [ptr<void>] nil)] : ptr<void>
-  (let [_cfg (httpd-cors-config-new allow-origin allow-methods allow-headers
-                                    expose-headers allow-credentials max-age)
+  (let [_cfg (httpd-cors-config-new allow-origin
+               allow-methods
+               allow-headers
+               expose-headers
+               allow-credentials
+               max-age)
         _n   next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-cors-is-preflight c))
         (httpd-mw-cors-preflight c _cfg)
-        (do
-          (httpd-call _n c)
-          (httpd-mw-cors-decorate c _cfg))))))
+        (do (httpd-call _n c) (httpd-mw-cors-decorate c _cfg))))))
 ;;; mw-cors -- CORS middleware with permissive defaults.
 ;;;
 ;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
@@ -4535,7 +4543,8 @@
     (fn [c : ptr<void>] : nil
       (let [t0 (httpd-mw-mono-ms)]
         (httpd-call _n c)
-        (httpd-mw-log-sink-call _s (httpd-mw-log-line c (- (httpd-mw-mono-ms) t0)))))))
+        (httpd-mw-log-sink-call _s
+          (httpd-mw-log-line c (- (httpd-mw-mono-ms) t0)))))))
 ;; =============================================================================
 ;; M8 (core): compose-middleware -- nest multiple middlewares around a base
 ;; =============================================================================
@@ -5661,7 +5670,14 @@
 ;;;
 ;;; Since: tourist-on-stdlib-httpd H4
 (defn default-secure-headers-opts [] : SecureHeadersOpts
-  (make-struct SecureHeadersOpts true "DENY" "no-referrer" "same-origin" -1 false ""))
+  (make-struct SecureHeadersOpts
+    true
+    "DENY"
+    "no-referrer"
+    "same-origin"
+    -1
+    false
+    ""))
 ;;; SecureHeadersConfig -- internal: one mw-secure-headers instance's own
 ;;; copy of its headers (a heap block that lives until process exit).
 (defopaque SecureHeadersConfig :int)
@@ -5728,14 +5744,15 @@
 ;;;     (compose-middleware base (mw-secure-headers-opts opts)))
 ;;;
 ;;; Since: tourist-on-stdlib-httpd H4
-(defn mw-secure-headers-opts [opts : SecureHeadersOpts ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+(defn mw-secure-headers-opts [opts : SecureHeadersOpts
+                              ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_cfg (httpd-secure-headers-config-new (.content-type-options opts)
-                                              (.frame-options opts)
-                                              (.referrer-policy opts)
-                                              (.cross-origin-opener-policy opts)
-                                              (.hsts-max-age opts)
-                                              (.hsts-include-subdomains opts)
-                                              (.content-security-policy opts))
+               (.frame-options opts)
+               (.referrer-policy opts)
+               (.cross-origin-opener-policy opts)
+               (.hsts-max-age opts)
+               (.hsts-include-subdomains opts)
+               (.content-security-policy opts))
         _n   next]
     (fn [c : ptr<void>] : nil
       (httpd-call _n c)
@@ -5836,9 +5853,7 @@
 ;;; Since: tourist-on-stdlib-httpd H4
 (defn mw-request-id [^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_n next]
-    (fn [c : ptr<void>] : nil
-      (httpd-mw-request-id-assign! c)
-      (httpd-call _n c))))
+    (fn [c : ptr<void>] : nil (httpd-mw-request-id-assign! c) (httpd-call _n c))))
 ;; -----------------------------------------------------------------------------
 ;; Trust proxy
 ;; -----------------------------------------------------------------------------
@@ -6225,9 +6240,7 @@
 ;;; Since: tourist-on-stdlib-httpd H4
 (defn mw-etag [^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_n next]
-    (fn [c : ptr<void>] : nil
-      (httpd-call _n c)
-      (httpd-mw-etag-apply c))))
+    (fn [c : ptr<void>] : nil (httpd-call _n c) (httpd-mw-etag-apply c))))
 ;; -----------------------------------------------------------------------------
 ;; mw-timeout
 ;; -----------------------------------------------------------------------------
@@ -6416,5 +6429,4 @@
 (defn mw-timeout [ms : int ^fat next : (fn [ptr<void>] nil)] : ptr<void>
   (let [_ms (if (< ms 1) 1 ms)
         _n  next]
-    (fn [c : ptr<void>] : nil
-      (httpd-mw-timeout-run c (:: _n :int) _ms))))
+    (fn [c : ptr<void>] : nil (httpd-mw-timeout-run c (:: _n :int) _ms))))
