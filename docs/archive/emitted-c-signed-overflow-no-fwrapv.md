@@ -1,7 +1,8 @@
 # Emitted C does signed `int64_t` arithmetic without `-fwrapv`: wrapping hashes are undefined behavior, and the optimizer acts on it
 
-- **Status:** open. Reproduces on v0.55.1 and v0.63.9 (a Release build from
-  `main`).
+- **Status:** RESOLVED 2026-10-11 (fix direction 1, see
+  [Resolution](#resolution)). Reproduced on v0.55.1 and v0.63.9 (a Release
+  build from `main`).
 - **Severity:** high (silently wrong results). No diagnostic, no crash, and the
   affected spice's own test suite stays green.
 - **Found:** 2026-10-10 writing the `tur-prob` guide. The Count-Min Sketch
@@ -126,3 +127,49 @@ tried) is a loop that overflows and then tests `x + 1 > x`.
 "Limits" that document this. Delete both when this is fixed and the spices CI
 pins a compiler that has it, and drop the `TUR_CC_FLAGS` line from
 `spices/prob/examples/01_tour.tur`'s header.
+
+## Resolution
+
+Fix direction 1, with the flag placed where no override can drop it:
+
+- **`-fwrapv` is in `TUR_EMITTED_C_CC_FLAGS`** (`src/main.c`), the suffix every
+  driver `cc` over emitted C appends *after* the user's flags -- the native and
+  wasm `tur build`/`tur run` link, the prelude-split library unit, `tur
+  compile`, and `tur link`. So `TUR_CC_FLAGS` (which replaces the defaults, and
+  which every test harness sets) cannot lose it, and no harness needed editing.
+  The comment there records it as a fact about the language, like
+  `-fno-strict-aliasing`, not a tuning knob.
+- **The CMake archives built from emitted-C-shaped code carry it too:**
+  `turt_preamble` (the split runtime preamble) and `turt_runtime`, whose flags
+  are documented as mirroring the default `tur build` ones.
+- **The interpreter folds `+ - *` on `int` in `uint64_t`**
+  (`eval_builtin`'s `BS_VARIADIC_FOLD`, `src/turi/eval.c`), so `--interpret`
+  wraps by definition rather than by the host compiler's mood, and the Debug
+  `tur`'s UBSan has nothing to report there.
+- **The MIR JIT** already agreed: `tur jit` prints the fixture's expected
+  output unchanged.
+
+So the semantics (fix direction 3) are: `int` `+ - *` wrap, two's complement,
+on every back end -- what `docs/guides/numeric-tower-guide.md` already claimed
+("matching what `int` already does").
+
+**Pinned by** `tests/fixtures/int-arith-wraps`: `(> (+ x 1) x)` at
+`INT64_MAX`, `(< (- x 1) x)` at `INT64_MIN`, `(+ big 1)`, `(* big 2)` and a
+multiplicative mix of the `prob/hash.tur` shape. On the old driver at `-O2`
+the two comparisons print `true`; with the fix, `false`, matching `--interpret`
+and `tur jit`. Fixture suite: 3724 passed, 0 failed.
+
+**Cost** (the perf check the report asked for; each program built by `tur
+build`, then rebuilt from the same `cc` line minus `-fwrapv`, best of 5 runs,
+4-core Linux box, gcc 13): `triangle/loop-sum`, `triangle/fib`,
+`bench-parsec-json`, `bench-logic-subst`, `bench-poly-specialize` and
+`bench-clone-overhead` are within run-to-run noise either way.
+`bench-dfs-queens` is the one that moved: 375 ms vs 357 ms for 10 runs, best
+of 12 -- about 5% slower with `-fwrapv`. That is the price of defined
+arithmetic; a hot loop that wants the old code generation can say so in its
+own inline C.
+
+**Spices follow-up (not in this repo):** once turmeric-spices pins a `tur` with
+this fix, delete `tur-prob`'s "Compiling -- read this first" section and its
+"Needs `-fwrapv`" bullet, and the `TUR_CC_FLAGS` line in
+`spices/prob/examples/01_tour.tur` (see "Guide upkeep" above).

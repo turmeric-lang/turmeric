@@ -1,0 +1,29 @@
+;; emitted-c-signed-overflow-no-fwrapv: `int` + - * wrap (two's complement).
+;; The emitter lowers them to the C operators on int64_t, where signed
+;; overflow is undefined, so without -fwrapv `cc -O2` folds `x + 1 > x` to
+;; true and computes a wrapping hash however it likes.
+
+(defn get [n : int] : int
+  ```c
+  return n;
+  ```)
+
+(defn bumps-past [x : int] : bool (> (+ x 1) x))
+(defn drops-below [x : int] : bool (< (- x 1) x))
+
+;; A multiplicative mix, the shape of tur-prob's hashes: products that are
+;; meant to wrap modulo 2^64.
+(defn mix [z : int] : int
+  (bit-xor (* z -7723592293110705685) (* (+ z 1) 4658895280902244378)))
+
+(defn main [] : int
+  (let [big   (get 9223372036854775807)
+        small (- (get 0) 9223372036854775807 1)]
+    (println (bumps-past big))     ; false: big + 1 wraps to the minimum
+    (println (bumps-past 7))       ; true
+    (println (drops-below small))  ; false
+    (println (+ big 1))            ; -9223372036854775808
+    (println (* big 2))            ; -2
+    (println (mix (get 1)))
+    (println (mix (get 12345))))
+  0)

@@ -4872,14 +4872,18 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
     switch (shape) {
 
     case BS_VARIADIC_FOLD: {
+        /* `int` + - * wrap (two's complement), as the compiled path does under
+         * the -fwrapv every emitted-C compile carries; folded in uint64_t so
+         * the interpreter's own C has no signed overflow either
+         * (emitted-c-signed-overflow-no-fwrapv). */
         if (n == 0) return turi_error("eval: variadic builtin requires ≥1 arg");
         const char *op = spec->c_op;
         bool is_float = (args[0].tag == TURI_FLOAT);
         if (strcmp(op, "+") == 0) {
             if (!is_float) {
-                int64_t acc = args[0].as_int;
-                for (uint32_t i = 1; i < n; i++) acc += args[i].as_int;
-                return turi_int(acc);
+                uint64_t acc = (uint64_t)args[0].as_int;
+                for (uint32_t i = 1; i < n; i++) acc += (uint64_t)args[i].as_int;
+                return turi_int((int64_t)acc);
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc += args[i].as_float;
@@ -4888,9 +4892,9 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         }
         if (strcmp(op, "-") == 0) {
             if (!is_float) {
-                int64_t acc = args[0].as_int;
-                for (uint32_t i = 1; i < n; i++) acc -= args[i].as_int;
-                return turi_int(acc);
+                uint64_t acc = (uint64_t)args[0].as_int;
+                for (uint32_t i = 1; i < n; i++) acc -= (uint64_t)args[i].as_int;
+                return turi_int((int64_t)acc);
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc -= args[i].as_float;
@@ -4899,9 +4903,9 @@ static TuriValue eval_builtin(TuriEnv *env, const BuiltinSpec *spec,
         }
         if (strcmp(op, "*") == 0) {
             if (!is_float) {
-                int64_t acc = args[0].as_int;
-                for (uint32_t i = 1; i < n; i++) acc *= args[i].as_int;
-                return turi_int(acc);
+                uint64_t acc = (uint64_t)args[0].as_int;
+                for (uint32_t i = 1; i < n; i++) acc *= (uint64_t)args[i].as_int;
+                return turi_int((int64_t)acc);
             } else {
                 double acc = args[0].as_float;
                 for (uint32_t i = 1; i < n; i++) acc *= args[i].as_float;

@@ -106,7 +106,7 @@ Reproduced on v0.55.1 and v0.63.9; the repro is a spices program, so it needs a
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [emitted-c-signed-overflow-no-fwrapv](emitted-c-signed-overflow-no-fwrapv.md) | high (silently wrong results) | The driver's default `cc` flags have no `-fwrapv`, so the emitted C's signed `int64_t` multiply in a wrapping hash (`prob/hash.tur`) is undefined behavior and the optimizer acts on it: `tur-prob`'s Count-Min returned 0 for every key. Correct at `-O0` or with `-fwrapv`; UBSan flags the multiplications; the spice's own tests pass either way. Workaround: `TUR_CC_FLAGS` with `-fwrapv` |
+| ~~[emitted-c-signed-overflow-no-fwrapv](../archive/emitted-c-signed-overflow-no-fwrapv.md)~~ | high (silently wrong results) | **RESOLVED 2026-10-11** (archived): `-fwrapv` rides in `TUR_EMITTED_C_CC_FLAGS`, which every driver `cc` over emitted C appends after `TUR_CC_FLAGS`, so no override drops it; `turt_preamble`/`turt_runtime` carry it, and the interpreter folds `int` `+ - *` in `uint64_t`. `int` arithmetic wraps on every back end. Pinned by `int-arith-wraps`. The tur-prob guide's `-fwrapv` workaround can go once the spices pin this |
 ## Found auditing the spices plans (filed 2026-10-07)
 
 Both rows were carried out of `docs/upcoming/spices/` when its resolved plans

@@ -183,8 +183,16 @@ static size_t source_stem_len(const char *name, size_t len) {
  * parse of a one-line `#lang r7rs` program took 2.9 s of a 6.4 s build; without
  * it, 0.1 s (docs/archive/r7rs-programs-compile-slowly.md).  Nobody reads the
  * indentation of generated C, and a harness's own TUR_CC_FLAGS still carry
- * -Wall, so the driver adds the opt-out itself rather than to each default. */
-#define TUR_EMITTED_C_CC_FLAGS " -Wno-misleading-indentation"
+ * -Wall, so the driver adds the opt-out itself rather than to each default.
+ *
+ * -fwrapv is a fact about the language, not a tuning knob: `int` is a 64-bit
+ * two's-complement integer whose `+ - *` wrap, and the emitter lowers them to
+ * the C operators on int64_t, where signed overflow is undefined.  Without it
+ * the optimizer acted on that -- tur-prob's Count-Min returned 0 for every key
+ * at -O2, correct at -O0 (docs/archive/emitted-c-signed-overflow-no-fwrapv.md).
+ * It rides here, after TUR_CC_FLAGS, so a harness or user override that
+ * replaces the defaults cannot drop it. */
+#define TUR_EMITTED_C_CC_FLAGS " -Wno-misleading-indentation -fwrapv"
 
 /* Global configuration variables — defined in globals.c (part of tur_core) */
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
