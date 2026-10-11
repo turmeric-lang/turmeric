@@ -1,0 +1,13 @@
+;; self-tco-refuses-fn-typed-params: a self backedge keeps the function's
+;; `fn`-typed parameters as they are rather than reassigning them, so a self
+;; call that passes one something other than itself -- here the two callbacks
+;; trade places every step -- is an ordinary call, and `^tailcall` says why.
+
+(defn alternate [a : (fn [int] int) b : (fn [int] int) n : int acc : int] : int
+  (if (= n 0)
+    acc
+    ^tailcall (alternate b a (- n 1) (a acc))))
+
+(defn main [] : int
+  (println (alternate (fn [x : int] : int (+ x 1)) (fn [x : int] : int (* x 2)) 6 0))
+  0)
