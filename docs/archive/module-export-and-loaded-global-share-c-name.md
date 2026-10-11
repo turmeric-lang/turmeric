@@ -1,5 +1,7 @@
 # A module's export and a `load`ed global with the same name get one C name
 
+**Status: RESOLVED 2026-10-11** (see [Resolution](#resolution)).
+
 **Severity: medium (compile failure, or a call type-checked against the wrong
 signature).** Found 2026-10-10 putting tourist on stdlib httpd
 (tourist-on-stdlib-httpd-plan H4): stdlib `httpd.tur` defines a global
@@ -74,3 +76,29 @@ around `emit_module.c:21336`.
 
 tourist renamed its function to `pattern-free` (turmeric-spices, tourist
 v0.3.0), so nothing in the httpd stack shares a name with stdlib httpd now.
+
+## Resolution
+
+Not two keys colliding: one BINDING shared. `elab_defn`
+(`src/compiler/elab_fns.c`, "Create/update binding for the function") reuses
+an existing global binding of the same name when it belongs to the same module
+or to "no module yet" -- meant for a pass-1 forward declaration, whose module
+is filled in when the defn arrives. The `load`ed `foo-free` is module-less
+too, but it already HAS its definition. So `m/b`'s `defn foo-free` took it
+over: one binding, re-stamped `defining_module_name = m/b`, carrying two
+definitions -- both emitted as `m__b__foo_hyfree`. Every name lookup then
+found that single binding, which is the milder shape (the `:refer`'d call
+checked against whichever signature was written last).
+
+A module-less binding is reused only while it is a forward declaration with no
+definition (`source_fn_def` unset), or for a redefinition at top level (no
+current module). A module defn beside a defined top-level global of the same
+name now gets its own binding, so the `:refer` import and the global are two
+functions with two C names, and `(foo-free 5)` in `m/c` calls `m/b`'s.
+
+**Pinned by** `module-export-beside-loaded-global` (the report's repro; the
+milder shape -- the `load` in the main file, not the importing one -- was
+checked by hand and calls `m/b`'s too).
+
+**Spices follow-up (not in this repo):** tourist's `router-free` ->
+`pattern-free` rename can stay or go; it is no longer needed.

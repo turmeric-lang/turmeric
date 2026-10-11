@@ -1,0 +1,4 @@
+(defn foo-free [x : ptr<void>] : nil
+  ```c
+  (void)x; printf("global foo-free\n");
+  ```)

@@ -41,7 +41,7 @@ Two compiler defects met while wiring stdlib httpd middleware under tourist
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [module-export-and-loaded-global-share-c-name](module-export-and-loaded-global-share-c-name.md) | medium (compile failure / wrong signature) | A module export and a same-named global from a `load`ed file are emitted under one module-qualified C name (`conflicting types for 'm__b__foo_hyfree'`); without the `load`, a `:refer`'d import is type-checked against the global's signature. Hit by tourist's `router-free` vs stdlib httpd's; tourist renamed it `pattern-free` |
+| ~~[module-export-and-loaded-global-share-c-name](../archive/module-export-and-loaded-global-share-c-name.md)~~ | medium (compile failure / wrong signature) | **RESOLVED 2026-10-11** (archived): one binding, not one key -- `elab_defn` reused the defined, module-less `load`ed global as if it were the module defn's forward declaration and re-stamped its module. A module-less binding is reused only while it has no definition. Pinned by `module-export-beside-loaded-global` |
 | [defer-skipped-on-panic-in-cps-function](defer-skipped-on-panic-in-cps-function.md) | medium (cleanup skipped) | A `defer` in a CPS-converted function runs only on the normal exit; a caught panic returns past it. Direct functions fire it. Leaked tourist's per-request ctx under `mw-recover`; worked around with an inline-C guard |
 
 ## Found executing the parsec guide plan (filed 2026-10-11)

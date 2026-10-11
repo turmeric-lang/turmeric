@@ -1,0 +1,6 @@
+(defmodule m/b
+  (export foo-free)
+  (defn foo-free [x : int] : void
+    ```c
+    printf("m/b foo-free %lld\n", (long long)x);
+    ```))

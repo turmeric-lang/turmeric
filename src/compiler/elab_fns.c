@@ -12420,8 +12420,17 @@ Expr *elab_defn(Elab *e, const Form *call) {
      * onto one mangled C symbol (and stamping it with whichever module came
      * last).  Creating a fresh binding instead gives each module's private its
      * own distinctly-mangled C name. */
+    /* module-export-and-loaded-global-share-c-name: "no module yet" means a
+     * pass-1 forward decl that has no definition.  A module-less binding that
+     * already HAS one (`source_fn_def`) is a top-level defn of its own -- say
+     * from a file the importing module `load`s -- and a module defn of the
+     * same name is a different function.  Reusing it stamped the global with
+     * the module's name, so the two definitions shared one C symbol
+     * (`conflicting types for 'm__b__foo_hyfree'`).  A redefinition at top
+     * level (no current module) still reuses, as before. */
     if (existing && existing->type.kind == TY_FN && existing->is_global &&
-        (existing->defining_module_name == NULL ||
+        ((existing->defining_module_name == NULL &&
+          (!existing->source_fn_def || e->current_module_name == NULL)) ||
          existing->defining_module_name == e->current_module_name)) {
         b = existing;
         b->type = fn_type;
