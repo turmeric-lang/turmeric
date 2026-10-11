@@ -5201,11 +5201,28 @@ static size_t sweet_analyze_node(SweetLine *lines, size_t n_lines,
     return last;
 }
 
+/* use-reader-macros-rejected-under-sweet-exp: a top-level `#use-reader-macros
+ * "path"` line is a READER directive, not a form.  The plain reader consumes it
+ * only between top-level forms (try_consume_use_directive), so the line has to
+ * reach it bare: wrapped as a two-element t-expression it became
+ * `(#use-reader-macros "path")`, and `#` inside a list was "unexpected
+ * character '#'". */
+static bool sweet_line_is_use_directive(const char *src, const SweetLine *L) {
+    static const char kw[] = "#use-reader-macros";
+    const size_t kl = sizeof(kw) - 1;
+    if (L->indent != 0 || L->is_group) return false;
+    if (L->content_end - L->content_start < kl) return false;
+    if (memcmp(src + L->content_start, kw, kl) != 0) return false;
+    size_t after = L->content_start + kl;
+    return after >= L->content_end || !is_macro_id_cont((unsigned char)src[after]);
+}
+
 static void sweet_analyze_top(SweetLine *lines, size_t n_lines,
                                const char *src, bool scheme) {
     size_t i = 0;
     while (i < n_lines) {
         if (lines[i].blank) { i++; continue; }
+        if (sweet_line_is_use_directive(src, &lines[i])) { i++; continue; }
         size_t last = sweet_analyze_node(lines, n_lines, src, i, scheme);
         i = last + 1;
     }

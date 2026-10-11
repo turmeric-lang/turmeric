@@ -1,0 +1,3 @@
+;; Reader macros pulled into a sweet-exp file by `#use-reader-macros`.
+(reader-macros/define 'json :raw-brace '$body)
+(reader-macros/define 'tag :raw-bracket '$body)
