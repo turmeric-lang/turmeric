@@ -816,6 +816,11 @@ typedef struct EmitCtx {
     /* Set by tco_mark when the tail spine reaches a dynamic call, so the body
      * is routed through emit_tail, where that call is recognised. */
     bool         tail_dyn_seen;
+    /* self-tco-refuses-fn-typed-params: the function whose self tail calls
+     * tco_mark / tc_check are deciding, while that function admits `fn`-typed
+     * parameters on condition the backedge keeps them unchanged; NULL
+     * elsewhere (a T5 group, a CPS body), where none is admitted. */
+    const Expr  *tco_fn_e;
     /* void-self-tail-call-not-lowered: the function whose tail spine tco_mark /
      * emit_tail / tc_check are walking returns nothing (`: nil`, C `void`).
      * Its leaves end in a bare `return;` rather than a value, and a one-armed

@@ -1,0 +1,72 @@
+;; cps-mut-cell-bound-outside-letval: a `^mut` that a loop assigns from a
+;; `let` is promoted to a shared heap cell, and the binder that introduces it
+;; must allocate that cell.  Only a literal initializer did; a call or a
+;; primitive declared the plain value and stored it, and the loop entry then
+;; passed a `double` where it takes a `double *` -- a C compile error.  Found
+;; in turmeric-spices' signal guide, counting zero crossings.
+;;
+;; Every function here calls a `^fat` callback, so it is lowered through the
+;; CPS backend, and assigns its mutable under a condition, which is what makes
+;; the loop carry it in a cell rather than as a loop parameter.
+
+(defn at [^fat sig : (fn [float] float) t : float] : float
+  (sig t))
+
+(defn triple [x : float] : float
+  (* x 3.0))
+
+;; A CPS call as the initializer: the mutable is bound by the join the call
+;; returns to.  y = t + 0.5, so the last value stored is (at y 2.0) = 2.5.
+(defn last-sample [^fat y : (fn [float] float)] : float
+  (let [^mut k    0
+        ^mut prev (at y 0.25)]
+    (while (< k 3)
+      (let [v (at y (as float k))]
+        (when (> v 0.0) (set! prev v)))
+      (set! k (+ k 1)))
+    prev))
+
+;; A direct call as the initializer, read before the loop overwrites it.
+(defn before-and-after [^fat y : (fn [float] float)] : float
+  (let [^mut k    0
+        ^mut prev (triple 0.5)]
+    (println prev)                                  ;; 1.5
+    (while (< k 2)
+      (let [v (at y 7.0)]
+        (when (> v 0.0) (set! prev v)))
+      (set! k (+ k 1)))
+    prev))
+
+;; A primitive as the initializer.
+(defn offset-first [^fat y : (fn [float] float)] : float
+  (let [^mut k    0
+        ^mut prev (+ 0.25 (at y 0.0))]
+    (println prev)                                  ;; 0.75
+    (while (< k 1)
+      (let [v (at y 3.0)]
+        (when (> v 0.0) (set! prev v)))
+      (set! k (+ k 1)))
+    prev))
+
+;; The shape that found it: count sign changes, printing every four steps.
+;; s(t) is +1 at even t and -1 at odd t, so every step is a crossing.
+(defn crossings [^fat s : (fn [float] float)] : int
+  (let [^mut k    1
+        ^mut n    0
+        ^mut prev (at s 0.0)]
+    (while (<= k 8)
+      (let [v (at s (as float k))]
+        (when (< (* v prev) 0.0) (set! n (+ n 1)))
+        (set! prev v))
+      (when (= (mod k 4) 0)
+        (println n)                                 ;; 4, then 4
+        (set! n 0))
+      (set! k (+ k 1)))
+    0))
+
+(defn main [] : int
+  (println (last-sample (fn [t : float] : float (+ t 0.5))))        ;; 2.5
+  (println (before-and-after (fn [t : float] : float (* t 2.0))))   ;; 14
+  (println (offset-first (fn [t : float] : float (+ t 0.5))))       ;; 3.5
+  (crossings (fn [t : float] : float (if (= (mod (as int t) 2) 0) 1.0 -1.0)))
+  0)

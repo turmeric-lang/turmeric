@@ -1,0 +1,55 @@
+;; self-tco-refuses-fn-typed-params: a self tail call is a backedge even when
+;; the function takes a function value, as long as the call passes that
+;; parameter on unchanged -- the shape of every loop that threads a callback
+;; through.  Self-TCO used to refuse any function with a `fn`-typed parameter,
+;; so each of these was ordinary recursion and overflowed the C stack well
+;; short of a million steps (turmeric-spices' signal/buffer fill was the first
+;; to hit it).
+;;
+;; hook.sh builds this at -O0, so no C optimizer can turn the recursion into a
+;; loop for us, and `^tailcall` makes the compiler check each backedge too.
+
+;; A `^fat` callback, as in the buffer fill that found this.  The inline-C
+;; sink keeps the function on the direct path (a `^fat` callback whose result
+;; feeds the loop is lowered through the CPS backend instead, and is filed
+;; separately as cps-self-call-through-join-grows-the-stack).
+(defn put [i : int x : float] : int
+  ```c
+  (void)i; (void)x;
+  return 0;
+  ```)
+
+(defn fill [^fat sig : (fn [float] float) k : int n : int] : int
+  (if (>= k n)
+    k
+    (do
+      (put k (sig (as float k)))
+      ^tailcall (fill sig (+ k 1) n))))
+
+;; A plain `fn`-typed callback, carried as a tur_poly_fn_t.
+(defn sum-thin [g : (fn [int] int) i : int n : int acc : int] : int
+  (if (>= i n)
+    acc
+    ^tailcall (sum-thin g (+ i 1) n (+ acc (g i)))))
+
+;; A rank-2 callback.
+(defn iterate [h : (forall [a] (-> a a)) i : int n : int acc : int] : int
+  (if (>= i n)
+    acc
+    ^tailcall (iterate h (+ i 1) n (h acc))))
+
+;; A self call that passes a DIFFERENT function is left an ordinary call --
+;; correct, just not a loop.  `alternate` swaps its two callbacks every step.
+(defn alternate [a : (fn [int] int) b : (fn [int] int) n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (alternate b a (- n 1) (a acc))))
+
+(defn main [] : int
+  (println (fill (fn [t : float] : float (* t 2.0)) 0 1000000))       ;; 1000000
+  (println (sum-thin (fn [x : int] : int (mod x 5)) 0 1000000 0))      ;; 2000000
+  (println (iterate (fn [x] x) 0 1000000 7))                           ;; 7
+  (println (alternate (fn [x : int] : int (+ x 1))
+                      (fn [x : int] : int (* x 2))
+                      6 0))                                            ;; 14
+  0)

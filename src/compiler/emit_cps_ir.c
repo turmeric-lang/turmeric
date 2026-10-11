@@ -7270,6 +7270,91 @@ static void loop_cell_scan(const CTerm *t, uint32_t *bound, int nb) {
     #undef LCS_BIND
 }
 
+/* cps-mut-cell-bound-outside-letval: once the scans above have promoted a
+ * `^mut` to a shared cell, the binder that INTRODUCES it must allocate the
+ * cell.  Only CT_LETVAL does (its emit and its binder decl both spell the cell
+ * pointer); a mutable whose initializer is a call or a primitive is bound by
+ * CT_LETCALL / CT_LETRAW / CT_LETPRIM, or -- when the call is a CPS call -- by
+ * the join it delivers to (CT_LETCONT's param).  Those declared the plain
+ * value type and stored the value, while every use read it as the cell
+ * pointer: a C type error at the loop entry (`double` for `double *`), from
+ * `(let [^mut prev (sample y 0.0)] (while ... (let [v ...] (set! prev v))))`.
+ *
+ * Rewrite each such binder to bind a fresh temporary and hand it to a
+ * CT_LETVAL of the mutable, so the one path that already allocates the cell
+ * does it for every binder form.  Runs per render, after the promotion scans
+ * and before any declaration or emission; an unpromoted binder is untouched. */
+static uint32_t g_cell_init_n;
+static bool letraw_emits_poly_fn(const CTerm *t);
+
+static CTerm *cell_init_letval(CVar *x, CTerm *body) {
+    CVar orig = *x;
+    CVar tmp = orig;
+    tmp.bind = NULL;
+    tmp.id = 0xC0000000u + g_cell_init_n++;
+    char nb[48];
+    snprintf(nb, sizeof nb, "__cell_init%u", tmp.id - 0xC0000000u);
+    tmp.name = arena_strdup(&g_arena, nb, strlen(nb));
+    *x = tmp;
+    CTerm *lv = (CTerm *)arena_alloc(&g_arena, sizeof(CTerm));
+    memset(lv, 0, sizeof *lv);
+    lv->kind = CT_LETVAL;
+    lv->as.letval.x = orig;
+    lv->as.letval.v.kind = CA_CVAR;
+    lv->as.letval.v.ty = tmp.ty;
+    lv->as.letval.v.type = tmp.type;
+    lv->as.letval.v.cvar_id = tmp.id;
+    lv->as.letval.v.cvar_name = tmp.name;
+    lv->as.letval.body = body;
+    return lv;
+}
+
+static void cell_init_rewrite(CTerm *t) {
+    if (!t) return;
+    #define CIR(xf, bodyf) do { \
+        if (is_byref_mut((xf).bind)) (bodyf) = cell_init_letval(&(xf), (bodyf)); } while (0)
+    switch (t->kind) {
+        case CT_LETVAL:  cell_init_rewrite(t->as.letval.body); return;
+        case CT_LETPRIM: cell_init_rewrite(t->as.letprim.body);
+                         CIR(t->as.letprim.x, t->as.letprim.body); return;
+        case CT_LETCALL: cell_init_rewrite(t->as.letcall.body);
+                         CIR(t->as.letcall.x, t->as.letcall.body); return;
+        case CT_LETRAW:  cell_init_rewrite(t->as.letraw.body);
+                         /* A fat poly-fn value is spelled by its own path
+                          * (letraw_emits_poly_fn); leave it alone. */
+                         if (!letraw_emits_poly_fn(t))
+                             CIR(t->as.letraw.x, t->as.letraw.body);
+                         return;
+        case CT_LETCONT: cell_init_rewrite(t->as.letcont.body);
+                         cell_init_rewrite(t->as.letcont.jbody);
+                         CIR(t->as.letcont.param, t->as.letcont.jbody); return;
+        case CT_IF:      cell_init_rewrite(t->as.if_.then_);
+                         cell_init_rewrite(t->as.if_.else_); return;
+        case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                             cell_init_rewrite(t->as.match.arms[i].body);
+                         return;
+        case CT_RESET:   cell_init_rewrite(t->as.reset.delim);
+                         cell_init_rewrite(t->as.reset.body); return;
+        case CT_SHIFT:   cell_init_rewrite(t->as.shift.body); return;
+        case CT_HANDLE:
+            cell_init_rewrite(t->as.handle.delim);
+            cell_init_rewrite(t->as.handle.body);
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                cell_init_rewrite(t->as.handle.cases[i].case_body);
+            return;
+        case CT_PERFORM: cell_init_rewrite(t->as.perform.body);
+                         CIR(t->as.perform.x, t->as.perform.body); return;
+        case CT_AWAIT:   cell_init_rewrite(t->as.await.body);
+                         CIR(t->as.await.x, t->as.await.body); return;
+        case CT_RESUME:  cell_init_rewrite(t->as.resume.body); return;
+        case CT_CLONEABLE: cell_init_rewrite(t->as.cloneable.body); return;
+        case CT_CALLCC:  cell_init_rewrite(t->as.callcc.body); return;
+        case CT_LOOP:    cell_init_rewrite(t->as.loop.body); return;
+        default: return;
+    }
+    #undef CIR
+}
+
 /* Populate g_byref_muts by scanning the whole function term for a delegated
  * `(set! m k)` continuation store. */
 static void byref_scan(const CTerm *t) {
@@ -13622,6 +13707,8 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * decides, since a loop can enclose the handle whose clause reads one. */
     loop_carried_scan(se->term);
     byref_scan(se->term);
+    g_cell_init_n = 0;
+    cell_init_rewrite(se->term);
     /* The term's own binders are `__t0` .. `__t<fresh_n-1>`, and the direct
      * emitter names its temporaries `__t<tmp_n>` from one program-wide
      * counter.  A monolithic build had emitted the stdlib before any user

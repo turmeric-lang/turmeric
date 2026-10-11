@@ -161,10 +161,31 @@ static uint32_t tco_env_offset(const FnDef *fd) {
     return (fd->closure && fd->n_params > 0) ? 1u : 0u;
 }
 
+/* self-tco-refuses-fn-typed-params: is parameter `i` a function value -- a
+ * `fn`-typed parameter, or one carried as a `tur_poly_fn_t` (a rank-2 or
+ * bare-`fn` parameter, `is_poly_fn`)?  Those are the parameters the self
+ * backedge keeps loop-invariant instead of reassigning. */
+static bool tco_param_kept(EmitCtx *ctx, const Expr *fn_e, FnDef *fd,
+                           uint32_t i) {
+    if (i < tco_env_offset(fd)) return false;
+    if (fd->params[i]->is_poly_fn) return true;
+    return tco_param_type(ctx, fn_e, fd, (uint8_t)i).kind == TY_FN;
+}
+
 /* A function is TCO-eligible only if every parameter is a plain scalar we can
  * reassign with `p = tmp;`.  Pass-by-pointer structs, poly-fn, fn-typed, and
  * carrier-ABI parameters are excluded so the backedge temporary's C type is
  * unambiguous.
+ *
+ * self-tco-refuses-fn-typed-params: with `invariant_fn_ok`, a `fn`-typed
+ * parameter is admitted after all -- on the condition that the backedge never
+ * reassigns it.  tco_mark then takes a self tail call as a backedge only when
+ * it passes every such parameter itself, unchanged
+ * (tco_self_call_keeps_fn_params), and emit_tail_backedge skips them, exactly
+ * as it skips a closure thunk's env.  That is the shape of every loop that
+ * threads a callback through (`(go f (+ i 1) acc)`), which used to be ordinary
+ * recursion and overflowed the C stack.  Only the self backedge opts in: a T5
+ * group jump reassigns every slot, so the group bar stays strict.
  *
  * M4 follow-up: a param that resolves to a concrete by-value struct (post-
  * Path A spec substitution: e.g. `Vec__int` from `(Vec int)` at a spec
@@ -173,7 +194,8 @@ static uint32_t tco_env_offset(const FnDef *fd) {
  * rather than the type-kind: only reject when the emitted name is
  * "int64_t" (the carrier fallback), which indicates the type would need
  * a bridge to/from the carrier on reassignment. */
-static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
+static bool tco_params_simple_ex(EmitCtx *ctx, const Expr *fn_e, FnDef *fd,
+                                 bool invariant_fn_ok) {
     if (fd->is_variadic) return false;
     /* A lifted closure thunk IS eligible: its env param is skipped (it is
      * loop-invariant across a self-call, see tco_env_offset) and the remaining
@@ -185,9 +207,11 @@ static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
      * into a sibling call; MIR performs no such optimization).  See
      * docs/archive/history/named-let-self-tail-not-tco.md. */
     for (uint32_t i = tco_env_offset(fd); i < fd->n_params; i++) {
-        if (fd->params[i]->is_poly_fn) return false;
+        if (tco_param_kept(ctx, fn_e, fd, i)) {
+            if (invariant_fn_ok) continue;
+            return false;
+        }
         Type pty = tco_param_type(ctx, fn_e, fd, i);
-        if (pty.kind == TY_FN) return false;
         Type rpty = emit_resolve_type(ctx, pty);
         if (type_struct_pass_by_ptr(rpty)) return false;
         if (type_uses_carrier_abi(rpty)) {
@@ -199,6 +223,40 @@ static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
             if (!c || strcmp(c, "int64_t") == 0) return false;
         }
     }
+    return true;
+}
+
+static bool tco_params_simple(EmitCtx *ctx, const Expr *fn_e, FnDef *fd) {
+    return tco_params_simple_ex(ctx, fn_e, fd, false);
+}
+
+static bool tco_is_var(const Expr *e, const Binding *b);
+
+/* Is `arg` parameter `p` itself?  A `tur_poly_fn_t` parameter handed on to a
+ * rank-2 / bare-`fn` slot arrives wrapped in an EX_POLY_WRAP with no wrapper
+ * thunk -- elab's HRT4 pass-through, which the emitter spells as the bare
+ * variable -- so that wrapper is transparent here too. */
+static bool tco_passes_itself(const Expr *arg, const Binding *p) {
+    while (arg && arg->kind == EX_ASCRIBE) arg = arg->as.ascribe_.inner;
+    if (arg && arg->kind == EX_POLY_WRAP && p->is_poly_fn &&
+        !arg->as.poly_wrap_.wrapper_binding)
+        arg = arg->as.poly_wrap_.inner;
+    return tco_is_var(arg, p);
+}
+
+/* ... and does self call `call` pass every kept parameter itself?  One that
+ * passes a different function value is left an ordinary call: still correct,
+ * just not a backedge.  `ctx->tco_fn_e` is the function being emitted; outside
+ * the self-TCO path it is NULL and no parameter is kept (tco_params_simple
+ * refused any fn-typed one there). */
+static bool tco_self_call_keeps_fn_params(EmitCtx *ctx, FnDef *fd,
+                                          const Expr *call) {
+    if (!ctx->tco_fn_e) return true;
+    uint32_t off = tco_env_offset(fd);
+    for (uint32_t i = off; i < fd->n_params; i++)
+        if (tco_param_kept(ctx, ctx->tco_fn_e, fd, i) &&
+            !tco_passes_itself(call->as.call_.args[i - off], fd->params[i]))
+            return false;
     return true;
 }
 
@@ -751,7 +809,8 @@ static int tco_mark(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
     switch (e->kind) {
         case EX_CALL: {
             e->as.call_.tail_group_idx = 0;
-            if (tco_is_self_call(fd, fn_cname, e)) {
+            if (tco_is_self_call(fd, fn_cname, e) &&
+                tco_self_call_keeps_fn_params(ctx, fd, e)) {
                 e->as.call_.is_tail_self_call = true;
                 return 1;
             }
@@ -971,8 +1030,16 @@ static void tc_check(EmitCtx *ctx, FnDef *fd, const char *fn_cname, Expr *e,
     switch (e->kind) {
         case EX_CALL:
             if (e->as.call_.wants_tailcall && !e->as.call_.is_tail_self_call &&
-                !e->as.call_.tail_group_idx)
-                tc_report(fd, fn_cname, e, why, fn_block);
+                !e->as.call_.tail_group_idx) {
+                const char *cwhy = why;
+                if (!cwhy && tco_is_self_call(fd, fn_cname, e) &&
+                    !tco_self_call_keeps_fn_params(ctx, fd, e))
+                    cwhy = "it passes a `fn`-typed parameter something other "
+                           "than itself.  A backedge keeps `fn`-typed "
+                           "parameters as they are, so a self call that loops "
+                           "must pass each one through unchanged";
+                tc_report(fd, fn_cname, e, cwhy, fn_block);
+            }
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
                 tc_check(ctx, fd, fn_cname, e->as.call_.args[i], TC_ARG, fn_block);
             tc_check(ctx, fd, fn_cname, e->as.call_.fn_expr, TC_ARG, fn_block);
@@ -1138,6 +1205,9 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
     uint32_t off = tco_env_offset(fd);
     char **tmps = n ? (char **)calloc(n, sizeof(char *)) : NULL;
     for (uint8_t i = (uint8_t)off; i < n; i++) {
+        /* self-tco-refuses-fn-typed-params: a kept `fn`-typed parameter is
+         * passed itself (tco_mark checked), so there is nothing to assign. */
+        if (tco_param_kept(ctx, fn_e, fd, i)) continue;
         char *av = emit_value(ctx, body, call->as.call_.args[i - off]);
         char *t = fresh_tmp(ctx);
         Type pty = tco_param_type(ctx, fn_e, fd, i);
@@ -1174,6 +1244,7 @@ static void emit_tail_backedge(EmitCtx *ctx, Buf *body, const Expr *fn_e,
      * tco_mark admitted the block only because none of them keeps it alive. */
     emit_tail_fire_frames(ctx, body);
     for (uint8_t i = (uint8_t)off; i < n; i++) {
+        if (!tmps[i]) continue;   /* a kept `fn`-typed parameter */
         char *pn = raw_name_for_binding(fd->params[i]);
         indent_buf(body, ctx->indent);
         buf_printf(body, "%s = %s;\n", pn, tmps[i]);
@@ -6497,11 +6568,16 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     bool tail_void = result_kind == TY_NIL && !is_main && fn_ret_c_void;
     bool tco_spine_ok = !body_diverges && fd->body->kind != EX_INLINE_C &&
         !(result_kind == TY_NIL && !tail_void) && !is_main &&
-        tco_params_simple(ctx, e, fd);
+        tco_params_simple_ex(ctx, e, fd, true);
     int n_tco_self = 0, n_tco_tail = 0;
     ctx->tail_dyn_seen = false;
     bool saved_tail_void = ctx->tail_void;
     ctx->tail_void = tail_void;
+    /* self-tco-refuses-fn-typed-params: tco_mark and the `^tailcall` check
+     * below decide which self calls keep this function's `fn`-typed
+     * parameters, so they need to see it. */
+    const Expr *saved_tco_fn_e = ctx->tco_fn_e;
+    ctx->tco_fn_e = tco_spine_ok ? e : NULL;
     if (tco_spine_ok)
         n_tco_self = tco_mark(ctx, fd, fn_name, fd->body, &n_tco_tail);
     /* T2: a body whose tail spine holds ONLY non-self tail calls still goes
@@ -6543,10 +6619,10 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
     else if (body_diverges)
         tc_fn_block = "every path of the enclosing function diverges (`return` "
                       "or `panic`), so no tail path is emitted";
-    else if (!tco_params_simple(ctx, e, fd))
+    else if (!tco_params_simple_ex(ctx, e, fd, true))
         tc_fn_block = "a parameter of the enclosing function cannot be "
                       "reassigned by a backedge (pass-by-pointer struct, "
-                      "`fn`-typed, poly-fn, or carrier-ABI)";
+                      "poly-fn, or carrier-ABI)";
 
     bool did_general = false;
     if (!prereq6_synthesized_body && !m2b_carrier_synth &&
@@ -6574,6 +6650,7 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
      * claimed is not an error even when tco_mark refused it.  Reporting before
      * this point would have made those a false positive. */
     if (!did_general) tc_verify_fn(ctx, fd, fn_name, tc_fn_block);
+    ctx->tco_fn_e = saved_tco_fn_e;
 
     if (did_general) {
         /* whole body emitted by the general splitter / group shim */
