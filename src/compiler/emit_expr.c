@@ -14937,7 +14937,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          i < fn_binding->type.as.fn.arity &&
                          fn_binding->type.as.fn.arg_full_types &&
                          fn_binding->type.as.fn.arg_full_types[i]) {
-                    Type raw_at = emit_resolve_type(ctx, emit_arg->type);
+                    /* forward-call-typed-list-arg-cast-to-int64: a caller
+                     * elaborated ABOVE its callee saw the pass-1 forward decl,
+                     * which keeps a compound parameter (`xs : (Cons int)`) as
+                     * the `:int` placeholder, so the elaborator wrapped the
+                     * node argument in an erasing `:int` ascription
+                     * (elab_call.c, no type_form).  By emit time the binding
+                     * carries the real parameter type; ask what the argument
+                     * IS, not what the placeholder made it, or the word went
+                     * into the typed `tur_adt_Cons__int *` slot uncast. */
+                    const Expr *heap_arg = emit_arg;
+                    while (heap_arg->kind == EX_ASCRIBE &&
+                           !heap_arg->as.ascribe_.type_form &&
+                           heap_arg->type.kind == TY_INT &&
+                           heap_arg->as.ascribe_.inner)
+                        heap_arg = heap_arg->as.ascribe_.inner;
+                    Type raw_at = emit_resolve_type(ctx, heap_arg->type);
                     bool arg_is_heap_ptr = type_is_heap_struct(raw_at) ||
                                            type_is_heap_adt(raw_at) ||
                                            raw_at.kind == TY_APP;
@@ -15056,10 +15071,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             emit_arg->kind == EX_VAR &&
                             acty && strcmp(acty, "int64_t") == 0 &&
                             strncmp(raw, "(void *)", 8) != 0;
-                        if ((rec_is_conc_ptr &&
-                             ((acty && strcmp(acty, "int64_t") == 0) ||
-                              arg_slot_is_carrier)) ||
-                            voidp_straddle) {
+                        /* Already cast to exactly this parameter's type (the
+                         * heap-arg arm above, for an erased forward-call
+                         * argument): a second cast is noise. */
+                        size_t rcL = strlen(rec_c);
+                        bool already_cast = raw[0] == '(' &&
+                            strncmp(raw + 1, rec_c, rcL) == 0 &&
+                            strncmp(raw + 1 + rcL, ")(intptr_t)(", 12) == 0;
+                        if (!already_cast &&
+                            ((rec_is_conc_ptr &&
+                              ((acty && strcmp(acty, "int64_t") == 0) ||
+                               arg_slot_is_carrier)) ||
+                             voidp_straddle)) {
                             Buf _fb; buf_init(&_fb);
                             buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
                             buf_putc(&_fb, '\0');

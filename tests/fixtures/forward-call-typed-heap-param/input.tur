@@ -1,0 +1,35 @@
+;; forward-call-typed-list-arg-cast-to-int64: a caller written ABOVE its
+;; callee is elaborated against the pass-1 forward decl, which keeps a compound
+;; parameter (`(Cons int)`, `(Cons N)`) as the `:int` placeholder, so the
+;; argument arrives wrapped in an erasing `:int` ascription.  The call then
+;; passed the int64 word to the typed `tur_adt_Cons__int *` parameter with no
+;; cast: -Wint-conversion (a hard error under clang and gcc 14).  Defining the
+;; callee first always compiled.
+
+(defopaque N :ptr<void>)
+(defn __p [] : ptr<void>
+  ```c
+  return (void *)"x";
+  ```)
+(defn two [] : (Cons N) (tcons-of (:: (__p) N) (tcons-of (:: (__p) N) (tnil))))
+
+;; tail call, non-tail call, and an opaque element type -- all above the callee
+(defn first-of [xs : (Cons int)] : int
+  (head-of xs))
+(defn first-plus [xs : (Cons int) k : int] : int
+  (+ k (head-of xs)))
+(defn child [i : int] : N
+  (let [r (nth-n (two) i)] r))
+
+(defn head-of [xs : (Cons int)] : int
+  (thead xs))
+(defn nth-n [xs : (Cons N) i : int] : N
+  (if (= i 0) (thead xs) (nth-n (ttail xs) (- i 1))))
+
+(defn main [] : int
+  (let [xs (tcons-of 7 (tcons-of 8 (tnil)))]
+    (println (first-of xs))       ; 7
+    (println (first-plus xs 3)))  ; 10
+  (child 1)
+  (println "ok")
+  0)
