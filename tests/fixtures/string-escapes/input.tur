@@ -1,0 +1,40 @@
+;; string-escapes -- the string escapes of every dialect but #lang r7rs,
+;; checked byte by byte: C's set (the simple escapes, 1-3 digit octal, \xHH),
+;; plus \e and the Unicode forms \uXXXX, \u{H...}, \UXXXXXXXX written back as
+;; UTF-8.  \x takes exactly two digits, so "\x41B" is A then B.
+;;
+;; The literals also pin the emitter: -std=c99 reads trigraphs, so "what??!"
+;; printed "what|" (and so did the symbol :what??!), and bytes that are not
+;; UTF-8 must not reach the C text raw.  No literal here holds a NUL, so both
+;; back ends read every byte; string-escape-nul-emit has those.
+
+(load "stdlib/str-build.tur")
+(load "stdlib/sym.tur")
+
+(defmodule app
+  (import cstr :refer [cstr-nth])
+
+  ;; The bytes [i, n) of s as decimal numbers, each after a space.
+  (defn bytes-from [s : cstr i : int n : int acc : cstr] : cstr
+    (if (>= i n)
+      acc
+      (bytes-from s (+ i 1) n (str-concat acc (str-concat " " (int->str (cstr-nth s i)))))))
+
+  (defn show [label : cstr s : cstr n : int] : void
+    (println (str-concat label (str-concat ":" (bytes-from s 0 n "")))))
+
+  (defn main [] : int
+    ;; simple escapes: a b f v e n r t \ " ' ?
+    (show "simple" "\a\b\f\v\e\n\r\t\\\"\'\?" 12)
+    ;; \xHH is two digits exactly; a third hex digit is its own character
+    (show "hex" "\x41B\x1bc\x7f\xFF" 6)
+    ;; octal stops at three digits or the first non-octal one
+    (show "octal" "\101\0101\377\1\12\1234" 8)
+    ;; U+00E9 as \uXXXX, U+1F600 as \u{...} and as \UXXXXXXXX, U+41
+    (show "unicode" "\u00e9\u{1F600}\U0001F600\u{41}" 11)
+    ;; bytes that are not well-formed UTF-8 survive the C compiler
+    (show "raw" "\xc3\xa9\xc3\xed\xa0\x80" 6)
+    ;; trigraphs are not read as trigraphs, in a string or a symbol's name
+    (println "what??! a??/b ???= ?")
+    (println (sym->str :what??!))
+    0))

@@ -291,6 +291,100 @@ static Form *read_attribute(Reader *r);
  * list, which suppresses the `^tailcall` prefix sugar below. */
 static Form *read_symbol_or_minus_at(Reader *r, bool head_pos);
 
+/* The string escapes of every dialect but `#lang r7rs`: C's set -- the
+ * simple escapes, 1-3 digit octal (`\0` among them), `\xHH` -- plus `\e`
+ * (ESC) and the Unicode forms `\uXXXX`, `\u{H...}` and `\UXXXXXXXX`, written
+ * back as UTF-8.  `\x` takes exactly two digits, as in Python, Rust and JS,
+ * not C's unbounded run: `"\x1bc"` is ESC then `c`.  `e` is the byte after
+ * the backslash, already consumed.  Writes the decoded bytes (at most 4) to
+ * `out` and returns how many; after a diagnostic for a malformed or unknown
+ * escape, sets r->error and returns 0. */
+static int read_base_escape(Reader *r, int e, char *out) {
+    switch (e) {
+        case 'n':  *out = '\n'; return 1;
+        case 't':  *out = '\t'; return 1;
+        case 'r':  *out = '\r'; return 1;
+        case 'a':  *out = 7;    return 1;
+        case 'b':  *out = 8;    return 1;
+        case 'f':  *out = 12;   return 1;
+        case 'v':  *out = 11;   return 1;
+        case 'e':  *out = 27;   return 1;
+        case '\\': case '"': case '\'': case '?':
+            *out = (char)e;
+            return 1;
+        case '0': case '1': case '2': case '3':
+        case '4': case '5': case '6': case '7': {
+            unsigned v = (unsigned)(e - '0');
+            for (int n = 1; n < 3 && peek(r) >= '0' && peek(r) <= '7'; n++)
+                v = v * 8 + (unsigned)(advance(r) - '0');
+            if (v > 0377) {
+                diag_emit(DIAG_ERROR, span_point(r),
+                          "octal string escape '\\%o' is out of range: one "
+                          "byte is at most \\377", v);
+                break;
+            }
+            *out = (char)v;
+            return 1;
+        }
+        case 'x': {
+            int hi = hex_digit(peek(r));
+            if (hi >= 0) advance(r);
+            int lo = hi >= 0 ? hex_digit(peek(r)) : -1;
+            if (lo < 0) {
+                diag_emit(DIAG_ERROR, span_point(r),
+                          "'\\x' string escape takes exactly two hex digits "
+                          "(e.g. \\x1b); write \\u{...} for a code point");
+                break;
+            }
+            advance(r);
+            *out = (char)(hi * 16 + lo);
+            return 1;
+        }
+        case 'u': case 'U': {
+            uint32_t cp = 0; int nd = 0, d;
+            if (e == 'u' && peek(r) == '{') {
+                advance(r);
+                while ((d = hex_digit(peek(r))) >= 0) {
+                    if (nd < 8) cp = cp * 16 + (uint32_t)d;
+                    advance(r); nd++;
+                }
+                if (nd == 0 || nd > 6 || peek(r) != '}') {
+                    diag_emit(DIAG_ERROR, span_point(r),
+                              "malformed '\\u{...}' string escape: expected 1-6 "
+                              "hex digits followed by '}'");
+                    break;
+                }
+                advance(r); /* '}' */
+            } else {
+                int want = (e == 'u') ? 4 : 8;
+                while (nd < want && (d = hex_digit(peek(r))) >= 0) {
+                    cp = cp * 16 + (uint32_t)d;
+                    advance(r); nd++;
+                }
+                if (nd < want) {
+                    diag_emit(DIAG_ERROR, span_point(r),
+                              "'\\%c' string escape takes exactly %d hex digits; "
+                              "write \\u{...} for 1-6", e, want);
+                    break;
+                }
+            }
+            if (cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+                diag_emit(DIAG_ERROR, span_point(r),
+                          "'\\%c' string escape names U+%04X, which is not a "
+                          "Unicode scalar value (a surrogate, or above 10FFFF)",
+                          e, (unsigned)cp);
+                break;
+            }
+            return utf8_encode(cp, out);
+        }
+        default:
+            diag_emit(DIAG_ERROR, span_point(r), "unknown string escape '\\%c'", e);
+            break;
+    }
+    r->error = true;
+    return 0;
+}
+
 static Form *read_string(Reader *r) {
     uint32_t start_line = r->line;
     uint32_t start_col = r->col;
@@ -328,49 +422,52 @@ static Form *read_string(Reader *r) {
         if (c == '\\') {
             int e = advance(r);
             char out;
+            if (!r->scheme_enabled) {
+                bi += (size_t)read_base_escape(r, e, buf + bi);
+                continue;
+            }
             /* r7rs-lang-plan R1: the R7RS 6.7 escape set.  `\a`, `\b` and
              * `\|` are new; `\x<hex>;` takes any scalar value and is written
              * back as UTF-8; `\<intraline ws>*<newline><intraline ws>*` is
              * the line continuation and produces nothing.  `\0` is Turmeric's
-             * and is not Scheme, so it falls through to the shared table
-             * (accepting it costs nothing and keeps the reader a variant). */
-            if (r->scheme_enabled) {
-                if (e == 'a') { buf[bi++] = 7; continue; }
-                if (e == 'b') { buf[bi++] = 8; continue; }
-                if (e == '|') { buf[bi++] = '|'; continue; }
-                if (e == 'x' || e == 'X') {
-                    uint32_t cp = 0; int nd = 0, d;
-                    while ((d = hex_digit(peek(r))) >= 0) {
-                        if (nd < 8) cp = cp * 16 + (uint32_t)d;
-                        advance(r); nd++;
-                    }
-                    if (nd == 0 || peek(r) != ';' || nd > 8 || cp > 0x10FFFF) {
-                        diag_emit(DIAG_ERROR, span_point(r),
-                                  "malformed '\\x<hex>;' string escape: expected 1-8 "
-                                  "hex digits (at most 10FFFF) followed by ';'");
-                        r->error = true;
-                        return NULL;
-                    }
-                    advance(r); /* ';' */
-                    bi += (size_t)utf8_encode(cp, buf + bi);
-                    continue;
+             * and is not Scheme, so it falls through to the table below
+             * (accepting it costs nothing and keeps the reader a variant).
+             * Every other dialect reads read_base_escape's set instead. */
+            if (e == 'a') { buf[bi++] = 7; continue; }
+            if (e == 'b') { buf[bi++] = 8; continue; }
+            if (e == '|') { buf[bi++] = '|'; continue; }
+            if (e == 'x' || e == 'X') {
+                uint32_t cp = 0; int nd = 0, d;
+                while ((d = hex_digit(peek(r))) >= 0) {
+                    if (nd < 8) cp = cp * 16 + (uint32_t)d;
+                    advance(r); nd++;
                 }
-                if (e == ' ' || e == '\t' || e == '\n' || e == '\r') {
-                    /* Line continuation: optional intraline whitespace, the
-                     * line ending, then the next line's leading whitespace. */
-                    int w = e;
-                    while (w == ' ' || w == '\t') w = advance(r);
-                    if (w == '\r' && peek(r) == '\n') advance(r);
-                    if (w != '\n' && w != '\r') {
-                        diag_emit(DIAG_ERROR, span_point(r),
-                                  "'\\' followed by whitespace must continue "
-                                  "onto the next line (R7RS line continuation)");
-                        r->error = true;
-                        return NULL;
-                    }
-                    while (peek(r) == ' ' || peek(r) == '\t') advance(r);
-                    continue;
+                if (nd == 0 || peek(r) != ';' || nd > 8 || cp > 0x10FFFF) {
+                    diag_emit(DIAG_ERROR, span_point(r),
+                              "malformed '\\x<hex>;' string escape: expected 1-8 "
+                              "hex digits (at most 10FFFF) followed by ';'");
+                    r->error = true;
+                    return NULL;
                 }
+                advance(r); /* ';' */
+                bi += (size_t)utf8_encode(cp, buf + bi);
+                continue;
+            }
+            if (e == ' ' || e == '\t' || e == '\n' || e == '\r') {
+                /* Line continuation: optional intraline whitespace, the
+                 * line ending, then the next line's leading whitespace. */
+                int w = e;
+                while (w == ' ' || w == '\t') w = advance(r);
+                if (w == '\r' && peek(r) == '\n') advance(r);
+                if (w != '\n' && w != '\r') {
+                    diag_emit(DIAG_ERROR, span_point(r),
+                              "'\\' followed by whitespace must continue "
+                              "onto the next line (R7RS line continuation)");
+                    r->error = true;
+                    return NULL;
+                }
+                while (peek(r) == ' ' || peek(r) == '\t') advance(r);
+                continue;
             }
             switch (e) {
                 case 'n':  out = '\n'; break;

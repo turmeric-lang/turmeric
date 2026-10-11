@@ -1,0 +1,30 @@
+;; string-escape-nul-emit -- a control byte in a string literal, written into
+;; the emitted C, keeps the characters after it.  The emitter spelled it as
+;; C's \x, which runs on through every hex digit that follows, so "a\0b\0f"
+;; compiled to the three bytes a, 0x0b, 0x0f.  It is three-digit octal now.
+;;
+;; Compiled only: the interpreter's cstr-nth stops at the first NUL, and the
+;; bug lived in the emitted C.  string-escapes covers the rest of the set.
+
+(load "stdlib/str-build.tur")
+
+(defmodule app
+  (import cstr :refer [cstr-nth])
+
+  ;; The bytes [i, n) of s as decimal numbers, each after a space.
+  (defn bytes-from [s : cstr i : int n : int acc : cstr] : cstr
+    (if (>= i n)
+      acc
+      (bytes-from s (+ i 1) n (str-concat acc (str-concat " " (int->str (cstr-nth s i)))))))
+
+  (defn show [label : cstr s : cstr n : int] : void
+    (println (str-concat label (str-concat ":" (bytes-from s 0 n "")))))
+
+  (defn main [] : int
+    ;; NUL before a hex-digit character keeps both
+    (show "nul" "a\0b\0f\0" 6)
+    ;; \0 is octal: it stops at a non-octal digit and takes octal ones
+    (show "octal" "\08\0101\x00a" 6)
+    ;; other control bytes before hex digits
+    (show "ctl" "\e7\ec\x01a\x7f1" 8)
+    0))

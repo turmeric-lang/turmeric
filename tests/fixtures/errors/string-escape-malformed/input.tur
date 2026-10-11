@@ -1,0 +1,5 @@
+;; string-escape-malformed -- every malformed string escape is reported, and
+;; the reader carries on to the closing quote, so one literal reports them all.
+(defn main [] : int
+  (println "\x4 \u12 \U0000041 \u{110000} \uD800 \u{12 \400 \q")
+  0)

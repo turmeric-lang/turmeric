@@ -4469,20 +4469,64 @@ char *name_for_binding(EmitCtx *ctx, const Binding *b) {
     return p;
 }
 
-/* Emit a C string literal from a StrSlice. */
+/* The length of the well-formed UTF-8 sequence at s[i..len), or 0 when the
+ * bytes there are not one: a stray continuation byte, a truncated or
+ * overlong sequence, a surrogate, or a value above U+10FFFF. */
+static uint32_t utf8_seq_len(const unsigned char *s, uint32_t i, uint32_t len) {
+    unsigned char c = s[i], lo = 0x80, hi = 0xBF;
+    uint32_t n;
+    if (c >= 0xC2 && c <= 0xDF)      n = 2;
+    else if (c >= 0xE0 && c <= 0xEF) n = 3;
+    else if (c >= 0xF0 && c <= 0xF4) n = 4;
+    else return 0;
+    if (c == 0xE0) lo = 0xA0;
+    if (c == 0xED) hi = 0x9F;
+    if (c == 0xF0) lo = 0x90;
+    if (c == 0xF4) hi = 0x8F;
+    if (len - i < n || s[i + 1] < lo || s[i + 1] > hi) return 0;
+    for (uint32_t k = 2; k < n; k++)
+        if ((s[i + k] & 0xC0) != 0x80) return 0;
+    return n;
+}
+
+/* Emit a C string literal from a StrSlice.  Since the string escapes reach
+ * any byte, three things C would misread are spelled out:
+ *   - other control bytes, and bytes outside well-formed UTF-8 (clang's
+ *     -Winvalid-source-encoding), are three-digit octal.  Not `\x`: C's runs
+ *     on through every hex digit that follows, so `\x00` before a `b` read
+ *     back as the single byte 0x0b, where octal stops after three digits;
+ *   - a `?` after another `?` is `\?`, because -std=c99 turns on trigraphs
+ *     and `"what??!"` came out as `what|`.  Trigraphs are replaced before
+ *     escapes are read, so it is the second `?` that has to change: no two
+ *     `?` may stand side by side in the C text. */
 void emit_c_string(Buf *out, StrSlice s) {
+    const unsigned char *p = (const unsigned char *)s.p;
     buf_putc(out, '"');
     for (uint32_t i = 0; i < s.len; i++) {
-        unsigned char c = (unsigned char)s.p[i];
+        unsigned char c = p[i];
         switch (c) {
             case '"':  buf_puts(out, "\\\""); break;
             case '\\': buf_puts(out, "\\\\"); break;
             case '\n': buf_puts(out, "\\n");  break;
             case '\t': buf_puts(out, "\\t");  break;
             case '\r': buf_puts(out, "\\r");  break;
+            case '?':
+                buf_puts(out, i > 0 && p[i - 1] == '?' ? "\\?" : "?");
+                break;
             default:
-                if (c < 0x20 || c == 0x7f) buf_printf(out, "\\x%02x", c);
-                else                       buf_putc(out, (char)c);
+                if (c < 0x20 || c == 0x7f) {
+                    buf_printf(out, "\\%03o", c);
+                } else if (c < 0x80) {
+                    buf_putc(out, (char)c);
+                } else {
+                    uint32_t n = utf8_seq_len(p, i, s.len);
+                    if (n == 0) {
+                        buf_printf(out, "\\%03o", c);
+                    } else {
+                        buf_write(out, s.p + i, n);
+                        i += n - 1;
+                    }
+                }
         }
     }
     buf_putc(out, '"');
@@ -7083,17 +7127,10 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
             st, r->len + 1, r->cid);
         buf_printf(out, "%lluULL, %uu, 0u, ",
                    (unsigned long long)r->hash, r->len);
-        /* Emit the name as a C string literal (escape conservatively). */
-        buf_putc(out, '"');
-        for (uint32_t j = 0; j < r->len; j++) {
-            unsigned char c = (unsigned char)r->name[j];
-            if (c == '"' || c == '\\') { buf_putc(out, '\\'); buf_putc(out, (char)c); }
-            else if (c == '\n') buf_puts(out, "\\n");
-            else if (c == '\t') buf_puts(out, "\\t");
-            else if (c < 0x20)  buf_printf(out, "\\%03o", c);
-            else                buf_putc(out, (char)c);
-        }
-        buf_puts(out, "\" };\n");
+        /* The name as a C string literal: emit_c_string, so a `??!` in a
+         * symbol is not read back as a trigraph. */
+        emit_c_string(out, strslice(r->name, r->len));
+        buf_puts(out, " };\n");
     }
     /* SYM5: seed the runtime intern table with this TU's static records so that
      * str->sym("foo") returns the same pointer as the literal :foo.  The
