@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.64.0` -- Adds Swift-style `#dedent"""..."""` string literals, typed `(Chan A)` / `LocalFiberGroup` APIs for the reactor and fiber groups, and embedder support for running spices compiled via `turi_env_attach_spice`.
+**Latest release:** `v0.64.1` -- Adds an Express-shaped `httpd` middleware set with connection upgrades, a `Char` type with `#\A` literals, and typed `parsec` results.
 
 ## What
 
