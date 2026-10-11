@@ -34,6 +34,18 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing the parsec guide plan (filed 2026-10-11)
+
+Typing `stdlib/parsec.tur` (`Char`, `List`, `Option`, `String` results) and
+writing its tutorial and guide turned up three compiler defects. Each is worked
+around in the shipped code and documented in the guide.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [byvalue-aggregate-erased-to-dangling-stack-address](byvalue-aggregate-erased-to-dangling-stack-address.md) | high (silent wrong values) | A by-value aggregate erased into an `int64` carrier slot is passed as the address of a stack temporary (`emit_carrier_bridge`); a callee that retains it -- `Applicative [Parser]`'s `pure` captures it in the parser closure -- reads a dead frame. `(pure (pair 1 2))` in a parser reads back garbage. Workaround: one-word results (`:heap` struct, `String`, `List`) |
+| [generic-hkt-method-lambda-with-tyvar-param-not-emitted](generic-hkt-method-lambda-with-tyvar-param-not-emitted.md) | medium (cc failure) | Inside a generic `defn`, a lambda whose param is typed by the signature's tyvar and is passed to `bind` / `fmap` is referenced but never emitted (`__poly_N` / `__fn_N` undeclared). Reproduces with `Option` on `main`. Why `do-m` binder inference is limited to ground types |
+| [hash-instance-on-int-opaque-breaks-any-key-maps](hash-instance-on-int-opaque-breaks-any-key-maps.md) | low-medium (compile failure) | A `Hash` instance on an int-backed opaque stops `(hash k)` on an `any` key from selecting `Hash [any]`, so every `any`-keyed map (`#map{...}` in Saffron) fails TUR-E0020. Why `Char` has no `Hash` instance |
+
 ## Found typing reactor-add-chan's channel (filed 2026-10-10)
 
 `tests/run-fnsan.sh` was cited as evidence that reactor callbacks match

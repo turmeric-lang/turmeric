@@ -1,0 +1,24 @@
+;; parsec tutorial, step 5 -- repetition with many and many1.
+;; The source of truth for docs/guides/parsec-tutorial.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+(defn digits [] : (Parser (List Char))
+  (many (satisfy digit?)))
+
+(defn some-digits [] : (Parser (List Char))
+  (many1 (satisfy digit?)))
+
+(defn main [] : int
+  (show-line (list->string (parse-first (digits) "123")))     ; 123
+  (println (list-count (parse-first (digits) "123")))         ; 3
+  ;; many always succeeds: no digits is the empty list.
+  (println (list-empty? (parse-first (digits) "")))           ; true
+  ;; many1 wants at least one.
+  (show-line (list->string (parse-first (some-digits) "42"))) ; 42
+  (println (some? (run-parser-full (some-digits) "")))        ; false
+  ;; many is greedy: on "123abc" it takes 1, 2 and 3 and stops at the a.
+  (let [r (list-first (run-parser (digits) "123abc"))]
+    (show-line (list->string (parse-result-value r)))         ; 123
+    (show-line (parse-result-rest r)))                        ; abc
+  0)

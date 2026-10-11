@@ -290,6 +290,37 @@
 
 (defn builder/push-byte! [b : StringBuilder c : int] : void
   (tur_sb_push_byte (:: b ptr<void>) c))
+;;; builder/push-char! -- append one character (a Char, 0..255) to the builder.
+;;;
+;;; Parameters:
+;;;   b -- the builder to append to
+;;;   c -- the character to append
+;;;
+;;; Example:
+;;;   (let [b (builder/new)]
+;;;     (do (builder/push-char! b #\h)
+;;;         (builder/push-char! b #\i)
+;;;         (builder/finish b)))  ; => String "hi"
+;;;
+;;; Since: parsec-guide-plan P1
+
+(defn builder/push-char! [b : StringBuilder c : Char] : void
+  (tur_sb_push_byte (:: b ptr<void>) (char->int c)))
+;;; char->string -- a fresh one-character String holding c.
+;;;
+;;; Parameters:
+;;;   c -- the character (0..255)
+;;;
+;;; Returns:
+;;;   A new owned String of length 1.
+;;;
+;;; Example:
+;;;   (string/to-cstr (char->string #\A))  ; => "A"
+;;;
+;;; Since: parsec-guide-plan P1
+
+(defn char->string [c : Char] : String
+  (let [b (builder/new)] (do (builder/push-char! b c) (builder/finish b))))
 ;;; builder/len -- number of bytes accumulated so far.
 ;;;
 ;;; Since: v2

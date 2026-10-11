@@ -79,7 +79,12 @@
   (defmacro must! [expr] (option-must expr))
   (defmacro must-msg! [expr msg] (option-expect expr msg))
   (defmacro ignore! [expr] (do expr nil))
-  (defmacro do-m [& forms]
+  ;; `& ^syntax forms`: the steps are bound as raw forms rather than
+  ;; substituted into the body and evaluated with it -- a step that is
+  ;; itself a `(do-m ...)` (`(many (do-m _ sep x p (pure x)))`) would
+  ;; otherwise be expanded at macro time and its `(fn ...)` read back as a
+  ;; compile-time function value (parsec-guide-plan P8).
+  (defmacro do-m [& ^syntax forms]
     (if (empty? forms)
       nil
       (if (empty? (rest forms))

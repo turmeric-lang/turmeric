@@ -3963,7 +3963,12 @@ static Form *read_char_literal(Reader *r) {
         items[1] = form_int(r->arena, span, value);
         return form_list(r->arena, span, items, 2);
     }
-    return form_int(r->arena, span, value);
+    /* parsec-guide-plan P2: still an F_INT, so every form-level consumer
+     * (quote, patterns, macros) sees the code it always saw, but marked so
+     * the elaborator types it as Char and the formatter writes `#\A`. */
+    Form *lit = form_int(r->arena, span, value);
+    lit->lit_suffix = LIT_SUF_CHAR;
+    return lit;
 }
 
 /* ---------------------------------------------------------------------------

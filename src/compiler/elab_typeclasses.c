@@ -9005,9 +9005,90 @@ resolved_user_fallback:;
     /* obj was already elaborated above for dispatch; elaborate the remaining args. */
     uint32_t n_args = call->as.list.len - 2;
     Expr **args = (Expr **)arena_alloc(e->arena, n_args * sizeof(Expr *));
+    /* parsec-guide-plan P8: a lambda handed to a method's function-typed
+     * parameter -- `.bind`'s `k : (fn [a] (m b))`, the shape every `do-m`
+     * step expands to, or `.fmap`'s `g` -- has its un-annotated params typed
+     * from that parameter, instantiated with what the receiver (and any earlier
+     * argument) binds.  Without it `(do-m c (item) ...)` bound `c` as the int
+     * carrier although the receiver is a `(Parser Char)`.  The same channel the
+     * plain-call path pushes (elab_call_fn_inner); elab_fn reads it only for a
+     * non-primitive param type, so int/float/cstr elements are untouched. */
+    const TypeClassMethod *lam_cm = NULL;
+    if (best_inst && best_inst->typeclass) {
+        TypeClass *ltc = best_inst->typeclass;
+        for (uint8_t mi = 0; mi < ltc->n_methods; mi++)
+            if (ltc->methods[mi].name &&
+                strcmp(ltc->methods[mi].name->name, method_name) == 0) {
+                lam_cm = &ltc->methods[mi];
+                break;
+            }
+    }
+    const Symbol *lam_bn[16];
+    Type lam_bt[16];
+    uint8_t lam_nb = 0;
+    if (lam_cm && lam_cm->n_params >= 1)
+        m7_collect_tyvar_bindings(e, lam_cm->param_types[0], obj->type,
+                                  lam_bn, lam_bt, &lam_nb, 16);
     for (uint32_t i = 0; i < n_args; i++) {
-        args[i] = elab_form(e, call->as.list.items[2 + i]);
+        Form *af = call->as.list.items[2 + i];
+        Type *lam_push = NULL;
+        if (lam_cm && lam_nb > 0 && 1 + i < lam_cm->n_params &&
+            lam_cm->param_types[1 + i].kind == TY_FN &&
+            lam_cm->param_types[1 + i].as.fn.arg_full_types &&
+            af->tag == F_LIST && af->as.list.len >= 1 &&
+            af->as.list.items[0]->tag == F_SYM &&
+            (af->as.list.items[0]->as.sym == e->sym_fn ||
+             af->as.list.items[0]->as.sym == e->sym_lambda)) {
+            const Type *pt = &lam_cm->param_types[1 + i];
+            uint32_t ar = pt->as.fn.arity;
+            lam_push = (Type *)arena_alloc(e->arena, sizeof(Type));
+            *lam_push = *pt;
+            Type **afts = (Type **)arena_alloc(e->arena, (ar ? ar : 1) * sizeof(Type *));
+            for (uint32_t k = 0; k < ar; k++) {
+                const Type *ak = pt->as.fn.arg_full_types[k];
+                afts[k] = NULL;
+                if (!ak) continue;
+                Type at = elab_subst_class_tyvars(e->arena, *ak, lam_bn, lam_nb,
+                                                  lam_bt, lam_nb);
+                /* Only a GROUND element type types the param.  One still
+                 * naming a type variable -- the `A` of an enclosing
+                 * `(defn token [A] ...)` -- keeps the carrier default it
+                 * always had: a lambda capturing such a param inside another
+                 * lambda is not emitted (the `__fn_N undeclared` cc error), so
+                 * typing it would turn working generic parsers into broken
+                 * ones. */
+                if (tc_type_mentions_tyvar(&at)) continue;
+                afts[k] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *afts[k] = at;
+            }
+            lam_push->as.fn.arg_full_types = afts;
+            /* The lambda's BODY expects the parameter's result: grounded by the
+             * bindings when it can be, else -- for a method whose result IS the
+             * continuation's (`bind`'s `(m b)` on both sides) -- whatever the
+             * call itself is expected to produce, which is what lets a `pure`
+             * at the end of a `do-m` chain find its instance. */
+            Type *rinst = NULL;
+            if (pt->as.fn.result_full_type) {
+                Type r = elab_subst_class_tyvars(e->arena, *pt->as.fn.result_full_type,
+                                                 lam_bn, lam_nb, lam_bt, lam_nb);
+                if (!tc_type_mentions_tyvar(&r)) {
+                    rinst = (Type *)arena_alloc(e->arena, sizeof(Type));
+                    *rinst = r;
+                } else if (e->expected_type && e->expected_type->kind != TY_FN &&
+                           type_eq(lam_cm->return_type, *pt->as.fn.result_full_type)) {
+                    rinst = e->expected_type;
+                }
+            }
+            lam_push->as.fn.result_full_type = rinst;
+        }
+        Type *lam_saved = e->expected_type;
+        if (lam_push) e->expected_type = lam_push;
+        args[i] = elab_form(e, af);
+        if (lam_push) e->expected_type = lam_saved;
         if (!args[i]) return NULL;
+        if (lam_cm && 1 + i < lam_cm->n_params)
+            m7_collect_tyvar_bindings(e, lam_cm->param_types[1 + i], args[i]->type,
+                                      lam_bn, lam_bt, &lam_nb, 16);
     }
 
     /* Arrow-identity passthrough: capture the pre-shim argument types so a

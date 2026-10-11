@@ -23,12 +23,17 @@ The runnable end-to-end version of every snippet here lives in
 [`tests/fixtures/parsec-tutorial/input.tur`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/parsec-tutorial/input.tur).
 
 > **Note.** The snippets below use the `#\<char>` character-literal
-> syntax (`#\+` reads as `43`, `#\0` as `48`, `#\space` as `32`).
-> That syntax is a v1 legibility slice; see
+> syntax (`#\+`, `#\0`, `#\space`); see
 > [`docs/archive/legible-char-literals-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/legible-char-literals-plan.md).
-> A `#\<char>` literal is just an `:int` -- the reader emits the byte
-> code, so it composes with `=` and arithmetic exactly like the raw
-> integer it replaces. The runnable fixture uses `#\` throughout.
+> A `#\<char>` literal is a `Char` (from the auto-loaded `stdlib/char.tur`),
+> not an `:int`: compare characters with `char=?`, classify them with
+> `digit?` / `alpha?` / `space?`, and cross to the code with `char->int`
+> (or back with `int->char`). The runnable fixture uses `#\` throughout.
+>
+> This tutorial builds its own combinators from scratch. For the stdlib's
+> ready-made `tur/parsec` library, see the
+> [parsec tutorial](parsec-tutorial.md) and the
+> [parsec reference guide](parsec-guide.md).
 
 ---
 
@@ -58,28 +63,29 @@ For a **byte-oriented** parser we want to walk the source one character
 at a time. The natural Turmeric type is a `:cstr` plus `cstr-nth` from
 `stdlib/cstr` (not autoloaded, so it takes a
 `(import cstr :refer [cstr-len cstr-nth])`). For the tutorial we keep
-the input as a **list of character codes** instead -- a plain
-`(cons int (cons int ...))` built with `stdlib/list`'s `list-head` and
-`list-tail` -- because it lets every combinator work on a single value
-type (`int`) without threading an index alongside the source. The
-string `"1+2*(3+4)"` becomes:
+the input as a **list of characters** instead -- a plain cons list
+walked with `stdlib/list`'s `list-head` and `list-tail` -- because it
+lets every combinator take the same input type (an `int` list carrier)
+without threading an index alongside the source. The string
+`"1+2*(3+4)"` becomes:
 
 ```turmeric
 (list #\1 #\+ #\2 #\* #\( #\3 #\+ #\4 #\))
 ```
 
 Two helpers make the rest of the code read cleanly. End-of-input is a
-`0` list carrier (nil):
+`0` list carrier (nil), and the carrier holds each character as its
+code, so reading the head crosses back to a `Char`:
 
 ```turmeric
 (defn at-end? [xs : int] : bool (= xs 0))
 
-(defn is-digit? [c : int] : bool
-  (if (< c #\0) false (if (> c #\9) false true)))
+(defn head-char [xs : int] : Char (int->char (list-head xs)))
 ```
 
-`list-head xs` returns the current byte and `list-tail xs` advances the
-cursor.
+`head-char xs` returns the current character and `list-tail xs` advances
+the cursor. Character classification comes from the stdlib: `digit?`,
+`alpha?`, `space?` and friends all take a `Char`.
 
 ---
 
@@ -114,11 +120,11 @@ The one *primitive* parser -- the atom every other combinator is built
 on -- consumes a single character if it matches a predicate:
 
 ```turmeric
-(defn psat [pred : (fn [int] bool)] : (fn [int] (PRes int))
-  (fn [xs : int] : (PRes int)
+(defn psat [pred : (fn [Char] bool)] : (fn [int] (PRes Char))
+  (fn [xs : int] : (PRes Char)
     (if (at-end? xs)
       (PFail)
-      (let [c (list-head xs)]
+      (let [c (head-char xs)]
         (if (pred c) (POK c (list-tail xs)) (PFail))))))
 ```
 
@@ -128,18 +134,18 @@ maybe a helper), return a new parser (a `(fn [int] (PRes A))`
 closure). Once you have `psat`, `pchar` and `digit` are one-liners:
 
 ```turmeric
-(defn eq-char [target : int] : (fn [int] bool)
-  (fn [c : int] : bool (= c target)))
+(defn eq-char [target : Char] : (fn [Char] bool)
+  (fn [c : Char] : bool (char=? c target)))
 
-(defn pchar [target : int] : (fn [int] (PRes int))
+(defn pchar [target : Char] : (fn [int] (PRes Char))
   (psat (eq-char target)))
 
-(defn digit [xs : int] : (PRes int)
-  ((psat is-digit?) xs))
+(defn digit [xs : int] : (PRes Char)
+  ((psat digit?) xs))
 ```
 
 `pchar` currying: `eq-char` builds a predicate closure and `psat`
-lifts it into a parser. `digit` invokes `(psat is-digit?)` eagerly and
+lifts it into a parser. `digit` invokes `(psat digit?)` eagerly and
 eta-expands the result so it can be used as a plain top-level parser.
 
 ---
@@ -149,7 +155,7 @@ eta-expands the result so it can be used as a plain top-level parser.
 The combinators are the recurring shapes -- alternation, mapping,
 sequencing -- lifted out of ad-hoc grammar code so we can compose them
 freely. The tutorial spells each one *monomorphically* (one instance
-per element type: `or-int` / `or-expr`, `map-int-to-expr`) as a
+per element type: `or-char` / `or-expr`, `map-int-to-expr`) as a
 pedagogical choice -- the shapes are easier to read when the element
 type is spelled out. The polymorphic spelling `(or-parser [A] p q)`
 also works: the compiler infers `A` through the returned closure at
@@ -160,9 +166,9 @@ the application site.
 "Try `p`; if it fails, try `q`":
 
 ```turmeric
-(defn or-int [p : (fn [int] (PRes int)) q : (fn [int] (PRes int))]
-    : (fn [int] (PRes int))
-  (fn [xs : int] : (PRes int)
+(defn or-char [p : (fn [int] (PRes Char)) q : (fn [int] (PRes Char))]
+    : (fn [int] (PRes Char))
+  (fn [xs : int] : (PRes Char)
     (match (p xs)
       (POK v rest) (POK v rest)
       (PFail)      (q xs))))
@@ -191,7 +197,7 @@ collapse to a single polymorphic `defn`:
 both the argument closures and the returned closure, and the compiler
 grounds it at each application site (e.g. `(or-parser paren-expr
 number-as-expr)` grounds `A = Expr`). The tutorial keeps the
-monomorphic pair below for readability, but any call to `or-int` or
+monomorphic pair below for readability, but any call to `or-char` or
 `or-expr` can be replaced with `or-parser` verbatim.
 
 ### Mapping -- `map-*-to-*`
@@ -246,16 +252,16 @@ representable.
   (EMul (Expr int) (Expr int)   : (Expr int))
   (EDiv (Expr int) (Expr int)   : (Expr int)))
 
-(defn apply-op [op : int lhs : Expr rhs : Expr] : Expr
-  (if (= op #\+) (EAdd lhs rhs)
-    (if (= op #\-) (ESub lhs rhs)
-      (if (= op #\*) (EMul lhs rhs)
-        (if (= op #\/) (EDiv lhs rhs)
+(defn apply-op [op : Char lhs : Expr rhs : Expr] : Expr
+  (if (char=? op #\+) (EAdd lhs rhs)
+    (if (char=? op #\-) (ESub lhs rhs)
+      (if (char=? op #\*) (EMul lhs rhs)
+        (if (char=? op #\/) (EDiv lhs rhs)
           (ENum 0))))))
 ```
 
-`apply-op` dispatches on the operator byte. It falls through to
-`(ENum 0)` on an unknown byte, which never happens if the grammar is
+`apply-op` dispatches on the operator character. It falls through to
+`(ENum 0)` on an unknown operator, which never happens if the grammar is
 correct -- and if it does, `eval-expr` will still produce a defined
 value.
 
@@ -279,15 +285,15 @@ The two-level `expr` / `term` split is what buys precedence: `*` and
 (defn digits-int-loop [xs : int acc : int] : (PRes int)
   (if (at-end? xs)
     (POK acc xs)
-    (let [c (list-head xs)]
-      (if (is-digit? c)
-        (digits-int-loop (list-tail xs) (+ (* acc 10) (- c #\0)))
+    (let [c (head-char xs)]
+      (if (digit? c)
+        (digits-int-loop (list-tail xs) (+ (* acc 10) (char->digit c)))
         (POK acc xs)))))
 
 (defn number [xs : int] : (PRes int)
   (match (digit xs)
     (PFail)      (PFail)
-    (POK d rest) (digits-int-loop rest (- d #\0))))
+    (POK d rest) (digits-int-loop rest (char->digit d))))
 ```
 
 `digit` (from earlier) is the "at-least-one" gate; `digits-int-loop`
@@ -306,14 +312,14 @@ iteration -- no stack growth, no O(n) intermediate allocations.
 (defn paren-expr [xs : int] : (PRes Expr)
   (if (at-end? xs)
     (PFail)
-    (let [c (list-head xs)]
-      (if (= c #\()
+    (let [c (head-char xs)]
+      (if (char=? c #\()
         (match (expr-parse (list-tail xs))
           (PFail)          (PFail)
           (POK inner rest)
           (if (at-end? rest)
             (PFail)
-            (if (= (list-head rest) #\))
+            (if (char=? (head-char rest) #\))
               (:: (POK inner (list-tail rest)) (PRes Expr))
               (PFail))))
         (PFail)))))
@@ -347,8 +353,8 @@ inlined `many` over `(op, factor)` pairs, folded left-to-right:
 (defn term-tail [xs : int lhs : Expr] : (PRes Expr)
   (if (at-end? xs)
     (POK lhs xs)
-    (let [c (list-head xs)]
-      (if (if (= c #\*) true (= c #\/))
+    (let [c (head-char xs)]
+      (if (or (char=? c #\*) (char=? c #\/))
         (match (factor (list-tail xs))
           (PFail)          (PFail)
           (POK rhs rest)   (term-tail rest (apply-op c lhs rhs)))
@@ -369,8 +375,8 @@ inlined `many` over `(op, factor)` pairs, folded left-to-right:
 (defn expr-tail [xs : int lhs : Expr] : (PRes Expr)
   (if (at-end? xs)
     (POK lhs xs)
-    (let [c (list-head xs)]
-      (if (if (= c #\+) true (= c #\-))
+    (let [c (head-char xs)]
+      (if (or (char=? c #\+) (char=? c #\-))
         (match (term (list-tail xs))
           (PFail)          (PFail)
           (POK rhs rest)   (expr-tail rest (apply-op c lhs rhs)))
@@ -432,8 +438,11 @@ Looking back at what the type system gave us:
 - **The `Expr` GADT** rules out impossible AST shapes. There is no
   "unknown tag" case to guard against because there is no way to
   construct one.
-- **`is-digit?`** returns `:bool`, not `:int`. The rule against `:int`
-  stand-ins (`CLAUDE.md`) is directly why.
+- **`Char`, not `:int`.** `#\+` is a `Char`, `psat` takes a
+  `(fn [Char] bool)`, and `digit?` returns `:bool` -- so a character
+  code can never be passed where a count is expected, or the other way
+  round. The rule against `:int` stand-ins (`CLAUDE.md`) is directly
+  why.
 
 None of these are aesthetic wins. Each rules out an entire class of
 bugs at compile time. That is the reason to reach for GADTs and ADTs
@@ -448,13 +457,14 @@ even for a tutorial-sized parser.
   here. See `tests/fixtures/parsec-json-subset/` for a starting
   point.
 - **Production library:** [`stdlib/parsec.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/parsec.tur)
-  has performance-tuned versions of every combinator plus `pstring`,
-  `parse-value`, and friends -- built on top of inline-C for the tight
-  loops.
+  has performance-tuned versions of every combinator plus `satisfy`,
+  `pstring`, `many`, `optional`, and the `do-m` / `alt-or` / `fmap`
+  typeclass surface -- see the [parsec tutorial](parsec-tutorial.md)
+  and the [parsec reference guide](parsec-guide.md).
 - **Real strings:** add `(import cstr :refer [cstr-len cstr-nth])` and
-  the input list of ASCII ints goes away -- the parser takes a `:cstr`
+  the input list of characters goes away -- the parser takes a `:cstr`
   directly.
-- **Polymorphic combinators:** the `or-int` / `or-expr` (and every
+- **Polymorphic combinators:** the `or-char` / `or-expr` (and every
   other monomorphic pair in the tutorial) can be collapsed to a single
   `(or-parser [A] p q)`; keeping the monomorphic spelling in the
   tutorial is a pedagogical choice, not a compiler limit.

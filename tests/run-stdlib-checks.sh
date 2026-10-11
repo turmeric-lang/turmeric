@@ -32,6 +32,7 @@ STDLIB_FILES=(
     stdlib/hamt.tur
     stdlib/typeclass-eq.tur
     stdlib/typeclass-functor.tur
+    stdlib/char.tur
     stdlib/map.tur
     stdlib/vec.tur
     stdlib/slice.tur
@@ -79,6 +80,7 @@ STDLIB_FLAGS=(
     ""
 
     # Bucket A flags
+    "--no-auto-stdlib"
     "--no-auto-stdlib"
     "--no-auto-stdlib"
     "--no-auto-stdlib"
