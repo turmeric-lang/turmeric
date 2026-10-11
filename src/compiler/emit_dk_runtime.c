@@ -28,6 +28,14 @@ void emit_cps_callcc_prelude(Buf *out) {
 "    tur_jmp_buf buf;\n"
 "    int64_t result;  /* value delivered by tur_escape_resume */\n"
 "    bool    valid;   /* false once the call/cc prompt has returned */\n"
+/* cps-defer-skipped-on-abortive-effect: the DK runtime's pending-perform list
+ * as it was when the landing was armed, and the hook that fires the records
+ * above it.  tur_escape_resume calls the hook BEFORE it jumps: the records
+ * live on the C frames of the dk_perform calls the escape abandons, and once
+ * the longjmp has landed the landing's own calls reuse that stack -- a walk
+ * from the landing read clobbered records (a SIGSEGV at -O1 and above). */
+"    void   *dk_pp;   /* g_dk_pend_perform at the landing */\n"
+"    void  (*abandon)(void *to);  /* fires the records above dk_pp, or NULL */\n"
 "} tur_escape_cont;\n"
 "/* r7rs-lang-plan R6 (D7): the prompts currently on the stack.  `valid` lives\n"
 " * in the prompt's own frame, so once that frame has returned the flag is a\n"
@@ -102,6 +110,7 @@ void emit_cps_callcc_prelude(Buf *out) {
 "        abort();\n"
 "    }\n"
 "    cc->result = v;\n"
+"    if (cc->abandon) cc->abandon(cc->dk_pp);   /* while the abandoned frames still exist */\n"
 "    TUR_LONGJMP(cc->buf);\n"
 "    return 0; /* unreachable */\n"
 "}\n"
@@ -1624,11 +1633,14 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        ck = p->k; cH = p->H;\n"
 "    }\n"
 "}\n"
-/* An escape (call/ec) landed: every record above `to` belongs to a dk_perform
- * whose C frame the longjmp discarded -- its case will not return, so its
- * continuation is dead unless the case copied it.  Fire those, innermost
- * first, and cut the list back. */
-"__attribute__((unused)) static void __dk_escape_abandon(DKPendPerform *to) {\n"
+/* An escape (call/ec) is about to land: every record above `to` belongs to a
+ * dk_perform whose C frame the longjmp will discard -- its case will not
+ * return, so its continuation is dead unless the case copied it.  Fire those,
+ * innermost first, and cut the list back.  Called from tur_escape_resume
+ * BEFORE the jump (through the landing's `abandon` hook), never from the
+ * landing: the records are on the frames being abandoned. */
+"__attribute__((unused)) static void __dk_escape_abandon(void *to_) {\n"
+"    DKPendPerform *to = (DKPendPerform *)to_;\n"
 "    for (DKPendPerform *p = g_dk_pend_perform; p && p != to; p = p->up)\n"
 "        if (!p->sub->ncopy) __dk_abort_abandon(p->k, p->H);\n"
 "    g_dk_pend_perform = to;\n"

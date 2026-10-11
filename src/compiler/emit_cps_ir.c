@@ -12859,9 +12859,10 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     ce_line(ce, "%s.valid = 1;", cc);
     ce_line(ce, "tur_escape_live_push(&%s);", cc);
     /* cps-defer-skipped-on-abortive-effect: the performs whose cases the
-     * escape jumps over are abandoned with their C frames; the landing fires
-     * the defers pending in their continuations (__dk_escape_abandon). */
-    ce_line(ce, "DKPendPerform *%s_pp = g_dk_pend_perform;", cc);
+     * escape jumps over are abandoned with their C frames; tur_escape_resume
+     * fires the defers pending in their continuations before it jumps, through
+     * the hook armed here (__dk_escape_abandon). */
+    ce_line(ce, "%s.dk_pp = (void *)g_dk_pend_perform; %s.abandon = __dk_escape_abandon;", cc, cc);
     ce_line(ce, "if (TUR_SETJMP(%s.buf) == 0) {", cc);
     ce->indent += 4;
     /* Normal path: emit the receiver value, then call it with &cc. */
@@ -12902,7 +12903,6 @@ static void emit_callcc(CE *ce, const CTerm *t) {
      * escape jumped over. */
     ce_line(ce, "%s.valid = 0;", cc);
     ce_line(ce, "tur_escape_live_pop(&%s);", cc);
-    ce_line(ce, "__dk_escape_abandon(%s_pp);", cc);
     if (boxed) {
         ce_line(ce, "{ tur_tagged_t *__ccb = (tur_tagged_t *)(intptr_t)%s.result; "
                     "%s = *__ccb; free(__ccb); }", cc, xn);

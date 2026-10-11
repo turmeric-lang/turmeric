@@ -1994,6 +1994,7 @@
   c->tb_root = tur_tb_root;
   c->tb_armed = tur_tb_armed_for;
   c->dk_driver = (void *)g_dk_driver;
+  c->dk_pend = (void *)g_dk_pend_perform;
   c->dk_depth = __dk_entry_depth;
   c->esc_n = tur_escape_live_n;
   if (c->esc_n > 0) {
@@ -2009,6 +2010,7 @@
   tur_tb_root = rc->tb_root;
   tur_tb_armed_for = rc->tb_armed;
   g_dk_driver = (tur_jmp_buf *)rc->dk_driver;
+  g_dk_pend_perform = (DKPendPerform *)rc->dk_pend;
   __dk_entry_depth = rc->dk_depth;
   for (int i = 0; i < rc->esc_n; i++) tur_escape_live_push((tur_escape_cont *)rc->esc[i]);
   ```)
@@ -2056,7 +2058,7 @@
       r7k_jmp_buf jb;
       unsigned char *lo, *img;
       size_t n;
-      void *tb_root, *tb_armed, *dk_driver, **esc;
+      void *tb_root, *tb_armed, *dk_driver, *dk_pend, **esc;
       int dk_depth, esc_n;
       // The thread that captured it: the image is a copy of THAT thread's
       // stack, so no other thread may jump into it (r7rs-cont-here?__).

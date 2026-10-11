@@ -2878,7 +2878,8 @@ static void __dk_abort_pending(DK *ck, const DK *cH, DKPendPerform *p) {
         ck = p->k; cH = p->H;
     }
 }
-__attribute__((unused)) static void __dk_escape_abandon(DKPendPerform *to) {
+__attribute__((unused)) static void __dk_escape_abandon(void *to_) {
+    DKPendPerform *to = (DKPendPerform *)to_;
     for (DKPendPerform *p = g_dk_pend_perform; p && p != to; p = p->up)
         if (!p->sub->ncopy) __dk_abort_abandon(p->k, p->H);
     g_dk_pend_perform = to;

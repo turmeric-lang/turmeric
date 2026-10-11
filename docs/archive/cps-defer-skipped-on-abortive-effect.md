@@ -105,9 +105,19 @@ landing was armed, the fiber swap carries the fiber's own
 (`FiberBlock.dk_pend`, swapped with the reap registry), and the c2mir front
 end gets a host slot (`tur_tls_dk_pend_perform_ptr`).
 
-**Escapes.** An `escape` landing fires the records the longjmp jumped over
+**Escapes.** An escape fires the records it is about to jump over
 (`__dk_escape_abandon`): a perform whose case invoked the escape is dead
-unless the case copied its `k`.  Reaching it needed one more fix: an
+unless the case copied its `k`.  The walk runs in `tur_escape_resume`,
+before the `longjmp`, through a hook the landing arms in its
+`tur_escape_cont` (`dk_pp`, `abandon`).  It first ran at the landing, which
+read the records after the jump: they live on the C frames of the
+`dk_perform` calls the escape abandons, and the landing's own calls reuse
+that stack, so the walk read clobbered memory -- a SIGSEGV at -O1 and above
+with the whole preamble (the fnsan CI job, gcc and clang alike), invisible
+at -O0 and under the split runtime.  The r7rs re-entrant `call/cc` saves and
+restores the list with the driver landing it already carries
+(`r7rs-cont-save-state` / `-load-state`), since a re-entered stack image
+brings its records back with it.  Reaching it needed one more fix: an
 escape receiver's `k` (a `CONT_ESCAPE` continuation, the landing's address
 as the int64 carrier) failed the CPS signature gate (`fn_sig_ok`), which
 made the receiver a permanently sig-rejected function and evicted every
