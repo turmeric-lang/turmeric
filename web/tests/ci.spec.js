@@ -531,25 +531,6 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-spices-chart .ci-empty')).toContainText(/not measured/i);
   });
 
-  test('the Test count tab lists cases by suite from the latest run', async ({ page }) => {
-    await stubLoc(page);
-    await stubDocs(page);
-    await page.goto('/ci?tab=counts');
-    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
-
-    await expect(page.locator('#ci-counts-tiles .ci-tile')).toHaveCount(4);
-    const rows = page.locator('#ci-counts-table tbody tr');
-    await expect(rows.first()).toBeVisible();
-    // Largest first.
-    const cases = (await rows.locator('td:nth-child(2)').allTextContents())
-      .map((t) => Number(t.replace(/[^0-9]/g, '')));
-    expect(cases.length).toBeGreaterThan(0);
-    expect([...cases].sort((a, b) => b - a)).toEqual(cases);
-
-    await page.locator('#ci-counts-search').fill('zzz-no-such-suite');
-    await expect(page.locator('#ci-counts-table .ci-empty')).toBeVisible();
-  });
-
   test('the page loads only the recent window, and the full log only for wide ranges', async ({ page }) => {
     await stubLoc(page);
     await stubDocs(page);

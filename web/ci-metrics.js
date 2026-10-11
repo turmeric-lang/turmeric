@@ -95,7 +95,7 @@ const SPICE_SERIES = [
   ['spices', 'Spices', '--chart-1'],
 ];
 
-const TABS = ['tests', 'counts', 'code', 'spices', 'reports'];
+const TABS = ['tests', 'code', 'spices', 'reports'];
 
 // Ranges the 8-day recent window can answer. Anything wider needs the full log.
 const RECENT_RANGES = ['1d', '7d'];
@@ -140,7 +140,6 @@ const state = {
   // True while `rows` is only the recent window (/api/ci-timings?window=recent)
   // rather than the full year. The full log is 40+ MB; the page opens on 7 days.
   windowed: false,
-  countsFilter: '',
 };
 
 // ── FORMATTING ──────────────────────────────────────────────────────────────
@@ -1196,84 +1195,6 @@ function renderDocsLegend() {
   }
 }
 
-// ── RENDER: TEST CASE COUNTS ────────────────────────────────────────────────
-//
-// The harness suites (tur_tests, turi_fixture_tests, ...) print their own
-// pass/fail/skip census and the collector lifts it into the row, so the count of
-// test CASES per suite is already in the timing data -- no new collection. Suites
-// that are one ctest entry with no internal census (most of the ~170) carry no
-// counts and are listed as such by the footnote, not as zero.
-
-function latestCounts() {
-  const rows = state.rows.filter((r) => envKey(r) === state.env);
-  const latestTs = rows.reduce((m, r) => Math.max(m, r.ts), 0);
-  const latest = rows.filter((r) => r.ts === latestTs);
-  return {
-    latestTs,
-    suites: latest.filter((r) => r.discovered != null),
-    uncounted: latest.filter((r) => r.discovered == null).length,
-  };
-}
-
-function renderCounts() {
-  const { suites, uncounted, latestTs } = latestCounts();
-  const sum = (k) => suites.reduce((a, r) => a + (r[k] ?? 0), 0);
-  const env = state.envs.find((e) => e.key === state.env);
-
-  const tile = (icon, label, value, note) => `
-    <div class="ci-tile">
-      <div class="ci-tile-label"><t-icon name="${icon}"></t-icon>${esc(label)}</div>
-      <div class="ci-tile-value">${value}</div>
-      <div class="ci-tile-note">${esc(note)}</div>
-    </div>`;
-
-  document.getElementById('ci-counts-tiles').innerHTML = [
-    tile('layers', 'Test cases', fmtCount(sum('discovered')),
-      `Discovered across ${suites.length} counting suites`),
-    tile('circle-check', 'Passed', fmtCount(sum('passed')), 'In the latest run'),
-    tile('circle-minus', 'Skipped', fmtCount(sum('skipped')), 'Not run in the latest run'),
-    tile(sum('failed') ? 'circle-x' : 'circle-check', 'Failed',
-      fmtCount(sum('failed')), 'In the latest run'),
-  ].join('');
-
-  document.getElementById('ci-counts-sub').textContent = latestTs
-    ? `${env ? env.label : ''} -- ${fmtDateTime(latestTs)}. ${uncounted} further `
-      + 'suites are a single ctest entry with no internal case count.'
-    : '';
-
-  const q = state.countsFilter.trim().toLowerCase();
-  const shown = suites
-    .filter((r) => !q || seriesName(r).toLowerCase().includes(q))
-    .sort((a, b) => b.discovered - a.discovered);
-  const peak = Math.max(1, ...suites.map((r) => r.discovered));
-
-  const table = document.getElementById('ci-counts-table');
-  if (!shown.length) {
-    table.innerHTML = '<tbody><tr><td><div class="ci-empty">No suites match.</div></td></tr></tbody>';
-    return;
-  }
-  const pct = (n) => `${((n ?? 0) / peak * 100).toFixed(2)}%`;
-  table.innerHTML = `
-    <thead><tr>
-      <th scope="col">Suite</th><th scope="col">Cases</th>
-      <th scope="col">Passed</th><th scope="col">Skipped</th>
-      <th scope="col">Failed</th><th scope="col">Share of largest</th>
-    </tr></thead>
-    <tbody>${shown.map((r) => `
-      <tr>
-        <td title="${esc(seriesName(r))}">${esc(seriesName(r))}</td>
-        <td>${esc(fmtCount(r.discovered))}</td>
-        <td>${esc(fmtCount(r.passed ?? 0))}</td>
-        <td>${esc(fmtCount(r.skipped ?? 0))}</td>
-        <td>${esc(fmtCount(r.failed ?? 0))}</td>
-        <td><div class="ci-count-bar" aria-hidden="true">
-          <span class="pass" style="width:${pct(r.passed)}"></span>
-          <span class="skip" style="width:${pct(r.skipped)}"></span>
-          <span class="fail" style="width:${pct(r.failed)}"></span>
-        </div></td>
-      </tr>`).join('')}</tbody>`;
-}
-
 // ── RENDER: SPICES AND GUIDES ───────────────────────────────────────────────
 
 // One fixed-series trend chart over the docs-counts rows. Rows whose field is
@@ -1592,7 +1513,6 @@ function render() {
   renderDocs();
   renderGuides();
   renderSpices();
-  renderCounts();
   renderSparks(stats);
   renderTable(stats);
   renderSkips();
@@ -1646,7 +1566,6 @@ function switchTab(tab) {
   }
   // A chart drawn into a hidden panel has a fallback viewBox width; redraw now
   // that the panel is visible so it fits the real column.
-  if (tab === 'counts') renderCounts();
   if (tab === 'code') renderLoc();
   if (tab === 'spices') renderSpices();
   if (tab === 'reports') { renderDocsTiles(); renderDocs(); renderGuides(); }
@@ -1803,12 +1722,6 @@ async function boot() {
   for (const t of document.querySelectorAll('.ci-tab')) {
     t.onclick = () => switchTab(t.dataset.tab);
   }
-
-  const countsSearch = document.getElementById('ci-counts-search');
-  countsSearch.addEventListener('input', () => {
-    state.countsFilter = countsSearch.value;
-    renderCounts();
-  });
 
   const search = document.getElementById('ci-spark-search');
   search.addEventListener('input', () => {

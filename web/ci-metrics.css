@@ -646,20 +646,3 @@
   .ci-field--range .ci-select { min-width: 0; width: 100%; }
 }
 
-/* ── TEST COUNT BARS ───────────────────── */
-/* A bar is redundant with the number beside it on purpose: it is what lets the
-   eye rank 170 suites without reading them. Passed/failed/skipped share one
-   track so the proportions of a suite are visible, not only its size. */
-
-.ci-count-bar {
-  display: flex;
-  height: 8px;
-  min-width: 120px;
-  border-radius: 4px;
-  overflow: hidden;
-  background: var(--border);
-}
-.ci-count-bar > span { display: block; height: 100%; }
-.ci-count-bar .pass { background: var(--chart-1); }
-.ci-count-bar .skip { background: var(--text-dim); }
-.ci-count-bar .fail { background: var(--danger, #d1453b); }
