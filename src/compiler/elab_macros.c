@@ -680,7 +680,13 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
     }
     /* At this point head->tag == F_SYM is guaranteed by the early return above. */
     if (head->as.sym == env->elab->sym_quote && f->as.list.len == 2) {
-        return ct_value_form(f->as.list.items[1]);
+        /* `(quote clauses)` on a parameter is the idiom a macro used to keep
+         * its argument as data (ecs's defxsystem walks its clauses this way).
+         * The argument IS data now, behind its PROV_MACRO_ARG wrapper; quote
+         * yields the argument, not the wrapper -- a walker reading the
+         * wrapper saw one element and stopped (or, recursing on `rest`,
+         * never did). */
+        return ct_value_form(macro_arg_unwrap(f->as.list.items[1]));
     }
     if (head->as.sym == env->elab->sym_quasiquote && f->as.list.len == 2) {
         return ct_value_form(ct_eval_quasiquote(env, f->as.list.items[1]));
@@ -957,12 +963,25 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
 
     CtValue head_v = ct_eval_form(env, head);
     if (!*env->ok) return head_v;
+    /* A user macro this splice will expand below.  Its arguments are written
+     * by the enclosing template -- `~@(fields ~cap ~(rest comps))` -- and a
+     * `~x` there means the VALUE of x.  A bare unquote evaluates to its inner
+     * UNevaluated (ct_eval_form), which used to be finished by substitution:
+     * the inner macro's `(empty? comps)` evaluated the substituted `(rest
+     * comps)` in place.  Substituted arguments are data now (PROV_MACRO_ARG),
+     * so that never happened and the recursion never reached its base case
+     * (ecs's sized-mono-world-fields).  Evaluate it here instead. */
+    bool splice_macro_call = env->expand_macro_head && head_v.tag != CT_VAL_FN &&
+                             elab_lookup_macro(env->elab, head->as.sym) != NULL;
     uint32_t n_in_args = f->as.list.len - 1;
     Form **tmp_args = (n_in_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_in_args * sizeof(Form *));
     bool *splice = (n_in_args == 0) ? NULL : (bool *)arena_alloc(env->elab->arena, n_in_args * sizeof(bool));
     uint32_t n_args = 0;
     for (uint32_t i = 0; i < n_in_args; i++) {
         Form *arg_form = f->as.list.items[i + 1];
+        if (splice_macro_call && arg_form->tag == F_UNQUOTE &&
+            !is_macro_arg_datum(arg_form) && arg_form->as.list.len == 1)
+            arg_form = arg_form->as.list.items[0];
         if (arg_form->tag == F_UNQUOTE_SPLICING) {
             CtValue v = ct_eval_splice_inner(env, arg_form->as.list.items[0]);
             Form *inner = ct_value_to_form(env, v, arg_form->span);

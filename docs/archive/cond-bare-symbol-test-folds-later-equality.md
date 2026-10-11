@@ -95,3 +95,27 @@ clause -- they just never evaluate inside it.
 **Pinned by** `tests/fixtures/macro-arg-not-ct-evaluated` (every case above;
 it fails to compile on the old expander). Fixture suite: 3724 passed, 0
 failed.
+
+## Follow-up 2026-10-11: two CT idioms the fix broke
+
+Running turmeric-spices' `ecs` suite against the fix found two macro idioms
+that relied on substituted arguments being re-evaluated, both in `ecs`'s world
+and system macros:
+
+- **`(quote param)`** -- the documented way a macro kept a parameter as data
+  for a CT walker (`defxsystem`'s `(quote clauses)`). The CT `quote` returned
+  the `PROV_MACRO_ARG` wrapper itself, a one-element form, so the walker saw
+  one item. `quote` now yields the argument (`macro_arg_unwrap`).
+- **A recursive splice with unquoted arguments** --
+  `~@(sized-mono-world-fields ~cap-expr ~(rest comps))`. A bare unquote
+  evaluates to its inner UNevaluated, and substitution used to finish the job:
+  the inner `(empty? comps)` evaluated the substituted `(rest comps)` in place.
+  With the argument now data, `empty?` saw the unevaluated call, never became
+  true, and expansion recursed until the compiler overflowed its stack (three
+  `ecs` compile-fail fixtures then "compiled clean", and one test crashed the
+  compiler). When the CT evaluator is about to expand a user macro inside a
+  splice, an argument written `~x` is now evaluated first (`ct_eval_call`,
+  `splice_macro_call`).
+
+**Pinned by** `tests/fixtures/macro-arg-ct-idioms` (it stack-overflows the
+compiler before this follow-up); the `ecs` spice suite passes again.
