@@ -631,6 +631,16 @@ void emit_cps_runtime_prelude(Buf *out) {
  * false): a dk_copy_range copy OWNS every node it copied, including the ones
  * past the borrow point. */
 "    bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */\n"
+/* defer-skipped-on-panic-in-cps-function: a frame that never runs because a
+ * panic abandoned its chain still owes the `defer`s pending in the function it
+ * continues.  The emitter hands such a frame an unwinder (__dk_with_unwind)
+ * that fires them from the frame's env; a frame that RUNS fires them itself
+ * at its own panic checks, so dk_run_impl clears the field before calling the
+ * frame (a run frame is never unwound twice), and __dk_reap_unwind fires what
+ * is left when a panicking entry leaves.  A copy never inherits it (dk_new
+ * zeroes; dk_copy_node leaves it): a stored continuation's re-run has its own
+ * exits. */
+"    void (*unwind)(intptr_t env);\n"
 /* Re-opening delivery protocol (cps-case-reopen-marker-kont-truncates-capture):
  * a handler whose case RE-OPENS an outer effect runs with the REAL enclosing
  * chain as its continuation and delivers its own value through it
@@ -714,7 +724,9 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused))\n"
 "static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {\n"
 "    DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;\n"
-"}\n"
+"}\n");
+    buf_puts(out,
+"__attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(intptr_t)) { k->unwind = u; return k; }\n"
 "/* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing\n"
 " * chain, borrowed.  The one spine then serves every consumer: dk_perform's\n"
 " * handler search walks straight into the real enclosing handlers, its capture\n"
@@ -1117,6 +1129,25 @@ void emit_cps_runtime_prelude(Buf *out) {
  * this does nothing, and the outermost exit frees everything, as before.
  * The list and the mark are the calling thread's (or fiber's), so this holds
  * with any number of threads. */
+/* defer-skipped-on-panic-in-cps-function: a panicking entry's exit.  Every
+ * frame the entry registered that never ran (its unwinder is still set) is a
+ * continuation the panic abandoned, and the `defer`s pending in it have not
+ * fired: fire them, newest registration first -- the innermost continuation,
+ * the order the direct emitter's frame chain unwinds in.  Only single-node
+ * registrations (kind 3) are frames the emitter hands an unwinder.  An
+ * unwinder may itself enter the machine (a defer body calling a colored
+ * function); such an entry registers above `n` and leaves again, so the walk
+ * down from `n` is unaffected. */
+"__attribute__((unused)) static void __dk_reap_unwind(size_t mark) {\n"
+"    size_t n = __dk_reap_n;\n"
+"    for (size_t i = n; i > mark; i--) {\n"
+"        if (!__dk_reap_v[i - 1] || __dk_reap_kind[i - 1] != 3) continue;\n"
+"        DK *d = (DK *)__dk_reap_v[i - 1];\n"
+"        if (!d->unwind) continue;\n"
+"        void (*u)(intptr_t) = d->unwind; d->unwind = NULL;\n"
+"        u(d->env);\n"
+"    }\n"
+"}\n"
 "__attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {\n"
 "#if defined(TUR_GC_ON) && TUR_GC_ON\n"
 "    /* A re-entered continuation can bring back an entry whose mark is past\n"
@@ -1328,12 +1359,14 @@ void emit_cps_runtime_prelude(Buf *out) {
 "             * program past the panic and must not run.  Its nodes are reap-owned. */\n"
 "            case DKK_FRAME: {\n"
 "                DK *self = k; intptr_t senv = k->env;\n"
+"                k->unwind = NULL;   /* a run frame fires its own pending defers */\n"
 "                v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;\n"
 "                /* The fn is done with its env, so it can follow the node. */\n"
 "                if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);\n"
 "                break;\n"
 "            }\n"
 "            case DKK_RESUME_FRAME:\n"
+"                k->unwind = NULL;\n"
 "                if (k->join_once) {\n"
 "                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
 "                    if (__dk_join_release_node(k)) return rf(renv, v, rest);\n"

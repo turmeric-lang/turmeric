@@ -1108,6 +1108,16 @@ char *emit_store_int_ptr_bridge(EmitCtx *ctx, const char *target_c,
  * trampoline.  Shared with the CPS emitter, whose own cps->direct call sites
  * bypass emit_value and so bypassed the check. */
 void emit_panic_signal_return(EmitCtx *ctx, Buf *body);
+/* defer-skipped-on-panic-in-cps-function: set by the CPS emitter while it
+ * renders a `__cps` body.  `pending` says whether any defer is pending at the
+ * current point AND `body` is the buffer that body is being written into (a
+ * helper the direct emitter lifts out of a delegated expression is another
+ * function, with its own frames, and takes the ordinary path); `fire` writes
+ * the statements that run them (LIFO) into
+ * `body` at ctx->indent, inside the `if (tur_panicking) { ... }` the panic
+ * return opens. */
+extern void (*g_cps_panic_fire)(EmitCtx *ctx, Buf *body);
+extern bool (*g_cps_panic_fire_pending)(Buf *body);
 Type emit_type_from_kind(TypeKind k);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);

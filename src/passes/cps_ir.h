@@ -372,6 +372,21 @@ struct CTerm {
         struct { CAtom *args; uint32_t n; }                               cont_;
         struct { const char *why; }                                       unsupported;
     } as;
+    /* defer-skipped-on-panic-in-cps-function: pending-defer markers.  A `do`
+     * that P5b lowers (cps_ir.c) threads each `(defer D)` body into the
+     * block's continuation, so the normal exit runs it; the emitter's panic
+     * checks (`if (tur_panicking) return`) leave the C function before that
+     * continuation runs.  So the chain also SAYS where a defer is pending:
+     * `defer_push` on a node marks "D is pending from here on, for every node
+     * beneath this one"; `defer_pop` marks "D is no longer pending" -- set on
+     * the node just before the threaded fire of D, so a panic inside D's own
+     * body does not fire D again.  Carried on an otherwise inert CT_LETVAL of
+     * the unit atom (a marker node), which the emitter renders as nothing.
+     * The emitter keeps a pending stack as it walks and fires the stack, LIFO,
+     * at every panic return, and hands every lifted frame an unwinder for the
+     * driver to fire if the frame never runs. */
+    const Expr *defer_push;
+    const Expr *defer_pop;
 };
 
 /* Translate one colored function body into CPS. Returns NULL if `fd` has no

@@ -2148,6 +2148,7 @@ struct DK {
     bool group_end;
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
     bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
+    void (*unwind)(intptr_t env);
     bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */
     bool resume_into;    /* case resumes `k` only into the chain: sub needs no markers */
     bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
@@ -2194,6 +2195,7 @@ __attribute__((unused))
 static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;
 }
+__attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(intptr_t)) { k->unwind = u; return k; }
 /* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
  * chain, borrowed.  The one spine then serves every consumer: dk_perform's
  * handler search walks straight into the real enclosing handlers, its capture
@@ -2519,6 +2521,16 @@ static void __dk_reap_run(void) {
     free(__dk_reap_v); free(__dk_reap_kind);
     __dk_reap_v = NULL; __dk_reap_kind = NULL; __dk_reap_n = __dk_reap_cap = 0;
 }
+__attribute__((unused)) static void __dk_reap_unwind(size_t mark) {
+    size_t n = __dk_reap_n;
+    for (size_t i = n; i > mark; i--) {
+        if (!__dk_reap_v[i - 1] || __dk_reap_kind[i - 1] != 3) continue;
+        DK *d = (DK *)__dk_reap_v[i - 1];
+        if (!d->unwind) continue;
+        void (*u)(intptr_t) = d->unwind; d->unwind = NULL;
+        u(d->env);
+    }
+}
 __attribute__((unused)) static void __dk_reap_drop_to(size_t mark) {
 #if defined(TUR_GC_ON) && TUR_GC_ON
     /* A re-entered continuation can bring back an entry whose mark is past
@@ -2676,12 +2688,14 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
              * program past the panic and must not run.  Its nodes are reap-owned. */
             case DKK_FRAME: {
                 DK *self = k; intptr_t senv = k->env;
+                k->unwind = NULL;   /* a run frame fires its own pending defers */
                 v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;
                 /* The fn is done with its env, so it can follow the node. */
                 if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);
                 break;
             }
             case DKK_RESUME_FRAME:
+                k->unwind = NULL;
                 if (k->join_once) {
                     DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
                     if (__dk_join_release_node(k)) return rf(renv, v, rest);
@@ -3808,6 +3822,7 @@ extern int * tur_tls_async_owns_env_ptr(void);
 #define tur_async_owns_env (*tur_tls_async_owns_env_ptr())
 #endif
 __attribute__((unused)) static void __dk_entry_leave(DK *root, size_t mark) {
+    if (tur_panicking) __dk_reap_unwind(mark);   /* defer-skipped-on-panic-in-cps-function */
     if (tur_async_suspended) {
         TurAsyncPark *p = tur_async_pending_park;
         if (!p || p->depth != __dk_entry_depth) return;
@@ -10502,7 +10517,7 @@ static int64_t bt_hyscope(int64_t body) {
             tur_frame_push_defer(&__frame_223, __defer_225, &__t226);
             int64_t __t227;
             int64_t __ps_228 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
-            if (tur_panicking) { tur_frame_fire_lifo(&__frame_223); return ((int64_t)0); }
+            if (tur_panicking) { tur_panicking = 0; tur_frame_fire_lifo(&__frame_223); tur_panicking = 1; return ((int64_t)0); }
             __t227 = __ps_228;
             tur_frame_fire_lifo(&__frame_223);
             __t221 = __t227;
@@ -10517,7 +10532,7 @@ static int64_t with_hyuntrailed(int64_t body) {
         tur_frame_push_defer(&__frame_229, __defer_230, NULL);
         int64_t __t231;
         int64_t __ps_232 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
-        if (tur_panicking) { tur_frame_fire_lifo(&__frame_229); return ((int64_t)0); }
+        if (tur_panicking) { tur_panicking = 0; tur_frame_fire_lifo(&__frame_229); tur_panicking = 1; return ((int64_t)0); }
         __t231 = __ps_232;
         tur_frame_fire_lifo(&__frame_229);
         return __t231;
