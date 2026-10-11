@@ -6,7 +6,7 @@ type_uses_carrier_abi emit_module.c 13
 type_uses_carrier_abi emit_stmt.c 2
 type_is_wide_byval_adt emit_expr.c 22
 type_is_wide_byval_adt emit_module.c 2
-type_is_wide_byval_adt types.c 6
+type_is_wide_byval_adt types.c 3
 type_is_boxed_container_elem emit_expr.c 8
 type_is_boxed_container_elem types.c 1
 fn_param_type_is_fat_normalized elab_call.c 4
