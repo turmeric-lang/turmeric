@@ -213,9 +213,15 @@ direction, not a change.
 **Goal.** One machine, one toolchain, one Release build, one corpus, one set
 of numbers everything later is compared against.
 
-- Choose and record the box (CPU, cores, RAM, OS, cc version, glibc) in the
-  artifact README; the cross-language suite already captures this per row.
-  Every later table in this plan carries that header or it is not a result.
+- The box is `infra/bench-box/` (`just bench-box-up` / `bench-box-down`): a
+  disposable EC2 instance, `m7i.xlarge` (4 vCPU, 16 GiB, the CI runner's
+  shape) on Ubuntu 24.04 by default, with the toolchain, `perf`, valgrind
+  and hyperfine installed and Debug + Release builds made at boot. Record
+  its instance type, AMI, cc version and glibc in the artifact README; the
+  cross-language suite already captures this per row. Every later table in
+  this plan carries that header or it is not a result. An `arm64` column
+  (`BENCH_ARCH=arm64`, e.g. `m7g.xlarge`) is one env var away when WP4 or
+  WP6 wants one.
 - Define the **audit corpus** and commit the list:
   - `performance-comparison/` at `small` and `medium` (21 programs, with the
     C/Rust columns where they exist);
@@ -471,11 +477,12 @@ that stands alone.
 
 ## 8. Open questions for the author
 
-1. **Which box is the baseline?** The cross-language suite's history is on
-   Apple silicon (M2, possibly M3); the r7rs audit and the triangle were on
-   x86-64 Linux; the nightly is arm64 Linux. One must be the reference and
-   the others get a column. The plan assumes x86-64 Linux because `perf`
-   and callgrind are there.
+1. **Which instance type is the baseline?** The plan assumes the bench
+   box's default, `m7i.xlarge` on x86-64 Linux, because `perf` and callgrind
+   are there and it matches the CI runners. The cross-language suite's
+   history is on Apple silicon (M2, possibly M3) and the nightly is arm64
+   Linux; each gets a column if wanted. A bigger box (`c7i.2xlarge`) makes
+   the suites faster but changes the `nproc`-dependent numbers, so pick once.
 2. **What should `tur run --release` mean** once it stops being a no-op
    (R-7)? WP2's flag sweep gives the data; the choice between "`-O2`, same
    as today" and "`-O3 -march=native`, user opted in" is a policy call.
