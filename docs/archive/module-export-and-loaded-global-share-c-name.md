@@ -96,9 +96,11 @@ current module). A module defn beside a defined top-level global of the same
 name now gets its own binding, so the `:refer` import and the global are two
 functions with two C names, and `(foo-free 5)` in `m/c` calls `m/b`'s.
 
-**Pinned by** `module-export-beside-loaded-global` (the report's repro; the
-milder shape -- the `load` in the main file, not the importing one -- was
-checked by hand and calls `m/b`'s too).
+**Pinned by** `module-export-beside-loaded-global` (the report's repro with
+Turmeric bodies in place of inline C, so `run-turi.sh` runs it too; the
+interpreter never collided -- the defect was the shared C symbol. The milder
+shape -- the `load` in the main file, not the importing one -- was checked by
+hand and calls `m/b`'s too).
 
 **Spices follow-up (not in this repo):** tourist's `router-free` ->
 `pattern-free` rename can stay or go; it is no longer needed.
