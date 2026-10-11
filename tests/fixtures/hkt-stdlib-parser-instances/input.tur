@@ -1,51 +1,45 @@
 ;; stdlib-hkt-consolidation T2: HKT typeclass instances for stdlib Parser.
 ;;
 ;; Parser is exposed as a kind-(* -> *) opaque so it carries Functor /
-;; Applicative / Monad / Alternative. Parser programs are now written with the
+;; Applicative / Monad / Alternative. Parser programs are written with the
 ;; generic do-m / for / bind / alt-or surface from stdlib/macros.tur instead of
-;; the bespoke bind-parser / or-parser combinators. A typeclass-method result
-;; carries the int erasure, so it is ascribed back to (Parser T) at the point a
-;; typed handle is needed (the run boundary).
+;; the bespoke bind-parser / or-parser combinators.
+;;
+;; parsec-guide-plan: the surface is typed now -- `item` is a (Parser Char), a
+;; do-m binder over it is a Char (typed from the receiver, no annotation), and
+;; the runners hand back the value itself (`parse-first`) or an Option
+;; (`run-parser-full`) instead of a raw result cell.
 
 (load "stdlib/parsec.tur")
 
-;; Extract the value from a run-parser-full result cell (value-wrapped, unlike
-;; run-parser's Pair-wrapped cells which parse-value reads).
-(defn full-value [cell : int] : int
-  ```c typedef struct { int64_t value; int64_t next; } Cell;
-  Cell *c = (Cell*)(intptr_t)cell; return c ? c->value : -1; ```)
-
-;; A pure parser of an int, ascribed to the Parser handle so do-m chains type.
-(defn punit [x : int] : (Parser int) (:: (pure-parser x) :Parser))
-
-;; Monad [Parser] via do-m: parse two chars, return their sum.
-(defn two-sum [] : int
+;; Monad [Parser] via do-m: parse two chars, return the sum of their codes.
+(defn two-sum [] : (Parser int)
   (do-m
     a (item)
     b (item)
-    (punit (+ a b))))
+    (pure (+ (char->int a) (char->int b)))))
 
 ;; Monad [Parser] via bind directly: parse two chars, keep the second.
-(defn second-char [] : int
+(defn second-char [] : (Parser Char)
   (bind (item) (fn [_a] (item))))
 
-;; Functor [Parser]: map (+1) over a single parsed char.
-(defn succ-char [] : (Parser int)
-  (:: (fmap (item) (fn [c : int] (+ c 1))) (Parser int)))
+;; Functor [Parser]: map the successor over a single parsed char.
+(defn succ-char [] : (Parser Char)
+  (fmap (item) (fn [c] (int->char (+ (char->int c) 1)))))
 
 ;; Alternative [Parser]: match 'A' or 'B'.
-(defn a-or-b [] : (Parser int)
-  (:: (alt-or (pchar 65) (pchar 66)) (Parser int)))
+(defn a-or-b [] : (Parser Char)
+  (alt-or (pchar #\A) (pchar #\B)))
 
 (defn main [] : int
   ;; do-m: 'A'(65) + 'B'(66) = 131, full input consumed
-  (println (full-value (run-parser-full (:: (two-sum) (Parser int)) "AB")))    ; 131
+  (println (parse-first (two-sum) "AB"))                         ; 131
   ;; bind: second char of "AB" = 'B'(66)
-  (println (full-value (run-parser-full (:: (second-char) (Parser int)) "AB"))) ; 66
+  (println (char->int (parse-first (second-char) "AB")))         ; 66
   ;; fmap: succ of 'A'(65) = 66
-  (println (parse-value (run-parser (succ-char) "A")))                         ; 66
+  (println (char->int (parse-first (succ-char) "A")))            ; 66
   ;; alt-or: matches 'B'(66) on "B"
-  (println (parse-value (run-parser (a-or-b) "B")))                            ; 66
-  ;; alt-or: neither matches on "X" -> 0 results
-  (println (parse-result-count (run-parser (a-or-b) "X")))                     ; 0
+  (println (char->int (parse-first (a-or-b) "B")))               ; 66
+  ;; alt-or: neither matches on "X" -> no parse at all
+  (println (list-count (run-parser (a-or-b) "X")))               ; 0
   0)

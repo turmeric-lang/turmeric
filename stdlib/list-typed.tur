@@ -98,3 +98,153 @@
 
 (defn list-count [A] [xs : (List A)] : int
   (if (list-empty? xs) 0 (tlength (:: (:: xs :int) (Cons A)))))
+;; ---- Building and walking a (List A) (parsec-guide-plan P5) ----------------
+;; These ride the int64 cons carrier like the rest of this module, so the
+;; element is the word the carrier holds: exact for int, Char, String, a
+;; `:heap` struct or any other one-word value -- the element types a parser
+;; produces.  String is needed only by list->string.
+(load "stdlib/string.tur")
+;;; list-nil -- the empty (List A).
+;;;
+;;; Returns:
+;;;   The empty list (carrier 0); its element type comes from the context.
+;;;
+;;; Example:
+;;;   (list-empty? (:: (list-nil) (List int)))  ; => true
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list-nil [A] [] : (List A) (:: 0 (List A)))
+;;; list-cons -- prepend x to xs.
+;;;
+;;; Parameters:
+;;;   x  -- the new first element
+;;;   xs -- the rest of the list
+;;;
+;;; Returns:
+;;;   A (List A) whose first element is x, followed by xs.
+;;;
+;;; Example:
+;;;   (list-count (list-cons 1 (list-of 2 3)))  ; => 3
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list-cons [A] [x : A xs : (List A)] : (List A)
+  (:: (:: (tcons (:: x :int) (list->carrier xs)) :int) (List A)))
+;;; list-first -- the first element of a non-empty list.
+;;;
+;;; Parameters:
+;;;   xs -- a non-empty (List A); check with list-empty? first
+;;;
+;;; Returns:
+;;;   The first element.
+;;;
+;;; Example:
+;;;   (list-first (list-of 7 8))  ; => 7
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list-first [A] [xs : (List A)] : A (:: (list-head (list->carrier xs)) A))
+;;; list-rest -- everything after the first element of a non-empty list.
+;;;
+;;; Parameters:
+;;;   xs -- a non-empty (List A)
+;;;
+;;; Returns:
+;;;   The (List A) after the first element (empty for a one-element list).
+;;;
+;;; Example:
+;;;   (list-first (list-rest (list-of 7 8)))  ; => 8
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list-rest [A] [xs : (List A)] : (List A)
+  (:: (list-tail (list->carrier xs)) (List A)))
+;;; list-foldl -- fold a list from the left.
+;;;
+;;; Parameters:
+;;;   xs   -- the list to fold
+;;;   init -- the starting accumulator
+;;;   f    -- (fn [acc x] acc'), called once per element, first to last
+;;;
+;;; Returns:
+;;;   The final accumulator.
+;;;
+;;; Example:
+;;;   (list-foldl (list-of 1 2 3) 0 (fn [acc : int x : int] : int (+ acc x)))  ; => 6
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list-foldl [A B] [xs : (List A) init : B f : (fn [B A] B)] : B
+  (if (list-empty? xs)
+    init
+    (list-foldl (list-rest xs) (f init (list-first xs)) f)))
+;;; list-reverse-onto__ -- internal: prepend xs, reversed, onto acc.
+
+(defn list-reverse-onto__ [A] [xs : (List A) acc : (List A)] : (List A)
+  (if (list-empty? xs)
+    acc
+    (list-reverse-onto__ (list-rest xs) (list-cons (list-first xs) acc))))
+;;; list-reverse -- the elements of xs in reverse order.
+;;;
+;;; Parameters:
+;;;   xs -- the list to reverse
+;;;
+;;; Returns:
+;;;   A new (List A), last element first.
+;;;
+;;; Example:
+;;;   (list-first (list-reverse (list-of 1 2 3)))  ; => 3
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list-reverse [A] [xs : (List A)] : (List A)
+  (list-reverse-onto__ xs (list-nil)))
+;;; list-map-onto__ -- internal: map f over xs, consing results onto acc in reverse.
+
+(defn list-map-onto__ [A B] [xs : (List A) f : (fn [A] B) acc : (List B)] : (List B)
+  (if (list-empty? xs)
+    (list-reverse acc)
+    (list-map-onto__ (list-rest xs) f (list-cons (f (list-first xs)) acc))))
+;;; list-map -- apply f to every element.
+;;;
+;;; Parameters:
+;;;   xs -- the list to map over
+;;;   f  -- the function applied to each element
+;;;
+;;; Returns:
+;;;   A new (List B) of the results, in the original order.
+;;;
+;;; Example:
+;;;   (list-first (list-map (list-of 1 2) (fn [x : int] : int (* x 10))))  ; => 10
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list-map [A B] [xs : (List A) f : (fn [A] B)] : (List B)
+  (list-map-onto__ xs f (list-nil)))
+;;; list->string-loop__ -- internal: append each Char of xs to the builder.
+
+(defn list->string-loop__ [xs : (List Char) b : StringBuilder] : String
+  (if (list-empty? xs)
+    (builder/finish b)
+    (do
+      (builder/push-char! b (list-first xs))
+      (list->string-loop__ (list-rest xs) b))))
+;;; list->string -- the characters of a (List Char) as a String.
+;;;
+;;; The usual last step of a character-level parser: `(many (satisfy alpha?))`
+;;; produces a (List Char), and this turns it into the String it spells.
+;;;
+;;; Parameters:
+;;;   xs -- the characters, first to last
+;;;
+;;; Returns:
+;;;   A fresh owned String.
+;;;
+;;; Example:
+;;;   (string/to-cstr (list->string (list-of #\h #\i)))  ; => "hi"
+;;;
+;;; Since: parsec-guide-plan P5
+
+(defn list->string [xs : (List Char)] : String
+  (list->string-loop__ xs (builder/new)))

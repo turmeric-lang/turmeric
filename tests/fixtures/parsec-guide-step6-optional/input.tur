@@ -1,0 +1,21 @@
+;; parsec tutorial, step 6 -- optional and Option.
+;; The source of truth for docs/guides/parsec-tutorial.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+;; An optional leading minus, then digits; produce the sign.
+(defn sign-of-number [] : (Parser (Option Char))
+  (do-m
+    sign (optional (pchar #\-))
+    _    (many1 (satisfy digit?))
+    (pure sign)))
+
+(defn describe [s : cstr] : cstr
+  (if (some? (parse-first (sign-of-number) s)) "has minus" "no minus"))
+
+(defn main [] : int
+  (println (describe "-42"))                                      ; has minus
+  (println (describe "42"))                                       ; no minus
+  (show-line (unwrap (parse-first (sign-of-number) "-42")))        ; #\-
+  (show-line (unwrap-or (parse-first (sign-of-number) "42") #\+))  ; #\+
+  0)

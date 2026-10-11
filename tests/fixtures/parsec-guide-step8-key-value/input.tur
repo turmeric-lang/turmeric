@@ -1,0 +1,37 @@
+;; parsec tutorial, step 8 -- putting it together: a key=value parser.
+;; The source of truth for docs/guides/parsec-tutorial.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+;; The parsed result.  A `:heap` record rides the parser's one-word carrier;
+;; see the guide for why a by-value Pair does not (yet).
+(defstruct Setting :heap [key : String value : String])
+
+(defn key-p [] : (Parser String)
+  (fmap (many1 (satisfy alpha?)) list->string))
+
+(defn value-p [] : (Parser String)
+  (fmap (many1 (satisfy alnum?)) list->string))
+
+(defn setting-p [] : (Parser Setting)
+  (do-m
+    k (key-p)
+    _ (pchar #\=)
+    v (value-p)
+    (pure (Setting k v))))
+
+;; Several settings, comma-separated.
+(defn settings-p [] : (Parser (List Setting))
+  (sep-by (setting-p) (pchar #\,)))
+
+(defn main [] : int
+  (let [r (run-parser-full (setting-p) "width=800")]
+    (if (some? r)
+      (do (show-line (.key (unwrap r)))                          ; width
+          (show-line (.value (unwrap r))))                       ; 800
+      (println "not a setting")))
+  (println (some? (run-parser-full (setting-p) "width:800")))    ; false
+  (let [all (parse-first (settings-p) "width=800,height=600")]
+    (println (list-count all))                                   ; 2
+    (show-line (.key (list-first (list-rest all)))))             ; height
+  0)

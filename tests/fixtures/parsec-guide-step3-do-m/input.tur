@@ -1,0 +1,21 @@
+;; parsec tutorial, step 3 -- sequencing with do-m.
+;; The source of truth for docs/guides/parsec-tutorial.md; keep them in sync.
+
+(load "stdlib/parsec.tur")
+
+;; Match "Hi" and return both characters as a list.  c1 and c2 are Chars:
+;; do-m binds each name to the value its parser produced.
+(defn hi-p [] : (Parser (List Char))
+  (do-m
+    c1 (pchar #\H)
+    c2 (pchar #\i)
+    (pure (list-cons c1 (list-cons c2 (list-nil))))))
+
+(defn main [] : int
+  (let [cs (parse-first (hi-p) "Hi")]
+    (println (list-count cs))                        ; 2
+    (show-line (list-first cs))                      ; #\H
+    (show-line (list->string cs)))                   ; Hi
+  ;; The second step fails on "Ho", so the whole parser does.
+  (println (some? (run-parser-full (hi-p) "Ho")))    ; false
+  0)

@@ -12990,6 +12990,36 @@ Expr *elab_defn(Elab *e, const Form *call) {
 /* Phase 2: fn — (fn [param1 param2 ...] body...) — no capture for phase 2
  * Lifts to a static function. For now, we require a return type annotation.
  * Example: (fn [x y] :int (+ x y)) */
+
+/* parsec-guide-plan P8: is `t` usable as a lambda body's expected type?  Every
+ * type variable it names must be one the ENCLOSING signature binds (the `A` of
+ * a `(defn token [A] ...)` the lambda sits in); a variable of the CALLEE's
+ * signature (`B` in `(fn [A] B)` on a HOF) is not grounded here. */
+static bool fn_expected_result_is_grounded(const Elab *e, const Type *t) {
+    if (!t) return true;
+    switch (t->kind) {
+        case TY_TYVAR: {
+            if (!t->as.tyvar_.name) return true;
+            for (uint8_t k = 0; k < e->n_sig_tyvars; k++)
+                if (e->sig_tyvars[k] && strcmp(e->sig_tyvars[k], t->as.tyvar_.name) == 0)
+                    return true;
+            return false;
+        }
+        case TY_APP:
+            return fn_expected_result_is_grounded(e, t->as.app.fn) &&
+                   fn_expected_result_is_grounded(e, t->as.app.arg);
+        case TY_FN:
+            if (!fn_expected_result_is_grounded(e, t->as.fn.result_full_type)) return false;
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (!fn_expected_result_is_grounded(e, t->as.fn.arg_full_types[i]))
+                        return false;
+            return true;
+        default:
+            return true;
+    }
+}
+
 Expr *elab_fn(Elab *e, const Form *call) {
     /* H10 x call/cc: consumed here so only the immediate receiver sees it. */
     bool is_callcc_receiver = e->in_callcc_receiver;
@@ -13669,6 +13699,14 @@ Expr *elab_fn(Elab *e, const Form *call) {
         e->expected_type = return_full_type;
     } else if (return_fn_type) {
         e->expected_type = return_fn_type;
+    } else if (e->expected_type && e->expected_type->kind == TY_FN) {
+        /* parsec-guide-plan P8: a function type on the channel is THIS
+         * lambda's expected type -- pushed by the call site for the param
+         * inference above -- not its body's.  The body expects that type's
+         * result, when the call site could ground it; a body that is itself a
+         * lambda must not read the outer lambda's params as its own. */
+        Type *er = e->expected_type->as.fn.result_full_type;
+        e->expected_type = (er && fn_expected_result_is_grounded(e, er)) ? er : NULL;
     }
     {
         /* Internal defines: splice (define name init) into nested let forms. */

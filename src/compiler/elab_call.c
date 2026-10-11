@@ -7872,6 +7872,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * calls are untouched. */
         const Type *eta_param_fn = exp_param_fn;
         Type eta_param_fn_inst;
+        Type lambda_param_fn_inst;
         if (exp_param_fn && call_type_has_named_tyvar(exp_param_fn) &&
             arg_form->tag == F_SYM && fn_type.kind == TY_FN &&
             fn_type.as.fn.arg_full_types) {
@@ -7946,7 +7947,65 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 arg_form->as.list.items[0]->tag == F_SYM &&
                 (arg_form->as.list.items[0]->as.sym == e->sym_fn ||
                  arg_form->as.list.items[0]->as.sym == e->sym_lambda)) {
-                e->expected_type = (Type *)exp_param_fn;
+                /* parsec-guide-plan P8: a polymorphic function-typed parameter
+                 * (`k : (fn [a] (m b))` on `bind`, `f : (fn [A] B)` on a HOF)
+                 * still names its tyvars here, so the lambda's un-annotated
+                 * params would default to the int carrier -- `(do-m c (item)
+                 * ...)` bound `c : int` against a `(Parser Char)`.  Bind those
+                 * tyvars from the EARLIER arguments, which the loop has already
+                 * elaborated (so nothing is reordered), and push the
+                 * instantiated type.  elab_fn reads its params (gated to
+                 * non-primitive types) and its result, as the body's expected
+                 * type -- so a result still naming one of the CALLEE's tyvars
+                 * is dropped rather than read as a same-named tyvar of the
+                 * caller's signature. */
+                const Type *push = exp_param_fn;
+                if (call_type_has_named_tyvar(exp_param_fn) && fn_type.kind == TY_FN &&
+                    fn_type.as.fn.arg_full_types && exp_param_fn->as.fn.arg_full_types) {
+                    CallTypeBinding lab[16];
+                    uint8_t n_lab = 0;
+                    for (uint8_t bi = 0; bi < 16; bi++) lab[bi].name = NULL;
+                    for (uint32_t j = 0; j < i; j++) {
+                        uint32_t pj = fn_binding->closure_fn_binding ? j + 1 : j;
+                        if (pj >= fn_type.as.fn.arity || !arg_done[j] || !args[j]) continue;
+                        const Type *pjt = fn_type.as.fn.arg_full_types[pj];
+                        if (!pjt || !call_type_has_named_tyvar(pjt)) continue;
+                        CallTypeBinding tmp[16];
+                        uint8_t n_tmp = n_lab;
+                        for (uint8_t bi = 0; bi < 16; bi++) tmp[bi] = lab[bi];
+                        if (call_collect_type_bindings(pjt, args[j]->type, tmp, &n_tmp)) {
+                            for (uint8_t bi = 0; bi < 16; bi++) lab[bi] = tmp[bi];
+                            n_lab = n_tmp;
+                        }
+                    }
+                    lambda_param_fn_inst = *exp_param_fn;
+                    uint32_t ar = exp_param_fn->as.fn.arity;
+                    Type **afts = (Type **)arena_alloc(e->arena,
+                        (ar ? ar : 1) * sizeof(Type *));
+                    for (uint32_t k = 0; k < ar; k++) {
+                        const Type *ak = exp_param_fn->as.fn.arg_full_types[k];
+                        if (ak) {
+                            afts[k] = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *afts[k] = n_lab ? call_instantiate_type(e, ak, lab, n_lab) : *ak;
+                        } else {
+                            afts[k] = NULL;
+                        }
+                    }
+                    lambda_param_fn_inst.as.fn.arg_full_types = afts;
+                    Type *rft = NULL;
+                    if (exp_param_fn->as.fn.result_full_type) {
+                        Type r = n_lab ? call_instantiate_type(e,
+                                             exp_param_fn->as.fn.result_full_type, lab, n_lab)
+                                       : *exp_param_fn->as.fn.result_full_type;
+                        if (!call_type_has_named_tyvar(&r)) {
+                            rft = (Type *)arena_alloc(e->arena, sizeof(Type));
+                            *rft = r;
+                        }
+                    }
+                    lambda_param_fn_inst.as.fn.result_full_type = rft;
+                    push = &lambda_param_fn_inst;
+                }
+                e->expected_type = (Type *)push;
                 pushed_expected = true;
             } else if (arg_form_is_ctor_call_of(e, arg_form, exp_param_app)) {
                 /* Bare constructor argument: hand it the parameter's own

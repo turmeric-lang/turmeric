@@ -521,8 +521,10 @@ annotation or an ascription (`(:: (pure 42) (Option int))`) to resolve.
 
 `stdlib/parsec.tur` exposes `Parser` as a kind-`(* -> *)` type constructor with
 the full instance set, so combinator code is ordinary `do-m` and `alt-or` over
-the `Parser` monad, with `alt-or` giving full backtracking choice. See
-[parser-combinators-tutorial.md](parser-combinators-tutorial.md).
+the `Parser` monad, with `alt-or` giving full backtracking choice. See the
+[parsec tutorial](parsec-tutorial.md) and [reference guide](parsec-guide.md),
+or [parser-combinators-tutorial.md](parser-combinators-tutorial.md) to build
+one from scratch.
 
 ### Polymorphism over the monad
 
