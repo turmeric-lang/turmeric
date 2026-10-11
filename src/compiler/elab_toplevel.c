@@ -558,6 +558,19 @@ Expr *elab_form(Elab *e, Form *f) {
                 case LIT_SUF_U64: lit_type = TYPE_UINT64;  break;
                 case LIT_SUF_F32: lit_type = TYPE_FLOAT32; break;
                 case LIT_SUF_F64: lit_type = TYPE_FLOAT64; break;
+                case LIT_SUF_CHAR: {
+                    /* parsec-guide-plan P2: `#\A` is a Char -- the opaque
+                     * stdlib/char.tur declares, auto-loaded so this resolves
+                     * in every program.  Where no such opaque is in scope
+                     * (--no-auto-stdlib, or char.tur itself above its
+                     * defopaque) the literal is the plain int it used to be. */
+                    Type *ct = elab_lookup_type_by_name(e, e->sym_Char);
+                    lit_type = (ct && ct->kind == TY_ADT && ct->as.adt_.def &&
+                                ct->as.adt_.def->is_opaque &&
+                                ct->as.adt_.def->n_type_params == 0)
+                               ? *ct : TYPE_INT;
+                    break;
+                }
                 default:          lit_type = TYPE_INT;     break;
             }
             bool is_float_suffix = (f->lit_suffix == LIT_SUF_F32 || f->lit_suffix == LIT_SUF_F64);

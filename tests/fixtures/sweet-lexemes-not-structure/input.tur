@@ -8,8 +8,8 @@ defn pick [a : cstr b : cstr] : cstr
   a
 
 defn main [] : int
-  println #\(
-  println #\;
+  println $ char->int #\(
+  println $ char->int #\;
   println "a;b"
   println $ pick "x;" "y"
   println (pick "p" ; a comment inside the group (with a paren

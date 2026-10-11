@@ -251,6 +251,69 @@
         (builder/push-cstr! b "}")
         (builder/finish b)))))
 ;; ---------------------------------------------------------------------------
+;; Show [Char] -- a character renders as the literal that reads back to it,
+;; `#\A`, `#\space`, `#\u1f` -- like Show [Sym]'s `:name`, so a parsed
+;; character is told apart from the int and the one-character string it is not.
+;; Char is auto-loaded (stdlib/char.tur), so the instance can live here, in
+;; Show's own module.  Ordinary Turmeric, so the interpreter runs it too.
+;; ---------------------------------------------------------------------------
+;;; show-char-name__ -- internal: the reader's name for code n ("" if none).
+
+(defn show-char-name__ [n : int] : cstr
+  (if (= n 32)
+    "space"
+    (if (= n 10)
+      "newline"
+      (if (= n 9)
+        "tab"
+        (if (= n 13)
+          "return"
+          (if (= n 0)
+            "null"
+            (if (= n 8)
+              "backspace"
+              (if (= n 127)
+                "delete"
+                (if (= n 27) "escape" (if (= n 7) "alarm" ""))))))))))
+;;; show-char-named?__ -- internal: does the reader have a name for code n?
+
+(defn show-char-named?__ [n : int] : bool
+  (or (= n 32)
+    (= n 10)
+    (= n 9)
+    (= n 13)
+    (= n 0)
+    (= n 8)
+    (= n 127)
+    (= n 27)
+    (= n 7)))
+;;; show-hex-digit__ -- internal: the lower-case hex digit for 0..15.
+
+(defn show-hex-digit__ [d : int] : Char
+  (if (< d 10) (int->char (+ d 48)) (int->char (+ d 87))))
+;;; Show [Char] -- render a character as its literal: `#\A`, `#\space`.
+;;;
+;;; Example:
+;;;   (show #\A)      ; => String "#\A"
+;;;   (show #\space)  ; => String "#\space"
+
+(definstance Show [Char]
+  (show [x]
+    : String
+    (let [b (builder/new)
+          n (char->int x)]
+      (do
+        (builder/push-cstr! b "#\\")
+        (if (show-char-named?__ n)
+          (builder/push-cstr! b (show-char-name__ n))
+          (if (and (> n 32) (< n 127))
+            (builder/push-char! b x)
+            (do
+              (builder/push-cstr! b "u")
+              (when (> n 15) (builder/push-char! b (show-hex-digit__ (/ n 16))))
+              (builder/push-char! b (show-hex-digit__ (mod n 16))))))
+        (builder/finish b)))))
+;; ---------------------------------------------------------------------------
 ;; Show [Sym] -- interned runtime symbols (:Sym).
 ;;
 ;; A keyword literal (`:a`) is an interned :Sym, so a Sym-keyed collection --
