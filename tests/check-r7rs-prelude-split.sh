@@ -48,6 +48,12 @@ trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 fail() { echo "FAIL check-r7rs-prelude-split: $*"; FAILED=1; }
 
+# A panic site (`static const tur_site_t __tur_site_N`, emit_site_ref_text) is
+# numbered per unit, so both units define a `__tur_site_N` of the same N.  It is
+# read-only, but its string pointer needs a relocation, so ELF puts it in
+# .data.rel.ro and nm reports it as data.  Each copy holds its own file and
+# line and nothing writes it, so it forks nothing; defined_data skips it, as
+# counted_data does for the pieces check below.
 # Per-unit by design: each unit registers its own rows of `any` type names
 # (Mach-O spells a C name with a leading `_`).
 ALLOW='^_?(__tur_any_chunk|__tur_any_rows)$'
@@ -80,11 +86,16 @@ defined_data() {
         # name in a Mach-O object always carries the leading underscore.
         nm -m "$1" 2>/dev/null |
             awk '/\(__DATA,__(data|bss|common|thread_vars|thread_bss)\)/ {
-                     n = $NF; sub(/\.[0-9]+$/, "", n); if (n ~ /^_/) print n }' |
+                     n = $NF; sub(/\.[0-9]+$/, "", n)
+                     if (n ~ /^___tur_site_[0-9]+$/) next
+                     if (n ~ /^_/) print n }' |
             sort -u
     else
         nm "$1" 2>/dev/null |
-            awk '$2 ~ /^[BbDdGgSs]$/ && $3 ~ /./ { n = $3; sub(/\.[0-9]+$/, "", n); print n }' |
+            awk '$2 ~ /^[BbDdGgSs]$/ && $3 ~ /./ {
+                     n = $3; sub(/\.[0-9]+$/, "", n)
+                     if (n ~ /^__tur_site_[0-9]+$/) next
+                     print n }' |
             sort -u
     fi
 }
