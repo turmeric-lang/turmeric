@@ -34,6 +34,18 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found writing the signal spice's filter and modulation guide (filed 2026-10-11)
+
+Adding buffers and guide examples to turmeric-spices' `signal` spice turned
+up three tail-call / CPS defects. The two that blocked the spice are fixed;
+the third is a narrower stack-growth gap found while fixing the first.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-self-call-through-join-grows-the-stack](cps-self-call-through-join-grows-the-stack.md) | medium (stack overflow below `-O2`) | A CPS-lowered self-recursive loop whose self call sits in the join of an earlier CPS call in the same step -- `(sum-to f (+ i 1) n (+ acc (f i)))` with a `^fat` `f` -- makes a C call per step (`fn__cps -> f -> dk_run -> fn_j0 -> fn__cps`). Flat only by the C compiler's sibling calls: segfaults at `-O0` / `--debug`. The `__tur_cps_self` backedge covers only a self call in the function's own body. Workaround: `while` + `^mut`, or a plain `(fn ...)` callback |
+| ~~[self-tco-refuses-fn-typed-params](../archive/self-tco-refuses-fn-typed-params.md)~~ | medium (stack overflow) | **RESOLVED 2026-10-11** (archived): CF1 refused any function with a `fn`-typed or `tur_poly_fn_t` parameter, so a loop threading a callback through was ordinary recursion. Such a parameter is now admitted when every self tail call passes it unchanged; the backedge skips it, like a closure env. T2's checkless non-self tail calls follow (157 snapshots: the prelude's `consume` / thunk runner). Pinned by `self-tail-call-keeps-fn-param` (-O0, 10^6 deep) and `errors/tailcall-fn-param-swapped` |
+| ~~[cps-mut-cell-bound-outside-letval](../archive/cps-mut-cell-bound-outside-letval.md)~~ | medium (compile failure) | **RESOLVED 2026-10-11** (archived): a loop-carried `^mut` promoted to a heap cell in a CPS-lowered function got its cell only from a `CT_LETVAL`; a call, primitive or CPS-join initializer declared the bare value, and the loop entry passed `double` for `double *`. `cell_init_rewrite` routes every such binder through a `CT_LETVAL`. Pinned by `cps-mut-cell-bound-by-call` |
+
 ## Found putting tourist on stdlib httpd (filed 2026-10-10)
 
 Two compiler defects met while wiring stdlib httpd middleware under tourist
