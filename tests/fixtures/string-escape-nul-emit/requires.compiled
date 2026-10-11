@@ -1,0 +1,2 @@
+The interpreter's cstr-nth refuses an index past the first NUL, and every
+literal here holds one.  The bug this pins lived in the emitted C.

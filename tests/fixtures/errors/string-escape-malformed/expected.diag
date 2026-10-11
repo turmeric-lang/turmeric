@@ -1,0 +1,8 @@
+'\x' string escape takes exactly two hex digits (e.g. \x1b); write \u{...} for a code point
+'\u' string escape takes exactly 4 hex digits; write \u{...} for 1-6
+'\U' string escape takes exactly 8 hex digits; write \u{...} for 1-6
+'\u' string escape names U+110000, which is not a Unicode scalar value
+'\u' string escape names U+D800, which is not a Unicode scalar value
+malformed '\u{...}' string escape: expected 1-6 hex digits followed by '}'
+octal string escape '\400' is out of range: one byte is at most \377
+unknown string escape '\q'

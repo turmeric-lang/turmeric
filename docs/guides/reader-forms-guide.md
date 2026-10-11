@@ -147,17 +147,42 @@ pins the width; unsuffixed floats are `f64`.
 
 ### String -- `"..."`
 
-Double-quoted UTF-8 text. Standard C escape sequences apply (`\n`, `\t`, `\\`,
-`\"`, etc.).
+Double-quoted UTF-8 text. A literal is a `cstr`, so it is bytes: an escape can
+put any byte in it, and a code point escape writes that code point's UTF-8.
+
+| Escape | Byte(s) |
+|---|---|
+| `\n` `\t` `\r` | newline, tab, carriage return |
+| `\a` `\b` `\f` `\v` | bell, backspace, form feed, vertical tab |
+| `\e` | escape (0x1B), as in `"\e[1m"` |
+| `\\` `\"` `\'` `\?` | the character itself |
+| `\0` .. `\377` | one byte, in 1-3 octal digits (`\0` is NUL) |
+| `\xHH` | one byte, in **exactly two** hex digits |
+| `\uXXXX` | a code point in exactly four hex digits, as UTF-8 |
+| `\u{H...}` | a code point in 1-6 hex digits, as UTF-8 |
+| `\UXXXXXXXX` | a code point in exactly eight hex digits, as UTF-8 |
+
+This is C's set plus `\e` and the `\u{...}` form, with one difference: C's
+`\x` takes every hex digit that follows, so in C `"\x1bc"` is a single
+(out-of-range) byte. Here `\x` takes two, as in Python, Rust and JavaScript,
+and `"\x1bc"` is escape followed by `c`. A code point escape must name a
+Unicode scalar value (at most `10FFFF`, and not a surrogate). Any other
+character after `\` is an error.
 
 ```turmeric
 "hello, world"
 "line one\nline two"
+"\e[1mbold\e[0m \x41\u00e9\u{1F600}"
 ```
 ```sweet-exp
 "hello, world"
 "line one\nline two"
+"\e[1mbold\e[0m \x41\u00e9\u{1F600}"
 ```
+
+`#lang r7rs` reads R7RS's escapes instead: there `\x` is `\x<hex>;`, ended by
+a semicolon, and `\` before a line break continues the string onto the next
+line. See [r7rs-guide](r7rs-guide.md).
 
 ### Character -- `#\`
 

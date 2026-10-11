@@ -1,0 +1,11 @@
+#lang r7rs
+;; r7rs-string-escape-emit -- a control character from an R7RS escape keeps
+;; the character after it in compiled code.  The emitter wrote it as C's \x,
+;; which runs on through every hex digit that follows: "\a1" compiled to the
+;; one character q (0x71), and "\x1b;c" to 0xbc, while the interpreter read
+;; both right.
+(import (scheme base) (scheme write))
+(define (codes s) (map char->integer (string->list s)))
+(write (codes "\a1")) (newline)
+(write (codes "\x1b;c")) (newline)
+(write (codes "\b\x7;f")) (newline)
