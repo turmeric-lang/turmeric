@@ -123,6 +123,8 @@ static __thread void *tur_tls_dk_resume_chain = 0;
 void **tur_tls_dk_resume_chain_ptr (void) { return &tur_tls_dk_resume_chain; }
 static __thread intptr_t tur_tls_dk_resume_val = 0;
 intptr_t *tur_tls_dk_resume_val_ptr (void) { return &tur_tls_dk_resume_val; }
+static __thread void *tur_tls_dk_pend_perform = 0;
+void **tur_tls_dk_pend_perform_ptr (void) { return &tur_tls_dk_pend_perform; }
 
 /* The dynamic tail-call trampoline (emit_module.c, proper-tail-calls T6): its
  * descriptor, the function it has armed, the driver's root and the sentinel

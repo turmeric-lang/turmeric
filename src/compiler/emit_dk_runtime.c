@@ -644,10 +644,12 @@ void emit_cps_runtime_prelude(Buf *out) {
  * clears the field before calling it.  A copy never inherits it (dk_new
  * zeroes; dk_copy_node leaves it): the originals a perform copies for its
  * handler (dk_perform) never run and are never downstream of a later panic,
- * so a resumed continuation's defers run exactly once, in the copy; and a
- * frame abandoned by something other than a panic (an abortive handler, an
- * escape) is never walked, so its defers do not run -- see
- * docs/reported/cps-defer-skipped-on-abortive-effect.md. */
+ * so a resumed continuation's defers run exactly once, in the copy.  A frame
+ * abandoned by an ABORTIVE handler case (one that returns having neither
+ * resumed nor kept its continuation) or by an escape is walked the same way,
+ * at the moment the case returns or the escape lands (__dk_abort_abandon,
+ * __dk_abort_pending, __dk_escape_abandon; cps-defer-skipped-on-abortive-
+ * effect, archived). */
 "    void (*unwind)(intptr_t env);\n"
 /* Re-opening delivery protocol (cps-case-reopen-marker-kont-truncates-capture):
  * a handler whose case RE-OPENS an outer effect runs with the REAL enclosing
@@ -742,6 +744,24 @@ void emit_cps_runtime_prelude(Buf *out) {
  * again (the emitter writes that into it). */
 "__attribute__((unused)) static void __dk_panic_abandon(DK *k) {\n"
 "    for (; k; k = k->next) {\n"
+"        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }\n"
+"        if (k->kind == DKK_DONE) break;\n"
+"    }\n"
+"}\n"
+/* cps-defer-skipped-on-abortive-effect: the chain an ABORTIVE handler case
+ * abandons -- the perform's frames up to its handler `H`, exclusive.  When the
+ * case returns without having copied its continuation (dk_perform checks
+ * `sub->ncopy`: every resume, store and shift-bridge wrap of `k` goes through
+ * dk_copy_range, so an uncopied `sub` was neither resumed nor kept), those
+ * originals are dead: H->next runs next, and nothing can reach them again.
+ * Fire their unwinders then, innermost first, exactly as a panic would.  The
+ * walk stops at H by address only -- a re-opening case can have run the
+ * handle's continuation and handed the group back (__dk_group_release), so H
+ * is never dereferenced.  No signal is pending here, so the unwinder's
+ * save/restore of tur_panicking (cps_pend_fire) leaves it clear -- unless a
+ * deferred body panics, which the caller then sees as an ordinary panic. */
+"__attribute__((unused)) static void __dk_abort_abandon(DK *k, const DK *H) {\n"
+"    for (; k && k != H; k = k->next) {\n"
 "        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }\n"
 "        if (k->kind == DKK_DONE) break;\n"
 "    }\n"
@@ -1031,7 +1051,22 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * overwrote the landing another thread's tail-resume longjmps to.  A fiber\n"
 " * carries its own registry and depth across its switches (FiberBlock,\n"
 " * tur_fiber_block_resume), since it can resume on another thread. */\n"
+/* cps-defer-skipped-on-abortive-effect: the performs whose handler case is
+ * running on this C stack, innermost first -- one record per non-tail
+ * dk_perform, on its own C frame, pushed before the case runs and popped
+ * after.  An abortive case (one that returns having neither resumed nor kept
+ * its continuation) looks down this list for the cases it abandoned with
+ * itself: a case that re-opened an enclosing effect runs with the real
+ * enclosing chain as its continuation (dk_case_enclosing_real), so when THAT
+ * effect aborts, the re-opening case's own perform is dead too, and its
+ * frames' defers are owed now, not when the C stack unwinds after the rest of
+ * the program ran.  Stack-disciplined like g_dk_driver: every longjmp landing
+ * resets it to the value it had when the landing was armed, the fiber swap
+ * carries the fiber's own (FiberBlock.dk_pend), and an escape landing fires
+ * the records it jumped over (__dk_escape_abandon). */
+"typedef struct DKPendPerform { DK *k; const DK *H; DK *sub; struct DKPendPerform *up; } DKPendPerform;\n"
 "#if defined(__GNUC__) || defined(__clang__)\n"
+"static TUR_THREAD_LOCAL DKPendPerform *g_dk_pend_perform;\n"
 "static TUR_THREAD_LOCAL void **__dk_reap_v;\n"
 "static TUR_THREAD_LOCAL unsigned char *__dk_reap_kind;  /* 1 = DK chain (dk_free), 0 = plain (free) */\n"
 "static TUR_THREAD_LOCAL size_t __dk_reap_n;\n"
@@ -1052,6 +1087,8 @@ void emit_cps_runtime_prelude(Buf *out) {
 "extern void **tur_tls_dk_driver_ptr(void);\n"
 "extern void **tur_tls_dk_resume_chain_ptr(void);\n"
 "extern intptr_t *tur_tls_dk_resume_val_ptr(void);\n"
+"extern void **tur_tls_dk_pend_perform_ptr(void);\n"
+"#define g_dk_pend_perform (*(DKPendPerform **)tur_tls_dk_pend_perform_ptr())\n"
 "#define __dk_reap_v (*(void ***)tur_tls_dk_reap_v_ptr())\n"
 "#define __dk_reap_kind (*(unsigned char **)tur_tls_dk_reap_kind_ptr())\n"
 "#define __dk_reap_n (*tur_tls_dk_reap_n_ptr())\n"
@@ -1074,6 +1111,8 @@ void emit_cps_runtime_prelude(Buf *out) {
 "TUR_TLS_FRESH(tur_jmp_buf *, g_dk_driver, g_dk_driver__at);\n"
 "TUR_TLS_FRESH(DK *, g_dk_resume_chain, g_dk_resume_chain__at);\n"
 "TUR_TLS_FRESH(intptr_t, g_dk_resume_val, g_dk_resume_val__at);\n"
+"TUR_TLS_FRESH(DKPendPerform *, g_dk_pend_perform, g_dk_pend_perform__at);\n"
+"#define g_dk_pend_perform (*g_dk_pend_perform__at())\n"
 "#define __dk_reap_v (*__dk_reap_v__at())\n"
 "#define __dk_reap_kind (*__dk_reap_kind__at())\n"
 "#define __dk_reap_n (*__dk_reap_n__at())\n"
@@ -1506,7 +1545,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * __dk_drive_after uses.  A panic signalled out of the chain returns like a\n"
 " * value (cps-body-panic-not-propagated): the wrapper's caller sees the flag. */\n"
 "static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv) {\n"
-"    tur_jmp_buf jb; tur_jmp_buf *saved = g_dk_driver;\n"
+"    tur_jmp_buf jb; tur_jmp_buf *saved = g_dk_driver; DKPendPerform *savedpp = g_dk_pend_perform;\n"
 "    g_dk_driver = &jb;\n"
 "    g_dk_resume_chain = first; g_dk_resume_val = firstv;\n"
 "    intptr_t r;\n"
@@ -1518,6 +1557,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "            if (own) __dk_reap_keep(ch);\n"
 "            break;\n"
 "        }\n"
+"        g_dk_pend_perform = savedpp;   /* the yield discarded every record above this landing */\n"
 "        if (own) __dk_reap_keep(ch);   /* a chain resumed in place may run through it */\n"
 "    }\n"
 "    g_dk_driver = saved;\n"
@@ -1526,7 +1566,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "/* Run the trampoline to completion after a tail-resume longjmp landed in the\n"
 " * entry wrapper. Owns its own jmp_buf so further yields land here. */\n"
 "static intptr_t __dk_drive_after(void) {\n"
-"    tur_jmp_buf jb; g_dk_driver = &jb;\n"
+"    tur_jmp_buf jb; g_dk_driver = &jb; DKPendPerform *savedpp = g_dk_pend_perform;\n"
 "    for (;;) {\n"
 "        DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;\n"
 "        bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */\n"
@@ -1545,6 +1585,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "         * chain that may tail-resume out -- so it is freed exactly once at the\n"
 "         * outermost entry (__dk_reap_run).  See\n"
 "         * docs/archive/effect-rec-nested-handler-nonterminates.md. */\n"
+"        g_dk_pend_perform = savedpp;   /* the yield discarded every record above this landing */\n"
 "        if (own) __dk_reap_keep(ch);   /* was dk_free(ch): premature under nesting */\n"
 "    }\n"
 "}\n");
@@ -1563,6 +1604,35 @@ void emit_cps_runtime_prelude(Buf *out) {
  * Run uncopied, the perform's frame and the joins under it are handed back as
  * they run (dk_frame_join), and the trampoline neither frees nor keeps the
  * chain (`inplace_head`): its nodes already have owners. */
+/* The performs an abortive case abandoned along with itself.  `ck..cH` is the
+ * dead chain just fired.  The record below it on the list is the perform whose
+ * case (dynamically) performed this one; that case is dead exactly when the
+ * dead chain passes through the first node beyond its handler group
+ * (dk_case_enclosing_real), which is where a re-opening case's continuation
+ * frames lead -- a perform handled INSIDE the case (a nested handle in its
+ * body, a resumed copy's marker) never reaches that node, and the case goes
+ * on.  A dead case whose `sub` was copied stops the walk: its continuation
+ * lives on in the copy, and so may everything beneath it. */
+"static void __dk_abort_pending(DK *ck, const DK *cH, DKPendPerform *p) {\n"
+"    for (; p; p = p->up) {\n"
+"        const DK *E = dk_case_enclosing_real(p->H);\n"
+"        bool on = false;\n"
+"        for (const DK *n = ck; n && n != cH; n = n->next) { if (n == E) { on = true; break; } if (n->kind == DKK_DONE) break; }\n"
+"        if (!on || p->sub->ncopy) break;\n"
+"        __dk_abort_abandon(p->k, p->H);\n"
+"        if (tur_panicking) break;\n"
+"        ck = p->k; cH = p->H;\n"
+"    }\n"
+"}\n"
+/* An escape (call/ec) landed: every record above `to` belongs to a dk_perform
+ * whose C frame the longjmp discarded -- its case will not return, so its
+ * continuation is dead unless the case copied it.  Fire those, innermost
+ * first, and cut the list back. */
+"__attribute__((unused)) static void __dk_escape_abandon(DKPendPerform *to) {\n"
+"    for (DKPendPerform *p = g_dk_pend_perform; p && p != to; p = p->up)\n"
+"        if (!p->sub->ncopy) __dk_abort_abandon(p->k, p->H);\n"
+"    g_dk_pend_perform = to;\n"
+"}\n"
 "static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {\n"
 "    DK *H = k;\n"
 "    while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;\n"
@@ -1652,8 +1722,23 @@ void emit_cps_runtime_prelude(Buf *out) {
 "     * frame itself, which hands the handler group -- H -- back\n"
 "     * (__dk_group_release). */\n"
 "    bool H_delivers = H->case_delivers; DK *H_next = H->next;\n"
+"    DKPendPerform pp = { k, H, sub, g_dk_pend_perform }; g_dk_pend_perform = &pp;\n"
 "    intptr_t r = H->handler(H->handler_env, arg, sub);\n"
+"    g_dk_pend_perform = pp.up;\n"
 "    if (tur_panicking) { __dk_panic_abandon(k); return r; }   /* the case panicked: the perform's chain never runs */\n"
+/* cps-defer-skipped-on-abortive-effect: the case returned without resuming
+ * or keeping `sub` (no copy was ever taken of it), so the perform's original
+ * frames up to H are abandoned for good: run the defers pending in them now,
+ * before the handle's continuation runs.  A case that resumed (dk_invoke /
+ * dk_resume_into copy `sub`), stored `k` (emit_letraw's copy-on-store) or
+ * wrapped it for a shift receiver (dk_copy_range(subk)) leaves ncopy > 0 and
+ * is not touched: its copies run their own defers when (if) they run.  A
+ * deferred body that panics surfaces as a panic of the perform. */
+"    if (!sub->ncopy) {\n"
+"        __dk_abort_abandon(k, H);\n"
+"        if (!tur_panicking) __dk_abort_pending(k, H, pp.up);\n"
+"        if (tur_panicking) { __dk_panic_abandon(H); return r; }\n"
+"    }\n"
 /* case_delivers: a re-opening case already delivered its value through the
  * real chain (its __kont = dk_case_enclosing_real covers H->next); `r` is the
  * value that bubbled back from that delivery, so deliver it AGAIN and the rest

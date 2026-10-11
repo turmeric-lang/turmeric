@@ -2202,6 +2202,12 @@ __attribute__((unused)) static void __dk_panic_abandon(DK *k) {
         if (k->kind == DKK_DONE) break;
     }
 }
+__attribute__((unused)) static void __dk_abort_abandon(DK *k, const DK *H) {
+    for (; k && k != H; k = k->next) {
+        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }
+        if (k->kind == DKK_DONE) break;
+    }
+}
 /* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
  * chain, borrowed.  The one spine then serves every consumer: dk_perform's
  * handler search walks straight into the real enclosing handlers, its capture
@@ -2439,7 +2445,9 @@ __attribute__((unused)) static __tur_cps_fn __tur_cps_lookup_checked(intptr_t di
  * overwrote the landing another thread's tail-resume longjmps to.  A fiber
  * carries its own registry and depth across its switches (FiberBlock,
  * tur_fiber_block_resume), since it can resume on another thread. */
+typedef struct DKPendPerform { DK *k; const DK *H; DK *sub; struct DKPendPerform *up; } DKPendPerform;
 #if defined(__GNUC__) || defined(__clang__)
+static TUR_THREAD_LOCAL DKPendPerform *g_dk_pend_perform;
 static TUR_THREAD_LOCAL void **__dk_reap_v;
 static TUR_THREAD_LOCAL unsigned char *__dk_reap_kind;  /* 1 = DK chain (dk_free), 0 = plain (free) */
 static TUR_THREAD_LOCAL size_t __dk_reap_n;
@@ -2460,6 +2468,8 @@ extern int *tur_tls_dk_entry_depth_ptr(void);
 extern void **tur_tls_dk_driver_ptr(void);
 extern void **tur_tls_dk_resume_chain_ptr(void);
 extern intptr_t *tur_tls_dk_resume_val_ptr(void);
+extern void **tur_tls_dk_pend_perform_ptr(void);
+#define g_dk_pend_perform (*(DKPendPerform **)tur_tls_dk_pend_perform_ptr())
 #define __dk_reap_v (*(void ***)tur_tls_dk_reap_v_ptr())
 #define __dk_reap_kind (*(unsigned char **)tur_tls_dk_reap_kind_ptr())
 #define __dk_reap_n (*tur_tls_dk_reap_n_ptr())
@@ -2481,6 +2491,8 @@ TUR_TLS_FRESH(int, __dk_entry_depth, __dk_entry_depth__at);
 TUR_TLS_FRESH(tur_jmp_buf *, g_dk_driver, g_dk_driver__at);
 TUR_TLS_FRESH(DK *, g_dk_resume_chain, g_dk_resume_chain__at);
 TUR_TLS_FRESH(intptr_t, g_dk_resume_val, g_dk_resume_val__at);
+TUR_TLS_FRESH(DKPendPerform *, g_dk_pend_perform, g_dk_pend_perform__at);
+#define g_dk_pend_perform (*g_dk_pend_perform__at())
 #define __dk_reap_v (*__dk_reap_v__at())
 #define __dk_reap_kind (*__dk_reap_kind__at())
 #define __dk_reap_n (*__dk_reap_n__at())
@@ -2806,7 +2818,7 @@ static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
  * __dk_drive_after uses.  A panic signalled out of the chain returns like a
  * value (cps-body-panic-not-propagated): the wrapper's caller sees the flag. */
 static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv) {
-    tur_jmp_buf jb; tur_jmp_buf *saved = g_dk_driver;
+    tur_jmp_buf jb; tur_jmp_buf *saved = g_dk_driver; DKPendPerform *savedpp = g_dk_pend_perform;
     g_dk_driver = &jb;
     g_dk_resume_chain = first; g_dk_resume_val = firstv;
     intptr_t r;
@@ -2818,6 +2830,7 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv) {
             if (own) __dk_reap_keep(ch);
             break;
         }
+        g_dk_pend_perform = savedpp;   /* the yield discarded every record above this landing */
         if (own) __dk_reap_keep(ch);   /* a chain resumed in place may run through it */
     }
     g_dk_driver = saved;
@@ -2826,7 +2839,7 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv) {
 /* Run the trampoline to completion after a tail-resume longjmp landed in the
  * entry wrapper. Owns its own jmp_buf so further yields land here. */
 static intptr_t __dk_drive_after(void) {
-    tur_jmp_buf jb; g_dk_driver = &jb;
+    tur_jmp_buf jb; g_dk_driver = &jb; DKPendPerform *savedpp = g_dk_pend_perform;
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
         bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */
@@ -2845,6 +2858,7 @@ static intptr_t __dk_drive_after(void) {
          * chain that may tail-resume out -- so it is freed exactly once at the
          * outermost entry (__dk_reap_run).  See
          * docs/archive/effect-rec-nested-handler-nonterminates.md. */
+        g_dk_pend_perform = savedpp;   /* the yield discarded every record above this landing */
         if (own) __dk_reap_keep(ch);   /* was dk_free(ch): premature under nesting */
     }
 }
@@ -2853,6 +2867,22 @@ static intptr_t __dk_drive_after(void) {
  * entry, before any interior perform can overwrite it) to recover its real
  * enclosing chain via dk_case_enclosing_real. */
 static const DK *g_dk_case_reopen_hnode = NULL;
+static void __dk_abort_pending(DK *ck, const DK *cH, DKPendPerform *p) {
+    for (; p; p = p->up) {
+        const DK *E = dk_case_enclosing_real(p->H);
+        bool on = false;
+        for (const DK *n = ck; n && n != cH; n = n->next) { if (n == E) { on = true; break; } if (n->kind == DKK_DONE) break; }
+        if (!on || p->sub->ncopy) break;
+        __dk_abort_abandon(p->k, p->H);
+        if (tur_panicking) break;
+        ck = p->k; cH = p->H;
+    }
+}
+__attribute__((unused)) static void __dk_escape_abandon(DKPendPerform *to) {
+    for (DKPendPerform *p = g_dk_pend_perform; p && p != to; p = p->up)
+        if (!p->sub->ncopy) __dk_abort_abandon(p->k, p->H);
+    g_dk_pend_perform = to;
+}
 static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     DK *H = k;
     while (H && !(H->kind == DKK_HANDLER && H->tag == tag) && H->kind != DKK_DONE) H = H->next;
@@ -2920,8 +2950,15 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * frame itself, which hands the handler group -- H -- back
      * (__dk_group_release). */
     bool H_delivers = H->case_delivers; DK *H_next = H->next;
+    DKPendPerform pp = { k, H, sub, g_dk_pend_perform }; g_dk_pend_perform = &pp;
     intptr_t r = H->handler(H->handler_env, arg, sub);
+    g_dk_pend_perform = pp.up;
     if (tur_panicking) { __dk_panic_abandon(k); return r; }   /* the case panicked: the perform's chain never runs */
+    if (!sub->ncopy) {
+        __dk_abort_abandon(k, H);
+        if (!tur_panicking) __dk_abort_pending(k, H, pp.up);
+        if (tur_panicking) { __dk_panic_abandon(H); return r; }
+    }
     return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
 /* Phase T21: FiberBlock */
@@ -2949,6 +2986,7 @@ struct FiberBlock {
     void **dk_reap_v; unsigned char *dk_reap_kind;
     size_t dk_reap_n, dk_reap_cap;
     int dk_entry_depth;
+    void *dk_pend;
     void *esc_live; int esc_live_n, esc_live_cap;
     int64_t r7dyn[8];
 };
@@ -3081,6 +3119,7 @@ static void tur_fiber_shim(uint32_t hi, uint32_t lo) {
             tur_handler_chain = prev_chain;
         } else {
             /* Panic caught - auto-cancel task group (TG-004-3) */
+            g_dk_pend_perform = NULL;   /* the fiber's base: nothing was pending when the landing was armed */
             f->panic_jmpbuf_valid = 0;
             tur_current_fiber = NULL;
             if (global_panic_payload) {
@@ -3149,6 +3188,7 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     size_t _dk_rn = __dk_reap_n, _dk_rc = __dk_reap_cap; int _dk_rd = __dk_entry_depth;
     __dk_reap_v = f->dk_reap_v; __dk_reap_kind = f->dk_reap_kind;
     __dk_reap_n = f->dk_reap_n; __dk_reap_cap = f->dk_reap_cap; __dk_entry_depth = f->dk_entry_depth;
+    void *_dk_pp = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)f->dk_pend;
     TUR_GC_FIBER_ENTER((void *)&_dk_save);
     swapcontext(&f->caller_ctx, &f->ctx);
     TUR_GC_FIBER_LEAVE();
@@ -3156,6 +3196,7 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     f->dk_reap_n = __dk_reap_n; f->dk_reap_cap = __dk_reap_cap; f->dk_entry_depth = __dk_entry_depth;
     __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;
     __dk_reap_n = _dk_rn; __dk_reap_cap = _dk_rc; __dk_entry_depth = _dk_rd;
+    f->dk_pend = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)_dk_pp;
     g_dk_driver = _dk_save;
     tur_current_fiber = _prev;
     return f->result;
@@ -3843,8 +3884,9 @@ __attribute__((unused)) static int64_t __dk_enter0(int64_t (*body)(DK *), void *
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    DKPendPerform *__dkpp = g_dk_pend_perform;
     if (TUR_SETJMP(__dkjb) == 0) { __r = body(__root); }
-    else { __r = __dk_drive_after(); }
+    else { g_dk_pend_perform = __dkpp; __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     if (out) { if (__r) memcpy(out, (const void *)(intptr_t)__r, out_size); else memset(out, 0, out_size); }
     __dk_entry_leave(__root, __dk_reap_mark);
@@ -8063,8 +8105,9 @@ __attribute__((unused)) static bool map_hyeq_hyloop(void * iter, void * m2_hamt,
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    DKPendPerform *__dkpp = g_dk_pend_perform;
     if (TUR_SETJMP(__dkjb) == 0) { __r = map_hyeq_hyloop__cps(iter, m2_hamt, keyeq, val_cmp, __root); }
-    else { __r = __dk_drive_after(); }
+    else { g_dk_pend_perform = __dkpp; __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     __dk_entry_leave(__root, __dk_reap_mark);
@@ -8451,8 +8494,9 @@ __attribute__((unused)) static bool list_hyeq_qu(int64_t l1, int64_t l2, int64_t
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    DKPendPerform *__dkpp = g_dk_pend_perform;
     if (TUR_SETJMP(__dkjb) == 0) { __r = list_hyeq_qu__cps(l1, l2, cmp_fn, __root); }
-    else { __r = __dk_drive_after(); }
+    else { g_dk_pend_perform = __dkpp; __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     bool __ret = (bool)(__r);
     __dk_entry_leave(__root, __dk_reap_mark);
@@ -8554,8 +8598,9 @@ __attribute__((unused)) static int64_t _un_uncons_hyfmap(int64_t cell, void * f)
     DK *__root = dk_prompt(DK_ROOT_TAG, dk_done());
     int64_t __r;
     tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;
+    DKPendPerform *__dkpp = g_dk_pend_perform;
     if (TUR_SETJMP(__dkjb) == 0) { __r = _un_uncons_hyfmap__cps(cell, f, __root); }
-    else { __r = __dk_drive_after(); }
+    else { g_dk_pend_perform = __dkpp; __r = __dk_drive_after(); }
     g_dk_driver = __dksave;
     int64_t __ret = (int64_t)(__r);
     __dk_entry_leave(__root, __dk_reap_mark);

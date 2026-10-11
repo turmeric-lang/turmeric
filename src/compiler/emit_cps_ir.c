@@ -1184,7 +1184,12 @@ static bool cps_pend_hook_pending(Buf *body) {
 static void cps_pend_fire(EmitCtx *ctx, Buf *body) {
     g_pend_firing = true;
     indent_buf(body, ctx->indent);
-    buf_puts(body, "tur_panicking = 0;   /* defer-skipped-on-panic-in-cps-function: pending defers */\n");
+    /* The signal is saved and restored, not forced: on a panic return it is
+     * set and comes back set; in an unwinder the DK runtime fires for a frame an
+     * ABORTIVE handler abandoned (__dk_abort_abandon) it is clear, and a forced
+     * `= 1` would turn the abort into a panic.  A deferred body that panics
+     * leaves it set on either path. */
+    buf_puts(body, "{ int __pk = tur_panicking; tur_panicking = 0;   /* defer-skipped-on-panic-in-cps-function: pending defers */\n");
     for (int i = g_n_pend - 1; i >= 0; i--) {
         if ((g_pend_unfirable | g_pend_downstream) & (1ull << i)) continue;
         char *rhs = emit_value(ctx, body, g_pend[i]);
@@ -1193,7 +1198,7 @@ static void cps_pend_fire(EmitCtx *ctx, Buf *body) {
         free(rhs);
     }
     indent_buf(body, ctx->indent);
-    buf_puts(body, "tur_panicking = 1;\n");
+    buf_puts(body, "if (__pk) tur_panicking = 1; }\n");
     g_pend_firing = false;
 }
 static void cps_pend_hook_fire(EmitCtx *ctx, Buf *body) {
@@ -12821,6 +12826,10 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     ce_line(ce, "tur_escape_cont %s;", cc);
     ce_line(ce, "%s.valid = 1;", cc);
     ce_line(ce, "tur_escape_live_push(&%s);", cc);
+    /* cps-defer-skipped-on-abortive-effect: the performs whose cases the
+     * escape jumps over are abandoned with their C frames; the landing fires
+     * the defers pending in their continuations (__dk_escape_abandon). */
+    ce_line(ce, "DKPendPerform *%s_pp = g_dk_pend_perform;", cc);
     ce_line(ce, "if (TUR_SETJMP(%s.buf) == 0) {", cc);
     ce->indent += 4;
     /* Normal path: emit the receiver value, then call it with &cc. */
@@ -12861,6 +12870,7 @@ static void emit_callcc(CE *ce, const CTerm *t) {
      * escape jumped over. */
     ce_line(ce, "%s.valid = 0;", cc);
     ce_line(ce, "tur_escape_live_pop(&%s);", cc);
+    ce_line(ce, "__dk_escape_abandon(%s_pp);", cc);
     if (boxed) {
         ce_line(ce, "{ tur_tagged_t *__ccb = (tur_tagged_t *)(intptr_t)%s.result; "
                     "%s = *__ccb; free(__ccb); }", cc, xn);
@@ -13801,9 +13811,10 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
          * else-branch runs the trampoline to completion. */
         if (!mvoid) buf_puts(file, "    int64_t __r;\n");
         buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+        buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
         buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(__root); }\n",
                    mvoid ? "(void)" : "__r = ", cn);
-        buf_printf(file, "    else { %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
+        buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
         buf_puts(file, "    g_dk_driver = __dksave;\n");
         /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
          * heap box owned by the reap list (consume=false, never freed at a load),
@@ -13945,11 +13956,12 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * called by a plain main) still trampolines a deep tail-resume flat. */
     if (!void_ret) buf_puts(file, "    int64_t __r;\n");
     buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+    buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
     buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(%s); }\n",
                void_ret ? "(void)" : "__r = ", cn, __args.data);
     /* T6: after a tail-resume longjmp the drive runs continuations that are not
      * this entry's body; no bounce shortcut applies there. */
-    buf_printf(file, "    else { %s%s__dk_drive_after(); }\n",
+    buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s%s__dk_drive_after(); }\n",
                tb_entry ? "tur_tb_root = NULL; " : "", void_ret ? "(void)" : "__r = ");
     buf_puts(file, "    g_dk_driver = __dksave;\n");
     if (tb_entry) buf_puts(file, "    tur_tb_root = __tb_save;\n");

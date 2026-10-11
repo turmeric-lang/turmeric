@@ -76,13 +76,14 @@
     (+ a (boom x))))
 
 ;; 10. An abortive handler (never resumes) abandons a frame with a pending
-;;     defer, then a panic in the same entry.  The abandoned defer does not
-;;     run (docs/reported/cps-defer-skipped-on-abortive-effect.md), and the
-;;     panic must not run it late either.
+;;     defer, then a panic in the same entry.  The abandoned defer runs when
+;;     the case returns (cps-defer-skipped-on-abortive-effect, archived;
+;;     tests/fixtures/defer-cps-abortive-handler has the shapes), and the
+;;     panic must not run it a second time.
 (defeffect Abort [] : int)
 
 (defn cps-aborted [] : int
-  (defer (note "cps-aborted: must not print"))
+  (defer (note "cps-aborted: defer ran at the abort"))
   (+ 1 (perform (Abort))))
 
 (defn cps-abort-then-panic [x : int] : int
