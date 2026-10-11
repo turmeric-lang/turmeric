@@ -3107,6 +3107,38 @@ typedef struct {
  * defer that is not the auto-drop shape (user defer -> keep falling back); more
  * refs than the fixed plan holds; or any ref used at/after the first control
  * barrier (a crossing ref -> P2/P3, keep falling back). */
+/* defer-skipped-on-panic-in-cps-function: a pending-defer marker node -- an
+ * inert CT_LETVAL of the unit atom carrying `defer_push` / `defer_pop` (see
+ * cps_ir.h).  The emitter renders the node as nothing but updates its pending
+ * stack from it. */
+static CTerm *defer_marker(CpsB *b, CTerm *rest, const Expr *push, const Expr *pop) {
+    CTerm *m = new_term(b, CT_LETVAL);
+    m->as.letval.x = fresh_cvar(b, push ? &push->type : &pop->type);
+    memset(&m->as.letval.v, 0, sizeof m->as.letval.v);
+    m->as.letval.v.kind = CA_UNIT;
+    m->as.letval.v.ty = TY_NIL;
+    m->as.letval.body = rest;
+    m->defer_push = push;
+    m->defer_pop = pop;
+    return m;
+}
+
+/* Wrap `rest` (the chain from `do` item `i` on) in push markers for the
+ * `(defer D)` items declared right before item `i` -- after the previous
+ * non-defer item.  Outermost is the first declared, so the pending stack
+ * holds them in declaration order and fires LIFO.  A defer declared AFTER the
+ * block's last non-defer item is never pending for a panic (nothing of the
+ * block runs after it but the fires), exactly as the direct emitter's frame,
+ * which registers a defer only when control reaches it. */
+static CTerm *defer_pushes_before(CpsB *b, Expr **items, uint32_t i, CTerm *rest) {
+    for (int j = (int)i - 1; j >= 0; j--) {
+        const Expr *it = ascribe_peel(items[j]);
+        if (!it || it->kind != EX_DEFER) break;
+        rest = defer_marker(b, rest, it->as.defer_.body, NULL);
+    }
+    return rest;
+}
+
 static bool plan_autodrop(const Expr *e, AutodropPlan *pl) {
     memset(pl, 0, sizeof(*pl));
     if (!e || e->kind != EX_DO || e->as.do_.n == 0) return false;
@@ -5066,22 +5098,30 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                     deliver->as.appcont.kont = kont;
                     deliver->as.appcont.v = atom_cvar(x);
                     /* Thread defer bodies in declaration order so they EXECUTE in
-                     * reverse-declaration (LIFO) order after x is bound. */
+                     * reverse-declaration (LIFO) order after x is bound.  A pop
+                     * marker sits before each fire (defer-skipped-on-panic-in-
+                     * cps-function): from there on D is no longer pending, so a
+                     * panic inside D's own body fires only the defers beneath it. */
                     CTerm *chain = deliver;
                     for (uint32_t i = 0; i < n; i++) {
                         const Expr *it = ascribe_peel(items[i]);
                         if (!it || it->kind != EX_DEFER) continue;
                         CVar d = fresh_cvar(b, &it->as.defer_.body->type);
                         chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
+                        chain = defer_marker(b, chain, NULL, it->as.defer_.body);
                     }
-                    /* Bind the value item (threading any perform continuation). */
+                    /* Bind the value item (threading any perform continuation),
+                     * then push-mark the defers declared between the previous
+                     * non-defer item and it: they are pending while it runs. */
                     chain = cps_bind(b, items[tail_idx], x, chain);
+                    chain = defer_pushes_before(b, items, (uint32_t)tail_idx, chain);
                     /* Prepend the non-defer statements before the value, in order. */
                     for (int i = tail_idx - 1; i >= 0; i--) {
                         const Expr *it = ascribe_peel(items[i]);
                         if (it && it->kind == EX_DEFER) continue;
                         CVar discard = fresh_cvar(b, &items[i]->type);
                         chain = cps_bind(b, items[i], discard, chain);
+                        chain = defer_pushes_before(b, items, (uint32_t)i, chain);
                     }
                     return chain;
                 }

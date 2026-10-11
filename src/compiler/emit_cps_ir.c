@@ -1126,6 +1126,150 @@ typedef struct {
     int n; bool ok;
 } CapSet;
 
+/* ---- defer-skipped-on-panic-in-cps-function: the pending-defer stack ------ *
+ * A `do` lowered by P5b (cps_ir.c) threads its `(defer D)` bodies into the
+ * block's continuation and marks the chain with push / pop markers (CTerm
+ * defer_push / defer_pop).  emit_term keeps the pending set as it walks: a
+ * push marker adds D for every node beneath it, a pop marker removes it, and
+ * the set is restored when the walk leaves a node, so what is pending at any
+ * emission point is exactly what is lexically pending there.  Two consumers:
+ *   - every panic-signal return written inside the body (the CPS emitter's own
+ *     cps_panic_check, and the direct emitter's checks inside delegated
+ *     expressions, through the g_cps_panic_fire hook) first runs the pending
+ *     bodies, LIFO, with the signal cleared, as the direct emitter's frame
+ *     fire does;
+ *   - every lifted continuation FRAME (a perform / join / reset / handle /
+ *     await continuation) gets an unwinder helper `<name>_unw(env)` that runs
+ *     the same bodies from its env, which the DK runtime fires for a frame a
+ *     panic abandoned before it ran (__dk_reap_unwind, dk_run_impl clears it
+ *     on a frame it runs).
+ * A handler case, a shift body and a loop helper are callees of the chain, not
+ * continuations of it: their bodies see an empty pending set (the frames that
+ * carry the fires are never run and unwind instead), so nothing fires twice.
+ * `g_pend_unfirable` masks the entries whose free variables a lifted helper
+ * does not carry in its env (nothing of the body references them there): such
+ * an entry is skipped in that helper, as it was before. */
+#define PD_MAX 48
+static const Expr *g_pend[PD_MAX];
+static int         g_n_pend;
+static uint64_t    g_pend_unfirable;
+/* Bit i: g_pend[i]'s fire is owned by a frame that already EXISTS at this
+ * point of the body (a join / reset / handle continuation created before the
+ * code being emitted runs) -- the sweep fires that frame's unwinder when a
+ * panic abandons it, so nothing emitted here (an inline fire, a later frame's
+ * unwinder) fires it as well. */
+static uint64_t    g_pend_downstream;
+static bool        g_pend_firing;      /* a fire is being written: its own checks stay plain */
+static Buf        *g_pend_out;         /* the buffer the walk writes; a lifted closure body is another */
+static const char *g_pend_k;           /* ce->cur_k at the point being written: the chain a panic abandons */
+static bool        g_pend_k_ok;        /* g_pend_k names a chain in scope (not a perform continuation,
+                                        * a handler case or a shift body: the driver / dk_perform walk theirs) */
+static char        g_last_unw[320];    /* emit_lifted: the unwinder it emitted, or "" */
+
+static bool cps_pend_any_firable(void) {
+    if (g_pend_firing) return false;
+    for (int i = 0; i < g_n_pend; i++)
+        if (!((g_pend_unfirable | g_pend_downstream) & (1ull << i))) return true;
+    return false;
+}
+/* The hook's predicate: pending, and the check is being written into the CPS
+ * body itself (not a helper the direct emitter lifted out of a delegated
+ * expression, whose locals are not the body's -- that one keeps the ordinary
+ * panic return, with its own frame fires). */
+static bool cps_pend_hook_pending(Buf *body) {
+    return body == g_pend_out && ((g_pend_k_ok && g_pend_k) || cps_pend_any_firable());
+}
+/* Write the fires at ctx->indent into `body`: the signal cleared, each pending
+ * body LIFO, the signal raised again.  Also the unwinder's body. */
+static void cps_pend_fire(EmitCtx *ctx, Buf *body) {
+    g_pend_firing = true;
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "tur_panicking = 0;   /* defer-skipped-on-panic-in-cps-function: pending defers */\n");
+    for (int i = g_n_pend - 1; i >= 0; i--) {
+        if ((g_pend_unfirable | g_pend_downstream) & (1ull << i)) continue;
+        char *rhs = emit_value(ctx, body, g_pend[i]);
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "(void)(%s);\n", rhs ? rhs : "0");
+        free(rhs);
+    }
+    indent_buf(body, ctx->indent);
+    buf_puts(body, "tur_panicking = 1;\n");
+    g_pend_firing = false;
+}
+static void cps_pend_hook_fire(EmitCtx *ctx, Buf *body) {
+    /* This function's pending defers first, then the chain this return
+     * abandons: its never-run frames fire their own (the frames downstream in
+     * THIS function -- the block's later defers, declared earlier -- and its
+     * callers' within the entry).  Innermost first, as the direct emitter's
+     * frame chain unwinds. */
+    if (cps_pend_any_firable()) cps_pend_fire(ctx, body);
+    if (g_pend_k_ok && g_pend_k) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "__dk_panic_abandon(%s);\n", g_pend_k);
+    }
+}
+/* The entries whose free variables `caps` does not carry: unfirable in a
+ * helper whose env is `caps` (NULL: no env). */
+static uint64_t pend_unfirable_for(const CapSet *caps) {
+    uint64_t m = 0;
+    for (int i = 0; i < g_n_pend; i++) {
+        uint32_t n_fv = 0;
+        Binding **fv = collect_free_vars(g_pend[i], NULL, 0, NULL, 0, &n_fv);
+        for (uint32_t k = 0; k < n_fv; k++) {
+            const Binding *b = fv[k];
+            if (!b || b->is_global || binding_excluded(b)) continue;
+            bool have = false;
+            if (caps) for (int c = 0; c < caps->n; c++) if (caps->b[c] == b) { have = true; break; }
+            if (!have) { m |= 1ull << i; break; }
+        }
+        free(fv);
+    }
+    return m;
+}
+/* The pending entries whose pop marker (hence whose threaded fire) lies in
+ * `t`: what a frame lifted from `t` owns. */
+static uint64_t term_pops_mask(const CTerm *t) {
+    if (!t) return 0;
+    uint64_t m = 0;
+    if (t->defer_pop)
+        for (int i = 0; i < g_n_pend; i++) if (g_pend[i] == t->defer_pop) m |= 1ull << i;
+    switch (t->kind) {
+        case CT_LETVAL:  return m | term_pops_mask(t->as.letval.body);
+        case CT_LETPRIM: return m | term_pops_mask(t->as.letprim.body);
+        case CT_LETCALL: return m | term_pops_mask(t->as.letcall.body);
+        case CT_LETRAW:  return m | term_pops_mask(t->as.letraw.body);
+        case CT_LETCONT: return m | term_pops_mask(t->as.letcont.jbody)
+                                  | term_pops_mask(t->as.letcont.body);
+        case CT_IF:      return m | term_pops_mask(t->as.if_.then_)
+                                  | term_pops_mask(t->as.if_.else_);
+        case CT_MATCH:   for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                             m |= term_pops_mask(t->as.match.arms[i].body);
+                         return m;
+        case CT_RESET:   return m | term_pops_mask(t->as.reset.delim)
+                                  | term_pops_mask(t->as.reset.body);
+        case CT_SHIFT:   return m | term_pops_mask(t->as.shift.body);
+        case CT_HANDLE:
+            m |= term_pops_mask(t->as.handle.delim) | term_pops_mask(t->as.handle.body);
+            for (uint32_t i = 0; i < t->as.handle.n_cases; i++)
+                m |= term_pops_mask(t->as.handle.cases[i].case_body);
+            return m;
+        case CT_PERFORM: return m | term_pops_mask(t->as.perform.body);
+        case CT_AWAIT:   return m | term_pops_mask(t->as.await.body);
+        case CT_RESUME:  return m | term_pops_mask(t->as.resume.body);
+        case CT_CLONEABLE: return m | term_pops_mask(t->as.cloneable.body);
+        case CT_CALLCC:  return m | term_pops_mask(t->as.callcc.body);
+        case CT_LOOP:    return m | term_pops_mask(t->as.loop.body);
+        default: return m;
+    }
+}
+/* The frame-creation sites: the unwinder emit_lifted just emitted, as the two
+ * halves of a `__dk_with_unwind(<frame>, <unw>)` wrap -- both empty when the
+ * helper has nothing pending to fire. */
+static void unw_take(char *uw, size_t n, char *uwc, size_t m) {
+    if (g_last_unw[0]) { snprintf(uw, n, "__dk_with_unwind("); snprintf(uwc, m, ", %s)", g_last_unw); }
+    else { uw[0] = '\0'; uwc[0] = '\0'; }
+}
+
 /* A capture rides the env by value: a scalar (Tier A/B) or an owning-free
  * by-value aggregate (Tier C, slot_box_ty).  Both are Copy, so a leaked env
  * storing them is multi-shot-safe with no retain/drop.  Owning handles / carrier
@@ -1726,6 +1870,23 @@ static bool collect_caps(const CTerm *body, uint32_t exclude, CapSet *cs) {
     cs->n = 0; cs->ok = true;
     g_cap_single_shot = true;   /* a reset/handle/perform continuation or shift body */
     collect_caps_rec(body, exclude, bound, 0, cs);
+    /* defer-skipped-on-panic-in-cps-function: the helper also fires the
+     * pending defers at its panic checks (and in its unwinder), so their free
+     * variables ride the env too.  One whose variable the env cannot carry
+     * stays out -- that defer is then masked off in this helper
+     * (pend_unfirable_for) instead of failing the lift. */
+    for (int d = 0; cs->ok && d < g_n_pend; d++) {
+        int n0 = cs->n;
+        uint32_t n_fv = 0;
+        Binding **fv = collect_free_vars(g_pend[d], NULL, 0, NULL, 0, &n_fv);
+        for (uint32_t i = 0; i < n_fv && cs->ok; i++) {
+            const Binding *b = fv[i];
+            if (!b || b->is_global || binding_excluded(b) || b->id == exclude) continue;
+            cap_add(cs, b, b->type.kind, &b->type);
+        }
+        free(fv);
+        if (!cs->ok) { cs->n = n0; cs->ok = true; }
+    }
     g_cap_single_shot = false;
     if (cs->ok && g_loop_inv && g_loop_inv->n > 0 && term_has_continue(body)) {
         for (int i = 0; i < g_loop_inv->n && cs->ok; i++) {
@@ -8486,7 +8647,40 @@ static void cps_deferred_consume_atoms(CE *ce, const CAtom *args, uint32_t n) {
     }
 }
 
+static void emit_term_inner(CE *ce, const CTerm *t);
+/* defer-skipped-on-panic-in-cps-function: maintain the pending-defer stack
+ * along the walk (see the stack's comment above cps_pend_fire). */
 static void emit_term(CE *ce, const CTerm *t) {
+    const Expr *saved[PD_MAX];
+    int saved_n = g_n_pend;
+    uint64_t saved_mask = g_pend_unfirable;
+    uint64_t saved_down = g_pend_downstream;
+    Buf *saved_out = g_pend_out;
+    const char *saved_k = g_pend_k;
+    memcpy(saved, g_pend, sizeof(const Expr *) * (size_t)g_n_pend);
+    g_pend_out = ce->out;
+    g_pend_k = ce->cur_k;
+    if (t->defer_push && g_n_pend < PD_MAX) g_pend[g_n_pend++] = t->defer_push;
+    if (t->defer_pop) {
+        for (int i = 0; i < g_n_pend; i++) {
+            if (g_pend[i] != t->defer_pop) continue;
+            for (int k = i + 1; k < g_n_pend; k++) g_pend[k - 1] = g_pend[k];
+            uint64_t keep = (1ull << i) - 1;
+            g_pend_unfirable  = (g_pend_unfirable & keep)  | ((g_pend_unfirable >> (i + 1)) << i);
+            g_pend_downstream = (g_pend_downstream & keep) | ((g_pend_downstream >> (i + 1)) << i);
+            g_n_pend--;
+            break;
+        }
+    }
+    emit_term_inner(ce, t);
+    g_n_pend = saved_n;
+    g_pend_unfirable = saved_mask;
+    g_pend_downstream = saved_down;
+    g_pend_out = saved_out;
+    g_pend_k = saved_k;
+    memcpy(g_pend, saved, sizeof(const Expr *) * (size_t)saved_n);
+}
+static void emit_term_inner(CE *ce, const CTerm *t) {
     switch (t->kind) {
         case CT_APPCONT: {
             char *v = atom_str(ce, &t->as.appcont.v);
@@ -8498,6 +8692,10 @@ static void emit_term(CE *ce, const CTerm *t) {
             break;
         }
         case CT_LETVAL: {
+            if (t->defer_push || t->defer_pop) {   /* a pending-defer marker: inert */
+                emit_term(ce, t->as.letval.body);
+                break;
+            }
             char *v = atom_str(ce, &t->as.letval.v);
             char *bn = cvar_cname(ce, t->as.letval.x);
             if (is_byref_mut(t->as.letval.x.bind)) {
@@ -9682,6 +9880,10 @@ static void emit_binder_decls(CE *ce, const CTerm *t) {
     switch (t->kind) {
         case CT_APPCONT: break;
         case CT_LETVAL: {
+            if (t->defer_push || t->defer_pop) {   /* a pending-defer marker: no binder */
+                emit_binder_decls(ce, t->as.letval.body);
+                break;
+            }
             char *bn = cvar_cname(ce, t->as.letval.x);
             /* B7: a by-reference mutable's binder is the (typed) cell POINTER. */
             if (is_byref_mut(t->as.letval.x.bind))
@@ -9958,6 +10160,20 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
                         const CTerm *body, const CHandleCase *hcase,
                         const CapSet *caps) {
     bool has_caps = (caps && caps->n > 0);
+    /* defer-skipped-on-panic-in-cps-function: a continuation FRAME inherits
+     * the pending defers (masked to what its env carries) and gets an
+     * unwinder; a handler case or shift body is a callee of the chain and
+     * sees none -- see the pending stack's comment. */
+    int      pend_saved_n    = g_n_pend;
+    uint64_t pend_saved_mask = g_pend_unfirable;
+    uint64_t pend_saved_down = g_pend_downstream;
+    bool     pend_frame      = (mode == LH_PERFORM_CONT || mode == LH_RESUME_CONT);
+    bool     pend_saved_k_ok = g_pend_k_ok;
+    if (!pend_frame) g_n_pend = 0;
+    else g_pend_unfirable |= pend_unfirable_for(caps);
+    /* Only a resume-frame helper holds its chain (`__kont`); the others
+     * return by signal to the driver / dk_perform, which walk the chain. */
+    g_pend_k_ok = (mode == LH_RESUME_CONT);
     bool join_release = g_lh_join_release
                      && (mode == LH_RESUME_CONT || mode == LH_PERFORM_CONT);
     g_lh_join_release = false;
@@ -10179,6 +10395,36 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     emit_binder_decls(&hc, body);
     emit_term(&hc, body);
     buf_putc(&tmp, '\0');
+    /* defer-skipped-on-panic-in-cps-function: the frame's unwinder -- the
+     * pending fires from the env, for the DK runtime to run when a panic
+     * abandons this frame before it runs.  Written while the captures'
+     * spellings are still recorded (restored just below). */
+    Buf unw; buf_init(&unw);
+    bool have_unw = false;
+    if (pend_frame && cps_pend_any_firable()) {
+        have_unw = true;
+        buf_printf(&unw, "static void %s_unw(intptr_t env) {\n", name);
+        if (has_caps) {
+            buf_printf(&unw, "    %s_env *__cap = (%s_env *)(intptr_t)env;\n", name, name);
+            for (int i = 0; i < caps->n; i++) {
+                char *cn = caps->b[i] ? name_for_binding(ce->ctx, caps->b[i]) : strdup(caps->cvname[i]);
+                buf_printf(&unw, "    %s %s = __cap->f%d; (void)%s;\n",
+                           cap_ctype(ce->ctx, caps, i), cn, i, cn);
+                free(cn);
+            }
+        } else {
+            buf_puts(&unw, "    (void)env;\n");
+        }
+        int si = ce->ctx->indent;
+        const char *srt = ce->ctx->current_fn_ret_ctype;
+        ce->ctx->indent = 4;
+        ce->ctx->current_fn_ret_ctype = "void";   /* the unwinder returns nothing */
+        cps_pend_fire(ce->ctx, &unw);
+        ce->ctx->current_fn_ret_ctype = srt;
+        ce->ctx->indent = si;
+        buf_puts(&unw, "}\n");
+        buf_putc(&unw, '\0');
+    }
     for (int i = 0; i < CC_MAX_CAPS; i++)
         if (cap_prev_name[i]) {
             emit_localvar_restore_ctype(cap_prev_name[i], cap_prev_ctype[i]);
@@ -10219,6 +10465,17 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     buf_puts(ce->helpers, tmp.data);
     buf_puts(ce->helpers, "}\n");
     buf_free(&tmp);
+    if (have_unw) {
+        buf_puts(ce->helpers, unw.data);
+        snprintf(g_last_unw, sizeof g_last_unw, "%s_unw", name);
+    } else {
+        g_last_unw[0] = '\0';
+    }
+    buf_free(&unw);
+    g_n_pend = pend_saved_n;
+    g_pend_unfirable = pend_saved_mask;
+    g_pend_downstream = pend_saved_down;
+    g_pend_k_ok = pend_saved_k_ok;
     ce->ctx->closure = saved_lh_closure;
     ce->ctx->env_var_name = saved_lh_env_var;
 }
@@ -10280,27 +10537,29 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
      * the node as this one call's continuation, so dk_run_impl may hand it (and
      * the lifted function its env) back when it runs uncopied, rather than
      * holding both until the outermost entry returns. */
-    char frame[720];
+    char frame[1200];
     if (caps || needs_kont) {
         g_lh_join_release = true;
         emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
+        char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
         g_lh_join_release = false;
         char *envexpr = emit_cont_env(ce, jname, caps);   /* caps-only env */
         /* async-repeated-park-holds-frames-until-settle: a sized env, so a
          * parked copy of the join owns a copy of it (dk_env_sized). */
         if (caps)
             snprintf(frame, sizeof frame,
-                     "__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))",
-                     jname, envexpr, ce->cur_k, jname);
+                     "%s__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))%s",
+                     uw, jname, envexpr, ce->cur_k, jname, uwc);
         else
             snprintf(frame, sizeof frame,
-                     "__dk_reap_node(dk_frame_resume_join(%s, %s, %s))", jname, envexpr, ce->cur_k);
+                     "%s__dk_reap_node(dk_frame_resume_join(%s, %s, %s))%s", uw, jname, envexpr, ce->cur_k, uwc);
         free(envexpr);
     } else {
         emit_lifted(ce, jname, LH_PERFORM_CONT, xn, t->as.letcont.param.ty,
                     t->as.letcont.param.type, t->as.letcont.jbody, NULL, NULL);
-        snprintf(frame, sizeof frame, "__dk_reap_node(dk_frame_join(%s, 0, %s))", jname, ce->cur_k);
+        char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
+        snprintf(frame, sizeof frame, "%s__dk_reap_node(dk_frame_join(%s, 0, %s))%s", uw, jname, ce->cur_k, uwc);
     }
     free(xn);
 
@@ -10402,18 +10661,21 @@ static void emit_escaping_join(CE *ce, const CTerm *t) {
     const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
     emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.letcont.param.ty,
                 t->as.letcont.param.type, t->as.letcont.jbody, NULL, caps);
+    char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
     free(xn);
     char *envexpr = emit_cont_env(ce, jname, caps);   /* caps-only env */
     char fv[24];
     snprintf(fv, sizeof fv, "__ej%d", id);
     /* Single spliced node, reaped at the outermost entry boundary like every
      * other structural node (docs/archive/cps-delimited-dk-node-leak.md). */
-    ce_line(ce, "DK *%s = __dk_reap_node(dk_frame_resume(%s, %s, %s));",
-            fv, jname, envexpr, ce->cur_k);
+    ce_line(ce, "DK *%s = %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s;",
+            fv, uw, jname, envexpr, ce->cur_k, uwc);
     free(envexpr);
     if (ce->n_hjoins >= MAX_JOINS) {
         /* Table full: fall back to a plain label join (the term was admitted,
-         * so this is a capacity limit, not a shape). */
+         * so this is a capacity limit, not a shape).  The frame above never
+         * runs, so it owns no fires: the body's own checks do. */
+        if (uw[0]) ce_line(ce, "%s->unwind = NULL;", fv);
         emit_term(ce, t->as.letcont.body);
         return;
     }
@@ -10423,7 +10685,12 @@ static void emit_escaping_join(CE *ce, const CTerm *t) {
     ce->hjoins[slot].out = ce->out;
     const char *saved_k = ce->cur_k;
     ce->cur_k = ce->hjoins[slot].frame;   /* lives while the body emits */
+    /* defer-skipped-on-panic-in-cps-function: the join frame exists from here
+     * on and owns the fires in jbody; nothing the body emits fires them too. */
+    uint64_t down_saved = g_pend_downstream;
+    g_pend_downstream |= term_pops_mask(t->as.letcont.jbody);
     emit_term(ce, t->as.letcont.body);
+    g_pend_downstream = down_saved;
     ce->cur_k = saved_k;
     ce->n_hjoins--;
 }
@@ -10530,8 +10797,16 @@ static void emit_loop(CE *ce, const CTerm *t) {
      * invariants in their env (collect_caps merges g_loop_inv). */
     const CapSet *saved_inv = g_loop_inv;
     g_loop_inv = (inv.n > 0) ? &inv : NULL;
+    /* defer-skipped-on-panic-in-cps-function: the loop helper is a callee of
+     * the chain; the frame that continues the loop carries the fires. */
+    int loop_pend_saved = g_n_pend;
+    bool loop_k_ok_saved = g_pend_k_ok;
+    g_n_pend = 0;
+    g_pend_k_ok = true;   /* the helper holds its chain in `__kont` */
     emit_binder_decls(&hc, t->as.loop.body);
     emit_term(&hc, t->as.loop.body);
+    g_n_pend = loop_pend_saved;
+    g_pend_k_ok = loop_k_ok_saved;
     g_loop_inv = saved_inv;
     buf_putc(&tmp, '\0');
 
@@ -10639,6 +10914,7 @@ static void emit_reset(CE *ce, const CTerm *t) {
     char *rxn = cvar_cname(ce, t->as.reset.x);
     emit_lifted(ce, hname, LH_RESUME_CONT, rxn, t->as.reset.x.ty, t->as.reset.x.type,
                 t->as.reset.body, NULL, caps);
+    char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
     free(rxn);
 
     char *envexpr = emit_cont_env(ce, hname, caps);   /* caps-only env */
@@ -10659,15 +10935,20 @@ static void emit_reset(CE *ce, const CTerm *t) {
      * freed here; register it for reaping at the outermost entry boundary
      * (docs/archive/cps-delimited-dk-node-leak.md) -- borrow_next keeps that
      * dk_free out of the enclosing chain. */
-    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, dk_frame_resume_borrow(%s, %s, %s)));",
-            pchain, hname, envexpr, ce->cur_k);
+    ce_line(ce, "DK *%s = __dk_reap_keep(dk_prompt(1, %sdk_frame_resume_borrow(%s, %s, %s)%s));",
+            pchain, uw, hname, envexpr, ce->cur_k, uwc);
     free(envexpr);
 
     const char *save = ce->cur_k;
     const Type *save_ty = ce->cur_ty;
     ce->cur_k = arena_strdup(&g_arena, pchain, strlen(pchain));
     ce->cur_ty = t->as.reset.x.type;    /* KK_PROMPT crossing type = reset result */
+    /* defer-skipped-on-panic-in-cps-function: the reset continuation frame
+     * exists from here on and owns the fires in reset.body. */
+    uint64_t down_saved = g_pend_downstream;
+    g_pend_downstream |= term_pops_mask(t->as.reset.body);
     emit_term(ce, t->as.reset.delim);   /* delivers to the prompt chain, tail */
+    g_pend_downstream = down_saved;
     ce->cur_k = save;
     ce->cur_ty = save_ty;
 }
@@ -11276,6 +11557,7 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
     const CapSet *caps = (caps_ok && cs.n > 0) ? &cs : NULL;
     emit_lifted(ce, jname, LH_RESUME_CONT, xn, t->as.cloneable.x.ty,
                 t->as.cloneable.x.type, t->as.cloneable.body, NULL, caps);
+    char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
     free(xn);
     /* serial-cont-chain-never-freed: the receiver owns `kchain`; when it
      * keeps nothing of it (serial_recv_confines_k) the chain is dead once the
@@ -11307,21 +11589,21 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
                           ? emit_param_ctype(ce->ctx, (FnDef *)lfd, 0) : NULL;
         if (envty)
             ce_line(ce, "return %s__cps((%s)(intptr_t)(%s), (%s)(intptr_t)%s,"
-                        " __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                        " %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s);"
                         " /* serial reset: outward closure receiver */",
-                    thunk, envty, fval, kty, kchain, jname, envexpr, ce->cur_k);
+                    thunk, envty, fval, kty, kchain, uw, jname, envexpr, ce->cur_k, uwc);
         else
             ce_line(ce, "return %s__cps((%s)(intptr_t)%s,"
-                        " __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+                        " %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s);"
                         " /* serial reset: outward closure receiver */",
-                    thunk, kty, kchain, jname, envexpr, ce->cur_k);
+                    thunk, kty, kchain, uw, jname, envexpr, ce->cur_k, uwc);
         free(thunk);
         free(fval);
     } else {
         char *fn = callee_name(t->as.cloneable.receiver);
-        ce_line(ce, "return %s__cps((%s)(intptr_t)%s, __dk_reap_node(dk_frame_resume(%s, %s, %s)));"
+        ce_line(ce, "return %s__cps((%s)(intptr_t)%s, %s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s);"
                     " /* serial reset: outward receiver */",
-                fn, kty, kchain, jname, envexpr, ce->cur_k);
+                fn, kty, kchain, uw, jname, envexpr, ce->cur_k, uwc);
         free(fn);
     }
     free(envexpr);
@@ -11339,9 +11621,9 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
         char *sv = slot_store_reap(ce->ctx, t->as.cloneable.x.ty,
                                    t->as.cloneable.x.type, pv);
         char *env2 = emit_cont_env(ce, jname, caps);
-        ce_line(ce, "return dk_run(__dk_reap_node(dk_frame_resume(%s, %s, %s)), %s);"
+        ce_line(ce, "return dk_run(%s__dk_reap_node(dk_frame_resume(%s, %s, %s))%s, %s);"
                     " /* serial reset: pure arm into the outward rest */",
-                jname, env2, ce->cur_k, sv);
+                uw, jname, env2, ce->cur_k, uwc, sv);
         free(env2);
         free(sv);
         free(pv);
@@ -11981,6 +12263,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
     g_lh_join_release = true;
     emit_lifted(ce, kname, LH_RESUME_CONT, hxn, t->as.handle.x.ty, t->as.handle.x.type,
                 t->as.handle.body, NULL, caps);
+    char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
     g_lh_join_release = false;
     free(hxn);
     char *hkenv = emit_cont_env(ce, kname, caps);   /* caps-only env */
@@ -11997,15 +12280,18 @@ static void emit_handle(CE *ce, const CTerm *t) {
         char *tblv = atom_str(ce, &t->as.handle.dyn_table);
         ce_line(ce, "DK *%s = __dk_reap_keep(dk_hgroup_from_table("
                     "(const tur_handler_table_t *)(intptr_t)%s, "
-                    "dk_frame_resume_borrow(%s, %s, %s)));",
-                hchain_d, tblv, kname, hkenv, ce->cur_k);
+                    "%sdk_frame_resume_borrow(%s, %s, %s)%s));",
+                hchain_d, tblv, uw, kname, hkenv, ce->cur_k, uwc);
         free(tblv);
         free(hkenv);
         const char *save_d = ce->cur_k;
         const Type *save_ty_d = ce->cur_ty;
         ce->cur_k = arena_strdup(&g_arena, hchain_d, strlen(hchain_d));
         ce->cur_ty = t->as.handle.x.type;
+        uint64_t down_saved_d = g_pend_downstream;
+        g_pend_downstream |= term_pops_mask(t->as.handle.body);
         emit_term(ce, t->as.handle.delim);
+        g_pend_downstream = down_saved_d;
         ce->cur_k = save_d;
         ce->cur_ty = save_ty_d;
         return;
@@ -12064,7 +12350,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
     /* fn-value-call-cps-frames-held-until-outer-entry, effect half: the
      * group's end, so the group is handed back when the original runs
      * (__dk_group_release). */
-    buf_printf(&chain, "dk_frame_resume_group_end(%s, %s, %s)", kname, hkenv, ce->cur_k);
+    buf_printf(&chain, "%sdk_frame_resume_group_end(%s, %s, %s)%s", uw, kname, hkenv, ce->cur_k, uwc);
     for (int ci = (int)nc - 1; ci >= 0; ci--) {
         int tag = effect_tag(t->as.handle.cases[ci].effect);
         /* E7: a deep case that reduces to a TAIL resume installs with
@@ -12112,7 +12398,12 @@ static void emit_handle(CE *ce, const CTerm *t) {
     const Type *save_ty = ce->cur_ty;
     ce->cur_k = arena_strdup(&g_arena, hchain, strlen(hchain));
     ce->cur_ty = t->as.handle.x.type;    /* KK_PROMPT crossing type = handle result */
+    /* defer-skipped-on-panic-in-cps-function: the handle continuation frame
+     * (the group's end) exists from here on and owns the fires in handle.body. */
+    uint64_t down_saved = g_pend_downstream;
+    g_pend_downstream |= term_pops_mask(t->as.handle.body);
     emit_term(ce, t->as.handle.delim);   /* body runs threading the handler prompt */
+    g_pend_downstream = down_saved;
     ce->cur_k = save;
     ce->cur_ty = save_ty;
 }
@@ -12188,6 +12479,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
         g_lh_join_release = true;
         emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
                     t->as.perform.body, NULL, caps);
+        char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
         g_lh_join_release = false;
         free(pxn);
         if (caps) {
@@ -12217,11 +12509,11 @@ static void emit_perform(CE *ce, const CTerm *t) {
              * boundary (__dk_reap_node: kind=0, a bare free that does not walk into
              * cur_k) -- reached on both the normal-return and the tail-resume-yield
              * paths -- exactly like the Track-B resume-frame sibling below. */
-            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_env_sized(dk_frame_join(%s, (intptr_t)%s, %s), sizeof(%s_env))));",
-                    tag, sa, pname, envv, ce->cur_k, pname);
+            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_env_sized(dk_frame_join(%s, (intptr_t)%s, %s), sizeof(%s_env)))%s);",
+                    tag, sa, uw, pname, envv, ce->cur_k, pname, uwc);
         } else {
-            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_join(%s, 0, %s)));",
-                    tag, sa, pname, ce->cur_k);
+            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_frame_join(%s, 0, %s))%s);",
+                    tag, sa, uw, pname, ce->cur_k, uwc);
         }
     } else {
         /* Track A: the continuation contains a NESTED control op (a further
@@ -12246,6 +12538,7 @@ static void emit_perform(CE *ce, const CTerm *t) {
         g_lh_resume_k = ce->cps_resume_k;
         emit_lifted(ce, pname, LH_RESUME_CONT, pxn, t->as.perform.x.ty, t->as.perform.x.type,
                     t->as.perform.body, NULL, caps);
+        char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
         g_lh_join_release = false;
         free(pxn);
         char *envexpr = emit_cont_env(ce, pname, caps);   /* caps-only env */
@@ -12260,11 +12553,11 @@ static void emit_perform(CE *ce, const CTerm *t) {
          * structural-node reaping discipline (docs/archive/cps-resume-frame-node-leak.md,
          * docs/archive/cps-delimited-dk-node-leak.md). */
         if (caps)
-            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env))));",
-                    tag, sa, pname, envexpr, ce->cur_k, pname);
+            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_env_sized(dk_frame_resume_join(%s, %s, %s), sizeof(%s_env)))%s);",
+                    tag, sa, uw, pname, envexpr, ce->cur_k, pname, uwc);
         else
-            ce_line(ce, "return dk_perform(%d, %s, __dk_reap_node(dk_frame_resume_join(%s, %s, %s)));",
-                    tag, sa, pname, envexpr, ce->cur_k);
+            ce_line(ce, "return dk_perform(%d, %s, %s__dk_reap_node(dk_frame_resume_join(%s, %s, %s))%s);",
+                    tag, sa, uw, pname, envexpr, ce->cur_k, uwc);
         free(envexpr);
     }
     free(sa);
@@ -12339,6 +12632,7 @@ static void emit_await(CE *ce, const CTerm *t) {
         g_lh_join_release = true;
         emit_lifted(ce, pname, LH_PERFORM_CONT, pxn, t->as.await.x.ty, t->as.await.x.type,
                     t->as.await.body, NULL, caps);
+        char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
         g_lh_join_release = false;
         free(pxn);
         /* Ready is asked before the env is registered, so a scheduler drain
@@ -12361,15 +12655,15 @@ static void emit_await(CE *ce, const CTerm *t) {
         ce_line(ce, "if (__awok) {");
         ce_line(ce, "    intptr_t __awr = %s((intptr_t)%s, __tur_await_value((void *)(%s)));",
                 pname, envv, fsa);
-        ce_line(ce, "    if (tur_panicking) return 0;");
+        ce_line(ce, "    if (tur_panicking) { __dk_panic_abandon(%s); return 0; }", ce->cur_k);
         ce_line(ce, "    return dk_run(%s, __awr);", ce->cur_k);
         ce_line(ce, "}");
         if (caps)
-            ce_line(ce, "DK *__awf = __dk_reap_node(dk_env_sized(dk_frame(%s, (intptr_t)%s, %s), sizeof(%s_env)));",
-                    pname, envv, ce->cur_k, pname);
+            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_env_sized(dk_frame(%s, (intptr_t)%s, %s), sizeof(%s_env)))%s;",
+                    uw, pname, envv, ce->cur_k, pname, uwc);
         else
-            ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame(%s, (intptr_t)%s, %s));",
-                    pname, envv, ce->cur_k);
+            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_frame(%s, (intptr_t)%s, %s))%s;",
+                    uw, pname, envv, ce->cur_k, uwc);
         ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
                 fsa);
         ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
@@ -12402,6 +12696,7 @@ static void emit_await(CE *ce, const CTerm *t) {
         g_lh_join_release = true;
         emit_lifted(ce, aname, LH_RESUME_CONT, axn, t->as.await.x.ty, t->as.await.x.type,
                     t->as.await.body, NULL, caps);
+        char uw[48], uwc[360]; unw_take(uw, sizeof uw, uwc, sizeof uwc);
         g_lh_join_release = false;
         free(axn);
         ce_line(ce, "int __awok = __tur_await_ready((void *)(%s));", fsa);
@@ -12409,11 +12704,11 @@ static void emit_await(CE *ce, const CTerm *t) {
         ce_line(ce, "if (__awok) return %s(%s, __tur_await_value((void *)(%s)), %s);",
                 aname, envexpr, fsa, ce->cur_k);
         if (caps)
-            ce_line(ce, "DK *__awf = __dk_reap_node(dk_env_sized(dk_frame_resume_borrow(%s, %s, %s), sizeof(%s_env)));",
-                    aname, envexpr, ce->cur_k, aname);
+            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_env_sized(dk_frame_resume_borrow(%s, %s, %s), sizeof(%s_env)))%s;",
+                    uw, aname, envexpr, ce->cur_k, aname, uwc);
         else
-            ce_line(ce, "DK *__awf = __dk_reap_node(dk_frame_resume_borrow(%s, %s, %s));",
-                    aname, envexpr, ce->cur_k);
+            ce_line(ce, "DK *__awf = %s__dk_reap_node(dk_frame_resume_borrow(%s, %s, %s))%s;",
+                    uw, aname, envexpr, ce->cur_k, uwc);
         ce_line(ce, "DK *__aws = __dk_reap_node(dk_shift(DK_ROOT_TAG, __tur_await_body, (intptr_t)%s, __awf));",
                 fsa);
         ce_line(ce, "intptr_t __awq = dk_run(__aws, 0);");
@@ -13056,7 +13351,27 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
      * that runs after this frame has returned. */
     int prev = ctx ? ctx->in_cps_fn : 0;
     if (ctx) ctx->in_cps_fn = prev + 1;
+    /* defer-skipped-on-panic-in-cps-function: the panic-return hook, and a
+     * fresh pending-defer stack for this render -- a colored closure lifted
+     * while an enclosing body has defers pending is its own function and owes
+     * none of them. */
+    g_cps_panic_fire = cps_pend_hook_fire;
+    g_cps_panic_fire_pending = cps_pend_hook_pending;
+    const Expr *pend_saved[PD_MAX];
+    int pend_saved_n = g_n_pend;
+    uint64_t pend_saved_mask = g_pend_unfirable;
+    uint64_t pend_saved_down = g_pend_downstream;
+    Buf *pend_saved_out = g_pend_out;
+    const char *pend_saved_k = g_pend_k;
+    bool pend_saved_k_ok = g_pend_k_ok;
+    memcpy(pend_saved, g_pend, sizeof(const Expr *) * (size_t)g_n_pend);
+    g_n_pend = 0; g_pend_unfirable = 0; g_pend_downstream = 0;
+    g_pend_k_ok = true;   /* a `__cps` body holds its chain in `__kont` */
     bool r = emit_cps_ir_try_fn_impl(ctx, file, e);
+    g_n_pend = pend_saved_n; g_pend_unfirable = pend_saved_mask;
+    g_pend_downstream = pend_saved_down; g_pend_out = pend_saved_out;
+    g_pend_k = pend_saved_k; g_pend_k_ok = pend_saved_k_ok;
+    memcpy(g_pend, pend_saved, sizeof(const Expr *) * (size_t)pend_saved_n);
     if (ctx) ctx->in_cps_fn = prev;
     return r;
 }

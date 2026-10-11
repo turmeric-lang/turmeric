@@ -2148,6 +2148,7 @@ struct DK {
     bool group_end;
     DKResumeFrame rfn; DKEnvClone env_clone; DKEnvDrop env_drop; DK *next;
     bool borrow_next;  /* ->next is borrowed (another chain owns it): dk_free stops here */
+    void (*unwind)(intptr_t env);
     bool case_delivers;  /* case fn delivers through the chain itself: dk_perform returns its result as-is */
     bool resume_into;    /* case resumes `k` only into the chain: sub needs no markers */
     bool tail_resume;  /* E7: this handler tail-resumes -> dk_perform yields to driver */
@@ -2193,6 +2194,13 @@ static DK *dk_frame_join(DKFrame fn, intptr_t env, DK *next) {
 __attribute__((unused))
 static DK *dk_frame_resume_join(DKResumeFrame fn, intptr_t env, DK *next) {
     DK *k = dk_frame_resume(fn, env, next); k->join_once = true; return k;
+}
+__attribute__((unused)) static DK *__dk_with_unwind(DK *k, void (*u)(intptr_t)) { k->unwind = u; return k; }
+__attribute__((unused)) static void __dk_panic_abandon(DK *k) {
+    for (; k; k = k->next) {
+        if (k->unwind) { void (*u)(intptr_t) = k->unwind; k->unwind = NULL; u(k->env); }
+        if (k->kind == DKK_DONE) break;
+    }
 }
 /* A handle-continuation resume-frame whose `next` is the ACTUAL enclosing
  * chain, borrowed.  The one spine then serves every consumer: dk_perform's
@@ -2676,12 +2684,14 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
              * program past the panic and must not run.  Its nodes are reap-owned. */
             case DKK_FRAME: {
                 DK *self = k; intptr_t senv = k->env;
-                v = k->fn(k->env, v); if (tur_panicking) return 0; k = k->next;
+                k->unwind = NULL;   /* a run frame fires its own pending defers */
+                v = k->fn(k->env, v); if (tur_panicking) { __dk_panic_abandon(k->next); return 0; } k = k->next;
                 /* The fn is done with its env, so it can follow the node. */
                 if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);
                 break;
             }
             case DKK_RESUME_FRAME:
+                k->unwind = NULL;
                 if (k->join_once) {
                     DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
                     if (__dk_join_release_node(k)) return rf(renv, v, rest);
@@ -2704,7 +2714,8 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                 sub = dk_append(sub, tail);
                 intptr_t bodyval = k->body(k->body_env, sub);
                 dk_free(sub);
-                if (to_root || tur_panicking) return bodyval;
+                if (tur_panicking) { __dk_panic_abandon(k->next); return bodyval; }
+                if (to_root) return bodyval;
                 k = P->next; v = bodyval; break;
             }
         }
@@ -2849,12 +2860,16 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     if (H->tail_inplace && H->tail_resume && !H->shallow && g_dk_driver) {
         k->inplace_head = true;
         g_dk_case_reopen_hnode = H;
-        return H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */
+        { intptr_t r0 = H->handler(H->handler_env, arg, k);  /* ends in dk_tail_resume -> longjmp */
+          if (tur_panicking) __dk_panic_abandon(k);
+          return r0; }
     }
     if (H->tail_resume && !H->shallow && g_dk_driver) {
         DK *sub = dk_copy_range(k, NULL);
         g_dk_case_reopen_hnode = H;  /* re-opening: case reads its enclosing markers */
-        return H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
+        { intptr_t r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */
+          if (tur_panicking) __dk_panic_abandon(k);
+          return r0; }
     }
     DK *sub = dk_copy_range(k, H);
     DK *tail, *encl;
@@ -2906,6 +2921,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * (__dk_group_release). */
     bool H_delivers = H->case_delivers; DK *H_next = H->next;
     intptr_t r = H->handler(H->handler_env, arg, sub);
+    if (tur_panicking) { __dk_panic_abandon(k); return r; }   /* the case panicked: the perform's chain never runs */
     return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
 /* Phase T21: FiberBlock */
@@ -8131,25 +8147,46 @@ static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, i
     bool __t2;
 __tur_cps_self:;
     bool __ps_121 = (hamt_sliter_hyadvance_ex((void *)(intptr_t)(iter)));
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     __t0 = __ps_121;
     if (__t0) {
         int64_t __ps_122 = (hamt_sliter_hycur_hyhash((void *)(intptr_t)(iter)));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         h_1001051 = __ps_122;
         void * __ps_123 = (hamt_sliter_hycur_hykey((void *)(intptr_t)(iter)));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         k_1001052 = __ps_123;
         bool __ps_124 = (hamt_slhas_hydynamic_qu((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t1 = __ps_124;
         if (__t1) {
             int64_t __ps_125 = (map_hyiter_hycur_hyval_hyas((void *)(intptr_t)(iter)));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             int64_t __ps_126 = (map_hyget_hydynamic_hyas((void *)(intptr_t)(m2_hamt), h_1001051, (void *)(intptr_t)(k_1001052), (void *)(intptr_t)(keyeq)));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             bool __ps_127 = (((bool)((int64_t (*)(void*, int64_t, int64_t))(intptr_t)((int64_t *)((void *)(intptr_t)(val_cmp)))[0])((void *)(intptr_t)(val_cmp), __ps_125, __ps_126)));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             __t2 = __ps_127;
             if (__t2) {
                 {   /* cps->cps self tail call: a backedge */
@@ -8487,10 +8524,16 @@ static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
     int64_t __t5;
     if (__t3) {
         int64_t __ps_150 = (list_hytail(l1));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t4 = __ps_150;
         int64_t __ps_151 = (list_hytail(l2));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t5 = __ps_151;
         return list_hyeq_qu__cps(__t4, __t5, (int64_t)(intptr_t)cmp_fn, __kont); /* cps->cps */
     } else {
@@ -8504,25 +8547,40 @@ static int64_t list_hyeq_qu__cps(int64_t l1, int64_t l2, int64_t cmp_fn, DK *__k
     int64_t __t6;
     int64_t __t7;
     bool __ps_145 = (null_qu(l1));
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     __t0 = __ps_145;
     if (__t0) {
         bool __ps_146 = (null_qu(l2));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t1 = __ps_146;
         return dk_run(__kont, (intptr_t)(__t1));
     } else {
         bool __ps_147 = (null_qu(l2));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t2 = __ps_147;
         if (__t2) {
             return dk_run(__kont, (intptr_t)(false));
         } else {
             int64_t __ps_148 = (list_hyhead(l1));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             __t6 = __ps_148;
             int64_t __ps_149 = (list_hyhead(l2));
-            if (tur_panicking) return ((int64_t)0);
+            if (tur_panicking) {
+                __dk_panic_abandon(__kont);
+                return ((int64_t)0);
+            }
             __t7 = __ps_149;
             list_hyeq_qu_j0_env *__ce_list_hyeq_qu_j0 = (list_hyeq_qu_j0_env *)malloc(sizeof(list_hyeq_qu_j0_env));
             __ce_list_hyeq_qu_j0->f0 = l1;
@@ -8601,7 +8659,10 @@ static intptr_t _un_uncons_hyfmap_j0(intptr_t env, intptr_t __t2__slot, DK *__ko
     int64_t __t2 = (int64_t)(__t2__slot);
     int64_t out_1001357;
     out_1001357 = (int64_t)(intptr_t)tcons__spec__tur_adt_Cons__int___int64_t_int64_t(__t1, __t2); /* cps->direct */
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     return dk_run(__kont, (intptr_t)(out_1001357));
 }
 static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
@@ -8609,18 +8670,30 @@ static int64_t _un_uncons_hyfmap__cps(int64_t cell, void * f, DK *__kont) {
     int64_t __t1;
     int64_t __t3;
     bool __ps_161 = (null_qu(cell));
-    if (tur_panicking) return ((int64_t)0);
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
     __t0 = __ps_161;
     if (__t0) {
         return dk_run(__kont, (intptr_t)(INT64_C(0)));
     } else {
         int64_t __ps_162 = (list_hyhead(cell));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         int64_t __ps_163 = ((*( tur_thunk_int64_t_int64_t_t *)(f))(f, __ps_162));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t1 = __ps_163;
         int64_t __ps_164 = (list_hytail(cell));
-        if (tur_panicking) return ((int64_t)0);
+        if (tur_panicking) {
+            __dk_panic_abandon(__kont);
+            return ((int64_t)0);
+        }
         __t3 = __ps_164;
         _un_uncons_hyfmap_j0_env *__ce__un_uncons_hyfmap_j0 = (_un_uncons_hyfmap_j0_env *)malloc(sizeof(_un_uncons_hyfmap_j0_env));
         __ce__un_uncons_hyfmap_j0->f0 = __t1;
@@ -10438,7 +10511,7 @@ static int64_t bt_hyscope(int64_t body) {
             tur_frame_push_defer(&__frame_217, __defer_219, &__t220);
             int64_t __t221;
             int64_t __ps_222 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
-            if (tur_panicking) { tur_frame_fire_lifo(&__frame_217); return ((int64_t)0); }
+            if (tur_panicking) { tur_panicking = 0; tur_frame_fire_lifo(&__frame_217); tur_panicking = 1; return ((int64_t)0); }
             __t221 = __ps_222;
             tur_frame_fire_lifo(&__frame_217);
             __t215 = __t221;
@@ -10453,7 +10526,7 @@ static int64_t with_hyuntrailed(int64_t body) {
         tur_frame_push_defer(&__frame_223, __defer_224, NULL);
         int64_t __t225;
         int64_t __ps_226 = (((int64_t (*)(void*))(intptr_t)((int64_t *)((void *)(intptr_t)(body)))[0])((void *)(intptr_t)(body)));
-        if (tur_panicking) { tur_frame_fire_lifo(&__frame_223); return ((int64_t)0); }
+        if (tur_panicking) { tur_panicking = 0; tur_frame_fire_lifo(&__frame_223); tur_panicking = 1; return ((int64_t)0); }
         __t225 = __ps_226;
         tur_frame_fire_lifo(&__frame_223);
         return __t225;

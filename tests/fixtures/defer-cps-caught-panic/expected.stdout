@@ -1,0 +1,26 @@
+direct: defer ran
+  ...and the rest of cleanup
+direct: caught
+cps-order: third declared, after the panic point
+cps-order: second declared, fires first
+cps-order: first declared, fires last
+cps-order: no panic
+cps-after-perform: defer ran
+  ...and the rest of cleanup
+cps-after-perform: caught
+cps-before-perform: defer ran
+cps-before-perform: caught
+cps-handler-panics: defer ran
+cps-handler-panics: caught
+cps-colored-callee: defer ran
+cps-colored-callee: caught
+cps-order: second declared, fires first
+cps-order: first declared, fires last
+cps-order: caught
+cps-captured: defer ran with its tag
+cps-captured: caught
+cps-no-panic: defer ran
+cps-no-panic: no panic
+cps-no-panic: defer ran
+cps-resumed-then-panic: caught
+cps-abort-then-panic: caught

@@ -364,3 +364,27 @@ Two small residues stay with the pin, each conservative rather than wrong:
 The images are unchanged: a continuation that may outlive its `call/cc`
 still keeps its (delta) image, and only a traced or counted continuation
 could free it.
+
+## 2026-10-11: re-measured; nothing cheaper is left
+
+Looked at again after the capture epoch. Debug/ASan `tur --interpret`,
+`quarantine_size_mb=0`, a loop that stores every continuation
+(`(call/cc (lambda (k) (set! saved k) 1))`) against the same loop with a
+plain lambda call in its place, and the escape-only form
+(`(call/cc (lambda (k) (k 1)))`, lowered to the one-shot escape):
+
+| iterations | control | stored continuation | escape-only |
+| --- | --- | --- | --- |
+| 10,000 | 100 MB | 128 MB | 109 MB |
+| 100,000 | 100 MB | 380 MB | -- |
+
+The control is flat: with the epoch, a program that never captures hands
+every frame back. A stored re-entrant continuation costs about 2.8 KB a
+capture, linear in the count, and that is exactly the residue the 2026-09-28
+and 2026-10-09 sections name: the delta image, the `R7kCont`, and the frame
+that was live at the capture -- which the stored `k` can legitimately
+complete, so no scope-based rule can free it. Freeing any of it needs to
+know the continuation procedure is dead, and interpreter closures are neither
+traced nor counted; there is no narrower rule to add. The row stays open
+on that one direction ("Reclaim images") and is not a candidate for a quick
+fix.

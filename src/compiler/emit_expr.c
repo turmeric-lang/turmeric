@@ -6286,6 +6286,12 @@ static bool spec_abi_spells_ctype(EmitCtx *ctx, const char *cty) {
 
 /* Emit the propagation check that returns a zero of the enclosing function's C
  * return type when a panic signal is pending (panic-return-signal, always-on). */
+/* defer-skipped-on-panic-in-cps-function: the CPS emitter's hook into the
+ * panic-signal return (declared in emit_internal.h; both NULL outside a CPS
+ * body render). */
+void (*g_cps_panic_fire)(EmitCtx *ctx, Buf *body) = NULL;
+bool (*g_cps_panic_fire_pending)(Buf *body) = NULL;
+
 void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     const char *rt = ctx->current_fn_ret_ctype;
     /* BR3b: inside the stackless trampoline a fallible reader call routes its
@@ -6320,13 +6326,57 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body) {
     const char *fire_pre = "", *fire_post = "";
     char fire_buf[1024];
     if (ctx->frame_var) {
-        size_t off = (size_t)snprintf(fire_buf, sizeof(fire_buf), "{ ");
+        /* defer-skipped-on-panic-in-cps-function (direct half): the deferred
+         * bodies run with the panic signal CLEARED.  They fire while
+         * `tur_panicking` is 1, and a body that calls a Turmeric function met
+         * that function's own per-call-site check right after its first call
+         * -- `(defer (cleanup))` ran only cleanup's first statement.  The
+         * signal is raised again once they have run; `tur_panic_in_progress`
+         * stays set throughout, so a defer body that panics is the double
+         * panic it always was. */
+        size_t off = (size_t)snprintf(fire_buf, sizeof(fire_buf), "{ tur_panicking = 0; ");
         for (const char *f = ctx->frame_var; f && off < sizeof(fire_buf) - 64;
              f = emit_frame_parent(f))
             off += (size_t)snprintf(fire_buf + off, sizeof(fire_buf) - off,
                                     "tur_frame_fire_lifo(&%s); ", f);
+        off += (size_t)snprintf(fire_buf + off, sizeof(fire_buf) - off, "tur_panicking = 1; ");
         fire_pre = fire_buf;
         fire_post = " }";
+    }
+    /* defer-skipped-on-panic-in-cps-function (CPS half): inside a `__cps` body
+     * the pending defers are not a frame but the CPS emitter's pending stack;
+     * it installs this hook while it renders one, and the hook writes the
+     * fires (and the same signal clear / raise) ahead of the return. */
+    if (rt && g_cps_panic_fire && g_cps_panic_fire_pending && g_cps_panic_fire_pending(body)) {
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "if (tur_panicking) {\n");
+        ctx->indent += 4;
+        /* This function's own frames first (a whole-body delegation keeps the
+         * direct emitter's tur_frame inside a `__cps` body): innermost scope,
+         * before the pending stack and the chain walk the hook writes. */
+        if (ctx->frame_var) {
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "tur_panicking = 0;\n");
+            for (const char *f = ctx->frame_var; f; f = emit_frame_parent(f)) {
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_frame_fire_lifo(&%s);\n", f);
+            }
+            indent_buf(body, ctx->indent);
+            buf_puts(body, "tur_panicking = 1;\n");
+        }
+        g_cps_panic_fire(ctx, body);
+        indent_buf(body, ctx->indent);
+        if (rt && strcmp(rt, "void") == 0) {
+            buf_puts(body, "return;\n");
+        } else {
+            char *rzero = rt ? emit_c_zero_of(rt) : NULL;
+            buf_printf(body, "return %s;\n", rzero ? rzero : "0");
+            free(rzero);
+        }
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "}\n");
+        return;
     }
     indent_buf(body, ctx->indent);
     if (rt && strcmp(rt, "void") == 0) {
