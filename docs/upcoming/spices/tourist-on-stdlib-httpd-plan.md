@@ -1,6 +1,14 @@
 # Plan: tourist on stdlib httpd, and the Express-shaped middleware set
 
-> Status: proposed (2026-10-04). Nothing landed.
+> Status: implemented (2026-10-10), on branch
+> `claude/tourist-stdlib-httpd-plan-vwqnhc` in both repos, not yet merged.
+> H0 skipped (optional); H1-H5 done. Deviations: spices/httpd's
+> `:tur-version` floor is a comment (dev builds report v0.64.0, which would
+> refuse); `serve-static!` gained stdlib's dotfile refusal along with ETag/304;
+> `set-cookie!` returns nothing (an empty name queues nothing); per-route
+> checks use a `guarded` combinator, since sub-apps take no `use!`; tourist's
+> `router-free` is `pattern-free` (a compiler name clash, see
+> `docs/reported/module-export-and-loaded-global-share-c-name.md`).
 > Scope: turmeric `stdlib/httpd.tur` (connection upgrade, new middleware);
 > `spices/httpd/` (becomes a typed layer over stdlib httpd);
 > `spices/tourist/` and `spices/tourist-session/` (move onto it).

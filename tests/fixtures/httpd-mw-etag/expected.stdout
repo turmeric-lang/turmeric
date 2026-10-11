@@ -1,0 +1,16 @@
+GET: status=200 etag=W/"<len>-<hash>" content-length=5 body=[hello]
+match: status=304 etag=W/"<len>-<hash>" content-length=(absent) body=[]
+match in list: status=304 etag=W/"<len>-<hash>" content-length=(absent) body=[]
+match without W/: status=304 etag=W/"<len>-<hash>" content-length=(absent) body=[]
+star: status=304 etag=W/"<len>-<hash>" content-length=(absent) body=[]
+other: status=200 etag=W/"<len>-<hash>" content-length=5 body=[hello]
+HEAD: status=200 etag=W/"<len>-<hash>" content-length=5 body=[]
+POST: status=200 etag=(absent) content-length=5 body=[hello]
+own match: status=304 etag="v1" content-length=(absent) body=[]
+own other: status=200 etag="v1" content-length=9 body=[versioned]
+-- bodiless statuses, no mw-etag
+204: status=204 etag=(absent) content-length=(absent) body=[]
+304: status=304 etag=(absent) content-length=(absent) body=[]
+pipelined after /nc: first=204 second=200 second-body=[fine]
+pipelined after /nm: first=304 second=200 second-body=[fine]
+done

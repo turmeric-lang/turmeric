@@ -1,0 +1,21 @@
+wildcard+credentials: refused
+listed+credentials: accepted
+allowed: status=200
+  Access-Control-Allow-Origin=https://b.example
+  Access-Control-Allow-Credentials=true
+  Vary=Accept-Encoding, Origin
+  Access-Control-Allow-Methods=(absent)
+  Access-Control-Max-Age=(absent)
+other: status=200
+  Access-Control-Allow-Origin=(absent)
+  Access-Control-Allow-Credentials=(absent)
+  Vary=Accept-Encoding, Origin
+  Access-Control-Allow-Methods=(absent)
+  Access-Control-Max-Age=(absent)
+preflight: status=204
+  Access-Control-Allow-Origin=https://a.example
+  Access-Control-Allow-Credentials=true
+  Vary=Origin
+  Access-Control-Allow-Methods=GET, POST
+  Access-Control-Max-Age=600
+done

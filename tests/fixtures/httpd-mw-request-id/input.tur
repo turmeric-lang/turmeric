@@ -1,0 +1,248 @@
+;; httpd-mw-request-id -- mw-request-id, httpd-req-id, and the mw-log-to sink
+;; (tourist-on-stdlib-httpd-plan H4).
+;;
+;;   1. A well-formed incoming X-Request-Id is kept: echoed on the response
+;;      and visible to the handler through httpd-req-id.
+;;   2. A malformed one (a space and a quote) and a 1 KiB one are replaced by
+;;      a fresh 32-hex-digit id, as is a missing one; two fresh ids differ.
+;;   3. Without mw-request-id, httpd-req-id is none and no header is sent.
+;;   4. mw-log-to hands each request's log line to a closure; with
+;;      mw-request-id outside it, the line ends in ` rid=<id>`.
+
+(load "stdlib/httpd.tur")
+
+;; --- raw HTTP client helpers (one request per connection) -------------------
+
+;; Send `req` (which carries Connection: close) and return everything the
+;; server wrote until it closed; free with raw-release.
+(defn raw-send [port : int req : cstr] : cstr
+  ```c
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  size_t cap = 8192, got = 0;
+  char *buf = (char *)malloc(cap);
+  buf[0] = '\0';
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return buf;
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return buf; }
+  size_t rl = strlen(req), sent = 0;
+  while (sent < rl) {
+      ssize_t w = send(fd, req + sent, rl - sent, 0);
+      if (w <= 0) break;
+      sent += (size_t)w;
+  }
+  for (;;) {
+      if (got + 1 >= cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+      ssize_t n = recv(fd, buf + got, cap - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  close(fd);
+  return buf;
+  ```)
+
+(defn raw-release [r : cstr] : nil
+  ```c free((void *)r); ```)
+
+;; The status code of a raw response (0 when there was none).
+(defn raw-status [r : cstr] : int
+  ```c return strlen(r) > 12 ? (int64_t)atoi(r + 9) : 0; ```)
+
+;; Every value of header `name` in the head of `r`, joined with " | ", or
+;; "(absent)".  The string lives until the next call.
+(defn raw-header [r : cstr name : cstr] : cstr
+  ```c
+  static char out[4096];
+  size_t o = 0;
+  out[0] = '\0';
+  const char *end = strstr(r, "\r\n\r\n");
+  if (!end) end = r + strlen(r);
+  size_t nl = strlen(name);
+  const char *p = strstr(r, "\r\n");
+  while (p && p < end) {
+      const char *line = p + 2;
+      const char *eol = strstr(line, "\r\n");
+      if (!eol || line >= end) break;
+      if ((size_t)(eol - line) > nl && strncasecmp(line, name, nl) == 0 && line[nl] == ':') {
+          const char *v = line + nl + 1;
+          while (*v == ' ') v++;
+          o += (size_t)snprintf(out + o, sizeof out - o, "%s%.*s", o ? " | " : "", (int)(eol - v), v);
+      }
+      p = eol;
+  }
+  return o ? out : "(absent)";
+  ```)
+
+;; The bytes after the head.
+(defn raw-body [r : cstr] : cstr
+  ```c
+  const char *b = strstr(r, "\r\n\r\n");
+  return b ? b + 4 : "";
+  ```)
+
+;; `METHOD path HTTP/1.1`, Host, the `extra` header lines (each ending in
+;; \r\n), Connection: close, and `body` with its Content-Length when it is
+;; not empty.  Returns what raw-send does.
+(defn raw-request [port : int method : cstr path : cstr extra : cstr body : cstr] : cstr
+  ```c
+  size_t bl = strlen(body);
+  size_t cap = strlen(method) + strlen(path) + strlen(extra) + bl + 160;
+  char *req = (char *)malloc(cap);
+  if (bl)
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+               method, path, extra, bl, body);
+  else
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sConnection: close\r\n\r\n", method, path, extra);
+  char *r = (char *)raw_hysend(port, req);
+  free(req);
+  return r;
+  ```)
+
+;; Print `label status=N`.
+(defn show-status [label : cstr r : cstr] : nil
+  ```c printf("%s status=%d\n", label, (int)raw_hystatus(r)); fflush(stdout); ```)
+
+;; Print `  name=value` for a response header (every value, or "(absent)").
+(defn show-header [r : cstr name : cstr] : nil
+  ```c printf("  %s=%s\n", name, raw_hyheader(r, name)); fflush(stdout); ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+;; The handler's view: body `id=<httpd-req-id>` or `id=none`.
+(defn set-id-body [c : ptr<void> id : cstr] : nil
+  ```c
+  char b[300];
+  snprintf(b, sizeof b, "id=%s", id);
+  __TUR_CNAME_httpd-resp-body!__(c, b);
+  ```)
+
+;; One check of a response: the X-Request-Id is `want` (or, when want is "",
+;; 32 lowercase hex digits), and the body names the same id.
+(defn check-id [label : cstr r : cstr want : cstr] : nil
+  ```c
+  /* __tur_include__: static char g_last_id[256]; */
+  const char *h = raw_hyheader(r, "X-Request-Id");
+  snprintf(g_last_id, sizeof g_last_id, "%s", h);
+  int hex = strlen(h) == 32;
+  for (int i = 0; hex && i < 32; i++) hex = (h[i] >= '0' && h[i] <= '9') || (h[i] >= 'a' && h[i] <= 'f');
+  char expect_body[300];
+  snprintf(expect_body, sizeof expect_body, "id=%s", h);
+  int body_ok = strcmp(raw_hybody(r), expect_body) == 0;
+  if (*want)
+      printf("%s: header=%s body-matches=%s\n", label, h, body_ok ? "yes" : "no");
+  else
+      printf("%s: fresh-hex32=%s body-matches=%s\n", label, hex ? "yes" : "no", body_ok ? "yes" : "no");
+  fflush(stdout);
+  ```)
+
+(defn last-id [] : cstr
+  ```c
+  static char copy[256];
+  snprintf(copy, sizeof copy, "%s", g_last_id);
+  return copy;
+  ```)
+
+(defn ids-differ? [a : cstr] : bool
+  ```c return strcmp(a, g_last_id) != 0; ```)
+
+;; The log sink: keep each line, with the elapsed time and a fresh id masked.
+(defn record-line [line : cstr] : nil
+  ```c
+  /* __tur_include__: static char g_log[4096]; */
+  /* __tur_include__: static size_t g_log_len = 0; */
+  /* __tur_include__: #include <pthread.h> */
+  /* __tur_include__: static pthread_mutex_t g_log_mtx = PTHREAD_MUTEX_INITIALIZER; */
+  char buf[512];
+  size_t o = 0;
+  const char *p = line;
+  const char *ms = strstr(line, "ms");
+  const char *ts = ms;
+  while (ts && ts > line && ts[-1] >= '0' && ts[-1] <= '9') ts--;
+  while (*p && o + 16 < sizeof buf) {
+      if (ts && p == ts) { memcpy(buf + o, "TIME", 4); o += 4; p = ms; continue; }
+      buf[o++] = *p++;
+  }
+  buf[o] = '\0';
+  char *rid = strstr(buf, " rid=");
+  if (rid && strlen(rid + 5) == 32) strcpy(rid + 5, "<fresh>");
+  pthread_mutex_lock(&g_log_mtx);
+  g_log_len += (size_t)snprintf(g_log + g_log_len, sizeof g_log - g_log_len, "%s\n", buf);
+  pthread_mutex_unlock(&g_log_mtx);
+  ```)
+
+(defn print-log [] : nil
+  ```c fputs(g_log, stdout); fflush(stdout); ```)
+
+(defn show-noid [r : cstr] : nil
+  ```c
+  printf("without mw-request-id: body=%s header=%s\n", raw_hybody(r), raw_hyheader(r, "X-Request-Id"));
+  fflush(stdout);
+  ```)
+
+(defn kib-header [] : cstr
+  ```c
+  static char h[1100];
+  memcpy(h, "X-Request-Id: ", 14);
+  memset(h + 14, 'a', 1024);
+  memcpy(h + 14 + 1024, "\r\n", 3);
+  return h;
+  ```)
+
+(defn main [] : int
+  (let [base   (fn [c : ptr<void>] : nil
+                 (let [id (httpd-req-id c)]
+                   (if (some? id) (set-id-body c (unwrap id)) (set-id-body c "none"))))
+        sink   (fn [line : cstr] : nil (record-line line))
+        h      (httpd-new-pool 0 1 (mw-request-id (mw-log-to sink base)))
+        port   (httpd-port h)
+        server (spawn-server h)]
+    (let [r (raw-request port "GET" "/a" "X-Request-Id: abc-123.XYZ_9\r\n" "")]
+      (check-id "valid" r "abc-123.XYZ_9")
+      (raw-release r))
+    (let [r (raw-request port "GET" "/b" "X-Request-Id: has space\"quote\r\n" "")]
+      (check-id "malformed" r "")
+      (raw-release r))
+    (let [r (raw-request port "GET" "/c" (kib-header) "")]
+      (check-id "1KiB" r "")
+      (raw-release r))
+    (let [r (raw-request port "GET" "/d" "" "")]
+      (check-id "missing" r "")
+      (raw-release r))
+    (let [prev (last-id)
+          r    (raw-request port "GET" "/e" "" "")]
+      (check-id "missing-again" r "")
+      (println (if (ids-differ? prev) "fresh ids differ: yes" "fresh ids differ: no"))
+      (raw-release r))
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h)
+    (println "-- log lines")
+    (print-log))
+  (let [h      (httpd-new-pool 0 1 (fn [c : ptr<void>] : nil
+                                     (let [id (httpd-req-id c)]
+                                       (if (some? id) (set-id-body c (unwrap id)) (set-id-body c "none")))))
+        port   (httpd-port h)
+        server (spawn-server h)
+        r      (raw-request port "GET" "/" "X-Request-Id: abc\r\n" "")]
+    (show-noid r)
+    (raw-release r)
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h))
+  (println "done")
+  0)

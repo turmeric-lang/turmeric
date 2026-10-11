@@ -1,7 +1,7 @@
 gzip-status=200
 gzip-content-encoding=gzip
 gzip-vary=Accept-Encoding
-gzip-decoded-ok=1
 plain-status=200
 plain-content-encoding=(none)
+gzip-decoded-ok=1
 done

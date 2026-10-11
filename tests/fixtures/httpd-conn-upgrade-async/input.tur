@@ -1,0 +1,102 @@
+;; httpd-conn-upgrade-async -- the async (fiber) server refuses a connection
+;; upgrade with a clear error rather than dropping the connection
+;; (tourist-on-stdlib-httpd-plan H1: "Pool mode first. In async (fiber)
+;; mode, refuse an upgrade with a clear error until it is designed").
+;;
+;; The handler asks for both kinds of hand-off -- both return false -- and
+;; then sets a 101 anyway, as a careless handler would.  The client must get
+;; a 501 with an explanatory body and Connection: close, never a 101 on a
+;; connection nobody took over.  (A one-line diagnostic also goes to stderr.)
+
+(load "stdlib/httpd.tur")
+(load "stdlib/chan.tur")
+
+(defn client-worker [arg : ptr<void>] : ptr<void>
+  ```c
+  /* __tur_include__: char g_async_upg_report[4096]; */
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+      snprintf(g_async_upg_report, sizeof g_async_upg_report, "connect failed\n");
+      return NULL;
+  }
+  const char *req = "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+  send(fd, req, strlen(req), 0);
+  char buf[2048];
+  size_t got = 0;
+  for (;;) {
+      ssize_t n = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  close(fd);
+  char *eol = strstr(buf, "\r\n");
+  char *body = strstr(buf, "\r\n\r\n");
+  int closes = strstr(buf, "Connection: close") != NULL;
+  if (eol) *eol = '\0';
+  snprintf(g_async_upg_report, sizeof g_async_upg_report,
+           "status-line=%s\nconnection-close=%s\nbody=%s\n",
+           buf, closes ? "yes" : "no", body ? body + 4 : "(none)");
+  return NULL;
+  ```)
+
+(defn client-report [] : nil
+  ```c
+  extern char g_async_upg_report[];
+  fputs(g_async_upg_report, stdout);
+  ```)
+
+(defn run-server-async [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun_hyasync(h); return NULL; ```)
+
+(defn spawn-server-async [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver_hyasync, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (let [donech  (chan-new 1)
+        handler (fn [c : ptr<void>] : nil
+                  (println (if (httpd-conn-upgrade! c (fn [c2 : ptr<void>] : nil
+                                                        (println "callback-ran")))
+                             "upgrade=true"
+                             "upgrade=false"))
+                  (println (if (httpd-conn-detach! c) "detach=true" "detach=false"))
+                  (println (if (httpd-conn-upgraded? c) "upgraded=true" "upgraded=false"))
+                  (httpd-resp-status! c 101)
+                  (httpd-resp-header! c "Upgrade" "websocket")
+                  (chan-send donech 1))
+        h       (httpd-new-async 0 handler)
+        port    (httpd-async-port h)
+        server  (spawn-server-async h)
+        client  (spawn-client port)]
+    (chan-recv donech)
+    (join-thread client)
+    (httpd-stop-async h)
+    (join-thread server)
+    (client-report)
+    (println "done")
+    (httpd-async-free h)
+    (chan-free donech)
+    0))

@@ -1,0 +1,128 @@
+;; httpd-mw-cors-origins -- CORS origin allow-list, Vary merging, and the
+;; "*"-with-credentials refusal (tourist-on-stdlib-httpd-plan H4).
+;;
+;; One server, mw-cors-opts with two allowed origins and credentials.  The
+;; base handler already sets `Vary: Accept-Encoding`, so the `Origin` the
+;; middleware adds must merge into that one header, not repeat it.
+;;
+;;   1. GET from an allowed origin: echoed back, credentials, Vary merged.
+;;   2. GET from another origin: no Access-Control-Allow-Origin at all (how a
+;;      browser is told no), but still `Vary: ..., Origin`.
+;;   3. Preflight from the other allowed origin: 204, its origin, methods.
+;;   4. cors-opts refuses "*" with credentials and accepts a listed origin.
+;;
+;; The client records each response; main prints after joining.
+
+(load "stdlib/httpd.tur")
+
+(defn client-worker [arg : ptr<void>] : ptr<void>
+  ```c
+  /* __tur_include__: char g_cors_report[4096]; */
+  int64_t port = *(int64_t *)arg;
+  free(arg);
+  size_t rl = 0;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  const char *reqs[3] = {
+      "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://b.example\r\nConnection: close\r\n\r\n",
+      "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://evil.example\r\nConnection: close\r\n\r\n",
+      "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://a.example\r\n"
+      "Access-Control-Request-Method: POST\r\nConnection: close\r\n\r\n" };
+  const char *names[3] = { "allowed", "other", "preflight" };
+  const char *keys[5] = { "Access-Control-Allow-Origin", "Access-Control-Allow-Credentials",
+                          "Vary", "Access-Control-Allow-Methods", "Access-Control-Max-Age" };
+  for (int i = 0; i < 3; i++) {
+      int fd = socket(AF_INET, SOCK_STREAM, 0);
+      if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) continue;
+      send(fd, reqs[i], strlen(reqs[i]), 0);
+      char buf[4096];
+      size_t got = 0;
+      for (;;) {
+          ssize_t n = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+          if (n <= 0) break;
+          got += (size_t)n;
+      }
+      buf[got] = '\0';
+      close(fd);
+      rl += (size_t)snprintf(g_cors_report + rl, sizeof g_cors_report - rl,
+                             "%s: status=%.3s\n", names[i], buf + 9);
+      for (int k = 0; k < 5; k++) {
+          char needle[96];
+          snprintf(needle, sizeof needle, "\r\n%s: ", keys[k]);
+          int count = 0;
+          for (char *p = buf; (p = strstr(p, needle)); p += strlen(needle)) {
+              char *v = p + strlen(needle);
+              char *eol = strstr(v, "\r\n");
+              rl += (size_t)snprintf(g_cors_report + rl, sizeof g_cors_report - rl,
+                                     "  %s=%.*s\n", keys[k], (int)(eol ? eol - v : 0), v);
+              count++;
+          }
+          if (count == 0)
+              rl += (size_t)snprintf(g_cors_report + rl, sizeof g_cors_report - rl,
+                                     "  %s=(absent)\n", keys[k]);
+      }
+  }
+  return NULL;
+  ```)
+
+(defn client-report [] : nil
+  ```c
+  extern char g_cors_report[];
+  fputs(g_cors_report, stdout);
+  ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn spawn-client [port : int] : ptr<void>
+  ```c
+  int64_t *p = (int64_t *)malloc(sizeof(int64_t));
+  *p = (int64_t)port;
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))client_hyworker, (void *)p);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn main [] : int
+  (println (if (ok? (cors-opts "*" "GET" "" "" true -1))
+             "wildcard+credentials: accepted"
+             "wildcard+credentials: refused"))
+  (println (if (ok? (cors-opts "https://a.example" "GET" "" "" true -1))
+             "listed+credentials: accepted"
+             "listed+credentials: refused"))
+  (let [opts     (make-struct CorsOpts
+                   "https://a.example, https://b.example"
+                   "GET, POST"
+                   "Content-Type"
+                   ""
+                   true
+                   600)
+        base     (fn [c : ptr<void>] : nil
+                   (httpd-resp-header! c "Vary" "Accept-Encoding")
+                   (httpd-resp-status! c 200)
+                   (httpd-resp-body! c "ok"))
+        composed (compose-middleware base (mw-cors-opts opts))
+        h        (httpd-new-pool 0 1 composed)
+        port     (httpd-port h)
+        server   (spawn-server h)
+        client   (spawn-client port)]
+    (join-thread client)
+    (client-report)
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h)
+    (println "done")
+    0))

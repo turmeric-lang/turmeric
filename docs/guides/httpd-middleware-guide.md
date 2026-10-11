@@ -1,7 +1,7 @@
 ---
 title: HTTP Middleware Catalog (stdlib/httpd)
 category: Networking and Web
-description: Reference for the shipped httpd middleware -- logging, CORS, basic auth, JSON, cookies, multipart, body-size, rate-limit, static files -- plus the request-attribute side channel and the composition helpers.
+description: Reference for the shipped httpd middleware -- logging, CORS, basic auth, JSON, cookies, multipart, body-size, rate-limit, static files, security headers, request ids, trusted proxies, ETags, timeouts -- plus the request-attribute side channel and the composition helpers.
 ---
 
 # HTTP Middleware Catalog
@@ -68,10 +68,42 @@ let [composed compose-middleware(base
   httpd-new(0 composed)
 ```
 
-The macro expands to `(mw-log (mw-cors ((mw-basic-auth "app" verify) base)))`
+The macro expands to `(mw-log (mw-cors (mw-basic-auth "app" verify base)))`
 -- the **leftmost middleware is the outermost wrapper**, its
 pre-processing runs first, its post-processing runs last (Ring /
-Rack ordering).
+Rack ordering). A middleware written as a call form, like
+`(mw-basic-auth "app" verify)`, gets the wrapped handler appended as its last
+argument, so every layer is a direct call and any number of configured
+middleware compose. (Before H4 it expanded to `((mw-basic-auth "app" verify)
+base)`, which type-checked for one such form but not two.)
+
+Order matters for two reasons. A middleware only sees what reaches it: put
+`mw-trust-proxy` outside everything that reads the client address
+(`mw-rate-limit`, `mw-log`). And a panic skips the post-processing of every
+layer it unwinds through, so put `mw-log` *outside* `mw-recover` to log the
+recovered 500:
+
+```turmeric
+(compose-middleware base
+                    (mw-trust-proxy tp)    ; client address for everything inside
+                    mw-log                 ; logs the 500 mw-recover makes
+                    mw-recover
+                    (mw-cors-opts cors)
+                    (mw-rate-limit limits))
+```
+
+```sweet-exp
+compose-middleware(base
+                   mw-trust-proxy(tp)    ; client address for everything inside
+                   mw-log                ; logs the 500 mw-recover makes
+                   mw-recover
+                   mw-cors-opts(cors)
+                   mw-rate-limit(limits))
+```
+
+The same stack runs around a whole [tourist](https://github.com/turmeric-lang/turmeric-spices/tree/main/spices/tourist)
+app through `tourist-opts`, or around a typed spices/httpd handler through
+`server-wrap` and `server-start-wrapped`.
 
 `compose-middleware-of` is the runtime variadic form for chains built
 dynamically (e.g. from a config flag). Each argument must be a *fat*
@@ -86,7 +118,7 @@ entry links to its docstring in the source for the full surface.
 | Name                      | Purpose                                          | Phase |
 |---------------------------|--------------------------------------------------|-------|
 | `mw-log`                  | One line per request -- method, path, status, body bytes, elapsed ms | M1 |
-| `mw-cors` / `mw-cors-with`| CORS preflight + Access-Control-Allow-Origin decoration | M4 |
+| `mw-cors` / `mw-cors-opts` / `mw-cors-with` | CORS preflight + Access-Control-Allow-Origin decoration, origin allow-list | M4 |
 | `mw-basic-auth`           | HTTP Basic Auth via user verifier closure; publishes `"user"` attr on success | M5 |
 | `mw-json-body`            | Pre-parse JSON request body; 400 on malformed input | M3 |
 | `mw-body-size`            | Reject requests with Content-Length above a cap (413) | MW1 |
@@ -94,6 +126,43 @@ entry links to its docstring in the source for the full surface.
 | `mw-static`               | Fall back to static files when `next` returned 404 (with ETag + 304) | MW2 |
 | `mw-compress` / `mw-compress-with` | gzip the response body when client sends `Accept-Encoding: gzip` (requires `tur/zlib` spice) | M6 |
 | `mw-recover`              | Catch a downstream panic and respond 500; the server keeps serving | MW3 |
+| `mw-log-to`               | `mw-log`'s line handed to your own `(fn [cstr] nil)` sink | H4 |
+| `mw-secure-headers` / `mw-secure-headers-opts` | nosniff, frame, referrer and opener policies; HSTS and CSP opt-in | H4 |
+| `mw-request-id`           | Keep a well-formed `X-Request-Id` or mint one; `httpd-req-id` reads it | H4 |
+| `mw-trust-proxy`          | Believe `X-Forwarded-For` / `-Proto` from listed proxies; `httpd-req-ip` / `httpd-req-proto` | H4 |
+| `mw-etag`                 | Weak ETag on 200 GET/HEAD responses, 304 on a matching `If-None-Match` | H4 |
+| `mw-timeout`              | Answer 503 when a handler overruns its deadline | H4 |
+
+### mw-cors (M4)
+
+Answers a preflight (`OPTIONS` with `Access-Control-Request-Method`) with 204
+and the Access-Control-Allow-* headers, without calling `next`, and decorates
+every other response. `allow-origin` in `CorsOpts` is `"*"`, one origin, or a
+comma-separated list: a listed origin is matched exactly against the request's
+`Origin` and echoed back, with `Vary: Origin` (merged into any `Vary` already
+set, never repeated); any other origin gets no Access-Control-Allow-Origin,
+which is how a browser is told no. `allow-credentials` is a `bool`.
+
+```turmeric
+(let [opts     (ok-val (cors-opts "https://app.example.com, https://admin.example.com"
+                                  "GET, POST" "Content-Type" "" true 600))
+      composed (compose-middleware base (mw-cors-opts opts))]
+  (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [opts     ok-val(cors-opts("https://app.example.com, https://admin.example.com"
+                               "GET, POST" "Content-Type" "" true 600))
+     composed compose-middleware(base mw-cors-opts(opts))]
+  httpd-new(0 composed)
+```
+
+`cors-opts` returns `(Result CorsOpts cstr)` and refuses `"*"` with
+credentials, which the CORS spec forbids. Options built with `make-struct`
+that combine them anyway are served without Allow-Credentials (a line goes to
+stderr). The middleware copies its configuration when it is built, so the
+strings may be computed and freed afterwards. `mw-cors` is the permissive
+development default (`default-cors-opts`).
 
 ### mw-body-size (MW1)
 
@@ -144,9 +213,11 @@ a flood of distinct IPs cannot leave every later IP unlimited, it only
 restarts the windows of the IPs it evicts. Each check touches at most 8
 entries.
 
-The client IP comes from [`httpd-req-remote-ip`](#client-ip), which
-caches its result on the `__remote_ip` request attribute so repeated
-lookups within one request do not re-`getpeername(2)`.
+The client is keyed by [`httpd-req-ip`](#client-ip): the transport peer,
+or -- with an [`mw-trust-proxy`](#mw-trust-proxy-h4) outside the limiter --
+the client address it read from `X-Forwarded-For`. Behind a proxy, put
+`mw-trust-proxy` outside `mw-rate-limit`, or every client shares the proxy's
+bucket.
 
 ### mw-static (MW2)
 
@@ -168,13 +239,19 @@ let [composed mw-static("./public" router-mw(r))]
 The response carries a `Content-Type` derived from the file extension
 (small built-in table covering HTML / CSS / JS / JSON / TXT / common
 image formats / WASM) and an `ETag` of the form `"<size>-<mtime>"`
-(both in hex). A subsequent request carrying a matching
-`If-None-Match` short-circuits with `304 Not Modified` and an empty
-body -- the file is `stat`'d but never `read`.
+(both in hex). A subsequent request whose `If-None-Match` names that tag
+(in a list, with or without `W/`, or `*`) short-circuits with
+`304 Not Modified` and an empty body -- the file is `stat`'d but never
+`read`. The body is binary-safe (it used to stop at the first NUL byte).
+
+The file serving itself is `httpd-static-serve! conn root rel`, for callers
+that choose the path -- a framework mapping `/assets/*` onto a directory
+(tourist's `serve-static!` is built on it). It returns `true` when it
+answered, and applies the same guards: the resolved file must sit inside
+`root`, and no segment may start with `.` (`.well-known` excepted).
 
 Files are read fully into memory. For very large files use a
-streaming backend instead -- the public surface today returns a
-buffered body via `httpd-resp-body!`.
+streaming backend instead.
 
 ### mw-basic-auth + request attrs
 
@@ -215,13 +292,19 @@ let [verify   (fn [u :cstr p :cstr] :int
 
 `mw-compress` gzips the response body when the client sends
 `Accept-Encoding: gzip`, sets `Content-Encoding: gzip` plus
-`Vary: Accept-Encoding`, and is otherwise a no-op. The codec lives in
-the `tur/zlib` spice (`../turmeric-spices/spices/zlib`); install it
-into your workspace, then `(load "stdlib/httpd-compress.tur")` from
-your program.
+`Vary: Accept-Encoding`, and is otherwise a no-op. It is the
+`httpd-compress` module, and the codec is the `tur/zlib` spice: declare the
+spice in your `build.tur`, import the module, and it resolves like any other
+spice import -- from an installed toolchain too.
+
+```turmeric no-check
+:spices #map{"tur-zlib" #map{:url    "https://github.com/turmeric-lang/turmeric-spices"
+                             :ref    "v0.1.0"
+                             :subdir "spices/zlib"}}
+```
 
 ```turmeric
-(load "stdlib/httpd-compress.tur")
+(import httpd-compress :refer [mw-compress])
 
 (let [base     (fn [c : ptr<void>] : nil
                  (httpd-resp-status! c 200)
@@ -231,7 +314,7 @@ your program.
 ```
 
 ```sweet-exp
-load "stdlib/httpd-compress.tur"
+import httpd-compress :refer [mw-compress]
 
 let [base     (fn [c :ptr<void>] :nil
                  httpd-resp-status!(c 200)
@@ -239,6 +322,11 @@ let [base     (fn [c :ptr<void>] :nil
      composed compose-middleware(base mw-log mw-compress)]
   httpd-new(0 composed)
 ```
+
+The `import` goes inside your program's `defmodule`. (Before
+tourist-on-stdlib-httpd H4 this was `(load "stdlib/httpd-compress.tur")`, which
+loaded the spice from a path relative to a side-by-side turmeric-spices
+checkout.)
 
 Notes:
 
@@ -296,6 +384,201 @@ Notes:
 - The panic message still goes to stderr, so a recovered panic is
   visible in the server log rather than swallowed.
 
+### mw-log / mw-log-to (M1, H4)
+
+`mw-log` prints one line per request to stdout after `next` returns:
+
+```
+GET /users/7 -> 200 412 3ms ip=203.0.113.7 rid=6f1c0e2a9b3d4c5e8f7a6b5c4d3e2f10
+```
+
+-- method, path, status, response body bytes, elapsed milliseconds, then
+` ip=` when an `mw-trust-proxy` outside it resolved the client address and
+` rid=` when an `mw-request-id` outside it assigned an id. The method and path
+are the client's bytes, so anything outside printable ASCII is written `\xHH`.
+`mw-log-to` hands the same line (no newline) to a closure of your own -- a
+file, a structured logger, a buffer a test reads:
+
+```turmeric
+(let [sink     (fn [line : cstr] : nil (eprintln line))
+      composed (compose-middleware base (mw-log-to sink))]
+  (httpd-new 0 composed))
+```
+
+```sweet-exp
+let [sink     (fn [line :cstr] :nil eprintln(line))
+     composed compose-middleware(base mw-log-to(sink))]
+  httpd-new(0 composed)
+```
+
+The line is borrowed: it lives until the request finishes, so copy it to keep
+it. The sink runs on whichever worker served the request, so it must be safe
+to call from several threads at once.
+
+### mw-secure-headers (H4)
+
+The response headers a browser-facing app should send by default, after
+`next` returns, each only if the route did not set it itself:
+
+| Header | Default |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `no-referrer` |
+| `Cross-Origin-Opener-Policy` | `same-origin` |
+| `Strict-Transport-Security` | off (`hsts-max-age` -1) |
+| `Content-Security-Policy` | off (`""`) |
+
+HSTS and CSP are opt-in because both can lock users out when set wrong -- a
+stray HSTS on a host that still needs plain HTTP, a CSP that blocks your own
+scripts. `mw-secure-headers-opts` takes a `SecureHeadersOpts`; `""` switches a
+header off:
+
+```turmeric
+(let [opts (make-struct SecureHeadersOpts
+             true                   ; content-type-options (nosniff)
+             "SAMEORIGIN"           ; frame-options
+             "strict-origin"        ; referrer-policy
+             "same-origin"          ; cross-origin-opener-policy
+             31536000               ; hsts-max-age (-1 = no HSTS)
+             true                   ; hsts-include-subdomains
+             "default-src 'self'")] ; content-security-policy
+  (httpd-new 0 (mw-secure-headers-opts opts base)))
+```
+
+```sweet-exp
+let [opts make-struct(SecureHeadersOpts
+             true                   ; content-type-options (nosniff)
+             "SAMEORIGIN"           ; frame-options
+             "strict-origin"        ; referrer-policy
+             "same-origin"          ; cross-origin-opener-policy
+             31536000               ; hsts-max-age (-1 = no HSTS)
+             true                   ; hsts-include-subdomains
+             "default-src 'self'")] ; content-security-policy
+  httpd-new(0 mw-secure-headers-opts(opts base))
+```
+
+`(default-secure-headers-opts)` returns the defaults in the table above.
+
+### mw-request-id (H4)
+
+Gives every request an id and echoes it as `X-Request-Id`. An incoming
+`X-Request-Id` is kept when it is 1-128 characters of `[A-Za-z0-9._-]` -- so an
+id a load balancer assigned follows the request through -- and anything else
+(missing, too long, a space or quote in it) is replaced by 32 random hex
+digits. Downstream code reads it with `httpd-req-id`, which is `none` without
+the middleware:
+
+```turmeric
+(let [handler (fn [c : ptr<void>] : nil
+                (let [id (httpd-req-id c)]
+                  (when (some? id) (log-with-id (unwrap id)))))]
+  (httpd-new 0 (mw-request-id handler)))
+```
+
+```sweet-exp
+let [handler (fn [c :ptr<void>] :nil
+               (let [id httpd-req-id(c)]
+                 (when some?(id) log-with-id(unwrap(id)))))]
+  httpd-new(0 mw-request-id(handler))
+```
+
+Put it outside `mw-log` / `mw-log-to` and the log line carries ` rid=<id>`.
+
+### mw-trust-proxy (H4)
+
+Behind a reverse proxy the transport peer is the proxy. `mw-trust-proxy`
+lets the peers you list tell the server who the client is:
+
+```turmeric
+(let [tp (trust-proxy-opts "loopback, 10.0.0.0/8")]
+  (when (ok? tp)
+    (httpd-new 0 (mw-trust-proxy (ok-val tp) base))))
+```
+
+```sweet-exp
+let [tp trust-proxy-opts("loopback, 10.0.0.0/8")]
+  when ok?(tp)
+    httpd-new(0 mw-trust-proxy(ok-val(tp) base))
+```
+
+- `trusted` is a comma-separated list of addresses (`10.0.0.5`, `::1`), CIDR
+  blocks (`10.0.0.0/8`, `fd00::/8`) and the keywords `loopback`, `linklocal`
+  and `uniquelocal`. `trust-proxy-opts` returns `err` naming an entry that is
+  none of those; `(default-trust-proxy-opts)` trusts nothing.
+- A peer that is not trusted is the client, and its `X-Forwarded-For` and
+  `X-Forwarded-Proto` are ignored -- anyone can send them.
+- A trusted peer's `X-Forwarded-For` is read right to left: hops that are
+  themselves trusted proxies are skipped, and the first that is not is the
+  client. (The leftmost entries are whatever the client wrote, so they are
+  never believed over a trusted hop's word.) A hop that is not an address
+  ends the walk at the last good one.
+- `X-Forwarded-Proto` is believed from a trusted peer, as `http` or `https`
+  only.
+
+`httpd-req-ip` and `httpd-req-proto` read the result, falling back to the
+peer address and the connection's own protocol when the middleware did not
+run. `mw-rate-limit` keys on `httpd-req-ip`, and `mw-log` adds ` ip=`.
+
+### mw-etag (H4)
+
+After `next` returns a 200 to a GET or HEAD, sets a weak ETag computed from
+the body, and answers a matching `If-None-Match` with `304 Not Modified` and
+no body:
+
+```turmeric
+(httpd-new 0 (compose-middleware api-handler mw-etag))
+```
+
+```sweet-exp
+httpd-new(0 compose-middleware(api-handler mw-etag))
+```
+
+- The tag is `W/"<length>-<FNV-1a 64 hash>"` -- weak, because it promises
+  equal bytes, not equal encodings: put `mw-compress` *outside* `mw-etag`.
+- A route that set its own `ETag` keeps it, and `If-None-Match` is checked
+  against that one. Comparison is weak (`W/` ignored on both sides), `*`
+  matches, and a comma-separated list matches if any entry does.
+- The body is still built every time; `mw-etag` saves the transfer, not the
+  work. `mw-static` does the same for files, from their size and mtime.
+
+Independent of `mw-etag`, the server never writes a body on a `1xx`, `204` or
+`304` response (one a handler set is dropped, along with `Content-Length`),
+and answers `HEAD` with the headers a GET would get -- `Content-Length`
+included -- and no body.
+
+### mw-timeout (H4)
+
+Answers `503 Service Unavailable` when a handler takes longer than `ms`
+milliseconds:
+
+```turmeric
+(httpd-new-pool 0 8 (mw-timeout 2000 slow-report-handler))
+```
+
+```sweet-exp
+httpd-new-pool(0 8 mw-timeout(2000 slow-report-handler))
+```
+
+`next` runs on a helper thread against a private copy of the request (body,
+headers, attributes, route params); the worker waits for it up to the
+deadline. In time, the copy's response -- status, headers, body, attributes --
+moves onto the real request as if `next` had run in place. Late, the client
+gets the 503 at the deadline. Know what that does and does not do:
+
+- **The handler is not stopped.** Threads cannot be cancelled safely, so a
+  late handler runs to completion on its helper thread; the deadline frees
+  the *client* and the worker, not the CPU. Its response is discarded, and it
+  cannot reach the client (the copy has no socket) or upgrade the
+  connection.
+- Let late handlers finish before `httpd-free`, which releases the closures
+  they are running.
+- On `httpd-new-async` it runs `next` inline with no deadline: a helper
+  thread may not touch the fiber's reactor.
+
+Place it inside the middleware whose post-processing should see the 503
+(`mw-log`, `mw-recover`) and outside the handler work it bounds.
+
 ## Request attributes (MW2)
 
 A small per-request key/value side channel attached to the connection.
@@ -318,9 +601,10 @@ let [x httpd-req-attr(c "missing")] ... ; => ""
 
 Attribute keys are case-sensitive plain cstrings. Both `key` and
 `val` are copied into per-request storage; the caller may reuse or
-free the originals. Keys starting with `__` are conventionally
-reserved for internal helpers (`__remote_ip` is the cached client
-IP); user code should pick its own non-`__` keys.
+free the originals. Keys starting with `__` are reserved for the
+built-ins (`__remote_ip` is the cached peer address, `__client_ip` /
+`__client_proto` what `mw-trust-proxy` resolved, `__request_id` the
+`mw-request-id` id); user code should pick its own non-`__` keys.
 
 ## Client IP
 
@@ -338,9 +622,12 @@ the connection fd. IPv4 addresses are formatted dotted-quad
 `__remote_ip` request attribute, so repeated calls within one request
 are cheap.
 
-If you sit behind a reverse proxy, read the `X-Forwarded-For` header
-via `httpd-req-header` instead -- `httpd-req-remote-ip` reports the
-*transport* peer, which is the proxy.
+`httpd-req-remote-ip` is always the *transport* peer -- behind a reverse
+proxy, the proxy. `httpd-req-ip` is the client: what
+[`mw-trust-proxy`](#mw-trust-proxy-h4) resolved from `X-Forwarded-For`, or the
+peer when it did not run. Use `httpd-req-ip` for anything about the client
+(logging, rate limits, allow-lists); never read `X-Forwarded-For` yourself
+without checking who sent it.
 
 ## Writing a middleware
 
@@ -392,26 +679,32 @@ defn mw-require-https [next :int] :ptr<void>
           httpd-resp-body!(c "HTTPS required"))))
 ```
 
+Pick the header setter by what the header means, because a route or another
+middleware may have set it already: `httpd-resp-header!` replaces (one-valued
+headers such as `Content-Type`, `ETag`), `httpd-resp-header-add!` appends
+(`Set-Cookie`), and `httpd-resp-vary!` adds a token to `Vary` only if it is not
+listed yet -- several middleware add to `Vary`, and repeating it is wrong.
+
 Use request attrs to thread context downstream:
 
 ```turmeric
-(defn mw-request-id [next : int] : ptr<void>
+(defn mw-tenant [next : int] : ptr<void>
   (let [_n next]
     (fn [c : ptr<void>] : nil
-      (let [id (httpd-req-header c "X-Request-Id")]
-        (httpd-set-attr! c "request_id" id)
+      (let [t (httpd-req-header c "X-Tenant")]
+        (httpd-set-attr! c "tenant" t)
         (httpd-call _n c)
-        (httpd-resp-header! c "X-Request-Id" (httpd-req-attr c "request_id"))))))
+        (httpd-resp-header! c "X-Tenant" (httpd-req-attr c "tenant"))))))
 ```
 
 ```sweet-exp
-defn mw-request-id [next :int] :ptr<void>
+defn mw-tenant [next :int] :ptr<void>
   let [_n next]
     (fn [c :ptr<void>] :nil
-      (let [id httpd-req-header(c "X-Request-Id")]
-        httpd-set-attr!(c "request_id" id)
+      (let [t httpd-req-header(c "X-Tenant")]
+        httpd-set-attr!(c "tenant" t)
         httpd-call(_n c)
-        httpd-resp-header!(c "X-Request-Id" httpd-req-attr(c "request_id"))))
+        httpd-resp-header!(c "X-Tenant" httpd-req-attr(c "tenant"))))
 ```
 
 ## Async interop
@@ -432,14 +725,11 @@ through any number of middleware wraps.
 
 ## Not yet shipped
 
-The following items are tracked in
-[`docs/archive/httpd-middleware-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/httpd-middleware-plan.md)
-but not yet in stdlib:
-
-- **`mw-timeout`** -- per-request wall-clock budget. Needs a
-  handler/timer race; today's worker-pool path has no portable
-  cancellation primitive, and the async path needs a `with-deadline`
-  combinator before this can ship cleanly.
+- **A deadline for `mw-timeout` on the async server.** It runs `next` inline
+  there today; bounding a fiber needs a `with-deadline` combinator on the
+  reactor.
+- **Cancelling a late handler.** `mw-timeout` answers the client at the
+  deadline but cannot stop the handler (see [mw-timeout](#mw-timeout-h4)).
 
 ## See also
 

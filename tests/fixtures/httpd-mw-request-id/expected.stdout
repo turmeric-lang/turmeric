@@ -1,0 +1,14 @@
+valid: header=abc-123.XYZ_9 body-matches=yes
+malformed: fresh-hex32=yes body-matches=yes
+1KiB: fresh-hex32=yes body-matches=yes
+missing: fresh-hex32=yes body-matches=yes
+missing-again: fresh-hex32=yes body-matches=yes
+fresh ids differ: yes
+-- log lines
+GET /a -> 200 16 TIMEms rid=abc-123.XYZ_9
+GET /b -> 200 35 TIMEms rid=<fresh>
+GET /c -> 200 35 TIMEms rid=<fresh>
+GET /d -> 200 35 TIMEms rid=<fresh>
+GET /e -> 200 35 TIMEms rid=<fresh>
+without mw-request-id: body=id=none header=(absent)
+done

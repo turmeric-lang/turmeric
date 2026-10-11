@@ -1,0 +1,8 @@
+idle: closed without a response
+partial: 408
+slow-loris: 408 within-deadline=yes
+oversized: 431
+pipelined: 2 responses, a-first=yes
+body-17: 413
+body-16: 200
+done

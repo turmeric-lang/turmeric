@@ -1,0 +1,7 @@
+upgrade=false
+detach=false
+upgraded=false
+status-line=HTTP/1.1 501 Not Implemented
+connection-close=yes
+body=connection upgrade is not supported by this server
+done

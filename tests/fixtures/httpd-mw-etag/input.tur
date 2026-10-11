@@ -1,0 +1,256 @@
+;; httpd-mw-etag -- mw-etag, and bodiless 204 / 304 / HEAD responses
+;; (tourist-on-stdlib-httpd-plan H4).
+;;
+;;   1. A 200 to GET gets a weak ETag; If-None-Match with it (or with `*`,
+;;      or in a list, or without the W/) answers 304 with the ETag, no body
+;;      and no Content-Length.  A non-matching one gets the 200.
+;;   2. HEAD: the same headers as GET, Content-Length included, no body.
+;;   3. POST is left alone (no ETag).
+;;   4. A route's own ETag is kept and is what If-None-Match is checked
+;;      against.
+;;   5. Without mw-etag: a 204 a handler gave a body to is sent without it
+;;      (and without Content-Length), and so is a handler-set 304.  A second
+;;      request on the same keep-alive connection then parses -- no stray
+;;      body bytes in between.
+
+(load "stdlib/httpd.tur")
+
+;; --- raw HTTP client helpers (one request per connection) -------------------
+
+;; Send `req` (which carries Connection: close) and return everything the
+;; server wrote until it closed; free with raw-release.
+(defn raw-send [port : int req : cstr] : cstr
+  ```c
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  size_t cap = 8192, got = 0;
+  char *buf = (char *)malloc(cap);
+  buf[0] = '\0';
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return buf;
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return buf; }
+  size_t rl = strlen(req), sent = 0;
+  while (sent < rl) {
+      ssize_t w = send(fd, req + sent, rl - sent, 0);
+      if (w <= 0) break;
+      sent += (size_t)w;
+  }
+  for (;;) {
+      if (got + 1 >= cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+      ssize_t n = recv(fd, buf + got, cap - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  close(fd);
+  return buf;
+  ```)
+
+(defn raw-release [r : cstr] : nil
+  ```c free((void *)r); ```)
+
+;; The status code of a raw response (0 when there was none).
+(defn raw-status [r : cstr] : int
+  ```c return strlen(r) > 12 ? (int64_t)atoi(r + 9) : 0; ```)
+
+;; Every value of header `name` in the head of `r`, joined with " | ", or
+;; "(absent)".  The string lives until the next call.
+(defn raw-header [r : cstr name : cstr] : cstr
+  ```c
+  static char out[4096];
+  size_t o = 0;
+  out[0] = '\0';
+  const char *end = strstr(r, "\r\n\r\n");
+  if (!end) end = r + strlen(r);
+  size_t nl = strlen(name);
+  const char *p = strstr(r, "\r\n");
+  while (p && p < end) {
+      const char *line = p + 2;
+      const char *eol = strstr(line, "\r\n");
+      if (!eol || line >= end) break;
+      if ((size_t)(eol - line) > nl && strncasecmp(line, name, nl) == 0 && line[nl] == ':') {
+          const char *v = line + nl + 1;
+          while (*v == ' ') v++;
+          o += (size_t)snprintf(out + o, sizeof out - o, "%s%.*s", o ? " | " : "", (int)(eol - v), v);
+      }
+      p = eol;
+  }
+  return o ? out : "(absent)";
+  ```)
+
+;; The bytes after the head.
+(defn raw-body [r : cstr] : cstr
+  ```c
+  const char *b = strstr(r, "\r\n\r\n");
+  return b ? b + 4 : "";
+  ```)
+
+;; `METHOD path HTTP/1.1`, Host, the `extra` header lines (each ending in
+;; \r\n), Connection: close, and `body` with its Content-Length when it is
+;; not empty.  Returns what raw-send does.
+(defn raw-request [port : int method : cstr path : cstr extra : cstr body : cstr] : cstr
+  ```c
+  size_t bl = strlen(body);
+  size_t cap = strlen(method) + strlen(path) + strlen(extra) + bl + 160;
+  char *req = (char *)malloc(cap);
+  if (bl)
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+               method, path, extra, bl, body);
+  else
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sConnection: close\r\n\r\n", method, path, extra);
+  char *r = (char *)raw_hysend(port, req);
+  free(req);
+  return r;
+  ```)
+
+;; Print `label status=N`.
+(defn show-status [label : cstr r : cstr] : nil
+  ```c printf("%s status=%d\n", label, (int)raw_hystatus(r)); fflush(stdout); ```)
+
+;; Print `  name=value` for a response header (every value, or "(absent)").
+(defn show-header [r : cstr name : cstr] : nil
+  ```c printf("  %s=%s\n", name, raw_hyheader(r, name)); fflush(stdout); ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+(defn path-is? [c : ptr<void> p : cstr] : bool
+  ```c return strcmp(httpd_hyreq_hypath(c), p) == 0; ```)
+
+;; Print status, ETag, Content-Length and the body (bytes after the head).
+(defn show [label : cstr r : cstr] : nil
+  ```c
+  const char *et = raw_hyheader(r, "ETag");
+  char etag[128];
+  /* the computed tag is W/"<len hex>-<fnv hex>": print its shape */
+  if (strncmp(et, "W/\"", 3) == 0) snprintf(etag, sizeof etag, "W/\"%s", strchr(et + 3, '-') ? "<len>-<hash>\"" : "?");
+  else snprintf(etag, sizeof etag, "%s", et);
+  char cl[64];
+  snprintf(cl, sizeof cl, "%s", raw_hyheader(r, "Content-Length"));
+  printf("%s: status=%d etag=%s content-length=%s body=[%s]\n",
+         label, (int)raw_hystatus(r), etag, cl, raw_hybody(r));
+  fflush(stdout);
+  ```)
+
+;; The ETag of a raw response, copied (lives until the next call).
+(defn etag-of [r : cstr] : cstr
+  ```c
+  static char e[128];
+  snprintf(e, sizeof e, "%s", raw_hyheader(r, "ETag"));
+  return e;
+  ```)
+
+(defn inm [tag : cstr] : cstr
+  ```c
+  static char h[256];
+  snprintf(h, sizeof h, "If-None-Match: %s\r\n", tag);
+  return h;
+  ```)
+
+(defn inm-list [tag : cstr] : cstr
+  ```c
+  static char h[256];
+  snprintf(h, sizeof h, "If-None-Match: \"nope\", %s\r\n", tag);
+  return h;
+  ```)
+
+(defn inm-strong [tag : cstr] : cstr
+  ```c
+  static char h[256];
+  snprintf(h, sizeof h, "If-None-Match: %s\r\n", strncmp(tag, "W/", 2) == 0 ? tag + 2 : tag);
+  return h;
+  ```)
+
+;; Two GETs on one keep-alive connection; prints both status lines and what
+;; came after the second head.
+(defn two-on-one [port : int path : cstr] : nil
+  ```c
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons((uint16_t)port);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return; }
+  char req[512];
+  int n = snprintf(req, sizeof req,
+                   "GET %s HTTP/1.1\r\nHost: x\r\n\r\nGET /ok HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", path);
+  send(fd, req, (size_t)n, 0);
+  char buf[4096];
+  size_t got = 0;
+  for (;;) {
+      ssize_t r = recv(fd, buf + got, sizeof buf - 1 - got, 0);
+      if (r <= 0) break;
+      got += (size_t)r;
+  }
+  buf[got] = '\0';
+  close(fd);
+  const char *second = strstr(buf + 1, "HTTP/1.1 ");
+  const char *b2 = second ? strstr(second, "\r\n\r\n") : NULL;
+  printf("pipelined after %s: first=%.3s second=%.3s second-body=[%s]\n",
+         path, buf + 9, second ? second + 9 : "---", b2 ? b2 + 4 : "");
+  fflush(stdout);
+  ```)
+
+(defn main [] : int
+  (let [base   (fn [c : ptr<void>] : nil
+                 (cond
+                   (path-is? c "/own") (do (httpd-resp-header! c "ETag" "\"v1\"")
+                                           (httpd-resp-body! c "versioned"))
+                   (path-is? c "/nc")  (do (httpd-resp-status! c 204)
+                                           (httpd-resp-body! c "must not be sent"))
+                   (path-is? c "/nm")  (do (httpd-resp-status! c 304)
+                                           (httpd-resp-body! c "nor this"))
+                   :else               (httpd-resp-body! c "hello")))
+        h      (httpd-new-pool 0 1 (mw-etag base))
+        port   (httpd-port h)
+        server (spawn-server h)
+        r0     (raw-request port "GET" "/" "" "")
+        tag    (etag-of r0)]
+    (show "GET" r0)
+    (let [r (raw-request port "GET" "/" (inm tag) "")] (show "match" r) (raw-release r))
+    (let [r (raw-request port "GET" "/" (inm-list tag) "")] (show "match in list" r) (raw-release r))
+    (let [r (raw-request port "GET" "/" (inm-strong tag) "")] (show "match without W/" r) (raw-release r))
+    (let [r (raw-request port "GET" "/" "If-None-Match: *\r\n" "")] (show "star" r) (raw-release r))
+    (let [r (raw-request port "GET" "/" "If-None-Match: W/\"other\"\r\n" "")] (show "other" r) (raw-release r))
+    (let [r (raw-request port "HEAD" "/" "" "")] (show "HEAD" r) (raw-release r))
+    (let [r (raw-request port "POST" "/" "" "data")] (show "POST" r) (raw-release r))
+    (let [r (raw-request port "GET" "/own" "If-None-Match: \"v1\"\r\n" "")] (show "own match" r) (raw-release r))
+    (let [r (raw-request port "GET" "/own" "If-None-Match: \"v0\"\r\n" "")] (show "own other" r) (raw-release r))
+    (raw-release r0)
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h))
+  (println "-- bodiless statuses, no mw-etag")
+  (let [base   (fn [c : ptr<void>] : nil
+                 (cond
+                   (path-is? c "/nc") (do (httpd-resp-status! c 204)
+                                          (httpd-resp-body! c "must not be sent"))
+                   (path-is? c "/nm") (do (httpd-resp-status! c 304)
+                                          (httpd-resp-body! c "nor this"))
+                   :else              (httpd-resp-body! c "fine")))
+        h      (httpd-new-pool 0 1 base)
+        port   (httpd-port h)
+        server (spawn-server h)]
+    (let [r (raw-request port "GET" "/nc" "" "")] (show "204" r) (raw-release r))
+    (let [r (raw-request port "GET" "/nm" "" "")] (show "304" r) (raw-release r))
+    (two-on-one port "/nc")
+    (two-on-one port "/nm")
+    (httpd-stop h)
+    (join-thread server)
+    (httpd-free h))
+  (println "done")
+  0)

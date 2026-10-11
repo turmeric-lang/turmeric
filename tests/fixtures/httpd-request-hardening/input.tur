@@ -140,6 +140,7 @@
   snprintf(c->method, sizeof c->method, "%s", method);
   snprintf(c->path, sizeof c->path, "%s", path);
   httpd_hymw_hylog_hyemit((void *)c, 5);
+  httpd_hyconn_hyrelease((void *)c);   /* the line is the request's */
   free(c);
   ```)
 

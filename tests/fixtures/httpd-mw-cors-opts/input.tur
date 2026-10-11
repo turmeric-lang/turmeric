@@ -142,7 +142,7 @@
                    "GET, POST, OPTIONS"
                    "Content-Type"
                    ""
-                   0
+                   false
                    60)
         composed (compose-middleware base (mw-cors-opts opts))
         h        (httpd-new-pool 0 1 composed)
