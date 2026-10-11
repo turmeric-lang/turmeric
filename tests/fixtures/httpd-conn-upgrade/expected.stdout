@@ -1,0 +1,12 @@
+upgrade=scheduled
+late-write=ok
+detached-close=ok
+status-line=HTTP/1.1 101 Switching Protocols
+has-upgrade-header=yes
+has-content-length=no
+has-connection-upgrade=yes
+after-upgrade=PINGlate
+raw=[HTTP/1.0 200 OK||||self-written]
+plain-status=HTTP/1.1 200 OK
+plain-body=ok
+done

@@ -1,0 +1,24 @@
+-- defaults
+/ status=200
+  X-Content-Type-Options=nosniff
+  X-Frame-Options=DENY
+  Referrer-Policy=no-referrer
+  Cross-Origin-Opener-Policy=same-origin
+  Strict-Transport-Security=(absent)
+  Content-Security-Policy=(absent)
+/own status=200
+  X-Content-Type-Options=nosniff
+  X-Frame-Options=SAMEORIGIN
+  Referrer-Policy=no-referrer
+  Cross-Origin-Opener-Policy=same-origin
+  Strict-Transport-Security=(absent)
+  Content-Security-Policy=(absent)
+-- opts
+/ status=200
+  X-Content-Type-Options=nosniff
+  X-Frame-Options=(absent)
+  Referrer-Policy=strict-origin
+  Cross-Origin-Opener-Policy=same-origin
+  Strict-Transport-Security=max-age=31536000; includeSubDomains
+  Content-Security-Policy=default-src 'self'
+done

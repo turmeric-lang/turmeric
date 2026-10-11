@@ -64,12 +64,15 @@
 ;;   httpd-req-body-len [conn :ptr<void>]                -- int
 ;;   httpd-resp-status! [conn :ptr<void> status :int]    -- nil
 ;;   httpd-resp-body!   [conn :ptr<void> body :cstr]     -- nil
+;;   httpd-set-read-timeout!        [ms :int]            -- int (previous)
+;;   httpd-server-set-read-timeout! [h ms]               -- nil (one server)
+;;   httpd-server-set-max-body!     [h n]                -- nil (one server)
+;;   httpd-conn-upgrade! [conn on-upgrade :(fn [ptr<void>] nil)] -- bool
+;;   httpd-conn-detach!  [conn]                          -- bool
+;;   httpd-conn-fd / httpd-conn-tls / httpd-conn-read / httpd-conn-write /
+;;   httpd-conn-close!   -- the transport of a handed-off connection
 ;; M3 body parsers (JSON) reuse stdlib/json's parser/free, so pull it in.
 (load "stdlib/json.tur")
-;; mw-cors owns its config strings as Drop-typeclass String captures so the
-;; closure drop-glue releases them (Model R); needs the String API.
-
-(load "stdlib/string.tur")
 
 (load "stdlib/effects.tur")
 ;; stdlib-effect-rows: the httpd server constructors (which bind+listen) and
@@ -86,15 +89,17 @@
   /* __tur_include__: #include <stdint.h> */
   /* __tur_include__: #include <string.h> */
   /* __tur_include__: #include <strings.h> */
+  /* __tur_include__: #include <errno.h> */
   /* __tur_include__: typedef struct { long long wrap_fd; long long handshake; long long read_fn; long long write_fn; long long shutdown; long long free_fn; } httpd_tls_ops_t; */
   /* __tur_include__: static httpd_tls_ops_t httpd_tls_ops = {0,0,0,0,0,0}; */
   /* __tur_include__: static int64_t httpd_max_body = 8388608; */
+  /* __tur_include__: static int64_t httpd_read_timeout_ms = 5000; */
   /* __tur_include__: static int httpd_bind_any = 0; */
   /* __tur_include__: static char httpd_bind_addr_s[64] = {0}; */
   /* __tur_include__: typedef struct __HttpdHeader { char *name; char *value; struct __HttpdHeader *next; } HttpdHeader; */
   /* __tur_include__: typedef struct __HttpdAttr { char *key; char *value; struct __HttpdAttr *next; } HttpdAttr; */
   /* __tur_include__: typedef struct __HttpdOwnedStr { char *s; struct __HttpdOwnedStr *next; } HttpdOwnedStr; */
-  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; } HttpdConn; */
+  /* __tur_include__: typedef struct { int fd; int64_t handler; char method[16]; char path[1024]; char version[16]; char *body; int body_len; int resp_status; char *resp_body; int resp_body_len; int client_keep_alive; void *route_params; int64_t tls; void *req_headers; void *resp_headers; int64_t req_json_cache; void *req_multipart_parts; void *fiber_group; void *attr_list; void *owned_cstrs; int upgrade; int64_t on_upgrade; int has_max_body; int64_t max_body; } HttpdConn; */
   /* __tur_include__: static const char *httpd_mp_find(const char *h, const char *e, const char *n, size_t nl) { if (!h || !e || nl == 0) return 0; for (; h + nl <= e; h++) if (memcmp(h, n, nl) == 0) return h; return 0; } */
   /* __tur_include__: static int httpd_hdr_param(const char *v, const char *ve, const char *key, char *out, int cap) { size_t kl = strlen(key); const char *q = (const char *)memchr(v, ';', (size_t)(ve - v)); while (q && q < ve) { q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; const char *ks = q; while (q < ve && *q != '=' && *q != ';') q++; const char *ke = q; while (ke > ks && (ke[-1] == ' ' || ke[-1] == '\t')) ke--; if (q >= ve || *q == ';') continue; q++; while (q < ve && (*q == ' ' || *q == '\t')) q++; int hit = (size_t)(ke - ks) == kl && strncasecmp(ks, key, kl) == 0; int n = 0; if (q < ve && *q == '"') { q++; while (q < ve && *q != '"') { if (*q == '\\' && q + 1 < ve) q++; if (hit && n + 1 < cap) out[n++] = *q; q++; } if (q < ve) q++; } else { while (q < ve && *q != ';' && *q != ' ' && *q != '\t') { if (hit && n + 1 < cap) out[n++] = *q; q++; } } if (hit) { out[n] = '\0'; return n; } q = (const char *)memchr(q, ';', (size_t)(ve - q)); } return -1; } */
   /* __tur_include__: static char *httpd_conn_own_cstr(HttpdConn *c, char *s) { if (!c || !s) return s; HttpdOwnedStr *n = (HttpdOwnedStr *)malloc(sizeof(HttpdOwnedStr)); if (!n) return s; n->s = s; n->next = (HttpdOwnedStr *)c->owned_cstrs; c->owned_cstrs = n; return s; } */
@@ -318,6 +323,7 @@
 (defn httpd-status-text [status : int] : cstr
   ```c
   switch (status) {
+    case 101: return "Switching Protocols";
     case 200: return "OK";
     case 201: return "Created";
     case 204: return "No Content";
@@ -331,9 +337,11 @@
     case 403: return "Forbidden";
     case 404: return "Not Found";
     case 405: return "Method Not Allowed";
+    case 408: return "Request Timeout";
     case 413: return "Payload Too Large";
     case 414: return "URI Too Long";
     case 429: return "Too Many Requests";
+    case 431: return "Request Header Fields Too Large";
     case 500: return "Internal Server Error";
     case 501: return "Not Implemented";
     case 503: return "Service Unavailable";
@@ -363,7 +371,8 @@
 ;;;   -400  malformed, negative or conflicting Content-Length, or both
 ;;;         Content-Length and Transfer-Encoding (the request-smuggling shape),
 ;;;         or a method / version too long for its field
-;;;   -413  Content-Length above httpd-set-max-body!'s cap
+;;;   -413  Content-Length above the body cap (httpd-server-set-max-body! for
+;;;         this server, else httpd-set-max-body!'s)
 ;;;   -414  a request target too long for the path field
 ;;;   -501  Transfer-Encoding (chunked bodies are not implemented, and reading
 ;;;         the chunks as the next request would desync the connection)
@@ -449,7 +458,11 @@
                   int name_len = (int)(colon - h);
                   char *val = colon + 1;
                   while (val < eol && (*val == ' ' || *val == '\t')) val++;
-                  int val_len = (int)(eol - val);
+                  /* The field value excludes trailing whitespace as well as
+                   * leading (RFC 9110 5.5). */
+                  const char *vend = eol;
+                  while (vend > val && (vend[-1] == ' ' || vend[-1] == '\t')) vend--;
+                  int val_len = (int)(vend - val);
                   if (name_len == 10 && strncasecmp(h, "Connection", 10) == 0) {
                       /* A comma-separated token list, each token whole:
                        * `closed` is not `close` (WP4, item 6). */
@@ -518,7 +531,8 @@
   conn->client_keep_alive = (conn_keep && !conn_close);
   if (bad_cl) return -400;
   if (have_te) return have_cl ? -400 : -501;
-  if (big_cl || content_len > httpd_max_body) return -413;
+  int64_t cap = conn->has_max_body ? conn->max_body : httpd_max_body;
+  if (big_cl || content_len > cap) return -413;
   *out_clen = content_len;
   return hdrs_total;
   ```)
@@ -542,16 +556,35 @@
   int blen = conn->resp_body ? conn->resp_body_len : 0;
   const char *ver  = is11 ? "HTTP/1.1" : "HTTP/1.0";
   const char *chdr = conn->client_keep_alive ? "keep-alive" : "close";
-  int has_content_type = 0;
+  /* H1 connection upgrade: the response hands the connection off (a 101, or
+   * a 2xx tunnel), so the server writes no framing of its own -- no
+   * Content-Length (RFC 9110 forbids it on 1xx), no Connection: keep-alive,
+   * no default Content-Type -- and no body.  The handler's own headers
+   * (Upgrade, Sec-WebSocket-Accept, ...) carry the response. */
+  int upgrading = (conn->upgrade == 1);
+  /* H4: a 1xx, 204 or 304 has no body by definition (RFC 9110 sec. 6.4.1),
+   * so it gets no Content-Length and no default Content-Type either;
+   * httpd-resp-finalize has already dropped any body the handler set. */
+  int bodiless = (status >= 100 && status < 200) || status == 204 || status == 304;
+  int has_content_type = 0, has_connection = 0;
   for (HttpdHeader *rh = (HttpdHeader *)conn->resp_headers; rh; rh = rh->next) {
-      if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) { has_content_type = 1; break; }
+      if (rh->name && strcasecmp(rh->name, "Content-Type") == 0) has_content_type = 1;
+      if (rh->name && strcasecmp(rh->name, "Connection") == 0) has_connection = 1;
   }
   size_t cap = 1024, len = 0;
   char *hb = (char *)malloc(cap);
   if (!hb) return NULL;
-  int n = snprintf(hb, cap, "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n%s",
+  int n;
+  if (upgrading) {
+      n = snprintf(hb, cap, "%s %d %s\r\n%s", ver, status, stxt,
+                   (status == 101 && !has_connection) ? "Connection: Upgrade\r\n" : "");
+  } else if (bodiless) {
+      n = snprintf(hb, cap, "%s %d %s\r\nConnection: %s\r\n", ver, status, stxt, chdr);
+  } else {
+      n = snprintf(hb, cap, "%s %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n%s",
                    ver, status, stxt, blen, chdr,
                    has_content_type ? "" : "Content-Type: text/plain; charset=utf-8\r\n");
+  }
   if (n < 0 || (size_t)n >= cap) { free(hb); return NULL; }
   len = (size_t)n;
   for (HttpdHeader *rh = (HttpdHeader *)conn->resp_headers; rh; rh = rh->next) {
@@ -581,16 +614,54 @@
   *out_len = (int64_t)len;
   return hb;
   ```)
+;;; httpd-resp-finalize -- internal: last word on the status before the head is built.
+;;;
+;;; A `101 Switching Protocols` is only honest on a connection that is really
+;;; being handed off.  One set without httpd-conn-upgrade! (a handler bug) is
+;;; answered 500, and one whose upgrade the server refused (the async server,
+;;; which cannot hand off a connection yet) is answered 501 -- in both cases
+;;; with an explanatory body and the connection closed, so the client never
+;;; believes it upgraded.
+;;;
+;;; A 1xx, 204 or 304 response has no body (RFC 9110), so one a handler set
+;;; anyway -- a middleware that ran after the status was decided, say -- is
+;;; dropped here rather than written as bytes the client would read as the
+;;; start of the next response.
+
+(defn httpd-resp-finalize [c : ptr<void>] : nil
+  ```c
+  HttpdConn *conn = (HttpdConn *)c;
+  if (!conn) return;
+  if (conn->resp_status == 101 && conn->upgrade != 1) {
+      int refused = (conn->upgrade == 3);
+      conn->resp_status = refused ? 501 : 500;
+      __TUR_CNAME_httpd-resp-body!__((void *)conn, refused
+          ? "connection upgrade is not supported by this server"
+          : "101 Switching Protocols without httpd-conn-upgrade!");
+      conn->client_keep_alive = 0;
+      return;
+  }
+  int st = conn->resp_status;
+  if (conn->upgrade != 1 && ((st >= 100 && st < 200) || st == 204 || st == 304) && conn->resp_body) {
+      free(conn->resp_body);
+      conn->resp_body = NULL;
+      conn->resp_body_len = 0;
+  }
+  ```)
 ;;; httpd-conn-release -- internal: free everything a request attached to conn.
 ;;;
 ;;; The body, the response body, both header lists, the cached JSON body, the
-;;; multipart parts, the attribute list and the owned accessor strings.  Leaves
-;;; conn reusable (every freed field is reset).
+;;; multipart parts, the attribute list, the owned accessor strings and an
+;;; upgrade callback that never ran.  Leaves conn reusable (every freed field
+;;; is reset).
 
 (defn httpd-conn-release [c : ptr<void>] : nil
   ```c
   HttpdConn *conn = (HttpdConn *)c;
   if (!conn) return;
+  /* H1: an upgrade callback that never ran (the 101 could not be written)
+   * is still owned by the conn. */
+  if (conn->on_upgrade) { TUR_CLOSURE_DROP(conn->on_upgrade); conn->on_upgrade = 0; }
   if (conn->body)      { free(conn->body); conn->body = NULL; }
   if (conn->resp_body) { free(conn->resp_body); conn->resp_body = NULL; }
   for (int which = 0; which < 2; which++) {
@@ -662,23 +733,35 @@
 ;;; HTTP/1.1 keep-alive semantics:
 ;;;   - HTTP/1.1: connection kept alive unless Connection: close.
 ;;;   - HTTP/1.0: connection closed unless Connection: keep-alive.
-;;;   - A SO_RCVTIMEO of 5 seconds bounds idle keep-alive holding time.
+;;;   - Each request head must arrive whole within the read timeout
+;;;     (`read-ms`, else httpd-set-read-timeout!'s, 5 s by default); that
+;;;     also bounds how long an idle keep-alive connection is held.  A head
+;;;     that is still incomplete at the deadline is answered 408, one larger
+;;;     than 256 KiB is answered 431, and an idle connection is just closed.
+;;;   - Bytes a client pipelined behind one request are kept for the next.
 ;;;
 ;;; When `tls` is non-zero it is an opaque TLS connection handle obtained
 ;;; from the spice's tls-wrap-fd + tls-handshake; reads and writes are
 ;;; routed through the registered TLS ops instead of recv/send.
 ;;;
-;;; Since: Phase H1 (TLS path: Phase H5)
+;;; A handler that called httpd-conn-upgrade! gets its response written and
+;;; then the connection handed to its callback; one that called
+;;; httpd-conn-detach! has taken the connection already.  Either way this
+;;; function neither closes the fd nor releases the TLS state afterwards.
+;;;
+;;; `max-body` is the server's own body cap (-1: httpd-set-max-body!'s).
+;;;
+;;; Since: Phase H1 (TLS path: Phase H5; upgrade, deadline: tourist-on-stdlib-httpd H1)
 
-(defn httpd-handle [fd : int handler : int tls : int] : nil
+(defn httpd-handle [fd : int handler : int tls : int max-body : int read-ms : int] : nil
   ```c
-  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
-  typedef void    (*httpd_tls_void_fn)(int64_t);
-  /* 5 second receive timeout bounds idle keep-alive connections. */
-  struct timeval tv;
-  tv.tv_sec = 5; tv.tv_usec = 0;
-  setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  typedef void (*httpd_tls_void_fn)(int64_t);
+  int64_t rto = read_ms > 0 ? read_ms : httpd_read_timeout_ms;
+  if (rto < 1) rto = 1;
   int keep_going = 1;
+  int handed_off = 0;     /* upgraded or detached: the fd is not ours to close */
+  char *carry = NULL;     /* bytes read past the end of the previous request */
+  int   carry_len = 0;
   while (keep_going) {
       HttpdConn _conn;
       HttpdConn *conn = &_conn;
@@ -686,20 +769,38 @@
       conn->fd = (int)fd;
       conn->handler = (int64_t)handler;
       conn->tls = (int64_t)tls;
+      if (max_body >= 0) { conn->has_max_body = 1; conn->max_body = max_body; }
       /* M0: grow the read buffer on demand so large header blocks no
        * longer truncate at 8 KB. Start at 8 KB; double until headers fit
-       * or a hard cap is reached (defends against runaway headers). */
+       * or the 256 KiB cap is reached (431 past it). */
       size_t buf_cap = 8192;
       size_t buf_max = 262144;  /* 256 KB hard cap on header block */
+      while (buf_cap < (size_t)carry_len + 1 && buf_cap < buf_max) buf_cap *= 2;
       char  *buf     = (char *)malloc(buf_cap);
       if (!buf) break;
       buf[0] = '\0';
       int total = 0;
       ssize_t n;
       char *hdr_end = NULL;
+      int oversized = 0, timed_out = 0;
+      if (carry_len > 0) {
+          /* A pipelined request, read (at least in part) with the last one. */
+          memcpy(buf, carry, (size_t)carry_len);
+          total = carry_len;
+          buf[total] = '\0';
+          free(carry);
+          carry = NULL;
+          carry_len = 0;
+          hdr_end = strstr(buf, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+      }
+      /* The whole head must arrive by the deadline.  A per-recv timeout let a
+       * peer that trickled one byte every few seconds hold the worker for as
+       * long as it liked (slow loris). */
+      int64_t deadline = httpd_hymw_hymono_hyms() + rto;
       while (!hdr_end) {
           if ((size_t)total + 1 >= buf_cap) {
-              if (buf_cap >= buf_max) break;
+              if (buf_cap >= buf_max) { oversized = 1; break; }
               size_t new_cap = buf_cap * 2;
               if (new_cap > buf_max) new_cap = buf_max;
               char *nb = (char *)realloc(buf, new_cap);
@@ -707,14 +808,17 @@
               buf = nb;
               buf_cap = new_cap;
           }
-          if (conn->tls && httpd_tls_ops.read_fn) {
-              n = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
-                      conn->tls, (int64_t)(intptr_t)(buf + total),
-                      (int64_t)(buf_cap - 1 - (size_t)total));
-          } else {
-              n = recv(conn->fd, buf + total,
-                       (size_t)(buf_cap - 1 - (size_t)total), 0);
-          }
+          int64_t rem = deadline - httpd_hymw_hymono_hyms();
+          if (rem <= 0) { timed_out = 1; break; }
+          httpd_hyset_hyrcvtimeo(fd, rem);
+          errno = 0;
+          n = (ssize_t)httpd_hyconn_hyread((void *)conn, (void *)(buf + total),
+                                           (int64_t)(buf_cap - 1 - (size_t)total));
+          /* A receive timeout is EAGAIN on POSIX and WSAETIMEDOUT (errno
+           * untouched) on Windows; a failed read past the deadline is one
+           * either way. */
+          if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                        httpd_hymw_hymono_hyms() >= deadline)) { timed_out = 1; break; }
           if (n <= 0) break;
           /* Resume the terminator search where the last one stopped (less
            * the terminator's own length): rescanning the whole buffer after
@@ -727,45 +831,54 @@
           hdr_end = strstr(buf + scan4, "\r\n\r\n");
           if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
-      if (!hdr_end) { free(buf); break; }  /* peer closed, timed out, or oversized */
+      if (!hdr_end) {
+          /* Peer closed, or an idle keep-alive connection timed out: nothing
+           * to answer.  A head that outgrew the cap, or was still arriving at
+           * the deadline, gets a status the client can act on (it used to be
+           * dropped without a word). */
+          int st = oversized ? 431 : (timed_out && total > 0) ? 408 : 0;
+          if (st) {
+              char eb[160];
+              int64_t el = httpd_hyerror_hyresponse(st, (void *)eb, (int64_t)sizeof eb);
+              (void)httpd_hyconn_hywrite((void *)conn, (void *)eb, el);
+              if (!tls) httpd_hylinger_hydrain(fd);
+          }
+          free(buf);
+          break;
+      }
       /* security-audit-plan M-4: the head is parsed by httpd-parse-head, the
        * one parser both server paths share, which also validates the
-       * Content-Length against httpd-set-max-body!'s cap BEFORE anything is
-       * allocated for the body. */
+       * Content-Length against the body cap BEFORE anything is allocated for
+       * the body. */
       int64_t content_len = 0;
       int64_t hdrs_total = httpd_hyparse_hyhead((void *)conn, (void *)buf,
                                                 (int64_t)total, (void *)&content_len);
       if (hdrs_total < 0) {
           char eb[160];
           int64_t el = httpd_hyerror_hyresponse(-hdrs_total, (void *)eb, (int64_t)sizeof eb);
-          if (conn->tls && httpd_tls_ops.write_fn) {
-              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)eb, el);
-          } else {
-              send(conn->fd, eb, (size_t)el, 0);
-          }
+          (void)httpd_hyconn_hywrite((void *)conn, (void *)eb, el);
+          if (!tls) httpd_hylinger_hydrain(fd);
           free(buf);
           httpd_hyconn_hyrelease((void *)conn);
           break;
       }
       int is_http_11 = (strstr(conn->version, "1.1") != NULL);
-      /* Read body if Content-Length present. */
+      /* Read body if Content-Length present.  Each read may wait up to the
+       * read timeout. */
+      int64_t body_in_buf = 0;
       if (content_len > 0) {
-          int64_t body_in_buf = (int64_t)total - hdrs_total;
+          body_in_buf = (int64_t)total - hdrs_total;
           if (body_in_buf < 0) body_in_buf = 0;
           if (body_in_buf > content_len) body_in_buf = content_len;
           conn->body = (char *)malloc((size_t)content_len + 1);
           if (!conn->body) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
           if (body_in_buf > 0) memcpy(conn->body, buf + hdrs_total, (size_t)body_in_buf);
+          httpd_hyset_hyrcvtimeo(fd, rto);
           int64_t got = body_in_buf;
           while (got < content_len) {
-              ssize_t r;
-              if (conn->tls && httpd_tls_ops.read_fn) {
-                  r = (ssize_t)((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
-                          conn->tls, (int64_t)(intptr_t)(conn->body + got), content_len - got);
-              } else {
-                  r = recv(conn->fd, conn->body + got, (size_t)(content_len - got), 0);
-              }
+              ssize_t r = (ssize_t)httpd_hyconn_hyread((void *)conn,
+                                                       (void *)(conn->body + got),
+                                                       content_len - got);
               if (r <= 0) break;
               got += (int64_t)r;
           }
@@ -775,6 +888,18 @@
            * not a request: drop the connection rather than hand the handler
            * a truncated one. */
           if (got < content_len) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
+      }
+      /* Pipelining: whatever followed this request in the buffer is the start
+       * of the next one.  It used to be freed with the buffer, so a client
+       * that sent two requests back to back lost the second. */
+      {
+          int64_t used = hdrs_total + body_in_buf;
+          if ((int64_t)total > used) {
+              carry_len = (int)((int64_t)total - used);
+              carry = (char *)malloc((size_t)carry_len);
+              if (carry) memcpy(carry, buf + used, (size_t)carry_len);
+              else carry_len = 0;
+          }
       }
       /* Read buffer is no longer needed past this point. */
       free(buf);
@@ -789,39 +914,57 @@
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
       typedef void (*fn1_t)(void *, int64_t);
       ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
-      /* Write response. */
+      if (conn->upgrade == 2) {
+          /* httpd-conn-detach!: the handler wrote its own response on the
+           * raw transport and owns the connection now. */
+          handed_off = 1;
+          httpd_hyconn_hyrelease((void *)conn);
+          break;
+      }
+      httpd_hyresp_hyfinalize((void *)conn);
+      int upgrading = (conn->upgrade == 1);
+      /* Write response (an upgrade response carries no body, and a HEAD
+       * response keeps the Content-Length a GET would have but not the
+       * bytes). */
       const char *body = conn->resp_body ? conn->resp_body : "";
-      int         blen = conn->resp_body ? conn->resp_body_len : 0;
+      int         blen = (conn->resp_body && !upgrading && strcmp(conn->method, "HEAD") != 0)
+                         ? conn->resp_body_len : 0;
       int64_t hlen = 0;
+      int write_ok = 0;
       char *hbuf = (char *)httpd_hyresp_hyhead((void *)conn, (int64_t)is_http_11, (void *)&hlen);
       if (!hbuf) {
           /* fall back to a minimal status-only response */
           char tiny[160];
           int64_t tl = httpd_hyerror_hyresponse(500, (void *)tiny, (int64_t)sizeof tiny);
-          if (conn->tls && httpd_tls_ops.write_fn) {
-              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)tiny, tl);
-          } else {
-              send(conn->fd, tiny, (size_t)tl, 0);
-          }
+          (void)httpd_hyconn_hywrite((void *)conn, (void *)tiny, tl);
           keep_going = 0;
       } else {
-          if (conn->tls && httpd_tls_ops.write_fn) {
-              ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                  conn->tls, (int64_t)(intptr_t)hbuf, hlen);
-              if (blen > 0) {
-                  ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
-                      conn->tls, (int64_t)(intptr_t)body, (int64_t)blen);
-              }
-          } else {
-              send(conn->fd, hbuf, (size_t)hlen, 0);
-              if (blen > 0) send(conn->fd, body, (size_t)blen, 0);
-          }
+          write_ok = httpd_hyconn_hywrite((void *)conn, (void *)hbuf, hlen) == hlen;
+          if (write_ok && blen > 0)
+              write_ok = httpd_hyconn_hywrite((void *)conn, (void *)body, (int64_t)blen) == blen;
           free(hbuf);
-          keep_going = conn->client_keep_alive;
+          keep_going = conn->client_keep_alive && write_ok;
       }
+      if (upgrading && write_ok) {
+          /* httpd-conn-upgrade!: the response is out, and the connection
+           * belongs to the callback from here on.  It runs with the conn
+           * still alive, so the request accessors keep working; the socket
+           * loses the server's read timeout first. */
+          int64_t cb = conn->on_upgrade;
+          conn->on_upgrade = 0;
+          handed_off = 1;
+          httpd_hyconn_hyclear_hytimeout((int64_t)fd);
+          ((fn1_t)(intptr_t)((int64_t *)(intptr_t)cb)[0])((void *)(intptr_t)cb,
+                                                          (int64_t)(intptr_t)conn);
+          TUR_CLOSURE_DROP(cb);
+          httpd_hyconn_hyrelease((void *)conn);
+          break;
+      }
+      if (upgrading) keep_going = 0;   /* the 101 never went out: just close */
       httpd_hyconn_hyrelease((void *)conn);
   }
+  if (carry) free(carry);
+  if (handed_off) return;
   if (tls && httpd_tls_ops.shutdown) {
       ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)((int64_t)tls);
   }
@@ -850,6 +993,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   typedef int64_t (*httpd_tls_wrap_fn)(int64_t, int64_t);
   typedef int64_t (*httpd_tls_handshake_fn)(int64_t);
@@ -870,6 +1015,11 @@
       pthread_mutex_unlock(&hb->fdq_mtx);
       int64_t tls = 0;
       if (hb->tls_ctx && httpd_tls_ops.wrap_fd && httpd_tls_ops.handshake) {
+          /* The handshake is bounded by the read timeout too: a client that
+           * connected and said nothing used to hold the worker forever. */
+          int64_t hto = hb->read_timeout_ms > 0 ? hb->read_timeout_ms : httpd_read_timeout_ms;
+          if (hto < 1) hto = 1;
+          httpd_hyset_hyrcvtimeo((int64_t)fd, hto);
           tls = ((httpd_tls_wrap_fn)(intptr_t)httpd_tls_ops.wrap_fd)(
                     (int64_t)(intptr_t)hb->tls_ctx, (int64_t)fd);
           if (tls == 0) { close(fd); continue; }
@@ -882,7 +1032,8 @@
               continue;
           }
       }
-      httpd_hyhandle((int64_t)fd, hb->handler, tls);
+      httpd_hyhandle((int64_t)fd, hb->handler, tls, hb->max_body,
+                     (int64_t)hb->read_timeout_ms);
   }
   return NULL;
   ```)
@@ -915,6 +1066,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   int64_t *fat = (int64_t *)env;
   HttpdBlock *hb = (HttpdBlock *)(intptr_t)fat[1];
@@ -1016,6 +1169,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   if (workers <= 0) workers = 4;
   /* `workers * sizeof(pthread_t)` wrapped for a huge count and the first
@@ -1043,6 +1198,8 @@
    * httpd-new-async's in-flight default; httpd-new-pool-with-limit sets
    * another (0 = unlimited). */
   hb->fdq_max = 512;
+  hb->max_body = -1;          /* httpd-set-max-body!'s, until overridden */
+  hb->read_timeout_ms = 0;    /* httpd-set-read-timeout!'s, until overridden */
   hb->fdq     = (int *)malloc((size_t)hb->fdq_cap * sizeof(int));
   if (!hb->fdq) { close(fd); TUR_CLOSURE_DROP(handler); free(hb); return NULL; }
   pthread_mutex_init(&hb->fdq_mtx, NULL);
@@ -1125,6 +1282,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   /* The handler's ownership passes to httpd-new-pool, which releases it on
    * every refusal.  The reactor does not run until httpd-run, so no
@@ -1212,6 +1371,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   /* handler is passed ^fat (this fn owns the heap box).  On an early refusal it
    * is never handed to httpd-new-pool, so release it here or it leaks -- via
@@ -1262,6 +1423,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   struct sockaddr_storage addr;
@@ -1290,6 +1453,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   tur_reactor_run(hb->reactor);
@@ -1316,6 +1481,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   hb->stop_flag = 1;
@@ -1355,6 +1522,8 @@
       volatile int stop_flag;
       void *tls_ctx;
       int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
   } HttpdBlock;
   HttpdBlock *hb = (HttpdBlock *)h;
   if (hb->workers) {
@@ -1392,6 +1561,430 @@
   pthread_mutex_destroy(&hb->fdq_mtx);
   pthread_cond_destroy(&hb->fdq_cv);
   free(hb);
+  ```)
+;; =============================================================================
+;; Server settings: read timeout and per-server limits
+;; (docs/upcoming/spices/tourist-on-stdlib-httpd-plan.md H1)
+;; =============================================================================
+;;; httpd-set-read-timeout! -- set how long the server waits on a client.
+;;;
+;;; A request head must arrive whole within this time (else 408), each read
+;;; of a request body may wait this long, an idle keep-alive connection is
+;;; closed after it, and on a TLS server it bounds the handshake.  The
+;;; default is 5000 ms.  This is the process-wide value; a pool server can
+;;; carry its own with httpd-server-set-read-timeout!.  The async server
+;;; uses it for every park on a client read or write.
+;;;
+;;; Parameters:
+;;;   ms -- the timeout in milliseconds (clamped to [1, 3600000])
+;;;
+;;; Returns:
+;;;   The previous timeout in milliseconds.
+;;;
+;;; Example:
+;;;   (httpd-set-read-timeout! 30000)   ; slow clients get 30 s
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-set-read-timeout! [ms : int] : int
+  ```c
+  int64_t prev = httpd_read_timeout_ms;
+  if (ms < 1) ms = 1;
+  if (ms > 3600000) ms = 3600000;
+  httpd_read_timeout_ms = ms;
+  return prev;
+  ```)
+;;; httpd-server-set-read-timeout! -- give one pool server its own read timeout.
+;;;
+;;; Overrides httpd-set-read-timeout! for the server `h` (from httpd-new,
+;;; httpd-new-pool, httpd-new-pool-with-limit or httpd-new-tls), so two
+;;; servers in one process can differ.  Call it before httpd-run.
+;;;
+;;; Parameters:
+;;;   h  -- a pool server handle
+;;;   ms -- the timeout in milliseconds (clamped to [1, 3600000]); 0 goes
+;;;         back to following httpd-set-read-timeout!
+;;;
+;;; Example:
+;;;   (httpd-server-set-read-timeout! h 500)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-server-set-read-timeout! [h : ptr<void> ms : int] : nil
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
+  } HttpdBlock;
+  if (!h) return;
+  if (ms < 0) ms = 0;
+  if (ms > 3600000) ms = 3600000;
+  ((HttpdBlock *)h)->read_timeout_ms = (int)ms;
+  ```)
+;;; httpd-server-set-max-body! -- give one pool server its own body cap.
+;;;
+;;; Overrides httpd-set-max-body! for the server `h`: a request whose
+;;; Content-Length exceeds it is answered 413 before any of the body is read.
+;;; Call it before httpd-run.
+;;;
+;;; Parameters:
+;;;   h -- a pool server handle
+;;;   n -- the cap in bytes (clamped to [0, 2^31 - 2]); negative goes back to
+;;;        following httpd-set-max-body!
+;;;
+;;; Example:
+;;;   (httpd-server-set-max-body! h 1048576)   ; 1 MiB for this server
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-server-set-max-body! [h : ptr<void> n : int] : nil
+  ```c
+  typedef struct {
+      int listen_fd; int64_t handler;
+      void *reactor; int listen_src_id; void *accept_clos;
+      pthread_t *workers; int n_workers;
+      int *fdq; int fdq_head; int fdq_tail; int fdq_count; int fdq_cap;
+      int fdq_closed;
+      pthread_mutex_t fdq_mtx;
+      pthread_cond_t  fdq_cv;
+      volatile int stop_flag;
+      void *tls_ctx;
+      int   fdq_max;     /* pending-connection cap; 0 = unlimited */
+      int64_t max_body;  /* per-server body cap; -1 = httpd-set-max-body!'s */
+      int   read_timeout_ms; /* per-server read timeout; 0 = the global */
+  } HttpdBlock;
+  if (!h) return;
+  if (n > 2147483646) n = 2147483646;   /* conn->body_len is an int */
+  ((HttpdBlock *)h)->max_body = n < 0 ? -1 : n;
+  ```)
+;;; httpd-linger-drain -- internal: half-close fd and read what the peer is
+;;; still sending, briefly, so the close that follows does not reset the
+;;; connection over unread data (a reset can discard the error response the
+;;; client has not read yet).  Bounded to 256 KiB and 500 ms.
+(defn httpd-linger-drain [fd : int] : nil
+  ```c
+  #ifndef SHUT_WR
+  #define SHUT_WR 1   /* winsock's SD_SEND */
+  #endif
+  shutdown((int)fd, SHUT_WR);
+  httpd_hyset_hyrcvtimeo(fd, 100);
+  int64_t until = httpd_hymw_hymono_hyms() + 500;
+  size_t drained = 0;
+  char sink[4096];
+  while (drained < 262144 && httpd_hymw_hymono_hyms() < until) {
+      ssize_t r = recv((int)fd, sink, sizeof sink, 0);
+      if (r <= 0) break;
+      drained += (size_t)r;
+  }
+  ```)
+;; =============================================================================
+;; Connection upgrade (tourist-on-stdlib-httpd-plan H1)
+;; =============================================================================
+;;
+;; A handler can take the connection away from the server -- the WebSocket
+;; shape.  Two ways:
+;;
+;;   (httpd-conn-upgrade! c on-upgrade)  -- the server writes the response the
+;;       handler built (normally a 101 and its Upgrade headers; no
+;;       Content-Length, no body), then, instead of reading the next keep-alive
+;;       request or closing, calls `on-upgrade` with the conn.  From then on the
+;;       callback owns the socket and its TLS state: httpd-conn-read,
+;;       httpd-conn-write and httpd-conn-close! work on either transport.
+;;   (httpd-conn-detach! c)              -- the handler has already written its
+;;       own response over httpd-conn-fd / httpd-conn-tls and keeps the
+;;       connection; the server writes nothing and closes nothing.
+;;
+;; Only the pool servers (httpd-new, httpd-new-pool, httpd-new-tls) can hand a
+;; connection off.  The async server refuses: both functions return false,
+;; one line goes to stderr, and a 101 the handler sets anyway is answered 501
+;; -- the connection is never silently dropped.
+;;
+;; The socket a handler takes over has no read timeout (the server clears its
+;; own) and is blocking.  Bytes a client sent after the upgrade request but
+;; before reading the 101 are not passed on; a WebSocket client must wait for
+;; the 101 anyway (RFC 6455 4.1).
+;;; httpd-conn-fd -- the client socket behind a request.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   The file descriptor, or -1 once httpd-conn-close! has closed it.
+;;;
+;;; Example:
+;;;   (httpd-conn-fd c)   ; => 7
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-fd [conn : ptr<void>] : int
+  ```c
+  if (!conn) return -1;
+  return (int64_t)((HttpdConn *)conn)->fd;
+  ```)
+;;; httpd-conn-tls -- the TLS state behind a request, or NULL on plaintext.
+;;;
+;;; The handle the registered TLS implementation's wrap op returned for this
+;;; connection (with tls/httpd from the tls spice: a `tls_conn_t*`).
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   The TLS handle, or NULL for a plaintext connection.
+;;;
+;;; Example:
+;;;   (httpd-conn-tls c)   ; => NULL on a plaintext connection
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-tls [conn : ptr<void>] : ptr<void>
+  ```c
+  if (!conn) return NULL;
+  return (void *)(intptr_t)((HttpdConn *)conn)->tls;
+  ```)
+;;; httpd-conn-read -- read up to `len` raw bytes from the connection.
+;;;
+;;; Goes through the registered TLS ops on a TLS connection, recv(2)
+;;; otherwise.  Meant for a connection that has been handed off; during an
+;;; ordinary request the server has already read the request.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;   buf  -- destination buffer
+;;;   len  -- its capacity in bytes
+;;;
+;;; Returns:
+;;;   Bytes read (> 0), 0 when the peer closed, negative on error or timeout.
+;;;
+;;; Example:
+;;;   (httpd-conn-read c buf 4096)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-read [conn : ptr<void> buf : ptr<void> len : int] : int
+  ```c
+  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || !buf || len <= 0 || c->fd < 0) return -1;
+  if (c->tls && httpd_tls_ops.read_fn)
+      return ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.read_fn)(
+                 c->tls, (int64_t)(intptr_t)buf, len);
+  ssize_t n;
+  do { n = recv(c->fd, buf, (size_t)len, 0); } while (n < 0 && errno == EINTR);
+  return (int64_t)n;
+  ```)
+;;; httpd-conn-write -- write all `len` bytes to the connection.
+;;;
+;;; Loops over short writes (a TLS record carries at most 16 KiB).  Goes
+;;; through the registered TLS ops on a TLS connection, send(2) otherwise.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;   buf  -- source bytes (may contain NUL)
+;;;   len  -- byte count
+;;;
+;;; Returns:
+;;;   `len` once everything is written, -1 on error.
+;;;
+;;; Example:
+;;;   (httpd-conn-write c frame frame-len)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-write [conn : ptr<void> buf : ptr<void> len : int] : int
+  ```c
+  typedef int64_t (*httpd_tls_io_fn)(int64_t, int64_t, int64_t);
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || c->fd < 0 || len < 0 || (len > 0 && !buf)) return -1;
+  const char *p = (const char *)buf;
+  int64_t sent = 0;
+  while (sent < len) {
+      int64_t w;
+      if (c->tls && httpd_tls_ops.write_fn) {
+          w = ((httpd_tls_io_fn)(intptr_t)httpd_tls_ops.write_fn)(
+                  c->tls, (int64_t)(intptr_t)(p + sent), len - sent);
+      } else {
+          ssize_t r = send(c->fd, p + sent, (size_t)(len - sent), 0);
+          if (r < 0 && errno == EINTR) continue;
+          w = (int64_t)r;
+      }
+      if (w <= 0) return -1;
+      sent += w;
+  }
+  return len;
+  ```)
+;;; httpd-conn-clear-timeout -- internal: drop the server's SO_RCVTIMEO from
+;;; a socket it is handing to someone else.
+(defn httpd-conn-clear-timeout [fd : int] : nil
+  ```c
+  httpd_hyset_hyrcvtimeo(fd, 0);
+  ```)
+;;; httpd-set-rcvtimeo -- internal: set a socket's receive timeout to `ms`
+;;; milliseconds (0 = none).  POSIX takes a struct timeval; winsock takes a
+;;; DWORD of milliseconds, and reads a timeval's first word as one (5 s
+;;; became 5 ms).
+(defn httpd-set-rcvtimeo [fd : int ms : int] : nil
+  ```c
+  if (ms < 0) ms = 0;
+  #ifdef _WIN32
+  DWORD t = (DWORD)ms;
+  setsockopt((SOCKET)fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&t, sizeof t);
+  #else
+  struct timeval tv;
+  tv.tv_sec = (time_t)(ms / 1000);
+  tv.tv_usec = (long)((ms % 1000) * 1000);
+  setsockopt((int)fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  #endif
+  ```)
+;;; httpd-upgrade-refuse -- internal: the async server cannot hand a
+;;; connection off yet.  Marks the conn (httpd-resp-finalize answers a 101
+;;; with 501) and says why on stderr, once per process.
+(defn httpd-upgrade-refuse [c : ptr<void>] : nil
+  ```c
+  static int warned = 0;
+  if (!warned) {
+      warned = 1;
+      fprintf(stderr, "httpd: connection upgrade is not supported by the async "
+                      "server (httpd-new-async); serve it from httpd-new-pool\n");
+  }
+  if (c) ((HttpdConn *)c)->upgrade = 3;
+  ```)
+;;; httpd-conn-upgrade! -- hand the connection to `on-upgrade` after this response.
+;;;
+;;; Call from a handler, after setting the response that accepts the upgrade
+;;; (for a WebSocket: status 101 plus `Upgrade`, `Connection` and
+;;; `Sec-WebSocket-Accept` headers).  When the handler returns the server
+;;; writes that response -- without a Content-Length or a body -- and then,
+;;; on the same worker thread, calls `on-upgrade` with the conn.  The request
+;;; accessors still work inside the callback.  From then on the callback owns
+;;; the socket and its TLS state: the server neither reads another request
+;;; from it nor closes it.  Release them with httpd-conn-close! (or, for a
+;;; transport kept past the callback, with the TLS spice's own shutdown/free
+;;; and close(2)).
+;;;
+;;; The callback blocks its worker for as long as it runs.  If the response
+;;; cannot be written the callback is not called and the connection is
+;;; closed as usual.  Only pool servers can hand a connection off; on the
+;;; async server this returns false (see the section notes).
+;;;
+;;; Parameters:
+;;;   conn       -- connection handle from the worker
+;;;   on-upgrade -- (fn [ptr<void>] nil), called with the conn; owned by the
+;;;                 server from this call on (dropped after it runs)
+;;;
+;;; Returns:
+;;;   true when the hand-off is scheduled, false when it was refused.
+;;;
+;;; Example:
+;;;   (httpd-resp-status! c 101)
+;;;   (httpd-resp-header! c "Upgrade" "websocket")
+;;;   (httpd-resp-header! c "Sec-WebSocket-Accept" accept)
+;;;   (httpd-conn-upgrade! c (fn [c2 : ptr<void>] : nil
+;;;                            (run-session c2)
+;;;                            (httpd-conn-close! c2)))
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-upgrade! [conn : ptr<void> ^fat on-upgrade : (fn [ptr<void>] nil)] : bool
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || c->fiber_group || c->upgrade == 2 || c->fd < 0) {
+      if (c && c->fiber_group) httpd_hyupgrade_hyrefuse((void *)c);
+      if (on_upgrade) TUR_CLOSURE_DROP(on_upgrade);
+      return false;
+  }
+  if (c->on_upgrade) TUR_CLOSURE_DROP(c->on_upgrade);
+  c->on_upgrade = on_upgrade;
+  c->upgrade = 1;
+  return true;
+  ```)
+;;; httpd-conn-detach! -- take the connection over, effective now.
+;;;
+;;; For a handler that writes its own response straight to the transport
+;;; (httpd-conn-fd / httpd-conn-tls, or httpd-conn-write) and keeps using the
+;;; connection.  When the handler returns the server writes nothing, reads
+;;; nothing more and closes nothing: the fd and its TLS state belong to the
+;;; caller, who must release them (httpd-conn-close!).  The socket loses the
+;;; server's read timeout at once.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   true when the connection is now the caller's, false when refused (the
+;;;   async server, a conn already handed off, or a closed one).
+;;;
+;;; Example:
+;;;   (when (httpd-conn-detach! c)
+;;;     (httpd-conn-write c reply reply-len)
+;;;     (httpd-conn-close! c))
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-detach! [conn : ptr<void>] : bool
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || c->fd < 0) return false;
+  if (c->fiber_group) { httpd_hyupgrade_hyrefuse((void *)c); return false; }
+  if (c->upgrade == 2) return false;
+  if (c->on_upgrade) { TUR_CLOSURE_DROP(c->on_upgrade); c->on_upgrade = 0; }
+  c->upgrade = 2;
+  httpd_hyconn_hyclear_hytimeout((int64_t)c->fd);
+  return true;
+  ```)
+;;; httpd-conn-upgraded? -- has this connection been (or will it be) handed off?
+;;;
+;;; True after httpd-conn-upgrade! or httpd-conn-detach! succeeded.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;
+;;; Returns:
+;;;   true when the server will not write a response of its own framing or
+;;;   close the connection.
+;;;
+;;; Example:
+;;;   (when (httpd-conn-upgraded? c) (println "hijacked"))
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-upgraded? [conn : ptr<void>] : bool
+  ```c
+  HttpdConn *c = (HttpdConn *)conn;
+  return c && (c->upgrade == 1 || c->upgrade == 2);
+  ```)
+;;; httpd-conn-close! -- release a connection that has been handed off.
+;;;
+;;; Sends the TLS close_notify and frees the TLS state (when there is one)
+;;; and closes the socket.  Only acts on a conn the caller owns -- inside an
+;;; httpd-conn-upgrade! callback, or after httpd-conn-detach! -- because
+;;; during an ordinary request the server owns the descriptor and closing it
+;;; under the server is a double close.  Idempotent.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle
+;;;
+;;; Returns:
+;;;   true when it closed the connection, false when there was nothing of
+;;;   the caller's to close.
+;;;
+;;; Example:
+;;;   (httpd-conn-close! c)
+;;;
+;;; Since: tourist-on-stdlib-httpd H1
+(defn httpd-conn-close! [conn : ptr<void>] : bool
+  ```c
+  typedef void (*httpd_tls_void_fn)(int64_t);
+  HttpdConn *c = (HttpdConn *)conn;
+  if (!c || !(c->upgrade == 1 || c->upgrade == 2) || c->fd < 0) return false;
+  if (c->tls) {
+      if (httpd_tls_ops.shutdown) ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.shutdown)(c->tls);
+      if (httpd_tls_ops.free_fn)  ((httpd_tls_void_fn)(intptr_t)httpd_tls_ops.free_fn)(c->tls);
+      c->tls = 0;
+  }
+  close(c->fd);
+  c->fd = -1;
+  return true;
   ```)
 ;;; httpd-req-method -- return the HTTP method from the parsed request.
 ;;;
@@ -1465,6 +2058,24 @@
 (defn httpd-resp-status! [conn : ptr<void> status : int] : nil
   ```c
   ((HttpdConn *)conn)->resp_status = (int)status;
+  ```)
+;;; httpd-resp-close! -- close the connection after this response.
+;;;
+;;; The response goes out with `Connection: close` and the server closes the
+;;; connection instead of waiting for another keep-alive request.  A
+;;; `Connection` header a handler sets itself does not do this (the server
+;;; owns that header); this does.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Example:
+;;;   (httpd-resp-close! c)
+;;;
+;;; Since: tourist-on-stdlib-httpd H2
+(defn httpd-resp-close! [conn : ptr<void>] : nil
+  ```c
+  if (conn) ((HttpdConn *)conn)->client_keep_alive = 0;
   ```)
 ;;; httpd-resp-body! -- set the HTTP response body (copies the string).
 ;;;
@@ -1678,6 +2289,51 @@
   while (t->next) t = t->next;
   t->next = nh;
   ```)
+;;; httpd-resp-vary! -- add a token to the response's Vary header, once.
+;;;
+;;; `Vary` lists the request headers a response depends on, and several
+;;; middleware add to it (CORS adds `Origin`, compression `Accept-Encoding`).
+;;; This merges: the token is appended to an existing Vary value unless it is
+;;; already listed (case-insensitive), and a `Vary: *` is left alone.
+;;;
+;;; Parameters:
+;;;   conn  -- connection handle from the worker
+;;;   token -- a header name, e.g. "Origin"
+;;;
+;;; Example:
+;;;   (httpd-resp-vary! c "Accept-Encoding")
+;;;   (httpd-resp-vary! c "Origin")          ; Vary: Accept-Encoding, Origin
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn httpd-resp-vary! [conn : ptr<void> token : cstr] : nil
+  ```c
+  if (!conn || !token || !*token) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  size_t tl = strlen(token);
+  for (HttpdHeader *h = (HttpdHeader *)c->resp_headers; h; h = h->next) {
+      if (!h->name || strcasecmp(h->name, "Vary") != 0) continue;
+      const char *v = h->value ? h->value : "";
+      const char *p = v;
+      while (*p) {
+          while (*p == ' ' || *p == '\t' || *p == ',') p++;
+          const char *s = p;
+          while (*p && *p != ',') p++;
+          const char *e = p;
+          while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+          if (((size_t)(e - s) == tl && strncasecmp(s, token, tl) == 0) ||
+              ((size_t)(e - s) == 1 && *s == '*')) return;
+      }
+      size_t vl = strlen(v);
+      char *nv = (char *)malloc(vl + tl + 3);
+      if (!nv) return;
+      if (vl) { memcpy(nv, v, vl); memcpy(nv + vl, ", ", 2); vl += 2; }
+      memcpy(nv + vl, token, tl + 1);
+      free(h->value);
+      h->value = nv;
+      return;
+  }
+  __TUR_CNAME_httpd-resp-header-add!__(conn, "Vary", token);
+  ```)
 ;; =============================================================================
 ;; M2: Cookie middleware (depends on M0)
 ;; =============================================================================
@@ -1728,18 +2384,35 @@
 (defn httpd-req-cookie [conn : ptr<void> name : cstr] : cstr
   ```c
   if (!conn || !name || !*name) return "";
-  HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers;
-  const char *cookie_hdr = NULL;
-  while (h) {
-      if (h->name && strcasecmp(h->name, "Cookie") == 0) {
-          cookie_hdr = h->value ? h->value : "";
-          break;
-      }
-      h = h->next;
-  }
-  if (!cookie_hdr) return "";
+  char *out = (char *)httpd_hycookie_hyparse_hyraw(httpd_hyreq_hyheader_hyraw(conn, "Cookie"), name);
+  /* httpd-request-accessor-cstr-leak: the value lives on the per-request
+   * owned-cstr list, so httpd-handle's cleanup frees it at request end. */
+  return out ? httpd_conn_own_cstr((HttpdConn *)conn, out) : "";
+  ```)
+;;; httpd-req-header-raw -- internal: a request header's value, or NULL when
+;;; the request has no such header (case-insensitive name).  Borrowed.
+(defn httpd-req-header-raw [conn : ptr<void> name : cstr] : cstr
+  ```c
+  if (!conn || !name) return NULL;
+  for (HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->req_headers; h; h = h->next)
+      if (h->name && strcasecmp(h->name, name) == 0) return h->value ? h->value : "";
+  return NULL;
+  ```)
+;;; httpd-cookie-parse-raw -- internal: one cookie's value out of a Cookie
+;;; header value.
+;;;
+;;; The walk every cookie accessor shares (httpd-req-cookie, httpd-string's
+;;; httpd-req-cookie-raw, tourist's req-cookie): `name=value` pairs separated
+;;; by `;` and optional blanks, names compared case-sensitively (RFC 6265).
+;;;
+;;; Returns a fresh malloc'd copy of the value (a present-empty cookie is a
+;;; fresh ""), which the caller frees, or NULL when `header` is NULL or the
+;;; cookie is absent.
+(defn httpd-cookie-parse-raw [header : cstr name : cstr] : cstr
+  ```c
+  if (!header || !name || !*name) return NULL;
   size_t nlen = strlen(name);
-  const char *p = cookie_hdr;
+  const char *p = header;
   while (*p) {
       /* Skip leading whitespace / separators. */
       while (*p == ' ' || *p == '\t' || *p == ';') p++;
@@ -1757,17 +2430,13 @@
       }
       if (klen == nlen && strncmp(kstart, name, nlen) == 0) {
           char *out = (char *)malloc(vlen + 1);
-          if (!out) return "";
+          if (!out) return NULL;
           if (vlen > 0) memcpy(out, vstart, vlen);
           out[vlen] = '\0';
-          /* httpd-request-accessor-cstr-leak: register the fresh malloc on the
-           * per-request owned-cstr list so httpd-handle's cleanup frees it at
-           * request end -- the docstring's "per-call ownership; do not free"
-           * contract is now actually implemented. */
-          return httpd_conn_own_cstr((HttpdConn *)conn, out);
+          return out;
       }
   }
-  return "";
+  return NULL;
   ```)
 ;;; CookieOpts -- fully-specified Set-Cookie attributes.
 ;;;
@@ -1855,12 +2524,29 @@
 (defn httpd-set-cookie! [conn : ptr<void> opts : CookieOpts] : nil
   ```c
   if (!conn) return;
+  char *buf = (char *)httpd_hycookie_hyformat(opts);
+  if (!buf) return;
+  __TUR_CNAME_httpd-resp-header-add!__((void *)conn, "Set-Cookie", buf);
+  free(buf);
+  ```)
+;;; httpd-cookie-format -- internal: the Set-Cookie header value for a
+;;; CookieOpts.
+;;;
+;;; `name=value` then Path, Domain, Max-Age, Secure, HttpOnly and SameSite as
+;;; CookieOpts says.  Shared by httpd-set-cookie! and tourist's set-cookie!.
+;;;
+;;; Returns a fresh malloc'd string the caller frees, or NULL when the name is
+;;; empty or memory ran out.
+;;;
+;;; Since: tourist-on-stdlib-httpd H5
+(defn httpd-cookie-format [opts : CookieOpts] : cstr
+  ```c
   const char *cname  = opts.name      ? opts.name      : "";
   const char *cval   = opts.value     ? opts.value     : "";
   const char *cpath  = opts.path      ? opts.path      : "";
   const char *cdom   = opts.domain    ? opts.domain    : "";
   const char *csame  = opts.same_site ? opts.same_site : "";
-  if (!*cname) return;
+  if (!*cname) return NULL;
   /* Sized to the attributes rather than a fixed 2 KiB: the old buffer summed
    * snprintf's would-be lengths into n, so once name=value passed 2 KiB,
    * sizeof(buf) - n wrapped and the next attribute was written past the end
@@ -1868,7 +2554,7 @@
   size_t cap = strlen(cname) + strlen(cval) + strlen(cpath) + strlen(cdom)
              + strlen(csame) + 128;
   char *buf = (char *)malloc(cap);
-  if (!buf) return;
+  if (!buf) return NULL;
   size_t n = 0;
   #define HTTPD_COOKIE_ADD(...) do { \
       int w_ = snprintf(buf + n, cap - n, __VA_ARGS__); \
@@ -1882,8 +2568,7 @@
   if (opts.http_only)      HTTPD_COOKIE_ADD("; HttpOnly");
   if (*csame)              HTTPD_COOKIE_ADD("; SameSite=%s", csame);
   #undef HTTPD_COOKIE_ADD
-  __TUR_CNAME_httpd-resp-header-add!__((void *)conn, "Set-Cookie", buf);
-  free(buf);
+  return buf;
   ```)
 ;; =============================================================================
 ;; M3: Body parsers -- URL-encoded forms + JSON
@@ -1931,10 +2616,27 @@
   ```c
   if (!conn || !field || !*field) return "";
   HttpdConn *c = (HttpdConn *)conn;
-  if (!c->body || c->body_len <= 0) return "";
+  char *out = (char *)httpd_hyform_hyparse_hyraw((void *)c->body, (int64_t)c->body_len, field);
+  /* httpd-request-accessor-cstr-leak: register on the per-request
+   * owned-cstr list so httpd-handle's cleanup frees it at request end. */
+  return out ? httpd_conn_own_cstr(c, out) : "";
+  ```)
+;;; httpd-form-parse-raw -- internal: one field of a URL-encoded body.
+;;;
+;;; The walk every form accessor shares (httpd-req-form, httpd-string's
+;;; httpd-req-form-raw, tourist's form-param): `name=value` pairs separated by
+;;; `&`, the value percent-decoded with `+` as a space.  Names are compared as
+;;; written (case-sensitive, not decoded).
+;;;
+;;; Returns a fresh malloc'd decoded value (a present-empty field is a fresh
+;;; ""), which the caller frees, or NULL when the body is empty or the field
+;;; is absent.
+(defn httpd-form-parse-raw [body : ptr<void> len : int field : cstr] : cstr
+  ```c
+  if (!body || len <= 0 || !field || !*field) return NULL;
   size_t flen = strlen(field);
-  const char *p   = c->body;
-  const char *end = c->body + c->body_len;
+  const char *p   = (const char *)body;
+  const char *end = p + len;
   while (p < end) {
       const char *kstart = p;
       while (p < end && *p != '=' && *p != '&') p++;
@@ -1950,7 +2652,7 @@
       if (klen == flen && strncmp(kstart, field, flen) == 0) {
           size_t vlen = vend ? (size_t)(vend - vstart) : 0;
           char *out = (char *)malloc(vlen + 1);
-          if (!out) return "";
+          if (!out) return NULL;
           size_t oi = 0;
           for (size_t i = 0; i < vlen; i++) {
               char ch = vstart[i];
@@ -1967,13 +2669,11 @@
               }
           }
           out[oi] = '\0';
-          /* httpd-request-accessor-cstr-leak: register on the per-request
-           * owned-cstr list so httpd-handle's cleanup frees it at request end. */
-          return httpd_conn_own_cstr(c, out);
+          return out;
       }
       if (p < end && *p == '&') p++;
   }
-  return "";
+  return NULL;
   ```)
 ;;; httpd-req-json -- lazily parse the request body as JSON.
 ;;;
@@ -2069,30 +2769,44 @@
 ;;      Access-Control-Allow-Origin (and Allow-Credentials / Expose-Headers
 ;;      when configured).
 ;;
-;; Caveat: `allow-origin = "*"` combined with `allow-credentials = 1` is
-;; INVALID per the CORS spec.  Browsers reject the response and the
-;; request fails.  Either echo the request's `Origin:` or list specific
-;; origins when credentials are required.
+;; Allowed origins (tourist-on-stdlib-httpd-plan H4): `allow-origin` is "*"
+;; (any origin), or one origin, or a comma-separated list of them.  A listed
+;; origin is matched EXACTLY against the request's `Origin` and echoed back --
+;; with `Vary: Origin`, because the answer now depends on the request -- and a
+;; request from any other origin gets no Access-Control-Allow-Origin at all,
+;; which is how a browser is told no.
+;;
+;; `allow-origin = "*"` combined with credentials is INVALID per the CORS spec
+;; (browsers reject the response).  `cors-opts` refuses to build such options;
+;; mw-cors-with / mw-cors-opts handed them anyway drop the credentials (fail
+;; closed) and say so on stderr.
+;;
+;; The middleware copies its configuration into a heap block of its own when
+;; it is built, so the caller's strings may be computed and freed afterwards.
+;; Like mw-rate-limit's table, the block lives until process exit (an atexit
+;; hook frees it): a middleware instance lives as long as the server it is
+;; composed into.
 ;;; CorsOpts -- mw-cors configuration.
 ;;;
 ;;; Field conventions:
-;;;   allow-origin      -- single value; "*" for any (no credentials),
-;;;                        or a specific origin
+;;;   allow-origin      -- "*" for any origin (no credentials), or one origin,
+;;;                        or a comma-separated list of origins, each matched
+;;;                        exactly and echoed back with `Vary: Origin`
 ;;;   allow-methods     -- comma-separated list emitted on preflight
 ;;;   allow-headers     -- comma-separated list emitted on preflight
 ;;;   expose-headers    -- comma-separated list emitted on normal responses
 ;;;                        (or "" to omit)
-;;;   allow-credentials -- 0 / 1; emits Allow-Credentials: true on both paths
+;;;   allow-credentials -- emit Allow-Credentials: true (not with "*")
 ;;;   max-age           -- preflight cache lifetime in seconds, or -1 to omit
 ;;;
-;;; Since: Phase H8 (M4)
-
+;;; Since: Phase H8 (M4); origin list and bool credentials since
+;;; tourist-on-stdlib-httpd H4
 (defstruct CorsOpts
   [allow-origin : cstr
    allow-methods : cstr
    allow-headers : cstr
    expose-headers : cstr
-   allow-credentials : int
+   allow-credentials : bool
    max-age : int])
 ;;; default-cors-opts -- permissive defaults suitable for development.
 ;;;
@@ -2100,15 +2814,108 @@
 ;;; no expose-headers, no credentials, no max-age.  Tighten for prod.
 ;;;
 ;;; Since: Phase H8 (M4)
-
 (defn default-cors-opts [] : CorsOpts
   (make-struct CorsOpts
     "*"
     "GET, POST, PUT, DELETE, OPTIONS"
     "Content-Type"
     ""
-    0
+    false
     -1))
+;;; cors-blank? -- internal: is this string NULL, empty or all blanks?
+(defn cors-blank? [s : cstr] : bool
+  ```c
+  if (!s) return true;
+  while (*s == ' ' || *s == '\t') s++;
+  return *s == '\0';
+  ```)
+;;; cors-wildcard? -- internal: is this allow-origin the "*" wildcard?
+(defn cors-wildcard? [allow-origin : cstr] : bool
+  ```c
+  if (!allow_origin) return false;
+  const char *p = allow_origin;
+  while (*p == ' ' || *p == '\t') p++;
+  if (*p != '*') return false;
+  p++;
+  while (*p == ' ' || *p == '\t') p++;
+  return *p == '\0';
+  ```)
+;;; cors-opts -- build a CorsOpts, refusing an invalid combination.
+;;;
+;;; The checked counterpart of `(make-struct CorsOpts ...)`: credentials with
+;;; the "*" origin is an error (the CORS spec forbids it and browsers reject
+;;; the response), as is an empty allow-origin.
+;;;
+;;; Parameters:
+;;;   allow-origin      -- "*", one origin, or a comma-separated list
+;;;   allow-methods     -- comma-separated methods for preflight
+;;;   allow-headers     -- comma-separated request headers for preflight
+;;;   expose-headers    -- comma-separated response headers, or ""
+;;;   allow-credentials -- send Access-Control-Allow-Credentials: true
+;;;   max-age           -- preflight cache seconds, or -1
+;;;
+;;; Returns:
+;;;   (Result CorsOpts cstr) -- ok(opts), or err(reason).
+;;;
+;;; Example:
+;;;   (cors-opts "https://app.example.com, https://admin.example.com"
+;;;              "GET, POST" "Content-Type" "" true 600)
+;;;   (cors-opts "*" "GET" "" "" true -1)   ; => err
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn cors-opts [allow-origin : cstr
+                 allow-methods : cstr
+                 allow-headers : cstr
+                 expose-headers : cstr
+                 allow-credentials : bool
+                 max-age : int] : (Result CorsOpts cstr)
+  (cond
+    (cors-blank? allow-origin)
+      (err "cors-opts: allow-origin is empty")
+    (and allow-credentials (cors-wildcard? allow-origin))
+      (err "cors-opts: allow-origin \"*\" cannot be combined with credentials")
+    :else
+      (ok (make-struct CorsOpts allow-origin allow-methods allow-headers
+                       expose-headers allow-credentials max-age))))
+;;; CorsConfig -- internal: one mw-cors instance's own copy of its settings.
+;;;
+;;; A heap block `HttpdCorsCfg` (see httpd-cors-config-new) that lives until
+;;; process exit.
+(defopaque CorsConfig :int)
+;;; httpd-cors-config-new -- internal: copy CORS settings into a heap block.
+;;;
+;;; Credentials with the "*" origin are dropped (fail closed) with a line on
+;;; stderr.  The block is registered for release at process exit.
+(defn httpd-cors-config-new [allow-origin : cstr
+                             allow-methods : cstr
+                             allow-headers : cstr
+                             expose-headers : cstr
+                             allow-credentials : bool
+                             max-age : int] : CorsConfig
+  ```c
+  /* __tur_include__: typedef struct __HttpdCorsCfg { char *origin; char *methods; char *headers; char *expose; int creds; int wildcard; int64_t max_age; struct __HttpdCorsCfg *next; } HttpdCorsCfg; */
+  /* __tur_include__: static HttpdCorsCfg *g_cors_registry = 0; */
+  /* __tur_include__: static int g_cors_atexit = 0; */
+  /* __tur_include__: static void httpd_cors_cleanup_all(void) { HttpdCorsCfg *c = g_cors_registry; while (c) { HttpdCorsCfg *nx = c->next; free(c->origin); free(c->methods); free(c->headers); free(c->expose); free(c); c = nx; } g_cors_registry = 0; } */
+  HttpdCorsCfg *c = (HttpdCorsCfg *)calloc(1, sizeof *c);
+  if (!c) return 0;
+  c->origin  = strdup(allow_origin   ? allow_origin   : "*");
+  c->methods = strdup(allow_methods  ? allow_methods  : "");
+  c->headers = strdup(allow_headers  ? allow_headers  : "");
+  c->expose  = strdup(expose_headers ? expose_headers : "");
+  c->wildcard = __TUR_CNAME_cors-wildcard?__(c->origin ? c->origin : "*") ? 1 : 0;
+  c->creds   = allow_credentials ? 1 : 0;
+  c->max_age = max_age;
+  if (c->creds && c->wildcard) {
+      fprintf(stderr, "httpd: mw-cors: allow-origin \"*\" cannot be combined with "
+                      "credentials; serving without Access-Control-Allow-Credentials\n");
+      c->creds = 0;
+  }
+  c->next = g_cors_registry;
+  g_cors_registry = c;
+  if (!g_cors_atexit) { atexit(httpd_cors_cleanup_all); g_cors_atexit = 1; }
+  return (int64_t)(intptr_t)c;
+  ```)
 ;;; httpd-mw-cors-is-preflight -- internal: 1 iff this is a CORS preflight.
 
 (defn httpd-mw-cors-is-preflight [conn : ptr<void>] : int
@@ -2118,133 +2925,102 @@
   if (!m || strcmp(m, "OPTIONS") != 0) return 0;
   return __TUR_CNAME_httpd-req-header?__((void *)conn, "Access-Control-Request-Method");
   ```)
-;;; httpd-mw-cors-emit-preflight -- internal: write the preflight response.
-;;;
-;;; Takes primitive fields rather than a CorsOpts value.  This originally
-;;; side-stepped a closure-capture codegen bug with by-pointer defstruct
-;;; params (the inner closure env stored the caller's `const CorsOpts *`
-;;; into a by-value field).  That bug is now fixed (see
-;;; docs/archive/history/stdlib-type-erasure-cleanup-plan.md A5/B5), so a future
-;;; refactor may capture a `CorsOpts` directly; the primitive surface is
-;;; retained for now to keep this change scoped to the codegen fix.
-
-(defn httpd-mw-cors-emit-preflight [conn : ptr<void>
-                                    allow-origin : cstr
-                                    allow-methods : cstr
-                                    allow-headers : cstr
-                                    allow-credentials : int
-                                    max-age : int] : nil
+;;; httpd-mw-cors-allow-origin -- internal: set Access-Control-Allow-Origin
+;;; (and Allow-Credentials) for this request per the config; returns true
+;;; when the origin was allowed.  A listed-origin config always adds
+;;; `Vary: Origin`, allowed or not, since the answer depends on it.
+(defn httpd-mw-cors-allow-origin [conn : ptr<void> cfg : CorsConfig] : bool
   ```c
-  if (!conn) return;
+  HttpdCorsCfg *c = (HttpdCorsCfg *)(intptr_t)cfg;
+  if (!conn || !c) return false;
+  if (c->wildcard) {
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin", "*");
+      return true;
+  }
+  __TUR_CNAME_httpd-resp-vary!__((void *)conn, "Origin");
+  const char *origin = httpd_hyreq_hyheader((void *)conn, "Origin");
+  if (!origin || !*origin) return false;
+  size_t ol = strlen(origin);
+  const char *p = c->origin;
+  int hit = 0;
+  while (*p && !hit) {
+      while (*p == ' ' || *p == '\t' || *p == ',') p++;
+      const char *s = p;
+      while (*p && *p != ',') p++;
+      const char *e = p;
+      while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+      if ((size_t)(e - s) == ol && memcmp(s, origin, ol) == 0) hit = 1;
+  }
+  if (!hit) return false;
+  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin", origin);
+  if (c->creds)
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Credentials", "true");
+  return true;
+  ```)
+;;; httpd-mw-cors-preflight -- internal: answer a preflight (204).
+(defn httpd-mw-cors-preflight [conn : ptr<void> cfg : CorsConfig] : nil
+  ```c
+  HttpdCorsCfg *c = (HttpdCorsCfg *)(intptr_t)cfg;
+  if (!conn || !c) return;
   __TUR_CNAME_httpd-resp-status!__((void *)conn, 204);
   __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
-  const char *ao = allow_origin  ? allow_origin  : "*";
-  const char *am = allow_methods ? allow_methods : "";
-  const char *ah = allow_headers ? allow_headers : "";
-  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin",  ao);
-  if (*am) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Methods", am);
-  if (*ah) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Headers", ah);
-  if (allow_credentials) {
-      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Credentials", "true");
-  }
-  if (max_age >= 0) {
+  if (!httpd_hymw_hycors_hyallow_hyorigin((void *)conn, cfg)) return;
+  if (*c->methods) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Methods", c->methods);
+  if (*c->headers) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Headers", c->headers);
+  if (c->max_age >= 0) {
       char buf[32];
-      snprintf(buf, sizeof(buf), "%lld", (long long)max_age);
+      snprintf(buf, sizeof(buf), "%lld", (long long)c->max_age);
       __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Max-Age", buf);
   }
   ```)
 ;;; httpd-mw-cors-decorate -- internal: decorate a normal-flow response.
-
-(defn httpd-mw-cors-decorate [conn : ptr<void>
-                              allow-origin : cstr
-                              expose-headers : cstr
-                              allow-credentials : int] : nil
+(defn httpd-mw-cors-decorate [conn : ptr<void> cfg : CorsConfig] : nil
   ```c
-  if (!conn) return;
-  const char *ao = allow_origin   ? allow_origin   : "*";
-  const char *eh = expose_headers ? expose_headers : "";
-  __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Origin", ao);
-  if (*eh) __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Expose-Headers", eh);
-  if (allow_credentials) {
-      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Allow-Credentials", "true");
-  }
+  HttpdCorsCfg *c = (HttpdCorsCfg *)(intptr_t)cfg;
+  if (!conn || !c) return;
+  if (!httpd_hymw_hycors_hyallow_hyorigin((void *)conn, cfg)) return;
+  if (*c->expose)
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "Access-Control-Expose-Headers", c->expose);
   ```)
 ;;; mw-cors-with -- CORS middleware factory (positional args).
 ;;;
 ;;; (mw-cors-with ao am ah eh ac ma) is a one-arg function suitable for
 ;;; compose-middleware: given a downstream handler `next`, returns a
 ;;; wrapped handler that either short-circuits a preflight or decorates
-;;; the normal response.
-;;;
-;;; For a struct-valued, curry-friendly equivalent, use `mw-cors-opts`:
-;;; `(mw-cors-opts opts)` partially applies a `CorsOpts` value and returns a
-;;; one-arg middleware usable directly in `compose-middleware`.  The curried
-;;; `__pap` env that captures the `CorsOpts` value once triggered a codegen
-;;; bug (a struct stored into an `int64_t` env field); that bug is now fixed
-;;; (stdlib-type-erasure-cleanup-plan A5/B5).
+;;; the normal response.  `mw-cors-opts` is the CorsOpts-valued form.
 ;;;
 ;;; See `CorsOpts` / `default-cors-opts` for field semantics.
 ;;;
 ;;; Example:
 ;;;   (compose-middleware base
-;;;     (mw-cors-with "https://app.example.com"
+;;;     (mw-cors-with "https://app.example.com, https://admin.example.com"
 ;;;                   "GET, POST, OPTIONS"
 ;;;                   "Content-Type, Authorization"
-;;;                   "" 1 60))
+;;;                   "" true 60))
 ;;;
-;;; Since: Phase H8 (M4)
-;;; httpd-cors-own-str -- internal: heap-copy a cstr for a server-lifetime
-;;; capture, preserving NULL.
-;;;
-;;; mw-cors-with stores its origin/methods/headers strings in a middleware
-;;; closure that lives for the whole server run.  Capturing the caller's cstr
-;;; BY BORROW dangles if the caller passed a computed/freed buffer (see
-;;; string-adoption-stdlib-plan.md, items 2/3).  This returns an OWNED String
-;;; (a refcounted copy) the closure keeps for its lifetime.  Under
-;;; With closure-drop-glue (graduated 2026-07-22) the String is a Drop-typeclass capture, so the
-;;; closure's drop-glue releases it when the middleware is torn down (Model R);
-;;; flag-off it lives to process exit, as before.
-
-(defn httpd-cors-own-str [s : cstr] : String (string/from-cstr s))
-
+;;; Since: Phase H8 (M4); origin list and bool credentials since
+;;; tourist-on-stdlib-httpd H4
 (defn mw-cors-with [allow-origin : cstr
                     allow-methods : cstr
                     allow-headers : cstr
                     expose-headers : cstr
-                    allow-credentials : int
+                    allow-credentials : bool
                     max-age : int
                     ^fat next : (fn [ptr<void>] nil)] : ptr<void>
-  ;; Own the captured strings so the server-lifetime closure never holds a
-  ;; borrowed pointer into a caller buffer that may be freed (the dangling
-  ;; hazard when allow-origin/headers are computed rather than literals).  The
-  ;; owned String captures are Drop-released by the closure drop-glue (Model R);
-  ;; the emit helpers take a borrowed `cstr` view via string/to-cstr.
-  (let [_ao (httpd-cors-own-str allow-origin)
-        _am (httpd-cors-own-str allow-methods)
-        _ah (httpd-cors-own-str allow-headers)
-        _eh (httpd-cors-own-str expose-headers)
-        _ac allow-credentials
-        _ma max-age
-        _n  next]
+  (let [_cfg (httpd-cors-config-new allow-origin allow-methods allow-headers
+                                    expose-headers allow-credentials max-age)
+        _n   next]
     (fn [c : ptr<void>] : nil
       (if (= 1 (httpd-mw-cors-is-preflight c))
-        (httpd-mw-cors-emit-preflight c
-          (string/to-cstr _ao)
-          (string/to-cstr _am)
-          (string/to-cstr _ah)
-          _ac
-          _ma)
+        (httpd-mw-cors-preflight c _cfg)
         (do
           (httpd-call _n c)
-          (httpd-mw-cors-decorate c
-            (string/to-cstr _ao)
-            (string/to-cstr _eh)
-            _ac))))))
+          (httpd-mw-cors-decorate c _cfg))))))
 ;;; mw-cors -- CORS middleware with permissive defaults.
 ;;;
 ;;; `(mw-cors next)` applies the `default-cors-opts` settings: allow-origin
 ;;; `*`, standard methods, Content-Type allowed, no credentials.  Use
-;;; `mw-cors-with` for customised settings.
+;;; `mw-cors-opts` for customised settings.
 ;;;
 ;;; Example:
 ;;;   (compose-middleware base mw-cors)
@@ -2256,7 +3032,7 @@
     "GET, POST, PUT, DELETE, OPTIONS"
     "Content-Type"
     ""
-    0
+    false
     -1
     next))
 ;;; mw-cors-opts -- CORS middleware factory configured by a CorsOpts struct.
@@ -2267,22 +3043,21 @@
 ;;;
 ;;;   (compose-middleware base (mw-cors-opts my-opts))
 ;;;
-;;; This is the struct-valued counterpart to the positional `mw-cors-with`.
-;;; The curried partial application captures the `CorsOpts` value in the
-;;; auto-generated `__pap` env; that codegen path was once broken (a struct
-;;; stored into an `int64_t` env field) and is now fixed
-;;; (stdlib-type-erasure-cleanup-plan A5/B5).
+;;; Build `opts` with `cors-opts` to have an invalid combination refused up
+;;; front; options that slip through (made with make-struct) are served
+;;; fail-closed as described in the section notes.
 ;;;
 ;;; Parameters:
-;;;   opts -- a CorsOpts value (see `default-cors-opts`)
-;;;   next -- downstream handler closure (fat-closure :int)
+;;;   opts -- a CorsOpts value (see `default-cors-opts`, `cors-opts`)
+;;;   next -- downstream handler closure
 ;;;
 ;;; Returns:
 ;;;   A wrapped handler closure (:ptr<void>) suitable for httpd-new /
 ;;;   compose-middleware.
 ;;;
 ;;; Example:
-;;;   (let [opts     (default-cors-opts)
+;;;   (let [opts     (ok-val (cors-opts "https://app.example.com" "GET, POST"
+;;;                                     "Content-Type" "" true 600))
 ;;;         composed (compose-middleware base (mw-cors-opts opts))]
 ;;;     (httpd-new 0 composed))
 ;;;
@@ -2341,49 +3116,11 @@
 (defn httpd-mw-basic-auth-check [conn : ptr<void> verifier : int] : int
   ```c
   if (!conn || !verifier) return 0;
-  const char *hdr = httpd_hyreq_hyheader((void *)conn, "Authorization");
-  if (!hdr || !*hdr) return 0;
-  /* Must start with "Basic ", case-insensitive. */
-  if (strncasecmp(hdr, "Basic ", 6) != 0) return 0;
-  const char *b64 = hdr + 6;
-  while (*b64 == ' ') b64++;
-  size_t blen = strlen(b64);
-  if (blen == 0) return 0;
-  /* Base64-decode into a per-call heap buffer.  Output size <= input size. */
-  /* Designated initializers with ranges ([0 ... 255] = -1) are a GNU
-   * extension that c2mir cannot parse, which pushed every httpd program to
-   * the JIT's cc fallback.  Build the table at runtime instead. */
-  signed char tab[256];
-  for (int i = 0; i < 256; i++) tab[i] = -1;
-  for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');
-  for (int i = 'a'; i <= 'z'; i++) tab[i] = (signed char)(i - 'a' + 26);
-  for (int i = '0'; i <= '9'; i++) tab[i] = (signed char)(i - '0' + 52);
-  tab[(int)'+'] = 62;
-  tab[(int)'/'] = 63;
-  char *raw = (char *)malloc(blen + 1);
+  char *raw = (char *)httpd_hybasic_hyauth_hydecode_hyraw(httpd_hyreq_hyheader_hyraw(conn, "Authorization"));
   if (!raw) return 0;
-  size_t   out  = 0;
-  uint32_t buf  = 0;
-  int      bits = 0;
-  for (size_t i = 0; i < blen; i++) {
-      char ch = b64[i];
-      if (ch == '=' || ch == ' ' || ch == '\r' || ch == '\n') continue;
-      signed char v = tab[(unsigned char)ch];
-      if (v < 0) { free(raw); return 0; }   /* malformed */
-      buf = (buf << 6) | (uint32_t)v;
-      bits += 6;
-      if (bits >= 8) {
-          bits -= 8;
-          raw[out++] = (char)((buf >> bits) & 0xFFu);
-      }
-  }
-  raw[out] = '\0';
-  /* A decoded NUL would truncate the user or password the verifier sees
-   * ("secret\0junk" checked as "secret"): refuse the header instead. */
-  if (memchr(raw, '\0', out)) { free(raw); return 0; }
-  /* Split on the first ':' -- everything before is user, after is pass. */
-  char *colon = (char *)memchr(raw, ':', out);
-  if (!colon) { free(raw); return 0; }
+  /* Split on the first ':' -- everything before is user, after is pass
+   * (httpd-basic-auth-decode-raw guarantees there is one). */
+  char *colon = strchr(raw, ':');
   *colon = '\0';
   const char *user = raw;
   const char *pass = colon + 1;
@@ -2396,6 +3133,57 @@
   if (ok) __TUR_CNAME_httpd-set-attr!__((void *)conn, "user", user);
   free(raw);
   return (int)(ok ? 1 : 0);
+  ```)
+;;; httpd-basic-auth-decode-raw -- internal: the `user:pass` an Authorization
+;;; header carries.
+;;;
+;;; Accepts `Basic <base64>` (scheme case-insensitive).  Shared by
+;;; mw-basic-auth and tourist's basic-auth.  Returns a fresh malloc'd
+;;; `user:pass` string the caller frees, or NULL when the header is NULL, not
+;;; Basic, not valid base64, has no ':' in it, or decodes to a NUL byte (which
+;;; would let "secret\0junk" be checked as "secret").
+;;;
+;;; Since: tourist-on-stdlib-httpd H5
+(defn httpd-basic-auth-decode-raw [hdr : cstr] : cstr
+  ```c
+  if (!hdr || !*hdr) return NULL;
+  /* Must start with "Basic ", case-insensitive. */
+  if (strncasecmp(hdr, "Basic ", 6) != 0) return NULL;
+  const char *b64 = hdr + 6;
+  while (*b64 == ' ') b64++;
+  size_t blen = strlen(b64);
+  if (blen == 0) return NULL;
+  /* Designated initializers with ranges ([0 ... 255] = -1) are a GNU
+   * extension that c2mir cannot parse, which pushed every httpd program to
+   * the JIT's cc fallback.  Build the table at runtime instead. */
+  signed char tab[256];
+  for (int i = 0; i < 256; i++) tab[i] = -1;
+  for (int i = 'A'; i <= 'Z'; i++) tab[i] = (signed char)(i - 'A');
+  for (int i = 'a'; i <= 'z'; i++) tab[i] = (signed char)(i - 'a' + 26);
+  for (int i = '0'; i <= '9'; i++) tab[i] = (signed char)(i - '0' + 52);
+  tab[(int)'+'] = 62;
+  tab[(int)'/'] = 63;
+  /* Output size <= input size. */
+  char *raw = (char *)malloc(blen + 1);
+  if (!raw) return NULL;
+  size_t   out  = 0;
+  uint32_t buf  = 0;
+  int      bits = 0;
+  for (size_t i = 0; i < blen; i++) {
+      char ch = b64[i];
+      if (ch == '=' || ch == ' ' || ch == '\r' || ch == '\n') continue;
+      signed char v = tab[(unsigned char)ch];
+      if (v < 0) { free(raw); return NULL; }   /* malformed */
+      buf = (buf << 6) | (uint32_t)v;
+      bits += 6;
+      if (bits >= 8) {
+          bits -= 8;
+          raw[out++] = (char)((buf >> bits) & 0xFFu);
+      }
+  }
+  raw[out] = '\0';
+  if (memchr(raw, '\0', out) || !memchr(raw, ':', out)) { free(raw); return NULL; }
+  return raw;
   ```)
 ;;; httpd-mw-basic-auth-challenge -- internal: emit 401 + WWW-Authenticate.
 
@@ -2784,6 +3572,9 @@
       fcntl(fd, F_SETFL, cflags | O_NONBLOCK);
   }
   int keep_going = 1;
+  int64_t rto = httpd_read_timeout_ms > 0 ? httpd_read_timeout_ms : 5000;
+  char *carry = NULL;     /* bytes read past the end of the previous request */
+  int   carry_len = 0;
   while (keep_going) {
       HttpdConn _conn;
       HttpdConn *conn = &_conn;
@@ -2794,14 +3585,31 @@
       /* --- Read until end-of-headers --- */
       size_t buf_cap = 8192;
       size_t buf_max = 262144;
+      while (buf_cap < (size_t)carry_len + 1 && buf_cap < buf_max) buf_cap *= 2;
       char  *buf     = (char *)malloc(buf_cap);
       if (!buf) break;
       buf[0] = '\0';
       int total = 0;
       char *hdr_end = NULL;
+      int oversized = 0, timed_out = 0;
+      if (carry_len > 0) {
+          /* A pipelined request: see httpd-handle. */
+          memcpy(buf, carry, (size_t)carry_len);
+          total = carry_len;
+          buf[total] = '\0';
+          free(carry);
+          carry = NULL;
+          carry_len = 0;
+          hdr_end = strstr(buf, "\r\n\r\n");
+          if (!hdr_end) hdr_end = strstr(buf, "\n\n");
+      }
+      /* The whole head must arrive within the read timeout, as in
+       * httpd-handle (a per-park timeout let a trickling client hold its
+       * fiber indefinitely). */
+      int64_t deadline = httpd_hymw_hymono_hyms() + rto;
       while (!hdr_end) {
           if ((size_t)total + 1 >= buf_cap) {
-              if (buf_cap >= buf_max) break;
+              if (buf_cap >= buf_max) { oversized = 1; break; }
               size_t new_cap = buf_cap * 2;
               if (new_cap > buf_max) new_cap = buf_max;
               char *nb = (char *)realloc(buf, new_cap);
@@ -2812,11 +3620,11 @@
           ssize_t n = recv(fd, buf + total, buf_cap - 1 - (size_t)total, 0);
           if (n < 0) {
               if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                  /* Park until readable, 5 s per wait as the blocking
-                   * pool's SO_RCVTIMEO -- it used to wait forever, so a
-                   * client that sent half a request held its fiber. */
-                  int ev = (int)tur_local_park_fd(group, fd, 1, 5000);
-                  if (ev < 0) break;   /* timeout (-2) or driver error */
+                  int64_t rem = deadline - httpd_hymw_hymono_hyms();
+                  if (rem <= 0) { timed_out = 1; break; }
+                  int ev = (int)tur_local_park_fd(group, fd, 1, rem);
+                  if (ev == -2) { timed_out = 1; break; }
+                  if (ev < 0) break;   /* driver error */
                   continue;
               }
               break;
@@ -2830,7 +3638,17 @@
           hdr_end = strstr(buf + scan4, "\r\n\r\n");
           if (!hdr_end) hdr_end = strstr(buf + scan2, "\n\n");
       }
-      if (!hdr_end) { free(buf); break; }
+      if (!hdr_end) {
+          /* 431 / 408 as in httpd-handle; an idle or closed peer gets none. */
+          int st = oversized ? 431 : (timed_out && total > 0) ? 408 : 0;
+          if (st) {
+              char eb[160];
+              int64_t el = httpd_hyerror_hyresponse(st, (void *)eb, (int64_t)sizeof eb);
+              (void)send(fd, eb, (size_t)el, 0);
+          }
+          free(buf);
+          break;
+      }
       /* security-audit-plan M-4: the same head parser as httpd-handle. */
       int64_t content_len = 0;
       int64_t hdrs_total = httpd_hyparse_hyhead((void *)conn, (void *)buf,
@@ -2847,8 +3665,9 @@
       }
       int is_http_11 = (strstr(conn->version, "1.1") != NULL);
       /* Body (await on EWOULDBLOCK; content_len is capped by parse-head). */
+      int64_t body_in_buf = 0;
       if (content_len > 0) {
-          int64_t body_in_buf = (int64_t)total - hdrs_total;
+          body_in_buf = (int64_t)total - hdrs_total;
           if (body_in_buf < 0) body_in_buf = 0;
           if (body_in_buf > content_len) body_in_buf = content_len;
           conn->body = (char *)malloc((size_t)content_len + 1);
@@ -2859,8 +3678,8 @@
               ssize_t r = recv(fd, conn->body + got, (size_t)(content_len - got), 0);
               if (r < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      /* 5 s per wait, as the blocking pool's SO_RCVTIMEO. */
-                      int ev = (int)tur_local_park_fd(group, fd, 1, 5000);
+                      /* The read timeout per wait, as the blocking pool. */
+                      int ev = (int)tur_local_park_fd(group, fd, 1, rto);
                       if (ev < 0) break;   /* timeout (-2) or driver error */
                       continue;
                   }
@@ -2872,6 +3691,16 @@
           conn->body[got] = '\0';
           conn->body_len = (int)got;
           if (got < content_len) { free(buf); httpd_hyconn_hyrelease((void *)conn); break; }
+      }
+      /* Pipelining: keep what followed this request (see httpd-handle). */
+      {
+          int64_t used = hdrs_total + body_in_buf;
+          if ((int64_t)total > used) {
+              carry_len = (int)((int64_t)total - used);
+              carry = (char *)malloc((size_t)carry_len);
+              if (carry) memcpy(carry, buf + used, (size_t)carry_len);
+              else carry_len = 0;
+          }
       }
       free(buf);
       /* Dispatch handler. */
@@ -2885,9 +3714,14 @@
          docs/archive/reactor-fd-callback-fn-ptr-type-mismatch.md */
       typedef void (*fn1_t)(void *, int64_t);
       ((fn1_t)(intptr_t)fat[0])((void *)fat, (int64_t)(intptr_t)conn);
-      /* Build the response head (shared with httpd-handle). */
+      /* A 101 here means an upgrade this server refused (httpd-conn-upgrade!
+       * cannot hand a fiber's connection off yet): answer it 501. */
+      httpd_hyresp_hyfinalize((void *)conn);
+      /* Build the response head (shared with httpd-handle).  HEAD: the
+       * head only, with the Content-Length a GET would have. */
       const char *body = conn->resp_body ? conn->resp_body : "";
-      int         blen = conn->resp_body ? conn->resp_body_len : 0;
+      int         blen = (conn->resp_body && strcmp(conn->method, "HEAD") != 0)
+                         ? conn->resp_body_len : 0;
       int64_t hlen64 = 0;
       char *hbuf = (char *)httpd_hyresp_hyhead((void *)conn, (int64_t)is_http_11, (void *)&hlen64);
       if (!hbuf) { httpd_hyconn_hyrelease((void *)conn); break; }
@@ -2903,7 +3737,7 @@
               ssize_t w = send(fd, hbuf + sent, (size_t)(hlen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);  /* WRITE */
+                      int ev = (int)tur_local_park_fd(group, fd, 2, rto);  /* WRITE */
                       if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
@@ -2919,7 +3753,7 @@
               ssize_t w = send(fd, body + sent, (size_t)(blen - sent), 0);
               if (w < 0) {
                   if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      int ev = (int)tur_local_park_fd(group, fd, 2, 5000);
+                      int ev = (int)tur_local_park_fd(group, fd, 2, rto);
                       if (ev < 0) { write_ok = 0; break; }
                       continue;
                   }
@@ -2935,6 +3769,7 @@
        * which this path's own cleanup used to leak. */
       httpd_hyconn_hyrelease((void *)conn);
   }
+  if (carry) free(carry);
   close(fd);
   /* A4: release the in-flight slot. */
   if (async) async->in_flight--;
@@ -3587,20 +4422,28 @@
   clock_gettime(CLOCK_MONOTONIC, &__ts);
   return (int64_t)__ts.tv_sec * 1000LL + (int64_t)__ts.tv_nsec / 1000000LL;
   ```)
-;;; httpd-mw-log-emit -- emit one log line for a completed request. Internal.
+;;; httpd-mw-log-line -- internal: the log line for a completed request.
+;;;
+;;; `METHOD PATH -> STATUS BYTES MSms`, then ` ip=ADDR` when mw-trust-proxy
+;;; resolved a client address and ` rid=ID` when mw-request-id assigned an
+;;; id.  No trailing newline.  The string belongs to the request.
 
-(defn httpd-mw-log-emit [c : ptr<void> elapsed-ms : int] : nil
+(defn httpd-mw-log-line [c : ptr<void> elapsed-ms : int] : cstr
   ```c
   HttpdConn *cn = (HttpdConn *)c;
   int status = cn->resp_status ? cn->resp_status : 200;
   /* The method and path are the client's bytes: escape anything outside
    * printable ASCII as \xHH, so a request cannot write control sequences
-   * (or a forged second log line) into the log (WP4, item 8). */
-  char m[sizeof cn->method * 4], pth[sizeof cn->path * 4];
-  const char *src[2] = { cn->method, cn->path };
-  char *dst[2] = { m, pth };
-  size_t cap[2] = { sizeof m, sizeof pth };
-  for (int k = 0; k < 2; k++) {
+   * (or a forged second log line) into the log (WP4, item 8).  The client
+   * address and request id are validated before they are stored, but go
+   * through the same filter. */
+  const char *ip  = httpd_hyreq_hyattr((void *)cn, "__client_ip");
+  const char *rid = httpd_hyreq_hyattr((void *)cn, "__request_id");
+  char m[sizeof cn->method * 4], pth[sizeof cn->path * 4], ipb[256], ridb[600];
+  const char *src[4] = { cn->method, cn->path, ip ? ip : "", rid ? rid : "" };
+  char *dst[4] = { m, pth, ipb, ridb };
+  size_t cap[4] = { sizeof m, sizeof pth, sizeof ipb, sizeof ridb };
+  for (int k = 0; k < 4; k++) {
       size_t o = 0;
       for (const unsigned char *q = (const unsigned char *)src[k]; *q && o + 5 < cap[k]; q++) {
           if (*q >= 0x20 && *q < 0x7f && *q != '\\') dst[k][o++] = (char)*q;
@@ -3608,9 +4451,20 @@
       }
       dst[k][o] = '\0';
   }
-  fprintf(stdout, "%s %s -> %d %d %lldms\n",
-          m, pth, status, cn->resp_body_len,
-          (long long)elapsed_ms);
+  size_t lc = strlen(m) + strlen(pth) + strlen(ipb) + strlen(ridb) + 96;
+  char *line = (char *)malloc(lc);
+  if (!line) return "";
+  snprintf(line, lc, "%s %s -> %d %d %lldms%s%s%s%s",
+           m, pth, status, cn->resp_body_len, (long long)elapsed_ms,
+           ipb[0] ? " ip=" : "", ipb, ridb[0] ? " rid=" : "", ridb);
+  return httpd_conn_own_cstr(cn, line);
+  ```)
+;;; httpd-mw-log-emit -- emit one log line for a completed request. Internal.
+
+(defn httpd-mw-log-emit [c : ptr<void> elapsed-ms : int] : nil
+  ```c
+  const char *line = httpd_hymw_hylog_hyline(c, elapsed_ms);
+  fprintf(stdout, "%s\n", line);
   fflush(stdout);
   ```)
 ;;; mw-log -- request logging middleware (stdout).
@@ -3618,7 +4472,10 @@
 ;;; Wraps a base handler so every request prints one line to stdout after
 ;;; the handler returns. The line carries the request method, path, the
 ;;; response status (defaulting to 200 if unset), the response body length
-;;; in bytes, and the elapsed wall time in milliseconds.
+;;; in bytes, and the elapsed wall time in milliseconds -- then ` ip=ADDR`
+;;; when an mw-trust-proxy outside it resolved the client address, and
+;;; ` rid=ID` when an mw-request-id outside it assigned a request id.
+;;; mw-log-to sends the same line somewhere else.
 ;;;
 ;;; Parameters:
 ;;;   next -- downstream handler closure (fat-closure :int)
@@ -3642,6 +4499,43 @@
       (let [t0 (httpd-mw-mono-ms)]
         (httpd-call _n c)
         (httpd-mw-log-emit c (- (httpd-mw-mono-ms) t0))))))
+;;; httpd-mw-log-sink-call -- internal: hand a line to a mw-log-to sink closure.
+
+(defn httpd-mw-log-sink-call [sink : int line : cstr] : nil
+  ```c
+  if (!sink) return;
+  /* The sink arrived through a ^fat parameter: a { thunk, env } closure
+   * whose slot 0 takes (env, arg). */
+  typedef void (*fn1_t)(void *, int64_t);
+  ((fn1_t)(intptr_t)((int64_t *)(intptr_t)sink)[0])((void *)(intptr_t)sink, (int64_t)(intptr_t)line);
+  ```)
+;;; mw-log-to -- request logging middleware with your own sink.
+;;;
+;;; mw-log's line (see mw-log), handed to `sink` instead of printed: write it
+;;; to a file, a structured logger, a ring buffer for a test.  The string is
+;;; borrowed and lives until the request is finished -- copy it to keep it.
+;;; The sink runs on the worker that served the request, so several can run
+;;; at once.
+;;;
+;;; Parameters:
+;;;   sink -- (fn [cstr] nil) called once per request with the line (no newline)
+;;;   next -- downstream handler closure
+;;;
+;;; Returns:
+;;;   A wrapped handler closure for httpd-new / compose-middleware.
+;;;
+;;; Example:
+;;;   (mw-log-to (fn [line : cstr] : nil (eprintln line)) base)
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+
+(defn mw-log-to [^fat sink : (fn [cstr] nil) ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_s sink
+        _n next]
+    (fn [c : ptr<void>] : nil
+      (let [t0 (httpd-mw-mono-ms)]
+        (httpd-call _n c)
+        (httpd-mw-log-sink-call _s (httpd-mw-log-line c (- (httpd-mw-mono-ms) t0)))))))
 ;; =============================================================================
 ;; M8 (core): compose-middleware -- nest multiple middlewares around a base
 ;; =============================================================================
@@ -3684,12 +4578,16 @@
 ;;; ends up as the OUTERMOST wrapper -- its pre-hook runs first and its
 ;;; post-hook runs last.
 ;;;
-;;; Each `mw_i` must be name-callable with one argument: typically a defn
-;;; like `mw-log` (shape `(defn mw-log [next :int] ... (fn [c] ...))`), or
-;;; a partially applied form like `(mw-cors opts)` that itself returns a
-;;; one-arg function. Bare closure VALUES are not directly callable in
-;;; Turmeric -- use a defn (or wrap such a value in a defn) before passing
-;;; it through compose-middleware.
+;;; Each `mw_i` is either a name callable with one argument -- typically a
+;;; defn like `mw-log` (shape `(defn mw-log [next :int] ... (fn [c] ...))`)
+;;; -- or a call form missing its last argument, like `(mw-cors-opts opts)`,
+;;; which gets the wrapped downstream handler appended as that argument:
+;;; `(compose-middleware base (mw-cors-opts o) (mw-rate-limit r))` is
+;;; `(mw-cors-opts o (mw-rate-limit r base))`.  That makes every layer a
+;;; direct call, so each `^fat next` parameter accepts the handler the layer
+;;; inside it returned.  (It used to expand to `((mw-cors-opts o) inner)`,
+;;; which type-checked for one such form but not for two.)  A `(fn ...)`
+;;; literal is called with the handler instead.
 ;;;
 ;;; Example:
 ;;;   (let [composed (compose-middleware base mw-log)]
@@ -3705,7 +4603,11 @@
 (defmacro compose-middleware [base & mws]
   (if (empty? mws)
     base
-    (list (first mws) (list compose-middleware base ~@(rest mws)))))
+    (if (list? (first mws))
+      (if (= (first (first mws)) (str->sym "fn"))
+        `(~(first mws) (compose-middleware ~base ~@(rest mws)))
+        `(~@(first mws) (compose-middleware ~base ~@(rest mws))))
+      `(~(first mws) (compose-middleware ~base ~@(rest mws))))))
 ;;; Handler -- an owned, composed request-handler onion (the result of
 ;;; `compose-middleware-of` / a folded middleware chain).
 ;;;
@@ -4366,6 +5268,11 @@
 ;;; Multiple mw-rate-limit instances get independent counters; share by
 ;;; reusing the same wrapped closure across compositions.
 ;;;
+;;; The client is keyed by httpd-req-ip: the peer address, or -- behind an
+;;; mw-trust-proxy that runs outside this middleware -- the client address
+;;; it read from X-Forwarded-For.  Without that, every client behind one
+;;; proxy shares the proxy's bucket.
+;;;
 ;;; Parameters:
 ;;;   opts -- RateLimitOpts
 ;;;   next -- downstream handler closure (fat-closure :int)
@@ -4384,7 +5291,7 @@
   (let [_st (httpd-mw-ratelimit-new (.requests opts) (.window-s opts))
         _n  next]
     (fn [c : ptr<void>] : nil
-      (let [ip    (httpd-req-remote-ip c)
+      (let [ip    (httpd-req-ip c)
             retry (httpd-mw-ratelimit-check _st ip)]
         (if (> retry 0) (httpd-mw-ratelimit-emit-429 c retry) (httpd-call _n c))))))
 ;; =============================================================================
@@ -4418,6 +5325,7 @@
   if (strcasecmp(ext, "svg") == 0)  return "image/svg+xml";
   if (strcasecmp(ext, "ico") == 0)  return "image/x-icon";
   if (strcasecmp(ext, "wasm")== 0)  return "application/wasm";
+  if (strcasecmp(ext, "pdf") == 0)  return "application/pdf";
   return "application/octet-stream";
   ```)
 ;;; httpd-mw-static-try -- internal: attempt to serve `path` from `root`
@@ -4425,6 +5333,36 @@
 ;;; written), 0 if the file is not found / forbidden.
 
 (defn httpd-mw-static-try [conn : ptr<void> root : cstr] : int
+  ```c
+  if (!conn) return 0;
+  return __TUR_CNAME_httpd-static-serve!__(conn, root, ((HttpdConn *)conn)->path) ? 1 : 0;
+  ```)
+;;; httpd-static-serve! -- answer a request with a file under a root directory.
+;;;
+;;; mw-static's file serving, for callers that pick the path themselves (a
+;;; framework mapping `/assets/*` onto a directory, say).  `rel` is joined onto
+;;; `root` (its query string ignored); the file must resolve, symlinks and all,
+;;; to a regular file inside `root`, and no segment of `rel` may start with '.'
+;;; (`.well-known` excepted) or contain a backslash.  A hit sets status 200,
+;;; the body (binary-safe), `Content-Type` from the extension and a strong
+;;; `ETag` of `"<size hex>-<mtime hex>"`; an `If-None-Match` naming that tag
+;;; (or `*`) gets 304 with the ETag and no body.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   root -- filesystem directory to serve from
+;;;   rel  -- the path to look up under it, e.g. "/css/site.css"
+;;;
+;;; Returns:
+;;;   bool -- true when it answered (200 or 304), false on a miss (nothing
+;;;           written).
+;;;
+;;; Example:
+;;;   (when (not (httpd-static-serve! c "./public" "/index.html"))
+;;;     (httpd-resp-status! c 404))
+;;;
+;;; Since: tourist-on-stdlib-httpd H5
+(defn httpd-static-serve! [conn : ptr<void> root : cstr rel : cstr] : bool
   ```c
   #include <sys/stat.h>
   #include <fcntl.h>
@@ -4434,8 +5372,7 @@
   #define O_NOFOLLOW 0
   #endif
   if (!conn || !root || !*root) return 0;
-  HttpdConn *c = (HttpdConn *)conn;
-  const char *rp = c->path;
+  const char *rp = rel;
   if (!rp || !*rp) return 0;
   /* security-audit-plan M-4.  The request path is used up to its query
    * string, and refused outright when any segment starts with '.' (".", "..",
@@ -4500,7 +5437,23 @@
            (unsigned long long)sb.st_mtime);
   /* Conditional request: If-None-Match. */
   const char *inm = httpd_hyreq_hyheader((void *)conn, "If-None-Match");
-  if (inm && *inm && strcmp(inm, etag) == 0) {
+  int inm_hit = 0;
+  if (inm && *inm) {
+      /* A list of tags, or `*`; W/ is ignored (weak comparison). */
+      const char *q = inm;
+      size_t el = strlen(etag);
+      while (*q && !inm_hit) {
+          while (*q == ' ' || *q == '\t' || *q == ',') q++;
+          const char *ts = q;
+          while (*q && *q != ',') q++;
+          const char *te = q;
+          while (te > ts && (te[-1] == ' ' || te[-1] == '\t')) te--;
+          if (te - ts == 1 && *ts == '*') inm_hit = 1;
+          if (te - ts >= 2 && (ts[0] == 'W' || ts[0] == 'w') && ts[1] == '/') ts += 2;
+          if ((size_t)(te - ts) == el && memcmp(ts, etag, el) == 0) inm_hit = 1;
+      }
+  }
+  if (inm_hit) {
       close(ffd);
       __TUR_CNAME_httpd-resp-status!__((void *)conn, 304);
       __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
@@ -4520,12 +5473,10 @@
   close(ffd);
   if (got != sz) { free(buf); return 0; }
   buf[got] = '\0';
-  /* Hand the buffer to __TUR_CNAME_httpd-resp-body!__ which strdups its arg; free ours. */
   __TUR_CNAME_httpd-resp-status!__((void *)conn, 200);
-  /* __TUR_CNAME_httpd-resp-body!__ uses strlen so binary files with embedded NULs are
-   * truncated. The mw-static API ships as a "small static files" surface;
-   * binary safety is a future enhancement. */
-  __TUR_CNAME_httpd-resp-body!__((void *)conn, buf);
+  /* Binary-safe: the body is the file's bytes, NULs included (it used to go
+   * through httpd-resp-body!, whose strlen cut a binary file short). */
+  __TUR_CNAME_httpd-resp-body-bytes!__((void *)conn, (void *)buf, (int64_t)got);
   free(buf);
   {
       /* The type comes from the path without its query string. */
@@ -4629,3 +5580,841 @@
     (fn [c : ptr<void>] : nil
       (let [r (catch-unwind (fn [] : int (do (httpd-call _n c) 0)))]
         (when (err? r) (httpd-mw-recover-500 c))))))
+
+;; =============================================================================
+;; The Express-shaped middleware set (tourist-on-stdlib-httpd-plan H4)
+;; =============================================================================
+;;
+;; helmet          -> mw-secure-headers / mw-secure-headers-opts
+;; request ids     -> mw-request-id, httpd-req-id
+;; trust proxy     -> mw-trust-proxy, httpd-req-ip, httpd-req-proto
+;; etag (dynamic)  -> mw-etag
+;; request timeout -> mw-timeout
+;; morgan (custom)  -> mw-log-to (defined with mw-log above)
+;;
+;; Each configurable middleware copies its configuration into a heap block of
+;; its own when it is built (the caller's strings may be computed and freed
+;; afterwards), released at process exit -- the mw-cors / mw-rate-limit
+;; pattern.  Two differently configured instances in one process are
+;; independent; nothing is a process global.
+;;; httpd-resp-has-header? -- has the response a header of this name yet?
+;;;
+;;; Case-insensitive.  Middleware that supplies a default (a security header,
+;;; an ETag) checks this first so a value the route set wins.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;   name -- header name
+;;;
+;;; Returns:
+;;;   true when the response carries at least one header named `name`.
+;;;
+;;; Example:
+;;;   (when (not (httpd-resp-has-header? c "Cache-Control"))
+;;;     (httpd-resp-header! c "Cache-Control" "no-store"))
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn httpd-resp-has-header? [conn : ptr<void> name : cstr] : bool
+  ```c
+  if (!conn || !name) return false;
+  for (HttpdHeader *h = (HttpdHeader *)((HttpdConn *)conn)->resp_headers; h; h = h->next)
+      if (h->name && strcasecmp(h->name, name) == 0) return true;
+  return false;
+  ```)
+;; -----------------------------------------------------------------------------
+;; mw-secure-headers (helmet)
+;; -----------------------------------------------------------------------------
+;;; SecureHeadersOpts -- mw-secure-headers configuration.
+;;;
+;;; Field conventions ("" or -1 leaves a header out):
+;;;   content-type-options       -- send X-Content-Type-Options: nosniff
+;;;   frame-options              -- X-Frame-Options ("DENY", "SAMEORIGIN")
+;;;   referrer-policy            -- Referrer-Policy
+;;;   cross-origin-opener-policy -- Cross-Origin-Opener-Policy
+;;;   hsts-max-age               -- Strict-Transport-Security max-age in
+;;;                                 seconds, or -1 (default) for none
+;;;   hsts-include-subdomains    -- add includeSubDomains to the HSTS header
+;;;   content-security-policy    -- Content-Security-Policy, "" (default) for none
+;;;
+;;; HSTS and CSP are opt-in: HSTS switched on by accident locks a domain to
+;;; https for its max-age, and a wrong CSP default breaks pages silently.
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defstruct SecureHeadersOpts
+  [content-type-options : bool
+   frame-options : cstr
+   referrer-policy : cstr
+   cross-origin-opener-policy : cstr
+   hsts-max-age : int
+   hsts-include-subdomains : bool
+   content-security-policy : cstr])
+;;; default-secure-headers-opts -- the safe defaults.
+;;;
+;;; nosniff, X-Frame-Options: DENY, Referrer-Policy: no-referrer,
+;;; Cross-Origin-Opener-Policy: same-origin; no HSTS, no CSP.
+;;;
+;;; Returns:
+;;;   SecureHeadersOpts
+;;;
+;;; Example:
+;;;   (mw-secure-headers-opts (default-secure-headers-opts) base)
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn default-secure-headers-opts [] : SecureHeadersOpts
+  (make-struct SecureHeadersOpts true "DENY" "no-referrer" "same-origin" -1 false ""))
+;;; SecureHeadersConfig -- internal: one mw-secure-headers instance's own
+;;; copy of its headers (a heap block that lives until process exit).
+(defopaque SecureHeadersConfig :int)
+;;; httpd-secure-headers-config-new -- internal: build the header list once.
+(defn httpd-secure-headers-config-new [content-type-options : bool
+                                       frame-options : cstr
+                                       referrer-policy : cstr
+                                       cross-origin-opener-policy : cstr
+                                       hsts-max-age : int
+                                       hsts-include-subdomains : bool
+                                       content-security-policy : cstr] : SecureHeadersConfig
+  ```c
+  /* __tur_include__: typedef struct __HttpdHdrSet { int n; char *name[8]; char *value[8]; struct __HttpdHdrSet *next; } HttpdHdrSet; */
+  /* __tur_include__: static HttpdHdrSet *g_hdrset_registry = 0; */
+  /* __tur_include__: static int g_hdrset_atexit = 0; */
+  /* __tur_include__: static void httpd_hdrset_cleanup_all(void) { HttpdHdrSet *s = g_hdrset_registry; while (s) { HttpdHdrSet *nx = s->next; for (int i = 0; i < s->n; i++) { free(s->name[i]); free(s->value[i]); } free(s); s = nx; } g_hdrset_registry = 0; } */
+  HttpdHdrSet *s = (HttpdHdrSet *)calloc(1, sizeof *s);
+  if (!s) return 0;
+  #define HDRSET_ADD(k, v) do { const char *v_ = (v); if (v_ && *v_) { s->name[s->n] = strdup(k); s->value[s->n] = strdup(v_); s->n++; } } while (0)
+  if (content_type_options) HDRSET_ADD("X-Content-Type-Options", "nosniff");
+  HDRSET_ADD("X-Frame-Options", frame_options);
+  HDRSET_ADD("Referrer-Policy", referrer_policy);
+  HDRSET_ADD("Cross-Origin-Opener-Policy", cross_origin_opener_policy);
+  if (hsts_max_age >= 0) {
+      char hv[80];
+      snprintf(hv, sizeof hv, "max-age=%lld%s", (long long)hsts_max_age,
+               hsts_include_subdomains ? "; includeSubDomains" : "");
+      HDRSET_ADD("Strict-Transport-Security", hv);
+  }
+  HDRSET_ADD("Content-Security-Policy", content_security_policy);
+  #undef HDRSET_ADD
+  s->next = g_hdrset_registry;
+  g_hdrset_registry = s;
+  if (!g_hdrset_atexit) { atexit(httpd_hdrset_cleanup_all); g_hdrset_atexit = 1; }
+  return (int64_t)(intptr_t)s;
+  ```)
+;;; httpd-mw-secure-headers-apply -- internal: add each configured header the
+;;; response does not carry already.
+(defn httpd-mw-secure-headers-apply [conn : ptr<void> cfg : SecureHeadersConfig] : nil
+  ```c
+  HttpdHdrSet *s = (HttpdHdrSet *)(intptr_t)cfg;
+  if (!conn || !s) return;
+  for (int i = 0; i < s->n; i++)
+      if (!__TUR_CNAME_httpd-resp-has-header?__((void *)conn, s->name[i]))
+          __TUR_CNAME_httpd-resp-header!__((void *)conn, s->name[i], s->value[i]);
+  ```)
+;;; mw-secure-headers-opts -- security headers on every response (helmet).
+;;;
+;;; After `next` returns, adds each header the options configure unless the
+;;; response already has one of that name -- a route that sets its own
+;;; X-Frame-Options keeps it.  See SecureHeadersOpts for the headers and why
+;;; HSTS and CSP are off unless asked for.
+;;;
+;;; Parameters:
+;;;   opts -- SecureHeadersOpts (default-secure-headers-opts for the defaults)
+;;;   next -- downstream handler
+;;;
+;;; Returns:
+;;;   A wrapped handler closure.
+;;;
+;;; Example:
+;;;   (let [opts (make-struct SecureHeadersOpts true "SAMEORIGIN" "no-referrer"
+;;;                           "same-origin" 31536000 true "default-src 'self'")]
+;;;     (compose-middleware base (mw-secure-headers-opts opts)))
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn mw-secure-headers-opts [opts : SecureHeadersOpts ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_cfg (httpd-secure-headers-config-new (.content-type-options opts)
+                                              (.frame-options opts)
+                                              (.referrer-policy opts)
+                                              (.cross-origin-opener-policy opts)
+                                              (.hsts-max-age opts)
+                                              (.hsts-include-subdomains opts)
+                                              (.content-security-policy opts))
+        _n   next]
+    (fn [c : ptr<void>] : nil
+      (httpd-call _n c)
+      (httpd-mw-secure-headers-apply c _cfg))))
+;;; mw-secure-headers -- mw-secure-headers-opts with the safe defaults.
+;;;
+;;; Example:
+;;;   (compose-middleware base mw-secure-headers)
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn mw-secure-headers [^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (mw-secure-headers-opts (default-secure-headers-opts) next))
+;; -----------------------------------------------------------------------------
+;; mw-request-id
+;; -----------------------------------------------------------------------------
+;;; httpd-mw-request-id-assign! -- internal: pick the request's ID and echo it.
+;;;
+;;; An incoming X-Request-Id is kept only if it is 1-128 characters of
+;;; [A-Za-z0-9._-] -- anything else (a CRLF, a 1 KiB value, a quote) is
+;;; replaced, so a client cannot inject into logs or headers through it.
+;;; Otherwise 128 random bits, as 32 hex digits.
+(defn httpd-mw-request-id-assign! [conn : ptr<void>] : nil
+  ```c
+  if (!conn) return;
+  const char *in = httpd_hyreq_hyheader((void *)conn, "X-Request-Id");
+  size_t n = in ? strlen(in) : 0;
+  int ok = n >= 1 && n <= 128;
+  for (size_t i = 0; ok && i < n; i++) {
+      char ch = in[i];
+      ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+           (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-';
+  }
+  char id[129];
+  if (ok) {
+      memcpy(id, in, n + 1);
+  } else {
+      unsigned char rb[16];
+      size_t got = 0;
+      FILE *ur = fopen("/dev/urandom", "rb");
+      if (ur) { got = fread(rb, 1, sizeof rb, ur); fclose(ur); }
+      if (got < sizeof rb) {
+          /* No /dev/urandom: mix the clock, a counter and an address.  The
+           * ID needs to be unique, not secret. */
+          static uint64_t ctr = 0;
+          uint64_t x = (uint64_t)time(NULL) ^ ((uint64_t)(uintptr_t)rb << 7) ^
+                       (++ctr * 0x9E3779B97F4A7C15ULL) ^ (uint64_t)clock();
+          for (size_t i = got; i < sizeof rb; i++) {
+              x += 0x9E3779B97F4A7C15ULL;
+              uint64_t z = x;
+              z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+              z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+              rb[i] = (unsigned char)((z ^ (z >> 31)) >> 56);
+          }
+      }
+      static const char hx[] = "0123456789abcdef";
+      for (int i = 0; i < 16; i++) { id[2 * i] = hx[rb[i] >> 4]; id[2 * i + 1] = hx[rb[i] & 15]; }
+      id[32] = '\0';
+  }
+  __TUR_CNAME_httpd-set-attr!__((void *)conn, "__request_id", id);
+  __TUR_CNAME_httpd-resp-header!__((void *)conn, "X-Request-Id", id);
+  ```)
+;;; httpd-req-id -- the request's ID, when mw-request-id assigned one.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   (Option cstr) -- some(id), valid for the rest of the request, or none
+;;;   when no mw-request-id ran.
+;;;
+;;; Example:
+;;;   (let [id (httpd-req-id c)]
+;;;     (when (some? id) (println (unwrap id))))
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn httpd-req-id [conn : ptr<void>] : (Option cstr)
+  ```c
+  const char *v = conn ? httpd_hyreq_hyattr((void *)conn, "__request_id") : NULL;
+  if (!v || !*v) return tur_none();
+  return tur_some_ptr((void *)v);
+  ```)
+;;; mw-request-id -- give every request an ID and echo it in X-Request-Id.
+;;;
+;;; Keeps a well-formed incoming X-Request-Id (1-128 of [A-Za-z0-9._-]),
+;;; else generates 128 random bits as hex.  The ID is readable downstream
+;;; with httpd-req-id, mw-log puts it on each line, and the response carries
+;;; it (a route may still replace the header).
+;;;
+;;; Parameters:
+;;;   next -- downstream handler
+;;;
+;;; Returns:
+;;;   A wrapped handler closure.
+;;;
+;;; Example:
+;;;   (compose-middleware base mw-log mw-request-id)   ; mw-log sees the ID
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn mw-request-id [^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_n next]
+    (fn [c : ptr<void>] : nil
+      (httpd-mw-request-id-assign! c)
+      (httpd-call _n c))))
+;; -----------------------------------------------------------------------------
+;; Trust proxy
+;; -----------------------------------------------------------------------------
+;;; TrustProxyOpts -- which peers may tell the server who the client is.
+;;;
+;;; `trusted` is a comma-separated list of addresses and CIDR ranges, IPv4 or
+;;; IPv6 ("10.0.0.0/8, 192.0.2.7, fd00::/8"), and the keywords `loopback`,
+;;; `linklocal` and `uniquelocal` (the private ranges).  The default trusts
+;;; nobody, so X-Forwarded-For and X-Forwarded-Proto are ignored.
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defstruct TrustProxyOpts [trusted : cstr])
+;;; default-trust-proxy-opts -- trust no proxy.
+;;;
+;;; Returns:
+;;;   TrustProxyOpts with an empty trusted list.
+;;;
+;;; Example:
+;;;   (mw-trust-proxy (default-trust-proxy-opts) base)   ; peer address only
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn default-trust-proxy-opts [] : TrustProxyOpts
+  (make-struct TrustProxyOpts ""))
+;;; httpd-ip-parse -- internal: parse a numeric IPv4 or IPv6 address (the first
+;;; `len` bytes of `s`, optionally in [brackets]) into 16 bytes, IPv4 as
+;;; ::ffff:a.b.c.d.  False when it is not an address.
+(defn httpd-ip-parse [s : cstr len : int out : ptr<void>] : bool
+  ```c
+  unsigned char *o = (unsigned char *)out;
+  char buf[64];
+  const char *p = s;
+  size_t n = (size_t)len;
+  while (n && (*p == ' ' || *p == '\t')) { p++; n--; }
+  while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+  if (n >= 2 && p[0] == '[') {
+      const char *rb = (const char *)memchr(p, ']', n);
+      if (!rb) return false;
+      n = (size_t)(rb - p - 1);
+      p++;
+  }
+  if (n == 0 || n >= sizeof buf) return false;
+  memcpy(buf, p, n);
+  buf[n] = '\0';
+  unsigned char v4[4];
+  if (inet_pton(AF_INET, buf, v4) == 1) {
+      memset(o, 0, 10); o[10] = 0xff; o[11] = 0xff; memcpy(o + 12, v4, 4);
+      return true;
+  }
+  /* "a.b.c.d:port" from a proxy that appends the port. */
+  char *colon = strchr(buf, ':');
+  if (colon && !strchr(colon + 1, ':') && strchr(buf, '.')) {
+      *colon = '\0';
+      if (inet_pton(AF_INET, buf, v4) == 1) {
+          memset(o, 0, 10); o[10] = 0xff; o[11] = 0xff; memcpy(o + 12, v4, 4);
+          return true;
+      }
+      return false;
+  }
+  return inet_pton(AF_INET6, buf, o) == 1;
+  ```)
+;;; httpd-trust-parse -- internal: parse a trusted list into `cap` records
+;;; {16-byte address, prefix bits} at `out`; returns the count, or -1 when an
+;;; entry is neither an address, a CIDR nor a keyword.
+(defn httpd-trust-parse [trusted : cstr out : ptr<void> cap : int] : int
+  ```c
+  /* __tur_include__: typedef struct { unsigned char a[16]; int bits; } HttpdCidr; */
+  HttpdCidr *rec = (HttpdCidr *)out;
+  int count = 0;
+  const char *p = trusted ? trusted : "";
+  #define CIDR_PUSH(addr_str, bits_v4) do { \
+      if (count < cap) { \
+          unsigned char a_[16]; \
+          if (!httpd_hyip_hyparse(addr_str, (int64_t)strlen(addr_str), (void *)a_)) return -1; \
+          memcpy(rec[count].a, a_, 16); \
+          int is4_ = (a_[10] == 0xff && a_[11] == 0xff && !a_[0] && !a_[1] && !a_[2] && !a_[3] && !a_[4] && !a_[5] && !a_[6] && !a_[7] && !a_[8] && !a_[9]); \
+          rec[count].bits = is4_ ? 96 + (bits_v4) : (bits_v4); \
+      } \
+      count++; \
+  } while (0)
+  while (*p) {
+      while (*p == ' ' || *p == '\t' || *p == ',') p++;
+      if (!*p) break;
+      const char *s = p;
+      while (*p && *p != ',') p++;
+      const char *e = p;
+      while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+      size_t n = (size_t)(e - s);
+      char ent[80];
+      if (n == 0 || n >= sizeof ent) return -1;
+      memcpy(ent, s, n);
+      ent[n] = '\0';
+      if (strcasecmp(ent, "loopback") == 0) {
+          CIDR_PUSH("127.0.0.0", 8); CIDR_PUSH("::1", 128);
+      } else if (strcasecmp(ent, "linklocal") == 0) {
+          CIDR_PUSH("169.254.0.0", 16); CIDR_PUSH("fe80::", 10);
+      } else if (strcasecmp(ent, "uniquelocal") == 0) {
+          CIDR_PUSH("10.0.0.0", 8); CIDR_PUSH("172.16.0.0", 12);
+          CIDR_PUSH("192.168.0.0", 16); CIDR_PUSH("fc00::", 7);
+      } else {
+          char *slash = strchr(ent, '/');
+          int bits = -1;
+          if (slash) {
+              *slash = '\0';
+              char *endp = NULL;
+              long b = strtol(slash + 1, &endp, 10);
+              if (!slash[1] || *endp || b < 0 || b > 128) return -1;
+              bits = (int)b;
+          }
+          unsigned char a[16];
+          if (!httpd_hyip_hyparse(ent, (int64_t)strlen(ent), (void *)a)) return -1;
+          int is4 = (a[10] == 0xff && a[11] == 0xff && !a[0] && !a[1] && !a[2] && !a[3] &&
+                     !a[4] && !a[5] && !a[6] && !a[7] && !a[8] && !a[9]);
+          if (bits < 0) bits = is4 ? 32 : 128;
+          if (is4 && bits > 32) return -1;
+          if (count < cap) {
+              memcpy(rec[count].a, a, 16);
+              rec[count].bits = is4 ? 96 + bits : bits;
+          }
+          count++;
+      }
+  }
+  #undef CIDR_PUSH
+  return count;
+  ```)
+;;; trust-proxy-opts -- build a TrustProxyOpts, refusing an entry that does
+;;; not parse.
+;;;
+;;; Parameters:
+;;;   trusted -- comma-separated addresses / CIDRs / keywords (see
+;;;              TrustProxyOpts)
+;;;
+;;; Returns:
+;;;   (Result TrustProxyOpts cstr) -- ok(opts), or err naming the problem.
+;;;
+;;; Example:
+;;;   (trust-proxy-opts "loopback, 10.0.0.0/8")
+;;;   (trust-proxy-opts "10.0.0.0/33")          ; => err
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn trust-proxy-opts [trusted : cstr] : (Result TrustProxyOpts cstr)
+  (if (< (httpd-trust-parse trusted (:: 0 :ptr<void>) 0) 0)
+    (err "trust-proxy-opts: an entry is not an address, CIDR range or keyword")
+    (ok (make-struct TrustProxyOpts trusted))))
+;;; TrustProxyConfig -- internal: one mw-trust-proxy instance's parsed ranges.
+(defopaque TrustProxyConfig :int)
+;;; httpd-trust-proxy-config-new -- internal: parse the trusted list once.
+;;; An unparsable list trusts nobody (and says so on stderr).
+(defn httpd-trust-proxy-config-new [trusted : cstr] : TrustProxyConfig
+  ```c
+  /* __tur_include__: typedef struct __HttpdTrust { int n; HttpdCidr *cidr; struct __HttpdTrust *next; } HttpdTrust; */
+  /* __tur_include__: static HttpdTrust *g_trust_registry = 0; */
+  /* __tur_include__: static int g_trust_atexit = 0; */
+  /* __tur_include__: static void httpd_trust_cleanup_all(void) { HttpdTrust *t = g_trust_registry; while (t) { HttpdTrust *nx = t->next; free(t->cidr); free(t); t = nx; } g_trust_registry = 0; } */
+  HttpdTrust *t = (HttpdTrust *)calloc(1, sizeof *t);
+  if (!t) return 0;
+  int64_t n = httpd_hytrust_hyparse(trusted, NULL, 0);
+  if (n < 0) {
+      fprintf(stderr, "httpd: mw-trust-proxy: unparsable trusted list \"%s\"; trusting no proxy\n",
+              trusted ? trusted : "");
+      n = 0;
+  }
+  if (n > 0) {
+      t->cidr = (HttpdCidr *)calloc((size_t)n, sizeof(HttpdCidr));
+      if (t->cidr) t->n = (int)httpd_hytrust_hyparse(trusted, (void *)t->cidr, n);
+  }
+  t->next = g_trust_registry;
+  g_trust_registry = t;
+  if (!g_trust_atexit) { atexit(httpd_trust_cleanup_all); g_trust_atexit = 1; }
+  return (int64_t)(intptr_t)t;
+  ```)
+;;; httpd-mw-trust-proxy-resolve! -- internal: work out the client address and
+;;; protocol and record them on the request.
+;;;
+;;; An untrusted peer is the client, and its forwarding headers are ignored.
+;;; A trusted peer's X-Forwarded-For is walked right to left: each hop that is
+;;; itself trusted is skipped, and the first that is not is the client (a hop
+;;; that does not parse ends the walk at the last good one).  X-Forwarded-Proto
+;;; is believed only from a trusted peer, and only as http or https.
+(defn httpd-mw-trust-proxy-resolve! [conn : ptr<void> cfg : TrustProxyConfig] : nil
+  ```c
+  HttpdTrust *t = (HttpdTrust *)(intptr_t)cfg;
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  const char *peer = __TUR_CNAME_httpd-req-remote-ip__((void *)conn);
+  unsigned char pa[16];
+  int peer_ok = peer && *peer && httpd_hyip_hyparse(peer, (int64_t)strlen(peer), (void *)pa);
+  int peer_trusted = 0;
+  if (peer_ok && t) {
+      for (int i = 0; i < t->n && !peer_trusted; i++) {
+          int bits = t->cidr[i].bits, k = 0, eq = 1;
+          for (; eq && bits >= 8; bits -= 8, k++) eq = pa[k] == t->cidr[i].a[k];
+          if (eq && bits > 0) {
+              unsigned char m = (unsigned char)(0xff << (8 - bits));
+              eq = (pa[k] & m) == (t->cidr[i].a[k] & m);
+          }
+          peer_trusted = eq;
+      }
+  }
+  const char *client = peer ? peer : "";
+  char best[64];
+  best[0] = '\0';
+  if (peer_trusted) {
+      const char *xff = httpd_hyreq_hyheader((void *)conn, "X-Forwarded-For");
+      const char *end = xff + strlen(xff);
+      while (end > xff) {
+          const char *s = end;
+          while (s > xff && s[-1] != ',') s--;
+          unsigned char ha[16];
+          size_t hl = (size_t)(end - s);
+          if (!httpd_hyip_hyparse(s, (int64_t)hl, (void *)ha)) break;
+          /* keep this hop's text, trimmed */
+          const char *a = s, *b = end;
+          while (a < b && (*a == ' ' || *a == '\t')) a++;
+          while (b > a && (b[-1] == ' ' || b[-1] == '\t')) b--;
+          size_t bl = (size_t)(b - a) < sizeof best - 1 ? (size_t)(b - a) : sizeof best - 1;
+          memcpy(best, a, bl);
+          best[bl] = '\0';
+          int hop_trusted = 0;
+          for (int i = 0; t && i < t->n && !hop_trusted; i++) {
+              int bits = t->cidr[i].bits, k = 0, eq = 1;
+              for (; eq && bits >= 8; bits -= 8, k++) eq = ha[k] == t->cidr[i].a[k];
+              if (eq && bits > 0) {
+                  unsigned char m = (unsigned char)(0xff << (8 - bits));
+                  eq = (ha[k] & m) == (t->cidr[i].a[k] & m);
+              }
+              hop_trusted = eq;
+          }
+          if (!hop_trusted) break;
+          end = s > xff ? s - 1 : xff;
+      }
+      if (best[0]) client = best;
+  }
+  __TUR_CNAME_httpd-set-attr!__((void *)conn, "__client_ip", client);
+  const char *proto = c->tls ? "https" : "http";
+  if (peer_trusted) {
+      const char *xfp = httpd_hyreq_hyheader((void *)conn, "X-Forwarded-Proto");
+      while (*xfp == ' ' || *xfp == '\t') xfp++;
+      size_t pl = strcspn(xfp, ", \t");
+      if (pl == 5 && strncasecmp(xfp, "https", 5) == 0) proto = "https";
+      else if (pl == 4 && strncasecmp(xfp, "http", 4) == 0) proto = "http";
+  }
+  __TUR_CNAME_httpd-set-attr!__((void *)conn, "__client_proto", proto);
+  ```)
+;;; mw-trust-proxy -- resolve the client address and protocol behind proxies.
+;;;
+;;; Put it outermost: middleware inside it (mw-rate-limit, mw-log) and the
+;;; handler then see the real client through httpd-req-ip / httpd-req-proto.
+;;; With the default options (or without this middleware) those return the
+;;; peer address and the connection's own protocol.
+;;;
+;;; Parameters:
+;;;   opts -- TrustProxyOpts (build with trust-proxy-opts to have a bad entry
+;;;           refused; an unparsable list trusts nobody)
+;;;   next -- downstream handler
+;;;
+;;; Returns:
+;;;   A wrapped handler closure.
+;;;
+;;; Example:
+;;;   (compose-middleware base
+;;;     (mw-trust-proxy (ok-val (trust-proxy-opts "loopback")))
+;;;     (mw-rate-limit (make-struct RateLimitOpts 100 60)))
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn mw-trust-proxy [opts : TrustProxyOpts ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_cfg (httpd-trust-proxy-config-new (.trusted opts))
+        _n   next]
+    (fn [c : ptr<void>] : nil
+      (httpd-mw-trust-proxy-resolve! c _cfg)
+      (httpd-call _n c))))
+;;; httpd-req-ip -- the client's IP address.
+;;;
+;;; What mw-trust-proxy resolved, when it ran; otherwise the peer address
+;;; (httpd-req-remote-ip).  The string lives as long as the request.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   The address as a cstr, or "" when it cannot be read.
+;;;
+;;; Example:
+;;;   (httpd-req-ip c)   ; => "203.0.113.9" behind a trusted proxy
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn httpd-req-ip [conn : ptr<void>] : cstr
+  ```c
+  if (!conn) return "";
+  const char *v = httpd_hyreq_hyattr((void *)conn, "__client_ip");
+  if (v && *v) return v;
+  return __TUR_CNAME_httpd-req-remote-ip__((void *)conn);
+  ```)
+;;; httpd-req-proto -- "https" or "http": how the client reached the server.
+;;;
+;;; A trusted proxy's X-Forwarded-Proto when mw-trust-proxy ran, else whether
+;;; this connection is TLS.
+;;;
+;;; Parameters:
+;;;   conn -- connection handle from the worker
+;;;
+;;; Returns:
+;;;   "https" or "http".
+;;;
+;;; Example:
+;;;   (when (cstr-eq? (httpd-req-proto c) "http") (redirect-to-https c))
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn httpd-req-proto [conn : ptr<void>] : cstr
+  ```c
+  if (!conn) return "http";
+  const char *v = httpd_hyreq_hyattr((void *)conn, "__client_proto");
+  if (v && *v) return v;
+  return ((HttpdConn *)conn)->tls ? "https" : "http";
+  ```)
+;; -----------------------------------------------------------------------------
+;; mw-etag
+;; -----------------------------------------------------------------------------
+;;; httpd-mw-etag-apply -- internal: tag a 200 GET/HEAD response and answer a
+;;; matching If-None-Match with 304.
+(defn httpd-mw-etag-apply [conn : ptr<void>] : nil
+  ```c
+  if (!conn) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (strcmp(c->method, "GET") != 0 && strcmp(c->method, "HEAD") != 0) return;
+  if (c->resp_status != 0 && c->resp_status != 200) return;
+  if (c->upgrade) return;
+  /* A route that set its own ETag keeps it, and If-None-Match is checked
+   * against that. */
+  const char *own = NULL;
+  for (HttpdHeader *rh = (HttpdHeader *)c->resp_headers; rh; rh = rh->next)
+      if (rh->name && strcasecmp(rh->name, "ETag") == 0) { own = rh->value ? rh->value : ""; break; }
+  char tag[64];
+  if (!own) {
+      /* FNV-1a 64 over the body bytes, plus the length: a weak validator
+       * (equal bytes, not a byte-for-byte promise across encodings). */
+      uint64_t h = 1469598103934665603ULL;
+      for (int i = 0; i < c->resp_body_len; i++) {
+          h ^= (unsigned char)c->resp_body[i];
+          h *= 1099511628211ULL;
+      }
+      snprintf(tag, sizeof tag, "W/\"%x-%llx\"", (unsigned)c->resp_body_len, (unsigned long long)h);
+      __TUR_CNAME_httpd-resp-header!__((void *)conn, "ETag", tag);
+  }
+  const char *inm = httpd_hyreq_hyheader((void *)conn, "If-None-Match");
+  if (!inm || !*inm) return;
+  /* Weak comparison: W/ is ignored on both sides; `*` matches. */
+  const char *mine = own ? own : tag;
+  if ((mine[0] == 'W' || mine[0] == 'w') && mine[1] == '/') mine += 2;
+  size_t ml = strlen(mine);
+  int hit = 0;
+  const char *p = inm;
+  while (*p && !hit) {
+      while (*p == ' ' || *p == '\t' || *p == ',') p++;
+      const char *s = p;
+      while (*p && *p != ',') p++;
+      const char *e = p;
+      while (e > s && (e[-1] == ' ' || e[-1] == '\t')) e--;
+      if (e - s == 1 && *s == '*') hit = 1;
+      if (e - s >= 2 && (s[0] == 'W' || s[0] == 'w') && s[1] == '/') s += 2;
+      if ((size_t)(e - s) == ml && memcmp(s, mine, ml) == 0) hit = 1;
+  }
+  if (hit) {
+      c->resp_status = 304;
+      __TUR_CNAME_httpd-resp-body!__((void *)conn, "");
+  }
+  ```)
+;;; mw-etag -- ETags and 304s for dynamic responses.
+;;;
+;;; After `next` returns a 200 to a GET or HEAD, sets a weak ETag computed
+;;; from the body (unless the route set an ETag itself, which is then the
+;;; one compared), and answers a matching If-None-Match with 304 and no
+;;; body -- the client reuses its copy.  The body is still built every time; this saves the transfer, not
+;;; the work.  mw-static does the same for files from their size and mtime.
+;;;
+;;; Parameters:
+;;;   next -- downstream handler
+;;;
+;;; Returns:
+;;;   A wrapped handler closure.
+;;;
+;;; Example:
+;;;   (compose-middleware api-handler mw-etag)
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn mw-etag [^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_n next]
+    (fn [c : ptr<void>] : nil
+      (httpd-call _n c)
+      (httpd-mw-etag-apply c))))
+;; -----------------------------------------------------------------------------
+;; mw-timeout
+;; -----------------------------------------------------------------------------
+;;; httpd-mw-timeout-run -- internal: run `next` on a helper thread against a
+;;; private copy of the request, and wait up to `ms` for it.
+;;;
+;;; In time, the copy's response (status, headers, body, the attributes and
+;;; strings it made) moves onto the real conn.  Late, the real conn is
+;;; answered 503 and the copy is left to the helper thread, which frees it
+;;; when the handler finally returns.  The copy has no socket (fd -1), so a
+;;; late handler cannot write to a connection that has moved on, and cannot
+;;; upgrade it.
+(defn httpd-mw-timeout-run [conn : ptr<void> next : int ms : int] : nil
+  ```c
+  /* __tur_include__: #include <pthread.h> */
+  /* __tur_include__: typedef struct { HttpdConn shadow; int64_t next; pthread_mutex_t mtx; pthread_cond_t cv; int done; int abandoned; } HttpdTimeoutJob; */
+  typedef struct __HttpdRP { char name[64]; char value[256]; struct __HttpdRP *next; } HttpdRP;
+  if (!conn || !next) return;
+  HttpdConn *c = (HttpdConn *)conn;
+  if (c->fiber_group) {
+      /* The async server: no helper thread may touch the fiber's reactor.
+       * Run inline, unbounded. */
+      typedef void (*fn1_t)(void *, int64_t);
+      ((fn1_t)(intptr_t)((int64_t *)(intptr_t)next)[0])((void *)(intptr_t)next, (int64_t)(intptr_t)conn);
+      return;
+  }
+  /* Cache the peer address while the socket is still ours, and the
+   * protocol while the TLS state is (the copy has neither). */
+  (void)__TUR_CNAME_httpd-req-remote-ip__((void *)conn);
+  {
+      const char *pr = httpd_hyreq_hyattr((void *)conn, "__client_proto");
+      if (!pr || !*pr) __TUR_CNAME_httpd-set-attr!__((void *)conn, "__client_proto", c->tls ? "https" : "http");
+  }
+  HttpdTimeoutJob *j = (HttpdTimeoutJob *)calloc(1, sizeof *j);
+  if (!j) return;
+  HttpdConn *s = &j->shadow;
+  memcpy(s->method, c->method, sizeof s->method);
+  memcpy(s->path, c->path, sizeof s->path);
+  memcpy(s->version, c->version, sizeof s->version);
+  s->fd = -1;
+  s->client_keep_alive = c->client_keep_alive;
+  s->resp_status = c->resp_status;
+  s->has_max_body = c->has_max_body;
+  s->max_body = c->max_body;
+  if (c->body) {
+      s->body = (char *)malloc((size_t)c->body_len + 1);
+      if (s->body) { memcpy(s->body, c->body, (size_t)c->body_len + 1); s->body_len = c->body_len; }
+  }
+  if (c->resp_body) {
+      s->resp_body = (char *)malloc((size_t)c->resp_body_len + 1);
+      if (s->resp_body) { memcpy(s->resp_body, c->resp_body, (size_t)c->resp_body_len + 1); s->resp_body_len = c->resp_body_len; }
+  }
+  for (int which = 0; which < 2; which++) {
+      HttpdHeader *src = (HttpdHeader *)(which ? c->resp_headers : c->req_headers);
+      HttpdHeader **tail = (HttpdHeader **)(which ? &s->resp_headers : &s->req_headers);
+      for (; src; src = src->next) {
+          HttpdHeader *h = (HttpdHeader *)calloc(1, sizeof *h);
+          if (!h) break;
+          h->name = strdup(src->name ? src->name : "");
+          h->value = strdup(src->value ? src->value : "");
+          *tail = h;
+          tail = &h->next;
+      }
+  }
+  HttpdAttr **atail = (HttpdAttr **)&s->attr_list;
+  for (HttpdAttr *a = (HttpdAttr *)c->attr_list; a; a = a->next) {
+      HttpdAttr *na = (HttpdAttr *)calloc(1, sizeof *na);
+      if (!na) break;
+      na->key = strdup(a->key ? a->key : "");
+      na->value = strdup(a->value ? a->value : "");
+      *atail = na;
+      atail = &na->next;
+  }
+  HttpdRP **rtail = (HttpdRP **)&s->route_params;
+  for (HttpdRP *r = (HttpdRP *)c->route_params; r; r = r->next) {
+      HttpdRP *nr = (HttpdRP *)malloc(sizeof *nr);
+      if (!nr) break;
+      memcpy(nr, r, sizeof *nr);
+      nr->next = NULL;
+      *rtail = nr;
+      rtail = &nr->next;
+  }
+  j->next = next;
+  pthread_mutex_init(&j->mtx, NULL);
+  pthread_cond_init(&j->cv, NULL);
+  pthread_t tid;
+  if (pthread_create(&tid, NULL, (void *(*)(void *))httpd_hymw_hytimeout_hythread, (void *)j) != 0) {
+      /* No thread: run inline, unbounded, and move the result as below. */
+      httpd_hymw_hytimeout_hythread((void *)j);
+  } else {
+      pthread_detach(tid);
+  }
+  struct timespec dl;
+  clock_gettime(CLOCK_REALTIME, &dl);
+  dl.tv_sec += (time_t)(ms / 1000);
+  dl.tv_nsec += (long)((ms % 1000) * 1000000);
+  if (dl.tv_nsec >= 1000000000L) { dl.tv_sec++; dl.tv_nsec -= 1000000000L; }
+  pthread_mutex_lock(&j->mtx);
+  while (!j->done) {
+      if (pthread_cond_timedwait(&j->cv, &j->mtx, &dl) != 0 && !j->done) break;
+  }
+  if (!j->done) {
+      j->abandoned = 1;
+      pthread_mutex_unlock(&j->mtx);
+      c->resp_status = 503;
+      __TUR_CNAME_httpd-resp-body!__((void *)conn, "Service Unavailable");
+      return;
+  }
+  pthread_mutex_unlock(&j->mtx);
+  /* In time: move the copy's response onto the real conn. */
+  c->resp_status = s->resp_status;
+  if (c->resp_body) free(c->resp_body);
+  c->resp_body = s->resp_body; c->resp_body_len = s->resp_body_len;
+  s->resp_body = NULL; s->resp_body_len = 0;
+  for (HttpdHeader *h = (HttpdHeader *)c->resp_headers; h; ) {
+      HttpdHeader *nx = h->next; free(h->name); free(h->value); free(h); h = nx;
+  }
+  c->resp_headers = s->resp_headers; s->resp_headers = NULL;
+  for (HttpdAttr *a = (HttpdAttr *)c->attr_list; a; ) {
+      HttpdAttr *nx = a->next; free(a->key); free(a->value); free(a); a = nx;
+  }
+  c->attr_list = s->attr_list; s->attr_list = NULL;
+  if (s->owned_cstrs) {
+      HttpdOwnedStr **ot = (HttpdOwnedStr **)&s->owned_cstrs;
+      while (*ot) ot = &(*ot)->next;
+      *ot = (HttpdOwnedStr *)c->owned_cstrs;
+      c->owned_cstrs = s->owned_cstrs; s->owned_cstrs = NULL;
+  }
+  if (!c->req_json_cache) { c->req_json_cache = s->req_json_cache; s->req_json_cache = 0; }
+  if (!c->req_multipart_parts) { c->req_multipart_parts = s->req_multipart_parts; s->req_multipart_parts = NULL; }
+  c->client_keep_alive = c->client_keep_alive && s->client_keep_alive;
+  httpd_hymw_hytimeout_hyfree((void *)j);
+  ```)
+;;; httpd-mw-timeout-thread -- internal: the helper thread's body.
+(defn httpd-mw-timeout-thread [arg : ptr<void>] : ptr<void>
+  ```c
+  HttpdTimeoutJob *j = (HttpdTimeoutJob *)arg;
+  typedef void (*fn1_t)(void *, int64_t);
+  ((fn1_t)(intptr_t)((int64_t *)(intptr_t)j->next)[0])((void *)(intptr_t)j->next,
+                                                        (int64_t)(intptr_t)&j->shadow);
+  pthread_mutex_lock(&j->mtx);
+  j->done = 1;
+  int abandoned = j->abandoned;
+  pthread_cond_signal(&j->cv);
+  pthread_mutex_unlock(&j->mtx);
+  if (abandoned) httpd_hymw_hytimeout_hyfree((void *)j);
+  return NULL;
+  ```)
+;;; httpd-mw-timeout-free -- internal: release a job and its copy of the request.
+(defn httpd-mw-timeout-free [arg : ptr<void>] : nil
+  ```c
+  typedef struct __HttpdRP { char name[64]; char value[256]; struct __HttpdRP *next; } HttpdRP;
+  HttpdTimeoutJob *j = (HttpdTimeoutJob *)arg;
+  if (!j) return;
+  for (HttpdRP *r = (HttpdRP *)j->shadow.route_params; r; ) { HttpdRP *nx = r->next; free(r); r = nx; }
+  j->shadow.route_params = NULL;
+  httpd_hyconn_hyrelease((void *)&j->shadow);
+  pthread_mutex_destroy(&j->mtx);
+  pthread_cond_destroy(&j->cv);
+  free(j);
+  ```)
+;;; mw-timeout -- answer 503 when a handler overruns `ms` milliseconds.
+;;;
+;;; Runs `next` on a helper thread against a private copy of the request and
+;;; waits up to `ms`.  In time, its response is used as usual.  Late, the
+;;; client gets `503 Service Unavailable` at the deadline -- but the handler
+;;; KEEPS RUNNING to completion on its thread: threads cannot be cancelled,
+;;; so a deadline answers the client early, it does not stop the work.  The
+;;; late handler's response is discarded; it cannot reach the client (its
+;;; copy has no socket) or upgrade the connection.  Let late handlers finish
+;;; before httpd-free, which releases the closures they run.
+;;;
+;;; On the async server it runs `next` inline with no deadline.
+;;;
+;;; Parameters:
+;;;   ms   -- the deadline in milliseconds
+;;;   next -- downstream handler
+;;;
+;;; Returns:
+;;;   A wrapped handler closure.
+;;;
+;;; Example:
+;;;   (compose-middleware slow-report-handler (mw-timeout 2000))
+;;;
+;;; Since: tourist-on-stdlib-httpd H4
+(defn mw-timeout [ms : int ^fat next : (fn [ptr<void>] nil)] : ptr<void>
+  (let [_ms (if (< ms 1) 1 ms)
+        _n  next]
+    (fn [c : ptr<void>] : nil
+      (httpd-mw-timeout-run c (:: _n :int) _ms))))

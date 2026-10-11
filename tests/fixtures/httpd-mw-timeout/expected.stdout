@@ -1,0 +1,7 @@
+fast: status=201 x-handler=fast body=[body=payload x-in=hdr attr=set-before]
+slow: status=503 x-handler=(absent) body=[Service Unavailable]
+slow answered before the handler finished: yes
+late handler still running then: yes
+after: status=201 x-handler=fast body=[body=second x-in=again attr=set-before]
+late handler finished: yes
+done

@@ -34,6 +34,16 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found putting tourist on stdlib httpd (filed 2026-10-10)
+
+Two compiler defects met while wiring stdlib httpd middleware under tourist
+(tourist-on-stdlib-httpd-plan H4). Both have workarounds in the spices.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [module-export-and-loaded-global-share-c-name](module-export-and-loaded-global-share-c-name.md) | medium (compile failure / wrong signature) | A module export and a same-named global from a `load`ed file are emitted under one module-qualified C name (`conflicting types for 'm__b__foo_hyfree'`); without the `load`, a `:refer`'d import is type-checked against the global's signature. Hit by tourist's `router-free` vs stdlib httpd's; tourist renamed it `pattern-free` |
+| [defer-skipped-on-panic-in-cps-function](defer-skipped-on-panic-in-cps-function.md) | medium (cleanup skipped) | A `defer` in a CPS-converted function runs only on the normal exit; a caught panic returns past it. Direct functions fire it. Leaked tourist's per-request ctx under `mw-recover`; worked around with an inline-C guard |
+
 ## Found typing reactor-add-chan's channel (filed 2026-10-10)
 
 `tests/run-fnsan.sh` was cited as evidence that reactor callbacks match
@@ -54,7 +64,7 @@ the plan's NG-C turned up a test-coverage gap in spices CI, which is open.
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[nil-argument-to-ptr-param-emits-void-expression](../archive/nil-argument-to-ptr-param-emits-void-expression.md)~~ | low-medium (compile failure) | **RESOLVED 2026-10-10** (archived): a literal `nil` at a `ptr<void>` parameter is rewritten to the `0` null literal every back end already handles, so it compiles on every call shape and is 0 under `--interpret` too; any other `:void` argument is now `TUR-E0001`. Fixing it exposed a captureless reactor callback crashing in `call_tur_timer_cb`: the five `reactor-add-*` wrappers took `cb : int`, so a bare C function pointer was called as a fat box. They are `^fat` now, like `local-spawn`. The reactor guide's examples run as written. Pinned by `nil-arg-to-ptr-param`, `nil-arg-to-ptr-param-inline-c`, `errors/nil-nonliteral-arg-to-ptr-param`, `reactor-captureless-callbacks`, `reactor-fd-captureless` |
-| [spice-suites-without-libturi-run-unsanitized](spice-suites-without-libturi-run-unsanitized.md) | low-medium (coverage gap) | A sanitized `tur` adds `-fsanitize` to a program only when it links `libturi` (`main.c:2989`), so in spices CI only the suites that pull in libturi (e.g. through the reactor) run under LeakSanitizer. A deliberate `nng_msg` leak in `nng/ctx` passes the suite and is caught with `TUR_CC_FLAGS=-fsanitize=address,undefined`. Forcing it on fails two older nng suites on test-side leaks |
+| [spice-suites-without-libturi-run-unsanitized](spice-suites-without-libturi-run-unsanitized.md) | low-medium (coverage gap) | A sanitized `tur` adds `-fsanitize` to a program only when it links `libturi` (`main.c:2989`), so in spices CI only the suites that pull in libturi (e.g. through the reactor) run under LeakSanitizer. A deliberate `nng_msg` leak in `nng/ctx` passes the suite and is caught with `TUR_CC_FLAGS=-fsanitize=address,undefined`. Forcing it on fails two older nng suites on test-side leaks. Since 2026-10-10 the httpd stack (httpd, tourist*, ws-server) links libturi and is covered; three `tourist-session` suites newly covered by H5 opt out (`detect_leaks=0`) on pre-existing test-side leaks |
 
 ## Found writing the prob spice guide (filed 2026-10-10)
 

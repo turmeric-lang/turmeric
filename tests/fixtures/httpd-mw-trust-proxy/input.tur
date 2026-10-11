@@ -1,0 +1,215 @@
+;; httpd-mw-trust-proxy -- mw-trust-proxy, httpd-req-ip / httpd-req-proto,
+;; mw-rate-limit keyed on the resolved client, and mw-log's ip=
+;; (tourist-on-stdlib-httpd-plan H4).
+;;
+;;   1. trust-proxy-opts refuses an entry that is not an address, a CIDR or
+;;      a keyword, and a prefix too long for its family.
+;;   2. Trusting nothing: X-Forwarded-For / -Proto are ignored, the peer is
+;;      the client.
+;;   3. Trusting loopback: the rightmost untrusted X-Forwarded-For hop is
+;;      the client (trusted hops are skipped), a hop that does not parse
+;;      ends the walk, and X-Forwarded-Proto https is believed.
+;;   4. mw-rate-limit behind mw-trust-proxy buckets by that client: two
+;;      clients behind one proxy get a bucket each.
+;;   5. mw-log-to's line carries ip=<client>.
+
+(load "stdlib/httpd.tur")
+
+;; --- raw HTTP client helpers (one request per connection) -------------------
+
+;; Send `req` (which carries Connection: close) and return everything the
+;; server wrote until it closed; free with raw-release.
+(defn raw-send [port : int req : cstr] : cstr
+  ```c
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family      = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port        = htons((uint16_t)port);
+  size_t cap = 8192, got = 0;
+  char *buf = (char *)malloc(cap);
+  buf[0] = '\0';
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return buf;
+  if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(fd); return buf; }
+  size_t rl = strlen(req), sent = 0;
+  while (sent < rl) {
+      ssize_t w = send(fd, req + sent, rl - sent, 0);
+      if (w <= 0) break;
+      sent += (size_t)w;
+  }
+  for (;;) {
+      if (got + 1 >= cap) { cap *= 2; buf = (char *)realloc(buf, cap); }
+      ssize_t n = recv(fd, buf + got, cap - 1 - got, 0);
+      if (n <= 0) break;
+      got += (size_t)n;
+  }
+  buf[got] = '\0';
+  close(fd);
+  return buf;
+  ```)
+
+(defn raw-release [r : cstr] : nil
+  ```c free((void *)r); ```)
+
+;; The status code of a raw response (0 when there was none).
+(defn raw-status [r : cstr] : int
+  ```c return strlen(r) > 12 ? (int64_t)atoi(r + 9) : 0; ```)
+
+;; Every value of header `name` in the head of `r`, joined with " | ", or
+;; "(absent)".  The string lives until the next call.
+(defn raw-header [r : cstr name : cstr] : cstr
+  ```c
+  static char out[4096];
+  size_t o = 0;
+  out[0] = '\0';
+  const char *end = strstr(r, "\r\n\r\n");
+  if (!end) end = r + strlen(r);
+  size_t nl = strlen(name);
+  const char *p = strstr(r, "\r\n");
+  while (p && p < end) {
+      const char *line = p + 2;
+      const char *eol = strstr(line, "\r\n");
+      if (!eol || line >= end) break;
+      if ((size_t)(eol - line) > nl && strncasecmp(line, name, nl) == 0 && line[nl] == ':') {
+          const char *v = line + nl + 1;
+          while (*v == ' ') v++;
+          o += (size_t)snprintf(out + o, sizeof out - o, "%s%.*s", o ? " | " : "", (int)(eol - v), v);
+      }
+      p = eol;
+  }
+  return o ? out : "(absent)";
+  ```)
+
+;; The bytes after the head.
+(defn raw-body [r : cstr] : cstr
+  ```c
+  const char *b = strstr(r, "\r\n\r\n");
+  return b ? b + 4 : "";
+  ```)
+
+;; `METHOD path HTTP/1.1`, Host, the `extra` header lines (each ending in
+;; \r\n), Connection: close, and `body` with its Content-Length when it is
+;; not empty.  Returns what raw-send does.
+(defn raw-request [port : int method : cstr path : cstr extra : cstr body : cstr] : cstr
+  ```c
+  size_t bl = strlen(body);
+  size_t cap = strlen(method) + strlen(path) + strlen(extra) + bl + 160;
+  char *req = (char *)malloc(cap);
+  if (bl)
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sContent-Length: %zu\r\nConnection: close\r\n\r\n%s",
+               method, path, extra, bl, body);
+  else
+      snprintf(req, cap, "%s %s HTTP/1.1\r\nHost: x\r\n%sConnection: close\r\n\r\n", method, path, extra);
+  char *r = (char *)raw_hysend(port, req);
+  free(req);
+  return r;
+  ```)
+
+;; Print `label status=N`.
+(defn show-status [label : cstr r : cstr] : nil
+  ```c printf("%s status=%d\n", label, (int)raw_hystatus(r)); fflush(stdout); ```)
+
+;; Print `  name=value` for a response header (every value, or "(absent)").
+(defn show-header [r : cstr name : cstr] : nil
+  ```c printf("  %s=%s\n", name, raw_hyheader(r, name)); fflush(stdout); ```)
+
+(defn run-server [h : ptr<void>] : ptr<void>
+  ```c httpd_hyrun(h); return NULL; ```)
+
+(defn spawn-server [h : ptr<void>] : ptr<void>
+  ```c
+  pthread_t *t = (pthread_t *)malloc(sizeof(pthread_t));
+  pthread_create(t, NULL, (void *(*)(void *))run_hyserver, (void *)h);
+  return (void *)t;
+  ```)
+
+(defn join-thread [t : ptr<void>] : nil
+  ```c pthread_join(*(pthread_t *)t, NULL); free(t); ```)
+
+;; Body: `ip=<httpd-req-ip> proto=<httpd-req-proto>`.
+(defn set-ip-body [c : ptr<void> ip : cstr proto : cstr] : nil
+  ```c
+  char b[300];
+  snprintf(b, sizeof b, "ip=%s proto=%s", ip, proto);
+  __TUR_CNAME_httpd-resp-body!__(c, b);
+  ```)
+
+(defn show-body [label : cstr r : cstr] : nil
+  ```c printf("%s: %d %s\n", label, (int)raw_hystatus(r), raw_hybody(r)); fflush(stdout); ```)
+
+(defn ask [port : int label : cstr extra : cstr] : nil
+  (let [r (raw-request port "GET" "/" extra "")]
+    (show-body label r)
+    (raw-release r)))
+
+(defn record-line [line : cstr] : nil
+  ```c
+  /* __tur_include__: static char g_log[4096]; */
+  /* __tur_include__: static size_t g_log_len = 0; */
+  const char *ms = strstr(line, "ms");
+  const char *ts = ms;
+  while (ts && ts > line && ts[-1] >= '0' && ts[-1] <= '9') ts--;
+  if (ts && ms)
+      g_log_len += (size_t)snprintf(g_log + g_log_len, sizeof g_log - g_log_len, "%.*sTIME%s\n",
+                                    (int)(ts - line), line, ms);
+  ```)
+
+(defn print-log [] : nil
+  ```c fputs(g_log, stdout); fflush(stdout); ```)
+
+(defn opts-check [label : cstr trusted : cstr] : nil
+  ```c printf("%s: ", label); fflush(stdout); ```
+  (println (if (ok? (trust-proxy-opts trusted)) "accepted" "refused")))
+
+(defn main [] : int
+  (opts-check "loopback, 10.0.0.0/8, ::1" "loopback, 10.0.0.0/8, ::1")
+  (opts-check "uniquelocal,linklocal" "uniquelocal,linklocal")
+  (opts-check "10.0.0.0/33" "10.0.0.0/33")
+  (opts-check "bogus" "bogus")
+  (let [base (fn [c : ptr<void>] : nil (set-ip-body c (httpd-req-ip c) (httpd-req-proto c)))]
+    (println "-- trusting nothing")
+    (let [h      (httpd-new-pool 0 1 (mw-trust-proxy (default-trust-proxy-opts) base))
+          port   (httpd-port h)
+          server (spawn-server h)]
+      (ask port "forged" "X-Forwarded-For: 203.0.113.7\r\nX-Forwarded-Proto: https\r\n")
+      (httpd-stop h)
+      (join-thread server)
+      (httpd-free h))
+    (println "-- trusting loopback")
+    (let [tp     (trust-proxy-opts "loopback")
+          h      (httpd-new-pool 0 1 (mw-trust-proxy (ok-val tp) base))
+          port   (httpd-port h)
+          server (spawn-server h)]
+      (ask port "no header" "")
+      (ask port "one hop" "X-Forwarded-For: 203.0.113.7\r\n")
+      (ask port "rightmost untrusted" "X-Forwarded-For: 198.51.100.1, 203.0.113.7\r\n")
+      (ask port "trusted hop skipped" "X-Forwarded-For: 203.0.113.7, 127.0.0.5\r\n")
+      (ask port "all trusted" "X-Forwarded-For: 127.0.0.9, 127.0.0.5\r\n")
+      (ask port "ipv6 hop" "X-Forwarded-For: 2001:db8::1\r\n")
+      (ask port "unparsable" "X-Forwarded-For: not-an-ip\r\n")
+      (ask port "unparsable left" "X-Forwarded-For: junk, 203.0.113.7, 127.0.0.2\r\n")
+      (ask port "proto https" "X-Forwarded-For: 203.0.113.7\r\nX-Forwarded-Proto: https\r\n")
+      (ask port "proto junk" "X-Forwarded-Proto: gopher\r\n")
+      (httpd-stop h)
+      (join-thread server)
+      (httpd-free h))
+    (println "-- rate limit and log behind the proxy")
+    (let [tp     (trust-proxy-opts "127.0.0.1")
+          sink   (fn [line : cstr] : nil (record-line line))
+          h      (httpd-new-pool 0 1
+                   (mw-trust-proxy (ok-val tp)
+                     (mw-log-to sink
+                       (mw-rate-limit (make-struct RateLimitOpts 2 60) base))))
+          port   (httpd-port h)
+          server (spawn-server h)]
+      (ask port "client A 1" "X-Forwarded-For: 203.0.113.7\r\n")
+      (ask port "client A 2" "X-Forwarded-For: 203.0.113.7\r\n")
+      (ask port "client A 3" "X-Forwarded-For: 203.0.113.7\r\n")
+      (ask port "client B 1" "X-Forwarded-For: 203.0.113.8\r\n")
+      (httpd-stop h)
+      (join-thread server)
+      (httpd-free h)
+      (print-log)))
+  (println "done")
+  0)

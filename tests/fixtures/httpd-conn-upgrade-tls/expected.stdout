@@ -1,0 +1,17 @@
+wrap_fd-called
+handshake-called
+upgrade-requested
+callback-start
+shutdown-called
+free-called
+callback-closed
+second-close=no-op
+wrap_fd-called
+handshake-called
+plain-request
+shutdown-called
+free-called
+status-line=HTTP/1.1 101 Switching Protocols
+after-upgrade=PING
+plain-body=TLS-OK
+done
