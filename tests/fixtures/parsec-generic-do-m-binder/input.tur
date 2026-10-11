@@ -1,0 +1,30 @@
+;; generic-hkt-method-lambda-with-tyvar-param-not-emitted, the parser shapes:
+;; inside a generic defn, a `bind` continuation typed by the defn's own type
+;; variable, a nested continuation capturing it, and -- the test the report
+;; set -- an un-annotated `do-m` binder typed from a `(Parser A)` receiver
+;; (parsec-guide-plan P8 used to keep such a binder on the int carrier).
+
+(load "stdlib/parsec.tur")
+
+(defn rebind [A] [p : (Parser A)] : (Parser A)
+  (bind p (fn [v : A] : (Parser A) (pure v))))
+
+(defn head-then [A] [p : (Parser A) q : (Parser A)] : (Parser (List A))
+  (bind p (fn [v : A] : (Parser (List A))
+            (bind (many q) (fn [vs : (List A)] : (Parser (List A))
+                             (pure (list-cons v vs)))))))
+
+;; The same parser through do-m: `v : A` and `vs : (List A)` are inferred.
+(defn head-then-m [A] [p : (Parser A) q : (Parser A)] : (Parser (List A))
+  (do-m v p vs (many q) (pure (list-cons v vs))))
+
+(defn main [] : int
+  (show-line (parse-first (rebind (item)) "x"))                          ; #\x
+  (println (parse-first (rebind (:: (pure 7.1) (Parser float))) ""))     ; 7.1
+  (let [cs (parse-first (head-then (item) (pchar #\b)) "abbb")]
+    (println (list-count cs))                                            ; 4
+    (show-line (list->string cs)))                                       ; abbb
+  (let [cs (parse-first (head-then-m (item) (pchar #\b)) "abb")]
+    (println (list-count cs))                                            ; 3
+    (show-line (list->string cs)))                                       ; abb
+  0)

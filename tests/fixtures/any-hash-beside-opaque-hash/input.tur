@@ -1,0 +1,9 @@
+;; hash-instance-on-int-opaque-breaks-any-key-maps, the typed dialect: an `any`
+;; receiver resolves to `Hash [any]` while a user opaque has its own `Hash`.
+(defopaque Tag :int)
+(definstance Hash [Tag] (hash [x] 0))
+(defn main [] : int
+  (let [k (:: 7 any)]
+    (println (= (hash k) (hash (:: 7 any))))
+    (println (hash (:: (:: 3 Tag) Tag))))
+  0)

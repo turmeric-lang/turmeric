@@ -2457,8 +2457,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             Type fres = (fld->full_type && def)
                 ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
-            const char *ctype = (type_is_wide_byval_adt(fres) &&
-                                 !adt_field_is_ros_pointer_box(def, &fres))
+            const char *ctype = adt_field_is_wide_box(def, &fres)
                 ? "int64_t"
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
@@ -2499,8 +2498,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 if (!fld->full_type || fld->full_type->kind != TY_TYVAR) continue;
                 Type fres = def ? substitute_adt_app_type_owned(fld->full_type, def, args)
                                 : type_simple(TY_UNKNOWN, CK_COPY);
-                const char *ctype = (type_is_wide_byval_adt(fres) &&
-                                     !adt_field_is_ros_pointer_box(def, &fres))
+                const char *ctype = adt_field_is_wide_box(def, &fres)
                     ? "int64_t"
                     : adt_field_c_type(def, fld, args);
                 free_struct_app_type(fres);
@@ -2529,8 +2527,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             Type fres = (fld->full_type && def)
                 ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
-            const char *ctype = (type_is_wide_byval_adt(fres) &&
-                                 !adt_field_is_ros_pointer_box(def, &fres))
+            const char *ctype = adt_field_is_wide_box(def, &fres)
                 ? "int64_t"
                 : adt_field_c_type(def, fld, args);
             free_struct_app_type(fres);
@@ -2599,8 +2596,7 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
                 ? substitute_adt_app_type_owned(fld->full_type, def, args)
                 : type_simple(TY_UNKNOWN, CK_COPY);
             val_ctype[fi] = adt_field_c_type(def, fld, args);
-            wide_box[fi] = type_is_wide_byval_adt(fres) &&
-                           !adt_field_is_ros_pointer_box(def, &fres);
+            wide_box[fi] = adt_field_is_wide_box(def, &fres);
             free_struct_app_type(fres);
         }
 
@@ -2680,7 +2676,23 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
-                buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                if (wide_box[fi]) {
+                    /* heap-adt-niche-option-some-payload-missing-cast (the
+                     * by-value half): the typedef above stores a WIDE by-value
+                     * element as an int64 heap box (B4 slice 2), but this
+                     * branch assigned the aggregate parameter straight into
+                     * that word -- `(Bx (Pos 7 8))` did not compile.  Box it
+                     * as the carrier branch below does. */
+                    buf_printf(out,
+                        "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
+                        " __r->%s = (int64_t)(intptr_t)__b; }\n",
+                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
+                    buf_printf(out,
+                        "    TUR_REGION_NOTE_WORDS((void *)(intptr_t)__r->%s, sizeof(%s));\n",
+                        mp, val_ctype[fi]);
+                } else {
+                    buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                }
                 free(mp);
             }
             buf_printf(out, "    return __r;\n");
@@ -4222,6 +4234,11 @@ size_t adt_byval_value_size_bytes(const AdtDef *def) {
  * for parametric-carrier elements; the field-read raw-carrier path only for an
  * erased int64 binding) so an ordinary wide by-value ADT match keeps its
  * existing B3 treatment. */
+bool adt_field_is_wide_box(const struct AdtDef *owner, const Type *resolved) {
+    return resolved && type_is_wide_byval_adt(*resolved) &&
+           !adt_field_is_ros_pointer_box(owner, resolved);
+}
+
 bool type_is_wide_byval_adt(Type t) {
     if (t.kind == TY_ADT && t.as.adt_.def) {
         /* van-laarhoven-lens-composition (Gap B2): a `:heap` struct/ADT is a typed

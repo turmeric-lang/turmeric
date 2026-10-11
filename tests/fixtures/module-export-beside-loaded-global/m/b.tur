@@ -1,0 +1,5 @@
+(defmodule m/b
+  (export foo-free)
+  (defn foo-free [x : int] : nil
+    (do (println "m/b foo-free")
+        (println x))))

@@ -1,0 +1,37 @@
+;; Two compile-time macro idioms that must keep working now that a
+;; substituted macro argument is data to the CT evaluator
+;; (macro-arg-not-ct-evaluated).  Both are what ecs's world and system
+;; macros are built from.
+;;
+;; 1. `(quote param)` on a parameter keeps it as data for a CT walker.
+;;    quote must yield the argument, not the PROV_MACRO_ARG wrapper.
+;; 2. A macro recursing through a splice with its arguments written `~x`:
+;;    `~@(fields ~cap ~(rest comps))`.  `~(rest comps)` is the VALUE of
+;;    `(rest comps)`; left unevaluated, the inner `(empty? comps)` never
+;;    became true and expansion recursed until the compiler's stack ran out.
+
+(defmacro count-items [& clauses]
+  (let [cls (quote clauses)
+        go  (letrec [walk (fn [cs n]
+                            (if (empty? cs)
+                              n
+                              (walk (rest cs) (+ n 1))))]
+              walk)]
+    (go cls 0)))
+
+(defmacro sum-fields [base comps]
+  (if (empty? comps)
+    `()
+    `(~base ~(first comps)
+      ~@(sum-fields ~base ~(rest comps)))))
+
+;; (sum-fields 100 [1 2 3]) -> (100 1 100 2 100 3); sum-pairs adds them up.
+(defmacro sum-pairs [base & xs]
+  `(+ 0 0 ~@(sum-fields ~base ~xs)))
+
+(defn main [] : int
+  (println (count-items :a 1 :b 2))   ; 4
+  (println (count-items))             ; 0
+  (println (sum-pairs 100 1 2 3))     ; 306
+  (println (sum-pairs 7))             ; 0
+  0)

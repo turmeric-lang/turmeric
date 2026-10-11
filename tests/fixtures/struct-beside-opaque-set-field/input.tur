@@ -1,0 +1,27 @@
+;; struct-field-with-opaque-sibling-lowered-to-int, the write side: `set!` of
+;; ANY field of a struct with a `defopaque` field emitted `(r).n = ...` on the
+;; int64 word that holds such a record -- not C.  It writes through the box now,
+;; boxing a by-value aggregate value like the constructor does, and a `:copy`
+;; record is copied first so its copies keep their values.
+
+(defopaque S :ptr<void>)
+(defstruct Pos :copy [line : int col : int])
+(defstruct R [msg : S n : int])
+(defstruct Rc :copy [msg : S n : int pos : Pos])
+(defn __s [] : ptr<void>
+  ```c
+  return (void*)"x";
+  ```)
+(defn main [] : int
+  (let [^mut r (R (:: (__s) S) 1)]
+    (set! (.n r) 5)
+    (println (.n r)))                 ; 5
+  (let [^mut a (Rc (:: (__s) S) 1 (Pos 3 4))
+        b a]
+    (set! (.n a) 7)
+    (set! (.pos a) (Pos 8 9))
+    (println (.n a))                  ; 7
+    (println (.col (.pos a)))         ; 9
+    (println (.n b))                  ; 1  (b is a copy)
+    (println (.col (.pos b))))        ; 4
+  0)

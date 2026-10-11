@@ -1,0 +1,29 @@
+;; heap-adt-niche-option-some-payload-missing-cast: a NICHE `(Option S)` (S a
+;; :non-null pointer opaque) is one pointer word.  A `:heap` constructor field
+;; of that type is the `void *` itself, but `(Some s)` was heap-BOXED on the way
+;; in (an int64 box address into the `void *` slot: -Wint-conversion, a hard
+;; error under clang) and the match dereferenced the field on the way out --
+;; while `(None)` stored the bare NULL, so reading it back was a NULL
+;; dereference.  emit_type_is_byvalue_adt now says a niche option is a word.
+
+(defopaque S :ptr<void> :non-null)
+(defdata Ev :heap :copy (A int) (C S (Option S)))
+(defn __raw [] : ptr<void>
+  ```c
+  return (void *)"hello";
+  ```)
+(defn s-of [] : S (:: (__raw) S))
+(defn show [s : S] : cstr
+  ```c
+  return (const char *)s;
+  ```)
+(defn mk [s : S] : Ev (C s (Some s)))
+(defn mk-none [s : S] : Ev (C s (None)))
+(defn desc [e : Ev] : cstr
+  (match e
+    (A x) "a"
+    (C s o) (match o (Some t) (show t) (None) "none")))
+(defn main [] : int
+  (println (desc (mk (s-of))))
+  (println (desc (mk-none (s-of))))
+  0)

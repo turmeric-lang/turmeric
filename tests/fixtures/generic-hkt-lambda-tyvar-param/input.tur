@@ -1,0 +1,41 @@
+;; generic-hkt-method-lambda-with-tyvar-param-not-emitted: a lambda typed by
+;; the enclosing defn's own type variable, handed to an HKT method (`bind`,
+;; `fmap`) on a concrete receiver.  The specialization of the enclosing
+;; generic dispatches to the by-value instance spec, hands it a per-spec
+;; clone of the rank-2 wrapper (element at its own type: a double natively,
+;; a wide struct as a word pointing at it), and builds a nested capturing
+;; continuation from its own clone.  Each generic runs at several element
+;; types, so a result that is right only by representation luck at `int`
+;; shows up at the others.
+(defstruct Pt :copy [x : float y : float])
+
+(defn rebind [A] [o : (Option A)] : (Option A)
+  (bind o (fn [v : A] : (Option A) (some v))))
+
+;; The bind result feeds a generic consumer, so it needs a real type.
+(defn drop-or [A] [o : (Option A) d : A] : A
+  (unwrap-or (bind o (fn [v : A] : (Option A) (none))) d))
+
+;; Nested continuation capturing the outer element.
+(defn first-if-both [A] [o : (Option A) q : (Option A)] : (Option A)
+  (bind o (fn [v : A] : (Option A)
+            (bind q (fn [w : A] : (Option A) (some v))))))
+
+;; fmap nested inside bind, capturing the outer element.
+(defn keep-left [A] [o : (Option A) q : (Option A)] : (Option A)
+  (bind o (fn [v : A] : (Option A) (fmap q (fn [w : A] : A v)))))
+
+(defn main [] : int
+  (println (unwrap (rebind (some 5))))                          ; 5
+  (println (unwrap (rebind (some 7.1))))                        ; 7.1
+  (println (unwrap (rebind (some "hi"))))                       ; hi
+  (println (.y (unwrap (rebind (some (Pt 1.5 2.25))))))         ; 2.25
+  (println (none? (rebind (:: (none) (Option float)))))         ; true
+  (println (drop-or (some 3) 9))                                ; 9
+  (println (drop-or (some 3.25) 1.5))                           ; 1.5
+  (println (unwrap (first-if-both (some 3) (some 4))))          ; 3
+  (println (unwrap (first-if-both (some 3.25) (some 4.5))))     ; 3.25
+  (println (none? (first-if-both (some 3.25) (:: (none) (Option float))))) ; true
+  (println (.x (unwrap (first-if-both (some (Pt 6.5 0.5)) (some (Pt 1.0 2.0)))))) ; 6.5
+  (println (unwrap (keep-left (some 7.1) (some 8.2))))          ; 7.1
+  0)

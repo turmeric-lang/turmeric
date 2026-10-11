@@ -1179,6 +1179,15 @@ bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     if (r.kind == TY_APP) {
         AdtDef *ad = type_adt_app_def(&r);
         if (ad && ad->is_heap) return false;
+        /* heap-adt-niche-option-some-payload-missing-cast: a NICHE `(Option
+         * S)` (SR3; S a non-null pointer) is spelled as the payload pointer
+         * itself -- one word, like a `:heap` ADT -- so it is never boxed into
+         * a carrier field slot or unboxed out of one.  Answering "by-value
+         * aggregate" here boxed `(Some s)` on the way into a `:heap`
+         * constructor's `void *` field and dereferenced the field on the way
+         * out, while `(None)` stored the bare NULL: the `None` read was a
+         * NULL dereference. */
+        if (adt_app_is_niche_option(r)) return false;
         return adt_app_is_byvalue_product(r);
     }
     return false;
@@ -4113,6 +4122,98 @@ static FnDef *scp_fndef_of(const Binding *fb) {
     free((void *)items);
     last_b = fb; last_fd = found; last_prog = g_scp_ctx->program_root;
     return found;
+}
+
+/* byvalue-aggregate-erased-to-dangling-stack-address: may the typeclass
+ * instance method `fb` RETAIN what arrives in its erased parameter `pi`?
+ *
+ * A by-value aggregate crossing into an erased carrier parameter is passed as
+ * the address of a stack spill, which is sound for a callee that only reads it
+ * and dangles for one that keeps it.  Decided from the CLASS method's declared
+ * signature, by parametricity: the method can hand the value back -- inside a
+ * closure, a container, or as itself -- only through a result whose type
+ * mentions one of the parameter's value-kinded type variables.  `pure : a ->
+ * (f a)` can; `fmap`/`bind`/`ap`, whose results are `(f b)`, cannot retain the
+ * receiver; `show : a -> cstr` cannot.  A variable under a function type the
+ * parameter holds is not a value it contains; one in the RESULT's function
+ * type is (a returned closure may capture it).  A constructor variable (`f` in `(f
+ * a)`) says nothing about a value and is not counted.  A parameter the class
+ * left unannotated (no variables to reason about) keeps the read-only answer,
+ * as does a method whose instance cannot be found.  Not covered: storing the
+ * value through a side effect into another argument's container. */
+static void irp_value_vars(const Type *t, bool head, const char **out,
+                           uint32_t *n, uint32_t cap, int depth) {
+    if (!t || depth > 32) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (!head && t->as.tyvar_.name && *n < cap) out[(*n)++] = t->as.tyvar_.name;
+            return;
+        case TY_APP:
+            irp_value_vars(t->as.app.fn, true, out, n, cap, depth + 1);
+            irp_value_vars(t->as.app.arg, false, out, n, cap, depth + 1);
+            return;
+        case TY_FN:
+            /* A function the parameter holds consumes and produces its
+             * variables' values; it does not CONTAIN one.  `ap`'s `(f (fn [a]
+             * b))` holds functions, never a `b`. */
+            return;
+        default:
+            return;
+    }
+}
+
+static bool irp_mentions(const Type *t, const char *name, int depth) {
+    if (!t || !name || depth > 32) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return irp_mentions(t->as.app.fn, name, depth + 1) ||
+                   irp_mentions(t->as.app.arg, name, depth + 1);
+        case TY_FN:
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (irp_mentions(t->as.fn.arg_full_types[i], name, depth + 1))
+                        return true;
+            return irp_mentions(t->as.fn.result_full_type, name, depth + 1);
+        default:
+            return false;
+    }
+}
+
+static bool inst_method_may_retain_param(EmitCtx *ctx, const Binding *fb,
+                                         uint32_t pi) {
+    if (!fb || !fb->is_instance_method || !ctx || !ctx->program_root) return false;
+    uint32_t n = 0;
+    const Expr **items = flatten_program_items(ctx->program_root, &n);
+    const FnDef *fd = NULL;
+    const TypeClassInstance *inst = NULL;
+    for (uint32_t i = 0; items && i < n && !fd; i++) {
+        const Expr *it = items[i];
+        if (!it || it->kind != EX_INSTANCE_DEF || !it->as.instance_def_.instance)
+            continue;
+        const TypeClassInstance *ci = it->as.instance_def_.instance;
+        for (uint32_t mi = 0; mi < ci->n_method_impls && !fd; mi++)
+            if (ci->method_impls[mi] && ci->method_impls[mi]->binding == fb) {
+                fd = ci->method_impls[mi];
+                inst = ci;
+            }
+    }
+    free((void *)items);
+    if (!fd || !inst || !inst->typeclass) return false;
+    const TypeClass *tc = inst->typeclass;
+    int slot = -1;
+    for (uint32_t mi = 0; mi < inst->n_method_impls && mi < tc->n_methods; mi++)
+        if (inst->method_impls[mi] == fd) { slot = (int)mi; break; }
+    if (slot < 0) return false;
+    const TypeClassMethod *m = &tc->methods[slot];
+    if (!m->param_types || pi >= m->n_params) return false;
+    const char *vars[16];
+    uint32_t nv = 0;
+    irp_value_vars(&m->param_types[pi], false, vars, &nv, 16, 0);
+    for (uint32_t v = 0; v < nv; v++)
+        if (irp_mentions(&m->return_type, vars[v], 0)) return true;
+    return false;
 }
 
 /* Does `fb` keep nothing of a closure carried in the sum it receives as param
@@ -11599,9 +11700,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * call (EX_CONS_LIST) is a `tur_adt_Cons__any *` --
                          * `((cut list <...>))` in #lang r7rs, a -Wint-conversion
                          * error under clang (r7rs-srfi-plan S2's SRFI 26 suite on
-                         * macOS). */
+                         * macOS).
+                         *
+                         * heap-adt-arg-to-closure-cross-module-missing-cast: the
+                         * argument's spelling is what a local was DECLARED as
+                         * (emit_localvar_lookup_ctype): `(let [e (mk x)] (h e))`
+                         * holds a `:heap` `e` as `tur_adt_Ev *`, while
+                         * emit_type_c_name of its Type answers the word, so the
+                         * typed local went into the `int64_t` slot uncast. */
                         const char *slot_cty = emit_type_c_name(ctx, arg_types[i]);
-                        const char *val_cty = arg ? emit_type_c_name(ctx, arg->type) : NULL;
+                        const char *val_cty = emit_str_is_bare_ident(arg_strs[i])
+                            ? emit_localvar_lookup_ctype(arg_strs[i]) : NULL;
+                        if (!val_cty && arg) val_cty = emit_type_c_name(ctx, arg->type);
                         size_t val_len = val_cty ? strlen(val_cty) : 0;
                         bool ptr_into_carrier = !slot_is_ptr && slot_cty &&
                             strcmp(slot_cty, "int64_t") == 0 &&
@@ -12185,8 +12295,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool field_is_fn = false;
                     {
                         Type rt = emit_resolve_type(ctx, e->type);
+                        /* heap-adt-niche-option-some-payload-missing-cast (the
+                         * non-niche half): a `:heap` owner's ctor takes an
+                         * inline-able field by value too -- its header is laid
+                         * out by value (emit_module.c `hdr_byval`) -- so boxing
+                         * the argument handed an int64 to a `tur_adt_Pos`
+                         * parameter. */
                         if (rt.kind == TY_ADT && rt.as.adt_.def &&
-                            adt_is_byvalue_product(rt.as.adt_.def)) {
+                            (adt_is_byvalue_product(rt.as.adt_.def) ||
+                             rt.as.adt_.def->is_heap)) {
                             const AdtDef *od = rt.as.adt_.def;
                             /* SR1: a by-value owner may now be MULTI-variant, so
                              * the field being stored belongs to the constructor
@@ -13458,7 +13575,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool pbp = (pt.kind == TY_ADT && pt.as.adt_.def)
                                    ? adt_byval_pass_by_ptr(pt.as.adt_.def)
                                    : adt_app_byval_pass_by_ptr(pt);
-                    if (pbp) {
+                    /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a
+                     * TYVAR parameter (the enclosing generic's element) is a word
+                     * pointing at an aggregate only where it resolves to one. */
+                    if (fn_binding->type.as.fn.arg_full_types[i]->kind == TY_TYVAR &&
+                        !emit_type_is_byvalue_adt(ctx, pt)) {
+                        /* native element: pass it through untouched */
+                    } else if (pbp) {
                         Buf c; buf_init(&c);
                         buf_printf(&c, "((const %s *)(intptr_t)(%s))",
                                    emit_type_c_name(ctx, pt), raw);
@@ -13710,6 +13833,34 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                                CK_CONCRETE, CK_CARRIER,
                                                                bridge_ty);
+                        } else if (_arg_is_byval_struct &&
+                                   inst_method_may_retain_param(ctx, fn_binding, i)) {
+                            /* byvalue-aggregate-erased-to-dangling-stack-address:
+                             * a typeclass instance method's erased parameter is
+                             * the shape that RETAINS -- `Applicative [Parser]`'s
+                             * `pure [x]` stores `x` in the parser closure it
+                             * returns, `pure` for a container stores it in the
+                             * container -- and the closure runs after this
+                             * frame is gone.  The plain bridge's stack spill
+                             * handed it `&tmp`: `(pure (pair 1 2))` in a parser
+                             * read back garbage.  Heap-promote, as the
+                             * container-insert arm above and the dict-dispatch
+                             * twin do; the box outlives any region bracket and
+                             * no store hook sees its words, so note them. */
+                            Type bridge_ty =
+                                fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                            if (bridge_ty.kind == TY_UNKNOWN)
+                                bridge_ty = emit_arg->type;
+                            raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                                                               CK_CONCRETE, CK_CARRIER,
+                                                               bridge_ty);
+                            const char *bcn = emit_type_c_name(ctx, bridge_ty);
+                            if (raw && bcn && strstr(raw, "(int64_t)(intptr_t)(") == raw) {
+                                indent_buf(body, ctx->indent);
+                                buf_printf(body,
+                                    "TUR_REGION_NOTE_WORDS((void *)(intptr_t)%s, sizeof(%s));\n",
+                                    raw, bcn);
+                            }
                         } else {
                             raw = emit_carrier_bridge(ctx, body, raw,
                                                       CK_CONCRETE, CK_CARRIER,
@@ -13825,9 +13976,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     }
                                 }
                             }
-                            if (fn_binding->body_is_inline_c &&
-                                (type_is_wide_byval_adt(rarg) ||
-                                 _n3_container_store)) {
+                            /* byvalue-aggregate-erased-to-dangling-stack-
+                             * address: an instance method's erased parameter
+                             * retains (`pure [x]` of `Applicative [Parser]`
+                             * keeps `x` in the closure it returns), the plain
+                             * `defstruct` twin of the TY_APP arm above. */
+                            bool _inst_retains = !type_is_heap_struct(rarg) &&
+                                                 !type_is_heap_adt(rarg) &&
+                                                 inst_method_may_retain_param(ctx, fn_binding, i);
+                            if ((fn_binding->body_is_inline_c &&
+                                 (type_is_wide_byval_adt(rarg) ||
+                                  _n3_container_store)) ||
+                                _inst_retains) {
                                 /* vec-push-byvalue-struct-param-emits-unbridged-
                                  * pointer: a WIDE struct PARAMETER is
                                  * materialized as `const T *`, so `raw` names
@@ -13852,6 +14012,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 raw = emit_carrier_bridge_escaping(
                                           ctx, body, raw,
                                           CK_CONCRETE, CK_CARRIER, rarg);
+                                /* The instance method's box is reached by no
+                                 * store hook (a container insert notes its own
+                                 * element): note its words. */
+                                const char *rcn = emit_type_c_name(ctx, rarg);
+                                if (_inst_retains && raw && rcn &&
+                                    strstr(raw, "(int64_t)(intptr_t)(") == raw) {
+                                    indent_buf(body, ctx->indent);
+                                    buf_printf(body,
+                                        "TUR_REGION_NOTE_WORDS((void *)(intptr_t)%s, sizeof(%s));\n",
+                                        raw, rcn);
+                                }
                             } else
                                 raw = emit_carrier_bridge(ctx, body, raw,
                                                           CK_CONCRETE, CK_CARRIER,
@@ -14937,7 +15108,22 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          i < fn_binding->type.as.fn.arity &&
                          fn_binding->type.as.fn.arg_full_types &&
                          fn_binding->type.as.fn.arg_full_types[i]) {
-                    Type raw_at = emit_resolve_type(ctx, emit_arg->type);
+                    /* forward-call-typed-list-arg-cast-to-int64: a caller
+                     * elaborated ABOVE its callee saw the pass-1 forward decl,
+                     * which keeps a compound parameter (`xs : (Cons int)`) as
+                     * the `:int` placeholder, so the elaborator wrapped the
+                     * node argument in an erasing `:int` ascription
+                     * (elab_call.c, no type_form).  By emit time the binding
+                     * carries the real parameter type; ask what the argument
+                     * IS, not what the placeholder made it, or the word went
+                     * into the typed `tur_adt_Cons__int *` slot uncast. */
+                    const Expr *heap_arg = emit_arg;
+                    while (heap_arg->kind == EX_ASCRIBE &&
+                           !heap_arg->as.ascribe_.type_form &&
+                           heap_arg->type.kind == TY_INT &&
+                           heap_arg->as.ascribe_.inner)
+                        heap_arg = heap_arg->as.ascribe_.inner;
+                    Type raw_at = emit_resolve_type(ctx, heap_arg->type);
                     bool arg_is_heap_ptr = type_is_heap_struct(raw_at) ||
                                            type_is_heap_adt(raw_at) ||
                                            raw_at.kind == TY_APP;
@@ -15056,10 +15242,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             emit_arg->kind == EX_VAR &&
                             acty && strcmp(acty, "int64_t") == 0 &&
                             strncmp(raw, "(void *)", 8) != 0;
-                        if ((rec_is_conc_ptr &&
-                             ((acty && strcmp(acty, "int64_t") == 0) ||
-                              arg_slot_is_carrier)) ||
-                            voidp_straddle) {
+                        /* Already cast to exactly this parameter's type (the
+                         * heap-arg arm above, for an erased forward-call
+                         * argument): a second cast is noise. */
+                        size_t rcL = strlen(rec_c);
+                        bool already_cast = raw[0] == '(' &&
+                            strncmp(raw + 1, rec_c, rcL) == 0 &&
+                            strncmp(raw + 1 + rcL, ")(intptr_t)(", 12) == 0;
+                        if (!already_cast &&
+                            ((rec_is_conc_ptr &&
+                              ((acty && strcmp(acty, "int64_t") == 0) ||
+                               arg_slot_is_carrier)) ||
+                             voidp_straddle)) {
                             Buf _fb; buf_init(&_fb);
                             buf_printf(&_fb, "(%s)(intptr_t)(%s)", rec_c, raw);
                             buf_putc(&_fb, '\0');
@@ -17643,7 +17837,20 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * for the `C [any]` argument bridge. */
                     bool fld_tagged = heap_fld_cast &&
                                       strcmp(heap_fld_cast, "tur_tagged_t") == 0;
-                    if (fld_aggregate || fld_tagged) {
+                    /* heap-adt-niche-option-some-payload-missing-cast (the
+                     * by-value half): a PARAMETRIC owner's monomorph stores a
+                     * WIDE by-value element as an int64 heap box (types.c, B4
+                     * slice 2: the typedef and, now, the `:heap` ctor), so it
+                     * is not "stored inline" -- deref the box.  A
+                     * non-parametric `:heap` header inlines it (hdr_byval) and
+                     * reads it directly below. */
+                    bool fld_wide_boxed = fld_aggregate && adt &&
+                        adt->n_type_params > 0 &&
+                        adt_field_is_wide_box(adt, &fld_rty);
+                    if (fld_wide_boxed) {
+                        buf_printf(&hb, "(*(%s *)(intptr_t)(((%s)(intptr_t)(%s))->%s))",
+                                   emit_type_c_name(ctx, fld_rty), heap_recv_cn, sv, mp);
+                    } else if (fld_aggregate || fld_tagged) {
                         buf_printf(&hb, "((%s)(intptr_t)(%s))->%s",
                                    heap_recv_cn, sv, mp);
                         if (fld_tagged && hb.len < sizeof ctx->any_field_read_note)
@@ -17693,6 +17900,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * return an int64 from a `void *` function. */
                     buf_printf(&hb, "(%s)(intptr_t)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                fld_rcty, adt_mn, sv, mp);
+                } else if (ctor && e->as.get_field_.field_idx < ctor->n_fields &&
+                           !adt_is_byvalue_product(adt) &&
+                           (adt_field_is_inline_byval(
+                                &ctor->fields[e->as.get_field_.field_idx]) ||
+                            emit_type_is_byvalue_adt(ctx, fld_rty)) &&
+                           cty && strncmp(cty, "tur_adt_", 8) == 0 &&
+                           strchr(cty, '*') == NULL) {
+                    /* struct-field-with-opaque-sibling-lowered-to-int: a CARRIER
+                     * record (an opaque field keeps `(defstruct Er [msg : S pos
+                     * : Pos])` off the by-value ABI, so every slot is the int64
+                     * word) stores a by-value aggregate field BOXED -- the
+                     * constructor's CONV-S1/B3 field-store crossing, which
+                     * inlines a field only when the OWNER is a by-value product
+                     * -- and the match binder unboxes it (B3).  The `.field`
+                     * read is the third party to that contract: deref the box.
+                     * adt_field_is_inline_byval alone answers for the field, not
+                     * the owner.  Reading the slot raw left `(.line (.pos e))`
+                     * applying `.line` to an int64_t. */
+                    buf_printf(&hb, "(*(%s *)(intptr_t)(((tur_adt_%s *)(intptr_t)(%s))->%s))",
+                               cty, adt_mn, sv, mp);
                 } else {
                     buf_printf(&hb, "(%s)((tur_adt_%s *)(intptr_t)(%s))->%s",
                                cty, adt_mn, sv, mp);
@@ -18211,6 +18438,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         if (variant) { free(wn); wn = variant; wn_is_variant = true; }
                     }
                 }
+            }
+            /* generic-hkt-method-lambda-with-tyvar-param-not-emitted: a
+             * wrapper that is itself generic (it forwards to a lambda typed by
+             * the enclosing generic's variable) was cloned under this
+             * specialization by emit_abi_scan_fn_values; name that clone, whose
+             * result is the specialization's by-value type. */
+            if (!wn_is_variant) {
+                char *wclone = emit_fn_value_spec_clone(
+                    ctx, e->as.poly_wrap_.wrapper_binding);
+                if (wclone) { free(wn); wn = wclone; }
             }
             /* M7: if the wrapper RETURNS a by-value aggregate (a Monad/HKT
              * continuation returning `(m b)`), it cannot be cast to the int64
@@ -20719,7 +20956,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * aggregate value itself in the union slot -- bind it
                              * directly, no cast (cast-to-aggregate is invalid C)
                              * and no carrier unbox. */
-                            bool inline_byval = adt_byval && bi < pat->ctor->n_fields &&
+                            /* heap-adt-niche-option-some-payload-missing-cast
+                             * (the non-niche half): a `:heap` owner's header
+                             * holds its fields by value too (emit_module.c's
+                             * `hdr_byval`), so its by-value field is inline. */
+                            bool inline_byval = (adt_byval || (adt && adt->is_heap)) &&
+                                bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             if (adt_niche) {
                                 /* SR3 slice B: `Some`'s payload IS the
@@ -21224,7 +21466,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * branch; the switch path could not previously be
                              * reached by a by-value owner, because "flows by
                              * value" implied "has no tag". */
-                            bool inline_byval = adt_byval &&
+                            /* A `:heap` owner inlines too (`hdr_byval`); see
+                             * the if-chain twin. */
+                            bool inline_byval = (adt_byval || (adt && adt->is_heap)) &&
                                 bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             /* CONV-S1/B3: a by-value ADT field is stored boxed

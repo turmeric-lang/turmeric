@@ -1,0 +1,9 @@
+;; module-export-and-loaded-global-share-c-name: `m/c` loads a file defining a
+;; global `foo-free` and imports `m/b`'s exported `foo-free`.  m/b's defn
+;; reused the global's binding as if it were its own forward declaration and
+;; stamped it with m/b's module, so both definitions were emitted as
+;; `m__b__foo_hyfree` ("conflicting types").  The :refer'd import is the one
+;; `(foo-free 5)` calls.
+(defmodule main
+  (import m/c :refer [run])
+  (defn main [] : int (run)))

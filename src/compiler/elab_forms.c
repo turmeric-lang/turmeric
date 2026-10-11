@@ -833,6 +833,16 @@ static bool cell_elem_type_ok(Type t) {
         case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
         case TY_BOOL: case TY_CSTR: case TY_SYM: case TY_ANY:
             return true;
+        case TY_ADT:
+            /* closure-set-of-captured-mut-opaque-undeclared: a `defopaque`
+             * handle is one word with nothing for scope exit to release (the
+             * same as a cstr), so it joins.  Without the cell, a closure that
+             * only WRITES it does not capture it at all -- `(set! kept (mk))`
+             * inside a lambda named the outer local, undeclared there.  An
+             * opaque that carries drop glue keeps the copying behaviour, like
+             * every other owning type. */
+            return t.as.adt_.def && t.as.adt_.def->is_opaque &&
+                   !t.as.adt_.def->needs_drop_glue;
         default:
             return false;
     }

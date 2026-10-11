@@ -1,0 +1,9 @@
+;; adt-arg-accepted-at-any-applied-param: a parameter declared with an applied
+;; type (`(Vec int)`) accepted a value of ANY user struct or `defdata` type --
+;; the HKT/G4 allowance meant for a GADT constructor (`Refl` at `(Equal a b)`)
+;; never compared the heads -- and the callee read the struct's words as a Vec.
+(defstruct P :heap [v : int])
+(defn f [v : (Vec int)] : int (vec-len v))
+(defn main [] : int
+  (println (f (P 3)))
+  0)

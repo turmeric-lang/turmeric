@@ -220,6 +220,64 @@ void emit_set_field_stmt(EmitCtx *ctx, Buf *body, const Expr *e) {
             } else
                 buf_printf(&lhs, "((%s *)(intptr_t)(%s))->%s",
                            type_c_name(recv_rty), rv, mp);
+        } else if (!adt_is_byvalue_product(adt) && recv_cn &&
+                   strcmp(recv_cn, "int64_t") == 0) {
+            /* struct-field-with-opaque-sibling-lowered-to-int: a CARRIER record
+             * -- a `defopaque` field keeps `(defstruct R [msg : S n : int])`
+             * off the by-value ABI -- is held as the int64 word of a heap box,
+             * and `(r).n = ...` is not C.  Write through the box, and keep the
+             * value semantics a struct has: a `:copy` record's box may be
+             * shared by every copy, so it is copied first and the variable
+             * re-pointed at the copy; a unique one cannot have been copied, so
+             * its box is written in place. */
+            char *madt = mangle_adt_name(adt->name);
+            /* The copy re-points the receiver, so it needs one to re-point: a
+             * variable.  Any other receiver is a fresh value nobody else
+             * holds, written in place. */
+            if (adt->is_copy && emit_str_is_bare_ident(rv)) {
+                char *cow = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "tur_adt_%s *%s = (tur_adt_%s *)malloc(sizeof(tur_adt_%s));\n",
+                           madt, cow, madt, madt);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "if (!%s) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n", cow);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*%s = *(tur_adt_%s *)(intptr_t)(%s);\n", cow, madt, rv);
+                /* Region store hook: the copy is malloc'd, so it outlives any
+                 * bracket, and it now holds the record's words. */
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "TUR_REGION_NOTE_WORDS(%s, sizeof(*%s));\n", cow, cow);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s = (int64_t)(intptr_t)%s;\n", rv, cow);
+                buf_printf(&lhs, "%s->%s", cow, mp);
+                free(cow);
+            } else {
+                buf_printf(&lhs, "((tur_adt_%s *)(intptr_t)(%s))->%s", madt, rv, mp);
+            }
+            free(madt);
+            /* A by-value aggregate field of a carrier record is stored boxed
+             * (the constructor's CONV-S1/B3 field-store crossing; the read
+             * and the match binder unbox it). */
+            const CtorField *bf = &ctor->fields[fi];
+            if (bf->full_type && emit_type_is_byvalue_adt(ctx, *bf->full_type)) {
+                const char *bcn = type_c_name(emit_resolve_type(ctx, *bf->full_type));
+                char *box = fresh_tmp(ctx);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "%s *%s = (%s *)malloc(sizeof(%s));\n", bcn, box, bcn, bcn);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "if (!%s) { fprintf(stderr, \"tur: oom\\n\"); abort(); }\n", box);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "*%s = (%s);\n", box, vv);
+                indent_buf(body, ctx->indent);
+                buf_printf(body, "TUR_REGION_NOTE_WORDS(%s, sizeof(*%s));\n", box, box);
+                free(vv);
+                Buf vb; buf_init(&vb);
+                buf_printf(&vb, "(int64_t)(intptr_t)%s", box);
+                buf_putc(&vb, '\0');
+                vv = strdup(vb.data);
+                buf_free(&vb);
+                free(box);
+            }
         } else {
             buf_printf(&lhs, "(%s).%s", rv, mp);
         }

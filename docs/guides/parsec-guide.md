@@ -235,21 +235,26 @@ result types are exact: `int`, `bool`, `Char`, `String`, `(List A)`, an
 ```
 
 A **by-value** aggregate handed to `pure` -- `(pure (pair a b))`, a plain
-`defstruct`, an `Option` you built yourself -- does not survive the trip
-today: it is passed as the address of a temporary that is gone by the time
-the parser runs. Build a `:heap` record instead. The defect is tracked in
-[docs/reported/byvalue-aggregate-erased-to-dangling-stack-address.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/byvalue-aggregate-erased-to-dangling-stack-address.md).
+`defstruct`, an `Option` you built yourself -- works too. It is wider than
+the word, so it is copied to the heap on the way in (the parser keeps it
+until it runs). That copy is not reclaimed today, so a parser that `pure`s a
+by-value value allocates once per run; a `:heap` record does not. (Before
+2026-10-11 the value was passed as the address of a temporary that was gone
+by the time the parser ran, and read back garbage:
+[docs/archive/byvalue-aggregate-erased-to-dangling-stack-address.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/byvalue-aggregate-erased-to-dangling-stack-address.md).)
 
-Two more limits of today's compiler, both with easy workarounds:
+Inside a **generic** `defn` (one with type parameters, like a combinator of
+your own), `do-m` binds its names at the type parameter: in
+`(defn head-then [A] [p : (Parser A) q : (Parser A)] ...)`,
+`(do-m v p vs (many q) ...)` binds `v : A` and `vs : (List A)`. (Before
+2026-10-11 they were bound as the untyped `int` carrier, and a lambda typed
+by `A` did not compile:
+[docs/archive/generic-hkt-method-lambda-with-tyvar-param-not-emitted.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/generic-hkt-method-lambda-with-tyvar-param-not-emitted.md).)
 
-- Inside a **generic** `defn` (one with type parameters, like a
-  combinator of your own), `do-m` binds its names as the untyped `int`
-  carrier rather than as `A`. Ascribe where you need the type --
-  `(:: x A)` -- or, better, use the library's combinators (`token`,
-  `between`, `sep-by`), which handle it for you.
-- A `do-m` written inline -- as an argument, `(many (do-m ...))`, or as a
-  step of another `do-m` -- has no declared type to build its `pure` from or
-  to give its value. Give it a name: a `defn` with a result type.
+One more limit of today's compiler, with an easy workaround: a `do-m`
+written inline -- as an argument, `(many (do-m ...))`, or as a step of
+another `do-m` -- has no declared type to build its `pure` from or to give
+its value. Give it a name: a `defn` with a result type.
 
 ---
 

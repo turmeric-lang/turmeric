@@ -1,0 +1,52 @@
+;; cond-bare-symbol-test-folds-later-equality: a macro argument is the
+;; caller's code, i.e. data to the compile-time evaluator.  Each case below
+;; used to be evaluated along with the template that held it.
+
+(defn get [n : int] : int
+  ```c
+  return n;
+  ```)
+
+(defn flag [n : int] : bool
+  ```c
+  return n == 99;
+  ```)
+
+;; A user function named like a CT builtin (`second`).
+(defn second [x : int] : int (+ x 2))
+
+;; 1. A bare-symbol first test made the clause list read as a call to
+;;    `stopped`, and its argument `(= rc 0)` folded to `false` at expansion.
+(defn classify [n : int] : cstr
+  (let [rc      (get n)
+        stopped (flag n)]
+    (cond stopped "s" (= rc 0) "zero" :else "other")))
+
+(defn classify3 [n : int] : cstr
+  (let [rc      (get n)
+        stopped (flag n)]
+    (cond stopped "s" (< rc 0) "neg" (= 0 rc) "zero" :else "other")))
+
+(defn eq-in-for [n : int rc : int] : (Option int)
+  (for [x (some n)] (if (= x rc) 1 0)))
+
+(defmacro my-do [& body] (do ~@body))
+(defmacro twice [x] (do x x))
+
+(defn main [] : int
+  (println (classify 0))     ; zero
+  (println (classify 99))    ; s
+  (println (classify 4))     ; other
+  (println (classify3 0))    ; zero
+  (println (classify3 -2))   ; neg
+  (let [rc (get 0)]
+    ;; 2. `for`'s body: `(= x rc)` folded to `false`.
+    (println (unwrap-or (eq-in-for 0 rc) -1))   ; 1
+    (println (unwrap-or (eq-in-for 1 rc) -1))   ; 0
+    ;; 3. A gate-listed name in a `when` body routed the whole template
+    ;;    through the CT evaluator, whose `do` dropped the body.
+    (when (= rc 0) (println (second rc)))      ; 2
+    (unless (< rc 0) (println (second 40)))    ; 42
+    (my-do (println (= rc 0)) (println (second 1)))  ; true 3
+    (twice (println (= rc 0))))                ; true true
+  0)

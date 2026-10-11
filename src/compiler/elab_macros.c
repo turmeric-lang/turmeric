@@ -17,7 +17,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f);
 static CtValue ct_eval_form(CtEnv *env, Form *f);
 static CtValue ct_eval_splice_inner(CtEnv *env, Form *f);
 static Form *elab_eval_macro_form(Elab *e, Form *f, MacroDef *macro, Form **args);
-static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args);
+static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args, bool mark);
 
 static CtValue ct_value_form(Form *f) {
     CtValue v;
@@ -31,6 +31,78 @@ static CtValue ct_value_fn(CtFn *fn) {
     v.tag = CT_VAL_FN;
     v.as.fn = fn;
     return v;
+}
+
+/* Macro arguments are data to the compile-time evaluator.
+ *
+ * A plain (non-^syntax) parameter is SUBSTITUTED into the template before the
+ * template is evaluated, so without a mark the caller's code was evaluated
+ * along with the template's own: in `cond`, the clause list
+ * `(stopped "s" (= rc 0) "zero" ...)` read as a call to `stopped` and its
+ * argument `(= rc 0)` went through the CT `=` builtin -- a Form comparison of
+ * the symbol `rc` with `0`, i.e. `false` -- so the expansion tested
+ * `(if false ...)`.  A `when` body calling a user function named `second`
+ * made the whole template CT-evaluated, and CT `do` dropped the body.
+ * cond-bare-symbol-test-folds-later-equality has the cases.
+ *
+ * So substitute_params wraps every argument it substitutes in an F_UNQUOTE
+ * stamped PROV_MACRO_ARG: ct_eval_form already hands a bare unquote's inner
+ * back unevaluated, ct_eval_quasiquote and template_needs_ct_eval learn the
+ * stamp below, and strip_macro_arg_data removes whatever wrappers survive
+ * before the expansion leaves elab_expand_macro.  Builtins still see the
+ * argument as a value -- `(first clauses)` is the first clause -- they just
+ * never evaluate inside it.  (^syntax parameters were the per-macro fix for
+ * this, bound in the CT env instead of substituted; do-m, hamt-of and set-of
+ * each needed it.) */
+static Form *macro_arg_datum(Elab *e, Form *arg, bool mark) {
+    if (!mark || !arg) return arg;
+    Form *d = form_unquote(e->arena, arg->span, arg);
+    d->fx_prov = (uint8_t)PROV_MACRO_ARG;
+    return d;
+}
+
+static bool is_macro_arg_datum(const Form *f) {
+    return f && f->tag == F_UNQUOTE && f->fx_prov == (uint8_t)PROV_MACRO_ARG &&
+           f->as.list.len == 1;
+}
+
+/* The argument itself when `f` is a PROV_MACRO_ARG wrapper, else `f`. */
+static Form *macro_arg_unwrap(Form *f) {
+    return is_macro_arg_datum(f) ? f->as.list.items[0] : f;
+}
+
+/* Copy-on-write removal of every PROV_MACRO_ARG wrapper in `f`.  An argument
+ * never carries a wrapper of its own (every expansion strips its result), so
+ * the walk does not descend into one it unwraps. */
+static Form *strip_macro_arg_data(Elab *e, Form *f) {
+    if (!f) return f;
+    if (is_macro_arg_datum(f)) return f->as.list.items[0];
+    switch (f->tag) {
+        case F_LIST: case F_VEC: case F_MAP: case F_SET:
+        case F_MAP_LITERAL: case F_SET_LITERAL: case F_ROW_LITERAL:
+        case F_QUOTE: case F_QUASIQUOTE: case F_UNQUOTE: case F_UNQUOTE_SPLICING:
+        case F_TYPE_ANN: case F_CONTRACT_TYPE: case F_READER_COND: case F_RANGE_VAR:
+            break;
+        default:
+            return f;
+    }
+    uint32_t n = f->as.list.len;
+    Form **items = NULL;
+    for (uint32_t i = 0; i < n; i++) {
+        Form *it = strip_macro_arg_data(e, f->as.list.items[i]);
+        if (it != f->as.list.items[i] && !items) {
+            items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+            for (uint32_t j = 0; j < i; j++) items[j] = f->as.list.items[j];
+        }
+        if (items) items[i] = it;
+    }
+    if (!items) return f;
+    Form *out = form_new(e->arena, f->tag, f->span);
+    out->lit_suffix = f->lit_suffix;
+    out->fx_prov    = f->fx_prov;
+    out->as.list.items = items;
+    out->as.list.len   = n;
+    return out;
 }
 
 static CtEnv *ct_env_new(Elab *e, CtEnv *parent, bool *ok) {
@@ -134,6 +206,9 @@ static Form **ct_qq_eval_seq_items(CtEnv *env, Form *f, uint32_t *out_n) {
 }
 
 static Form *ct_eval_quasiquote(CtEnv *env, Form *f) {
+    /* A substituted argument (`~param` drops its unquote, a bare `param`
+     * inside the template is substituted too) is literal data here. */
+    if (is_macro_arg_datum(f)) return f->as.list.items[0];
     switch (f->tag) {
         case F_UNQUOTE: {
             CtValue v = ct_eval_form(env, f->as.list.items[0]);
@@ -378,6 +453,11 @@ static bool template_needs_ct_eval(Form *f) {
             }
             return false;
         case F_UNQUOTE:
+            /* The caller's argument: what it contains says nothing about
+             * the template, so it cannot route the template through the
+             * CT evaluator (a `when` body calling `second`). */
+            if (is_macro_arg_datum(f)) return false;
+            return template_needs_ct_eval(f->as.list.items[0]);
         case F_UNQUOTE_SPLICING:
             return template_needs_ct_eval(f->as.list.items[0]);
         case F_QUASIQUOTE:
@@ -564,15 +644,49 @@ static CtValue ct_eval_builtin(CtEnv *env, const Symbol *name, Form **args, uint
 static CtValue ct_eval_call(CtEnv *env, Form *f) {
     if (f->as.list.len == 0) return ct_value_form(form_list(env->elab->arena, f->span, NULL, 0));
     Form *head = f->as.list.items[0];
+    /* A call the template writes with a caller-supplied head, `(op x)` for a
+     * parameter `op`: the head is the caller's data, so it never names a CT
+     * special form, builtin or fn -- even when it is spelled `first` -- but
+     * the template's own arguments are still evaluated. */
+    if (is_macro_arg_datum(head)) {
+        uint32_t n_in = f->as.list.len - 1;
+        Form **tmp = (n_in == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_in * sizeof(Form *));
+        bool *spl = (n_in == 0) ? NULL : (bool *)arena_alloc(env->elab->arena, n_in * sizeof(bool));
+        uint32_t n_out = 1;
+        for (uint32_t i = 0; i < n_in; i++) {
+            Form *a = f->as.list.items[i + 1];
+            bool is_spl = a->tag == F_UNQUOTE_SPLICING;
+            CtValue v = is_spl ? ct_eval_splice_inner(env, a->as.list.items[0])
+                               : ct_eval_form(env, a);
+            tmp[i] = ct_value_to_form(env, v, a->span);
+            if (!*env->ok) return ct_value_form(form_nil(env->elab->arena, f->span));
+            spl[i] = is_spl && tmp[i]->tag == F_LIST;
+            n_out += spl[i] ? tmp[i]->as.list.len : 1;
+        }
+        Form **items = (Form **)arena_alloc(env->elab->arena, n_out * sizeof(Form *));
+        uint32_t k = 0;
+        items[k++] = head->as.list.items[0];
+        for (uint32_t i = 0; i < n_in; i++) {
+            if (!spl[i]) { items[k++] = tmp[i]; continue; }
+            for (uint32_t j = 0; j < tmp[i]->as.list.len; j++) items[k++] = tmp[i]->as.list.items[j];
+        }
+        return ct_value_form(form_list(env->elab->arena, f->span, items, n_out));
+    }
     /* Non-symbol head: cannot be a CT special form or builtin.
      * Return the form as-is so it can be elaborated later.
      * This preserves unevaluated clause lists inside variadic macros. */
     if (head->tag != F_SYM) {
-        return ct_value_form(f);
+        return ct_value_form(strip_macro_arg_data(env->elab, f));
     }
     /* At this point head->tag == F_SYM is guaranteed by the early return above. */
     if (head->as.sym == env->elab->sym_quote && f->as.list.len == 2) {
-        return ct_value_form(f->as.list.items[1]);
+        /* `(quote clauses)` on a parameter is the idiom a macro used to keep
+         * its argument as data (ecs's defxsystem walks its clauses this way).
+         * The argument IS data now, behind its PROV_MACRO_ARG wrapper; quote
+         * yields the argument, not the wrapper -- a walker reading the
+         * wrapper saw one element and stopped (or, recursing on `rest`,
+         * never did). */
+        return ct_value_form(macro_arg_unwrap(f->as.list.items[1]));
     }
     if (head->as.sym == env->elab->sym_quasiquote && f->as.list.len == 2) {
         return ct_value_form(ct_eval_quasiquote(env, f->as.list.items[1]));
@@ -625,7 +739,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
             diag_emit(DIAG_ERROR, f->span, "compile-time let requires bindings and body");
             return ct_value_form(form_nil(env->elab->arena, f->span));
         }
-        Form *bindings = f->as.list.items[1];
+        Form *bindings = macro_arg_unwrap(f->as.list.items[1]);
         if (bindings->tag != F_VEC && bindings->tag != F_LIST) {
             *env->ok = false;
             diag_emit(DIAG_ERROR, bindings->span, "compile-time let bindings must be a vector or list");
@@ -638,7 +752,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
         CtEnv *inner = ct_env_new(env->elab, env, env->ok);
         for (uint32_t i = 0; i < bindings->as.list.len; i += 2) {
-            Form *name_f = bindings->as.list.items[i];
+            Form *name_f = macro_arg_unwrap(bindings->as.list.items[i]);
             if (name_f->tag != F_SYM) {
                 *env->ok = false;
                 diag_emit(DIAG_ERROR, name_f->span, "compile-time let binding name must be a symbol");
@@ -669,7 +783,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
             diag_emit(DIAG_ERROR, f->span, "compile-time letrec requires bindings and body");
             return ct_value_form(form_nil(env->elab->arena, f->span));
         }
-        Form *bindings = f->as.list.items[1];
+        Form *bindings = macro_arg_unwrap(f->as.list.items[1]);
         if (bindings->tag != F_VEC && bindings->tag != F_LIST) {
             *env->ok = false;
             diag_emit(DIAG_ERROR, bindings->span,
@@ -686,7 +800,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         /* Pass A: pre-bind all names to nil so mutual references resolve. */
         Form *nil_form = form_nil(env->elab->arena, f->span);
         for (uint32_t i = 0; i < bindings->as.list.len; i += 2) {
-            Form *name_f = bindings->as.list.items[i];
+            Form *name_f = macro_arg_unwrap(bindings->as.list.items[i]);
             if (name_f->tag != F_SYM) {
                 *env->ok = false;
                 diag_emit(DIAG_ERROR, name_f->span,
@@ -697,7 +811,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
         /* Pass B: elaborate inits and rebind. */
         for (uint32_t i = 0; i < bindings->as.list.len; i += 2) {
-            Form *name_f = bindings->as.list.items[i];
+            Form *name_f = macro_arg_unwrap(bindings->as.list.items[i]);
             CtValue init_v = ct_eval_form(inner, bindings->as.list.items[i + 1]);
             if (!*env->ok) return init_v;
             ct_env_bind(inner, name_f->as.sym, init_v);
@@ -724,6 +838,10 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
         }
         Form *params_f = f->as.list.items[1];
         if (params_f->tag != F_LIST && params_f->tag != F_VEC) {
+            /* A caller-supplied parameter vector: this lambda is the
+             * caller's runtime code threaded through, not a CT fn. */
+            if (is_macro_arg_datum(params_f))
+                return ct_value_form(strip_macro_arg_data(env->elab, f));
             *env->ok = false;
             diag_emit(DIAG_ERROR, params_f->span, "compile-time fn params must be a vector or list");
             return ct_value_form(form_nil(env->elab->arena, f->span));
@@ -749,7 +867,7 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
                 Form *after = f->as.list.items[2];
                 if (after->tag == F_TYPE_ANN || after->tag == F_KEYWORD) runtime_lambda = true;
             }
-            if (runtime_lambda) return ct_value_form(f);
+            if (runtime_lambda) return ct_value_form(strip_macro_arg_data(env->elab, f));
         }
         uint32_t n_total = params_f->as.list.len;
         Form **params = (Form **)arena_alloc(env->elab->arena, n_total * sizeof(Form *));
@@ -845,12 +963,25 @@ static CtValue ct_eval_call(CtEnv *env, Form *f) {
 
     CtValue head_v = ct_eval_form(env, head);
     if (!*env->ok) return head_v;
+    /* A user macro this splice will expand below.  Its arguments are written
+     * by the enclosing template -- `~@(fields ~cap ~(rest comps))` -- and a
+     * `~x` there means the VALUE of x.  A bare unquote evaluates to its inner
+     * UNevaluated (ct_eval_form), which used to be finished by substitution:
+     * the inner macro's `(empty? comps)` evaluated the substituted `(rest
+     * comps)` in place.  Substituted arguments are data now (PROV_MACRO_ARG),
+     * so that never happened and the recursion never reached its base case
+     * (ecs's sized-mono-world-fields).  Evaluate it here instead. */
+    bool splice_macro_call = env->expand_macro_head && head_v.tag != CT_VAL_FN &&
+                             elab_lookup_macro(env->elab, head->as.sym) != NULL;
     uint32_t n_in_args = f->as.list.len - 1;
     Form **tmp_args = (n_in_args == 0) ? NULL : (Form **)arena_alloc(env->elab->arena, n_in_args * sizeof(Form *));
     bool *splice = (n_in_args == 0) ? NULL : (bool *)arena_alloc(env->elab->arena, n_in_args * sizeof(bool));
     uint32_t n_args = 0;
     for (uint32_t i = 0; i < n_in_args; i++) {
         Form *arg_form = f->as.list.items[i + 1];
+        if (splice_macro_call && arg_form->tag == F_UNQUOTE &&
+            !is_macro_arg_datum(arg_form) && arg_form->as.list.len == 1)
+            arg_form = arg_form->as.list.items[0];
         if (arg_form->tag == F_UNQUOTE_SPLICING) {
             CtValue v = ct_eval_splice_inner(env, arg_form->as.list.items[0]);
             Form *inner = ct_value_to_form(env, v, arg_form->span);
@@ -1163,7 +1294,7 @@ static bool splice_inner_needs_ct_eval(Elab *e, Form *f) {
 }
 
 /* Phase 6: Helper to substitute parameters in a form */
-static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
+static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args, bool mark) {
     switch (f->tag) {
         case F_NIL:
         case F_BOOL:
@@ -1186,8 +1317,12 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
              * item, mirroring the F_TYPE_ANN Gap-G fix below. */
             uint32_t n = f->as.list.len;
             Form **items = (Form **)arena_alloc(e->arena, n * sizeof(Form *));
+            /* Unmarked: ct_eval_form hands a contract type back untouched,
+             * so a PROV_MACRO_ARG wrapper inside one would never be undone
+             * by evaluation (the final strip would, but nothing here needs
+             * the protection -- the CT evaluator does not look inside). */
             for (uint32_t i = 0; i < n; i++)
-                items[i] = substitute_params(e, f->as.list.items[i], macro, args);
+                items[i] = substitute_params(e, f->as.list.items[i], macro, args, false);
             return form_contract_type(e->arena, f->span, items, n);
         }
         case F_TYPE_ANN: {
@@ -1201,7 +1336,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
              * resolved under
              * docs/archive/history/macro-unquote-in-type-position-rejected.md. */
             if (f->as.list.len == 0) return f;
-            Form *inner = substitute_params(e, f->as.list.items[0], macro, args);
+            Form *inner = substitute_params(e, f->as.list.items[0], macro, args, false);
             return form_type_ann(e->arena, f->span, inner);
         }
         case F_QUASIQUOTE:
@@ -1212,7 +1347,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
              * (e.g.) reduce a (do ...) body to just its tail expression
              * and silently drop sibling forms. */
             return form_quasiquote(e->arena, f->span,
-                                   substitute_params(e, f->as.list.items[0], macro, args));
+                                   substitute_params(e, f->as.list.items[0], macro, args, mark));
         case F_UNQUOTE: {
             /* If the unquote's inner is a bare macro-parameter symbol,
              * inline the arg form directly (dropping the unquote wrapper).
@@ -1227,19 +1362,19 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                 for (uint32_t i = 0; i < macro->n_params; i++) {
                     Form *param = macro->params[i];
                     if (param->tag == F_SYM && param->as.sym == inner->as.sym) {
-                        return args[i];
+                        return macro_arg_datum(e, args[i], mark);
                     }
                 }
                 if (macro->rest_param && macro->rest_param == inner->as.sym) {
-                    return args[macro->n_params];
+                    return macro_arg_datum(e, args[macro->n_params], mark);
                 }
             }
             return form_unquote(e->arena, f->span,
-                                substitute_params(e, inner, macro, args));
+                                substitute_params(e, inner, macro, args, mark));
         }
         case F_UNQUOTE_SPLICING:
             return form_unquote_splicing(e->arena, f->span,
-                                         substitute_params(e, f->as.list.items[0], macro, args));
+                                         substitute_params(e, f->as.list.items[0], macro, args, mark));
         case F_LIST: {
             /* Check for gensym call: (gensym) or (gensym prefix) */
             if (f->as.list.len >= 1 && f->as.list.items[0]->tag == F_SYM) {
@@ -1271,9 +1406,24 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                     if (item->tag == F_UNQUOTE_SPLICING) {
                         /* ~@ inner: substitute the inner form, then splice if it's a list */
                         Form *inner = item->as.list.items[0];
-                        Form *subst = substitute_params(e, inner, macro, args);
+                        Form *subst = substitute_params(e, inner, macro, args, mark);
                         temp[i] = subst;
-                        if (splice_inner_needs_ct_eval(e, subst)) {
+                        if (is_macro_arg_datum(subst) &&
+                            subst->as.list.items[0]->tag == F_LIST) {
+                            /* `~@rest`: the caller's argument list.  Splice
+                             * its elements, each still marked as data, so
+                             * the CT evaluator cannot evaluate them (or let
+                             * them decide whether it runs at all). */
+                            Form *lst = subst->as.list.items[0];
+                            Form **marked = (lst->as.list.len == 0) ? NULL
+                                : (Form **)arena_alloc(e->arena, lst->as.list.len * sizeof(Form *));
+                            for (uint32_t j = 0; j < lst->as.list.len; j++)
+                                marked[j] = macro_arg_datum(e, lst->as.list.items[j], true);
+                            temp[i] = form_list(e->arena, lst->span, marked, lst->as.list.len);
+                            is_splice[i] = true;
+                            keep_splice_wrapper[i] = false;
+                            n_out += lst->as.list.len;
+                        } else if (splice_inner_needs_ct_eval(e, subst)) {
                             /* CT computation (e.g. (map ...) / a macro call):
                              * keep the wrapper so ct_eval_quasiquote computes
                              * and splices the result rather than flattening the
@@ -1291,7 +1441,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                             n_out++;
                         }
                     } else {
-                        temp[i] = substitute_params(e, item, macro, args);
+                        temp[i] = substitute_params(e, item, macro, args, mark);
                         is_splice[i] = false;
                         keep_splice_wrapper[i] = false;
                         n_out++;
@@ -1319,7 +1469,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             }
             Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
-                items[i] = substitute_params(e, f->as.list.items[i], macro, args);
+                items[i] = substitute_params(e, f->as.list.items[i], macro, args, mark);
             }
             /* Preserve annotation provenance through the template rebuild: a
              * `#reads w` reads as `(reads w)` stamped PROV_READS, and
@@ -1339,13 +1489,14 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
                      * (first decl) / (symbol-name decl) treat it as AST data
                      * rather than evaluating it as code. */
                     if (macro->is_syntax_param && macro->is_syntax_param[i]) return f;
-                    return args[i];
+                    return macro_arg_datum(e, args[i], mark);
                 }
             }
             /* Check if this symbol is the rest parameter */
             if (macro->rest_param && macro->rest_param == f->as.sym) {
                 if (macro->rest_is_syntax) return f;
-                return args[macro->n_params]; /* rest list packed at n_params index */
+                /* rest list packed at n_params index */
+                return macro_arg_datum(e, args[macro->n_params], mark);
             }
             /* Not a parameter - return as-is */
             return f;
@@ -1359,7 +1510,7 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args) {
             /* Recursively substitute in vector/map/set items */
             Form **items = (Form **)arena_alloc(e->arena, f->as.list.len * sizeof(Form *));
             for (uint32_t i = 0; i < f->as.list.len; i++) {
-                items[i] = substitute_params(e, f->as.list.items[i], macro, args);
+                items[i] = substitute_params(e, f->as.list.items[i], macro, args, mark);
             }
             if (f->tag == F_MAP) {
                 Form *m = form_map(e->arena, f->span, items, f->as.list.len);
@@ -1436,11 +1587,12 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
         }
         Span rest_span = n_rest > 0 ? args[macro->n_params]->span : macro->span;
         aug_args[macro->n_params] = form_list(e->arena, rest_span, rest_items, n_rest);
-        Form *templ = substitute_params(e, macro->body, macro, aug_args);
+        Form *templ = substitute_params(e, macro->body, macro, aug_args, true);
         if (!templ) { EXPAND_RESTORE(); return NULL; }
         Form *result = (template_needs_ct_eval(templ) || macro->is_syntax_param ||
                         macro->rest_is_syntax || macro->force_ct_eval)
             ? elab_eval_macro_form(e, templ, macro, aug_args) : templ;
+        result = strip_macro_arg_data(e, result);
         EXPAND_RESTORE(); return result;
     }
     if (n_args != macro->n_params) {
@@ -1451,11 +1603,12 @@ Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) 
     }
 
     /* Substitute parameters in the macro body */
-    Form *templ = substitute_params(e, macro->body, macro, args);
+    Form *templ = substitute_params(e, macro->body, macro, args, true);
     if (!templ) { EXPAND_RESTORE(); return NULL; }
     Form *result = (template_needs_ct_eval(templ) || macro->is_syntax_param ||
                     macro->force_ct_eval)
         ? elab_eval_macro_form(e, templ, macro, args) : templ;
+    result = strip_macro_arg_data(e, result);
     EXPAND_RESTORE(); return result;
 
 #undef EXPAND_RESTORE

@@ -1,0 +1,40 @@
+;; heap-adt-def-global-read-missing-cast: a top-level `def` of a `:heap` value is
+;; declared with the carrier spelling (`static int64_t a_hynode_N;`) while a
+;; merge temp of the same type is the typed pointer.  Each arm below assigned
+;; the word to the pointer with no cast: -Wint-conversion, a hard error under
+;; clang and gcc 14 (gcc 13 warns, which the run.sh ratchet fails on).
+
+(defdata K :heap :copy (A) (B))
+(def a-node (A))
+(def b-node (B))
+
+(defn pick [i : int] : K
+  (if (= i 1) b-node a-node))
+
+(defn pick-ascribed [i : int] : K
+  (if (= i 1) (:: b-node K) (:: a-node K)))
+
+(defn pick-match [i : int] : K
+  (match i
+    1 b-node
+    _ a-node))
+
+(defn pick-cond [i : int] : K
+  (cond (= i 1) b-node
+        (= i 2) a-node
+        :else   b-node))
+
+(defn name [k : K] : cstr
+  (match k (A) "a" (B) "b"))
+
+(defn main [] : int
+  (println (name (pick 1)))
+  (println (name (pick 0)))
+  (println (name (pick-ascribed 1)))
+  (println (name (pick-match 1)))
+  (println (name (pick-match 5)))
+  (println (name (pick-cond 2)))
+  (println (name (pick-cond 7)))
+  (let [k (if (= 1 1) a-node b-node)]
+    (println (name k)))
+  0)

@@ -1534,6 +1534,9 @@ char *atom_int_typed(int64_t i, TypeKind k);
 char *atom_float32(double f);
 char *atom_float(double f);
 char *atom_var(EmitCtx *ctx, const Binding *b);
+/* The clone of generic fn value `b` interned under the active specialization's
+ * bindings (emit_abi_scan_fn_values), or NULL. */
+char *emit_fn_value_spec_clone(EmitCtx *ctx, const Binding *b);
 /* B7b: is this `^mut` binding promoted to a shared heap cell for the function
  * the CPS backend is currently emitting?  Owned by emit_cps_ir.c (g_byref_muts);
  * exposed so the value-position chokepoint (atom_var) can deref a read no matter

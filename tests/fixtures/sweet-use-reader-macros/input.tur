@@ -1,0 +1,12 @@
+#lang sweet-exp
+;; use-reader-macros-rejected-under-sweet-exp: the t-expression preprocessor
+;; wrapped this directive line like any two-element line, as
+;; `(#use-reader-macros "macros.tur")`, and the plain reader -- which consumes
+;; the directive only between top-level forms -- then met `#` inside a list:
+;; "unexpected character '#'".  A top-level directive line passes through bare.
+#use-reader-macros "macros.tur"
+
+defn main [] : int
+  println #json{ "name": "ada" }
+  println #tag[ a b c ]
+  0

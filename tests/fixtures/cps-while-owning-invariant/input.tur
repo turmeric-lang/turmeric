@@ -1,0 +1,39 @@
+;; cps-while-discarded-cps-call-loses-captures: a `while` in a CPS-colored
+;; function is lowered to a tail-recursive loop helper whose extra parameters
+;; are the loop INVARIANTS -- the enclosing function's values the body reads.
+;; They were collected under the multi-shot capture gate, so one owning
+;; one-word value among them (here a `:copy` record made a carrier by its
+;; opaque field) bailed the whole set, and the helper read `h` and `n` it was
+;; never passed: `'n' undeclared` in the emitted C.
+(defeffect Log [x : int] : nil)
+(defopaque Raw :int)
+(defstruct H :copy [raw : Raw handler : (fn [int] int)])
+
+(defn raw-of [h : H] : int (:: (.raw h) int))
+
+(defn feed! [r : int s : int] : (Result int int)
+  (perform (Log (+ r s)))
+  (ok 0))
+
+;; The report's shape: the CPS call's result is discarded.
+(defn feed-n [h : H n : int] : nil
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! (raw-of h) i)
+      (set! i (+ i 1)))))
+
+;; The record's handler field called inside the loop, two int invariants.
+(defn feed-via [h : H base : int n : int] : nil
+  (let [^mut i 0]
+    (while (< i n)
+      (feed! base ((.handler h) i))
+      (set! i (+ i 1)))))
+
+(defn run [] : nil
+  (let [h (H (:: 100 Raw) (fn [x : int] : int (* x 10)))]
+    (handle (do (feed-n h 3) (feed-via h 7 2))
+      (Log [x] k) (do (println x) (resume k nil)))))
+
+(defn main [] : int
+  (run)
+  0)

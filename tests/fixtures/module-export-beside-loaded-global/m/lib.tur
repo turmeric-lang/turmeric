@@ -1,0 +1,2 @@
+(defn foo-free [x : ptr<void>] : nil
+  (println "global foo-free"))

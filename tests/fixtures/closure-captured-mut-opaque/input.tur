@@ -1,0 +1,27 @@
+;; closure-set-of-captured-mut-opaque-undeclared: a `^mut` defopaque handle that
+;; a lambda `set!`s moves into the shared mutable cell like a scalar does.  It
+;; used to keep the copying behaviour, and a closure that only WRITES a
+;; variable does not capture it, so the lambda body named the outer local --
+;; "use of undeclared identifier".
+
+(defopaque S :ptr<void>)
+(defn __mk [n : int] : ptr<void>
+  ```c
+  static const char *names[] = {"zero", "one", "two"};
+  return (void *)names[n];
+  ```)
+(defn mk [n : int] : S (:: (__mk n) S))
+(defn show [s : S] : cstr
+  ```c
+  return (const char *)s;
+  ```)
+(defn call [f : (fn [int] int)] : int (f 1))
+(defn main [] : int
+  (let [^mut kept (mk 0)]
+    (call (fn [x : int] : int (do (set! kept (mk 2)) x)))
+    (println (show kept)))
+  (let [^mut last (mk 0)]
+    (call (fn [x : int] : int (do (set! last (mk x)) x)))
+    (call (fn [x : int] : int (do (println (show last)) x)))
+    (println "ok"))
+  0)

@@ -1898,6 +1898,13 @@ bool         adt_app_is_byvalue_product(Type t);
  * Takes precedence over the B4 wide-element int64 box. */
 bool         adt_field_is_ros_pointer_box(const struct AdtDef *owner,
                                           const Type *resolved);
+/* B4 slice 2: true when a parametric ADT monomorph field of resolved type
+ * `resolved` is STORED as an int64 heap box -- a wide by-value element that is
+ * not a box-as-pointer field (adt_field_is_ros_pointer_box wins).  The one
+ * spelling of that decision: the monomorph typedef, its constructors and a
+ * `.field` read on a :heap receiver all ask it. */
+bool         adt_field_is_wide_box(const struct AdtDef *owner,
+                                   const Type *resolved);
 /* SR3 slice A (null-None): true when `ctor` is the stdlib Option's nullary
  * tag-0 `None` -- the one constructor whose CARRIER form is the null pointer
  * (the historical none-as-NULL every reader already accepts), so its carrier

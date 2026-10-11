@@ -1,0 +1,24 @@
+;; heap-adt-arg-to-closure-cross-module-missing-cast: calling a function-typed
+;; parameter with a `let`-bound `:heap` value passed the typed local
+;; (`tur_adt_Ev *`) into the closure thunk's `int64_t` slot with no cast:
+;; -Wint-conversion, a hard error under clang and gcc 14.  The bridge asked
+;; the argument's TYPE how it was spelled (the word); it asks what the local
+;; was declared as now.  Not cross-module after all: one file reproduces it.
+
+(defdata Ev :heap :copy (A int) (B int int))
+(defn mk [x : int] : Ev (B x x))
+
+(defn call [h : (fn [Ev] int) x : int] : int
+  (let [e (mk x)
+        r (h e)]
+    r))
+
+(defn call-fat [^fat h : (fn [Ev] int) x : int] : int
+  (let [e (mk x)]
+    (h e)))
+
+(defn main [] : int
+  (println (call (fn [e : Ev] : int (match e (A x) x (B x y) (+ x y))) 4))   ; 8
+  (let [k 1]
+    (println (call-fat (fn [e : Ev] : int (match e (A x) (+ k x) (B x y) (+ k x y))) 4)))  ; 9
+  0)

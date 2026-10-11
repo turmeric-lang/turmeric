@@ -10444,7 +10444,20 @@ static void emit_loop(CE *ce, const CTerm *t) {
         uint32_t bnd[CC_MAX_BOUND]; uint32_t nbnd = 0;
         for (uint32_t i = 0; i < np && nbnd < CC_MAX_BOUND; i++)
             if (t->as.loop.params[i].bind) bnd[nbnd++] = t->as.loop.params[i].bind->id;
+        /* cps-while-discarded-cps-call-loses-captures: an invariant is threaded
+         * LINEARLY -- the entry hands it to the helper once, and each back-edge
+         * hands it to the next iteration once -- never duplicated into a frame
+         * that may run twice (a frame that carries the back-edge merges it in
+         * collect_caps, whose own frames are single-shot).  So it is admitted
+         * on the single-shot rule a join env uses (cap_add's owning_ok), not
+         * the multi-shot Copy gate.  Under that gate an owning-but-one-word
+         * value -- a `:copy` record whose opaque field makes it a carrier --
+         * bailed the WHOLE set, and the helper then read `p`/`n` it was never
+         * passed: `'n' undeclared`. */
+        bool saved_ss = g_cap_single_shot;
+        g_cap_single_shot = true;
         collect_caps_rec(t->as.loop.body, UINT32_MAX, bnd, nbnd, &inv);
+        g_cap_single_shot = saved_ss;
         if (!inv.ok) inv.n = 0;
     }
     /* Shared name CSV: helper params, entry-call args, and back-edge args all name

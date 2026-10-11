@@ -707,8 +707,10 @@ endif()
 # back `--runtime=lib` as a default.  See the plan's ASan caveat (Section 5/6).
 #
 # Compile flags mirror the default `tur build` cc_flags (-O2 -std=c99
-# -fno-strict-aliasing) so the objects are ABI-identical to a bare-source
-# compile; no -Werror so a stray warning here never fails the archive build.
+# -fno-strict-aliasing, plus the -fwrapv every emitted-C compile carries --
+# TUR_EMITTED_C_CC_FLAGS in main.c) so the objects are ABI-identical to a
+# bare-source compile; no -Werror so a stray warning here never fails the
+# archive build.
 # DEDUP-4b (gc-cycle-collection-plan): rc/gc/rc_free_queue join the archive so a
 # compiled program can LINK the one maintained copy of the reference counter and
 # cycle collector instead of carrying a hand-written replica of it in its
@@ -749,7 +751,7 @@ add_library(turt_runtime STATIC ${TURT_RUNTIME_SOURCES})
 set_target_properties(turt_runtime PROPERTIES OUTPUT_NAME "turt_runtime")
 target_include_directories(turt_runtime PRIVATE ${TUR_INCLUDE_DIRS})
 target_compile_options(turt_runtime PRIVATE
-    -O2 -std=c99 -fno-strict-aliasing -Wall -Wno-unused-parameter
+    -O2 -std=c99 -fno-strict-aliasing -fwrapv -Wall -Wno-unused-parameter
     $<$<C_COMPILER_ID:GNU>:-Wno-format-truncation>
 )
 if(APPLE)
@@ -788,7 +790,7 @@ target_include_directories(turt_preamble PRIVATE ${TUR_INCLUDE_DIRS})
 # ELF).  The archive is a single object, so without these the linker can only
 # take all of it: a one-line program's code grew 4x under the split.
 target_compile_options(turt_preamble PRIVATE
-    -O2 -std=c99 -fno-strict-aliasing -w -ffunction-sections -fdata-sections
+    -O2 -std=c99 -fno-strict-aliasing -fwrapv -w -ffunction-sections -fdata-sections
 )
 
 # ---------------------------------------------------------------------------

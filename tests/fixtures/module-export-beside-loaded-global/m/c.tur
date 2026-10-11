@@ -1,0 +1,7 @@
+(load "tests/fixtures/module-export-beside-loaded-global/m/lib.tur")
+(defmodule m/c
+  (import m/b :refer [foo-free])
+  (export run)
+  (defn run [] : int
+    (foo-free 5)
+    0))

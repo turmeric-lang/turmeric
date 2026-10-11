@@ -1,0 +1,9 @@
+#lang saffron
+;; hash-instance-on-int-opaque-breaks-any-key-maps: a `Hash` instance on an
+;; int-backed opaque made `(hash k)` on an `any` key pick that instance (the
+;; first non-primitive one registered) instead of `Hash [any]`, and the
+;; any-receiver guard refused it -- so every `#map{...}` literal failed.
+(defopaque Tag :int)
+(definstance Hash [Tag] (hash [x] 0))
+(define m #map{"a" 1})
+(println (map-get m "a"))
