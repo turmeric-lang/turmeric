@@ -11608,9 +11608,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * call (EX_CONS_LIST) is a `tur_adt_Cons__any *` --
                          * `((cut list <...>))` in #lang r7rs, a -Wint-conversion
                          * error under clang (r7rs-srfi-plan S2's SRFI 26 suite on
-                         * macOS). */
+                         * macOS).
+                         *
+                         * heap-adt-arg-to-closure-cross-module-missing-cast: the
+                         * argument's spelling is what a local was DECLARED as
+                         * (emit_localvar_lookup_ctype): `(let [e (mk x)] (h e))`
+                         * holds a `:heap` `e` as `tur_adt_Ev *`, while
+                         * emit_type_c_name of its Type answers the word, so the
+                         * typed local went into the `int64_t` slot uncast. */
                         const char *slot_cty = emit_type_c_name(ctx, arg_types[i]);
-                        const char *val_cty = arg ? emit_type_c_name(ctx, arg->type) : NULL;
+                        const char *val_cty = emit_str_is_bare_ident(arg_strs[i])
+                            ? emit_localvar_lookup_ctype(arg_strs[i]) : NULL;
+                        if (!val_cty && arg) val_cty = emit_type_c_name(ctx, arg->type);
                         size_t val_len = val_cty ? strlen(val_cty) : 0;
                         bool ptr_into_carrier = !slot_is_ptr && slot_cty &&
                             strcmp(slot_cty, "int64_t") == 0 &&
