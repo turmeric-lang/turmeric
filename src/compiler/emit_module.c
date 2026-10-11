@@ -18802,6 +18802,25 @@ static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
     const Binding **need = NULL; uint32_t n_need = 0, cap_need = 0;
     const Binding **refs = NULL; uint32_t n_refs = 0, cap_refs = 0;
 
+    /* heap-adt-def-global-read-missing-cast: record every global's DECLARED C
+     * spelling under its name, ahead of any body that reads it.  A `def` is
+     * declared with the carrier spelling (`static int64_t a_hynode_7;` for a
+     * `:heap` ADT) while a merge temp of the same type is the typed pointer,
+     * and the arm bridges (if_arm_word_ptr_cast, emit_merge_assign_bridged)
+     * key on this table -- with no entry for the global they assigned the word
+     * to the pointer with no cast, a hard error under clang and gcc 14. */
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *d = items[i];
+        if (d->kind != EX_DEF || !d->as.def_.binding) continue;
+        const Binding *db = d->as.def_.binding;
+        if (db->is_thread_local || def_is_opaque_type_decl(d)) continue;
+        const char *fr = NULL; char *fa = NULL;
+        if (emit_global_def_thin_fnptr(db, &fr, &fa)) { free(fa); continue; }
+        char *bn = name_for_binding(ctx, (Binding *)db);
+        emit_localvar_record_ctype(bn, type_c_name(db->type));
+        free(bn);
+    }
+
     for (uint32_t i = 0; i < n_items; i++) {
         const Expr *e = items[i];
         if (e->kind == EX_DEF) continue;      /* its own declaration is here */

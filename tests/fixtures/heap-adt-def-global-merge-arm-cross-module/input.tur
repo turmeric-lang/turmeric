@@ -1,0 +1,10 @@
+;; heap-adt-def-global-read-missing-cast, across a module boundary: the `def`s
+;; are another module's exports, read into an `if` merge temp here.
+(defmodule app
+  (import kinds :refer [K A B a-node b-node])
+  (defn pick [i : int] : K
+    (if (= i 1) b-node a-node))
+  (defn main [] : int
+    (println (match (pick 1) (A) "a" (B) "b"))
+    (println (match (pick 0) (A) "a" (B) "b"))
+    0))

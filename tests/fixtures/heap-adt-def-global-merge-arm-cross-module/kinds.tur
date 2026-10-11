@@ -1,0 +1,4 @@
+(defmodule kinds (export K A B a-node b-node)
+  (defdata K :heap :copy (A) (B))
+  (def a-node (A))
+  (def b-node (B)))
