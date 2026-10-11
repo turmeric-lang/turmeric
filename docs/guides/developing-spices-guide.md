@@ -740,6 +740,29 @@ Behaviour:
   or `"fetch"` per dep, and `tur.lock` records `:resolved-via "system"` (with
   no git SHA -- the system package manager owns the version) or the usual
   `:url`/`:ref`/`:resolved` row for the fetch path.
+- `:options` land in the CMake cache **before** `find_package`, not only
+  before the fallback build, so a find module's hint variable steers the
+  system search. Homebrew keeps some formulae keg-only -- outside every
+  default search path -- and this is how a spice points at one:
+  `:options #map{:PostgreSQL_ROOT "/opt/homebrew/opt/libpq"}`. A hint naming
+  a directory that does not exist is not searched, so it is harmless on other
+  platforms. A user can also set the same name as an environment variable
+  (`export PostgreSQL_ROOT="$(brew --prefix libpq)"`), which CMake reads too.
+- **No `:url` means system-only.** Some libraries have no source build to
+  fall back on (libpq ships inside the PostgreSQL server tree). Omit `:url` and
+  the dep resolves through `find_package` or not at all: when nothing is found,
+  `tur fetch` stops with a message naming the dep and the package, rather than
+  attempting a fetch with nothing to fetch. Nothing is downloaded, so nothing
+  is pinned: `tur audit` lists the dep as `system only`.
+
+```turmeric
+:cmake-deps #map{
+  "libpq" #map{:prefer-system true                  ;; no :url: system-only
+               :cmake-name    "PostgreSQL"
+               :targets       ["PostgreSQL::PostgreSQL"]
+               :options       #map{:PostgreSQL_ROOT "/opt/homebrew/opt/libpq"}}
+}
+```
 
 `:prefer-system` is opt-in; deps without it keep their FetchContent-only
 behaviour unchanged.
@@ -755,7 +778,8 @@ tur fetch --refetch          # ignore system copies, always build from source
 ```
 
 This disables the `find_package` short-circuit for every `:prefer-system` dep
-in the manifest.
+in the manifest that has a `:url` to build from. A system-only dep (no `:url`)
+still resolves through `find_package`, since there is no source copy to prefer.
 
 > **Caveats.** A binary linked against a Homebrew/apt shared library will fail
 > at runtime on a machine without that library installed; pin the source build

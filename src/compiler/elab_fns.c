@@ -27,6 +27,11 @@ bool expr_is_fresh_any_closure(const Expr *x);
  * ALSO retain the argument it returns. */
 bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
                                       const Expr *ignore);
+/* sum-payload-box-leaks-at-match (fix 3): the sum-box escape walk, defined
+ * emit-side, used to prove a returned let binding is its box's only holder. */
+bool sum_box_binding_escapes(const Expr *e, const Binding *b);
+bool sum_box_binding_escapes_except(const Expr *e, const Binding *b,
+                                    const Expr *ignore);
 
 /* RM1 (reclamation-plan): the freshness analysis, on the elaborated body.
  * True iff every VALUE PATH ends in a sum-constructor application or a call
@@ -44,6 +49,44 @@ bool catch_box_binding_escapes_except(const Expr *e, const Binding *b,
  * contingent on that parameter -- recorded in *need -- rather than as not
  * fresh.  NULL params is the unconditional question. */
 static bool fresh_sum_walk(const Expr *e, Binding **params, uint32_t n_params,
+                           uint32_t *need);
+
+/* sum-payload-box-leaks-at-match (fix 3): `(let [r <fresh>] (cleanup) r)` --
+ * the shape a producer takes when it must release something of its own after
+ * minting the result -- hands its caller the box `r` holds.  That is fresh
+ * exactly when `r`'s init is, `r` is not reassigned, and nothing in the `let`
+ * keeps `r` apart from the tail that returns it.  The tail is peeled through
+ * `do` and ascriptions only; an `r` returned from inside an `if` or `match`
+ * arm stays not-fresh, the safe answer. */
+static bool fresh_let_binding_returned(const Expr *e, Binding **params,
+                                       uint32_t n_params, uint32_t *need) {
+    const Expr *tail = e->as.let_.body;
+    while (tail) {
+        if (tail->kind == EX_ASCRIBE) tail = tail->as.ascribe_.inner;
+        else if (tail->kind == EX_DO && tail->as.do_.n > 0)
+            tail = tail->as.do_.items[tail->as.do_.n - 1];
+        else break;
+    }
+    if (!tail || tail->kind != EX_VAR) return false;
+    const Binding *b = tail->as.var.binding;
+    if (!b || b->is_mut) return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++) {
+        if (e->as.let_.bindings[j].binding != b) continue;
+        uint32_t sub = 0;
+        if (!fresh_sum_walk(e->as.let_.bindings[j].init, params, n_params,
+                            need ? &sub : NULL))
+            return false;
+        for (uint32_t k = 0; k < e->as.let_.n; k++)
+            if (k != j && sum_box_binding_escapes(e->as.let_.bindings[k].init, b))
+                return false;
+        if (sum_box_binding_escapes_except(e->as.let_.body, b, tail)) return false;
+        if (need) *need |= sub;
+        return true;
+    }
+    return false;
+}
+
+static bool fresh_sum_walk(const Expr *e, Binding **params, uint32_t n_params,
                            uint32_t *need) {
     static int depth = 0;
     if (!e || depth > 64) return false;
@@ -58,7 +101,8 @@ static bool fresh_sum_walk(const Expr *e, Binding **params, uint32_t n_params,
                 fresh_sum_walk(e->as.do_.items[e->as.do_.n - 1], params, n_params, need);
             break;
         case EX_LET:
-            r = fresh_sum_walk(e->as.let_.body, params, n_params, need);
+            r = fresh_sum_walk(e->as.let_.body, params, n_params, need) ||
+                fresh_let_binding_returned(e, params, n_params, need);
             break;
         case EX_IF:
             r = e->as.if_.else_or_null &&
