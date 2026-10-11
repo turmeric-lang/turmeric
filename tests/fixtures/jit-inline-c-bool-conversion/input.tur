@@ -12,9 +12,13 @@
   return x & 256;
   ```)
 
+;; The cast is explicit because clang's -Wfloat-conversion flags an implicit
+;; double -> bool, which tests/run.sh's cc-warning ratchet fails on the clang
+;; legs (gcc stays silent).  c2mir sends an explicit cast to _Bool through the
+;; same gen_to_bool as the implicit `return` above, so it is still pinned.
 (defn nonzero-double [d : float] : bool
   ```c
-  return d;
+  return (bool)d;
   ```)
 
 (defn stored-flag [x : int] : bool

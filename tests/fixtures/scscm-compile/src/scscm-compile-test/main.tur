@@ -64,164 +64,164 @@
 
     (check "compile-number"
       "440"
-      "440")
+      "440;\n")
 
     (check "compile-float"
       "0.5"
-      "0.5")
+      "0.5;\n")
 
     (check "compile-atom-nil"
       "nil"
-      "nil")
+      "nil;\n")
 
     (check "compile-atom-true"
       "true"
-      "true")
+      "true;\n")
 
     (check "compile-string"
       "\"hello\""
-      "\"hello\"")
+      "\"hello\";\n")
 
     (check "compile-symbol"
       "foo-bar"
-      "foo_bar")
+      "foo_bar;\n")
 
     (check "compile-symbol-pred"
       "done?"
-      "done_p")
+      "done_q;\n")
 
     (check "compile-keyword"
       ":freq"
-      "\\freq")
+      "\\freq;\n")
 
     (check "compile-add"
       "(+ 1 2)"
-      "1 + 2")
+      "1 + 2;\n")
 
     (check "compile-sub"
       "(- 10 3)"
-      "10 - 3")
+      "10 - 3;\n")
 
     (check "compile-mul"
       "(* 4 5)"
-      "4 * 5")
+      "4 * 5;\n")
 
     (check "compile-eq"
       "(= x 0)"
-      "x == 0")
+      "x == 0;\n")
 
     (check "compile-call"
       "(foo 1 2 3)"
-      "foo(1, 2, 3)")
+      "foo(1, 2, 3);\n")
 
     (check "compile-call-nested"
       "(foo (bar 1) 2)"
-      "foo(bar(1), 2)")
+      "foo(bar(1), 2);\n")
 
     (check "compile-dot-access"
       "(. obj msg)"
-      "obj.msg")
+      "obj.msg;\n")
 
     (check "compile-dot-call"
       "(. obj msg 1 2)"
-      "obj.msg(1, 2)")
+      "obj.msg(1, 2);\n")
 
     (check "compile-dotdot"
       "(.dot SynthDef new :foo)"
-      "SynthDef.new(\\foo)")
+      "SynthDef.new(\\foo);\n")
 
     (check "compile-vector"
       "[1 2 3]"
-      "[1, 2, 3]")
+      "[1, 2, 3];\n")
 
     (check "compile-fn"
       "(fn [x y] (+ x y))"
-      "{ |x, y| x + y }")
+      "{ |x, y| x + y };\n")
 
     (check "compile-fn-noparams"
       "(fn [] 42)"
-      "{ 42 }")
+      "{ 42 };\n")
 
     (check "compile-var"
       "(var x 10)"
-      "var x = 10")
+      "var x = 10;\n")
 
     (check "compile-set"
       "(set! x 20)"
-      "x = 20")
+      "x = 20;\n")
 
     (check "compile-if-full"
       "(if true 1 2)"
-      "if(true, { 1 }, { 2 })")
+      "if (true) { 1 } { 2 };\n")
 
     (check "compile-if-then"
       "(if true 1)"
-      "if(true, { 1 })")
+      "if (true) { 1 } { nil };\n")
 
     (check "compile-do"
       "(do 1 2 3)"
-      "1;\n2;\n3")
+      "1;\n2;\n3;\n")
 
     (check "compile-let"
       "(let [x 1 y 2] (+ x y))"
-      "var x = 1;\nvar y = 2;\nx + y")
+      "{ |x, y| x + y }.value(1, 2);\n")
 
     (check "compile-multiple-forms"
       "(var x 1)\n(var y 2)"
-      "var x = 1;\nvar y = 2")
+      "var x = 1;\nvar y = 2;\n")
 
     ;; ---- expander tests ----
 
     (check "expand-when"
       "(when true 42)"
-      "if(true, { 42 }, { nil })")
+      "if (true) { 42 } { nil };\n")
 
     (check "expand-unless"
       "(unless false 99)"
-      "if(not(false), { 99 }, { nil })")
+      "if (false.not) { 99 } { nil };\n")
 
     (check "expand-thread-first"
       "(-> 10 (+ 5))"
-      "10 + 5")
+      "10 + 5;\n")
 
     (check "expand-pbind"
       "(pbind :freq 440)"
-      "Pbind(\\freq, 440)")
+      "Pbind(\\freq, 440);\n")
 
     (check "expand-pseq"
       "(pseq [1 2 3] 2)"
-      "Pseq([1, 2, 3], 2)")
+      "Pseq.new([1, 2, 3], 2);\n")
 
     (check "expand-prand"
       "(prand [1 2 3] 1)"
-      "Prand([1, 2, 3], 1)")
+      "Prand.new([1, 2, 3], 1);\n")
 
     (check "expand-midi-hz"
       "(midi->hz 60)"
-      "60.midicps")
+      "60.midicps;\n")
 
     (check "expand-hz-midi"
       "(hz->midi 440)"
-      "440.cpsmidi")
+      "440.cpsmidi;\n")
 
     (check "expand-db-amp"
       "(db->amp -6)"
-      "-6.dbamp")
+      "-6.dbamp;\n")
 
     (check "expand-amp-db"
       "(amp->db 0.5)"
-      "0.5.ampdb")
+      "0.5.ampdb;\n")
 
     (check "expand-adsr"
       "(adsr 0.01 0.1 0.5 0.5)"
-      "Env.adsr(0.01, 0.1, 0.5, 0.5)")
+      "EnvGen.kr(Env.adsr(0.1, 0.5, 0.5), 0.01, doneAction: 2);\n")
 
     (check "expand-perc"
       "(perc 0.01 0.5)"
-      "Env.perc(0.01, 0.5)")
+      "EnvGen.kr(Env.perc(0.01, 0.5), doneAction: 2);\n")
 
     (check "expand-quote-sym"
       "'foo"
-      "\\foo")
+      "\\foo;\n")
 
     0))
