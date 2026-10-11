@@ -11,8 +11,7 @@
 > **Type:** Performance / measurement / tooling
 > **Depends on:** nothing that is not already in the tree. `tur demangle`
 > (profiling-plan P0, landed), `benchmarks/run-triangle.sh`,
-> `performance-comparison/scripts/run_all.sh`, the memory-usage guide's
-> `measure.sh`, and the `ci-metrics` timing pipeline
+> `benchmarks/run-benchmarks.sh`, the memory-usage guide's `measure.sh`, and the `ci-metrics` timing pipeline
 > (`tools/ci/collect-suite-timings.py`, `publish-timings.sh`, the `/ci` page)
 > are the instruments this plan builds on.
 > **Related:** [profiling-plan](profiling-plan.md) (the `--timings` /
@@ -41,7 +40,8 @@ this survey:
   holds a dozen one-off experiment harnesses whose committed results date
   from May to September; `performance-comparison/` is a 21-program,
   nine-language suite whose raw results are gitignored and whose last full
-  sweep was 2026-09-01 on an Apple M2. `tests/benchmarks/` (three programs,
+  sweep was 2026-09-01 on an Apple M2 (out of scope here; see below).
+  `tests/benchmarks/` (three programs,
   `tests/run-bench.sh`) is registered with nothing and run by nothing.
 - **CI measures how long the test suites take, and nothing else.** The
   `ci-metrics` branch and the `/ci` page track suite wall-clock per
@@ -70,6 +70,13 @@ What this plan is deliberately **not**:
 
 - **Not an optimization plan.** It produces a ranked list; the ranking says
   what to build next, this plan does not build it.
+- **Not a cross-language comparison.** `performance-comparison/` (the C /
+  Rust / Haskell / Racket / Python / Clojure suite) is not a priority for this
+  work and is not in the audit corpus. The audit measures Turmeric against
+  itself: its own engines, its own C baselines where a `-baseline.c` or a
+  ceiling harness exists, and its own earlier numbers. The suite stays in the
+  tree for whoever wants the external comparison later; nothing here
+  depends on it.
 - **Not a profiler plan.** The `--timings` and `--profile` flags belong to
   [profiling-plan](profiling-plan.md). WP1 builds the minimal `--timings`
   (profiling-plan C0+C1) because the compile-time half of the audit cannot be
@@ -85,7 +92,7 @@ What this plan is deliberately **not**:
 | Surface | Instrument in the tree | Results kept where | Re-measured by | Gap |
 | --- | --- | --- | --- | --- |
 | Emitted-program runtime, Turmeric-only | `benchmarks/run-benchmarks.sh` (wall time, optional `-baseline.c`, optional `.time` tripwire) | `benchmarks/benchmark-results.md` (2026-05-13: two rows) | nobody | hard-codes `./build/tur` (a Debug/ASan build); 2 of ~12 programs have a bound or baseline; `bench-backtrack-n-queens` names a baseline C file that does not exist |
-| Emitted-program runtime, cross-language | `performance-comparison/scripts/run_all.sh` + `aggregate_results.py` + `check_reproducibility.py` (CV > 10% flagged) | `results/raw/`, gitignored; golden stdout committed | nobody since 2026-09-01 | no stored history; `docs/methodology.md` names an M3/macOS 14.5 box, the setup note an M2 |
+| Emitted-program runtime, cross-language | `performance-comparison/scripts/run_all.sh` + `aggregate_results.py` + `check_reproducibility.py` (CV > 10% flagged) | `results/raw/`, gitignored; golden stdout committed | nobody since 2026-09-01 | **out of scope for this plan**; noted for completeness. No stored history; `docs/methodology.md` names an M3/macOS 14.5 box, the setup note an M2 |
 | Three-engine latency | `benchmarks/run-triangle.sh` (interp / jit / cc build+run, best of N, refuses on output disagreement) | pasted into performance-guide.md | by hand when the guide is edited | snapshot only |
 | Per-feature heap cost | memory-usage-guide `measure.sh` (valgrind memcheck + massif, N=10000 vs N=0) | the guide's cost table (2026-10-05) | by hand | the script is prose in a guide, not a file; nothing diffs the table against a rebuild |
 | Leaks in emitted code | `tests/run-leak-check.sh` (`requires.leak-check`), `docs/artifacts/leak-sweep-*` | report rows | per PR for marked fixtures | byte residue (1766 B corpus-wide) tracked by hand in `carrier-sum-option-boxes-have-no-owner` |
@@ -175,9 +182,10 @@ E = engines, W = web, D = documentation disagreement.
 
 **A. Emitted-program runtime.** Where does a compiled Turmeric program spend
 its cycles, by subsystem (user code, rc, regions, CPS/DK frames, HAMT, Vec,
-strings, dictionary dispatch, async)? What is the gap to the C baseline per
-category of `performance-comparison/`, and how much of it is the runtime
-(R-2..R-5) versus the lowering (R-1, R-11) versus the C flags (R-7)?
+strings, dictionary dispatch, async)? Where a C ceiling exists in the tree
+(`bind-option-baseline.c`, `fmap-vec-baseline.c`, `adt-alloc/ceiling.c`),
+what is the gap to it, and how much of it is the runtime (R-2..R-5) versus
+the lowering (R-1, R-11) versus the C flags (R-7)?
 
 **B. Memory and allocation.** Per feature, what does a value cost in traffic,
 peak and residue, and does the cost table still hold? Which shapes allocate
@@ -217,30 +225,35 @@ of numbers everything later is compared against.
   disposable EC2 instance, `m7i.xlarge` (4 vCPU, 16 GiB, the CI runner's
   shape) on Ubuntu 24.04 by default, with the toolchain, `perf`, valgrind
   and hyperfine installed and Debug + Release builds made at boot. Record
-  its instance type, AMI, cc version and glibc in the artifact README; the
-  cross-language suite already captures this per row. Every later table in
-  this plan carries that header or it is not a result. An `arm64` column
+  its instance type, AMI, cc version and glibc in the artifact README.
+  Every later table in this plan carries that header or it is not a result. An `arm64` column
   (`BENCH_ARCH=arm64`, e.g. `m7g.xlarge`) is one env var away when WP4 or
   WP6 wants one.
-- Define the **audit corpus** and commit the list:
-  - `performance-comparison/` at `small` and `medium` (21 programs, with the
-    C/Rust columns where they exist);
-  - `benchmarks/*.tur` (the experiment harnesses) and `benchmarks/triangle/`;
+- Define the **audit corpus** and commit the list. Turmeric programs only;
+  `performance-comparison/` is not in it:
+  - `benchmarks/*.tur` (the experiment harnesses, with their two C
+    baselines) and `benchmarks/triangle/`;
   - `tests/benchmarks/` (3 programs);
-  - ~20 fixtures picked from `tests/fixtures/` to cover shapes the benchmarks
+  - the larger `examples/` programs that `tests/check-examples.sh` already
+    builds and runs (19 of them go through `cc`, per the suite-timing
+    readout), as the closest thing the tree has to real programs;
+  - ~30 fixtures picked from `tests/fixtures/` to cover shapes the benchmarks
     do not: effects with non-tail resume, async, STM, HAMT-heavy, string
-    builder, region-bracketed, dictionary-dispatch-heavy, Saffron. Pick them
-    by `TUR_REPR_CENSUS` / `--dump-cps` output, not by name.
+    builder, region-bracketed, dictionary-dispatch-heavy, Saffron, and the
+    `*-deep`/`*-stress` constant-stack checks sized up. Pick them by
+    `TUR_REPR_CENSUS` / `--dump-cps` output, not by name.
 - Fix the harness defects that would otherwise poison every number:
   `run-benchmarks.sh` must take `TUR` like the other runners and refuse an
   ASan binary (the triangle runner's probe is the model); the missing
   `bench-backtrack-n-queens-baseline.c` is either written or the reference
   removed; `tests/run-bench.sh` is either registered (not in the PR gate) or
-  folded into `benchmarks/`.
+  folded into `benchmarks/`. Every corpus program's stdout is pinned (the
+  fixtures already have `expected.stdout`; the benchmarks and examples get a
+  checked-in `expected.stdout` beside them), so a later experiment cannot
+  look fast by doing less.
 - Run everything once, serially, and commit: wall time, user+sys CPU, peak
   RSS (`wait4` rusage, as the r7rs audit did), emitted C size, binary size,
   and for the cc path the build/run split. This is the **baseline**.
-- Reconcile the methodology doc's hardware note with the setup note's.
 
 **Deliverable.** `docs/artifacts/perf-audit-2026-10/wp0-baseline.md` + CSV;
 the corpus list as a file the later runners read. **Effort:** small-medium;
@@ -341,8 +354,8 @@ the curves; guide update. **Effort:** small-medium.
 **Goal.** Refresh the engine triangle on the baseline box and attribute each
 engine's fixed cost.
 
-- Re-run `benchmarks/run-triangle.sh` and the `turi`/`turjit` columns of the
-  cross-language suite (E-4). Replace the guide's table.
+- Re-run `benchmarks/run-triangle.sh` on the baseline box, and the corpus
+  under all three engines (E-4). Replace the guide's table.
 - Interpreter: callgrind the three slowest corpus programs under
   `--interpret`; report `eval_lookup`'s share after the fast path (E-1), the
   module-global lookup path, and the `turi_errorf`-on-miss question.
@@ -446,7 +459,8 @@ that stands alone.
   toolchain, or it is not a result.
 - **Output parity before timing.** The triangle runner refuses to time a
   program whose engines disagree; every WP2 experiment (flags, LTO, inlined
-  runtime) inherits that rule via the cross-language suite's golden files.
+  runtime) inherits that rule through the corpus's pinned `expected.stdout`
+  (WP0).
 - **Instruments:** `perf` + `tur demangle`, callgrind (instructions, for
   attribution), massif and memcheck (bytes), `wait4` rusage (RSS), the
   runtime counters in section 1, `TUR_SHOW_CC=1` for the cc leg,
@@ -479,9 +493,8 @@ that stands alone.
 
 1. **Which instance type is the baseline?** The plan assumes the bench
    box's default, `m7i.xlarge` on x86-64 Linux, because `perf` and callgrind
-   are there and it matches the CI runners. The cross-language suite's
-   history is on Apple silicon (M2, possibly M3) and the nightly is arm64
-   Linux; each gets a column if wanted. A bigger box (`c7i.2xlarge`) makes
+   are there and it matches the CI runners. The nightly is arm64 Linux and
+   can get a column if wanted. A bigger box (`c7i.2xlarge`) makes
    the suites faster but changes the `nproc`-dependent numbers, so pick once.
 2. **What should `tur run --release` mean** once it stops being a no-op
    (R-7)? WP2's flag sweep gives the data; the choice between "`-O2`, same
@@ -496,6 +509,6 @@ that stands alone.
    would make PR-level tracking possible.
 5. **Priority between compile latency and runtime throughput.** The
    triangle says the front end dominates one-shot latency on every engine;
-   the cross-language suite says steady state is within 1-2x of native on
-   most rows. If v1's story is "fast edit-run loop", WP1 and C-1 lead; if it
+   the two C baselines in `benchmarks/` and the JIT notes say steady state is
+   within 1-2x of hand-written C where it has been checked. If v1's story is "fast edit-run loop", WP1 and C-1 lead; if it
    is "fast programs", WP2 does.
