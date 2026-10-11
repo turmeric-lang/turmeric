@@ -4124,6 +4124,98 @@ static FnDef *scp_fndef_of(const Binding *fb) {
     return found;
 }
 
+/* byvalue-aggregate-erased-to-dangling-stack-address: may the typeclass
+ * instance method `fb` RETAIN what arrives in its erased parameter `pi`?
+ *
+ * A by-value aggregate crossing into an erased carrier parameter is passed as
+ * the address of a stack spill, which is sound for a callee that only reads it
+ * and dangles for one that keeps it.  Decided from the CLASS method's declared
+ * signature, by parametricity: the method can hand the value back -- inside a
+ * closure, a container, or as itself -- only through a result whose type
+ * mentions one of the parameter's value-kinded type variables.  `pure : a ->
+ * (f a)` can; `fmap`/`bind`/`ap`, whose results are `(f b)`, cannot retain the
+ * receiver; `show : a -> cstr` cannot.  A variable under a function type the
+ * parameter holds is not a value it contains; one in the RESULT's function
+ * type is (a returned closure may capture it).  A constructor variable (`f` in `(f
+ * a)`) says nothing about a value and is not counted.  A parameter the class
+ * left unannotated (no variables to reason about) keeps the read-only answer,
+ * as does a method whose instance cannot be found.  Not covered: storing the
+ * value through a side effect into another argument's container. */
+static void irp_value_vars(const Type *t, bool head, const char **out,
+                           uint32_t *n, uint32_t cap, int depth) {
+    if (!t || depth > 32) return;
+    switch (t->kind) {
+        case TY_TYVAR:
+            if (!head && t->as.tyvar_.name && *n < cap) out[(*n)++] = t->as.tyvar_.name;
+            return;
+        case TY_APP:
+            irp_value_vars(t->as.app.fn, true, out, n, cap, depth + 1);
+            irp_value_vars(t->as.app.arg, false, out, n, cap, depth + 1);
+            return;
+        case TY_FN:
+            /* A function the parameter holds consumes and produces its
+             * variables' values; it does not CONTAIN one.  `ap`'s `(f (fn [a]
+             * b))` holds functions, never a `b`. */
+            return;
+        default:
+            return;
+    }
+}
+
+static bool irp_mentions(const Type *t, const char *name, int depth) {
+    if (!t || !name || depth > 32) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.name && strcmp(t->as.tyvar_.name, name) == 0;
+        case TY_APP:
+            return irp_mentions(t->as.app.fn, name, depth + 1) ||
+                   irp_mentions(t->as.app.arg, name, depth + 1);
+        case TY_FN:
+            if (t->as.fn.arg_full_types)
+                for (uint32_t i = 0; i < t->as.fn.arity; i++)
+                    if (irp_mentions(t->as.fn.arg_full_types[i], name, depth + 1))
+                        return true;
+            return irp_mentions(t->as.fn.result_full_type, name, depth + 1);
+        default:
+            return false;
+    }
+}
+
+static bool inst_method_may_retain_param(EmitCtx *ctx, const Binding *fb,
+                                         uint32_t pi) {
+    if (!fb || !fb->is_instance_method || !ctx || !ctx->program_root) return false;
+    uint32_t n = 0;
+    const Expr **items = flatten_program_items(ctx->program_root, &n);
+    const FnDef *fd = NULL;
+    const TypeClassInstance *inst = NULL;
+    for (uint32_t i = 0; items && i < n && !fd; i++) {
+        const Expr *it = items[i];
+        if (!it || it->kind != EX_INSTANCE_DEF || !it->as.instance_def_.instance)
+            continue;
+        const TypeClassInstance *ci = it->as.instance_def_.instance;
+        for (uint32_t mi = 0; mi < ci->n_method_impls && !fd; mi++)
+            if (ci->method_impls[mi] && ci->method_impls[mi]->binding == fb) {
+                fd = ci->method_impls[mi];
+                inst = ci;
+            }
+    }
+    free((void *)items);
+    if (!fd || !inst || !inst->typeclass) return false;
+    const TypeClass *tc = inst->typeclass;
+    int slot = -1;
+    for (uint32_t mi = 0; mi < inst->n_method_impls && mi < tc->n_methods; mi++)
+        if (inst->method_impls[mi] == fd) { slot = (int)mi; break; }
+    if (slot < 0) return false;
+    const TypeClassMethod *m = &tc->methods[slot];
+    if (!m->param_types || pi >= m->n_params) return false;
+    const char *vars[16];
+    uint32_t nv = 0;
+    irp_value_vars(&m->param_types[pi], false, vars, &nv, 16, 0);
+    for (uint32_t v = 0; v < nv; v++)
+        if (irp_mentions(&m->return_type, vars[v], 0)) return true;
+    return false;
+}
+
 /* Does `fb` keep nothing of a closure carried in the sum it receives as param
  * `pi`?  Its body (no inline C, cannot suspend) uses the param only as the
  * scrutinee of a `match` whose arm binders are only invoked, as an argument to
@@ -13728,6 +13820,34 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             raw = emit_carrier_bridge_escaping(ctx, body, raw,
                                                                CK_CONCRETE, CK_CARRIER,
                                                                bridge_ty);
+                        } else if (_arg_is_byval_struct &&
+                                   inst_method_may_retain_param(ctx, fn_binding, i)) {
+                            /* byvalue-aggregate-erased-to-dangling-stack-address:
+                             * a typeclass instance method's erased parameter is
+                             * the shape that RETAINS -- `Applicative [Parser]`'s
+                             * `pure [x]` stores `x` in the parser closure it
+                             * returns, `pure` for a container stores it in the
+                             * container -- and the closure runs after this
+                             * frame is gone.  The plain bridge's stack spill
+                             * handed it `&tmp`: `(pure (pair 1 2))` in a parser
+                             * read back garbage.  Heap-promote, as the
+                             * container-insert arm above and the dict-dispatch
+                             * twin do; the box outlives any region bracket and
+                             * no store hook sees its words, so note them. */
+                            Type bridge_ty =
+                                fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
+                            if (bridge_ty.kind == TY_UNKNOWN)
+                                bridge_ty = emit_arg->type;
+                            raw = emit_carrier_bridge_escaping(ctx, body, raw,
+                                                               CK_CONCRETE, CK_CARRIER,
+                                                               bridge_ty);
+                            const char *bcn = emit_type_c_name(ctx, bridge_ty);
+                            if (raw && bcn && strstr(raw, "(int64_t)(intptr_t)(") == raw) {
+                                indent_buf(body, ctx->indent);
+                                buf_printf(body,
+                                    "TUR_REGION_NOTE_WORDS((void *)(intptr_t)%s, sizeof(%s));\n",
+                                    raw, bcn);
+                            }
                         } else {
                             raw = emit_carrier_bridge(ctx, body, raw,
                                                       CK_CONCRETE, CK_CARRIER,
@@ -13843,9 +13963,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     }
                                 }
                             }
-                            if (fn_binding->body_is_inline_c &&
-                                (type_is_wide_byval_adt(rarg) ||
-                                 _n3_container_store)) {
+                            /* byvalue-aggregate-erased-to-dangling-stack-
+                             * address: an instance method's erased parameter
+                             * retains (`pure [x]` of `Applicative [Parser]`
+                             * keeps `x` in the closure it returns), the plain
+                             * `defstruct` twin of the TY_APP arm above. */
+                            bool _inst_retains = !type_is_heap_struct(rarg) &&
+                                                 !type_is_heap_adt(rarg) &&
+                                                 inst_method_may_retain_param(ctx, fn_binding, i);
+                            if ((fn_binding->body_is_inline_c &&
+                                 (type_is_wide_byval_adt(rarg) ||
+                                  _n3_container_store)) ||
+                                _inst_retains) {
                                 /* vec-push-byvalue-struct-param-emits-unbridged-
                                  * pointer: a WIDE struct PARAMETER is
                                  * materialized as `const T *`, so `raw` names
@@ -13870,6 +13999,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                 raw = emit_carrier_bridge_escaping(
                                           ctx, body, raw,
                                           CK_CONCRETE, CK_CARRIER, rarg);
+                                /* The instance method's box is reached by no
+                                 * store hook (a container insert notes its own
+                                 * element): note its words. */
+                                const char *rcn = emit_type_c_name(ctx, rarg);
+                                if (_inst_retains && raw && rcn &&
+                                    strstr(raw, "(int64_t)(intptr_t)(") == raw) {
+                                    indent_buf(body, ctx->indent);
+                                    buf_printf(body,
+                                        "TUR_REGION_NOTE_WORDS((void *)(intptr_t)%s, sizeof(%s));\n",
+                                        raw, rcn);
+                                }
                             } else
                                 raw = emit_carrier_bridge(ctx, body, raw,
                                                           CK_CONCRETE, CK_CARRIER,

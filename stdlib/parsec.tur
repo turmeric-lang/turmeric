@@ -39,8 +39,9 @@
 ;; A parser's result rides that int64 word.  One-word results -- int, Char,
 ;; String, (List A), a `:heap` struct, an Option this module built -- are
 ;; exact.  A by-value aggregate handed to `pure` (`(pure (pair a b))`, a plain
-;; defstruct) does NOT survive the carrier today: see
-;; docs/reported/byvalue-aggregate-erased-to-dangling-stack-address.md.
+;; defstruct) is wider than the word: the compiler heap-copies it on the way
+;; in, a copy nothing reclaims yet (see
+;; docs/archive/byvalue-aggregate-erased-to-dangling-stack-address.md).
 ;;
 ;; Calling conventions of the carrier layer:
 ;;   - Parser constructors return :ptr<void>  (fat closure pointer)

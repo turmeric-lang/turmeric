@@ -1,5 +1,8 @@
 # A by-value aggregate erased into a retaining generic parameter becomes a dangling stack address
 
+**Status: RESOLVED 2026-10-11** (fix direction 1, see
+[Resolution](#resolution)).
+
 **Severity: high (silent wrong values).** Filed 2026-10-11 while executing
 [parsec-guide-plan](../archive/parsec-guide-plan.md).
 
@@ -70,3 +73,42 @@ Build one-word results: a `:heap` struct, a `String`, a `(List A)`, a `Char`,
 an `int`. `stdlib/parsec.tur`'s own `optional` builds its `Option` boxes on
 the heap (`tur_some_int`), so `(Parser (Option A))` is exact. The parsec guide
 documents the limit under "What a parser can produce".
+
+## Resolution
+
+Fix direction 1, scoped by parametricity rather than by guessing. Both
+call-argument arms that bridge a by-value aggregate into an erased carrier
+parameter (`emit_value_dispatch`: the `TY_APP` block for `(Pair int int)` /
+`(Option Char)`, and the non-parametric block for a plain `defstruct`) already
+heap-promote for an inline-C container insert. They now also take the escaping
+bridge (`emit_carrier_bridge_escaping`, a `malloc`'d copy, region-noted) when
+the callee is a typeclass instance method that may RETAIN the parameter.
+
+That is decided from the CLASS method's declared signature
+(`inst_method_may_retain_param`, `src/compiler/emit_expr.c`). A method can hand
+an argument back -- in a closure, a container, or as itself -- only through a
+result whose type mentions one of the parameter's value-kinded type variables.
+`pure : a -> (f a)` qualifies. `fmap`, `bind` and `ap` (results `(f b)`),
+`show : a -> cstr` and the encoders do not, and keep the stack spill. A
+constructor variable (`f` in `(f a)`) and a variable under a function type the
+parameter holds (`ap`'s `(f (fn [a] b))` holds functions, not `b`s) are not
+values the parameter contains.
+
+Measured on the fixture corpus: a first version that heap-promoted for every
+instance method fired at 20 fixtures (`bind`/`fmap`/`ap`/`catch-error`
+receivers that only read their argument, so a leaked box per call); the
+parametricity test fires at none of them, and at the repro.
+
+**Cost:** the box has no owner yet, so each retaining crossing allocates once
+and is never freed (the
+[carrier-sum-option-boxes-have-no-owner](../reported/carrier-sum-option-boxes-have-no-owner.md)
+problem). A leak where there was a dangling read.
+
+**Not covered:** a method that stores the value through a side effect into
+another argument (a mutable container) without returning it; the signature
+does not show that.
+
+**Pinned by** `parsec-pure-byvalue-aggregate` (`(pure (pair 1 2))`, `(pure
+(some c))` and a plain `defstruct` through a parser; the old compiler printed
+garbage for all three). The parsec guide, tutorial and `stdlib/parsec.tur`'s
+header no longer describe the limit.

@@ -1,0 +1,27 @@
+;; byvalue-aggregate-erased-to-dangling-stack-address: a by-value aggregate
+;; handed to an instance method's erased parameter was passed as the address of
+;; a stack spill.  `Applicative [Parser]`'s `pure [x]` keeps `x` in the parser it
+;; returns, which runs after the continuation's frame is gone: `(pure (pair 1
+;; 2))` read back garbage, `(pure (some c))` read `#\null`.  A parameter the
+;; class signature lets come back in the result (`pure : a -> (f a)`) is
+;; heap-promoted now.
+
+(load "stdlib/parsec.tur")
+(defstruct P :copy [a : int b : int])
+
+(defn two [] : (Parser (Pair int int))
+  (do-m _c (item) (pure (pair 1 2))))
+(defn opt-char [] : (Parser (Option Char))
+  (do-m c (item) (pure (some c))))
+(defn ps [] : (Parser P)
+  (do-m _c (item) (pure (P 3 4))))
+
+(defn main [] : int
+  (let [p (parse-first (two) "x")]
+    (println (pair-fst p))
+    (println (pair-snd p)))
+  (let [o (parse-first (opt-char) "q")]
+    (println (match o (Some c) (char->int c) (None) -1)))
+  (let [s (parse-first (ps) "x")]
+    (println (+ (.a s) (.b s))))
+  0)
