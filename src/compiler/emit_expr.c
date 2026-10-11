@@ -12295,8 +12295,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool field_is_fn = false;
                     {
                         Type rt = emit_resolve_type(ctx, e->type);
+                        /* heap-adt-niche-option-some-payload-missing-cast (the
+                         * non-niche half): a `:heap` owner's ctor takes an
+                         * inline-able field by value too -- its header is laid
+                         * out by value (emit_module.c `hdr_byval`) -- so boxing
+                         * the argument handed an int64 to a `tur_adt_Pos`
+                         * parameter. */
                         if (rt.kind == TY_ADT && rt.as.adt_.def &&
-                            adt_is_byvalue_product(rt.as.adt_.def)) {
+                            (adt_is_byvalue_product(rt.as.adt_.def) ||
+                             rt.as.adt_.def->is_heap)) {
                             const AdtDef *od = rt.as.adt_.def;
                             /* SR1: a by-value owner may now be MULTI-variant, so
                              * the field being stored belongs to the constructor
@@ -17824,7 +17831,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * for the `C [any]` argument bridge. */
                     bool fld_tagged = heap_fld_cast &&
                                       strcmp(heap_fld_cast, "tur_tagged_t") == 0;
-                    if (fld_aggregate || fld_tagged) {
+                    /* heap-adt-niche-option-some-payload-missing-cast (the
+                     * by-value half): a PARAMETRIC owner's monomorph stores a
+                     * WIDE by-value element as an int64 heap box (types.c, B4
+                     * slice 2: the typedef and, now, the `:heap` ctor), so it
+                     * is not "stored inline" -- deref the box.  A
+                     * non-parametric `:heap` header inlines it (hdr_byval) and
+                     * reads it directly below. */
+                    bool fld_wide_boxed = fld_aggregate && adt &&
+                        adt->n_type_params > 0 &&
+                        type_is_wide_byval_adt(fld_rty) &&
+                        !adt_field_is_ros_pointer_box(adt, &fld_rty);
+                    if (fld_wide_boxed) {
+                        buf_printf(&hb, "(*(%s *)(intptr_t)(((%s)(intptr_t)(%s))->%s))",
+                                   emit_type_c_name(ctx, fld_rty), heap_recv_cn, sv, mp);
+                    } else if (fld_aggregate || fld_tagged) {
                         buf_printf(&hb, "((%s)(intptr_t)(%s))->%s",
                                    heap_recv_cn, sv, mp);
                         if (fld_tagged && hb.len < sizeof ctx->any_field_read_note)
@@ -20920,7 +20941,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * aggregate value itself in the union slot -- bind it
                              * directly, no cast (cast-to-aggregate is invalid C)
                              * and no carrier unbox. */
-                            bool inline_byval = adt_byval && bi < pat->ctor->n_fields &&
+                            /* heap-adt-niche-option-some-payload-missing-cast
+                             * (the non-niche half): a `:heap` owner's header
+                             * holds its fields by value too (emit_module.c's
+                             * `hdr_byval`), so its by-value field is inline. */
+                            bool inline_byval = (adt_byval || (adt && adt->is_heap)) &&
+                                bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             if (adt_niche) {
                                 /* SR3 slice B: `Some`'s payload IS the
@@ -21425,7 +21451,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * branch; the switch path could not previously be
                              * reached by a by-value owner, because "flows by
                              * value" implied "has no tag". */
-                            bool inline_byval = adt_byval &&
+                            /* A `:heap` owner inlines too (`hdr_byval`); see
+                             * the if-chain twin. */
+                            bool inline_byval = (adt_byval || (adt && adt->is_heap)) &&
                                 bi < pat->ctor->n_fields &&
                                 adt_field_is_inline_byval(&pat->ctor->fields[bi]);
                             /* CONV-S1/B3: a by-value ADT field is stored boxed

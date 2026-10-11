@@ -2680,7 +2680,23 @@ static void emit_registered_adt_app_rec(Buf *out, uint32_t idx) {
             if (!flat) buf_printf(out, "    __r->tag = %u;\n", ctor->tag);
             for (uint32_t fi = 0; fi < ctor->n_fields; fi++) {
                 char *mp = adt_field_member_path(def, ctor, fi);
-                buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                if (wide_box[fi]) {
+                    /* heap-adt-niche-option-some-payload-missing-cast (the
+                     * by-value half): the typedef above stores a WIDE by-value
+                     * element as an int64 heap box (B4 slice 2), but this
+                     * branch assigned the aggregate parameter straight into
+                     * that word -- `(Bx (Pos 7 8))` did not compile.  Box it
+                     * as the carrier branch below does. */
+                    buf_printf(out,
+                        "    { %s *__b = (%s *)malloc(sizeof(%s)); *__b = _%u;"
+                        " __r->%s = (int64_t)(intptr_t)__b; }\n",
+                        val_ctype[fi], val_ctype[fi], val_ctype[fi], fi, mp);
+                    buf_printf(out,
+                        "    TUR_REGION_NOTE_WORDS((void *)(intptr_t)__r->%s, sizeof(%s));\n",
+                        mp, val_ctype[fi]);
+                } else {
+                    buf_printf(out, "    __r->%s = _%u;\n", mp, fi);
+                }
                 free(mp);
             }
             buf_printf(out, "    return __r;\n");

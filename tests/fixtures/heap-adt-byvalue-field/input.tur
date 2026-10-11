@@ -1,0 +1,51 @@
+;; heap-adt-niche-option-some-payload-missing-cast, the non-niche half -- and
+;; the wider family it belonged to: a `:heap` ADT with a BY-VALUE field.
+;;   - A non-parametric `:heap` owner's header holds the field inline, but the
+;;     constructor call boxed the argument (int64 into a `tur_adt_Pos`
+;;     parameter) and the match binder dereferenced the field.
+;;   - A parametric owner's monomorph stores a WIDE by-value element boxed
+;;     (B4), but its `:heap` constructor assigned the aggregate into the word,
+;;     and `.field` read the box as the value.
+(defopaque S :ptr<void>)
+(defn __raw [] : ptr<void>
+  ```c
+  return (void *)"hello";
+  ```)
+(defn s-of [] : S (:: (__raw) S))
+(defn show [s : S] : cstr
+  ```c
+  return (const char *)s;
+  ```)
+
+(defstruct Pos :copy [line : int col : int])
+(defstruct Sm :copy [a : int32 b : int32])
+(defdata K :heap (Ka int) (Kb Pos))
+(defdata One :heap (One Pos int))
+(defdata Ev :heap (A int) (C S (Option S)))
+(defstruct H :heap [p : Pos n : int])
+(defstruct HB :heap [A] [v : A n : int])
+(defdata Bx :heap [A] (Bx A))
+
+(defn sum-one [o : One] : int (match o (One p n) (+ (.col p) n)))
+(defn desc [e : Ev] : cstr
+  (match e
+    (A x) "a"
+    (C s o) (match o (Some t) (show t) (None) "none")))
+
+(defn main [] : int
+  (println (match (Kb (Pos 3 4)) (Ka x) x (Kb p) (+ (.line p) (.col p))))  ; 7
+  (println (sum-one (One (Pos 1 2) 10)))                                  ; 12
+  (println (desc (C (s-of) (Some (s-of)))))                               ; hello
+  (println (desc (C (s-of) (None))))                                      ; none
+  (let [h (H (Pos 5 6) 1)]
+    (println (.col (.p h)))                                               ; 6
+    (set! (.p h) (Pos 9 11))
+    (println (.col (.p h))))                                              ; 11
+  (let [hb (HB (Pos 3 4) 1)]
+    (println (.col (.v hb))))                                             ; 4
+  (let [hs (HB (Sm (:: 5 int32) (:: 6 int32)) 2)]
+    (println (.b (.v hs))))                                               ; 6
+  (println (match (Bx (Pos 7 8)) (Bx p) (.col p)))                        ; 8
+  (println (match (Bx (Sm (:: 7 int32) (:: 8 int32))) (Bx s) (.b s)))     ; 8
+  (println (match (Bx (some 9)) (Bx o) (unwrap-or o 0)))                  ; 9
+  0)
