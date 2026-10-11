@@ -4513,9 +4513,12 @@
   ```c
   if (!sink) return;
   /* The sink arrived through a ^fat parameter: a { thunk, env } closure
-   * whose slot 0 takes (env, arg). */
-  typedef void (*fn1_t)(void *, int64_t);
-  ((fn1_t)(intptr_t)((int64_t *)(intptr_t)sink)[0])((void *)(intptr_t)sink, (int64_t)(intptr_t)line);
+   * whose slot 0 takes (env, arg).  A cstr argument keeps its C type at
+   * slot 0 (`void (*)(void *, const char *)`, unlike a ptr<void> one,
+   * which is int64_t there), and the call must use exactly that type:
+   * -fsanitize=function traps on any other. */
+  typedef void (*fn1_t)(void *, const char *);
+  ((fn1_t)(intptr_t)((int64_t *)(intptr_t)sink)[0])((void *)(intptr_t)sink, line);
   ```)
 ;;; mw-log-to -- request logging middleware with your own sink.
 ;;;
