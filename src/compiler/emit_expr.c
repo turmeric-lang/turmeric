@@ -1179,6 +1179,15 @@ bool emit_type_is_byvalue_adt(EmitCtx *ctx, Type t) {
     if (r.kind == TY_APP) {
         AdtDef *ad = type_adt_app_def(&r);
         if (ad && ad->is_heap) return false;
+        /* heap-adt-niche-option-some-payload-missing-cast: a NICHE `(Option
+         * S)` (SR3; S a non-null pointer) is spelled as the payload pointer
+         * itself -- one word, like a `:heap` ADT -- so it is never boxed into
+         * a carrier field slot or unboxed out of one.  Answering "by-value
+         * aggregate" here boxed `(Some s)` on the way into a `:heap`
+         * constructor's `void *` field and dereferenced the field on the way
+         * out, while `(None)` stored the bare NULL: the `None` read was a
+         * NULL dereference. */
+        if (adt_app_is_niche_option(r)) return false;
         return adt_app_is_byvalue_product(r);
     }
     return false;
