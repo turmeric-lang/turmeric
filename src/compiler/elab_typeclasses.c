@@ -8073,6 +8073,34 @@ Expr *elab_method_call(Elab *e, const Form *call) {
         }
     }
 
+    /* hash-instance-on-int-opaque-breaks-any-key-maps: an `any` receiver whose
+     * class has a genuine `C [any]` instance resolves to THAT instance, ahead
+     * of the ranking below.  `any` is not a primitive kind, so the search
+     * treats it as KIND_ARROW and takes the first non-primitive instance as an
+     * exact match -- registration order, newest first -- which made a user
+     * `(definstance Hash [Tag] ...)` on an opaque win `(hash k)` for every
+     * `any` key in `hamt-of`, and the `any`-receiver guard below then refused
+     * the call.  A `[any]` instance is exactly what an `any` receiver asks
+     * for; a minted Saffron dispatch dictionary is not one. */
+    if (obj && obj->type.kind == TY_ANY && !ambig_watch) {
+        for (TypeClassInstance *inst = e->typeclass_env.instances; inst != NULL;
+             inst = inst->next) {
+            if (inst->dyn_any_minted || inst->n_type_args == 0 ||
+                inst->type_args[0].kind != TY_ANY)
+                continue;
+            for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
+                const TypeClassMethod *method = &inst->typeclass->methods[i];
+                if (method->name->len != method_name_len ||
+                    memcmp(method->name->name, method_name, method_name_len) != 0)
+                    continue;
+                best_method = inst->method_impls[i];
+                best_inst = inst;
+                exact_match_found = true;
+                goto found_method;
+            }
+        }
+    }
+
     /* Search instances — prefer the one whose type_args[0] matches obj's type. */
     for (TypeClassInstance *inst = e->typeclass_env.instances; inst != NULL; inst = inst->next) {
         for (uint8_t i = 0; i < inst->typeclass->n_methods; i++) {
