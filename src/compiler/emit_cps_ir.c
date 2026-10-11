@@ -3781,8 +3781,13 @@ static bool fn_is_d2b_main(const FnDef *fd) {
      * main -- exactly its current behaviour, with NO forced-d2b regression.  The
      * gate is thus the fixpoint (the "taint-completeness guard" the note asked for),
      * unlocked now that E2a threads the effectful fn-values a handle-main performs. */
+    /* escape-in-main-reaches-direct-emitter: an `escape` / `call/cc` is
+     * delimited control too, lowered only by the CT-IR backend (the direct
+     * emitter's EX_CALLCC arm aborts) -- so a main whose only control op is
+     * one is a d2b candidate as well.  Same fixpoint, same fallbacks. */
     return cps_expr_contains_shift(fd->body)
-        || expr_has_handle(fd->body);
+        || expr_has_handle(fd->body)
+        || cps_expr_contains_callcc(fd->body);
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */

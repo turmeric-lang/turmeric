@@ -118,7 +118,7 @@ runtime call); fixture cases 18 and 19 cover the receiver installing the
 handle and the continuation passed to a function that does.  Found on the
 way and filed separately: an `escape` written directly in `main` is an
 internal error
-([escape-in-main-reaches-direct-emitter](../reported/escape-in-main-reaches-direct-emitter.md)).
+([escape-in-main-reaches-direct-emitter](escape-in-main-reaches-direct-emitter.md), since resolved).
 
 **A deferred body that panics.** The fire helper (`cps_pend_fire`) runs
 each body in its own `do { } while (0)` with the per-call-site signal check

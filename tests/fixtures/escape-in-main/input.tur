@@ -1,0 +1,30 @@
+;; escape-in-main-reaches-direct-emitter: an `escape` / `call/cc` written
+;; directly in `main` used to abort the compiler ("EX_CALLCC reached the
+;; direct emitter"): a `main` was a CPS (d2b) candidate only for a reset /
+;; shift or a `handle`, so one whose only control op was an escape stayed on
+;; the direct emitter, which has no lowering for it.  It is a candidate now.
+
+(defn note [s : cstr] : int
+  ```c printf("%s\n", s); fflush(stdout); return 0; ```)
+(defeffect Ask [] : int)
+
+(defn body [] : int
+  (defer (note "body: defer ran"))
+  (+ 1 (perform (Ask))))
+
+(defn with-handle [esc : escape-cont] : int
+  (handle (body) (Ask [] k) (esc 7)))
+
+(defn main [] : int
+  ;; 1. the escape is taken: the pending (+ 3 _) is abandoned
+  (println (+ 100 (escape (fn [k] (+ 3 (k 9))))))
+  ;; 2. the receiver ignores k: the body value flows out normally
+  (println (escape (fn [k] 42)))
+  ;; 3. call/cc spelling, bound in a let
+  (let [v (call/cc (fn [^linear k] (k 5)))]
+    (println (+ v 10)))
+  ;; 4. the escape continuation reaches a handler case in a callee: the
+  ;;    jumped-over perform's defer fires at the landing
+  (println (+ 100 (escape (fn [k] (with-handle k)))))
+  (note "done")
+  0)

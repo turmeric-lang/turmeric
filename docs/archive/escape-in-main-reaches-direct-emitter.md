@@ -26,10 +26,9 @@ helper is the workaround.
 A `main` that is not the d2b shape is permanently routed to the direct
 emitter (`SIG-MAIN` in the `TUR_TRACE_EVICT=1` trace, emit_cps_ir.c
 `fn_is_main && !fn_is_d2b_main`), and the direct emitter has no lowering for
-`EX_CALLCC` -- it prints the message above (src/compiler/emit_expr.c, the
-`EX_CALLCC` arm) and emits nothing for the expression.  The build still
-runs cc on the rest, so the program may link and run with the escape
-silently missing, or fail to compile, depending on what surrounded it.
+`EX_CALLCC` -- its arm (src/compiler/emit_expr.c) prints the message above
+and calls `abort()`: the compiler dies on a legal program with no
+diagnostic and no source location.
 
 ## Fix directions
 
@@ -40,3 +39,19 @@ silently missing, or fail to compile, depending on what surrounded it.
 - At minimum, make the arm a real `TUR-E` diagnostic that names the
   workaround and stops the build, instead of a message on stderr and an
   empty expression.
+
+## Resolved 2026-10-11
+
+Direction 1, at the root: `fn_is_d2b_main` (src/compiler/emit_cps_ir.c)
+now makes a zero-arg `main` a CPS candidate when its body directly holds a
+`call/cc` / `escape`, as it already did for a reset / shift or a `handle`.
+The test is `cps_expr_contains_callcc` (src/passes/cps.c), the coloring
+walk `cps_directly_uses_control` parameterized to seed on `EX_CALLCC`
+alone, so it walks exactly the operand positions the coloring pass walks
+(call arguments, builtins, `match` arms, the Saffron `any` seams, ...)
+rather than a second hand-written subset.  The candidate goes through the
+same taint fixpoint and falls back the same way as a handle-installing
+main.  Fixture `tests/fixtures/escape-in-main`: the escape taken, the
+receiver ignoring `k`, the `call/cc` spelling in a `let`, and the escape
+continuation reaching a handler case in a callee (the perform it jumps
+over fires its pending defer at the landing).
