@@ -63,11 +63,15 @@ has already cost a closed PR (mir#8, 2026-10-10). So:
 - **Every PR targets the default branch**: `main` here, `master` in
   turmeric-lang/mir. Never set a PR's base to another PR's branch, not even
   for a moment.
-- **A change that depends on an open PR**: branch from that PR's branch, so its
-  commits come along, but still target the default branch, and open the
-  description with "Contains #N's commits; merge after #N." The diff shows
-  #N's commits until #N merges; that is the accepted cost. It is also the only
-  way to get CI here -- `ci.yml` runs only for PRs into `main`.
+- **NEVER stack PRs -- the user does not want stacks used, at all.** Do not
+  branch from another open PR's branch, do not merge another PR's branch into
+  yours, and do not write "Contains #N's commits; merge after #N." Merging the
+  first PR of a stack leaves the next one unmergeable, and the user has been
+  burned by that repeatedly. Every PR branches from the default branch and
+  must stand alone. If a change needs something that is only in an open PR,
+  carry the minimal change you need in your own PR (identical hunks merge
+  cleanly once the other PR lands), or wait for the other PR to merge and
+  branch from the default branch then. If neither works, ask the user.
 - **Never delete, recreate or restore a branch** to repair a PR. Claude Code
   sessions cannot delete remote branches (the git proxy answers HTTP 403, which
   `git push --delete` reports as "Everything up-to-date"), so a recreated branch
