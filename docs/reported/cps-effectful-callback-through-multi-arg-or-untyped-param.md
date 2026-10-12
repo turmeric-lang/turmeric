@@ -17,8 +17,16 @@ argument in tail and join position, captureless and capturing, a struct
 result, an Option argument and an Option result; every line equals `tur
 --interpret`; passes the JIT harness). An aggregate wider than 16 bytes is
 still refused at compile time (`fn_sig_ok`: the lambda's `__cps` signature).
-Also seen, not fixed: the untyped `^fat` shape below draws a false TUR-W0033
-("handler clause for 'Ask' is unreachable") beside its refusal.
+Found the same day and fixed: the untyped `^fat` shape below drew a false
+TUR-W0033 ("handler clause for 'Ask' is unreachable") beside its refusal --
+the effect pass charged an effectful argument to the call only for a TYPED or
+poly fn parameter (`src/passes/effect_check.c`); an untyped `^fat` parameter
+is as open as a bare `: fn` now. Pinned by
+`tests/fixtures/errors/cps-untyped-fat-effectful-callback` (the refusal in
+`expected.diag`, the warning's absence in the new `unexpected.diag`, which
+`tests/run.sh` now honours for negative fixtures). The refusal itself stays:
+with no signature the call through the parameter can be neither threaded nor
+given a direct fallback; a typed parameter compiles.
 
 **Narrowed 2026-10-09: scalar arguments and results thread, pointer
 results and capturing closures of those kinds too.**
