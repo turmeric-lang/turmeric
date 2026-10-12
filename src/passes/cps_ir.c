@@ -3139,6 +3139,77 @@ static CTerm *defer_pushes_before(CpsB *b, Expr **items, uint32_t i, CTerm *rest
     return rest;
 }
 
+/* P5b's admission: the index of the last NON-defer item of `do` block `e` --
+ * its value -- when `e` carries at least one `(defer D)` whose body is
+ * control-free (safe_to_delegate), else -1.  E3b (owning-cloneable-capture):
+ * the elaborator APPENDS an auto-inserted scope-exit drop `(defer (rc/drop r))`
+ * AFTER the real body, so the value item need not be the last item; trailing
+ * defers are threaded like any other (they fire after the value is produced --
+ * through the reset -- before delivery), which is what lets an owning `rc` the
+ * CPS-colored fn OWNS ride a cloneable capture without a hand-written drop. */
+static int do_defer_threadable(CpsB *b, const Expr *e) {
+    if (!e || e->kind != EX_DO) return -1;
+    Expr **items = e->as.do_.items;
+    bool has_defer = false;
+    int tail_idx = -1;
+    for (uint32_t i = 0; i < e->as.do_.n; i++) {
+        const Expr *it = ascribe_peel(items[i]);
+        if (it && it->kind == EX_DEFER) {
+            has_defer = true;
+            if (!safe_to_delegate(b, it->as.defer_.body)) return -1;
+        } else {
+            tail_idx = (int)i;
+        }
+    }
+    return has_defer ? tail_idx : -1;
+}
+
+/* P5b (cps-runtime-finish): thread `do` block `e`'s `(defer D)` items into its
+ * continuation.  The block's value (item `tail_idx`) is bound to `x`, then each
+ * defer body fires, in reverse-declaration (LIFO) order, then `rest` runs.  A
+ * `__cps` function establishes no defer frame, so this is how an explicit defer
+ * -- "run D at this block's scope exit, LIFO" -- is modelled: through any
+ * perform in the value, before the value is delivered.  Matches the direct
+ * emitter's tur_frame fire-LIFO order.
+ *
+ * Shared by the tail translator (`rest` delivers x to the block's kont) and
+ * the bind translator (`rest` is whatever follows the block): a `let` whose
+ * body defers, sitting in a `do` that defers too, is a block in BIND position
+ * (cps-defer-in-let-body-under-deferring-do-evicts -- before this the bind
+ * arm had no P5b and the inner defer evicted the whole function). */
+static CTerm *cps_do_thread_defers(CpsB *b, const Expr *e, int tail_idx,
+                                   CVar x, CTerm *rest) {
+    Expr **items = e->as.do_.items;
+    uint32_t n = e->as.do_.n;
+    /* Thread defer bodies in declaration order so they EXECUTE in
+     * reverse-declaration (LIFO) order after x is bound.  A pop marker sits
+     * before each fire (defer-skipped-on-panic-in-cps-function): from there on
+     * D is no longer pending, so a panic inside D's own body fires only the
+     * defers beneath it. */
+    CTerm *chain = rest;
+    for (uint32_t i = 0; i < n; i++) {
+        const Expr *it = ascribe_peel(items[i]);
+        if (!it || it->kind != EX_DEFER) continue;
+        CVar d = fresh_cvar(b, &it->as.defer_.body->type);
+        chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
+        chain = defer_marker(b, chain, NULL, it->as.defer_.body);
+    }
+    /* Bind the value item (threading any perform continuation), then
+     * push-mark the defers declared between the previous non-defer item and
+     * it: they are pending while it runs. */
+    chain = cps_bind(b, items[tail_idx], x, chain);
+    chain = defer_pushes_before(b, items, (uint32_t)tail_idx, chain);
+    /* Prepend the non-defer statements before the value, in order. */
+    for (int i = tail_idx - 1; i >= 0; i--) {
+        const Expr *it = ascribe_peel(items[i]);
+        if (it && it->kind == EX_DEFER) continue;
+        CVar discard = fresh_cvar(b, &items[i]->type);
+        chain = cps_bind(b, items[i], discard, chain);
+        chain = defer_pushes_before(b, items, (uint32_t)i, chain);
+    }
+    return chain;
+}
+
 static bool plan_autodrop(const Expr *e, AutodropPlan *pl) {
     memset(pl, 0, sizeof(*pl));
     if (!e || e->kind != EX_DO || e->as.do_.n == 0) return false;
@@ -5067,63 +5138,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * (e.g. `effect-defer`: `(do (defer (println "cleanup")) (perform
              * (Ask)))` prints cleanup then returns the resumed value). */
             {
-                Expr **items = e->as.do_.items;
-                bool has_defer = false, defer_ok = true;
-                int tail_idx = -1;   /* last NON-defer item -- the do's value */
-                for (uint32_t i = 0; i < n; i++) {
-                    const Expr *it = ascribe_peel(items[i]);
-                    if (it && it->kind == EX_DEFER) {
-                        has_defer = true;
-                        if (!safe_to_delegate(b, it->as.defer_.body)) defer_ok = false;
-                    } else {
-                        tail_idx = (int)i;
-                    }
-                }
-                /* E3b (owning-cloneable-capture): the elaborator APPENDS an
-                 * auto-inserted scope-exit drop `(defer (rc/drop r))` AFTER the
-                 * real body, so the value item is not the last item -- trailing
-                 * defer(s) follow it.  The original P5b threading bailed on a
-                 * defer tail (`tail_idx != n-1`); it is allowed now, using the
-                 * last non-defer item as the value and threading the
-                 * trailing defer into the continuation (fires after the value is
-                 * produced -- through the reset -- before delivery), exactly the
-                 * straight-line drop the explicit-drop channel already emits.  This
-                 * is what lets an owning `rc` the CPS-colored fn OWNS ride a
-                 * cloneable capture without a hand-written drop.  Unconditional
-                 * since owning-cloneable-capture graduated (2026-07-20); a defer
-                 * tail no longer bails. */
-                if (has_defer && defer_ok && tail_idx >= 0) {
-                    CVar x = fresh_cvar(b, &items[tail_idx]->type);
+                int tail_idx = do_defer_threadable(b, e);
+                if (tail_idx >= 0) {
+                    CVar x = fresh_cvar(b, &e->as.do_.items[tail_idx]->type);
                     CTerm *deliver = new_term(b, CT_APPCONT);
                     deliver->as.appcont.kont = kont;
                     deliver->as.appcont.v = atom_cvar(x);
-                    /* Thread defer bodies in declaration order so they EXECUTE in
-                     * reverse-declaration (LIFO) order after x is bound.  A pop
-                     * marker sits before each fire (defer-skipped-on-panic-in-
-                     * cps-function): from there on D is no longer pending, so a
-                     * panic inside D's own body fires only the defers beneath it. */
-                    CTerm *chain = deliver;
-                    for (uint32_t i = 0; i < n; i++) {
-                        const Expr *it = ascribe_peel(items[i]);
-                        if (!it || it->kind != EX_DEFER) continue;
-                        CVar d = fresh_cvar(b, &it->as.defer_.body->type);
-                        chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
-                        chain = defer_marker(b, chain, NULL, it->as.defer_.body);
-                    }
-                    /* Bind the value item (threading any perform continuation),
-                     * then push-mark the defers declared between the previous
-                     * non-defer item and it: they are pending while it runs. */
-                    chain = cps_bind(b, items[tail_idx], x, chain);
-                    chain = defer_pushes_before(b, items, (uint32_t)tail_idx, chain);
-                    /* Prepend the non-defer statements before the value, in order. */
-                    for (int i = tail_idx - 1; i >= 0; i--) {
-                        const Expr *it = ascribe_peel(items[i]);
-                        if (it && it->kind == EX_DEFER) continue;
-                        CVar discard = fresh_cvar(b, &items[i]->type);
-                        chain = cps_bind(b, items[i], discard, chain);
-                        chain = defer_pushes_before(b, items, (uint32_t)i, chain);
-                    }
-                    return chain;
+                    return cps_do_thread_defers(b, e, tail_idx, x, deliver);
                 }
             }
             CTerm *rest = cps_tail(b, e->as.do_.items[n - 1], kont);
@@ -5622,6 +5643,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     }
                 }
                 return r;
+            }
+            /* P5b in bind position: see cps_do_thread_defers. */
+            {
+                int tail_idx = do_defer_threadable(b, e);
+                if (tail_idx >= 0)
+                    return cps_do_thread_defers(b, e, tail_idx, x, rest);
             }
             CTerm *r = cps_bind(b, e->as.do_.items[n - 1], x, rest);
             for (int i = (int)n - 2; i >= 0; i--) {

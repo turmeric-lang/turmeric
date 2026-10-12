@@ -11,7 +11,7 @@ emit_abi_constraint_var_bindings emit_core.c 1
 emit_abi_constraint_var_bindings emit_module.c 1
 emit_abi_fn_value_signature emit_module.c 1
 emit_dispatch_tyvar emit_core.c 1
-emit_dispatch_tyvar emit_module.c 1
+emit_dispatch_tyvar emit_module.c 2
 emit_reresolve_disp_type emit_core.c 3
 emit_reresolve_disp_type emit_expr.c 1
 emit_reresolve_disp_type emit_module.c 1

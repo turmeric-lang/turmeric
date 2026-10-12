@@ -6160,6 +6160,26 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
     Type bound;
     TypeClassInstance *inst = NULL;
     bool abstract_return_dispatch = false;
+    /* associated-type-unusable-nullary-and-generic (the generic spelling):
+     * inside a constrained generic the expected type can be the UNREDUCED
+     * projection itself -- `(:: (empty) (Inner A))`, or a `let` annotated
+     * `(Inner A)` -- which names the dispatch variable `A` outright.  No
+     * instance binds `Inner` to a type variable, so the instance search below
+     * would refuse it; instead it is the abstract-tyvar return dispatch every
+     * other return-directed method gets at `A` (a representative instance,
+     * re-resolved per monomorph by emit and the interpreter), with the call
+     * keeping the projection as its type so each spec reduces it. */
+    bool assoc_proj_at_tyvar = false;
+    if (assoc_idx >= 0 && e->expected_type &&
+        e->expected_type->kind == TY_TYVAR &&
+        e->expected_type->as.tyvar_.assoc_of &&
+        e->expected_type->as.tyvar_.assoc_arg &&
+        e->expected_type->as.tyvar_.assoc_arg->kind == TY_TYVAR &&
+        e->expected_type->as.tyvar_.assoc_arg->as.tyvar_.name) {
+        const Symbol *an = tc->assoc_type_names[assoc_idx];
+        const Symbol *po = e->expected_type->as.tyvar_.assoc_of;
+        assoc_proj_at_tyvar = an && (po == an || strcmp(po->name, an->name) == 0);
+    }
     if (!e->expected_type) {
         /* Mechanism B (return-type-dispatch-nullary-arrow plan, T3): with no
          * expected type a nullary arrow method (e.g. Category `ident`) has
@@ -6189,7 +6209,7 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
                       name->name, name->name);
             return NULL;
         }
-    } else if (assoc_idx >= 0) {
+    } else if (assoc_idx >= 0 && !assoc_proj_at_tyvar) {
         /* half 1: the result is the class's associated type, so the expected
          * type is an instance's BINDING of it, not the dispatch variable.  The
          * ascription that spelled the projection names the instance
@@ -6232,9 +6252,12 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
             }
         }
     } else {
-        /* Bind the dispatch tyvar from the expected type (bare or structured). */
-        if (!rt_unify_return(&meth->return_type, e->expected_type, disp_tv,
-                             &bound)) {
+        /* Bind the dispatch tyvar from the expected type (bare or structured);
+         * a projection at a type variable names it directly (above). */
+        if (assoc_proj_at_tyvar) {
+            bound = *e->expected_type->as.tyvar_.assoc_arg;
+        } else if (!rt_unify_return(&meth->return_type, e->expected_type, disp_tv,
+                                    &bound)) {
             diag_emit(DIAG_ERROR, call->span,
                       "ascribed type does not match the result shape of '%s'",
                       name->name);
@@ -6558,7 +6581,9 @@ Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
         tur_mangle_ident(name->name, dict_expr->as.dict_.method_name,
                          sizeof(dict_expr->as.dict_.method_name));
         out->as.call_.dict_arg = dict_expr;
-        out->type = bound;  /* keep the abstract tyvar for emit re-resolution */
+        /* keep the abstract tyvar for emit re-resolution -- or the projection
+         * over it, which emit_dispatch_tyvar maps back to its argument */
+        if (!assoc_proj_at_tyvar) out->type = bound;
     }
     return out;
 }

@@ -4946,6 +4946,29 @@ static bool body_has_dispatch_on_app_tyvar(
             if (r) return true;
         }
     }
+    /* A return-directed method dispatched on an abstract type variable --
+     * `(:: (dflt) A)`, or `(:: (empty) (Inner A))` through its projection --
+     * whose variable this call binds to a NOMINAL type.  Two `defopaque ... :int`
+     * instances share the carrier, so `abi_changes` stays false; the receiver
+     * tests below need a receiver, and a nullary method has none.  So no spec
+     * was minted and the carrier base, which bakes the representative instance,
+     * answered for every instantiation: `(get-dflt (:: 1 W))` printed V's
+     * default, silently.  The same TY_ADT / TY_APP gate as the receiver test,
+     * so a primitive binding (whose own C type already splits it) mints
+     * nothing new. */
+    if (e->kind == EX_CALL && e->as.call_.dict_arg) {
+        Type dt;
+        if (emit_dispatch_tyvar(e, &dt) && dt.kind == TY_TYVAR &&
+            dt.as.tyvar_.name && !dt.as.tyvar_.assoc_of) {
+            for (uint8_t i = 0; i < n_bindings; i++) {
+                if (bindings[i].name &&
+                    strcmp(bindings[i].name, dt.as.tyvar_.name) == 0 &&
+                    (bindings[i].type.kind == TY_APP ||
+                     bindings[i].type.kind == TY_ADT))
+                    return true;
+            }
+        }
+    }
     if (e->kind == EX_CALL && e->as.call_.dict_arg && e->as.call_.n_args >= 1) {
         /* nested-construct/constrained-instance: a RETURN-dispatched inner method
          * call (`(:: (dec tag) (Result A cstr))`) re-dispatches to the per-A

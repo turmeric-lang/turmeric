@@ -1,5 +1,12 @@
 # An associated type cannot be a nullary method's only class mention, or named at a type variable
 
+**RESOLVED 2026-10-12.** The last open shape -- the nullary method called
+inside a generic at the projection, `(:: (empty) (Inner A))` -- compiles and
+runs on both engines; see "Fixed 2026-10-12" at the end. What still refuses is
+a call with no expected type at all, or a bare type that several instances bind
+the associated type to; both are genuine ambiguity, and each diagnostic says
+what to write instead.
+
 **Narrowed again 2026-10-09: half 1 is fixed.** `(empty [] : Inner)` can be
 called: `(let [z : (Inner W) (empty)] ...)` dispatches to `Box [W]` through the
 projection the annotation spelled, `(:: (empty) Pt)` through the one instance
@@ -282,3 +289,53 @@ but at a concrete type the projection is reduced where it is parsed
 typed.  A fix needs the ascription to keep the projection it was written as
 (or the return-dispatch path to accept one), which is the design question
 this half is left on.  The witness-parameter workaround above still applies.
+
+## Fixed 2026-10-12: the nullary method at a projection over a type variable
+
+Inside `(defn empty-of [A] [(Box A)] [x : A] : (Inner A) ...)`, the 2026-10-09
+fix still refused `(:: (empty) (Inner A))` and `(let [z : (Inner A) (empty)]
+...)`: "no instance of 'Box' binds its associated type 'Inner' to tyvar". The
+expected type is the UNREDUCED projection (half 2's `TY_TYVAR` carrying
+`assoc_of` / `assoc_arg`), and the associated-type arm looked for an instance
+binding `Inner` to that type variable.
+
+- **Elaboration** (`elab_try_return_dispatch`, `src/compiler/elab_typeclasses.c`).
+  A projection of the method's own associated type at a type variable names
+  the dispatch variable outright, so it takes the path every return-directed
+  method takes at an abstract variable (`(:: (dflt) A)`): a representative
+  instance, tagged with the dictionary for per-instantiation re-resolution --
+  but the call keeps the projection as its type, so each instantiation reduces
+  it (`int` at W, `cstr` at V).
+- **Emission** (`emit_dispatch_tyvar`, `src/compiler/emit_core.c`). A
+  dictionary-tagged call whose result is a projection dispatches on the
+  projection's ARGUMENT; the projection's own spec binding is the reduced type,
+  which names no instance.
+- **Interpreter** (`src/turi/eval.c`, the frame-dictionary gate). The same
+  mapping before the frame's dictionary is looked up by the dispatch
+  variable's name.
+
+Found on the way and fixed with it, compiled only and pre-existing: a
+constrained generic whose ONLY class call is return-directed -- no receiver --
+got no per-instance specialization when the instances share the int carrier
+(`defopaque W :int`, `defopaque V :int`). The spec-minting probe
+(`body_has_dispatch_on_app_tyvar`, `src/compiler/emit_module.c`) asked only
+about dispatch calls with a receiver, so the carrier base, which bakes the
+representative, answered for every instantiation: `(get-dflt (:: 1 W))`
+printed V's default, silently. A receiver-dispatched call anywhere in the body
+(`typeclass-nullary-method-newtype-tyvar`'s `combine`) minted the spec and
+hid it. The probe now also asks a dictionary-tagged call's dispatch variable
+(through `emit_dispatch_tyvar`, so a projection counts) and mints when it is
+bound to a nominal type, the receiver test's own gate.
+
+Pinned by `tests/fixtures/typeclass-assoc-nullary-method-generic` (the
+projection in an ascription, in a `let`, through a generic relay, and beside a
+receiver-dispatched method in a `(Vec (Inner B))`, at an `int`, a `cstr` and a
+struct instance, all three `defopaque :int`) and
+`tests/fixtures/typeclass-return-dispatch-only-newtype-spec` (the newtype
+collapse, through an ascription, a `let` and a relay, next to an `int`
+instance). Both agree with `tur --interpret` line for line.
+
+Found on the way, not fixed: inside such a generic, `(let [v : (Vec (Inner A))
+(vec-new)] ...)` keeps `vec-new`'s own un-instantiated `(Vec A)`, which then
+reads as the CALLER's `A` -- see
+[generic-result-tyvar-captured-under-projection-expected](../reported/generic-result-tyvar-captured-under-projection-expected.md).

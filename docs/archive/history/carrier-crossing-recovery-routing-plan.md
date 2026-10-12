@@ -117,6 +117,7 @@ plan was filed against).
 |---|---|---|
 | `emit_core.c` `emit_reresolve_disp_type` dispatch-tyvar identification | ROUTED (delegates to `emit_dispatch_tyvar`) | -- |
 | `emit_module.c` `emit_call_dispatches_on_spec_tyvar` tyvar identification | MIGRATED | inline copy deleted; now calls `emit_dispatch_tyvar` |
+| `emit_module.c` `body_has_dispatch_on_app_tyvar` receiver-less return dispatch | ROUTED | added 2026-10-12; a nullary return-directed method on an abstract tyvar (`(:: (dflt) A)`) has no receiver for the probe's other tests, so its dispatch tyvar is asked through `emit_dispatch_tyvar` (which maps an associated-type projection result to its argument) to decide whether this binding mints a spec |
 | `emit_core.c` constraint-var resolution tail (`param_idx`->elem) | MIGRATED | param_idx->element mapping routed through shared `emit_abi_constraint_var_bindings`; struct-strict extraction stays site-local |
 | `emit_module.c` `emit_abi_register_call` constraint-binding augmentation | MIGRATED | same `param_idx`->element kernel; any-TY_APP extraction stays site-local |
 | `emit_core.c`/`emit_module.c` constraint-var vs. `emit_ground_constraint_var` | NOT MERGED (by design) | `emit_ground_constraint_var` differs (param_idx<0 + concreteness gating); merge would change instance selection |

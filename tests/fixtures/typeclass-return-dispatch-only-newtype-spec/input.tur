@@ -1,0 +1,38 @@
+;; A constrained generic whose ONLY class call is return-directed --
+;; `(:: (dflt) A)`, no receiver -- over instances that share the int carrier
+;; (`defopaque ... :int`).  The C signature does not change between W and V,
+;; and the spec-minting probe only looked at dispatch calls that HAVE a
+;; receiver, so no per-instance spec was minted: the carrier base baked the
+;; representative instance and `(get-dflt (:: 1 W))` printed V's default --
+;; silently, compiled only (the interpreter reads the frame's dictionary).
+;; A receiver-dispatched call anywhere in the body (typeclass-nullary-method-
+;; newtype-tyvar's `combine`) minted the spec and hid it.
+(defclass Dflt [a]
+  (dflt [] : a))
+(defopaque W :int)
+(defopaque V :int)
+(definstance Dflt [W] (dflt [] (:: 7 W)))
+(definstance Dflt [V] (dflt [] (:: 8 V)))
+(definstance Dflt [int] (dflt [] 9))
+
+(defn get-dflt [A] [(Dflt A)] [x : A] : A
+  (:: (dflt) A))
+
+;; the same through a let and a relay
+(defn get-let [^Dflt A] [x : A] : A
+  (let [d : A (dflt)]
+    d))
+
+(defn relay [^Dflt A] [x : A] : A
+  (get-let x))
+
+(defn main [] : int
+  (println (:: (get-dflt (:: 1 W)) int))
+  (println (:: (get-dflt (:: 1 V)) int))
+  (println (get-dflt 1))
+  (println (:: (get-let (:: 1 W)) int))
+  (println (:: (get-let (:: 1 V)) int))
+  (println (:: (relay (:: 1 W)) int))
+  (println (:: (relay (:: 1 V)) int))
+  (println (relay 1))
+  0)

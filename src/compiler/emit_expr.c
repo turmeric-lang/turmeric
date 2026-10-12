@@ -11340,6 +11340,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         note_call_ret(ctx, emit_type_c_name(ctx, e->type));
                     }
                 }
+                /* generic-closure-carrier-bridges-missing (Defect 1): the same
+                 * readback for a POINTER result.  A closure lifted out of a
+                 * generic -- `(fn [] : A v)` in `(capture [A] ...)` -- gets a
+                 * per-spec clone only when `A` changes the register class
+                 * (float, by-value aggregate), so a `cstr` instance calls the
+                 * shared thunk, which returns the int64 carrier.  The call's
+                 * own type is the grounded pointer; without this the carrier
+                 * word reached `puts` as an integer, a hard -Wint-conversion
+                 * error on gcc 14 / clang 15+.  Keyed on the thunk's emitted
+                 * return spelling, as above, so a thunk that already returns
+                 * the pointer is left alone. */
+                else {
+                    Type rt = emit_resolve_type(ctx, e->type);
+                    const char *want = emit_type_c_name(ctx, rt);
+                    const char *rct = emit_sig_lookup_ret_ctype(thunk_name);
+                    if (rct && strcmp(rct, "int64_t") == 0 && want &&
+                        strchr(want, '*') != NULL) {
+                        Buf c; buf_init(&c);
+                        buf_printf(&c, "((%s)(intptr_t)(%s))", want, result);
+                        buf_putc(&c, '\0');
+                        free(result);
+                        result = strdup(c.data);
+                        buf_free(&c);
+                        note_call_ret(ctx, want);
+                    }
+                }
                 for (uint32_t i = 0; i <= e->as.call_.n_args; i++) free(arg_strs[i]);
                 free(arg_strs);
                 free(thunk_name);
@@ -15580,12 +15606,35 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * is EMITTED with as the int64 word (an inline-C primitive's
                  * `(Vec A)` receiver).  The word is the pointer; passing it
                  * bare was an int-conversion error under clang and gcc 14. */
+                /* generic-closure-carrier-bridges-missing (Defect 2): a
+                 * CAPTURE read in a closure body is spelled through the env
+                 * (`__env_X->values`), so the local table above knows nothing
+                 * of it -- but the env struct declared its field at the type
+                 * resolved under the active spec, a concrete pointer in a
+                 * per-spec clone (`tur_adt_Vec__float * values`).  Handed to
+                 * the generic carrier `vec_hyget(int64_t, ...)` it needs the
+                 * same word cast. */
+                const char *cap_ct = NULL;
+                if (arg_expr && arg_expr->kind == EX_VAR &&
+                    arg_expr->as.var.binding && ctx->closure &&
+                    ctx->env_var_name) {
+                    const Binding *ab = arg_expr->as.var.binding;
+                    for (uint8_t ci = 0; ci < ctx->closure->n_captures; ci++) {
+                        if (ctx->closure->captures[ci] != ab) continue;
+                        /* An earlier rule may already have bridged it. */
+                        if (!ab->is_global && ab->type.kind != TY_FN && raw &&
+                            strncmp(raw, "(int64_t)", 9) != 0)
+                            cap_ct = emit_type_c_name(ctx, ab->type);
+                        break;
+                    }
+                }
                 if (fn_binding && !fn_binding->closure_fn_binding && raw &&
-                    (emit_str_is_bare_ident(raw) ||
+                    (cap_ct || emit_str_is_bare_ident(raw) ||
                      (strncmp(raw, "__g->", 5) == 0 &&
                       emit_str_is_bare_ident(raw + 5)))) {
                     const char *sp = emit_sig_lookup_param_ctype(fn_name, i);
-                    const char *rc = emit_localvar_lookup_ctype(raw);
+                    const char *rc = cap_ct ? cap_ct
+                                            : emit_localvar_lookup_ctype(raw);
                     size_t rL = rc ? strlen(rc) : 0;
                     size_t sL = sp ? strlen(sp) : 0;
                     if (sp && strcmp(sp, "int64_t") == 0 && rL >= 1 &&

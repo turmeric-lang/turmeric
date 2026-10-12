@@ -9,7 +9,7 @@
 # all" for a program that declares two.  They are parked now and retried once
 # an instance registers.  Both back ends, then the instance-less program,
 # which must still report the error.  See
-# docs/reported/associated-type-unusable-nullary-and-generic.md.
+# docs/archive/associated-type-unusable-nullary-and-generic.md.
 set -e
 FIXTURE_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "== compiled"
