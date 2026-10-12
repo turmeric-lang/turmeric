@@ -6918,6 +6918,32 @@ static const char *find_mono_clone_for_call(EmitCtx *ctx, const Binding *fn,
             if (ok) { hit2 = spec->clone_name; n_hit2++; }
         }
         if (n_hit2 == 1) return hit2;
+        /* Gap H siblings: two instantiations at nominal types that share the
+         * int carrier (`(go (:: n P) 1)` / `(go (:: n Q) 2)` over two
+         * `defopaque :int` instances) mint `..._int64_t` and `..._int64_t__h1`,
+         * which no C spelling tells apart -- so both passes tie and the call
+         * went to the BASE, which nothing else calls and so is never emitted:
+         * an undefined reference at link time.  The emitter recorded which
+         * clone each call resolved to when it minted it (keyed on the call
+         * node and the enclosing spec, emit_abi_record_specialized_call);
+         * the direct emitter's call naming reads the same entry. */
+        if (call_expr) {
+            const char *outer = ctx->current_abi_specialization
+                ? ctx->current_abi_specialization->clone_name : NULL;
+            for (uint32_t i = 0; i < ctx->n_specialized_calls; i++) {
+                if (ctx->specialized_call_exprs[i] != call_expr ||
+                    ctx->specialized_call_outer[i] != outer)
+                    continue;
+                const char *nm = ctx->specialized_call_names[i];
+                for (uint32_t k = 0; nm && k < ctx->n_abi_specializations; k++) {
+                    const EmitAbiSpecialization *spec = &ctx->abi_specializations[k];
+                    if (spec->binding == fn && spec->clone_name &&
+                        strcmp(spec->clone_name, nm) == 0)
+                        return spec->clone_name;
+                }
+                break;
+            }
+        }
     }
     return NULL;
 }
@@ -7754,14 +7780,17 @@ static void cps_site_clear(CE *ce, char *set) {
  * that only invokes the arm binder or a tag predicate).  Only a binder
  * declared as the by-value aggregate itself: a carrier word or a pointer
  * names storage this binder does not own -- as emit_letraw_fnfield_reap. */
-static void emit_letcall_sum_closure_reap(CE *ce, const CTerm *t, const char *bn) {
-    const Expr *let = t->as.letcall.sum_let;
-    uint32_t i = t->as.letcall.sum_let_idx;
-    if (!let || t->as.letcall.x.ty == TY_NIL || t->as.letcall.x.ty == TY_NEVER) return;
-    const char *bct = binder_ctype_full(ce->ctx, t->as.letcall.x.ty, t->as.letcall.x.type);
+static void emit_sum_let_closure_reap(CE *ce, const Expr *let, uint32_t i,
+                                      CVar x, const char *bn) {
+    if (!let || x.ty == TY_NIL || x.ty == TY_NEVER) return;
+    const char *bct = binder_ctype_full(ce->ctx, x.ty, x.type);
     if (!bct || strncmp(bct, "tur_adt_", 8) != 0 || strchr(bct, '*')) return;
     if (!emit_let_binding_sum_closure_freeable(ce->ctx, let, i)) return;
     emit_sum_closure_payload_reap(ce->ctx, ce->out, bn, let->as.let_.bindings[i].binding->type);
+}
+static void emit_letcall_sum_closure_reap(CE *ce, const CTerm *t, const char *bn) {
+    emit_sum_let_closure_reap(ce, t->as.letcall.sum_let, t->as.letcall.sum_let_idx,
+                              t->as.letcall.x, bn);
 }
 
 /* E2a lookup key for a `via_registry` callee.
@@ -9953,6 +9982,9 @@ static void emit_letraw(CE *ce, const CTerm *t) {
                     "__dk_reap_closure((intptr_t)TUR_UNTAG(%s));", bn);
     }
     emit_letraw_fnfield_reap(ce, t, bn);
+    /* The constructor spelling of the CT_LETCALL's sum-closure reap. */
+    emit_sum_let_closure_reap(ce, t->as.letraw.sum_let, t->as.letraw.sum_let_idx,
+                              t->as.letraw.x, bn);
     free(bn);
     free(rhs);
     emit_term(ce, t->as.letraw.body);

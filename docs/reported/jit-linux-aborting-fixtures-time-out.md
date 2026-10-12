@@ -1,6 +1,24 @@
 # Aborting fixtures intermittently time out on the Linux JIT leg
 
-**Mitigation landed 2026-10-09, mechanism still unconfirmed.** Next step 2
+**2026-10-12: the 2026-10-09 mitigation was a no-op; fixed, still
+unconfirmed.** It set the limit with `ulimit -c 1`, and bash counts `-c` in
+1024-byte blocks: that is a 1024-byte limit (`bash -c 'ulimit -c 1; grep "core
+file" /proc/self/limits'` prints `1024`), which the kernel pipes like any
+other. Its notice also never reached the job log -- the "Run JIT suites" step
+filters ctest's output to `FAIL` / summary lines -- so its absence proved
+nothing. Of 25 `main` runs with it (2026-10-10 to 2026-10-12, `ci.yml`), 15
+still timed out, 1 to 23 fixtures each, every one an `expected.exit` =
+`nonzero` fixture, still in alphabetical clusters a second or two apart (run
+38186563013: the four `any-cast-*` at 00:05:06-08). No other fixture failed
+in any of them. `run-jit.sh` now sets exactly one byte with `prlimit --pid $$
+--core=1:1` (children inherit it; it says so on stderr either way), and the
+workflow's filter keeps `run-jit:` lines, so the next `JIT engine
+(ubuntu-latest)` log shows whether the runner pipes cores. If the line says
+the limit is set and the clusters stop, archive this; if no `run-jit:` line
+appears at all, the runner does not pipe cores, the hypothesis is wrong, and
+`ASAN_OPTIONS=handle_abort=1` (next steps, 2) is the next thing to try.
+
+**Mitigation landed 2026-10-09 (see above: it did not take effect), mechanism still unconfirmed.** Next step 2
 below is in `tests/run-jit.sh`, in a form that works without confirming
 step 1 first: when `/proc/sys/kernel/core_pattern` is a pipe, the harness
 sets `RLIMIT_CORE` to 1 -- the kernel's one "do not pipe this dump" value

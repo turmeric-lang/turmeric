@@ -36,6 +36,14 @@ fixture's output went only to the artifact below. The artifact is still
 listed as unexpired, but its download host (`*.blob.core.windows.net`) was
 not reachable from that sandbox, so it is still unread.
 
+**Re-checked on CI 2026-10-12.** The `JIT engine (ubuntu-latest)` logs of 27
+`main` runs (`ci.yml`, 2026-10-09 to 2026-10-12, runs 37879711337 to
+38186563013) were read: `r7rs-threads-lifecycle` failed in none of them. The
+step's filter keeps every `FAIL` line, so its absence is a pass. The only
+failures in those runs were the aborting-fixture timeouts of
+[jit-linux-aborting-fixtures-time-out](jit-linux-aborting-fixtures-time-out.md).
+Still one occurrence in all.
+
 **Next step.** The full output is in that run's `jit-ctest-log-ubuntu-latest`
 artifact (ID 11283599190, 90-day retention): look for the
 `r7rs-threads-lifecycle` block and any `ERROR: AddressSanitizer` /

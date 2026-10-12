@@ -4223,6 +4223,11 @@ static bool inst_method_may_retain_param(EmitCtx *ctx, const Binding *fb,
  * for -- the walk is sum_closure_payload_escapes, with the param as the local.
  * Memoized per FnDef; a recursive question reads the in-progress answer,
  * which is "keeps", so a self-call never admits itself. */
+/* Inside a callee's body (the memoized question below) a dictionary dispatch
+ * is not re-resolved: the active spec is the CALLER's, which says nothing
+ * about the callee's type variables, and the memo must not depend on it. */
+static int g_scp_callee_depth = 0;
+
 static bool fn_param_keeps_no_payload_closure(const Binding *fb, uint32_t pi) {
     if (fb && fb->source_binding) fb = fb->source_binding;
     FnDef *fd = scp_fndef_of(fb);
@@ -4231,10 +4236,12 @@ static bool fn_param_keeps_no_payload_closure(const Binding *fb, uint32_t pi) {
     uint32_t bit = 1u << pi;
     if (fd->sumcl_known & bit) return (fd->sumcl_nonretain & bit) != 0;
     fd->sumcl_known |= bit;                 /* in progress: "keeps" */
+    g_scp_callee_depth++;
     bool ok = fndef_cannot_suspend(fd) &&
               !expr_subtree_has_inline_c(fd->body) &&
               fd->params[pi] &&
               !sum_closure_payload_escapes(fd->body, fd->params[pi], 0);
+    g_scp_callee_depth--;
     if (ok) fd->sumcl_nonretain |= bit;
     return ok;
 }
@@ -4293,13 +4300,27 @@ static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int dep
                 while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
                 /* Only a callee known HERE: a dictionary dispatch inside a
                  * generic names a representative instance, not the one that
-                 * runs (emit_reresolve_method_fndef's whole reason to exist). */
+                 * runs (emit_reresolve_method_fndef's whole reason to exist).
+                 * So re-resolve it under the active spec, as the call itself
+                 * will be emitted, and ask the instance method that runs
+                 * (sum-closure-payload-never-dropped, item 1). */
+                const Binding *afb = fb;
                 bool static_callee = !x->as.call_.dict_arg ||
                                      call_dispatch_is_static(x);
+                if (!static_callee && a && a->kind == EX_VAR &&
+                    a->as.var.binding == b && g_scp_ctx &&
+                    g_scp_ctx->current_abi_specialization &&
+                    g_scp_callee_depth == 0) {
+                    FnDef *rfd = emit_reresolve_method_fndef(g_scp_ctx, x);
+                    if (rfd && rfd->binding) {
+                        afb = rfd->binding;
+                        static_callee = true;
+                    }
+                }
                 if (a && a->kind == EX_VAR && a->as.var.binding == b &&
                     static_callee &&
-                    (fn_is_tag_predicate_on(fb, i) ||
-                     fn_param_keeps_no_payload_closure(fb, i)))
+                    (fn_is_tag_predicate_on(afb, i) ||
+                     fn_param_keeps_no_payload_closure(afb, i)))
                     continue;                   /* reads only the tag, or
                                                  * only calls what it matches out */
                 if (sum_closure_payload_escapes(x->as.call_.args[i], b, depth + 1))

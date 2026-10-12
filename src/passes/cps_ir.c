@@ -1315,11 +1315,23 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
      * that atomize its arguments (the closure's own letraw).  Name the let on
      * it, so the emitter can ask whether the binding's live arm holds a
      * closure nothing else reaches and reap it (emit_letcall_sum_closure_reap). */
+    /* The constructor spelling, `(Some <closure>)`, is delegated instead
+     * (delegate_call_atomized): a raw let of a COPY of the call, its closure
+     * argument atomized, binding the same binder. */
+    const Expr *pinit = ascribe_peel(init);
+    bool init_ctor = pinit && pinit->kind == EX_CALL && pinit->as.call_.ctor;
     for (CTerm *u = t; u; ) {
         if (u->kind == CT_LETCALL && u->as.letcall.call_expr == init &&
             u->as.letcall.x.id == bx.id) {
             u->as.letcall.sum_let = let;
             u->as.letcall.sum_let_idx = idx;
+            break;
+        }
+        if (init_ctor && u->kind == CT_LETRAW && u->as.letraw.x.id == bx.id &&
+            u->as.letraw.e && u->as.letraw.e->kind == EX_CALL &&
+            u->as.letraw.e->as.call_.ctor == pinit->as.call_.ctor) {
+            u->as.letraw.sum_let = let;
+            u->as.letraw.sum_let_idx = idx;
             break;
         }
         if (u->kind == CT_LETRAW)       u = u->as.letraw.body;
@@ -4699,6 +4711,14 @@ static CTerm *delegate_call_atomized(CpsB *b, Expr *e, CVar x, CTerm *rest,
             continue;
         if (!safe_to_delegate(b, a)) any_control = true;
         TypeKind k = a->type.kind;
+        /* A function value is one word too -- a closure's env box or a bare
+         * entry -- and binds as one, exactly as the atomized arguments of a
+         * cps->direct call to a named function do (`(some <closure>)`).
+         * Admitted for a CONSTRUCTOR only: `(Some <capturing closure>)` had
+         * no FnDef behind its callee, so it took this fn-VALUE route and a
+         * closure argument (never safe_to_delegate) evicted the function
+         * (sum-closure-payload-never-dropped, "found on the way"). */
+        if (k == TY_FN && e->as.call_.ctor) continue;
         if (!(tierA_scalar_kind(k) || k == TY_FLOAT || k == TY_FLOAT64 ||
               k == TY_FLOAT32))
             all_scalar = false;
