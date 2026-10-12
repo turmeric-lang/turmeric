@@ -192,3 +192,7 @@ idiom, the non-tail twin, and a rest that captures the perform's answer: 1 /
 non-tail outer -- the fallback copy -- an abortive branch after the perform,
 two performs before the resume, two performs of the inner effect in one
 body, a loop body: the copying path's answers on both back ends).
+
+Suite, second pass: `run.sh` 3759/0, `run-leak-check.sh` 178 / 0 / 3
+known-open, the JIT over the effect, CPS, multishot, handle, async, resume,
+defer, shift and reset fixtures 499/0.

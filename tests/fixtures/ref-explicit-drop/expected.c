@@ -2168,9 +2168,19 @@ struct DK {
     bool resume_once;    /* case resumes `k` at most once, non-tail, straight-line */
     bool resume_inplace; /* dk_perform's k: the case was handed the original chain */
     bool splice_into;    /* a rest-of-case frame spliced into a live chain */
+    bool resume_once_dyn; /* resume_once, but through a perform: ask `ss` first */
+    bool multishot;       /* this case may resume its k more than once */
+    bool ss;              /* the chain past this node is single-shot */
 };
+/* Is the chain from `n` on (n included) single-shot?  See the `ss` field. */
+static bool __dk_ss_after(const DK *n) {
+    return n->ss && !((n->kind == DKK_PROMPT && n->tag != DK_ROOT_TAG)
+                      || n->kind == DKK_SHIFT || n->kind == DKK_SHIFT0
+                      || (n->kind == DKK_HANDLER && n->multishot));
+}
 static DK *dk_new(DKKind kind, DK *next) {
-    DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next; return k;
+    DK *k = (DK *)calloc(1, sizeof(DK)); k->kind = kind; k->next = next;
+    k->ss = next ? __dk_ss_after(next) : true; return k;
 }
 static DK *dk_done(void) { return dk_new(DKK_DONE, NULL); }
 static DK *dk_frame(DKFrame fn, intptr_t env, DK *next) {
@@ -2261,6 +2271,10 @@ __attribute__((unused))
 static DK *dk_case_resumes_into(DK *k) { k->case_delivers = true; k->resume_into = true; return k; }
 __attribute__((unused))
 static DK *dk_case_resumes_once(DK *k) { dk_case_resumes_into(k); k->resume_once = true; return k; }
+__attribute__((unused))
+static DK *dk_case_resumes_once_dyn(DK *k) { dk_case_resumes_into(k); k->resume_once_dyn = true; return k; }
+__attribute__((unused))
+static DK *dk_case_multishot(DK *k) { k->multishot = true; return k; }
 /* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry
  * driver instead of resuming inline, keeping deep effectful recursion flat. */
 static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
@@ -2307,6 +2321,7 @@ static DK *dk_hgroup_from_table(const tur_handler_table_t *t, DK *base) {
          * so install as a tail handler (dk_perform yields the resumed chain to
          * the entry driver), matching the static handle path. */
         head = dk_handler_tail(e->dk_tag, (DKHandler)e->dk_fn, (intptr_t)e->env, head);
+        head->multishot = true;   /* a table case's shape is not known here: see `ss` */
     }
     return dk_hgroup(head);
 }
@@ -2337,6 +2352,7 @@ static DK *dk_copy_node(const DK *n) {
     c->case_delivers = n->case_delivers;
     c->resume_into = n->resume_into;
     c->resume_once = n->resume_once;
+    c->resume_once_dyn = n->resume_once_dyn; c->multishot = n->multishot; c->ss = n->ss;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -2797,16 +2813,23 @@ __attribute__((unused))
 static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {
     if (sub->resume_inplace) {
         DK *k = sub; k->resume_inplace = false;
-        if (!borrow) {
-            DK *ge = tail->next, *p = k;
-            while (p && p->next != ge && p->kind != DKK_DONE) p = p->next;
-            if (!p || p->next != ge) {
-                fprintf(stderr, "tur: internal error: resume_once: the case's continuation is not on the perform's chain\n");
-                abort();
-            }
-            p->next = tail; tail->body_env = (intptr_t)p; tail->splice_into = true; tail->borrow_next = false;
+        DK *H = (DK *)k->body_env; k->body_env = 0;
+        DK *ge = borrow ? tail : tail->next, *p = k;
+        while (p && p->next != ge && p->kind != DKK_DONE) p = p->next;
+        if (p && p->next == ge) {   /* the original case continuation: the chain continues into it */
+            if (!borrow) { p->next = tail; tail->body_env = (intptr_t)p; tail->splice_into = true; tail->borrow_next = false; }
+            k->inplace_head = true;
+        } else {
+            /* The resume is made from a COPY of the case's continuation (an
+             * enclosing non-tail case captured across it, resume_once_dyn): its
+             * rest is the copy's, not the chain's, so the resumed part is copied
+             * once -- the perform's frames and H's group -- and continues into
+             * `tail`.  The originals never run; the copy is reap-owned. */
+            DK *c = dk_append(dk_copy_range(k, H), dk_copy_range(H, dk_case_enclosing_real(H)));
+            DK *last = c; while (last->next) last = last->next;
+            last->next = tail; last->borrow_next = borrow != 0;
+            __dk_reap_keep(c); c->inplace_head = true; k = c;
         }
-        k->inplace_head = true;
         if (g_dk_driver) { g_dk_resume_chain = k; g_dk_resume_val = v; TUR_LONGJMP(*g_dk_driver); }
         return dk_run(k, v);
     }
@@ -2963,13 +2986,14 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
           if (tur_panicking) __dk_panic_abandon(k);
           return r0; }
     }
-    if (H->resume_once && !H->shallow && g_dk_driver && !tur_dk_pinned) {
-        k->resume_inplace = true;
+    if ((H->resume_once || (H->resume_once_dyn && __dk_ss_after(dk_case_enclosing_real(H))))
+        && !H->shallow && g_dk_driver && !tur_dk_pinned) {
+        k->resume_inplace = true; k->body_env = (intptr_t)H;   /* body_env: unused on a frame or handler */
         g_dk_case_reopen_hnode = H;
         DKPendPerform pp = { k, H, NULL, g_dk_pend_perform }; g_dk_pend_perform = &pp;
         intptr_t r0 = H->handler(H->handler_env, arg, k);   /* a resume ends in dk_resume_into -> longjmp */
         g_dk_pend_perform = pp.up;
-        k->resume_inplace = false;
+        k->resume_inplace = false; k->body_env = 0;
         if (tur_panicking) { __dk_panic_abandon(k); return r0; }
         __dk_abort_abandon(k, H);   /* answered without resuming: k..H never run */
         if (!tur_panicking) __dk_abort_pending(k, H, pp.up);
