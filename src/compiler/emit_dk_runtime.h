@@ -49,6 +49,11 @@ void emit_tur_jmp_buf_prelude(Buf *out);
 
 void emit_cps_runtime_prelude(Buf *out);
 
+/* Emit __dk_resume_word, the resume of a handler continuation word outside the
+ * case that bound it (resume-of-cont-typed-param-is-a-no-op).  Call once, after
+ * the DK machine and -- when `bridged` -- after the cloneable <-> DK bridge. */
+void emit_dk_resume_word_prelude(Buf *out, bool bridged);
+
 /* True while emit_rt_split_source() is producing the CANONICAL split-runtime
  * text (S2): the committed src/runtime/generated/tur_rt_split*.{c,h}, and the
  * probe cmd_jit hashes against them.  Defined in emit_module.c, where the flag

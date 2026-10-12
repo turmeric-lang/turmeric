@@ -1,0 +1,7 @@
+;; resume-of-cont-typed-param-is-a-no-op: `resume` resumes an effect handler
+;; continuation.  A cloneable `cont` is resumed by calling it, `(k v)`; a
+;; `resume` of one used to compile to its value (the continuation never ran)
+;; and fail at run time under --interpret.
+(defn recv [k : cont] : int (resume k 10))
+(defn main [] : nil
+  (println (reset (+ 1 (shift recv 0)))))

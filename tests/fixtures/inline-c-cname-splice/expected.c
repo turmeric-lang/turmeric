@@ -3129,6 +3129,12 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     if (H_kcopy && !tur_dk_pinned && __dk_reap_take(sub, 1)) dk_free(sub);
     return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
+__attribute__((unused, noinline))
+static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
+    ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */
+    return dk_invoke((DK *)k, w);
+}
+
 /* Phase T21: FiberBlock */
 #ifdef __clang__
 #pragma clang diagnostic push

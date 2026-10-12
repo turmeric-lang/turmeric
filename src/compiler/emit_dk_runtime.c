@@ -146,6 +146,34 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
 "\n");
 }
 
+/* resume-of-cont-typed-param-is-a-no-op: __dk_resume_word resumes a handler
+ * continuation OUTSIDE the case that bound it -- passed to a helper, stored in
+ * a cell -- for a direct-emitted `resume` (emit_effects_resume).  The word is
+ * one of two things, depending on the case that made it: the DK chain
+ * dk_perform handed a one-shot case, or, for a `^multishot` / fn-payload /
+ * __Shift case (case_is_multishot, emit_cps_ir.c), that chain wrapped as a
+ * tur_cloneable_cont by the bridge above.  The helper cannot know which case
+ * its `k` came from, so it asks: a wrapper's first word is its cont_fn, and a
+ * handler case's wrapper always carries __dk_cont_fn there, a value no DK's
+ * first word (its DKKind) can hold.  `bridged` says whether the bridge -- and
+ * so any wrapper -- is in the program; without it every word is a chain.
+ * noinline: inlined into a case that passes a wrapper, gcc's -Warray-bounds
+ * flags the chain arm's store into the 32-byte wrapper, which never runs.
+ * Emitted after the DK machine and, when present, the bridge. */
+void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
+    buf_puts(out,
+"__attribute__((unused, noinline))\n"
+"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n");
+    if (bridged)
+        buf_puts(out,
+"    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn)\n"
+"        return (intptr_t)__dk_cont_fn(((tur_cloneable_cont *)k)->env, (int64_t)w);\n");
+    buf_puts(out,
+"    ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */\n"
+"    return dk_invoke((DK *)k, w);\n"
+"}\n\n");
+}
+
 /* Serial marshaling runtime: the fixed tagged context frames + the resume /
  * serialize / deserialize builtins. Emitted after the DK machine prelude,
  * gated on preamble_uses_serial (emit_module.c). */

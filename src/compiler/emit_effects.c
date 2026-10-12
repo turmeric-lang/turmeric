@@ -1076,13 +1076,10 @@ char *emit_effects_compose_handlers(EmitCtx *ctx, Buf *body, const Expr *e) {
 char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (resume k value) - resume continuation with value.
      *
-     * Phase 19D: k is a FiberBlock* cast to int64_t.
-     * tur_effect_cont_resume(k, v) resumes the fiber via the dispatch fn.
-     *
      * MS1: CK_MULTISHOT k is a tur_cloneable_cont* (int64_t).
      * tur_cloneable_cont_resume(tur_continuation_snapshot(k), v) clones before each resume.
      *
-     * For Phase 18 tur_cont* continuations (TY_CONT), use the old path.
+     * Any other k is a DK chain word, resumed with dk_invoke (below).
      */
     if (e->as.resume_.resume) {
         char *k_var = emit_value(ctx, body, e->as.resume_.resume->k);
@@ -1121,47 +1118,64 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
             free(v_var);
             return tmp;
         }
-        if (k_type.kind == TY_INT) {
-            /* Phase 19D: fiber-based k.
-             * tur_effect_cont_resume always returns int64_t (the fiber's final result),
-             * regardless of the effect's return type. Always capture the return value
-             * so the handler can return it as the handle expression's result. */
-            char *tmp = fresh_tmp(ctx);
-            Type vtype = e->as.resume_.resume->value->type;
-            bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
-            /* Store the resume value into the int64 ABI: a by-value aggregate
-             * boxed (the perform result unboxes it), a float bit-reinterpreted
-             * (a plain cast would truncate the fraction), else a plain cast. */
-            char *v_arg = v_is_nil ? strdup("(int64_t)0")
-                                   : eff_slot_store(vtype, v_var);
-            indent_buf(body, ctx->indent);
-            Buf rcall; buf_init(&rcall);
-            buf_printf(&rcall, "tur_effect_cont_resume((int64_t)(intptr_t)%s, %s)", k_var, v_arg);
-            buf_putc(&rcall, '\0');
-            /* tur_effect_cont_resume returns the fiber's final result in the
-             * int64 ABI.  Load it back to the resume expr's real type: a boxed
-             * aggregate deref'd, a float bit-reinterpreted into a genuine double
-             * local (so a downstream store re-packs it correctly rather than
-             * re-reinterpreting an int as a double).  Plain scalars stay in an
-             * int64_t local, matching the pre-fix ABI the callers expect. */
-            bool res_is_float = (e->type.kind == TY_FLOAT || e->type.kind == TY_FLOAT64
-                                 || e->type.kind == TY_FLOAT32);
-            if (eff_type_boxed(e->type) || res_is_float) {
-                char *ld = eff_slot_load(e->type, rcall.data);
-                buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), tmp, ld);
-                free(ld);
+        /* Every other k is a handler continuation word: the DK chain
+         * dk_perform handed the case (`k = (int64_t)subk`), resumed here
+         * outside the case that bound it -- a helper the case passed it to
+         * (`(defn helper [k v] (resume k v))`), a cell it was stored in, or an
+         * `effect-cont` receiver.  Resume it as the CPS backend's emit_resume
+         * does any k that is not the case's own: dk_invoke runs the captured
+         * chain to the handle and returns what the handle delivers.
+         *
+         * This arm used to be two wrong ones (resume-of-cont-typed-param-is-a-
+         * no-op): a TY_INT k called tur_effect_cont_resume, deleted with the
+         * fiber effect runtime (2026-07-19), so it failed to link; any other
+         * k -- a `cont<int>` annotation is a type variable -- returned the
+         * resume VALUE and never ran the continuation, a silent wrong answer.
+         * A cloneable / escape / serial `cont` never gets here: elab_resume
+         * refuses `resume` on one (it is resumed by calling it, `(k v)`). */
+        Type vtype = e->as.resume_.resume->value->type;
+        bool v_is_nil = (vtype.kind == TY_NIL || vtype.kind == TY_NEVER);
+        char *v_arg;
+        if (v_is_nil) {
+            v_arg = strdup("(int64_t)0");
+        } else {
+            char *st = eff_slot_store(vtype, v_var);
+            /* A boxed aggregate is read back without freeing (the resumed
+             * chain may be re-run), so the per-run reap list owns the box --
+             * as slot_store_reap does on the CPS backend. */
+            if (eff_type_boxed(vtype)) {
+                Buf rb; buf_init(&rb);
+                buf_printf(&rb, "(int64_t)__dk_reap_ptr((intptr_t)%s)", st);
+                buf_putc(&rb, '\0');
+                v_arg = strdup(rb.data);
+                buf_free(&rb);
+                free(st);
             } else {
-                buf_printf(body, "int64_t %s = %s;\n", tmp, rcall.data);
+                v_arg = st;
             }
-            buf_free(&rcall);
-            free(v_arg);
-            free(k_var);
-            free(v_var);
-            return tmp;
         }
+        /* __dk_resume_word (emit_dk_runtime.c) also takes the word a
+         * `^multishot` / fn-payload case wraps its chain in. */
+        Buf rcall; buf_init(&rcall);
+        buf_printf(&rcall, "__dk_resume_word((intptr_t)(%s), (intptr_t)(%s))", k_var, v_arg);
+        buf_putc(&rcall, '\0');
+        char *tmp = fresh_tmp(ctx);
+        indent_buf(body, ctx->indent);
+        if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) {
+            buf_printf(body, "int64_t %s = (int64_t)%s;\n", tmp, rcall.data);
+        } else {
+            char *ld = eff_slot_load(e->type, rcall.data);
+            buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), tmp, ld);
+            free(ld);
+        }
+        buf_free(&rcall);
+        /* The resumed chain may have panicked under a handler and signalled
+         * back through dk_invoke (cps-body-panic-not-propagated). */
+        emit_panic_signal_return(ctx, body);
+        free(v_arg);
         free(k_var);
-        /* Phase 18 path: return value directly */
-        return v_var;
+        free(v_var);
+        return tmp;
     }
     return atom_nil();
 }

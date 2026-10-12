@@ -15523,9 +15523,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * (their callees dk_invoke/dk_copy_range/dk_free are guaranteed present). */
     const bool dk_machine_emitted = shared || cps_uses_delimited || cps_uses_cloneable_dk
                                  || cps_uses_serial || cps_ir_emittable;
-    if (shared || cps_uses_cloneable_dk || (cps_uses_cloneable_rt && dk_machine_emitted)) {
+    const bool dk_bridge_emitted = shared || cps_uses_cloneable_dk
+                                || (cps_uses_cloneable_rt && dk_machine_emitted);
+    if (dk_bridge_emitted) {
         emit_cps_cloneable_bridge_prelude(out);
     }
+    if (dk_machine_emitted)
+        emit_dk_resume_word_prelude(out, dk_bridge_emitted);
     /* CPS10 (CPS5.4): the serial marshaling runtime needs the DK machine. Gate
      * on *presence* of serial syntax (not just lowerable resets) so stdlib
      * save-cont!/resume-cont! never reference an unemitted builtin -- an

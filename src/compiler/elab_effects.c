@@ -1157,6 +1157,27 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
         return out;
     }
 
+    /* resume-of-cont-typed-param-is-a-no-op: the reified shift hands its
+     * receiver the context wrapped as a tur_cloneable_cont, which only the
+     * snapshot resume (CK_MULTISHOT) reads.  A one-shot `effect-cont` receiver
+     * resumes a DK chain (dk_invoke) instead and would run off the wrapper --
+     * the same mismatch the cross-function route refuses above. */
+    {
+        const Type *kpt = receiver_cont_param_type(k_expr);
+        if (kpt && kpt->kind == TY_CONT
+            && (ContFlavor)kpt->as.cont.flavor == CONT_EFFECT
+            && kpt->copy_kind != CK_MULTISHOT) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                "a resuming shift receiver must use a `multishot-effect-cont` or "
+                "`cont` continuation, not a one-shot `effect-cont`\n"
+                "  = help: declare the receiver's continuation parameter "
+                "`multishot-effect-cont` (single-resume receivers work through it "
+                "too), or `cont`");
+            return NULL;
+        }
+    }
+
     Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
     out->as.cloneable_shift_.k_fn = k_expr;
     out->as.cloneable_shift_.body = body;
@@ -3072,6 +3093,29 @@ Expr *elab_resume(Elab *e, const Form *call) {
 
     Expr *k = elab_form(e, call->as.list.items[1]);
     if (!k) return NULL;
+
+    /* resume-of-cont-typed-param-is-a-no-op: `resume` resumes an effect
+     * handler continuation.  A `cont`-typed k is one only when it is
+     * `effect-cont` (CONT_EFFECT); view that one as its int64 carrier, keeping
+     * its copy_kind, exactly as the `(k v)` sugar does (elab_call.c), so both
+     * spellings build the same EX_RESUME.  A cloneable / escape / serial
+     * continuation runs on a different runtime and is resumed by calling it;
+     * `resume` of one used to compile to its value (the continuation never
+     * ran) and failed at run time under `--interpret`, so refuse it here. */
+    if (k->type.kind == TY_CONT) {
+        ContFlavor fl = (ContFlavor)k->type.as.cont.flavor;
+        if (fl != CONT_EFFECT) {
+            const char *fname = fl == CONT_ESCAPE ? "escape-cont"
+                              : fl == CONT_SERIAL ? "serial-cont" : "cont";
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                "resume takes an effect handler continuation, got a `%s`; "
+                "call the continuation instead: (k v)", fname);
+            return NULL;
+        }
+        Type kcar = TYPE_INT;
+        kcar.copy_kind = k->type.copy_kind;
+        k->type = kcar;
+    }
 
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;

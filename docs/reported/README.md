@@ -46,12 +46,6 @@ per-call box.
 | --- | --- | --- |
 | [fn-param-at-type-variable-slot-boxed-per-call](fn-param-at-type-variable-slot-boxed-per-call.md) | low (32 B per call) | A `(fn ...)`-typed parameter (the 16-byte `tur_poly_fn_t` carrier) passed into a type-variable slot -- `(ident d)`, `(unwrap-or o d)`, `(vec-push! v d)` -- was a type error or a cc error. **Fixed 2026-10-12:** boxed into a fat handle there (`EX_POLY_TO_FAT`, typed with the declared signature), both back ends -- `fn-param-through-type-variable-slot`. Left: that box is a 32 B malloc per call nothing frees (the slot may return or store it, and a parameter is not a link-time constant) |
 
-## Found probing the non-tail resume report's residue (filed 2026-10-12)
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [resume-of-cont-typed-param-is-a-no-op](resume-of-cont-typed-param-is-a-no-op.md) | high (silent wrong answer), narrow | `(defn helper [k : cont<int> v : int] : int (resume k v))` compiles to `return v;` -- the direct emitter's `EX_RESUME` has no arm for a `TY_CONT` continuation that is not `^multishot` and falls to a "return the value" path -- so a handler `k` handed to a helper never runs its continuation (`(step 7)` prints 10, `--interpret` 17). On `main` before 2026-10-12. Directions: lower a `TY_CONT` resume through `dk_invoke`, or refuse the shape |
-
 ## Found writing the signal spice's pitch and sequencing examples (filed 2026-10-11)
 
 A generic `cycle` (a closure returning the next value of a list) compiled

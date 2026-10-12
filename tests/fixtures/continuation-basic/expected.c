@@ -3143,6 +3143,12 @@ static TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;
 extern void ** tur_tls_cur_shift_reset_ptr(void);
 #define tur_cur_shift_reset (*(tur_shift_reset_ctx **)tur_tls_cur_shift_reset_ptr())
 #endif
+__attribute__((unused, noinline))
+static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
+    ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */
+    return dk_invoke((DK *)k, w);
+}
+
 /* Phase T21: FiberBlock */
 #ifdef __clang__
 #pragma clang diagnostic push
