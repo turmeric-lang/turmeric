@@ -141,3 +141,7 @@ performs in one body, an outer multi-shot capture across the splice, a
 three-case handle, a direct call before the resume, the handle opened inside
 a multi-shot copy, the value used twice after, a loop body: the copying
 path's answers on both back ends).
+
+Suite: `run.sh` 3757/0, `run-leak-check.sh` 177 / 0 / 3 known-open, the
+JIT over the effect, CPS, multishot, handle, async, resume and defer
+fixtures 474/0.  The repro at 1,000,000 turns: 1.4 MB.
