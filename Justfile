@@ -660,3 +660,38 @@ perf: perf-run perf-aggregate perf-analyze perf-docs perf-viz perf-open
 # empty under MSYS2).  The toolchain above is correct; the build is what still
 # needs work.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Bench box -- a disposable EC2 instance for suites and benchmarks
+# ---------------------------------------------------------------------------
+#
+# infra/bench-box/ is a CDK app: `bench-box-up` deploys one m7i.xlarge
+# (override with BENCH_INSTANCE_TYPE / BENCH_ARCH / BENCH_GIT_REF /
+# BENCH_MAX_UPTIME_HOURS), `bench-box-down` destroys everything.  Access is
+# SSM Session Manager; nothing is open inbound.  See infra/bench-box/README.md.
+
+BENCH := "infra/bench-box"
+
+# Spin up the bench box (deploys the CDK stack, waits for SSM).
+bench-box-up:
+    bash {{BENCH}}/scripts/up.sh
+
+# Tear the bench box down (instance, volume, VPC, role).
+bench-box-down:
+    bash {{BENCH}}/scripts/down.sh
+
+# Shell on the bench box over SSM (or run a command: `just bench-box-ssh 'cd turmeric && ls'`).
+bench-box-ssh *cmd:
+    bash {{BENCH}}/scripts/ssh.sh {{cmd}}
+
+# Pull a results directory back from ~/turmeric on the box.
+bench-box-pull path dest="":
+    bash {{BENCH}}/scripts/pull.sh {{path}} {{dest}}
+
+# List bench boxes in the account (running or stopped).
+bench-box-status:
+    bash {{BENCH}}/scripts/status.sh
+
+# Once, as an admin: IAM policies, scoped CDK bootstrap, optional operator user + budget.
+bench-box-bootstrap *args:
+    bash {{BENCH}}/scripts/bootstrap-account.sh {{args}}
