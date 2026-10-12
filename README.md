@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.64.2` -- Macro arguments are no longer run through the compile-time evaluator (fixing `cond`/`for`/`when` miscompiles), `defer` now fires on panics in CPS functions, and strings gain C-style escapes like `\x1b`.
+**Latest release:** `v0.64.3` -- Deep CPS tail calls no longer overflow the C stack at -O0, and effect-handler resumes run in place and free their continuation copies instead of holding hundreds of megabytes.
 
 ## What
 

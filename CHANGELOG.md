@@ -2,6 +2,42 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.64.3] -- 2026-10-12
+
+### Fixed
+
+- **Deep CPS tail calls no longer grow the C stack.** A `cps->cps` tail call
+  that threads the continuation was a plain C call, so a loop crossing a lifted
+  join grew the stack one frame chain per step and segfaulted at `-O0` / `-Og`;
+  such calls now bounce through the trampoline driver.
+- **Effectful callbacks with by-value arguments compile.** A lambda taking a
+  by-value struct or sum parameter is threaded at its own C type instead of
+  casting every slot to `int64_t`, and a capturing lambda's entry takes the
+  closure box. A false `TUR-W0033` beside an untyped `^fat` effectful argument
+  is also gone.
+- **A let-bound effectful lambda called from another closure works.** `(let [f
+  (fn ...perform...)] ...)` whose `f` is captured and called by a sibling
+  closure is now lowered instead of refused.
+- **Closures in sum payloads are freed.** `(Some <closure>)` in a CPS-lowered
+  function no longer evicts the closure, and a callee that only projects its
+  payload (`unwrap`, `unwrap-or`, `ok-val`) drops the closure it leaves behind
+  instead of leaking it per call.
+- **Handler resumes run in place and free their copies.** A case that resumes
+  its `k` once -- even after a `perform` -- hands over the original chain when
+  nothing outward is multi-shot, and a delivered continuation copy that nothing
+  captured is freed when its run ends, instead of being held until the outermost
+  entry returns.
+- **Generic fixes: carrier bridges, projections, and fn-typed slots.** A
+  let-bound call of a generic's returned closure reads back its pointer type; a
+  result like `(Vec (Inner A))` binds the callee's open variable; a nullary
+  method through an associated type dispatches; and a `fn`-typed parameter
+  passed into a type-variable slot is boxed so `(unwrap-or o d)` and `(vec-push!
+  v d)` typecheck.
+- **Nested CPS `defer` fires.** A deferring `do` in a let body's bind position
+  no longer evicts the function's defer threading.
+- **An async let body's box is freed.** `(let [body (fn [] ...)] (await (async
+  body)))` in a performing function no longer leaks the body's box per spawn.
+
 ## [0.64.2] -- 2026-10-12
 
 ### Added
