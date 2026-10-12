@@ -645,15 +645,16 @@ bool cps_visit_children(const Expr *e,
  * reaching it is modeled as an unresolved call by the caller). This mirrors the
  * trusted enumeration in cps_expr_contains_shift, plus the serial operators. */
 static bool cps_directly_uses_control(const Expr *e);
+static bool cps_control_walk(const Expr *e, bool callcc_only);
 bool cps_expr_uses_control(const Expr *e) { return cps_directly_uses_control(e); }
 
-/* Visitor thunk for the enumerator's default arm: "stop" means "found one". */
+/* Visitor thunk for the enumerator's default arm: "stop" means "found one".
+ * `ud` is the walk's callcc_only flag. */
 static bool cps_control_visit(const Expr *c, void *ud) {
-    (void)ud;
-    return cps_directly_uses_control(c);
+    return cps_control_walk(c, *(const bool *)ud);
 }
 
-static bool cps_directly_uses_control(const Expr *e) {
+static bool cps_control_walk(const Expr *e, bool callcc_only) {
     if (!e) return false;
     switch (e->kind) {
         /* Seeds: any of these IR nodes is a control operator. */
@@ -668,76 +669,81 @@ static bool cps_directly_uses_control(const Expr *e) {
         case EX_HANDLE:
         case EX_RESUME:
         case EX_DISCONTINUE:
+            return !callcc_only;
         /* (call/cc f) / (escape f): the native CT-IR path (build_callcc /
          * emit_callcc) lowers these on the DK-threaded backend, so a function that
          * uses them is a CPS candidate -- color it so ensure_S classifies it and it
-         * emits natively instead of wholly direct-emitting through emit_cps_callcc. */
+         * emits natively instead of wholly direct-emitting through emit_cps_callcc.
+         * The only seed of the callcc_only walk (cps_expr_contains_callcc), which
+         * fn_is_d2b_main consults: a `main` whose only control op is an escape
+         * is otherwise left on the direct emitter, which has no lowering for it
+         * (escape-in-main-reaches-direct-emitter). */
         case EX_CALLCC:
             return true;
         /* cps-async (graduated 2026-07-19): `await` lowers to a dk_shift (or, in a
          * handler case, delegates to the fiber path), so it is always a control
          * seed that colors its function. */
         case EX_AWAIT:
-            return true;
+            return !callcc_only;
         /* Structural recursion (no descent into nested fn bodies). */
         case EX_LET:
             for (uint32_t i = 0; i < e->as.let_.n; i++)
-                if (cps_directly_uses_control(e->as.let_.bindings[i].init)) return true;
-            return cps_directly_uses_control(e->as.let_.body);
+                if (cps_control_walk(e->as.let_.bindings[i].init, callcc_only)) return true;
+            return cps_control_walk(e->as.let_.body, callcc_only);
         case EX_IF:
-            return cps_directly_uses_control(e->as.if_.cond)
-                || cps_directly_uses_control(e->as.if_.then_)
-                || cps_directly_uses_control(e->as.if_.else_or_null);
+            return cps_control_walk(e->as.if_.cond, callcc_only)
+                || cps_control_walk(e->as.if_.then_, callcc_only)
+                || cps_control_walk(e->as.if_.else_or_null, callcc_only);
         case EX_DO:
             for (uint32_t i = 0; i < e->as.do_.n; i++)
-                if (cps_directly_uses_control(e->as.do_.items[i])) return true;
+                if (cps_control_walk(e->as.do_.items[i], callcc_only)) return true;
             return false;
         case EX_WHILE:
-            return cps_directly_uses_control(e->as.while_.cond)
-                || cps_directly_uses_control(e->as.while_.body);
+            return cps_control_walk(e->as.while_.cond, callcc_only)
+                || cps_control_walk(e->as.while_.body, callcc_only);
         case EX_SET:
-            return cps_directly_uses_control(e->as.set_.value);
+            return cps_control_walk(e->as.set_.value, callcc_only);
         case EX_DEF:
-            return cps_directly_uses_control(e->as.def_.init);
+            return cps_control_walk(e->as.def_.init, callcc_only);
         case EX_BUILTIN:
             for (uint32_t i = 0; i < e->as.builtin.n; i++)
-                if (cps_directly_uses_control(e->as.builtin.args[i])) return true;
+                if (cps_control_walk(e->as.builtin.args[i], callcc_only)) return true;
             return false;
         case EX_CALL:
-            if (cps_directly_uses_control(e->as.call_.fn_expr)) return true;
+            if (cps_control_walk(e->as.call_.fn_expr, callcc_only)) return true;
             for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-                if (cps_directly_uses_control(e->as.call_.args[i])) return true;
+                if (cps_control_walk(e->as.call_.args[i], callcc_only)) return true;
             return false;
         case EX_DEFER:
-            return cps_directly_uses_control(e->as.defer_.body);
+            return cps_control_walk(e->as.defer_.body, callcc_only);
         case EX_RETURN:
-            return cps_directly_uses_control(e->as.return_.value);
+            return cps_control_walk(e->as.return_.value, callcc_only);
         case EX_PANIC:
-            return cps_directly_uses_control(e->as.panic_.payload);
+            return cps_control_walk(e->as.panic_.payload, callcc_only);
         case EX_PANIC_WITH:
-            return cps_directly_uses_control(e->as.panic_with_.payload);
+            return cps_control_walk(e->as.panic_with_.payload, callcc_only);
         case EX_PANIC_PAYLOAD_TYPE:
         case EX_PANIC_PAYLOAD_VALUE:
         case EX_PANIC_PAYLOAD_FILE:
         case EX_PANIC_PAYLOAD_LINE:
-            return cps_directly_uses_control(e->as.panic_payload_type_.payload);
+            return cps_control_walk(e->as.panic_payload_type_.payload, callcc_only);
         case EX_PANIC_PAYLOAD_DOWNS:
-            return cps_directly_uses_control(e->as.panic_payload_downs_.payload);
+            return cps_control_walk(e->as.panic_payload_downs_.payload, callcc_only);
         case EX_CATCH_UNWIND:
-            return cps_directly_uses_control(e->as.catch_unwind_.thunk);
+            return cps_control_walk(e->as.catch_unwind_.thunk, callcc_only);
         case EX_CATCH_PANIC_OF:
-            return cps_directly_uses_control(e->as.catch_panic_of_.thunk);
+            return cps_control_walk(e->as.catch_panic_of_.thunk, callcc_only);
         case EX_DYNVAR_BINDING:
             for (uint32_t i = 0; i < e->as.dynvar_binding_.n_pairs; i++)
-                if (cps_directly_uses_control(e->as.dynvar_binding_.pairs[i].override_expr))
+                if (cps_control_walk(e->as.dynvar_binding_.pairs[i].override_expr, callcc_only))
                     return true;
-            return cps_directly_uses_control(e->as.dynvar_binding_.body);
+            return cps_control_walk(e->as.dynvar_binding_.body, callcc_only);
         case EX_REINTERPRET:
-            return cps_directly_uses_control(e->as.reinterpret_.expr);
+            return cps_control_walk(e->as.reinterpret_.expr, callcc_only);
         case EX_ASCRIBE:
             /* Ascription is erased at codegen; seed on a control op that is
              * only reachable through (:: <control-op> T). */
-            return cps_directly_uses_control(e->as.ascribe_.inner);
+            return cps_control_walk(e->as.ascribe_.inner, callcc_only);
         /* cps-coloring-walk-has-no-arm-for-union-inject: the same reasoning as
          * EX_ASCRIBE above, for the four nodes a `#lang saffron` file wraps its
          * expressions in.  Without these arms each falls to `default: return
@@ -767,24 +773,24 @@ static bool cps_directly_uses_control(const Expr *e) {
          * rule.md, where `expr_subtree_has_inline_c` was missing arms for these
          * same nodes and silently skipped every Saffron function. */
         case EX_UNION_INJECT:
-            return cps_directly_uses_control(e->as.union_inject_.value);
+            return cps_control_walk(e->as.union_inject_.value, callcc_only);
         case EX_DYN_OP:
             for (uint32_t i = 0; i < e->as.dyn_op_.n_args; i++)
-                if (cps_directly_uses_control(e->as.dyn_op_.args[i])) return true;
+                if (cps_control_walk(e->as.dyn_op_.args[i], callcc_only)) return true;
             return false;
         case EX_DYN_CALL:
-            if (cps_directly_uses_control(e->as.dyn_call_.fn)) return true;
+            if (cps_control_walk(e->as.dyn_call_.fn, callcc_only)) return true;
             for (uint32_t i = 0; i < e->as.dyn_call_.n_args; i++)
-                if (cps_directly_uses_control(e->as.dyn_call_.args[i])) return true;
+                if (cps_control_walk(e->as.dyn_call_.args[i], callcc_only)) return true;
             return false;
         case EX_DYN_FIELD:
-            return cps_directly_uses_control(e->as.dyn_field_.obj);
+            return cps_control_walk(e->as.dyn_field_.obj, callcc_only);
         /* saffron-lang-plan S9: the dispatch node, same shape as the three
          * above -- receiver plus arguments, any of which can hold a control op. */
         case EX_DYN_METHOD:
-            if (cps_directly_uses_control(e->as.dyn_method_.obj)) return true;
+            if (cps_control_walk(e->as.dyn_method_.obj, callcc_only)) return true;
             for (uint32_t i = 0; i < e->as.dyn_method_.n_args; i++)
-                if (cps_directly_uses_control(e->as.dyn_method_.args[i])) return true;
+                if (cps_control_walk(e->as.dyn_method_.args[i], callcc_only)) return true;
             return false;
         /* ...and the `any` READERS, which the first round of arms missed
          * because nothing then put one between a defn's body and its control
@@ -796,11 +802,11 @@ static bool cps_directly_uses_control(const Expr *e) {
          * later.  A reader is transparent to control the same way an ascription
          * is. */
         case EX_ANY_CAST:
-            return cps_directly_uses_control(e->as.any_cast_.value);
+            return cps_control_walk(e->as.any_cast_.value, callcc_only);
         case EX_ANY_IS:
-            return cps_directly_uses_control(e->as.any_is_.value);
+            return cps_control_walk(e->as.any_is_.value, callcc_only);
         case EX_ANY_TYPE_OF:
-            return cps_directly_uses_control(e->as.any_type_of_.value);
+            return cps_control_walk(e->as.any_type_of_.value, callcc_only);
         /* B3 (cps-tramp-resume): a `(with-handler hv body)` / `(compose-handlers
          * ...)` is a delimited handler install -- a control seed under the flag,
          * so a `main`/fn whose only control op is a first-class handler value is
@@ -811,7 +817,7 @@ static bool cps_directly_uses_control(const Expr *e) {
          * with-handler path it used to preserve is gone. */
         case EX_WITH_HANDLER:
         case EX_COMPOSE_HANDLERS:
-            return true;
+            return !callcc_only;
         /* A control op (perform / shift / handle / ...) inside a `match` arm colors
          * its function just like one in an `if` branch -- without this recursion a
          * `(defn pick [b] (match b (Full v) (+ v (perform (Choose))) ...))` reads as
@@ -819,10 +825,10 @@ static bool cps_directly_uses_control(const Expr *e) {
          * DK handler (cps-backend-effect-under-match).  Unconditional since
          * cps-tramp-resume graduated (2026-07-19). */
         case EX_MATCH:
-            if (cps_directly_uses_control(e->as.match_.scrutinee)) return true;
+            if (cps_control_walk(e->as.match_.scrutinee, callcc_only)) return true;
             for (uint32_t i = 0; i < e->as.match_.n_arms; i++) {
-                if (cps_directly_uses_control(e->as.match_.arms[i].body)) return true;
-                if (cps_directly_uses_control(e->as.match_.arms[i].guard)) return true;
+                if (cps_control_walk(e->as.match_.arms[i].body, callcc_only)) return true;
+                if (cps_control_walk(e->as.match_.arms[i].guard, callcc_only)) return true;
             }
             return false;
         /* Nested function definitions are call-graph boundaries. */
@@ -836,9 +842,13 @@ static bool cps_directly_uses_control(const Expr *e) {
          * node existed.  `(.v (Box (perform (Ask))))` is the shape that was
          * escaping -- neither EX_GET_FIELD nor EX_MAKE_STRUCT had an arm. */
         default:
-            return cps_visit_children(e, cps_control_visit, NULL);
+            return cps_visit_children(e, cps_control_visit, &callcc_only);
     }
 }
+static bool cps_directly_uses_control(const Expr *e) { return cps_control_walk(e, false); }
+/* The same walk seeded on EX_CALLCC alone: does `e` directly contain a
+ * call/cc / escape (not under a nested fn)?  fn_is_d2b_main reads it. */
+bool cps_expr_contains_callcc(const Expr *e) { return cps_control_walk(e, true); }
 
 /* One call-graph node, one per top-level function. */
 typedef struct CpsNode {

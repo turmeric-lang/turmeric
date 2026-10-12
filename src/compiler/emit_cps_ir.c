@@ -1184,16 +1184,39 @@ static bool cps_pend_hook_pending(Buf *body) {
 static void cps_pend_fire(EmitCtx *ctx, Buf *body) {
     g_pend_firing = true;
     indent_buf(body, ctx->indent);
-    buf_puts(body, "tur_panicking = 0;   /* defer-skipped-on-panic-in-cps-function: pending defers */\n");
+    /* The signal is saved and restored, not forced: on a panic return it is
+     * set and comes back set; in an unwinder the DK runtime fires for a frame an
+     * ABORTIVE handler abandoned (__dk_abort_abandon) it is clear, and a forced
+     * `= 1` would turn the abort into a panic.  A deferred body that panics
+     * leaves it set on either path. */
+    /* Each body fires in its own `do { } while (0)`, with the direct emitter's
+     * per-call-site signal check spelled `break` (panic_signal_is_break, the
+     * stackless trampoline's mode): a deferred body that panics leaves that
+     * one body, not the fire, so the bodies declared before it still run --
+     * as tur_frame_fire_lifo runs every closure of a direct frame -- and the
+     * panic is raised again after the last one.  On the panic path a body
+     * that panics is the double panic it always was (tur_panic_in_progress). */
+    buf_puts(body, "{ int __pk = tur_panicking, __pd = 0; tur_panicking = 0;   /* defer-skipped-on-panic-in-cps-function: pending defers */\n");
+    bool saved_break = ctx->panic_signal_is_break;
     for (int i = g_n_pend - 1; i >= 0; i--) {
         if ((g_pend_unfirable | g_pend_downstream) & (1ull << i)) continue;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "do {\n");
+        ctx->indent += 4;
+        ctx->panic_signal_is_break = true;
         char *rhs = emit_value(ctx, body, g_pend[i]);
+        ctx->panic_signal_is_break = saved_break;
         indent_buf(body, ctx->indent);
         buf_printf(body, "(void)(%s);\n", rhs ? rhs : "0");
         free(rhs);
+        ctx->indent -= 4;
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "} while (0);\n");
+        indent_buf(body, ctx->indent);
+        buf_puts(body, "if (tur_panicking) { __pd = 1; tur_panicking = 0; }\n");
     }
     indent_buf(body, ctx->indent);
-    buf_puts(body, "tur_panicking = 1;\n");
+    buf_puts(body, "if (__pk || __pd) tur_panicking = 1; }\n");
     g_pend_firing = false;
 }
 static void cps_pend_hook_fire(EmitCtx *ctx, Buf *body) {
@@ -3611,8 +3634,17 @@ static bool fn_sig_ok(const FnDef *fd) {
          * value and only ever resumed or marshalled through a plain runtime
          * call, never threaded through a slot -- so, like a ^borrow handle,
          * it keeps an effectful receiver CPS-emittable. */
+        /* cps-escape-receiver-with-handle-evicts: an `escape` receiver's `k`
+         * (CONT_ESCAPE, the tur_escape_cont address as the int64 carrier) is
+         * the same shape -- passed by value, consumed only by a plain
+         * tur_escape_resume call that longjmps to its landing.  Rejecting it
+         * made the receiver a permanently sig-rejected fn, and every function
+         * sharing an effect with it (one it installs a `handle` for) was
+         * evicted with it: a `handle` inside an escape receiver was a hard
+         * "no lowering for perform" error. */
         bool serial_k_ok = p->type.kind == TY_CONT &&
-                           p->type.as.cont.flavor == CONT_SERIAL;
+                           (p->type.as.cont.flavor == CONT_SERIAL ||
+                            p->type.as.cont.flavor == CONT_ESCAPE);
         if (!p->is_borrow && !fn_param_ok && !serial_k_ok
             && !sig_slot_ok(&p->type, p->type.kind)
             && !fn_byval_agg_param_ok(fd, p)
@@ -3749,8 +3781,13 @@ static bool fn_is_d2b_main(const FnDef *fd) {
      * main -- exactly its current behaviour, with NO forced-d2b regression.  The
      * gate is thus the fixpoint (the "taint-completeness guard" the note asked for),
      * unlocked now that E2a threads the effectful fn-values a handle-main performs. */
+    /* escape-in-main-reaches-direct-emitter: an `escape` / `call/cc` is
+     * delimited control too, lowered only by the CT-IR backend (the direct
+     * emitter's EX_CALLCC arm aborts) -- so a main whose only control op is
+     * one is a d2b candidate as well.  Same fixpoint, same fallbacks. */
     return cps_expr_contains_shift(fd->body)
-        || expr_has_handle(fd->body);
+        || expr_has_handle(fd->body)
+        || cps_expr_contains_callcc(fd->body);
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */
@@ -12906,6 +12943,11 @@ static void emit_callcc(CE *ce, const CTerm *t) {
     ce_line(ce, "tur_escape_cont %s;", cc);
     ce_line(ce, "%s.valid = 1;", cc);
     ce_line(ce, "tur_escape_live_push(&%s);", cc);
+    /* cps-defer-skipped-on-abortive-effect: the performs whose cases the
+     * escape jumps over are abandoned with their C frames; tur_escape_resume
+     * fires the defers pending in their continuations before it jumps, through
+     * the hook armed here (__dk_escape_abandon). */
+    ce_line(ce, "%s.dk_pp = (void *)g_dk_pend_perform; %s.abandon = __dk_escape_abandon;", cc, cc);
     ce_line(ce, "if (TUR_SETJMP(%s.buf) == 0) {", cc);
     ce->indent += 4;
     /* Normal path: emit the receiver value, then call it with &cc. */
@@ -13888,9 +13930,10 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
          * else-branch runs the trampoline to completion. */
         if (!mvoid) buf_puts(file, "    int64_t __r;\n");
         buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+        buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
         buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(__root); }\n",
                    mvoid ? "(void)" : "__r = ", cn);
-        buf_printf(file, "    else { %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
+        buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s__dk_drive_after(); }\n", mvoid ? "(void)" : "__r = ");
         buf_puts(file, "    g_dk_driver = __dksave;\n");
         /* Read the delivered value out BEFORE the reap: a Tier-C return rides a
          * heap box owned by the reap list (consume=false, never freed at a load),
@@ -14032,11 +14075,12 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * called by a plain main) still trampolines a deep tail-resume flat. */
     if (!void_ret) buf_puts(file, "    int64_t __r;\n");
     buf_puts(file, "    tur_jmp_buf __dkjb; tur_jmp_buf *__dksave = g_dk_driver; g_dk_driver = &__dkjb;\n");
+    buf_puts(file, "    DKPendPerform *__dkpp = g_dk_pend_perform;\n");
     buf_printf(file, "    if (TUR_SETJMP(__dkjb) == 0) { %s%s__cps(%s); }\n",
                void_ret ? "(void)" : "__r = ", cn, __args.data);
     /* T6: after a tail-resume longjmp the drive runs continuations that are not
      * this entry's body; no bounce shortcut applies there. */
-    buf_printf(file, "    else { %s%s__dk_drive_after(); }\n",
+    buf_printf(file, "    else { g_dk_pend_perform = __dkpp; %s%s__dk_drive_after(); }\n",
                tb_entry ? "tur_tb_root = NULL; " : "", void_ret ? "(void)" : "__r = ");
     buf_puts(file, "    g_dk_driver = __dksave;\n");
     if (tb_entry) buf_puts(file, "    tur_tb_root = __tb_save;\n");

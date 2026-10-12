@@ -23,6 +23,9 @@ bool cps_expr_contains_shift(const Expr *e);
  * operand into a let -- a widen over a control op is not lowerable by the
  * CPS IR, but a widen over the LET VARIABLE is. */
 bool cps_expr_uses_control(const Expr *e);
+/* escape-in-main-reaches-direct-emitter: the same walk seeded on call/cc /
+ * escape alone (fn_is_d2b_main). */
+bool cps_expr_contains_callcc(const Expr *e);
 /* The one enumeration of every evaluated operand of an expression (nested fn
  * definitions -- EX_FN_DEF / EX_FN / EX_CLOSURE -- are boundaries and are NOT
  * visited).  `visit` returns true to stop; returns whether it stopped.  See

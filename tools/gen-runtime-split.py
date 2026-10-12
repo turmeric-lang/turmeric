@@ -64,6 +64,7 @@ TLS = {
     '__dk_reap_cap': ('size_t *', 'tur_tls_dk_reap_cap_ptr'),
     '__dk_entry_depth': ('int *', 'tur_tls_dk_entry_depth_ptr'),
     'g_dk_driver': ('void **', 'tur_tls_dk_driver_ptr'),
+    'g_dk_pend_perform': ('void **', 'tur_tls_dk_pend_perform_ptr'),
     'g_dk_resume_chain': ('void **', 'tur_tls_dk_resume_chain_ptr'),
     'g_dk_resume_val': ('intptr_t *', 'tur_tls_dk_resume_val_ptr'),
     # The dynamic tail-call trampoline's state (emit_module.c).

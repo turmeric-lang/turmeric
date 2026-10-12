@@ -23,4 +23,5 @@ cps-no-panic: defer ran
 cps-no-panic: no panic
 cps-no-panic: defer ran
 cps-resumed-then-panic: caught
+cps-aborted: defer ran at the abort
 cps-abort-then-panic: caught

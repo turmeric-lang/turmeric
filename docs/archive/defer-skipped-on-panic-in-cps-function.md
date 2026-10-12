@@ -119,7 +119,7 @@ is the double panic it always was.
 panic -- an abortive handler that never resumes, an escape -- still does not
 run its defers, and a later panic does not run them late either (fixture
 case 10); that is
-[cps-defer-skipped-on-abortive-effect](../reported/cps-defer-skipped-on-abortive-effect.md).
+[cps-defer-skipped-on-abortive-effect](cps-defer-skipped-on-abortive-effect.md) (since resolved).
 A `defer` inside a `let` body
 whose enclosing `do` also carries defers still evicts the function from the
 CPS backend (`BODY-TAINT`), which predates this change: the block then has
