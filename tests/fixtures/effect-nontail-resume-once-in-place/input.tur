@@ -1,0 +1,56 @@
+;; effect-nontail-resume-copies-held-until-outer-entry: a handler case that
+;; resumes its continuation once, NON-tail, on straight-line code -- `(+ 1
+;; (resume k 10))` -- resumes the ORIGINAL chain in place (dk_case_resumes_once
+;; / dk_perform's resume_once branch).  The rest of the case is spliced in
+;; after the handler group as a resume-frame (dk_resume_into) and taken back
+;; out, and freed, when it runs (dk_run_impl).  It used to resume a copy of a
+;; copy: dk_perform's `sub` and dk_resume_into's `c` were both kept until the
+;; outermost entry returned, and sitting on the reap list above the handler
+;; group and the perform's frame they kept those from being handed back too
+;; (~1,500 B a turn).
+;;
+;;   per-turn   -- a loop that opens a handle each turn and performs under it,
+;;                 the case resuming non-tail; an outer tail-resume handler
+;;                 answers a second effect from the resumed part
+;;   one-handle -- a loop of performs under one handle whose case is
+;;                 `(+ 0 (resume k 1))`: every turn's `(+ 0 _)` waits for the
+;;                 whole loop, so the chain grows by that one frame a turn --
+;;                 but it is not registered, so the reap list does not
+;;   captures   -- the rest of the case captures a value (`(+ x (resume k 10))`),
+;;                 so its resume-frame has an env, released after the frame runs
+;;
+;; Each prints the DK reap list's length at turns 10 and 900: the same at both
+;; (per-turn grew by 7 entries a turn, one-handle and captures by 2).
+;; Leak-checked (requires.leak-check).
+
+(defeffect Ask [] int)
+(defeffect Inner [] int)
+
+(defn reap-len [] : int
+  ```c
+  return (int64_t)__dk_reap_n;
+  ```)
+
+(defn note [i : int] : int
+  (if (or (= i 10) (= i 900)) (do (println (reap-len)) 0) 0))
+
+(defn inner-step [x : int] : int
+  (handle (+ x (perform (Inner)) (perform (Ask)))
+    (Inner [] k) (+ 1 (resume k 10))))
+(defn per-turn [i : int n : int acc : int] : int
+  (if (= i n) acc (per-turn (+ i 1) n (+ acc (note i) (inner-step i)))))
+
+(defn ask-plus [x : int] : int (+ x (perform (Ask))))
+(defn one-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (one-loop (+ i 1) n (+ acc (note i) (ask-plus i)))))
+
+(defn cap-step [x : int] : int
+  (handle (+ x (perform (Inner)))
+    (Inner [] k) (+ x (resume k 10))))
+(defn cap-turn [i : int n : int acc : int] : int
+  (if (= i n) acc (cap-turn (+ i 1) n (+ acc (note i) (cap-step i)))))
+
+(defn main [] : nil
+  (println (handle (per-turn 0 1000 0) (Ask [] k) (resume k 3)))   ;; 499500 + 14*1000
+  (println (handle (one-loop 0 1000 0) (Ask [] k) (+ 0 (resume k 1))))   ;; 499500 + 1000
+  (println (cap-turn 0 1000 0)))                                    ;; 2*499500 + 10*1000

@@ -1,0 +1,74 @@
+;; effect-nontail-resume-copies-held-until-outer-entry: a case that resumes
+;; its `k` once, non-tail, resumes the original chain in place
+;; (dk_case_resumes_once).  The shapes around that path, each printing the
+;; answer the copying path gave:
+;;
+;;   abortive    -- the same case answers without resuming on one branch
+;;   twice       -- two performs of the effect in one body: the second is
+;;                  handled while the first case's rest is spliced in
+;;   under-outer -- the resumed part performs an OUTER effect whose case is
+;;                  multi-shot and non-tail: its capture crosses the splice
+;;   multi-case  -- a handle with a once case, a tail case and an abortive one
+;;   call-before -- a direct call before the resume
+;;   nested      -- the once-handle opened inside a multi-shot resumed copy
+;;   value-after -- the resume's value is used twice in the rest
+;;   loop-body   -- the once-handle around a loop that performs each turn
+
+(defeffect Inner [] int)
+(defeffect Outer [] int)
+(defeffect Stop [] int)
+(defeffect Tail [] int)
+
+(defn sq [x : int] : int (* x x))
+
+(defn abortive [x : int] : int
+  (handle (+ x (perform (Inner)))
+    (Inner [] k) (if (> x 5) (+ 1 (resume k 10)) 0)))
+
+(defn twice [x : int] : int
+  (handle (+ x (perform (Inner)) (perform (Inner)))
+    (Inner [] k) (+ 1 (resume k 10))))
+
+(defn under-outer [x : int] : int
+  (handle
+    (handle (+ x (perform (Inner)) (perform (Outer)))
+      (Inner [] k) (+ 1 (resume k 10)))
+    (Outer [] ^multishot k2) (+ (resume k2 1) (resume k2 2))))
+
+(defn multi-case [x : int] : int
+  (handle (+ x (perform (Inner)) (perform (Tail)) (perform (Stop)))
+    (Inner [] k) (+ 1 (resume k 10))
+    (Tail [] k) (resume k 100)
+    (Stop [] k) 7))
+
+(defn call-before [x : int] : int
+  (handle (+ x (perform (Inner)))
+    (Inner [] k) (+ (sq x) (resume k 10))))
+
+(defn once-step [x : int] : int
+  (handle (+ x (perform (Inner)))
+    (Inner [] k) (+ 1 (resume k 10))))
+(defn nested [x : int] : int
+  (handle (+ (perform (Outer)) (once-step x))
+    (Outer [] ^multishot k2) (+ (resume k2 1) (resume k2 2))))
+
+(defn value-after [x : int] : int
+  (handle (+ x (perform (Inner)))
+    (Inner [] k) (let [v (resume k 10)] (+ v v x))))
+
+(defn body-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (body-loop (+ i 1) n (+ acc (perform (Inner))))))
+(defn loop-body [n : int] : int
+  (handle (body-loop 0 n 0)
+    (Inner [] k) (+ 1 (resume k 2))))
+
+(defn main [] : nil
+  (println (abortive 3))
+  (println (abortive 9))
+  (println (twice 1))
+  (println (under-outer 1))
+  (println (multi-case 1))
+  (println (call-before 4))
+  (println (nested 1))
+  (println (value-after 1))
+  (println (loop-body 5)))

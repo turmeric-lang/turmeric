@@ -712,7 +712,22 @@ void emit_cps_runtime_prelude(Buf *out) {
  * (or the `done`) after the re-installed group.  dk_resume_into resumes the
  * part before it and continues into the case's own continuation instead.  Not
  * copied by dk_copy_node: a copy of `sub` (dk_invoke's) runs to its end. */
-"    bool resume_cut;   /* dk_perform's sub: the resumed part ends here */\n");
+"    bool resume_cut;   /* dk_perform's sub: the resumed part ends here */\n"
+/* effect-nontail-resume-copies-held-until-outer-entry: `resume_once` marks a
+ * handler whose case resumes its `k` at most once, NON-tail, on code that can
+ * put no frame of the case on the chain before the resume (emit_handle,
+ * case_resumes_once; dk_case_resumes_once).  dk_perform hands such a case the
+ * ORIGINAL chain instead of a copy, marking its head `resume_inplace` (read and
+ * cleared by dk_resume_into), and dk_resume_into SPLICES the rest of the case
+ * in after the handler group instead of copying the chain a second time: the
+ * spliced frame carries `splice_into`, with the node it was spliced after in
+ * its (otherwise unused) body_env, so dk_run_impl takes it back out and frees
+ * it when it runs.  resume_once is the case fn's protocol and is copied with
+ * the node, as resume_into is; the other two name live chain state and are
+ * not. */
+"    bool resume_once;    /* case resumes `k` at most once, non-tail, straight-line */\n"
+"    bool resume_inplace; /* dk_perform's k: the case was handed the original chain */\n"
+"    bool splice_into;    /* a rest-of-case frame spliced into a live chain */\n");
     buf_puts(out,
 "};\n"
 "static DK *dk_new(DKKind kind, DK *next) {\n"
@@ -830,6 +845,12 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused))\n"
 "static DK *dk_case_resumes_into(DK *k) { k->case_delivers = true; k->resume_into = true; return k; }\n");
     buf_puts(out,
+/* A resuming-into case that resumes `k` at most once, non-tail, and can put
+ * no frame of its own on the chain before it does (emit_handle,
+ * case_resumes_once): dk_perform hands it the original chain. */
+"__attribute__((unused))\n"
+"static DK *dk_case_resumes_once(DK *k) { dk_case_resumes_into(k); k->resume_once = true; return k; }\n");
+    buf_puts(out,
 "/* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry\n"
 " * driver instead of resuming inline, keeping deep effectful recursion flat. */\n"
 "static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {\n"
@@ -924,6 +945,7 @@ void emit_cps_runtime_prelude(Buf *out) {
  * fn's delivery protocol, which a re-installed marker copy shares. */
 "    c->case_delivers = n->case_delivers;\n"
 "    c->resume_into = n->resume_into;\n"
+"    c->resume_once = n->resume_once;\n"
 "    c->rfn = n->rfn; return c;\n"
 "}\n"
 "static DK *dk_copy_enclosing_handlers(const DK *from) {\n"
@@ -1074,6 +1096,12 @@ void emit_cps_runtime_prelude(Buf *out) {
  * carries the fiber's own (FiberBlock.dk_pend), and an escape landing fires
  * the records it jumped over (__dk_escape_abandon). */
 "typedef struct DKPendPerform { DK *k; const DK *H; DK *sub; struct DKPendPerform *up; } DKPendPerform;\n"
+/* Is the record's case continuation still held somewhere -- resumed, stored
+ * or wrapped (its `sub` was copied)?  A record whose case was handed the
+ * original chain (dk_perform's resume_once branch) has no `sub`: its resume
+ * longjmps to the driver, which discards the record, so a live one has not
+ * resumed and holds nothing. */
+"static bool __dk_pp_kept(const DKPendPerform *p) { return p->sub ? p->sub->ncopy != 0 : false; }\n"
 "#if defined(__GNUC__) || defined(__clang__)\n"
 "static TUR_THREAD_LOCAL DKPendPerform *g_dk_pend_perform;\n"
 "static TUR_THREAD_LOCAL void **__dk_reap_v;\n"
@@ -1147,6 +1175,24 @@ void emit_cps_runtime_prelude(Buf *out) {
 " * Kind 3, freed like kind 0, but known to be a node: a park's hand-off reads\n"
 " * its `orphaned` flag (__dk_reap_seg_take). */\n"
 "__attribute__((unused)) static DK *__dk_reap_node(DK *k) { __dk_reap_push(k, 3); return k; }\n");
+    buf_puts(out,
+/* effect-nontail-resume-copies-held-until-outer-entry: the rest-of-case frame
+ * of a resuming-into case (emit_resume) OWNS its env instead of registering
+ * it: registered at the resume, the env sat on the reap list above the
+ * perform's frame and its env, which then could not be handed back when they
+ * ran in place.  The frame's chain frees it (dk_free, env_owned); a copy dups
+ * it (dk_copy_node); and when the original runs spliced into a live chain,
+ * dk_run_impl registers it right before the frame function reads it, so that
+ * function's release (__dk_join_release_env) finds it last.  An env too large
+ * for env_size is registered as before. */
+"__attribute__((unused))\n"
+"static DK *dk_frame_resume_borrow_owned(DKResumeFrame fn, intptr_t env, size_t size, DK *next) {\n"
+"    DK *k = dk_frame_resume_borrow(fn, env, next);\n"
+"    if (!env) return k;\n"
+"    if (size > 0xFFFF) { __dk_reap_ptr(env); return k; }\n"
+"    k->env_owned = true; k->env_size = (uint16_t)size; return k;\n"
+"}\n"
+);
     /* closure-drop-glue: a boundary-reaped closure env is headered (env[-1] holds
      * its drop-glue), so a bare free of the past-header pointer would be an
      * interior free (corruption).  Reap kind 2 = "headered closure", released
@@ -1423,6 +1469,19 @@ void emit_cps_runtime_prelude(Buf *out) {
 "                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
 "                    if (__dk_group_release(k)) return rf(renv, v, rest);\n"
 "                }\n"
+"                /* A rest-of-case frame spliced into the chain (dk_resume_into):\n"
+"                 * the resumed part has run, so take it back out -- the handler\n"
+"                 * group's chain ends at its own frame again -- and free it.  Its\n"
+"                 * env goes back from inside the frame function, as a join's. */\n"
+"                if (k->splice_into) {\n"
+"                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;\n"
+"                    DK *prev = (DK *)k->body_env;\n"
+"                    if (prev && prev->next == k) prev->next = rest;\n"
+"                    k->splice_into = false;\n"
+"                    if (k->env_owned && renv) __dk_reap_ptr(renv);   /* the frame fn releases it */\n"
+"                    if (!tur_dk_pinned) free(k);\n"
+"                    return rf(renv, v, rest);\n"
+"                }\n"
 "                return k->rfn(k->env, v, k->next);\n"
 "            case DKK_SHIFT:\n"
 "            case DKK_SHIFT0: {\n"
@@ -1501,11 +1560,35 @@ void emit_cps_runtime_prelude(Buf *out) {
     buf_puts(out,
 "__attribute__((unused))\n"
 "static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {\n"
+/* effect-nontail-resume-copies-held-until-outer-entry: `sub` is the ORIGINAL
+ * chain (dk_perform's resume_once branch).  Splice `tail` -- the rest of the
+ * case, whose next is the handle's real continuation `ge` -- in after H's
+ * group, the node whose next is `ge`, and run the chain in place from its
+ * head.  While spliced, the group's own free walks through `tail` into `ge`
+ * (borrow_next off), so a chain abandoned before `tail` runs frees it with
+ * the group; dk_run_impl unsplices and frees it when it runs.  A tail resume
+ * (`borrow`: `tail` IS `ge`) splices nothing.  Yielded to the driver like a
+ * tail resume; its nodes have their own owners (inplace_head). */
+"    if (sub->resume_inplace) {\n"
+"        DK *k = sub; k->resume_inplace = false;\n"
+"        if (!borrow) {\n"
+"            DK *ge = tail->next, *p = k;\n"
+"            while (p && p->next != ge && p->kind != DKK_DONE) p = p->next;\n"
+"            if (!p || p->next != ge) {\n"
+"                fprintf(stderr, \"tur: internal error: resume_once: the case's continuation is not on the perform's chain\\n\");\n"
+"                abort();\n"
+"            }\n"
+"            p->next = tail; tail->body_env = (intptr_t)p; tail->splice_into = true; tail->borrow_next = false;\n"
+"        }\n"
+"        k->inplace_head = true;\n"
+"        if (g_dk_driver) { g_dk_resume_chain = k; g_dk_resume_val = v; TUR_LONGJMP(*g_dk_driver); }\n"
+"        return dk_run(k, v);\n"
+"    }\n"
 "    const DK *cut = sub;\n"
 "    while (cut && !cut->resume_cut) cut = cut->next;\n"
 "    DK *c = cut && cut != sub ? dk_copy_range(sub, cut) : NULL;\n"
 "    if (!c) {   /* not dk_perform's sub: resume it on the C stack */\n"
-"        if (!borrow) __dk_reap_node(tail);\n"
+"        if (!borrow) __dk_reap_keep(tail);   /* one node (borrow_next); frees an owned env */\n"
 "        return dk_run(tail, dk_invoke(sub, v));\n"
 "    }\n"
 "    DK *last = c;\n"
@@ -1683,7 +1766,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        const DK *E = dk_case_enclosing_real(p->H);\n"
 "        bool on = false;\n"
 "        for (const DK *n = ck; n && n != cH; n = n->next) { if (n == E) { on = true; break; } if (n->kind == DKK_DONE) break; }\n"
-"        if (!on || p->sub->ncopy) break;\n"
+"        if (!on || __dk_pp_kept(p)) break;\n"
 "        __dk_abort_abandon(p->k, p->H);\n"
 "        if (tur_panicking) break;\n"
 "        ck = p->k; cH = p->H;\n"
@@ -1698,7 +1781,7 @@ void emit_cps_runtime_prelude(Buf *out) {
 "__attribute__((unused)) static void __dk_escape_abandon(void *to_) {\n"
 "    DKPendPerform *to = (DKPendPerform *)to_;\n"
 "    for (DKPendPerform *p = g_dk_pend_perform; p && p != to; p = p->up)\n"
-"        if (!p->sub->ncopy) __dk_abort_abandon(p->k, p->H);\n"
+"        if (!__dk_pp_kept(p)) __dk_abort_abandon(p->k, p->H);\n"
 "    g_dk_pend_perform = to;\n"
 "}\n"
 "static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {\n"
@@ -1732,6 +1815,34 @@ void emit_cps_runtime_prelude(Buf *out) {
 "        { intptr_t r0 = H->handler(H->handler_env, arg, sub);  /* ends in dk_tail_resume -> longjmp */\n"
 "          if (tur_panicking) __dk_panic_abandon(k);\n"
 "          return r0; }\n"
+"    }\n"
+    /* effect-nontail-resume-copies-held-until-outer-entry: the in-place branch
+     * for a NON-tail resume.  A deep case that resumes `k` at most once, in
+     * its own straight-line (or branching) body, with nothing before the
+     * resume that could put a frame of the case on the chain
+     * (dk_case_resumes_once) is handed the ORIGINAL chain, as a tail in-place
+     * case is: its one resume (dk_resume_into) splices the rest of the case in
+     * after H's group and yields the chain to the driver, so the perform's
+     * frames and the joins under them run uncopied and are handed back as they
+     * run, the handler group when its continuation frame runs
+     * (__dk_group_release), and the spliced frame when it runs.  It used to
+     * get a copy (`sub`) and resume a copy of that (dk_resume_into's `c`), both
+     * kept until the outermost entry returned.  A case that answers without
+     * resuming returns here, and its k..H are dead, as on the copy path.  The
+     * driver is required (the resume must be able to leave this frame), and
+     * nothing pinned (r7rs call/cc keeps every node where it is). */
+"    if (H->resume_once && !H->shallow && g_dk_driver && !tur_dk_pinned) {\n"
+"        k->resume_inplace = true;\n"
+"        g_dk_case_reopen_hnode = H;\n"
+"        DKPendPerform pp = { k, H, NULL, g_dk_pend_perform }; g_dk_pend_perform = &pp;\n"
+"        intptr_t r0 = H->handler(H->handler_env, arg, k);   /* a resume ends in dk_resume_into -> longjmp */\n"
+"        g_dk_pend_perform = pp.up;\n"
+"        k->resume_inplace = false;\n"
+"        if (tur_panicking) { __dk_panic_abandon(k); return r0; }\n"
+"        __dk_abort_abandon(k, H);   /* answered without resuming: k..H never run */\n"
+"        if (!tur_panicking) __dk_abort_pending(k, H, pp.up);\n"
+"        if (tur_panicking) { __dk_panic_abandon(H); return r0; }\n"
+"        return r0;   /* case_delivers: it delivered through the real chain */\n"
 "    }\n"
 "    DK *sub = dk_copy_range(k, H);\n");
     buf_puts(out,

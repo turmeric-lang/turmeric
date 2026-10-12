@@ -10280,6 +10280,101 @@ static bool case_resumes_into(const CHandleCase *c) {
     return c && c->k && !c->resumable_payload && !is_shift_effect(c->effect)
         && term_resumes_nontail(c->case_body, c->k);
 }
+/* effect-nontail-resume-copies-held-until-outer-entry: does `t` name `k` as
+ * any operand?  Conservative: a term kind not listed counts as naming it. */
+static bool atom_is_binding(const CAtom *a, const Binding *b);
+static bool term_mentions_binding(const CTerm *t, const Binding *k) {
+    while (t) {
+        switch (t->kind) {
+            case CT_APPCONT: return atom_is_binding(&t->as.appcont.v, k);
+            case CT_RESUME:
+                if (atom_is_binding(&t->as.resume.k, k) || atom_is_binding(&t->as.resume.v, k)) return true;
+                t = t->as.resume.body; break;
+            case CT_LETVAL:
+                if (atom_is_binding(&t->as.letval.v, k)) return true;
+                t = t->as.letval.body; break;
+            case CT_LETPRIM:
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (atom_is_binding(&t->as.letprim.args[i], k)) return true;
+                t = t->as.letprim.body; break;
+            case CT_LETCALL:
+                if (t->as.letcall.fn == k) return true;
+                for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                    if (atom_is_binding(&t->as.letcall.args[i], k)) return true;
+                t = t->as.letcall.body; break;
+            case CT_IF:
+                if (atom_is_binding(&t->as.if_.cond, k)) return true;
+                return term_mentions_binding(t->as.if_.then_, k)
+                    || term_mentions_binding(t->as.if_.else_, k);
+            case CT_MATCH:
+                if (atom_is_binding(&t->as.match.scrut, k)) return true;
+                for (uint32_t gi = 0; gi < t->as.match.n_guard_vars; gi++)
+                    if (atom_is_binding(&t->as.match.guard_vars[gi], k)) return true;
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    if (term_mentions_binding(t->as.match.arms[i].body, k)) return true;
+                return false;
+            default: return true;
+        }
+    }
+    return false;
+}
+/* ...and does the case resume `k` at most once on every path, and reach that
+ * resume through nothing that could put a frame of the case on the chain
+ * first -- rebinds, primitives, DIRECT calls (CT_LETCALL: uncolored, so no
+ * join of its own on the chain; a callee that enters CPS afresh runs on a
+ * chain of its own) and branches only; no perform, colored call, join point,
+ * await, loop or raw step -- with `k` unmentioned after the resume?  Then the
+ * case fn is called once per perform (dk_perform), resumes `k` at most once,
+ * and nothing can run its frames a second time (an outer multi-shot resume
+ * re-runs a case's continuation only through a frame the case put on the
+ * chain), so dk_perform may hand it the ORIGINAL chain to resume in place
+ * (dk_case_resumes_once).  A path that answers without resuming is fine: the
+ * case returns to dk_perform, which abandons k..H as on the copy path.  A tail
+ * resume on one branch beside a non-tail one on another is fine too: it runs
+ * the original chain on into the handle's continuation, as a tail resume
+ * does. */
+static bool resume_is_tail(const CTerm *t);
+static bool term_resumes_k_once(const CTerm *t, const Binding *k) {
+    while (t) {
+        switch (t->kind) {
+            case CT_APPCONT: return !atom_is_binding(&t->as.appcont.v, k);
+            case CT_RESUME:
+                if (!atom_is_binding(&t->as.resume.k, k) || atom_is_binding(&t->as.resume.v, k))
+                    return false;
+                return !term_mentions_binding(t->as.resume.body, k);
+            case CT_LETVAL:
+                if (atom_is_binding(&t->as.letval.v, k)) return false;
+                t = t->as.letval.body; break;
+            case CT_LETPRIM:
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (atom_is_binding(&t->as.letprim.args[i], k)) return false;
+                t = t->as.letprim.body; break;
+            case CT_LETCALL:
+                if (t->as.letcall.fn == k) return false;
+                for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                    if (atom_is_binding(&t->as.letcall.args[i], k)) return false;
+                t = t->as.letcall.body; break;
+            case CT_IF:
+                if (atom_is_binding(&t->as.if_.cond, k)) return false;
+                return term_resumes_k_once(t->as.if_.then_, k)
+                    && term_resumes_k_once(t->as.if_.else_, k);
+            case CT_MATCH:
+                if (atom_is_binding(&t->as.match.scrut, k)) return false;
+                for (uint32_t gi = 0; gi < t->as.match.n_guard_vars; gi++)
+                    if (atom_is_binding(&t->as.match.guard_vars[gi], k)) return false;
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    if (!term_resumes_k_once(t->as.match.arms[i].body, k)) return false;
+                return true;
+            default: return false;
+        }
+    }
+    return false;
+}
+static bool term_k_only_resumed(const CTerm *t, const Binding *k);
+static bool case_resumes_once(const CHandleCase *c) {
+    return case_resumes_into(c) && term_k_only_resumed(c->case_body, c->k)
+        && term_resumes_k_once(c->case_body, c->k);
+}
 /* ...and is that every use of `k`: the continuation of a resume, in the case
  * body or the rest of a resume or a perform (the resume-frames emit_resume and
  * emit_perform lift), never a value, never under a join?  Then nothing resumes `k` with
@@ -11072,7 +11167,15 @@ static void emit_continue(CE *ce, const CTerm *t) {
  * scalar captures, nothing else.  Returns a malloc'd C expr for the DK frame
  * env: the env struct pointer when there are captures, else "0".  The struct
  * is leaked with the DK nodes (reaped at the entry boundary). */
+static char *emit_cont_env_impl(CE *ce, const char *hname, const CapSet *caps, bool reap);
 static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps) {
+    return emit_cont_env_impl(ce, hname, caps, true);
+}
+/* The same env, left to its frame to own (dk_frame_resume_borrow_owned). */
+static char *emit_cont_env_owned(CE *ce, const char *hname, const CapSet *caps) {
+    return emit_cont_env_impl(ce, hname, caps, false);
+}
+static char *emit_cont_env_impl(CE *ce, const char *hname, const CapSet *caps, bool reap) {
     /* The env is caps-only: every lifted frame that needs its enclosing
      * continuation receives it AT RUN TIME (a DKResumeFrame's third parameter,
      * from the node's own ->next).  The pre-unification `__k` env slot -- a
@@ -11093,7 +11196,7 @@ static char *emit_cont_env(CE *ce, const char *hname, const CapSet *caps) {
     /* The env struct outlives its DK frame (shared read-only across multi-shot
      * resumes) and is never freed at a call site; reap it at the outermost entry
      * boundary (docs/archive/cps-delimited-dk-node-leak.md). */
-    ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
+    if (reap) ce_line(ce, "__dk_reap_ptr((intptr_t)%s);", envv);
     Buf b; buf_init(&b); buf_printf(&b, "(intptr_t)%s", envv); buf_putc(&b, '\0');
     char *s = strdup(b.data); buf_free(&b); return s;
 }
@@ -12569,7 +12672,9 @@ static void emit_handle(CE *ce, const CTerm *t) {
         bool cinto = case_resumes_into(&t->as.handle.cases[ci]);
         bool creopen = case_reopens(t->as.handle.cases[ci].case_body) || cinto;
         Buf nxt; buf_init(&nxt);
-        if (cinto && term_k_only_resumed(t->as.handle.cases[ci].case_body, t->as.handle.cases[ci].k))
+        if (cinto && case_resumes_once(&t->as.handle.cases[ci]))
+            buf_puts(&nxt, "dk_case_resumes_once(");
+        else if (cinto && term_k_only_resumed(t->as.handle.cases[ci].case_body, t->as.handle.cases[ci].k))
             buf_puts(&nxt, "dk_case_resumes_into(");
         else if (creopen) buf_puts(&nxt, "dk_case_delivers(");
         buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", ctor, tag, cnames[ci], cenvs[ci],
@@ -12960,12 +13065,26 @@ static void emit_resume(CE *ce, const CTerm *t) {
             bool ok = collect_caps(t->as.resume.body, t->as.resume.x.id, &cs);
             const CapSet *caps = (ok && cs.n > 0) ? &cs : NULL;
             g_lh_resume_k = ce->cps_resume_k;
+            /* effect-nontail-resume-copies-held-until-outer-entry: the frame
+             * OWNS its env (dk_frame_resume_borrow_owned) -- registered here it
+             * sat above the perform's frame on the reap list and kept it from
+             * being handed back -- and hands it back as a join does once it has
+             * read its captures: the env is the list's last entry only when the
+             * frame ran spliced into a live chain (dk_perform's resume_once
+             * branch), where dk_run_impl registers it just before; under the
+             * copy path it is never registered and the frame's chain frees it. */
+            g_lh_join_release = true;
             emit_lifted(ce, rname, LH_RESUME_CONT, rxn, t->as.resume.x.ty, t->as.resume.x.type,
                         t->as.resume.body, NULL, caps);
+            g_lh_join_release = false;
             free(rxn);
-            char *envexpr = emit_cont_env(ce, rname, caps);   /* caps-only env */
-            ce_line(ce, "return dk_resume_into((DK *)(%s), %s, dk_frame_resume_borrow(%s, %s, %s), 0);",
-                    kk, sv, rname, envexpr, ce->cur_k);
+            char *envexpr = emit_cont_env_owned(ce, rname, caps);   /* caps-only env, frame-owned */
+            if (caps)
+                ce_line(ce, "return dk_resume_into((DK *)(%s), %s, dk_frame_resume_borrow_owned(%s, %s, sizeof(%s_env), %s), 0);",
+                        kk, sv, rname, envexpr, rname, ce->cur_k);
+            else
+                ce_line(ce, "return dk_resume_into((DK *)(%s), %s, dk_frame_resume_borrow(%s, %s, %s), 0);",
+                        kk, sv, rname, envexpr, ce->cur_k);
             free(envexpr);
         }
         free(sv); free(kk); free(vv);
