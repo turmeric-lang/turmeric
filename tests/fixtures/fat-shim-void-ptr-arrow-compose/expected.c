@@ -2171,6 +2171,10 @@ struct DK {
     bool resume_once_dyn; /* resume_once, but through a perform: ask `ss` first */
     bool multishot;       /* this case may resume its k more than once */
     bool ss;              /* the chain past this node is single-shot */
+    bool copy_tail;       /* dk_resume_into's copy ends here: body_env is its head */
+    bool k_copied_only;   /* case only copies its k: dk_perform's sub dies with the case */
+    bool k_last;          /* a resume site: the case's last use of this k (emit_resume) */
+    bool copy_last;       /* dk_resume_into's copy ends at this node: body_env is its head */
 };
 /* Is the chain from `n` on (n included) single-shot?  See the `ss` field. */
 static bool __dk_ss_after(const DK *n) {
@@ -2275,6 +2279,8 @@ __attribute__((unused))
 static DK *dk_case_resumes_once_dyn(DK *k) { dk_case_resumes_into(k); k->resume_once_dyn = true; return k; }
 __attribute__((unused))
 static DK *dk_case_multishot(DK *k) { k->multishot = true; return k; }
+__attribute__((unused))
+static DK *dk_case_k_copied_only(DK *k) { k->k_copied_only = true; return k; }
 /* E7: a deep handler whose case tail-resumes -- dk_perform yields to the entry
  * driver instead of resuming inline, keeping deep effectful recursion flat. */
 static DK *dk_handler_tail(int tag, DKHandler fn, intptr_t env, DK *next) {
@@ -2353,6 +2359,7 @@ static DK *dk_copy_node(const DK *n) {
     c->resume_into = n->resume_into;
     c->resume_once = n->resume_once;
     c->resume_once_dyn = n->resume_once_dyn; c->multishot = n->multishot; c->ss = n->ss;
+    c->k_copied_only = n->k_copied_only;
     c->rfn = n->rfn; return c;
 }
 static DK *dk_copy_enclosing_handlers(const DK *from) {
@@ -2560,6 +2567,22 @@ __attribute__((unused)) static void __dk_reap_closure_now(intptr_t p) {
         }
     }
 }
+__attribute__((unused)) static bool __dk_chain_copied(const DK *k) {
+    for (; k; k = k->borrow_next ? NULL : k->next) if (k->ncopy) return true;
+    return false;
+}
+__attribute__((unused)) static bool __dk_reap_take(void *p, unsigned char kind) {
+    size_t lo = __dk_reap_n > 64 ? __dk_reap_n - 64 : 0;
+    for (size_t i = __dk_reap_n; i-- > lo; ) {
+        if (__dk_reap_v[i] == p && __dk_reap_kind[i] == kind) {
+            memmove(&__dk_reap_v[i], &__dk_reap_v[i + 1], (__dk_reap_n - i - 1) * sizeof(void *));
+            memmove(&__dk_reap_kind[i], &__dk_reap_kind[i + 1], __dk_reap_n - i - 1);
+            __dk_reap_n--;
+            return true;
+        }
+    }
+    return false;
+}
 static void __dk_reap_run(void) {
     for (size_t i = 0; i < __dk_reap_n && !tur_dk_pinned; i++) {
         if (__dk_reap_kind[i] == 1) dk_free((DK *)__dk_reap_v[i]);
@@ -2716,11 +2739,15 @@ __attribute__((unused)) static void __dk_join_release_env(intptr_t env) {
     __dk_reap_v[n - 1] = NULL; __dk_reap_n = n - 1;
     free((void *)env);
 }
+static void __dk_copy_last_release(DK *last) {
+    DK *c = (DK *)last->body_env; last->copy_last = false; last->body_env = 0;
+    if (c && !tur_dk_pinned && !__dk_chain_copied(c) && __dk_reap_take(c, 1)) dk_free(c);
+}
 static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
     while (k) {
         switch (k->kind) {
             case DKK_DONE: return v;
-            case DKK_PROMPT: case DKK_HANDLER: k = k->next; break;
+            case DKK_PROMPT: case DKK_HANDLER: { DK *n = k->next; if (k->copy_last) __dk_copy_last_release(k); k = n; break; }
             /* cps-body-panic-not-propagated: a frame whose body panicked under a
              * handler returned by signal; the rest of the chain is the rest of the
              * program past the panic and must not run.  Its nodes are reap-owned. */
@@ -2730,6 +2757,7 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                 v = k->fn(k->env, v); if (tur_panicking) { __dk_panic_abandon(k->next); return 0; } k = k->next;
                 /* The fn is done with its env, so it can follow the node. */
                 if (self->join_once && __dk_join_release_node(self)) __dk_join_release_env(senv);
+                else if (self->copy_last) __dk_copy_last_release(self);
                 break;
             }
             case DKK_RESUME_FRAME:
@@ -2746,6 +2774,22 @@ static intptr_t dk_run_impl(DK *k, intptr_t v, bool root) {
                  * the resumed part has run, so take it back out -- the handler
                  * group's chain ends at its own frame again -- and free it.  Its
                  * env goes back from inside the frame function, as a join's. */
+                /* The rest-of-case frame of a dk_resume_into COPY: the copy has
+                 * run up to here.  Uncopied, it is dead: take it off the reap
+                 * list and free it, this frame included (its env goes back from
+                 * the frame function, registered here as a spliced one's is). */
+                if (k->copy_tail) {
+                    DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
+                    DK *c = (DK *)k->body_env; k->copy_tail = false; k->body_env = 0;
+                    if (c && !tur_dk_pinned && !__dk_chain_copied(c) && __dk_reap_take(c, 1)) {
+                        DK *p = c; while (p->next != k) p = p->next;
+                        p->borrow_next = true;   /* stop the walk before this frame */
+                        dk_free(c);
+                        if (k->env_owned && renv) __dk_reap_ptr(renv);
+                        free(k);
+                        return rf(renv, v, rest);
+                    }
+                }
                 if (k->splice_into) {
                     DKResumeFrame rf = k->rfn; intptr_t renv = k->env; DK *rest = k->next;
                     DK *prev = (DK *)k->body_env;
@@ -2844,7 +2888,18 @@ static intptr_t dk_resume_into(DK *sub, intptr_t v, DK *tail, int borrow) {
     while (last->next) last = last->next;
     last->next = tail; last->borrow_next = borrow != 0;
     __dk_reap_keep(c);
+    /* Fix direction 2: when `tail` (the rest of the case, owned by `c`) runs,
+     * every node of `c` before it has run or been left behind by a capture;
+     * dk_run_impl hands `c` back then if nothing copied it (copy_tail: the
+     * copy's head in body_env, unused on a resume-frame).  A borrowed tail is
+     * the handle's own frame and is not marked. */
+    if (!borrow) { tail->copy_tail = true; tail->body_env = (intptr_t)c; }
+    else if (last->kind != DKK_SHIFT && last->kind != DKK_SHIFT0) { last->copy_last = true; last->body_env = (intptr_t)c; }
     if (g_dk_driver) {   /* nothing is left to do here: let the driver run it */
+        /* The case's last use of `sub` (k_last), every use a copy
+         * (k_copied_only), and the yield below leaves dk_perform's frame --
+         * the one reader of `sub` after the case -- so it is dead now. */
+        if (sub->k_last && sub->k_copied_only && !tur_dk_pinned && __dk_reap_take(sub, 1)) dk_free(sub);
         c->inplace_head = true;   /* owned by the reap entry above, not the driver */
         g_dk_resume_chain = c; g_dk_resume_val = v;
         TUR_LONGJMP(*g_dk_driver);
@@ -2906,9 +2961,14 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv) {
     g_dk_driver = &jb;
     g_dk_resume_chain = first; g_dk_resume_val = firstv;
     intptr_t r;
+    /* `first` -- dk_invoke's copy -- is registered before it runs, so an
+     * escape that longjmps over this frame still leaves it owned, and taken
+     * back below once every run through it is over. */
+    bool first_kept = !(first && first->inplace_head);
+    if (first_kept) __dk_reap_keep(first);
     for (;;) {
         DK *ch = g_dk_resume_chain; intptr_t rv = g_dk_resume_val;
-        bool own = !(ch && ch->inplace_head);   /* an in-place chain has its own owners */
+        bool own = !(ch && ch->inplace_head) && ch != first;   /* an in-place chain has its own owners */
         if (TUR_SETJMP(jb) == 0) {
             r = dk_run_impl(ch, rv, false);
             if (own) __dk_reap_keep(ch);
@@ -2918,6 +2978,13 @@ static intptr_t __dk_drive_bounded(DK *first, intptr_t firstv) {
         if (own) __dk_reap_keep(ch);   /* a chain resumed in place may run through it */
     }
     g_dk_driver = saved;
+    /* effect-nontail-resume-copies-held-until-outer-entry, fix direction 2:
+     * every run through `first` is over -- a chain yielded from inside it ran
+     * in this loop -- so when nothing copied any of its nodes (no capture,
+     * store or park shares its envs or will run it) it is dead now, not at
+     * the outermost entry.  What else points into it holds it borrowed (a
+     * handle's continuation frame, a join) and never follows the link. */
+    if (first_kept && !tur_dk_pinned && !__dk_chain_copied(first) && __dk_reap_take(first, 1)) dk_free(first);
     return r;
 }
 /* Run the trampoline to completion after a tail-resume longjmp landed in the
@@ -3045,10 +3112,11 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
      * -- so reaping is `sub`'s sole disposal on both the return and longjmp paths.
      * We reap BEFORE the handler call so a longjmp cannot skip the registration. */
     __dk_reap_keep(sub);
+    sub->k_copied_only = H->k_copied_only && __dk_ss_after(dk_case_enclosing_real(H));
     /* Read before the case runs: a case can run the handle's continuation
      * frame itself, which hands the handler group -- H -- back
      * (__dk_group_release). */
-    bool H_delivers = H->case_delivers; DK *H_next = H->next;
+    bool H_delivers = H->case_delivers; DK *H_next = H->next; bool H_kcopy = H->k_copied_only;
     DKPendPerform pp = { k, H, sub, g_dk_pend_perform }; g_dk_pend_perform = &pp;
     intptr_t r = H->handler(H->handler_env, arg, sub);
     g_dk_pend_perform = pp.up;
@@ -3058,6 +3126,7 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
         if (!tur_panicking) __dk_abort_pending(k, H, pp.up);
         if (tur_panicking) { __dk_panic_abandon(H); return r; }
     }
+    if (H_kcopy && !tur_dk_pinned && __dk_reap_take(sub, 1)) dk_free(sub);
     return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
 /* Phase T21: FiberBlock */

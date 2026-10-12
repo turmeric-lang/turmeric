@@ -242,3 +242,6 @@ two loops, a once case under a `^multishot` outer, a `^multishot` case
 resuming a chain that holds a once-handle, a stored `k` resumed after its
 handle exited; the kept-copies compiler's answers, which the interpreter
 agrees with).
+
+Suite, third pass: `run.sh` 3760/0, `run-leak-check.sh` 179 / 0 / 3
+known-open, the JIT over the effect-family fixtures 500/0.
