@@ -1,0 +1,55 @@
+;; cps-self-call-through-join-grows-the-stack: every shape here makes a
+;; cps->cps tail call from a lifted join (or to another CPS function) once per
+;; step, so it is constant-stack only through the bounce.
+
+(defeffect Ask [] int)
+(defeffect Pick [] int)
+
+;; 1. The report's repro: the callback's result feeds the next step.
+(defn sum-to [^fat f : (fn [int] int) i : int n : int acc : int] : int
+  (if (>= i n)
+    acc
+    (sum-to f (+ i 1) n (+ acc (f i)))))
+
+;; 2. The callback is called for its effect; its result is dropped.
+(defn each [^fat f : (fn [int] int) i : int n : int] : int
+  (if (>= i n)
+    i
+    (do (f i) (each f (+ i 1) n))))
+
+;; 3. A mutual pair: each step calls the callback, then the other function.
+(defn ping [^fat f : (fn [int] int) i : int n : int acc : int] : int
+  (if (>= i n) acc (pong f (+ i 1) n (+ acc (f i)))))
+(defn pong [^fat f : (fn [int] int) i : int n : int acc : int] : int
+  (if (>= i n) acc (ping f (+ i 1) n (- acc (f i)))))
+
+;; 4. The callback performs an effect handled outside the loop.
+(defn ask-plus [x : int] : int (+ x (perform (Ask))))
+
+;; 5. A loop whose step is a cps->cps call to another function (not self),
+;;    reached from a join.
+(defn step [^fat f : (fn [int] int) x : int] : int (+ 1 (f x)))
+(defn count-steps [^fat f : (fn [int] int) i : int n : int acc : int] : int
+  (if (>= i n) acc (count-steps f (+ i 1) n (+ acc (step f i)))))
+
+;; 6. A nested direct entry: the callback itself runs a CPS loop to completion
+;;    before returning, so a bounce inside it must land in ITS entry, not the
+;;    outer loop's.
+(defn inner-sum [k : int] : int
+  (sum-to (fn [x : int] : int (mod x 2)) 0 k 0))
+
+(defn main [] : int
+  (let [n 2000000]
+    (println (sum-to (fn [x : int] : int (mod x 3)) 0 n 0))
+    (println (each (fn [x : int] : int x) 0 n))
+    (println (ping (fn [x : int] : int (mod x 7)) 0 n 0))
+    ;; the handler resumes once, in tail position: resumed in place
+    (println (handle (sum-to ask-plus 0 n 0) (Ask [] k) (resume k 1)))
+    ;; a non-tail resume around the loop: the bounce must land in the resume's
+    ;; own driver, and the case must see the loop's whole value
+    (println (handle (+ 1 (perform (Pick)))
+      (Pick [] ^multishot kk) (+ (resume kk (sum-to (fn [x : int] : int 1) 0 n 0))
+                                 (resume kk 10))))
+    (println (count-steps (fn [x : int] : int (mod x 5)) 0 n 0))
+    (println (sum-to inner-sum 0 3000 0)))
+  0)

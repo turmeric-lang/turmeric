@@ -87,4 +87,5 @@ rank-2 callback, each 10^6 deep under `^tailcall`, built at `-O0` by its
 **Not covered:** a `^fat` callback whose result feeds the next iteration --
 `(sum f (+ i 1) n (+ acc (f i)))` -- is lowered through the CPS backend,
 which never reaches this path. Filed separately as
-[cps-self-call-through-join-grows-the-stack](../reported/cps-self-call-through-join-grows-the-stack.md).
+[cps-self-call-through-join-grows-the-stack](cps-self-call-through-join-grows-the-stack.md)
+(since resolved 2026-10-12).
