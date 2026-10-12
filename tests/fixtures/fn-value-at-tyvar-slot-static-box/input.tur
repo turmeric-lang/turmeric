@@ -1,0 +1,44 @@
+;; A named defn passed into a generic's type-variable slot (`a : A`) is boxed
+;; as a fat `{ shim, orig }` handle.  Every such call malloc'd a fresh box
+;; that nothing freed -- 24 B a call, `(pick plus1 plus1)` two of them.  The
+;; box is a link-time constant, so it is the shared static one now; its no-op
+;; header keeps any later drop of it (a let, a struct field, a sum payload)
+;; harmless.  (requires.leak-check)
+(defn plus1 [x : int] : int (+ x 1))
+(defn twice [x : int] : int (* x 2))
+(defn pick [A] [a : A b : A] : A a)
+(defn ident [A] [a : A] : A a)
+(defstruct Holder [f : (fn [int] int)])
+
+;; called on the spot
+(defn direct [i : int] : int
+  (+ ((pick plus1 twice) i) ((ident twice) i)))
+
+;; bound to a local first
+(defn let-bound [i : int] : int
+  (let [g (ident plus1)]
+    (g i)))
+
+;; stored in a struct field
+(defn in-struct [i : int] : int
+  (let [h (Holder (ident plus1))]
+    ((. h f) i)))
+
+;; carried as a sum payload
+(defn in-some [i : int] : int
+  (match (some (ident twice))
+    (Some f) (f i)
+    (None) 0))
+
+(defn loop [i : int acc : int] : int
+  (if (= i 0)
+    acc
+    (loop (- i 1) (+ acc (direct i) (let-bound i) (in-struct i) (in-some i)))))
+
+(defn main [] : int
+  (println (direct 1))
+  (println (let-bound 2))
+  (println (in-struct 3))
+  (println (in-some 4))
+  (println (loop 100 0))
+  0)

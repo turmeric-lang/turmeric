@@ -81,9 +81,32 @@ Each of these still leaks the env, as before. None is freed early.
    pointed at the `:int`-reader rows of carrier-sum-option-boxes-have-no-owner
    as this shape. They are not: those fixtures erase the closure to `int`
    themselves.)
-2. **`unwrap` / `unwrap-or`**: the read hands the closure out as a value.
-   Freeing would need the result to be only invoked, the same question as
-   the arm binder, asked through the call.
+2. ~~**`unwrap` / `unwrap-or`**: the read hands the closure out as a value.~~
+   **Fixed 2026-10-12.** A callee that only PROJECTS the payload keeps nothing
+   (`fn_projects_payload_of`, `src/compiler/emit_expr.c`). Its whole body is a
+   `match` on that parameter. Each arm answers either its own binder or
+   something that names neither the parameter nor any binder. The callee
+   cannot suspend, and its inline C never spells the parameter's name.
+   `unwrap`, `unwrap-or` and `ok-val` qualify; `unwrap`'s `(default-of A)` arm
+   is inline C that names nothing of the Option. The question then moves to
+   the call's result. If it is invoked on the spot (`((unwrap ff) 41)`), or
+   bound by a `let` (sibling or nested) to a local that is itself only invoked
+   (`closure_binding_escapes`), the closure goes nowhere and the local still
+   drops it. 2400 B in 100 calls before, 0 now. Pinned by
+   `sum-closure-payload-unwrap-dropped` (leak-checked: on the spot, sibling
+   let, nested let, `unwrap-or`, `ok-val`, 100 turns). `sum-closure-payload-kept`
+   gained the must-keep half: the projected closure returned, pushed into a
+   vector (directly, through a nested let, from `unwrap-or`), each called after
+   the heap has been reused. Found on the way, pre-existing on `main`: the
+   named `plus1` in `(unwrap-or ff plus1)` leaked a 24 B box per call, as does
+   every named defn passed into ANY generic's type-variable slot (`(pick plus1
+   plus1)`: two). The box is a link-time constant, so that slot now asks for
+   the shared static one (`static_ok`, `src/compiler/elab_call.c`), except
+   for a `^construct` callee, whose sum payload is what this report's drops
+   free (GCC flags a static address reaching `free` there). Its no-op header
+   makes a later drop harmless. Pinned by `fn-value-at-tyvar-slot-static-box`
+   (leak-checked: called on the spot, let-bound, in a struct field, as a
+   `some` payload; 9696 B in 404 allocations before, 0 now).
 3. ~~**Lets the CPS backend emits.**~~ **Fixed 2026-10-09.** In a function
    the CPS backend lowers (its body performs), the let's `(some <closure>)` is
    a cps->direct call (`CT_LETCALL`); the IR builder names the `let` on it

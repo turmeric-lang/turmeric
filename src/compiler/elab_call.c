@@ -8260,6 +8260,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, shim_ty,
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
+                    /* fn-value-at-type-variable-slot-boxed-per-call: a named
+                     * defn's `{ shim, orig }` box is a link-time constant, so
+                     * it may be the shared static one -- otherwise every
+                     * `(pick plus1 plus1)` mallocs a box nothing frees (24 B a
+                     * call).  Its no-op header makes any later drop of it
+                     * harmless.  A `^construct` template is left on the
+                     * malloc form: its sum payload is what the scope-exit
+                     * drops free, and GCC reports a static address reaching
+                     * `free` there (the -Wfree-nonheap-object ratchet; see
+                     * the static_ok comment in expr.h). */
+                    shim->as.fn_to_fat_.static_ok =
+                        fn_binding && !fn_binding->is_construct_template;
                     args[i] = shim;
                 }
             }

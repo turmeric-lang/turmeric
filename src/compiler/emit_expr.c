@@ -4098,6 +4098,128 @@ static bool fn_is_tag_predicate_on(const Binding *fb, uint32_t pi) {
 
 static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int depth);
 
+/* sum-closure-payload-never-dropped, item 2: does `fb` only PROJECT the
+ * payload of its parameter `pi` -- its whole body a `match` on that parameter
+ * whose every arm answers either that arm's own binder (the payload, handed
+ * back as it is) or something that names neither the parameter nor any
+ * binder (`(default-of A)`, another parameter)?  That is `unwrap`,
+ * `unwrap-or`, `ok-val`.  The closure it hands back is the sum's own, so the
+ * call keeps nothing, and the question is moved to whoever receives the
+ * result (sum_closure_payload_escapes' call-head and let arms). */
+static bool fndef_cannot_suspend(const FnDef *fd);     /* below */
+static FnDef *scp_fndef_of(const Binding *fb);          /* below */
+static bool expr_names_binding(const Expr *e, const Binding *b);
+typedef struct { const Binding *b; bool hit; } NamesUd;
+static bool names_visit(const Expr *c, void *ud) {
+    NamesUd *u = (NamesUd *)ud;
+    if (!u->hit) u->hit = expr_names_binding(c, u->b);
+    return u->hit;
+}
+static bool expr_names_binding(const Expr *e, const Binding *b) {
+    if (!e) return false;
+    if (e->kind == EX_VAR) return e->as.var.binding == b;
+    if (e->kind == EX_CLOSURE) {
+        const struct Closure *c = e->as.closure_.closure;
+        if (!c) return true;
+        for (uint32_t k = 0; k < c->n_captures; k++) if (c->captures[k] == b) return true;
+        return false;
+    }
+    if (e->kind == EX_FN || e->kind == EX_FN_DEF) return false;
+    NamesUd u = { b, false };
+    cps_visit_children(e, names_visit, &u);
+    return u.hit;
+}
+/* Does an inline-C block in `e` spell `name` (as a whole identifier)? */
+typedef struct { const char *name; bool hit; } IcMentionUd;
+static bool ic_mention_visit(const Expr *c, void *ud);
+static void ic_mention_walk(const Expr *e, IcMentionUd *u) {
+    if (!e || u->hit) return;
+    if (e->kind == EX_INLINE_C && e->as.inline_c_.inline_c) {
+        const StrSlice *code = &e->as.inline_c_.inline_c->code;
+        size_t nl = strlen(u->name);
+        for (uint32_t i = 0; code->p && nl && i + nl <= code->len; i++) {
+            if (memcmp(code->p + i, u->name, nl) != 0) continue;
+            char pc = i ? code->p[i - 1] : ' ';
+            char nc = i + nl < code->len ? code->p[i + nl] : ' ';
+            bool pid = (pc == '_' || (pc >= 'a' && pc <= 'z') || (pc >= 'A' && pc <= 'Z') || (pc >= '0' && pc <= '9'));
+            bool nid = (nc == '_' || (nc >= 'a' && nc <= 'z') || (nc >= 'A' && nc <= 'Z') || (nc >= '0' && nc <= '9'));
+            if (!pid && !nid) { u->hit = true; return; }
+        }
+        return;
+    }
+    if (e->kind == EX_CLOSURE && e->as.closure_.closure && e->as.closure_.closure->fn) {
+        ic_mention_walk(e->as.closure_.closure->fn->body, u);
+        return;
+    }
+    cps_visit_children(e, ic_mention_visit, u);
+}
+static bool ic_mention_visit(const Expr *c, void *ud) {
+    IcMentionUd *u = (IcMentionUd *)ud;
+    ic_mention_walk(c, u);
+    return u->hit;
+}
+static bool expr_inline_c_mentions(const Expr *e, const char *name) {
+    IcMentionUd u = { name, false };
+    ic_mention_walk(e, &u);
+    return u.hit;
+}
+
+static bool fn_projects_payload_of(const Binding *fb, uint32_t pi) {
+    if (fb && fb->source_binding) fb = fb->source_binding;
+    FnDef *fd = scp_fndef_of(fb);
+    if (!fd || !fd->params || pi >= fd->n_params || !fd->body) return false;
+    /* Inline C is admitted when it cannot reach the parameter: a block can
+     * name a local only by spelling it in its text (unwrap's `(default-of
+     * A)` is such a block, and names nothing of the Option). */
+    if (!fndef_cannot_suspend(fd) || !fd->params[pi] || !fd->params[pi]->name ||
+        expr_inline_c_mentions(fd->body, fd->params[pi]->name->name))
+        return false;
+    const Expr *m = fd->body;
+    while (m && m->kind == EX_ASCRIBE) m = m->as.ascribe_.inner;
+    if (!m || m->kind != EX_MATCH) return false;
+    const Expr *sc = m->as.match_.scrutinee;
+    while (sc && sc->kind == EX_ASCRIBE) sc = sc->as.ascribe_.inner;
+    if (!sc || sc->kind != EX_VAR || sc->as.var.binding != fd->params[pi]) return false;
+    for (uint32_t i = 0; i < m->as.match_.n_arms; i++) {
+        const MatchArm *arm = &m->as.match_.arms[i];
+        if (arm->guard || arm->pattern.is_var) return false;
+        const Expr *v = arm->body;
+        while (v && v->kind == EX_ASCRIBE) v = v->as.ascribe_.inner;
+        if (!v) return false;
+        bool own_binder = false;
+        if (v->kind == EX_VAR)
+            for (uint32_t k = 0; k < arm->pattern.n_bindings; k++)
+                if (arm->pattern.bindings[k] == v->as.var.binding) own_binder = true;
+        if (own_binder) continue;
+        if (expr_names_binding(v, fd->params[pi])) return false;
+        for (uint32_t k = 0; k < arm->pattern.n_bindings; k++)
+            if (expr_names_binding(v, arm->pattern.bindings[k])) return false;
+    }
+    return true;
+}
+/* `c` (peeled) is a call projecting `b`'s payload (fn_projects_payload_of):
+ * the index of `b` among its arguments, else -1. */
+static int projector_call_on(const Expr *c, const Binding *b) {
+    while (c && c->kind == EX_ASCRIBE) c = c->as.ascribe_.inner;
+    if (!c || c->kind != EX_CALL || c->as.call_.fn_expr) return -1;
+    if (c->as.call_.dict_arg && !call_dispatch_is_static(c)) return -1;
+    for (uint32_t i = 0; i < c->as.call_.n_args; i++) {
+        const Expr *a = c->as.call_.args[i];
+        while (a && a->kind == EX_ASCRIBE) a = a->as.ascribe_.inner;
+        if (a && a->kind == EX_VAR && a->as.var.binding == b)
+            return fn_projects_payload_of(c->as.call_.fn_binding, i) ? (int)i : -1;
+    }
+    return -1;
+}
+/* Every argument of call `c` but `skip`, asked the payload question. */
+static bool call_args_escape_but(const Expr *c, uint32_t skip, const Binding *b, int depth) {
+    while (c && c->kind == EX_ASCRIBE) c = c->as.ascribe_.inner;
+    for (uint32_t i = 0; i < c->as.call_.n_args; i++)
+        if (i != skip && sum_closure_payload_escapes(c->as.call_.args[i], b, depth + 1))
+            return true;
+    return false;
+}
+
 /* Can a call of this function suspend or perform?  A closure taken out of the
  * sum is freed when the caller's `let` ends; a continuation captured while it
  * runs and resumed after that would call into a freed env.  Asked of the
@@ -4279,6 +4401,7 @@ static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int dep
             return false;
         }
         case EX_FN:
+            return false;   /* a bare (captureless) lambda cannot name a local */
         case EX_FN_DEF:
             return true;                        /* not walked: be conservative */
         case EX_MATCH: {
@@ -4312,7 +4435,13 @@ static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int dep
         case EX_CALL: {
             const Binding *fb = x->as.call_.fn_binding;
             if (fb && fb->source_binding) fb = fb->source_binding;
-            if (sum_closure_payload_escapes(x->as.call_.fn_expr, b, depth + 1))
+            /* `((unwrap ff) 41)`: the projected closure is invoked on the
+             * spot, so it goes nowhere (item 2). */
+            int pj = projector_call_on(x->as.call_.fn_expr, b);
+            if (pj >= 0) {
+                if (call_args_escape_but(x->as.call_.fn_expr, (uint32_t)pj, b, depth))
+                    return true;
+            } else if (sum_closure_payload_escapes(x->as.call_.fn_expr, b, depth + 1))
                 return true;
             for (uint32_t i = 0; i < x->as.call_.n_args; i++) {
                 const Expr *a = x->as.call_.args[i];
@@ -4346,6 +4475,25 @@ static bool sum_closure_payload_escapes(const Expr *x, const Binding *b, int dep
                     return true;
             }
             return sum_closure_payload_escapes(x->as.call_.dict_arg, b, depth + 1);
+        }
+        case EX_LET: {
+            /* `(let [f (unwrap ff)] (f 2))`: a binding of the projected
+             * closure that is itself only invoked (closure_binding_escapes)
+             * keeps nothing (item 2).  Every other init is asked as usual. */
+            for (uint32_t i = 0; i < x->as.let_.n; i++) {
+                const Expr *init = x->as.let_.bindings[i].init;
+                const Binding *lb = x->as.let_.bindings[i].binding;
+                int pj = projector_call_on(init, b);
+                if (pj >= 0 && lb && !lb->is_mut) {
+                    if (call_args_escape_but(init, (uint32_t)pj, b, depth)) return true;
+                    for (uint32_t j = i + 1; j < x->as.let_.n; j++)
+                        if (scp_binding_escapes(x->as.let_.bindings[j].init, lb)) return true;
+                    if (scp_binding_escapes(x->as.let_.body, lb)) return true;
+                    continue;
+                }
+                if (sum_closure_payload_escapes(init, b, depth + 1)) return true;
+            }
+            return sum_closure_payload_escapes(x->as.let_.body, b, depth + 1);
         }
         default:
             break;
@@ -4438,9 +4586,23 @@ static bool let_binding_sum_closure_freeable(EmitCtx *ctx, const Expr *e,
         !fndef_cannot_suspend(a->as.closure_.closure->fn))
         return false;
     if (sum_closure_payload_escapes(e->as.let_.body, b, 0)) return false;
-    for (uint32_t j = 0; j < e->as.let_.n; j++)
-        if (j != i && sum_closure_payload_escapes(e->as.let_.bindings[j].init, b, 0))
-            return false;
+    for (uint32_t j = 0; j < e->as.let_.n; j++) {
+        if (j == i) continue;
+        /* A sibling binding of the projected closure, `f (unwrap ff)`, that
+         * is itself only invoked keeps nothing (item 2; the walk's EX_LET arm
+         * covers a nested let). */
+        const Expr *ij = e->as.let_.bindings[j].init;
+        const Binding *lj = e->as.let_.bindings[j].binding;
+        int pj = j > i ? projector_call_on(ij, b) : -1;
+        if (pj >= 0 && lj && !lj->is_mut) {
+            if (call_args_escape_but(ij, (uint32_t)pj, b, 0)) return false;
+            for (uint32_t k = j + 1; k < e->as.let_.n; k++)
+                if (scp_binding_escapes(e->as.let_.bindings[k].init, lj)) return false;
+            if (scp_binding_escapes(e->as.let_.body, lj)) return false;
+            continue;
+        }
+        if (sum_closure_payload_escapes(ij, b, 0)) return false;
+    }
     return true;
 }
 

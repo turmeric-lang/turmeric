@@ -17,6 +17,10 @@
 ;;   c-callee        -- handed to a callee whose body is inline C (which could
 ;;                      stash the closure where no walk can see it)
 ;;   aliased         -- `(let [g ff] ...)`
+;;   unwrap-returned -- the closure `unwrap` projects is bound, then returned
+;;   unwrap-stored   -- the projected closure is pushed into a vector
+;;   unwrap-let-kept -- bound in a nested let, and that binding is stored
+;;   unwrap-or-kept  -- `unwrap-or`'s result pushed into a vector
 
 (defn returned [k : int] : (Option (fn [int] int))
   (let [ff (some (fn [x : int] : int (+ x k)))]
@@ -75,6 +79,27 @@
       (Some f) (f 3)
       (None) 0)))
 
+(defn unwrap-returned [k : int] : (fn [int] int)
+  (let [ff (some (fn [x : int] : int (+ x k)))
+        f (unwrap ff)]
+    f))
+
+(defn unwrap-stored [k : int v : (Vec (fn [int] int))] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (vec-push! v (unwrap ff))
+    1))
+
+(defn unwrap-let-kept [k : int v : (Vec (fn [int] int))] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (let [g (unwrap ff)]
+      (vec-push! v g)
+      (g 0))))
+
+(defn unwrap-or-kept [k : int v : (Vec (fn [int] int))] : int
+  (let [ff (some (fn [x : int] : int (+ x k)))]
+    (vec-push! v (unwrap-or ff (fn [x : int] : int x)))
+    1))
+
 (defn main [] : int
   (println (match (returned 2) (Some f) (f 40) (None) 0))   ;; 42
   (println ((binder-escapes 40) 2))                          ;; 42
@@ -87,4 +112,14 @@
     (println (kept-deeper 10 v))                             ;; 2
     (println ((vec-get v 0) 2))                              ;; 42 -- the kept closures
     (println ((vec-get v 1) 32))                             ;; 42
+    (let [u (unwrap-returned 40)]
+      (println ((binder-escapes 1000) 0))                    ;; reuse the heap
+      (println (u 2)))                                       ;; 42
+    (println (unwrap-stored 30 v))                           ;; 1
+    (println (unwrap-let-kept 20 v))                         ;; 20
+    (println (unwrap-or-kept 10 v))                          ;; 1
+    (println (kept-by-callee 1000 v))                        ;; reuse the heap
+    (println ((vec-get v 2) 12))                             ;; 42
+    (println ((vec-get v 3) 22))                             ;; 42
+    (println ((vec-get v 4) 32))                             ;; 42
     0))
