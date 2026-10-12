@@ -38,17 +38,28 @@ leak gate.
     one-shot resume cannot read. `(k v)` there used to fail to link.
   - `tests/fixtures/errors/resume-of-cloneable-cont` and
     `errors/shift-receiver-one-shot-effect-cont` pin these.
-- **Not addressed here:**
-  - `cont<T>` silently becoming a type variable. A `cont<T>` that meant
-    `TY_CONT` would refuse a handler `k` at the call
-    ("expected cont<?>, got int"), so the spelling the repro uses is what
-    now works.
-  - A `resume` expression is typed as its VALUE, not as what the handle
-    delivers. `(defn helper [k v : P] : int (resume k v))` with a struct `P`
-    is a TUR-E0709 return mismatch, in the case body as much as in a helper.
-  - The interpreter refuses an explicitly annotated `multishot-effect-cont`
-    lexical shift receiver ("resume: not a continuation"), which compiles
-    and runs.
+- **Follow-ups, all landed 2026-10-12** on the same branch:
+  - **`cont<T>` silently becoming a type variable.** Filed and fixed as
+    [cont-angle-bracket-annotation-becomes-tyvar](cont-angle-bracket-annotation-becomes-tyvar.md).
+    A helper now declares its `k` as `effect-cont<T>`, and a handler `k` passes
+    as one.
+  - **A `resume` expression typed as its VALUE.** It is now typed as what its
+    handle delivers (same report). That turned out to be a silent wrong answer
+    in an ordinary case body as well:
+    `(do (println (resume k 3.25)) 5)` in a handle of int printed
+    `3.45846e-323`.
+  - **The interpreter refusing a `multishot-effect-cont` lexical shift
+    receiver** ("resume: not a continuation"). Its EX_RESUME, on both the
+    recursive and the work-stack path, now resumes the TuriCont handle a
+    lexical shift hands out when the binding is declared a continuation
+    (`resume_k_is_ts_handle`, `src/turi/eval.c`).
+    `tests/fixtures/shift-receiver-multishot-effect-cont` pins it. Leak-checking
+    that fixture found
+    [lexical-shift-receiver-cont-never-freed](../reported/lexical-shift-receiver-cont-never-freed.md),
+    which is older than this work.
+  - **Still true:** `resume` of an arbitrary `int` (not a continuation) is
+    resumed as a DK chain and crashes compiled. On `main` it failed to link.
+    `int` remains the erased carrier a stored `k` legitimately uses.
 
 ---
 

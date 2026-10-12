@@ -1108,10 +1108,22 @@ char *emit_effects_resume(EmitCtx *ctx, Buf *body, const Expr *e) {
              * (docs/archive/cps-resume-frame-node-leak.md, snapshot sibling.) */
             indent_buf(body, ctx->indent);
             buf_printf(body, "int64_t %s = tur_continuation_snapshot(%s);\n", snap, k_var);
+            /* The resume returns what the handle delivers in the int64 slot;
+             * load it as the resume's real type (a float by its bits). */
+            char *raw = fresh_tmp(ctx);
             indent_buf(body, ctx->indent);
-            buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(%s, %s);\n", tmp, snap, v_arg);
+            buf_printf(body, "int64_t %s = tur_cloneable_cont_resume(%s, %s);\n", raw, snap, v_arg);
             indent_buf(body, ctx->indent);
             buf_printf(body, "tur_cloneable_cont_drop(%s);\n", snap);
+            indent_buf(body, ctx->indent);
+            if (e->type.kind == TY_NIL || e->type.kind == TY_NEVER) {
+                buf_printf(body, "int64_t %s = %s;\n", tmp, raw);
+            } else {
+                char *ld = eff_slot_load(e->type, raw);
+                buf_printf(body, "%s %s = %s;\n", type_c_name(e->type), tmp, ld);
+                free(ld);
+            }
+            free(raw);
             free(snap);
             free(v_arg);
             free(k_var);

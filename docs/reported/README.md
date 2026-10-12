@@ -38,7 +38,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cont-angle-bracket-annotation-becomes-tyvar](cont-angle-bracket-annotation-becomes-tyvar.md) | medium (silent loss of type checking) | `[k : cont<int>]` is one unknown symbol, so it falls through to an implicit type variable named `cont<int>` and nothing about `k` is checked -- the `rc<T>` bug of 2026-07-20, for the continuation types. Parsing it alone would break handing a case's `k` to a helper: every cont-typed parameter refuses the `int`-typed handler `k`. |
+| [lexical-shift-receiver-cont-never-freed](lexical-shift-receiver-cont-never-freed.md) | low-medium (488 B per evaluation) | A lexical `shift` wraps the captured chain in a `tur_cloneable_cont` for its receiver and frees neither the wrapper nor the chain copy -- the handler-case bridge reaps both at the entry boundary, the reified shift body does not. Predates the receiver-flavor work that found it. |
 
 ## Found executing the open reports (filed 2026-10-12)
 

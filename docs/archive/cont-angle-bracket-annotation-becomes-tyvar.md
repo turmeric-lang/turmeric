@@ -1,14 +1,56 @@
 # `cont<T>` (angle-bracket) type annotation silently becomes a type variable
 
+**Fixed 2026-10-12**, along all three fix directions below:
+
+- **Resolved annotations.** `cont_type_from_keyword_name`
+  (`src/compiler/elab_types.c`) resolves `cont<T>` and its flavors to the
+  flavored `TY_CONT` with `returns = T`. `rc_family_type_from_keyword_name`
+  delegates to it, so every annotation site that call already serves gets it.
+  `returns_known` records that T was written, so the bare names' int default
+  is not mistaken for it.
+- **A handler `k` passes as an `effect-cont`** (`elab_call.c`, beside the
+  int-carrier admissions). An `effect-cont` parameter may resume it more than
+  once. A `multishot-effect-cont` parameter takes only a `k` that
+  `Binding.cont_is_wrapper` marks (a fn-payload or `__Shift` case): its
+  snapshot resume reads only the wrapper, and a user `^multishot` case hands
+  out the bare chain. A cloneable, escape or serial `cont` is refused with a
+  hint.
+- **A resume is typed as what its handle delivers** (`elab_make_resume`).
+  For a case's `k` that is the handle's result type, which
+  `Binding.cont_result_type` records. For an `effect-cont<T>` it is T, when
+  T is a scalar. This replaces the resume value's type, which made
+  `(println (resume k 3.25))` in a handle of int print the int's bits as a
+  double on the compiled path.
+- **Fixed on the way: a fn-payload case resuming its own wrapped `k`** hung
+  (tail resume) or crashed (non-tail). The CPS backend resumed the wrapper as
+  a bare chain. It now goes through `__dk_resume_word` and stays off the
+  tail-resume fast path (`case_tail_resumes_chain`, `emit_resume`).
+
+Fixtures:
+
+- `resume-handler-k-outside-its-case` now declares `effect-cont<int>`.
+- `resume-typed-as-handle-result`.
+- `resume-fn-payload-case-own-k`.
+- `errors/handler-k-to-cloneable-cont-param`,
+  `errors/handler-k-to-multishot-effect-cont-param` and
+  `errors/cont-angle-bracket-annotation-is-checked`.
+
+The effects guide has a section on passing `k` to a helper.
+
+Not covered: an unknown type name in general (`[k : zork]`) still becomes an
+implicit type variable. That is the GS4 design, not this bug.
+
+---
+
 **Severity: medium (silent loss of type checking).** Nothing a program does
 with such a parameter is checked. This is how
-[resume-of-cont-typed-param-is-a-no-op](../archive/resume-of-cont-typed-param-is-a-no-op.md)
+[resume-of-cont-typed-param-is-a-no-op](resume-of-cont-typed-param-is-a-no-op.md)
 stayed silent: the direct emitter's `resume` treated an unrecognised
 continuation type as "return the value". Found 2026-10-12 while fixing that
 report.
 
 This is the same defect as
-[rc-angle-bracket-annotation-becomes-tyvar](../archive/history/rc-angle-bracket-annotation-becomes-tyvar.md)
+[rc-angle-bracket-annotation-becomes-tyvar](history/rc-angle-bracket-annotation-becomes-tyvar.md)
 (fixed 2026-07-20), for the continuation types. That fix did not cover them.
 
 ## Repro

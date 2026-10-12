@@ -544,12 +544,67 @@ Type *ptr_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
  * -- a silent footgun.  Returns NULL when `name` is not one of these
  * angle-bracket forms, so the caller falls through to its existing resolution
  * (bare `rc`, tyvar, alias, ...). */
+/* cont-angle-bracket-annotation-becomes-tyvar: resolve a continuation
+ * annotation spelled with angle brackets -- `cont<T>`, `escape-cont<T>`,
+ * `serial-cont<T>`, `effect-cont<T>`, `multishot-effect-cont<T>` -- to the
+ * flavored TY_CONT whose `returns` is T, exactly the one-argument list form
+ * `(cont T)` (fn_type_from_form_impl).  The reader hands the whole spelling
+ * over as ONE symbol, and no ladder knew it, so it fell through to an implicit
+ * type variable named "cont<int>" and nothing about the parameter was checked.
+ * Reached through rc_family_type_from_keyword_name, which every annotation
+ * site already calls for the same angle-bracket problem.  NULL when `name` is
+ * not one of these forms. */
+static Type *cont_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
+                                         Span span, const Symbol *rec_name,
+                                         const Symbol **type_params,
+                                         Kind *type_param_kinds,
+                                         uint8_t n_type_params) {
+    if (len < 3 || name[len - 1] != '>') return NULL;
+    uint32_t lt = 0;
+    while (lt < len && name[lt] != '<') lt++;
+    if (lt == 0 || lt >= len - 1) return NULL;
+    char head[32];
+    if (lt >= sizeof(head)) return NULL;
+    memcpy(head, name, lt);
+    head[lt] = '\0';
+    int cflav = cont_flavor_from_name(head);
+    if (cflav < 0) return NULL;
+    const char *inner = name + lt + 1;
+    uint32_t inner_len = len - lt - 2;   /* between '<' and the final '>' */
+    if (inner_len == 0) {
+        diag_emit(DIAG_ERROR, span, "empty result type in '%s<...>'", head);
+        return NULL;
+    }
+    const Symbol *inner_sym = symtab_intern(e->st, strslice(inner, inner_len));
+    Form inner_form;
+    memset(&inner_form, 0, sizeof(inner_form));
+    inner_form.tag = F_SYM;
+    inner_form.span = span;
+    inner_form.as.sym = inner_sym;
+    Type *ret = type_expr_from_form(e, &inner_form, rec_name,
+                                    type_params, type_param_kinds, n_type_params);
+    if (!ret) return NULL;
+    Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
+    *t = type_cont_flavored(ret->kind, (ContFlavor)cflav);
+    t->as.cont.returns_known = true;
+    if (cont_name_is_multishot(head)) t->copy_kind = CK_MULTISHOT;
+    return t;
+}
+
 Type *rc_family_type_from_keyword_name(Elab *e, const char *name, uint32_t len,
                                        Span span, const Symbol *rec_name,
                                        const Symbol **type_params,
                                        Kind *type_param_kinds, uint8_t n_type_params) {
     /* shortest typed form is "rc<x>" == 5 chars; must end in '>' */
     if (len < 5 || name[len - 1] != '>') return NULL;
+    /* cont-angle-bracket-annotation-becomes-tyvar: the continuation types
+     * have the same angle-bracket spelling and the same callers. */
+    {
+        Type *ct = cont_type_from_keyword_name(e, name, len, span, rec_name,
+                                               type_params, type_param_kinds,
+                                               n_type_params);
+        if (ct) return ct;
+    }
     TypeKind family = TY_UNKNOWN;
     uint32_t prefix_len = 0;
     if (len > 3 && memcmp(name, "rc<", 3) == 0)        { family = TY_RC;   prefix_len = 3; }

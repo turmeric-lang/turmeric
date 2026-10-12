@@ -803,6 +803,7 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
      * receivers behave identically (one snapshot, one resume). */
     Binding *k_b = binding_new(e, k_name, TYPE_INT, false, false, span);
     k_b->is_continuation = true;
+    k_b->cont_is_wrapper = true;   /* the __Shift case wraps its chain */
     k_b->type.copy_kind = CK_MULTISHOT;
     scope_add(&hs, k_b);
 
@@ -2514,6 +2515,12 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
             break;
         }
         kb->is_continuation = true;
+        kb->cont_is_wrapper = cases[i].resumable_payload;
+        /* A resume runs the rest of the handled body (with the handler still
+         * installed, or not for a shallow one) and delivers what the handle
+         * delivers: the body's type, not the resume value's. */
+        if (body && body->type.kind != TY_UNKNOWN && body->type.kind != TY_NEVER)
+            kb->cont_result_type = &body->type;
         cases[i].k_binding = kb;
         scope_add(&handler_scope, kb);
         
@@ -2567,8 +2574,9 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
 
         /* ET3-C: Check that the handler clause result type matches the body type.
          * Skip the check when either is TY_UNKNOWN or TY_NEVER, or when the clause
-         * body ends in a resume expression (resume returns the value type passed to
-         * the continuation, not the overall handle result type). */
+         * body ends in a resume expression.  (A resume of the case's own `k` is
+         * typed as the handle's result now -- elab_make_resume -- so such a
+         * clause agrees by construction; the skip predates that.) */
         {
             /* Helper: check if an expression ends in a resume.
              * Handles bare (resume ...) and (do ... (resume ...)) patterns. */
@@ -3073,7 +3081,32 @@ Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
     resume->k = k;
     resume->value = value;
 
-    Expr *out = expr_new(e->arena, EX_RESUME, value->type, span);
+    /* A resume yields what the handle delivers, not the value it resumes
+     * with: a case's `k` carries its handle's result type, and an
+     * `effect-cont<T>` names it.  Typing it as the value (the fallback, when
+     * neither is known) made `(println (resume k 3.25))` in a handle of int
+     * read an int's bits as a double, and refused `(+ 100 (resume k 3.25))`. */
+    Type rtype = value->type;
+    if (k->kind == EX_VAR && k->as.var.binding) {
+        const Binding *kb = k->as.var.binding;
+        if (kb->cont_result_type) {
+            rtype = *kb->cont_result_type;
+        } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_known) {
+            /* `returns` is a bare kind: only a scalar names a whole type. */
+            switch (kb->type.as.cont.returns) {
+                case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_BOOL: case TY_CSTR: case TY_NIL:
+                    rtype = type_from_kind(kb->type.as.cont.returns);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    Expr *out = expr_new(e->arena, EX_RESUME, rtype, span);
     out->as.resume_.resume = resume;
     return out;
 }

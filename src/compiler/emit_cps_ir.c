@@ -12662,6 +12662,16 @@ static bool case_body_tail_resumes(const CTerm *t) {
     return false;
 }
 
+/* ...and may it take that fast path?  dk_tail_resume hands the driver the
+ * chain itself, so not when the case binds its `k` as the cloneable wrapper
+ * (a fn-payload / __Shift case, Binding.cont_is_wrapper): that case resumes
+ * through __dk_resume_word (emit_resume), inline.  Both the case body's
+ * resume and its handler ctor ask this, so they agree. */
+static bool case_tail_resumes_chain(const CHandleCase *c) {
+    if (c->k && c->k->cont_is_wrapper) return false;
+    return case_body_tail_resumes(c->case_body);
+}
+
 /* fn-value-call-cps-frames-held-until-outer-entry, effect half: a TAIL-resume
  * case (case_body_tail_resumes) whose continuation `k` appears nowhere but as
  * the continuation of that one tail resume -- not bound, passed, called or
@@ -12786,7 +12796,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
          * ctor decision below. */
         bool save_ctr = ce->case_tail_resume;
         ce->case_tail_resume = !t->as.handle.shallow
-            && case_body_tail_resumes(t->as.handle.cases[ci].case_body);
+            && case_tail_resumes_chain(&t->as.handle.cases[ci]);
         emit_lifted(ce, cnames[ci], LH_HANDLER_CASE, NULL, TY_INT, NULL,
                     t->as.handle.cases[ci].case_body, &t->as.handle.cases[ci], ccaps);
         ce->case_tail_resume = save_ctr;
@@ -12825,7 +12835,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
          * emit_resume for that case emits the matching dk_tail_resume. */
         const char *ctor = hctor;
         if (!t->as.handle.shallow
-            && case_body_tail_resumes(t->as.handle.cases[ci].case_body))
+            && case_tail_resumes_chain(&t->as.handle.cases[ci]))
             ctor = case_resumes_k_only_in_tail(&t->as.handle.cases[ci])
                  ? "dk_handler_tail_inplace" : "dk_handler_tail";
         /* A RE-OPENING case delivers its own value through the real enclosing
@@ -13209,6 +13219,26 @@ static void emit_resume(CE *ce, const CTerm *t) {
      * dk_handler_tail (case_body_tail_resumes agrees), so the chain it handed
      * the case runs on past the handle and this yield hands it off; the value is
      * delivered by the driver, so nothing follows here. */
+    /* resume-of-cont-typed-param-is-a-no-op: a fn-payload / __Shift case
+     * binds its `k` as the cloneable wrapper around the chain, not the chain,
+     * so every chain arm below -- the consumed store included, which would
+     * land past the 32-byte wrapper -- misread it: the case hung or crashed.
+     * Resume it through the wrapper (__dk_resume_word), inline. */
+    if (t->as.resume.k.kind == CA_VAR && t->as.resume.k.var
+        && t->as.resume.k.var->cont_is_wrapper) {
+        char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
+        Buf inv; buf_init(&inv);
+        buf_printf(&inv, "__dk_resume_word((intptr_t)(%s), %s)", kk, sv);
+        buf_putc(&inv, '\0');
+        char *ld = slot_load(ce->ctx, t->as.resume.x.ty, t->as.resume.x.type, inv.data, false);
+        char *bn = cvar_cname(ce, t->as.resume.x);
+        ce_line(ce, "%s = %s;", bn, ld);
+        buf_free(&inv);
+        free(bn); free(ld); free(sv); free(kk); free(vv);
+        cps_panic_check(ce);
+        emit_term(ce, t->as.resume.body);
+        return;
+    }
     /* (cont? k) support: mark k consumed at the user resume site so a later
      * `cont?` on the same k reads false (matches the fiber path). */
     ce_line(ce, "((DK *)(%s))->consumed = 1;", kk);

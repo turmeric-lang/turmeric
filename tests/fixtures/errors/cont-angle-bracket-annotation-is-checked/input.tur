@@ -1,0 +1,6 @@
+;; cont-angle-bracket-annotation-becomes-tyvar: `k : cont<int>` was one
+;; unknown symbol, so it became a type variable and `(+ k 1)` went unchecked
+;; ("first arg type tyvar").  It is a continuation now, and says so.
+(defn helper [k : cont<int>] : int (+ k 1))
+(defn main [] : nil
+  (println 1))

@@ -1,0 +1,44 @@
+;; A `resume` delivers what its handle delivers, so it is typed as the
+;; handle's result -- not as the value it resumes with.  It used to take the
+;; value's type: `(println (resume k 3.25))` in a handle of int printed the
+;; int's bits read as a double (3.45846e-323 for 7) on the compiled path,
+;; and `(+ 100 (resume k 3.25))` was refused as mixed int/float arithmetic.
+;; An `effect-cont<T>` parameter carries the same fact across a call.
+
+(defstruct P [x : int y : int])
+(defeffect AskF [] float)
+(defeffect AskP [] P)
+(defeffect AskI [] int)
+
+;; Float value, int handle: arithmetic on the resume, and a printed resume.
+(defn step-arith [] : int
+  (handle (if (> (perform (AskF)) 1.5) 7 0) (AskF [] k) (+ 100 (resume k 3.25))))
+(defn step-print [] : int
+  (handle (if (> (perform (AskF)) 1.5) 7 0) (AskF [] k) (do (println (resume k 3.25)) 5)))
+
+;; Struct value, int handle.
+(defn step-struct [] : int
+  (handle (let [p (perform (AskP))] (+ (.x p) (.y p)))
+    (AskP [] k) (+ 100 (resume k (P 3 4)))))
+
+;; Int value, float handle.
+(defn step-float [] : float
+  (handle (+ 0.5 (if (> (perform (AskI)) 1) 2.25 0.0))
+    (AskI [] k) (+ 0.25 (resume k 2))))
+
+;; Across a call: the helper's `effect-cont<T>` names the handle's type.
+(defn helper-int [k : effect-cont<int> v : float] : int (+ 1 (resume k v)))
+(defn step-helper [] : int
+  (handle (if (> (perform (AskF)) 1.5) 7 0) (AskF [] k) (helper-int k 3.25)))
+(defn helper-float [k : effect-cont<float> v : float] : float (resume k v))
+(defn step-helper-float [] : float
+  (handle (+ 0.5 (perform (AskF)))
+    (AskF [] ^multishot k) (+ (helper-float k 3.25) (helper-float k 1.25))))
+
+(defn main [] : nil
+  (println (step-arith))          ; 100 + 7 = 107
+  (println (step-print))          ; prints 7, then 5
+  (println (step-struct))         ; 100 + 3 + 4 = 107
+  (println (step-float))          ; 0.25 + 0.5 + 2.25 = 3
+  (println (step-helper))         ; 1 + 7 = 8
+  (println (step-helper-float)))  ; (0.5 + 3.25) + (0.5 + 1.25) = 5.5

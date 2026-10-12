@@ -8711,6 +8711,53 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
              * (int64_t)(intptr_t) cast so the generated C99 code is valid. */
             arg_ok = true;
         }
+        /* cont-angle-bracket-annotation-becomes-tyvar: a handler case's `k` --
+         * an `is_continuation` binding, carried as the int64 DK word -- handed
+         * to a helper that declares it as what it is, an `effect-cont`.  Its
+         * `resume` / `(k v)` there is __dk_resume_word, which reads both shapes
+         * a case hands out, and may run more than once (dk_invoke copies the
+         * chain each time), so it takes a `^multishot` case's `k` too.  A
+         * `multishot-effect-cont` parameter resumes through the snapshot,
+         * which reads only the cloneable wrapper a fn-payload case binds
+         * (Binding.cont_is_wrapper), so it takes only that `k`.  A cloneable,
+         * escape or serial `cont` runs another runtime altogether. */
+        if (!arg_ok && expected_arg_kind == TY_CONT && args[i]->kind == EX_VAR
+            && args[i]->as.var.binding && args[i]->as.var.binding->is_continuation
+            && fn_type.kind == TY_FN) {
+            uint32_t fi_k = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *want_k =
+                (fn_type.as.fn.arg_full_types && fi_k < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fi_k] : NULL;
+            if ((!want_k || want_k->kind != TY_CONT) && fn_binding->source_fn_def
+                && fn_binding->source_fn_def->params
+                && fi_k < fn_binding->source_fn_def->n_params
+                && fn_binding->source_fn_def->params[fi_k])
+                want_k = &fn_binding->source_fn_def->params[fi_k]->type;
+            if (want_k && want_k->kind == TY_CONT) {
+                const Binding *kb = args[i]->as.var.binding;
+                bool want_effect = (ContFlavor)want_k->as.cont.flavor == CONT_EFFECT;
+                bool want_multi = want_k->copy_kind == CK_MULTISHOT;
+                if (want_effect && (!want_multi || kb->cont_is_wrapper)) {
+                    arg_ok = true;
+                } else {
+                    diag_emit_with_code(DIAG_ERROR, args[i]->span,
+                        TUR_E0001_TYPE_MISMATCH,
+                        want_effect
+                            ? "function '%s' arg %u: '%s' cannot pass as a "
+                              "`multishot-effect-cont` -- only a fn-payload "
+                              "handler case's continuation is one\n"
+                              "  = help: declare the parameter `effect-cont`; a "
+                              "helper may resume it more than once"
+                            : "function '%s' arg %u: '%s' is a handler "
+                              "continuation, which a cloneable/escape/serial "
+                              "`cont` parameter cannot take\n"
+                              "  = help: declare the parameter `effect-cont`",
+                        fn_binding->name ? fn_binding->name->name : "?",
+                        i + 1, kb->name ? kb->name->name : "k");
+                    return NULL;
+                }
+            }
+        }
         /* IT4: Union type subtyping — accept a value of type A where (A | B) is expected.
          * Wrap the argument with EX_UNION_INJECT so emit.c produces TUR_TAG(idx, val). */
         if (!arg_ok && expected_arg_kind == TY_UNION) {
