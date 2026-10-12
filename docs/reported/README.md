@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing resume-of-cont-typed-param-is-a-no-op (filed 2026-10-12)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cont-angle-bracket-annotation-becomes-tyvar](cont-angle-bracket-annotation-becomes-tyvar.md) | medium (silent loss of type checking) | `[k : cont<int>]` is one unknown symbol, so it falls through to an implicit type variable named `cont<int>` and nothing about `k` is checked -- the `rc<T>` bug of 2026-07-20, for the continuation types. Parsing it alone would break handing a case's `k` to a helper: every cont-typed parameter refuses the `int`-typed handler `k`. |
+
 ## Found executing the open reports (filed 2026-10-12)
 
 Closing `sum-closure-payload-never-dropped` item 2 turned up two pre-existing
