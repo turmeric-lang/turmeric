@@ -2803,6 +2803,9 @@ static bool letval_thin_fn_local_ok(const CTerm *t) {
         return false;
     if (cps_ir_thread_local_has(x->bind))
         return !cps_ir_thread_local_env_boxed(x->bind);
+    /* An alias of the lambda kept for a closure that captures it, whose calls
+     * through it are rewritten to direct ones (cps_ir_kept_global_alias). */
+    if (cps_ir_kept_global_alias(x->bind, v->var)) return true;
     return thin_alias_target(x->bind) == v->var && threadable_has(v->var);
 }
 

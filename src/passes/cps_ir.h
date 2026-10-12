@@ -469,6 +469,9 @@ const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i);
 /* The same for an immutable local holding a GLOBAL fn -- named, or a lifted
  * captureless lambda -- every use of which is a saturated call: the global,
  * or NULL. */
+/* An alias of a global kept because a nested closure captures it (see
+ * cps_ir.c, PapInline.keep_binding). */
+bool cps_ir_kept_global_alias(const Binding *local, const Binding *target);
 const Binding *cps_ir_let_global_fn_alias(const Expr *let, uint32_t i);
 /* A captureless `letrec` member (global, its lifted lambda in source_binding):
  * the lambda a call through it calls, or NULL. */
