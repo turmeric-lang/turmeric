@@ -1,0 +1,57 @@
+;; generic-closure-carrier-bridges-missing: a closure returned by a generic,
+;; let-bound and then called, and a typed capture handed to a generic stdlib
+;; callee inside a per-spec clone of the closure body.  Both used to emit an
+;; int/pointer mix (-Wint-conversion: a hard error on gcc 14 / clang 15+).
+
+(defstruct Pt [x : int y : int])
+
+;; Defect 1: the let-bound call's result (cstr goes to the shared carrier
+;; thunk, which returns the int64 word).
+(defn capture [A] [v : A] : (fn [] A)
+  (fn [] : A v))
+
+;; Defect 2: the typed capture `values` passed to `vec-get`.
+(defn first-of [A] [values : (Vec A)] : (fn [] A)
+  (fn [] : A (vec-get values 0)))
+
+;; Both at once -- the shape that found the report.
+(defn cycle [A] [values : (Vec A)] : (fn [] A)
+  (let [^mut i 0]
+    (fn [] : A
+      (let [v (vec-get values (mod i (vec-len values)))]
+        (set! i (+ i 1))
+        v))))
+
+(defn main [] : int
+  (println ((capture "applied")))
+  (let [g (capture "bound")]
+    (println (g)))
+  (let [gi (capture 41)]
+    (println (gi)))
+  (let [gf (capture 7.1)]
+    (println (gf)))
+  (let [gb (capture true)]
+    (println (gb)))
+  (let [gp (capture (Pt 3 4))]
+    (println (.y (gp))))
+  (let [f (first-of [1.5 2.5])]
+    (println (f)))
+  (let [s (first-of ["a" "b"])]
+    (println (s)))
+  (let [i (first-of [3 4])]
+    (println (i)))
+  (let [cf (cycle [1.25 2.5])]
+    (println (cf))
+    (println (cf))
+    (println (cf)))
+  (let [cs (cycle ["x" "y"])]
+    (println (cs))
+    (println (cs))
+    (println (cs)))
+  (let [cb (cycle [true false])]
+    (println (cb))
+    (println (cb)))
+  (let [cp (cycle [(Pt 1 2) (Pt 3 4)])]
+    (println (.x (cp)))
+    (println (.y (cp))))
+  0)

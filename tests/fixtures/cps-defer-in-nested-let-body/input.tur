@@ -1,0 +1,80 @@
+;; cps-defer-in-let-body-under-deferring-do-evicts: a `defer` in a `let` body
+;; (a `do` in BIND position) inside a `do` that defers too.  Each function
+;; performs, so it is CPS-lowered; the defers fire LIFO at their own block's
+;; exit, through the perform, as the direct emitter's frames do.
+
+(defeffect Ask [] : int)
+
+;; The report's repro.
+(defn f [x : int] : int
+  (defer (println "f outer"))
+  (let [a (+ (perform (Ask)) x)]
+    (defer (println "f inner"))
+    a))
+
+;; The perform inside the inner block, after its defer: the inner defer is
+;; pending across the resume.
+(defn g [x : int] : int
+  (defer (println "g outer"))
+  (let [a x]
+    (defer (println "g inner"))
+    (+ a (perform (Ask)))))
+
+;; Two levels of nesting, two defers in the middle block, and the block's
+;; value used after it.
+(defn h [x : int] : int
+  (defer (println "h 1"))
+  (let [a (let [b (perform (Ask))]
+            (defer (println "h 2a"))
+            (defer (println "h 2b"))
+            (let [c (+ b x)]
+              (defer (println "h 3"))
+              c))]
+    (println "h after")
+    (* a 2)))
+
+;; A nested block in a non-tail statement position.
+(defn s [x : int] : int
+  (defer (println "s outer"))
+  (let [_ (let [q (perform (Ask))]
+            (defer (println "s stmt"))
+            q)]
+    (println "s next")
+    (+ x 1)))
+
+(defn boom [x : int] : int
+  (if (> x 0) (panic "boom") x))
+
+;; A caught panic inside the inner block, after the perform: both defers are
+;; pending and fire, inner first.
+(defn p [x : int] : int
+  (defer (println "p outer"))
+  (let [a (perform (Ask))]
+    (defer (println "p inner"))
+    (+ a (boom x))))
+
+;; A caught panic after the inner block has exited: its defer already fired
+;; (and is no longer pending); only the outer one fires again.
+(defn q [x : int] : int
+  (defer (println "q outer"))
+  (let [a (let [b (perform (Ask))]
+            (defer (println "q inner"))
+            b)]
+    (+ a (boom x))))
+
+(defn run-p [x : int] : nil
+  (let [r (catch-unwind (fn [] : int (handle (p x) (Ask [] k) (resume k 50))))]
+    (println (if (err? r) "p: caught" "p: no panic"))))
+
+(defn run-q [x : int] : nil
+  (let [r (catch-unwind (fn [] : int (handle (q x) (Ask [] k) (resume k 60))))]
+    (println (if (err? r) "q: caught" "q: no panic"))))
+
+(defn main [] : int
+  (println (handle (f 1) (Ask [] k) (resume k 10)))
+  (println (handle (g 2) (Ask [] k) (resume k 20)))
+  (println (handle (h 3) (Ask [] k) (resume k 30)))
+  (println (handle (s 4) (Ask [] k) (resume k 40)))
+  (run-p 1)
+  (run-q 1)
+  0)

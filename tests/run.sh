@@ -13,6 +13,7 @@
 #   tests/fixtures/errors/<name>/          — negative fixture
 #     input.tur
 #     expected.diag       (substring(s) that must appear in stderr; one per line)
+#     unexpected.diag     (substring(s) that must NOT appear in stderr; one per line)
 #
 # Pass: exits 0 with "PASS <name>". Any failure exits 1.
 
@@ -1230,6 +1231,32 @@ run_negative() {
             fi
         done < "$dir/expected.diag"
         if [ $missing -ne 0 ]; then
+            {
+                echo "    actual stderr:"
+                sed 's/^/      /' "$dir/actual.stderr"
+            } >> "$log_file"
+            write_result "FAIL" "$name" "diagnostic mismatch" "$log_file"
+            return
+        fi
+    fi
+
+    # unexpected.diag: the negative path's unexpected.stderr -- substrings that
+    # must NOT appear beside the expected error (one per line).  Pins the
+    # absence of a false diagnostic that used to accompany a real one, e.g. a
+    # TUR-W0033 "unreachable" on the handler whose effect is the refusal.
+    if [ -f "$dir/unexpected.diag" ]; then
+        local present=0
+        while IFS= read -r needle; do
+            [ -z "$needle" ] && continue
+            if grep -F -q "$needle" "$dir/actual.stderr"; then
+                {
+                    echo "FAIL $name — unexpected diagnostic substring found:"
+                    echo "    $needle"
+                } >> "$log_file"
+                present=1
+            fi
+        done < "$dir/unexpected.diag"
+        if [ $present -ne 0 ]; then
             {
                 echo "    actual stderr:"
                 sed 's/^/      /' "$dir/actual.stderr"

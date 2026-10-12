@@ -1,0 +1,65 @@
+;; cps-local-fn-alias-or-lambda-called-in-place-refused (a lambda called from
+;; inside another closure): a let-bound effectful lambda `f`, called only from
+;; the body of another let-bound lambda `g` that captures it.  The rewrite
+;; that makes `(f n)` the lambda's own CPS call was registered only while the
+;; `let` binding `f` was being translated, and `g`'s body is a separate lifted
+;; function, so the call there went to f's direct entry, a fresh root: refused
+;; at compile time ("this effect operation has no lowering here").  The
+;; translation of `g`'s body now finds the `let` that bound its capture and
+;; applies the same rewrite.  Every line equals `tur --interpret`.
+(defeffect Ask [] :int)
+
+;; capturing f, non-tail call in g
+(defn cap-f [m : int] : int
+  (let [f (fn [n : int] : int (+ m n (perform (Ask))))
+        g (fn [n : int] : int (* 2 (f n)))]
+    (g 1)))
+
+;; captureless f (a global alias of the lifted lambda)
+(defn thin-f [m : int] : int
+  (let [f (fn [n : int] : int (+ n (perform (Ask))))
+        g (fn [n : int] : int (* 2 (f n)))]
+    (g 1)))
+
+;; the call in g's tail position, g called twice, and f called directly too
+(defn tail-f [m : int] : int
+  (let [f (fn [n : int] : int (+ m n (perform (Ask))))
+        g (fn [n : int] : int (f (+ n 100)))]
+    (+ (g 1) (g 2) (f 3))))
+
+;; g performs too, before and after the call
+(defn both-perform [m : int] : int
+  (let [f (fn [n : int] : int (+ m n (perform (Ask))))
+        g (fn [n : int] : int (let [a (perform (Ask))] (+ a (f n) (perform (Ask)))))]
+    (g 1)))
+
+;; three levels: h captures g captures f
+(defn chain [m : int] : int
+  (let [f (fn [n : int] : int (+ m n (perform (Ask))))
+        g (fn [n : int] : int (+ 1 (f n)))
+        h (fn [n : int] : int (* 3 (g n)))]
+    (h 2)))
+
+;; f with two arguments and a float result path
+(defn two-args [m : int] : int
+  (let [f (fn [a : int b : int] : int (+ a (* b m) (perform (Ask))))
+        g (fn [n : int] : int (- (f n n) 1))]
+    (g 4)))
+
+;; g in a loop: 100 calls, each threading through f
+(defn loop-g [m : int] : int
+  (let [f (fn [n : int] : int (+ n (perform (Ask))))
+        g (fn [n : int] : int (* m (f n)))]
+    (letrec [go (fn [i : int acc : int] : int
+                  (if (= i 0) acc (go (- i 1) (+ acc (g i)))))]
+      (go 100 0))))
+
+(defn main [] : int
+  (println (handle (cap-f 5) (Ask [] k) (resume k 10)))
+  (println (handle (thin-f 5) (Ask [] k) (resume k 10)))
+  (println (handle (tail-f 5) (Ask [] k) (resume k 10)))
+  (println (handle (both-perform 5) (Ask [] k) (resume k 7)))
+  (println (handle (chain 5) (Ask [] k) (resume k 10)))
+  (println (handle (two-args 5) (Ask [] k) (resume k 10)))
+  (println (handle (loop-g 2) (Ask [] k) (resume k 1)))
+  0)

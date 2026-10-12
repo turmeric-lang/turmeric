@@ -45,6 +45,10 @@ typedef struct PapInline {
      * (cps_ir_let_local_closure): a call through it is `(target var rest...)`,
      * the env box first.  The binding is KEPT -- the box is still built. */
     bool      is_env_call;
+    /* An alias of a global (is_alias) that a nested closure captures: its
+     * calls are rewritten, but the binding is KEPT -- the closure's env copies
+     * it (cps-local-fn-alias-or-lambda-called-in-place-refused). */
+    bool      keep_binding;
 } PapInline;
 
 typedef struct CpsB {
@@ -1253,6 +1257,7 @@ static bool cps_any_closure_env_freeable(const Expr *let, uint32_t idx) {
  * was bound and the env never freed at all: 24 B a turn of a loop.  Only a
  * call the direct emitter may take whole qualifies -- a colored callee keeps
  * its continuation threading. */
+static bool nested_alias_applies(CpsB *b, const Binding *callee, const Expr *e);   /* fwd */
 static bool safe_to_delegate(CpsB *b, const Expr *e);   /* fwd (defined below) */
 static bool cps_fresh_call_env_freeable(CpsB *b, const Expr *let, uint32_t idx) {
     const Expr *init = ascribe_peel(let->as.let_.bindings[idx].init);
@@ -1315,11 +1320,23 @@ static CTerm *cps_bind_let_init(CpsB *b, const Expr *let, uint32_t idx, CVar bx,
      * that atomize its arguments (the closure's own letraw).  Name the let on
      * it, so the emitter can ask whether the binding's live arm holds a
      * closure nothing else reaches and reap it (emit_letcall_sum_closure_reap). */
+    /* The constructor spelling, `(Some <closure>)`, is delegated instead
+     * (delegate_call_atomized): a raw let of a COPY of the call, its closure
+     * argument atomized, binding the same binder. */
+    const Expr *pinit = ascribe_peel(init);
+    bool init_ctor = pinit && pinit->kind == EX_CALL && pinit->as.call_.ctor;
     for (CTerm *u = t; u; ) {
         if (u->kind == CT_LETCALL && u->as.letcall.call_expr == init &&
             u->as.letcall.x.id == bx.id) {
             u->as.letcall.sum_let = let;
             u->as.letcall.sum_let_idx = idx;
+            break;
+        }
+        if (init_ctor && u->kind == CT_LETRAW && u->as.letraw.x.id == bx.id &&
+            u->as.letraw.e && u->as.letraw.e->kind == EX_CALL &&
+            u->as.letraw.e->as.call_.ctor == pinit->as.call_.ctor) {
+            u->as.letraw.sum_let = let;
+            u->as.letraw.sum_let_idx = idx;
             break;
         }
         if (u->kind == CT_LETRAW)       u = u->as.letraw.body;
@@ -2241,6 +2258,9 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
                  * the call runs the lambda's direct entry from a fresh root. */
                 if (pe && pe->is_env_call) return false;
                 if (cps_self_env_call(b, fn)) return false;
+                /* ...nor through a capture the nested rewrite owns (a lambda
+                 * called from inside another closure). */
+                if (!pe && fn && nested_alias_applies(b, fn, e)) return false;
             }
             /* An indirect callee with no binding -- e.g. a capability CALL
              * `(.print-line cap "..")` whose callee is a `.field` access yielding
@@ -3139,6 +3159,77 @@ static CTerm *defer_pushes_before(CpsB *b, Expr **items, uint32_t i, CTerm *rest
     return rest;
 }
 
+/* P5b's admission: the index of the last NON-defer item of `do` block `e` --
+ * its value -- when `e` carries at least one `(defer D)` whose body is
+ * control-free (safe_to_delegate), else -1.  E3b (owning-cloneable-capture):
+ * the elaborator APPENDS an auto-inserted scope-exit drop `(defer (rc/drop r))`
+ * AFTER the real body, so the value item need not be the last item; trailing
+ * defers are threaded like any other (they fire after the value is produced --
+ * through the reset -- before delivery), which is what lets an owning `rc` the
+ * CPS-colored fn OWNS ride a cloneable capture without a hand-written drop. */
+static int do_defer_threadable(CpsB *b, const Expr *e) {
+    if (!e || e->kind != EX_DO) return -1;
+    Expr **items = e->as.do_.items;
+    bool has_defer = false;
+    int tail_idx = -1;
+    for (uint32_t i = 0; i < e->as.do_.n; i++) {
+        const Expr *it = ascribe_peel(items[i]);
+        if (it && it->kind == EX_DEFER) {
+            has_defer = true;
+            if (!safe_to_delegate(b, it->as.defer_.body)) return -1;
+        } else {
+            tail_idx = (int)i;
+        }
+    }
+    return has_defer ? tail_idx : -1;
+}
+
+/* P5b (cps-runtime-finish): thread `do` block `e`'s `(defer D)` items into its
+ * continuation.  The block's value (item `tail_idx`) is bound to `x`, then each
+ * defer body fires, in reverse-declaration (LIFO) order, then `rest` runs.  A
+ * `__cps` function establishes no defer frame, so this is how an explicit defer
+ * -- "run D at this block's scope exit, LIFO" -- is modelled: through any
+ * perform in the value, before the value is delivered.  Matches the direct
+ * emitter's tur_frame fire-LIFO order.
+ *
+ * Shared by the tail translator (`rest` delivers x to the block's kont) and
+ * the bind translator (`rest` is whatever follows the block): a `let` whose
+ * body defers, sitting in a `do` that defers too, is a block in BIND position
+ * (cps-defer-in-let-body-under-deferring-do-evicts -- before this the bind
+ * arm had no P5b and the inner defer evicted the whole function). */
+static CTerm *cps_do_thread_defers(CpsB *b, const Expr *e, int tail_idx,
+                                   CVar x, CTerm *rest) {
+    Expr **items = e->as.do_.items;
+    uint32_t n = e->as.do_.n;
+    /* Thread defer bodies in declaration order so they EXECUTE in
+     * reverse-declaration (LIFO) order after x is bound.  A pop marker sits
+     * before each fire (defer-skipped-on-panic-in-cps-function): from there on
+     * D is no longer pending, so a panic inside D's own body fires only the
+     * defers beneath it. */
+    CTerm *chain = rest;
+    for (uint32_t i = 0; i < n; i++) {
+        const Expr *it = ascribe_peel(items[i]);
+        if (!it || it->kind != EX_DEFER) continue;
+        CVar d = fresh_cvar(b, &it->as.defer_.body->type);
+        chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
+        chain = defer_marker(b, chain, NULL, it->as.defer_.body);
+    }
+    /* Bind the value item (threading any perform continuation), then
+     * push-mark the defers declared between the previous non-defer item and
+     * it: they are pending while it runs. */
+    chain = cps_bind(b, items[tail_idx], x, chain);
+    chain = defer_pushes_before(b, items, (uint32_t)tail_idx, chain);
+    /* Prepend the non-defer statements before the value, in order. */
+    for (int i = tail_idx - 1; i >= 0; i--) {
+        const Expr *it = ascribe_peel(items[i]);
+        if (it && it->kind == EX_DEFER) continue;
+        CVar discard = fresh_cvar(b, &items[i]->type);
+        chain = cps_bind(b, items[i], discard, chain);
+        chain = defer_pushes_before(b, items, (uint32_t)i, chain);
+    }
+    return chain;
+}
+
 static bool plan_autodrop(const Expr *e, AutodropPlan *pl) {
     memset(pl, 0, sizeof(*pl));
     if (!e || e->kind != EX_DO || e->as.do_.n == 0) return false;
@@ -3369,8 +3460,26 @@ static bool pap_calls_saturated(const Expr *e, const Binding *var, uint32_t rem_
                     return false;
             return true;
         /* A nested fn definition may capture `var` -- a use as a value the
-         * enumeration below would not see (it does not enter fn bodies). */
-        case EX_FN: case EX_CLOSURE: case EX_FN_DEF:
+         * enumeration below would not see (it does not enter fn bodies).
+         *
+         * cps-local-fn-alias-or-lambda-called-in-place-refused (a lambda
+         * called from inside another closure): a CLOSURE literal that captures
+         * `var` and only ever CALLS it, saturated, in its own body is fine --
+         * the rewrite reaches that body too (cps_ir_nested_alias_*, consulted
+         * by pap_maybe_rewrite when the lambda is translated).  A closure that
+         * does not capture `var` cannot name it.  A nested named fn stays a
+         * refusal. */
+        case EX_CLOSURE: {
+            const struct Closure *c = e->as.closure_.closure;
+            if (!c || !c->fn) return false;
+            bool captures = false;
+            for (uint32_t k = 0; k < c->n_captures; k++)
+                if (c->captures[k] == var) captures = true;
+            if (!captures) return true;
+            if (c->is_shift_receiver || c->is_effect_payload) return false;
+            return pap_calls_saturated(c->fn->body, var, rem_arity);
+        }
+        case EX_FN: case EX_FN_DEF:
             return false;
         default: {
             /* Every other node: its evaluated operands, through the shared
@@ -3462,6 +3571,151 @@ static bool letrec_local_closure(CpsB *b, const Expr *e) {
     return lc && callee_colored(b, lc);
 }
 
+/* cps-local-fn-alias-or-lambda-called-in-place-refused (a lambda called from
+ * inside another closure): `(let [f (fn ...) g (fn [n] ... (f n) ...)] (g 1))`.
+ * pap_register_let rewrites the calls through `f` while the let that binds it
+ * is being translated, but `g`'s body is a separate lifted function, where `f`
+ * is a capture and nothing was registered: the call went to f's direct entry,
+ * a fresh root, and its `perform` had no lowering.  pap_calls_saturated now
+ * admits a capture whose every use in the capturing body is a saturated call;
+ * this index lets the translation of that body find the `let` that bound the
+ * capture and apply the same rewrite there.  Built on first need, per program:
+ * every `let` binding of a closure literal or a variable, in every function
+ * and closure body. */
+typedef struct { const Binding *var; const Expr *let; uint32_t idx; } NestedLetEnt;
+static const Expr   *g_nl_prog;
+static uint32_t      g_nl_np, g_nl_cap, g_nl_n;
+static NestedLetEnt *g_nl;
+
+static uint32_t nl_slot(const Binding *k) {
+    uint64_t x = (uint64_t)(uintptr_t)k;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (uint32_t)x & (g_nl_cap - 1);
+}
+static void nl_put(const Binding *v, const Expr *let, uint32_t idx) {
+    if (!v) return;
+    if (2 * (g_nl_n + 1) > g_nl_cap) {
+        uint32_t oc = g_nl_cap, nc = oc ? oc * 2 : 64;
+        NestedLetEnt *old = g_nl;
+        g_nl = (NestedLetEnt *)calloc(nc, sizeof *g_nl);
+        if (!g_nl) { g_nl = old; return; }
+        g_nl_cap = nc; g_nl_n = 0;
+        for (uint32_t i = 0; i < oc; i++)
+            if (old[i].var) nl_put(old[i].var, old[i].let, old[i].idx);
+        free(old);
+    }
+    uint32_t h = nl_slot(v);
+    while (g_nl[h].var && g_nl[h].var != v) h = (h + 1) & (g_nl_cap - 1);
+    if (!g_nl[h].var) { g_nl[h].var = v; g_nl[h].let = let; g_nl[h].idx = idx; g_nl_n++; }
+}
+static void nl_walk(const Expr *e);
+static bool nl_visit(const Expr *c, void *ud) { (void)ud; nl_walk(c); return false; }
+static void nl_walk(const Expr *e) {
+    if (!e) return;
+    switch (e->kind) {
+        case EX_LET: case EX_LETREC:
+            for (uint32_t i = 0; i < e->as.let_.n; i++) {
+                const Expr *init = ascribe_peel(e->as.let_.bindings[i].init);
+                if (init && (init->kind == EX_CLOSURE || init->kind == EX_VAR))
+                    nl_put(e->as.let_.bindings[i].binding, e, i);
+            }
+            break;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                nl_walk(e->as.closure_.closure->fn->body);
+            return;
+        case EX_FN:
+            if (e->as.fn_.fn) nl_walk(e->as.fn_.fn->body);
+            return;
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn) nl_walk(e->as.fn_def_.fn->body);
+            return;
+        default:
+            break;
+    }
+    cps_visit_children(e, nl_visit, NULL);
+}
+static void nl_build(const Expr *program) {
+    free(g_nl); g_nl = NULL; g_nl_cap = 0; g_nl_n = 0;
+    for (uint32_t i = 0; i < program->as.program.n; i++) {
+        const Expr *it = program->as.program.items[i];
+        if (!it) continue;
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            DefModule *m = it->as.defmodule_.mod;
+            for (uint32_t j = 0; j < m->n_body; j++) nl_walk(m->body[j]);
+        } else {
+            nl_walk(it);
+        }
+    }
+    g_nl_prog = program;
+    g_nl_np = program->as.program.n;
+}
+static bool nl_lookup(const Expr *program, const Binding *v,
+                      const Expr **let, uint32_t *idx) {
+    if (!program || program->kind != EX_PROGRAM || !v) return false;
+    if (program != g_nl_prog || program->as.program.n != g_nl_np) nl_build(program);
+    if (!g_nl_cap) return false;
+    uint32_t h = nl_slot(v);
+    while (g_nl[h].var) {
+        if (g_nl[h].var == v) { *let = g_nl[h].let; *idx = g_nl[h].idx; return true; }
+        h = (h + 1) & (g_nl_cap - 1);
+    }
+    return false;
+}
+
+/* The rewrite of a call through `callee`, a capture of the closure being
+ * translated, when the `let` that bound it qualifies as in its own function:
+ * an alias of a global fn (a direct call to it) or a local capturing closure
+ * of a colored lambda (the lambda's own call, the captured box first).  NULL
+ * otherwise. */
+static Expr *nested_alias_rewrite(CpsB *b, const Binding *callee, const Expr *e) {
+    if (!b || !callee || !b->cur_fd || !b->cur_fd->closure || callee->is_global)
+        return NULL;
+    const struct Closure *c = b->cur_fd->closure;
+    bool captured = false;
+    for (uint32_t k = 0; k < c->n_captures; k++)
+        if (c->captures[k] == callee) captured = true;
+    if (!captured) return NULL;
+    const Expr *let = NULL; uint32_t idx = 0;
+    if (!nl_lookup(b->program, callee, &let, &idx)) return NULL;
+    const Binding *ga = cps_ir_let_global_fn_alias(let, idx);
+    if (ga && e->as.call_.n_args == ga->type.as.fn.arity) {
+        Expr *nc = expr_new(b->a, EX_CALL, e->type, e->span);
+        nc->as.call_ = e->as.call_;
+        nc->as.call_.fn_binding = (Binding *)ga;
+        nc->as.call_.fn_expr = NULL;
+        return nc;
+    }
+    const Binding *lc = cps_ir_let_local_closure(let, idx);
+    if (lc && callee_colored(b, lc) && callee->type.kind == TY_FN &&
+        e->as.call_.n_args == callee->type.as.fn.arity) {
+        PapInline pe;
+        memset(&pe, 0, sizeof pe);
+        pe.var = callee; pe.target = lc;
+        pe.rem_arity = callee->type.as.fn.arity;
+        pe.is_env_call = true;
+        return pap_build_saturated_call(b, &pe, e);
+    }
+    return NULL;
+}
+
+static bool let_var_captured(const Expr *let, uint32_t i, const Binding *vb);   /* fwd */
+static bool nested_alias_applies(CpsB *b, const Binding *callee, const Expr *e) {
+    return e && e->kind == EX_CALL && nested_alias_rewrite(b, callee, e) != NULL;
+}
+
+/* For the emitter's core check (letval_thin_fn_local_ok): is `local` a let
+ * alias of the global `target`, kept because a nested closure captures it
+ * (PapInline.keep_binding)?  Its binder is then a thin fn local -- the
+ * address in an int64 slot -- that the capturing closure's env copies. */
+bool cps_ir_kept_global_alias(const Binding *local, const Binding *target) {
+    if (!local || !target || !g_nl_prog) return false;
+    const Expr *let = NULL; uint32_t idx = 0;
+    if (!nl_lookup(g_nl_prog, local, &let, &idx)) return false;
+    return cps_ir_let_global_fn_alias(let, idx) == target &&
+           let_var_captured(let, idx, local);
+}
+
 static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
     if (!e || e->kind != EX_CALL) return e;
     const Binding *callee = e->as.call_.fn_binding;
@@ -3495,7 +3749,11 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
         return nc;
     }
     const PapInline *pe = pap_lookup(b, callee);
-    if (!pe || e->as.call_.n_args != pe->rem_arity) return e;
+    if (!pe) {
+        Expr *nr = nested_alias_rewrite(b, callee, e);
+        return nr ? nr : e;
+    }
+    if (e->as.call_.n_args != pe->rem_arity) return e;
     return pap_build_saturated_call(b, pe, e);
 }
 
@@ -3503,6 +3761,91 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
  * the body is a saturated call).  Returns the count pushed (pop with the saved
  * b->n_pap after the let is fully translated). */
 static const Type *fn_alias_sig(const Binding *b);   /* fwd */
+
+/* async-capturing-body-env-never-freed (a let the CPS backend lowers):
+ * `(let [body (fn [] ...)] (await (async body)))` in a function that performs.
+ * The direct emitter's let marks such a binding (let_mark_spawn_owned) so
+ * the spawn owns the closure's box and drops it when the body settles; the
+ * CPS let never asked, so every such spawn leaked its box (32 B).  The
+ * direct emitter's rule refuses a `perform` in the let -- a multi-shot resume
+ * could run the spawn twice on one box -- and under CPS any COLORED call can
+ * capture such a continuation too, so the scope must hold no control at
+ * all: no perform / handle / shift / resume, no colored call.  The spawn's
+ * own `await` is fine: it resumes once, after the spawn. */
+void emit_let_mark_spawn_owned_one(const Expr *e, uint32_t i);   /* emit_expr.c */
+typedef struct { CpsB *b; bool bad; } SpawnScopeUd;
+static bool spawn_scope_visit(const Expr *c, void *ud);
+static void spawn_scope_walk(const Expr *x, SpawnScopeUd *u) {
+    if (!x || u->bad) return;
+    switch (x->kind) {
+        case EX_PERFORM: case EX_HANDLE: case EX_HANDLER_LIT: case EX_WITH_HANDLER:
+        case EX_SHIFT: case EX_SHIFT0: case EX_RESET: case EX_RESUME:
+        case EX_CALLCC: case EX_CLONEABLE_RESET: case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_RESET: case EX_SERIAL_SHIFT:
+            u->bad = true;
+            return;
+        case EX_CALL: {
+            const Binding *fn = x->as.call_.fn_binding;
+            if (!fn || callee_colored(u->b, fn)) { u->bad = true; return; }
+            break;
+        }
+        case EX_CLOSURE: case EX_FN: case EX_FN_DEF:
+            return;   /* a body runs only when called, and a call is checked */
+        default:
+            break;
+    }
+    cps_visit_children(x, spawn_scope_visit, u);
+}
+static bool spawn_scope_visit(const Expr *c, void *ud) {
+    spawn_scope_walk(c, (SpawnScopeUd *)ud);
+    return ((SpawnScopeUd *)ud)->bad;
+}
+static void cps_let_mark_spawn_owned(CpsB *b, const Expr *let) {
+    if (!let || let->kind != EX_LET) return;
+    for (uint32_t i = 0; i < let->as.let_.n; i++) {
+        const Expr *init = ascribe_peel(let->as.let_.bindings[i].init);
+        if (!init || init->kind != EX_CLOSURE) continue;
+        /* The scope after the box is built: the later inits and the body.
+         * Control BEFORE it (an earlier init) re-runs the construction on a
+         * resume, so each spawn still gets a box of its own. */
+        SpawnScopeUd u = { b, false };
+        for (uint32_t j = i + 1; j < let->as.let_.n && !u.bad; j++)
+            spawn_scope_walk(let->as.let_.bindings[j].init, &u);
+        spawn_scope_walk(let->as.let_.body, &u);
+        if (!u.bad) emit_let_mark_spawn_owned_one(let, i);
+    }
+}
+
+/* Does a closure literal in `e` (at any depth) capture `var`? */
+typedef struct { const Binding *var; bool hit; } CapUd;
+static bool cap_visit(const Expr *c, void *ud);
+static void cap_walk(const Expr *e, CapUd *u) {
+    if (!e || u->hit) return;
+    if (e->kind == EX_CLOSURE) {
+        const struct Closure *c = e->as.closure_.closure;
+        if (!c) return;
+        for (uint32_t k = 0; k < c->n_captures; k++)
+            if (c->captures[k] == u->var) { u->hit = true; return; }
+        if (c->fn) cap_walk(c->fn->body, u);
+        return;
+    }
+    if (e->kind == EX_FN || e->kind == EX_FN_DEF) return;
+    cps_visit_children(e, cap_visit, u);
+}
+static bool cap_visit(const Expr *c, void *ud) {
+    CapUd *u = (CapUd *)ud;
+    cap_walk(c, u);
+    return u->hit;
+}
+/* Is let-binding `i`'s variable captured by a closure in a later init or the
+ * body (its scope)? */
+static bool let_var_captured(const Expr *let, uint32_t i, const Binding *vb) {
+    CapUd u = { vb, false };
+    for (uint32_t j = i + 1; j < let->as.let_.n && !u.hit; j++)
+        cap_walk(let->as.let_.bindings[j].init, &u);
+    if (!u.hit) cap_walk(let->as.let_.body, &u);
+    return u.hit;
+}
 
 /* Returns false when a binding whose calls MUST be rewritten (an alias of a
  * global, a local closure) found the table full: the caller evicts rather
@@ -3541,6 +3884,7 @@ static bool pap_register_let(CpsB *b, const Expr *let) {
             b->pap[b->n_pap].rem_arity = fn_alias_sig(src)->as.fn.arity;
             b->pap[b->n_pap].is_alias = true;
             b->pap[b->n_pap].is_env_call = false;
+            b->pap[b->n_pap].keep_binding = let_var_captured(let, i, vb);
             b->n_pap++;
             continue;
         }
@@ -3788,7 +4132,8 @@ const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i) {
 static bool pap_binding_inlined(CpsB *b, const Expr *let, uint32_t idx, uint32_t saved) {
     const Binding *vb = let->as.let_.bindings[idx].binding;
     for (uint32_t j = saved; j < b->n_pap; j++)
-        if (b->pap[j].var == vb) return !b->pap[j].is_env_call;
+        if (b->pap[j].var == vb)
+            return !b->pap[j].is_env_call && !b->pap[j].keep_binding;
     return false;
 }
 
@@ -4628,6 +4973,14 @@ static CTerm *delegate_call_atomized(CpsB *b, Expr *e, CVar x, CTerm *rest,
             continue;
         if (!safe_to_delegate(b, a)) any_control = true;
         TypeKind k = a->type.kind;
+        /* A function value is one word too -- a closure's env box or a bare
+         * entry -- and binds as one, exactly as the atomized arguments of a
+         * cps->direct call to a named function do (`(some <closure>)`).
+         * Admitted for a CONSTRUCTOR only: `(Some <capturing closure>)` had
+         * no FnDef behind its callee, so it took this fn-VALUE route and a
+         * closure argument (never safe_to_delegate) evicted the function
+         * (sum-closure-payload-never-dropped, "found on the way"). */
+        if (k == TY_FN && e->as.call_.ctor) continue;
         if (!(tierA_scalar_kind(k) || k == TY_FLOAT || k == TY_FLOAT64 ||
               k == TY_FLOAT32))
             all_scalar = false;
@@ -4992,6 +5345,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 b->n_pap = saved_pap;
                 return unsupported_form(b, e);
             }
+            cps_let_mark_spawn_owned(b, e);
             CTerm *rest = cps_tail(b, e->as.let_.body, kont);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
                 if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {
@@ -5067,63 +5421,13 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * (e.g. `effect-defer`: `(do (defer (println "cleanup")) (perform
              * (Ask)))` prints cleanup then returns the resumed value). */
             {
-                Expr **items = e->as.do_.items;
-                bool has_defer = false, defer_ok = true;
-                int tail_idx = -1;   /* last NON-defer item -- the do's value */
-                for (uint32_t i = 0; i < n; i++) {
-                    const Expr *it = ascribe_peel(items[i]);
-                    if (it && it->kind == EX_DEFER) {
-                        has_defer = true;
-                        if (!safe_to_delegate(b, it->as.defer_.body)) defer_ok = false;
-                    } else {
-                        tail_idx = (int)i;
-                    }
-                }
-                /* E3b (owning-cloneable-capture): the elaborator APPENDS an
-                 * auto-inserted scope-exit drop `(defer (rc/drop r))` AFTER the
-                 * real body, so the value item is not the last item -- trailing
-                 * defer(s) follow it.  The original P5b threading bailed on a
-                 * defer tail (`tail_idx != n-1`); it is allowed now, using the
-                 * last non-defer item as the value and threading the
-                 * trailing defer into the continuation (fires after the value is
-                 * produced -- through the reset -- before delivery), exactly the
-                 * straight-line drop the explicit-drop channel already emits.  This
-                 * is what lets an owning `rc` the CPS-colored fn OWNS ride a
-                 * cloneable capture without a hand-written drop.  Unconditional
-                 * since owning-cloneable-capture graduated (2026-07-20); a defer
-                 * tail no longer bails. */
-                if (has_defer && defer_ok && tail_idx >= 0) {
-                    CVar x = fresh_cvar(b, &items[tail_idx]->type);
+                int tail_idx = do_defer_threadable(b, e);
+                if (tail_idx >= 0) {
+                    CVar x = fresh_cvar(b, &e->as.do_.items[tail_idx]->type);
                     CTerm *deliver = new_term(b, CT_APPCONT);
                     deliver->as.appcont.kont = kont;
                     deliver->as.appcont.v = atom_cvar(x);
-                    /* Thread defer bodies in declaration order so they EXECUTE in
-                     * reverse-declaration (LIFO) order after x is bound.  A pop
-                     * marker sits before each fire (defer-skipped-on-panic-in-
-                     * cps-function): from there on D is no longer pending, so a
-                     * panic inside D's own body fires only the defers beneath it. */
-                    CTerm *chain = deliver;
-                    for (uint32_t i = 0; i < n; i++) {
-                        const Expr *it = ascribe_peel(items[i]);
-                        if (!it || it->kind != EX_DEFER) continue;
-                        CVar d = fresh_cvar(b, &it->as.defer_.body->type);
-                        chain = cps_bind(b, (Expr *)it->as.defer_.body, d, chain);
-                        chain = defer_marker(b, chain, NULL, it->as.defer_.body);
-                    }
-                    /* Bind the value item (threading any perform continuation),
-                     * then push-mark the defers declared between the previous
-                     * non-defer item and it: they are pending while it runs. */
-                    chain = cps_bind(b, items[tail_idx], x, chain);
-                    chain = defer_pushes_before(b, items, (uint32_t)tail_idx, chain);
-                    /* Prepend the non-defer statements before the value, in order. */
-                    for (int i = tail_idx - 1; i >= 0; i--) {
-                        const Expr *it = ascribe_peel(items[i]);
-                        if (it && it->kind == EX_DEFER) continue;
-                        CVar discard = fresh_cvar(b, &items[i]->type);
-                        chain = cps_bind(b, items[i], discard, chain);
-                        chain = defer_pushes_before(b, items, (uint32_t)i, chain);
-                    }
-                    return chain;
+                    return cps_do_thread_defers(b, e, tail_idx, x, deliver);
                 }
             }
             CTerm *rest = cps_tail(b, e->as.do_.items[n - 1], kont);
@@ -5576,6 +5880,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 b->n_pap = saved_pap;
                 return unsupported_form(b, e);
             }
+            cps_let_mark_spawn_owned(b, e);
             CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
                 if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {
@@ -5622,6 +5927,12 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                     }
                 }
                 return r;
+            }
+            /* P5b in bind position: see cps_do_thread_defers. */
+            {
+                int tail_idx = do_defer_threadable(b, e);
+                if (tail_idx >= 0)
+                    return cps_do_thread_defers(b, e, tail_idx, x, rest);
             }
             CTerm *r = cps_bind(b, e->as.do_.items[n - 1], x, rest);
             for (int i = (int)n - 2; i >= 0; i--) {

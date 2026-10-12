@@ -1,13 +1,32 @@
 # An effectful function called through a local name is refused
 
+**Narrowed a fifth time 2026-10-12: a lambda called from inside ANOTHER
+closure runs** -- `(let [f (fn ...perform...) g (fn [n] (* 2 (f n)))] (g 1))`,
+capturing or captureless `f`. The rewrite that makes a call through `f` the
+lambda's own CPS call (`pap_register_let`) was registered only while the `let`
+binding `f` was translated, and `g`'s body is a separate lifted function where
+`f` is a capture. `pap_calls_saturated` now admits a closure literal that
+captures the variable and only calls it, saturated, in its own body; and the
+translation of that body finds the `let` that bound the capture (a lazily built
+program-wide index, `nl_lookup`, `src/passes/cps_ir.c`) and applies the same
+rewrite (`nested_alias_rewrite`), with `safe_to_delegate` refusing to delegate
+such a call. A captureless `f`'s alias binding is kept when a closure captures
+it (`PapInline.keep_binding`; the env copies it) and admitted as a thin fn
+local (`cps_ir_kept_global_alias`). Pinned by
+`tests/fixtures/cps-local-lambda-called-from-another-closure` (leak-checked;
+non-tail and tail calls in `g`, `f` also called directly, `g` performing around
+the call, a three-level chain, two arguments, 100 calls from a loop; every line
+equals `tur --interpret`; passes the JIT harness).
+
 **Narrowed a fourth time 2026-10-10: a CAPTURELESS lambda used through the
 local and as a value runs too** (see "Fixed 2026-10-10" below), and so does
 one only ever passed on. **What is left:**
 
 - a lambda that RETURNS a function;
-- a lambda (capturing or not) called from inside ANOTHER closure (`g` calls
-  `f`, both `let`-bound): `g` captures `f`, which is a value use;
 - a capturing `letrec` of more than one member (mutual recursion).
+
+(A lambda called from inside another closure was on this list until
+2026-10-12; see above.)
 
 **Narrowed a third time 2026-10-09: a CAPTURING lambda used both through
 the local and as a value runs** (see "Fixed: a value use as well as calls"

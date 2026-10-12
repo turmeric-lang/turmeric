@@ -602,7 +602,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   two causal types carry `OrsetDelta` / `OrmapDelta` instead.
 
   **Two shapes in 2.4's sketch do not compile**, both filed:
-  [associated-type-unusable-nullary-and-generic](../reported/associated-type-unusable-nullary-and-generic.md).
+  [associated-type-unusable-nullary-and-generic](../archive/associated-type-unusable-nullary-and-generic.md).
 
   1. `(delta-bottom [] : Delta)` -- a nullary method whose only mention of the
      class variable is through the associated type is not registered at all.
@@ -615,6 +615,12 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
      it works. So the class cannot be used generically, and C4 ships no
      generic delta helpers: every `apply-delta` caller names a concrete state
      type. That is the biggest limitation of C4 as shipped.
+
+  **Both now compile (report archived 2026-10-12):** the projection at a type
+  variable since 2026-10-03, and the nullary method -- `(:: (delta-bottom)
+  (Delta A))` inside a generic, `(:: (delta-bottom) (Delta GCounter))` at a
+  concrete one -- since 2026-10-09 / 2026-10-12. Dropping the witness
+  parameter and adding generic delta helpers is open spice work.
 
   Deltas here require CAUSAL DELIVERY, which is the assumption `crdt/causal`
   already documents for its version-vector compaction -- applying a delta

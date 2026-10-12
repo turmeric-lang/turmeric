@@ -1243,6 +1243,22 @@ static bool call_arg_is_region_node_word(Type t) {
     return !region_def_is_malloc_collection(def);
 }
 
+/* Does `t` mention an unreduced associated-type projection (`(Inner A)`,
+ * types.h tyvar_.assoc_of)?  Walks applications only -- the shape an expected
+ * container type takes. */
+static bool call_type_mentions_assoc_projection(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.assoc_of != NULL;
+        case TY_APP:
+            return call_type_mentions_assoc_projection(t->as.app.fn) ||
+                   call_type_mentions_assoc_projection(t->as.app.arg);
+        default:
+            return false;
+    }
+}
+
 static bool call_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -8068,6 +8084,30 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 type_adt_app_def(gft) == args[i]->type.as.adt_.def)
                 args[i] = gadt_refine_to_index(e, args[i]);
         }
+        /* fn-param-at-type-variable-slot: a `(fn ...)`-typed PARAMETER with a
+         * scalar signature is the 16-byte poly carrier (tur_poly_fn_t {env,
+         * fn}, typed ptr<void>), while a type-variable slot holds one word --
+         * a fat handle when it is a function.  Passed as it was, `(ident d)`
+         * bound A to ptr<void> (the result was not callable), `(unwrap-or ff
+         * d)` cast the struct to an integer (a C error), and `(vec-push! v d)`
+         * into a `(Vec (fn ...))` was a type mismatch.  Box it into a fat
+         * handle as a `^fat` sink does (EX_POLY_TO_FAT), typed with the
+         * parameter's declared signature so A binds to the function type. */
+        if (expected_arg_kind == TY_TYVAR && args[i]->type.kind == TY_PTR_VOID) {
+            const Expr *pv = args[i];
+            while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+            const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+            if (pb && pb->is_param && pb->is_poly_fn && pb->poly_type &&
+                pb->poly_type->kind == TY_FN && !pb->poly_type->as.fn.cfnptr) {
+                Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *bt = *pb->poly_type;
+                bt->as.fn.boxed = true;
+                Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, *bt, args[i]->span);
+                conv->as.poly_to_fat_.inner = args[i];
+                conv->as.poly_to_fat_.sink_fn_type = pb->poly_type;
+                args[i] = conv;
+            }
+        }
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
         /* typed-c-abi-function-pointers: a `(c-fn [A...] R)` parameter is a
          * bare C function pointer.  The same-kind match above would admit ANY
@@ -8244,6 +8284,23 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     Expr *shim = expr_new(e->arena, EX_FN_TO_FAT, shim_ty,
                                           args[i]->span);
                     shim->as.fn_to_fat_.inner = args[i];
+                    /* fn-value-at-type-variable-slot-boxed-per-call: a named
+                     * defn's `{ shim, orig }` box is a link-time constant, so
+                     * it may be the shared static one -- otherwise every
+                     * `(pick plus1 plus1)` mallocs a box nothing frees (24 B a
+                     * call).  Its no-op header makes any later drop of it
+                     * harmless, and it is handed out opaque (opaque_static)
+                     * so gcc, once the callee is inlined, cannot follow it
+                     * into a drop's never-taken free() branch -- a struct
+                     * fn-field's drop glue did, in the whole-preamble
+                     * build.  A `^construct` template is left on the
+                     * malloc form: its sum payload is what the scope-exit
+                     * drops free, and GCC reports a static address reaching
+                     * `free` there (the -Wfree-nonheap-object ratchet; see
+                     * the static_ok comment in expr.h). */
+                    shim->as.fn_to_fat_.static_ok =
+                        fn_binding && !fn_binding->is_construct_template;
+                    shim->as.fn_to_fat_.opaque_static = true;
                     args[i] = shim;
                 }
             }
@@ -10550,6 +10607,37 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
                                          *saved_expected_return,
                                          type_bindings, &n_type_bindings);
+    }
+    /* generic-result-tyvar-captured-under-projection-expected: a call whose
+     * result variable no argument binds -- `vec-new`'s `(Vec A)` -- under an
+     * expected type that names an associated-type PROJECTION of the enclosing
+     * generic, `(let [v : (Vec (Inner A)) (vec-new)] ...)`.  Every branch
+     * above declines (the expected type is not ground, the result not a bare
+     * variable, the callee no constructor), so the result kept `vec-new`'s own
+     * `A` -- which then read as the CALLER's `A`: `Vec__W` where the spec
+     * reduces the projection to `int`.  Bind it from the expected type: the
+     * projection is a variable each spec of the enclosing generic binds by
+     * name (call_bind_assoc_projections), so emit composes `A := (Inner A)`
+     * through the active spec, exactly as the `^construct` branch composes a
+     * caller variable.  Gated to a projection so the relay returns the
+     * ground-only guard protects are untouched. */
+    else if (saved_expected_return && fn_type.kind == TY_FN &&
+             fn_binding && fn_binding->is_global &&
+             n_type_bindings == 0 &&
+             fn_type.as.fn.result_full_type &&
+             fn_type.as.fn.result_full_type->kind == TY_APP &&
+             call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+             saved_expected_return->kind == TY_APP &&
+             call_type_mentions_assoc_projection(saved_expected_return)) {
+        CallTypeBinding scratch[16];
+        uint8_t n_scratch = 0;
+        for (uint8_t s = 0; s < 16; s++) scratch[s].name = NULL;
+        if (call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                       *saved_expected_return,
+                                       scratch, &n_scratch)) {
+            for (uint8_t s = 0; s < n_scratch; s++) type_bindings[s] = scratch[s];
+            n_type_bindings = n_scratch;
+        }
     }
     /* generic-call-result-leaks-callee-tyvar-names: a call whose arguments
      * bound SOME of its result variables but not all -- `(ok (f v))` binds

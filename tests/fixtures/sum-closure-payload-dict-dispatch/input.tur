@@ -1,0 +1,34 @@
+;; sum-closure-payload-never-dropped, item 1: a capturing closure in a
+;; by-value Option local, inside a constrained generic, handed to a class
+;; method.  The call is a dictionary dispatch whose binding names a
+;; representative instance, so the payload walk could not ask the method that
+;; runs and kept the closure: 24 B per call.  The walk now re-resolves the
+;; dispatch under the active spec, as the call itself is emitted, and asks
+;; that instance method (requires.leak-check: no leak).
+;;
+;; P and Q are both `defopaque :int`, so `go` is minted twice with one C
+;; signature (Gap H `__h1`).  `loop` is CPS-emitted, and its cps->direct calls
+;; to `go` tied between the two siblings and fell back to the base `go`,
+;; which nothing else calls and so was never emitted: an undefined reference
+;; at link time, on main too.  The call is resolved through the clone the
+;; emitter recorded for it now.
+(defclass Runner [a]
+  (run-opt [x : a o : (Option (fn [int] int))] : int))
+(defopaque P :int)
+(defopaque Q :int)
+(definstance Runner [P]
+  (run-opt [x o] (match o (Some f) (f (:: x int)) (None) 0)))
+(definstance Runner [Q]
+  (run-opt [x o] (match o (Some f) (* 2 (f (:: x int))) (None) 1)))
+
+(defn go [A] [(Runner A)] [x : A k : int] : int
+  (let [ff (some (fn [y : int] : int (+ y k)))]
+    (run-opt x ff)))
+
+(defn loop [n : int acc : int] : int
+  (if (= n 0) acc
+      (loop (- n 1) (+ acc (go (:: n P) 1) (go (:: n Q) 2)))))
+
+(defn main [] : int
+  (println (loop 50 0))
+  0)

@@ -1,0 +1,90 @@
+;; async-capturing-body-env-never-freed (a let the CPS backend lowers): a
+;; capturing lambda bound to a local and spawned once, in a function that
+;; performs an effect, so the CPS backend lowers it.  The direct emitter's let
+;; makes such a spawn own the box (let_mark_spawn_owned); the CPS let never
+;; asked, so each spawn leaked its box (32 B).  It asks now, after proving the
+;; scope that follows the box's construction can capture no continuation (no
+;; perform / handle / colored call): a perform BEFORE it -- in the let's
+;; earlier binding, or around the let -- re-runs the construction on a resume.
+;; Leak-checked (requires.leak-check): the perform before the let, in an
+;; earlier binding, a body that parks every turn, a struct capture, and 100
+;; spawns from a performing loop.  A let whose scope after the box performs
+;; (the box built BEFORE a perform) is not marked: a continuation captured
+;; there could re-run the spawn on the same box.
+(defeffect Ask [] :int)
+
+(defstruct P [a : int b : int])
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defn perform-before [k : int] : int
+  (let [x (perform (Ask))]
+    (let [body (fn [] : int (+ k x))]
+      (await (async body)))))
+
+(defn earlier-binding [k : int] : int
+  (let [x    (perform (Ask))
+        body (fn [] : int (* k x))]
+    (await (async body))))
+
+(defn parking [k : int] : int
+  (let [x    (perform (Ask))
+        body (fn [] : int (+ k x (sum-values 0 300 0)))]
+    (drive (async body))))
+
+(defn struct-cap [k : int] : int
+  (let [x    (perform (Ask))
+        p    (P k x)
+        body (fn [] : int (+ (.a p) (.b p)))]
+    (await (async body))))
+
+(defn loop [i : int acc : int] : int
+  (if (= i 0) acc (loop (- i 1) (+ acc (earlier-binding i)))))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (handle (perform-before 5) (Ask [] k) (resume k 1)))
+  (println (handle (earlier-binding 6) (Ask [] k) (resume k 2)))
+  (println (handle (parking 7) (Ask [] k) (resume k 3)))
+  (println (handle (struct-cap 40) (Ask [] k) (resume k 2)))
+  (println (handle (loop 100 0) (Ask [] k) (resume k 1)))
+  (free-future (cur-cell false)))

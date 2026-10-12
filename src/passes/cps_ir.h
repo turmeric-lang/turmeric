@@ -306,8 +306,14 @@ struct CTerm {
          * main body may free it before jumping back rather than leave it to
          * the boundary.  An argument of that very call would be the next
          * turn's live parameter. */
+        /* sum_let / sum_let_idx: as on a CT_LETCALL -- the `let` whose
+         * binding this raw let's call initializes, when that call is a sum
+         * CONSTRUCTOR applied to a closure (`(Some <closure>)`, delegated with
+         * its closure argument atomized): the emitter may reap the live
+         * arm's closure (emit_sum_let_closure_reap). */
         struct { CVar x; const Expr *e; CTerm *body; bool reap_env;
-                 bool reap_any_env; bool reap_at_backedge; }               letraw;
+                 bool reap_any_env; bool reap_at_backedge;
+                 const Expr *sum_let; uint32_t sum_let_idx; }               letraw;
         /* U3 cloneable (multi-shot).  `receiver` is a named, uncolored top-level
          * fn called with the fresh cloneable_cont handle; its result is the reset
          * value bound to x; then run body.
@@ -463,6 +469,9 @@ const Binding *cps_ir_let_fnparam_alias(const Expr *let, uint32_t i);
 /* The same for an immutable local holding a GLOBAL fn -- named, or a lifted
  * captureless lambda -- every use of which is a saturated call: the global,
  * or NULL. */
+/* An alias of a global kept because a nested closure captures it (see
+ * cps_ir.c, PapInline.keep_binding). */
+bool cps_ir_kept_global_alias(const Binding *local, const Binding *target);
 const Binding *cps_ir_let_global_fn_alias(const Expr *let, uint32_t i);
 /* A captureless `letrec` member (global, its lifted lambda in source_binding):
  * the lambda a call through it calls, or NULL. */

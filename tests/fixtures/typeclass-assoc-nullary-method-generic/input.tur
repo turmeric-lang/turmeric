@@ -1,0 +1,57 @@
+;; associated-type-unusable-nullary-and-generic (the generic spelling): inside
+;; a generic constrained by the class, a nullary method whose result is the
+;; associated type is called at the unreduced projection -- `(:: (empty)
+;; (Inner A))`, or a `let` annotated `(Inner A)` -- which names the dispatch
+;; variable `A`.  It was refused ("no instance of 'Box' binds its associated
+;; type 'Inner' to tyvar"); now it is the abstract-tyvar return dispatch any
+;; return-directed method gets at `A`, re-resolved per instantiation, with the
+;; call keeping the projection as its type so each instantiation reduces it.
+;; W and V are both `defopaque ... :int`, so the int carrier alone cannot tell
+;; their instantiations apart.  Both engines.
+(defclass Box [a]
+  (type Inner : Type)
+  (empty [] : Inner)
+  (unwrap [x : a] : Inner))
+(defopaque W :int)
+(defopaque V :int)
+(defopaque U :int)
+(defstruct Pt [x : int y : int])
+(definstance Box [W] (type Inner = int) (empty [] 7) (unwrap [x] (:: x int)))
+(definstance Box [V] (type Inner = cstr) (empty [] "v-empty") (unwrap [x] "v"))
+(definstance Box [U] (type Inner = Pt) (empty [] (Pt 3 4)) (unwrap [x] (Pt (:: x int) 1)))
+
+;; an ascription at the projection
+(defn empty-of [A] [(Box A)] [x : A] : (Inner A)
+  (:: (empty) (Inner A)))
+
+;; a let annotated with the projection
+(defn empty-let [A] [(Box A)] [x : A] : (Inner A)
+  (let [z : (Inner A) (empty)]
+    z))
+
+;; a generic relaying to a generic
+(defn empty-relay [A] [(Box A)] [x : A] : (Inner A)
+  (empty-of x))
+
+;; the empty value beside a receiver-dispatched method on the same instance
+(defn both [A] [(Box A)] [x : A] : (Vec (Inner A))
+  (let [v : (Vec (Inner A)) (vec-new)]
+    (vec-push! v (:: (empty) (Inner A)))
+    (vec-push! v (unwrap x))
+    v))
+
+(defn main [] : int
+  (println (empty-of (:: 1 W)))
+  (println (empty-of (:: 1 V)))
+  (println (.x (empty-of (:: 1 U))))
+  (println (empty-let (:: 1 W)))
+  (println (empty-let (:: 1 V)))
+  (println (.y (empty-let (:: 1 U))))
+  (println (empty-relay (:: 1 W)))
+  (println (empty-relay (:: 1 V)))
+  (let [bw (both (:: 5 W))]
+    (println (+ (vec-get bw 0) (vec-get bw 1))))
+  (let [bv (both (:: 5 V))]
+    (println (vec-get bv 0))
+    (println (vec-get bv 1)))
+  0)

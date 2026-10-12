@@ -1987,7 +1987,14 @@ struct Expr {
          * the spellings differ, the emitter wraps the closure in a { adapter,
          * handle } box whose adapter converts each word (a float by its bits);
          * otherwise the handle passes through unchanged. */
+        /* opaque_static (fn-value-at-tyvar-slot-static-box): with static_ok,
+         * hand the static box out through TUR_OPAQUE_PTR.  A type-variable
+         * slot may pass the box on to a dropping sink (a struct fn-field's
+         * drop glue); once the callee is inlined gcc sees the static address
+         * reach tur_closure_drop's free() branch -- never taken, the header is
+         * the no-op keep glue -- and reports -Wfree-nonheap-object. */
         struct { struct Expr *inner; bool static_ok; bool stack_ok; bool erased_result; bool inner_is_fat;
+                 bool opaque_static;
                  bool nil_result_word; bool word_params;
                  const struct Type *sink_fn_type; } fn_to_fat_;
         /* SC7: convert a tur_poly_fn_t {env,fn} (a typeclass-method closure
