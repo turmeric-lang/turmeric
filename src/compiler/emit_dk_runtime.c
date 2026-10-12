@@ -1541,6 +1541,62 @@ void emit_cps_runtime_prelude(Buf *out) {
 "    return 0; /* unreachable */\n"
 "}\n"
 "");
+    /* cps-self-call-through-join-grows-the-stack: a cps->cps tail call that
+     * hands on `__kont` -- `return g__cps(args, __kont)` -- is a C call, and
+     * constant-stack only when the C compiler makes it a sibling call (gcc at
+     * -O2, not at -O0 or -Og).  The self backedge and the fused groups cover a
+     * call in a function's OWN main body; a call from a lifted join (the
+     * continuation of a callback whose result feeds the next step: `sum-to`
+     * -> f -> dk_run -> sum-to_j0 -> sum-to`) is a different C function, and
+     * every link of that cycle is a C call.  At -O0 a ten-million-step loop
+     * overflowed the stack.
+     *
+     * The emitter guards each such call with __dk_tail_deep(): how far the C
+     * stack has grown below the trampoline driver's landing.  The driver's
+     * `tur_jmp_buf` is a local of the landing frame, so `g_dk_driver` IS an
+     * address on that frame, and no new per-thread state is needed.  While
+     * the stack is flat (every tail call a sibling call) the test is two
+     * loads and a compare and the call is made as before.  Once the growth
+     * passes TUR_DK_BOUNCE_DEPTH the site packs its arguments into a heap
+     * env, wraps a thunk that makes the call in a resume-frame whose `next`
+     * is `__kont`, and yields that node to the driver exactly as a tail
+     * resume does (dk_tail_resume): the longjmp pops every frame of the
+     * cycle, the driver runs the node, dk_run_impl's DKK_RESUME_FRAME arm
+     * tail-calls the thunk, and the thunk frees both and makes the call from
+     * a flat stack.  Only pass-through frames lie between a driver landing
+     * and a CPS body or resume-frame helper -- the invariant dk_tail_resume
+     * already relies on: a `__kont`-threading call exists only in a main
+     * body or an LH_RESUME_CONT helper (handler cases and shift bodies have
+     * no `__kont`), and every consumer of a dk_run result (an entry wrapper,
+     * dk_invoke, an async resume) installs a landing of its own.
+     *
+     * `inplace_head` keeps the driver from freeing or keeping the node: it is
+     * owned by the thunk, which frees it once it has read the arguments out.
+     * The threshold is small against the smallest stack a CPS loop can run on
+     * (a 1 MiB fiber), and large against a step (~200-300 B at -O0), so a
+     * bounce happens once per few hundred steps there and never on a flat
+     * stack.  Overridable with -DTUR_DK_BOUNCE_DEPTH=<bytes>. */
+    buf_puts(out,
+"#ifndef TUR_DK_BOUNCE_DEPTH\n"
+"#define TUR_DK_BOUNCE_DEPTH (64u * 1024u)\n"
+"#endif\n"
+"__attribute__((unused)) static bool __dk_tail_deep(void) {\n"
+"    uintptr_t d = (uintptr_t)g_dk_driver;\n"
+"    if (!d) return false;\n"
+"#if defined(__GNUC__) || defined(__clang__)\n"
+"    uintptr_t h = (uintptr_t)__builtin_frame_address(0);\n"
+"#else\n"
+"    char probe; uintptr_t h = (uintptr_t)&probe;\n"
+"#endif\n"
+"    return (d > h ? d - h : h - d) > (uintptr_t)TUR_DK_BOUNCE_DEPTH;\n"
+"}\n"
+"__attribute__((unused)) static intptr_t __dk_bounce(DK *n) {\n"
+"    n->inplace_head = true;   /* the thunk owns it, not the driver */\n"
+"    g_dk_resume_chain = n; g_dk_resume_val = 0;\n"
+"    TUR_LONGJMP(*g_dk_driver);\n"
+"    return 0; /* unreachable */\n"
+"}\n"
+"");
     buf_puts(out,
 "/* Run `first` to completion, absorbing any tail-resume yields it makes, and\n"
 " * return its value.  Same trampoline as __dk_drive_after but SCOPED: it\n"

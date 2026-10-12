@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.64.1` -- Adds an Express-shaped `httpd` middleware set with connection upgrades, a `Char` type with `#\A` literals, and typed `parsec` results.
+**Latest release:** `v0.64.2` -- Macro arguments are no longer run through the compile-time evaluator (fixing `cond`/`for`/`when` miscompiles), `defer` now fires on panics in CPS functions, and strings gain C-style escapes like `\x1b`.
 
 ## What
 

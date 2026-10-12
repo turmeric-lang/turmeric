@@ -15587,6 +15587,13 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * whose case is running on ITS stack (g_dk_pend_perform), swapped with the
      * reap registry.  Raw pointer: the record type is the DK runtime's. */
     buf_puts(out, "    void *dk_pend;\n");
+    /* cps-self-call-through-join-grows-the-stack: the fiber's own trampoline
+     * landing (g_dk_driver), a setjmp buffer on ITS stack.  Swapped with the
+     * registry: resumed with the RESUMER's landing in place, a tail resume or
+     * a deep-stack bounce inside the fiber would longjmp onto another stack.
+     * NULL until a CPS entry on the fiber installs one (an inline resume
+     * until then). */
+    buf_puts(out, "    tur_jmp_buf *dk_driver;\n");
     /* r7rs-gc-fiber-migration: the fiber's own live-escape set (the call/cc
      * prompts on ITS stack), swapped in by tur_fiber_block_resume when the
      * program has the escape runtime. */
@@ -15826,6 +15833,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    __dk_reap_v = f->dk_reap_v; __dk_reap_kind = f->dk_reap_kind;\n");
     buf_puts(out, "    __dk_reap_n = f->dk_reap_n; __dk_reap_cap = f->dk_reap_cap; __dk_entry_depth = f->dk_entry_depth;\n");
     buf_puts(out, "    void *_dk_pp = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)f->dk_pend;\n");
+    buf_puts(out, "    g_dk_driver = f->dk_driver;   /* the fiber's own landing, on its own stack */\n");
     /* r7rs-gc-fiber-migration: the live-escape set is the call/cc prompts on
      * the CURRENT stack, so it is the fiber's, not the thread's.  Shared with
      * the resumer, a fiber that yields inside a call/cc and resumes on
@@ -15852,6 +15860,7 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;\n");
     buf_puts(out, "    __dk_reap_n = _dk_rn; __dk_reap_cap = _dk_rc; __dk_entry_depth = _dk_rd;\n");
     buf_puts(out, "    f->dk_pend = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)_dk_pp;\n");
+    buf_puts(out, "    f->dk_driver = g_dk_driver;\n");
     if (shared || cps_uses_callcc) {
         buf_puts(out, "    f->esc_live = (void *)tur_escape_live; f->esc_live_n = tur_escape_live_n; f->esc_live_cap = tur_escape_live_cap;\n");
         buf_puts(out, "    tur_escape_live = _esc_v; tur_escape_live_n = _esc_n; tur_escape_live_cap = _esc_c;\n");

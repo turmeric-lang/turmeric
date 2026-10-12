@@ -2,6 +2,53 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.64.2] -- 2026-10-12
+
+### Added
+
+- **C-style string escapes.** `"\x1b[1m"`, `\a \b \f \v \' \?`, one-to-three
+  digit octal, and `\uXXXX` / `\u{H...}` / `\UXXXXXXXX` now read in the turmeric
+  and saffron dialects; `#lang r7rs` keeps its own set. Emitted C writes control
+  bytes as three-digit octal so `"a\0b"` is no longer `a`, `0x0b`.
+
+### Changed
+
+- **`int` arithmetic wraps everywhere.** Emitted C compiles with `-fwrapv` and
+  `turi` folds `+ - *` in unsigned, so overflow wraps identically on the
+  interpreter, JIT and compiled paths instead of invoking undefined behavior at
+  `-O2`.
+
+### Fixed
+
+- **Macro arguments are data, not code.** `cond`, `for` and `when` no longer run
+  caller expressions through the compile-time evaluator, so a clause test like
+  `(= rc 0)` compares real values instead of silently becoming `false`.
+- **`defer` fires on panics and aborts in CPS functions.** A caught panic, an
+  abortive handler case, or an `escape` runs pending defers innermost first,
+  exactly once per frame; an escape also fires the performs it abandons before
+  the jump instead of reading clobbered stack at the landing.
+- **By-value aggregates cross erased C parameters safely.** Merge arms over
+  global `def`s, forward calls, closure word slots, `:heap` ADT by-value fields,
+  niche `(Option S)` payloads, and instance methods that retain their argument
+  (`(pure (pair 1 2))`) all compile and read back the right values.
+- **Carrier records read and write through their box.** `(.pos e)` and `set!` of
+  any field of a record with a `defopaque` field work, and a captured `^mut`
+  opaque handle moves into the shared cell.
+- **A module `defn` no longer takes over a loaded global.** A module function
+  sharing a name with a top-level `defn` no longer collides on one C symbol and
+  fails the build.
+- **`any` keys hash with the `any` instance.** A user `(definstance Hash [Tag])`
+  on an opaque no longer breaks every `#map{...}` literal, and a top-level
+  `#use-reader-macros` line passes the sweet preprocessor.
+- **Self-TCO keeps callback parameters.** A self-recursive loop that threads a
+  `fn`-typed parameter through unchanged now tail-calls instead of overflowing
+  the C stack.
+- **CPS `while` loops keep their invariants and cells.** A one-word owning
+  invariant no longer drops the loop helper's captures, and a `^mut` bound by a
+  call or primitive gets its shared cell.
+- **`escape` directly in `main` compiles.** A `main` whose only control op is an
+  `escape` / `call/cc` no longer aborts the compiler.
+
 ## [0.64.1] -- 2026-10-11
 
 ### Added
