@@ -1243,6 +1243,22 @@ static bool call_arg_is_region_node_word(Type t) {
     return !region_def_is_malloc_collection(def);
 }
 
+/* Does `t` mention an unreduced associated-type projection (`(Inner A)`,
+ * types.h tyvar_.assoc_of)?  Walks applications only -- the shape an expected
+ * container type takes. */
+static bool call_type_mentions_assoc_projection(const Type *t) {
+    if (!t) return false;
+    switch (t->kind) {
+        case TY_TYVAR:
+            return t->as.tyvar_.assoc_of != NULL;
+        case TY_APP:
+            return call_type_mentions_assoc_projection(t->as.app.fn) ||
+                   call_type_mentions_assoc_projection(t->as.app.arg);
+        default:
+            return false;
+    }
+}
+
 static bool call_type_has_named_tyvar(const Type *t) {
     if (!t) return false;
     switch (t->kind) {
@@ -10550,6 +10566,37 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
         (void)call_collect_type_bindings(fn_type.as.fn.result_full_type,
                                          *saved_expected_return,
                                          type_bindings, &n_type_bindings);
+    }
+    /* generic-result-tyvar-captured-under-projection-expected: a call whose
+     * result variable no argument binds -- `vec-new`'s `(Vec A)` -- under an
+     * expected type that names an associated-type PROJECTION of the enclosing
+     * generic, `(let [v : (Vec (Inner A)) (vec-new)] ...)`.  Every branch
+     * above declines (the expected type is not ground, the result not a bare
+     * variable, the callee no constructor), so the result kept `vec-new`'s own
+     * `A` -- which then read as the CALLER's `A`: `Vec__W` where the spec
+     * reduces the projection to `int`.  Bind it from the expected type: the
+     * projection is a variable each spec of the enclosing generic binds by
+     * name (call_bind_assoc_projections), so emit composes `A := (Inner A)`
+     * through the active spec, exactly as the `^construct` branch composes a
+     * caller variable.  Gated to a projection so the relay returns the
+     * ground-only guard protects are untouched. */
+    else if (saved_expected_return && fn_type.kind == TY_FN &&
+             fn_binding && fn_binding->is_global &&
+             n_type_bindings == 0 &&
+             fn_type.as.fn.result_full_type &&
+             fn_type.as.fn.result_full_type->kind == TY_APP &&
+             call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
+             saved_expected_return->kind == TY_APP &&
+             call_type_mentions_assoc_projection(saved_expected_return)) {
+        CallTypeBinding scratch[16];
+        uint8_t n_scratch = 0;
+        for (uint8_t s = 0; s < 16; s++) scratch[s].name = NULL;
+        if (call_collect_type_bindings(fn_type.as.fn.result_full_type,
+                                       *saved_expected_return,
+                                       scratch, &n_scratch)) {
+            for (uint8_t s = 0; s < n_scratch; s++) type_bindings[s] = scratch[s];
+            n_type_bindings = n_scratch;
+        }
     }
     /* generic-call-result-leaks-callee-tyvar-names: a call whose arguments
      * bound SOME of its result variables but not all -- `(ok (f v))` binds

@@ -34,11 +34,9 @@
   (empty-of x))
 
 ;; the empty value beside a receiver-dispatched method on the same instance
-;; (spelled over B: an `A` here collides with vec-new's own result variable --
-;; docs/reported/generic-result-tyvar-captured-under-projection-expected.md)
-(defn both [B] [(Box B)] [x : B] : (Vec (Inner B))
-  (let [v : (Vec (Inner B)) (vec-new)]
-    (vec-push! v (:: (empty) (Inner B)))
+(defn both [A] [(Box A)] [x : A] : (Vec (Inner A))
+  (let [v : (Vec (Inner A)) (vec-new)]
+    (vec-push! v (:: (empty) (Inner A)))
     (vec-push! v (unwrap x))
     v))
 

@@ -1,8 +1,10 @@
 # A generic call's unbound result variable reads as the caller's when the expected type is a projection
 
+**RESOLVED 2026-10-12** (filed and fixed the same day) -- see "Fixed" at the end.
+
 **Severity: low-medium (a C type mismatch, or a type error, depending on a
 variable's spelling).** Found 2026-10-12 while fixing
-[associated-type-unusable-nullary-and-generic](../archive/associated-type-unusable-nullary-and-generic.md).
+[associated-type-unusable-nullary-and-generic](associated-type-unusable-nullary-and-generic.md).
 
 ## Repro
 
@@ -69,3 +71,24 @@ The same family as the archived generic-call-result-leaks-callee-tyvar-names
 
 Worth a fixture with the caller's variable spelled the same as the callee's,
 since that is the spelling that hides the defect behind a working program.
+
+## Fixed (2026-10-12)
+
+Fix direction 1, gated narrowly. After the existing result-from-expected
+branches (`src/compiler/elab_call.c`, after `e->expected_type =
+saved_expected_return`), a global callee whose result is an application over
+a variable no argument bound, under an expected application that mentions an
+associated-type projection, binds its variables from the expected type --
+`vec-new`'s `A := (Inner A)`. The projection is a variable every spec of the
+enclosing generic binds by name (`call_bind_assoc_projections`), so emit
+composes the binding through the active spec as it does for the `^construct`
+branch's caller variables, and the result is `(Vec (Inner A))`, reduced per
+spec. Gated to a projection so the relay returns the ground-only guard
+protects (binding `K -> K` would mark a call specialized with nothing
+concrete) are untouched.
+
+Pinned by `tests/fixtures/assoc-projection-expected-binds-callee-result`
+(the caller's variable spelled like `vec-new`'s, and a local `mk [T]`
+producer, at an `int` and a `cstr` projection; both engines). It is a type
+error on `main` and the pointer-type warning in the first spelling.
+`typeclass-assoc-nullary-method-generic`'s `both` is back to the natural `A`.

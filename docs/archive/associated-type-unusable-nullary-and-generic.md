@@ -335,7 +335,7 @@ struct instance, all three `defopaque :int`) and
 collapse, through an ascription, a `let` and a relay, next to an `int`
 instance). Both agree with `tur --interpret` line for line.
 
-Found on the way, not fixed: inside such a generic, `(let [v : (Vec (Inner A))
-(vec-new)] ...)` keeps `vec-new`'s own un-instantiated `(Vec A)`, which then
-reads as the CALLER's `A` -- see
-[generic-result-tyvar-captured-under-projection-expected](../reported/generic-result-tyvar-captured-under-projection-expected.md).
+Found on the way and fixed the same day: inside such a generic, `(let [v :
+(Vec (Inner A)) (vec-new)] ...)` kept `vec-new`'s own un-instantiated `(Vec
+A)`, which then read as the CALLER's `A` --
+[generic-result-tyvar-captured-under-projection-expected](generic-result-tyvar-captured-under-projection-expected.md).
