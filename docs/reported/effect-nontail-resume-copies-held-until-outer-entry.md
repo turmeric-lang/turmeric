@@ -1,23 +1,26 @@
 # An effect resumed non-tail, or more than once, in a loop keeps its continuation copies until the outermost entry returns
 
-**Narrowed 2026-10-12: a case that resumes `k` once, non-tail, on
-straight-line code resumes the ORIGINAL chain in place.** The repro below
-runs in 1.4 MB at 200,000 turns (339 MB before; the Debug `tur`'s own
-program, no sanitizer), and the reap list of a loop that opens such a handle
-a turn, or performs a turn under one, stays flat.  What is left is the shape
-the title still names: a case that resumes `k` more than once, or reaches its
-one resume through a frame of its own on the chain -- a `perform`, a colored
-call, a join -- still resumes a copy, and the copies are kept.  See "Fixed
-2026-10-12" at the end.
+**Narrowed twice 2026-10-12: a case that resumes `k` once resumes the
+ORIGINAL chain in place -- on straight-line code, and, when nothing outward
+of the handle is multi-shot, after a `perform` of an outer effect too.** The
+repro below runs in 1.4 MB at 200,000 turns (339 MB before; the Debug
+`tur`'s own program, no sanitizer), and so do the log-then-continue idiom
+`(do (perform (Write y)) (resume k 10))` (401 MB before) and its non-tail
+twin (345 MB before); the reap list of a loop that opens any of these
+handles a turn stays flat.  What is left is a `k` resumed more than once
+(`^multishot`), a case under a `^multishot` handler, a prompt or a shift,
+and a `k` resumed elsewhere than the case's own body (`dk_invoke`).  See
+"Fixed 2026-10-12" and "Fixed 2026-10-12, second pass" at the end.
 
 **Severity: low-medium (memory grows for the life of the loop's outermost
 call).** What is left of
 [fn-value-call-cps-frames-held-until-outer-entry](../archive/fn-value-call-cps-frames-held-until-outer-entry.md):
 a handler case that resumes its continuation once, in tail position, now
 resumes the original chain in place and allocates nothing that outlives the
-turn.  Since 2026-10-12 so does one that resumes it once NON-tail on code that
-can put no frame of its own on the chain first.  Any other case still resumes
-a COPY, and the copies are kept.
+turn.  Since 2026-10-12 so does one that resumes it once NON-tail, on code that
+can put no frame of its own on the chain first, or through a `perform` when
+nothing outward of the handle can run that frame twice.  Any other case
+still resumes a COPY, and the copies are kept.
 
 ## Repro
 
@@ -49,23 +52,24 @@ nests C frames a turn: the resume yields its chain to the trampoline driver
 
 ## What is left
 
-A case that resumes `k` more than once, or reaches its one resume through a
-frame of its own on the chain, still takes the copy path:
-
 ```turmeric
-(Inner [] k) (+ (resume k 1) (resume k 2))              ; twice
-(Inner [] k) (let [y (perform (Outer))] (+ y (resume k 1)))  ; after a perform
-(Inner [] k) (let [y (effectful-helper)] (+ y (resume k 1)))  ; after a colored call
+(Inner [] ^multishot k) (+ (resume k 1) (resume k 2))   ; twice: a copy each, by design
+(Inner [] k) (let [y (perform (Outer))] (+ y (resume k 1)))
+  ;; ...under a ^multishot Outer, a reset, or a with-handler table: the
+  ;; perform's continuation can run twice, so the copy path (see `ss`)
+(Inner [] k) (helper k)                                  ; k resumed elsewhere: dk_invoke
 ```
 
-The second and third are refused for a reason, not for want of a predicate:
-the perform's (or call's) continuation is a frame of the case on the chain,
-and an outer multi-shot resume can run it twice -- and with it the resume of
-`k` -- so the original cannot be handed over.  A per-resume runtime count
-cannot see that second run coming either; what it would take is a proof that
-no enclosing handler is multi-shot, or a copy taken lazily at the second
-resume (the first runs the original, a second finds it consumed and copies
-what it needs -- which is the whole chain, already run).
+The second is a runtime fact, not a predicate gap: `^multishot` is the one
+way a non-tail resume runs a continuation twice (a plain `k` is `^unique`,
+so a second `resume` is TUR-E0201), and a shift to an enclosing prompt the
+other; `ss` reads both off the chain in O(1).  A `with-handler` table's
+cases are marked multi-shot because their shape is not known at the
+install.  The third needs `dk_invoke`'s copy, which `__dk_drive_bounded`
+keeps; fix direction 2 (free a delivered copy nothing captured) still
+applies to it.  A colored call before the resume is outside the CPS subset
+today (the call's `perform` is refused with "no lowering here"), so it is
+not a shape this report can measure.
 
 ## Where it comes from
 
@@ -81,7 +85,7 @@ copies `sub` again and keeps that copy (`__dk_drive_bounded`'s
 copied, so the join release never takes them. All of it waits for the
 outermost entry.
 
-## Fix directions (as filed; 1 is done for the straight-line case)
+## Fix directions (as filed; 1 is done, for the straight-line case and the re-opening one)
 
 1. **One-shot non-tail resume in place.** Under `dk_resume_into` the resumed
    part no longer returns to the case -- it runs on into the case's
@@ -145,3 +149,46 @@ path's answers on both back ends).
 Suite: `run.sh` 3757/0, `run-leak-check.sh` 177 / 0 / 3 known-open, the
 JIT over the effect, CPS, multishot, handle, async, resume and defer
 fixtures 474/0.  The repro at 1,000,000 turns: 1.4 MB.
+
+## Fixed 2026-10-12, second pass: one resume after a `perform`, in place when nothing outward is multi-shot
+
+The same, with the proof made at run time.  `case_resumes_once_dyn`
+(`src/compiler/emit_cps_ir.c`) admits the straight-line predicate's walk
+across a `perform` of an outer effect, and `emit_handle` marks the case
+`dk_case_resumes_once_dyn`; `case_resumes_into` now also admits a TAIL resume
+anywhere but on a dk_handler_tail case's own spine (the continuation of a
+perform, a branch), so the log-then-continue idiom resumes into the chain
+(`dk_resume_into`, borrowing the handle's continuation) instead of running a
+copy nested on the C stack (`dk_invoke`) and delivering after it.  What
+could run the perform's continuation -- and the resume -- twice is on the
+chain outward of the handle: a `^multishot` case (`dk_case_multishot`:
+`CK_MULTISHOT`, a resumable-payload or shift effect's cloneable `k`, or a
+`with-handler` table's cases, whose shape the install does not know), a
+prompt other than the root's (a shift's body may invoke its continuation
+any number of times), or a pending shift.  Every node carries `ss`, "the
+chain past this node holds none of those", computed at `dk_new` from its
+`next` (O(1); a copy takes its original's, whose chain outward has every
+blocker the copy's has; a node linked later keeps the value it was made
+with -- conservative, since linking only appends copies), and `dk_perform`
+asks `__dk_ss_after` of the node after the handler group before taking the
+in-place branch.  `dk_perform` leaves `H` on the chain's head (`body_env`),
+so when the resume is made from a COPY of the case's continuation after all
+-- an enclosing non-tail case captured across it, which `ss` allows, since
+such a case runs its copy once -- `dk_resume_into` finds the handle's
+continuation absent from the chain and copies the perform's frames and the
+group once itself (one copy where there were two), continuing into the
+copy's rest.
+
+| program | before | after |
+| --- | --- | --- |
+| `(do (perform (Write y)) (resume k 10))`, a handle a turn, 200,000 turns | 401 MB | 1.4 MB |
+| `(+ (perform (Write y)) (resume k 10))`, the same | 345 MB | 1.4 MB |
+
+Pinned by `tests/fixtures/effect-reopen-resume-once-in-place`
+(leak-checked; the reap list's length at turns 10 and 900 for the tail
+idiom, the non-tail twin, and a rest that captures the perform's answer: 1 /
+1 each, against 71 / 6,301, 7,072 / 13,302 and 14,073 / 20,303 before) and
+`effect-reopen-resume-once-shapes` (a `^multishot` outer resuming twice, a
+non-tail outer -- the fallback copy -- an abortive branch after the perform,
+two performs before the resume, two performs of the inner effect in one
+body, a loop body: the copying path's answers on both back ends).

@@ -1,0 +1,59 @@
+;; effect-nontail-resume-copies-held-until-outer-entry: the shapes around a
+;; case that performs an outer effect before its one resume
+;; (dk_case_resumes_once_dyn), each printing the copying path's answer:
+;;
+;;   multishot-outer -- the outer handler is ^multishot and resumes twice: the
+;;                      case's continuation runs twice, so the copy path
+;;   nontail-outer   -- the outer handler resumes non-tail, once
+;;   abortive-after  -- the case answers without resuming after its perform
+;;   two-performs    -- two outer performs before the resume
+;;   twice-in-body   -- the handle body performs Log twice
+;;   loop-body       -- the handle around a loop performing Log each turn
+
+(defeffect Write [x : int] int)
+(defeffect Log [x : int] int)
+
+(defn step [x : int] : int
+  (handle (+ x (perform (Log x)))
+    (Log [y] k) (+ (perform (Write y)) (resume k 10))))
+
+(defn multishot-outer [x : int] : int
+  (handle (step x) (Write [y] ^multishot k) (+ (resume k y) (resume k 1))))
+
+(defn nontail-outer [x : int] : int
+  (handle (step x) (Write [y] k) (+ 100 (resume k y))))
+
+(defn abortive-after [x : int] : int
+  (handle
+    (handle (+ x (perform (Log x)))
+      (Log [y] k) (let [w (perform (Write y))] (if (> w 5) (+ w (resume k 10)) 0)))
+    (Write [y] k) (resume k y)))
+
+(defn two-performs [x : int] : int
+  (handle
+    (handle (+ x (perform (Log x)))
+      (Log [y] k) (+ (perform (Write y)) (perform (Write 1)) (resume k 10)))
+    (Write [y] k) (resume k y)))
+
+(defn twice-in-body [x : int] : int
+  (handle
+    (handle (+ x (perform (Log x)) (perform (Log 2)))
+      (Log [y] k) (+ (perform (Write y)) (resume k 10)))
+    (Write [y] k) (resume k y)))
+
+(defn body-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (body-loop (+ i 1) n (+ acc (perform (Log i))))))
+(defn loop-body [n : int] : int
+  (handle
+    (handle (body-loop 0 n 0)
+      (Log [y] k) (+ (perform (Write y)) (resume k 2)))
+    (Write [y] k) (resume k y)))
+
+(defn main [] : nil
+  (println (multishot-outer 1))
+  (println (nontail-outer 1))
+  (println (abortive-after 3))
+  (println (abortive-after 9))
+  (println (two-performs 1))
+  (println (twice-in-body 1))
+  (println (loop-body 5)))

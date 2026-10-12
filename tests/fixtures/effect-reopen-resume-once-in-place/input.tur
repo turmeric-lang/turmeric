@@ -1,0 +1,49 @@
+;; effect-nontail-resume-copies-held-until-outer-entry: a case that performs
+;; an OUTER effect and then resumes its `k` once -- `(do (perform (Write y))
+;; (resume k 10))`, the log-then-continue idiom, and its non-tail twin --
+;; resumes the ORIGINAL chain in place when nothing outward of the handle can
+;; run the case's continuation twice (dk_case_resumes_once_dyn: no multi-shot
+;; handler, prompt or shift outward, read off the chain in O(1) at the
+;; perform).  Under a ^multishot handler or a reset it keeps the copy path.
+;;
+;;   log-tail    -- a loop opening a handle a turn whose case performs Write
+;;                  then tail-resumes; the outer Write case tail-resumes
+;;   log-nontail -- the same with a non-tail resume after the perform
+;;   captures    -- the rest after the resume captures the perform's answer
+;;
+;; Each prints the DK reap list's length at turns 10 and 900: the same at both
+;; (log-tail grew by 9 entries a turn, log-nontail by 8).  Leak-checked.
+
+(defeffect Write [x : int] int)
+(defeffect Log [x : int] int)
+
+(defn reap-len [] : int
+  ```c
+  return (int64_t)__dk_reap_n;
+  ```)
+
+(defn note [i : int] : int
+  (if (or (= i 10) (= i 900)) (do (println (reap-len)) 0) 0))
+
+(defn tail-step [x : int] : int
+  (handle (+ x (perform (Log x)))
+    (Log [y] k) (do (perform (Write y)) (resume k 10))))
+(defn tail-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (tail-loop (+ i 1) n (+ acc (note i) (tail-step i)))))
+
+(defn nontail-step [x : int] : int
+  (handle (+ x (perform (Log x)))
+    (Log [y] k) (+ (perform (Write y)) (resume k 10))))
+(defn nontail-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (nontail-loop (+ i 1) n (+ acc (note i) (nontail-step i)))))
+
+(defn cap-step [x : int] : int
+  (handle (+ x (perform (Log x)))
+    (Log [y] k) (let [w (perform (Write y))] (+ w y (resume k 10)))))
+(defn cap-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (cap-loop (+ i 1) n (+ acc (note i) (cap-step i)))))
+
+(defn main [] : nil
+  (println (handle (tail-loop 0 1000 0) (Write [y] k) (resume k y)))      ;; 499500 + 10000
+  (println (handle (nontail-loop 0 1000 0) (Write [y] k) (resume k y)))   ;; 2*499500 + 10000
+  (println (handle (cap-loop 0 1000 0) (Write [y] k) (resume k y))))      ;; 3*499500 + 10000
