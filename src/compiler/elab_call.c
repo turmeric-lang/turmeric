@@ -8084,6 +8084,30 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 type_adt_app_def(gft) == args[i]->type.as.adt_.def)
                 args[i] = gadt_refine_to_index(e, args[i]);
         }
+        /* fn-param-at-type-variable-slot: a `(fn ...)`-typed PARAMETER with a
+         * scalar signature is the 16-byte poly carrier (tur_poly_fn_t {env,
+         * fn}, typed ptr<void>), while a type-variable slot holds one word --
+         * a fat handle when it is a function.  Passed as it was, `(ident d)`
+         * bound A to ptr<void> (the result was not callable), `(unwrap-or ff
+         * d)` cast the struct to an integer (a C error), and `(vec-push! v d)`
+         * into a `(Vec (fn ...))` was a type mismatch.  Box it into a fat
+         * handle as a `^fat` sink does (EX_POLY_TO_FAT), typed with the
+         * parameter's declared signature so A binds to the function type. */
+        if (expected_arg_kind == TY_TYVAR && args[i]->type.kind == TY_PTR_VOID) {
+            const Expr *pv = args[i];
+            while (pv && pv->kind == EX_ASCRIBE) pv = pv->as.ascribe_.inner;
+            const Binding *pb = (pv && pv->kind == EX_VAR) ? pv->as.var.binding : NULL;
+            if (pb && pb->is_param && pb->is_poly_fn && pb->poly_type &&
+                pb->poly_type->kind == TY_FN && !pb->poly_type->as.fn.cfnptr) {
+                Type *bt = (Type *)arena_alloc(e->arena, sizeof(Type));
+                *bt = *pb->poly_type;
+                bt->as.fn.boxed = true;
+                Expr *conv = expr_new(e->arena, EX_POLY_TO_FAT, *bt, args[i]->span);
+                conv->as.poly_to_fat_.inner = args[i];
+                conv->as.poly_to_fat_.sink_fn_type = pb->poly_type;
+                args[i] = conv;
+            }
+        }
         bool arg_ok = (args[i]->type.kind == expected_arg_kind);
         /* typed-c-abi-function-pointers: a `(c-fn [A...] R)` parameter is a
          * bare C function pointer.  The same-kind match above would admit ANY

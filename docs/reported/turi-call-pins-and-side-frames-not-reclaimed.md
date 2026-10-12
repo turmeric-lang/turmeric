@@ -90,4 +90,6 @@ they stay.
 
 ## Pinned by
 
-Nothing yet.
+`tests/check-turi-frame-reclaim.py`: its third program (a generic function
+called 300,000 times, the tyvar pins) and its fifth (a `defer` called
+300,000 times, the snapshot). The three frames still open have no check yet.

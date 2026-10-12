@@ -1,0 +1,45 @@
+;; A `(fn ...)`-typed PARAMETER passed into a generic's type-variable slot.
+;; Such a parameter is the 16-byte poly carrier (tur_poly_fn_t {env, fn}),
+;; while the slot holds one word.  Before 2026-10-12 nothing converted it:
+;; `((ident d) 10)` was a type error (A bound to ptr<void>, so the result was
+;; not callable), `(unwrap-or ff d)` failed in cc (the struct cast to an
+;; integer), and `(vec-push! v d)` into a `(Vec (fn ...))` was TUR-E0001.  It
+;; is boxed into a fat handle now, as a `^fat` sink boxes it, typed with the
+;; parameter's declared signature.  Float and cstr signatures cross through
+;; their typed slot-0 shims.  The box is a per-call malloc nothing frees (the
+;; slot may return or store it), so this fixture is not leak-checked.
+(defn ident [A] [a : A] : A a)
+(defn pick [A] [a : A b : A] : A b)
+(defn plus1 [x : int] : int (+ x 1))
+(defn halve [x : float] : float (/ x 2.0))
+(defn greet [s : cstr] : cstr s)
+(defn add [a : int b : int] : int (+ a b))
+
+(defn via-int [d : (fn [int] int)] : int ((ident d) 10))
+(defn via-float [d : (fn [float] float)] : float ((ident d) 7.1))
+(defn via-cstr [d : (fn [cstr] cstr)] : cstr ((pick d d) "there"))
+(defn via-2 [d : (fn [int int] int)] : int ((ident d) 3 4))
+(defn via-unwrap-or [d : (fn [int] int)] : int
+  ((unwrap-or (none) d) 5))
+(defn via-opt [d : (fn [int] int)] : int
+  (match (some d)
+    (Some f) (f 5)
+    (None) 0))
+(defn via-vec [d : (fn [float] float)] : float
+  (let [v : (Vec (fn [float] float)) (vec-new)]
+    (vec-push! v d)
+    ((vec-get v 0) 3.3)))
+
+(defn main [] : int
+  (println (via-int plus1))
+  (let [k 100]
+    (println (via-int (fn [x : int] : int (+ x k)))))
+  (println (via-float halve))
+  (let [s 0.5]
+    (println (via-float (fn [x : float] : float (* x s)))))
+  (println (via-cstr greet))
+  (println (via-2 add))
+  (println (via-unwrap-or plus1))
+  (println (via-opt plus1))
+  (println (via-vec halve))
+  0)

@@ -34,6 +34,18 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing the open reports (filed 2026-10-12)
+
+Closing `sum-closure-payload-never-dropped` item 2 turned up two pre-existing
+gaps at a generic's type-variable slot. A named defn there leaked a box per
+call; it takes the static box now (that report's row). A `(fn ...)`-typed
+parameter there did not compile at all; it does now, at the cost of a
+per-call box.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fn-param-at-type-variable-slot-boxed-per-call](fn-param-at-type-variable-slot-boxed-per-call.md) | low (32 B per call) | A `(fn ...)`-typed parameter (the 16-byte `tur_poly_fn_t` carrier) passed into a type-variable slot -- `(ident d)`, `(unwrap-or o d)`, `(vec-push! v d)` -- was a type error or a cc error. **Fixed 2026-10-12:** boxed into a fat handle there (`EX_POLY_TO_FAT`, typed with the declared signature), both back ends -- `fn-param-through-type-variable-slot`. Left: that box is a 32 B malloc per call nothing frees (the slot may return or store it, and a parameter is not a link-time constant) |
+
 ## Found writing the signal spice's pitch and sequencing examples (filed 2026-10-11)
 
 A generic `cycle` (a closure returning the next value of a list) compiled
