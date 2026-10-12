@@ -3762,6 +3762,60 @@ static Expr *pap_maybe_rewrite(CpsB *b, Expr *e) {
  * b->n_pap after the let is fully translated). */
 static const Type *fn_alias_sig(const Binding *b);   /* fwd */
 
+/* async-capturing-body-env-never-freed (a let the CPS backend lowers):
+ * `(let [body (fn [] ...)] (await (async body)))` in a function that performs.
+ * The direct emitter's let marks such a binding (let_mark_spawn_owned) so
+ * the spawn owns the closure's box and drops it when the body settles; the
+ * CPS let never asked, so every such spawn leaked its box (32 B).  The
+ * direct emitter's rule refuses a `perform` in the let -- a multi-shot resume
+ * could run the spawn twice on one box -- and under CPS any COLORED call can
+ * capture such a continuation too, so the scope must hold no control at
+ * all: no perform / handle / shift / resume, no colored call.  The spawn's
+ * own `await` is fine: it resumes once, after the spawn. */
+void emit_let_mark_spawn_owned_one(const Expr *e, uint32_t i);   /* emit_expr.c */
+typedef struct { CpsB *b; bool bad; } SpawnScopeUd;
+static bool spawn_scope_visit(const Expr *c, void *ud);
+static void spawn_scope_walk(const Expr *x, SpawnScopeUd *u) {
+    if (!x || u->bad) return;
+    switch (x->kind) {
+        case EX_PERFORM: case EX_HANDLE: case EX_HANDLER_LIT: case EX_WITH_HANDLER:
+        case EX_SHIFT: case EX_SHIFT0: case EX_RESET: case EX_RESUME:
+        case EX_CALLCC: case EX_CLONEABLE_RESET: case EX_CLONEABLE_SHIFT:
+        case EX_SERIAL_RESET: case EX_SERIAL_SHIFT:
+            u->bad = true;
+            return;
+        case EX_CALL: {
+            const Binding *fn = x->as.call_.fn_binding;
+            if (!fn || callee_colored(u->b, fn)) { u->bad = true; return; }
+            break;
+        }
+        case EX_CLOSURE: case EX_FN: case EX_FN_DEF:
+            return;   /* a body runs only when called, and a call is checked */
+        default:
+            break;
+    }
+    cps_visit_children(x, spawn_scope_visit, u);
+}
+static bool spawn_scope_visit(const Expr *c, void *ud) {
+    spawn_scope_walk(c, (SpawnScopeUd *)ud);
+    return ((SpawnScopeUd *)ud)->bad;
+}
+static void cps_let_mark_spawn_owned(CpsB *b, const Expr *let) {
+    if (!let || let->kind != EX_LET) return;
+    for (uint32_t i = 0; i < let->as.let_.n; i++) {
+        const Expr *init = ascribe_peel(let->as.let_.bindings[i].init);
+        if (!init || init->kind != EX_CLOSURE) continue;
+        /* The scope after the box is built: the later inits and the body.
+         * Control BEFORE it (an earlier init) re-runs the construction on a
+         * resume, so each spawn still gets a box of its own. */
+        SpawnScopeUd u = { b, false };
+        for (uint32_t j = i + 1; j < let->as.let_.n && !u.bad; j++)
+            spawn_scope_walk(let->as.let_.bindings[j].init, &u);
+        spawn_scope_walk(let->as.let_.body, &u);
+        if (!u.bad) emit_let_mark_spawn_owned_one(let, i);
+    }
+}
+
 /* Does a closure literal in `e` (at any depth) capture `var`? */
 typedef struct { const Binding *var; bool hit; } CapUd;
 static bool cap_visit(const Expr *c, void *ud);
@@ -5291,6 +5345,7 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
                 b->n_pap = saved_pap;
                 return unsupported_form(b, e);
             }
+            cps_let_mark_spawn_owned(b, e);
             CTerm *rest = cps_tail(b, e->as.let_.body, kont);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
                 if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {
@@ -5825,6 +5880,7 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
                 b->n_pap = saved_pap;
                 return unsupported_form(b, e);
             }
+            cps_let_mark_spawn_owned(b, e);
             CTerm *r = cps_bind(b, e->as.let_.body, x, rest);
             for (int i = (int)e->as.let_.n - 1; i >= 0; i--) {
                 if (pap_binding_inlined(b, e, (uint32_t)i, saved_pap)) {

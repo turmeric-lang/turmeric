@@ -2916,7 +2916,15 @@ static bool spawn_use_visit(const Expr *x, void *ud) {
     spawn_use_walk(x, (SpawnUseUd *)ud);
     return false;
 }
+static bool let_sole_use_is_spawn_impl(const Expr *e, uint32_t idx, bool later_only);
 static bool let_sole_use_is_spawn(const Expr *e, uint32_t idx) {
+    return let_sole_use_is_spawn_impl(e, idx, false);
+}
+/* `later_only`: the earlier inits are not walked -- they cannot name the
+ * binding, and the caller (the CPS translator) has its own answer for the
+ * control in them: a resume of a continuation captured there re-runs the
+ * closure's construction too, so the spawn never sees the same box twice. */
+static bool let_sole_use_is_spawn_impl(const Expr *e, uint32_t idx, bool later_only) {
     if (e->kind != EX_LET) return false;
     const Binding *b = e->as.let_.bindings[idx].binding;
     const Expr *init = e->as.let_.bindings[idx].init;
@@ -2928,12 +2936,23 @@ static bool let_sole_use_is_spawn(const Expr *e, uint32_t idx) {
     if (!(closure_env_drop_is_shallow(c) || closure_env_drop_frees_box_only(c))) return false;
     SpawnUseUd u = { b, 0, 0, 0, false };
     spawn_use_walk(e->as.let_.body, &u);
-    for (uint32_t j = 0; j < e->as.let_.n; j++)
+    for (uint32_t j = later_only ? idx + 1 : 0; j < e->as.let_.n; j++)
         if (j != idx) spawn_use_walk(e->as.let_.bindings[j].init, &u);
     return !u.unsafe && u.spawns == 1 && u.others == 0;
 }
 /* Mark the let's spawn-owned closures before its body is emitted (the spawn
- * reads the mark); a binding the let itself drops is never one. */
+ * reads the mark); a binding the let itself drops is never one.  Also asked by
+ * the CPS translator for a let it lowers (cps_let_mark_spawn_owned, which
+ * first proves the let's scope can capture no continuation). */
+static void let_mark_spawn_owned(const Expr *e);
+static bool let_binding_env_freeable(const Expr *e, uint32_t i);
+void emit_let_mark_spawn_owned_one(const Expr *e, uint32_t i) {
+    if (!e || e->kind != EX_LET || i >= e->as.let_.n) return;
+    Binding *b = e->as.let_.bindings[i].binding;
+    if (b && !b->spawn_owns_env && !let_binding_env_freeable(e, i) &&
+        let_sole_use_is_spawn_impl(e, i, true))
+        b->spawn_owns_env = true;
+}
 static void let_mark_spawn_owned(const Expr *e) {
     if (!e || e->kind != EX_LET) return;
     for (uint32_t i = 0; i < e->as.let_.n; i++) {
