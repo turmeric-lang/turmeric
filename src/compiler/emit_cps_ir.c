@@ -10425,6 +10425,70 @@ static bool case_resumes_once_dyn(const CHandleCase *c) {
     return case_resumes_into(c) && term_k_only_resumed(c->case_body, c->k)
         && term_resumes_k_once_impl(c->case_body, c->k, true);
 }
+/* Is every use of `k` in the case one that COPIES the continuation -- a
+ * `resume` (dk_invoke / dk_resume_into copy it) or a store into a by-reference
+ * mutable (copy-on-store, emit_letraw) -- so that dk_perform's `sub` is dead
+ * once the case has returned?  Then dk_perform frees it there instead of at
+ * the outermost entry (dk_case_k_copied_only; fix direction 2 of
+ * effect-nontail-resume-copies-held-until-outer-entry).  Conservative: any
+ * other mention of `k`, or a term kind not listed, is an escape. */
+static bool term_k_copied_only(const CTerm *t, const Binding *k) {
+    while (t) {
+        switch (t->kind) {
+            case CT_APPCONT: return !atom_is_binding(&t->as.appcont.v, k);
+            case CT_RESUME:
+                if (atom_is_binding(&t->as.resume.v, k)) return false;
+                t = t->as.resume.body; break;
+            case CT_PERFORM:
+                for (uint32_t i = 0; i < t->as.perform.n; i++)
+                    if (atom_is_binding(&t->as.perform.args[i], k)) return false;
+                t = t->as.perform.body; break;
+            case CT_LETVAL:
+                if (atom_is_binding(&t->as.letval.v, k)) return false;
+                t = t->as.letval.body; break;
+            case CT_LETPRIM:
+                for (uint32_t i = 0; i < t->as.letprim.n; i++)
+                    if (atom_is_binding(&t->as.letprim.args[i], k)) return false;
+                t = t->as.letprim.body; break;
+            case CT_LETCALL:
+                if (t->as.letcall.fn == k) return false;
+                for (uint32_t i = 0; i < t->as.letcall.n; i++)
+                    if (atom_is_binding(&t->as.letcall.args[i], k)) return false;
+                t = t->as.letcall.body; break;
+            case CT_LETRAW: {
+                /* A copy-on-store of `k` is a copy; any other raw step that
+                 * names it is an escape. */
+                const Binding *bref = byref_set_target(t->as.letraw.e);
+                if (!bref) {
+                    uint32_t n = 0;
+                    Binding **fv = collect_free_vars(t->as.letraw.e, NULL, 0, NULL, 0, &n);
+                    bool names_k = false;
+                    for (uint32_t i = 0; i < n; i++) if (fv[i] == k) names_k = true;
+                    free(fv);
+                    if (names_k) return false;
+                }
+                t = t->as.letraw.body; break;
+            }
+            case CT_IF:
+                if (atom_is_binding(&t->as.if_.cond, k)) return false;
+                return term_k_copied_only(t->as.if_.then_, k)
+                    && term_k_copied_only(t->as.if_.else_, k);
+            case CT_MATCH:
+                if (atom_is_binding(&t->as.match.scrut, k)) return false;
+                for (uint32_t gi = 0; gi < t->as.match.n_guard_vars; gi++)
+                    if (atom_is_binding(&t->as.match.guard_vars[gi], k)) return false;
+                for (uint32_t i = 0; i < t->as.match.n_arms; i++)
+                    if (!term_k_copied_only(t->as.match.arms[i].body, k)) return false;
+                return true;
+            default: return false;
+        }
+    }
+    return false;
+}
+static bool case_k_copied_only(const CHandleCase *c) {
+    return c && c->k && !c->resumable_payload && !is_shift_effect(c->effect)
+        && term_k_copied_only(c->case_body, c->k);
+}
 /* May this case resume its continuation more than once?  A `^multishot` k,
  * or a resumable-payload / shift effect's cloneable one.  dk_perform reads it
  * off the chain (`ss`) for an inner case that would resume in place. */
@@ -12731,6 +12795,8 @@ static void emit_handle(CE *ce, const CTerm *t) {
         Buf nxt; buf_init(&nxt);
         bool cmulti = case_is_multishot(&t->as.handle.cases[ci]);
         if (cmulti) buf_puts(&nxt, "dk_case_multishot(");
+        bool ckcopy = case_k_copied_only(&t->as.handle.cases[ci]);
+        if (ckcopy) buf_puts(&nxt, "dk_case_k_copied_only(");
         if (cinto && case_resumes_once(&t->as.handle.cases[ci]))
             buf_puts(&nxt, "dk_case_resumes_once(");
         else if (cinto && case_resumes_once_dyn(&t->as.handle.cases[ci]))
@@ -12741,6 +12807,7 @@ static void emit_handle(CE *ce, const CTerm *t) {
         buf_printf(&nxt, "%s(%d, %s, %s, %.*s)", ctor, tag, cnames[ci], cenvs[ci],
                    (int)chain.len, chain.data);
         if (creopen) buf_putc(&nxt, ')');
+        if (ckcopy) buf_putc(&nxt, ')');
         if (cmulti) buf_putc(&nxt, ')');
         buf_free(&chain);
         chain = nxt;
@@ -13116,6 +13183,13 @@ static void emit_resume(CE *ce, const CTerm *t) {
     if (ce->cps_resume_k && t->as.resume.k.kind == CA_VAR
         && t->as.resume.k.var == ce->cps_resume_k) {
         char *sv = slot_store_reap(ce->ctx, t->as.resume.v.ty, t->as.resume.v.type, vv);
+        /* Fix direction 2 (effect-nontail-resume-copies-held-until-outer-
+         * entry): nothing after this resume names `k`, so this is the case's
+         * last use of it; dk_resume_into may free dk_perform's `sub` once it
+         * has copied what it resumes, when every use the case made of `k` was
+         * a copy (the handler node's k_copied_only, stamped onto `sub`). */
+        if (!term_mentions_binding(t->as.resume.body, ce->cps_resume_k))
+            ce_line(ce, "((DK *)(%s))->k_last = 1;", kk);
         if (resume_is_tail(t)) {
             ce_line(ce, "return dk_resume_into((DK *)(%s), %s, %s, 1);", kk, sv, ce->cur_k);
         } else {

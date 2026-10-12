@@ -1,0 +1,56 @@
+;; effect-nontail-resume-copies-held-until-outer-entry, fix direction 2: a
+;; delivered copy nothing captured is freed once it has run, not at the
+;; outermost entry -- dk_invoke's (at the end of its bounded run),
+;; dk_resume_into's (when its rest-of-case frame runs, or its last node for a
+;; borrowed tail), and dk_perform's `sub` at the case's last use of `k` when
+;; every use was a copy and nothing outward is multi-shot.  Each shape prints
+;; the answer the kept-copies path gave; leak-checked (requires.leak-check)
+;; so a copy freed too early, or twice, shows.
+;;
+;;   multishot      -- `(+ (resume k 1) (resume k 2))` a turn, 1000 turns
+;;   stored         -- k stored into a ^mut and resumed later, twice
+;;   under-multi    -- a once case whose perform continuation an outer
+;;                     ^multishot case runs twice (sub must stay)
+;;   nested-invoke  -- a ^multishot case resuming a k whose chain holds a
+;;                     handle with a once case
+;;   abortive-copy  -- the case stores k and answers; the store's copy is
+;;                     resumed after the handle has exited
+
+(defeffect Ask [] int)
+(defeffect Write [x : int] int)
+
+(defn ms-step [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] ^multishot k) (+ (resume k 1) (resume k 2))))
+(defn ms-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (ms-loop (+ i 1) n (+ acc (ms-step i)))))
+
+(defn stored-step [i : int] : int
+  (let [^mut saved 0]
+    (let [r (handle (+ i (perform (Ask))) (Ask [] k) (do (set! saved k) 0))]
+      (+ r (resume saved 10) (resume saved 20)))))
+(defn stored-loop [i : int n : int acc : int] : int
+  (if (= i n) acc (stored-loop (+ i 1) n (+ acc (stored-step i)))))
+
+(defn once-step [x : int] : int
+  (handle (+ x (perform (Ask)))
+    (Ask [] k) (+ (perform (Write x)) (resume k 10))))
+(defn under-multi [x : int] : int
+  (handle (once-step x) (Write [y] ^multishot k2) (+ (resume k2 y) (resume k2 1))))
+
+(defn inner [x : int] : int
+  (handle (+ x (perform (Ask))) (Ask [] k) (+ 1 (resume k 10))))
+(defn nested-invoke [x : int] : int
+  (handle (+ (perform (Write x)) (inner x))
+    (Write [y] ^multishot k2) (+ (resume k2 y) (resume k2 1))))
+
+(defn abortive-copy [x : int] : int
+  (let [^mut saved 0]
+    (let [r (handle (* 2 (+ x (perform (Ask)))) (Ask [] k) (do (set! saved k) 7))]
+      (+ r (resume saved 3)))))
+
+(defn main [] : nil
+  (println (ms-loop 0 1000 0))        ;; 2*499500 + 3*1000
+  (println (stored-loop 0 1000 0))    ;; 2*499500 + 30*1000
+  (println (under-multi 1))
+  (println (nested-invoke 1))
+  (println (abortive-copy 4)))

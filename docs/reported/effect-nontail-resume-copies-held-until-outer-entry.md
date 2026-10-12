@@ -9,8 +9,11 @@ repro below runs in 1.4 MB at 200,000 turns (339 MB before; the Debug
 twin (345 MB before); the reap list of a loop that opens any of these
 handles a turn stays flat.  What is left is a `k` resumed more than once
 (`^multishot`), a case under a `^multishot` handler, a prompt or a shift,
-and a `k` resumed elsewhere than the case's own body (`dk_invoke`).  See
-"Fixed 2026-10-12" and "Fixed 2026-10-12, second pass" at the end.
+and a `k` resumed elsewhere than the case's own body (`dk_invoke`) -- and
+for those, since the third pass, every delivered copy nothing captured is
+freed once it has run (fix direction 2), so a `^multishot` case resuming
+twice a turn costs a third of what it did.  See the three "Fixed
+2026-10-12" sections at the end.
 
 **Severity: low-medium (memory grows for the life of the loop's outermost
 call).** What is left of
@@ -53,21 +56,26 @@ nests C frames a turn: the resume yields its chain to the trampoline driver
 ## What is left
 
 ```turmeric
-(Inner [] ^multishot k) (+ (resume k 1) (resume k 2))   ; twice: a copy each, by design
+(Inner [] ^multishot k) (+ (resume k 1) (resume k 2))   ; twice: a copy each, freed after each run
 (Inner [] k) (let [y (perform (Outer))] (+ y (resume k 1)))
   ;; ...under a ^multishot Outer, a reset, or a with-handler table: the
   ;; perform's continuation can run twice, so the copy path (see `ss`)
 (Inner [] k) (helper k)                                  ; k resumed elsewhere: dk_invoke
 ```
 
-The second is a runtime fact, not a predicate gap: `^multishot` is the one
+What the first still keeps, per perform, is not a copy: the perform's
+ORIGINAL frame and its env, which only copies of ever run (so no hand-back
+fires for them), and behind them on the reap list the handler group and the
+loop's join.  The env is shared by every copy of the frame, so freeing it
+needs a count of those copies, which the nodes do not keep.  A stored `k`
+(the scheduler idiom) keeps its stored copy for good, since a stored
+continuation may be resumed any number of times (a second `(resume saved
+v)` compiles and runs).  The second is a runtime fact, not a predicate gap: `^multishot` is the one
 way a non-tail resume runs a continuation twice (a plain `k` is `^unique`,
 so a second `resume` is TUR-E0201), and a shift to an enclosing prompt the
 other; `ss` reads both off the chain in O(1).  A `with-handler` table's
 cases are marked multi-shot because their shape is not known at the
-install.  The third needs `dk_invoke`'s copy, which `__dk_drive_bounded`
-keeps; fix direction 2 (free a delivered copy nothing captured) still
-applies to it.  A colored call before the resume is outside the CPS subset
+install.  The third resumes a copy, freed after its run since the third pass.  A colored call before the resume is outside the CPS subset
 today (the call's `perform` is refused with "no lowering here"), so it is
 not a shape this report can measure.
 
@@ -196,3 +204,41 @@ body, a loop body: the copying path's answers on both back ends).
 Suite, second pass: `run.sh` 3759/0, `run-leak-check.sh` 178 / 0 / 3
 known-open, the JIT over the effect, CPS, multishot, handle, async, resume,
 defer, shift and reset fixtures 499/0.
+
+## Fixed 2026-10-12, third pass: a delivered copy nothing captured is freed after its run (fix direction 2)
+
+Three copies, each released where its run provably ends, when no node of it
+was ever copied (`__dk_chain_copied`: a copy shares its original's envs and
+may still run) and nothing pinned DK memory, by taking its entry back off
+the reap list (`__dk_reap_take`, a bounded search down from the top) and
+freeing the chain:
+
+- **`dk_invoke`'s copy** at the end of its bounded run
+  (`__dk_drive_bounded`): registered before the run, as before, so an
+  escape that longjmps over the driver still leaves it owned; every chain
+  yielded from inside it ran in that loop, so once the loop is over nothing
+  runs through it again.
+- **`dk_resume_into`'s copy** when its rest-of-case frame runs
+  (`copy_tail`: the frame carries the copy's head), or, for a tail resume
+  into the handle's own frame, when its last node is walked past
+  (`copy_last`).
+- **`dk_perform`'s `sub`** at the case's last use of `k` (`k_last`,
+  stamped by `emit_resume` on a resume after which nothing names `k`), when
+  every use the case made of `k` was a copy -- a `resume`, a copy-on-store
+  into a `^mut` (`case_k_copied_only`, `dk_case_k_copied_only`) -- and, for
+  a resume that yields to the driver, when nothing outward of the handle is
+  multi-shot (`ss`): a resume in a lifted frame of the case is its last use
+  on paper, but an enclosing `^multishot` case runs that frame again
+  (measured as a use-after-free in `effect-reopen-resume-once-shapes` before
+  the `ss` gate).  A case that returns to `dk_perform` frees it there.
+
+| program, 200,000 turns of a handle a turn | before | after |
+| --- | --- | --- |
+| `(Ask [] ^multishot k) (+ (resume k 1) (resume k 2))` | 447 MB | 148 MB |
+| `(Ask [] k) (do (set! saved k) 0)`, then `(resume saved 10)` | 458 MB | 267 MB |
+
+Pinned by `tests/fixtures/effect-copies-freed-after-run` (leak-checked: the
+two loops, a once case under a `^multishot` outer, a `^multishot` case
+resuming a chain that holds a once-handle, a stored `k` resumed after its
+handle exited; the kept-copies compiler's answers, which the interpreter
+agrees with).
