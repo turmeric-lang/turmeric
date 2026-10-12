@@ -7863,16 +7863,26 @@ static const Type *e2a_callee_sig(const Binding *fn, const CAtom *fn_atom,
     if (!t || t->as.fn.arity != n || (n && !t->as.fn.arg_kinds)) return NULL;
     return t;
 }
-static const char *e2a_param_ctype(const Type *sig, uint32_t i) {
+static const char *e2a_param_ctype(EmitCtx *ctx, const Type *sig, uint32_t i) {
     if (!sig || i >= sig->as.fn.arity) return "int64_t";
     TypeKind k = (TypeKind)sig->as.fn.arg_kinds[i];
+    const Type *full = sig->as.fn.arg_full_types ? sig->as.fn.arg_full_types[i] : NULL;
+    Type _r;
     /* In a colored generic's monomorph a parameter typed by the type variable
      * is the instantiation's: a `(fn [B] B)` parameter at B := float takes a
      * double, as the callee's registered entry declares it. */
-    if (g_cps_mono_resolver && sig->as.fn.arg_full_types && sig->as.fn.arg_full_types[i]) {
-        Type _r; const Type *rt = cps_resolve_ty(sig->as.fn.arg_full_types[i], &_r);
-        if (rt) k = rt->kind;
+    if (g_cps_mono_resolver && full) {
+        const Type *rt = cps_resolve_ty(full, &_r);
+        if (rt) { k = rt->kind; full = rt; }
     }
+    /* cps-effectful-callback-through-multi-arg-or-untyped-param (an aggregate
+     * argument): a by-value struct / sum parameter is declared at its own C
+     * type by the registered twin (`__fn_9__cps(tur_adt_P2 p, DK *)`), and an
+     * aggregate is passed in its own register class -- or in memory -- so
+     * the cast must spell it; an `int64_t` slot was "incompatible type for
+     * argument" from cc. */
+    if (ctx && full && emit_type_is_byvalue_adt(ctx, *full))
+        return emit_type_c_name(ctx, *full);
     switch (k) {
         case TY_FLOAT: case TY_FLOAT64: return "double";
         case TY_FLOAT32:                return "float";
@@ -7880,11 +7890,11 @@ static const char *e2a_param_ctype(const Type *sig, uint32_t i) {
     }
 }
 /* "int64_t (*)(<lead>T0, T1, ..., DK *)" into `out`. */
-static void e2a_cast(char *out, size_t cap, const char *lead, const Type *sig,
-                     uint32_t n) {
+static void e2a_cast(EmitCtx *ctx, char *out, size_t cap, const char *lead,
+                     const Type *sig, uint32_t n) {
     int off = snprintf(out, cap, "int64_t (*)(%s", lead);
     for (uint32_t i = 0; i < n && off < (int)cap - 64; i++)
-        off += snprintf(out + off, cap - (size_t)off, "%s, ", e2a_param_ctype(sig, i));
+        off += snprintf(out + off, cap - (size_t)off, "%s, ", e2a_param_ctype(ctx, sig, i));
     snprintf(out + off, cap - (size_t)off, "DK *)");
 }
 
@@ -8020,9 +8030,9 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
                                   const char *thread, const char *tag,
                                   const Type *sig) {
     char env_cast[512];
-    e2a_cast(env_cast, sizeof env_cast, "void *, ", sig, n);
+    e2a_cast(ce->ctx, env_cast, sizeof env_cast, "void *, ", sig, n);
     char thin_cast[512];
-    e2a_cast(thin_cast, sizeof thin_cast, "", sig, n);
+    e2a_cast(ce->ctx, thin_cast, sizeof thin_cast, "", sig, n);
     ce_line(ce, "{ int64_t *__e2ab = (int64_t *)(intptr_t)(%s); /* %s (fat callee) */", callee, tag);
     ce_line(ce, "  __tur_cps_fn __e2af = __tur_cps_lookup(__e2ab[0]);");
     const char *sep = n ? ", " : "";
@@ -9103,7 +9113,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 }
                 /* cast to the __cps ABI, float parameters at their own type */
                 char cast[512];
-                e2a_cast(cast, sizeof cast, "", e2sig, t->as.tailcall.n);
+                e2a_cast(ce->ctx, cast, sizeof cast, "", e2sig, t->as.tailcall.n);
                 char key[640];
                 e2a_lookup_key(key, sizeof key, t->as.tailcall.fn, pf);
                 if (t->as.tailcall.n)
@@ -10760,7 +10770,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
             free(argv_cps);
         } else {
         char cast[512];
-        e2a_cast(cast, sizeof cast, "", e2sig, call->as.tailcall.n);
+        e2a_cast(ce->ctx, cast, sizeof cast, "", e2sig, call->as.tailcall.n);
         char key[640];
         e2a_lookup_key(key, sizeof key, call->as.tailcall.fn, fn);
         if (call->as.tailcall.n)
@@ -14033,10 +14043,27 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Params: the __cps ABI spelling (emit_params) EXCEPT a pass-by-ptr
      * aggregate, which is spelled `const T *` to agree with the direct forward
      * decl (the wrapper is the plain-name symbol direct callers link against). */
+    /* A lifted CLOSURE's plain-name entry is its thunk, reached through the
+     * fat-closure protocol, where a WIDE by-value aggregate parameter crosses
+     * as an int64 box pointer (B4: emit_fns.c's `__tur_b4box_<name>`, and the
+     * forward declaration says so).  Spelling it by value here was "conflicting
+     * types" for every effectful capturing lambda taking a struct of more than
+     * eight bytes (cps-effectful-callback-through-multi-arg-or-untyped-param). */
+    bool *b4box = (bool *)calloc(fd->n_params ? fd->n_params : 1, sizeof(bool));
+    if (fd->closure) {
+        for (uint32_t i = 0; i < fd->n_params; i++) {
+            if (fd->params[i]->is_poly_fn || fd->param_types[i].kind == TY_FN) continue;
+            if (cps_entry_param_by_ptr(e, fd, i)) continue;
+            if (type_is_b4box_closure_slot(emit_resolve_type(ctx, fd->param_types[i])))
+                b4box[i] = true;
+        }
+    }
     for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(file, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
-        if (cps_entry_param_by_ptr(e, fd, i)) {
+        if (b4box[i]) {
+            buf_printf(file, "int64_t __tur_b4box_%s", pn);
+        } else if (cps_entry_param_by_ptr(e, fd, i)) {
             buf_printf(file, "const %s *%s",
                        cps_entry_param_byptr_ctype(e, fd, i), pn);
         } else {
@@ -14095,6 +14122,13 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     for (uint32_t i = 0; i < fd->n_params; i++) {
         if (i) buf_puts(&__args, ", ");
         char *pn = name_for_binding(ctx, fd->params[i]);
+        if (b4box[i]) {
+            /* Borrowed: the box belongs to the caller's carrier node. */
+            const char *ct = emit_type_c_name(ctx, emit_resolve_type(ctx, fd->param_types[i]));
+            buf_printf(&__args, "*(%s *)(intptr_t)__tur_b4box_%s", ct, pn);
+            free(pn);
+            continue;
+        }
         if (cps_entry_param_by_ptr(e, fd, i)) buf_putc(&__args, '*');
         buf_puts(&__args, pn);
         free(pn);
@@ -14146,6 +14180,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
         buf_puts(file, "    return __ret;\n}\n");
     }
 entry_wrapper_done:
+    free(b4box);
 
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
      * __cps mapping at startup, so a threaded call site recovers its CPS variant. */

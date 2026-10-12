@@ -1,0 +1,49 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param (an aggregate
+;; argument): an effectful callback whose parameter is a by-value struct or
+;; sum, called through a typed fn parameter of a CPS-lowered function.  The
+;; analysis admitted it (the lambda's registered `__cps` twin takes the
+;; aggregate by value) but the threaded call cast every slot to `int64_t`, so
+;; cc rejected the program ("incompatible type for argument"), on main too.
+;; The cast now spells a by-value aggregate at its own C type.  A CAPTURING
+;; lambda failed one step earlier: its CPS-emitted entry took the struct by
+;; value while the closure-thunk ABI passes a wide (>8 byte) aggregate as an
+;; int64 box ("conflicting types"); the entry now takes the box and derefs it.
+;; Every line equals `tur --interpret`.
+(defeffect Ask [] :int)
+(defstruct P2 [a : int b : int])
+
+;; a struct argument, tail call
+(defn app-tail [h : (fn [P2] int) x : int] : int
+  (h (P2 x x)))
+
+;; a struct argument beside an int, non-tail (the continuation is a heap join)
+(defn app-join [h : (fn [P2 int] int) x : int] : int
+  (+ 1 (h (P2 x (* 2 x)) 100)))
+
+;; a struct result
+(defn app-ret [h : (fn [int] P2) x : int] : int
+  (.b (h x)))
+
+;; a by-value Option argument, and an Option result
+(defn app-opt [h : (fn [(Option int)] int) x : int] : int
+  (+ 1 (h (some x))))
+(defn app-opt-ret [h : (fn [int] (Option int)) x : int] : int
+  (match (h x) (Some v) v (None) -1))
+
+(defn main [] : int
+  (println (handle (app-tail (fn [p : P2] : int (+ (.a p) (.b p) (perform (Ask)))) 1)
+             (Ask [] k) (resume k 10)))
+  (let [m 1000]
+    ;; capturing lambdas
+    (println (handle (app-join (fn [p : P2 n : int] : int (+ m n (.a p) (.b p) (perform (Ask)))) 1)
+               (Ask [] k) (resume k 10)))
+    (println (handle (app-tail (fn [p : P2] : int (+ m (.a p) (perform (Ask)))) 3)
+               (Ask [] k) (resume k 20))))
+  (println (handle (app-ret (fn [v : int] : P2 (P2 v (+ v (perform (Ask))))) 1)
+             (Ask [] k) (resume k 10)))
+  (println (handle (app-opt (fn [o : (Option int)] : int
+                              (match o (Some v) (+ v (perform (Ask))) (None) 0)) 4)
+             (Ask [] k) (resume k 10)))
+  (println (handle (app-opt-ret (fn [v : int] : (Option int) (some (+ v (perform (Ask))))) 4)
+             (Ask [] k) (resume k 20)))
+  0)
