@@ -2806,6 +2806,25 @@ static intptr_t dk_tail_resume(DK *sub, intptr_t v) {
     TUR_LONGJMP(*g_dk_driver);
     return 0; /* unreachable */
 }
+#ifndef TUR_DK_BOUNCE_DEPTH
+#define TUR_DK_BOUNCE_DEPTH (64u * 1024u)
+#endif
+__attribute__((unused)) static bool __dk_tail_deep(void) {
+    uintptr_t d = (uintptr_t)g_dk_driver;
+    if (!d) return false;
+#if defined(__GNUC__) || defined(__clang__)
+    uintptr_t h = (uintptr_t)__builtin_frame_address(0);
+#else
+    char probe; uintptr_t h = (uintptr_t)&probe;
+#endif
+    return (d > h ? d - h : h - d) > (uintptr_t)TUR_DK_BOUNCE_DEPTH;
+}
+__attribute__((unused)) static intptr_t __dk_bounce(DK *n) {
+    n->inplace_head = true;   /* the thunk owns it, not the driver */
+    g_dk_resume_chain = n; g_dk_resume_val = 0;
+    TUR_LONGJMP(*g_dk_driver);
+    return 0; /* unreachable */
+}
 /* Run `first` to completion, absorbing any tail-resume yields it makes, and
  * return its value.  Same trampoline as __dk_drive_after but SCOPED: it
  * restores the previous landing on the way out, so a nested run cannot steal
@@ -2988,6 +3007,7 @@ struct FiberBlock {
     size_t dk_reap_n, dk_reap_cap;
     int dk_entry_depth;
     void *dk_pend;
+    tur_jmp_buf *dk_driver;
     void *esc_live; int esc_live_n, esc_live_cap;
     int64_t r7dyn[8];
 };
@@ -3190,6 +3210,7 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     __dk_reap_v = f->dk_reap_v; __dk_reap_kind = f->dk_reap_kind;
     __dk_reap_n = f->dk_reap_n; __dk_reap_cap = f->dk_reap_cap; __dk_entry_depth = f->dk_entry_depth;
     void *_dk_pp = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)f->dk_pend;
+    g_dk_driver = f->dk_driver;   /* the fiber's own landing, on its own stack */
     TUR_GC_FIBER_ENTER((void *)&_dk_save);
     swapcontext(&f->caller_ctx, &f->ctx);
     TUR_GC_FIBER_LEAVE();
@@ -3198,6 +3219,7 @@ static int64_t tur_fiber_block_resume(FiberBlock *f, int64_t arg) {
     __dk_reap_v = _dk_rv; __dk_reap_kind = _dk_rk;
     __dk_reap_n = _dk_rn; __dk_reap_cap = _dk_rc; __dk_entry_depth = _dk_rd;
     f->dk_pend = (void *)g_dk_pend_perform; g_dk_pend_perform = (DKPendPerform *)_dk_pp;
+    f->dk_driver = g_dk_driver;
     g_dk_driver = _dk_save;
     tur_current_fiber = _prev;
     return f->result;
@@ -8349,6 +8371,15 @@ static int64_t list_hylength(int64_t l) {
   
 }
 
+typedef struct { DK *node; int64_t a0; int64_t a1; int64_t a2; } list_hyeq_qu_b1_env;
+static intptr_t list_hyeq_qu_b1(intptr_t env, intptr_t v, DK *__kont) {
+    list_hyeq_qu_b1_env *a = (list_hyeq_qu_b1_env *)(intptr_t)env; (void)v;
+    int64_t a0 = a->a0;
+    int64_t a1 = a->a1;
+    int64_t a2 = a->a2;
+    DK *nd = a->node; free(a); free(nd);
+    return (intptr_t)list_hyeq_qu__cps(a0, a1, a2, __kont); /* cps->cps, bounced */
+}
 typedef struct { int64_t f0; int64_t f1; int64_t f2; } list_hyeq_qu_j0_env;
 static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
     list_hyeq_qu_j0_env *__cap = (list_hyeq_qu_j0_env *)(intptr_t)env;
@@ -8372,6 +8403,14 @@ static intptr_t list_hyeq_qu_j0(intptr_t env, intptr_t __t3__slot, DK *__kont) {
             return ((int64_t)0);
         }
         __t5 = __ps_127;
+        if (__dk_tail_deep()) {   /* cps->cps tail call on a deep stack: bounce to the driver */
+            list_hyeq_qu_b1_env *__tb = (list_hyeq_qu_b1_env *)malloc(sizeof *__tb);
+            __tb->node = dk_frame_resume(list_hyeq_qu_b1, (intptr_t)__tb, __kont);
+            __tb->a0 = __t4;
+            __tb->a1 = __t5;
+            __tb->a2 = (int64_t)(intptr_t)cmp_fn;
+            return __dk_bounce(__tb->node);
+        }
         return list_hyeq_qu__cps(__t4, __t5, (int64_t)(intptr_t)cmp_fn, __kont); /* cps->cps */
     } else {
         return dk_run(__kont, (intptr_t)(false));

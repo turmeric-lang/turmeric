@@ -200,14 +200,21 @@ depends on it now.
 
 ### What is still a C call
 
-- **A group member reached through a closure, an internal `define`, or a
+- ~~**A group member reached through a closure, an internal `define`, or a
   lifted continuation.** Members are top-level procedures only. A `__cps`
   closure takes its env as param 0, and a tail call that happens inside a
   lifted join helper is not in a main body. Those calls stay
-  `return g__cps(...)`, constant stack at `-O2` as before.
-- **A component larger than eight members or thirty-two parameter slots**
+  `return g__cps(...)`, constant stack at `-O2` as before.~~ **Covered
+  2026-10-12** by
+  [cps-self-call-through-join-grows-the-stack](cps-self-call-through-join-grows-the-stack.md):
+  every such call is still `return g__cps(args, __kont)` on a flat stack,
+  but is guarded by a depth check against the trampoline driver's landing
+  and bounces to the driver once the stack has grown, so it is constant
+  stack at every `-O`.
+- ~~**A component larger than eight members or thirty-two parameter slots**
   (`CTG_MAXMEM`, `CTG_MAXSLOTS`) is not fused. Raise the caps if a real
-  program hits them.
+  program hits them.~~ Same: an unfused member's tail calls take the guarded
+  C call, so the caps bound only how much of a cycle is a `goto`.
 - ~~**A tail call after a `guard`, into another procedure.**~~ Resolved
   2026-09-29: the partner was evicted from CPS by its base case, not by the
   tail call. `guard` makes

@@ -7526,6 +7526,15 @@ typedef struct {
      * struct but writes elsewhere, so it never reaches the backedge. */
     char        *loop_reaps[16];
     uint32_t     n_loop_reaps;
+    /* cps-self-call-through-join-grows-the-stack: `__kont` here is the live
+     * downstream chain and nothing on the C stack between this code and the
+     * trampoline driver's landing consumes a returned value -- a main body,
+     * or a resume-frame helper (LH_RESUME_CONT) lifted from one.  A cps->cps
+     * tail call that threads `__kont` may then bounce to the driver when the
+     * stack is deep (__dk_tail_deep / __dk_bounce).  False in a shift body,
+     * a handler case, a perform-continuation frame and a loop helper that
+     * returns its exit value, and in everything lifted out of those. */
+    bool        kont_tail_live;
 } CE;
 
 /* ============================================================================
@@ -9256,6 +9265,66 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                     free(argv);
                     break;
                 }
+                /* cps-self-call-through-join-grows-the-stack: every other
+                 * `__kont`-threading cps->cps tail call -- a self call from a
+                 * lifted join, a call to a function outside this group, a
+                 * closure's -- is a C call, constant-stack only as a sibling
+                 * call.  Where `__kont` is the live chain (kont_tail_live),
+                 * guard it: once the C stack has grown TUR_DK_BOUNCE_DEPTH
+                 * below the driver's landing, pack the arguments into a heap
+                 * env and yield a resume-frame thunk that makes the call to
+                 * the driver (__dk_bounce), which runs it from a flat stack.
+                 * The thunk and its env type go to the helpers, ahead of the
+                 * function (or the join) that uses them; the callee's `__cps`
+                 * prototype is already in scope wherever the call itself is.
+                 * The env's field types are the callee's declared `__cps`
+                 * parameter types (emit_param_ctype, as emit_params spells
+                 * them), which is what the typed arguments are cast to.  Same
+                 * exclusions as the backedge: a re-resolved or clone callee
+                 * (its parameter spelling is the spec's), a kont other than
+                 * the function's own, a shift / case / perform-cont frame, an
+                 * argument with a deferred drop (the `freed after` arm needs
+                 * the call to return).  See __dk_tail_deep in
+                 * emit_dk_runtime.c for why the jump is safe. */
+                if (ce->kont_tail_live && !rr && !clone &&
+                    t->as.tailcall.kont.kind == KK_RET &&
+                    !ce->shift_mode && !ce->ret_mode && !ce->handler_case_mode &&
+                    !cps_deferred_any_atom(t->as.tailcall.args, t->as.tailcall.n)) {
+                    const FnDef *bfd = g_prog ? fd_for_binding(g_prog, t->as.tailcall.fn) : NULL;
+                    bool bok = bfd && t->as.tailcall.n == bfd->n_params;
+                    for (uint32_t i = 0; bok && i < bfd->n_params; i++)
+                        bok = bfd->params[i] != NULL;   /* emit_param_ctype reads each */
+                    if (bok) {
+                        uint32_t n = t->as.tailcall.n;
+                        int bid = (*ce->helper_ctr)++;
+                        char bname[320];
+                        snprintf(bname, sizeof bname, "%s_b%d", ce->fn_cn, bid);
+                        Buf *h = ce->helpers;
+                        buf_printf(h, "typedef struct { DK *node;");
+                        for (uint32_t i = 0; i < n; i++)
+                            buf_printf(h, " %s a%u;", emit_param_ctype(ce->ctx, bfd, i), i);
+                        buf_printf(h, " } %s_env;\n", bname);
+                        buf_printf(h, "static intptr_t %s(intptr_t env, intptr_t v, DK *__kont) {\n"
+                                      "    %s_env *a = (%s_env *)(intptr_t)env; (void)v;\n",
+                                   bname, bname, bname);
+                        for (uint32_t i = 0; i < n; i++)
+                            buf_printf(h, "    %s a%u = a->a%u;\n", emit_param_ctype(ce->ctx, bfd, i), i, i);
+                        buf_puts(h, "    DK *nd = a->node; free(a); free(nd);\n");
+                        buf_printf(h, "    return (intptr_t)%s__cps(", fn);
+                        for (uint32_t i = 0; i < n; i++) buf_printf(h, "a%u, ", i);
+                        buf_puts(h, "__kont); /* cps->cps, bounced */\n}\n");
+                        ce_line(ce, "if (__dk_tail_deep()) {   /* cps->cps tail call on a deep stack: bounce to the driver */");
+                        ce_line(ce, "    %s_env *__tb = (%s_env *)malloc(sizeof *__tb);", bname, bname);
+                        ce_line(ce, "    __tb->node = dk_frame_resume(%s, (intptr_t)__tb, __kont);", bname);
+                        for (uint32_t i = 0; i < n; i++) {
+                            size_t from = arg_offs[i];
+                            size_t to = (i + 1 < n) ? arg_offs[i + 1] - 2 : strlen(argv_t);
+                            ce_line(ce, "    __tb->a%u = %.*s;", i, (int)(to - from), argv_t + from);
+                        }
+                        ce_line(ce, "    return __dk_bounce(__tb->node);");
+                        ce_line(ce, "}");
+                    }
+                }
                 free(arg_offs);
                 /* cps-edge-walk-misses-nodes-and-colored-frames-leak, the tail
                  * arm: a fresh box handed to this callee (a deferred drop keyed
@@ -10341,6 +10410,10 @@ static void emit_lifted(CE *ce, const char *name, LHMode mode,
     hc.handler_case_mode = (mode == LH_HANDLER_CASE);   /* E7: only a direct case body */
     hc.case_tail_resume  = (mode == LH_HANDLER_CASE) ? ce->case_tail_resume : false;
     hc.cps_resume_k      = resumes_into ? hcase->k : resume_k;
+    /* Only a resume-frame keeps a live `__kont` (its DKResumeFrame parameter,
+     * which dk_run_impl tail-calls it with); the other shapes return a value
+     * to whoever ran them. */
+    hc.kont_tail_live    = ce->kont_tail_live && (mode == LH_RESUME_CONT);
 
     /* N6.3: read the captured values out of the env struct into locals named the
      * same way the body references them (name_for_binding). */
@@ -10911,6 +10984,9 @@ static void emit_loop(CE *ce, const CTerm *t) {
     hc.ret_mode = ret_direct;
     hc.handler_case_mode = false;
     hc.case_tail_resume = false;
+    /* A helper that returns its exit value (ret_direct) has a consumer on the
+     * C stack; one that threads `__kont` is a live tail like its caller. */
+    hc.kont_tail_live = ce->kont_tail_live && !ret_direct;
     /* The exit arm delivers the live-after var to the helper's KK_RET; its
      * crossing type matches what the caller's continuation expects. */
     hc.ret_ty = (t->as.loop.result_kont.kind == KK_PROMPT) ? ce->cur_ty
@@ -13711,6 +13787,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     ce.cur_k = "__kont"; ce.fn_cn = cn; ce.helper_ctr = &helper_ctr;
     ce.tb_bouncer = !fd->closure && fn_may_bounce(fd);
     ce.tb_out = &body_buf;
+    ce.kont_tail_live = true;   /* a main body: `__kont` is the function's own continuation */
     ce.ret_ty = mono_ret ? mono_ret : fn_ret_type(fd);   /* KK_RET crossing type (Tier C aggregate return) */
     /* fn-value-fat-normalization (effect-row increment): a CAPTURING lambda's
      * __cps twin reads its captures exactly like the direct thunk does -- cast
