@@ -19410,7 +19410,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *sb_tmp = fresh_tmp(ctx);
                     indent_buf(body, ctx->indent);
                     buf_printf(body,
-                               "void *%s = (void *)((char *)&%s + sizeof(void *));\n",
+                               e->as.fn_to_fat_.opaque_static
+                                   ? "void *%s = TUR_OPAQUE_PTR((char *)&%s + sizeof(void *));\n"
+                                   : "void *%s = (void *)((char *)&%s + sizeof(void *));\n",
                                sb_tmp, box);
                     free(fnptr);
                     free(typed_shim);

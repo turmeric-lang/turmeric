@@ -8289,13 +8289,18 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                      * it may be the shared static one -- otherwise every
                      * `(pick plus1 plus1)` mallocs a box nothing frees (24 B a
                      * call).  Its no-op header makes any later drop of it
-                     * harmless.  A `^construct` template is left on the
+                     * harmless, and it is handed out opaque (opaque_static)
+                     * so gcc, once the callee is inlined, cannot follow it
+                     * into a drop's never-taken free() branch -- a struct
+                     * fn-field's drop glue did, in the whole-preamble
+                     * build.  A `^construct` template is left on the
                      * malloc form: its sum payload is what the scope-exit
                      * drops free, and GCC reports a static address reaching
                      * `free` there (the -Wfree-nonheap-object ratchet; see
                      * the static_ok comment in expr.h). */
                     shim->as.fn_to_fat_.static_ok =
                         fn_binding && !fn_binding->is_construct_template;
+                    shim->as.fn_to_fat_.opaque_static = true;
                     args[i] = shim;
                 }
             }
