@@ -1,0 +1,53 @@
+;; sum-closure-payload-never-dropped, item 2: a capturing closure held in a
+;; by-value Option / Result local and read back with `unwrap`, `unwrap-or` or
+;; `ok-val`.  Those hand the closure out as a value, so the local's
+;; scope-exit drop was refused and the env leaked (24 B a construction).  A
+;; callee that only PROJECTS the payload -- its body a `match` on the
+;; parameter whose arms answer the arm's own binder or something naming
+;; neither -- keeps nothing, and the question moves to the result: invoked on
+;; the spot, or bound to a local that is itself only invoked, the closure goes
+;; nowhere and the local still drops it.  (requires.leak-check)
+(defn plus1 [x : int] : int (+ x 1))
+
+;; invoked on the spot
+(defn call-head [k : int] : int
+  (let [bump k
+        ff (some (fn [x : int] : int (+ x bump)))]
+    ((unwrap ff) 41)))
+
+;; bound to a sibling local, called twice
+(defn let-bound [k : int] : int
+  (let [ff (some (fn [x : int] : int (* x k)))
+        f (unwrap ff)]
+    (+ (f 2) (f 3))))
+
+;; bound in a nested let
+(defn nested-let [k : int] : int
+  (let [ff (some (fn [x : int] : int (- x k)))]
+    (let [g (unwrap ff)]
+      (g 100))))
+
+;; unwrap-or with a named default (its `dflt : A` box is the static one)
+(defn with-default [k : int] : int
+  (let [ff (some (fn [x : int] : int (+ x k k)))]
+    ((unwrap-or ff plus1) 10)))
+
+;; ok-val on a Result whose Err arm is an int
+(defn result-ok [k : int] : int
+  (let [r : (Result (fn [int] int) int) (ok (fn [x : int] : int (* x k k)))]
+    ((ok-val r) 2)))
+
+(defn loop [i : int acc : int] : int
+  (if (= i 0)
+    acc
+    (loop (- i 1) (+ acc (call-head i) (let-bound i) (nested-let i)
+                     (with-default i) (result-ok i)))))
+
+(defn main [] : int
+  (println (call-head 1))
+  (println (let-bound 2))
+  (println (nested-let 3))
+  (println (with-default 4))
+  (println (result-ok 5))
+  (println (loop 100 0))
+  0)

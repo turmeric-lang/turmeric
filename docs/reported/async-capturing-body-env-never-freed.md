@@ -1,5 +1,21 @@
 # A capturing `async` body's closure env is never freed
 
+**Narrowed a sixth time 2026-10-12: a let the CPS backend lowers.**
+`(let [body (fn [] ...)] (await (async body)))` in a function that performs
+leaked its box (32 B a spawn): the direct emitter's let marks such a binding
+(`let_mark_spawn_owned`), but the CPS let never asked. It asks now
+(`cps_let_mark_spawn_owned`, `src/passes/cps_ir.c`), per closure binding,
+after proving that the scope following the box's construction -- the later
+inits and the body -- can capture no continuation (no perform / handle /
+shift / resume, no colored call), since a resume of one captured there could
+re-run the spawn on the same box. Control BEFORE the construction (an earlier
+binding, a perform around the let) re-runs the construction too, so it does
+not disqualify, unlike the direct rule's blanket "no perform in the let"
+(`let_sole_use_is_spawn_impl`'s `later_only`). Pinned by
+`tests/fixtures/async-let-bound-body-env-dropped-cps` (leak-checked: a perform
+before the let, in an earlier binding, a parking body, a struct capture, 100
+spawns from a performing loop; passes the JIT harness).
+
 **Narrowed a fifth time 2026-10-09: the future of an awaited fresh spawn is
 freed too.** `(await (async ...))` names its `TurFuture` nowhere else, and
 no stdlib call frees a raw spawn future (`future-free` is the typed

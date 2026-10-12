@@ -1,0 +1,22 @@
+f inner
+f outer
+11
+g inner
+g outer
+22
+h 3
+h 2b
+h 2a
+h after
+h 1
+66
+s stmt
+s next
+s outer
+5
+p inner
+p outer
+p: caught
+q inner
+q outer
+q: caught

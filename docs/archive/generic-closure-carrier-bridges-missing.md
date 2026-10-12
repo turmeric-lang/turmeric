@@ -1,5 +1,7 @@
 # Generic closures skip two carrier bridges: a let-bound call's result, and a typed capture into a generic callee
 
+**RESOLVED 2026-10-12** -- both bridges are in; see "Fixed" at the end.
+
 **Severity: medium (C compile failure on current toolchains).** Two shapes of
 a closure returned by a generic function emit C that passes an integer where a
 pointer is expected, or the reverse. gcc 13 only warns (`-Wint-conversion`)
@@ -104,3 +106,37 @@ instance, Defect 1 for a `cstr` one.
 
 Write the closure-returning function at a concrete type, as the signal guide's
 `(defn cycle [values : (Vec float)] : (fn [] float) ...)` does.
+
+## Fixed (2026-10-12)
+
+- **Defect 1** (`src/compiler/emit_expr.c`, the `closure_fn_binding`
+  direct-dispatch arm of call emission). Beside the SR2a readback that
+  unboxes a by-value sum, a call whose thunk is EMITTED returning the int64
+  carrier (`emit_sig_lookup_ret_ctype`) while the call's resolved C type is
+  a pointer is now cast back, `((const char *)(intptr_t)(__fn_5(...)))`, and
+  the cast is noted as the call's return type so a hoisted `__ps_N` temp is
+  declared at the pointer. Keyed on the thunk's spelling, so a clone that
+  already returns the pointer is untouched. `float` and by-value aggregates
+  never reach the shared thunk -- they get a per-spec clone -- and `bool`
+  and the narrow integers convert implicitly.
+- **Defect 2** (same file, the general call-argument loop's
+  "cps-direct-arg-follows-emitted-signature" bridge). That bridge cast a
+  local RECORDED as a pointer into a parameter emitted as the int64 word,
+  but a capture read in a closure body is spelled through the env
+  (`__env_X->values`) and is in no local table. When the argument is a
+  capture of the closure being emitted, its C type is the env field's --
+  `emit_type_c_name` of the binding under the active spec, the same
+  spelling the env struct was declared with -- so the per-spec clone's
+  `tur_adt_Vec__float *` capture now goes into `vec_hyget(int64_t, ...)` as
+  `(int64_t)(intptr_t)(...)`. An argument an earlier rule already cast is
+  left alone (otherwise the arrow fixtures' captured fn values got a second,
+  redundant cast).
+
+Pinned by `tests/fixtures/generic-closure-let-bound-carrier-bridge`: the
+let-bound call at `cstr`, `int`, `float`, `bool` and a struct; a `(Vec A)`
+capture passed to `vec-get` at `float`, `cstr` and `int`; and the generic
+`cycle` that found the report at `float`, `cstr`, `bool` and a struct.
+`tests/run.sh` fails a fixture on any `-Wint-conversion` warning, so the
+fixture failed before the change (`emitted C representation warning`) and
+passes after; every line equals `tur --interpret`. Checked by hand under
+`gcc -Werror=int-conversion` and clang as well.

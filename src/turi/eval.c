@@ -9313,6 +9313,13 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                          * on; a class-only walk here handed V's dictionary to
                          * a K-directed method (map keys rendered via the
                          * value instance). */
+                        /* A result that is an associated-type projection,
+                         * `(Inner A)`, dispatches on its argument `A`
+                         * (associated-type-unusable-nullary-and-generic). */
+                        if (!recv_is_tyvar && h->as.tyvar_.assoc_of &&
+                            h->as.tyvar_.assoc_arg &&
+                            h->as.tyvar_.assoc_arg->kind == TY_TYVAR)
+                            h = h->as.tyvar_.assoc_arg;
                         const char *disp_tv =
                             recv_is_tyvar
                                 ? control->as.call_.args[0]->type.as.tyvar_.name

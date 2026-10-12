@@ -1,0 +1,42 @@
+;; generic-result-tyvar-captured-under-projection-expected: a call whose
+;; result variable no argument binds (`vec-new`, `mk`) under an expected type
+;; that names an associated-type projection of the enclosing generic --
+;; `(let [v : (Vec (Inner A)) (vec-new)] ...)`.  No branch bound the callee's
+;; variable from a non-ground expected type, so its result kept the callee's
+;; own `(Vec A)`, and that `A` read as the CALLER's `A`: `v` was declared
+;; `Vec__W *` / `Vec__V *` while the spec built `Vec__int *` / `Vec__cstr *`
+;; (an incompatible-pointer warning here, an error on gcc 14), or, with a
+;; callee whose variable is spelled differently, a type error ("expected T,
+;; got (Inner A)").  The variable is now bound to the projection, which each
+;; spec of the enclosing generic reduces.  Both engines.
+(defclass Box [a]
+  (type Inner : Type)
+  (unwrap [x : a] : Inner))
+(defopaque W :int)
+(defopaque V :int)
+(defstruct Pt [x : int y : int])
+(definstance Box [W] (type Inner = int) (unwrap [x] (:: x int)))
+(definstance Box [V] (type Inner = cstr) (unwrap [x] "v"))
+
+;; the caller's variable spelled like vec-new's own
+(defn both [A] [(Box A)] [x : A] : (Vec (Inner A))
+  (let [v : (Vec (Inner A)) (vec-new)]
+    (vec-push! v (unwrap x))
+    v))
+
+;; a local producer whose variable is spelled differently
+(defn mk [T] [] : (Vec T) (vec-new))
+
+(defn both2 [A] [(Box A)] [x : A] : (Vec (Inner A))
+  (let [v : (Vec (Inner A)) (mk)]
+    (vec-push! v (unwrap x))
+    (vec-push! v (unwrap x))
+    v))
+
+(defn main [] : int
+  (println (vec-get (both (:: 5 W)) 0))
+  (println (vec-get (both (:: 5 V)) 0))
+  (println (vec-len (both2 (:: 6 W))))
+  (println (+ (vec-get (both2 (:: 6 W)) 0) (vec-get (both2 (:: 6 W)) 1)))
+  (println (vec-get (both2 (:: 6 V)) 1))
+  0)

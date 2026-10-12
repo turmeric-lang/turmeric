@@ -3340,7 +3340,19 @@ bool emit_dispatch_tyvar(const Expr *call, Type *out) {
         while (recv && recv->kind == EX_ASCRIBE) recv = recv->as.ascribe_.inner;
         if (recv && recv->type.kind == TY_TYVAR) { *out = recv->type; return true; }
     }
-    if (call->type.kind == TY_TYVAR) { *out = call->type; return true; }
+    if (call->type.kind == TY_TYVAR) {
+        /* associated-type-unusable-nullary-and-generic: a return-directed
+         * method whose result is the associated type, called at the projection
+         * `(Inner A)`, dispatches on `A` -- the projection's own spec binding
+         * is the REDUCED type (`int`), which names no instance. */
+        if (call->type.as.tyvar_.assoc_of && call->type.as.tyvar_.assoc_arg &&
+            call->as.call_.dict_arg) {
+            *out = *call->type.as.tyvar_.assoc_arg;
+            return true;
+        }
+        *out = call->type;
+        return true;
+    }
     /* constrained-hkt-spec-keeps-representative-instance: a higher-kinded class
      * method called on the abstract constructor has receiver `(m int)` and
      * result `(m b)` -- TY_APP spines whose HEAD is the dispatch variable.  The

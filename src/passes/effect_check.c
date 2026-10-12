@@ -458,6 +458,12 @@ static EffectRow *collect_effects_in_expr(Arena *a, Expr *e,
                     pfn = param->poly_type;          /* NULL: a bare `: fn` */
                     while (pfn && pfn->kind == TY_FORALL) pfn = pfn->as.forall_.body;
                     if (param->poly_type && (!pfn || pfn->kind != TY_FN)) continue;
+                } else if (param->is_fat && param->type.kind == TY_PTR_VOID) {
+                    /* An untyped `^fat h`: a fn value with no signature at
+                     * all, so no row either -- as open as a bare `: fn`.  Its
+                     * effectful argument drew the same false TUR-W0033
+                     * (cps-effectful-callback-through-multi-arg-or-untyped-param). */
+                    pfn = NULL;
                 } else continue;
                 /* A written row (`#fx{}` included) is ER2's or TUR-E0009's --
                  * except a bare row VARIABLE, `(fn [int] #fx{e} int)`: ER2

@@ -76,13 +76,23 @@ export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0}"
 # this dump" (fs/coredump.c), so set it, and keep ASan from resetting it to 0.
 # A file core_pattern is left alone: there a limit of 1 would leave 1-byte
 # cores in the fixture directories.
+#
+# The limit is ONE BYTE, and `ulimit -c 1` does not set it: bash counts -c in
+# 1024-byte blocks, so that set 1024, which the kernel pipes like any other
+# limit -- the 2026-10-09 version of this did exactly that and changed nothing
+# (the clustered timeouts continued; jit-linux-aborting-fixtures-time-out).
+# `prlimit` (util-linux) takes bytes and sets this shell's own limit, which
+# every fixture process inherits.
 _core_pattern="$(cat /proc/sys/kernel/core_pattern 2>/dev/null || true)"
 if [ "${_core_pattern#|}" != "$_core_pattern" ]; then
-    if ulimit -c 1 2>/dev/null; then
+    # stderr: under TUR_TEST_LIST stdout is the fixture list and nothing
+    # else (the shard-partition check reads it line by line).
+    if command -v prlimit >/dev/null 2>&1 &&
+       prlimit --pid $$ --core=1:1 2>/dev/null; then
         export ASAN_OPTIONS="$ASAN_OPTIONS:disable_coredump=0"
-        # stderr: under TUR_TEST_LIST stdout is the fixture list and nothing
-        # else (the shard-partition check reads it line by line).
-        echo "run-jit: core dumps piped to '${_core_pattern%% *}'; RLIMIT_CORE=1 so aborting fixtures skip them" >&2
+        echo "run-jit: core dumps piped to '${_core_pattern%% *}'; RLIMIT_CORE=1 byte so aborting fixtures skip them" >&2
+    else
+        echo "run-jit: core dumps piped to '${_core_pattern%% *}'; could not set RLIMIT_CORE=1 byte (no prlimit), aborting fixtures may queue on the handler" >&2
     fi
 fi
 

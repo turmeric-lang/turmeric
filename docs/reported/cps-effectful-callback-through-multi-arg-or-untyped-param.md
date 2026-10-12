@@ -1,5 +1,33 @@
 # An effectful callback through a multi-argument or untyped fn parameter is refused
 
+**Narrowed 2026-10-12: a by-value aggregate argument or result threads.**
+That shape was worse than this report said: it was not refused, the program
+did not BUILD (on `main` too). A lambda with a struct or sum parameter was
+admitted as threadable -- its registered `__cps` twin takes the aggregate by
+value -- but the threaded call (`emit_e2a_fat_dispatch` and the thin registry
+calls, `src/compiler/emit_cps_ir.c`) cast every non-float slot to `int64_t`:
+"incompatible type for argument 2". `e2a_param_ctype` now spells a by-value
+aggregate at its own C type. A CAPTURING lambda failed a step earlier: its
+CPS-emitted plain-name entry took a wide (>8 byte) aggregate by value while
+the closure-thunk ABI and its forward declaration pass it as an int64 box
+(B4, `__tur_b4box_<name>`) -- "conflicting types"; the entry now takes the box
+and derefs it into the `__cps` call. Pinned by
+`tests/fixtures/cps-effectful-callback-aggregate-args` (leak-checked; a struct
+argument in tail and join position, captureless and capturing, a struct
+result, an Option argument and an Option result; every line equals `tur
+--interpret`; passes the JIT harness). An aggregate wider than 16 bytes is
+still refused at compile time (`fn_sig_ok`: the lambda's `__cps` signature).
+Found the same day and fixed: the untyped `^fat` shape below drew a false
+TUR-W0033 ("handler clause for 'Ask' is unreachable") beside its refusal --
+the effect pass charged an effectful argument to the call only for a TYPED or
+poly fn parameter (`src/passes/effect_check.c`); an untyped `^fat` parameter
+is as open as a bare `: fn` now. Pinned by
+`tests/fixtures/errors/cps-untyped-fat-effectful-callback` (the refusal in
+`expected.diag`, the warning's absence in the new `unexpected.diag`, which
+`tests/run.sh` now honours for negative fixtures). The refusal itself stays:
+with no signature the call through the parameter can be neither threaded nor
+given a direct fallback; a typed parameter compiles.
+
 **Narrowed 2026-10-09: scalar arguments and results thread, pointer
 results and capturing closures of those kinds too.**
 
@@ -34,7 +62,8 @@ All three fixtures are leak-checked, pass the JIT harness and run clean under
 `-fsanitize=function`. **What is left:**
 
 - shape 2, an untyped `^fat` parameter;
-- an aggregate (struct or ADT) argument or result;
+- an aggregate (struct or ADT) argument wider than 16 bytes (narrower ones
+  thread since 2026-10-12, above);
 - a capturing closure with an untyped `ptr<void>` argument or a
   narrow-integer / `bool` result.
 

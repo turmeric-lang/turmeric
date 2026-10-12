@@ -1,0 +1,28 @@
+;; The must-keep twin of sum-closure-payload-dict-dispatch: the same generic,
+;; but Q's instance method keeps the closure it matches out (pushes it to a
+;; global vector, called after `go` returned).  Re-resolved per spec, P's
+;; instantiation drops its closure and Q's keeps it; a drop on the Q side
+;; would be a use-after-free at the later calls.
+(def kept : (Vec (fn [int] int)) (vec-new))
+
+(defclass Runner [a]
+  (run-opt [x : a o : (Option (fn [int] int))] : int))
+(defopaque P :int)
+(defopaque Q :int)
+(definstance Runner [P]
+  (run-opt [x o] (match o (Some f) (f (:: x int)) (None) 0)))
+;; Q keeps the closure it matches out
+(definstance Runner [Q]
+  (run-opt [x o] (match o (Some f) (do (vec-push! kept f) 1) (None) 0)))
+
+(defn go [A] [(Runner A)] [x : A k : int] : int
+  (let [ff (some (fn [y : int] : int (+ y k)))]
+    (run-opt x ff)))
+
+(defn main [] : int
+  (println (go (:: 5 P) 1))
+  (println (go (:: 5 Q) 100))
+  (println (go (:: 6 Q) 200))
+  (println ((vec-get kept 0) 1))
+  (println ((vec-get kept 1) 2))
+  0)

@@ -1,0 +1,14 @@
+;; cps-effectful-callback-through-multi-arg-or-untyped-param, shape 2: an
+;; effectful lambda handed to an UNTYPED `^fat` parameter.  The parameter
+;; carries no signature, so the call through it can be neither threaded nor
+;; given a direct fallback, and the program is refused at compile time (write
+;; the parameter's type, `(fn [int] int)`, and it compiles).  The refusal used
+;; to come with a false TUR-W0033 -- "handler clause for 'Ask' is unreachable"
+;; -- because the effect pass charged an effectful argument only to a TYPED
+;; (or poly) fn parameter; unexpected.diag pins its absence.
+(defeffect Ask [] :int)
+(defn app [^fat h x : int] : int (h x))
+(defn main [] : int
+  (println (handle (app (fn [x : int] : int (+ x (perform (Ask)))) 1)
+             (Ask [] k) (resume k 10)))
+  0)

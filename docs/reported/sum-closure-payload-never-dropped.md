@@ -59,15 +59,54 @@ ASan if the drop ever trusts that mask again.
 
 Each of these still leaks the env, as before. None is freed early.
 
-1. **A dictionary-dispatched callee inside a generic.** The call's
-   `fn_binding` names a representative instance, not the one that runs, so
-   only a statically dispatched call is asked. (Fixed 2026-10-08 for every
-   statically known callee -- a first version of this report pointed at the
-   `:int`-reader rows of carrier-sum-option-boxes-have-no-owner as this shape.
-   They are not: those fixtures erase the closure to `int` themselves.)
-2. **`unwrap` / `unwrap-or`**: the read hands the closure out as a value.
-   Freeing would need the result to be only invoked, the same question as
-   the arm binder, asked through the call.
+1. ~~**A dictionary-dispatched callee inside a generic.**~~ **Fixed
+   2026-10-12.** The call's `fn_binding` names a representative instance,
+   not the one that runs, so only a statically dispatched call was asked.
+   The payload walk (`sum_closure_payload_escapes`, `src/compiler/emit_expr.c`)
+   now re-resolves such a call under the active spec
+   (`emit_reresolve_method_fndef`, as the call itself is emitted) and asks
+   the instance method that runs; inside a callee's own memoized question it
+   does not (the active spec is the caller's there), so that answer stays
+   conservative. 2400 B in 100 calls before, 0 now. Pinned by
+   `sum-closure-payload-dict-dispatch` (leak-checked) and
+   `sum-closure-payload-dict-dispatch-kept` (one instance keeps the closure
+   in a global vector; called after the generic returned). Found on the way,
+   pre-existing on `main`: that program did not LINK -- its two instances
+   are `defopaque :int`, so the generic's specs are Gap H siblings with one
+   C signature, and a CPS-emitted caller's cps->direct call tied between them
+   and fell back to the never-emitted base (`find_mono_clone_for_call`,
+   `src/compiler/emit_cps_ir.c`, now breaks the tie with the clone the
+   emitter recorded for that call). (Before 2026-10-08 this item also
+   covered every statically known callee; a first version of this report
+   pointed at the `:int`-reader rows of carrier-sum-option-boxes-have-no-owner
+   as this shape. They are not: those fixtures erase the closure to `int`
+   themselves.)
+2. ~~**`unwrap` / `unwrap-or`**: the read hands the closure out as a value.~~
+   **Fixed 2026-10-12.** A callee that only PROJECTS the payload keeps nothing
+   (`fn_projects_payload_of`, `src/compiler/emit_expr.c`). Its whole body is a
+   `match` on that parameter. Each arm answers either its own binder or
+   something that names neither the parameter nor any binder. The callee
+   cannot suspend, and its inline C never spells the parameter's name.
+   `unwrap`, `unwrap-or` and `ok-val` qualify; `unwrap`'s `(default-of A)` arm
+   is inline C that names nothing of the Option. The question then moves to
+   the call's result. If it is invoked on the spot (`((unwrap ff) 41)`), or
+   bound by a `let` (sibling or nested) to a local that is itself only invoked
+   (`closure_binding_escapes`), the closure goes nowhere and the local still
+   drops it. 2400 B in 100 calls before, 0 now. Pinned by
+   `sum-closure-payload-unwrap-dropped` (leak-checked: on the spot, sibling
+   let, nested let, `unwrap-or`, `ok-val`, 100 turns). `sum-closure-payload-kept`
+   gained the must-keep half: the projected closure returned, pushed into a
+   vector (directly, through a nested let, from `unwrap-or`), each called after
+   the heap has been reused. Found on the way, pre-existing on `main`: the
+   named `plus1` in `(unwrap-or ff plus1)` leaked a 24 B box per call, as does
+   every named defn passed into ANY generic's type-variable slot (`(pick plus1
+   plus1)`: two). The box is a link-time constant, so that slot now asks for
+   the shared static one (`static_ok`, `src/compiler/elab_call.c`), except
+   for a `^construct` callee, whose sum payload is what this report's drops
+   free (GCC flags a static address reaching `free` there). Its no-op header
+   makes a later drop harmless. Pinned by `fn-value-at-tyvar-slot-static-box`
+   (leak-checked: called on the spot, let-bound, in a struct field, as a
+   `some` payload; 9696 B in 404 allocations before, 0 now).
 3. ~~**Lets the CPS backend emits.**~~ **Fixed 2026-10-09.** In a function
    the CPS backend lowers (its body performs), the let's `(some <closure>)` is
    a cps->direct call (`CT_LETCALL`); the IR builder names the `let` on it
@@ -85,7 +124,16 @@ Each of these still leaks the env, as before. None is freed early.
    this report's: `(let [ff (Some (fn ...))] (match ff (Some f) (f (perform
    ...))))` -- the constructor written directly -- evicts the function from
    the CPS backend ("indirect call (non-atomic args)"), where `(some ...)`
-   does not.
+   does not. **Fixed 2026-10-12:** a constructor has no FnDef, so the call
+   took the fn-VALUE route (`delegate_call_atomized`, `src/passes/cps_ir.c`),
+   which refused any non-scalar argument it had to atomize, and a capturing
+   closure is never safe to delegate. A constructor's `fn`-typed argument is
+   now atomized as one word, as the arguments of `(some ...)`'s cps->direct
+   call are; the delegated raw let names its `let` too (`letraw.sum_let`), so
+   the live arm's closure gets the same reap (`emit_sum_let_closure_reap`),
+   and the constructor spelling leaked 2376 B in 99 constructions before
+   that, 0 after. `sum-closure-payload-dropped-cps` gained `(Some ...)`, an
+   `(Ok ...)` arm and a 200-turn loop of the constructor spelling.
 4. **A closure whose drop releases something** -- one capturing an `rc`, a
    fat closure or a Drop instance, or with inline C -- would need its deep
    drop glue and the ownership questions that come with it. (**Narrowed
@@ -106,8 +154,5 @@ Each of these still leaks the env, as before. None is freed early.
 
 ## Fix directions
 
-- For (1), re-resolve the dispatch per monomorph the way
-  `emit_reresolve_method_fndef` does for the sum-box drops, and ask the
-  resolved method.
 - For (3), give `emit_cps_ir.c`'s let lowering the same scope-exit hook the
   closure env and `any` drops already have there.
