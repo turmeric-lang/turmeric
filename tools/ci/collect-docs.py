@@ -28,6 +28,18 @@ checkout (spices/*/build.tur; docs/guides/ and spices/*/docs/guides/).  When the
 spices checkout is absent those fields are null rather than 0, so /ci can say
 "not measured" instead of charting a collapse to zero.
 
+And it counts report FLOW, not just stock: `reports_filed` and
+`reports_archived` are running totals of the reports that have ever entered and
+left docs/reported/ on main's first-parent line.  /ci differences them between
+two rows to chart reports archived minus reports filed.  Walking first parents
+with -m diffs every merge against the main it landed on, so the totals are a
+sum of tree diffs and `reports_filed - reports_archived == open_reports` holds
+exactly.  A plain path-limited `git log` breaks that: its history
+simplification drops side branches, and on this repo it came out 14 short.  A report filed and closed
+on a branch before merging never touched main, and is counted by neither.  A
+rename inside docs/reported/ is neither filed nor archived.  Both fields are
+null in a shallow clone, whose history would undercount them.
+
 Usage:
     collect-docs.py                      # one JSON object on stdout
     collect-docs.py --repo /path/to/repo
@@ -97,6 +109,51 @@ def count_md_tree(repo, subdir):
     return n
 
 
+def is_report(path):
+    """A top-level docs/reported/*.md finding, as count_md counts them."""
+    prefix = "docs/reported/"
+    if not path.startswith(prefix):
+        return False
+    name = path[len(prefix):]
+    return ("/" not in name and name.endswith(".md")
+            and name != "README.md" and not name.startswith("."))
+
+
+def report_flow(repo):
+    """(filed, archived): reports that ever entered / left docs/reported/.
+
+    Running totals along HEAD's first-parent line.  Returns (None, None) when
+    they cannot be counted honestly: a shallow clone (its history is cut off,
+    so both totals would come out short) or no git at all.
+    """
+    def git(*args):
+        return subprocess.run(["git", "-C", repo, *args], check=True,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL).stdout.decode()
+    try:
+        if git("rev-parse", "--is-shallow-repository").strip() != "false":
+            return (None, None)
+        log = git("log", "--first-parent", "-m", "-M", "--name-status",
+                  "--format=", "--diff-filter=ADR", "--", "docs/reported/")
+    except (OSError, subprocess.CalledProcessError):
+        return (None, None)
+    filed = archived = 0
+    for line in log.splitlines():
+        parts = line.split("\t")
+        status = parts[0][:1]
+        if status == "A" and len(parts) == 2:
+            filed += is_report(parts[1])
+        elif status == "D" and len(parts) == 2:
+            archived += is_report(parts[1])
+        elif status == "R" and len(parts) == 3:
+            # Inside the pathspec both ends are usually reports, and a rename is
+            # then neither event.  A move out to docs/archive/ shows up as a D,
+            # not an R, because the pathspec hides its destination.
+            archived += is_report(parts[1]) and not is_report(parts[2])
+            filed += is_report(parts[2]) and not is_report(parts[1])
+    return (filed, archived)
+
+
 def spice_names(spices_repo):
     """Sorted names of the spices: each directory under spices/ with a manifest."""
     base = os.path.join(spices_repo, "spices")
@@ -137,6 +194,7 @@ def main():
     spices_plans = count_md_tree(args.repo, "docs/upcoming/spices")
     open_reports = count_md(args.repo, "docs/reported")
     open_plans = count_md_tree(args.repo, "docs/upcoming")
+    reports_filed, reports_archived = report_flow(args.repo)
 
     spices_repo = args.spices_repo or os.path.join(
         os.path.abspath(args.repo), "..", "turmeric-spices")
@@ -159,6 +217,10 @@ def main():
         "held_plans": held_plans,
         "v1_plans": v1_plans,
         "spices_plans": spices_plans,
+        # Report flow: running totals, differenced by /ci.  Null in a shallow
+        # clone.  reports_filed - reports_archived == open_reports.
+        "reports_filed": reports_filed,
+        "reports_archived": reports_archived,
         # Guides and spices.  The spice fields are null when the spices repo
         # was not checked out, which is "not measured", not "zero".
         "turmeric_guides": turmeric_guides,
@@ -176,6 +238,8 @@ def main():
         print(f"{'  held':>12}  {held_plans:>4}", file=sys.stderr)
         print(f"{'  v1':>12}  {v1_plans:>4}", file=sys.stderr)
         print(f"{'  spices':>12}  {spices_plans:>4}", file=sys.stderr)
+        print(f"{'filed':>12}  {reports_filed!s:>4}", file=sys.stderr)
+        print(f"{'archived':>12}  {reports_archived!s:>4}", file=sys.stderr)
         print(f"{'guides':>12}  {turmeric_guides:>4}", file=sys.stderr)
         print(f"{'spice guides':>12}  {spice_guides!s:>4}", file=sys.stderr)
         print(f"{'spices':>12}  {len(names) if names is not None else None!s:>4}",

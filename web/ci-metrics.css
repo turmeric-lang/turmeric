@@ -566,6 +566,37 @@
 .ci-table tbody tr:hover td { background: var(--bg-hover); }
 .ci-table tbody tr.is-selected td:first-child { color: var(--text-primary); }
 
+/* Tests per suite: the count's share of the largest suite, as a bar under
+   the number.  Magnitude, so one hue; the number beside it carries the value. */
+.ci-count-cell { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.ci-count-bar {
+  width: 96px;
+  height: 6px;
+  flex: none;
+  background: var(--bg-panel);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ci-count-bar span { display: block; height: 100%; background: var(--chart-1); border-radius: 0 3px 3px 0; }
+.ci-count-num { min-width: 5ch; }
+/* A charted suite's row carries its line's color as a key, so the table and
+   the chart name the same thing the same way. Text stays in text tokens. */
+.ci-count-key {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 8px;
+  vertical-align: 0.05em;
+}
+
+/* Net-flow columns (drawBarChart): their fill rides inline, like the line
+   chart's strokes. The zero line is the one rule the chart is read against, so
+   it sits a step above the gridlines. */
+.ci-zero-line { stroke: var(--border-str); stroke-width: 1; }
+.ci-band-hover { fill: var(--bg-hover); opacity: 0; }
+.ci-band-hover.is-on { opacity: 1; }
+
 .ci-delta-up   { color: var(--status-fail); }
 .ci-delta-down { color: var(--status-pass); }
 .ci-delta-flat { color: var(--text-dim); }
@@ -641,8 +672,10 @@
   .ci-spark svg { width: 72px; }
   .ci-tooltip { min-width: 150px; font-size: 11px; }
 
-  /* Stack the tab bar so the tabs and range control sit on separate rows. */
+  /* Stack the tab bar so the tabs and range control sit on separate rows,
+     and let five tabs wrap rather than push the page sideways. */
   .ci-tabs-bar { flex-direction: column; align-items: stretch; }
+  .ci-tabs { flex-wrap: wrap; }
   .ci-field--range .ci-select { min-width: 0; width: 100%; }
 }
 
