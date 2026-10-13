@@ -727,6 +727,14 @@ const SourceFile *diag_source_file(uint16_t file_id);
  * file ids end, so import/load ids start past them instead of overwriting one. */
 void     diag_note_autoload_file_ids(uint16_t end);
 uint16_t diag_autoload_file_ids_end(void);
+/* r7rs-imported-libraries-recompiled-every-build: is `file_id` a library the
+ * program imported from the stdlib -- `(srfi 13)`'s stdlib/srfi/13.scm,
+ * `(scheme eval)`'s stdlib/r7rs/eval.tur -- rather than an auto-loaded stdlib
+ * file or the program's own?  Past the auto-loaded band, and under the stdlib
+ * root the driver resolved ($TUR_STDLIB_DIR, which it sets before any import
+ * is resolved).  False when no root is known: the safe answer, since such a
+ * file is then the program's, as it always was. */
+bool     diag_file_is_imported_stdlib(uint16_t file_id);
 
 /* Translate a span into the coordinates of the file the user is editing.
  *

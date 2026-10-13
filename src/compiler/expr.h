@@ -436,6 +436,13 @@ struct Binding {
     /* r7rs-programs-compile-slowly: the library unit of this program's split
      * build defined this stdlib function (emit_split_lib_owns). */
     bool          split_lib_defined;
+    /* r7rs-imported-libraries-recompiled-every-build: a global created while
+     * a library the program imported from the stdlib was elaborated
+     * (`ids_implib`) -- a definition of the imported-library unit of a split
+     * build, as is_from_stdlib marks the library unit's.  A lambda lifted out
+     * of a SRFI macro's expansion in the program's own code is the
+     * program's, whatever file its span names. */
+    bool          is_from_implib;
     /* compiled-closure-copies-a-captured-mut: set on the NAME binding of a
      * `^mut` local that a lambda captures (elab_let_mut_to_cell).  The value
      * lives in a shared heap cell bound under this hidden symbol; every read
@@ -1302,6 +1309,8 @@ struct InlineC {
     /* r7rs-programs-compile-slowly: a file-scope block elaborated in the
      * auto-loaded stdlib's window -- the library unit's in a split build. */
     bool           from_stdlib;
+    /* ...or in an imported stdlib library's (Binding.is_from_implib). */
+    bool           from_implib;
 };
 
 /* Phase 3: Closure represents a fn with captured environment. */

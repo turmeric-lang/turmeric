@@ -13457,11 +13457,13 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
     for (size_t i = 0; i < g_ents_n; i++) {
         if (!g_ents[i].in_s) continue;
         const FnDef *fd = g_ents[i].fd;
-        /* r7rs-programs-compile-slowly: the library unit of a split build
-         * declares only what it defines -- the stdlib's. */
-        if (g_emit_split == EMIT_SPLIT_LIB && !emit_split_lib_owns(fd->binding)) continue;
+        /* r7rs-programs-compile-slowly: a library unit of a split build
+         * declares only what it or an earlier unit defines -- never a later
+         * unit's (r7rs-imported-libraries-recompiled-every-build). */
+        if (g_emit_split != EMIT_SPLIT_NONE &&
+            emit_split_binding_home(fd->binding) > g_emit_split) continue;
         char *cn = raw_name_for_binding(fd->binding);
-        if (g_emit_split == EMIT_SPLIT_LIB) {
+        if (emit_split_defines(fd->binding)) {
             size_t cl = strlen(cn);
             char *xn = (char *)malloc(cl + 6);
             if (xn) {
@@ -13488,7 +13490,8 @@ static void emit_forward_decls(EmitCtx *ctx, Buf *file) {
     for (size_t i = 0; i < g_ents_n; i++) {
         if (!g_ents[i].mono_template) continue;
         FnDef *fd = (FnDef *)g_ents[i].fd;
-        if (g_emit_split == EMIT_SPLIT_LIB && !emit_split_lib_owns(fd->binding)) continue;
+        if (g_emit_split != EMIT_SPLIT_NONE &&
+            emit_split_binding_home(fd->binding) > g_emit_split) continue;
         for (uint32_t s = 0; s < ctx->n_abi_specializations; s++) {
             EmitAbiSpecialization *spec = &ctx->abi_specializations[s];
             if (spec->fn != fd || !spec->clone_name) continue;

@@ -2202,6 +2202,8 @@ void elab_init_state(Elab *e, Arena *arena, SymbolTable *st) {
     e->next_id = 0;
     e->next_stdlib_id = ELAB_STDLIB_ID_BASE;
     e->ids_stdlib = false;
+    e->next_implib_id = ELAB_IMPLIB_ID_BASE;
+    e->ids_implib = false;
     e->next_gensym_id = 0;  /* Phase 6 */
     /* RT1: refinement obligation vector (empty unless `refined` is on). */
     refine_obligations_init(&e->refine_obs, arena);
@@ -2813,6 +2815,7 @@ Binding *binding_new(Elab *e, const Symbol *name, Type type,
     /* MF3: mark global bindings created during stdlib auto-load so user
      * code that later shadows them gets a hard diagnostic. */
     b->is_from_stdlib = is_global && e->in_stdlib_load;
+    b->is_from_implib = is_global && !e->in_stdlib_load && e->ids_implib;
     return b;
 }
 

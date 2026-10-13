@@ -910,6 +910,38 @@ static Buf *g_manifest_sink = NULL;
  * empty when the split declines; the output is then one unit as always.  Set
  * only by cmd_build, which compiles the library unit once and caches it. */
 static Buf *g_split_lib_sink = NULL;
+/* r7rs-imported-libraries-recompiled-every-build: when non-NULL as well, a
+ * program that imports a library from the stdlib -- `(srfi 13)`, `(scheme
+ * eval)` -- is written as THREE units, the imported libraries' definitions
+ * here (emit_split.h).  Left empty when the program imports none, or when
+ * that unit declines; the build is then the two units above. */
+static Buf *g_split_imp_sink = NULL;
+
+/* Does a split build write the imported-library unit?  Wherever the split
+ * applies; TUR_IMPORT_SPLIT=0 turns it off (the imported libraries are then
+ * the program's, as they were). */
+static bool g_import_split_failed = false;   /* cmd_build: this build's three units did not link */
+/* How many names the imported-library unit exports (compile_to_c), for
+ * import_split_pieces. */
+static size_t g_split_imp_exports = 0;
+
+/* The imported-library unit is compiled in pieces (prelude_pieces) only when
+ * it is big.  Every piece compiles the whole runtime preamble the unit
+ * carries, ~0.5 s of cc at -O2 whatever the unit defines, so for a small SRFI
+ * the pieces buy ~0.5 s of wall time for ~1.4 s more CPU -- the wrong trade
+ * for a cold fixture suite, which runs a build per core.  SRFI 13's unit
+ * (~300 names) and (scheme eval)'s (~175, compiled with ASan under a Debug
+ * `tur`: 8.5 s whole, 6.9 s in four) gain from them; SRFI 1's (~120) and
+ * (scheme read)'s (~75) do not. */
+#define IMPORT_SPLIT_PIECES_MIN_EXPORTS 150
+static int prelude_pieces(void);
+static int import_split_pieces(void) {
+    return g_split_imp_exports >= IMPORT_SPLIT_PIECES_MIN_EXPORTS ? prelude_pieces() : 1;
+}
+static bool import_split_applies(void) {
+    const char *e = getenv("TUR_IMPORT_SPLIT");
+    return !(e && strcmp(e, "0") == 0) && !g_import_split_failed;
+}
 
 /* Does this compile get a split build?  `#lang r7rs` only: that is where the
  * prelude dominates the build (a one-line program reaches ~160 of its
@@ -1267,33 +1299,74 @@ static int compile_to_c(const char *path, Buf *out_c,
             /* r7rs-srfi-plan S3: the whole program is here now, so an SRFI
              * definition nothing reaches can go before it costs a C function
              * (and a startup fat box).  Exports stay when a manifest of them
-             * is being written. */
+             * is being written.
+             *
+             * r7rs-imported-libraries-recompiled-every-build: before the
+             * split, too, although that makes an imported SRFI's unit (below)
+             * this program's rather than the library's -- cached for every
+             * rebuild of the program, but not shared with another that
+             * reaches other SRFI procedures.  Keeping all of SRFI 13 for the
+             * sake of sharing cost a one-line program ~1.9 s more of Debug
+             * `tur` emission per build than its pruned unit: more than a
+             * cold compile of that unit, paid on every build instead of once.
+             * A library that is not pruned ((scheme eval), (scheme read)) has
+             * one unit for every program that imports it. */
             srfi_prune_program(ctx.arena, ctx.prog, g_manifest_sink != NULL);
+            const bool split_try = g_split_lib_sink && prelude_split_applies();
+            bool use_imp = split_try && g_split_imp_sink && import_split_applies() &&
+                           emit_split_program_imports(ctx.prog);
             bool split_done = false;
-            if (g_split_lib_sink && prelude_split_applies()) {
-                /* The library unit first: it records what the program unit
-                 * declares instead of defining. */
+            if (split_try) {
+                /* The library unit first, then the imported-library unit:
+                 * each records what the units after it declare instead of
+                 * defining. */
                 Buf lib; buf_init(&lib);
+                Buf imp; buf_init(&imp);
                 Buf cli; buf_init(&cli);
-                emit_split_set_mode(EMIT_SPLIT_LIB);
-                bool ok = emit_program(&lib, ctx.prog) == 0 && !emit_split_refusal();
-                if (ok) {
-                    emit_split_set_mode(EMIT_SPLIT_CLIENT);
-                    ok = emit_program(&cli, ctx.prog) == 0 && !emit_split_refusal();
+                for (;;) {
+                    emit_split_set_imp(use_imp);
+                    emit_split_set_mode(EMIT_SPLIT_LIB);
+                    bool ok = emit_program(&lib, ctx.prog) == 0 && !emit_split_refusal();
+                    /* The library unit's text is renamed by its own exports
+                     * alone, so it is the same text whatever is imported. */
+                    Buf lib_r; buf_init(&lib_r);
+                    if (ok) emit_split_rename(lib.data, lib.len, &lib_r);
+                    size_t lib_exports = emit_split_exports_count();
+                    if (ok && use_imp) {
+                        emit_split_set_mode(EMIT_SPLIT_IMP);
+                        ok = emit_program(&imp, ctx.prog) == 0 && !emit_split_refusal();
+                        g_split_imp_exports = emit_split_exports_count() - lib_exports;
+                        if (ok && getenv("TUR_SHOW_CC"))
+                            fprintf(stderr, "tur: imported-library unit: %zu names, %d piece(s)\n",
+                                    g_split_imp_exports, import_split_pieces());
+                    }
+                    if (ok) {
+                        emit_split_set_mode(EMIT_SPLIT_CLIENT);
+                        ok = emit_program(&cli, ctx.prog) == 0 && !emit_split_refusal();
+                    }
+                    const char *why = emit_split_refusal();
+                    if (!ok && getenv("TUR_SHOW_CC"))
+                        fprintf(stderr, "tur: %s split declined: %s\n",
+                                use_imp ? "imported-library" : "prelude",
+                                why ? why : "emission failed");
+                    if (ok) {
+                        /* Every name a library unit exports moves to a
+                         * private prefix, in every unit (EMIT_SPLIT_PREFIX). */
+                        buf_write(g_split_lib_sink, lib_r.data, lib_r.len);
+                        if (use_imp) emit_split_rename(imp.data, imp.len, g_split_imp_sink);
+                        emit_split_rename(cli.data, cli.len, out_c);
+                        split_done = true;
+                    }
+                    buf_free(&lib_r);
+                    emit_split_reset();
+                    lib.len = imp.len = cli.len = 0;
+                    if (ok || !use_imp || diag_had_error()) break;
+                    /* Two units then, as before: the imported libraries are
+                     * the program's. */
+                    use_imp = false;
                 }
-                const char *why = emit_split_refusal();
-                if (!ok && getenv("TUR_SHOW_CC"))
-                    fprintf(stderr, "tur: prelude split declined: %s\n",
-                            why ? why : "emission failed");
-                if (ok) {
-                    /* Every name the library unit exports moves to a private
-                     * prefix, in both units (EMIT_SPLIT_PREFIX). */
-                    emit_split_rename(lib.data, lib.len, g_split_lib_sink);
-                    emit_split_rename(cli.data, cli.len, out_c);
-                    split_done = true;
-                }
-                emit_split_reset();
                 buf_free(&lib);
+                buf_free(&imp);
                 buf_free(&cli);
                 if (diag_had_error()) rc = 1;
             }
@@ -3274,10 +3347,12 @@ static int prelude_pieces(void) {
  * caller then compiles the unit whole, so a piece that does not compile costs
  * time, never a build.  `stem` names the temporaries. */
 static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *flags,
-                                  const char *stem, int np, const char *out_obj) {
+                                  const char *stem, int np, const char *piece_prefix,
+                                  const char *out_obj) {
     Buf pieces[8];
     for (int k = 0; k < np; k++) buf_init(&pieces[k]);
-    int rc = emit_split_pieces(lib_c->data, lib_c->len, np, PRELUDE_PIECE_DUP_MAX, pieces);
+    int rc = emit_split_pieces(lib_c->data, lib_c->len, np, PRELUDE_PIECE_DUP_MAX,
+                               piece_prefix, pieces);
     char src[8][1100], obj[8][1100];
     int written = 0;
     for (int k = 0; rc == 0 && k < np; k++) {
@@ -3487,6 +3562,7 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
                                 const Buf *aux_includes, const Buf *autolink,
                                 bool needs_asan, const Buf *cmake_flags,
                                 const char **include_dirs, int n_include_dirs,
+                                const char *piece_prefix, int np, bool accept_quoted,
                                 char *obj, size_t obj_cap) {
     /* The flags that reach a compile: the build's own, plus every -I/-D the
      * link line would pass; nothing it links.  And the link's sanitizers: a
@@ -3505,9 +3581,24 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
         while (q < lim && *q) {
             while (q < lim && *q == ' ') q++;
             const char *tok = q;
+            /* A shell-quoted token is one token, spaces and all: `(scheme
+             * eval)`'s `'-DTUR_R7RS_STDLIB="<root>"'` (its @TUR_STDLIB_ROOT@)
+             * is how the stdlib root reaches its C -- which, imported, is
+             * compiled here (r7rs-imported-libraries-recompiled-every-build).
+             * The compile runs through system(), so the shell unquotes it as
+             * it does on the link line.  The imported-library unit's only: no
+             * auto-loaded file writes one, and in the library unit's key it
+             * would only fork that object for nothing. */
+            bool squote = accept_quoted && (*q == '\'');
+            if (squote) {
+                q++;
+                while (q < lim && *q && *q != '\'') q++;
+                if (q < lim && *q == '\'') q++;
+            }
             while (q < lim && *q && *q != ' ') q++;
             size_t tl = (size_t)(q - tok);
-            if (tl > 2 && tok[0] == '-' && (tok[1] == 'I' || tok[1] == 'D')) {
+            const char *t = squote ? tok + 1 : tok;
+            if (tl > (squote ? 4u : 2u) && t[0] == '-' && (t[1] == 'I' || t[1] == 'D')) {
                 buf_putc(&flags, ' ');
                 buf_write(&flags, tok, tl);
             }
@@ -3595,11 +3686,10 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     }
     fclose(f);
     int rc = 1;
-    int np = prelude_pieces();
     if (np > 1) {
         char stem[1100];
         snprintf(stem, sizeof stem, "%s/%016llx.%ld", dir, (unsigned long long)h, (long)getpid());
-        rc = prelude_compile_pieces(lib_c, cc, flags.data, stem, np, tmp_obj);
+        rc = prelude_compile_pieces(lib_c, cc, flags.data, stem, np, piece_prefix, tmp_obj);
         if (rc != 0 && getenv("TUR_SHOW_CC"))
             fprintf(stderr, "tur: the library unit did not compile in %d pieces; compiling it whole\n", np);
     }
@@ -3640,7 +3730,7 @@ static int cmd_build_once(const char *input, const char *out_path,
                           const char *target,
                           const char **reader_macro_paths,
                           int n_reader_macro_paths,
-                          bool allow_split, bool *retry_whole);
+                          bool allow_split, bool *retry_whole, bool *three_units);
 
 static int cmd_build(const char *input, const char *out_path,
                      const char **include_dirs, int n_include_dirs,
@@ -3651,13 +3741,26 @@ static int cmd_build(const char *input, const char *out_path,
      * to compile or the two fail to link, build the program as one unit --
      * slower, never wrong. */
     bool retry = false;
+    bool three = false;
+    g_import_split_failed = false;
     int rc = cmd_build_once(input, out_path, include_dirs, n_include_dirs, target,
-                            reader_macro_paths, n_reader_macro_paths, true, &retry);
+                            reader_macro_paths, n_reader_macro_paths, true, &retry, &three);
+    /* r7rs-imported-libraries-recompiled-every-build: three units that did
+     * not build try two (the imported libraries back in the program's)
+     * before one. */
+    if (retry && three) {
+        if (getenv("TUR_SHOW_CC"))
+            fprintf(stderr, "tur: imported-library split build failed; building as two units\n");
+        g_import_split_failed = true;
+        rc = cmd_build_once(input, out_path, include_dirs, n_include_dirs, target,
+                            reader_macro_paths, n_reader_macro_paths, true, &retry, &three);
+        g_import_split_failed = false;
+    }
     if (!retry) return rc;
     if (getenv("TUR_SHOW_CC"))
         fprintf(stderr, "tur: prelude split build failed; building as one unit\n");
     return cmd_build_once(input, out_path, include_dirs, n_include_dirs, target,
-                          reader_macro_paths, n_reader_macro_paths, false, &retry);
+                          reader_macro_paths, n_reader_macro_paths, false, &retry, &three);
 }
 
 static int cmd_build_once(const char *input, const char *out_path,
@@ -3665,8 +3768,9 @@ static int cmd_build_once(const char *input, const char *out_path,
                           const char *target,
                           const char **reader_macro_paths,
                           int n_reader_macro_paths,
-                          bool allow_split, bool *retry_whole) {
+                          bool allow_split, bool *retry_whole, bool *three_units) {
     *retry_whole = false;
+    *three_units = false;
     /* RT3: reset per-compile refinement state, like the check/run/emit-c entry
      * points. The memo caches VC pointers into the per-compile arena; a process
      * that builds >1 file (`tur test`, LSP) otherwise keeps stale pointers and
@@ -3696,17 +3800,26 @@ static int cmd_build_once(const char *input, const char *out_path,
      * decides; compile_to_c leaves `split_lib` empty when it declines). */
     Buf split_lib;
     buf_init(&split_lib);
+    /* r7rs-imported-libraries-recompiled-every-build: and the imported
+     * libraries' unit, when the program imports any. */
+    Buf split_imp;
+    buf_init(&split_imp);
     bool try_split = allow_split && !(target && strcmp(target, "wasm") == 0) &&
                      g_runtime_mode != TUR_RT_SPLIT;
-    if (try_split) g_split_lib_sink = &split_lib;
+    if (try_split) { g_split_lib_sink = &split_lib; g_split_imp_sink = &split_imp; }
     int rc = compile_to_c(input, &csrc, include_dirs, n_include_dirs,
                           reader_macro_paths, n_reader_macro_paths);
     g_split_lib_sink = NULL;
+    g_split_imp_sink = NULL;
     if (n_used_mods > 0) used_modules_ctx_set(NULL);
     free_tur_files(used_mods, n_used_mods);
-    if (rc != 0) { buf_free(&csrc); buf_free(&split_lib); return rc; }
+    if (rc != 0) { buf_free(&csrc); buf_free(&split_lib); buf_free(&split_imp); return rc; }
     const bool prelude_split = split_lib.len > 0;
+    if (!prelude_split) split_imp.len = 0;
+    const bool import_split = split_imp.len > 0;
+    *three_units = import_split;
     if (prelude_split) hoist_tur_include_directives(&split_lib);
+    if (import_split) hoist_tur_include_directives(&split_imp);
 
     /* Write generated C to a deterministic path so ccache can cache the result
      * across repeated builds of the same .tur file.  Fall back to a random
@@ -3723,6 +3836,7 @@ static int cmd_build_once(const char *input, const char *out_path,
             fprintf(stderr, "tur: cannot create temp file\n");
             buf_free(&csrc);
             buf_free(&split_lib);
+            buf_free(&split_imp);
             return 2;
         }
         tf = fdopen(fd, "wb");
@@ -3784,6 +3898,7 @@ static int cmd_build_once(const char *input, const char *out_path,
         buf_free(&split_c);
         buf_free(&csrc);
         buf_free(&split_lib);
+        buf_free(&split_imp);
         return 2;
     }
     fclose(tf);
@@ -3800,9 +3915,13 @@ static int cmd_build_once(const char *input, const char *out_path,
         buf_write(&both, csrc.data, csrc.len);
         buf_putc(&both, '\n');
         buf_write(&both, split_lib.data, split_lib.len);
+        if (import_split) {
+            buf_putc(&both, '\n');
+            buf_write(&both, split_imp.data, split_imp.len);
+        }
         bool al_ok = scan_autolink_markers(&both, &autolink);
         buf_free(&both);
-        if (!al_ok) { buf_free(&csrc); buf_free(&autolink); return 2; }
+        if (!al_ok) { buf_free(&csrc); buf_free(&autolink); buf_free(&split_lib); buf_free(&split_imp); return 2; }
     } else {
         if (!scan_autolink_markers(&csrc, &autolink)) {
             buf_free(&csrc); buf_free(&autolink); return 2;
@@ -3955,13 +4074,24 @@ static int cmd_build_once(const char *input, const char *out_path,
         else { buf_putc(&_in, '\0'); snprintf(inputs, sizeof inputs, "%s", _in.data); buf_free(&_in); }
     }
     if (prelude_split) {
-        char obj[1024];
+        char obj[1024], imp_obj[1024];
+        imp_obj[0] = '\0';
+        /* r7rs-imported-libraries-recompiled-every-build: the imported
+         * libraries' unit is cached the same way, by its own text. */
         if (prelude_split_object(&split_lib, cc, cc_flags, &aux_includes, &autolink,
                                  autolink_needs_asan, &cmake_flags,
                                  include_dirs, n_include_dirs,
-                                 obj, sizeof obj) != 0) {
+                                 EMIT_SPLIT_PIECE_PREFIX, prelude_pieces(), false,
+                                 obj, sizeof obj) != 0 ||
+            (import_split &&
+             prelude_split_object(&split_imp, cc, cc_flags, &aux_includes, &autolink,
+                                  autolink_needs_asan, &cmake_flags,
+                                  include_dirs, n_include_dirs,
+                                  EMIT_SPLIT_IMP_PIECE_PREFIX, import_split_pieces(), true,
+                                  imp_obj, sizeof imp_obj) != 0)) {
             *retry_whole = true;
             buf_free(&split_lib);
+            buf_free(&split_imp);
             buf_free(&aux_includes);
             buf_free(&aux_sources);
             buf_free(&autolink);
@@ -3974,6 +4104,10 @@ static int cmd_build_once(const char *input, const char *out_path,
             bool _ok = buf_put_quoted(&_in, tmpl);
             buf_putc(&_in, ' ');
             _ok = buf_put_quoted(&_in, obj) && _ok;
+            if (imp_obj[0]) {
+                buf_putc(&_in, ' ');
+                _ok = buf_put_quoted(&_in, imp_obj) && _ok;
+            }
             buf_putc(&_in, '\0');
             if (_ok) snprintf(inputs, sizeof inputs, "%s", _in.data);
             else inputs[0] = '\0';
@@ -3981,6 +4115,7 @@ static int cmd_build_once(const char *input, const char *out_path,
         }
     }
     buf_free(&split_lib);
+    buf_free(&split_imp);
     int link_rc = link_command_run(cc, cc_flags, inputs, &aux_includes,
                                    &aux_sources, &autolink, autolink_needs_asan,
                                    &cmake_flags, include_dirs, n_include_dirs,

@@ -29,14 +29,37 @@
 
 #include "buf.h"
 
+/* r7rs-imported-libraries-recompiled-every-build: a program that imports a
+ * library from the stdlib -- `(srfi 13)`, `(scheme eval)` -- is written as
+ * THREE units.  The library unit stays exactly what it is for every program;
+ * between it and the program sits
+ *
+ *   the IMPORTED-LIBRARY unit -- the definitions of every stdlib library the
+ *                        program imports, with external linkage.  It is a
+ *                        client of the library unit (declares the prelude,
+ *                        carries none of its state) and the owner of its own
+ *                        items, exactly as the library unit owns the
+ *                        prelude's.  Its text depends on what is imported,
+ *                        not on the rest of the program, so its object is
+ *                        cached too: by every program importing the same
+ *                        libraries -- for an SRFI, pruned to the same
+ *                        procedures (srfi_prune_program) -- and by every
+ *                        rebuild of one.
+ *
+ * The program unit declares what either one defines.  The modes are ordered:
+ * a unit defines its own items, declares those of the units before it, and
+ * never sees those of the units after it. */
 typedef enum {
     EMIT_SPLIT_NONE = 0,   /* one unit, as always */
     EMIT_SPLIT_LIB,        /* the library unit */
+    EMIT_SPLIT_IMP,        /* the imported-library unit */
     EMIT_SPLIT_CLIENT,     /* the program unit */
 } EmitSplitMode;
 
 /* Rewrite the file-scope state in `src[0..len)` for one side of the split,
- * appending the result to `out`:
+ * appending the result to `out` (`mode` is LIB for text a unit defines, CLIENT
+ * for text a unit after the one defining it declares -- IMP is passed as
+ * neither):
  *
  *   LIB     every file-scope variable loses `static`, so this unit defines it
  *           with external linkage.
@@ -68,6 +91,9 @@ void emit_split_state(const char *src, size_t len, EmitSplitMode mode, Buf *out)
  * records the stdlib definitions. */
 void emit_split_note_export(const char *name);
 void emit_split_exports_clear(void);
+/* How many names are recorded: what the imported-library unit adds to the
+ * library unit's is a measure of how much it defines. */
+size_t emit_split_exports_count(void);
 
 /* Copy `src[0..len)` to `out` with every identifier recorded by
  * emit_split_note_export (or the LIB-mode transform) given EMIT_SPLIT_PREFIX.
@@ -97,6 +123,11 @@ void emit_split_rename(const char *src, size_t len, Buf *out);
  * Writes pieces[0..n) (each buf_init'd by the caller) and returns 0, or
  * nonzero when the text does not split (then compile it whole). */
 #define EMIT_SPLIT_PIECE_PREFIX "tur_sp_"
-int emit_split_pieces(const char *src, size_t len, int n, size_t dup_max, Buf *pieces);
+/* The imported-library unit's pieces use their own prefix: its object links
+ * beside the library unit's, so a static of the same name in both must not
+ * become one external symbol defined twice. */
+#define EMIT_SPLIT_IMP_PIECE_PREFIX "tur_spi_"
+int emit_split_pieces(const char *src, size_t len, int n, size_t dup_max,
+                      const char *prefix, Buf *pieces);
 
 #endif /* TUR_EMIT_SPLIT_H */

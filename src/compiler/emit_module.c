@@ -1191,6 +1191,9 @@ void emit_any_type_name_table(EmitCtx *ctx, Buf *out) {
  * ------------------------------------------------------------------------- */
 EmitSplitMode g_emit_split = EMIT_SPLIT_NONE;
 static const char *g_split_refusal = NULL;
+/* r7rs-imported-libraries-recompiled-every-build: this split build has an
+ * imported-library unit (emit_split_set_imp). */
+static bool g_split_imp = false;
 
 typedef struct { char *key; char *val; } SplitCarry;
 typedef struct { SplitCarry *v; uint32_t n, cap; } SplitCarryTab;
@@ -1244,44 +1247,125 @@ void emit_split_reset(void) {
     sym_codegen_split_clear();
     g_emit_split = EMIT_SPLIT_NONE;
     g_split_refusal = NULL;
+    g_split_imp = false;
 }
 
-/* The library unit owns every stdlib definition it writes.  The client unit
- * declares those, and writes -- as its own, file-local -- any stdlib function
- * the library unit did not: a generic defn the stdlib alone never needs in
- * its unspecialized form (emit_abi_fn_skip_generic) but the program does. */
+void emit_split_set_imp(bool on) { g_split_imp = on; }
+bool emit_split_has_imp(void) { return g_split_imp; }
+
+/* The unit a binding's definition belongs to: the auto-loaded stdlib's are the
+ * library unit's, an imported stdlib library's the imported-library unit's
+ * (when the build has one), everything else the program's. */
+EmitSplitMode emit_split_binding_home(const Binding *b) {
+    if (b && b->is_from_stdlib) return EMIT_SPLIT_LIB;
+    if (b && g_split_imp && b->is_from_implib) return EMIT_SPLIT_IMP;
+    return EMIT_SPLIT_CLIENT;
+}
+
+/* A library unit owns every definition of its own that it writes.  A unit
+ * after it declares those, and writes -- as its own, file-local -- any such
+ * function the owning unit did not: a generic defn the library alone never
+ * needs in its unspecialized form (emit_abi_fn_skip_generic) but a later
+ * unit does. */
 bool emit_split_lib_owns(const Binding *b) {
-    if (g_emit_split == EMIT_SPLIT_NONE || !b || !b->is_from_stdlib) return false;
-    return g_emit_split == EMIT_SPLIT_LIB || b->split_lib_defined;
+    if (g_emit_split == EMIT_SPLIT_NONE || !b) return false;
+    EmitSplitMode home = emit_split_binding_home(b);
+    if (home == EMIT_SPLIT_CLIENT) return false;
+    if (home == g_emit_split) return true;
+    return home < g_emit_split && b->split_lib_defined;
 }
 
-/* Who writes a top-level item: the library unit, the client unit, or both
- * (types and declarations, which each unit needs and which carry no state). */
-typedef enum { SPLIT_OWN_BOTH, SPLIT_OWN_LIB, SPLIT_OWN_USER } SplitOwner;
+bool emit_split_defines(const Binding *b) {
+    return g_emit_split != EMIT_SPLIT_NONE && g_emit_split != EMIT_SPLIT_CLIENT &&
+           emit_split_binding_home(b) == g_emit_split;
+}
 
-static SplitOwner split_item_owner(const Expr *e) {
+/* The mode emit_split_state rewrites a library unit's verbatim text in: as
+ * its definer in the unit it belongs to, as a declarer in every later one. */
+static EmitSplitMode split_state_mode(EmitSplitMode home) {
+    if (g_emit_split == EMIT_SPLIT_NONE) return EMIT_SPLIT_NONE;
+    return home == g_emit_split ? EMIT_SPLIT_LIB : EMIT_SPLIT_CLIENT;
+}
+
+/* Who writes a top-level item, from this unit's side: a library unit -- this
+ * one, or an earlier one this unit declares it from (LIB) -- this unit, as
+ * its own file-local item (USER), every unit from its home on (BOTH: types
+ * and declarations, which carry no state), or a later unit only (LATER: this
+ * unit never sees it). */
+typedef enum { SPLIT_OWN_BOTH, SPLIT_OWN_LIB, SPLIT_OWN_USER, SPLIT_OWN_LATER } SplitOwner;
+
+/* The unit a top-level item belongs to; `*shared` when it is a type or a
+ * declaration, which its home unit and every later one write. */
+static EmitSplitMode split_item_home(const Expr *e, bool *shared) {
+    *shared = false;
     switch (e->kind) {
     case EX_FN_DEF:
-        return (e->as.fn_def_.fn && emit_split_lib_owns(e->as.fn_def_.fn->binding))
-               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+        return emit_split_binding_home(e->as.fn_def_.fn ? e->as.fn_def_.fn->binding : NULL);
     case EX_DEF:
-        return (e->as.def_.binding && e->as.def_.binding->is_from_stdlib)
-               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+        return emit_split_binding_home(e->as.def_.binding);
     case EX_DEFDATA:
     case EX_DEFGADT: {
-        /* A stdlib type is both units'; a type of the program's is its own. */
+        /* A library's type is written by every unit from its own on; a type
+         * of the program's is the program unit's. */
         const AdtDef *d = e->kind == EX_DEFGADT ? e->as.defgadt_.def : e->as.defdata_.def;
-        return (d && d->from_stdlib) ? SPLIT_OWN_BOTH : SPLIT_OWN_USER;
+        *shared = true;
+        if (d && d->from_stdlib) return EMIT_SPLIT_LIB;
+        if (d && g_split_imp && d->from_implib) return EMIT_SPLIT_IMP;
+        return EMIT_SPLIT_CLIENT;
     }
     case EX_EXTERN_C:
-        return SPLIT_OWN_BOTH;
-    case EX_INLINE_C:
-        return (e->as.inline_c_.inline_c && e->as.inline_c_.inline_c->from_stdlib)
-               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
-    default:
-        return (e->span.file_id >= 1 && e->span.file_id < diag_autoload_file_ids_end())
-               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+        *shared = true;
+        return EMIT_SPLIT_LIB;
+    case EX_INLINE_C: {
+        const InlineC *ic = e->as.inline_c_.inline_c;
+        if (ic && ic->from_stdlib) return EMIT_SPLIT_LIB;
+        if (ic && g_split_imp && ic->from_implib) return EMIT_SPLIT_IMP;
+        return EMIT_SPLIT_CLIENT;
     }
+    default:
+        if (e->span.file_id >= 1 && e->span.file_id < diag_autoload_file_ids_end())
+            return EMIT_SPLIT_LIB;
+        if (g_split_imp && diag_file_is_imported_stdlib(e->span.file_id))
+            return EMIT_SPLIT_IMP;
+        return EMIT_SPLIT_CLIENT;
+    }
+}
+
+static SplitOwner split_item_owner(const Expr *e) {
+    bool shared;
+    EmitSplitMode home = split_item_home(e, &shared);
+    if (g_emit_split != EMIT_SPLIT_NONE && home > g_emit_split) return SPLIT_OWN_LATER;
+    if (shared) return SPLIT_OWN_BOTH;
+    if (home == EMIT_SPLIT_CLIENT) return SPLIT_OWN_USER;
+    /* A function an earlier unit declined to define (above) is this unit's. */
+    if (e->kind == EX_FN_DEF)
+        return (e->as.fn_def_.fn && emit_split_lib_owns(e->as.fn_def_.fn->binding))
+               ? SPLIT_OWN_LIB : SPLIT_OWN_USER;
+    return SPLIT_OWN_LIB;
+}
+
+/* An item a library unit owns that an earlier unit than this one defines:
+ * this unit only declares it. */
+static bool split_item_declared_here(const Expr *e) {
+    bool shared;
+    return split_item_owner(e) == SPLIT_OWN_LIB &&
+           split_item_home(e, &shared) < g_emit_split;
+}
+
+bool emit_split_program_imports(const Expr *program) {
+    if (!program || program->kind != EX_PROGRAM) return false;
+    bool saved = g_split_imp;
+    g_split_imp = true;
+    uint32_t n_items;
+    const Expr **items = flatten_program_items(program, &n_items);
+    bool any = false;
+    for (uint32_t i = 0; i < n_items && !any; i++) {
+        bool shared;
+        if (split_item_home(items[i], &shared) == EMIT_SPLIT_IMP && !shared) any = true;
+    }
+    free(items);
+    g_split_imp = saved;
+    return any;
 }
 
 /* The signature the emitter recorded for `cname` in this unit, as one string
@@ -1303,8 +1387,8 @@ static char *split_sig_of(const char *cname) {
     return r;
 }
 
-/* After the forward declarations: the library unit records each of its
- * functions' signatures; the client unit refuses the split if its own
+/* After the forward declarations: a library unit records each of its
+ * functions' signatures; a later unit refuses the split if its own
  * declaration of any of them says something else. */
 static void split_check_sigs(const Expr **items, uint32_t n_items) {
     if (g_emit_split == EMIT_SPLIT_NONE) return;
@@ -1316,7 +1400,7 @@ static void split_check_sigs(const Expr **items, uint32_t n_items) {
         const char *cn = raw_name_for_binding(fd->binding);
         char *sig = split_sig_of(cn);
         if (sig) {
-            if (g_emit_split == EMIT_SPLIT_LIB) {
+            if (emit_split_defines(fd->binding)) {
                 split_tab_put(&g_split_sigs, cn, sig);
                 fd->binding->split_lib_defined = true;
                 emit_split_note_export(cn);
@@ -1463,12 +1547,13 @@ static const char *fatbox_intern(EmitCtx *ctx, const char *key, const char *win_
      * and emits later -- would then get the same spelling twice, with no crash
      * and no diagnostic, just wrong C.  See
      * docs/archive/c-name-accessors-share-static-buffers.md. */
-    const char *lib = (g_emit_split == EMIT_SPLIT_CLIENT)
+    const char *lib = (g_emit_split == EMIT_SPLIT_CLIENT || g_emit_split == EMIT_SPLIT_IMP)
         ? split_tab_get(&g_split_boxes, key) : NULL;
     char nb[96];
     if (lib) snprintf(nb, sizeof nb, "%s", lib);
     else snprintf(nb, sizeof nb, g_emit_split == EMIT_SPLIT_CLIENT ? "__tur_ufatbox_%u"
-                                                                 : "__tur_fatbox_%u",
+                                 : g_emit_split == EMIT_SPLIT_IMP  ? "__tur_ifatbox_%u"
+                                                                   : "__tur_fatbox_%u",
                   (unsigned)idx);
     ctx->fatbox_names[idx] = strdup(nb);
     if (!ctx->fatbox_names[idx]) { fprintf(stderr, "tur: oom\n"); abort(); }
@@ -1479,8 +1564,10 @@ static const char *fatbox_intern(EmitCtx *ctx, const char *key, const char *win_
         buf_printf(ctx->thunk_typedefs, "extern void *%s[3];\n", b);
         return b;
     }
-    if (g_emit_split == EMIT_SPLIT_LIB) {
-        /* A split build is 64-bit only, so the box is always pointer words. */
+    if (g_emit_split == EMIT_SPLIT_LIB || g_emit_split == EMIT_SPLIT_IMP) {
+        /* A split build is 64-bit only, so the box is always pointer words.
+         * The imported-library unit's boxes are recorded with the library
+         * unit's: the program names whichever unit made one. */
         split_tab_put(&g_split_boxes, key, b);
         emit_split_note_export(b);
         buf_printf(ctx->thunk_typedefs, "extern void *%s[3];\n", b);
@@ -15098,7 +15185,8 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "}\n\n");
     /* Not in a split build's library unit: only the program unit has a main,
      * and the helper's statics must live in one unit (check-r7rs-prelude-split). */
-    if (g_opt_r7rs && !shared && g_emit_split != EMIT_SPLIT_LIB) emit_deep_stack_runtime(out);
+    if (g_opt_r7rs && !shared && g_emit_split != EMIT_SPLIT_LIB && g_emit_split != EMIT_SPLIT_IMP)
+        emit_deep_stack_runtime(out);
 
     /* CPS3: emit tur_cps_cont_t + tur_cps_apply when --cps-path is active */
     if (g_cps_path) {
@@ -18494,6 +18582,9 @@ static void emit_hoisted_includes(Buf *out) {
          * and writing them made the unit's text -- so its cached object --
          * one per program (a crew module's `#define CREW_WORKERS 8`). */
         if (g_emit_split == EMIT_SPLIT_LIB && !g_hoisted_stdlib[i]) continue;
+        /* r7rs-imported-libraries-recompiled-every-build: nor the
+         * imported-library unit, for the same reason. */
+        if (g_emit_split == EMIT_SPLIT_IMP && !g_hoisted_stdlib[i] && !g_hoisted_implib[i]) continue;
         tur_emit_hoisted_include(out, g_hoisted_includes[i]);
     }
 }
@@ -18992,7 +19083,7 @@ static void gdef_collect_refs(const Expr *e, const Binding ***a, uint32_t *n, ui
  * client unit when the stdlib owns it. */
 static const char *split_def_storage(const Binding *b) {
     if (!emit_split_lib_owns(b)) return "static ";
-    return g_emit_split == EMIT_SPLIT_LIB ? "" : "extern ";
+    return emit_split_defines(b) ? "" : "extern ";
 }
 
 static void emit_global_def_forward_decls(EmitCtx *ctx, Buf *out,
@@ -19152,6 +19243,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * reference -- e.g. the capability vtables in stdlib/io.tur and log.tur. */
     Buf cprelude; buf_init(&cprelude);
     Buf cprelude_user; buf_init(&cprelude_user);   /* split client: the program's own */
+    Buf cprelude_own; buf_init(&cprelude_own);     /* split: this library unit's own */
     InlineCDedup cprelude_dedup = {0};  /* file-scope-inline-c-dedup */
 
     EmitCtx ctx;
@@ -19270,13 +19362,15 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     /* r7rs-programs-compile-slowly (emit_split.h): the library unit of a split
      * build is written from the auto-loaded stdlib's items alone -- and from
      * the types and declarations both units need -- so nothing of the
-     * program reaches it and its text is the same for every program. */
-    const bool split_lib = (g_emit_split == EMIT_SPLIT_LIB);
-    const bool split_client = (g_emit_split == EMIT_SPLIT_CLIENT);
+     * program reaches it and its text is the same for every program.
+     * r7rs-imported-libraries-recompiled-every-build: the imported-library
+     * unit, from those and the imported libraries' items, for the same
+     * reason. */
+    const bool split_lib = (g_emit_split == EMIT_SPLIT_LIB || g_emit_split == EMIT_SPLIT_IMP);
     if (split_lib && items) {
         uint32_t k = 0;
         for (uint32_t i = 0; i < n_items; i++)
-            if (split_item_owner(items[i]) != SPLIT_OWN_USER) items[k++] = items[i];
+            if (split_item_owner(items[i]) != SPLIT_OWN_LATER) items[k++] = items[i];
         n_items = k;
     }
 
@@ -19322,7 +19416,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         }
     }
 
-    /* The library unit of a split build has no `main`: its def initializers
+    /* A library unit of a split build has no `main`: its def initializers
      * run from __tur_module_def_init, as a user-main program's do. */
     const bool defs_to_init_fn = user_has_main || split_lib;
 
@@ -19883,8 +19977,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
              * declares a stdlib global and leaves its initializer to the
              * library unit, which runs it from __tur_split_lib_init. */
             const bool def_lib_owned = emit_split_lib_owns(e->as.def_.binding);
-            const bool def_declare_only = split_client && def_lib_owned;
-            if (split_lib && def_lib_owned) {
+            const bool def_declare_only = def_lib_owned &&
+                                          !emit_split_defines(e->as.def_.binding);
+            if (def_lib_owned && !def_declare_only) {
                 e->as.def_.binding->split_lib_defined = true;
                 emit_split_note_export(bn);
             }
@@ -19982,8 +20077,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
             if (emit_abi_fn_skip_generic(&ctx, e)) {
                 continue;
             }
-            /* r7rs-programs-compile-slowly: the library unit defines it. */
-            if (split_client && split_item_owner(e) == SPLIT_OWN_LIB) continue;
+            /* r7rs-programs-compile-slowly: a library unit defines it. */
+            if (split_item_declared_here(e)) continue;
             emit_fn_def(&ctx, &file, e);
         } else if (e->kind == EX_EXTERN_C) {
             /* Emit extern-c declaration early (before handler functions) */
@@ -20060,7 +20155,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
              * Gap F: route to def_init_body so user-has-main programs
              * still execute the initializer via __constructor__. */
             if (g_emit_split != EMIT_SPLIT_NONE && split_item_owner(e) == SPLIT_OWN_LIB)
-                emit_split_refuse("a stdlib dynamic variable");
+                emit_split_refuse(g_split_imp ? "a stdlib or imported library's dynamic variable"
+                                              : "a stdlib dynamic variable");
             DynVarEntry *entry = e->as.defdynamic_.entry;
             char *mname = mangle_dynvar_name(entry->name->name);
             Buf *init_sink = defs_to_init_fn ? &def_init_body : &body;
@@ -20083,20 +20179,32 @@ static int emit_program_inner(Buf *out, const Expr *program) {
                  * text, so its cached object, one per program -- every
                  * r7rs-threads-* fixture built its own because a crew module
                  * `#define`d its worker count. */
-                bool user_block = g_emit_split != EMIT_SPLIT_NONE
-                               && split_item_owner(e) == SPLIT_OWN_USER;
-                if (!(user_block && g_emit_split == EMIT_SPLIT_LIB))
-                    inline_c_emit_block_deduped(user_block ? &cprelude_user : &cprelude,
-                                                 &cprelude_dedup, ic->code.p, ic->code.len);
+                /* r7rs-imported-libraries-recompiled-every-build: a library
+                 * unit's own blocks are rewritten as their definer
+                 * (cprelude_own), those of an earlier unit as a declarer
+                 * (cprelude); the program's are the program unit's alone. */
+                bool shared;
+                EmitSplitMode home = split_item_home(e, &shared);
+                Buf *dst = &cprelude;
+                if (g_emit_split != EMIT_SPLIT_NONE) {
+                    if (home == EMIT_SPLIT_CLIENT) dst = split_lib ? NULL : &cprelude_user;
+                    else if (home == g_emit_split) dst = &cprelude_own;
+                    else if (home > g_emit_split) dst = NULL;
+                }
+                if (dst)
+                    inline_c_emit_block_deduped(dst, &cprelude_dedup, ic->code.p, ic->code.len);
             }
         } else {
             /* r7rs-programs-compile-slowly: a stdlib statement would run in
              * only one unit's `main`, which the library unit has none of. */
             if (g_emit_split != EMIT_SPLIT_NONE && split_item_owner(e) == SPLIT_OWN_LIB) {
                 size_t before = body.len;
-                if (split_client) continue;
+                if (split_item_declared_here(e)) continue;
                 emit_stmt(&ctx, &body, e);
-                if (body.len != before) emit_split_refuse("a stdlib top-level statement");
+                if (body.len != before)
+                    emit_split_refuse(g_emit_split == EMIT_SPLIT_IMP
+                                      ? "an imported library's top-level statement"
+                                      : "a stdlib top-level statement");
                 continue;
             }
             emit_stmt(&ctx, &body, e);
@@ -20730,7 +20838,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         emit_runtime_preamble(&pre, program, false);
         emit_hoisted_includes(&pre);
         emit_panic_site_slot(&pre);
-        emit_split_state(pre.data, pre.len, g_emit_split, out);
+        emit_split_state(pre.data, pre.len, split_state_mode(EMIT_SPLIT_LIB), out);
         buf_free(&pre);
     } else {
         emit_runtime_preamble(out, program, false);
@@ -20791,7 +20899,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     if (concrete_fn_ptr_typedefs.len) { buf_write(out, concrete_fn_ptr_typedefs.data, concrete_fn_ptr_typedefs.len); buf_putc(out, '\n'); }
     if (concrete_adt_apps.len) { buf_write(out, concrete_adt_apps.data, concrete_adt_apps.len); buf_putc(out, '\n'); }
     if (rt_lazy.len) {
-        emit_split_state(rt_lazy.data, rt_lazy.len, g_emit_split, out);
+        emit_split_state(rt_lazy.data, rt_lazy.len, split_state_mode(EMIT_SPLIT_LIB), out);
         buf_putc(out, '\n');
     }
     buf_free(&rt_lazy);
@@ -20805,9 +20913,16 @@ static int emit_program_inner(Buf *out, const Expr *program) {
      * may reference the file-scope helpers it declares).  In a split build the
      * stdlib's blocks share their state the way the runtime preamble does. */
     if (cprelude.len)    {
-        emit_split_state(cprelude.data, cprelude.len, g_emit_split, out);
+        emit_split_state(cprelude.data, cprelude.len,
+                         g_emit_split == EMIT_SPLIT_NONE ? EMIT_SPLIT_NONE : EMIT_SPLIT_CLIENT,
+                         out);
         buf_putc(out, '\n');
     }
+    if (cprelude_own.len) {
+        emit_split_state(cprelude_own.data, cprelude_own.len, EMIT_SPLIT_LIB, out);
+        buf_putc(out, '\n');
+    }
+    buf_free(&cprelude_own);
     if (cprelude_user.len) { buf_write(out, cprelude_user.data, cprelude_user.len); buf_putc(out, '\n'); }
     buf_free(&cprelude_user);
     buf_free(&early_file);
@@ -20838,8 +20953,9 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     buf_free(&defer_thunk_defs);
 
     if (split_lib) {
-        /* r7rs-programs-compile-slowly: the library unit has no entry point;
-         * its initializers run from __tur_split_lib_init (static_init_emit). */
+        /* r7rs-programs-compile-slowly: a library unit has no entry point;
+         * its initializers run from __tur_split_lib_init (or, in the
+         * imported-library unit, __tur_split_imp_init: static_init_emit). */
         if (def_init_body.len) {
             buf_puts(out, "static void __tur_module_def_init(void) {\n");
             buf_write(out, def_init_body.data, def_init_body.len);

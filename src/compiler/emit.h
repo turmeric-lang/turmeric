@@ -28,16 +28,24 @@ void emit_shared_runtime_header(Buf *out);
 void emit_rt_split_source(Buf *out);
 
 /* r7rs-programs-compile-slowly (emit_split.h): write the library unit
- * (EMIT_SPLIT_LIB) or the client unit (EMIT_SPLIT_CLIENT) of a split build
- * with the next emit_program, or an ordinary single unit (EMIT_SPLIT_NONE).
- * Emit the library unit first: it records what the client unit declares
- * instead of defining (the fat boxes it owns and its functions' signatures).
+ * (EMIT_SPLIT_LIB), the imported-library unit (EMIT_SPLIT_IMP) or the client
+ * unit (EMIT_SPLIT_CLIENT) of a split build with the next emit_program, or an
+ * ordinary single unit (EMIT_SPLIT_NONE).  Emit them in that order: each
+ * records what the units after it declare instead of defining (the fat boxes
+ * it owns and its functions' signatures).
  * emit_split_refusal is NULL while both units can be built, else why not --
  * the caller then emits the program as one unit.  emit_split_reset clears
  * the mode and what the library unit recorded. */
 void emit_split_set_mode(int mode);
 const char *emit_split_refusal(void);
 void emit_split_reset(void);
+/* r7rs-imported-libraries-recompiled-every-build: does this split build
+ * write an imported-library unit (EMIT_SPLIT_IMP)?  Set before the library
+ * unit is emitted and kept for all three; with it off, an imported library's
+ * items are the program's, as they always were.  emit_split_reset clears it.
+ * emit_split_program_imports says whether a program has any such items. */
+void emit_split_set_imp(bool on);
+bool emit_split_program_imports(const Expr *program);
 
 /* J2: when true, emit_program appends the per-export `<mangled>__ffi` shims
  * (the --shared path's interpreter-arbitrary-arity-ffi emission) to the

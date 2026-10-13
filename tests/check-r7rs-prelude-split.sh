@@ -165,6 +165,89 @@ if [ -n "$LIB_A" ] && [ -n "$LIB_B" ] && [ "$LIB_A" != "$LIB_B" ]; then
          "(${LIB_A##*/} vs ${LIB_B##*/}): the cache never hits"
 fi
 
+# r7rs-imported-libraries-recompiled-every-build: a program that imports a
+# library from the stdlib is THREE units -- the library unit, the imported
+# libraries' unit (cached the same way, by its text) and the program's.  For
+# each program below:
+#
+#   - the link names two cached objects, the first the same library object
+#     every other program links;
+#   - no data symbol is defined in two of the three objects (the same fork
+#     check as above, pairwise);
+#   - the program unit defines none of the imported library's functions --
+#     they are what the report found it recompiling on every build;
+#   - it prints its fixture's expected output.
+#
+# And two programs that import the same unpruned library ((scheme read)) link
+# the same imported-library object.
+IMP_FIXTURES="r7rs-srfi-13:srfi13_ r7rs-read:r7rs_hyrd_ r7rs-strings:r7rs_hyrd_"
+IMP_READ_A=""
+IMP_READ_B=""
+for spec in $IMP_FIXTURES; do
+    f="${spec%%:*}"; marker="${spec##*:}"
+    src="tests/fixtures/$f/input.tur"
+    [ -f "$src" ] || { fail "imp/$f: no $src"; continue; }
+    d="$TMP/imp-$f"
+    mkdir -p "$d"
+    cp -r "tests/fixtures/$f/." "$d/"
+    log="$d/build.log"
+    if ! (cd "$d" && TUR_PRELUDE_SPLIT=1 TUR_SHOW_CC=1 "$TUR" build input.tur -o "$d/prog") \
+            >"$log" 2>&1; then
+        fail "imp/$f: build failed"; sed 's/^/    /' "$log" | tail -20; continue
+    fi
+    if grep -q "split declined\|prelude split build failed" "$log"; then
+        fail "imp/$f: the split was not used"; grep "split" "$log" | sed 's/^/    /'; continue
+    fi
+    link=$(grep '^CC: ' "$log" | grep -v ' -c -o ' | tail -1)
+    objs=$(printf '%s\n' "$link" | grep -o "[^ '\"]*/prelude/[0-9a-f]*\.o")
+    lib=$(printf '%s\n' "$objs" | sed -n 1p)
+    imp=$(printf '%s\n' "$objs" | sed -n 2p)
+    cli=$(printf '%s\n' "$link" | sed "s/.* -o [^ ]* ['\"]\{0,1\}\([^ '\"]*\.c\)['\"]\{0,1\} .*/\1/")
+    if [ -z "$imp" ] || [ ! -f "$imp" ] || [ ! -f "$lib" ] || [ ! -f "$cli" ]; then
+        fail "imp/$f: the link does not name three units"
+        printf '    %s\n' "$link"; continue
+    fi
+    if [ -n "$LIB_A" ] && [ "$lib" != "$LIB_A" ]; then
+        fail "imp/$f built its own library unit (${lib##*/} vs ${LIB_A##*/})"
+    fi
+    case "$f" in
+        r7rs-read)    IMP_READ_A="$imp" ;;
+        r7rs-strings) IMP_READ_B="$imp" ;;
+    esac
+    if ! "$CC_BIN" -O2 -std=c99 -w -fno-strict-aliasing -Isrc/runtime -c -o "$d/client.o" "$cli" \
+            >"$d/cc.log" 2>&1; then
+        fail "imp/$f: the program unit does not compile on its own"; tail -5 "$d/cc.log"; continue
+    fi
+    for pair in "$lib $imp" "$lib $d/client.o" "$imp $d/client.o"; do
+        set -- $pair
+        both=$(comm -12 <(defined_data "$1") <(defined_data "$2") | grep -Ev "$ALLOW")
+        if [ -n "$both" ]; then
+            fail "imp/$f: state defined in both ${1##*/} and ${2##*/}:"
+            printf '%s\n' "$both" | sed 's/^/    /' | head -20
+        fi
+    done
+    # Mach-O spells a C name with a leading `_`.
+    own=$(nm "$d/client.o" 2>/dev/null | awk -v m="$marker" '$2 ~ /^[Tt]$/ && index($3, m) { print $3 }' | head -5)
+    if [ -n "$own" ]; then
+        fail "imp/$f: the program unit defines the imported library's functions:"
+        printf '%s\n' "$own" | sed 's/^/    /'
+    fi
+    if ! nm "$imp" 2>/dev/null | awk -v m="$marker" '$2 == "T" && index($3, m) { f = 1 } END { exit !f }'; then
+        fail "imp/$f: the imported-library unit defines no '$marker' function"
+    fi
+    exp="tests/fixtures/$f/expected.stdout"
+    if [ -f "$exp" ]; then
+        if ! (cd "$d" && "$d/prog" >"$d/out" 2>/dev/null; true) || ! diff -q "$d/out" "$exp" >/dev/null; then
+            fail "imp/$f: output differs from $exp"
+            diff "$d/out" "$exp" | head -10 | sed 's/^/    /'
+        fi
+    fi
+done
+if [ -n "$IMP_READ_A" ] && [ -n "$IMP_READ_B" ] && [ "$IMP_READ_A" != "$IMP_READ_B" ]; then
+    fail "r7rs-read and r7rs-strings built different (scheme read) units" \
+         "(${IMP_READ_A##*/} vs ${IMP_READ_B##*/}): something of the program reached it"
+fi
+
 # r7rs-prelude-library-object-varies-with-the-program: the library unit is the
 # stdlib's alone, so programs that differ only in what THEY define link the
 # same object.  Two that used to fork it: a global named `f` (the CPS coloring

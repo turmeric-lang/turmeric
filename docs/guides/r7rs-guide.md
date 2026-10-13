@@ -51,9 +51,15 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
   program as one unit). Programs share that one cached object; a Debug `tur`
   keeps a second for programs that import `(scheme eval)`, which link its
   sanitized interpreter. The cache keeps its 24 most recently used objects,
-  dropping only those unused for a day. `TUR_PRELUDE_SPLIT=0` builds the
-  program as a single C unit instead; `TUR_SHOW_CC=1` shows the two
-  compiles, or why a program was built as one unit.
+  dropping only those unused for a day. A library the program imports from
+  the stdlib -- an SRFI, `(scheme eval)`, `(scheme read)` -- is a third unit,
+  cached in the same place: the first build that imports it compiles it, and
+  later builds link it (an SRFI's unit holds just the procedures the program
+  reaches, so a program that reaches others compiles its own).
+  `TUR_IMPORT_SPLIT=0` leaves the imported libraries in the program's unit;
+  `TUR_PRELUDE_SPLIT=0` builds the program as a single C unit instead;
+  `TUR_SHOW_CC=1` shows the compiles, or why a program was built as fewer
+  units.
 - **`.scm` files** are Scheme without the `#lang r7rs` line: `tur run
   prog.scm`, `tur build prog.scm` (the binary is `prog`), `tur check` and
   `tur --interpret` all take one, a `(load "util.scm")` reads one, and

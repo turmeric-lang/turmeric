@@ -218,6 +218,14 @@ typedef struct Elab {
      * every program.  Draw an id through elab_fresh_id, never `next_id++`. */
     uint32_t     next_stdlib_id;
     bool         ids_stdlib;
+    /* r7rs-imported-libraries-recompiled-every-build: the same for a library
+     * the program imports from the stdlib (diag_file_is_imported_stdlib) --
+     * `(srfi 13)`, `(scheme eval)`.  Its C is a cached unit of its own, so
+     * its names must not move with the program either; `ids_implib` is set
+     * while one of its forms is elaborated, and its ids start at
+     * ELAB_IMPLIB_ID_BASE. */
+    uint32_t     next_implib_id;
+    bool         ids_implib;
     uint32_t     next_gensym_id;  /* Phase 6: for generating unique symbol names */
     /* Transitive-RM: shared reader-macro registry, set by the driver
      * before elaborate_program runs. Module loaders (elab_module.c,
@@ -2504,10 +2512,20 @@ void elab_infer_nonretain_masks(Binding *b, Binding **params, uint32_t n_params,
 /* r7rs-programs-compile-slowly: the first id of the stdlib's own counter --
  * far past anything a program draws, so the two ranges never meet. */
 #define ELAB_STDLIB_ID_BASE 1000000u
+/* r7rs-imported-libraries-recompiled-every-build: the first id of an imported
+ * stdlib library's counter (`next_implib_id`), past the stdlib's range. */
+#define ELAB_IMPLIB_ID_BASE 2000000u
 
 /* A fresh binding / gensym id (see `next_stdlib_id`). */
 static inline uint32_t elab_fresh_id(Elab *e) {
-    return (e->in_stdlib_load || e->ids_stdlib) ? e->next_stdlib_id++ : e->next_id++;
+    if (e->in_stdlib_load || e->ids_stdlib) return e->next_stdlib_id++;
+    return e->ids_implib ? e->next_implib_id++ : e->next_id++;
+}
+
+/* Is `f` a form of a library the program imported from the stdlib (its ids
+ * come from `next_implib_id`)? */
+static inline bool elab_form_ids_implib(const Elab *e, const Form *f) {
+    return !e->in_stdlib_load && f && diag_file_is_imported_stdlib(f->span.file_id);
 }
 
 #endif

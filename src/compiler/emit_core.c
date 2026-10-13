@@ -4893,6 +4893,7 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
          * is bare, upgrade the entry: one deliberate per-platform use is enough
          * to make the header's absence expected for the whole TU. */
         if (g_hoist_origin_stdlib) g_hoisted_stdlib[i] = true;
+        if (g_hoist_origin_implib) g_hoisted_implib[i] = true;
         if (optional && !hoisted_entry_is_optional(e)) {
             size_t tl = sizeof(TUR_HOIST_OPTIONAL_TAG) - 1;
             char *up = (char *)malloc(n + tl + 1);
@@ -4908,9 +4909,11 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
         uint32_t cap = g_cap_hoisted_includes ? g_cap_hoisted_includes * 2 : 8;
         char **nh = (char **)realloc(g_hoisted_includes, cap * sizeof(char *));
         bool *ns = (bool *)realloc(g_hoisted_stdlib, cap * sizeof(bool));
-        if (!nh || !ns) { fprintf(stderr, "tur: oom\n"); abort(); }
+        if (ns) g_hoisted_stdlib = ns;
+        bool *ni = (bool *)realloc(g_hoisted_implib, cap * sizeof(bool));
+        if (!nh || !ns || !ni) { fprintf(stderr, "tur: oom\n"); abort(); }
         g_hoisted_includes = nh;
-        g_hoisted_stdlib = ns;
+        g_hoisted_implib = ni;
         g_cap_hoisted_includes = cap;
     }
     size_t tl = optional ? sizeof(TUR_HOIST_OPTIONAL_TAG) - 1 : 0;
@@ -4920,6 +4923,7 @@ void tur_hoist_include_add_ex(const char *line, size_t n, bool optional) {
     if (optional) memcpy(copy + n, TUR_HOIST_OPTIONAL_TAG, tl);
     copy[n + tl] = '\0';
     g_hoisted_stdlib[g_n_hoisted_includes] = g_hoist_origin_stdlib;
+    g_hoisted_implib[g_n_hoisted_includes] = g_hoist_origin_implib;
     g_hoisted_includes[g_n_hoisted_includes++] = copy;
 }
 
@@ -7119,17 +7123,22 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
      * it uses (strong, external); the client unit declares those `extern` and
      * keeps a file-local record for a keyword only it quotes.  The SYM5 seed
      * still registers both units' records, first registration winning. */
-    if (g_emit_split == EMIT_SPLIT_LIB) storage = "const";
+    /* r7rs-imported-libraries-recompiled-every-build: the imported-library
+     * unit declares the library unit's records and defines, the same way, the
+     * ones only it uses; the program unit declares both units'. */
+    if (g_emit_split == EMIT_SPLIT_LIB || g_emit_split == EMIT_SPLIT_IMP) storage = "const";
     for (uint32_t i = 0; i < g_n_sym_records; i++) {
         SymRecord *r = &g_sym_records[i];
-        if (g_emit_split == EMIT_SPLIT_LIB) {
-            split_lib_note_sym(r->cid);
-            emit_split_note_export(r->cid);
-        } else if (g_emit_split == EMIT_SPLIT_CLIENT && split_lib_defines_sym(r->cid)) {
+        if ((g_emit_split == EMIT_SPLIT_CLIENT || g_emit_split == EMIT_SPLIT_IMP) &&
+            split_lib_defines_sym(r->cid)) {
             buf_printf(out,
                 "extern const struct { uint64_t hash; uint32_t len; uint32_t _pad; char name[%u]; } %s;\n",
                 r->len + 1, r->cid);
             continue;
+        }
+        if (g_emit_split == EMIT_SPLIT_LIB || g_emit_split == EMIT_SPLIT_IMP) {
+            split_lib_note_sym(r->cid);
+            emit_split_note_export(r->cid);
         }
         const char *st = (g_emit_split == EMIT_SPLIT_CLIENT) ? "static const" : storage;
         /* The record has a flexible array member, so use a sized anonymous
@@ -7157,7 +7166,8 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
     /* r7rs-programs-compile-slowly: the program unit of a split build seeds
      * its records too -- str->sym lives in the library unit, and a symbol
      * only the program quotes must still be the one `string->symbol` finds. */
-    if (g_n_sym_records > 0 && (g_sym_intern_used || g_emit_split == EMIT_SPLIT_CLIENT)) {
+    if (g_n_sym_records > 0 && (g_sym_intern_used || g_emit_split == EMIT_SPLIT_CLIENT ||
+                                g_emit_split == EMIT_SPLIT_IMP)) {
         buf_puts(out, "extern void tur_sym_register(const struct __tur_sym *);\n");
         buf_puts(out, "static void __tur_symtab_seed(void) {\n");
         for (uint32_t i = 0; i < g_n_sym_records; i++) {
@@ -7245,14 +7255,19 @@ void static_init_emit(Buf *out, bool gc_collector_pasted) {
      * is initialized before the program's own code runs, as in one unit.
      * The region-pool shutdown stays with the client: it is registered once
      * per program. */
-    if (g_emit_split == EMIT_SPLIT_LIB) {
-        buf_puts(out,
+    /* r7rs-imported-libraries-recompiled-every-build: the imported-library
+     * unit's, the same way, from __tur_split_imp_init -- run after the
+     * library unit's, whose code its initializers may call. */
+    if (g_emit_split == EMIT_SPLIT_LIB || g_emit_split == EMIT_SPLIT_IMP) {
+        const char *fn = g_emit_split == EMIT_SPLIT_LIB ? "__tur_split_lib_init"
+                                                        : "__tur_split_imp_init";
+        buf_printf(out,
             "/* r7rs-programs-compile-slowly: this unit's initializers, run by the\n"
             " * program unit's __tur_static_init before its own. */\n"
-            "void __tur_split_lib_init(void) {\n"
-            "    static int __tur_split_lib_init_done = 0;\n"
-            "    if (__tur_split_lib_init_done) return;\n"
-            "    __tur_split_lib_init_done = 1;\n");
+            "void %s(void) {\n"
+            "    static int %s_done = 0;\n"
+            "    if (%s_done) return;\n"
+            "    %s_done = 1;\n", fn, fn, fn, fn);
         for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
             for (uint32_t i = 0; i < g_n_static_inits; i++)
                 if (g_static_inits[i].band == (StaticInitBand)band)
@@ -7261,7 +7276,9 @@ void static_init_emit(Buf *out, bool gc_collector_pasted) {
         return;
     }
     const bool split_client = (g_emit_split == EMIT_SPLIT_CLIENT);
+    const bool split_imp = split_client && emit_split_has_imp();
     if (split_client) buf_puts(out, "extern void __tur_split_lib_init(void);\n");
+    if (split_imp) buf_puts(out, "extern void __tur_split_imp_init(void);\n");
     buf_puts(out,
         "/* S1b: explicit static initialization -- see docs/archive/jit-engine-plan.md.\n"
         " * Called from main(); the constructor below covers the no-main cases\n"
@@ -7296,6 +7313,7 @@ void static_init_emit(Buf *out, bool gc_collector_pasted) {
          * place the atexit ordering actually holds. */
         emit_region_shutdown_atexit(out, 4);
         if (split_client) buf_puts(out, "    __tur_split_lib_init();\n");
+        if (split_imp) buf_puts(out, "    __tur_split_imp_init();\n");
         for (int band = STATIC_INIT_KEYS; band <= STATIC_INIT_DEFS; band++)
             for (uint32_t i = 0; i < g_n_static_inits; i++)
                 if (g_static_inits[i].band == (StaticInitBand)band)

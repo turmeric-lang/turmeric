@@ -8251,8 +8251,8 @@ static int64_t map_hyget_hydynamic_hyas(void * m, int64_t hash, void * key, void
 static int64_t map_hyeq_hyloop__cps(void * iter_1001047, void * m2_hyhamt_1001048, void * keyeq_1001049, int64_t val_cmp, DK *__kont);
 static int64_t list_hyeq_qu__cps(int64_t l1_1001343, int64_t l2_1001344, int64_t cmp_fn, DK *__kont);
 static int64_t _un_uncons_hyfmap__cps(int64_t cell_1001355, void * f_1001356, DK *__kont);
-static int64_t keep_if__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o_51, int64_t pred, DK *__kont);
-static int64_t keep_if__spec__tur_adt_Option__float_tur_adt_Option__float_int64_t__cps(tur_adt_Option__float o_51, int64_t pred, DK *__kont);
+static int64_t keep_if__spec__tur_adt_Option__int_tur_adt_Option__int_int64_t__cps(tur_adt_Option__int o_10, int64_t pred, DK *__kont);
+static int64_t keep_if__spec__tur_adt_Option__float_tur_adt_Option__float_int64_t__cps(tur_adt_Option__float o_10, int64_t pred, DK *__kont);
 static int64_t map_hyeq_hyloop__cps(void * iter, void * m2_hamt, void * keyeq, int64_t val_cmp, DK *__kont) {
     bool __t0;
     int64_t h_1001051;
@@ -10768,7 +10768,7 @@ static void printf_hyfloat6(double x) {
   
 }
 
-static double PI_43;
+static double PI_2000034;
 static double tur_u_tan(double x) {
         return __builtin_tan(x);
   
@@ -11176,7 +11176,7 @@ static void __tur_module_def_init(void) {
     SCHEMA_unAP_1001546 = INT64_C(14);
     SCHEMA_unFIELD_1001547 = INT64_C(15);
     SCHEMA_unAP_unFAT_1001548 = INT64_C(16);
-    PI_43 = 3.141592653589793;
+    PI_2000034 = 3.141592653589793;
 }
 
 TUR_FATBOX_DEF(__tur_fatbox_0, __tur_fatshim_bool_int64_t_int64_t, __fn_1001064)

@@ -1,5 +1,11 @@
 # `#lang r7rs`: an imported SRFI or on-demand library is recompiled on every build
 
+**RESOLVED 2026-10-12.** Direction 1 is built: a program that imports a
+library from the stdlib is three C units, and the imported libraries' unit is
+compiled once and cached beside the prelude's. `r7rs-srfi-13` builds warm in
+2.4 s instead of 4.4 s, `r7rs-eval` in 4.1 s instead of 5.6 s. See
+"Resolution" at the end.
+
 **Severity:** medium (build time). Every build of a program that imports an
 SRFI or `(scheme eval)` spends 2-4 s more in cc than a trivial program does,
 on every build and with a warm cache. These are the 25 slowest warm r7rs
@@ -60,8 +66,7 @@ time.
 
 ## Pinned by
 
-Nothing yet. A check could build `r7rs-srfi-13` twice on a warm cache and
-assert that the program unit holds no `srfi13_` definition.
+`tests/check-r7rs-prelude-split.sh`, the `imp/*` cases (see "Resolution").
 
 ## Direction 2 prototyped and measured, 2026-10-08 -- not landed
 
@@ -119,3 +124,102 @@ fifteen `g_emit_split == EMIT_SPLIT_LIB` / `EMIT_SPLIT_CLIENT` decisions in
 `emit_split.c` each need a third answer, and `emit_split_lib_owns` currently
 answers two questions at once ("give it external linkage" and "only declare
 it here") that such a unit needs answered differently.
+
+## Resolution (2026-10-12): direction 1, a third unit
+
+A split build of a program that imports a library from the stdlib now writes
+three C units:
+
+| unit | holds | cached by |
+| --- | --- | --- |
+| library (`EMIT_SPLIT_LIB`) | runtime preamble state, the auto-loaded stdlib | its text -- unchanged, the same object as before for every program |
+| imported-library (`EMIT_SPLIT_IMP`, new) | every imported stdlib library's definitions, with external linkage | its text, in the same `prelude/` cache |
+| program (`EMIT_SPLIT_CLIENT`) | the program; declares what the two others define | -- |
+
+**The emitter** (`src/compiler/emit_module.c`, "r7rs-programs-compile-slowly:
+the split build").  The modes are ordered LIB < IMP < CLIENT, and every item
+and binding has a *home* unit (`emit_split_binding_home`, `split_item_home`):
+the library unit's when elaborated in the auto-load window (`is_from_stdlib`),
+the imported-library unit's when elaborated while an imported stdlib file's
+forms were (`is_from_implib`, new, with `AdtDef.from_implib` and
+`InlineC.from_implib`), the program's otherwise.  A unit defines the items of
+its own home, declares those of an earlier one, and never sees a later one's
+(`SPLIT_OWN_LATER`, filtered out as the library unit always filtered the
+program).  That splits `emit_split_lib_owns`'s two questions the report named:
+it still answers "external linkage" (defined here or declared from an earlier
+unit), and `emit_split_defines` answers "this unit defines it".  Verbatim text
+is rewritten per home -- the runtime preamble as a declarer in the IMP unit, its
+own file-scope C blocks as a definer (`cprelude_own`).  Its fat boxes
+(`__tur_ifatbox_N`), keyword records and function signatures are recorded with
+the library unit's, so the program names whichever unit made one.  Its
+initializers run from `__tur_split_imp_init`, which the program's
+`__tur_static_init` calls after `__tur_split_lib_init`.
+
+The origin flag is the elaboration window, not the span's file: a lambda
+lifted while the program's own code is elaborated -- out of a SRFI macro's
+expansion, say -- is the program's whatever file its span names, since its
+body may name the program's globals, which the IMP unit never sees.
+
+**Names that do not move with the program.**  An imported library's ids came
+from the program's counter, so its lambdas (`__fn_192`) were renumbered by any
+change to the program ahead of them in the two elaboration passes -- the
+problem `next_stdlib_id` solved for the prelude.  An imported stdlib file's
+forms now draw from `next_implib_id` (base 2,000,000; `ids_implib`, set per
+form in both passes and in the module loader).  Seven `expected.c` snapshots
+of programs importing a stdlib module moved by that renumbering alone.
+`diag_file_is_imported_stdlib` decides what such a file is: past the
+auto-loaded band, and under the stdlib root by canonical path (the elaborator
+registers `stdlib/srfi/14.scm`, the driver resolves an absolute root).
+
+**The driver** (`src/main.c`).  `compile_to_c` emits LIB, IMP, CLIENT; the
+library unit is renamed by its own exports alone, so its text (and hash) is
+the same whatever is imported.  The IMP unit compiles through
+`prelude_split_object` like the library unit, with its own piece prefix
+(`tur_spi_`: its object links beside the library unit's), in pieces only when
+it exports at least 150 names -- every piece compiles the ~550 KB preamble the
+unit carries (~0.5 s of cc), which is the wrong trade for a small SRFI.  The
+shell-quoted `'-D...'` trap the prototype hit is fixed for this unit (a quoted
+`-I`/`-D` token is accepted there; the library unit's key is untouched).
+Fallbacks: an IMP unit the emitter refuses (a library's top-level statement --
+`(sicp extras)` calls `(amb-reset!)` -- or dynamic variable) is a two-unit
+build as before; three units that fail to compile or link retry as two before
+one.  `TUR_IMPORT_SPLIT=0` turns the third unit off.
+
+**What it does not do: share an SRFI's unit between programs.**  The SRFI
+prune (`srfi_prune_program`) still runs per program, so an SRFI's unit holds
+what this program reaches: cached for every rebuild of the program, but a
+program that reaches other SRFI procedures compiles its own.  Keeping all of
+SRFI 13 instead made its unit the same for every program, and cost a one-line
+program ~1.9 s more of Debug-`tur` emission per build (the declarations in
+the program unit, the definitions in the IMP unit) -- more than a cold compile
+of the pruned unit, and on every build.  `(scheme read)`, `(scheme eval)` and
+the other unpruned libraries do get one unit per import set: `r7rs-read`,
+`r7rs-strings` and `r7rs-bignums` link the same object.
+
+**Measured** (Linux, Debug `tur`, 4 cores, `tur build`, serial):
+
+| program | before (every build) | after, cold IMP unit | after, warm |
+| --- | --- | --- | --- |
+| `r7rs-closure-one-capture-call` (no import) | 1.4 s | -- | 1.4 s |
+| `r7rs-srfi-13` | 4.4 s | 4.0 s | 2.4-2.7 s |
+| `r7rs-eval` | 5.6 s | 6.9 s | 4.1-4.2 s |
+| `r7rs-read` | 2.1 s | 2.6 s | 1.8 s |
+
+What is left of `r7rs-eval`'s warm build is its own code and the ASan
+program unit (a trivial program unit compiled with `-fsanitize=address` is
+1.8 s of cc on its own).
+
+Over the corpus -- the 126 compiled `#lang r7rs` fixtures built one after
+another, each from a fresh cache directory (`cold`) and then again (`warm`):
+
+| | before | after |
+| --- | --- | --- |
+| warm | 267 s | 230 s (-14%) |
+| cold | 270 s | 284 s (+5%) |
+
+The cold column is the one CI pays where ccache misses (`tests/run.sh` builds
+fixtures through ccache, so an unchanged unit's text is a hit there).  Most
+SRFI fixtures are their import set's only program, so cold they compile their
+IMP unit once -- the definitions they compiled before, plus a second unit's
+fixed cost: ~0.5 s of cc for the preamble each unit carries, which is what
+the +14 s is.  A developer rebuilding a program gets the warm column.

@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "buf.h"
+#include "platform_fs.h"  /* realpath() on Windows */
 
 #define MAX_FILES DIAG_MAX_FILES
 #define MAX_NOTES 8
@@ -147,6 +148,36 @@ void diag_note_autoload_file_ids(uint16_t end) {
 }
 uint16_t diag_autoload_file_ids_end(void) { return autoload_file_ids_end_; }
 
+/* diag_file_is_imported_stdlib is asked per item and per binding, so its
+ * answer is kept -- by the SourceFile, since a compile-time evaluator session
+ * may register another file under the same id; diag_reset forgets them. */
+static const SourceFile *imp_seen_[MAX_FILES];
+static bool              imp_ans_[MAX_FILES];
+
+bool diag_file_is_imported_stdlib(uint16_t file_id) {
+    if (file_id == 0 || file_id < autoload_file_ids_end_ || file_id >= MAX_FILES) return false;
+    const SourceFile *f = files_[file_id];
+    if (!f || !f->path) return false;
+    if (imp_seen_[file_id] == f) return imp_ans_[file_id];
+    /* Canonical paths on both sides: the elaborator resolves an import
+     * against its own spelling of the root (`stdlib`, relative), the driver
+     * may hold another (absolute, beside the binary). */
+    const char *root = getenv("TUR_STDLIB_DIR");
+    if (!root || !*root) root = "stdlib";
+    bool r = false;
+    char *croot = realpath(root, NULL);
+    char *cpath = croot ? realpath(f->path, NULL) : NULL;
+    if (croot && cpath) {
+        size_t rl = strlen(croot);
+        r = strncmp(cpath, croot, rl) == 0 && (cpath[rl] == '/' || cpath[rl] == '\\');
+    }
+    free(croot);
+    free(cpath);
+    imp_seen_[file_id] = f;
+    imp_ans_[file_id] = r;
+    return r;
+}
+
 const SourceFile *diag_source_file(uint16_t file_id) {
     if (file_id < MAX_FILES) return files_[file_id];
     return NULL;
@@ -156,6 +187,7 @@ void diag_reset(void) {
     had_error_ = false;
     file_count_ = 0;
     for (size_t i = 0; i < MAX_FILES; i++) files_[i] = NULL;
+    for (size_t i = 0; i < MAX_FILES; i++) imp_seen_[i] = NULL;
 }
 
 size_t diag_files_capacity(void) { return MAX_FILES; }

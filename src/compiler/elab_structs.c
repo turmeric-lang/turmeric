@@ -2012,6 +2012,7 @@ Expr *elab_defdata(Elab *e, const Form *call) {
     out->as.defdata_.def = def;
     out->as.defdata_.binding = adt_binding;
     def->from_stdlib = e->in_stdlib_load;   /* r7rs-programs-compile-slowly */
+    def->from_implib = !e->in_stdlib_load && e->ids_implib;
     return out;
 
 data_ctor_parse_error:
@@ -2895,6 +2896,7 @@ Expr *elab_defgadt(Elab *e, const Form *call) {
     out->as.defgadt_.def = def;
     out->as.defgadt_.binding = adt_binding;
     def->from_stdlib = e->in_stdlib_load;   /* r7rs-programs-compile-slowly */
+    def->from_implib = !e->in_stdlib_load && e->ids_implib;
     return out;
 
 ctor_parse_error:

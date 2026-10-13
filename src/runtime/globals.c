@@ -83,6 +83,11 @@ uint32_t  g_cap_hoisted_includes = 0;
  * caller says whose code it is scanning in g_hoist_origin_stdlib. */
 bool     *g_hoisted_stdlib = NULL;
 bool      g_hoist_origin_stdlib = false;
+/* ...and did a library the program imported from the stdlib hoist it?  The
+ * imported-library unit writes those and the stdlib's
+ * (r7rs-imported-libraries-recompiled-every-build). */
+bool     *g_hoisted_implib = NULL;
+bool      g_hoist_origin_implib = false;
 
 /* AR8: Variadic rest parameters -- track if any variadic defn is compiled */
 bool g_has_variadics = false;
