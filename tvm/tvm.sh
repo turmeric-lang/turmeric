@@ -91,7 +91,7 @@ __tvm_stdlib_dir() {
 
 # Rearrange a freshly extracted version dir into the prefix layout:
 #
-#     bin/tur   lib/*.a   include/turi/   share/turmeric/stdlib/
+#     bin/tur   lib/*.a   include/   share/turmeric/stdlib/
 #
 # Releases have shipped two shapes -- windows-x86_64 the prefix layout, the
 # three tar.gz targets flat (`tur`, `libturi.a`, `libturt_runtime.a` and
@@ -405,7 +405,15 @@ __tvm_build_from_source() {
   # built a version that could not compile anything, for the same reason a
   # flat tarball could not -- see __tvm_normalize_layout.
   [ -f "$_src/build-release/src/libturt_runtime.a" ] && cp "$_src/build-release/src/libturt_runtime.a" "$_tmp/lib/"
-  cp "$_src"/src/turi/eval.h "$_src"/src/turi/env.h "$_src"/src/turi/value.h "$_src"/src/turi/fiber.h "$_tmp/include/turi/" 2>/dev/null
+  # The embedding headers AND what they #include (compiler/, runtime/), the
+  # set a release archive ships -- the four turi headers alone do not compile.
+  # Refs older than scripts/stage-release.sh get the four they always got.
+  if [ -f "$_src/scripts/stage-release.sh" ]; then
+    bash "$_src/scripts/stage-release.sh" --headers "$_tmp/include" >/dev/null \
+      || { __tvm_err "staging the embedding headers failed for $_ref"; return 1; }
+  else
+    cp "$_src"/src/turi/eval.h "$_src"/src/turi/env.h "$_src"/src/turi/value.h "$_src"/src/turi/fiber.h "$_tmp/include/turi/" 2>/dev/null
+  fi
   cp -R "$_src/stdlib" "$_tmp/share/turmeric/" 2>/dev/null
   : > "$_tmp/.source-built"
   rm -rf "$_vdir"
