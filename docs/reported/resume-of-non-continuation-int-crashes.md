@@ -21,6 +21,12 @@ build time to run time.
 | `tur --interpret` | `eval: resume: not a continuation` |
 | `main` before the resume fix | link error, `tur_effect_cont_resume` undefined |
 
+`(cont? k)` has the same shape. Since
+[cont-query-on-wrapped-handler-k-reads-past-wrapper](../archive/cont-query-on-wrapped-handler-k-reads-past-wrapper.md)
+it lowers to `__dk_cont_live_word`, which reads a word the same way. So
+`(defn main [] : nil (println (cont? 5)))` segfaults compiled (it used to
+fail to link). The interpreter prints `false`. Any fix here should cover both.
+
 ## Root cause
 
 `elab_resume` accepts any `k`. A non-multishot `resume` lowers to

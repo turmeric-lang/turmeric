@@ -1570,16 +1570,20 @@ char *emit_effects_serial_shift(EmitCtx *ctx, Buf *body, const Expr *e) {
 
 char *emit_effects_cont_pred(EmitCtx *ctx, Buf *body, const Expr *e) {
     /* (cont? k) - check if a continuation is still valid (not done).
-     * Phase 19D: for Phase-19 TY_INT k values (FiberBlock*), check !fiber->done.
-     * For Phase 18 tur_cont* continuations, call tur_cont_consumed(). */
+     * A handler continuation -- an `effect-cont` or a plain `int` k, the
+     * shapes a direct-emitted `resume` takes -- is a DK chain or the cloneable
+     * wrapper around one, and __dk_cont_live_word tells them apart as
+     * __dk_resume_word does (cont-query-on-wrapped-handler-k-reads-past-
+     * wrapper).  Both used to call fiber-runtime helpers deleted 2026-07-19,
+     * so either failed to link.  Any other cont flavor keeps tur_cont_consumed. */
     char *inner = emit_value(ctx, body, e->as.cont_pred_.expr);
     char *tmp = fresh_tmp(ctx);
     indent_buf(body, ctx->indent);
-    if (e->as.cont_pred_.expr->type.kind == TY_CONT) {
+    const Type *kt = &e->as.cont_pred_.expr->type;
+    if (kt->kind == TY_CONT && kt->as.cont.flavor != CONT_EFFECT) {
         buf_printf(body, "bool %s = !tur_cont_consumed((tur_cont *)(intptr_t)%s);\n", tmp, inner);
     } else {
-        /* Phase 19D: k is a FiberBlock* cast to int64_t */
-        buf_printf(body, "bool %s = tur_effect_cont_valid(%s);\n", tmp, inner);
+        buf_printf(body, "bool %s = __dk_cont_live_word((intptr_t)(%s));\n", tmp, inner);
     }
     free(inner);
     return tmp;

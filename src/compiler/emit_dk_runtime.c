@@ -172,6 +172,21 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
 "    ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */\n"
 "    return dk_invoke((DK *)k, w);\n"
 "}\n\n");
+    /* cont-query-on-wrapped-handler-k-reads-past-wrapper: (cont? k) asks the
+     * same question of the same two shapes.  A bare chain is live until a
+     * resume marks it consumed.  A wrapper is resumed through __dk_cont_fn,
+     * which dk_invokes a COPY of its chain, so the wrapped chain is never
+     * consumed and the wrapper stays resumable: it is live.  Reading
+     * `consumed` straight off a wrapper read past its 32 bytes. */
+    buf_puts(out,
+"__attribute__((unused, noinline))\n"
+"static bool __dk_cont_live_word(intptr_t k) {\n");
+    if (bridged)
+        buf_puts(out,
+"    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn) return true;\n");
+    buf_puts(out,
+"    return !((DK *)k)->consumed;\n"
+"}\n\n");
 }
 
 /* Serial marshaling runtime: the fixed tagged context frames + the resume /

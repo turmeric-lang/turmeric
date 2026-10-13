@@ -1,0 +1,23 @@
+;; cont-query-on-wrapped-handler-k-reads-past-wrapper: a fn-payload case binds
+;; its `k` as the 32-byte cloneable wrapper around the DK chain, and `(cont? k)`
+;; read it as a `DK` -- an out-of-bounds heap read (ASan under run-leak-check).
+;; `cont?` now asks __dk_cont_live_word, which tells a wrapper from a chain.
+;; Before the fix, `cont?` on an `effect-cont` parameter did not link at all.
+(defeffect Ask [] : int)
+(defeffect ShiftE [f : (fn [effect-cont] int)] : int)
+
+;; `cont?` on an effect-cont parameter: a bare chain here, a wrapper below.
+(defn pick [k : effect-cont] : int (if (cont? k) (resume k 5) 0))
+
+(defn producer [] : int
+  (+ 100 (perform (ShiftE (fn [k : effect-cont] : int
+                            (if (cont? k) (+ (k 1) (k 2)) 7))))))
+
+(defn main [] : nil
+  ;; An ordinary case: `k` is a bare chain.
+  (println (handle (+ 1 (perform (Ask))) (Ask [] k) (if (cont? k) (resume k 5) 0)))
+  (println (handle (+ 1 (perform (Ask))) (Ask [] k) (pick k)))
+  ;; The report's repro: `cont?` in the fn-payload case itself.
+  (println (handle (producer) (ShiftE [f] k) (if (cont? k) (f k) 0)))
+  ;; A wrapper resumes a copy of its chain, so it stays live after a resume.
+  (println (handle (producer) (ShiftE [f] k) (let [r (f k)] (if (cont? k) r 0)))))

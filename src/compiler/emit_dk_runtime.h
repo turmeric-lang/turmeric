@@ -50,7 +50,8 @@ void emit_tur_jmp_buf_prelude(Buf *out);
 void emit_cps_runtime_prelude(Buf *out);
 
 /* Emit __dk_resume_word, the resume of a handler continuation word outside the
- * case that bound it (resume-of-cont-typed-param-is-a-no-op).  Call once, after
+ * case that bound it (resume-of-cont-typed-param-is-a-no-op), and
+ * __dk_cont_live_word, the `(cont? k)` of the same word.  Call once, after
  * the DK machine and -- when `bridged` -- after the cloneable <-> DK bridge. */
 void emit_dk_resume_word_prelude(Buf *out, bool bridged);
 

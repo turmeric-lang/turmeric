@@ -1,5 +1,36 @@
 # `(cont? k)` on a fn-payload case's `k` reads past the end of its wrapper
 
+**Fixed 2026-10-13.** The repro prints `101` and is clean under ASan.
+`tests/fixtures/cont-query-wrapped-handler-k` pins it and is opted into the
+leak gate (`requires.leak-check`), where the old read was a
+heap-buffer-overflow.
+
+- **The fix (fix direction 1, the runtime half).** Beside `__dk_resume_word`,
+  `emit_dk_resume_word_prelude` (`src/compiler/emit_dk_runtime.c`) now emits
+  `__dk_cont_live_word`. It checks a word for `__dk_cont_fn` first, the way
+  `__dk_resume_word` does, and reads `consumed` only off a bare chain. Both
+  `cont?` lowerings call it: the CPS `TUR_DK_CONT_PRED` arm
+  (`src/compiler/emit_cps_ir.c`) and the direct emitter's
+  `emit_effects_cont_pred` (`src/compiler/emit_effects.c`). A runtime check
+  rather than `Binding.cont_is_wrapper` covers a `k` that reached a helper,
+  where the binding no longer says which shape it is.
+- **Fix direction 2: a wrapper is live.** `__dk_cont_fn` `dk_invoke`s a copy
+  of the wrapped chain, so that chain is never consumed and the wrapper stays
+  resumable. `(cont? k)` on a wrapper is `true`, before and after a resume.
+  `__dk_resume_word` never marked a wrapper either.
+- **A second bug, found on the way.** `cont?` on an `effect-cont` parameter
+  (`(defn pick [k : effect-cont] : int (if (cont? k) (resume k 5) 0))`) did
+  not link. The direct emitter called `tur_cont_consumed` for every `TY_CONT`
+  and `tur_effect_cont_valid` for an `int` k. The second was deleted with the
+  fiber effect runtime on 2026-07-19, and the first is never in an emitted
+  program. Both now go to `__dk_cont_live_word`. Only a non-effect cont
+  flavor still reaches `tur_cont_consumed`.
+- **Left open.** `(cont? 5)` used to fail to link and now segfaults, as
+  `(resume 5 v)` does. That is
+  [resume-of-non-continuation-int-crashes](../reported/resume-of-non-continuation-int-crashes.md).
+
+The original report follows.
+
 **Severity: medium.** This is an out-of-bounds heap read, and the answer is
 whatever byte is there. A fn-payload case's `k` is not a DK chain but the
 32-byte `tur_cloneable_cont` around one, and `cont?` reads it as a `DK`.
