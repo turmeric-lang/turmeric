@@ -161,9 +161,25 @@ void emit_cps_cloneable_bridge_prelude(Buf *out) {
  * flags the chain arm's store into the 32-byte wrapper, which never runs.
  * Emitted after the DK machine and, when present, the bridge. */
 void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
+    /* resume-of-non-continuation-int-crashes: a word that cannot be a
+     * pointer is no continuation -- one in the first page, which no supported
+     * target maps, or one not aligned to a pointer (a DK node and a
+     * tur_cloneable_cont are structs holding pointers, heap or stack).  Both
+     * helpers dereferenced the word, so `(resume 5 v)` and `(cont? 5)`
+     * segfaulted where the interpreter says "not a continuation" / `false`.
+     * A word that does look like a pointer is still trusted: an `int`-typed
+     * `k` carries no more than that, and only a typed one could tell. */
     buf_puts(out,
+"__attribute__((unused))\n"
+"static inline bool __dk_word_not_cont(intptr_t k) {\n"
+"    return (uintptr_t)k < 4096u || ((uintptr_t)k & (sizeof(void *) - 1u)) != 0;\n"
+"}\n"
 "__attribute__((unused, noinline))\n"
-"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n");
+"static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {\n"
+"    if (__dk_word_not_cont(k)) {\n"
+"        tur_panic(\"resume: not a continuation\");\n"
+"        return 0;   /* under catch-unwind tur_panic returns; the caller's check unwinds */\n"
+"    }\n");
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn)\n"
@@ -181,7 +197,7 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
 "static bool __dk_cont_live_word(intptr_t k) {\n"
-"    if (!k) return false;   /* 0 is not a continuation */\n");
+"    if (__dk_word_not_cont(k)) return false;   /* 0 included */\n");
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn) return true;\n");

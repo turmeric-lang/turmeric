@@ -1,0 +1,43 @@
+;; `resume` / `cont?` of a word that is not a continuation.  A handler `k` still
+;; travels as `:int` (a helper parameter, a `^mut` cell), so the compiler cannot
+;; refuse `(helper 5 6)`; the runtime helpers __dk_resume_word and
+;; __dk_cont_live_word dereferenced the word and segfaulted.  A word that
+;; cannot be a pointer -- in the first page, or not pointer-aligned -- is now a
+;; panic ("resume: not a continuation", the interpreter's words) and `false`.
+;; A real continuation passed through the same `:int` helper still resumes.
+;; See docs/archive/resume-of-non-continuation-int-crashes.md.
+;;
+;; requires.compiled: the interpreter reports the resume as an eval error, not
+;; a panic, so its catch-unwind does not catch it.
+;;
+;; real-k: (Ask) answers 41, + 1 = 42.
+
+(load "stdlib/panic.tur")
+
+(defeffect Ask [] int)
+
+(defn helper [k : int v : int] : int (resume k v))
+(defn live? [k : int] : bool (cont? k))
+
+(defn use-ask [] : int (+ 1 (perform (Ask))))
+(defn real-k [] : int
+  (handle (use-ask)
+    (Ask [] k) (helper k 41)))
+
+(defn try-resume [w : int] : nil
+  (let [r (catch-unwind (fn [] : int (+ 1 (helper w 6))))]
+    (if (ok? r)
+      (println "no panic")
+      (println (panic-message (result-panic r))))))
+
+(defn main [] : int
+  (println (real-k))
+  (try-resume 0)
+  (try-resume 5)
+  (try-resume 4095)
+  (try-resume 4097)
+  (println (live? 0))
+  (println (live? 5))
+  (println (live? 4099))
+  (println "survived")
+  0)

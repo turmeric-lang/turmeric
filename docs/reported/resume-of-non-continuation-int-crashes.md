@@ -1,6 +1,38 @@
 # `resume` of an `int` that is not a continuation crashes compiled
 
-**Severity: low-medium.** It needs a program that resumes a number. That is
+**Narrowed 2026-10-13: a word that cannot be a pointer is a panic, not a
+crash.** Both runtime helpers (`emit_dk_resume_word_prelude`,
+`src/compiler/emit_dk_runtime.c`) now ask `__dk_word_not_cont` before they
+dereference. The answer is yes for a word in the first page (below 4096, which
+no supported target maps) or one not aligned to a pointer, since a DK node and
+a `tur_cloneable_cont` are structs holding pointers. Then:
+
+- `__dk_resume_word` panics `resume: not a continuation` (the interpreter's
+  words). Under `catch-unwind`, `tur_panic` returns, so the helper returns 0
+  and the caller's check unwinds; the panic is caught with its message.
+- `__dk_cont_live_word` answers `false`, as the interpreter does.
+
+The repro now panics, and `(cont? 5)` prints `false`. A real continuation
+passed through the same `:int` helper still resumes. Pinned by
+`tests/fixtures/resume-non-continuation-panics` (0, 5, 4095 and the misaligned
+4097, each caught; `cont?` of three of them; a real `k` through `(helper k
+41)`). With the guard reverted the fixture fails (stdout mismatch).
+
+**Still open:**
+
+- **The heuristic's limit.** An `int` that looks like a pointer -- aligned and
+  at least 4096, `(cont? 4096)` -- is still dereferenced, and still crashes.
+  Only fix direction 1 below, a typed `k`, can tell a continuation from a
+  number.
+- **The interpreter's error is not a panic.** `turi_error`
+  (`src/turi/eval.c`), as for `discontinue`, ends the program even inside
+  `catch-unwind`; compiled, the panic is caught. The fixture is
+  `requires.compiled` for that reason.
+- **The panic names the runtime's line.** `panic at <unit>.c:N`, the
+  runtime-helper case of
+  [panic-location-names-the-runtime-not-the-call-site](panic-location-names-the-runtime-not-the-call-site.md).
+
+**Severity: low (was low-medium).** It needs a program that resumes a number. That is
 a misuse, but the compiler accepts it, and the result is a segfault rather
 than a diagnostic. Noted 2026-10-12 in
 [resume-of-cont-typed-param-is-a-no-op](../archive/resume-of-cont-typed-param-is-a-no-op.md)
