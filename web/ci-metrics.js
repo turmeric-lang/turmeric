@@ -95,28 +95,6 @@ const SPICE_SERIES = [
   ['spices', 'Spices', '--chart-1'],
 ];
 
-// Macro-suites: the ctest suites that print a test count, grouped by what they
-// exercise. First match wins and the last row matches everything, so a newly
-// counted suite always lands in some group -- check which before trusting it.
-// Five rows, one per palette slot, in palette order.
-const MACRO_SUITES = [
-  ['fixtures', 'Fixtures', '--chart-1', /^tur_tests$|fixture_tests$/,
-    'tests/fixtures/ through each engine: compiled, interpreter, JIT'],
-  ['browser', 'Browser', '--chart-2', /^web_/,
-    'Try Turmeric and the site, under Playwright'],
-  ['spices', 'Spices', '--chart-3', /spice|scscm/,
-    'Resolving, fetching and building spices'],
-  ['runtime', 'Compiler and runtime', '--chart-4',
-    /_seam$|_unit$|multi_module|leak|ctor_alias|demangle|eval_sandbox/,
-    'Seams, unit tests, multi-module builds and leak gates'],
-  ['tooling', 'CLI and tooling', '--chart-5', /./,
-    'The tur subcommands, and every counted suite not above'],
-];
-
-function macroOf(suite) {
-  return MACRO_SUITES.find(([, , , re]) => re.test(suite));
-}
-
 const TABS = ['tests', 'counts', 'code', 'spices', 'reports'];
 
 // Ranges the 8-day recent window can answer. Anything wider needs the full log.
@@ -690,17 +668,16 @@ function renderFilters() {
 //   fmtTickY  (v) => string               -- axis labels
 //   footer    axis-title text under the plot
 //   label     the SVG's aria-label
-//   height    plot height; a small multiple passes less than the default
 //   directLabels  false where a title already names the one series
 function drawLineChart({
   host, tooltip, idPrefix, series, xs, log = false,
-  ticksY, fmtY, fmtTickY, footer, label, height = 320, directLabels = true,
+  ticksY, fmtY, fmtTickY, footer, label, directLabels = true,
 }) {
   const x0 = xs[0];
   const x1 = xs[xs.length - 1];
 
   const W = Math.max(360, host.clientWidth || 860);
-  const H = height;
+  const H = 320;
   const showLabels = directLabels && series.length <= 4 && W >= 640;
   const pad = { t: 18, r: showLabels ? 128 : 24, b: 40, l: 62 };
   const iw = W - pad.l - pad.r;
@@ -1386,8 +1363,7 @@ function suiteCounts() {
   return out;
 }
 
-// Totals over time, one point per CI run: { ts, sha, total, macro: {id: n},
-// failedHere }. Every suite contributes its NEWEST count as of that run, not
+// Totals over time, one point per CI run: { ts, sha, total, failedHere }. Every suite contributes its NEWEST count as of that run, not
 // only the suites the run itself executed -- a push runs only the jobs its
 // diff needs, so a plain per-run sum sawtooths between ~3.7k and ~9k with no
 // test added or removed.
@@ -1416,12 +1392,8 @@ function countTimeline(series) {
       const end = lastTs.get(s);
       if (end < e.ts && end < newest - 7 * 86400) cur.delete(s);   // retired
     }
-    const snap = { ts: e.ts, sha: e.sha, total: 0, macro: {}, failedHere: snaps.get(e.run)?.failedHere ?? false };
-    for (const [s, p] of cur) {
-      snap.total += p.count;
-      const id = macroOf(s)[0];
-      snap.macro[id] = (snap.macro[id] ?? 0) + p.count;
-    }
+    const snap = { ts: e.ts, sha: e.sha, total: 0, failedHere: snaps.get(e.run)?.failedHere ?? false };
+    for (const p of cur.values()) snap.total += p.count;
     snap.failedHere = snap.failedHere || e.failed > 0;
     snaps.set(e.run, snap);
   }
@@ -1432,16 +1404,12 @@ function renderCounts() {
   const tiles = document.getElementById('ci-counts-tiles');
   const host = document.getElementById('ci-counts-chart');
   const sub = document.getElementById('ci-counts-sub');
-  const grid = document.getElementById('ci-macro-grid');
-  const gridSub = document.getElementById('ci-macro-sub');
 
   const series = suiteCounts();
   if (!series.size) {
     tiles.innerHTML = '';
     sub.textContent = '';
     host.innerHTML = '<div class="ci-empty">No suite prints a test count yet.</div>';
-    grid.innerHTML = '';
-    gridSub.textContent = '';
     return;
   }
 
@@ -1486,7 +1454,6 @@ function renderCounts() {
   sub.textContent = `Every suite that prints a test count, each at its newest count as of `
     + `each run.${silent.size ? ` ${silent.size} other suites print none and are not counted.` : ''}`;
 
-  // ── total
   if (inRange.length < 2) {
     host.innerHTML = `<div class="ci-empty">${timeline.length > inRange.length
       ? 'Only one run in this range -- widen it to see a trend.'
@@ -1509,74 +1476,6 @@ function renderCounts() {
       directLabels: false,
     });
   }
-
-  // ── per macro-suite: small multiples, each on its own zero-based scale. On
-  // one shared axis the fixtures' ~11k flattens every other group to the floor.
-  const members = new Map();
-  for (const p of current) {
-    const id = macroOf(p.suite)[0];
-    if (!members.has(id)) members.set(id, []);
-    members.get(id).push(p);
-  }
-  const groups = MACRO_SUITES.filter(([id]) => members.has(id));
-  gridSub.textContent = `${groups.length} groups. Each chart has its own scale, from zero; `
-    + 'open a group to see which suites it adds up.';
-  grid.innerHTML = groups.map(([id, name, cssVar, , desc], i) => {
-    const ms = members.get(id).sort((a, b) => b.count - a.count || a.suite.localeCompare(b.suite));
-    const now = sum(ms, 'count');
-    const change = inRange.length > 1 ? (last.macro[id] ?? 0) - (first.macro[id] ?? 0) : null;
-    return `
-      <div class="ci-multiple" data-macro="${esc(id)}">
-        <div class="ci-multiple-head">
-          <div>
-            <h3 class="ci-multiple-title">
-              <span class="swatch" style="background:var(${cssVar})"></span>${esc(name)}
-            </h3>
-            <p class="ci-multiple-desc">${esc(desc)}</p>
-          </div>
-          <div class="ci-multiple-figure">
-            <span class="ci-multiple-value">${esc(fmtCount(now))}</span>
-            <span class="ci-multiple-change">${change == null ? '' : esc(fmtSignedCount(change))}</span>
-          </div>
-        </div>
-        <div class="ci-chart-wrap">
-          <div class="ci-chart" id="ci-macro-chart-${i}"></div>
-          <div class="ci-tooltip" id="ci-macro-tooltip-${i}" hidden></div>
-        </div>
-        <details class="ci-multiple-members">
-          <summary>${ms.length} suite${ms.length === 1 ? '' : 's'}</summary>
-          <ul>${ms.map((m) => `
-            <li><span class="name">${esc(m.suite)}</span>
-                <span class="val">${esc(fmtCount(m.count))}</span></li>`).join('')}
-          </ul>
-        </details>
-      </div>`;
-  }).join('');
-
-  groups.forEach(([id, name, cssVar], i) => {
-    const chart = document.getElementById(`ci-macro-chart-${i}`);
-    if (inRange.length < 2) {
-      chart.innerHTML = '<div class="ci-empty">Needs two runs in range.</div>';
-      return;
-    }
-    drawLineChart({
-      host: chart,
-      tooltip: document.getElementById(`ci-macro-tooltip-${i}`),
-      idPrefix: `ci-macro-${i}`,
-      series: [{
-        key: id, label: name, color: `var(${cssVar})`,
-        pts: inRange.map((p) => ({ x: p.ts, y: p.macro[id] ?? 0, sha: p.sha })),
-      }],
-      xs: inRange.map((p) => p.ts),
-      ticksY: (lo, hi) => decimalTicks(lo, hi, 3),
-      fmtY: fmtCount,
-      fmtTickY: fmtCountTick,
-      footer: '',
-      label: `${name}: tests over time`,
-      height: 170,
-      directLabels: false,
-    });
-  });
 }
 
 // ── RENDER: REPORT FLOW ─────────────────────────────────────────────────────
@@ -2248,7 +2147,6 @@ async function boot() {
   const redraw = new Map([
     [document.getElementById('ci-chart'), renderChart],
     [document.getElementById('ci-counts-chart'), renderCounts],
-    [document.getElementById('ci-macro-grid'), renderCounts],
     [document.getElementById('ci-loc-chart'), renderLoc],
     [document.getElementById('ci-docs-chart'), renderDocs],
     [document.getElementById('ci-flow-chart'), renderFlow],

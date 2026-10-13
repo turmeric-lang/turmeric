@@ -272,7 +272,6 @@ test.describe('CI metrics dashboard', () => {
     // flat line's zero-height box reads as hidden.
     await page.locator('#ci-tab-counts').click();
     await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(1);
-    await expect(page.locator('#ci-macro-grid .ci-multiple').first()).toBeVisible();
 
     // The line-count chart is on the Code tab. Switch to it and verify.
     await page.locator('#ci-tab-code').click();
@@ -500,7 +499,7 @@ test.describe('CI metrics dashboard', () => {
     await expect(tip.locator('.ci-tooltip-head .mono')).toHaveText(/^[0-9a-f]{7}$/);
   });
 
-  test('the Test counts tab charts total tests and tests per macro-suite', async ({ page }) => {
+  test('the Test counts tab charts total tests', async ({ page }) => {
     await stubLoc(page);
     await stubDocs(page);
     await page.goto('/ci');
@@ -517,28 +516,10 @@ test.describe('CI metrics dashboard', () => {
     await expect(tiles.filter({ hasText: 'Change in range' })).toContainText('+10');
     await expect(page.locator('#ci-counts-sub')).toContainText('23 other suites');
 
-    // Chart 1: the total, one line, with its own hover.
+    // The total, one line, with its own hover.
     await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(1);
     await page.locator('#ci-counts-hit').hover();
     await expect(page.locator('#ci-counts-tooltip')).toBeVisible();
-
-    // Chart 2: one small multiple per macro-suite that has a counted suite,
-    // in palette order, each with its own chart.
-    const cards = page.locator('#ci-macro-grid .ci-multiple');
-    await expect(cards).toHaveCount(2);
-    await expect(cards.nth(0)).toHaveAttribute('data-macro', 'fixtures');
-    await expect(cards.nth(0).locator('.ci-multiple-value')).toHaveText('5,000');
-    await expect(cards.nth(0).locator('.ci-multiple-change')).toHaveText('+10');
-    await expect(cards.nth(1)).toHaveAttribute('data-macro', 'spices');
-    await expect(cards.nth(1).locator('.ci-multiple-value')).toHaveText('80');
-    await expect(page.locator('#ci-macro-grid .ci-series-line')).toHaveCount(2);
-
-    // A group says which suites it adds up.
-    await cards.nth(0).locator('summary').click();
-    const members = cards.nth(0).locator('.ci-multiple-members li');
-    await expect(members).toHaveCount(2);
-    await expect(members.nth(0)).toContainText('turi_fixture_tests');
-    await expect(members.nth(1)).toContainText('tur_tests');
 
     // Not environment-locked: no picker of its own.
     await expect(page.locator('#ci-panel-counts select')).toHaveCount(0);
