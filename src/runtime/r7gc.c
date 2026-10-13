@@ -173,7 +173,7 @@
  * image is a few KiB, and as a large object each one cost a 64 KiB mapping.
  * `unused`: a split build's later units carry this table but only prototypes
  * of the functions that read it (emit_split_export_static_fns). */
-static const uint32_t tur_gc_class_size[TUR_GC_NCLASS] __attribute__((unused)) = {
+static const uint32_t __attribute__((unused)) tur_gc_class_size[TUR_GC_NCLASS] = {
     16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384,
     448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560, 3072,
     3584, 4096, 5120, 6144, 8192, 10912, 13104, 16384, 21840, 32768
