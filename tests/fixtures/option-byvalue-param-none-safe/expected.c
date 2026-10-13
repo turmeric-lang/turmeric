@@ -10730,7 +10730,7 @@ static void printf_hyfloat6(double x) {
   
 }
 
-static double PI_39;
+static double PI_2000034;
 static double tur_u_tan(double x) {
         return __builtin_tan(x);
   
@@ -10986,7 +10986,7 @@ static void __tur_module_def_init(void) {
     SCHEMA_unAP_1001546 = INT64_C(14);
     SCHEMA_unFIELD_1001547 = INT64_C(15);
     SCHEMA_unAP_unFAT_1001548 = INT64_C(16);
-    PI_39 = 3.141592653589793;
+    PI_2000034 = 3.141592653589793;
 }
 
 TUR_FATBOX_DEF(__tur_fatbox_0, __tur_fatshim_bool_int64_t_int64_t, __fn_1001064)

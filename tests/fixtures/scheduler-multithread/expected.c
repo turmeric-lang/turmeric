@@ -10776,24 +10776,24 @@ int main(int argc, char **argv) {
         {
             void * __ps_205 = (scheduler_hymt_hynew(INT64_C(2)));
             /* panic-return-signal: ret ctype unknown; no propagation here */
-            void * sched_57 = __ps_205;
-            (void)sched_57;
+            void * sched_6 = __ps_205;
+            (void)sched_6;
             {
                 void * __ps_206 = (fiber_hynew((void *)(intptr_t)(fiber_hya), INT64_C(0)));
                 /* panic-return-signal: ret ctype unknown; no propagation here */
-                void * fa_58 = __ps_206;
-                (void)fa_58;
+                void * fa_7 = __ps_206;
+                (void)fa_7;
                 {
                     void * __ps_207 = (fiber_hynew((void *)(intptr_t)(fiber_hyb), INT64_C(0)));
                     /* panic-return-signal: ret ctype unknown; no propagation here */
-                    void * fb_59 = __ps_207;
-                    (void)fb_59;
-                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_57), (void *)(intptr_t)(fa_58));
-                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_57), (void *)(intptr_t)(fb_59));
+                    void * fb_8 = __ps_207;
+                    (void)fb_8;
+                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_6), (void *)(intptr_t)(fa_7));
+                    scheduler_hymt_hyspawn((void *)(intptr_t)(sched_6), (void *)(intptr_t)(fb_8));
                     thread_hysleep(INT64_C(100));
-                    scheduler_hymt_hyfree((void *)(intptr_t)(sched_57));
-                    fiber_hyfree((void *)(intptr_t)(fa_58));
-                    fiber_hyfree((void *)(intptr_t)(fb_59));
+                    scheduler_hymt_hyfree((void *)(intptr_t)(sched_6));
+                    fiber_hyfree((void *)(intptr_t)(fa_7));
+                    fiber_hyfree((void *)(intptr_t)(fb_8));
                 }
             }
             int64_t __t208;
