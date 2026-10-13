@@ -1,0 +1,34 @@
+;; app/shapes -- defines the ADTs app/main constructs.  Their constructors
+;; are `static` in this module's .c; the header carries only the layouts.
+
+(defmodule app/shapes
+  (export area Rect Circle Dot describe Pt pt-sum INil ICons ilen Box box-get)
+
+  ;; by value: a wide variant (over 16 bytes) and a nullary one
+  (defdata Shape (Circle :int) (Rect :int :int) (Dot))
+  ;; a record ADT
+  (defdata Pt (Pt [x : int y : int z : int]))
+  ;; recursive, so a heap carrier
+  (defdata IList (INil) (ICons :int IList))
+  ;; parametric
+  (defdata Box [a] (Box :a))
+
+  (defn area [s : Shape] : int
+    (match s
+      (Circle r) (* 3 r)
+      (Rect w h) (* w h)
+      (Dot) 0))
+  (defn describe [s : Shape] : cstr
+    (match s
+      (Circle _) "circle"
+      (Rect _ _) "rect"
+      (Dot) "dot"))
+  (defn pt-sum [p : Pt] : int
+    (+ (.x p) (+ (.y p) (.z p))))
+  (defn ilen [l : IList] : int
+    (match l
+      (INil) 0
+      (ICons _ t) (+ 1 (ilen t))))
+  (defn box-get [b : (Box int)] : int
+    (match b
+      (Box v) v)))

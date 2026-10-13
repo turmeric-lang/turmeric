@@ -13555,6 +13555,16 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 char arg_emitted_cty[256];
                 snprintf(arg_emitted_cty, sizeof arg_emitted_cty, "%s",
                          ctx->call_ret_note);
+                /* shared-build-imported-ctor-undeclared: and clear it.  The
+                 * hoist leaves the note set for exactly this read; left set
+                 * after the LAST argument, it became THIS call's note, and
+                 * the panic-hoist declared the call's own temp with the
+                 * argument's type whenever the callee's return type was not
+                 * recorded -- an imported function under separate compilation:
+                 * `tur_adt_Shape __ps = app__geo__area2(&s)` for an `int64_t`
+                 * result.  A builder that knows its own return type notes it
+                 * after this loop, so nothing it says is lost. */
+                ctx->call_ret_note[0] = '\0';
                 /* byvalue-result-param-ok-predicate-materialize-bad-cast: set
                  * once a pass-by-pointer struct *parameter* argument has been
                  * converted to the int64 carrier by a pointer cast (its C value

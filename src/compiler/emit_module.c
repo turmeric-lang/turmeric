@@ -22122,6 +22122,103 @@ static int emit_header_inner(Buf *out, const char *module_name, const Expr *prog
     return 0;
 }
 
+/* shared-build-imported-ctor-undeclared: the ADTs whose constructors a module
+ * calls.  A constructor is emitted `static` in its defining module's .c only
+ * (Pass 0 below), and the header carries just the TUR_TD_-guarded layout
+ * (emit_header's typedef_only pass), so under separate compilation a module
+ * that BUILDS a value of an imported ADT called `ctor_Shape_Rect` with nothing
+ * declaring it -- an implicit `int`, then "invalid initializer".  The walk
+ * finds the calls; the caller emits those constructors into this TU as well. */
+typedef struct { const AdtDef **v; uint32_t n, cap; } CtorAdtSet;
+
+static bool ctor_adt_set_has(const CtorAdtSet *s, const AdtDef *d) {
+    for (uint32_t i = 0; i < s->n; i++) if (s->v[i] == d) return true;
+    return false;
+}
+
+static void ctor_adt_set_add(CtorAdtSet *s, const AdtDef *d) {
+    if (!d || ctor_adt_set_has(s, d)) return;
+    if (s->n == s->cap) {
+        uint32_t nc = s->cap ? s->cap * 2 : 8;
+        const AdtDef **nv = (const AdtDef **)realloc(s->v, nc * sizeof(*nv));
+        if (!nv) return;
+        s->v = nv;
+        s->cap = nc;
+    }
+    s->v[s->n++] = d;
+}
+
+/* The ADT a call constructs, or NULL.  Mirrors emit_ctor_owner_adt (emit_expr.c)
+ * without its bare result-type fallback, which would claim every call that
+ * returns an ADT: the resolved CtorDef; a nullary constructor, whose binding is
+ * typed as the ADT itself; a SYNTHESIZED call (elab_partial_apply's `__pap`
+ * body), which has no CtorDef but calls one of its result ADT's constructors by
+ * name. */
+static const AdtDef *call_constructed_adt(const Expr *e) {
+    if (e->as.call_.ctor && e->as.call_.ctor->adt) return e->as.call_.ctor->adt;
+    const Binding *fb = e->as.call_.fn_binding;
+    if (!fb || !fb->name || !fb->name->name) return NULL;
+    if (fb->type.kind == TY_ADT && fb->type.as.adt_.def) return fb->type.as.adt_.def;
+    if (e->type.kind != TY_ADT || !e->type.as.adt_.def) return NULL;
+    const AdtDef *d = e->type.as.adt_.def;
+    for (uint32_t ci = 0; ci < d->n_ctors; ci++)
+        if (d->ctors[ci] && d->ctors[ci]->name &&
+            strcmp(d->ctors[ci]->name, fb->name->name) == 0)
+            return d;
+    return NULL;
+}
+
+static void collect_constructed_adts(const Expr *e, CtorAdtSet *acc);
+static bool collect_constructed_adts_visit(const Expr *c, void *ud) {
+    collect_constructed_adts(c, (CtorAdtSet *)ud);
+    return false;
+}
+
+/* Every operand through cps_visit_children, plus the nested function bodies it
+ * treats as boundaries -- a lambda builds values too. */
+static void collect_constructed_adts(const Expr *e, CtorAdtSet *acc) {
+    if (!e) return;
+    if (e->kind == EX_CALL) ctor_adt_set_add(acc, call_constructed_adt(e));
+    switch (e->kind) {
+        case EX_FN_DEF:
+            if (e->as.fn_def_.fn) collect_constructed_adts(e->as.fn_def_.fn->body, acc);
+            return;
+        case EX_FN:
+            if (e->as.fn_.fn) collect_constructed_adts(e->as.fn_.fn->body, acc);
+            return;
+        case EX_CLOSURE:
+            if (e->as.closure_.closure && e->as.closure_.closure->fn)
+                collect_constructed_adts(e->as.closure_.closure->fn->body, acc);
+            return;
+        default:
+            (void)cps_visit_children(e, collect_constructed_adts_visit, acc);
+            return;
+    }
+}
+
+/* Emit, into `out`, the constructors of every ADT this module's items construct
+ * but do not define.  `static`, so a per-TU copy needs no linkage change; the
+ * layout inside is the same TUR_TD_-guarded typedef the included header already
+ * defined, so it is a no-op here.  Whole-program builds never need this: they
+ * flatten every module into one program, where each ADT is local. */
+static void emit_imported_adt_ctors(Buf *out, const Expr **items, uint32_t n_items) {
+    CtorAdtSet local = {0}, used = {0};
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Expr *e = items[i];
+        if (e->kind == EX_DEFDATA || e->kind == EX_DEFGADT)
+            ctor_adt_set_add(&local, e->kind == EX_DEFGADT ? e->as.defgadt_.def
+                                                           : e->as.defdata_.def);
+    }
+    for (uint32_t i = 0; i < n_items; i++) collect_constructed_adts(items[i], &used);
+    for (uint32_t i = 0; i < used.n; i++) {
+        const AdtDef *d = used.v[i];
+        if (ctor_adt_set_has(&local, d) || d->superseded || d->is_opaque) continue;
+        emit_adt_typedef_and_ctors(out, d, false);
+    }
+    free(local.v);
+    free(used.v);
+}
+
 /* Emit a C implementation file for a module. Contains definitions. */
 /* Emit a C implementation file for a module. Contains definitions.
  * When separate_compilation is true (Phase M3): #includes imported modules'
@@ -22467,6 +22564,10 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
             emit_adt_typedef_and_ctors(&impl_early, adef, false);
         }
     }
+    /* shared-build-imported-ctor-undeclared: and the constructors this module
+     * calls of an ADT another module defines. */
+    if (separate_compilation)
+        emit_imported_adt_ctors(&impl_early, impl_items, impl_n_items);
 
     /* Pass 1a: emit all file-scope inline-C blocks before any defn body.
      * Dependency-based reordering (or a top-level C block that lands after

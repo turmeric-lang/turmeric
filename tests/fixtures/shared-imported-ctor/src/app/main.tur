@@ -1,0 +1,26 @@
+;; app/main -- constructs every kind of app/shapes ADT: by value (wide and
+;; nullary), a record, a recursive heap list, a parametric box, inside a
+;; lambda, and through a partially applied constructor.  Matches on one too.
+
+(defmodule app/main
+  (import app/shapes :refer [area Rect Circle Dot describe Pt pt-sum
+                             INil ICons ilen Box box-get])
+
+  (defn main [] : int
+    (println (area (Rect 2 4)))
+    (println (area (Circle 5)))
+    (println (area (Dot)))
+    (println (describe (Rect 1 1)))
+    (let [s (Circle 2)]
+      (println (match s
+                 (Circle r) r
+                 (Rect w h) (+ w h)
+                 (Dot) -1)))
+    (println (pt-sum (Pt 1 2 3)))
+    (println (ilen (ICons 1 (ICons 2 (ICons 3 (INil))))))
+    (println (box-get (Box 41)))
+    (let [mk (fn [n : int] : int (area (Rect n n)))]
+      (println (mk 6)))
+    (let [r3 (Rect 3)]
+      (println (area (r3 7))))
+    0))

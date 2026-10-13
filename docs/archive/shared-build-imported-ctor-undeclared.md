@@ -1,5 +1,40 @@
 # `tur build --shared` of a multi-module project: an imported constructor is undeclared
 
+**RESOLVED 2026-10-13 -- fix direction 1, plus a stale note it uncovered.**
+The repro builds as a shared library, and its per-module C links and runs with
+the whole-program build's output.
+
+- **The constructors.** Under separate compilation, `emit_implementation`
+  (`src/compiler/emit_module.c`) now walks the module's items for
+  constructor calls (`emit_imported_adt_ctors` / `collect_constructed_adts`)
+  and emits, into its own `.c`, the constructors of every ADT it constructs
+  but does not define. They stay `static`, so the per-TU copy needs no
+  linkage change, and the layout they carry is the `TUR_TD_`-guarded typedef
+  the included header already defined. A call counts when it has a resolved
+  CtorDef, calls a nullary constructor, or is a synthesized `__pap` body
+  calling one of its result ADT's constructors by name. The walk descends
+  into lambdas, which `cps_visit_children` treats as boundaries.
+- **The stale note.** With the constructor declared, the build still failed:
+  `tur_adt_Shape __ps = app__geo__area2(&s)` for an `int64_t` result. A
+  hoisted call leaves `call_ret_note` set to its temp's type, so the
+  enclosing call's argument loop can read it (SR2b). Nothing cleared it after
+  the LAST argument, so it became the enclosing call's own note, and the
+  panic-hoist used it whenever the callee's return type was not recorded. An
+  imported function under separate compilation is exactly that callee. The
+  argument loop in `emit_expr.c` now clears the note once it has captured it
+  (`arg_emitted_cty`). A whole-program build always has the callee's
+  forward-declared type, which is why this never showed there.
+- Pinned by `tests/run-shared-imported-ctor.sh` (ctest
+  `tur_shared_imported_ctor`, fixture `tests/fixtures/shared-imported-ctor`):
+  a wide by-value variant, a nullary one, a record ADT, a recursive heap
+  list, a parametric box, a constructor inside a lambda and a partially
+  applied one, plus a `match` on an imported ADT. The harness builds
+  `--shared`, checks `app__main.c` defines `ctor_Shape_Rect`, links and runs
+  the per-module C, and runs the whole-program build; both print the same.
+  Before the fix the shared build fails with 13 C errors.
+
+---
+
 **Severity: medium.** A correct multi-module project fails to build as a
 shared library as soon as one module calls a constructor of an ADT defined in
 another. The same project builds and runs as an executable (`tur build <dir>`,

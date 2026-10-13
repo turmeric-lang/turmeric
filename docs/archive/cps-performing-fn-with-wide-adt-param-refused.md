@@ -29,8 +29,8 @@ repro prints `11` compiled, as the interpreter does.
   (`tur build <dir>`, the performing function in an imported module), and
   `tur build --shared` with the function internal to the exported module. All
   three were refused before and are correct now. The `--shared` build of a
-  multi-module project is broken independently of this:
-  [shared-build-imported-ctor-undeclared](../reported/shared-build-imported-ctor-undeclared.md).
+  multi-module project was broken independently of this, and is fixed too:
+  [shared-build-imported-ctor-undeclared](shared-build-imported-ctor-undeclared.md).
   A generic that performs is refused at every width, `int` included -- also
   filed separately:
   [generic-fn-performing-caller-handled-effect-refused](../reported/generic-fn-performing-caller-handled-effect-refused.md).
