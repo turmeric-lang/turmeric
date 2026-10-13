@@ -4,7 +4,8 @@
 # policies in iam/, bootstraps CDK under its own qualifier (so it never
 # touches an existing CDKToolkit stack), and optionally creates the
 # least-privilege IAM user whose access key a Claude Code environment or a
-# CI job gets.  README.md "Credentials and permissions" explains each piece.
+# CI job gets.  docs/design/aws-bench-box-design.md "Credentials and
+# permissions" explains each piece.
 #
 #   AWS_PROFILE=admin scripts/bootstrap-account.sh                 # policies + bootstrap
 #   AWS_PROFILE=admin scripts/bootstrap-account.sh --create-user   # ...and the operator user + one key

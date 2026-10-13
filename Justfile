@@ -668,7 +668,8 @@ perf: perf-run perf-aggregate perf-analyze perf-docs perf-viz perf-open
 # infra/bench-box/ is a CDK app: `bench-box-up` deploys one m7i.xlarge
 # (override with BENCH_INSTANCE_TYPE / BENCH_ARCH / BENCH_GIT_REF /
 # BENCH_MAX_UPTIME_HOURS), `bench-box-down` destroys everything.  Access is
-# SSM Session Manager; nothing is open inbound.  See infra/bench-box/README.md.
+# SSM Session Manager; nothing is open inbound.  See
+# docs/design/aws-bench-box-design.md.
 
 BENCH := "infra/bench-box"
 
