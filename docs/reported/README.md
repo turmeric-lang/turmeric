@@ -34,11 +34,17 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing adt-handle-result-as-call-arg-evicts (filed 2026-10-13)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-performing-fn-with-wide-adt-param-refused](cps-performing-fn-with-wide-adt-param-refused.md) | low-medium | A function that `perform`s and takes a by-value aggregate over 16 bytes (`(Rect :int :int)`) is `SIG-REJECT`ed by `fn_byval_agg_param_ok`, so the `perform` has "no lowering here" and the effect's other functions evict too; the interpreter runs it. The exclusion predates the entry wrapper learning the `const T *` spelling. |
+
 ## Found fixing effect-cont-aggregate-result-untyped (filed 2026-10-13)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [adt-handle-result-as-call-arg-evicts](adt-handle-result-as-call-arg-evicts.md) | low | `(area (handle (Rect ...) ...))` -- a wide by-value ADT `handle` result passed straight to an uncolored callee -- evicts the function (`call_arg_ok` refuses the raw aggregate) and every function sharing its effect; `let`-binding it first compiles. |
+| ~~[adt-handle-result-as-call-arg-evicts](../archive/adt-handle-result-as-call-arg-evicts.md)~~ | low | **RESOLVED 2026-10-13** (archived): the CPS call gate admits a wide by-value aggregate (over 16 bytes, `type_struct_pass_by_ptr`) at a cps->direct call whose callee declares the same type, and the argument renderer passes `&(atom)` for the direct path's `const T *` parameter, as the direct emitter does. Pinned by `cps-wide-adt-handle-call-arg` (tail and non-tail calls, a wide struct between scalars, a float product, a sibling sharing the effect; leak-checked) |
 
 ## Gaps left by the resume / shift work (filed 2026-10-13)
 
