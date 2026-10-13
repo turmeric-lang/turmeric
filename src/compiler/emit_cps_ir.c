@@ -792,30 +792,53 @@ static const FnDef *cps_fd_of_binding(const Binding *b);   /* defined beside ent
  * by-value aggregate atom raw, which is exactly that signature.  So `(wrap-val
  * (handle (mk-wrap) ...))` in a colored `main` need not evict: admit the atom
  * when the callee's declared parameter spells the SAME aggregate C type as the
- * atom, narrow (not wide -- a wide by-value ADT param is passed by pointer on
- * the direct path, which the raw emission would not match). */
-static bool cps_direct_param_takes_agg_raw(const Binding *fn, uint32_t i,
-                                           const CAtom *a) {
-    if (!g_emit_ctx || !fn || fn->type.kind != TY_FN || !a || !a->type) return false;
-    if (i >= fn->type.as.fn.arity) return false;
-    if (fn->closure_fn_binding) return false;
+ * atom.
+ *
+ * adt-handle-result-as-call-arg-evicts: a WIDE by-value aggregate (over 16
+ * bytes -- tag word plus widest variant, adt_byval_pass_by_ptr -- such as
+ * `(Rect :int :int)`) is declared `const tur_adt_Shape *` on the direct
+ * path, so it is admitted too and passed by ADDRESS (`&(atom)`, the direct
+ * emitter's own `area(&s)`).  `(area (handle (Rect ...) ...))` evicted the
+ * caller -- and, through BODY-TAINT, every function sharing its effect --
+ * while the `let`-bound twin, delegated whole to the direct emitter, built.
+ * The by-pointer rule mirrors the direct forward decl (cps_entry_param_by_ptr):
+ * an inline-C or closure callee takes the aggregate by value, and a callee
+ * with no FnDef in hand is not assumed either way. */
+typedef enum { AGG_ARG_NO, AGG_ARG_RAW, AGG_ARG_ADDR } AggArgMode;
+static AggArgMode cps_direct_agg_arg_mode(const Binding *fn, uint32_t i,
+                                          const CAtom *a) {
+    if (!g_emit_ctx || !fn || fn->type.kind != TY_FN || !a || !a->type) return AGG_ARG_NO;
+    if (i >= fn->type.as.fn.arity) return AGG_ARG_NO;
+    if (fn->closure_fn_binding) return AGG_ARG_NO;
     const Type *pt = NULL;
     const FnDef *fd = cps_fd_of_binding(fn);
     if (fd && i < fd->n_params && fd->params[i]) {
-        if (fd->params[i]->is_poly_fn) return false;
+        if (fd->params[i]->is_poly_fn) return AGG_ARG_NO;
         pt = &fd->params[i]->type;
     } else if (fn->type.as.fn.arg_full_types) {
         pt = fn->type.as.fn.arg_full_types[i];
     }
-    if (!pt) return false;
-    if (pt->kind != a->type->kind) return false;
-    if (!type_eq(*pt, *a->type)) return false;
-    if (type_struct_pass_by_ptr(*a->type)) return false;   /* direct path takes `const T *` */
+    if (!pt) return AGG_ARG_NO;
+    if (pt->kind != a->type->kind) return AGG_ARG_NO;
+    if (!type_eq(*pt, *a->type)) return AGG_ARG_NO;
     const char *pc = binder_ctype_full(g_emit_ctx, pt->kind, pt);
     const char *ac = binder_ctype_full(g_emit_ctx, a->ty, a->type);
-    if (!pc || !ac || strcmp(pc, ac) != 0) return false;
-    if (strcmp(pc, "int64_t") == 0 || strchr(pc, '*')) return false;
-    return true;
+    if (!pc || !ac || strcmp(pc, ac) != 0) return AGG_ARG_NO;
+    if (strcmp(pc, "int64_t") == 0 || strchr(pc, '*')) return AGG_ARG_NO;
+    if (!type_struct_pass_by_ptr(*a->type)) return AGG_ARG_RAW;
+    /* The direct path takes `const T *` -- unless the callee is one it spells
+     * by value (cps_entry_param_by_ptr's exceptions), or unknown.  An UNCOLORED
+     * callee, the usual one here, has no CPS entry, so look it up in the
+     * program (as callee_effect_free does). */
+    const FnDef *dfd = fd ? fd : (g_prog ? fd_for_binding(g_prog, fn) : NULL);
+    if (!dfd || dfd->closure || (dfd->body && dfd->body->kind == EX_INLINE_C))
+        return AGG_ARG_NO;
+    if (a->kind != CA_VAR && a->kind != CA_CVAR) return AGG_ARG_NO;  /* addressable */
+    return AGG_ARG_ADDR;
+}
+static bool cps_direct_param_takes_agg_raw(const Binding *fn, uint32_t i,
+                                           const CAtom *a) {
+    return cps_direct_agg_arg_mode(fn, i, a) != AGG_ARG_NO;
 }
 
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
@@ -8355,10 +8378,13 @@ static bool cps_atom_recorded_ptr(const char *a) {
     size_t L = c ? strlen(c) : 0;
     return L >= 1 && c[L - 1] == '*';
 }
+/* `to_direct`: the call is cps->direct, to the callee's direct-emitter C
+ * signature (CT_LETCALL, the cps->direct tail arm), rather than to its `__cps`
+ * entry.  Only there does a wide by-value aggregate go by address. */
 static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
                                        const Binding *fn,
                                        const EmitAbiSpecialization *spec,
-                                       size_t *offs) {
+                                       size_t *offs, bool to_direct) {
     Buf b; buf_init(&b);
     for (uint32_t i = 0; i < n; i++) {
         if (i) buf_puts(&b, ", ");
@@ -8528,6 +8554,12 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
              * decides, as in the direct emitter's argument chain. */
             buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         }
+        else if (arg_is_byval_agg && to_direct &&
+                 cps_direct_agg_arg_mode(fn, i, &args[i]) == AGG_ARG_ADDR)
+            /* adt-handle-result-as-call-arg-evicts: the direct signature takes
+             * this wide aggregate as `const T *` -- pass its address, as the
+             * direct emitter does (`area(&s)`). */
+            buf_printf(&b, "&(%s)", a);
         else if (atom_is_fat_fn(&args[i]) || arg_is_byval_agg)
             buf_puts(&b, a);
         else if (param_is_voidp && arg_is_ptr && (!arg_c_ptr_known || arg_is_c_ptr))
@@ -8549,8 +8581,9 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
 }
 static char *atoms_csv_call_typed(CE *ce, const CAtom *args, uint32_t n,
                                   const Binding *fn,
-                                  const EmitAbiSpecialization *spec) {
-    return atoms_csv_call_typed_offs(ce, args, n, fn, spec, NULL);
+                                  const EmitAbiSpecialization *spec,
+                                  bool to_direct) {
+    return atoms_csv_call_typed_offs(ce, args, n, fn, spec, NULL, to_direct);
 }
 
 static void emit_term(CE *ce, const CTerm *t);
@@ -8976,7 +9009,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
             char *argv = (rr_lc || mclone_lc)
                 ? atoms_csv_call_clone(ce, t->as.letcall.args, t->as.letcall.n, fn)
                 : atoms_csv_call_typed(ce, t->as.letcall.args, t->as.letcall.n,
-                                       t->as.letcall.fn, lc_spec);
+                                       t->as.letcall.fn, lc_spec, true);
             char *bn = cvar_cname(ce, t->as.letcall.x);
             /* RM3 R4 (docs/archive/regions-plan.md): NO region boundary here,
              * deliberately.  The CPS path's `bt-scope` calls all land on the
@@ -9244,7 +9277,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 char *argv_t = atoms_csv_call_typed_offs(ce, t->as.tailcall.args,
                                                          t->as.tailcall.n, t->as.tailcall.fn,
                                                          find_spec_by_clone_name(ce->ctx, fn),
-                                                         arg_offs);
+                                                         arg_offs, false);
                 /* cps-self-tail-call-relies-on-sibling-call: a self tail call
                  * that hands on the function's own continuation, in its main
                  * body, is a loop.  `return f__cps(args, __kont)` left it to the
@@ -9430,7 +9463,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                     ? atoms_csv_call(ce, t->as.tailcall.args, t->as.tailcall.n)
                     : atoms_csv_call_typed(ce, t->as.tailcall.args,
                                            t->as.tailcall.n, t->as.tailcall.fn,
-                                           find_spec_by_clone_name(ce->ctx, fn));
+                                           find_spec_by_clone_name(ce->ctx, fn), true);
                 /* Edge 2a (generic-show-wrapper-cps-monomorphization-plan): a
                  * `:nil`/`:void`-returning callee (a `^Show a` wrapper like
                  * `show-line`/`print-show`, `tur_contract_check`, ...) emits as C
@@ -11098,7 +11131,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         /* Param-type-aware carrier casts (gcc14-int-conversion). */
         char *argv_t = atoms_csv_call_typed(ce, call->as.tailcall.args,
                                             call->as.tailcall.n, call->as.tailcall.fn,
-                                            find_spec_by_clone_name(ce->ctx, fn));
+                                            find_spec_by_clone_name(ce->ctx, fn), false);
         ce_line(ce, "return %s__cps(%s, %s); /* cps->cps heap join */", fn, argv_t, frame);
         free(argv_t);
     }

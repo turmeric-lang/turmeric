@@ -34,11 +34,17 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing adt-handle-result-as-call-arg-evicts (filed 2026-10-13)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cps-performing-fn-with-wide-adt-param-refused](cps-performing-fn-with-wide-adt-param-refused.md) | low-medium | A function that `perform`s and takes a by-value aggregate over 16 bytes (`(Rect :int :int)`) is `SIG-REJECT`ed by `fn_byval_agg_param_ok`, so the `perform` has "no lowering here" and the effect's other functions evict too; the interpreter runs it. The exclusion predates the entry wrapper learning the `const T *` spelling. |
+
 ## Found fixing effect-cont-aggregate-result-untyped (filed 2026-10-13)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [adt-handle-result-as-call-arg-evicts](adt-handle-result-as-call-arg-evicts.md) | low | `(area (handle (Rect ...) ...))` -- a wide by-value ADT `handle` result passed straight to an uncolored callee -- evicts the function (`call_arg_ok` refuses the raw aggregate) and every function sharing its effect; `let`-binding it first compiles. |
+| ~~[adt-handle-result-as-call-arg-evicts](../archive/adt-handle-result-as-call-arg-evicts.md)~~ | low | **RESOLVED 2026-10-13** (archived): the CPS call gate admits a wide by-value aggregate (over 16 bytes, `type_struct_pass_by_ptr`) at a cps->direct call whose callee declares the same type, and the argument renderer passes `&(atom)` for the direct path's `const T *` parameter, as the direct emitter does. Pinned by `cps-wide-adt-handle-call-arg` (tail and non-tail calls, a wide struct between scalars, a float product, a sibling sharing the effect; leak-checked) |
 
 ## Gaps left by the resume / shift work (filed 2026-10-13)
 
@@ -49,9 +55,9 @@ not fixed there.
 | --- | --- | --- |
 | [cps-wrapper-ascribed-adt-store-misses-int-ptr-bridge](cps-wrapper-ascribed-adt-store-misses-int-ptr-bridge.md) | high (macOS build failure; v0.49.0 regression) | A CPS-lowered function that ascribes a by-value-ADT call to `:int` emits `__t0 = __t252;` into an `int64_t` with no bridging cast; AppleClang 21 rejects it, gcc only warns. |
 | [release-tarball-turi-headers-are-unusable](release-tarball-turi-headers-are-unusable.md) | high (turi embedders) | Release archives since v0.47.0 ship `include/turi/` headers that do not compile, and `tur` looks for them at a path the archive lacks; no libturi consumer builds against a release. |
-| [cont-query-on-wrapped-handler-k-reads-past-wrapper](cont-query-on-wrapped-handler-k-reads-past-wrapper.md) | medium (out-of-bounds read) | `(cont? k)` on a fn-payload case's `k` reads `((DK *)k)->consumed` from the 32-byte `tur_cloneable_cont` wrapper -- ASan heap-buffer-overflow; the answer is whatever byte is there. `emit_resume` tells the shapes apart, `cont?` does not. |
+| ~~[cont-query-on-wrapped-handler-k-reads-past-wrapper](../archive/cont-query-on-wrapped-handler-k-reads-past-wrapper.md)~~ | medium (out-of-bounds read) | **RESOLVED 2026-10-13** (archived): both `cont?` lowerings call `__dk_cont_live_word`, which checks for a `__dk_cont_fn` wrapper before reading `consumed` off a bare chain; a wrapper is live before and after a resume. Pinned by `cont-query-wrapped-handler-k` (leak-checked) |
 | [resume-of-non-continuation-int-crashes](resume-of-non-continuation-int-crashes.md) | low-medium | `(resume k v)` with `k` a plain int (`(h 5 6)`) segfaults compiled (`__dk_resume_word` dereferences it); the interpreter says "not a continuation"; `(cont? 5)` does the same through `__dk_cont_live_word`. `int` stays accepted because a stored or untyped handler `k` is still carried as one. |
-| [effect-cont-aggregate-result-untyped](effect-cont-aggregate-result-untyped.md) | low | `effect-cont<P>` with a struct P does not type the resume (the cont type keeps its result as a bare kind), so a helper declared `: P` is refused with TUR-E0709; the interpreter runs it. |
+| ~~[effect-cont-aggregate-result-untyped](../archive/effect-cont-aggregate-result-untyped.md)~~ | low | **RESOLVED 2026-10-13** (archived): the cont type carries the whole written result type (`Type.as.cont.returns_full`), which `elab_make_resume` prefers to the scalar ladder, so an aggregate resume is typed and crosses the slot boxed. Pinned by `effect-cont-aggregate-result` (leak-checked) |
 | [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. |
 
 ## Found fixing resume-of-cont-typed-param-is-a-no-op (filed 2026-10-12)
