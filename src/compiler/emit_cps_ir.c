@@ -8917,10 +8917,14 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
             char *bn = cvar_cname(ce, t->as.letprim.x);
             if (sp->c_op && strcmp(sp->c_op, "TUR_DK_CONT_PRED") == 0) {
                 /* (cont? k): the DK handler-case continuation is unconsumed until
-                 * a user `resume` sets its `consumed` flag (emit_resume).  The k
-                 * atom is `int64_t` or `DK *` depending on the case; `(DK *)(intptr_t)`
-                 * normalizes both. */
-                ce_line(ce, "%s = !((DK *)(intptr_t)(%s))->consumed;", bn, n ? as[0] : "0");
+                 * a user `resume` sets its `consumed` flag (emit_resume).  A
+                 * fn-payload / __Shift case's k is the cloneable wrapper around
+                 * the chain, and a k that reached a helper may be either, so ask
+                 * __dk_cont_live_word, which tells them apart as
+                 * __dk_resume_word does (cont-query-on-wrapped-handler-k-reads-
+                 * past-wrapper).  The k atom is `int64_t` or `DK *` depending on
+                 * the case; `(intptr_t)` normalizes both. */
+                ce_line(ce, "%s = __dk_cont_live_word((intptr_t)(%s));", bn, n ? as[0] : "0");
             } else if (is_println_shape(sp->shape)) {
                 emit_println(ce, sp, n ? as[0] : "0");
                 ce_line(ce, "%s = 0;", bn);  /* nil result */
