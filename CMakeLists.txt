@@ -1131,6 +1131,17 @@ add_test(
   COMMAND bash tests/run-any-type-id-multi-module.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# shared-build-imported-ctor-undeclared: a module that constructs a value of
+# an ADT another module defines called that ADT's `static` constructor with
+# nothing in its TU declaring it, so `tur build --shared` failed at cc.  The
+# whole-program build inlines every module into one TU and hides it, so this
+# drives separate compilation.  See
+# docs/archive/shared-build-imported-ctor-undeclared.md.
+add_test(
+  NAME tur_shared_imported_ctor
+  COMMAND bash tests/run-shared-imported-ctor.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Sweet-exp manifest support: verifies build.tur.sweet is treated as a
 # fully equivalent manifest by walk-up discovery, pkg_manifest_read, and
 # tur init --sweet.  See docs/archive/history/build-tur-sweet-manifest-plan.md.

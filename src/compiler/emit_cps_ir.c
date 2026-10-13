@@ -326,11 +326,24 @@ static bool adt_int64_carrier(const Type *t) {
     return strcmp(type_c_name(*(Type *)t), "int64_t") == 0;
 }
 
+/* generic-fn-performing-caller-handled-effect-refused: inside a monomorph (a
+ * spec resolver is active), a type that STILL resolves to a type variable is
+ * the erased carrier.  A clone minted from another generic's base body binds
+ * the callee's `T` to the caller's own `T` -- `(defn outer [T] [x : T] : T
+ * (pass-through x))` -- and the concrete clone a later caller wants shares its
+ * name (`__spec__int64_t_int64_t`), so this is the one that is emitted.  Its C
+ * signature spells such a value `int64_t`, and it crosses a slot or an env as
+ * that word.  Outside a monomorph a bare type variable keeps the old answer:
+ * the template gates are built on refusing it. */
+static bool mono_erased_tyvar(const Type *r) {
+    return g_cps_mono_resolver && r && r->kind == TY_TYVAR;
+}
+
 static bool slot_ok_t(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
     return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r)
-        || erased_adt_carrier(r) || adt_int64_carrier(r);
+        || erased_adt_carrier(r) || adt_int64_carrier(r) || mono_erased_tyvar(r);
 }
 
 /* Signature-position slot gate (a colored function's PARAMS and RETURN).  It is
@@ -803,10 +816,17 @@ static const FnDef *cps_fd_of_binding(const Binding *b);   /* defined beside ent
  * while the `let`-bound twin, delegated whole to the direct emitter, built.
  * The by-pointer rule mirrors the direct forward decl (cps_entry_param_by_ptr):
  * an inline-C or closure callee takes the aggregate by value, and a callee
- * with no FnDef in hand is not assumed either way. */
+ * with no FnDef in hand is not assumed either way.
+ *
+ * cps-performing-fn-with-wide-adt-param-refused: `to_cps_entry` is an E2a
+ * `via_registry` call -- `(f s)` through a threaded fn-value param.  It is
+ * classed cps->direct (`f` is no SEnt), but it dispatches to the value's
+ * `__cps` entry (an aggregate argument has no direct fallback,
+ * e2a_slot_kind_ok), and every `__cps` entry takes a by-value aggregate BY
+ * VALUE (emit_params), wide or not.  So the argument crosses raw there. */
 typedef enum { AGG_ARG_NO, AGG_ARG_RAW, AGG_ARG_ADDR } AggArgMode;
 static AggArgMode cps_direct_agg_arg_mode(const Binding *fn, uint32_t i,
-                                          const CAtom *a) {
+                                          const CAtom *a, bool to_cps_entry) {
     if (!g_emit_ctx || !fn || fn->type.kind != TY_FN || !a || !a->type) return AGG_ARG_NO;
     if (i >= fn->type.as.fn.arity) return AGG_ARG_NO;
     if (fn->closure_fn_binding) return AGG_ARG_NO;
@@ -825,7 +845,7 @@ static AggArgMode cps_direct_agg_arg_mode(const Binding *fn, uint32_t i,
     const char *ac = binder_ctype_full(g_emit_ctx, a->ty, a->type);
     if (!pc || !ac || strcmp(pc, ac) != 0) return AGG_ARG_NO;
     if (strcmp(pc, "int64_t") == 0 || strchr(pc, '*')) return AGG_ARG_NO;
-    if (!type_struct_pass_by_ptr(*a->type)) return AGG_ARG_RAW;
+    if (to_cps_entry || !type_struct_pass_by_ptr(*a->type)) return AGG_ARG_RAW;
     /* The direct path takes `const T *` -- unless the callee is one it spells
      * by value (cps_entry_param_by_ptr's exceptions), or unknown.  An UNCOLORED
      * callee, the usual one here, has no CPS entry, so look it up in the
@@ -837,12 +857,12 @@ static AggArgMode cps_direct_agg_arg_mode(const Binding *fn, uint32_t i,
     return AGG_ARG_ADDR;
 }
 static bool cps_direct_param_takes_agg_raw(const Binding *fn, uint32_t i,
-                                           const CAtom *a) {
-    return cps_direct_agg_arg_mode(fn, i, a) != AGG_ARG_NO;
+                                           const CAtom *a, bool to_cps_entry) {
+    return cps_direct_agg_arg_mode(fn, i, a, to_cps_entry) != AGG_ARG_NO;
 }
 
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
-                         bool cps_to_direct) {
+                         bool cps_to_direct, bool to_cps_entry) {
     bool cef = callee_effect_free(fn);
     for (uint32_t i = 0; i < n; i++) {
         /* Pure higher-order value threading into an effect-free callee is admitted
@@ -856,11 +876,23 @@ static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
         if (cef && atom_is_fn_value(&args[i]) && !atom_is_fat_fn(&args[i])) continue;
         if (cps_to_direct && !call_arg_ok(&args[i], true) &&
             call_arg_ok(&args[i], false) &&
-            cps_direct_param_takes_agg_raw(fn, i, &args[i]))
+            cps_direct_param_takes_agg_raw(fn, i, &args[i], to_cps_entry))
             continue;
         if (!call_arg_ok(&args[i], cps_to_direct)) return false;
     }
     return true;
+}
+
+/* A CT_TAILCALL's arguments.  A cps->direct tail call (callee not CPS-emitted)
+ * passes its args RAW to the callee's direct-emitter C signature, so a by-value
+ * ADT arg must match it (call_args_ok).  A cps->cps tail call threads through
+ * `f__cps`, whose params the CPS backend emits with the matching ABI, so the
+ * wider atom_ok admits the by-value aggregate there -- as it does for an E2a
+ * `via_registry` call, which reaches a `__cps` entry too. */
+static bool tailcall_args_ok(const CTerm *t) {
+    bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
+    return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args, t->as.tailcall.n,
+                        cps_to_direct, t->as.tailcall.via_registry);
 }
 
 /* ---- C3 delimited-control subset predicates -------------------------- *
@@ -1322,7 +1354,9 @@ static void unw_take(char *uw, size_t n, char *uwc, size_t m) {
  * ADTs are rejected here (their copy would duplicate a refcount) -- they route
  * through cap_owning_ok / clone-on-read-out instead. */
 static bool cap_ty_ok(TypeKind ty, const Type *type) {
-    return slot_ty(ty) || slot_box_ty(type);
+    if (slot_ty(ty) || slot_box_ty(type)) return true;
+    Type _r;
+    return type && mono_erased_tyvar(cps_resolve_ty(type, &_r));
 }
 
 /* An owning-carrying BY-VALUE aggregate: a by-value struct/ADT product whose def
@@ -2882,7 +2916,7 @@ static bool term_core_ok_impl(const CTerm *t) {
              * arg must ride the callee's carrier ABI -- reject it (call_arg_ok
              * cps_to_direct=true) so the function evicts rather than emit a
              * raw-struct-for-int64 arg. */
-            if (!call_args_ok(t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n, true))
+            if (!call_args_ok(t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n, true, false))
                 return false;
             return term_core_ok(t->as.letcall.body);
         }
@@ -2897,20 +2931,12 @@ static bool term_core_ok_impl(const CTerm *t) {
              * past the code that uses it (miscompile).  Require the drop up front;
              * otherwise fall back. */
             return letraw_ok(t) && term_core_ok(t->as.letraw.body);
-        case CT_TAILCALL: {
+        case CT_TAILCALL:
             /* KK_RET / KK_VAR / KK_PROMPT are all valid here: a KK_PROMPT tail
              * call threads the enclosing prompt chain (a reset's delimited
              * body); a KK_VAR is only reifiable when the callee is not emittable
-             * (handled by needs_heap_join).  A cps->direct tail call (callee not
-             * CPS-emitted) passes its args RAW to the callee's direct-emitter C
-             * signature, so a by-value ADT arg must ride the carrier ABI -- reject
-             * it (evict).  A cps->cps tail call threads through `f__cps`, whose
-             * params the CPS backend emits with the matching ABI, so the wider
-             * atom_ok admits the by-value aggregate there. */
-            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
-            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
-                                t->as.tailcall.n, cps_to_direct);
-        }
+             * (handled by needs_heap_join). */
+            return tailcall_args_ok(t);
         case CT_LETCONT:
             return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
                 && term_core_ok(t->as.letcont.jbody)
@@ -3341,11 +3367,8 @@ static bool handle_delim_ok(const CTerm *t) {
             return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
                 && handle_delim_ok(t->as.letcont.jbody)
                 && handle_delim_ok(t->as.letcont.body);
-        case CT_TAILCALL: {
-            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
-            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
-                                t->as.tailcall.n, cps_to_direct);
-        }
+        case CT_TAILCALL:
+            return tailcall_args_ok(t);
         case CT_HANDLE: {
             /* A NESTED handle in this handle's handled body (e.g. `(handle (handle
              * (do-write-read) (Read ..)) (Write ..))`: do-write-read performs Read
@@ -3464,22 +3487,24 @@ static bool fn_single_concrete_sig(const FnDef *fd) {
 }
 
 /* E1, by-value-aggregate PARAM: admit an owning-free by-value aggregate param
- * (`slot_box_ty` -- a flat product with no rc/ref/weak field), matching the direct
- * emitter's by-value spelling (`static int64_t run(tur_adt_Cfg c)`).  Requires a
- * single concrete signature -- the `__cps` entry, its forward decl, and the
- * direct wrapper all spell it identically through emit_params.  (This also used
- * to require --enable=cps-tramp-resume, which graduated 2026-07-19.) */
+ * (`slot_box_ty` -- a flat product with no rc/ref/weak field).  Requires a
+ * single concrete signature.  The `__cps` entry takes it BY VALUE (emit_params)
+ * whatever its width; the plain-name entry wrapper mirrors the direct forward
+ * decl, which is `const T *` for a WIDE one (over 16 bytes, a defdata record
+ * ADT -- type_struct_pass_by_ptr), and dereferences it into the `__cps` call
+ * (cps_entry_param_by_ptr).  A cps->direct caller of that wrapper passes
+ * `&(atom)` (cps_direct_agg_arg_mode); a cps->cps one, or an E2a dispatch
+ * through a fn value, passes the atom raw.
+ *
+ * cps-performing-fn-with-wide-adt-param-refused: this used to admit only an
+ * aggregate the direct emitter ALSO passes by value, because the wrapper once
+ * spelled the param by value too and clashed with the `const T *` forward decl
+ * (`conflicting types`).  The wrapper learned the by-pointer spelling
+ * 2026-07-22 (sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch), so a
+ * function that performs and takes `(Rect :int :int)` no longer evicts --
+ * along with every function sharing its effect. */
 static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
-    /* The direct emitter passes SOME aggregates BY POINTER (`const tur_adt_H *` --
-     * a defdata record ADT, a large by-value product; type_struct_pass_by_ptr),
-     * not by value.  emit_params spells the CPS param BY VALUE (`tur_adt_H`), so
-     * admitting a by-pointer aggregate makes the `__cps` entry / wrapper disagree
-     * with the direct emitter's forward decl -- a `conflicting types` C error
-     * (conv-adt-record-typed-fn-field-call).  Restrict this admission to an
-     * aggregate the direct emitter ALSO passes by value (a defstruct-lowered
-     * `tur_adt_Cfg`), so all three spellings match through emit_params. */
-    return fn_single_concrete_sig(fd)
-        && slot_box_ty(&p->type) && !type_struct_pass_by_ptr(p->type);
+    return fn_single_concrete_sig(fd) && slot_box_ty(&p->type);
 }
 
 /* E2b soundness gate: the fat-closure (is_poly_fn) param `p` is only CALLED (as a
@@ -3680,6 +3705,52 @@ static bool fn_sig_ok(const FnDef *fd) {
     return true;
 }
 
+/* generic-fn-performing-caller-handled-effect-refused: does `e` (a body,
+ * nested fn definitions excluded) perform, directly or through a function it
+ * calls by name?  The coloring seed below, closed over direct calls: a generic
+ * that performs only through a callee -- `(defn outer [T] [x : T] : T
+ * (pass-through x))`, or one calling a plain performer -- is colored just the
+ * same, its base SIG-REJECTs the same way, and without a clone its carrier
+ * base is what runs: it called the callee's fresh-root entry, so the effect
+ * escaped its handler and was taken off the backend program-wide.  `seen`
+ * visits each function once, so a query is linear in the program. */
+typedef struct { const FnDef **seen; uint32_t n, cap; } EffReach;
+static bool eff_reach_first_visit(EffReach *u, const FnDef *f) {
+    for (uint32_t i = 0; i < u->n; i++) if (u->seen[i] == f) return false;
+    if (u->n == u->cap) {
+        uint32_t nc = u->cap ? u->cap * 2 : 16;
+        const FnDef **nv = (const FnDef **)realloc(u->seen, nc * sizeof(*nv));
+        if (!nv) return false;
+        u->seen = nv;
+        u->cap = nc;
+    }
+    u->seen[u->n++] = f;
+    return true;
+}
+static bool expr_reaches_effect_op(const Expr *e, EffReach *u);
+static bool expr_reaches_effect_op_visit(const Expr *c, void *ud) {
+    return expr_reaches_effect_op(c, (EffReach *)ud);
+}
+static bool expr_reaches_effect_op(const Expr *e, EffReach *u) {
+    if (!e) return false;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
+        const FnDef *callee = e->as.call_.fn_binding->source_fn_def;
+        if (callee && callee->body && eff_reach_first_visit(u, callee) &&
+            (cps_expr_contains_effect_op(callee->body) ||
+             expr_reaches_effect_op(callee->body, u)))
+            return true;
+    }
+    if (e->kind == EX_FN_DEF || e->kind == EX_FN || e->kind == EX_CLOSURE) return false;
+    return cps_visit_children(e, expr_reaches_effect_op_visit, u);
+}
+static bool fn_body_reaches_effect_op(const FnDef *fd) {
+    EffReach u = {0};
+    (void)eff_reach_first_visit(&u, fd);
+    bool r = expr_reaches_effect_op(fd->body, &u);
+    free(u.seen);
+    return r;
+}
+
 /* SR2b (G3a clone mint): does this colored fn need a MONOMORPH CLONE to be
  * CPS-emittable?  True when its own generic signature sig-rejects (tyvar
  * params/result), so only a spec resolved through concrete bindings can carry
@@ -3697,11 +3768,21 @@ bool emit_cps_ir_colored_fn_needs_mono(const FnDef *fd) {
      * perturbs emission state other emitters read (derive-show's pbp reads
      * broke under an early cps_color_program).  The syntactic test is the
      * coloring seed anyway, so it can only over-approximate transitively
-     * colored callers -- which never reach here, because a caller without its
-     * own effect form fails this test and needed no island. */
+     * colored callers.
+     *
+     * generic-fn-performing-caller-handled-effect-refused: a caller WITHOUT its
+     * own effect form does reach here, and needs the clone just as much -- see
+     * expr_reaches_effect_op.  Only an unconstrained, non-instance generic
+     * takes that route: a typeclass method and a constrained generic keep the
+     * strict syntactic seed, as the `unsafe` lesson above recommends. */
     if (!fd || !fd->body) return false;
-    if (!cps_expr_contains_effect_op(fd->body)) return false;
-    return !fn_sig_ok(fd);
+    if (cps_expr_contains_effect_op(fd->body)) return !fn_sig_ok(fd);
+    if (fd->owner_instance || fd->constraints.n_constraints) return false;
+    /* The walk first: it only reads the tree, while fn_sig_ok spells the
+     * signature's C types, which registers their monomorphs -- asked of every
+     * generic from emit_abi_fn_skip_generic, that reordered the typedefs of
+     * programs this change has nothing to do with. */
+    return fn_body_reaches_effect_op(fd) && !fn_sig_ok(fd);
 }
 
 /* ---- whole-program classification cache ------------------------------ */
@@ -6132,6 +6213,17 @@ static bool fd_sig_has_tyvar(const FnDef *fd) {
     }
     return type_has_unresolved_tyvar(fn_ret_type(fd));
 }
+/* generic-fn-performing-caller-handled-effect-refused: may a GENERIC's carrier
+ * base be left out when nothing calls it through the carrier?  Yes when its
+ * monomorph clones carry it (emit_cps_ir_colored_fn_needs_mono): the base is a
+ * template whose `perform` the direct emitter cannot lower.  Generic only --
+ * fd_sig_has_tyvar reads types without spelling them -- so a non-generic
+ * function, which has no clones and no carrier calls on record, is never
+ * dropped, and its signature is never re-spelled out of order. */
+bool emit_cps_ir_generic_base_is_template(const FnDef *fd) {
+    return fd && !fd->owner_instance && fd->binding && fd_sig_has_tyvar(fd)
+        && emit_cps_ir_colored_fn_needs_mono(fd);
+}
 static bool addr_taken_has(const Binding *b);
 static bool generic_unreached(EmitCtx *ctx, const FnDef *fd) {
     if (!ctx || !fd || !fd->binding || !fd_sig_has_tyvar(fd)) return false;
@@ -8555,7 +8647,7 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         }
         else if (arg_is_byval_agg && to_direct &&
-                 cps_direct_agg_arg_mode(fn, i, &args[i]) == AGG_ARG_ADDR)
+                 cps_direct_agg_arg_mode(fn, i, &args[i], false) == AGG_ARG_ADDR)
             /* adt-handle-result-as-call-arg-evicts: the direct signature takes
              * this wide aggregate as `const T *` -- pass its address, as the
              * direct emitter does (`area(&s)`). */

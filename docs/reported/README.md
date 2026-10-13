@@ -48,11 +48,18 @@ papercuts, which have no report of their own.
 | [byvalue-option-field-read-as-carrier-at-generic-call](byvalue-option-field-read-as-carrier-at-generic-call.md) | medium (build failure, gcc and clang) | `(peek (.p h))`, where `p : (Option (Fr T))` is a by-value field of a `:heap` struct, is read as `(int64_t)(intptr_t)(h->p)` and unboxed by `emit_carrier_bridge`. The call-arg path judges the field to be carrier-represented. Upstream site not located. |
 | [instance-method-match-fallthrough-return-unbridged](instance-method-match-fallthrough-return-unbridged.md) | medium (clang 15+/gcc 14 build failure) | An instance method declared `: (Cons a)` whose body is a `match` bridges every arm's return to the `int64_t` carrier but not the unreachable trailing `return __tN;` of the pointer-typed temp (`emit_fns.c:5070`). Blocks the zipper plan's `Plated` class (ZP3). |
 
+## Found fixing cps-performing-fn-with-wide-adt-param-refused (filed 2026-10-13)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[shared-build-imported-ctor-undeclared](../archive/shared-build-imported-ctor-undeclared.md)~~ | medium | **RESOLVED 2026-10-13** (archived): under separate compilation a module emits, into its own `.c`, the `static` constructors of every ADT it constructs but does not define (`emit_imported_adt_ctors`). That uncovered a stale `call_ret_note`: the last argument's hoisted type became the call's own, so an imported callee with no recorded return type got its temp declared with the argument's type; the argument loop now clears it. Pinned by `tur_shared_imported_ctor` (by-value, nullary, record, recursive, parametric, lambda and partially applied constructors; shared and whole-program builds agree) |
+| ~~[generic-fn-performing-caller-handled-effect-refused](../archive/generic-fn-performing-caller-handled-effect-refused.md)~~ | medium (expressiveness) | **RESOLVED 2026-10-13** (archived): the clones were already minted and admissible at every type; the generic's carrier BASE was still emitted for a bare `[x : T]` (only a nested type variable dropped it) and its `perform` had no direct lowering, so it is now skipped when nothing calls it through the carrier. A generic performing only through a callee now gets clones too (`fn_body_reaches_effect_op`), and a callee clone minted from a generic base admits its still-erased type variable as the `int64_t` word its signature spells (`mono_erased_tyvar`). Pinned by `cps-generic-performs-caller-handled` (leak-checked) |
+
 ## Found fixing adt-handle-result-as-call-arg-evicts (filed 2026-10-13)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cps-performing-fn-with-wide-adt-param-refused](cps-performing-fn-with-wide-adt-param-refused.md) | low-medium | A function that `perform`s and takes a by-value aggregate over 16 bytes (`(Rect :int :int)`) is `SIG-REJECT`ed by `fn_byval_agg_param_ok`, so the `perform` has "no lowering here" and the effect's other functions evict too; the interpreter runs it. The exclusion predates the entry wrapper learning the `const T *` spelling. |
+| ~~[cps-performing-fn-with-wide-adt-param-refused](../archive/cps-performing-fn-with-wide-adt-param-refused.md)~~ | low-medium | **RESOLVED 2026-10-13** (archived): `fn_byval_agg_param_ok` admits a wide by-value aggregate parameter (over 16 bytes, `type_struct_pass_by_ptr`); the `__cps` entry takes it by value and the plain-name wrapper keeps the forward decl's `const T *` (fix direction 1). That exposed one more gate: an E2a `via_registry` call through a fn-value parameter, `(f s)`, was classed cps->direct and evicted its caller, so the effect went unhandled at run time; `tailcall_args_ok` now passes the aggregate raw there, as the `__cps` callee takes it. Pinned by `cps-wide-adt-param-perform` (record ADT, wide defstruct, float product, two performs, cps->cps call, fn-value call, lambda; leak-checked) |
 
 ## Found fixing effect-cont-aggregate-result-untyped (filed 2026-10-13)
 

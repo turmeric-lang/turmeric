@@ -1,0 +1,9 @@
+(defpackage shared-imported-ctor
+  :name        "shared-imported-ctor"
+  :version     "0.1.0"
+  :description "Pins shared-build-imported-ctor-undeclared: app/main constructs values of ADTs app/shapes defines.  Under separate compilation (tur build --shared) the constructors were static in shapes.c and declared nowhere main.c could see them."
+  :exports #map{
+    "app/main" ["main"]
+    "app/shapes" ["area" "Rect" "Circle" "Dot" "describe" "Pt" "pt-sum"
+                  "INil" "ICons" "ilen" "Box" "box-get"]
+  })

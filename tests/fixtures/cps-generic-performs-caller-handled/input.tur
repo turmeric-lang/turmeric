@@ -1,0 +1,59 @@
+;; A function with a type parameter that `perform`s an effect its CALLER
+;; handles.  It was refused at every instantiation, `int` included: "this
+;; effect operation has no lowering here", and every function sharing the
+;; effect evicted with it.  The interpreter ran it.  See
+;; docs/archive/generic-fn-performing-caller-handled-effect-refused.md.
+;;
+;; The ABI scan already minted a clone for every call, and the CPS backend
+;; admitted the clones.  What failed:
+;;   - a bare `[x : T]` generic's carrier BASE was still emitted (only a
+;;     type variable nested in a compound type dropped it), and the direct
+;;     emitter cannot lower its `perform`;
+;;   - a generic that performs only through a callee (`outer`, `calls-plain`)
+;;     got no clone at all, so its base ran and the effect escaped;
+;;   - the callee clone minted from `outer`'s erased base binds `T` to
+;;     `outer`'s own `T`, which the slot and capture gates refused.
+;;
+;; Each line's answer is in the comment beside it.
+
+(defdata P1 (P1 :int))
+(defdata P3 (P3 :int :int :int))
+(defeffect Ask [] :int)
+(defeffect Note [s :cstr] :int)
+
+;; the report's repro
+(defn emit-twice [T] [x : T] : int {(perform (Ask)) + (perform (Ask))})
+;; never called: its base used to be emitted, perform and all
+(defn never-called [T] [x : T] : int (perform (Ask)))
+;; the value is live across the perform
+(defn pass-through [T] [x : T] : T (do (perform (Ask)) x))
+;; a second effect, with an argument
+(defn tagged [T] [x : T] : T (do (perform (Note "tagged")) x))
+;; performs only through a generic callee
+(defn outer [T] [x : T] : T (pass-through x))
+;; performs only through a plain callee
+(defn plain [n : int] : int (+ n (perform (Ask))))
+(defn calls-plain [T] [x : T] : T (do (plain 1) x))
+;; handles its own effect
+(defn island [T] [x : T] : T
+  (do (handle (perform (Ask)) (Ask [] k) (resume k 1)) x))
+
+(defn main [] : nil
+  (println (handle (emit-twice 0) (Ask [] k) (resume k 5)))                ; 10
+  (println (handle (pass-through 7) (Ask [] k) (resume k 1)))              ; 7
+  (println (handle (pass-through "seven") (Ask [] k) (resume k 1)))        ; seven
+  (println (handle (pass-through 7.1) (Ask [] k) (resume k 1)))            ; 7.1
+  (println (handle (match (pass-through (P1 8)) (P1 a) a)
+             (Ask [] k) (resume k 1)))                                     ; 8
+  (println (handle (match (pass-through (P3 1 2 3)) (P3 a b c) (+ a (+ b c)))
+             (Ask [] k) (resume k 1)))                                     ; 6
+  (println (handle (outer 42) (Ask [] k) (resume k 1)))                    ; 42
+  (println (handle (outer 2.5) (Ask [] k) (resume k 1)))                   ; 2.5
+  (println (handle (outer "o") (Ask [] k) (resume k 1)))                   ; o
+  (println (handle (match (outer (P3 4 5 6)) (P3 a b c) (+ a (+ b c)))
+             (Ask [] k) (resume k 1)))                                     ; 15
+  (println (handle (calls-plain 5) (Ask [] k) (resume k 1)))               ; 5
+  (println (island 99))                                                    ; 99
+  (println (handle (+ (plain 1) (pass-through 10)) (Ask [] k) (resume k 5))) ; 16
+  (println (handle (tagged 3)
+             (Note [m] k) (do (println m) (resume k 0)))))                 ; tagged, 3
