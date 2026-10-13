@@ -3149,6 +3149,11 @@ static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
     return dk_invoke((DK *)k, w);
 }
 
+__attribute__((unused, noinline))
+static bool __dk_cont_live_word(intptr_t k) {
+    return !((DK *)k)->consumed;
+}
+
 /* Phase T21: FiberBlock */
 #ifdef __clang__
 #pragma clang diagnostic push
