@@ -5453,12 +5453,14 @@ const DOCS_PACK_BASE = '/docs-pack';
  * How many pages each of the nav's dated sections lists.
  *
  * Ten apiece, matching the Recently Added and Recently Updated cards at the top
- * of the website's guides index. Those cards are guides only; these also carry
- * API modules, since the pane is a browser over the whole pack. The dates behind
- * both are the same numbers -- the generator stamps each page with the day its
- * source was first committed and the day it was last committed to, and passes
- * the guides' dates straight through -- so the two cannot disagree about when a
- * guide arrived or when it last changed.
+ * of the website's guides index -- and, like those cards, guides only. The pack
+ * stamps API modules and spice pages with dates too, but these lists answer
+ * "what is new to read?", and a module page is reference that its API tree
+ * already files; mixed in, it takes a slot from a guide. The dates behind the
+ * pane and the website are the same numbers -- the generator stamps each page
+ * with the day its source was first committed and the day it was last committed
+ * to, and passes the guides' dates straight through -- so the two cannot
+ * disagree about when a guide arrived or when it last changed.
  */
 const DOCS_RECENT_COUNT = 10;
 
@@ -5723,8 +5725,8 @@ function docsQuickstartSection() {
 }
 
 /**
- * One dated, flat section -- "Recently Added" or "Recently Updated" -- across
- * all three kinds of page.
+ * One dated, flat section -- "Recently Added" or "Recently Updated" -- of
+ * guides.
  *
  * A `<details>`, closed on load. Both sections answer a "what changed since I
  * last looked?" question, which you ask occasionally and never on the way to a
@@ -5776,23 +5778,24 @@ function renderDocsNav() {
         return;
     }
     const pages = docsAllPages();
+    const guides = pages.filter(p => p.kind === 'guide');
     // The quickstart first, then what is new, then the tree.
     let html = docsQuickstartSection();
-    // Above the tree, and flat: what changed cuts across guides, API modules and
-    // spices, so grouping it by category would bury the one thing it is for.
+    // Above the tree, and flat: what changed cuts across guide categories, so
+    // grouping it by category would bury the one thing it is for. Guides only
+    // (see DOCS_RECENT_COUNT): the API tree below is where a module is found.
     // Added first, then updated -- arrival is the bigger news, and a page that
     // has only just landed is filtered out of the second list rather than
     // repeated in it. Either section is absent entirely when the pack carries no
     // dates for it, rather than shown empty.
-    const recent = docsRecentPages(pages);
+    const recent = docsRecentPages(guides);
     if (recent.length) {
         html += docsDatedSection('docs-nav-recent', 'Recently Added', 'added', recent);
     }
-    const updated = docsUpdatedPages(pages);
+    const updated = docsUpdatedPages(guides);
     if (updated.length) {
         html += docsDatedSection('docs-nav-updated', 'Recently Updated', 'updated', updated);
     }
-    const guides = pages.filter(p => p.kind === 'guide');
     const modules = pages.filter(p => p.kind === 'module');
     const spices = pages.filter(p => p.kind === 'spice');
     if (guides.length) html += docsNavSection('Guides', docsGroupByCategory(guides));

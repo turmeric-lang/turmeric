@@ -139,8 +139,7 @@ test.describe('docs pane', () => {
         // empty. Skip instead of failing -- that is a build input, not a bug.
         const dated = await page.evaluate(async () => {
             const idx = await (await fetch('/docs-pack/index.json')).json();
-            return [...(idx.guides || []), ...(idx.api || []), ...(idx.spices || [])]
-                .filter(e => e.added).length;
+            return (idx.guides || []).filter(e => e.added).length;
         });
         test.skip(dated === 0, 'pack carries no add dates (built outside a git checkout)');
 
@@ -152,6 +151,12 @@ test.describe('docs pane', () => {
         expect(dates.length).toBeGreaterThan(0);
         expect(dates.length).toBeLessThanOrEqual(10);
         expect([...dates].sort().reverse()).toEqual(dates);
+
+        // Guides only, like the website's cards: an API module or spice page
+        // is found in its own tree, not in "what is new to read".
+        const addedRefs = await page.locator('#docs-nav .docs-nav-recent a[data-doc-ref]')
+            .evaluateAll(els => els.map(el => el.dataset.docRef));
+        for (const ref of addedRefs) expect(ref).toMatch(/^guides\//);
 
         // Closed on load -- it is a "what changed?" section, not a permanent
         // ten-row tax on the top of the nav -- and its summary opens it.
@@ -179,7 +184,7 @@ test.describe('docs pane', () => {
         // updated -- so the guard counts the pages that actually qualify.
         const edited = await page.evaluate(async () => {
             const idx = await (await fetch('/docs-pack/index.json')).json();
-            return [...(idx.guides || []), ...(idx.api || []), ...(idx.spices || [])]
+            return (idx.guides || [])
                 .filter(e => e.updated && e.updated !== e.added).length;
         });
         test.skip(edited === 0, 'pack carries no edit dates (built outside a git checkout)');
@@ -214,6 +219,8 @@ test.describe('docs pane', () => {
             return out;
         });
         for (const ref of refs) expect(idx[ref].updated).not.toBe(idx[ref].added);
+        // Guides only, as in Recently Added.
+        for (const ref of refs) expect(ref).toMatch(/^guides\//);
 
         // And it navigates like any other nav entry.
         const first = page.locator('#docs-nav .docs-nav-updated a[data-doc-ref]').first();

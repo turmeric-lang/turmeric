@@ -71,7 +71,7 @@ The pack is a build output and is gitignored, like `turmeric.wasm` and
 - `added` and `updated` are the two ends of that page's git history -- the day
   its source file was first committed, and the day it was last committed to --
   read while the pack is generated, in one traversal. The pane's **Recently
-  Added** and **Recently Updated** sections are these fields sorted, and they
+  Added** and **Recently Updated** sections are the guides' fields sorted, and they
   are here rather than in each doc's front matter so that a guide cannot forget
   to carry a date -- or keep claiming to be new because it still does. A page
   git has no commit for (an untracked draft, a build from a release tarball
@@ -124,17 +124,17 @@ Inside the pane:
 
 - **Nav** is pinned at the top with the **Quickstart**, the page the pane also
   opens on when you have not been anywhere else yet. Below it, two dated lists:
-  **Recently Added**, the ten newest pages in the pack, and under it **Recently
-  Updated**, the ten most recently edited. Both run across all three kinds at
-  once -- new guides and new stdlib modules sit in one list, because "what is
-  new here?" does not respect the tree -- and a page that has not been touched
+  **Recently Added**, the ten newest guides in the pack, and under it **Recently
+  Updated**, the ten most recently edited. Both list guides only -- they answer
+  "what is new to read?", and an API module is reference the tree below already
+  files -- and a guide that has not been touched
   since it landed appears only in the first. Each is collapsed on load and opens
   on click; "what changed since I last looked?" is an occasional question, and
   twenty permanent rows above the tree is a steep way to answer it. They are the
   in-app counterparts of the two cards at the top of the website's guides index
-  -- same counts, same dates, and wider by exactly the pages that page does not
-  cover. Below them, the tree itself: guides by category, API modules by group,
-  and spices when this build carries their pages.
+  -- same pages, same counts, same dates. Below them, the tree itself: guides by
+  category, API modules by group, and spices when this build carries their
+  pages.
 - **Search** takes one query and returns two kinds of result: pages (from the
   pack) and symbols (from `doc-names.json`). Picking a symbol routes to the
   existing docstring panel.
