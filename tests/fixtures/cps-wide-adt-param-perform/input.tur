@@ -1,0 +1,69 @@
+;; A function that `perform`s and takes a WIDE by-value aggregate parameter
+;; (over 16 bytes -- `(Rect :int :int)`, a record ADT, a three-field
+;; defstruct).  The direct emitter passes such a parameter as `const T *`
+;; (type_struct_pass_by_ptr), and fn_byval_agg_param_ok refused it, so the
+;; function SIG-REJECTed: "this effect operation has no lowering here" at the
+;; `perform`, and every function sharing the effect evicted with it.  The
+;; interpreter ran it.  The `__cps` entry now takes the aggregate by value and
+;; the plain-name wrapper keeps the forward decl's `const T *`.  See
+;; docs/archive/cps-performing-fn-with-wide-adt-param-refused.md.
+;;
+;;   area2      the report's repro: perform, then match the parameter
+;;   rec-sum    a record ADT read through field accessors
+;;   big-sum    a wide defstruct between two scalar parameters
+;;   fsum       a product of three floats
+;;   twice      two performs; the aggregate is live across both
+;;   wrap       a cps->cps non-tail call passing the aggregate on
+;;   apply-s    `area2` as a fn value: the E2a dispatch in `apply-s` reaches
+;;              `area2__cps` and passes the aggregate raw (it used to evict
+;;              `apply-s` instead, and the effect then went unhandled)
+;;   lambda     a capture-free lambda with a wide parameter
+;;
+;; 3+2*4 = 11; 1+3*5 = 16; 1+10+2+3 = 16; 1+10+2+3+4+5 = 25;
+;; 0.5+1.25+2.5+7.1 = 11.35; 2+2+7+8 = 19; 100+11 = 111; 1000+8 = 1008;
+;; 1+9-4 = 6.
+
+(defdata Shape (Circle :int) (Rect :int :int))
+(defdata H (H [tag : int a : int b : int]))
+(defstruct Big [a : int b : int c : int])
+(defstruct FBig [x : float y : float z : float])
+(defeffect Ask [] int)
+(defeffect AskF [] float)
+
+(defn area2 [s : Shape] : int
+  (+ (perform (Ask))
+     (match s
+       (Circle r) (* 3 r)
+       (Rect w h) (* w h))))
+(defn rec-sum [h : H] : int
+  (+ (.tag h) (+ (perform (Ask)) (+ (.a h) (.b h)))))
+(defn big-sum [k : int b : Big m : int] : int
+  (+ k (+ (perform (Ask)) (+ (.a b) (+ (.b b) (+ (.c b) m))))))
+(defn fsum [f : FBig] : float
+  (+ (perform (AskF)) (+ (.x f) (+ (.y f) (.z f)))))
+(defn twice [s : Shape] : int
+  (let [a (perform (Ask))
+        b (perform (Ask))]
+    (+ a (+ b (match s
+                (Circle r) r
+                (Rect w h) (+ w h))))))
+(defn wrap [s : Shape] : int
+  (+ 100 (area2 s)))
+(defn apply-s [f : (fn [Shape] int) s : Shape] : int
+  (f s))
+
+(defn main [] : nil
+  (println (handle (area2 (Rect 2 4)) (Ask [] k) (resume k 3)))
+  (println (handle (area2 (Circle 5)) (Ask [] k) (resume k 1)))
+  (println (handle (rec-sum (H 1 2 3)) (Ask [] k) (resume k 10)))
+  (println (handle (big-sum 1 (Big 2 3 4) 5) (Ask [] k) (resume k 10)))
+  (println (handle (fsum (FBig 1.25 2.5 7.1)) (AskF [] k) (resume k 0.5)))
+  (println (handle (twice (Rect 7 8)) (Ask [] k) (resume k 2)))
+  (println (handle (wrap (Rect 2 4)) (Ask [] k) (resume k 3)))
+  (println (handle (apply-s area2 (Rect 2 4)) (Ask [] k) (resume k 1000)))
+  (let [g (fn [s : Shape] : int
+            (+ (perform (Ask))
+               (match s
+                 (Circle r) r
+                 (Rect w h) (- w h))))]
+    (println (handle (g (Rect 9 4)) (Ask [] k) (resume k 1)))))

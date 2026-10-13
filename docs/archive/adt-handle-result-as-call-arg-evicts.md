@@ -17,8 +17,10 @@
   cps->cps sites). On a direct call it passes an ADDR argument as `&(atom)`,
   the direct emitter's own `area(&s)`. The atom is a C local of the frame that
   makes the call, which is synchronous, so the address outlives the use. A
-  `__cps` entry never takes such a parameter (`fn_byval_agg_param_ok` refuses
-  it), so the cps->cps sites never need the address.
+  `__cps` entry takes such a parameter BY VALUE (since
+  [cps-performing-fn-with-wide-adt-param-refused](cps-performing-fn-with-wide-adt-param-refused.md)
+  admitted it; before that `fn_byval_agg_param_ok` refused it), so the
+  cps->cps sites never need the address.
 - Pinned by `tests/fixtures/cps-wide-adt-handle-call-arg` (leak-checked). It
   covers the call in tail position, under `+` (`CT_LETCALL`), a wide
   `defstruct` between two scalar arguments, a 16-byte float product that stays
@@ -27,7 +29,8 @@
   ADDR answer disabled, the fixture fails to build again.
 
 Found on the way and filed separately:
-[cps-performing-fn-with-wide-adt-param-refused](../reported/cps-performing-fn-with-wide-adt-param-refused.md).
+[cps-performing-fn-with-wide-adt-param-refused](cps-performing-fn-with-wide-adt-param-refused.md)
+(since resolved).
 A function that performs AND takes a wide aggregate parameter is refused
 outright (`SIG-REJECT`).
 

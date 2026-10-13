@@ -803,10 +803,17 @@ static const FnDef *cps_fd_of_binding(const Binding *b);   /* defined beside ent
  * while the `let`-bound twin, delegated whole to the direct emitter, built.
  * The by-pointer rule mirrors the direct forward decl (cps_entry_param_by_ptr):
  * an inline-C or closure callee takes the aggregate by value, and a callee
- * with no FnDef in hand is not assumed either way. */
+ * with no FnDef in hand is not assumed either way.
+ *
+ * cps-performing-fn-with-wide-adt-param-refused: `to_cps_entry` is an E2a
+ * `via_registry` call -- `(f s)` through a threaded fn-value param.  It is
+ * classed cps->direct (`f` is no SEnt), but it dispatches to the value's
+ * `__cps` entry (an aggregate argument has no direct fallback,
+ * e2a_slot_kind_ok), and every `__cps` entry takes a by-value aggregate BY
+ * VALUE (emit_params), wide or not.  So the argument crosses raw there. */
 typedef enum { AGG_ARG_NO, AGG_ARG_RAW, AGG_ARG_ADDR } AggArgMode;
 static AggArgMode cps_direct_agg_arg_mode(const Binding *fn, uint32_t i,
-                                          const CAtom *a) {
+                                          const CAtom *a, bool to_cps_entry) {
     if (!g_emit_ctx || !fn || fn->type.kind != TY_FN || !a || !a->type) return AGG_ARG_NO;
     if (i >= fn->type.as.fn.arity) return AGG_ARG_NO;
     if (fn->closure_fn_binding) return AGG_ARG_NO;
@@ -825,7 +832,7 @@ static AggArgMode cps_direct_agg_arg_mode(const Binding *fn, uint32_t i,
     const char *ac = binder_ctype_full(g_emit_ctx, a->ty, a->type);
     if (!pc || !ac || strcmp(pc, ac) != 0) return AGG_ARG_NO;
     if (strcmp(pc, "int64_t") == 0 || strchr(pc, '*')) return AGG_ARG_NO;
-    if (!type_struct_pass_by_ptr(*a->type)) return AGG_ARG_RAW;
+    if (to_cps_entry || !type_struct_pass_by_ptr(*a->type)) return AGG_ARG_RAW;
     /* The direct path takes `const T *` -- unless the callee is one it spells
      * by value (cps_entry_param_by_ptr's exceptions), or unknown.  An UNCOLORED
      * callee, the usual one here, has no CPS entry, so look it up in the
@@ -837,12 +844,12 @@ static AggArgMode cps_direct_agg_arg_mode(const Binding *fn, uint32_t i,
     return AGG_ARG_ADDR;
 }
 static bool cps_direct_param_takes_agg_raw(const Binding *fn, uint32_t i,
-                                           const CAtom *a) {
-    return cps_direct_agg_arg_mode(fn, i, a) != AGG_ARG_NO;
+                                           const CAtom *a, bool to_cps_entry) {
+    return cps_direct_agg_arg_mode(fn, i, a, to_cps_entry) != AGG_ARG_NO;
 }
 
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
-                         bool cps_to_direct) {
+                         bool cps_to_direct, bool to_cps_entry) {
     bool cef = callee_effect_free(fn);
     for (uint32_t i = 0; i < n; i++) {
         /* Pure higher-order value threading into an effect-free callee is admitted
@@ -856,11 +863,23 @@ static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
         if (cef && atom_is_fn_value(&args[i]) && !atom_is_fat_fn(&args[i])) continue;
         if (cps_to_direct && !call_arg_ok(&args[i], true) &&
             call_arg_ok(&args[i], false) &&
-            cps_direct_param_takes_agg_raw(fn, i, &args[i]))
+            cps_direct_param_takes_agg_raw(fn, i, &args[i], to_cps_entry))
             continue;
         if (!call_arg_ok(&args[i], cps_to_direct)) return false;
     }
     return true;
+}
+
+/* A CT_TAILCALL's arguments.  A cps->direct tail call (callee not CPS-emitted)
+ * passes its args RAW to the callee's direct-emitter C signature, so a by-value
+ * ADT arg must match it (call_args_ok).  A cps->cps tail call threads through
+ * `f__cps`, whose params the CPS backend emits with the matching ABI, so the
+ * wider atom_ok admits the by-value aggregate there -- as it does for an E2a
+ * `via_registry` call, which reaches a `__cps` entry too. */
+static bool tailcall_args_ok(const CTerm *t) {
+    bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
+    return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args, t->as.tailcall.n,
+                        cps_to_direct, t->as.tailcall.via_registry);
 }
 
 /* ---- C3 delimited-control subset predicates -------------------------- *
@@ -2882,7 +2901,7 @@ static bool term_core_ok_impl(const CTerm *t) {
              * arg must ride the callee's carrier ABI -- reject it (call_arg_ok
              * cps_to_direct=true) so the function evicts rather than emit a
              * raw-struct-for-int64 arg. */
-            if (!call_args_ok(t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n, true))
+            if (!call_args_ok(t->as.letcall.fn, t->as.letcall.args, t->as.letcall.n, true, false))
                 return false;
             return term_core_ok(t->as.letcall.body);
         }
@@ -2897,20 +2916,12 @@ static bool term_core_ok_impl(const CTerm *t) {
              * past the code that uses it (miscompile).  Require the drop up front;
              * otherwise fall back. */
             return letraw_ok(t) && term_core_ok(t->as.letraw.body);
-        case CT_TAILCALL: {
+        case CT_TAILCALL:
             /* KK_RET / KK_VAR / KK_PROMPT are all valid here: a KK_PROMPT tail
              * call threads the enclosing prompt chain (a reset's delimited
              * body); a KK_VAR is only reifiable when the callee is not emittable
-             * (handled by needs_heap_join).  A cps->direct tail call (callee not
-             * CPS-emitted) passes its args RAW to the callee's direct-emitter C
-             * signature, so a by-value ADT arg must ride the carrier ABI -- reject
-             * it (evict).  A cps->cps tail call threads through `f__cps`, whose
-             * params the CPS backend emits with the matching ABI, so the wider
-             * atom_ok admits the by-value aggregate there. */
-            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
-            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
-                                t->as.tailcall.n, cps_to_direct);
-        }
+             * (handled by needs_heap_join). */
+            return tailcall_args_ok(t);
         case CT_LETCONT:
             return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
                 && term_core_ok(t->as.letcont.jbody)
@@ -3341,11 +3352,8 @@ static bool handle_delim_ok(const CTerm *t) {
             return (slot_ok_t(t->as.letcont.param.type, t->as.letcont.param.ty) || t->as.letcont.param.ty == TY_NIL)
                 && handle_delim_ok(t->as.letcont.jbody)
                 && handle_delim_ok(t->as.letcont.body);
-        case CT_TAILCALL: {
-            bool cps_to_direct = !binding_cps_reachable(t->as.tailcall.fn);
-            return call_args_ok(t->as.tailcall.fn, t->as.tailcall.args,
-                                t->as.tailcall.n, cps_to_direct);
-        }
+        case CT_TAILCALL:
+            return tailcall_args_ok(t);
         case CT_HANDLE: {
             /* A NESTED handle in this handle's handled body (e.g. `(handle (handle
              * (do-write-read) (Read ..)) (Write ..))`: do-write-read performs Read
@@ -3464,22 +3472,24 @@ static bool fn_single_concrete_sig(const FnDef *fd) {
 }
 
 /* E1, by-value-aggregate PARAM: admit an owning-free by-value aggregate param
- * (`slot_box_ty` -- a flat product with no rc/ref/weak field), matching the direct
- * emitter's by-value spelling (`static int64_t run(tur_adt_Cfg c)`).  Requires a
- * single concrete signature -- the `__cps` entry, its forward decl, and the
- * direct wrapper all spell it identically through emit_params.  (This also used
- * to require --enable=cps-tramp-resume, which graduated 2026-07-19.) */
+ * (`slot_box_ty` -- a flat product with no rc/ref/weak field).  Requires a
+ * single concrete signature.  The `__cps` entry takes it BY VALUE (emit_params)
+ * whatever its width; the plain-name entry wrapper mirrors the direct forward
+ * decl, which is `const T *` for a WIDE one (over 16 bytes, a defdata record
+ * ADT -- type_struct_pass_by_ptr), and dereferences it into the `__cps` call
+ * (cps_entry_param_by_ptr).  A cps->direct caller of that wrapper passes
+ * `&(atom)` (cps_direct_agg_arg_mode); a cps->cps one, or an E2a dispatch
+ * through a fn value, passes the atom raw.
+ *
+ * cps-performing-fn-with-wide-adt-param-refused: this used to admit only an
+ * aggregate the direct emitter ALSO passes by value, because the wrapper once
+ * spelled the param by value too and clashed with the `const T *` forward decl
+ * (`conflicting types`).  The wrapper learned the by-pointer spelling
+ * 2026-07-22 (sepcomp-cps-entry-wrapper-byptr-agg-param-mismatch), so a
+ * function that performs and takes `(Rect :int :int)` no longer evicts --
+ * along with every function sharing its effect. */
 static bool fn_byval_agg_param_ok(const FnDef *fd, const Binding *p) {
-    /* The direct emitter passes SOME aggregates BY POINTER (`const tur_adt_H *` --
-     * a defdata record ADT, a large by-value product; type_struct_pass_by_ptr),
-     * not by value.  emit_params spells the CPS param BY VALUE (`tur_adt_H`), so
-     * admitting a by-pointer aggregate makes the `__cps` entry / wrapper disagree
-     * with the direct emitter's forward decl -- a `conflicting types` C error
-     * (conv-adt-record-typed-fn-field-call).  Restrict this admission to an
-     * aggregate the direct emitter ALSO passes by value (a defstruct-lowered
-     * `tur_adt_Cfg`), so all three spellings match through emit_params. */
-    return fn_single_concrete_sig(fd)
-        && slot_box_ty(&p->type) && !type_struct_pass_by_ptr(p->type);
+    return fn_single_concrete_sig(fd) && slot_box_ty(&p->type);
 }
 
 /* E2b soundness gate: the fat-closure (is_poly_fn) param `p` is only CALLED (as a
@@ -8555,7 +8565,7 @@ static char *atoms_csv_call_typed_offs(CE *ce, const CAtom *args, uint32_t n,
             buf_printf(&b, "(int64_t)(intptr_t)%s", a);
         }
         else if (arg_is_byval_agg && to_direct &&
-                 cps_direct_agg_arg_mode(fn, i, &args[i]) == AGG_ARG_ADDR)
+                 cps_direct_agg_arg_mode(fn, i, &args[i], false) == AGG_ARG_ADDR)
             /* adt-handle-result-as-call-arg-evicts: the direct signature takes
              * this wide aggregate as `const T *` -- pass its address, as the
              * direct emitter does (`area(&s)`). */

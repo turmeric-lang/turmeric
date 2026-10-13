@@ -34,11 +34,17 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing cps-performing-fn-with-wide-adt-param-refused (filed 2026-10-13)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [shared-build-imported-ctor-undeclared](shared-build-imported-ctor-undeclared.md) | medium | `tur build --shared` of a multi-module project fails at cc when one module calls a constructor of an ADT another module defines: `ctor_<Adt>_<Ctor>` is `static` in the defining TU and declared nowhere the importer sees (`implicit declaration of function 'ctor_Shape_Rect'`). The executable build of the same project works. No effects needed. |
+
 ## Found fixing adt-handle-result-as-call-arg-evicts (filed 2026-10-13)
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cps-performing-fn-with-wide-adt-param-refused](cps-performing-fn-with-wide-adt-param-refused.md) | low-medium | A function that `perform`s and takes a by-value aggregate over 16 bytes (`(Rect :int :int)`) is `SIG-REJECT`ed by `fn_byval_agg_param_ok`, so the `perform` has "no lowering here" and the effect's other functions evict too; the interpreter runs it. The exclusion predates the entry wrapper learning the `const T *` spelling. |
+| ~~[cps-performing-fn-with-wide-adt-param-refused](../archive/cps-performing-fn-with-wide-adt-param-refused.md)~~ | low-medium | **RESOLVED 2026-10-13** (archived): `fn_byval_agg_param_ok` admits a wide by-value aggregate parameter (over 16 bytes, `type_struct_pass_by_ptr`); the `__cps` entry takes it by value and the plain-name wrapper keeps the forward decl's `const T *` (fix direction 1). That exposed one more gate: an E2a `via_registry` call through a fn-value parameter, `(f s)`, was classed cps->direct and evicted its caller, so the effect went unhandled at run time; `tailcall_args_ok` now passes the aggregate raw there, as the `__cps` callee takes it. Pinned by `cps-wide-adt-param-perform` (record ADT, wide defstruct, float product, two performs, cps->cps call, fn-value call, lambda; leak-checked) |
 
 ## Found fixing effect-cont-aggregate-result-untyped (filed 2026-10-13)
 
