@@ -1,0 +1,53 @@
+;; A CPS-emitted function whose tail call takes `(:: (lower rs) :int)`, where
+;; `lower` returns a by-value-ADT handle (`tur_adt_Vec__int *`) and is reached
+;; cps->direct.  The call's result is delivered to the ascription's inline join,
+;; an `int64_t` local, so the store straddles pointer and integer:
+;;
+;;     tur_adt_Vec__int * __t = lower((int64_t)(intptr_t)rs); /* cps->direct */
+;;     __t0 = (int64_t)(intptr_t)__t;                          /* the bridge */
+;;
+;; Without the bridge it is `__t0 = __t;` -- a -Wint-conversion warning on gcc,
+;; which run.sh's emitted-C ratchet FAILs, and a hard error on AppleClang 21.
+;; See docs/archive/cps-wrapper-ascribed-adt-store-misses-int-ptr-bridge.md.
+;;
+;; The shape is the turmeric-spices `plot-anyrenderers` one it was found in.
+;; `lower` calls a dictionary method through an existential, which colors it,
+;; and its `letrec` evicts it from the CPS set; `run` is colored only because it
+;; calls `lower`, stays CPS-emitted, and so reaches `lower` cps->direct.
+;;
+;; lower -> [4*10, 6+1] = [40, 7]; run -> 100 + 40 + 7 = 147.
+
+(defclass Rdr [a]
+  (to-legacy [r] : int))
+
+(defstruct LinesR [n : int])
+(defstruct PointsR [n : int])
+
+(definstance Rdr [LinesR]
+  (to-legacy [r] (* (.n r) 10)))
+(definstance Rdr [PointsR]
+  (to-legacy [r] (+ (.n r) 1)))
+
+(defn lower [rs : (Vec (exists [a] [(Rdr a)] a))] : (Vec int)
+  (let [n   (vec-len rs)
+        out (vec-new)]
+    (letrec [go (fn [i : int] : (Vec int)
+                  (if (>= i n) out
+                    (let [h (open (vec-get rs i) [a v] (to-legacy v))]
+                      (do (vec-push! out h)
+                          (go (+ i 1))))))]
+      (go 0))))
+
+(defn total [h : int opts : int] : int
+  (let [v (:: h (Vec int))]
+    (+ opts (+ (vec-get v 0) (vec-get v 1)))))
+
+(defn run [rs : (Vec (exists [a] [(Rdr a)] a)) opts : int] : int
+  (total (:: (lower rs) :int) opts))
+
+(defn main [] : int
+  (let [rs (vec-new)]
+    (do (vec-push! rs (pack (make-struct LinesR 4) (exists [a] [(Rdr a)] a)))
+        (vec-push! rs (pack (make-struct PointsR 6) (exists [a] [(Rdr a)] a)))
+        (println (run rs 100))
+        0)))
