@@ -603,6 +603,7 @@ for the full pattern.
 
 ## See also
 
+- [Tourist Web Stack End-to-End](tourist-web-stack-guide.md) -- full application with TLS, sessions, and templates
 - [Threading Guide](threading-guide.md) -- OS threads, Mutex, Arc (used by tur-httpd internally)
 - [Error Handling Guide](error-handling-guide.md) -- `result<:cstr>` unwrapping patterns
 - [WebSockets Guide](websocket-guide.md) -- `ws-client` / `ws-server` / `tourist-ws`
