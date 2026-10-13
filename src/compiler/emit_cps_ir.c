@@ -326,11 +326,24 @@ static bool adt_int64_carrier(const Type *t) {
     return strcmp(type_c_name(*(Type *)t), "int64_t") == 0;
 }
 
+/* generic-fn-performing-caller-handled-effect-refused: inside a monomorph (a
+ * spec resolver is active), a type that STILL resolves to a type variable is
+ * the erased carrier.  A clone minted from another generic's base body binds
+ * the callee's `T` to the caller's own `T` -- `(defn outer [T] [x : T] : T
+ * (pass-through x))` -- and the concrete clone a later caller wants shares its
+ * name (`__spec__int64_t_int64_t`), so this is the one that is emitted.  Its C
+ * signature spells such a value `int64_t`, and it crosses a slot or an env as
+ * that word.  Outside a monomorph a bare type variable keeps the old answer:
+ * the template gates are built on refusing it. */
+static bool mono_erased_tyvar(const Type *r) {
+    return g_cps_mono_resolver && r && r->kind == TY_TYVAR;
+}
+
 static bool slot_ok_t(const Type *t, TypeKind k) {
     Type rt; const Type *r = cps_resolve_ty(t, &rt);
     if (r != t) k = r->kind;
     return slot_ty(k) || slot_box_ty(r) || carrier_handle_ok(r)
-        || erased_adt_carrier(r) || adt_int64_carrier(r);
+        || erased_adt_carrier(r) || adt_int64_carrier(r) || mono_erased_tyvar(r);
 }
 
 /* Signature-position slot gate (a colored function's PARAMS and RETURN).  It is
@@ -1341,7 +1354,9 @@ static void unw_take(char *uw, size_t n, char *uwc, size_t m) {
  * ADTs are rejected here (their copy would duplicate a refcount) -- they route
  * through cap_owning_ok / clone-on-read-out instead. */
 static bool cap_ty_ok(TypeKind ty, const Type *type) {
-    return slot_ty(ty) || slot_box_ty(type);
+    if (slot_ty(ty) || slot_box_ty(type)) return true;
+    Type _r;
+    return type && mono_erased_tyvar(cps_resolve_ty(type, &_r));
 }
 
 /* An owning-carrying BY-VALUE aggregate: a by-value struct/ADT product whose def
@@ -3690,6 +3705,52 @@ static bool fn_sig_ok(const FnDef *fd) {
     return true;
 }
 
+/* generic-fn-performing-caller-handled-effect-refused: does `e` (a body,
+ * nested fn definitions excluded) perform, directly or through a function it
+ * calls by name?  The coloring seed below, closed over direct calls: a generic
+ * that performs only through a callee -- `(defn outer [T] [x : T] : T
+ * (pass-through x))`, or one calling a plain performer -- is colored just the
+ * same, its base SIG-REJECTs the same way, and without a clone its carrier
+ * base is what runs: it called the callee's fresh-root entry, so the effect
+ * escaped its handler and was taken off the backend program-wide.  `seen`
+ * visits each function once, so a query is linear in the program. */
+typedef struct { const FnDef **seen; uint32_t n, cap; } EffReach;
+static bool eff_reach_first_visit(EffReach *u, const FnDef *f) {
+    for (uint32_t i = 0; i < u->n; i++) if (u->seen[i] == f) return false;
+    if (u->n == u->cap) {
+        uint32_t nc = u->cap ? u->cap * 2 : 16;
+        const FnDef **nv = (const FnDef **)realloc(u->seen, nc * sizeof(*nv));
+        if (!nv) return false;
+        u->seen = nv;
+        u->cap = nc;
+    }
+    u->seen[u->n++] = f;
+    return true;
+}
+static bool expr_reaches_effect_op(const Expr *e, EffReach *u);
+static bool expr_reaches_effect_op_visit(const Expr *c, void *ud) {
+    return expr_reaches_effect_op(c, (EffReach *)ud);
+}
+static bool expr_reaches_effect_op(const Expr *e, EffReach *u) {
+    if (!e) return false;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
+        const FnDef *callee = e->as.call_.fn_binding->source_fn_def;
+        if (callee && callee->body && eff_reach_first_visit(u, callee) &&
+            (cps_expr_contains_effect_op(callee->body) ||
+             expr_reaches_effect_op(callee->body, u)))
+            return true;
+    }
+    if (e->kind == EX_FN_DEF || e->kind == EX_FN || e->kind == EX_CLOSURE) return false;
+    return cps_visit_children(e, expr_reaches_effect_op_visit, u);
+}
+static bool fn_body_reaches_effect_op(const FnDef *fd) {
+    EffReach u = {0};
+    (void)eff_reach_first_visit(&u, fd);
+    bool r = expr_reaches_effect_op(fd->body, &u);
+    free(u.seen);
+    return r;
+}
+
 /* SR2b (G3a clone mint): does this colored fn need a MONOMORPH CLONE to be
  * CPS-emittable?  True when its own generic signature sig-rejects (tyvar
  * params/result), so only a spec resolved through concrete bindings can carry
@@ -3707,11 +3768,18 @@ bool emit_cps_ir_colored_fn_needs_mono(const FnDef *fd) {
      * perturbs emission state other emitters read (derive-show's pbp reads
      * broke under an early cps_color_program).  The syntactic test is the
      * coloring seed anyway, so it can only over-approximate transitively
-     * colored callers -- which never reach here, because a caller without its
-     * own effect form fails this test and needed no island. */
+     * colored callers.
+     *
+     * generic-fn-performing-caller-handled-effect-refused: a caller WITHOUT its
+     * own effect form does reach here, and needs the clone just as much -- see
+     * expr_reaches_effect_op.  Only an unconstrained, non-instance generic
+     * takes that route: a typeclass method and a constrained generic keep the
+     * strict syntactic seed, as the `unsafe` lesson above recommends. */
     if (!fd || !fd->body) return false;
-    if (!cps_expr_contains_effect_op(fd->body)) return false;
-    return !fn_sig_ok(fd);
+    if (cps_expr_contains_effect_op(fd->body)) return !fn_sig_ok(fd);
+    if (fd->owner_instance || fd->constraints.n_constraints) return false;
+    if (fn_sig_ok(fd)) return false;
+    return fn_body_reaches_effect_op(fd);
 }
 
 /* ---- whole-program classification cache ------------------------------ */
@@ -6141,6 +6209,17 @@ static bool fd_sig_has_tyvar(const FnDef *fd) {
         }
     }
     return type_has_unresolved_tyvar(fn_ret_type(fd));
+}
+/* generic-fn-performing-caller-handled-effect-refused: may a GENERIC's carrier
+ * base be left out when nothing calls it through the carrier?  Yes when its
+ * monomorph clones carry it (emit_cps_ir_colored_fn_needs_mono): the base is a
+ * template whose `perform` the direct emitter cannot lower.  Generic only --
+ * fd_sig_has_tyvar reads types without spelling them -- so a non-generic
+ * function, which has no clones and no carrier calls on record, is never
+ * dropped, and its signature is never re-spelled out of order. */
+bool emit_cps_ir_generic_base_is_template(const FnDef *fd) {
+    return fd && !fd->owner_instance && fd->binding && fd_sig_has_tyvar(fd)
+        && emit_cps_ir_colored_fn_needs_mono(fd);
 }
 static bool addr_taken_has(const Binding *b);
 static bool generic_unreached(EmitCtx *ctx, const FnDef *fd) {

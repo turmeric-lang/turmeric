@@ -51,6 +51,9 @@ const Expr *emit_cps_ir_effect_escaping_fnval(const Symbol *eff);
 /* SR2b: colored generic whose base signature sig-rejects -- needs a monomorph
  * clone (the G3a island path's precondition).  See the definition. */
 bool emit_cps_ir_colored_fn_needs_mono(const struct FnDef *fd);
+/* A generic whose clones carry it: its carrier base may be skipped when
+ * nothing calls it through the carrier. */
+bool emit_cps_ir_generic_base_is_template(const struct FnDef *fd);
 
 /* If `fn_def_expr`'s FnDef is colored and lies in the C1 emittable subset, emit
  * its CPS body + direct-entry wrapper into `file` and return true.  Otherwise

@@ -9517,6 +9517,20 @@ static bool emit_abi_fn_skip_generic(const EmitCtx *ctx, const Expr *e) {
             return !emit_abi_has_carrier_call(ctx, fd->binding);
         }
     }
+    /* generic-fn-performing-caller-handled-effect-refused: a generic that
+     * performs, itself or through a callee (emit_cps_ir_generic_base_is_template)
+     * is served by its monomorph clones -- the ABI scan mints one for every
+     * call, at every type, `int` included, and those are what the CPS backend
+     * lowers.  The carrier
+     * base cannot lower its `perform` at all (the direct emitter has no
+     * lowering for one), so emitting it was a hard "no lowering here" error even
+     * though nothing called it.  The generic-unsafe test below only drops a base
+     * whose type variable is nested in a compound type; a bare `[x : T]` is
+     * carrier-safe, so its base was always emitted.  Skip it on the same "no
+     * carrier call" condition: a base something does call through the carrier
+     * still has to exist, and still reports. */
+    if (emit_cps_ir_generic_base_is_template(fd))
+        return !emit_abi_has_carrier_call(ctx, fd->binding);
     if (!emit_abi_fn_is_generic_unsafe(e)) return false;
     /* M7 by-value HKT: never skip the carrier BASE method of an HKT instance.
      * Its concrete call sites route through per-(f, A) by-value `__spec` clones

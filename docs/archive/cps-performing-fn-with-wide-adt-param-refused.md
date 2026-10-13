@@ -31,9 +31,9 @@ repro prints `11` compiled, as the interpreter does.
   three were refused before and are correct now. The `--shared` build of a
   multi-module project was broken independently of this, and is fixed too:
   [shared-build-imported-ctor-undeclared](shared-build-imported-ctor-undeclared.md).
-  A generic that performs is refused at every width, `int` included -- also
-  filed separately:
-  [generic-fn-performing-caller-handled-effect-refused](../reported/generic-fn-performing-caller-handled-effect-refused.md).
+  A generic that performed was refused at every width, `int` included -- filed
+  separately and since fixed:
+  [generic-fn-performing-caller-handled-effect-refused](generic-fn-performing-caller-handled-effect-refused.md).
 - Pinned by `tests/fixtures/cps-wide-adt-param-perform` (leak-checked): the
   repro at both variants, a record ADT, a wide defstruct between scalars, a
   float product, two performs, a cps->cps non-tail call, the fn-value call
