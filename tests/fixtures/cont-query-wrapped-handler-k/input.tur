@@ -17,6 +17,8 @@
   ;; An ordinary case: `k` is a bare chain.
   (println (handle (+ 1 (perform (Ask))) (Ask [] k) (if (cont? k) (resume k 5) 0)))
   (println (handle (+ 1 (perform (Ask))) (Ask [] k) (pick k)))
+  ;; A `^multishot` case's `k` is a wrapper too, asked in the same helper.
+  (println (handle (+ 1 (perform (Ask))) (Ask [] ^multishot k) (pick k)))
   ;; The report's repro: `cont?` in the fn-payload case itself.
   (println (handle (producer) (ShiftE [f] k) (if (cont? k) (f k) 0)))
   ;; A wrapper resumes a copy of its chain, so it stays live after a resume.

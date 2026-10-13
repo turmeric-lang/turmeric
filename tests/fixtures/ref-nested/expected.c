@@ -3137,6 +3137,7 @@ static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
 
 __attribute__((unused, noinline))
 static bool __dk_cont_live_word(intptr_t k) {
+    if (!k) return false;   /* 0 is not a continuation */
     return !((DK *)k)->consumed;
 }
 

@@ -180,7 +180,8 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
      * `consumed` straight off a wrapper read past its 32 bytes. */
     buf_puts(out,
 "__attribute__((unused, noinline))\n"
-"static bool __dk_cont_live_word(intptr_t k) {\n");
+"static bool __dk_cont_live_word(intptr_t k) {\n"
+"    if (!k) return false;   /* 0 is not a continuation */\n");
     if (bridged)
         buf_puts(out,
 "    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn) return true;\n");
