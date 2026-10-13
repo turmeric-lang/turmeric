@@ -241,7 +241,8 @@ Clojure's `seq-zip`, `vector-zip` and `xml-zip` are covered in section 3.3.
 - **Why a record, not a class.** In Haskell this is
   `Traversable t => t a -> Zipper`. Here `Traversable` is an `:int` stub,
   and a higher-kinded `Shapely [^t]` class whose methods return `(Cons a)`
-  crashes the compiler (D2: "a call reached the dead base generic path").
+  compiles to a program that aborts at runtime (D2: "a call reached the
+  dead base generic path").
   Once `Traversable` is typed, `traverse` with a state applicative (that is,
   `mapAccumL`) is exactly what is needed to derive a `Traversal`. Then
   `zip/traversal-of` can build the record from an instance, as ZP3 does for
@@ -436,13 +437,14 @@ After ZP4, decide whether to rebase `(Zipper A)` onto a `ZipCursor` over
 
 ## 5. Compiler defects found while prototyping (2026-10-13, `704cc531`)
 
-None of these are filed under `docs/reported/` yet. Each should be filed, or
-fixed directly, when picked up. Every repro is complete and was run as
-shown.
+D1--D4 are filed under `docs/reported/` (linked below), with root causes
+and fix directions. D5 and the inference papercuts are recorded only here.
+Every repro is complete and was run as shown.
 
 **D1 -- generic match-and-rebuild of a parametric `:heap` sum leaves `(Cons
-T)` payload binders as `int64_t`.** The specialised constructor takes the
-typed pointer. gcc 13 warns (and `run.sh` fails on the warning); clang 15+
+T)` payload binders as `int64_t`**
+([heap-sum-match-binder-of-app-payload-unbridged](../reported/heap-sum-match-binder-of-app-payload-unbridged.md)).
+The specialised constructor takes the typed pointer. gcc 13 warns (and `run.sh` fails on the warning); clang 15+
 and gcc 14 reject it.
 
 ```turmeric
@@ -464,33 +466,38 @@ and gcc 14 reject it.
 ;; 'int64_t' to parameter of type 'tur_adt_Cons__R *' [-Wint-conversion]
 ```
 
-**D2 -- the same rebuild, returning the sum directly, crashes the compiler.**
+**D2 -- a generic over a parametric `:heap` sum is never specialized, so a
+constructor in its body aborts at runtime**
+([heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)).
+It compiles cleanly. The interpreter prints `6`, and so does the compiled
+program without `:heap`.
 
 ```turmeric
-(defdata R :heap :copy (Lf int) (Br (Cons R)))
-(defdata Fr :heap :copy [T] (Nil) (Frame (Cons T) T))
-(defn val [r : R] : int (match r (Lf v) v (Br _) 0))
+(defdata Fr :heap [T] (Nil) (Frame T T))
 (defn bump [T] [f : (Fr T)] : (Fr T)
   (match f
-    (Nil) f
-    (Frame l x) (Frame l x)))
+    (Nil) (Nil)
+    (Frame a b) (Frame b a)))
 (defn main [] : int
-  (let [f : (Fr R) (Frame (tcons-of (Lf 1) (tnil)) (Lf 7))]
-    (match (bump f)
-      (Nil) (println 0)
-      (Frame l x) (println (+ (val x) (val (thead l))))))
+  (match (bump (Frame 1 7))
+    (Nil) (println 0)
+    (Frame a b) (println (- a b)))
   0)
-;; tur: internal error: base constructor 'ctor_Fr_Frame' of a parametric type has
-;; no definition; a call reached the dead base generic path instead of a per-spec clone
+;; at runtime: tur: internal error: base constructor 'ctor_Fr_Frame' of a parametric
+;; type has no definition; a call reached the dead base generic path instead of a
+;; per-spec clone
 ```
 
-The same internal error (`ctor_Cons_Cons`) comes from a higher-kinded
-`(defclass Shapely [^t] (contents [ta : (t a)] : (Cons a)) ...)` whose
-`Tree` instance calls generic helpers. Constructing and matching `Frame`
-outside a generic function works.
+**Why.** `type_c_name` spells `(Fr T)` and `(Fr int)` alike as `int64_t`,
+so `emit_abi_register_call`'s C-name comparison never mints a clone. A
+higher-kinded `(defclass Shapely [^t] (contents [ta : (t a)] : (Cons a)) ...)`,
+whose `Tree` instance calls generic helpers, aborts the same way
+(`ctor_Cons_Cons`).
 
 **D3 -- a by-value `(Option (S T))` field of a `:heap` struct, passed to a
-generic function, is read as a carrier word.** The emitted C is
+generic function, is read as a carrier word**
+([byvalue-option-field-read-as-carrier-at-generic-call](../reported/byvalue-option-field-read-as-carrier-at-generic-call.md)).
+The emitted C is
 `(int64_t)(intptr_t)(h->p)` on an aggregate, which both gcc and clang
 reject.
 
@@ -507,7 +514,9 @@ reject.
 
 **D4 -- an instance method whose declared return is `(Cons a)`, with a
 `match` body, misses the pointer-to-word bridge on the fall-through
-`return`.** The arm returns are bridged; the trailing `return __tN;` after
+`return`**
+([instance-method-match-fallthrough-return-unbridged](../reported/instance-method-match-fallthrough-return-unbridged.md)).
+The arm returns are bridged; the trailing `return __tN;` after
 the `switch` is not.
 
 ```turmeric
