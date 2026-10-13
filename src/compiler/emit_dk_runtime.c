@@ -172,6 +172,23 @@ void emit_dk_resume_word_prelude(Buf *out, bool bridged) {
 "    ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */\n"
 "    return dk_invoke((DK *)k, w);\n"
 "}\n\n");
+    /* cont-query-on-wrapped-handler-k-reads-past-wrapper: (cont? k) asks the
+     * same question of the same two shapes.  A chain is live until a resume
+     * marks it consumed; a wrapper is a multi-shot `k`, resumed through a
+     * copy of its chain any number of times, so it stays live -- what the
+     * interpreter answers for any continuation.  Reading `consumed` off a
+     * wrapper read past its 32 bytes (ASan heap-buffer-overflow).  0 is not
+     * a continuation.  noinline for the reason __dk_resume_word is. */
+    buf_puts(out,
+"__attribute__((unused, noinline))\n"
+"static bool __dk_cont_live_word(intptr_t k) {\n"
+"    if (!k) return false;\n");
+    if (bridged)
+        buf_puts(out,
+"    if (*(int64_t (* const *)(void *, int64_t))k == __dk_cont_fn) return true;\n");
+    buf_puts(out,
+"    return !((DK *)k)->consumed;\n"
+"}\n\n");
 }
 
 /* Serial marshaling runtime: the fixed tagged context frames + the resume /

@@ -41,7 +41,6 @@ not fixed there.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [cont-query-on-wrapped-handler-k-reads-past-wrapper](cont-query-on-wrapped-handler-k-reads-past-wrapper.md) | medium (out-of-bounds read) | `(cont? k)` on a fn-payload case's `k` reads `((DK *)k)->consumed` from the 32-byte `tur_cloneable_cont` wrapper -- ASan heap-buffer-overflow; the answer is whatever byte is there. `emit_resume` tells the shapes apart, `cont?` does not. |
 | [resume-of-non-continuation-int-crashes](resume-of-non-continuation-int-crashes.md) | low-medium | `(resume k v)` with `k` a plain int (`(h 5 6)`) segfaults compiled (`__dk_resume_word` dereferences it); the interpreter says "not a continuation". `int` stays accepted because a stored or untyped handler `k` is still carried as one. |
 | [effect-cont-aggregate-result-untyped](effect-cont-aggregate-result-untyped.md) | low | `effect-cont<P>` with a struct P does not type the resume (the cont type keeps its result as a bare kind), so a helper declared `: P` is refused with TUR-E0709; the interpreter runs it. |
 | [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. |

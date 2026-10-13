@@ -1,5 +1,32 @@
 # `(cont? k)` on a fn-payload case's `k` reads past the end of its wrapper
 
+**Fixed 2026-10-13** along fix directions 1-3 below.
+
+- **`cont?` asks the runtime which shape it has.** `__dk_cont_live_word`
+  sits beside `__dk_resume_word` (`emit_dk_resume_word_prelude`,
+  `src/compiler/emit_dk_runtime.c`) and tells the two apart the same way:
+  a wrapper's first word is `__dk_cont_fn`. Both back ends now lower
+  `(cont? k)` to it: the CPS backend's `TUR_DK_CONT_PRED` arm
+  (`src/compiler/emit_cps_ir.c`) and the direct emitter's
+  `emit_effects_cont_pred` (`src/compiler/emit_effects.c`). So a `k` that
+  reached a helper is covered too, where the binding cannot say which
+  shape arrived.
+- **A wrapper is live (direction 2).** It is resumed through a copy of its
+  chain any number of times, and the interpreter answers true for any
+  continuation. A chain is live until a resume marks it consumed, as
+  before. A 0 word answers false.
+- **Fixed on the way:** `cont?` in a helper that the CPS backend does not
+  lower went to the direct emitter. That emitter called
+  `tur_effect_cont_valid` for an `int` `k`, which was deleted with the fiber
+  effect runtime. For an `effect-cont` it called `tur_cont_consumed`, which
+  belongs to a Phase 18 `tur_cont` and is declared by no emitted program.
+  Either way the program failed to build.
+
+`tests/fixtures/cont-query-on-wrapped-handler-k` (`requires.leak-check`)
+covers the repro, a wrapper asked after its payload resumed it, a bare
+chain, and both shapes asked in a helper. It prints the same on the cc path,
+the JIT and `--interpret`, and is clean under the ASan leak gate.
+
 **Severity: medium.** This is an out-of-bounds heap read, and the answer is
 whatever byte is there. A fn-payload case's `k` is not a DK chain but the
 32-byte `tur_cloneable_cont` around one, and `cont?` reads it as a `DK`.

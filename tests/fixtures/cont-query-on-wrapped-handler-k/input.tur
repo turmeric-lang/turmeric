@@ -1,0 +1,39 @@
+;; cont-query-on-wrapped-handler-k-reads-past-wrapper: `(cont? k)` on a
+;; handler continuation answers on every shape of `k`, without reading past
+;; it.  A fn-payload or `^multishot` case binds its `k` as the 32-byte
+;; cloneable wrapper around the DK chain, and `cont?` read the chain's
+;; `consumed` flag off the wrapper: an ASan heap-buffer-overflow, and an
+;; answer that was whatever byte lay there.  Under requires.leak-check the
+;; gate builds this with ASan, which is what sees that read.
+;;
+;; A wrapper is multi-shot -- resumed through a copy of its chain -- so it
+;; stays live, as the interpreter answers for any continuation.  The same
+;; question asked in a helper the case passed `k` to went through the direct
+;; emitter, which named runtimes no emitted program defines, and failed to
+;; build.
+
+(defeffect Ask [] int)
+(defeffect ShiftE [f : (fn [effect-cont] int)] : int)
+
+(defn producer [] : int
+  (+ 100 (perform (ShiftE (fn [k : effect-cont] : int (k 1))))))
+
+;; Asked in a helper: the helper cannot know which shape its `k` is.
+(defn checked-resume [k : effect-cont v : int] : int
+  (if (cont? k) (resume k v) 0))
+(defn checked-call [f : (fn [effect-cont] int) k : effect-cont] : int
+  (if (cont? k) (f k) 0))
+
+(defn main [] : nil
+  (do
+    ;; The report's repro: a fn-payload case's `k` is the wrapper.
+    (println (handle (producer) (ShiftE [f] k) (if (cont? k) (f k) 0)))
+    ;; ... and still live after the payload resumed it.
+    (println (handle (producer)
+               (ShiftE [f] k) (let [r (f k)] (if (cont? k) r 0))))
+    ;; An ordinary case's `k` is the bare chain.
+    (println (handle (+ 1 (perform (Ask))) (Ask [] k) (if (cont? k) (resume k 5) 0)))
+    ;; Both shapes asked in a helper.
+    (println (handle (+ 1 (perform (Ask))) (Ask [] k) (checked-resume k 5)))
+    (println (handle (+ 1 (perform (Ask))) (Ask [] ^multishot k) (checked-resume k 7)))
+    (println (handle (producer) (ShiftE [f] k) (checked-call f k)))))
