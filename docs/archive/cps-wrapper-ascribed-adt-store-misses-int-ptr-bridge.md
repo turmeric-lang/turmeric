@@ -1,6 +1,42 @@
 # CPS wrapper stores a by-value ADT into an `int64_t` temp with no bridging cast
 
-**Severity: high -- a v0.48.0 -> v0.49.0 regression that fails the build on
+**RESOLVED (verified and archived 2026-10-13).** Fixed as filed (fix direction
+1), on `main` before 2026-09-30 -- the oldest commit a fresh clone carries
+already has it, so the landing commit cannot be named; the report was never
+archived. The cps->direct arm of `CT_TAILCALL` in `emit_term_inner`
+(`src/compiler/emit_cps_ir.c`) compares the callee's recorded return C type
+with the delivery slot's (`cty_word_straddle(drt, slot_cty)`) and, when one is
+a pointer and the other the int64 word, delivers `(slot_cty)(intptr_t)tmp`.
+The `plot` shape now emits:
+
+```c
+tur_adt_Vec__int * __t174 = plot__core__anyrenderers_hy_gtlegacy((int64_t)(intptr_t)rs); /* cps->direct */
+...
+__t0 = (int64_t)(intptr_t)__t174;
+```
+
+Verified against turmeric-spices `main` (470bec1): all 11 `spices/plot`
+test files `emit-c` and pass `clang -fsyntax-only -Werror=int-conversion
+-Werror=incompatible-pointer-types`.
+
+- **Fix direction 2 (the missing fixture) is done here:**
+  `tests/fixtures/cps-direct-ascribed-adt-int-bridge`, a one-file copy of the
+  `plot` shape. It also answers the minimization question below: the
+  distinguishing feature is not the existential element type itself but what
+  it does to coloring. Calling a dictionary method through `open` colors
+  `lower`; its `letrec` then evicts it (`BODY-UNSUPPORTED ... EX_LETREC`), so
+  its caller `run` -- colored only for calling `lower` -- is CPS-emitted and
+  reaches `lower` cps->direct, through the ascription's inline join. That is
+  why a `perform` in the caller (probe 1) did not reproduce: the perform
+  continuation is delegated to the direct emitter instead. With the straddle
+  arm disabled the fixture FAILs `run.sh` with the report's exact
+  `-Wint-conversion` on gcc.
+- **Fix direction 3 needed nothing new:** `tests/run.sh` already FAILs any
+  fixture whose emitted C draws `-Wint-conversion` /
+  `-Wincompatible-pointer-types` (the emitted-C representation ratchet), so the
+  class is no longer macOS-only once a fixture exercises the shape.
+
+**Severity (at filing): high -- a v0.48.0 -> v0.49.0 regression that fails the build on
 macOS.** A CPS-lowered function that ascribes a by-value-ADT-returning call
 to `:int` emits `__t0 = __t252;` where `__t0` is `int64_t` and `__t252` is a
 `tur_adt_Vec__int *`. Under AppleClang 21 `-Wint-conversion` is an error by
