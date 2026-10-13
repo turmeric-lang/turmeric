@@ -3129,15 +3129,23 @@ static intptr_t dk_perform(int tag, intptr_t arg, DK *k) {
     if (H_kcopy && !tur_dk_pinned && __dk_reap_take(sub, 1)) dk_free(sub);
     return H_delivers ? r : dk_run_impl(H_next, r, false);
 }
+__attribute__((unused))
+static inline bool __dk_word_not_cont(intptr_t k) {
+    return (uintptr_t)k < 4096u || ((uintptr_t)k & (sizeof(void *) - 1u)) != 0;
+}
 __attribute__((unused, noinline))
 static intptr_t __dk_resume_word(intptr_t k, intptr_t w) {
+    if (__dk_word_not_cont(k)) {
+        tur_panic("resume: not a continuation");
+        return 0;   /* under catch-unwind tur_panic returns; the caller's check unwinds */
+    }
     ((DK *)k)->consumed = 1;   /* (cont? k), as emit_resume marks it */
     return dk_invoke((DK *)k, w);
 }
 
 __attribute__((unused, noinline))
 static bool __dk_cont_live_word(intptr_t k) {
-    if (!k) return false;   /* 0 is not a continuation */
+    if (__dk_word_not_cont(k)) return false;   /* 0 included */
     return !((DK *)k)->consumed;
 }
 
