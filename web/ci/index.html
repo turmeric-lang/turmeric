@@ -161,20 +161,18 @@
     </div>
 
     <!-- ── Test counts tab ────────────────────────────────────────────── -->
-    <!-- Inside the environment lock, like the timings: a suite can run a
-         different number of tests on another OS or compiler (tur_flags_tests
-         does), so counts from two environments are not one series. -->
+    <!-- Outside the environment lock: each suite is counted once, from the
+         environment it runs in most (renderCounts says why). The Range filter
+         above still applies. -->
     <div class="ci-tab-panel" id="ci-panel-counts" role="tabpanel"
          aria-labelledby="ci-tab-counts" hidden>
 
       <section class="ci-tiles" id="ci-counts-tiles" aria-label="Test count summary"></section>
 
-      <section class="ci-filters" id="ci-counts-filters" aria-label="Environment"></section>
-
       <section class="ci-panel">
         <div class="ci-panel-head">
           <div>
-            <h2 class="ci-panel-title">Tests over time</h2>
+            <h2 class="ci-panel-title">Total tests</h2>
             <p class="ci-panel-sub" id="ci-counts-sub"></p>
           </div>
         </div>
@@ -182,19 +180,16 @@
           <div class="ci-chart" id="ci-counts-chart"></div>
           <div class="ci-tooltip" id="ci-counts-tooltip" hidden></div>
         </div>
-        <div class="ci-legend" id="ci-counts-legend"></div>
       </section>
 
       <section class="ci-panel">
         <div class="ci-panel-head">
           <div>
-            <h2 class="ci-panel-title">Tests per suite</h2>
-            <p class="ci-panel-sub" id="ci-counts-table-sub"></p>
+            <h2 class="ci-panel-title">Tests per macro-suite</h2>
+            <p class="ci-panel-sub" id="ci-macro-sub"></p>
           </div>
         </div>
-        <div class="ci-table-wrap">
-          <table class="ci-table" id="ci-counts-table"></table>
-        </div>
+        <div class="ci-multiples" id="ci-macro-grid"></div>
       </section>
 
     </div>

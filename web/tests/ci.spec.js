@@ -99,7 +99,7 @@ test.describe('CI metrics dashboard', () => {
       { os: 'macOS', cc: 'AppleClang-21.0.0', nproc: 3, jit: false },
     ];
     const suites = [
-      'tur_tests', 'turi_fixture_tests', 'tur_jit_smoke',
+      'tur_tests', 'turi_fixture_tests', 'tur_jit_smoke', 'tur_spice_resolver_tests',
       ...Array.from({ length: 22 }, (_, n) => `quick_${n}`),
     ];
     const rows = [];
@@ -113,7 +113,10 @@ test.describe('CI metrics dashboard', () => {
             ? { discovered: 1400 - i * 2 + e * 3, passed: 1390 - i * 2 + e * 3, failed: 0, skipped: 10 }
             : suite === 'turi_fixture_tests'
               ? { discovered: 3600, passed: 2700, failed: 0, skipped: 900 }
-              : {};
+              // A census with no `discovered`: counted as passed + failed.
+              : suite === 'tur_spice_resolver_tests'
+                ? { passed: 80, failed: 0 }
+                : {};
           rows.push(JSON.stringify({
             branch: 'main', build_type: 'Debug', ...env, ts: now - i * 3600,
             sha: 'a'.repeat(40), run_id: String(i), suite, status: 'pass',
@@ -265,11 +268,11 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-legend .ci-legend-item')).toHaveCount(seriesCount);
 
     // Tests per run and per suite are on the Test counts tab.
-    // Counted, not toBeVisible: the fixture's turi count never changes, and a
+    // Counted, not toBeVisible: the fixture's spice count never changes, and a
     // flat line's zero-height box reads as hidden.
     await page.locator('#ci-tab-counts').click();
-    await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(2);
-    await expect(page.locator('#ci-counts-table tbody tr').first()).toBeVisible();
+    await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(1);
+    await expect(page.locator('#ci-macro-grid .ci-multiple').first()).toBeVisible();
 
     // The line-count chart is on the Code tab. Switch to it and verify.
     await page.locator('#ci-tab-code').click();
@@ -497,7 +500,7 @@ test.describe('CI metrics dashboard', () => {
     await expect(tip.locator('.ci-tooltip-head .mono')).toHaveText(/^[0-9a-f]{7}$/);
   });
 
-  test('the Test counts tab counts tests per suite, inside the environment lock', async ({ page }) => {
+  test('the Test counts tab charts total tests and tests per macro-suite', async ({ page }) => {
     await stubLoc(page);
     await stubDocs(page);
     await page.goto('/ci');
@@ -506,45 +509,64 @@ test.describe('CI metrics dashboard', () => {
     await page.locator('#ci-tab-counts').click();
     await expect(page).toHaveURL(/tab=counts/);
 
-    // Headline: each suite's newest count, summed over the suites that print one.
+    // Each suite counted once, at its newest count: 1,400 + 3,600 + 80.
     const tiles = page.locator('#ci-counts-tiles .ci-tile');
     await expect(tiles).toHaveCount(4);
-    await expect(tiles.filter({ hasText: 'Tests' }).first()).toContainText('5,000');
+    await expect(tiles.filter({ hasText: 'Tests' }).first()).toContainText('5,080');
     await expect(tiles.filter({ hasText: 'Skipped tests' })).toContainText('910');
     await expect(tiles.filter({ hasText: 'Change in range' })).toContainText('+10');
+    await expect(page.locator('#ci-counts-sub')).toContainText('23 other suites');
 
-    // One row per counted suite, largest first; the rest are named as uncounted.
-    const rows = page.locator('#ci-counts-table tbody tr');
-    await expect(rows).toHaveCount(2);
-    await expect(rows.nth(0)).toHaveAttribute('data-suite', 'turi_fixture_tests');
-    await expect(rows.nth(1)).toContainText('1,400');
-    await expect(rows.nth(1)).toContainText('+10');
-    await expect(page.locator('#ci-counts-table-sub')).toContainText('23 other suites');
-
-    // One line per suite -- never a per-run sum, which a partial run would
-    // drag down -- each named in the legend and keyed in its table row.
-    await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(2);
-    await expect(page.locator('#ci-counts-legend .ci-legend-item')).toHaveCount(2);
-    await expect(rows.nth(1)).toHaveClass(/is-selected/);
-
-    // A row toggles its suite off the chart and back on, and the URL keeps
-    // the selection; the defaults stay out of a bare link.
-    await expect(page).not.toHaveURL(/counts=/);
-    await rows.nth(1).click();
+    // Chart 1: the total, one line, with its own hover.
     await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(1);
-    await expect(rows.nth(1)).not.toHaveClass(/is-selected/);
-    await expect(page).toHaveURL(/counts=turi_fixture_tests(&|$)/);
-    await rows.nth(1).click();
-    await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(2);
-    await expect(page).toHaveURL(/counts=turi_fixture_tests%2Ctur_tests/);
+    await page.locator('#ci-counts-hit').hover();
+    await expect(page.locator('#ci-counts-tooltip')).toBeVisible();
 
-    // Its environment selector is the Tests tab's lock: switching it changes
-    // the counts and the shared env in the URL.
-    await page.locator('#ci-counts-env').selectOption({ index: 1 });
-    await expect(page).toHaveURL(/env=/);
-    await expect(tiles.filter({ hasText: 'Tests' }).first()).toContainText('5,003');
-    await expect(page.locator('#ci-env')).toHaveValue(
-      await page.locator('#ci-counts-env').inputValue());
+    // Chart 2: one small multiple per macro-suite that has a counted suite,
+    // in palette order, each with its own chart.
+    const cards = page.locator('#ci-macro-grid .ci-multiple');
+    await expect(cards).toHaveCount(2);
+    await expect(cards.nth(0)).toHaveAttribute('data-macro', 'fixtures');
+    await expect(cards.nth(0).locator('.ci-multiple-value')).toHaveText('5,000');
+    await expect(cards.nth(0).locator('.ci-multiple-change')).toHaveText('+10');
+    await expect(cards.nth(1)).toHaveAttribute('data-macro', 'spices');
+    await expect(cards.nth(1).locator('.ci-multiple-value')).toHaveText('80');
+    await expect(page.locator('#ci-macro-grid .ci-series-line')).toHaveCount(2);
+
+    // A group says which suites it adds up.
+    await cards.nth(0).locator('summary').click();
+    const members = cards.nth(0).locator('.ci-multiple-members li');
+    await expect(members).toHaveCount(2);
+    await expect(members.nth(0)).toContainText('turi_fixture_tests');
+    await expect(members.nth(1)).toContainText('tur_tests');
+
+    // Not environment-locked: no picker of its own.
+    await expect(page.locator('#ci-panel-counts select')).toHaveCount(0);
+  });
+
+  // A push runs only the jobs its diff needs, so the newest run often executed
+  // a few suites. The total carries every other suite's newest count forward
+  // rather than dropping to what that one run happened to execute.
+  test('a run that executed only some suites does not dip the total', async ({ page }) => {
+    const body = timingsFixture().split('\n').filter((l) => {
+      const r = JSON.parse(l);
+      return !(r.run_id === '0' && r.suite !== 'tur_tests');
+    }).join('\n');
+    await page.route('**/api/ci-timings*', (route) => route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
+      body,
+    }));
+    await page.goto('/ci?tab=counts');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    const tiles = page.locator('#ci-counts-tiles .ci-tile');
+    await expect(tiles.filter({ hasText: 'Tests' }).first()).toContainText('5,080');
+    // The line's last point sits where the others do, not at 1,400.
+    const ys = await page.locator('#ci-counts-chart circle.ci-point').evaluateAll(
+      (els) => els.map((el) => Number(el.getAttribute('cy'))));
+    expect(ys.length).toBe(6);
+    expect(Math.abs(ys[ys.length - 1] - ys[ys.length - 2])).toBeLessThan(2);
   });
 
   test('the Reports tab charts reports archived minus filed', async ({ page }) => {
