@@ -3011,6 +3011,15 @@ static void apply_runtime_lib_mode(Buf *autolink) {
     *autolink = inj;
 }
 
+/* Is `prefix` an installed SDK prefix -- <prefix>/include/turi/eval.h, the
+ * layout a release archive ships (scripts/stage-release.sh)? */
+static bool sdk_prefix_has_turi_headers(const char *prefix) {
+    char probe[4200];
+    struct stat st;
+    snprintf(probe, sizeof(probe), "%s/include/turi/eval.h", prefix);
+    return stat(probe, &st) == 0 && S_ISREG(st.st_mode);
+}
+
 /* tur-link-and-build-split-plan Phase 1: resolve the raw `__tur_autolink__`
  * flag string (as scanned out of the generated C, or read from a `.link`
  * sidecar) into the final link-ready flag set, and report whether the linked
@@ -3034,18 +3043,40 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
                                     bool *out_needs_asan) {
     *out_needs_asan = false;
 
-    /* 1. -lturi SDK anchoring. */
+    /* 1. -lturi SDK anchoring.  Two SDK shapes:
+     *   - a SOURCE TREE staged under <root>/share/turmeric/src (sdk_root), and
+     *   - an installed PREFIX, <prefix>/include/turi/eval.h beside
+     *     <prefix>/lib/libturi.a (sdk_prefix) -- the shape every release
+     *     archive ships (scripts/stage-release.sh).  Probed at exactly
+     *     <exe_dir>/.., the way resolve_stdlib_root and locate_runtime_lib
+     *     find the same archive's stdlib and runtime: a walk-up would let a
+     *     stale /usr/local/include/turi shadow a dev build under /usr/local/src.
+     * Only the first was looked for, so no release from v0.47.0 on could build
+     * a program that links -lturi: `turi/eval.h` not found
+     * (docs/archive/release-tarball-turi-headers-are-unusable.md). */
     if (autolink->len > 0 && strstr(autolink->data, "-lturi")) {
         char sdk_root[4096] = "";
+        char sdk_prefix[4096] = "";
         const char *sdk_env = getenv("TUR_SDK_ROOT");
         if (sdk_env && *sdk_env) {
-            snprintf(sdk_root, sizeof(sdk_root), "%s", sdk_env);
+            if (sdk_prefix_has_turi_headers(sdk_env))
+                snprintf(sdk_prefix, sizeof(sdk_prefix), "%s", sdk_env);
+            else
+                snprintf(sdk_root, sizeof(sdk_root), "%s", sdk_env);
         } else {
             char exe_buf[4096] = "";
             if (get_exe_path(exe_buf, sizeof(exe_buf)) == 0) {
                 char dir[4096];
                 dir_of_path(exe_buf, dir, sizeof(dir));
-                for (int d = 0; d < 8; d++) {
+                char parent[4096];
+                snprintf(parent, sizeof(parent), "%s", dir);
+                char *psep = last_path_sep(parent);
+                if (psep && psep != parent) {
+                    *psep = '\0';
+                    if (sdk_prefix_has_turi_headers(parent))
+                        snprintf(sdk_prefix, sizeof(sdk_prefix), "%s", parent);
+                }
+                for (int d = 0; d < 8 && !sdk_prefix[0]; d++) {
                     char probe[4096];
                     struct stat sdk_st;
                     snprintf(probe, sizeof(probe),
@@ -3078,6 +3109,26 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
             buf_init(&new_al);
             buf_write(&new_al, sdk_flags.data, sdk_flags.len);
             buf_free(&sdk_flags);
+            buf_putc(&new_al, ' ');
+            if (autolink->len > 1)
+                buf_write(&new_al, autolink->data, autolink->len - 1);
+            buf_putc(&new_al, '\0');
+            buf_free(autolink);
+            *autolink = new_al;
+        } else if (sdk_prefix[0]) {
+            /* One -I: the shipped headers spell each other src/-relative
+             * ("compiler/diag.h"), and include/ mirrors that layout.  The
+             * marker's own -Isrc/... flags are anchored by step 3 at
+             * <prefix>/share/turmeric, which has no src/; cc ignores a
+             * missing -I directory. */
+            Buf new_al;
+            buf_init(&new_al);
+            buf_printf(&new_al, "-I%s/include", sdk_prefix);
+            char lib_probe[4200];
+            struct stat sdk_lib_st;
+            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libturi.a", sdk_prefix);
+            if (stat(lib_probe, &sdk_lib_st) == 0)
+                buf_printf(&new_al, " -L%s/lib", sdk_prefix);
             buf_putc(&new_al, ' ');
             if (autolink->len > 1)
                 buf_write(&new_al, autolink->data, autolink->len - 1);

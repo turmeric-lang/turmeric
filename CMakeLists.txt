@@ -989,6 +989,17 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_eval_link PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+# release-tarball-turi-headers-are-unusable: stage the archive a release
+# publishes (scripts/stage-release.sh, the script release.yml packages
+# through) and build a `turi/eval` and a `(scheme eval)` program with the
+# staged tur alone.  No release from v0.47.0 could build either; this is the
+# per-PR copy of release.yml's extracted-archive check.
+add_test(
+  NAME tur_release_sdk
+  COMMAND bash tests/check-release-sdk.sh "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_release_sdk PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
 # tur-init-help-scaffolds-and-overwrites: `tur init` must never destroy a
 # working tree.  `tur init --help` did not print help -- the flag fell past the
 # project-name slot, the cwd basename was used as the name, and scaffolding

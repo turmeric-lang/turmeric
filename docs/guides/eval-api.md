@@ -30,12 +30,24 @@ int main(void) {
 }
 ```
 
-Compile and link:
+Compile and link, with `<prefix>` the root of an extracted release archive (or
+an install of one, e.g. `/usr/local`):
 
 ```sh
-cc -o demo demo.c -I/usr/local/include/turi \
-   -L/usr/local/lib -lturi -lpthread
+cc -o demo demo.c -I<prefix>/include \
+   -L<prefix>/lib -lturi -lpthread
 ```
+
+The `-I` names `include/`, not `include/turi/`: the headers spell each other
+`"turi/env.h"`, and `turi/env.h` includes the compiler's and runtime's headers
+the same way (`"compiler/diag.h"`, `"runtime/arena.h"`), which the archive ships
+under `include/compiler/` and `include/runtime/`. A Turmeric program that
+embeds the interpreter -- `(import turi/eval)`, or `(import (scheme eval))` in
+`#lang r7rs` -- needs neither flag: when it links `-lturi`, `tur build` adds
+`-I<prefix>/include -L<prefix>/lib` for the archive its own binary came from.
+Releases before that (v0.47.0 up to the fix of
+[release-tarball-turi-headers-are-unusable](../archive/release-tarball-turi-headers-are-unusable.md))
+shipped only the four `turi/` headers, and cannot build an embedder at all.
 
 ---
 

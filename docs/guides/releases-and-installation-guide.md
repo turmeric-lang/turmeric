@@ -99,13 +99,14 @@ All four unpack to the same **prefix layout**:
 ```
 bin/tur            (bin/tur.exe on Windows)
 lib/libturt_runtime.a, libturi.a
-include/turi/*.h
+include/{turi,compiler,runtime}/*.h
 share/turmeric/stdlib/
 ```
 
 Keep that shape. `tur` finds its runtime archive at `<exe_dir>/../lib` and its
-standard library at `<exe_dir>/../share/turmeric/stdlib`, so the tree is one an
-installed toolchain already has. Put `<extracted>/bin` on `PATH`, or symlink
+standard library at `<exe_dir>/../share/turmeric/stdlib`, and a program that
+links `-lturi` gets `-I<exe_dir>/../include -L<exe_dir>/../lib`, so the tree is
+one an installed toolchain already has. `scripts/stage-release.sh` writes it. Put `<extracted>/bin` on `PATH`, or symlink
 `bin/tur` -- the walk-up resolves through a symlink either way.
 
 Windows ships a `.zip` rather than a `.tar.gz` because Explorer opens one and
@@ -216,7 +217,9 @@ After extracting, the tarball lays out like:
 |-- bin/tur                   # the CLI
 |-- lib/libturt_runtime.a     # runtime archive `tur build` links against
 |-- lib/libturi.a             # static library for C embedding
-|-- include/turi/             # public headers (eval.h, env.h, value.h, fiber.h)
+|-- include/turi/             # embedding headers (eval.h, env.h, value.h, fiber.h, r7rs_embed.h)
+|-- include/compiler/         #   ...and the compiler / runtime headers they include
+|-- include/runtime/
 `-- share/turmeric/stdlib/    # the standard library (~137 .tur files)
 ```
 
@@ -363,13 +366,17 @@ For each matrix leg (`linux-x86_64`, `linux-aarch64`, `macos-arm64`):
 2. Installs `libedit` (Apple/Linux differ on package manager).
 3. Configures and builds with CMake in Release mode.
 4. Runs `tur --version` as a smoke test.
-5. Packages `bin/tur` + `lib/*.a` + `include/turi/*.h` +
-   `share/turmeric/stdlib/` into a `tar.gz`.
+5. Stages `bin/tur` + `lib/*.a` + `include/` + `share/turmeric/stdlib/` with
+   `scripts/stage-release.sh` and packs them into a `tar.gz`.
 6. Unpacks that archive and compiles a two-line program with it. `tur
    --version` above proves only that the binary starts, which is a weaker
    claim than it looks: the archives passed that check for several releases
    while being unable to compile anything. This is the step that would have
    caught it, and it is what verifies whichever layout is packaged.
+7. Builds and runs two libturi embedders from the same archive --
+   `tests/release-sdk/turi-eval.tur` and `scheme-eval.tur` (Windows: the
+   second only). The two-line program links no `-lturi`, so it passed while
+   no release from v0.47.0 could build an embedder.
 7. Uploads the artifact.
 
 Windows is a separate job rather than a fourth matrix leg: every step needs

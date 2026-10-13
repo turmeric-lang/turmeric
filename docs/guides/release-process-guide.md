@@ -309,13 +309,17 @@ For `linux-x86_64`, `linux-aarch64`, and `macos-arm64`:
 2. Install `libedit` (package manager differs by platform).
 3. Configure and build with CMake in Release mode.
 4. Run `tur --version` as a smoke test.
-5. Package `bin/tur` + `lib/*.a` + `include/turi/*.h` +
-   `share/turmeric/stdlib/` into a prefix-layout `tar.gz`.
+5. Stage `bin/tur` + `lib/*.a` + `include/` + `share/turmeric/stdlib/`
+   with `scripts/stage-release.sh` and pack them into a prefix-layout
+   `tar.gz`.
 6. Unpack the archive and compile a two-line program with it. `tur
    --version` proves only that the binary starts; this step proves it
    can actually compile. Several releases passed the version check
    while being unable to compile anything.
-7. Upload the artifact.
+7. Build and run the two libturi embedders in `tests/release-sdk/` from
+   the same archive (the two-line program links no `-lturi`).
+   `tests/check-release-sdk.sh` runs the same check on every PR.
+8. Upload the artifact.
 
 ### Build (Windows)
 

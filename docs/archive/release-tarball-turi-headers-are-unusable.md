@@ -1,6 +1,55 @@
 # Release tarball's `include/turi/` cannot be included, and `tur` never points at it
 
-**Severity: high for any turi-embedding consumer; zero for everyone else.**
+**RESOLVED 2026-10-13.** Both halves fixed, plus the check that keeps them
+fixed. Still live on `main` that day: a prefix tree staged exactly as
+`release.yml` packaged it failed the repro with `'turi/eval.h' file not
+found`, and with `-I`/`-L` passed by hand, one header deeper on
+`compiler/diag.h`.
+
+- **Fix direction 1 -- `tur` probes the prefix layout.**
+  `resolve_autolink_flags` step 1 (`src/main.c`) checks
+  `<exe_dir>/../include/turi/eval.h` and, for a program that links `-lturi`,
+  prepends `-I<prefix>/include -L<prefix>/lib`. It probes exactly one level
+  up, like `resolve_stdlib_root` step 3 and `locate_runtime_lib`, not as a
+  walk-up: a walk-up would let a stale `/usr/local/include/turi` shadow a dev
+  build under `/usr/local/src`. `TUR_SDK_ROOT` pointing at a prefix
+  (`include/turi/eval.h` present) takes the same arm; the source-tree probe
+  (`share/turmeric/src/turi/eval.h`) is unchanged.
+- **Fix direction 2 -- ship the closure.** `scripts/stage-release.sh` stages
+  the archive, and both `release.yml` packaging steps call it. Its `include/`
+  is the `cc -MM` closure of the roots programs name -- `turi/eval.h`,
+  `env.h`, `value.h`, `fiber.h`, and `turi/r7rs_embed.h` -- copied
+  src/-relative. That is 12 headers today: the report's six, plus
+  `compiler/forms.h` (added since) and `r7rs_embed.h`. The script then
+  compiles the roots with nothing but `-I<dist>/include`, so a header that
+  gains an include either ships it or fails the staging. The closure is
+  computed rather than listed because a hand-kept list is how four of eleven
+  shipped. The "shrink the surface" option, an embedding API that does not
+  drag in `compiler/diag.h`, is still open as a design question. Shipping the
+  closure unblocks consumers and is easy to narrow later.
+- **`(import (scheme eval))` was broken by the same defect.**
+  `stdlib/r7rs/eval.tur` includes `turi/r7rs_embed.h`, which no archive ever
+  shipped, so `#lang r7rs` `eval` could not compile from a release either.
+- **Fix direction 3 -- the check.** `release.yml` builds and runs
+  `tests/release-sdk/turi-eval.tur` and `scheme-eval.tur` from the extracted
+  archive (Windows: `scheme-eval` only, the path its suite already covers from
+  the build tree). `tests/check-release-sdk.sh` (ctest `tur_release_sdk`)
+  stages the same tree from a local build on every PR. It builds both programs
+  with the staged `tur` from outside the checkout and asserts that the compile
+  line takes `-I`/`-L` from the staged prefix and nothing from `src/`.
+  Measured: with the `main.c` probe reverted, it fails with `turi/eval.h: No
+  such file`; with only the old four headers staged, with
+  `compiler/diag.h: No such file` and `turi/r7rs_embed.h: No such file`.
+- **tvm's build-from-source path** (`tvm/tvm.sh`) copied the same four
+  headers into a third shape. It now uses `stage-release.sh --headers` when
+  the checked-out ref has it.
+- **Guides:** `eval-api.md` (its compile line passed `-I.../include/turi`,
+  which cannot resolve `"turi/env.h"`), `releases-and-installation-guide.md`,
+  `release-process-guide.md`, `tvm-guide.md`. The turmeric-spices `CLAUDE.md`
+  sentence this report names is in that repo and still describes the flat
+  layout.
+
+**Severity (at filing): high for any turi-embedding consumer; zero for everyone else.**
 Every official release archive since **v0.47.0** ships a `turi` public header
 set that does not compile, and a `tur` whose SDK anchoring looks for those
 headers at a path the archive never contains. The net effect is that **no

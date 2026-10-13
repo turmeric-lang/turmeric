@@ -1,0 +1,22 @@
+;; tests/release-sdk/turi-eval.tur -- embed the interpreter through
+;; `(import turi/eval)`, the way a libturi host program does.
+;;
+;; Compiled against a STAGED release archive (scripts/stage-release.sh) by
+;; tests/check-release-sdk.sh and by release.yml's extracted-archive check.
+;; Its inline C includes "turi/eval.h", which pulls in the compiler's diag /
+;; symbols headers and the runtime's arena / buf headers, and links -lturi, so
+;; it builds only when the archive ships that whole header closure AND `tur`
+;; adds -I<prefix>/include -L<prefix>/lib for it.  No release from v0.47.0 to
+;; the fix could build it: docs/archive/release-tarball-turi-headers-are-unusable.md.
+;;
+;; Prints 42.
+(defmodule release-sdk/main
+  (import turi/eval :refer [Env/new Env/free eval eval-ok? eval-as-int eval-free])
+
+  (defn main [] : int
+    (let [env (Env/new)
+          r   (eval env "(+ 40 2)")]
+      (println (if (eval-ok? r) (eval-as-int r) -1))
+      (eval-free r)
+      (Env/free env)
+      0)))
