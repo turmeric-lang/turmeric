@@ -3778,8 +3778,11 @@ bool emit_cps_ir_colored_fn_needs_mono(const FnDef *fd) {
     if (!fd || !fd->body) return false;
     if (cps_expr_contains_effect_op(fd->body)) return !fn_sig_ok(fd);
     if (fd->owner_instance || fd->constraints.n_constraints) return false;
-    if (fn_sig_ok(fd)) return false;
-    return fn_body_reaches_effect_op(fd);
+    /* The walk first: it only reads the tree, while fn_sig_ok spells the
+     * signature's C types, which registers their monomorphs -- asked of every
+     * generic from emit_abi_fn_skip_generic, that reordered the typedefs of
+     * programs this change has nothing to do with. */
+    return fn_body_reaches_effect_op(fd) && !fn_sig_ok(fd);
 }
 
 /* ---- whole-program classification cache ------------------------------ */
