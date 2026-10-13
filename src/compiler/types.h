@@ -865,6 +865,12 @@ typedef struct Type {
              * name's int default -- so a resume of the continuation may be
              * typed by it (elab_make_resume).  Not part of type equality. */
             bool     returns_known;
+            /* effect-cont-aggregate-result-untyped: the whole written result
+             * type when `returns` was written -- `returns` is a bare kind, a
+             * whole type only for a scalar, so a struct / ADT result needs
+             * this to type a resume.  NULL when unwritten.  Not part of type
+             * equality (as `returns_known`). */
+            const struct Type *returns_full;
         } cont;
         /* Phase HKT-P1: Type application — (type-app F A) */
         struct {
