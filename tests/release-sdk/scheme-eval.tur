@@ -1,0 +1,10 @@
+#lang r7rs
+;; tests/release-sdk/scheme-eval.tur -- `(scheme eval)` from a staged release
+;; archive.  stdlib/r7rs/eval.tur links -lturi and includes
+;; "turi/r7rs_embed.h", a header no archive shipped before
+;; scripts/stage-release.sh computed the set.  See turi-eval.tur.
+;;
+;; Prints 42.
+(import (scheme base) (scheme write) (scheme eval))
+(write (eval '(* 6 7) (environment '(scheme base))))
+(newline)

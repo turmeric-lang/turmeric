@@ -77,29 +77,10 @@ jobs:
           TAG=${GITHUB_REF_NAME}
           ARCHIVE="turmeric-${TAG}-${{ matrix.target }}.tar.gz"
 
-          mkdir -p dist/bin dist/lib dist/include/turi dist/share/turmeric
-
-          cp build/tur dist/bin/
-          cp build/src/libturi.a dist/lib/
-          # libturt_runtime.a is the one TUR_RT_AUTO will actually link.  Without
-          # it in the archive, `tur run` from an extracted tarball fell back to
-          # recompiling src/runtime/*.c -- which the archive does not ship -- and
-          # failed at the C compile step.  Verified broken on macOS and Windows
-          # before this; docs/archive/release-archive-cannot-compile.md.
-          cp build/src/libturt_runtime.a dist/lib/
-          # libturt_preamble.a is what lets a default build skip recompiling the
-          # runtime preamble in every program (cc-path-preamble-split-plan).
-          # Without it the build still works -- it keeps the whole preamble --
-          # so a missing copy here would only ever show up as slowness.
-          cp build/src/libturt_preamble.a dist/lib/
-          # TUR_JIT defaults ON (vendored MIR), so libturi.a carries the JIT
-          # engine's image API and links PUBLIC against MIR: a C host that
-          # embeds libturi and calls that API needs libtur_mir.a beside it.
-          # A plain `-lturi` link never pulls the engine's object in.  A hard
-          # cp, so a build that lost the engine fails here rather than shipping.
-          cp build/libtur_mir.a dist/lib/
-          cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
-          cp -R stdlib dist/share/turmeric/
+          # What goes in, and why each file is there, is written down once in
+          # scripts/stage-release.sh -- shared with build-windows below and with
+          # tests/check-release-sdk.sh, which stages the same tree on every PR.
+          bash scripts/stage-release.sh build dist
 
           tar -czf "${ARCHIVE}" -C dist .
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
@@ -127,6 +108,32 @@ jobs:
             *"hello from the archive"*) echo "Archive compiles and runs." ;;
             *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
           esac
+
+      # A libturi embedder, from the same extracted archive.  hello.tur above
+      # includes no turi header and links no -lturi, so it passed on every
+      # release from v0.47.0 while none of them could build an embedder: the
+      # archive shipped 4 of the 12 headers include/ needs, and `tur` never
+      # added -I<prefix>/include.  turi-eval.tur is `(import turi/eval)` (the
+      # whole header closure); scheme-eval.tur is `(import (scheme eval))`
+      # (turi/r7rs_embed.h).  docs/archive/release-tarball-turi-headers-are-unusable.md.
+      # tests/check-release-sdk.sh runs the same two programs on every PR,
+      # against a tree staged by the same scripts/stage-release.sh.
+      - name: Embed the interpreter from the extracted archive
+        run: |
+          for prog in turi-eval scheme-eval; do
+            cp "tests/release-sdk/${prog}.tur" verify/
+            out=$(cd verify && ./bin/tur run "${prog}.tur" 2>&1) || {
+              printf '%s\n' "$out"
+              echo "::error::the extracted archive cannot build ${prog}.tur, a libturi embedder"
+              exit 1
+            }
+            printf '%s\n' "$out"
+            if [ "$(printf '%s\n' "$out" | tail -1)" != "42" ]; then
+              echo "::error::${prog}.tur printed the wrong answer from the extracted archive"
+              exit 1
+            fi
+            echo "${prog}.tur builds and runs from the archive."
+          done
 
       # TUR_JIT defaults ON, so the shipped binary carries the MIR engine, and
       # linux-aarch64 is a leg no CI job runs the engine on.  Run the same
@@ -283,16 +290,8 @@ jobs:
           TAG=${GITHUB_REF_NAME}
           ARCHIVE="turmeric-${TAG}-windows-x86_64.zip"
 
-          mkdir -p dist/bin dist/lib dist/include/turi dist/share/turmeric
-
-          cp build/tur.exe dist/bin/
-          cp build/src/libturt_runtime.a dist/lib/
-          cp build/src/libturt_preamble.a dist/lib/
-          cp build/src/libturi.a dist/lib/
-          # See the `build` legs: the JIT engine's MIR, for libturi embedders.
-          cp build/libtur_mir.a dist/lib/
-          cp src/turi/eval.h src/turi/env.h src/turi/value.h src/turi/fiber.h dist/include/turi/
-          cp -R stdlib dist/share/turmeric/
+          # The same staging as the `build` legs: scripts/stage-release.sh.
+          bash scripts/stage-release.sh build dist
 
           # zip rather than tar.gz: Explorer opens one and not the other.  The
           # release job checksums whatever it finds, so the format is free.
@@ -322,6 +321,28 @@ jobs:
             *"hello from the archive"*) echo "Archive compiles and runs." ;;
             *) echo "::error::unexpected output from the extracted archive"; exit 1 ;;
           esac
+
+      # As on the `build` legs, a libturi embedder from the extracted archive --
+      # but (scheme eval) only.  The Windows suite already links it from the
+      # build tree (the r7rs-eval fixture), so this checks the archive's shape
+      # and nothing new about the platform; `(import turi/eval)` has never run
+      # on Windows (its fixture is ctest-only), and a release is the wrong
+      # place to find out.  The full header closure is still compiled on its
+      # own here, by scripts/stage-release.sh's self-check.
+      - name: Embed the interpreter from the extracted archive
+        run: |
+          cp tests/release-sdk/scheme-eval.tur verify/
+          out=$(cd verify && ./bin/tur.exe run scheme-eval.tur 2>&1) || {
+            printf '%s\n' "$out"
+            echo "::error::the extracted archive cannot build scheme-eval.tur, a libturi embedder"
+            exit 1
+          }
+          printf '%s\n' "$out"
+          if [ "$(printf '%s\n' "$out" | tail -1 | tr -d '\r')" != "42" ]; then
+            echo "::error::scheme-eval.tur printed the wrong answer from the extracted archive"
+            exit 1
+          fi
+          echo "scheme-eval.tur builds and runs from the archive."
 
       # As on the `build` legs: the shipped engine, from the extracted archive,
       # with a cc fallback (TUR-W0070) counted as a failure.

@@ -293,11 +293,14 @@ Each release ships one tarball per `(os, arch)`:
 
 ```
 turmeric-v<tag>-<target>.tar.gz   # target: linux-x86_64 | linux-aarch64 | macos-arm64
-  tur                              # the compiler binary
-  libturi.a                        # static interpreter library
-  include/turi/*.h                 # headers for linking against libturi
-  stdlib/                          # stdlib snapshot for that release
+  bin/tur                          # the compiler binary
+  lib/libturi.a                    # static interpreter library (+ runtime archives)
+  include/{turi,compiler,runtime}/ # headers for linking against libturi
+  share/turmeric/stdlib/           # stdlib snapshot for that release
 ```
+
+Releases before v0.47.0 shipped the same files flat at the archive root;
+`tvm install` rearranges either shape into the one above.
 
 `tvm install` downloads the asset matching the current host, verifies
 its SHA-256 against the release's `sha256sums.txt`, and extracts it
@@ -314,7 +317,7 @@ $TVM_DIR/                  # default: ~/.tvm
   versions/<v>/
     bin/tur                # extracted compiler
     lib/libturi.a          # interpreter library
-    include/turi/*.h
+    include/               # turi/, compiler/, runtime/ headers
     stdlib/                # per-version stdlib snapshot
   aliases/
     default                # plain-text file: "0.24.0"
