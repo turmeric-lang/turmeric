@@ -24,7 +24,7 @@
 
 set -u
 cd "$(dirname "$0")/.."
-REPO="$(pwd)"
+REPO="$(pwd -P)"
 BUILD="${1:-build}"
 case $BUILD in /*) ;; *) BUILD="$REPO/$BUILD" ;; esac
 
@@ -39,7 +39,10 @@ if [ ! -f "$BUILD/libtur_mir.a" ]; then
     exit 0
 fi
 
-TMP="$(mktemp -d)"
+# pwd -P: `tur` names its own location with symlinks resolved, and the
+# assertions below compare paths as strings.  macOS's $TMPDIR is under /var,
+# a symlink to /private/var, so an unresolved TMP never matched.
+TMP="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 fail() { echo "FAIL check-release-sdk: $*"; FAILED=1; }
