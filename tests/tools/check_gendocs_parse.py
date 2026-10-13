@@ -12,8 +12,12 @@ named `int` appeared; the return position `] : int` came back as ':'.  53% of
 the stdlib would have rendered with a wrong signature on the next
 `tur run docs`.
 
+Also pins how docstring prose renders: its Markdown `code` spans become
+<code> on the API pages, and nothing else in it is read as Markdown.
+
 Runs without the `markdown` package (a stub stands in for it), because the
-parser is what is under test, not the HTML renderer.
+docstring parser and gendocs' own inline renderer are what is under test, not
+the guide renderer the package backs.
 """
 import os
 import sys
@@ -118,8 +122,44 @@ for ok, what in checks:
         fails += 1
         print(f"FAIL gendocs-parse (scheme library): {what}")
 
+# Docstring prose renders its Markdown `code` spans as <code> -- and nothing
+# else as Markdown: before the fix every summary, parameter and Returns line
+# reached the API pages with its backticks showing.
+from gendocs import _inline_html, _render_def_card  # noqa: E402
+
+INLINE_CASES = [
+    ('a `vec-get` call', 'a <code>vec-get</code> call'),
+    ('`a` and `b`', '<code>a</code> and <code>b</code>'),
+    ('`x < y` & z', '<code>x &lt; y</code> &amp; z'),          # escaped inside and out
+    ('one ` stray', 'one ` stray'),                              # unmatched: literal
+    ('`` a `b` c ``', '<code>a `b` c</code>'),                   # double-backtick span
+    ('*args* and tur_box_*', '*args* and tur_box_*'),            # not emphasis
+    ('spans `two\nlines`', 'spans <code>two lines</code>'),     # wrapped span
+    ('', ''),
+]
+for text, want in INLINE_CASES:
+    got = _inline_html(text)
+    if got != want:
+        fails += 1
+        print(f"FAIL gendocs-inline: _inline_html({text!r}) = {got!r}, want {want!r}")
+
+card = _render_def_card({
+    'kind': 'defn', 'name': 'vec-get', 'params': [('v', ':Vec')], 'return_type': ':int',
+    'docstring': {
+        'summary': 'vec-get -- read slot `i` of `v`.', 'deprecated': '',
+        'params': [('v', 'the `Vec` to read')], 'returns': 'The `int` at `i`.',
+        'example': '(vec-get v `0`)', 'since': '',
+    },
+})
+for want in ('read slot <code>i</code> of <code>v</code>.', 'the <code>Vec</code> to read',
+             'The <code>int</code> at <code>i</code>.', '(vec-get v `0`)'):
+    if want not in card:
+        fails += 1
+        print(f"FAIL gendocs-inline: def card lacks {want!r}")
+
 if fails:
     print(f"gendocs-parse: {fails} case(s) failed")
     sys.exit(1)
 print(f"PASS check-gendocs-parse ({len(CASES)} signatures, both spellings; "
-      f"{len(SCHEME_CASES)} Scheme forms and a define-library)")
+      f"{len(SCHEME_CASES)} Scheme forms and a define-library; "
+      f"{len(INLINE_CASES)} inline-code cases)")
