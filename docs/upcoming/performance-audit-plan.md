@@ -1,7 +1,9 @@
 # Performance audit -- Turmeric as it stands at v0.64.1
 
 > **Status: PROPOSED; the author's five decisions are in (2026-10-11), see
-> section 8.** Baseline is `m7i.xlarge`; `--release` will mean `-O3` over
+> section 8.** Baseline is the author's local Intel NUC8i7HVK running
+> Windows 11 with WSL2 (revised 2026-10-13 from an AWS `m7i.xlarge`; its
+> setup is to be confirmed in WP0); `--release` will mean `-O3` over
 > an unchanged `-O2` default; the CPS coloring of fn-value calls (R-1) is
 > incidental, so it is WP2's lead item and D-1 is settled now; CI tracking
 > stays on hosted runners; attention is split between compile latency and
@@ -30,7 +32,9 @@
 > [suite-timing-trends-plan](../archive/suite-timing-trends-plan.md) (the
 > CI timing pipeline WP6 extends),
 > [post-jit-benchmark-resurrection-plan](../archive/post-jit-benchmark-resurrection-plan.md)
-> (the cross-language suite's last full sweep, 2026-09-01).
+> (the cross-language suite's last full sweep, 2026-09-01),
+> [aws-bench-box-design](../design/aws-bench-box-design.md) (the AWS
+> baseline this plan named until 2026-10-13, kept for reference).
 
 ## 0. Summary
 
@@ -226,14 +230,11 @@ direction, not a change.
 **Goal.** One machine, one toolchain, one Release build, one corpus, one set
 of numbers everything later is compared against.
 
-- The box is `infra/bench-box/` (`just bench-box-up` / `bench-box-down`): a
-  disposable EC2 instance, `m7i.xlarge` (4 vCPU, 16 GiB, the CI runner's
-  shape) on Ubuntu 24.04 by default, with the toolchain, `perf`, valgrind
-  and hyperfine installed and Debug + Release builds made at boot. Record
-  its instance type, AMI, cc version and glibc in the artifact README.
-  Every later table in this plan carries that header or it is not a result. An `arm64` column
-  (`BENCH_ARCH=arm64`, e.g. `m7g.xlarge`) is one env var away when WP4 or
-  WP6 wants one.
+- The box is the author's own machine (section 8, decision 1), described in
+  **The baseline machine** below. Its setup is not yet confirmed, so WP0
+  starts by working through that subsection's checklist and writing the
+  answers into the artifact README. Every later table in this plan carries
+  the header that checklist produces, or it is not a result.
 - Define the **audit corpus** and commit the list. Turmeric programs only;
   `performance-comparison/` is not in it:
   - `benchmarks/*.tur` (the experiment harnesses, with their two C
@@ -263,6 +264,87 @@ of numbers everything later is compared against.
 **Deliverable.** `docs/artifacts/perf-audit-2026-10/wp0-baseline.md` + CSV;
 the corpus list as a file the later runners read. **Effort:** small-medium;
 mostly machine time.
+
+#### The baseline machine
+
+| | |
+| --- | --- |
+| Machine | Intel NUC 8 (NUC8i7HVK, "Hades Canyon"), the author's own |
+| CPU | Core i7-8809G per Intel's spec for this model: Kaby Lake, 4 cores / 8 threads, AVX2, no AVX-512 -- confirm with `lscpu` |
+| Memory | 16 GB (host; the WSL2 VM sees less, item 2 below) |
+| Storage | 512 GB SSD |
+| Host OS | Windows 11 |
+| Linux | WSL2; distro and kernel to be recorded |
+| Hypervisor | believed set up; to be confirmed (item 1 below) |
+
+What follows from the choice, stated once:
+
+- **It is not the CI runners' shape** (`ubuntu-latest` is 4 vCPU / 16 GiB
+  of a server CPU; this is 8 logical CPUs of a 2018 desktop part inside a VM
+  with its own memory cap). Its numbers are compared with each other and with nothing on
+  `/ci`.
+- **A Claude Code cloud session cannot reach it.** The timing work of WP0-WP4
+  runs in a local session (Claude Code inside WSL2) or by hand, and lands as
+  commits like anything else. A cloud session can still do the reading, the
+  harness code, the R-1 census (a count from `--dump-cps`, not a timing) and
+  WP7.
+- **`-march=native` in the R-7 sweep means Kaby Lake (AVX2).** That number
+  belongs to this host; it is not a portable result (decision 2 already
+  keeps it out of every default).
+
+**To investigate before the first number.** The author believes the
+hypervisor is set up; nothing in this plan has checked it, and WSL2 brings a
+few traps a bare-metal Linux box does not. Each item ends with what goes in
+the artifact header.
+
+1. **WSL2, not WSL1, on a working hypervisor.** On Windows, `wsl -l -v`
+   (VERSION column reads 2), `wsl --version`, and `systeminfo` (its Hyper-V
+   section should read "A hypervisor has been detected"; if it lists
+   requirements instead, virtualization is off in firmware or the Virtual
+   Machine Platform feature is not enabled). Inside, `uname -r` ends in
+   `-microsoft-standard-WSL2` and `systemd-detect-virt` prints `microsoft`.
+   Prefer Ubuntu 24.04, what `ubuntu-latest` runs. *Record:* Windows build,
+   WSL version, kernel, distro.
+2. **What the VM is given.** By default WSL2 caps the VM at a fraction of
+   host memory (half on current releases, so ~8 GB here) and hands it every
+   logical processor, unless `%UserProfile%\.wslconfig` says otherwise. An
+   interpreter fixture alone peaks at ~3.5 GiB (CLAUDE.md), so set
+   `[wsl2] memory=` explicitly (e.g. `12GB`, leaving Windows 4 GB) and decide
+   `processors=` and `swap=`. Turn off, or at least record, any
+   `[experimental]` setting such as `autoMemoryReclaim`, which can drop the
+   page cache under a running sweep. *Record:* the `.wslconfig`, `nproc`,
+   `free -g`.
+3. **Hardware performance counters.** Whether the WSL2 VM exposes the PMU is
+   the main unknown: `perf stat -e cycles,instructions true` prints real
+   counts if it does and `<not supported>` if it does not. The plan does not
+   depend on it -- without counters, `perf record -e cpu-clock` still
+   attributes time by sampling and callgrind (which needs no PMU) carries the
+   instruction counts -- but WP2 loses its IPC and cache columns. Getting
+   `perf` at all is its own step: Ubuntu's `linux-tools-*` packages are built
+   for Ubuntu's kernels, not Microsoft's, so either build `tools/perf` from
+   the matching WSL2-Linux-Kernel tag or call another version's binary
+   directly (`/usr/lib/linux-tools/<ver>/perf`). *Record:* counters yes/no,
+   the perf version, `kernel.perf_event_paranoid`.
+4. **Where the tree lives.** Clone and build in the distro's own ext4 disk
+   (`~/turmeric`), never under `/mnt/c`: the Windows drives are mounted over
+   9P, which makes a file-heavy build and the suite many times slower and puts
+   Defender's real-time scan in the path. The WSL virtual disk grows on the
+   512 GB SSD; Debug + Release builds, ccache and fixture outputs want about
+   80 GiB free. *Record:* the checkout path, free space.
+5. **Clock speed and noise come from Windows.** Turbo and frequency follow
+   the Windows power plan, not a Linux governor (`cpupower` has nothing to
+   drive inside WSL2): pick one plan (High or Ultimate performance) and use it
+   for every run. The NUC is a compact chassis, so run one long corpus
+   program twice back to back; if the second run is slower, that is thermal
+   throttling, and sweeps get a cool-down between programs. Windows
+   background work (Update, Defender scans, search indexing, a browser) is
+   the real threat to section 6's idle-box rule: pause updates and close what
+   can be closed for a sweep, and let the CV > 10% reproducibility rule (WP6)
+   mark the rows that stayed noisy anyway. *Record:* power plan, whether
+   throttling was seen.
+6. **Pinning is to vCPUs.** `taskset` inside WSL2 pins to the VM's virtual
+   processors, which Hyper-V may run on any physical core. Use it for
+   consistency, but record it as "vCPU-pinned", not as core isolation.
 
 ### WP1 -- Compile latency
 
@@ -404,14 +486,16 @@ hosted runner is a quiet machine.
   shape: `(program, engine, metric, value, os, cc, nproc)`. Add compile
   time (from WP1's `--timings`) and emitted binary size as two more metrics
   on the same programs.
-  Hosted runners are the only runners (section 8, decision 4); the bench
-  box is for short-lived project work, not a standing runner, so the plan
+  Hosted runners are the only runners (section 8, decision 4); the
+  baseline machine is the author's desktop, not a runner, so the plan
   never assumes a quiet dedicated machine in CI.
 - Plot them on `/ci` as a third panel beside suite timings and line count.
   Plot the nightly arm64 suite rows that are already uploaded and never
   shown.
-- Tripwires, not gates: a `.time`-style bound per program at 1.5x the
-  baseline, surfaced as a `::warning::` in the nightly, never a failed PR.
+- Tripwires, not gates: a `.time`-style bound per program at 1.5x that
+  program's own trailing nightly median (the WP0 baseline is different
+  hardware, so it cannot anchor a CI bound), surfaced as a `::warning::` in
+  the nightly, never a failed PR.
   CLAUDE.md's "a red suite does not block landing" applies here with extra
   force.
 - Give `check_reproducibility.py`'s CV > 10% rule a home in the nightly so a
@@ -467,8 +551,10 @@ PR from `main` that stands alone.
   *residue* numbers come from valgrind on Release binaries or LSan on the
   leak-check harness, never from ASan RSS.
 - **Serial runs, idle box.** No concurrent suite, build or sweep. CLAUDE.md's
-  overlap trap produces fake regressions as readily as fake failures. Pin to
-  a core set where the OS allows; record whether you did.
+  overlap trap produces fake regressions as readily as fake failures. On the
+  baseline machine "idle" covers the Windows host too (WP0, item 5). Pin to
+  a vCPU set if you like and record whether you did; under WSL2 that is not
+  core isolation (WP0, item 6).
 - **Best-of-N for latency, trimmed mean for throughput**, as the two existing
   harnesses already do; report N. Every table carries commit, box and
   toolchain, or it is not a result.
@@ -509,10 +595,15 @@ PR from `main` that stands alone.
 The five questions the first draft put to the author, and the answers. Each
 is folded into the section it affects above; this is the record.
 
-1. **Baseline instance type: `m7i.xlarge`** (x86-64, 4 vCPU, 16 GiB), the
-   bench box default. It matches the CI runners' shape so suite timings stay
-   comparable, and `perf` and callgrind are mature there. The nightly's
-   arm64 can be a column; it is not the reference.
+1. **Baseline machine: the author's local Intel NUC8i7HVK, Windows 11 with
+   WSL2** (16 GB RAM, 512 GB SSD). *Revised 2026-10-13*; the first answer
+   was an AWS `m7i.xlarge` bench box, and its notes are now in
+   [aws-bench-box-design](../design/aws-bench-box-design.md) for reference.
+   The author believes the hypervisor is set up; that, and the rest of the
+   WSL2 setup, is the first thing WP0 confirms (WP0, "The baseline
+   machine"). The machine does not match the CI runners' shape, so its
+   numbers are compared only with each other. The nightly's arm64 can be a
+   column; it is not the reference.
 2. **`tur run --release`:** the default stays `-O2`; `--release` adds `-O3`;
    `-march=native` is never on by default. WP2's flag sweep (R-7) decides
    whether `-O3` is worth anything here and whether LTO joins it.
@@ -520,14 +611,15 @@ is folded into the section it affects above; this is the record.
    from the trampoline work, not a soundness contract. It is WP2's lead item
    and D-1 is settled toward the memory guide now.
 4. **CI performance tracking stays on hosted runners.** There is no budget
-   for a standing dedicated runner; the bench box is for short-lived project
-   work like this audit. WP6's shape (nightly, serial, programs over one
+   for a standing dedicated runner, and the baseline machine is the
+   author's desktop, not a runner. WP6's shape (nightly, serial, programs over one
    second, warnings not gates) stands, and per-PR tracking is not planned.
 5. **Compile latency vs runtime throughput: a balance, leaning runtime when
    in doubt.** WP1 and WP2 start together after WP0; WP2 wins a tie.
 
-Nothing remains open that this plan needs the author for before WP0 starts.
-Two things outside the plan do: the AWS account bootstrap for the bench box
-(`infra/bench-box/scripts/bootstrap-account.sh`, run once with admin
-credentials, choosing the one region), and any new question a work package
-raises, which goes in that package's artifact.
+Nothing remains open that this plan needs the author for before WP0 starts,
+except access to the baseline machine: WP0's investigation (the six items
+under "The baseline machine") runs on it, locally, and its answers may raise
+a setup change only the author can make (a firmware switch, a Windows
+feature, `.wslconfig`). Any new question a work package raises goes in that
+package's artifact.
