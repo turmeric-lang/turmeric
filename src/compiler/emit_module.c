@@ -10209,7 +10209,14 @@ static void emit_sig_retire(char *s) {
     g_sig_retired[g_sig_retired_n++] = s;
 }
 
+/* Bumped by every emit_sig_reset, starting from 1, so a recorder that keeps
+ * its own state across resets (types.c's ADT-app registry) can tell whether
+ * its records are still in the table.  0 is never current. */
+static uint32_t g_sig_epoch = 1;
+uint32_t emit_sig_epoch(void) { return g_sig_epoch; }
+
 void emit_sig_reset(void) {
+    if (++g_sig_epoch == 0) g_sig_epoch = 1;
     for (uint32_t i = 0; i < g_sig_tab_n; i++) {
         for (uint32_t j = 0; j < g_sig_tab[i].n_params; j++)
             free(g_sig_tab[i].param_ctypes[j]);
