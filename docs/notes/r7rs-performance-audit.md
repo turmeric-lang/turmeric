@@ -74,7 +74,8 @@ with a trivial program, the client unit of `r7rs-srfi-13` defines 376 more
 functions (91 `srfi13_*` and 15 `srfi14_*`, plus their lambdas and drop
 glue). `r7rs-eval` defines 206 more (143 `r7rs_*` from `r7rs/eval.tur` and
 `read.tur`). Filed as
-[r7rs-imported-libraries-recompiled-every-build](../reported/r7rs-imported-libraries-recompiled-every-build.md).
+[r7rs-imported-libraries-recompiled-every-build](../archive/r7rs-imported-libraries-recompiled-every-build.md)
+(resolved 2026-10-12: the imported libraries are a third, cached unit).
 
 ### Cold cache: the timeouts
 

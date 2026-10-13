@@ -415,6 +415,8 @@ typedef struct AdtDef {
     /* r7rs-programs-compile-slowly: defined inside the auto-loaded stdlib's
      * window -- a type the library unit of a split build writes too. */
     bool from_stdlib;
+    /* ...or in an imported stdlib library's (Binding.is_from_implib). */
+    bool from_implib;
 } AdtDef;
 
 /* CONV-S2 (struct/ADT convergence): a single-variant, non-GADT ADT is

@@ -934,10 +934,13 @@ Expr *elab_form(Elab *e, Form *f) {
              * makes that idempotent. */
             extern size_t tur_hoist_top_includes_scan(const char *body, size_t len);
             extern bool g_hoist_origin_stdlib;
+            extern bool g_hoist_origin_implib;
             if (f->as.cblock.p) {
                 g_hoist_origin_stdlib = e->in_stdlib_load;
+                g_hoist_origin_implib = !e->in_stdlib_load && e->ids_implib;
                 (void)tur_hoist_top_includes_scan(f->as.cblock.p, f->as.cblock.len);
                 g_hoist_origin_stdlib = false;
+                g_hoist_origin_implib = false;
             }
             /* inline-c-cname-module-prefix-plan: resolve __TUR_CNAME_<name>__
              * splices into captures so module-prefixed callees get their exact
@@ -956,6 +959,7 @@ Expr *elab_form(Elab *e, Form *f) {
             /* r7rs-programs-compile-slowly: a block the auto-loaded stdlib
              * owns, including one a stdlib file `(load ...)`s. */
             ic->from_stdlib = e->in_stdlib_load;
+            ic->from_implib = !e->in_stdlib_load && e->ids_implib;
             
             Expr *out = expr_new(e->arena, EX_INLINE_C, TYPE_NIL, f->span);
             out->as.inline_c_.inline_c = ic;
@@ -1955,7 +1959,9 @@ static Expr *tl_elab_form(TlRetryCtx *c, uint32_t i) {
     Elab *e = c->e;
     Form *f = c->forms[i];
     bool saved_in_stdlib = e->in_stdlib_load;
+    bool saved_ids_implib = e->ids_implib;
     e->in_stdlib_load = (i < c->stdlib_prefix);
+    e->ids_implib = elab_form_ids_implib(e, f);
     /* Statement position for the def-position check: this form, and any
      * form reachable from it through `do` chains, is a statement.  Anything
      * deeper is an expression subform.  See def_form_is_statement_position. */
@@ -1967,6 +1973,7 @@ static Expr *tl_elab_form(TlRetryCtx *c, uint32_t i) {
     e->toplevel_dynamic = false;
     e->toplevel_scheme  = false;
     e->in_stdlib_load = saved_in_stdlib;
+    e->ids_implib = saved_ids_implib;
     return x;
 }
 
@@ -2979,6 +2986,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
         /* r7rs-programs-compile-slowly: a stdlib type's stub id comes from the
          * stdlib's counter, like everything else of the stdlib's. */
         e.ids_stdlib = (i < stdlib_prefix);
+        e.ids_implib = !e.ids_stdlib && elab_form_ids_implib(&e, f);
         if (f->tag != F_LIST || f->as.list.len < 2) continue;
         Form *head = f->as.list.items[0];
         if (!head || head->tag != F_SYM) continue;
@@ -3062,6 +3070,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     }
 
     e.ids_stdlib = false;
+    e.ids_implib = false;
 
     /* v2 sole-effect-lowering (top-level-handle taint root): fold trailing
      * top-level STATEMENT forms into a synthesized `(defn main [] : int
@@ -3286,8 +3295,10 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     e.in_stdlib_load = (stdlib_prefix > 0);
     for (uint32_t i = 0; i < nforms; i++) {
         if (i == stdlib_prefix) e.in_stdlib_load = false;
+        e.ids_implib = elab_form_ids_implib(&e, forms[i]);
         elab_pre_declare_toplevel_defn(&e, arena, forms[i]);
     }
+    e.ids_implib = false;
 
     /* Phase M0+: Validate defmodule position per source file.
      *

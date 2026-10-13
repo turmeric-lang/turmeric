@@ -39,9 +39,19 @@ extern bool g_panic_abort;
 /* r7rs-programs-compile-slowly: which unit of a split build this emission
  * writes (emit_split.h); EMIT_SPLIT_NONE for every ordinary emission. */
 extern EmitSplitMode g_emit_split;
-/* Is this binding a definition the library unit of a split build owns --
- * one of the auto-loaded stdlib files'?  False outside a split. */
+/* Is this binding a definition a library unit of a split build owns -- one
+ * of the auto-loaded stdlib files' (the library unit) or of a library the
+ * program imported from the stdlib (the imported-library unit) -- with
+ * external linkage: defined in this unit, or in an earlier one that this unit
+ * declares it from?  False outside a split. */
 bool emit_split_lib_owns(const Binding *b);
+/* ...and is this unit the one that DEFINES it? */
+bool emit_split_defines(const Binding *b);
+/* Does this split build have an imported-library unit (emit_split_set_imp)? */
+bool emit_split_has_imp(void);
+/* The unit a binding's definition belongs to: EMIT_SPLIT_LIB, EMIT_SPLIT_IMP
+ * or EMIT_SPLIT_CLIENT (the program's). */
+EmitSplitMode emit_split_binding_home(const Binding *b);
 /* Decline the split for this program: the build falls back to one unit.
  * `why` is a string literal, kept for TUR_SHOW_CC-style diagnostics. */
 void emit_split_refuse(const char *why);
@@ -67,6 +77,8 @@ extern uint32_t  g_n_hoisted_includes;
 extern uint32_t  g_cap_hoisted_includes;
 extern bool     *g_hoisted_stdlib;
 extern bool      g_hoist_origin_stdlib;
+extern bool     *g_hoisted_implib;
+extern bool      g_hoist_origin_implib;
 
 /* Marker appended to a hoisted `#include` whose author wrote a
  * `tur:optional` comment on the line -- a header that is EXPECTED to be

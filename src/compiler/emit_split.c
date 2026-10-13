@@ -485,6 +485,8 @@ void emit_split_note_export(const char *name) {
     if (name) exp_add(name, strlen(name));
 }
 
+size_t emit_split_exports_count(void) { return g_exp_n; }
+
 void emit_split_exports_clear(void) {
     for (uint32_t i = 0; i < g_exp_cap; i++) free(g_exp[i]);
     free(g_exp);
@@ -855,7 +857,8 @@ static void put_dup_decl(Buf *out, const char *s, size_t a, size_t hend,
 }
 
 /* Copy s[0..n) to out, giving every identifier in `set` the piece prefix. */
-static void piece_rename(const char *s, size_t n, const NameMap *set, Buf *out) {
+static void piece_rename(const char *s, size_t n, const NameMap *set, const char *prefix,
+                         Buf *out) {
     size_t i = 0;
     while (i < n) {
         size_t j = skip_lexeme(s, n, i);
@@ -864,7 +867,7 @@ static void piece_rename(const char *s, size_t n, const NameMap *set, Buf *out) 
             (i == 0 || !is_ident_char(s[i - 1]))) {
             size_t k = i;
             while (k < n && is_ident_char(s[k])) k++;
-            if (namemap_find(set, s + i, k - i)) buf_puts(out, EMIT_SPLIT_PIECE_PREFIX);
+            if (namemap_find(set, s + i, k - i)) buf_puts(out, prefix);
             buf_write(out, s + i, k - i);
             i = k;
             continue;
@@ -881,7 +884,8 @@ static void piece_rename(const char *s, size_t n, const NameMap *set, Buf *out) 
     }
 }
 
-int emit_split_pieces(const char *s, size_t n, int npieces, size_t dup_max, Buf *pieces) {
+int emit_split_pieces(const char *s, size_t n, int npieces, size_t dup_max,
+                      const char *prefix, Buf *pieces) {
     if (!s || n == 0 || npieces < 2) return 1;
     PieceItem *items = NULL;
     size_t nitems = 0, cap = 0;
@@ -1065,7 +1069,7 @@ int emit_split_pieces(const char *s, size_t n, int npieces, size_t dup_max, Buf 
                 break;
             }
         }
-        piece_rename(t.data ? t.data : "", t.len, &statics, &pieces[p]);
+        piece_rename(t.data ? t.data : "", t.len, &statics, prefix, &pieces[p]);
         buf_free(&t);
     }
     free(declared);

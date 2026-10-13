@@ -87,10 +87,11 @@ What this plan is deliberately **not**:
   (profiling-plan C0+C1) because the compile-time half of the audit cannot be
   done honestly without it; it does not build P1-P6.
 - **Not another r7rs audit.** `#lang r7rs` was costed on 2026-10-05 and its
-  open items (recommendations 1, 2, 4 and 5 of that note, plus
-  [r7rs-imported-libraries-recompiled-every-build](../reported/r7rs-imported-libraries-recompiled-every-build.md))
-  stand as written. This plan covers plain Turmeric, Saffron where cheap, and
-  the engines; it cites the r7rs note rather than re-measuring it.
+  open items (recommendations 1, 2, 4 and 5 of that note) stand as written;
+  [r7rs-imported-libraries-recompiled-every-build](../archive/r7rs-imported-libraries-recompiled-every-build.md),
+  the other one, was resolved 2026-10-12. This plan covers plain Turmeric,
+  Saffron where cheap, and the engines; it cites the r7rs note rather than
+  re-measuring it.
 
 ## 1. What is already measured, and what is not
 
