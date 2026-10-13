@@ -980,6 +980,8 @@ const Expr **flatten_program_items(const Expr *program, uint32_t *out_n);
  * against what the callee's signature really is.  emit_sig_reset() clears it at
  * the start of each program emission. */
 void emit_sig_reset(void);
+/* Changes on every emit_sig_reset; never 0. */
+uint32_t emit_sig_epoch(void);
 void emit_sig_record_param_ctype(const char *cname, uint32_t idx, uint32_t n_params,
                                  const char *ctype);
 const char *emit_sig_lookup_param_ctype(const char *cname, uint32_t idx);

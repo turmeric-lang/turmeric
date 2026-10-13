@@ -30,13 +30,36 @@ static bool tok_is(const char *s, size_t at, size_t len, const char *w) {
     return strlen(w) == len && memcmp(s + at, w, len) == 0;
 }
 
-static bool is_ident_char(char c) {
-    return isalnum((unsigned char)c) || c == '_' || c == '$';
+/* [A-Za-z0-9_$], as a table: the transforms ask it of every byte of the
+ * library unit, and isalnum() is a locale lookup per call. */
+static const bool k_ident_char[256] = {
+    ['0'] = 1, ['1'] = 1, ['2'] = 1, ['3'] = 1, ['4'] = 1,
+    ['5'] = 1, ['6'] = 1, ['7'] = 1, ['8'] = 1, ['9'] = 1,
+    ['A'] = 1, ['B'] = 1, ['C'] = 1, ['D'] = 1, ['E'] = 1, ['F'] = 1, ['G'] = 1,
+    ['H'] = 1, ['I'] = 1, ['J'] = 1, ['K'] = 1, ['L'] = 1, ['M'] = 1, ['N'] = 1,
+    ['O'] = 1, ['P'] = 1, ['Q'] = 1, ['R'] = 1, ['S'] = 1, ['T'] = 1, ['U'] = 1,
+    ['V'] = 1, ['W'] = 1, ['X'] = 1, ['Y'] = 1, ['Z'] = 1,
+    ['a'] = 1, ['b'] = 1, ['c'] = 1, ['d'] = 1, ['e'] = 1, ['f'] = 1, ['g'] = 1,
+    ['h'] = 1, ['i'] = 1, ['j'] = 1, ['k'] = 1, ['l'] = 1, ['m'] = 1, ['n'] = 1,
+    ['o'] = 1, ['p'] = 1, ['q'] = 1, ['r'] = 1, ['s'] = 1, ['t'] = 1, ['u'] = 1,
+    ['v'] = 1, ['w'] = 1, ['x'] = 1, ['y'] = 1, ['z'] = 1,
+    ['_'] = 1, ['$'] = 1,
+};
+
+static inline bool is_ident_char(char c) {
+    return k_ident_char[(unsigned char)c];
 }
 
 /* Past a comment, string or character literal starting at s[i]; i itself if
  * none starts there. */
-static size_t skip_lexeme(const char *s, size_t n, size_t i) {
+static size_t skip_lexeme_at(const char *s, size_t n, size_t i);
+static inline size_t skip_lexeme(const char *s, size_t n, size_t i) {
+    /* Every lexeme starts with one of these; the callers ask at every byte. */
+    char c = s[i];
+    if (c != '/' && c != '"' && c != '\'') return i;
+    return skip_lexeme_at(s, n, i);
+}
+static size_t skip_lexeme_at(const char *s, size_t n, size_t i) {
     if (i + 1 < n && s[i] == '/' && s[i + 1] == '*') {
         i += 2;
         while (i + 1 < n && !(s[i] == '*' && s[i + 1] == '/')) i++;
@@ -586,31 +609,37 @@ static void note_declared_names(const char *s, size_t a, size_t b) {
 /* ---- the rename ----------------------------------------------------------- */
 
 void emit_split_rename(const char *s, size_t n, Buf *out) {
-    size_t i = 0;
+    /* Everything but the prefixes is copied as is, so it goes out in runs
+     * from `run`: the library unit is megabytes, renamed on every build to
+     * be hashed, and a call per character was most of the cost. */
+    size_t i = 0, run = 0;
     while (i < n) {
         /* String and character literals keep their text; comments too. */
-        size_t j = skip_lexeme(s, n, i);
-        if (j != i) { buf_write(out, s + i, j - i); i = j; continue; }
-        if (is_ident_char(s[i]) && !isdigit((unsigned char)s[i]) &&
+        char c = s[i];
+        if (c == '/' || c == '"' || c == '\'') {
+            size_t j = skip_lexeme(s, n, i);
+            if (j != i) { i = j; continue; }
+        }
+        if (is_ident_char(c) && !(c >= '0' && c <= '9') &&
             (i == 0 || !is_ident_char(s[i - 1]))) {
             size_t k = i;
             while (k < n && is_ident_char(s[k])) k++;
-            if (exp_has(s + i, k - i)) buf_puts(out, EMIT_SPLIT_PREFIX);
-            buf_write(out, s + i, k - i);
+            if (exp_has(s + i, k - i)) {
+                buf_write(out, s + run, i - run);
+                buf_puts(out, EMIT_SPLIT_PREFIX);
+                run = i;
+            }
             i = k;
             continue;
         }
         /* a number's digits are not an identifier's start */
         if (isdigit((unsigned char)s[i])) {
-            size_t k = i;
-            while (k < n && (is_ident_char(s[k]) || s[k] == '.')) k++;
-            buf_write(out, s + i, k - i);
-            i = k;
+            while (i < n && (is_ident_char(s[i]) || s[i] == '.')) i++;
             continue;
         }
-        buf_putc(out, s[i]);
         i++;
     }
+    buf_write(out, s + run, n - run);
 }
 
 void emit_split_state(const char *s, size_t n, EmitSplitMode mode, Buf *out) {
@@ -750,6 +779,77 @@ static bool function_name(const char *s, size_t a, size_t b, size_t *ns, size_t 
     if (e == k || isdigit((unsigned char)s[k])) return false;
     *ns = k; *ne = e;
     return true;
+}
+
+/* ---- runtime functions defined once (r7rs-split-units-each-compile-the-runtime) */
+
+/* Calls `fn` on each file-scope function definition or prototype in s[0..n)
+ * that is `static`, not `inline` and not a constructor or destructor, with
+ * the item's bounds and its name; everything else goes to `other`. */
+typedef void (*StaticFnVisit)(const char *s, size_t a, size_t e, bool is_def,
+                              size_t ns, size_t ne, void *ud);
+typedef void (*OtherVisit)(const char *s, size_t a, size_t e, void *ud);
+static void each_static_fn(const char *s, size_t n, StaticFnVisit fn, OtherVisit other,
+                           void *ud) {
+    size_t i = 0;
+    while (i < n) {
+        size_t a = i;
+        if (isspace((unsigned char)s[i])) { i++; other(s, a, i, ud); continue; }
+        size_t j = skip_lexeme(s, n, i);
+        if (j != i) { other(s, a, j, ud); i = j; continue; }
+        if (s[i] == '#' && at_line_start(s, i)) {
+            i = skip_pp_line(s, n, i);
+            other(s, a, i, ud);
+            continue;
+        }
+        if (s[i] == ';') { i++; other(s, a, i, ud); continue; }
+        ChunkKind kind;
+        size_t body = 0;
+        size_t e = chunk_end(s, n, i, &kind, &body);
+        size_t hend = kind == CHUNK_FUNC ? body : e;
+        HeadKw h = { .first = true };
+        each_head_token(s, i, hend, head_kw_tok, &h);
+        size_t ns, ne;
+        bool is_fn = kind == CHUNK_FUNC ||
+                     (kind == CHUNK_DECL && !h.is_typedef && decl_is_function(s, i, e));
+        if (is_fn && h.is_static && !h.is_inline && !head_has_ctor(s, i, hend) &&
+            function_name(s, i, hend, &ns, &ne))
+            fn(s, i, e, kind == CHUNK_FUNC, ns, ne, ud);
+        else
+            other(s, i, e, ud);
+        i = e;
+    }
+}
+
+static void collect_static_def(const char *s, size_t a, size_t e, bool is_def,
+                               size_t ns, size_t ne, void *ud) {
+    (void)a; (void)e;
+    if (is_def) namemap_put((NameMap *)ud, s + ns, ne - ns, 1);
+}
+static void skip_other(const char *s, size_t a, size_t e, void *ud) {
+    (void)s; (void)a; (void)e; (void)ud;
+}
+
+typedef struct { const NameMap *defined; Buf *out; } ExportFnCtx;
+static void export_static_fn(const char *s, size_t a, size_t e, bool is_def,
+                             size_t ns, size_t ne, void *ud) {
+    ExportFnCtx *c = (ExportFnCtx *)ud;
+    (void)is_def;
+    if (!namemap_find(c->defined, s + ns, ne - ns)) { buf_write(c->out, s + a, e - a); return; }
+    exp_add(s + ns, ne - ns);
+    put_without_static(c->out, s, a, e);
+}
+static void copy_other(const char *s, size_t a, size_t e, void *ud) {
+    buf_write(((ExportFnCtx *)ud)->out, s + a, e - a);
+}
+
+void emit_split_export_static_fns(const char *s, size_t n, Buf *out) {
+    if (!s || n == 0) return;
+    NameMap defined = { 0 };
+    each_static_fn(s, n, collect_static_def, skip_other, &defined);
+    ExportFnCtx c = { &defined, out };
+    each_static_fn(s, n, export_static_fn, copy_other, &c);
+    namemap_free(&defined);
 }
 
 /* Does a function head carry an attribute a `static` twin cannot: one that
@@ -1045,6 +1145,11 @@ int emit_split_pieces(const char *s, size_t n, int npieces, size_t dup_max,
                     if (!declared[it->dup]) {
                         size_t ns, ne;
                         if (function_name(s, it->a, it->body, &ns, &ne)) {
+                            /* The one definition's own name first: the twin's
+                             * macro covers calls, and a use as a value
+                             * (`atexit(f)`) with no prototype of f before it
+                             * would name nothing. */
+                            put_head_as_proto(&t, s, it->a, it->body);
                             put_dup_decl(&t, s, it->a, it->body, ns, ne);
                             declared[it->dup] = true;
                         }

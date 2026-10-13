@@ -587,6 +587,7 @@ static Type *cont_type_from_keyword_name(Elab *e, const char *name, uint32_t len
     Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
     *t = type_cont_flavored(ret->kind, (ContFlavor)cflav);
     t->as.cont.returns_known = true;
+    t->as.cont.returns_full = ret;
     if (cont_name_is_multishot(head)) t->copy_kind = CK_MULTISHOT;
     return t;
 }

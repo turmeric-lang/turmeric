@@ -1,5 +1,63 @@
 # `#lang r7rs`: every split unit recompiles the collector and the DK runtime
 
+**Fix directions 1 and 2 done 2026-10-13, and direction 3 in part. What
+stays open is skipping the library unit's emission on a warm cache.** In a
+split build the collector, the DK runtime and
+the deep-stack helper (`tur_deep_*`) are each defined once, in the library
+unit, under the `tur_sl_` prefix. Every later unit carries prototypes of them
+instead. `emit_split_once_fns` (src/compiler/emit_module.c) runs the section's
+text through `emit_split_export_static_fns` (src/compiler/emit_split.c), and
+the state transform does the rest. Kept `static`, so per-unit as before:
+`inline` functions, a constructor (armed in the library unit only),
+`tur_rt_tls_roots`, and `__dk_enter0`, which is on every direct-to-CPS entry
+and is small. The deep-stack helper used to be written into the program unit
+only. Its function-local statics now live in the library unit, which is still
+one unit, and it names `main` only as an external.
+
+Measured on one 4-core Linux box, gcc, min of 8 (`cc -O2`, compile only, the
+program unit of the repro below):
+
+| program unit | size | cc |
+| --- | --- | --- |
+| before | 549 KB | 732 ms |
+| collector once | 513 KB | 349 ms |
+| + DK runtime once | 480 KB | 189 ms |
+| + `tur_deep_*` in the library unit | 474 KB | 160 ms |
+
+What is left of the unit's compile is 77% parsing. A Release `tur build` of
+the repro went from 1.01 s to 0.47 s warm (6.0 s to 5.7 s cold). With
+`(only (srfi 13) string-pad)` imported it went from 1.16 s to 0.58 s warm
+(7.2 s to 6.4 s cold).
+
+Run time, as valgrind instruction counts against the old build: a recursive
+`fib` is unchanged, a `guard`/`raise` loop is -0.3%, a list-building `map`
+loop is +0.5%, and a `parameterize`/`call/cc`/`dynamic-wind` loop is +0.9%.
+The rest is entry points that are now real cross-unit calls (`calloc`, the
+region allocator's wrappers) and a few more words scanned. Five collector
+helpers that only the collector calls are `static inline` now
+(`tur_gc_alloc_small`, `_refill`, `_maybe_collect`, `_push`, `_drain`). That
+keeps them inlined in the library unit, which halved the cost of the first
+version.
+
+One more result, measured but not designed for: a call/cc generator loop
+(a `for-each` re-entered 100 times per generator, 3000 generators) ran in
+1.5-2.0 s instead of 3.4 s. At its last collection it held 0.9 MB live in a
+10 MB heap, where the old build held 42 MB live in 124 MB. The result is
+identical, and a single-unit build of the old compiler also held 42 MB. So
+the old code's frames kept conservative false roots alive. A likely cause,
+not checked, is stale words in the larger frames that inlining the collector
+made, copied into each continuation's stack image.
+
+On the way, `emit_split_pieces` had a latent hole: a small function copied
+into a piece that does not own it got its `static` twin and the call macro,
+but no prototype of the one definition. So a use of it as a value
+(`atexit(tur_gc_report)`) in that piece named nothing. The piece now declares
+the definition first.
+
+`check-r7rs-prelude-split.sh`, `check-r7rs-main-stack-size.sh`,
+`run-r7rs-gc.sh` (256/256), `run-r7rs-sanitize.sh` (130/130),
+`run-r7rs-import.sh` and `tests/run.sh` pass.
+
 **Severity:** medium (build time). On a warm cache, the program unit of a
 one-line `#lang r7rs` program is 549 KB of C and costs 0.54 s of cc at `-O2`.
 That is 82% of a 0.66 s `tur build` with a Release `tur`. About 86% of the
@@ -78,7 +136,7 @@ from the others, behaves the same.
 
 ## Fix directions
 
-1. **Define the collector once, in the library unit.** In a split build, paste
+1. **Done 2026-10-13 (see the top).** **Define the collector once, in the library unit.** In a split build, paste
    `r7gc.c` with `static` removed from its function definitions, then let the
    existing machinery finish the job:
    - `emit_split_state` keeps them as external definitions in the library unit
@@ -102,21 +160,53 @@ from the others, behaves the same.
    for an ASan-linked program), and the same again on each cold
    imported-library compile. Across the 126 compiled r7rs fixtures that is
    about 35 s of a 230 s serial warm walk.
-2. **The same for the DK runtime and `tur_deep_*`.** The floor row above
+2. **Done 2026-10-13 (see the top).** **The same for the DK runtime and `tur_deep_*`.** The floor row above
    bounds what is left after (1): 259 ms down to 76 ms. Keep the helpers whose
    inlining matters at run time (tagging, boxing, carrier conversions) as
    `static inline`. The large, out-of-line pieces (`dk_run_impl`,
    `__dk_drive_after`, the reap list) are the candidates.
 3. **Lower priority: the split re-emits the library unit on a warm cache.**
-   Under callgrind (cc excluded), the `tur` process emits once for `emit-c`
-   (561 M instructions for the program above), twice for a two-unit build
-   (810 M), and three times when it imports (`(srfi 13)`: 1096 M against
-   942 M for two units). On a warm cache, the library unit's text is emitted
-   only to be hashed. The client emission needs only the tables it records:
-   signatures, fat boxes, keyword records, exports, and `split_lib_defined`.
-   Those tables could be cached beside the object under a key computed before
-   emission: the compiler version, the auto-loaded stdlib's sources, and every
-   option that changes emitted text. That would skip one emission per build,
-   about 30% of `tur`'s own work in a build, or about 0.25 s on a Debug `tur`.
-   A key that misses an input would link a program against stale signatures,
-   which is why this ranks below (1) and (2).
+   **Part done 2026-10-13: the re-emission is cheaper; skipping it is not
+   done.** Re-measured with a Release `tur` under callgrind, cc excluded, for
+   the program above (warm cache). `tur` did 824 M instructions: 269 M in
+   the front end, 393 M emitting and renaming the library unit, and 155 M
+   emitting the program unit. Two costs inside the emission were pure waste,
+   and both are gone:
+
+   - `type_register_adt_app` re-recorded every constructor signature of an
+     ADT application on every lookup. `type_c_name` looks one up for every
+     spelling of the type, so that was 60 M. It now records once per
+     `emit_sig_reset` (`emit_sig_epoch`, src/compiler/types.c).
+   - `emit_split_rename` wrote a character at a time and asked
+     `skip_lexeme` and `isalnum` at every byte (86 M). It now copies runs,
+     and the transforms share a byte table and an inline `skip_lexeme`
+     guard. `emit_split_state`'s `chunk_end` got cheaper too (41 M -> 29 M).
+
+   `tur` now does 710 M (-14%). `tur emit-c` is byte-identical before and
+   after on all 2934 fixtures. Every split unit of the 132 r7rs fixtures
+   (program unit text, library and imported-library object hashes) is too.
+
+   What is left of the library unit's share is the emission itself, about
+   40% of `tur`'s work, or roughly 0.1 s of a 0.46 s warm build with a
+   Release `tur`. Skipping it needs a key computed before emission, and two
+   measurements show that is harder than "compiler, stdlib, options":
+
+   - **The library unit depends on the program.** Of the 132 r7rs fixtures,
+     123 share one library unit. Seven `(scheme eval)` programs share
+     another, which is expected because their build differs. But
+     `r7rs-sicp-extras` had one of its own.
+   - **Its text depends on emission history.** That program's imported-library
+     split is declined ("an imported library's top-level statement"), so
+     main.c emits the library unit a second time for the two-unit retry. The
+     second emission is not the first: `schema/alt` (stdlib/schema.tur:538)
+     passes its erased `Vec` to `schema/union` with one `(int64_t)(intptr_t)`
+     cast fewer. Forcing any program to emit the library unit twice gives the
+     same variant, so the first emission mutates something the second reads.
+     The C is equivalent, and every such retry shares the one variant
+     object, so the cost today is one extra cold compile per cache.
+
+   So a cached table set would have to come from a first emission. Its key
+   would also have to cover whatever program-dependent inputs reach the
+   library unit, which nothing enumerates today. Until both are pinned down,
+   the remaining saving does not justify the risk of linking against stale
+   signatures.

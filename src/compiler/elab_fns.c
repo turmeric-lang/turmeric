@@ -7406,6 +7406,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 Type *t = (Type *)arena_alloc(e->arena, sizeof(Type));
                 *t = type_cont_flavored(ret ? ret->kind : TY_INT, (ContFlavor)cflav);
                 t->as.cont.returns_known = ret != NULL;
+                t->as.cont.returns_full = ret;
                 if (cmulti) t->copy_kind = CK_MULTISHOT;
                 return t;
             }
@@ -7418,6 +7419,7 @@ static Type *fn_type_from_form_impl(Elab *e, const Form *form,
                 *t = type_cont_arg_flavored(bt ? bt->kind : TY_UNKNOWN,
                                             rt ? rt->kind : TY_INT, (ContFlavor)cflav);
                 t->as.cont.returns_known = rt != NULL;
+                t->as.cont.returns_full = rt;
                 if (cmulti) t->copy_kind = CK_MULTISHOT;
                 return t;
             }

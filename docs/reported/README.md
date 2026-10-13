@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing effect-cont-aggregate-result-untyped (filed 2026-10-13)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [adt-handle-result-as-call-arg-evicts](adt-handle-result-as-call-arg-evicts.md) | low | `(area (handle (Rect ...) ...))` -- a wide by-value ADT `handle` result passed straight to an uncolored callee -- evicts the function (`call_arg_ok` refuses the raw aggregate) and every function sharing its effect; `let`-binding it first compiles. |
+
 ## Gaps left by the resume / shift work (filed 2026-10-13)
 
 Noted while landing resume-of-cont-typed-param-is-a-no-op and its follow-ups,
@@ -42,7 +48,6 @@ not fixed there.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [resume-of-non-continuation-int-crashes](resume-of-non-continuation-int-crashes.md) | low-medium | `(resume k v)` with `k` a plain int (`(h 5 6)`) segfaults compiled (`__dk_resume_word` dereferences it); the interpreter says "not a continuation"; `(cont? 5)` does the same through `__dk_cont_live_word`. `int` stays accepted because a stored or untyped handler `k` is still carried as one. |
-| [effect-cont-aggregate-result-untyped](effect-cont-aggregate-result-untyped.md) | low | `effect-cont<P>` with a struct P does not type the resume (the cont type keeps its result as a bare kind), so a helper declared `: P` is refused with TUR-E0709; the interpreter runs it. |
 | [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. |
 
 ## Found fixing resume-of-cont-typed-param-is-a-no-op (filed 2026-10-12)
@@ -194,7 +199,7 @@ prelude-variant cost it also found was
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [r7rs-split-units-each-compile-the-runtime](r7rs-split-units-each-compile-the-runtime.md) | medium (build time) | Every unit of a split build pastes the collector (`r7gc.c`) and the DK runtime as `static` copies, and `malloc` routes every allocation through the collector's, so each unit re-optimizes it: 86% of a one-line program unit's 0.54 s cc (collector alone ~50%; 1.6 s -> 0.8 s under ASan). Define them once in the library unit and declare them elsewhere. Front-end import cost is small (Release +10-30 ms) |
+| [r7rs-split-units-each-compile-the-runtime](r7rs-split-units-each-compile-the-runtime.md) | medium (build time) | Every unit of a split build pastes the collector (`r7gc.c`) and the DK runtime as `static` copies, and `malloc` routes every allocation through the collector's, so each unit re-optimizes it: 86% of a one-line program unit's 0.54 s cc (collector alone ~50%; 1.6 s -> 0.8 s under ASan). Collector, DK runtime and `tur_deep_*` defined once, in the library unit, since 2026-10-13: program unit 732 -> 160 ms of cc, warm `tur build` 1.01 -> 0.47 s. The warm-cache re-emission is 14% cheaper (`tur` 824 M -> 710 M instructions); skipping it is open, blocked on a pre-emission key (the library unit's text depends on the program and on emission history; see the report). Front-end import cost is small (Release +10-30 ms) |
 | ~~[r7rs-imported-libraries-recompiled-every-build](../archive/r7rs-imported-libraries-recompiled-every-build.md)~~ | medium (build time) | **RESOLVED 2026-10-12** (archived): a program that imports a stdlib library is three units -- the prelude's, the imported libraries' (a client of the prelude unit, owner of its own items, cached by its text under `prelude/`) and the program's (`EMIT_SPLIT_IMP`, `src/compiler/emit_split.h`). Imported libraries draw ids from their own counter, so their names no longer move with the program. Warm: `r7rs-srfi-13` 4.4 -> 2.4 s, `r7rs-eval` 5.6 -> 4.1 s. An SRFI is still pruned per program, so its unit is shared only by programs that reach the same procedures; `(scheme read)` / `(scheme eval)` units are shared. Pinned by `check-r7rs-prelude-split.sh` (`imp/*`) |
 | ~~[turi-immutable-struct-args-copied-per-call](../archive/turi-immutable-struct-args-copied-per-call.md)~~ | medium (interpreter) | **RESOLVED 2026-10-07** (archived): the interpreter copies a by-value argument only if its type (or a by-value struct inside it) has a field write in the program (`AdtDef.field_written`, set at the one `EX_SET_FIELD` site); `any` boxes over symbols and the empty list are no longer copied. `r7rs-srfi-14` peak 132 -> 48 MB. Pinned by `tests/check-turi-frame-reclaim.py` |
 | ~~[turi-effect-perform-keeps-its-continuation](../archive/turi-effect-perform-keeps-its-continuation.md)~~ | medium (interpreter) | **RESOLVED 2026-10-07** (archived): a clause that is just `(resume k v)` (inert `v`) resumes its slice in place, re-arms its own prompt and frees the capture: the repro's 200,000 performs peak at 31 MB, from 556 MB. Other clause shapes keep the cloning path. Pinned by `tests/check-turi-frame-reclaim.py` |
