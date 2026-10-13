@@ -46,7 +46,7 @@ embeds the interpreter -- `(import turi/eval)`, or `(import (scheme eval))` in
 `#lang r7rs` -- needs neither flag: when it links `-lturi`, `tur build` adds
 `-I<prefix>/include -L<prefix>/lib` for the archive its own binary came from.
 Releases before that (v0.47.0 up to the fix of
-[release-tarball-turi-headers-are-unusable](../archive/release-tarball-turi-headers-are-unusable.md))
+[docs/archive/release-tarball-turi-headers-are-unusable.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/release-tarball-turi-headers-are-unusable.md))
 shipped only the four `turi/` headers, and cannot build an embedder at all.
 
 ---
