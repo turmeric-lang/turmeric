@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.64.3` -- Deep CPS tail calls no longer overflow the C stack at -O0, and effect-handler resumes run in place and free their continuation copies instead of holding hundreds of megabytes.
+**Latest release:** `v0.64.4` -- A helper's `resume` now actually runs the handler continuation instead of returning the value, and `cont<T>` / `effect-cont<T>` annotations type honestly instead of becoming silent type variables.
 
 ## What
 
