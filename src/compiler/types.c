@@ -682,6 +682,11 @@ typedef struct RegisteredAdtApp {
      * record_adt_app_ctor_sigs on the entry it is in the middle of filling
      * and the stack goes (ASan DEADLYSIGNAL on `tur check`). */
     bool         recording;
+    /* emit_sig_epoch() when this entry's ctor signatures were last recorded:
+     * a lookup records them again only after emit_sig_reset has emptied the
+     * table since.  Recording on every lookup cost ~7% of a `#lang r7rs`
+     * build's emission (type_c_name registers on every spelling). */
+    uint32_t     recorded_epoch;
 } RegisteredAdtApp;
 
 static RegisteredAdtApp *g_adt_apps = NULL;
@@ -2146,6 +2151,7 @@ void emit_sig_record_ret_ctype(const char *cname, uint32_t n_params,
                                const char *ctype);
 void emit_sig_record_param_ctype(const char *cname, uint32_t idx,
                                  uint32_t n_params, const char *ctype);
+uint32_t emit_sig_epoch(void);
 static void record_adt_app_ctor_sigs(AdtDef *def, Type *args, uint8_t n_args,
                                      Type t) {
     Buf name; buf_init(&name);
@@ -2228,6 +2234,7 @@ const char *type_register_adt_app(Type t) {
              * (`int64_t` recorded against a `void *` slot).  The call-site
              * bridge trusts these strings, so a stale one is worse than none. */
             if (g_adt_apps[i].recording) return g_adt_apps[i].name;
+            if (g_adt_apps[i].recorded_epoch == emit_sig_epoch()) return g_adt_apps[i].name;
             Type ct = g_adt_apps[i].type;
             AdtDef *cdef = NULL; Type cargs[16]; uint8_t cn_args = 0;
             if (type_extract_adt_app(&ct, &cdef, cargs, &cn_args) && cdef) {
@@ -2235,6 +2242,7 @@ const char *type_register_adt_app(Type t) {
                 record_adt_app_ctor_sigs(cdef, cargs, cn_args, ct);
                 g_adt_apps[i].recording = false;
             }
+            g_adt_apps[i].recorded_epoch = emit_sig_epoch();
             return g_adt_apps[i].name;
         }
     }
@@ -2258,6 +2266,7 @@ const char *type_register_adt_app(Type t) {
     g_adt_apps[g_n_adt_apps].emitted  = false;
     g_adt_apps[g_n_adt_apps].emitting = false;
     g_adt_apps[g_n_adt_apps].recording = false;
+    g_adt_apps[g_n_adt_apps].recorded_epoch = 0;
     buf_free(&name);
     if (!g_adt_apps[g_n_adt_apps].name) { fprintf(stderr, "tur: oom\n"); abort(); }
     /* Register FIRST, record the ctor signatures SECOND: recording c-names
@@ -2275,6 +2284,7 @@ const char *type_register_adt_app(Type t) {
             record_adt_app_ctor_sigs(cdef, cargs, cn_args, ct);
     }
     g_adt_apps[idx].recording = false;
+    g_adt_apps[idx].recorded_epoch = emit_sig_epoch();
     return g_adt_apps[idx].name;
 }
 

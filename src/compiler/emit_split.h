@@ -78,6 +78,20 @@ typedef enum {
  * define. */
 void emit_split_state(const char *src, size_t len, EmitSplitMode mode, Buf *out);
 
+/* r7rs-split-units-each-compile-the-runtime: copy `src[0..len)` to `out`
+ * with every `static` function it DEFINES made external -- the definition
+ * and each prototype of it lose `static`, and its name is recorded with
+ * emit_split_note_export.  For runtime text pasted into every unit whose
+ * functions are not per-unit (the r7rs-gc collector, the DK runtime, the
+ * deep-stack helper; emit_split_once_fns in emit_module.c): run before
+ * emit_split_state, which then keeps the definitions in the library unit and
+ * turns them into prototypes in every later one, so the code is compiled
+ * once instead of once per unit.  Left `static`: `inline` functions (each
+ * unit inlines its own copy), a constructor or destructor (emit_split_state
+ * arms it in the library unit only), and a function only prototyped here
+ * (another part of the unit defines it). */
+void emit_split_export_static_fns(const char *src, size_t len, Buf *out);
+
 /* Every symbol the library unit exports is renamed with this prefix, in both
  * units.  In one unit the runtime's state and the stdlib's functions are
  * `static`; exported, their names are the same ones the runtime archives
