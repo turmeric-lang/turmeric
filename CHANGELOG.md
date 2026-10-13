@@ -2,6 +2,41 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.64.4] -- 2026-10-13
+
+### Added
+
+- **Tourist web-stack guide.** A new guide walks through building a web stack
+  with `turi`, with sweet-expression examples that parse as written.
+
+### Fixed
+
+- **A helper's `resume` runs the continuation.** `(resume k v)` in a function
+  that received `k` as a parameter compiled to `return v;`, so the handler case
+  never resumed; it now invokes the continuation like the CPS backend.
+- **Continuation annotations type honestly.** `cont<T>`, `effect-cont<T>` and
+  `multishot-effect-cont<T>` resolve to real continuation types instead of
+  silent type variables, a handler case's `k` can be passed where an
+  `effect-cont` is expected, and an aggregate `T` types the resume instead of
+  being refused.
+- **`cont?` no longer reads out of bounds.** On a wrapped handler `k` it read
+  past the wrapper, and a `0` word was dereferenced; both now answer safely, and
+  `cont?` on an `effect-cont` or unannotated `k` links again.
+- **A lexical shift's receiver continuation is freed.** A cloneable `shift` that
+  keeps nothing of `k` no longer leaks its wrapper per evaluation, and
+  `tur_cloneable_cont_drop` compiles in statement and CPS positions.
+- **Wide by-value aggregates cross a CPS-to-direct call.** A by-value ADT over
+  16 bytes passed to an uncolored callee no longer evicts the caller with "this
+  effect operation has no lowering here".
+- **`#lang r7rs` builds are faster and cached better.** An imported stdlib
+  library gets its own cached C unit instead of being recompiled at `-O2` on
+  every build, and a split build compiles the collector and continuation runtime
+  once instead of re-optimizing them in every unit.
+- **Release archives can embed `turi` again.** Every release since v0.47.0
+  shipped an `include/turi/` that could not compile; `tur` now finds and links
+  `-lturi` next to itself, so `(import turi/eval)` and `(import (scheme eval))`
+  build against a release.
+
 ## [0.64.3] -- 2026-10-12
 
 ### Fixed
