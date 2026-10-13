@@ -325,28 +325,23 @@ defn main [] :int
     tls-ctx-load-key-pem(tls-ctx "/tmp/tls-smoke-test/test-key.pem")
     let [store memory-store-new()
          sess-mw session-mw(store default-session-config())]
-      let [public-routes
-             url-map!
-               mount!("/" get!("/" home-handler))
-               mount!("/login"
-                 url-map!
-                   mount!("/" get!("/" login-get)
-                              post!("/" login-post)))
-           protected-routes
-             url-map!
-               mount!("/dashboard" get!("/" dashboard-handler))
-               mount!("/logout"   get!("/" logout-handler))]
+      let [public-routes    url-map!(mount!("/" get!("/" home-handler))
+                                     mount!("/login"
+                                            url-map!(mount!("/" get!("/" login-get)
+                                                                post!("/" login-post)))))
+           protected-routes url-map!(mount!("/dashboard" get!("/" dashboard-handler))
+                                     mount!("/logout" get!("/" logout-handler)))]
         let [srv tourist(8443
-                  sess-mw
-                  serve-static!("/assets" "./public")
-                  use!((fn [ctx]
-                    let [path req-path(ctx)]
-                      if or(str-prefix?(path "/dashboard")
-                           str-prefix?(path "/logout"))
-                        require-auth(ctx)
-                        none-value()))
-                  public-routes
-                  protected-routes)]
+                         sess-mw
+                         serve-static!("/assets" "./public")
+                         use!((fn [ctx]
+                                (let [path req-path(ctx)]
+                                  (if or(str-prefix?(path "/dashboard")
+                                         str-prefix?(path "/logout"))
+                                    require-auth(ctx)
+                                    none-value()))))
+                         public-routes
+                         protected-routes)]
           server-stop(srv)
           tls-ctx-free(tls-ctx)
           0
