@@ -861,6 +861,10 @@ typedef struct Type {
             TypeKind returns;  /* ResetT: the type (k v) yields (the delimited result) */
             TypeKind arg;      /* BodyT: the resume-value type (k) expects; TY_UNKNOWN = unchecked */
             int      flavor;   /* ContFlavor; 0 = CONT_CLONEABLE (default) */
+            /* `returns` was written (`cont<T>`, `(cont T)`), not the bare
+             * name's int default -- so a resume of the continuation may be
+             * typed by it (elab_make_resume).  Not part of type equality. */
+            bool     returns_known;
         } cont;
         /* Phase HKT-P1: Type application — (type-app F A) */
         struct {

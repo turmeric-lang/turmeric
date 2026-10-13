@@ -236,6 +236,16 @@ struct Binding {
     /* Phase T25: true if this binding is an algebraic-effect continuation (k in handle cases).
      * Used to detect continuation escape into async blocks at compile time. */
     bool          is_continuation;
+    /* A handler continuation the CPS backend binds as a tur_cloneable_cont
+     * wrapping the DK chain, not as the bare chain: the `k` of a fn-payload
+     * case (HandleCase.resumable_payload) or of the __Shift handler.  Its
+     * resumes go through __dk_resume_word, never the chain-only fast paths,
+     * and only it may pass as a `multishot-effect-cont`. */
+    bool          cont_is_wrapper;
+    /* The type a resume of this continuation delivers -- the enclosing
+     * handle's result type -- or NULL when unknown (elab_make_resume falls
+     * back to the resume value's type). */
+    const Type   *cont_result_type;
     /* Phase M1: Module visibility */
     bool          is_exported;          /* listed in module's (export ...) */
     /* G3 (mutable-globals-plan §4.3): this

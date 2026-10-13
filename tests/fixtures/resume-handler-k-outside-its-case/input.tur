@@ -1,0 +1,85 @@
+;; resume-of-cont-typed-param-is-a-no-op: a handler continuation `k` resumed
+;; OUTSIDE the case that bound it -- handed to a helper function -- runs the
+;; continuation, on the compiled path as under --interpret.
+;;
+;; The report's helper declared `[k : cont<int>]`, which elaborated as a type
+;; variable (cont-angle-bracket-annotation-becomes-tyvar), and the direct
+;; emitter's resume fell to a "return the value" arm for it: `step` printed
+;; 10 for 17.  An `int` or unannotated `k` called the deleted fiber runtime
+;; and failed to link.  A helper now declares its `k` as what it is, an
+;; `effect-cont` (or `effect-cont<T>`, T being what the handle delivers), and
+;; every spelling resumes through __dk_resume_word -- including the cloneable
+;; wrapper a fn-payload case hands out, which it tells apart from a bare DK
+;; chain at run time.
+
+(defeffect Ask [] int)
+(defeffect AskF [] float)
+(defeffect Log [msg : int] : nil)
+(defeffect ShiftE [f : (fn [effect-cont] int)] : int)
+
+;; The report's repro, declared honestly: `effect-cont<int>`.
+(defn helper-cont [k : effect-cont<int> v : int] : int (resume k v))
+(defn step-cont [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] k) (helper-cont k 10)))
+
+;; Bare `effect-cont`, resumed through the `(k v)` spelling.
+(defn helper-effect [k : effect-cont v : int] : int (k v))
+(defn step-effect [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] k) (helper-effect k 40)))
+
+;; A `^multishot` case's `k` resumed twice by the helper.
+(defn helper-both [k : effect-cont v : int] : int (+ (resume k v) (resume k 1)))
+(defn step-multi [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] ^multishot k) (helper-both k 10)))
+
+;; `int` and unannotated.
+(defn helper-int [k : int v : int] : int (resume k v))
+(defn helper-any [k v : int] : int (resume k v))
+(defn step-int [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] k) (helper-int k 20)))
+(defn step-any [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] k) (helper-any k 30)))
+
+;; A non-tail resume in the helper, and more of the case after the call.
+(defn helper-twice [k v : int] : int (* 2 (resume k v)))
+(defn step-nontail [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] k) (+ 1 (helper-twice k 10))))
+
+;; A float resume value crosses the slot by bits, not by truncation.
+(defn helper-float [k v : float] : float (resume k v))
+(defn step-float [x : float] : float
+  (handle (+ x (perform (AskF))) (AskF [] k) (helper-float k 3.25)))
+
+;; An outer effect performed before the inner one is still handled outward.
+(defn body [i : int] : int (do (perform (Log i)) (+ i (perform (Ask)))))
+(defn step-nested [] : int
+  (handle (handle (body 5) (Ask [] k) (helper-any k 10))
+    (Log [m] k) (do (println m) (resume k nil))))
+
+;; A fn-payload case wraps its `k` as a cloneable continuation -- the one
+;; `k` a `multishot-effect-cont` parameter takes.
+(defn producer [] : int (+ 100 (perform (ShiftE (fn [k : effect-cont] : int (k 1))))))
+(defn step-payload [] : int
+  (handle (producer) (ShiftE [f] k) (helper-any k 7)))
+(defn helper-snap [k : multishot-effect-cont v : int] : int (+ (resume k v) (resume k 1)))
+(defn step-payload-multi [] : int
+  (handle (producer) (ShiftE [f] k) (helper-snap k 7)))
+
+;; A helper resume a loop runs many times.
+(defn loop [i : int acc : int] : int
+  (if (= i 0)
+    acc
+    (loop (- i 1) (+ acc (handle (+ i (perform (Ask))) (Ask [] k) (helper-any k 1))))))
+
+(defn main [] : nil
+  (println (step-cont 7))       ; 7 + 10 = 17
+  (println (step-effect 7))     ; 47
+  (println (step-multi 7))      ; (7 + 10) + (7 + 1) = 25
+  (println (step-int 7))        ; 27
+  (println (step-any 7))        ; 37
+  (println (step-nontail 7))    ; 1 + 2 * (7 + 10) = 35
+  (println (step-float 7.1))    ; 10.35
+  (println (step-nested))       ; prints 5, then 15
+  (println (step-payload))      ; 107
+  (println (step-payload-multi)) ; 107 + 101 = 208
+  (println (loop 10000 0)))     ; sum (i + 1), i = 1..10000 = 50015000

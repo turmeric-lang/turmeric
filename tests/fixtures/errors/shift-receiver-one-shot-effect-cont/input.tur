@@ -1,0 +1,6 @@
+;; resume-of-cont-typed-param-is-a-no-op: a reified (lexical) shift hands its
+;; receiver a cloneable-wrapped continuation, which a one-shot `effect-cont`
+;; resume cannot read.  The cross-function shift already refused this; the
+;; lexical one built it and crashed.  `multishot-effect-cont` or `cont` work.
+(defn main [] : nil
+  (println (reset (+ 1 (shift (fn [k : effect-cont] : int (k 10)) 0)))))

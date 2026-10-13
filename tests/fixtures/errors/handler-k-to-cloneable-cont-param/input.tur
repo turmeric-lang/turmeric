@@ -1,0 +1,9 @@
+;; cont-angle-bracket-annotation-becomes-tyvar: `cont<int>` is a cloneable
+;; continuation now, not a type variable, and a handler case's `k` -- a DK
+;; chain -- cannot pass as one.  The parameter wants `effect-cont`.
+(defeffect Ask [] int)
+(defn helper [k : cont<int> v : int] : int (k v))
+(defn step [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] k) (helper k 10)))
+(defn main [] : nil
+  (println (step 7)))

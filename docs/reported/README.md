@@ -34,6 +34,24 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Gaps left by the resume / shift work (filed 2026-10-13)
+
+Noted while landing resume-of-cont-typed-param-is-a-no-op and its follow-ups,
+not fixed there.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cont-query-on-wrapped-handler-k-reads-past-wrapper](cont-query-on-wrapped-handler-k-reads-past-wrapper.md) | medium (out-of-bounds read) | `(cont? k)` on a fn-payload case's `k` reads `((DK *)k)->consumed` from the 32-byte `tur_cloneable_cont` wrapper -- ASan heap-buffer-overflow; the answer is whatever byte is there. `emit_resume` tells the shapes apart, `cont?` does not. |
+| [resume-of-non-continuation-int-crashes](resume-of-non-continuation-int-crashes.md) | low-medium | `(resume k v)` with `k` a plain int (`(h 5 6)`) segfaults compiled (`__dk_resume_word` dereferences it); the interpreter says "not a continuation". `int` stays accepted because a stored or untyped handler `k` is still carried as one. |
+| [effect-cont-aggregate-result-untyped](effect-cont-aggregate-result-untyped.md) | low | `effect-cont<P>` with a struct P does not type the resume (the cont type keeps its result as a bare kind), so a helper declared `: P` is refused with TUR-E0709; the interpreter runs it. |
+| [unknown-type-annotation-becomes-implicit-tyvar](unknown-type-annotation-becomes-implicit-tyvar.md) | low (policy) | `[k : zork]` -- any unknown type name, capitalized too -- is an implicit type variable, so a typo is never reported; KB-026 finds the single-occurrence case but demotes it to another tyvar. |
+
+## Found fixing resume-of-cont-typed-param-is-a-no-op (filed 2026-10-12)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [cloneable-cont-escaped-chain-leaks](cloneable-cont-escaped-chain-leaks.md) | low (488 B per escaped continuation) | A cloneable shift's `k` that the receiver returns or stores -- or a clone the program never drops -- has no owner and leaks its wrapper + chain copy. The residue of the lexical-shift-receiver fix, which drops a confined `k`; the program must `tur_cloneable_cont_drop` the rest. |
+
 ## Found executing the open reports (filed 2026-10-12)
 
 Closing `sum-closure-payload-never-dropped` item 2 turned up two pre-existing
@@ -45,12 +63,6 @@ per-call box.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [fn-param-at-type-variable-slot-boxed-per-call](fn-param-at-type-variable-slot-boxed-per-call.md) | low (32 B per call) | A `(fn ...)`-typed parameter (the 16-byte `tur_poly_fn_t` carrier) passed into a type-variable slot -- `(ident d)`, `(unwrap-or o d)`, `(vec-push! v d)` -- was a type error or a cc error. **Fixed 2026-10-12:** boxed into a fat handle there (`EX_POLY_TO_FAT`, typed with the declared signature), both back ends -- `fn-param-through-type-variable-slot`. Left: that box is a 32 B malloc per call nothing frees (the slot may return or store it, and a parameter is not a link-time constant) |
-
-## Found probing the non-tail resume report's residue (filed 2026-10-12)
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [resume-of-cont-typed-param-is-a-no-op](resume-of-cont-typed-param-is-a-no-op.md) | high (silent wrong answer), narrow | `(defn helper [k : cont<int> v : int] : int (resume k v))` compiles to `return v;` -- the direct emitter's `EX_RESUME` has no arm for a `TY_CONT` continuation that is not `^multishot` and falls to a "return the value" path -- so a handler `k` handed to a helper never runs its continuation (`(step 7)` prints 10, `--interpret` 17). On `main` before 2026-10-12. Directions: lower a `TY_CONT` resume through `dk_invoke`, or refuse the shape |
 
 ## Found writing the signal spice's pitch and sequencing examples (filed 2026-10-11)
 

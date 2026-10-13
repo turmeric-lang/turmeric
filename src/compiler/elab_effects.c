@@ -803,6 +803,7 @@ static Expr *wrap_reset_body_with_shift_handler(Elab *e, Expr *body_B, Span span
      * receivers behave identically (one snapshot, one resume). */
     Binding *k_b = binding_new(e, k_name, TYPE_INT, false, false, span);
     k_b->is_continuation = true;
+    k_b->cont_is_wrapper = true;   /* the __Shift case wraps its chain */
     k_b->type.copy_kind = CK_MULTISHOT;
     scope_add(&hs, k_b);
 
@@ -1155,6 +1156,27 @@ static Expr *elab_cont_shift_core(Elab *e, const Form *call, Expr *k_expr) {
             e->reified_serial_at_depth[e->cloneable_reset_depth] = true;
         }
         return out;
+    }
+
+    /* resume-of-cont-typed-param-is-a-no-op: the reified shift hands its
+     * receiver the context wrapped as a tur_cloneable_cont, which only the
+     * snapshot resume (CK_MULTISHOT) reads.  A one-shot `effect-cont` receiver
+     * resumes a DK chain (dk_invoke) instead and would run off the wrapper --
+     * the same mismatch the cross-function route refuses above. */
+    {
+        const Type *kpt = receiver_cont_param_type(k_expr);
+        if (kpt && kpt->kind == TY_CONT
+            && (ContFlavor)kpt->as.cont.flavor == CONT_EFFECT
+            && kpt->copy_kind != CK_MULTISHOT) {
+            diag_emit_with_code(DIAG_ERROR, call->span,
+                TUR_E0016_CLONEABLE_SHIFT_OUTSIDE_RESET,
+                "a resuming shift receiver must use a `multishot-effect-cont` or "
+                "`cont` continuation, not a one-shot `effect-cont`\n"
+                "  = help: declare the receiver's continuation parameter "
+                "`multishot-effect-cont` (single-resume receivers work through it "
+                "too), or `cont`");
+            return NULL;
+        }
     }
 
     Expr *out = expr_new(e->arena, EX_CLONEABLE_SHIFT, body->type, call->span);
@@ -2493,6 +2515,12 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
             break;
         }
         kb->is_continuation = true;
+        kb->cont_is_wrapper = cases[i].resumable_payload;
+        /* A resume runs the rest of the handled body (with the handler still
+         * installed, or not for a shallow one) and delivers what the handle
+         * delivers: the body's type, not the resume value's. */
+        if (body && body->type.kind != TY_UNKNOWN && body->type.kind != TY_NEVER)
+            kb->cont_result_type = &body->type;
         cases[i].k_binding = kb;
         scope_add(&handler_scope, kb);
         
@@ -2546,8 +2574,9 @@ static Expr *elab_handle_impl(Elab *e, const Form *call, bool shallow) {
 
         /* ET3-C: Check that the handler clause result type matches the body type.
          * Skip the check when either is TY_UNKNOWN or TY_NEVER, or when the clause
-         * body ends in a resume expression (resume returns the value type passed to
-         * the continuation, not the overall handle result type). */
+         * body ends in a resume expression.  (A resume of the case's own `k` is
+         * typed as the handle's result now -- elab_make_resume -- so such a
+         * clause agrees by construction; the skip predates that.) */
         {
             /* Helper: check if an expression ends in a resume.
              * Handles bare (resume ...) and (do ... (resume ...)) patterns. */
@@ -3052,7 +3081,32 @@ Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
     resume->k = k;
     resume->value = value;
 
-    Expr *out = expr_new(e->arena, EX_RESUME, value->type, span);
+    /* A resume yields what the handle delivers, not the value it resumes
+     * with: a case's `k` carries its handle's result type, and an
+     * `effect-cont<T>` names it.  Typing it as the value (the fallback, when
+     * neither is known) made `(println (resume k 3.25))` in a handle of int
+     * read an int's bits as a double, and refused `(+ 100 (resume k 3.25))`. */
+    Type rtype = value->type;
+    if (k->kind == EX_VAR && k->as.var.binding) {
+        const Binding *kb = k->as.var.binding;
+        if (kb->cont_result_type) {
+            rtype = *kb->cont_result_type;
+        } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_known) {
+            /* `returns` is a bare kind: only a scalar names a whole type. */
+            switch (kb->type.as.cont.returns) {
+                case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+                case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+                case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+                case TY_BOOL: case TY_CSTR: case TY_NIL:
+                    rtype = type_from_kind(kb->type.as.cont.returns);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    Expr *out = expr_new(e->arena, EX_RESUME, rtype, span);
     out->as.resume_.resume = resume;
     return out;
 }
@@ -3072,6 +3126,29 @@ Expr *elab_resume(Elab *e, const Form *call) {
 
     Expr *k = elab_form(e, call->as.list.items[1]);
     if (!k) return NULL;
+
+    /* resume-of-cont-typed-param-is-a-no-op: `resume` resumes an effect
+     * handler continuation.  A `cont`-typed k is one only when it is
+     * `effect-cont` (CONT_EFFECT); view that one as its int64 carrier, keeping
+     * its copy_kind, exactly as the `(k v)` sugar does (elab_call.c), so both
+     * spellings build the same EX_RESUME.  A cloneable / escape / serial
+     * continuation runs on a different runtime and is resumed by calling it;
+     * `resume` of one used to compile to its value (the continuation never
+     * ran) and failed at run time under `--interpret`, so refuse it here. */
+    if (k->type.kind == TY_CONT) {
+        ContFlavor fl = (ContFlavor)k->type.as.cont.flavor;
+        if (fl != CONT_EFFECT) {
+            const char *fname = fl == CONT_ESCAPE ? "escape-cont"
+                              : fl == CONT_SERIAL ? "serial-cont" : "cont";
+            diag_emit_with_code(DIAG_ERROR, call->span, TUR_E0001_TYPE_MISMATCH,
+                "resume takes an effect handler continuation, got a `%s`; "
+                "call the continuation instead: (k v)", fname);
+            return NULL;
+        }
+        Type kcar = TYPE_INT;
+        kcar.copy_kind = k->type.copy_kind;
+        k->type = kcar;
+    }
 
     Expr *value = elab_form(e, call->as.list.items[2]);
     if (!value) return NULL;

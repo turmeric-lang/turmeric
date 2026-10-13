@@ -1,0 +1,11 @@
+;; cont-angle-bracket-annotation-becomes-tyvar: a `multishot-effect-cont`
+;; parameter resumes through the snapshot, which reads only the cloneable
+;; wrapper a fn-payload case binds.  A `^multishot` case hands out the bare
+;; chain, so its `k` goes to an `effect-cont` parameter, which may resume it
+;; more than once.
+(defeffect Ask [] int)
+(defn helper [k : multishot-effect-cont v : int] : int (+ (resume k v) (resume k 1)))
+(defn step [i : int] : int
+  (handle (+ i (perform (Ask))) (Ask [] ^multishot k) (helper k 10)))
+(defn main [] : nil
+  (println (step 7)))

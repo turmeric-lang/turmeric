@@ -5505,6 +5505,18 @@ char *emit_builtin(EmitCtx *ctx, Buf *body, const Expr *e) {
     buf_free(&out);
     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
     free(arg_strs);
+    /* A nil-result runtime call is emitted for its effect, here, and leaves
+     * the nil placeholder -- println's convention, which emit_stmt relies on
+     * ("for nil-typed this was already a stmt").  Returned as an expression
+     * instead, `(tur_cloneable_cont_drop k)` in statement position was never
+     * written out: the drop silently did nothing
+     * (lexical-shift-receiver-cont-never-freed). */
+    if (spec->shape == BS_FUNC_CALL && e->type.kind == TY_NIL) {
+        indent_buf(body, ctx->indent);
+        buf_printf(body, "%s;\n", result);
+        free(result);
+        return atom_nil();
+    }
     return result;
 }
 

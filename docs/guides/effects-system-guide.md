@@ -53,6 +53,30 @@ def name perform(Read())
 
 Continuations in Turmeric are **one-shot**: calling `(resume k v)` consumes `k`, preventing reuse. This matches Turmeric's ownership model. (See [Logic Programming Guide](logic-programming-guide.md) for cloneable continuations.)
 
+### Passing `k` to a helper
+
+A handler case may hand its continuation to another function. Declare the
+parameter `effect-cont<T>`, where `T` is what the handle delivers. A resume
+there (`(resume k v)` or `(k v)`) yields that `T`. A resume is always typed as
+what its handle delivers, not as the value it resumes with.
+
+```turmeric
+(defeffect Ask [] int)
+
+(defn answer [k : effect-cont<int> v : int] : int (resume k v))
+
+(defn step [i : int] : int
+  (handle (+ i (perform (Ask)))
+    (Ask [] k) (answer k 10)))   ; 7 -> 17
+```
+
+- A bare `effect-cont` works too: the resume is then typed `int`.
+- An `effect-cont` parameter may resume a `^multishot` case's `k` more than
+  once.
+- `multishot-effect-cont` takes only the `k` of a case whose effect carries a
+  `(fn [effect-cont] R)` payload.
+- A cloneable `cont` cannot take a handler's `k`: it runs a different runtime.
+
 ### Properties
 
 - **Effects are not in the type system** -- Whether `perform` is handled is checked dynamically. Unhandled effects raise an exception at runtime.

@@ -1,0 +1,23 @@
+;; A handler case for an effect that carries an `(fn [effect-cont] R)` payload
+;; binds its `k` as a cloneable continuation wrapping the DK chain, so the
+;; payload can resume it.  The case resuming that `k` ITSELF used to treat
+;; the wrapper as the bare chain -- a tail resume hung (dk_tail_resume of
+;; the wrapper), a non-tail one crashed.  It resumes through the wrapper now
+;; (__dk_resume_word), on the compiled path as under --interpret.
+
+(defeffect ShiftE [f : (fn [effect-cont] int)] : int)
+
+(defn producer [] : int
+  (+ 100 (perform (ShiftE (fn [k : effect-cont] : int (k 1))))))
+
+;; The case resumes its own `k`, in tail position.
+(defn tail-own [] : int
+  (handle (producer) (ShiftE [f] k) (resume k 5)))
+
+;; Both: its own resume, then the payload's.
+(defn both [] : int
+  (handle (producer) (ShiftE [f] k) (+ (resume k 5) (f k))))
+
+(defn main [] : nil
+  (println (tail-own))   ; 100 + 5 = 105
+  (println (both)))      ; 105 + 101 = 206

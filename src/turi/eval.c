@@ -4119,6 +4119,25 @@ static bool cont_handle_forged(TuriEnv *env, int64_t h, TuriValue *err) {
     return true;
 }
 
+/* resume-of-cont-typed-param-is-a-no-op: a lexical shift hands its receiver
+ * the captured context as a TuriCont handle -- an int (ts_capture_and_run) --
+ * and a receiver that declares its continuation `multishot-effect-cont`
+ * resumes it with EX_RESUME (`(k v)` on CONT_EFFECT, elab_call.c) rather than
+ * the cloneable builtin.  Recognise that handle by the binding's declared
+ * continuation type -- a handler `k` is a TURI_EFFECT_CONT, and an int that
+ * is not declared a continuation stays "not a continuation" -- and resume it
+ * as tur_cloneable_cont_resume does (ts_try_cont_builtin). */
+static bool resume_k_is_ts_handle(const Expr *kexpr, TuriValue k) {
+    return k.tag == TURI_INT && k.as_int != 0 && kexpr && kexpr->kind == EX_VAR
+        && kexpr->as.var.binding && kexpr->as.var.binding->type.kind == TY_CONT;
+}
+static TuriValue ts_cont_resume(TuriEnv *env, TuriCont *c, int64_t w);
+static TuriValue resume_ts_handle(TuriEnv *env, TuriValue k, TuriValue v) {
+    TuriValue forged;
+    if (cont_handle_forged(env, k.as_int, &forged)) return forged;
+    return ts_cont_resume(env, (TuriCont *)(intptr_t)k.as_int, v.as_int);
+}
+
 static TuriCont *ts_cont_copy(TuriEnv *env, const TuriCont *c) {
     /* Escaping payload: the copy is boxed as an int continuation handle and
      * returned (multi-shot); pool-owned, never freed. */
@@ -10305,7 +10324,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * descend the value arg under DK_RESUME carrying k in .last --
                  * from here on identical to the former eval_expr'd-k path. */
                 if (signaled) { len--; break; }
-                if (cur.tag != TURI_EFFECT_CONT) {
+                if (cur.tag != TURI_EFFECT_CONT
+                    && !resume_k_is_ts_handle(top->expr->as.resume_.resume->k, cur)) {
                     cur = turi_error("eval: resume: not a continuation");
                     len--; break;
                 }
@@ -10335,6 +10355,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (signaled) { len--; break; }
                 TuriValue v = cur;
                 len--;   /* pop DK_RESUME */
+                if (k.tag == TURI_INT) {   /* a lexical shift's handle (DK_RESUME_K) */
+                    cur = resume_ts_handle(env, k, v);
+                    break;
+                }
                 if (!k.as_cont->ws) {
                     cur = eval_resume_cont(env, rcf, k.as_cont, v);  /* fiber cont */
                     break;
@@ -12847,6 +12871,8 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         TuriValue val = eval_expr(env, frame, re->value);
         if (turi_is_error(val) || env_signaled(env)) return val;
 
+        if (resume_k_is_ts_handle(re->k, k))
+            return resume_ts_handle(env, k, val);
         if (k.tag != TURI_EFFECT_CONT)
             return turi_error("eval: resume: not a continuation");
 

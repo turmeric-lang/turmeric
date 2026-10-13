@@ -1,0 +1,13 @@
+;; A lexical shift whose receiver declares its continuation
+;; `multishot-effect-cont`.  The compiled path resumed it through the
+;; snapshot; the interpreter refused `(k v)` and `(resume k v)` with "resume:
+;; not a continuation", since the receiver is handed the captured context as
+;; a TuriCont handle rather than a handler continuation.  It resumes that
+;; handle now, as the cloneable `(k v)` does.
+
+(defn recv [k : multishot-effect-cont] : int (+ (k 10) (k 20)))
+
+(defn main [] : nil
+  (println (reset (+ 1 (shift (fn [k : multishot-effect-cont] : int (k 10)) 0))))   ; 11
+  (println (reset (* 2 (shift recv 0))))                                            ; 20 + 40 = 60
+  (println (reset (+ 1 (shift (fn [k : multishot-effect-cont] : int (resume k 4)) 0)))))  ; 5
