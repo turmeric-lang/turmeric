@@ -39,6 +39,7 @@ directory is worse for triage than no index.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [shared-build-imported-ctor-undeclared](shared-build-imported-ctor-undeclared.md) | medium | `tur build --shared` of a multi-module project fails at cc when one module calls a constructor of an ADT another module defines: `ctor_<Adt>_<Ctor>` is `static` in the defining TU and declared nowhere the importer sees (`implicit declaration of function 'ctor_Shape_Rect'`). The executable build of the same project works. No effects needed. |
+| [generic-fn-performing-caller-handled-effect-refused](generic-fn-performing-caller-handled-effect-refused.md) | medium (expressiveness) | A function with a type parameter that `perform`s an effect its caller handles is refused ("no lowering here", `SIG-REJECT`) at every instantiation, `int` included; the interpreter runs it. The archived generic-monomorph plan's own "verified sound" `emit-twice` example. That plan relied on the fiber machine, since retired; the G3b mono-template route needs an ABI clone, and a carrier-called scalar instantiation has none. |
 
 ## Found fixing adt-handle-result-as-call-arg-evicts (filed 2026-10-13)
 

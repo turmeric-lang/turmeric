@@ -31,12 +31,16 @@ repro prints `11` compiled, as the interpreter does.
   three were refused before and are correct now. The `--shared` build of a
   multi-module project is broken independently of this:
   [shared-build-imported-ctor-undeclared](../reported/shared-build-imported-ctor-undeclared.md).
+  A generic that performs is refused at every width, `int` included -- also
+  filed separately:
+  [generic-fn-performing-caller-handled-effect-refused](../reported/generic-fn-performing-caller-handled-effect-refused.md).
 - Pinned by `tests/fixtures/cps-wide-adt-param-perform` (leak-checked): the
   repro at both variants, a record ADT, a wide defstruct between scalars, a
   float product, two performs, a cps->cps non-tail call, the fn-value call
-  through `apply-s`, and a lambda with a wide parameter. The same answers
-  under `tur --interpret` and `tur jit`. The baseline refuses seven of its
-  nine calls ("no lowering here").
+  through `apply-s` (tail) and `apply-s2` (under `+`, the E2a heap join), and
+  a lambda with a wide parameter. The same answers under `tur --interpret` and
+  `tur jit`. Before the fix it does not build: seven `perform` sites report
+  "no lowering here".
 
 **Left open, no repro on `main`.** The intermediate build above shows that an
 E2-threading callee evicted for a STRUCTURAL reason (`BODY-STRUCT-CORE`,
