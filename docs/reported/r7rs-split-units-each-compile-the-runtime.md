@@ -1,5 +1,24 @@
 # `#lang r7rs`: every split unit recompiles the collector and the DK runtime
 
+**The collector half fixed 2026-10-13 (fix direction 1); the DK runtime and
+the warm-cache re-emission stay open.** In a split build the collector's
+functions are defined once, in the library unit, as `tur_sl_tur_gc_*`; every
+later unit carries prototypes of them
+(`emit_split_export_static_fns`, src/compiler/emit_split.c, called from
+`emit_r7rs_gc_prologue`). The program unit of the repro below went from 549 KB
+and 760 ms of cc to 513 KB and 380 ms on the box that measured it (the 544 ms
+row below is a different box), and its object from 52 functions to 24, none of
+them `tur_gc_*`. Kept `static`: the `inline` helpers, the constructor (armed in
+the library unit only, as before) and `tur_rt_tls_roots`, which each unit
+still emits. On the way, `emit_split_pieces` had a latent hole: a small
+function copied into a piece that does not own it got its `static` twin and
+the call macro, but no prototype of the one definition. So a use of it as a
+value (`atexit(tur_gc_report)`) in that piece named nothing. The piece now
+declares the definition first.
+`check-r7rs-prelude-split.sh`, `run-r7rs-gc.sh` (256/256),
+`run-r7rs-sanitize.sh` (130/130) and `run-r7rs-import.sh` pass.
+What is left is *Fix directions* 2 and 3.
+
 **Severity:** medium (build time). On a warm cache, the program unit of a
 one-line `#lang r7rs` program is 549 KB of C and costs 0.54 s of cc at `-O2`.
 That is 82% of a 0.66 s `tur build` with a Release `tur`. About 86% of the
@@ -78,7 +97,7 @@ from the others, behaves the same.
 
 ## Fix directions
 
-1. **Define the collector once, in the library unit.** In a split build, paste
+1. **Done 2026-10-13 (see the top).** **Define the collector once, in the library unit.** In a split build, paste
    `r7gc.c` with `static` removed from its function definitions, then let the
    existing machinery finish the job:
    - `emit_split_state` keeps them as external definitions in the library unit

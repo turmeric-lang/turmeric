@@ -162,8 +162,10 @@
 #endif
 
 /* Up to half a chunk.  The large classes matter for continuations: a stack
- * image is a few KiB, and as a large object each one cost a 64 KiB mapping. */
-static const uint32_t tur_gc_class_size[TUR_GC_NCLASS] = {
+ * image is a few KiB, and as a large object each one cost a 64 KiB mapping.
+ * `unused`: a split build's later units carry this table but only prototypes
+ * of the functions that read it (emit_split_export_static_fns). */
+static const uint32_t tur_gc_class_size[TUR_GC_NCLASS] __attribute__((unused)) = {
     16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384,
     448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560, 3072,
     3584, 4096, 5120, 6144, 8192, 10912, 13104, 16384, 21840, 32768
@@ -1244,8 +1246,9 @@ extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((we
 
 /* Installing it, separately from the constructor below, because a constructor
  * is not always early enough.  The prelude split (src/compiler/emit_split.h)
- * pastes this collector into BOTH units of a program and arms the constructor
- * in only one of them -- and Mach-O ignores a constructor's priority ACROSS
+ * pastes this collector into every unit of a program -- defined in the
+ * library unit, prototyped in the others (emit_split_export_static_fns) --
+ * and arms the constructor in only one of them -- and Mach-O ignores a constructor's priority ACROSS
  * object files, running initializers in link order instead.  The program unit
  * links first, so its __tur_static_init ran before the library unit's
  * constructor got here, and the HAMT that `__tur_module_def_init` builds and
@@ -1256,8 +1259,8 @@ extern void tur_rt_set_allocator(const tur_gc_rt_allocator *a) __attribute__((we
  * So the emitter also calls this from the first statement of
  * __tur_static_init, in whichever unit has it, before anything that unit does
  * can allocate.  Calling it twice is a no-op: the table is the same one, and
- * every copy of these functions works the same shared heap (tur_gc_G is one
- * variable across the split).  It is safe before tur_gc_init too --
+ * there is one copy of these functions across the split, working one shared
+ * heap (tur_gc_G is one variable).  It is safe before tur_gc_init too --
  * tur_gc_malloc initializes the collector on its first call.  Where TUR_GC_ON
  * is 0 the stub at the bottom of this file answers that call instead. */
 static __attribute__((unused)) void tur_gc_install_rt_allocator(void) {

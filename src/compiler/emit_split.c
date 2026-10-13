@@ -752,6 +752,77 @@ static bool function_name(const char *s, size_t a, size_t b, size_t *ns, size_t 
     return true;
 }
 
+/* ---- runtime functions defined once (r7rs-split-units-each-compile-the-runtime) */
+
+/* Calls `fn` on each file-scope function definition or prototype in s[0..n)
+ * that is `static`, not `inline` and not a constructor or destructor, with
+ * the item's bounds and its name; everything else goes to `other`. */
+typedef void (*StaticFnVisit)(const char *s, size_t a, size_t e, bool is_def,
+                              size_t ns, size_t ne, void *ud);
+typedef void (*OtherVisit)(const char *s, size_t a, size_t e, void *ud);
+static void each_static_fn(const char *s, size_t n, StaticFnVisit fn, OtherVisit other,
+                           void *ud) {
+    size_t i = 0;
+    while (i < n) {
+        size_t a = i;
+        if (isspace((unsigned char)s[i])) { i++; other(s, a, i, ud); continue; }
+        size_t j = skip_lexeme(s, n, i);
+        if (j != i) { other(s, a, j, ud); i = j; continue; }
+        if (s[i] == '#' && at_line_start(s, i)) {
+            i = skip_pp_line(s, n, i);
+            other(s, a, i, ud);
+            continue;
+        }
+        if (s[i] == ';') { i++; other(s, a, i, ud); continue; }
+        ChunkKind kind;
+        size_t body = 0;
+        size_t e = chunk_end(s, n, i, &kind, &body);
+        size_t hend = kind == CHUNK_FUNC ? body : e;
+        HeadKw h = { .first = true };
+        each_head_token(s, i, hend, head_kw_tok, &h);
+        size_t ns, ne;
+        bool is_fn = kind == CHUNK_FUNC ||
+                     (kind == CHUNK_DECL && !h.is_typedef && decl_is_function(s, i, e));
+        if (is_fn && h.is_static && !h.is_inline && !head_has_ctor(s, i, hend) &&
+            function_name(s, i, hend, &ns, &ne))
+            fn(s, i, e, kind == CHUNK_FUNC, ns, ne, ud);
+        else
+            other(s, i, e, ud);
+        i = e;
+    }
+}
+
+static void collect_static_def(const char *s, size_t a, size_t e, bool is_def,
+                               size_t ns, size_t ne, void *ud) {
+    (void)a; (void)e;
+    if (is_def) namemap_put((NameMap *)ud, s + ns, ne - ns, 1);
+}
+static void skip_other(const char *s, size_t a, size_t e, void *ud) {
+    (void)s; (void)a; (void)e; (void)ud;
+}
+
+typedef struct { const NameMap *defined; Buf *out; } ExportFnCtx;
+static void export_static_fn(const char *s, size_t a, size_t e, bool is_def,
+                             size_t ns, size_t ne, void *ud) {
+    ExportFnCtx *c = (ExportFnCtx *)ud;
+    (void)is_def;
+    if (!namemap_find(c->defined, s + ns, ne - ns)) { buf_write(c->out, s + a, e - a); return; }
+    exp_add(s + ns, ne - ns);
+    put_without_static(c->out, s, a, e);
+}
+static void copy_other(const char *s, size_t a, size_t e, void *ud) {
+    buf_write(((ExportFnCtx *)ud)->out, s + a, e - a);
+}
+
+void emit_split_export_static_fns(const char *s, size_t n, Buf *out) {
+    if (!s || n == 0) return;
+    NameMap defined = { 0 };
+    each_static_fn(s, n, collect_static_def, skip_other, &defined);
+    ExportFnCtx c = { &defined, out };
+    each_static_fn(s, n, export_static_fn, copy_other, &c);
+    namemap_free(&defined);
+}
+
 /* Does a function head carry an attribute a `static` twin cannot: one that
  * is about the symbol (weak, alias, section, used, ...) rather than the code? */
 static bool head_symbol_attr(const char *s, size_t a, size_t b) {
@@ -1045,6 +1116,11 @@ int emit_split_pieces(const char *s, size_t n, int npieces, size_t dup_max,
                     if (!declared[it->dup]) {
                         size_t ns, ne;
                         if (function_name(s, it->a, it->body, &ns, &ne)) {
+                            /* The one definition's own name first: the twin's
+                             * macro covers calls, and a use as a value
+                             * (`atexit(f)`) with no prototype of f before it
+                             * would name nothing. */
+                            put_head_as_proto(&t, s, it->a, it->body);
                             put_dup_decl(&t, s, it->a, it->body, ns, ne);
                             declared[it->dup] = true;
                         }

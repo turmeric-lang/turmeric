@@ -12349,7 +12349,20 @@ static void emit_r7rs_gc_macros(Buf *out, bool on) {
 static void emit_r7rs_gc_prologue(Buf *out) {
     buf_puts(out, "/* r7rs-gc: this unit allocates from the collector below "
                   "(docs/archive/r7rs-gc-plan.md). */\n");
-    emit_embedded_runtime_source(out, "r7gc.c", tur_rt_embed_r7gc_c);
+    if (g_emit_split == EMIT_SPLIT_NONE) {
+        emit_embedded_runtime_source(out, "r7gc.c", tur_rt_embed_r7gc_c);
+    } else {
+        /* r7rs-split-units-each-compile-the-runtime: nothing in the collector
+         * is per-unit -- its state is already the library unit's alone -- so
+         * its functions are too.  Made external here, the split's state
+         * transform defines them in the library unit and prototypes them in
+         * every later one, which then compiles none of the
+         * allocate-collect-mark-scan path its `malloc` macro reaches. */
+        Buf gc; buf_init(&gc);
+        emit_embedded_runtime_source(&gc, "r7gc.c", tur_rt_embed_r7gc_c);
+        emit_split_export_static_fns(gc.data, gc.len, out);
+        buf_free(&gc);
+    }
     emit_r7rs_gc_macros(out, true);
 }
 
