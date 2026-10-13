@@ -3091,6 +3091,10 @@ Expr *elab_make_resume(Elab *e, Expr *k, Expr *value, Span span) {
         const Binding *kb = k->as.var.binding;
         if (kb->cont_result_type) {
             rtype = *kb->cont_result_type;
+        } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_full) {
+            /* effect-cont-aggregate-result-untyped: the written result type,
+             * whole -- a struct or ADT as well as a scalar. */
+            rtype = *kb->type.as.cont.returns_full;
         } else if (kb->type.kind == TY_CONT && kb->type.as.cont.returns_known) {
             /* `returns` is a bare kind: only a scalar names a whole type. */
             switch (kb->type.as.cont.returns) {
