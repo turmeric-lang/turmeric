@@ -36,9 +36,17 @@ with -m diffs every merge against the main it landed on, so the totals are a
 sum of tree diffs and `reports_filed - reports_archived == open_reports` holds
 exactly.  A plain path-limited `git log` breaks that: its history
 simplification drops side branches, and on this repo it came out 14 short.  A report filed and closed
-on a branch before merging never touched main, and is counted by neither.  A
-rename inside docs/reported/ is neither filed nor archived.  Both fields are
-null in a shallow clone, whose history would undercount them.
+on a branch before merging never touched main, and is counted by neither.
+
+Renames are off (--no-renames), so every change is an add or a delete.  The
+usual archive, `git mv docs/reported/x.md docs/archive/x.md`, is a rename on the
+whole tree, but under this pathspec it is a delete -- counted as archived.
+Rename detection was tried to keep a slug change inside docs/reported/ from
+counting as one filed and one archived, but reports share a template, and it
+paired a report archived in one push with a different one filed in the same
+push, hiding both.  No report has ever been renamed in place here, and the net
+is exact either way.  Both fields are null in a shallow clone, whose history
+would undercount them.
 
 Usage:
     collect-docs.py                      # one JSON object on stdout
@@ -133,24 +141,17 @@ def report_flow(repo):
     try:
         if git("rev-parse", "--is-shallow-repository").strip() != "false":
             return (None, None)
-        log = git("log", "--first-parent", "-m", "-M", "--name-status",
-                  "--format=", "--diff-filter=ADR", "--", "docs/reported/")
+        log = git("log", "--first-parent", "-m", "--no-renames", "--name-status",
+                  "--format=", "--diff-filter=AD", "--", "docs/reported/")
     except (OSError, subprocess.CalledProcessError):
         return (None, None)
     filed = archived = 0
     for line in log.splitlines():
-        parts = line.split("\t")
-        status = parts[0][:1]
-        if status == "A" and len(parts) == 2:
-            filed += is_report(parts[1])
-        elif status == "D" and len(parts) == 2:
-            archived += is_report(parts[1])
-        elif status == "R" and len(parts) == 3:
-            # Inside the pathspec both ends are usually reports, and a rename is
-            # then neither event.  A move out to docs/archive/ shows up as a D,
-            # not an R, because the pathspec hides its destination.
-            archived += is_report(parts[1]) and not is_report(parts[2])
-            filed += is_report(parts[2]) and not is_report(parts[1])
+        status, _, path = line.partition("\t")
+        if status == "A":
+            filed += is_report(path)
+        elif status == "D":
+            archived += is_report(path)
     return (filed, archived)
 
 
