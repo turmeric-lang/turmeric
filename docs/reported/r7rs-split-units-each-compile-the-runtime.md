@@ -1,23 +1,61 @@
 # `#lang r7rs`: every split unit recompiles the collector and the DK runtime
 
-**The collector half fixed 2026-10-13 (fix direction 1); the DK runtime and
-the warm-cache re-emission stay open.** In a split build the collector's
-functions are defined once, in the library unit, as `tur_sl_tur_gc_*`; every
-later unit carries prototypes of them
-(`emit_split_export_static_fns`, src/compiler/emit_split.c, called from
-`emit_r7rs_gc_prologue`). The program unit of the repro below went from 549 KB
-and 760 ms of cc to 513 KB and 380 ms on the box that measured it (the 544 ms
-row below is a different box), and its object from 52 functions to 24, none of
-them `tur_gc_*`. Kept `static`: the `inline` helpers, the constructor (armed in
-the library unit only, as before) and `tur_rt_tls_roots`, which each unit
-still emits. On the way, `emit_split_pieces` had a latent hole: a small
-function copied into a piece that does not own it got its `static` twin and
-the call macro, but no prototype of the one definition. So a use of it as a
-value (`atexit(tur_gc_report)`) in that piece named nothing. The piece now
-declares the definition first.
-`check-r7rs-prelude-split.sh`, `run-r7rs-gc.sh` (256/256),
-`run-r7rs-sanitize.sh` (130/130) and `run-r7rs-import.sh` pass.
-What is left is *Fix directions* 2 and 3.
+**Fix directions 1 and 2 done 2026-10-13; only direction 3 (the warm-cache
+re-emission) stays open.** In a split build the collector, the DK runtime and
+the deep-stack helper (`tur_deep_*`) are each defined once, in the library
+unit, under the `tur_sl_` prefix. Every later unit carries prototypes of them
+instead. `emit_split_once_fns` (src/compiler/emit_module.c) runs the section's
+text through `emit_split_export_static_fns` (src/compiler/emit_split.c), and
+the state transform does the rest. Kept `static`, so per-unit as before:
+`inline` functions, a constructor (armed in the library unit only),
+`tur_rt_tls_roots`, and `__dk_enter0`, which is on every direct-to-CPS entry
+and is small. The deep-stack helper used to be written into the program unit
+only. Its function-local statics now live in the library unit, which is still
+one unit, and it names `main` only as an external.
+
+Measured on one 4-core Linux box, gcc, min of 8 (`cc -O2`, compile only, the
+program unit of the repro below):
+
+| program unit | size | cc |
+| --- | --- | --- |
+| before | 549 KB | 732 ms |
+| collector once | 513 KB | 349 ms |
+| + DK runtime once | 480 KB | 189 ms |
+| + `tur_deep_*` in the library unit | 474 KB | 160 ms |
+
+What is left of the unit's compile is 77% parsing. A Release `tur build` of
+the repro went from 1.01 s to 0.47 s warm (6.0 s to 5.7 s cold). With
+`(only (srfi 13) string-pad)` imported it went from 1.16 s to 0.58 s warm
+(7.2 s to 6.4 s cold).
+
+Run time, as valgrind instruction counts against the old build: a recursive
+`fib` is unchanged, a `guard`/`raise` loop is -0.3%, a list-building `map`
+loop is +0.5%, and a `parameterize`/`call/cc`/`dynamic-wind` loop is +0.9%.
+The rest is entry points that are now real cross-unit calls (`calloc`, the
+region allocator's wrappers) and a few more words scanned. Five collector
+helpers that only the collector calls are `static inline` now
+(`tur_gc_alloc_small`, `_refill`, `_maybe_collect`, `_push`, `_drain`). That
+keeps them inlined in the library unit, which halved the cost of the first
+version.
+
+One more result, measured but not designed for: a call/cc generator loop
+(a `for-each` re-entered 100 times per generator, 3000 generators) ran in
+1.5-2.0 s instead of 3.4 s. At its last collection it held 0.9 MB live in a
+10 MB heap, where the old build held 42 MB live in 124 MB. The result is
+identical, and a single-unit build of the old compiler also held 42 MB. So
+the old code's frames kept conservative false roots alive. A likely cause,
+not checked, is stale words in the larger frames that inlining the collector
+made, copied into each continuation's stack image.
+
+On the way, `emit_split_pieces` had a latent hole: a small function copied
+into a piece that does not own it got its `static` twin and the call macro,
+but no prototype of the one definition. So a use of it as a value
+(`atexit(tur_gc_report)`) in that piece named nothing. The piece now declares
+the definition first.
+
+`check-r7rs-prelude-split.sh`, `check-r7rs-main-stack-size.sh`,
+`run-r7rs-gc.sh` (256/256), `run-r7rs-sanitize.sh` (130/130),
+`run-r7rs-import.sh` and `tests/run.sh` pass.
 
 **Severity:** medium (build time). On a warm cache, the program unit of a
 one-line `#lang r7rs` program is 549 KB of C and costs 0.54 s of cc at `-O2`.
@@ -121,7 +159,7 @@ from the others, behaves the same.
    for an ASan-linked program), and the same again on each cold
    imported-library compile. Across the 126 compiled r7rs fixtures that is
    about 35 s of a 230 s serial warm walk.
-2. **The same for the DK runtime and `tur_deep_*`.** The floor row above
+2. **Done 2026-10-13 (see the top).** **The same for the DK runtime and `tur_deep_*`.** The floor row above
    bounds what is left after (1): 259 ms down to 76 ms. Keep the helpers whose
    inlining matters at run time (tagging, boxing, carrier conversions) as
    `static inline`. The large, out-of-line pieces (`dk_run_impl`,

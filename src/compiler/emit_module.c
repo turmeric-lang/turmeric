@@ -12298,6 +12298,18 @@ static void emit_rcgc_global(Buf *out, bool shared,
  *
  * The S2 split (emit_rt_split_source) forces the archive posture, so the
  * generated runtime TU never carries these -- the host links region.c. */
+/* r7rs-split-units-each-compile-the-runtime: runtime text whose functions
+ * need not be per-unit, written so that a split build compiles them once.
+ * Outside a split it is written as is.  In one, its `static` functions are
+ * made external (emit_split_export_static_fns), and the split's state
+ * transform then defines them in the library unit and prototypes them in
+ * every later one.  Only for text every unit of the build writes alike, and
+ * whose functions reach nothing a unit keeps for itself. */
+static void emit_split_once_fns(Buf *out, const Buf *text) {
+    if (g_emit_split == EMIT_SPLIT_NONE) buf_write(out, text->data, text->len);
+    else emit_split_export_static_fns(text->data, text->len, out);
+}
+
 /* ---------------------------------------------------------------------------
  * The r7rs-gc collector (docs/archive/r7rs-gc-plan.md; graduated 2026-09-25,
  * on by default for a single-unit `#lang r7rs` program; TUR_R7RS_GC=0 or
@@ -12349,20 +12361,14 @@ static void emit_r7rs_gc_macros(Buf *out, bool on) {
 static void emit_r7rs_gc_prologue(Buf *out) {
     buf_puts(out, "/* r7rs-gc: this unit allocates from the collector below "
                   "(docs/archive/r7rs-gc-plan.md). */\n");
-    if (g_emit_split == EMIT_SPLIT_NONE) {
-        emit_embedded_runtime_source(out, "r7gc.c", tur_rt_embed_r7gc_c);
-    } else {
-        /* r7rs-split-units-each-compile-the-runtime: nothing in the collector
-         * is per-unit -- its state is already the library unit's alone -- so
-         * its functions are too.  Made external here, the split's state
-         * transform defines them in the library unit and prototypes them in
-         * every later one, which then compiles none of the
-         * allocate-collect-mark-scan path its `malloc` macro reaches. */
-        Buf gc; buf_init(&gc);
-        emit_embedded_runtime_source(&gc, "r7gc.c", tur_rt_embed_r7gc_c);
-        emit_split_export_static_fns(gc.data, gc.len, out);
-        buf_free(&gc);
-    }
+    /* Nothing in the collector is per-unit -- its state is already the
+     * library unit's alone -- so its functions are not either: a later unit
+     * compiles none of the allocate-collect-mark-scan path its `malloc` macro
+     * reaches. */
+    Buf gc; buf_init(&gc);
+    emit_embedded_runtime_source(&gc, "r7gc.c", tur_rt_embed_r7gc_c);
+    emit_split_once_fns(out, &gc);
+    buf_free(&gc);
     emit_r7rs_gc_macros(out, true);
 }
 
@@ -13812,10 +13818,10 @@ static const char TUR_DEEP_SIZE_FN[] =
  * record; the collector and call/cc read the new thread's own stack bounds
  * (both ask pthreads for the calling thread).  Windows has its own branch
  * (CreateThread).  Not under `tur jit` (`__MIRC__`), whose engine already runs main on a sized thread
- * (TUR_MAIN_STACK_MB there too).  In a split build it is written into the
- * program unit only (emit_split.h).  A failure to make the thread is not an
- * error -- main just runs where it is, as before, with a line on stderr when
- * TUR_MAIN_STACK_MB asked for the size. */
+ * (TUR_MAIN_STACK_MB there too).  In a split build it is defined in the
+ * library unit and declared in the others (emit_split_once_fns).  A failure
+ * to make the thread is not an error -- main just runs where it is, as
+ * before, with a line on stderr when TUR_MAIN_STACK_MB asked for the size. */
 static void emit_deep_stack_runtime(Buf *out) {
     buf_puts(out,
         "#if !defined(_WIN32) && !defined(__MIRC__)\n"
@@ -15196,10 +15202,16 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
     buf_puts(out, "    fprintf(stderr, \"panic (no unwind): %s\\n\", msg ? msg : \"(no message)\");\n");
     buf_puts(out, "    abort();\n");
     buf_puts(out, "}\n\n");
-    /* Not in a split build's library unit: only the program unit has a main,
-     * and the helper's statics must live in one unit (check-r7rs-prelude-split). */
-    if (g_opt_r7rs && !shared && g_emit_split != EMIT_SPLIT_LIB && g_emit_split != EMIT_SPLIT_IMP)
-        emit_deep_stack_runtime(out);
+    /* The helper's statics must live in one unit (check-r7rs-prelude-split).
+     * In a split build that is the library unit, which defines the functions
+     * once (emit_split_once_fns) for the program unit's main to call: they
+     * name `main` only as an external, resolved where the units link. */
+    if (g_opt_r7rs && !shared) {
+        Buf deep; buf_init(&deep);
+        emit_deep_stack_runtime(&deep);
+        emit_split_once_fns(out, &deep);
+        buf_free(&deep);
+    }
 
     /* CPS3: emit tur_cps_cont_t + tur_cps_apply when --cps-path is active */
     if (g_cps_path) {
@@ -15588,7 +15600,12 @@ static void emit_runtime_preamble(Buf *out, const Expr *program, bool shared) {
      * emit_cps_reset / emit_cps_cloneable_reset lower onto dk_run/dk_shift. */
     if (shared || cps_uses_delimited || cps_uses_cloneable_dk ||
         cps_uses_serial || cps_ir_emittable) {
-        emit_cps_runtime_prelude(out);
+        /* The machine is compiled once in a split build: every unit's
+         * continuation frames run on the library unit's trampoline. */
+        Buf dk; buf_init(&dk);
+        emit_cps_runtime_prelude(&dk);
+        emit_split_once_fns(out, &dk);
+        buf_free(&dk);
         /* The DK runtime's per-thread state (dk-reap-list-shared-across-
          * threads): realloc'd (collected) arrays and a chain in flight. */
         r7gc_note_tls_root("__dk_reap_v");

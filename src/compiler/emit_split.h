@@ -82,7 +82,8 @@ void emit_split_state(const char *src, size_t len, EmitSplitMode mode, Buf *out)
  * with every `static` function it DEFINES made external -- the definition
  * and each prototype of it lose `static`, and its name is recorded with
  * emit_split_note_export.  For runtime text pasted into every unit whose
- * functions are not per-unit (the r7rs-gc collector): run before
+ * functions are not per-unit (the r7rs-gc collector, the DK runtime, the
+ * deep-stack helper; emit_split_once_fns in emit_module.c): run before
  * emit_split_state, which then keeps the definitions in the library unit and
  * turns them into prototypes in every later one, so the code is compiled
  * once instead of once per unit.  Left `static`: `inline` functions (each

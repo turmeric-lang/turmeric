@@ -161,6 +161,14 @@
 #define TUR_GC_SIG_RESUME SIGXFSZ
 #endif
 
+/* `inline` below marks a helper only the collector's own functions call, on
+ * the allocation or marking path.  A split build defines the collector once
+ * (emit_split_export_static_fns) and leaves `inline` functions `static`, so
+ * the library unit inlines these into their callers as one unit does, rather
+ * than calling them across an external boundary (about 1.5% more
+ * instructions in an allocation-heavy loop), and a later unit, where every
+ * caller is a prototype, drops them unused. */
+
 /* Up to half a chunk.  The large classes matter for continuations: a stack
  * image is a few KiB, and as a large object each one cost a 64 KiB mapping.
  * `unused`: a split build's later units carry this table but only prototypes
@@ -595,7 +603,7 @@ TUR_GC_NOASAN static void tur_gc_collect_now(bool if_due);
  * refill time and read here without a lock: a stale read costs one refill's
  * worth of delay.  Threads that cross the threshold together all ask; the
  * first collects and the others find it no longer due (tur_gc_collect_now). */
-static void tur_gc_maybe_collect(void) {
+static inline void tur_gc_maybe_collect(void) {
     tur_gc_state *G = tur_gc_G;
     if (TUR_GC_LOAD(&G->off)) return;
     if (G->torture) {
@@ -620,7 +628,7 @@ static uint32_t tur_gc_class_of(size_t n) {
  * shared lists (or the class's bump page) into the calling thread's cache,
  * marking each allocated in its page's bitmap -- to the cache, from the
  * heap's point of view, until the thread hands it out.  Returns the first. */
-static void *tur_gc_refill(tur_gc_thread *t, uint32_t cls) {
+static inline void *tur_gc_refill(tur_gc_thread *t, uint32_t cls) {
     tur_gc_state *G = tur_gc_G;
     size_t sz = tur_gc_class_size[cls];
     unsigned want = sz <= 256 ? 32 : sz <= 4096 ? 8 : 2, got = 0;
@@ -654,7 +662,7 @@ static void *tur_gc_refill(tur_gc_thread *t, uint32_t cls) {
 /* The fast path: pop the calling thread's cache.  No lock; a collection can
  * stop the thread anywhere in here, and the slot in flight is then in its
  * registers or on its stack, which the collector scans. */
-static void *tur_gc_alloc_small(tur_gc_thread *t, size_t n) {
+static inline void *tur_gc_alloc_small(tur_gc_thread *t, size_t n) {
     uint32_t cls = tur_gc_class_of(n ? n : 1);
     void *p = t->cache[cls];
     if (p) t->cache[cls] = *(void **)p;
@@ -813,7 +821,7 @@ static char *tur_gc_strndup(const char *s, size_t m) {
 
 /* The mark stack holds (start, size) pairs, so the drain does not look the
  * object's page up a second time. */
-static void tur_gc_push(uintptr_t start, uintptr_t size) {
+static inline void tur_gc_push(uintptr_t start, uintptr_t size) {
     tur_gc_state *G = tur_gc_G;
     if (G->mstack_n + 2 > G->mstack_cap) {
         size_t nc = G->mstack_cap * 2;
@@ -868,7 +876,7 @@ TUR_GC_NOASAN static void tur_gc_scan(const void *p, size_t n) {
 
 static void tur_gc_scan_cb(const void *p, size_t n, void *ud) { (void)ud; tur_gc_scan(p, n); }
 
-TUR_GC_NOASAN static void tur_gc_drain(void) {
+TUR_GC_NOASAN static inline void tur_gc_drain(void) {
     tur_gc_state *G = tur_gc_G;
     while (G->mstack_n) {
         uintptr_t size  = G->mstack[--G->mstack_n];
