@@ -55,8 +55,10 @@ leak gate.
     (`resume_k_is_ts_handle`, `src/turi/eval.c`).
     `tests/fixtures/shift-receiver-multishot-effect-cont` pins it. Leak-checking
     that fixture found
-    [lexical-shift-receiver-cont-never-freed](../reported/lexical-shift-receiver-cont-never-freed.md),
-    which is older than this work.
+    [lexical-shift-receiver-cont-never-freed](lexical-shift-receiver-cont-never-freed.md),
+    which is older than this work. It was fixed the same day, except for an
+    escaped continuation
+    ([cloneable-cont-escaped-chain-leaks](../reported/cloneable-cont-escaped-chain-leaks.md)).
   - **Still true:** `resume` of an arbitrary `int` (not a continuation) is
     resumed as a DK chain and crashes compiled. On `main` it failed to link.
     `int` remains the erased carrier a stored `k` legitimately uses.

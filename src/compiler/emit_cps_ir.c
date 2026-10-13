@@ -3939,6 +3939,10 @@ static bool jbody_has_cps_tailcall(const CTerm *t) {
                           return false;
         case CT_LETCONT:  return jbody_has_cps_tailcall(t->as.letcont.jbody)
                               || jbody_has_cps_tailcall(t->as.letcont.body);
+        /* A lexical cloneable reset / call/cc landing runs its body inline,
+         * after the reset (cps-join-after-cloneable-reset-misses-kont). */
+        case CT_CLONEABLE: return jbody_has_cps_tailcall(t->as.cloneable.body);
+        case CT_CALLCC:    return jbody_has_cps_tailcall(t->as.callcc.body);
         default:          return false;
     }
 }
@@ -3968,6 +3972,10 @@ static bool jbody_has_perform(const CTerm *t) {
                           return false;
         case CT_LETCONT:  return jbody_has_perform(t->as.letcont.jbody)
                               || jbody_has_perform(t->as.letcont.body);
+        /* A lexical cloneable reset / call/cc landing runs its body inline,
+         * after the reset (cps-join-after-cloneable-reset-misses-kont). */
+        case CT_CLONEABLE: return jbody_has_perform(t->as.cloneable.body);
+        case CT_CALLCC:    return jbody_has_perform(t->as.callcc.body);
         default:          return false;
     }
 }
@@ -3997,6 +4005,10 @@ static bool jbody_has_delim(const CTerm *t) {
                           return false;
         case CT_LETCONT:  return jbody_has_delim(t->as.letcont.jbody)
                               || jbody_has_delim(t->as.letcont.body);
+        /* A lexical cloneable reset / call/cc landing runs its body inline,
+         * after the reset (cps-join-after-cloneable-reset-misses-kont). */
+        case CT_CLONEABLE: return jbody_has_delim(t->as.cloneable.body);
+        case CT_CALLCC:    return jbody_has_delim(t->as.callcc.body);
         default:          return false;
     }
 }
@@ -7729,7 +7741,11 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
              * clang).  Mirrors the non-CPS emit path (emit_core.c BS_FUNC_CALL),
              * keyed on the same c_op identity. */
             bool cast_args = (sp->c_op && strcmp(sp->c_op, "cons") == 0);
-            buf_printf(&b, "%s(", sp->c_op);
+            /* A void runtime call (`tur_cloneable_cont_drop`) still binds a
+             * nil word: `(call, 0)`, not `x = call` -- a void value assigned
+             * did not compile (lexical-shift-receiver-cont-never-freed). */
+            bool is_void = sp->result_type.kind == TY_NIL;
+            buf_printf(&b, "%s%s(", is_void ? "(" : "", sp->c_op);
             for (uint32_t i = 0; i < n; i++) {
                 if (i) buf_puts(&b, ", ");
                 if (cast_args) {
@@ -7738,7 +7754,7 @@ static char *prim_expr(const BuiltinSpec *sp, char **as, uint32_t n) {
                     buf_printf(&b, "(%s)", as[i]);
                 }
             }
-            buf_putc(&b, ')');
+            buf_puts(&b, is_void ? "), 0)" : ")");
             break;
         }
         default:
@@ -11721,10 +11737,13 @@ static bool serial_k_is(const Expr *x, const Binding *k) {
 }
 
 /* What the walk below tracks.  K_SERIAL: the receiver's serial-cont, whose
- * readers copy it.  K_FNPARAM: a fn value (a lambda that captured the
- * serial-cont) that may only be CALLED -- never stored, returned, captured or
- * passed on -- so it is dead when its holder returns. */
-typedef enum { K_SERIAL, K_FNPARAM } SerialKRole;
+ * readers copy it.  K_CLONE: a cloneable shift receiver's `cont`, likewise --
+ * its `(k v)` / clone / snapshot builtins and a `resume` of it all dk_invoke or
+ * dk_copy_range the chain the wrapper holds and leave it be
+ * (lexical-shift-receiver-cont-never-freed).  K_FNPARAM: a fn value (a lambda
+ * that captured the continuation) that may only be CALLED -- never stored,
+ * returned, captured or passed on -- so it is dead when its holder returns. */
+typedef enum { K_SERIAL, K_CLONE, K_FNPARAM } SerialKRole;
 
 static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
                             int depth);
@@ -11780,7 +11799,7 @@ static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
         case EX_RESUME: {
             const ResumeExpr *r = x->as.resume_.resume;
             if (!r) return true;
-            if (role == K_SERIAL && serial_k_is(r->k, k)) {
+            if ((role == K_SERIAL || role == K_CLONE) && serial_k_is(r->k, k)) {
                 /* a resume of k is a copying read */
             } else if (!serial_k_use_ok(r->k, k, role, depth)) {
                 return false;
@@ -11814,9 +11833,14 @@ static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
             /* `(k v)` on a serial-cont elaborates to this resume builtin
              * (elab_call's CC4 dispatch), the handle its argument 0. */
             const BuiltinSpec *sp = x->as.builtin.spec;
-            bool reader = role == K_SERIAL && sp && sp->name &&
-                          (strcmp(sp->name, "tur_serial_cont_resume") == 0 ||
-                           strcmp(sp->name, "tur_serial_cont_serialize") == 0);
+            bool reader = sp && sp->name &&
+                ((role == K_SERIAL &&
+                  (strcmp(sp->name, "tur_serial_cont_resume") == 0 ||
+                   strcmp(sp->name, "tur_serial_cont_serialize") == 0)) ||
+                 (role == K_CLONE &&
+                  (strcmp(sp->name, "tur_cloneable_cont_resume") == 0 ||
+                   strcmp(sp->name, "tur_cloneable_cont_clone") == 0 ||
+                   strcmp(sp->name, "tur_continuation_snapshot") == 0)));
             for (uint32_t i = 0; i < x->as.builtin.n; i++) {
                 if (reader && i == 0 && serial_k_is(x->as.builtin.args[i], k)) continue;
                 if (!serial_k_use_ok(x->as.builtin.args[i], k, role, depth)) return false;
@@ -11866,7 +11890,7 @@ static bool serial_k_use_ok(const Expr *x, const Binding *k, SerialKRole role,
     }
 }
 
-static bool serial_recv_confines_k(const CTerm *t) {
+static bool serial_recv_confines_k(const CTerm *t, SerialKRole role) {
     const FnDef *fd = NULL;
     if (t->as.cloneable.receiver_expr) {
         const Expr *f = t->as.cloneable.receiver_expr;
@@ -11879,12 +11903,15 @@ static bool serial_recv_confines_k(const CTerm *t) {
     if (fd->body->kind == EX_INLINE_C || (fd->binding && fd->binding->body_is_inline_c))
         return false;
     const Binding *k = fd->params[fd->n_params - 1];
-    return k && serial_k_use_ok(fd->body, k, K_SERIAL, 0);
+    return k && serial_k_use_ok(fd->body, k, role, 0);
 }
 
+/* `free_stmt`, when set, releases the continuation once the receiver returns
+ * -- passed only when the receiver keeps nothing of `k`
+ * (serial_recv_confines_k) -- unless the receiver parked an async body. */
 static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
                                  const char *cont_setup, const char *cont_arg,
-                                 bool free_cap) {
+                                 const char *free_stmt) {
     if (t->as.cloneable.receiver_expr) {
         const Expr *f = t->as.cloneable.receiver_expr;
         struct Closure *closure = f->as.closure_.closure;
@@ -11909,15 +11936,15 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
          * pointer for the cloneable int64_t k.  A serial k is itself either
          * spelling (serial_recv_kty). */
         const char *kty = t->as.cloneable.serial ? serial_recv_kty(ce, t) : "int64_t";
-        if (free_cap)
+        if (free_stmt)
             /* serial-cont-chain-never-freed: the receiver kept nothing of
              * `k` (serial_recv_confines_k), so its chain dies here. */
             buf_printf(ce->helpers,
                 "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
                 "    intptr_t __r = (intptr_t)%s((void *)env, (%s)(intptr_t)%s);\n"
-                "    if (!tur_async_suspended) dk_free(%s);\n"
+                "    if (!tur_async_suspended) %s\n"
                 "    return __r;\n}\n",
-                bodyfn, cont_setup, thunk_name, kty, cont_arg, cont_arg);
+                bodyfn, cont_setup, thunk_name, kty, cont_arg, free_stmt);
         else
             buf_printf(ce->helpers,
                 "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
@@ -11966,13 +11993,13 @@ static void emit_cl_shift_bodyfn(CE *ce, const char *bodyfn, const CTerm *t,
         buf_putc(&call, '\0');
         emit_scalar_word_conv(&rc, rty, "int64_t", call.data);
         buf_putc(&rc, '\0');
-        if (free_cap)
+        if (free_stmt)
             buf_printf(ce->helpers,
                 "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
                 "    intptr_t __r = (intptr_t)%s;\n"
-                "    if (!tur_async_suspended) dk_free(%s);\n"
+                "    if (!tur_async_suspended) %s\n"
                 "    return __r;\n}\n",
-                bodyfn, cont_setup, rc.data, cont_arg);
+                bodyfn, cont_setup, rc.data, free_stmt);
         else
             buf_printf(ce->helpers,
                 "static intptr_t %s(intptr_t env, DK *subk) {\n%s"
@@ -12032,7 +12059,7 @@ static void emit_serial_outward_call(CE *ce, const CTerm *t, int id, const char 
      * registered for the entry boundary's reap.  It cannot be freed after the
      * call: the call is this function's tail. */
     char kreap[96];
-    if (serial_recv_confines_k(t)) {
+    if (serial_recv_confines_k(t, K_SERIAL)) {
         snprintf(kreap, sizeof kreap, "__dk_reap_keep(%s)", kchain);
         kchain = kreap;
     }
@@ -12171,11 +12198,18 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                          closure->fn->n_params > 0 ? closure->fn->params[0]->id : 0);
             }
             ce_line(ce, "%s = %s(%s, (int64_t)(intptr_t)%s);", xn, thunk_name, fval, cv);
+            /* lexical-shift-receiver-cont-never-freed: the receiver literal is
+             * called once, here, and the identity continuation holds no
+             * reference to it -- release its box as Shape 2 does. */
+            emit_cl_shift_env_drop(ce, t, fval);
             free(thunk_name);
             free(fval);
         } else {
             ce_line(ce, "%s = %s((int64_t)(intptr_t)%s);", xn, rfn, cv);
         }
+        /* ...and the identity wrapper, when the receiver kept nothing of it. */
+        if (serial_recv_confines_k(t, K_CLONE))
+            ce_line(ce, "if (!tur_async_suspended) tur_cloneable_cont_drop((int64_t)(intptr_t)%s);", cv);
     } else if (t->as.cloneable.serial) {
         /* U4 Shape 2 (serial): an arithmetic context marshaled via the shared
          * tagged frames (`__sk_frame_for_tag`), and a shift body that hands the
@@ -12188,7 +12222,7 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
         if (!outward)
             emit_cl_shift_bodyfn(ce, bodyfn, t,
                 "    DK *__cap = dk_copy_range(subk, NULL);\n", "__cap",
-                serial_recv_confines_k(t));
+                serial_recv_confines_k(t, K_SERIAL) ? "dk_free(__cap);" : NULL);
         /* A 1-arg call frame gets a per-site wrapper fn plus a SkReg entry that
          * self-registers (constructor) so the marshaler maps the frame <-> a stable
          * name ("<fn>$L") for save/restore.  Arithmetic frames need no per-site
@@ -12529,10 +12563,15 @@ static void emit_cloneable(CE *ce, const CTerm *t) {
                     ctxfn, cloneable_frame_expr(fr->op, fr->hole_left));
             }
         }
+        /* lexical-shift-receiver-cont-never-freed: the wrapper and the chain
+         * copy it owns died with the receiver whenever it kept nothing of `k`;
+         * tur_cloneable_cont_drop releases both (__dk_env_drop is dk_free). */
         emit_cl_shift_bodyfn(ce, bodyfn, t,
             "    DK *__cap = dk_copy_range(subk, NULL);\n"
             "    tur_cloneable_cont *__k = tur_cloneable_cont_alloc(__dk_cont_fn, __cap, __dk_env_clone, __dk_env_drop);\n",
-            "__k", false);
+            "__k",
+            serial_recv_confines_k(t, K_CLONE)
+                ? "tur_cloneable_cont_drop((int64_t)(intptr_t)__k);" : NULL);
         char dv[48];
         snprintf(dv, sizeof(dv), "__ccd%d", id);
         ce_line(ce, "DK *%s = dk_prompt(1, dk_done());", dv);

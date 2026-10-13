@@ -38,7 +38,7 @@ directory is worse for triage than no index.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [lexical-shift-receiver-cont-never-freed](lexical-shift-receiver-cont-never-freed.md) | low-medium (488 B per evaluation) | A lexical `shift` wraps the captured chain in a `tur_cloneable_cont` for its receiver and frees neither the wrapper nor the chain copy -- the handler-case bridge reaps both at the entry boundary, the reified shift body does not. Predates the receiver-flavor work that found it. |
+| [cloneable-cont-escaped-chain-leaks](cloneable-cont-escaped-chain-leaks.md) | low (488 B per escaped continuation) | A cloneable shift's `k` that the receiver returns or stores -- or a clone the program never drops -- has no owner and leaks its wrapper + chain copy. The residue of the lexical-shift-receiver fix, which drops a confined `k`; the program must `tur_cloneable_cont_drop` the rest. |
 
 ## Found executing the open reports (filed 2026-10-12)
 

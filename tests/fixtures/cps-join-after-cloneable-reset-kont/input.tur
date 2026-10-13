@@ -1,0 +1,24 @@
+;; cps-join-after-cloneable-reset-misses-kont: a join whose body runs a lexical
+;; cloneable reset (or a call/cc landing) and THEN a `handle` was lifted as a
+;; value-only frame -- the walkers that decide whether a join needs `__kont`
+;; (jbody_has_delim / _perform / _cps_tailcall) did not look past the reset,
+;; whose body runs inline -- so the handle's frame named an undeclared
+;; `__kont` and the program did not compile.
+
+(defeffect Tick [] int)
+(defn use1 [k : cont] : int (k 1))
+(defn k-id [k] : int k)
+(defn s2 [i : int] : int (cloneable-reset (+ i (cloneable-shift use1 0))))
+(defn tick [c : int] : int (+ c (perform (Tick))))
+
+(defn main [] : nil
+  (println (s2 7))                                                ; 8
+  ;; A named, non-escaping receiver, then a handle.
+  (let [c (cloneable-reset (+ 1 (cloneable-shift use1 0)))]
+    (println (handle (tick c) (Tick [] k) (resume k 40))))        ; 2 + 40 = 42
+  ;; An escaping receiver, then a handle on the escaped continuation's value.
+  (let [c (cloneable-reset (+ 1 (cloneable-shift k-id 0)))]
+    (println (handle (tick (tur_cloneable_cont_resume c 5)) (Tick [] k) (resume k 40))))   ; 6 + 40 = 46
+  ;; A call/cc landing, then a handle.
+  (let [c (call/cc (fn [k] 3))]
+    (println (handle (tick c) (Tick [] k) (resume k 40)))))       ; 43

@@ -1,0 +1,59 @@
+;; lexical-shift-receiver-cont-never-freed: a lexical cloneable shift hands its
+;; receiver the captured context wrapped as a tur_cloneable_cont -- a copy of
+;; the DK chain plus the 32-byte wrapper -- and nothing freed either: 488 B per
+;; shift evaluated, so a loop grew without bound.  When the receiver keeps
+;; nothing of `k` (every use resumes, clones or snapshots it -- each copies),
+;; the shift body drops the wrapper once the receiver returns.  A `k` the
+;; receiver stores, returns or drops itself keeps the old behaviour -- and an
+;; explicit `(tur_cloneable_cont_drop k)` now does what it says: in statement
+;; position it was never emitted, and in a CPS-colored function it assigned a
+;; void call and did not compile.
+;; Runs under tests/run-leak-check.sh (requires.leak-check).
+
+(defn use1 [k : cont] : int (k 1))
+(defn twice [k : cont] : int (+ (k 1) (k 2)))
+(defn via [k : cont] : int (use1 k))                ; resumed through a helper
+(defn own [k] : int                                 ; the receiver frees k itself
+  (let [r (tur_cloneable_cont_resume k 1)]
+    (do (tur_cloneable_cont_drop k) r)))
+
+;; Shape 2 (a context frame), named receivers.
+(defn s2 [i : int] : int (cloneable-reset (+ i (cloneable-shift use1 0))))
+(defn s2-twice [i : int] : int (cloneable-reset (* i (cloneable-shift twice 0))))
+(defn s2-via [i : int] : int (cloneable-reset (+ i (cloneable-shift via 0))))
+(defn s2-own [i : int] : int (cloneable-reset (+ i (cloneable-shift own 0))))
+;; Shape 2, a capturing closure receiver.
+(defn s2-closure [i : int] : int
+  (cloneable-reset (+ 10 (cloneable-shift (fn [k : cont] (+ i (k 5))) 0))))
+;; Shape 1 (no context frame), a capturing closure receiver.
+(defn s1-closure [i : int] : int
+  (reset (shift (fn [k : cont] : int (+ i (k 1))) 0)))
+
+;; An escaping continuation, dropped explicitly -- a clone of it in a
+;; function the CPS backend colors (it performs), the original by `main`.
+(defeffect Tick [] int)
+(defn k-id [k] : int k)
+(defn drop-then-tick [c] : int (do (tur_cloneable_cont_drop c) (+ 1 (perform (Tick)))))
+(defn escaped [] : int
+  (let [c (cloneable-reset (+ 1 (cloneable-shift k-id 0)))]
+    (let [a (handle (drop-then-tick (tur_cloneable_cont_clone c)) (Tick [] k) (resume k 41))
+          b (tur_cloneable_cont_resume c 5)]
+      (do (tur_cloneable_cont_drop c)
+          (+ (* 100 a) b)))))
+
+(defn run [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (run (- n 1)
+         (+ acc (+ (s2 n) (+ (s2-twice n) (+ (s2-via n) (+ (s2-own n)
+                (+ (s2-closure n) (s1-closure n))))))))))
+
+(defn main [] : nil
+  (println (s2 7))           ; 8
+  (println (s2-twice 7))     ; 7 + 14 = 21
+  (println (s2-via 7))       ; 8
+  (println (s2-own 7))       ; 8
+  (println (s2-closure 7))   ; 7 + 15 = 22
+  (println (s1-closure 7))   ; 8
+  (println (run 500 0))      ; sum over n = 1..500 of (n+1)+3n+(n+1)+(n+1)+(n+15)+(n+1)
+  (println (escaped)))       ; 100 * 42 + 6 = 4206
