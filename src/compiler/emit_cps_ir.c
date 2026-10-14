@@ -861,10 +861,26 @@ static bool cps_direct_param_takes_agg_raw(const Binding *fn, uint32_t i,
     return cps_direct_agg_arg_mode(fn, i, a, to_cps_entry) != AGG_ARG_NO;
 }
 
+/* await-parks-only-to-the-nearest-c-frame: a rank-2 (forall) parameter
+ * handed on, unchanged, to a callee parameter that is rank-2 too.  The atom is
+ * the parameter itself (cps_ir_rank2_handed_on peels the identity wrap), so
+ * nothing spills it to a one-word temp: the call passes the caller's
+ * `tur_poly_fn_t` to the callee's `tur_poly_fn_t`, on either entry. */
+static bool fat_param_handed_on(const Binding *fn, uint32_t i, const CAtom *a) {
+    if (!atom_is_fat_fn(a)) return false;
+    const Binding *v = a->var;
+    if (!v->poly_type || v->poly_type->kind != TY_FORALL) return false;
+    const FnDef *cfd = fn ? fn->source_fn_def : NULL;
+    if (!cfd || i >= cfd->n_params || !cfd->params[i]) return false;
+    const Binding *cp = cfd->params[i];
+    return cp->is_poly_fn && cp->poly_type && cp->poly_type->kind == TY_FORALL;
+}
+
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
                          bool cps_to_direct, bool to_cps_entry) {
     bool cef = callee_effect_free(fn);
     for (uint32_t i = 0; i < n; i++) {
+        if (fat_param_handed_on(fn, i, &args[i])) continue;
         /* Pure higher-order value threading into an effect-free callee is admitted
          * for a SCALAR fn value (a bare fn-ptr / closure carrier that crosses the
          * arg slot as one word).  A FAT closure (`tur_poly_fn_t`, is_poly_fn) is a
@@ -3604,7 +3620,7 @@ static bool fn_sig_ok(const FnDef *fd) {
         for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
             const Binding *cap = fd->closure->captures[ci];
             if (!cap || cap->is_global) continue;
-            if (cap->is_poly_fn) return false;
+            if (cap->is_poly_fn && !cap->may_hold_awaiter) return false;
             /* PRIMITIVE captures only: an aggregate / type-app / tyvar capture
              * (the lens `l2 : Lens` shape) may resolve by-value under a spec,
              * be read `(__env->l2).field` under a spec-suffixed env layout the
@@ -3677,7 +3693,7 @@ static bool fn_sig_ok(const FnDef *fd) {
          * through a DK/call-arg slot. */
         if (p->is_poly_fn
             && !(fn_single_concrete_sig(fd)
-                 && fatparam_only_called(fd, p))) return false;
+                 && (fatparam_only_called(fd, p) || p->may_hold_awaiter))) return false;
         bool fn_param_ok = p->type.kind == TY_FN || p->is_poly_fn;
         /* serial-receiver-effect-cannot-reach-enclosing-handler: a `k :
          * serial-cont` parameter is the opaque DK chain a serial-shift
@@ -14048,6 +14064,31 @@ void emit_cps_ir_flush_groups(Buf *file) {
         if (g_ctg[gi].declared && !g_ctg[gi].defined) ctg_emit_def(file, &g_ctg[gi]);
 }
 
+/* await-parks-only-to-the-nearest-c-frame: a call in `e` (nested function
+ * definitions excluded) through a rank-2 parameter that may receive an
+ * awaiting function and that the translator cannot thread -- it calls the
+ * value's direct entry, whose root an await below parks at.  NULL if none. */
+static bool r2_unthreaded_visit(const Expr *c, void *ud);
+static const Expr *rank2_awaiter_call_unthreaded(const Expr *e) {
+    if (!e) return NULL;
+    if (e->kind == EX_CALL) {
+        const Binding *fb = e->as.call_.fn_binding;
+        if (fb && fb->is_poly_fn && fb->may_hold_awaiter
+            && fb->poly_type && fb->poly_type->kind == TY_FORALL
+            && !cps_ir_fncps_param_call_threads(fb, e))
+            return e;
+    }
+    const Expr *found = NULL;
+    cps_visit_children(e, r2_unthreaded_visit, &found);
+    return found;
+}
+static bool r2_unthreaded_visit(const Expr *c, void *ud) {
+    const Expr *f = rank2_awaiter_call_unthreaded(c);
+    if (!f) return false;
+    *(const Expr **)ud = f;
+    return true;
+}
+
 static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e);
 bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Mark the DK body for the direct emitter it delegates to: a value it
@@ -14194,7 +14235,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
              * clone of an in-S template that mono_sig_ok refuses returns
              * above and is not this. */
             if (!fd->await_evict_warned && cps_fn_may_await(fd)
-                && !fn_is_main(fd)
+                && fd->async_reachable && !fn_is_main(fd)
                 && strncmp(nm, "__poly_", 7) != 0) {
                 fd->await_evict_warned = true;
                 const char *because =
@@ -14207,16 +14248,21 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                     : strcmp(cat, "SIG-TAINT") == 0
                       ? "it shares an effect with a function the backend cannot take"
                     : "a form in its body has no lowering there";
+                /* A lifted lambda's name (`__fn_N`) is not one the user
+                 * wrote; the span already points at its `(fn ...)`. */
+                char who[160];
+                if (fd->binding->is_lifted_lambda) snprintf(who, sizeof who, "this lambda");
+                else snprintf(who, sizeof who, "`%s`", nm);
                 diag_emit_with_code(DIAG_WARNING, fd->binding->span,
                     TUR_W0044_AWAITER_COMPILED_DIRECT,
-                    "`%s` may await but is compiled direct-style: %s%s%s%s. "
+                    "%s may await but is compiled direct-style: %s%s%s%s. "
                     "Inside an async body, a pending future awaited below it "
                     "would park at this function's root instead of the body's, so the "
                     "program refuses the park at run time (`await: a pending "
                     "future would park below a direct-style call`); a ready "
                     "future is unaffected. Move the await, or the call to the "
                     "awaiting function, out of this function (%s)",
-                    nm, because, *why ? " (" : "", why, *why ? ")" : "", cat);
+                    who, because, *why ? " (" : "", why, *why ? ")" : "", cat);
             }
             if (getenv("TUR_TRACE_EVICT")) {
                 /* Stage F (v2): an `eff=1` column marks a fn that performs or
@@ -14256,6 +14302,34 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
+
+    /* await-parks-only-to-the-nearest-c-frame: this function is on the
+     * backend, but a call in it through a rank-2 parameter that may receive an
+     * awaiting function can still leave the chain: a position that is not an
+     * int or bool, or a constrained forall, has no threaded lowering
+     * (fncps_forall_call_ok), so
+     * it calls the value's direct entry and an await below it is refused at
+     * run time.  Say so at the call, once per function. */
+    if (!fd->await_evict_warned && cps_fn_may_await(fd) && fd->async_reachable) {
+        const Expr *bad = rank2_awaiter_call_unthreaded(fd->body);
+        if (bad) {
+            fd->await_evict_warned = true;
+            const Binding *pb = bad->as.call_.fn_binding;
+            diag_emit_with_code(DIAG_WARNING, bad->span,
+                TUR_W0044_AWAITER_COMPILED_DIRECT,
+                "`%s` calls `%s`, a rank-2 parameter that may be handed a "
+                "function that awaits, through its direct entry: only int and "
+                "bool arguments and results of an unconstrained forall have a "
+                "threaded lowering. Inside an async body, a pending future awaited "
+                "through it would park at that function's root instead of the "
+                "body's, so the program refuses the park at run time (`await: "
+                "a pending future would park below a direct-style call`); a "
+                "ready future is unaffected. Take the awaiting function as a "
+                "plain `fn`-typed parameter instead",
+                fd->binding->name ? fd->binding->name->name : "?",
+                pb->name ? pb->name->name : "?");
+        }
+    }
 
     /* cps-self-tail-call-relies-on-sibling-call: is this function a member of
      * a mutual tail-call group?  Decided before the render, whose cell /
@@ -14758,8 +14832,18 @@ entry_wrapper_done:
     free(b4box);
 
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
-     * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
-    if (threadable_has(fd->binding)) {
+     * __cps mapping at startup, so a threaded call site recovers its CPS variant.
+     *
+     * await-parks-only-to-the-nearest-c-frame: so does an address-taken
+     * function that may await.  A rank-2 adapter's twin (`__poly_N__cps`,
+     * ensure_poly_wrap_cps_thunk) and the fat dispatch both find the CPS entry
+     * through this registry, and a miss calls the DIRECT entry -- whose root an
+     * await below it parks at.  The tier analysis that fills the threadable set
+     * follows a fn value only into a parameter that is called; one handed on,
+     * or captured into a lambda that calls it, read as an escape, so the
+     * awaiter went unregistered and the park was refused. */
+    if (threadable_has(fd->binding)
+        || (cps_fn_may_await(fd) && addr_taken_has(fd->binding))) {
         /* fnsan-e2a-registry-typed-entry: the E2a call site casts a looked-up
          * entry to `int64_t (*)([void *,] W0.., DK *)` with every Wi the word
          * except a float kind, which travels at its own type (e2a_cast).  An

@@ -71,16 +71,22 @@ A **fiber** is a user-space thread (lightweight thread) that:
 A pending `await` parks by capturing the continuation up to the async body's
 root. Every function between the body and the await has to be on the CPS
 backend for that capture to reach the root; a function the backend cannot
-take (one exported under a fixed C name with `export-as`, one whose signature
-or capture has a shape the backend does not thread, one whose body is inline
-C) is compiled direct-style and puts a nearer root in the way. The compiled
+take (one exported under a fixed C name with `export-as`, a capturing lambda
+inside a generic, one whose body is inline C) is compiled direct-style and
+puts a nearer root in the way. So does a call through a rank-2 (`forall`)
+parameter whose argument or result is not an int or bool (a float, a string,
+a pointer): take such a function as a plain `fn`-typed parameter instead. An
+awaiting function passed through a rank-2 parameter on int and bool
+positions parks correctly. The compiled
 program refuses such a park at run time (`await: a pending future would park
 below a direct-style call`) instead of running the rest of the body with a
 dummy value.
 
 The compiler says so up front: a function that may await -- its own body
-awaits, or it calls a function that does -- and that the backend evicts draws
-**`TUR-W0044`** at its definition, with the reason. It is a warning, not an
+awaits, it calls a function that does, or it is handed one -- that may run
+below an async body, and that the backend evicts, draws **`TUR-W0044`** at
+its definition, with the reason (an unthreaded rank-2 call draws it at the
+call). It is a warning, not an
 error, because an await that only ever meets a ready future never parks and
 such a program runs unchanged. To clear it, move the await (or the call to
 the awaiting function) out of the named function into a caller the backend

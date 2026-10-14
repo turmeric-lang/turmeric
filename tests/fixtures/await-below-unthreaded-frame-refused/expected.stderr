@@ -1,0 +1,3 @@
+warning [TUR-W0044]: `gen-cap` may await but is compiled direct-style
+warning [TUR-W0044]: `r2f-apply` calls `f`, a rank-2 parameter that may be handed a function that awaits
+await: a pending future would park below a direct-style call

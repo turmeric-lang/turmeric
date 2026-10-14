@@ -1,5 +1,16 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-14 (sixth pass): rank-2 awaiters run, and the warning is
+exact.** An awaiter reached through a rank-2 (`forall`) parameter -- called,
+handed on, or captured into a lambda -- now parks the whole body (1213 for
+1213 in each shape). `TUR-W0044` follows an awaiter through function values,
+fires only for functions reachable from an `async` body, and names an
+unthreaded rank-2 call. What is left: a capturing lambda inside a generic, a
+rank-2 call with a float, string or pointer position or a constraint, and
+`export-as`. Each
+draws the warning and is refused at run time. See "Rank-2 admitted, warning
+made exact" at the end.
+
 **Narrowed 2026-10-14 (fifth pass): the refusal is announced at compile
 time.** A function that may await and that the CPS backend evicts now draws
 `TUR-W0044` at its definition, naming the function and why it is off the
@@ -266,9 +277,94 @@ fixtures that park correctly: `await-through-fn-value`,
 `await-below-struct-capturing-lambda`,
 `await-in-struct-capturing-async-body`, `cps-perform-and-await-parking`.
 
-Still open, unchanged: each eviction reason an awaiter can still hit wants
-its own admission (a generic or rank-2 capture, a poly-fn parameter); the
-`export-as` one stays a refusal. The warning does not know whether the
-evicted function is reachable from an async body at all, which is why
-`worker` above draws it; a reachability pass from the `async` spawn sites
-would make it exact.
+Still open at the time: each eviction reason an awaiter can still hit wanted
+its own admission (a generic or rank-2 capture, a poly-fn parameter), and the
+warning did not know whether the evicted function was reachable from an
+async body. Both are taken up in the next section.
+
+### Rank-2 admitted, warning made exact (2026-10-14, sixth pass)
+
+Five probes on the shape-1 driver (`level3` awaits a pending future 300
+times; the body is `7 + 2 * (3 + level3 ...)`, so 1213). Before:
+
+| Shape | Before | After |
+|---|---|---|
+| awaiter called through a rank-2 param | refused, no warning | 1213 |
+| rank-2 param handed on to another | refused, no warning | 1213 |
+| lambda capturing the rank-2 param | refused, no warning | 1213 |
+| the same through a `bool` position | refused, no warning | 1213 |
+| generic awaiter (no lambda) | 1213 | 1213 |
+| lambda capturing a generic's `T` | refused, warned | refused, warned |
+| rank-2 call with a float position | refused, no warning | refused, warned |
+
+What changed:
+
+- **may_await follows function values into parameters.**
+  `Binding.may_hold_awaiter` marks a parameter some call hands an awaiting
+  function (named, a lambda, or another such parameter); calling, handing
+  on, or capturing it then may await (`src/passes/cps.c`, the may_await
+  fixpoint). On the binding, so a lambda capturing the parameter sees it.
+  Before this, `r2-pass`/`r2-cap` read as non-awaiting: evicted for reasons
+  an awaiter is exempt from, and silent.
+- **A rank-2 call threads.** `fncps_param_call_ok` refused every `forall`
+  parameter as "a different, wider ABI". An unconstrained one called on int
+  and bool positions has the slot's ABI: the elaborator's wrapper
+  `__poly_N(void *, int64_t...)` and its twin `__poly_N__cps(void *,
+  int64_t..., DK *)`. It now dispatches through `fn_cps` like a plain `fn`
+  parameter (`fncps_forall_call_ok`, `src/passes/cps_ir.c`); for those kinds
+  the `.fn` fallback casts exactly as the delegated call did. A string or
+  pointer result is read back through the int64 carrier by the direct path,
+  so a fallback cast to a pointer-returning type trapped under
+  `-fsanitize=function` (`hrt-poly-call-cstr-result`); those kinds stay
+  delegated.
+- **A rank-2 param handed on is passed, not spilled.** `(r2-apply f x)` wraps
+  `f` in an identity `EX_POLY_WRAP`, which atomized into a `void *` temp that
+  cannot hold the fat struct. The translator passes the parameter's own atom
+  (`cps_ir_rank2_handed_on`) and `call_args_ok` admits it
+  (`fat_param_handed_on`); `fn_sig_ok` admits a fat parameter that may hold
+  an awaiter.
+- **A rank-2 capture.** `fn_sig_ok` admits a poly-fn capture that may hold an
+  awaiter. The env-struct helper in `emit_expr.c` spelled it `void *`; it
+  now has the `tur_poly_fn_t` rule its lockstep twin in `emit_fns.c` has.
+- **Registry.** An address-taken function that may await registers its
+  direct -> `__cps` row even when the threadability tiers did not admit it
+  (a value handed on or captured reads as an escape there). The adapter
+  twin and the fat dispatch look the awaiter up there; a miss called its
+  direct entry.
+
+The warning, now exact:
+
+- **Reachability.** `FnDef.async_reachable`, from every `(async thunk)` and
+  closed over calls and references; a thunk that is not a known function
+  makes everything reachable. Only reachable functions warn, matching the
+  run-time refusal's own `tur_async_body_depth` test. `worker` in
+  `cps-oracle-async-placement` no longer warns.
+- **Rank-2 calls.** A CPS-emitted function with an unthreaded call through
+  an awaiter-holding rank-2 parameter warns at the call, naming the
+  parameter and suggesting a plain `fn`-typed parameter (which threads
+  floats: the float probe prints 607 that way).
+- A lifted lambda is named "this lambda" (the span points at its `fn`).
+
+Pinned by `await-through-rank2-param` (four rank-2 shapes, leak-checked,
+`unexpected.stderr` TUR-W0044) and `await-below-unthreaded-frame-refused`
+(the generic capture and the float rank-2 call: three warnings, then the
+refusal).
+
+**Still open:**
+
+- *A capturing lambda inside a generic.* `--dump-cps-mono` calls the
+  generic's specialization admissible, but none is emitted: the program runs
+  the generic's erased-carrier base and one base lambda that carries `T` as
+  a word. The base refuses type-variable parameters and captures by design
+  (`fn_carrier_param_ok`: a carrier `__cps` signature would be hit by
+  concrete CPS callers with by-value struct arguments). Fixing it means
+  CPS-emitting closure spec clones (`mono_sig_ok` refuses every closure
+  clone; its env unpack would need `env_name_override`) or specializing such
+  generics at all. A generic awaiter without a lambda works.
+- *A rank-2 call with a position that is not an int or bool, or a
+  constrained forall.* The slot carries a float at its own type, which the
+  wrapper's `int64_t` parameter does not declare; a string or pointer result
+  goes through the carrier on the direct path; a constrained forall adds
+  dictionary slots. Warned at the call; a plain `fn` parameter is the
+  workaround.
+- *`export-as`* stays a refusal: its C ABI is fixed.

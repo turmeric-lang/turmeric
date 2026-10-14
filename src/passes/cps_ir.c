@@ -401,16 +401,51 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
  * NON-poly arguments (the `tur_poly_fn_t.fn_cps` ABI is `(void*, int64_t...,
  * DK*)`).  A rank-2/3 forall poly param (poly_type TY_FORALL) or a poly-wrapped
  * arg (poly_arg_mask) crosses a different, wider ABI and is excluded (it stays
- * on the delegated direct path). */
+ * on the delegated direct path) -- except the all-int-word unconstrained
+ * forall call, whose ABI is the slot's (fncps_forall_call_ok above). */
+/* await-parks-only-to-the-nearest-c-frame: the rank-2 shape whose ABI IS
+ * the slot's.  An UNCONSTRAINED forall param (no dictionary slots,
+ * make_poly_wrapper's n_lead_ignore == 0) called on int / bool positions: the
+ * wrapper the elaborator mints for its argument takes `(void *, int64_t...)`,
+ * and its `fn_cps` twin (ensure_poly_wrap_cps_thunk) is `__poly_N__cps(void *,
+ * int64_t..., DK *)`, converting each word to the inner function's own type
+ * -- the word ABI the slot call spells.  For these kinds the `.fn` fallback
+ * (fncps_direct_call) casts exactly as the delegated direct call does.
+ * Delegated instead, the call entered the wrapper's direct root, and an await
+ * below it parked there: the runtime refused the park.
+ *
+ * Every other kind stays delegated.  A float crosses the slot at its own type
+ * (e2a_cast), which the wrapper's int64_t parameter does not declare.  A
+ * pointer (cstr, ptr<void>) RESULT is read back through the int64 carrier by
+ * the direct path (`(const char *)(intptr_t)f.fn(...)`, over an int64
+ * adapter), where the fallback would cast `.fn` to a pointer-returning type:
+ * a -fsanitize=function trap (hrt-poly-call-cstr-result under fnsan). */
+static bool fncps_forall_word_kind(TypeKind k) {
+    return k == TY_INT || k == TY_INT64 || k == TY_BOOL;
+}
+static bool fncps_forall_call_ok(const Binding *fn, const Expr *e) {
+    const Type *pt = fn->poly_type;
+    if (pt->as.forall_.n_constraints) return false;
+    if (e->as.call_.poly_arg_mask) return false;
+    if (!fncps_forall_word_kind(e->type.kind)) return false;
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+        if (!fncps_forall_word_kind(e->as.call_.args[i]->type.kind)) return false;
+    return true;
+}
 static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
     if (!fn || !fn->is_poly_fn) return false;
-    if (fn->poly_type && fn->poly_type->kind == TY_FORALL) return false;
     if (e->as.call_.n_args > CPS_FNCPS_MAX_ARGS) return false;
+    if (fn->poly_type && fn->poly_type->kind == TY_FORALL)
+        return fncps_forall_call_ok(fn, e);
     if (e->as.call_.poly_arg_mask) return false;
     if (!fncps_result_kind_ok(e->type.kind)) return false;
     for (uint32_t i = 0; i < e->as.call_.n_args; i++)
         if (!fncps_arg_kind_ok(e->as.call_.args[i]->type.kind)) return false;
     return true;
+}
+
+bool cps_ir_fncps_param_call_threads(const Binding *fn, const Expr *call) {
+    return call && call->kind == EX_CALL && fncps_param_call_ok(fn, call);
 }
 
 /* ---- small allocation helpers ----------------------------------------- */
@@ -2517,7 +2552,38 @@ static bool call_slot_nonretaining(const Expr *call, uint32_t i) {
 
 /* atomize() for argument `i` of `call`, recording whether its slot retains
  * it (see PendItem.reap_ok). */
+/* await-parks-only-to-the-nearest-c-frame: a rank-2 (forall) parameter
+ * handed on to a rank-2 parameter, `(r2-apply f x)` inside `(defn r2-pass [f
+ * (forall [a] (-> a a)) ...])`.  The elaborator wraps the argument
+ * (EX_POLY_WRAP), but the value already IS the callee's `tur_poly_fn_t`, and
+ * the direct emitter passes the bare parameter.  Atomizing the wrapper bound
+ * it to a temp whose C type is `void *`, which cannot hold the fat struct;
+ * pass the parameter's own atom instead (call_args_ok admits exactly this
+ * shape: fat_param_handed_on). */
+static const Binding *rank2_param_of(const Expr *e) {
+    e = ascribe_peel(e);
+    if (!e || e->kind != EX_VAR || !e->as.var.binding) return NULL;
+    const Binding *pb = e->as.var.binding;
+    if (!pb->is_poly_fn || !pb->poly_type || pb->poly_type->kind != TY_FORALL) return NULL;
+    return pb;
+}
+static bool callee_param_is_rank2(const Expr *call, uint32_t i) {
+    const Binding *fb = call->as.call_.fn_binding;
+    const FnDef *cfd = fb ? fb->source_fn_def : NULL;
+    if (!cfd || i >= cfd->n_params || !cfd->params[i]) return false;
+    const Binding *cp = cfd->params[i];
+    return cp->is_poly_fn && cp->poly_type && cp->poly_type->kind == TY_FORALL;
+}
+static const Binding *cps_ir_rank2_handed_on(const Expr *call, uint32_t i) {
+    if (!call || call->kind != EX_CALL || i >= call->as.call_.n_args) return NULL;
+    const Expr *a = call->as.call_.args[i];
+    if (!a || a->kind != EX_POLY_WRAP || a->as.poly_wrap_.is_closure) return NULL;
+    if (!callee_param_is_rank2(call, i)) return NULL;
+    return rank2_param_of(a->as.poly_wrap_.inner);
+}
 static CAtom atomize_call_arg(CpsB *b, Expr *call, uint32_t i, Pending *p) {
+    if (cps_ir_rank2_handed_on(call, i))
+        return atom_of(ascribe_peel(call->as.call_.args[i]->as.poly_wrap_.inner));
     uint32_t before = p->n;
     CAtom a = atomize(b, call->as.call_.args[i], p);
     if (p->n == before + 1)

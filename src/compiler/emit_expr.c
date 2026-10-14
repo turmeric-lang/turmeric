@@ -190,7 +190,15 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
          * exactly in a double's 53-bit integer range.  Pin the field
          * to the carrier so the stored bits and the fat-dispatch
          * read-back agree. */
-        const char *field_ctype = captured->type.kind == TY_FN
+        /* CY4, in lockstep with the emit_fns.c twin: a rank-2 capture lives
+         * as the fat tur_poly_fn_t its readers dispatch through (`.fn` /
+         * `.fn_cps` / `.env`).  This arm wins when the CPS backend emits the
+         * env first (await-parks-only-to-the-nearest-c-frame: an awaiting
+         * lambda capturing a rank-2 parameter), and without the rule it
+         * spelled the field `void *`. */
+        const char *field_ctype = captured->is_poly_fn
+            ? "tur_poly_fn_t"
+            : captured->type.kind == TY_FN
             ? "int64_t"
             : emit_type_c_name(ctx, captured->type);
         buf_printf(out, "%s %s; ", field_ctype, field);
