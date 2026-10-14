@@ -3273,6 +3273,10 @@ typedef struct R7kCont {
     uint32_t        epoch;      /* turi_cont_epoch just after its pin */
     uint32_t        key_refs;
     bool            dead;
+    /* The `(scheme eval)` call from evaluated code to a program procedure it
+     * was captured inside (0: none): its image holds the evaluator's frames
+     * under that call, which are gone once the call returns. */
+    uint64_t        bridge_call;
 } R7kCont;
 /* r7rs-callcc-memory-never-freed: images are kept small.  Consecutive
  * captures of one stack range differ in about one word in eighty (a
@@ -3593,6 +3597,7 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
     if (!r7k_slot_new(env, c)) { free(c); return turi_int(0); }
     TuriEnv *volatile venv = env;
     c->owner = pthread_self();
+    c->bridge_call = turi_r7rs_embed_call_serial();
     turi_cont_pin();
     c->epoch = turi_cont_epoch();
     c->state = turi_cont_state_capture(env);
@@ -3676,6 +3681,10 @@ static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n
         return turi_error("r7rs-cont-restore__: the continuation's image was reclaimed "
                           "while it was still reachable (an interpreter bug: "
                           "r7rs-callcc-memory-never-freed)");
+    if (c->bridge_call && !turi_r7rs_embed_call_live(c->bridge_call))
+        return turi_error("call/cc: the continuation was captured inside a call from evaluated code "
+                          "to a program procedure, and that call has returned; the evaluator "
+                          "cannot resume it (docs/reported/r7rs-eval-continuation-reentry-across-bridge.md)");
     /* S-5: the image is copied over the live stack below its base, so in a
      * provenance-tracked env it must have been taken under a top-level form
      * whose mark sits where the current one does, on this thread -- the
@@ -3706,11 +3715,10 @@ static int64_t r7rs_eval_interp_host(int64_t host_id) {
 }
 static void r7rs_eval_bind_host(TuriEnv *env) {
     g_r7rs_eval_host_env = env;
-    /* turi-dropped-closures-kept-until-teardown: values of this env now
-     * cross into the embedded evaluator, which keeps them in its own arrays
-     * where no sweep reads (r7rs_embed.c) -- so, like that env, this one no
-     * longer sweeps. */
-    env->no_pool_sweep = true;
+    /* No value of this env crosses: datums cross as text, and a procedure as
+     * an id into r7rs-eval-hosts__, a global of this env's that its sweeps
+     * read (stdlib/r7rs/eval.tur).  So it keeps sweeping, as the embedded
+     * env does (r7rs_embed.c hands that one its own roots). */
     turi_r7rs_embed_set_host(r7rs_eval_interp_host, env);
 }
 static TuriValue native_r7rs_eval_c_eval(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -3976,21 +3984,22 @@ static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
 }
 /* The twins of the prelude's dynamic-environment slots (r7rs-dyn-ref__,
  * tur_r7rs_dyn in the compiled runtime): the wind, handler and parameter
- * stacks and a re-entry's delivered value.  One set: turi has no
- * user-reachable thread spawn, as with a ^thread-local global here.  A slot
- * never written reads as nil, which r7rs-dyn-unset?__ answers #t for. */
-static TuriValue r7rs_dyn_slots[4];
-static bool      r7rs_dyn_written[4];
+ * stacks and a re-entry's delivered value.  One set per env (env.h,
+ * r7rs_dyn): turi has no user-reachable thread spawn, as with a
+ * ^thread-local global here, but `(scheme eval)` runs a second env in the
+ * process (r7rs_embed.c), and that env's handlers are its own, as they are
+ * beside a compiled program.  A slot never written reads as nil, which
+ * r7rs-dyn-unset?__ answers #t for. */
 static TuriValue native_r7rs_dyn_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     int64_t i = r7rs_arg_int(a, n, 0);
-    if (i < 0 || i >= 4 || !r7rs_dyn_written[i]) return turi_nil();
-    return r7rs_dyn_slots[i];
+    if (i < 0 || i >= 4 || !env->r7rs_dyn_written[i]) return turi_nil();
+    return env->r7rs_dyn[i];
 }
 static TuriValue native_r7rs_dyn_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     int64_t i = r7rs_arg_int(a, n, 0);
-    if (i >= 0 && i < 4 && n >= 2) { r7rs_dyn_slots[i] = a[1]; r7rs_dyn_written[i] = true; }
+    if (i >= 0 && i < 4 && n >= 2) { env->r7rs_dyn[i] = a[1]; env->r7rs_dyn_written[i] = true; }
     return turi_nil();
 }
 static TuriValue native_r7rs_dyn_unset(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -4043,10 +4052,13 @@ static void r7k_gc_cont(TuriContGc *gc, const R7kCont *c) {
     turi_cont_gc_state(gc, c->state, c->epoch, buf, (uintptr_t)c->lo, c->n);
     free(buf);
 }
+/* The `(scheme eval)` evaluator's own arrays, when `env` is its env. */
+static void r7k_gc_root_words(const void *p, uint64_t nbytes, void *ud) {
+    turi_cont_gc_words((TuriContGc *)ud, p, (size_t)nbytes);
+}
 static const char *r7k_sweep_gate(TuriEnv *env) {
     if (g_scheme_lower_opened_seam)
         return "the program imports a Turmeric module or a library of its own";
-    if (env->no_pool_sweep) return "values are kept outside the interpreter";
     if (env->debugger) return "a debugger is attached";
     if (env->coro_stacks || env->sched_ready_head || env->current_fiber || env->all_futures ||
         env->timers_head || env->io_pending_head)
@@ -4088,8 +4100,9 @@ static void r7k_maybe_sweep(TuriEnv *env, bool pool) {
     if (gc) {
         for (uint32_t i = 0; i < g_r7k_n_slots; i++) g_r7k_slots[i].marked = false;
         g_r7k_n_marked_wl = 0;
-        turi_cont_gc_words(gc, r7rs_dyn_slots, sizeof r7rs_dyn_slots);
+        turi_cont_gc_words(gc, env->r7rs_dyn, sizeof env->r7rs_dyn);
         turi_cont_gc_words(gc, g_r7k_form_results, sizeof g_r7k_form_results);
+        turi_r7rs_embed_roots(env, r7k_gc_root_words, gc);
         turi_cont_gc_roots(gc, r7k_stack_base());
         for (;;) {
             bool any = turi_cont_gc_drain(gc);
@@ -4142,19 +4155,19 @@ static void r7k_pool_sweep(TuriEnv *env, bool start) {
  * threads, which SRFI 18 allows): it runs when the running code waits,
  * sleeps or yields, so the monitor needs no lock -- nothing switches inside
  * one of 18.scm's critical sections, whose only switch point is the wait.
- * The dynamic-environment slots above are one set for the process, so each
+ * The dynamic-environment slots above are one set for the env, so each
  * switch saves the leaving code's, clears them for whoever runs next (a new
  * thread starts with none, as on an OS thread), and restores them on the
  * way back. */
 static void r7rs_thread_switch(TuriEnv *env, bool *progress) {
     TuriValue saved[4];
     bool      written[4];
-    memcpy(saved, r7rs_dyn_slots, sizeof saved);
-    memcpy(written, r7rs_dyn_written, sizeof written);
-    memset(r7rs_dyn_written, 0, sizeof r7rs_dyn_written);
+    memcpy(saved, env->r7rs_dyn, sizeof saved);
+    memcpy(written, env->r7rs_dyn_written, sizeof written);
+    memset(env->r7rs_dyn_written, 0, sizeof env->r7rs_dyn_written);
     bool p = turi_sched_yield(env);
-    memcpy(r7rs_dyn_slots, saved, sizeof saved);
-    memcpy(r7rs_dyn_written, written, sizeof written);
+    memcpy(env->r7rs_dyn, saved, sizeof saved);
+    memcpy(env->r7rs_dyn_written, written, sizeof written);
     if (progress) *progress = p;
 }
 static double r7rs_thread_now(void) {

@@ -339,12 +339,17 @@ typedef struct TuriEnv {
      * (that would let the pool grow by a budget each time) -- and once it reaches
      * `pool_budget` (0: never) `pool_sweep_due` is raised, and the
      * interpreter sweeps at its next safe point (turi_pool_count,
-     * turi_val_sweep_budget).  `no_pool_sweep`: something outside the
-     * interpreter keeps this env's values where no sweep can see them
-     * (r7rs_embed.c), so neither sweep runs. */
+     * turi_val_sweep_budget). */
     size_t      pool_since, pool_budget;
     bool        pool_sweep_due;
-    bool        no_pool_sweep;
+    /* The R7RS prelude's dynamic-environment slots (interpreter_natives.c,
+     * r7rs-dyn-ref__): the wind, handler and parameter stacks and a
+     * re-entry's delivered value.  The env's own, as the compiled runtime's
+     * are the program's: the `(scheme eval)` evaluator is a second env in
+     * the same process, and its handlers must not land on the program's
+     * stacks (one env's sweep cannot see into the other's pool). */
+    TuriValue   r7rs_dyn[4];
+    bool        r7rs_dyn_written[4];
     /* The frames and work-stack temporaries a capture kept from being handed
      * back (eval.c, cont_defer_*), which the sweep releases once nothing
      * reaches them. */

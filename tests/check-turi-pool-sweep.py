@@ -24,12 +24,18 @@ Two checks:
    report at the first use.  The output must be the fixture's, and sweeps
    must have run and handed objects back.
 
-2. Memory.  Three loops that make garbage each time round -- a `guard`, a
-   `lambda` passed to a procedure, a `map` over a short list -- run at N and
-   4N iterations.  With the sweep their peak RSS must not grow by more than
-   8 MB from N to 4N; with it off (TUR_TURI_POOL_GC=0) the same loops must
-   grow by more, so it is the sweep that bounds them.  ASan's free quarantine
-   is off for these runs, so a Debug tur measures live memory.
+   tests/fixtures/r7rs-eval-pool-sweep runs the same way: `(scheme eval)`
+   runs a second env, both envs sweep, and each must keep its own handler,
+   wind and parameter stacks (TuriEnv.r7rs_dyn) and the evaluator's arrays
+   must be its roots (turi_r7rs_embed_roots, src/turi/r7rs_embed.c).
+
+2. Memory.  Four loops that make garbage each time round -- a `guard`, a
+   `lambda` passed to a procedure, a `map` over a short list, and a `guard`
+   in a program that has called `eval` -- run at N and 4N iterations.  With
+   the sweep their peak RSS must not grow by more than 8 MB from N to 4N;
+   with it off (TUR_TURI_POOL_GC=0) the same loops must grow by more, so it
+   is the sweep that bounds them.  ASan's free quarantine is off for these
+   runs, so a Debug tur measures live memory.
 
 usage: python3 tests/check-turi-pool-sweep.py [TUR]   (default ./build/tur)
 """
@@ -41,7 +47,8 @@ import tempfile
 
 TUR = sys.argv[1] if len(sys.argv) > 1 else "./build/tur"
 HERE = os.path.dirname(os.path.abspath(__file__))
-FIXTURE = os.path.join(HERE, "fixtures", "r7rs-pool-sweep-places")
+FIXTURES = [os.path.join(HERE, "fixtures", f)
+            for f in ("r7rs-pool-sweep-places", "r7rs-eval-pool-sweep")]
 
 HEAD = "#lang r7rs\n(import (scheme base) (scheme write))\n"
 LOOPS = {
@@ -63,6 +70,16 @@ LOOPS = {
   (if (= i %d) acc
       (loop (+ i 1) (+ acc (apply + (map (lambda (x) (* x 2)) l))))))
 (write (loop 0 0))
+(newline)
+"""),
+    # The program's env keeps sweeping once it has called `eval`.
+    "eval": (10000, "#lang r7rs\n(import (scheme base) (scheme write) (scheme eval))\n" + """(define (loop i acc)
+  (if (= i %d) acc
+      (loop (+ i 1) (+ acc (guard (e (#t 1)) 1)))))
+(define (run)
+  (eval '(define (unused) 1) (environment '(scheme base)))
+  (loop 0 0))
+(write (run))
 (newline)
 """),
 }
@@ -100,25 +117,28 @@ def peak_of(path, **extra):
 
 with tempfile.TemporaryDirectory() as tmp:
     # 1. Soundness: a sweep every 64 KB, what it hands back poisoned.
-    expected = open(os.path.join(FIXTURE, "expected.stdout")).read()
-    p = subprocess.run([TUR, "--interpret", os.path.join(FIXTURE, "input.tur")],
-                       capture_output=True, text=True, timeout=600,
-                       env=env_with(TUR_TURI_POOL_GC_STRESS="65536",
-                                    TUR_TURI_POOL_GC_QUARANTINE="1",
-                                    TUR_TURI_CONT_GC_TRACE="1"))
-    if p.returncode != 0 or p.stdout != expected:
-        failures.append("the places fixture under stress exited %d, printed:\n%s\nexpected:\n%s"
-                        "\nstderr tail:\n%s" % (p.returncode, p.stdout, expected,
-                                                p.stderr.strip()[-1500:]))
-    sweeps = [l for l in p.stderr.splitlines() if l.startswith("r7k-gc (pool):")]
-    ran = [l for l in sweeps if "none freed" not in l]
-    handed = sum(int(m.group(1)) for m in (re.search(r"(\d+) KB of frames", l) for l in ran) if m)
-    print("stress: %d pool sweeps, %d completed, %d KB handed back"
-          % (len(sweeps), len(ran), handed))
-    if len(ran) < 20:
-        failures.append("only %d pool sweeps completed under TUR_TURI_POOL_GC_STRESS" % len(ran))
-    if handed < 1024:
-        failures.append("the stress sweeps handed back only %d KB" % handed)
+    for fixture in FIXTURES:
+        name = os.path.basename(fixture)
+        expected = open(os.path.join(fixture, "expected.stdout")).read()
+        p = subprocess.run([TUR, "--interpret", os.path.join(fixture, "input.tur")],
+                           capture_output=True, text=True, timeout=600,
+                           env=env_with(TUR_TURI_POOL_GC_STRESS="65536",
+                                        TUR_TURI_POOL_GC_QUARANTINE="1",
+                                        TUR_TURI_CONT_GC_TRACE="1"))
+        if p.returncode != 0 or p.stdout != expected:
+            failures.append("%s under stress exited %d, printed:\n%s\nexpected:\n%s"
+                            "\nstderr tail:\n%s" % (name, p.returncode, p.stdout, expected,
+                                                    p.stderr.strip()[-1500:]))
+        sweeps = [l for l in p.stderr.splitlines() if l.startswith("r7k-gc (pool):")]
+        ran = [l for l in sweeps if "none freed" not in l]
+        handed = sum(int(m.group(1)) for m in (re.search(r"(\d+) KB of frames", l) for l in ran) if m)
+        print("%s under stress: %d pool sweeps, %d completed, %d KB handed back"
+              % (name, len(sweeps), len(ran), handed))
+        if len(ran) < 20:
+            failures.append("%s: only %d pool sweeps completed under TUR_TURI_POOL_GC_STRESS"
+                            % (name, len(ran)))
+        if handed < 1024:
+            failures.append("%s: the stress sweeps handed back only %d KB" % (name, handed))
 
     # 2. Memory: flat with the sweep, growing without it.
     for name, (n, src) in LOOPS.items():

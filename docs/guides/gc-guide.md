@@ -482,9 +482,23 @@ The marker is conservative: an env running `#lang r7rs` keeps an object map
 of its value pool, with a bit for each place an allocation starts and its
 kind, so any word pointing into the pool marks the object holding it. It
 frees nothing when in doubt. Both sweeps are off for programs that import
-Turmeric modules, call `eval`, or run fibers, because each of those keeps
-values somewhere the marker does not read. Elsewhere, closures stay under
-the policy above.
+Turmeric modules or run fibers, because each of those keeps values somewhere
+the marker does not read. Elsewhere, closures stay under the policy above.
+
+`(scheme eval)` runs a second env in the process, and both envs sweep. Two
+rules keep that sound:
+
+- **Nothing crosses by reference.** A datum crosses as text, and a procedure
+  as an id. Each env's sweep sees only its own pool.
+- **Each env keeps its own dynamic-environment slots** (`TuriEnv.r7rs_dyn`):
+  its wind, handler and parameter stacks. When they were one set for the
+  process, a handler the evaluator installed was consed onto the program's
+  list, and the program's sweep could not follow that pair. It then handed
+  back the program's own handler pair while it was still in use.
+
+The bridge's own arrays (procedures handed out, wrappers of program
+procedures, pending arguments) are roots of the evaluator's sweep
+(`turi_r7rs_embed_roots`).
 
 Environment variables:
 

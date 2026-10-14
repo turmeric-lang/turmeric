@@ -1,0 +1,30 @@
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1152
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1155
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1158
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1161
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1164
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1167
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1170
+(caught-inside inner-catches)
+(caught-outside "program-catches" 1000)
+1173
+winds: 48
+sums: 74400
+adders: (11 12 13)
+callback again: 5
+(outer after)
+0

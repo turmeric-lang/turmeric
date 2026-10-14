@@ -67,6 +67,21 @@ int turi_r7rs_embed_load(const char *sets_text, const char *path);
 /* Call embedded procedure `proc_id` with the pushed arguments. */
 int turi_r7rs_embed_apply(int64_t proc_id);
 
+/* The innermost call from evaluated code to a program procedure that is in
+ * progress (0: none), and whether call `serial` still is.  A continuation
+ * captured inside such a call cannot be re-entered once the call has
+ * returned: the evaluator's frames under it are gone (interpreter_natives.c,
+ * r7rs-cont-restore__). */
+uint64_t turi_r7rs_embed_call_serial(void);
+int      turi_r7rs_embed_call_live(uint64_t serial);
+
+/* For the pool sweep of the embedded env (interpreter_natives.c): calls `fn`
+ * on each range of that env's values this file keeps in its own arrays --
+ * the procedures handed to the program, the host procedures' wrappers, the
+ * pending arguments.  Nothing when `env` is another env. */
+typedef void (*TuriR7rsRootFn)(const void *p, uint64_t nbytes, void *ud);
+void turi_r7rs_embed_roots(const void *env, TuriR7rsRootFn fn, void *ud);
+
 /* The last result's payload (valid until the next eval/apply/answer). */
 const char *turi_r7rs_embed_result_text(void);
 int64_t     turi_r7rs_embed_result_id(void);

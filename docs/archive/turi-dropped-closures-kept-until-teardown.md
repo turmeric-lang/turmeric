@@ -143,13 +143,84 @@ The sweep shares the continuation sweep's marker, roots and gates
   - Timers or pending I/O.
   - Any mutable map: the map keeps its values in its own memory. The R7RS
     libraries make none.
-  - `env->no_pool_sweep`, set by the `(scheme eval)` bridge.
+  - At first, `env->no_pool_sweep`, set by the `(scheme eval)` bridge. It is
+    gone since the follow-up below.
 
-The `eval` gate fixes a hole the continuation sweep already had. The bridge
-keeps the program's procedures and pending arguments in its own arrays,
-which no sweep reads. The stress runs below found it: a struct the program
-had passed in was read after it had been reclaimed. Now the embedded env
-and, from the first `eval`, the program's env do not sweep.
+### `(scheme eval)` follow-up (2026-10-14)
+
+The stress runs below found a struct the program had passed in being read
+after a sweep had reclaimed it. The first diagnosis was the bridge's arrays
+(src/turi/r7rs_embed.c), so the first fix stopped the embedded env and, from
+the first `eval`, the program's env from sweeping. That gate masked a
+different hole, which the continuation sweep already had.
+
+**The cause.** The R7RS dynamic-environment slots (wind, handler and
+parameter stacks) were one set for the process. The embedded env shared them
+with the program:
+
+1. Each apply the bridge makes installs a catch-all handler.
+2. That handler's pair was consed onto the program's handler list, so the
+   program's own handler pair was reachable only through it.
+3. The program's sweep cannot follow a pair in another env's pool, so it
+   handed the program's pair back while it was still in use.
+
+Tracing every sweep and slot write under quarantine showed it: the
+reclaimed object was the program's `R7rsPair`, written to slot 1 by both
+envs.
+
+**The fix.**
+
+- **Per-env slots.** The slots are the env's own (`TuriEnv.r7rs_dyn`), as a
+  compiled program's are. The bridge carries no program value by reference
+  (datums as text, procedures as ids into `r7rs-eval-hosts__`, a global the
+  program's sweep reads), so the program's env sweeps again.
+- **Bridge roots.** The embedded env sweeps too. The bridge's arrays are its
+  roots (`turi_r7rs_embed_roots`): the procedures handed to the program, the
+  wrappers of the program's procedures, and the pending arguments of an
+  apply. The apply builds its argument list straight from the pending array
+  rather than from an unrooted copy. `no_pool_sweep` is gone.
+- **The fixture.** `r7rs-eval-pool-sweep` runs the program's sweep while
+  evaluated code's handlers, winds and parameters are installed. It also
+  uses each of the bridge's arrays again after garbage has been made.
+- **Negative controls.** Each fails at once under quarantine with a sweep
+  every 4 KB:
+  - sharing the slots again;
+  - leaving out the procedures root;
+  - leaving out the host-wrappers root;
+  - leaving out the pending-arguments root.
+
+  The fixed build ran 3,747 sweeps over that fixture with no report.
+
+Measured on a Release `tur`, peak RSS:
+
+| program | before | after |
+| --- | --- | --- |
+| program-only `guard` loop after one `eval`, 5,000 iterations | 70.8 MB | 56.1 MB |
+| the same, 20,000 iterations | 128.2 MB | 56.2 MB |
+| a loop calling an eval'd procedure, 5,000 iterations | 98.1 MB | 64.2 MB |
+| the same, 20,000 iterations | 236.7 MB | 74.8 MB |
+
+The eval'd-procedure loop still grows 0.7 KB a call: strings and string
+ports, which the sweep does not hand back
+(docs/reported/turi-r7rs-strings-and-ports-kept-until-teardown.md).
+
+**What the per-env slots changed for continuations.** Re-entering a
+continuation the program captured inside a call from evaluated code, after
+that call had returned, used to stop with a panic. The cause was the shared
+slots: the program's wind list held the evaluator's winds. Per-env slots
+removed that accident, and the bridge's C frames then returned twice: a use
+after free in `host_native`. Now:
+
+- A host call's arguments live in a list by serial, and the answer in a slot
+  the host fills as its last act.
+- The interpreter refuses such a continuation before restoring anything
+  (`R7kCont.bridge_call`).
+- A compiled program, whose call/cc cannot ask libturi, exits at the second
+  return with the same explanation. It used to free memory twice.
+
+Re-entering one while its call is still running works on both back ends.
+Full support is filed as
+docs/reported/r7rs-eval-continuation-reentry-across-bridge.md.
 
 ### Measured
 

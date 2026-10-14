@@ -15934,7 +15934,7 @@ static size_t gc_mark_free_lists(TuriEnv *env) {
 }
 
 TuriContGc *turi_cont_gc_begin(TuriEnv *env, TuriContGcWordFn on_word, void *ud) {
-    if (env->no_pool_sweep || !turi_val_mark_begin(env)) return NULL;
+    if (!turi_val_mark_begin(env)) return NULL;
     TuriContGc *gc = (TuriContGc *)calloc(1, sizeof *gc);
     if (!gc) { (void)turi_val_mark_end(env); return NULL; }
     gc->env = env;
