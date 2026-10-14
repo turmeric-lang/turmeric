@@ -5,12 +5,16 @@ WP0 of docs/upcoming/performance-audit-plan.md.  Reads benchmarks/audit/corpus.t
 (the committed corpus list) and, for every program on every engine it names,
 measures what the plan's baseline asks for:
 
-  wall time    best and median of --reps runs (perf_counter around wait4)
+  wall time    best and median of --reps runs (CLOCK_MONOTONIC around fork/wait4)
   user / sys   CPU of the best-wall run, from the child's rusage -- which on
                Linux folds in every descendant the child reaped, so a
                `tur build` row includes the cc it ran
   peak RSS     max ru_maxrss over the reps (KiB; macOS bytes are converted)
   bytes        emitted C size for the `emit` phase, binary size for `build`
+
+Every run goes through benchmarks/audit/rusage-run.c, compiled at start: a
+child forked from Python inherits Python's high-water RSS into its own
+ru_maxrss at exec, so a 1 ms program would read ~16 MB (see that file).
 
 Phases per engine:
 
@@ -56,7 +60,6 @@ import shutil
 import statistics
 import subprocess
 import sys
-import threading
 import time
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -143,41 +146,38 @@ def masked(text, check):
 # Measurement
 # --------------------------------------------------------------------------
 
-def maxrss_kib(ru):
-    # ru_maxrss is KiB on Linux and bytes on macOS.
-    return ru.ru_maxrss // 1024 if sys.platform == "darwin" else ru.ru_maxrss
+LAUNCHER = None   # path of the compiled rusage-run, set by main()
 
 
-def run_once(argv, timeout, stdout_path=None):
-    """Run argv from the repo root; return (rc, wall_s, rusage, stdout_bytes).
+def build_launcher(dest):
+    src = os.path.join(ROOT, "benchmarks", "audit", "rusage-run.c")
+    cc = os.environ.get("CC", "cc")
+    r = subprocess.run([cc, "-O2", "-o", dest, src], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"run-corpus: could not build {src} with {cc}:\n{r.stderr}")
+    return dest
 
-    rc is None on timeout.  stdout goes to a file when stdout_path is given (so
-    a large output does not sit in a pipe buffer while the clock runs)."""
-    # A blocking wait4 plus a kill timer, not a WNOHANG poll: a poll's sleep is
-    # wall-clock error, and the triangle programs run in single milliseconds.
-    out = open(stdout_path, "wb") if stdout_path else subprocess.DEVNULL
-    timed_out = threading.Event()
-    try:
-        t0 = time.perf_counter()
-        p = subprocess.Popen(argv, cwd=ROOT, stdin=subprocess.DEVNULL,
-                             stdout=out, stderr=subprocess.DEVNULL)
 
-        def kill():
-            timed_out.set()
-            p.kill()
-        timer = threading.Timer(timeout, kill)
-        timer.start()
-        _, status, ru = os.wait4(p.pid, 0)
-        wall = time.perf_counter() - t0
-        timer.cancel()
-        p.returncode = os.waitstatus_to_exitcode(status)
-    finally:
-        if stdout_path:
-            out.close()
-    if timed_out.is_set():
-        return None, wall, ru, b""
-    data = open(stdout_path, "rb").read() if stdout_path else b""
-    return p.returncode, wall, ru, data
+def run_once(argv, timeout, stdout_path):
+    """Run argv from the repo root under rusage-run.
+
+    Returns (rc, wall_s, user_s, sys_s, maxrss_kib, stdout_bytes); rc is None
+    on timeout and negative for a signal.  stdout goes to a file, so a large
+    output does not sit in a pipe buffer while the clock runs."""
+    r = subprocess.run([LAUNCHER, str(max(1, int(timeout + 0.999))), stdout_path] + argv,
+                       cwd=ROOT, capture_output=True, text=True)
+    fields = r.stdout.split()
+    if r.returncode != 0 or len(fields) != 5:
+        sys.exit(f"run-corpus: rusage-run failed on {argv}: {r.stdout}{r.stderr}")
+    status, wall_ns, user_us, sys_us, rss = fields
+    if status == "timeout":
+        rc = None
+    elif status.startswith("signal:"):
+        rc = -int(status.split(":")[1])
+    else:
+        rc = int(status)
+    data = open(stdout_path, "rb").read() if rc is not None else b""
+    return rc, int(wall_ns) / 1e9, int(user_us) / 1e6, int(sys_us) / 1e6, int(rss), data
 
 
 def measure(argv, reps, timeout, scratch, check=None, pin=None):
@@ -188,8 +188,8 @@ def measure(argv, reps, timeout, scratch, check=None, pin=None):
     first_out = None
     status = "ok"
     for i in range(reps):
-        rc, wall, ru, data = run_once(argv, timeout, os.path.join(scratch, "stdout"))
-        peak = max(peak, maxrss_kib(ru))
+        rc, wall, user, sys_s, rss, data = run_once(argv, timeout, os.path.join(scratch, "stdout"))
+        peak = max(peak, rss)
         if rc is None:
             status = f"timeout>{timeout:g}s"
             walls.append(wall)
@@ -207,13 +207,13 @@ def measure(argv, reps, timeout, scratch, check=None, pin=None):
             break
         walls.append(wall)
         if best is None or wall < best[0]:
-            best = (wall, ru)
+            best = (wall, user, sys_s)
     row = {
         "reps": len(walls),
         "wall_ms_min": round(min(walls) * 1000, 2),
         "wall_ms_median": round(statistics.median(walls) * 1000, 2),
-        "user_ms": round(best[1].ru_utime * 1000, 2) if best else "",
-        "sys_ms": round(best[1].ru_stime * 1000, 2) if best else "",
+        "user_ms": round(best[1] * 1000, 2) if best else "",
+        "sys_ms": round(best[2] * 1000, 2) if best else "",
         "maxrss_kib": peak,
         "status": status,
     }
@@ -333,6 +333,8 @@ def main():
     out = os.path.abspath(args.out or os.path.join(ROOT, "benchmarks", "output", "audit", ts))
     scratch = os.path.join(out, "scratch")
     os.makedirs(os.path.join(scratch, "bin"), exist_ok=True)
+    global LAUNCHER
+    LAUNCHER = build_launcher(os.path.join(scratch, "rusage-run"))
     meta = header(tur, args)
     tur_stamp = stamp(tur)
 
@@ -398,8 +400,8 @@ def main():
                 else:
                     again_argv = [exe] if ref_engine == "cc" else (
                         [tur, "jit", src] if ref_engine == "jit" else [tur, "--interpret", src])
-                    rc, _, _, data = run_once(again_argv, prog.timeout,
-                                              os.path.join(scratch, "stdout"))
+                    rc, _, _, _, _, data = run_once(again_argv, prog.timeout,
+                                                    os.path.join(scratch, "stdout"))
                     if rc != 0 or masked(data.decode("utf-8", "replace"), prog.check) != masked(ref, prog.check):
                         print("  NOT PINNED: a second run disagreed with the first (use cols=)")
                     else:
