@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.64.5` -- Wide by-value aggregate parameters and generics that perform handled effects now compile instead of being refused, and `tur build --shared` links ADT constructors defined in another module.
+**Latest release:** `v0.65.0` -- Awaits park through rank-2 and exported functions instead of failing at run time, generics over `:heap` parametric sums compile, and panics name your call site; returning a generic's type variable as a ground type is now a compile error.
 
 ## What
 
