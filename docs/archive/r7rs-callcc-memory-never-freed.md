@@ -431,8 +431,10 @@ The procedure value itself (`(fn [& vs] ...)` in the prelude's
 `r7rs-call/cc`) and the `let` frame it captures are pool objects. Like every
 closure the interpreter makes, they stay until the env is freed. That is the
 interpreter's policy for closures (docs/guides/gc-guide.md, "The interpreter
-is different"), not this report's. It is also why the stored-continuation
-loop above stays above the stored-closure loop.
+is different"), not this report's; what it costs a Scheme loop is filed as
+[turi-dropped-closures-kept-until-teardown](../reported/turi-dropped-closures-kept-until-teardown.md).
+It is also why the stored-continuation loop above stays above the
+stored-closure loop.
 
 ### How it finds what is reachable
 
