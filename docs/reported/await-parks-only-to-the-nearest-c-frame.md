@@ -1,5 +1,11 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-14 (ninth pass): a constrained generic passed as a
+constrained rank-2 value parks, and so does a nil-result rank-2 call.** The
+one shape left is a rank-2 call with a struct position (or more than eight
+arguments), which warns and is refused at run time. See "Ninth pass" at the
+end.
+
 **Narrowed 2026-10-14 (eighth pass): both refusals the seventh pass left now
 park.** A constrained rank-2 call and a rank-2 call with a computed float or
 pointer argument print the right answer. What is left is narrower: a
@@ -522,3 +528,68 @@ fnsan 220/0 over forall / await / async / generic / lens / dict fixtures.
   than eight arguments*: the `fn_cps` slot is a word ABI. Seen on the way: a
   function reading a field of such a call's struct result also evicts
   (`unsupported form: EX_GET_FIELD`).
+
+### Ninth pass (2026-10-14): the dict-clone, and a nil result
+
+| Shape | Eighth pass | Now |
+|---|---|---|
+| constrained generic `[(Eq T)] [x : T y : T] : bool` passed as a constrained rank-2 value | refused, warned | 1213 |
+| the same with two constraints (`[(Eq T) (Hash T)]`) | refused, warned | 1213 |
+| the same returning `T` | refused, warned | 1213 |
+| rank-2 call with a nil result | refused, warned | 1213 |
+| rank-2 call with a struct position | refused, warned | refused, warned |
+
+A constrained generic handed to a constrained rank-2 parameter runs as a
+dict-clone (`f__dict_N`, `make_dict_clone`): a copy of the generic taking one
+int64 dictionary per constraint ahead of the generic's own parameters, whose
+`T` positions are the int64 carrier word and whose result is always the
+carrier (`emit_fns.c`, MB2.5). Three things kept it off the backend, and the
+wrapper's call then entered its direct root:
+
+- its `__dict_N` parameter was a rejected spelling (`param_name_clashes_cps`)
+  and its `T` parameters a rejected kind (`sig_slot_ok`);
+- its class-method calls (`(eq? x y)`) dispatch through
+  `ctx->dict_dispatch_*`, which `emit_fn_def` installs AFTER
+  `emit_cps_ir_try_fn` is tried, so a CPS render would have bound the
+  representative instance;
+- the rank-2 value's twin was built from the GENERIC's type (type-variable
+  positions, which `cps_ir_fncps_sig_ok` refuses), so the value had no
+  `fn_cps` slot at all.
+
+Now a may-await dict-clone is an erased base (`fn_erased_base`, the rule the
+seventh pass made for a lambda capturing a `T`): `fn_sig_ok` reads its `T`
+positions as the word and admits its `__dict_` name; `emit_cps_ir_try_fn`
+installs the dictionary-dispatch vector around the render, in lockstep with
+`emit_fn_def`, so the delegated method call dispatches through the dictionary
+parameter; the entry wrapper returns the carrier; the clone registers its
+`__cps` row; and the twin is built from the clone (`dict_clone_binding`),
+with `cps_ir_fncps_sig_ok_erased` reading `T` as the word and the twin's
+forward declaration of the clone returning the carrier. A float-result
+dict-clone stays off (the carrier return would convert the value) and keeps
+its warning.
+
+The first attempt also admitted dict-clone MONOMORPHS to the mono path (the
+`__dict_` rejection had been what kept them off), which miscompiled
+`hkt-generic-calls-generic`: a mono `__cps` read another dict-clone spec's
+carrier result as the by-value `Option`. `mono_sig_ok` now refuses a
+dict-clone outright, and the name exemption is scoped to the may-await base.
+
+A nil-result rank-2 call threads too: the fallback runs the re-rendered call
+for effect and delivers the unit.
+
+Pinned by `await-through-constrained-rank2-value` (the three dict-clone
+shapes, leak-checked; was `await-below-unthreaded-frame-refused`), the nil
+shape added to `await-through-rank2-param`, and a new
+`await-below-unthreaded-frame-refused` pinning the struct shape. Full suite
+3797/0, leak-check 210/0 (4 known-open), fnsan 336/0 over forall / await /
+async / generic / lens / dict / constrained / hkt fixtures.
+
+**Still open:**
+
+- *A rank-2 call with a struct argument or result, or more than eight
+  arguments.* The `fn_cps` slot is a word ABI, and the value's `.fn` carries a
+  struct through the carrier-spill protocol (`boxes_aggregate`) the threaded
+  path does not mirror. A function reading a field of such a call's struct
+  result evicts with it (`unsupported form: EX_GET_FIELD`).
+- *A float-result dict-clone* keeps the direct path (its carrier return
+  would convert the value) and the warning.

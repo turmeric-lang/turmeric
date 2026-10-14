@@ -22,6 +22,7 @@
 ;;                 a float.  The call's computed arguments are hoisted into
 ;;                 binders first (rank2_hoist_args), so its fallback can be
 ;;                 re-rendered over atoms.
+;;   r2-nil     -- a nil result: the fallback runs the call for effect.
 ;;   r2-eq      -- a CONSTRAINED rank-2 call `(f x 0)` through
 ;;                 `(forall [a] [(Eq a)] ...)`: the dictionary is its leading
 ;;                 argument, and the value's twin takes it too (and ignores it,
@@ -113,6 +114,17 @@
 (defn r2cf-apply [f (forall [a] (-> a a)) x : float] : float (f (+ x 0.5)))
 (defn r2-cfloat [] : int (+ 606 (as int (r2cf-apply level3f 7.1))))
 
+;; r2-nil
+(defn cell [set : bool v : int] : int
+  ```c
+  static int64_t g = 0;
+  if (set) g = v;
+  return g;
+  ```)
+(defn level3n [m : int] : nil (do (cell true (+ m (sum-values 0 300 0))) nil))
+(defn r2n-apply [f (forall [a] (-> a nil)) x : int] : nil (f x))
+(defn r2-nil [] : int (do (r2n-apply level3n 13) (+ 600 (cell false 0))))
+
 ;; r2-eq, r2-eq-computed
 (defn level3e [x : int y : int] : bool (> (+ x (sum-values 0 300 0)) y))
 (defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x 0))
@@ -133,6 +145,7 @@
   (println (drive (async r2-computed)))
   ;; 606 + int(7.1 + 0.5 + 600)
   (println (drive (async r2-cfloat)))
+  (println (drive (async r2-nil)))
   (println (drive (async r2-eq)))
   (println (drive (async r2-eq-computed)))
   (free-future (cur-cell false)))

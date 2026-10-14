@@ -1,2 +1,3 @@
-warning [TUR-W0044]: `same-and-wait`, passed to a constrained rank-2 parameter, may await but is compiled direct-style
+warning [TUR-W0044]: `r2p-apply` calls `f`, a rank-2 parameter that may be handed a function that awaits
+warning [TUR-W0044]: `body` may await but is compiled direct-style
 await: a pending future would park below a direct-style call

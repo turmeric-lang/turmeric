@@ -2730,9 +2730,13 @@ char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
  * words it ignores, so the threaded slot call (cps_ir.c, fncps_forall_call_ok)
  * passes exactly what the `.fn` call passes (await-parks-only-to-the-nearest-
  * c-frame).  0 for every other wrapper. */
+/* `carrier_result`: the inner function is a dict-clone, whose direct
+ * definition returns the int64 carrier whatever its declared result (MB2.5),
+ * so the twin's forward declaration of it says so and its result is delivered
+ * as the word it already is. */
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
                                  const char *inner_fn, const Type *inner_ty,
-                                 uint32_t n_lead_ignore) {
+                                 uint32_t n_lead_ignore, bool carrier_result) {
     Buf nb; buf_init(&nb);
     buf_puts(&nb, wrapper_name);
     buf_puts(&nb, "__cps");
@@ -2764,6 +2768,7 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
      * spelling (`__pwx`). */
     uint32_t n = inner_ty->as.fn.arity;
     TypeKind rk = inner_ty->as.fn.result_kind;
+    if (carrier_result && rk != TY_NIL) rk = TY_INT;
     const char *rc = rk == TY_NIL ? "void" : cps_ir_fncps_arg_ctype(rk);
     Buf decl, prm, fwd, cast;
     buf_init(&decl); buf_init(&prm); buf_init(&fwd); buf_init(&cast);

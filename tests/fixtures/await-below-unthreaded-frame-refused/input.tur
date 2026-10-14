@@ -3,13 +3,11 @@
 ;; TUR-W0044 at compile time, and the compiled program refuses the park at
 ;; run time rather than losing the rest of the body.
 ;;
-;; A CONSTRAINED GENERIC passed to a constrained rank-2 parameter runs as a
-;; dict-clone (`same-and-wait__dict_N`): a copy taking the dictionary as a
-;; real parameter, whose class-method calls dispatch through it.  That
-;; dispatch is set up by the direct emitter after the CPS render is tried, so
-;; the clone stays off the backend rather than bind the wrong instance.  (A
-;; MONOMORPHIC function passed to the same parameter threads; see
-;; await-through-rank2-param, r2-eq.)
+;; A rank-2 call with a STRUCT position: the `fn_cps` slot carries one-word
+;; values, and the value's `.fn` carries a struct through the carrier-spill
+;; protocol the threaded path does not mirror, so the call stays delegated to
+;; the value's direct entry.  (`body`, which reads a field of that struct
+;; result, evicts with it -- the second warning.)
 
 
 (defn cur-cell [fresh : bool] : ptr<void>
@@ -55,10 +53,10 @@
     (free-future f)
     v))
 
-(defn same-and-wait [T] [(Eq T)] [x : T y : T] : bool
-  (and (eq? x y) (> (sum-values 0 300 0) 0)))
-(defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x x))
-(defn body [] : int (if (r2e-apply same-and-wait 5) 1213 0))
+(defstruct P [a : int b : int])
+(defn level3p [p : P] : P (P (+ (.a p) (sum-values 0 300 0)) (.b p)))
+(defn r2p-apply [f (forall [a] (-> a a)) p : P] : P (f p))
+(defn body [] : int (.a (r2p-apply level3p (P 13 0))))
 
 (defn main [] : nil
   (cur-cell true)

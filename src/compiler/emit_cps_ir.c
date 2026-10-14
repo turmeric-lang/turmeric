@@ -343,13 +343,24 @@ static bool adt_int64_carrier(const Type *t) {
  * classification, the heap-join fixpoint and its render), so the template
  * gates still refuse a bare type variable everywhere else. */
 static bool g_cps_erased_base;
+static const Type *fn_ret_type(const FnDef *fd);   /* fwd */
 static bool mono_erased_tyvar(const Type *r) {
     return (g_cps_mono_resolver || g_cps_erased_base) && r && r->kind == TY_TYVAR;
 }
-/* Is `fd` such a lambda?  A capture typed by a bare type variable, and the
- * lambda may await -- the only case fn_sig_ok admits a TY_TYVAR capture. */
-static bool fn_erased_tyvar_lambda(const FnDef *fd) {
-    if (!fd || !fd->closure || !cps_fn_may_await(fd)) return false;
+/* Is `fd` such a function?  Either a lambda that may await with a capture
+ * typed by a bare type variable (the only case fn_sig_ok admits a TY_TYVAR
+ * capture), or a DICT-CLONE that may await: the copy of a constrained generic
+ * a constrained rank-2 parameter calls, which takes its dictionaries as
+ * leading int64 params and its `T` params as the carrier word, and returns
+ * the carrier (emit_fns.c, MB2.5).  Not one whose result is a float: the
+ * carrier return would convert the value. */
+static bool fn_erased_base(const FnDef *fd) {
+    if (!fd || !cps_fn_may_await(fd)) return false;
+    if (fd->n_dict_clone) {
+        TypeKind rk = fn_ret_type(fd)->kind;
+        return rk != TY_FLOAT && rk != TY_FLOAT64 && rk != TY_FLOAT32;
+    }
+    if (!fd->closure) return false;
     for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
         const Binding *cap = fd->closure->captures[ci];
         if (cap && !cap->is_global && cap->type.kind == TY_TYVAR) return true;
@@ -3496,6 +3507,13 @@ static bool param_name_clashes_cps(const FnDef *fd, const Binding *b) {
      * the CPS emitter mints itself.  Admitting it is what lets a capturing
      * callback get a `__cps` twin (the registry's slot-0 env-taking entry). */
     if (strncmp(n, "__env_p_", 8) == 0) return false;
+    /* A may-await dict-clone's dictionary param (`__dict_<id>`,
+     * make_dict_clone) is uniquely numbered too, and never a name the CPS
+     * emitter mints (fn_erased_base).  Every other dict-clone keeps the
+     * rejection: it is what has kept dict-clones, and their monomorph
+     * clones, off the backend. */
+    if (strncmp(n, "__dict_", 7) == 0)
+        return !(fd && fd->n_dict_clone && cps_fn_may_await(fd));
     if (n[0] == '_' && n[1] == '_') return true;
     if (n[0] == 't' && n[1] != '\0') {
         for (const char *p = n + 1; *p; p++) if (*p < '0' || *p > '9') return false;
@@ -3614,7 +3632,12 @@ static bool fn_sig_ok(const FnDef *fd) {
      * such a param keeps the function on the fallback (see the param loop below).
      * See docs/archive/cps-tier-c-effect-result-native-plan.md. */
     const Type *rt = fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
+    /* await-parks-only-to-the-nearest-c-frame: a may-await dict-clone's `T`
+     * positions are the int64 carrier word in C (fn_erased_base), as the
+     * direct emitter spells them. */
+    bool erased_dc = fd->n_dict_clone && fn_erased_base(fd);
+    if (rt->kind != TY_NIL && !(erased_dc && rt->kind == TY_TYVAR)
+        && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
         && !fn_carrier_ret_ok(fd, rt)) return false;
     /* fn-value-fat-normalization (effect-row increment): a CAPTURING lambda is
      * CPS-admitted ONLY when it is in the threadable set -- i.e. it flows into
@@ -3744,7 +3767,8 @@ static bool fn_sig_ok(const FnDef *fd) {
         bool serial_k_ok = p->type.kind == TY_CONT &&
                            (p->type.as.cont.flavor == CONT_SERIAL ||
                             p->type.as.cont.flavor == CONT_ESCAPE);
-        if (!p->is_borrow && !fn_param_ok && !serial_k_ok
+        bool tyvar_word = erased_dc && p->type.kind == TY_TYVAR;
+        if (!p->is_borrow && !fn_param_ok && !serial_k_ok && !tyvar_word
             && !sig_slot_ok(&p->type, p->type.kind)
             && !fn_byval_agg_param_ok(fd, p)
             && !fn_carrier_param_ok(fd, p)) return false;
@@ -6762,7 +6786,7 @@ static void ensure_S(const Expr *program) {
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 uint32_t fresh_n = cps_ir_last_fresh_count();
-                g_cps_erased_base = fn_erased_tyvar_lambda(fd);
+                g_cps_erased_base = fn_erased_base(fd);
                 bool core_ok = !candidate || term_core_ok(t);
                 g_cps_erased_base = false;
                 if (candidate && !core_ok) {
@@ -6918,7 +6942,7 @@ static void ensure_S(const Expr *program) {
     while (changed) {
         changed = false;
         for (size_t i = 0; i < g_ents_n; i++) {
-            g_cps_erased_base = fn_erased_tyvar_lambda(g_ents[i].fd);
+            g_cps_erased_base = fn_erased_base(g_ents[i].fd);
             if (g_ents[i].in_s && needs_heap_join(g_ents[i].term)) {
                 g_ents[i].in_s = false;
                 changed = true;
@@ -8379,6 +8403,14 @@ static char *fncps_fallback_value(CE *ce, const Binding *fnb, const char *pf,
         ce->ctx->indent = ce->indent;
         char *rhs = emit_value(ce->ctx, ce->out, call);
         ce->ctx->indent = saved;
+        if (call->type.kind == TY_NIL) {
+            /* A void call comes back un-emitted (see emit_letraw): run it
+             * for effect and deliver the unit. */
+            if (rhs) ce_line(ce, "%s;", rhs);
+            free(rhs);
+            cps_panic_check(ce);
+            return strdup("(int64_t)0");
+        }
         const char *cty = binder_ctype_full(ce->ctx, call->type.kind, &call->type);
         char tmp[32];
         snprintf(tmp, sizeof tmp, "__fcv%d", (*ce->helper_ctr)++);
@@ -13902,8 +13934,15 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
      * clone of a lifted CLOSURE lambda is never CPS-emitted.  The spec's env
      * layout rides an env_name_override the CPS render's base-env unpack does
      * not know, and the registry story only ever threads the BASE entry (the
-     * fat box's slot 0).  The clone keeps the direct path. */
-    if (fd->closure) return false;
+     * fat box's slot 0).  The clone keeps the direct path.
+     *
+     * Nor a DICT-CLONE's monomorph: a dict-clone returns the int64 carrier
+     * (emit_fns.c, MB2.5) whatever the spec's result type says, so a mono
+     * `__cps` reading another dict-clone spec's result as the by-value
+     * aggregate miscompiles (hkt-generic-calls-generic, when the `__dict_`
+     * param-name rejection that kept these off was narrowed).  The one
+     * dict-clone the backend takes is the may-await BASE (fn_erased_base). */
+    if (fd->closure || fd->n_dict_clone) return false;
     const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
                    ? &spec->result_type : fn_ret_type(fd);
     /* A CONCRETE monomorph of an ORDINARY defn has a single concrete C signature
@@ -14242,8 +14281,49 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     g_pend_k_ok = true;   /* a `__cps` body holds its chain in `__kont` */
     bool erased_saved = g_cps_erased_base;
     g_cps_erased_base = e && e->kind == EX_FN_DEF
-        && fn_erased_tyvar_lambda(e->as.fn_def_.fn);
+        && fn_erased_base(e->as.fn_def_.fn);
+    /* await-parks-only-to-the-nearest-c-frame: a dict-clone's class-method
+     * calls dispatch through its dictionary params.  The direct emitter
+     * installs that context (ctx->dict_dispatch_*) AFTER trying this render
+     * (emit_fns.c emit_fn_def), so install it here for the delegated calls
+     * the render hands to emit_value -- the same vector, in lockstep with
+     * emit_fns.c -- and restore it after. */
+    const FnDef *dcfd = (ctx && e && e->kind == EX_FN_DEF && e->as.fn_def_.fn
+                         && e->as.fn_def_.fn->n_dict_clone) ? e->as.fn_def_.fn : NULL;
+    uint8_t      dd_saved_n = 0;
+    const char  *dd_saved_cname = NULL;
+    TypeClass   *dd_saved_class = NULL;
+    TypeClass   *dd_saved_classes[MAX_FN_CONSTRAINTS];
+    const char  *dd_saved_cnames[MAX_FN_CONSTRAINTS];
+    struct Binding *dd_saved_params[MAX_FN_CONSTRAINTS];
+    char        *dd_owned[MAX_FN_CONSTRAINTS] = {0};
+    if (dcfd) {
+        dd_saved_n = ctx->dict_dispatch_n;
+        dd_saved_cname = ctx->dict_dispatch_param_cname;
+        dd_saved_class = ctx->dict_dispatch_class;
+        memcpy(dd_saved_classes, ctx->dict_dispatch_classes, sizeof dd_saved_classes);
+        memcpy(dd_saved_cnames, ctx->dict_dispatch_param_cnames, sizeof dd_saved_cnames);
+        memcpy(dd_saved_params, ctx->dict_dispatch_params, sizeof dd_saved_params);
+        ctx->dict_dispatch_n = dcfd->n_dict_clone;
+        for (uint8_t k = 0; k < dcfd->n_dict_clone; k++) {
+            dd_owned[k] = raw_name_for_binding(dcfd->dict_clone_params[k]);
+            ctx->dict_dispatch_param_cnames[k] = dd_owned[k];
+            ctx->dict_dispatch_params[k] = dcfd->dict_clone_params[k];
+            ctx->dict_dispatch_classes[k] = dcfd->dict_clone_classes[k];
+        }
+        ctx->dict_dispatch_param_cname = dd_owned[0];
+        ctx->dict_dispatch_class = dcfd->dict_clone_classes[0];
+    }
     bool r = emit_cps_ir_try_fn_impl(ctx, file, e);
+    if (dcfd) {
+        ctx->dict_dispatch_n = dd_saved_n;
+        ctx->dict_dispatch_param_cname = dd_saved_cname;
+        ctx->dict_dispatch_class = dd_saved_class;
+        memcpy(ctx->dict_dispatch_classes, dd_saved_classes, sizeof dd_saved_classes);
+        memcpy(ctx->dict_dispatch_param_cnames, dd_saved_cnames, sizeof dd_saved_cnames);
+        memcpy(ctx->dict_dispatch_params, dd_saved_params, sizeof dd_saved_params);
+        for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_owned[k]);
+    }
     g_cps_erased_base = erased_saved;
     g_n_pend = pend_saved_n; g_pend_unfirable = pend_saved_mask;
     g_pend_downstream = pend_saved_down; g_pend_out = pend_saved_out;
@@ -14454,9 +14534,9 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* await-parks-only-to-the-nearest-c-frame: this function is on the
      * backend, but a call in it through a rank-2 parameter that may receive an
-     * awaiting function can still leave the chain: a struct position, a nil
-     * result or more than CPS_FNCPS_MAX_ARGS arguments has no threaded
-     * lowering (fncps_forall_call_ok_as), so
+     * awaiting function can still leave the chain: a struct position or more
+     * than CPS_FNCPS_MAX_ARGS arguments has no threaded lowering
+     * (fncps_forall_call_ok_as), so
      * it calls the value's direct entry and an await below it is refused at
      * run time.  Say so at the call, once per function. */
     if (!fd->await_evict_warned && cps_fn_may_await(fd) && fd->async_reachable) {
@@ -14468,8 +14548,8 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                 TUR_W0044_AWAITER_COMPILED_DIRECT,
                 "`%s` calls `%s`, a rank-2 parameter that may be handed a "
                 "function that awaits, through its direct entry: a call with a "
-                "struct argument or result, a nil result, or more than eight "
-                "arguments has no threaded lowering. Inside an async body, a "
+                "struct argument or result, or more than eight arguments, has "
+                "no threaded lowering. Inside an async body, a "
                 "pending future awaited "
                 "through it would park at that function's root instead of the "
                 "body's, so the program refuses the park at run time (`await: "
@@ -14820,6 +14900,10 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * rather than returning an int64. */
     bool void_ret = (rt->kind == TY_NIL);
     const char *rety = void_ret ? "void" : binder_ctype_full(ctx, rt->kind, rt);
+    /* A dict-clone's plain entry returns the int64 carrier, as its direct
+     * definition and forward declaration do (emit_fns.c / emit_module.c,
+     * MB2.5: keep in lockstep). */
+    if (fd->n_dict_clone && !void_ret) rety = "int64_t";
     /* Linkage must mirror the direct emitter's `needs_static` (emit_fns.c) and
      * the forward decl (emit_fn_forward_decls): in separate compilation an
      * exported (or retain_c_linkage) non-stdlib defn keeps external linkage so
@@ -14993,7 +15077,7 @@ entry_wrapper_done:
      * or captured into a lambda that calls it, read as an escape, so the
      * awaiter went unregistered and the park was refused. */
     if (threadable_has(fd->binding)
-        || (cps_fn_may_await(fd) && addr_taken_has(fd->binding))) {
+        || (cps_fn_may_await(fd) && (addr_taken_has(fd->binding) || fd->n_dict_clone))) {
         /* fnsan-e2a-registry-typed-entry: the E2a call site casts a looked-up
          * entry to `int64_t (*)([void *,] W0.., DK *)` with every Wi the word
          * except a float kind, which travels at its own type (e2a_cast).  An

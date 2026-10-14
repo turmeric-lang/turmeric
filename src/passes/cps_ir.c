@@ -367,6 +367,20 @@ bool cps_ir_fncps_sig_ok(const Type *fn_ty) {
         if (!fncps_arg_kind_ok((TypeKind)fn_ty->as.fn.arg_kinds[i])) return false;
     return fncps_result_kind_ok(fn_ty->as.fn.result_kind);
 }
+/* cps_ir_fncps_sig_ok for a dict-clone's type: a `T` position is the int64
+ * carrier word in its C signature (await-parks-only-to-the-nearest-c-frame). */
+bool cps_ir_fncps_sig_ok_erased(const Type *fn_ty) {
+    if (!fn_ty || fn_ty->kind != TY_FN) return false;
+    uint32_t n = fn_ty->as.fn.arity;
+    if (n > CPS_FNCPS_MAX_ARGS || (n && !fn_ty->as.fn.arg_kinds)) return false;
+    for (uint32_t i = 0; i < n; i++) {
+        TypeKind k = (TypeKind)fn_ty->as.fn.arg_kinds[i];
+        if (k != TY_TYVAR && !fncps_arg_kind_ok(k)) return false;
+    }
+    TypeKind rk = fn_ty->as.fn.result_kind;
+    if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32) return false;
+    return rk == TY_TYVAR || fncps_result_kind_ok(rk);
+}
 bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
     if (!lifted_ty || lifted_ty->kind != TY_FN) return false;
     uint32_t n = lifted_ty->as.fn.arity;
@@ -446,8 +460,8 @@ static bool fncps_forall_call_ok_as(const Binding *fn, const Expr *e, bool atomi
     for (uint32_t i = 0; i < nc; i++)
         if (e->as.call_.args[i]->kind != EX_DICT) return false;
     if (e->as.call_.poly_arg_mask) return false;
-    if (e->type.kind == TY_NIL || !fncps_result_kind_ok(e->type.kind)) return false;
-    if (!atomic && !fncps_forall_word_kind(e->type.kind)) return false;
+    if (!fncps_result_kind_ok(e->type.kind)) return false;
+    if (!atomic && e->type.kind != TY_NIL && !fncps_forall_word_kind(e->type.kind)) return false;
     for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
         TypeKind k = e->as.call_.args[i]->type.kind;
         if (!fncps_arg_kind_ok(k)) return false;

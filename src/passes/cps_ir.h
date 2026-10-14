@@ -445,6 +445,8 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
  * question, so the two cannot drift apart. */
 #define CPS_FNCPS_MAX_ARGS 8
 bool cps_ir_fncps_sig_ok(const Type *fn_ty);
+/* The same for a dict-clone's type, whose `T` positions are the int64 word. */
+bool cps_ir_fncps_sig_ok_erased(const Type *fn_ty);
 /* await-parks-only-to-the-nearest-c-frame: does the call `call` through the
  * fat (is_poly_fn) parameter `fn` thread the continuation through the value's
  * `fn_cps` slot?  False means the translator delegates it to the value's

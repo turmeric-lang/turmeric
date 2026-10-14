@@ -18848,6 +18848,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const Binding *ib = (inner && inner->kind == EX_VAR)
                     ? inner->as.var.binding : NULL;
                 if (ib && ib->source_binding) ib = ib->source_binding;
+                /* await-parks-only-to-the-nearest-c-frame: a constrained
+                 * generic's value is its DICT-CLONE (the wrapper forwards to
+                 * it, dictionaries first), so the twin threads the clone, not
+                 * the generic: its `T` positions are the carrier word and its
+                 * result the carrier (cps_ir_fncps_sig_ok_erased). */
+                const Binding *dcb = e->as.poly_wrap_.dict_clone_binding;
+                if (dcb) ib = dcb;
                 /* Gate on the wrapped fn being EFFECTFUL (a non-empty effect row):
                  * it performs / propagates an effect, so it is CPS-colored and has
                  * a registered `__cps` entry the twin threads through.  A pure fn
@@ -18879,7 +18886,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * threaded).  Anything else would mismatch the twin's forward
                  * decl and stays on the delegated direct path. */
                 if (ib && ib->is_global && effectful
-                    && cps_ir_fncps_sig_ok(&ib->type)) {
+                    && (dcb ? cps_ir_fncps_sig_ok_erased(&ib->type)
+                            : cps_ir_fncps_sig_ok(&ib->type))) {
                     char *iname = raw_name_for_binding(ib);
                     /* The wrapper's leading dictionary slots: its arity is the
                      * env, then those, then the inner's arguments. */
@@ -18888,7 +18896,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (wb && wb->type.kind == TY_FN
                         && wb->type.as.fn.arity > 1 + ib->type.as.fn.arity)
                         n_lead = wb->type.as.fn.arity - 1 - ib->type.as.fn.arity;
-                    char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname, &ib->type, n_lead);
+                    char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname, &ib->type, n_lead,
+                                                            dcb != NULL);
                     fn_cps_arity = ib->type.as.fn.arity + n_lead;
                     /* twin==NULL means already emitted -- reuse the name. */
                     if (twin) { fn_cps_name = twin; }
