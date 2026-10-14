@@ -1,6 +1,8 @@
 /* benchmarks/audit/rusage-run.c -- run one command and report its rusage.
  *
- * Usage: rusage-run <timeout-seconds> <stdout-file> <argv...>
+ * Usage: rusage-run <timeout-seconds> <stdin-file|-> <stdout-file> <argv...>
+ *
+ * stdin is the named file, or /dev/null for "-"; stderr goes to /dev/null.
  *
  * Prints one line to its own stdout:
  *     <status> <wall_ns> <user_us> <sys_us> <maxrss_kib>
@@ -19,6 +21,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -36,22 +39,23 @@ static void on_alarm(int sig) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 4) {
-        fprintf(stderr, "usage: rusage-run <timeout-s> <stdout-file> <argv...>\n");
+    if (argc < 5) {
+        fprintf(stderr, "usage: rusage-run <timeout-s> <stdin-file|-> <stdout-file> <argv...>\n");
         return 2;
     }
+    const char *in_path = strcmp(argv[2], "-") == 0 ? "/dev/null" : argv[2];
     unsigned timeout = (unsigned)strtoul(argv[1], NULL, 10);
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     child = fork();
     if (child < 0) { perror("fork"); return 2; }
     if (child == 0) {
-        int in = open("/dev/null", O_RDONLY);
-        int out = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int in = open(in_path, O_RDONLY);
+        int out = open(argv[3], O_WRONLY | O_CREAT | O_TRUNC, 0644);
         int err = open("/dev/null", O_WRONLY);
         if (in < 0 || out < 0 || err < 0) _exit(126);
         dup2(in, 0); dup2(out, 1); dup2(err, 2);
-        execvp(argv[3], argv + 3);
+        execvp(argv[4], argv + 4);
         _exit(127);
     }
     struct sigaction sa = {0};

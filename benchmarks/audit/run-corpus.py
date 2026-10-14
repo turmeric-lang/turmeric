@@ -56,6 +56,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -82,11 +83,29 @@ class Program:
         self.note = note
         self.lineno = lineno
 
+        # A fixture is run the way tests/run.sh runs it: `flags` are global
+        # flags before the subcommand, `run.args` go to the compiled binary,
+        # `input.stdin` is its stdin, and `expected.exit` is the exit code
+        # that counts as success.
+        self.fixture_dir = None
+        self.flags, self.run_args, self.stdin, self.expected_exit = [], [], "-", 0
+        d = os.path.dirname(path)
+        if d.startswith("tests/fixtures/"):
+            self.fixture_dir = os.path.join(ROOT, d)
+            f = lambda name: os.path.join(self.fixture_dir, name)
+            if os.path.exists(f("flags")):
+                self.flags = shlex.split(open(f("flags")).read())
+            if os.path.exists(f("run.args")):
+                self.run_args = [l.rstrip("\n") for l in open(f("run.args")) if l.strip()]
+            if os.path.exists(f("input.stdin")):
+                self.stdin = f("input.stdin")
+            if os.path.exists(f("expected.exit")):
+                self.expected_exit = int(open(f("expected.exit")).read().strip())
+
     @property
     def pin_path(self):
-        d = os.path.dirname(self.path)
-        if d.startswith("tests/fixtures/"):
-            return os.path.join(ROOT, d, "expected.stdout")
+        if self.fixture_dir:
+            return os.path.join(self.fixture_dir, "expected.stdout")
         key = re.sub(r"\.tur(\.sweet)?$", "", self.path).replace("/", "__")
         return os.path.join(PIN_DIR, key + ".stdout")
 
@@ -158,13 +177,13 @@ def build_launcher(dest):
     return dest
 
 
-def run_once(argv, timeout, stdout_path):
+def run_once(argv, timeout, stdout_path, stdin="-"):
     """Run argv from the repo root under rusage-run.
 
     Returns (rc, wall_s, user_s, sys_s, maxrss_kib, stdout_bytes); rc is None
     on timeout and negative for a signal.  stdout goes to a file, so a large
     output does not sit in a pipe buffer while the clock runs."""
-    r = subprocess.run([LAUNCHER, str(max(1, int(timeout + 0.999))), stdout_path] + argv,
+    r = subprocess.run([LAUNCHER, str(max(1, int(timeout + 0.999))), stdin, stdout_path] + argv,
                        cwd=ROOT, capture_output=True, text=True)
     fields = r.stdout.split()
     if r.returncode != 0 or len(fields) != 5:
@@ -180,7 +199,7 @@ def run_once(argv, timeout, stdout_path):
     return rc, int(wall_ns) / 1e9, int(user_us) / 1e6, int(sys_us) / 1e6, int(rss), data
 
 
-def measure(argv, reps, timeout, scratch, check=None, pin=None):
+def measure(argv, reps, timeout, scratch, check=None, pin=None, stdin="-", ok_rc=0):
     """Best-of-reps.  Returns a dict of metrics plus status and the stdout of
     the first run (used for pinning)."""
     walls, best = [], None
@@ -188,13 +207,14 @@ def measure(argv, reps, timeout, scratch, check=None, pin=None):
     first_out = None
     status = "ok"
     for i in range(reps):
-        rc, wall, user, sys_s, rss, data = run_once(argv, timeout, os.path.join(scratch, "stdout"))
+        rc, wall, user, sys_s, rss, data = run_once(argv, timeout,
+                                                    os.path.join(scratch, "stdout"), stdin)
         peak = max(peak, rss)
         if rc is None:
             status = f"timeout>{timeout:g}s"
             walls.append(wall)
             break
-        if rc != 0:
+        if rc != ok_rc:
             status = f"rc={rc}"
             walls.append(wall)
             break
@@ -365,26 +385,34 @@ def main():
                 print(f"  no pin at {os.path.relpath(prog.pin_path, ROOT)} (run with --pin)")
             exe = os.path.join(scratch, "bin", re.sub(r"[^A-Za-z0-9_.-]", "_", prog.path))
             src = os.path.join(ROOT, prog.path)
+            tur_f = [tur] + prog.flags
             outs = {}
             for engine in prog.engines:
                 if engine not in want or (engine == "jit" and not jit_ok):
                     continue
                 if engine == "cc":
-                    row, _ = measure([tur, "emit-c", src], args.reps, prog.timeout, scratch)
+                    row, _ = measure(tur_f + ["emit-c", src], args.reps, prog.timeout, scratch)
                     emit(prog, "cc", "emit", row,
                          os.path.getsize(os.path.join(scratch, "stdout"))
                          if row["status"] == "ok" else "")
-                    row, _ = measure([tur, "build", src, "-o", exe], args.reps, prog.timeout, scratch)
+                    row, _ = measure(tur_f + ["build", src, "-o", exe], args.reps,
+                                     prog.timeout, scratch)
                     emit(prog, "cc", "build", row,
                          os.path.getsize(exe) if row["status"] == "ok" else "")
                     if row["status"] != "ok":
                         continue
-                    argv = [exe]
+                    argv = [exe] + prog.run_args
+                elif prog.run_args:
+                    # run.args is the compiled binary's argv; the engines take
+                    # theirs differently, so a fixture that needs them is cc-only.
+                    print(f"  {engine:6} run   skipped: run.args is a compiled-binary argv")
+                    continue
                 elif engine == "jit":
-                    argv = [tur, "jit", src]
+                    argv = tur_f + ["jit", src]
                 else:
-                    argv = [tur, "--interpret", src]
-                row, first = measure(argv, args.reps, prog.timeout, scratch, prog.check, pin)
+                    argv = tur_f + ["--interpret", src]
+                row, first = measure(argv, args.reps, prog.timeout, scratch, prog.check, pin,
+                                     prog.stdin, prog.expected_exit)
                 emit(prog, engine, "run", row)
                 if row["status"] == "ok" and first is not None:
                     outs[engine] = first
@@ -398,11 +426,11 @@ def main():
                 elif prog.pin_path.startswith(os.path.join(ROOT, "tests", "fixtures")):
                     print("  NOT PINNED: fixture pins are the fixture's own expected.stdout")
                 else:
-                    again_argv = [exe] if ref_engine == "cc" else (
-                        [tur, "jit", src] if ref_engine == "jit" else [tur, "--interpret", src])
+                    again_argv = [exe] + prog.run_args if ref_engine == "cc" else (
+                        tur_f + ["jit", src] if ref_engine == "jit" else tur_f + ["--interpret", src])
                     rc, _, _, _, _, data = run_once(again_argv, prog.timeout,
-                                                    os.path.join(scratch, "stdout"))
-                    if rc != 0 or masked(data.decode("utf-8", "replace"), prog.check) != masked(ref, prog.check):
+                                                    os.path.join(scratch, "stdout"), prog.stdin)
+                    if rc != prog.expected_exit or masked(data.decode("utf-8", "replace"), prog.check) != masked(ref, prog.check):
                         print("  NOT PINNED: a second run disagreed with the first (use cols=)")
                     else:
                         os.makedirs(PIN_DIR, exist_ok=True)
