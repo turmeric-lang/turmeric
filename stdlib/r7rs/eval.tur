@@ -134,9 +134,9 @@
 ;;; call/cc once at startup (the interpreter's twins do nothing: its capture
 ;;; reaches the evaluator directly).
 (def r7rs-eval-cont-hooks__ (r7rs-cont-hooks-install__ (r7rs-eval-c-cont-hook__ 0)
-                                                        (r7rs-eval-c-cont-hook__ 1)
-                                                        (r7rs-eval-c-cont-hook__ 2)
-                                                        (r7rs-eval-c-cont-hook__ 3)))
+                                                       (r7rs-eval-c-cont-hook__ 1)
+                                                       (r7rs-eval-c-cont-hook__ 2)
+                                                       (r7rs-eval-c-cont-hook__ 3)))
 
 ;;; ---- procedures across the bridge -----------------------------------------
 

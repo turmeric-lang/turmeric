@@ -109,10 +109,12 @@ def peak_of(path, **extra):
             "resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss))")
     p = subprocess.run([sys.executable, "-c", code, TUR, "--interpret", path],
                        capture_output=True, text=True, env=env_with(**extra), timeout=600)
-    rc, kb = p.stderr.strip().split("\n")[-1].split()
+    rc, maxrss = p.stderr.strip().split("\n")[-1].split()
     if rc != "0":
         failures.append("%s exited %s" % (path, rc))
-    return p.stdout, int(kb) / 1024.0
+    # ru_maxrss is in kilobytes on Linux and in bytes on macOS.
+    kb = int(maxrss) / 1024.0 if sys.platform == "darwin" else int(maxrss)
+    return p.stdout, kb / 1024.0
 
 
 with tempfile.TemporaryDirectory() as tmp:

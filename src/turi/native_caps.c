@@ -321,8 +321,10 @@ static const TuriNativeCapRow k_rows[] = {
     { "r7rs-call-variadic__", 0 },
     { "r7rs-cont-capture__", 0 },
     { "r7rs-cont-here?__", 0 },
+    { "r7rs-cont-hooks-install__", 0 },                      /* the interpreter's twin does nothing (its capture reaches the evaluator directly) */
     { "r7rs-cont-null?__", 0 },
     { "r7rs-cont-restore__", 0 },
+    { "r7rs-cont-resumable?__", 0 },
     { "r7rs-cont-resumed?__", 0 },
     { "r7rs-cstr-free__", 0 },
     { "r7rs-cstr-hash__", 0 },
@@ -342,6 +344,7 @@ static const TuriNativeCapRow k_rows[] = {
     { "r7rs-eval-c-answer-raise__", TURI_CAP_EVERY },        /* acts on the process-global embedded R7RS env, which holds every capability */
     { "r7rs-eval-c-answer-unspecified__", TURI_CAP_EVERY },  /* acts on the process-global embedded R7RS env, which holds every capability */
     { "r7rs-eval-c-apply__", TURI_CAP_EVERY },               /* acts on the process-global embedded R7RS env, which holds every capability */
+    { "r7rs-eval-c-cont-hook__", 0 },                        /* the interpreter's twin answers 0: no hook is handed out */
     { "r7rs-eval-c-eval__", TURI_CAP_EVERY },                /* evaluates text in the process-global embedded R7RS env, which holds every capability */
     { "r7rs-eval-c-frame-count__", TURI_CAP_EVERY },         /* acts on the process-global embedded R7RS env, which holds every capability */
     { "r7rs-eval-c-frame-id__", TURI_CAP_EVERY },            /* acts on the process-global embedded R7RS env, which holds every capability */
@@ -924,6 +927,7 @@ static const TuriNativeHandleRow k_handle_rows[] = {
     { "r7rs-cont-capture__", { TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_R7KCONT, TURI_HSIG_MINT },
     { "r7rs-cont-here?__", { TURI_HK_R7KCONT, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "r7rs-cont-restore__", { TURI_HK_R7KCONT, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
+    { "r7rs-cont-resumable?__", { TURI_HK_R7KCONT, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "r7rs-idtab-count__", { TURI_HK_R7IDTAB, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },
     { "r7rs-idtab-free__", { TURI_HK_R7IDTAB, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, TURI_HSIG_FREE },
     { "r7rs-idtab-get__", { TURI_HK_R7IDTAB, TURI_HK_NONE, TURI_HK_NONE, TURI_HK_NONE }, TURI_HK_NONE, 0 },

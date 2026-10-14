@@ -61,7 +61,10 @@ if [ "${TUR_SPLIT_LIB_CACHE_ALL:-0}" = 1 ]; then
     NOCACHE=""
     for d in tests/fixtures/*/; do
         f=$(basename "$d")
-        [ -f "$d/input.tur" ] && head -3 "$d/input.tur" | grep -q '^#lang r7rs' || continue
+        [ -f "$d/input.tur" ] || continue
+        # No pipe into grep -q under pipefail (tests/check-pipefail-grep-q.sh).
+        head3=$(head -3 "$d/input.tur")
+        [[ $'\n'"$head3" == *$'\n#lang r7rs'* ]] || continue
         FIXTURES="$FIXTURES $f"
     done
 fi
