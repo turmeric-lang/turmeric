@@ -9191,6 +9191,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
             new_list[ci].param_idx = -1;
             new_list[ci].tyvar = tyvar_sym;
             new_list[ci].return_resolved = false;
+            new_list[ci].n_arg_tyvars = 0;
+            for (uint32_t ai = 1; ai < cf->as.list.len && new_list[ci].n_arg_tyvars < 8; ai++) {
+                if (cf->as.list.items[ai]->tag != F_SYM) break;
+                new_list[ci].arg_tyvars[new_list[ci].n_arg_tyvars++] =
+                    cf->as.list.items[ai]->as.sym;
+            }
         }
         constraint_list = new_list;
         n_constraints = n_constraint_forms;
@@ -9214,6 +9220,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             new_list[n_constraints + ci].param_idx       = -1;
             new_list[n_constraints + ci].tyvar           = tpv_con_binder[ci];
             new_list[n_constraints + ci].return_resolved = false;
+            new_list[n_constraints + ci].n_arg_tyvars    = 0;
         }
         constraint_list = new_list;
         n_constraints = new_count;
@@ -9545,6 +9552,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 constraint_list[n_constraints + c].param_idx = -1;
                 constraint_list[n_constraints + c].tyvar = binder;
                 constraint_list[n_constraints + c].return_resolved = false;
+                constraint_list[n_constraints + c].n_arg_tyvars = 0;
             }
             n_constraints = new_count;
             n_pending = 0;
@@ -10814,6 +10822,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 constraint_list[n_constraints].param_idx       = -1;
                 constraint_list[n_constraints].tyvar           = tv_sym;
                 constraint_list[n_constraints].return_resolved = !in_param;
+                constraint_list[n_constraints].n_arg_tyvars = 0;
                 n_constraints = new_count;
                 body_start++;
             }
@@ -10940,9 +10949,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * result_kind / result_full_type assigned to the final fn_type below.
          *
          * Only the *annotated* return is forwarded here.  An inferred return
-         * (return_kind still TY_NIL / TY_TYVAR, resolved from body->type after
+         * (return_kind still TY_NIL, resolved from body->type after
          * elaboration) is the genuinely mutually-dependent case and is left to
-         * the post-body fn_type construction. */
+         * the post-body fn_type construction.
+         *
+         * declared-tyvars-are-not-rigid: a WRITTEN `: B` (return_tyvar_type)
+         * is annotated too.  It used to be left out with the inferred case, so
+         * a generic's self-call read the pass-1 carrier `TY_INT`: `list-foldl`'s
+         * `(if (list-empty? xs) init (list-foldl ...))` was `then=B else=int`,
+         * and `(defn go [A] ... : A (go ...))` returned `int` under `A`. */
         /* saffron-lang-plan S4: forward an UNANNOTATED Saffron return as `any`.
          *
          * RR1 below leaves an inferred return to the post-body construction,
@@ -10964,7 +10979,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
         if (return_kind == TY_NIL && !return_annotated &&
             lang_span_is_dynamic(call->span)) {
             existing->type.as.fn.result_kind = TY_ANY;
-        } else if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
+        } else if (return_kind != TY_NIL &&
+                   (return_kind != TY_TYVAR || return_tyvar_type)) {
             existing->type.as.fn.result_kind = return_kind;
             Type *rft = NULL;
             if (return_adt_def) {
@@ -11766,10 +11782,34 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind == TY_APP ? return_app_type : NULL,
                 return_kind, body->type))
             rc = RET_CONFLICT_CARRIER_AGGREGATE;
+        /* declared-tyvars-are-not-rigid: the type question the representation
+         * predicates above leave out.  A generic's own `[A B]` are rigid in
+         * its body, against each other and against a ground type: `[x : A]
+         * : int` handed back a float's bits or a string's address as the int
+         * it declared.  Only `#{Unsafe}` keeps that carrier bridge
+         * (`allow_ground`). */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            n_fn_type_params > 0) {
+            const Type *decl = return_tyvar_type ? return_tyvar_type
+                             : (return_kind == TY_APP) ? return_app_type : NULL;
+            Type dk = return_adt_def ? type_adt(return_adt_def)
+                                     : type_from_kind(return_kind);
+            /* The defn's own parameters: `e->sig_tyvars` was restored at the
+             * scope pop above. */
+            const char *rigid[8];
+            uint8_t n_rigid = 0;
+            for (uint8_t k = 0; k < n_fn_type_params && k < 8; k++)
+                if (fn_type_params[k]) rigid[n_rigid++] = fn_type_params[k]->name;
+            if (rigid_tyvar_conflict(rigid, n_rigid, decl ? *decl : dk,
+                                     body->type, fn_declared_unsafe))
+                rc = RET_CONFLICT_RIGID_TYVAR;
+        }
         if (rc != RET_CONFLICT_NONE) {
             Buf wb; buf_init(&wb);
             if (!return_adt_def && return_kind == TY_APP && return_app_type)
                 type_print(&wb, *return_app_type);
+            else if (!return_adt_def && return_kind == TY_TYVAR && return_tyvar_type)
+                type_print(&wb, *return_tyvar_type);
             buf_putc(&wb, '\0');
             const char *want = return_adt_def ? return_adt_def->name
                              : (wb.data && wb.data[0]) ? wb.data
@@ -11848,6 +11888,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "tail into the form above it. Declare ': void' if the "
                         "function is meant to return nothing",
                         name_f->as.sym->name, want);
+                    break;
+                case RET_CONFLICT_RIGID_TYVAR:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- a declared type variable stands for "
+                        "whichever type the caller picks, so inside the body it "
+                        "matches only itself; nothing here can turn %s into %s",
+                        name_f->as.sym->name, want, gb.data, gb.data, want);
                     break;
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }

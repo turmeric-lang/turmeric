@@ -499,6 +499,7 @@ void constraint_set_add(ConstraintSet *cs, TypeClass *typeclass, Type type_arg) 
     cs->constraints[cs->n_constraints].param_idx = -1;
     cs->constraints[cs->n_constraints].tyvar = NULL;
     cs->constraints[cs->n_constraints].return_resolved = false;
+    cs->constraints[cs->n_constraints].n_arg_tyvars = 0;
     cs->n_constraints++;
 }
 

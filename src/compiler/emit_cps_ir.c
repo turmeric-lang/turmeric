@@ -443,8 +443,25 @@ static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, b
  * scalar slot is returned unchanged (no pointer to free).  See
  * docs/archive/cps-effect-perform-carrier-leak.md. */
 static char *slot_store_reap(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) {
-    char *s = slot_store(ctx, k, t, e);
     Type _r; const Type *rt = cps_resolve_ty(t, &_r);
+    /* option-map-generic-partial-double-boxed: a binder the lowering typed
+     * from an erased tyvar result (`(Option B)` with B bound to a generic
+     * partial's `A`) is the int64 carrier word, and the letraw that filled it
+     * already packed the aggregate into a reaped box (the "pack it the way the
+     * DK slot carries such a value" bridge in emit_letraw).  The word IS the
+     * slot value: boxing it again assigned an int64 to the aggregate, which
+     * did not compile. */
+    if (slot_box_ty(rt) && e && emit_str_is_bare_ident(e)) {
+        const char *ect = emit_localvar_lookup_ctype(e);
+        if (ect && strcmp(ect, "int64_t") == 0) {
+            Buf b; buf_init(&b);
+            buf_printf(&b, "(intptr_t)(%s)", e);
+            buf_putc(&b, '\0');
+            char *s = strdup(b.data); buf_free(&b);
+            return s;
+        }
+    }
+    char *s = slot_store(ctx, k, t, e);
     if (slot_box_ty(rt)) {
         Buf b; buf_init(&b);
         buf_printf(&b, "__dk_reap_ptr(%s)", s);
@@ -3967,6 +3984,19 @@ static bool addr_taken_has(const Binding *b) {
     for (int i = 0; i < g_addr_taken_n; i++) if (g_addr_taken[i] == b) return true;
     return false;
 }
+/* panic-location-names-the-runtime-not-the-call-site: the global fns a
+ * partial application's thunk forwards to (`(vec-get v)`; the thunk's call
+ * carries forwards_site).  Not address-taken -- the thunk calls them
+ * directly, and classification must not treat them so -- but reachable
+ * through a fn value all the same, which is what emit_cps_ir_addr_taken_any
+ * answers. */
+static const Binding *g_pap_fwd[256];
+static int            g_pap_fwd_n;
+static void pap_fwd_add(const Binding *b) {
+    for (int i = 0; i < g_pap_fwd_n; i++) if (g_pap_fwd[i] == b) return;
+    if (g_pap_fwd_n < (int)(sizeof(g_pap_fwd)/sizeof(g_pap_fwd[0])))
+        g_pap_fwd[g_pap_fwd_n++] = b;
+}
 
 /* Effect -> prompt-tag registry.  Tags start at 2 (reset/shift use 1); the same
  * interned effect Symbol always maps to the same tag, so a handle and a matching
@@ -4723,6 +4753,9 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                  * lambda (the CPS translator rewrites it so). */
                 const Binding *lt = cps_ir_letrec_member_target(e->as.call_.fn_binding);
                 eff_acc_add_callee(acc, lt ? lt : e->as.call_.fn_binding);
+                if (g_addr_collecting && e->as.call_.forwards_site &&
+                    e->as.call_.fn_binding->is_global)
+                    pap_fwd_add(e->as.call_.fn_binding);
             } else if (e->as.call_.fn_expr) {
                 /* Effect subtyping / capability field (docs/reported/
                  * cps-effect-subtype-capability-pure-fn-in-effectful-field.md):
@@ -6476,6 +6509,7 @@ static void ensure_S(const Expr *program) {
      * the classification loop -- a forward reference (a fn passed as a value later
      * in the file) would otherwise be missed. */
     g_addr_taken_n = 0;
+    g_pap_fwd_n = 0;
     g_addr_collecting = true;
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = (Expr *)items[i];
@@ -7935,21 +7969,27 @@ static char *registry_callee_name(CE *ce, const Binding *fn) {
 }
 
 /* panic-location-names-the-runtime-not-the-call-site: around a cps->direct
- * call to a callee whose inline-C body may panic, the statement that sets
- * this call's site (`tur_site_set(&__tur_site_N);`), or NULL.  The caller
- * writes it just before the call line and `tur_site_clear();` just after
- * (cps_site_clear); the arguments are atoms, so nothing between the two is a
- * call.  Malloc'd. */
+ * call the direct emitter would site (emit_direct_call_site_mode), the
+ * statement that saves the slot and sets or keeps this call's site is
+ * written here, just before the call line, and the one restoring the slot is
+ * returned for cps_site_clear to write just after; NULL when the call is not
+ * sited.  The arguments are atoms, so nothing between the two is a call.
+ * Malloc'd. */
 static char *cps_site_set(CE *ce, const Binding *fb, const Expr *call_expr) {
-    if (!call_expr || !emit_direct_call_sited(ce->ctx, fb)) return NULL;
-    char *set = emit_site_set_text(ce->ctx, emit_call_site_span(call_expr));
-    if (set) ce_line(ce, "%s;", set);
-    return set;
+    if (!call_expr) return NULL;
+    char *close = NULL;
+    char *open = emit_site_open_stmt(ce->ctx,
+                                     emit_direct_call_site_mode(ce->ctx, call_expr, fb),
+                                     emit_call_site_span(call_expr), &close);
+    if (!open) return NULL;
+    ce_line(ce, "%s", open);
+    free(open);
+    return close;
 }
-static void cps_site_clear(CE *ce, char *set) {
-    if (!set) return;
-    ce_line(ce, "tur_site_clear();");
-    free(set);
+static void cps_site_clear(CE *ce, char *close) {
+    if (!close) return;
+    ce_line(ce, "%s", close);
+    free(close);
 }
 
 /* sum-closure-payload-never-dropped (the CPS half): a `let` binding whose init
@@ -8136,10 +8176,9 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     /* panic-location-names-the-runtime-not-the-call-site: the slot-0 call may
      * enter a sited inline-C body (an unregistered fn value is exactly a body
      * the CPS backend never emits -- vec-get's); in a unit that takes such a
-     * function as a value, set this call's site around it, as the direct
+     * function as a value, the call carries its site, as the direct
      * emitter's site_fn_value_call does. */
-    char *site = (call && emit_fn_value_calls_sited(ce->ctx))
-                     ? emit_site_set_text(ce->ctx, emit_call_site_span(call)) : NULL;
+    EmitSiteMode site_m = emit_fn_value_call_site_mode(ce->ctx, call);
     Buf ps, av; buf_init(&ps); buf_init(&av);
     for (uint32_t i = 0; i < n; i++) {
         const Type *pt = e2a_slot_type(sig, (int)i, &tmp);
@@ -8175,18 +8214,29 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     const Type *rt = e2a_slot_type(sig, -1, &tmp);
     Buf out; buf_init(&out);
     if (rt->kind == TY_NIL) {
-        if (site) buf_printf(&out, "%s; ", site);
-        buf_printf(&out, "((void (*)(void *%s))(intptr_t)%s[0])((void *)%s%s);",
+        Buf vc; buf_init(&vc);
+        buf_printf(&vc, "((void (*)(void *%s))(intptr_t)%s[0])((void *)%s%s)",
                    ps.data, box, box, av.data);
-        if (site) buf_puts(&out, " tur_site_clear();");
+        buf_putc(&vc, '\0');
+        char *sited = call ? emit_site_wrap(ce->ctx, site_m, emit_call_site_span(call),
+                                            "void", vc.data) : NULL;
+        buf_printf(&out, "%s;", sited ? sited : vc.data);
+        free(sited);
+        buf_free(&vc);
         buf_printf(&out, " return dk_run(%s, (intptr_t)0);", thread);
     } else {
         const char *rc = thunk_result_slot_c_name(*rt);
         Buf cl; buf_init(&cl);
-        if (site) buf_printf(&cl, "({ %s; %s __tur_sr = ", site, rc);
         buf_printf(&cl, "((%s (*)(void *%s))(intptr_t)%s[0])((void *)%s%s)", rc, ps.data, box, box, av.data);
-        if (site) buf_puts(&cl, "; tur_site_clear(); __tur_sr; })");
         buf_putc(&cl, '\0');
+        char *sited = call ? emit_site_wrap(ce->ctx, site_m, emit_call_site_span(call),
+                                            rc, cl.data) : NULL;
+        if (sited) {
+            buf_free(&cl); buf_init(&cl);
+            buf_puts(&cl, sited);
+            buf_putc(&cl, '\0');
+            free(sited);
+        }
         size_t rL = strlen(rc);
         if (rt->kind == TY_FLOAT || rt->kind == TY_FLOAT64 || rt->kind == TY_FLOAT32) {
             char *w = cps_ir_fncps_word_of(rt->kind, cl.data);
@@ -8200,7 +8250,6 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     buf_putc(&out, '\0');
     char *r = strdup(out.data);
     buf_free(&out); buf_free(&ps); buf_free(&av);
-    free(site);
     return r;
 }
 
@@ -8271,11 +8320,10 @@ static void fncps_direct_call(CE *ce, Buf *out, const char *pf, char *const *arg
     /* panic-location-names-the-runtime-not-the-call-site: the `.fn` entry may
      * be a sited inline-C body; see e2a_fallback_stmt.  The value is an
      * int64 carrier in every arm but the float ones. */
-    char *site = (call && emit_fn_value_calls_sited(ce->ctx))
-                     ? emit_site_set_text(ce->ctx, emit_call_site_span(call)) : NULL;
+    EmitSiteMode site_m = emit_fn_value_call_site_mode(ce->ctx, call);
     Buf *dst = out;
     Buf inner;
-    if (site) { buf_init(&inner); dst = &inner; }
+    if (site_m != EMIT_SITE_NONE) { buf_init(&inner); dst = &inner; }
     for (uint32_t i = 0; i < n; i++) {
         /* The wrapper `.fn` holds keeps each parameter's own C type. */
         const char *pc = cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i));
@@ -8311,12 +8359,13 @@ static void fncps_direct_call(CE *ce, Buf *out, const char *pf, char *const *arg
     else
         buf_printf(dst, "((int64_t(*)(void*%s))%s.fn)(%s.env%s)",
                    ps.data, pf, pf, av.data);
-    if (site) {
+    if (site_m != EMIT_SITE_NONE) {
         buf_putc(&inner, '\0');
-        buf_printf(out, "({ %s; %s __tur_sr = %s; tur_site_clear(); __tur_sr; })",
-                   site, rk_flt ? rc : "int64_t", inner.data);
+        char *sited = emit_site_wrap(ce->ctx, site_m, emit_call_site_span(call),
+                                     rk_flt ? rc : "int64_t", inner.data);
+        buf_puts(out, sited ? sited : inner.data);
+        free(sited);
         buf_free(&inner);
-        free(site);
     }
     buf_free(&ps); buf_free(&av);
 }
@@ -13812,6 +13861,8 @@ bool emit_cps_ir_addr_taken_any(const Expr *program, bool (*pred)(const Binding 
     ensure_S(program);
     for (int i = 0; i < g_addr_taken_n; i++)
         if (pred(g_addr_taken[i])) return true;
+    for (int i = 0; i < g_pap_fwd_n; i++)
+        if (pred(g_pap_fwd[i])) return true;
     return false;
 }
 

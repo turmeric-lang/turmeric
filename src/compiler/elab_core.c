@@ -3157,6 +3157,87 @@ bool return_type_applied_scalar_conflict(const Type *declared_app,
     return applied_type_conflict(d, body);
 }
 
+/* declared-tyvars-are-not-rigid: a type variable a signature DECLARES (`[A B]`)
+ * stands for whichever one type the caller picks, so inside the body it matches
+ * only itself.  Every position check above asks a representation question --
+ * does this pair share the int64 carrier? -- and a bare tyvar is "unpinned" to
+ * all of them, so `(defn bad [A B] [a : A] : B a)`, `[a : A] : int`,
+ * `[a : cstr] : A` and a swapped `(pair b a)` under `(Pair A B)` all passed
+ * `tur check`, and a caller that trusted the signature then segfaulted.
+ *
+ * This is the type question those checks leave out, asked structurally: a
+ * RIGID variable against a differently named rigid variable is a conflict;
+ * against a GROUND pinned type (scalar, cstr, float, a bare ADT, a ground
+ * application with a real head) it is a conflict unless `allow_ground` -- the
+ * `#{Unsafe}` carrier bridge, where an integer handle is deliberately returned
+ * as `A`.  A plain generic has no such bridge: `(defn f [A] [x : A] : int x)`
+ * handed back 7.1's bit pattern and a string's address as the int it
+ * declared, while the interpreter printed the float and the string.  The `let`
+ * site asks only the variable half; a ground-vs-variable annotation is the
+ * primitive compare's.  Two applications over one ADT head are compared argument by
+ * argument, which is what catches the swapped pair.  Anything else (an unnamed
+ * or open variable, `!`, `any`, unknown, a tyvar-headed `(m b)`, two different
+ * heads) is left to the checks that own it.
+ *
+ * RIGID means named in the ENCLOSING signature -- the `rigid` list, which is
+ * the defn's own type parameters at its return check (where `e->sig_tyvars`
+ * has already been restored) and `e->sig_tyvars`, the set `ng_tyvar_in_sig`
+ * consults, inside the body -- not merely named.  A callee's result variable
+ * that no argument binds survives the call under the callee's own letter --
+ * `(vec-new)` is `(Vec A)` inside `(defn mk [T] [] : (Vec T) ...)` -- and
+ * is nobody's declared variable there (assoc-projection-expected-binds-
+ * callee-result).  One that collides with a signature variable is renamed
+ * apart and marked open by the call (generic-call-result-leaks-callee-tyvar-
+ * names), so an open slot or an unreduced associated-type projection is never
+ * rigid either. */
+static bool rt_is_rigid(const char *const *rigid, uint8_t n_rigid, const Type *t) {
+    if (!t || t->kind != TY_TYVAR || !t->as.tyvar_.name ||
+        t->as.tyvar_.open_slot || t->as.tyvar_.assoc_of)
+        return false;
+    for (uint8_t k = 0; rigid && k < n_rigid; k++)
+        if (rigid[k] && strcmp(rigid[k], t->as.tyvar_.name) == 0)
+            return true;
+    return false;
+}
+static bool rt_is_ground_pinned(Type t) {
+    switch (t.kind) {
+        case TY_BOOL: case TY_CSTR:
+        case TY_INT: case TY_INT8: case TY_INT16: case TY_INT32: case TY_INT64:
+        case TY_UINT8: case TY_UINT16: case TY_UINT32: case TY_UINT64:
+        case TY_FLOAT: case TY_FLOAT32: case TY_FLOAT64:
+            return true;
+        case TY_ADT:
+            return t.as.adt_.def != NULL;
+        case TY_APP:
+            return ac_real_head(t) != NULL && ac_type_is_ground(&t, 0);
+        default:
+            return false;
+    }
+}
+bool rigid_tyvar_conflict(const char *const *rigid, uint8_t n_rigid,
+                          Type want, Type got, bool allow_ground) {
+    bool wr = rt_is_rigid(rigid, n_rigid, &want), gr = rt_is_rigid(rigid, n_rigid, &got);
+    if (wr && gr)
+        return strcmp(want.as.tyvar_.name, got.as.tyvar_.name) != 0;
+    if (wr || gr) {
+        /* The other side: a leftover callee letter is as unpinned as an open
+         * slot -- it is not this function's variable and may become `A`. */
+        Type other = wr ? got : want;
+        if (other.kind == TY_TYVAR) return false;
+        return !allow_ground && rt_is_ground_pinned(other);
+    }
+    if (want.kind == TY_APP && got.kind == TY_APP &&
+        want.as.app.fn && want.as.app.arg && got.as.app.fn && got.as.app.arg) {
+        AdtDef *wd = type_adt_app_def(&want), *gd = type_adt_app_def(&got);
+        if (!wd || wd != gd) return false;
+        return rigid_tyvar_conflict(rigid, n_rigid, *want.as.app.fn, *got.as.app.fn,
+                                    allow_ground) ||
+               rigid_tyvar_conflict(rigid, n_rigid, *want.as.app.arg, *got.as.app.arg,
+                                    allow_ground);
+    }
+    return false;
+}
+
 /* carrier-aware-return-unification: single dispatcher over the return-position
  * predicates -- see elab_internal.h.  Runs them in the established order
  * (nominal -> register-class -> pointer-scalar commit -> pointer-scalar reverse)

@@ -145,11 +145,12 @@ Each choice, and why:
   document order.
 - **The path link is a nullable typed pointer, not a `defdata` and not an
   `Option`.** The obvious encodings are a sum `(Top) | (Frame ...)` or a
-  field `(Option (ZipFrame T))`. Each hits an open codegen defect when a
-  generic body reads or rebuilds it (D1, D2, D3 in section 5). The nullable
-  link is what `(Cons A)` itself uses for nil, it compiles warning-clean, and
-  regions do not note its null test. When D1--D3 are fixed this can become a
-  sum; the public API does not expose it either way.
+  field `(Option (ZipFrame T))`. Each hit a codegen defect when a generic
+  body read or rebuilt it (D1, D2, D3 in section 5). The nullable link is
+  what `(Cons A)` itself uses for nil, it compiles warning-clean, and regions
+  do not note its null test. D1--D3 are fixed (2026-10-14), so this can now
+  become a sum or an `Option` field; the public API does not expose it either
+  way.
 - **`ZipOps` is `:heap :copy`.** Each location then carries the ops as one
   word instead of three closures. It also avoids defect D5, seen when a
   by-value ops record was built inside a constrained function.
@@ -318,8 +319,8 @@ Each phase lands on its own, in its own PR against `main`.
 ### ZP0 -- compiler defects (in parallel; ZP1, ZP2 and ZP4 do not wait)
 
 Fix D1--D5 and I1--I4 from section 5, each pinned by its repro as a fixture.
-Only **D4** blocked a phase here (ZP3), and it is fixed. D1--D3 block the nicer internal
-encodings, which ZP1 avoids. The I-items each cost an ascription inside
+Only **D4** blocked a phase here (ZP3), and it is fixed. D1--D3 blocked the nicer internal
+encodings, which ZP1 avoids; they are fixed too. The I-items each cost an ascription inside
 `zip.tur`. Fixing them removes those ascriptions, and the same papercuts
 also hit users writing their own `ZipOps`.
 
@@ -439,15 +440,17 @@ After ZP4, decide whether to rebase `(Zipper A)` onto a `ZipCursor` over
 
 ## 5. Compiler defects found while prototyping (2026-10-13, `704cc531`)
 
-D1--D4 are filed under `docs/reported/` (linked below), with root causes
-and fix directions. D5 and the inference papercuts are recorded only here.
+D1--D4 were filed under `docs/reported/` (linked below; all four are
+resolved and archived), with root causes and fix directions. D5 and the inference papercuts are recorded only here.
 Every repro is complete and was run as shown.
 
 **D1 -- generic match-and-rebuild of a parametric `:heap` sum leaves `(Cons
 T)` payload binders as `int64_t`**
 ([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)).
+**Resolved 2026-10-14** with D2: the clone reads the scrutinee through its
+monomorph, so the binder is the typed pointer.
 The specialised constructor takes the typed pointer. gcc 13 warns (and `run.sh` fails on the warning); clang 15+
-and gcc 14 reject it. **Fixed 2026-10-14**, pinned by
+and gcc 14 reject it. Also pinned by
 `tests/fixtures/heap-sum-match-binder-app-payload`. The *effectful* version
 of the same rebuild is fixed too, the same day
 ([heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../archive/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md)).
@@ -480,7 +483,9 @@ so a zipper walk may handle an effect mid-branch.
 
 **D2 -- a generic over a parametric `:heap` sum is never specialized, so a
 constructor in its body aborts at runtime**
-([heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)).
+([heap-sum-generic-never-specialized](../archive/heap-sum-generic-never-specialized.md)).
+**Resolved 2026-10-14**: a ground `:heap` sum in a generic's signature now
+forces a clone.
 It compiles cleanly. The interpreter prints `6`, and so does the compiled
 program without `:heap`.
 
@@ -514,8 +519,8 @@ The emitted C is
 reject. **Fixed 2026-10-14**, pinned by
 `tests/fixtures/byvalue-field-of-param-app-as-generic-arg`. The fix also
 covers an `(Option T)` field and a non-`Option` by-value sum field, so an
-`(Option (ZipFrame T))` path link is available to this plan again. Making
-the link a sum is still blocked, by D2 alone now that D1 is fixed.
+`(Option (ZipFrame T))` path link is available to this plan again. With D1
+and D2 fixed as well, so is a sum.
 
 ```turmeric
 (defstruct Fr :heap :copy [T] (x T))

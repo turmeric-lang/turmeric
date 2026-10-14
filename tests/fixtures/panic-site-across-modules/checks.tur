@@ -1,0 +1,10 @@
+;; checks -- a module whose inline-C body panics, for
+;; tests/run-panic-site-across-modules.sh.
+
+(defmodule checks
+  (export checked)
+  (defn checked [i : int] : int
+    ```c
+    if (i > 3) tur_panic("checked: past end");
+    return i;
+    ```))

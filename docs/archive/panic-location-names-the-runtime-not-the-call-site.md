@@ -1,5 +1,45 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Follow-up 2026-10-14: the three "known and accepted" gaps are closed.**
+The slot discipline changed under all three: a sited call now SAVES the
+slot, sets its site, and RESTORES the saved value after (`tur_site_push` /
+`tur_site_pop`, `emit_site_wrap` and `emit_site_open_stmt` in
+`src/compiler/emit_core.c`) instead of clearing it, so a site outlives the
+calls made beneath it. A call the compiler forwards and a call written in
+stdlib source KEEP a site already set and set their own only when none is
+(`tur_site_keep`, `site_mode_for`); the interpreter's leaf call does the same
+(`leaf_panic_site`, `src/turi/eval.c`; stdlib source is `diag_file_is_stdlib`).
+On the 100M-turn `vec-get` loop the extra load measured nothing (99 ms
+best-of-9 for unsited, set/clear and save/restore alike: the set is sunk into
+the panic path). (1) A **partial application** names the call made through
+it: the thunk's one call carries `forwards_site` (`elab_partial_apply`) and
+keeps the site the call through the value set; a unit with such a partial
+sites its fn-value calls (`emit_cps_ir_addr_taken_any` counts the thunks'
+targets), a direct call of a let-bound partial's thunk is sited as a call to
+its target (`binding_panics_in_inline_c`, the `__papN` scan), and the
+interpreter hands the thunk the caller's site (`g_fwd_site`). (2) The **per-unit
+slot**: a multi-file build's runtime header gives the owner TU the one slot
+(`extern` elsewhere; `emit_panic_site_slot(out, shared)`), and a call into
+another module's sited body, whose signature this TU does not record, holds
+its value in an `__auto_type` temp -- that build is never c2mir's. (The r7rs
+split build already shared its slot through `emit_split_state`.) (3) A
+**stdlib HOF**: the program's call to a stdlib function taking a function
+value is sited in a unit whose fn-value calls are, and the call through the
+value inside it, written in stdlib source, keeps that site -- so
+`(option-map (some 9) get10)` names the program's line on both engines. Found
+on the way: `run-turi.sh` never checked `expected.stderr` on a positive
+fixture, so "both engines" above was asserted compiled only; it checks it
+now. And `(option-map (some 1) (vec-get v))` -- a generic partial handed to a
+CPS-emitted clone -- did not compile: the return delivery boxed an already
+boxed carrier word (`slot_store_reap`). Pinned by
+`tests/fixtures/panic-site-through-partial`, `panic-site-let-bound-partial`,
+`panic-site-partial-through-stdlib-hof` (both engines),
+`panic-site-through-stdlib-hof` (compiled), `option-map-generic-partial`, and
+`tests/run-panic-site-across-modules.sh` (ctest
+`tur_panic_site_across_modules`). Still not sited, and named as the runtime's
+line: a sited body entered from C -- a `--shared` library's host, the REPL's
+dlopened spice -- where no Turmeric call exists to name.
+
 **Resolved 2026-10-14: the three shapes left open are closed, and the
 report is archived.** A sited inline-C body entered THROUGH A FUNCTION VALUE
 names the call through the value: `(f v 9)` inside a HOF prints `panic at

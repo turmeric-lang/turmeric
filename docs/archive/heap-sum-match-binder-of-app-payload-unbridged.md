@@ -1,40 +1,64 @@
 # A `(Cons T)` payload bound by a generic `match` on a `:heap` sum is declared `int64_t`, and rebuilding passes it to a typed-pointer constructor uncast
 
-**Resolved 2026-10-14: the report is archived.** The binder is now declared
-at its spec-resolved typed pointer. The base-carrier leg has a `TY_APP` twin
-(`match_binder_base_app_ptr_ctype`, `src/compiler/emit_expr.c`). When the
-scrutinee is read through the erased base layout and the binder's type is a
-parametric application that the active resolution grounds to a typed pointer
-(`(Cons T)` to `tur_adt_Cons__R *`), the binder relabels the base slot's
-int64 word: `tur_adt_Cons__R * l = (tur_adt_Cons__R *)(intptr_t)__scrut->as.Frame._0;`.
-It also records that C type for the bridges. This is what the
-monomorph-scrutinee leg already did for the same binder. Both the switch path
-and the guarded if-chain path take it.
+**RESOLVED 2026-10-14** as a side effect of fixing
+[heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md).
+Pinned by `tests/fixtures/heap-sum-match-binder-cons-payload`: this repro, the
+same rebuild with the sum as the parameter itself (which needed the
+never-specialized fix to get a clone at all), and a `float` element.
 
-The change covers pointers only. The base slot is one word, and a
-typed-pointer payload is that word spelled differently. A by-value aggregate
-payload stays with the tyvar leg, which settles its layout case by case. The
-rebuilt `ctor_Fr_Frame__R(l, x)` and every other use of the binder (`thead`,
-`tnil?`, a `let`, a generic recursive call) now agree with the declaration.
+## Resolution
 
-Pinned by `tests/fixtures/heap-sum-match-binder-app-payload`: the repro, a
-guarded rebuild, and four instantiations (a `:heap` sum, int, a fractional
-float, cstr). It is clean under gcc 13 and clang 18, and on the baseline it
-fails `run.sh`'s emitted-C `-Wint-conversion` check. No `expected.c` moved.
+Half 1 of the root cause below is gone, at its source rather than by widening
+the SR2b leg (fix direction 1). The ADT match emitter upgrades a scrutinee to
+its monomorph when the spec resolves it concretely. That upgrade now accepts a
+`:heap` parametric sum app as well as a by-value product
+(`adt_app_is_heap_sum`, `src/compiler/emit_expr.c:20913` and `:20939`). Inside
+`bump__spec__...` the scrutinee is therefore `tur_adt_Fr__R *`, and its typed
+`(Cons R)` field declares the binder as `tur_adt_Cons__R *`, so
+`ctor_Fr_Frame__R` receives the type it takes. Verified on unmodified `main`
+first: `CC=clang tur run` fails there with the `-Wint-conversion` error
+quoted below, and builds and prints `8` with the fix.
 
-**One correction to the root cause below.** Half 2 overstates the bridge.
+Half 2 (the constructor-argument bridge trusts the argument's type over the
+local's declared C type) is unchanged. As the report says, it is harmless
+alone; fix direction 2 remains a hardening option, not an open defect.
+
+## A parallel fix, on the same day
+
+This branch fixed the same repro one level down, before the source-level fix
+above reached it. That fix added a `TY_APP` twin of the SR2b base-carrier leg
+(`match_binder_base_app_ptr_ctype`, `src/compiler/emit_expr.c`). When a
+scrutinee is still read through the erased base layout and the binder's type
+is a parametric application that the active spec grounds to a typed pointer,
+the binder relabels the base slot's int64 word as that pointer. Both the
+switch path and the guarded if-chain path take it. With the scrutinee
+upgrade above, this repro no longer reaches that leg. It stays as the
+binder-level answer for a scrutinee the upgrade does not cover. It is
+pinned, alongside `heap-sum-match-binder-cons-payload`, by
+`tests/fixtures/heap-sum-match-binder-app-payload`: a guarded rebuild, plus
+`:heap`-sum, int, 7.1 and cstr instantiations.
+
+Merging the two fixes exposed a third gap. The upgrade makes the guarded
+rebuild's scrutinee a monomorph, so it takes the if-chain path's monomorph
+binder leg. That leg substituted only a field declared as a bare type
+variable, so `l : (Cons T)` stayed `int64_t` and clang rejected the
+rebuild again. The if-chain path now carries the switch path's SR2b leg as
+well: when the binder names the int64 carrier, it substitutes the field's
+declared type through the scrutinee's arguments. The guarded fixture pins
+it.
+
+**A correction to half 2 below.** It overstates the bridge.
 `emit_var_spec_arg_type` answers only for a *parameter* of the active spec,
-so for the binder `l` it returned nothing. The binder was never recorded
+so for the binder `l` it returned nothing. The binder was not recorded
 either, so the bridge had no C type for the argument and inserted no cast.
-That is why the fix is in the declaration and not in the bridge.
 
-**Not covered:** the CPS backend's arm-binder mirror (`emit_cps_ir.c`, the
-`CT_MATCH` field binds) has none of the spec-substitution legs, not even the
-tyvar one. An effectful version of the same rebuild never gets that far. It
-ICEs earlier, on the merge temp, and was filed separately as
+**The CPS backend's arm-binder mirror** (`emit_cps_ir.c`, the `CT_MATCH`
+field binds) has none of the spec-substitution legs. An effectful version of
+this rebuild ICEd earlier, on the merge temp, and was filed as
 [heap-sum-rebuild-in-effectful-generic-merge-temp-ice](heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md),
 resolved the same day. The rebuilt clones there print the right values, so
-this mirror is not on that path.
+that mirror is not on that path.
+
 
 **Severity: medium.** This is a build failure under clang 15+ and gcc 14:
 `-Wint-conversion` is an error there. gcc 13 only warns, but `tests/run.sh`

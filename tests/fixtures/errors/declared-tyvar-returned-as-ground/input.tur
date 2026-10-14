@@ -1,0 +1,11 @@
+;; declared-tyvars-are-not-rigid: a declared type variable against a ground
+;; type.  `A` is whatever the caller picked; the body cannot hand back a cstr
+;; for it (nor an int: the sibling fixture declared-tyvar-ground-as-tyvar).
+;; `(defn f [A] [x : A] : int x)` printed 7.1's bit pattern and a string's
+;; address compiled, and 7.1 and the string interpreted.  `#{Unsafe}` keeps
+;; that bridge; a plain generic does not.
+(defn bad [A] [a : A] : cstr
+  a)
+(defn main [] : int
+  (println (bad 7))
+  0)

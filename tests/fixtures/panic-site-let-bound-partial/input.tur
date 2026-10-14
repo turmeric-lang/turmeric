@@ -1,0 +1,12 @@
+;; panic-location-names-the-runtime-not-the-call-site: a let-bound PARTIAL
+;; APPLICATION of a sited inline-C body, called by name -- `(g 9)` -- names
+;; that call, this file's line 11, not line 9 where the partial was made.
+;; Compiled, the call resolves to a direct call of the partial's thunk, which
+;; is sited as a call to vec-get would be (binding_panics_in_inline_c).  Both
+;; engines agree.
+(defn main [] : int
+  (let [v (vec-of 10 20 30)
+        g (vec-get v)]
+    (println (g 1))
+    (println (g 9))
+    0))

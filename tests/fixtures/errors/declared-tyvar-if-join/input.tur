@@ -1,0 +1,8 @@
+;; declared-tyvars-are-not-rigid: `(if c a b)` with `a : A` and `b : B`
+;; joined -- two variables are type_eq by kind, and the tolerant walk read a
+;; variable as a wildcard.  `(if c a 1)` is the ground twin.
+(defn bad [A B] [a : A b : B c : bool] : A
+  (if c a b))
+(defn main [] : int
+  (println (bad 1 "s" false))
+  0)

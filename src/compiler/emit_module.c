@@ -5849,6 +5849,27 @@ static bool type_phantom_hides_aggregate(const Type *t) {
     return false;
 }
 
+/* heap-sum-generic-never-specialized: a `:heap` parametric SUM
+ * (`(defdata Fr :heap [T] (Nil) (Frame T T))`) has no base constructor -- only
+ * the per-spec `ctor_Fr_Frame__int` -- yet `(Fr T)` and `(Fr int)` both spell
+ * the int64 carrier (type_c_name names an ADT app as its monomorph only for a
+ * by-value product).  The `type_c_name` comparison therefore sees no ABI change,
+ * no clone is minted, and a base body that rebuilds the sum calls the
+ * dead-base ctor trap at runtime.  Return true when `t` is, or carries among
+ * its type arguments, a GROUND application of such an ADT, so the caller can
+ * force a spec exactly as G4 does for a phantom opaque. */
+static bool type_mentions_ground_heap_sum_app(const Type *t) {
+    if (!t || t->kind != TY_APP || emit_abi_type_has_any_tyvar(t)) return false;
+    if (adt_app_is_heap_sum(*t)) return true;
+    AdtDef *adef = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(t, &adef, args, &n_args) || !adef) return false;
+    for (uint8_t i = 0; i < n_args; i++)
+        if (type_mentions_ground_heap_sum_app(&args[i])) return true;
+    return false;
+}
+
 /* Does `t` have a leaf of kind `k` anywhere in its application spine? */
 static bool type_mentions_kind(const Type *t, TypeKind k) {
     if (!t) return false;
@@ -6910,6 +6931,41 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         if (site_wins) { bindings = site_fixed; site_corrected = true; }
     }
 
+    /* heap-sum-generic-never-specialized: `(flip (One 7.1))` binds `B` to an
+     * OPEN slot -- `(One 7.1) : (Two float B)` fixes nothing else -- so `(Two A
+     * B)` instantiates to a non-ground app, the `:heap` sum rescue below cannot
+     * fire, and the base body's `(One a)` reaches the dead-base trap.  Ground
+     * the open slots to the int carrier (the same answer the ctor that built the
+     * argument took, emit_ground_open_slots), but only when that is what
+     * exposes a ground `:heap` sum: Result/Option open slots ride the carrier
+     * already and keep the bindings elab gave them. */
+    AbiTypeBinding open_fixed[ABI_TYPE_BINDINGS_MAX];
+    if (!borrow_path && fd && bindings && n_bindings > 0 &&
+        n_bindings <= ABI_TYPE_BINDINGS_MAX && fn_binding->type.kind == TY_FN) {
+        bool any_open = false;
+        for (uint8_t bi = 0; bi < n_bindings; bi++) {
+            open_fixed[bi] = bindings[bi];
+            open_fixed[bi].type = emit_ground_open_slots(ctx, bindings[bi].type,
+                                                         &any_open);
+        }
+        bool exposes = false;
+        for (uint32_t i = 0; any_open && !exposes && i <= fd->n_params; i++) {
+            const Type *gt = (i < fd->n_params)
+                ? ((fn_binding->type.as.fn.arg_full_types &&
+                    fn_binding->type.as.fn.arg_full_types[i])
+                   ? fn_binding->type.as.fn.arg_full_types[i] : &fd->params[i]->type)
+                : fn_binding->type.as.fn.result_full_type;
+            if (!gt) continue;
+            Type before = emit_abi_instantiate_type(gt, bindings, n_bindings,
+                                                    ctx->type_arena);
+            Type after = emit_abi_instantiate_type(gt, open_fixed, n_bindings,
+                                                   ctx->type_arena);
+            exposes = !type_mentions_ground_heap_sum_app(&before) &&
+                      type_mentions_ground_heap_sum_app(&after);
+        }
+        if (exposes) bindings = open_fixed;
+    }
+
     bool abi_changes = false;
     Type arg_types[MAX_FN_ARITY];
     uint8_t n_spec_args;
@@ -6987,6 +7043,12 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * the carrier layout.  Force a spec so the substituted body is
                  * emitted; arg_types[i] retains the concrete element so the spec
                  * dedup keys on it (the carrier C name still emits int64). */
+                abi_changes = true;
+            } else if (!type_eq(generic_arg, arg_types[i]) &&
+                       type_mentions_ground_heap_sum_app(&arg_types[i])) {
+                /* heap-sum-generic-never-specialized: `(Fr T)` -> `(Fr int)` for a
+                 * `:heap` parametric sum spells int64 on both sides, but the
+                 * base body has no constructor to build one with. */
                 abi_changes = true;
             }
         }
@@ -7328,6 +7390,11 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             result_type = grounded;
     }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
+        abi_changes = true;
+    } else if (!borrow_path && !type_eq(generic_result, result_type) &&
+               type_mentions_ground_heap_sum_app(&result_type)) {
+        /* heap-sum-generic-never-specialized: the result-side twin of the
+         * parameter rescue above (`(defn mk [T] [x : T] : (Fr T) ...)`). */
         abi_changes = true;
     }
     /* GDE1: even when the C ABI is unchanged, intern a specialization when the
@@ -18649,18 +18716,19 @@ static void emit_hoisted_includes(Buf *out) {
  * function whose inline-C body may panic (`tur_panic(` in its text --
  * vec-get's bounds check) sets the thread's current site to its own source
  * position (a static `tur_site_t` the emitter interns per call,
- * emit_site_set_text) just before the call and clears it just after, and
- * `tur_panic` inside such a body is tur_panic_sited (emit_fns.c), which
- * names that site -- so the location printed is the call's, not the
- * runtime's.  Two stores per call, nothing on entry; the slot is read only
- * when a panic happens.  A sited call among the arguments sets and clears
- * its own before the outer call runs, so the outer then has none and names
- * the runtime's line, as before -- never another call's.  A call through a
- * function value sets its own site too, in a unit that takes a panicking
- * inline-C function as a value anywhere (emit_fn_value_calls_sited); in any
- * other unit no such body can be reached that way and closure calls pay
- * nothing.  An instance method's call is sited like a defn's
- * (binding_panics_in_inline_c finds the method's FnDef through its instance).
+ * emit_site_ref_text) just before the call and restores the slot just after
+ * (emit_site_wrap), and `tur_panic` inside such a body is tur_panic_sited
+ * (emit_fns.c), which names that site -- so the location printed is the
+ * call's, not the runtime's.  A load and two stores per call, nothing on
+ * entry; the slot is read only when a panic happens.  A call through a
+ * function value carries its site too, in a unit that takes a panicking
+ * inline-C function as a value, or partially applies one, anywhere
+ * (emit_fn_value_calls_sited); in any other unit no such body can be
+ * reached that way and closure calls pay nothing.  An instance method's
+ * call is sited like a defn's (binding_panics_in_inline_c finds the
+ * method's FnDef through its instance).  The program's call to a stdlib
+ * function taking a function value is sited in such a unit, and the stdlib
+ * code beneath it keeps that site (emit_direct_call_site_mode).
  *
  * Emitted AFTER the fixed preamble, with the hoisted includes, on purpose.
  * Nothing in the runtime archive reads the slot, and a thread-local inside
@@ -18668,24 +18736,65 @@ static void emit_hoisted_includes(Buf *out) {
  * build (the decls half takes the accessor branch) -- two calls around
  * every vec-get.  Here, under gcc/clang, it is a native thread-local store.
  * c2mir has no thread-locals and takes the host's slot
- * (src/runtime/tur_tls.c), as the fixed region's do.  Every emitted unit --
- * the program, a split build's library and client, a `--shared` TU -- gets
- * its own `static` slot and helpers; a call from one unit into another's
- * sited body is one more "nothing set". */
-static void emit_panic_site_slot(Buf *out) {
+ * (src/runtime/tur_tls.c), as the fixed region's do.  A single-file unit
+ * gets its own `static` slot; a split build's library and client share one
+ * (emit_split_state makes the library's external and the client's `extern`);
+ * the separately compiled modules of a multi-file build share the one their
+ * runtime header gives the owner TU (`shared`, TUR_RT_OWNER) -- so a call
+ * from one module into another's sited body names the caller's line.
+ *
+ * A sited call SAVES the slot (tur_site_push, or tur_site_keep, which sets
+ * only when nothing is set: stdlib source, a forwarder) and puts it back
+ * after (tur_site_pop), so a site outlives the calls made beneath it -- a
+ * stdlib HOF's callbacks, a sited call among the arguments.  tur_site_set /
+ * tur_site_clear remain for a statement that sites itself (the Saffron
+ * dynamic runtime's arity and field checks). */
+static void emit_panic_site_slot(Buf *out, bool shared) {
     buf_puts(out,
         "/* panic-location-names-the-runtime-not-the-call-site: the source site of\n"
-        " * the direct call to a panicking inline-C body this thread is making --\n"
-        " * set just before the call, cleared just after, read by tur_panic_sited. */\n"
+        " * the call into a panicking inline-C body this thread is making -- saved\n"
+        " * and set just before the call, restored just after, read by\n"
+        " * tur_panic_sited. */\n"
         "typedef struct { const char *file; int line; } tur_site_t;\n"
-        "#if defined(__GNUC__) || defined(__clang__)\n"
-        "static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;\n"
+        "#if defined(__GNUC__) || defined(__clang__)\n");
+    if (shared)
+        buf_puts(out,
+            "#ifdef TUR_RT_OWNER\n"
+            "TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;\n"
+            "#else\n"
+            "extern TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;\n"
+            "#endif\n");
+    else
+        buf_puts(out, "static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;\n");
+    /* The save-and-set helpers read and write the slot by name under
+     * gcc/clang.  Through the slot's ADDRESS (`*p = s`, p = &tur_cur_site)
+     * gcc 13 at -O1 under -fsanitize=undefined miscompiles the null check
+     * UBSan puts on the store -- it branches on flags a `test` before it
+     * left, so an empty slot reads as a store to null and the program
+     * aborts (the r7rs-sanitize CI job).  Only the host accessor's branch
+     * takes the pointer, where it saves c2mir an accessor call. */
+    buf_puts(out,
+        "static inline const tur_site_t *tur_site_push(const tur_site_t *s) {\n"
+        "    const tur_site_t *o = tur_cur_site; tur_cur_site = s; return o;\n"
+        "}\n"
+        "static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {\n"
+        "    const tur_site_t *o = tur_cur_site; if (!o) tur_cur_site = s; return o;\n"
+        "}\n"
         "#else\n"
         "extern void **tur_tls_cur_site_ptr(void);\n"
         "#define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())\n"
+        "static inline const tur_site_t *tur_site_push(const tur_site_t *s) {\n"
+        "    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;\n"
+        "    *p = s; return o;\n"
+        "}\n"
+        "static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {\n"
+        "    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;\n"
+        "    if (!o) *p = s; return o;\n"
+        "}\n"
         "#endif\n"
         "static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }\n"
         "static inline void tur_site_clear(void) { tur_cur_site = NULL; }\n"
+        "static inline void tur_site_pop(const tur_site_t *o) { tur_cur_site = o; }\n"
         "static inline void tur_panic_sited(const char *msg) {\n"
         "    const tur_site_t *s = tur_cur_site;\n"
         /* A caught panic (catch-unwind) never reaches the call's clear, so the
@@ -18711,7 +18820,7 @@ void emit_shared_runtime_header(Buf *out) {
     buf_puts(out, "#ifndef TUR_RUNTIME_H\n#define TUR_RUNTIME_H\n");
     emit_runtime_preamble(out, NULL, /*shared=*/true);
     emit_hoisted_includes(out);
-    emit_panic_site_slot(out);
+    emit_panic_site_slot(out, /*shared=*/true);
     buf_puts(out, "#endif /* TUR_RUNTIME_H */\n");
 }
 
@@ -20897,13 +21006,13 @@ static int emit_program_inner(Buf *out, const Expr *program) {
         Buf pre; buf_init(&pre);
         emit_runtime_preamble(&pre, program, false);
         emit_hoisted_includes(&pre);
-        emit_panic_site_slot(&pre);
+        emit_panic_site_slot(&pre, false);
         emit_split_state(pre.data, pre.len, split_state_mode(EMIT_SPLIT_LIB), out);
         buf_free(&pre);
     } else {
         emit_runtime_preamble(out, program, false);
         emit_hoisted_includes(out);
-        emit_panic_site_slot(out);
+        emit_panic_site_slot(out, false);
     }
 
     /* Phase 4 v1: Collect all defer thunks into a buffer so they can be
@@ -21168,6 +21277,8 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     free(ctx.fatbox_keys);
     free(ctx.fatbox_names);
     free((void *)ctx.inst_panic_bindings);
+    free((void *)ctx.pap_thunk_bindings);
+    free((void *)ctx.pap_thunk_targets);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
@@ -22902,6 +23013,8 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     free(ctx.fatbox_keys);
     free(ctx.fatbox_names);
     free((void *)ctx.inst_panic_bindings);
+    free((void *)ctx.pap_thunk_bindings);
+    free((void *)ctx.pap_thunk_targets);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);

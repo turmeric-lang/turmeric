@@ -34,22 +34,28 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing heap-sum-generic-never-specialized (filed 2026-10-14)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| ~~[declared-tyvars-are-not-rigid](../archive/declared-tyvars-are-not-rigid.md)~~ | high (unsound) | **RESOLVED 2026-10-14** (archived): a declared type variable matches only itself at the defn return, a `let` annotation, a monomorphic callee's or constructor's argument, and an `if` join (`rigid_tyvar_conflict`; `#{Unsafe}` keeps the carrier bridge). The `[x : A] : int` "bridge" a fixture pinned printed float bits and string addresses and is gone. Two typing defects it exposed are fixed with it: a multi-parameter class's method result typed as one instance's, and a generic's self-call typed `int`. `errors/declared-tyvar-*`, `declared-tyvar-rigid-accepts` |
+| [heap-sum-unpinned-tyvar-relayed-to-generic](heap-sum-unpinned-tyvar-relayed-to-generic.md) | low | `(has? (bump (Nil)))` with nothing in the program fixing `T` still aborts at the dead-base trap. The call's binding is `T -> T` (a named variable, not an open slot), the same shape a relay produces, so no clone is minted. |
+
 ## Found prototyping the generic zipper (filed 2026-10-13)
 
 Hit while prototyping
 [generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D1--D4). That
 plan routes around all four; its section 5 also records D5 and four inference
-papercuts, which have no report of their own. D1
-([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md))
-D3
-([byvalue-option-field-read-as-carrier-at-generic-call](../archive/byvalue-option-field-read-as-carrier-at-generic-call.md))
-and D4
-([instance-method-match-fallthrough-return-unbridged](../archive/instance-method-match-fallthrough-return-unbridged.md))
-were fixed and archived 2026-10-14.
+papercuts, which have no report of their own. All four are now fixed and
+archived (2026-10-14): D1 and D2 by the `:heap` sum specialization, D3 and D4
+in their own changes.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md) | medium-high (correct program aborts at runtime) | A generic over a parametric `:heap` **sum** (`(defn bump [T] [f : (Fr T)] : (Fr T) ...)`) gets no spec clone, because `type_c_name` spells `(Fr T)` and `(Fr int)` alike as `int64_t` (`types.c:4768` names only products) and `emit_abi_register_call`'s C-name gate never fires. A constructor in the base body then hits the dead-base trap at runtime. The interpreter is right; without `:heap` it is right. |
+| ~~[heap-sum-generic-never-specialized](../archive/heap-sum-generic-never-specialized.md)~~ | medium-high | **RESOLVED 2026-10-14** (archived): a parameter or result instantiating to a ground `:heap` parametric sum app forces a clone even though both spell `int64_t` (`type_mentions_ground_heap_sum_app`, next to G4), the clone reads the scrutinee through the monomorph, and an open slot at a constructor or in a call's bindings grounds to `int`. Left open: [heap-sum-unpinned-tyvar-relayed-to-generic](heap-sum-unpinned-tyvar-relayed-to-generic.md). `heap-sum-generic-rebuild` |
+| ~~[heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)~~ | medium | **RESOLVED 2026-10-14** (archived), by the same change: inside the clone the scrutinee is `tur_adt_Fr__R *`, so the `(Cons R)` binder is declared as the typed pointer the constructor takes. `heap-sum-match-binder-cons-payload` |
+| ~~[byvalue-option-field-read-as-carrier-at-generic-call](../archive/byvalue-option-field-read-as-carrier-at-generic-call.md)~~ | medium | **RESOLVED 2026-10-14** (archived): `field_read_emits_byvalue_aggregate` substituted the receiver's type arguments only into a field typed as a bare parameter, so `(p (Option (Fr T)))` -- an application over T -- read as not by-value and the call-argument bridge cast `h->p` to the carrier. Also covers `(Option T)` and by-value sum fields. Pinned by `byvalue-field-of-param-app-as-generic-arg`. |
+| ~~[instance-method-match-fallthrough-return-unbridged](../archive/instance-method-match-fallthrough-return-unbridged.md)~~ | medium | **RESOLVED 2026-10-14** (archived): `emit_tail`'s match arm spelled the unreachable fall-through `return <temp>;` raw instead of through the shared return ladder. Found beside it: a literal-pattern match declared its result temp from the static type, so `(match c true a false b)` returning `T` at float printed 7 for 7.1. Pinned by `match-result-temp-typed-return`. |
 
 ## Found fixing cps-performing-fn-with-wide-adt-param-refused (filed 2026-10-13)
 

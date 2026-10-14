@@ -2051,6 +2051,9 @@ bool         type_is_heap_struct(Type t);
 /* seam 3: the ADT analogue -- true when t is a (possibly applied) :heap ADT
  * (the lowered form of a :heap defstruct); its ABI is `tur_adt_<Name> *`. */
 bool         type_is_heap_adt(Type t);
+/* heap-sum-generic-never-specialized: true when t is a concrete application of a
+ * `:heap` parametric SUM -- carrier-spelled, monomorph-laid-out, no base ctor. */
+bool         adt_app_is_heap_sum(Type t);
 /* True when t is a fully concrete (tyvar-free) type with a monomorphizable C
  * codegen layout -- e.g. `(Vec int)` but not `(Vec A)`.  Gates spec-minting on
  * concrete-only call sites. */

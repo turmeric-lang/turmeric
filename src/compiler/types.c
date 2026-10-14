@@ -6071,6 +6071,20 @@ bool type_is_heap_adt(Type t) {
     return false;
 }
 
+/* heap-sum-generic-never-specialized: true when t is a CONCRETE application of
+ * a `:heap` parametric SUM (`(defdata Fr :heap [T] (Nil) (Frame T T))`,
+ * `(Fr int)`).  Such an app spells the int64 carrier (type_c_name names an ADT
+ * app as its monomorph only for a by-value product), yet the value in hand is a
+ * pointer to its `tur_adt_Fr__int` monomorph, and the ADT has no base
+ * constructor -- only per-spec `ctor_Fr_Frame__int`.  A generic over it needs
+ * a clone, and the clone must read it through the monomorph layout. */
+bool adt_app_is_heap_sum(Type t) {
+    if (!type_app_is_concrete_adt(&t)) return false;
+    AdtDef *def = type_adt_app_def(&t);
+    return def && def->is_heap && def->n_type_params > 0 &&
+           !adt_app_is_byvalue_product(t);
+}
+
 /* end-to-end-monomorphization: the by-value struct C name for a (heap or not)
  * struct/struct-app -- the same name type_c_name returns for a non-heap struct
  * (`Vec__int`), WITHOUT the trailing " *" that the heap pointer lowering adds.

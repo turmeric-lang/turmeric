@@ -44,7 +44,8 @@ bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b);
 
 /* panic-location-names-the-runtime-not-the-call-site: does some global fn
  * whose ADDRESS is taken anywhere in `program` -- referenced as a fn value,
- * the E2 pre-pass of ensure_S -- satisfy `pred`?  The direct emitter asks
+ * the E2 pre-pass of ensure_S, or forwarded to by a partial application's
+ * thunk -- satisfy `pred`?  The direct emitter asks
  * with "its inline-C body may panic" to decide whether a call through a fn
  * value in this unit sets the panic site around itself (emit_fn_value_calls_sited). */
 bool emit_cps_ir_addr_taken_any(const Expr *program, bool (*pred)(const Binding *));
