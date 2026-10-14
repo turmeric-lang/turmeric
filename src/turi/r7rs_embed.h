@@ -67,13 +67,39 @@ int turi_r7rs_embed_load(const char *sets_text, const char *path);
 /* Call embedded procedure `proc_id` with the pushed arguments. */
 int turi_r7rs_embed_apply(int64_t proc_id);
 
-/* The innermost call from evaluated code to a program procedure that is in
- * progress (0: none), and whether call `serial` still is.  A continuation
- * captured inside such a call cannot be re-entered once the call has
- * returned: the evaluator's frames under it are gone (interpreter_natives.c,
- * r7rs-cont-restore__). */
-uint64_t turi_r7rs_embed_call_serial(void);
-int      turi_r7rs_embed_call_live(uint64_t serial);
+/* r7rs-eval-continuation-reentry-across-bridge: the evaluator's side of a
+ * program continuation.  The program's call/cc copies the C stack, and a
+ * capture inside a call from evaluated code to a program procedure copies
+ * the evaluator's frames with it; what those frames need back on a
+ * re-entry is kept in a handle these take.
+ *
+ *   capture    at the capture, before the stack is copied.  `program` says
+ *              the caller is a compiled program's call/cc, which keeps no
+ *              interpreter state of its own, so the handle takes the
+ *              drivers' work stacks and the thread's globals too (the
+ *              interpreter's own capture already holds them).  NULL when
+ *              there is no evaluator yet.
+ *   resumable  whether the continuation can be resumed now: one captured
+ *              inside a host call made from a text being evaluated (`(eval
+ *              '(f 1))`, as against an applied procedure) can be only while
+ *              that evaluation is still in progress.
+ *   restore    just before the image is copied back; `stack_top` is the
+ *              image's upper end.
+ *   resumed    just after the jump, from the capture's frame.
+ *   free       when the continuation is reclaimed.
+ *
+ * A compiled program reaches these through the prelude's hooks, which
+ * stdlib/r7rs/eval.tur installs (r7rs-cont-hooks-install__); it never frees
+ * a handle, and the evaluator's pool sweep waits while such a handle holds
+ * its frames. */
+void *turi_r7rs_embed_cont_capture(int program);
+int   turi_r7rs_embed_cont_resumable(void *handle);
+void  turi_r7rs_embed_cont_restore(void *handle, const void *stack_top);
+void  turi_r7rs_embed_cont_resumed(void *handle);
+void  turi_r7rs_embed_cont_free(void *handle);
+/* The hook forms of capture and restore. */
+void *turi_r7rs_embed_program_cont_capture(void);
+int   turi_r7rs_embed_program_conts_live(void);
 
 /* For the pool sweep of the embedded env (interpreter_natives.c): calls `fn`
  * on each range of that env's values this file keeps in its own arrays --

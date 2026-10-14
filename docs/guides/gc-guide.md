@@ -500,6 +500,19 @@ The bridge's own arrays (procedures handed out, wrappers of program
 procedures, pending arguments) are roots of the evaluator's sweep
 (`turi_r7rs_embed_roots`).
 
+A program continuation captured inside a call from evaluated code to a
+program procedure copies the evaluator's frames with the stack. The
+evaluator keeps what those frames need back in a handle taken at the
+capture (`turi_r7rs_embed_cont_*`: its env's dynamic-extent fields, its
+dynamic-environment slots, the host call in progress; for a compiled
+program, whose call/cc keeps no interpreter state, the drivers' work
+stacks and the thread's globals too, with the interpreter pinned). A
+compiled program reaches the handle through hooks `(scheme eval)` installs
+in the prelude's call/cc. The evaluator's sweep declines while such a
+handle holds its frames; nothing tells libturi when a compiled program's
+continuation dies, so there it declines from the first such capture on.
+See `docs/archive/r7rs-eval-continuation-reentry-across-bridge.md`.
+
 Environment variables:
 
 - `TUR_TURI_POOL_GC=0` turns the pool sweep off.

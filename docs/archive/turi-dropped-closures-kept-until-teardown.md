@@ -213,14 +213,13 @@ after free in `host_native`. Now:
 
 - A host call's arguments live in a list by serial, and the answer in a slot
   the host fills as its last act.
-- The interpreter refuses such a continuation before restoring anything
-  (`R7kCont.bridge_call`).
-- A compiled program, whose call/cc cannot ask libturi, exits at the second
-  return with the same explanation. It used to free memory twice.
+- The interpreter refused such a continuation before restoring anything,
+  and a compiled program, whose call/cc could not ask libturi, exited at the
+  second return with the same explanation (it used to free memory twice).
 
-Re-entering one while its call is still running works on both back ends.
-Full support is filed as
-docs/reported/r7rs-eval-continuation-reentry-across-bridge.md.
+Re-entering one while its call was still running worked on both back ends.
+Later the same day the re-entry after the return was made to work too:
+docs/archive/r7rs-eval-continuation-reentry-across-bridge.md.
 
 ### Measured
 

@@ -731,6 +731,11 @@ uint32_t       turi_cont_epoch(void);
 void           turi_cont_release_drives(const void *top);
 TuriContState *turi_cont_state_capture(TuriEnv *env);
 void           turi_cont_state_restore(TuriEnv *env, const TuriContState *s);
+/* The env's fields without its drives, and their restore alone: for the
+ * `(scheme eval)` evaluator's env inside a program continuation
+ * (r7rs_embed.c), whose drives the capturing env's state already holds. */
+TuriContState *turi_cont_state_capture_env(TuriEnv *env);
+void           turi_cont_state_restore_env(TuriEnv *env, const TuriContState *s);
 /* The per-form prompt (r7rs-toplevel-reentry-reruns-forms): the drive the
  * current top-level form runs under, and the boundary a capture stops its
  * drive snapshot at.  `set` returns the previous boundary. */

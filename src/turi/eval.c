@@ -7921,6 +7921,18 @@ struct TuriContState {
 void turi_cont_pin(void) { g_turi_cont_pinned = true; g_turi_cont_epoch++; }
 uint32_t turi_cont_epoch(void) { return g_turi_cont_epoch; }
 
+/* r7rs-eval-continuation-reentry-across-bridge: the env's own fields and
+ * the thread's globals, without the drives.  For an env whose drives
+ * another capture already holds (the `(scheme eval)` evaluator's, inside a
+ * program continuation), or that has none. */
+TuriContState *turi_cont_state_capture_env(TuriEnv *env) {
+    DriveReg *b = g_drive_boundary;
+    g_drive_boundary = g_drive_regs;   /* nothing to walk */
+    TuriContState *s = turi_cont_state_capture(env);
+    g_drive_boundary = b;
+    return s;
+}
+
 TuriContState *turi_cont_state_capture(TuriEnv *env) {
     TuriContState *s = (TuriContState *)calloc(1, sizeof *s);
     if (!s) return NULL;
@@ -7996,6 +8008,31 @@ void turi_cont_release_drives(const void *top) {
             free(*r->pst);
             *r->pst = r->inl;
         }
+}
+
+/* The env's fields alone: the globals and drives were put back by the
+ * capture that holds them (turi_cont_state_restore). */
+void turi_cont_state_restore_env(TuriEnv *env, const TuriContState *s) {
+    env->returning         = s->returning;
+    env->throwing          = s->throwing;
+    env->aborting          = s->aborting;
+    env->panicking         = s->panicking;
+    env->return_value      = s->return_value;
+    env->throw_value       = s->throw_value;
+    env->abort_value       = s->abort_value;
+    env->abort_prompt_kind = s->abort_prompt_kind;
+    env->abort_target      = s->abort_target;
+    env->handler_stack     = s->handler_stack;
+    env->defer_stack       = s->defer_stack;
+    env->effect_env        = s->effect_env;
+    env->catch_jmp         = s->catch_jmp;
+    env->current_module    = s->current_module;
+    if (s->n_escape_live > env->cap_escape_live) {
+        env->escape_live = (void **)realloc(env->escape_live, s->n_escape_live * sizeof(void *));
+        env->cap_escape_live = s->n_escape_live;
+    }
+    if (s->n_escape_live) memcpy(env->escape_live, s->escape_live, s->n_escape_live * sizeof(void *));
+    env->n_escape_live     = s->n_escape_live;
 }
 
 void turi_cont_state_restore(TuriEnv *env, const TuriContState *s) {

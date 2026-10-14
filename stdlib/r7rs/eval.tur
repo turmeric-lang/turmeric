@@ -115,6 +115,29 @@
   turi_r7rs_embed_answer_raise(condition);
   ```)
 
+;;; r7rs-eval-c-cont-hook__ -- internal: the evaluator's continuation hooks
+;;; (src/turi/r7rs_embed.h), by number: 0 capture, 1 resumable, 2 restore,
+;;; 3 resumed.  A continuation the program captures inside a call from
+;;; evaluated code to a program procedure copies the evaluator's frames with
+;;; the stack; through these the evaluator keeps what the frames need on a
+;;; re-entry (r7rs-eval-continuation-reentry-across-bridge).
+(defn r7rs-eval-c-cont-hook__ [which : int] : ptr<void>
+  ```c
+  switch (which) {
+  case 0:  return (void *)(uintptr_t)turi_r7rs_embed_program_cont_capture;
+  case 1:  return (void *)(uintptr_t)turi_r7rs_embed_cont_resumable;
+  case 2:  return (void *)(uintptr_t)turi_r7rs_embed_cont_restore;
+  default: return (void *)(uintptr_t)turi_r7rs_embed_cont_resumed;
+  }
+  ```)
+;;; r7rs-eval-cont-hooks__ -- internal: the hooks, installed in the prelude's
+;;; call/cc once at startup (the interpreter's twins do nothing: its capture
+;;; reaches the evaluator directly).
+(def r7rs-eval-cont-hooks__ (r7rs-cont-hooks-install__ (r7rs-eval-c-cont-hook__ 0)
+                                                        (r7rs-eval-c-cont-hook__ 1)
+                                                        (r7rs-eval-c-cont-hook__ 2)
+                                                        (r7rs-eval-c-cont-hook__ 3)))
+
 ;;; ---- procedures across the bridge -----------------------------------------
 
 ;;; The program procedures evaluated code has been handed, newest first; a

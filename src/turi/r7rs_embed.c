@@ -420,26 +420,14 @@ static TuriValue host_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud
     (void)g_host(host_id);
     switch_side(was);
     answer_take(&kind, &text, &id);
-    if (!call_end(serial)) {
-        /* This call returned once already, and a continuation the program
-         * captured inside it brought control back.  The interpreter refuses
-         * such a continuation before it restores anything; a compiled
-         * program's call/cc cannot ask, and the evaluator's frames under this
-         * one were freed at the first return. */
-        fprintf(stderr, "tur: eval: a continuation captured inside a call from evaluated code to a program "
-                        "procedure was invoked after that call returned; the evaluator cannot resume it\n");
-        exit(70);
-    }
+    /* Not found: this call returned once already, and a continuation the
+     * program captured inside it brought control back (turi_r7rs_embed_cont_
+     * resumed put the evaluator's state back for it; the arguments were
+     * freed at the first return, and the host has read them). */
+    (void)call_end(serial);
     TuriValue r = import_value(kind, text, id);
     free(text);
     return r;
-}
-
-uint64_t turi_r7rs_embed_call_serial(void) { return g_ncalls ? g_calls[g_ncalls - 1].serial : 0; }
-int turi_r7rs_embed_call_live(uint64_t serial) {
-    for (size_t i = g_ncalls; i-- > 0;)
-        if (g_calls[i].serial == serial) return 1;
-    return 0;
 }
 
 /* The innermost host call's arguments: the host function reads them first. */
@@ -517,6 +505,34 @@ static char *import_form(const char *sets_text) {
     return out;
 }
 
+/* The texts being evaluated (eval_source), innermost last, by serial: a
+ * program continuation captured inside one can be resumed only while that
+ * evaluation is still in progress (turi_r7rs_embed_cont_resumable).  An
+ * evaluation a continuation escaped from stays until one below it ends, or
+ * a resume abandons it. */
+static uint64_t *g_texts;
+static size_t    g_ntexts, g_captexts;
+static uint64_t  g_text_serial;
+
+static uint64_t text_begin(void) {
+    if (g_ntexts == g_captexts) {
+        g_captexts = g_captexts ? g_captexts * 2 : 8;
+        g_texts = (uint64_t *)xrealloc(g_texts, g_captexts * sizeof *g_texts);
+    }
+    g_texts[g_ntexts++] = ++g_text_serial;
+    return g_text_serial;
+}
+static void text_end(uint64_t serial) {
+    size_t k = g_ntexts;
+    while (k > 0 && g_texts[k - 1] != serial) k--;
+    if (k > 0) g_ntexts = k - 1;
+}
+static bool text_live(uint64_t serial) {
+    for (size_t i = g_ntexts; i-- > 0;)
+        if (g_texts[i] == serial) return true;
+    return false;
+}
+
 static int eval_source(const char *sets_text, const char *body) {
     if (!embed_env()) { set_result_text("eval: the embedded R7RS evaluator did not start"); return 'E'; }
     char *imports = import_form(sets_text);
@@ -524,7 +540,9 @@ static int eval_source(const char *sets_text, const char *body) {
     char *src = (char *)malloc(n);
     snprintf(src, n, "%s\n%s", imports, body);
     free(imports);
+    uint64_t serial = text_begin();
     TuriValue v = embed_eval_text(src);
+    text_end(serial);
     free(src);
     return set_result(v);
 }
@@ -608,6 +626,97 @@ int turi_r7rs_embed_apply(int64_t proc_id) {
     TuriValue call[2] = { proc_value(proc_id), l };
     if (failed(call[0])) return set_result(call[0]);
     return set_result(embed_call(g_catch_apply, call, 2));
+}
+
+/* ---- a program continuation captured inside a host call -------------------
+ * r7rs-eval-continuation-reentry-across-bridge; r7rs_embed.h says when each
+ * of these is called.  The embedded env's dynamic-extent fields (its live
+ * escapes above all) and its dynamic-environment slots go with every
+ * capture; for a compiled program, so do the drivers' work stacks and the
+ * thread's globals, and the capture pins the interpreter (turi_cont_pin), so
+ * the frames and temporaries the image holds are not freed at the first
+ * return.  Nothing tells this file when a compiled program's continuation
+ * dies, so the evaluator's sweep waits from the first such capture on.
+ *
+ * A capture inside a host call made from a text being evaluated (`(eval
+ * '(f 1))`, rather than an applied procedure) also copies the frames of that
+ * evaluation, which end with its `eval`: resumed after that returned, they
+ * would finish the evaluation a second time.  Such a continuation can be
+ * resumed only while the evaluation is still in progress. */
+typedef struct {
+    TuriContState *state;
+    bool           program;      /* state holds the drives and globals too */
+    bool           pinned;
+    uint64_t       serial;       /* the host call in progress, 0: none */
+    uint64_t       text;         /* the text being evaluated, 0: none */
+    TuriValue      dyn[4];
+    bool           dyn_written[4];
+} EmbedCont;
+static size_t g_program_conts;
+
+void *turi_r7rs_embed_cont_capture(int program) {
+    if (!g_env) return NULL;
+    EmbedCont *h = (EmbedCont *)calloc(1, sizeof *h);
+    if (!h) return NULL;
+    h->serial  = g_ncalls ? g_calls[g_ncalls - 1].serial : 0;
+    h->text    = g_ntexts ? g_texts[g_ntexts - 1] : 0;
+    h->program = program != 0;
+    if (program && h->serial) {
+        /* The evaluator's frames are in the image, and only the interpreter
+         * can keep what they need. */
+        turi_cont_pin();
+        h->pinned = true;
+        g_program_conts++;
+        h->state = turi_cont_state_capture(g_env);
+    } else {
+        h->state = turi_cont_state_capture_env(g_env);
+    }
+    memcpy(h->dyn, g_env->r7rs_dyn, sizeof h->dyn);
+    memcpy(h->dyn_written, g_env->r7rs_dyn_written, sizeof h->dyn_written);
+    return h;
+}
+void *turi_r7rs_embed_program_cont_capture(void) { return turi_r7rs_embed_cont_capture(1); }
+int turi_r7rs_embed_program_conts_live(void) { return g_program_conts > 0; }
+
+int turi_r7rs_embed_cont_resumable(void *handle) {
+    const EmbedCont *h = (const EmbedCont *)handle;
+    return !h || !h->text || text_live(h->text);
+}
+
+void turi_r7rs_embed_cont_restore(void *handle, const void *stack_top) {
+    const EmbedCont *h = (const EmbedCont *)handle;
+    if (h && h->program) turi_cont_release_drives(stack_top);
+}
+
+void turi_r7rs_embed_cont_resumed(void *handle) {
+    const EmbedCont *h = (const EmbedCont *)handle;
+    if (!h || !g_env || !h->state) return;
+    if (h->program) turi_cont_state_restore(g_env, h->state);
+    else            turi_cont_state_restore_env(g_env, h->state);
+    /* The host calls and evaluations begun since the capture went with
+     * their frames. */
+    while (g_ncalls && g_calls[g_ncalls - 1].serial > h->serial) {
+        g_ncalls--;
+        free_args(g_calls[g_ncalls].args, g_calls[g_ncalls].n);
+    }
+    while (g_ntexts && g_texts[g_ntexts - 1] > h->text) g_ntexts--;
+    /* The evaluator's dynamic environment: travel its wind stack to the
+     * captured one (R7RS 6.10 -- each `after` out, each `before` in, which
+     * also reinstalls the handlers and parameters of that extent), then put
+     * the slots back as they were. */
+    TuriValue travel = turi_env_get(g_env, "r7rs-travel-to__");
+    TuriValue target = h->dyn_written[0] ? h->dyn[0] : g_null;
+    if (!failed(travel)) (void)embed_call(travel, &target, 1);
+    memcpy(g_env->r7rs_dyn, h->dyn, sizeof h->dyn);
+    memcpy(g_env->r7rs_dyn_written, h->dyn_written, sizeof h->dyn_written);
+}
+
+void turi_r7rs_embed_cont_free(void *handle) {
+    EmbedCont *h = (EmbedCont *)handle;
+    if (!h) return;
+    if (h->pinned) g_program_conts--;
+    turi_cont_state_free(h->state);
+    free(h);
 }
 
 void turi_r7rs_embed_roots(const void *env, TuriR7rsRootFn fn, void *ud) {

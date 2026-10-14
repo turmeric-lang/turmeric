@@ -3273,10 +3273,10 @@ typedef struct R7kCont {
     uint32_t        epoch;      /* turi_cont_epoch just after its pin */
     uint32_t        key_refs;
     bool            dead;
-    /* The `(scheme eval)` call from evaluated code to a program procedure it
-     * was captured inside (0: none): its image holds the evaluator's frames
-     * under that call, which are gone once the call returns. */
-    uint64_t        bridge_call;
+    /* r7rs-eval-continuation-reentry-across-bridge: the `(scheme eval)`
+     * evaluator's side of this capture (r7rs_embed.c) -- what its frames in
+     * the image need back on a re-entry.  NULL before the first eval. */
+    void           *embed;
 } R7kCont;
 /* r7rs-callcc-memory-never-freed: images are kept small.  Consecutive
  * captures of one stack range differ in about one word in eighty (a
@@ -3535,6 +3535,8 @@ static bool r7k_slot_new(TuriEnv *env, R7kCont *c) {
 static void r7k_cont_free(R7kCont *c) {
     turi_cont_state_free(c->state);
     c->state = NULL;
+    turi_r7rs_embed_cont_free(c->embed);
+    c->embed = NULL;
     free(c->d_idx);
     free(c->d_val);
     c->d_idx = NULL;
@@ -3597,15 +3599,16 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
     if (!r7k_slot_new(env, c)) { free(c); return turi_int(0); }
     TuriEnv *volatile venv = env;
     c->owner = pthread_self();
-    c->bridge_call = turi_r7rs_embed_call_serial();
     turi_cont_pin();
     c->epoch = turi_cont_epoch();
     c->state = turi_cont_state_capture(env);
+    c->embed = turi_r7rs_embed_cont_capture(0);
     volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
     mark[0] = 0;
     if (R7K_SETJMP(c->jb) != 0) {
         R7kCont *rc = c;
         turi_cont_state_restore(venv, rc->state);
+        turi_r7rs_embed_cont_resumed(rc->embed);
         return turi_int(rc->handle | 1);
     }
     if (!c->state || !r7k_snapshot(c, (unsigned char *)mark)) {
@@ -3674,6 +3677,11 @@ static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, vo
     if (turi_is_error(r)) return r;
     return turi_nil();
 }
+static TuriValue r7k_not_resumable(void) {
+    return turi_error("call/cc: the continuation was captured inside an `eval` that has since "
+                      "returned; it cannot be resumed "
+                      "(docs/archive/r7rs-eval-continuation-reentry-across-bridge.md)");
+}
 static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
     R7kCont *c = r7k_cont_of(r7rs_arg_int(a, n, 0));
@@ -3681,10 +3689,7 @@ static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n
         return turi_error("r7rs-cont-restore__: the continuation's image was reclaimed "
                           "while it was still reachable (an interpreter bug: "
                           "r7rs-callcc-memory-never-freed)");
-    if (c->bridge_call && !turi_r7rs_embed_call_live(c->bridge_call))
-        return turi_error("call/cc: the continuation was captured inside a call from evaluated code "
-                          "to a program procedure, and that call has returned; the evaluator "
-                          "cannot resume it (docs/reported/r7rs-eval-continuation-reentry-across-bridge.md)");
+    if (!turi_r7rs_embed_cont_resumable(c->embed)) return r7k_not_resumable();
     /* S-5: the image is copied over the live stack below its base, so in a
      * provenance-tracked env it must have been taken under a top-level form
      * whose mark sits where the current one does, on this thread -- the
@@ -3695,7 +3700,27 @@ static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n
         return turi_error("r7rs-cont-restore__: the continuation was captured "
                           "under another prompt (S-5)");
     turi_cont_release_drives(c->lo + c->n);
+    turi_r7rs_embed_cont_restore(c->embed, c->lo + c->n);
     r7k_restore(c);
+}
+/* r7rs-cont-resumable?__ -- the prelude asks before the wind travel, so the
+ * refusal is an error object `guard` can catch and no thunk has run. */
+static TuriValue native_r7rs_cont_resumable(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    R7kCont *c = r7k_cont_of(r7rs_arg_int(a, n, 0));
+    /* A handle naming no continuation answers yes, so the restore reports it. */
+    return turi_bool(!c || turi_r7rs_embed_cont_resumable(c->embed));
+}
+/* r7rs-cont-hooks-install__ / r7rs-eval-c-cont-hook__ -- the compiled
+ * prelude's way to the evaluator's continuation hooks (r7rs_embed.h); here
+ * the capture above reaches them directly. */
+static TuriValue native_r7rs_cont_hooks_install(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_bool(true);
+}
+static TuriValue native_r7rs_eval_c_cont_hook(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(0);
 }
 
 /* r7rs-lang-plan T4: twins of stdlib/r7rs/eval.tur's inline C.  Both back
@@ -4064,6 +4089,7 @@ static const char *r7k_sweep_gate(TuriEnv *env) {
         env->timers_head || env->io_pending_head)
         return "the program has fibers, generators, futures, timers or pending I/O";
     if (g_r7k_untracked_store) return "a mutable map holds values";
+    if (turi_r7rs_embed_program_conts_live()) return "a program continuation holds the evaluator's frames";
     if (!r7k_stack_base()) return "the thread's stack base is unknown";
     pthread_t self = pthread_self();
     for (uint32_t i = 0; i < g_r7k_n_slots; i++) {
@@ -5130,6 +5156,9 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-cont-null?__",    native_r7rs_cont_null,     NULL);
     turi_env_register_native(env, "r7rs-cont-here?__",    native_r7rs_cont_here,     NULL);
     turi_env_register_native(env, "r7rs-cont-restore__",  native_r7rs_cont_restore,  NULL);
+    turi_env_register_native(env, "r7rs-cont-resumable?__", native_r7rs_cont_resumable, NULL);
+    turi_env_register_native(env, "r7rs-cont-hooks-install__", native_r7rs_cont_hooks_install, NULL);
+    turi_env_register_native(env, "r7rs-eval-c-cont-hook__", native_r7rs_eval_c_cont_hook, NULL);
     turi_env_register_native(env, "r7rs-toplevel__",       native_r7rs_toplevel,      NULL);
     /* r7rs-lang-plan T4: stdlib/r7rs/eval.tur. */
     turi_env_register_native(env, "r7rs-eval-c-eval__",             native_r7rs_eval_c_eval,             NULL);
