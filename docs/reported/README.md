@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing instance-method-match-fallthrough-return-unbridged (filed 2026-10-14)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [none-arm-not-grounded-by-sibling-some-arm](none-arm-not-grounded-by-sibling-some-arm.md) | low-medium (build failure; type error in the `if` form) | `(match c true (None) false (Some x))` in value position, its `(Option T)` not grounded by the enclosing function: `(None)` builds the erased carrier, `(Some x)` the monomorph, and the aggregate is stored into the carrier temp. The `if` form is "if branches have mismatched types". `(:: (None) (Option T))` works around both. |
+
 ## Found prototyping the generic zipper (filed 2026-10-13)
 
 Hit while prototyping
@@ -41,14 +47,15 @@ Hit while prototyping
 plan routes around all four; its section 5 also records D5 and four inference
 papercuts, which have no report of their own. D1
 ([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md))
-and D3
+D3
 ([byvalue-option-field-read-as-carrier-at-generic-call](../archive/byvalue-option-field-read-as-carrier-at-generic-call.md))
+and D4
+([instance-method-match-fallthrough-return-unbridged](../archive/instance-method-match-fallthrough-return-unbridged.md))
 were fixed and archived 2026-10-14.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md) | medium-high (correct program aborts at runtime) | A generic over a parametric `:heap` **sum** (`(defn bump [T] [f : (Fr T)] : (Fr T) ...)`) gets no spec clone, because `type_c_name` spells `(Fr T)` and `(Fr int)` alike as `int64_t` (`types.c:4768` names only products) and `emit_abi_register_call`'s C-name gate never fires. A constructor in the base body then hits the dead-base trap at runtime. The interpreter is right; without `:heap` it is right. |
-| [instance-method-match-fallthrough-return-unbridged](instance-method-match-fallthrough-return-unbridged.md) | medium (clang 15+/gcc 14 build failure) | An instance method declared `: (Cons a)` whose body is a `match` bridges every arm's return to the `int64_t` carrier but not the unreachable trailing `return __tN;` of the pointer-typed temp (`emit_fns.c:5070`). Blocks the zipper plan's `Plated` class (ZP3). |
 
 ## Found fixing cps-performing-fn-with-wide-adt-param-refused (filed 2026-10-13)
 

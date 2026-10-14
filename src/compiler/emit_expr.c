@@ -6513,6 +6513,46 @@ static bool emit_hkt_spec_app_result(EmitCtx *ctx, Type erased, Type *out) {
     return true;
 }
 
+/* The type a `match`'s RESULT temp is declared at.  The match's static type is
+ * the generic one, so inside a specialised body it has to be resolved the way
+ * the arms are:
+ *
+ *   M7: in a specialised instance-method body the static type is the generic
+ *   `(ReF b)` while every arm constructs the concrete `ctor_*__bool`
+ *   monomorph -- an `int64_t` temp is "incompatible types when assigning".
+ *   Resolution only upgrades a non-concrete app.
+ *
+ *   SR2b: a match whose result is the method tyvar itself -- `ok-val`'s `:A`
+ *   -- resolved by the active spec to anything with a non-carrier C spelling:
+ *   an aggregate, a double (`unwrap` over `(Option float)` printed 2 for 2.5
+ *   through an int64 temp), a cstr / void* / typed fn-pointer.  Gated on the
+ *   UNRESOLVED type being a tyvar so a genuinely erased site keeps the carrier
+ *   temp, and excluding the B4 recursive-carrier wrapper whose by-value form
+ *   IS the carrier word.
+ *
+ * Shared by the ADT and literal-pattern paths
+ * (instance-method-match-fallthrough-return-unbridged): the literal path
+ * declared from the static type alone, so `(match c true a false b)` returning
+ * `T` at float truncated 7.1 to 7 with no diagnostic, and at cstr or `(Option
+ * int)` was a cc error. */
+static Type match_result_temp_type(EmitCtx *ctx, const Expr *e) {
+    Type res_ty = e->type;
+    if (res_ty.kind == TY_APP && type_app_is_concrete_adt(&res_ty)) return res_ty;
+    Type _rr = emit_resolve_type(ctx, res_ty);
+    if (_rr.kind == TY_APP && type_app_is_concrete_adt(&_rr))
+        return _rr;
+    if (!emit_hkt_spec_app_result(ctx, _rr, &res_ty) &&
+        (e->type.kind == TY_TYVAR || e->type.kind == TY_FORALL) &&
+        strcmp(type_c_name(_rr), "int64_t") != 0 &&
+        !(_rr.kind == TY_ADT && _rr.as.adt_.def &&
+          adt_is_byval_recursive_carrier_wrapper(_rr.as.adt_.def)))
+        res_ty = _rr;
+    /* else: still erased -- inside a by-value HKT instance-method spec the
+     * match's result type is the bare parametric base while the arms build
+     * the monomorph; emit_hkt_spec_app_result above grounds that case. */
+    return res_ty;
+}
+
 /* SR2b: does the ACTIVE spec clone's own ABI -- its result or any argument,
  * resolved through the spec's bindings -- spell exactly this C type?  The
  * match-binder tyvar-substitution legs key on this: a clone's params and
@@ -20780,13 +20820,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * initializer") -- the ADT path below already says so;
                          * a literal-pattern match on a bool or an int returning
                          * a by-value `(Result float int)` hit it here. */
-                        Type _lrt = e->type;
+                        /* instance-method-match-fallthrough-return-unbridged:
+                         * declared at the RESOLVED type, as the ADT path below
+                         * is, and recorded so the arms' stores and the return
+                         * ladder read the real spelling. */
+                        Type _lrt = match_result_temp_type(ctx, e);
                         if (type_is_byvalue_adt_product(_lrt) ||
                             adt_app_is_byvalue_product(_lrt) ||
                             _lrt.kind == TY_ANY || _lrt.kind == TY_UNION)
                             buf_printf(body, "%s %s = {0};\n", type_c_name(_lrt), tmp);
                         else
                             buf_printf(body, "%s %s = 0;\n", type_c_name(_lrt), tmp);
+                        emit_localvar_record_ctype(tmp, type_c_name(_lrt));
                     }
                     char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
                     TypeKind _sk = e->as.match_.scrutinee->type.kind;
@@ -21014,43 +21059,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool nil_result = (e->type.kind == TY_NIL);
             char *tmp = NULL;
             if (!nil_result) {
-                /* M7: the RESULT temp needs the same resolution the scrutinee
-                 * just got, for the same reason -- in a specialised
-                 * instance-method body the match's static result type is the
-                 * generic `(ReF b)` while every arm constructs the concrete
-                 * `ctor_*__bool` monomorph, so declaring the temp from the
-                 * static type spells `int64_t` and each arm's store is
-                 * "incompatible types when assigning to type 'int64_t'".
-                 * Same narrowing: resolution only upgrades a non-concrete app. */
-                Type res_ty = e->type;
-                if (!(res_ty.kind == TY_APP && type_app_is_concrete_adt(&res_ty))) {
-                    Type _rr = emit_resolve_type(ctx, res_ty);
-                    if (_rr.kind == TY_APP && type_app_is_concrete_adt(&_rr))
-                        res_ty = _rr;
-                    else if (!emit_hkt_spec_app_result(ctx, _rr, &res_ty) &&
-                             (e->type.kind == TY_TYVAR || e->type.kind == TY_FORALL) &&
-                             strcmp(type_c_name(_rr), "int64_t") != 0 &&
-                             !(_rr.kind == TY_ADT && _rr.as.adt_.def &&
-                               adt_is_byval_recursive_carrier_wrapper(_rr.as.adt_.def))) {
-                        /* SR2b: a match whose RESULT is the method tyvar itself
-                         * -- `ok-val`'s `:A` -- resolved by the active spec to
-                         * any type with a non-carrier C spelling: an aggregate
-                         * (`(tur_adt_Point){0}` arms), a double (`unwrap` over
-                         * `(Option float)` printed 2 for 2.5 through an int64
-                         * temp), a cstr / void* / typed fn-pointer (each arm's
-                         * `(default-of A)` spells the typed null).  The arms
-                         * already emit the concrete type, so the erased temp is
-                         * the mismatch.  Gated on the UNRESOLVED type being a
-                         * tyvar so a genuinely erased site keeps the carrier
-                         * temp, and excluding the B4 recursive-carrier wrapper
-                         * whose by-value form IS the carrier word. */
-                        res_ty = _rr;
-                    }
-                    /* else: still erased -- inside a by-value HKT
-                     * instance-method spec the match's result type is the bare
-                     * parametric base while the arms build the monomorph;
-                     * emit_hkt_spec_app_result above grounds that case. */
-                }
+                /* M7 / SR2b: the RESULT temp needs the same resolution the
+                 * scrutinee just got (match_result_temp_type). */
+                Type res_ty = match_result_temp_type(ctx, e);
                 tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 /* Initialize to zero to silence -Wsometimes-uninitialized; exhaustiveness

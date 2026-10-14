@@ -7,7 +7,7 @@
 > **Type:** Stdlib (pure Turmeric, no inline C), plus five compiler defects
 > found while prototyping it (section 5).
 > **Track:** Additive and v1-compatible. ZP1, ZP2 and ZP4 land on today's
-> compiler. ZP3 waits on one emitter fix (D4).
+> compiler. ZP3 waited on one emitter fix, D4, which is fixed (2026-10-14).
 > **Builds on:** `stdlib/list.tur`'s `:heap` `(Cons A)`, `stdlib/lens.tur`'s
 > record encoding of optics, and regions
 > ([gc-guide](../guides/gc-guide.md), [memory-usage-guide](../guides/memory-usage-guide.md)).
@@ -38,7 +38,7 @@ zipper":
 
 - Use Clojure's design for the core. It is the only one that fits the type
   system today, and the prototype runs.
-- Add Uniplate/`Plated` as typeclass sugar once defect D4 is fixed.
+- Add Uniplate/`Plated` as typeclass sugar (defect D4, which blocked it, is fixed).
 - Build the element cursor from a record-encoded `Traversal`.
 - Defer the derivative-of-a-type approaches (McBride, `syz`) and Kmett's
   typed level stacks (section 2).
@@ -318,7 +318,7 @@ Each phase lands on its own, in its own PR against `main`.
 ### ZP0 -- compiler defects (in parallel; ZP1, ZP2 and ZP4 do not wait)
 
 Fix D1--D5 and I1--I4 from section 5, each pinned by its repro as a fixture.
-Only **D4** blocks a phase here (ZP3). D1--D3 block the nicer internal
+Only **D4** blocked a phase here (ZP3), and it is fixed. D1--D3 block the nicer internal
 encodings, which ZP1 avoids. The I-items each cost an ascription inside
 `zip.tur`. Fixing them removes those ascriptions, and the same papercuts
 also hit users writing their own `ZipOps`.
@@ -365,7 +365,7 @@ also hit users writing their own `ZipOps`.
   constant-folds a small arithmetic AST `defdata` and is the "why would I
   want this" example for the guide.
 
-### ZP3 -- `Plated` typeclass sugar (blocked on D4)
+### ZP3 -- `Plated` typeclass sugar (was blocked on D4, now fixed)
 
 ```turmeric
 (defclass Plated [a]
@@ -379,9 +379,11 @@ also hit users writing their own `ZipOps`.
 `Plated` is lens's name for "has children of its own type". It is also the
 right place for Uniplate's other combinators: `universe`, `transform` and
 `rewrite` need no zipper at all. Those are out of scope here but cheap to
-add on top. The prototype of exactly this class compiles except for D4.
-With the ops record made `:heap` (as in 3.1), D4 is the only remaining
-error.
+add on top. The prototype of exactly this class compiled except for D4.
+With the ops record made `:heap` (as in 3.1), D4 was the only remaining
+error. Since D4's fix, the class with a `match`-bodied instance for a
+`:heap` tree builds and runs under gcc and clang; `zip/plated` itself has
+not been built yet.
 
 ### ZP4 -- element cursor
 
@@ -529,9 +531,11 @@ the link a sum is still blocked, by D2 alone now that D1 is fixed.
 **D4 -- an instance method whose declared return is `(Cons a)`, with a
 `match` body, misses the pointer-to-word bridge on the fall-through
 `return`**
-([instance-method-match-fallthrough-return-unbridged](../reported/instance-method-match-fallthrough-return-unbridged.md)).
+([instance-method-match-fallthrough-return-unbridged](../archive/instance-method-match-fallthrough-return-unbridged.md)).
 The arm returns are bridged; the trailing `return __tN;` after
-the `switch` is not.
+the `switch` is not. **Fixed 2026-10-14**, pinned by
+`tests/fixtures/match-result-temp-typed-return`, which also covers a
+`(Vec a)`, `(Option a)`, `float` and `int` method result.
 
 ```turmeric
 (defdata R :heap :copy (Lf int) (Br (Cons R)))

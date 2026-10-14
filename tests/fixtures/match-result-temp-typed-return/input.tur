@@ -1,0 +1,88 @@
+;; A `match` result temp, and the values that leave through it.
+;;
+;; 1. instance-method-match-fallthrough-return-unbridged.  An instance method
+;;    declared `: (Cons a)` returns the int64 carrier (its dict slot's
+;;    spelling), and its tail `match` is TCO-routed: each arm returns on its
+;;    own, bridged, and the match's result temp `tur_adt_Cons__R *` is
+;;    returned once more after the switch, on a line nothing reaches.  That
+;;    return was spelled raw, `return __t70;` -- a -Wint-conversion, an error
+;;    under clang 15+ and gcc 14.  It now takes the shared return ladder.
+;;    The other class results here -- `(Vec a)`, `(Option a)`, `float`, `int`
+;;    -- already compiled; they pin that the ladder leaves them alone.
+;;
+;; 2. Found on the way: a LITERAL-pattern match declared its temp from the
+;;    match's static type, `T`, where the ADT path resolves it through the
+;;    active spec.  So `pick` at float stored 7.1 into an int64 temp and
+;;    printed 7, with no diagnostic; at cstr, or at an `(Option T)` result,
+;;    it was a cc error.
+
+(defdata R :heap :copy (Lf int) (Br (Cons R)))
+
+(defclass Kids [a] (kids [x : a] : (Cons a)))
+(definstance Kids [R]
+  (kids [r] (match r (Lf _) (tnil) (Br cs) cs)))
+
+(defclass Bag [a] (bag [x : a] : (Vec a)))
+(definstance Bag [R]
+  (bag [r] (match r
+             (Lf _) (let [v (vec-new)] (do (vec-push! v r) v))
+             (Br cs) (let [v (vec-new)] (do (vec-push! v (thead cs)) (vec-push! v r) v)))))
+
+(defclass First [a] (first-of [x : a] : (Option a)))
+(definstance First [R]
+  (first-of [r] (match r (Lf _) (None) (Br cs) (Some (thead cs)))))
+
+(defclass Weigh [a] (weigh [x : a] : float))
+(definstance Weigh [R]
+  (weigh [r] (match r (Lf n) (+ 0.25 7.1) (Br _) 0.5)))
+
+(defclass Count [a] (count-of [x : a] : int))
+(definstance Count [R]
+  (count-of [r] (match r (Lf n) n (Br cs) (tlength cs))))
+
+(defn gkids [T] [o : (Option (Cons T))] : (Cons T)
+  (match o
+    (None) (tnil)
+    (Some cs) cs))
+
+(defn val [r : R] : int
+  (match r
+    (Lf v) v
+    (Br _) -1))
+
+;; literal-pattern matches whose result is the type parameter
+(defn pick [T] [c : bool a : T b : T] : T
+  (match c
+    true a
+    false b))
+
+(defn pick-let [T] [c : bool a : T b : T] : T
+  (let [r (match c true a false b)]
+    r))
+
+(defn first-lit [T] [o : (Cons T)] : (Option T)
+  (match (tnil? o)
+    true (None)
+    false (Some (thead o))))
+
+(defn main [] : int
+  (let [t (Br (tcons-of (Lf 4) (tcons-of (Lf 5) (tnil))))
+        l (Lf 9)]
+    (println (tlength (kids t)))
+    (println (tlength (kids l)))
+    (println (vec-len (bag t)))
+    (println (vec-len (bag l)))
+    (println (match (first-of t) (None) -1 (Some x) (val x)))
+    (println (match (first-of l) (None) -1 (Some x) (val x)))
+    (println (weigh l))
+    (println (weigh t))
+    (println (count-of t))
+    (println (count-of l))
+    (println (tlength (gkids (Some (tcons-of 1 (tnil)))))))
+  (println (pick true 7.1 0.5))
+  (println (pick-let false 7.1 0.25))
+  (println (pick false 3 4))
+  (println (pick true "a" "b"))
+  (println (match (first-lit (tcons-of 3 (tnil))) (None) -1 (Some x) x))
+  (println (match (first-lit (tcons-of 2.5 (tnil))) (None) -1.5 (Some x) x))
+  0)
