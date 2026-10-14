@@ -75,9 +75,10 @@ through a named call, a function value, a rank-2 (`forall`) parameter, a
 lambda inside a generic, or an `export-as` function parks correctly. What
 still puts a nearer root in the way: a function the backend cannot take for
 another reason (an inline-C body, a signature shape it does not thread), a
-call through a CONSTRAINED rank-2 parameter, and a rank-2 call whose argument
-is computed in place where an argument or the result is a float or a pointer
-(`let`-bind the argument first). The compiled program refuses such a park at
+constrained generic passed to a constrained rank-2 parameter (pass a
+monomorphic function instead), and a rank-2 call with a struct argument or
+result, a nil result, or more than eight arguments. The compiled program
+refuses such a park at
 run time (`await: a pending future would park below a direct-style call`)
 instead of running the rest of the body with a dummy value.
 

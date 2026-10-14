@@ -10891,7 +10891,6 @@ static const char * shown_hybool(tur_poly_fn_t l, bool s) {
 
 static int64_t peek_hyint__cps(tur_poly_fn_t l, int64_t s, DK *__kont) {
     int64_t __t0;
-    int64_t __t1;
     void *__t235 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
     *(void (**)(void *))__t235 = 0;
     int64_t *__t234 = (int64_t *)((char *)__t235 + sizeof(void *));
@@ -10903,13 +10902,13 @@ static int64_t peek_hyint__cps(tur_poly_fn_t l, int64_t s, DK *__kont) {
         __dk_panic_abandon(__kont);
         return ((int64_t)0);
     }
-    __t0 = __ps_237;
-    __t1 = get_hyconst((int64_t)(intptr_t)__t0); /* cps->direct */
+    int64_t __ps_238 = (get_hyconst(__ps_237));
     if (tur_panicking) {
         __dk_panic_abandon(__kont);
         return ((int64_t)0);
     }
-    return dk_run(__kont, (intptr_t)(__t1));
+    __t0 = __ps_238;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static int64_t peek_hyint(tur_poly_fn_t l, int64_t s) {
     __dk_entry_depth++;
@@ -10941,18 +10940,18 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        const char * __ps_238 = (shown_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_60 }, INT64_C(7)));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        puts(__ps_238);
-        const char * __ps_239 = (shown_hybool((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_76 }, true));
+        const char * __ps_239 = (shown_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_60 }, INT64_C(7)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         puts(__ps_239);
-        int64_t __ps_240 = (peek_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_92 }, INT64_C(42)));
+        const char * __ps_240 = (shown_hybool((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_76 }, true));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%lld\n", (long long)(__ps_240));
-        int64_t __t241;
-        __t241 = INT64_C(0);
-        return (int)__t241;
+        puts(__ps_240);
+        int64_t __ps_241 = (peek_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_92 }, INT64_C(42)));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_241));
+        int64_t __t242;
+        __t242 = INT64_C(0);
+        return (int)__t242;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
@@ -10960,9 +10959,9 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_242 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_243 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_242;
+        return __ps_243;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
@@ -10981,9 +10980,9 @@ static void __defer_221(void *__env) {
 
 static void __defer_216(void *__env) {
     struct __defer_env_215 *__e = (struct __defer_env_215 *)__env;
-    bool __ps_243 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_244 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_243);
+    (void)(__ps_244);
 }
 
 

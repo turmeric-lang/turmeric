@@ -14385,9 +14385,23 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                     : "a form in its body has no lowering there";
                 /* A lifted lambda's name (`__fn_N`) is not one the user
                  * wrote; the span already points at its `(fn ...)`. */
-                char who[160];
+                char who[200];
+                const char *dc = fd->n_dict_clone ? strstr(nm, "__dict_") : NULL;
                 if (fd->binding->is_lifted_lambda) snprintf(who, sizeof who, "this lambda");
+                else if (dc)
+                    /* A dict-clone (`f__dict_N`): the copy of a constrained
+                     * generic `f` that a rank-2 parameter calls with its
+                     * dictionaries.  Name the function the user wrote. */
+                    snprintf(who, sizeof who, "`%.*s`, passed to a constrained rank-2 parameter,",
+                             (int)(dc - nm), nm);
                 else snprintf(who, sizeof who, "`%s`", nm);
+                /* Its class-method calls dispatch through the dictionary
+                 * parameters (ctx->dict_dispatch_*), set up by the direct
+                 * emitter after the CPS render is tried -- on the backend they
+                 * would bind the representative instance, so it stays off. */
+                if (dc) because = "a constrained generic used as a rank-2 value runs "
+                                  "as a dictionary-passing copy, which the backend "
+                                  "does not take";
                 diag_emit_with_code(DIAG_WARNING, fd->binding->span,
                     TUR_W0044_AWAITER_COMPILED_DIRECT,
                     "%s may await but is compiled direct-style: %s%s%s%s. "
@@ -14440,9 +14454,9 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* await-parks-only-to-the-nearest-c-frame: this function is on the
      * backend, but a call in it through a rank-2 parameter that may receive an
-     * awaiting function can still leave the chain: a constrained forall, or
-     * a computed argument with a float or pointer position, has no threaded
-     * lowering (fncps_forall_call_ok), so
+     * awaiting function can still leave the chain: a struct position, a nil
+     * result or more than CPS_FNCPS_MAX_ARGS arguments has no threaded
+     * lowering (fncps_forall_call_ok_as), so
      * it calls the value's direct entry and an await below it is refused at
      * run time.  Say so at the call, once per function. */
     if (!fd->await_evict_warned && cps_fn_may_await(fd) && fd->async_reachable) {
@@ -14453,15 +14467,15 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             diag_emit_with_code(DIAG_WARNING, bad->span,
                 TUR_W0044_AWAITER_COMPILED_DIRECT,
                 "`%s` calls `%s`, a rank-2 parameter that may be handed a "
-                "function that awaits, through its direct entry: a constrained "
-                "forall, or a computed argument with a float or pointer "
-                "argument or result, has no threaded lowering. Inside an async body, a pending future awaited "
+                "function that awaits, through its direct entry: a call with a "
+                "struct argument or result, a nil result, or more than eight "
+                "arguments has no threaded lowering. Inside an async body, a "
+                "pending future awaited "
                 "through it would park at that function's root instead of the "
                 "body's, so the program refuses the park at run time (`await: "
                 "a pending future would park below a direct-style call`); a "
-                "ready future is unaffected. Bind a computed argument with "
-                "`let` first, or take the awaiting function as a plain "
-                "`fn`-typed parameter",
+                "ready future is unaffected. Take the awaiting function as a "
+                "plain `fn`-typed parameter, or move the await out of it",
                 fd->binding->name ? fd->binding->name->name : "?",
                 pb->name ? pb->name->name : "?");
         }

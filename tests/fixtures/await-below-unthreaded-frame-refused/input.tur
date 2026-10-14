@@ -1,20 +1,15 @@
-;; await-parks-only-to-the-nearest-c-frame: the two shapes that still put a
-;; direct-style frame between an async body and its await.  Both draw
+;; await-parks-only-to-the-nearest-c-frame: the shape that still puts a
+;; direct-style frame between an async body and its await.  It draws
 ;; TUR-W0044 at compile time, and the compiled program refuses the park at
 ;; run time rather than losing the rest of the body.
 ;;
-;;   r2cf-apply -- a rank-2 call with a COMPUTED argument and a float
-;;                 position: the `.fn` fallback cannot re-render the call
-;;                 through the direct emitter, and its own cast matches the
-;;                 delegated one only on int / bool positions, so the call
-;;                 stays delegated.  `let`-binding the argument threads it.
-;;   r2e-apply  -- a constrained rank-2 call: the dictionary argument makes
-;;                 the call non-atomic, and the function evicts.
-;;
-;; main reaches the float shape first, and its refusal aborts the program;
-;; the constrained one is spawned after it, so it is reachable from an async
-;; body (which TUR-W0044 requires) but never runs.  Both warnings are
-;; compile-time.
+;; A CONSTRAINED GENERIC passed to a constrained rank-2 parameter runs as a
+;; dict-clone (`same-and-wait__dict_N`): a copy taking the dictionary as a
+;; real parameter, whose class-method calls dispatch through it.  That
+;; dispatch is set up by the direct emitter after the CPS render is tried, so
+;; the clone stays off the backend rather than bind the wrong instance.  (A
+;; MONOMORPHIC function passed to the same parameter threads; see
+;; await-through-rank2-param, r2-eq.)
 
 
 (defn cur-cell [fresh : bool] : ptr<void>
@@ -60,16 +55,12 @@
     (free-future f)
     v))
 
-(defn level3f [x : float] : float (+ x (as float (sum-values 0 300 0))))
-(defn r2cf-apply [f (forall [a] (-> a a)) x : float] : float (f (+ x 0.5)))
-(defn float-body [] : int (as int (r2cf-apply level3f 7.1)))
-
-(defn level3e [x : int y : int] : bool (> (+ x (sum-values 0 300 0)) y))
-(defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x 0))
-(defn eq-body [] : int (if (r2e-apply level3e 5) 1213 0))
+(defn same-and-wait [T] [(Eq T)] [x : T y : T] : bool
+  (and (eq? x y) (> (sum-values 0 300 0) 0)))
+(defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x x))
+(defn body [] : int (if (r2e-apply same-and-wait 5) 1213 0))
 
 (defn main [] : nil
   (cur-cell true)
-  (println (drive (async float-body)))
-  (println (drive (async eq-body)))
+  (println (drive (async body)))
   (free-future (cur-cell false)))

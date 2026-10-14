@@ -403,8 +403,7 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
  * arg (poly_arg_mask) crosses a different, wider ABI and is excluded (it stays
  * on the delegated direct path) -- except the all-int-word unconstrained
  * forall call, whose ABI is the slot's (fncps_forall_call_ok above). */
-/* await-parks-only-to-the-nearest-c-frame: a call through an UNCONSTRAINED
- * forall param (no dictionary slots, make_poly_wrapper's n_lead_ignore == 0)
+/* await-parks-only-to-the-nearest-c-frame: a call through a forall param
  * threads like a plain `fn` param.  The `fn_cps` slot is the word ABI: the
  * slot call packs every argument as a word (a float by its bits), and the
  * value's twin -- `__poly_N__cps(void *, int64_t..., DK *)`,
@@ -412,29 +411,42 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
  * type.  Delegated instead, the call entered the value's direct root, and an
  * await below it parked there: the runtime refused the park.
  *
+ * A CONSTRAINED forall is called with its dictionaries first (EX_DICT, the
+ * address of an instance singleton).  The value's wrapper takes them -- as
+ * ignored leading slots for a monomorphic inner, as real parameters for a
+ * dict-clone -- and so does its twin (ensure_poly_wrap_cps_thunk's
+ * n_lead_ignore), so the slot call passes every argument the `.fn` call does.
+ *
  * The `.fn` fallback (a value built without a twin) is NOT the slot ABI:
  * `.fn` holds whatever the elaborator built -- an int64 carrier adapter read
  * back through `(const char *)(intptr_t)`, or a typed wrapper.  With atomic
  * arguments the emitter renders that call through the direct emitter itself
  * (fncps_fallback_value), exactly as the delegated call was rendered, so any
- * slot kind threads.  With a computed argument it cannot re-render the call,
- * and its own slot-ABI cast matches the delegated one only for int and bool
- * positions; a float or pointer there stays delegated. */
+ * slot kind threads.  A computed argument is hoisted into a binder first
+ * (rank2_hoist_args), so this only meets one when the hoist could not run;
+ * its own slot-ABI cast then matches the delegated one on int and bool only. */
 static bool is_atomic(const Expr *e);   /* fwd */
 static bool fncps_forall_word_kind(TypeKind k) {
     return k == TY_INT || k == TY_INT64 || k == TY_BOOL;
 }
+/* An argument the fallback may re-render: an atom, or a dictionary (a
+ * constant address, with nothing to evaluate twice). */
+static bool rank2_atomic_arg(const Expr *a) {
+    return a && (a->kind == EX_DICT || is_atomic(a));
+}
 bool cps_ir_call_args_atomic(const Expr *call) {
     for (uint32_t i = 0; i < call->as.call_.n_args; i++)
-        if (!is_atomic(call->as.call_.args[i])) return false;
+        if (!rank2_atomic_arg(call->as.call_.args[i])) return false;
     return true;
 }
-static bool fncps_forall_call_ok(const Binding *fn, const Expr *e) {
+static bool fncps_forall_call_ok_as(const Binding *fn, const Expr *e, bool atomic) {
     const Type *pt = fn->poly_type;
-    if (pt->as.forall_.n_constraints) return false;
+    uint32_t nc = pt->as.forall_.n_constraints;
+    if (nc > e->as.call_.n_args) return false;
+    for (uint32_t i = 0; i < nc; i++)
+        if (e->as.call_.args[i]->kind != EX_DICT) return false;
     if (e->as.call_.poly_arg_mask) return false;
     if (e->type.kind == TY_NIL || !fncps_result_kind_ok(e->type.kind)) return false;
-    bool atomic = cps_ir_call_args_atomic(e);
     if (!atomic && !fncps_forall_word_kind(e->type.kind)) return false;
     for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
         TypeKind k = e->as.call_.args[i]->type.kind;
@@ -442,6 +454,9 @@ static bool fncps_forall_call_ok(const Binding *fn, const Expr *e) {
         if (!atomic && !fncps_forall_word_kind(k)) return false;
     }
     return true;
+}
+static bool fncps_forall_call_ok(const Binding *fn, const Expr *e) {
+    return fncps_forall_call_ok_as(fn, e, cps_ir_call_args_atomic(e));
 }
 static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
     if (!fn || !fn->is_poly_fn) return false;
@@ -455,8 +470,18 @@ static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {
     return true;
 }
 
+/* fncps_param_call_ok, or would be once rank2_hoist_args hoists the call's
+ * computed arguments (it always can: at most CPS_FNCPS_MAX_ARGS of them, into
+ * a fresh Pending).  The whole-expression delegation check and the warning
+ * scan ask this, since the call arms hoist before they ask the plain one. */
+static bool fncps_param_call_ok_hoisted(const Binding *fn, const Expr *e) {
+    if (fncps_param_call_ok(fn, e)) return true;
+    return fn && fn->is_poly_fn && fn->poly_type && fn->poly_type->kind == TY_FORALL
+        && e->as.call_.n_args <= CPS_FNCPS_MAX_ARGS
+        && fncps_forall_call_ok_as(fn, e, true);
+}
 bool cps_ir_fncps_param_call_threads(const Binding *fn, const Expr *call) {
-    return call && call->kind == EX_CALL && fncps_param_call_ok(fn, call);
+    return call && call->kind == EX_CALL && fncps_param_call_ok_hoisted(fn, call);
 }
 
 /* ---- small allocation helpers ----------------------------------------- */
@@ -2291,7 +2316,7 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
              * value passed to it is registered, so ONE pure fn-value passed in
              * another call sent an effectful lambda's `perform` off the
              * trampoline: "unhandled effect" from a program that compiled. */
-            if (fn && fncps_param_call_ok(fn, e))
+            if (fn && fncps_param_call_ok_hoisted(fn, e))
                 return false;
             /* Nor a call through an inlined alias of a fn param: its `let` is
              * dropped, so the direct emitter would name an undeclared local.
@@ -2486,6 +2511,11 @@ static bool safe_to_delegate(CpsB *b, const Expr *e) {
          * inline-C as a CT_LETRAW.  Unconditional since cps-tramp-resume
          * graduated (2026-07-19). */
         case EX_INLINE_C:  return true;
+        /* An implicit dictionary argument is the address of an instance
+         * singleton: a constant, emitted in place.  A constrained rank-2 call
+         * threads with it as its leading argument (fncps_forall_call_ok_as),
+         * which binds it here first (await-parks-only-to-the-nearest-c-frame). */
+        case EX_DICT:      return true;
         /* cps-evicts-handle-in-operand-positions: a reinterpret is a pure value
          * conversion the direct emitter lowers in place, so it is exactly as
          * delegatable as the value it converts.  A generic call whose result
@@ -2526,12 +2556,28 @@ static CAtom atomize(CpsB *b, Expr *e, Pending *p) {
     return atom_cvar(x);
 }
 
-/* Atomize every argument of a `fn_cps` call, left to right. */
+/* Atomize every argument of a `fn_cps` call, left to right.  A dictionary
+ * argument (a constrained rank-2 call's leading one) is bound at the int64
+ * word the direct emitter renders it as -- `(int64_t)(intptr_t)(&dict_..)` --
+ * not at its node's `ptr<void>`, which would declare the binder `void *`
+ * (await-parks-only-to-the-nearest-c-frame). */
 static CAtom *fncps_atomize_args(CpsB *b, const Expr *e, Pending *pp) {
     uint32_t n = e->as.call_.n_args;
     CAtom *args = arena_alloc(b->a, (n ? n : 1) * sizeof(CAtom));
-    for (uint32_t i = 0; i < n; i++)
-        args[i] = atomize(b, e->as.call_.args[i], pp);
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.call_.args[i];
+        if (a && a->kind == EX_DICT && pp->n < 32) {
+            Type *wt = arena_alloc(b->a, sizeof(Type));
+            memset(wt, 0, sizeof(Type));
+            wt->kind = TY_INT;
+            CVar x = fresh_cvar(b, wt);
+            pp->items[pp->n].expr = a; pp->items[pp->n].x = x;
+            pp->items[pp->n].reap_ok = false; pp->n++;
+            args[i] = atom_cvar(x);
+            continue;
+        }
+        args[i] = atomize(b, a, pp);
+    }
     return args;
 }
 
@@ -4997,6 +5043,40 @@ static Expr *cvar_expr(CpsB *b, CVar *y, const Type *ty, Span sp) {
     yv->as.var.binding = yb;
     return yv;
 }
+
+/* await-parks-only-to-the-nearest-c-frame: a call through a forall param with
+ * a computed argument -- `(f (+ x 0.5))`.  Its `.fn` fallback is the direct
+ * emitter's own rendering of the call, which must read only atoms, so hoist
+ * each computed argument into a fresh binder (cvar_expr: the binder's
+ * declaration and the re-rendered Expr spell the same C name), left to right,
+ * queued on `pp` for fold_pending to bind around the call.  Only when the
+ * hoisted call then threads (fncps_forall_call_ok_as); otherwise `e` comes
+ * back unchanged and `pp` untouched. */
+static Expr *rank2_hoist_args(CpsB *b, Expr *e, Pending *pp) {
+    const Binding *fn = e ? e->as.call_.fn_binding : NULL;
+    if (!fn || !fn->is_poly_fn || !fn->poly_type || fn->poly_type->kind != TY_FORALL)
+        return e;
+    uint32_t n = e->as.call_.n_args, need = 0;
+    for (uint32_t i = 0; i < n; i++)
+        if (!rank2_atomic_arg(e->as.call_.args[i])) need++;
+    if (!need || pp->n + need > 32 || n > CPS_FNCPS_MAX_ARGS) return e;
+    if (!fncps_forall_call_ok_as(fn, e, true)) return e;
+    Expr *c = arena_alloc(b->a, sizeof(Expr));
+    *c = *e;
+    Expr **na = arena_alloc(b->a, n * sizeof(Expr *));
+    for (uint32_t i = 0; i < n; i++) {
+        Expr *a = e->as.call_.args[i];
+        if (rank2_atomic_arg(a)) { na[i] = a; continue; }
+        CVar y = fresh_cvar(b, &a->type);
+        na[i] = cvar_expr(b, &y, &a->type, a->span);
+        pp->items[pp->n].expr = a;
+        pp->items[pp->n].x = y;
+        pp->items[pp->n].reap_ok = false;
+        pp->n++;
+    }
+    c->as.call_.args = na;
+    return c;
+}
 /* `x := reinterpret(e')` where e' carries control: bind e' to a fresh binder y
  * of e''s own type (any translation the operand needs), then x from a
  * synthesized reinterpret of y -- atomic, so delegated to the direct emitter,
@@ -5317,14 +5397,16 @@ static CTerm *cps_tail(CpsB *b, Expr *e, CKont kont) {
              * emitter picks `fn_cps` when populated (an effectful fn-value) and
              * the direct `f.fn` path otherwise, so a pure fn-value is unchanged.
              * Restricted to the slot's word ABI (fncps_param_call_ok). */
-            if (fncps_param_call_ok(fn, e)) {
-                Pending pp = {0};
-                CAtom *args = fncps_atomize_args(b, e, &pp);
+            Pending hp = {0};
+            Expr *ce = rank2_hoist_args(b, e, &hp);
+            if (fncps_param_call_ok(fn, ce)) {
+                Pending pp = hp;
+                CAtom *args = fncps_atomize_args(b, ce, &pp);
                 CTerm *t = new_term(b, CT_TAILCALL);
                 t->as.tailcall.fn = fn; t->as.tailcall.args = args;
-                t->as.tailcall.n = e->as.call_.n_args; t->as.tailcall.kont = kont;
+                t->as.tailcall.n = ce->as.call_.n_args; t->as.tailcall.kont = kont;
                 t->as.tailcall.via_fncps = true;
-                t->as.tailcall.call_expr = e;
+                t->as.tailcall.call_expr = ce;
                 return fold_pending(b, &pp, t);
             }
             /* A cps->direct call to an uncolored callee with atomic args is
@@ -5851,16 +5933,18 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
              * as a heap join `j(x)` and threads it to the closure's `fn_cps` slot
              * (or the direct `f.fn` path when NULL).  Mirrors the E2a via_registry
              * non-tail shape (int-register-class args). */
-            if (fncps_param_call_ok(fn, e)) {
-                Pending pp = {0};
-                CAtom *fargs = fncps_atomize_args(b, e, &pp);
+            Pending hp = {0};
+            Expr *ce = rank2_hoist_args(b, e, &hp);
+            if (fncps_param_call_ok(fn, ce)) {
+                Pending pp = hp;
+                CAtom *fargs = fncps_atomize_args(b, ce, &pp);
                 CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
                 CTerm *call = new_term(b, CT_TAILCALL);
                 call->as.tailcall.fn = fn; call->as.tailcall.args = fargs;
-                call->as.tailcall.n = e->as.call_.n_args; call->as.tailcall.kont = kont_var(j);
+                call->as.tailcall.n = ce->as.call_.n_args; call->as.tailcall.kont = kont_var(j);
                 call->as.tailcall.via_fncps = true;
-                call->as.tailcall.call_expr = e;
+                call->as.tailcall.call_expr = ce;
                 CTerm *t = new_term(b, CT_LETCONT);
                 t->as.letcont.j = j; t->as.letcont.param = x;
                 t->as.letcont.jbody = rest; t->as.letcont.body = call;
@@ -6516,5 +6600,5 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call) {
      * calls an unregistered value directly). */
     if (call_through_fat_param(call) && cps_ir_thread_param_has(p) && call_args_pendable(call))
         return true;
-    return fncps_param_call_ok(p, call);
+    return fncps_param_call_ok_hoisted(p, call);
 }

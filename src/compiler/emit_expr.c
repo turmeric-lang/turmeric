@@ -18881,8 +18881,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 if (ib && ib->is_global && effectful
                     && cps_ir_fncps_sig_ok(&ib->type)) {
                     char *iname = raw_name_for_binding(ib);
-                    char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname, &ib->type);
-                    fn_cps_arity = ib->type.as.fn.arity;
+                    /* The wrapper's leading dictionary slots: its arity is the
+                     * env, then those, then the inner's arguments. */
+                    uint32_t n_lead = 0;
+                    const Binding *wb = e->as.poly_wrap_.wrapper_binding;
+                    if (wb && wb->type.kind == TY_FN
+                        && wb->type.as.fn.arity > 1 + ib->type.as.fn.arity)
+                        n_lead = wb->type.as.fn.arity - 1 - ib->type.as.fn.arity;
+                    char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname, &ib->type, n_lead);
+                    fn_cps_arity = ib->type.as.fn.arity + n_lead;
                     /* twin==NULL means already emitted -- reuse the name. */
                     if (twin) { fn_cps_name = twin; }
                     else {

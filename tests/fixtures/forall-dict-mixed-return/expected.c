@@ -10677,28 +10677,56 @@ static int64_t poly_hyrank(int64_t x) {
         TUR_MUSTTAIL return __inst_Rank_rank_int(x);
 }
 
-static int64_t use_hyshow__cps(tur_poly_fn_t f, DK *__kont) {
-    const char * __t3;
-    int64_t __t2;
-    const char * __t1;
+static intptr_t use_hyshow_j1(intptr_t env, intptr_t __t1__slot) {
+    (void)env;
+    const char * __t1 = (const char *)(__t1__slot);
     int64_t __t0;
-    const char * __ps_204 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton)), (int64_t)(INT64_C(7))))));
-    if (tur_panicking) {
-        __dk_panic_abandon(__kont);
-        return ((int64_t)0);
-    }
-    __t3 = __ps_204;
-    puts(__t3);
-    __t2 = 0;
-    const char * __ps_205 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_bool_singleton)), (int64_t)(true)))));
-    if (tur_panicking) {
-        __dk_panic_abandon(__kont);
-        return ((int64_t)0);
-    }
-    __t1 = __ps_205;
     puts(__t1);
     __t0 = 0;
-    return dk_run(__kont, (intptr_t)("shown"));
+    return (intptr_t)("shown");
+}
+typedef struct { tur_poly_fn_t f0; } use_hyshow_j0_env;
+static intptr_t use_hyshow_j0(intptr_t env, intptr_t __t5__slot, DK *__kont) {
+    use_hyshow_j0_env *__cap = (use_hyshow_j0_env *)(intptr_t)env;
+    tur_poly_fn_t f = __cap->f0;
+    __dk_join_release_env((intptr_t)__cap);
+    const char * __t5 = (const char *)(__t5__slot);
+    int64_t __t4;
+    int64_t __t2;
+    puts(__t5);
+    __t4 = 0;
+    __t2 = (int64_t)(intptr_t)(&dict_Show_bool_singleton);
+    if (f.fn_cps) return ((int64_t (*)(void *, int64_t, int64_t, DK *))f.fn_cps)(f.env, (int64_t)(intptr_t)(__t2), (int64_t)(true), __dk_reap_node(dk_frame_join(use_hyshow_j1, 0, __kont))); /* E2 threaded fat fn-value heap join */
+    const char * __ps_204 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_bool_singleton)), (int64_t)(true)))));
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    const char * __fcv2 = __ps_204;
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    return dk_run(__dk_reap_node(dk_frame_join(use_hyshow_j1, 0, __kont)), (intptr_t)(__fcv2));
+}
+static int64_t use_hyshow__cps(tur_poly_fn_t f, DK *__kont) {
+    int64_t __t6;
+    __t6 = (int64_t)(intptr_t)(&dict_Show_int_singleton);
+    use_hyshow_j0_env *__ce_use_hyshow_j0 = (use_hyshow_j0_env *)malloc(sizeof(use_hyshow_j0_env));
+    __ce_use_hyshow_j0->f0 = f;
+    __dk_reap_ptr((intptr_t)__ce_use_hyshow_j0);
+    if (f.fn_cps) return ((int64_t (*)(void *, int64_t, int64_t, DK *))f.fn_cps)(f.env, (int64_t)(intptr_t)(__t6), (int64_t)(INT64_C(7)), __dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyshow_j0, (intptr_t)__ce_use_hyshow_j0, __kont), sizeof(use_hyshow_j0_env)))); /* E2 threaded fat fn-value heap join */
+    const char * __ps_205 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton)), (int64_t)(INT64_C(7))))));
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    const char * __fcv3 = __ps_205;
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    return dk_run(__dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyshow_j0, (intptr_t)__ce_use_hyshow_j0, __kont), sizeof(use_hyshow_j0_env))), (intptr_t)(__fcv3));
 }
 __attribute__((unused)) static const char * use_hyshow(tur_poly_fn_t f) {
     __dk_entry_depth++;
@@ -10714,24 +10742,58 @@ __attribute__((unused)) static const char * use_hyshow(tur_poly_fn_t f) {
     __dk_entry_leave(__root, __dk_reap_mark);
     return __ret;
 }
-static int64_t use_hyrank__cps(tur_poly_fn_t f, DK *__kont) {
-    int64_t __t0;
-    int64_t __t1;
+typedef struct { int64_t f0; } use_hyrank_j1_env;
+static intptr_t use_hyrank_j1(intptr_t env, intptr_t __t1__slot, DK *__kont) {
+    use_hyrank_j1_env *__cap = (use_hyrank_j1_env *)(intptr_t)env;
+    int64_t __t0 = __cap->f0;
+    __dk_join_release_env((intptr_t)__cap);
+    int64_t __t1 = (int64_t)(__t1__slot);
     int64_t __t2;
-    int64_t __ps_206 = (((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton)), (int64_t)(INT64_C(7))));
-    if (tur_panicking) {
-        __dk_panic_abandon(__kont);
-        return ((int64_t)0);
-    }
-    __t0 = __ps_206;
-    int64_t __ps_207 = (((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_bool_singleton)), (int64_t)(true)));
-    if (tur_panicking) {
-        __dk_panic_abandon(__kont);
-        return ((int64_t)0);
-    }
-    __t1 = __ps_207;
     __t2 = (__t0) + (__t1);
     return dk_run(__kont, (intptr_t)(__t2));
+}
+typedef struct { tur_poly_fn_t f0; } use_hyrank_j0_env;
+static intptr_t use_hyrank_j0(intptr_t env, intptr_t __t0__slot, DK *__kont) {
+    use_hyrank_j0_env *__cap = (use_hyrank_j0_env *)(intptr_t)env;
+    tur_poly_fn_t f = __cap->f0;
+    __dk_join_release_env((intptr_t)__cap);
+    int64_t __t0 = (int64_t)(__t0__slot);
+    int64_t __t3;
+    __t3 = (int64_t)(intptr_t)(&dict_Rank_bool_singleton);
+    use_hyrank_j1_env *__ce_use_hyrank_j1 = (use_hyrank_j1_env *)malloc(sizeof(use_hyrank_j1_env));
+    __ce_use_hyrank_j1->f0 = __t0;
+    __dk_reap_ptr((intptr_t)__ce_use_hyrank_j1);
+    if (f.fn_cps) return ((int64_t (*)(void *, int64_t, int64_t, DK *))f.fn_cps)(f.env, (int64_t)(intptr_t)(__t3), (int64_t)(true), __dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyrank_j1, (intptr_t)__ce_use_hyrank_j1, __kont), sizeof(use_hyrank_j1_env)))); /* E2 threaded fat fn-value heap join */
+    int64_t __ps_206 = (((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_bool_singleton)), (int64_t)(true)));
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    int64_t __fcv2 = __ps_206;
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    return dk_run(__dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyrank_j1, (intptr_t)__ce_use_hyrank_j1, __kont), sizeof(use_hyrank_j1_env))), (intptr_t)(__fcv2));
+}
+static int64_t use_hyrank__cps(tur_poly_fn_t f, DK *__kont) {
+    int64_t __t5;
+    __t5 = (int64_t)(intptr_t)(&dict_Rank_int_singleton);
+    use_hyrank_j0_env *__ce_use_hyrank_j0 = (use_hyrank_j0_env *)malloc(sizeof(use_hyrank_j0_env));
+    __ce_use_hyrank_j0->f0 = f;
+    __dk_reap_ptr((intptr_t)__ce_use_hyrank_j0);
+    if (f.fn_cps) return ((int64_t (*)(void *, int64_t, int64_t, DK *))f.fn_cps)(f.env, (int64_t)(intptr_t)(__t5), (int64_t)(INT64_C(7)), __dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyrank_j0, (intptr_t)__ce_use_hyrank_j0, __kont), sizeof(use_hyrank_j0_env)))); /* E2 threaded fat fn-value heap join */
+    int64_t __ps_207 = (((int64_t(*)(void*, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton)), (int64_t)(INT64_C(7))));
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    int64_t __fcv3 = __ps_207;
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    return dk_run(__dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyrank_j0, (intptr_t)__ce_use_hyrank_j0, __kont), sizeof(use_hyrank_j0_env))), (intptr_t)(__fcv3));
 }
 __attribute__((unused)) static int64_t use_hyrank(tur_poly_fn_t f) {
     __dk_entry_depth++;

@@ -1566,6 +1566,13 @@ static void cps_ar_refs(const Expr *e, CpsAsyncReachUd *u) {
     if (!e) return;
     if (e->kind == EX_CALL) cps_ar_mark_binding(u, e->as.call_.fn_binding);
     else if (e->kind == EX_VAR) cps_ar_mark_binding(u, e->as.var.binding);
+    else if (e->kind == EX_POLY_WRAP) {
+        /* A rank-2 value is the wrapper (`__poly_N`) the elaborator minted,
+         * and for a constrained generic the dict-clone it forwards to: both
+         * run when the value is called. */
+        cps_ar_mark_binding(u, e->as.poly_wrap_.wrapper_binding);
+        cps_ar_mark_binding(u, e->as.poly_wrap_.dict_clone_binding);
+    }
     else if (e->kind == EX_CLOSURE && e->as.closure_.closure)
         cps_ar_mark(u, e->as.closure_.closure->fn);
     cps_visit_children(e, cps_ar_refs_visit, u);

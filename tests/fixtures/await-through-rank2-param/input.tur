@@ -18,7 +18,15 @@
 ;;                 them), and its `.fn` fallback is rendered by the direct
 ;;                 emitter, as the delegated call was.
 ;;   r2-cstr    -- a string result, likewise.
-;;   r2-computed -- a computed int argument `(f (+ x 1))`.
+;;   r2-computed -- a computed argument `(f (+ x 1))`; r2-cfloat the same at
+;;                 a float.  The call's computed arguments are hoisted into
+;;                 binders first (rank2_hoist_args), so its fallback can be
+;;                 re-rendered over atoms.
+;;   r2-eq      -- a CONSTRAINED rank-2 call `(f x 0)` through
+;;                 `(forall [a] [(Eq a)] ...)`: the dictionary is its leading
+;;                 argument, and the value's twin takes it too (and ignores it,
+;;                 for a monomorphic function); r2-eq-computed with a computed
+;;                 argument.
 ;;
 ;; Every body awaits a pending future each turn; the driver fulfills it with
 ;; 2 and hands out a fresh one.  Leak-checked (requires.leak-check).
@@ -101,6 +109,17 @@
 (defn r2c-apply [f (forall [a] (-> a a)) x : int] : int (f (+ x 1)))
 (defn r2-computed [] : int (+ 7 (* 2 (r2c-apply level3 2))))
 
+;; r2-cfloat
+(defn r2cf-apply [f (forall [a] (-> a a)) x : float] : float (f (+ x 0.5)))
+(defn r2-cfloat [] : int (+ 606 (as int (r2cf-apply level3f 7.1))))
+
+;; r2-eq, r2-eq-computed
+(defn level3e [x : int y : int] : bool (> (+ x (sum-values 0 300 0)) y))
+(defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x 0))
+(defn r2e-computed [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f (+ x 1) 0))
+(defn r2-eq [] : int (if (r2e-apply level3e 5) 1213 0))
+(defn r2-eq-computed [] : int (if (r2e-computed level3e 5) 1213 0))
+
 (defn main [] : nil
   (cur-cell true)
   ;; 7 + 2 * (3 + 600), four times
@@ -112,4 +131,8 @@
   (println (drive (async r2-float)))
   (println (drive (async r2-cstr)))
   (println (drive (async r2-computed)))
+  ;; 606 + int(7.1 + 0.5 + 600)
+  (println (drive (async r2-cfloat)))
+  (println (drive (async r2-eq)))
+  (println (drive (async r2-eq-computed)))
   (free-future (cur-cell false)))

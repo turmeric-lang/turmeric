@@ -1,5 +1,13 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-14 (eighth pass): both refusals the seventh pass left now
+park.** A constrained rank-2 call and a rank-2 call with a computed float or
+pointer argument print the right answer. What is left is narrower: a
+constrained GENERIC passed as a constrained rank-2 value (it runs as a
+dict-clone the backend does not take), and a rank-2 call with a struct
+position, a nil result or more than eight arguments. Each warns and is
+refused at run time. See "Eighth pass" at the end.
+
 **Narrowed 2026-10-14 (seventh pass): the shapes left open by the sixth pass
 park.** An `export-as` function, a lambda inside a generic capturing a `T`
 (at `bool`, `int`, `float`, `cstr`, a struct, and in a constrained generic),
@@ -454,3 +462,63 @@ generic fixtures.
   call over the translator's own argument temps.
 - Any other eviction an awaiter can hit (an inline-C body, a signature shape
   the backend does not thread) stays the run-time refusal, warned.
+
+### Eighth pass (2026-10-14): constrained and computed rank-2 calls
+
+| Shape | Seventh pass | Now |
+|---|---|---|
+| constrained rank-2 call, `(f x 0)` through `(forall [a] [(Eq a)] ...)` | refused, warned | 1213 |
+| the same with a computed argument | refused, warned | 1213 |
+| rank-2 call with a computed float argument | refused, warned | 607 (7.1 + 0.5 + 600) |
+| a constrained GENERIC passed to that parameter | refused, no warning | refused, warned |
+| rank-2 call with a struct position | refused, warned | refused, warned |
+
+- **Computed arguments are hoisted.** The call arms bind each computed
+  argument of a rank-2 call to a fresh binder first (`rank2_hoist_args`,
+  over `cvar_expr`, whose synthesized binding makes the binder's declaration
+  and the re-rendered call spell the same C name), left to right. The call
+  then reads only atoms, so its `.fn` fallback is the direct emitter's own
+  rendering for every slot kind. The whole-expression delegation check,
+  the warning scan and `cps_ir_param_call_threads` ask the hoisted form of
+  the predicate (`fncps_param_call_ok_hoisted`): the delegation check had
+  read the unhoisted call as unthreadable and delegated it whole.
+- **Constrained calls thread.** A constrained forall is called with its
+  dictionaries first (`EX_DICT`, a constant address). The predicate accepts
+  them there (`fncps_forall_call_ok_as`), `safe_to_delegate` accepts an
+  `EX_DICT`, and the slot call binds each at the int64 word the direct
+  emitter renders it as (a `void *` binder was a `-Wint-conversion`). The
+  value's twin had the INNER function's arity, without the dictionary slot
+  the `.fn` adapter takes (`__poly_dictskip`); it now takes the wrapper's
+  leading dictionary words and ignores them (`ensure_poly_wrap_cps_thunk`'s
+  `n_lead_ignore`, from the wrapper's arity). No caller used a constrained
+  value's twin before, so its arity change reaches nothing else.
+- **Snapshots.** Seven constrained-forall fixtures
+  (`forall-dict-mixed-return`, `forall-dict-two-scalar`,
+  `van-laarhoven-lens-show*`) now thread their calls through the slot, as
+  unconstrained ones already did; their `expected.c` is regenerated and
+  their output unchanged.
+- **The dict-clone shape now warns.** The reachability walk followed a
+  poly-wrap to the generic, never to the wrapper or the dict-clone it
+  calls; it marks both now. The warning names the generic the user wrote
+  ("`same-and-wait`, passed to a constrained rank-2 parameter") and says
+  why.
+
+Pinned by four shapes added to `await-through-rank2-param` (computed float,
+constrained, constrained-and-computed) and by
+`await-below-unthreaded-frame-refused`, now the dict-clone refusal. Full
+suite 3796/0 (seven snapshots regenerated), leak-check 209/0 (4 known-open),
+fnsan 220/0 over forall / await / async / generic / lens / dict fixtures.
+
+**Still open:**
+
+- *A constrained generic passed as a constrained rank-2 value.* It runs as a
+  dict-clone (`f__dict_N`) whose class-method calls dispatch through its
+  dictionary parameters (`ctx->dict_dispatch_*`, set in `emit_fns.c` AFTER
+  `emit_cps_ir_try_fn` is tried). On the backend those calls would bind the
+  representative instance -- a wrong answer -- so it stays off. Fixing it
+  means establishing the dispatch context before the CPS render (and a
+  twin for the clone's type-variable parameters).
+- *A rank-2 call with a struct argument or result, a nil result, or more
+  than eight arguments*: the `fn_cps` slot is a word ABI. Seen on the way: a
+  function reading a field of such a call's struct result also evicts
+  (`unsupported form: EX_GET_FIELD`).
