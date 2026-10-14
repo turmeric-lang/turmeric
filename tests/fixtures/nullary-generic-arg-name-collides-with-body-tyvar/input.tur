@@ -1,0 +1,30 @@
+;; generic-zipper-plan: a return-only generic call -- `(tnil)` -- inside a
+;; generic body whose type variable has the SAME spelling as the callee's
+;; (`A` in both `lf [A]` and `tnil [A]`).  The nullary call's result keeps the
+;; name but is an open slot, so it must be pinned like any other: `(make-struct
+;; R :kids (tnil))` against `(Cons (R A))` was rejected ("expected (Cons (R
+;; A)), got (Cons A)"), and once accepted the nested `(tcons-of a (tcons-of b
+;; (tnil)))` emitted an unspecialized `tnil()` and cast `(Cons (R int))` to
+;; `tur_adt_Cons__int *` -- the callee's `A` read through the caller's spec.
+;; Each body below is instantiated at int and at float.
+(defstruct R :heap :copy [A] (label A) (kids (Cons (R A))))
+
+(defn lf [A] [x : A] : (R A) (make-struct R :label x :kids (tnil)))
+(defn node2 [A] [x : A a : (R A) b : (R A)] : (R A)
+  (make-struct R :label x :kids (tcons-of a (tcons-of b (tnil)))))
+(defn node2t [T] [x : T a : (R T) b : (R T)] : (R T)
+  (make-struct R :label x :kids (tcons-of a (tcons-of b (tnil)))))
+(defn node2asc [A] [x : A a : (R A) b : (R A)] : (R A)
+  (make-struct R :label x :kids (tcons-of a (tcons-of b (:: (tnil) (Cons (R A)))))))
+
+(defn second-label [A] [r : (R A)] : A (.label (thead (ttail (.kids r)))))
+
+(defn main [] : int
+  (println (second-label (node2 1 (lf 2) (lf 3))))
+  (println (second-label (node2t 1 (lf 2) (lf 3))))
+  (println (second-label (node2asc 1 (lf 2) (lf 3))))
+  (println (second-label (node2 0.5 (lf 1.25) (lf 7.1))))
+  (println (second-label (node2t 0.5 (lf 1.25) (lf 7.1))))
+  (println (second-label (node2asc 0.5 (lf 1.25) (lf 7.1))))
+  (println (tlength (.kids (lf 4))))
+  0)

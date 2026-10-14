@@ -3558,6 +3558,7 @@ Expr *elab_ascribe(Elab *e, const Form *call) {
 
     /* Build ascription node — the expression's type is overridden by the ascribed type
      * for downstream type-checking purposes. Type is erased at codegen. */
+    elab_ground_free_poly_call(e, inner, ascribed);
     Expr *out = expr_new(e->arena, EX_ASCRIBE, *ascribed, call->span);
     out->as.ascribe_.inner = inner;
     out->as.ascribe_.type_form = type_form;

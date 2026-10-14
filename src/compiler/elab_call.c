@@ -1416,6 +1416,80 @@ static bool ng_type_names_sig_tyvar(const Elab *e, const Type *t) {
     return false;
 }
 
+/* The same question, ignoring an OPEN-slot variable: a return-only generic
+ * call's own result variable that happens to share the enclosing signature's
+ * spelling -- `(tnil)` inside `(defn leaf [A] ...)` is `(Cons A)` with an
+ * open `A` -- is the callee's, not the body's (see the rename-apart in
+ * call-result typing, which keeps the name and marks it open). */
+static bool ng_type_names_rigid_sig_tyvar(const Elab *e, const Type *t) {
+    if (!t) return false;
+    if (t->kind == TY_TYVAR)
+        return !t->as.tyvar_.open_slot && ng_tyvar_in_sig(e, t->as.tyvar_.name);
+    if (t->kind == TY_APP)
+        return ng_type_names_rigid_sig_tyvar(e, t->as.app.fn) ||
+               ng_type_names_rigid_sig_tyvar(e, t->as.app.arg);
+    return false;
+}
+
+/* nullary-generic-arg-under-body-tyvar (generic-zipper-plan I1): is every
+ * named tyvar in the application `t` one the ENCLOSING signature quantifies?
+ * Inside `(defn mk [T] ...)` the parameter `(Cons T)` is as ground as this
+ * body can make it -- `T` is the body's own abstract type, which each
+ * specialization substitutes -- so a nullary call's fresh variable may be
+ * pinned to it exactly as to a concrete type.  Only applications and bare
+ * variables are walked; anything else that names a variable answers false. */
+static bool ng_type_only_sig_tyvars(const Elab *e, const Type *t) {
+    if (!t) return true;
+    if (t->kind == TY_TYVAR)
+        return !t->as.tyvar_.name || ng_tyvar_in_sig(e, t->as.tyvar_.name);
+    if (t->kind == TY_APP)
+        return ng_type_only_sig_tyvars(e, t->as.app.fn) &&
+               ng_type_only_sig_tyvars(e, t->as.app.arg);
+    return !call_type_has_named_tyvar(t);
+}
+
+static bool call_find_type_binding(CallTypeBinding *bindings, uint8_t n_bindings,
+                                   const char *name, uint8_t *out_idx);
+
+/* Is every named tyvar of the callee's parameter type `t` already bound by
+ * this call's siblings?  A variable left unbound would print -- and match --
+ * under its own name, which may coincide with one the enclosing signature
+ * quantifies; ng_type_only_sig_tyvars must not mistake it for the body's. */
+static bool ng_all_tyvars_bound(const Type *t, CallTypeBinding *bindings,
+                                uint8_t n_bindings) {
+    if (!t) return true;
+    if (t->kind == TY_TYVAR)
+        return !t->as.tyvar_.name ||
+               call_find_type_binding(bindings, n_bindings, t->as.tyvar_.name, NULL);
+    if (t->kind == TY_APP)
+        return ng_all_tyvars_bound(t->as.app.fn, bindings, n_bindings) &&
+               ng_all_tyvars_bound(t->as.app.arg, bindings, n_bindings);
+    return !call_type_has_named_tyvar(t);
+}
+
+/* Does `t` name at least one type variable, and only ones the ENCLOSING
+ * signature does NOT quantify?  Those are the free variables of a
+ * return-only generic call's result -- `(box-trav)`'s `(Trav (Box A) A)` --
+ * which nothing has fixed yet.  Only applications and bare variables are
+ * walked; anything else that names a variable answers false. */
+static bool ng_type_free_open_rec(const Elab *e, const Type *t, bool *named) {
+    if (!t) return true;
+    if (t->kind == TY_TYVAR) {
+        if (!t->as.tyvar_.name) return true;
+        *named = true;
+        return t->as.tyvar_.open_slot || !ng_tyvar_in_sig(e, t->as.tyvar_.name);
+    }
+    if (t->kind == TY_APP)
+        return ng_type_free_open_rec(e, t->as.app.fn, named) &&
+               ng_type_free_open_rec(e, t->as.app.arg, named);
+    return !call_type_has_named_tyvar(t);
+}
+
+static bool ng_type_free_open(const Elab *e, const Type *t) {
+    bool named = false;
+    return e && ng_type_free_open_rec(e, t, &named) && named;
+}
+
 /* M7 (typed `Cons` tail): an application argument carrying the enclosing
  * body's abstract tyvar -- `(Cons A)` from an ascription or a recursive call
  * inside `(defn rec [A] [(C A)] ...)` -- against the parameter instantiated
@@ -1529,6 +1603,45 @@ static bool call_type_tyvars_all_in_sig(const Elab *e, const Type *t) {
  * argument check, NULL everywhere else. */
 static const Elab *g_call_cb_elab = NULL;
 
+static Type call_instantiate_type(Elab *e, const Type *t,
+                                  CallTypeBinding *bindings, uint8_t n_bindings);
+static bool call_collect_type_bindings(const Type *expected, Type actual,
+                                       CallTypeBinding *bindings, uint8_t *n_bindings);
+
+/* generic-zipper-plan I1: `(wrap x (tnil))` inside `(defn mk [T] [x : T]
+ * ...)` against `[x : T xs : (Cons T)]`.  Arg 1 bound the callee's `T` to the
+ * BODY's abstract `T`, so the instantiated parameter `inst` is `(Cons T)` --
+ * open only in the enclosing signature's variables, which every
+ * specialization of this body grounds.  Pin the nullary call's own variable
+ * to it, as for a concrete parameter: the recorded `A := T` is composed
+ * through the active specialization at emit (generic-from-generic call), as
+ * an ascription `(:: (tnil) (Cons T))` would be.  The callee's parameter
+ * must be fully bound by the siblings (an unbound variable spelled like one
+ * of the body's would otherwise pass for it), and the argument must name no
+ * RIGID variable of the body's.  True when it grounded the argument. */
+static bool ng_ground_nullary_arg(Elab *e, Expr *arg, const Type *expected_full,
+                                  Type inst, CallTypeBinding *type_bindings,
+                                  uint8_t n_type_bindings) {
+    if (!arg || arg->kind != EX_CALL || inst.kind != TY_APP || e->n_sig_tyvars == 0)
+        return false;
+    if (!ng_all_tyvars_bound(expected_full, type_bindings, n_type_bindings) ||
+        !ng_type_names_sig_tyvar(e, &inst) || !ng_type_only_sig_tyvars(e, &inst) ||
+        ng_type_names_rigid_sig_tyvar(e, &arg->type))
+        return false;
+    CallTypeBinding ngscratch[16];
+    uint8_t ngn = 0;
+    if (!call_collect_type_bindings(&arg->type, inst, ngscratch, &ngn)) return false;
+    if (ngn > 0 && !arg->as.call_.abi_bindings) {
+        AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(
+            e->arena, ngn * sizeof(AbiTypeBinding));
+        for (uint8_t bi = 0; bi < ngn; bi++) saved[bi] = ngscratch[bi];
+        arg->as.call_.abi_bindings   = saved;
+        arg->as.call_.n_abi_bindings = ngn;
+    }
+    arg->type = inst;
+    return true;
+}
+
 static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        CallTypeBinding *bindings, uint8_t *n_bindings) {
     if (!expected) return true;
@@ -1606,6 +1719,37 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                                        bindings[idx].type.as.tyvar_.name)))) {
                     bindings[idx].type = actual;
                     return true;
+                }
+                /* generic-zipper-plan I3: the same provisional binding, one
+                 * level down.  `(get-first (box-trav) b)` against `[t : (Trav
+                 * S A) s : S]` bound `S` to `(Box A)` from the nullary call's
+                 * result -- an application whose variables nothing fixed --
+                 * and `b : (Box int)` then failed "expected (Box A), got (Box
+                 * int)".  When the later argument fills exactly those free
+                 * variables (and names none of its own beyond the enclosing
+                 * signature's), it takes the binding's place, and what it
+                 * fixed the free variables to is substituted into every
+                 * other binding that still carries them (`A := A` becomes `A
+                 * := int`), so the grounding pass below the argument loop
+                 * grounds the nullary call itself. */
+                if (bindings[idx].type.kind == TY_APP && actual.kind == TY_APP &&
+                    g_call_cb_elab &&
+                    ng_type_free_open(g_call_cb_elab, &bindings[idx].type) &&
+                    ng_type_only_sig_tyvars(g_call_cb_elab, &actual)) {
+                    CallTypeBinding fsub[16];
+                    uint8_t n_fsub = 0;
+                    if (call_collect_type_bindings(&bindings[idx].type, actual,
+                                                   fsub, &n_fsub)) {
+                        Elab *ce = (Elab *)g_call_cb_elab;
+                        for (uint8_t bj = 0; bj < *n_bindings; bj++) {
+                            if (bj == idx) continue;
+                            if (ng_type_free_open(g_call_cb_elab, &bindings[bj].type))
+                                bindings[bj].type = call_instantiate_type(
+                                    ce, &bindings[bj].type, fsub, n_fsub);
+                        }
+                        bindings[idx].type = actual;
+                        return true;
+                    }
                 }
                 /* m5-eq-vec-rewrite-fn-arg-loses-annotation step 2 (fix-i v2):
                  * a prior TYVAR-named binding (from an earlier same-tyvar
@@ -8571,7 +8715,7 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                  * argument is in (below the loop). */
                 if (arg_ok && expected_full->kind == TY_APP &&
                     w2_arg_is_free_poly_call(args[i]) &&
-                    !ng_type_names_sig_tyvar(e, &args[i]->type)) {
+                    !ng_type_names_rigid_sig_tyvar(e, &args[i]->type)) {
                     Type inst_now = call_instantiate_type(e, expected_full,
                                                           type_bindings, n_type_bindings);
                     if (call_type_has_named_tyvar(&inst_now)) {
@@ -8616,6 +8760,15 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                     Type inst = call_instantiate_type(e, expected_full,
                                                       type_bindings, n_type_bindings);
                     if (ng_erased_match(e, &inst, &args[i]->type)) arg_ok = true;
+                    /* ...unless the name only COLLIDES: `(tnil)` inside `(defn
+                     * leaf [A] ...)` against `(Cons (Rose A))` -- its `A` is
+                     * the open result variable of the nullary call, which the
+                     * grounding below pins like any other. */
+                    else if (!ng_type_names_rigid_sig_tyvar(e, &args[i]->type) &&
+                             w2_arg_is_free_poly_call(args[i]) &&
+                             ng_ground_nullary_arg(e, args[i], expected_full, inst,
+                                                   type_bindings, n_type_bindings))
+                        arg_ok = true;
                 } else if (!arg_ok && expected_full->kind == TY_APP &&
                     args[i]->type.kind == TY_APP &&
                     w2_arg_is_free_poly_call(args[i])) {
@@ -8636,6 +8789,10 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                             args[i]->type = inst;
                             arg_ok = true;
                         }
+                    } else if (ng_ground_nullary_arg(e, args[i], expected_full, inst,
+                                                     type_bindings, n_type_bindings)) {
+                        /* generic-zipper-plan I1 -- see ng_ground_nullary_arg. */
+                        arg_ok = true;
                     } else if (inst.kind == TY_APP && i + 1 < n_args &&
                                !ng_type_names_sig_tyvar(e, &args[i]->type)) {
                         /* open-arg-first-binds-call-result-as-int: the
@@ -10468,7 +10625,15 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
             Type inst = call_instantiate_type(e, pf, type_bindings, n_type_bindings);
             CallTypeBinding ogscratch[16];
             uint8_t ogn = 0;
-            bool grounded = inst.kind == TY_APP && !call_type_has_named_tyvar(&inst);
+            /* generic-zipper-plan I3: grounded to the ENCLOSING body's own
+             * variables counts too (`(get-first (box-trav) b)` inside
+             * `gen-first [T]` grounds `(box-trav)` to `(Trav (Box T) T)`);
+             * the recorded `A := T` is composed through the active
+             * specialization at emit, as the nullary-argument block does. */
+            bool grounded = inst.kind == TY_APP &&
+                (!call_type_has_named_tyvar(&inst) ||
+                 (e->n_sig_tyvars > 0 && ng_type_only_sig_tyvars(e, &inst) &&
+                  !ng_type_names_rigid_sig_tyvar(e, &args[i]->type)));
             if (!grounded ||
                 !call_collect_type_bindings(&args[i]->type, inst, ogscratch, &ogn)) {
                 if (!open_first_strict[i]) continue;
@@ -12668,6 +12833,36 @@ Binding *poly_arg_fn_binding(Expr *arg) {
     }
     if (arg->kind == EX_ASCRIBE) return poly_arg_fn_binding(arg->as.ascribe_.inner);
     return NULL;
+}
+
+/* generic-zipper-plan I3, the ASCRIBED spelling: `(:: (box-trav) (Trav (Box
+ * T) T))` inside `(defn gen-first [T] ...)`.  The nullary-argument block and
+ * the grounding pass below a call's argument loop record the substitution a
+ * return-only generic call is grounded to (`A := T`) so emit composes it
+ * through the active specialization; an ascription did not, and every
+ * specialization of the enclosing body called the base generic -- whose
+ * lifted closures construct through the dead base constructor.  Record it
+ * here too.  Only for a target open in the enclosing signature's variables:
+ * a fully concrete target (`(:: (vec-new) (Vec int))`) already specializes
+ * through the ascription's own path. */
+void elab_ground_free_poly_call(Elab *e, Expr *call, const Type *target) {
+    if (!e || !call || !target || call->kind != EX_CALL || target->kind != TY_APP)
+        return;
+    if (call->as.call_.abi_bindings || call->type.kind != TY_APP) return;
+    if (!w2_arg_is_free_poly_call(call)) return;
+    if (e->n_sig_tyvars == 0 || ng_type_names_rigid_sig_tyvar(e, &call->type)) return;
+    if (!ng_type_names_sig_tyvar(e, target) || !ng_type_only_sig_tyvars(e, target))
+        return;
+    CallTypeBinding scratch[16];
+    uint8_t n = 0;
+    if (!call_collect_type_bindings(&call->type, *target, scratch, &n) || n == 0)
+        return;
+    AbiTypeBinding *saved = (AbiTypeBinding *)arena_alloc(e->arena,
+                                                          n * sizeof(AbiTypeBinding));
+    for (uint8_t bi = 0; bi < n; bi++) saved[bi] = scratch[bi];
+    call->as.call_.abi_bindings   = saved;
+    call->as.call_.n_abi_bindings = n;
+    call->type = *target;
 }
 
 /* Phase HRT1: Elaborate a call through a rank-2 polymorphic function parameter.

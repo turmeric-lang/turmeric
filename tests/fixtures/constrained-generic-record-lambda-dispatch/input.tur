@@ -1,0 +1,48 @@
+;; plated-ops-closure-dispatch-baked (generic-zipper-plan): a constrained
+;; generic stores lambdas that call class methods into a record --
+;; `(fn [x : T] : bool (pb? x))` inside `pl-ops [^Pl T]`, the shape of
+;; zip/plated-ops.  That lambda's C signature is the same at every T (`int64_t
+;; -> bool`; both instances' types ride the carrier), so nothing asked for a
+;; per-spec clone, and its one shared thunk kept the representative instance
+;; the elaborator baked -- the Rose instance's constant `true` -- for a Tree
+;; leaf.  Its siblings, whose signatures do change, were cloned and right.
+;; The lambda is now cloned under each spec whose bindings ground a dispatch.
+(defclass Pl [a]
+  (pb? [x : a] : bool)
+  (pc  [x : a] : (Cons a))
+  (pr  [x : a kids : (Cons a)] : a))
+
+(defstruct Ops :heap :copy [T]
+  (branch?   (fn [T] bool))
+  (children  (fn [T] (Cons T)))
+  (make-node (fn [T (Cons T)] T)))
+
+(defstruct Rose :heap :copy [A] (label A) (kids (Cons (Rose A))))
+(defn mk-rose [A] [l : A ks : (Cons (Rose A))] : (Rose A) (make-struct Rose :label l :kids ks))
+
+(definstance Pl [Rose]
+  (pb? [r] true)
+  (pc [r] (.kids r))
+  (pr [r ks] (mk-rose (.label r) ks)))
+
+(defn pl-ops [^Pl T] [] : (Ops T)
+  (make-struct Ops
+    :branch?   (fn [x : T] : bool (pb? x))
+    :children  (fn [x : T] : (Cons T) (pc x))
+    :make-node (fn [x : T ks : (Cons T)] : T (pr x ks))))
+
+(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+
+(definstance Pl [Tree]
+  (pb? [t] (match t (Leaf _) false (Node _) true))
+  (pc [t] (match t (Leaf _) (tnil) (Node cs) cs))
+  (pr [t cs] (Node cs)))
+
+(defn main [] : int
+  (let [ops (:: (pl-ops) (Ops Tree))]
+    (println ((.branch? ops) (Leaf 1)))
+    (println ((.branch? ops) (Node (tnil))))
+    (println (tlength ((.children ops) (Node (tcons-of (Leaf 1) (tnil)))))))
+  (let [rops (:: (pl-ops) (Ops (Rose int)))]
+    (println ((.branch? rops) (mk-rose 1 (tnil)))))
+  0)

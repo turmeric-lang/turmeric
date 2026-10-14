@@ -1947,6 +1947,28 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
                 return;
             }
             break;  /* non-self call -> default return path */
+        case EX_PANIC:
+        case EX_PANIC_WITH:
+            /* panic-tail-branch-returns-void (generic-zipper-plan): a `panic`
+             * leaf of a tail `if`/`do` -- `(if leaf? (panic "...") kids)` in
+             * a function returning `(Cons T)` -- took the ordinary return
+             * path below, which spells the panic's own value: `return
+             * ((void)0);`, a hard cc error for every non-void result.  The
+             * panic's emission already unwinds (`if (tur_panicking) return
+             * ...`); what follows is dead, and is the function's zero, as the
+             * merge temp of a value `if` gets (emit_if_dead_branch_zero). */
+            if (!ctx->tail_void && ctx->current_fn_ret_ctype &&
+                strcmp(ctx->current_fn_ret_ctype, "void") != 0) {
+                char *z = emit_c_zero_of(ctx->current_fn_ret_ctype);
+                if (z) {
+                    emit_stmt(ctx, body, e);
+                    indent_buf(body, ctx->indent);
+                    buf_printf(body, "return %s;\n", z);
+                    free(z);
+                    return;
+                }
+            }
+            break;
         case EX_IF:
             if (e->as.if_.else_or_null) {
                 char *cond = emit_value(ctx, body, e->as.if_.cond);

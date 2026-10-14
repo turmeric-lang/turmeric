@@ -1,0 +1,25 @@
+;; generic-zipper-plan I1: a return-only generic call -- `(tnil)` -- handed to
+;; a generic callee inside a generic body, where the parameter it fills is
+;; grounded only to the BODY's own type variable.  `(wrap x (tnil))` inside
+;; `mk [T]` binds wrap's `T` to the body's `T` from `x`, so the parameter is
+;; `(Cons T)`; that used to be rejected as "expected (Cons T), got (Cons A)"
+;; and needed `(:: (tnil) (Cons T))`.  The nullary call is now pinned to the
+;; body's `T` and specialized with each instantiation of the body, in either
+;; argument order.
+(defn wrap [T] [x : T xs : (Cons T)] : (Cons T) (tcons-of x xs))
+(defn wrap2 [T] [xs : (Cons T) x : T] : (Cons T) (tcons-of x xs))
+
+(defn mk [T] [x : T] : (Cons T) (wrap x (tnil)))
+(defn mk2 [T] [x : T] : (Cons T) (wrap x (wrap x (tnil))))
+(defn mk-rev [T] [x : T] : (Cons T) (wrap2 (tnil) x))
+
+(defstruct P :copy [a : float b : int])
+
+(defn main [] : int
+  (println (thead (mk 5)))
+  (println (thead (mk 7.1)))
+  (println (tlength (mk2 3.25)))
+  (println (.a (thead (mk2 (P 2.5 3)))))
+  (println (thead (mk-rev 9)))
+  (println (thead (mk-rev 7.25)))
+  0)

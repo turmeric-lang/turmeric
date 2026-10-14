@@ -1,0 +1,27 @@
+;; lambda-in-generic-record-boxed-with-the-word-shim (found by the
+;; generic-zipper-plan): a lambda built inside a generic body and stored into
+;; a fn-typed FIELD of a parametric record is read by every consumer at the
+;; field's type in the record's monomorph -- `((.f fs) 2.5)` on an `(Fs
+;; float)` dispatches slot 0 as `(void *, double)`.  The box held the word
+;; adapter its erased declaration suggested, so the double arrived in the
+;; wrong register class and the program printed 0 or 1.2e-322 instead of 2.5.
+;; By-value and `:heap` records, a nullary generic and one with an argument.
+(defstruct Fs :copy [A] (f (fn [A] (Cons A))))
+(defstruct Hs :heap :copy [A] (f (fn [A] (Cons A))) (g (fn [A A] A)))
+
+(defn mk-f [A] [x : A] : (Fs A)
+  (make-struct Fs :f (fn [y : A] : (Cons A) (tcons-of y (tnil)))))
+(defn mk-f0 [A] [] : (Fs A)
+  (make-struct Fs :f (fn [y : A] : (Cons A) (tcons-of y (tcons-of y (tnil))))))
+(defn mk-h [A] [x : A] : (Hs A)
+  (make-struct Hs :f (fn [y : A] : (Cons A) (tcons-of y (tnil)))
+                  :g (fn [a : A b : A] : A b)))
+
+(defn main [] : int
+  (println (thead ((.f (mk-f 2.5)) 7.1)))
+  (println (thead ((.f (mk-f 2)) 7)))
+  (println (tlength ((.f (:: (mk-f0) (Fs float))) 3.25)))
+  (println (thead ((.f (:: (mk-f0) (Fs float))) 3.25)))
+  (println (thead ((.f (mk-h 2.5)) 6.5)))
+  (println ((.g (mk-h 2.5)) 1.25 8.75))
+  0)
