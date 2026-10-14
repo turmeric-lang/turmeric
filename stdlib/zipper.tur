@@ -2,6 +2,11 @@
 ;;;
 ;;; Runtime layout: left array, left_len, focus, right array, right_len.
 ;;;
+;;; Moves are O(n): each one copies both neighbour arrays.  For a persistent
+;;; zipper with O(1) moves and no `zipper-free` -- over a list (a `ZipCursor`
+;;; over `zip/cons-traversal`) or over any tree (`ZipLoc`) -- see
+;;; `stdlib/zip.tur`.
+;;;
 ;;; Since: Phase TC2-B
 ;; Phase TC2-B: Typed Zipper[A]
 ;; 1D list zipper with typed focus and neighbor arrays.

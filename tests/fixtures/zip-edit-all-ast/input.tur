@@ -1,0 +1,109 @@
+;; generic-zipper-plan ZP2: zip/edit-all over a small arithmetic AST -- the
+;; guide's "why would I want this" example.  The zipper owns the traversal and
+;; the rebuild; the program only says what to do at one node.  edit-all is
+;; top-down (each node is edited before its children are visited), so a fold
+;; that replaces every CLOSED subtree (one with no variables) by its value
+;; folds the largest constant subtrees in one pass.  Substituting a variable
+;; and folding again reduces the whole tree to a number.
+(load "stdlib/str-build.tur")
+(load "stdlib/zip.tur")
+
+;; A variable is named by a small id: 0 is x, 1 is y.
+(defdata Ast :heap :copy (Num int) (Var int) (Add (Cons Ast)) (Mul (Cons Ast)))
+
+(defn var-name [v : int] : cstr (if (= v 0) "x" "y"))
+
+(defn ast-ops [] : (ZipOps Ast)
+  (zip/ops (fn [a : Ast] : bool
+             (match a
+               (Num _)  false
+               (Var _)  false
+               (Add _)  true
+               (Mul _)  true))
+           (fn [a : Ast] : (Cons Ast)
+             (match a
+               (Num _)  (tnil)
+               (Var _)  (tnil)
+               (Add cs) cs
+               (Mul cs) cs))
+           (fn [a : Ast cs : (Cons Ast)] : Ast
+             (match a
+               (Mul _)  (Mul cs)
+               (Add _)  (Add cs)
+               (Num _)  a
+               (Var _)  a))))
+
+(defn args2 [a : Ast b : Ast] : (Cons Ast) (tcons-of a (tcons-of b (tnil))))
+(defn args3 [a : Ast b : Ast c : Ast] : (Cons Ast) (tcons-of a (args2 b c)))
+(defn args4 [a : Ast b : Ast c : Ast d : Ast] : (Cons Ast) (tcons-of a (args3 b c d)))
+
+;; --- plain recursion over one node's subtree --------------------------------
+
+(defn all-closed? [cs : (Cons Ast)] : bool
+  (if (tnil? cs) true (if (closed? (thead cs)) (all-closed? (ttail cs)) false)))
+
+(defn closed? [a : Ast] : bool
+  (match a
+    (Num _)  true
+    (Var _)  false
+    (Add cs) (all-closed? cs)
+    (Mul cs) (all-closed? cs)))
+
+(defn sum-of [cs : (Cons Ast)] : int
+  (if (tnil? cs) 0 (+ (value (thead cs)) (sum-of (ttail cs)))))
+
+(defn product-of [cs : (Cons Ast)] : int
+  (if (tnil? cs) 1 (* (value (thead cs)) (product-of (ttail cs)))))
+
+(defn value [a : Ast] : int
+  (match a
+    (Num n)  n
+    (Var _)  0
+    (Add cs) (sum-of cs)
+    (Mul cs) (product-of cs)))
+
+(defn show-args [cs : (Cons Ast)] : cstr
+  (if (tnil? cs) "" (str-concat (str-concat " " (show (thead cs))) (show-args (ttail cs)))))
+
+(defn show [a : Ast] : cstr
+  (match a
+    (Num n)  (int->str n)
+    (Var v)  (var-name v)
+    (Add cs) (str-concat (str-concat "(+" (show-args cs)) ")")
+    (Mul cs) (str-concat (str-concat "(*" (show-args cs)) ")")))
+
+;; --- the edits: one node at a time ------------------------------------------
+
+(defn fold [a : Ast] : Ast
+  (match a
+    (Num _)  a
+    (Var _)  a
+    (Add _)  (if (closed? a) (Num (value a)) a)
+    (Mul _)  (if (closed? a) (Num (value a)) a)))
+
+(defn subst-x [a : Ast] : Ast
+  (match a
+    (Var v)  (if (= v 0) (Num 10) a)
+    (Num _)  a
+    (Add _)  a
+    (Mul _)  a))
+
+(defn main [] : int
+  ;; (+ x (* 2 3) (+ 1 (* y 4) (* 5 6)) 7)
+  (let [e (Add (args4 (Var 0)
+                      (Mul (args2 (Num 2) (Num 3)))
+                      (Add (args3 (Num 1) (Mul (args2 (Var 1) (Num 4))) (Mul (args2 (Num 5) (Num 6)))))
+                      (Num 7)))
+        folded (zip/edit-all (zip/zipper (ast-ops) e) fold)]
+    (println (show e))
+    (println (show folded))
+    ;; substitute x everywhere, then fold: y still blocks the middle term
+    (let [no-x (zip/edit-all (zip/zipper (ast-ops) folded) subst-x)]
+      (println (show no-x))
+      (println (show (zip/edit-all (zip/zipper (ast-ops) no-x) fold))))
+    ;; a closed tree folds to one number at the root, in one step
+    (println (show (zip/edit-all (zip/zipper (ast-ops) (Mul (args3 (Num 2) (Add (args2 (Num 3) (Num 4))) (Num 5))))
+                                 fold)))
+    ;; the original is untouched
+    (println (show e)))
+  0)

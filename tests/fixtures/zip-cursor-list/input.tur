@@ -1,0 +1,37 @@
+;; generic-zipper-plan ZP4: the element cursor over zip/cons-traversal is a
+;; persistent list zipper -- moves and edits are O(1), every cursor stays
+;; valid, and closing it gives back the edited list.  Float elements, so a
+;; register-class slip would show.
+(load "stdlib/zip.tur")
+
+(defn cur [o : (Option (ZipCursor (Cons float) float))] : (ZipCursor (Cons float) float)
+  (match o
+    (Some c) c
+    (None)   (panic "no element")))
+
+(defn print-all [xs : (Cons float)] : int
+  (if (tnil? xs) 0 (do (println (thead xs)) (+ 1 (print-all (ttail xs))))))
+
+;; walk to the end, doubling every element
+(defn double-all [c : (ZipCursor (Cons float) float)] : (Cons float)
+  (let [d (zip/cursor-edit c (fn [x : float] : float (* x 2.0)))]
+    (match (zip/cursor-next d)
+      (Some n) (double-all n)
+      (None)   (zip/cursor-close d))))
+
+(defn main [] : int
+  (let [xs (tcons-of 1.5 (tcons-of 2.25 (tcons-of 3.75 (tcons-of 7.1 (tnil)))))
+        c0 (cur (zip/cursor (zip/cons-traversal) xs))
+        c2 (cur (zip/cursor-next (cur (zip/cursor-next c0))))
+        e  (zip/cursor-set c2 30.5)]
+    (println (zip/cursor-focus c0))
+    (println (zip/cursor-focus c2))
+    (println (zip/cursor-focus e))
+    (println (zip/cursor-focus (cur (zip/cursor-prev e))))
+    (println (zip/cursor-focus (cur (zip/cursor-next e))))
+    (println (print-all (zip/cursor-close e)))
+    ;; the original list, and the cursor before the edit, are unchanged
+    (println (print-all xs))
+    (println (zip/cursor-focus c2))
+    (println (print-all (double-all c0))))
+  0)

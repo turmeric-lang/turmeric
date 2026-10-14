@@ -75,6 +75,9 @@ STDLIB_FILES=(
     # hand-written Complex.  Both are pure Turmeric over typeclass.tur + math.tur.
     stdlib/rational.tur
     stdlib/complex.tur
+    # generic-zipper-plan: the structural zipper (ZipLoc), Rose, Plated and the
+    # element cursor -- pure Turmeric over list.tur and option.tur.
+    stdlib/zip.tur
 )
 STDLIB_FLAGS=(
     ""
@@ -101,6 +104,7 @@ STDLIB_FLAGS=(
     "--no-auto-stdlib"
 
     # Bucket B flags
+    ""
     ""
     ""
     ""

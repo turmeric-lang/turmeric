@@ -1,0 +1,63 @@
+;; generic-zipper-plan ZP2: the stock parametric rose tree, (Rose A), over an
+;; int label and over a by-value struct label.  zip/rose-zip opens it, every
+;; node is a branch (so zip/down of a leaf is None but zip/append-child works
+;; anywhere), and zip/root rebuilds each edited level with its label kept.
+(load "stdlib/str-build.tur")
+(load "stdlib/zip.tur")
+
+(defstruct Pt :copy [x : float y : float])
+
+(defn leaf [A] [x : A] : (Rose A) (zip/rose x (tnil)))
+(defn node2 [A] [x : A a : (Rose A) b : (Rose A)] : (Rose A)
+  (zip/rose x (tcons-of a (tcons-of b (tnil)))))
+
+(defn show-kids [ks : (Cons (Rose int))] : cstr
+  (if (tnil? ks)
+    ""
+    (str-concat (str-concat " " (show (thead ks))) (show-kids (ttail ks)))))
+
+(defn show [r : (Rose int)] : cstr
+  (if (tnil? (.kids r))
+    (int->str (.label r))
+    (str-concat (str-concat (str-concat "(" (int->str (.label r))) (show-kids (.kids r))) ")")))
+
+(defn get [A] [o : (Option (ZipLoc (Rose A)))] : (ZipLoc (Rose A))
+  (match o
+    (Some z) z
+    (None)   (panic "no such location")))
+
+(defn sum-x [ks : (Cons (Rose Pt))] : float
+  (if (tnil? ks)
+    0.0
+    (+ (.x (.label (thead ks))) (+ (sum-x (.kids (thead ks))) (sum-x (ttail ks))))))
+
+(defn main [] : int
+  (let [t (node2 1 (node2 2 (leaf 3) (leaf 4)) (leaf 5))
+        z (zip/rose-zip t)]
+    (println (show t))
+    (println (zip/branch? z))
+    (let [two  (get (zip/down z))
+          four (get (zip/right (get (zip/down two))))
+          five (get (zip/right two))]
+      (println (.label (zip/node four)))
+      (println (zip/depth four))
+      ;; a rose leaf is a branch with no children
+      (println (zip/branch? five))
+      (println (none? (zip/down five)))
+      ;; relabel deep in the tree; the labels above are kept by make-node
+      (println (show (zip/root (zip/replace four (leaf 40)))))
+      (println (show (zip/root (zip/append-child five (leaf 6)))))
+      (println (show (zip/root (zip/insert-child two (leaf 0)))))
+      (println (show (zip/root (zip/remove two))))
+      (println (show t))))
+  ;; the same zipper over a by-value struct label
+  (let [p (node2 (Pt 0.5 0.25) (leaf (Pt 1.5 2.25)) (leaf (Pt 3.25 4.5)))
+        z (zip/rose-zip p)
+        b (get (zip/right (get (zip/down z))))
+        e (zip/edit b (fn [r : (Rose Pt)] : (Rose Pt)
+                        (zip/rose (Pt (* 2.0 (.x (.label r))) (.y (.label r))) (.kids r))))]
+    (println (.x (.label (zip/node b))))
+    (println (.y (.label (zip/node e))))
+    (println (sum-x (tcons-of (zip/root e) (tnil))))
+    (println (sum-x (tcons-of p (tnil)))))
+  0)
