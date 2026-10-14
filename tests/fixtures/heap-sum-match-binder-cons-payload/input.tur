@@ -1,0 +1,42 @@
+;; heap-sum-match-binder-of-app-payload-unbridged: inside a generic's clone, a
+;; `match` on a `:heap` parametric sum read the scrutinee through the BASE
+;; layout (`tur_adt_Fr *`), because only a by-value product was upgraded to its
+;; monomorph.  The `(Cons T)` payload binder then took the base slot's
+;; `int64_t`, and rebuilding passed it uncast to `ctor_Fr_Frame__R`, whose slot
+;; is `tur_adt_Cons__R *` -- a -Wint-conversion error under clang 15+ / gcc 14.
+;; The clone now reads the scrutinee through `tur_adt_Fr__R`.
+;;
+;; `bump-box` is the original shape (the sum inside a `:heap` struct, so the
+;; enclosing generic was cloned even before heap-sum-generic-never-specialized
+;; was fixed); `bump` is the same rebuild with the sum as the parameter itself.
+(defdata R :heap :copy (Lf int) (Br (Cons R)))
+(defdata Fr :heap :copy [T] (Nil) (Frame (Cons T) T))
+(defstruct Box :heap :copy [T] (fr (Fr T)))
+
+(defn val [r : R] : int
+  (match r
+    (Lf v) v
+    (Br _) 0))
+
+(defn bump-box [T] [b : (Box T)] : (Box T)
+  (make-struct Box :fr (match (.fr b)
+                         (Nil) (.fr b)
+                         (Frame l x) (Frame l x))))
+
+(defn bump [T] [f : (Fr T)] : (Fr T)
+  (match f
+    (Nil) f
+    (Frame l x) (Frame l x)))
+
+(defn main [] : int
+  (let [b (make-struct Box :fr (Frame (tcons-of (Lf 1) (tnil)) (Lf 7)))]
+    (match (.fr (bump-box b))
+      (Nil) (println 0)
+      (Frame l x) (println (+ (val x) (val (thead l))))))   ; 8
+  (match (bump (Frame (tcons-of (Lf 2) (tnil)) (Lf 9)))
+    (Nil) (println 0)
+    (Frame l x) (println (+ (val x) (val (thead l)))))       ; 11
+  (match (bump (Frame (tcons-of 7.1 (tnil)) 3.25))
+    (Nil) (println 0.0)
+    (Frame l x) (println (+ x (thead l))))                   ; 10.35
+  0)

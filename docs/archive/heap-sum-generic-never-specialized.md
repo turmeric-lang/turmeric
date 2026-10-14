@@ -1,5 +1,58 @@
 # A generic over a parametric `:heap` sum is never specialized, so a constructor in its body aborts at runtime
 
+**RESOLVED 2026-10-14**, by fix directions 1 and 3, plus two gaps the fix
+exposed. Pinned by `tests/fixtures/heap-sum-generic-rebuild`: the repro's
+`bump`, a read-only `has?`, a result-only `mk`, a generic calling a generic,
+the sum nested in an `Option`, `float`/`cstr`/`bool`/struct elements, and
+open slots. One narrower shape stays open as
+[heap-sum-unpinned-tyvar-relayed-to-generic](../reported/heap-sum-unpinned-tyvar-relayed-to-generic.md).
+
+## Resolution
+
+- **The clone decision** (fix direction 1). `emit_abi_register_call` forces
+  an ABI change when a parameter or the result instantiates to a type that
+  is, or carries among its arguments, a ground `:heap` parametric sum
+  application, even though the C spelling is unchanged
+  (`type_mentions_ground_heap_sum_app`, `src/compiler/emit_module.c:5861`,
+  used at `:7048` and `:7395`). This sits next to the G4
+  `type_phantom_hides_aggregate` rescue, as the report suggested. The
+  predicate itself is `adt_app_is_heap_sum` (`src/compiler/types.c:6067`).
+  Distinct element types that spell the same clone name get the existing
+  `__h<n>` suffix.
+- **The clone read the base layout.** With a clone minted, its `match` still
+  read the scrutinee as `tur_adt_Fr *`, because the "upgrade to the
+  monomorph" step at the top of the ADT match emitter accepted only by-value
+  products. For `int`, `float` and `cstr` the 8-byte slots happen to line up.
+  A `cstr` binder was still declared `int64_t`, which gcc 14 and clang 15+
+  reject. A `(Fr bool)` read its fields at the wrong offsets. Both upgrade
+  sites (`src/compiler/emit_expr.c:20913`, `:20939`) now also accept a
+  `:heap` sum app. The word in hand already points at that monomorph, which
+  is what `main` uses when the static type is concrete. This also resolved
+  [heap-sum-match-binder-of-app-payload-unbridged](heap-sum-match-binder-of-app-payload-unbridged.md).
+- **Open slots reached the trap without a generic.** `(match (Nil) ...)`
+  with nothing pinning `T`, and `(One 7.1)` of a two-parameter
+  `(defdata Two :heap [A B] ...)`, named the base `ctor_Fr_Nil` /
+  `ctor_Two_One` straight from `main`. That was true on `main` before this fix
+  as well. A constructor stores no value in an open slot
+  (`tyvar_.open_slot`), so `emit_ground_open_slots`
+  (`src/compiler/emit_expr.c:6470`) grounds it to the `int` carrier. The
+  constructor emitter uses it through `emit_heap_ctor_open_suffix` (`:6492`,
+  in both the nullary and the n-arg branch). A nullary ctor nothing pins
+  types as the bare, unapplied ADT, so there every slot is open.
+  `emit_abi_register_call` grounds a call's open-slot bindings the same way
+  (`src/compiler/emit_module.c:6942`), but only when that is what exposes a
+  ground `:heap` sum. Result/Option open slots ride the carrier and keep the
+  bindings elab gave them, which is the case
+  `set-add-elem-hash-disagrees-with-set-member` warns about.
+- **Not taken:** fix direction 2 (a body walk for suffix-less constructors).
+  Direction 1 decides from the signature, and the cost is a clone for a
+  read-only generic such as `has?` too. That is correct, just not free.
+
+Suite: `bash tests/run.sh` 3792 passed, 0 failed, with no `expected.c`
+snapshot moving. Both new fixtures also pass `tests/run-turi.sh`, gcc 13 and
+clang 18 with no warnings, and `tests/check-emitted-float-conversions.py`.
+
+
 **Severity: medium-high.** A correct program compiles cleanly and then
 aborts at runtime. The interpreter runs the same program correctly. The
 abort is loud: it prints a message and calls `abort()`.
@@ -87,6 +140,9 @@ path that does not.
 
 ## Related
 
+- [heap-sum-unpinned-tyvar-relayed-to-generic](../reported/heap-sum-unpinned-tyvar-relayed-to-generic.md)
+  is the shape left open: `(has? (bump (Nil)))`, where nothing in the program
+  ever fixes `T`.
 - The zipper plan works around this by never rebuilding a parametric `:heap`
   sum in a generic body: its path frames are `:heap` structs with a nullable
   link.

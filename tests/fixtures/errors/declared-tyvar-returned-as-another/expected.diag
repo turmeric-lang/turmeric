@@ -1,0 +1,2 @@
+function 'bad' declares return type 'B' but its body returns A
+a declared type variable stands for whichever type the caller picks

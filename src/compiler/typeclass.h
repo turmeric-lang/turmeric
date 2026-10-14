@@ -347,6 +347,14 @@ typedef struct TypeConstraint {
      * be resolved from the expected result type rather than an argument. */
     const struct Symbol *tyvar;
     bool                 return_resolved;
+    /* declared-tyvars-are-not-rigid: EVERY variable of a middle-vector
+     * constraint `[(StorageOps S E)]`, in class-parameter order (`[0]` is
+     * `tyvar`).  A method whose declared result is the class's second
+     * parameter is typed from here inside the constrained generic -- the
+     * representative instance's concrete type is not the body's.  The caret
+     * forms record none. */
+    const struct Symbol *arg_tyvars[8];
+    uint8_t              n_arg_tyvars;
 } TypeConstraint;
 
 /* Constraint set for a function */

@@ -5679,6 +5679,9 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                          * exhaustive and so turning that on is a one-line
                          * change with a diagnostic already waiting. */
                         break;
+                    /* declared-tyvars-are-not-rigid: asked at the defn return only; the
+                     * dispatcher this path uses never answers it. */
+                    case RET_CONFLICT_RIGID_TYVAR:
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
                 buf_free(&gb);
@@ -9616,8 +9619,17 @@ resolved_user_fallback:;
      * return-dispatch-tyvar above).  Without this a `let` binding took the
      * representative's `int`: `(let [y (n x x)] y)` stored the float instance's
      * double into an int64_t, and `(n y x)` then dispatched on a concrete int.
-     * The base clone is unchanged -- `A` lowers to the same int64 carrier. */
-    if (obj->type.kind == TY_TYVAR && e->definstance_depth == 0 &&
+     * The base clone is unchanged -- `A` lowers to the same int64 carrier.
+     *
+     * declared-tyvars-are-not-rigid: an INSTANCE body is the same situation
+     * when the instance is parametric and dispatches on its own variable --
+     * `(sg-combine (unwrap x) (unwrap y))` inside `Sg [(Option A)] [(Sg A)]`
+     * is an `A`, not the representative's `int`; typed `int` it made
+     * `(some ...)` an `(Option int)` beside the `x : (Option A)` arm
+     * (class-superclass-parametric-instance).  So no `definstance_depth`
+     * gate: a bare-variable receiver inside an instance body is the
+     * instance's own abstract variable. */
+    if (obj->type.kind == TY_TYVAR &&
         best_inst && best_inst->typeclass &&
         best_inst->typeclass->n_type_params >= 1 &&
         best_inst->typeclass->type_params[0]) {
@@ -9672,6 +9684,34 @@ resolved_user_fallback:;
                 const Type *hd = &rt;
                 while (hd->kind == TY_APP && hd->as.app.fn) hd = hd->as.app.fn;
                 if (hd->kind == TY_ADT && hd->as.adt_.def) result_type = rt;
+            }
+            /* declared-tyvars-are-not-rigid: a result that is a class
+             * parameter OTHER than the receiver's -- `(sop-get [s : S idx :
+             * int] : E)` of `(defclass StorageOps [S E] ...)` -- kept the
+             * representative instance's type (`Vel`), so inside `(defn
+             * any-get [S E] [(StorageOps S E)] ... : E ...)` the body read as
+             * a ground `Vel` under a declared `E`.  The enclosing generic's
+             * constraint says what that parameter is called here: its
+             * variables sit in class-parameter order (`arg_tyvars`). */
+            else if (recv_is_cv && cm->return_type.kind == TY_TYVAR &&
+                     cm->return_type.as.tyvar_.name && obj->type.as.tyvar_.name) {
+                int pk = -1;
+                for (uint8_t k = 1; k < rtc->n_type_params; k++)
+                    if (rtc->type_params[k] &&
+                        strcmp(rtc->type_params[k]->name,
+                               cm->return_type.as.tyvar_.name) == 0) {
+                        pk = k;
+                        break;
+                    }
+                for (uint8_t ci = 0; pk >= 1 && ci < e->cur_fn_n_constraints; ci++) {
+                    const TypeConstraint *fc = &e->cur_fn_constraints[ci];
+                    if (fc->typeclass != rtc || !fc->tyvar ||
+                        strcmp(fc->tyvar->name, obj->type.as.tyvar_.name) != 0)
+                        continue;
+                    if (pk < fc->n_arg_tyvars && fc->arg_tyvars[pk])
+                        result_type = type_tyvar_named(fc->arg_tyvars[pk]->name);
+                    break;
+                }
             }
             break;
         }

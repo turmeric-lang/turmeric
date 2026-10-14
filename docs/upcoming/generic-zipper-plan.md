@@ -437,13 +437,15 @@ After ZP4, decide whether to rebase `(Zipper A)` onto a `ZipCursor` over
 
 ## 5. Compiler defects found while prototyping (2026-10-13, `704cc531`)
 
-D1--D4 are filed under `docs/reported/` (linked below), with root causes
-and fix directions. D5 and the inference papercuts are recorded only here.
+D1--D4 were filed under `docs/reported/` (linked below; D1 and D2 are
+resolved and archived), with root causes and fix directions. D5 and the inference papercuts are recorded only here.
 Every repro is complete and was run as shown.
 
 **D1 -- generic match-and-rebuild of a parametric `:heap` sum leaves `(Cons
 T)` payload binders as `int64_t`**
-([heap-sum-match-binder-of-app-payload-unbridged](../reported/heap-sum-match-binder-of-app-payload-unbridged.md)).
+([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)).
+**Resolved 2026-10-14** with D2: the clone reads the scrutinee through its
+monomorph, so the binder is the typed pointer.
 The specialised constructor takes the typed pointer. gcc 13 warns (and `run.sh` fails on the warning); clang 15+
 and gcc 14 reject it.
 
@@ -468,7 +470,9 @@ and gcc 14 reject it.
 
 **D2 -- a generic over a parametric `:heap` sum is never specialized, so a
 constructor in its body aborts at runtime**
-([heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)).
+([heap-sum-generic-never-specialized](../archive/heap-sum-generic-never-specialized.md)).
+**Resolved 2026-10-14**: a ground `:heap` sum in a generic's signature now
+forces a clone.
 It compiles cleanly. The interpreter prints `6`, and so does the compiled
 program without `:heap`.
 

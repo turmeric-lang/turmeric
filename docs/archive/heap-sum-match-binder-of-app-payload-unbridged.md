@@ -1,5 +1,29 @@
 # A `(Cons T)` payload bound by a generic `match` on a `:heap` sum is declared `int64_t`, and rebuilding passes it to a typed-pointer constructor uncast
 
+**RESOLVED 2026-10-14** as a side effect of fixing
+[heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md).
+Pinned by `tests/fixtures/heap-sum-match-binder-cons-payload`: this repro, the
+same rebuild with the sum as the parameter itself (which needed the
+never-specialized fix to get a clone at all), and a `float` element.
+
+## Resolution
+
+Half 1 of the root cause below is gone, at its source rather than by widening
+the SR2b leg (fix direction 1). The ADT match emitter upgrades a scrutinee to
+its monomorph when the spec resolves it concretely. That upgrade now accepts a
+`:heap` parametric sum app as well as a by-value product
+(`adt_app_is_heap_sum`, `src/compiler/emit_expr.c:20913` and `:20939`). Inside
+`bump__spec__...` the scrutinee is therefore `tur_adt_Fr__R *`, and its typed
+`(Cons R)` field declares the binder as `tur_adt_Cons__R *`, so
+`ctor_Fr_Frame__R` receives the type it takes. Verified on unmodified `main`
+first: `CC=clang tur run` fails there with the `-Wint-conversion` error
+quoted below, and builds and prints `8` with the fix.
+
+Half 2 (the constructor-argument bridge trusts the argument's type over the
+local's declared C type) is unchanged. As the report says, it is harmless
+alone; fix direction 2 remains a hardening option, not an open defect.
+
+
 **Severity: medium.** This is a build failure under clang 15+ and gcc 14:
 `-Wint-conversion` is an error there. gcc 13 only warns, but `tests/run.sh`
 fails a fixture on that warning. The program is correct, and with gcc 13 it

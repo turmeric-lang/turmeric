@@ -1,0 +1,1 @@
+let binding 'b': type annotation does not match initializer (annotated B, got A)

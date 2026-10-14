@@ -1588,8 +1588,18 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                  * "expected A, got float".  The enclosing signature's own
                  * variables are fixed in each instantiation and keep the m5
                  * treatment. */
-                if (bindings[idx].type.kind == TY_TYVAR && actual.kind != TY_TYVAR &&
-                    actual.kind != TY_UNKNOWN &&
+                /* declared-tyvars-are-not-rigid: a provisional binding yields
+                 * to the ENCLOSING signature's own variable exactly as it
+                 * yields to a concrete type.  `(let [v (vec-new)] (vec-push! v
+                 * a) ...)` with `a : A` binds vec-push!'s `A` to the renamed-
+                 * apart `vec-new.A` from `v` first; the caller's rigid `A` then
+                 * takes its place, instead of "expected vec-new.A, got A". */
+                bool actual_fixes = actual.kind != TY_TYVAR
+                    ? actual.kind != TY_UNKNOWN
+                    : (actual.as.tyvar_.name && !actual.as.tyvar_.open_slot &&
+                       g_call_cb_elab &&
+                       ng_tyvar_in_sig(g_call_cb_elab, actual.as.tyvar_.name));
+                if (bindings[idx].type.kind == TY_TYVAR && actual_fixes &&
                     (bindings[idx].type.as.tyvar_.open_slot ||
                      (g_call_cb_elab && bindings[idx].type.as.tyvar_.name &&
                       !ng_tyvar_in_sig(g_call_cb_elab,
@@ -9416,6 +9426,34 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
             }
         }
+        /* declared-tyvars-are-not-rigid: every tolerance above lets an
+         * argument typed by the ENCLOSING signature's variable into a ground
+         * parameter -- `(f a)` with `a : A` and `f [x : int]`, `(P a)` into an
+         * `int` field -- because a variable is "unpinned" to all of them.  A
+         * callee's own variable is an instantiation and is left to the binding
+         * machinery; a ground parameter of a defn (not a carrier-default
+         * untyped one) or of a constructor field is a commitment the argument
+         * must meet.  Inside `#{Unsafe}` the carrier bridge stays. */
+        if (arg_ok && fn_binding && fn_type.kind == TY_FN && e->n_sig_tyvars > 0 &&
+            !(lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
+            uint32_t fi_r = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *want_r =
+                (fn_type.as.fn.arg_full_types && fi_r < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fi_r] : NULL;
+            Type want_t = want_r ? *want_r : type_from_kind(expected_arg_kind);
+            bool committed = false;
+            if (fn_binding->source_fn_def && fn_binding->source_fn_def->params &&
+                fi_r < fn_binding->source_fn_def->n_params &&
+                fn_binding->source_fn_def->params[fi_r])
+                committed = !fn_binding->source_fn_def->params[fi_r]->type_is_carrier_default;
+            else if (!fn_binding->source_fn_def && fn_binding->name &&
+                     elab_lookup_ctor(e, fn_binding->name))
+                committed = true;
+            if (committed && !call_type_has_named_tyvar(&want_t) &&
+                rigid_tyvar_conflict(e->sig_tyvars, e->n_sig_tyvars, want_t,
+                                     args[i]->type, e->unsafe_depth > 0))
+                arg_ok = false;
+        }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */
@@ -10776,8 +10814,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * This keeps compound returns such as Session[P], Role[...], and
          * higher-order TY_FN results from collapsing into a bare TypeKind shell. */
         if (fn_type.as.fn.result_full_type) {
+            /* declared-tyvars-are-not-rigid: the rename-apart below also has
+             * work when NO argument bound anything -- `(vec-new)` inside a
+             * `[A B]` body returning `(Vec B)` left vec-new's own `A` reading
+             * as the body's `A`.  With no bindings and no collision the
+             * instantiation is the identity. */
             if (call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
-                n_type_bindings > 0) {
+                (n_type_bindings > 0 || e->n_sig_tyvars > 0)) {
                 result_type = call_instantiate_type(e, fn_type.as.fn.result_full_type,
                                                     type_bindings, n_type_bindings);
                 /* generic-call-result-leaks-callee-tyvar-names: a result
@@ -10808,11 +10851,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         if (call_find_type_binding(type_bindings, n_type_bindings, rn[ri], &idx))
                             continue;
                         if (!ng_tyvar_in_sig(e, rn[ri])) continue;
-                        char nm[96];
-                        snprintf(nm, sizeof nm, "%s.%s", fn_binding->name->name, rn[ri]);
-                        const Symbol *ns = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
                         apart[n_apart].name = rn[ri];
-                        apart[n_apart].type = type_tyvar_named(ns->name);
+                        if (n_bound == 0) {
+                            /* declared-tyvars-are-not-rigid: NOTHING bound --
+                             * `(vec-new)` inside `k [A]`.  Its `(Vec A)` reading
+                             * as the body's `A` is load-bearing: a `vec-get` on
+                             * it stays the abstract `A` only because the name is
+                             * the signature's (ng_tyvar_in_sig), and renaming it
+                             * collapsed that read to the int carrier (the
+                             * generic-spec-carrier-crossings SIGSEGV).  Keep the
+                             * name; mark it OPEN, so a binding it makes is
+                             * provisional -- `(list-nil)` handed to `acc : (List
+                             * B)` inside `list-map [A B]` no longer binds `B :=
+                             * A` over the `B` that `f` bound. */
+                            apart[n_apart].type = type_tyvar_named(rn[ri]);
+                        } else {
+                            char nm[96];
+                            snprintf(nm, sizeof nm, "%s.%s", fn_binding->name->name, rn[ri]);
+                            const Symbol *ns = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+                            apart[n_apart].type = type_tyvar_named(ns->name);
+                        }
                         apart[n_apart].type.as.tyvar_.open_slot = true;
                         n_apart++;
                     }
