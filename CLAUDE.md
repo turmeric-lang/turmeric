@@ -571,8 +571,10 @@ observed:
   and their bindings are handed back when nothing captured them
   ([turi-call-frames-never-reclaimed](docs/archive/turi-call-frames-never-reclaimed.md)),
   so ordinary loops no longer grow per step. A closure capture keeps its
-  frames, a re-entrant `call/cc` turns reclamation off for the rest of the
-  run, and a by-value struct argument of a type the program writes a field of
+  frames, a re-entrant `call/cc` keeps the frames live at the capture until a
+  sweep finds no continuation needs them
+  ([r7rs-callcc-memory-never-freed](docs/archive/r7rs-callcc-memory-never-freed.md)),
+  and a by-value struct argument of a type the program writes a field of
   is still copied and kept (since 2026-10-07 nothing else is copied:
   [turi-immutable-struct-args-copied-per-call](docs/archive/turi-immutable-struct-args-copied-per-call.md)).
   On the Debug `tur`,

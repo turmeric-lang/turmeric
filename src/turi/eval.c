@@ -1300,6 +1300,9 @@ struct EvalFrame {
      * whose DK_CALL_RET may hand it back on return when it never escaped. */
     bool          escaped;
     bool          reclaimable;
+    /* Its release was put off to the sweep (cont_defer_frame): it was live at
+     * a capture, so only a sweep can tell that no image still needs it. */
+    bool          deferred;
     /* r7rs-callcc-memory-never-freed: the capture epoch this frame was made
      * in (g_turi_cont_epoch).  A re-entrant call/cc image can complete only
      * activations that were live at its capture, so a frame made since the
@@ -1328,18 +1331,36 @@ struct EvalFrame {
 static bool     g_turi_cont_pinned = false;
 static uint32_t g_turi_cont_epoch  = 0;
 
+/* A frame or binding from the pool, noted in the pool's object map as a kind
+ * the interpreter hands out again (r7rs-callcc-memory-never-freed).  Out of
+ * line, so the free-list fast paths below stay small enough to inline into
+ * the driver. */
+__attribute__((noinline))
+static EvalFrame *eval_frame_pool_alloc(TuriEnv *env) {
+    EvalFrame *f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
+    turi_val_note_reused(env, f);
+    return f;
+}
+__attribute__((noinline))
+static EvalBinding *binding_pool_alloc(TuriEnv *env) {
+    EvalBinding *b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
+    turi_val_note_reused(env, b);
+    return b;
+}
+
 static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
     /* Escaping payload: a closure can capture this frame and outlive the scope
      * that created it, so frames live in env's value pool (reclaimed by
      * turi_env_free).  Only an activation's call frame is ever handed back
      * early (eval_frame_new_call / frame_release). */
-    EvalFrame *f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
+    EvalFrame *f = eval_frame_pool_alloc(env);
     f->bindings    = NULL;
     f->parent      = parent;
     f->tyvars      = NULL;
     f->dicts       = NULL;
     f->escaped     = false;
     f->reclaimable = false;
+    f->deferred    = false;
     f->epoch       = g_turi_cont_epoch;
     f->owned       = NULL;
     f->owned_next  = NULL;
@@ -1371,13 +1392,14 @@ static bool turi_frame_reclaim_on(void) {
 static EvalFrame *eval_frame_new_call(TuriEnv *env, EvalFrame *parent) {
     EvalFrame *f = (EvalFrame *)env->frame_free;
     if (f) env->frame_free = f->parent;
-    else   f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
+    else   f = eval_frame_pool_alloc(env);
     f->bindings    = NULL;
     f->parent      = parent;
     f->tyvars      = NULL;
     f->dicts       = NULL;
     f->escaped     = false;
     f->reclaimable = true;
+    f->deferred    = false;
     f->epoch       = g_turi_cont_epoch;
     f->owned       = NULL;
     f->owned_next  = NULL;
@@ -1470,7 +1492,7 @@ static void frame_bind(TuriEnv *env, EvalFrame *f, const char *name, TuriValue v
      * a released call frame (frame_release). */
     EvalBinding *b = (EvalBinding *)env->binding_free;
     if (b) env->binding_free = b->next;
-    else   b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
+    else   b = binding_pool_alloc(env);
     b->name  = name;
     b->value = value;
     b->next  = f->bindings;
@@ -7662,6 +7684,15 @@ typedef struct {
  * with the image and names the right epoch. */
 #define TURI_DRIVE_FREE_EP(ep, p) \
     do { if (!g_turi_cont_pinned || (ep) == g_turi_cont_epoch) free(p); } while (0)
+/* The same for a work-stack entry's OWN temporary (`own`, its `aux`, read with
+ * the epoch): kept, it is put off to the sweep, which frees it once no live
+ * image's drives hold the entry (cont_defer_temp).  Anything else kept --
+ * a packed rest-argument array the entry never held -- stays kept. */
+#define TURI_DRIVE_FREE_OWN(ep, p, own)                                        \
+    do {                                                                       \
+        if (!g_turi_cont_pinned || (ep) == g_turi_cont_epoch) free(p);         \
+        else if ((const void *)(p) == (const void *)(own)) cont_defer_temp(env, (p)); \
+    } while (0)
 
 /* turi-call-frames-never-reclaimed: an activation's DK_CALL_RET is done with
  * its call frame -- it returned, or a tail call replaced it.  Hand the frame
@@ -7705,10 +7736,18 @@ static void frame_release_one(TuriEnv *env, EvalFrame *f) {
     env->frame_free = f;
 }
 
+static void cont_defer_frame(TuriEnv *env, EvalFrame *f);
+static void cont_defer_temp(TuriEnv *env, void *p);
+
 static void frame_release(TuriEnv *env, EvalFrame *f) {
-    if (!f || !f->reclaimable || f->escaped || f->epoch != g_turi_cont_epoch ||
-        env->debugger || !turi_frame_reclaim_on())
+    if (!f || !f->reclaimable || f->escaped || env->debugger || !turi_frame_reclaim_on())
         return;
+    if (f->epoch != g_turi_cont_epoch) {
+        /* A capture since the frame was made: an image may complete this
+         * activation again.  The sweep hands it back once none can. */
+        cont_defer_frame(env, f);
+        return;
+    }
     f->reclaimable = false;   /* a second release of the same frame is a no-op */
     /* Nothing under an unescaped frame escaped (frame_escape marks every
      * ancestor), so its owned frames go with it. */
@@ -7755,6 +7794,12 @@ void *turi_cont_set_drive_boundary(void *b) {
 }
 
 typedef struct { DriveCont **pst; size_t len, cap; DriveCont *copy; } DriveSnap;
+/* r7rs-callcc-memory-never-freed: where each captured drive's inline work
+ * stack sits in the image, and how many of its entries are live when the
+ * stack is that buffer (len 0 when it had grown onto the heap, whose copy is
+ * a DriveSnap).  The sweep reads those entries typed and skips the rest of
+ * the buffer, which holds stale entries of deeper, finished evaluations. */
+typedef struct { const DriveCont *inl; size_t len; } DriveInl;
 
 struct TuriContState {
     bool        returning, throwing, aborting, panicking, firing_panic_defer;
@@ -7772,9 +7817,12 @@ struct TuriContState {
     DriveReg   *drive_regs;
     DriveSnap  *drives;
     size_t      n_drives;
+    DriveInl   *inl;
+    size_t      n_inl;
 };
 
 void turi_cont_pin(void) { g_turi_cont_pinned = true; g_turi_cont_epoch++; }
+uint32_t turi_cont_epoch(void) { return g_turi_cont_epoch; }
 
 TuriContState *turi_cont_state_capture(TuriEnv *env) {
     TuriContState *s = (TuriContState *)calloc(1, sizeof *s);
@@ -7807,8 +7855,19 @@ TuriContState *turi_cont_state_capture(TuriEnv *env) {
 #endif
     s->current_gen        = g_current_gen;
     s->drive_regs         = g_drive_regs;
-    for (DriveReg *r = g_drive_regs; r && r != g_drive_boundary; r = r->prev)
+    for (DriveReg *r = g_drive_regs; r && r != g_drive_boundary; r = r->prev) {
         if (*r->pst != r->inl) s->n_drives++;
+        s->n_inl++;
+    }
+    if (s->n_inl) {
+        s->inl = (DriveInl *)malloc(s->n_inl * sizeof(DriveInl));
+        if (!s->inl) { s->n_inl = 0; turi_cont_state_free(s); return NULL; }
+        size_t k = 0;
+        for (DriveReg *r = g_drive_regs; r && r != g_drive_boundary; r = r->prev, k++) {
+            s->inl[k].inl = r->inl;
+            s->inl[k].len = *r->pst == r->inl ? *r->plen : 0;
+        }
+    }
     if (s->n_drives) {
         s->drives = (DriveSnap *)calloc(s->n_drives, sizeof(DriveSnap));
         size_t k = 0;
@@ -7883,6 +7942,16 @@ void turi_cont_state_restore(TuriEnv *env, const TuriContState *s) {
     }
 }
 
+/* r7rs-callcc-memory-never-freed: a reclaimed continuation's saved state. */
+void turi_cont_state_free(TuriContState *s) {
+    if (!s) return;
+    for (size_t k = 0; k < s->n_drives; k++) free(s->drives[k].copy);
+    free(s->drives);
+    free(s->inl);
+    free(s->escape_live);
+    free(s);
+}
+
 /* F4: activation seed for eval_drive_ex.  When non-NULL, the driver pushes a
  * DK_CALL_RET carrying this saved caller-state beneath DK_DONE and descends the
  * fn body in tail position; the DK_CALL_RET epilogue runs when the (possibly
@@ -7937,10 +8006,12 @@ struct TuriWsCont {
  * Bindings are re-linked most-recent-first to preserve shadowing order. */
 static EvalFrame *clone_frame_bindings(TuriEnv *env, EvalFrame *src, EvalFrame *parent) {
     EvalFrame *nf = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
+    turi_val_note_reused(env, nf);
     nf->parent = parent;
     nf->bindings = NULL;
     nf->escaped = true;        /* part of a resumed continuation slice */
     nf->reclaimable = false;
+    nf->deferred = false;
     nf->epoch = g_turi_cont_epoch;
     nf->owned = nf->owned_next = NULL;
     /* Collect src bindings (head-first) then re-prepend in reverse to preserve
@@ -9098,10 +9169,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             TuriValue  clv = apply_fn;
             TuriValue *acc = apply_args;
             uint32_t   n   = apply_n;
+            /* r7rs-callcc-memory-never-freed: the arguments were made since
+             * the last leaf call, so no image holds them; only a leaf call
+             * below (a native that captures) can put them in one. */
+            uint32_t   acc_epoch = g_turi_cont_epoch;
             apply_args = NULL;
             if (clv.tag != TURI_CLOSURE || !clv.as_closure) {
                 cur = turi_error("eval: native-resume apply: not a closure");
-                TURI_DRIVE_FREE(acc); descending = false; continue;
+                free(acc); descending = false; continue;
             }
             TuriClosure *cl = clv.as_closure;
             FnDef       *fn = (FnDef *)cl->fn;
@@ -9139,7 +9214,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     g_panic_site = st[len - 1].expr->span;
                 cur = eval_apply(env, cl, acc, n);
                 g_panic_site = saved_site;
-                TURI_DRIVE_FREE(acc); descending = false; continue;
+                TURI_DRIVE_FREE_EP(acc_epoch, acc); descending = false; continue;
             }
             uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
             uint32_t effective_params = (uint32_t)fn->n_params - param_offset;
@@ -9148,12 +9223,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                       fn->binding ? fn->binding->name->name : "<fn>",
                                       (unsigned)effective_params, (unsigned)n);
-                TURI_DRIVE_FREE(acc); descending = false; continue;
+                free(acc); descending = false; continue;
             }
             if (env->step_fuel_limit > 0) {
                 if (env->step_fuel == 0) {
                     cur = turi_error("eval: step fuel exhausted");
-                    TURI_DRIVE_FREE(acc); descending = false; continue;
+                    free(acc); descending = false; continue;
                 }
                 env->step_fuel--;
             }
@@ -9162,7 +9237,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 frame_bind(env, call_frame,
                            fn->params[param_offset + i]->name->name,
                            turi_copy_byvalue_struct_arg(env, acc[i]));
-            TURI_DRIVE_FREE(acc);
+            free(acc);
             DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_RET, .frame = call_frame,
                                      .aux = env->defer_stack,
                                      .saved_module  = env->current_module,
@@ -10224,6 +10299,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                  * restore saved env state.  A non-matching abort (a shift abort,
                  * or an escape to an outer call/cc) propagates unchanged. */
                 TuriEscapeBoundary *b = (TuriEscapeBoundary *)top->aux;
+                uint32_t b_epoch = top->epoch;
                 escape_live_pop(env, b);
                 if (env->aborting && env->abort_target == (void *)b) {
                     env->aborting      = false;
@@ -10232,7 +10308,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     env->handler_stack = b->saved_handler_stack;
                     env->defer_stack   = b->saved_defer_stack;
                 }
-                TURI_DRIVE_FREE(b);
+                TURI_DRIVE_FREE_OWN(b_epoch, b, b);
                 len--;
                 break;
             }
@@ -10610,9 +10686,10 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
             case DK_CALL_ARG: {
                 TuriValue *acc = (TuriValue *)top->aux;
                 uint32_t acc_epoch = top->epoch;   /* before any leaf call: see TURI_DRIVE_FREE_EP */
+                void *const acc_own = acc;
                 uint32_t n = drive_call_n_args(top->expr);
                 bool is_dyn = top->expr->kind == EX_DYN_CALL;
-                if (signaled) { TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break; }
+                if (signaled) { TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--; break; }
                 if (n > 0) {
                     acc[top->index] = cur;
                     top->index++;
@@ -10633,7 +10710,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     const FnDef *vfd = (const FnDef *)cl->fn;
                     uint32_t want = (uint32_t)vfd->n_params - (cl->skip_env_param ? 1u : 0u);
                     TuriValue *packed = turi_pack_rest_args(env, acc, n, 0, want);
-                    if (packed) { TURI_DRIVE_FREE_EP(acc_epoch, acc); acc = packed; n = want; }
+                    if (packed) { TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); acc = packed; n = want; }
                 }
                 /* The runtime-tag re-dispatch that sat here
                  * (gde_reresolve_method_by_value) is retired -- the
@@ -10652,7 +10729,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         int64_t w = (n >= 2) ? acc[1].as_int : 0;
                         TuriValue forged;
                         bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
-                        TURI_DRIVE_FREE_EP(acc_epoch, acc);
+                        TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own);
                         if (bad) { cur = forged; len--; break; }
                         ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                         int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
@@ -10675,7 +10752,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                            ? top->expr->as.call_.site : top->expr->span;
                     cur = eval_apply(env, cl, acc, n);
                     g_panic_site = saved_site;
-                    TURI_DRIVE_FREE_EP(acc_epoch, acc); len--;
+                    TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--;
                     break;
                 }
                 /* Turi-body closure: shared prologue (arity + step-fuel checks,
@@ -10780,12 +10857,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                         cur = turi_errorf("eval: arity mismatch: %s expects %u args, got %u",
                                           fn->binding ? fn->binding->name->name : "<fn>",
                                           (unsigned)effective_params, (unsigned)(n - arg_base));
-                    TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break;
+                    TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--; break;
                 }
                 if (env->step_fuel_limit > 0) {  /* SB3: step-fuel, as the retired eval_apply_inner charged it */
                     if (env->step_fuel == 0) {
                         cur = turi_error("eval: step fuel exhausted");
-                        TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break;
+                        TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--; break;
                     }
                     env->step_fuel--;
                 }
@@ -10794,7 +10871,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     frame_bind(env, call_frame,
                                fn->params[param_offset + i]->name->name,
                                turi_copy_byvalue_struct_arg(env, acc[arg_base + i]));
-                TURI_DRIVE_FREE_EP(acc_epoch, acc);
+                TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own);
                 /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
                  * just bound as ordinary int args carry TypeClassInstance
                  * pointers (the EX_DICT address-only value).  Record them as
@@ -10976,7 +11053,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 uint32_t           n    = be->as.builtin.n;
                 TuriValue         *acc  = (TuriValue *)top->aux;  /* NULL if short-circuit */
                 uint32_t           acc_epoch = top->epoch;
-                if (signaled) { if (acc) TURI_DRIVE_FREE_EP(acc_epoch, acc); len--; break; }
+                void *const        acc_own   = acc;
+                if (signaled) { if (acc) TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--; break; }
                 if (spec->shape == BS_AND_SC) {
                     if (!turi_is_truthy(cur)) { cur = turi_bool(false); len--; break; }
                 } else if (spec->shape == BS_OR_SC) {
@@ -11003,7 +11081,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     int64_t w = (n >= 2) ? acc[1].as_int : 0;
                     TuriValue forged;
                     bool bad = n >= 1 && cont_handle_forged(env, acc[0].as_int, &forged);
-                    TURI_DRIVE_FREE_EP(acc_epoch, acc);
+                    TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own);
                     if (bad) { cur = forged; len--; break; }
                     ContFoldState *s; TuriValue val, ffn, *fargs; uint32_t fn_n;
                     int rc = cont_fold_begin(c, w, &s, &val, &ffn, &fargs, &fn_n);
@@ -11013,14 +11091,14 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     have_apply = true;   /* result returns to this DK_CONT_FOLD */
                 } else {
                     cur = eval_builtin(env, spec, acc, n);
-                    TURI_DRIVE_FREE_EP(acc_epoch, acc); len--;
+                    TURI_DRIVE_FREE_OWN(acc_epoch, acc, acc_own); len--;
                 }
                 break;
             }
             case DK_MAKE_STRUCT: {
                 TuriValue *fields = (TuriValue *)top->aux;
                 uint32_t   fields_epoch = top->epoch;
-                if (signaled) { TURI_DRIVE_FREE_EP(fields_epoch, fields); len--; break; }  /* abandon, propagate */
+                if (signaled) { TURI_DRIVE_FREE_OWN(fields_epoch, fields, fields); len--; break; }  /* abandon, propagate */
                 const Expr *me = top->expr;
                 uint32_t    n  = me->as.make_struct_.n_fields;
                 fields[top->index] = cur;
@@ -11031,7 +11109,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 } else {
                     /* make_struct_val_def copies the fields, so free after. */
                     cur = make_struct_val_def(env, "<struct>", n, fields);
-                    TURI_DRIVE_FREE_EP(fields_epoch, fields);
+                    TURI_DRIVE_FREE_OWN(fields_epoch, fields, fields);
                     len--;  /* pop; keep returning the struct value */
                 }
                 break;
@@ -15037,6 +15115,7 @@ static EvalBinding *promo_copy_bindings(TuriEnv *env, EvalBinding *b, PromoMap *
     void *seen = promo_map_get(fwd, b);
     if (seen) return (EvalBinding *)seen;
     EvalBinding *nb = (EvalBinding *)turi_val_perm_alloc(env, sizeof *nb);
+    turi_val_note_reused(env, nb);
     promo_map_put(fwd, b, nb);
     nb->name  = b->name;                       /* interned in sym_arena */
     nb->value = promo_copy(env, b->value, fwd);
@@ -15061,12 +15140,14 @@ static EvalFrame *promo_copy_frame(TuriEnv *env, EvalFrame *f, PromoMap *fwd) {
     void *seen = promo_map_get(fwd, f);
     if (seen) return (EvalFrame *)seen;
     EvalFrame *nf = (EvalFrame *)turi_val_perm_alloc(env, sizeof *nf);
+    turi_val_note_reused(env, nf);
     promo_map_put(fwd, f, nf);
     nf->parent   = promo_copy_frame(env, f->parent, fwd);
     nf->bindings = promo_copy_bindings(env, f->bindings, fwd);
     nf->tyvars   = promo_copy_tyvars(env, f->tyvars, fwd);
     nf->escaped     = true;    /* promoted: reachable from a survivor */
     nf->reclaimable = false;
+    nf->deferred    = false;
     nf->epoch       = g_turi_cont_epoch;
     nf->owned = nf->owned_next = NULL;
     return nf;
@@ -15436,6 +15517,456 @@ static void collsweep_after_rewind(TuriEnv *env, TuriValue result) {
     }
 }
 
+/* ===========================================================================
+ * r7rs-callcc-memory-never-freed: what a capture kept, put off to the sweep.
+ *
+ * A frame made before a capture, and a work-stack entry's argument
+ * accumulator pushed before one, are not handed back when their activation
+ * ends: an image of that capture may complete the activation again (the
+ * capture epoch, frame_release and TURI_DRIVE_FREE_OWN).  Before the sweep
+ * they were kept for the life of the process.  Now they are recorded here,
+ * and a sweep that completed hands back each one nothing reached -- no live
+ * image's drives hold its entry, nothing reaches the frame -- so no
+ * re-entry can come back to it.  Only an env that sweeps records anything.
+ * ======================================================================== */
+typedef struct {
+    EvalFrame **frames;
+    size_t      n_frames, cap_frames;
+    PromoMap    temps;      /* malloc'd temporary -> itself (a set) */
+} ContDeferred;
+
+static ContDeferred *cont_deferred(TuriEnv *env) {
+    if (!env->obj_starts || g_scheme_lower_opened_seam) return NULL;
+    if (!env->cont_deferred) {
+        ContDeferred *d = (ContDeferred *)calloc(1, sizeof *d);
+        if (!d) return NULL;
+        promo_map_init(&d->temps);
+        env->cont_deferred = d;
+    }
+    return (ContDeferred *)env->cont_deferred;
+}
+
+static void cont_defer_frame(TuriEnv *env, EvalFrame *f) {
+    if (f->deferred) return;
+    ContDeferred *d = cont_deferred(env);
+    if (!d) return;
+    if (d->n_frames == d->cap_frames) {
+        size_t ncap = d->cap_frames ? d->cap_frames * 2 : 256;
+        EvalFrame **nf = (EvalFrame **)realloc(d->frames, ncap * sizeof *nf);
+        if (!nf) return;   /* kept for good, as before the sweep */
+        d->frames = nf;
+        d->cap_frames = ncap;
+    }
+    f->deferred = true;
+    d->frames[d->n_frames++] = f;
+}
+
+static void cont_defer_temp(TuriEnv *env, void *p) {
+    ContDeferred *d = p ? cont_deferred(env) : NULL;
+    if (d) promo_map_put(&d->temps, p, p);
+}
+
+/* Env teardown, and a scratch rewind (the frames were in scratch). */
+static void cont_deferred_drop_frames(TuriEnv *env) {
+    ContDeferred *d = (ContDeferred *)env->cont_deferred;
+    if (d) d->n_frames = 0;
+}
+void turi_cont_deferred_free(TuriEnv *env) {
+    ContDeferred *d = (ContDeferred *)env->cont_deferred;
+    if (!d) return;
+    for (uint32_t i = 0; i < d->temps.cap; i++)
+        if (d->temps.slots[i].key) free(d->temps.slots[i].key);
+    promo_map_free(&d->temps);
+    free(d->frames);
+    free(d);
+    env->cont_deferred = NULL;
+}
+
+/* ===========================================================================
+ * r7rs-callcc-memory-never-freed: the marker of the continuation-image sweep.
+ *
+ * A re-entrant call/cc image (interpreter_natives.c) can be freed once its
+ * continuation procedure is unreachable, and the interpreter has no collector
+ * to say when that is.  The R7RS natives run one: at a capture, when enough
+ * images have accumulated, they mark everything reachable and free the
+ * images nothing reached.  They own the images; this marker walks the
+ * interpreter's side.
+ *
+ * It is CONSERVATIVE.  Every word it reads that points into the value pool
+ * marks the object holding it (value.c's object map) and queues that
+ * object's words; a word naming a tracked collection box queues the box's
+ * cells; and every word is offered to the natives' hook, which recognises a
+ * continuation handle and queues that continuation's image.  So it needs no
+ * layout for a frame, a binding, a closure or a struct -- they are pool
+ * objects -- and an integer that happens to look like a pointer only keeps
+ * something alive.  The typed parts are the memory outside the pool that
+ * holds values: the drivers' work stacks and their argument accumulators,
+ * the globals, the env's in-flight values, the defer chain.
+ *
+ * What it cannot see, it does not guess at: it records a DOUBT, and a sweep
+ * with a doubt frees nothing.  That covers a set or map box (its entries are
+ * untyped), every work-stack kind whose `aux` is a structure this walk does
+ * not know (effects, generators, STM, catch-unwind, native resumes), and any
+ * effect or generator state in flight.  The roots and their limits:
+ *
+ *   - the C stack from here to the thread's base (the caller passes the
+ *     base), with the callee-saved registers spilled into this frame;
+ *   - every live drive's work stack, entries [0, len) typed, and its inline
+ *     buffer left out of the stack scan (above len it holds stale entries);
+ *   - the globals, the prelude snapshot, the env's return/throw/abort values;
+ *   - the live defer chain's snapshot frames;
+ *   - a reached continuation's image and saved state (turi_cont_gc_state),
+ *     its drives handled the same way as the live ones.
+ * ======================================================================== */
+#if defined(__SANITIZE_ADDRESS__)
+#  define TURI_GC_NOASAN __attribute__((no_sanitize_address))
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define TURI_GC_NOASAN __attribute__((no_sanitize_address))
+#  endif
+#endif
+#ifndef TURI_GC_NOASAN
+#  define TURI_GC_NOASAN
+#endif
+
+enum { GC_RANGE, GC_BOX };
+typedef struct { int kind; uintptr_t lo, hi; TuriCollBuf *box; } GcWork;
+typedef struct { uintptr_t lo, hi; } GcSkip;
+
+struct TuriContGc {
+    TuriEnv          *env;
+    TuriContGcWordFn  on_word;
+    void             *ud;
+    PromoMap          boxes;     /* live tracked box -> its TuriCollBuf */
+    GcWork           *wl;
+    size_t            n_wl, cap_wl;
+    const char       *doubt;     /* the first reason nothing may be freed */
+    /* Nonzero while the words read are an image's (or the registers saved
+     * with it): the capture epoch it was taken at.  See gc_word. */
+    uint32_t          image_epoch;
+    size_t            scanned;   /* bytes read, for the caller's pacing */
+    PromoMap          temps;     /* work-stack temporaries a drive reached */
+};
+
+void turi_cont_gc_doubt(TuriContGc *gc, const char *why) {
+    if (!gc->doubt) gc->doubt = why;
+}
+
+static void gc_push(TuriContGc *gc, int kind, uintptr_t lo, uintptr_t hi, TuriCollBuf *box) {
+    if (gc->n_wl == gc->cap_wl) {
+        size_t ncap = gc->cap_wl ? gc->cap_wl * 2 : 256;
+        GcWork *nw = (GcWork *)realloc(gc->wl, ncap * sizeof *nw);
+        if (!nw) { turi_cont_gc_doubt(gc, "out of memory"); return; }
+        gc->wl = nw;
+        gc->cap_wl = ncap;
+    }
+    gc->wl[gc->n_wl++] = (GcWork){ kind, lo, hi, box };
+}
+
+/* One word.  A word read out of an image is a word of the C stack as it was
+ * at the capture, and a slot the frames then live never wrote still holds
+ * whatever an earlier, finished call left there -- often the address of a
+ * frame or binding that was on the free list then and has been handed out
+ * again since, to the very next call/cc's `let`, whose binding holds the
+ * next continuation's handle.  Followed, that stale word chains every image
+ * to the one after it and the sweep frees nothing.  So from an image: a frame
+ * made or handed out again since the capture (its epoch is the capture's or
+ * later) is not the one the image saw, and is skipped; a binding is skipped
+ * outright -- a live one hangs off its frame, which the image names in its
+ * drives and its evaluator's locals, and is reached through it. */
+_Static_assert(sizeof(EvalFrame) >= sizeof(EvalBinding) + 16,
+               "gc_word tells a frame from a binding by its extent");
+static void gc_word(TuriContGc *gc, uintptr_t w) {
+    if (w < 4096) return;
+    gc->on_word(gc, w, gc->ud);
+    uintptr_t lo, hi;
+    int kind = turi_val_object_of(gc->env, w, &lo, &hi);
+    if (kind >= 0) {
+        /* A free-listed object is a frame when it is a frame's size (an
+         * object's extent is at least its size, and a binding's never
+         * reaches a frame's): taking a binding for a frame only reads its
+         * neighbour as an epoch, and then either follows it or skips it, as
+         * a binding would be. */
+        if (gc->image_epoch && kind == TURI_VAL_REUSED) {
+            if (hi - lo < sizeof(EvalFrame)) return;
+            if (((const EvalFrame *)lo)->epoch >= gc->image_epoch) return;
+        }
+        if (turi_val_mark(gc->env, lo)) gc_push(gc, GC_RANGE, lo, hi, NULL);
+        return;
+    }
+    if (gc->boxes.count) {
+        TuriCollBuf *n = (TuriCollBuf *)promo_map_get(&gc->boxes, (const void *)w);
+        if (n && !n->marked) {
+            n->marked = true;
+            gc_push(gc, GC_BOX, 0, 0, n);
+        }
+    }
+}
+
+static void gc_value(TuriContGc *gc, TuriValue v) {
+    switch (v.tag) {
+    case TURI_NIL: case TURI_BOOL: case TURI_FLOAT: case TURI_CSTR:
+    case TURI_ERROR: case TURI_REJECTION: case TURI_STRUCT_TYPE: case TURI_SYNTAX:
+        return;   /* no value-pool object behind them that can hold one */
+    default:
+        gc_word(gc, (uintptr_t)v.as_int);
+    }
+}
+
+static void gc_box_markfn(TuriValue v, void *ctx) { gc_value((TuriContGc *)ctx, v); }
+
+/* The words of [addr, addr + n), read from `buf` (the memory itself, or a copy
+ * of it -- an image), leaving out the `skip` ranges (sorted, by address). */
+TURI_GC_NOASAN
+static void gc_scan(TuriContGc *gc, const unsigned char *buf, uintptr_t addr, size_t n,
+                    const GcSkip *skip, size_t n_skip) {
+    size_t s = 0;
+    gc->scanned += n;
+    for (size_t off = 0; off + sizeof(uintptr_t) <= n; off += sizeof(uintptr_t)) {
+        uintptr_t a = addr + off;
+        while (s < n_skip && skip[s].hi <= a) s++;
+        if (s < n_skip && skip[s].lo <= a) {
+            off = (size_t)(skip[s].hi - addr);
+            off = (off + sizeof(uintptr_t) - 1) & ~(sizeof(uintptr_t) - 1);
+            off -= sizeof(uintptr_t);   /* the loop's increment */
+            continue;
+        }
+        /* A plain load in an uninstrumented function: an intercepted memcpy
+         * would report the C stack's redzones. */
+        gc_word(gc, *(const volatile uintptr_t *)(const void *)(buf + off));
+    }
+}
+
+/* One work-stack entry: its frame, its `last` value, and the `aux` the kinds
+ * that hold values keep there.  `saved` says it came out of an image, whose
+ * defer marks name a chain that may since have been fired and freed. */
+static void gc_drive(TuriContGc *gc, const DriveCont *d, bool saved) {
+    switch (d->kind) {
+    case DK_BUILTIN_ARG:
+    case DK_CALL_ARG:
+    case DK_MAKE_STRUCT:
+        if (d->aux) {
+            promo_map_put(&gc->temps, d->aux, d->aux);
+            size_t cap = promo_wscont_aux_cap(d);
+            size_t k   = d->index < cap ? d->index : cap;
+            const TuriValue *acc = (const TuriValue *)d->aux;
+            for (size_t i = 0; i < k; i++) gc_value(gc, acc[i]);
+        }
+        break;
+    case DK_LET_BODY:
+    case DK_CALL_RET:
+        /* A defer mark: the live chain is walked whole (turi_cont_gc_roots). */
+        if (saved && d->aux) turi_cont_gc_doubt(gc, "a defer in a saved continuation");
+        break;
+    case DK_ESCAPE:   /* aux: the escape boundary, which holds no live value */
+        if (d->aux) promo_map_put(&gc->temps, d->aux, d->aux);
+        break;
+    case DK_DONE: case DK_IF_BRANCH: case DK_DO_SEQ: case DK_LET_BIND:
+    case DK_MATCH_BODY: case DK_UNARY: case DK_GET_FIELD: case DK_WHILE:
+    case DK_MATCH_SCRUT:
+        break;
+    default:
+        turi_cont_gc_doubt(gc, "an effect, generator, STM or native-resume frame");
+        break;
+    }
+    gc_word(gc, (uintptr_t)d->frame);
+    gc_value(gc, d->last);
+}
+
+static int gc_skip_cmp(const void *a, const void *b) {
+    uintptr_t x = ((const GcSkip *)a)->lo, y = ((const GcSkip *)b)->lo;
+    return x < y ? -1 : x > y;
+}
+
+TuriContGc *turi_cont_gc_begin(TuriEnv *env, TuriContGcWordFn on_word, void *ud) {
+    if (!turi_val_mark_begin(env)) return NULL;
+    TuriContGc *gc = (TuriContGc *)calloc(1, sizeof *gc);
+    if (!gc) { (void)turi_val_mark_end(env); return NULL; }
+    gc->env = env;
+    gc->on_word = on_word;
+    gc->ud = ud;
+    promo_map_init(&gc->boxes);
+    promo_map_init(&gc->temps);
+    for (TuriCollBuf *n = env->coll_bufs; n; n = n->next) {
+        n->marked = false;
+        if (n->box) promo_map_put(&gc->boxes, n->box, n);
+    }
+    return gc;
+}
+
+void turi_cont_gc_words(TuriContGc *gc, const void *p, size_t n) {
+    gc_scan(gc, (const unsigned char *)p, (uintptr_t)p, n, NULL, 0);
+}
+
+uint32_t turi_cont_gc_image_epoch(const TuriContGc *gc) { return gc->image_epoch; }
+
+void turi_cont_gc_image_words(TuriContGc *gc, const void *p, size_t n, uint32_t epoch) {
+    gc->image_epoch = epoch;
+    gc_scan(gc, (const unsigned char *)p, (uintptr_t)p, n, NULL, 0);
+    gc->image_epoch = 0;
+}
+
+/* The live C stack, from this frame to `hi`, leaving out `skip`. */
+__attribute__((noinline)) TURI_GC_NOASAN
+static void gc_scan_stack(TuriContGc *gc, uintptr_t hi, const GcSkip *skip, size_t n_skip) {
+    volatile uintptr_t here = 0;
+    uintptr_t lo = (uintptr_t)&here & ~(uintptr_t)(sizeof(uintptr_t) - 1);
+    if (hi > lo) gc_scan(gc, (const unsigned char *)lo, lo, (size_t)(hi - lo), skip, n_skip);
+}
+
+/* The same, with the callee-saved registers spilled into this frame first
+ * (the scan starts below it).  Its own function: the setjmp would clobber the
+ * caller's loop variables. */
+__attribute__((noinline))
+static void gc_roots_stack(TuriContGc *gc, uintptr_t hi, const GcSkip *skip, size_t n_skip) {
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__EMSCRIPTEN__)
+    __builtin_unwind_init();
+#endif
+    jmp_buf regs;
+    if (setjmp(regs) == 0) gc_scan_stack(gc, hi, skip, n_skip);
+}
+
+void turi_cont_gc_roots(TuriContGc *gc, const void *stack_hi) {
+    TuriEnv *env = gc->env;
+    for (EnvBinding *b = env->globals; b; b = b->next) gc_value(gc, b->value);
+    for (uint32_t i = 0; i < env->n_prelude_globals; i++)
+        gc_value(gc, env->prelude_globals[i].value);
+    gc_value(gc, env->return_value);
+    gc_value(gc, env->throw_value);
+    gc_value(gc, env->abort_value);
+    gc_value(gc, env->session_rtv);
+    for (DeferItem *d = (DeferItem *)env->defer_stack; d; d = d->next)
+        gc_word(gc, (uintptr_t)d->snapshot);
+    if (env->handler_stack) turi_cont_gc_doubt(gc, "a live effect handler");
+    if (g_catch_stack)      turi_cont_gc_doubt(gc, "a live catch boundary");
+    if (g_reset_stack)      turi_cont_gc_doubt(gc, "a live reset");
+#ifndef __EMSCRIPTEN__
+    if (g_pending_cont || g_pending_gen) turi_cont_gc_doubt(gc, "a pending effect continuation");
+#endif
+    if (g_current_gen)      turi_cont_gc_doubt(gc, "a running generator");
+
+    size_t n_skip = 0, cap_skip = 0;
+    GcSkip *skip = NULL;
+    for (DriveReg *r = g_drive_regs; r; r = r->prev) {
+        for (size_t i = 0; i < *r->plen; i++) gc_drive(gc, &(*r->pst)[i], false);
+        if (n_skip == cap_skip) {
+            cap_skip = cap_skip ? cap_skip * 2 : 16;
+            GcSkip *ns = (GcSkip *)realloc(skip, cap_skip * sizeof *ns);
+            if (!ns) { free(skip); turi_cont_gc_doubt(gc, "out of memory"); return; }
+            skip = ns;
+        }
+        skip[n_skip].lo = (uintptr_t)r->inl;
+        skip[n_skip].hi = (uintptr_t)(r->inl + DRIVE_INLINE);
+        n_skip++;
+    }
+    qsort(skip, n_skip, sizeof *skip, gc_skip_cmp);
+    gc_roots_stack(gc, (uintptr_t)stack_hi, skip, n_skip);
+    free(skip);
+}
+
+void turi_cont_gc_state(TuriContGc *gc, const TuriContState *s, uint32_t epoch,
+                        const unsigned char *img, uintptr_t img_lo, size_t img_n) {
+    gc_value(gc, s->return_value);
+    gc_value(gc, s->throw_value);
+    gc_value(gc, s->abort_value);
+    /* The escape boundaries a re-entry makes live again. */
+    for (uint32_t i = 0; i < s->n_escape_live; i++)
+        if (s->escape_live[i]) promo_map_put(&gc->temps, s->escape_live[i], s->escape_live[i]);
+    if (s->handler_stack || s->defer_stack || s->catch_stack ||
+        s->reset_stack || s->pending_cont || s->pending_gen || s->current_gen)
+        turi_cont_gc_doubt(gc, "a handler, defer, catch, reset or generator in a saved continuation");
+    for (size_t k = 0; k < s->n_drives; k++)
+        for (size_t i = 0; i < s->drives[k].len; i++)
+            gc_drive(gc, &s->drives[k].copy[i], true);
+    GcSkip *skip = s->n_inl ? (GcSkip *)malloc(s->n_inl * sizeof *skip) : NULL;
+    size_t n_skip = 0;
+    if (s->n_inl && !skip) { turi_cont_gc_doubt(gc, "out of memory"); return; }
+    uintptr_t img_hi = img_lo + img_n;
+    for (size_t k = 0; k < s->n_inl; k++) {
+        uintptr_t lo = (uintptr_t)s->inl[k].inl;
+        uintptr_t hi = (uintptr_t)(s->inl[k].inl + DRIVE_INLINE);
+        if (lo < img_lo || hi > img_hi) {
+            /* Not inside the image (never expected): leave it to the scan. */
+            if (s->inl[k].len) turi_cont_gc_doubt(gc, "a saved drive outside its image");
+            continue;
+        }
+        for (size_t i = 0; i < s->inl[k].len; i++) {
+            DriveCont d;
+            memcpy(&d, img + (lo - img_lo) + i * sizeof(DriveCont), sizeof d);
+            gc_drive(gc, &d, true);
+        }
+        skip[n_skip].lo = lo;
+        skip[n_skip].hi = hi;
+        n_skip++;
+    }
+    qsort(skip, n_skip, sizeof *skip, gc_skip_cmp);
+    gc->image_epoch = epoch;
+    gc_scan(gc, img, img_lo, img_n, skip, n_skip);
+    gc->image_epoch = 0;
+    free(skip);
+}
+
+bool turi_cont_gc_drain(TuriContGc *gc) {
+    bool any = false;
+    while (gc->n_wl && !gc->doubt) {
+        GcWork w = gc->wl[--gc->n_wl];
+        any = true;
+        if (w.kind == GC_RANGE) {
+            gc_scan(gc, (const unsigned char *)w.lo, w.lo, (size_t)(w.hi - w.lo), NULL, 0);
+        } else if (w.box->box) {
+            if (!w.box->scan || !w.box->scan(w.box->box, gc_box_markfn, gc))
+                turi_cont_gc_doubt(gc, "a set or map whose entries cannot be read");
+        }
+    }
+    return any;
+}
+
+size_t turi_cont_gc_release(TuriContGc *gc) {
+    ContDeferred *d = (ContDeferred *)gc->env->cont_deferred;
+    size_t n = 0;
+    if (!d || gc->doubt || !turi_val_starts_complete(gc->env)) return 0;
+    size_t keep = 0;
+    for (size_t i = 0; i < d->n_frames; i++) {
+        EvalFrame *f = d->frames[i];
+        if (turi_val_marked(gc->env, (uintptr_t)f)) { d->frames[keep++] = f; continue; }
+        f->deferred = false;
+        f->reclaimable = false;
+        EvalFrame *o = f->owned;
+        f->owned = NULL;
+        frame_release_one(gc->env, f);
+        while (o) {
+            EvalFrame *next = o->owned_next;
+            frame_release_one(gc->env, o);
+            o = next;
+        }
+        n++;
+    }
+    d->n_frames = keep;
+    PromoMap left;
+    promo_map_init(&left);
+    for (uint32_t i = 0; i < d->temps.cap; i++) {
+        void *p = d->temps.slots[i].key;
+        if (!p) continue;
+        if (promo_map_get(&gc->temps, p)) promo_map_put(&left, p, p);
+        else { free(p); n++; }
+    }
+    promo_map_free(&d->temps);
+    d->temps = left;
+    return n;
+}
+
+const char *turi_cont_gc_end(TuriContGc *gc, size_t *scanned) {
+    const char *doubt = gc->doubt;
+    if (scanned) *scanned = gc->scanned;
+    promo_map_free(&gc->temps);
+    for (TuriCollBuf *n = gc->env->coll_bufs; n; n = n->next) n->marked = false;
+    promo_map_free(&gc->boxes);
+    free(gc->wl);
+    if (!turi_val_mark_end(gc->env) && !doubt) doubt = "out of memory in the object map";
+    free(gc);
+    return doubt;
+}
+
 /* Promote everything that escapes this top-level eval (its result plus every
  * global) into value_perm, then rewind value_scratch.  A no-op unless promotion
  * is enabled; conservatively skips the rewind whenever safety cannot be proven. */
@@ -15614,7 +16145,11 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     promo_map_free(&fwd);
     *result = promoted;
 
-    /* Everything reachable now lives in value_perm; reclaim the scratch region. */
+    /* Everything reachable now lives in value_perm; reclaim the scratch region.
+     * Its object starts go first (r7rs-callcc-memory-never-freed): the next
+     * generation's objects start elsewhere in the same slabs. */
+    turi_val_starts_forget(env, &env->value_scratch);
+    cont_deferred_drop_frames(env);
     arena_reset(&env->value_scratch);
     env->frame_free   = NULL;   /* their nodes were in scratch */
     env->binding_free = NULL;
@@ -15817,6 +16352,12 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
             body_len = rest_len;
         }
     }
+    /* r7rs-callcc-memory-never-freed: a Scheme session keeps the value pool's
+     * object map, which the continuation-image sweep needs.  Complete only
+     * when it starts with the session's first turn -- `tur --interpret` seeds
+     * the language before its preloads, so it does there. */
+    if (env->lang == LANG_R7RS && !env->obj_starts)
+        turi_val_starts_enable(env, env->n_acc_turns == 0);
 
     /* 1. Build combined source: all prior definitions + new source (sans #lang).
      *

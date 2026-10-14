@@ -130,4 +130,10 @@ const char *scheme_source_name(const char *name, char *buf, size_t cap);
  * which use Turmeric's own semantics, partial application included. */
 bool scheme_span_is_user_source(Span sp);
 
+/* r7rs-callcc-memory-never-freed: set once a Scheme program in this process
+ * imports a Turmeric module or a library of its own -- code that can reach
+ * natives which keep values in memory the interpreter's continuation-image
+ * sweep cannot read.  The sweep then stays off.  Never reset. */
+extern bool g_scheme_lower_opened_seam;
+
 #endif /* TUR_SCHEME_LOWER_H */

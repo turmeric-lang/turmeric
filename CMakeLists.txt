@@ -1431,6 +1431,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_turi_frame_reclaim PROPERTIES TIMEOUT 720 DEPENDS tur)
+# r7rs-callcc-memory-never-freed: `tur --interpret` frees a re-entrant call/cc
+# image once nothing reachable holds its continuation.  Re-enters
+# continuations stored in every kind of place with a sweep at each capture,
+# and bounds a loop that stores every continuation it makes.
+add_test(
+  NAME tur_turi_callcc_reclaim
+  COMMAND python3 tests/check-turi-callcc-reclaim.py $<TARGET_FILE:tur>
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_turi_callcc_reclaim PROPERTIES TIMEOUT 720 DEPENDS tur)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

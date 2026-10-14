@@ -173,7 +173,7 @@ Each item has an open report:
   [turi-call-pins-and-side-frames-not-reclaimed](../reported/turi-call-pins-and-side-frames-not-reclaimed.md).
 - **Programs with a re-entrant `call/cc`.** The first capture switches
   reclamation off for the rest of the run:
-  [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md),
+  [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md),
   section *2026-10-05*.
 - **Frames captured by a closure**, with everything under them, as before.
   That is correct until the interpreter can tell a closure is dead.

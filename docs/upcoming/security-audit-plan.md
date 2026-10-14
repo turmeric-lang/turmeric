@@ -122,7 +122,7 @@ confirm.
 | T5 | **Editor protocols** (LSP, DAP, MCP over stdio) | framed messages from the editor | Peer is semi-trusted (it is the user's editor), but framing must be robust: a bad `Content-Length` must not overflow (M-3). |
 
 Out of scope for this audit: DoS of a developer's own machine by their own
-program; the R7RS embedding's memory growth (`docs/reported/r7rs-callcc-memory-never-freed.md`
+program; the R7RS embedding's memory growth (`docs/archive/r7rs-callcc-memory-never-freed.md`
 covers it); Godot bindings (separate repo).
 
 ## 2. Findings already in hand

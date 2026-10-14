@@ -380,6 +380,9 @@ void turi_env_free(TuriEnv *env) {
      * turi-value-pool-scratch-promotion-plan: free both value regions. */
     arena_free(&env->value_scratch);
     arena_free(&env->value_perm);
+    turi_val_starts_free(env);   /* r7rs-callcc-memory-never-freed */
+    turi_cont_release_env(env);
+    turi_cont_deferred_free(env);
     turi_val_global_pool_free();
 
     /* TR2.2b: the persistent elaboration session owns malloc'd scope/registry

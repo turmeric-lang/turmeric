@@ -1,5 +1,19 @@
 # `#lang r7rs`: a re-entrant `call/cc` keeps a copy of the stack forever under `--interpret`
 
+**Resolved 2026-10-14: the interpreter frees a continuation nothing can reach.**
+The one direction left open below, "Reclaim images", is done. `tur
+--interpret` now runs a sweep that finds which continuations a program can
+still reach and frees the rest: the stack image, the saved evaluator state,
+and the frames and argument lists that were kept so a re-entry could finish
+them. See *2026-10-14* at the end for how it works, what it costs and where
+it stays off.
+
+| `tur --interpret`, Release | before | after |
+| --- | --- | --- |
+| 100,000 iterations, each storing its continuation (`(set! saved k)`) | 245 MB | 76 MB |
+| the same loop storing a fresh closure instead (the floor) | 54 MB | 56 MB |
+| a generator stepped 16,000 times (two captures a step) | 121 MB | 55 MB |
+
 **Narrowed 2026-10-09: a capture no longer pins the frames made after it.**
 The 2026-10-05 regression below is fixed: `frame_release` and the driver's
 argument accumulators are keyed on a capture EPOCH rather than the pin, so a
@@ -388,3 +402,170 @@ know the continuation procedure is dead, and interpreter closures are neither
 traced nor counted; there is no narrower rule to add. The row stays open
 on that one direction ("Reclaim images") and is not a candidate for a quick
 fix.
+
+## 2026-10-14: a sweep frees what no continuation can reach
+
+The 2026-10-11 section was right that this needed the interpreter to know
+when a continuation procedure is dead, and that interpreter values are
+neither traced nor counted. The fix traces them, for this one purpose.
+`tur --interpret` runs a SWEEP at a capture once enough continuations are
+live. It marks everything the program can still reach and frees every
+continuation it did not reach (`r7k_maybe_sweep`,
+src/turi/interpreter_natives.c; the marker is `turi_cont_gc_*`,
+src/turi/eval.c).
+
+### What a sweep frees
+
+- **The continuation:** its stack image (whole, or a delta), the saved
+  evaluator state with its drive-stack copies, and the `R7kCont`. A whole
+  image that is still the key of a live delta, or this thread's current
+  keyframe for its stack range, is kept until neither holds.
+- **What a capture kept from being handed back.** A frame made before a
+  capture is not released when its activation ends, because an image may run
+  that activation again; neither is a work-stack entry's argument list, or a
+  `call/ec` escape boundary, pushed before one. These are now recorded
+  (`cont_defer_frame`, `TURI_DRIVE_FREE_OWN`). After a complete marking, each
+  one nothing reached goes back to the free lists (`turi_cont_gc_release`).
+
+The procedure value itself (`(fn [& vs] ...)` in the prelude's
+`r7rs-call/cc`) and the `let` frame it captures are pool objects. Like every
+closure the interpreter makes, they stay until the env is freed. That is the
+interpreter's policy for closures (docs/guides/gc-guide.md, "The interpreter
+is different"), not this report's. It is also why the stored-continuation
+loop above stays above the stored-closure loop.
+
+### How it finds what is reachable
+
+The marker is **conservative**. Every word it reads is tried three ways:
+
+- as a **continuation handle**;
+- as a pointer into the **value pool**. The pool is a bump arena with no object
+  boundaries, so an env running `#lang r7rs` now keeps an OBJECT MAP: a bit
+  for every 8-byte unit where an allocation starts (value.c,
+  `turi_val_starts_*`). A word anywhere inside an object marks the object,
+  and all of the object's words are read in turn;
+- as a **tracked collection box** (a Vec, Set or Map). Its cells are read through
+  the box's TR3 scan callback.
+
+No layout is needed for a frame, a binding, a closure or a struct. An integer
+that happens to look like a pointer only keeps something alive. Memory
+outside the pool that holds values is read with its type: the drivers' work
+stacks and their argument accumulators, the globals, the env's in-flight
+values, the defer chain, and the R7RS natives' dynamic-environment slots.
+
+The roots are:
+
+- the C stack from the sweep up to the thread's stack base, with the
+  callee-saved registers spilled into a frame the scan covers;
+- every live drive. Entries `[0, len)` are read with their type. The rest of a
+  drive's inline buffer is left out of the stack scan: it holds stale entries
+  of evaluations that have finished;
+- the globals, the env's return, throw and abort values, and the defer chain.
+
+A reached continuation is read the same way. That means its image (a delta
+is rebuilt into the bytes it would restore), the registers saved in its
+`jmp_buf`, and its saved state, its drives handled like the live ones.
+
+**Handles.** A program no longer holds an `R7kCont` address. It holds a slot
+in a table plus the slot's generation, as `(gen << 32) | ((slot + 1) << 2)`;
+bit 0 is still the prelude's re-entry tag. A sweep recognises a handle
+wherever one is stored. Freeing a continuation bumps its slot's generation,
+so a handle that outlived its image names nothing. Restoring it is then an
+error that names this report, not a jump into freed memory. That error is
+what the stress test below looks for.
+
+### Stale words: the one trap
+
+The first version marked almost everything. Each image chained to the one
+after it: of 256 continuations, a sweep freed 9. An image is the C stack as
+it was at the capture. A slot the frames live then never wrote still holds
+whatever an earlier, finished call left there. Very often that is the address
+of a frame or binding that was on the free list at the time and has been
+handed out again since, to the very next `call/cc`'s `let`, whose binding
+holds the next continuation's handle. So words read **out of an image**, or
+out of its `jmp_buf`, are filtered:
+
+- A frame **made or handed out again since the capture** is skipped. Every
+  frame carries the epoch it was made in, and a frame with the capture's
+  epoch or later is not the frame the image saw.
+- A **binding** is skipped outright. A live binding hangs off its frame, which
+  the image names in its drives and its evaluator's locals, and is reached
+  through it.
+- A continuation **captured after** the image is skipped.
+
+The object map marks frame and binding starts. Those are the kinds the
+interpreter reuses; the object's extent tells the two apart. With the filter,
+a sweep of the loop above frees 253 of 256.
+
+### When it runs, and what it costs
+
+A sweep runs at a capture once three things hold: 512 captures have passed
+since the last sweep, the live count has doubled from what the last sweep
+left, and the captures since have made about twice what the last sweep read
+(counted at 1 KB a capture). A sweep walks everything reachable: some 300 KB
+for a small program, mostly the prelude's globals, about 0.4 ms on a Release
+`tur`. The three rules keep that a small, constant cost per capture, whether
+continuations live long or the program's heap is large: a generator over a
+big list would otherwise walk the list every few hundred steps. The two
+capture-heavy loops above run about 10-15% slower than before. The object map
+costs a Scheme program about 2-4% more memory whether or not it captures (a
+`guard` loop, which never captures: 216 MB -> 225 MB). Turmeric programs keep
+no map.
+
+### Where a sweep frees nothing
+
+A sweep does not guess. It records a DOUBT, and a sweep with a doubt frees
+nothing that time. The doubts:
+
+- a non-empty Set or Map is reachable (its entries are untyped);
+- a work-stack entry is of a kind the marker does not read (effects,
+  generators, STM, `catch-unwind`, native resumes);
+- an effect handler, catch, reset or generator is live, or is saved in a
+  reached continuation;
+- a reached continuation saved a defer.
+
+None of these comes up in a Scheme program that uses only R7RS and the SRFIs.
+The sweep is off altogether:
+
+- when the program imports a Turmeric module or a library of its own. Natives
+  can then keep values in memory the marker cannot read
+  (`g_scheme_lower_opened_seam`, set by the Scheme lowering);
+- when the program has fibers, generators or futures (SRFI 18 threads);
+- under a debugger;
+- while a continuation of another env or thread is live;
+- in an env whose object map started after the env had evaluated something:
+  a REPL that switched to `#lang r7rs` mid-session.
+
+`TUR_TURI_CONT_GC=0` turns it off. `TUR_TURI_CONT_GC_TRACE=1` reports each
+sweep on stderr. `TUR_TURI_CONT_GC_STRESS=1` sweeps at every capture, for the
+tests.
+
+Two imprecisions are left. Neither frees anything wrongly; both only keep
+something too long. A stale word in an image that points at an object
+allocated fresh since the capture (rather than handed out again) is followed.
+A stale word in the *live* stack keeps what it names until the next sweep.
+
+### Tests
+
+- `tests/fixtures/r7rs-callcc-reclaimed-images` stores a continuation in
+  each kind of place a program can keep one: a vector, a nest of pairs, a
+  record, a closure, a promise, a parameter object, the argument list of a
+  call in progress, another continuation's image, an exception payload, the
+  dynamic environment, and a SRFI 69 table. It also re-enters `map` part-way.
+  Each case makes captures it drops at once, so sweeps run in between, then
+  re-enters the stored continuation. Both back ends print the same.
+- `tests/check-turi-callcc-reclaim.py` (ctest `tur_turi_callcc_reclaim`) runs
+  that program with a sweep at every capture: 2,024 sweeps, none declined,
+  2,008 continuations freed, every answer right. It then bounds a loop that
+  stores every continuation: its growth must stay within twice that of the
+  stored-closure loop plus 16 MB, and be at most half its growth with the
+  sweep off. Debug: +26 MB, against +14 for closures and +123 with the sweep
+  off.
+- With one of the marker's inputs disabled on purpose (vector cells not
+  read), the stress run stops at the first case with the restore's error.
+  The test can see a missed reference.
+- All 2,769 `run-turi.sh` fixtures and 3,796 `run.sh` fixtures pass. Under
+  `run-turi.sh` with a sweep at every capture, every Scheme fixture but the
+  new one passes as well. The new one times out there, at its full size,
+  because 8,000 sweeps do not fit in 15 seconds; the check script runs it
+  smaller.

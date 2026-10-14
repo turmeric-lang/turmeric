@@ -463,6 +463,18 @@ tracking, which is also what keeps a TVar valid across rewinds. Explicit
 `vec-free` / `set-free` / `map-free` remain available and remain the only
 mid-run reclamation for envs without promotion.
 
+**Re-entrant `call/cc` images** (`#lang r7rs`) are the one thing the
+interpreter collects mid-run, without promotion. A captured continuation is a
+copy of the C stack plus the evaluator's saved state, about 2 KB, and a
+capture also keeps the frames and argument lists that were live at it. A sweep
+runs at a capture once enough continuations are live and frees every one whose
+handle nothing reachable holds. The marker is conservative: an env running
+`#lang r7rs` keeps an object map of its value pool, a bit for each place an
+allocation starts, so any word pointing into the pool marks the object holding
+it. The marker frees nothing when in doubt, and the sweep is off for programs
+that import Turmeric modules or run fibers. Closures stay under the policy
+above. See `docs/archive/r7rs-callcc-memory-never-freed.md`.
+
 **Consequence for `bash tests/run.sh`.** The compiler/codegen path is
 leak-clean and runs with LeakSanitizer enabled. The interpreter harnesses
 (`run-turi.sh`, `run-flags.sh`) default to `ASAN_OPTIONS=detect_leaks=0` -- not

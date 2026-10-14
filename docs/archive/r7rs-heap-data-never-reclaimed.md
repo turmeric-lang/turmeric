@@ -93,7 +93,7 @@ kept in a Turmeric map or `rc<T>` cell is seen.
   the direction the experiment above took --
   with the prelude's inline C allocating through it. The T5 continuation
   images and the DK frames are then roots, which also retires
-  [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md).
+  [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md).
 - Either way the fixture gate can then check leaks again: opt the `r7rs-*`
   fixtures into `tests/run-leak-check.sh` (`requires.leak-check`).
 
@@ -101,7 +101,7 @@ kept in a Turmeric map or `rc<T>` cell is seen.
 
 `docs/guides/r7rs-guide.md` ("Where it differs from R7RS") carries one bullet,
 beginning "**Data is never freed.**", for this report and three others: the
-`call/cc` clause is [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md),
+`call/cc` clause is [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md),
 the caught-`raise` clause is
 [r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md),
 and "on all but a few prelude paths" is

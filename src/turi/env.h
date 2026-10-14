@@ -315,6 +315,15 @@ typedef struct TuriEnv {
      * frame's tyvar and dictionary pins (eval.c's TyvarBind / DictBind). */
     void       *tyvar_free;
     void       *dict_free;
+    /* r7rs-callcc-memory-never-freed: where each value-pool object starts, so
+     * the continuation-image sweep can resolve a conservative word to the
+     * object holding it (value.c, turi_val_starts_*).  NULL unless the env
+     * runs `#lang r7rs` -- nothing else captures a re-entrant continuation. */
+    struct TuriObjStarts *obj_starts;
+    /* The frames and work-stack temporaries a capture kept from being handed
+     * back (eval.c, cont_defer_*), which the sweep releases once nothing
+     * reaches them. */
+    void       *cont_deferred;
     /* turi-value-pool-scratch-promotion-plan: opt-in bound on steady-state memory
      * for a single long-lived env (notebook-kernel pattern). When true, turi_eval
      * promotes every escaping value into value_perm and rewinds value_scratch at
