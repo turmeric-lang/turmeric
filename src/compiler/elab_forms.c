@@ -1425,7 +1425,13 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * (some 7.1)]`, `[o : (Vec int) (some 1)]` and `[o : (Option
                  * int) 7]` were accepted -- the binding silently took the
                  * initializer's type, or an int where an Option was claimed. */
-                if (!primitive && applied_type_conflict(*ann_ty, init->type)) {
+                /* declared-tyvars-are-not-rigid: `[b : B a]` with `a : A` is
+                 * the same swap one level down, and `[p : P a]` the ground
+                 * case the primitive compare above does not reach. */
+                if (!primitive && (applied_type_conflict(*ann_ty, init->type) ||
+                                   rigid_tyvar_conflict(e->sig_tyvars, e->n_sig_tyvars,
+                                                        *ann_ty, init->type,
+                                                        e->unsafe_depth > 0))) {
                     Buf ab; buf_init(&ab); type_print(&ab, *ann_ty); buf_putc(&ab, '\0');
                     Buf ib; buf_init(&ib); type_print(&ib, init->type); buf_putc(&ib, '\0');
                     diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
@@ -4040,6 +4046,17 @@ Expr *elab_if(Elab *e, const Form *call) {
             else_ = elab_fn_value_to_fat(e, else_);
             result_t = then_->type.as.fn.boxed ? then_->type : else_->type;
         } else if (!type_eq(then_->type, else_->type) &&
+                   (elab_retype_nullary_ctor_arm(then_, else_->type) ||
+                    elab_retype_nullary_ctor_arm(else_, then_->type))) {
+            /* none-arm-not-grounded-by-sibling-some-arm: `(if c (None) (Some
+             * x))` -- a nullary constructor, typed as the bare ADT for want
+             * of an argument, beside an application of the same ADT.  It was
+             * "if branches have mismatched types: then=Option else=(Option
+             * T)".  The constructor takes its sibling's type, the one an
+             * expected type would have pinned; any other bare-typed branch
+             * still mismatches. */
+            result_t = then_->type;
+        } else if (!type_eq(then_->type, else_->type) &&
                    (lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
                    !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
             /* saffron-dynamic-surface-pass (low): in a Saffron file an `if`
@@ -4057,8 +4074,17 @@ Expr *elab_if(Elab *e, const Form *call) {
             then_ = elab_coerce_to_any(e, then_);
             else_ = elab_coerce_to_any(e, else_);
             result_t = then_->type;
-        } else if (!type_eq(then_->type, else_->type)
-                   && !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
+        } else if ((!type_eq(then_->type, else_->type)
+                    && !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t))
+                   /* declared-tyvars-are-not-rigid: `(if c a b)` with `a : A`
+                    * and `b : B`, or `(if c a 1)`, joined -- two variables are
+                    * `type_eq` by kind and the tolerant walk reads a variable
+                    * as a wildcard.  The enclosing signature's variables match
+                    * only themselves; `#{Unsafe}` keeps the carrier bridge. */
+                   || (!(lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
+                       rigid_tyvar_conflict(e->sig_tyvars, e->n_sig_tyvars,
+                                            then_->type, else_->type,
+                                            e->unsafe_depth > 0))) {
             free(then_states);
             free(move_bindings);
             free(before_states);

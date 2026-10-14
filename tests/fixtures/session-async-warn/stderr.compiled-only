@@ -1,0 +1,1 @@
+TUR-W0043 warns about the compiled async runtime and is emitted only when compiling (elab_concurrent.c, !g_interpret_mode)

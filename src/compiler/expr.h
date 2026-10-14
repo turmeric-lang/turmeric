@@ -371,6 +371,13 @@ struct Binding {
     AliasState    alias_state;
     /* UT1: name of the binding that aliased this one (for TUR_E0200 message), or NULL */
     const Symbol *alias_name;
+    /* await-parks-only-to-the-nearest-c-frame: a function PARAMETER some
+     * call hands an awaiting function value (a named awaiter, an awaiting
+     * lambda, or another such parameter).  Calling it, passing it on, or
+     * capturing it into a lambda that does then may await.  On the binding
+     * rather than its FnDef so a lambda that captures the parameter sees it.
+     * Written by cps_color_program's may_await fixpoint, reset with it. */
+    bool          may_hold_awaiter;
     /* Phase HRT1: rank-2 polymorphic function parameter */
     bool          is_poly_fn;     /* true if this binding is a rank-2 poly fn param */
     const struct Type *poly_type; /* full TY_FORALL type, NULL if not rank-2 */
@@ -1187,6 +1194,18 @@ struct FnDef {
      * the callee's continuation.  Written by cps_color_program; read through
      * cps_fn_may_await. */
     bool           may_await;
+    /* await-parks-only-to-the-nearest-c-frame: this function may run below an
+     * async body -- it is an `(async ...)` thunk, or is called or referenced by
+     * one that may.  When a spawn's thunk cannot be resolved to a function (a
+     * thunk handed in as a parameter), every function counts.  TUR-W0044 is
+     * emitted only for these: an await anywhere else has no body to lose (the
+     * run-time refusal keys on tur_async_body_depth the same way).  Written by
+     * cps_color_program. */
+    bool           async_reachable;
+    /* await-parks-only-to-the-nearest-c-frame: TUR-W0044 has been emitted
+     * for this function (the CPS eviction site may be reached more than once
+     * per function -- per translation unit, per spec clone). */
+    bool           await_evict_warned;
     /* sum-closure-payload-never-dropped: lazily computed, emit side.  Bit i of
      * sumcl_known says param i has been asked; bit i of sumcl_nonretain says
      * the body keeps no closure taken out of the sum it receives there (see
@@ -1668,6 +1687,13 @@ struct Expr {
                   * callee raises names it (emit_call_site_span), as the
                   * node's own span would name the template. */
                  Span site;
+                 /* The one call in a partial application's thunk
+                  * (elab_partial_apply), which forwards the call made
+                  * through the partial's value: a panic in the callee
+                  * names that call through the value -- `(f i)` in a HOF --
+                  * and this call's own span (where the partial was made)
+                  * only when nothing set one (both engines). */
+                 bool forwards_site;
                  bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
                  /* Bitmasks over argument index.  64-bit: ordinary parameters
                   * are unbounded (these masks stay 0 for non-poly calls), but a

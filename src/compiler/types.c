@@ -3846,6 +3846,20 @@ const char *adt_heap_ptr_c_name(const AdtDef *def) {
     return heap_ptr_c_name(adt_byval_c_name(def));
 }
 
+/* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: the same question for
+ * a CONCRETE application of a parametric :heap ADT -- `(Fr int)` ->
+ * `tur_adt_Fr__int *`.  type_c_name's TY_APP arm names only by-value
+ * products, so a :heap parametric SUM spells int64_t there while its
+ * monomorph ctor (`ctor_Fr_Frame__int`) returns the typed pointer.  NULL for
+ * anything else: a non-heap or non-concrete app, or one with no monomorph. */
+const char *adt_app_heap_ptr_c_name(Type app) {
+    if (app.kind != TY_APP || !type_app_is_concrete_adt(&app)) return NULL;
+    AdtDef *def = type_adt_app_def(&app);
+    if (!def || !def->is_heap) return NULL;
+    const char *nm = type_register_adt_app(app);
+    return nm ? heap_ptr_c_name(nm) : NULL;
+}
+
 /* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
  * representation of a non-parametric flat-product ADT.  Mirrors the name the
  * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)
@@ -6055,6 +6069,20 @@ bool type_is_heap_adt(Type t) {
             return def && def->is_heap;
     }
     return false;
+}
+
+/* heap-sum-generic-never-specialized: true when t is a CONCRETE application of
+ * a `:heap` parametric SUM (`(defdata Fr :heap [T] (Nil) (Frame T T))`,
+ * `(Fr int)`).  Such an app spells the int64 carrier (type_c_name names an ADT
+ * app as its monomorph only for a by-value product), yet the value in hand is a
+ * pointer to its `tur_adt_Fr__int` monomorph, and the ADT has no base
+ * constructor -- only per-spec `ctor_Fr_Frame__int`.  A generic over it needs
+ * a clone, and the clone must read it through the monomorph layout. */
+bool adt_app_is_heap_sum(Type t) {
+    if (!type_app_is_concrete_adt(&t)) return false;
+    AdtDef *def = type_adt_app_def(&t);
+    return def && def->is_heap && def->n_type_params > 0 &&
+           !adt_app_is_byvalue_product(t);
 }
 
 /* end-to-end-monomorphization: the by-value struct C name for a (heap or not)

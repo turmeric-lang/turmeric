@@ -335,8 +335,37 @@ static bool adt_int64_carrier(const Type *t) {
  * signature spells such a value `int64_t`, and it crosses a slot or an env as
  * that word.  Outside a monomorph a bare type variable keeps the old answer:
  * the template gates are built on refusing it. */
+/* await-parks-only-to-the-nearest-c-frame: the same holds while the backend
+ * classifies or renders the BASE body of a lambda that captures a bare `T`
+ * and may await (fn_sig_ok admits it): that body only ever runs erased, its
+ * env stores the capture as the int64 carrier, and its direct thunk reads it
+ * as that word.  Scoped to that function (g_cps_erased_base, set around its
+ * classification, the heap-join fixpoint and its render), so the template
+ * gates still refuse a bare type variable everywhere else. */
+static bool g_cps_erased_base;
+static const Type *fn_ret_type(const FnDef *fd);   /* fwd */
 static bool mono_erased_tyvar(const Type *r) {
-    return g_cps_mono_resolver && r && r->kind == TY_TYVAR;
+    return (g_cps_mono_resolver || g_cps_erased_base) && r && r->kind == TY_TYVAR;
+}
+/* Is `fd` such a function?  Either a lambda that may await with a capture
+ * typed by a bare type variable (the only case fn_sig_ok admits a TY_TYVAR
+ * capture), or a DICT-CLONE that may await: the copy of a constrained generic
+ * a constrained rank-2 parameter calls, which takes its dictionaries as
+ * leading int64 params and its `T` params as the carrier word, and returns
+ * the carrier (emit_fns.c, MB2.5).  Not one whose result is a float: the
+ * carrier return would convert the value. */
+static bool fn_erased_base(const FnDef *fd) {
+    if (!fd || !cps_fn_may_await(fd)) return false;
+    if (fd->n_dict_clone) {
+        TypeKind rk = fn_ret_type(fd)->kind;
+        return rk != TY_FLOAT && rk != TY_FLOAT64 && rk != TY_FLOAT32;
+    }
+    if (!fd->closure) return false;
+    for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
+        const Binding *cap = fd->closure->captures[ci];
+        if (cap && !cap->is_global && cap->type.kind == TY_TYVAR) return true;
+    }
+    return false;
 }
 
 static bool slot_ok_t(const Type *t, TypeKind k) {
@@ -443,8 +472,25 @@ static char *slot_load(EmitCtx *ctx, TypeKind k, const Type *t, const char *s, b
  * scalar slot is returned unchanged (no pointer to free).  See
  * docs/archive/cps-effect-perform-carrier-leak.md. */
 static char *slot_store_reap(EmitCtx *ctx, TypeKind k, const Type *t, const char *e) {
-    char *s = slot_store(ctx, k, t, e);
     Type _r; const Type *rt = cps_resolve_ty(t, &_r);
+    /* option-map-generic-partial-double-boxed: a binder the lowering typed
+     * from an erased tyvar result (`(Option B)` with B bound to a generic
+     * partial's `A`) is the int64 carrier word, and the letraw that filled it
+     * already packed the aggregate into a reaped box (the "pack it the way the
+     * DK slot carries such a value" bridge in emit_letraw).  The word IS the
+     * slot value: boxing it again assigned an int64 to the aggregate, which
+     * did not compile. */
+    if (slot_box_ty(rt) && e && emit_str_is_bare_ident(e)) {
+        const char *ect = emit_localvar_lookup_ctype(e);
+        if (ect && strcmp(ect, "int64_t") == 0) {
+            Buf b; buf_init(&b);
+            buf_printf(&b, "(intptr_t)(%s)", e);
+            buf_putc(&b, '\0');
+            char *s = strdup(b.data); buf_free(&b);
+            return s;
+        }
+    }
+    char *s = slot_store(ctx, k, t, e);
     if (slot_box_ty(rt)) {
         Buf b; buf_init(&b);
         buf_printf(&b, "__dk_reap_ptr(%s)", s);
@@ -861,10 +907,26 @@ static bool cps_direct_param_takes_agg_raw(const Binding *fn, uint32_t i,
     return cps_direct_agg_arg_mode(fn, i, a, to_cps_entry) != AGG_ARG_NO;
 }
 
+/* await-parks-only-to-the-nearest-c-frame: a rank-2 (forall) parameter
+ * handed on, unchanged, to a callee parameter that is rank-2 too.  The atom is
+ * the parameter itself (cps_ir_rank2_handed_on peels the identity wrap), so
+ * nothing spills it to a one-word temp: the call passes the caller's
+ * `tur_poly_fn_t` to the callee's `tur_poly_fn_t`, on either entry. */
+static bool fat_param_handed_on(const Binding *fn, uint32_t i, const CAtom *a) {
+    if (!atom_is_fat_fn(a)) return false;
+    const Binding *v = a->var;
+    if (!v->poly_type || v->poly_type->kind != TY_FORALL) return false;
+    const FnDef *cfd = fn ? fn->source_fn_def : NULL;
+    if (!cfd || i >= cfd->n_params || !cfd->params[i]) return false;
+    const Binding *cp = cfd->params[i];
+    return cp->is_poly_fn && cp->poly_type && cp->poly_type->kind == TY_FORALL;
+}
+
 static bool call_args_ok(const Binding *fn, const CAtom *args, uint32_t n,
                          bool cps_to_direct, bool to_cps_entry) {
     bool cef = callee_effect_free(fn);
     for (uint32_t i = 0; i < n; i++) {
+        if (fat_param_handed_on(fn, i, &args[i])) continue;
         /* Pure higher-order value threading into an effect-free callee is admitted
          * for a SCALAR fn value (a bare fn-ptr / closure carrier that crosses the
          * arg slot as one word).  A FAT closure (`tur_poly_fn_t`, is_poly_fn) is a
@@ -2141,19 +2203,26 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
  * name a join defined within it (its exits otherwise are KK_RET, which the
  * lifted helper maps to its own k).  Rejects a body that escapes to an
  * enclosing join. */
+/* `outer_ok` (handle-under-match-in-main-has-no-lowering): a plain value
+ * delivery (CT_APPCONT) to a join defined OUTSIDE the term is admitted too.
+ * Only the handle-continuation check passes it -- see handle_cont_ok. */
+static bool joins_closed_rec_x(const CTerm *t, uint32_t *def, int nd, bool outer_ok);
 static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
+    return joins_closed_rec_x(t, def, nd, false);
+}
+static bool joins_closed_rec_x(const CTerm *t, uint32_t *def, int nd, bool outer_ok) {
     if (!t || nd >= CC_MAX_BOUND) return t == NULL;
     switch (t->kind) {
         case CT_APPCONT:
             if (t->as.appcont.kont.kind == KK_VAR) {
                 for (int i = 0; i < nd; i++) if (def[i] == t->as.appcont.kont.id) return true;
-                return false;
+                return outer_ok;
             }
             return true;
-        case CT_LETVAL:  return joins_closed_rec(t->as.letval.body, def, nd);
-        case CT_LETPRIM: return joins_closed_rec(t->as.letprim.body, def, nd);
-        case CT_LETCALL: return joins_closed_rec(t->as.letcall.body, def, nd);
-        case CT_LETRAW:  return joins_closed_rec(t->as.letraw.body, def, nd);
+        case CT_LETVAL:  return joins_closed_rec_x(t->as.letval.body, def, nd, outer_ok);
+        case CT_LETPRIM: return joins_closed_rec_x(t->as.letprim.body, def, nd, outer_ok);
+        case CT_LETCALL: return joins_closed_rec_x(t->as.letcall.body, def, nd, outer_ok);
+        case CT_LETRAW:  return joins_closed_rec_x(t->as.letraw.body, def, nd, outer_ok);
         case CT_TAILCALL:
             if (t->as.tailcall.kont.kind == KK_VAR) {
                 for (int i = 0; i < nd; i++) if (def[i] == t->as.tailcall.kont.id) return true;
@@ -2161,16 +2230,16 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
             }
             return true;
         case CT_IF:
-            return joins_closed_rec(t->as.if_.then_, def, nd)
-                && joins_closed_rec(t->as.if_.else_, def, nd);
+            return joins_closed_rec_x(t->as.if_.then_, def, nd, outer_ok)
+                && joins_closed_rec_x(t->as.if_.else_, def, nd, outer_ok);
         case CT_MATCH:
             for (uint32_t i = 0; i < t->as.match.n_arms; i++)
-                if (!joins_closed_rec(t->as.match.arms[i].body, def, nd)) return false;
+                if (!joins_closed_rec_x(t->as.match.arms[i].body, def, nd, outer_ok)) return false;
             return true;
         case CT_LETCONT:
             def[nd] = t->as.letcont.j.id;
-            return joins_closed_rec(t->as.letcont.jbody, def, nd + 1)
-                && joins_closed_rec(t->as.letcont.body, def, nd + 1);
+            return joins_closed_rec_x(t->as.letcont.jbody, def, nd + 1, outer_ok)
+                && joins_closed_rec_x(t->as.letcont.body, def, nd + 1, outer_ok);
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
         case CT_CALLCC: return joins_closed_rec(t->as.callcc.body, def, nd);
@@ -2178,8 +2247,10 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
             /* Track A (A2): a nested `perform` in a reset/handle continuation
              * body.  The perform delivers to a handler (not a join); its joins are
              * in its own continuation, so recurse there.  term_core_ok already
-             * gates whether the nested perform is emittable (A1). */
-            return joins_closed_rec(t->as.perform.body, def, nd);
+             * gates whether the nested perform is emittable (A1).  Its frame is
+             * spliced onto the same downstream, so an outer delivery from it
+             * reaches the same escaping join. */
+            return joins_closed_rec_x(t->as.perform.body, def, nd, outer_ok);
         case CT_HANDLE:
             /* A nested `handle` in a reset/handle CONTINUATION (e.g. two sequential
              * `handle`s: the first's continuation contains the second -- effect-abort
@@ -2196,7 +2267,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
                 for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++)
                     if (!joins_closed_rec(t->as.handle.cases[ci].case_body, hdef, 0))
                         return false;
-                return joins_closed_rec(t->as.handle.body, def, nd);
+                return joins_closed_rec_x(t->as.handle.body, def, nd, outer_ok);
             }
         /* cps-while-native: a back-edge references the loop helper, not a join; a
          * CT_LOOP's internal joins are a separate scope (checked when its own body
@@ -2216,6 +2287,26 @@ static bool reset_body_ok(const CTerm *t) {
     if (!term_core_ok(t)) return false;
     uint32_t def[CC_MAX_BOUND];
     return joins_closed_rec(t, def, 0);
+}
+
+/* handle-under-match-in-main-has-no-lowering: a HANDLE continuation may also
+ * deliver to a join that ENCLOSES the handle -- `(if c (println (handle ...))
+ * ...)` followed by more code, the handle's rest jumping to the if's merge.
+ * reset_body_ok refused that ("self-contained"), so a `handle` anywhere but the
+ * tail of a branch evicted its function, and with it every function performing
+ * the handled effect.  Such a join is always reified, never a label:
+ * join_escapes_lifted_rec counts a delivery from handle.body as lifted, so
+ * letcont_is_escaping_join holds for it, and emit_escaping_join makes its frame
+ * cur_k while the branch emits.  emit_handle splices the continuation frame
+ * onto that cur_k, so the delivery runs the join frame through `__kont`
+ * ("escaping join via downstream") -- the same path a perform continuation
+ * in a branch has used since perform-inside-loop-has-no-lowering.  Only a
+ * value delivery is admitted; a tail call or loop exit to an outer join, and
+ * any outer reference from a nested delim or handler case, stay refused. */
+static bool handle_cont_ok(const CTerm *t) {
+    if (!term_core_ok(t)) return false;
+    uint32_t def[CC_MAX_BOUND];
+    return joins_closed_rec_x(t, def, 0, true);
 }
 
 /* A shift body in the C3 subset: straight-line (letval/letprim/letcall) ending
@@ -2999,7 +3090,7 @@ static bool term_core_ok_impl(const CTerm *t) {
             CapSet hcs;
             if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
                 || !handle_delim_ok(t->as.handle.delim)
-                || !reset_body_ok(t->as.handle.body)
+                || !handle_cont_ok(t->as.handle.body)
                 || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
                 return false;
             for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
@@ -3462,6 +3553,13 @@ static bool param_name_clashes_cps(const FnDef *fd, const Binding *b) {
      * the CPS emitter mints itself.  Admitting it is what lets a capturing
      * callback get a `__cps` twin (the registry's slot-0 env-taking entry). */
     if (strncmp(n, "__env_p_", 8) == 0) return false;
+    /* A may-await dict-clone's dictionary param (`__dict_<id>`,
+     * make_dict_clone) is uniquely numbered too, and never a name the CPS
+     * emitter mints (fn_erased_base).  Every other dict-clone keeps the
+     * rejection: it is what has kept dict-clones, and their monomorph
+     * clones, off the backend. */
+    if (strncmp(n, "__dict_", 7) == 0)
+        return !(fd && fd->n_dict_clone && cps_fn_may_await(fd));
     if (n[0] == '_' && n[1] == '_') return true;
     if (n[0] == 't' && n[1] != '\0') {
         for (const char *p = n + 1; *p; p++) if (*p < '0' || *p > '9') return false;
@@ -3580,7 +3678,12 @@ static bool fn_sig_ok(const FnDef *fd) {
      * such a param keeps the function on the fallback (see the param loop below).
      * See docs/archive/cps-tier-c-effect-result-native-plan.md. */
     const Type *rt = fn_ret_type(fd);
-    if (rt->kind != TY_NIL && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
+    /* await-parks-only-to-the-nearest-c-frame: a may-await dict-clone's `T`
+     * positions are the int64 carrier word in C (fn_erased_base), as the
+     * direct emitter spells them. */
+    bool erased_dc = fd->n_dict_clone && fn_erased_base(fd);
+    if (rt->kind != TY_NIL && !(erased_dc && rt->kind == TY_TYVAR)
+        && !sig_slot_ok(rt, rt->kind) && !slot_box_ty(rt)
         && !fn_carrier_ret_ok(fd, rt)) return false;
     /* fn-value-fat-normalization (effect-row increment): a CAPTURING lambda is
      * CPS-admitted ONLY when it is in the threadable set -- i.e. it flows into
@@ -3604,7 +3707,7 @@ static bool fn_sig_ok(const FnDef *fd) {
         for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
             const Binding *cap = fd->closure->captures[ci];
             if (!cap || cap->is_global) continue;
-            if (cap->is_poly_fn) return false;
+            if (cap->is_poly_fn && !cap->may_hold_awaiter) return false;
             /* PRIMITIVE captures only: an aggregate / type-app / tyvar capture
              * (the lens `l2 : Lens` shape) may resolve by-value under a spec,
              * be read `(__env->l2).field` under a spec-suffixed env layout the
@@ -3627,6 +3730,20 @@ static bool fn_sig_ok(const FnDef *fd) {
                     if (type_has_unresolved_tyvar(&cap->type)) return false;
                     if (cap->type.kind == TY_ADT && cap->type.as.adt_.def
                         && cap->type.as.adt_.def->n_type_params > 0) return false;
+                    break;
+                case TY_TYVAR:
+                    /* await-parks-only-to-the-nearest-c-frame: a lambda
+                     * inside a generic that captures a bare `T` and may
+                     * await.  This is the BASE lambda -- its env stores the
+                     * capture as the int64 carrier word, and the __cps twin
+                     * reads it through that same base layout, as the direct
+                     * thunk does.  The spec-suffixed layouts above belong to
+                     * a monomorph clone, which mono_sig_ok never CPS-emits.
+                     * Refused, the lambda had no twin: the generic's
+                     * specialization (on the backend) hands it to a callee
+                     * whose fat dispatch then missed in the registry and
+                     * entered its direct root, and the park was refused. */
+                    if (!cps_fn_may_await(fd)) return false;
                     break;
                 default:
                     return false;
@@ -3677,7 +3794,7 @@ static bool fn_sig_ok(const FnDef *fd) {
          * through a DK/call-arg slot. */
         if (p->is_poly_fn
             && !(fn_single_concrete_sig(fd)
-                 && fatparam_only_called(fd, p))) return false;
+                 && (fatparam_only_called(fd, p) || p->may_hold_awaiter))) return false;
         bool fn_param_ok = p->type.kind == TY_FN || p->is_poly_fn;
         /* serial-receiver-effect-cannot-reach-enclosing-handler: a `k :
          * serial-cont` parameter is the opaque DK chain a serial-shift
@@ -3696,7 +3813,8 @@ static bool fn_sig_ok(const FnDef *fd) {
         bool serial_k_ok = p->type.kind == TY_CONT &&
                            (p->type.as.cont.flavor == CONT_SERIAL ||
                             p->type.as.cont.flavor == CONT_ESCAPE);
-        if (!p->is_borrow && !fn_param_ok && !serial_k_ok
+        bool tyvar_word = erased_dc && p->type.kind == TY_TYVAR;
+        if (!p->is_borrow && !fn_param_ok && !serial_k_ok && !tyvar_word
             && !sig_slot_ok(&p->type, p->type.kind)
             && !fn_byval_agg_param_ok(fd, p)
             && !fn_carrier_param_ok(fd, p)) return false;
@@ -3731,6 +3849,39 @@ static bool expr_reaches_effect_op(const Expr *e, EffReach *u);
 static bool expr_reaches_effect_op_visit(const Expr *c, void *ud) {
     return expr_reaches_effect_op(c, (EffReach *)ud);
 }
+/* await-parks-only-to-the-nearest-c-frame: a function VALUE passed as a call
+ * argument -- a lambda, or a named function -- that performs or awaits, or
+ * reaches a function that does.  Its callee may call it, so the call reaches
+ * the effect op too (the rule cps_expr_awaits applies to `await`).  Without
+ * it a generic whose await is reached only through a lambda it hands to a
+ * higher-order function minted no monomorph at a carrier type (`int`): the
+ * erased base ran, refused its type variable, and the park was refused. */
+static bool fnvalue_arg_reaches_effect_op(const Expr *a, EffReach *u) {
+    while (a) {
+        if (a->kind == EX_ASCRIBE)          a = a->as.ascribe_.inner;
+        else if (a->kind == EX_FN_TO_FAT)   a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else if (a->kind == EX_POLY_WRAP)   a = a->as.poly_wrap_.inner;
+        else if (a->kind == EX_CAST)        a = a->as.cast_.expr;
+        else break;
+    }
+    /* Resolved as emit_abi_call_passes_effectful_fn resolves it: a lambda
+     * reaches here as a closure node, or as a variable bound to one. */
+    const FnDef *vf = NULL;
+    if (a && a->kind == EX_CLOSURE && a->as.closure_.closure)
+        vf = a->as.closure_.closure->fn;
+    else if (a && a->kind == EX_FN)
+        vf = a->as.fn_.fn;
+    else if (a && a->kind == EX_VAR && a->as.var.binding) {
+        const Binding *b = a->as.var.binding;
+        if (b->source_binding) b = b->source_binding;
+        vf = b->source_fn_def;
+        if (!vf && b->closure_fn_binding) vf = b->closure_fn_binding->source_fn_def;
+        if (!vf && b->hoist_closure_fn_binding) vf = b->hoist_closure_fn_binding->source_fn_def;
+    }
+    return vf && vf->body && eff_reach_first_visit(u, vf) &&
+           (cps_expr_contains_effect_op(vf->body) || expr_reaches_effect_op(vf->body, u));
+}
 static bool expr_reaches_effect_op(const Expr *e, EffReach *u) {
     if (!e) return false;
     if (e->kind == EX_CALL && e->as.call_.fn_binding) {
@@ -3740,6 +3891,9 @@ static bool expr_reaches_effect_op(const Expr *e, EffReach *u) {
              expr_reaches_effect_op(callee->body, u)))
             return true;
     }
+    if (e->kind == EX_CALL)
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            if (fnvalue_arg_reaches_effect_op(e->as.call_.args[i], u)) return true;
     if (e->kind == EX_FN_DEF || e->kind == EX_FN || e->kind == EX_CLOSURE) return false;
     return cps_visit_children(e, expr_reaches_effect_op_visit, u);
 }
@@ -3777,7 +3931,7 @@ bool emit_cps_ir_colored_fn_needs_mono(const FnDef *fd) {
      * strict syntactic seed, as the `unsafe` lesson above recommends. */
     if (!fd || !fd->body) return false;
     if (cps_expr_contains_effect_op(fd->body)) return !fn_sig_ok(fd);
-    if (fd->owner_instance || fd->constraints.n_constraints) return false;
+    if (fd->owner_instance) return false;
     /* The walk first: it only reads the tree, while fn_sig_ok spells the
      * signature's C types, which registers their monomorphs -- asked of every
      * generic from emit_abi_fn_skip_generic, that reordered the typedefs of
@@ -3892,9 +4046,18 @@ static bool fn_is_d2b_main(const FnDef *fd) {
      * delimited control too, lowered only by the CT-IR backend (the direct
      * emitter's EX_CALLCC arm aborts) -- so a main whose only control op is
      * one is a d2b candidate as well.  Same fixpoint, same fallbacks. */
+    /* handle-under-match-in-main-has-no-lowering: ...and a control op anywhere
+     * the shared enumerator reaches.  The first two walks have no arm for
+     * `match`, so `(match (handle (f) ...) ...)` left main on the direct path:
+     * SIG-MAIN permanently tainted the handled effect, and every function
+     * performing it was evicted.  cps_expr_uses_control is the coloring walk's
+     * own seed test, which falls back to cps_visit_children for every kind it
+     * has no arm for.  Kept beside the original two so the answer only widens;
+     * a main it admits still faces the taint fixpoint like any candidate. */
     return cps_expr_contains_shift(fd->body)
         || expr_has_handle(fd->body)
-        || cps_expr_contains_callcc(fd->body);
+        || cps_expr_contains_callcc(fd->body)
+        || cps_expr_uses_control(fd->body);
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */
@@ -3928,6 +4091,19 @@ static void addr_taken_add(const Binding *b) {
 static bool addr_taken_has(const Binding *b) {
     for (int i = 0; i < g_addr_taken_n; i++) if (g_addr_taken[i] == b) return true;
     return false;
+}
+/* panic-location-names-the-runtime-not-the-call-site: the global fns a
+ * partial application's thunk forwards to (`(vec-get v)`; the thunk's call
+ * carries forwards_site).  Not address-taken -- the thunk calls them
+ * directly, and classification must not treat them so -- but reachable
+ * through a fn value all the same, which is what emit_cps_ir_addr_taken_any
+ * answers. */
+static const Binding *g_pap_fwd[256];
+static int            g_pap_fwd_n;
+static void pap_fwd_add(const Binding *b) {
+    for (int i = 0; i < g_pap_fwd_n; i++) if (g_pap_fwd[i] == b) return;
+    if (g_pap_fwd_n < (int)(sizeof(g_pap_fwd)/sizeof(g_pap_fwd[0])))
+        g_pap_fwd[g_pap_fwd_n++] = b;
 }
 
 /* Effect -> prompt-tag registry.  Tags start at 2 (reset/shift use 1); the same
@@ -4685,6 +4861,9 @@ static void expr_collect_effects_acc(const Expr *e, EffAcc *acc) {
                  * lambda (the CPS translator rewrites it so). */
                 const Binding *lt = cps_ir_letrec_member_target(e->as.call_.fn_binding);
                 eff_acc_add_callee(acc, lt ? lt : e->as.call_.fn_binding);
+                if (g_addr_collecting && e->as.call_.forwards_site &&
+                    e->as.call_.fn_binding->is_global)
+                    pap_fwd_add(e->as.call_.fn_binding);
             } else if (e->as.call_.fn_expr) {
                 /* Effect subtyping / capability field (docs/reported/
                  * cps-effect-subtype-capability-pure-fn-in-effectful-field.md):
@@ -6225,6 +6404,20 @@ bool emit_cps_ir_generic_base_is_template(const FnDef *fd) {
         && emit_cps_ir_colored_fn_needs_mono(fd);
 }
 static bool addr_taken_has(const Binding *b);
+/* await-parks-only-to-the-nearest-c-frame: a generic BASE that never runs --
+ * every call reaches one of its specializations (none is a carrier call,
+ * KB-022), and it is never taken as a value.  Its base refuses its type
+ * variables and so always evicts; TUR-W0044 must not name it, since the
+ * specializations are what sit between an async body and an await. */
+static bool generic_base_never_runs(EmitCtx *ctx, const FnDef *fd) {
+    if (!ctx || !fd || !fd->binding || !fd_sig_has_tyvar(fd)) return false;
+    if (addr_taken_has(fd->binding)) return false;
+    for (uint32_t i = 0; i < ctx->n_carrier_call_bindings; i++)
+        if (ctx->carrier_call_bindings[i] == fd->binding) return false;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++)
+        if (ctx->abi_specializations[i].fn == fd) return true;
+    return false;
+}
 static bool generic_unreached(EmitCtx *ctx, const FnDef *fd) {
     if (!ctx || !fd || !fd->binding || !fd_sig_has_tyvar(fd)) return false;
     if (fd->binding->c_export_name || fd->closure) return false;
@@ -6438,6 +6631,7 @@ static void ensure_S(const Expr *program) {
      * the classification loop -- a forward reference (a fn passed as a value later
      * in the file) would otherwise be missed. */
     g_addr_taken_n = 0;
+    g_pap_fwd_n = 0;
     g_addr_collecting = true;
     for (uint32_t i = 0; i < np; i++) {
         Expr *it = (Expr *)items[i];
@@ -6622,7 +6816,8 @@ static void ensure_S(const Expr *program) {
                  * own it (emit its exported direct entry AND a `__cps` variant).
                  * A genuine `^:export-as` export still perm-routes. */
                 if (fd->binding->c_export_name
-                    && !fd->binding->is_instance_method)
+                    && !fd->binding->is_instance_method
+                    && !cps_fn_may_await(fd))
                     { candidate = false; sig_perm = true; }
                 if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
                 if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
@@ -6663,7 +6858,10 @@ static void ensure_S(const Expr *program) {
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 uint32_t fresh_n = cps_ir_last_fresh_count();
-                if (candidate && !term_core_ok(t)) {
+                g_cps_erased_base = fn_erased_base(fd);
+                bool core_ok = !candidate || term_core_ok(t);
+                g_cps_erased_base = false;
+                if (candidate && !core_ok) {
                     candidate = false;
                     /* An un-lowerable inline-C form in a colored body is a
                      * PERMANENT carve-out, not a fixable BODY root: inline-C
@@ -6816,6 +7014,7 @@ static void ensure_S(const Expr *program) {
     while (changed) {
         changed = false;
         for (size_t i = 0; i < g_ents_n; i++) {
+            g_cps_erased_base = fn_erased_base(g_ents[i].fd);
             if (g_ents[i].in_s && needs_heap_join(g_ents[i].term)) {
                 g_ents[i].in_s = false;
                 changed = true;
@@ -6826,6 +7025,7 @@ static void ensure_S(const Expr *program) {
                 g_ents[i].in_s = false;
                 changed = true;
             }
+            g_cps_erased_base = false;
         }
         /* An effect is tainted by any entry that is NEITHER an S candidate NOR a
          * mono-template: those are the genuinely fiber functions.  A mono-template
@@ -7897,21 +8097,27 @@ static char *registry_callee_name(CE *ce, const Binding *fn) {
 }
 
 /* panic-location-names-the-runtime-not-the-call-site: around a cps->direct
- * call to a callee whose inline-C body may panic, the statement that sets
- * this call's site (`tur_site_set(&__tur_site_N);`), or NULL.  The caller
- * writes it just before the call line and `tur_site_clear();` just after
- * (cps_site_clear); the arguments are atoms, so nothing between the two is a
- * call.  Malloc'd. */
+ * call the direct emitter would site (emit_direct_call_site_mode), the
+ * statement that saves the slot and sets or keeps this call's site is
+ * written here, just before the call line, and the one restoring the slot is
+ * returned for cps_site_clear to write just after; NULL when the call is not
+ * sited.  The arguments are atoms, so nothing between the two is a call.
+ * Malloc'd. */
 static char *cps_site_set(CE *ce, const Binding *fb, const Expr *call_expr) {
-    if (!call_expr || !emit_direct_call_sited(ce->ctx, fb)) return NULL;
-    char *set = emit_site_set_text(ce->ctx, emit_call_site_span(call_expr));
-    if (set) ce_line(ce, "%s;", set);
-    return set;
+    if (!call_expr) return NULL;
+    char *close = NULL;
+    char *open = emit_site_open_stmt(ce->ctx,
+                                     emit_direct_call_site_mode(ce->ctx, call_expr, fb),
+                                     emit_call_site_span(call_expr), &close);
+    if (!open) return NULL;
+    ce_line(ce, "%s", open);
+    free(open);
+    return close;
 }
-static void cps_site_clear(CE *ce, char *set) {
-    if (!set) return;
-    ce_line(ce, "tur_site_clear();");
-    free(set);
+static void cps_site_clear(CE *ce, char *close) {
+    if (!close) return;
+    ce_line(ce, "%s", close);
+    free(close);
 }
 
 /* sum-closure-payload-never-dropped (the CPS half): a `let` binding whose init
@@ -8098,10 +8304,9 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     /* panic-location-names-the-runtime-not-the-call-site: the slot-0 call may
      * enter a sited inline-C body (an unregistered fn value is exactly a body
      * the CPS backend never emits -- vec-get's); in a unit that takes such a
-     * function as a value, set this call's site around it, as the direct
+     * function as a value, the call carries its site, as the direct
      * emitter's site_fn_value_call does. */
-    char *site = (call && emit_fn_value_calls_sited(ce->ctx))
-                     ? emit_site_set_text(ce->ctx, emit_call_site_span(call)) : NULL;
+    EmitSiteMode site_m = emit_fn_value_call_site_mode(ce->ctx, call);
     Buf ps, av; buf_init(&ps); buf_init(&av);
     for (uint32_t i = 0; i < n; i++) {
         const Type *pt = e2a_slot_type(sig, (int)i, &tmp);
@@ -8137,18 +8342,29 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     const Type *rt = e2a_slot_type(sig, -1, &tmp);
     Buf out; buf_init(&out);
     if (rt->kind == TY_NIL) {
-        if (site) buf_printf(&out, "%s; ", site);
-        buf_printf(&out, "((void (*)(void *%s))(intptr_t)%s[0])((void *)%s%s);",
+        Buf vc; buf_init(&vc);
+        buf_printf(&vc, "((void (*)(void *%s))(intptr_t)%s[0])((void *)%s%s)",
                    ps.data, box, box, av.data);
-        if (site) buf_puts(&out, " tur_site_clear();");
+        buf_putc(&vc, '\0');
+        char *sited = call ? emit_site_wrap(ce->ctx, site_m, emit_call_site_span(call),
+                                            "void", vc.data) : NULL;
+        buf_printf(&out, "%s;", sited ? sited : vc.data);
+        free(sited);
+        buf_free(&vc);
         buf_printf(&out, " return dk_run(%s, (intptr_t)0);", thread);
     } else {
         const char *rc = thunk_result_slot_c_name(*rt);
         Buf cl; buf_init(&cl);
-        if (site) buf_printf(&cl, "({ %s; %s __tur_sr = ", site, rc);
         buf_printf(&cl, "((%s (*)(void *%s))(intptr_t)%s[0])((void *)%s%s)", rc, ps.data, box, box, av.data);
-        if (site) buf_puts(&cl, "; tur_site_clear(); __tur_sr; })");
         buf_putc(&cl, '\0');
+        char *sited = call ? emit_site_wrap(ce->ctx, site_m, emit_call_site_span(call),
+                                            rc, cl.data) : NULL;
+        if (sited) {
+            buf_free(&cl); buf_init(&cl);
+            buf_puts(&cl, sited);
+            buf_putc(&cl, '\0');
+            free(sited);
+        }
         size_t rL = strlen(rc);
         if (rt->kind == TY_FLOAT || rt->kind == TY_FLOAT64 || rt->kind == TY_FLOAT32) {
             char *w = cps_ir_fncps_word_of(rt->kind, cl.data);
@@ -8162,7 +8378,6 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     buf_putc(&out, '\0');
     char *r = strdup(out.data);
     buf_free(&out); buf_free(&ps); buf_free(&av);
-    free(site);
     return r;
 }
 
@@ -8233,11 +8448,10 @@ static void fncps_direct_call(CE *ce, Buf *out, const char *pf, char *const *arg
     /* panic-location-names-the-runtime-not-the-call-site: the `.fn` entry may
      * be a sited inline-C body; see e2a_fallback_stmt.  The value is an
      * int64 carrier in every arm but the float ones. */
-    char *site = (call && emit_fn_value_calls_sited(ce->ctx))
-                     ? emit_site_set_text(ce->ctx, emit_call_site_span(call)) : NULL;
+    EmitSiteMode site_m = emit_fn_value_call_site_mode(ce->ctx, call);
     Buf *dst = out;
     Buf inner;
-    if (site) { buf_init(&inner); dst = &inner; }
+    if (site_m != EMIT_SITE_NONE) { buf_init(&inner); dst = &inner; }
     for (uint32_t i = 0; i < n; i++) {
         /* The wrapper `.fn` holds keeps each parameter's own C type. */
         const char *pc = cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i));
@@ -8273,14 +8487,60 @@ static void fncps_direct_call(CE *ce, Buf *out, const char *pf, char *const *arg
     else
         buf_printf(dst, "((int64_t(*)(void*%s))%s.fn)(%s.env%s)",
                    ps.data, pf, pf, av.data);
-    if (site) {
+    if (site_m != EMIT_SITE_NONE) {
         buf_putc(&inner, '\0');
-        buf_printf(out, "({ %s; %s __tur_sr = %s; tur_site_clear(); __tur_sr; })",
-                   site, rk_flt ? rc : "int64_t", inner.data);
+        char *sited = emit_site_wrap(ce->ctx, site_m, emit_call_site_span(call),
+                                     rk_flt ? rc : "int64_t", inner.data);
+        buf_puts(out, sited ? sited : inner.data);
+        free(sited);
         buf_free(&inner);
-        free(site);
     }
     buf_free(&ps); buf_free(&av);
+}
+
+/* await-parks-only-to-the-nearest-c-frame: the `fn_cps == NULL` fallback of a
+ * via_fncps call, as a value.  A rank-2 (forall) callee's `.fn` holds whatever
+ * the elaborator built for the value -- an int64 carrier adapter, a typed
+ * wrapper -- and only the direct emitter knows which.  With atomic arguments
+ * the call is rendered through it, exactly as the delegated call was, bound
+ * to a temp at the call's own type, and checked for a panic the way the
+ * delegated call was.  Otherwise (and for any other callee) the fallback is
+ * fncps_direct_call's slot-ABI cast (a word, except a float), which
+ * fncps_forall_call_ok admits for a rank-2 callee only on int / bool
+ * positions, where it is the delegated cast. */
+static bool fncps_callee_is_forall(const Binding *fnb) {
+    return fnb && fnb->is_poly_fn && fnb->poly_type
+        && fnb->poly_type->kind == TY_FORALL;
+}
+static char *fncps_fallback_value(CE *ce, const Binding *fnb, const char *pf,
+                                  char *const *av, uint32_t na, const Expr *call) {
+    if (fncps_callee_is_forall(fnb) && call && cps_ir_call_args_atomic(call)) {
+        int saved = ce->ctx->indent;
+        ce->ctx->indent = ce->indent;
+        char *rhs = emit_value(ce->ctx, ce->out, call);
+        ce->ctx->indent = saved;
+        if (call->type.kind == TY_NIL) {
+            /* A void call comes back un-emitted (see emit_letraw): run it
+             * for effect and deliver the unit. */
+            if (rhs) ce_line(ce, "%s;", rhs);
+            free(rhs);
+            cps_panic_check(ce);
+            return strdup("(int64_t)0");
+        }
+        const char *cty = binder_ctype_full(ce->ctx, call->type.kind, &call->type);
+        char tmp[32];
+        snprintf(tmp, sizeof tmp, "__fcv%d", (*ce->helper_ctr)++);
+        ce_line(ce, "%s %s = %s;", cty ? cty : "int64_t", tmp, rhs ? rhs : "0");
+        free(rhs);
+        cps_panic_check(ce);
+        return strdup(tmp);
+    }
+    Buf b; buf_init(&b);
+    fncps_direct_call(ce, &b, pf, av, na, call);
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
 }
 
 /* The threaded call through a fat closure's `fn_cps` slot, threading `thread`.
@@ -9266,11 +9526,15 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                         pf, sc.data);
                 buf_free(&sc);
                 /* Pure fallback: call the direct entry and deliver the result. */
-                Buf pv; buf_init(&pv);
-                fncps_direct_call(ce, &pv, pf, av, na, t->as.tailcall.call_expr);
-                buf_putc(&pv, '\0');
-                emit_deliver(ce, &t->as.tailcall.kont, pv.data);
-                buf_free(&pv);
+                char *pv = fncps_fallback_value(ce, t->as.tailcall.fn, pf, av, na,
+                                                t->as.tailcall.call_expr);
+                if (fncps_callee_is_forall(t->as.tailcall.fn) && t->as.tailcall.call_expr
+                    && cps_ir_call_args_atomic(t->as.tailcall.call_expr))
+                    emit_deliver_ty(ce, &t->as.tailcall.kont, pv,
+                                    &t->as.tailcall.call_expr->type);
+                else
+                    emit_deliver(ce, &t->as.tailcall.kont, pv);
+                free(pv);
                 free(pf); fncps_args_free(av, na);
                 break;
             }
@@ -11207,20 +11471,19 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value heap join */",
                 pf, sc.data);
         buf_free(&sc);
-        Buf dc; buf_init(&dc);
-        fncps_direct_call(ce, &dc, pf, av, na, call->as.tailcall.call_expr);
-        buf_putc(&dc, '\0');
+        char *dc = fncps_fallback_value(ce, call->as.tailcall.fn, pf, av, na,
+                                        call->as.tailcall.call_expr);
         /* The join reads its parameter out of the slot: a float by its bits. */
         TypeKind drk = call->as.tailcall.call_expr
             ? call->as.tailcall.call_expr->type.kind : TY_INT;
         if (drk == TY_FLOAT || drk == TY_FLOAT64 || drk == TY_FLOAT32) {
-            char *dw = cps_ir_fncps_word_of(drk, dc.data);
+            char *dw = cps_ir_fncps_word_of(drk, dc);
             ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dw);
             free(dw);
         } else {
-            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc.data);
+            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc);
         }
-        buf_free(&dc);
+        free(dc);
         free(pf); fncps_args_free(av, na);
     } else if (call->as.tailcall.via_registry) {
         /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified
@@ -13774,7 +14037,24 @@ bool emit_cps_ir_addr_taken_any(const Expr *program, bool (*pred)(const Binding 
     ensure_S(program);
     for (int i = 0; i < g_addr_taken_n; i++)
         if (pred(g_addr_taken[i])) return true;
+    for (int i = 0; i < g_pap_fwd_n; i++)
+        if (pred(g_pap_fwd[i])) return true;
     return false;
+}
+
+/* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: a CONCRETE heap handle
+ * (`(Vec int)` -> `tur_adt_Vec__int *`, a `:heap` struct/record monomorph, a
+ * session channel) in a monomorph clone's signature.  It is one pointer word:
+ * the clone's `__cps` entry, its direct wrapper and every caller spell it from
+ * the same concrete type, and it crosses a DK slot by a plain cast exactly as
+ * carrier_handle_ok already lets it do inside an admitted body.  Tyvar-elemented
+ * handles stay out -- that is the base's erased spelling, and the base must
+ * keep sig-rejecting so the clone is what runs. */
+static bool mono_heap_handle_ok(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    return (t->kind == TY_APP || t->kind == TY_ADT || t->kind == TY_STRUCT) &&
+           carrier_handle_ok(t) && !type_has_unresolved_tyvar(t);
 }
 
 /* G1 (cps-backend-generic-monomorph-classification-plan): analysis-only probe.
@@ -13797,8 +14077,15 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
      * clone of a lifted CLOSURE lambda is never CPS-emitted.  The spec's env
      * layout rides an env_name_override the CPS render's base-env unpack does
      * not know, and the registry story only ever threads the BASE entry (the
-     * fat box's slot 0).  The clone keeps the direct path. */
-    if (fd->closure) return false;
+     * fat box's slot 0).  The clone keeps the direct path.
+     *
+     * Nor a DICT-CLONE's monomorph: a dict-clone returns the int64 carrier
+     * (emit_fns.c, MB2.5) whatever the spec's result type says, so a mono
+     * `__cps` reading another dict-clone spec's result as the by-value
+     * aggregate miscompiles (hkt-generic-calls-generic, when the `__dict_`
+     * param-name rejection that kept these off was narrowed).  The one
+     * dict-clone the backend takes is the may-await BASE (fn_erased_base). */
+    if (fd->closure || fd->n_dict_clone) return false;
     const Type *rt = (spec->result_type.kind != TY_UNKNOWN)
                    ? &spec->result_type : fn_ret_type(fd);
     /* A CONCRETE monomorph of an ORDINARY defn has a single concrete C signature
@@ -13832,9 +14119,23 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
      * (`__t0 = __t348`, a cc error in typed/result-basic), so it keeps the
      * gate it had. */
     bool erased_arg_ok = !is_inst && !(rt->kind != TY_NIL && slot_box_ty(rt));
+    /* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: ... and a concrete heap
+     * HANDLE (mono_heap_handle_ok), but only for a clone whose body reaches a
+     * `perform`.  That clone has no other lowering: its base sig-rejects on
+     * the tyvar-elemented handle, so without this a generic performer over
+     * `(Vec T)` or a `:heap` `(Box T)` was a hard "no lowering here" error.
+     * A colored generic that performs nothing -- `map-eq-driver`, colored only
+     * by its `^fat` comparator call -- compiles fine on the direct path, and
+     * moving it onto DK continuations would buy nothing, so it keeps the gate
+     * it had.  The show-collections miscompile the comment above records was
+     * the instance-method double emission `is_inst` now fences. */
+    bool handle_ok = !is_inst && fd->body &&
+                     (cps_expr_contains_effect_op(fd->body) ||
+                      fn_body_reaches_effect_op(fd));
     #define MONO_SLOT_OK(t, k) (is_inst ? sig_slot_ok((t), (k)) \
                                         : (sig_slot_ok((t), (k)) || slot_box_ty(t) || \
                                            slot_carrier_app(t) || \
+                                           (handle_ok && mono_heap_handle_ok(t)) || \
                                            (erased_arg_ok && slot_erased_carrier_app(t))))
     if (rt->kind != TY_NIL && !MONO_SLOT_OK(rt, rt->kind)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {
@@ -14092,6 +14393,31 @@ void emit_cps_ir_flush_groups(Buf *file) {
         if (g_ctg[gi].declared && !g_ctg[gi].defined) ctg_emit_def(file, &g_ctg[gi]);
 }
 
+/* await-parks-only-to-the-nearest-c-frame: a call in `e` (nested function
+ * definitions excluded) through a rank-2 parameter that may receive an
+ * awaiting function and that the translator cannot thread -- it calls the
+ * value's direct entry, whose root an await below parks at.  NULL if none. */
+static bool r2_unthreaded_visit(const Expr *c, void *ud);
+static const Expr *rank2_awaiter_call_unthreaded(const Expr *e) {
+    if (!e) return NULL;
+    if (e->kind == EX_CALL) {
+        const Binding *fb = e->as.call_.fn_binding;
+        if (fb && fb->is_poly_fn && fb->may_hold_awaiter
+            && fb->poly_type && fb->poly_type->kind == TY_FORALL
+            && !cps_ir_fncps_param_call_threads(fb, e))
+            return e;
+    }
+    const Expr *found = NULL;
+    cps_visit_children(e, r2_unthreaded_visit, &found);
+    return found;
+}
+static bool r2_unthreaded_visit(const Expr *c, void *ud) {
+    const Expr *f = rank2_awaiter_call_unthreaded(c);
+    if (!f) return false;
+    *(const Expr **)ud = f;
+    return true;
+}
+
 static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e);
 bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     /* Mark the DK body for the direct emitter it delegates to: a value it
@@ -14115,7 +14441,52 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     memcpy(pend_saved, g_pend, sizeof(const Expr *) * (size_t)g_n_pend);
     g_n_pend = 0; g_pend_unfirable = 0; g_pend_downstream = 0;
     g_pend_k_ok = true;   /* a `__cps` body holds its chain in `__kont` */
+    bool erased_saved = g_cps_erased_base;
+    g_cps_erased_base = e && e->kind == EX_FN_DEF
+        && fn_erased_base(e->as.fn_def_.fn);
+    /* await-parks-only-to-the-nearest-c-frame: a dict-clone's class-method
+     * calls dispatch through its dictionary params.  The direct emitter
+     * installs that context (ctx->dict_dispatch_*) AFTER trying this render
+     * (emit_fns.c emit_fn_def), so install it here for the delegated calls
+     * the render hands to emit_value -- the same vector, in lockstep with
+     * emit_fns.c -- and restore it after. */
+    const FnDef *dcfd = (ctx && e && e->kind == EX_FN_DEF && e->as.fn_def_.fn
+                         && e->as.fn_def_.fn->n_dict_clone) ? e->as.fn_def_.fn : NULL;
+    uint8_t      dd_saved_n = 0;
+    const char  *dd_saved_cname = NULL;
+    TypeClass   *dd_saved_class = NULL;
+    TypeClass   *dd_saved_classes[MAX_FN_CONSTRAINTS];
+    const char  *dd_saved_cnames[MAX_FN_CONSTRAINTS];
+    struct Binding *dd_saved_params[MAX_FN_CONSTRAINTS];
+    char        *dd_owned[MAX_FN_CONSTRAINTS] = {0};
+    if (dcfd) {
+        dd_saved_n = ctx->dict_dispatch_n;
+        dd_saved_cname = ctx->dict_dispatch_param_cname;
+        dd_saved_class = ctx->dict_dispatch_class;
+        memcpy(dd_saved_classes, ctx->dict_dispatch_classes, sizeof dd_saved_classes);
+        memcpy(dd_saved_cnames, ctx->dict_dispatch_param_cnames, sizeof dd_saved_cnames);
+        memcpy(dd_saved_params, ctx->dict_dispatch_params, sizeof dd_saved_params);
+        ctx->dict_dispatch_n = dcfd->n_dict_clone;
+        for (uint8_t k = 0; k < dcfd->n_dict_clone; k++) {
+            dd_owned[k] = raw_name_for_binding(dcfd->dict_clone_params[k]);
+            ctx->dict_dispatch_param_cnames[k] = dd_owned[k];
+            ctx->dict_dispatch_params[k] = dcfd->dict_clone_params[k];
+            ctx->dict_dispatch_classes[k] = dcfd->dict_clone_classes[k];
+        }
+        ctx->dict_dispatch_param_cname = dd_owned[0];
+        ctx->dict_dispatch_class = dcfd->dict_clone_classes[0];
+    }
     bool r = emit_cps_ir_try_fn_impl(ctx, file, e);
+    if (dcfd) {
+        ctx->dict_dispatch_n = dd_saved_n;
+        ctx->dict_dispatch_param_cname = dd_saved_cname;
+        ctx->dict_dispatch_class = dd_saved_class;
+        memcpy(ctx->dict_dispatch_classes, dd_saved_classes, sizeof dd_saved_classes);
+        memcpy(ctx->dict_dispatch_param_cnames, dd_saved_cnames, sizeof dd_saved_cnames);
+        memcpy(ctx->dict_dispatch_params, dd_saved_params, sizeof dd_saved_params);
+        for (uint8_t k = 0; k < MAX_FN_CONSTRAINTS; k++) free(dd_owned[k]);
+    }
+    g_cps_erased_base = erased_saved;
     g_n_pend = pend_saved_n; g_pend_unfirable = pend_saved_mask;
     g_pend_downstream = pend_saved_down; g_pend_out = pend_saved_out;
     g_pend_k = pend_saved_k; g_pend_k_ok = pend_saved_k_ok;
@@ -14223,6 +14594,67 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                     cat = !core ? "BODY-STRUCT-CORE" : hj ? "BODY-STRUCT-JOIN" : "BODY-TAINT";
                 }
             }
+            /* await-parks-only-to-the-nearest-c-frame: a function that may
+             * await, evicted, calls its awaiter through the direct entry,
+             * whose root a pending await's park stops at.  The runtime refuses
+             * that park (tur_async_body_depth) rather than losing the rest of
+             * the async body; say so at compile time too, naming the frame and
+             * why it is in the way.  `main` is left out: it is never below an
+             * async body, and an await in it has no body to lose.  A rank-2
+             * adapter (`__poly_<N>`, make_poly_wrapper) is left out too: only
+             * its base entry is refused here; the fat box a colored caller
+             * dispatches through carries the adapter's own `__poly_<N>__cps`
+             * twin, so a park never crosses the base entry
+             * (await-through-fn-value parks through three of them).  So is a
+             * generic base no call reaches (generic_base_never_runs): its
+             * specializations run instead.  A spec
+             * clone of an in-S template that mono_sig_ok refuses returns
+             * above and is not this. */
+            if (!fd->await_evict_warned && cps_fn_may_await(fd)
+                && fd->async_reachable && !fn_is_main(fd)
+                && !generic_base_never_runs(ctx, fd)
+                && strncmp(nm, "__poly_", 7) != 0) {
+                fd->await_evict_warned = true;
+                const char *because =
+                    strcmp(cat, "SIG-EXPORT") == 0
+                      ? "it is exported under a fixed C name (export-as), which keeps the C ABI"
+                    : strcmp(cat, "SIG-REJECT") == 0
+                      ? "its signature or a capture has a shape the backend does not thread"
+                    : strcmp(cat, "SIG-INLINE-C") == 0
+                      ? "its body is inline C"
+                    : strcmp(cat, "SIG-TAINT") == 0
+                      ? "it shares an effect with a function the backend cannot take"
+                    : "a form in its body has no lowering there";
+                /* A lifted lambda's name (`__fn_N`) is not one the user
+                 * wrote; the span already points at its `(fn ...)`. */
+                char who[200];
+                const char *dc = fd->n_dict_clone ? strstr(nm, "__dict_") : NULL;
+                if (fd->binding->is_lifted_lambda) snprintf(who, sizeof who, "this lambda");
+                else if (dc)
+                    /* A dict-clone (`f__dict_N`): the copy of a constrained
+                     * generic `f` that a rank-2 parameter calls with its
+                     * dictionaries.  Name the function the user wrote. */
+                    snprintf(who, sizeof who, "`%.*s`, passed to a constrained rank-2 parameter,",
+                             (int)(dc - nm), nm);
+                else snprintf(who, sizeof who, "`%s`", nm);
+                /* Its class-method calls dispatch through the dictionary
+                 * parameters (ctx->dict_dispatch_*), set up by the direct
+                 * emitter after the CPS render is tried -- on the backend they
+                 * would bind the representative instance, so it stays off. */
+                if (dc) because = "a constrained generic used as a rank-2 value runs "
+                                  "as a dictionary-passing copy, which the backend "
+                                  "does not take";
+                diag_emit_with_code(DIAG_WARNING, fd->binding->span,
+                    TUR_W0044_AWAITER_COMPILED_DIRECT,
+                    "%s may await but is compiled direct-style: %s%s%s%s. "
+                    "Inside an async body, a pending future awaited below it "
+                    "would park at this function's root instead of the body's, so the "
+                    "program refuses the park at run time (`await: a pending "
+                    "future would park below a direct-style call`); a ready "
+                    "future is unaffected. Move the await, or the call to the "
+                    "awaiting function, out of this function (%s)",
+                    who, because, *why ? " (" : "", why, *why ? ")" : "", cat);
+            }
             if (getenv("TUR_TRACE_EVICT")) {
                 /* Stage F (v2): an `eff=1` column marks a fn that performs or
                  * handles an effect -- the ONLY evictions that keep the fiber
@@ -14261,6 +14693,35 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
     }
 
     if (!g_fwd_done) { emit_forward_decls(ctx, file); g_fwd_done = true; }
+
+    /* await-parks-only-to-the-nearest-c-frame: this function is on the
+     * backend, but a call in it through a rank-2 parameter that may receive an
+     * awaiting function can still leave the chain: a struct position or more
+     * than CPS_FNCPS_MAX_ARGS arguments has no threaded lowering
+     * (fncps_forall_call_ok_as), so
+     * it calls the value's direct entry and an await below it is refused at
+     * run time.  Say so at the call, once per function. */
+    if (!fd->await_evict_warned && cps_fn_may_await(fd) && fd->async_reachable) {
+        const Expr *bad = rank2_awaiter_call_unthreaded(fd->body);
+        if (bad) {
+            fd->await_evict_warned = true;
+            const Binding *pb = bad->as.call_.fn_binding;
+            diag_emit_with_code(DIAG_WARNING, bad->span,
+                TUR_W0044_AWAITER_COMPILED_DIRECT,
+                "`%s` calls `%s`, a rank-2 parameter that may be handed a "
+                "function that awaits, through its direct entry: a call with a "
+                "struct argument or result, or more than eight arguments, has "
+                "no threaded lowering. Inside an async body, a "
+                "pending future awaited "
+                "through it would park at that function's root instead of the "
+                "body's, so the program refuses the park at run time (`await: "
+                "a pending future would park below a direct-style call`); a "
+                "ready future is unaffected. Take the awaiting function as a "
+                "plain `fn`-typed parameter, or move the await out of it",
+                fd->binding->name ? fd->binding->name->name : "?",
+                pb->name ? pb->name->name : "?");
+        }
+    }
 
     /* cps-self-tail-call-relies-on-sibling-call: is this function a member of
      * a mutual tail-call group?  Decided before the render, whose cell /
@@ -14601,6 +15062,10 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
      * rather than returning an int64. */
     bool void_ret = (rt->kind == TY_NIL);
     const char *rety = void_ret ? "void" : binder_ctype_full(ctx, rt->kind, rt);
+    /* A dict-clone's plain entry returns the int64 carrier, as its direct
+     * definition and forward declaration do (emit_fns.c / emit_module.c,
+     * MB2.5: keep in lockstep). */
+    if (fd->n_dict_clone && !void_ret) rety = "int64_t";
     /* Linkage must mirror the direct emitter's `needs_static` (emit_fns.c) and
      * the forward decl (emit_fn_forward_decls): in separate compilation an
      * exported (or retain_c_linkage) non-stdlib defn keeps external linkage so
@@ -14763,8 +15228,18 @@ entry_wrapper_done:
     free(b4box);
 
     /* E2a: a threadable captureless effectful lambda registers its direct-entry ->
-     * __cps mapping at startup, so a threaded call site recovers its CPS variant. */
-    if (threadable_has(fd->binding)) {
+     * __cps mapping at startup, so a threaded call site recovers its CPS variant.
+     *
+     * await-parks-only-to-the-nearest-c-frame: so does an address-taken
+     * function that may await.  A rank-2 adapter's twin (`__poly_N__cps`,
+     * ensure_poly_wrap_cps_thunk) and the fat dispatch both find the CPS entry
+     * through this registry, and a miss calls the DIRECT entry -- whose root an
+     * await below it parks at.  The tier analysis that fills the threadable set
+     * follows a fn value only into a parameter that is called; one handed on,
+     * or captured into a lambda that calls it, read as an escape, so the
+     * awaiter went unregistered and the park was refused. */
+    if (threadable_has(fd->binding)
+        || (cps_fn_may_await(fd) && (addr_taken_has(fd->binding) || fd->n_dict_clone))) {
         /* fnsan-e2a-registry-typed-entry: the E2a call site casts a looked-up
          * entry to `int64_t (*)([void *,] W0.., DK *)` with every Wi the word
          * except a float kind, which travels at its own type (e2a_cast).  An

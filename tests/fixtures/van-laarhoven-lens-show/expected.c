@@ -5555,17 +5555,33 @@ static void tur_role_close(void *role_ptr) {
 
 /* ==== tur: end of fixed runtime preamble ==== */
 /* panic-location-names-the-runtime-not-the-call-site: the source site of
- * the direct call to a panicking inline-C body this thread is making --
- * set just before the call, cleared just after, read by tur_panic_sited. */
+ * the call into a panicking inline-C body this thread is making -- saved
+ * and set just before the call, restored just after, read by
+ * tur_panic_sited. */
 typedef struct { const char *file; int line; } tur_site_t;
 #if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; tur_cur_site = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; if (!o) tur_cur_site = s; return o;
+}
 #else
 extern void **tur_tls_cur_site_ptr(void);
 #define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    *p = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    if (!o) *p = s; return o;
+}
 #endif
 static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }
 static inline void tur_site_clear(void) { tur_cur_site = NULL; }
+static inline void tur_site_pop(const tur_site_t *o) { tur_cur_site = o; }
 static inline void tur_panic_sited(const char *msg) {
     const tur_site_t *s = tur_cur_site;
     tur_cur_site = NULL;
@@ -8621,9 +8637,9 @@ static bool vec_hyeq_hyloop(int64_t x, int64_t y, int64_t i, int64_t len) {
             __t136 = true;
         } else {
             bool __t137;
-            int64_t __ps_139 = (({ tur_site_set(&__tur_site_138); int64_t __tur_sr = vec_hyget(x, i); tur_site_clear(); __tur_sr; }));
+            int64_t __ps_139 = (({ const tur_site_t *__tur_sv = tur_site_keep(&__tur_site_138); int64_t __tur_sr = vec_hyget(x, i); tur_site_pop(__tur_sv); __tur_sr; }));
             if (tur_panicking) return ((bool)0);
-            int64_t __ps_141 = (({ tur_site_set(&__tur_site_140); int64_t __tur_sr = vec_hyget(y, i); tur_site_clear(); __tur_sr; }));
+            int64_t __ps_141 = (({ const tur_site_t *__tur_sv = tur_site_keep(&__tur_site_140); int64_t __tur_sr = vec_hyget(y, i); tur_site_pop(__tur_sv); __tur_sr; }));
             if (tur_panicking) return ((bool)0);
             bool __ps_142 = (__inst_Eq_eq_qu_int(__ps_139, __ps_141));
             if (tur_panicking) return ((bool)0);
@@ -10893,7 +10909,6 @@ static const char * shown_hybool(tur_poly_fn_t l, bool s) {
 
 static int64_t peek_hyint__cps(tur_poly_fn_t l, int64_t s, DK *__kont) {
     int64_t __t0;
-    int64_t __t1;
     void *__t237 = malloc(sizeof(void *) + 2 * sizeof(int64_t));
     *(void (**)(void *))__t237 = 0;
     int64_t *__t236 = (int64_t *)((char *)__t237 + sizeof(void *));
@@ -10905,13 +10920,13 @@ static int64_t peek_hyint__cps(tur_poly_fn_t l, int64_t s, DK *__kont) {
         __dk_panic_abandon(__kont);
         return ((int64_t)0);
     }
-    __t0 = __ps_239;
-    __t1 = get_hyconst((int64_t)(intptr_t)__t0); /* cps->direct */
+    int64_t __ps_240 = (get_hyconst(__ps_239));
     if (tur_panicking) {
         __dk_panic_abandon(__kont);
         return ((int64_t)0);
     }
-    return dk_run(__kont, (intptr_t)(__t1));
+    __t0 = __ps_240;
+    return dk_run(__kont, (intptr_t)(__t0));
 }
 __attribute__((unused)) static int64_t peek_hyint(tur_poly_fn_t l, int64_t s) {
     __dk_entry_depth++;
@@ -10943,18 +10958,18 @@ int main(int argc, char **argv) {
             _c->next = g_tur_args;
             g_tur_args = (int64_t)(intptr_t)_c;
         }
-        const char * __ps_240 = (shown_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_57 }, INT64_C(7)));
-        /* panic-return-signal: ret ctype unknown; no propagation here */
-        puts(__ps_240);
-        const char * __ps_241 = (shown_hybool((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_71 }, true));
+        const char * __ps_241 = (shown_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_57 }, INT64_C(7)));
         /* panic-return-signal: ret ctype unknown; no propagation here */
         puts(__ps_241);
-        int64_t __ps_242 = (peek_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_85 }, INT64_C(42)));
+        const char * __ps_242 = (shown_hybool((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_71 }, true));
         /* panic-return-signal: ret ctype unknown; no propagation here */
-        printf("%lld\n", (long long)(__ps_242));
-        int64_t __t243;
-        __t243 = INT64_C(0);
-        return (int)__t243;
+        puts(__ps_242);
+        int64_t __ps_243 = (peek_hyint((tur_poly_fn_t){ NULL, (int64_t(*)(void*,int64_t))__poly_85 }, INT64_C(42)));
+        /* panic-return-signal: ret ctype unknown; no propagation here */
+        printf("%lld\n", (long long)(__ps_243));
+        int64_t __t244;
+        __t244 = INT64_C(0);
+        return (int)__t244;
 }
 
 static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int64_t h, int64_t t) {
@@ -10962,9 +10977,9 @@ static tur_adt_Cons__int * tcons__spec__tur_adt_Cons__int___int64_t_int64_t(int6
 }
 
 static tur_adt_Vec__int * vec_empty_like____spec__tur_adt_Vec__int___int64_t(int64_t witness) {
-        tur_adt_Vec__int * __ps_244 = (vec_new__spec__tur_adt_Vec__int__());
+        tur_adt_Vec__int * __ps_245 = (vec_new__spec__tur_adt_Vec__int__());
         if (tur_panicking) return ((tur_adt_Vec__int *)0);
-        return __ps_244;
+        return __ps_245;
 }
 
 static tur_adt_Vec__int * vec_new__spec__tur_adt_Vec__int__(void) {
@@ -10983,9 +10998,9 @@ static void __defer_223(void *__env) {
 
 static void __defer_218(void *__env) {
     struct __defer_env_217 *__e = (struct __defer_env_217 *)__env;
-    bool __ps_245 = (bt_hyundo_hyto_ex(__e->m));
+    bool __ps_246 = (bt_hyundo_hyto_ex(__e->m));
     /* panic-return-signal: ret ctype unknown; no propagation here */
-    (void)(__ps_245);
+    (void)(__ps_246);
 }
 
 

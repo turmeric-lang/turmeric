@@ -1141,6 +1141,16 @@ add_test(
   COMMAND bash tests/run-any-type-id-multi-module.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# panic-location-names-the-runtime-not-the-call-site: a panic in one module's
+# inline-C body, called from another module, names the caller's line when the
+# modules are compiled separately -- the panic-site slot used to be `static`
+# per TU, so it named a line of tur_runtime.h.  A single-`main` manifest
+# project is one TU and hides it, so this drives a bare-directory build.
+add_test(
+  NAME tur_panic_site_across_modules
+  COMMAND bash tests/run-panic-site-across-modules.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # shared-build-imported-ctor-undeclared: a module that constructs a value of
 # an ADT another module defines called that ADT's `static` constructor with
 # nothing in its TU declaring it, so `tur build --shared` failed at cc.  The

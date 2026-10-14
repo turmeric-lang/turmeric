@@ -1,0 +1,84 @@
+;; A generic `match` that rebuilds a parametric `:heap` SUM whose payload is a
+;; parametric application -- `(Cons T)` -- inside a clone of the enclosing
+;; generic.
+;;
+;; `type_c_name` spells a `:heap` parametric sum application as the int64
+;; carrier (it names only single-constructor products), so the scrutinee
+;; `(.fr b) : (Fr R)` is read through the erased base layout `tur_adt_Fr *`.
+;; Its `(Cons T)` binder took that layout's `int64_t` slot type, while every
+;; use of the binder -- the rebuilt `ctor_Fr_Frame__R(l, x)`, a
+;; `thead__spec__..._tur_adt_Cons__R__(l)` -- asks its spec-resolved type,
+;; `tur_adt_Cons__R *`.  An int handed to a pointer parameter:
+;; -Wint-conversion, an error under clang 15+ and gcc 14
+;; (heap-sum-match-binder-of-app-payload-unbridged).
+;;
+;; The `Box` wrapper is what gives `bump` a clone at all (a generic whose only
+;; T-bearing parameter is the sum itself is never specialized; see
+;; heap-sum-generic-never-specialized).  `bump-g` carries a guard, so it is
+;; emitted by the if-chain path rather than the switch; `depth` and
+;; `first-or` read the binder through a let, `tnil?`, `thead` and a generic
+;; recursive call.  Four element types -- a `:heap` sum, int, float (with a
+;; fractional part) and cstr -- each get their own clone.
+
+(defdata R :heap :copy (Lf int) (Br (Cons R)))
+(defdata Fr :heap :copy [T] (Nil) (Frame (Cons T) T))
+(defstruct Box :heap :copy [T] (fr (Fr T)))
+
+(defn val [r : R] : int
+  (match r
+    (Lf v) v
+    (Br _) 0))
+
+(defn bump [T] [b : (Box T)] : (Box T)
+  (make-struct Box :fr (match (.fr b)
+                         (Nil) (.fr b)
+                         (Frame l x) (Frame l x))))
+
+(defn bump-g [T] [b : (Box T) k : int] : (Box T)
+  (make-struct Box :fr (match (.fr b)
+                         (Nil) (.fr b)
+                         (Frame l x) when (> k 0) (Frame (tcons-of x l) x)
+                         (Frame l x) (Frame l x))))
+
+(defn len [T] [l : (Cons T)] : int
+  (if (tnil? l) 0 (+ 1 (len (ttail l)))))
+
+(defn depth [T] [b : (Box T)] : int
+  (match (.fr b)
+    (Nil) 0
+    (Frame l x) (let [m l] (+ (len m) (if (tnil? l) 0 1)))))
+
+(defn first-or [T] [b : (Box T) d : T] : T
+  (match (.fr b)
+    (Nil) d
+    (Frame l x) (if (tnil? l) x (thead l))))
+
+(defn main [] : int
+  (let [b  (make-struct Box :fr (Frame (tcons-of (Lf 1) (tnil)) (Lf 7)))
+        bi (make-struct Box :fr (Frame (tcons-of 3 (tcons-of 4 (tnil))) 5))
+        bf (make-struct Box :fr (Frame (tcons-of 7.1 (tnil)) 2.25))
+        bs (make-struct Box :fr (Frame (tcons-of "hi" (tnil)) "yo"))]
+    ;; the report's repro: 7 + 1
+    (match (.fr (bump b))
+      (Nil) (println 0)
+      (Frame l x) (println (+ (val x) (val (thead l)))))
+    ;; guarded arm taken: x is consed onto l, 7 + 7
+    (match (.fr (bump-g b 1))
+      (Nil) (println 0)
+      (Frame l x) (println (+ (val x) (val (thead l)))))
+    ;; guarded arm skipped: 5 + 3
+    (match (.fr (bump-g bi 0))
+      (Nil) (println 0)
+      (Frame l x) (println (+ x (thead l))))
+    ;; float: 2.25 consed onto (7.1), 2.25 + 2.25
+    (match (.fr (bump-g bf 1))
+      (Nil) (println 0)
+      (Frame l x) (println (+ x (thead l))))
+    (println (depth b))
+    (println (depth bi))
+    (println (depth bs))
+    (println (val (first-or b (Lf 0))))
+    (println (first-or bi 0))
+    (println (first-or bf 0.5))
+    (println (first-or bs "none")))
+  0)

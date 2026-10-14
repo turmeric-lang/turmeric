@@ -1,0 +1,90 @@
+;; await-parks-only-to-the-nearest-c-frame: an awaiting function reached
+;; through a lambda inside a generic, the lambda capturing a value of the
+;; generic's type variable.  The generic's specialization is on the CPS
+;; backend, but the lambda is emitted once, erased: its env holds the `T`
+;; capture as the int64 carrier word.  The backend refused that capture, so
+;; the lambda had no `__cps` twin, the callee's fat dispatch missed it in the
+;; registry and entered its direct root, and the park was refused.  Now:
+;;
+;;   - a lambda that may await may capture a bare `T`; its body is
+;;     classified and rendered with `T` read as the erased carrier word, as
+;;     its direct thunk reads it (g_cps_erased_base);
+;;   - a generic that reaches an await only through a function VALUE it
+;;     passes on (the lambda here) gets its monomorph minted at a carrier
+;;     type too -- at `int` the erased base used to run instead;
+;;   - a constrained generic gets one the same way (gen-eq).
+;;
+;; The struct instantiation lives in await-in-generic-capturing-lambda-struct:
+;; it parks correctly, but its env-boxed capture leaks (known-leak,
+;; erased-capture-aggregate-box-never-freed).
+;;
+;; Each body awaits a pending future each turn; the driver fulfills it with
+;; 2 and hands out a fresh one.  Leak-checked (requires.leak-check).
+
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+(defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defn gid [T] [x : T] : T x)
+
+(defn gen-cap [T] [v : T m : int] : int
+  (* 2 (apply3 (fn [y : int] : int (let [w (gid v)] (level3 y))) (+ m 1))))
+
+(defn at-bool [] : int (+ 7 (gen-cap true 2)))
+(defn at-int [] : int (+ 7 (gen-cap 5 2)))
+(defn at-float [] : int (+ 7 (gen-cap 7.1 2)))
+(defn at-cstr [] : int (+ 7 (gen-cap "s" 2)))
+
+(defn gen-eq [T] [(Eq T)] [v : T m : int] : int
+  (* 2 (apply3 (fn [y : int] : int (if (eq? v v) (level3 y) 0)) (+ m 1))))
+(defn constrained [] : int (+ 7 (gen-eq 5 2)))
+
+(defn main [] : nil
+  (cur-cell true)
+  ;; 7 + 2 * (3 + 600), each
+  (println (drive (async at-bool)))
+  (println (drive (async at-int)))
+  (println (drive (async at-float)))
+  (println (drive (async at-cstr)))
+  (println (drive (async constrained)))
+  (free-future (cur-cell false)))

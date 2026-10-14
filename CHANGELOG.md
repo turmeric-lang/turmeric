@@ -2,6 +2,56 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.65.0] -- 2026-10-14
+
+### Added
+
+- **`tur` warns when a may-await function is compiled direct-style
+  (TUR-W0044).** A pending `await` parks at the nearest C frame, so a function
+  the CPS backend evicts between the async body and the `await` can refuse the
+  park at run time; the eviction site now says so at compile time, once per
+  function.
+- **`tur explain TUR-E0709` covers the new rigid-type-variable error.** The
+  explain text describes the conflict and no longer suggests adding a type
+  parameter as an escape hatch.
+
+### Changed
+
+- **BREAKING -- A generic may not launder its type variable as a ground type.**
+  `(defn generic-carrier [A] [x : A] : int x)` was accepted but compiled to
+  pointer bits; it is now refused (TUR-E0709), and only `#{Unsafe}` keeps the
+  bridge. Declared type variables are also rigid at call arguments, constructor
+  arguments, `if` joins and `let` annotations, so a swapped `(Pair A B)` or an
+  `(Option A)` used as `(Option B)` is caught before it segfaults.
+
+### Fixed
+
+- **`await` parks through rank-2 and exported functions.** An awaiter reached
+  through a `forall` parameter, an `export-as` function, a generic capture, a
+  computed-argument or constrained rank-2 call, or a constrained generic handed
+  to a rank-2 parameter no longer fails at run time with no warning.
+- **Panics name your call site, not the runtime's.** A sited inline-C body
+  entered through a function value, an instance dispatch, a partial application,
+  a cross-module call or a stdlib HOF now prints `panic at input.tur:LINE` for
+  the call you wrote.
+- **Generics over `:heap` parametric sums specialize and compile.** A generic
+  over `(Fr T)` or `(Cons T)` no longer hits the dead-base trap,
+  `-Wint-conversion` errors on match binders and tail-match fall-throughs, or
+  "no lowering here"; a performing generic taking a `(Vec int)` handle compiles
+  too.
+- **A by-value field typed as an application over `T` is read as the
+  aggregate.** `(peek (.p h))` with `p : (Option (Fr T))` no longer unboxes the
+  int64 carrier into a by-value parameter.
+- **A parametric instance's dispatch on its own variable is that variable.**
+  Inside `(definstance Sg [(Option A)] ...)`, `(sg-combine (unwrap x) ...)` is
+  typed `(Option A)`, not `(Option int)`, so a correct program compiles.
+- **`(None)` beside `(Some x)` takes the joined type.** `(if c (None) (Some 3))`
+  and its `match` arm no longer type-error or build the nullary arm with the
+  erased base constructor.
+- **A `handle` outside a branch tail compiles.** A `handle` under a `do`, an
+  `if` branch or a literal-pattern match on a performing call no longer evicts
+  the function with "this effect operation has no lowering here".
+
 ## [0.64.5] -- 2026-10-14
 
 ### Fixed

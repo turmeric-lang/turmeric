@@ -1,0 +1,7 @@
+;; declared-tyvars-are-not-rigid: the other direction -- an int body under a
+;; declared `A`.  The caller may have picked cstr, and then this segfaults.
+(defn bad [A] [a : int] : A
+  a)
+(defn main [] : int
+  (let [s : cstr (bad 7)] (println s))
+  0)

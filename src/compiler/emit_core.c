@@ -1855,6 +1855,29 @@ static void inst_panic_scan_items(EmitCtx *ctx, Expr **items, uint32_t n) {
                                   it->as.defmodule_.mod->n_body);
             continue;
         }
+        /* A partial application's thunk (`__papN`, elab_partial_apply): its
+         * body is the one forwarding call to the function partially applied.
+         * The call that enters it -- direct, when the compiler resolves the
+         * closure (`(g 9)` on a let-bound partial) -- is sited as a call to
+         * that function would be (binding_panics_in_inline_c). */
+        if (it->kind == EX_FN_DEF && it->as.fn_def_.fn && it->as.fn_def_.fn->binding) {
+            const Expr *fb = it->as.fn_def_.fn->body;
+            if (fb && fb->kind == EX_CALL && fb->as.call_.forwards_site &&
+                fb->as.call_.fn_binding) {
+                const Binding **gb = (const Binding **)realloc(
+                    (void *)ctx->pap_thunk_bindings,
+                    (ctx->n_pap_thunks + 1) * sizeof *gb);
+                const Binding **gt = gb ? (const Binding **)realloc(
+                    (void *)ctx->pap_thunk_targets,
+                    (ctx->n_pap_thunks + 1) * sizeof *gt) : NULL;
+                if (gb) ctx->pap_thunk_bindings = gb;
+                if (!gb || !gt) return;
+                ctx->pap_thunk_targets = gt;
+                ctx->pap_thunk_bindings[ctx->n_pap_thunks] = it->as.fn_def_.fn->binding;
+                ctx->pap_thunk_targets[ctx->n_pap_thunks++] = fb->as.call_.fn_binding;
+            }
+            continue;
+        }
         if (it->kind != EX_INSTANCE_DEF || !it->as.instance_def_.instance) continue;
         const TypeClassInstance *inst = it->as.instance_def_.instance;
         for (uint8_t m = 0; m < inst->n_method_impls; m++) {
@@ -1869,15 +1892,17 @@ static void inst_panic_scan_items(EmitCtx *ctx, Expr **items, uint32_t n) {
         }
     }
 }
+static void inst_panic_scan(EmitCtx *ctx) {
+    if (ctx->inst_panic_scanned) return;
+    ctx->inst_panic_scanned = true;
+    const Expr *p = ctx->program_root;
+    if (p && p->kind == EX_PROGRAM)
+        inst_panic_scan_items(ctx, p->as.program.items, p->as.program.n);
+}
 static bool inst_method_binding_panics(EmitCtx *ctx, const Binding *b) {
     if (!ctx || !b->name || !b->name->name ||
         strncmp(b->name->name, "__inst_", 7) != 0) return false;
-    if (!ctx->inst_panic_scanned) {
-        ctx->inst_panic_scanned = true;
-        const Expr *p = ctx->program_root;
-        if (p && p->kind == EX_PROGRAM)
-            inst_panic_scan_items(ctx, p->as.program.items, p->as.program.n);
-    }
+    inst_panic_scan(ctx);
     for (uint32_t i = 0; i < ctx->n_inst_panic_bindings; i++)
         if (ctx->inst_panic_bindings[i] == b) return true;
     return false;
@@ -1885,19 +1910,32 @@ static bool inst_method_binding_panics(EmitCtx *ctx, const Binding *b) {
 /* Does a direct call to `b` enter a body that raises a runtime panic?  A
  * top-level defn's FnDef hangs off the binding; an instance method's is
  * found through its definstance (inst_method_binding_panics), so
- * `(checked-at x i)` dispatched to an inline-C method is sited too. */
+ * `(checked-at x i)` dispatched to an inline-C method is sited too; and a
+ * partial application's thunk forwards to one that does. */
 bool binding_panics_in_inline_c(EmitCtx *ctx, const Binding *b) {
     if (!b || !b->is_global) return false;
     if (b->source_fn_def) return fn_def_panics_in_inline_c(b->source_fn_def);
-    return inst_method_binding_panics(ctx, b);
+    if (inst_method_binding_panics(ctx, b)) return true;
+    if (!ctx) return false;
+    inst_panic_scan(ctx);
+    for (uint32_t i = 0; i < ctx->n_pap_thunks; i++)
+        if (ctx->pap_thunk_bindings[i] == b) {
+            const Binding *t = ctx->pap_thunk_targets[i];
+            return t != b && t && t->is_global &&
+                   (t->source_fn_def ? fn_def_panics_in_inline_c(t->source_fn_def)
+                                     : inst_method_binding_panics(ctx, t));
+        }
+    return false;
 }
 
 /* Does a call through a FUNCTION VALUE in this unit set the panic site
  * around itself?  Only when some panicking inline-C function is taken as a
- * value somewhere in the program (`(apply2 vec-get v 9)`): the body such a
- * call enters reads the slot, and with no fn value that could reach one, the
- * two thread-local stores would buy nothing on every closure call.  One
- * answer per unit, from the CPS classifier's address-taken pre-pass. */
+ * value somewhere in the program -- `(apply2 vec-get v 9)`, or partially
+ * applied, `(vec-get v)`, whose thunk's one call keeps the site the call
+ * through the value sets: the body such a call enters reads the slot, and
+ * with no fn value that could reach one, the thread-local traffic would buy
+ * nothing on every closure call.  One answer per unit, from the CPS
+ * classifier's address-taken pre-pass. */
 static bool defn_binding_panics_pred(const Binding *b) {
     return b && b->is_global && b->source_fn_def &&
            fn_def_panics_in_inline_c(b->source_fn_def);
@@ -1910,18 +1948,117 @@ bool emit_fn_value_calls_sited(EmitCtx *ctx) {
     return ctx->fn_value_sited == 2;
 }
 
-/* Does a DIRECT call to `b` set its own site?  When the callee's body may
- * panic -- except inside a `__poly_N` forwarding wrapper in a unit whose
- * fn-value calls are sited: the wrapper's call is the compiler's, written at
- * the line the program handed the function over, and the program's own call
- * through the value (`(f x)`, sited by site_fn_value_call) has already set
- * the line a reader wants.  Both engines then name that line.  In a unit
- * with no sited fn-value calls the wrapper's own site stands: the line the
- * function was handed over at beats the runtime's. */
-bool emit_direct_call_sited(EmitCtx *ctx, const Binding *b) {
-    if (!binding_panics_in_inline_c(ctx, b)) return false;
-    if (ctx && ctx->in_forwarding_wrapper && emit_fn_value_calls_sited(ctx)) return false;
-    return true;
+/* Is `call` written in stdlib source -- its site, the macro use for a call
+ * written in a template, under the stdlib root? */
+static bool call_site_is_stdlib(const Expr *call) {
+    Span sp = emit_call_site_span(call);
+    return sp.line && diag_file_is_stdlib(sp.file_id);
+}
+
+/* How a sited call treats a site already in the slot.  A call the PROGRAM
+ * wrote sets its own; one the compiler forwards -- a partial application's
+ * thunk (`forwards_site`), a `__poly_N` forwarding wrapper's one call -- and
+ * one written in stdlib source keep the site the program's call set (the
+ * call through the value, the program's call to the stdlib function), and
+ * set their own only when there is none.  The interpreter does the same with
+ * its leaf call (eval.c). */
+static EmitSiteMode site_mode_for(EmitCtx *ctx, const Expr *call) {
+    if (ctx && ctx->in_forwarding_wrapper) return EMIT_SITE_KEEP;
+    if (call && call->kind == EX_CALL && call->as.call_.forwards_site) return EMIT_SITE_KEEP;
+    return call_site_is_stdlib(call) ? EMIT_SITE_KEEP : EMIT_SITE_SET;
+}
+
+/* A stdlib function that takes a function value (option-map, result-map):
+ * its own call through that value is written in stdlib source, so a panic
+ * the value raises names the program's call to it -- as the interpreter's
+ * native for it does -- once that call sets its site. */
+static bool binding_is_stdlib_hof(const Binding *b) {
+    if (!b || !b->is_global || b->type.kind != TY_FN) return false;
+    const FnDef *fd = b->source_fn_def;
+    if (!fd || !(b->is_from_stdlib || diag_file_is_stdlib(b->span.file_id))) return false;
+    for (uint32_t i = 0; i < fd->n_params; i++)
+        if (fd->param_types[i].kind == TY_FN) return true;
+    return false;
+}
+
+/* The site discipline of a DIRECT call to `b`.  A callee whose inline-C body
+ * may panic is sited (site_mode_for says whether it sets or keeps); so is a
+ * stdlib function taking a function value, called from the program in a unit
+ * whose fn-value calls are sited -- the call through the value inside it
+ * keeps that site, so a sited body handed to it names the program's line. */
+EmitSiteMode emit_direct_call_site_mode(EmitCtx *ctx, const Expr *call, const Binding *b) {
+    if (binding_panics_in_inline_c(ctx, b)) return site_mode_for(ctx, call);
+    if (binding_is_stdlib_hof(b) && !(ctx && ctx->in_forwarding_wrapper) &&
+        !(call && call->kind == EX_CALL && call->as.call_.forwards_site) &&
+        !call_site_is_stdlib(call) && emit_fn_value_calls_sited(ctx))
+        return EMIT_SITE_SET;
+    return EMIT_SITE_NONE;
+}
+
+/* The site discipline of a call through a FUNCTION VALUE: sited only in a
+ * unit that takes a panicking inline-C function as a value anywhere
+ * (emit_fn_value_calls_sited); otherwise no such body can be reached and
+ * closure calls pay nothing. */
+EmitSiteMode emit_fn_value_call_site_mode(EmitCtx *ctx, const Expr *call) {
+    if (!call || !emit_fn_value_calls_sited(ctx)) return EMIT_SITE_NONE;
+    return site_mode_for(ctx, call);
+}
+
+/* `call` wrapped in its site, as one expression: save the slot, set this
+ * call's site (tur_site_push) or keep one already there (tur_site_keep),
+ * make the call, put the saved site back (tur_site_pop), yield the call's
+ * value held in a temp of `ret_c`.  Restoring rather than clearing is what
+ * lets an outer site survive an inner call: the program's call to a stdlib
+ * HOF, across the callbacks it makes; a call among the arguments, across
+ * the outer call.  A `void` call yields nothing -- an int statement
+ * expression cast away, since a void statement expression trips an
+ * assertion in c2mir.  NULL when nothing is to be done (no mode, no `ret_c`,
+ * no site); the caller emits the call bare.  Malloc'd. */
+char *emit_site_wrap(EmitCtx *ctx, EmitSiteMode m, Span span, const char *ret_c,
+                     const char *call) {
+    if (m == EMIT_SITE_NONE || !call || !ret_c || !*ret_c) return NULL;
+    char *ref = emit_site_ref_text(ctx, span);
+    if (!ref) return NULL;
+    const char *push = m == EMIT_SITE_KEEP ? "tur_site_keep" : "tur_site_push";
+    Buf b; buf_init(&b);
+    if (strcmp(ret_c, "void") == 0)
+        buf_printf(&b, "((void)({ const tur_site_t *__tur_sv = %s(%s); %s; "
+                       "tur_site_pop(__tur_sv); 0; }))", push, ref, call);
+    else
+        buf_printf(&b, "({ const tur_site_t *__tur_sv = %s(%s); %s __tur_sr = %s; "
+                       "tur_site_pop(__tur_sv); __tur_sr; })", push, ref, ret_c, call);
+    buf_putc(&b, '\0');
+    free(ref);
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
+}
+
+/* The same as two statements, for a backend that writes the call as a line
+ * of its own (the CPS backend's cps->direct arms): the returned opening
+ * saves the slot into a fresh `__tur_sv_N` and sets or keeps the site, and
+ * `*close` restores it.  The opening starts with `;` so that it may follow a
+ * label (a declaration may not, before C23).  NULL when nothing is to be
+ * done.  Both malloc'd. */
+char *emit_site_open_stmt(EmitCtx *ctx, EmitSiteMode m, Span span, char **close) {
+    *close = NULL;
+    if (m == EMIT_SITE_NONE) return NULL;
+    char *ref = emit_site_ref_text(ctx, span);
+    if (!ref) return NULL;
+    uint32_t id = (uint32_t)ctx->tmp_n++;
+    Buf b; buf_init(&b);
+    buf_printf(&b, "; const tur_site_t *__tur_sv_%u = %s(%s);", id,
+               m == EMIT_SITE_KEEP ? "tur_site_keep" : "tur_site_push", ref);
+    buf_putc(&b, '\0');
+    char *open = strdup(b.data);
+    buf_free(&b);
+    free(ref);
+    Buf c; buf_init(&c);
+    buf_printf(&c, "tur_site_pop(__tur_sv_%u);", id);
+    buf_putc(&c, '\0');
+    *close = strdup(c.data);
+    buf_free(&c);
+    return open;
 }
 
 /* The source position a panic in `call`'s callee should name: the macro use

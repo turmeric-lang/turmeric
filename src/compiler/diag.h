@@ -169,6 +169,15 @@ typedef enum DiagCode {
      * on another OS thread the program hangs with no further diagnostic.
      * Not emitted under --interpret, whose rendezvous is cooperative. */
     TUR_W0043_SESSION_OP_IN_ASYNC,
+    /* await-parks-only-to-the-nearest-c-frame: a function that may await
+     * (its body awaits, or it calls a function that does) is compiled
+     * direct-style because the CPS backend evicted it.  A pending future
+     * awaited below it would park at its entry's root instead of the async
+     * body's; the program then refuses that park at run time (`await: a
+     * pending future would park below a direct-style call`).  A ready future
+     * is unaffected, which is why this is a warning and not an error.
+     * Emitted once per function at the eviction site (emit_cps_ir.c). */
+    TUR_W0044_AWAITER_COMPILED_DIRECT,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */
@@ -735,6 +744,11 @@ uint16_t diag_autoload_file_ids_end(void);
  * is resolved).  False when no root is known: the safe answer, since such a
  * file is then the program's, as it always was. */
 bool     diag_file_is_imported_stdlib(uint16_t file_id);
+/* panic-location-names-the-runtime-not-the-call-site: is `file_id` any file
+ * under the stdlib root -- auto-loaded or imported?  A panic site written
+ * there is the library's, not the program's: a call made from stdlib source
+ * keeps a site the program's own call already set (both engines). */
+bool     diag_file_is_stdlib(uint16_t file_id);
 
 /* Translate a span into the coordinates of the file the user is editing.
  *

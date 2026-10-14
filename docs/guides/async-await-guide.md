@@ -66,6 +66,33 @@ A **fiber** is a user-space thread (lightweight thread) that:
 - Can be awaited with `(await fut)`.
 - Composable: multiple `await`s sequence operations.
 
+### Where an await may park -- `TUR-W0044`
+
+A pending `await` parks by capturing the continuation up to the async body's
+root. Every function between the body and the await has to be on the CPS
+backend for that capture to reach the root. An awaiting function reached
+through a named call, a function value, a rank-2 (`forall`) parameter, a
+lambda inside a generic, or an `export-as` function parks correctly. What
+still puts a nearer root in the way: a function the backend cannot take for
+another reason (an inline-C body, a signature shape it does not thread), and
+a rank-2 call with a struct argument or result or more than eight arguments.
+A constrained generic passed to a constrained rank-2 parameter parks
+correctly unless its result is a float. The compiled program refuses such a
+park at
+run time (`await: a pending future would park below a direct-style call`)
+instead of running the rest of the body with a dummy value.
+
+The compiler says so up front: a function that may await -- its own body
+awaits, it calls a function that does, or it is handed one -- that may run
+below an async body, and that the backend evicts, draws **`TUR-W0044`** at
+its definition, with the reason (an unthreaded rank-2 call draws it at the
+call). It is a warning, not an
+error, because an await that only ever meets a ready future never parks and
+such a program runs unchanged. To clear it, move the await (or the call to
+the awaiting function) out of the named function into a caller the backend
+takes, or change the function's shape. `tur explain TUR-W0044` has the long
+form; `TUR_TRACE_EVICT=1` prints every eviction with its category.
+
 ### Task panics
 
 A panic inside an `(async ...)` body is that **task's** failure, not the

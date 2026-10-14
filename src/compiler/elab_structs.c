@@ -3037,6 +3037,33 @@ static bool arm_arg_join(Elab *e, Type a, Type b, Type *out) {
     return false;
 }
 
+/* none-arm-not-grounded-by-sibling-some-arm: a NULLARY constructor of a
+ * parametric ADT -- `(None)` -- has no argument to infer its type parameters
+ * from, so outside an expected type (elab_call's `result_pinned`) it is typed
+ * as the bare ADT.  Joined beside `(Some x) : (Option T)`, the join keeps the
+ * application, but the `(None)` node itself kept the bare type, so codegen built
+ * it with the erased base ctor (`ctor_Option_None()`, the int64 carrier) beside
+ * the monomorph `ctor_Option_Some__int` (a by-value aggregate): the two arms of
+ * one join in two representations.  Give such an arm the joined type, which is
+ * what an expected type would have pinned.  A nullary constructor carries no
+ * payload, so its representation is decided by its type alone; any other bare
+ * expression keeps its type.  Returns whether `arm` was (or now is) typed as
+ * `joined`. */
+bool elab_retype_nullary_ctor_arm(Expr *arm, Type joined) {
+    if (!arm || arm->kind != EX_CALL || !arm->as.call_.ctor ||
+        arm->as.call_.n_args != 0)
+        return false;
+    const CtorDef *ctor = arm->as.call_.ctor;
+    if (!ctor->adt || ctor->adt->is_gadt || ctor->adt->n_type_params == 0)
+        return false;
+    if (arm->type.kind != TY_ADT || arm->type.as.adt_.def != ctor->adt)
+        return false;
+    if (joined.kind != TY_APP || type_adt_app_def(&joined) != ctor->adt)
+        return false;
+    arm->type = joined;
+    return true;
+}
+
 static bool match_arm_type_compatible(Elab *e, Type a, Type b, Type *out) {
     if (type_eq(a, b)) {
         /* match-result-temp-typed-from-first-arm: two arms of one fn type, a
@@ -4228,8 +4255,18 @@ Expr *elab_match(Elab *e, const Form *call) {
                          type_app_is_concrete_adt(&body->type) &&
                          type_adt_app_def(&body->type) == type_adt_app_def(&lit_result))
                     lit_result = body->type;
+                /* none-arm-not-grounded-by-sibling-some-arm: a bare ADT
+                 * (a nullary-constructor first arm, `true (None)`) and an
+                 * application over the same def keep the application, as
+                 * the ADT path's join does. */
+                else if (lit_result.kind == TY_ADT && lit_result.as.adt_.def &&
+                         body->type.kind == TY_APP &&
+                         type_adt_app_def(&body->type) == lit_result.as.adt_.def)
+                    lit_result = body->type;
             }
             if (lit_result.kind == TY_UNKNOWN) lit_result = TYPE_NIL;
+            for (uint32_t ai = 0; ai < n_arms; ai++)
+                elab_retype_nullary_ctor_arm(lit_arms[ai].body, lit_result);
             Expr *out = expr_new(e->arena, EX_MATCH, lit_result, call->span);
             out->as.match_.scrutinee = scrutinee;
             out->as.match_.arms      = lit_arms;
@@ -5140,6 +5177,11 @@ Expr *elab_match(Elab *e, const Form *call) {
     free(arm_diverges);
 
     if (result_type.kind == TY_UNKNOWN) result_type = TYPE_NIL;
+
+    /* none-arm-not-grounded-by-sibling-some-arm: the join kept the application
+     * over a bare-typed nullary constructor arm; give that arm the type too. */
+    for (uint32_t ai = 0; ai < n_arms; ai++)
+        elab_retype_nullary_ctor_arm(arms[ai].body, result_type);
 
     /* saffron-lang-plan S5: when the arms UNIFIED to `any`, box the ones that
      * are not.

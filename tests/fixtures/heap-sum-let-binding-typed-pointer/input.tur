@@ -1,0 +1,94 @@
+;; A `let` binding of a concrete `:heap` SUM, consumed every way a local is.
+;;
+;; `type_c_name` spells a `:heap` sum as the int64 carrier, while its
+;; constructor returns the typed pointer and repr_of calls it a heap pointer.
+;; Two seams followed (heap-sum-rebuild-in-effectful-generic-merge-temp-ice):
+;;
+;;   1. A PARAMETRIC sum application -- `(let [f (Frame 3 4)] ...)` at
+;;      `(Fr int)` -- was declared `int64_t`, and the Debug build's
+;;      representation shadow ICE'd ("want=heap-ptr got=carrier-i64").  The
+;;      non-parametric `R` was already declared `tur_adt_R *`; the
+;;      application now gets `tur_adt_Fr__int *` the same way.
+;;   2. A closure capturing such a binding stored the typed pointer into its
+;;      `int64_t` env field uncast: -Wint-conversion, an error under clang.
+;;      That one was there for the non-parametric `R` too.
+;;
+;; The consumers: a concrete callee, a generic callee, a tail-position let, a
+;; `:heap` struct field, a Vec element, two closure captures, an `if` merge,
+;; a direct match, a `^mut` rebinding, a tail-recursive loop, a float element
+;; with a fractional part, and a nested application.
+
+(defdata R :heap (Lf int) (Br int))
+(defdata Fr :heap [T] (Nil) (Frame T T))
+(defstruct Holder :heap [fr : (Fr int)])
+
+(defn val [r : R] : int
+  (match r
+    (Lf v) v
+    (Br v) (- 0 v)))
+
+(defn diff [f : (Fr int)] : int
+  (match f
+    (Nil) 0
+    (Frame a b) (- b a)))
+
+(defn gsnd [T] [f : (Fr T) d : T] : T
+  (match f
+    (Nil) d
+    (Frame a b) b))
+
+(defn mk [n : int] : (Fr int)
+  (let [f (Frame n (+ n 10))]
+    f))
+
+(defn pick [c : bool] : (Fr int)
+  (let [x (Frame 1 2)
+        y (Nil)]
+    (if c x y)))
+
+(defn sum-to [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (let [f (Frame n acc)]
+      (match f
+        (Nil) acc
+        (Frame a b) (sum-to (- a 1) (+ a b))))))
+
+(defn fsum [f : (Fr float)] : float
+  (match f
+    (Nil) 0.0
+    (Frame a b) (+ a b)))
+
+(defn main [] : int
+  (let [f     (Frame 3 4)
+        g     (mk 5)
+        r     (Lf 9)
+        h     (make-struct Holder :fr f)
+        v     (vec-new)
+        cl    (fn [] : int (diff g))
+        cr    (fn [] : int (val r))
+        ^mut cur (Frame 1 2)]
+    (vec-push! v f)
+    (vec-push! v g)
+    (println (diff f))
+    (println (gsnd f 0))
+    (println (diff g))
+    (println (diff (.fr h)))
+    (println (diff (vec-get v 1)))
+    (println (cl))
+    (println (cr))
+    (println (diff (pick true)))
+    (println (diff (pick false)))
+    (println (match f
+               (Nil) 0
+               (Frame a b) (+ a b)))
+    (set! cur (Frame 30 40))
+    (println (diff cur))
+    (println (sum-to 4 0))
+    (let [ff (Frame 7.1 0.25)
+          nn (Frame (Frame 1 2) (Frame 3 4))]
+      (println (fsum ff))
+      (println (match nn
+                 (Nil) 0
+                 (Frame x y) (+ (diff x) (diff y))))))
+  0)

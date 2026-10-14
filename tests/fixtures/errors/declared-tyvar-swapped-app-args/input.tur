@@ -1,0 +1,7 @@
+;; declared-tyvars-are-not-rigid: two applications of one ADT are compared
+;; argument by argument, so a swapped pair under `(Pair A B)` is caught.
+(defn sw [A B] [a : A b : B] : (Pair A B)
+  (pair b a))
+(defn main [] : int
+  (println (pair-fst (sw 1 "x")))
+  0)

@@ -1,0 +1,9 @@
+;; declared-tyvars-are-not-rigid: the `[A B]` a signature declares are rigid
+;; inside its body -- `A` matches only `A`.  Returning an `A` where `B` is
+;; declared was accepted (both ride the int64 carrier), and a caller that
+;; trusted the signature then segfaulted.
+(defn bad [A B] [a : A] : B
+  a)
+(defn main [] : int
+  (let [s : cstr (bad 7)] (println s))
+  0)

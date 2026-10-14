@@ -5555,17 +5555,33 @@ static void tur_role_close(void *role_ptr) {
 
 /* ==== tur: end of fixed runtime preamble ==== */
 /* panic-location-names-the-runtime-not-the-call-site: the source site of
- * the direct call to a panicking inline-C body this thread is making --
- * set just before the call, cleared just after, read by tur_panic_sited. */
+ * the call into a panicking inline-C body this thread is making -- saved
+ * and set just before the call, restored just after, read by
+ * tur_panic_sited. */
 typedef struct { const char *file; int line; } tur_site_t;
 #if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; tur_cur_site = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; if (!o) tur_cur_site = s; return o;
+}
 #else
 extern void **tur_tls_cur_site_ptr(void);
 #define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    *p = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    if (!o) *p = s; return o;
+}
 #endif
 static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }
 static inline void tur_site_clear(void) { tur_cur_site = NULL; }
+static inline void tur_site_pop(const tur_site_t *o) { tur_cur_site = o; }
 static inline void tur_panic_sited(const char *msg) {
     const tur_site_t *s = tur_cur_site;
     tur_cur_site = NULL;
@@ -8431,9 +8447,9 @@ static bool vec_hyeq_hyloop(int64_t x, int64_t y, int64_t i, int64_t len) {
             __t115 = true;
         } else {
             bool __t116;
-            int64_t __ps_118 = (({ tur_site_set(&__tur_site_117); int64_t __tur_sr = vec_hyget(x, i); tur_site_clear(); __tur_sr; }));
+            int64_t __ps_118 = (({ const tur_site_t *__tur_sv = tur_site_keep(&__tur_site_117); int64_t __tur_sr = vec_hyget(x, i); tur_site_pop(__tur_sv); __tur_sr; }));
             if (tur_panicking) return ((bool)0);
-            int64_t __ps_120 = (({ tur_site_set(&__tur_site_119); int64_t __tur_sr = vec_hyget(y, i); tur_site_clear(); __tur_sr; }));
+            int64_t __ps_120 = (({ const tur_site_t *__tur_sv = tur_site_keep(&__tur_site_119); int64_t __tur_sr = vec_hyget(y, i); tur_site_pop(__tur_sv); __tur_sr; }));
             if (tur_panicking) return ((bool)0);
             bool __ps_121 = (__inst_Eq_eq_qu_int(__ps_118, __ps_120));
             if (tur_panicking) return ((bool)0);
@@ -10672,28 +10688,60 @@ static const char * poly(int64_t x) {
         return combine(__ps_205, __ps_206);
 }
 
-static int64_t use_hyboth__cps(tur_poly_fn_t f, DK *__kont) {
-    const char * __t3;
-    int64_t __t2;
-    const char * __t1;
+static intptr_t use_hyboth_j1(intptr_t env, intptr_t __t1__slot) {
+    (void)env;
+    const char * __t1 = (const char *)(__t1__slot);
     int64_t __t0;
-    const char * __ps_207 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton)), (int64_t)(INT64_C(7))))));
-    if (tur_panicking) {
-        __dk_panic_abandon(__kont);
-        return ((int64_t)0);
-    }
-    __t3 = __ps_207;
-    puts(__t3);
-    __t2 = 0;
-    const char * __ps_208 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_bool_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_bool_singleton)), (int64_t)(true)))));
-    if (tur_panicking) {
-        __dk_panic_abandon(__kont);
-        return ((int64_t)0);
-    }
-    __t1 = __ps_208;
     puts(__t1);
     __t0 = 0;
-    return dk_run(__kont, (intptr_t)("done"));
+    return (intptr_t)("done");
+}
+typedef struct { tur_poly_fn_t f0; } use_hyboth_j0_env;
+static intptr_t use_hyboth_j0(intptr_t env, intptr_t __t6__slot, DK *__kont) {
+    use_hyboth_j0_env *__cap = (use_hyboth_j0_env *)(intptr_t)env;
+    tur_poly_fn_t f = __cap->f0;
+    __dk_join_release_env((intptr_t)__cap);
+    const char * __t6 = (const char *)(__t6__slot);
+    int64_t __t5;
+    int64_t __t2;
+    int64_t __t3;
+    puts(__t6);
+    __t5 = 0;
+    __t2 = (int64_t)(intptr_t)(&dict_Show_bool_singleton);
+    __t3 = (int64_t)(intptr_t)(&dict_Rank_bool_singleton);
+    if (f.fn_cps) return ((int64_t (*)(void *, int64_t, int64_t, int64_t, DK *))f.fn_cps)(f.env, (int64_t)(intptr_t)(__t2), (int64_t)(intptr_t)(__t3), (int64_t)(true), __dk_reap_node(dk_frame_join(use_hyboth_j1, 0, __kont))); /* E2 threaded fat fn-value heap join */
+    const char * __ps_207 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_bool_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_bool_singleton)), (int64_t)(true)))));
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    const char * __fcv2 = __ps_207;
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    return dk_run(__dk_reap_node(dk_frame_join(use_hyboth_j1, 0, __kont)), (intptr_t)(__fcv2));
+}
+static int64_t use_hyboth__cps(tur_poly_fn_t f, DK *__kont) {
+    int64_t __t7;
+    int64_t __t8;
+    __t7 = (int64_t)(intptr_t)(&dict_Show_int_singleton);
+    __t8 = (int64_t)(intptr_t)(&dict_Rank_int_singleton);
+    use_hyboth_j0_env *__ce_use_hyboth_j0 = (use_hyboth_j0_env *)malloc(sizeof(use_hyboth_j0_env));
+    __ce_use_hyboth_j0->f0 = f;
+    __dk_reap_ptr((intptr_t)__ce_use_hyboth_j0);
+    if (f.fn_cps) return ((int64_t (*)(void *, int64_t, int64_t, int64_t, DK *))f.fn_cps)(f.env, (int64_t)(intptr_t)(__t7), (int64_t)(intptr_t)(__t8), (int64_t)(INT64_C(7)), __dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyboth_j0, (intptr_t)__ce_use_hyboth_j0, __kont), sizeof(use_hyboth_j0_env)))); /* E2 threaded fat fn-value heap join */
+    const char * __ps_208 = (((const char *)(intptr_t)(((int64_t(*)(void*, int64_t, int64_t, int64_t))f.fn)(f.env, (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Show_int_singleton)), (int64_t)(intptr_t)((int64_t)(intptr_t)(&dict_Rank_int_singleton)), (int64_t)(INT64_C(7))))));
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    const char * __fcv3 = __ps_208;
+    if (tur_panicking) {
+        __dk_panic_abandon(__kont);
+        return ((int64_t)0);
+    }
+    return dk_run(__dk_reap_node(dk_env_sized(dk_frame_resume_join(use_hyboth_j0, (intptr_t)__ce_use_hyboth_j0, __kont), sizeof(use_hyboth_j0_env))), (intptr_t)(__fcv3));
 }
 __attribute__((unused)) static const char * use_hyboth(tur_poly_fn_t f) {
     __dk_entry_depth++;

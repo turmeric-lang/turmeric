@@ -594,6 +594,30 @@ run_turi_fixture() {
         fi
     fi
 
+    # expected.stderr: substrings that must appear, one per line, as in
+    # tests/run.sh -- so a fixture that pins a panic's location (`panic at
+    # input.tur:8: ...`) pins it under --interpret too, not only compiled.
+    # stderr.compiled-only (its contents say why) marks expected stderr that
+    # only the compiling path prints -- a --dump-* or --*-stats report, a
+    # warning about the compiled runtime, a message the engines word
+    # differently on purpose; the fixture's stdout and exit still count.
+    if [ -f "$dir/expected.stderr" ] && [ ! -f "$dir/stderr.compiled-only" ]; then
+        local missing=0
+        while IFS= read -r needle; do
+            [ -z "$needle" ] && continue
+            if ! grep -F -q -- "$needle" "$actual_stderr"; then
+                [ $missing -eq 0 ] && echo "FAIL $name -- expected stderr substring not found:"
+                echo "    $needle"
+                missing=1
+            fi
+        done < "$dir/expected.stderr"
+        if [ $missing -ne 0 ]; then
+            head -5 "$actual_stderr" | sed 's/^/    stderr: /'
+            echo "FAIL" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"
+            return
+        fi
+    fi
+
     stamp_write "$name" "$input"
     echo "PASS $name"
     echo "PASS" > "$RESULTS_DIR/$(printf '%s' "$name" | tr '/ ' '__').result"

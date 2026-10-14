@@ -7,7 +7,7 @@
 > **Type:** Stdlib (pure Turmeric, no inline C), plus five compiler defects
 > found while prototyping it (section 5).
 > **Track:** Additive and v1-compatible. ZP1, ZP2 and ZP4 land on today's
-> compiler. ZP3 waits on one emitter fix (D4).
+> compiler. ZP3 waited on one emitter fix, D4, which is fixed (2026-10-14).
 > **Builds on:** `stdlib/list.tur`'s `:heap` `(Cons A)`, `stdlib/lens.tur`'s
 > record encoding of optics, and regions
 > ([gc-guide](../guides/gc-guide.md), [memory-usage-guide](../guides/memory-usage-guide.md)).
@@ -38,7 +38,7 @@ zipper":
 
 - Use Clojure's design for the core. It is the only one that fits the type
   system today, and the prototype runs.
-- Add Uniplate/`Plated` as typeclass sugar once defect D4 is fixed.
+- Add Uniplate/`Plated` as typeclass sugar (defect D4, which blocked it, is fixed).
 - Build the element cursor from a record-encoded `Traversal`.
 - Defer the derivative-of-a-type approaches (McBride, `syz`) and Kmett's
   typed level stacks (section 2).
@@ -145,11 +145,12 @@ Each choice, and why:
   document order.
 - **The path link is a nullable typed pointer, not a `defdata` and not an
   `Option`.** The obvious encodings are a sum `(Top) | (Frame ...)` or a
-  field `(Option (ZipFrame T))`. Each hits an open codegen defect when a
-  generic body reads or rebuilds it (D1, D2, D3 in section 5). The nullable
-  link is what `(Cons A)` itself uses for nil, it compiles warning-clean, and
-  regions do not note its null test. When D1--D3 are fixed this can become a
-  sum; the public API does not expose it either way.
+  field `(Option (ZipFrame T))`. Each hit a codegen defect when a generic
+  body read or rebuilt it (D1, D2, D3 in section 5). The nullable link is
+  what `(Cons A)` itself uses for nil, it compiles warning-clean, and regions
+  do not note its null test. D1--D3 are fixed (2026-10-14), so this can now
+  become a sum or an `Option` field; the public API does not expose it either
+  way.
 - **`ZipOps` is `:heap :copy`.** Each location then carries the ops as one
   word instead of three closures. It also avoids defect D5, seen when a
   by-value ops record was built inside a constrained function.
@@ -318,8 +319,8 @@ Each phase lands on its own, in its own PR against `main`.
 ### ZP0 -- compiler defects (in parallel; ZP1, ZP2 and ZP4 do not wait)
 
 Fix D1--D5 and I1--I4 from section 5, each pinned by its repro as a fixture.
-Only **D4** blocks a phase here (ZP3). D1--D3 block the nicer internal
-encodings, which ZP1 avoids. The I-items each cost an ascription inside
+Only **D4** blocked a phase here (ZP3), and it is fixed. D1--D3 blocked the nicer internal
+encodings, which ZP1 avoids; they are fixed too. The I-items each cost an ascription inside
 `zip.tur`. Fixing them removes those ascriptions, and the same papercuts
 also hit users writing their own `ZipOps`.
 
@@ -365,7 +366,7 @@ also hit users writing their own `ZipOps`.
   constant-folds a small arithmetic AST `defdata` and is the "why would I
   want this" example for the guide.
 
-### ZP3 -- `Plated` typeclass sugar (blocked on D4)
+### ZP3 -- `Plated` typeclass sugar (was blocked on D4, now fixed)
 
 ```turmeric
 (defclass Plated [a]
@@ -379,9 +380,11 @@ also hit users writing their own `ZipOps`.
 `Plated` is lens's name for "has children of its own type". It is also the
 right place for Uniplate's other combinators: `universe`, `transform` and
 `rewrite` need no zipper at all. Those are out of scope here but cheap to
-add on top. The prototype of exactly this class compiles except for D4.
-With the ops record made `:heap` (as in 3.1), D4 is the only remaining
-error.
+add on top. The prototype of exactly this class compiled except for D4.
+With the ops record made `:heap` (as in 3.1), D4 was the only remaining
+error. Since D4's fix, the class with a `match`-bodied instance for a
+`:heap` tree builds and runs under gcc and clang; `zip/plated` itself has
+not been built yet.
 
 ### ZP4 -- element cursor
 
@@ -437,15 +440,27 @@ After ZP4, decide whether to rebase `(Zipper A)` onto a `ZipCursor` over
 
 ## 5. Compiler defects found while prototyping (2026-10-13, `704cc531`)
 
-D1--D4 are filed under `docs/reported/` (linked below), with root causes
-and fix directions. D5 and the inference papercuts are recorded only here.
+D1--D4 were filed under `docs/reported/` (linked below; all four are
+resolved and archived), with root causes and fix directions. D5 and the inference papercuts are recorded only here.
 Every repro is complete and was run as shown.
 
 **D1 -- generic match-and-rebuild of a parametric `:heap` sum leaves `(Cons
 T)` payload binders as `int64_t`**
-([heap-sum-match-binder-of-app-payload-unbridged](../reported/heap-sum-match-binder-of-app-payload-unbridged.md)).
+([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)).
+**Resolved 2026-10-14** with D2: the clone reads the scrutinee through its
+monomorph, so the binder is the typed pointer.
 The specialised constructor takes the typed pointer. gcc 13 warns (and `run.sh` fails on the warning); clang 15+
-and gcc 14 reject it.
+and gcc 14 reject it. Also pinned by
+`tests/fixtures/heap-sum-match-binder-app-payload`. The *effectful* version
+of the same rebuild is fixed too, the same day
+([heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../archive/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md)).
+It was three defects, and two of them matter to this plan beyond D1. A
+generic function that performs could not take a `:heap` struct or `(Vec T)`
+parameter, nor perform only inside a `match` arm; both now compile, pinned
+by `tests/fixtures/generic-performer-heap-handle-param`. Matching directly on
+a `handle` result, or a `handle` in a non-tail branch, compiles too
+([handle-under-match-in-main-has-no-lowering](../archive/handle-under-match-in-main-has-no-lowering.md)),
+so a zipper walk may handle an effect mid-branch.
 
 ```turmeric
 (defdata R :heap :copy (Lf int) (Br (Cons R)))
@@ -468,7 +483,9 @@ and gcc 14 reject it.
 
 **D2 -- a generic over a parametric `:heap` sum is never specialized, so a
 constructor in its body aborts at runtime**
-([heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)).
+([heap-sum-generic-never-specialized](../archive/heap-sum-generic-never-specialized.md)).
+**Resolved 2026-10-14**: a ground `:heap` sum in a generic's signature now
+forces a clone.
 It compiles cleanly. The interpreter prints `6`, and so does the compiled
 program without `:heap`.
 
@@ -496,10 +513,14 @@ whose `Tree` instance calls generic helpers, aborts the same way
 
 **D3 -- a by-value `(Option (S T))` field of a `:heap` struct, passed to a
 generic function, is read as a carrier word**
-([byvalue-option-field-read-as-carrier-at-generic-call](../reported/byvalue-option-field-read-as-carrier-at-generic-call.md)).
+([byvalue-option-field-read-as-carrier-at-generic-call](../archive/byvalue-option-field-read-as-carrier-at-generic-call.md)).
 The emitted C is
 `(int64_t)(intptr_t)(h->p)` on an aggregate, which both gcc and clang
-reject.
+reject. **Fixed 2026-10-14**, pinned by
+`tests/fixtures/byvalue-field-of-param-app-as-generic-arg`. The fix also
+covers an `(Option T)` field and a non-`Option` by-value sum field, so an
+`(Option (ZipFrame T))` path link is available to this plan again. With D1
+and D2 fixed as well, so is a sum.
 
 ```turmeric
 (defstruct Fr :heap :copy [T] (x T))
@@ -515,9 +536,11 @@ reject.
 **D4 -- an instance method whose declared return is `(Cons a)`, with a
 `match` body, misses the pointer-to-word bridge on the fall-through
 `return`**
-([instance-method-match-fallthrough-return-unbridged](../reported/instance-method-match-fallthrough-return-unbridged.md)).
+([instance-method-match-fallthrough-return-unbridged](../archive/instance-method-match-fallthrough-return-unbridged.md)).
 The arm returns are bridged; the trailing `return __tN;` after
-the `switch` is not.
+the `switch` is not. **Fixed 2026-10-14**, pinned by
+`tests/fixtures/match-result-temp-typed-return`, which also covers a
+`(Vec a)`, `(Option a)`, `float` and `int` method result.
 
 ```turmeric
 (defdata R :heap :copy (Lf int) (Br (Cons R)))
