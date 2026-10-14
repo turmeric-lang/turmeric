@@ -6459,6 +6459,57 @@ static bool emit_hkt_spec_app_result(EmitCtx *ctx, Type erased, Type *out) {
     return true;
 }
 
+/* heap-sum-generic-never-specialized (the open-slot twin): replace every OPEN
+ * slot in `t` -- a parameter a constructor application left unfixed, the `B` of
+ * `(One 7.1) : (Two float B)` (types.h, tyvar_.open_slot) -- with the int
+ * carrier.  Nothing in the program binds an open slot, and the constructor that
+ * left it open stores no value of that type, so any monomorph builds the same
+ * cell; int is the one every reader of the same value grounds to as well.  A
+ * variable a signature quantifies (`T` inside a generic's base body) is not an
+ * open slot and is kept.  Sets *changed when anything was replaced. */
+Type emit_ground_open_slots(EmitCtx *ctx, Type t, bool *changed) {
+    if (t.kind == TY_TYVAR && t.as.tyvar_.open_slot) {
+        if (changed) *changed = true;
+        return emit_type_from_kind(TY_INT);
+    }
+    if (t.kind != TY_APP || !t.as.app.fn || !t.as.app.arg) return t;
+    bool c = false;
+    Type fn = emit_ground_open_slots(ctx, *t.as.app.fn, &c);
+    Type arg = emit_ground_open_slots(ctx, *t.as.app.arg, &c);
+    if (!c) return t;
+    if (changed) *changed = true;
+    Span nosp; memset(&nosp, 0, sizeof nosp);
+    return type_app(ctx->type_arena, fn, arg, nosp);
+}
+
+/* A `:heap` parametric ADT has no base constructor -- only per-monomorph
+ * `ctor_Fr_Nil__int` -- so a ctor call whose type keeps an open slot
+ * (`(match (Nil) ...)`, `(One 7.1)` of a two-parameter sum) named the dead-base
+ * trap and aborted a correct program.  Ground the open slots and return that
+ * monomorph's suffix (and, through `out_family`, the grounded type).  A NULLARY
+ * ctor nothing pins types as the bare, unapplied ADT, so for it every slot is
+ * open.  NULL when nothing applies. */
+static char *emit_heap_ctor_open_suffix(EmitCtx *ctx, Type rty, bool nullary,
+                                        Type *out_family) {
+    if (nullary && rty.kind == TY_ADT && rty.as.adt_.def &&
+        rty.as.adt_.def->n_type_params > 0) {
+        AdtDef *def = rty.as.adt_.def;
+        Span nosp; memset(&nosp, 0, sizeof nosp);
+        Type open = emit_type_from_kind(TY_TYVAR);
+        open.as.tyvar_.open_slot = true;
+        rty = type_adt(def);
+        rty.hkt_kind = kind_for_arity(def->n_type_params);
+        for (uint32_t i = 0; i < def->n_type_params; i++)
+            rty = type_app(ctx->type_arena, rty, open, nosp);
+    }
+    if (rty.kind != TY_APP) return NULL;
+    bool changed = false;
+    Type g = emit_ground_open_slots(ctx, rty, &changed);
+    if (!changed || !type_app_is_concrete_adt(&g)) return NULL;
+    if (out_family) *out_family = g;
+    return type_adt_app_ctor_suffix(g);
+}
+
 /* SR2b: does the ACTIVE spec clone's own ABI -- its result or any argument,
  * resolved through the spec's bindings -- spell exactly this C type?  The
  * match-binder tyvar-substitution legs key on this: a clone's params and
@@ -12276,6 +12327,10 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     suffix = emit_hkt_spec_ctor_suffix(ctx, e);
                 if (!suffix && rty.kind == TY_APP)
                     suffix = type_adt_app_ctor_suffix(rty);  /* last resort: prior behaviour */
+                if (!suffix && e->as.call_.ctor && e->as.call_.ctor->adt &&
+                    e->as.call_.ctor->adt->is_heap &&
+                    e->as.call_.ctor->adt->n_type_params > 0)
+                    suffix = emit_heap_ctor_open_suffix(ctx, rty, true, NULL);
                 Buf out; buf_init(&out);
                 if (suffix) {
                     buf_printf(&out, "ctor_%s%s()", _mc, suffix);
@@ -12371,6 +12426,12 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 }
                 if (!suffix && rty.kind == TY_APP) {
                     suffix = type_adt_app_ctor_suffix(rty);  /* last resort: prior behaviour */
+                    have_family = (suffix != NULL);
+                }
+                if (!suffix && e->as.call_.ctor && e->as.call_.ctor->adt &&
+                    e->as.call_.ctor->adt->is_heap &&
+                    e->as.call_.ctor->adt->n_type_params > 0) {
+                    suffix = emit_heap_ctor_open_suffix(ctx, rty, false, &ctor_family);
                     have_family = (suffix != NULL);
                 }
                 /* macos-int-conversion-carrier-pointer-straddles (case A):
@@ -20843,8 +20904,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             Type scrut_ty = e->as.match_.scrutinee->type;
             if (!(scrut_ty.kind == TY_APP && type_app_is_concrete_adt(&scrut_ty))) {
                 Type _rs = emit_resolve_type(ctx, scrut_ty);
+                /* heap-sum-generic-never-specialized: a `:heap` parametric sum
+                 * is not by value, but the word in hand already points at its
+                 * monomorph (`tur_adt_Fr__bool`), whose field widths follow the
+                 * element -- the base `tur_adt_Fr` layout reads `(Fr bool)` at
+                 * the wrong offsets and binds a `cstr` field as an integer. */
                 if (_rs.kind == TY_APP && type_app_is_concrete_adt(&_rs) &&
-                    adt_app_is_byvalue_product(_rs))
+                    (adt_app_is_byvalue_product(_rs) || adt_app_is_heap_sum(_rs)))
                     scrut_ty = _rs;
             }
             /* SR2a graduation: inside a SPECIALIZED body the scrutinee param's
@@ -20869,7 +20935,8 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     Type _rspec = emit_resolve_type(ctx, _spec_t);
                     if (_rspec.kind == TY_APP &&
                         type_app_is_concrete_adt(&_rspec) &&
-                        adt_app_is_byvalue_product(_rspec))
+                        (adt_app_is_byvalue_product(_rspec) ||
+                         adt_app_is_heap_sum(_rspec)))
                         scrut_ty = _rspec;
                 }
             }

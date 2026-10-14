@@ -1138,6 +1138,9 @@ void emit_panic_signal_return(EmitCtx *ctx, Buf *body);
 extern void (*g_cps_panic_fire)(EmitCtx *ctx, Buf *body);
 extern bool (*g_cps_panic_fire_pending)(Buf *body);
 Type emit_type_from_kind(TypeKind k);
+/* heap-sum-generic-never-specialized: `t` with every open slot (a parameter a
+ * constructor application left unfixed) grounded to the int carrier. */
+Type emit_ground_open_slots(EmitCtx *ctx, Type t, bool *changed);
 Type emit_resolve_type(EmitCtx *ctx, Type t);
 const char *emit_type_c_name(EmitCtx *ctx, Type t);
 /* Increment 4 stage 3 (repr-decision-function-plan): the shadow instrument,

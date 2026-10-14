@@ -5849,6 +5849,27 @@ static bool type_phantom_hides_aggregate(const Type *t) {
     return false;
 }
 
+/* heap-sum-generic-never-specialized: a `:heap` parametric SUM
+ * (`(defdata Fr :heap [T] (Nil) (Frame T T))`) has no base constructor -- only
+ * the per-spec `ctor_Fr_Frame__int` -- yet `(Fr T)` and `(Fr int)` both spell
+ * the int64 carrier (type_c_name names an ADT app as its monomorph only for a
+ * by-value product).  The `type_c_name` comparison therefore sees no ABI change,
+ * no clone is minted, and a base body that rebuilds the sum calls the
+ * dead-base ctor trap at runtime.  Return true when `t` is, or carries among
+ * its type arguments, a GROUND application of such an ADT, so the caller can
+ * force a spec exactly as G4 does for a phantom opaque. */
+static bool type_mentions_ground_heap_sum_app(const Type *t) {
+    if (!t || t->kind != TY_APP || emit_abi_type_has_any_tyvar(t)) return false;
+    if (adt_app_is_heap_sum(*t)) return true;
+    AdtDef *adef = NULL;
+    Type args[16];
+    uint8_t n_args = 0;
+    if (!type_extract_adt_app(t, &adef, args, &n_args) || !adef) return false;
+    for (uint8_t i = 0; i < n_args; i++)
+        if (type_mentions_ground_heap_sum_app(&args[i])) return true;
+    return false;
+}
+
 /* Does `t` have a leaf of kind `k` anywhere in its application spine? */
 static bool type_mentions_kind(const Type *t, TypeKind k) {
     if (!t) return false;
@@ -6910,6 +6931,41 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
         if (site_wins) { bindings = site_fixed; site_corrected = true; }
     }
 
+    /* heap-sum-generic-never-specialized: `(flip (One 7.1))` binds `B` to an
+     * OPEN slot -- `(One 7.1) : (Two float B)` fixes nothing else -- so `(Two A
+     * B)` instantiates to a non-ground app, the `:heap` sum rescue below cannot
+     * fire, and the base body's `(One a)` reaches the dead-base trap.  Ground
+     * the open slots to the int carrier (the same answer the ctor that built the
+     * argument took, emit_ground_open_slots), but only when that is what
+     * exposes a ground `:heap` sum: Result/Option open slots ride the carrier
+     * already and keep the bindings elab gave them. */
+    AbiTypeBinding open_fixed[ABI_TYPE_BINDINGS_MAX];
+    if (!borrow_path && fd && bindings && n_bindings > 0 &&
+        n_bindings <= ABI_TYPE_BINDINGS_MAX && fn_binding->type.kind == TY_FN) {
+        bool any_open = false;
+        for (uint8_t bi = 0; bi < n_bindings; bi++) {
+            open_fixed[bi] = bindings[bi];
+            open_fixed[bi].type = emit_ground_open_slots(ctx, bindings[bi].type,
+                                                         &any_open);
+        }
+        bool exposes = false;
+        for (uint32_t i = 0; any_open && !exposes && i <= fd->n_params; i++) {
+            const Type *gt = (i < fd->n_params)
+                ? ((fn_binding->type.as.fn.arg_full_types &&
+                    fn_binding->type.as.fn.arg_full_types[i])
+                   ? fn_binding->type.as.fn.arg_full_types[i] : &fd->params[i]->type)
+                : fn_binding->type.as.fn.result_full_type;
+            if (!gt) continue;
+            Type before = emit_abi_instantiate_type(gt, bindings, n_bindings,
+                                                    ctx->type_arena);
+            Type after = emit_abi_instantiate_type(gt, open_fixed, n_bindings,
+                                                   ctx->type_arena);
+            exposes = !type_mentions_ground_heap_sum_app(&before) &&
+                      type_mentions_ground_heap_sum_app(&after);
+        }
+        if (exposes) bindings = open_fixed;
+    }
+
     bool abi_changes = false;
     Type arg_types[MAX_FN_ARITY];
     uint8_t n_spec_args;
@@ -6987,6 +7043,12 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
                  * the carrier layout.  Force a spec so the substituted body is
                  * emitted; arg_types[i] retains the concrete element so the spec
                  * dedup keys on it (the carrier C name still emits int64). */
+                abi_changes = true;
+            } else if (!type_eq(generic_arg, arg_types[i]) &&
+                       type_mentions_ground_heap_sum_app(&arg_types[i])) {
+                /* heap-sum-generic-never-specialized: `(Fr T)` -> `(Fr int)` for a
+                 * `:heap` parametric sum spells int64 on both sides, but the
+                 * base body has no constructor to build one with. */
                 abi_changes = true;
             }
         }
@@ -7328,6 +7390,11 @@ static void emit_abi_register_call(EmitCtx *ctx, const Expr *call,
             result_type = grounded;
     }
     if (strcmp(type_c_name(generic_result), type_c_name(result_type)) != 0) {
+        abi_changes = true;
+    } else if (!borrow_path && !type_eq(generic_result, result_type) &&
+               type_mentions_ground_heap_sum_app(&result_type)) {
+        /* heap-sum-generic-never-specialized: the result-side twin of the
+         * parameter rescue above (`(defn mk [T] [x : T] : (Fr T) ...)`). */
         abi_changes = true;
     }
     /* GDE1: even when the C ABI is unchanged, intern a specialization when the

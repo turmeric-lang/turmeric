@@ -1,0 +1,86 @@
+;; heap-sum-generic-never-specialized: a generic over a `:heap` parametric SUM
+;; spells the int64 carrier at every instantiation ((Fr T) and (Fr int) are both
+;; `int64_t`), so the C-name comparison that mints specs saw no ABI change and
+;; no clone was made.  The ADT has no base constructor -- only per-monomorph
+;; `ctor_Fr_Frame__int` -- so a base body that rebuilds the sum reached the
+;; dead-base trap and aborted a correct program.
+;;
+;; Covered: a match-and-rebuild (`bump`), a read-only predicate (`has?`, which
+;; gets a clone now too and must still answer), a result-only constructor
+;; (`mk`), a generic calling a generic (`twice`), the sum nested in an Option
+;; (`wrap`), float / cstr / bool / struct elements (the clone reads the payload
+;; through the monomorph's layout, whose widths follow the element), and open
+;; slots: `(Nil)` with nothing pinning `T`, and `(One 7.1)` of a two-parameter
+;; sum that fixes only `A`.
+(defstruct Pt [x : float y : float])
+(defdata Fr :heap [T] (Nil) (Frame T T))
+(defdata Two :heap [A B] (None2) (One A) (Both A B))
+
+(defn bump [T] [f : (Fr T)] : (Fr T)
+  (match f
+    (Nil) (Nil)
+    (Frame a b) (Frame b a)))
+
+(defn has? [T] [f : (Fr T)] : bool
+  (match f
+    (Nil) false
+    (Frame a b) true))
+
+(defn mk [T] [x : T y : T] : (Fr T)
+  (Frame x y))
+
+(defn twice [T] [f : (Fr T)] : (Fr T)
+  (bump (bump f)))
+
+(defn wrap [T] [o : (Option (Fr T))] : (Option (Fr T))
+  (match o
+    (None) (none)
+    (Some f) (some (bump f))))
+
+(defn flip [A B] [t : (Two A B)] : (Two A B)
+  (match t
+    (None2) (None2)
+    (One a) (One a)
+    (Both a b) (Both a b)))
+
+(defn main [] : int
+  (match (bump (Frame 1 7))
+    (Nil) (println 0)
+    (Frame a b) (println (- a b)))                ; 6
+  (match (bump (Frame 7.1 3.25))
+    (Nil) (println 0.0)
+    (Frame a b) (println (- a b)))                ; -3.85
+  (match (bump (Frame "x" "y"))
+    (Nil) (println "nil")
+    (Frame a b) (println a))                      ; y
+  (match (bump (Frame true false))
+    (Nil) (println "nil")
+    (Frame a b) (do (println a) (println b)))     ; false, true
+  (match (bump (Frame (Pt 7.1 3.25) (Pt 0.5 1.5)))
+    (Nil) (println 0.0)
+    (Frame a b) (println (+ (.x a) (.y b))))      ; 0.5 + 3.25 = 3.75
+  (println (has? (Frame 1 2)))                    ; true
+  (println (has? (Frame "a" "b")))                ; true
+  (match (mk 2.5 0.25)
+    (Nil) (println 0.0)
+    (Frame a b) (println (- a b)))                ; 2.25
+  (match (twice (Frame 10 3))
+    (Nil) (println 0)
+    (Frame a b) (println (- a b)))                ; 7
+  (match (wrap (some (Frame 1.5 4.75)))
+    (None) (println 0.0)
+    (Some f) (match f
+               (Nil) (println 0.0)
+               (Frame a b) (println (- a b))))    ; 3.25
+  (match (Nil)
+    (Nil) (println "open nil")
+    (Frame a b) (println "frame"))                ; open nil
+  (match (flip (One 7.1))
+    (None2) (println 0.0)
+    (One a) (println a)
+    (Both a b) (println a))                       ; 7.1
+  (match (flip (Both 3 "s"))
+    (None2) (println "none")
+    (One a) (println "one")
+    (Both a b) (do (println a) (println b)))      ; 3, s
+  0)
