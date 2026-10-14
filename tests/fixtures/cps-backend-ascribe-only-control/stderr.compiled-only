@@ -1,0 +1,1 @@
+--dump-cps-coloring output: the compiler's CPS classification, which --interpret does not run

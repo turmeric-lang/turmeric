@@ -1,0 +1,10 @@
+;; main -- calls another module's sited inline-C body; the panic names this
+;; file's line 9.  See tests/run-panic-site-across-modules.sh.
+
+(defmodule main
+  (import checks :refer [checked])
+  (defn main [] : int
+    (println (checked 2))
+    (let [n 7]
+      (println (checked n)))
+    0))

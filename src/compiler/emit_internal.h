@@ -856,16 +856,22 @@ typedef struct EmitCtx {
      * here), scanned from program_root on first ask; and whether a call
      * through a fn VALUE in this unit sets the site around itself (0 = not
      * yet asked, 1 = no, 2 = yes -- some panicking inline-C fn is taken as a
-     * value somewhere in the program; emit_fn_value_calls_sited). */
+     * value, or partially applied, somewhere in the program;
+     * emit_fn_value_calls_sited). */
     const Binding **inst_panic_bindings;
     uint32_t     n_inst_panic_bindings;
+    /* The partial-application thunks (`__papN`) of the same scan, each with
+     * the function its one forwarding call reaches. */
+    const Binding **pap_thunk_bindings;
+    const Binding **pap_thunk_targets;
+    uint32_t     n_pap_thunks;
     bool         inst_panic_scanned;
     uint8_t      fn_value_sited;
     /* The function being emitted is a `__poly_N` forwarding wrapper
      * (SYNTH_FORWARDING_WRAPPER): its one call forwards to the function the
-     * program handed over as a value, so in a unit whose fn-value calls are
-     * sited that call is NOT (emit_direct_call_sited) -- the site the call
-     * through the value set, the program's `(f x)`, is the one to name. */
+     * program handed over as a value, so that call KEEPS a site already set
+     * (emit_direct_call_site_mode) -- the site the call through the value
+     * set, the program's `(f x)`, is the one to name. */
     bool         in_forwarding_wrapper;
     /* stdlib-list-null-check-retires-regions: set by emit_builtin for exactly
      * the one EX_ASCRIBE operand of `(= (:: node :int) 0)` / `not=`, and
@@ -1438,12 +1444,22 @@ bool closure_body_inline_c_touches_env(const struct Closure *c);
 bool closure_binding_escapes_reaped(const Expr *e, const Binding *b);
 /* panic-location-names-the-runtime-not-the-call-site (emit_core.c): a defn
  * whose inline-C body calls `tur_panic(` is handed its caller's site -- a
- * direct call sets `emit_site_set_text(ctx, span)` before the call and
- * `tur_site_clear()` after it; the body's `tur_panic` reads it. */
+ * sited call saves the thread's slot, sets its own site (or keeps one already
+ * set), and restores the slot after (emit_site_wrap, emit_site_open_stmt);
+ * the body's `tur_panic` reads it. */
+typedef enum {
+    EMIT_SITE_NONE = 0,  /* not sited */
+    EMIT_SITE_SET,       /* the program's call: set its own site */
+    EMIT_SITE_KEEP,      /* stdlib source, a forwarder: set only when none is */
+} EmitSiteMode;
 bool  fn_def_panics_in_inline_c(const FnDef *fd);
 bool  binding_panics_in_inline_c(EmitCtx *ctx, const Binding *b);
 bool  emit_fn_value_calls_sited(EmitCtx *ctx);
-bool  emit_direct_call_sited(EmitCtx *ctx, const Binding *b);
+EmitSiteMode emit_direct_call_site_mode(EmitCtx *ctx, const Expr *call, const Binding *b);
+EmitSiteMode emit_fn_value_call_site_mode(EmitCtx *ctx, const Expr *call);
+char *emit_site_wrap(EmitCtx *ctx, EmitSiteMode m, Span span, const char *ret_c,
+                     const char *call);
+char *emit_site_open_stmt(EmitCtx *ctx, EmitSiteMode m, Span span, char **close);
 Span  emit_call_site_span(const Expr *call);
 char *emit_site_set_text(EmitCtx *ctx, Span span);
 /* `&__tur_site_N` for the same static: the site as an argument, for a helper

@@ -845,6 +845,13 @@ first line names the open report.  `tests/run-fnsan.sh` (the `fnsan` CI job)
 leaves it out of the gate run, then runs it alone and FAILS if it no longer
 traps -- delete the marker then.  Never use it to park a new trap.
 
+`tests/run-turi.sh` checks `expected.stderr` too, as `run.sh` does, so a
+fixture that pins a panic's location pins it on both engines. A fixture whose
+expected stderr only the compiling path prints -- a `--dump-*` report, a
+warning about the compiled runtime -- carries `stderr.compiled-only` (not a
+skip marker; its first line says why), and `run-turi.sh` then checks only its
+stdout and exit.
+
 A fixture may also carry `requires.no-leak-check` (not a skip marker): the
 compiled binary then runs with `ASAN_OPTIONS=detect_leaks=0`. Reserve it for
 fixtures whose program intentionally registers process-lifetime closures the

@@ -121,8 +121,13 @@ Point, not Other`. So does a bounds check inside a stdlib accessor -- the
 location is the call that failed, not the accessor's C: `panic at
 boom.tur:9: vec index out of bounds` -- whether the accessor is called by
 name, handed to a higher-order function and called through the parameter
-(the location is then the call through the parameter), or reached by
-typeclass dispatch. A Saffron dynamic operator with no row for its operand
+(the location is then the call through the parameter), partially applied
+(`(vec-get v)`: the location is the call made through the partial, not the
+line it was made on), or reached by typeclass dispatch. Handed to a stdlib
+higher-order function such as `option-map`, it names your call to that
+function, not a line of the stdlib. In a multi-module build compiled module
+by module, a call into another module's accessor names the caller's line
+too. A Saffron dynamic operator with no row for its operand
 names the operator's line. The location is one line: it does not say how
 your code got there. For the calls that led to it, use either of the next
 two sections: `tur debug`
