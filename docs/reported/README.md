@@ -34,12 +34,6 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
-## Found fixing instance-method-match-fallthrough-return-unbridged (filed 2026-10-14)
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [none-arm-not-grounded-by-sibling-some-arm](none-arm-not-grounded-by-sibling-some-arm.md) | low-medium (build failure; type error in the `if` form) | `(match c true (None) false (Some x))` in value position, its `(Option T)` not grounded by the enclosing function: `(None)` builds the erased carrier, `(Some x)` the monomorph, and the aggregate is stored into the carrier temp. The `if` form is "if branches have mismatched types". `(:: (None) (Option T))` works around both. |
-
 ## Found prototyping the generic zipper (filed 2026-10-13)
 
 Hit while prototyping

@@ -1,0 +1,63 @@
+;; A nullary constructor joined with an application of its own ADT --
+;; `(None)` beside `(Some x)` -- in a `match` arm, an `if` branch or a `cond`.
+;;
+;; `(None)` has no argument to infer its type parameter from, so without an
+;; expected type it was typed as the bare ADT `Option`
+;; (none-arm-not-grounded-by-sibling-some-arm):
+;;
+;;   - `if` / `cond`: a type error, "if branches have mismatched types:
+;;     then=Option else=(Option T)" -- even outside a generic, at
+;;     `(Option int)`.
+;;   - `match`: the join kept the application, but the `(None)` node did not,
+;;     so codegen built it with the erased base ctor (the int64 carrier) beside
+;;     the `(Some x)` monomorph (a by-value aggregate), and the C did not
+;;     compile -- in either arm order.
+;;
+;; The constructor now takes the joined type, the one an expected type would
+;; have pinned.  Covered at int, 7.1, cstr and a user-defined ADT, with the
+;; None path taken and not, in a literal match, an ADT match, an `if`, a
+;; `cond` with two None arms, and a non-generic `let`.
+
+(defdata Mb [T] (Nada) (Algo T))
+(defdata R (Lf int) (Br int))
+(defn first-flag [T] [o : (Cons T)] : int
+  (match (match (tnil? o) true (None) false (Some (thead o)))
+    (None) 0
+    (Some x) 1))
+(defn first-flag-some-first [T] [o : (Cons T)] : int
+  (match (match (tnil? o) false (Some (thead o)) true (None))
+    (None) 0
+    (Some x) 1))
+(defn first-or [T] [o : (Cons T) d : T] : T
+  (match (if (tnil? o) (None) (Some (thead o)))
+    (None) d
+    (Some x) x))
+(defn mb-or [T] [c : bool v : T d : T] : T
+  (match (match c true (Algo v) false (Nada))
+    (Nada) d
+    (Algo x) x))
+(defn adt-arm [T] [r : R v : T d : T] : T
+  (match (match r (Lf _) (None) (Br _) (Some v))
+    (None) d
+    (Some x) x))
+(defn pick3 [T] [n : int v : T d : T] : T
+  (match (cond (= n 0) (None) (= n 1) (Some v) :else (None))
+    (None) d
+    (Some x) x))
+(defn main [] : int
+  (println (first-flag (tcons-of 3 (tnil))))
+  (println (first-flag (:: (tnil) (Cons int))))
+  (println (first-flag-some-first (tcons-of 3 (tnil))))
+  (println (first-flag-some-first (:: (tnil) (Cons int))))
+  (println (first-or (tcons-of 7.1 (tnil)) 0.5))
+  (println (first-or (:: (tnil) (Cons float)) 0.5))
+  (println (first-or (tcons-of "s" (tnil)) "d"))
+  (println (mb-or true 7.1 0.25))
+  (println (mb-or false 7.1 0.25))
+  (println (adt-arm (Lf 1) 4 9))
+  (println (adt-arm (Br 1) 4 9))
+  (println (pick3 1 "one" "other"))
+  (println (pick3 2 "one" "other"))
+  (let [o (if (= 1 1) (None) (Some 3))]
+    (println (match o (None) 0 (Some x) x)))
+  0)

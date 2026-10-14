@@ -44,11 +44,11 @@ int and at 2.5. No `expected.c` moved; full `run.sh` was 3801 passed, 0
 failed. The plan's `Plated` class (ZP3), with a `match`-bodied instance
 for a `:heap` tree, now builds and runs.
 
-**Filed:**
-[none-arm-not-grounded-by-sibling-some-arm](../reported/none-arm-not-grounded-by-sibling-some-arm.md).
+**Filed, and resolved the same day:**
+[none-arm-not-grounded-by-sibling-some-arm](none-arm-not-grounded-by-sibling-some-arm.md).
 A *value-position* literal match whose arms are `(None)` and `(Some x)`
-still fails, because the two arms build different representations. That
-is an inference gap, and the `if` form is a type error.
+failed, because the two arms built different representations; the `if`
+form was a type error.
 
 The original filing follows.
 
