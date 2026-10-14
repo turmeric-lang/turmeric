@@ -1986,6 +1986,13 @@ bool return_type_applied_scalar_conflict(const Type *declared_app,
  * type and `got` a scalar or a DIFFERENT ground applied type, or `want` an
  * int-family / bool / cstr scalar and `got` a ground by-value applied type. */
 bool applied_type_conflict(Type want, Type got);
+/* declared-tyvars-are-not-rigid: a variable of the enclosing signature (one of
+ * the `n_rigid` names in `rigid`) matches only itself.  True when `want` and
+ * `got` disagree on one -- two differently named rigid variables, or (unless
+ * `allow_ground`) a rigid variable against a ground pinned type -- at the top
+ * or, for two applications of one ADT, in any argument. */
+bool rigid_tyvar_conflict(const char *const *rigid, uint8_t n_rigid,
+                          Type want, Type got, bool allow_ground);
 
 /* carrier-aware-return-unification: classify a return position so the shared
  * dispatcher knows how much to reject against the int64 carrier ABI.
@@ -2022,6 +2029,7 @@ typedef enum {
     RET_CONFLICT_BOOL_INTEGER,
     RET_CONFLICT_CARRIER_AGGREGATE,
     RET_CONFLICT_NIL_BODY,
+    RET_CONFLICT_RIGID_TYVAR,   /* declared-tyvars-are-not-rigid -> TUR-E0709 */
 } ReturnConflict;
 
 /* carrier-aware-return-unification: single dispatcher over the return-position

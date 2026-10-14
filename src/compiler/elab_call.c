@@ -1588,8 +1588,18 @@ static bool call_collect_type_bindings(const Type *expected, Type actual,
                  * "expected A, got float".  The enclosing signature's own
                  * variables are fixed in each instantiation and keep the m5
                  * treatment. */
-                if (bindings[idx].type.kind == TY_TYVAR && actual.kind != TY_TYVAR &&
-                    actual.kind != TY_UNKNOWN &&
+                /* declared-tyvars-are-not-rigid: a provisional binding yields
+                 * to the ENCLOSING signature's own variable exactly as it
+                 * yields to a concrete type.  `(let [v (vec-new)] (vec-push! v
+                 * a) ...)` with `a : A` binds vec-push!'s `A` to the renamed-
+                 * apart `vec-new.A` from `v` first; the caller's rigid `A` then
+                 * takes its place, instead of "expected vec-new.A, got A". */
+                bool actual_fixes = actual.kind != TY_TYVAR
+                    ? actual.kind != TY_UNKNOWN
+                    : (actual.as.tyvar_.name && !actual.as.tyvar_.open_slot &&
+                       g_call_cb_elab &&
+                       ng_tyvar_in_sig(g_call_cb_elab, actual.as.tyvar_.name));
+                if (bindings[idx].type.kind == TY_TYVAR && actual_fixes &&
                     (bindings[idx].type.as.tyvar_.open_slot ||
                      (g_call_cb_elab && bindings[idx].type.as.tyvar_.name &&
                       !ng_tyvar_in_sig(g_call_cb_elab,
@@ -10773,8 +10783,13 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
          * This keeps compound returns such as Session[P], Role[...], and
          * higher-order TY_FN results from collapsing into a bare TypeKind shell. */
         if (fn_type.as.fn.result_full_type) {
+            /* declared-tyvars-are-not-rigid: the rename-apart below also has
+             * work when NO argument bound anything -- `(vec-new)` inside a
+             * `[A B]` body returning `(Vec B)` left vec-new's own `A` reading
+             * as the body's `A`.  With no bindings and no collision the
+             * instantiation is the identity. */
             if (call_type_has_named_tyvar(fn_type.as.fn.result_full_type) &&
-                n_type_bindings > 0) {
+                (n_type_bindings > 0 || e->n_sig_tyvars > 0)) {
                 result_type = call_instantiate_type(e, fn_type.as.fn.result_full_type,
                                                     type_bindings, n_type_bindings);
                 /* generic-call-result-leaks-callee-tyvar-names: a result

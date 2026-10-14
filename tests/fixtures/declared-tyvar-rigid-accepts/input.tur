@@ -1,0 +1,34 @@
+;; declared-tyvars-are-not-rigid, the other half: what the rigid-variable check
+;; must keep accepting.  A generic relaying its argument through another
+;; generic (the callee's letters are substituted at the call), a two-variable
+;; relay, a diverging body, a constructor whose slot the declared return fills,
+;; a bare-ADT body under an applied return (stdlib `some`'s own shape), a
+;; swapped pair put back in order, a callee's result variable no argument
+;; binds (`(vec-new)` is `(Vec A)` in `mk`, nobody's declared variable there,
+;; and the same `A` under a `[A B]` signature is renamed apart), and an
+;; `#{Unsafe}` generic returning an int handle as `A` -- the carrier bridge
+;; that stays deliberate.
+(defn id [A] [x : A] : A x)
+(defn mk [T] [] : (Vec T) (vec-new))
+(defn mk2 [A B] [a : A] : (Vec B) (vec-new))
+(defn raw [h : int] #fx{Unsafe} : int
+  ```c
+  return h;
+  ```)
+(defn relay [X] [x : X] : X (id x))
+(defn relay2 [X Y] [x : X y : Y] : Y (id y))
+(defn boom [A] [a : A] : A (panic "no"))
+(defn empty [A] [a : A] : (Option A) (none))
+(defn wrap [A] [a : A] : (Option A) (some a))
+(defn sw [A B] [a : A b : B] : (Pair B A) (pair b a))
+(defn handle-as [A] [h : int] #fx{Unsafe} : A (raw h))
+(defn main [] : int
+  (println (relay 7))
+  (println (relay2 1 "y"))
+  (println (unwrap-or (empty 3) 9))
+  (println (unwrap (wrap 7.1)))
+  (println (pair-fst (sw 1 "x")))
+  (println (vec-len (:: (mk) (Vec int))))
+  (println (vec-len (:: (mk2 1) (Vec cstr))))
+  (println (:: (unsafe (handle-as 42)) :int))
+  0)

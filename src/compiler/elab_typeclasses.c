@@ -5679,6 +5679,9 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call) {
                          * exhaustive and so turning that on is a one-line
                          * change with a diagnostic already waiting. */
                         break;
+                    /* declared-tyvars-are-not-rigid: asked at the defn return only; the
+                     * dispatcher this path uses never answers it. */
+                    case RET_CONFLICT_RIGID_TYVAR:
                     case RET_CONFLICT_NONE: break;  /* unreachable */
                 }
                 buf_free(&gb);

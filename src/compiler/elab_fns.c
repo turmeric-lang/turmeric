@@ -11766,10 +11766,36 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 return_kind == TY_APP ? return_app_type : NULL,
                 return_kind, body->type))
             rc = RET_CONFLICT_CARRIER_AGGREGATE;
+        /* declared-tyvars-are-not-rigid: the type question the representation
+         * predicates above leave out.  A generic's own `[A B]` are rigid in
+         * its body.  Only the variable-vs-variable half is asked
+         * (`allow_ground`): `[x : A] : int` is the carrier bridge
+         * return-type-carrier-bridges-still-accepted pins as accepted, and a
+         * multi-parameter class's method result is typed as one instance's
+         * (`any-get [S E] ... : E` reads `Vel`), so the ground half is a
+         * policy question the report keeps open. */
+        if (rc == RET_CONFLICT_NONE && !return_unannotated &&
+            n_fn_type_params > 0) {
+            const Type *decl = return_tyvar_type ? return_tyvar_type
+                             : (return_kind == TY_APP) ? return_app_type : NULL;
+            Type dk = return_adt_def ? type_adt(return_adt_def)
+                                     : type_from_kind(return_kind);
+            /* The defn's own parameters: `e->sig_tyvars` was restored at the
+             * scope pop above. */
+            const char *rigid[8];
+            uint8_t n_rigid = 0;
+            for (uint8_t k = 0; k < n_fn_type_params && k < 8; k++)
+                if (fn_type_params[k]) rigid[n_rigid++] = fn_type_params[k]->name;
+            if (rigid_tyvar_conflict(rigid, n_rigid, decl ? *decl : dk,
+                                     body->type, /*allow_ground=*/true))
+                rc = RET_CONFLICT_RIGID_TYVAR;
+        }
         if (rc != RET_CONFLICT_NONE) {
             Buf wb; buf_init(&wb);
             if (!return_adt_def && return_kind == TY_APP && return_app_type)
                 type_print(&wb, *return_app_type);
+            else if (!return_adt_def && return_kind == TY_TYVAR && return_tyvar_type)
+                type_print(&wb, *return_tyvar_type);
             buf_putc(&wb, '\0');
             const char *want = return_adt_def ? return_adt_def->name
                              : (wb.data && wb.data[0]) ? wb.data
@@ -11848,6 +11874,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
                         "tail into the form above it. Declare ': void' if the "
                         "function is meant to return nothing",
                         name_f->as.sym->name, want);
+                    break;
+                case RET_CONFLICT_RIGID_TYVAR:
+                    diag_emit_with_code(DIAG_ERROR, body->span,
+                        TUR_E0709_RETURN_TYPE_MISMATCH,
+                        "function '%s' declares return type '%s' but its body "
+                        "returns %s -- a declared type variable stands for "
+                        "whichever type the caller picks, so inside the body it "
+                        "matches only itself; nothing here can turn %s into %s",
+                        name_f->as.sym->name, want, gb.data, gb.data, want);
                     break;
                 case RET_CONFLICT_NONE: break;  /* unreachable */
             }

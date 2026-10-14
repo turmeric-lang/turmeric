@@ -1425,7 +1425,12 @@ Expr *elab_let(Elab *e, const Form *call) {
                  * (some 7.1)]`, `[o : (Vec int) (some 1)]` and `[o : (Option
                  * int) 7]` were accepted -- the binding silently took the
                  * initializer's type, or an int where an Option was claimed. */
-                if (!primitive && applied_type_conflict(*ann_ty, init->type)) {
+                /* declared-tyvars-are-not-rigid: `[b : B a]` with `a : A` is
+                 * the same swap one level down; ground-vs-variable stays with
+                 * the primitive compare above and the applied one here. */
+                if (!primitive && (applied_type_conflict(*ann_ty, init->type) ||
+                                   rigid_tyvar_conflict(e->sig_tyvars, e->n_sig_tyvars,
+                                                        *ann_ty, init->type, true))) {
                     Buf ab; buf_init(&ab); type_print(&ab, *ann_ty); buf_putc(&ab, '\0');
                     Buf ib; buf_init(&ib); type_print(&ib, init->type); buf_putc(&ib, '\0');
                     diag_emit_with_code(DIAG_ERROR, type_ann_form->span,
