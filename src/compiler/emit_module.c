@@ -18699,19 +18699,34 @@ static void emit_panic_site_slot(Buf *out, bool shared) {
             "#endif\n");
     else
         buf_puts(out, "static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;\n");
+    /* The save-and-set helpers read and write the slot by name under
+     * gcc/clang.  Through the slot's ADDRESS (`*p = s`, p = &tur_cur_site)
+     * gcc 13 at -O1 under -fsanitize=undefined miscompiles the null check
+     * UBSan puts on the store -- it branches on flags a `test` before it
+     * left, so an empty slot reads as a store to null and the program
+     * aborts (the r7rs-sanitize CI job).  Only the host accessor's branch
+     * takes the pointer, where it saves c2mir an accessor call. */
     buf_puts(out,
+        "static inline const tur_site_t *tur_site_push(const tur_site_t *s) {\n"
+        "    const tur_site_t *o = tur_cur_site; tur_cur_site = s; return o;\n"
+        "}\n"
+        "static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {\n"
+        "    const tur_site_t *o = tur_cur_site; if (!o) tur_cur_site = s; return o;\n"
+        "}\n"
         "#else\n"
         "extern void **tur_tls_cur_site_ptr(void);\n"
         "#define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())\n"
+        "static inline const tur_site_t *tur_site_push(const tur_site_t *s) {\n"
+        "    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;\n"
+        "    *p = s; return o;\n"
+        "}\n"
+        "static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {\n"
+        "    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;\n"
+        "    if (!o) *p = s; return o;\n"
+        "}\n"
         "#endif\n"
         "static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }\n"
         "static inline void tur_site_clear(void) { tur_cur_site = NULL; }\n"
-        "static inline const tur_site_t *tur_site_push(const tur_site_t *s) {\n"
-        "    const tur_site_t **p = &tur_cur_site, *o = *p; *p = s; return o;\n"
-        "}\n"
-        "static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {\n"
-        "    const tur_site_t **p = &tur_cur_site, *o = *p; if (!o) *p = s; return o;\n"
-        "}\n"
         "static inline void tur_site_pop(const tur_site_t *o) { tur_cur_site = o; }\n"
         "static inline void tur_panic_sited(const char *msg) {\n"
         "    const tur_site_t *s = tur_cur_site;\n"
