@@ -1,0 +1,63 @@
+# Performance-audit corpus (docs/upcoming/performance-audit-plan.md, WP0).
+#
+# Read by benchmarks/audit/run-corpus.py.  One program per line:
+#
+#   <path>  <engines>  <check>  [timeout=<s>]  # note
+#
+# engines  comma list of cc, jit, interp.  A program with user inline C is
+#          cc,jit only: the interpreter does not run inline C (run-turi.sh
+#          skips such programs for the same reason).
+# check    `exact`, or `cols=N,M,...` for self-timing programs: only those
+#          comma-separated columns of each output line are compared.
+#
+# Pins live in benchmarks/audit/expected/ (a fixture's pin is its own
+# expected.stdout).  Turmeric programs only: performance-comparison/ is not in
+# the corpus.  Not in it, and why:
+#
+#   benchmarks/bench-capture-restore.tur   SX0(a)'s sweep; > 120 s, owned by run-capture-curve.sh
+#   examples/guestbook/src/main.tur        an HTTP server; never exits
+#   examples/snake/src/main.tur            needs raylib and a display
+#   examples/guestbook/src/{conts,handlers,httpd,router,security,store,strutil,templates}.tur,
+#   examples/snake/src/raylib.tur          library modules: build, print nothing
+
+# --- the engine triangle (pure Turmeric, all three engines) ----------------
+benchmarks/triangle/fib.tur                  cc,jit,interp  exact
+benchmarks/triangle/loop-sum.tur             cc,jit,interp  exact
+benchmarks/triangle/mandel.tur               cc,jit,interp  exact
+
+# --- benchmarks/ experiment harnesses -------------------------------------
+benchmarks/bind-option.tur                   cc,jit         exact   # C ceiling: bind-option-baseline.c
+benchmarks/fmap-vec.tur                      cc,jit         exact   # C ceiling: fmap-vec-baseline.c
+benchmarks/bench-backtrack-n-queens.tur      cc,jit         exact   # all inline C: a cc control, not a Turmeric number
+benchmarks/bench-clone-overhead.tur          cc,jit         exact
+benchmarks/bench-dfs-queens.tur              cc,jit         exact
+benchmarks/bench-logic-query.tur             cc,jit         exact
+benchmarks/bench-logic-subst.tur             cc,jit         cols=1,2,3
+benchmarks/bench-logic-subst-split.tur       cc,jit         cols=1,2,3
+benchmarks/bench-parsec-json.tur             cc,jit         exact
+benchmarks/bench-poly-specialize.tur         cc,jit,interp  exact
+benchmarks/bench-regions-subst.tur           cc,jit         cols=1,2,5
+benchmarks/bench-saffron-dyn-tail.tur        cc,jit,interp  exact   timeout=300
+benchmarks/hamt-bench-insert.tur             cc,jit         exact
+benchmarks/hamt-bench-lookup.tur             cc,jit         exact
+benchmarks/hamt-bench-snapshot.tur           cc,jit         exact
+benchmarks/hamt-bench-transient.tur          cc,jit         exact   # R-5: compare with hamt-bench-insert
+
+# --- tests/benchmarks: one fmap per process, so effectively startup cost ----
+tests/benchmarks/hkt-dict-pass.tur           cc,jit         exact
+tests/benchmarks/scheduler-mt-vs-st.tur      cc,jit         exact
+tests/benchmarks/workstealing-deque-bench.tur cc,jit        exact
+
+# --- examples/: the closest thing to real programs (compile latency; runs are ms) ---
+examples/cellular-automata.tur               cc,jit         exact
+examples/cli_args_demo.tur                   cc,jit,interp  exact
+examples/datalog/blog.tur                    cc,jit         exact
+examples/datalog/datalog.tur                 cc,jit         exact
+examples/datalog/indexed.tur                 cc,jit         exact
+examples/datalog/minimal.tur                 cc,jit         exact
+examples/datalog/query.tur                   cc,jit         exact
+examples/minikanren/src/main.tur             cc,jit         exact
+examples/reflected-measures/src/main.tur     cc,jit,interp  exact
+
+# --- tests/fixtures: shapes the benchmarks do not cover (picked by
+# TUR_REPR_CENSUS / --dump-cps; see wp0-baseline.md) ------------------------

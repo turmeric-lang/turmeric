@@ -41,5 +41,6 @@
 
 (defn main [] :int
   (let [v (__bench_vec_build 1000000)]
-    (.bench-fmap v inc1)
+    ;; Print the element count so a harness can check the work was done.
+    (println (.bench-fmap v inc1))
     0))
