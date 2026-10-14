@@ -34,17 +34,24 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found fixing heap-sum-match-binder-of-app-payload-unbridged (filed 2026-10-14)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [heap-sum-rebuild-in-effectful-generic-merge-temp-ice](heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md) | medium (ICE on a correct program) | The fixed zipper D1 rebuild, with a `perform` in the arm, ICEs at the repr shadow: `merge-temp result type=(Fr R) want=heap-ptr got=carrier-i64`. Present on the baseline too. The CPS `CT_MATCH` binder loop also lacks the direct emitter's spec-substitution legs, so a second failure likely waits behind the ICE. |
+
 ## Found prototyping the generic zipper (filed 2026-10-13)
 
 Hit while prototyping
 [generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D1--D4). That
 plan routes around all four; its section 5 also records D5 and four inference
-papercuts, which have no report of their own.
+papercuts, which have no report of their own. D1
+([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md))
+was fixed and archived 2026-10-14.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | [heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md) | medium-high (correct program aborts at runtime) | A generic over a parametric `:heap` **sum** (`(defn bump [T] [f : (Fr T)] : (Fr T) ...)`) gets no spec clone, because `type_c_name` spells `(Fr T)` and `(Fr int)` alike as `int64_t` (`types.c:4768` names only products) and `emit_abi_register_call`'s C-name gate never fires. A constructor in the base body then hits the dead-base trap at runtime. The interpreter is right; without `:heap` it is right. |
-| [heap-sum-match-binder-of-app-payload-unbridged](heap-sum-match-binder-of-app-payload-unbridged.md) | medium (clang 15+/gcc 14 build failure) | Inside a generic's clone, a `match` on a `:heap` sum binds a `(Cons T)` payload as the base slot's `int64_t`, because the SR2b substitution is gated on `TY_TYVAR` binders. Rebuilding passes it uncast to `ctor_..__R(tur_adt_Cons__R *, ...)`, because the ctor-arg bridge reads the arg's type, not its declaration. |
 | [byvalue-option-field-read-as-carrier-at-generic-call](byvalue-option-field-read-as-carrier-at-generic-call.md) | medium (build failure, gcc and clang) | `(peek (.p h))`, where `p : (Option (Fr T))` is a by-value field of a `:heap` struct, is read as `(int64_t)(intptr_t)(h->p)` and unboxed by `emit_carrier_bridge`. The call-arg path judges the field to be carrier-represented. Upstream site not located. |
 | [instance-method-match-fallthrough-return-unbridged](instance-method-match-fallthrough-return-unbridged.md) | medium (clang 15+/gcc 14 build failure) | An instance method declared `: (Cons a)` whose body is a `match` bridges every arm's return to the `int64_t` carrier but not the unreachable trailing `return __tN;` of the pointer-typed temp (`emit_fns.c:5070`). Blocks the zipper plan's `Plated` class (ZP3). |
 

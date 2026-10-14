@@ -90,7 +90,7 @@ path that does not.
 - The zipper plan works around this by never rebuilding a parametric `:heap`
   sum in a generic body: its path frames are `:heap` structs with a nullable
   link.
-- [heap-sum-match-binder-of-app-payload-unbridged](heap-sum-match-binder-of-app-payload-unbridged.md)
-  is the same rebuild one level down. There the sum sits inside a `:heap`
-  struct, the enclosing generic *is* cloned, and the binders are what go
-  wrong.
+- [heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)
+  (resolved 2026-10-14) is the same rebuild one level down. There the sum
+  sits inside a `:heap` struct, the enclosing generic *is* cloned, and the
+  binders are what went wrong.

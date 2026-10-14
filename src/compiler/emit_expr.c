@@ -3465,6 +3465,43 @@ const char *match_binder_c_type(const Type *t) {
     return (nm && strcmp(nm, "void") == 0) ? "int64_t" : nm;
 }
 
+/* heap-sum-match-binder-of-app-payload-unbridged: the typed-pointer spelling a
+ * match binder takes when it reads a field of the erased BASE layout (the
+ * scrutinee is not a monomorph app) and its own type is a PARAMETRIC
+ * application the active resolution grounds to a typed pointer.
+ *
+ * A `:heap` parametric SUM is spelled as the int64 carrier at every
+ * instantiation (type_c_name names only single-constructor products), so
+ * inside `bump__spec__tur_adt_Box__R_...` a `(match (.fr b) (Frame l x) ...)`
+ * reads `tur_adt_Fr *`, and the `(Cons T)` binder took that layout's `int64_t`
+ * slot type.  Everything downstream of the binder asks its type, which
+ * resolves to `(Cons R)` -- `tur_adt_Cons__R *` -- so the rebuilt
+ * `ctor_Fr_Frame__R(l, x)` and any `thead__spec__..._tur_adt_Cons__R__(l)`
+ * were handed an integer where a pointer was declared (-Wint-conversion, an
+ * error under clang 15+ and gcc 14).  The monomorph-scrutinee leg already
+ * substitutes such a binder; this is the base-layout twin, which the SR2b
+ * base-carrier leg (TY_TYVAR / TY_FORALL binders only) did not cover.
+ *
+ * Pointers only: the base slot is one int64 word, and a typed-pointer payload
+ * is that same word spelled differently, so the declaration only relabels it.
+ * A by-value aggregate payload has a layout question the tyvar leg answers
+ * case by case, and stays with it.  Writes into `buf` and returns it, or NULL
+ * when the binder keeps `ctype`. */
+static const char *match_binder_base_app_ptr_ctype(EmitCtx *ctx,
+                                                   const Binding *fb,
+                                                   const char *ctype,
+                                                   char *buf, size_t bufsz) {
+    if (!ctx || !fb || !ctype || strcmp(ctype, "int64_t") != 0) return NULL;
+    if (fb->type.kind != TY_APP) return NULL;
+    Type r = emit_resolve_type(ctx, fb->type);
+    if (r.kind != TY_APP || !type_app_is_concrete_adt(&r)) return NULL;
+    const char *c = emit_type_c_name(ctx, r);
+    size_t n = c ? strlen(c) : 0;
+    if (n == 0 || c[n - 1] != '*' || n >= bufsz) return NULL;
+    memcpy(buf, c, n + 1);
+    return buf;
+}
+
 /* tail-recursive-let-drops-carrier-bridge: the ONE question "must this `let`
  * binding's initialiser be bridged from the int64 carrier into a by-value
  * aggregate, and into WHICH type?"
@@ -21301,6 +21338,29 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     ctype  = emit_type_c_name(ctx, _sub);
                                 }
                             }
+                            /* heap-sum-match-binder-of-app-payload-unbridged: the
+                             * switch path's TY_APP base-layout leg, for a guarded
+                             * match over the same carrier scrutinee. */
+                            if (!scrut_is_app_monomorph && !adt_byval &&
+                                !adt_niche && bi < pat->ctor->n_fields &&
+                                !adt_field_is_inline_byval(&pat->ctor->fields[bi])) {
+                                char _pbuf[256];
+                                const char *_pc = match_binder_base_app_ptr_ctype(
+                                    ctx, fb, ctype, _pbuf, sizeof _pbuf);
+                                if (_pc) {
+                                    char *bname = name_for_binding(ctx, fb);
+                                    char *mp = adt_field_member_path(
+                                        pat->ctor->adt, pat->ctor, bi);
+                                    emit_localvar_record_ctype(bname, _pc);
+                                    indent_buf(body, ctx->indent);
+                                    buf_printf(body,
+                                        "%s %s = (%s)(intptr_t)__scrut%s%s;\n",
+                                        _pc, bname, _pc, acc, mp);
+                                    free(bname);
+                                    free(mp);
+                                    continue;
+                                }
+                            }
                             char *bname = name_for_binding(ctx, fb);
                             /* S9 (D8 Q1): an `any` binder is declared as the box; record it so
                              * the re-resolved `C [any]` call does not read it as a carrier. */
@@ -21804,6 +21864,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                         snprintf(_sub_ctype, sizeof _sub_ctype, "%s", _fc);
                                         ctype = _sub_ctype;
                                     }
+                                }
+                            }
+                            /* heap-sum-match-binder-of-app-payload-unbridged: the
+                             * base-carrier leg's TY_APP twin -- a `(Cons T)`
+                             * binder of the base layout's int64 slot, grounded
+                             * by the active spec to a typed pointer.  Disjoint
+                             * from every leg above (each needs a monomorph
+                             * scrutinee or a tyvar/float binder). */
+                            if (!scrut_is_app_monomorph && !adt_byval &&
+                                bi < pat->ctor->n_fields &&
+                                !adt_field_is_inline_byval(&pat->ctor->fields[bi])) {
+                                char _pbuf[256];
+                                const char *_pc = match_binder_base_app_ptr_ctype(
+                                    ctx, fb, ctype, _pbuf, sizeof _pbuf);
+                                if (_pc) {
+                                    char *bname = name_for_binding(ctx, fb);
+                                    char *mp = adt_field_member_path(
+                                        pat->ctor->adt, pat->ctor, bi);
+                                    emit_localvar_record_ctype(bname, _pc);
+                                    indent_buf(body, ctx->indent);
+                                    buf_printf(body,
+                                        "%s %s = (%s)(intptr_t)__scrut->%s;\n",
+                                        _pc, bname, _pc, mp);
+                                    free(bname);
+                                    free(mp);
+                                    continue;
                                 }
                             }
                             /* Use name_for_binding to get the canonical C name */

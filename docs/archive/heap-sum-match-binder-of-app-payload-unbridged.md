@@ -1,5 +1,39 @@
 # A `(Cons T)` payload bound by a generic `match` on a `:heap` sum is declared `int64_t`, and rebuilding passes it to a typed-pointer constructor uncast
 
+**Resolved 2026-10-14: the report is archived.** The binder is now declared
+at its spec-resolved typed pointer. The base-carrier leg has a `TY_APP` twin
+(`match_binder_base_app_ptr_ctype`, `src/compiler/emit_expr.c`). When the
+scrutinee is read through the erased base layout and the binder's type is a
+parametric application that the active resolution grounds to a typed pointer
+(`(Cons T)` to `tur_adt_Cons__R *`), the binder relabels the base slot's
+int64 word: `tur_adt_Cons__R * l = (tur_adt_Cons__R *)(intptr_t)__scrut->as.Frame._0;`.
+It also records that C type for the bridges. This is what the
+monomorph-scrutinee leg already did for the same binder. Both the switch path
+and the guarded if-chain path take it.
+
+The change covers pointers only. The base slot is one word, and a
+typed-pointer payload is that word spelled differently. A by-value aggregate
+payload stays with the tyvar leg, which settles its layout case by case. The
+rebuilt `ctor_Fr_Frame__R(l, x)` and every other use of the binder (`thead`,
+`tnil?`, a `let`, a generic recursive call) now agree with the declaration.
+
+Pinned by `tests/fixtures/heap-sum-match-binder-app-payload`: the repro, a
+guarded rebuild, and four instantiations (a `:heap` sum, int, a fractional
+float, cstr). It is clean under gcc 13 and clang 18, and on the baseline it
+fails `run.sh`'s emitted-C `-Wint-conversion` check. No `expected.c` moved.
+
+**One correction to the root cause below.** Half 2 overstates the bridge.
+`emit_var_spec_arg_type` answers only for a *parameter* of the active spec,
+so for the binder `l` it returned nothing. The binder was never recorded
+either, so the bridge had no C type for the argument and inserted no cast.
+That is why the fix is in the declaration and not in the bridge.
+
+**Not covered:** the CPS backend's arm-binder mirror (`emit_cps_ir.c`, the
+`CT_MATCH` field binds) has none of the spec-substitution legs, not even the
+tyvar one. An effectful version of the same rebuild never gets that far. It
+ICEs earlier, on the merge temp, and is filed separately as
+[heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../reported/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md).
+
 **Severity: medium.** This is a build failure under clang 15+ and gcc 14:
 `-Wint-conversion` is an error there. gcc 13 only warns, but `tests/run.sh`
 fails a fixture on that warning. The program is correct, and with gcc 13 it
@@ -45,7 +79,7 @@ int64_t x_N = (int64_t)__scrut->as.Frame._1;
 ```
 
 The `Box` wrapper is there so that `bump` gets a clone at all. Without it,
-[heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md)
+[heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)
 hits first.
 
 ## Root cause
@@ -85,5 +119,5 @@ Two halves, each harmless alone.
 
 ## Related
 
-- [heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md)
+- [heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)
   has the same `types.c` spelling as its root.

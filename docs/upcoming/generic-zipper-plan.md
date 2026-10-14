@@ -443,9 +443,12 @@ Every repro is complete and was run as shown.
 
 **D1 -- generic match-and-rebuild of a parametric `:heap` sum leaves `(Cons
 T)` payload binders as `int64_t`**
-([heap-sum-match-binder-of-app-payload-unbridged](../reported/heap-sum-match-binder-of-app-payload-unbridged.md)).
+([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)).
 The specialised constructor takes the typed pointer. gcc 13 warns (and `run.sh` fails on the warning); clang 15+
-and gcc 14 reject it.
+and gcc 14 reject it. **Fixed 2026-10-14**, pinned by
+`tests/fixtures/heap-sum-match-binder-app-payload`. An *effectful* version
+of the same rebuild still ICEs, on the merge temp rather than the binder
+([heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../reported/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md)).
 
 ```turmeric
 (defdata R :heap :copy (Lf int) (Br (Cons R)))
