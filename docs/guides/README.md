@@ -125,6 +125,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - **[arrows-guide.md](arrows-guide.md)** -- Bare-function arrow combinators and building DSP signal graphs with `stdlib/arrow.tur` and `stdlib/signal/`
 - **[generators-guide.md](generators-guide.md)** -- Zero-overhead generators with `gen`/`yield`, lazy `Seq` combinators, and the `Range` type
 - **[effects-vs-monads.md](effects-vs-monads.md)** -- When to reach for an effect handler and when to reach for a monad value
+- **[zipper-guide.md](zipper-guide.md)** -- Generic zippers with `stdlib/zip.tur`: a typed `clojure.zip` over any tree, the `Plated` typeclass, and an element cursor over any container
 
 ## Concurrency and Async
 
@@ -265,7 +266,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Advanced Types → [gadts-guide.md](gadts-guide.md), [existential-types-guide.md](existential-types-guide.md), [opaques-guide.md](opaques-guide.md), [advanced-type-system-rationale.md](advanced-type-system-rationale.md)
 - Type Safety → [substructural-types-guide.md](substructural-types-guide.md), [uniqueness-types-guide.md](uniqueness-types-guide.md), [borrow-checking-and-lifetimes-guide.md](borrow-checking-and-lifetimes-guide.md)
 - Error Handling → [error-handling-guide.md](error-handling-guide.md), [contract-types-guide.md](contract-types-guide.md)
-- Functional Patterns → [arrows-guide.md](arrows-guide.md), [generators-guide.md](generators-guide.md), [effects-vs-monads.md](effects-vs-monads.md)
+- Functional Patterns → [arrows-guide.md](arrows-guide.md), [generators-guide.md](generators-guide.md), [effects-vs-monads.md](effects-vs-monads.md), [zipper-guide.md](zipper-guide.md)
 - Concurrency and Async → [threading-guide.md](threading-guide.md), [async-await-guide.md](async-await-guide.md), [stm-guide.md](stm-guide.md), [session-types-guide.md](session-types-guide.md), [dynamic-vars-guide.md](dynamic-vars-guide.md), [thread-pool-guide.md](thread-pool-guide.md), [reactor-guide.md](reactor-guide.md), [channels-and-select-guide.md](channels-and-select-guide.md), [structured-concurrency-guide.md](structured-concurrency-guide.md)
 - Advanced Control Flow → [delimited-control-operators-guide.md](delimited-control-operators-guide.md), [effects-system-guide.md](effects-system-guide.md), [logic-programming-guide.md](logic-programming-guide.md), [serializable-continuations-guide.md](serializable-continuations-guide.md), [web-continuations-guide.md](web-continuations-guide.md), [state-machines-guide.md](state-machines-guide.md)
 - Data Structures and Libraries → [hamt-guide.md](hamt-guide.md), [frame-guide.md](frame-guide.md), [stats-guide.md](stats-guide.md), [json-guide.md](json-guide.md), [schema-guide.md](schema-guide.md), [ecs-guide.md](ecs-guide.md), [regex-guide.md](regex-guide.md), [parsec-guide.md](parsec-guide.md)

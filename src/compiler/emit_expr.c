@@ -2679,8 +2679,16 @@ static const char *control_result_temp_ctype(EmitCtx *ctx, Type type,
      * declared `type` may have been collapsed to a scalar at elab (the
      * return-only-poly accessor shape), and shadowing the collapsed type
      * reports the site's correct recovery as a false disagreement. */
-    repr_shadow_check(ctx, "merge-temp", REPR_POS_RESULT,
-                      bv.kind != TY_UNKNOWN ? bv : type, out);
+    /* merge-temp-shadow-reads-tyvar-erasure (generic-zipper-plan): shadow
+     * only a CONCRETE declared type, exactly as the binding site does.  A
+     * generic's `T`-typed merge temp keeps the erased spelling by design
+     * (emit_repr_concrete_heap_ptr_c_name refuses a tyvar-declared type), and
+     * resolving it through the spec -- `T := Tree`, a `:heap` sum -- read
+     * that erasure as a disagreement and ICE'd on `((.mk ops) n)` in any
+     * spec of a generic over a `:heap` sum. */
+    Type shadow_ty = bv.kind != TY_UNKNOWN ? bv : type;
+    if (!emit_repr_type_mentions_tyvar(&shadow_ty))
+        repr_shadow_check(ctx, "merge-temp", REPR_POS_RESULT, shadow_ty, out);
     return out;
 }
 
@@ -12100,7 +12108,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         word_back ? decl_ptr_res : disp_result,
                         n > 0 ? arg_types : NULL, (uint8_t)n);
-                    if (word_back && !thunk_typedef) word_back = false;
+                    /* lambda-in-generic-record-boxed-with-the-word-shim: with no
+                     * typed-thunk typedef -- a `(Cons float)` result, a <= 16
+                     * byte app, declines one -- the fallback cast below still
+                     * spells the declared pointer.  `zip/cursor-close` reads
+                     * `fill : (fn [S (Cons A)] S)` at S := (Cons float); the
+                     * box a concrete sink builds returns the pointer, and the
+                     * parameters were already cast at their declared types. */
                     Buf out; buf_init(&out);
                     if (word_back) buf_puts(&out, "(int64_t)(intptr_t)(");
                     /* narrow-closure-result-read-through-int64-carrier: slot 0
@@ -12108,6 +12122,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * widened; convert back to the declared type. */
                     const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
                     bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (word_back && !thunk_typedef) {
+                        slot_rc = thunk_result_slot_c_spelling(
+                            emit_type_c_name(ctx, decl_ptr_res));
+                        narrow_back = false;
+                    }
                     /* generic-hof-option-result-read-by-value: when the boxing
                      * site filled slot 0 with the CARRIER shim (typed shim
                      * declined, a wide by-value parameter), slot 0 returns a
@@ -12116,7 +12135,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * box pointer for the value (`(Option float)` through
                      * `mx-app` printed 0).  Ask the producer's own question. */
                     bool carrier_unbox = false;
-                    if (!thunk_typedef && n <= MAX_FN_ARITY) {
+                    if (!thunk_typedef && !word_back && n <= MAX_FN_ARITY) {
                         Type rres = emit_resolve_type(ctx, disp_result);
                         Type rargs[MAX_FN_ARITY];
                         for (uint32_t i = 0; i < n; i++)
@@ -12643,7 +12662,53 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         }
                     }
                     if (!_have_fld) ctx->pending_ctor_field_ty = NULL;
+                    /* lambda-in-generic-record-boxed-with-the-word-shim
+                     * (generic-zipper-plan): a bare fn boxed into a fn-typed
+                     * FIELD is read by every consumer at the field's type in
+                     * this monomorph -- `((.f fs) 2.5)` on an `(Fs float)`
+                     * dispatches slot 0 as `(void *, double)`.  Hand the box
+                     * that spelling.  Without it a lambda built inside a
+                     * generic body (`(make-struct Fs :f (fn [y : A] ...))` in
+                     * `mk-f [A]`) saw no sink, kept the word adapter its
+                     * erased declaration suggested, and the double arrived in
+                     * the wrong register class (0, or 1.2e-322). */
+                    const Type *fbs_prev_t = ctx->fat_box_sink_type;
+                    uint64_t fbs_prev_m = ctx->fat_box_sink_erased_mask;
+                    bool fbs_prev_r = ctx->fat_box_sink_erased_res;
+                    Type _sink_ty;
+                    {
+                        const Expr *fb = arg;
+                        while (fb && fb->kind == EX_ASCRIBE) fb = fb->as.ascribe_.inner;
+                        if (_have_fld && fb && fb->kind == EX_FN_TO_FAT) {
+                            /* The family is still written in the enclosing
+                             * generic's variables inside a spec -- `(Traversal
+                             * (Cons A) A)` in `zip/cons-traversal` -- and the
+                             * field's `fn` type is written in the RECORD's
+                             * (`(fn [S] (Cons A))`), which _fld_ty's
+                             * substitution does not reach into.  Resolve the
+                             * family, then instantiate the field through it. */
+                            Type rfam = emit_resolve_type(ctx, ctor_family);
+                            AdtDef *_rd = NULL;
+                            Type _rargs[16];
+                            uint8_t _rn = 0;
+                            if (type_extract_adt_app(&rfam, &_rd, _rargs, &_rn) && _rd)
+                                _sink_ty = emit_type_through_adt_args(
+                                    ctx, e->as.call_.ctor->fields[i].full_type,
+                                    _rd, _rargs, _rn);
+                            else
+                                _sink_ty = emit_resolve_type(ctx, _fld_ty);
+                            if (_sink_ty.kind == TY_FN &&
+                                !emit_repr_type_mentions_tyvar(&_sink_ty)) {
+                                ctx->fat_box_sink_type = &_sink_ty;
+                                ctx->fat_box_sink_erased_mask = 0;
+                                ctx->fat_box_sink_erased_res = false;
+                            }
+                        }
+                    }
                     arg_strs[i] = emit_value(ctx, body, arg);
+                    ctx->fat_box_sink_type = fbs_prev_t;
+                    ctx->fat_box_sink_erased_mask = fbs_prev_m;
+                    ctx->fat_box_sink_erased_res = fbs_prev_r;
                     ctx->pending_ctor_field_ty = _saved_fld;
                     /* ok-nil-unconstructible-in-turmeric: a `nil` payload --
                      * `(Ok nil)` for a `(Result nil E)` -- emits as the void
@@ -15590,6 +15655,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     callee_param_is_typed_heap_ptr &&
                     !expr_emits_byvalue_carrier_abi(ctx, emit_arg)) {
                     Type pf = *fn_binding->type.as.fn.arg_full_types[i];
+                    /* callee-param-cast-resolved-through-caller-spec
+                     * (generic-zipper-plan): the declared parameter is written
+                     * in the CALLEE's variables -- `tcons-of`'s `t : (Cons A)`
+                     * -- and resolving it through the active (caller's) spec
+                     * reads a caller variable of the same spelling: inside
+                     * `node [A]` at `A := int` it spelled `(Cons (R int))` as
+                     * `tur_adt_Cons__int *`.  The matched spec carries the
+                     * callee's own instantiation; take its spelling. */
+                    if (matched_spec && i < matched_spec->n_args &&
+                        (type_is_heap_struct(matched_spec->arg_types[i]) ||
+                         type_is_heap_adt(matched_spec->arg_types[i])))
+                        pf = matched_spec->arg_types[i];
                     const char *pty = emit_type_c_name(ctx, pf);
                     Buf _hb; buf_init(&_hb);
                     buf_printf(&_hb, "(%s)(intptr_t)(%s)", pty, raw);
@@ -15657,6 +15734,17 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                             strcmp(pty, "void *") != 0 &&
                             strncmp(pty, "int64_t", 7) != 0 &&
                             strncmp(pty, "RcControlBlock", 14) != 0) {
+                            /* callee-param-cast-resolved-through-caller-spec:
+                             * as at the typed-heap-pointer cast above, the
+                             * matched spec spells the CALLEE's instantiation;
+                             * `pf` is in the callee's variables, and resolving
+                             * it through the caller's spec mis-reads a
+                             * same-named variable.  Only the spelling of a
+                             * cast already being made changes. */
+                            if (matched_spec && i < matched_spec->n_args &&
+                                (type_is_heap_struct(matched_spec->arg_types[i]) ||
+                                 type_is_heap_adt(matched_spec->arg_types[i])))
+                                pty = emit_type_c_name(ctx, matched_spec->arg_types[i]);
                             Buf _hb; buf_init(&_hb);
                             buf_printf(&_hb, "(%s)(intptr_t)(%s)", pty, raw);
                             buf_putc(&_hb, '\0');

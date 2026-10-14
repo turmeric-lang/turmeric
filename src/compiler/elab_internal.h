@@ -2237,6 +2237,10 @@ bool gadt_claim_disagrees(Elab *e, const Form *claim, const Expr *x,
 /* gadt-length-index-not-enforced: `x` wrapped in an ascription to its known
  * GADT index, or `x` unchanged.  elab_call.c. */
 Expr *gadt_refine_to_index(Elab *e, Expr *x);
+/* generic-zipper-plan I3: record the grounding of a return-only generic call
+ * ascribed to a type open only in the enclosing signature's variables.
+ * elab_call.c. */
+void elab_ground_free_poly_call(Elab *e, Expr *call, const Type *target);
 Binding *make_poly_wrapper(Elab *e, Binding *inner_b, uint8_t inner_arity, Span span, bool typed_concrete);
 /* MB1 (constrained-hkt-forall-mode-b): variant with `n_lead_ignore` leading
  * dict-carrier params the wrapper accepts but does not forward to the inner. */

@@ -1,0 +1,23 @@
+;; panic-tail-branch-returns-void (generic-zipper-plan): a `panic` as one arm
+;; of a function's tail `if` or `match`, where the function returns a typed
+;; pointer -- a `(Cons float)` or a generic `:heap` struct -- emitted `return
+;; ((void)0);`, a hard cc error.  The arm now unwinds and returns a dead zero.
+(defstruct S :heap :copy [T] (x T))
+
+(defn kids [b : bool] : (Cons float)
+  (if b (tcons-of 2.5 (tnil)) (panic "no kids")))
+
+(defn pick [T] [b : bool s : (S T)] : (Cons T)
+  (if b (tcons-of (.x s) (tnil)) (panic "called children on a leaf node")))
+
+(defn get [T] [o : (Option (S T))] : (S T)
+  (match o
+    (Some s) s
+    (None)   (panic "no such location")))
+
+(defn main [] : int
+  (println (thead (kids true)))
+  (println (thead (pick true (make-struct S :x 7.1))))
+  (println (.x (get (Some (make-struct S :x 3)))))
+  (println (tlength (pick false (make-struct S :x 2))))
+  0)

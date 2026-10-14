@@ -129,6 +129,11 @@ One `(.extend z ca-rule)` call steps the entire automaton forward.
 
 The full Zipper implementation lives in [`stdlib/zipper.tur`](https://github.com/turmeric-lang/turmeric/blob/main/stdlib/zipper.tur). See [`tests/fixtures/zipper-comonad/`](https://github.com/turmeric-lang/turmeric/tree/main/tests/fixtures/zipper-comonad/) for a runnable version.
 
+This zipper is array-backed: each move copies both neighbour arrays. For a
+persistent zipper with O(1) moves -- over a list, or over any tree, the way
+Clojure's `clojure.zip` works -- see the [zipper guide](zipper-guide.md) and
+`stdlib/zip.tur`.
+
 ---
 
 ## Part 4 -- GridCtx: 2D Cellular Automata

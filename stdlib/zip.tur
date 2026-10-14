@@ -1,0 +1,1168 @@
+;;; tur/zip -- generic zippers: a structural zipper over any tree, and an element cursor.
+;;;
+;;; Two persistent zippers, both pure Turmeric:
+;;;
+;;; - `(ZipLoc T)`, the STRUCTURAL zipper -- Clojure's `clojure.zip`, typed.
+;;;   Describe a homogeneous tree type `T` with three functions (`branch?`,
+;;;   `children`, `make-node`, bundled by `zip/ops`) and navigate it with
+;;;   `zip/down`, `zip/up`, `zip/left`, `zip/right`, `zip/next`, `zip/prev`;
+;;;   edit it with `zip/replace`, `zip/edit`, `zip/insert-*`, `zip/remove`;
+;;;   rebuild it with `zip/root`.  `zip/rose-zip` does this for the stock
+;;;   rose tree `(Rose A)`, and a `Plated` instance does it for your own type
+;;;   (`zip/plated`).
+;;; - `(ZipCursor S A)`, the ELEMENT cursor -- a zipper over the `A`-elements
+;;;   of any container `S`, described by a `(Traversal S A)`.  Step through
+;;;   the elements, edit them in place, and close the cursor back into an `S`
+;;;   of the same shape.  Over `zip/cons-traversal` it is an O(1) list zipper.
+;;;
+;;; Every location is an immutable value: a move or an edit returns a new one
+;;; and leaves the old one valid.  Unedited subtrees are shared rather than
+;;; copied, and `(zip/root (zip/zipper ops t))` returns `t` itself.
+;;;
+;;; Moves that Clojure answers with `nil` at a boundary return `Option`.
+;;; Edits that Clojure throws on (an insert or remove at the top, the children
+;;; of a leaf) panic with Clojure's own message.
+;;;
+;;; Memory: locations, frames and rebuilt nodes are `:heap` values like
+;;; `(Cons A)`.  Outside a region they live until the process exits; inside
+;;; `with-region` a session whose result is a scalar rewinds in one step.
+;;; There is no `zip/free`.
+;;;
+;;; Not auto-loaded: `(load "stdlib/zip.tur")`.  See docs/guides/zipper-guide.md.
+;;;
+;;; Since: generic-zipper-plan ZP1
+;; Generic zipper module.
+
+;;; ZipOps -- how to navigate a tree type T: the three functions of `clojure.zip`.
+;;;
+;;; `branch?` says whether a node can have children, `children` lists them in
+;;; order, and `make-node` rebuilds a node with a new list of children.  Build
+;;; one with `zip/ops`.  `:heap :copy`, so a location carries it as one word.
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defstruct ZipOps
+  :heap
+  :copy
+  [T]
+  (branch? (fn [T] bool))
+  (children (fn [T] (Cons T)))
+  (make-node (fn [T (Cons T)] T)))
+
+;;; ZipFrame -- one level of a location's path (internal).
+;;;
+;;; `lefts` holds the left siblings NEAREST FIRST, `pnode` the parent as it was
+;;; on the way down, `up` the next frame out (the NULL link at the root),
+;;; `rights` the right siblings in order, and `changed` whether anything below
+;;; this frame was edited -- `zip/up` rebuilds the parent only then.
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defstruct ZipFrame
+  :heap
+  :copy
+  [T]
+  (lefts (Cons T))
+  (pnode T)
+  (up (ZipFrame T))
+  (rights (Cons T))
+  (changed bool))
+
+;;; ZipLoc -- a location in a tree of T: the focused node plus the path to it.
+;;;
+;;; `end` is Clojure's `:end` marker, set by `zip/next` past the last node.
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defstruct ZipLoc
+  :heap
+  :copy
+  [T]
+  (node T)
+  (path (ZipFrame T))
+  (end bool)
+  (ops (ZipOps T)))
+
+;; ---------------------------------------------------------------------------
+;; Internal helpers.
+
+;;; zip/-top? -- internal: is this path link the root's (the NULL link)?
+(defn zip/-top? [T] [f : (ZipFrame T)] : bool (= (:: f :int) 0))
+
+;;; zip/-no-frame -- internal: the root's path link.
+(defn zip/-no-frame [T] [] : (ZipFrame T) (:: 0 (ZipFrame T)))
+
+;;; zip/-rev-onto -- internal: xs reversed, in front of acc.
+(defn zip/-rev-onto [T] [xs : (Cons T) acc : (Cons T)] : (Cons T)
+  (if (tnil? xs) acc (zip/-rev-onto (ttail xs) (tcons-of (thead xs) acc))))
+
+;;; zip/-append1 -- internal: xs with x added at the end.
+(defn zip/-append1 [T] [xs : (Cons T) x : T] : (Cons T)
+  (zip/-rev-onto (zip/-rev-onto xs (tnil)) (tcons-of x (tnil))))
+
+;;; zip/-loc -- internal: a location that is not the end marker.
+(defn zip/-loc [T] [n : T p : (ZipFrame T) ops : (ZipOps T)] : (ZipLoc T)
+  (make-struct ZipLoc :node n :path p :end false :ops ops))
+
+;;; zip/-frame -- internal: a path frame.
+(defn zip/-frame [T] [ls : (Cons T)
+                      pn : T
+                      up : (ZipFrame T)
+                      rs : (Cons T)
+                      ch : bool] : (ZipFrame T)
+  (make-struct ZipFrame :lefts ls :pnode pn :up up :rights rs :changed ch))
+
+;;; zip/-mark -- internal: the frame with `changed` set; the root link as is.
+(defn zip/-mark [T] [f : (ZipFrame T)] : (ZipFrame T)
+  (if (zip/-top? f)
+    f
+    (zip/-frame (.lefts f) (.pnode f) (.up f) (.rights f) true)))
+
+;;; zip/-depth-acc -- internal: tail-recursive frame count behind `zip/depth`.
+(defn zip/-depth-acc [T] [f : (ZipFrame T) n : int] : int
+  (if (zip/-top? f) n (zip/-depth-acc (.up f) (+ n 1))))
+
+;;; zip/-ancestors-acc -- internal: the parents of every frame from f out, root first.
+(defn zip/-ancestors-acc [T] [f : (ZipFrame T) acc : (Cons T)] : (Cons T)
+  (if (zip/-top? f) acc (zip/-ancestors-acc (.up f) (tcons-of (.pnode f) acc))))
+
+;; ---------------------------------------------------------------------------
+;; Construction and inspection.
+
+;;; zip/ops -- bundle the three functions that describe a tree type T.
+;;;
+;;; Parameters:
+;;;   branch?   -- can this node have children?  A false answer makes the node
+;;;                a leaf: `zip/down` gives None and `zip/children` panics.
+;;;   children  -- the node's children, in order
+;;;   make-node -- the node rebuilt with the given children, in order
+;;;
+;;; Returns:
+;;;   A (ZipOps T) for `zip/zipper`.
+;;;
+;;; Example:
+;;;   (defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+;;;   (def tree-ops
+;;;     (zip/ops (fn [t : Tree] : bool (match t (Leaf _) false (Node _) true))
+;;;              (fn [t : Tree] : (Cons Tree) (match t (Leaf _) (tnil) (Node cs) cs))
+;;;              (fn [t : Tree cs : (Cons Tree)] : Tree (Node cs))))
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/ops [T] [branch? : (fn [T] bool)
+                   children : (fn [T] (Cons T))
+                   make-node : (fn [T (Cons T)] T)] : (ZipOps T)
+  (make-struct ZipOps :branch? branch? :children children :make-node make-node))
+
+;;; zip/zipper -- open a zipper at the root of a tree.
+;;;
+;;; Parameters:
+;;;   ops  -- how to navigate T (see `zip/ops`)
+;;;   root -- the tree
+;;;
+;;; Returns:
+;;;   The location of `root`, with an empty path.
+;;;
+;;; Example:
+;;;   (zip/node (zip/zipper tree-ops t))  ; => t
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/zipper [T] [ops : (ZipOps T) root : T] : (ZipLoc T)
+  (zip/-loc root (zip/-no-frame) ops))
+
+;;; zip/node -- the node at a location.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The focused node.
+;;;
+;;; Example:
+;;;   (zip/node (zip/zipper tree-ops t))  ; => t
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/node [T] [z : (ZipLoc T)] : T (.node z))
+
+;;; zip/branch? -- can the node at a location have children?
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The ops' `branch?` of the focused node.  An empty branch answers true.
+;;;
+;;; Example:
+;;;   (zip/branch? (zip/zipper tree-ops (Leaf 1)))  ; => false
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/branch? [T] [z : (ZipLoc T)] : bool ((.branch? (.ops z)) (.node z)))
+
+;;; zip/children -- the children of the node at a location, in order.
+;;;
+;;; Panics with "called children on a leaf node" when `zip/branch?` is false,
+;;; as Clojure throws: a leaf and an empty branch are different things.
+;;;
+;;; Parameters:
+;;;   z -- a location whose node is a branch
+;;;
+;;; Returns:
+;;;   The node's children, a (Cons T) -- (tnil) for an empty branch.
+;;;
+;;; Example:
+;;;   (tlength (zip/children (zip/zipper tree-ops t)))  ; => number of children
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/children [T] [z : (ZipLoc T)] : (Cons T)
+  (if (zip/branch? z)
+    ((.children (.ops z)) (.node z))
+    (panic "called children on a leaf node")))
+
+;;; zip/make-node -- build a node with the location's ops.
+;;;
+;;; Parameters:
+;;;   z    -- a location (only its ops are used)
+;;;   node -- the node to rebuild
+;;;   kids -- its new children, in order
+;;;
+;;; Returns:
+;;;   `node` rebuilt with `kids`, by the ops' `make-node`.
+;;;
+;;; Example:
+;;;   (zip/make-node z (zip/node z) (tnil))  ; => the focused node, childless
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/make-node [T] [z : (ZipLoc T) node : T kids : (Cons T)] : T
+  ((.make-node (.ops z)) node kids))
+
+;;; zip/ancestors -- the nodes on the path from the root to a location's parent.
+;;;
+;;; Clojure's `path`.  Each is the node as it was on the way down, so an edit
+;;; below it is not reflected until `zip/up` rebuilds it.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The ancestors, root first; (tnil) at the root.
+;;;
+;;; Example:
+;;;   (tlength (zip/ancestors (zip/zipper tree-ops t)))  ; => 0
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/ancestors [T] [z : (ZipLoc T)] : (Cons T)
+  (zip/-ancestors-acc (.path z) (tnil)))
+
+;;; zip/lefts -- the left siblings of a location, in document order.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The siblings before the node, leftmost first; (tnil) at the root.
+;;;
+;;; Example:
+;;;   (zip/lefts (zip/zipper tree-ops t))  ; => (tnil)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/lefts [T] [z : (ZipLoc T)] : (Cons T)
+  (let [f (.path z)]
+    (if (zip/-top? f) (tnil) (zip/-rev-onto (.lefts f) (tnil)))))
+
+;;; zip/rights -- the right siblings of a location, in document order.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The siblings after the node, nearest first; (tnil) at the root.
+;;;
+;;; Example:
+;;;   (zip/rights (zip/zipper tree-ops t))  ; => (tnil)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/rights [T] [z : (ZipLoc T)] : (Cons T)
+  (let [f (.path z)] (if (zip/-top? f) (tnil) (.rights f))))
+
+;;; zip/depth -- how many levels a location is below the root.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   0 at the root, 1 for its children, and so on.
+;;;
+;;; Example:
+;;;   (zip/depth (zip/zipper tree-ops t))  ; => 0
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/depth [T] [z : (ZipLoc T)] : int (zip/-depth-acc (.path z) 0))
+
+;;; zip/end? -- has `zip/next` walked past the last node?
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   true for the end marker `zip/next` returns after the last node in
+;;;   pre-order, false otherwise.
+;;;
+;;; Example:
+;;;   (zip/end? (zip/zipper tree-ops t))  ; => false
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/end? [T] [z : (ZipLoc T)] : bool (.end z))
+
+;; ---------------------------------------------------------------------------
+;; Moves.
+
+;;; zip/down -- move to the leftmost child.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   (Some loc) at the first child; None on a leaf or an empty branch.
+;;;
+;;; Example:
+;;;   (zip/down (zip/zipper tree-ops (Node (tcons-of (Leaf 1) (tnil)))))
+;;;   ; => (Some loc), with (Leaf 1) in focus
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/down [T] [z : (ZipLoc T)] : (Option (ZipLoc T))
+  (if (zip/branch? z)
+    (let [cs ((.children (.ops z)) (.node z))]
+      (if (tnil? cs)
+        (None)
+        (Some (zip/-loc (thead cs)
+                (zip/-frame (tnil) (.node z) (.path z) (ttail cs) false)
+                (.ops z)))))
+    (None)))
+
+;;; zip/up -- move to the parent, rebuilding it if anything below was edited.
+;;;
+;;; An unedited parent is returned as it was, with no allocation, so a walk
+;;; that edits nothing shares every node with the original tree.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   (Some loc) at the parent; None at the root.
+;;;
+;;; Example:
+;;;   (zip/up (zip/zipper tree-ops t))  ; => None
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/up [T] [z : (ZipLoc T)] : (Option (ZipLoc T))
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      (None)
+      (Some (if (.changed f)
+              (zip/-loc ((.make-node (.ops z)) (.pnode f)
+                          (zip/-rev-onto (.lefts f)
+                            (tcons-of (.node z) (.rights f))))
+                (zip/-mark (.up f))
+                (.ops z))
+              (zip/-loc (.pnode f) (.up f) (.ops z)))))))
+
+;;; zip/right -- move to the next sibling.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   (Some loc) at the right sibling; None at the rightmost child or the root.
+;;;
+;;; Example:
+;;;   (zip/right (zip/zipper tree-ops t))  ; => None
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/right [T] [z : (ZipLoc T)] : (Option (ZipLoc T))
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      (None)
+      (if (tnil? (.rights f))
+        (None)
+        (Some (zip/-loc (thead (.rights f))
+                (zip/-frame (tcons-of (.node z) (.lefts f))
+                  (.pnode f)
+                  (.up f)
+                  (ttail (.rights f))
+                  (.changed f))
+                (.ops z)))))))
+
+;;; zip/left -- move to the previous sibling.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   (Some loc) at the left sibling; None at the leftmost child or the root.
+;;;
+;;; Example:
+;;;   (zip/left (zip/zipper tree-ops t))  ; => None
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/left [T] [z : (ZipLoc T)] : (Option (ZipLoc T))
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      (None)
+      (if (tnil? (.lefts f))
+        (None)
+        (Some (zip/-loc (thead (.lefts f))
+                (zip/-frame (ttail (.lefts f))
+                  (.pnode f)
+                  (.up f)
+                  (tcons-of (.node z) (.rights f))
+                  (.changed f))
+                (.ops z)))))))
+
+;;; zip/leftmost -- move to the first sibling.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The leftmost sibling's location; z itself when already there or at the root.
+;;;
+;;; Example:
+;;;   (zip/node (zip/leftmost z))  ; => the first child of z's parent
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/leftmost [T] [z : (ZipLoc T)] : (ZipLoc T)
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      z
+      (if (tnil? (.lefts f))
+        z
+        (let [all (zip/-rev-onto (.lefts f) (tcons-of (.node z) (.rights f)))]
+          (zip/-loc (thead all)
+            (zip/-frame (tnil) (.pnode f) (.up f) (ttail all) (.changed f))
+            (.ops z)))))))
+
+;;; zip/rightmost -- move to the last sibling.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The rightmost sibling's location; z itself when already there or at the root.
+;;;
+;;; Example:
+;;;   (zip/node (zip/rightmost z))  ; => the last child of z's parent
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/rightmost [T] [z : (ZipLoc T)] : (ZipLoc T)
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      z
+      (if (tnil? (.rights f))
+        z
+        (let [all (zip/-rev-onto (.rights f) (tcons-of (.node z) (.lefts f)))]
+          (zip/-loc (thead all)
+            (zip/-frame (ttail all) (.pnode f) (.up f) (tnil) (.changed f))
+            (.ops z)))))))
+
+;;; zip/root -- zip all the way up and return the (possibly edited) tree.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The root node, with every edited level rebuilt.  With no edits it is the
+;;;   very tree the zipper was opened on.
+;;;
+;;; Example:
+;;;   (zip/root (zip/replace (zip/zipper tree-ops t) (Leaf 9)))  ; => (Leaf 9)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/root [T] [z : (ZipLoc T)] : T
+  (if (.end z)
+    (.node z)
+    (match (zip/up z) (None) (.node z) (Some p) (zip/root p))))
+
+;;; zip/-deepest-last -- internal: the last node in pre-order under z (z if a leaf).
+(defn zip/-deepest-last [T] [z : (ZipLoc T)] : (ZipLoc T)
+  (match (zip/down z) (Some c) (zip/-deepest-last (zip/rightmost c)) (None) z))
+
+;;; zip/-next-up -- internal: `next` from a node with no child and no right sibling.
+(defn zip/-next-up [T] [z : (ZipLoc T)] : (ZipLoc T)
+  (match (zip/up z)
+    (None)
+    (make-struct ZipLoc :node (.node z) :path (.path z) :end true :ops (.ops z))
+    (Some u)
+    (match (zip/right u) (Some r) r (None) (zip/-next-up u))))
+
+;;; zip/next -- move to the next node in a depth-first, pre-order walk.
+;;;
+;;; Past the last node it returns the END marker: a location at the (rebuilt)
+;;; root for which `zip/end?` is true.  `zip/next` of the end marker is the
+;;; end marker; `zip/root` of it is the tree.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   The next location in pre-order, or the end marker.
+;;;
+;;; Example:
+;;;   (defn visit-all [T] [z : (ZipLoc T)] : T
+;;;     (if (zip/end? z) (zip/root z) (visit-all (zip/next z))))
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/next [T] [z : (ZipLoc T)] : (ZipLoc T)
+  (if (.end z)
+    z
+    (match (zip/down z)
+      (Some d)
+      d
+      (None)
+      (match (zip/right z) (Some r) r (None) (zip/-next-up z)))))
+
+;;; zip/prev -- move to the previous node in a depth-first, pre-order walk.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;
+;;; Returns:
+;;;   (Some loc) at the previous node in pre-order; None at the root (and at
+;;;   the end marker).
+;;;
+;;; Example:
+;;;   (zip/prev (zip/zipper tree-ops t))  ; => None
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/prev [T] [z : (ZipLoc T)] : (Option (ZipLoc T))
+  (match (zip/left z) (Some l) (Some (zip/-deepest-last l)) (None) (zip/up z)))
+
+;; ---------------------------------------------------------------------------
+;; Edits.
+
+;;; zip/replace -- replace the node at a location.
+;;;
+;;; Parameters:
+;;;   z    -- a location
+;;;   node -- the new node
+;;;
+;;; Returns:
+;;;   The same location with `node` in focus; `zip/up` and `zip/root` rebuild
+;;;   the levels above it.  z itself is unchanged.
+;;;
+;;; Example:
+;;;   (zip/node (zip/replace z (Leaf 40)))  ; => (Leaf 40)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/replace [T] [z : (ZipLoc T) node : T] : (ZipLoc T)
+  (make-struct ZipLoc
+    :node
+    node
+    :path
+    (zip/-mark (.path z))
+    :end
+    (.end z)
+    :ops
+    (.ops z)))
+
+;;; zip/edit -- replace the node at a location with a function of it.
+;;;
+;;; Parameters:
+;;;   z -- a location
+;;;   f -- the edit, applied to the focused node
+;;;
+;;; Returns:
+;;;   `(zip/replace z (f (zip/node z)))`.
+;;;
+;;; Example:
+;;;   (zip/edit z (fn [t : Tree] : Tree (Leaf 0)))
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/edit [T] [z : (ZipLoc T) f : (fn [T] T)] : (ZipLoc T)
+  (zip/replace z (f (.node z))))
+
+;;; zip/insert-left -- insert a sibling immediately to the left, without moving.
+;;;
+;;; Panics with "Insert at top" at the root, as Clojure throws.
+;;;
+;;; Parameters:
+;;;   z    -- a location below the root
+;;;   item -- the new sibling
+;;;
+;;; Returns:
+;;;   The same location, with `item` as its new left sibling.
+;;;
+;;; Example:
+;;;   (zip/lefts (zip/insert-left z (Leaf 0)))  ; => ... ending in (Leaf 0)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/insert-left [T] [z : (ZipLoc T) item : T] : (ZipLoc T)
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      (panic "Insert at top")
+      (zip/-loc (.node z)
+        (zip/-frame (tcons-of item (.lefts f))
+          (.pnode f)
+          (.up f)
+          (.rights f)
+          true)
+        (.ops z)))))
+
+;;; zip/insert-right -- insert a sibling immediately to the right, without moving.
+;;;
+;;; Panics with "Insert at top" at the root, as Clojure throws.
+;;;
+;;; Parameters:
+;;;   z    -- a location below the root
+;;;   item -- the new sibling
+;;;
+;;; Returns:
+;;;   The same location, with `item` as its new right sibling.
+;;;
+;;; Example:
+;;;   (thead (zip/rights (zip/insert-right z (Leaf 0))))  ; => (Leaf 0)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/insert-right [T] [z : (ZipLoc T) item : T] : (ZipLoc T)
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      (panic "Insert at top")
+      (zip/-loc (.node z)
+        (zip/-frame (.lefts f)
+          (.pnode f)
+          (.up f)
+          (tcons-of item (.rights f))
+          true)
+        (.ops z)))))
+
+;;; zip/insert-child -- add a first child to the node at a location, without moving.
+;;;
+;;; Panics with "called children on a leaf node" when the node is not a branch.
+;;;
+;;; Parameters:
+;;;   z    -- a location whose node is a branch
+;;;   item -- the new leftmost child
+;;;
+;;; Returns:
+;;;   The same location, its node rebuilt with `item` before its children.
+;;;
+;;; Example:
+;;;   (thead (zip/children (zip/insert-child z (Leaf 0))))  ; => (Leaf 0)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/insert-child [T] [z : (ZipLoc T) item : T] : (ZipLoc T)
+  (zip/replace z (zip/make-node z (.node z) (tcons-of item (zip/children z)))))
+
+;;; zip/append-child -- add a last child to the node at a location, without moving.
+;;;
+;;; Panics with "called children on a leaf node" when the node is not a branch.
+;;;
+;;; Parameters:
+;;;   z    -- a location whose node is a branch
+;;;   item -- the new rightmost child
+;;;
+;;; Returns:
+;;;   The same location, its node rebuilt with `item` after its children.
+;;;
+;;; Example:
+;;;   (zip/node (zip/rightmost (unwrap (zip/down (zip/append-child z (Leaf 0))))))
+;;;   ; => (Leaf 0)
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/append-child [T] [z : (ZipLoc T) item : T] : (ZipLoc T)
+  (zip/replace z
+    (zip/make-node z (.node z) (zip/-append1 (zip/children z) item))))
+
+;;; zip/remove -- delete the node at a location.
+;;;
+;;; Panics with "Remove at top" at the root, as Clojure throws.
+;;;
+;;; Parameters:
+;;;   z -- a location below the root
+;;;
+;;; Returns:
+;;;   The location that preceded z in a pre-order walk: the deepest last
+;;;   descendant of its left sibling, or its parent (rebuilt) when z was the
+;;;   first child.
+;;;
+;;; Example:
+;;;   (zip/root (zip/remove z))  ; => the tree without z's node
+;;;
+;;; Since: generic-zipper-plan ZP1
+(defn zip/remove [T] [z : (ZipLoc T)] : (ZipLoc T)
+  (let [f (.path z)]
+    (if (zip/-top? f)
+      (panic "Remove at top")
+      (if (tnil? (.lefts f))
+        (zip/-loc ((.make-node (.ops z)) (.pnode f) (.rights f))
+          (zip/-mark (.up f))
+          (.ops z))
+        (zip/-deepest-last (zip/-loc (thead (.lefts f))
+                             (zip/-frame (ttail (.lefts f))
+                               (.pnode f)
+                               (.up f)
+                               (.rights f)
+                               true)
+                             (.ops z)))))))
+
+;; ---------------------------------------------------------------------------
+;; Search and bulk rewrite (ZP2).
+
+;;; zip/find-next -- search forward in pre-order for a node satisfying p.
+;;;
+;;; The search starts AT z: z itself is returned when its node satisfies p.
+;;; To find the following match, search from `(zip/next found)`.
+;;;
+;;; Parameters:
+;;;   z -- where to start
+;;;   p -- the test, applied to each node
+;;;
+;;; Returns:
+;;;   (Some loc) at the first node, from z on in pre-order, satisfying p;
+;;;   None when the walk reaches the end without one.
+;;;
+;;; Example:
+;;;   (zip/find-next (zip/zipper tree-ops t)
+;;;                  (fn [n : Tree] : bool (match n (Leaf v) (= v 3) (Node _) false)))
+;;;   ; => (Some loc) at (Leaf 3)
+;;;
+;;; Since: generic-zipper-plan ZP2
+(defn zip/find-next [T] [z : (ZipLoc T) p : (fn [T] bool)] : (Option (ZipLoc T))
+  (if (.end z)
+    (None)
+    (if (p (.node z)) (Some z) (zip/find-next (zip/next z) p))))
+
+;;; zip/edit-all -- apply f to every node from z on, in pre-order, and return the root.
+;;;
+;;; Clojure's standard edit loop, shipped: edit the node, move with
+;;; `zip/next`, stop at the end.  Each node is edited BEFORE its children are
+;;; visited, so the walk descends into what f returned -- the zipper form of
+;;; Uniplate's `transform`, top-down.  From the root it rewrites the whole
+;;; tree.
+;;;
+;;; Parameters:
+;;;   z -- where to start (usually the root location)
+;;;   f -- the edit, applied to each node
+;;;
+;;; Returns:
+;;;   The rebuilt root.
+;;;
+;;; Example:
+;;;   (zip/edit-all (zip/zipper tree-ops t)
+;;;                 (fn [n : Tree] : Tree (match n (Leaf v) (Leaf (* v 2)) (Node _) n)))
+;;;   ; => t with every leaf doubled
+;;;
+;;; Since: generic-zipper-plan ZP2
+(defn zip/edit-all [T] [z : (ZipLoc T) f : (fn [T] T)] : T
+  (if (.end z)
+    (zip/root z)
+    (zip/edit-all (zip/next (zip/replace z (f (.node z)))) f)))
+
+;; ---------------------------------------------------------------------------
+;; The stock rose tree (ZP2).
+
+;;; Rose -- a rose tree: a label and a list of child trees (Haskell's Data.Tree).
+;;;
+;;; The typed counterpart of Clojure's `seq-zip`.  Every node is a branch --
+;;; a leaf is a node with no children -- so `zip/down` of a leaf is None and
+;;; `zip/append-child` works anywhere.  `kids` is a `Cons`, so `zip/down` is
+;;; O(1).  Build one with `zip/rose` or `make-struct`.
+;;;
+;;; Since: generic-zipper-plan ZP2
+(defstruct Rose :heap :copy [A] (label A) (kids (Cons (Rose A))))
+
+;;; zip/rose -- build a rose tree node.
+;;;
+;;; Parameters:
+;;;   label -- the node's label
+;;;   kids  -- its children, in order ((tnil) for a leaf)
+;;;
+;;; Returns:
+;;;   A (Rose A).
+;;;
+;;; Example:
+;;;   (zip/rose 1 (tcons-of (zip/rose 2 (tnil)) (tnil)))  ; => 1 with one child, 2
+;;;
+;;; Since: generic-zipper-plan ZP2
+(defn zip/rose [A] [label : A kids : (Cons (Rose A))] : (Rose A)
+  (make-struct Rose :label label :kids kids))
+
+;;; zip/rose-ops -- the ZipOps of a rose tree.
+;;;
+;;; Returns:
+;;;   Ops whose `branch?` is always true, `children` reads `kids`, and
+;;;   `make-node` keeps the label and replaces the children.
+;;;
+;;; Example:
+;;;   (zip/zipper (zip/rose-ops) r)  ; same as (zip/rose-zip r)
+;;;
+;;; Since: generic-zipper-plan ZP2
+(defn zip/rose-ops [A] [] : (ZipOps (Rose A))
+  (make-struct ZipOps
+    :branch?
+    (fn [r : (Rose A)] : bool true)
+    :children
+    (fn [r : (Rose A)] : (Cons (Rose A)) (.kids r))
+    :make-node
+    (fn [r : (Rose A) ks : (Cons (Rose A))] : (Rose A)
+      (make-struct Rose :label (.label r) :kids ks))))
+
+;;; zip/rose-zip -- open a zipper at the root of a rose tree.
+;;;
+;;; Parameters:
+;;;   r -- the tree
+;;;
+;;; Returns:
+;;;   `(zip/zipper (zip/rose-ops) r)`.
+;;;
+;;; Example:
+;;;   (.label (zip/node (zip/rose-zip (zip/rose 7 (tnil)))))  ; => 7
+;;;
+;;; Since: generic-zipper-plan ZP2
+(defn zip/rose-zip [A] [r : (Rose A)] : (ZipLoc (Rose A))
+  (zip/zipper (zip/rose-ops) r))
+
+;; ---------------------------------------------------------------------------
+;; Plated: typeclass sugar over ZipOps (ZP3).
+
+;;; Plated -- a type whose values have children of the same type.
+;;;
+;;; lens's `Plated` / Uniplate's `Uniplate`: the three ZipOps functions as an
+;;; instance, so `zip/plated` can open a zipper with no ops argument.  An
+;;; instance gives one canonical view of a type; for a second view of the same
+;;; type, build a ZipOps with `zip/ops` instead.
+;;;
+;;; Parameters:
+;;;   a -- the tree type
+;;;
+;;; Returns:
+;;;   plate-branch?  -- can x have children?
+;;;   plate-children -- x's children, in order
+;;;   plate-rebuild  -- x rebuilt with the given children
+;;;
+;;; Example:
+;;;   (definstance Plated [Tree]
+;;;     (plate-branch? [t] (match t (Leaf _) false (Node _) true))
+;;;     (plate-children [t] (match t (Leaf _) (tnil) (Node cs) cs))
+;;;     (plate-rebuild [t cs] (Node cs)))
+;;;
+;;; Since: generic-zipper-plan ZP3
+(defclass Plated [a]
+  (plate-branch? [x : a] : bool)
+  (plate-children [x : a] : (Cons a))
+  (plate-rebuild [x : a kids : (Cons a)] : a))
+
+;;; Plated [Rose] -- a rose tree's children are its kids; every node is a branch.
+(definstance Plated [Rose]
+  (plate-branch? [r] true)
+  (plate-children [r] (.kids r))
+  (plate-rebuild [r ks] (zip/rose (.label r) ks)))
+
+;;; zip/plated-ops -- the ZipOps a Plated instance describes.
+;;;
+;;; Returns:
+;;;   Ops that call the instance's plate-branch?, plate-children and
+;;;   plate-rebuild.
+;;;
+;;; Example:
+;;;   (:: (zip/plated-ops) (ZipOps Tree))
+;;;
+;;; Since: generic-zipper-plan ZP3
+(defn zip/plated-ops [^Plated T] [] : (ZipOps T)
+  (make-struct ZipOps
+    :branch?
+    (fn [x : T] : bool (plate-branch? x))
+    :children
+    (fn [x : T] : (Cons T) (plate-children x))
+    :make-node
+    (fn [x : T ks : (Cons T)] : T (plate-rebuild x ks))))
+
+;;; zip/plated -- open a zipper on a value of a Plated type.
+;;;
+;;; Parameters:
+;;;   root -- the tree
+;;;
+;;; Returns:
+;;;   `(zip/zipper (zip/plated-ops) root)`.
+;;;
+;;; Example:
+;;;   (zip/node (zip/plated t))  ; => t
+;;;
+;;; Since: generic-zipper-plan ZP3
+(defn zip/plated [^Plated T] [root : T] : (ZipLoc T)
+  (zip/zipper (zip/plated-ops) root))
+
+;; ---------------------------------------------------------------------------
+;; The element cursor (ZP4).
+
+;;; Traversal -- how to visit the A-elements of a container S, and put them back.
+;;;
+;;; `parts` lists the elements of an S in order; `fill` returns the same S with
+;;; its elements replaced, in order.  The record mirrors stdlib/lens.tur's
+;;; `Lens`.  Laws:
+;;;   (fill s (parts s)) = s
+;;;   (parts (fill s xs)) = xs, when xs has as many elements as (parts s)
+;;; `:heap :copy`, so a cursor carries it as one word.
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defstruct Traversal
+  :heap
+  :copy
+  [S A]
+  (parts (fn [S] (Cons A)))
+  (fill (fn [S (Cons A)] S)))
+
+;;; ZipCursor -- a cursor over the elements of a container, focused on one.
+;;;
+;;; `shape` is the container as opened, `lefts` the elements before the focus
+;;; (nearest first), `rights` those after it (in order).
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defstruct ZipCursor
+  :heap
+  :copy
+  [S A]
+  (shape S)
+  (lefts (Cons A))
+  (focus A)
+  (rights (Cons A))
+  (trav (Traversal S A)))
+
+;;; zip/traversal -- build a Traversal from its two functions.
+;;;
+;;; Parameters:
+;;;   parts -- the elements of an S, in order
+;;;   fill  -- the S with its elements replaced, in order
+;;;
+;;; Returns:
+;;;   A (Traversal S A) for `zip/cursor`.
+;;;
+;;; Example:
+;;;   (zip/traversal (fn [p : Pair] : (Cons int) ...)
+;;;                  (fn [p : Pair xs : (Cons int)] : Pair ...))
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/traversal [S A] [parts : (fn [S] (Cons A)) fill : (fn [S (Cons A)] S)] : (Traversal S
+                                                                                     A)
+  (make-struct Traversal :parts parts :fill fill))
+
+;;; zip/cursor -- open a cursor on the first element of a container.
+;;;
+;;; Opening reads every element once (O(n)); after that each move and edit is
+;;; O(1), and every cursor stays valid.
+;;;
+;;; Parameters:
+;;;   t -- the container's Traversal
+;;;   s -- the container
+;;;
+;;; Returns:
+;;;   (Some cursor) focused on the first element; None when s has none.
+;;;
+;;; Example:
+;;;   (zip/cursor (zip/cons-traversal) (tcons-of 1 (tnil)))  ; => (Some c), focus 1
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cursor [S A] [t : (Traversal S A) s : S] : (Option (ZipCursor S A))
+  (let [xs ((.parts t) s)]
+    (if (tnil? xs)
+      (None)
+      (Some (make-struct ZipCursor
+              :shape
+              s
+              :lefts
+              (tnil)
+              :focus
+              (thead xs)
+              :rights
+              (ttail xs)
+              :trav
+              t)))))
+
+;;; zip/cursor-focus -- the element a cursor is on.
+;;;
+;;; Parameters:
+;;;   c -- a cursor
+;;;
+;;; Returns:
+;;;   The focused element.
+;;;
+;;; Example:
+;;;   (zip/cursor-focus c)  ; => the current element
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cursor-focus [S A] [c : (ZipCursor S A)] : A (.focus c))
+
+;;; zip/cursor-set -- replace the element a cursor is on.
+;;;
+;;; Parameters:
+;;;   c -- a cursor
+;;;   a -- the new element
+;;;
+;;; Returns:
+;;;   The same position with `a` in focus; c itself is unchanged.
+;;;
+;;; Example:
+;;;   (zip/cursor-focus (zip/cursor-set c 200))  ; => 200
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cursor-set [S A] [c : (ZipCursor S A) a : A] : (ZipCursor S A)
+  (make-struct ZipCursor
+    :shape
+    (.shape c)
+    :lefts
+    (.lefts c)
+    :focus
+    a
+    :rights
+    (.rights c)
+    :trav
+    (.trav c)))
+
+;;; zip/cursor-edit -- replace the element a cursor is on with a function of it.
+;;;
+;;; Parameters:
+;;;   c -- a cursor
+;;;   f -- the edit
+;;;
+;;; Returns:
+;;;   `(zip/cursor-set c (f (zip/cursor-focus c)))`.
+;;;
+;;; Example:
+;;;   (zip/cursor-edit c (fn [x : int] : int (* x 2)))
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cursor-edit [S A] [c : (ZipCursor S A) f : (fn [A] A)] : (ZipCursor S
+                                                                     A)
+  (zip/cursor-set c (f (.focus c))))
+
+;;; zip/cursor-next -- move to the next element.
+;;;
+;;; Parameters:
+;;;   c -- a cursor
+;;;
+;;; Returns:
+;;;   (Some cursor) on the next element; None on the last one.
+;;;
+;;; Example:
+;;;   (zip/cursor-next c)  ; => (Some c2), or None at the last element
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cursor-next [S A] [c : (ZipCursor S A)] : (Option (ZipCursor S A))
+  (if (tnil? (.rights c))
+    (None)
+    (Some (make-struct ZipCursor
+            :shape
+            (.shape c)
+            :lefts
+            (tcons-of (.focus c) (.lefts c))
+            :focus
+            (thead (.rights c))
+            :rights
+            (ttail (.rights c))
+            :trav
+            (.trav c)))))
+
+;;; zip/cursor-prev -- move to the previous element.
+;;;
+;;; Parameters:
+;;;   c -- a cursor
+;;;
+;;; Returns:
+;;;   (Some cursor) on the previous element; None on the first one.
+;;;
+;;; Example:
+;;;   (zip/cursor-prev c)  ; => (Some c0), or None at the first element
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cursor-prev [S A] [c : (ZipCursor S A)] : (Option (ZipCursor S A))
+  (if (tnil? (.lefts c))
+    (None)
+    (Some (make-struct ZipCursor
+            :shape
+            (.shape c)
+            :lefts
+            (ttail (.lefts c))
+            :focus
+            (thead (.lefts c))
+            :rights
+            (tcons-of (.focus c) (.rights c))
+            :trav
+            (.trav c)))))
+
+;;; zip/cursor-close -- write the elements back into the container.
+;;;
+;;; Parameters:
+;;;   c -- a cursor
+;;;
+;;; Returns:
+;;;   The container the cursor was opened on, with every element as the
+;;;   cursor now has it, by the Traversal's `fill` (O(n)).  The original
+;;;   container is unchanged.
+;;;
+;;; Example:
+;;;   (zip/cursor-close (zip/cursor-set c 200))  ; => s with that element 200
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cursor-close [S A] [c : (ZipCursor S A)] : S
+  ((.fill (.trav c)) (.shape c)
+    (zip/-rev-onto (.lefts c) (tcons-of (.focus c) (.rights c)))))
+
+;;; zip/cons-traversal -- the Traversal of a list: its elements are itself.
+;;;
+;;; A cursor over it is a persistent list zipper with O(1) moves.
+;;;
+;;; Returns:
+;;;   A (Traversal (Cons A) A) whose `parts` is the identity and whose `fill`
+;;;   returns the new elements as the list.
+;;;
+;;; Example:
+;;;   (zip/cursor (zip/cons-traversal) xs)  ; => a cursor over xs
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/cons-traversal [A] [] : (Traversal (Cons A) A)
+  (make-struct Traversal
+    :parts
+    (fn [xs : (Cons A)] : (Cons A) xs)
+    :fill
+    (fn [xs : (Cons A) ys : (Cons A)] : (Cons A) ys)))
+
+;;; zip/-forest-labels -- internal: a forest's labels in pre-order, in front of acc.
+(defn zip/-forest-labels [A] [ks : (Cons (Rose A)) acc : (Cons A)] : (Cons A)
+  (if (tnil? ks)
+    acc
+    (let [r (thead ks)]
+      (tcons-of (.label r)
+        (zip/-forest-labels (.kids r) (zip/-forest-labels (ttail ks) acc))))))
+
+;;; ZipFill -- internal: a rebuilt forest and the labels it did not use.
+(defstruct ZipFill :heap :copy [A] (built (Cons (Rose A))) (rest (Cons A)))
+
+;;; zip/-fill-forest -- internal: relabel a forest in pre-order from xs.
+;;;
+;;; A tree keeps its old label once xs runs out, so `fill` is total.
+(defn zip/-fill-forest [A] [ks : (Cons (Rose A)) xs : (Cons A)] : (ZipFill A)
+  (if (tnil? ks)
+    (make-struct ZipFill :built (tnil) :rest xs)
+    (let [r     (thead ks)
+          label (if (tnil? xs) (.label r) (thead xs))
+          kids  (zip/-fill-forest (.kids r) (if (tnil? xs) xs (ttail xs)))
+          sibs  (zip/-fill-forest (ttail ks) (.rest kids))]
+      (make-struct ZipFill
+        :built
+        (tcons-of (zip/rose label (.built kids)) (.built sibs))
+        :rest
+        (.rest sibs)))))
+
+;;; zip/rose-labels -- the Traversal of a rose tree's labels, in pre-order.
+;;;
+;;; Returns:
+;;;   A (Traversal (Rose A) A): `parts` lists the labels root first, depth
+;;;   first; `fill` relabels the same shape from a list of labels.
+;;;
+;;; Example:
+;;;   (zip/cursor (zip/rose-labels) r)  ; => a cursor over r's labels
+;;;
+;;; Since: generic-zipper-plan ZP4
+(defn zip/rose-labels [A] [] : (Traversal (Rose A) A)
+  (make-struct Traversal
+    :parts
+    (fn [r : (Rose A)] : (Cons A)
+      (zip/-forest-labels (tcons-of r (tnil)) (tnil)))
+    :fill
+    (fn [r : (Rose A) xs : (Cons A)] : (Rose A)
+      (thead (.built (zip/-fill-forest (tcons-of r (tnil)) xs))))))

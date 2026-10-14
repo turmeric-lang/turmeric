@@ -1,0 +1,35 @@
+;; generic-zipper-plan I3: a return-only generic call whose result type is an
+;; application -- `(box-trav)` : `(Trav (Box A) A)` -- grounded by a LATER
+;; sibling argument.  `(get-first (box-trav) b)` against `[t : (Trav S A) s :
+;; S]` bound `S` to the nullary call's `(Box A)` first, and `b : (Box int)`
+;; was then rejected: "expected (Box A), got (Box int)".  The later argument
+;; now fills those free variables, and the nullary call is specialized at
+;; them -- from `main`, and from inside a generic body (`gen-first`, where it
+;; grounds to the body's own `T`), with or without an ascription.  The
+;; closures `box-trav` builds construct `:heap` values, so a call left on the
+;; base generic aborted at runtime ("a call reached the dead base generic
+;; path").
+(defstruct Trav :copy [S A] (parts (fn [S] (Cons A))) (fill (fn [S (Cons A)] S)))
+(defstruct Box :heap :copy [A] (v A))
+
+(defn box-trav [A] [] : (Trav (Box A) A)
+  (make-struct Trav
+    :parts (fn [b : (Box A)] : (Cons A) (tcons-of (.v b) (tnil)))
+    :fill  (fn [b : (Box A) xs : (Cons A)] : (Box A) (make-struct Box :v (thead xs)))))
+
+(defn get-first [S A] [t : (Trav S A) s : S] : A (thead ((.parts t) s)))
+(defn refill [S A] [t : (Trav S A) s : S x : A] : S ((.fill t) s (tcons-of x (tnil))))
+
+(defn gen-first [T] [b : (Box T)] : T (get-first (box-trav) b))
+(defn gen-first-asc [T] [b : (Box T)] : T
+  (get-first (:: (box-trav) (Trav (Box T) T)) b))
+
+(defn main [] : int
+  (println (get-first (box-trav) (make-struct Box :v 9)))
+  (println (get-first (box-trav) (make-struct Box :v 7.1)))
+  (println (.v (refill (box-trav) (make-struct Box :v 7.1) 3.25)))
+  (println (gen-first (make-struct Box :v 2.5)))
+  (println (gen-first (make-struct Box :v 4)))
+  (println (gen-first-asc (make-struct Box :v 6.75)))
+  (println (gen-first-asc (make-struct Box :v 8)))
+  0)

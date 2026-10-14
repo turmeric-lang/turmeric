@@ -43,7 +43,7 @@ The original filing follows.
 program is correct.
 
 **Discovered:** 2026-10-13, prototyping
-[generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D3), on
+[generic-zipper-plan](generic-zipper-plan.md) (its D3), on
 `main` at v0.64.4 (`704cc531`).
 
 ## Repro

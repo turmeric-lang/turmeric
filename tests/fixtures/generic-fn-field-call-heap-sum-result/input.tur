@@ -1,0 +1,26 @@
+;; merge-temp-shadow-reads-tyvar-erasure (generic-zipper-plan): a generic that
+;; calls a fn-typed record field returning its `T` -- `((.mk o) n)` -- at a
+;; `:heap` SUM `T` ICE'd: "a representation decision disagrees with repr_of at
+;; merge-temp ... type=Tree want=heap-ptr got=carrier-i64".  The generic's
+;; `T`-typed temp keeps the erased carrier spelling by design; the shadow check
+;; resolved it through the spec and misread the erasure.  It is the shape of
+;; every zip/up and zip/root over a user AST.
+(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+(defstruct Ops :heap :copy [T] (mk (fn [T (Cons T)] T)) (id (fn [T] T)))
+
+(defn call-mk [T] [o : (Ops T) n : T ks : (Cons T)] : T ((.mk o) n ks))
+(defn call-id [T] [o : (Ops T) n : T] : T ((.id o) n))
+
+(defn size [t : Tree] : int
+  (match t
+    (Leaf _)  1
+    (Node cs) (+ 1 (tlength cs))))
+
+(defn main [] : int
+  (let [o (make-struct Ops :mk (fn [t : Tree cs : (Cons Tree)] : Tree (Node cs))
+                           :id (fn [t : Tree] : Tree t))]
+    (println (size (call-mk o (Leaf 1) (tcons-of (Leaf 2) (tcons-of (Leaf 3) (tnil))))))
+    (match (call-id o (Leaf 7))
+      (Leaf v)  (println v)
+      (Node cs) (println 0)))
+  0)

@@ -202,6 +202,10 @@ fixture_has_inline_c() {
         [ -f "$loaded" ] || continue
         case "$loaded" in
             stdlib/session.tur) continue ;;
+            # str-concat / int->str: both are interpreter natives
+            # (interpreter_natives.c), so the zipper fixtures' tree printer
+            # runs here too (generic-zipper-plan).
+            stdlib/str-build.tur) continue ;;
         esac
         grep -q '```c' "$loaded" 2>/dev/null && return 0
     done < <(sed -n 's/.*(load "\([^"]*\)").*/\1/p' "$f" 2>/dev/null)

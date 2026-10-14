@@ -1,0 +1,25 @@
+;; generic-zipper-plan ZP4: zip/cursor answers None when the container has no
+;; elements -- an empty list, or a user container whose traversal lists
+;; nothing -- and a one-element cursor has no next or previous element.
+(load "stdlib/zip.tur")
+
+(defdata Bag :heap :copy (Empty) (Holds (Cons int)))
+
+(defn bag-trav [] : (Traversal Bag int)
+  (zip/traversal (fn [b : Bag] : (Cons int) (match b (Empty) (tnil) (Holds xs) xs))
+                 (fn [b : Bag xs : (Cons int)] : Bag (match b (Empty) b (Holds _) (Holds xs)))))
+
+(defn main [] : int
+  (println (none? (zip/cursor (zip/cons-traversal) (:: (tnil) (Cons int)))))
+  (println (none? (zip/cursor (bag-trav) (Empty))))
+  (println (none? (zip/cursor (bag-trav) (Holds (tnil)))))
+  (match (zip/cursor (bag-trav) (Holds (tcons-of 7 (tnil))))
+    (None)   (println "unexpected")
+    (Some c) (do (println (zip/cursor-focus c))
+                 (println (none? (zip/cursor-next c)))
+                 (println (none? (zip/cursor-prev c)))))
+  ;; a one-node rose tree has exactly one label
+  (match (zip/cursor (zip/rose-labels) (zip/rose 9 (tnil)))
+    (None)   (println "unexpected")
+    (Some c) (println (none? (zip/cursor-next c))))
+  0)

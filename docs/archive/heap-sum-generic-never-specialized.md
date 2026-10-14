@@ -58,7 +58,7 @@ aborts at runtime. The interpreter runs the same program correctly. The
 abort is loud: it prints a message and calls `abort()`.
 
 **Discovered:** 2026-10-13, prototyping
-[generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D2), on
+[generic-zipper-plan](generic-zipper-plan.md) (its D2), on
 `main` at v0.64.4 (`704cc531`).
 
 ## Repro

@@ -66,7 +66,7 @@ fails a fixture on that warning. The program is correct, and with gcc 13 it
 runs and prints the right answer.
 
 **Discovered:** 2026-10-13, prototyping
-[generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D1), on
+[generic-zipper-plan](generic-zipper-plan.md) (its D1), on
 `main` at v0.64.4 (`704cc531`).
 
 ## Repro

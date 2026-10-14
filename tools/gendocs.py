@@ -2173,7 +2173,8 @@ def emit_pack_api(modules, pack_dir, *, section='api', slug_prefix=''):
                 prose=packlib.strip_tags(content)),
         }
         source = module.get('file_path')
-        dates = page_dates.get(Path(source)) if source else {}
+        # A module with no git history yet (new, uncommitted) has no dates.
+        dates = (page_dates.get(Path(source)) if source else None) or {}
         for key in ('added', 'updated'):
             if dates.get(key):
                 entry[key] = dates[key]

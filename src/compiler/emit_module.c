@@ -2153,6 +2153,27 @@ Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
                                      ctx->type_arena);
 }
 
+/* A constructor field's written type instantiated at the family's arguments
+ * -- through `fn` types too, which substitute_adt_app_type_owned leaves
+ * alone.  `(fn [S] (Cons A))` in `(Traversal (Cons float) float)` is
+ * `(fn [(Cons float)] (Cons float))`.  Arena-owned. */
+Type emit_type_through_adt_args(EmitCtx *ctx, const Type *t, const AdtDef *def,
+                                const Type *args, uint8_t n_args) {
+    if (!t) return emit_type_from_kind(TY_UNKNOWN);
+    if (!def || !def->type_params || !args) return *t;
+    AbiTypeBinding b[ABI_TYPE_BINDINGS_MAX];
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < def->n_type_params && i < n_args &&
+                        n < ABI_TYPE_BINDINGS_MAX; i++) {
+        if (!def->type_params[i]) continue;
+        b[n].name = def->type_params[i];
+        b[n].type = args[i];
+        n++;
+    }
+    if (n == 0) return *t;
+    return emit_abi_instantiate_type(t, b, n, ctx->type_arena);
+}
+
 /* `callee` NULL: the callee is slot 0 of the fat box the adapter receives as
  * its env -- a capturing closure's thunk, called with that box.  `callee`
  * EMIT_ADAPT_BARE_SLOT1: slot 1 holds a BARE function (an EX_FN_TO_FAT box),
@@ -4967,8 +4988,14 @@ void emit_flush_dead_base_ctor_traps(EmitCtx *ctx, Buf *out) {
             for (uint32_t a = 0; c0 && a < arity && a < c0->n_fields; a++) {
                 const char *fn2 = c0->fields[a].name;
                 const char *fct = adt_ctor_field_c_type(&c0->fields[a], true);
-                if (fn2)
-                    buf_printf(out, "    __r->%s = (%s)(_%u);\n", fn2, fct, a);
+                /* phantom-base-ctor-unmangled-field (generic-zipper-plan): the
+                 * struct declares the C-safe spelling (`branch?` ->
+                 * `branch_`, `make-node` -> `make_hynode`), so assign it. */
+                if (fn2) {
+                    char *mf = mangle_field_name(fn2);
+                    buf_printf(out, "    __r->%s = (%s)(_%u);\n", mf, fct, a);
+                    free(mf);
+                }
             }
             buf_puts(out, "    return __r;\n}\n");
             free(sname);
@@ -8782,7 +8809,21 @@ static bool emit_abi_scan_one_fn_value(EmitCtx *ctx, Binding *vb,
                 g_bhd_detect_return_dispatch = saved_detect;
             }
         }
-        if (!abi_changes && !instance_changes) return false;
+        /* plated-ops-closure-dispatch-baked (generic-zipper-plan): a LIFTED
+         * lambda handed on as a value -- `(fn [x : T] : bool (plate-branch?
+         * x))` stored into a record inside `zip/plated-ops [^Plated T]` --
+         * shares the enclosing generic's variables, so the active bindings
+         * apply to it by name.  Its signature (`int64_t -> bool`) is the same
+         * at every `T`, and `T := Tree` is not an application, so neither
+         * test above asked for a clone; the one shared thunk kept the
+         * representative instance the elaborator baked (zip/branch? answered
+         * the Rose instance's `true` for a Tree leaf).  A body that dispatches
+         * on a variable the spec grounds is cloned under the spec. */
+        bool lambda_dispatch = false;
+        if (!abi_changes && !instance_changes && vb->is_lifted_lambda && vfd->body &&
+            emit_subtree_dispatches_on_spec_tyvar(vfd->body, NULL, bindings, n_bindings))
+            lambda_dispatch = true;
+        if (!abi_changes && !instance_changes && !lambda_dispatch) return false;
 
         /* Per-instantiation monomorphization: skip inline-C bodies without
          * `__TUR_TY_<NAME>__` markers unless a slot escapes the carrier ABI
@@ -8811,7 +8852,7 @@ static bool emit_abi_scan_one_fn_value(EmitCtx *ctx, Binding *vb,
             v_args, v_nargs, v_result, NULL,
             /* instance-only clones share a signature, so they must be kept
              * apart by their type BINDINGS or they dedup into one body. */
-            !abi_changes && instance_changes);
+            !abi_changes && (instance_changes || lambda_dispatch));
         /* Newly created: recurse into the clone body so nested fn-values
          * specialize too.  (Already-interned specs were scanned when created.) */
         if (ctx->n_abi_specializations != before) {
@@ -9389,6 +9430,14 @@ static void emit_abi_scan_expr(EmitCtx *ctx, const Expr *e,
             break;
         case EX_GEN_DONE:
             emit_abi_scan_expr(ctx, e->as.gen_done_.gen_expr, items, n_items);
+            break;
+        case EX_RC_OF:
+            /* rc-of-operand-never-scanned (generic-zipper-plan): `(rc/of
+             * (make-struct N (:: (vec-new) (Vec rc<S>))))` -- a generic call
+             * under `rc/of` was never registered, so it was emitted as the
+             * carrier base, which nothing noted: the program linked only while
+             * some other call happened to keep `vec_hynew` alive. */
+            emit_abi_scan_expr(ctx, e->as.rc_of_.expr, items, n_items);
             break;
         default:
             break;

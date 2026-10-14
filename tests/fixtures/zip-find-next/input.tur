@@ -1,0 +1,92 @@
+;; generic-zipper-plan ZP2: zip/find-next searches forward in pre-order from a
+;; location -- the location itself first -- and returns None when the walk
+;; reaches the end.  Searching again from (zip/next found) finds the next
+;; match; zip/edit at a found location and zip/root rebuild the tree.
+(load "stdlib/str-build.tur")
+(load "stdlib/zip.tur")
+
+;; A minimal rose-like tree: a leaf holds an int, a node holds its children.
+(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+
+(defn tree-ops [] : (ZipOps Tree)
+  (zip/ops (fn [t : Tree] : bool (match t (Leaf _) false (Node _) true))
+           (fn [t : Tree] : (Cons Tree) (match t (Leaf _) (tnil) (Node cs) cs))
+           (fn [t : Tree cs : (Cons Tree)] : Tree (Node cs))))
+
+(defn n0 [] : Tree (Node (tnil)))
+(defn n1 [a : Tree] : Tree (Node (tcons-of a (tnil))))
+(defn n2 [a : Tree b : Tree] : Tree (Node (tcons-of a (tcons-of b (tnil)))))
+(defn n3 [a : Tree b : Tree c : Tree] : Tree
+  (Node (tcons-of a (tcons-of b (tcons-of c (tnil))))))
+(defn n4 [a : Tree b : Tree c : Tree d : Tree] : Tree
+  (Node (tcons-of a (tcons-of b (tcons-of c (tcons-of d (tnil)))))))
+
+;; Clojure's vector-zip printing: a node is [k1 k2 ...].
+(defn show-kids [cs : (Cons Tree)] : cstr
+  (if (tnil? cs)
+    ""
+    (if (tnil? (ttail cs))
+      (show (thead cs))
+      (str-concat (str-concat (show (thead cs)) " ") (show-kids (ttail cs))))))
+
+(defn show [t : Tree] : cstr
+  (match t
+    (Leaf v)  (int->str v)
+    (Node cs) (str-concat (str-concat "[" (show-kids cs)) "]")))
+
+(defn show-list [cs : (Cons Tree)] : cstr
+  (str-concat (str-concat "(" (show-kids cs)) ")"))
+
+(defn show-at [o : (Option (ZipLoc Tree))] : cstr
+  (match o
+    (None)   "None"
+    (Some z) (show (zip/node z))))
+
+(defn get [o : (Option (ZipLoc Tree))] : (ZipLoc Tree)
+  (match o
+    (Some z) z
+    (None)   (panic "no such location")))
+
+(defn leaf=? [n : int] : (fn [Tree] bool)
+  (fn [t : Tree] : bool
+    (match t
+      (Leaf v)  (= v n)
+      (Node _)  false)))
+
+(defn empty-node? [t : Tree] : bool
+  (match t
+    (Leaf _)  false
+    (Node cs) (tnil? cs)))
+
+(defn even-leaf? [t : Tree] : bool
+  (match t
+    (Leaf v)  (= (mod v 2) 0)
+    (Node _)  false))
+
+(defn count-from [z : (ZipLoc Tree) p : (fn [Tree] bool)] : int
+  (match (zip/find-next z p)
+    (None)   0
+    (Some f) (+ 1 (count-from (zip/next f) p))))
+
+(defn main [] : int
+  (let [t (n4 (Leaf 1) (n2 (Leaf 2) (n1 (Leaf 3))) (n0) (n2 (Leaf 4) (Leaf 3)))
+        z (zip/zipper (tree-ops) t)]
+    (let [three (get (zip/find-next z (leaf=? 3)))]
+      (println (show (zip/node three)))
+      (println (zip/depth three))
+      (println (show-list (zip/ancestors three)))
+      ;; a location that matches finds itself
+      (println (zip/depth (get (zip/find-next three (leaf=? 3)))))
+      ;; searching from the next location finds the second 3, at depth 2
+      (let [again (get (zip/find-next (zip/next three) (leaf=? 3)))]
+        (println (zip/depth again))
+        (println (show-list (zip/lefts again)))
+        (println (show-at (zip/find-next (zip/next again) (leaf=? 3))))))
+    (println (show-at (zip/find-next z (leaf=? 9))))
+    (println (show-at (zip/find-next z empty-node?)))
+    (println (count-from z even-leaf?))
+    ;; find, then edit there
+    (println (show (zip/root (zip/replace (get (zip/find-next z (leaf=? 4))) (Leaf 40)))))
+    ;; the end marker finds nothing
+    (println (show-at (zip/find-next (zip/next (zip/zipper (tree-ops) (Leaf 1))) (leaf=? 1)))))
+  0)

@@ -1,0 +1,84 @@
+;; generic-zipper-plan ZP4: the element cursor over a user binary tree.  A
+;; Traversal lists the tree's values in order (`parts`) and rebuilds the same
+;; shape from a list of values (`fill`).  A cursor steps through the values,
+;; edits them in O(1), and closes back into a tree; the original tree and
+;; every earlier cursor are unchanged.  The stock rose-tree label traversal
+;; does the same over float labels.
+(load "stdlib/zip.tur")
+
+(defdata Bin :heap :copy (Tip) (Br Bin int Bin))
+
+;; fill's state: the rebuilt subtree and the values it did not use
+(defstruct BFill :heap :copy [t : Bin rest : (Cons int)])
+
+(defn bin-parts [b : Bin acc : (Cons int)] : (Cons int)
+  (match b
+    (Tip)      acc
+    (Br l v r) (bin-parts l (tcons-of v (bin-parts r acc)))))
+
+(defn bin-fill [b : Bin xs : (Cons int)] : BFill
+  (match b
+    (Tip)      (BFill b xs)
+    (Br l v r) (let [fl (bin-fill l xs)
+                     mid (.rest fl)
+                     fr (bin-fill r (ttail mid))]
+                 (BFill (Br (.t fl) (thead mid) (.t fr)) (.rest fr)))))
+
+(defn bin-trav [] : (Traversal Bin int)
+  (zip/traversal (fn [b : Bin] : (Cons int) (bin-parts b (tnil)))
+                 (fn [b : Bin xs : (Cons int)] : Bin (.t (bin-fill b xs)))))
+
+(defn sum [b : Bin] : int
+  (match b
+    (Tip)      0
+    (Br l v r) (+ (sum l) (+ v (sum r)))))
+
+(defn leaf [v : int] : Bin (Br (Tip) v (Tip)))
+
+(defn cur [o : (Option (ZipCursor Bin int))] : (ZipCursor Bin int)
+  (match o
+    (Some c) c
+    (None)   (panic "no element")))
+
+(defn rcur [o : (Option (ZipCursor (Rose float) float))] : (ZipCursor (Rose float) float)
+  (match o
+    (Some c) c
+    (None)   (panic "no element")))
+
+(defn print-all [xs : (Cons int)] : int
+  (if (tnil? xs) 0 (do (println (thead xs)) (+ 1 (print-all (ttail xs))))))
+
+(defn label-sum [ks : (Cons (Rose float))] : float
+  (if (tnil? ks)
+    0.0
+    (+ (.label (thead ks)) (+ (label-sum (.kids (thead ks))) (label-sum (ttail ks))))))
+
+(defn main [] : int
+  ;; ((1) 2 (3))
+  (let [t  (Br (leaf 1) 2 (leaf 3))
+        c1 (cur (zip/cursor (bin-trav) t))
+        c2 (cur (zip/cursor-next c1))
+        e  (zip/cursor-set c2 200)]
+    (println (zip/cursor-focus c1))
+    (println (zip/cursor-focus c2))
+    (println (sum (zip/cursor-close e)))
+    (println (sum t))
+    ;; earlier cursors are still valid
+    (println (zip/cursor-focus c2))
+    (println (sum (zip/cursor-close c2)))
+    ;; move back over the edit and edit again
+    (let [e2 (zip/cursor-edit (cur (zip/cursor-prev e)) (fn [x : int] : int (* x 10)))]
+      (println (zip/cursor-focus e2))
+      (print-all (bin-parts (zip/cursor-close e2) (tnil))))
+    ;; the ends
+    (println (none? (zip/cursor-prev c1)))
+    (println (none? (zip/cursor-next (cur (zip/cursor-next c2))))))
+  ;; the rose-tree labels, in pre-order: 0.5 (1.25 (2.5)) (7.1)
+  (let [r (zip/rose 0.5 (tcons-of (zip/rose 1.25 (tcons-of (zip/rose 2.5 (tnil)) (tnil)))
+                                  (tcons-of (zip/rose 7.1 (tnil)) (tnil))))
+        c (rcur (zip/cursor (zip/rose-labels) r))
+        d (zip/cursor-set (rcur (zip/cursor-next (rcur (zip/cursor-next c)))) 3.25)]
+    (println (zip/cursor-focus d))
+    (println (label-sum (tcons-of (zip/cursor-close d) (tnil))))
+    (println (label-sum (tcons-of r (tnil)))))
+  0)

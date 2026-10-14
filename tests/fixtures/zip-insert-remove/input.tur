@@ -1,0 +1,100 @@
+;; generic-zipper-plan ZP1: zip/insert-left, insert-right, insert-child,
+;; append-child, and zip/remove returning the pre-order predecessor.  Each
+;; expected tree is the one Clojure's clojure.zip gives for the same edit on
+;; (vector-zip [1 [2 3] 4]): an insert does not move the location, and a
+;; remove lands on the deepest last descendant of the left sibling, or on the
+;; rebuilt parent when the removed node was a first child.
+(load "stdlib/str-build.tur")
+(load "stdlib/zip.tur")
+
+;; A minimal rose-like tree: a leaf holds an int, a node holds its children.
+(defdata Tree :heap :copy (Leaf int) (Node (Cons Tree)))
+
+(defn tree-ops [] : (ZipOps Tree)
+  (zip/ops (fn [t : Tree] : bool (match t (Leaf _) false (Node _) true))
+           (fn [t : Tree] : (Cons Tree) (match t (Leaf _) (tnil) (Node cs) cs))
+           (fn [t : Tree cs : (Cons Tree)] : Tree (Node cs))))
+
+(defn n0 [] : Tree (Node (tnil)))
+(defn n1 [a : Tree] : Tree (Node (tcons-of a (tnil))))
+(defn n2 [a : Tree b : Tree] : Tree (Node (tcons-of a (tcons-of b (tnil)))))
+(defn n3 [a : Tree b : Tree c : Tree] : Tree
+  (Node (tcons-of a (tcons-of b (tcons-of c (tnil))))))
+(defn n4 [a : Tree b : Tree c : Tree d : Tree] : Tree
+  (Node (tcons-of a (tcons-of b (tcons-of c (tcons-of d (tnil)))))))
+
+;; Clojure's vector-zip printing: a node is [k1 k2 ...].
+(defn show-kids [cs : (Cons Tree)] : cstr
+  (if (tnil? cs)
+    ""
+    (if (tnil? (ttail cs))
+      (show (thead cs))
+      (str-concat (str-concat (show (thead cs)) " ") (show-kids (ttail cs))))))
+
+(defn show [t : Tree] : cstr
+  (match t
+    (Leaf v)  (int->str v)
+    (Node cs) (str-concat (str-concat "[" (show-kids cs)) "]")))
+
+(defn show-list [cs : (Cons Tree)] : cstr
+  (str-concat (str-concat "(" (show-kids cs)) ")"))
+
+(defn show-at [o : (Option (ZipLoc Tree))] : cstr
+  (match o
+    (None)   "None"
+    (Some z) (show (zip/node z))))
+
+(defn get [o : (Option (ZipLoc Tree))] : (ZipLoc Tree)
+  (match o
+    (Some z) z
+    (None)   (panic "no such location")))
+
+(defn main [] : int
+  (let [t     (n3 (Leaf 1) (n2 (Leaf 2) (Leaf 3)) (Leaf 4))
+        z     (zip/zipper (tree-ops) t)
+        one   (get (zip/down z))
+        mid   (get (zip/right one))
+        two   (get (zip/down mid))
+        three (get (zip/right two))
+        four  (get (zip/right mid))]
+    ;; inserts beside a node: the location stays on the node
+    (let [a (zip/insert-left one (Leaf 0))]
+      (println (show (zip/node a)))
+      (println (show-list (zip/lefts a)))
+      (println (show (zip/root a))))
+    (let [b (zip/insert-right one (Leaf 5))]
+      (println (show (zip/node b)))
+      (println (show-at (zip/right b)))
+      (println (show (zip/root b))))
+    ;; two inserts on the same side keep their order
+    (println (show (zip/root (zip/insert-left (zip/insert-left three (Leaf 8)) (Leaf 9)))))
+    (println (show (zip/root (zip/insert-right (zip/insert-right one (Leaf 8)) (Leaf 9)))))
+    ;; children added to a branch
+    (println (show (zip/node (zip/insert-child mid (Leaf 9)))))
+    (println (show (zip/root (zip/insert-child mid (Leaf 9)))))
+    (println (show (zip/root (zip/append-child mid (Leaf 9)))))
+    (println (show (zip/root (zip/append-child (zip/zipper (tree-ops) (n0)) (Leaf 9)))))
+    ;; remove: a node with a leaf left sibling lands on it
+    (let [r (zip/remove three)]
+      (println (show (zip/node r)))
+      (println (show (zip/root r)))
+      (println (show (zip/node (zip/next r)))))
+    ;; a node whose left sibling is a branch lands on its deepest last node
+    (let [r (zip/remove four)]
+      (println (show (zip/node r)))
+      (println (show (zip/root r))))
+    (let [r (zip/remove mid)]
+      (println (show (zip/node r)))
+      (println (show (zip/root r))))
+    ;; a first child lands on the rebuilt parent
+    (let [r (zip/remove two)]
+      (println (show (zip/node r)))
+      (println (show (zip/root r))))
+    (let [r (zip/remove one)]
+      (println (show (zip/node r)))
+      (println (zip/depth r))
+      (println (show (zip/root r))))
+    ;; removing every child of a branch leaves an empty branch
+    (println (show (zip/root (zip/remove (zip/remove three)))))
+    (println (show t)))
+  0)
