@@ -5,6 +5,7 @@
 #include "globals.h"      /* compiler config globals */
 #include "cps.h"          /* cps_visit_children (ownership provenance walk) */
 #include "diag.h"         /* diag_file_path (emit_site_push_text) */
+#include "emit_cps_ir.h"  /* emit_cps_ir_addr_taken_any (emit_fn_value_calls_sited) */
 
 /* ------------ helpers ------------ */
 
@@ -1828,8 +1829,10 @@ bool closure_body_inline_c_touches_env(const struct Closure *c) {
  * `tur_panic(` (vec-get's bounds check, grid-set!'s)?  Such a body is given
  * its caller's site: a direct call sets it around the call
  * (emit_site_set_text) and the body's `tur_panic` reads it (emit_fns.c).
- * `tur_panic_at(` carries a site of its own and is not matched; a closure is
- * entered through a value, with nothing set, so it is left alone. */
+ * `tur_panic_at(` carries a site of its own and is not matched.  A closure
+ * (a lambda) is left alone: a lambda's body is Turmeric, and the direct calls
+ * in it set their own sites; a named fn entered through a value is sited by
+ * the call through the value (site_fn_value_call, emit_expr.c). */
 bool fn_def_panics_in_inline_c(const FnDef *fd) {
     if (!fd || fd->closure || !fd->body || fd->body->kind != EX_INLINE_C) return false;
     const InlineC *ic = fd->body->as.inline_c_.inline_c;
@@ -1840,8 +1843,85 @@ bool fn_def_panics_in_inline_c(const FnDef *fd) {
         if (memcmp(ic->code.p + i, needle, nl) == 0) return true;
     return false;
 }
-bool binding_panics_in_inline_c(const Binding *b) {
-    return b && b->is_global && fn_def_panics_in_inline_c(b->source_fn_def);
+/* The instance methods of `items` (and of a defmodule's body) whose inline-C
+ * body panics, appended to ctx->inst_panic_bindings by the binding each call
+ * site resolves to (the method FnDef's own). */
+static void inst_panic_scan_items(EmitCtx *ctx, Expr **items, uint32_t n) {
+    for (uint32_t i = 0; i < n; i++) {
+        const Expr *it = items[i];
+        if (!it) continue;
+        if (it->kind == EX_DEFMODULE && it->as.defmodule_.mod) {
+            inst_panic_scan_items(ctx, it->as.defmodule_.mod->body,
+                                  it->as.defmodule_.mod->n_body);
+            continue;
+        }
+        if (it->kind != EX_INSTANCE_DEF || !it->as.instance_def_.instance) continue;
+        const TypeClassInstance *inst = it->as.instance_def_.instance;
+        for (uint8_t m = 0; m < inst->n_method_impls; m++) {
+            const FnDef *fd = inst->method_impls[m];
+            if (!fd || !fd->binding || !fn_def_panics_in_inline_c(fd)) continue;
+            const Binding **grown = (const Binding **)realloc(
+                (void *)ctx->inst_panic_bindings,
+                (ctx->n_inst_panic_bindings + 1) * sizeof *grown);
+            if (!grown) return;
+            ctx->inst_panic_bindings = grown;
+            ctx->inst_panic_bindings[ctx->n_inst_panic_bindings++] = fd->binding;
+        }
+    }
+}
+static bool inst_method_binding_panics(EmitCtx *ctx, const Binding *b) {
+    if (!ctx || !b->name || !b->name->name ||
+        strncmp(b->name->name, "__inst_", 7) != 0) return false;
+    if (!ctx->inst_panic_scanned) {
+        ctx->inst_panic_scanned = true;
+        const Expr *p = ctx->program_root;
+        if (p && p->kind == EX_PROGRAM)
+            inst_panic_scan_items(ctx, p->as.program.items, p->as.program.n);
+    }
+    for (uint32_t i = 0; i < ctx->n_inst_panic_bindings; i++)
+        if (ctx->inst_panic_bindings[i] == b) return true;
+    return false;
+}
+/* Does a direct call to `b` enter a body that raises a runtime panic?  A
+ * top-level defn's FnDef hangs off the binding; an instance method's is
+ * found through its definstance (inst_method_binding_panics), so
+ * `(checked-at x i)` dispatched to an inline-C method is sited too. */
+bool binding_panics_in_inline_c(EmitCtx *ctx, const Binding *b) {
+    if (!b || !b->is_global) return false;
+    if (b->source_fn_def) return fn_def_panics_in_inline_c(b->source_fn_def);
+    return inst_method_binding_panics(ctx, b);
+}
+
+/* Does a call through a FUNCTION VALUE in this unit set the panic site
+ * around itself?  Only when some panicking inline-C function is taken as a
+ * value somewhere in the program (`(apply2 vec-get v 9)`): the body such a
+ * call enters reads the slot, and with no fn value that could reach one, the
+ * two thread-local stores would buy nothing on every closure call.  One
+ * answer per unit, from the CPS classifier's address-taken pre-pass. */
+static bool defn_binding_panics_pred(const Binding *b) {
+    return b && b->is_global && b->source_fn_def &&
+           fn_def_panics_in_inline_c(b->source_fn_def);
+}
+bool emit_fn_value_calls_sited(EmitCtx *ctx) {
+    if (!ctx) return false;
+    if (!ctx->fn_value_sited)
+        ctx->fn_value_sited = emit_cps_ir_addr_taken_any(ctx->program_root,
+                                                         defn_binding_panics_pred) ? 2 : 1;
+    return ctx->fn_value_sited == 2;
+}
+
+/* Does a DIRECT call to `b` set its own site?  When the callee's body may
+ * panic -- except inside a `__poly_N` forwarding wrapper in a unit whose
+ * fn-value calls are sited: the wrapper's call is the compiler's, written at
+ * the line the program handed the function over, and the program's own call
+ * through the value (`(f x)`, sited by site_fn_value_call) has already set
+ * the line a reader wants.  Both engines then name that line.  In a unit
+ * with no sited fn-value calls the wrapper's own site stands: the line the
+ * function was handed over at beats the runtime's. */
+bool emit_direct_call_sited(EmitCtx *ctx, const Binding *b) {
+    if (!binding_panics_in_inline_c(ctx, b)) return false;
+    if (ctx && ctx->in_forwarding_wrapper && emit_fn_value_calls_sited(ctx)) return false;
+    return true;
 }
 
 /* The source position a panic in `call`'s callee should name: the macro use

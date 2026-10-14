@@ -10387,10 +10387,11 @@ void ensure_r7rs_cast_helper(EmitCtx *ctx) {
         "static tur_tagged_t (*tur_r7rs_type_error_hook)(const char *, const char *, tur_tagged_t);\n"
         "#endif\n"
         "static void __tur_any_cast_check_r7(tur_tagged_t v, int64_t want,\n"
-        "                                    const char *who, const char *what) {\n"
+        "                                    const char *who, const char *what,\n"
+        "                                    const char *file, int line) {\n"
         "    if (TUR_GETTAG(v) != want && tur_r7rs_type_error_hook)\n"
         "        (void)tur_r7rs_type_error_hook(who, what, v);\n"
-        "    __tur_any_cast_check(TUR_GETTAG(v), want);\n"
+        "    __tur_any_cast_check_at(TUR_GETTAG(v), want, file, line);\n"
         "}\n");
 }
 
@@ -18654,8 +18655,12 @@ static void emit_hoisted_includes(Buf *out) {
  * runtime's.  Two stores per call, nothing on entry; the slot is read only
  * when a panic happens.  A sited call among the arguments sets and clears
  * its own before the outer call runs, so the outer then has none and names
- * the runtime's line, as before -- never another call's; a body entered
- * through a function value (nothing set) does the same.
+ * the runtime's line, as before -- never another call's.  A call through a
+ * function value sets its own site too, in a unit that takes a panicking
+ * inline-C function as a value anywhere (emit_fn_value_calls_sited); in any
+ * other unit no such body can be reached that way and closure calls pay
+ * nothing.  An instance method's call is sited like a defn's
+ * (binding_panics_in_inline_c finds the method's FnDef through its instance).
  *
  * Emitted AFTER the fixed preamble, with the hoisted includes, on purpose.
  * Nothing in the runtime archive reads the slot, and a thread-local inside
@@ -21162,6 +21167,7 @@ static int emit_program_inner(Buf *out, const Expr *program) {
     }
     free(ctx.fatbox_keys);
     free(ctx.fatbox_names);
+    free((void *)ctx.inst_panic_bindings);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);
@@ -22895,6 +22901,7 @@ static int emit_implementation_inner(Buf *out, const char *module_name, const Ex
     }
     free(ctx.fatbox_keys);
     free(ctx.fatbox_names);
+    free((void *)ctx.inst_panic_bindings);
     for (uint32_t i = 0; i < ctx.n_exbox_dict_names; i++) free(ctx.exbox_dict_names[i]);
     free(ctx.exbox_dict_names);
     for (uint32_t i = 0; i < ctx.n_env_struct_names; i++) free(ctx.env_struct_fn_typedefs[i]);

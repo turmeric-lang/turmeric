@@ -3200,8 +3200,13 @@ void turi_host_exit_guard(TuriEnv *env, const char *msg) {
  * a setjmp boundary (or no boundary) the old behaviour is preserved (longjmp /
  * fire-defers-and-exit). */
 /* panic-location-names-the-runtime-not-the-call-site: the `(panic ...)`
- * node's span, set by EX_PANIC for the one call it makes, and a failed
- * `cast`'s; every other runtime panic has none.  Printed as the compiled path prints it --
+ * node's span, set by EX_PANIC for the one call it makes, a failed `cast`'s,
+ * and -- around a native leaf call -- the call's own, so a native that
+ * panics (vec-get's bounds check) names the line that called it.  The leaf
+ * call SAVES the slot and restores it afterwards rather than clearing it: a
+ * native HOF that calls back into a native (turi_call) or into a Turmeric
+ * closure whose own leaf calls come and go still names the HOF's call when
+ * a later native panics inside it.  Printed as the compiled path prints it --
  * `panic at boom.tur:3: msg`, the file's basename. */
 static _Thread_local Span g_panic_site;
 static const char *panic_site_base(Span sp) {
@@ -9123,8 +9128,17 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     continue;
                 }
                 /* Leaf (native / inline-C): dispatched synchronously via
-                 * eval_apply, exactly as the DK_CALL_ARG leaf path does. */
+                 * eval_apply, exactly as the DK_CALL_ARG leaf path does.
+                 * panic-location-names-the-runtime-not-the-call-site: the
+                 * DK_NATIVE_RESUME frame beneath carries the form that asked
+                 * for this application (`(tvar/modify tv f)`), so a native `f`
+                 * that panics names that form's line. */
+                Span saved_site = g_panic_site;
+                if (cl->native && len > 0 && st[len - 1].kind == DK_NATIVE_RESUME &&
+                    st[len - 1].expr)
+                    g_panic_site = st[len - 1].expr->span;
                 cur = eval_apply(env, cl, acc, n);
+                g_panic_site = saved_site;
                 TURI_DRIVE_FREE(acc); descending = false; continue;
             }
             uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
@@ -9911,7 +9925,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 s->tv = tv; s->old = old;
                 NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                 nr->resume = tvar_modify_resume; nr->state = s;
-                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .expr = control, .aux = nr }));
                 apply_fn   = fn;
                 apply_args = (TuriValue *)malloc(sizeof(TuriValue));
                 apply_args[0] = turi_int(old);
@@ -10012,7 +10026,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     s->let_frames = d.let_frames; s->n_let = d.n_let;
                     NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                     nr->resume = serial_receiver_resume; nr->state = s;
-                    DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .expr = control, .aux = nr }));
                     if (d.is_fold) {
                         /* SR N4 Slice 7: is_pure -- fold the reified context over
                          * the pure value on the work-stack (DK_CONT_FOLD). */
@@ -10129,7 +10143,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 s->form = is0 ? "shift0" : "shift";
                 NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                 nr->resume = abortive_shift_resume; nr->state = s;
-                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .expr = control, .aux = nr }));
                 apply_fn   = fn;
                 apply_args = (TuriValue *)malloc(sizeof(TuriValue));
                 apply_args[0] = v;
@@ -10655,11 +10669,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * check, turi_runtime_panic) names this call; the site is
                      * consumed by the panic or cleared after the call, so no
                      * later panic inherits it. */
+                    Span saved_site = g_panic_site;
                     if (cl->native)
                         g_panic_site = (top->expr->kind == EX_CALL && top->expr->as.call_.site.line)
                                            ? top->expr->as.call_.site : top->expr->span;
                     cur = eval_apply(env, cl, acc, n);
-                    g_panic_site = SPAN_UNKNOWN;
+                    g_panic_site = saved_site;
                     TURI_DRIVE_FREE_EP(acc_epoch, acc); len--;
                     break;
                 }

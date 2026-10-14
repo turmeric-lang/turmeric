@@ -7903,7 +7903,7 @@ static char *registry_callee_name(CE *ce, const Binding *fn) {
  * (cps_site_clear); the arguments are atoms, so nothing between the two is a
  * call.  Malloc'd. */
 static char *cps_site_set(CE *ce, const Binding *fb, const Expr *call_expr) {
-    if (!call_expr || !binding_panics_in_inline_c(fb)) return NULL;
+    if (!call_expr || !emit_direct_call_sited(ce->ctx, fb)) return NULL;
     char *set = emit_site_set_text(ce->ctx, emit_call_site_span(call_expr));
     if (set) ce_line(ce, "%s;", set);
     return set;
@@ -8093,8 +8093,15 @@ static bool e2a_fallback_ok(const Type *sig, uint32_t n) {
 /* The fallback's `return` statement: slot 0 called at its slot types, the
  * result delivered to `thread` as the word. */
 static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint32_t n,
-                               const char *box, const char *thread) {
+                               const char *box, const char *thread, const Expr *call) {
     Type tmp;
+    /* panic-location-names-the-runtime-not-the-call-site: the slot-0 call may
+     * enter a sited inline-C body (an unregistered fn value is exactly a body
+     * the CPS backend never emits -- vec-get's); in a unit that takes such a
+     * function as a value, set this call's site around it, as the direct
+     * emitter's site_fn_value_call does. */
+    char *site = (call && emit_fn_value_calls_sited(ce->ctx))
+                     ? emit_site_set_text(ce->ctx, emit_call_site_span(call)) : NULL;
     Buf ps, av; buf_init(&ps); buf_init(&av);
     for (uint32_t i = 0; i < n; i++) {
         const Type *pt = e2a_slot_type(sig, (int)i, &tmp);
@@ -8130,12 +8137,17 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     const Type *rt = e2a_slot_type(sig, -1, &tmp);
     Buf out; buf_init(&out);
     if (rt->kind == TY_NIL) {
-        buf_printf(&out, "((void (*)(void *%s))(intptr_t)%s[0])((void *)%s%s); return dk_run(%s, (intptr_t)0);",
-                   ps.data, box, box, av.data, thread);
+        if (site) buf_printf(&out, "%s; ", site);
+        buf_printf(&out, "((void (*)(void *%s))(intptr_t)%s[0])((void *)%s%s);",
+                   ps.data, box, box, av.data);
+        if (site) buf_puts(&out, " tur_site_clear();");
+        buf_printf(&out, " return dk_run(%s, (intptr_t)0);", thread);
     } else {
         const char *rc = thunk_result_slot_c_name(*rt);
         Buf cl; buf_init(&cl);
+        if (site) buf_printf(&cl, "({ %s; %s __tur_sr = ", site, rc);
         buf_printf(&cl, "((%s (*)(void *%s))(intptr_t)%s[0])((void *)%s%s)", rc, ps.data, box, box, av.data);
+        if (site) buf_puts(&cl, "; tur_site_clear(); __tur_sr; })");
         buf_putc(&cl, '\0');
         size_t rL = strlen(rc);
         if (rt->kind == TY_FLOAT || rt->kind == TY_FLOAT64 || rt->kind == TY_FLOAT32) {
@@ -8150,6 +8162,7 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
     buf_putc(&out, '\0');
     char *r = strdup(out.data);
     buf_free(&out); buf_free(&ps); buf_free(&av);
+    free(site);
     return r;
 }
 
@@ -8171,7 +8184,7 @@ static char *e2a_fallback_stmt(CE *ce, const Type *sig, const CAtom *args, uint3
 static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
                                   const CAtom *args, const char *argv, uint32_t n,
                                   const char *thread, const char *tag,
-                                  const Type *sig) {
+                                  const Type *sig, const Expr *call) {
     char env_cast[512];
     e2a_cast(ce->ctx, env_cast, sizeof env_cast, "void *, ", sig, n);
     char thin_cast[512];
@@ -8191,7 +8204,7 @@ static void emit_e2a_fat_dispatch(CE *ce, const char *callee, const char *who,
         ce_line(ce, "  if (__e2ah == (void *)__tur_fatbox_keep || __e2ah == NULL) {");
         ce_line(ce, "    __tur_cps_fn __e2as = __tur_cps_lookup(__e2ab[1]);");
         ce_line(ce, "    if (__e2as) return ((%s)__e2as)(%s%s%s); }", thin_cast, av, sep, thread);
-        char *fb = e2a_fallback_stmt(ce, sig, args, n, "__e2ab", thread);
+        char *fb = e2a_fallback_stmt(ce, sig, args, n, "__e2ab", thread, call);
         ce_line(ce, "  %s }", fb);   /* an unregistered value: the direct call */
         free(fb);
     } else {
@@ -8213,10 +8226,18 @@ static TypeKind fncps_arg_kind(const Expr *call, uint32_t i) {
         ? call->as.call_.args[i]->type.kind : TY_INT;
 }
 
-static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
+static void fncps_direct_call(CE *ce, Buf *out, const char *pf, char *const *args,
                               uint32_t n, const Expr *call) {
     TypeKind rk = call ? call->type.kind : TY_INT;
     Buf ps, av; buf_init(&ps); buf_init(&av);
+    /* panic-location-names-the-runtime-not-the-call-site: the `.fn` entry may
+     * be a sited inline-C body; see e2a_fallback_stmt.  The value is an
+     * int64 carrier in every arm but the float ones. */
+    char *site = (call && emit_fn_value_calls_sited(ce->ctx))
+                     ? emit_site_set_text(ce->ctx, emit_call_site_span(call)) : NULL;
+    Buf *dst = out;
+    Buf inner;
+    if (site) { buf_init(&inner); dst = &inner; }
     for (uint32_t i = 0; i < n; i++) {
         /* The wrapper `.fn` holds keeps each parameter's own C type. */
         const char *pc = cps_ir_fncps_arg_ctype(fncps_arg_kind(call, i));
@@ -8234,23 +8255,31 @@ static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
     }
     buf_putc(&ps, '\0'); buf_putc(&av, '\0');
     const char *rc = cps_ir_fncps_arg_ctype(rk);
+    bool rk_flt = rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32;
     if (rk == TY_NIL)
-        buf_printf(out, "(((void(*)(void*%s))%s.fn)(%s.env%s), (int64_t)0)",
+        buf_printf(dst, "(((void(*)(void*%s))%s.fn)(%s.env%s), (int64_t)0)",
                    ps.data, pf, pf, av.data);
-    else if (rk == TY_FLOAT || rk == TY_FLOAT64 || rk == TY_FLOAT32)
+    else if (rk_flt)
         /* The value at its own type: the delivery stores it into the slot by
          * its bits (slot_store), or a join parameter of that type takes it. */
-        buf_printf(out, "((%s(*)(void*%s))%s.fn)(%s.env%s)",
+        buf_printf(dst, "((%s(*)(void*%s))%s.fn)(%s.env%s)",
                    rc, ps.data, pf, pf, av.data);
     else if (rc[strlen(rc) - 1] == '*')
-        buf_printf(out, "((int64_t)(intptr_t)((%s(*)(void*%s))%s.fn)(%s.env%s))",
+        buf_printf(dst, "((int64_t)(intptr_t)((%s(*)(void*%s))%s.fn)(%s.env%s))",
                    rc, ps.data, pf, pf, av.data);
     else if (strcmp(rc, "int64_t") != 0)
-        buf_printf(out, "((int64_t)((%s(*)(void*%s))%s.fn)(%s.env%s))",
+        buf_printf(dst, "((int64_t)((%s(*)(void*%s))%s.fn)(%s.env%s))",
                    rc, ps.data, pf, pf, av.data);
     else
-        buf_printf(out, "((int64_t(*)(void*%s))%s.fn)(%s.env%s)",
+        buf_printf(dst, "((int64_t(*)(void*%s))%s.fn)(%s.env%s)",
                    ps.data, pf, pf, av.data);
+    if (site) {
+        buf_putc(&inner, '\0');
+        buf_printf(out, "({ %s; %s __tur_sr = %s; tur_site_clear(); __tur_sr; })",
+                   site, rk_flt ? rc : "int64_t", inner.data);
+        buf_free(&inner);
+        free(site);
+    }
     buf_free(&ps); buf_free(&av);
 }
 
@@ -9238,7 +9267,7 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 buf_free(&sc);
                 /* Pure fallback: call the direct entry and deliver the result. */
                 Buf pv; buf_init(&pv);
-                fncps_direct_call(&pv, pf, av, na, t->as.tailcall.call_expr);
+                fncps_direct_call(ce, &pv, pf, av, na, t->as.tailcall.call_expr);
                 buf_putc(&pv, '\0');
                 emit_deliver(ce, &t->as.tailcall.kont, pv.data);
                 buf_free(&pv);
@@ -9264,7 +9293,8 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                 if (e2a_call_is_fat(t->as.tailcall.fn, &t->as.tailcall.fn_atom)) {
                     emit_e2a_fat_dispatch(ce, pf, pf, t->as.tailcall.args, argv,
                                           t->as.tailcall.n, thread,
-                                          "E2a threaded fn-value", e2sig);
+                                          "E2a threaded fn-value", e2sig,
+                                          t->as.tailcall.call_expr);
                     free(pf); free(argv);
                     break;
                 }
@@ -11178,7 +11208,7 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
                 pf, sc.data);
         buf_free(&sc);
         Buf dc; buf_init(&dc);
-        fncps_direct_call(&dc, pf, av, na, call->as.tailcall.call_expr);
+        fncps_direct_call(ce, &dc, pf, av, na, call->as.tailcall.call_expr);
         buf_putc(&dc, '\0');
         /* The join reads its parameter out of the slot: a float by its bits. */
         TypeKind drk = call->as.tailcall.call_expr
@@ -11203,7 +11233,8 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         if (e2a_call_is_fat(call->as.tailcall.fn, &call->as.tailcall.fn_atom)) {
             emit_e2a_fat_dispatch(ce, fn, fn, call->as.tailcall.args, argv_cps,
                                   call->as.tailcall.n, frame,
-                                  "E2a threaded fn-value heap join", e2sig);
+                                  "E2a threaded fn-value heap join", e2sig,
+                                  call->as.tailcall.call_expr);
             free(argv_cps);
         } else {
         char cast[512];
@@ -13736,6 +13767,14 @@ bool emit_cps_ir_emits_binding(const Expr *program, const Binding *b) {
     if (!program || !b) return false;
     ensure_S(program);
     return binding_in_s(b);
+}
+
+bool emit_cps_ir_addr_taken_any(const Expr *program, bool (*pred)(const Binding *)) {
+    if (!program || !pred) return false;
+    ensure_S(program);
+    for (int i = 0; i < g_addr_taken_n; i++)
+        if (pred(g_addr_taken[i])) return true;
+    return false;
 }
 
 /* G1 (cps-backend-generic-monomorph-classification-plan): analysis-only probe.

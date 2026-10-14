@@ -1,5 +1,45 @@
 # A panic's "at" location names the runtime, not the Turmeric call site
 
+**Resolved 2026-10-14: the three shapes left open are closed, and the
+report is archived.** A sited inline-C body entered THROUGH A FUNCTION VALUE
+names the call through the value: `(f v 9)` inside a HOF prints `panic at
+input.tur:8` on both engines where the compiled program printed the runtime's
+line. The direct emitter's four fat/thin call-through-a-value arms
+(`site_fn_value_call`, `src/compiler/emit_expr.c`) and the CPS backend's two
+(`e2a_fallback_stmt`, `fncps_direct_call`, `src/compiler/emit_cps_ir.c`) set
+the thread's site around the call in the same statement-expression shape a
+direct sited call uses -- but only in a unit that takes a panicking inline-C
+function as a value ANYWHERE (`emit_fn_value_calls_sited`, answered once per
+unit from the CPS classifier's address-taken pre-pass,
+`emit_cps_ir_addr_taken_any`): in any other unit no such body can be reached
+through a value, and closure calls pay nothing. Where it is on, a 100M-turn
+loop of a call through a fn value measured no difference (5.4-5.6 s sited
+against 5.7-5.8 s not, run-to-run spread). A `__poly_N` forwarding wrapper's
+own forwarding call is NOT sited in such a unit (`emit_direct_call_sited`,
+`ctx->in_forwarding_wrapper`): it would have named the line the program
+handed the function over, where the interpreter names the program's `(f x)`.
+An INSTANCE METHOD whose inline-C body panics, reached by dispatch, names the
+dispatching call: the method's binding carries no `source_fn_def`, so
+`binding_panics_in_inline_c` finds its FnDef through its definstance
+(`inst_method_binding_panics`, `src/compiler/emit_core.c`). The r7rs raising
+check (`__tur_any_cast_check_r7`) takes the cast's file and line and panics
+through `__tur_any_cast_check_at` when no hook is installed. Interpreted, the
+driver's native leaf call SAVES and restores the site instead of clearing it,
+so a native HOF that calls back into a native (`turi_call`) or whose Turmeric
+callback's own leaf calls come and go still names the HOF's call when a later
+native panics inside it; the native-resume apply (`tvar/modify`, `shift`, the
+serial receiver) names the requesting form, carried on its `DK_NATIVE_RESUME`
+frame. Pinned by `tests/fixtures/panic-site-through-fn-value` (both engines),
+`panic-site-through-poly-fn-value` (the CPS backend and the forwarding
+wrapper; compiled) and `panic-site-through-instance-dispatch` (compiled).
+No `expected.c` moved. Known and accepted: a partial application
+(`(vec-get v)`) names the line the partial was made, on both engines; the
+site is per unit, so a call from one unit into another's sited body names the
+runtime's line; and a stdlib HOF that is a native under `--interpret` but
+Turmeric-bodied compiled names the HOF's call interpreted and the HOF's own
+`(f x)` line compiled. `docs/guides/debugging-guide.md` says the location is
+the call's in every shape.
+
 **Narrowed a third time 2026-10-09: the Saffron dynamic runtime names the
 program's line, on both back ends.** `(+ (* a 2) b)` with `b` a string
 printed `panic at <emitted>.c:2888: +: no operator for a cstr argument`
