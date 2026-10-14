@@ -7,8 +7,9 @@
 # engines  comma list of cc, jit, interp.  A program with user inline C is
 #          cc,jit only: the interpreter does not run inline C (run-turi.sh
 #          skips such programs for the same reason).
-# check    `exact`, or `cols=N,M,...` for self-timing programs: only those
-#          comma-separated columns of each output line are compared.
+# check    `exact`; or, for self-timing programs, `cols=N,M,...` (compare only
+#          those comma-separated columns of each line) or `keep-lines=P:N,M`
+#          (compare only lines N, M of every group of P).
 #
 # Pins live in benchmarks/audit/expected/ (a fixture's pin is its own
 # expected.stdout).  Turmeric programs only: performance-comparison/ is not in
@@ -30,7 +31,7 @@ benchmarks/bind-option.tur                   cc,jit         exact   # C ceiling:
 benchmarks/fmap-vec.tur                      cc,jit         exact   # C ceiling: fmap-vec-baseline.c
 benchmarks/bench-backtrack-n-queens.tur      cc,jit         exact   # all inline C: a cc control, not a Turmeric number
 benchmarks/bench-clone-overhead.tur          cc,jit         exact
-benchmarks/bench-dfs-queens.tur              cc,jit         exact
+benchmarks/bench-dfs-queens.tur              cc,jit         keep-lines=5:1,2,4
 benchmarks/bench-logic-query.tur             cc,jit         exact
 benchmarks/bench-logic-subst.tur             cc,jit         cols=1,2,3
 benchmarks/bench-logic-subst-split.tur       cc,jit         cols=1,2,3
@@ -43,17 +44,18 @@ benchmarks/hamt-bench-lookup.tur             cc,jit         exact
 benchmarks/hamt-bench-snapshot.tur           cc,jit         exact
 benchmarks/hamt-bench-transient.tur          cc,jit         exact   # R-5: compare with hamt-bench-insert
 
-# --- tests/benchmarks: one fmap per process, so effectively startup cost ----
+# --- tests/benchmarks: one fmap per process, so effectively startup cost.
+# They print nothing, so their (empty) pins check only a clean exit. --------
 tests/benchmarks/hkt-dict-pass.tur           cc,jit         exact
 tests/benchmarks/scheduler-mt-vs-st.tur      cc,jit         exact
 tests/benchmarks/workstealing-deque-bench.tur cc,jit        exact
 
 # --- examples/: the closest thing to real programs (compile latency; runs are ms) ---
 examples/cellular-automata.tur               cc,jit         exact
-examples/cli_args_demo.tur                   cc,jit,interp  exact
+examples/cli_args_demo.tur                   cc,jit         exact   # imports inline C
 examples/datalog/blog.tur                    cc,jit         exact
 examples/datalog/datalog.tur                 cc,jit         exact
-examples/datalog/indexed.tur                 cc,jit         exact
+examples/datalog/indexed.tur                 cc             exact   # jit answers differently: docs/reported/jit-string-literal-identity-differs-from-cc.md
 examples/datalog/minimal.tur                 cc,jit         exact
 examples/datalog/query.tur                   cc,jit         exact
 examples/minikanren/src/main.tur             cc,jit         exact

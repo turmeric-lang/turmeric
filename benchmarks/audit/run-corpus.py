@@ -25,9 +25,10 @@ a fixture is its own expected.stdout; for everything else it lives under
 benchmarks/audit/expected/.  `--pin` writes missing pins (two runs, which must
 agree), and never overwrites one unless `--repin`.
 
-Self-timing programs print nanosecond columns that cannot be pinned verbatim.
-Their corpus line says `cols=1,2,5`: only those comma-separated columns of each
-output line are compared (lines without a comma are compared whole).
+Self-timing programs print nanosecond values that cannot be pinned verbatim.
+A corpus line saying `cols=1,2,5` compares only those comma-separated columns
+of each output line (lines without a comma are compared whole);
+`keep-lines=5:1,2,4` compares only lines 1, 2 and 4 of every group of five.
 
 It refuses a sanitized `tur` (the Debug build): every number would be ASan's
 shadow-memory bookkeeping.  The probe reads symbol tables with `nm`, the way
@@ -110,8 +111,9 @@ def read_corpus(path):
             bad = [e for e in engs if e not in ENGINES]
             if bad:
                 sys.exit(f"{path}:{lineno}: unknown engine(s) {bad}")
-            if check != "exact" and not re.fullmatch(r"cols=\d+(,\d+)*", check):
-                sys.exit(f"{path}:{lineno}: check must be `exact` or `cols=N,M,...`")
+            if check != "exact" and not re.fullmatch(r"(cols=|keep-lines=\d+:)\d+(,\d+)*", check):
+                sys.exit(f"{path}:{lineno}: check must be `exact`, `cols=N,M,...` "
+                         "or `keep-lines=P:N,M,...`")
             if not os.path.exists(os.path.join(ROOT, prog_path)):
                 sys.exit(f"{path}:{lineno}: no such program {prog_path}")
             progs.append(Program(prog_path, engs, check, timeout, note.strip(), lineno))
@@ -121,6 +123,12 @@ def read_corpus(path):
 def masked(text, check):
     if check == "exact":
         return text
+    if check.startswith("keep-lines="):
+        # keep-lines=P:N,M -- in each group of P lines keep lines N, M (1-based).
+        period, _, idx = check[len("keep-lines="):].partition(":")
+        keep = {int(i) - 1 for i in idx.split(",")}
+        lines = text.splitlines()
+        return "\n".join(l for i, l in enumerate(lines) if i % int(period) in keep) + "\n"
     keep = [int(c) - 1 for c in check[len("cols="):].split(",")]
     out = []
     for line in text.splitlines():

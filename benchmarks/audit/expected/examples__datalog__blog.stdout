@@ -1,0 +1,26 @@
+=== Blog Posts ===
+--- Post 101 ---
+  Title:
+Hello World
+  Author:
+Alice
+  Body:
+My first post!
+  Comments:
+Bob
+Nice post!
+Alice
+Thanks!
+--- Post 102 ---
+  Title:
+Turmeric Tips
+  Author:
+Bob
+  Body:
+Use defdata for ADTs.
+  Comments:
+=== Alice's Posts ===
+101
+=== Comments on Post 101 ===
+Nice post!
+Thanks!
