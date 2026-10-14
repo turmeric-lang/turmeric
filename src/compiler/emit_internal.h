@@ -145,6 +145,11 @@ void        sym_codegen_emit(Buf *out, bool external_weak);
 /* r7rs-prelude-split-wrong-symbols-on-windows: forget the records the library
  * unit of a split build defined (called when a split starts and ends). */
 void        sym_codegen_split_clear(void);
+/* r7rs-split-units-each-compile-the-runtime: record one, and read them back,
+ * for the cached library unit (emit_split_carry_save / _load). */
+void        sym_codegen_split_note(const char *cid);
+uint32_t    sym_codegen_split_count(void);
+const char *sym_codegen_split_at(uint32_t i);
 /* SYM5: note that str->sym is defined in this TU (gates the seeding ctor). */
 void        sym_codegen_note_intern_used(void);
 

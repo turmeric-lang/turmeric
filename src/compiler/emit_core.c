@@ -7166,7 +7166,7 @@ static bool split_lib_defines_sym(const char *cid) {
     return false;
 }
 
-static void split_lib_note_sym(const char *cid) {
+void sym_codegen_split_note(const char *cid) {
     if (split_lib_defines_sym(cid)) return;
     if (g_n_split_lib_syms == g_cap_split_lib_syms) {
         uint32_t nc = g_cap_split_lib_syms ? g_cap_split_lib_syms * 2 : 64;
@@ -7176,6 +7176,13 @@ static void split_lib_note_sym(const char *cid) {
         g_cap_split_lib_syms = nc;
     }
     g_split_lib_syms[g_n_split_lib_syms++] = strdup(cid);
+}
+
+/* r7rs-split-units-each-compile-the-runtime: the records, for the cached
+ * library unit (emit_split_carry_save). */
+uint32_t sym_codegen_split_count(void) { return g_n_split_lib_syms; }
+const char *sym_codegen_split_at(uint32_t i) {
+    return i < g_n_split_lib_syms ? g_split_lib_syms[i] : NULL;
 }
 
 void sym_codegen_emit(Buf *out, bool external_weak) {
@@ -7229,7 +7236,7 @@ void sym_codegen_emit(Buf *out, bool external_weak) {
             continue;
         }
         if (g_emit_split == EMIT_SPLIT_LIB || g_emit_split == EMIT_SPLIT_IMP) {
-            split_lib_note_sym(r->cid);
+            sym_codegen_split_note(r->cid);
             emit_split_note_export(r->cid);
         }
         const char *st = (g_emit_split == EMIT_SPLIT_CLIENT) ? "static const" : storage;

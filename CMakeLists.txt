@@ -1422,6 +1422,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_r7rs_prelude_split PROPERTIES TIMEOUT 720)
+# r7rs-split-units-each-compile-the-runtime: a warm split build reads the
+# library unit's emission back from the cache.  The program unit, the objects
+# it links and its output must be what an emitted library unit gives, and a
+# damaged entry must fall back to emitting it.
+add_test(
+  NAME tur_r7rs_split_lib_cache
+  COMMAND bash tests/check-r7rs-split-lib-cache.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_r7rs_split_lib_cache PROPERTIES TIMEOUT 720)
 # turi-call-frames-never-reclaimed: `tur --interpret` hands an activation's
 # call frame (and its let / match-arm frames) back when it returns uncaptured.
 # Runs one program with and without reclamation and asserts peak RSS halves.

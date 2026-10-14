@@ -6190,7 +6190,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
             if (fd->params[i] && strcmp(pc, "int64_t") != 0 &&
                 (type_uses_carrier_abi(resolved_spec_arg) ||
                  type_app_is_concrete_adt(&resolved_spec_arg)))
-                fd->params[i]->emit_byvalue_carrier_abi = true;
+                emit_note(fd->params[i])->emit_byvalue_carrier_abi = true;
         } else {
             /* Phase D: large structs use const T* ABI unless in inline-C or closure.
              * bare-fat-sink-poly-box-slot0-int64-mismatch.md: a ^fat param is a
@@ -6213,7 +6213,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
                 if (fd->params[i] &&
                     type_uses_carrier_abi(emit_resolve_type(ctx, param_ty)) &&
                     strcmp(pc, "int64_t") != 0)
-                    fd->params[i]->emit_byvalue_carrier_abi = true;
+                    emit_note(fd->params[i])->emit_byvalue_carrier_abi = true;
                 /* CONV-S1 seam 4 (carrier-held by-value-ADT receiver): the param
                  * signature is the int64 carrier (param_ty is the dispatch class
                  * var `a`), but the binding's elaborated type is a by-value
@@ -6227,7 +6227,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
                         (bt.kind == TY_ADT || bt.kind == TY_APP) &&
                         !type_is_heap_struct(bt) && !type_is_heap_adt(bt) &&
                         !type_uses_carrier_abi(bt))
-                        fd->params[i]->emit_carrier_holds_byval = true;
+                        emit_note(fd->params[i])->emit_carrier_holds_byval = true;
                     /* MB2 (constrained-hkt-forall-mode-b-plan): a dict-clone's
                      * poly-carrier param is the int64 carrier, but a concrete
                      * :heap-ADT / pointer binding type (`Point`) emits its env
@@ -6245,7 +6245,7 @@ static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
                      * meaning holds, so widening it can only remove straddles. */
                     if (btc && strcmp(btc, "int64_t") != 0 &&
                         strchr(btc, '*') != NULL)
-                        fd->params[i]->emit_carrier_holds_ptr = true;
+                        emit_note(fd->params[i])->emit_carrier_holds_ptr = true;
                 }
             }
         }

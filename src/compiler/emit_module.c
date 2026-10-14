@@ -1236,6 +1236,10 @@ void emit_split_set_mode(int mode) {
 
 const char *emit_split_refusal(void) { return g_split_refusal; }
 
+static const char SPLIT_SIG_REFUSAL[] =
+    "a stdlib function's signature differs between the units";
+bool emit_split_refused_on_sigs(void) { return g_split_refusal == SPLIT_SIG_REFUSAL; }
+
 void emit_split_refuse(const char *why) {
     if (!g_split_refusal) g_split_refusal = why ? why : "refused";
 }
@@ -1368,6 +1372,234 @@ bool emit_split_program_imports(const Expr *program) {
     return any;
 }
 
+/* ---------------------------------------------------------------------------
+ * r7rs-split-units-each-compile-the-runtime: the library unit's carried state
+ * as a text record (emit.h), so a warm build can skip the emission.  One
+ * section per table, each a count line then one entry per line; the fields of
+ * an entry are tab-separated (names, box keys and C signatures hold neither a
+ * tab nor a newline):
+ *
+ *   E <n>  exported names, sorted
+ *   B <n>  fat boxes: <key> TAB <name>, in definition order
+ *   S <n>  signatures: <C name> TAB <sig>, in definition order
+ *   Y <n>  keyword records the unit defines, in definition order
+ *   D <n>  the program's stdlib bindings it defines: F|V TAB <C name>, sorted
+ * ------------------------------------------------------------------------- */
+#define SPLIT_CARRY_MAGIC "tur-split-carry 1\n"
+
+/* Is `file_id` one of the stdlib's files: auto-loaded, or under the stdlib
+ * root (an imported library, or a module the stdlib imports)? */
+static bool split_file_is_stdlib(uint16_t file_id) {
+    return (file_id >= 1 && file_id < diag_autoload_file_ids_end()) ||
+           diag_file_is_imported_stdlib(file_id);
+}
+
+const Expr *emit_split_lib_files(const Expr *program, bool *files, size_t n_files) {
+    if (!program || program->kind != EX_PROGRAM) return program;
+    EmitSplitMode saved = g_emit_split;
+    g_emit_split = EMIT_SPLIT_LIB;
+    uint32_t n_items = 0;
+    const Expr **items = flatten_program_items(program, &n_items);
+    const Expr *foreign = NULL;
+    for (uint32_t i = 0; i < n_items && !foreign; i++) {
+        if (split_item_owner(items[i]) == SPLIT_OWN_LATER) continue;
+        uint16_t f = items[i]->span.file_id;
+        if (!split_file_is_stdlib(f)) foreign = items[i];
+        else if (f < n_files) files[f] = true;
+    }
+    free((void *)items);
+    g_emit_split = saved;
+    return foreign;
+}
+
+/* The C name the client unit gives a top-level stdlib binding: a function's
+ * as split_check_sigs spells it, a global's as the EX_DEF emitter does (at
+ * the top level, where no parameter or capture can shadow it). */
+static char *split_defined_name(const Expr *e) {
+    static EmitCtx top;   /* zeroed: no function, closure or locals in scope */
+    if (e->kind == EX_FN_DEF)
+        return e->as.fn_def_.fn ? raw_name_for_binding(e->as.fn_def_.fn->binding) : NULL;
+    return name_for_binding(&top, e->as.def_.binding);
+}
+
+static const Binding *split_item_binding(const Expr *e) {
+    if (e->kind == EX_FN_DEF) return e->as.fn_def_.fn ? e->as.fn_def_.fn->binding : NULL;
+    if (e->kind == EX_DEF) return e->as.def_.binding;
+    return NULL;
+}
+
+static int split_str_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+void emit_split_carry_save(Buf *out, const Expr *program) {
+    buf_puts(out, SPLIT_CARRY_MAGIC);
+    size_t ne;
+    char **ex = emit_split_exports_sorted(&ne);
+    buf_printf(out, "E %zu\n", ne);
+    for (size_t i = 0; i < ne; i++) buf_printf(out, "%s\n", ex[i]);
+    free(ex);
+    buf_printf(out, "B %u\n", (unsigned)g_split_boxes.n);
+    for (uint32_t i = 0; i < g_split_boxes.n; i++)
+        buf_printf(out, "%s\t%s\n", g_split_boxes.v[i].key, g_split_boxes.v[i].val);
+    buf_printf(out, "S %u\n", (unsigned)g_split_sigs.n);
+    for (uint32_t i = 0; i < g_split_sigs.n; i++)
+        buf_printf(out, "%s\t%s\n", g_split_sigs.v[i].key, g_split_sigs.v[i].val);
+    uint32_t ny = sym_codegen_split_count();
+    buf_printf(out, "Y %u\n", (unsigned)ny);
+    for (uint32_t i = 0; i < ny; i++) buf_printf(out, "%s\n", sym_codegen_split_at(i));
+    uint32_t n_items = 0;
+    const Expr **items = flatten_program_items(program, &n_items);
+    char **def = (char **)malloc((n_items ? n_items : 1) * sizeof(char *));
+    if (!def) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t nd = 0;
+    for (uint32_t i = 0; i < n_items; i++) {
+        const Binding *b = split_item_binding(items[i]);
+        if (!b || !b->split_lib_defined || emit_split_binding_home(b) != EMIT_SPLIT_LIB) continue;
+        char *cn = split_defined_name(items[i]);
+        if (!cn) continue;
+        Buf l; buf_init(&l);
+        buf_printf(&l, "%c\t%s", items[i]->kind == EX_FN_DEF ? 'F' : 'V', cn);
+        buf_putc(&l, '\0');
+        def[nd++] = strdup(l.data);
+        buf_free(&l);
+        free(cn);
+    }
+    free((void *)items);
+    qsort(def, nd, sizeof(char *), split_str_cmp);
+    buf_printf(out, "D %zu\n", nd);
+    for (size_t i = 0; i < nd; i++) { buf_printf(out, "%s\n", def[i]); free(def[i]); }
+    free(def);
+}
+
+void emit_split_clear_defined(const Expr *program) {
+    uint32_t n_items = 0;
+    const Expr **items = flatten_program_items(program, &n_items);
+    for (uint32_t i = 0; i < n_items; i++) {
+        Binding *b = (Binding *)split_item_binding(items[i]);
+        if (b) b->split_lib_defined = false;
+    }
+    free((void *)items);
+}
+
+/* The next line of `*p` (up to `lim`) as [*s, *e), past its newline; false
+ * at the end. */
+static bool carry_line(const char **p, const char *lim, const char **s, const char **e) {
+    if (*p >= lim) return false;
+    const char *nl = memchr(*p, '\n', (size_t)(lim - *p));
+    if (!nl) return false;
+    *s = *p;
+    *e = nl;
+    *p = nl + 1;
+    return true;
+}
+
+/* A section header "<tag> <n>". */
+static bool carry_count(const char **p, const char *lim, char tag, size_t *n) {
+    const char *s, *e;
+    if (!carry_line(p, lim, &s, &e) || e - s < 3 || s[0] != tag || s[1] != ' ') return false;
+    size_t v = 0;
+    for (const char *q = s + 2; q < e; q++) {
+        if (*q < '0' || *q > '9') return false;
+        v = v * 10 + (size_t)(*q - '0');
+        if (v > (size_t)1 << 24) return false;
+    }
+    *n = v;
+    return true;
+}
+
+static char *carry_dup(const char *s, const char *e) {
+    char *c = (char *)malloc((size_t)(e - s) + 1);
+    if (!c) { fprintf(stderr, "tur: oom\n"); abort(); }
+    memcpy(c, s, (size_t)(e - s));
+    c[e - s] = '\0';
+    return c;
+}
+
+/* One "<key> TAB <val>" section into `t`. */
+static bool carry_pairs(const char **p, const char *lim, char tag, SplitCarryTab *t) {
+    size_t n;
+    if (!carry_count(p, lim, tag, &n)) return false;
+    for (size_t i = 0; i < n; i++) {
+        const char *s, *e;
+        if (!carry_line(p, lim, &s, &e)) return false;
+        const char *tab = memchr(s, '\t', (size_t)(e - s));
+        if (!tab || tab == s || tab + 1 == e) return false;
+        char *k = carry_dup(s, tab), *v = carry_dup(tab + 1, e);
+        split_tab_put(t, k, v);
+        free(k);
+        free(v);
+    }
+    return true;
+}
+
+bool emit_split_carry_load(const char *rec, size_t len, const Expr *program) {
+    const char *p = rec, *lim = rec + len, *s, *e;
+    size_t magic = sizeof SPLIT_CARRY_MAGIC - 1;
+    if (len < magic || memcmp(rec, SPLIT_CARRY_MAGIC, magic) != 0) return false;
+    p += magic;
+    size_t n;
+    bool ok = carry_count(&p, lim, 'E', &n);
+    for (size_t i = 0; ok && i < n; i++) {
+        ok = carry_line(&p, lim, &s, &e) && e > s;
+        if (ok) { char *c = carry_dup(s, e); emit_split_note_export(c); free(c); }
+    }
+    ok = ok && carry_pairs(&p, lim, 'B', &g_split_boxes) &&
+         carry_pairs(&p, lim, 'S', &g_split_sigs) && carry_count(&p, lim, 'Y', &n);
+    for (size_t i = 0; ok && i < n; i++) {
+        ok = carry_line(&p, lim, &s, &e) && e > s;
+        if (ok) { char *c = carry_dup(s, e); sym_codegen_split_note(c); free(c); }
+    }
+    /* The bindings: every recorded name must be exactly one of this
+     * program's stdlib bindings, or the record is for another stdlib. */
+    size_t nd = 0;
+    char **def = NULL;
+    ok = ok && carry_count(&p, lim, 'D', &nd);
+    if (ok) {
+        def = (char **)calloc(nd ? nd : 1, sizeof(char *));
+        if (!def) { fprintf(stderr, "tur: oom\n"); abort(); }
+    }
+    for (size_t i = 0; ok && i < nd; i++) {
+        ok = carry_line(&p, lim, &s, &e) && e - s > 2 && (s[0] == 'F' || s[0] == 'V') &&
+             s[1] == '\t';
+        if (ok) def[i] = carry_dup(s, e);
+    }
+    ok = ok && p == lim;
+    if (ok) qsort(def, nd, sizeof(char *), split_str_cmp);
+    size_t matched = 0;
+    if (ok) {
+        /* From a clean slate: a split retried as two units loads it again. */
+        emit_split_clear_defined(program);
+        uint32_t n_items = 0;
+        const Expr **items = flatten_program_items(program, &n_items);
+        for (uint32_t i = 0; i < n_items; i++) {
+            Binding *b = (Binding *)split_item_binding(items[i]);
+            if (!b || emit_split_binding_home(b) != EMIT_SPLIT_LIB) continue;
+            char *cn = split_defined_name(items[i]);
+            if (!cn) continue;
+            Buf l; buf_init(&l);
+            buf_printf(&l, "%c\t%s", items[i]->kind == EX_FN_DEF ? 'F' : 'V', cn);
+            buf_putc(&l, '\0');
+            const char *key = l.data;
+            if (bsearch(&key, def, nd, sizeof(char *), split_str_cmp)) {
+                if (b->split_lib_defined) ok = false;   /* two bindings, one name */
+                b->split_lib_defined = true;
+                matched++;
+            }
+            buf_free(&l);
+            free(cn);
+        }
+        free((void *)items);
+    }
+    for (size_t i = 0; i < nd && def; i++) free(def[i]);
+    free(def);
+    if (ok && matched == nd) return true;
+    /* Nothing of the record stays. */
+    emit_split_clear_defined(program);
+    emit_split_set_mode(EMIT_SPLIT_LIB);
+    return false;
+}
+
 /* The signature the emitter recorded for `cname` in this unit, as one string
  * ("<ret>(<p0>,<p1>,...)"); NULL when nothing was recorded. */
 static char *split_sig_of(const char *cname) {
@@ -1410,7 +1642,7 @@ static void split_check_sigs(const Expr **items, uint32_t n_items) {
                     if (getenv("TUR_SHOW_CC"))
                         fprintf(stderr, "tur: split: %s is %s in the library unit, %s here\n",
                                 cn, lib ? lib : "(undeclared)", sig);
-                    emit_split_refuse("a stdlib function's signature differs between the units");
+                    emit_split_refuse(SPLIT_SIG_REFUSAL);
                 }
             }
         }
@@ -22968,7 +23200,10 @@ typedef struct { Buf *out; const Expr *program; } EmitProgArgs;
  * Depth-counted so an emission nested inside another does not pull the outer
  * one's CTerms out from under it. */
 static int g_emission_depth;
-static void emission_enter(void) { if (g_emission_depth++ == 0) emit_cps_ir_forget(); }
+uint32_t g_emit_note_epoch;   /* expr.h: emit_note */
+static void emission_enter(void) {
+    if (g_emission_depth++ == 0) { emit_cps_ir_forget(); g_emit_note_epoch++; }
+}
 static void emission_leave(void) { if (--g_emission_depth == 0) emit_cps_ir_forget(); }
 
 static int emit_program_job(void *p) {

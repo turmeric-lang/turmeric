@@ -507,6 +507,15 @@ struct Binding {
      * int64 carrier through intptr_t or it is a -Wint-conversion.  Set in the
      * param emitter (emit_fns.c), consulted at the capture site (emit_expr.c). */
     bool          emit_carrier_holds_ptr;
+    /* The emission that wrote the three emit_* notes above (g_emit_note_epoch).
+     * They describe one emission, so read and write them through emit_note,
+     * which drops the notes another emission left: a binding can be read
+     * before its own emission writes it (a call argument is classified before
+     * the let it names is emitted), and a second emit_program in one process
+     * used to read the first one's notes there -- one cast fewer in
+     * schema/alt, so a split build's retry emitted a library unit no other
+     * build shared (r7rs-split-units-each-compile-the-runtime). */
+    uint32_t      emit_note_epoch;
     /* True when this binding names a defn whose body is an EX_INLINE_C block.
      * The formal-param emitter (emit_fns.c:423) treats inline-C defns as
      * by-value for struct params even when they would normally cross the
@@ -878,6 +887,21 @@ struct Binding {
     bool                is_ambient_dict;
     struct TypeClassInstance *ambient_repr;
 };
+
+/* The current emission (emit_module.c: bumped as each top-level emission
+ * starts).  emit_note hands back `b` with the emit_* notes another emission
+ * wrote cleared, so they read as a fresh binding's until this one sets them. */
+extern uint32_t g_emit_note_epoch;
+static inline Binding *emit_note(const Binding *cb) {
+    Binding *b = (Binding *)cb;
+    if (b->emit_note_epoch != g_emit_note_epoch) {
+        b->emit_byvalue_carrier_abi = false;
+        b->emit_carrier_holds_byval = false;
+        b->emit_carrier_holds_ptr = false;
+        b->emit_note_epoch = g_emit_note_epoch;
+    }
+    return b;
+}
 
 /* GF1: Generator definition -- one per (gen ...) expression */
 typedef struct GenDef {

@@ -47,6 +47,31 @@ void emit_split_reset(void);
 void emit_split_set_imp(bool on);
 bool emit_split_program_imports(const Expr *program);
 
+/* r7rs-split-units-each-compile-the-runtime: what the library unit's emission
+ * leaves for the units after it -- the names it exports, the fat boxes and
+ * keyword records it defines, its functions' signatures and which of the
+ * program's stdlib bindings it defines -- written right after that emission
+ * (emit_split_carry_save, appending a text record to `out`) and put back by
+ * emit_split_carry_load in place of the emission, in EMIT_SPLIT_LIB mode, for
+ * the same elaborated stdlib (main.c keys the cache).  Load returns false,
+ * having put nothing back, when the record is malformed or names a binding
+ * this program does not have; the caller then emits the unit.
+ * emit_split_clear_defined forgets the bindings a load (or an emission)
+ * marked. */
+void emit_split_carry_save(Buf *out, const Expr *program);
+bool emit_split_carry_load(const char *rec, size_t len, const Expr *program);
+void emit_split_clear_defined(const Expr *program);
+/* The first item the library unit would write that does not come from one of
+ * the stdlib's files (an `extern-c` of the program's, which every unit
+ * declares), or NULL: only then is the unit the stdlib's alone, so a cached
+ * one can stand in for it.  Marks files[id] for the file of every item it
+ * would write (ids below n_files). */
+const Expr *emit_split_lib_files(const Expr *program, bool *files, size_t n_files);
+/* Was this split refused because a unit after the library unit declared one
+ * of its functions with another signature?  With a cached library unit, that
+ * is the cache's fault, not the program's. */
+bool emit_split_refused_on_sigs(void);
+
 /* J2: when true, emit_program appends the per-export `<mangled>__ffi` shims
  * (the --shared path's interpreter-arbitrary-arity-ffi emission) to the
  * single-file TU.  Set only by the REPL's in-process spice build; leave

@@ -510,6 +510,21 @@ void emit_split_note_export(const char *name) {
 
 size_t emit_split_exports_count(void) { return g_exp_n; }
 
+static int exp_name_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+char **emit_split_exports_sorted(size_t *n) {
+    char **v = (char **)malloc((g_exp_n ? g_exp_n : 1) * sizeof(char *));
+    if (!v) { fprintf(stderr, "tur: oom\n"); abort(); }
+    size_t k = 0;
+    for (uint32_t i = 0; i < g_exp_cap; i++)
+        if (g_exp[i]) v[k++] = g_exp[i];
+    qsort(v, k, sizeof(char *), exp_name_cmp);
+    *n = k;
+    return v;
+}
+
 void emit_split_exports_clear(void) {
     for (uint32_t i = 0; i < g_exp_cap; i++) free(g_exp[i]);
     free(g_exp);
