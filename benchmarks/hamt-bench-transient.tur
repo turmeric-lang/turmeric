@@ -4,20 +4,20 @@
 
 (defn bench-transient [n :int] :int
   ```c
-  void *empty = hamt_new();
-  void *t = hamt_transient(empty);
-  hamt_free(empty);
+  void *empty = tur_hamt_new();
+  void *t = tur_hamt_transient(empty);
+  tur_hamt_free(empty);
   for (int64_t i = 0; i < n; i++) {
       int64_t *k = (int64_t *)malloc(sizeof(int64_t));
       int64_t *v = (int64_t *)malloc(sizeof(int64_t));
       *k = i;
       *v = i * 2;
       uint64_t h = (uint64_t)i * 2654435761ULL;
-      hamt_transient_set_(t, (int64_t)h, (void *)k, (void *)v);
+      tur_hamt_transient_set(t, (int64_t)h, (void *)k, (void *)v);
   }
-  void *m = hamt_persistent_(t);
-  int64_t count = hamt_count(m);
-  hamt_free(m);
+  void *m = tur_hamt_persistent(t);
+  int64_t count = tur_hamt_count(m);
+  tur_hamt_free(m);
   return count;
   ```)
 

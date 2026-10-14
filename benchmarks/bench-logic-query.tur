@@ -65,19 +65,17 @@
   return (int64_t)(intptr_t)result;
   ```)
 
+;; The driver loop is Turmeric, not inline C: it used to call `logic_query`
+;; from a C body by guessing the emitter's mangling of `logic-query`, which
+;; stopped linking when the mangling changed.  Calling it from Turmeric lets
+;; the compiler resolve the name.
 (defn main [] :int
-  ```c
-  int64_t total = 0;
-  for (int iter = 0; iter < 10000; iter++) {
-      int64_t results = logic_query(20, 19);
-      /* count */
-      typedef struct { int64_t value; int64_t next; } Cell;
-      Cell *c = (Cell*)(intptr_t)results;
-      while (c) { total++; c = (Cell*)(intptr_t)c->next; }
-      /* free */
-      c = (Cell*)(intptr_t)results;
-      while (c) { Cell *nx = (Cell*)(intptr_t)c->next; free(c); c = nx; }
-  }
-  printf("%lld\n", (long long)(total / 10000));
-  return 0;
-  ```)
+  (let [^mut total 0]
+    (let [^mut iter 0]
+      (while (< iter 10000)
+        (let [results (logic-query 20 19)]
+          (set! total (+ total (bt-count results)))
+          (bt-free results))
+        (set! iter (+ iter 1))))
+    (println (/ total 10000)))
+  0)

@@ -5,9 +5,14 @@
 ;;
 ;; The benchmark creates a vec of 1,000,000 elements and applies the
 ;; increment function through the typeclass dispatch mechanism.
+;;
+;; The class is local and Bench-prefixed: the stdlib prelude auto-loads its own
+;; Functor now, so redefining it is an error and an instance of the prelude's
+;; class here is an orphan (TUR-E0013).  The local class keeps what the
+;; 2026-05-13 number measured against fmap-vec-baseline.c.
 
-(defclass Functor [^f]
-  (fmap [container fn] :int))
+(defclass BenchFunctor [^f]
+  (bench-fmap [container fn] :int))
 
 ;; Build a vec of n sequential integers (0..n-1) using inline C
 (defn __bench_vec_build [n] :int
@@ -29,12 +34,12 @@
   return (int64_t)v->len;
   ```)
 
-(definstance Functor [vec]
-  (fmap [container fn] (__bench_vec_fmap_impl container fn)))
+(definstance BenchFunctor [vec]
+  (bench-fmap [container fn] (__bench_vec_fmap_impl container fn)))
 
 (defn inc1 [x] :int (+ x 1))
 
 (defn main [] :int
   (let [v (__bench_vec_build 1000000)]
-    (.fmap v inc1)
+    (.bench-fmap v inc1)
     0))
