@@ -370,7 +370,7 @@ def main():
                 if engine not in want or (engine == "jit" and not jit_ok):
                     continue
                 if engine == "cc":
-                    row, _ = measure([tur, "emit-c", src], 1, prog.timeout, scratch)
+                    row, _ = measure([tur, "emit-c", src], args.reps, prog.timeout, scratch)
                     emit(prog, "cc", "emit", row,
                          os.path.getsize(os.path.join(scratch, "stdout"))
                          if row["status"] == "ok" else "")
