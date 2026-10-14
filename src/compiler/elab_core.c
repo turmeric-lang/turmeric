@@ -3168,13 +3168,13 @@ bool return_type_applied_scalar_conflict(const Type *declared_app,
  * This is the type question those checks leave out, asked structurally: a
  * RIGID variable against a differently named rigid variable is a conflict;
  * against a GROUND pinned type (scalar, cstr, float, a bare ADT, a ground
- * application with a real head) it is a conflict unless `allow_ground`.  Every
- * caller passes `allow_ground` today: `[x : A] : int` is a bridge a fixture
- * pins as accepted (return-type-carrier-bridges-still-accepted), and a
- * multi-parameter class's method result is typed as ONE instance's type inside
- * a constrained generic (`any-get [S E] ... : E` reads `Vel`), so the ground
- * half waits on both -- see docs/reported/declared-tyvars-are-not-rigid.md.
- * Two applications over one ADT head are compared argument by
+ * application with a real head) it is a conflict unless `allow_ground` -- the
+ * `#{Unsafe}` carrier bridge, where an integer handle is deliberately returned
+ * as `A`.  A plain generic has no such bridge: `(defn f [A] [x : A] : int x)`
+ * handed back 7.1's bit pattern and a string's address as the int it
+ * declared, while the interpreter printed the float and the string.  The `let`
+ * site asks only the variable half; a ground-vs-variable annotation is the
+ * primitive compare's.  Two applications over one ADT head are compared argument by
  * argument, which is what catches the swapped pair.  Anything else (an unnamed
  * or open variable, `!`, `any`, unknown, a tyvar-headed `(m b)`, two different
  * heads) is left to the checks that own it.

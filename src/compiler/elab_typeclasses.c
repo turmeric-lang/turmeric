@@ -9676,6 +9676,34 @@ resolved_user_fallback:;
                 while (hd->kind == TY_APP && hd->as.app.fn) hd = hd->as.app.fn;
                 if (hd->kind == TY_ADT && hd->as.adt_.def) result_type = rt;
             }
+            /* declared-tyvars-are-not-rigid: a result that is a class
+             * parameter OTHER than the receiver's -- `(sop-get [s : S idx :
+             * int] : E)` of `(defclass StorageOps [S E] ...)` -- kept the
+             * representative instance's type (`Vel`), so inside `(defn
+             * any-get [S E] [(StorageOps S E)] ... : E ...)` the body read as
+             * a ground `Vel` under a declared `E`.  The enclosing generic's
+             * constraint says what that parameter is called here: its
+             * variables sit in class-parameter order (`arg_tyvars`). */
+            else if (recv_is_cv && cm->return_type.kind == TY_TYVAR &&
+                     cm->return_type.as.tyvar_.name && obj->type.as.tyvar_.name) {
+                int pk = -1;
+                for (uint8_t k = 1; k < rtc->n_type_params; k++)
+                    if (rtc->type_params[k] &&
+                        strcmp(rtc->type_params[k]->name,
+                               cm->return_type.as.tyvar_.name) == 0) {
+                        pk = k;
+                        break;
+                    }
+                for (uint8_t ci = 0; pk >= 1 && ci < e->cur_fn_n_constraints; ci++) {
+                    const TypeConstraint *fc = &e->cur_fn_constraints[ci];
+                    if (fc->typeclass != rtc || !fc->tyvar ||
+                        strcmp(fc->tyvar->name, obj->type.as.tyvar_.name) != 0)
+                        continue;
+                    if (pk < fc->n_arg_tyvars && fc->arg_tyvars[pk])
+                        result_type = type_tyvar_named(fc->arg_tyvars[pk]->name);
+                    break;
+                }
+            }
             break;
         }
     }

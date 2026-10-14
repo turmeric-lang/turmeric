@@ -9191,6 +9191,12 @@ Expr *elab_defn(Elab *e, const Form *call) {
             new_list[ci].param_idx = -1;
             new_list[ci].tyvar = tyvar_sym;
             new_list[ci].return_resolved = false;
+            new_list[ci].n_arg_tyvars = 0;
+            for (uint32_t ai = 1; ai < cf->as.list.len && new_list[ci].n_arg_tyvars < 8; ai++) {
+                if (cf->as.list.items[ai]->tag != F_SYM) break;
+                new_list[ci].arg_tyvars[new_list[ci].n_arg_tyvars++] =
+                    cf->as.list.items[ai]->as.sym;
+            }
         }
         constraint_list = new_list;
         n_constraints = n_constraint_forms;
@@ -9214,6 +9220,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             new_list[n_constraints + ci].param_idx       = -1;
             new_list[n_constraints + ci].tyvar           = tpv_con_binder[ci];
             new_list[n_constraints + ci].return_resolved = false;
+            new_list[n_constraints + ci].n_arg_tyvars    = 0;
         }
         constraint_list = new_list;
         n_constraints = new_count;
@@ -9545,6 +9552,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 constraint_list[n_constraints + c].param_idx = -1;
                 constraint_list[n_constraints + c].tyvar = binder;
                 constraint_list[n_constraints + c].return_resolved = false;
+                constraint_list[n_constraints + c].n_arg_tyvars = 0;
             }
             n_constraints = new_count;
             n_pending = 0;
@@ -10814,6 +10822,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
                 constraint_list[n_constraints].param_idx       = -1;
                 constraint_list[n_constraints].tyvar           = tv_sym;
                 constraint_list[n_constraints].return_resolved = !in_param;
+                constraint_list[n_constraints].n_arg_tyvars = 0;
                 n_constraints = new_count;
                 body_start++;
             }
@@ -11768,12 +11777,10 @@ Expr *elab_defn(Elab *e, const Form *call) {
             rc = RET_CONFLICT_CARRIER_AGGREGATE;
         /* declared-tyvars-are-not-rigid: the type question the representation
          * predicates above leave out.  A generic's own `[A B]` are rigid in
-         * its body.  Only the variable-vs-variable half is asked
-         * (`allow_ground`): `[x : A] : int` is the carrier bridge
-         * return-type-carrier-bridges-still-accepted pins as accepted, and a
-         * multi-parameter class's method result is typed as one instance's
-         * (`any-get [S E] ... : E` reads `Vel`), so the ground half is a
-         * policy question the report keeps open. */
+         * its body, against each other and against a ground type: `[x : A]
+         * : int` handed back a float's bits or a string's address as the int
+         * it declared.  Only `#{Unsafe}` keeps that carrier bridge
+         * (`allow_ground`). */
         if (rc == RET_CONFLICT_NONE && !return_unannotated &&
             n_fn_type_params > 0) {
             const Type *decl = return_tyvar_type ? return_tyvar_type
@@ -11787,7 +11794,7 @@ Expr *elab_defn(Elab *e, const Form *call) {
             for (uint8_t k = 0; k < n_fn_type_params && k < 8; k++)
                 if (fn_type_params[k]) rigid[n_rigid++] = fn_type_params[k]->name;
             if (rigid_tyvar_conflict(rigid, n_rigid, decl ? *decl : dk,
-                                     body->type, /*allow_ground=*/true))
+                                     body->type, fn_declared_unsafe))
                 rc = RET_CONFLICT_RIGID_TYVAR;
         }
         if (rc != RET_CONFLICT_NONE) {

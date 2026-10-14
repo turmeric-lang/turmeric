@@ -1,8 +1,8 @@
 # A generic's declared type variables are not rigid: `(defn bad [A B] [a : A] : B a)` type-checks
 
-**Severity: high (unsound) -- the variable-vs-variable half is fixed at the
-return and `let` positions 2026-10-14; the variable-vs-ground half, and three
-more positions, stay open, see "What is fixed" and "Still open" below.** `tur
+**Severity: high (unsound) -- fixed at the return and `let` positions
+2026-10-14, both halves; three more positions stay open, see "What is fixed"
+and "Still open" below.** `tur
 check` accepted a generic whose body does not have its declared result type,
 as long as both sides ride the int64 carrier. A caller then trusts the
 signature, and the program segfaults, on both back ends.
@@ -111,46 +111,49 @@ real head). Two applications of one ADT head are compared argument by
 argument; anything else (unnamed or open variables, `!`, `any`, unknown,
 tyvar-headed `(m b)`, two different heads) is left to the checks that own it.
 
-Only the **variable-vs-variable** half is asked today (every caller passes
-`allow_ground`); the ground half is in the predicate and waits on the two
-blockers under "Still open".
-
 - **Return position** (`elab_fns.c`, next to the committed-applied check):
-  `[a : A] : B a`, `(Option A)` under `(Option B)`, the swapped pair, and
-  `(Vec A)` under `(Vec B)` are TUR-E0709 with a message naming both types.
-  `tur explain TUR-E0709` has it as case 4.
+  every row of the table above is TUR-E0709 with a message naming both
+  types, the bare-ADT return `[a : A] : P` included. An `#{Unsafe}` generic
+  keeps the ground-handle-as-`A` carrier bridge and is held only to the
+  variable-vs-variable half. `tur explain TUR-E0709` has it as case 4.
 - **`let` annotation** (`elab_forms.c`): `[b : B a]` with `a : A` is rejected
-  with the existing annotation-mismatch message.
+  with the existing annotation-mismatch message. Only the variable half
+  there; `[b : int a]` was already rejected by the primitive compare.
+
+Two things stood in the way of the ground half, both settled:
+
+- `tests/fixtures/return-type-carrier-bridges-still-accepted` pinned
+  `(defn generic-carrier [A] [x : A] : int x)` as an accepted bridge ("a
+  generic defn may legitimately declare the carrier spelling", asserted in
+  the archived struct-return-type-mismatch-unchecked-until-cc report, never
+  argued). Measured: compiled, `(generic-carrier 7.1)` printed
+  `4619679907765970534` (the bits of 7.1), `(generic-carrier "hello")` the
+  string's address, a struct a heap box address; the interpreter printed
+  `7.1` and `hello`. A signature that says `int` and delivers a pointer is
+  not a bridge, and nothing in the stdlib used the shape (with the half on,
+  only this fixture and `any-get` below failed). The fixture now records the
+  decision and points at the errors fixtures; `#{Unsafe}` is the one escape
+  hatch, and the TUR-E0709 explain text no longer offers "give it a type
+  parameter" as another.
+- `typeclass-bounded-wrapper-heterogeneous-dispatch`: inside
+  `(defn any-get [S E] [(StorageOps S E)] ... : E (sop-get s idx))` the
+  method call was typed `Vel`, one instance's `E`. `elab_method_call` takes
+  an abstract receiver's result from the representative instance and only
+  corrected a result that is the receiver's own class variable
+  (`type_params[0]`); `E` is the second parameter. The middle-vector
+  constraint `(StorageOps S E)` also recorded only `S` (`TypeConstraint.tyvar`),
+  so the call site had nothing to read `E` from. `TypeConstraint` now keeps
+  every variable in class-parameter order (`arg_tyvars`), and the call takes
+  the k-th from the enclosing generic's constraint on that receiver.
 
 Pinned by `tests/fixtures/errors/declared-tyvar-{returned-as-another,
-swapped-app-args,let-annotation}` and, for what must keep passing,
-`tests/fixtures/declared-tyvar-rigid-accepts` (relay through a generic,
-two-variable relay, a diverging body, `(none)` and `(some a)` bodies, a
-swapped pair put back in order, a leftover callee letter with and without a
-collision, the `#{Unsafe}` bridge).
+returned-as-ground,ground-as-tyvar,swapped-app-args,let-annotation}` and,
+for what must keep passing, `tests/fixtures/declared-tyvar-rigid-accepts`
+(relay through a generic, two-variable relay, a diverging body, `(none)` and
+`(some a)` bodies, a swapped pair put back in order, a leftover callee letter
+with and without a collision, the `#{Unsafe}` bridge).
 
 ## Still open
-
-**The variable-vs-ground half**, both directions, at the return position.
-`[a : A] : int`, `[a : cstr] : A`, `[a : float] : A`, `[a : A] : P` all still
-pass, and `[a : int] : A` is the direction the repro segfaults in. The
-predicate already asks it (`allow_ground = false`); turning it on met two
-things in the suite:
-
-- `tests/fixtures/return-type-carrier-bridges-still-accepted` pins
-  `(defn generic-carrier [A] [x : A] : int x)` as an accepted carrier bridge
-  ("a generic defn may legitimately declare the carrier spelling"). That is
-  a policy decision, filed with the aggregate-vs-scalar check; a caller that
-  picks `float` reads its bits as an integer. Whether a generic keeps that
-  bridge is the question to settle before this half can land, and it only
-  needs settling for the body-is-variable direction.
-- `typeclass-bounded-wrapper-heterogeneous-dispatch`: inside
-  `(defn any-get [S E] [(StorageOps S E)] [... ] : E ...)` the method call's
-  result is typed `Vel`, one instance's `E`, not the class variable. A
-  multi-parameter class's result is resolved to a concrete instance at check
-  time, so the ground check sees a real-looking `Vel` under a declared `E`.
-  That typing is the thing to fix (the body IS an `E`); until then the
-  body-is-ground direction, the dangerous one, cannot be told from it.
 
 The same wildcard treatment at three more positions. Each passes `tur check`
 today:
@@ -175,10 +178,9 @@ carrier parameter on purpose; measure with the suite before widening.
 2. **Narrower first step:** keep the representation gates, but add one type
    check for the case where the declared result is a bare declared variable
    (or a type application of one) and the body's type is a different declared
-   variable or a ground type. Done as `rigid_tyvar_conflict`; the ground
-   half is written but switched off, see "Still open".
-3. **Pin it** with an `errors/` fixture per table row. Done for the rows the
-   variable-vs-variable half covers.
+   variable or a ground type. Done as `rigid_tyvar_conflict`.
+3. **Pin it** with an `errors/` fixture per table row. Done for the return
+   and `let` rows.
 
 ## Related
 

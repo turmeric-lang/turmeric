@@ -20,8 +20,12 @@
 ;; rejected now; see tests/fixtures/errors/applied-param-returned-as-int-rejected/.
 ;; A :heap one is rejected too: tests/fixtures/errors/return-type-heap-app-vs-scalar/.)
 
-;; a generic defn may legitimately declare the carrier spelling
-(defn generic-carrier [A] [x : A] : int x)
+;; (A generic returning its `A` as `int`, `(defn generic-carrier [A] [x : A] :
+;; int x)`, used to sit here as "accepted" too.  It handed back 7.1's bit
+;; pattern and a string's address as the int it declared, and the interpreter
+;; disagreed on both.  A declared type variable matches only itself now; see
+;; tests/fixtures/errors/declared-tyvar-returned-as-ground/.  `#{Unsafe}` keeps
+;; the bridge: tests/fixtures/declared-tyvar-rigid-accepts/.)
 
 ;; and the identity case is not a mismatch at all
 (defstruct S [a : int])
@@ -30,6 +34,5 @@
 (defn main [] : int
   (println (unhandle (:: 7 :Handle)))          ; 7
   (println (.a (same (S 41))))               ; 41
-  (println (generic-carrier 5))              ; 5
   (println (.a (S (unhandle (:: 3 :Handle))))) ; 3
   0)
