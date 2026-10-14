@@ -12108,7 +12108,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     char *thunk_typedef = ensure_typed_thunk_typedef(ctx, ctx->file,
                         word_back ? decl_ptr_res : disp_result,
                         n > 0 ? arg_types : NULL, (uint8_t)n);
-                    if (word_back && !thunk_typedef) word_back = false;
+                    /* lambda-in-generic-record-boxed-with-the-word-shim: with no
+                     * typed-thunk typedef -- a `(Cons float)` result, a <= 16
+                     * byte app, declines one -- the fallback cast below still
+                     * spells the declared pointer.  `zip/cursor-close` reads
+                     * `fill : (fn [S (Cons A)] S)` at S := (Cons float); the
+                     * box a concrete sink builds returns the pointer, and the
+                     * parameters were already cast at their declared types. */
                     Buf out; buf_init(&out);
                     if (word_back) buf_puts(&out, "(int64_t)(intptr_t)(");
                     /* narrow-closure-result-read-through-int64-carrier: slot 0
@@ -12116,6 +12122,11 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * widened; convert back to the declared type. */
                     const char *slot_rc = thunk_result_slot_c_spelling(ret_c);
                     bool narrow_back = slot_rc && ret_c && strcmp(slot_rc, ret_c) != 0;
+                    if (word_back && !thunk_typedef) {
+                        slot_rc = thunk_result_slot_c_spelling(
+                            emit_type_c_name(ctx, decl_ptr_res));
+                        narrow_back = false;
+                    }
                     /* generic-hof-option-result-read-by-value: when the boxing
                      * site filled slot 0 with the CARRIER shim (typed shim
                      * declined, a wide by-value parameter), slot 0 returns a
@@ -12124,7 +12135,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                      * box pointer for the value (`(Option float)` through
                      * `mx-app` printed 0).  Ask the producer's own question. */
                     bool carrier_unbox = false;
-                    if (!thunk_typedef && n <= MAX_FN_ARITY) {
+                    if (!thunk_typedef && !word_back && n <= MAX_FN_ARITY) {
                         Type rres = emit_resolve_type(ctx, disp_result);
                         Type rargs[MAX_FN_ARITY];
                         for (uint32_t i = 0; i < n; i++)
@@ -12668,15 +12679,30 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     {
                         const Expr *fb = arg;
                         while (fb && fb->kind == EX_ASCRIBE) fb = fb->as.ascribe_.inner;
-                        /* The family is still written in the enclosing generic's
-                         * variables inside a spec; resolve it through the spec. */
-                        if (_have_fld) _sink_ty = emit_resolve_type(ctx, _fld_ty);
-                        if (_have_fld && fb && fb->kind == EX_FN_TO_FAT &&
-                            _sink_ty.kind == TY_FN &&
-                            !emit_repr_type_mentions_tyvar(&_sink_ty)) {
-                            ctx->fat_box_sink_type = &_sink_ty;
-                            ctx->fat_box_sink_erased_mask = 0;
-                            ctx->fat_box_sink_erased_res = false;
+                        if (_have_fld && fb && fb->kind == EX_FN_TO_FAT) {
+                            /* The family is still written in the enclosing
+                             * generic's variables inside a spec -- `(Traversal
+                             * (Cons A) A)` in `zip/cons-traversal` -- and the
+                             * field's `fn` type is written in the RECORD's
+                             * (`(fn [S] (Cons A))`), which _fld_ty's
+                             * substitution does not reach into.  Resolve the
+                             * family, then instantiate the field through it. */
+                            Type rfam = emit_resolve_type(ctx, ctor_family);
+                            AdtDef *_rd = NULL;
+                            Type _rargs[16];
+                            uint8_t _rn = 0;
+                            if (type_extract_adt_app(&rfam, &_rd, _rargs, &_rn) && _rd)
+                                _sink_ty = emit_type_through_adt_args(
+                                    ctx, e->as.call_.ctor->fields[i].full_type,
+                                    _rd, _rargs, _rn);
+                            else
+                                _sink_ty = emit_resolve_type(ctx, _fld_ty);
+                            if (_sink_ty.kind == TY_FN &&
+                                !emit_repr_type_mentions_tyvar(&_sink_ty)) {
+                                ctx->fat_box_sink_type = &_sink_ty;
+                                ctx->fat_box_sink_erased_mask = 0;
+                                ctx->fat_box_sink_erased_res = false;
+                            }
                         }
                     }
                     arg_strs[i] = emit_value(ctx, body, arg);

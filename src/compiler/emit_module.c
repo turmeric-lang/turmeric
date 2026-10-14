@@ -1921,6 +1921,27 @@ Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
                                      ctx->type_arena);
 }
 
+/* A constructor field's written type instantiated at the family's arguments
+ * -- through `fn` types too, which substitute_adt_app_type_owned leaves
+ * alone.  `(fn [S] (Cons A))` in `(Traversal (Cons float) float)` is
+ * `(fn [(Cons float)] (Cons float))`.  Arena-owned. */
+Type emit_type_through_adt_args(EmitCtx *ctx, const Type *t, const AdtDef *def,
+                                const Type *args, uint8_t n_args) {
+    if (!t) return emit_type_from_kind(TY_UNKNOWN);
+    if (!def || !def->type_params || !args) return *t;
+    AbiTypeBinding b[ABI_TYPE_BINDINGS_MAX];
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < def->n_type_params && i < n_args &&
+                        n < ABI_TYPE_BINDINGS_MAX; i++) {
+        if (!def->type_params[i]) continue;
+        b[n].name = def->type_params[i];
+        b[n].type = args[i];
+        n++;
+    }
+    if (n == 0) return *t;
+    return emit_abi_instantiate_type(t, b, n, ctx->type_arena);
+}
+
 /* `callee` NULL: the callee is slot 0 of the fat box the adapter receives as
  * its env -- a capturing closure's thunk, called with that box.  `callee`
  * EMIT_ADAPT_BARE_SLOT1: slot 1 holds a BARE function (an EX_FN_TO_FAT box),

@@ -1734,6 +1734,8 @@ extern const char EMIT_ADAPT_FAT_SLOT1[];
 struct EmitAbiSpecialization;
 Type emit_type_through_spec(EmitCtx *ctx, const Type *t,
                             const struct EmitAbiSpecialization *spec);
+Type emit_type_through_adt_args(EmitCtx *ctx, const Type *t, const AdtDef *def,
+                                const Type *args, uint8_t n_args);
 char *ensure_call_adapter_ex(EmitCtx *ctx, Buf *out, const char *callee,
                              const char *crc, const char **cpc,
                              const char *arc, const char **apc, uint8_t n);
