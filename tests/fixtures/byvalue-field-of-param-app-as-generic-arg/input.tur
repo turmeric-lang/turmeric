@@ -1,0 +1,61 @@
+;; A by-value field whose declared type is an APPLICATION over the struct's
+;; parameter -- `(p (Option (Fr T)))`, `(q (Option T))`, `(s (Sm T))` -- read
+;; inside a generic clone and passed straight to another generic's clone.
+;;
+;; The `:heap` struct's monomorph holds the field by value
+;; (`tur_adt_Option__Fr__int p;`) and the callee's clone takes it by value, but
+;; the call-argument path cast `h->p` to the int64 carrier and unboxed it:
+;; "aggregate value used where an integer was expected", under gcc and clang
+;; (byvalue-option-field-read-as-carrier-at-generic-call).  The guard that
+;; knows a by-value field read is already the aggregate
+;; (field_read_emits_byvalue_aggregate) substituted the receiver's type
+;; arguments only into a field typed as a BARE parameter `(x T)`; an
+;; application over T stayed generic and read as not concrete.
+;;
+;; Covered: an Option of a `:heap` struct, an Option of the parameter, a
+;; non-Option by-value sum, a nested receiver, None/Miss values, and int, a
+;; fractional float and cstr instantiations.  The let-bound, returned and
+;; directly-matched reads took other paths and are kept as controls.
+
+(defstruct Fr :heap :copy [T] (x T))
+(defdata Sm :copy [T] (Hit T) (Miss))
+(defstruct Holder :heap :copy [T] (p (Option (Fr T))) (q (Option T)) (s (Sm T)))
+(defstruct Outer :heap :copy [T] (h (Holder T)))
+(defn peek [T] [o : (Option (Fr T))] : bool (match o (None) false (Some _) true))
+(defn get-or [T] [o : (Option (Fr T)) d : T] : T (match o (None) d (Some f) (.x f)))
+(defn opt-or [T] [o : (Option T) d : T] : T (match o (None) d (Some v) v))
+(defn sm-or [T] [s : (Sm T) d : T] : T (match s (Hit v) v (Miss) d))
+(defn probe [T] [h : (Holder T)] : bool (peek (.p h)))
+(defn grab [T] [h : (Holder T) d : T] : T (get-or (.p h) d))
+(defn qgrab [T] [h : (Holder T) d : T] : T (opt-or (.q h) d))
+(defn sgrab [T] [h : (Holder T) d : T] : T (sm-or (.s h) d))
+(defn via-let [T] [h : (Holder T) d : T] : T (let [o (.p h)] (get-or o d)))
+(defn ret-p [T] [h : (Holder T)] : (Option (Fr T)) (.p h))
+(defn direct [T] [h : (Holder T) d : T] : T (match (.p h) (None) d (Some f) (.x f)))
+(defn deep [T] [o : (Outer T) d : T] : T (get-or (.p (.h o)) d))
+(defn mk [T] [v : T] : (Holder T)
+  (make-struct Holder :p (Some (make-struct Fr :x v)) :q (Some v) :s (Hit v)))
+(defn mk0 [T] [v : T] : (Holder T)
+  (make-struct Holder :p (None) :q (None) :s (Miss)))
+(defn main [] : int
+  (let [hi (mk 7)
+        hf (mk 7.1)
+        hs (mk "s")
+        h0 (mk0 0)]
+    (println (probe hi))
+    (println (probe h0))
+    (println (grab hi 0))
+    (println (grab hf 0.5))
+    (println (grab hs "d"))
+    (println (grab h0 -1))
+    (println (qgrab hi 0))
+    (println (qgrab hf 0.5))
+    (println (qgrab h0 -2))
+    (println (sgrab hi 0))
+    (println (sgrab hf 0.5))
+    (println (sgrab h0 -3))
+    (println (via-let hf 0.5))
+    (println (get-or (ret-p hi) 0))
+    (println (direct hs "d"))
+    (println (deep (make-struct Outer :h hf) 0.5)))
+  0)

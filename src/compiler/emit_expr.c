@@ -1413,7 +1413,15 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
         if (ctor && fidx < ctor->n_fields &&
             type_extract_adt_app(&rt, &ad, aargs, &an) && ad) {
             const CtorField *cf = &ctor->fields[fidx];
-            if (cf->full_type && cf->full_type->kind == TY_TYVAR) {
+            /* byvalue-option-field-read-as-carrier-at-generic-call: an
+             * APPLICATION over the parameter -- `(p (Option (Fr T)))` -- needs
+             * the same substitution as a bare `(x T)`.  Taken as declared it
+             * still mentions T, fails the concreteness test below, and the
+             * field read of `h->p`, already the by-value monomorph
+             * `tur_adt_Option__Fr__int`, was cast to the carrier and unboxed
+             * ("aggregate value used where an integer was expected"). */
+            if (cf->full_type && (cf->full_type->kind == TY_TYVAR ||
+                                  emit_repr_type_mentions_tyvar(cf->full_type))) {
                 fr = substitute_adt_app_type_owned(cf->full_type, ad, aargs);
                 fr_owned = (fr.kind == TY_APP);
                 have_fr = true;

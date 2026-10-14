@@ -506,10 +506,14 @@ whose `Tree` instance calls generic helpers, aborts the same way
 
 **D3 -- a by-value `(Option (S T))` field of a `:heap` struct, passed to a
 generic function, is read as a carrier word**
-([byvalue-option-field-read-as-carrier-at-generic-call](../reported/byvalue-option-field-read-as-carrier-at-generic-call.md)).
+([byvalue-option-field-read-as-carrier-at-generic-call](../archive/byvalue-option-field-read-as-carrier-at-generic-call.md)).
 The emitted C is
 `(int64_t)(intptr_t)(h->p)` on an aggregate, which both gcc and clang
-reject.
+reject. **Fixed 2026-10-14**, pinned by
+`tests/fixtures/byvalue-field-of-param-app-as-generic-arg`. The fix also
+covers an `(Option T)` field and a non-`Option` by-value sum field, so an
+`(Option (ZipFrame T))` path link is available to this plan again. Making
+the link a sum is still blocked, by D2 alone now that D1 is fixed.
 
 ```turmeric
 (defstruct Fr :heap :copy [T] (x T))
