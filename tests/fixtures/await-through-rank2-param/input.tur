@@ -1,0 +1,151 @@
+;; await-parks-only-to-the-nearest-c-frame: an awaiting function reached
+;; through a rank-2 (`forall`) parameter must park the whole async body.
+;; Each shape used to put a direct-style frame between the body and the
+;; await, so the park was refused at run time:
+;;
+;;   r2-called  -- the rank-2 call itself was delegated to the value's
+;;                 direct entry (`f.fn`); it now threads through `fn_cps`,
+;;                 like a plain `fn` parameter (fncps_forall_call_ok).
+;;   r2-passed  -- a function handing its rank-2 parameter on was evicted
+;;                 (a fat closure used as a value); a parameter that may
+;;                 hold an awaiter is admitted, and the call passes the
+;;                 caller's tur_poly_fn_t straight through.
+;;   r2-capture -- a lambda capturing the rank-2 parameter was evicted (a
+;;                 poly-fn capture); admitted for an awaiter-holding capture.
+;;   r2-bool    -- the same through a `bool` position.
+;;   r2-float   -- a float position: the call threads through `fn_cps` (the
+;;                 slot packs the float's bits; the value's twin unpacks
+;;                 them), and its `.fn` fallback is rendered by the direct
+;;                 emitter, as the delegated call was.
+;;   r2-cstr    -- a string result, likewise.
+;;   r2-computed -- a computed argument `(f (+ x 1))`; r2-cfloat the same at
+;;                 a float.  The call's computed arguments are hoisted into
+;;                 binders first (rank2_hoist_args), so its fallback can be
+;;                 re-rendered over atoms.
+;;   r2-nil     -- a nil result: the fallback runs the call for effect.
+;;   r2-eq      -- a CONSTRAINED rank-2 call `(f x 0)` through
+;;                 `(forall [a] [(Eq a)] ...)`: the dictionary is its leading
+;;                 argument, and the value's twin takes it too (and ignores it,
+;;                 for a monomorphic function); r2-eq-computed with a computed
+;;                 argument.
+;;
+;; Every body awaits a pending future each turn; the driver fulfills it with
+;; 2 and hands out a fresh one.  Leak-checked (requires.leak-check).
+
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+(defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defn r2-apply [f (forall [a] (-> a a)) x : int] : int (f x))
+
+;; r2-called
+(defn r2-level2 [m : int] : int (* 2 (r2-apply level3 (+ m 1))))
+(defn r2-called [] : int (+ 7 (r2-level2 2)))
+
+;; r2-passed
+(defn r2-pass [f (forall [a] (-> a a)) x : int] : int (* 2 (r2-apply f (+ x 1))))
+(defn r2-passed [] : int (+ 7 (r2-pass level3 2)))
+
+;; r2-capture
+(defn r2-cap [f (forall [a] (-> a a)) x : int] : int
+  (* 2 (apply3 (fn [y : int] : int (f y)) (+ x 1))))
+(defn r2-capture [] : int (+ 7 (r2-cap level3 2)))
+
+;; r2-bool
+(defn level3b [b : bool] : bool (if b (> (sum-values 0 300 0) 0) false))
+(defn r2b-apply [f (forall [a] (-> a a)) x : bool] : bool (f x))
+(defn r2-bool [] : int (if (r2b-apply level3b true) 1213 0))
+
+;; r2-float
+(defn level3f [x : float] : float (+ x (as float (sum-values 0 300 0))))
+(defn r2f-apply [f (forall [a] (-> a a)) x : float] : float (f x))
+(defn r2-float [] : int (+ 606 (as int (r2f-apply level3f 7.1))))
+
+;; r2-cstr
+(defn level3s [x : int] : cstr (if (> (sum-values 0 300 0) x) "parked" "short"))
+(defn r2s-apply [f (forall [a] (-> a cstr)) x : int] : cstr (f x))
+(defn r2-cstr [] : int (do (println (r2s-apply level3s 5)) 1213))
+
+;; r2-computed
+(defn r2c-apply [f (forall [a] (-> a a)) x : int] : int (f (+ x 1)))
+(defn r2-computed [] : int (+ 7 (* 2 (r2c-apply level3 2))))
+
+;; r2-cfloat
+(defn r2cf-apply [f (forall [a] (-> a a)) x : float] : float (f (+ x 0.5)))
+(defn r2-cfloat [] : int (+ 606 (as int (r2cf-apply level3f 7.1))))
+
+;; r2-nil
+(defn cell [set : bool v : int] : int
+  ```c
+  static int64_t g = 0;
+  if (set) g = v;
+  return g;
+  ```)
+(defn level3n [m : int] : nil (do (cell true (+ m (sum-values 0 300 0))) nil))
+(defn r2n-apply [f (forall [a] (-> a nil)) x : int] : nil (f x))
+(defn r2-nil [] : int (do (r2n-apply level3n 13) (+ 600 (cell false 0))))
+
+;; r2-eq, r2-eq-computed
+(defn level3e [x : int y : int] : bool (> (+ x (sum-values 0 300 0)) y))
+(defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x 0))
+(defn r2e-computed [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f (+ x 1) 0))
+(defn r2-eq [] : int (if (r2e-apply level3e 5) 1213 0))
+(defn r2-eq-computed [] : int (if (r2e-computed level3e 5) 1213 0))
+
+(defn main [] : nil
+  (cur-cell true)
+  ;; 7 + 2 * (3 + 600), four times
+  (println (drive (async r2-called)))
+  (println (drive (async r2-passed)))
+  (println (drive (async r2-capture)))
+  (println (drive (async r2-bool)))
+  ;; 606 + int(7.1 + 600)
+  (println (drive (async r2-float)))
+  (println (drive (async r2-cstr)))
+  (println (drive (async r2-computed)))
+  ;; 606 + int(7.1 + 0.5 + 600)
+  (println (drive (async r2-cfloat)))
+  (println (drive (async r2-nil)))
+  (println (drive (async r2-eq)))
+  (println (drive (async r2-eq-computed)))
+  (free-future (cur-cell false)))

@@ -1,0 +1,89 @@
+;; await-parks-only-to-the-nearest-c-frame: a CONSTRAINED GENERIC passed to a
+;; constrained rank-2 parameter.  It runs as a dict-clone (`f__dict_N`): a
+;; copy taking its dictionaries as leading int64 params, its `T` params as the
+;; carrier word, and returning the carrier.  The clone stayed off the CPS
+;; backend -- its `__dict_` param name was a rejected spelling, its `T` params
+;; a rejected kind, and its class-method calls dispatch through context the
+;; direct emitter installs only after the CPS render is tried -- so the
+;; wrapper's call entered the clone's direct root and the park was refused.
+;;
+;; A may-await dict-clone is now an erased base the backend takes
+;; (fn_erased_base): the dictionary-dispatch context is installed around its
+;; render, its `T` positions read as the word, its entry returns the carrier,
+;; and the rank-2 value's twin threads the clone.  Shapes:
+;;
+;;   one-constraint -- `[(Eq T)] [x : T y : T] : bool`
+;;   two-constraint -- `[(Eq T) (Hash T)]`, two dictionaries
+;;   t-result       -- `[(Eq T)] [x : T y : T] : T`, the carrier result
+;;
+;; Each body awaits a pending future each turn; the driver fulfills it with
+;; 2 and hands out a fresh one.  Leak-checked (requires.leak-check).
+
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+(defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+;; one-constraint
+(defn same-and-wait [T] [(Eq T)] [x : T y : T] : bool
+  (and (eq? x y) (> (sum-values 0 300 0) 0)))
+(defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x x))
+(defn one-constraint [] : int (if (r2e-apply same-and-wait 5) 1213 0))
+
+;; two-constraint
+(defn both-wait [T] [(Eq T) (Hash T)] [x : T y : T] : bool
+  (and (eq? x y) (> (+ (hash x) 1) 0) (> (sum-values 0 300 0) 0)))
+(defn r2eh-apply [f (forall [a] [(Eq a) (Hash a)] (-> a a bool)) x : int] : bool (f x x))
+(defn two-constraint [] : int (if (r2eh-apply both-wait 5) 1213 0))
+
+;; t-result
+(defn pick-wait [T] [(Eq T)] [x : T y : T] : T
+  (if (eq? x y) (do (sum-values 0 300 0) x) y))
+(defn r2et-apply [f (forall [a] [(Eq a)] (-> a a a)) x : int] : int (f x x))
+(defn t-result [] : int (+ 1208 (r2et-apply pick-wait 5)))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (drive (async one-constraint)))
+  (println (drive (async two-constraint)))
+  (println (drive (async t-result)))
+  (free-future (cur-cell false)))

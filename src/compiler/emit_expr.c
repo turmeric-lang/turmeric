@@ -190,7 +190,15 @@ void emit_closure_env_struct_and_glue(EmitCtx *ctx, Buf *out,
          * exactly in a double's 53-bit integer range.  Pin the field
          * to the carrier so the stored bits and the fat-dispatch
          * read-back agree. */
-        const char *field_ctype = captured->type.kind == TY_FN
+        /* CY4, in lockstep with the emit_fns.c twin: a rank-2 capture lives
+         * as the fat tur_poly_fn_t its readers dispatch through (`.fn` /
+         * `.fn_cps` / `.env`).  This arm wins when the CPS backend emits the
+         * env first (await-parks-only-to-the-nearest-c-frame: an awaiting
+         * lambda capturing a rank-2 parameter), and without the rule it
+         * spelled the field `void *`. */
+        const char *field_ctype = captured->is_poly_fn
+            ? "tur_poly_fn_t"
+            : captured->type.kind == TY_FN
             ? "int64_t"
             : emit_type_c_name(ctx, captured->type);
         buf_printf(out, "%s %s; ", field_ctype, field);
@@ -18955,6 +18963,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 const Binding *ib = (inner && inner->kind == EX_VAR)
                     ? inner->as.var.binding : NULL;
                 if (ib && ib->source_binding) ib = ib->source_binding;
+                /* await-parks-only-to-the-nearest-c-frame: a constrained
+                 * generic's value is its DICT-CLONE (the wrapper forwards to
+                 * it, dictionaries first), so the twin threads the clone, not
+                 * the generic: its `T` positions are the carrier word and its
+                 * result the carrier (cps_ir_fncps_sig_ok_erased). */
+                const Binding *dcb = e->as.poly_wrap_.dict_clone_binding;
+                if (dcb) ib = dcb;
                 /* Gate on the wrapped fn being EFFECTFUL (a non-empty effect row):
                  * it performs / propagates an effect, so it is CPS-colored and has
                  * a registered `__cps` entry the twin threads through.  A pure fn
@@ -18986,10 +19001,19 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * threaded).  Anything else would mismatch the twin's forward
                  * decl and stays on the delegated direct path. */
                 if (ib && ib->is_global && effectful
-                    && cps_ir_fncps_sig_ok(&ib->type)) {
+                    && (dcb ? cps_ir_fncps_sig_ok_erased(&ib->type)
+                            : cps_ir_fncps_sig_ok(&ib->type))) {
                     char *iname = raw_name_for_binding(ib);
-                    char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname, &ib->type);
-                    fn_cps_arity = ib->type.as.fn.arity;
+                    /* The wrapper's leading dictionary slots: its arity is the
+                     * env, then those, then the inner's arguments. */
+                    uint32_t n_lead = 0;
+                    const Binding *wb = e->as.poly_wrap_.wrapper_binding;
+                    if (wb && wb->type.kind == TY_FN
+                        && wb->type.as.fn.arity > 1 + ib->type.as.fn.arity)
+                        n_lead = wb->type.as.fn.arity - 1 - ib->type.as.fn.arity;
+                    char *twin = ensure_poly_wrap_cps_thunk(ctx, wn, iname, &ib->type, n_lead,
+                                                            dcb != NULL);
+                    fn_cps_arity = ib->type.as.fn.arity + n_lead;
                     /* twin==NULL means already emitted -- reuse the name. */
                     if (twin) { fn_cps_name = twin; }
                     else {

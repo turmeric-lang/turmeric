@@ -1467,6 +1467,17 @@ static bool cps_binding_may_await(const Binding *b) {
     if (b->source_binding) b = b->source_binding;
     return b->source_fn_def && b->source_fn_def->may_await;
 }
+/* await-parks-only-to-the-nearest-c-frame: a parameter some caller hands an
+ * awaiting function (Binding.may_hold_awaiter) is itself an awaiting function
+ * value: calling it may await, and so may passing it on or capturing it into
+ * a lambda that calls it.  Without this a higher-order function that reaches
+ * the awaiter only through its parameter -- `(defn r2-pass [f (forall [a]
+ * (-> a a)) x : int] ... (r2-apply f x))` -- read as one that never awaits: it
+ * stayed off the CPS backend for reasons an awaiter is exempt from, and
+ * TUR-W0044 missed it when it was evicted. */
+static bool cps_param_may_receive_awaiter(const Binding *b) {
+    return b && b->may_hold_awaiter;
+}
 static bool cps_fnvalue_arg_awaits(const Expr *arg) {
     arg = cps_peel_fnvalue_arg(arg);
     if (!arg) return false;
@@ -1474,7 +1485,8 @@ static bool cps_fnvalue_arg_awaits(const Expr *arg) {
         const Binding *b = arg->as.var.binding;
         return cps_binding_may_await(b)
             || cps_binding_may_await(b->closure_fn_binding)
-            || cps_binding_may_await(b->hoist_closure_fn_binding);
+            || cps_binding_may_await(b->hoist_closure_fn_binding)
+            || cps_param_may_receive_awaiter(b);
     }
     if (arg->kind == EX_CLOSURE && arg->as.closure_.closure && arg->as.closure_.closure->fn) {
         const FnDef *lfd = arg->as.closure_.closure->fn;
@@ -1487,6 +1499,7 @@ static bool cps_expr_awaits(const Expr *e) {
     if (e->kind == EX_AWAIT) return true;
     if (e->kind == EX_CALL) {
         if (cps_binding_may_await(e->as.call_.fn_binding)) return true;
+        if (cps_param_may_receive_awaiter(e->as.call_.fn_binding)) return true;
         for (uint32_t i = 0; i < e->as.call_.n_args; i++)
             if (cps_fnvalue_arg_awaits(e->as.call_.args[i])) return true;
     }
@@ -1495,6 +1508,107 @@ static bool cps_expr_awaits(const Expr *e) {
 static bool cps_awaits_visit(const Expr *c, void *ud) {
     (void)ud;
     return cps_expr_awaits(c);
+}
+
+/* The other half of the parameter rule: every call in `e` (nested function
+ * definitions excluded, as in cps_expr_awaits) that passes an awaiting
+ * function value flags the callee's parameter at that position. */
+typedef struct { CpsNode *nodes; uint32_t n; bool changed; } CpsAwaitMaskUd;
+static bool cps_await_mask_visit(const Expr *c, void *ud);
+static void cps_await_mask_walk(const Expr *e, CpsAwaitMaskUd *u) {
+    if (!e) return;
+    if (e->kind == EX_CALL && e->as.call_.fn_binding) {
+        int ci = cps_find_node(u->nodes, u->n, e->as.call_.fn_binding);
+        if (ci >= 0) {
+            FnDef *g = u->nodes[ci].fd;
+            for (uint32_t i = 0; i < e->as.call_.n_args && i < g->n_params; i++) {
+                Binding *p = g->params[i];
+                if (!p || p->may_hold_awaiter) continue;
+                if (!cps_fnvalue_arg_awaits(e->as.call_.args[i])) continue;
+                p->may_hold_awaiter = true;
+                u->changed = true;
+            }
+        }
+    }
+    cps_visit_children(e, cps_await_mask_visit, u);
+}
+static bool cps_await_mask_visit(const Expr *c, void *ud) {
+    cps_await_mask_walk(c, (CpsAwaitMaskUd *)ud);
+    return false;
+}
+
+/* await-parks-only-to-the-nearest-c-frame: which functions may run below an
+ * async body (FnDef.async_reachable).  Seeds are the thunks of every
+ * `(async ...)` in the program; from a reachable function, every function it
+ * calls or references as a value is reachable (a value may be called later,
+ * so referencing is enough -- conservative, never loses a warning).  A thunk
+ * that is not a known function makes every function reachable. */
+typedef struct { CpsNode *nodes; uint32_t n; bool changed; bool unknown; } CpsAsyncReachUd;
+static FnDef *cps_ar_fd_of(CpsAsyncReachUd *u, const Binding *b) {
+    if (!b) return NULL;
+    if (b->source_binding) b = b->source_binding;
+    int ci = cps_find_node(u->nodes, u->n, b);
+    if (ci >= 0) return u->nodes[ci].fd;
+    return b->source_fn_def;
+}
+static void cps_ar_mark(CpsAsyncReachUd *u, FnDef *fd) {
+    if (fd && !fd->async_reachable) { fd->async_reachable = true; u->changed = true; }
+}
+static void cps_ar_mark_binding(CpsAsyncReachUd *u, const Binding *b) {
+    if (!b) return;
+    cps_ar_mark(u, cps_ar_fd_of(u, b));
+    cps_ar_mark(u, cps_ar_fd_of(u, b->closure_fn_binding));
+    cps_ar_mark(u, cps_ar_fd_of(u, b->hoist_closure_fn_binding));
+}
+/* Mark what `e` (code that runs below an async body) calls or references. */
+static bool cps_ar_refs_visit(const Expr *c, void *ud);
+static void cps_ar_refs(const Expr *e, CpsAsyncReachUd *u) {
+    if (!e) return;
+    if (e->kind == EX_CALL) cps_ar_mark_binding(u, e->as.call_.fn_binding);
+    else if (e->kind == EX_VAR) cps_ar_mark_binding(u, e->as.var.binding);
+    else if (e->kind == EX_POLY_WRAP) {
+        /* A rank-2 value is the wrapper (`__poly_N`) the elaborator minted,
+         * and for a constrained generic the dict-clone it forwards to: both
+         * run when the value is called. */
+        cps_ar_mark_binding(u, e->as.poly_wrap_.wrapper_binding);
+        cps_ar_mark_binding(u, e->as.poly_wrap_.dict_clone_binding);
+    }
+    else if (e->kind == EX_CLOSURE && e->as.closure_.closure)
+        cps_ar_mark(u, e->as.closure_.closure->fn);
+    cps_visit_children(e, cps_ar_refs_visit, u);
+}
+static bool cps_ar_refs_visit(const Expr *c, void *ud) {
+    cps_ar_refs(c, (CpsAsyncReachUd *)ud);
+    return false;
+}
+/* Seed from every `(async thunk)` in `e`, wherever it sits. */
+static bool cps_ar_seed_visit(const Expr *c, void *ud);
+static void cps_ar_seed(const Expr *e, CpsAsyncReachUd *u) {
+    if (!e) return;
+    if (e->kind == EX_ASYNC) {
+        const Expr *t = cps_peel_fnvalue_arg(e->as.async_.fn_expr);
+        if (!t) {
+            /* nothing to resolve */
+        } else if (t->kind == EX_CLOSURE && t->as.closure_.closure) {
+            cps_ar_mark(u, t->as.closure_.closure->fn);
+        } else if (t->kind == EX_VAR) {
+            const Binding *b = t->as.var.binding;
+            FnDef *fd = cps_ar_fd_of(u, b);
+            if (!fd && b) fd = cps_ar_fd_of(u, b->closure_fn_binding);
+            if (!fd && b) fd = cps_ar_fd_of(u, b->hoist_closure_fn_binding);
+            if (fd) cps_ar_mark(u, fd);
+            else u->unknown = true;
+        } else if (e->as.async_.fn_expr->type.kind == TY_FN) {
+            u->unknown = true;          /* a computed fn value */
+        } else {
+            cps_ar_refs(e->as.async_.fn_expr, u);   /* an expression body */
+        }
+    }
+    cps_visit_children(e, cps_ar_seed_visit, u);
+}
+static bool cps_ar_seed_visit(const Expr *c, void *ud) {
+    cps_ar_seed(c, (CpsAsyncReachUd *)ud);
+    return false;
 }
 
 bool cps_fn_may_await(const FnDef *fd) {
@@ -1620,16 +1734,49 @@ void cps_color_program(Arena *a, Expr *program) {
 
     /* await-through-fn-value-parks-only-the-callee: `may_await` to a fixed
      * point -- a function whose body awaits, or calls a function that may.
-     * Reset first, like cps_colored, so a re-run starts clean. */
-    for (uint32_t i = 0; i < n; i++) nodes[i].fd->may_await = false;
+     * Reset first, like cps_colored, so a re-run starts clean.  The same
+     * fixpoint flags may_hold_awaiter (await-parks-only-to-the-nearest-c-
+     * frame): a parameter some call hands an awaiting function, so that a
+     * body calling or passing on such a parameter may await too. */
+    for (uint32_t i = 0; i < n; i++) {
+        nodes[i].fd->may_await = false;
+        for (uint32_t p = 0; p < nodes[i].fd->n_params; p++)
+            if (nodes[i].fd->params[p]) nodes[i].fd->params[p]->may_hold_awaiter = false;
+    }
     changed = true;
     while (changed) {
         changed = false;
         for (uint32_t i = 0; i < n; i++) {
+            CpsAwaitMaskUd mu = { nodes, n, false };
+            cps_await_mask_walk(nodes[i].fd->body, &mu);
+            if (mu.changed) changed = true;
             if (nodes[i].fd->may_await) continue;
             if (cps_expr_awaits(nodes[i].fd->body)) {
                 nodes[i].fd->may_await = true;
                 changed = true;
+            }
+        }
+    }
+
+    /* await-parks-only-to-the-nearest-c-frame: async reachability, for
+     * TUR-W0044.  Seeds from every spawn site (functions and top-level items),
+     * then closes over calls and references to a fixed point. */
+    {
+        CpsAsyncReachUd ar = { nodes, n, false, false };
+        for (uint32_t i = 0; i < n; i++) nodes[i].fd->async_reachable = false;
+        for (uint32_t i = 0; i < n; i++) cps_ar_seed(nodes[i].fd->body, &ar);
+        for (uint32_t i = 0; i < program->as.program.n; i++) {
+            const Expr *it = program->as.program.items[i];
+            if (it && it->kind != EX_FN_DEF) cps_ar_seed(it, &ar);
+        }
+        if (ar.unknown) {
+            for (uint32_t i = 0; i < n; i++) nodes[i].fd->async_reachable = true;
+        } else {
+            ar.changed = true;
+            while (ar.changed) {
+                ar.changed = false;
+                for (uint32_t i = 0; i < n; i++)
+                    if (nodes[i].fd->async_reachable) cps_ar_refs(nodes[i].fd->body, &ar);
             }
         }
     }

@@ -169,6 +169,15 @@ typedef enum DiagCode {
      * on another OS thread the program hangs with no further diagnostic.
      * Not emitted under --interpret, whose rendezvous is cooperative. */
     TUR_W0043_SESSION_OP_IN_ASYNC,
+    /* await-parks-only-to-the-nearest-c-frame: a function that may await
+     * (its body awaits, or it calls a function that does) is compiled
+     * direct-style because the CPS backend evicted it.  A pending future
+     * awaited below it would park at its entry's root instead of the async
+     * body's; the program then refuses that park at run time (`await: a
+     * pending future would park below a direct-style call`).  A ready future
+     * is unaffected, which is why this is a warning and not an error.
+     * Emitted once per function at the eviction site (emit_cps_ir.c). */
+    TUR_W0044_AWAITER_COMPILED_DIRECT,
     /* MS2: Multi-shot continuation capture analysis */
     TUR_E0500_MULTISHOT_UNIQUE_CAPTURE,       /* ^multishot handler captures a unique/linear value */
     TUR_E0501_MULTISHOT_ANN_OUTSIDE_HANDLER,  /* ^multishot annotation outside a handler continuation */

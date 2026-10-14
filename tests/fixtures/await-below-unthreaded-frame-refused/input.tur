@@ -1,0 +1,64 @@
+;; await-parks-only-to-the-nearest-c-frame: the shape that still puts a
+;; direct-style frame between an async body and its await.  It draws
+;; TUR-W0044 at compile time, and the compiled program refuses the park at
+;; run time rather than losing the rest of the body.
+;;
+;; A rank-2 call with a STRUCT position: the `fn_cps` slot carries one-word
+;; values, and the value's `.fn` carries a struct through the carrier-spill
+;; protocol the threaded path does not mirror, so the call stays delegated to
+;; the value's direct entry.  (`body`, which reads a field of that struct
+;; result, evicts with it -- the second warning.)
+
+
+(defn cur-cell [fresh : bool] : ptr<void>
+  ```c
+  static void *g = NULL;
+  if (fresh) { g = tur_future_new(); }
+  return g;
+  ```)
+
+(defn pending? [f : ptr<void>] : bool
+  ```c
+  return ((TurFuture *)f)->status == FUTURE_PENDING;
+  ```)
+
+(defn fulfill-future [f : ptr<void> v : int] : nil
+  ```c
+  tur_future_fulfill((TurFuture *)f, (int64_t)v);
+  ```)
+
+(defn future-value [f : ptr<void>] : int
+  ```c
+  return (int64_t)tur_future_get((TurFuture *)f);
+  ```)
+
+(defn free-future [f : ptr<void>] : nil
+  ```c
+  tur_future_free((TurFuture *)f);
+  ```)
+
+(defn next-value [] : int (await (cur-cell false)))
+(defn sum-values [i : int n : int acc : int] : int
+  (if (= i n) acc (sum-values (+ i 1) n (+ acc (next-value)))))
+
+(defn level3 [m : int] : int (+ m (sum-values 0 300 0)))
+(defn apply3 [f : (fn [int] int) x : int] : int (f x))
+(defn drive [f : ptr<void>] : int
+  (while (pending? f)
+    (let [old (cur-cell false)]
+      (cur-cell true)
+      (fulfill-future old 2)
+      (free-future old)))
+  (let [v (future-value f)]
+    (free-future f)
+    v))
+
+(defstruct P [a : int b : int])
+(defn level3p [p : P] : P (P (+ (.a p) (sum-values 0 300 0)) (.b p)))
+(defn r2p-apply [f (forall [a] (-> a a)) p : P] : P (f p))
+(defn body [] : int (.a (r2p-apply level3p (P 13 0))))
+
+(defn main [] : nil
+  (cur-cell true)
+  (println (drive (async body)))
+  (free-future (cur-cell false)))

@@ -2724,8 +2724,19 @@ char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
     return name;
 }
 
+/* `n_lead_ignore`: the wrapper's leading dictionary slots (make_poly_wrapper_ex)
+ * -- a CONSTRAINED rank-2 sink calls through the value with a dictionary first,
+ * which a monomorphic inner does not take.  The twin takes them too, as leading
+ * words it ignores, so the threaded slot call (cps_ir.c, fncps_forall_call_ok)
+ * passes exactly what the `.fn` call passes (await-parks-only-to-the-nearest-
+ * c-frame).  0 for every other wrapper. */
+/* `carrier_result`: the inner function is a dict-clone, whose direct
+ * definition returns the int64 carrier whatever its declared result (MB2.5),
+ * so the twin's forward declaration of it says so and its result is delivered
+ * as the word it already is. */
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
-                                 const char *inner_fn, const Type *inner_ty) {
+                                 const char *inner_fn, const Type *inner_ty,
+                                 uint32_t n_lead_ignore, bool carrier_result) {
     Buf nb; buf_init(&nb);
     buf_puts(&nb, wrapper_name);
     buf_puts(&nb, "__cps");
@@ -2757,6 +2768,7 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
      * spelling (`__pwx`). */
     uint32_t n = inner_ty->as.fn.arity;
     TypeKind rk = inner_ty->as.fn.result_kind;
+    if (carrier_result && rk != TY_NIL) rk = TY_INT;
     const char *rc = rk == TY_NIL ? "void" : cps_ir_fncps_arg_ctype(rk);
     Buf decl, prm, fwd, cast;
     buf_init(&decl); buf_init(&prm); buf_init(&fwd); buf_init(&cast);
@@ -2796,9 +2808,17 @@ char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
     }
     buf_putc(&decl, '\0'); buf_putc(&prm, '\0'); buf_putc(&fwd, '\0'); buf_putc(&cast, '\0');
     buf_putc(&dir, '\0');
+    Buf lead; buf_init(&lead);
+    for (uint32_t i = 0; i < n_lead_ignore; i++)
+        buf_printf(&lead, ", int64_t __pwd%u", i);
+    buf_putc(&lead, '\0');
     buf_printf(target, "static %s %s(%s);\n", rc, inner_fn, n ? decl.data : "void");
-    buf_printf(target, "static int64_t %s(void *__pwe%s, struct DK *__kont) {\n", name, prm.data);
+    buf_printf(target, "static int64_t %s(void *__pwe%s%s, struct DK *__kont) {\n",
+               name, lead.data, prm.data);
     buf_puts(target, "    (void)__pwe;\n");
+    for (uint32_t i = 0; i < n_lead_ignore; i++)
+        buf_printf(target, "    (void)__pwd%u;\n", i);
+    buf_free(&lead);
     buf_printf(target, "    __tur_cps_fn __c = __tur_cps_lookup((intptr_t)%s);\n", inner_fn);
     buf_printf(target, "    if (__c) return ((int64_t(*)(%sstruct DK *))__c)(%s%s__kont);\n",
                cast.data, fwd.data, n ? ", " : "");

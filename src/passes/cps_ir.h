@@ -445,6 +445,17 @@ bool cps_ir_param_call_threads(const Binding *p, const Expr *call);
  * question, so the two cannot drift apart. */
 #define CPS_FNCPS_MAX_ARGS 8
 bool cps_ir_fncps_sig_ok(const Type *fn_ty);
+/* The same for a dict-clone's type, whose `T` positions are the int64 word. */
+bool cps_ir_fncps_sig_ok_erased(const Type *fn_ty);
+/* await-parks-only-to-the-nearest-c-frame: does the call `call` through the
+ * fat (is_poly_fn) parameter `fn` thread the continuation through the value's
+ * `fn_cps` slot?  False means the translator delegates it to the value's
+ * direct entry -- a constrained rank-2 call, or one with a computed argument
+ * and a float or pointer position. */
+bool cps_ir_fncps_param_call_threads(const Binding *fn, const Expr *call);
+/* Is every argument of `call` atomic (a variable or literal)?  A via_fncps
+ * fallback may then re-render the call through the direct emitter. */
+bool cps_ir_call_args_atomic(const Expr *call);
 /* The C spelling of an argument (or result) kind cps_ir_fncps_sig_ok admits. */
 const char *cps_ir_fncps_arg_ctype(TypeKind k);
 /* A value of kind `k` spelled as the int64 word that crosses the slot, and back

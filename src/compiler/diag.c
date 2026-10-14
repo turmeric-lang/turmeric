@@ -345,6 +345,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0041_HIGH_ARITY:                 return "TUR-W0041";
         case TUR_W0042_SHADOWS_SPECIAL_FORM:       return "TUR-W0042";
         case TUR_W0043_SESSION_OP_IN_ASYNC:        return "TUR-W0043";
+        case TUR_W0044_AWAITER_COMPILED_DIRECT:    return "TUR-W0044";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -528,6 +529,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
     if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
     if (strcmp(s, "TUR-W0043") == 0) return TUR_W0043_SESSION_OP_IN_ASYNC;
+    if (strcmp(s, "TUR-W0044") == 0) return TUR_W0044_AWAITER_COMPILED_DIRECT;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -1208,6 +1210,44 @@ static const DiagExplanation diag_explanations_[] = {
       "The warning is a heuristic: a body that does hand one end to a peer on\n"
       "another thread works and still warns.\n"
       "See docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md.\n",
+    },
+    { TUR_W0044_AWAITER_COMPILED_DIRECT,
+      "TUR-W0044: A function that may await is compiled direct-style\n"
+      "\n"
+      "The named function awaits a future -- in its own body, through a\n"
+      "function it calls, or through a function value it is handed -- and it\n"
+      "may run below an async body, but the CPS backend could not take it, so\n"
+      "it is compiled as an ordinary C function.  The message says why: its\n"
+      "signature or a capture has a shape the backend does not thread, its body\n"
+      "is inline C, or a form in its body has no lowering there.\n"
+      "\n"
+      "The second form names a call instead: a call through a rank-2 (forall)\n"
+      "parameter that may be handed a function that awaits, with a struct\n"
+      "argument or result, or more than eight arguments.  That call has no\n"
+      "threaded lowering and enters the value's direct entry, with the same\n"
+      "effect.  Every scalar position threads, dictionaries included; so does a\n"
+      "constrained generic passed as the value, unless its result is a float.\n"
+      "\n"
+      "A pending `await` parks by shifting to the NEAREST root prompt.  With this\n"
+      "function on the C stack between the async body and the await, that root\n"
+      "is the awaiter's own entry, not the body's: the park would capture only\n"
+      "the part of the body below this function, and the rest would carry on at\n"
+      "once with a dummy 0.  The compiled program refuses that park at run time\n"
+      "instead -- it prints\n"
+      "  await: a pending future would park below a direct-style call ...\n"
+      "and aborts.  An await that only ever meets a READY future never parks, so\n"
+      "such a program runs unchanged; that is why this is a warning.\n"
+      "\n"
+      "Fix: take the frame out of the path.  Move the await (or the call to the\n"
+      "awaiting function) out of the evicted function into a caller the backend\n"
+      "takes, or change the evicted function's shape -- a plain scalar/handle\n"
+      "signature, no inline C in the body.  `tur --interpret` runs the program\n"
+      "as written.  TUR_TRACE_EVICT=1 prints every eviction with its category.\n"
+      "\n"
+      "Only functions that may run below an async body warn: an (async ...)\n"
+      "thunk, and whatever it calls or references.  An await anywhere else has\n"
+      "no body to lose.\n"
+      "See docs/reported/await-parks-only-to-the-nearest-c-frame.md.\n",
     },
     { TUR_W0042_SHADOWS_SPECIAL_FORM,
       "TUR-W0042: Definition shadows a special form\n"

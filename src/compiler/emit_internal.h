@@ -1825,7 +1825,8 @@ const char *emit_fn_value_clone_for_current_spec(EmitCtx *ctx, const Binding *vb
 char *ensure_poly_wrap_spec_variant(EmitCtx *ctx, const char *inner_clone,
                                     uint32_t arity);
 char *ensure_poly_wrap_cps_thunk(EmitCtx *ctx, const char *wrapper_name,
-                                 const char *inner_fn, const Type *inner_ty);
+                                 const char *inner_fn, const Type *inner_ty,
+                                 uint32_t n_lead_ignore, bool carrier_result);
 char *ensure_fncps_env_dispatch(EmitCtx *ctx, const Type *lifted_ty);
 /* The lifted lambda of a closure EX_POLY_WRAP whose fat value gets a `fn_cps`
  * dispatcher (cps_ir_fncps_closure_sig_ok), or NULL.  Asked by the emitter that
