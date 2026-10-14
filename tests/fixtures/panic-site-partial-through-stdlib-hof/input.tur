@@ -1,0 +1,12 @@
+;; panic-location-names-the-runtime-not-the-call-site: a PARTIAL of a sited
+;; inline-C body handed to a stdlib HOF -- `(option-map (some 9) (vec-get
+;; v))` -- names the program's call to option-map, this file's line 11, on
+;; both engines: compiled, that call is sited and option-map's own `(f v)`
+;; and the partial's thunk keep its site; interpreted, option-map is a native
+;; whose leaf call sets it and the thunk keeps it.  It used not to compile at
+;; all (option-map-generic-partial).
+(defn main [] : int
+  (let [v (vec-of 10 20 30)]
+    (println (unwrap-or (option-map (some 1) (vec-get v)) 0))
+    (println (unwrap-or (option-map (some 9) (vec-get v)) 0))
+    0))

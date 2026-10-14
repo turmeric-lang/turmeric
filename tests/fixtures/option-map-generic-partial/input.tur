@@ -1,0 +1,19 @@
+;; option-map-generic-partial: a partial application of a GENERIC function
+;; handed to option-map -- `(option-map (some 1) (vec-get v))` -- did not
+;; compile.  The CPS backend's option-map clone bound the match's result to the
+;; int64 carrier (B bound to the partial's erased `A`) and the letraw packed
+;; the aggregate into a reaped box there, but the return delivery boxed that
+;; word AGAIN as if it were the aggregate: "incompatible types when assigning
+;; to type 'tur_adt_Option__int' from type 'int64_t'".  The delivery now hands
+;; the word on as the slot value (slot_store_reap).  A non-generic partial, or
+;; a lambda, always compiled.
+(defn pick2 [A] [v : (Vec A) i : int] : A (vec-get v i))
+(defn main [] : int
+  (let [v (vec-of 10 20 30)
+        w (vec-of 1.5 2.5)]
+    (println (unwrap-or (option-map (some 1) (vec-get v)) 0))
+    (println (unwrap-or (option-map (some 2) (pick2 v)) 0))
+    (println (unwrap-or (option-map (some 0) (vec-get w)) 0.0))
+    (println (unwrap-or (option-map (none) (vec-get v)) 7))
+    (println (ok-val (result-map (ok 0) (vec-get v))))
+    0))

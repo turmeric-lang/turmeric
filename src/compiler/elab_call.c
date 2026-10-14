@@ -6307,6 +6307,9 @@ static Expr *elab_partial_apply(Elab *e, const Form *call, Binding *fn_binding,
     inner_call->as.call_.dict_arg = NULL;
     inner_call->as.call_.is_poly_call = false;
     inner_call->as.call_.poly_arg_mask = 0;
+    /* panic-location-names-the-runtime-not-the-call-site: a panic in the
+     * callee names the call made through the partial's value. */
+    inner_call->as.call_.forwards_site = true;
 
     /* Build the thunk FnDef */
     /* Thunk params: [env_param (TY_PTR_VOID), rem_param_0, ..., rem_param_{n_remaining-1}] */
