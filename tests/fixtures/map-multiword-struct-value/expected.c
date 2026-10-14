@@ -5555,17 +5555,33 @@ static void tur_role_close(void *role_ptr) {
 
 /* ==== tur: end of fixed runtime preamble ==== */
 /* panic-location-names-the-runtime-not-the-call-site: the source site of
- * the direct call to a panicking inline-C body this thread is making --
- * set just before the call, cleared just after, read by tur_panic_sited. */
+ * the call into a panicking inline-C body this thread is making -- saved
+ * and set just before the call, restored just after, read by
+ * tur_panic_sited. */
 typedef struct { const char *file; int line; } tur_site_t;
 #if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; tur_cur_site = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; if (!o) tur_cur_site = s; return o;
+}
 #else
 extern void **tur_tls_cur_site_ptr(void);
 #define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    *p = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    if (!o) *p = s; return o;
+}
 #endif
 static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }
 static inline void tur_site_clear(void) { tur_cur_site = NULL; }
+static inline void tur_site_pop(const tur_site_t *o) { tur_cur_site = o; }
 static inline void tur_panic_sited(const char *msg) {
     const tur_site_t *s = tur_cur_site;
     tur_cur_site = NULL;
@@ -9401,9 +9417,9 @@ static bool vec_hyeq_hyloop(int64_t x, int64_t y, int64_t i, int64_t len) {
             __t153 = true;
         } else {
             bool __t154;
-            int64_t __ps_156 = (({ tur_site_set(&__tur_site_155); int64_t __tur_sr = vec_hyget(x, i); tur_site_clear(); __tur_sr; }));
+            int64_t __ps_156 = (({ const tur_site_t *__tur_sv = tur_site_keep(&__tur_site_155); int64_t __tur_sr = vec_hyget(x, i); tur_site_pop(__tur_sv); __tur_sr; }));
             if (tur_panicking) return ((bool)0);
-            int64_t __ps_158 = (({ tur_site_set(&__tur_site_157); int64_t __tur_sr = vec_hyget(y, i); tur_site_clear(); __tur_sr; }));
+            int64_t __ps_158 = (({ const tur_site_t *__tur_sv = tur_site_keep(&__tur_site_157); int64_t __tur_sr = vec_hyget(y, i); tur_site_pop(__tur_sv); __tur_sr; }));
             if (tur_panicking) return ((bool)0);
             bool __ps_159 = (__inst_Eq_eq_qu_int(__ps_156, __ps_158));
             if (tur_panicking) return ((bool)0);
@@ -11786,7 +11802,7 @@ static void * vec_hyshow_hyloop(int64_t v, int64_t i, int64_t len, void * b) {
             } else {
             }
             {
-                int64_t __ps_258 = (({ tur_site_set(&__tur_site_257); int64_t __tur_sr = vec_hyget(v, i); tur_site_clear(); __tur_sr; }));
+                int64_t __ps_258 = (({ const tur_site_t *__tur_sv = tur_site_keep(&__tur_site_257); int64_t __tur_sr = vec_hyget(v, i); tur_site_pop(__tur_sv); __tur_sr; }));
                 if (tur_panicking) return ((void *)0);
                 void * __ps_259 = (__inst_Show_show_int(__ps_258));
                 if (tur_panicking) return ((void *)0);

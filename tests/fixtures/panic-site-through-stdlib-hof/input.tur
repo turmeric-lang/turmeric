@@ -1,0 +1,17 @@
+;; panic-location-names-the-runtime-not-the-call-site: a sited inline-C body
+;; handed to a STDLIB higher-order function -- option-map, which calls it as
+;; `(f v)` in stdlib/option.tur -- names the program's call to option-map,
+;; this file's line 16, not option.tur's line.  The program's call to a
+;; stdlib function taking a function value is sited, and the call through the
+;; value inside it, written in stdlib source, keeps that site (tur_site_keep);
+;; the interpreter, whose option-map is a native, names the same call.
+;; Compiled only: the body is user inline C, which run-turi.sh skips.
+(defn get10 [i : int] : int
+  ```c
+  if (i > 3) tur_panic("get10: past end");
+  return i * 10;
+  ```)
+(defn main [] : int
+  (println (unwrap-or (option-map (some 1) get10) 0))
+  (println (unwrap-or (option-map (some 9) get10) 0))
+  0)

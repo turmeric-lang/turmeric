@@ -119,10 +119,18 @@ line. `tur --interpret` prints the same line, with exit code 1. A failed
 `cast` names the cast the same way: `panic at boom.tur:7: cast: any holds
 Point, not Other`. So does a bounds check inside a stdlib accessor -- the
 location is the call that failed, not the accessor's C: `panic at
-boom.tur:9: vec index out of bounds`. A panic raised inside a runtime helper
-the program never calls by name (a Saffron dynamic operator, say) still names
-a line in the generated C. The location does not say how your code got there. For the
-calls that led to it, use either of the next two sections: `tur debug`
+boom.tur:9: vec index out of bounds` -- whether the accessor is called by
+name, handed to a higher-order function and called through the parameter
+(the location is then the call through the parameter), partially applied
+(`(vec-get v)`: the location is the call made through the partial, not the
+line it was made on), or reached by typeclass dispatch. Handed to a stdlib
+higher-order function such as `option-map`, it names your call to that
+function, not a line of the stdlib. In a multi-module build compiled module
+by module, a call into another module's accessor names the caller's line
+too. A Saffron dynamic operator with no row for its operand
+names the operator's line. The location is one line: it does not say how
+your code got there. For the calls that led to it, use either of the next
+two sections: `tur debug`
 shows the Turmeric call stack directly, and a `--debug` build under lldb
 stops at the panic with the full stack (see
 [the panic recipe](#finding-where-a-panic-came-from)).

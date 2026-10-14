@@ -1663,6 +1663,13 @@ struct Expr {
                   * callee raises names it (emit_call_site_span), as the
                   * node's own span would name the template. */
                  Span site;
+                 /* The one call in a partial application's thunk
+                  * (elab_partial_apply), which forwards the call made
+                  * through the partial's value: a panic in the callee
+                  * names that call through the value -- `(f i)` in a HOF --
+                  * and this call's own span (where the partial was made)
+                  * only when nothing set one (both engines). */
+                 bool forwards_site;
                  bool is_poly_call;   /* Phase HRT1: call through rank-2 poly fn param */
                  /* Bitmasks over argument index.  64-bit: ordinary parameters
                   * are unbounded (these masks stay 0 for non-poly calls), but a

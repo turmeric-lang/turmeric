@@ -7495,6 +7495,27 @@ static void emit_async_direct_body(EmitCtx *ctx, Buf *body, const Expr *fn_expr)
     buf_puts(body, "tur_async_direct_body = 1;\n");
 }
 
+/* panic-location-names-the-runtime-not-the-call-site: a call through a
+ * FUNCTION VALUE -- a fat closure's slot 0, a thin fn pointer -- may enter a
+ * sited inline-C body (`vec-get` handed to a HOF as a value), which reads the
+ * thread's current site when it panics.  When this unit takes such a function
+ * as a value anywhere (emit_fn_value_call_site_mode; otherwise nothing could
+ * be reached and no call pays), the call carries its own site
+ * (emit_site_wrap) -- the value held in a temp of the call's C type
+ * (`ret_c`) -- so `(f v 9)` in a HOF names the HOF's line, not the
+ * runtime's.  Written in stdlib source, the call keeps a site the program's
+ * own call already set.  Returns `call` unchanged when nothing is to be done;
+ * otherwise the wrapped text, with `call` freed. */
+static char *site_fn_value_call(EmitCtx *ctx, const Expr *e, char *call,
+                                const char *ret_c) {
+    if (!call) return call;
+    char *r = emit_site_wrap(ctx, emit_fn_value_call_site_mode(ctx, e),
+                             emit_call_site_span(e), ret_c, call);
+    if (!r) return call;
+    free(call);
+    return r;
+}
+
 /* Bind a cast's operand to `cb` and check its tag against `tag`.  A cast in
  * Scheme source (r7rs-type-errors-are-uncatchable-panics) calls the raising
  * check, which names the procedure and the expected type; every other cast
@@ -7535,7 +7556,22 @@ static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
     buf_puts(body, ", ");
     if (want) emit_c_string(body, strslice(want, (uint32_t)strlen(want)));
     else      buf_puts(body, "\"\"");
-    buf_puts(body, ");\n");
+    /* panic-location-names-the-runtime-not-the-call-site: with no hook
+     * installed (the prelude not yet started) the raising check panics, and
+     * names the cast's own site like the Turmeric check above. */
+    const char *rpath = e->span.line ? diag_file_path(e->span.file_id) : NULL;
+    if (rpath) {
+        const char *rbase = rpath;
+        for (const char *p = rpath; *p; p++) if (*p == '\\' || *p == '/') rbase = p + 1;
+        buf_puts(body, ", \"");
+        for (const char *p = rbase; *p; p++) {
+            if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+            buf_putc(body, *p);
+        }
+        buf_printf(body, "\", %u);\n", e->span.line);
+    } else {
+        buf_puts(body, ", NULL, 0);\n");
+    }
 }
 
 /* fnsan-fat-closure-at-tyvar-sink: the adapter for a { adapter, handle }
@@ -11522,6 +11558,25 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 buf_putc(&out, '\0');
                 char *result = strdup(out.data);
                 buf_free(&out);
+                /* panic-location-names-the-runtime-not-the-call-site: the
+                 * thunk of a partial application of a panicking inline-C
+                 * function (`(g 9)` on a let-bound `(vec-get v)`, resolved
+                 * here to a direct thunk call) is sited as the call through
+                 * the value would be: the thunk's forwarding call keeps it. */
+                {
+                    EmitSiteMode pm = emit_direct_call_site_mode(ctx, e, thunk_binding);
+                    const char *prc = pm != EMIT_SITE_NONE
+                                          ? emit_sig_lookup_ret_ctype(thunk_name) : NULL;
+                    char *sited = (prc && *prc)
+                                      ? emit_site_wrap(ctx, pm, emit_call_site_span(e),
+                                                       prc, result)
+                                      : NULL;
+                    if (sited) {
+                        free(result);
+                        result = sited;
+                        note_call_ret(ctx, prc);
+                    }
+                }
                 /* SR2a: the readback half of the fn-carrier crossing, for a
                  * DIRECT thunk call.  A closure lifted out of a POLYMORPHIC
                  * combinator keeps that combinator's ungrounded result -- the
@@ -11679,7 +11734,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(&out, ")");
                     if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     free(thunk_typedef);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
@@ -12020,7 +12075,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (carrier_unbox) buf_puts(&out, ")");
                     if (word_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     free(thunk_typedef);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
@@ -12059,7 +12114,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&out, "((%s (*)(void))(intptr_t)%s)()",
                                ret_c, fn_ptr);
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     free(fn_ptr);
                     note_call_ret(ctx, ret_c);   /* findings 16 */
@@ -12246,7 +12301,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     buf_puts(&out, ")");
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
@@ -15915,43 +15970,42 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 arg_strs[i] = raw;
             }
             Buf out; buf_init(&out);
-            /* panic-location-names-the-runtime-not-the-call-site: a callee
-             * whose inline-C body may panic is handed this call's own site,
-             * set just before the call and cleared just after it, so a
-             * panic in the body names this line (emit_fns.c).  A statement
-             * expression, so the clear follows the call and the value is
-             * still the call's, held in a temp of the callee's emitted
-             * return type (the signature side table -- not `__auto_type`,
-             * which c2mir lacks); a `void` callee has no value to hold, so
-             * it gets a plain comma expression (a void statement expression
-             * trips an assertion in c2mir); a callee the table does not know
-             * is called as before, unsited. */
-            const char *site_rct = binding_panics_in_inline_c(fn_binding)
-                                       ? emit_sig_lookup_ret_ctype(fn_name) : NULL;
-            char *site_set = (site_rct && *site_rct)
-                                 ? emit_site_set_text(ctx, emit_call_site_span(e)) : NULL;
-            bool site_void = site_set && strcmp(site_rct, "void") == 0;
-            if (site_set) {
-                if (site_void) buf_printf(&out, "(%s, ", site_set);
-                else buf_printf(&out, "({ %s; %s __tur_sr = ", site_set, site_rct);
-            }
             buf_printf(&out, "%s(", fn_name);
             for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
                 if (i > 0) buf_puts(&out, ", ");
                 buf_printf(&out, "%s", arg_strs[i]);
             }
             buf_puts(&out, ")");
-            if (site_set) {
-                if (site_void) buf_puts(&out, ", tur_site_clear())");
-                else buf_puts(&out, "; tur_site_clear(); __tur_sr; })");
-                free(site_set);
-                /* The panic hoist types its `__ps_N` temp from this note; left
-                 * to read the text it finds `({` and falls back to
-                 * `__auto_type`, which c2mir does not know. */
-                note_call_ret(ctx, site_rct);
-            }
             buf_putc(&out, '\0');
-            char *result = strdup(out.data);
+            /* panic-location-names-the-runtime-not-the-call-site: a callee
+             * whose inline-C body may panic is handed this call's own site
+             * (emit_direct_call_site_mode, emit_site_wrap), so a panic in
+             * the body names this line (emit_fns.c); so is a stdlib function
+             * taking a function value, whose call through it keeps the site.
+             * The value is held in a temp of the callee's emitted return
+             * type (the signature side table -- not `__auto_type`, which
+             * c2mir lacks).  A callee the table does not know is called as
+             * before, unsited -- except in a separately compiled module,
+             * where the callee is another module's, declared by its header:
+             * that build is never c2mir's, and `__auto_type` holds the
+             * value there, as the panic hoist's temps already do. */
+            EmitSiteMode site_m = emit_direct_call_site_mode(ctx, e, fn_binding);
+            const char *site_rct = site_m != EMIT_SITE_NONE
+                                       ? emit_sig_lookup_ret_ctype(fn_name) : NULL;
+            if (site_m != EMIT_SITE_NONE && (!site_rct || !*site_rct) &&
+                ctx->separate_compilation && fn_binding && fn_binding->type.kind == TY_FN)
+                site_rct = strcmp(type_c_name(emit_type_from_kind(
+                                      fn_binding->type.as.fn.result_kind)), "void") == 0
+                               ? "void" : "__auto_type";
+            char *sited = (site_rct && *site_rct)
+                              ? emit_site_wrap(ctx, site_m, emit_call_site_span(e),
+                                               site_rct, out.data)
+                              : NULL;
+            char *result = sited ? sited : strdup(out.data);
+            /* The panic hoist types its `__ps_N` temp from this note; left to
+             * read the text it finds `({` and falls back to `__auto_type`,
+             * which c2mir does not know. */
+            if (sited && strcmp(site_rct, "__auto_type") != 0) note_call_ret(ctx, site_rct);
             buf_free(&out);
             /* SR1: the readback half of the `:int`-carrier-parameter bridge.  A
              * callee declared `: int` that really hands back a sum -- `(defn

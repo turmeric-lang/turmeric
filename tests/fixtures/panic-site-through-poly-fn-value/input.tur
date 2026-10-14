@@ -1,0 +1,19 @@
+;; panic-location-names-the-runtime-not-the-call-site: a sited inline-C body
+;; handed to a HOF with a SCALAR signature -- the CPS backend emits apply1,
+;; and `checked` crosses as a tur_poly_fn_t through a `__poly_N` forwarding
+;; wrapper -- names the call through the value, this file's line 10, where
+;; it named the runtime's own line.  The CPS fallback call sets the site; the
+;; wrapper's own forwarding call leaves it alone (emit_direct_call_sited),
+;; so the line is the program's `(f x)`, as the interpreter names it.
+;; Compiled only: the body is user inline C, which run-turi.sh skips.
+(defn apply1 [f : (fn [int] int) x : int] : int
+  (f x))
+(defn checked [i : int] : int
+  ```c
+  if (i > 3) tur_panic("checked: past end");
+  return i;
+  ```)
+(defn main [] : int
+  (println (apply1 checked 2))
+  (println (apply1 checked 7))
+  0)

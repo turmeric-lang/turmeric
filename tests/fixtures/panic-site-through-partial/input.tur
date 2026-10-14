@@ -1,0 +1,17 @@
+;; panic-location-names-the-runtime-not-the-call-site: a PARTIAL APPLICATION
+;; of a sited inline-C body -- `(vec-get v)` -- handed to a HOF and called
+;; there as `f` names the call through the value, this file's line 10, as
+;; `(apply2 vec-get v 9)` does (panic-site-through-fn-value) -- not line 14,
+;; where the partial was made, which its thunk's own call carries.  The
+;; thunk's call keeps the site the call through the value set (forwards_site:
+;; tur_site_keep compiled, g_fwd_site interpreted).  Both engines agree.
+
+(defn apply1 [f : (fn [int] int) i : int] : int
+  (f i))
+
+(defn main [] : int
+  (let [v (vec-of 10 20 30)
+        g (vec-get v)]
+    (println (apply1 g 1))
+    (println (apply1 g 9))
+    0))

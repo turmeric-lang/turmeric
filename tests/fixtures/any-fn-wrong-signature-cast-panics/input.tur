@@ -7,8 +7,8 @@
 ;; the pointer's low byte, read as a `const char *` the callee never received.
 ;;
 ;; It panics now, on BOTH back ends.  The messages differ and only the compiled
-;; one is asserted (expected.stderr is checked by run.sh; run-turi.sh asserts
-;; stdout and the exit code), because the two sides say the same thing
+;; one is asserted (stderr.compiled-only: run-turi.sh asserts stdout and the
+;; exit code here, not expected.stderr), because the two sides say the same thing
 ;; differently: compiled has only the two ids' display names, which are both
 ;; "fn", so it reports the mismatch as a signature mismatch; the interpreter has
 ;; the closure's reconstructed key and names both signatures outright.

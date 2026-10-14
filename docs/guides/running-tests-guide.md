@@ -155,7 +155,7 @@ removes a check.
 | --- | --- |
 | `expected.stdout` | The program's exact output. Without it the output is not checked at all |
 | `expected.exit` | The expected exit status (default 0) |
-| `expected.stderr` | Substrings that must appear in stderr |
+| `expected.stderr` | Substrings that must appear in stderr, one per line (`run.sh` and `run-turi.sh`) |
 | `unexpected.stderr` | Substrings that must NOT appear in stderr (`run.sh`), one per line -- pins a false diagnostic's absence |
 | `expected.diag` | Negative fixtures: substrings the compiler's diagnostics must contain, one per line |
 | `unexpected.diag` | Negative fixtures (`run.sh`): substrings that must NOT appear beside the expected error, one per line -- pins a false diagnostic that used to accompany a real one |
@@ -181,6 +181,7 @@ removes a check.
 | `requires.no-leak-check` | The program runs with leak detection off |
 | `requires.leak-check` | Opted in to `tests/run-leak-check.sh` |
 | `known.fnsan` | A known `-fsanitize=function` trap, handled by `tests/run-fnsan.sh` |
+| `stderr.compiled-only` | `run-turi.sh` does not check `expected.stderr`: only the compiling path prints it (a `--dump-*` report, a warning about the compiled runtime). Its contents say why |
 
 CLAUDE.md, "Fixture Files", has the reasoning behind several of these.
 

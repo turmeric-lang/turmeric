@@ -744,6 +744,11 @@ uint16_t diag_autoload_file_ids_end(void);
  * is resolved).  False when no root is known: the safe answer, since such a
  * file is then the program's, as it always was. */
 bool     diag_file_is_imported_stdlib(uint16_t file_id);
+/* panic-location-names-the-runtime-not-the-call-site: is `file_id` any file
+ * under the stdlib root -- auto-loaded or imported?  A panic site written
+ * there is the library's, not the program's: a call made from stdlib source
+ * keeps a site the program's own call already set (both engines). */
+bool     diag_file_is_stdlib(uint16_t file_id);
 
 /* Translate a span into the coordinates of the file the user is editing.
  *

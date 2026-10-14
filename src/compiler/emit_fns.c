@@ -5424,7 +5424,22 @@ static void tcg_emit_def(EmitCtx *ctx, Buf *file, TcgGroup *g) {
     buf_free(&F);
 }
 
+static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e);
+
+/* panic-location-names-the-runtime-not-the-call-site: a `__poly_N` forwarding
+ * wrapper's body is emitted with ctx->in_forwarding_wrapper set, so its one
+ * forwarding call keeps the panic site the call through the value set, and
+ * names its own line only when none is (emit_direct_call_site_mode). */
 void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
+    FnDef *fd = e ? e->as.fn_def_.fn : NULL;
+    bool saved = ctx->in_forwarding_wrapper;
+    ctx->in_forwarding_wrapper = fd && fd->binding &&
+                                 fd->binding->synth_kind == SYNTH_FORWARDING_WRAPPER;
+    emit_fn_def_body(ctx, file, e);
+    ctx->in_forwarding_wrapper = saved;
+}
+
+static void emit_fn_def_body(EmitCtx *ctx, Buf *file, const Expr *e) {
     FnDef *fd = e->as.fn_def_.fn;
     /* forall-dict-pass-nested-lambda-dispatch-plan (Phase 2): a mapper's dead
      * poly-wrapper, orphaned when the mapper became a dict-capturing closure. */
@@ -6786,9 +6801,11 @@ void emit_fn_def(EmitCtx *ctx, Buf *file, const Expr *e) {
          * calls `tur_panic(` panics through tur_panic_sited, which names the
          * site its direct caller set around the call (the general call arm
          * in emit_expr.c, the cps->direct arms), so `(vec-get v 9)` names
-         * the program's line.  Nothing happens at entry; a body entered with
-         * no site set (through a function value) names the runtime's own
-         * line, as before. */
+         * the program's line, and so does a call through a function value
+         * (site_fn_value_call), a partial application or an instance-method
+         * dispatch.  Nothing happens at entry; a body entered with no site
+         * set -- from C (a `--shared` library's host), or a fn value in a
+         * unit that takes none -- names the runtime's own line, as before. */
         bool sited = fn_def_panics_in_inline_c(fd);
         if (sited) buf_puts(file, "#define tur_panic(m) tur_panic_sited(m)\n");
         /* Inline C body - emit as-is (it contains its own return statements) */

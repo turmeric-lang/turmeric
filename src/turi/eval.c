@@ -3200,10 +3200,48 @@ void turi_host_exit_guard(TuriEnv *env, const char *msg) {
  * a setjmp boundary (or no boundary) the old behaviour is preserved (longjmp /
  * fire-defers-and-exit). */
 /* panic-location-names-the-runtime-not-the-call-site: the `(panic ...)`
- * node's span, set by EX_PANIC for the one call it makes, and a failed
- * `cast`'s; every other runtime panic has none.  Printed as the compiled path prints it --
+ * node's span, set by EX_PANIC for the one call it makes, a failed `cast`'s,
+ * and -- around a native leaf call -- the call's own, so a native that
+ * panics (vec-get's bounds check) names the line that called it.  The leaf
+ * call SAVES the slot and restores it afterwards rather than clearing it: a
+ * native HOF that calls back into a native (turi_call) or into a Turmeric
+ * closure whose own leaf calls come and go still names the HOF's call when
+ * a later native panics inside it.  Printed as the compiled path prints it --
  * `panic at boom.tur:3: msg`, the file's basename. */
 static _Thread_local Span g_panic_site;
+/* The site of the call that entered a partial application's thunk -- `(f i)`
+ * through the partial's value -- for the thunk's one forwarding call
+ * (forwards_site, elab_partial_apply) to name.  Set by the driver as it
+ * enters the thunk, consumed by the next leaf call, cleared on entering any
+ * other closure: the thunk's arguments are its captures and parameters, so
+ * nothing runs between its entry and that call. */
+static _Thread_local Span g_fwd_site;
+static Span call_node_site(const Expr *x) {
+    if (!x) return SPAN_UNKNOWN;
+    return (x->kind == EX_CALL && x->as.call_.site.line) ? x->as.call_.site : x->span;
+}
+static bool fn_is_pap_thunk(const FnDef *fn) {
+    const Expr *b = fn ? fn->body : NULL;
+    while (b && b->kind == EX_ASCRIBE && !b->as.ascribe_.type_form) b = b->as.ascribe_.inner;
+    return b && b->kind == EX_CALL && b->as.call_.forwards_site;
+}
+/* The site a native leaf call at `x` hands a panic, `saved` being the one
+ * already in the slot.  The program's call names itself.  The forwarding
+ * call of a partial's thunk names the call through the partial's value, else
+ * whatever is set; a call written in stdlib source keeps whatever is set --
+ * the program's call to a native HOF that called back into it -- as the
+ * compiled path's tur_site_keep does (emit_core.c, site_mode_for). */
+static Span leaf_panic_site(const Expr *x, Span saved) {
+    Span fwd = g_fwd_site;
+    g_fwd_site = SPAN_UNKNOWN;
+    Span own = call_node_site(x);
+    if (x && x->kind == EX_CALL && x->as.call_.forwards_site) {
+        if (fwd.line) return fwd;
+        return saved.line ? saved : own;
+    }
+    if (saved.line && own.line && diag_file_is_stdlib(own.file_id)) return saved;
+    return own;
+}
 static const char *panic_site_base(Span sp) {
     const char *path = sp.line ? diag_file_path(sp.file_id) : NULL;
     if (!path) return NULL;
@@ -9123,8 +9161,18 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     continue;
                 }
                 /* Leaf (native / inline-C): dispatched synchronously via
-                 * eval_apply, exactly as the DK_CALL_ARG leaf path does. */
+                 * eval_apply, exactly as the DK_CALL_ARG leaf path does.
+                 * panic-location-names-the-runtime-not-the-call-site: the
+                 * DK_NATIVE_RESUME frame beneath carries the form that asked
+                 * for this application (`(tvar/modify tv f)`), so a native `f`
+                 * that panics names that form's line. */
+                Span saved_site = g_panic_site;
+                g_fwd_site = SPAN_UNKNOWN;
+                if (cl->native && len > 0 && st[len - 1].kind == DK_NATIVE_RESUME &&
+                    st[len - 1].expr)
+                    g_panic_site = st[len - 1].expr->span;
                 cur = eval_apply(env, cl, acc, n);
+                g_panic_site = saved_site;
                 TURI_DRIVE_FREE(acc); descending = false; continue;
             }
             uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;
@@ -9149,6 +9197,12 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                            fn->params[param_offset + i]->name->name,
                            turi_copy_byvalue_struct_arg(env, acc[i]));
             TURI_DRIVE_FREE(acc);
+            /* panic-location-names-the-runtime-not-the-call-site: a partial's
+             * thunk applied for a native names the form that asked
+             * (DK_NATIVE_RESUME), as a native leaf applied here does. */
+            g_fwd_site = (fn_is_pap_thunk(fn) && len > 0 &&
+                          st[len - 1].kind == DK_NATIVE_RESUME && st[len - 1].expr)
+                             ? st[len - 1].expr->span : SPAN_UNKNOWN;
             DRIVE_PUSH(((DriveCont){ .kind = DK_CALL_RET, .frame = call_frame,
                                      .aux = env->defer_stack,
                                      .saved_module  = env->current_module,
@@ -9911,7 +9965,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 s->tv = tv; s->old = old;
                 NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                 nr->resume = tvar_modify_resume; nr->state = s;
-                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .expr = control, .aux = nr }));
                 apply_fn   = fn;
                 apply_args = (TuriValue *)malloc(sizeof(TuriValue));
                 apply_args[0] = turi_int(old);
@@ -10012,7 +10066,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                     s->let_frames = d.let_frames; s->n_let = d.n_let;
                     NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                     nr->resume = serial_receiver_resume; nr->state = s;
-                    DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                    DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .expr = control, .aux = nr }));
                     if (d.is_fold) {
                         /* SR N4 Slice 7: is_pure -- fold the reified context over
                          * the pure value on the work-stack (DK_CONT_FOLD). */
@@ -10129,7 +10183,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 s->form = is0 ? "shift0" : "shift";
                 NativeResume *nr = (NativeResume *)malloc(sizeof(NativeResume));
                 nr->resume = abortive_shift_resume; nr->state = s;
-                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .aux = nr }));
+                DRIVE_PUSH(((DriveCont){ .kind = DK_NATIVE_RESUME, .expr = control, .aux = nr }));
                 apply_fn   = fn;
                 apply_args = (TuriValue *)malloc(sizeof(TuriValue));
                 apply_args[0] = v;
@@ -10655,11 +10709,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                      * check, turi_runtime_panic) names this call; the site is
                      * consumed by the panic or cleared after the call, so no
                      * later panic inherits it. */
-                    if (cl->native)
-                        g_panic_site = (top->expr->kind == EX_CALL && top->expr->as.call_.site.line)
-                                           ? top->expr->as.call_.site : top->expr->span;
+                    Span saved_site = g_panic_site;
+                    Span leaf_site = leaf_panic_site(top->expr, saved_site);
+                    if (cl->native) g_panic_site = leaf_site;
                     cur = eval_apply(env, cl, acc, n);
-                    g_panic_site = SPAN_UNKNOWN;
+                    g_panic_site = saved_site;
                     TURI_DRIVE_FREE_EP(acc_epoch, acc); len--;
                     break;
                 }
@@ -10780,6 +10834,9 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                fn->params[param_offset + i]->name->name,
                                turi_copy_byvalue_struct_arg(env, acc[arg_base + i]));
                 TURI_DRIVE_FREE_EP(acc_epoch, acc);
+                /* panic-location-names-the-runtime-not-the-call-site: a
+                 * partial's thunk names this call (g_fwd_site). */
+                g_fwd_site = fn_is_pap_thunk(fn) ? call_node_site(top->expr) : SPAN_UNKNOWN;
                 /* turi-dict-passing-plan: a DICT-CLONE's leading dict params
                  * just bound as ordinary int args carry TypeClassInstance
                  * pointers (the EX_DICT address-only value).  Record them as
@@ -11157,6 +11214,10 @@ static TuriValue eval_apply_driven(TuriEnv *env, TuriClosure *cl,
      * a HOF native re-entering evaluation, and the inline-C override below. */
     if (cl->native) return call_native_checked(env, cl, args, n_args);
 
+    /* panic-location-names-the-runtime-not-the-call-site: applied from C (a
+     * native HOF's turi_call), no program call entered this closure; a
+     * partial's thunk then keeps the site the HOF's own call set. */
+    g_fwd_site = SPAN_UNKNOWN;
     FnDef *fn = (FnDef *)cl->fn;
     /* EX_CLOSURE adds a synthetic __env_p first param for codegen; skip it. */
     uint32_t param_offset     = cl->skip_env_param ? 1u : 0u;

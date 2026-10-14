@@ -148,14 +148,15 @@ void diag_note_autoload_file_ids(uint16_t end) {
 }
 uint16_t diag_autoload_file_ids_end(void) { return autoload_file_ids_end_; }
 
-/* diag_file_is_imported_stdlib is asked per item and per binding, so its
- * answer is kept -- by the SourceFile, since a compile-time evaluator session
- * may register another file under the same id; diag_reset forgets them. */
+/* Whether a file lies under the stdlib root is asked per item, per binding
+ * and per call, so the answer is kept -- by the SourceFile, since a
+ * compile-time evaluator session may register another file under the same
+ * id; diag_reset forgets them. */
 static const SourceFile *imp_seen_[MAX_FILES];
 static bool              imp_ans_[MAX_FILES];
 
-bool diag_file_is_imported_stdlib(uint16_t file_id) {
-    if (file_id == 0 || file_id < autoload_file_ids_end_ || file_id >= MAX_FILES) return false;
+static bool file_under_stdlib_root(uint16_t file_id) {
+    if (file_id >= MAX_FILES) return false;
     const SourceFile *f = files_[file_id];
     if (!f || !f->path) return false;
     if (imp_seen_[file_id] == f) return imp_ans_[file_id];
@@ -176,6 +177,15 @@ bool diag_file_is_imported_stdlib(uint16_t file_id) {
     imp_seen_[file_id] = f;
     imp_ans_[file_id] = r;
     return r;
+}
+
+bool diag_file_is_imported_stdlib(uint16_t file_id) {
+    if (file_id == 0 || file_id < autoload_file_ids_end_) return false;
+    return file_under_stdlib_root(file_id);
+}
+
+bool diag_file_is_stdlib(uint16_t file_id) {
+    return file_under_stdlib_root(file_id);
 }
 
 const SourceFile *diag_source_file(uint16_t file_id) {
