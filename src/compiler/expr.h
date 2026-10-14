@@ -1163,6 +1163,10 @@ struct FnDef {
      * the callee's continuation.  Written by cps_color_program; read through
      * cps_fn_may_await. */
     bool           may_await;
+    /* await-parks-only-to-the-nearest-c-frame: TUR-W0044 has been emitted
+     * for this function (the CPS eviction site may be reached more than once
+     * per function -- per translation unit, per spec clone). */
+    bool           await_evict_warned;
     /* sum-closure-payload-never-dropped: lazily computed, emit side.  Bit i of
      * sumcl_known says param i has been asked; bit i of sumcl_nonretain says
      * the body keeps no closure taken out of the sum it receives there (see

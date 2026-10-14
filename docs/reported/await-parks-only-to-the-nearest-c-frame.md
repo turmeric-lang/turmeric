@@ -1,5 +1,14 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-14 (fifth pass): the refusal is announced at compile
+time.** A function that may await and that the CPS backend evicts now draws
+`TUR-W0044` at its definition, naming the function and why it is off the
+backend (`export-as`, a signature or capture shape, an inline-C body, a form
+with no lowering). The run-time refusal stays as the floor; the warning is
+what fix direction 2 asked for, as a warning rather than an error because a
+program whose awaits only ever meet ready futures runs unchanged. See
+"Warned at compile time" at the end.
+
 **Narrowed 2026-10-09 (fourth pass): a function that both performs an effect
 and awaits a future compiles.** Every ordering -- perform then await, await
 then perform, either under the function's own `handle` -- was refused
@@ -217,3 +226,49 @@ compile-time diagnostic: an `export-as` function (its C ABI is fixed, so
 that one stays a refusal), a generic or rank-2 capture, a poly-fn parameter.
 A compile-time version of the refusal (fix direction 2) would also refuse
 programs that only ever await ready futures.
+
+### Warned at compile time (2026-10-14)
+
+The eviction site (`emit_cps_ir_try_fn_impl`, `src/compiler/emit_cps_ir.c`)
+already classified every colored fallback for `TUR_TRACE_EVICT`. It now also
+emits `TUR-W0044` once per function that `cps_fn_may_await` and is evicted,
+at the function's definition span, with the category's reason in prose:
+
+```
+input.tur:43:33: warning [TUR-W0044]: `level2` may await but is compiled
+direct-style: it is exported under a fixed C name (export-as), which keeps
+the C ABI. Inside an async body, a pending future awaited below it would
+park at this function's root instead of the body's, so the program refuses
+the park at run time (`await: a pending future would park below a
+direct-style call`); a ready future is unaffected. Move the await, or the
+call to the awaiting function, out of this function (SIG-EXPORT)
+```
+
+`tur explain TUR-W0044` has the long form. Two evictions are left out on
+purpose, both measured as false positives on the await fixture set:
+
+- `main`: it is never below an async body, so an await in it has no body to
+  lose (it fired on five fixtures whose `main` awaits a spawned future).
+- A rank-2 adapter `__poly_<N>` (`make_poly_wrapper`): only its base entry
+  is refused at the site; the fat box a colored caller dispatches through
+  carries the adapter's own `__poly_<N>__cps` twin, so a park never crosses
+  the base entry (`await-through-fn-value` parks through three of them and
+  prints the right answers).
+
+Across every fixture that awaits, the warning fires on exactly two: the
+`export-as` function of `await-below-exported-function-refused` (now in its
+`expected.stderr`) and `worker` in `cps-oracle-async-placement`, which
+awaits a future it has just spawned -- ready on the compiled path, so the
+program is correct and the warning is the "ready future is unaffected"
+case. `unexpected.stderr` pins its absence on the five pending-future
+fixtures that park correctly: `await-through-fn-value`,
+`await-below-evicted-caller-or-nontail-resume`,
+`await-below-struct-capturing-lambda`,
+`await-in-struct-capturing-async-body`, `cps-perform-and-await-parking`.
+
+Still open, unchanged: each eviction reason an awaiter can still hit wants
+its own admission (a generic or rank-2 capture, a poly-fn parameter); the
+`export-as` one stays a refusal. The warning does not know whether the
+evicted function is reachable from an async body at all, which is why
+`worker` above draws it; a reachability pass from the `async` spawn sites
+would make it exact.

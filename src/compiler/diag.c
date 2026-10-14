@@ -335,6 +335,7 @@ const char *diag_code_to_string(DiagCode code) {
         case TUR_W0041_HIGH_ARITY:                 return "TUR-W0041";
         case TUR_W0042_SHADOWS_SPECIAL_FORM:       return "TUR-W0042";
         case TUR_W0043_SESSION_OP_IN_ASYNC:        return "TUR-W0043";
+        case TUR_W0044_AWAITER_COMPILED_DIRECT:    return "TUR-W0044";
         /* LT1: Linear type errors */
         case TUR_E0100_LINEAR_DROPPED:             return "TUR-E0100";
         case TUR_E0101_LINEAR_USE_AFTER_CONSUME:   return "TUR-E0101";
@@ -518,6 +519,7 @@ DiagCode diag_code_from_string(const char *s) {
     if (strcmp(s, "TUR-W0041") == 0) return TUR_W0041_HIGH_ARITY;
     if (strcmp(s, "TUR-W0042") == 0) return TUR_W0042_SHADOWS_SPECIAL_FORM;
     if (strcmp(s, "TUR-W0043") == 0) return TUR_W0043_SESSION_OP_IN_ASYNC;
+    if (strcmp(s, "TUR-W0044") == 0) return TUR_W0044_AWAITER_COMPILED_DIRECT;
     /* LT1: Linear type errors */
     if (strcmp(s, "TUR-E0100") == 0) return TUR_E0100_LINEAR_DROPPED;
     if (strcmp(s, "TUR-E0101") == 0) return TUR_E0101_LINEAR_USE_AFTER_CONSUME;
@@ -1198,6 +1200,34 @@ static const DiagExplanation diag_explanations_[] = {
       "The warning is a heuristic: a body that does hand one end to a peer on\n"
       "another thread works and still warns.\n"
       "See docs/archive/compiled-async-fiber-deadlocks-on-a-session-op.md.\n",
+    },
+    { TUR_W0044_AWAITER_COMPILED_DIRECT,
+      "TUR-W0044: A function that may await is compiled direct-style\n"
+      "\n"
+      "The named function awaits a future -- in its own body, or through a\n"
+      "function it calls -- but the CPS backend could not take it, so it is\n"
+      "compiled as an ordinary C function.  The message says why: it is exported\n"
+      "under a fixed C name (export-as), its signature has a shape the backend\n"
+      "does not thread (a rank-2 fn parameter, a generic capture, ...), its body\n"
+      "is inline C, or a form in its body has no lowering there.\n"
+      "\n"
+      "A pending `await` parks by shifting to the NEAREST root prompt.  With this\n"
+      "function on the C stack between the async body and the await, that root\n"
+      "is the awaiter's own entry, not the body's: the park would capture only\n"
+      "the part of the body below this function, and the rest would carry on at\n"
+      "once with a dummy 0.  The compiled program refuses that park at run time\n"
+      "instead -- it prints\n"
+      "  await: a pending future would park below a direct-style call ...\n"
+      "and aborts.  An await that only ever meets a READY future never parks, so\n"
+      "such a program runs unchanged; that is why this is a warning.\n"
+      "\n"
+      "Fix: take the frame out of the path.  Move the await (or the call to the\n"
+      "awaiting function) out of the evicted function into a caller the backend\n"
+      "takes, or change the evicted function's shape -- a plain scalar/handle\n"
+      "signature, no export-as, no inline C in the body.  `tur --interpret` runs\n"
+      "the program as written.  TUR_TRACE_EVICT=1 prints every eviction with its\n"
+      "category.\n"
+      "See docs/reported/await-parks-only-to-the-nearest-c-frame.md.\n",
     },
     { TUR_W0042_SHADOWS_SPECIAL_FORM,
       "TUR-W0042: Definition shadows a special form\n"

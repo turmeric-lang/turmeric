@@ -14179,6 +14179,45 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
                     cat = !core ? "BODY-STRUCT-CORE" : hj ? "BODY-STRUCT-JOIN" : "BODY-TAINT";
                 }
             }
+            /* await-parks-only-to-the-nearest-c-frame: a function that may
+             * await, evicted, calls its awaiter through the direct entry,
+             * whose root a pending await's park stops at.  The runtime refuses
+             * that park (tur_async_body_depth) rather than losing the rest of
+             * the async body; say so at compile time too, naming the frame and
+             * why it is in the way.  `main` is left out: it is never below an
+             * async body, and an await in it has no body to lose.  A rank-2
+             * adapter (`__poly_<N>`, make_poly_wrapper) is left out too: only
+             * its base entry is refused here; the fat box a colored caller
+             * dispatches through carries the adapter's own `__poly_<N>__cps`
+             * twin, so a park never crosses the base entry
+             * (await-through-fn-value parks through three of them).  A spec
+             * clone of an in-S template that mono_sig_ok refuses returns
+             * above and is not this. */
+            if (!fd->await_evict_warned && cps_fn_may_await(fd)
+                && !fn_is_main(fd)
+                && strncmp(nm, "__poly_", 7) != 0) {
+                fd->await_evict_warned = true;
+                const char *because =
+                    strcmp(cat, "SIG-EXPORT") == 0
+                      ? "it is exported under a fixed C name (export-as), which keeps the C ABI"
+                    : strcmp(cat, "SIG-REJECT") == 0
+                      ? "its signature or a capture has a shape the backend does not thread"
+                    : strcmp(cat, "SIG-INLINE-C") == 0
+                      ? "its body is inline C"
+                    : strcmp(cat, "SIG-TAINT") == 0
+                      ? "it shares an effect with a function the backend cannot take"
+                    : "a form in its body has no lowering there";
+                diag_emit_with_code(DIAG_WARNING, fd->binding->span,
+                    TUR_W0044_AWAITER_COMPILED_DIRECT,
+                    "`%s` may await but is compiled direct-style: %s%s%s%s. "
+                    "Inside an async body, a pending future awaited below it "
+                    "would park at this function's root instead of the body's, so the "
+                    "program refuses the park at run time (`await: a pending "
+                    "future would park below a direct-style call`); a ready "
+                    "future is unaffected. Move the await, or the call to the "
+                    "awaiting function, out of this function (%s)",
+                    nm, because, *why ? " (" : "", why, *why ? ")" : "", cat);
+            }
             if (getenv("TUR_TRACE_EVICT")) {
                 /* Stage F (v2): an `eff=1` column marks a fn that performs or
                  * handles an effect -- the ONLY evictions that keep the fiber

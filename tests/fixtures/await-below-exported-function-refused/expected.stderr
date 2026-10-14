@@ -1,1 +1,2 @@
 await: a pending future would park below a direct-style call
+warning [TUR-W0044]: `level2` may await but is compiled direct-style: it is exported under a fixed C name (export-as)
