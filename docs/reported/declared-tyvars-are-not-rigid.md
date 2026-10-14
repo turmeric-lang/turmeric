@@ -83,11 +83,16 @@ Two things make "named" the wrong test for "rigid", both found by the suite:
   had bound something. `(list-nil)` inside `list-map [A B]` was `(List A)`
   under `list-nil`'s `A`, passed to `acc : (List B)` it bound `B := A`, and
   `list-map`'s own body typed `(List A)` -- wrong before this report too, and
-  invisible while everything rode the carrier (15 parsec fixtures). The
-  rename now also runs with zero bindings, and a provisional binding to such
-  a renamed letter yields to the enclosing signature's own variable just as
-  it yields to a concrete type (`(let [v (vec-new)] (vec-push! v a) v)` with
-  `a : A` binds `vec-push!`'s `A` to `vec-new.A` first).
+  invisible while everything rode the carrier (15 parsec fixtures). At zero
+  bindings the colliding letter is now marked `open_slot` but KEEPS its name:
+  `(vec-new)` reading as the body's `A` is load-bearing, since a `vec-get` on
+  it stays the abstract `A` only because the name is the signature's
+  (`ng_tyvar_in_sig`), and renaming it `vec-new.A` collapsed that read to the
+  int carrier (three generic-spec-carrier-crossings fixtures, one of them the
+  SIGSEGV its own header describes). With the flag, a binding the letter
+  makes is provisional, and `f`'s `B` wins over `acc`'s. A provisional binding
+  also yields to the enclosing signature's own variable just as it yields to
+  a concrete type.
 
 The check is flow-insensitive: `(let [v (vec-new)] (vec-push! v a) v)` under
 a declared `(Vec B)` is still accepted, because `v`'s element is learned only

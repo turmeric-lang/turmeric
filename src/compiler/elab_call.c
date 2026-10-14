@@ -10820,11 +10820,26 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                         if (call_find_type_binding(type_bindings, n_type_bindings, rn[ri], &idx))
                             continue;
                         if (!ng_tyvar_in_sig(e, rn[ri])) continue;
-                        char nm[96];
-                        snprintf(nm, sizeof nm, "%s.%s", fn_binding->name->name, rn[ri]);
-                        const Symbol *ns = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
                         apart[n_apart].name = rn[ri];
-                        apart[n_apart].type = type_tyvar_named(ns->name);
+                        if (n_bound == 0) {
+                            /* declared-tyvars-are-not-rigid: NOTHING bound --
+                             * `(vec-new)` inside `k [A]`.  Its `(Vec A)` reading
+                             * as the body's `A` is load-bearing: a `vec-get` on
+                             * it stays the abstract `A` only because the name is
+                             * the signature's (ng_tyvar_in_sig), and renaming it
+                             * collapsed that read to the int carrier (the
+                             * generic-spec-carrier-crossings SIGSEGV).  Keep the
+                             * name; mark it OPEN, so a binding it makes is
+                             * provisional -- `(list-nil)` handed to `acc : (List
+                             * B)` inside `list-map [A B]` no longer binds `B :=
+                             * A` over the `B` that `f` bound. */
+                            apart[n_apart].type = type_tyvar_named(rn[ri]);
+                        } else {
+                            char nm[96];
+                            snprintf(nm, sizeof nm, "%s.%s", fn_binding->name->name, rn[ri]);
+                            const Symbol *ns = symtab_intern(e->st, strslice(nm, (uint32_t)strlen(nm)));
+                            apart[n_apart].type = type_tyvar_named(ns->name);
+                        }
                         apart[n_apart].type.as.tyvar_.open_slot = true;
                         n_apart++;
                     }
