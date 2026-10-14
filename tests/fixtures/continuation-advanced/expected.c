@@ -5575,18 +5575,26 @@ static void tur_role_close(void *role_ptr) {
 typedef struct { const char *file; int line; } tur_site_t;
 #if defined(__GNUC__) || defined(__clang__)
 static TUR_THREAD_LOCAL const tur_site_t *tur_cur_site;
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; tur_cur_site = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t *o = tur_cur_site; if (!o) tur_cur_site = s; return o;
+}
 #else
 extern void **tur_tls_cur_site_ptr(void);
 #define tur_cur_site (*(const tur_site_t **)tur_tls_cur_site_ptr())
+static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    *p = s; return o;
+}
+static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
+    const tur_site_t **p = (const tur_site_t **)tur_tls_cur_site_ptr(), *o = *p;
+    if (!o) *p = s; return o;
+}
 #endif
 static inline void tur_site_set(const tur_site_t *s) { tur_cur_site = s; }
 static inline void tur_site_clear(void) { tur_cur_site = NULL; }
-static inline const tur_site_t *tur_site_push(const tur_site_t *s) {
-    const tur_site_t **p = &tur_cur_site, *o = *p; *p = s; return o;
-}
-static inline const tur_site_t *tur_site_keep(const tur_site_t *s) {
-    const tur_site_t **p = &tur_cur_site, *o = *p; if (!o) *p = s; return o;
-}
 static inline void tur_site_pop(const tur_site_t *o) { tur_cur_site = o; }
 static inline void tur_panic_sited(const char *msg) {
     const tur_site_t *s = tur_cur_site;
