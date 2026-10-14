@@ -1,0 +1,102 @@
+;; A `handle` whose continuation has to reach a join that ENCLOSES it -- a
+;; handle in a branch with code after the branch -- and a literal-pattern
+;; `match` on the result of a function that performs.
+;;
+;; A handle's continuation is lifted into its own DK frame, and the backend
+;; admitted it only when every join it delivered to was defined inside it.
+;; So a handle anywhere but the tail of a branch evicted its function, and
+;; with it every function performing the handled effect: a hard "this effect
+;; operation has no lowering here" (handle-under-match-in-main-has-no-
+;; lowering).  Such a join is reified as a frame (an escaping join), and the
+;; continuation frame is spliced onto it, so the delivery runs it through
+;; `__kont` -- the path a `perform` continuation in a branch already used.
+;;
+;; `scrut` is the other half: a literal-pattern match bound its scrutinee
+;; inside its join, so `(match (f) 42 ... _ ...)` with `f` colored had a heap
+;; join whose body jumped back out, which is unemittable.
+;;
+;; The shapes: an abortive handler, captures on both sides of the join, a
+;; float with a fractional part crossing a bind-position join, nested
+;; branches, an ADT match arm, and a 20000-step loop through the join.
+
+(defeffect Tick [] int)
+(defeffect Tf [] float)
+
+(defdata Sh (Circle int) (Sq int))
+
+(defn f [] : int
+  (+ 1 (perform (Tick))))
+
+(defn ff [] : float
+  (+ 0.25 (perform (Tf))))
+
+(defn branch [c : bool] : int
+  (do
+    (if c
+      (println (handle (f) (Tick [] k) (resume k 41)))
+      (println 0))
+    7))
+
+(defn abort-branch [c : bool] : int
+  (do
+    (if c
+      (println (handle (f) (Tick [] k) 99))
+      (println 0))
+    1))
+
+(defn caps [c : bool z : int] : int
+  (let [w (* z 2)]
+    (do
+      (if c
+        (println (+ w (handle (f) (Tick [] k) (resume k z))))
+        (println w))
+      (+ w z))))
+
+(defn fl [c : bool] : float
+  (let [r (if c (handle (ff) (Tf [] k) (resume k 7.1)) 0.5)]
+    (* r 2.0)))
+
+(defn nest [a : bool b : bool] : int
+  (do
+    (if a
+      (do
+        (if b
+          (println (handle (f) (Tick [] k) (resume k 100)))
+          (println -1))
+        (println (handle (f) (Tick [] k) (resume k 200))))
+      (println -2))
+    3))
+
+(defn shape [s : Sh] : int
+  (let [n (match s
+            (Circle r) (handle (f) (Tick [] k) (resume k r))
+            (Sq w) (* w w))]
+    (+ n 1000)))
+
+(defn deep [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (let [v (if (> n 0) (handle (f) (Tick [] k) (resume k n)) 0)]
+      (deep (- n 1) (+ acc v)))))
+
+(defn scrut [] : int
+  (do
+    (match (f)
+      42 (println "scrut ok")
+      _ (println "scrut no"))
+    7))
+
+(defn main [] : int
+  (println (branch true))
+  (println (abort-branch true))
+  (println (caps true 5))
+  (println (caps false 5))
+  (println (fl true))
+  (println (fl false))
+  (println (nest true true))
+  (println (nest true false))
+  (println (shape (Circle 4)))
+  (println (shape (Sq 3)))
+  (println (deep 20000 0))
+  (println (handle (scrut) (Tick [] k) (resume k 41)))
+  0)

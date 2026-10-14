@@ -1,5 +1,44 @@
 # A by-value `(Option ...)` field of a `:heap` struct, passed to a generic function, is read as a carrier word
 
+**Resolved 2026-10-14: the report is archived.** The repro prints `true`.
+`probe`'s clone now passes the field straight through:
+`peek__spec__...(((tur_adt_Holder__int *)(intptr_t)(h))->p)`.
+
+**The judgement, located.** The call-argument bridge (`emit_expr.c`, the
+carrier->concrete `emit_carrier_bridge` call in the spec-argument loop)
+already had a guard for exactly this case: G9's
+`field_read_emits_byvalue_aggregate`. Its comment says "a by-value
+aggregate field read is ALREADY the concrete aggregate". That guard
+substituted the receiver's type arguments into the field's declared type
+only when that type was a **bare** parameter (`(x T)`). Here the field is
+`(Option (Fr T))`, an *application* over `T`, so it stayed generic. It
+failed the guard's concreteness test, the guard said "not by-value", and
+the bridge ran. The report's guess, that the field was judged from its
+generic declared type, was right. The guard now substitutes any field type
+that mentions a type variable.
+
+**Which shapes shared the path.** These were measured on the previous
+commit. Every **argument-position** read of a by-value field whose type is
+an application over `T` failed:
+
+- `(Option (Fr T))`: four clones (int, 7.1 and cstr instantiations)
+- `(Option T)`: two clones
+- a non-`Option` by-value sum `(Sm T)`: two clones
+- a nested receiver `(.p (.h o))`: one clone
+
+That was nine compile errors in one probe. A let-bound read, a returned
+read and a read matched on directly take other paths and were already
+right.
+
+Pinned by `tests/fixtures/byvalue-field-of-param-app-as-generic-arg`. It
+covers all of the shapes above plus `None`/`Miss` values and the three
+controls, under `run.sh` (gcc 13, clang 18) and `run-turi.sh`. No
+`expected.c` moved; full `run.sh` was 3801 passed, 0 failed. The fixture
+does not carry `requires.leak-check`: its only leaked blocks are `:heap`
+nodes, which are process-lifetime by design.
+
+The original filing follows.
+
 **Severity: medium.** The emitted C is rejected by both gcc and clang. The
 program is correct.
 

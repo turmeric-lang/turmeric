@@ -756,6 +756,15 @@ static const char *emit_repr_concrete_heap_ptr_c_name(EmitCtx *ctx,
      * matches the value the ctor actually hands it. */
     if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT && rbt.as.adt_.def)
         hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
+    /* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: the same drift for
+     * a concrete app of a parametric :heap SUM -- `(Fr int)` c-names to the
+     * carrier, its ctor returns `tur_adt_Fr__int *`, and repr_of says
+     * heap-ptr.  Declaring the binding `int64_t` was the one disagreement,
+     * and the shadow ICE'd on `(let [f (Frame 3 4)] ...)`. */
+    if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_APP) {
+        const char *an = adt_app_heap_ptr_c_name(rbt);
+        if (an) hn = an;
+    }
     return hn;
 }
 
@@ -1412,7 +1421,15 @@ static bool field_read_emits_byvalue_aggregate(EmitCtx *ctx, const Expr *e) {
         if (ctor && fidx < ctor->n_fields &&
             type_extract_adt_app(&rt, &ad, aargs, &an) && ad) {
             const CtorField *cf = &ctor->fields[fidx];
-            if (cf->full_type && cf->full_type->kind == TY_TYVAR) {
+            /* byvalue-option-field-read-as-carrier-at-generic-call: an
+             * APPLICATION over the parameter -- `(p (Option (Fr T)))` -- needs
+             * the same substitution as a bare `(x T)`.  Taken as declared it
+             * still mentions T, fails the concreteness test below, and the
+             * field read of `h->p`, already the by-value monomorph
+             * `tur_adt_Option__Fr__int`, was cast to the carrier and unboxed
+             * ("aggregate value used where an integer was expected"). */
+            if (cf->full_type && (cf->full_type->kind == TY_TYVAR ||
+                                  emit_repr_type_mentions_tyvar(cf->full_type))) {
                 fr = substitute_adt_app_type_owned(cf->full_type, ad, aargs);
                 fr_owned = (fr.kind == TY_APP);
                 have_fr = true;
@@ -3471,6 +3488,43 @@ static bool let_init_aliases_fat_fn_param(const Expr *init) {
 const char *match_binder_c_type(const Type *t) {
     const char *nm = type_c_name(*t);
     return (nm && strcmp(nm, "void") == 0) ? "int64_t" : nm;
+}
+
+/* heap-sum-match-binder-of-app-payload-unbridged: the typed-pointer spelling a
+ * match binder takes when it reads a field of the erased BASE layout (the
+ * scrutinee is not a monomorph app) and its own type is a PARAMETRIC
+ * application the active resolution grounds to a typed pointer.
+ *
+ * A `:heap` parametric SUM is spelled as the int64 carrier at every
+ * instantiation (type_c_name names only single-constructor products), so
+ * inside `bump__spec__tur_adt_Box__R_...` a `(match (.fr b) (Frame l x) ...)`
+ * reads `tur_adt_Fr *`, and the `(Cons T)` binder took that layout's `int64_t`
+ * slot type.  Everything downstream of the binder asks its type, which
+ * resolves to `(Cons R)` -- `tur_adt_Cons__R *` -- so the rebuilt
+ * `ctor_Fr_Frame__R(l, x)` and any `thead__spec__..._tur_adt_Cons__R__(l)`
+ * were handed an integer where a pointer was declared (-Wint-conversion, an
+ * error under clang 15+ and gcc 14).  The monomorph-scrutinee leg already
+ * substitutes such a binder; this is the base-layout twin, which the SR2b
+ * base-carrier leg (TY_TYVAR / TY_FORALL binders only) did not cover.
+ *
+ * Pointers only: the base slot is one int64 word, and a typed-pointer payload
+ * is that same word spelled differently, so the declaration only relabels it.
+ * A by-value aggregate payload has a layout question the tyvar leg answers
+ * case by case, and stays with it.  Writes into `buf` and returns it, or NULL
+ * when the binder keeps `ctype`. */
+static const char *match_binder_base_app_ptr_ctype(EmitCtx *ctx,
+                                                   const Binding *fb,
+                                                   const char *ctype,
+                                                   char *buf, size_t bufsz) {
+    if (!ctx || !fb || !ctype || strcmp(ctype, "int64_t") != 0) return NULL;
+    if (fb->type.kind != TY_APP) return NULL;
+    Type r = emit_resolve_type(ctx, fb->type);
+    if (r.kind != TY_APP || !type_app_is_concrete_adt(&r)) return NULL;
+    const char *c = emit_type_c_name(ctx, r);
+    size_t n = c ? strlen(c) : 0;
+    if (n == 0 || c[n - 1] != '*' || n >= bufsz) return NULL;
+    memcpy(buf, c, n + 1);
+    return buf;
 }
 
 /* tail-recursive-let-drops-carrier-bridge: the ONE question "must this `let`
@@ -6465,6 +6519,46 @@ static bool emit_hkt_spec_app_result(EmitCtx *ctx, Type erased, Type *out) {
     if (!type_app_is_concrete_adt(&sret)) return false;
     *out = sret;
     return true;
+}
+
+/* The type a `match`'s RESULT temp is declared at.  The match's static type is
+ * the generic one, so inside a specialised body it has to be resolved the way
+ * the arms are:
+ *
+ *   M7: in a specialised instance-method body the static type is the generic
+ *   `(ReF b)` while every arm constructs the concrete `ctor_*__bool`
+ *   monomorph -- an `int64_t` temp is "incompatible types when assigning".
+ *   Resolution only upgrades a non-concrete app.
+ *
+ *   SR2b: a match whose result is the method tyvar itself -- `ok-val`'s `:A`
+ *   -- resolved by the active spec to anything with a non-carrier C spelling:
+ *   an aggregate, a double (`unwrap` over `(Option float)` printed 2 for 2.5
+ *   through an int64 temp), a cstr / void* / typed fn-pointer.  Gated on the
+ *   UNRESOLVED type being a tyvar so a genuinely erased site keeps the carrier
+ *   temp, and excluding the B4 recursive-carrier wrapper whose by-value form
+ *   IS the carrier word.
+ *
+ * Shared by the ADT and literal-pattern paths
+ * (instance-method-match-fallthrough-return-unbridged): the literal path
+ * declared from the static type alone, so `(match c true a false b)` returning
+ * `T` at float truncated 7.1 to 7 with no diagnostic, and at cstr or `(Option
+ * int)` was a cc error. */
+static Type match_result_temp_type(EmitCtx *ctx, const Expr *e) {
+    Type res_ty = e->type;
+    if (res_ty.kind == TY_APP && type_app_is_concrete_adt(&res_ty)) return res_ty;
+    Type _rr = emit_resolve_type(ctx, res_ty);
+    if (_rr.kind == TY_APP && type_app_is_concrete_adt(&_rr))
+        return _rr;
+    if (!emit_hkt_spec_app_result(ctx, _rr, &res_ty) &&
+        (e->type.kind == TY_TYVAR || e->type.kind == TY_FORALL) &&
+        strcmp(type_c_name(_rr), "int64_t") != 0 &&
+        !(_rr.kind == TY_ADT && _rr.as.adt_.def &&
+          adt_is_byval_recursive_carrier_wrapper(_rr.as.adt_.def)))
+        res_ty = _rr;
+    /* else: still erased -- inside a by-value HKT instance-method spec the
+     * match's result type is the bare parametric base while the arms build
+     * the monomorph; emit_hkt_spec_app_result above grounds that case. */
+    return res_ty;
 }
 
 /* heap-sum-generic-never-specialized (the open-slot twin): replace every OPEN
@@ -16493,6 +16587,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * value already held as the carrier. */
                         buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
                                    lhs, field, cn);
+                    } else if (!captured->is_param &&
+                               decl_cty && strcmp(decl_cty, "int64_t") == 0 &&
+                               val_cty && strcmp(val_cty, "int64_t") == 0 &&
+                               emit_repr_concrete_heap_ptr_c_name(
+                                   ctx, captured->type, REPR_POS_LET_BIND)) {
+                        /* heap-sum-rebuild-in-effectful-generic-merge-temp-ice:
+                         * a `:heap` SUM (and the Line-family record) c-names to
+                         * the carrier, so `val_cty` says int64_t -- but a LET
+                         * binding of one is declared at its typed pointer
+                         * (`tur_adt_R *`, `tur_adt_Fr__int *`; the let-bind
+                         * chokepoint), and the plain store was a
+                         * -Wint-conversion.  A parameter keeps type_c_name's
+                         * carrier spelling, so it needs no relabel. */
+                        buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   lhs, field, cn);
                     } else {
                         buf_printf(out, "%s->%s = %s%s;\n",
                                    lhs, field, captured_is_pbp ? "*" : "", cn);
@@ -20805,13 +20914,18 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * initializer") -- the ADT path below already says so;
                          * a literal-pattern match on a bool or an int returning
                          * a by-value `(Result float int)` hit it here. */
-                        Type _lrt = e->type;
+                        /* instance-method-match-fallthrough-return-unbridged:
+                         * declared at the RESOLVED type, as the ADT path below
+                         * is, and recorded so the arms' stores and the return
+                         * ladder read the real spelling. */
+                        Type _lrt = match_result_temp_type(ctx, e);
                         if (type_is_byvalue_adt_product(_lrt) ||
                             adt_app_is_byvalue_product(_lrt) ||
                             _lrt.kind == TY_ANY || _lrt.kind == TY_UNION)
                             buf_printf(body, "%s %s = {0};\n", type_c_name(_lrt), tmp);
                         else
                             buf_printf(body, "%s %s = 0;\n", type_c_name(_lrt), tmp);
+                        emit_localvar_record_ctype(tmp, type_c_name(_lrt));
                     }
                     char *scrut_val = emit_value(ctx, body, e->as.match_.scrutinee);
                     TypeKind _sk = e->as.match_.scrutinee->type.kind;
@@ -21045,43 +21159,9 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
             bool nil_result = (e->type.kind == TY_NIL);
             char *tmp = NULL;
             if (!nil_result) {
-                /* M7: the RESULT temp needs the same resolution the scrutinee
-                 * just got, for the same reason -- in a specialised
-                 * instance-method body the match's static result type is the
-                 * generic `(ReF b)` while every arm constructs the concrete
-                 * `ctor_*__bool` monomorph, so declaring the temp from the
-                 * static type spells `int64_t` and each arm's store is
-                 * "incompatible types when assigning to type 'int64_t'".
-                 * Same narrowing: resolution only upgrades a non-concrete app. */
-                Type res_ty = e->type;
-                if (!(res_ty.kind == TY_APP && type_app_is_concrete_adt(&res_ty))) {
-                    Type _rr = emit_resolve_type(ctx, res_ty);
-                    if (_rr.kind == TY_APP && type_app_is_concrete_adt(&_rr))
-                        res_ty = _rr;
-                    else if (!emit_hkt_spec_app_result(ctx, _rr, &res_ty) &&
-                             (e->type.kind == TY_TYVAR || e->type.kind == TY_FORALL) &&
-                             strcmp(type_c_name(_rr), "int64_t") != 0 &&
-                             !(_rr.kind == TY_ADT && _rr.as.adt_.def &&
-                               adt_is_byval_recursive_carrier_wrapper(_rr.as.adt_.def))) {
-                        /* SR2b: a match whose RESULT is the method tyvar itself
-                         * -- `ok-val`'s `:A` -- resolved by the active spec to
-                         * any type with a non-carrier C spelling: an aggregate
-                         * (`(tur_adt_Point){0}` arms), a double (`unwrap` over
-                         * `(Option float)` printed 2 for 2.5 through an int64
-                         * temp), a cstr / void* / typed fn-pointer (each arm's
-                         * `(default-of A)` spells the typed null).  The arms
-                         * already emit the concrete type, so the erased temp is
-                         * the mismatch.  Gated on the UNRESOLVED type being a
-                         * tyvar so a genuinely erased site keeps the carrier
-                         * temp, and excluding the B4 recursive-carrier wrapper
-                         * whose by-value form IS the carrier word. */
-                        res_ty = _rr;
-                    }
-                    /* else: still erased -- inside a by-value HKT
-                     * instance-method spec the match's result type is the bare
-                     * parametric base while the arms build the monomorph;
-                     * emit_hkt_spec_app_result above grounds that case. */
-                }
+                /* M7 / SR2b: the RESULT temp needs the same resolution the
+                 * scrutinee just got (match_result_temp_type). */
+                Type res_ty = match_result_temp_type(ctx, e);
                 tmp = fresh_tmp(ctx);
                 indent_buf(body, ctx->indent);
                 /* Initialize to zero to silence -Wsometimes-uninitialized; exhaustiveness
@@ -21390,6 +21470,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                              * (`!scrut_is_app_monomorph`, resolving a tyvar through
                              * the active spec); this is the monomorph one. */
                             Type fb_eff = fb->type;
+                            char _sub_ctype[256];
                             if (scrut_is_app_monomorph &&
                                 fb->type.kind == TY_TYVAR &&
                                 bi < pat->ctor->n_fields) {
@@ -21399,6 +21480,55 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                     _sub.kind != TY_TYVAR) {
                                     fb_eff = _sub;
                                     ctype  = emit_type_c_name(ctx, _sub);
+                                }
+                            } else if (scrut_is_app_monomorph &&
+                                       bi < pat->ctor->n_fields &&
+                                       pat->ctor->fields[bi].full_type &&
+                                       ctype && strcmp(ctype, "int64_t") == 0) {
+                                /* heap-sum-match-binder-of-app-payload-unbridged:
+                                 * the switch path's SR2b leg.  A field declared as
+                                 * an application of the ctor's parameters --
+                                 * `(Frame (Cons T) T)` -- binds `l : (Cons T)`,
+                                 * whose own name is the erased carrier, while the
+                                 * monomorph's slot is `tur_adt_Cons__R *`.  Ask the
+                                 * scrutinee's arguments, as the switch path does,
+                                 * so a guarded rebuild hands the typed pointer on. */
+                                AdtDef *_sd = NULL;
+                                Type _sargs[16];
+                                uint8_t _sn = 0;
+                                if (type_extract_adt_app(&scrut_ty, &_sd, _sargs, &_sn) &&
+                                    _sd == pat->ctor->adt) {
+                                    Type _sf = substitute_adt_app_type_owned(
+                                        pat->ctor->fields[bi].full_type, _sd, _sargs);
+                                    const char *_sc = match_binder_c_type(&_sf);
+                                    if (_sc && strcmp(_sc, "int64_t") != 0) {
+                                        snprintf(_sub_ctype, sizeof _sub_ctype, "%s", _sc);
+                                        ctype = _sub_ctype;
+                                    }
+                                    free_struct_app_type(_sf);
+                                }
+                            }
+                            /* heap-sum-match-binder-of-app-payload-unbridged: the
+                             * switch path's TY_APP base-layout leg, for a guarded
+                             * match over the same carrier scrutinee. */
+                            if (!scrut_is_app_monomorph && !adt_byval &&
+                                !adt_niche && bi < pat->ctor->n_fields &&
+                                !adt_field_is_inline_byval(&pat->ctor->fields[bi])) {
+                                char _pbuf[256];
+                                const char *_pc = match_binder_base_app_ptr_ctype(
+                                    ctx, fb, ctype, _pbuf, sizeof _pbuf);
+                                if (_pc) {
+                                    char *bname = name_for_binding(ctx, fb);
+                                    char *mp = adt_field_member_path(
+                                        pat->ctor->adt, pat->ctor, bi);
+                                    emit_localvar_record_ctype(bname, _pc);
+                                    indent_buf(body, ctx->indent);
+                                    buf_printf(body,
+                                        "%s %s = (%s)(intptr_t)__scrut%s%s;\n",
+                                        _pc, bname, _pc, acc, mp);
+                                    free(bname);
+                                    free(mp);
+                                    continue;
                                 }
                             }
                             char *bname = name_for_binding(ctx, fb);
@@ -21904,6 +22034,32 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                         snprintf(_sub_ctype, sizeof _sub_ctype, "%s", _fc);
                                         ctype = _sub_ctype;
                                     }
+                                }
+                            }
+                            /* heap-sum-match-binder-of-app-payload-unbridged: the
+                             * base-carrier leg's TY_APP twin -- a `(Cons T)`
+                             * binder of the base layout's int64 slot, grounded
+                             * by the active spec to a typed pointer.  Disjoint
+                             * from every leg above (each needs a monomorph
+                             * scrutinee or a tyvar/float binder). */
+                            if (!scrut_is_app_monomorph && !adt_byval &&
+                                bi < pat->ctor->n_fields &&
+                                !adt_field_is_inline_byval(&pat->ctor->fields[bi])) {
+                                char _pbuf[256];
+                                const char *_pc = match_binder_base_app_ptr_ctype(
+                                    ctx, fb, ctype, _pbuf, sizeof _pbuf);
+                                if (_pc) {
+                                    char *bname = name_for_binding(ctx, fb);
+                                    char *mp = adt_field_member_path(
+                                        pat->ctor->adt, pat->ctor, bi);
+                                    emit_localvar_record_ctype(bname, _pc);
+                                    indent_buf(body, ctx->indent);
+                                    buf_printf(body,
+                                        "%s %s = (%s)(intptr_t)__scrut->%s;\n",
+                                        _pc, bname, _pc, mp);
+                                    free(bname);
+                                    free(mp);
+                                    continue;
                                 }
                             }
                             /* Use name_for_binding to get the canonical C name */

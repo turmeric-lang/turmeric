@@ -23,6 +23,42 @@ Half 2 (the constructor-argument bridge trusts the argument's type over the
 local's declared C type) is unchanged. As the report says, it is harmless
 alone; fix direction 2 remains a hardening option, not an open defect.
 
+## A parallel fix, on the same day
+
+This branch fixed the same repro one level down, before the source-level fix
+above reached it. That fix added a `TY_APP` twin of the SR2b base-carrier leg
+(`match_binder_base_app_ptr_ctype`, `src/compiler/emit_expr.c`). When a
+scrutinee is still read through the erased base layout and the binder's type
+is a parametric application that the active spec grounds to a typed pointer,
+the binder relabels the base slot's int64 word as that pointer. Both the
+switch path and the guarded if-chain path take it. With the scrutinee
+upgrade above, this repro no longer reaches that leg. It stays as the
+binder-level answer for a scrutinee the upgrade does not cover. It is
+pinned, alongside `heap-sum-match-binder-cons-payload`, by
+`tests/fixtures/heap-sum-match-binder-app-payload`: a guarded rebuild, plus
+`:heap`-sum, int, 7.1 and cstr instantiations.
+
+Merging the two fixes exposed a third gap. The upgrade makes the guarded
+rebuild's scrutinee a monomorph, so it takes the if-chain path's monomorph
+binder leg. That leg substituted only a field declared as a bare type
+variable, so `l : (Cons T)` stayed `int64_t` and clang rejected the
+rebuild again. The if-chain path now carries the switch path's SR2b leg as
+well: when the binder names the int64 carrier, it substitutes the field's
+declared type through the scrutinee's arguments. The guarded fixture pins
+it.
+
+**A correction to half 2 below.** It overstates the bridge.
+`emit_var_spec_arg_type` answers only for a *parameter* of the active spec,
+so for the binder `l` it returned nothing. The binder was not recorded
+either, so the bridge had no C type for the argument and inserted no cast.
+
+**The CPS backend's arm-binder mirror** (`emit_cps_ir.c`, the `CT_MATCH`
+field binds) has none of the spec-substitution legs. An effectful version of
+this rebuild ICEd earlier, on the merge temp, and was filed as
+[heap-sum-rebuild-in-effectful-generic-merge-temp-ice](heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md),
+resolved the same day. The rebuilt clones there print the right values, so
+that mirror is not on that path.
+
 
 **Severity: medium.** This is a build failure under clang 15+ and gcc 14:
 `-Wint-conversion` is an error there. gcc 13 only warns, but `tests/run.sh`
@@ -69,7 +105,7 @@ int64_t x_N = (int64_t)__scrut->as.Frame._1;
 ```
 
 The `Box` wrapper is there so that `bump` gets a clone at all. Without it,
-[heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md)
+[heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)
 hits first.
 
 ## Root cause
@@ -109,5 +145,5 @@ Two halves, each harmless alone.
 
 ## Related
 
-- [heap-sum-generic-never-specialized](heap-sum-generic-never-specialized.md)
+- [heap-sum-generic-never-specialized](../reported/heap-sum-generic-never-specialized.md)
   has the same `types.c` spelling as its root.

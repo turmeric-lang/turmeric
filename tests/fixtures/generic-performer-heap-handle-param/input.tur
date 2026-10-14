@@ -1,0 +1,78 @@
+;; A generic function that performs, reached at a concrete instantiation.
+;;
+;; Its generic BASE always sig-rejects (a tyvar-elemented signature), so the
+;; only lowering its `perform` has is a monomorph clone the CPS backend emits.
+;; Two gates kept that clone from existing or from being admitted, and each
+;; turned a correct program into "this effect operation has no lowering here"
+;; (heap-sum-rebuild-in-effectful-generic-merge-temp-ice):
+;;
+;;   1. mono_sig_ok refused a concrete HEAP HANDLE in the clone's signature --
+;;      `(Vec int)`, a `:heap` struct `(Box int)` -- though one is a single
+;;      pointer word.  `total`, `peek`, `again` and `bump` hit it.
+;;   2. cps_expr_contains_effect_op had no arm for `match` (or a constructor
+;;      argument), so a generic whose only `perform` sits in a match arm was
+;;      never asked for a clone at all.  `pick` hit it; `bump` hits both.
+;;
+;; `bump` is the generic-zipper plan's D1 rebuild with an effect in the arm:
+;; a parametric `:heap` sum inside a `:heap` struct, its `(Cons T)` payload
+;; rebuilt.  Every handler resumes with a count, so a lost resume shows up in
+;; the sums.
+
+(defeffect Tick [] int)
+
+(defdata R :heap :copy (Lf int) (Br (Cons R)))
+(defdata Fr :heap :copy [T] (Nil) (Frame (Cons T) T))
+(defstruct Box :heap :copy [T] (v T))
+(defstruct Zip :heap :copy [T] (fr (Fr T)))
+
+(defn val [r : R] : int
+  (match r
+    (Lf v) v
+    (Br _) 0))
+
+(defn total [T] [v : (Vec T)] : int
+  (+ (perform (Tick)) (vec-len v)))
+
+(defn peek [T] [b : (Box T)] : T
+  (do (perform (Tick)) (.v b)))
+
+(defn again [T] [b : (Box T)] : (Box T)
+  (do (perform (Tick)) (make-struct Box :v (.v b))))
+
+(defn pick [T] [x : T d : T] : T
+  (match 1
+    1 (do (perform (Tick)) x)
+    _ d))
+
+(defn bump [T] [z : (Zip T)] : (Zip T)
+  (make-struct Zip :fr (match (.fr z)
+                         (Nil) (.fr z)
+                         (Frame l x) (do (perform (Tick)) (Frame (tcons-of x l) x)))))
+
+(defn main [] : int
+  (let [v  (vec-new)
+        z  (make-struct Zip :fr (Frame (tcons-of (Lf 1) (tnil)) (Lf 7)))
+        zf (make-struct Zip :fr (Frame (tcons-of 7.1 (tnil)) 0.25))]
+    (vec-push! v 3)
+    (vec-push! v 4)
+    ;; 100 + 2
+    (println (handle (total v) (Tick [] k) (resume k 100)))
+    (println (handle (peek (make-struct Box :v 7)) (Tick [] k) (resume k 0)))
+    (println (handle (peek (make-struct Box :v "box")) (Tick [] k) (resume k 0)))
+    (println (.v (handle (again (make-struct Box :v 7.1)) (Tick [] k) (resume k 0))))
+    (println (handle (pick 7 0) (Tick [] k) (resume k 0)))
+    (println (handle (pick "x" "y") (Tick [] k) (resume k 0)))
+    ;; Each `handle` result is let-bound before it is matched on.  Matching
+    ;; on one directly is handle-under-match-in-main's subject, not this
+    ;; fixture's.
+    (let [z2  (handle (bump z) (Tick [] k) (resume k 0))
+          zf2 (handle (bump zf) (Tick [] k) (resume k 0))]
+      ;; x = Lf 7 consed onto (Lf 1): 7 + 7
+      (match (.fr z2)
+        (Nil) (println 0)
+        (Frame l x) (println (+ (val x) (val (thead l)))))
+      ;; 0.25 consed onto (7.1): 0.25 + 0.25
+      (match (.fr zf2)
+        (Nil) (println 0)
+        (Frame l x) (println (+ x (thead l))))))
+  0)

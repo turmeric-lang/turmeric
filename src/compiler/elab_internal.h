@@ -1840,6 +1840,9 @@ bool elab_scheme_stdlib_file(void *ud, const char *name, char *out, size_t cap);
 
 /* TY2.2: wrap a value in EX_UNION_INJECT to widen it to the `any` top type. */
 Expr *elab_coerce_to_any(Elab *e, Expr *value);
+/* none-arm-not-grounded-by-sibling-some-arm: retype a bare-typed nullary
+ * constructor arm of a join to the joined application (elab_structs.c). */
+bool elab_retype_nullary_ctor_arm(Expr *arm, Type joined);
 /* The `any`-bridge adaptor for a function value whose signature differs from
  * the slot's only in where `any` appears (elab_call.c); NULL leaves it alone. */
 Expr *elab_fn_any_bridge(Elab *e, Expr *arg, const Type *want_decl,

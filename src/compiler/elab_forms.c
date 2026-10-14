@@ -4046,6 +4046,17 @@ Expr *elab_if(Elab *e, const Form *call) {
             else_ = elab_fn_value_to_fat(e, else_);
             result_t = then_->type.as.fn.boxed ? then_->type : else_->type;
         } else if (!type_eq(then_->type, else_->type) &&
+                   (elab_retype_nullary_ctor_arm(then_, else_->type) ||
+                    elab_retype_nullary_ctor_arm(else_, then_->type))) {
+            /* none-arm-not-grounded-by-sibling-some-arm: `(if c (None) (Some
+             * x))` -- a nullary constructor, typed as the bare ADT for want
+             * of an argument, beside an application of the same ADT.  It was
+             * "if branches have mismatched types: then=Option else=(Option
+             * T)".  The constructor takes its sibling's type, the one an
+             * expected type would have pinned; any other bare-typed branch
+             * still mismatches. */
+            result_t = then_->type;
+        } else if (!type_eq(then_->type, else_->type) &&
                    (lang_span_is_dynamic(call->span) || e->toplevel_dynamic) &&
                    !if_branches_unify_via_tyvar(then_->type, else_->type, &result_t)) {
             /* saffron-dynamic-surface-pass (low): in a Saffron file an `if`

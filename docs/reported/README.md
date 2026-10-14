@@ -46,14 +46,16 @@ directory is worse for triage than no index.
 Hit while prototyping
 [generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D1--D4). That
 plan routes around all four; its section 5 also records D5 and four inference
-papercuts, which have no report of their own.
+papercuts, which have no report of their own. All four are now fixed and
+archived (2026-10-14): D1 and D2 by the `:heap` sum specialization, D3 and D4
+in their own changes.
 
 | Report | Severity | One line |
 | --- | --- | --- |
 | ~~[heap-sum-generic-never-specialized](../archive/heap-sum-generic-never-specialized.md)~~ | medium-high | **RESOLVED 2026-10-14** (archived): a parameter or result instantiating to a ground `:heap` parametric sum app forces a clone even though both spell `int64_t` (`type_mentions_ground_heap_sum_app`, next to G4), the clone reads the scrutinee through the monomorph, and an open slot at a constructor or in a call's bindings grounds to `int`. Left open: [heap-sum-unpinned-tyvar-relayed-to-generic](heap-sum-unpinned-tyvar-relayed-to-generic.md). `heap-sum-generic-rebuild` |
 | ~~[heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)~~ | medium | **RESOLVED 2026-10-14** (archived), by the same change: inside the clone the scrutinee is `tur_adt_Fr__R *`, so the `(Cons R)` binder is declared as the typed pointer the constructor takes. `heap-sum-match-binder-cons-payload` |
-| [byvalue-option-field-read-as-carrier-at-generic-call](byvalue-option-field-read-as-carrier-at-generic-call.md) | medium (build failure, gcc and clang) | `(peek (.p h))`, where `p : (Option (Fr T))` is a by-value field of a `:heap` struct, is read as `(int64_t)(intptr_t)(h->p)` and unboxed by `emit_carrier_bridge`. The call-arg path judges the field to be carrier-represented. Upstream site not located. |
-| [instance-method-match-fallthrough-return-unbridged](instance-method-match-fallthrough-return-unbridged.md) | medium (clang 15+/gcc 14 build failure) | An instance method declared `: (Cons a)` whose body is a `match` bridges every arm's return to the `int64_t` carrier but not the unreachable trailing `return __tN;` of the pointer-typed temp (`emit_fns.c:5070`). Blocks the zipper plan's `Plated` class (ZP3). |
+| ~~[byvalue-option-field-read-as-carrier-at-generic-call](../archive/byvalue-option-field-read-as-carrier-at-generic-call.md)~~ | medium | **RESOLVED 2026-10-14** (archived): `field_read_emits_byvalue_aggregate` substituted the receiver's type arguments only into a field typed as a bare parameter, so `(p (Option (Fr T)))` -- an application over T -- read as not by-value and the call-argument bridge cast `h->p` to the carrier. Also covers `(Option T)` and by-value sum fields. Pinned by `byvalue-field-of-param-app-as-generic-arg`. |
+| ~~[instance-method-match-fallthrough-return-unbridged](../archive/instance-method-match-fallthrough-return-unbridged.md)~~ | medium | **RESOLVED 2026-10-14** (archived): `emit_tail`'s match arm spelled the unreachable fall-through `return <temp>;` raw instead of through the shared return ladder. Found beside it: a literal-pattern match declared its result temp from the static type, so `(match c true a false b)` returning `T` at float printed 7 for 7.1. Pinned by `match-result-temp-typed-return`. |
 
 ## Found fixing cps-performing-fn-with-wide-adt-param-refused (filed 2026-10-13)
 

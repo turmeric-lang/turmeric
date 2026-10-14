@@ -2079,6 +2079,21 @@ static void emit_tail(EmitCtx *ctx, Buf *body, const Expr *fn_e, FnDef *fd,
             char *v = emit_value(ctx, body, e);
             ctx->match_tail = save;
             emit_tail_fire_frames(ctx, body);
+            /* instance-method-match-fallthrough-return-unbridged: the
+             * fall-through return of the result temp is a return like any
+             * other, so it takes the shared ladder, with the match as the
+             * tail.  Spelled raw, it skipped every bridge the arms' own
+             * returns get: an instance method declared `: (Cons a)` returns
+             * the int64 carrier from its dict slot while the temp is the
+             * typed `tur_adt_Cons__R *`, and `return __t70;` was a
+             * -Wint-conversion (an error under clang 15+ and gcc 14) on a
+             * line no execution reaches.  A nil-typed match has no value to
+             * bridge and keeps the plain spelling. */
+            if (v && e->type.kind != TY_NIL) {
+                emit_fn_return_spelling(ctx, body, fn_e, fd, e, v,
+                                        result_kind, is_main);
+                return;
+            }
             indent_buf(body, ctx->indent);
             if (is_main && result_kind == TY_INT)
                 buf_printf(body, "return (int)%s;\n", v);
