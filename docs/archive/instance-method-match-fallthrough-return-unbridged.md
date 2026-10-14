@@ -58,7 +58,7 @@ that warning. The offending line is unreachable, so the program is correct
 wherever it compiles.
 
 **Discovered:** 2026-10-13, prototyping
-[generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D4, which
+[generic-zipper-plan](generic-zipper-plan.md) (its D4, which
 blocks the plan's ZP3 `Plated` class), on `main` at v0.64.4 (`704cc531`).
 
 ## Repro

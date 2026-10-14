@@ -34,6 +34,18 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found executing generic-zipper-plan (filed 2026-10-14)
+
+Hit while building `stdlib/zip.tur` from
+[generic-zipper-plan](../archive/generic-zipper-plan.md). The zipper avoids
+both. Eight other defects found the same way were fixed in that change and
+have no report: see the plan's section 5.
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [generic-returned-lambda-builds-heap-app](generic-returned-lambda-builds-heap-app.md) | medium | A lambda RETURNED by a generic whose body builds a `:heap` parametric value (`(make-struct Box :v y)`, `tcons-of`) is lifted once at the carrier ABI and calls the dead base constructor; a captured float stored that way prints garbage. A lambda stored into a record field is fine. |
+| [bare-parametric-instance-ctor-arg-unbridged](bare-parametric-instance-ctor-arg-unbridged.md) | low-medium | `(definstance C [Rose] (m [r ks] (make-struct Rose ... :kids ks)))` passes the erased `int64_t` `ks` straight to the representative monomorph constructor's typed-pointer parameter: a warning under gcc 13, an error under clang. |
+
 ## Found executing heap-sum-generic-never-specialized (filed 2026-10-14)
 
 | Report | Severity | One line |
@@ -44,7 +56,7 @@ directory is worse for triage than no index.
 ## Found prototyping the generic zipper (filed 2026-10-13)
 
 Hit while prototyping
-[generic-zipper-plan](../upcoming/generic-zipper-plan.md) (its D1--D4). That
+[generic-zipper-plan](../archive/generic-zipper-plan.md) (its D1--D4). That
 plan routes around all four; its section 5 also records D5 and four inference
 papercuts, which have no report of their own. All four are now fixed and
 archived (2026-10-14): D1 and D2 by the `:heap` sum specialization, D3 and D4

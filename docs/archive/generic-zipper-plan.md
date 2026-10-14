@@ -1,8 +1,11 @@
 # Plan: Generic zipper (`stdlib/zip.tur`)
 
-> **Status:** Proposed 2026-10-13. Not started. The core design was
-> prototyped against `main` at v0.64.4 (`704cc531`) and runs, both compiled
-> (gcc 13 and clang 18, no warnings) and under `tur interpret`. See
+> **Status:** **Done 2026-10-14** -- ZP0 through ZP6 landed together; see
+> [section 8](#8-outcome-2026-10-14) for what shipped, where it departs from
+> this plan, and what ZP0 found. The deferred items (ZP-D1..D4) each still need
+> a plan of their own. Proposed 2026-10-13; the core design was prototyped
+> against `main` at v0.64.4 (`704cc531`), compiled (gcc 13 and clang 18) and
+> under `tur interpret`. See
 > [Appendix A](#appendix-a----the-zp1-prototype-verified-2026-10-13).
 > **Type:** Stdlib (pure Turmeric, no inline C), plus five compiler defects
 > found while prototyping it (section 5).
@@ -442,6 +445,8 @@ After ZP4, decide whether to rebase `(Zipper A)` onto a `ZipCursor` over
 
 D1--D4 were filed under `docs/reported/` (linked below; all four are
 resolved and archived), with root causes and fix directions. D5 and the inference papercuts are recorded only here.
+How ZP0 closed each of them, and the further defects building the zipper
+found, are in [section 8](#8-outcome-2026-10-14).
 Every repro is complete and was run as shown.
 
 **D1 -- generic match-and-rebuild of a parametric `:heap` sum leaves `(Cons
@@ -610,6 +615,114 @@ Appendix A.
 - **Q3. Does `zip/children` panic on a leaf, or return `(tnil)`?** Default:
   panic, matching Clojure. Otherwise an empty branch and a leaf would be
   indistinguishable to a caller about to `append-child`.
+
+## 8. Outcome (2026-10-14)
+
+Every phase landed in one change: `stdlib/zip.tur`, 17 `zip-*` fixtures, the
+guide, and the compiler fixes below. The phases were built in order but not
+split into separate PRs, because each depends on the previous one's code and
+stacked PRs are not used here.
+
+### What shipped
+
+- **ZP1-ZP2.** Every row of the section 3.1 API table, plus `zip/depth`,
+  `zip/find-next` and `zip/edit-all`, with full docstrings; `(Rose A)`,
+  `zip/rose` (a constructor, an addition), `zip/rose-ops`, `zip/rose-zip`.
+  `stdlib/zip.tur` is in Bucket B of `tests/run-stdlib-checks.sh`.
+- **ZP3.** `Plated`, `zip/plated-ops` (an addition: the ops record an instance
+  describes), `zip/plated`, and a stock `Plated [Rose]` instance.
+- **ZP4.** `Traversal`, `ZipCursor`, `zip/traversal`, `zip/cursor`,
+  `-focus`/`-set`/`-edit`/`-next`/`-prev`/`-close`, `zip/cons-traversal`,
+  `zip/rose-labels`.
+- **ZP5.** Decided: **fallback.** `stdlib/zipper.tur` keeps its array
+  representation; its module docstring now says moves are O(n) and points at
+  `stdlib/zip.tur`. A rebase could keep the signatures only by turning
+  `zipper-free` into a no-op and leaving the cells to regions -- a memory
+  regression for a long-running automaton loop -- and would pull `zip.tur`
+  into the auto-loaded set.
+- **ZP6.** [`docs/guides/zipper-guide.md`](../guides/zipper-guide.md), indexed
+  under Functional Patterns, with a cross-link from the CA comonad tutorial.
+  Every code block in it was compiled and run.
+
+### Departures from the plan
+
+- **`Traversal` is `:heap :copy`, not `:copy`,** for the reason section 3.1
+  gives for `ZipOps`: a cursor carries it as one word.
+- **The panic fixtures are not under `errors/`.** That harness asserts
+  compile-time diagnostics (`emit-c` must fail). They are ordinary fixtures
+  with `expected.exit` and `expected.stderr`: `zip-remove-at-top-panics`,
+  `zip-insert-at-top-panics`, `zip-children-of-leaf-panics`.
+- **`Plated` needs an instance in `zip.tur` itself.** A class with no
+  instance makes every call of its methods a TUR-E0015 ("this program
+  declares no 'Plated' instance at all") -- including the ones inside
+  `zip/plated-ops` -- so a program that loaded `zip.tur` without declaring an
+  instance failed. The stock `Plated [Rose]` fixes that, and is the natural
+  instance anyway (lens has one for `Data.Tree`).
+- **The path link stays the nullable typed pointer.** D1--D3 being fixed
+  allows a sum or an `Option` there; nothing needed it.
+- **Fixture printers use `stdlib/str-build.tur`.** Its two inline-C bodies
+  (`str-concat`, `int->str`) are interpreter natives, so `run-turi.sh` now
+  exempts it from the inline-C carve-out, as it does `stdlib/session.tur`.
+  That lets every `zip-*` fixture run under both harnesses, as section 6
+  wanted, and newly brings four existing fixtures under turi (all pass).
+- **`zip.tur` defines each helper after the generics it calls.** A forward
+  reference to a generic defined later in the file types its result as `int`.
+
+### ZP0: the defects of section 5
+
+- **I1 (fixed).** A return-only generic call grounded only by the enclosing
+  body's type variables -- `(wrap x (tnil))` in `mk [T]` -- is pinned to them
+  and specialized with each instantiation (`ng_ground_nullary_arg`,
+  `src/compiler/elab_call.c`). That includes the common case where the
+  callee's variable has the same spelling as the body's (`(tnil)` inside
+  `leaf [A]`, an open slot): on `main` even `(make-struct R :kids (tnil))`
+  inside an `[A]` body was rejected. Pinned by
+  `nullary-generic-arg-under-body-tyvar` and
+  `nullary-generic-arg-name-collides-with-body-tyvar`.
+- **I2 (no longer reproduces).** `zip/root`'s self-recursive `match` arm
+  needs no ascription.
+- **I3 (fixed).** A later argument now refines a provisional application
+  binding left by a nullary call (`S := (Box A)` meets `(Box int)`), and the
+  call is grounded -- also inside a generic body, and also when ascribed.
+  Before, `(get-first (box-trav) b)` inside `gen-first [T]` called the base
+  generic even WITH the ascription, and aborted at the dead-base trap. Pinned
+  by `nullary-generic-grounded-by-later-sibling`.
+- **I4 (no longer reproduces).**
+- **D5 (did not reproduce).** `ZipOps` and `Traversal` are `:heap :copy`, as
+  planned.
+
+### ZP0: new defects found building it (fixed)
+
+Each one blocked or miscompiled a zipper fixture.
+
+| Defect | Fix | Pinned by |
+|---|---|---|
+| A lambda built in a generic body and stored into a record's fn field was boxed with the word adapter, so a `float` argument arrived in the wrong register class (0, 1.2e-322) | the constructor-argument loop hands the box the field's type in the monomorph (`emit_expr.c`) | `generic-lambda-in-record-field-float` |
+| `panic` as a tail branch of a function returning a typed pointer emitted `return ((void)0);` | `emit_tail` emits the panic, then a dead zero (`emit_fns.c`) | `panic-tail-branch-typed-pointer-result` |
+| A generic calling a fn field returning its `T`, at a `:heap` sum `T`, ICE'd at the merge-temp representation shadow -- the shape of every `zip/up` over a user AST | the merge-temp shadow skips a tyvar-declared type, as the binding shadow does | `generic-fn-field-call-heap-sum-result` |
+| A callee parameter cast resolved through the CALLER's spec when the two share a variable name (`(Cons (R int))` cast to `tur_adt_Cons__int *`) | both typed-pointer cast sites take the matched spec's own parameter type | `nullary-generic-arg-name-collides-with-body-tyvar` |
+| A lambda stored into a record by a constrained generic, whose C signature is the same at every `T`, kept the representative instance: `zip/branch?` answered the `Rose` instance's `true` for a user tree's leaf | a lifted lambda whose body dispatches on a spec-grounded variable is cloned per spec (`emit_abi_scan_one_fn_value`) | `constrained-generic-record-lambda-dispatch` |
+| The phantom-only base constructor assigned raw field names (`__r->branch? = ...`) | it mangles them, as the struct declares | not pinned: after the fixes above no program found reaches that constructor |
+| `rc/of`'s operand was never ABI-scanned, so a generic call under it -- `(rc/of (make-struct N (:: (vec-new) (Vec rc<S>))))` -- emitted the base `vec_hynew`, which linked only while some other call kept it alive. The `open_slot` change to I1 removed that other call | `emit_abi_scan_expr` descends into `EX_RC_OF` | the existing `rc-family-type-in-app-argument` |
+
+The `open_slot` change also lets a `(vec-new)` inside an `[A]` stdlib body
+specialize per instantiation, as it already did under any other variable
+name, so the unused base `vec_hynew` is no longer emitted: 157 `expected.c`
+snapshots were regenerated, and each differs from the old one only by that
+dead function (checked mechanically, fixture by fixture).
+
+Two more are filed, not fixed; the zipper avoids both:
+[generic-returned-lambda-builds-heap-app](../reported/generic-returned-lambda-builds-heap-app.md)
+and
+[bare-parametric-instance-ctor-arg-unbridged](../reported/bare-parametric-instance-ctor-arg-unbridged.md).
+
+### Region measurements (section 6)
+
+Fifty `with-region` sessions, each building a 127-node `(Rose int)`,
+rewriting every node with `zip/edit-all` and summing the labels:
+`region-stats: pushes=50 rewinds=50 retires=0`. The same fifty sessions
+returning the edited tree: `pushes=50 rewinds=0 retires=50`, as section 3.4
+predicts.
 
 ## Appendix A -- the ZP1 prototype (verified 2026-10-13)
 
