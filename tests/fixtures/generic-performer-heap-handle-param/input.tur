@@ -62,9 +62,9 @@
     (println (.v (handle (again (make-struct Box :v 7.1)) (Tick [] k) (resume k 0))))
     (println (handle (pick 7 0) (Tick [] k) (resume k 0)))
     (println (handle (pick "x" "y") (Tick [] k) (resume k 0)))
-    ;; Each `handle` result is let-bound before it is matched on: a `handle`
-    ;; directly under a `match` keeps `main` off the CPS backend, a separate
-    ;; open gap (handle-under-match-in-main-has-no-lowering).
+    ;; Each `handle` result is let-bound before it is matched on.  Matching
+    ;; on one directly is handle-under-match-in-main's subject, not this
+    ;; fixture's.
     (let [z2  (handle (bump z) (Tick [] k) (resume k 0))
           zf2 (handle (bump zf) (Tick [] k) (resume k 0))]
       ;; x = Lf 7 consed onto (Lf 1): 7 + 7

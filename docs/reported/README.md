@@ -34,16 +34,6 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
-## Found fixing the generic-zipper heap-sum reports (filed 2026-10-14)
-
-Found while resolving
-[heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../archive/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md)
-(archived the same day).
-
-| Report | Severity | One line |
-| --- | --- | --- |
-| [handle-under-match-in-main-has-no-lowering](handle-under-match-in-main-has-no-lowering.md) | medium (hard compile error on a correct program) | `(match (handle (f) ...) ...)` in `main`, or a `handle` in a match arm there, fails with "this effect operation has no lowering here" at `f`'s `perform`. Two halves: `fn_is_d2b_main`'s walks have no `EX_MATCH` arm, so `main` is `SIG-MAIN` and taints the effect; with that fixed, `CT_HANDLE`'s continuation (a `CT_MATCH`, or a join) fails `reset_body_ok`. Let-binding the `handle` first works. |
-
 ## Found prototyping the generic zipper (filed 2026-10-13)
 
 Hit while prototyping

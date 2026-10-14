@@ -452,10 +452,10 @@ of the same rebuild is fixed too, the same day
 It was three defects, and two of them matter to this plan beyond D1. A
 generic function that performs could not take a `:heap` struct or `(Vec T)`
 parameter, nor perform only inside a `match` arm; both now compile, pinned
-by `tests/fixtures/generic-performer-heap-handle-param`. One shape is still
-open: matching directly on a `handle` result in `main`
-([handle-under-match-in-main-has-no-lowering](../reported/handle-under-match-in-main-has-no-lowering.md)).
-Let-bind the result first.
+by `tests/fixtures/generic-performer-heap-handle-param`. Matching directly on
+a `handle` result, or a `handle` in a non-tail branch, compiles too
+([handle-under-match-in-main-has-no-lowering](../archive/handle-under-match-in-main-has-no-lowering.md)),
+so a zipper walk may handle an effect mid-branch.
 
 ```turmeric
 (defdata R :heap :copy (Lf int) (Br (Cons R)))

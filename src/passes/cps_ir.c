@@ -5864,13 +5864,32 @@ static CTerm *cps_bind(CpsB *b, Expr *e, CVar x, CTerm *rest) {
             }
             if (safe_to_delegate(b, e)) return build_letraw(b, e, x, rest);
             if (match_direct_dispatch_ok(b, e)) {
+                /* handle-under-match-in-main-has-no-lowering: bind a non-atomic
+                 * scrutinee BEFORE the join, as the ADT arm above and EX_IF do
+                 * (their atomize Pending folds around the CT_LETCONT).
+                 * build_direct_match_term would bind it inside, so a control
+                 * op there -- `(match (f) 42 ...)` with `f` colored, or
+                 * `(match (handle ...) ...)` -- had its continuation reach
+                 * back out to this join: a heap join whose body escapes is
+                 * unemittable (needs_heap_join), and the function evicted. */
+                Expr *scrut = e->as.match_.scrutinee;
+                const Expr *ps = ascribe_peel(scrut);
+                Expr *me = e;
+                CVar y = {0};
+                bool hoist = !(ps && ps->kind == EX_VAR && ps->as.var.binding);
+                if (hoist) {
+                    y = fresh_cvar(b, &scrut->type);
+                    me = arena_alloc(b->a, sizeof(Expr));
+                    *me = *e;
+                    me->as.match_.scrutinee = cvar_expr(b, &y, &scrut->type, scrut->span);
+                }
                 CVar j = fresh_cvar(b, x.type);
                 j.name = arena_strdup(b->a, "j", 1);
-                CTerm *body = build_direct_match_term(b, e, kont_var(j));
+                CTerm *body = build_direct_match_term(b, me, kont_var(j));
                 CTerm *t = new_term(b, CT_LETCONT);
                 t->as.letcont.j = j; t->as.letcont.param = x;
                 t->as.letcont.jbody = rest; t->as.letcont.body = body;
-                return t;
+                return hoist ? cps_bind(b, scrut, y, t) : t;
             }
             return unsupported_form(b, e);
         }

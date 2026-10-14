@@ -1,0 +1,45 @@
+;; A `handle` under a `match` -- or in a non-tail branch -- of `main`.
+;;
+;; Each of these was a hard "this effect operation has no lowering here" at
+;; `f`'s `perform` (handle-under-match-in-main-has-no-lowering), in three
+;; layers:
+;;
+;;   1. fn_is_d2b_main's walks had no `match` arm, so a `handle` under one
+;;      left `main` on the direct path (SIG-MAIN), which permanently tainted
+;;      Tick and evicted `f`.
+;;   2. A literal-pattern match bound its scrutinee INSIDE its join, so the
+;;      handle's continuation jumped back out to it.
+;;   3. A handle continuation could not deliver to an enclosing join at all,
+;;      so a handle in a match arm or an `if` branch with code after it was
+;;      refused even once `main` was a candidate.
+;;
+;; The let-bound form was the workaround; it is kept as the control.
+
+(defeffect Tick [] int)
+
+(defn f [] : int
+  (+ 1 (perform (Tick))))
+
+(defn main [] : int
+  ;; scrutinee
+  (match (handle (f) (Tick [] k) (resume k 41))
+    42 (println "scrutinee ok")
+    _ (println "scrutinee no"))
+  ;; a match arm, then more code
+  (match 1
+    1 (println (handle (f) (Tick [] k) (resume k 9)))
+    _ (println 0))
+  ;; an `if` branch, then more code
+  (if (= 1 1)
+    (println (handle (f) (Tick [] k) (resume k 19)))
+    (println 0))
+  ;; an abortive handler in a branch: the case value is the handle's value
+  (if (= 1 1)
+    (println (handle (f) (Tick [] k) 99))
+    (println 0))
+  ;; the let-bound control
+  (let [r (handle (f) (Tick [] k) (resume k 41))]
+    (match r
+      42 (println "let ok")
+      _ (println "let no")))
+  0)

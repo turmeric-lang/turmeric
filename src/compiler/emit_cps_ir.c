@@ -2141,19 +2141,26 @@ static bool collect_caps_case(const CTerm *body, const CHandleCase *hc, CapSet *
  * name a join defined within it (its exits otherwise are KK_RET, which the
  * lifted helper maps to its own k).  Rejects a body that escapes to an
  * enclosing join. */
+/* `outer_ok` (handle-under-match-in-main-has-no-lowering): a plain value
+ * delivery (CT_APPCONT) to a join defined OUTSIDE the term is admitted too.
+ * Only the handle-continuation check passes it -- see handle_cont_ok. */
+static bool joins_closed_rec_x(const CTerm *t, uint32_t *def, int nd, bool outer_ok);
 static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
+    return joins_closed_rec_x(t, def, nd, false);
+}
+static bool joins_closed_rec_x(const CTerm *t, uint32_t *def, int nd, bool outer_ok) {
     if (!t || nd >= CC_MAX_BOUND) return t == NULL;
     switch (t->kind) {
         case CT_APPCONT:
             if (t->as.appcont.kont.kind == KK_VAR) {
                 for (int i = 0; i < nd; i++) if (def[i] == t->as.appcont.kont.id) return true;
-                return false;
+                return outer_ok;
             }
             return true;
-        case CT_LETVAL:  return joins_closed_rec(t->as.letval.body, def, nd);
-        case CT_LETPRIM: return joins_closed_rec(t->as.letprim.body, def, nd);
-        case CT_LETCALL: return joins_closed_rec(t->as.letcall.body, def, nd);
-        case CT_LETRAW:  return joins_closed_rec(t->as.letraw.body, def, nd);
+        case CT_LETVAL:  return joins_closed_rec_x(t->as.letval.body, def, nd, outer_ok);
+        case CT_LETPRIM: return joins_closed_rec_x(t->as.letprim.body, def, nd, outer_ok);
+        case CT_LETCALL: return joins_closed_rec_x(t->as.letcall.body, def, nd, outer_ok);
+        case CT_LETRAW:  return joins_closed_rec_x(t->as.letraw.body, def, nd, outer_ok);
         case CT_TAILCALL:
             if (t->as.tailcall.kont.kind == KK_VAR) {
                 for (int i = 0; i < nd; i++) if (def[i] == t->as.tailcall.kont.id) return true;
@@ -2161,16 +2168,16 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
             }
             return true;
         case CT_IF:
-            return joins_closed_rec(t->as.if_.then_, def, nd)
-                && joins_closed_rec(t->as.if_.else_, def, nd);
+            return joins_closed_rec_x(t->as.if_.then_, def, nd, outer_ok)
+                && joins_closed_rec_x(t->as.if_.else_, def, nd, outer_ok);
         case CT_MATCH:
             for (uint32_t i = 0; i < t->as.match.n_arms; i++)
-                if (!joins_closed_rec(t->as.match.arms[i].body, def, nd)) return false;
+                if (!joins_closed_rec_x(t->as.match.arms[i].body, def, nd, outer_ok)) return false;
             return true;
         case CT_LETCONT:
             def[nd] = t->as.letcont.j.id;
-            return joins_closed_rec(t->as.letcont.jbody, def, nd + 1)
-                && joins_closed_rec(t->as.letcont.body, def, nd + 1);
+            return joins_closed_rec_x(t->as.letcont.jbody, def, nd + 1, outer_ok)
+                && joins_closed_rec_x(t->as.letcont.body, def, nd + 1, outer_ok);
         case CT_RESUME: return joins_closed_rec(t->as.resume.body, def, nd);
         case CT_CLONEABLE: return joins_closed_rec(t->as.cloneable.body, def, nd);
         case CT_CALLCC: return joins_closed_rec(t->as.callcc.body, def, nd);
@@ -2178,8 +2185,10 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
             /* Track A (A2): a nested `perform` in a reset/handle continuation
              * body.  The perform delivers to a handler (not a join); its joins are
              * in its own continuation, so recurse there.  term_core_ok already
-             * gates whether the nested perform is emittable (A1). */
-            return joins_closed_rec(t->as.perform.body, def, nd);
+             * gates whether the nested perform is emittable (A1).  Its frame is
+             * spliced onto the same downstream, so an outer delivery from it
+             * reaches the same escaping join. */
+            return joins_closed_rec_x(t->as.perform.body, def, nd, outer_ok);
         case CT_HANDLE:
             /* A nested `handle` in a reset/handle CONTINUATION (e.g. two sequential
              * `handle`s: the first's continuation contains the second -- effect-abort
@@ -2196,7 +2205,7 @@ static bool joins_closed_rec(const CTerm *t, uint32_t *def, int nd) {
                 for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++)
                     if (!joins_closed_rec(t->as.handle.cases[ci].case_body, hdef, 0))
                         return false;
-                return joins_closed_rec(t->as.handle.body, def, nd);
+                return joins_closed_rec_x(t->as.handle.body, def, nd, outer_ok);
             }
         /* cps-while-native: a back-edge references the loop helper, not a join; a
          * CT_LOOP's internal joins are a separate scope (checked when its own body
@@ -2216,6 +2225,26 @@ static bool reset_body_ok(const CTerm *t) {
     if (!term_core_ok(t)) return false;
     uint32_t def[CC_MAX_BOUND];
     return joins_closed_rec(t, def, 0);
+}
+
+/* handle-under-match-in-main-has-no-lowering: a HANDLE continuation may also
+ * deliver to a join that ENCLOSES the handle -- `(if c (println (handle ...))
+ * ...)` followed by more code, the handle's rest jumping to the if's merge.
+ * reset_body_ok refused that ("self-contained"), so a `handle` anywhere but the
+ * tail of a branch evicted its function, and with it every function performing
+ * the handled effect.  Such a join is always reified, never a label:
+ * join_escapes_lifted_rec counts a delivery from handle.body as lifted, so
+ * letcont_is_escaping_join holds for it, and emit_escaping_join makes its frame
+ * cur_k while the branch emits.  emit_handle splices the continuation frame
+ * onto that cur_k, so the delivery runs the join frame through `__kont`
+ * ("escaping join via downstream") -- the same path a perform continuation
+ * in a branch has used since perform-inside-loop-has-no-lowering.  Only a
+ * value delivery is admitted; a tail call or loop exit to an outer join, and
+ * any outer reference from a nested delim or handler case, stay refused. */
+static bool handle_cont_ok(const CTerm *t) {
+    if (!term_core_ok(t)) return false;
+    uint32_t def[CC_MAX_BOUND];
+    return joins_closed_rec_x(t, def, 0, true);
 }
 
 /* A shift body in the C3 subset: straight-line (letval/letprim/letcall) ending
@@ -2999,7 +3028,7 @@ static bool term_core_ok_impl(const CTerm *t) {
             CapSet hcs;
             if (!(slot_ok_t(t->as.handle.x.type, t->as.handle.x.ty) || t->as.handle.x.ty == TY_NIL)
                 || !handle_delim_ok(t->as.handle.delim)
-                || !reset_body_ok(t->as.handle.body)
+                || !handle_cont_ok(t->as.handle.body)
                 || !collect_caps(t->as.handle.body, t->as.handle.x.id, &hcs))
                 return false;
             for (uint32_t ci = 0; ci < t->as.handle.n_cases; ci++) {
@@ -3892,9 +3921,18 @@ static bool fn_is_d2b_main(const FnDef *fd) {
      * delimited control too, lowered only by the CT-IR backend (the direct
      * emitter's EX_CALLCC arm aborts) -- so a main whose only control op is
      * one is a d2b candidate as well.  Same fixpoint, same fallbacks. */
+    /* handle-under-match-in-main-has-no-lowering: ...and a control op anywhere
+     * the shared enumerator reaches.  The first two walks have no arm for
+     * `match`, so `(match (handle (f) ...) ...)` left main on the direct path:
+     * SIG-MAIN permanently tainted the handled effect, and every function
+     * performing it was evicted.  cps_expr_uses_control is the coloring walk's
+     * own seed test, which falls back to cps_visit_children for every kind it
+     * has no arm for.  Kept beside the original two so the answer only widens;
+     * a main it admits still faces the taint fixpoint like any candidate. */
     return cps_expr_contains_shift(fd->body)
         || expr_has_handle(fd->body)
-        || cps_expr_contains_callcc(fd->body);
+        || cps_expr_contains_callcc(fd->body)
+        || cps_expr_uses_control(fd->body);
 }
 
 static const Expr *g_prog;      /* program the cache is keyed on */

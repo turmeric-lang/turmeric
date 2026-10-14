@@ -63,11 +63,11 @@ Neither carries `requires.leak-check`. Under LSan, their only leaked blocks
 are `:heap` nodes and an unfreed `Vec`, which are process-lifetime by
 design. No leaked block comes from a DK frame or a closure env.
 
-**Found on the way and filed open:**
-[handle-under-match-in-main-has-no-lowering](../reported/handle-under-match-in-main-has-no-lowering.md).
+**Found on the way and filed:**
+[handle-under-match-in-main-has-no-lowering](handle-under-match-in-main-has-no-lowering.md).
 `(match (handle (f) ...) ...)` in `main` is the same hard error. This
 fixture's first draft hit it, and it reproduces on the baseline with no
-generics at all.
+generics at all. Resolved the same day.
 
 The original filing follows. Its "Root cause" guessed at the ICE and missed
 that it was the shadow's view of half 1. It also missed halves 2 and 3, which
