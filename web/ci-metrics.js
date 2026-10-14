@@ -95,7 +95,7 @@ const SPICE_SERIES = [
   ['spices', 'Spices', '--chart-1'],
 ];
 
-const TABS = ['tests', 'code', 'spices', 'reports'];
+const TABS = ['tests', 'counts', 'code', 'spices', 'reports'];
 
 // Ranges the 8-day recent window can answer. Anything wider needs the full log.
 const RECENT_RANGES = ['1d', '7d'];
@@ -122,11 +122,6 @@ const state = {
   // rather than drawing an empty axis.
   loc: [],
   locKeys: new Set(LOC_DEFAULT),
-  // 'lines' plots the counts; 'change' plots each series against its own first
-  // value in range. Two different questions — how big, and what moved — and on
-  // a shared zero-based axis the first one cannot answer the second: a week of
-  // pushes moves 408,000 lines by a few hundred, which is a third of a pixel.
-  locMode: 'lines',
   locError: null,
   // Open plans and reports: same shape as loc -- one NDJSON row per push to
   // main, no env dimension. Empty until /api/ci-docs has its first row.
@@ -184,12 +179,11 @@ function fmtCount(n) {
   return n == null || Number.isNaN(n) ? '--' : Math.round(n).toLocaleString();
 }
 
-// Signed, and trimmed rather than fixed: tick steps here can be 0.05% or 5%
-// depending on the range, so a fixed precision is wrong at one end or the
-// other. The sign is what carries the meaning, so it is never dropped.
-function fmtSignedPct(x) {
-  const v = +x.toFixed(Math.abs(x) < 1 ? 2 : 1);
-  return `${v > 0 ? '+' : ''}${v}%`;
+// A change in a count: the sign carries the meaning, so zero is the only value
+// shown without one.
+function fmtSignedCount(n) {
+  if (n == null || Number.isNaN(n)) return '--';
+  return `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(Math.round(n)).toLocaleString()}`;
 }
 
 // Axis form for line counts, where `1,552,973` does not fit under a tick.
@@ -423,7 +417,6 @@ function readURL() {
     range: q.get('range'),
     scale: q.get('scale'),
     loc: q.get('loc') ? q.get('loc').split(',').filter(Boolean) : null,
-    locMode: q.get('locmode'),
     docs: q.get('docs') ? q.get('docs').split(',').filter(Boolean) : null,
     tab: q.get('tab'),
   };
@@ -445,7 +438,6 @@ function writeURL() {
   // Only when it differs from the default pair, so a bare link stays bare.
   const loc = LOC_SERIES.map(([k]) => k).filter((k) => state.locKeys.has(k));
   if (loc.join(',') !== LOC_DEFAULT.join(',')) q.set('loc', loc.join(','));
-  if (state.locMode !== 'lines') q.set('locmode', state.locMode);
   const docs = DOCS_SERIES.map(([k]) => k).filter((k) => state.docsKeys.has(k));
   if (docs.join(',') !== DOCS_DEFAULT.join(',')) q.set('docs', docs.join(','));
   if (state.tab !== 'tests') q.set('tab', state.tab);
@@ -507,6 +499,16 @@ function decimalTicks(lo, hi, count) {
   for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) {
     out.push(v);
   }
+  return out;
+}
+
+// Whole numbers only: the bar chart counts reports, and a tick at 0.5 (or the
+// 2.5 the decimal ladder allows) is a label for a value that cannot occur.
+function intTicks(lo, hi, count) {
+  const t = decimalTicks(lo, hi, count);
+  const step = Math.max(1, Math.ceil(t.length > 1 ? t[1] - t[0] : 1));
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(v);
   return out;
 }
 
@@ -666,16 +668,17 @@ function renderFilters() {
 //   fmtTickY  (v) => string               -- axis labels
 //   footer    axis-title text under the plot
 //   label     the SVG's aria-label
+//   directLabels  false where a title already names the one series
 function drawLineChart({
   host, tooltip, idPrefix, series, xs, log = false,
-  ticksY, fmtY, fmtTickY, footer, label,
+  ticksY, fmtY, fmtTickY, footer, label, directLabels = true,
 }) {
   const x0 = xs[0];
   const x1 = xs[xs.length - 1];
 
   const W = Math.max(360, host.clientWidth || 860);
   const H = 320;
-  const showLabels = series.length <= 4 && W >= 640;
+  const showLabels = directLabels && series.length <= 4 && W >= 640;
   const pad = { t: 18, r: showLabels ? 128 : 24, b: 40, l: 62 };
   const iw = W - pad.l - pad.r;
   const ih = H - pad.t - pad.b;
@@ -686,10 +689,7 @@ function drawLineChart({
 
   // Linear always includes zero. Not a style choice: a cropped axis is the
   // oldest way to make noise look like a trend, and both series here are read
-  // against each other. Where the magnitudes are too far apart for that to say
-  // anything — a 408k line beside a 169k one barely moves in a week — the fix
-  // is to plot a different QUANTITY (the line-count panel's "Change" mode,
-  // which is relative by construction), not to quietly move the floor.
+  // against each other.
   let yLo;
   let yHi;
   if (log) {
@@ -697,9 +697,9 @@ function drawLineChart({
     yLo = Math.max(1, vmin * 0.7);
     yHi = vmax * 1.3;
   } else {
-    // Math.min/max with 0 so a series that goes negative (percent change) keeps
-    // its baseline on the chart; for all-positive data this is yLo = 0 and
-    // yHi = vmax * 1.08, as it has always been.
+    // Math.min/max with 0 so a series that dips below zero keeps its baseline
+    // on the chart; for all-positive data this is yLo = 0 and yHi = vmax *
+    // 1.08, as it has always been.
     yLo = Math.min(0, vmin);
     yHi = Math.max(0, vmax);
     const slack = (yHi - yLo) * 0.08 || 1;
@@ -876,6 +876,135 @@ function wireHover({ host, tooltip, idPrefix, series, sx, fmtY, pad, ih }) {
   });
 }
 
+// ── THE BAR CHART ───────────────────────────────────────────────────────────
+//
+// One column per time bucket, for a quantity with a sign. Above the zero line
+// in one hue, below it in the other, so polarity reads by position first and
+// color second. The axis vocabulary is drawLineChart's -- hairline grid, dim
+// tick labels, x labels thinned by pixel distance -- and so is the hover: one
+// tooltip, for the bucket under the pointer.
+//
+//   buckets   [{ label, y, head, rows: [[name, value, color?]] }], in x order
+//   ticksY    (lo, hi) => number[]
+//   fmtTickY  (v) => string
+//   footer    axis-title text under the plot
+//   label     the SVG's aria-label
+function drawBarChart({
+  host, tooltip, idPrefix, buckets, ticksY, fmtTickY, footer, label,
+  posColor, negColor,
+}) {
+  const W = Math.max(360, host.clientWidth || 860);
+  const H = 280;
+  const pad = { t: 18, r: 24, b: 40, l: 62 };
+  const iw = W - pad.l - pad.r;
+  const ih = H - pad.t - pad.b;
+
+  // Zero is always on the axis -- it is the line the whole chart is read
+  // against -- and an all-zero range still gets one unit either side of it.
+  const ys = buckets.map((b) => b.y);
+  let yLo = Math.min(0, ...ys);
+  let yHi = Math.max(0, ...ys);
+  if (yHi === yLo) { yLo = -1; yHi = 1; }
+  const slack = (yHi - yLo) * 0.08;
+  if (yHi > 0) yHi += slack;
+  if (yLo < 0) yLo -= slack;
+  const sy = (v) => pad.t + ih - ((v - yLo) / (yHi - yLo)) * ih;
+
+  // Columns are capped at 24px and never fill their band: the air between
+  // them is what makes each one a day rather than a slab of a histogram.
+  const bw = iw / buckets.length;
+  const colW = Math.max(2, Math.min(24, bw * 0.6));
+  const bx = (i) => pad.l + i * bw + (bw - colW) / 2;
+
+  const parts = [];
+  for (let i = 0; i < buckets.length; i++) {
+    parts.push(svgEl('rect', {
+      class: 'ci-band-hover', 'data-i': i,
+      x: pad.l + i * bw, y: pad.t, width: bw, height: ih,
+    }));
+  }
+  for (const t of ticksY(yLo, yHi)) {
+    const y = sy(t);
+    parts.push(svgEl('line', {
+      class: t === 0 ? 'ci-zero-line' : 'ci-grid-line',
+      x1: pad.l, x2: pad.l + iw, y1: y, y2: y,
+    }));
+    parts.push(`<text class="ci-axis-text" x="${pad.l - 10}" y="${y + 3}"
+      text-anchor="end">${esc(fmtTickY(t))}</text>`);
+  }
+
+  // Square where the column meets zero, a 4px round at its data end.
+  const y0 = sy(0);
+  buckets.forEach((b, i) => {
+    if (!b.y) return;
+    const x = bx(i);
+    const yv = sy(b.y);
+    const h = Math.abs(yv - y0);
+    const r = Math.min(4, colW / 2, h);
+    const up = b.y > 0;
+    const k = up ? r : -r;   // the round turns back toward the zero line
+    const d = `M${x},${y0} V${yv + k} Q${x},${yv} ${x + r},${yv} H${x + colW - r}`
+      + ` Q${x + colW},${yv} ${x + colW},${yv + k} V${y0} Z`;
+    parts.push(`<path class="${up ? 'ci-bar-pos' : 'ci-bar-neg'}" d="${d}"
+      style="fill:${up ? posColor : negColor}" />`);
+  });
+
+  // X labels thinned by pixel distance, keeping the newest bucket.
+  const X_GAP = 62;
+  const keep = [];
+  const cx = (i) => pad.l + i * bw + bw / 2;
+  for (let i = 0; i < buckets.length; i++) {
+    if (!keep.length || cx(i) - cx(keep[keep.length - 1]) >= X_GAP) keep.push(i);
+  }
+  const last = buckets.length - 1;
+  if (keep[keep.length - 1] !== last) {
+    while (keep.length && cx(last) - cx(keep[keep.length - 1]) < X_GAP) keep.pop();
+    keep.push(last);
+  }
+  for (const i of keep) {
+    parts.push(`<text class="ci-axis-text" x="${cx(i)}" y="${pad.t + ih + 18}"
+      text-anchor="middle">${esc(buckets[i].label)}</text>`);
+  }
+  parts.push(`<text class="ci-axis-title" x="${pad.l}" y="${H - 4}">${esc(footer)}</text>`);
+
+  parts.push(svgEl('rect', {
+    class: 'ci-hit', id: `${idPrefix}-hit`, x: pad.l, y: pad.t, width: iw, height: ih,
+  }));
+
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
+    role="img" aria-label="${esc(label)}">${parts.join('')}</svg>`;
+
+  const svg = host.querySelector('svg');
+  const hit = host.querySelector(`#${idPrefix}-hit`);
+  const bands = [...host.querySelectorAll('.ci-band-hover')];
+  const hide = () => {
+    tooltip.hidden = true;
+    for (const band of bands) band.classList.remove('is-on');
+  };
+  hit.addEventListener('mouseleave', hide);
+  hit.addEventListener('mousemove', (ev) => {
+    const box = svg.getBoundingClientRect();
+    const ux = ((ev.clientX - box.left) / box.width) * svg.viewBox.baseVal.width;
+    const i = Math.max(0, Math.min(last, Math.floor((ux - pad.l) / bw)));
+    const b = buckets[i];
+    bands.forEach((band, j) => band.classList.toggle('is-on', j === i));
+    tooltip.innerHTML = `
+      <div class="ci-tooltip-head"><span>${esc(b.head)}</span></div>
+      ${b.rows.map(([name, value, color]) => `
+        <div class="ci-tooltip-row">
+          <span class="dot" style="background:${color ?? 'transparent'}"></span>
+          <span class="name">${esc(name)}</span>
+          <span class="val">${esc(value)}</span>
+        </div>`).join('')}`;
+    tooltip.hidden = false;
+    const scale = box.width / svg.viewBox.baseVal.width;
+    const px = cx(i) * scale;
+    const flip = px + tooltip.offsetWidth + 20 > box.width;
+    tooltip.style.left = `${flip ? px - tooltip.offsetWidth - 14 : px + 14}px`;
+    tooltip.style.top = `${Math.max(0, (pad.t + ih / 2) * scale - tooltip.offsetHeight / 2)}px`;
+  });
+}
+
 // ── RENDER: SUITE DURATIONS ─────────────────────────────────────────────────
 
 function renderChart() {
@@ -988,28 +1117,14 @@ function renderLoc() {
     return;
   }
 
-  const change = state.locMode === 'change';
   const series = LOC_SERIES
     .filter(([key]) => state.locKeys.has(key))
-    .map(([key, label, cssVar]) => {
-      // Each series is indexed to its OWN first value in range, so a 500-line
-      // week shows up the same whether it landed in a 4,000-line bucket or a
-      // 400,000-line one. A zero base (an empty bucket) has no percentage, so
-      // it stays at zero rather than becoming Infinity.
-      const base = rows[0][key] || 0;
-      return {
-        key,
-        label,
-        color: `var(${cssVar})`,
-        pts: rows.map((r) => ({
-          x: r.ts,
-          y: change
-            ? (base ? ((r[key] ?? 0) - base) / base * 100 : 0)
-            : (r[key] ?? 0),
-          sha: r.sha,
-        })),
-      };
-    });
+    .map(([key, label, cssVar]) => ({
+      key,
+      label,
+      color: `var(${cssVar})`,
+      pts: rows.map((r) => ({ x: r.ts, y: r[key] ?? 0, sha: r.sha })),
+    }));
 
   drawLineChart({
     host,
@@ -1018,13 +1133,10 @@ function renderLoc() {
     series,
     xs,
     ticksY: (lo, hi) => decimalTicks(lo, hi, 5),
-    fmtY: change ? fmtSignedPct : fmtCount,
-    fmtTickY: change ? fmtSignedPct : fmtCountTick,
-    footer: `${xs.length} commit${xs.length === 1 ? '' : 's'}`
-      + (change ? ` · change since ${fmtDate(rows[0].ts)}` : ''),
-    label: change
-      ? 'Change in tracked lines of code over the selected range'
-      : 'Tracked lines of code over time',
+    fmtY: fmtCount,
+    fmtTickY: fmtCountTick,
+    footer: `${xs.length} commit${xs.length === 1 ? '' : 's'}`,
+    label: 'Tracked lines of code over time',
   });
 
   renderLocLegend();
@@ -1193,6 +1305,306 @@ function renderDocsLegend() {
       writeURL();
     };
   }
+}
+
+// ── RENDER: TEST COUNTS ─────────────────────────────────────────────────────
+
+// How many tests a suite row counted, or null when the suite printed no census
+// line (collect-suite-timings.py's SUMMARY_RE). `discovered` when the harness
+// reports it; otherwise what it ran plus what it skipped.
+function testCount(r) {
+  if (r.passed == null) return null;
+  return r.discovered ?? (r.passed + (r.failed ?? 0) + (r.skipped ?? 0));
+}
+
+const runKey = (r) => (r.run_id != null ? `${r.run_id}|${r.run_attempt ?? ''}` : `ts|${r.ts}`);
+
+// suite -> [{ ts, run, sha, count, passed, failed, skipped }], ascending.
+//
+// Each suite is counted ONCE, from its home environment: the one it has the
+// most whole (unsharded) runs in. Counting it in every environment would add
+// tur_tests up twice for running on Linux and macOS, and the environment lock
+// the timings need would hide the browser suites, which only run under
+// emscripten. A suite that only ever runs sharded is summed across its shards
+// per run, so it is not dropped for having no whole run.
+function suiteCounts() {
+  const rowsBy = new Map();   // suite -> envKey -> rows
+  for (const r of state.rows) {
+    if (testCount(r) == null) continue;
+    let envs = rowsBy.get(r.suite);
+    if (!envs) rowsBy.set(r.suite, (envs = new Map()));
+    const k = envKey(r);
+    if (!envs.has(k)) envs.set(k, []);
+    envs.get(k).push(r);
+  }
+  const envRank = new Map(state.envs.map((e, i) => [e.key, i]));
+  const out = new Map();
+  for (const [suite, envs] of rowsBy) {
+    const whole = (rows) => rows.filter((r) => !r.shard_total).length;
+    const [, rows] = [...envs].sort((a, b) => (
+      whole(b[1]) - whole(a[1]) || b[1].length - a[1].length
+      || (envRank.get(a[0]) ?? 0) - (envRank.get(b[0]) ?? 0)
+    ))[0];
+    const byRun = new Map();
+    const unsharded = rows.filter((r) => !r.shard_total);
+    for (const r of unsharded.length ? unsharded : rows) {
+      const key = runKey(r);
+      const p = byRun.get(key);
+      const v = { count: testCount(r), passed: r.passed, failed: r.failed ?? 0, skipped: r.skipped ?? 0 };
+      if (!p) byRun.set(key, { ts: r.ts, run: key, sha: r.sha, ...v });
+      else {
+        // Another shard of the same run: add it in.
+        p.ts = Math.max(p.ts, r.ts);
+        for (const k of ['count', 'passed', 'failed', 'skipped']) p[k] += v[k];
+      }
+    }
+    out.set(suite, [...byRun.values()].sort((a, b) => a.ts - b.ts));
+  }
+  return out;
+}
+
+// Totals over time, one point per CI run: { ts, sha, total, failedHere }. Every suite contributes its NEWEST count as of that run, not
+// only the suites the run itself executed -- a push runs only the jobs its
+// diff needs, so a plain per-run sum sawtooths between ~3.7k and ~9k with no
+// test added or removed.
+//
+// Two edges keep the carry-forward honest. A suite last seen more than a week
+// before the newest data has been removed, so it leaves the sum after its last
+// run instead of being carried to the end. And the points start once every
+// suite present on the data's first day has reported: before that, the sum is
+// missing suites that simply had not run yet in the loaded window.
+function countTimeline(series) {
+  const events = [];
+  for (const [suite, pts] of series) for (const p of pts) events.push({ suite, ...p });
+  events.sort((a, b) => a.ts - b.ts);
+  if (!events.length) return [];
+  const newest = events[events.length - 1].ts;
+  const lastTs = new Map([...series].map(([s, pts]) => [s, pts[pts.length - 1].ts]));
+  const firstTs = [...series.values()].map((pts) => pts[0].ts);
+  const dataStart = Math.min(...firstTs);
+  const warm = Math.max(...firstTs.filter((t) => t <= dataStart + 86400));
+
+  const cur = new Map();
+  const snaps = new Map();   // run -> snapshot after that run's last event
+  for (const e of events) {
+    cur.set(e.suite, e);
+    for (const s of cur.keys()) {
+      const end = lastTs.get(s);
+      if (end < e.ts && end < newest - 7 * 86400) cur.delete(s);   // retired
+    }
+    const snap = { ts: e.ts, sha: e.sha, total: 0, failedHere: snaps.get(e.run)?.failedHere ?? false };
+    for (const p of cur.values()) snap.total += p.count;
+    snap.failedHere = snap.failedHere || e.failed > 0;
+    snaps.set(e.run, snap);
+  }
+  return [...snaps.values()].filter((p) => p.ts >= warm).sort((a, b) => a.ts - b.ts);
+}
+
+function renderCounts() {
+  const tiles = document.getElementById('ci-counts-tiles');
+  const host = document.getElementById('ci-counts-chart');
+  const sub = document.getElementById('ci-counts-sub');
+
+  const series = suiteCounts();
+  if (!series.size) {
+    tiles.innerHTML = '';
+    sub.textContent = '';
+    host.innerHTML = '<div class="ci-empty">No suite prints a test count yet.</div>';
+    return;
+  }
+
+  const timeline = countTimeline(series);
+  const cutoff = rangeCutoff(state.rows);
+  const inRange = timeline.filter((p) => p.ts >= cutoff);
+
+  // Headline: each current suite's newest count -- the same rule the timeline
+  // applies at its last point, so the tile and the line end on one number.
+  const newestTs = Math.max(...[...series.values()].map((pts) => pts[pts.length - 1].ts));
+  const current = [...series]
+    .map(([suite, pts]) => ({ suite, ...pts[pts.length - 1] }))
+    .filter((p) => p.ts >= newestTs - 7 * 86400);
+  const sum = (rows, k) => rows.reduce((a, p) => a + p[k], 0);
+  const total = sum(current, 'count');
+  const failed = sum(current, 'failed');
+  const skipped = sum(current, 'skipped');
+  const first = inRange[0];
+  const last = inRange[inRange.length - 1];
+
+  const tile = (cls, icon, label, value, note) => `
+    <div class="ci-tile ${cls}">
+      <div class="ci-tile-label"><t-icon name="${icon}"></t-icon>${esc(label)}</div>
+      <div class="ci-tile-value">${value}</div>
+      <div class="ci-tile-note">${esc(note)}</div>
+    </div>`;
+  tiles.innerHTML = [
+    tile('', 'list-checks', 'Tests', esc(fmtCount(total)),
+      `Across ${current.length} suite${current.length === 1 ? '' : 's'} that print a count`),
+    tile(failed ? 'is-fail' : '', failed ? 'circle-x' : 'circle-check', 'Failing tests',
+      esc(fmtCount(failed)), failed ? 'In each suite\'s newest run' : 'None in any suite\'s newest run'),
+    tile(skipped ? 'is-skip' : '', 'circle-minus', 'Skipped tests',
+      esc(fmtCount(skipped)), 'Counted, but not run'),
+    tile('', 'trending-up', 'Change in range',
+      esc(inRange.length > 1 ? fmtSignedCount(last.total - first.total) : '--'),
+      inRange.length > 1 ? `Since ${fmtDate(first.ts)}` : 'Needs two runs in range'),
+  ].join('');
+
+  // Suites that ran but printed no census line are not in any of this.
+  const silent = new Set(state.rows.map((r) => r.suite));
+  for (const name of series.keys()) silent.delete(name);
+  sub.textContent = `Every suite that prints a test count, each at its newest count as of `
+    + `each run.${silent.size ? ` ${silent.size} other suites print none and are not counted.` : ''}`;
+
+  if (inRange.length < 2) {
+    host.innerHTML = `<div class="ci-empty">${timeline.length > inRange.length
+      ? 'Only one run in this range -- widen it to see a trend.'
+      : 'Only one run has been counted so far. A trend needs two.'}</div>`;
+  } else {
+    drawLineChart({
+      host,
+      tooltip: document.getElementById('ci-counts-tooltip'),
+      idPrefix: 'ci-counts',
+      series: [{
+        key: 'total', label: 'Tests', color: 'var(--chart-1)',
+        pts: inRange.map((p) => ({ x: p.ts, y: p.total, fail: p.failedHere, sha: p.sha })),
+      }],
+      xs: inRange.map((p) => p.ts),
+      ticksY: (lo, hi) => decimalTicks(lo, hi, 5),
+      fmtY: fmtCount,
+      fmtTickY: fmtCountTick,
+      footer: `${inRange.length} run${inRange.length === 1 ? '' : 's'}`,
+      label: 'Total tests over time',
+      directLabels: false,
+    });
+  }
+}
+
+// ── RENDER: REPORT FLOW ─────────────────────────────────────────────────────
+
+// The pushes that moved docs/reported/, as [{ ts, filed, archived, net }]: one
+// per docs row, against the row before it. Rows carrying the running totals
+// (collect-docs.py's reports_filed / reports_archived) give the split exactly.
+// Older rows only have the open count, whose fall IS archived minus filed --
+// every report that leaves the directory was archived, every one that enters
+// was filed -- so the net is still exact there; only the split is unknown.
+function reportFlows() {
+  const out = [];
+  for (let i = 1; i < state.docs.length; i++) {
+    const a = state.docs[i - 1];
+    const b = state.docs[i];
+    if (a.reports_filed != null && b.reports_filed != null
+        && a.reports_archived != null && b.reports_archived != null) {
+      const filed = b.reports_filed - a.reports_filed;
+      const archived = b.reports_archived - a.reports_archived;
+      out.push({ ts: b.ts, filed, archived, net: archived - filed });
+    } else if (a.open_reports != null && b.open_reports != null) {
+      out.push({ ts: b.ts, filed: null, archived: null, net: a.open_reports - b.open_reports });
+    }
+  }
+  return out;
+}
+
+// Local calendar days -- the reader's, since "what happened Tuesday" is asked
+// in their timezone -- or Monday-start weeks once a range spans more days than
+// columns fit. Every bucket from the start of the range to the newest push is
+// present, a quiet day as an empty slot, so the x axis is time and not a list.
+function flowBuckets(flows, fromTs) {
+  if (!flows.length) return [];
+  const startOf = (ts, weekly) => {
+    const d = new Date(ts * 1000);
+    d.setHours(0, 0, 0, 0);
+    if (weekly) d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return d;
+  };
+  const lastTs = flows[flows.length - 1].ts;
+  const firstTs = Math.min(fromTs, flows[0].ts);
+  const weekly = (lastTs - firstTs) / 86400 > 60;
+  const buckets = [];
+  const end = startOf(lastTs, weekly);
+  for (const d = startOf(firstTs, weekly); d <= end; d.setDate(d.getDate() + (weekly ? 7 : 1))) {
+    buckets.push({ start: d.getTime() / 1000, weekly, pushes: 0, net: 0, filed: 0, archived: 0, split: true });
+  }
+  for (const f of flows) {
+    // Last bucket that starts at or before the push.
+    let b = null;
+    for (const c of buckets) if (c.start <= f.ts) b = c;
+    if (!b) continue;
+    b.pushes += 1;
+    b.net += f.net;
+    if (f.filed == null) b.split = false;
+    else { b.filed += f.filed; b.archived += f.archived; }
+  }
+  return buckets;
+}
+
+function renderFlow() {
+  const host = document.getElementById('ci-flow-chart');
+  const sub = document.getElementById('ci-flow-sub');
+  const legend = document.getElementById('ci-flow-legend');
+
+  if (state.docsError) {
+    host.innerHTML = `<div class="ci-empty">${esc(state.docsError)}</div>`;
+    sub.textContent = '';
+    legend.innerHTML = '';
+    return;
+  }
+
+  const cutoff = rangeCutoff(state.docs);
+  const flows = reportFlows().filter((f) => f.ts >= cutoff);
+  // From the start of the range, or of the data when the range reaches past it.
+  const buckets = flowBuckets(flows, Math.max(cutoff, state.docs[0]?.ts ?? 0));
+
+  const net = flows.reduce((a, f) => a + f.net, 0);
+  const split = flows.every((f) => f.filed != null);
+  const filed = flows.reduce((a, f) => a + (f.filed ?? 0), 0);
+  const archived = flows.reduce((a, f) => a + (f.archived ?? 0), 0);
+  sub.innerHTML = flows.length
+    ? `${split ? `${esc(fmtCount(archived))} archived, ${esc(fmtCount(filed))} filed in this
+         range: net <strong>${esc(fmtSignedCount(net))}</strong>.`
+        : `Net <strong>${esc(fmtSignedCount(net))}</strong> in this range.`}
+       Above the line, a ${buckets[0]?.weekly ? 'week' : 'day'} closed more reports than
+       it opened; below it, the backlog grew.`
+    : '';
+
+  legend.innerHTML = [
+    ['var(--chart-2)', 'More archived than filed'],
+    ['var(--chart-1)', 'More filed than archived'],
+  ].map(([color, name]) => `
+    <span class="ci-legend-item">
+      <span class="swatch" style="background:${color}"></span>${esc(name)}
+    </span>`).join('');
+
+  if (!flows.length) {
+    host.innerHTML = `<div class="ci-empty">${state.docs.length > 1
+      ? 'No push in this range -- widen it to see the flow.'
+      : 'Only one push has been measured so far. A flow needs two.'}</div>`;
+    return;
+  }
+
+  const dayLabel = (b) => (b.weekly ? `wk ${fmtDate(b.start)}` : fmtDate(b.start));
+  drawBarChart({
+    host,
+    tooltip: document.getElementById('ci-flow-tooltip'),
+    idPrefix: 'ci-flow',
+    buckets: buckets.map((b) => ({
+      label: dayLabel(b),
+      y: b.net,
+      head: `${b.weekly ? 'Week of ' : ''}${fmtDate(b.start)} · ${b.pushes} push${b.pushes === 1 ? '' : 'es'}`,
+      rows: [
+        ['Net', fmtSignedCount(b.net),
+          b.net > 0 ? 'var(--chart-2)' : b.net < 0 ? 'var(--chart-1)' : null],
+        ...(b.split
+          ? [['Archived', fmtCount(b.archived)], ['Filed', fmtCount(b.filed)]]
+          : [['Split', 'not recorded']]),
+      ],
+    })),
+    ticksY: (lo, hi) => intTicks(lo, hi, 5),
+    fmtTickY: (v) => fmtSignedCount(v),
+    footer: `${flows.length} push${flows.length === 1 ? '' : 'es'} · reports archived minus filed per ${
+      buckets[0].weekly ? 'week' : 'day'}`,
+    label: `Reports archived minus reports filed, per ${buckets[0].weekly ? 'week' : 'day'}`,
+    posColor: 'var(--chart-2)',
+    negColor: 'var(--chart-1)',
+  });
 }
 
 // ── RENDER: SPICES AND GUIDES ───────────────────────────────────────────────
@@ -1508,9 +1920,11 @@ function render() {
   renderTiles();
   renderFilters();
   renderChart();
+  renderCounts();
   renderLoc();
   renderDocsTiles();
   renderDocs();
+  renderFlow();
   renderGuides();
   renderSpices();
   renderSparks(stats);
@@ -1566,9 +1980,10 @@ function switchTab(tab) {
   }
   // A chart drawn into a hidden panel has a fallback viewBox width; redraw now
   // that the panel is visible so it fits the real column.
+  if (tab === 'counts') renderCounts();
   if (tab === 'code') renderLoc();
   if (tab === 'spices') renderSpices();
-  if (tab === 'reports') { renderDocsTiles(); renderDocs(); renderGuides(); }
+  if (tab === 'reports') { renderDocsTiles(); renderDocs(); renderFlow(); renderGuides(); }
   writeURL();
 }
 
@@ -1662,7 +2077,6 @@ async function boot() {
   state.env = state.envs.some((e) => e.key === url.env) ? url.env : state.envs[0].key;
   if (url.range && RANGES.some(([v]) => v === url.range)) state.range = url.range;
   if (url.scale === 'log') state.scale = 'log';
-  if (url.locMode === 'change') state.locMode = 'change';
   if (url.statuses) {
     const valid = url.statuses.filter((s) => STATUSES.includes(s));
     if (valid.length) state.statuses = new Set(valid);
@@ -1687,13 +2101,10 @@ async function boot() {
   document.getElementById('ci-state').hidden = true;
   document.getElementById('ci-body').hidden = false;
 
-  for (const [attr, which] of [['data-scale', 'scale'], ['data-loc-mode', 'locMode']]) {
-    for (const b of document.querySelectorAll(`.ci-seg-btn[${attr}]`)) {
-      b.classList.toggle('is-active', b.getAttribute(attr) === state[which]);
-    }
+  for (const b of document.querySelectorAll('.ci-seg-btn[data-scale]')) {
+    b.classList.toggle('is-active', b.getAttribute('data-scale') === state.scale);
   }
   wireSegToggle('data-scale', (v) => { state.scale = v; renderChart(); });
-  wireSegToggle('data-loc-mode', (v) => { state.locMode = v; renderLoc(); });
 
   // The range <select> is static HTML shared across all tabs, so it is wired
   // here rather than in renderFilters (which only owns the Tests-tab controls).
@@ -1735,8 +2146,10 @@ async function boot() {
   // Re-render (rather than scale) on resize so text never distorts.
   const redraw = new Map([
     [document.getElementById('ci-chart'), renderChart],
+    [document.getElementById('ci-counts-chart'), renderCounts],
     [document.getElementById('ci-loc-chart'), renderLoc],
     [document.getElementById('ci-docs-chart'), renderDocs],
+    [document.getElementById('ci-flow-chart'), renderFlow],
     [document.getElementById('ci-guides-chart'), renderGuides],
     [document.getElementById('ci-spices-chart'), renderSpices],
   ]);

@@ -42,16 +42,19 @@ test.describe('CI metrics dashboard', () => {
 
   function docsFixture() {
     const now = Math.floor(Date.now() / 1000);
-    // The last two columns are the guide counts; spices/spice_guides are null on
+    // The guide counts follow the plan columns; spices/spice_guides are null on
     // the first row on purpose -- published without the spices checkout, which
-    // must read as "not measured", never as a drop to zero.
+    // must read as "not measured", never as a drop to zero. The last two
+    // columns are the running report totals (filed, archived), absent on the
+    // first row as on every row published before collect-docs.py counted them;
+    // filed - archived is that row's open_reports.
     const rows = [
-      ['aaaaaaa1111111111111111111111111111aaaa1', 28, 25, 10, 15, 3, 0, 150, null],
-      ['bbbbbbb2222222222222222222222222222bbbb2', 29, 26, 10, 15, 3, 1, 152, 19],
-      ['ccccccc3333333333333333333333333333cccc3', 30, 27, 10, 15, 3, 2, 154, 20],
-      ['ddddddd4444444444444444444444444444dddd4', 30, 29, 10, 14, 3, 3, 155, 21],
+      ['aaaaaaa1111111111111111111111111111aaaa1', 28, 28, 10, 15, 3, 0, 150, null, null, null],
+      ['bbbbbbb2222222222222222222222222222bbbb2', 29, 26, 10, 15, 3, 1, 152, 19, 100, 74],
+      ['ccccccc3333333333333333333333333333cccc3', 30, 27, 10, 15, 3, 2, 154, 20, 103, 76],
+      ['ddddddd4444444444444444444444444444dddd4', 30, 29, 10, 14, 3, 3, 155, 21, 106, 77],
     ];
-    return rows.map(([sha, open_plans, open_reports, active, held, v1, spices, tg, sg], i) => JSON.stringify({
+    return rows.map(([sha, open_plans, open_reports, active, held, v1, spices, tg, sg, rf, ra], i) => JSON.stringify({
       ts: now - (rows.length - 1 - i) * 5 * 3600,
       sha,
       open_plans,
@@ -64,6 +67,7 @@ test.describe('CI metrics dashboard', () => {
       spice_guides: sg,
       spices: sg == null ? null : 40 + i,
       spice_names: sg == null ? null : ['ansi', 'json', 'raylib'],
+      ...(rf == null ? {} : { reports_filed: rf, reports_archived: ra }),
     })).join('\n');
   }
 
@@ -95,18 +99,24 @@ test.describe('CI metrics dashboard', () => {
       { os: 'macOS', cc: 'AppleClang-21.0.0', nproc: 3, jit: false },
     ];
     const suites = [
-      'tur_tests', 'turi_fixture_tests', 'tur_jit_smoke',
+      'tur_tests', 'turi_fixture_tests', 'tur_jit_smoke', 'tur_spice_resolver_tests',
       ...Array.from({ length: 22 }, (_, n) => `quick_${n}`),
     ];
     const rows = [];
     for (const [e, env] of envs.entries()) {
       for (let i = 0; i < 6; i++) {
         suites.forEach((suite, k) => {
+          // Run i=0 is the newest: tur_tests grows by two tests a run (and
+          // counts three more on macOS), so the Test counts tab has a trend
+          // and an environment switch has something to change.
           const counted = suite === 'tur_tests'
-            ? { discovered: 1400, passed: 1390, failed: 0, skipped: 10 }
+            ? { discovered: 1400 - i * 2 + e * 3, passed: 1390 - i * 2 + e * 3, failed: 0, skipped: 10 }
             : suite === 'turi_fixture_tests'
               ? { discovered: 3600, passed: 2700, failed: 0, skipped: 900 }
-              : {};
+              // A census with no `discovered`: counted as passed + failed.
+              : suite === 'tur_spice_resolver_tests'
+                ? { passed: 80, failed: 0 }
+                : {};
           rows.push(JSON.stringify({
             branch: 'main', build_type: 'Debug', ...env, ts: now - i * 3600,
             sha: 'a'.repeat(40), run_id: String(i), suite, status: 'pass',
@@ -241,8 +251,8 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('site-nav nav')).toBeVisible();
     await expect(page.locator('site-footer a[href="/ci"]')).toHaveCount(1);
 
-    // Four tabs, Tests active by default.
-    await expect(page.locator('.ci-tab')).toHaveCount(4);
+    // Five tabs, Tests active by default.
+    await expect(page.locator('.ci-tab')).toHaveCount(5);
     await expect(page.locator('#ci-tab-tests')).toHaveClass(/is-active/);
 
     // Four stat tiles, and a provenance line naming the latest commit.
@@ -257,6 +267,12 @@ test.describe('CI metrics dashboard', () => {
     expect(seriesCount).toBeLessThanOrEqual(5);
     await expect(page.locator('#ci-legend .ci-legend-item')).toHaveCount(seriesCount);
 
+    // Tests per run and per suite are on the Test counts tab.
+    // Counted, not toBeVisible: the fixture's spice count never changes, and a
+    // flat line's zero-height box reads as hidden.
+    await page.locator('#ci-tab-counts').click();
+    await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(1);
+
     // The line-count chart is on the Code tab. Switch to it and verify.
     await page.locator('#ci-tab-code').click();
     await expect(page.locator('#ci-loc-chart .ci-series-line').first()).toBeVisible();
@@ -268,6 +284,8 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-docs-legend .ci-legend-toggle')).toHaveCount(5);
     await expect(page.locator('#ci-docs-tiles .ci-tile')).toHaveCount(6);
     await expect(page.locator('#ci-guides-chart .ci-series-line')).toHaveCount(2);
+    await expect(page.locator('#ci-flow-chart path.ci-bar-pos, #ci-flow-chart path.ci-bar-neg')
+      .first()).toBeVisible();
 
     // Back on the Tests tab, the sparkline grid and table are present.
     await page.locator('#ci-tab-tests').click();
@@ -384,16 +402,11 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('#ci-loc-chart .ci-series-line')).toHaveCount(3);
     await expect(page).toHaveURL(/loc=code_lines%2Ctest_lines%2Cgenerated_lines/);
 
-    // Change mode replots each series against its own first value in range, so
-    // the two land on one axis -- the whole point of having the mode.
-    await page.locator('.ci-seg-btn[data-loc-mode="change"]').click();
-    await expect(page).toHaveURL(/locmode=change/);
-    // ... and must not have moved the timings chart's own toggle.
-    await expect(page).not.toHaveURL(/[?&]scale=log/);
-    await expect(page.locator('#ci-loc-chart .ci-axis-title'))
-      .toHaveText(/change since/);
-    await expect(page.locator('#ci-loc-chart .ci-axis-text').first())
-      .toHaveText(/%$/);
+    // Counts only: the panel has no percent-change mode, so no toggle, and an
+    // old ?locmode=change link is ignored rather than honoured.
+    await expect(page.locator('#ci-panel-code .ci-seg-btn')).toHaveCount(0);
+    await expect(page.locator('#ci-loc-chart .ci-axis-text', { hasText: /%$/ }))
+      .toHaveCount(0);
 
     // Its own tooltip, on its own hit area.
     await page.locator('#ci-loc-hit').hover();
@@ -484,6 +497,95 @@ test.describe('CI metrics dashboard', () => {
     const tip = page.locator('#ci-docs-tooltip');
     await expect(tip).toBeVisible();
     await expect(tip.locator('.ci-tooltip-head .mono')).toHaveText(/^[0-9a-f]{7}$/);
+  });
+
+  test('the Test counts tab charts total tests', async ({ page }) => {
+    await stubLoc(page);
+    await stubDocs(page);
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    await page.locator('#ci-tab-counts').click();
+    await expect(page).toHaveURL(/tab=counts/);
+
+    // Each suite counted once, at its newest count: 1,400 + 3,600 + 80.
+    const tiles = page.locator('#ci-counts-tiles .ci-tile');
+    await expect(tiles).toHaveCount(4);
+    await expect(tiles.filter({ hasText: 'Tests' }).first()).toContainText('5,080');
+    await expect(tiles.filter({ hasText: 'Skipped tests' })).toContainText('910');
+    await expect(tiles.filter({ hasText: 'Change in range' })).toContainText('+10');
+    await expect(page.locator('#ci-counts-sub')).toContainText('23 other suites');
+
+    // The total, one line, with its own hover.
+    await expect(page.locator('#ci-counts-chart .ci-series-line')).toHaveCount(1);
+    await page.locator('#ci-counts-hit').hover();
+    await expect(page.locator('#ci-counts-tooltip')).toBeVisible();
+
+    // Not environment-locked: no picker of its own.
+    await expect(page.locator('#ci-panel-counts select')).toHaveCount(0);
+  });
+
+  // A push runs only the jobs its diff needs, so the newest run often executed
+  // a few suites. The total carries every other suite's newest count forward
+  // rather than dropping to what that one run happened to execute.
+  test('a run that executed only some suites does not dip the total', async ({ page }) => {
+    const body = timingsFixture().split('\n').filter((l) => {
+      const r = JSON.parse(l);
+      return !(r.run_id === '0' && r.suite !== 'tur_tests');
+    }).join('\n');
+    await page.route('**/api/ci-timings*', (route) => route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
+      body,
+    }));
+    await page.goto('/ci?tab=counts');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    const tiles = page.locator('#ci-counts-tiles .ci-tile');
+    await expect(tiles.filter({ hasText: 'Tests' }).first()).toContainText('5,080');
+    // The line's last point sits where the others do, not at 1,400.
+    const ys = await page.locator('#ci-counts-chart circle.ci-point').evaluateAll(
+      (els) => els.map((el) => Number(el.getAttribute('cy'))));
+    expect(ys.length).toBe(6);
+    expect(Math.abs(ys[ys.length - 1] - ys[ys.length - 2])).toBeLessThan(2);
+  });
+
+  test('the Reports tab charts reports archived minus filed', async ({ page }) => {
+    await stubLoc(page);
+    await stubDocs(page);
+    await page.goto('/ci?tab=reports');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    // +2, -1, -2 across three pushes. The first push predates the running
+    // totals, so its net comes from the open count and the range cannot claim
+    // a split.
+    await expect(page.locator('#ci-flow-sub')).toContainText(/Net [−-]1 in this range/);
+    await expect(page.locator('#ci-flow-chart path.ci-bar-pos, #ci-flow-chart path.ci-bar-neg')
+      .first()).toBeVisible();
+    // Polarity is named, never color alone.
+    await expect(page.locator('#ci-flow-legend .ci-legend-item')).toHaveCount(2);
+    await expect(page.locator('#ci-flow-chart .ci-zero-line')).toHaveCount(1);
+
+    await page.locator('#ci-flow-hit').hover();
+    const tip = page.locator('#ci-flow-tooltip');
+    await expect(tip).toBeVisible();
+    await expect(tip.locator('.ci-tooltip-row').first()).toContainText('Net');
+  });
+
+  test('the report flow names the split when every push carries it', async ({ page }) => {
+    await stubLoc(page);
+    await page.route('**/api/ci-docs*', (route) => route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson' },
+      body: docsFixture().split('\n').slice(1).join('\n'),
+    }));
+    await page.goto('/ci?tab=reports');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    // 3 filed + 2 archived, then 3 filed + 1 archived: the backlog grew by 3.
+    await expect(page.locator('#ci-flow-sub')).toContainText('3 archived, 6 filed');
+    await expect(page.locator('#ci-flow-sub')).toContainText(/net [−-]3/);
+    await expect(page.locator('#ci-flow-chart path.ci-bar-pos')).toHaveCount(0);
   });
 
   test('the Reports tab counts Turmeric guides and spice guides', async ({ page }) => {

@@ -835,6 +835,16 @@ add_test(
   COMMAND bash tests/check-gendocs-parse.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# tools/ci/collect-docs.py's running report totals, which /ci's "reports
+# archived minus filed" chart differences: a `git mv` to docs/archive/ counts as
+# archived, and a report archived and another filed in one merge are not paired
+# as a rename (they were, while rename detection was on).  Throwaway git repos;
+# no build needed.
+add_test(
+  NAME tur_collect_docs_lint
+  COMMAND bash tests/check-collect-docs.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # Spice-aware per-file resolver: SC0/SC1 (later SC phases extend the script).
 add_test(
   NAME tur_spice_resolver_tests

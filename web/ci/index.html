@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CI Metrics -- Turmeric</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<meta name="description" content="Test suite timings and line counts for the Turmeric compiler, published from CI on every push to main. Duration trends, per-suite sparklines, product-vs-test lines of code, open plans and reports, and the skip ledger.">
+<meta name="description" content="Test suite timings and line counts for the Turmeric compiler, published from CI on every push to main. Duration trends, per-suite sparklines, tests per suite, product-vs-test lines of code, open plans and reports, and the skip ledger.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
@@ -65,6 +65,9 @@
         <button type="button" class="ci-tab is-active" role="tab"
                 id="ci-tab-tests" aria-selected="true"
                 aria-controls="ci-panel-tests" data-tab="tests">Tests</button>
+        <button type="button" class="ci-tab" role="tab"
+                id="ci-tab-counts" aria-selected="false"
+                aria-controls="ci-panel-counts" data-tab="counts">Test counts</button>
         <button type="button" class="ci-tab" role="tab"
                 id="ci-tab-code" aria-selected="false"
                 aria-controls="ci-panel-code" data-tab="code">Code</button>
@@ -157,6 +160,30 @@
 
     </div>
 
+    <!-- ── Test counts tab ────────────────────────────────────────────── -->
+    <!-- Outside the environment lock: each suite is counted once, from the
+         environment it runs in most (renderCounts says why). The Range filter
+         above still applies. -->
+    <div class="ci-tab-panel" id="ci-panel-counts" role="tabpanel"
+         aria-labelledby="ci-tab-counts" hidden>
+
+      <section class="ci-tiles" id="ci-counts-tiles" aria-label="Test count summary"></section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Total tests</h2>
+            <p class="ci-panel-sub" id="ci-counts-sub"></p>
+          </div>
+        </div>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-counts-chart"></div>
+          <div class="ci-tooltip" id="ci-counts-tooltip" hidden></div>
+        </div>
+      </section>
+
+    </div>
+
     <!-- ── Code tab ───────────────────────────────────────────────────── -->
     <div class="ci-tab-panel" id="ci-panel-code" role="tabpanel"
          aria-labelledby="ci-tab-code" hidden>
@@ -169,14 +196,6 @@
           <div>
             <h2 class="ci-panel-title">Lines of code</h2>
             <p class="ci-panel-sub" id="ci-loc-sub"></p>
-          </div>
-          <!-- Not Linear/Log: a week moves 400k lines by a few hundred, which no
-               scale makes visible on a shared zero-based axis. "Change" plots a
-               different quantity -- each series against its own first value in
-               range -- which is the only honest way to see it. -->
-          <div class="ci-seg" role="group" aria-label="Line count chart mode">
-            <button type="button" class="ci-seg-btn is-active" data-loc-mode="lines">Lines</button>
-            <button type="button" class="ci-seg-btn" data-loc-mode="change">Change</button>
           </div>
         </div>
         <div class="ci-chart-wrap">
@@ -238,6 +257,20 @@
           <div class="ci-tooltip" id="ci-docs-tooltip" hidden></div>
         </div>
         <div class="ci-legend" id="ci-docs-legend"></div>
+      </section>
+
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Reports archived minus filed</h2>
+            <p class="ci-panel-sub" id="ci-flow-sub"></p>
+          </div>
+        </div>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-flow-chart"></div>
+          <div class="ci-tooltip" id="ci-flow-tooltip" hidden></div>
+        </div>
+        <div class="ci-legend" id="ci-flow-legend"></div>
       </section>
 
       <section class="ci-panel">

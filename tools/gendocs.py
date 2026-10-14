@@ -1154,6 +1154,18 @@ em { color: var(--green); font-style: italic; }
 
 .def-returns { font-size: 0.875rem; color: var(--text-primary); }
 
+/* A docstring's `code` spans (_inline_html).  The same chip the guides draw
+   (genguides GUIDE_CSS), so a name reads the same in prose on either page. */
+.def-card p code, .param-table td code, .module-doc p code,
+.internal-item-summary code, .index-card p code {
+  font-family: 'Iosevka', 'Fira Code', monospace;
+  font-size: 0.85em;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+}
+
 .def-example {
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -1390,6 +1402,39 @@ _API_PAGE_SCRIPTS = {
 }
 
 
+# Docstring prose -- summaries, parameter descriptions, Returns, Deprecated --
+# writes code the way the guides do, as Markdown `code` spans; well over a
+# thousand `;;;` lines in stdlib/ carry one.  Escaped as plain text, they
+# reached the page with their backticks showing.
+#
+# Only the span syntax is honoured.  A docstring is not a Markdown document:
+# its `*`, `_` and `[...]` are ordinary Turmeric (`*args*`, `tur_box_*`,
+# `[x : int]`), not emphasis or links.  A run of N backticks opens a span that
+# the next run of exactly N closes, so ``a `b` c`` can show a backtick, and a
+# span may wrap onto the next `;;;` line.  An unmatched backtick stays literal.
+# Example blocks are <pre> and untouched.
+_CODE_SPAN_RE = re.compile(r'(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)', re.DOTALL)
+
+
+def _inline_html(text):
+    """Escape docstring prose for HTML, rendering `code` spans as <code>."""
+    out = []
+    pos = 0
+    for m in _CODE_SPAN_RE.finditer(text):
+        # A span that wrapped onto the next line reads as one space there, as
+        # in CommonMark.
+        body = m.group(2).replace('\n', ' ')
+        # CommonMark: one space either side is padding, there so the span can
+        # start or end with a backtick (`` `x` ``), not part of the code.
+        if len(body) > 2 and body[0] == ' ' and body[-1] == ' ' and body.strip():
+            body = body[1:-1]
+        out.append(html_module.escape(text[pos:m.start()]))
+        out.append(f'<code>{html_module.escape(body)}</code>')
+        pos = m.end()
+    out.append(html_module.escape(text[pos:]))
+    return ''.join(out)
+
+
 def _sidebar_tip(defn) -> str:
     """Tooltip for a sidebar definition link: its docstring summary if it has
     one, else a plain 'jump to' so every entry carries something useful."""
@@ -1524,11 +1569,11 @@ def _render_def_card(defn, anchor_prefix=''):
         if dash_idx != -1:
             summary = summary[dash_idx + 4:]
         if summary:
-            h += f'  <p class="def-summary">{html_module.escape(summary)}</p>\n'
+            h += f'  <p class="def-summary">{_inline_html(summary)}</p>\n'
 
         if doc['deprecated']:
             h += '  <p class="def-deprecated"><span class="def-deprecated-label">Deprecated</span> '
-            h += f'{html_module.escape(doc["deprecated"])}</p>\n'
+            h += f'{_inline_html(doc["deprecated"])}</p>\n'
 
         if doc['params']:
             h += '  <div class="def-section">\n'
@@ -1536,14 +1581,14 @@ def _render_def_card(defn, anchor_prefix=''):
             h += '    <table class="param-table">\n'
             for pname, pdesc in doc['params']:
                 h += f'    <tr><td>{html_module.escape(pname)}</td>'
-                h += f'<td></td><td>{html_module.escape(pdesc)}</td></tr>\n'
+                h += f'<td></td><td>{_inline_html(pdesc)}</td></tr>\n'
             h += '    </table>\n'
             h += '  </div>\n'
 
         if doc['returns']:
             h += '  <div class="def-section">\n'
             h += '    <div class="def-section-label">Returns</div>\n'
-            h += f'    <p class="def-returns">{html_module.escape(doc["returns"])}</p>\n'
+            h += f'    <p class="def-returns">{_inline_html(doc["returns"])}</p>\n'
             h += '  </div>\n'
 
         if doc['example']:
@@ -1553,7 +1598,7 @@ def _render_def_card(defn, anchor_prefix=''):
             h += '  </div>\n'
 
         if doc['since']:
-            h += f'  <p class="def-since">Since: {html_module.escape(doc["since"])}</p>\n'
+            h += f'  <p class="def-since">Since: {_inline_html(doc["since"])}</p>\n'
 
     h += '</div>\n'
     return h
@@ -1594,7 +1639,7 @@ def build_module_content(module, brand='stdlib'):
             summary = summary[dash_idx + 4:]
         content += '  <div class="module-doc">\n'
         if summary:
-            content += f'    <p class="module-doc-summary">{html_module.escape(summary)}</p>\n'
+            content += f'    <p class="module-doc-summary">{_inline_html(summary)}</p>\n'
         if md.get('example'):
             content += '    <div class="def-section">\n'
             content += '      <div class="def-section-label">Example</div>\n'
@@ -1602,9 +1647,9 @@ def build_module_content(module, brand='stdlib'):
             content += '    </div>\n'
         if md.get('deprecated'):
             content += '    <p class="def-deprecated"><span class="def-deprecated-label">Deprecated</span> '
-            content += f'{html_module.escape(md["deprecated"])}</p>\n'
+            content += f'{_inline_html(md["deprecated"])}</p>\n'
         if md.get('since'):
-            content += f'    <p class="def-since">Since: {html_module.escape(md["since"])}</p>\n'
+            content += f'    <p class="def-since">Since: {_inline_html(md["since"])}</p>\n'
         content += '  </div>\n'
 
     for defn in exported:
@@ -1625,7 +1670,7 @@ def build_module_content(module, brand='stdlib'):
             content += f'  <div class="internal-item" id="{html_module.escape(anchor)}">'
             content += f'<code>{html_module.escape(defn["name"])}</code>'
             if summary_text:
-                content += f'<span class="internal-item-summary">-- {html_module.escape(summary_text)}</span>'
+                content += f'<span class="internal-item-summary">-- {_inline_html(summary_text)}</span>'
             content += '</div>\n'
         content += '  </div>\n</details>\n'
 
@@ -1704,7 +1749,7 @@ def _index_card_html(module):
     h = f'  <a href="{html_module.escape(page_name)}" class="index-card" style="display:block">\n'
     h += f'    <h3>{html_module.escape(mod_name)}</h3>\n'
     if mod_summary:
-        h += f'    <p>{html_module.escape(mod_summary)}</p>\n'
+        h += f'    <p>{_inline_html(mod_summary)}</p>\n'
     h += f'    <div class="export-count">{export_count} exported definition{"s" if export_count != 1 else ""}</div>\n'
     h += '  </a>\n'
     return h
