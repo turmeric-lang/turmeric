@@ -2,6 +2,46 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.65.1] -- 2026-10-14
+
+### Added
+
+- **`stdlib/zip.tur` adds generic zippers.** `(ZipLoc T)` walks any homogeneous
+  tree clojure.zip-style: `zip/zipper`, `down`/`up`/`left`/`right`,
+  `next`/`prev`, `replace`/`edit`, `insert-child`, `remove`, and more; moves
+  return `Option`. `(Rose A)` with `zip/rose-zip`, `zip/find-next` and
+  `zip/edit-all`, plus a `Plated` class with a stock `Plated [Rose]` instance. A
+  new zipper guide covers the ops, the element cursor and a clojure.zip to `zip`
+  table.
+
+### Changed
+
+- **Warm builds skip re-emitting library C.** On a warm cache `tur` reuses the
+  library unit's emitted C instead of regenerating and renaming it on every
+  build, cutting most of the work a one-line program paid for.
+
+### Fixed
+
+- **`tur --interpret` reclaims memory as a program runs.** Continuations whose
+  handles nothing reaches are freed at a capture, and a sweep of each env's
+  value pool returns closures, frames, bindings and small structs nothing
+  reaches -- a Scheme loop with `guard`, lambdas or `map` no longer grows
+  without bound. Each env also gets its own R7RS dynamic-environment slots, so
+  one env's sweep can no longer free a handler the other env still uses.
+- **A continuation captured inside a call from eval'd code re-enters.** Under
+  `(scheme eval)`, invoking such a continuation after the call returned no
+  longer refuses it or exits a compiled program; both back ends resume with the
+  R7RS answer.
+- **Generic inference grounds return-only and later-refined calls.** A nullary
+  generic call grounded only by the enclosing body's variables -- `(wrap x
+  (tnil))` inside `mk [T]` -- specializes per instantiation, and a later
+  argument now refines a provisional application binding a nullary call left,
+  including ascribed forms inside a generic body.
+- **A lambda stored into a generic record's fn field is typed exactly.** The
+  field's function type is instantiated through the record's variables, so the
+  box no longer falls back to an untyped shim and the indirect-call check
+  passes.
+
 ## [0.65.0] -- 2026-10-14
 
 ### Added
