@@ -1,0 +1,17 @@
+;; panic-location-names-the-runtime-not-the-call-site: an instance method
+;; whose inline-C body panics, reached by typeclass dispatch, names the
+;; dispatching call -- this file's line 14 -- where it named the runtime's
+;; own line: the method's binding carries no source_fn_def, so the call arm
+;; finds the FnDef through its definstance.  Compiled only: the body is user
+;; inline C, which run-turi.sh skips.
+(defclass Checked [a] (checked-at [x : a i : int] : int))
+(definstance Checked [int]
+  (checked-at [x : int i : int] : int
+    ```c
+    if (i > x) tur_panic("checked-at: index past end");
+    return x - i;
+    ```))
+(defn main [] : int
+  (println (checked-at 10 3))
+  (println (checked-at 10 30))
+  0)

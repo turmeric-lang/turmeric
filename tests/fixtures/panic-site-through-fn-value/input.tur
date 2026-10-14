@@ -1,0 +1,14 @@
+;; panic-location-names-the-runtime-not-the-call-site: a sited inline-C body
+;; entered THROUGH A FUNCTION VALUE -- vec-get handed to apply2 and called as
+;; `f` -- names the call through the value, this file's line 8, where it
+;; named the runtime's own line.  The program takes a panicking inline-C
+;; function as a value, so every call through a fn value in this unit sets
+;; its site; the interpreter's leaf call does the same.  Both engines agree.
+(defn apply2 [f : (fn [(Vec int) int] int) v : (Vec int) i : int] : int
+  (f v i))
+
+(defn main [] : int
+  (let [v (vec-of 10 20 30)]
+    (println (apply2 vec-get v 1))
+    (println (apply2 vec-get v 9))
+    0))

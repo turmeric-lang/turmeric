@@ -7487,6 +7487,36 @@ static void emit_async_direct_body(EmitCtx *ctx, Buf *body, const Expr *fn_expr)
     buf_puts(body, "tur_async_direct_body = 1;\n");
 }
 
+/* panic-location-names-the-runtime-not-the-call-site: a call through a
+ * FUNCTION VALUE -- a fat closure's slot 0, a thin fn pointer -- may enter a
+ * sited inline-C body (`vec-get` handed to a HOF as a value), which reads the
+ * thread's current site when it panics.  When this unit takes such a function
+ * as a value anywhere (emit_fn_value_calls_sited; otherwise nothing could be
+ * reached and no call pays), the call sets its own site just before and
+ * clears it just after, in the statement-expression shape the direct call
+ * arm uses -- the value held in a temp of the call's C type (`ret_c`; a
+ * `void` result takes the comma form) -- so `(f v 9)` in a HOF names the
+ * HOF's line, not the runtime's.  Returns `call` unchanged when nothing is to
+ * be done; otherwise the wrapped text, with `call` freed. */
+static char *site_fn_value_call(EmitCtx *ctx, const Expr *e, char *call,
+                                const char *ret_c) {
+    if (!call || !emit_fn_value_calls_sited(ctx)) return call;
+    char *set = emit_site_set_text(ctx, emit_call_site_span(e));
+    if (!set) return call;
+    Buf b; buf_init(&b);
+    if (!ret_c || !*ret_c || strcmp(ret_c, "void") == 0)
+        buf_printf(&b, "(%s, %s, tur_site_clear())", set, call);
+    else
+        buf_printf(&b, "({ %s; %s __tur_sr = %s; tur_site_clear(); __tur_sr; })",
+                   set, ret_c, call);
+    buf_putc(&b, '\0');
+    free(set);
+    free(call);
+    char *r = strdup(b.data);
+    buf_free(&b);
+    return r;
+}
+
 /* Bind a cast's operand to `cb` and check its tag against `tag`.  A cast in
  * Scheme source (r7rs-type-errors-are-uncatchable-panics) calls the raising
  * check, which names the procedure and the expected type; every other cast
@@ -7527,7 +7557,22 @@ static void emit_any_cast_bind_check(EmitCtx *ctx, Buf *body, const Expr *e,
     buf_puts(body, ", ");
     if (want) emit_c_string(body, strslice(want, (uint32_t)strlen(want)));
     else      buf_puts(body, "\"\"");
-    buf_puts(body, ");\n");
+    /* panic-location-names-the-runtime-not-the-call-site: with no hook
+     * installed (the prelude not yet started) the raising check panics, and
+     * names the cast's own site like the Turmeric check above. */
+    const char *rpath = e->span.line ? diag_file_path(e->span.file_id) : NULL;
+    if (rpath) {
+        const char *rbase = rpath;
+        for (const char *p = rpath; *p; p++) if (*p == '\\' || *p == '/') rbase = p + 1;
+        buf_puts(body, ", \"");
+        for (const char *p = rbase; *p; p++) {
+            if (*p == '\\' || *p == '"') buf_putc(body, '\\');
+            buf_putc(body, *p);
+        }
+        buf_printf(body, "\", %u);\n", e->span.line);
+    } else {
+        buf_puts(body, ", NULL, 0);\n");
+    }
 }
 
 /* fnsan-fat-closure-at-tyvar-sink: the adapter for a { adapter, handle }
@@ -11671,7 +11716,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_puts(&out, ")");
                     if (narrow_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     free(thunk_typedef);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
@@ -12012,7 +12057,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     if (carrier_unbox) buf_puts(&out, ")");
                     if (word_back) buf_puts(&out, ")");
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     free(thunk_typedef);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
@@ -12051,7 +12096,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     buf_printf(&out, "((%s (*)(void))(intptr_t)%s)()",
                                ret_c, fn_ptr);
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     free(fn_ptr);
                     note_call_ret(ctx, ret_c);   /* findings 16 */
@@ -12238,7 +12283,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     }
                     buf_puts(&out, ")");
                     buf_putc(&out, '\0');
-                    char *result = strdup(out.data);
+                    char *result = site_fn_value_call(ctx, e, strdup(out.data), ret_c);
                     buf_free(&out);
                     for (uint32_t i = 0; i < n; i++) free(arg_strs[i]);
                     free(arg_strs);
@@ -15918,7 +15963,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
              * it gets a plain comma expression (a void statement expression
              * trips an assertion in c2mir); a callee the table does not know
              * is called as before, unsited. */
-            const char *site_rct = binding_panics_in_inline_c(fn_binding)
+            const char *site_rct = emit_direct_call_sited(ctx, fn_binding)
                                        ? emit_sig_lookup_ret_ctype(fn_name) : NULL;
             char *site_set = (site_rct && *site_rct)
                                  ? emit_site_set_text(ctx, emit_call_site_span(e)) : NULL;
