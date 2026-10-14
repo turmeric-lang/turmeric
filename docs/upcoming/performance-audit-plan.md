@@ -1,9 +1,9 @@
 # Performance audit -- Turmeric as it stands at v0.64.1
 
 > **Status: PROPOSED; the author's five decisions are in (2026-10-11), see
-> section 8.** Baseline is the author's local Intel NUC8i7HVK running
-> Windows 11 with WSL2 (revised 2026-10-13 from an AWS `m7i.xlarge`; its
-> setup is to be confirmed in WP0); `--release` will mean `-O3` over
+> section 8.** Baseline is the author's local Intel NUC 9 Pro (i7-9850H)
+> running Windows 11 with WSL2 (revised 2026-10-13 from an AWS `m7i.xlarge`;
+> the setup was confirmed in WP0 on 2026-10-14); `--release` will mean `-O3` over
 > an unchanged `-O2` default; the CPS coloring of fn-value calls (R-1) is
 > incidental, so it is WP2's lead item and D-1 is settled now; CI tracking
 > stays on hosted runners; attention is split between compile latency and
@@ -268,28 +268,32 @@ mostly machine time.
 
 #### The baseline machine
 
+**Confirmed on the box 2026-10-14** (the full header, toolchain and checklist
+answers are in [docs/artifacts/perf-audit-2026-10/README.md](../artifacts/perf-audit-2026-10/README.md)).
+The first draft named a NUC8i7HVK; the machine is a NUC 9 Pro.
+
 | | |
 | --- | --- |
-| Machine | Intel NUC 8 (NUC8i7HVK, "Hades Canyon"), the author's own |
-| CPU | Core i7-8809G per Intel's spec for this model: Kaby Lake, 4 cores / 8 threads, AVX2, no AVX-512 -- confirm with `lscpu` |
-| Memory | 16 GB (host; the WSL2 VM sees less, item 2 below) |
-| Storage | 512 GB SSD |
-| Host OS | Windows 11 |
-| Linux | WSL2; distro and kernel to be recorded |
-| Hypervisor | believed set up; to be confirmed (item 1 below) |
+| Machine | Intel NUC 9 Pro (`NUC9V7QNX`, "Quartz Canyon"), the author's own |
+| CPU | Core i7-9850H: Coffee Lake-H, 6 cores / 12 threads, AVX2, no AVX-512 |
+| Memory | 16 GB host (2 x 8 GB DDR4-2400); the WSL2 VM gets 12 GB (item 2 below) |
+| Storage | 256 GB internal NVMe (the WSL disk); a 1 TB external USB SSD is attached and not used |
+| Host OS | Windows 11 Home 10.0.26200 |
+| Linux | WSL 2.6.1, kernel 6.6.87.2-microsoft-standard-WSL2, Ubuntu 24.04.5 |
+| Hypervisor | working; the VM exposes the PMU to `perf` (item 3 below) |
 
 What follows from the choice, stated once:
 
 - **It is not the CI runners' shape** (`ubuntu-latest` is 4 vCPU / 16 GiB
-  of a server CPU; this is 8 logical CPUs of a 2018 desktop part inside a VM
-  with its own memory cap). Its numbers are compared with each other and with nothing on
+  of a server CPU; this is 12 logical CPUs of a 2019 laptop-class part inside
+  a VM with its own memory cap). Its numbers are compared with each other and with nothing on
   `/ci`.
 - **A Claude Code cloud session cannot reach it.** The timing work of WP0-WP4
   runs in a local session (Claude Code inside WSL2) or by hand, and lands as
   commits like anything else. A cloud session can still do the reading, the
   harness code, the R-1 census (a count from `--dump-cps`, not a timing) and
   WP7.
-- **`-march=native` in the R-7 sweep means Kaby Lake (AVX2).** That number
+- **`-march=native` in the R-7 sweep means Coffee Lake (AVX2).** That number
   belongs to this host; it is not a portable result (decision 2 already
   keeps it out of every default).
 
@@ -596,8 +600,10 @@ PR from `main` that stands alone.
 The five questions the first draft put to the author, and the answers. Each
 is folded into the section it affects above; this is the record.
 
-1. **Baseline machine: the author's local Intel NUC8i7HVK, Windows 11 with
-   WSL2** (16 GB RAM, 512 GB SSD). *Revised 2026-10-13*; the first answer
+1. **Baseline machine: the author's local Intel NUC, Windows 11 with
+   WSL2** (16 GB RAM). Named a NUC8i7HVK here at first; WP0 found a NUC 9
+   Pro (i7-9850H, 6C/12T, 256 GB internal NVMe) on 2026-10-14, and section 4
+   carries the confirmed table. *Revised 2026-10-13*; the first answer
    was an AWS `m7i.xlarge` bench box, and its notes are now in
    [aws-bench-box-design](../design/aws-bench-box-design.md) for reference.
    The author believes the hypervisor is set up; that, and the rest of the
