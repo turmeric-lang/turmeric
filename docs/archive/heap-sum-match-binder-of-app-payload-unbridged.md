@@ -31,8 +31,10 @@ That is why the fix is in the declaration and not in the bridge.
 **Not covered:** the CPS backend's arm-binder mirror (`emit_cps_ir.c`, the
 `CT_MATCH` field binds) has none of the spec-substitution legs, not even the
 tyvar one. An effectful version of the same rebuild never gets that far. It
-ICEs earlier, on the merge temp, and is filed separately as
-[heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../reported/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md).
+ICEs earlier, on the merge temp, and was filed separately as
+[heap-sum-rebuild-in-effectful-generic-merge-temp-ice](heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md),
+resolved the same day. The rebuilt clones there print the right values, so
+this mirror is not on that path.
 
 **Severity: medium.** This is a build failure under clang 15+ and gcc 14:
 `-Wint-conversion` is an error there. gcc 13 only warns, but `tests/run.sh`

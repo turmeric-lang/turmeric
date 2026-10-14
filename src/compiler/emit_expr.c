@@ -748,6 +748,15 @@ static const char *emit_repr_concrete_heap_ptr_c_name(EmitCtx *ctx,
      * matches the value the ctor actually hands it. */
     if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_ADT && rbt.as.adt_.def)
         hn = adt_heap_ptr_c_name(rbt.as.adt_.def);
+    /* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: the same drift for
+     * a concrete app of a parametric :heap SUM -- `(Fr int)` c-names to the
+     * carrier, its ctor returns `tur_adt_Fr__int *`, and repr_of says
+     * heap-ptr.  Declaring the binding `int64_t` was the one disagreement,
+     * and the shadow ICE'd on `(let [f (Frame 3 4)] ...)`. */
+    if (strcmp(hn, "int64_t") == 0 && rbt.kind == TY_APP) {
+        const char *an = adt_app_heap_ptr_c_name(rbt);
+        if (an) hn = an;
+    }
     return hn;
 }
 
@@ -16450,6 +16459,21 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * field is a -Wint-conversion (an error under clang).
                          * Bridge it through intptr_t, which is a no-op for a
                          * value already held as the carrier. */
+                        buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
+                                   lhs, field, cn);
+                    } else if (!captured->is_param &&
+                               decl_cty && strcmp(decl_cty, "int64_t") == 0 &&
+                               val_cty && strcmp(val_cty, "int64_t") == 0 &&
+                               emit_repr_concrete_heap_ptr_c_name(
+                                   ctx, captured->type, REPR_POS_LET_BIND)) {
+                        /* heap-sum-rebuild-in-effectful-generic-merge-temp-ice:
+                         * a `:heap` SUM (and the Line-family record) c-names to
+                         * the carrier, so `val_cty` says int64_t -- but a LET
+                         * binding of one is declared at its typed pointer
+                         * (`tur_adt_R *`, `tur_adt_Fr__int *`; the let-bind
+                         * chokepoint), and the plain store was a
+                         * -Wint-conversion.  A parameter keeps type_c_name's
+                         * carrier spelling, so it needs no relabel. */
                         buf_printf(out, "%s->%s = (int64_t)(intptr_t)(%s);\n",
                                    lhs, field, cn);
                     } else {

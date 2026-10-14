@@ -13777,6 +13777,21 @@ bool emit_cps_ir_addr_taken_any(const Expr *program, bool (*pred)(const Binding 
     return false;
 }
 
+/* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: a CONCRETE heap handle
+ * (`(Vec int)` -> `tur_adt_Vec__int *`, a `:heap` struct/record monomorph, a
+ * session channel) in a monomorph clone's signature.  It is one pointer word:
+ * the clone's `__cps` entry, its direct wrapper and every caller spell it from
+ * the same concrete type, and it crosses a DK slot by a plain cast exactly as
+ * carrier_handle_ok already lets it do inside an admitted body.  Tyvar-elemented
+ * handles stay out -- that is the base's erased spelling, and the base must
+ * keep sig-rejecting so the clone is what runs. */
+static bool mono_heap_handle_ok(const Type *t) {
+    if (!t) return false;
+    Type _r; t = cps_resolve_ty(t, &_r);
+    return (t->kind == TY_APP || t->kind == TY_ADT || t->kind == TY_STRUCT) &&
+           carrier_handle_ok(t) && !type_has_unresolved_tyvar(t);
+}
+
 /* G1 (cps-backend-generic-monomorph-classification-plan): analysis-only probe.
  * When --dump-cps-mono is set and this call is emitting a colored-generic
  * MONOMORPH body (ctx->current_abi_specialization pins fd to concrete type args),
@@ -13832,9 +13847,23 @@ static bool mono_sig_ok(const FnDef *fd, const EmitAbiSpecialization *spec) {
      * (`__t0 = __t348`, a cc error in typed/result-basic), so it keeps the
      * gate it had. */
     bool erased_arg_ok = !is_inst && !(rt->kind != TY_NIL && slot_box_ty(rt));
+    /* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: ... and a concrete heap
+     * HANDLE (mono_heap_handle_ok), but only for a clone whose body reaches a
+     * `perform`.  That clone has no other lowering: its base sig-rejects on
+     * the tyvar-elemented handle, so without this a generic performer over
+     * `(Vec T)` or a `:heap` `(Box T)` was a hard "no lowering here" error.
+     * A colored generic that performs nothing -- `map-eq-driver`, colored only
+     * by its `^fat` comparator call -- compiles fine on the direct path, and
+     * moving it onto DK continuations would buy nothing, so it keeps the gate
+     * it had.  The show-collections miscompile the comment above records was
+     * the instance-method double emission `is_inst` now fences. */
+    bool handle_ok = !is_inst && fd->body &&
+                     (cps_expr_contains_effect_op(fd->body) ||
+                      fn_body_reaches_effect_op(fd));
     #define MONO_SLOT_OK(t, k) (is_inst ? sig_slot_ok((t), (k)) \
                                         : (sig_slot_ok((t), (k)) || slot_box_ty(t) || \
                                            slot_carrier_app(t) || \
+                                           (handle_ok && mono_heap_handle_ok(t)) || \
                                            (erased_arg_ok && slot_erased_carrier_app(t))))
     if (rt->kind != TY_NIL && !MONO_SLOT_OK(rt, rt->kind)) return false;
     for (uint32_t i = 0; i < fd->n_params; i++) {

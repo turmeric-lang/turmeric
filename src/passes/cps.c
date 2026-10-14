@@ -165,6 +165,10 @@ bool cps_fn_needs_transform(const FnDef *fd) {
  * clone's by-value param vs the body's pass-by-pointer reads).  Read by
  * emit_cps_ir_colored_fn_needs_mono, which wants "this fn's own body
  * suspends", not "this fn touches the effect system". */
+static bool cps_effect_op_visit(const Expr *c, void *ud) {
+    (void)ud;
+    return cps_expr_contains_effect_op(c);
+}
 bool cps_expr_contains_effect_op(const Expr *e) {
     if (!e) return false;
     switch (e->kind) {
@@ -265,8 +269,16 @@ bool cps_expr_contains_effect_op(const Expr *e) {
             return cps_expr_contains_effect_op(e->as.reinterpret_.expr);
         case EX_ASCRIBE:
             return cps_expr_contains_effect_op(e->as.ascribe_.inner);
+        /* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: every other kind
+         * walks its evaluated operands through the shared enumerator, as the
+         * coloring and call-edge walks already do (see cps_visit_children).
+         * Without it a `perform` in a `match` arm -- or under a constructor
+         * argument or a field read -- read as "this body never suspends", so
+         * a generic whose only `perform` sits there was never given the clone
+         * that is its one lowering: `(defn pick [T] [x : T] : T (match 1 1 (do
+         * (perform (Tick)) x) _ x))` was a hard "no lowering here" error. */
         default:
-            return false;
+            return cps_visit_children(e, cps_effect_op_visit, NULL);
     }
 }
 

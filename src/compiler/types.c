@@ -3846,6 +3846,20 @@ const char *adt_heap_ptr_c_name(const AdtDef *def) {
     return heap_ptr_c_name(adt_byval_c_name(def));
 }
 
+/* heap-sum-rebuild-in-effectful-generic-merge-temp-ice: the same question for
+ * a CONCRETE application of a parametric :heap ADT -- `(Fr int)` ->
+ * `tur_adt_Fr__int *`.  type_c_name's TY_APP arm names only by-value
+ * products, so a :heap parametric SUM spells int64_t there while its
+ * monomorph ctor (`ctor_Fr_Frame__int`) returns the typed pointer.  NULL for
+ * anything else: a non-heap or non-concrete app, or one with no monomorph. */
+const char *adt_app_heap_ptr_c_name(Type app) {
+    if (app.kind != TY_APP || !type_app_is_concrete_adt(&app)) return NULL;
+    AdtDef *def = type_adt_app_def(&app);
+    if (!def || !def->is_heap) return NULL;
+    const char *nm = type_register_adt_app(app);
+    return nm ? heap_ptr_c_name(nm) : NULL;
+}
+
 /* CONV-S1: the stable C typedef name (`tur_adt_<mangled>`) for the BY-VALUE
  * representation of a non-parametric flat-product ADT.  Mirrors the name the
  * emitters build for the base typedef (emit_module.c:emit_adt_typedef_and_ctors)

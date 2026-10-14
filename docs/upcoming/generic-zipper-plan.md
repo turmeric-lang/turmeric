@@ -446,9 +446,16 @@ T)` payload binders as `int64_t`**
 ([heap-sum-match-binder-of-app-payload-unbridged](../archive/heap-sum-match-binder-of-app-payload-unbridged.md)).
 The specialised constructor takes the typed pointer. gcc 13 warns (and `run.sh` fails on the warning); clang 15+
 and gcc 14 reject it. **Fixed 2026-10-14**, pinned by
-`tests/fixtures/heap-sum-match-binder-app-payload`. An *effectful* version
-of the same rebuild still ICEs, on the merge temp rather than the binder
-([heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../reported/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md)).
+`tests/fixtures/heap-sum-match-binder-app-payload`. The *effectful* version
+of the same rebuild is fixed too, the same day
+([heap-sum-rebuild-in-effectful-generic-merge-temp-ice](../archive/heap-sum-rebuild-in-effectful-generic-merge-temp-ice.md)).
+It was three defects, and two of them matter to this plan beyond D1. A
+generic function that performs could not take a `:heap` struct or `(Vec T)`
+parameter, nor perform only inside a `match` arm; both now compile, pinned
+by `tests/fixtures/generic-performer-heap-handle-param`. One shape is still
+open: matching directly on a `handle` result in `main`
+([handle-under-match-in-main-has-no-lowering](../reported/handle-under-match-in-main-has-no-lowering.md)).
+Let-bind the result first.
 
 ```turmeric
 (defdata R :heap :copy (Lf int) (Br (Cons R)))

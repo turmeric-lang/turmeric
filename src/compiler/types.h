@@ -1898,6 +1898,7 @@ char        *type_adt_app_ctor_suffix(Type t);
  * representation of a non-parametric flat-product ADT.  See types.c. */
 const char  *adt_byval_c_name(const AdtDef *def);
 const char  *adt_heap_ptr_c_name(const AdtDef *def);
+const char  *adt_app_heap_ptr_c_name(Type app);
 /* Parametric-by-value monomorphisation (heavy prerequisite for CONV-S1
  * graduation; see docs/archive/parametric-adt-byvalue-plan.md).  True when t is
  * a concrete monomorphisation of a single-variant non-GADT parametric flat
