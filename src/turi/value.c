@@ -18,25 +18,31 @@
  * says nothing about which object holds it.  This map records them: a bit per
  * 8-byte granule of every pool page that starts an allocation (strings start
  * on any byte, and take their granule).  An object runs from its start to the
- * next start, or to the end of its slab's used bytes.  A second bit array on
- * the same pages says which starts are frames or bindings, the kinds the
- * interpreter hands out again, and a third is the mark set of one sweep;
- * those two are allocated for a page when it first needs one.  Pages live in an
+ * next start, or to the end of its slab's used bytes.  Three more bit arrays
+ * on the same pages give a start's kind -- a frame, a binding, a closure or a
+ * struct, the kinds the interpreter hands out again (turi-dropped-closures-
+ * kept-until-teardown: the pool sweep needs the kind exactly, not guessed
+ * from the extent) -- and a fifth is the mark set of one sweep; those four
+ * are allocated for a page when it first needs one.  Pages live in an
  * open-addressing table keyed by page number, each its own allocation so the
  * one-entry cache the allocation path consults stays valid as the table
- * grows.  About 2% of the pool, up to 4% where frames are made, and only for
- * an env that runs `#lang r7rs`.
+ * grows.  About 2% of the pool, up to 8% where frames and structs are made,
+ * and only for an env that runs `#lang r7rs`.
  * --------------------------------------------------------------------------- */
 
 #define STARTS_PAGE_SHIFT 12u
 #define STARTS_WORDS      ((1u << (STARTS_PAGE_SHIFT - 3u)) / 64u)   /* 8 */
 
-/* `reused` and `marks` are allocated for a page when it first needs them:
- * when a frame or binding is made on it, when a sweep marks something on it. */
+/* `kind0`..`kind2` and `marks` are allocated for a page when it first needs
+ * them: when an object of a kind with that bit is made on it, when a sweep
+ * marks something on it.  A start's kind is kind0 + 2 * kind1 + 4 * kind2
+ * (the TURI_VAL_* kinds). */
 typedef struct StartsPage {
     uintptr_t  page;
     uint64_t   starts[STARTS_WORDS];
-    uint64_t  *reused;   /* TURI_VAL_REUSED starts */
+    uint64_t  *kind0;    /* TURI_VAL_FRAME and TURI_VAL_CLOSURE starts */
+    uint64_t  *kind1;    /* TURI_VAL_BINDING and TURI_VAL_CLOSURE starts */
+    uint64_t  *kind2;    /* TURI_VAL_STRUCT starts */
     uint64_t  *marks;    /* the current sweep's marks */
 } StartsPage;
 
@@ -94,9 +100,10 @@ static StartsPage *starts_page(struct TuriObjStarts *s, uintptr_t page) {
     return p;
 }
 
-static inline void starts_note(TuriEnv *env, const void *ptr) {
+static inline void starts_note(TuriEnv *env, const void *ptr, size_t n) {
     struct TuriObjStarts *s = env->obj_starts;
     if (!s) return;
+    turi_pool_count(env, n);
     uintptr_t a = (uintptr_t)ptr, page = a >> STARTS_PAGE_SHIFT;
     StartsPage *p = s->last;
     if (!p || p->page != page) {
@@ -114,16 +121,31 @@ static uint64_t *starts_bits(struct TuriObjStarts *s, uint64_t **slot) {
     return *slot;
 }
 
-void turi_val_note_reused(TuriEnv *env, const void *ptr) {
+void turi_val_note_kind(TuriEnv *env, const void *ptr, int kind) {
     struct TuriObjStarts *s = env->obj_starts;
     if (!s) return;
     uintptr_t a = (uintptr_t)ptr, page = a >> STARTS_PAGE_SHIFT;
     StartsPage *p = s->last && s->last->page == page ? s->last : starts_find(s, page);
     if (!p) { s->broken = true; return; }
-    uint64_t *bits = starts_bits(s, &p->reused);
-    if (!bits) return;
     uint32_t g = (uint32_t)(a >> 3) & ((1u << (STARTS_PAGE_SHIFT - 3u)) - 1u);
-    bits[g >> 6] |= (uint64_t)1 << (g & 63u);
+    uint64_t bit = (uint64_t)1 << (g & 63u);
+    uint64_t **slots[3] = { &p->kind0, &p->kind1, &p->kind2 };
+    for (int k = 0; k < 3; k++) {
+        if (kind & (1 << k)) {
+            uint64_t *bits = starts_bits(s, slots[k]);
+            if (!bits) return;
+            bits[g >> 6] |= bit;
+        } else if (*slots[k]) {
+            (*slots[k])[g >> 6] &= ~bit;   /* TURI_VAL_PLAIN: forget it */
+        }
+    }
+}
+
+void turi_val_sweep_budget(TuriEnv *env, size_t bytes) {
+    if (!env) return;
+    env->pool_sweep_due = false;
+    env->pool_since     = 0;
+    env->pool_budget    = env->obj_starts ? bytes : 0;
 }
 
 void turi_val_starts_enable(TuriEnv *env, bool complete) {
@@ -153,7 +175,9 @@ static void starts_clear_range(const void *p, size_t n, void *ud) {
             for (uint32_t g = g0; g < g1; g++) {
                 uint64_t keep = ~((uint64_t)1 << (g & 63u));
                 pg->starts[g >> 6]   &= keep;
-                if (pg->reused) pg->reused[g >> 6] &= keep;
+                if (pg->kind0) pg->kind0[g >> 6] &= keep;
+                if (pg->kind1) pg->kind1[g >> 6] &= keep;
+                if (pg->kind2) pg->kind2[g >> 6] &= keep;
             }
         }
         a = stop;
@@ -168,7 +192,12 @@ void turi_val_starts_free(TuriEnv *env) {
     struct TuriObjStarts *s = env ? env->obj_starts : NULL;
     if (!s) return;
     for (size_t i = 0; i < s->cap; i++) {
-        if (s->tab[i]) { free(s->tab[i]->reused); free(s->tab[i]->marks); }
+        if (s->tab[i]) {
+            free(s->tab[i]->kind0);
+            free(s->tab[i]->kind1);
+            free(s->tab[i]->kind2);
+            free(s->tab[i]->marks);
+        }
         free(s->tab[i]);
     }
     free(s->tab);
@@ -293,7 +322,42 @@ int turi_val_object_of(TuriEnv *env, uintptr_t w, uintptr_t *start, uintptr_t *e
     uint64_t bit = (uint64_t)1 << (g & 63u);
     *start = at;
     *end   = starts_next(s, at, r->hi);
-    return p->reused && (p->reused[g >> 6] & bit) ? TURI_VAL_REUSED : TURI_VAL_PLAIN;
+    return (p->kind0 && (p->kind0[g >> 6] & bit) ? 1 : 0) |
+           (p->kind1 && (p->kind1[g >> 6] & bit) ? 2 : 0) |
+           (p->kind2 && (p->kind2[g >> 6] & bit) ? 4 : 0);
+}
+
+size_t turi_val_each_unmarked(TuriEnv *env, void (*fn)(void *obj, int kind, void *ud),
+                              void *ud) {
+    struct TuriObjStarts *s = env->obj_starts;
+    if (!s || !s->n_ranges || s->broken) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < s->cap; i++) {
+        StartsPage *p = s->tab[i];
+        if (!p || (!p->kind0 && !p->kind1 && !p->kind2)) continue;
+        /* A page wholly inside one snapshot range needs no check per object
+         * (the usual case: only a slab's last page holds its end). */
+        uintptr_t plo = p->page << STARTS_PAGE_SHIFT;
+        const StartsRange *pr = starts_range_of(s, plo);
+        bool whole = pr && pr->hi >= plo + ((uintptr_t)1 << STARTS_PAGE_SHIFT);
+        for (uint32_t w = 0; w < STARTS_WORDS; w++) {
+            uint64_t k0 = p->kind0 ? p->kind0[w] : 0, k1 = p->kind1 ? p->kind1[w] : 0;
+            uint64_t k2 = p->kind2 ? p->kind2[w] : 0;
+            uint64_t cand = p->starts[w] & (k0 | k1 | k2) & ~(p->marks ? p->marks[w] : 0);
+            while (cand) {
+                int bit = __builtin_ctzll(cand);
+                cand &= cand - 1;
+                uintptr_t at = (p->page << STARTS_PAGE_SHIFT) | ((uintptr_t)(w * 64 + bit) << 3);
+                /* Only what the pass's snapshot holds: nothing made since was
+                 * there to be marked. */
+                if (!whole && !starts_range_of(s, at)) continue;
+                fn((void *)at, (int)(((k0 >> bit) & 1) | (((k1 >> bit) & 1) << 1) |
+                                     (((k2 >> bit) & 1) << 2)), ud);
+                n++;
+            }
+        }
+    }
+    return n;
 }
 
 bool turi_val_marked(TuriEnv *env, uintptr_t start) {
@@ -323,28 +387,29 @@ bool turi_val_mark(TuriEnv *env, uintptr_t start) {
 
 void *turi_val_alloc(TuriEnv *env, size_t n) {
     void *p = arena_alloc(&env->value_scratch, n);
-    starts_note(env, p);
+    starts_note(env, p, n);
     return p;
 }
 
 void *turi_val_calloc(TuriEnv *env, size_t n) {
     void *p = arena_alloc(&env->value_scratch, n);
-    starts_note(env, p);
+    starts_note(env, p, n);
     if (n) memset(p, 0, n);
     return p;
 }
 
 void *turi_val_calloc_aligned(TuriEnv *env, size_t n, size_t align) {
     void *p = arena_alloc_aligned(&env->value_scratch, n, align);
-    starts_note(env, p);
+    starts_note(env, p, n);
     if (n) memset(p, 0, n);
     return p;
 }
 
 char *turi_val_strdup(TuriEnv *env, const char *s) {
     if (!s) return NULL;
-    char *p = arena_strdup(&env->value_scratch, s, strlen(s));
-    starts_note(env, p);
+    size_t n = strlen(s);
+    char *p = arena_strdup(&env->value_scratch, s, n);
+    starts_note(env, p, n + 1);
     return p;
 }
 
@@ -352,19 +417,19 @@ char *turi_val_strdup(TuriEnv *env, const char *s) {
  * the promotion walk to relocate escaping values out of scratch. */
 void *turi_val_perm_alloc(TuriEnv *env, size_t n) {
     void *p = arena_alloc(&env->value_perm, n);
-    starts_note(env, p);
+    starts_note(env, p, 0);
     return p;
 }
 
 void *turi_val_perm_alloc_aligned(TuriEnv *env, size_t n, size_t align) {
     void *p = arena_alloc_aligned(&env->value_perm, n, align);
-    starts_note(env, p);
+    starts_note(env, p, 0);
     return p;
 }
 
 void *turi_val_perm_calloc(TuriEnv *env, size_t n) {
     void *p = arena_alloc(&env->value_perm, n);
-    starts_note(env, p);
+    starts_note(env, p, 0);
     if (n) memset(p, 0, n);
     return p;
 }
@@ -372,7 +437,7 @@ void *turi_val_perm_calloc(TuriEnv *env, size_t n) {
 char *turi_val_perm_strdup(TuriEnv *env, const char *s) {
     if (!s) return NULL;
     char *p = arena_strdup(&env->value_perm, s, strlen(s));
-    starts_note(env, p);
+    starts_note(env, p, 0);
     return p;
 }
 

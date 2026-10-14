@@ -168,6 +168,10 @@ static bool embed_env(void) {
     if (!env) { switch_side(was); return false; }
     env->lang        = LANG_R7RS;
     env->reader_type = READER_R7RS;
+    /* turi-dropped-closures-kept-until-teardown: the procedures handed to the
+     * program (g_procs) and the host's (g_hosts) live in this file's arrays,
+     * which no sweep reads -- so this env runs none. */
+    env->no_pool_sweep = true;
     const char *saved = g_lang_prelude;
     g_lang_prelude = lang_traits(LANG_R7RS)->prelude;
     turi_env_preload_macros(env, root);

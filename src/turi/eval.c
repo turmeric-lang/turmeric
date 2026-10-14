@@ -141,6 +141,11 @@ struct TuriClosure {
     /* EX_CLOSURE closures have a synthetic __env_p first param for codegen;
      * the interpreter skips it and uses the captured frame instead. */
     bool            skip_env_param;
+    /* turi-dropped-closures-kept-until-teardown: the capture epoch it was made
+     * in (closure_alloc), as a frame's: a closure the pool sweep handed back
+     * may be made again at the same address, and a word of an older image
+     * naming that address is stale (gc_word). */
+    uint32_t        epoch;
     /* Owning module name (for a top-level defn inside a defmodule), or NULL.
      * eval_apply publishes this as env->current_module while the body runs so
      * intra-module calls can resolve module-private "<module>/<name>" bindings. */
@@ -1338,13 +1343,80 @@ static uint32_t g_turi_cont_epoch  = 0;
 __attribute__((noinline))
 static EvalFrame *eval_frame_pool_alloc(TuriEnv *env) {
     EvalFrame *f = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
-    turi_val_note_reused(env, f);
+    turi_val_note_kind(env, f, TURI_VAL_FRAME);
     return f;
 }
 __attribute__((noinline))
 static EvalBinding *binding_pool_alloc(TuriEnv *env) {
     EvalBinding *b = (EvalBinding *)turi_val_alloc(env, sizeof(EvalBinding));
-    turi_val_note_reused(env, b);
+    turi_val_note_kind(env, b, TURI_VAL_BINDING);
+    return b;
+}
+
+/* turi-dropped-closures-kept-until-teardown: an object the pool sweep put on
+ * a free list is poisoned under ASan, all but the word that links the list,
+ * so a use after the sweep handed it back is an error at once instead of a
+ * read of whatever was made there next.  Taking one off a list unpoisons it
+ * (a no-op for what an activation handed back, which is never poisoned). */
+#if defined(__SANITIZE_ADDRESS__)
+#  define TURI_POOL_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define TURI_POOL_ASAN 1
+#  endif
+#endif
+#ifdef TURI_POOL_ASAN
+void __asan_poison_memory_region(void const volatile *addr, size_t size);
+void __asan_unpoison_memory_region(void const volatile *addr, size_t size);
+#  define POOL_POISON(p, n, link_off) do {                                      \
+        __asan_poison_memory_region((const char *)(p), (link_off));              \
+        __asan_poison_memory_region((const char *)(p) + (link_off) + sizeof(void *), \
+                                    (n) - (link_off) - sizeof(void *));          \
+    } while (0)
+#  define POOL_UNPOISON(p, n) __asan_unpoison_memory_region((p), (n))
+#else
+#  define POOL_POISON(p, n, link_off) ((void)0)
+#  define POOL_UNPOISON(p, n) ((void)0)
+#endif
+
+/* A closure for a `fn` value -- EX_FN, EX_CLOSURE, a lifted lambda re-homed
+ * on its frame -- zeroed: from the free list the pool sweep fills, else the
+ * pool, noted as a closure so the sweep can hand it back.  The free list is
+ * linked through `fn`.  Closures made once (natives, defns) stay plain. */
+static TuriClosure *closure_alloc(TuriEnv *env) {
+    TuriClosure *cl = (TuriClosure *)env->closure_free;
+    if (cl) {
+        env->closure_free = *(void **)cl;
+        POOL_UNPOISON(cl, sizeof *cl);
+        turi_pool_count(env, sizeof *cl);
+    } else {
+        cl = (TuriClosure *)turi_val_alloc(env, sizeof *cl);
+        turi_val_note_kind(env, cl, TURI_VAL_CLOSURE);
+    }
+    memset(cl, 0, sizeof *cl);
+    cl->epoch = g_turi_cont_epoch;
+    return cl;
+}
+
+/* With the released free list empty: a frame or binding the pool sweep
+ * handed back (counted toward its budget, as a closure from closure_alloc
+ * is), else one from the pool. */
+__attribute__((noinline))
+static EvalFrame *eval_frame_reuse_swept(TuriEnv *env) {
+    EvalFrame *f = (EvalFrame *)env->frame_swept;
+    if (!f) return eval_frame_pool_alloc(env);
+    env->frame_swept = f->parent;
+    POOL_UNPOISON(f, sizeof *f);
+    turi_pool_count(env, sizeof *f);
+    return f;
+}
+__attribute__((noinline))
+static EvalBinding *binding_reuse_swept(TuriEnv *env) {
+    EvalBinding *b = (EvalBinding *)env->binding_swept;
+    if (!b) return binding_pool_alloc(env);
+    env->binding_swept = b->next;
+    POOL_UNPOISON(b, sizeof *b);
+    turi_pool_count(env, sizeof *b);
     return b;
 }
 
@@ -1353,7 +1425,9 @@ static EvalFrame *eval_frame_new(TuriEnv *env, EvalFrame *parent) {
      * that created it, so frames live in env's value pool (reclaimed by
      * turi_env_free).  Only an activation's call frame is ever handed back
      * early (eval_frame_new_call / frame_release). */
-    EvalFrame *f = eval_frame_pool_alloc(env);
+    EvalFrame *f = (EvalFrame *)env->frame_free;
+    if (f) { env->frame_free = f->parent; POOL_UNPOISON(f, sizeof *f); }
+    else   f = eval_frame_reuse_swept(env);
     f->bindings    = NULL;
     f->parent      = parent;
     f->tyvars      = NULL;
@@ -1391,8 +1465,8 @@ static bool turi_frame_reclaim_on(void) {
 /* An activation's call frame: from the free list when one is there. */
 static EvalFrame *eval_frame_new_call(TuriEnv *env, EvalFrame *parent) {
     EvalFrame *f = (EvalFrame *)env->frame_free;
-    if (f) env->frame_free = f->parent;
-    else   f = eval_frame_pool_alloc(env);
+    if (f) { env->frame_free = f->parent; POOL_UNPOISON(f, sizeof *f); }
+    else   f = eval_frame_reuse_swept(env);
     f->bindings    = NULL;
     f->parent      = parent;
     f->tyvars      = NULL;
@@ -1491,8 +1565,8 @@ static void frame_bind(TuriEnv *env, EvalFrame *f, const char *name, TuriValue v
      * live in env's value pool (reclaimed by turi_env_free), or come back from
      * a released call frame (frame_release). */
     EvalBinding *b = (EvalBinding *)env->binding_free;
-    if (b) env->binding_free = b->next;
-    else   b = binding_pool_alloc(env);
+    if (b) { env->binding_free = b->next; POOL_UNPOISON(b, sizeof *b); }
+    else   b = binding_reuse_swept(env);
     b->name  = name;
     b->value = value;
     b->next  = f->bindings;
@@ -1605,6 +1679,9 @@ static TuriValue eval_drive(TuriEnv *env, EvalFrame *frame, const Expr *e);
 struct TuriStruct {
     const char  *name;     /* struct name (for debugging) */
     uint32_t     n_fields;
+    /* turi-dropped-closures-kept-until-teardown: the capture epoch it was made
+     * in, as a closure's (struct_alloc, gc_word). */
+    uint32_t     epoch;
     TuriValue   *fields;   /* heap-allocated array */
     /* interp-collection-handles-report-as-int: this TuriStruct is not a user
      * value at all -- it is the `any` box the widen wraps a bare carrier in, so
@@ -1624,16 +1701,34 @@ struct TuriStruct {
  * with the other natives. */
 static TuriValue adt_ctor_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud);
 
-static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
-    /* Escaping payload: the TuriStruct + its fields array are returned and may
-     * be captured/stored, so they live in env's value pool (reclaimed by
-     * turi_env_free), never individually freed. */
-    TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
-    s->name       = name;
+/* A struct of `n` fields, its field array right behind it in one block:
+ * escaping payload, so from env's value pool.  turi-dropped-closures-kept-
+ * until-teardown: up to TURI_STRUCT_FREE_MAX fields it is noted as a struct,
+ * and the pool sweep hands it back to the free list for its field count once
+ * nothing reaches it (linked through `name`).  Fields uninitialised. */
+static TuriStruct *struct_alloc(TuriEnv *env, uint32_t n) {
+    size_t bytes = sizeof(TuriStruct) + (size_t)n * sizeof(TuriValue);
+    TuriStruct *s = NULL;
+    if (n <= TURI_STRUCT_FREE_MAX && (s = (TuriStruct *)env->struct_free[n]) != NULL) {
+        env->struct_free[n] = *(void **)s;
+        POOL_UNPOISON(s, bytes);
+        turi_pool_count(env, bytes);
+    } else {
+        s = (TuriStruct *)turi_val_alloc(env, bytes);
+        if (n <= TURI_STRUCT_FREE_MAX) turi_val_note_kind(env, s, TURI_VAL_STRUCT);
+    }
+    s->name       = NULL;
     s->n_fields   = n;
+    s->epoch      = g_turi_cont_epoch;
     s->ctor       = NULL;
     s->is_any_box = false;   /* arena memory is not zeroed */
-    s->fields   = n ? (TuriValue *)turi_val_alloc(env, n * sizeof(TuriValue)) : NULL;
+    s->fields     = n ? (TuriValue *)(s + 1) : NULL;
+    return s;
+}
+
+static TuriValue make_struct_val_def(TuriEnv *env, const char *name, uint32_t n, TuriValue *fields) {
+    TuriStruct *s = struct_alloc(env, n);
+    s->name = name;
     for (uint32_t i = 0; i < n; i++) s->fields[i] = fields[i];
     return turi_struct_val(s);
 }
@@ -1704,14 +1799,10 @@ static TuriValue turi_copy_byvalue_struct_arg(TuriEnv *env, TuriValue v) {
      * these copies were most of what a run kept -- 1.47 M `Sym` boxes and
      * 94 K empty lists in r7rs-srfi-14, none ever freed. */
     if (!turi_struct_arg_may_be_written(v)) return v;
-    TuriStruct *s = (TuriStruct *)turi_val_alloc(env, sizeof(TuriStruct));
+    TuriStruct *s = struct_alloc(env, src->n_fields);
     s->name       = src->name;
-    s->n_fields   = src->n_fields;
     s->ctor       = src->ctor;
     s->is_any_box = src->is_any_box;
-    s->fields   = src->n_fields
-                    ? (TuriValue *)turi_val_alloc(env, src->n_fields * sizeof(TuriValue))
-                    : NULL;
     for (uint32_t i = 0; i < src->n_fields; i++)
         s->fields[i] = turi_copy_byvalue_struct_arg(env, src->fields[i]);
     return turi_struct_val(s);
@@ -7776,6 +7867,12 @@ typedef struct DriveReg {
     DriveCont      **pst;
     size_t          *plen, *pcap;
     DriveCont       *inl;
+    /* turi-dropped-closures-kept-until-teardown: the arguments of a leaf call
+     * the driver made from an array it holds itself, not one on its work
+     * stack (a native-resume application), for the sweep to read while the
+     * call runs. */
+    const TuriValue *loose;
+    size_t           n_loose;
 } DriveReg;
 static _Thread_local DriveReg *g_drive_regs;
 /* r7rs-toplevel-reentry-reruns-forms: the drive the current top-level form
@@ -8006,7 +8103,7 @@ struct TuriWsCont {
  * Bindings are re-linked most-recent-first to preserve shadowing order. */
 static EvalFrame *clone_frame_bindings(TuriEnv *env, EvalFrame *src, EvalFrame *parent) {
     EvalFrame *nf = (EvalFrame *)turi_val_alloc(env, sizeof(EvalFrame));
-    turi_val_note_reused(env, nf);
+    turi_val_note_kind(env, nf, TURI_VAL_FRAME);
     nf->parent = parent;
     nf->bindings = NULL;
     nf->escaped = true;        /* part of a resumed continuation slice */
@@ -9096,6 +9193,21 @@ static inline bool seq_has_direct_defer(const Expr *e) {
     return false;
 }
 
+/* turi-dropped-closures-kept-until-teardown: the pool sweep runs at the top of
+ * a driver's step, once the pool has grown by its budget.  There every value
+ * the driver holds is on its work stack or in a local the stack scan reads --
+ * except a pending native-resume application's arguments and a perform's
+ * hand-off, which sit in arrays of the driver's own; a step that starts with
+ * one of those is let go, and the sweep runs at the next. */
+static TuriPoolSweepFn g_pool_sweep_hook;
+void turi_set_pool_sweep_hook(TuriPoolSweepFn fn) { g_pool_sweep_hook = fn; }
+
+__attribute__((noinline))
+static void pool_sweep_safe_point(TuriEnv *env) {
+    if (g_pool_sweep_hook) g_pool_sweep_hook(env, false);
+    else turi_val_sweep_budget(env, 0);
+}
+
 static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                                const DriveSeed *seed) {
     DriveCont  inl[DRIVE_INLINE];
@@ -9118,7 +9230,7 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
         st[len++].epoch = g_turi_cont_epoch;                                   \
     } while (0)
 
-    DriveReg drive_reg = { g_drive_regs, &st, &len, &cap, inl };   /* T5 */
+    DriveReg drive_reg = { g_drive_regs, &st, &len, &cap, inl, NULL, 0 };   /* T5 */
     g_drive_regs = &drive_reg;
 
     DRIVE_PUSH(((DriveCont){ .kind = DK_DONE }));
@@ -9161,6 +9273,8 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
     TuriValue  *pargs_heap = NULL;
 
     for (;;) {
+        if (__builtin_expect(env->pool_sweep_due, 0) && !have_apply && !pargs_heap)
+            pool_sweep_safe_point(env);
         if (have_apply) {
             /* Apply `apply_fn` to apply_args[0..apply_n).  The result returns to
              * the DK_NATIVE_RESUME frame beneath, so this is ALWAYS a non-tail
@@ -9212,7 +9326,11 @@ static TuriValue eval_drive_ex(TuriEnv *env, EvalFrame *frame, const Expr *e,
                 if (cl->native && len > 0 && st[len - 1].kind == DK_NATIVE_RESUME &&
                     st[len - 1].expr)
                     g_panic_site = st[len - 1].expr->span;
+                drive_reg.loose = acc;
+                drive_reg.n_loose = n;
                 cur = eval_apply(env, cl, acc, n);
+                drive_reg.loose = NULL;
+                drive_reg.n_loose = 0;
                 g_panic_site = saved_site;
                 TURI_DRIVE_FREE_EP(acc_epoch, acc); descending = false; continue;
             }
@@ -12262,8 +12380,9 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
             _v.as_closure->fn->binding->is_lifted_lambda &&
             e->as.var.binding->is_lifted_lambda &&
             !e->as.var.binding->is_shared_any_adaptor) {
-            TuriClosure *copy = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
+            TuriClosure *copy = closure_alloc(env);
             *copy = *_v.as_closure;
+            copy->epoch = g_turi_cont_epoch;
             copy->captured = frame;
             frame_escape(frame);
             _v = turi_closure(copy);
@@ -12541,8 +12660,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Anonymous function (fn) ---------------------------------------- */
     case EX_FN: {
-        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
-        memset(cl, 0, sizeof(*cl));
+        TuriClosure *cl = closure_alloc(env);
         cl->fn       = e->as.fn_.fn;
         cl->captured = frame; /* capture lexical scope */
         frame_escape(frame);
@@ -12551,8 +12669,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
 
     /* --- Closure with captured variables (fn with captures) --------------- */
     case EX_CLOSURE: {
-        TuriClosure *cl = (TuriClosure *)turi_val_alloc(env, sizeof(TuriClosure));
-        memset(cl, 0, sizeof(*cl));
+        TuriClosure *cl = closure_alloc(env);
         cl->fn             = e->as.closure_.closure->fn;
         cl->captured       = frame; /* interpreter uses lexical frame */
         frame_escape(frame);
@@ -15115,7 +15232,7 @@ static EvalBinding *promo_copy_bindings(TuriEnv *env, EvalBinding *b, PromoMap *
     void *seen = promo_map_get(fwd, b);
     if (seen) return (EvalBinding *)seen;
     EvalBinding *nb = (EvalBinding *)turi_val_perm_alloc(env, sizeof *nb);
-    turi_val_note_reused(env, nb);
+    turi_val_note_kind(env, nb, TURI_VAL_BINDING);
     promo_map_put(fwd, b, nb);
     nb->name  = b->name;                       /* interned in sym_arena */
     nb->value = promo_copy(env, b->value, fwd);
@@ -15140,7 +15257,7 @@ static EvalFrame *promo_copy_frame(TuriEnv *env, EvalFrame *f, PromoMap *fwd) {
     void *seen = promo_map_get(fwd, f);
     if (seen) return (EvalFrame *)seen;
     EvalFrame *nf = (EvalFrame *)turi_val_perm_alloc(env, sizeof *nf);
-    turi_val_note_reused(env, nf);
+    turi_val_note_kind(env, nf, TURI_VAL_FRAME);
     promo_map_put(fwd, f, nf);
     nf->parent   = promo_copy_frame(env, f->parent, fwd);
     nf->bindings = promo_copy_bindings(env, f->bindings, fwd);
@@ -15645,6 +15762,7 @@ struct TuriContGc {
      * with it): the capture epoch it was taken at.  See gc_word. */
     uint32_t          image_epoch;
     size_t            scanned;   /* bytes read, for the caller's pacing */
+    size_t            free_bytes; /* on the free lists after the pass */
     PromoMap          temps;     /* work-stack temporaries a drive reached */
 };
 
@@ -15674,22 +15792,25 @@ static void gc_push(TuriContGc *gc, int kind, uintptr_t lo, uintptr_t hi, TuriCo
  * later) is not the one the image saw, and is skipped; a binding is skipped
  * outright -- a live one hangs off its frame, which the image names in its
  * drives and its evaluator's locals, and is reached through it. */
-_Static_assert(sizeof(EvalFrame) >= sizeof(EvalBinding) + 16,
-               "gc_word tells a frame from a binding by its extent");
+/* turi-dropped-closures-kept-until-teardown: a closure is the same -- made or
+ * made again since the capture, it is not the one the image saw.  Not
+ * instrumented: the epoch read may be of an object on a free list, which ASan
+ * holds poisoned. */
+TURI_GC_NOASAN
 static void gc_word(TuriContGc *gc, uintptr_t w) {
     if (w < 4096) return;
     gc->on_word(gc, w, gc->ud);
     uintptr_t lo, hi;
     int kind = turi_val_object_of(gc->env, w, &lo, &hi);
     if (kind >= 0) {
-        /* A free-listed object is a frame when it is a frame's size (an
-         * object's extent is at least its size, and a binding's never
-         * reaches a frame's): taking a binding for a frame only reads its
-         * neighbour as an epoch, and then either follows it or skips it, as
-         * a binding would be. */
-        if (gc->image_epoch && kind == TURI_VAL_REUSED) {
-            if (hi - lo < sizeof(EvalFrame)) return;
-            if (((const EvalFrame *)lo)->epoch >= gc->image_epoch) return;
+        if (gc->image_epoch) {
+            if (kind == TURI_VAL_BINDING) return;
+            if (kind == TURI_VAL_FRAME &&
+                ((const EvalFrame *)lo)->epoch >= gc->image_epoch) return;
+            if (kind == TURI_VAL_CLOSURE &&
+                ((const TuriClosure *)lo)->epoch >= gc->image_epoch) return;
+            if (kind == TURI_VAL_STRUCT &&
+                ((const TuriStruct *)lo)->epoch >= gc->image_epoch) return;
         }
         if (turi_val_mark(gc->env, lo)) gc_push(gc, GC_RANGE, lo, hi, NULL);
         return;
@@ -15778,8 +15899,42 @@ static int gc_skip_cmp(const void *a, const void *b) {
     return x < y ? -1 : x > y;
 }
 
+/* turi-dropped-closures-kept-until-teardown: what is on a free list already
+ * is not handed back again, and its stale words keep nothing alive -- so it
+ * is marked without being read (the links are read; the rest is poisoned
+ * under ASan). */
+static size_t gc_mark_free_lists(TuriEnv *env) {
+    size_t bytes = 0;
+    for (EvalFrame *f = (EvalFrame *)env->frame_free; f; f = f->parent) {
+        (void)turi_val_mark(env, (uintptr_t)f);
+        bytes += sizeof *f;
+    }
+    for (EvalBinding *b = (EvalBinding *)env->binding_free; b; b = b->next) {
+        (void)turi_val_mark(env, (uintptr_t)b);
+        bytes += sizeof *b;
+    }
+    for (EvalFrame *f = (EvalFrame *)env->frame_swept; f; f = f->parent) {
+        (void)turi_val_mark(env, (uintptr_t)f);
+        bytes += sizeof *f;
+    }
+    for (EvalBinding *b = (EvalBinding *)env->binding_swept; b; b = b->next) {
+        (void)turi_val_mark(env, (uintptr_t)b);
+        bytes += sizeof *b;
+    }
+    for (void *c = env->closure_free; c; c = *(void **)c) {
+        (void)turi_val_mark(env, (uintptr_t)c);
+        bytes += sizeof(TuriClosure);
+    }
+    for (int k = 0; k <= TURI_STRUCT_FREE_MAX; k++)
+        for (void *c = env->struct_free[k]; c; c = *(void **)c) {
+            (void)turi_val_mark(env, (uintptr_t)c);
+            bytes += sizeof(TuriStruct) + (size_t)k * sizeof(TuriValue);
+        }
+    return bytes;
+}
+
 TuriContGc *turi_cont_gc_begin(TuriEnv *env, TuriContGcWordFn on_word, void *ud) {
-    if (!turi_val_mark_begin(env)) return NULL;
+    if (env->no_pool_sweep || !turi_val_mark_begin(env)) return NULL;
     TuriContGc *gc = (TuriContGc *)calloc(1, sizeof *gc);
     if (!gc) { (void)turi_val_mark_end(env); return NULL; }
     gc->env = env;
@@ -15787,6 +15942,7 @@ TuriContGc *turi_cont_gc_begin(TuriEnv *env, TuriContGcWordFn on_word, void *ud)
     gc->ud = ud;
     promo_map_init(&gc->boxes);
     promo_map_init(&gc->temps);
+    gc->free_bytes = gc_mark_free_lists(env);
     for (TuriCollBuf *n = env->coll_bufs; n; n = n->next) {
         n->marked = false;
         if (n->box) promo_map_put(&gc->boxes, n->box, n);
@@ -15835,6 +15991,7 @@ void turi_cont_gc_roots(TuriContGc *gc, const void *stack_hi) {
     gc_value(gc, env->throw_value);
     gc_value(gc, env->abort_value);
     gc_value(gc, env->session_rtv);
+    gc_value(gc, env->catch_panic_value);
     for (DeferItem *d = (DeferItem *)env->defer_stack; d; d = d->next)
         gc_word(gc, (uintptr_t)d->snapshot);
     if (env->handler_stack) turi_cont_gc_doubt(gc, "a live effect handler");
@@ -15849,6 +16006,7 @@ void turi_cont_gc_roots(TuriContGc *gc, const void *stack_hi) {
     GcSkip *skip = NULL;
     for (DriveReg *r = g_drive_regs; r; r = r->prev) {
         for (size_t i = 0; i < *r->plen; i++) gc_drive(gc, &(*r->pst)[i], false);
+        for (size_t i = 0; i < r->n_loose; i++) gc_value(gc, r->loose[i]);
         if (n_skip == cap_skip) {
             cap_skip = cap_skip ? cap_skip * 2 : 16;
             GcSkip *ns = (GcSkip *)realloc(skip, cap_skip * sizeof *ns);
@@ -15954,6 +16112,98 @@ size_t turi_cont_gc_release(TuriContGc *gc) {
     d->temps = left;
     return n;
 }
+
+/* turi-dropped-closures-kept-until-teardown: every frame, binding and closure
+ * nothing reached goes back to its free list -- after turi_cont_gc_release,
+ * whose kept frames are on the lists by then and so marked here.  Zeroed (a
+ * stale word in a free object can then name nothing), and poisoned under
+ * ASan but for the link. */
+typedef struct { TuriEnv *env; size_t bytes; } PoolReclaim;
+
+/* TUR_TURI_POOL_GC_QUARANTINE=1 (for finding a root the marker misses):
+ * what the sweep would hand back is poisoned whole under ASan and never
+ * handed out again, so the first use of it is reported where it happens
+ * instead of corrupting whatever is made there next. */
+static int g_pool_quarantine = -1;
+
+static void pool_reclaim_one(void *obj, int kind, void *ud) {
+    PoolReclaim *r = (PoolReclaim *)ud;
+    TuriEnv *env = r->env;
+    if (g_pool_quarantine < 0) {
+        const char *q = getenv("TUR_TURI_POOL_GC_QUARANTINE");
+        g_pool_quarantine = q && q[0] == '1';
+    }
+    if (g_pool_quarantine) {
+        size_t n = kind == TURI_VAL_FRAME ? sizeof(EvalFrame)
+                 : kind == TURI_VAL_BINDING ? sizeof(EvalBinding)
+                 : kind == TURI_VAL_CLOSURE ? sizeof(TuriClosure)
+                 : sizeof(TuriStruct) + (size_t)((TuriStruct *)obj)->n_fields * sizeof(TuriValue);
+        turi_val_note_kind(env, obj, TURI_VAL_PLAIN);
+        POOL_UNPOISON(obj, n);   /* (a no-op; keeps the macro in use) */
+#ifdef TURI_POOL_ASAN
+        __asan_poison_memory_region(obj, n);
+#endif
+        r->bytes += n;
+        return;
+    }
+    switch (kind) {
+    case TURI_VAL_FRAME: {
+        EvalFrame *f = (EvalFrame *)obj;
+        memset(f, 0, sizeof *f);
+        f->parent = (EvalFrame *)env->frame_swept;
+        env->frame_swept = f;
+        POOL_POISON(f, sizeof *f, offsetof(EvalFrame, parent));
+        r->bytes += sizeof *f;
+        break;
+    }
+    case TURI_VAL_BINDING: {
+        EvalBinding *b = (EvalBinding *)obj;
+        memset(b, 0, sizeof *b);
+        b->next = (EvalBinding *)env->binding_swept;
+        env->binding_swept = b;
+        POOL_POISON(b, sizeof *b, offsetof(EvalBinding, next));
+        r->bytes += sizeof *b;
+        break;
+    }
+    case TURI_VAL_CLOSURE: {
+        TuriClosure *cl = (TuriClosure *)obj;
+        memset(cl, 0, sizeof *cl);
+        *(void **)cl = env->closure_free;
+        env->closure_free = cl;
+        POOL_POISON(cl, sizeof *cl, 0);
+        r->bytes += sizeof *cl;
+        break;
+    }
+    case TURI_VAL_STRUCT: {
+        /* A block struct_alloc made: its field count picks the list.  One
+         * that does not look like it is left alone. */
+        TuriStruct *s = (TuriStruct *)obj;
+        uint32_t n = s->n_fields;
+        if (n > TURI_STRUCT_FREE_MAX || s->fields != (n ? (TuriValue *)(s + 1) : NULL)) break;
+        size_t bytes = sizeof *s + (size_t)n * sizeof(TuriValue);
+        memset(s, 0, bytes);
+        *(void **)s = env->struct_free[n];
+        env->struct_free[n] = s;
+        POOL_POISON(s, bytes, 0);
+        r->bytes += bytes;
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+size_t turi_cont_gc_reclaim(TuriContGc *gc) {
+    TuriEnv *env = gc->env;
+    if (gc->doubt || !turi_val_starts_complete(env) || !turi_frame_reclaim_on()) return 0;
+    gc->free_bytes = gc_mark_free_lists(env);
+    PoolReclaim r = { env, 0 };
+    turi_val_each_unmarked(env, pool_reclaim_one, &r);
+    gc->free_bytes += r.bytes;
+    return r.bytes;
+}
+
+size_t turi_cont_gc_free_bytes(const TuriContGc *gc) { return gc->free_bytes; }
 
 const char *turi_cont_gc_end(TuriContGc *gc, size_t *scanned) {
     const char *doubt = gc->doubt;
@@ -16153,8 +16403,12 @@ static void turi_promote_escaping(TuriEnv *env, TuriValue *result) {
     arena_reset(&env->value_scratch);
     env->frame_free   = NULL;   /* their nodes were in scratch */
     env->binding_free = NULL;
+    env->frame_swept   = NULL;
+    env->binding_swept = NULL;
     env->tyvar_free   = NULL;
     env->dict_free    = NULL;
+    env->closure_free = NULL;
+    memset(env->struct_free, 0, sizeof env->struct_free);
     env->promo_rewinds++;   /* TR0: scratch actually reclaimed this cycle */
 
     /* TR3: with the live graph now provably rooted at result+globals, sweep
@@ -16356,8 +16610,10 @@ static TuriValue turi_eval_impl(TuriEnv *env, const char *src, const char *path,
      * object map, which the continuation-image sweep needs.  Complete only
      * when it starts with the session's first turn -- `tur --interpret` seeds
      * the language before its preloads, so it does there. */
-    if (env->lang == LANG_R7RS && !env->obj_starts)
+    if (env->lang == LANG_R7RS && !env->obj_starts) {
         turi_val_starts_enable(env, env->n_acc_turns == 0);
+        if (g_pool_sweep_hook && turi_val_starts_complete(env)) g_pool_sweep_hook(env, true);
+    }
 
     /* 1. Build combined source: all prior definitions + new source (sans #lang).
      *

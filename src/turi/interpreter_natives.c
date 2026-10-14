@@ -2550,6 +2550,11 @@ static TurMmStorage *mm_alloc(uint64_t cap) {
     }
     return s;
 }
+/* turi-dropped-closures-kept-until-teardown: a mutable map keeps its values
+ * in its own memory, where no sweep reads, so once one exists the sweeps stay
+ * off (r7k_sweep_gate).  The R7RS libraries make none; a Scheme program
+ * reaches one only through the Turmeric seam, which turns them off anyway. */
+static bool g_r7k_untracked_store;
 static TuriValue native_mutmap_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
     TurMmStorage *s = mm_alloc(16);
@@ -2557,6 +2562,7 @@ static TuriValue native_mutmap_new(TuriEnv *env, TuriValue *a, uint32_t n, void 
     TurMmWrap *m = (TurMmWrap *)malloc(sizeof(*m));
     if (!m) { free(s); return turi_nil(); }
     m->storage = s;
+    g_r7k_untracked_store = true;   /* r7k_sweep_gate */
     return turi_int((int64_t)(intptr_t)m);
 }
 static TuriValue native_mutmap_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -3455,7 +3461,24 @@ static size_t    g_r7k_live;           /* slots holding a continuation */
 #define R7K_SWEEP_EVERY 512
 #define R7K_SCAN_PER_CAPTURE 1024
 static size_t    g_r7k_next_sweep = R7K_SWEEP_EVERY;
-static int       r7k_gc_mode = -1;     /* bit 0: on, 1: trace, 2: stress; -1 unread */
+/* bit 0: on, 1: trace, 2: stress, 3: the pool sweep on; -1 unread */
+static int       r7k_gc_mode = -1;
+/* turi-dropped-closures-kept-until-teardown: the pool sweep runs once the
+ * value pool has grown by its budget (value.c, turi_val_sweep_budget): 4 MB,
+ * or twice what the last sweep read if more, or half of what is on the free
+ * lists (which a sweep walks) if more still -- a collector's usual trade, the
+ * marking costing about one byte read per two allocated.  A sweep that could
+ * free nothing (a doubt: a guard's handler live, say) tries again sooner,
+ * after 256 KB, doubling each time it fails again up to the full budget, so
+ * one that happens to land inside every handler still finds a gap.
+ * TUR_TURI_POOL_GC=0 turns it off (only kept frames and continuations are
+ * then handed back); TUR_TURI_POOL_GC_STRESS=<bytes> sweeps every that many
+ * bytes. */
+#define R7K_POOL_BUDGET (4u << 20)
+#define R7K_POOL_RETRY  (256u << 10)
+static size_t    g_r7k_pool_retry = R7K_POOL_RETRY;
+static size_t    g_r7k_pool_stress;
+/* g_r7k_untracked_store (declared with the mutable map): the sweep's gate. */
 
 static int64_t r7k_handle_of(uint32_t slot) {
     return (int64_t)(((uint64_t)g_r7k_slots[slot].gen << 32) | ((uint64_t)(slot + 1) << 2));
@@ -3530,13 +3553,15 @@ static void r7k_slot_free(uint32_t i) {
     g_r7k_live--;
     r7k_cont_free(c);
 }
-static void r7k_maybe_sweep(TuriEnv *env);   /* below, beside the roots it reads */
+static void r7k_maybe_sweep(TuriEnv *env, bool pool);   /* below, beside the roots it reads */
 static void r7k_gc_mode_read(void) {
     const char *on = getenv("TUR_TURI_CONT_GC"), *tr = getenv("TUR_TURI_CONT_GC_TRACE");
     const char *st = getenv("TUR_TURI_CONT_GC_STRESS");
+    const char *po = getenv("TUR_TURI_POOL_GC"), *ps = getenv("TUR_TURI_POOL_GC_STRESS");
     r7k_gc_mode = (!(on && on[0] == '0') ? 1 : 0) | ((tr && tr[0] == '1') ? 2 : 0) |
-                  ((st && st[0] == '1') ? 4 : 0);
+                  ((st && st[0] == '1') ? 4 : 0) | (!(po && po[0] == '0') ? 8 : 0);
     if (r7k_gc_mode & 4) g_r7k_next_sweep = 1;
+    g_r7k_pool_stress = ps ? (size_t)strtoull(ps, NULL, 10) : 0;
 }
 
 void turi_cont_release_env(TuriEnv *env) {
@@ -3562,7 +3587,7 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
      * there; 0 sends the prelude to its escape-only call/ec. */
     if (env->provenance_on && g_r7k_form_depth == 0) return turi_int(0);
     if (r7k_gc_mode < 0) r7k_gc_mode_read();
-    if (g_r7k_live >= g_r7k_next_sweep) r7k_maybe_sweep(env);
+    if (g_r7k_live >= g_r7k_next_sweep) r7k_maybe_sweep(env, false);
     R7kCont *volatile c = (R7kCont *)calloc(1, sizeof(R7kCont));
     if (!c) return turi_int(0);
     if (!r7k_slot_new(env, c)) { free(c); return turi_int(0); }
@@ -3681,6 +3706,11 @@ static int64_t r7rs_eval_interp_host(int64_t host_id) {
 }
 static void r7rs_eval_bind_host(TuriEnv *env) {
     g_r7rs_eval_host_env = env;
+    /* turi-dropped-closures-kept-until-teardown: values of this env now
+     * cross into the embedded evaluator, which keeps them in its own arrays
+     * where no sweep reads (r7rs_embed.c) -- so, like that env, this one no
+     * longer sweeps. */
+    env->no_pool_sweep = true;
     turi_r7rs_embed_set_host(r7rs_eval_interp_host, env);
 }
 static TuriValue native_r7rs_eval_c_eval(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -4016,9 +4046,12 @@ static void r7k_gc_cont(TuriContGc *gc, const R7kCont *c) {
 static const char *r7k_sweep_gate(TuriEnv *env) {
     if (g_scheme_lower_opened_seam)
         return "the program imports a Turmeric module or a library of its own";
+    if (env->no_pool_sweep) return "values are kept outside the interpreter";
     if (env->debugger) return "a debugger is attached";
-    if (env->coro_stacks || env->sched_ready_head || env->current_fiber || env->all_futures)
-        return "the program has fibers, generators or futures";
+    if (env->coro_stacks || env->sched_ready_head || env->current_fiber || env->all_futures ||
+        env->timers_head || env->io_pending_head)
+        return "the program has fibers, generators, futures, timers or pending I/O";
+    if (g_r7k_untracked_store) return "a mutable map holds values";
     if (!r7k_stack_base()) return "the thread's stack base is unknown";
     pthread_t self = pthread_self();
     for (uint32_t i = 0; i < g_r7k_n_slots; i++) {
@@ -4028,9 +4061,27 @@ static const char *r7k_sweep_gate(TuriEnv *env) {
     }
     return NULL;
 }
+/* The pool sweep's next budget, after a sweep that read `scanned` bytes and
+ * freed nothing because of `why` (NULL: it ran). */
+static void r7k_pool_rebudget(TuriEnv *env, const char *why, size_t scanned, size_t free_bytes) {
+    size_t full = R7K_POOL_BUDGET;
+    if (full < scanned * 2) full = scanned * 2;
+    if (full < free_bytes / 2) full = free_bytes / 2;   /* the free lists are walked too */
+    size_t b;
+    if (!(r7k_gc_mode & 8)) b = 0;
+    else if (g_r7k_pool_stress) b = g_r7k_pool_stress;
+    else if (!why) { b = full; g_r7k_pool_retry = R7K_POOL_RETRY; }
+    else {
+        b = g_r7k_pool_retry < full ? g_r7k_pool_retry : full;
+        if (g_r7k_pool_retry < full) g_r7k_pool_retry *= 2;
+    }
+    turi_val_sweep_budget(env, b);
+}
+
 __attribute__((noinline))
-static void r7k_maybe_sweep(TuriEnv *env) {
-    size_t before = g_r7k_live, freed = 0, scanned = 0, kept_back = 0;
+static void r7k_maybe_sweep(TuriEnv *env, bool pool) {
+    size_t before = g_r7k_live, freed = 0, scanned = 0, kept_back = 0, reclaimed = 0;
+    size_t free_bytes = 0;
     const char *why = (r7k_gc_mode & 1) ? r7k_sweep_gate(env) : "TUR_TURI_CONT_GC=0";
     TuriContGc *gc = why ? NULL : turi_cont_gc_begin(env, r7k_gc_word, NULL);
     if (!why && !gc) why = "the value pool keeps no complete object map";
@@ -4049,6 +4100,8 @@ static void r7k_maybe_sweep(TuriEnv *env) {
             if (!any) break;
         }
         size_t released = turi_cont_gc_release(gc);
+        if (r7k_gc_mode & 8) reclaimed = turi_cont_gc_reclaim(gc);
+        free_bytes = turi_cont_gc_free_bytes(gc);
         why = turi_cont_gc_end(gc, &scanned);
         if (!why)
             for (uint32_t i = 0; i < g_r7k_n_slots; i++)
@@ -4059,16 +4112,30 @@ static void r7k_maybe_sweep(TuriEnv *env) {
         kept_back = released;
     }
     if (r7k_gc_mode & 2) {
-        if (why) fprintf(stderr, "r7k-gc: %zu live, none freed: %s\n", before, why);
-        else     fprintf(stderr, "r7k-gc: %zu live, %zu freed, %zu KB read, "
-                                 "%zu kept frames and temporaries handed back\n",
-                         before, freed, scanned / 1024, kept_back);
+        /* A sweep at a capture reports as it always has ("r7k-gc:"); one the
+         * pool's growth started is told apart, since it may well land inside
+         * a handler and decline. */
+        const char *at = pool ? "r7k-gc (pool):" : "r7k-gc:";
+        if (why) fprintf(stderr, "%s %zu live, none freed: %s\n", at, before, why);
+        else     fprintf(stderr, "%s %zu live, %zu freed, %zu KB read, "
+                                 "%zu kept frames and temporaries handed back, "
+                                 "%zu KB of frames, bindings, closures and structs\n",
+                         at, before, freed, scanned / 1024, kept_back, reclaimed / 1024);
     }
+    r7k_pool_rebudget(env, why, scanned, free_bytes);
     size_t next = g_r7k_live + R7K_SWEEP_EVERY;
     if (next < g_r7k_live * 2) next = g_r7k_live * 2;
     if (next < g_r7k_live + scanned / R7K_SCAN_PER_CAPTURE)
         next = g_r7k_live + scanned / R7K_SCAN_PER_CAPTURE;
     g_r7k_next_sweep = (r7k_gc_mode & 4) ? g_r7k_live + 1 : next;
+}
+
+/* turi-dropped-closures-kept-until-teardown: the interpreter's pool sweep
+ * (eval.h, TuriPoolSweepFn): the same marking, run because the pool grew. */
+static void r7k_pool_sweep(TuriEnv *env, bool start) {
+    if (r7k_gc_mode < 0) r7k_gc_mode_read();
+    if (start) r7k_pool_rebudget(env, NULL, 0, 0);
+    else       r7k_maybe_sweep(env, true);
 }
 /* r7rs-srfi-18-216-sicp-plan T2: twins of stdlib/r7rs/thread.tur, SRFI 18's
  * C half.  Under the interpreter a thread is a scheduler fiber (green
@@ -5045,6 +5112,7 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-unlink__",         native_r7rs_unlink,         NULL);
     /* r7rs-lang-plan T5: the prelude's re-entrant call/cc. */
     turi_env_register_native(env, "r7rs-cont-capture__",  native_r7rs_cont_capture,  NULL);
+    turi_set_pool_sweep_hook(r7k_pool_sweep);   /* turi-dropped-closures-kept-until-teardown */
     turi_env_register_native(env, "r7rs-cont-resumed?__", native_r7rs_cont_resumed,  NULL);
     turi_env_register_native(env, "r7rs-cont-null?__",    native_r7rs_cont_null,     NULL);
     turi_env_register_native(env, "r7rs-cont-here?__",    native_r7rs_cont_here,     NULL);

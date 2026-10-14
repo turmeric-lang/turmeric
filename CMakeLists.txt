@@ -1451,6 +1451,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_turi_callcc_reclaim PROPERTIES TIMEOUT 720 DEPENDS tur)
+# turi-dropped-closures-kept-until-teardown: the pool sweep hands back every
+# frame, binding, closure and small struct nothing reaches.  Runs a fixture
+# that keeps values in every kind of place under a sweep every 64 KB with what
+# it hands back poisoned, and asserts three garbage-making loops stay flat.
+add_test(
+  NAME tur_turi_pool_sweep
+  COMMAND python3 tests/check-turi-pool-sweep.py $<TARGET_FILE:tur>
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_turi_pool_sweep PROPERTIES TIMEOUT 720 DEPENDS tur)
 # saffron-lang-plan S8: the editor syntax packs.  The vim half is ACTUALLY
 # LOADED in a real Vim and queried for highlight groups -- which is what caught
 # the fused-vs-spaced annotation bug.  The vscode half is structure and pattern

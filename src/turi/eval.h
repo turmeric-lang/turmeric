@@ -768,10 +768,21 @@ bool        turi_cont_gc_drain(TuriContGc *gc);
 /* After a complete marking: hand back the frames and temporaries captures
  * kept (eval.c, cont_defer_*) that nothing reached.  Returns how many. */
 size_t      turi_cont_gc_release(TuriContGc *gc);
+/* turi-dropped-closures-kept-until-teardown: then hand back every frame,
+ * binding and closure nothing reached (the pool sweep).  Returns the bytes. */
+size_t      turi_cont_gc_reclaim(TuriContGc *gc);
+/* The bytes on the free lists after it (the next sweep walks them all). */
+size_t      turi_cont_gc_free_bytes(const TuriContGc *gc);
 /* Env teardown: free the deferred temporaries' store. */
 void        turi_cont_deferred_free(TuriEnv *env);
 /* `*scanned`: how many bytes the marking read. */
 const char *turi_cont_gc_end(TuriContGc *gc, size_t *scanned);
+/* The pool sweep's driver, which owns the roots only it knows (the R7RS
+ * natives).  The interpreter calls it with `start` true when an env first
+ * keeps an object map (to set the first budget, turi_val_sweep_budget), and
+ * with `start` false at a safe point once env->pool_sweep_due is raised. */
+typedef void (*TuriPoolSweepFn)(TuriEnv *env, bool start);
+void        turi_set_pool_sweep_hook(TuriPoolSweepFn fn);
 
 /* Run the cooperative event loop until all async fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);
