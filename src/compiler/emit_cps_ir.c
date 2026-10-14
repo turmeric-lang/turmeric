@@ -335,8 +335,26 @@ static bool adt_int64_carrier(const Type *t) {
  * signature spells such a value `int64_t`, and it crosses a slot or an env as
  * that word.  Outside a monomorph a bare type variable keeps the old answer:
  * the template gates are built on refusing it. */
+/* await-parks-only-to-the-nearest-c-frame: the same holds while the backend
+ * classifies or renders the BASE body of a lambda that captures a bare `T`
+ * and may await (fn_sig_ok admits it): that body only ever runs erased, its
+ * env stores the capture as the int64 carrier, and its direct thunk reads it
+ * as that word.  Scoped to that function (g_cps_erased_base, set around its
+ * classification, the heap-join fixpoint and its render), so the template
+ * gates still refuse a bare type variable everywhere else. */
+static bool g_cps_erased_base;
 static bool mono_erased_tyvar(const Type *r) {
-    return g_cps_mono_resolver && r && r->kind == TY_TYVAR;
+    return (g_cps_mono_resolver || g_cps_erased_base) && r && r->kind == TY_TYVAR;
+}
+/* Is `fd` such a lambda?  A capture typed by a bare type variable, and the
+ * lambda may await -- the only case fn_sig_ok admits a TY_TYVAR capture. */
+static bool fn_erased_tyvar_lambda(const FnDef *fd) {
+    if (!fd || !fd->closure || !cps_fn_may_await(fd)) return false;
+    for (uint8_t ci = 0; ci < fd->closure->n_captures; ci++) {
+        const Binding *cap = fd->closure->captures[ci];
+        if (cap && !cap->is_global && cap->type.kind == TY_TYVAR) return true;
+    }
+    return false;
 }
 
 static bool slot_ok_t(const Type *t, TypeKind k) {
@@ -3644,6 +3662,20 @@ static bool fn_sig_ok(const FnDef *fd) {
                     if (cap->type.kind == TY_ADT && cap->type.as.adt_.def
                         && cap->type.as.adt_.def->n_type_params > 0) return false;
                     break;
+                case TY_TYVAR:
+                    /* await-parks-only-to-the-nearest-c-frame: a lambda
+                     * inside a generic that captures a bare `T` and may
+                     * await.  This is the BASE lambda -- its env stores the
+                     * capture as the int64 carrier word, and the __cps twin
+                     * reads it through that same base layout, as the direct
+                     * thunk does.  The spec-suffixed layouts above belong to
+                     * a monomorph clone, which mono_sig_ok never CPS-emits.
+                     * Refused, the lambda had no twin: the generic's
+                     * specialization (on the backend) hands it to a callee
+                     * whose fat dispatch then missed in the registry and
+                     * entered its direct root, and the park was refused. */
+                    if (!cps_fn_may_await(fd)) return false;
+                    break;
                 default:
                     return false;
             }
@@ -3747,6 +3779,39 @@ static bool expr_reaches_effect_op(const Expr *e, EffReach *u);
 static bool expr_reaches_effect_op_visit(const Expr *c, void *ud) {
     return expr_reaches_effect_op(c, (EffReach *)ud);
 }
+/* await-parks-only-to-the-nearest-c-frame: a function VALUE passed as a call
+ * argument -- a lambda, or a named function -- that performs or awaits, or
+ * reaches a function that does.  Its callee may call it, so the call reaches
+ * the effect op too (the rule cps_expr_awaits applies to `await`).  Without
+ * it a generic whose await is reached only through a lambda it hands to a
+ * higher-order function minted no monomorph at a carrier type (`int`): the
+ * erased base ran, refused its type variable, and the park was refused. */
+static bool fnvalue_arg_reaches_effect_op(const Expr *a, EffReach *u) {
+    while (a) {
+        if (a->kind == EX_ASCRIBE)          a = a->as.ascribe_.inner;
+        else if (a->kind == EX_FN_TO_FAT)   a = a->as.fn_to_fat_.inner;
+        else if (a->kind == EX_POLY_TO_FAT) a = a->as.poly_to_fat_.inner;
+        else if (a->kind == EX_POLY_WRAP)   a = a->as.poly_wrap_.inner;
+        else if (a->kind == EX_CAST)        a = a->as.cast_.expr;
+        else break;
+    }
+    /* Resolved as emit_abi_call_passes_effectful_fn resolves it: a lambda
+     * reaches here as a closure node, or as a variable bound to one. */
+    const FnDef *vf = NULL;
+    if (a && a->kind == EX_CLOSURE && a->as.closure_.closure)
+        vf = a->as.closure_.closure->fn;
+    else if (a && a->kind == EX_FN)
+        vf = a->as.fn_.fn;
+    else if (a && a->kind == EX_VAR && a->as.var.binding) {
+        const Binding *b = a->as.var.binding;
+        if (b->source_binding) b = b->source_binding;
+        vf = b->source_fn_def;
+        if (!vf && b->closure_fn_binding) vf = b->closure_fn_binding->source_fn_def;
+        if (!vf && b->hoist_closure_fn_binding) vf = b->hoist_closure_fn_binding->source_fn_def;
+    }
+    return vf && vf->body && eff_reach_first_visit(u, vf) &&
+           (cps_expr_contains_effect_op(vf->body) || expr_reaches_effect_op(vf->body, u));
+}
 static bool expr_reaches_effect_op(const Expr *e, EffReach *u) {
     if (!e) return false;
     if (e->kind == EX_CALL && e->as.call_.fn_binding) {
@@ -3756,6 +3821,9 @@ static bool expr_reaches_effect_op(const Expr *e, EffReach *u) {
              expr_reaches_effect_op(callee->body, u)))
             return true;
     }
+    if (e->kind == EX_CALL)
+        for (uint32_t i = 0; i < e->as.call_.n_args; i++)
+            if (fnvalue_arg_reaches_effect_op(e->as.call_.args[i], u)) return true;
     if (e->kind == EX_FN_DEF || e->kind == EX_FN || e->kind == EX_CLOSURE) return false;
     return cps_visit_children(e, expr_reaches_effect_op_visit, u);
 }
@@ -3793,7 +3861,7 @@ bool emit_cps_ir_colored_fn_needs_mono(const FnDef *fd) {
      * strict syntactic seed, as the `unsafe` lesson above recommends. */
     if (!fd || !fd->body) return false;
     if (cps_expr_contains_effect_op(fd->body)) return !fn_sig_ok(fd);
-    if (fd->owner_instance || fd->constraints.n_constraints) return false;
+    if (fd->owner_instance) return false;
     /* The walk first: it only reads the tree, while fn_sig_ok spells the
      * signature's C types, which registers their monomorphs -- asked of every
      * generic from emit_abi_fn_skip_generic, that reordered the typedefs of
@@ -6241,6 +6309,20 @@ bool emit_cps_ir_generic_base_is_template(const FnDef *fd) {
         && emit_cps_ir_colored_fn_needs_mono(fd);
 }
 static bool addr_taken_has(const Binding *b);
+/* await-parks-only-to-the-nearest-c-frame: a generic BASE that never runs --
+ * every call reaches one of its specializations (none is a carrier call,
+ * KB-022), and it is never taken as a value.  Its base refuses its type
+ * variables and so always evicts; TUR-W0044 must not name it, since the
+ * specializations are what sit between an async body and an await. */
+static bool generic_base_never_runs(EmitCtx *ctx, const FnDef *fd) {
+    if (!ctx || !fd || !fd->binding || !fd_sig_has_tyvar(fd)) return false;
+    if (addr_taken_has(fd->binding)) return false;
+    for (uint32_t i = 0; i < ctx->n_carrier_call_bindings; i++)
+        if (ctx->carrier_call_bindings[i] == fd->binding) return false;
+    for (uint32_t i = 0; i < ctx->n_abi_specializations; i++)
+        if (ctx->abi_specializations[i].fn == fd) return true;
+    return false;
+}
 static bool generic_unreached(EmitCtx *ctx, const FnDef *fd) {
     if (!ctx || !fd || !fd->binding || !fd_sig_has_tyvar(fd)) return false;
     if (fd->binding->c_export_name || fd->closure) return false;
@@ -6638,7 +6720,8 @@ static void ensure_S(const Expr *program) {
                  * own it (emit its exported direct entry AND a `__cps` variant).
                  * A genuine `^:export-as` export still perm-routes. */
                 if (fd->binding->c_export_name
-                    && !fd->binding->is_instance_method)
+                    && !fd->binding->is_instance_method
+                    && !cps_fn_may_await(fd))
                     { candidate = false; sig_perm = true; }
                 if (fn_is_main(fd) && !fn_is_d2b_main(fd)) { candidate = false; sig_perm = true; }
                 if (candidate && !fn_sig_ok(fd)) { candidate = false; sig_perm = true; }
@@ -6679,7 +6762,10 @@ static void ensure_S(const Expr *program) {
                 }
                 CTerm *t = cps_ir_translate_fn(&g_arena, (Expr *)program, fd);
                 uint32_t fresh_n = cps_ir_last_fresh_count();
-                if (candidate && !term_core_ok(t)) {
+                g_cps_erased_base = fn_erased_tyvar_lambda(fd);
+                bool core_ok = !candidate || term_core_ok(t);
+                g_cps_erased_base = false;
+                if (candidate && !core_ok) {
                     candidate = false;
                     /* An un-lowerable inline-C form in a colored body is a
                      * PERMANENT carve-out, not a fixable BODY root: inline-C
@@ -6832,6 +6918,7 @@ static void ensure_S(const Expr *program) {
     while (changed) {
         changed = false;
         for (size_t i = 0; i < g_ents_n; i++) {
+            g_cps_erased_base = fn_erased_tyvar_lambda(g_ents[i].fd);
             if (g_ents[i].in_s && needs_heap_join(g_ents[i].term)) {
                 g_ents[i].in_s = false;
                 changed = true;
@@ -6842,6 +6929,7 @@ static void ensure_S(const Expr *program) {
                 g_ents[i].in_s = false;
                 changed = true;
             }
+            g_cps_erased_base = false;
         }
         /* An effect is tainted by any entry that is NEITHER an S candidate NOR a
          * mono-template: those are the genuinely fiber functions.  A mono-template
@@ -8270,6 +8358,43 @@ static void fncps_direct_call(Buf *out, const char *pf, char *const *args,
     buf_free(&ps); buf_free(&av);
 }
 
+/* await-parks-only-to-the-nearest-c-frame: the `fn_cps == NULL` fallback of a
+ * via_fncps call, as a value.  A rank-2 (forall) callee's `.fn` holds whatever
+ * the elaborator built for the value -- an int64 carrier adapter, a typed
+ * wrapper -- and only the direct emitter knows which.  With atomic arguments
+ * the call is rendered through it, exactly as the delegated call was, bound
+ * to a temp at the call's own type, and checked for a panic the way the
+ * delegated call was.  Otherwise (and for any other callee) the fallback is
+ * fncps_direct_call's slot-ABI cast (a word, except a float), which
+ * fncps_forall_call_ok admits for a rank-2 callee only on int / bool
+ * positions, where it is the delegated cast. */
+static bool fncps_callee_is_forall(const Binding *fnb) {
+    return fnb && fnb->is_poly_fn && fnb->poly_type
+        && fnb->poly_type->kind == TY_FORALL;
+}
+static char *fncps_fallback_value(CE *ce, const Binding *fnb, const char *pf,
+                                  char *const *av, uint32_t na, const Expr *call) {
+    if (fncps_callee_is_forall(fnb) && call && cps_ir_call_args_atomic(call)) {
+        int saved = ce->ctx->indent;
+        ce->ctx->indent = ce->indent;
+        char *rhs = emit_value(ce->ctx, ce->out, call);
+        ce->ctx->indent = saved;
+        const char *cty = binder_ctype_full(ce->ctx, call->type.kind, &call->type);
+        char tmp[32];
+        snprintf(tmp, sizeof tmp, "__fcv%d", (*ce->helper_ctr)++);
+        ce_line(ce, "%s %s = %s;", cty ? cty : "int64_t", tmp, rhs ? rhs : "0");
+        free(rhs);
+        cps_panic_check(ce);
+        return strdup(tmp);
+    }
+    Buf b; buf_init(&b);
+    fncps_direct_call(&b, pf, av, na, call);
+    buf_putc(&b, '\0');
+    char *s = strdup(b.data);
+    buf_free(&b);
+    return s;
+}
+
 /* The threaded call through a fat closure's `fn_cps` slot, threading `thread`.
  * The slot is declared at the one-argument ABI (`tur_poly_fn_t`, emit_module.c);
  * a twin of another arity was stored through a cast (emit_expr.c, EX_POLY_WRAP)
@@ -9253,11 +9378,15 @@ static void emit_term_inner(CE *ce, const CTerm *t) {
                         pf, sc.data);
                 buf_free(&sc);
                 /* Pure fallback: call the direct entry and deliver the result. */
-                Buf pv; buf_init(&pv);
-                fncps_direct_call(&pv, pf, av, na, t->as.tailcall.call_expr);
-                buf_putc(&pv, '\0');
-                emit_deliver(ce, &t->as.tailcall.kont, pv.data);
-                buf_free(&pv);
+                char *pv = fncps_fallback_value(ce, t->as.tailcall.fn, pf, av, na,
+                                                t->as.tailcall.call_expr);
+                if (fncps_callee_is_forall(t->as.tailcall.fn) && t->as.tailcall.call_expr
+                    && cps_ir_call_args_atomic(t->as.tailcall.call_expr))
+                    emit_deliver_ty(ce, &t->as.tailcall.kont, pv,
+                                    &t->as.tailcall.call_expr->type);
+                else
+                    emit_deliver(ce, &t->as.tailcall.kont, pv);
+                free(pv);
                 free(pf); fncps_args_free(av, na);
                 break;
             }
@@ -11193,20 +11322,19 @@ static void emit_heap_join(CE *ce, const CTerm *t) {
         ce_line(ce, "if (%s.fn_cps) return %s; /* E2 threaded fat fn-value heap join */",
                 pf, sc.data);
         buf_free(&sc);
-        Buf dc; buf_init(&dc);
-        fncps_direct_call(&dc, pf, av, na, call->as.tailcall.call_expr);
-        buf_putc(&dc, '\0');
+        char *dc = fncps_fallback_value(ce, call->as.tailcall.fn, pf, av, na,
+                                        call->as.tailcall.call_expr);
         /* The join reads its parameter out of the slot: a float by its bits. */
         TypeKind drk = call->as.tailcall.call_expr
             ? call->as.tailcall.call_expr->type.kind : TY_INT;
         if (drk == TY_FLOAT || drk == TY_FLOAT64 || drk == TY_FLOAT32) {
-            char *dw = cps_ir_fncps_word_of(drk, dc.data);
+            char *dw = cps_ir_fncps_word_of(drk, dc);
             ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dw);
             free(dw);
         } else {
-            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc.data);
+            ce_line(ce, "return dk_run(%s, (intptr_t)(%s));", frame, dc);
         }
-        buf_free(&dc);
+        free(dc);
         free(pf); fncps_args_free(av, na);
     } else if (call->as.tailcall.via_registry) {
         /* E2a tier-`nontail`: the callee is a fn-value param; thread the reified
@@ -14112,7 +14240,11 @@ bool emit_cps_ir_try_fn(EmitCtx *ctx, Buf *file, const Expr *e) {
     memcpy(pend_saved, g_pend, sizeof(const Expr *) * (size_t)g_n_pend);
     g_n_pend = 0; g_pend_unfirable = 0; g_pend_downstream = 0;
     g_pend_k_ok = true;   /* a `__cps` body holds its chain in `__kont` */
+    bool erased_saved = g_cps_erased_base;
+    g_cps_erased_base = e && e->kind == EX_FN_DEF
+        && fn_erased_tyvar_lambda(e->as.fn_def_.fn);
     bool r = emit_cps_ir_try_fn_impl(ctx, file, e);
+    g_cps_erased_base = erased_saved;
     g_n_pend = pend_saved_n; g_pend_unfirable = pend_saved_mask;
     g_pend_downstream = pend_saved_down; g_pend_out = pend_saved_out;
     g_pend_k = pend_saved_k; g_pend_k_ok = pend_saved_k_ok;
@@ -14231,11 +14363,14 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
              * its base entry is refused here; the fat box a colored caller
              * dispatches through carries the adapter's own `__poly_<N>__cps`
              * twin, so a park never crosses the base entry
-             * (await-through-fn-value parks through three of them).  A spec
+             * (await-through-fn-value parks through three of them).  So is a
+             * generic base no call reaches (generic_base_never_runs): its
+             * specializations run instead.  A spec
              * clone of an in-S template that mono_sig_ok refuses returns
              * above and is not this. */
             if (!fd->await_evict_warned && cps_fn_may_await(fd)
                 && fd->async_reachable && !fn_is_main(fd)
+                && !generic_base_never_runs(ctx, fd)
                 && strncmp(nm, "__poly_", 7) != 0) {
                 fd->await_evict_warned = true;
                 const char *because =
@@ -14305,9 +14440,9 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
 
     /* await-parks-only-to-the-nearest-c-frame: this function is on the
      * backend, but a call in it through a rank-2 parameter that may receive an
-     * awaiting function can still leave the chain: a position that is not an
-     * int or bool, or a constrained forall, has no threaded lowering
-     * (fncps_forall_call_ok), so
+     * awaiting function can still leave the chain: a constrained forall, or
+     * a computed argument with a float or pointer position, has no threaded
+     * lowering (fncps_forall_call_ok), so
      * it calls the value's direct entry and an await below it is refused at
      * run time.  Say so at the call, once per function. */
     if (!fd->await_evict_warned && cps_fn_may_await(fd) && fd->async_reachable) {
@@ -14318,14 +14453,15 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             diag_emit_with_code(DIAG_WARNING, bad->span,
                 TUR_W0044_AWAITER_COMPILED_DIRECT,
                 "`%s` calls `%s`, a rank-2 parameter that may be handed a "
-                "function that awaits, through its direct entry: only int and "
-                "bool arguments and results of an unconstrained forall have a "
-                "threaded lowering. Inside an async body, a pending future awaited "
+                "function that awaits, through its direct entry: a constrained "
+                "forall, or a computed argument with a float or pointer "
+                "argument or result, has no threaded lowering. Inside an async body, a pending future awaited "
                 "through it would park at that function's root instead of the "
                 "body's, so the program refuses the park at run time (`await: "
                 "a pending future would park below a direct-style call`); a "
-                "ready future is unaffected. Take the awaiting function as a "
-                "plain `fn`-typed parameter instead",
+                "ready future is unaffected. Bind a computed argument with "
+                "`let` first, or take the awaiting function as a plain "
+                "`fn`-typed parameter",
                 fd->binding->name ? fd->binding->name->name : "?",
                 pb->name ? pb->name->name : "?");
         }

@@ -13,6 +13,12 @@
 ;;   r2-capture -- a lambda capturing the rank-2 parameter was evicted (a
 ;;                 poly-fn capture); admitted for an awaiter-holding capture.
 ;;   r2-bool    -- the same through a `bool` position.
+;;   r2-float   -- a float position: the call threads through `fn_cps` (the
+;;                 slot packs the float's bits; the value's twin unpacks
+;;                 them), and its `.fn` fallback is rendered by the direct
+;;                 emitter, as the delegated call was.
+;;   r2-cstr    -- a string result, likewise.
+;;   r2-computed -- a computed int argument `(f (+ x 1))`.
 ;;
 ;; Every body awaits a pending future each turn; the driver fulfills it with
 ;; 2 and hands out a fresh one.  Leak-checked (requires.leak-check).
@@ -81,6 +87,20 @@
 (defn r2b-apply [f (forall [a] (-> a a)) x : bool] : bool (f x))
 (defn r2-bool [] : int (if (r2b-apply level3b true) 1213 0))
 
+;; r2-float
+(defn level3f [x : float] : float (+ x (as float (sum-values 0 300 0))))
+(defn r2f-apply [f (forall [a] (-> a a)) x : float] : float (f x))
+(defn r2-float [] : int (+ 606 (as int (r2f-apply level3f 7.1))))
+
+;; r2-cstr
+(defn level3s [x : int] : cstr (if (> (sum-values 0 300 0) x) "parked" "short"))
+(defn r2s-apply [f (forall [a] (-> a cstr)) x : int] : cstr (f x))
+(defn r2-cstr [] : int (do (println (r2s-apply level3s 5)) 1213))
+
+;; r2-computed
+(defn r2c-apply [f (forall [a] (-> a a)) x : int] : int (f (+ x 1)))
+(defn r2-computed [] : int (+ 7 (* 2 (r2c-apply level3 2))))
+
 (defn main [] : nil
   (cur-cell true)
   ;; 7 + 2 * (3 + 600), four times
@@ -88,4 +108,8 @@
   (println (drive (async r2-passed)))
   (println (drive (async r2-capture)))
   (println (drive (async r2-bool)))
+  ;; 606 + int(7.1 + 600)
+  (println (drive (async r2-float)))
+  (println (drive (async r2-cstr)))
+  (println (drive (async r2-computed)))
   (free-future (cur-cell false)))

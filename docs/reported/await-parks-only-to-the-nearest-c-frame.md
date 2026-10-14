@@ -1,5 +1,13 @@
 # An await below a direct-style call or a non-tail resume parks only part of the async body
 
+**Narrowed 2026-10-14 (seventh pass): the shapes left open by the sixth pass
+park.** An `export-as` function, a lambda inside a generic capturing a `T`
+(at `bool`, `int`, `float`, `cstr`, a struct, and in a constrained generic),
+and a rank-2 call with a float or string position all print the right answer
+now. What is left: a CONSTRAINED rank-2 call, and a rank-2 call with a
+computed argument and a float or pointer position. Both warn and are refused
+at run time. See "Seventh pass" at the end.
+
 **Narrowed 2026-10-14 (sixth pass): rank-2 awaiters run, and the warning is
 exact.** An awaiter reached through a rank-2 (`forall`) parameter -- called,
 handed on, or captured into a lambda -- now parks the whole body (1213 for
@@ -368,3 +376,81 @@ refusal).
   dictionary slots. Warned at the call; a plain `fn` parameter is the
   workaround.
 - *`export-as`* stays a refusal: its C ABI is fixed.
+
+### Seventh pass (2026-10-14): export-as, generic captures, every rank-2 kind
+
+| Shape | Sixth pass | Now |
+|---|---|---|
+| awaiter below an `export-as` function | refused, warned | 1211 |
+| lambda in a generic capturing `T`, at `bool` / `float` / `cstr` / struct | refused, warned | 1213 |
+| the same at `int` | refused, warned | 1213 |
+| the same in a constrained generic (`[(Eq T)]`) | refused, warned | 1213 |
+| rank-2 call with a float position | refused, warned | 607 (7.1 + 600) |
+| rank-2 call with a string result | refused, no warning | right answer |
+| rank-2 call with a computed int argument | 1213 | 1213 |
+| rank-2 call with a computed float argument | refused, warned | refused, warned |
+| constrained rank-2 call | refused, warned | refused, warned |
+
+- **`export-as`.** The classifier perm-routed every genuine export. A
+  may-await one is now a candidate: internal callers thread into its
+  `__cps` twin, and the exported symbol is the entry wrapper, whose linkage
+  rule mirrors the direct emitter's `needs_static` line for line (neither
+  reads `c_export_name`) and whose name and signature are the direct
+  definition's. The FFI shim calls that symbol. A C caller still enters at a
+  fresh root, as before.
+- **The rank-2 fallback.** The threaded slot was never the problem for a
+  float or a pointer: the slot call packs every argument as a word and the
+  value's twin unpacks it. The `.fn` fallback was: `.fn` holds whatever the
+  elaborator built (an int64 carrier adapter read back through
+  `(const char *)(intptr_t)`, or a typed wrapper), and casting it to the call
+  site's types trapped under `-fsanitize=function`
+  (`hrt-poly-call-cstr-result`). With atomic arguments the fallback is now
+  the direct emitter's own rendering of the call (`fncps_fallback_value`), so
+  every slot kind threads. A computed argument cannot be re-rendered, so it
+  keeps the slot cast, which matches the delegated one on int and bool only.
+- **Generic captures, three parts.** The sixth pass misread this one: the
+  generic's specialization IS on the backend; the frame in the way was the
+  lambda. (1) It is emitted once, erased, its env holding the `T` capture as
+  the int64 carrier, and `fn_sig_ok` refused a `TY_TYVAR` capture, so it had
+  no `__cps` twin and the fat dispatch missed in the registry. A lambda that
+  may await may now capture a bare `T`; its body is classified and rendered
+  with `T` read as the erased carrier word, exactly as its direct thunk reads
+  it (`g_cps_erased_base`, scoped to that function, so the template gates
+  still refuse a bare type variable elsewhere). (2) At `int` no monomorph was
+  minted at all: `expr_reaches_effect_op`, which decides whether a generic
+  needs one for an effect it reaches only through calls, did not follow a
+  function value passed as an argument. It does now (`fnvalue_arg_reaches_
+  effect_op`). (3) A constrained generic never took that route ("keep the
+  strict syntactic seed, as the `unsafe` lesson recommends"); the lesson was
+  about a `handle`, which this walk does not count, so a constrained,
+  non-instance generic takes it too. 650 typeclass / constraint / effect /
+  generic fixtures pass.
+- **Warning.** A generic base whose every call reaches a specialization (no
+  carrier call, never a value) no longer warns: the specializations are what
+  run (`generic_base_never_runs`).
+
+Found on the way, not about `await`:
+[erased-capture-aggregate-box-never-freed](erased-capture-aggregate-box-never-freed.md)
+-- the struct instantiation boxes `v` into the erased env field and the shared
+drop glue never frees it (16 B per closure, on the direct path too).
+
+Pinned by `await-below-exported-function` (was `...-refused`),
+`await-in-generic-capturing-lambda` (bool/int/float/cstr/constrained),
+`await-in-generic-capturing-lambda-struct` (`known-leak`), the float, string
+and computed-int shapes added to `await-through-rank2-param`, and
+`await-below-unthreaded-frame-refused`, now the two remaining shapes. All
+leak-checked except the refusal; fnsan clean over 208 forall / await / async /
+generic fixtures.
+
+**Still open:**
+
+- *A constrained rank-2 call* (`(f x 0)` through `f (forall [a] [(Eq a)]
+  ...)`): the dictionary argument makes the call non-atomic, so the
+  translator reports "indirect call (non-atomic args)" and the function
+  evicts. Threading it means teaching the fn_cps slot the dictionary slots
+  (`make_poly_wrapper_ex`'s `n_lead_ignore`).
+- *A rank-2 call with a computed argument and a float or pointer position*:
+  `let`-binding the argument threads it; the fix would be re-rendering the
+  call over the translator's own argument temps.
+- Any other eviction an awaiter can hit (an inline-C body, a signature shape
+  the backend does not thread) stays the run-time refusal, warned.

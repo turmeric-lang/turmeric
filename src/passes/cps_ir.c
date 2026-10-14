@@ -403,33 +403,44 @@ bool cps_ir_fncps_closure_sig_ok(const Type *lifted_ty) {
  * arg (poly_arg_mask) crosses a different, wider ABI and is excluded (it stays
  * on the delegated direct path) -- except the all-int-word unconstrained
  * forall call, whose ABI is the slot's (fncps_forall_call_ok above). */
-/* await-parks-only-to-the-nearest-c-frame: the rank-2 shape whose ABI IS
- * the slot's.  An UNCONSTRAINED forall param (no dictionary slots,
- * make_poly_wrapper's n_lead_ignore == 0) called on int / bool positions: the
- * wrapper the elaborator mints for its argument takes `(void *, int64_t...)`,
- * and its `fn_cps` twin (ensure_poly_wrap_cps_thunk) is `__poly_N__cps(void *,
- * int64_t..., DK *)`, converting each word to the inner function's own type
- * -- the word ABI the slot call spells.  For these kinds the `.fn` fallback
- * (fncps_direct_call) casts exactly as the delegated direct call does.
- * Delegated instead, the call entered the wrapper's direct root, and an await
- * below it parked there: the runtime refused the park.
+/* await-parks-only-to-the-nearest-c-frame: a call through an UNCONSTRAINED
+ * forall param (no dictionary slots, make_poly_wrapper's n_lead_ignore == 0)
+ * threads like a plain `fn` param.  The `fn_cps` slot is the word ABI: the
+ * slot call packs every argument as a word (a float by its bits), and the
+ * value's twin -- `__poly_N__cps(void *, int64_t..., DK *)`,
+ * ensure_poly_wrap_cps_thunk -- unpacks each to the inner function's own
+ * type.  Delegated instead, the call entered the value's direct root, and an
+ * await below it parked there: the runtime refused the park.
  *
- * Every other kind stays delegated.  A float crosses the slot at its own type
- * (e2a_cast), which the wrapper's int64_t parameter does not declare.  A
- * pointer (cstr, ptr<void>) RESULT is read back through the int64 carrier by
- * the direct path (`(const char *)(intptr_t)f.fn(...)`, over an int64
- * adapter), where the fallback would cast `.fn` to a pointer-returning type:
- * a -fsanitize=function trap (hrt-poly-call-cstr-result under fnsan). */
+ * The `.fn` fallback (a value built without a twin) is NOT the slot ABI:
+ * `.fn` holds whatever the elaborator built -- an int64 carrier adapter read
+ * back through `(const char *)(intptr_t)`, or a typed wrapper.  With atomic
+ * arguments the emitter renders that call through the direct emitter itself
+ * (fncps_fallback_value), exactly as the delegated call was rendered, so any
+ * slot kind threads.  With a computed argument it cannot re-render the call,
+ * and its own slot-ABI cast matches the delegated one only for int and bool
+ * positions; a float or pointer there stays delegated. */
+static bool is_atomic(const Expr *e);   /* fwd */
 static bool fncps_forall_word_kind(TypeKind k) {
     return k == TY_INT || k == TY_INT64 || k == TY_BOOL;
+}
+bool cps_ir_call_args_atomic(const Expr *call) {
+    for (uint32_t i = 0; i < call->as.call_.n_args; i++)
+        if (!is_atomic(call->as.call_.args[i])) return false;
+    return true;
 }
 static bool fncps_forall_call_ok(const Binding *fn, const Expr *e) {
     const Type *pt = fn->poly_type;
     if (pt->as.forall_.n_constraints) return false;
     if (e->as.call_.poly_arg_mask) return false;
-    if (!fncps_forall_word_kind(e->type.kind)) return false;
-    for (uint32_t i = 0; i < e->as.call_.n_args; i++)
-        if (!fncps_forall_word_kind(e->as.call_.args[i]->type.kind)) return false;
+    if (e->type.kind == TY_NIL || !fncps_result_kind_ok(e->type.kind)) return false;
+    bool atomic = cps_ir_call_args_atomic(e);
+    if (!atomic && !fncps_forall_word_kind(e->type.kind)) return false;
+    for (uint32_t i = 0; i < e->as.call_.n_args; i++) {
+        TypeKind k = e->as.call_.args[i]->type.kind;
+        if (!fncps_arg_kind_ok(k)) return false;
+        if (!atomic && !fncps_forall_word_kind(k)) return false;
+    }
     return true;
 }
 static bool fncps_param_call_ok(const Binding *fn, const Expr *e) {

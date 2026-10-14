@@ -3,16 +3,18 @@
 ;; TUR-W0044 at compile time, and the compiled program refuses the park at
 ;; run time rather than losing the rest of the body.
 ;;
-;;   gen-cap   -- a capturing lambda inside a generic: the generic and its
-;;                lambda are emitted only as their erased-carrier base, whose
-;;                type-variable parameter / capture the CPS backend refuses.
-;;   r2f-apply -- a rank-2 call with a float position: the slot carries a
-;;                float at its own type, which the rank-2 wrapper does not
-;;                declare, so the call takes the value's direct entry.
+;;   r2cf-apply -- a rank-2 call with a COMPUTED argument and a float
+;;                 position: the `.fn` fallback cannot re-render the call
+;;                 through the direct emitter, and its own cast matches the
+;;                 delegated one only on int / bool positions, so the call
+;;                 stays delegated.  `let`-binding the argument threads it.
+;;   r2e-apply  -- a constrained rank-2 call: the dictionary argument makes
+;;                 the call non-atomic, and the function evicts.
 ;;
 ;; main reaches the float shape first, and its refusal aborts the program;
-;; the generic one is spawned after it, so it is reachable from an async body
-;; (which TUR-W0044 requires) but never runs.  Both warnings are compile-time.
+;; the constrained one is spawned after it, so it is reachable from an async
+;; body (which TUR-W0044 requires) but never runs.  Both warnings are
+;; compile-time.
 
 
 (defn cur-cell [fresh : bool] : ptr<void>
@@ -58,16 +60,16 @@
     (free-future f)
     v))
 
-(defn gen-cap [T] [v : T m : int] : int
-  (* 2 (apply3 (fn [y : int] : int (let [w v] (level3 y))) (+ m 1))))
-(defn gen-body [] : int (+ 7 (gen-cap true 2)))
-
 (defn level3f [x : float] : float (+ x (as float (sum-values 0 300 0))))
-(defn r2f-apply [f (forall [a] (-> a a)) x : float] : float (f x))
-(defn float-body [] : int (as int (r2f-apply level3f 7.1)))
+(defn r2cf-apply [f (forall [a] (-> a a)) x : float] : float (f (+ x 0.5)))
+(defn float-body [] : int (as int (r2cf-apply level3f 7.1)))
+
+(defn level3e [x : int y : int] : bool (> (+ x (sum-values 0 300 0)) y))
+(defn r2e-apply [f (forall [a] [(Eq a)] (-> a a bool)) x : int] : bool (f x 0))
+(defn eq-body [] : int (if (r2e-apply level3e 5) 1213 0))
 
 (defn main [] : nil
   (cur-cell true)
   (println (drive (async float-body)))
-  (println (drive (async gen-body)))
+  (println (drive (async eq-body)))
   (free-future (cur-cell false)))
