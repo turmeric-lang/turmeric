@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.65.0` -- Awaits park through rank-2 and exported functions instead of failing at run time, generics over `:heap` parametric sums compile, and panics name your call site; returning a generic's type variable as a ground type is now a compile error.
+**Latest release:** `v0.65.1` -- The interpreter now reclaims continuations, closures and frames as a program runs instead of growing without bound, warm builds reuse the library unit's emitted C, and `stdlib/zip.tur` adds generic zippers over any homogeneous tree.
 
 ## What
 
