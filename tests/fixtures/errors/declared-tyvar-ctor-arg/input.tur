@@ -1,0 +1,9 @@
+;; declared-tyvars-are-not-rigid: an `A` into a constructor's `int` field.
+;; A constructor call takes the same argument path as a function call, and a
+;; field is a commitment the argument must meet.
+(defstruct P [x : int])
+(defn bad [A] [a : A] : P
+  (P a))
+(defn main [] : int
+  (println (.x (bad "s")))
+  0)

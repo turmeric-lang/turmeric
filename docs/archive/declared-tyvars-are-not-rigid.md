@@ -1,11 +1,20 @@
 # A generic's declared type variables are not rigid: `(defn bad [A B] [a : A] : B a)` type-checks
 
-**Severity: high (unsound) -- fixed at the return and `let` positions
-2026-10-14, both halves; three more positions stay open, see "What is fixed"
-and "Still open" below.** `tur
-check` accepted a generic whose body does not have its declared result type,
-as long as both sides ride the int64 carrier. A caller then trusts the
-signature, and the program segfaults, on both back ends.
+**RESOLVED 2026-10-14**, at every position the report names: the defn
+return, a `let` annotation, a monomorphic callee's argument, a constructor
+argument, and an `if` join. One predicate, `rigid_tyvar_conflict`
+(`src/compiler/elab_core.c`), asked at each site; `#{Unsafe}` keeps the
+carrier bridge. Pinned by eight `errors/` fixtures,
+`tests/fixtures/errors/declared-tyvar-*`, and by
+`tests/fixtures/declared-tyvar-rigid-accepts` for what must keep passing.
+Two pre-existing typing defects the check exposed are fixed with it (a
+multi-parameter class's method result, and a generic's self-call; both
+below). The check is flow-insensitive; see the note under "Root cause".
+
+**Severity: high (unsound).** `tur check` accepted a generic whose body does
+not have its declared result type, as long as both sides ride the int64
+carrier. A caller then trusts the signature, and the program segfaults, on
+both back ends.
 
 **Discovered:** 2026-10-14, writing the fixture for
 [heap-sum-generic-never-specialized](../archive/heap-sum-generic-never-specialized.md),
@@ -153,10 +162,9 @@ for what must keep passing, `tests/fixtures/declared-tyvar-rigid-accepts`
 `(some a)` bodies, a swapped pair put back in order, a leftover callee letter
 with and without a collision, the `#{Unsafe}` bridge).
 
-## Still open
+## The three remaining positions (fixed 2026-10-14, same day)
 
-The same wildcard treatment at three more positions. Each passes `tur check`
-today:
+The same wildcard treatment at three more positions. Each passed `tur check`:
 
 | Body | Where |
 | --- | --- |
@@ -164,10 +172,29 @@ today:
 | `(defstruct P [x : int])` `(defn bad [A] [a : A] : P (P a))` | constructor argument against an `int` field. |
 | `(defn bad [A B] [a : A b : B c : bool] : A (if c a b))` | `if` join: the result is typed `A` and the `B` arm is accepted. |
 
-Fix direction: call `rigid_tyvar_conflict` from each site's existing
-mismatch check, as the `let` site does. The monomorphic-callee argument check
-is the one most likely to meet stdlib code that passes an `A` into an `:int`
-carrier parameter on purpose; measure with the suite before widening.
+All three now ask `rigid_tyvar_conflict` with the enclosing signature's
+variables (`e->sig_tyvars`), the carrier bridge allowed inside `#{Unsafe}`
+(`e->unsafe_depth`):
+
+- **Call argument** (`elab_call.c`, after every argument tolerance, before
+  the mismatch diagnostic): a parameter is a commitment when it is a defn's
+  typed parameter (not a carrier-default untyped one) or a constructor's
+  field; a parameter that mentions the callee's own variable is an
+  instantiation and is left to the binding machinery. A constructor call
+  takes this path, so the constructor-argument position came with it. The
+  stdlib passed no `A` into an `:int` carrier parameter anywhere.
+- **`if` join** (`elab_forms.c`): the existing branch-mismatch diagnostic,
+  which already printed both types.
+
+What the `if` check exposed, and what is fixed with it: a generic's
+**self-call** was typed `int`. `elab_defn` forwards the declared return to
+the function's own binding before elaborating the body (RR1), but excluded
+`return_kind == TY_TYVAR` as "inferred", which also excluded a written
+`: B`; so `list-foldl`'s `(if (list-empty? xs) init (list-foldl ...))` was
+`then=B else=int` (16 fixtures), and `(defn go [A] ... : A (go ...))` returned
+the carrier under `A`. A written type variable is forwarded now; the
+self-call types as `A`, and a recursive generic runs correctly at float and
+string (`go5` in the accepts fixture).
 
 ## Fix directions (as filed; direction 2 and 3 are done for two positions)
 

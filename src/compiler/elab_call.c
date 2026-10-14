@@ -9423,6 +9423,34 @@ static Expr *elab_call_fn_inner(Elab *e, const Form *call, Binding *fn_binding) 
                 }
             }
         }
+        /* declared-tyvars-are-not-rigid: every tolerance above lets an
+         * argument typed by the ENCLOSING signature's variable into a ground
+         * parameter -- `(f a)` with `a : A` and `f [x : int]`, `(P a)` into an
+         * `int` field -- because a variable is "unpinned" to all of them.  A
+         * callee's own variable is an instantiation and is left to the binding
+         * machinery; a ground parameter of a defn (not a carrier-default
+         * untyped one) or of a constructor field is a commitment the argument
+         * must meet.  Inside `#{Unsafe}` the carrier bridge stays. */
+        if (arg_ok && fn_binding && fn_type.kind == TY_FN && e->n_sig_tyvars > 0 &&
+            !(lang_span_is_dynamic(call->span) || e->toplevel_dynamic)) {
+            uint32_t fi_r = fn_binding->closure_fn_binding ? i + 1 : i;
+            const Type *want_r =
+                (fn_type.as.fn.arg_full_types && fi_r < fn_type.as.fn.arity)
+                    ? fn_type.as.fn.arg_full_types[fi_r] : NULL;
+            Type want_t = want_r ? *want_r : type_from_kind(expected_arg_kind);
+            bool committed = false;
+            if (fn_binding->source_fn_def && fn_binding->source_fn_def->params &&
+                fi_r < fn_binding->source_fn_def->n_params &&
+                fn_binding->source_fn_def->params[fi_r])
+                committed = !fn_binding->source_fn_def->params[fi_r]->type_is_carrier_default;
+            else if (!fn_binding->source_fn_def && fn_binding->name &&
+                     elab_lookup_ctor(e, fn_binding->name))
+                committed = true;
+            if (committed && !call_type_has_named_tyvar(&want_t) &&
+                rigid_tyvar_conflict(e->sig_tyvars, e->n_sig_tyvars, want_t,
+                                     args[i]->type, e->unsafe_depth > 0))
+                arg_ok = false;
+        }
         if (!arg_ok) {
             /* Phase 8: Enhanced type mismatch with error code */
             /* IT1: Use union-specific error code when union type is involved */

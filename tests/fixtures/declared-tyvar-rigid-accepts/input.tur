@@ -15,6 +15,17 @@
   ```c
   return h;
   ```)
+;; A generic callee's own variable is an instantiation, whatever its letter;
+;; a diverging arm and a `(none)` arm join with anything; a parametric
+;; constructor's field is the variable itself; and a SELF-CALL is typed by the
+;; written `: A`, not the pass-1 int carrier it used to read.
+(defn id2 [T] [x : T] : T x)
+(defn relay3 [A] [a : A] : A (id2 a))
+(defn pick [A] [a : A c : bool] : A (if c a (panic "no")))
+(defn opt2 [A] [a : A c : bool] : (Option A) (if c (some a) (none)))
+(defdata Bx :copy [X] (Mk X))
+(defn boxed [A] [a : A] : (Bx A) (Mk a))
+(defn go5 [A] [n : int a : A] : A (if (= n 0) a (go5 (- n 1) a)))
 (defn relay [X] [x : X] : X (id x))
 (defn relay2 [X Y] [x : X y : Y] : Y (id y))
 (defn boom [A] [a : A] : A (panic "no"))
@@ -31,4 +42,10 @@
   (println (vec-len (:: (mk) (Vec int))))
   (println (vec-len (:: (mk2 1) (Vec cstr))))
   (println (:: (unsafe (handle-as 42)) :int))
+  (println (relay3 3))
+  (println (pick 7.1 true))
+  (println (unwrap-or (opt2 4 true) 0))
+  (match (boxed 5) (Mk v) (println v))
+  (println (go5 3 7.1))
+  (println (go5 2 "s"))
   0)

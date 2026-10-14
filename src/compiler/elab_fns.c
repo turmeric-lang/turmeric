@@ -10949,9 +10949,15 @@ Expr *elab_defn(Elab *e, const Form *call) {
          * result_kind / result_full_type assigned to the final fn_type below.
          *
          * Only the *annotated* return is forwarded here.  An inferred return
-         * (return_kind still TY_NIL / TY_TYVAR, resolved from body->type after
+         * (return_kind still TY_NIL, resolved from body->type after
          * elaboration) is the genuinely mutually-dependent case and is left to
-         * the post-body fn_type construction. */
+         * the post-body fn_type construction.
+         *
+         * declared-tyvars-are-not-rigid: a WRITTEN `: B` (return_tyvar_type)
+         * is annotated too.  It used to be left out with the inferred case, so
+         * a generic's self-call read the pass-1 carrier `TY_INT`: `list-foldl`'s
+         * `(if (list-empty? xs) init (list-foldl ...))` was `then=B else=int`,
+         * and `(defn go [A] ... : A (go ...))` returned `int` under `A`. */
         /* saffron-lang-plan S4: forward an UNANNOTATED Saffron return as `any`.
          *
          * RR1 below leaves an inferred return to the post-body construction,
@@ -10973,7 +10979,8 @@ Expr *elab_defn(Elab *e, const Form *call) {
         if (return_kind == TY_NIL && !return_annotated &&
             lang_span_is_dynamic(call->span)) {
             existing->type.as.fn.result_kind = TY_ANY;
-        } else if (return_kind != TY_NIL && return_kind != TY_TYVAR) {
+        } else if (return_kind != TY_NIL &&
+                   (return_kind != TY_TYVAR || return_tyvar_type)) {
             existing->type.as.fn.result_kind = return_kind;
             Type *rft = NULL;
             if (return_adt_def) {

@@ -1,0 +1,9 @@
+;; declared-tyvars-are-not-rigid: an `A` handed to a monomorphic callee's
+;; `int` parameter.  Every argument tolerance read a variable as a wildcard,
+;; so `f` received a string's address as its int.
+(defn f [x : int] : int x)
+(defn bad [A] [a : A] : int
+  (f a))
+(defn main [] : int
+  (println (bad "s"))
+  0)
