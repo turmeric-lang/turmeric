@@ -9619,8 +9619,17 @@ resolved_user_fallback:;
      * return-dispatch-tyvar above).  Without this a `let` binding took the
      * representative's `int`: `(let [y (n x x)] y)` stored the float instance's
      * double into an int64_t, and `(n y x)` then dispatched on a concrete int.
-     * The base clone is unchanged -- `A` lowers to the same int64 carrier. */
-    if (obj->type.kind == TY_TYVAR && e->definstance_depth == 0 &&
+     * The base clone is unchanged -- `A` lowers to the same int64 carrier.
+     *
+     * declared-tyvars-are-not-rigid: an INSTANCE body is the same situation
+     * when the instance is parametric and dispatches on its own variable --
+     * `(sg-combine (unwrap x) (unwrap y))` inside `Sg [(Option A)] [(Sg A)]`
+     * is an `A`, not the representative's `int`; typed `int` it made
+     * `(some ...)` an `(Option int)` beside the `x : (Option A)` arm
+     * (class-superclass-parametric-instance).  So no `definstance_depth`
+     * gate: a bare-variable receiver inside an instance body is the
+     * instance's own abstract variable. */
+    if (obj->type.kind == TY_TYVAR &&
         best_inst && best_inst->typeclass &&
         best_inst->typeclass->n_type_params >= 1 &&
         best_inst->typeclass->type_params[0]) {

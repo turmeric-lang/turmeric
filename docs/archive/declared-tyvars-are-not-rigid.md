@@ -7,9 +7,9 @@ argument, and an `if` join. One predicate, `rigid_tyvar_conflict`
 carrier bridge. Pinned by eight `errors/` fixtures,
 `tests/fixtures/errors/declared-tyvar-*`, and by
 `tests/fixtures/declared-tyvar-rigid-accepts` for what must keep passing.
-Two pre-existing typing defects the check exposed are fixed with it (a
-multi-parameter class's method result, and a generic's self-call; both
-below). The check is flow-insensitive; see the note under "Root cause".
+Three pre-existing typing defects the check exposed are fixed with it (a
+multi-parameter class's method result, a generic's self-call, and a
+parametric instance body's dispatch on its own variable; all below). The check is flow-insensitive; see the note under "Root cause".
 
 **Severity: high (unsound).** `tur check` accepted a generic whose body does
 not have its declared result type, as long as both sides ride the int64
@@ -195,6 +195,14 @@ the function's own binding before elaborating the body (RR1), but excluded
 the carrier under `A`. A written type variable is forwarded now; the
 self-call types as `A`, and a recursive generic runs correctly at float and
 string (`go5` in the accepts fixture).
+
+And the third: inside a PARAMETRIC instance body, a dispatch on the
+instance's own variable took the representative instance's type.
+`(sg-combine (unwrap x) (unwrap y))` inside `Sg [(Option A)] [(Sg A)]`
+was `int`, so `(some ...)` was an `(Option int)` beside the `x : (Option A)`
+arm (`class-superclass-parametric-instance`). The class-variable rule in
+`elab_method_call` that types such a call as the receiver's `A` was gated on
+`definstance_depth == 0`, with no argument for the gate; it is gone.
 
 ## Fix directions (as filed; direction 2 and 3 are done for two positions)
 
