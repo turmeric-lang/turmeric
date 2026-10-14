@@ -2,6 +2,33 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.64.5] -- 2026-10-14
+
+### Fixed
+
+- **Wide by-value aggregate parameters on performing functions compile.** A
+  function that `perform`s and takes a by-value aggregate over 16 bytes -- a
+  `(Rect :int :int)`, a record ADT, a three-field defstruct -- no longer fails
+  with "no lowering here" and evicting every function sharing the effect; the
+  interpreter already ran it.
+- **A generic that performs a handled effect compiles.** A function with a type
+  parameter that `perform`s an effect its caller handles was refused at every
+  instantiation, `int` included; it now compiles and runs on both engines.
+- **`tur build --shared` links imported ADT constructors.** A module that
+  constructs a value of an ADT another module defines no longer fails at the C
+  compiler with an implicit-`int` error; the importer now emits the constructors
+  it uses into its own unit.
+
+### Docs
+
+- **Docstring code spans render as code.** Backtick spans in summaries,
+  parameter descriptions, Returns, Deprecated and Since lines now render as
+  `<code>` on the API pages instead of showing their backticks; example blocks
+  are unchanged.
+- **Try Turmeric's docs pane lists guides only.** The Recently Added and
+  Recently Updated sections no longer mix in API modules and spice pages; API
+  modules stay in their own tree.
+
 ## [0.64.4] -- 2026-10-13
 
 ### Added

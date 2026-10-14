@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.64.4` -- A helper's `resume` now actually runs the handler continuation instead of returning the value, and `cont<T>` / `effect-cont<T>` annotations type honestly instead of becoming silent type variables.
+**Latest release:** `v0.64.5` -- Wide by-value aggregate parameters and generics that perform handled effects now compile instead of being refused, and `tur build --shared` links ADT constructors defined in another module.
 
 ## What
 
