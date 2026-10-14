@@ -4510,6 +4510,8 @@ static bool stdlib_autoloaded(const char *name) {
  * global).  `(turmeric a/b/c)` is the module `a/b/c` with a leading `stdlib/`
  * dropped (the module loader's stdlib fallback finds it); any other name
  * `(my utils)` joins with `/`. */
+bool g_scheme_lower_opened_seam = false;
+
 static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
     *ok = true;
     if (set->tag != F_LIST || set->as.list.len == 0 || set->as.list.items[0]->tag != F_SYM) {
@@ -4548,6 +4550,8 @@ static const Symbol *library_module(SL *sl, Form *set, bool *ok) {
         }
         return NULL;
     }
+    /* Past here the library is a Turmeric module or the program's own. */
+    g_scheme_lower_opened_seam = true;
     if (strcmp(head, "turmeric") == 0) {
         if (set->as.list.len != 2 || set->as.list.items[1]->tag != F_SYM) {
             err(set, "(turmeric <module>) takes one module path, e.g. (turmeric stdlib/vec) or (turmeric json/encode)");

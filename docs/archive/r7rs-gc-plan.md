@@ -7,7 +7,7 @@ defaults true; `--enable=r7rs-gc` is a no-op on the GRADUATED list).
 it, which is what a program that starts threads does. Answered
 [r7rs-heap-data-never-reclaimed](r7rs-heap-data-never-reclaimed.md)
 for the compiled back end, the compiled half of
-[r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)
+[r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md)
 (its interpreter half stays open), and, on the compiled back end,
 [r7rs-caught-raise-leaks-runtime-records](r7rs-caught-raise-leaks-runtime-records.md)
 and [r7rs-remaining-scratch-leaks](r7rs-remaining-scratch-leaks.md)

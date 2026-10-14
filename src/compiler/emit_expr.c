@@ -820,7 +820,7 @@ static const char *emit_binding_repr_c_name(EmitCtx *ctx, Type binding_ty,
         if (!returns_concrete && !call_returns_byvalue_aggregate(ctx, p))
             return "int64_t";
     } else if (p->kind == EX_VAR) {
-        if (!(p->as.var.binding && p->as.var.binding->emit_byvalue_carrier_abi))
+        if (!(p->as.var.binding && emit_note(p->as.var.binding)->emit_byvalue_carrier_abi))
             return "int64_t";
     } else if (p->kind == EX_IF || p->kind == EX_LET || p->kind == EX_LETREC ||
                p->kind == EX_DO) {
@@ -1134,7 +1134,7 @@ static bool expr_emits_byvalue_carrier_abi(EmitCtx *ctx, const Expr *e) {
         return !type_is_heap_struct(ft) && type_has_concrete_codegen_layout(&ft);
     }
     if (e->kind == EX_VAR)
-        return e->as.var.binding && e->as.var.binding->emit_byvalue_carrier_abi;
+        return e->as.var.binding && emit_note(e->as.var.binding)->emit_byvalue_carrier_abi;
     return false;
 }
 
@@ -3841,7 +3841,7 @@ char *emit_let_binding_decl(EmitCtx *ctx, Buf *body, const Expr *e, uint32_t i,
         /* KB-021: record whether this binding ended up by-value so that a
          * later dictionary-dispatch use of the var bridges it to the carrier. */
         if (e->as.let_.bindings[i].binding)
-            e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
+            emit_note(e->as.let_.bindings[i].binding)->emit_byvalue_carrier_abi =
                 type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
                 strcmp(bind_c, "int64_t") != 0;
         /* CC1 (curried-call-cast-rough-edges-plan): when the binding is
@@ -5327,7 +5327,7 @@ static char *emit_letrec_value(EmitCtx *ctx, Buf *body, const Expr *e) {
                 repr_shadow_check(ctx, "binding", REPR_POS_LET_BIND, b->type,
                                   bind_c);
             if (e->as.let_.bindings[i].binding)
-                e->as.let_.bindings[i].binding->emit_byvalue_carrier_abi =
+                emit_note(e->as.let_.bindings[i].binding)->emit_byvalue_carrier_abi =
                     type_uses_carrier_abi(emit_resolve_type(ctx, b->type)) &&
                     strcmp(bind_c, "int64_t") != 0;
             /* CC1 (curried-call-cast-rough-edges-plan): when the binding is
@@ -6321,7 +6321,7 @@ static bool expr_is_erased_carrier_param(EmitCtx *ctx, const Expr *e) {
     while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
     if (!e || e->kind != EX_VAR) return false;
     Binding *b = e->as.var.binding;
-    if (!b || !b->is_param || !b->emit_carrier_holds_byval) return false;
+    if (!b || !b->is_param || !emit_note(b)->emit_carrier_holds_byval) return false;
     Type spec_t;
     if (ctx && emit_spec_arg_type_for_binding(ctx, b, &spec_t) &&
         type_is_byvalue_adt_product(emit_resolve_type(ctx, spec_t)))
@@ -11257,7 +11257,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         bool holds_agg = true;
                         if (av && av->kind == EX_VAR && av->as.var.binding) {
                             const Binding *ab = av->as.var.binding;
-                            if (ab->emit_carrier_holds_byval) holds_agg = false;
+                            if (emit_note(ab)->emit_carrier_holds_byval) holds_agg = false;
                             char *an = name_for_binding(ctx, ab);
                             const char *rec = an ? emit_localvar_lookup_ctype(an) : NULL;
                             if (rec) holds_agg = agg_cn && strcmp(rec, agg_cn) == 0;
@@ -14775,7 +14775,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                 bool emit_arg_holds_carrier_byval = false;
                 if (emit_arg && emit_arg->kind == EX_VAR &&
                     emit_arg->as.var.binding &&
-                    emit_arg->as.var.binding->emit_carrier_holds_byval) {
+                    emit_note(emit_arg->as.var.binding)->emit_carrier_holds_byval) {
                     Type vspec;
                     bool passed_byval = emit_var_spec_arg_type(ctx, emit_arg, &vspec) &&
                         vspec.kind == TY_APP && type_app_is_concrete_adt(&vspec) &&
@@ -15734,7 +15734,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                          * exactly that, so consult it as a second signal. */
                         bool arg_slot_is_carrier =
                             emit_arg->kind == EX_VAR && emit_arg->as.var.binding &&
-                            emit_arg->as.var.binding->emit_carrier_holds_ptr;
+                            emit_note(emit_arg->as.var.binding)->emit_carrier_holds_ptr;
                         /* generic-category-base-passes-carrier-to-arrow-
                          * instance: a `void *` formal is the same straddle.  A
                          * generic's unspecialized base holds `f : A` as the
@@ -16527,7 +16527,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * the carrier through intptr_t so the capture is not a
                  * -Wint-conversion (pointer->intptr_t->pointer is a no-op for the
                  * non-carrier case, so this only bites carrier-held params). */
-                if (captured->emit_carrier_holds_ptr && !captured_is_pbp) {
+                if (emit_note(captured)->emit_carrier_holds_ptr && !captured_is_pbp) {
                     const char *fcty = emit_type_c_name(ctx, captured->type);
                     buf_printf(out, "%s->%s = (%s)(intptr_t)%s;\n",
                                lhs, field, fcty, cn);
@@ -18152,7 +18152,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     while (rv && rv->kind == EX_ASCRIBE) rv = rv->as.ascribe_.inner;
                     if (rv && rv->kind == EX_VAR && rv->as.var.binding)
                         recv_held_as_carrier =
-                            rv->as.var.binding->emit_carrier_holds_byval;
+                            emit_note(rv->as.var.binding)->emit_carrier_holds_byval;
                 }
                 /* applied-unary-instance-head: emit_carrier_holds_byval is set on
                  * the param binding while emitting the CARRIER BASE (`x` is the
@@ -20487,7 +20487,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         cname, var_name, cname, packed_val);
                 }
                 if (e->as.exists_open_.var_binding)
-                    e->as.exists_open_.var_binding->emit_byvalue_carrier_abi = true;
+                    emit_note(e->as.exists_open_.var_binding)->emit_byvalue_carrier_abi = true;
             } else if (packed_is_byval_aggregate) {
                 const char *cname = type_struct_value_c_name(open_bind_ty);
                 buf_printf(body, "%s %s = *(%s *)(%s);\n",
@@ -20497,7 +20497,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * access instead of the `((T *)(intptr_t)sv)->field` carrier
                  * cast (the same flag the let-binding path sets). */
                 if (e->as.exists_open_.var_binding)
-                    e->as.exists_open_.var_binding->emit_byvalue_carrier_abi = true;
+                    emit_note(e->as.exists_open_.var_binding)->emit_byvalue_carrier_abi = true;
             } else if (packed_is_linear_record) {
                 if (vk_is_ptr) {
                     buf_printf(body,

@@ -1,0 +1,93 @@
+#lang r7rs
+;; r7rs-eval-continuation-reentry-across-bridge: a continuation the program
+;; captures inside a call from evaluated code to a program procedure holds
+;; the evaluator's frames, and can be re-entered after that call has
+;; returned -- the evaluator keeps what its frames need (src/turi/r7rs_embed.c,
+;; turi_r7rs_embed_cont_*; a compiled program's call/cc reaches it through
+;; the prelude's hooks).  Both back ends print the same.
+(import (scheme base) (scheme write) (scheme eval) (scheme repl))
+
+(define env (environment '(scheme base)))
+(define saved #f)
+(define count 0)
+
+;; 1. Re-entered after the call returned, three times.
+(define (reenter)
+  (set! saved #f)
+  (set! count 0)
+  (let ((r ((eval '(lambda (f) (+ 1 (f 41))) env)
+            (lambda (x) (call/cc (lambda (k) (set! saved k) x))))))
+    (write (list 'result r)) (newline)
+    (set! count (+ count 1))
+    (if (< count 3) (saved (* count 100)))
+    (write (eval '(+ 1 2) env)) (newline)))
+(reenter)
+
+;; 2. Re-entered while the call still runs: a loop written with call/cc
+;;    inside the program procedure.
+(define (loop-inside)
+  (write ((eval '(lambda (g) (list 'got (g 1))) env)
+          (lambda (x)
+            (let ((n 0) (k #f))
+              (call/cc (lambda (c) (set! k c)))
+              (set! n (+ n 1))
+              (if (< n 5) (k #f))
+              (* n 10)))))
+  (newline))
+(loop-inside)
+
+;; 3. The evaluator's dynamic environment comes back with the re-entry: its
+;;    wind's `before` runs again, its parameter binding and its handler are
+;;    in place, and the program's own handler catches what evaluated code
+;;    raises afterwards.
+(define (dynamic)
+  (set! saved #f)
+  (set! count 0)
+  (let* ((wrapped (eval '(lambda (f)
+                           (let ((p (make-parameter 'outer)))
+                             (parameterize ((p 'inner))
+                               (dynamic-wind
+                                 (lambda () (display "[in]"))
+                                 (lambda () (list (p) (guard (e ((symbol? e) (list 'eval-caught e)))
+                                                        (f 41))))
+                                 (lambda () (display "[out]"))))))
+                        env))
+         (r (wrapped (lambda (x)
+                       (let ((v (call/cc (lambda (k) (set! saved k) x))))
+                         (if (eq? v 'boom) (raise v) v))))))
+    (write (list 'result r)) (newline)
+    (set! count (+ count 1))
+    (cond ((= count 1) (saved 100))
+          ((= count 2) (saved 'boom)))
+    (write (guard (e (#t (list 'program-caught e)))
+             ((eval '(lambda (g) (g)) env) (lambda () (raise 'late)))))
+    (newline)))
+(dynamic)
+
+;; 4. Escaping out of evaluated code through a continuation captured
+;;    outside it still works, and so does the next eval.
+(define (escape)
+  (write (call/cc (lambda (k)
+                    ((eval '(lambda (f) (+ 1 (f 41))) env) (lambda (x) (k (list 'escaped x)))))))
+  (newline)
+  (write ((eval '(lambda (g) (g 2)) env) (lambda (x) (* x 10)))) (newline))
+(escape)
+
+;; 5. Captured inside a host call made from a text being evaluated: resumed
+;;    while that evaluation runs, the rest of the text runs again; after it
+;;    has returned, the invocation is an error object the program can guard.
+(define (from-text)
+  (set! saved #f)
+  (set! count 0)
+  (let ((ienv (interaction-environment)))
+    (eval '(define hold-f #f) ienv)
+    (eval '(define hold-g #f) ienv)
+    ((eval '(lambda (a b) (set! hold-f a) (set! hold-g b)) ienv)
+     (lambda (x) (call/cc (lambda (k) (if (not saved) (set! saved k)) x)))
+     (lambda (x) (if (and saved (< count 2)) (begin (set! count (+ count 1)) (saved (* 10 x))) x)))
+    (write (eval '(list (hold-f 1) (hold-g 2)) ienv)) (newline)
+    (write (guard (e ((error-object? e) (list 'refused (error-object-message e))))
+             (saved 5)))
+    (newline)
+    (write (eval '(+ 1 2) ienv)) (newline)))
+(from-text)

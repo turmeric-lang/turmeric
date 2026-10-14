@@ -106,7 +106,7 @@ differences kept on purpose (T7), none fail.
 
 What graduation does **not** claim is that nothing is open. Four `#lang r7rs`
 reports are, and none of them is a wrong answer:
-[r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)
+[r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md)
 (the interpreter retains a re-entrant continuation's stack image for the life
 of the process -- deliberate for its closures elsewhere too),
 [r7rs-conformance-program-emits-megabytes-of-c](r7rs-conformance-program-emits-megabytes-of-c.md)
@@ -2522,7 +2522,7 @@ re-entered continuation).**
 >     bridge, so they copy nothing.
 >   - The public `call/cc` copies the stack on every call: O(stack depth),
 >     and never freed. Filed as
->     [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md).
+>     [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md).
 >   - `r7rs-call/cc` calls the escape fallback through a procedure value,
 >     since a direct call would make it a CPS function.
 > - ~~**Top level is not delimited.**~~ A continuation was the rest of the
@@ -2722,7 +2722,7 @@ task.*
       was found; audit the rest of the emitted runtime and eval.c;
     - the saved runtime-state lists, compiled and interpreted, against every
       global that tracks the stack;
-    - growth: [r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md).
+    - growth: [r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md).
   - **`eval` (T4):**
     - the bridge's `strdup`s and result texts;
     - the host-frame and pending-argument buffers;
@@ -2953,7 +2953,7 @@ differences, as reports"):
   `--no-r7rs-gc` for a program that starts threads). The interpreter keeps
   its values for the life of the process by design; the `call/cc` images'
   interpreter half stays open
-  ([r7rs-callcc-memory-never-freed](../reported/r7rs-callcc-memory-never-freed.md)).
+  ([r7rs-callcc-memory-never-freed](r7rs-callcc-memory-never-freed.md)).
 - ~~**`command-line` starts with `"tur"`**, not the program's own path~~
   -- resolved 2026-09-25 through a pre-declared `*argv0*` global
   ([archived](r7rs-command-line-first-element-is-tur.md)).

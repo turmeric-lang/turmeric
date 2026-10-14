@@ -28,6 +28,7 @@ typedef struct TuriThrow      TuriThrow;       /* defined in eval.c */
 typedef struct TuriFuture     TuriFuture;      /* defined in turi/fiber.h */
 typedef struct TuriEnv        TuriEnv;         /* from env.h */
 struct Form;                                   /* compiler/forms.h -- syntax object payload */
+struct Arena;                                  /* runtime/arena.h -- the value pools */
 
 /* Tagged value type for the eval runtime. */
 typedef enum TuriTag {
@@ -152,6 +153,52 @@ void *turi_val_perm_alloc(TuriEnv *env, size_t n);
 void *turi_val_perm_alloc_aligned(TuriEnv *env, size_t n, size_t align);
 void *turi_val_perm_calloc(TuriEnv *env, size_t n);
 char *turi_val_perm_strdup(TuriEnv *env, const char *s);
+
+/* r7rs-callcc-memory-never-freed: the value pool's object map.  Once enabled,
+ * every turi_val_* allocation records where it starts, so a conservative scan
+ * (the interpreter's continuation-image sweep, eval.c) can take any word that
+ * points into the pool to the object holding it, and mark it.  `complete`
+ * says the map was on before the env evaluated anything, so no object it
+ * cannot place exists.
+ *
+ * A mark pass: turi_val_mark_begin snapshots the pool's used ranges and
+ * clears the marks (false when the map is off or incomplete), and
+ * turi_val_mark_end drops the snapshot.
+ * turi_val_starts_forget clears the starts in arena `a` before it is
+ * rewound (a scratch promotion). */
+void turi_val_starts_enable(TuriEnv *env, bool complete);
+bool turi_val_starts_complete(const TuriEnv *env);
+void turi_val_starts_forget(TuriEnv *env, struct Arena *a);
+void turi_val_starts_free(TuriEnv *env);
+/* The interpreter's free-listed kinds -- frames, bindings, closures and
+ * structs -- which a sweep must tell apart: one at an address a stale word
+ * names may since have been handed out again (eval.c, frame_release), and
+ * the pool sweep hands back each one nothing reached
+ * (turi-dropped-closures-kept-until-teardown).  Noted once, at allocation. */
+enum { TURI_VAL_PLAIN = 0, TURI_VAL_FRAME = 1, TURI_VAL_BINDING = 2, TURI_VAL_CLOSURE = 3,
+       TURI_VAL_STRUCT = 4 };
+void turi_val_note_kind(TuriEnv *env, const void *p, int kind);   /* 0: no longer one */
+/* Raise env->pool_sweep_due once `bytes` more have been allocated from the
+ * scratch pool (0: never), and lower it now.  The interpreter sweeps at its
+ * next safe point and sets the next budget. */
+void turi_val_sweep_budget(TuriEnv *env, size_t bytes);
+/* Call fn on every noted (non-plain) object of the last mark pass's snapshot
+ * that the pass did not mark, with its kind; between turi_val_mark_begin and
+ * turi_val_mark_end.  Returns how many. */
+size_t turi_val_each_unmarked(TuriEnv *env, void (*fn)(void *obj, int kind, void *ud),
+                              void *ud);
+bool turi_val_mark_begin(TuriEnv *env);
+/* The object `w` points into: its kind (TURI_VAL_*), and its extent
+ * [*start, *end); -1 for a word outside the pool's allocated objects. */
+int  turi_val_object_of(TuriEnv *env, uintptr_t w, uintptr_t *start, uintptr_t *end);
+/* Mark the object starting at `start`; true the first time. */
+bool turi_val_mark(TuriEnv *env, uintptr_t start);
+/* Whether the pass marked the object starting at `start` (true for an
+ * address the map does not know as a start). */
+bool turi_val_marked(TuriEnv *env, uintptr_t start);
+/* False when the pass could not record everything (out of memory): its
+ * marks are incomplete and nothing may be freed on them. */
+bool turi_val_mark_end(TuriEnv *env);
 
 /* Env-less fallback pool for the error/rejection constructors below, whose
  * signatures carry no env.  Backed by a process-global arena that turi_env_free

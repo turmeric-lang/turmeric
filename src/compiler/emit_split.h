@@ -108,6 +108,10 @@ void emit_split_exports_clear(void);
 /* How many names are recorded: what the imported-library unit adds to the
  * library unit's is a measure of how much it defines. */
 size_t emit_split_exports_count(void);
+/* The recorded names in byte order, borrowed (free the array, not the
+ * names), for the cached library unit's carried state (emit_split_carry_save
+ * in emit_module.c). */
+char **emit_split_exports_sorted(size_t *n);
 
 /* Copy `src[0..len)` to `out` with every identifier recorded by
  * emit_split_note_export (or the LIB-mode transform) given EMIT_SPLIT_PREFIX.

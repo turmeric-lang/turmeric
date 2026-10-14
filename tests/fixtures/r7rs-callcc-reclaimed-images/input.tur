@@ -1,0 +1,157 @@
+#lang r7rs
+;; r7rs-callcc-memory-never-freed: under --interpret a sweep frees the image of
+;; a re-entrant continuation once nothing reachable holds its handle.  Each
+;; case below stores one continuation in a different kind of place, makes
+;; CHURN more captures whose continuations are dropped at once -- enough that
+;; sweeps run in between -- and then re-enters the stored one.  A place the
+;; sweep failed to read would free an image still reachable, and the re-entry
+;; would stop the program with r7rs-cont-restore__'s error.  Both back ends
+;; print the same.  tests/check-turi-callcc-reclaim.py runs this program
+;; again with a sweep at every capture.
+(import (scheme base) (scheme write) (scheme lazy) (srfi 69))
+
+(define (show x) (write x) (newline))
+
+;; CHURN captures whose continuations are dropped at once: enough of them
+;; that the interpreter's sweep runs between a store and its re-entry.
+(define junk #f)
+(define (churn n)
+  (let loop ((i 0) (acc 0))
+    (if (= i n) acc
+        (loop (+ i 1) (+ acc (call/cc (lambda (k) (set! junk k) 1)))))))
+(define CHURN 600)
+
+;; 1. Only a vector holds it.
+(define (in-vector)
+  (let ((v (make-vector 3 #f)) (n 0))
+    (let ((r (call/cc (lambda (k) (vector-set! v 1 k) 'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) ((vector-ref v 1) 'second) (list 'vector r n)))))
+(show (in-vector))
+
+;; 2. Only a list, deep in a nest of pairs, holds it.
+(define (in-list)
+  (let ((box (list 'a (list 'b (cons 'c #f)))) (n 0))
+    (let ((r (call/cc (lambda (k) (set-cdr! (cadr (cadr box)) k) 'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) ((cdr (cadr (cadr box))) 'second) (list 'list r n)))))
+(show (in-list))
+
+;; 3. Only a record's mutable field holds it.
+(define-record-type cell (make-cell v) cell? (v cell-v set-cell-v!))
+(define (in-record)
+  (let ((c (make-cell #f)) (n 0))
+    (let ((r (call/cc (lambda (k) (set-cell-v! c k) 'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) ((cell-v c) 'second) (list 'record r n)))))
+(show (in-record))
+
+;; 4. Only a closure's environment holds it.
+(define (in-closure)
+  (let ((n 0) (thunk #f))
+    (let ((r (call/cc (lambda (k) (set! thunk (lambda () (k 'second))) 'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) (thunk) (list 'closure r n)))))
+(show (in-closure))
+
+;; 5. Only a promise holds it, through the closure it delays.
+(define (in-promise)
+  (let ((n 0) (p #f))
+    (let ((r (call/cc (lambda (k) (set! p (delay (k 'second))) 'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) (force p) (list 'promise r n)))))
+(show (in-promise))
+
+;; 6. Only a parameter object holds it.
+(define (in-parameter)
+  (let ((n 0) (prm #f))
+    (let ((r (call/cc (lambda (k) (set! prm (make-parameter k)) 'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) ((prm) 'second) (list 'parameter r n)))))
+(show (in-parameter))
+
+;; 7. Only the argument list of a call still being evaluated holds it: the
+;;    continuation is the first argument's value, and the second argument
+;;    makes the captures.
+(define (in-pending-call)
+  (let ((n 0))
+    (define (f a b)
+      (set! n (+ n 1))
+      (if (procedure? a) (a 'second) (list 'pending a b n)))
+    (f (call/cc (lambda (k) k)) (churn CHURN))))
+(show (in-pending-call))
+
+;; 8. Only another continuation's image holds it: k1 lives in a `let` of an
+;;    activation that has returned, and that activation is kept by k2.
+(define saved2 #f)
+(define via2 #f)
+(define (g)
+  (let ((k1 (call/cc (lambda (k) k))))
+    (if (procedure? k1)
+        (begin
+          (call/cc (lambda (k2) (set! saved2 k2)))
+          (if via2 (k1 'second) 'first))
+        (list 'image k1))))
+(define (in-image)
+  (let ((r (g)))
+    (churn CHURN)
+    (if (eq? r 'first)
+        (begin (set! via2 #t) (saved2 #f))
+        r)))
+(show (in-image))
+
+;; 9. Only an exception's payload holds it, after the handler returned it.
+(define (in-condition)
+  (let ((n 0) (caught #f))
+    (let ((r (call/cc (lambda (k)
+                        (set! caught (guard (e (#t e)) (raise (list 'k k))))
+                        'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) ((cadr caught) 'second) (list 'condition r n)))))
+(show (in-condition))
+
+;; 10. Only the dynamic environment holds it: the value of a parameterize.
+(define cur (make-parameter #f))
+(define (in-parameterize)
+  (let ((n 0))
+    (let ((r (call/cc (lambda (k)
+                        (parameterize ((cur k))
+                          (churn CHURN)
+                          (if (< n 1) (begin (set! n (+ n 1)) ((cur) 'second)) 'unreached))))))
+      (list 'parameterize r n))))
+(show (in-parameterize))
+
+;; 11. Only a SRFI 69 hash table holds it.
+(define (in-hash-table)
+  (let ((t (make-hash-table)) (n 0))
+    (let ((r (call/cc (lambda (k) (hash-table-set! t 'k k) 'first))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 2) ((hash-table-ref t 'k) 'second) (list 'hash-table r n)))))
+(show (in-hash-table))
+
+;; 12. Re-entering `map` part-way, twice: the list it was building lives in
+;;     the image's drives.
+(define (in-map)
+  (let ((mk #f) (n 0))
+    (let ((r (map (lambda (x) (if (= x 2) (call/cc (lambda (k) (set! mk k) x)) x)) '(1 2 3))))
+      (set! n (+ n 1))
+      (churn CHURN)
+      (if (< n 3) (mk (* 10 n)) (list 'map r n)))))
+(show (in-map))
+
+;; 13. A continuation re-entered after a thousand dropped ones, many times.
+(define (many)
+  (let ((saved #f) (n 0))
+    (let ((r (call/cc (lambda (k) (set! saved k) 0))))
+      (set! n (+ n 1))
+      (churn 50)
+      (if (< r 20) (saved (+ r 1)) (list 'many r n)))))
+(show (many))

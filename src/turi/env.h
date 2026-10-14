@@ -315,6 +315,45 @@ typedef struct TuriEnv {
      * frame's tyvar and dictionary pins (eval.c's TyvarBind / DictBind). */
     void       *tyvar_free;
     void       *dict_free;
+    /* turi-dropped-closures-kept-until-teardown: the same for closures and
+     * for structs of up to TURI_STRUCT_FREE_MAX fields (by field count), which
+     * only the pool sweep hands back (eval.c, closure_alloc, struct_alloc). */
+    void       *closure_free;
+    /* Frames and bindings the pool sweep handed back, kept apart from the
+     * ones activations hand back as they return: taking one of these counts
+     * toward the sweep's budget (turi_pool_count), taking a returned one
+     * does not -- a call loop recycles its frames without making garbage. */
+    void       *frame_swept;
+    void       *binding_swept;
+#define TURI_STRUCT_FREE_MAX 8
+    void       *struct_free[TURI_STRUCT_FREE_MAX + 1];
+    /* r7rs-callcc-memory-never-freed: where each value-pool object starts, so
+     * the continuation-image sweep can resolve a conservative word to the
+     * object holding it (value.c, turi_val_starts_*).  NULL unless the env
+     * runs `#lang r7rs` -- nothing else captures a re-entrant continuation. */
+    struct TuriObjStarts *obj_starts;
+    /* turi-dropped-closures-kept-until-teardown: the pool sweep's budget.
+     * `pool_since` counts the bytes of values made since the last sweep --
+     * from the pool or from what the last sweep handed back, since a free
+     * list refilled by a sweep must not stretch the time to the next one
+     * (that would let the pool grow by a budget each time) -- and once it reaches
+     * `pool_budget` (0: never) `pool_sweep_due` is raised, and the
+     * interpreter sweeps at its next safe point (turi_pool_count,
+     * turi_val_sweep_budget). */
+    size_t      pool_since, pool_budget;
+    bool        pool_sweep_due;
+    /* The R7RS prelude's dynamic-environment slots (interpreter_natives.c,
+     * r7rs-dyn-ref__): the wind, handler and parameter stacks and a
+     * re-entry's delivered value.  The env's own, as the compiled runtime's
+     * are the program's: the `(scheme eval)` evaluator is a second env in
+     * the same process, and its handlers must not land on the program's
+     * stacks (one env's sweep cannot see into the other's pool). */
+    TuriValue   r7rs_dyn[4];
+    bool        r7rs_dyn_written[4];
+    /* The frames and work-stack temporaries a capture kept from being handed
+     * back (eval.c, cont_defer_*), which the sweep releases once nothing
+     * reaches them. */
+    void       *cont_deferred;
     /* turi-value-pool-scratch-promotion-plan: opt-in bound on steady-state memory
      * for a single long-lived env (notebook-kernel pattern). When true, turi_eval
      * promotes every escaping value into value_perm and rewinds value_scratch at
@@ -571,6 +610,13 @@ typedef struct TuriEnv {
      * one read-only loaded image rather than each carrying its own copy. */
     bool        spice_image_borrowed;
 } TuriEnv;
+
+/* turi-dropped-closures-kept-until-teardown: count `n` bytes of values made
+ * toward the pool sweep's budget. */
+static inline void turi_pool_count(TuriEnv *env, size_t n) {
+    env->pool_since += n;
+    if (env->pool_budget && env->pool_since >= env->pool_budget) env->pool_sweep_due = true;
+}
 
 /* Create a new unrestricted environment. */
 TuriEnv *turi_env_new(void);

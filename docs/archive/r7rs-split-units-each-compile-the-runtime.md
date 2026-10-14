@@ -1,7 +1,9 @@
 # `#lang r7rs`: every split unit recompiles the collector and the DK runtime
 
-**Fix directions 1 and 2 done 2026-10-13, and direction 3 in part. What
-stays open is skipping the library unit's emission on a warm cache.** In a
+**Resolved 2026-10-14.** Fix directions 1 and 2 were done 2026-10-13, and
+direction 3 in part. The rest of direction 3 was done 2026-10-14: a warm
+build reads the library unit's emission back from a cache instead of
+emitting it again. The details are under direction 3 below. In a
 split build the collector, the DK runtime and
 the deep-stack helper (`tur_deep_*`) are each defined once, in the library
 unit, under the `tur_sl_` prefix. Every later unit carries prototypes of them
@@ -65,7 +67,7 @@ compile goes to runtime helpers that the unit carries as `static` copies.
 Roughly half of it is the conservative collector alone, which every unit
 re-optimizes in full because `malloc` is redirected to it. The imported-library
 unit
-([r7rs-imported-libraries-recompiled-every-build](../archive/r7rs-imported-libraries-recompiled-every-build.md))
+([r7rs-imported-libraries-recompiled-every-build](r7rs-imported-libraries-recompiled-every-build.md))
 pays the same cost again, each time it is compiled cold. Found 2026-10-13 while
 measuring where an importing program's build time goes.
 
@@ -165,9 +167,9 @@ from the others, behaves the same.
    inlining matters at run time (tagging, boxing, carrier conversions) as
    `static inline`. The large, out-of-line pieces (`dk_run_impl`,
    `__dk_drive_after`, the reap list) are the candidates.
-3. **Lower priority: the split re-emits the library unit on a warm cache.**
-   **Part done 2026-10-13: the re-emission is cheaper; skipping it is not
-   done.** Re-measured with a Release `tur` under callgrind, cc excluded, for
+3. **Done 2026-10-14 (see the end of this item).** **The split re-emits the
+   library unit on a warm cache.** First, on 2026-10-13, the re-emission got
+   cheaper. Re-measured with a Release `tur` under callgrind, cc excluded, for
    the program above (warm cache). `tur` did 824 M instructions: 269 M in
    the front end, 393 M emitting and renaming the library unit, and 155 M
    emitting the program unit. Two costs inside the emission were pure waste,
@@ -210,3 +212,76 @@ from the others, behaves the same.
    library unit, which nothing enumerates today. Until both are pinned down,
    the remaining saving does not justify the risk of linking against stale
    signatures.
+
+   **Done 2026-10-14.** Both blockers were pinned down, and a warm build now
+   reads the library unit's emission back from a cache (`SplitLibCache`,
+   src/main.c):
+
+   - **Emission history.** `Binding::emit_byvalue_carrier_abi` (and its two
+     siblings `emit_carrier_holds_byval`, `emit_carrier_holds_ptr`) is written
+     while a binding is emitted, and read before that in the next emission: a
+     call argument is classified before the `let` it names is emitted. That is
+     the `schema/alt` cast. The three notes now carry the emission that wrote
+     them (`emit_note`, src/compiler/expr.h, epoch bumped by `emission_enter`),
+     so a second emission reads them as the first did. One more counter leaked
+     across emissions: the CPS tail-call groups (`__cps_tcg_N`,
+     src/compiler/emit_cps_ir.c) kept numbering, so the program unit's names
+     depended on whether the library unit had been emitted first in the
+     process. `ctg_reset` now restarts it, as emit_fns.c's twin already did.
+     After both, `r7rs-sicp-extras`'s retry emits the same library unit as
+     everyone else, and `tur emit-c` is byte-identical on all 3730 fixture
+     inputs.
+   - **Program dependence.** It is not there. All 132 split-built r7rs
+     fixtures, `(scheme eval)` and the `(turmeric ...)` seam included, emit
+     one library unit, byte for byte. The seven `(scheme eval)` programs only
+     *compile* it differently (ASan), which the object key already covers.
+     The unit is written from the stdlib's items alone, by construction
+     (`split_item_owner`).
+
+   The cache: the first build that emits the unit writes its renamed text
+   (`<tur-build>/prelude/<text hash>.libtext`, 1.6 MB, once per text) and the
+   state it leaves for the later units (`<key>.lib`, 120 KB). That state is
+   the exported names, the fat boxes, the signatures, the keyword records, and
+   which of the program's stdlib bindings the unit defines
+   (`emit_split_carry_save` / `_load`, src/compiler/emit_module.c). The key is
+   computed before emission. It covers the `tur` binary (path, inode, size,
+   mtime), the command line less the program's own paths, `TUR_*` in the
+   environment, the experiments, the emission switches and whole-program
+   feature flags (globals.h), and the path and content of every stdlib file
+   the unit's items come from. An imported library's files are not among
+   them, so a program's imports do not fork the key: the whole r7rs corpus
+   shares one. Two kinds of program never use it: one with an item the unit
+   would carry (a program `extern-c`), and one that reads a file of its own
+   besides the program (a module, a Scheme library, an `include`).
+
+   A wrong entry is caught at three points, and each one emits the unit
+   instead:
+
+   - the record names a binding this program does not have;
+   - a later unit declares a library function with another signature
+     (`split_check_sigs`);
+   - the units do not link (cmd_build retries around an emitted unit).
+
+   The emitted unit then replaces the entry. `TUR_SPLIT_LIB_CACHE=verify`
+   emits it anyway and reports any difference, and `TUR_SPLIT_LIB_CACHE=0`
+   turns the cache off. `tests/check-r7rs-split-lib-cache.sh` (ctest
+   `tur_r7rs_split_lib_cache`) checks seven programs: built with the cache
+   off, cold and warm, the program unit and the objects it links must be the
+   same each time. It also damages an entry three ways (a renamed binding, a
+   changed signature, a dropped export) and expects each build to recover.
+
+   Measured on one 4-core Linux box with a Release `tur`, warm cache:
+
+   | program | `tur` instructions, emitted -> cached | `tur build`, median of 21 |
+   | --- | --- | --- |
+   | `(display 1)` (the repro) | 715 M -> 416 M (-42%) | 401 -> 336 ms |
+   | with `(only (srfi 13) string-pad)` | 977 M -> 679 M (-31%) | 486 -> 374 ms |
+
+   A serial warm `tur build` of all 133 r7rs fixtures went from 110-114 s to
+   102-103 s. 111 of them read the cache. 21 read a file of their own, and
+   one is not a split build. Over all 133, the program unit's text, the
+   library and imported-library objects, and the exit status are identical
+   with the cache off, cold and warm, and `verify` finds every entry equal to
+   a fresh emission. `tests/run.sh` (3796/0), `run-r7rs-gc.sh`,
+   `run-r7rs-sanitize.sh`, `check-r7rs-prelude-split.sh` and the r7rs import,
+   eval-link, srfi-prune and stack ctests pass.

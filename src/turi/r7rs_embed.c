@@ -47,16 +47,31 @@ static char      *g_pending_err;
 static char    *g_result_text;
 static int64_t  g_result_id;
 
-/* One argument of a host call, and the host call in progress. */
+/* One argument of a host call, and the host calls in progress, innermost
+ * last.  They live here, not in host_native's frame: a continuation the
+ * program captures inside a host call is a copy of the C stack, and
+ * re-entering it returns through host_native again after the first return
+ * already finished the call.  So each call is found by its serial, and its
+ * arguments are freed by whichever return finds it first -- a re-entry finds
+ * none.  A call a continuation escaped from stays until a call below it
+ * returns. */
 typedef struct { int kind; char *text; int64_t id; } FrameArg;
 typedef struct {
+    uint64_t  serial;
     FrameArg *args;
     int       n;
-    int       answer_kind;
-    char     *answer_text;
-    int64_t   answer_id;
-} HostFrame;
-static HostFrame *g_frame;
+} HostCall;
+static HostCall *g_calls;
+static size_t    g_ncalls, g_capcalls;
+static uint64_t  g_call_serial;
+
+/* The answer of the host call that just ended.  Answering is the host
+ * function's last act, and host_native takes it as soon as the host function
+ * returns, so it never needs to say which call it belongs to -- which a
+ * re-entered call could not. */
+static int      g_answer_kind = 'U';
+static char    *g_answer_text;
+static int64_t  g_answer_id;
 
 static void *xrealloc(void *p, size_t n) {
     void *q = realloc(p, n);
@@ -348,57 +363,94 @@ static TuriValue import_value(int kind, const char *text, int64_t id) {
 
 /* ---- a host call: evaluated code calls a procedure the program passed in -- */
 
+static void free_args(FrameArg *a, int n) {
+    for (int i = 0; i < n; i++) free(a[i].text);
+    free(a);
+}
+
+/* Ends call `serial`, and any a continuation escaped from above it.  False
+ * when the call has ended already: this return is a re-entry. */
+static bool call_end(uint64_t serial) {
+    size_t k = g_ncalls;
+    while (k > 0 && g_calls[k - 1].serial != serial) k--;
+    if (k == 0) return false;
+    for (size_t i = k - 1; i < g_ncalls; i++) free_args(g_calls[i].args, g_calls[i].n);
+    g_ncalls = k - 1;
+    return true;
+}
+
+static void answer_take(int *kind, char **text, int64_t *id) {
+    *kind = g_answer_kind;
+    *text = g_answer_text;
+    *id   = g_answer_id;
+    g_answer_kind = 'U';
+    g_answer_text = NULL;
+    g_answer_id   = 0;
+}
+
 static TuriValue host_native(TuriEnv *env, TuriValue *args, uint32_t n, void *ud) {
     (void)env;
     int64_t host_id = (int64_t)(intptr_t)ud;
     if (!g_host) return turi_error("eval: no host to call a program procedure");
-    HostFrame f = { 0 };
-    f.args = (FrameArg *)calloc(n ? n : 1, sizeof(FrameArg));
-    f.n = (int)n;
+    FrameArg *fa = (FrameArg *)calloc(n ? n : 1, sizeof(FrameArg));
     for (uint32_t i = 0; i < n; i++) {
-        f.args[i].kind = export_value(args[i], &f.args[i].text, &f.args[i].id);
-        if (f.args[i].kind == 'E' || f.args[i].kind == 'U') {
+        fa[i].kind = export_value(args[i], &fa[i].text, &fa[i].id);
+        if (fa[i].kind == 'E' || fa[i].kind == 'U') {
             /* An unspecified argument travels as a datum the reader cannot
              * make, so it is the named error as well. */
             TuriValue e = turi_errorf("eval: argument %u of a program procedure cannot cross: %s", i + 1,
-                                      f.args[i].kind == 'U' ? "it is the unspecified value" : f.args[i].text);
-            for (uint32_t j = 0; j <= i; j++) free(f.args[j].text);
-            free(f.args);
+                                      fa[i].kind == 'U' ? "it is the unspecified value" : fa[i].text);
+            free_args(fa, (int)i + 1);
             return e;
         }
     }
-    f.answer_kind = 'U';
-    HostFrame *saved = g_frame;
-    g_frame = &f;
+    if (g_ncalls == g_capcalls) {
+        g_capcalls = g_capcalls ? g_capcalls * 2 : 8;
+        g_calls = (HostCall *)xrealloc(g_calls, g_capcalls * sizeof(HostCall));
+    }
+    uint64_t serial = ++g_call_serial;
+    g_calls[g_ncalls++] = (HostCall){ serial, fa, (int)n };
+    int     kind;
+    char   *text;
+    int64_t id;
+    answer_take(&kind, &text, &id);   /* nothing is pending; drop it if it is */
+    free(text);
     bool was = g_in_embed;
     switch_side(false);
     (void)g_host(host_id);
     switch_side(was);
-    g_frame = saved;
-    TuriValue r = import_value(f.answer_kind, f.answer_text, f.answer_id);
-    for (int i = 0; i < f.n; i++) free(f.args[i].text);
-    free(f.args);
-    free(f.answer_text);
+    answer_take(&kind, &text, &id);
+    /* Not found: this call returned once already, and a continuation the
+     * program captured inside it brought control back (turi_r7rs_embed_cont_
+     * resumed put the evaluator's state back for it; the arguments were
+     * freed at the first return, and the host has read them). */
+    (void)call_end(serial);
+    TuriValue r = import_value(kind, text, id);
+    free(text);
     return r;
 }
 
-int turi_r7rs_embed_frame_count(void) { return g_frame ? g_frame->n : 0; }
+/* The innermost host call's arguments: the host function reads them first. */
+static const HostCall *call_top(void) { return g_ncalls ? &g_calls[g_ncalls - 1] : NULL; }
+int turi_r7rs_embed_frame_count(void) { return call_top() ? call_top()->n : 0; }
 int turi_r7rs_embed_frame_kind(int i) {
-    return g_frame && i >= 0 && i < g_frame->n ? g_frame->args[i].kind : 'U';
+    const HostCall *c = call_top();
+    return c && i >= 0 && i < c->n ? c->args[i].kind : 'U';
 }
 const char *turi_r7rs_embed_frame_text(int i) {
-    return g_frame && i >= 0 && i < g_frame->n && g_frame->args[i].text ? g_frame->args[i].text : "";
+    const HostCall *c = call_top();
+    return c && i >= 0 && i < c->n && c->args[i].text ? c->args[i].text : "";
 }
 int64_t turi_r7rs_embed_frame_id(int i) {
-    return g_frame && i >= 0 && i < g_frame->n ? g_frame->args[i].id : 0;
+    const HostCall *c = call_top();
+    return c && i >= 0 && i < c->n ? c->args[i].id : 0;
 }
 
 static void answer(int kind, const char *text, int64_t id) {
-    if (!g_frame) return;
-    free(g_frame->answer_text);
-    g_frame->answer_kind = kind;
-    g_frame->answer_text = text ? strdup(text) : NULL;
-    g_frame->answer_id   = id;
+    free(g_answer_text);
+    g_answer_kind = kind;
+    g_answer_text = text ? strdup(text) : NULL;
+    g_answer_id   = id;
 }
 void turi_r7rs_embed_answer_datum(const char *text) { answer('D', text, 0); }
 void turi_r7rs_embed_answer_host(int64_t host_id) { answer('H', NULL, host_id); }
@@ -453,6 +505,34 @@ static char *import_form(const char *sets_text) {
     return out;
 }
 
+/* The texts being evaluated (eval_source), innermost last, by serial: a
+ * program continuation captured inside one can be resumed only while that
+ * evaluation is still in progress (turi_r7rs_embed_cont_resumable).  An
+ * evaluation a continuation escaped from stays until one below it ends, or
+ * a resume abandons it. */
+static uint64_t *g_texts;
+static size_t    g_ntexts, g_captexts;
+static uint64_t  g_text_serial;
+
+static uint64_t text_begin(void) {
+    if (g_ntexts == g_captexts) {
+        g_captexts = g_captexts ? g_captexts * 2 : 8;
+        g_texts = (uint64_t *)xrealloc(g_texts, g_captexts * sizeof *g_texts);
+    }
+    g_texts[g_ntexts++] = ++g_text_serial;
+    return g_text_serial;
+}
+static void text_end(uint64_t serial) {
+    size_t k = g_ntexts;
+    while (k > 0 && g_texts[k - 1] != serial) k--;
+    if (k > 0) g_ntexts = k - 1;
+}
+static bool text_live(uint64_t serial) {
+    for (size_t i = g_ntexts; i-- > 0;)
+        if (g_texts[i] == serial) return true;
+    return false;
+}
+
 static int eval_source(const char *sets_text, const char *body) {
     if (!embed_env()) { set_result_text("eval: the embedded R7RS evaluator did not start"); return 'E'; }
     char *imports = import_form(sets_text);
@@ -460,7 +540,9 @@ static int eval_source(const char *sets_text, const char *body) {
     char *src = (char *)malloc(n);
     snprintf(src, n, "%s\n%s", imports, body);
     free(imports);
+    uint64_t serial = text_begin();
     TuriValue v = embed_eval_text(src);
+    text_end(serial);
     free(src);
     return set_result(v);
 }
@@ -519,31 +601,135 @@ int turi_r7rs_embed_load(const char *sets_text, const char *path) {
 }
 
 int turi_r7rs_embed_apply(int64_t proc_id) {
-    /* Take the pending arguments first: the call may re-enter. */
-    size_t     n    = g_npending;
-    TuriValue *args = (TuriValue *)malloc((n ? n : 1) * sizeof(TuriValue));
-    memcpy(args, g_pending, n * sizeof(TuriValue));
     char *err = g_pending_err;
-    g_npending    = 0;
     g_pending_err = NULL;
-    if (!embed_env()) { free(args); free(err); set_result_text("eval: the embedded R7RS evaluator did not start"); return 'E'; }
+    if (!embed_env()) { g_npending = 0; free(err); set_result_text("eval: the embedded R7RS evaluator did not start"); return 'E'; }
     if (err) {
-        free(args);
+        g_npending = 0;
         set_result_text(err);
         free(err);
         return 'E';
     }
+    /* The list is built while the arguments are still in g_pending, where
+     * the embedded env's pool sweep reads them (turi_r7rs_embed_roots): a
+     * sweep may run inside any embed_call.  Consing calls no host procedure,
+     * so nothing pushes meanwhile; the call itself may re-enter, so the
+     * arguments are taken before it. */
     TuriValue l = g_null;
-    for (size_t i = n; i-- > 0;) {
-        TuriValue pair[2] = { args[i], l };
+    for (size_t i = g_npending; i-- > 0;) {
+        TuriValue pair[2] = { g_pending[i], l };
         l = embed_call(g_cons, pair, 2);
         if (failed(l)) break;
     }
-    free(args);
+    g_npending = 0;
     if (failed(l)) return set_result(l);
     TuriValue call[2] = { proc_value(proc_id), l };
     if (failed(call[0])) return set_result(call[0]);
     return set_result(embed_call(g_catch_apply, call, 2));
+}
+
+/* ---- a program continuation captured inside a host call -------------------
+ * r7rs-eval-continuation-reentry-across-bridge; r7rs_embed.h says when each
+ * of these is called.  The embedded env's dynamic-extent fields (its live
+ * escapes above all) and its dynamic-environment slots go with every
+ * capture; for a compiled program, so do the drivers' work stacks and the
+ * thread's globals, and the capture pins the interpreter (turi_cont_pin), so
+ * the frames and temporaries the image holds are not freed at the first
+ * return.  Nothing tells this file when a compiled program's continuation
+ * dies, so the evaluator's sweep waits from the first such capture on.
+ *
+ * A capture inside a host call made from a text being evaluated (`(eval
+ * '(f 1))`, rather than an applied procedure) also copies the frames of that
+ * evaluation, which end with its `eval`: resumed after that returned, they
+ * would finish the evaluation a second time.  Such a continuation can be
+ * resumed only while the evaluation is still in progress. */
+typedef struct {
+    TuriContState *state;
+    bool           program;      /* state holds the drives and globals too */
+    bool           pinned;
+    uint64_t       serial;       /* the host call in progress, 0: none */
+    uint64_t       text;         /* the text being evaluated, 0: none */
+    TuriValue      dyn[4];
+    bool           dyn_written[4];
+} EmbedCont;
+static size_t g_program_conts;
+
+void *turi_r7rs_embed_cont_capture(int program) {
+    if (!g_env) return NULL;
+    EmbedCont *h = (EmbedCont *)calloc(1, sizeof *h);
+    if (!h) return NULL;
+    h->serial  = g_ncalls ? g_calls[g_ncalls - 1].serial : 0;
+    h->text    = g_ntexts ? g_texts[g_ntexts - 1] : 0;
+    h->program = program != 0;
+    if (program && h->serial) {
+        /* The evaluator's frames are in the image, and only the interpreter
+         * can keep what they need. */
+        turi_cont_pin();
+        h->pinned = true;
+        g_program_conts++;
+        h->state = turi_cont_state_capture(g_env);
+    } else {
+        h->state = turi_cont_state_capture_env(g_env);
+    }
+    memcpy(h->dyn, g_env->r7rs_dyn, sizeof h->dyn);
+    memcpy(h->dyn_written, g_env->r7rs_dyn_written, sizeof h->dyn_written);
+    return h;
+}
+void *turi_r7rs_embed_program_cont_capture(void) { return turi_r7rs_embed_cont_capture(1); }
+int turi_r7rs_embed_program_conts_live(void) { return g_program_conts > 0; }
+
+int turi_r7rs_embed_cont_resumable(void *handle) {
+    const EmbedCont *h = (const EmbedCont *)handle;
+    return !h || !h->text || text_live(h->text);
+}
+
+void turi_r7rs_embed_cont_restore(void *handle, const void *stack_top) {
+    const EmbedCont *h = (const EmbedCont *)handle;
+    if (h && h->program) turi_cont_release_drives(stack_top);
+}
+
+void turi_r7rs_embed_cont_resumed(void *handle) {
+    const EmbedCont *h = (const EmbedCont *)handle;
+    if (!h || !g_env || !h->state) return;
+    if (h->program) turi_cont_state_restore(g_env, h->state);
+    else            turi_cont_state_restore_env(g_env, h->state);
+    /* The host calls and evaluations begun since the capture went with
+     * their frames. */
+    while (g_ncalls && g_calls[g_ncalls - 1].serial > h->serial) {
+        g_ncalls--;
+        free_args(g_calls[g_ncalls].args, g_calls[g_ncalls].n);
+    }
+    while (g_ntexts && g_texts[g_ntexts - 1] > h->text) g_ntexts--;
+    /* The evaluator's dynamic environment: travel its wind stack to the
+     * captured one (R7RS 6.10 -- each `after` out, each `before` in, which
+     * also reinstalls the handlers and parameters of that extent), then put
+     * the slots back as they were. */
+    TuriValue travel = turi_env_get(g_env, "r7rs-travel-to__");
+    TuriValue target = h->dyn_written[0] ? h->dyn[0] : g_null;
+    if (!failed(travel)) (void)embed_call(travel, &target, 1);
+    memcpy(g_env->r7rs_dyn, h->dyn, sizeof h->dyn);
+    memcpy(g_env->r7rs_dyn_written, h->dyn_written, sizeof h->dyn_written);
+}
+
+void turi_r7rs_embed_cont_free(void *handle) {
+    EmbedCont *h = (EmbedCont *)handle;
+    if (!h) return;
+    if (h->pinned) g_program_conts--;
+    turi_cont_state_free(h->state);
+    free(h);
+}
+
+void turi_r7rs_embed_roots(const void *env, TuriR7rsRootFn fn, void *ud) {
+    if (!g_env || env != (const void *)g_env) return;
+    /* The prelude procedures are the env's globals as well; held here, they
+     * are kept even if evaluated code rebinds a name. */
+    const TuriValue fixed[] = { g_read, g_write, g_cons, g_null, g_catch_apply,
+                                g_raised_p, g_raised_mk, g_condition, g_host_wrap };
+    fn(fixed, sizeof fixed, ud);
+    if (g_nprocs) fn(g_procs, g_nprocs * sizeof *g_procs, ud);
+    for (size_t i = 0; i < g_caphosts; i++)
+        if (g_host_set[i]) fn(&g_hosts[i], sizeof g_hosts[i], ud);
+    if (g_npending) fn(g_pending, g_npending * sizeof *g_pending, ud);
 }
 
 const char *turi_r7rs_embed_result_text(void) { return g_result_text ? g_result_text : ""; }

@@ -21,6 +21,7 @@
 #include "diag.h"    /* SYNTAX natives: diag file-registry save/restore for read-string */
 #include "forms.h"   /* SYNTAX natives: Form constructors/accessors */
 #include "reader.h"  /* SYNTAX natives: read_all_with_registry for read-string */
+#include "scheme_lower.h"   /* r7rs-callcc-memory-never-freed: g_scheme_lower_opened_seam */
 
 #include <ctype.h>
 #include <errno.h>
@@ -2549,6 +2550,11 @@ static TurMmStorage *mm_alloc(uint64_t cap) {
     }
     return s;
 }
+/* turi-dropped-closures-kept-until-teardown: a mutable map keeps its values
+ * in its own memory, where no sweep reads, so once one exists the sweeps stay
+ * off (r7k_sweep_gate).  The R7RS libraries make none; a Scheme program
+ * reaches one only through the Turmeric seam, which turns them off anyway. */
+static bool g_r7k_untracked_store;
 static TuriValue native_mutmap_new(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)a; (void)n; (void)ud;
     TurMmStorage *s = mm_alloc(16);
@@ -2556,6 +2562,7 @@ static TuriValue native_mutmap_new(TuriEnv *env, TuriValue *a, uint32_t n, void 
     TurMmWrap *m = (TurMmWrap *)malloc(sizeof(*m));
     if (!m) { free(s); return turi_nil(); }
     m->storage = s;
+    g_r7k_untracked_store = true;   /* r7k_sweep_gate */
     return turi_int((int64_t)(intptr_t)m);
 }
 static TuriValue native_mutmap_len(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -3257,19 +3264,31 @@ typedef struct R7kCont {
     /* The stack address the image runs up to (r7k_snapshot's `base`): the
      * top-level form's mark, or the thread's stack base outside any form. */
     unsigned char  *base;
+    /* r7rs-callcc-memory-never-freed: the handle the program holds (see the
+     * handle table below), how many live deltas are taken against this
+     * image, and whether its own continuation was reclaimed -- a whole image
+     * outlives its continuation while it is a delta's key or a range's
+     * current keyframe. */
+    int64_t         handle;
+    uint32_t        epoch;      /* turi_cont_epoch just after its pin */
+    uint32_t        key_refs;
+    bool            dead;
+    /* r7rs-eval-continuation-reentry-across-bridge: the `(scheme eval)`
+     * evaluator's side of this capture (r7rs_embed.c) -- what its frames in
+     * the image need back on a re-entry.  NULL before the first eval. */
+    void           *embed;
 } R7kCont;
-/* r7rs-callcc-memory-never-freed: the interpreter cannot tell when a
- * continuation is dead -- it has no collector, and a continuation procedure
- * may be stored anywhere -- so a stack image lives as long as the process.
- * What it CAN do is make each image small.  Consecutive captures of one
- * stack range differ in about one word in eighty (a generator's two
- * captures per step, measured: 98.8% of words equal to the previous capture
- * at the same address), so an image is kept as the words that differ from a
- * KEYFRAME -- the latest whole image of the same range -- and a restore
- * copies the keyframe back and patches them.  A delta is always against a
- * whole image, never another delta, and keyframes, like every image, are
- * never freed, so a delta's key stays valid.  A capture that differs in more
- * than an eighth of its words becomes the range's new keyframe. */
+/* r7rs-callcc-memory-never-freed: images are kept small.  Consecutive
+ * captures of one stack range differ in about one word in eighty (a
+ * generator's two captures per step, measured: 98.8% of words equal to the
+ * previous capture at the same address), so an image is kept as the words
+ * that differ from a KEYFRAME -- the latest whole image of the same range --
+ * and a restore copies the keyframe back and patches them.  A delta is always
+ * against a whole image, never another delta, and a whole image stays while
+ * a delta needs it (key_refs) or it is a range's keyframe here.  A capture
+ * that differs in more than an eighth of its words becomes the range's new
+ * keyframe.  Images are freed by the sweep below once nothing can reach
+ * their continuation. */
 #define R7K_KEYS 8
 static _Thread_local R7kCont *r7k_keys[R7K_KEYS];
 static _Thread_local unsigned r7k_keys_next;
@@ -3278,10 +3297,22 @@ static R7kCont *r7k_key_find(const unsigned char *lo, size_t n) {
         if (r7k_keys[i] && r7k_keys[i]->lo == lo && r7k_keys[i]->n == n) return r7k_keys[i];
     return NULL;
 }
-static void r7k_key_put(R7kCont *c) {
+/* Free a reclaimed whole image once nothing needs it as a key. */
+static void r7k_key_release(R7kCont *k) {
+    if (!k->dead || k->key_refs) return;
     for (unsigned i = 0; i < R7K_KEYS; i++)
-        if (r7k_keys[i] && r7k_keys[i]->lo == c->lo && r7k_keys[i]->n == c->n) { r7k_keys[i] = c; return; }
-    r7k_keys[r7k_keys_next++ % R7K_KEYS] = c;
+        if (r7k_keys[i] == k) return;
+    free(k->img);
+    free(k);
+}
+static void r7k_key_put(R7kCont *c) {
+    unsigned at = R7K_KEYS;
+    for (unsigned i = 0; i < R7K_KEYS; i++)
+        if (r7k_keys[i] && r7k_keys[i]->lo == c->lo && r7k_keys[i]->n == c->n) { at = i; break; }
+    if (at == R7K_KEYS) at = r7k_keys_next++ % R7K_KEYS;
+    R7kCont *old = r7k_keys[at];
+    r7k_keys[at] = c;
+    if (old && old != c) r7k_key_release(old);
 }
 static _Thread_local unsigned char *r7k_base_tls;
 /* r7rs-toplevel-reentry-reruns-forms: the top of the current top-level
@@ -3357,6 +3388,7 @@ static int r7k_snapshot(R7kCont *c, unsigned char *mark) {
         size_t nd = (idx && val) ? r7k_diff(key->img, lo, nw, idx, val, cap) : cap + 1;
         if (nd <= cap) {
             c->key   = key;
+            key->key_refs++;
             c->n_d   = nd;
             c->d_idx = nd ? (uint32_t *)realloc(idx, nd * sizeof(uint32_t)) : (free(idx), (uint32_t *)NULL);
             c->d_val = nd ? (uintptr_t *)realloc(val, nd * sizeof(uintptr_t)) : (free(val), (uintptr_t *)NULL);
@@ -3394,6 +3426,164 @@ static void r7k_restore(R7kCont *c) {
     }
     r7k_jump(c);
 }
+/* r7rs-callcc-memory-never-freed: the handle a program holds for a
+ * continuation is not the R7kCont's address but a slot in this table, with
+ * the slot's generation: ((gen << 32) | ((slot + 1) << 2)), bit 0 the
+ * re-entry tag the prelude tests.  The sweep frees an image whose handle
+ * nothing reachable holds, and bumps the slot's generation, so a handle that
+ * outlived its image (the sweep missed a reference -- it must not, but the
+ * failure should be an error, not a jump into freed memory) names no
+ * continuation.  A handle is also a word the sweep can recognise wherever it
+ * finds one: an R7kCont address in a frame is no different from any other
+ * heap pointer, while a handle carries its slot and generation with it. */
+typedef struct {
+    R7kCont  *c;        /* NULL: free */
+    TuriEnv  *env;      /* the env that captured it */
+    uint32_t  gen;
+    bool      marked;   /* a sweep reached its handle */
+} R7kSlot;
+static R7kSlot  *g_r7k_slots;
+static uint32_t  g_r7k_n_slots, g_r7k_cap_slots;
+static uint32_t *g_r7k_free_slots;     /* stack of free slot indices */
+static uint32_t  g_r7k_n_free;
+static uint32_t *g_r7k_marked_wl;      /* the sweep's reached, unscanned slots */
+static uint32_t  g_r7k_n_marked_wl;
+static size_t    g_r7k_live;           /* slots holding a continuation */
+/* Sweep when this many continuations are live: the first sweep after 512
+ * (about 1 MB of images and state), then once there have been at least 512
+ * captures since, the count has doubled from what the last sweep left, AND
+ * the captures since have made about as much memory as the last sweep read.
+ * A sweep costs a walk of everything reachable -- some 300 KB for a small
+ * program, the prelude's globals mostly, about 0.4 ms on a Release tur -- so
+ * the first rule keeps that small per capture, the second keeps it constant
+ * while continuations live long, and the third while the program's heap is
+ * large next to them: a generator stepping over a big list would otherwise
+ * walk the whole list every few hundred steps.  It is a collector's usual
+ * trade: dropped continuations may come to take about twice as much memory
+ * as the last sweep read before they go (a capture keeps about 2 KB, and the
+ * third rule counts 1 KB). */
+#define R7K_SWEEP_EVERY 512
+#define R7K_SCAN_PER_CAPTURE 1024
+static size_t    g_r7k_next_sweep = R7K_SWEEP_EVERY;
+/* bit 0: on, 1: trace, 2: stress, 3: the pool sweep on; -1 unread */
+static int       r7k_gc_mode = -1;
+/* turi-dropped-closures-kept-until-teardown: the pool sweep runs once the
+ * value pool has grown by its budget (value.c, turi_val_sweep_budget): 4 MB,
+ * or twice what the last sweep read if more, or half of what is on the free
+ * lists (which a sweep walks) if more still -- a collector's usual trade, the
+ * marking costing about one byte read per two allocated.  A sweep that could
+ * free nothing (a doubt: a guard's handler live, say) tries again sooner,
+ * after 256 KB, doubling each time it fails again up to the full budget, so
+ * one that happens to land inside every handler still finds a gap.
+ * TUR_TURI_POOL_GC=0 turns it off (only kept frames and continuations are
+ * then handed back); TUR_TURI_POOL_GC_STRESS=<bytes> sweeps every that many
+ * bytes. */
+#define R7K_POOL_BUDGET (4u << 20)
+#define R7K_POOL_RETRY  (256u << 10)
+static size_t    g_r7k_pool_retry = R7K_POOL_RETRY;
+static size_t    g_r7k_pool_stress;
+/* g_r7k_untracked_store (declared with the mutable map): the sweep's gate. */
+
+static int64_t r7k_handle_of(uint32_t slot) {
+    return (int64_t)(((uint64_t)g_r7k_slots[slot].gen << 32) | ((uint64_t)(slot + 1) << 2));
+}
+static R7kSlot *r7k_slot_of(uint64_t h) {
+    h &= ~(uint64_t)1;
+    uint32_t lo = (uint32_t)h;
+    if ((h & 3) || lo < 4) return NULL;
+    uint32_t i = (lo >> 2) - 1;
+    if (i >= g_r7k_n_slots || !g_r7k_slots[i].c || g_r7k_slots[i].gen != (uint32_t)(h >> 32))
+        return NULL;
+    return &g_r7k_slots[i];
+}
+static R7kCont *r7k_cont_of(int64_t h) {
+    R7kSlot *s = r7k_slot_of((uint64_t)h);
+    return s ? s->c : NULL;
+}
+/* A slot for `c`; false when the table cannot grow. */
+static bool r7k_slot_new(TuriEnv *env, R7kCont *c) {
+    uint32_t i;
+    if (g_r7k_n_free) {
+        i = g_r7k_free_slots[--g_r7k_n_free];
+    } else {
+        if (g_r7k_n_slots == g_r7k_cap_slots) {
+            uint32_t ncap = g_r7k_cap_slots ? g_r7k_cap_slots * 2 : 256;
+            if (ncap >= (1u << 29)) return false;
+            R7kSlot  *ns = (R7kSlot *)realloc(g_r7k_slots, ncap * sizeof *ns);
+            if (!ns) return false;
+            g_r7k_slots = ns;
+            uint32_t *nf = (uint32_t *)realloc(g_r7k_free_slots, ncap * sizeof *nf);
+            if (!nf) return false;
+            g_r7k_free_slots = nf;
+            uint32_t *nw = (uint32_t *)realloc(g_r7k_marked_wl, ncap * sizeof *nw);
+            if (!nw) return false;
+            g_r7k_marked_wl = nw;
+            g_r7k_cap_slots = ncap;
+        }
+        i = g_r7k_n_slots++;
+        g_r7k_slots[i].gen = 1;
+    }
+    g_r7k_slots[i].c = c;
+    g_r7k_slots[i].env = env;
+    g_r7k_slots[i].marked = false;
+    c->handle = r7k_handle_of(i);
+    g_r7k_live++;
+    return true;
+}
+/* Free a continuation's image and state, keeping a whole image that is still
+ * a key; the slot goes back to the table with a new generation. */
+static void r7k_cont_free(R7kCont *c) {
+    turi_cont_state_free(c->state);
+    c->state = NULL;
+    turi_r7rs_embed_cont_free(c->embed);
+    c->embed = NULL;
+    free(c->d_idx);
+    free(c->d_val);
+    c->d_idx = NULL;
+    c->d_val = NULL;
+    if (c->key) {
+        R7kCont *k = c->key;
+        c->key = NULL;
+        k->key_refs--;
+        r7k_key_release(k);
+    }
+    c->dead = true;
+    if (c->img) r7k_key_release(c);
+    else free(c);
+}
+static void r7k_slot_free(uint32_t i) {
+    R7kCont *c = g_r7k_slots[i].c;
+    g_r7k_slots[i].c = NULL;
+    g_r7k_slots[i].gen = g_r7k_slots[i].gen >= 0x7fffffffu ? 1 : g_r7k_slots[i].gen + 1;
+    g_r7k_free_slots[g_r7k_n_free++] = i;
+    g_r7k_live--;
+    r7k_cont_free(c);
+}
+static void r7k_maybe_sweep(TuriEnv *env, bool pool);   /* below, beside the roots it reads */
+static void r7k_gc_mode_read(void) {
+    const char *on = getenv("TUR_TURI_CONT_GC"), *tr = getenv("TUR_TURI_CONT_GC_TRACE");
+    const char *st = getenv("TUR_TURI_CONT_GC_STRESS");
+    const char *po = getenv("TUR_TURI_POOL_GC"), *ps = getenv("TUR_TURI_POOL_GC_STRESS");
+    r7k_gc_mode = (!(on && on[0] == '0') ? 1 : 0) | ((tr && tr[0] == '1') ? 2 : 0) |
+                  ((st && st[0] == '1') ? 4 : 0) | (!(po && po[0] == '0') ? 8 : 0);
+    if (r7k_gc_mode & 4) g_r7k_next_sweep = 1;
+    g_r7k_pool_stress = ps ? (size_t)strtoull(ps, NULL, 10) : 0;
+}
+
+void turi_cont_release_env(TuriEnv *env) {
+    for (uint32_t i = 0; i < g_r7k_n_slots; i++)
+        if (g_r7k_slots[i].c && g_r7k_slots[i].env == env) r7k_slot_free(i);
+    /* A keyframe this thread still holds is dead now if its continuation
+     * was one of these; let it go. */
+    for (unsigned i = 0; i < R7K_KEYS; i++) {
+        R7kCont *k = r7k_keys[i];
+        if (k && k->dead) {
+            r7k_keys[i] = NULL;
+            r7k_key_release(k);
+        }
+    }
+}
+
 static int g_r7k_form_depth;   /* r7rs-toplevel__ prompts live (defined below) */
 static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)a; (void)n; (void)ud;
@@ -3402,20 +3592,31 @@ static TuriValue native_r7rs_cont_capture(TuriEnv *env, TuriValue *a, uint32_t n
      * would overwrite them.  A provenance-tracked env captures no image
      * there; 0 sends the prelude to its escape-only call/ec. */
     if (env->provenance_on && g_r7k_form_depth == 0) return turi_int(0);
+    if (r7k_gc_mode < 0) r7k_gc_mode_read();
+    if (g_r7k_live >= g_r7k_next_sweep) r7k_maybe_sweep(env, false);
     R7kCont *volatile c = (R7kCont *)calloc(1, sizeof(R7kCont));
+    if (!c) return turi_int(0);
+    if (!r7k_slot_new(env, c)) { free(c); return turi_int(0); }
     TuriEnv *volatile venv = env;
     c->owner = pthread_self();
     turi_cont_pin();
+    c->epoch = turi_cont_epoch();
     c->state = turi_cont_state_capture(env);
+    c->embed = turi_r7rs_embed_cont_capture(0);
     volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
     mark[0] = 0;
     if (R7K_SETJMP(c->jb) != 0) {
         R7kCont *rc = c;
         turi_cont_state_restore(venv, rc->state);
-        return turi_int((int64_t)((uintptr_t)rc | 1));
+        turi_r7rs_embed_cont_resumed(rc->embed);
+        return turi_int(rc->handle | 1);
     }
-    if (!c->state || !r7k_snapshot(c, (unsigned char *)mark)) return turi_int(0);
-    return turi_int((int64_t)(uintptr_t)c);
+    if (!c->state || !r7k_snapshot(c, (unsigned char *)mark)) {
+        R7kSlot *sl = r7k_slot_of((uint64_t)c->handle);
+        if (sl) r7k_slot_free((uint32_t)(sl - g_r7k_slots));
+        return turi_int(0);
+    }
+    return turi_int(c->handle);
 }
 static TuriValue native_r7rs_cont_resumed(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3423,8 +3624,9 @@ static TuriValue native_r7rs_cont_resumed(TuriEnv *env, TuriValue *a, uint32_t n
 }
 static TuriValue native_r7rs_cont_here(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
-    R7kCont *c = (R7kCont *)(uintptr_t)(r7rs_arg_int(a, n, 0) & ~(int64_t)1);
-    return turi_bool(pthread_equal(c->owner, pthread_self()) != 0);
+    /* A handle naming no continuation answers yes, so the restore reports it. */
+    R7kCont *c = r7k_cont_of(r7rs_arg_int(a, n, 0));
+    return turi_bool(!c || pthread_equal(c->owner, pthread_self()) != 0);
 }
 static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
@@ -3443,6 +3645,8 @@ static TuriValue native_r7rs_cont_null(TuriEnv *env, TuriValue *a, uint32_t n, v
 static unsigned char *g_r7k_form_saved[64];
 static void          *g_r7k_boundary_saved[64];
 static int            g_r7k_form_depth;
+/* Each prompt's result, past the longjmp that ends it (a sweep root). */
+static TuriValue      g_r7k_form_results[64];
 __attribute__((noinline))
 static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
@@ -3462,32 +3666,61 @@ static TuriValue native_r7rs_toplevel(TuriEnv *env, TuriValue *a, uint32_t n, vo
     g_r7k_form_saved[d] = g_r7k_form_base;
     g_r7k_boundary_saved[d] = turi_cont_set_drive_boundary(turi_cont_drive_mark());
     g_r7k_form_base = (unsigned char *)&jb;
-    static TuriValue r_static[64];
     if (R7K_SETJMP(jb) == 0) {
-        r_static[d] = turi_call(env, a[0], NULL, 0);
+        g_r7k_form_results[d] = turi_call(env, a[0], NULL, 0);
         r7k_longjmp(jb);
     }
     d = --g_r7k_form_depth;
     g_r7k_form_base = g_r7k_form_saved[d];
     turi_cont_set_drive_boundary(g_r7k_boundary_saved[d]);
-    TuriValue r = r_static[d];
+    TuriValue r = g_r7k_form_results[d];
     if (turi_is_error(r)) return r;
     return turi_nil();
 }
+static TuriValue r7k_not_resumable(void) {
+    return turi_error("call/cc: the continuation was captured inside an `eval` that has since "
+                      "returned; it cannot be resumed "
+                      "(docs/archive/r7rs-eval-continuation-reentry-across-bridge.md)");
+}
 static TuriValue native_r7rs_cont_restore(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)ud;
-    R7kCont *c = (R7kCont *)(uintptr_t)(r7rs_arg_int(a, n, 0) & ~(int64_t)1);
+    R7kCont *c = r7k_cont_of(r7rs_arg_int(a, n, 0));
+    if (!c)
+        return turi_error("r7rs-cont-restore__: the continuation's image was reclaimed "
+                          "while it was still reachable (an interpreter bug: "
+                          "r7rs-callcc-memory-never-freed)");
+    if (!turi_r7rs_embed_cont_resumable(c->embed)) return r7k_not_resumable();
     /* S-5: the image is copied over the live stack below its base, so in a
      * provenance-tracked env it must have been taken under a top-level form
      * whose mark sits where the current one does, on this thread -- the
      * frames it overwrites are then this form's, never the embedder's. */
     if (env->provenance_on &&
-        (!c || g_r7k_form_depth == 0 || c->base != g_r7k_form_base ||
+        (g_r7k_form_depth == 0 || c->base != g_r7k_form_base ||
          !pthread_equal(c->owner, pthread_self())))
         return turi_error("r7rs-cont-restore__: the continuation was captured "
                           "under another prompt (S-5)");
     turi_cont_release_drives(c->lo + c->n);
+    turi_r7rs_embed_cont_restore(c->embed, c->lo + c->n);
     r7k_restore(c);
+}
+/* r7rs-cont-resumable?__ -- the prelude asks before the wind travel, so the
+ * refusal is an error object `guard` can catch and no thunk has run. */
+static TuriValue native_r7rs_cont_resumable(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)ud;
+    R7kCont *c = r7k_cont_of(r7rs_arg_int(a, n, 0));
+    /* A handle naming no continuation answers yes, so the restore reports it. */
+    return turi_bool(!c || turi_r7rs_embed_cont_resumable(c->embed));
+}
+/* r7rs-cont-hooks-install__ / r7rs-eval-c-cont-hook__ -- the compiled
+ * prelude's way to the evaluator's continuation hooks (r7rs_embed.h); here
+ * the capture above reaches them directly. */
+static TuriValue native_r7rs_cont_hooks_install(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_bool(true);
+}
+static TuriValue native_r7rs_eval_c_cont_hook(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
+    (void)env; (void)a; (void)n; (void)ud;
+    return turi_int(0);
 }
 
 /* r7rs-lang-plan T4: twins of stdlib/r7rs/eval.tur's inline C.  Both back
@@ -3507,6 +3740,10 @@ static int64_t r7rs_eval_interp_host(int64_t host_id) {
 }
 static void r7rs_eval_bind_host(TuriEnv *env) {
     g_r7rs_eval_host_env = env;
+    /* No value of this env crosses: datums cross as text, and a procedure as
+     * an id into r7rs-eval-hosts__, a global of this env's that its sweeps
+     * read (stdlib/r7rs/eval.tur).  So it keeps sweeping, as the embedded
+     * env does (r7rs_embed.c hands that one its own roots). */
     turi_r7rs_embed_set_host(r7rs_eval_interp_host, env);
 }
 static TuriValue native_r7rs_eval_c_eval(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
@@ -3772,45 +4009,191 @@ static void r7rs_put_utf8(char *out, int *n, uint32_t cp) {
 }
 /* The twins of the prelude's dynamic-environment slots (r7rs-dyn-ref__,
  * tur_r7rs_dyn in the compiled runtime): the wind, handler and parameter
- * stacks and a re-entry's delivered value.  One set: turi has no
- * user-reachable thread spawn, as with a ^thread-local global here.  A slot
- * never written reads as nil, which r7rs-dyn-unset?__ answers #t for. */
-static TuriValue r7rs_dyn_slots[4];
-static bool      r7rs_dyn_written[4];
+ * stacks and a re-entry's delivered value.  One set per env (env.h,
+ * r7rs_dyn): turi has no user-reachable thread spawn, as with a
+ * ^thread-local global here, but `(scheme eval)` runs a second env in the
+ * process (r7rs_embed.c), and that env's handlers are its own, as they are
+ * beside a compiled program.  A slot never written reads as nil, which
+ * r7rs-dyn-unset?__ answers #t for. */
 static TuriValue native_r7rs_dyn_ref(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     int64_t i = r7rs_arg_int(a, n, 0);
-    if (i < 0 || i >= 4 || !r7rs_dyn_written[i]) return turi_nil();
-    return r7rs_dyn_slots[i];
+    if (i < 0 || i >= 4 || !env->r7rs_dyn_written[i]) return turi_nil();
+    return env->r7rs_dyn[i];
 }
 static TuriValue native_r7rs_dyn_set(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
-    (void)env; (void)ud;
+    (void)ud;
     int64_t i = r7rs_arg_int(a, n, 0);
-    if (i >= 0 && i < 4 && n >= 2) { r7rs_dyn_slots[i] = a[1]; r7rs_dyn_written[i] = true; }
+    if (i >= 0 && i < 4 && n >= 2) { env->r7rs_dyn[i] = a[1]; env->r7rs_dyn_written[i] = true; }
     return turi_nil();
 }
 static TuriValue native_r7rs_dyn_unset(TuriEnv *env, TuriValue *a, uint32_t n, void *ud) {
     (void)env; (void)ud;
     return turi_bool(n < 1 || turi_any_identity_payload(a[0]).tag == TURI_NIL);
 }
+
+/* r7rs-callcc-memory-never-freed: the sweep.  A continuation's image, saved
+ * state and R7kCont are freed once no reachable word holds its handle.  It
+ * runs at a capture, when the live count reaches g_r7k_next_sweep: the
+ * marker (eval.c, turi_cont_gc_*) walks the globals, the env's in-flight
+ * values, the live drives, the C stack and registers, and the two value
+ * stores of these natives -- the dynamic-environment slots and the prompts'
+ * results -- and every handle it finds queues that continuation's image,
+ * saved state and jmp_buf (the callee-saved registers at its capture) to be
+ * walked in turn.  A delta image is walked as the bytes it restores.  What
+ * nothing reached is freed.  A doubt anywhere (eval.c lists them) frees
+ * nothing this time.
+ *
+ * The sweep stays off where some value could be out of its sight: a program
+ * that imported a Turmeric module or a library of its own (natives that keep
+ * values in their own memory), one with fibers, generators or futures (their
+ * own C stacks), a debugger session, a continuation of another env or
+ * thread, an env whose object map started late.  TUR_TURI_CONT_GC=0 turns it
+ * off; TUR_TURI_CONT_GC_TRACE=1 reports each sweep on stderr, and
+ * TUR_TURI_CONT_GC_STRESS=1 sweeps at every capture (for the tests: a
+ * reference the marker misses then fails at once, as the restore's error). */
+static void r7k_gc_word(TuriContGc *gc, uintptr_t w, void *ud) {
+    (void)ud;
+    R7kSlot *s = r7k_slot_of((uint64_t)w);
+    if (!s || s->marked) return;
+    /* An image holds no continuation captured after it: such a word is stale
+     * (gc_word, eval.c, says how stale words get there). */
+    uint32_t in = turi_cont_gc_image_epoch(gc);
+    if (in && s->c->epoch > in) return;
+    s->marked = true;
+    g_r7k_marked_wl[g_r7k_n_marked_wl++] = (uint32_t)(s - g_r7k_slots);
+}
+static void r7k_gc_cont(TuriContGc *gc, const R7kCont *c) {
+    turi_cont_gc_image_words(gc, &c->jb, sizeof c->jb, c->epoch);
+    if (c->img) {
+        turi_cont_gc_state(gc, c->state, c->epoch, c->img, (uintptr_t)c->lo, c->n);
+        return;
+    }
+    unsigned char *buf = (unsigned char *)malloc(c->n);
+    if (!buf) { turi_cont_gc_doubt(gc, "out of memory"); return; }
+    memcpy(buf, c->key->img, c->n);
+    for (size_t i = 0; i < c->n_d; i++)
+        memcpy(buf + (size_t)c->d_idx[i] * sizeof(uintptr_t), &c->d_val[i], sizeof(uintptr_t));
+    turi_cont_gc_state(gc, c->state, c->epoch, buf, (uintptr_t)c->lo, c->n);
+    free(buf);
+}
+/* The `(scheme eval)` evaluator's own arrays, when `env` is its env. */
+static void r7k_gc_root_words(const void *p, uint64_t nbytes, void *ud) {
+    turi_cont_gc_words((TuriContGc *)ud, p, (size_t)nbytes);
+}
+static const char *r7k_sweep_gate(TuriEnv *env) {
+    if (g_scheme_lower_opened_seam)
+        return "the program imports a Turmeric module or a library of its own";
+    if (env->debugger) return "a debugger is attached";
+    if (env->coro_stacks || env->sched_ready_head || env->current_fiber || env->all_futures ||
+        env->timers_head || env->io_pending_head)
+        return "the program has fibers, generators, futures, timers or pending I/O";
+    if (g_r7k_untracked_store) return "a mutable map holds values";
+    if (turi_r7rs_embed_program_conts_live()) return "a program continuation holds the evaluator's frames";
+    if (!r7k_stack_base()) return "the thread's stack base is unknown";
+    pthread_t self = pthread_self();
+    for (uint32_t i = 0; i < g_r7k_n_slots; i++) {
+        const R7kSlot *s = &g_r7k_slots[i];
+        if (s->c && (s->env != env || !pthread_equal(s->c->owner, self)))
+            return "a continuation of another env or thread is live";
+    }
+    return NULL;
+}
+/* The pool sweep's next budget, after a sweep that read `scanned` bytes and
+ * freed nothing because of `why` (NULL: it ran). */
+static void r7k_pool_rebudget(TuriEnv *env, const char *why, size_t scanned, size_t free_bytes) {
+    size_t full = R7K_POOL_BUDGET;
+    if (full < scanned * 2) full = scanned * 2;
+    if (full < free_bytes / 2) full = free_bytes / 2;   /* the free lists are walked too */
+    size_t b;
+    if (!(r7k_gc_mode & 8)) b = 0;
+    else if (g_r7k_pool_stress) b = g_r7k_pool_stress;
+    else if (!why) { b = full; g_r7k_pool_retry = R7K_POOL_RETRY; }
+    else {
+        b = g_r7k_pool_retry < full ? g_r7k_pool_retry : full;
+        if (g_r7k_pool_retry < full) g_r7k_pool_retry *= 2;
+    }
+    turi_val_sweep_budget(env, b);
+}
+
+__attribute__((noinline))
+static void r7k_maybe_sweep(TuriEnv *env, bool pool) {
+    size_t before = g_r7k_live, freed = 0, scanned = 0, kept_back = 0, reclaimed = 0;
+    size_t free_bytes = 0;
+    const char *why = (r7k_gc_mode & 1) ? r7k_sweep_gate(env) : "TUR_TURI_CONT_GC=0";
+    TuriContGc *gc = why ? NULL : turi_cont_gc_begin(env, r7k_gc_word, NULL);
+    if (!why && !gc) why = "the value pool keeps no complete object map";
+    if (gc) {
+        for (uint32_t i = 0; i < g_r7k_n_slots; i++) g_r7k_slots[i].marked = false;
+        g_r7k_n_marked_wl = 0;
+        turi_cont_gc_words(gc, env->r7rs_dyn, sizeof env->r7rs_dyn);
+        turi_cont_gc_words(gc, g_r7k_form_results, sizeof g_r7k_form_results);
+        turi_r7rs_embed_roots(env, r7k_gc_root_words, gc);
+        turi_cont_gc_roots(gc, r7k_stack_base());
+        for (;;) {
+            bool any = turi_cont_gc_drain(gc);
+            while (g_r7k_n_marked_wl) {
+                any = true;
+                r7k_gc_cont(gc, g_r7k_slots[g_r7k_marked_wl[--g_r7k_n_marked_wl]].c);
+            }
+            if (!any) break;
+        }
+        size_t released = turi_cont_gc_release(gc);
+        if (r7k_gc_mode & 8) reclaimed = turi_cont_gc_reclaim(gc);
+        free_bytes = turi_cont_gc_free_bytes(gc);
+        why = turi_cont_gc_end(gc, &scanned);
+        if (!why)
+            for (uint32_t i = 0; i < g_r7k_n_slots; i++)
+                if (g_r7k_slots[i].c && !g_r7k_slots[i].marked) {
+                    r7k_slot_free(i);
+                    freed++;
+                }
+        kept_back = released;
+    }
+    if (r7k_gc_mode & 2) {
+        /* A sweep at a capture reports as it always has ("r7k-gc:"); one the
+         * pool's growth started is told apart, since it may well land inside
+         * a handler and decline. */
+        const char *at = pool ? "r7k-gc (pool):" : "r7k-gc:";
+        if (why) fprintf(stderr, "%s %zu live, none freed: %s\n", at, before, why);
+        else     fprintf(stderr, "%s %zu live, %zu freed, %zu KB read, "
+                                 "%zu kept frames and temporaries handed back, "
+                                 "%zu KB of frames, bindings, closures and structs\n",
+                         at, before, freed, scanned / 1024, kept_back, reclaimed / 1024);
+    }
+    r7k_pool_rebudget(env, why, scanned, free_bytes);
+    size_t next = g_r7k_live + R7K_SWEEP_EVERY;
+    if (next < g_r7k_live * 2) next = g_r7k_live * 2;
+    if (next < g_r7k_live + scanned / R7K_SCAN_PER_CAPTURE)
+        next = g_r7k_live + scanned / R7K_SCAN_PER_CAPTURE;
+    g_r7k_next_sweep = (r7k_gc_mode & 4) ? g_r7k_live + 1 : next;
+}
+
+/* turi-dropped-closures-kept-until-teardown: the interpreter's pool sweep
+ * (eval.h, TuriPoolSweepFn): the same marking, run because the pool grew. */
+static void r7k_pool_sweep(TuriEnv *env, bool start) {
+    if (r7k_gc_mode < 0) r7k_gc_mode_read();
+    if (start) r7k_pool_rebudget(env, NULL, 0, 0);
+    else       r7k_maybe_sweep(env, true);
+}
 /* r7rs-srfi-18-216-sicp-plan T2: twins of stdlib/r7rs/thread.tur, SRFI 18's
  * C half.  Under the interpreter a thread is a scheduler fiber (green
  * threads, which SRFI 18 allows): it runs when the running code waits,
  * sleeps or yields, so the monitor needs no lock -- nothing switches inside
  * one of 18.scm's critical sections, whose only switch point is the wait.
- * The dynamic-environment slots above are one set for the process, so each
+ * The dynamic-environment slots above are one set for the env, so each
  * switch saves the leaving code's, clears them for whoever runs next (a new
  * thread starts with none, as on an OS thread), and restores them on the
  * way back. */
 static void r7rs_thread_switch(TuriEnv *env, bool *progress) {
     TuriValue saved[4];
     bool      written[4];
-    memcpy(saved, r7rs_dyn_slots, sizeof saved);
-    memcpy(written, r7rs_dyn_written, sizeof written);
-    memset(r7rs_dyn_written, 0, sizeof r7rs_dyn_written);
+    memcpy(saved, env->r7rs_dyn, sizeof saved);
+    memcpy(written, env->r7rs_dyn_written, sizeof written);
+    memset(env->r7rs_dyn_written, 0, sizeof env->r7rs_dyn_written);
     bool p = turi_sched_yield(env);
-    memcpy(r7rs_dyn_slots, saved, sizeof saved);
-    memcpy(r7rs_dyn_written, written, sizeof written);
+    memcpy(env->r7rs_dyn, saved, sizeof saved);
+    memcpy(env->r7rs_dyn_written, written, sizeof written);
     if (progress) *progress = p;
 }
 static double r7rs_thread_now(void) {
@@ -4768,10 +5151,14 @@ void wk_register_stdlib_natives(TuriEnv *env) {
     turi_env_register_native(env, "r7rs-unlink__",         native_r7rs_unlink,         NULL);
     /* r7rs-lang-plan T5: the prelude's re-entrant call/cc. */
     turi_env_register_native(env, "r7rs-cont-capture__",  native_r7rs_cont_capture,  NULL);
+    turi_set_pool_sweep_hook(r7k_pool_sweep);   /* turi-dropped-closures-kept-until-teardown */
     turi_env_register_native(env, "r7rs-cont-resumed?__", native_r7rs_cont_resumed,  NULL);
     turi_env_register_native(env, "r7rs-cont-null?__",    native_r7rs_cont_null,     NULL);
     turi_env_register_native(env, "r7rs-cont-here?__",    native_r7rs_cont_here,     NULL);
     turi_env_register_native(env, "r7rs-cont-restore__",  native_r7rs_cont_restore,  NULL);
+    turi_env_register_native(env, "r7rs-cont-resumable?__", native_r7rs_cont_resumable, NULL);
+    turi_env_register_native(env, "r7rs-cont-hooks-install__", native_r7rs_cont_hooks_install, NULL);
+    turi_env_register_native(env, "r7rs-eval-c-cont-hook__", native_r7rs_eval_c_cont_hook, NULL);
     turi_env_register_native(env, "r7rs-toplevel__",       native_r7rs_toplevel,      NULL);
     /* r7rs-lang-plan T4: stdlib/r7rs/eval.tur. */
     turi_env_register_native(env, "r7rs-eval-c-eval__",             native_r7rs_eval_c_eval,             NULL);

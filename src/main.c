@@ -299,6 +299,10 @@ static void dir_of_path(const char *path, char *out, size_t cap) {
  * Resolved via platform APIs in get_exe_path() first; argv[0] is only used
  * if those fail. */
 static const char *g_argv0 = NULL;
+/* The whole command line, for the split build's library-unit cache key
+ * (split_lib_cache_init): a flag that changes the emitted C changes it. */
+static int g_main_argc = 0;
+static const char *const *g_main_argv = NULL;
 
 /* SN1: write the absolute path of the running `tur` executable to out.
  * Returns 0 on success, -1 on failure (in which case out is unmodified). */
@@ -925,6 +929,49 @@ static bool g_import_split_failed = false;   /* cmd_build: this build's three un
  * import_split_pieces. */
 static size_t g_split_imp_exports = 0;
 
+/* r7rs-split-units-each-compile-the-runtime: the library unit's emission,
+ * cached.  On a warm cache the unit's text is already compiled (its object is
+ * keyed by that text), but emitting it again was still ~40% of `tur`'s work
+ * for a one-line program.  So the first build that emits it also writes the
+ * renamed text and everything the emission leaves for the later units
+ * (emit_split_carry_save) to <tur-build>/prelude/<key>.lib, and a later build
+ * with the same key reads that back instead of emitting.  The key has to be
+ * known BEFORE emission, so it covers everything that can reach the unit's
+ * text (split_lib_cache_init): the compiler binary itself, the command line,
+ * TUR_* in the environment, the experiments and emission switches, the
+ * whole-program feature flags, and the path and content of every stdlib file
+ * the unit's items come from.  The program's own code reaches none of it: the
+ * unit writes only the stdlib's items.  A program whose items would land there
+ * (an `extern-c`), or that reads a module of its own (a Turmeric module, a
+ * Scheme library or `include` in another file), does not use the cache.  Nor
+ * do its imports fork the key: an imported library's items are a later
+ * unit's, and every r7rs fixture -- `(scheme eval)`, the SRFIs, the
+ * `(turmeric ...)` seam -- emits one and the same library unit.
+ *
+ * What a wrong key could do is caught at three points, all falling back to
+ * emitting the unit: the record names a binding this program does not have
+ * (emit_split_carry_load), a later unit declares a library function with
+ * another signature (split_check_sigs), or the units fail to compile or link
+ * (cmd_build retries with the cache off).  TUR_SPLIT_LIB_CACHE=verify emits
+ * the unit anyway and says when the entry differs from it;
+ * tests/check-r7rs-split-lib-cache.sh runs it (TUR_SPLIT_LIB_CACHE_ALL=1: over
+ * every r7rs fixture).  TUR_SPLIT_LIB_CACHE=0 turns the cache off. */
+typedef struct {
+    bool     on;          /* this compile may read and write the cache */
+    bool     verify;      /* TUR_SPLIT_LIB_CACHE=verify */
+    bool     no_restore;  /* the entry did not fit: emit, and replace it */
+    uint64_t key;
+} SplitLibCache;
+static void split_lib_cache_init(SplitLibCache *c, const Expr *prog, const char *input);
+static bool split_lib_cache_restore(SplitLibCache *c, const Expr *prog, Buf *lib_r);
+static void split_lib_cache_record(SplitLibCache *c, const Expr *prog, const Buf *lib_r);
+/* cmd_build: emit the library unit, whatever the cache holds (a retry after
+ * a split build whose library unit came from it did not build); the entry is
+ * still written, replacing one that differs. */
+static bool g_split_lib_cache_off = false;
+/* compile_to_c: did this compile's library unit come from the cache? */
+static bool g_split_lib_from_cache = false;
+
 /* The imported-library unit is compiled in pieces (prelude_pieces) only when
  * it is big.  Every piece compiles the whole runtime preamble the unit
  * carries, ~0.5 s of cc at -O2 whatever the unit defines, so for a small SRFI
@@ -1323,14 +1370,22 @@ static int compile_to_c(const char *path, Buf *out_c,
                 Buf lib; buf_init(&lib);
                 Buf imp; buf_init(&imp);
                 Buf cli; buf_init(&cli);
+                SplitLibCache slc;
+                split_lib_cache_init(&slc, ctx.prog, path);
                 for (;;) {
                     emit_split_set_imp(use_imp);
                     emit_split_set_mode(EMIT_SPLIT_LIB);
-                    bool ok = emit_program(&lib, ctx.prog) == 0 && !emit_split_refusal();
                     /* The library unit's text is renamed by its own exports
-                     * alone, so it is the same text whatever is imported. */
+                     * alone, so it is the same text whatever is imported --
+                     * and the same for every program (SplitLibCache). */
                     Buf lib_r; buf_init(&lib_r);
-                    if (ok) emit_split_rename(lib.data, lib.len, &lib_r);
+                    const bool cached = split_lib_cache_restore(&slc, ctx.prog, &lib_r);
+                    bool ok = cached;
+                    if (!cached) {
+                        ok = emit_program(&lib, ctx.prog) == 0 && !emit_split_refusal();
+                        if (ok) emit_split_rename(lib.data, lib.len, &lib_r);
+                        if (ok) split_lib_cache_record(&slc, ctx.prog, &lib_r);
+                    }
                     size_t lib_exports = emit_split_exports_count();
                     if (ok && use_imp) {
                         emit_split_set_mode(EMIT_SPLIT_IMP);
@@ -1345,6 +1400,19 @@ static int compile_to_c(const char *path, Buf *out_c,
                         ok = emit_program(&cli, ctx.prog) == 0 && !emit_split_refusal();
                     }
                     const char *why = emit_split_refusal();
+                    if (!ok && cached && emit_split_refused_on_sigs() && !diag_had_error()) {
+                        /* The cached unit is not the one this program's
+                         * stdlib would emit: emit it, as with no cache. */
+                        if (getenv("TUR_SHOW_CC"))
+                            fprintf(stderr, "tur: the cached library unit %016llx does not fit; emitting it\n",
+                                    (unsigned long long)slc.key);
+                        slc.no_restore = true;
+                        emit_split_clear_defined(ctx.prog);
+                        buf_free(&lib_r);
+                        emit_split_reset();
+                        lib.len = imp.len = cli.len = 0;
+                        continue;
+                    }
                     if (!ok && getenv("TUR_SHOW_CC"))
                         fprintf(stderr, "tur: %s split declined: %s\n",
                                 use_imp ? "imported-library" : "prelude",
@@ -1356,6 +1424,7 @@ static int compile_to_c(const char *path, Buf *out_c,
                         if (use_imp) emit_split_rename(imp.data, imp.len, g_split_imp_sink);
                         emit_split_rename(cli.data, cli.len, out_c);
                         split_done = true;
+                        g_split_lib_from_cache = cached;
                     }
                     buf_free(&lib_r);
                     emit_split_reset();
@@ -3509,7 +3578,10 @@ static int prelude_cache_ent_cmp(const void *a, const void *b) {
     return x < y ? -1 : x > y ? 1 : 0;
 }
 
-static void prelude_cache_prune(const char *dir, const char *keep) {
+/* Prune the cache's own `<16 hex><suffix>` files beyond `keep_n`, least
+ * recently used first, sparing any used in the last `idle_secs`. */
+static void prelude_cache_prune_ext(const char *dir, const char *keep, const char *suffix,
+                                    size_t keep_n, double idle_secs) {
 #ifndef _WIN32
     DIR *d = opendir(dir);
     if (!d) return;
@@ -3519,9 +3591,9 @@ static void prelude_cache_prune(const char *dir, const char *keep) {
     while ((de = readdir(d)) != NULL) {
         const char *nm = de->d_name;
         size_t l = strlen(nm);
-        /* Only the cache's own `<16 hex>.o`: never a lock, a kept unit, or a
-         * private `<hash>.<pid>.o` another build is still writing. */
-        if (l != 18 || strcmp(nm + 16, ".o") != 0) continue;
+        /* Only the cache's own `<16 hex><suffix>`: never a lock, a kept unit,
+         * or a private `<hash>.<pid>.o` another build is still writing. */
+        if (l != 16 + strlen(suffix) || strcmp(nm + 16, suffix) != 0) continue;
         bool hex = true;
         for (size_t i = 0; i < 16; i++) if (!isxdigit((unsigned char)nm[i])) hex = false;
         if (!hex) continue;
@@ -3541,12 +3613,12 @@ static void prelude_cache_prune(const char *dir, const char *keep) {
         n++;
     }
     closedir(d);
-    if (n + 1 > PRELUDE_CACHE_KEEP) {
+    if (n + 1 > keep_n) {
         qsort(ents, n, sizeof *ents, prelude_cache_ent_cmp);
-        size_t excess = n + 1 - PRELUDE_CACHE_KEEP;
+        size_t excess = n + 1 - keep_n;
         time_t now = time(NULL);
         for (size_t i = 0; i < n && excess > 0; i++, excess--) {
-            if (difftime(now, ents[i].mtime) < PRELUDE_CACHE_IDLE_SECS) break;
+            if (difftime(now, ents[i].mtime) < idle_secs) break;
             char path[1100];
             snprintf(path, sizeof path, "%s/%s", dir, ents[i].name);
             unlink(path);
@@ -3554,8 +3626,12 @@ static void prelude_cache_prune(const char *dir, const char *keep) {
     }
     free(ents);
 #else
-    (void)dir; (void)keep;
+    (void)dir; (void)keep; (void)suffix; (void)keep_n; (void)idle_secs;
 #endif
+}
+
+static void prelude_cache_prune(const char *dir, const char *keep) {
+    prelude_cache_prune_ext(dir, keep, ".o", PRELUDE_CACHE_KEEP, PRELUDE_CACHE_IDLE_SECS);
 }
 
 /* r7rs-prelude-library-object-varies-with-the-program, cause 3: could a
@@ -3776,6 +3852,344 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
     return ret;
 }
 
+/* ---- the library unit's emission, cached (SplitLibCache) ---------------- */
+
+/* An entry is a library unit's carried state (~120 KB) and the hash of its
+ * renamed text (~1.6 MB, kept once per text).  There is a key for each `tur`
+ * binary, stdlib and set of switches in use, and a text for fewer; one
+ * nobody reads is only a cold emission away. */
+#define SPLIT_LIB_CACHE_KEEP 32
+#define SPLIT_LIB_TEXT_KEEP  8
+#define SPLIT_LIB_MAGIC "tur-split-lib 1\n"
+
+#ifndef _WIN32
+extern char **environ;
+#endif
+
+static int split_lib_str_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* tur_hamt_hash_xxh64 reads 8-byte words, so it wants an aligned start; a
+ * source file's text begins wherever its `#lang` line ends. */
+static uint64_t split_lib_hash(const char *p, size_t n) {
+    if (((uintptr_t)p & 7u) == 0) return tur_hamt_hash_xxh64(p, n);
+    Buf a; buf_init(&a);
+    buf_write(&a, p, n);
+    uint64_t h = tur_hamt_hash_xxh64(a.data, n);
+    buf_free(&a);
+    return h;
+}
+
+/* One key field: its length, then its bytes, so no two field lists hash the
+ * same text. */
+static void split_lib_key_put(Buf *k, const char *s) {
+    buf_printf(k, "%zu:%s\n", strlen(s), s);
+}
+
+static void split_lib_cache_init(SplitLibCache *c, const Expr *prog, const char *input) {
+    memset(c, 0, sizeof *c);
+    const char *mode = getenv("TUR_SPLIT_LIB_CACHE");
+    if (mode && strcmp(mode, "0") == 0) return;
+#ifdef _WIN32
+    (void)prog; (void)input;
+#else
+    const bool show = getenv("TUR_SHOW_CC") != NULL;
+    /* A program that reads a module of its own (a Turmeric one, or a Scheme
+     * library or `include` in another file) is left out, beyond what the
+     * items below show: its code can do more than the program file's. */
+    for (uint32_t f = 1; f < DIAG_MAX_FILES; f++) {
+        const SourceFile *sf = diag_source_file((uint16_t)f);
+        if (!sf || f < diag_autoload_file_ids_end() || diag_file_is_imported_stdlib((uint16_t)f))
+            continue;
+        if (show)
+            fprintf(stderr, "tur: library unit not cached: the program reads %s, which is not the stdlib's\n",
+                    sf->path ? sf->path : "?");
+        return;
+    }
+    /* The files the library unit is written from: the auto-loaded ones and
+     * any stdlib module they bring in.  An imported library's (`(srfi 13)`,
+     * `(scheme read)`) are not among them -- its items are a later unit's --
+     * so a program's imports do not fork the key. */
+    bool lib_files[DIAG_MAX_FILES] = { false };
+    const Expr *foreign = emit_split_lib_files(prog, lib_files, DIAG_MAX_FILES);
+    if (foreign) {
+        if (show) {
+            const char *fp = diag_file_path(foreign->span.file_id);
+            fprintf(stderr, "tur: library unit not cached: it would carry the program's item at %s:%u\n",
+                    fp ? fp : "?", (unsigned)foreign->span.line);
+        }
+        return;
+    }
+    char exe[4096];
+    struct stat est;
+    if (get_exe_path(exe, sizeof exe) != 0 || stat(exe, &est) != 0) return;
+
+    Buf k; buf_init(&k);
+    buf_puts(&k, SPLIT_LIB_MAGIC);
+    split_lib_key_put(&k, TUR_VERSION);
+    /* The compiler: a rebuilt `tur` is a new file, whatever its version says. */
+    split_lib_key_put(&k, exe);
+#if defined(__APPLE__)
+    long mt_ns = (long)est.st_mtimespec.tv_nsec;
+#else
+    long mt_ns = (long)est.st_mtim.tv_nsec;
+#endif
+    buf_printf(&k, "exe %llu %llu %lld %lld.%09ld\n",
+               (unsigned long long)est.st_dev, (unsigned long long)est.st_ino,
+               (long long)est.st_size, (long long)est.st_mtime, mt_ns);
+    /* The command line, less what names this program's files and outputs:
+     * a flag that changes the emitted C changes the key.  An `-I` changes
+     * only which files are read, and those are hashed below. */
+    for (int i = 1; i < g_main_argc && g_main_argv; i++) {
+        const char *a = g_main_argv[i];
+        if (strcmp(a, "--") == 0) break;
+        if (input && strcmp(a, input) == 0) continue;
+        if ((strcmp(a, "-o") == 0 || strcmp(a, "--output") == 0 || strcmp(a, "-I") == 0 ||
+             strcmp(a, "-B") == 0 || strcmp(a, "--build-dir") == 0) && i + 1 < g_main_argc) {
+            i++;
+            continue;
+        }
+        if (strncmp(a, "-I", 2) == 0 || strncmp(a, "--build-dir=", 12) == 0 ||
+            strncmp(a, "--output=", 9) == 0)
+            continue;
+        buf_puts(&k, "arg ");
+        split_lib_key_put(&k, a);
+    }
+    /* The environment's TUR_* switches (sorted; only the cache's own and
+     * the build log's are left out). */
+    size_t ne = 0, ecap = 0;
+    const char **ev = NULL;
+    for (char **e = environ; e && *e; e++) {
+        if (strncmp(*e, "TUR_", 4) != 0 || strncmp(*e, "TUR_SHOW_CC=", 12) == 0 ||
+            strncmp(*e, "TUR_SPLIT_LIB_CACHE=", 20) == 0)
+            continue;
+        if (ne == ecap) {
+            ecap = ecap ? ecap * 2 : 32;
+            const char **nv = (const char **)realloc(ev, ecap * sizeof *ev);
+            if (!nv) { free(ev); buf_free(&k); return; }
+            ev = nv;
+        }
+        ev[ne++] = *e;
+    }
+    if (ne) qsort(ev, ne, sizeof *ev, split_lib_str_cmp);
+    for (size_t i = 0; i < ne; i++) { buf_puts(&k, "env "); split_lib_key_put(&k, ev[i]); }
+    free(ev);
+    /* Experiments, from whichever source enabled them. */
+    for (size_t i = 0; i < experiment_count(); i++) {
+        const ExperimentDescriptor *d = experiment_at(i);
+        buf_printf(&k, "xp %s %d\n", d->name, d->opt_global ? (int)*d->opt_global : -1);
+    }
+    /* The emission's switches and the whole-program feature flags the
+     * preamble reads (globals.h).  A new global that changes the emitted C
+     * belongs here; `TUR_SPLIT_LIB_CACHE=verify` over the r7rs fixtures is
+     * the check that the list is enough. */
+    extern bool g_needs_regex_h;
+#define SLK(g) buf_printf(&k, "g " #g " %lld\n", (long long)(g))
+    SLK(g_unsafe_max_lines); SLK(g_unsafe_warn_nested); SLK(g_unsafe_require_safety);
+    SLK(g_lint_unsafe_enabled); SLK(g_lint_inline_c_unsafe); SLK(g_panic_abort);
+    SLK(g_warn_unused_result); SLK(g_lint_panic); SLK(g_no_contracts);
+    SLK(g_emit_debug_lines); SLK(g_backtrack_depth); SLK(g_cps_path);
+    SLK(g_needs_hamt); SLK(g_needs_regex_h); SLK(g_needs_dlfcn); SLK(g_has_variadics);
+    SLK(g_uses_cons); SLK(g_gadt_enabled); SLK(g_data_literals_enabled);
+    SLK(g_json_reader_enabled); SLK(g_schema_reader_enabled); SLK(g_sized_types_enabled);
+    SLK(g_strict_effects); SLK(g_emit_abi_trace); SLK(g_linear_enabled);
+    SLK(g_unique_enabled); SLK(g_substructural_enabled); SLK(g_union_types_enabled);
+    SLK(g_intersection_types_enabled); SLK(g_effect_types_enabled);
+    SLK(g_contracts_enabled); SLK(g_keep_contracts_in_release); SLK(g_sessions_enabled);
+    SLK(g_dynvar_enabled); SLK(g_callcc_enabled); SLK(g_symbols_enabled);
+    SLK(g_interpret_mode); SLK(g_elab_toplevel_imports); SLK(g_macro_caps_io);
+    SLK(g_no_proc_macros); SLK(g_turi_stdlib_preload); SLK(g_adt_slab);
+    SLK(g_sr1_sum_byvalue); SLK(g_sr2_app_sum_byvalue); SLK(g_trail_autoloaded);
+    SLK(g_opt_option_niche); SLK(g_opt_regions); SLK(g_opt_dynamic_any);
+    SLK(g_opt_saffron_gc); SLK(g_opt_r7rs); SLK(g_opt_reflected_measures);
+    SLK(g_opt_repl_jit_inline_c); SLK(g_opt_r7rs_gc); SLK(g_strict_refine);
+    SLK(g_emit_for_link); SLK(g_emit_ffi_export_shims); SLK(g_runtime_mode);
+    SLK(emit_rcgc_from_archive());
+#undef SLK
+    split_lib_key_put(&k, g_lang_prelude ? g_lang_prelude : "");
+    /* Those files, by path and content. */
+    for (uint32_t f = 1; f < DIAG_MAX_FILES; f++) {
+        const SourceFile *sf = diag_source_file((uint16_t)f);
+        if (!sf || !sf->src || !(f < diag_autoload_file_ids_end() || lib_files[f])) continue;
+        buf_printf(&k, "file %zu %016llx ", sf->len,
+                   (unsigned long long)split_lib_hash(sf->src, sf->len));
+        split_lib_key_put(&k, sf->path ? sf->path : "");
+    }
+    c->key = split_lib_hash(k.data, k.len);
+    buf_free(&k);
+    c->on = true;
+    c->verify = mode && strcmp(mode, "verify") == 0;
+    c->no_restore = g_split_lib_cache_off;
+    if (show) fprintf(stderr, "tur: library unit cache key %016llx\n", (unsigned long long)c->key);
+#endif
+}
+
+/* <tur-build>/prelude/<name><ext>, or false when the directory is not one we
+ * own (the text is compiled into the user's program: same rule as the
+ * objects beside it, prelude_split_object). */
+static bool split_lib_cache_file(uint64_t name, const char *ext, char *out, size_t cap) {
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%sprelude", stable_c_prefix());
+    if (mkdir(dir, 0700) != 0 && errno != EEXIST) return false;
+    if (!tmp_dir_is_ours(dir)) return false;
+    snprintf(out, cap, "%s/%016llx%s", dir, (unsigned long long)name, ext);
+    return true;
+}
+
+/* All of a cache file, or false when it is missing or not ours alone. */
+static bool split_lib_cache_slurp(const char *path, Buf *out) {
+    struct stat st;
+    if (!prelude_object_usable(path, &st)) return false;
+    FILE *f = fopen(path, "rb");
+    if (!f) return false;
+    char chunk[65536];
+    size_t n;
+    while ((n = fread(chunk, 1, sizeof chunk, f)) > 0) buf_write(out, chunk, n);
+    bool ok = !ferror(f);
+    fclose(f);
+    return ok;
+}
+
+/* Write `n` bytes to `path` whole or not at all (a private name, renamed). */
+static bool split_lib_cache_put_file(const char *path, const char *head,
+                                     const char *data, size_t n) {
+    char tmp[1200];
+    snprintf(tmp, sizeof tmp, "%s.%ld.tmp", path, (long)getpid());
+    FILE *f = fopen_nofollow_w(tmp);
+    if (!f) return false;
+    bool ok = (!head || fputs(head, f) >= 0) && fwrite(data, 1, n, f) == n;
+    if (fclose(f) != 0) ok = false;
+    if (!ok || rename(tmp, path) != 0) { unlink(tmp); return false; }
+    return true;
+}
+
+/* The entry for `c->key`: <key>.lib holds the carried state and names the
+ * text by its hash; <text hash>.libtext holds the text, once for every key
+ * that has it.  False when either is missing or not wholly as written. */
+static bool split_lib_cache_read(const SplitLibCache *c, Buf *text, Buf *carry) {
+    char path[1100];
+    Buf d; buf_init(&d);
+    bool ok = false;
+    if (split_lib_cache_file(c->key, ".lib", path, sizeof path) &&
+        split_lib_cache_slurp(path, &d)) {
+        /* "<magic><key>\n<text hash> <text len> <carry len>\n<carry>" */
+        size_t ml = sizeof SPLIT_LIB_MAGIC - 1;
+        const char *nl1 = d.len > ml && memcmp(d.data, SPLIT_LIB_MAGIC, ml) == 0
+                          ? memchr(d.data + ml, '\n', d.len - ml) : NULL;
+        const char *nl2 = nl1 ? memchr(nl1 + 1, '\n', (size_t)(d.data + d.len - nl1 - 1)) : NULL;
+        unsigned long long key = 0, th = 0;
+        size_t tl = 0, cl = 0;
+        if (nl2 && sscanf(d.data + ml, "%16llx", &key) == 1 && key == c->key &&
+            sscanf(nl1 + 1, "%16llx %zu %zu", &th, &tl, &cl) == 3 &&
+            (size_t)(d.data + d.len - (nl2 + 1)) == cl) {
+            char tpath[1100];
+            size_t before = text->len;
+            if (split_lib_cache_file((uint64_t)th, ".libtext", tpath, sizeof tpath) &&
+                split_lib_cache_slurp(tpath, text) && text->len - before == tl &&
+                split_lib_hash(text->data + before, tl) == (uint64_t)th) {
+                buf_write(carry, nl2 + 1, cl);
+                ok = true;
+            } else {
+                text->len = before;
+            }
+        }
+    }
+    buf_free(&d);
+    return ok;
+}
+
+static void split_lib_cache_write(const SplitLibCache *c, const Buf *text, const Buf *carry) {
+    uint64_t th = split_lib_hash(text->data, text->len);
+    char tpath[1100], path[1100], dir[1024];
+    if (!split_lib_cache_file(th, ".libtext", tpath, sizeof tpath) ||
+        !split_lib_cache_file(c->key, ".lib", path, sizeof path))
+        return;
+    snprintf(dir, sizeof dir, "%sprelude", stable_c_prefix());
+    Buf have; buf_init(&have);
+    bool text_there = split_lib_cache_slurp(tpath, &have) && have.len == text->len &&
+                      memcmp(have.data, text->data, text->len) == 0;
+    buf_free(&have);
+    if (!text_there) {
+        if (!split_lib_cache_put_file(tpath, NULL, text->data, text->len)) return;
+        prelude_cache_prune_ext(dir, tpath, ".libtext", SPLIT_LIB_TEXT_KEEP, 0);
+    }
+    char head[128];
+    snprintf(head, sizeof head, "%s%016llx\n%016llx %zu %zu\n", SPLIT_LIB_MAGIC,
+             (unsigned long long)c->key, (unsigned long long)th, text->len, carry->len);
+    if (split_lib_cache_put_file(path, head, carry->data, carry->len))
+        prelude_cache_prune_ext(dir, path, ".lib", SPLIT_LIB_CACHE_KEEP, 0);
+}
+
+/* In place of the library unit's emission: its cached text (appended to
+ * `lib_r`) and carried state, put back.  False -- having put back nothing --
+ * when there is no entry or it does not fit this program; emit it then. */
+static bool split_lib_cache_restore(SplitLibCache *c, const Expr *prog, Buf *lib_r) {
+    if (!c->on || c->verify || c->no_restore) return false;
+    Buf text, carry;
+    buf_init(&text);
+    buf_init(&carry);
+    bool ok = split_lib_cache_read(c, &text, &carry);
+    if (ok && !emit_split_carry_load(carry.data, carry.len, prog)) {
+        if (getenv("TUR_SHOW_CC"))
+            fprintf(stderr, "tur: the cached library unit %016llx names bindings this program "
+                            "does not have; emitting it\n", (unsigned long long)c->key);
+        c->no_restore = true;
+        ok = false;
+    }
+    if (ok) {
+        buf_write(lib_r, text.data, text.len);
+        /* Most recently used last, for the pruning. */
+        char path[1100];
+        if (split_lib_cache_file(c->key, ".lib", path, sizeof path))
+            (void)prelude_object_reuse(path);
+        if (split_lib_cache_file(split_lib_hash(text.data, text.len), ".libtext",
+                                 path, sizeof path))
+            (void)prelude_object_reuse(path);
+        if (getenv("TUR_SHOW_CC"))
+            fprintf(stderr, "tur: library unit from the cache (%016llx)\n", (unsigned long long)c->key);
+    }
+    buf_free(&text);
+    buf_free(&carry);
+    return ok;
+}
+
+/* After the library unit's emission: write its entry, unless an equal one is
+ * there.  One that differs is replaced -- and, under
+ * TUR_SPLIT_LIB_CACHE=verify, reported and kept, since then the key failed
+ * to tell two different units apart. */
+static void split_lib_cache_record(SplitLibCache *c, const Expr *prog, const Buf *lib_r) {
+    if (getenv("TUR_SHOW_CC"))
+        fprintf(stderr, "tur: library unit emitted (text %016llx)\n",
+                (unsigned long long)split_lib_hash(lib_r->data, lib_r->len));
+    if (!c->on) return;
+    Buf carry; buf_init(&carry);
+    emit_split_carry_save(&carry, prog);
+    Buf old_text, old_carry;
+    buf_init(&old_text);
+    buf_init(&old_carry);
+    bool had = split_lib_cache_read(c, &old_text, &old_carry);
+    bool same_text = had && old_text.len == lib_r->len &&
+                     memcmp(old_text.data, lib_r->data, lib_r->len) == 0;
+    bool same_carry = had && old_carry.len == carry.len &&
+                      memcmp(old_carry.data, carry.data, carry.len) == 0;
+    if (had && (!same_text || !same_carry)) {
+        if (c->verify || getenv("TUR_SHOW_CC"))
+            fprintf(stderr, "tur: split library cache: entry %016llx differs from the emitted "
+                            "library unit (%s%s%s)\n", (unsigned long long)c->key,
+                    same_text ? "" : "text", !same_text && !same_carry ? ", " : "",
+                    same_carry ? "" : "carried state");
+    } else if (had && c->verify && getenv("TUR_SHOW_CC")) {
+        fprintf(stderr, "tur: split library cache: entry %016llx verified\n",
+                (unsigned long long)c->key);
+    }
+    if (!had || (!c->verify && (!same_text || !same_carry)))
+        split_lib_cache_write(c, lib_r, &carry);
+    buf_free(&old_text);
+    buf_free(&old_carry);
+    buf_free(&carry);
+}
+
 static int cmd_build_once(const char *input, const char *out_path,
                           const char **include_dirs, int n_include_dirs,
                           const char *target,
@@ -3794,8 +4208,19 @@ static int cmd_build(const char *input, const char *out_path,
     bool retry = false;
     bool three = false;
     g_import_split_failed = false;
+    g_split_lib_cache_off = false;
     int rc = cmd_build_once(input, out_path, include_dirs, n_include_dirs, target,
                             reader_macro_paths, n_reader_macro_paths, true, &retry, &three);
+    /* r7rs-split-units-each-compile-the-runtime: units that did not build
+     * around a library unit from the cache are tried again around an emitted
+     * one first (which replaces the entry if it differs). */
+    if (retry && g_split_lib_from_cache) {
+        if (getenv("TUR_SHOW_CC"))
+            fprintf(stderr, "tur: split build failed with the cached library unit; emitting it\n");
+        g_split_lib_cache_off = true;
+        rc = cmd_build_once(input, out_path, include_dirs, n_include_dirs, target,
+                            reader_macro_paths, n_reader_macro_paths, true, &retry, &three);
+    }
     /* r7rs-imported-libraries-recompiled-every-build: three units that did
      * not build try two (the imported libraries back in the program's)
      * before one. */
@@ -3822,6 +4247,7 @@ static int cmd_build_once(const char *input, const char *out_path,
                           bool allow_split, bool *retry_whole, bool *three_units) {
     *retry_whole = false;
     *three_units = false;
+    g_split_lib_from_cache = false;
     /* RT3: reset per-compile refinement state, like the check/run/emit-c entry
      * points. The memo caches VC pointers into the per-compile arena; a process
      * that builds >1 file (`tur test`, LSP) otherwise keeps stale pointers and
@@ -12527,6 +12953,8 @@ static int tur_main_inner(int argc, char **argv) {
      * Platform APIs (_NSGetExecutablePath / /proc/self/exe) are tried
      * first; argv[0] is the last-resort path source. */
     g_argv0 = (argc > 0) ? argv[0] : NULL;
+    g_main_argc = argc;
+    g_main_argv = (const char *const *)argv;
     /* Resolve the stdlib root once at startup so TUR_STDLIB_DIR is
      * propagated into the process env before any subsystem (elaborator,
      * worker, interpreter) reads it. */

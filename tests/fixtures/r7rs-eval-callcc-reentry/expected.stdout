@@ -1,0 +1,14 @@
+(result 42)
+(result 101)
+(result 201)
+3
+(got 50)
+[in][out](result (inner 41))
+[in][out](result (inner 100))
+[in][out](result (inner (eval-caught boom)))
+(program-caught late)
+(escaped 41)
+20
+(20 2)
+(refused "call/cc: the continuation was captured inside an `eval` that has since returned; it cannot be resumed")
+3

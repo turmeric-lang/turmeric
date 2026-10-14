@@ -14190,6 +14190,11 @@ static void ctg_reset(void) {
     memset(g_ctg, 0, sizeof g_ctg);
     g_n_ctg = 0;
     g_ctg_built = false;
+    /* The names are a unit's own (`static`): numbered per emission, as
+     * tcg_reset_group_registry numbers emit_fns.c's, so a split build's
+     * program unit reads the same whether or not its library unit was
+     * emitted first in this process (r7rs-split-units-each-compile-the-runtime). */
+    g_ctg_ctr = 0;
 }
 
 /* Every colored tail call's callee in `t`, lifted regions included -- an
@@ -14749,7 +14754,7 @@ static bool emit_cps_ir_try_fn_impl(EmitCtx *ctx, Buf *file, const Expr *e) {
             const char *pc = emit_type_c_name(ctx, rat);
             if (fd->params[i] && pc && strcmp(pc, "int64_t") != 0
                 && (type_uses_carrier_abi(rat) || type_app_is_concrete_adt(&rat)))
-                fd->params[i]->emit_byvalue_carrier_abi = true;
+                emit_note(fd->params[i])->emit_byvalue_carrier_abi = true;
         }
     }
 

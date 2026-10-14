@@ -1,0 +1,86 @@
+#lang r7rs
+;; turi-dropped-closures-kept-until-teardown: the `(scheme eval)` evaluator
+;; is a second interpreter env in the process, and both envs sweep their
+;; pools.  Two things are checked:
+;;
+;;   - Each env's handlers, winds and parameters are its own: the program's
+;;     must stay where the program's sweep can read them.  Evaluated code
+;;     installs handlers of its own and then calls back into the program,
+;;     which makes enough garbage (`churn`) for the program's sweep to run
+;;     while both sets are installed.  Each result then needs the program's
+;;     own handler, wind and parameter, all installed before the call.
+;;   - The evaluator keeps some of its env's values in arrays of its own
+;;     (src/turi/r7rs_embed.c): the procedures handed to the program, the
+;;     wrappers of the program's procedures, the arguments of an apply.  Each
+;;     is used again after its env has made garbage.
+;;
+;; tests/check-turi-pool-sweep.py runs this with a sweep every few KB and
+;; every object a sweep hands back poisoned.
+(import (scheme base) (scheme write) (scheme eval))
+
+(define (churn n)
+  (let loop ((i 0) (acc 0))
+    (if (= i n) acc
+        (loop (+ i 1) (+ acc (guard (e (#t 1)) ((lambda (x) (car (list x i))) 1)))))))
+
+(define depth (make-parameter 0))
+
+(define (count-up n k)
+  (let loop ((i n) (acc '()))
+    (if (= i 0) acc (loop (- i 1) (cons (+ i k) acc)))))
+
+;; The callback: churn, then answer, raise a symbol (evaluated code catches
+;; it) or raise a string (it does not, so the program's own guard does).
+(define (callback n)
+  (let ((m (churn n)))
+    (cond ((= (modulo n 3) 0) (raise 'inner-catches))
+          ((= (modulo n 3) 1) (raise "program-catches"))
+          (else (+ m (depth))))))
+
+(define (run)
+  (let ((inner (eval '(lambda (g n)
+                        (guard (e ((symbol? e) (list 'caught-inside e)))
+                          (with-exception-handler
+                            (lambda (c) (raise c))
+                            (lambda ()
+                              (dynamic-wind
+                                (lambda () #f)
+                                (lambda () (g n))
+                                (lambda () #f))))))
+                     (environment '(scheme base))))
+        (log '())
+        (winds 0))
+    (do ((i 0 (+ i 1))) ((= i 24))
+      (let ((r (parameterize ((depth 1000))
+                 (guard (e ((string? e) (list 'caught-outside e (depth))))
+                   (dynamic-wind
+                     (lambda () (set! winds (+ winds 1)))
+                     (lambda () (inner callback (+ 150 i)))
+                     (lambda () (set! winds (+ winds 1))))))))
+        (set! log (cons r log))
+        ;; More garbage, with only the program's handlers installed.
+        (churn 100)))
+    (for-each (lambda (r) (write r) (newline)) (reverse log))
+    (display "winds: ") (write winds) (newline)
+    ;; Procedures evaluated code made, kept by the program while the
+    ;; evaluator makes garbage; applies whose list arguments are read back
+    ;; one after another.
+    (let* ((env (environment '(scheme base)))
+           (adders (map (lambda (k) (eval (list 'lambda '(x) (list '+ 'x k)) env))
+                        '(1 2 3)))
+           (sum-lists (eval '(lambda (a b c)
+                               (guard (e (#t -1)) (apply + (append a b c))))
+                            env))
+           (sums 0))
+      (do ((i 0 (+ i 1))) ((= i 20))
+        (set! sums (+ sums (sum-lists (count-up 40 i) (count-up 40 (+ i 1)) (count-up 40 (+ i 2))))))
+      (display "sums: ") (write sums) (newline)
+      (display "adders: ") (write (map (lambda (f) (f 10)) adders)) (newline)
+      ;; `callback` crosses again: its wrapper was made on its first crossing
+      ;; and kept since.
+      (display "callback again: ") (write ((eval '(lambda (g) (g 5)) env) callback)) (newline))
+    ;; The program's handler stack is intact after it all.
+    (write (guard (e (#t (list 'outer e))) (raise 'after))) (newline)
+    (write (depth)) (newline)))
+
+(run)

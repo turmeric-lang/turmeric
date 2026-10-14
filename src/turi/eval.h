@@ -724,16 +724,70 @@ TuriValue turi_any_identity_payload(TuriValue v);
  * (after the stack image is restored). */
 typedef struct TuriContState TuriContState;
 void           turi_cont_pin(void);
+/* The capture epoch: how many captures there have been. */
+uint32_t       turi_cont_epoch(void);
 /* Free the heap work stacks of the drives a re-entry is about to abandon:
  * those registered below `top`, the top of the image being restored. */
 void           turi_cont_release_drives(const void *top);
 TuriContState *turi_cont_state_capture(TuriEnv *env);
 void           turi_cont_state_restore(TuriEnv *env, const TuriContState *s);
+/* The env's fields without its drives, and their restore alone: for the
+ * `(scheme eval)` evaluator's env inside a program continuation
+ * (r7rs_embed.c), whose drives the capturing env's state already holds. */
+TuriContState *turi_cont_state_capture_env(TuriEnv *env);
+void           turi_cont_state_restore_env(TuriEnv *env, const TuriContState *s);
 /* The per-form prompt (r7rs-toplevel-reentry-reruns-forms): the drive the
  * current top-level form runs under, and the boundary a capture stops its
  * drive snapshot at.  `set` returns the previous boundary. */
 void          *turi_cont_drive_mark(void);
 void          *turi_cont_set_drive_boundary(void *b);
+/* r7rs-callcc-memory-never-freed: free a reclaimed continuation's state. */
+void           turi_cont_state_free(TuriContState *s);
+/* Free every continuation `env` captured (env teardown; defined with the
+ * R7RS natives, interpreter_natives.c). */
+void           turi_cont_release_env(TuriEnv *env);
+
+/* r7rs-callcc-memory-never-freed: the marker of the continuation-image sweep
+ * (eval.c says what it walks and why it is conservative).  The R7RS natives
+ * drive it: begin (NULL when the env keeps no object map), the roots, then
+ * drain and the images of the continuations the hook reports, alternately,
+ * until neither has work; end returns NULL when the marking is complete, or
+ * the reason nothing may be freed.  `on_word` sees every word the marker
+ * reads and recognises a continuation handle among them. */
+typedef struct TuriContGc TuriContGc;
+typedef void (*TuriContGcWordFn)(TuriContGc *gc, uintptr_t w, void *ud);
+TuriContGc *turi_cont_gc_begin(TuriEnv *env, TuriContGcWordFn on_word, void *ud);
+void        turi_cont_gc_doubt(TuriContGc *gc, const char *why);
+void        turi_cont_gc_roots(TuriContGc *gc, const void *stack_hi);
+void        turi_cont_gc_words(TuriContGc *gc, const void *p, size_t n);
+/* A reached continuation, captured at `epoch` (turi_cont_epoch just after its
+ * pin): its saved state, and its image -- the bytes of [img_lo, img_lo +
+ * img_n) as captured, read from `img`.  `image_words` is for other words
+ * saved at the capture (the jmp_buf); `image_epoch` is the epoch of the
+ * image being read, 0 outside one. */
+void        turi_cont_gc_state(TuriContGc *gc, const TuriContState *s, uint32_t epoch,
+                               const unsigned char *img, uintptr_t img_lo, size_t img_n);
+void        turi_cont_gc_image_words(TuriContGc *gc, const void *p, size_t n, uint32_t epoch);
+uint32_t    turi_cont_gc_image_epoch(const TuriContGc *gc);
+bool        turi_cont_gc_drain(TuriContGc *gc);
+/* After a complete marking: hand back the frames and temporaries captures
+ * kept (eval.c, cont_defer_*) that nothing reached.  Returns how many. */
+size_t      turi_cont_gc_release(TuriContGc *gc);
+/* turi-dropped-closures-kept-until-teardown: then hand back every frame,
+ * binding and closure nothing reached (the pool sweep).  Returns the bytes. */
+size_t      turi_cont_gc_reclaim(TuriContGc *gc);
+/* The bytes on the free lists after it (the next sweep walks them all). */
+size_t      turi_cont_gc_free_bytes(const TuriContGc *gc);
+/* Env teardown: free the deferred temporaries' store. */
+void        turi_cont_deferred_free(TuriEnv *env);
+/* `*scanned`: how many bytes the marking read. */
+const char *turi_cont_gc_end(TuriContGc *gc, size_t *scanned);
+/* The pool sweep's driver, which owns the roots only it knows (the R7RS
+ * natives).  The interpreter calls it with `start` true when an env first
+ * keeps an object map (to set the first budget, turi_val_sweep_budget), and
+ * with `start` false at a safe point once env->pool_sweep_due is raised. */
+typedef void (*TuriPoolSweepFn)(TuriEnv *env, bool start);
+void        turi_set_pool_sweep_hook(TuriPoolSweepFn fn);
 
 /* Run the cooperative event loop until all async fibers and timers complete. */
 void turi_run_event_loop(TuriEnv *env);

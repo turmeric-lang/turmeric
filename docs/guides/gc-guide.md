@@ -463,6 +463,67 @@ tracking, which is also what keeps a TVar valid across rewinds. Explicit
 `vec-free` / `set-free` / `map-free` remain available and remain the only
 mid-run reclamation for envs without promotion.
 
+**`#lang r7rs` is collected mid-run, without promotion.** Two sweeps share
+one marker:
+
+- **Re-entrant `call/cc` images.** A captured continuation is a copy of the
+  C stack plus the evaluator's saved state, about 2 KB, and a capture also
+  keeps the frames and argument lists that were live at it. A sweep runs at
+  a capture once enough continuations are live and frees every one whose
+  handle nothing reachable holds.
+- **The value pool itself** (the pool sweep). Every 4 MB of values made, or
+  more on a large heap, the sweep hands every frame, binding, closure and
+  small struct (a pair, a record) that nothing reaches back to a free list,
+  and the interpreter makes new ones from there. So a `guard`, a `lambda` or
+  a `map` in a loop runs in flat memory instead of growing until the env is
+  freed.
+
+The marker is conservative: an env running `#lang r7rs` keeps an object map
+of its value pool, with a bit for each place an allocation starts and its
+kind, so any word pointing into the pool marks the object holding it. It
+frees nothing when in doubt. Both sweeps are off for programs that import
+Turmeric modules or run fibers, because each of those keeps values somewhere
+the marker does not read. Elsewhere, closures stay under the policy above.
+
+`(scheme eval)` runs a second env in the process, and both envs sweep. Two
+rules keep that sound:
+
+- **Nothing crosses by reference.** A datum crosses as text, and a procedure
+  as an id. Each env's sweep sees only its own pool.
+- **Each env keeps its own dynamic-environment slots** (`TuriEnv.r7rs_dyn`):
+  its wind, handler and parameter stacks. When they were one set for the
+  process, a handler the evaluator installed was consed onto the program's
+  list, and the program's sweep could not follow that pair. It then handed
+  back the program's own handler pair while it was still in use.
+
+The bridge's own arrays (procedures handed out, wrappers of program
+procedures, pending arguments) are roots of the evaluator's sweep
+(`turi_r7rs_embed_roots`).
+
+A program continuation captured inside a call from evaluated code to a
+program procedure copies the evaluator's frames with the stack. The
+evaluator keeps what those frames need back in a handle taken at the
+capture (`turi_r7rs_embed_cont_*`: its env's dynamic-extent fields, its
+dynamic-environment slots, the host call in progress; for a compiled
+program, whose call/cc keeps no interpreter state, the drivers' work
+stacks and the thread's globals too, with the interpreter pinned). A
+compiled program reaches the handle through hooks `(scheme eval)` installs
+in the prelude's call/cc. The evaluator's sweep declines while such a
+handle holds its frames; nothing tells libturi when a compiled program's
+continuation dies, so there it declines from the first such capture on.
+See `docs/archive/r7rs-eval-continuation-reentry-across-bridge.md`.
+
+Environment variables:
+
+- `TUR_TURI_POOL_GC=0` turns the pool sweep off.
+- `TUR_TURI_POOL_GC_STRESS=<bytes>` sweeps every that many bytes.
+- `TUR_TURI_POOL_GC_QUARANTINE=1` poisons what a sweep would hand back,
+  under a Debug (ASan) `tur`, instead of reusing it, so a reference the
+  marker missed is reported at its first use.
+
+See `docs/archive/r7rs-callcc-memory-never-freed.md` and
+`docs/archive/turi-dropped-closures-kept-until-teardown.md`.
+
 **Consequence for `bash tests/run.sh`.** The compiler/codegen path is
 leak-clean and runs with LeakSanitizer enabled. The interpreter harnesses
 (`run-turi.sh`, `run-flags.sh`) default to `ASAN_OPTIONS=detect_leaks=0` -- not

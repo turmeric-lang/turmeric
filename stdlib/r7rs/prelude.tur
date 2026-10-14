@@ -2063,7 +2063,19 @@
       // The thread that captured it: the image is a copy of THAT thread's
       // stack, so no other thread may jump into it (r7rs-cont-here?__).
       pthread_t owner;
+      // r7rs-eval-continuation-reentry-across-bridge: the (scheme eval)
+      // evaluator's side of this capture (r7k_hook_capture), NULL without it.
+      void *turi;
   } r7k_cont;
+  // The evaluator's continuation hooks (src/turi/r7rs_embed.h), installed by
+  // r7rs-cont-hooks-install__ from stdlib/r7rs/eval.tur, which links libturi.
+  // A capture inside a call from evaluated code to a program procedure copies
+  // the evaluator's frames into the image; these hand the evaluator what
+  // those frames need back on a re-entry.  Null in a program without eval.
+  static void *(*volatile r7k_hook_capture)(void);
+  static int   (*volatile r7k_hook_resumable)(void *);
+  static void  (*volatile r7k_hook_restore)(void *, const void *);
+  static void  (*volatile r7k_hook_resumed)(void *);
   #if defined(__SANITIZE_ADDRESS__)
   #define R7K_ASAN 1
   #elif defined(__has_feature)
@@ -2255,12 +2267,14 @@
   r7k_cont *volatile c = (r7k_cont *)calloc(1, sizeof(r7k_cont));
   c->owner = pthread_self();
   tur_dk_pinned = 1;
+  if (r7k_hook_capture) c->turi = r7k_hook_capture();
   volatile unsigned char *mark = (volatile unsigned char *)__builtin_alloca(32);
   mark[0] = 0;
   save_state((void *)c);
   if (R7K_SETJMP(c->jb) != 0) {
     r7k_cont *rc = c;
     load_state((void *)rc);
+    if (rc->turi && r7k_hook_resumed) r7k_hook_resumed(rc->turi);
     return (void *)((uintptr_t)rc | 1);
   }
   if (!r7k_measure(c, (unsigned char *)mark)) return NULL;
@@ -2305,12 +2319,45 @@
     nil
     (do (r7rs-signal__ "call/cc: continuation invoked on a thread other than the one that captured it")
         nil)))
+;;; r7rs-cont-resumable?__ -- internal: #f when the (scheme eval) evaluator
+;;; cannot resume its side of the continuation: one captured inside a host
+;;; call made from a text being evaluated (`(eval '(f 1))`, as against an
+;;; applied procedure) can be re-entered only while that evaluation is still
+;;; in progress -- its frames end with the `eval`, and resumed after it
+;;; returned they would finish the evaluation a second time.
+(defn r7rs-cont-resumable?__ [c : ptr<void>] : bool
+  ```c
+  r7k_cont *k = (r7k_cont *)((uintptr_t)c & ~(uintptr_t)1);
+  return !k->turi || !r7k_hook_resumable || r7k_hook_resumable(k->turi) != 0;
+  ```)
+;;; r7rs-cont-check-resumable__ -- internal: the error object a program can
+;;; `guard` for that case.  Checked before the wind travel, with the thread
+;;; check.
+(defn r7rs-cont-check-resumable__ [c : ptr<void>] : nil
+  (if (r7rs-cont-resumable?__ c)
+    nil
+    (do (r7rs-signal__ "call/cc: the continuation was captured inside an `eval` that has since returned; it cannot be resumed")
+        nil)))
 ;;; r7rs-cont-restore__ -- internal: copy the captured stack back and jump in.
 (defn r7rs-cont-restore__ [c : ptr<void>] : nil
   ```c
   r7k_cont *k = (r7k_cont *)((uintptr_t)c & ~(uintptr_t)1);
   tur_escape_live_n = 0;
+  if (k->turi && r7k_hook_restore) r7k_hook_restore(k->turi, k->lo + k->n);
   r7k_restore(k);
+  ```)
+;;; r7rs-cont-hooks-install__ -- internal: point the capture above at the
+;;; (scheme eval) evaluator's continuation hooks (src/turi/r7rs_embed.h):
+;;; capture, resumable, restore, resumed.  Run once, at startup, by
+;;; stdlib/r7rs/eval.tur; the interpreter's twin does nothing, since its
+;;; capture reaches the evaluator directly.
+(defn r7rs-cont-hooks-install__ [capture : ptr<void> resumable : ptr<void> restore : ptr<void> resumed : ptr<void>] : bool
+  ```c
+  r7k_hook_capture   = (void *(*)(void))(uintptr_t)capture;
+  r7k_hook_resumable = (int (*)(void *))(uintptr_t)resumable;
+  r7k_hook_restore   = (void (*)(void *, const void *))(uintptr_t)restore;
+  r7k_hook_resumed   = (void (*)(void *))(uintptr_t)resumed;
+  return true;
   ```)
 
 ;;; r7rs-cont-delivered__ -- the value an invoked continuation hands its
@@ -2389,6 +2436,7 @@
         (r7rs-cont-delivered__)
         (f (fn [& vs : any] : any
              (r7rs-cont-check-here__ c)
+             (r7rs-cont-check-resumable__ c)
              (r7rs-travel-to__ saved)
              (r7rs-cont-deliver!__ (r7rs-values-of-list__ (r7rs-chain->list__ (:: vs (Cons any)))))
              (r7rs-cont-restore__ c)))))))
