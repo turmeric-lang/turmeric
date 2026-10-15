@@ -6,7 +6,7 @@
   ```c
   /* Insert n entries, storing key pointers in an array for later lookup */
   int64_t **keys = (int64_t **)malloc((size_t)n * sizeof(int64_t *));
-  void *m = hamt_new();
+  void *m = tur_hamt_new();
   for (int64_t i = 0; i < n; i++) {
       int64_t *k = (int64_t *)malloc(sizeof(int64_t));
       int64_t *v = (int64_t *)malloc(sizeof(int64_t));
@@ -14,18 +14,18 @@
       *v = i * 2;
       keys[i] = k;
       uint64_t h = (uint64_t)i * 2654435761ULL;
-      void *m2 = hamt_set(m, (int64_t)h, (void *)k, (void *)v);
-      if (m2 != m) { hamt_free(m); }
+      void *m2 = tur_hamt_set(m, (int64_t)h, (void *)k, (void *)v);
+      if (m2 != m) { tur_hamt_free(m); }
       m = m2;
   }
   /* Look up all entries using stored key pointers */
   int64_t hits = 0;
   for (int64_t i = 0; i < n; i++) {
       uint64_t h = (uint64_t)i * 2654435761ULL;
-      void *found = hamt_get(m, (int64_t)h, (void *)keys[i]);
+      void *found = tur_hamt_get(m, (int64_t)h, (void *)keys[i]);
       if (found) hits++;
   }
-  hamt_free(m);
+  tur_hamt_free(m);
   free(keys);
   return hits;
   ```)

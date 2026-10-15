@@ -1,0 +1,16 @@
+{
+  "date_utc": "2026-10-15T00:39:57+00:00",
+  "commit": "1a2052bf701830a15bf9a5eafaace6c537491e48",
+  "dirty": false,
+  "tur": "build-release/tur",
+  "tur_version": "tur: the Turmeric compiler (v0.65.1)",
+  "cc": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "host": "artificer-quartz",
+  "kernel": "6.6.87.2-microsoft-standard-WSL2",
+  "cpu": "Intel(R) Core(TM) i7-9850H CPU @ 2.60GHz",
+  "nproc": 12,
+  "reps": 5,
+  "warmup": 1,
+  "cooldown_s": 3.0,
+  "env": {}
+}

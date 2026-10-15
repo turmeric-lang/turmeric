@@ -1,0 +1,20 @@
+-- pull: all Alice facts --
+:user/name
+Alice
+:user/email
+alice@example.com
+:user/age
+30
+:user/age
+31
+-- as-of tx-age-1: Alice's age before birthday --
+30
+-- history: Alice :user/age across all tx --
+3
+30
+7
+31
+-- retracted? Bob :user/email --
+true
+-- q-av: entity with :user/age = 31 --
+1

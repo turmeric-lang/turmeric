@@ -1,0 +1,6 @@
+-- idb-q-ea entity=1 :user/name --
+Alice
+-- idb-q-ea entity=2 :user/age --
+25
+-- idb-q-ea entity=3 :user/email (should be empty) --
+0

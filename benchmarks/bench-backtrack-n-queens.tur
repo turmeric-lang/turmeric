@@ -1,7 +1,10 @@
 ;; Phase B5: Backtracking N-Queens benchmark
 ;;
 ;; Solves N-Queens for N=8 repeatedly to measure backtracking monad throughput.
-;; Baseline: same algorithm in plain C (bench-backtrack-n-queens-baseline.c).
+;; Both functions are inline C, so this program IS its own C baseline: it
+;; times cc and the runtime's startup, not Turmeric codegen.  (It used to cite
+;; a bench-backtrack-n-queens-baseline.c that was never written; one would be
+;; this file's C, copied.)  The audit corpus keeps it as a cc control.
 
 (defn nqueens [n] :int
   ```c

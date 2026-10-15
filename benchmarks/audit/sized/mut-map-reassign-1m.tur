@@ -1,0 +1,38 @@
+;; SIZED COPY of tests/fixtures/mut-map-reassign/input.tur for the performance audit
+;; (benchmarks/audit/corpus.txt).  Changed: (while (< i 3) ...) -> (while (< i 1000000) ...).
+;; Everything below is the fixture's own text; its comments describe
+;; the fixture's size.  The pinned answer is
+;; benchmarks/audit/expected/benchmarks__audit__sized__mut-map-reassign-1m.stdout.
+;; Regenerate (after the fixture changes): bash benchmarks/audit/make-sized.sh
+;; mut-map-reassign-missing-spec-link-error (archived): growing a map by
+;; `set!` reassignment on a `^mut` binding -- the idiom no fixture used; every
+;; fixture grew maps by chained lets.  Two defects, fixed together 2026-08-16:
+;;
+;;   1 (emit scan): emit_abi_scan_expr never descended into a `set!` RHS, so
+;;     the generic `map-assoc-eq-o` call there never interned its ABI spec --
+;;     the call emitted the BASE generic name and died at LINK having passed
+;;     tur check.
+;;   2 (repr seam): the control-form merge temp for the concrete `(Map int
+;;     int)` was declared `int64_t` where chokepoint 1's protocol says the
+;;     typed pointer; the R3 shadow ICE'd on it in Debug, masking defect 1.
+;;     The merge-temp decl and its ctype mirror now share the let-bind
+;;     position's concrete-heap rule (emit_repr_concrete_heap_ptr_c_name).
+;;
+;; The float-valued variant pins the same shape at a second element class
+;; (7.1 -- a value an int/float coercion bug cannot hide behind).
+(defn main [] : int
+  (let [^mut m (:: (map-new) (Map int int))]
+    (let [^mut i 0]
+      (while (< i 1000000)
+        (set! m (map-assoc m i i))
+        (set! i (+ i 1))))
+    (println (map-count m))
+    (println (map-get m 2)))
+  (let [^mut fm (:: (map-new) (Map int float))]
+    (let [^mut j 0]
+      (while (< j 2)
+        (set! fm (map-assoc fm j 7.1))
+        (set! j (+ j 1))))
+    (println (map-count fm))
+    (println (map-get fm 1)))
+  0)

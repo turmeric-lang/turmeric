@@ -1,0 +1,12 @@
+-- All user names --
+Alice
+Bob
+-- Alice's facts --
+:user/name
+Alice
+:user/email
+alice@example.com
+:user/age
+30
+-- Users with age NOT 25 --
+30

@@ -9,7 +9,7 @@
 ;;   - Free the deque.
 ;;
 ;; This exercises the hot path in the scheduler worker loop.
-;; Run with: ./tests/run-bench.sh workstealing-deque-bench
+;; Run with: python3 benchmarks/audit/run-corpus.py --only workstealing-deque-bench
 ;;
 ;; Tuning notes (SCH-006):
 ;;   - The deque capacity defaults to 64 here (adequate for 64-item workload).

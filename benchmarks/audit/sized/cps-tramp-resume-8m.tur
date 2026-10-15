@@ -1,0 +1,38 @@
+;; SIZED COPY of tests/fixtures/cps-tramp-resume-deep-1m/input.tur for the performance audit
+;; (benchmarks/audit/corpus.txt).  Changed: (loop 1000000 0) -> (loop 8000000 0).
+;; Everything below is the fixture's own text; its comments describe
+;; the fixture's size.  The pinned answer is
+;; benchmarks/audit/expected/benchmarks__audit__sized__cps-tramp-resume-8m.stdout.
+;; Regenerate (after the fixture changes): bash benchmarks/audit/make-sized.sh
+;; E7 (cps-tramp-resume): a 1e6-deep tail-recursive effectful loop under a
+;; resuming handler must run FLAT on the DK path -- the trampolined tail-resume
+;; keeps the C stack constant instead of the O(N) inline-resume stack that would
+;; SIGSEGV well before 1e6. The accumulator threads the resumed value, so a wrong
+;; resume also shows up: result = 3 * 1000000 = 3000000.
+;;
+;; COMPILED-ONLY (requires.compiled). This is the full-depth half of a pair; the
+;; sibling `cps-tramp-resume-deep` runs the same program at 1e5 on every path.
+;; The split exists because the tree-walking interpreter retains roughly 4 KiB
+;; per resumed step -- its closures and continuations are process-lifetime by
+;; design (see CLAUDE.md) -- so 1e6 steps peak at ~3.5 GiB RSS under
+;; `--interpret`, enough that two such fixtures co-scheduled by
+;; tests/run-turi.sh exhaust a 16 GiB CI runner and blow the per-fixture
+;; timeout. Compiled, the same program is O(1) memory: ~2.5s and ~70 MiB.
+;; Nothing is lost by not interpreting it -- the C-stack flatness this fixture
+;; proves is a property of the compiled DK path, and the interpreter does not
+;; use the C stack for recursion depth at all.
+;; See docs/archive/ci-cps-tramp-turi-timeouts-under-load.md.
+(defeffect Ask [] :int)
+
+(defn loop [n : int acc : int] : int
+  (if (= n 0)
+    acc
+    (loop (- n 1) (+ acc (perform (Ask))))))
+
+(defn run [] : int
+  (handle (loop 8000000 0)
+    (Ask [] k) (resume k 3)))
+
+(defn main [] : int
+  (println (run))
+  0)
