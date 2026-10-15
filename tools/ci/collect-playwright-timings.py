@@ -27,6 +27,13 @@ Usage:
     python3 tools/ci/collect-playwright-timings.py \
         --suite web_desktop web/results-desktop.xml \
         --suite web_mobile  web/results-mobile.xml  > timings.jsonl
+
+`--web-perf FILE` also turns the JSON that web/tests/web-perf.spec.js writes
+(performance-audit-plan WP5) into one row per metric -- the time to "Ready",
+to a first result, an LSP keystroke, ... -- with `suite: "web_perf:<metric>"`,
+the value in `duration_ms`, and `kind: "web-perf"`, which keeps them out of
+the dashboard's suite views (a measurement is not a suite run).  A missing
+file writes nothing: the perf step is non-blocking and may not have run.
 """
 
 import argparse
@@ -74,8 +81,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--suite", nargs=2, action="append", metavar=("NAME", "XML"),
-                    required=True, help="suite row name and its Playwright JUnit file")
+                    default=[], help="suite row name and its Playwright JUnit file")
+    ap.add_argument("--web-perf", metavar="JSON",
+                    help="web-perf.spec.js's result file: one row per metric")
     args = ap.parse_args()
+    if not args.suite and not args.web_perf:
+        ap.error("give at least one --suite or --web-perf")
 
     row_base = {
         "sha": os.environ.get("GITHUB_SHA"),
@@ -109,7 +120,37 @@ def main():
         if skipped:
             row["partial_skip_reason"] = f"{skipped} of {discovered} tests skipped"
         print(json.dumps(row, sort_keys=True))
+    if args.web_perf:
+        for row in web_perf_rows(args.web_perf, row_base):
+            print(json.dumps(row, sort_keys=True))
     return 0
+
+
+def web_perf_rows(path, row_base):
+    """One row per metric in web-perf.spec.js's JSON; none if it is absent."""
+    if not os.path.isfile(path):
+        warn(f"no web-perf result at {path}; writing no web_perf rows")
+        return []
+    try:
+        doc = json.load(open(path))
+    except (OSError, ValueError) as e:
+        warn(f"could not read {path}: {e}")
+        return []
+    rows = []
+    for name, value in sorted((doc.get("metrics") or {}).items()):
+        if not isinstance(value, (int, float)):
+            continue
+        row = dict(row_base)
+        row.update({
+            "suite": f"web_perf:{name}",
+            "kind": "web-perf",
+            "status": "pass",
+            "skip_reason": None,
+            "duration_ms": round(float(value), 1),
+            "samples": doc.get("cold_loads"),
+        })
+        rows.append(row)
+    return rows
 
 
 if __name__ == "__main__":

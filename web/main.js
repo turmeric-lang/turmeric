@@ -1359,6 +1359,10 @@ function startEvalWorker() {
             const msg = e.data;
 
             if (msg.type === 'ready') {
+                if (msg.boot) {
+                    window._turiBoot = Object.assign(window._turiBoot || {}, msg.boot,
+                                                     { workerReadyAt: performance.now() });
+                }
                 resolve();
                 return;
             }
@@ -1435,6 +1439,9 @@ async function initWasm() {
     if (wasmState !== WASM_STATE.INITIALIZING) return;
 
     wasmState = WASM_STATE.LOADING;
+    // performance-audit-plan WP5: boot marks, ms since navigation start. The
+    // worker adds its own stage times on 'ready' (startEvalWorker).
+    window._turiBoot = Object.assign(window._turiBoot || {}, { initWasmAt: performance.now() });
 
     const loadingOverlay = document.getElementById('loading-overlay');
     const wasmStatus = document.getElementById('wasm-status-text');
@@ -1452,6 +1459,7 @@ async function initWasm() {
         await fetchDocNames();
         fetchLangRegistry();  // re-renders the picker from the C-side tables
         showStatus('Ready', 'success');
+        window._turiBoot = Object.assign(window._turiBoot || {}, { statusReadyAt: performance.now() });
         loadFromUrlHash();
 
         if (loadingOverlay) loadingOverlay.style.display = 'none';

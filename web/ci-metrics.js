@@ -1956,6 +1956,13 @@ function wireSegToggle(attr, apply) {
   }
 }
 
+// A row with a `kind` is a measurement, not a suite run (the web-perf rows
+// tools/ci/collect-playwright-timings.py --web-perf writes); the suite views
+// leave it out rather than plot it as a suite.
+function isSuiteRow(r) {
+  return !r.kind;
+}
+
 async function fetchNDJSON(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -1992,7 +1999,7 @@ function switchTab(tab) {
 async function loadFull() {
   const full = await fetchNDJSON(API);
   if (!full.rows.length) throw new Error('empty');
-  state.rows = full.rows;
+  state.rows = full.rows.filter(isSuiteRow);
   state.year = full.year;
   state.windowed = false;
   state.envs = buildEnvs(state.rows);
@@ -2032,7 +2039,7 @@ async function boot() {
   }
 
   state.year = timings.value.year;
-  state.rows = timings.value.rows;
+  state.rows = timings.value.rows.filter(isSuiteRow);
   state.windowed = timings.value.windowed;
   if (!state.rows.length) {
     fail('No timing rows have been published yet.');

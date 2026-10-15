@@ -10,9 +10,14 @@
 
 #include "wasm_glue.h"
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 /* We need to include the turi headers. src/ is in the include path. */
 #include "turi/env.h"
@@ -83,6 +88,36 @@ void turi_wasm_free(void *p) {
  * (load ...) dedup keys consistent. */
 #define WASM_STDLIB_ROOT "stdlib"
 
+/* performance-audit-plan WP5: the wall time of each startup phase, so Try
+ * Turmeric can report what a first visit waits for (W-2).  Only the first
+ * turi_wasm_init records -- a reset re-runs the preload, but it is not a cold
+ * start.  Read back as JSON with turi_wasm_boot_timings(). */
+#define WASM_BOOT_MAX_PHASES 12
+static struct { const char *name; double ms; } g_boot[WASM_BOOT_MAX_PHASES];
+static int    g_boot_n;
+static double g_boot_prev;
+static bool   g_boot_recording;
+
+static double wasm_now_ms(void) {
+#ifdef __EMSCRIPTEN__
+    return emscripten_get_now();
+#else
+    /* Native builds of this file are unit tests; they never read the times. */
+    return (double)clock() * 1000.0 / CLOCKS_PER_SEC;
+#endif
+}
+
+static void wasm_boot_mark(const char *phase) {
+    if (!g_boot_recording) return;
+    double now = wasm_now_ms();
+    if (g_boot_n < WASM_BOOT_MAX_PHASES) {
+        g_boot[g_boot_n].name = phase;
+        g_boot[g_boot_n].ms   = now - g_boot_prev;
+        g_boot_n++;
+    }
+    g_boot_prev = now;
+}
+
 /* Bring a freshly-created env up to interpreter parity with the native
  * `tur --interpret` entry point: load the core macros (when/cond/for/and/or +
  * assert!/require!/...) and the typed-collection stdlib so reader-macro data
@@ -95,18 +130,22 @@ void turi_wasm_free(void *p) {
 static void wasm_preload_stdlib(TuriEnv *env) {
     if (!env) return;
     turi_env_preload_macros(env, WASM_STDLIB_ROOT);
+    wasm_boot_mark("preload_macros");
     /* Typed native-function stubs (nil-value/cons/head/tail + benchmark helpers)
      * in the same after-macros/before-collections slot as --interpret and the
      * native REPL, so `(list-head (cons 65 (cons 66 0)))` evaluates to 65 at the
      * browser prompt instead of nil (cons would otherwise be an elaborator
      * builtin the tree-walker cannot execute). */
     turi_env_preload_native_stubs(env);
+    wasm_boot_mark("preload_native_stubs");
     turi_env_preload_collections(env, WASM_STDLIB_ROOT);
+    wasm_boot_mark("preload_collections");
     /* Preload the REPL-only Show slice (Show [Vec] / [Set] / [Map]) so a
      * collection result renders through its Show instance via
      * turi_try_show_by_tag below, matching the native `tur repl`
      * (src/turi/repl.c, right after turi_env_preload_collections). */
     turi_env_preload_typeclasses(env, WASM_STDLIB_ROOT);
+    wasm_boot_mark("preload_typeclasses");
     /* Pin the preloaded prefix: the browser REPL is the long-lived env this
      * matters most for -- running an editor program that opens with
      * `#lang turmeric/sweet` used to wipe src_acc, so the next `#map{}` at the
@@ -122,9 +161,11 @@ static void wasm_preload_stdlib(TuriEnv *env) {
      * gap).  Runs AFTER the preload so the native shims win over the loaded
      * inline-C bodies. */
     turi_env_register_interpreter_natives(env);
+    wasm_boot_mark("pin_and_natives");
     /* PS5: snapshot the runtime prelude last, so it holds the native overrides
      * registered just above -- turi_wasm_rewind_to_prelude restores it. */
     turi_env_snapshot_prelude(env);
+    wasm_boot_mark("snapshot_prelude");
 }
 
 /* Push a program's partial last line out of libc's buffer.
@@ -155,23 +196,50 @@ static void wasm_flush_program_output(void) {
  * Returns 0 on success, non-zero on failure. */
 int turi_wasm_init(void) {
     if (g_env) return 0; /* Already initialized */
-    
+
+    g_boot_recording = true;
+    g_boot_prev = wasm_now_ms();
+
     /* Use the unrestricted environment — the browser's WASM sandbox already
      * prevents real filesystem/network access.  Turmeric's sandboxed flag
      * would block println/print which we want routed to the JS print callback. */
     g_env = turi_env_new();
     if (!g_env) return 1;
     turi_env_set_diag_sink(g_env, wasm_diag_sink, g_env);
+    wasm_boot_mark("env_new");
 
     /* Initialize diagnostics (no color in WASM - output goes to JS console) */
     turi_init(false);
+    wasm_boot_mark("turi_init");
 
     /* Preload the stdlib (macros + typed collections) so the REPL matches the
      * native --interpret path -- without this, `#map{}`/`#set{}` and every
      * macro (when/cond/for/...) failed as "unknown function or operator". */
     wasm_preload_stdlib(g_env);
 
+    g_boot_recording = false;
     return 0;
+}
+
+/* The phases turi_wasm_init recorded, as a JSON object of milliseconds in the
+ * order they ran ({"env_new":1.2,...}); "{}" before init.  The string is
+ * static; the caller must NOT free it. */
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+const char *turi_wasm_boot_timings(void) {
+    static char buf[64 * WASM_BOOT_MAX_PHASES + 4];
+    size_t n = 0;
+    buf[n++] = '{';
+    for (int i = 0; i < g_boot_n && n < sizeof buf - 2; i++) {
+        int w = snprintf(buf + n, sizeof buf - n - 1, "%s\"%s\":%.3f",
+                         i ? "," : "", g_boot[i].name, g_boot[i].ms);
+        if (w < 0 || (size_t)w >= sizeof buf - n - 1) break;
+        n += (size_t)w;
+    }
+    buf[n++] = '}';
+    buf[n] = '\0';
+    return buf;
 }
 
 /* Reset the evaluation environment to a fresh state.
