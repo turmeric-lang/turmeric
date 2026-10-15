@@ -118,6 +118,29 @@ Query:
   byte by byte, make it a `String` first. `=` does not take a `Char`; compare
   with `(eq? c #\,)`.
 
+Search (none of these allocates; a position is an `(Option int)`, `(none)` when
+there is no match, never `-1`):
+
+- `string/index-of`, `string/index-of-from`, `string/last-index-of` -- where a
+  `String` needle occurs. The empty needle is found at the start offset (at
+  `(string/len s)` for `last-index-of`).
+- `string/index-of-char`, `string/index-of-char-from` -- where an ASCII
+  character occurs.
+- `string/starts-with-at? s prefix at` -- whether `prefix` occurs at offset
+  `at`; false, not an error, when `at` is out of range or the prefix would run
+  past the end.
+- `string/span-while s start pred` -- the index where a run of bytes passing
+  `pred` ends, or `(string/len s)`. The `stdlib/char.tur` predicates plug in:
+  `(string/span-while line 0 space?)` is the indentation width,
+  `(string/span-while line i alnum?)` the end of a name.
+- `string/run-length s start c` -- how many `c` in a row start at `start`: a
+  fence's backticks, an ATX heading's `#`s.
+
+Each has a `slice/` twin that searches a `StringSlice` for a `String` needle,
+within the slice's own bounds. `stdlib/cstr.tur` has `cstr-starts-with?`,
+`cstr-ends-with?`, `cstr-index-of`, `cstr-index-of-char` and `cstr-span-while`,
+so a literal or a line from `fs/read-lines` can be scanned without a copy.
+
 Transform (each returns a fresh immutable `String`):
 
 - `string/concat`, `string/substring`, `string/to-upper`, `string/to-lower`,
@@ -231,7 +254,9 @@ can neither be freed nor mutated underneath the slice.
 
 Surface: `string/slice` / `string/slice-cstr` (construct), `slice/sub` (O(1)
 sub-view), `slice/len` / `slice/empty?` / `slice/byte-at` / `slice/byte-is?` /
-`slice/char-at` / `slice/compare` / `slice/eq?` / `slice/hash` (query), `slice/to-string` / `slice/to-cstr`
+`slice/char-at` / `slice/compare` / `slice/eq?` / `slice/hash` (query), the
+search functions (`slice/index-of`, `slice/span-while` and the rest, as
+above), `slice/to-string` / `slice/to-cstr`
 (materialize), `slice/retain` / `slice/release` (share/drop). Typeclasses `Eq`,
 `Ord`, `Show`, `Hash`. Compiled and `--interpret` behave identically.
 
