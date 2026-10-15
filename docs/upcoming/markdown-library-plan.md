@@ -1,0 +1,500 @@
+# tur/markdown -- CommonMark + GFM in Turmeric, and the string helpers it needs
+
+> **Status:** plan; nothing implemented. Written 2026-10-15. It started as "would
+> `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
+> turned out not to remove any dependency (see section 9). The Markdown renderer
+> did look worth doing, and so did the string helpers that both spikes below kept
+> having to write by hand.
+> **Type:** stdlib (`stdlib/string.tur`, `string-slice.tur`, `cstr.tur`,
+> `char.tur`, new `stdlib/markdown.tur` + `stdlib/markdown/`, new
+> `stdlib/unicode.tur`), tools (`tools/genguides.py`, `tools/genspices.py`,
+> `tools/requirements.txt`), guides (fence and list fixes), CI (the docs jobs).
+> **Track:** runs alongside v1, not on it. tur-signal, the v1 gate, calls none of
+> this. Phase S is additive and can land any time. Phases U and M are fine to
+> finish after v1, but they touch no compiler code, so they can proceed in
+> parallel without blocking it.
+> **Related:** [`notebook-docs-examples-plan.md`](notebook-docs-examples-plan.md)
+> (the notebook spice's `notebook/cmark.tur`),
+> [`hold/reader-envelopes-and-stringed-graduation-plan.md`](hold/reader-envelopes-and-stringed-graduation-plan.md)
+> (literate `.tur.md`; asks that its fence rules agree with the renderer),
+> [`security-audit-plan.md`](security-audit-plan.md) (C-5, the `markdown` pin;
+> W-4, docs as a trust boundary),
+> [`../guides/strings-guide.md`](../guides/strings-guide.md) (the
+> `cstr` / `String` / `StringSlice` model the helpers follow).
+
+## 0. Summary
+
+The docs site renders Markdown with `python-markdown` 3.11. That is the only
+third-party Python package on the docs path, and it is pinned with hashes
+because it feeds a released artifact (security-audit C-5). The guides are not
+written for it, though. They are written for GitHub, which means CommonMark plus
+the GFM extensions. `tools/genguides.py` carries about 230 lines of workarounds
+for the gap, and the live site still shows 54 lists as run-on paragraphs.
+
+This plan:
+
+1. **Phase S** adds string helpers to stdlib: byte tests against `Char`
+   literals, search that returns `Option`, split/join/lines, trims, and
+   builder-based concatenation. Both spikes, and `stdlib/re.tur`, show these
+   are what pure-Turmeric text processing is missing today.
+2. **Phase U** adds the Unicode and HTML-entity tables CommonMark needs.
+3. **Phase M** writes `tur/markdown`: a pure-Turmeric CommonMark 0.31.2 + GFM
+   parser and HTML renderer, tested against the spec's examples. It then moves
+   the docs pipeline onto it, deletes the workarounds and the `markdown` pin,
+   and offers it to the other consumers (notebook spice, literate `.tur.md`,
+   terminal rendering).
+
+A few fixes in section 2 don't depend on any of this and can land now.
+
+## 1. Evidence
+
+### 1.1 What ships today vs. CommonMark + GFM
+
+Method: every `docs/guides/*.md` page rendered two ways, with the block structure
+compared by tag counts. One side is what ships (genguides' preprocessing, then
+`python-markdown` with `fenced_code`, `tables`, `toc`). The other is
+`cmarkgfm` 2025.10.22 (GitHub's cmark-gfm) on the raw source.
+
+| Finding | Number |
+|---|---|
+| Lists the live site renders as a run-on paragraph with literal `- ` bullets (a list straight after a paragraph line, which python-markdown won't start) | **54 lists on 23 guide pages** (e.g. "Advantages" in `cloudflare-deployment-guide.md`; 10 in `snake-game-tutorial.md`) |
+| Guides with a `turmeric` / `sweet-exp` block containing a column-0 ```` ``` ```` from inline C (genguides widens these fences before rendering) | 31 |
+| ...of which CommonMark (and GitHub, today) closes the block early and renders broken | **16** |
+| Pages whose block structure still differs once those fences are widened in source | **3**, and only in how adjacent block quotes split (`image-dumps-guide.md`, `repl-tutorial.md`, `web-continuations-tutorial.md`) |
+| Heading ids that would change under GitHub's slug rule instead of python-markdown's (mostly the ` -- ` in titles: `a -- b` is `a-b` vs `a----b`) | **403 of 3,050** |
+| Links in the guides that point at a `#fragment` | 214 |
+
+So CommonMark + GFM is the right target, with one exception: **keep
+python-markdown's heading-id rule** so existing anchors and inbound links keep
+working.
+
+The workarounds in `tools/genguides.py` that exist only because of
+python-markdown: `dedent_indented_fences` (fences inside list items),
+`unquote_blockquote_fences` (fences inside block quotes), `widen_nested_fences`,
+the info-string marker strip in `build_guide_body`, `render_task_lists`, the
+`LAZY_OL` tweak, and `unrendered_fences` (a detector for fences that never
+rendered).
+
+### 1.2 Spikes
+
+Two throwaway programs, compiled with the Debug `tur`. Neither is committed.
+
+- **Docstring scanner** (~100 lines): walks `stdlib/`, pulls `;;;` summaries
+  using gendocs' attachment rule. Compiles in 0.5s, runs in 16ms, and agrees with
+  `gendocs.py` on 2,332 of the 2,389 definitions both found. The other 57 are
+  module docstrings and r7rs `define` forms the spike skipped.
+- **Markdown block subset** (~230 lines): a typed tree (`defdata Block` with a
+  recursive `(Vec Block)`), CommonMark's rules for fenced code (length, `~`
+  vs backtick, info-string restriction, closing rules), ATX headings, block
+  quotes as a recursive container, paragraphs, and an HTML renderer with escaping
+  through `StringBuilder`. It processes all 160 guides in **48ms**. Its counts of
+  fenced code blocks, ATX headings and block quotes match cmark-gfm on
+  **160 of 160** pages.
+
+The language is ready for this. Most of the friction was in the string surface,
+which is why Phase S comes first. The rest is listed in section 7.
+
+### 1.3 What already exists
+
+- **`turmeric-spices/spices/notebook/src/notebook/cmark.tur`**: a "block-level
+  CommonMark subset parser", 2,084 lines, of which **1,345 are inline C**. Nodes
+  are `:int` handles. It has no link reference definitions, no HTML blocks, and
+  only a few hard-coded entities. As inline C, it can't run under `--interpret`
+  or in the web REPL. Its renderers (`render-md.tur`, `render-html.tur`) bring
+  the total to 4,702 lines.
+- **Strings:** `cstr` has five primitives (`cstr-len`, `cstr-nth`, `cstr-sub`,
+  `cstr-eq?`, `cstr-free`). `String` has `starts-with?` / `ends-with?` /
+  `contains?`, `concat`, `substring`, `trim`, case mapping and `StringBuilder`.
+  `StringSlice` has zero-copy views. There's no search that returns a position,
+  no split, join or lines, no one-sided trim, and no literal replace. `=` doesn't
+  accept `Char`, so a byte can't be compared to `#\,` without
+  `(char=? (int->char b) #\,)`.
+- **Consequence:** `stdlib/re.tur`, the one stdlib text processor written in
+  plain Turmeric, compares raw byte numbers (`44` for `,`, `125` for `}`, `58`
+  for `:`). `json.tur` (31 inline-C blocks), `csv.tur` (14), `parsec.tur` (23)
+  and `path.tur` (7) fall back to C.
+
+## 2. Quick wins, independent of the library
+
+Each of these is small, fixes something live today, and stays correct after the
+switch.
+
+1. **Blank line before the 54 run-on lists** (23 pages). CommonMark renders them
+   the same with or without it. python-markdown needs it. This fixes the live site
+   now.
+2. **Widen the outer fence** of the 31 `turmeric` / `sweet-exp` blocks that
+   contain a column-0 ```` ``` ```` to four backticks. This fixes the 16 pages
+   GitHub renders broken today, and it makes `widen_nested_fences` a no-op ahead
+   of its removal in M4. Add a check to `tools/check-guide-pairs.py` that flags
+   a three-backtick block a CommonMark parser would close early, so new ones
+   don't creep in.
+3. **Pin the unpinned install.** `.github/workflows/release-cut.yml` (the
+   spices-site deploy job) runs `python3 -m pip install markdown` with no version
+   or hash, which contradicts C-5. Use
+   `python3 -m pip install --require-hashes -r tools/requirements.txt` like
+   `ci.yml` and `release.yml` do.
+
+## 3. Phase overview
+
+| Phase | Theme | Breaking? | Track | Size (approx.) |
+|---|---|---|---|---|
+| **S1** | Byte tests with `Char`, `Char` equality | No | Any time | ~150 lines + fixtures |
+| **S2** | Search: positions as `Option`, run lengths, predicates | No | Any time | ~300 lines |
+| **S3** | Split / join / lines, owned and zero-copy | No | Any time | ~250 lines |
+| **S4** | One-sided trims, literal replace, repeat, pad, parse-int | No | Any time | ~200 lines |
+| **S5** | Builder pushes and a concatenation macro | No | Any time | ~150 lines |
+| **U** | Unicode classes + case folding, HTML entity table | No | Before M2 | generator + tables |
+| **M1** | Block parser | No | Parallel / post-v1 | ~1.5k lines |
+| **M2** | Inline parser | No | Parallel / post-v1 | ~1.5k lines |
+| **M3** | HTML renderer, GFM extensions, heading ids | No | Parallel / post-v1 | ~0.8k lines |
+| **M4** | Docs pipeline cut-over; drop the `markdown` pin | No (site output changes as listed) | After M3 | tool + CI |
+| **M5** | Notebook spice, literate `.tur.md`, terminal rendering | Spice API (notebook) | After M4 | per consumer |
+
+Each S phase is one PR. U is one PR. M1 to M3 are one PR each, with the spec
+ratchet (section 5.1) rising each time. M4 is its own PR. M5 is one PR per
+consumer, and the notebook one lands in `turmeric-spices`.
+
+## 4. Phase S -- string helpers
+
+### 4.1 Design rules
+
+- **Not found is `(None)`, never `-1`.** CLAUDE.md, "No Lazy `:int` Stand-Ins".
+  Positions are `(Option int)`. Lengths and counts stay `:int`.
+- **Borrow inputs, allocate only where the name says so.** Search and predicates
+  never allocate. Anything returning a `String` returns an owned one (rc 1), and
+  anything returning a slice returns an owned slice, per the strings guide's
+  short rules.
+- **Write them in Turmeric first, over `string/byte-at`, `string/len` and
+  friends.** Then they behave the same under `--interpret` and in the web REPL
+  with no native-parity work. Move a helper to `src/runtime/tur_string.c` (plus
+  its `src/turi/string_native.c` native and its two `src/turi/native_caps.c`
+  rows) only when a benchmark shows it matters.
+- **Coverage per type.** `String` and `StringSlice` get the full set. `cstr`
+  gets only the non-allocating tests and search. `cstr` is what literals,
+  `fs/read-lines` and `fs/read-text` hand you, so scanning it shouldn't require
+  a copy first.
+- **Naming** follows the existing prefixes: `string/`, `slice/`, `cstr-`,
+  `builder/`.
+- **Every function** gets a full `;;;` docstring, an ASCII-only fixture under
+  `tests/fixtures/`, and coverage in `tests/run-turi.sh`. Allocating helpers also
+  get a `requires.leak-check` marker and `tests/run-leak-check.sh` coverage,
+  since ownership is where these go wrong.
+
+### 4.2 S1 -- byte tests with `Char`
+
+The most common shape in `re.tur` and in both spikes is "is the byte at `i` this
+character, and is `i` in range":
+
+```turmeric
+;; today (stdlib/re.tur:231)
+(if (if (< p1 len) (= (cstr-nth input p1) 44) false) ...)
+
+;; with S1
+(if (cstr-byte-is? input p1 #\,) ...)
+```
+
+- `string/byte-is? [s : String i : int c : Char] : bool`, plus `slice/byte-is?`
+  and `cstr-byte-is?`. They return false when `i` is out of range.
+- `string/char-at [s : String i : int] : (Option Char)`, plus `slice/char-at`
+  and `cstr-char-at`. These return the byte as a `Char`, for ASCII-oriented
+  scanning. UTF-8 decoding is Phase U's job.
+- **`=` on `Char`.** `(= #\, #\,)` is a `TUR-E0006` today, because `=`'s
+  overloads are keyed by primitive type kind and `Char` is a `defopaque` over
+  `:int`. The options are in section 8. Whichever is chosen, `(= c #\,)` should
+  work, the way it already does for `int`, `float` and `bool`.
+
+### 4.3 S2 -- search
+
+Non-allocating:
+
+- `string/index-of [s : String needle : String] : (Option int)`
+- `string/index-of-from [s : String needle : String start : int] : (Option int)`
+- `string/last-index-of [s : String needle : String] : (Option int)`
+- `string/index-of-char [s : String c : Char] : (Option int)`, plus
+  `string/index-of-char-from`
+- `string/starts-with-at? [s : String prefix : String at : int] : bool`, a
+  prefix test at an offset. Both spikes hand-wrote it.
+- `string/span-while [s : String start : int pred : (fn [Char] bool)] : int`:
+  the first index at or after `start` where `pred` fails, or `(string/len s)`.
+  The `char.tur` predicates plug in directly. It covers the spikes' hand-written
+  `skip-ws`, `indent-of` and `name-end`:
+
+  ```turmeric
+  (string/span-while line 0 space?)          ;; indentation width
+  (string/span-while line start alnum?)      ;; end of a name token
+  ```
+
+- `string/run-length [s : String start : int c : Char] : int`: how many `c`
+  in a row start at `start`. Covers fence runs and ATX `#` counts.
+
+Every one of these also gets a `slice/` twin. `cstr` gets `cstr-starts-with?`,
+`cstr-ends-with?`, `cstr-index-of`, `cstr-index-of-char` and
+`cstr-span-while`.
+
+### 4.4 S3 -- split, join, lines
+
+Owned results:
+
+- `string/split [s : String sep : String] : (Vec String)`
+- `string/split-char [s : String c : Char] : (Vec String)`
+- `string/lines [s : String] : (Vec String)`, splitting on LF, CRLF and CR, the
+  three line endings CommonMark recognises.
+- `string/join [parts : (Vec String) sep : String] : String`, which borrows its
+  parts.
+- `string/release-all [v : (Vec String)] : void`, which releases every element
+  and then the vector. Without it, every `split` caller has to write the loop.
+
+Zero-copy, which is what the Markdown parser wants for its input lines:
+
+- `string/line-slices [s : String] : (Vec StringSlice)`
+- `slice/split-char [sl : StringSlice c : Char] : (Vec StringSlice)`
+- `slice/release-all [v : (Vec StringSlice)] : void`
+
+Files:
+
+- `fs/read-string [path : cstr] : (Result String IoError)`. `fs/read-text`
+  returns a `cstr` today, and `markdown/parse` takes a `String`.
+
+Written over `vec-push!`, these inherit its region escape note (CLAUDE.md,
+"Region Store Hooks"). If any of them moves to C, it has to call
+`TUR_REGION_NOTE` before the store.
+
+### 4.5 S4 -- trims and transforms
+
+- `string/trim-start`, `string/trim-end` (`string/trim` already exists), and the
+  zero-copy `slice/trim`, `slice/trim-start`, `slice/trim-end`, which return
+  sub-slices.
+- `string/replace-all [s : String from : String to : String] : String`, a
+  literal replace. `re/replace-all` is regex-based and works on `cstr`.
+- `string/repeat [s : String n : int] : String`
+- `string/pad-start [s : String width : int c : Char] : String`, plus
+  `string/pad-end`
+- `string/parse-int [s : String] : (Option int)`, plus `slice/parse-int`.
+  CommonMark needs it for ordered-list start numbers, and the existing
+  `str->int-checked` takes a `cstr` and returns `(Either int int)`.
+
+### 4.6 S5 -- building
+
+The spike's output line was eight nested two-argument `str-concat` calls, each
+allocating, with every intermediate leaked:
+
+```turmeric
+;; today
+(println (str-concat path (str-concat "\t" (str-concat (int->str pre) ...))))
+```
+
+- `builder/push-slice!`, `builder/push-int!` (writes decimal digits, no
+  temporary), `builder/push-repeat! [b : StringBuilder c : Char n : int]`.
+- **`builder/push!` through a one-method typeclass**, with instances for `cstr`,
+  `String`, `StringSlice`, `Char`, `int` and `bool`. Floats are left out until
+  float formatting is decided separately (and probed with `7.1`, per CLAUDE.md).
+- **A concatenation macro** (working name `string/of`) that expands to one
+  builder, a `builder/push!` per argument, and `builder/finish`. It borrows its
+  arguments and creates no temporaries, so the only thing to release is the one
+  `String` it returns:
+
+  ```turmeric
+  (string/of path "\t" pre "\t" headings)   ;; => owned String
+  ```
+
+## 5. Phase U -- Unicode and entity tables
+
+CommonMark needs things the stdlib can't do today outside `#lang r7rs`:
+
+- **Unicode whitespace** (category Zs, plus tab, LF, FF, CR) and **Unicode
+  punctuation** (categories P and S, as of spec 0.31) for the left- and
+  right-flanking rules on emphasis delimiters.
+- **Full Unicode case folding** for matching link reference labels.
+- **UTF-8 decoding at a byte index**, to classify the code point on either side
+  of a delimiter run.
+- **The HTML5 named-entity table**, about 2,100 names with their semicolons.
+
+Plan:
+
+- Generalise `tools/gen-r7rs-unicode.py`. Its UCD input is already pinned through
+  `tools/fetch-ucd.sh`. It would also emit a general `stdlib/unicode.tur`:
+  `unicode/space? [c : Char] : bool`, `unicode/punct? [c : Char] : bool`,
+  `unicode/fold-case [s : String] : String`, and
+  `utf8/decode-at [s : String i : int] : (Option (Pair Char int))` (the code
+  point, and the next byte index). The table format is open (section 8).
+- A new `tools/gen-html-entities.py` turns WHATWG's `entities.json`, pinned by
+  digest, into `stdlib/markdown/entities.tur`, which is generated and committed
+  like the r7rs tables.
+
+## 6. Phase M -- `tur/markdown`
+
+### 6.1 Target and conformance
+
+- **CommonMark 0.31.2 plus the GFM extensions**: tables, strikethrough,
+  extended autolinks, task list items. **Not** bug-compatibility with
+  python-markdown, apart from heading ids (6.3).
+- **Spec examples as fixtures.** The spec has about 650 examples, and the GFM spec adds
+  its extension examples. A runner, `tests/run-markdown-spec.sh` (ctest
+  `tur_markdown_spec`), renders each example and compares it with the expected
+  HTML after the spec's own normalisation (attribute order, whitespace between
+  tags). It runs compiled and under `--interpret`. A committed ratchet file lists
+  the passing example numbers, and that list may only grow. M1 to M3 each raise
+  it, and M3 ends at all examples passing.
+- **Licence:** the spec text is CC-BY-SA 4.0. Whether to vendor the examples
+  file, with attribution, is in section 8.
+
+### 6.2 Module layout and API
+
+- `stdlib/markdown.tur` (module `tur/markdown`, the public surface), with
+  internals in `stdlib/markdown/{block,inline,html,entities,slug}.tur`. Pure
+  Turmeric, with no inline C. That is the property that lets it run under
+  `--interpret` and in the web REPL, and that the notebook's parser lacks.
+- **Real types, no `:int` handles.** `defdata Block` covers paragraph, heading,
+  code block (info, body, fenced?), block quote, list (ordered?, start, tight?,
+  items), HTML block, thematic break and table. `defdata Inline` covers text,
+  code, emphasis, strong, strikethrough, link (destination, title, children),
+  image, raw HTML, soft break and hard break. Every block carries a source span
+  (start and end line), because the tools that use this need line numbers for
+  their messages.
+- **Options are structs**, per the arity guide:
+  `(defstruct MdOpts [tables : bool strikethrough : bool autolinks : bool
+  tasklists : bool math : bool])` and `(defstruct HtmlOpts [raw-html : bool
+  heading-ids : SlugMode])`. `math` (`$...$` / `$$...$$`, off by default) exists
+  for the notebook.
+- **Functions:**
+  - `markdown/parse [src : String opts : MdOpts] : Doc`
+  - `markdown/render-html [d : Doc opts : HtmlOpts] : String`
+  - `markdown/headings [d : Doc] : (Vec HeadingInfo)`: level, text and id, for
+    tables of contents
+  - `markdown/code-blocks [d : Doc] : (Vec CodeBlockInfo)`: info string, body
+    and span, for fence consumers (section 6.6)
+  - `markdown/escape-html`. Not `escape`, which is a special form (section 7).
+  - `Doc` owns its tree; `markdown/doc-free` releases it.
+
+### 6.3 Heading ids
+
+The default reproduces python-markdown's `toc` rule. Take the heading's text,
+apply NFKD and drop non-ASCII, remove everything but word characters, spaces and
+`-`, lowercase it, and collapse each run of spaces and `-` to a single `-`.
+Duplicate ids get `_1`, `_2`, and so on. With this rule, the 214 fragment links
+and every inbound link to the site keep resolving. GitHub's rule is available as
+a `SlugMode`, for READMEs that are read on GitHub.
+
+### 6.4 M1 to M3
+
+- **M1, block parser:** line splitting, tabs (the spec's partial tab
+  expansion), container matching (block quotes, list items and their content
+  columns), lazy continuation lines, all the leaf blocks (thematic break, ATX
+  and setext headings, indented and fenced code, the seven kinds of HTML block,
+  link reference definitions, paragraphs), and tight vs. loose lists.
+- **M2, inline parser:** backslash escapes, entity and numeric references, code
+  spans, the delimiter-run algorithm for emphasis, links and images (inline;
+  full, collapsed and shortcut references; nested brackets), autolinks, raw
+  HTML, hard and soft breaks.
+- **M3, rendering:** the HTML renderer (including the spec's URL escaping),
+  the GFM extensions, heading ids, and `markdown/headings`.
+- **Size:** about 3 to 5k lines in total. commonmark.js is roughly 3k lines of
+  JavaScript, and the notebook's parser plus renderers come to 4.7k.
+- **Performance target:** all guides plus the spice READMEs parse and render in
+  under a second compiled. The block-subset spike took 48ms.
+
+### 6.5 M4 -- docs pipeline cut-over
+
+1. **Prerequisites:** section 2's fence and list fixes have landed.
+2. **A renderer tool.** `tools/md/render.tur` is built once with `tur build`
+   and runs in batch mode: given a list of `.md` files, it writes each page's
+   HTML fragment and its headings (JSON) to an output directory.
+   `tools/genguides.py` and `tools/genspices.py` call it in place of
+   `md_lib.Markdown(...).convert`. The rest of the post-processing stays in
+   Python for now, because it's site layout rather than Markdown: syntax
+   toggles, mermaid unwrapping, table scroll wrappers, the inline Contents box.
+3. **A diff gate.** A one-off script renders every guide and spice README both
+   ways and reports structural differences. The expected ones are the run-on
+   lists, if any are left after section 2, and the block-quote splitting on the
+   three pages above. Anything else gets investigated before switching.
+4. **Delete the workarounds** listed in 1.1, about 230 lines.
+5. **Drop the `markdown` pin** from `tools/requirements.txt`, its `pip install`
+   steps in `ci.yml`, `release.yml` and `release-cut.yml`, and the `markdown`
+   stub in `tests/tools/check_gendocs_parse.py`. One side effect:
+   `gendocs.py --emit-tur`, which regenerates the tracked
+   `stdlib/docstrings.tur`, stops needing a pip package. Today it fails without
+   `markdown`, because it imports genguides for page layout.
+6. **CI cost:** the docs jobs then need a built `tur` (section 8).
+
+### 6.6 M5 -- other consumers
+
+- **Notebook spice:** replace `notebook/cmark.tur` with `tur/markdown`, keeping
+  thin adapters for the spice's own API (`md-node-*`, `md-source-span`). This is
+  a spice API change, so it goes through the spice's usual versioning.
+- **Literate `.tur.md`** (the hold plan): its envelope pass, in C, decides which
+  fences are program text. A ctest feeds the spec's fenced-code and container
+  examples through both the envelope's extractor and `markdown/code-blocks`,
+  and requires them to agree. That is the plan's own "two `.tur.md` dialects
+  that disagree" concern, as a test.
+- **Fence scanners:** `tools/check-guide-pairs.py` and `tools/doctest.py` find
+  fences with their own scans. `markdown/code-blocks` replaces those whenever
+  these tools move to Turmeric.
+- **Terminal rendering:** `markdown/render-ansi` for `tur doc`, the REPL's
+  `(doc ...)` and spice READMEs on the command line. Later.
+
+## 7. Compiler friction the spikes found
+
+1. **A `let`-bound `(vec-new)` doesn't take its element type from where it's
+   used.** It copies the enclosing function's return type instead, or stays an
+   unresolved `(Vec A)` when there isn't one to copy. Not yet filed under
+   `docs/reported/`.
+
+   ```turmeric
+   (defn fill [acc : (Vec cstr)] : int
+     (do (vec-push! acc "x") (vec-len acc)))
+
+   (defn go [out : (Vec int)] : (Vec int)
+     (let [inner (vec-new)]
+       (println (fill inner))    ;; TUR-E0001: expected (Vec cstr), got (Vec int)
+       out))
+   ```
+
+   Without the `(Vec int)` return type, the error reads `got (Vec A)`. The
+   workaround is a typed helper, `(defn new-lines [] : (Vec cstr) (vec-new))`.
+2. **`=` doesn't accept `Char`** (`TUR-E0006`). Covered by S1.
+3. **`escape` is a special form**, so a user's `(defn escape ...)` can never be
+   called by its bare name. `TUR-W0042` says so clearly. The Markdown module
+   names its function `markdown/escape-html`.
+4. **`import` only works inside `defmodule`**, so even a one-file tool needs a
+   `defmodule` wrapper. Minor; noted for completeness.
+
+## 8. Open questions
+
+1. **Spec examples:** vendor `spec.json` (CC-BY-SA 4.0) with attribution in its
+   own directory, or check in only a generator plus a pinned digest? Tests must
+   not touch the network.
+2. **`=` on `Char`:** add builtins rows for `Char` comparisons, let `=` fall
+   back to `Eq` for opaque newtypes in general, or leave `=` alone and rely on
+   `byte-is?` / `char=?`?
+3. **Name of the concatenation macro:** `string/of`, or the shorter `str`. `str`
+   collides with the legacy `stdlib/str.tur` prefix.
+4. **Unicode tables:** reuse the r7rs pattern (one C table emitted twice, for
+   compiled code and an interpreter native, with a sync check), or pure-Turmeric
+   range tables searched by bisection (slower, but no native)?
+5. **Docs CI:** build `tur` inside the docs jobs (ccache), or reuse the binary
+   from the build job as an artifact?
+6. **Raw HTML in spice READMEs:** pass it through, as python-markdown does
+   today, or escape it, since spice READMEs are third-party content (W-4)?
+7. **Stdlib or spice:** this plan puts it in stdlib. The repo's own docs build
+   shouldn't depend on a `turmeric-spices` checkout, and literate `.tur.md` is a
+   compiler feature. Confirm.
+
+## 9. Related work outside this plan
+
+- **Docstring extraction.** `tools/gendocs.py` parses `;;;` blocks with
+  line-based regexes. `src/lsp/lsp_docs.c` uses a different rule for which
+  definition a block belongs to: the LSP drops a block at a `;;` line, gendocs
+  keeps it. 62 stdlib definitions currently show another function's
+  documentation; for example, `tur doc env/get-raw` prints `env/get`'s full
+  docs. The proposed fix is one extractor in the compiler that both use, plus a
+  check that each summary names its own definition. That belongs in its own plan
+  or report.
+- **No general sort in stdlib.** Surfaced by the same investigation. Not a
+  string helper, so not covered here.
+- **Python stays a dev dependency** whatever happens here: about 30 ctest
+  targets, `tests/run.sh`'s parity checks, the fuzzers, `tools/ci/` and
+  `tools/release_prepare.py` all use it. This plan removes the only third-party
+  package on the docs path, not Python itself. The Python generators that write
+  committed compiler C (`gen-runtime-split.py`, `gen_ffi_dispatch.py`,
+  `gen-r7rs-*.py`) should stay out of Turmeric, because they would need a
+  working `tur` to produce `tur`'s own source.
