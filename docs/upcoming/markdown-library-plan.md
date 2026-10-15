@@ -1,6 +1,7 @@
 # tur/markdown -- CommonMark + GFM in Turmeric, and the string helpers it needs
 
-> **Status:** plan; nothing implemented. Written 2026-10-15. It started as "would
+> **Status:** plan; nothing implemented. Written 2026-10-15; its open questions
+> were settled with the author the same day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
 > turned out not to remove any dependency (see section 9). The Markdown renderer
 > did look worth doing, and so did the string helpers that both spikes below kept
@@ -61,6 +62,7 @@ compared by tag counts. One side is what ships (genguides' preprocessing, then
 | Guides with a `turmeric` / `sweet-exp` block containing a column-0 ```` ``` ```` from inline C (genguides widens these fences before rendering) | 31 |
 | ...of which CommonMark (and GitHub, today) closes the block early and renders broken | **16** |
 | Pages whose block structure still differs once those fences are widened in source | **3**, and only in how adjacent block quotes split (`image-dumps-guide.md`, `repl-tutorial.md`, `web-continuations-tutorial.md`) |
+| Raw HTML a CommonMark parser finds | **3 in the guides, none intentional**: `ptr<void>` inside two of the broken fences above, and `<source>` after a code span that `` \` `` ended early (`developing-spices-guide.md:1283`, hidden on the live site today). **0** in the 51 spice READMEs |
 | Heading ids that would change under GitHub's slug rule instead of python-markdown's (mostly the ` -- ` in titles: `a -- b` is `a-b` vs `a----b`) | **403 of 3,050** |
 | Links in the guides that point at a `#fragment` | 214 |
 
@@ -133,12 +135,16 @@ switch.
    or hash, which contradicts C-5. Use
    `python3 -m pip install --require-hashes -r tools/requirements.txt` like
    `ci.yml` and `release.yml` do.
+4. **Fix the code span at `developing-spices-guide.md:1283`.** It writes
+   `` \` `` inside a code span, but backslash escapes don't work in code spans, so
+   the span ends early and the browser hides `<source>` as an unknown tag. Use a
+   double-backtick span. The other two accidental tags go away with item 2.
 
 ## 3. Phase overview
 
 | Phase | Theme | Breaking? | Track | Size (approx.) |
 |---|---|---|---|---|
-| **S1** | Byte tests with `Char`, `Char` equality | No | Any time | ~150 lines + fixtures |
+| **S1** | Byte tests with `Char` | No | Any time | ~150 lines + fixtures |
 | **S2** | Search: positions as `Option`, run lengths, predicates | No | Any time | ~300 lines |
 | **S3** | Split / join / lines, owned and zero-copy | No | Any time | ~250 lines |
 | **S4** | One-sided trims, literal replace, repeat, pad, parse-int | No | Any time | ~200 lines |
@@ -198,10 +204,12 @@ character, and is `i` in range":
 - `string/char-at [s : String i : int] : (Option Char)`, plus `slice/char-at`
   and `cstr-char-at`. These return the byte as a `Char`, for ASCII-oriented
   scanning. UTF-8 decoding is Phase U's job.
-- **`=` on `Char`.** `(= #\, #\,)` is a `TUR-E0006` today, because `=`'s
-  overloads are keyed by primitive type kind and `Char` is a `defopaque` over
-  `:int`. The options are in section 8. Whichever is chosen, `(= c #\,)` should
-  work, the way it already does for `int`, `float` and `bool`.
+- **`=` on `Char` stays as it is** (decided, section 8). `(= #\, #\,)` is a
+  `TUR-E0006`, because `=`'s overloads are keyed by primitive type kind and
+  `Char` is a `defopaque` over `:int`. `=` rejects `String` for the same reason.
+  `(eq? c #\,)` already works through `Eq [Char]`, which is the same idiom the
+  strings guide prescribes for `cstr`. The fixtures and docstrings for S1 use
+  `eq?`, and `byte-is?` covers the common case without a comparison at all.
 
 ### 4.3 S2 -- search
 
@@ -288,7 +296,7 @@ allocating, with every intermediate leaked:
 - **`builder/push!` through a one-method typeclass**, with instances for `cstr`,
   `String`, `StringSlice`, `Char`, `int` and `bool`. Floats are left out until
   float formatting is decided separately (and probed with `7.1`, per CLAUDE.md).
-- **A concatenation macro** (working name `string/of`) that expands to one
+- **A concatenation macro, `string/of`** (name decided, section 8), that expands to one
   builder, a `builder/push!` per argument, and `builder/finish`. It borrows its
   arguments and creates no temporaries, so the only thing to release is the one
   `String` it returns:
@@ -316,7 +324,11 @@ Plan:
   `unicode/space? [c : Char] : bool`, `unicode/punct? [c : Char] : bool`,
   `unicode/fold-case [s : String] : String`, and
   `utf8/decode-at [s : String i : int] : (Option (Pair Char int))` (the code
-  point, and the next byte index). The table format is open (section 8).
+  point, and the next byte index). The tables follow the existing r7rs pattern
+  (decided, section 8): one static C table emitted twice, as inline C for
+  compiled code and as an interpreter native in `src/turi/`, with a sync check
+  like `tests/check-r7rs-unicode-sync.sh` keeping the two copies identical. The
+  r7rs prelude can then read the same tables instead of carrying its own.
 - A new `tools/gen-html-entities.py` turns WHATWG's `entities.json`, pinned by
   digest, into `stdlib/markdown/entities.tur`, which is generated and committed
   like the r7rs tables.
@@ -335,15 +347,30 @@ Plan:
   tags). It runs compiled and under `--interpret`. A committed ratchet file lists
   the passing example numbers, and that list may only grow. M1 to M3 each raise
   it, and M3 ends at all examples passing.
-- **Licence:** the spec text is CC-BY-SA 4.0. Whether to vendor the examples
-  file, with attribution, is in section 8.
+- **Where the examples live** (decided, section 8): a separate repository in
+  the `turmeric-lang` org, working name `turmeric-lang/commonmark-spec-data`.
+  It holds the spec's examples and the GFM extension examples as JSON, with
+  their CC-BY-SA 4.0 licence and attribution. That keeps the share-alike text
+  out of this repository. It is consumed the way `turmeric-spices` already is:
+  - Locally, clone it next to this checkout (`../commonmark-spec-data/`). When
+    it's absent, the runner PASS-skips with a message saying how to get it,
+    the same as `requires.spices`.
+  - In CI, the jobs that run the suite check it out with `actions/checkout`
+    (as `release-cut.yml` already does for `turmeric-spices`) at a commit SHA
+    pinned in this repo, in `tests/markdown-spec/PINNED`. Nothing reaches the
+    network at configure or test time.
+  - The ratchet file, which lists the passing example numbers per spec version,
+    lives in this repo, next to `PINNED`.
+  - Creating the repository is a manual step for an org owner, before M1.
 
 ### 6.2 Module layout and API
 
 - `stdlib/markdown.tur` (module `tur/markdown`, the public surface), with
-  internals in `stdlib/markdown/{block,inline,html,entities,slug}.tur`. Pure
-  Turmeric, with no inline C. That is the property that lets it run under
-  `--interpret` and in the web REPL, and that the notebook's parser lacks.
+  internals in `stdlib/markdown/{block,inline,html,entities,slug}.tur`. It lives
+  in stdlib, not a spice (decided, section 8). The module itself has no inline
+  C. Its only native dependency is `stdlib/unicode.tur`, whose tables ship with
+  interpreter natives. So it runs compiled, under `--interpret` and in the web
+  REPL, which the notebook's parser can't.
 - **Real types, no `:int` handles.** `defdata Block` covers paragraph, heading,
   code block (info, body, fenced?), block quote, list (ordered?, start, tight?,
   items), HTML block, thematic break and table. `defdata Inline` covers text,
@@ -353,9 +380,19 @@ Plan:
   their messages.
 - **Options are structs**, per the arity guide:
   `(defstruct MdOpts [tables : bool strikethrough : bool autolinks : bool
-  tasklists : bool math : bool])` and `(defstruct HtmlOpts [raw-html : bool
+  tasklists : bool math : bool])` and `(defstruct HtmlOpts [raw-html : RawHtml
   heading-ids : SlugMode])`. `math` (`$...$` / `$$...$$`, off by default) exists
   for the notebook.
+- **Raw HTML** (decided, section 8): `RawHtml` is an ADT with three cases.
+  `Pass` passes raw HTML through. `TagFilter`, the **default**, is GitHub's
+  behaviour: raw HTML passes through, except that the opening `<` of nine tags
+  is escaped (`title`, `textarea`, `style`, `xmp`, `iframe`, `noembed`,
+  `noframes`, `script`, `plaintext`). `Escape` renders all raw HTML as text.
+  Pass-through keeps one hazard: Turmeric type syntax that slips outside code
+  (`ptr<void>`, `<name>`) parses as a tag, and the browser hides it. Since no
+  guide uses raw HTML on purpose, M4's renderer tool reports every raw-HTML node
+  it emits, and the docs build fails on any in `docs/guides/` that the page
+  doesn't explicitly allow.
 - **Functions:**
   - `markdown/parse [src : String opts : MdOpts] : Doc`
   - `markdown/render-html [d : Doc opts : HtmlOpts] : String`
@@ -414,7 +451,12 @@ a `SlugMode`, for READMEs that are read on GitHub.
    `gendocs.py --emit-tur`, which regenerates the tracked
    `stdlib/docstrings.tur`, stops needing a pip package. Today it fails without
    `markdown`, because it imports genguides for page layout.
-6. **CI cost:** the docs jobs then need a built `tur` (section 8).
+6. **CI cost** (decided, section 8): `ci.yml`'s `web-smoke` job and
+   `release-cut.yml`'s Try Turmeric deploy already build a native `tur` for
+   `tur run docs`, so they cost nothing extra. The two that don't get an
+   in-job build with ccache, the way those two do it: `release.yml`'s `docs`
+   job and `release-cut.yml`'s spices-site job. Both stay independent of the
+   release builds and run in parallel with them.
 
 ### 6.6 M5 -- other consumers
 
@@ -424,7 +466,8 @@ a `SlugMode`, for READMEs that are read on GitHub.
 - **Literate `.tur.md`** (the hold plan): its envelope pass, in C, decides which
   fences are program text. A ctest feeds the spec's fenced-code and container
   examples through both the envelope's extractor and `markdown/code-blocks`,
-  and requires them to agree. That is the plan's own "two `.tur.md` dialects
+  and requires them to agree. It reads the examples from the same sibling
+  checkout as 6.1 and skips the same way when that checkout is absent. That is the plan's own "two `.tur.md` dialects
   that disagree" concern, as a test.
 - **Fence scanners:** `tools/check-guide-pairs.py` and `tools/doctest.py` find
   fences with their own scans. `markdown/code-blocks` replaces those whenever
@@ -451,33 +494,27 @@ a `SlugMode`, for READMEs that are read on GitHub.
 
    Without the `(Vec int)` return type, the error reads `got (Vec A)`. The
    workaround is a typed helper, `(defn new-lines [] : (Vec cstr) (vec-new))`.
-2. **`=` doesn't accept `Char`** (`TUR-E0006`). Covered by S1.
+2. **`=` doesn't accept `Char`** (`TUR-E0006`). Left as it is (section 8):
+   `eq?` already works, and S1's helpers cover the common case.
 3. **`escape` is a special form**, so a user's `(defn escape ...)` can never be
    called by its bare name. `TUR-W0042` says so clearly. The Markdown module
    names its function `markdown/escape-html`.
 4. **`import` only works inside `defmodule`**, so even a one-file tool needs a
    `defmodule` wrapper. Minor; noted for completeness.
 
-## 8. Open questions
+## 8. Decisions
 
-1. **Spec examples:** vendor `spec.json` (CC-BY-SA 4.0) with attribution in its
-   own directory, or check in only a generator plus a pinned digest? Tests must
-   not touch the network.
-2. **`=` on `Char`:** add builtins rows for `Char` comparisons, let `=` fall
-   back to `Eq` for opaque newtypes in general, or leave `=` alone and rely on
-   `byte-is?` / `char=?`?
-3. **Name of the concatenation macro:** `string/of`, or the shorter `str`. `str`
-   collides with the legacy `stdlib/str.tur` prefix.
-4. **Unicode tables:** reuse the r7rs pattern (one C table emitted twice, for
-   compiled code and an interpreter native, with a sync check), or pure-Turmeric
-   range tables searched by bisection (slower, but no native)?
-5. **Docs CI:** build `tur` inside the docs jobs (ccache), or reuse the binary
-   from the build job as an artifact?
-6. **Raw HTML in spice READMEs:** pass it through, as python-markdown does
-   today, or escape it, since spice READMEs are third-party content (W-4)?
-7. **Stdlib or spice:** this plan puts it in stdlib. The repo's own docs build
-   shouldn't depend on a `turmeric-spices` checkout, and literate `.tur.md` is a
-   compiler feature. Confirm.
+The questions this plan first left open, settled with the author on 2026-10-15.
+
+| # | Question | Decision | Why |
+|---|---|---|---|
+| 1 | Where do the CommonMark spec examples (CC-BY-SA 4.0) live? | A separate `turmeric-lang` repository (working name `commonmark-spec-data`), consumed as a sibling checkout pinned by SHA; tests skip when it is absent (6.1) | Keeps the share-alike text out of this repo; same pattern as `turmeric-spices`; nothing touches the network at configure or test time |
+| 2 | Should `=` accept `Char`? | **No.** `=` stays primitive-only; `eq?` is the idiom (4.2) | `(eq? c #\,)` already works through `Eq [Char]`; `=` rejects `String` for the same reason; S1's `byte-is?` covers the common case. Making `=` fall back to `Eq` would be its own plan, behind `--enable` |
+| 3 | Name of the concatenation macro | `string/of` (4.6) | Matches the `string/` prefix of what it returns; `str` is already a type name (the borrowed-view tier) |
+| 4 | How are the Unicode tables generated? | The r7rs pattern: one C table emitted twice, inline C plus an interpreter native, with a sync check (section 5) | Fast static lookups; works compiled, interpreted and in the web REPL; the generator and UCD pin already exist |
+| 5 | How do the docs CI jobs get a `tur`? | Build in-job with ccache in `release.yml`'s `docs` job and `release-cut.yml`'s spices-site job; the other two docs jobs already build one (6.5) | Matches the existing jobs; keeps the docs jobs parallel to the release builds |
+| 6 | Raw HTML | Pass through with GFM's tag filter by default (`RawHtml` is `TagFilter`); `Pass` and `Escape` are available; the docs build fails on any raw HTML in a guide that doesn't allow it (6.2) | GitHub's behaviour, closest to today's site; the build check catches the accidental-tag hazard pass-through keeps |
+| 7 | Stdlib or spice? | Stdlib: `stdlib/markdown.tur` + `stdlib/markdown/` (6.2) | The repo's own docs build can't depend on the spices checkout, and literate `.tur.md` is a compiler feature |
 
 ## 9. Related work outside this plan
 
