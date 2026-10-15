@@ -157,6 +157,215 @@
 ;;; Since: markdown-library-plan S1
 (defn slice/char-at [sl : StringSlice i : int] : (Option Char)
   (let [b (slice/byte-at sl i)] (if (< b 0) (none) (some (int->char b)))))
+;; ---- Search (markdown-library-plan S2) -------------------------------------
+;; The string/ search functions for a slice.  Offsets, bounds and results are
+;; the slice's own, not its parent's.  The needle is a String: in a parser the
+;; haystack is a slice of the document and the needle is usually a literal.
+;; None of these allocates.
+;;; slice/-match-at -- internal: do bytes [k, n) of p equal sl's from at+k on?
+
+(defn slice/-match-at [sl : StringSlice p : String at : int k : int n : int] : bool
+  (if (>= k n)
+    true
+    (if (= (slice/byte-at sl (+ at k)) (string/byte-at p k))
+      (slice/-match-at sl p at (+ k 1) n)
+      false)))
+;;; slice/starts-with-at? -- does prefix occur in the slice at byte offset at?
+;;;
+;;; string/starts-with-at? for a slice.
+;;;
+;;; Parameters:
+;;;   sl     -- the slice to look in (borrowed)
+;;;   prefix -- the bytes to look for (borrowed)
+;;;   at     -- the byte offset in the slice to test
+;;;
+;;; Returns:
+;;;   true iff the slice's bytes from at on begin with prefix.
+;;;
+;;; Example:
+;;;   (slice/starts-with-at? (string/slice (string/from-cstr "x <!-- y") 2 6) (string/from-cstr "<!--") 0)  ; => true
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/starts-with-at? [sl : StringSlice prefix : String at : int] : bool
+  (let [n (string/len prefix)]
+    (and (>= at 0)
+      (<= (+ at n) (slice/len sl))
+      (slice/-match-at sl prefix at 0 n))))
+;;; slice/-index-of-loop -- internal: first match of needle at i..last.
+
+(defn slice/-index-of-loop [sl : StringSlice needle : String i : int last : int] : (Option int)
+  (if (> i last)
+    (none)
+    (if (slice/starts-with-at? sl needle i)
+      (some i)
+      (slice/-index-of-loop sl needle (+ i 1) last))))
+;;; slice/index-of-from -- offset of the first needle at or after start.
+;;;
+;;; string/index-of-from for a slice.
+;;;
+;;; Parameters:
+;;;   sl     -- the slice to search (borrowed)
+;;;   needle -- the bytes to find (borrowed)
+;;;   start  -- the first slice offset a match may begin at
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i >= start where needle occurs, else (none).
+;;;
+;;; Example:
+;;;   (slice/index-of-from (string/slice (string/from-cstr "a,b,c") 0 5) (string/from-cstr ",") 2)  ; => (some 3)
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/index-of-from [sl : StringSlice needle : String start : int] : (Option int)
+  (slice/-index-of-loop sl
+    needle
+    (if (< start 0) 0 start)
+    (- (slice/len sl) (string/len needle))))
+;;; slice/index-of -- offset of the first occurrence of needle in the slice.
+;;;
+;;; string/index-of for a slice.
+;;;
+;;; Parameters:
+;;;   sl     -- the slice to search (borrowed)
+;;;   needle -- the bytes to find (borrowed)
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i where needle occurs, or (none).
+;;;
+;;; Example:
+;;;   (slice/index-of (string/slice (string/from-cstr "<p>a</p>") 3 5) (string/from-cstr "</"))  ; => (some 1)
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/index-of [sl : StringSlice needle : String] : (Option int)
+  (slice/index-of-from sl needle 0))
+;;; slice/-last-index-of-loop -- internal: last match of needle at i down to 0.
+
+(defn slice/-last-index-of-loop [sl : StringSlice needle : String i : int] : (Option int)
+  (if (< i 0)
+    (none)
+    (if (slice/starts-with-at? sl needle i)
+      (some i)
+      (slice/-last-index-of-loop sl needle (- i 1)))))
+;;; slice/last-index-of -- offset of the last occurrence of needle in the slice.
+;;;
+;;; string/last-index-of for a slice.
+;;;
+;;; Parameters:
+;;;   sl     -- the slice to search (borrowed)
+;;;   needle -- the bytes to find (borrowed)
+;;;
+;;; Returns:
+;;;   (some i) for the highest i where needle occurs, or (none).
+;;;
+;;; Example:
+;;;   (slice/last-index-of (string/slice (string/from-cstr "a/b/c/") 0 5) (string/from-cstr "/"))  ; => (some 3)
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/last-index-of [sl : StringSlice needle : String] : (Option int)
+  (slice/-last-index-of-loop sl needle (- (slice/len sl) (string/len needle))))
+;;; slice/-index-of-byte-loop -- internal: first i in [i, n) holding byte b.
+
+(defn slice/-index-of-byte-loop [sl : StringSlice b : int i : int n : int] : (Option int)
+  (if (>= i n)
+    (none)
+    (if (= (slice/byte-at sl i) b)
+      (some i)
+      (slice/-index-of-byte-loop sl b (+ i 1) n))))
+;;; slice/index-of-char-from -- offset of the first c at or after start.
+;;;
+;;; string/index-of-char-from for a slice.
+;;;
+;;; Parameters:
+;;;   sl    -- the slice to search (borrowed)
+;;;   c     -- the character to find (ASCII)
+;;;   start -- the first slice offset to look at
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i >= start holding c, or (none).
+;;;
+;;; Example:
+;;;   (slice/index-of-char-from (string/slice (string/from-cstr "a]b]") 0 4) #\] 2)  ; => (some 3)
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/index-of-char-from [sl : StringSlice c : Char start : int] : (Option int)
+  (slice/-index-of-byte-loop sl
+    (char->int c)
+    (if (< start 0) 0 start)
+    (slice/len sl)))
+;;; slice/index-of-char -- offset of the first c in the slice.
+;;;
+;;; string/index-of-char for a slice.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to search (borrowed)
+;;;   c  -- the character to find (ASCII)
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i holding c, or (none).
+;;;
+;;; Example:
+;;;   (slice/index-of-char (string/slice (string/from-cstr "x [a] y") 2 3) #\])  ; => (some 2)
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/index-of-char [sl : StringSlice c : Char] : (Option int)
+  (slice/index-of-char-from sl c 0))
+;;; slice/-span-loop -- internal: first i in [i, n) whose byte fails pred, else n.
+
+(defn slice/-span-loop [sl : StringSlice
+                        pred : (fn [Char] bool)
+                        i : int
+                        n : int] : int
+  (if (>= i n)
+    n
+    (if (pred (int->char (slice/byte-at sl i)))
+      (slice/-span-loop sl pred (+ i 1) n)
+      i)))
+;;; slice/span-while -- the slice index where a run satisfying pred ends.
+;;;
+;;; string/span-while for a slice: the run stops at the slice's end, not its
+;;; parent's.
+;;;
+;;; Parameters:
+;;;   sl    -- the slice to scan (borrowed)
+;;;   start -- the slice offset to start at (clamped into [0, (slice/len sl)])
+;;;   pred  -- the test each byte must pass to continue the run
+;;;
+;;; Returns:
+;;;   The end of the run: an index in [start, (slice/len sl)].
+;;;
+;;; Example:
+;;;   (slice/span-while (string/slice (string/from-cstr "x  abc") 1 5) 0 space?)  ; => 2
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/span-while [sl : StringSlice start : int pred : (fn [Char] bool)] : int
+  (let [n (slice/len sl)]
+    (slice/-span-loop sl pred (if (< start 0) 0 (if (> start n) n start)) n)))
+;;; slice/-run-loop -- internal: first i in [i, n) not holding byte b, else n.
+
+(defn slice/-run-loop [sl : StringSlice b : int i : int n : int] : int
+  (if (>= i n)
+    n
+    (if (= (slice/byte-at sl i) b) (slice/-run-loop sl b (+ i 1) n) i)))
+;;; slice/run-length -- how many c in a row start at start in the slice.
+;;;
+;;; string/run-length for a slice: the run stops at the slice's end.
+;;;
+;;; Parameters:
+;;;   sl    -- the slice to scan (borrowed)
+;;;   start -- the slice offset the run starts at
+;;;   c     -- the character the run is made of (ASCII)
+;;;
+;;; Returns:
+;;;   The run's length in bytes, 0 or more.
+;;;
+;;; Example:
+;;;   (slice/run-length (string/slice (string/from-cstr "````x") 0 3) 0 #\`)  ; => 3
+;;;
+;;; Since: markdown-library-plan S2
+(defn slice/run-length [sl : StringSlice start : int c : Char] : int
+  (let [n (slice/len sl)]
+    (if (or (< start 0) (>= start n))
+      0
+      (- (slice/-run-loop sl (char->int c) start n) start))))
 ;;; slice/compare -- lexicographic byte compare of two slices: -1, 0, or 1.
 ;;;
 ;;; Since: v2

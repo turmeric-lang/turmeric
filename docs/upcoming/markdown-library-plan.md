@@ -1,7 +1,8 @@
 # tur/markdown -- CommonMark + GFM in Turmeric, and the string helpers it needs
 
-> **Status:** plan; nothing implemented. Written 2026-10-15; its open questions
-> were settled with the author the same day (section 8). It started as "would
+> **Status:** in progress. S1 (#1200) and S2 are implemented; the rest is
+> still plan. Written 2026-10-15; its open questions were settled with the
+> author the same day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
 > turned out not to remove any dependency (see section 9). The Markdown renderer
 > did look worth doing, and so did the string helpers that both spikes below kept
@@ -538,6 +539,13 @@ a `SlugMode`, for READMEs that are read on GitHub.
    names its function `markdown/escape-html`.
 4. **`import` only works inside `defmodule`**, so even a one-file tool needs a
    `defmodule` wrapper. Minor; noted for completeness.
+5. **A named `let` can't declare its result type** (found writing S2). It
+   desugars to an unannotated `fn` (`elab_named_let`, `src/compiler/elab_forms.c`),
+   so the loop call is typed `int`. A loop that returns `bool` or `(Option int)`
+   then fails with "if branches have mismatched types". S2's loops are
+   self-recursive helper `defn`s with declared result types instead, which the
+   self-tail-call lowering turns into loops just the same. A `: T` after the
+   binding vector, `(let loop [i 0] : (Option int) ...)`, would fix it.
 
 ## 8. Decisions
 

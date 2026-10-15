@@ -1,0 +1,152 @@
+;; string-search -- markdown-library-plan S2: non-allocating search on
+;; String, StringSlice and cstr.
+;;
+;; A position that may not exist is an (Option int), never -1.  An offset
+;; that is negative, at the end or past it is not an error.  The empty needle
+;; occurs at every offset from 0 to the length.  A slice's search stops at its
+;; own bounds, not its parent's.
+
+(load "stdlib/string-slice.tur")
+
+(defmodule app
+  (import cstr :refer [cstr-starts-with? cstr-ends-with? cstr-index-of
+                       cstr-index-of-char cstr-span-while])
+
+  (defn yn [b : bool] : cstr (if b "T" "F"))
+
+  ;; a position as its number, or "none"
+  (defn pos [o : (Option int)] : void
+    (match o
+      (Some i) (println i)
+      (None)   (println "none")))
+
+  (defn not-gt? [c : Char] : bool (not (char=? c #\>)))
+
+  ;; s is "a --> b --> c": the arrows start at 2 and 8, the length is 13.
+  (defn demo-string [] : int
+    (let [s     (string/from-cstr "a --> b --> c")
+          arrow (string/from-cstr "-->")
+          back  (string/from-cstr "<--")
+          empty (string/from-cstr "")
+          long  (string/from-cstr "a --> b --> c!")]
+      (do
+        (println "starts-with-at?")
+        (println (yn (string/starts-with-at? s arrow 2)))   ;; T
+        (println (yn (string/starts-with-at? s arrow 3)))   ;; F
+        (println (yn (string/starts-with-at? s arrow -1)))  ;; F: negative
+        (println (yn (string/starts-with-at? s arrow 11)))  ;; F: runs past the end
+        (println (yn (string/starts-with-at? s empty 13)))  ;; T: "" at the end
+        (println (yn (string/starts-with-at? s empty 14)))  ;; F: past it
+        (println "index-of")
+        (pos (string/index-of s arrow))                     ;; 2
+        (pos (string/index-of-from s arrow 3))              ;; 8
+        (pos (string/index-of-from s arrow 9))              ;; none
+        (pos (string/index-of-from s arrow -5))             ;; 2: from 0
+        (pos (string/index-of s back))                      ;; none
+        (pos (string/index-of s long))                      ;; none: longer than s
+        (pos (string/index-of s empty))                     ;; 0
+        (pos (string/index-of-from s empty 13))             ;; 13
+        (pos (string/index-of-from s empty 14))             ;; none
+        (println "last-index-of")
+        (pos (string/last-index-of s arrow))                ;; 8
+        (pos (string/last-index-of s back))                 ;; none
+        (pos (string/last-index-of s empty))                ;; 13
+        (pos (string/last-index-of s s))                    ;; 0
+        (println "index-of-char")
+        (pos (string/index-of-char s #\b))                  ;; 6
+        (pos (string/index-of-char-from s #\b 7))           ;; none
+        (pos (string/index-of-char s #\c))                  ;; 12: the last byte
+        (pos (string/index-of-char s #\z))                  ;; none
+        (pos (string/index-of-char-from s #\a -3))          ;; 0: from 0
+        (println "span-while")
+        (println (string/span-while s 0 alpha?))            ;; 1
+        (println (string/span-while s 1 space?))            ;; 2
+        (println (string/span-while s 12 alpha?))           ;; 13: to the end
+        (println (string/span-while s -4 alpha?))           ;; 1: from 0
+        (println (string/span-while s 99 alpha?))           ;; 13: clamped
+        (println (string/span-while s 0 not-gt?))           ;; 4: a named predicate
+        (println (string/span-while s 5 (fn [c : Char] : bool (not (char=? c #\-)))))  ;; 8
+        (println "run-length")
+        (println (string/run-length s 2 #\-))               ;; 2
+        (println (string/run-length s 4 #\-))               ;; 0: '>' there
+        (println (string/run-length s -1 #\a))              ;; 0: negative
+        (println (string/run-length s 13 #\c))              ;; 0: at the end
+        (string/release s)
+        (string/release arrow)
+        (string/release back)
+        (string/release empty)
+        (string/release long)
+        0)))
+
+  (defn demo-high-byte [] : int
+    (let [s (string/from-cstr "\xc3\xa9x")]               ;; U+00E9, then 'x'
+      (do
+        (println (string/span-while s 0 alpha?))            ;; 0: 195 is not alpha
+        (pos (string/index-of-char s #\x))                  ;; 2: bytes, not chars
+        (string/release s)
+        0)))
+
+  ;; doc is "## [a](b) ##"; the view w is "[a](b)", bytes 3..8.
+  (defn demo-slice [] : int
+    (let [doc   (string/from-cstr "## [a](b) ##")
+          w     (string/slice doc 3 6)
+          hash  (string/slice doc 0 1)
+          close (string/from-cstr "](")
+          hh    (string/from-cstr "##")
+          paren (string/from-cstr "(")
+          tail  (string/from-cstr "(b)")
+          tail2 (string/from-cstr "(b) ")]
+      (do
+        (pos (slice/index-of-char w #\]))                   ;; 2
+        (pos (slice/index-of-char w #\#))                   ;; none: only outside the view
+        (pos (slice/index-of-char-from w #\( 3))            ;; 3
+        (pos (slice/index-of w close))                      ;; 2
+        (pos (slice/index-of w hh))                         ;; none: only outside the view
+        (pos (slice/index-of-from w paren 4))               ;; none
+        (pos (slice/last-index-of w paren))                 ;; 3
+        (println (yn (slice/starts-with-at? w tail 3)))     ;; T
+        (println (yn (slice/starts-with-at? w tail2 3)))    ;; F: the ' ' is the parent's
+        (println (slice/span-while w 0 punct?))             ;; 1
+        (println (slice/span-while w 4 alpha?))             ;; 5
+        (println (slice/run-length hash 0 #\#))             ;; 1: the parent has 2
+        (slice/release w)
+        (slice/release hash)
+        (string/release doc)
+        (string/release close)
+        (string/release hh)
+        (string/release paren)
+        (string/release tail)
+        (string/release tail2)
+        0)))
+
+  (defn demo-cstr [] : int
+    (do
+      (println (yn (cstr-starts-with? "# Title" "# ")))     ;; T
+      (println (yn (cstr-starts-with? "#" "# ")))           ;; F: shorter than prefix
+      (println (yn (cstr-starts-with? "abc" "")))           ;; T
+      (println (yn (cstr-ends-with? "guide.md" ".md")))     ;; T
+      (println (yn (cstr-ends-with? "md" ".md")))           ;; F
+      (println (yn (cstr-ends-with? "a" "")))               ;; T
+      (pos (cstr-index-of "key: value" ": "))               ;; 3
+      (pos (cstr-index-of "abc" "abcd"))                    ;; none
+      (pos (cstr-index-of "abc" ""))                        ;; 0
+      (pos (cstr-index-of "aaab" "ab"))                     ;; 2
+      (pos (cstr-index-of-char "a=b" #\=))                  ;; 1
+      (pos (cstr-index-of-char "ab" #\=))                   ;; none
+      (pos (cstr-index-of-char "" #\a))                     ;; none
+      (println (cstr-span-while "  - x" 0 space?))          ;; 2
+      (println (cstr-span-while "  - x" 99 space?))         ;; 5: clamped
+      (println (cstr-span-while "  - x" -1 space?))         ;; 2: from 0
+      0))
+
+  (defn main [] : int
+    (do
+      (println "-- string")
+      (demo-string)
+      (println "-- high byte")
+      (demo-high-byte)
+      (println "-- slice")
+      (demo-slice)
+      (println "-- cstr")
+      (demo-cstr)
+      0)))
