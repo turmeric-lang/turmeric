@@ -8,7 +8,7 @@ description: Writing custom effects
 
 A step-by-step guide to algebraic effects in Turmeric. Each section builds on the previous one, starting from the simplest possible effect and working up to real-world patterns like mock I/O and dependency injection.
 
-> **Prerequisites**: Working `build/tur` binary (run `just build`, or the CMake bootstrap in the README). No prior knowledge of algebraic effects is required.
+> **Prerequisites**: Working `build/tur` binary (run `tur run build`, or the CMake bootstrap in the README). No prior knowledge of algebraic effects is required.
 
 ---
 

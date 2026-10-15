@@ -25,7 +25,7 @@ better fits once you need true edge distribution or sub-millisecond cold starts.
 
 | Tool | How to get it |
 |---|---|
-| Turmeric (`tur`) built from source | `just build` |
+| Turmeric (`tur`) built from source | `tur run build` |
 | Docker | https://docs.docker.com/get-started/get-docker/ |
 | Cloudflare account (paid, Workers Paid plan) | https://cloudflare.com |
 | Wrangler CLI | `npm install -g wrangler` |
@@ -142,7 +142,7 @@ defn main [] :int
 Test locally before containerizing:
 
 ```sh
-just build
+tur run build
 tur run service.tur
 # in another terminal:
 curl http://localhost:8080/
@@ -159,14 +159,12 @@ RUN apt-get update && apt-get install -y \
     build-essential cmake git python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install 'just'
-RUN curl --proto '=https' --tlsv1.2 -sSf \
-    https://github.com/casey/just/releases/latest/download/just-x86_64-unknown-linux-musl.tar.gz \
-    | tar -xz -C /usr/local/bin just
-
+# Build tur itself. There is no tur in the image yet, so this is plain CMake
+# rather than `tur run`.
 WORKDIR /turmeric
 COPY . .
-RUN just release
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    && cmake --build build -j
 
 # Compile the service to a standalone binary
 RUN build/tur emit-c --output-dir /tmp/svc service.tur \
@@ -193,7 +191,7 @@ alongside the source:
 ```dockerfile
 FROM ubuntu:22.04
 
-# ... install build deps, just build ...
+# ... install build deps and build tur, as in the builder stage above ...
 COPY --from=builder /turmeric/build/tur /usr/local/bin/tur
 COPY service.tur /app/service.tur
 
@@ -289,7 +287,7 @@ Turmeric expression -- without long-running loops, raw sockets, or filesystem ac
 From the Turmeric repository root:
 
 ```sh
-just wasm
+tur run wasm
 ```
 
 This produces:
@@ -303,7 +301,7 @@ build-wasm/wasm/turmeric.wasm
 
 Emscripten's default output targets browser environments. Cloudflare Workers run in
 a V8 isolate with no `window`, `document`, or `XMLHttpRequest`. The stock
-`just wasm` build already passes `-sMODULARIZE=1` and
+`tur run wasm` build already passes `-sMODULARIZE=1` and
 `-sEXPORT_NAME=TurmericModule`; what it does not set is the target environment:
 
 ```sh
@@ -393,7 +391,7 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 [build]
-command = "just wasm && cp build-wasm/wasm/turmeric.js . && cp build-wasm/wasm/turmeric.wasm ."
+command = "tur run wasm && cp build-wasm/wasm/turmeric.js . && cp build-wasm/wasm/turmeric.wasm ."
 
 [[rules]]
 type = "CompiledWasm"

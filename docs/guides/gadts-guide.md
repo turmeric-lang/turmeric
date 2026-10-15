@@ -443,7 +443,7 @@ GADT support is on by default. Files that use `defgadt` or match on a GADT
 compile with no special flag:
 
 ```sh
-just build          # builds everything, GADTs included
+tur run build          # builds everything, GADTs included
 ./build/tur run my-file.tur
 ./build/tur build my-file.tur
 ```

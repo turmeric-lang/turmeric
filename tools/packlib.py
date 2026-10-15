@@ -30,7 +30,7 @@ from typing import Iterable
 
 # Every generator drops one of these into the pack root; genpack.py merges them
 # into index.json and then deletes them. Keeping them out of index.json itself
-# means a partial `just docs` (say, guides only) never produces a half-written
+# means a partial `tur run docs` (say, guides only) never produces a half-written
 # contract file that the pane would happily believe.
 SIDECAR_SUFFIX = '.pack-manifest.json'
 

@@ -53,7 +53,7 @@ if [ "${TURI_TEST_LIST:-0}" = "1" ]; then LIST_ONLY=1; fi
 # run -- so it must not require a built interpreter.  tests/run-shard-partition.sh
 # calls it from the non-JIT `test` job, where $TUR may be absent entirely.
 if [ "$LIST_ONLY" = "0" ]; then
-    [ -x "$TUR" ] || { echo "run-turi: $TUR not built; run 'just build' first" >&2; exit 2; }
+    [ -x "$TUR" ] || { echo "run-turi: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 fi
 
 # Optional sharding, spelled and CLAMPED exactly as tests/run.sh and

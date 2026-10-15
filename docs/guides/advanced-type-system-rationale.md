@@ -333,8 +333,8 @@ below.
 
 This distinction maps cleanly onto Turmeric's build model:
 
-- Debug builds (`just build`) always check contracts.
-- Release builds (`just release`) strip them by default; pass `--keep-contracts`
+- Debug builds (`tur run build`) always check contracts.
+- Release builds (`tur run release`) strip them by default; pass `--keep-contracts`
   to retain them for safety-critical code.
 - A custom failure handler (`set-contract-handler!`, `with-contract-handler`)
   lets embedders redirect failures instead of panicking.

@@ -156,7 +156,7 @@ jobs:
           fetch-depth: 0
 
       # The deploy insists on spices (tools/check-pack-spices.py, the same
-      # check `just deploy-web` runs): genspices.py degrades to zero spice
+      # check `tur run deploy-web` runs): genspices.py degrades to zero spice
       # pages without the sibling checkout, which is fine for CI and wrong for
       # the site.  Unpinned for the reason recorded at the same clone in ci.yml.
       # Full history, not --depth 1, for the same page-dating reason as the
@@ -284,7 +284,7 @@ jobs:
           cache: 'npm'
           cache-dependency-path: web/package-lock.json
 
-      # Mirrors the spices repo's `just deploy-web` recipe: render guides +
+      # Mirrors the spices repo's `tur run deploy-web` recipe: render guides +
       # spice pages, copy them with the static assets into web/dist, deploy.
       - name: Generate spice docs
         run: |

@@ -28,7 +28,7 @@ run_benchmark() {
             ;;
         turmeric)
             cd "${BENCHMARK_DIR}/turmeric"
-            just release
+            tur run release
             build-rel/tur ${benchmark}.tur "$(jq -r .small.n $input_file)" > "$output_file"
             ;;
         clojure)

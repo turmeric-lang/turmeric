@@ -19,7 +19,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 # The REPL invokes `tur` as a subprocess; point at the local build.  TUR_BIN
 # must be absolute so the subprocess works regardless of where the loader is
 # invoked from -- but prefixing $PWD unconditionally corrupts an already

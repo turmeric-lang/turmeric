@@ -120,12 +120,12 @@ web/.wrangler/
 # web/public/ (src/CMakeLists.txt), where vite picks them up as static assets.
 # They are build products, not source: tracking them forced a second
 # "regenerate web artifacts" commit after every deploy and left each release
-# tag carrying the *previous* release's binary. Run `just wasm` (or
-# `tur run wasm`) to produce them; `just web` / `just deploy-web` do it for you.
+# tag carrying the *previous* release's binary. Run `tur run wasm` (or
+# `tur run wasm`) to produce them; `tur run web` / `tur run deploy-web` do it for you.
 web/public/turmeric.js
 web/public/turmeric.wasm
 
-# Doc-name index behind the web REPL's doc panel, emitted by `just docs`
+# Doc-name index behind the web REPL's doc panel, emitted by `tur run docs`
 # (tools/gendocs.py --emit-json). Same story as the wasm pair above: tracking
 # it meant every release tag either carried a stale index -- v0.32.3 nearly
 # shipped without a single `rat/*` or `complex/*` entry -- or dirtied the tree
@@ -137,14 +137,14 @@ web/public/turmeric.wasm
 web/public/doc-names.json
 
 # The docs pack (OD1): chrome-free guide/API/spice fragments plus index.json,
-# emitted by `just docs` from the same generators that build docs/html/. Try
+# emitted by `tur run docs` from the same generators that build docs/html/. Try
 # Turmeric renders it in its in-app docs pane and its service worker precaches
 # it wholesale for offline use. Gitignored for the same reasons as
 # doc-names.json above: it is a build output, it is large, and its spices
 # section depends on the optional sibling ../turmeric-spices/ checkout.
 web/public/docs-pack/
 
-# Release docs bundle from `just docs-tarball` (OD4).
+# Release docs bundle from `tur run docs-tarball` (OD4).
 turmeric-docs-*.tar.gz
 
 # Local Playwright config override (e.g. pointing launchOptions.executablePath

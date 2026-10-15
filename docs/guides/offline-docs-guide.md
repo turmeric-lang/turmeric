@@ -24,7 +24,7 @@ none of it is opt-in.
 
 ## The docs pack
 
-`just docs` produces two renderings of the same documentation:
+`tur run docs` produces two renderings of the same documentation:
 
 - `docs/html/` -- the pages turmeric-lang.com serves, with site chrome.
 - `web/public/docs-pack/` -- the **docs pack**: the same article bodies with
@@ -237,17 +237,17 @@ export TUR_DOCS_DIR="$PWD/turmeric-docs-v0.38.0/docs/html"
 tur docs --open
 ```
 
-In a source checkout, `just docs` writes `docs/html/` and `tur docs` finds it
-with no configuration. To build the archive locally: `just docs-tarball`.
+In a source checkout, `tur run docs` writes `docs/html/` and `tur docs` finds it
+with no configuration. To build the archive locally: `tur run docs-tarball`.
 
 ## Regenerating and checking the pack
 
 ```sh
-just docs          # site HTML + docs pack, then the pack checks
-just docs-tarball  # the above, plus turmeric-docs-<version>.tar.gz
+tur run docs          # site HTML + docs pack, then the pack checks
+tur run docs-tarball  # the above, plus turmeric-docs-<version>.tar.gz
 ```
 
-`just docs` runs the three generators with `--emit-pack`, then
+`tur run docs` runs the three generators with `--emit-pack`, then
 `tools/genpack.py`, which is the pass that runs once the whole pack is on disk.
 It:
 
@@ -306,16 +306,16 @@ entries that 404 offline. "Installed means complete" stays true for whatever
 the pack claims to contain.
 
 **A deploy is the one place that leniency is wrong.** `genspices.py` reports a
-missing checkout as a warning and moves on, so `just docs` exits 0 having
+missing checkout as a warning and moves on, so `tur run docs` exits 0 having
 produced no spice pages -- and a deploy of that pack drops every spice from the
 site's spice pages, the offline pack and the search index without failing
-anything. `just deploy-web` therefore runs `tools/check-pack-spices.py` over the
+anything. `tur run deploy-web` therefore runs `tools/check-pack-spices.py` over the
 built pack and refuses to publish one with no spice pages. `docs` itself stays
 lenient, because CI has no sibling checkout and legitimately builds a
 spice-less pack.
 
 **Finding the sibling checkout from a worktree.** `genspices.py` resolves
-`../turmeric-spices` from the directory `just` runs in. In a plain clone that is
+`../turmeric-spices` from the directory the recipe runs in. In a plain clone that is
 the sibling of the checkout, which is what the path expects. A **worktree of a
 bare checkout sits one level further in** -- the worktrees are subdirectories of
 the bare repo -- so `../turmeric-spices` lands inside the bare repo rather than

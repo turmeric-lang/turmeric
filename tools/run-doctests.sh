@@ -6,7 +6,7 @@
 #
 # Prerequisites:
 #   Run `python3 tools/doctest.py stdlib/ --out tests/doctest-generated/` first
-#   (or let `just doctest` call both steps in order).
+#   (or let `tur run doctest` call both steps in order).
 #
 # Environment:
 #   TUR         path to tur binary (default: ./build/tur)
@@ -16,7 +16,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "run-doctests: $TUR not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR" ] || { echo "run-doctests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 
 GENERATED="tests/doctest-generated"
 STAMP_CACHE="tests/.stamp-cache-doctest"

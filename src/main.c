@@ -11764,7 +11764,7 @@ static int usage_doc(void) {
 /* ---------------------------------------------------------------------------
  * OD4: stdlib docstring lookup for `tur doc`.
  *
- * The full docstrings already ship with every install: `just docs` generates
+ * The full docstrings already ship with every install: `tur run docs` generates
  * stdlib/docstrings.tur, and the formula installs stdlib/ under
  * <prefix>/share/turmeric/.  Rather than boot the interpreter and preload the
  * whole stdlib to answer one lookup, read the generated table directly -- see
@@ -11903,7 +11903,7 @@ static int usage_repl(void) {
  * table. This answers the page-sized one: where are the rendered guides on
  * this machine, and how do I read them without a network?
  *
- * The docs are a separate artifact from the binary -- `just docs-tarball`
+ * The docs are a separate artifact from the binary -- `tur run docs-tarball`
  * builds turmeric-docs-<version>.tar.gz, which a release attaches and a
  * package manager can unpack into <prefix>/share/doc/turmeric/. When they are
  * not installed, say so and point at the website rather than failing: an
@@ -11984,7 +11984,7 @@ static void docs_not_installed_note(void) {
         "  Or install it:    download turmeric-docs-<version>.tar.gz from the\n"
         "                    release and unpack it, then point TUR_DOCS_DIR at\n"
         "                    the directory holding guides/ and api/.\n"
-        "  Or build it:      just docs   (writes docs/html/ in a checkout)\n"
+        "  Or build it:      tur run docs   (writes docs/html/ in a checkout)\n"
         "\n"
         "`tur doc <symbol>` works without any of this -- the docstring table\n"
         "ships with the binary.\n", TUR_DOCS_URL);

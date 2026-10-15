@@ -130,7 +130,7 @@ test.describe('offline docs', () => {
 
     test.beforeAll(() => {
         test.skip(!existsSync(path.join(DIST_DIR, 'sw.js')),
-                  'no production build -- run `npm run build` (or `just web`) first');
+                  'no production build -- run `npm run build` (or `tur run web`) first');
     });
     test.beforeEach(async () => { await startServer(); });
     test.afterAll(async () => { await stopServer(); });

@@ -463,7 +463,7 @@ def main() -> None:
         '--emit-json',
         metavar='PATH',
         help='Write a JSON array of {name, summary, kind, spice} entries to PATH. '
-             'Used by `just docs` to fold spice symbols into web/public/doc-names.json.',
+             'Used by `tur run docs` to fold spice symbols into web/public/doc-names.json.',
     )
     p.add_argument(
         '--emit-pack',

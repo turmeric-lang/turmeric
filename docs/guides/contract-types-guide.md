@@ -260,9 +260,9 @@ Contract types are enabled by default.
 
 | Build | Contracts |
 |---|---|
-| `just build` (debug) | Always active |
-| `just release` | Stripped by default |
-| `just release` with `--keep-contracts` | Retained (safety-critical code) |
+| `tur run build` (debug) | Always active |
+| `tur run release` | Stripped by default |
+| `tur run release` with `--keep-contracts` | Retained (safety-critical code) |
 
 Contracts are compile-time insertions. A release build with no flag produces the same
 binary as code written without contract annotations.

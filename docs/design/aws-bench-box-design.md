@@ -16,11 +16,11 @@ happens on a quiet, known machine instead of a laptop. `up` before testing,
 `down` after; nothing here is meant to live longer than a session.
 
 ```sh
-just bench-box-up                 # or: bash infra/bench-box/scripts/up.sh
-just bench-box-ssh                # a shell on the box (SSM; nothing open inbound)
-just bench-box-ssh 'cd turmeric && timeout 720 bash tests/run.sh'
-just bench-box-pull benchmarks/output/triangle   # rsync results back
-just bench-box-down               # destroy everything
+tur run bench-box-up                 # or: bash infra/bench-box/scripts/up.sh
+tur run bench-box-ssh                # a shell on the box (SSM; nothing open inbound)
+tur run bench-box-ssh 'cd turmeric && timeout 720 bash tests/run.sh'
+tur run bench-box-pull benchmarks/output/triangle   # rsync results back
+tur run bench-box-down               # destroy everything
 ```
 
 The performance audit named this box as its baseline machine from
@@ -194,18 +194,18 @@ for what each column wants.
 
 ```sh
 # follow the bootstrap
-just bench-box-ssh tail -f /var/log/bench-bootstrap.log
+tur run bench-box-ssh tail -f /var/log/bench-bootstrap.log
 
 # the suite (12-minute timeout, per CLAUDE.md), detached so a dropped session does not kill it
-just bench-box-ssh 'cd turmeric && nohup timeout 720 bash tests/run.sh > run.log 2>&1 &'
-just bench-box-ssh 'tail -3 turmeric/run.log'
+tur run bench-box-ssh 'cd turmeric && nohup timeout 720 bash tests/run.sh > run.log 2>&1 &'
+tur run bench-box-ssh 'tail -3 turmeric/run.log'
 
 # the engine triangle on the Release build
-just bench-box-ssh 'cd turmeric && TUR=./build-release/tur bash benchmarks/run-triangle.sh'
+tur run bench-box-ssh 'cd turmeric && TUR=./build-release/tur bash benchmarks/run-triangle.sh'
 
 # a perf profile, demangled
-just bench-box-ssh 'cd turmeric && perf record -g ./some-bin && perf script | ./build-release/tur demangle > prof.txt'
-just bench-box-pull . ./box-tree          # or a subdirectory
+tur run bench-box-ssh 'cd turmeric && perf record -g ./some-bin && perf script | ./build-release/tur demangle > prof.txt'
+tur run bench-box-pull . ./box-tree          # or a subdirectory
 ```
 
 Run one thing at a time on the box when you are timing it. CLAUDE.md's
@@ -215,8 +215,8 @@ that nothing else is running on it.
 
 ## Tearing down
 
-`just bench-box-down` destroys the stack: instance, volume, VPC, role.
-Pull results first; the volume goes with it. `just bench-box-status` lists
+`tur run bench-box-down` destroys the stack: instance, volume, VPC, role.
+Pull results first; the volume goes with it. `tur run bench-box-status` lists
 any bench box in the account, including one another checkout deployed, so
 you can confirm nothing is left running (or stopped and still holding a
 volume).
@@ -255,7 +255,7 @@ section 8, decision 1). Kept here as the plan stated them.
   suite timings stayed comparable, and `perf` and callgrind are mature there.
   The nightly's arm64 could be a column; it was not the reference.
 - **WP0's machine bullet.** The box is `infra/bench-box/`
-  (`just bench-box-up` / `bench-box-down`): a disposable EC2 instance,
+  (`tur run bench-box-up` / `bench-box-down`): a disposable EC2 instance,
   `m7i.xlarge` on Ubuntu 24.04 by default, with the toolchain, `perf`,
   valgrind and hyperfine installed and Debug + Release builds made at boot.
   Record its instance type, AMI, cc version and glibc in the artifact README;
