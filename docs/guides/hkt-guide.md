@@ -206,7 +206,7 @@ Implement `fmap` and `bind` using inline C to call the closure function pointer:
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn __fmap_option [container fn] :int
   ```c
   if (!tur_is_some(container)) return TUR_NONE;
@@ -219,7 +219,7 @@ defn __bind_option [ma fn] :int
   if (!tur_is_some(ma)) return TUR_NONE;
   return ((int64_t(*)(int64_t))(intptr_t)fn)(tur_opt_value(ma));
   ```
-```
+````
 
 ## Standard HKT Typeclasses
 

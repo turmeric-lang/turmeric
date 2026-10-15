@@ -824,7 +824,7 @@ pointers, providing type-safe size information without any runtime cost.
 (println (size-eval (unsafe (ffi-struct-field-count)))) ; => 3
 ```
 
-```sweet-exp
+````sweet-exp
 ; Wrapper that reports the byte size of a point struct via an inline-C accessor.
 defn ffi-point-size [] #{Unsafe} :Size
   ```c
@@ -846,7 +846,7 @@ defn ffi-struct-field-count [] #{Unsafe} :Size
 println(size-eval(unsafe(ffi-point-size())))         ; => 16
 println(size-eval(unsafe(ffi-array-size())))         ; => 16
 println(size-eval(unsafe(ffi-struct-field-count()))) ; => 3
-```
+````
 
 The pattern is: return `ctor_Static(n)` from inline C to inject a sized
 annotation into Turmeric's type system.

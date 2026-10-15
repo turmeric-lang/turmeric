@@ -162,7 +162,7 @@ The test suite shows a minimal version of the latter approach: a
 the callback updates per item, with `acc-sum` / `acc-count` accessors
 exposed to the Turmeric layer for assertions:
 
-```turmeric
+````turmeric
 ```c
 #include <pthread.h>
 static pthread_mutex_t g_mu    = PTHREAD_MUTEX_INITIALIZER;
@@ -178,7 +178,7 @@ void tp_test_work_cb(void *item) {
   free(v);
 }
 ```
-```
+````
 
 ## Awaiting and shutdown
 
@@ -253,7 +253,7 @@ control path (often `let` + nested `do`).
 This mirrors test case 1 from the spice's own suite -- 10 unit items,
 4 workers, drain-and-stop, assert the accumulator:
 
-```turmeric
+````turmeric
 (defmodule example
   (import thread-pool/pool :as tp)
 
@@ -311,7 +311,7 @@ void ex_work_cb(void *item) {
         (do (println "ok") 0)
         (do (println "FAIL") 1)))))
 )
-```
+````
 
 ## Composing with other primitives
 

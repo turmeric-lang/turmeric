@@ -485,7 +485,7 @@ returning an `(Option cstr)` built with the typed inline-C builders
     (Some v) v
     (None)   dflt))
 ```
-```sweet-exp
+````sweet-exp
 defn form-field [encoded : cstr name : cstr] : (Option cstr)
   ```c
   ... walk `&`-separated segments, match the key, decode %XX and '+' ...
@@ -497,7 +497,7 @@ defn field-or [body : cstr name : cstr dflt : cstr] : cstr
   (match (form-field body name)
     (Some v) v
     (None)   dflt)
-```
+````
 
 ### Escaping
 
@@ -862,7 +862,7 @@ newlines), so the format needs no quoting:
 (defn store-lines [] : cstr   ;; the whole file, or "" when there is none yet
   ...)
 ```
-```sweet-exp
+````sweet-exp
 defn store-append! [name : cstr message : cstr] : int
   ```c
   #include <time.h>
@@ -876,7 +876,7 @@ defn store-append! [name : cstr message : cstr] : int
 
 defn store-lines [] : cstr   ;; the whole file, or "" when there is none yet
   ...
-```
+````
 
 Writes go through a temp file and `rename`, so a crash mid-write leaves the
 previous file intact. `render-entries` / `render-thankyou` walk the lines

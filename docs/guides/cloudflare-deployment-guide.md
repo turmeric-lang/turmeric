@@ -93,7 +93,7 @@ requests to it.
     (scheduler-run-to-completion sched))
   0)
 ```
-```sweet-exp
+````sweet-exp
 ;; service.tur -- minimal HTTP service for Approach A (Cloudflare Containers)
 ;;
 ;; Listens on $PORT (default 8080), accepts connections concurrently using the
@@ -129,7 +129,7 @@ defn main [] :int
     scheduler-spawn(sched accepter)
     scheduler-run-to-completion(sched)
   0
-```
+````
 
 > **Owned-return note.** `http-ok` assembles a fresh response with nested
 > `str-concat` and returns it as `cstr`; `handle-client` sends it and drops it

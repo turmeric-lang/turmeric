@@ -208,7 +208,7 @@ Surround C source with triple backticks and a `c` tag:
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn file-size [f]
   ```c
   FILE* file = (FILE*)f;
@@ -218,7 +218,7 @@ defn file-size [f]
   fseek(file, pos, SEEK_SET);
   return (int)size;
   ```
-```
+````
 
 The block is pasted verbatim into the generated function body. Turmeric
 parameters are available by name as C local variables with their translated
@@ -485,7 +485,7 @@ interface. This pattern keeps the unsafe pointer juggling isolated:
   ```c free(rng); ```)
 ```
 
-```sweet-exp
+````sweet-exp
 ;; stdlib/random.tur -- capability struct wrapping libc rand()
 defn Real-Random []
   ```c
@@ -515,7 +515,7 @@ defn Real-Random []
 
 defn Real-Random-free [rng]
   ```c free(rng); ```
-```
+````
 
 The struct is returned as `:ptr` (opaque `void *`) and freed explicitly. This
 is intentionally manual -- `rc<T>` and `weak<T>` cannot track arbitrary C heap
@@ -1080,7 +1080,7 @@ void  vec2_free(Vec2 *v);
       (println len))))   ;; prints 5.0
 ```
 
-```sweet-exp
+````sweet-exp
 ;; Declare the functions we need
 extern-c vec2_alloc [^float ^float] :ptr
 extern-c vec2_free  [^ptr]          :void
@@ -1109,7 +1109,7 @@ defn demo []
     defer vec2_free(a)
     let [len vec2-len(a)]
       println(len)   ;; prints 5.0
-```
+````
 
 Build with:
 

@@ -117,14 +117,14 @@ macros:
   return (int64_t)TUR_APPLY1(f, x);
   ```)
 ```
-```sweet-exp
+````sweet-exp
 defn run-once [^fat f x : int] : int
   ```c
   /* f is int64_t at the C level; pass it through TUR_APPLY1
      to invoke the closure under the unified ABI. */
   return (int64_t)TUR_APPLY1(f, x);
   ```
-```
+````
 
 The same rule applies in either direction: a Turmeric global declared
 `^fat` is callable from inline-C as `int64_t`, and an inline-C function

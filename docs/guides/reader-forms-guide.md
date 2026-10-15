@@ -570,13 +570,13 @@ A triple-backtick block embeds raw C code inside a `defn` body. The closing
   return (int)ftell(file);
   ```)
 ```
-```sweet-exp
+````sweet-exp
 defn file-size [f] :int
   ```c
   FILE* file = (FILE*)f;
   return (int)ftell(file);
   ```
-```
+````
 
 ---
 

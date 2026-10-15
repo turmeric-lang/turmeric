@@ -126,14 +126,14 @@ The C helper allocates and fills the struct:
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn datum-new [entity :int attr :int value :int tx :int] :int
   ```c
   int64_t *d = malloc(4 * sizeof(int64_t));
   d[0] = entity; d[1] = attr; d[2] = value; d[3] = tx;
   return (int64_t)(intptr_t)d;
   ```
-```
+````
 
 Accessors project individual fields:
 
@@ -188,7 +188,7 @@ increments it before stamping the new datum.
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn db-new [] :int
   ```c
   int64_t *db = malloc(2 * sizeof(int64_t));
@@ -198,7 +198,7 @@ defn db-new [] :int
   db[1] = 0;
   return (int64_t)(intptr_t)db;
   ```
-```
+````
 
 `db-assert!` increments `next-tx`, allocates a new datum, appends it to the
 vector, and returns the transaction number:
@@ -267,7 +267,7 @@ Attribute names are C string literals. Two helpers convert between Turmeric
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn cstr->int [s :cstr] :int
   ```c return (int64_t)(intptr_t)s; ```
 
@@ -275,7 +275,7 @@ defn cstr-eq? [a :int b :int] :bool
   ```c
   return strcmp((const char*)(intptr_t)a, (const char*)(intptr_t)b) == 0;
   ```
-```
+````
 
 `cstr->int` turns a string literal (whose address is stable for the lifetime of
 the program) into an opaque integer for storage. `cstr-eq?` compares two such

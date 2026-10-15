@@ -186,7 +186,7 @@ A defer fires at the end of a transaction, after commit or abort. Register them 
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn register-commit-defer [env-ptr fn-ptr] :void
   ```c
   STM_Transaction *tx = tur_stm_current_tx();
@@ -198,7 +198,7 @@ defn register-abort-defer [env-ptr fn-ptr] :void
   STM_Transaction *tx = tur_stm_current_tx();
   tur_stm_defer_on_abort(tx, (stm_defer_fn_t)fn_ptr, env_ptr);
   ```
-```
+````
 
 Commit defers run once, in registration order, after the write set is applied. Abort defers run on every failed attempt, including retries -- design them to be idempotent.
 

@@ -243,7 +243,7 @@ The `fn` arguments are C function pointers. Use inline C to define them:
   return (void*)double_val;
   ```)
 ```
-```sweet-exp
+````sweet-exp
 defn my-map-fn [] :ptr
   ```c
   void *double_val(void *val, void *ctx) {
@@ -251,7 +251,7 @@ defn my-map-fn [] :ptr
   }
   return (void*)double_val;
   ```
-```
+````
 
 ## Transient Mode
 

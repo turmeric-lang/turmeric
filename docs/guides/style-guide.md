@@ -129,7 +129,7 @@ of `__tur_cons_cell { int64_t head; int64_t tail; }` cells, or `0`
   return acc;
   ```)
 ```
-```sweet-exp
+````sweet-exp
 defn cons-list-sum [lst :int] #{Unsafe} :int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
@@ -138,7 +138,7 @@ defn cons-list-sum [lst :int] #{Unsafe} :int
   while (p) { acc += p->head; p = (__tur_cons_cell *)(intptr_t)p->tail; }
   return acc;
   ```
-```
+````
 
 Or use a pure tail-recursive helper:
 
@@ -162,7 +162,7 @@ Or use a pure tail-recursive helper:
     acc
     (list-sum-acc (cons-tail lst) (+ acc (cons-head lst)))))
 ```
-```sweet-exp
+````sweet-exp
 defn cons-head [lst :int] #{Unsafe} :int
   ```c
   typedef struct { int64_t head; int64_t tail; } __tur_cons_cell;
@@ -181,7 +181,7 @@ defn list-sum-acc [lst :int acc :int] #{Unsafe} :int
   if {lst = 0}
     acc
     list-sum-acc(cons-tail(lst) {acc + cons-head(lst)})
-```
+````
 
 #### Performance note
 
@@ -275,18 +275,27 @@ Key points:
 ```turmeric
 ;; Good:
 (defn file-size [f] : int
-  ```
-```sweet-exp
-;; Good:
-defn file-size [f] :int
-```c
+  ```c
   return (int)ftell((FILE*)f);
   ```)
+```
+````sweet-exp
+;; Good:
+defn file-size [f] : int
+  ```c
+  return (int)ftell((FILE*)f);
+  ```
+````
 
+The closing run on its own line is what to avoid in the s-expression form. It
+ends any surrounding Markdown code fence early -- which is why this block needs
+a four-backtick fence to show it:
+
+````turmeric no-check
 ;; Bad (closing ``` on its own line breaks Markdown fences):
-(defn file-size [f] :int
+(defn file-size [f] : int
   ```c
   return (int)ftell((FILE*)f);
   ```
 )
-```
+````

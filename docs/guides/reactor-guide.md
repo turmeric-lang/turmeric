@@ -355,14 +355,14 @@ Programs that load `stdlib/reactor.tur` must link against `libturi`:
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 ;; The autolink hint is included when you load "stdlib/reactor.tur".
 ;; For standalone files that only declare the tur_reactor_* externs, add:
 defn reactor-link [] :int
   ```c /* __tur_autolink__: -lturi */
   return 0;
   ```
-```
+````
 
 When running `tur build`, this is handled automatically by the
 `reactor/autolink-hint` function that ships with the stdlib module.

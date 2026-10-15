@@ -100,7 +100,7 @@ hash map.
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn eavt-idx-insert! [idx :ptr<void> entity :int attr :int datum :int] :nil
   ```c
   struct eavt_idx *i = (struct eavt_idx *)idx;
@@ -110,7 +110,7 @@ defn eavt-idx-insert! [idx :ptr<void> entity :int attr :int datum :int] :nil
   e->next = i->buckets[h];
   i->buckets[h] = e;
   ```
-```
+````
 
 Prepending is O(1) and maintains insertion order within each chain.
 
@@ -137,7 +137,7 @@ entries that match `(entity, attr)` exactly:
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
   ```c
   ...
@@ -151,7 +151,7 @@ defn eavt-idx-lookup [idx :ptr<void> entity :int attr :int] :ptr<void>
   }
   return result;
   ```
-```
+````
 
 With 64 buckets and well-distributed data, each chain has on average
 `n / 64` entries. For the tutorial scale (dozens of datums) this is O(1) in
