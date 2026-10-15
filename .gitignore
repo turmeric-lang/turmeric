@@ -158,8 +158,9 @@ web/pw.local.config.js
 # clangd LSP index (machine-specific, regenerated automatically)
 .cache/
 
-# Claude Code session memory (developer-local)
-memory/
+# Claude Code session memory (developer-local).  Anchored to the repo root:
+# unanchored, it also hid benchmarks/memory/ (git add skipped it silently).
+/memory/
 core
 
 # Performance comparison build artifacts and generated output
