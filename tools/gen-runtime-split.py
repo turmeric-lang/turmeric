@@ -6,8 +6,9 @@ Consumes the feature-complete single-file runtime preamble from
 
   src/runtime/generated/tur_rt_split.c        -- the runtime TU: every
       file-scope static externalized (so the program half can bind it),
-      the runtime thread-locals (the TLS table below) routed through the host tur_tls accessors
-      (one storage), compiled by a real cc into the host.
+      the runtime thread-locals (the TLS table below) routed to the host's
+      tur_tls storage (one storage; read directly where DIRECT_TLS allows,
+      through its accessors otherwise), compiled by a real cc into the host.
   src/runtime/generated/tur_rt_split_decls.h  -- the declarations region:
       same preamble with function bodies dropped and statics turned into
       extern declarations.  cmd_jit splices this ahead of the program half
@@ -87,6 +88,155 @@ TLS = {
     # store rather than an accessor call around every vec-get.  Only c2mir
     # reaches the host's tur_tls_cur_site_ptr, through the emitted #else.
 }
+
+# DIRECT reads of that one storage (performance-audit R-2).  An accessor call
+# per access was ~25% of the cycles of a hosted-split program, up to 57% on a
+# CPS loop: the emitter checks tur_panicking after every panic-capable call,
+# and an opaque call there also stops gcc transforming the caller (98.7% of
+# fib's instructions).  A real cc can name the host's thread-local itself, so
+# wherever one compiles a half of the split, each NAME becomes the accessor's
+# own body, inlined:
+#
+#     extern __thread int tur_tls_panicking;
+#     #define tur_panicking (*((int *)&tur_tls_panicking))
+#
+# Still one storage -- tur_tls.c's, which the accessor returns the address of
+# -- so nothing above changes, only how a cc reaches it.  The accessors stay
+# for the front ends and builds that cannot use the direct form:
+#
+#   - c2mir (`tur jit`), which has no thread-locals at all;
+#   - _WIN32, where no run has checked a PE link that names another object's
+#     __thread (MinGW gcc can emulate TLS, which changes the symbol);
+#   - TUR_TLS_FRESH builds (clang, Windows gcc, the sanitizers), whose compiler
+#     may keep a thread-local's ADDRESS live across a call.  A fiber that
+#     yields can resume on another thread, so those builds re-derive the
+#     address after every call; an out-of-line accessor already does.  GCC
+#     elsewhere addresses each access off %fs, the exposure the inline
+#     preamble has always had.
+#
+# Read from src/runtime/tur_tls.c rather than tabled here, so the two cannot
+# drift: each storage line and its accessor look like
+#
+#     __thread T tur_tls_x = 0;
+#     T *tur_tls_x_ptr (void) { return &tur_tls_x; }
+TUR_TLS_C = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'src', 'runtime', 'tur_tls.c')
+DIRECT_TLS = '!defined(_WIN32) && !defined(TUR_TLS_FRESH)'
+HOSTED_TLS_GUARD = ('#if (defined(__GNUC__) || defined(__clang__)) '
+                    '&& !defined(TUR_RT_SPLIT_HOSTED)')
+
+
+def tls_storage(path=TUR_TLS_C):
+    """accessor name -> (extern declaration of its storage, its return
+    expression), read from src/runtime/tur_tls.c."""
+    with open(path) as f:
+        txt = f.read()
+    decl = {}
+    for m in re.finditer(r'^__thread\s+(?:_Alignas\(\d+\)\s+)?([^=;\[]+?)\s*'
+                         r'\b(tur_tls_\w+)\s*(\[[^\]]*\])?\s*(?:=[^;]*)?;',
+                         txt, re.M):
+        t = m.group(1).strip()
+        sep = '' if t.endswith('*') else ' '
+        decl[m.group(2)] = (f'extern __thread {t}{sep}{m.group(2)}'
+                            f'{m.group(3) or ""};')
+    if re.search(r'^static\s+__thread', txt, re.M):
+        sys.exit(f'{path}: a static __thread cannot be read directly; '
+                 f'give it external linkage')
+    out = {}
+    for m in re.finditer(r'\b(tur_tls_\w+_ptr)\s*\(void\)\s*\{\s*return\s+'
+                         r'([^;]+);\s*\}', txt):
+        acc, body = m.group(1), m.group(2).strip()
+        store = re.search(r'\btur_tls_\w+', body)
+        if not store or store.group(0) not in decl:
+            sys.exit(f'{path}: {acc} returns {body!r}, not a __thread storage')
+        out[acc] = (decl[store.group(0)], body)
+    return out
+
+
+def direct_ref(rt, body):
+    """`acc()` inlined: the accessor's return expression, cast to the return
+    type the caller declares for it."""
+    if re.fullmatch(r'&\w+', body):
+        return f'(({rt}){body})'
+    return f'(({rt})({body}))'
+
+
+def direct_branch(branch, storage):
+    """The accessor branch of a thread-local block, rewritten to read the
+    storage directly: each `extern RT acc(void);` becomes the storage's extern
+    declaration and each `acc()` in a #define becomes direct_ref.  Comments are
+    dropped; anything else is a shape this was not written for, so stop."""
+    out, rts = [], {}
+    in_comment = False
+    for l in branch:
+        s = l.strip()
+        if in_comment:
+            in_comment = '*/' not in s
+            continue
+        if s.startswith('/*'):
+            in_comment = '*/' not in s
+            continue
+        if not s:
+            continue
+        m = re.match(r'^extern\s+(.+?)\s*\b(tur_tls_\w+_ptr)\s*\(void\);$', s)
+        if m:
+            rt, acc = m.group(1).strip(), m.group(2)
+            if acc not in storage:
+                sys.exit(f'{acc}: no __thread storage in {TUR_TLS_C}')
+            rts[acc] = rt
+            out.append(storage[acc][0])
+            continue
+        if s.startswith('#define '):
+            new = s
+            for acc, rt in rts.items():
+                new = re.sub(r'\b' + acc + r'\(\)',
+                             lambda _m, rt=rt, acc=acc:
+                             direct_ref(rt, storage[acc][1]), new)
+            if new == s:
+                sys.exit(f'no accessor call to inline in {s!r}')
+            out.append(new)
+            continue
+        sys.exit(f'unexpected line in a thread-local accessor branch: {s!r}')
+    return out
+
+
+def direct_tls_hosted(lines, storage):
+    """Give every thread-local block of the decls half a direct-read branch
+    for a hosted cc build, between its native branch (not hosted) and its
+    accessor branch (c2mir and the DIRECT_TLS exclusions).  -> (lines, n)"""
+    out, n = [], 0
+    i = 0
+    while i < len(lines):
+        out.append(lines[i])
+        if lines[i] != HOSTED_TLS_GUARD:
+            i += 1
+            continue
+        depth, els, end = 0, None, None
+        j = i + 1
+        while j < len(lines):
+            s = lines[j].strip()
+            if re.match(r'#\s*if', s):
+                depth += 1
+            elif re.match(r'#\s*endif', s):
+                if depth == 0:
+                    end = j
+                    break
+                depth -= 1
+            elif depth == 0 and re.match(r'#\s*elif', s):
+                sys.exit(f'line {j}: #elif in a thread-local block')
+            elif depth == 0 and re.match(r'#\s*else', s):
+                els = j
+            j += 1
+        if els is None or end is None:
+            sys.exit(f'line {i}: thread-local block without #else/#endif')
+        out.extend(lines[i + 1:els])
+        out.append('#elif (defined(__GNUC__) || defined(__clang__)) && '
+                   + DIRECT_TLS)
+        out.extend(direct_branch(lines[els + 1:end], storage))
+        out.extend(lines[els:end + 1])
+        n += 1
+        i = end + 1
+    return out, n
 
 # Functions whose BODY belongs in the decls half, emitted `static inline`, and
 # which are omitted from the runtime archive entirely.
@@ -198,8 +348,9 @@ def fn_def_names(lines):
     return names
 
 
-def split(src):
-    """-> (impl_txt, decls_txt, program_defined_protos)"""
+def split(src, storage):
+    """-> (impl_txt, decls_txt, program_defined_protos); storage is
+    tls_storage()."""
     pre_txt, _prog = src.split(MARK, 1)
     lines = pre_txt.split('\n')
     defined = fn_def_names(lines)
@@ -311,16 +462,31 @@ def split(src):
                     dtype = full.split(name)[0]
                     dtype = re.sub(r'^.*?(TUR_THREAD_LOCAL|_Thread_local)\s+',
                                    '', dtype).strip()
+                    if acc not in storage:
+                        sys.exit(f'{acc}: no __thread storage in {TUR_TLS_C}')
+                    sdecl, sbody = storage[acc]
+
+                    def tls_define(ref):
+                        if rt == 'void **':
+                            return f'#define {name} (*({dtype} *){ref})'
+                        return f'#define {name} (*{ref})'
+                    # The runtime TU is always compiled by a real cc, so it
+                    # reads the storage directly wherever DIRECT_TLS allows.
+                    impl.append(f'#if {DIRECT_TLS}')
+                    impl.append(sdecl)
+                    impl.append(tls_define(direct_ref(rt, sbody)))
+                    impl.append('#else')
                     impl.append(f'extern {rt} {acc}(void);')
-                    if rt == 'void **':
-                        impl.append(f'#define {name} (*({dtype} *){acc}())')
-                    else:
-                        impl.append(f'#define {name} (*{acc}())')
+                    impl.append(tls_define(f'{acc}()'))
+                    impl.append('#endif')
                     # decls half keeps the emitted #if/#else block verbatim
-                    # (this static decl line sits inside its GNU branch); the
-                    # decls half is only ever compiled by c2mir, which takes
-                    # the #else accessor branch, so the GNU-branch variable
-                    # definition below is dead text there.
+                    # (this static decl line sits inside its GNU branch).  No
+                    # consumer of the decls half takes that branch -- c2mir
+                    # defines neither macro, and a hosted cc build defines
+                    # TUR_RT_SPLIT_HOSTED (the guard rewrite below) -- so the
+                    # variable definition is dead text there.  The hosted
+                    # build's direct reads go in afterwards
+                    # (direct_tls_hosted).
                     decls.append(full)
                 elif tls:
                     impl.append(de_static(full))
@@ -468,6 +634,10 @@ def split(src):
         decls.append(l)
         i += 1
     impl_txt = '\n'.join(impl) + '\n'
+    decls, n_direct = direct_tls_hosted('\n'.join(decls).split('\n'), storage)
+    if n_direct == 0:
+        sys.exit('no thread-local block in the decls half took a direct-read '
+                 'branch; did the guard rewrite change?')
     decls_txt = ('\n'.join(decls) +
                  '\n/* ==== S2: host-resident runtime; declarations only ==== */\n')
     return impl_txt, decls_txt, program_protos
@@ -501,7 +671,7 @@ def main():
     if not re.fullmatch(r'[0-9a-f]{16}', hash_hex):
         sys.exit(f'unexpected hash output: {hash_hex!r}')
 
-    impl, decls, program_protos = split(src)
+    impl, decls, program_protos = split(src, tls_storage())
     print(f'preamble: {src.count(chr(10))} lines   '
           f'runtime TU: {impl.count(chr(10))} lines   '
           f'decls: {decls.count(chr(10))} lines   hash: {hash_hex}')
@@ -517,9 +687,9 @@ def main():
                 f' *\n'
                 f' * The Turmeric runtime as one TU: the emitted preamble '
                 f'(every gate on) with\n'
-                f' * statics externalized and thread-locals routed through '
-                f'the host tur_tls\n'
-                f' * accessors.  source hash {hash_hex}. */\n')
+                f' * statics externalized and thread-locals routed to the '
+                f'host tur_tls\n'
+                f' * storage.  source hash {hash_hex}. */\n')
         f.write(impl)
 
     with open(os.path.join(args.out, 'tur_rt_split_decls.h'), 'w', newline='\n') as f:
