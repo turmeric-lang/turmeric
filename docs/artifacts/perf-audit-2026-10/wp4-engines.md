@@ -208,7 +208,8 @@ only in the self-timing columns they also differ in between two runs of the
 unpatched build, no exit-code change. Nine corpus programs make more than a
 million such calls ([wp4-jit-memcpy.tsv](wp4-jit-memcpy.tsv): Saffron, the
 dynamic and mutual tail-call fixtures, `fn-value-join`, the logic/regions
-substitution benchmarks).
+substitution benchmarks; its run times were taken with the counter loaded,
+so read only the counts).
 
 What is left of Saffron's gap after the fix is mostly allocation:
 `calloc`/`free` are ~33% of the patched profile, where the native binary
