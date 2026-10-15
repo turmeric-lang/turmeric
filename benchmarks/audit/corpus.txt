@@ -116,3 +116,13 @@ tests/fixtures/closure-let-in-self-tail-loop/input.tur            cc,jit,interp 
 tests/fixtures/parsec-guide-patterns/input.tur                    cc,jit         exact
 tests/fixtures/fn-value-call-join-reclaimed/input.tur             cc,jit,interp  exact
 tests/fixtures/httpd-mw-fold-many/input.tur                       cc,jit         exact
+
+# --- sized-up fixture copies (benchmarks/audit/make-sized.sh): one size literal
+# raised so the run is long enough to time.  Not interp: the tree-walker keeps
+# ~4 KiB per step, so these sizes are GiBs there (CLAUDE.md). ----------------
+benchmarks/audit/sized/effect-nontail-ticks-1m.tur                cc,jit         exact   timeout=300   # M-2
+benchmarks/audit/sized/cps-tramp-resume-8m.tur                    cc,jit         exact   timeout=300
+benchmarks/audit/sized/closure-let-loop-10m.tur                   cc,jit         exact   timeout=300   # R-1
+benchmarks/audit/sized/fn-value-join-1000x.tur                    cc,jit         exact   timeout=300   # R-1
+benchmarks/audit/sized/region-rounds-100k.tur                     cc,jit         exact   timeout=300   # R-3
+benchmarks/audit/sized/mut-map-reassign-1m.tur                    cc,jit         exact   timeout=300

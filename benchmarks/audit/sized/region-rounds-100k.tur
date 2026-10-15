@@ -1,0 +1,61 @@
+;; SIZED COPY of tests/fixtures/region-with-region/input.tur for the performance audit
+;; (benchmarks/audit/corpus.txt).  Changed: (rounds 100 8 0) -> (rounds 100000 8 0).
+;; Everything below is the fixture's own text; its comments describe
+;; the fixture's size.  The pinned answer is
+;; benchmarks/audit/expected/benchmarks__audit__sized__region-rounds-100k.stdout.
+;; Regenerate (after the fixture changes): bash benchmarks/audit/make-sized.sh
+;; RM3 A1 (regions-plan.md): `with-region` is the LIFETIME-ONLY region bracket
+;; -- the half of `bt-scope` that reclaims, without the trail level.
+;;
+;; This asserts the same value-survives property as region-scope-value-survives
+;; (every number is read AFTER the pop, and the loop reuses the pooled slabs so
+;; a rewind that corrupted them would drift), plus the two things specific to
+;; the split:
+;;
+;;   1. `with-region` opens a region but NO trail level, so it carries no
+;;      `#fx{Bt}`.  `pure-total` DECLARES `#fx{}` and still calls it -- the
+;;      exact shape that is TUR-E0009 for `bt-scope`
+;;      (errors/sx1-bt-row-pure-caller-rejected).  A program with no
+;;      backtracking gets the reclamation without reaching for a search
+;;      primitive.
+;;
+;;   2. The result is a scalar `:int` sum, so nothing that points into the
+;;      generation crosses the boundary and the pop REWINDS (the static walk
+;;      clears it).  The spine built inside is reclaimed; the sum survives.
+;;
+;; With regions off (`TUR_REGIONS=0`, the bisection hatch), `with-region` is a plain identity call and the
+;; numbers are identical -- which is what the regions seam checks.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (build (- n 1) (:: (Link n acc) :int))))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0;
+  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
+  return acc;
+  ```)
+
+;; A #fx{} (pure-declared) caller reaching a region bracket: legal, because
+;; with-region opens no trail level.  The bt-scope twin of this is TUR-E0009.
+(defn pure-total [n : int] #fx{} : int
+  (with-region (fn [] (chain-sum (build n 0)))))
+
+;; k generations of the same shape, opened and reclaimed in turn -- the pooled
+;; slabs are reused each round.
+(defn rounds [k : int n : int acc : int] : int
+  (if (<= k 0)
+    acc
+    (rounds (- k 1) n (+ acc (pure-total n)))))
+
+(defn main [] : int
+  (println (pure-total 4))     ;; 1+2+3+4   = 10
+  (println (pure-total 100))   ;; 100*101/2 = 5050
+  (println (rounds 100000 8 0))   ;; 100 * (8*9/2) = 3600
+  (println (pure-total 4))     ;; 10, after all the slab reuse
+  0)
