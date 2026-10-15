@@ -205,10 +205,11 @@ with `--debug` left out, since their `-Og` would be overridden). Every mode's
 output matched the default's (the three self-timing programs excepted from the
 comparison). Metric: **user-space instructions** (`perf stat -e
 instructions:u,cycles:u -r 3`), which this box's interference bursts do not
-move; cycles are given in parentheses and are **provisional** -- the sweep's
-first programs ran while another session's test suite was loading the
-machine, which inflates cycles (not instructions) through hyperthread
-contention. Raw: [wp2-build-modes.csv](wp2-build-modes.csv).
+move; cycles in parentheses. The sweep was run twice: once while another
+session's test suite loaded the machine, and again on the idle box. The
+instruction counts agreed to the digit; the cycles below are the idle run's
+(the loaded run had inflated a few, e.g. `-march=native` on `fib` +52%, idle
+-2%). Raw (idle run): [wp2-build-modes.csv](wp2-build-modes.csv).
 
 | program | nosplit | O3 | native | lto | lto-O3 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -224,28 +225,29 @@ contention. Raw: [wp2-build-modes.csv](wp2-build-modes.csv).
 | effect-nontail-resume-under-outer | -12.2% | -0.9% | +0.1% | -12.2% | -17.0% |
 | handle-in-nontail-branch | -12.2% | 0.0% | -0.1% | -12.2% | -17.4% |
 | rc-free-queue-deep-cascade | -0.4% | 0.0% | 0.0% | -14.2% | -14.5% |
-| sized/cps-tramp-resume-8m | -17.8% (-36.4% cyc) | -1.4% | +0.1% | -17.8% | -22.0% |
-| sized/closure-let-loop-10m | **-30.5%** (-56.8% cyc) | 0.0% | 0.0% | -28.9% | -34.2% |
-| sized/fn-value-join-1000x | -16.9% (-32.0% cyc) | 0.0% | -0.1% | -16.9% | -23.4% |
-| sized/effect-nontail-ticks-1m | -12.3% (-19.2% cyc) | -0.9% | +0.1% | -12.3% | -17.1% |
+| sized/cps-tramp-resume-8m | -17.8% (-36.3% cyc) | -1.4% | +0.1% | -17.8% | -22.0% |
+| sized/closure-let-loop-10m | **-30.5%** (-56.7% cyc) | 0.0% | 0.0% | -28.9% | -34.2% |
+| sized/fn-value-join-1000x | -16.9% (-31.9% cyc) | 0.0% | -0.1% | -16.9% | -23.4% |
+| sized/effect-nontail-ticks-1m | -12.3% (-29.5% cyc) | -0.9% | +0.1% | -12.3% | -17.1% |
 | sized/mut-map-reassign-1m | 0.0% | 0.0% | 0.0% | -2.2% | -5.7% |
-| **geomean cycles ratio** (provisional) | **0.749** | 0.950 | 1.044 | 0.747 | 0.691 |
+| **geomean cycles ratio** | **0.745** | 0.940 | 1.003 | 0.717 | 0.679 |
 
 (`bench-clone-overhead`, `bench-parsec-json`, `bench-saffron-dyn-tail`,
 `stackless-catch-unwind-deep`, `sized/region-rounds-100k` move by under 6% in
-every mode; the CSV has them. `region-rounds-100k` reads +73% *cycles* at
-equal instructions in all three inline modes -- a memory-side effect of layout,
-not chased.)
+every mode; the CSV has them. Two read +69-74% *cycles* at equal instructions
+in the inline mode -- `region-rounds-100k` in all three inline modes,
+`rc-free-queue-deep-cascade` in `nosplit` only (LTO turns it into -13%) -- a
+memory-side effect of layout, not chased.)
 
 **What it says.**
 
 - **The preamble split is the R-2 cost, and it is large**: compiling the
-  preamble inline is worth ~25% of cycles across these programs and 12-50% of
-  instructions on anything that calls through CPS, effects or regions. LTO
-  across the separately compiled runtime sources (rc, hamt, region) adds
-  almost nothing on top -- 0.749 vs 0.747 -- except where rc frees dominate
-  (`rc-free-queue-deep-cascade`, -14%) or a search allocates in a loop
-  (`bench-dfs-queens`).
+  preamble inline is worth ~25% of cycles across these programs (geomean
+  0.745) and 12-50% of instructions on anything that calls through CPS,
+  effects or regions. LTO across the separately compiled runtime sources (rc,
+  hamt, region) adds ~4% on top -- 0.745 -> 0.717 -- most of it where rc frees
+  dominate (`rc-free-queue-deep-cascade`, -14% instructions) or a search
+  allocates in a loop (`bench-dfs-queens`, -21%).
 - **The mechanism is one accessor.** Under `TUR_RT_SPLIT_HOSTED` the panic
   flag the emitter checks after every panic-capable call is
   `#define tur_panicking (*tur_tls_panicking_ptr())`
@@ -256,7 +258,7 @@ not chased.)
   program runs 98.7% fewer instructions. The accessor exists so a JIT or
   shared-library build can share the thread-local; a statically linked cc
   build does not need it.
-- **`-O3` is worth ~5%**, almost all of it on inline-C-heavy code
+- **`-O3` is worth ~6%** (geomean 0.940), much of it on inline-C-heavy code
   (`bench-backtrack-n-queens` -25% instructions). On emitted Turmeric it moves
   nothing measurable.
 - **`-march=native` buys nothing** on this corpus (the one -15% is `mandel`'s
@@ -481,7 +483,8 @@ and [region-retired-generations-make-shutdown-quadratic](../../reported/region-r
   rc-heavy program; the allocator is the cost.
 - **`-march=native`** (R-7): nothing on this corpus.
 - **LTO across the runtime archive** (R-2) on top of an inline preamble:
-  0.749 -> 0.747 geomean cycles; worth it only for rc-free-heavy code.
+  0.745 -> 0.717 geomean cycles, ~4%, most of it on rc-free- and
+  allocation-heavy code -- small next to the preamble itself.
 - **Spawn + await** (R-10): ~137 ns, allocation-bound, no switch on the
   measured path.
 
@@ -495,7 +498,7 @@ and [region-retired-generations-make-shutdown-quadratic](../../reported/region-r
 | 4 | **Retired regions: O(1) registry removal and a cheap shutdown** (R-3): scan `reg_remove` from the end, drop this thread's registry entries in one pass at exit, index retired slabs for `tur_region_owns` | the 71% of `region-rounds-100k`; frees that stay cheap in long runs | small (1-2), medium (3) |
 | 5 | **Fiber switch without `swapcontext`** on Linux/macOS (R-10): emit the asm switch or the Windows-style register snapshot | the ~0.8 us park/resume turn, most of it the signal-mask syscall | medium |
 | 6 | **R-1, properly**: effect rows that hold for function values (inference at lambdas, checking at HOF parameters) or a `may_hold_awaiter`-style parameter analysis, **plus** drop-before-call so a self-call with closure drop glue is a real tail call | 42-45% of instructions on combinator-style code, 4 allocations per region bracket, ~250 stdlib functions off the CPS path -- and no closure loop overflowing its stack when it leaves the trampoline | large |
-| 7 | `--release` = `-O3` with the inline preamble (or #1) (R-7, decision 2) | ~5% from `-O3`, more on inline-C code; LTO not worth its link time | small |
+| 7 | `--release` = `-O3` with the inline preamble (or #1) (R-7, decision 2); LTO optional | ~6% from `-O3` (more on inline-C code), ~4% more with LTO; together with the inline preamble, geomean 0.679 | small |
 | 8 | Region rewind fixtures that assert a rewind (`TUR_REGION_STATS` pinned) | the rewind-corruption tests test a rewind again | small |
 
 ## Not done here
