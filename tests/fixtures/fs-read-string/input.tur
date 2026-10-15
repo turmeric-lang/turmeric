@@ -1,0 +1,59 @@
+;; fs-read-string -- markdown-library-plan S3: fs/read-string
+;; (stdlib/fs-string.tur) reads a whole file into a fresh owned String, every
+;; byte of it, NUL included, and reports a file it cannot open as an IoError.
+
+(load "stdlib/fs-string.tur")
+
+(defn tmp-path [name : cstr] : cstr
+  ```c
+  /* Run-time scratch dir (see io-stdlib-roundtrip for why not "/tmp"). */
+  static char buf[512];
+  const char *d = getenv("TUR_TEST_TMPDIR");
+  if (!d || !*d) d = "/tmp";
+  snprintf(buf, sizeof buf, "%s/%s", d, name);
+  return buf;
+  ```)
+
+;; 14 bytes, a NUL among them, which fs/write-text would stop at
+(defn write-sample [path : cstr] : bool
+  ```c
+  static const char bytes[] = "a\0b\r\nline two\n";
+  size_t n = sizeof bytes - 1;
+  FILE *f = fopen(path, "wb");
+  if (!f) return false;
+  bool ok = fwrite(bytes, 1, n, f) == n;
+  fclose(f);
+  return ok;
+  ```)
+
+(defn write-empty [path : cstr] : bool
+  ```c
+  FILE *f = fopen(path, "wb");
+  if (!f) return false;
+  fclose(f);
+  return true;
+  ```)
+
+(defn main [] : int
+  (do
+    (println (if (write-sample (tmp-path "tur-fs-read-string.txt")) "wrote" "write failed"))
+    (match (fs/read-string (tmp-path "tur-fs-read-string.txt"))
+      (Ok s) (do (println (string/len s))               ;; 14
+                 (println (string/byte-at s 1))         ;; 0: the NUL is kept
+                 (let [v (string/lines s)]
+                   (do (println (vec-len v))            ;; 2
+                       (println (string/len (vec-get v 0)))      ;; 3: "a", NUL, "b"
+                       (println (string/to-cstr (vec-get v 1)))  ;; line two
+                       (string/release-all v)))
+                 (string/release s))
+      (Err e) (println (io-error/message e)))
+    (println (if (write-empty (tmp-path "tur-fs-read-string-empty.txt")) "wrote" "write failed"))
+    (match (fs/read-string (tmp-path "tur-fs-read-string-empty.txt"))
+      (Ok s) (do (println (string/len s))               ;; 0
+                 (string/release s))
+      (Err e) (println (io-error/message e)))
+    (match (fs/read-string (tmp-path "no-such-dir/x.txt"))
+      (Ok s) (do (println "unexpected Ok")
+                 (string/release s))
+      (Err e) (println "missing file: Err"))
+    0))

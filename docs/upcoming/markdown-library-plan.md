@@ -1,7 +1,7 @@
 # tur/markdown -- CommonMark + GFM in Turmeric, and the string helpers it needs
 
-> **Status:** in progress. S1 (#1200) and S2 are implemented; the rest is
-> still plan. Written 2026-10-15; its open questions were settled with the
+> **Status:** in progress. S1 (#1200), S2 (#1209) and S3 are implemented;
+> the rest is still plan. Written 2026-10-15; its open questions were settled with the
 > author the same day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
 > turned out not to remove any dependency (see section 9). The Markdown renderer
