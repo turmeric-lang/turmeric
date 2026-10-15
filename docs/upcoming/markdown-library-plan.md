@@ -357,19 +357,32 @@ Plan:
 - **CommonMark 0.31.2 plus the GFM extensions**: tables, strikethrough,
   extended autolinks, task list items. **Not** bug-compatibility with
   python-markdown, apart from heading ids (6.3).
-- **Spec examples as fixtures.** The spec has about 650 examples, and the GFM spec adds
-  its extension examples. A runner, `tests/run-markdown-spec.sh` (ctest
+- **Spec examples as fixtures.** CommonMark 0.31.2 has 652 examples, and the GFM
+  spec adds 24 extension examples. A runner, `tests/run-markdown-spec.sh` (ctest
   `tur_markdown_spec`), renders each example and compares it with the expected
   HTML after the spec's own normalisation (attribute order, whitespace between
   tags). It runs compiled and under `--interpret`. A committed ratchet file lists
   the passing example numbers, and that list may only grow. M1 to M3 each raise
   it, and M3 ends at all examples passing.
-- **Where the examples live** (decided, section 8): a separate repository in
-  the `turmeric-lang` org, working name `turmeric-lang/commonmark-spec-data`.
-  It holds the spec's examples and the GFM extension examples as JSON, with
-  their CC-BY-SA 4.0 licence and attribution. That keeps the share-alike text
-  out of this repository. It is consumed the way `turmeric-spices` already is:
-  - Locally, clone it next to this checkout (`../commonmark-spec-data/`). When
+- **Where the examples live** (decided, section 8):
+  [`turmeric-lang/commonmark-spec`](https://github.com/turmeric-lang/commonmark-spec),
+  which keeps the share-alike text out of this repository. It was created and
+  populated on 2026-10-15; the first commit is `a029e939`. It holds:
+  - `commonmark/0.31.2/spec.json`: all 652 examples, byte-identical to
+    upstream's `test/spec_tests.py --dump-tests`.
+  - `gfm/0.29-gfm/extensions.json`: the 24 GFM extension examples (8 table,
+    2 strikethrough, 11 autolink, 1 tagfilter, 2 tasklist), each tagged with
+    its extension. GitHub's renderer passes all 24 after normalisation.
+  - `SOURCES.json`, the upstream commit and SHA-256 behind each file, and
+    `tools/extract.py`, which regenerates or `--check`s them from those pinned
+    commits.
+  - The CC-BY-SA 4.0 legal code, the attribution, and a list of the changes
+    made.
+
+  It doesn't include upstream's `normalize.py` (BSD-2-Clause), so M1's runner
+  brings its own normalisation. It's consumed the way `turmeric-spices`
+  already is:
+  - Locally, clone it next to this checkout (`../commonmark-spec/`). When
     it's absent, the runner PASS-skips with a message saying how to get it,
     the same as `requires.spices`.
   - In CI, the jobs that run the suite check it out with `actions/checkout`
@@ -378,7 +391,6 @@ Plan:
     network at configure or test time.
   - The ratchet file, which lists the passing example numbers per spec version,
     lives in this repo, next to `PINNED`.
-  - Creating the repository is a manual step for an org owner, before M1.
 
 ### 6.2 Module layout and API
 
@@ -525,7 +537,7 @@ The questions this plan first left open, settled with the author on 2026-10-15.
 
 | # | Question | Decision | Why |
 |---|---|---|---|
-| 1 | Where do the CommonMark spec examples (CC-BY-SA 4.0) live? | A separate `turmeric-lang` repository (working name `commonmark-spec-data`), consumed as a sibling checkout pinned by SHA; tests skip when it is absent (6.1) | Keeps the share-alike text out of this repo; same pattern as `turmeric-spices`; nothing touches the network at configure or test time |
+| 1 | Where do the CommonMark spec examples (CC-BY-SA 4.0) live? | [`turmeric-lang/commonmark-spec`](https://github.com/turmeric-lang/commonmark-spec) (created and populated 2026-10-15), consumed as a sibling checkout pinned by SHA; tests skip when it is absent (6.1) | Keeps the share-alike text out of this repo; same pattern as `turmeric-spices`; nothing touches the network at configure or test time |
 | 2 | Should `=` accept `Char`? | **No.** `=` stays primitive-only; `eq?` is the idiom (4.2) | `(eq? c #\,)` already works through `Eq [Char]`; `=` rejects `String` for the same reason; S1's `byte-is?` covers the common case. Making `=` fall back to `Eq` would be its own plan, behind `--enable` |
 | 3 | Name of the concatenation macro | `string/of` (4.6) | Matches the `string/` prefix of what it returns; `str` is already a type name (the borrowed-view tier) |
 | 4 | How are the Unicode tables generated? | The r7rs pattern: one C table emitted twice, inline C plus an interpreter native, with a sync check (section 5) | Fast static lookups; works compiled, interpreted and in the web REPL; the generator and UCD pin already exist |
