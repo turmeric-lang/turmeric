@@ -650,28 +650,36 @@ inline-C carve-outs, c2mir divergences), not just speed, so pair a
 load-bearing `:engine` with a `:tur-version` floor (older binaries silently
 ignore unknown manifest keys and run under cc).
 
-Measured triangle (x86-64 Linux, Release `tur`, best of 5, end-to-end wall
-time; `bash benchmarks/run-triangle.sh` regenerates this from
-`benchmarks/triangle/`):
+Measured triangle, regenerated 2026-10-15 by `benchmarks/run-triangle.sh`
+from `benchmarks/triangle/` (the performance audit's baseline box: x86-64
+Linux under WSL2, gcc 13.3, Release `-DTUR_JIT=ON` `tur`; `REPS=11`, two
+sweeps, each cell the faster one; end-to-end wall time):
 
 | program | interpreter | tur jit | cc build | cc run | cc total |
 |---|---|---|---|---|---|
-| fib (fib 27, call-heavy) | 137ms | 127ms | 178ms | 2ms | 180ms |
-| loop-sum (5M-iteration loop) | 1567ms | 137ms | 180ms | 3ms | 183ms |
-| mandel (float inner loop) | 639ms | 142ms | 187ms | 5ms | 192ms |
+| fib (fib 27, call-heavy) | 165ms | 105ms | 170ms | 3ms | 173ms |
+| loop-sum (5M-iteration loop) | 1489ms | 107ms | 160ms | 2ms | 162ms |
+| mandel (float inner loop) | 647ms | 109ms | 178ms | 4ms | 182ms |
 
 All three legs are re-measured together on each run, so the columns are
 comparable to each other. They are NOT comparable to a snapshot taken on a
-different machine.
+different machine. The `cc build` column is the noisiest (up to 10% between
+sweeps). The audit's write-up,
+[wp4-engines.md](../artifacts/perf-audit-2026-10/wp4-engines.md), has the
+method, and WP0's baseline has every corpus program on all three engines.
 
 How to read it:
 
-- **The front end dominates one-shot latency on every engine.** Roughly
-  200ms of each cell is elaboration and codegen shared by all three legs;
-  the engines differ in what happens after. For a program this small the
-  interpreter's zero-compile leg makes it competitive end to end even
-  while its loop throughput is 9x behind (loop-sum).
-- **`tur jit` beats the cc round trip end to end**, by ~25-30% on these
+- **Each engine's fixed cost is its back end, not the front end.** The
+  front end shared by all three legs is ~20 ms (read, elaborate, emit; for
+  `tur jit` also the prune). The ~160 ms of the cc leg is gcc and the link;
+  ~70 ms of the JIT leg is c2mir, which is 65% of a typical quick
+  `tur jit` run (median over the corpus programs that run under 20 ms:
+  110 ms wall, 72 ms of it c2mir). For a program this small the
+  interpreter's zero-compile leg keeps it competitive end to end on fib;
+  once a loop dominates, as in loop-sum, it is ~14x slower end to end than
+  `tur jit`.
+- **`tur jit` beats the cc round trip end to end**, by 34-40% on these
   programs. Code generation is serialized and LAZY -- only the functions a
   run actually calls get compiled (worth 23-36% off the JIT leg alone
   versus eager generation). Its other advantage is structural, being IN PROCESS: no
@@ -679,11 +687,16 @@ How to read it:
   faster than the `tur build --shared` round trip it replaces (see the
   repl guide). `TUR_JIT_GEN=eager` restores whole-program generation, which
   is slower but compiles every function up front.
-- **Compiled native runtime is 4-7ms** for these workloads -- for any
+- **Compiled native runtime is 2-4ms** for these workloads -- for any
   long-running or repeatedly-invoked program, `tur build` once and run
   the binary; nothing else is close in steady state.
-- The MIR tier generates good-but-not-gcc code: expect JIT'd loop bodies
-  within ~1-2x of cc -O2, not parity, and note the JIT runs the program
+- The MIR tier's loop code is close to gcc's on plain Turmeric (mandel's JIT
+  run is 4.9 ms against cc's 4 ms). The large gaps the audit found come from
+  two other places: c2mir copies every struct over 5 bytes with a call to
+  libc `memcpy`, so code that passes 16-byte values by value (Saffron's
+  dynamic values, some tail-call shapes) runs up to 3.7x behind cc; and a
+  JIT'd program allocates from the compiler's own heap, which made an
+  allocation-bound loop 1.9x slower there. Note too that the JIT runs the program
   on a sized entry stack (`TUR_MAIN_STACK_MB`, default 1024 on 64-bit) because
   MIR does not perform gcc's sibling-call optimization -- so a deep
   recursion the cc path survives only because gcc turned the self-call into

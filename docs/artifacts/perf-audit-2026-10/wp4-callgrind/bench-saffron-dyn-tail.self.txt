@@ -1,0 +1,40 @@
+--------------------------------------------------------------------------------
+Profile data file '/srv/perf/runs/wp4/callgrind/bench-saffron-dyn-tail.cg' (creator: callgrind-3.22.0)
+--------------------------------------------------------------------------------
+I1 cache: 
+D1 cache: 
+LL cache: 
+Timerange: Basic block 0 - 10423820906
+Trigger: Program termination
+Profiled target:  ./build-relg/tur --interpret benchmarks/bench-saffron-dyn-tail.tur (PID 4834, part 1)
+Events recorded:  Ir
+Events shown:     Ir
+Event sort order: Ir
+Thresholds:       99
+Include dirs:     
+User annotated:   
+Auto-annotation:  on
+
+--------------------------------------------------------------------------------
+Ir                      
+--------------------------------------------------------------------------------
+42,797,492,645 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                      file:function
+--------------------------------------------------------------------------------
+8,302,093,032 (19.40%)  src/turi/eval.c:eval_expr_impl [/srv/perf/wp4/build-relg/tur]
+7,544,603,711 (17.63%)  src/turi/eval.c:eval_drive_ex [/srv/perf/wp4/build-relg/tur]
+7,202,183,232 (16.83%)  src/turi/eval.c:eval_expr_impl'2 [/srv/perf/wp4/build-relg/tur]
+2,860,918,711 ( 6.68%)  src/compiler/builtins.c:builtin_lookup [/srv/perf/wp4/build-relg/tur]
+2,700,703,944 ( 6.31%)  src/turi/eval.c:eval_expr'2 [/srv/perf/wp4/build-relg/tur]
+2,040,814,146 ( 4.77%)  src/turi/eval.c:eval_lookup [/srv/perf/wp4/build-relg/tur]
+1,740,450,107 ( 4.07%)  src/turi/eval.c:eval_builtin [/srv/perf/wp4/build-relg/tur]
+1,620,648,162 ( 3.79%)  src/turi/eval.c:turi_any_box_widen [/srv/perf/wp4/build-relg/tur]
+1,410,379,055 ( 3.30%)  src/compiler/types.h:type_simple.constprop.0 [/srv/perf/wp4/build-relg/tur]
+1,364,624,806 ( 3.19%)  ./string/../sysdeps/x86_64/multiarch/strcmp-avx2.S:__strcmp_avx2 [/usr/lib/x86_64-linux-gnu/libc.so.6]
+1,350,453,708 ( 3.16%)  src/turi/eval.c:eval_expr [/srv/perf/wp4/build-relg/tur]
+1,050,325,741 ( 2.45%)  src/compiler/types.c:type_eq [/srv/perf/wp4/build-relg/tur]
+  540,752,181 ( 1.26%)  ./malloc/./malloc/malloc.c:_int_free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  510,170,034 ( 1.19%)  src/turi/eval.c:turi_copy_byvalue_struct_arg [/srv/perf/wp4/build-relg/tur]
+  470,228,085 ( 1.10%)  src/turi/eval.c:frame_release_one [/srv/perf/wp4/build-relg/tur]
