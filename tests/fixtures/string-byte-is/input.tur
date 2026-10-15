@@ -1,0 +1,84 @@
+;; string-byte-is -- markdown-library-plan S1: bounds-checked byte tests
+;; against Char literals, on String, StringSlice and cstr.
+;;
+;; byte-is? is false (never an error) for an index that is negative, at the
+;; end, or past it; char-at is (none) there.  A slice's bounds are its own,
+;; not its parent's.  cstr has no stored length, so its terminator is "at the
+;; end" too.  A byte above 127 comes back as a Char with that raw code.
+
+(load "stdlib/string-slice.tur")
+
+(defmodule app
+  (import cstr :refer [cstr-byte-is? cstr-char-at])
+
+  (defn yn [b : bool] : cstr (if b "T" "F"))
+
+  ;; a Char option as its code, or "none"
+  (defn opt [o : (Option Char)] : void
+    (match o
+      (Some c) (println (char->int c))
+      (None)   (println "none")))
+
+  (defn demo-string [] : int
+    (let [s (string/from-cstr "a,b")]
+      (do
+        (println (yn (string/byte-is? s 1 #\,)))   ;; T
+        (println (yn (string/byte-is? s 0 #\,)))   ;; F: it's 'a'
+        (println (yn (string/byte-is? s -1 #\a)))  ;; F: negative
+        (println (yn (string/byte-is? s 3 #\b)))   ;; F: at the end
+        (println (yn (string/byte-is? s 99 #\b)))  ;; F: far past it
+        (opt (string/char-at s 2))                 ;; 98 ('b')
+        (opt (string/char-at s 3))                 ;; none
+        (opt (string/char-at s -1))                ;; none
+        (match (string/char-at s 1)                ;; the eq? idiom: T
+          (Some c) (println (yn (eq? c #\,)))
+          (None)   (println "none"))
+        (string/release s)
+        0)))
+
+  (defn demo-high-byte [] : int
+    (let [s (string/from-cstr "\xc3\xa9")]         ;; U+00E9 in UTF-8
+      (do
+        (opt (string/char-at s 0))                 ;; 195, the raw lead byte
+        (println (yn (string/byte-is? s 0 #\a)))   ;; F
+        (string/release s)
+        0)))
+
+  (defn demo-slice [] : int
+    (let [s (string/from-cstr "hello world")
+          w (string/slice s 6 5)]                  ;; "world"
+      (do
+        (println (yn (slice/byte-is? w 0 #\w)))    ;; T
+        (println (yn (slice/byte-is? w 4 #\d)))    ;; T
+        (println (yn (slice/byte-is? w 5 #\d)))    ;; F: past the VIEW
+        (println (yn (slice/byte-is? w -1 #\space))) ;; F: the parent's ' '
+        (opt (slice/char-at w 1))                  ;; 111 ('o')
+        (opt (slice/char-at w 5))                  ;; none
+        (slice/release w)
+        (string/release s)
+        0)))
+
+  (defn demo-cstr [] : int
+    (do
+      (println (yn (cstr-byte-is? "a,b" 1 #\,)))   ;; T
+      (println (yn (cstr-byte-is? "a,b" 2 #\,)))   ;; F
+      (println (yn (cstr-byte-is? "a,b" -1 #\a)))  ;; F: negative
+      (println (yn (cstr-byte-is? "a,b" 3 #\b)))   ;; F: the terminator
+      (println (yn (cstr-byte-is? "a,b" 40 #\b)))  ;; F: far past it
+      (println (yn (cstr-byte-is? "" 0 #\a)))      ;; F: empty
+      (opt (cstr-char-at "hi" 1))                  ;; 105 ('i')
+      (opt (cstr-char-at "hi" 2))                  ;; none
+      (opt (cstr-char-at "hi" -3))                 ;; none
+      0))
+
+  (defn main [] : int
+    (do
+      (println "-- string")
+      (demo-string)
+      (println "-- high byte")
+      (demo-high-byte)
+      (println "-- slice")
+      (demo-slice)
+      (println "-- cstr")
+      (demo-cstr)
+      0)))

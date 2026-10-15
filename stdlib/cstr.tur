@@ -12,7 +12,13 @@
 ;;;
 ;;; Since: 2026-07-01
 (defmodule cstr
-  (export cstr-len cstr-nth cstr-sub cstr-eq? cstr-free)
+  (export cstr-len
+    cstr-nth
+    cstr-byte-is?
+    cstr-char-at
+    cstr-sub
+    cstr-eq?
+    cstr-free)
   ;;; cstr-len -- byte length of a NUL-terminated C string.
   ;;;
   ;;; Parameters:
@@ -42,6 +48,51 @@
     ```c
     return (int64_t)(unsigned char)((const char *)(intptr_t)s)[i];
     ```)
+  ;;; cstr-byte-is? -- is the byte at index i of s the character c?
+  ;;;
+  ;;; Unlike cstr-nth this checks the index: it is false when i is negative
+  ;;; or at or past the terminator, so a scanner needs no separate length
+  ;;; test and no magic numbers.  c should be ASCII, as for string/byte-is?.
+  ;;; A cstr stores no length, so every call measures s: cheap for a line or
+  ;;; a token, but a byte-by-byte walk over a long text should make it a
+  ;;; String once and use string/byte-is?.
+  ;;;
+  ;;; Parameters:
+  ;;;   s -- NUL-terminated C string pointer
+  ;;;   i -- a byte index; out of range is not an error
+  ;;;   c -- the character to compare with
+  ;;;
+  ;;; Returns:
+  ;;;   true iff 0 <= i < (cstr-len s) and the byte at i is c's code.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-byte-is? "a,b" 1 #\,)  ; => true
+  ;;;   (cstr-byte-is? "a,b" 3 #\,)  ; => false
+  ;;;
+  ;;; Since: markdown-library-plan S1
+  (defn cstr-byte-is? [s : cstr i : int c : Char] : bool
+    (and (>= i 0) (< i (cstr-len s)) (= (cstr-nth s i) (char->int c))))
+  ;;; cstr-char-at -- the byte at index i of s as a Char, or (none).
+  ;;;
+  ;;; The checked counterpart of cstr-nth, for comparing with character
+  ;;; literals.  Measures s on every call, like cstr-byte-is?.
+  ;;;
+  ;;; Parameters:
+  ;;;   s -- NUL-terminated C string pointer
+  ;;;   i -- a byte index; out of range is not an error
+  ;;;
+  ;;; Returns:
+  ;;;   (some c) holding the byte at i, or (none) when i is negative or at or
+  ;;;   past the terminator.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-char-at "hi" 1)  ; => (some #\i)
+  ;;;
+  ;;; Since: markdown-library-plan S1
+  (defn cstr-char-at [s : cstr i : int] : (Option Char)
+    (if (and (>= i 0) (< i (cstr-len s)))
+      (some (int->char (cstr-nth s i)))
+      (none)))
   ;;; cstr-sub -- substring [start, end) of a NUL-terminated C string.
   ;;;
   ;;; Parameters:

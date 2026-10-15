@@ -120,6 +120,43 @@
 
 (defn slice/byte-at [sl : StringSlice i : int] : int
   (tur_slice_byte_at (:: sl ptr<void>) i))
+;;; slice/byte-is? -- is the byte at index i of the slice the character c?
+;;;
+;;; string/byte-is? for a slice.  The index is relative to the slice, and so
+;;; is the bounds check: a byte of the parent String outside the view is out
+;;; of range.  c should be ASCII, as for string/byte-is?.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to look in (borrowed)
+;;;   i  -- a byte index into the slice; out of range is not an error
+;;;   c  -- the character to compare with
+;;;
+;;; Returns:
+;;;   true iff 0 <= i < (slice/len sl) and the byte at i is c's code.
+;;;
+;;; Example:
+;;;   (slice/byte-is? (string/slice (string/from-cstr "a,b") 1 2) 0 #\,)  ; => true
+;;;
+;;; Since: markdown-library-plan S1
+(defn slice/byte-is? [sl : StringSlice i : int c : Char] : bool
+  (= (slice/byte-at sl i) (char->int c)))
+;;; slice/char-at -- the byte at index i of the slice as a Char, or (none).
+;;;
+;;; string/char-at for a slice; the index and the bounds are the slice's.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to look in (borrowed)
+;;;   i  -- a byte index into the slice; out of range is not an error
+;;;
+;;; Returns:
+;;;   (some c) holding the byte at i, or (none) when i is out of range.
+;;;
+;;; Example:
+;;;   (slice/char-at (string/slice (string/from-cstr "hi") 1 1) 0)  ; => (some #\i)
+;;;
+;;; Since: markdown-library-plan S1
+(defn slice/char-at [sl : StringSlice i : int] : (Option Char)
+  (let [b (slice/byte-at sl i)] (if (< b 0) (none) (some (int->char b)))))
 ;;; slice/compare -- lexicographic byte compare of two slices: -1, 0, or 1.
 ;;;
 ;;; Since: v2

@@ -108,6 +108,15 @@ Query:
 - `string/len`, `string/empty?`, `string/byte-at`, `string/eq?`,
   `string/compare`, `string/hash`, `string/starts-with?`, `string/ends-with?`,
   `string/contains?`.
+- `string/byte-is?` and `string/char-at` -- bounds-checked byte access for a
+  scanner. `(string/byte-is? s i #\,)` is false, never an error, when `i` is out
+  of range, so it replaces a length test plus a magic number such as `44`;
+  `string/char-at` gives `(some c)` or `(none)`. Both read one byte, so compare
+  them with ASCII characters. There are matching `slice/` versions, and
+  `cstr-byte-is?` / `cstr-char-at` in `stdlib/cstr.tur`. A `cstr` stores no
+  length, so those two measure the string on every call; to scan a long text
+  byte by byte, make it a `String` first. `=` does not take a `Char`; compare
+  with `(eq? c #\,)`.
 
 Transform (each returns a fresh immutable `String`):
 
@@ -221,8 +230,8 @@ can neither be freed nor mutated underneath the slice.
 ```
 
 Surface: `string/slice` / `string/slice-cstr` (construct), `slice/sub` (O(1)
-sub-view), `slice/len` / `slice/empty?` / `slice/byte-at` / `slice/compare` /
-`slice/eq?` / `slice/hash` (query), `slice/to-string` / `slice/to-cstr`
+sub-view), `slice/len` / `slice/empty?` / `slice/byte-at` / `slice/byte-is?` /
+`slice/char-at` / `slice/compare` / `slice/eq?` / `slice/hash` (query), `slice/to-string` / `slice/to-cstr`
 (materialize), `slice/retain` / `slice/release` (share/drop). Typeclasses `Eq`,
 `Ord`, `Show`, `Hash`. Compiled and `--interpret` behave identically.
 
