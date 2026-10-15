@@ -10640,9 +10640,9 @@ static void wk_apply_flags(const char *flags_str) {
          * from this string, and a flag without a row here is silently lost.
          * The child times its own compile and writes its own report before
          * _exit (which skips atexit, so the child calls prof_finish itself);
-         * the worker process itself is not profiled
-         * and nothing is merged across fixtures.  Only the one-token forms:
-         * the path of `--timings <path>` would be a second token. */
+         * the worker process itself is not profiled and nothing is merged
+         * across fixtures.  Only the one-token forms: the path of
+         * `--timings <path>` would be a second token. */
         else if (strcmp(tok, "--timings") == 0 || strncmp(tok, "--timings=", 10) == 0) {
             static char *wk_argv[] = { "tur", "worker", NULL };
             static char  wk_path[1024];

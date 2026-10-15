@@ -795,44 +795,49 @@ of `benchmarks/triangle/fib.tur` on a Release `tur` (x86-64 Linux, warm
 caches, one run -- illustrative, not a benchmark):
 
 ```
-tur --timings: tur build --timings benchmarks/triangle/fib.tur -o /tmp/fib
+tur --timings: tur build --timings fib.json benchmarks/triangle/fib.tur -o fib
   phase              self ms   self %
-  read                 2.463      1.0
-  module-load          0.939      0.4
-  macro-expand         0.018      0.0
-  elaborate            7.552      3.1
-  typeclass            1.401      0.6
-  kind-check           0.082      0.0
-  effect-lower         0.003      0.0
-  effect-row           0.906      0.4
-  cps                  0.029      0.0
-  borrow-check         0.148      0.1
-  refine               0.204      0.1
+  read                 1.811      1.0
+  module-load          0.526      0.3
+  macro-expand         0.012      0.0
+  elaborate            4.219      2.4
+  typeclass            0.801      0.5
+  kind-check           0.038      0.0
+  effect-lower         0.001      0.0
+  effect-row           0.469      0.3
+  cps                  0.023      0.0
+  borrow-check         0.069      0.0
+  refine               0.154      0.1
   mono                 0.001      0.0
-  emit                12.279      5.0
-  cc                 217.705     88.8
-  other                1.411      0.6
-  total (wall)       245.142    100.0
+  emit                 6.608      3.8
+  cc                 156.637     90.8
+  other                1.191      0.7
+  total (wall)       172.560    100.0
   (exclusive time: a phase's own time, nested phases excluded; 1162 clock reads)
 ```
 
-The table leaves out phases that took no time; the JSON lists every phase,
-in the order above, as the `tur-profile/1` document of kind `compiler`:
+The table leaves out phases that took no time; the JSON (`fib.json` above)
+lists every phase, in the order of the table, as the `tur-profile/1`
+document of kind `compiler`:
 
 ```json
 {
   "schema": "tur-profile/1",
   "kind": "compiler",
   "tur_version": "0.65.1",
-  "command": "tur build --timings=prof.json f.tur",
-  "started_utc": "2026-10-14T18:54:13Z",
-  "wall_ms": 245.1420,
+  "command": "tur build --timings fib.json benchmarks/triangle/fib.tur -o fib",
+  "started_utc": "2026-10-15T02:20:27Z",
+  "wall_ms": 172.5600,
   "notes": [],
   "clock_reads": 1162,
   "phases": [
-    {"name": "read", "self_ms": 2.4630, "self_pct": 1.0047},
+    {"name": "read", "self_ms": 1.8110, "self_pct": 1.0495},
+    {"name": "sweet", "self_ms": 0.0000, "self_pct": 0.0000},
     ...
-    {"name": "other", "self_ms": 1.4110, "self_pct": 0.5756}
+    {"name": "cc", "self_ms": 156.6371, "self_pct": 90.7726},
+    {"name": "jit", "self_ms": 0.0000, "self_pct": 0.0000},
+    {"name": "run", "self_ms": 0.0000, "self_pct": 0.0000},
+    {"name": "other", "self_ms": 1.1905, "self_pct": 0.6899}
   ]
 }
 ```
