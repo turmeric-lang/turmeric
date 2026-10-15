@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found running the JIT suite against a Release `tur` (filed 2026-10-15)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [contract-purity-check-skipped-when-checks-off](contract-purity-check-skipped-when-checks-off.md) | low-medium | TUR-E0375 (a contract predicate with side effects) is raised only from the code that builds the runtime check. So a Release `tur`, or `--no-contracts` on any build, accepts an impure `:pre`, `:post` or refinement predicate that a Debug `tur` rejects. Only `:invariant` is checked regardless of the gate. |
+
 ## Found running the performance audit's WP0 corpus (filed 2026-10-14)
 
 | Report | Severity | One line |
