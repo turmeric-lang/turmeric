@@ -52,6 +52,13 @@ have no report: see the plan's section 5.
 | [generic-returned-lambda-builds-heap-app](generic-returned-lambda-builds-heap-app.md) | medium | A lambda RETURNED by a generic whose body builds a `:heap` parametric value (`(make-struct Box :v y)`, `tcons-of`) is lifted once at the carrier ABI and calls the dead base constructor; a captured float stored that way prints garbage. A lambda stored into a record field is fine. |
 | [bare-parametric-instance-ctor-arg-unbridged](bare-parametric-instance-ctor-arg-unbridged.md) | low-medium | `(definstance C [Rose] (m [r ks] (make-struct Rose ... :kids ks)))` passes the erased `int64_t` `ks` straight to the representative monomorph constructor's typed-pointer parameter: a warning under gcc 13, an error under clang. |
 
+## Found by the performance audit's WP2 (filed 2026-10-14)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [region-rewind-fixtures-never-rewind](region-rewind-fixtures-never-rewind.md) | medium (test coverage) | `region-with-region` and `region-scope-value-survives` exist to catch a rewind that corrupts pooled slabs, and say the pop rewinds; under `TUR_REGION_STATS=1` both show `rewinds=0 retires=103`, because their erasing ascription and erased inline-C argument are escape-note hooks. They check stdout only, so they pass. |
+| [region-retired-generations-make-shutdown-quadratic](region-retired-generations-make-shutdown-quadratic.md) | medium (performance) | A retired generation stays in the ownership registry forever: shutdown frees each with a `reg_remove` that scans from index 0 (71% of a 100k-round run's cycles), and every `tur_region_free` walks all retired generations. |
+
 ## Found executing heap-sum-generic-never-specialized (filed 2026-10-14)
 
 | Report | Severity | One line |

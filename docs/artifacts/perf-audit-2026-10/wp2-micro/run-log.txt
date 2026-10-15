@@ -1,0 +1,84 @@
+b72572e6e benchmarks/audit: subsys-profile.py buckets perf samples by runtime subsystem (WP2)
+=== R-4: rc allocation registers with the (disabled) cycle collector
+  out: 0   wall 267 ms
+        14.76%  [.] _int_malloc                                -      -            
+        12.41%  [.] malloc_consolidate                         -      -            
+         6.03%  [.] malloc                                     -      -            
+         4.73%  [.] cfree@GLIBC_2.2.5                          -      -            
+         4.18%  [.] rc_free_queue_drain                        -      -            
+         4.01%  [.] unlink_chunk.isra.0                        -      -            
+         3.94%  [.] _int_free                                  -      -            
+         3.76%  [.] rc_strong_decrement                        -      -            
+         3.58%  [k] clear_page_erms                            -      -            
+         3.16%  [.] rc_cb_alloc_kinded                         -      -            
+         3.14%  [k] asm_exc_page_fault                         -      -            
+         2.23%  [.] gc_unregister_block                        -      -            
+         2.06%  [.] build.constprop.0.isra.0                   -      -            
+         1.82%  [k] check_preemption_disabled                  -      -            
+=== R-5: HAMT transient vs persistent, 100k inserts (heap traffic)
+  hamt-bench-insert: wall 177 ms  instructions 1720879185  total heap usage: 866,177 allocs, 666,177 frees, 93,425,320 bytes allocated
+  hamt-bench-transient: wall 173 ms  instructions 1701872284  total heap usage: 766,179 allocs, 566,178 frees, 87,025,408 bytes allocated
+        56.85%  [.] tur_hamt_node_release.part.0               -      -            
+        11.46%  [.] bitmap_node_copy                           -      -            
+         5.78%  [.] node_insert                                -      -            
+         5.51%  [.] malloc_consolidate                         -      -            
+         4.95%  [.] _int_malloc                                -      -            
+         3.41%  [.] node_has.constprop.0                       -      -            
+         1.78%  [.] unlink_chunk.isra.0                        -      -            
+         1.77%  [.] cfree@GLIBC_2.2.5                          -      -            
+=== R-6: Vec growth -- malloc+copy+free (today) vs realloc, 10M pushes
+  patched vec-push! growth to realloc
+  malloc: out 10000000 49999995000000  wall 112 ms  instructions 454077714
+  realloc: out 10000000 49999995000000  wall 61 ms  instructions 360153953
+        36.75%  [.] main                                       -      -            
+         8.26%  [.] tur_region_note_escape                     -      -            
+         7.09%  [k] asm_exc_page_fault                         -      -            
+         5.03%  [k] clear_page_erms                            -      -            
+         4.53%  [k] check_preemption_disabled                  -      -            
+         3.29%  [k] sync_regs                                  -      -            
+=== R-8: tail calls with no guarantee under gcc (TUR_MUSTTAIL sites in emitted C)
+  fixtures: 2975; with at least one TUR_MUSTTAIL tail call: 2973; sites: 43559
+  requires.musttail markers: 2
+            TUR_MUSTTAIL_SELF(__inst_Eq_eq_qu_Char);
+            TUR_MUSTTAIL return char_eq_qu(x, y);
+    --
+            TUR_MUSTTAIL_SELF(__fn_1001064);
+            TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
+    --
+            TUR_MUSTTAIL_SELF(__fn_1001491);
+            TUR_MUSTTAIL return __inst_Eq_eq_qu_int(a, b);
+    6150:#      define TUR_MUSTTAIL __attribute__((musttail))
+    6151:#      define TUR_MUSTTAIL_PINS 1
+    6155:#    define TUR_MUSTTAIL
+=== R-10: fibers -- spawn+await and park/resume cost, and the switch path
+  spawn: wall 273 ms  out 10 16 13 
+  park: wall 813 ms  out 1 1 4000013 
+  switch symbols in the spawn binary: _setjmp longjmp swapcontext 
+        13.24%  [.] cfree@GLIBC_2.2.5              -      -            
+        11.38%  [.] _int_malloc                    -      -            
+        11.00%  [.] _int_free                      -      -            
+         8.90%  [.] __libc_calloc                  -      -            
+         7.46%  [.] malloc                         -      -            
+         5.93%  [.] __dk_reap_push                 -      -            
+         5.83%  [.] __dk_join_release_node         -      -            
+         5.55%  [.] tur_async_fiber_closure        -      -            
+=== subsystem table
+benchmarks/triangle/fib.tur                                user 75 tls 8 libc 5 kernel 12
+benchmarks/bench-dfs-queens.tur                            user 7 stdlib 6 trail 10 region 7 tls 6 libc 26 kernel 20 native 19
+benchmarks/bench-logic-subst.tur                           user 12 stdlib 59 trail 3 tls 13 libc 3 kernel 10
+benchmarks/bench-regions-subst.tur                         user 11 stdlib 57 cps 3 region 6 tls 10 libc 6 kernel 6
+benchmarks/bench-saffron-dyn-tail.tur                      user 22 gc 51 cps 2 libc 5 native 21
+benchmarks/hamt-bench-insert.tur                           hamt 69 libc 13 kernel 5 native 12
+tests/fixtures/stackless-catch-unwind-deep/input.tur       user 8 libc 33 kernel 58
+tests/fixtures/tailcall-carrier-let-deep/input.tur         user 12 region 4 libc 53 kernel 28 native 1
+benchmarks/audit/sized/effect-nontail-ticks-1m.tur         cps 17 tls 3 libc 25 kernel 48 native 7
+benchmarks/audit/sized/cps-tramp-resume-8m.tur             cps 36 tls 9 libc 40 native 15
+benchmarks/audit/sized/closure-let-loop-10m.tur            cps 45 region 1 tls 16 libc 27 native 11
+benchmarks/audit/sized/fn-value-join-1000x.tur             cps 33 tls 8 libc 49 kernel 4 native 6
+benchmarks/audit/sized/region-rounds-100k.tur              region 73 libc 6 kernel 19
+benchmarks/audit/sized/mut-map-reassign-1m.tur             hamt 30 libc 11 kernel 30 native 29
+/srv/perf/runs/wp2-micro/rc2m.tur                          rc 10 gc 4 region 2 libc 47 kernel 27 native 11
+/srv/perf/runs/wp2-micro/vecpush.tur                       user 35 region 8 tls 2 kernel 55
+/srv/perf/runs/wp2-micro/spawn.tur                         cps 20 tls 8 libc 56 native 15
+
+[exited with code 0]
