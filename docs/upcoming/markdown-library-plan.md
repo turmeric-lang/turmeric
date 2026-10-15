@@ -579,15 +579,18 @@ The questions this plan first left open, settled with the author on 2026-10-15.
 It reads the same `Justfile`, so a contributor who has `tur` doesn't need the
 `just` binary. That makes it the one non-Python tool on the dev path that can
 go away completely. It is worth doing, and most of it has already happened.
-What's left, as measured on 2026-10-15:
+**J1 and J2 are in [#1201](https://github.com/turmeric-lang/turmeric/pull/1201)**
+(open). What's left, as measured on 2026-10-15:
 
 - **CI already doesn't use `just`.** No workflow installs it or runs it.
   Recipes run as `./build/tur run <recipe>` (for example
   `tur run regen-snapshots -- --check` and `tur run docs`).
 - **`tur run` handles the whole Justfile.** `./build/tur run --list` parses
-  all 75 recipes and prints no unsupported-feature notes. The file uses no
-  `[unix]`-style attributes, modules or backtick substitution, which are the
-  features `tur run` defers.
+  all 75 recipes and prints no unsupported-feature notes. `tur run` now
+  implements recipe attributes (`[unix]`, `[group]`, `[confirm]` and the
+  rest), modules, imports and backtick substitution; only an unknown
+  attribute such as `[parallel]` is refused. The guide still listed those as
+  unsupported, and #1201 corrects it.
 - **The one hard dependency is the Justfile calling `just` itself.** `debug`,
   `release` and `tsan` run `[ -f build/CMakeCache.txt ] || just configure`,
   `reconfigure` runs `just configure`, and the Windows build runs
@@ -611,16 +614,19 @@ Replace each self-call with a hidden dependency recipe, so the same file works
 under both runners:
 
 ```
+CONFIGURE := "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+
 debug: _configured
     cmake --build build -j --config Debug
 
 _configured:
-    @[ -f build/CMakeCache.txt ] || cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    @[ -f build/CMakeCache.txt ] || {{CONFIGURE}}
 ```
 
 `release` and `tsan` depend on `_configured` the same way. `reconfigure`
-becomes `rm -rf build` followed by the `cmake -S . -B build ...` line, and the
-Windows recipe gets a matching `_configured-windows`. `tur run` already
+becomes `rm -rf build` followed by `{{CONFIGURE}}`. `build-windows` is one
+bash script, so it inlines the configure step from a matching
+`CONFIGURE_WIN`. `tur run` already
 supports dependencies and `_`-prefixed hidden recipes. Verify by running
 `tur run build` in a fresh worktree with no `build/` and no `just` on `PATH`.
 
@@ -635,9 +641,17 @@ can be a ctest target or a step in an existing CI job:
 ### J3 -- say `tur run`
 
 Mechanical: change each mention listed above to `tur run <recipe>`, and
-regenerate `stdlib/docstrings.tur` for its new header. Leave `docs/archive/`
-alone, because those files are history. Plans in `docs/upcoming/` get updated
-when they're next touched.
+regenerate `stdlib/docstrings.tur` for its new header. #1201 already did the
+Justfile's own messages. Leave `docs/archive/` alone, because those files are
+history. Plans in `docs/upcoming/` get updated when they're next touched.
+
+**One exception: Windows bootstrap.** On a fresh Windows box there is no
+`tur` yet, and `setup-windows` is what installs `just` (the Justfile's
+"Windows setup" notes say so). There, `just` really is the runner, so those
+notes and the Windows guide's bootstrap steps keep it.
+
+J3 touches the same guides as #1197 and regenerates the same
+`stdlib/docstrings.tur` as #1200, so it waits for both to merge.
 
 ### What stays
 
