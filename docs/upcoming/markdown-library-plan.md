@@ -60,7 +60,7 @@ compared by tag counts. One side is what ships (genguides' preprocessing, then
 |---|---|
 | Lists the live site renders as a run-on paragraph with literal `- ` bullets (a list straight after a paragraph line, which python-markdown won't start) | **54 lists on 23 guide pages** (e.g. "Advantages" in `cloudflare-deployment-guide.md`; 10 in `snake-game-tutorial.md`) |
 | Guides with a `turmeric` / `sweet-exp` block containing a column-0 ```` ``` ```` from inline C (genguides widens these fences before rendering) | 31 |
-| ...of which CommonMark (and GitHub, today) closes the block early and renders broken | **16** |
+| ...of which CommonMark (and GitHub, today) closes the block early and renders broken | **16** (28 blocks) |
 | Pages whose block structure still differs once those fences are widened in source | **3**, and only in how adjacent block quotes split (`image-dumps-guide.md`, `repl-tutorial.md`, `web-continuations-tutorial.md`) |
 | Raw HTML a CommonMark parser finds | **3 in the guides, none intentional**: `ptr<void>` inside two of the broken fences above, and `<source>` after a code span that `` \` `` ended early (`developing-spices-guide.md:1283`, hidden on the live site today). **0** in the 51 spice READMEs |
 | Heading ids that would change under GitHub's slug rule instead of python-markdown's (mostly the ` -- ` in titles: `a -- b` is `a-b` vs `a----b`) | **403 of 3,050** |
@@ -119,26 +119,43 @@ which is why Phase S comes first. The rest is listed in section 7.
 ## 2. Quick wins, independent of the library
 
 Each of these is small, fixes something live today, and stays correct after the
-switch.
+switch. **All four are in
+[#1197](https://github.com/turmeric-lang/turmeric/pull/1197)** (open), which
+was cut from `main` and doesn't depend on this plan. What it actually does,
+where that differs from the first draft of this section:
 
-1. **Blank line before the 54 run-on lists** (23 pages). CommonMark renders them
-   the same with or without it. python-markdown needs it. This fixes the live site
-   now.
-2. **Widen the outer fence** of the 31 `turmeric` / `sweet-exp` blocks that
-   contain a column-0 ```` ``` ```` to four backticks. This fixes the 16 pages
-   GitHub renders broken today, and it makes `widen_nested_fences` a no-op ahead
-   of its removal in M4. Add a check to `tools/check-guide-pairs.py` that flags
-   a three-backtick block a CommonMark parser would close early, so new ones
-   don't creep in.
-3. **Pin the unpinned install.** `.github/workflows/release-cut.yml` (the
-   spices-site deploy job) runs `python3 -m pip install markdown` with no version
-   or hash, which contradicts C-5. Use
-   `python3 -m pip install --require-hashes -r tools/requirements.txt` like
-   `ci.yml` and `release.yml` do.
-4. **Fix the code span at `developing-spices-guide.md:1283`.** It writes
-   `` \` `` inside a code span, but backslash escapes don't work in code spans, so
-   the span ends early and the browser hides `<source>` as an unknown tag. Use a
-   double-backtick span. The other two accidental tags go away with item 2.
+1. **Blank line before the run-on lists:** 52 of the 54. CommonMark renders them
+   the same with or without it (cmark-gfm's output is unchanged on every page),
+   and python-markdown needs it. Two are left on purpose: `macros-guide.md` and
+   `value-representations-guide.md` continue a list item with less than
+   python-markdown's four spaces of indent, and a blank line there would turn
+   GitHub's tight list loose. M4's renderer fixes them without touching the
+   source. Three more lines that only *look* like ordered lists (`3) per element
+   class`, `404) -- send the HTML`) are wrapped prose and stay as they are.
+2. **Widen the outer fence** of the **28 blocks on 16 guides** that a CommonMark
+   parser closes early, not all 31 guides that `widen_nested_fences` touches.
+   The other 15 only nest runs CommonMark already reads as content. Most of the
+   28 are sweet-exp blocks whose inline C closes on a line indented two spaces,
+   which is still a closing fence. The site's HTML is byte-identical on every
+   page but one, and `widen_nested_fences` is now a no-op ahead of its removal
+   in M4. `tools/check-guide-pairs.py` learned longer fences and now **fails on
+   any three-backtick turmeric / sweet-exp / lisp block a CommonMark parser
+   would close early**. The spice READMEs have none.
+   - Along the way: `style-guide.md`'s Inline-C Style example had its Good pair
+     and Bad example spliced into one another. It's now a parse-checked pair
+     followed by a `no-check` Bad block.
+3. **Pin the unpinned install.** `.github/workflows/release-cut.yml`'s
+   deploy-spices job ran `python3 -m pip install markdown` with no version or
+   hash, which contradicts C-5. Its workspace is the `turmeric-spices` checkout,
+   which has no requirements file, so pointing at `tools/requirements.txt` alone
+   would have broken it. The job now sparse-checks-out just that file from this
+   repo, into `.turmeric-pins/` outside the deployed `web/dist`, and installs
+   with `--require-hashes`.
+4. **Fix the code span at `developing-spices-guide.md:1283`.** It wrote
+   `` \` `` inside a code span, but backslash escapes don't work in code spans,
+   so the span ended early and the browser hid `<source>` as an unknown tag.
+   It's now a double-backtick span. The other two accidental tags went away with
+   item 2.
 
 ## 3. Phase overview
 
