@@ -61,5 +61,58 @@ examples/datalog/query.tur                   cc,jit         exact
 examples/minikanren/src/main.tur             cc,jit         exact
 examples/reflected-measures/src/main.tur     cc,jit,interp  exact
 
-# --- tests/fixtures: shapes the benchmarks do not cover (picked by
-# TUR_REPR_CENSUS / --dump-cps; see wp0-baseline.md) ------------------------
+# --- tests/fixtures: shapes the benchmarks do not cover --------------------
+# Picked 2026-10-14 from a sweep of all 2826 eligible fixtures by compiler
+# output, not name: --dump-cps-coloring / --dump-cps (colored fns, and which
+# control terms they hold), an emit-c runtime-call census against a
+# (println 42) baseline, and dict-dispatch sites left after mono.  The
+# evidence per pick is in docs/artifacts/perf-audit-2026-10/wp0-baseline.md.
+# Pins are each fixture's own expected.stdout; its flags / run.args /
+# input.stdin / expected.exit are honoured as tests/run.sh does.  interp only
+# where the fixture is shallow and has no inline C, loads or requires.compiled.
+# Contract/refine fixtures are left out on purpose: a Release tur compiles the
+# checks away, so 14 of them print a different answer.
+#
+# effects: non-tail / multishot resume (M-2), handle in non-tail position
+tests/fixtures/effect-nontail-resume-under-outer/input.tur        cc,jit,interp  exact
+tests/fixtures/effect-multishot-resume-in-loop/input.tur          cc,jit,interp  exact
+tests/fixtures/handle-in-nontail-branch/input.tur                 cc,jit,interp  exact
+# constant-stack loops: tail resume, capturing letrec, tail calls (flags = --debug)
+tests/fixtures/cps-tramp-resume-deep-1m/input.tur                 cc,jit         exact
+tests/fixtures/cps-tramp-resume-multicase-500k/input.tur          cc,jit         exact
+tests/fixtures/cps-capturing-letrec-loop-deep/input.tur           cc,jit         exact
+tests/fixtures/tailcall-mutual-deep/input.tur                     cc,jit         exact
+tests/fixtures/tailcall-drop-glue-deep/input.tur                  cc,jit         exact
+tests/fixtures/tailcall-carrier-let-deep/input.tur                cc,jit         exact
+tests/fixtures/stackless-catch-unwind-deep/input.tur              cc,jit         exact
+tests/fixtures/rc-free-queue-deep-cascade/input.tur               cc,jit         exact
+# async, fibers, task groups (R-10)
+tests/fixtures/await-fresh-spawn-future-freed/input.tur           cc,jit         exact
+tests/fixtures/async-repeated-park-frees-each-turn/input.tur      cc,jit         exact
+tests/fixtures/fiber-scheduler/input.tur                          cc,jit         exact
+tests/fixtures/taskgroup-linear/input.tur                         cc,jit         exact
+# STM
+tests/fixtures/stm-tmvar-tchan/input.tur                          cc,jit         exact
+tests/fixtures/stm-stress/input.tur                               cc,jit         exact
+# HAMT / Set / Map, transients (R-5)
+tests/fixtures/set-typed-basic/input.tur                          cc,jit,interp  exact
+tests/fixtures/hamt-transient-basic/input.tur                     cc,jit         exact
+tests/fixtures/mut-map-reassign/input.tur                         cc,jit,interp  exact
+# strings (R-9)
+tests/fixtures/string-builder/input.tur                           cc,jit         exact
+# regions (R-3)
+tests/fixtures/region-with-region/input.tur                       cc,jit         exact
+tests/fixtures/region-escape-via-main-loop/input.tur              cc,jit         exact
+# dictionary dispatch that survives monomorphization (R-11)
+tests/fixtures/hkt-generic-calls-generic/input.tur                cc,jit,interp  exact
+tests/fixtures/stdlib-monad-entails-applicative/input.tur         cc,jit,interp  exact
+tests/fixtures/van-laarhoven-lens-show-deep/input.tur             cc,jit         exact
+# Saffron
+tests/fixtures/tailcall-dyn-deep/input.tur                        cc,jit         exact
+tests/fixtures/docs-introducing-saffron-examples/input.tur        cc,jit,interp  exact
+tests/fixtures/saffron-higher-order/input.tur                     cc,jit,interp  exact
+# CPS-colored by fn-value calls alone, no effect term (R-1)
+tests/fixtures/closure-let-in-self-tail-loop/input.tur            cc,jit,interp  exact
+tests/fixtures/parsec-guide-patterns/input.tur                    cc,jit         exact
+tests/fixtures/fn-value-call-join-reclaimed/input.tur             cc,jit,interp  exact
+tests/fixtures/httpd-mw-fold-many/input.tur                       cc,jit         exact
