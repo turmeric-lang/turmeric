@@ -1,0 +1,352 @@
+{
+  "schema": "web-perf/1",
+  "ts": "2026-10-15T16:31:14.335Z",
+  "sha": null,
+  "cold_loads": 5,
+  "keystrokes": 5,
+  "lsp_debounce_ms": 150,
+  "metrics": {
+    "cold_ready_ms": 1004.1450000000186,
+    "cold_first_result_ms": 1050.2100000000792,
+    "cold_monaco_ms": 582.9399999999441,
+    "cold_worker_script_ms": 19.479999999981374,
+    "cold_worker_module_ms": 67.86499999999069,
+    "cold_worker_init_ms": 148.64999999990687,
+    "first_eval_ms": 45.72500000009313,
+    "warm_ready_ms": 516.5500000000466,
+    "warm_worker_module_ms": 77.71999999997206,
+    "lsp_boot_ms": 85.97999999998137,
+    "lsp_keystroke_ms": 165.5,
+    "lsp_analysis_ms": 15.5
+  },
+  "init_phases_ms": {
+    "env_new": 1.105,
+    "turi_init": 0.005,
+    "preload_macros": 43.955,
+    "preload_native_stubs": 2.335,
+    "preload_collections": 80.455,
+    "preload_typeclasses": 16.09,
+    "pin_and_natives": 0.345,
+    "snapshot_prelude": 1.815
+  },
+  "download": {
+    "before_ready_bytes": 24443332,
+    "before_ready_requests": 373,
+    "first_visit_bytes": 27502930,
+    "first_visit_requests": 794,
+    "top_before_ready": [
+      {
+        "path": "/turmeric.wasm",
+        "bytes": 5478786
+      },
+      {
+        "path": "/assets/editor.api-DxNCHVm9.js",
+        "bytes": 2735602
+      },
+      {
+        "path": "/assets/iosevka-latin-500-normal-CQO8XnuS.woff2",
+        "bytes": 1982008
+      },
+      {
+        "path": "/assets/iosevka-latin-400-normal-7stTb90X.woff2",
+        "bytes": 1968168
+      },
+      {
+        "path": "/assets/iosevka-latin-500-normal-6hm74U-t.woff",
+        "bytes": 1918176
+      },
+      {
+        "path": "/assets/iosevka-latin-400-normal-BVqCxfc4.woff",
+        "bytes": 1912240
+      },
+      {
+        "path": "/assets/vs-DVODpzEQ.js",
+        "bytes": 1294933
+      },
+      {
+        "path": "/assets/site-xLWhuXFR.js",
+        "bytes": 585822
+      },
+      {
+        "path": "/docs-pack/index.json",
+        "bytes": 567686
+      },
+      {
+        "path": "/doc-names.json",
+        "bytes": 350574
+      },
+      {
+        "path": "/assets/try-D_S9WSew.js",
+        "bytes": 219214
+      },
+      {
+        "path": "/turmeric.js",
+        "bytes": 196842
+      },
+      {
+        "path": "/try/",
+        "bytes": 128430
+      },
+      {
+        "path": "/assets/editor-B8GMDV7_.css",
+        "bytes": 99095
+      },
+      {
+        "path": "/assets/try-BwjOUmnU.css",
+        "bytes": 97906
+      }
+    ],
+    "top_first_visit": [
+      {
+        "path": "/turmeric.wasm",
+        "bytes": 5478786
+      },
+      {
+        "path": "/assets/editor.api-DxNCHVm9.js",
+        "bytes": 2735602
+      },
+      {
+        "path": "/assets/iosevka-latin-500-normal-CQO8XnuS.woff2",
+        "bytes": 1982008
+      },
+      {
+        "path": "/assets/iosevka-latin-400-normal-7stTb90X.woff2",
+        "bytes": 1968168
+      },
+      {
+        "path": "/assets/iosevka-latin-500-normal-6hm74U-t.woff",
+        "bytes": 1918176
+      },
+      {
+        "path": "/assets/iosevka-latin-400-normal-BVqCxfc4.woff",
+        "bytes": 1912240
+      },
+      {
+        "path": "/assets/vs-DVODpzEQ.js",
+        "bytes": 1294933
+      },
+      {
+        "path": "/assets/site-xLWhuXFR.js",
+        "bytes": 585822
+      },
+      {
+        "path": "/docs-pack/index.json",
+        "bytes": 567686
+      },
+      {
+        "path": "/doc-names.json",
+        "bytes": 350574
+      },
+      {
+        "path": "/assets/try-D_S9WSew.js",
+        "bytes": 219214
+      },
+      {
+        "path": "/docs-pack/api/tur-r7rs-prelude",
+        "bytes": 203970
+      },
+      {
+        "path": "/turmeric.js",
+        "bytes": 196842
+      },
+      {
+        "path": "/try/",
+        "bytes": 128430
+      },
+      {
+        "path": "/docs-pack/api/tur-httpd",
+        "bytes": 114016
+      }
+    ],
+    "note": "response body bytes as served by vite preview (uncompressed); tools/ci/web-bundle-size.py has the gzip/brotli sizes"
+  },
+  "raw": {
+    "cold": [
+      {
+        "boot": {
+          "initWasmAt": 1415.3350000000792,
+          "script_ms": 21.665000000037253,
+          "module_ms": 149.4649999999674,
+          "init_ms": 219.7149999999674,
+          "phases": {
+            "env_new": 1.505,
+            "turi_init": 0,
+            "preload_macros": 56.73,
+            "preload_native_stubs": 4.74,
+            "preload_collections": 132.425,
+            "preload_typeclasses": 19.055,
+            "pin_and_natives": 0.44,
+            "snapshot_prelude": 4.74
+          },
+          "workerReadyAt": 1896.7150000000838,
+          "statusReadyAt": 1936.140000000014,
+          "domContentLoadedAt": 961.6300000000047,
+          "loadAt": 1033.0700000000652
+        },
+        "eval": {
+          "clickToResultMs": 64.42500000004657,
+          "resultAt": 2347.725000000093,
+          "ok": true
+        }
+      },
+      {
+        "boot": {
+          "initWasmAt": 525.6649999999208,
+          "script_ms": 49.19499999994878,
+          "module_ms": 67.86499999999069,
+          "init_ms": 161.47999999998137,
+          "phases": {
+            "env_new": 1.105,
+            "turi_init": 0.01,
+            "preload_macros": 44.19,
+            "preload_native_stubs": 1.765,
+            "preload_collections": 91.595,
+            "preload_typeclasses": 20.6,
+            "pin_and_natives": 0.345,
+            "snapshot_prelude": 1.815
+          },
+          "workerReadyAt": 1341.9249999999302,
+          "statusReadyAt": 1377.6199999999953,
+          "domContentLoadedAt": 129.82499999995343,
+          "loadAt": 206.4199999999255
+        },
+        "eval": {
+          "clickToResultMs": 44.080000000074506,
+          "resultAt": 1844.4100000000326,
+          "ok": true
+        }
+      },
+      {
+        "boot": {
+          "initWasmAt": 582.9399999999441,
+          "script_ms": 19.479999999981374,
+          "module_ms": 70.01000000000931,
+          "init_ms": 148.64999999990687,
+          "phases": {
+            "env_new": 1.73,
+            "turi_init": 0.015,
+            "preload_macros": 42.48,
+            "preload_native_stubs": 2.41,
+            "preload_collections": 79.655,
+            "preload_typeclasses": 16.09,
+            "pin_and_natives": 0.445,
+            "snapshot_prelude": 5.63
+          },
+          "workerReadyAt": 889.3699999999953,
+          "statusReadyAt": 926.2249999999767,
+          "domContentLoadedAt": 192.98499999998603,
+          "loadAt": 258.3050000000512
+        },
+        "eval": {
+          "clickToResultMs": 41.17999999993481,
+          "resultAt": 1453.8199999999488,
+          "ok": true
+        }
+      },
+      {
+        "boot": {
+          "initWasmAt": 441.82499999995343,
+          "script_ms": 9.135000000009313,
+          "module_ms": 63.73499999998603,
+          "init_ms": 101.48499999998603,
+          "phases": {
+            "env_new": 1.015,
+            "turi_init": 0.005,
+            "preload_macros": 31.06,
+            "preload_native_stubs": 1.41,
+            "preload_collections": 54.565,
+            "preload_typeclasses": 11.88,
+            "pin_and_natives": 0.29,
+            "snapshot_prelude": 1.215
+          },
+          "workerReadyAt": 690.7049999999581,
+          "statusReadyAt": 760.5200000000186,
+          "domContentLoadedAt": 108.70499999995809,
+          "loadAt": 171.97499999997672
+        },
+        "eval": {
+          "clickToResultMs": 45.72500000009313,
+          "resultAt": 2091.055000000051,
+          "ok": true
+        }
+      },
+      {
+        "boot": {
+          "initWasmAt": 657.0450000000419,
+          "script_ms": 14.090000000083819,
+          "module_ms": 66.95499999995809,
+          "init_ms": 142.34499999997206,
+          "phases": {
+            "env_new": 0.98,
+            "turi_init": 0.005,
+            "preload_macros": 43.955,
+            "preload_native_stubs": 2.335,
+            "preload_collections": 80.455,
+            "preload_typeclasses": 12.645,
+            "pin_and_natives": 0.325,
+            "snapshot_prelude": 1.595
+          },
+          "workerReadyAt": 957.1650000000373,
+          "statusReadyAt": 1004.1450000000186,
+          "domContentLoadedAt": 282.7600000000093,
+          "loadAt": 344.6450000000186
+        },
+        "eval": {
+          "clickToResultMs": 46.065000000060536,
+          "resultAt": 1539.420000000042,
+          "ok": true
+        }
+      }
+    ],
+    "warm": {
+      "boot": {
+        "initWasmAt": 278.25,
+        "script_ms": 9.515000000130385,
+        "module_ms": 77.71999999997206,
+        "init_ms": 106.03000000002794,
+        "phases": {
+          "env_new": 1.04,
+          "turi_init": 0.005,
+          "preload_macros": 35.745,
+          "preload_native_stubs": 1.88,
+          "preload_collections": 53.755,
+          "preload_typeclasses": 11.595,
+          "pin_and_natives": 0.3,
+          "snapshot_prelude": 1.665
+        },
+        "workerReadyAt": 499.3300000000745,
+        "statusReadyAt": 516.5500000000466,
+        "domContentLoadedAt": 67.96000000019558,
+        "loadAt": 151.43000000016764
+      },
+      "eval": {
+        "clickToResultMs": 32.33499999996275,
+        "resultAt": 1030.6100000001024,
+        "ok": true
+      },
+      "bytesAtReady": null,
+      "serviceWorkerReady": true
+    },
+    "lsp": {
+      "boot": {
+        "ok": true,
+        "ms": 85.97999999998137
+      },
+      "settled": true,
+      "breakMs": [
+        169.0549999999348,
+        165.90500000002794,
+        165.21999999997206,
+        165.3649999999907,
+        165.29000000003725
+      ],
+      "fixMs": [
+        166.31000000005588,
+        165.18500000005588,
+        165.06499999994412,
+        165.6350000000093,
+        166.23499999986961
+      ]
+    }
+  }
+}

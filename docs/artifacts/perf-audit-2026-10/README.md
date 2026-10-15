@@ -1,6 +1,10 @@
 # Performance audit 2026-10 -- artifacts
 
 Measurements for [performance-audit-plan](../../upcoming/performance-audit-plan.md).
+**Start at [summary.md](summary.md)**: the audit's result on one page -- what
+to build next across every surface, ranked, and the definition of done closed
+item by item.
+
 One file per work package (`wp0-*.md`, `wp1-*.md`, ...), raw CSV/JSONL beside
 it. Every table in those files carries the header below or names a different
 one; a number without a header is not a result.

@@ -134,11 +134,47 @@ still pays the full 100 ms preload.
 | of which the client's debounce | 150 ms (`lsp-client.js` `DEFAULT_DEBOUNCE_MS`) |
 | analysis + transport | **~16 ms** |
 
-This run's repeat visit was served by the HTTP cache alone: on a loopback
+That CI run's repeat visit was served by the HTTP cache alone: on a loopback
 host the app skips the service worker unless the URL carries `?sw=1`
-(`web/README.md`), so the run measured neither a service-worker repeat visit
-nor the worker's install-time precache. The spec now loads `/try/?sw=1`, so
-the next web-smoke run's `web-perf` artifact carries both.
+(`web/README.md`). The spec now loads `/try/?sw=1`; the section below has the
+service-worker numbers, from the WP0 box.
+
+## On the WP0 box, with the service worker
+
+Added at the audit's close-out, once Node 22, emsdk 6.0.10 and Playwright's
+Chromium were installed on the baseline box (a work disk on D:; built the way
+the web-smoke job builds, from `main` @ `58b985ca8`; the same 5,478,786-byte
+`turmeric.wasm`). Two sweeps of five cold loads each, `?sw=1`. Raw:
+[wp5-web-perf-box-1.json](wp5-web-perf-box-1.json),
+[wp5-web-perf-box-2.json](wp5-web-perf-box-2.json).
+
+| | sweep 1 | sweep 2 | CI runner (above) |
+| --- | ---: | ---: | ---: |
+| cold: Ready | 1004 ms | 852 ms | 918 ms |
+| cold: Monaco up (`initWasm` starts) | 583 ms | 509 ms | 533 ms |
+| cold: `turi_wasm_init` | 149 ms | 146 ms | 98 ms |
+| first result after Run | 46 ms | 51 ms | 29 ms |
+| **repeat visit through the service worker: Ready** | **517 ms** | **506 ms** | (504 ms, HTTP cache) |
+| LSP keystroke -> diagnostics (analysis) | 166 ms (16) | 167 ms (17) | 166 ms (16) |
+
+The box is slower per core than the hosted runner on the preload (collections
+80 ms, macros 45 ms against 53 and 33), and otherwise agrees with it.
+
+- **The service worker does not make a repeat visit faster than the HTTP
+  cache:** 506-517 ms against 504. The repeat visit is Monaco (~280 ms from the
+  worker's cache), the wasm module (~78 ms) and the preload (~106 ms), whoever
+  serves the bytes -- which is why W-2's build-time prelude is the repeat
+  visit's lever, not caching.
+- **What the worker downloads on a first visit**: its install precaches the
+  shell, the docs pack (6.73 MB) and every `url(/assets/...)` the bundled CSS
+  names -- which, through the `@fontsource` packages' `@font-face` rules, is
+  **all 98 font files: 49 `.woff2` (2.63 MB) and 49 `.woff` (4.71 MB)**, every
+  unicode-range subset of every family and weight the CSS imports, in both
+  formats. A browser that has a service worker reads woff2, and a page only
+  fetches the subsets its text needs, so the `.woff` half is downloaded and
+  never used. With it, the spec counts ~27.5 MB of response bodies over a first
+  visit, against 12.7 MB before Ready without the worker (that figure counts
+  a file twice when the page and the precache both fetch it).
 
 ## Not a problem (measured, fine)
 
@@ -154,7 +190,7 @@ the next web-smoke run's `web-perf` artifact carries both.
 
 | # | change | buys | effort |
 | --- | --- | --- | --- |
-| 1 | **Subset the Iosevka fonts** (self-hosted ASCII + the symbols the UI uses, one weight if 500 is cosmetic) | most of ~1.98 MB, 40% of a first visit's bytes | small |
+| 1 | **Subset the Iosevka fonts** (self-hosted ASCII + the symbols the UI uses, one weight if 500 is cosmetic), **and precache only woff2** (`precacheShellAssets` in `web/public/sw.js` takes every `url()` the CSS names) | most of ~1.98 MB a first visit needs before Ready, and the 4.71 MB of `.woff` the service worker fetches and never uses | small |
 | 2 | **Take the 168 non-startup stdlib files out of the wasm**; fetch one on first `load` (a lazy FS node or a second data file) | ~0.48 MB brotli (~30% of the wasm transfer) and 2.8 MB of file system in each of two workers; `docstrings.tur` (W-1, 118 KB) comes with it | medium |
 | 3 | **Pre-compress `turmeric.wasm` at brotli -q 11** at build and serve it with `Content-Encoding: br` from `worker.js` | 0.37 MB, 23% of the wasm transfer | small-medium |
 | 4 | **Start the eval worker and the `doc-names.json` fetch beside the Monaco import**, not after it | ~0.25-0.4 s of a 0.9 s local Ready off the critical path; on a network, the wasm download overlaps Monaco's | small |
@@ -164,7 +200,6 @@ the next web-smoke run's `web-perf` artifact carries both.
 
 - A real network: the transfer figures are computed from bytes, not
   timed. A throttled Playwright run would time them.
-- The service-worker repeat visit and the precache's bytes (above): the next
-  web-smoke run measures them.
 - Mobile, other browsers, a large editor buffer under the LSP.
-- The WP0 box: the same spec runs there once Node and emsdk are installed.
+- The precache's bytes per file, deduplicated: the spec sums response bodies
+  by path, so a file the page and the worker both fetch counts twice.
