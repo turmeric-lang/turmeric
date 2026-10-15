@@ -751,6 +751,120 @@ CC=clang TUR_CC_FLAGS="-O3 -march=native" ./benchmarks/run-benchmarks.sh
   [Execution engines](#execution-engines-interpreter-vs-tur-jit-vs-cc--o2)
   above.
 
+### Compiler timings (`--timings`)
+
+`--timings` answers "why is `tur build` slow?" -- where the *compiler's* time
+goes, as opposed to the program's.  It works on any compiling command
+(`build`, `check`, `emit-c`, `run`, `jit`):
+
+```sh
+tur build --timings f.tur               # table on stderr
+tur build --timings=prof.json f.tur     # table on stderr + JSON to prof.json
+tur build --timings prof.json f.tur     # same; the bare form takes the next
+                                        # argument only if it ends in .json
+                                        # or is /dev/... (else it is an input)
+tur check --timings /dev/stdout f.tur   # JSON on stdout (--timings=- too)
+```
+
+Each phase is a zone the driver or elaborator enters and leaves:
+
+| phase | what is charged to it |
+|---|---|
+| `read` | the reader, for every file: the entry, the auto-loaded stdlib, imports, `(load ...)` |
+| `sweet` | the sweet-exp preprocessor that runs before the reader |
+| `module-load` | finding, reading and splicing module files -- the stdlib autoload, `import`, `(load ...)` -- but not their parse (`read`) or their elaboration (`elaborate`) |
+| `macro-expand` | computing an expansion; elaborating the result is `elaborate` |
+| `elaborate` | `PASS_ELABORATE`, less everything else in this list it contains |
+| `typeclass` | `defclass`/`definstance`, method dispatch, instance resolution |
+| `kind-check`, `effect-lower`, `effect-row`, `cps`, `borrow-check` | the core passes of the same names |
+| `refine` | refinement obligations: frame checks, call-site crossings, the solver |
+| `mono` | the by-value spec resolution pass (monomorphs instantiated inline are charged to `elaborate` or `emit`, wherever that happens) |
+| `emit` | producing C, including the driver's split-preamble swap and the JIT's prune |
+| `cc` | wall time the driver spends waiting on toolchain subprocesses (cc, the link, nm) |
+| `jit` | `tur jit`: c2mir, the MIR link, and tearing the context down |
+| `run` | the program's own execution under `tur run` / `tur jit` (not compile time; the report says so) |
+| `other` | what no zone claims: argument parsing, path and manifest resolution, writing outputs |
+
+The times are **exclusive**: a phase's `self ms` is time spent in it and in
+nothing nested inside it.  Elaboration recursively loads modules which read
+files which are elaborated in turn, and the timer keeps an explicit zone
+stack and charges each stretch of time to the innermost open zone, so the
+phases are a partition of the wall clock: `sum(self_ms) == wall_ms` by
+construction, and the percentages add to 100.  An example table, `tur build`
+of `benchmarks/triangle/fib.tur` on a Release `tur` (x86-64 Linux, warm
+caches, one run -- illustrative, not a benchmark):
+
+```
+tur --timings: tur build --timings benchmarks/triangle/fib.tur -o /tmp/fib
+  phase              self ms   self %
+  read                 2.463      1.0
+  module-load          0.939      0.4
+  macro-expand         0.018      0.0
+  elaborate            7.552      3.1
+  typeclass            1.401      0.6
+  kind-check           0.082      0.0
+  effect-lower         0.003      0.0
+  effect-row           0.906      0.4
+  cps                  0.029      0.0
+  borrow-check         0.148      0.1
+  refine               0.204      0.1
+  mono                 0.001      0.0
+  emit                12.279      5.0
+  cc                 217.705     88.8
+  other                1.411      0.6
+  total (wall)       245.142    100.0
+  (exclusive time: a phase's own time, nested phases excluded; 1162 clock reads)
+```
+
+The table leaves out phases that took no time; the JSON lists every phase,
+in the order above, as the `tur-profile/1` document of kind `compiler`:
+
+```json
+{
+  "schema": "tur-profile/1",
+  "kind": "compiler",
+  "tur_version": "0.65.1",
+  "command": "tur build --timings=prof.json f.tur",
+  "started_utc": "2026-10-14T18:54:13Z",
+  "wall_ms": 245.1420,
+  "notes": [],
+  "clock_reads": 1162,
+  "phases": [
+    {"name": "read", "self_ms": 2.4630, "self_pct": 1.0047},
+    ...
+    {"name": "other", "self_ms": 1.4110, "self_pct": 0.5756}
+  ]
+}
+```
+
+`notes` carries the run's honesty caveats, and the table prints them above
+the phases: a sanitized `tur` (the Debug build -- **profile a Release `tur`**,
+ASan's bookkeeping skews every phase), a Debug build's assertions (each core
+pass also re-verifies kind info), a `run` phase present, or an exit from
+inside a phase.  `clock_reads` is the timer's own cost: one monotonic clock
+read per zone change, so a few thousand of them are well under a millisecond.
+With the flag off every hook is a single branch, and the emitted C is
+byte-identical either way.
+
+Two things the numbers do not say:
+
+- `cc` is wall time, not CPU.  A `#lang r7rs` build compiles its library unit
+  in parallel pieces; those overlap, and the phase is how long the driver
+  waited, not the CPU they burned.
+- The `tur worker` fixture evaluator re-applies `--timings` in each forked
+  fixture child, which then reports its own compile only; nothing is merged
+  across fixtures and the worker itself is not profiled.  `tur build` (single
+  file or project) runs in one process and has no such children -- its only
+  subprocesses are the toolchain's, which is `cc`.
+
+`--timings` changes no program's meaning, so it is a plain flag, not an
+`--enable=` experiment.  The design and what comes next (per-module timings,
+the program-side `--profile`) are in
+[profiling-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/profiling-plan.md).
+`tur jit --timing-json <path>` still writes its own
+`{"compile_ms", "run_ms", "engine"}` record for the benchmark harness,
+unchanged.
+
 ## Performance checklist
 
 Use this list before calling a hot path done:

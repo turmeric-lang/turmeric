@@ -357,6 +357,8 @@ audit answered it for r7rs, and settle C-2.
   zone stack; a table to stderr and JSON to a path). Absorb
   `--timing-json` as that plan specifies. This is the one piece of tooling
   the audit builds, because every number in this package depends on it.
+  **Landed 2026-10-14** (profiling-plan C0+C1; `--timing-json` left as is,
+  its absorption being that plan's C4).
 - Run `--timings` over the corpus on the Release `tur`; callgrind the top
   three programs per zone. Expect C-3's three open hot spots to reappear.
 - Cost the prelude (C-1): time and bytes of the 34 auto-loaded files per

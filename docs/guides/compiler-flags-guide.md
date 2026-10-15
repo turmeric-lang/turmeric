@@ -126,6 +126,16 @@ and only when a `defer` was live. A panic now names its own `.tur` file and
 line (`panic at boom.tur:3: ...`); for a stack, build with `--debug` and use
 `tur debug` or lldb (`docs/guides/debugging-guide.md`).
 
+### `--timings[=<path>]`
+
+Prints where the compile's time went, phase by phase (read, module-load,
+macro-expand, elaborate, typeclass, each core pass, refine, emit, cc, ...),
+as exclusive time that sums to the wall clock; with a path it also writes
+the same as `tur-profile/1` JSON.  Works on `build`, `check`, `emit-c`,
+`run` and `jit`, and changes nothing that is compiled.  See
+[performance-guide.md](performance-guide.md#compiler-timings---timings) for
+the phases, the JSON shape and how to read it.
+
 ### `--dump-kinds`
 
 Prints the kind of every bound type to stdout after the kind-checking
