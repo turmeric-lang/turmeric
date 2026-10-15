@@ -403,3 +403,13 @@ its continuation param", which the clone does not export. The design note
 above stands. One more constraint is now on record: a sum-param mask says
 nothing about closures inside the sum (see the split-out report), so it
 cannot be reused for the continuation's env either.
+
+## Re-measured 2026-10-15 (performance audit WP3) -- 16 B smaller
+
+Same sweep, same procedure, both root modes
+([wp3-memory](../artifacts/perf-audit-2026-10/wp3-memory.md#m-3-leak-residue)):
+**1968 B** with stack and register roots off (the comparable number; 1984 B
+on 2026-10-08), 1919 B with LSan's default roots. The one row that moved is
+`hkt-stdlib-result-ok-biased`, 64 -> 48 B; every other row matches
+2026-10-08's strict column byte for byte. `tests/run-leak-check.sh`: 212
+passed, 0 failed, 4 known-open.
