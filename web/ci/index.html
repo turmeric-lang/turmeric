@@ -82,6 +82,9 @@
         <button type="button" class="ci-tab" role="tab"
                 id="ci-tab-reports" aria-selected="false"
                 aria-controls="ci-panel-reports" data-tab="reports">Reports</button>
+        <button type="button" class="ci-tab" role="tab"
+                id="ci-tab-bench" aria-selected="false"
+                aria-controls="ci-panel-bench" data-tab="bench">Benchmarks</button>
       </div>
       <div class="ci-field ci-field--range">
         <label class="ci-field-label" for="ci-range">Range</label>
@@ -210,6 +213,31 @@
         <div class="ci-legend" id="ci-loc-legend"></div>
       </section>
 
+    </div>
+
+    <!-- ── Benchmarks tab ─────────────────────────────────────────────── -->
+    <!-- performance-audit-plan WP6: the nightly arm64 workflow's tracked
+         programs (benchmarks/audit/tracked.txt), from /api/ci-bench. One
+         runner shape, so no environment picker; the Range filter applies. -->
+    <div class="ci-tab-panel" id="ci-panel-bench" role="tabpanel"
+         aria-labelledby="ci-tab-bench" hidden>
+      <section class="ci-panel">
+        <div class="ci-panel-head">
+          <div>
+            <h2 class="ci-panel-title">Nightly benchmarks</h2>
+            <p class="ci-panel-sub" id="ci-bench-sub"></p>
+          </div>
+          <div class="ci-field">
+            <label class="ci-field-label" for="ci-bench-view">View</label>
+            <select class="ci-select" id="ci-bench-view"></select>
+          </div>
+        </div>
+        <div class="ci-chart-wrap">
+          <div class="ci-chart" id="ci-bench-chart"></div>
+          <div class="ci-tooltip" id="ci-bench-tooltip" hidden></div>
+        </div>
+        <div class="ci-legend" id="ci-bench-legend"></div>
+      </section>
     </div>
 
     <!-- ── Spices tab ─────────────────────────────────────────────────── -->

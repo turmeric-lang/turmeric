@@ -1,0 +1,30 @@
+# Nightly tracked benchmarks (docs/upcoming/performance-audit-plan.md, WP6).
+#
+# The same format as corpus.txt, read by the same runner
+# (benchmarks/audit/run-corpus.py --corpus benchmarks/audit/tracked.txt), and
+# turned into ci-metrics rows by benchmarks/audit/bench-rows.py in the nightly
+# arm64 workflow's `bench` job.  The pins are the corpus's.
+#
+# At most ten programs, each run >~1 s on at least one listed engine on the
+# WP0 box, so a hosted runner's jitter is a small fraction of the number.  An
+# engine is listed only where its run is long enough to read, plus cc where the
+# compile time and binary size are worth a row.  WP0 run times (NUC 9 Pro):
+#
+#   loop-sum                interp 1.5 s                    -- the interpreter's loop throughput
+#   bench-saffron-dyn-tail  cc 0.9 s, jit 3.3 s, interp 3.2 s -- dynamic calls; the JIT's struct-copy gap (WP4)
+#   cps-tramp-resume-8m     cc 0.8 s, jit 1.0 s             -- the CPS trampoline (effects)
+#   region-rounds-100k      cc 0.8 s, jit 1.1 s             -- region brackets (WP2 R-3)
+#   mut-map-reassign-1m     cc 1.2 s, jit 1.8 s             -- MutableMap writes
+#
+# (cc is listed at 0.8-0.9 s where the same program's JIT row is tracked: the
+# pair is the comparison.)  Nothing whose every engine runs under ~0.8 s is
+# listed, which is why R-1's closure loop (0.4-0.5 s) is not here.
+#
+# Change the list deliberately: a program dropped here loses its history's
+# continuity on /ci.
+
+benchmarks/triangle/loop-sum.tur                    interp          exact
+benchmarks/bench-saffron-dyn-tail.tur               cc,jit,interp   exact   timeout=300
+benchmarks/audit/sized/cps-tramp-resume-8m.tur      cc,jit          exact   timeout=300
+benchmarks/audit/sized/region-rounds-100k.tur       cc,jit          exact   timeout=300
+benchmarks/audit/sized/mut-map-reassign-1m.tur      cc,jit          exact   timeout=300

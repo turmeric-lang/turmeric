@@ -205,6 +205,72 @@ jobs:
           echo "::error::the full-size requires.stress fixtures failed or did not all run. Their per-PR twins run 1e6; a failure only here, at 1e7, means the tail-call bound held at 1e6 and broke further out. stress.log in the uploaded artifact has both harnesses' output."
           exit 1
 
+  # performance-audit-plan WP6: the tracked benchmarks, as a trend.
+  #
+  # benchmarks/audit/tracked.txt names at most ten programs that run >~1 s on
+  # the WP0 box, so a hosted runner's jitter is a small fraction of each
+  # number.  WP0's runner times them serially, best of 3 after a warm-up, and
+  # refuses any run whose output differs from its pin; bench-rows.py turns that
+  # into rows and checks each against the trailing median of its own last
+  # nights on this runner shape.  A row over 1.5x prints a ::warning:: (a
+  # ::notice:: when the reps disagree by more than 10% -- noisy, not a
+  # regression).  Tripwires, never gates: nothing here fails the job but a
+  # build or runner error.
+  #
+  # Its own runner, not a step after the suites: the suites job is an hour of
+  # ASan on the same three cores, and a benchmark next to it measures it.
+  # Release + JIT, because a Debug/ASan tur's numbers mean nothing (plan
+  # section 6).
+  bench:
+    name: Tracked benchmarks (arm64, Release)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: brew install libedit || true
+
+      - name: Configure (Release + JIT)
+        run: cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DTUR_JIT=ON -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      # ALL targets: `tur build` links libturt_runtime.a / libturt_preamble.a,
+      # which `--target tur` does not produce.
+      - name: Build
+        run: cmake --build build-release -j
+
+      # The tripwire's history: this and last year's bench rows from ci-metrics.
+      # A first night (no file yet) just has no bounds.
+      - name: Fetch the benchmark history
+        continue-on-error: true
+        run: |
+          git fetch --depth=1 origin ci-metrics:refs/remotes/origin/ci-metrics
+          y=$(date -u +%Y)
+          for yr in "$((y - 1))" "$y"; do
+            git show "origin/ci-metrics:bench-${yr}.jsonl" >> bench-history.jsonl 2>/dev/null || true
+          done
+          echo "history: $(wc -l < bench-history.jsonl 2>/dev/null || echo 0) row(s)"
+
+      - name: Run the tracked benchmarks (serial, best of 3)
+        run: python3 benchmarks/audit/run-corpus.py --tur ./build-release/tur
+          --corpus benchmarks/audit/tracked.txt --reps 3 --out bench-out
+
+      - name: Rows and tripwires
+        if: always()
+        run: python3 benchmarks/audit/bench-rows.py bench-out --out bench.jsonl
+          --history bench-history.jsonl
+
+      - name: Upload benchmark rows
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-bench-${{ github.run_id }}
+          path: |
+            bench.jsonl
+            bench-out/
+          if-no-files-found: warn
+          retention-days: 30
+
   # Append the nightly's rows to the ci-metrics branch, the same way ci.yml's
   # `publish-timings` job does for a main push.  ci.yml's publisher only sees
   # its own run's artifacts, so without this the full-matrix arm64 durations
@@ -216,8 +282,8 @@ jobs:
   # timings are the interesting ones.  main only: a workflow_dispatch from a
   # branch measures that branch, and the trend is main's.
   publish-timings:
-    name: Publish suite timings
-    needs: suites
+    name: Publish suite timings and benchmarks
+    needs: [suites, bench]
     if: always() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -243,12 +309,25 @@ jobs:
           name: nightly-arm64-${{ github.run_id }}
           path: nightly-artifact
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: nightly-bench-${{ github.run_id }}
+          path: bench-artifact
+
+      # One commit for both: publish-timings.sh takes the bench rows with
+      # --bench, and publishes them even on a night the suites left no rows.
       - name: Publish
         run: |
           set -euo pipefail
-          if [ ! -s nightly-artifact/timings.jsonl ]; then
-            echo "::warning::no nightly suite timings collected; nothing to publish"
+          t=nightly-artifact/timings.jsonl
+          b=bench-artifact/bench.jsonl
+          if [ ! -s "$t" ] && [ ! -s "$b" ]; then
+            echo "::warning::no nightly suite timings or benchmark rows collected; nothing to publish"
             exit 0
           fi
-          echo "publishing $(wc -l < nightly-artifact/timings.jsonl) nightly row(s)"
-          bash tools/ci/publish-timings.sh nightly-artifact/timings.jsonl
+          [ -s "$t" ] || echo "::warning::no nightly suite timings collected; publishing the benchmark rows alone"
+          [ -s "$b" ] || echo "::warning::no nightly benchmark rows collected; publishing the suite timings alone"
+          rows() { if [ -s "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+          echo "publishing $(rows "$t") suite row(s), $(rows "$b") bench row(s)"
+          bash tools/ci/publish-timings.sh "$t" --bench "$b"

@@ -242,6 +242,10 @@ def measure(argv, reps, timeout, scratch, check=None, pin=None, stdin="-", ok_rc
         "reps": len(walls),
         "wall_ms_min": round(min(walls) * 1000, 2),
         "wall_ms_median": round(statistics.median(walls) * 1000, 2),
+        # check_reproducibility.py's CV (sample stdev / mean); WP6's nightly
+        # marks a row above 10% noisy instead of reading it as a regression.
+        "wall_cv": (round(statistics.stdev(walls) / statistics.mean(walls), 4)
+                    if len(walls) > 1 and statistics.mean(walls) > 0 else ""),
         "user_ms": round(best[1] * 1000, 2) if best else "",
         "sys_ms": round(best[2] * 1000, 2) if best else "",
         "maxrss_kib": peak,
@@ -373,7 +377,7 @@ def main():
     tur_stamp = stamp(tur)
 
     fields = ["program", "engine", "phase", "status", "reps", "wall_ms_min",
-              "wall_ms_median", "user_ms", "sys_ms", "maxrss_kib", "bytes"]
+              "wall_ms_median", "wall_cv", "user_ms", "sys_ms", "maxrss_kib", "bytes"]
     rows = []
     csv_path = os.path.join(out, "rows.csv")
     with open(csv_path, "w", newline="") as fcsv:
