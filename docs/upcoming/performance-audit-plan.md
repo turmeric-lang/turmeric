@@ -528,6 +528,19 @@ engine's fixed cost.
 
 ### WP6 -- Regression tracking in CI
 
+**Status: done 2026-10-15.** The nightly arm64 workflow's `bench` job runs
+`benchmarks/audit/tracked.txt` (five programs, ten program/engine pairs, each
+over ~1 s on some engine) through WP0's runner on a Release `tur`, serial,
+best of 3, output-checked; `benchmarks/audit/bench-rows.py` writes run time
+per engine plus the cc leg's build time, front-end time and binary size to the
+ci-metrics branch's own `bench-<year>.jsonl` (`publish-timings.sh --bench`),
+and /ci's Benchmarks tab plots them. Tripwire: 1.5x a series' trailing
+14-night median prints a `::warning::`; a row whose reps' CV is over 10% is
+marked noisy and gets a `::notice::` instead. The nightly arm64 suite rows were
+already plotted (the Tests tab's macOS environment, since
+[nightly-arm64-timings-not-on-ci-metrics](../archive/nightly-arm64-timings-not-on-ci-metrics.md)).
+The performance guide's "What CI tracks, nightly" says how to read it.
+
 **Goal.** Make the baseline a trend, not a snapshot, without pretending a
 hosted runner is a quiet machine.
 

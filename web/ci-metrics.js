@@ -24,6 +24,20 @@ import { GITHUB_URL } from './repo.js';
 const API = '/api/ci-timings';
 const LOC_API = '/api/ci-loc';
 const DOCS_API = '/api/ci-docs';
+const BENCH_API = '/api/ci-bench';
+
+// The nightly benchmarks (performance-audit-plan WP6): one chart per view,
+// each at most five series -- the palette's cap -- so a view is one metric on
+// one engine. [key, title, metric, engine].
+const BENCH_VIEWS = [
+  ['run_ms/jit', 'Run time: tur jit', 'run_ms', 'jit'],
+  ['run_ms/cc', 'Run time: the tur build binary', 'run_ms', 'cc'],
+  ['run_ms/interp', 'Run time: tur --interpret', 'run_ms', 'interp'],
+  ['build_ms/cc', 'Build time: tur build (front end + cc)', 'build_ms', 'cc'],
+  ['emit_ms/cc', 'Front end: tur emit-c', 'emit_ms', 'cc'],
+  ['binary_bytes/cc', 'Binary size', 'binary_bytes', 'cc'],
+];
+const BENCH_DEFAULT = 'run_ms/jit';
 
 // Fixed categorical order from vars.css. Assigned by suite name, never by
 // rank, so filtering the selection does not repaint the survivors. Five is the
@@ -95,7 +109,7 @@ const SPICE_SERIES = [
   ['spices', 'Spices', '--chart-1'],
 ];
 
-const TABS = ['tests', 'counts', 'code', 'spices', 'reports'];
+const TABS = ['tests', 'counts', 'code', 'spices', 'reports', 'bench'];
 
 // Ranges the 8-day recent window can answer. Anything wider needs the full log.
 const RECENT_RANGES = ['1d', '7d'];
@@ -128,6 +142,11 @@ const state = {
   docs: [],
   docsKeys: new Set(DOCS_DEFAULT),
   docsError: null,
+  // Nightly benchmarks: their own NDJSON file (/api/ci-bench), one row per
+  // program, engine and metric per night, from the nightly arm64 workflow.
+  bench: [],
+  benchError: null,
+  benchView: BENCH_DEFAULT,
   // Which tab is visible. Tests is the default; the others render their charts
   // on first reveal so the SVG picks up the real panel width instead of the
   // 860px fallback a hidden panel forces.
@@ -196,6 +215,22 @@ function fmtCountTick(n) {
   if (a >= 1e6) return `${trim(n / 1e6)}M`;
   if (a >= 1e3) return `${trim(n / 1e3)}k`;
   return String(Math.round(n));
+}
+
+// A binary's size, decimal units (what `ls -l` and the WP3/WP5 tables use).
+function fmtBytes(n) {
+  if (n == null || Number.isNaN(n)) return '--';
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)} MB`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)} KB`;
+  return `${Math.round(n)} B`;
+}
+
+function fmtBytesTick(n) {
+  if (n === 0) return '0';
+  const trim = (x) => String(+x.toFixed(1));
+  if (n >= 1e6) return `${trim(n / 1e6)}MB`;
+  if (n >= 1e3) return `${trim(n / 1e3)}KB`;
+  return `${Math.round(n)}B`;
 }
 
 // `AppleClang-21.0.0` -> `AppleClang 21`, `GNU-13.3.0` -> `GNU 13.3`.
@@ -319,6 +354,11 @@ function docsRows() {
   return state.docs.filter((r) => r.ts >= cutoff);
 }
 
+function benchRows() {
+  const cutoff = rangeCutoff(state.bench);
+  return state.bench.filter((r) => r.ts >= cutoff);
+}
+
 // The newest docs row that actually carries `key`, for the headline numbers:
 // the newest row may predate the field (published before it shipped) or lack the
 // spices checkout, and "--" there is more honest than a zero.
@@ -419,6 +459,7 @@ function readURL() {
     loc: q.get('loc') ? q.get('loc').split(',').filter(Boolean) : null,
     docs: q.get('docs') ? q.get('docs').split(',').filter(Boolean) : null,
     tab: q.get('tab'),
+    bench: q.get('bench'),
   };
 }
 
@@ -441,6 +482,7 @@ function writeURL() {
   const docs = DOCS_SERIES.map(([k]) => k).filter((k) => state.docsKeys.has(k));
   if (docs.join(',') !== DOCS_DEFAULT.join(',')) q.set('docs', docs.join(','));
   if (state.tab !== 'tests') q.set('tab', state.tab);
+  if (state.benchView !== BENCH_DEFAULT) q.set('bench', state.benchView);
   history.replaceState(null, '', q.toString() ? `?${q}` : location.pathname);
 }
 
@@ -1173,6 +1215,102 @@ function renderLocLegend() {
       writeURL();
     };
   }
+}
+
+// ── RENDER: NIGHTLY BENCHMARKS ──────────────────────────────────────────────
+
+// A program's short name: the file, or a fixture's directory for input.tur.
+function benchLabel(program) {
+  const parts = String(program).split('/');
+  let stem = parts[parts.length - 1].replace(/\.tur$/, '');
+  if ((stem === 'input' || stem === 'main') && parts.length > 1) stem = parts[parts.length - 2];
+  return stem;
+}
+
+function renderBench() {
+  const host = document.getElementById('ci-bench-chart');
+  const sub = document.getElementById('ci-bench-sub');
+  const legend = document.getElementById('ci-bench-legend');
+  const pick = document.getElementById('ci-bench-view');
+  if (!host) return;
+
+  if (!pick.options.length) {
+    pick.innerHTML = BENCH_VIEWS.map(([key, title]) =>
+      `<option value="${esc(key)}">${esc(title)}</option>`).join('');
+    pick.onchange = () => {
+      state.benchView = pick.value;
+      renderBench();
+      writeURL();
+    };
+  }
+  pick.value = state.benchView;
+
+  if (state.benchError) {
+    host.innerHTML = `<div class="ci-empty">${esc(state.benchError)}</div>`;
+    sub.textContent = '';
+    legend.innerHTML = '';
+    return;
+  }
+
+  const [, title, metric, engine] =
+    BENCH_VIEWS.find(([key]) => key === state.benchView) ?? BENCH_VIEWS[0];
+  // One runner shape, the newest row's: a number from a different (os, nproc)
+  // is not comparable, the same rule the Tests tab's environment lock keeps.
+  const latest = state.bench[state.bench.length - 1];
+  const shape = (r) => `${r.os}|${r.nproc}`;
+  const rows = benchRows().filter((r) => shape(r) === shape(latest)
+    && r.metric === metric && r.engine === engine
+    && r.status === 'ok' && r.value != null);
+  const programs = [...new Set(rows.map((r) => r.program))].sort().slice(0, 5);
+  const xs = [...new Set(rows.map((r) => r.ts))].sort((a, b) => a - b);
+  const noisy = rows.filter((r) => r.noisy).length;
+
+  sub.textContent = `Nightly, ${latest.os ?? '?'} with ${latest.nproc ?? '?'} cores,`
+    + ` Release tur, best of ${latest.reps ?? 3} after a warm-up, output checked against`
+    + ` its pin. ${rows.length} measurement${rows.length === 1 ? '' : 's'} in range`
+    + `${noisy ? `, ${noisy} noisy (reps disagree by more than 10%)` : ''}.`
+    + ' A night above 1.5x its trailing median is flagged on the nightly run.';
+
+  if (xs.length < 2) {
+    host.innerHTML = `<div class="ci-empty">${rows.length
+      ? 'Only one night in this range -- widen it, or wait for a second night.'
+      : 'Nothing measured for this view yet.'}</div>`;
+    legend.innerHTML = '';
+    return;
+  }
+
+  const series = programs.map((program, i) => ({
+    key: program,
+    label: benchLabel(program),
+    color: `var(--chart-${i + 1})`,
+    pts: rows.filter((r) => r.program === program)
+      .map((r) => ({ x: r.ts, y: r.value, sha: r.sha })),
+  }));
+  const bytes = metric === 'binary_bytes';
+
+  drawLineChart({
+    host,
+    tooltip: document.getElementById('ci-bench-tooltip'),
+    idPrefix: 'ci-bench',
+    series,
+    xs,
+    ticksY: (lo, hi) => (bytes ? decimalTicks(lo, hi, 5) : niceTicks(lo, hi, 5)),
+    fmtY: bytes ? fmtBytes : fmtDuration,
+    fmtTickY: bytes ? fmtBytesTick : fmtTick,
+    footer: `${xs.length} night${xs.length === 1 ? '' : 's'}`,
+    label: title,
+  });
+
+  const newest = (program) => {
+    const own = rows.filter((r) => r.program === program);
+    return own.length ? own[own.length - 1].value : null;
+  };
+  legend.innerHTML = series.map((s) => `
+    <span class="ci-legend-item">
+      <span class="swatch" style="background:${s.color}"></span>
+      ${esc(s.label)}
+      <span class="count">${esc((bytes ? fmtBytes : fmtDuration)(newest(s.key)))}</span>
+    </span>`).join('');
 }
 
 // ── RENDER: OPEN PLANS AND REPORTS ──────────────────────────────────────────
@@ -1927,6 +2065,7 @@ function render() {
   renderFlow();
   renderGuides();
   renderSpices();
+  renderBench();
   renderSparks(stats);
   renderTable(stats);
   renderSkips();
@@ -1984,6 +2123,7 @@ function switchTab(tab) {
   if (tab === 'code') renderLoc();
   if (tab === 'spices') renderSpices();
   if (tab === 'reports') { renderDocsTiles(); renderDocs(); renderFlow(); renderGuides(); }
+  if (tab === 'bench') renderBench();
   writeURL();
 }
 
@@ -2019,10 +2159,11 @@ async function boot() {
     }
     return { ...(await fetchNDJSON(API)), windowed: false };
   };
-  const [timings, loc, docs] = await Promise.allSettled([
+  const [timings, loc, docs, bench] = await Promise.allSettled([
     fetchTimings(),
     fetchNDJSON(LOC_API),
     fetchNDJSON(DOCS_API),
+    fetchNDJSON(BENCH_API),
   ]);
 
   if (timings.status === 'rejected') {
@@ -2061,6 +2202,18 @@ async function boot() {
       + ' this panel shipped.';
   }
 
+  if (bench.status === 'fulfilled') {
+    state.bench = bench.value.rows.filter((r) => r.kind === 'bench')
+      .sort((a, b) => a.ts - b.ts);
+    if (!state.bench.length) {
+      state.benchError = 'No benchmark rows have been published yet.';
+    }
+  } else {
+    state.benchError = `Benchmarks are unavailable (${bench.reason.message}). The`
+      + ' nightly arm64 workflow publishes them, starting with its first run after'
+      + ' this panel shipped.';
+  }
+
   state.envs = buildEnvs(state.rows);
 
   const url = readURL();
@@ -2090,6 +2243,7 @@ async function boot() {
     if (valid.length) state.docsKeys = new Set(valid);
   }
   if (url.tab && TABS.includes(url.tab)) state.tab = url.tab;
+  if (url.bench && BENCH_VIEWS.some(([key]) => key === url.bench)) state.benchView = url.bench;
 
   const known = new Set(state.rows.map(seriesName));
   state.suites = url.suites
@@ -2152,6 +2306,7 @@ async function boot() {
     [document.getElementById('ci-flow-chart'), renderFlow],
     [document.getElementById('ci-guides-chart'), renderGuides],
     [document.getElementById('ci-spices-chart'), renderSpices],
+    [document.getElementById('ci-bench-chart'), renderBench],
   ]);
   let raf = 0;
   const pending = new Set();

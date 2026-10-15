@@ -9,8 +9,15 @@
 # the commit message additionally carries [skip ci].
 #
 # Usage: publish-timings.sh timings.jsonl [--loc loc.jsonl] [--docs docs.jsonl]
+#                           [--bench bench.jsonl]
 #
-# --loc and --docs go in the SAME commit rather than through a second
+# --bench (performance-audit-plan WP6) appends the nightly benchmark rows
+# benchmarks/audit/bench-rows.py writes to `bench-<year>.jsonl`: their own
+# file, so the tripwire can read a year of history cheaply and the suite
+# views never see them.  With --bench, an empty timings file is not a reason
+# to skip the publish.
+#
+# --loc, --docs and --bench go in the SAME commit rather than through a second
 # invocation.  Two pushes to one branch from one job is two chances to be
 # rejected and two retry loops racing each other for the tip; one commit
 # carrying all files cannot half-land.
@@ -39,10 +46,15 @@ RECENT_FILE="suite-timings-recent.jsonl"
 INPUT=""
 LOC_INPUT=""
 DOCS_INPUT=""
+BENCH_INPUT=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --loc)
             LOC_INPUT="${2:?--loc needs a file}"
+            shift 2
+            ;;
+        --bench)
+            BENCH_INPUT="${2:?--bench needs a file}"
             shift 2
             ;;
         --docs)
@@ -60,18 +72,35 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-: "${INPUT:?usage: publish-timings.sh <timings.jsonl> [--loc <loc.jsonl>] [--docs <docs.jsonl>]}"
+: "${INPUT:?usage: publish-timings.sh <timings.jsonl> [--loc <loc.jsonl>] [--docs <docs.jsonl>] [--bench <bench.jsonl>]}"
 
 abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
 
-if [ ! -s "$INPUT" ]; then
+FILE="suite-timings-${YEAR}.jsonl"
+INPUT_ABS=""
+ROWS=0
+if [ -s "$INPUT" ]; then
+    INPUT_ABS="$(abspath "$INPUT")"
+    ROWS="$(wc -l < "$INPUT_ABS" | tr -d ' ')"
+elif [ -n "$BENCH_INPUT" ] && [ -s "$BENCH_INPUT" ]; then
+    echo "publish-timings: $INPUT is missing or empty; publishing the bench rows alone" >&2
+else
     echo "publish-timings: $INPUT is missing or empty; nothing to publish" >&2
     exit 0
 fi
 
-INPUT_ABS="$(abspath "$INPUT")"
-FILE="suite-timings-${YEAR}.jsonl"
-ROWS="$(wc -l < "$INPUT_ABS" | tr -d ' ')"
+# The nightly benchmarks (WP6): their own year file.
+BENCH_FILE="bench-${YEAR}.jsonl"
+BENCH_ABS=""
+BENCH_ROWS=0
+if [ -n "$BENCH_INPUT" ]; then
+    if [ -s "$BENCH_INPUT" ]; then
+        BENCH_ABS="$(abspath "$BENCH_INPUT")"
+        BENCH_ROWS="$(wc -l < "$BENCH_ABS" | tr -d ' ')"
+    else
+        echo "publish-timings: $BENCH_INPUT is missing or empty; skipping bench rows" >&2
+    fi
+fi
 
 # A missing or empty --loc is a warning, not a failure: the timings are the
 # reason this job exists and must publish without the line counts.
@@ -141,7 +170,9 @@ every publish, so /ci can open without downloading the whole year.
 `repo-loc-<year>.jsonl` holds one object per CI run with the tracked line counts
 of the commit, split product / test / bench / example / generated.
 `docs-counts-<year>.jsonl` holds one object per CI run with the counts of open
-plans (docs/upcoming/) and reports (docs/reported/). All three are appended by
+plans (docs/upcoming/) and reports (docs/reported/). `bench-<year>.jsonl` holds
+the nightly benchmark rows (one per program, engine and metric per night).
+All four are appended by
 `tools/ci/publish-timings.sh` on pushes to `main`. See
 `docs/archive/suite-timing-trends-plan.md` on `main` for the timings schema and
 the reason timings are only comparable within a fixed
@@ -153,14 +184,15 @@ EOF
         )
     fi
 
-    cat "$INPUT_ABS" >> "$WT/$FILE"
+    [ -n "$INPUT_ABS" ] && cat "$INPUT_ABS" >> "$WT/$FILE"
     [ -n "$LOC_ABS" ] && cat "$LOC_ABS" >> "$WT/$LOC_FILE"
     [ -n "$DOCS_ABS" ] && cat "$DOCS_ABS" >> "$WT/$DOCS_FILE"
+    [ -n "$BENCH_ABS" ] && cat "$BENCH_ABS" >> "$WT/$BENCH_FILE"
 
     # Window anchored on the newest row (as the page's range filter is), not on
     # wall-clock, so a quiet week still yields a non-empty file.  A torn
-    # line is skipped.
-    python3 - "$WT/$FILE" "$WT/$RECENT_FILE" "$RECENT_DAYS" <<'PYEOF'
+    # line is skipped.  Nothing to re-derive when no suite rows were appended.
+    [ -n "$INPUT_ABS" ] && python3 - "$WT/$FILE" "$WT/$RECENT_FILE" "$RECENT_DAYS" <<'PYEOF'
 import json, sys
 src, dst, days = sys.argv[1], sys.argv[2], int(sys.argv[3])
 rows = []
@@ -178,20 +210,28 @@ PYEOF
 
     (
         cd "$WT"
-        git add "$FILE" "$RECENT_FILE" README.md 2>/dev/null || git add "$FILE"
+        if [ -n "$INPUT_ABS" ]; then
+            git add "$FILE" "$RECENT_FILE" README.md 2>/dev/null || git add "$FILE"
+        else
+            git add README.md 2>/dev/null || true
+        fi
         [ -n "$LOC_ABS" ] && git add "$LOC_FILE"
         [ -n "$DOCS_ABS" ] && git add "$DOCS_FILE"
+        [ -n "$BENCH_ABS" ] && git add "$BENCH_FILE"
         if git diff --cached --quiet; then
             echo "publish-timings: no change to commit" >&2
             exit 0
         fi
         # [skip ci] is the second layer of the "this branch never builds"
         # guarantee; the workflow's own `branches: [main]` filter is the first.
-        git commit -q -m "ci-metrics: ${ROWS} suite rows, ${LOC_ROWS} loc row(s), ${DOCS_ROWS} docs row(s) from ${GITHUB_SHA:-local} [skip ci]"
+        git commit -q -m "ci-metrics: ${ROWS} suite rows, ${LOC_ROWS} loc row(s), ${DOCS_ROWS} docs row(s), ${BENCH_ROWS} bench row(s) from ${GITHUB_SHA:-local} [skip ci]"
     )
 
     if git -C "$WT" push origin "$BRANCH"; then
-        echo "publish-timings: appended ${ROWS} rows to ${BRANCH}/${FILE}" >&2
+        [ -n "$INPUT_ABS" ] \
+            && echo "publish-timings: appended ${ROWS} rows to ${BRANCH}/${FILE}" >&2
+        [ -n "$BENCH_ABS" ] \
+            && echo "publish-timings: appended ${BENCH_ROWS} rows to ${BRANCH}/${BENCH_FILE}" >&2
         [ -n "$LOC_ABS" ] \
             && echo "publish-timings: appended ${LOC_ROWS} rows to ${BRANCH}/${LOC_FILE}" >&2
         [ -n "$DOCS_ABS" ] \

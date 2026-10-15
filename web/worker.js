@@ -221,6 +221,12 @@ export default {
       return proxyMetricsNDJSON(url, 'docs-counts', 'no doc counts available');
     }
 
+    // The nightly benchmark rows (performance-audit-plan WP6): a few dozen
+    // a night, in their own file so the suite views never see them.
+    if (pathname === '/api/ci-bench') {
+      return proxyMetricsNDJSON(url, 'bench', 'no benchmark rows available');
+    }
+
     // Rewrite try.turmeric-lang.com/* -> turmeric-lang.com/try/*
     // so both URLs serve the same page without a redirect round-trip.
     const response = await env.ASSETS.fetch(request);

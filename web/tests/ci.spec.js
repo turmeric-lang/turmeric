@@ -89,6 +89,41 @@ test.describe('CI metrics dashboard', () => {
     }));
   }
 
+  // Nightly benchmark rows (performance-audit-plan WP6), in the shape
+  // benchmarks/audit/bench-rows.py writes: three nights, two programs under
+  // tur jit (one night of one of them noisy), and one cc binary size.
+  function benchFixture() {
+    const now = Math.floor(Date.now() / 1000);
+    const base = { kind: 'bench', os: 'macOS', nproc: 3, status: 'ok', reps: 3, build_type: 'Release' };
+    const rows = [];
+    for (let i = 0; i < 3; i++) {
+      const ts = now - (2 - i) * 6 * 3600;
+      const sha = `${'abc'[i].repeat(7)}${'0'.repeat(33)}`;
+      rows.push({ ...base, ts, sha, engine: 'jit', metric: 'run_ms', unit: 'ms',
+                  program: 'benchmarks/audit/sized/cps-tramp-resume-8m.tur',
+                  suite: 'bench:cps-tramp-resume-8m/jit/run_ms',
+                  value: 1090 + 5 * i, cv: 0.01, noisy: false });
+      rows.push({ ...base, ts, sha, engine: 'jit', metric: 'run_ms', unit: 'ms',
+                  program: 'benchmarks/audit/sized/mut-map-reassign-1m.tur',
+                  suite: 'bench:mut-map-reassign-1m/jit/run_ms',
+                  value: 2250 - 10 * i, cv: i === 2 ? 0.14 : 0.01, noisy: i === 2 });
+      rows.push({ ...base, ts, sha, engine: 'cc', metric: 'binary_bytes', unit: 'bytes',
+                  program: 'benchmarks/audit/sized/mut-map-reassign-1m.tur',
+                  suite: 'bench:mut-map-reassign-1m/cc/binary_bytes',
+                  value: 48144 + i, cv: null, noisy: false });
+    }
+    return rows.map((r) => JSON.stringify(r)).join('\n');
+  }
+
+  async function stubBench(page) {
+    const body = benchFixture();
+    await page.route('**/api/ci-bench*', (route) => route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson', 'X-Metrics-Year': '2026' },
+      body,
+    }));
+  }
+
   // A small timings fixture for the tests that need known data or must not
   // depend on a 40 MB live download. `recentOnly` makes the full log 502, so a
   // test can prove the page did not need it.
@@ -251,8 +286,8 @@ test.describe('CI metrics dashboard', () => {
     await expect(page.locator('site-nav nav')).toBeVisible();
     await expect(page.locator('site-footer a[href="/ci"]')).toHaveCount(1);
 
-    // Five tabs, Tests active by default.
-    await expect(page.locator('.ci-tab')).toHaveCount(5);
+    // Six tabs, Tests active by default.
+    await expect(page.locator('.ci-tab')).toHaveCount(6);
     await expect(page.locator('#ci-tab-tests')).toHaveClass(/is-active/);
 
     // Four stat tiles, and a provenance line naming the latest commit.
@@ -374,6 +409,44 @@ test.describe('CI metrics dashboard', () => {
 
     await page.locator('#ci-range').selectOption('all');
     await expect(page).toHaveURL(/range=all/);
+  });
+
+  test('the benchmarks panel charts the nightly rows, one engine per view', async ({ page }) => {
+    await stubBench(page);
+    await page.goto('/ci');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+
+    await page.locator('#ci-tab-bench').click();
+    await expect(page).toHaveURL(/tab=bench/);
+
+    // Default view, run time under tur jit: the fixture's two programs, each
+    // named in the legend, and the noisy night counted in the subtitle.
+    await expect(page.locator('#ci-bench-chart .ci-series-line')).toHaveCount(2);
+    await expect(page.locator('#ci-bench-legend .ci-legend-item')).toHaveCount(2);
+    await expect(page.locator('#ci-bench-legend')).toContainText('mut-map-reassign-1m');
+    await expect(page.locator('#ci-bench-sub')).toContainText('1 noisy');
+
+    // Binary size is a cc view of its own, kept in the URL, in bytes.
+    await page.locator('#ci-bench-view').selectOption('binary_bytes/cc');
+    await expect(page).toHaveURL(/bench=binary_bytes%2Fcc/);
+    await expect(page.locator('#ci-bench-chart .ci-series-line')).toHaveCount(1);
+    await expect(page.locator('#ci-bench-legend')).toContainText('KB');
+
+    // Its own tooltip, on its own hit area.
+    await page.locator('#ci-bench-hit').hover();
+    await expect(page.locator('#ci-bench-tooltip')).toBeVisible();
+  });
+
+  test('the benchmarks panel says so when nothing has been published', async ({ page }) => {
+    await page.route('**/api/ci-bench*', (route) => route.fulfill({
+      status: 502, headers: { 'Content-Type': 'text/plain' }, body: 'no benchmark rows available\n',
+    }));
+    await page.goto('/ci?tab=bench');
+    await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('#ci-bench-chart .ci-empty')).toContainText('Benchmarks are unavailable');
+    // The rest of the page is unaffected.
+    await page.locator('#ci-tab-tests').click();
+    await expect(page.locator('#ci-tiles .ci-tile')).toHaveCount(4);
   });
 
   test('the line-count panel charts product vs test lines', async ({ page }) => {

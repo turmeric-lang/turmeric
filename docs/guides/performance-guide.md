@@ -799,6 +799,50 @@ CC=clang TUR_CC_FLAGS="-O3 -march=native" ./benchmarks/run-benchmarks.sh
   [Execution engines](#execution-engines-interpreter-vs-tur-jit-vs-cc--o2)
   above.
 
+### What CI tracks, nightly
+
+The nightly arm64 workflow's `bench` job (`.github/workflows/nightly-arm64.yml`)
+turns a handful of benchmarks into a trend. It builds a Release `-DTUR_JIT=ON`
+`tur` on a fresh macOS arm64 runner and runs the programs named in
+`benchmarks/audit/tracked.txt` -- at most ten, each running for more than about
+a second on some engine, so the runner's jitter is a small part of the number
+-- through the performance audit's corpus runner (`benchmarks/audit/run-corpus.py`):
+
+- **serially**, one program and phase at a time, after a discarded warm-up;
+- **best of 3**, and only when the output matches the program's pinned answer
+  -- a run that prints something else is not timed;
+- per program and engine: the **run time**; for the cc engine also the **build
+  time** (`tur build`, the front end plus cc), the **front-end time**
+  (`tur emit-c`) and the **binary size**.
+
+`benchmarks/audit/bench-rows.py` writes one row per program, engine and metric
+to the `ci-metrics` branch's `bench-<year>.jsonl`, and **/ci's Benchmarks tab**
+plots them, one engine and metric per view.
+
+How to read it:
+
+- **Compare a series only with itself.** The runner is a shared hosted
+  machine, not the audit's baseline box, and its numbers are not comparable to
+  any table in this guide; the tab plots one runner shape (os, cores) at a time.
+- **A tripwire is a warning, not a failure.** A night more than 1.5x the
+  trailing median of that series' own last 14 nights prints a `::warning::` on
+  the nightly run. Nothing fails, and no PR waits on it: the job exists to make
+  a slow drift visible, not to gate.
+- **"Noisy" means the three reps disagreed by more than 10%** (the coefficient
+  of variation, as `performance-comparison/scripts/check_reproducibility.py`
+  computes it). A noisy night over its bound gets a `::notice::` instead of a
+  warning, and counts as noise until the next nights confirm it.
+- **Changing `tracked.txt` breaks a series' continuity**, so change it
+  deliberately; a program's history keys on its name.
+
+To reproduce a night's numbers locally (Linux or macOS, Release `tur`):
+
+```sh
+python3 benchmarks/audit/run-corpus.py --tur ./build-release/tur \
+    --corpus benchmarks/audit/tracked.txt --reps 3 --out /tmp/bench
+python3 benchmarks/audit/bench-rows.py /tmp/bench --out /tmp/bench.jsonl
+```
+
 ### Compiler timings (`--timings`)
 
 `--timings` answers "why is `tur build` slow?" -- where the *compiler's* time
