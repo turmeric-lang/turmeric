@@ -111,8 +111,10 @@ function topPaths(entries, n = 15) {
         .map(([path, bytes]) => ({ path, bytes }));
 }
 
-/** Navigate, wait for Ready, run one program; ms since navigation start. */
-async function measureLoad(page, url, bytesLog = null) {
+/** Navigate, wait for Ready, run one program; ms since navigation start.
+ *  `seq` makes the program's answer unique to this load: a repeat visit
+ *  restores the console, which would otherwise already show the last answer. */
+async function measureLoad(page, url, seq, bytesLog = null) {
     await page.goto(url);
     await expect(page.locator('#wasm-status-text')).toHaveText('Ready', { timeout: 90_000 });
     const bytesAtReady = bytesLog ? bytesLog.slice() : null;
@@ -124,19 +126,20 @@ async function measureLoad(page, url, bytesLog = null) {
         });
     });
     // A value the page cannot already be showing (a version banner could hold
-    // a bare "3").
-    const ev = await page.evaluate(async () => {
-        window._turiEditor.setValue('(+ 40000 2)');
+    // a bare "3", a restored console the previous load's answer).
+    const want = String(40000 + 7 * seq + 2);
+    const ev = await page.evaluate(async ([n, answer]) => {
+        window._turiEditor.setValue(`(+ ${40000 + 7 * n} 2)`);
         const con = document.getElementById('console');
         const t0 = performance.now();
         document.getElementById('run-btn').click();
-        while (!con.textContent.includes('40002') && performance.now() - t0 < 20_000) {
+        while (!con.textContent.includes(answer) && performance.now() - t0 < 20_000) {
             await new Promise(r => setTimeout(r, 2));
         }
         const t1 = performance.now();
-        return { clickToResultMs: t1 - t0, resultAt: t1, ok: con.textContent.includes('40002') };
-    });
-    expect(ev.ok, 'the first evaluation printed 40002').toBe(true);
+        return { clickToResultMs: t1 - t0, resultAt: t1, ok: con.textContent.includes(answer) };
+    }, [seq, want]);
+    expect(ev.ok, `the first evaluation printed ${want}`).toBe(true);
     return { boot, eval: ev, bytesAtReady };
 }
 
@@ -201,7 +204,9 @@ test('Try Turmeric: cold load, first evaluation, repeat visit, LSP keystrokes', 
     let port = await freePort();
     while (port === 3000) port = await freePort();
     await startServer(port);
-    const url = `http://127.0.0.1:${port}/try/`;
+    // ?sw=1: on a loopback host the app skips the service worker unless asked
+    // (web/README.md); production always has it, so the measurement does too.
+    const url = `http://127.0.0.1:${port}/try/?sw=1`;
     try {
         const cold = [];
         let ctx = null;
@@ -212,7 +217,7 @@ test('Try Turmeric: cold load, first evaluation, repeat visit, LSP keystrokes', 
             ctx = await browser.newContext();
             bytesLog = trackBytes(ctx);
             page = await ctx.newPage();
-            cold.push(await measureLoad(page, url, bytesLog));
+            cold.push(await measureLoad(page, url, i, bytesLog));
         }
         // Repeat visit: the last context's service worker has precached the
         // bundle by the time it is ready.
@@ -239,7 +244,7 @@ test('Try Turmeric: cold load, first evaluation, repeat visit, LSP keystrokes', 
             note: 'response body bytes as served by vite preview (uncompressed); ' +
                   'tools/ci/web-bundle-size.py has the gzip/brotli sizes',
         };
-        const warm = await measureLoad(page, url);
+        const warm = await measureLoad(page, url, COLD_LOADS);
         warm.serviceWorkerReady = swReady;
         const lsp = await measureLsp(page, KEYSTROKES);
         await ctx.close();
