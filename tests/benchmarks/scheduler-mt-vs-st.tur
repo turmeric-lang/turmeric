@@ -21,7 +21,7 @@
 ;;     tuning.  With default 1024-capacity deques and 0.1ms idle sleep the
 ;;     crossover is typically at 4+ threads for CPU-bound workloads.
 ;;
-;; Run with: ./tests/run-bench.sh scheduler-mt-vs-st
+;; Run with: python3 benchmarks/audit/run-corpus.py --only scheduler-mt-vs-st
 
 (defn bench-main [] :int
   ```c

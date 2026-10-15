@@ -662,17 +662,20 @@ is explicitly documented in `tests/run.sh`).
 
 ### Benchmarking HKT dispatch overhead
 
-The benchmark suite in `tests/benchmarks/` measures typeclass dispatch overhead.
-The primary benchmark is `hkt-dict-pass.tur`, which exercises `Functor.fmap` over
-`option` in a tight loop:
+`benchmarks/bind-option.tur` and `benchmarks/fmap-vec.tur` measure dictionary
+dispatch in a loop against monomorphic C baselines (`*-baseline.c`), and
+`run-benchmarks.sh` reports the overhead ratio. Use a Release `tur`; the
+runner refuses a sanitized one:
 
 ```sh
-./tests/run-bench.sh                  # run all benchmarks
-./tests/run-bench.sh hkt-dict-pass    # run only the HKT dispatch benchmark
-BENCHMINIT=10000 ./tests/run-bench.sh # increase minimum iterations
+TUR=./build-release/tur bash benchmarks/run-benchmarks.sh bind-option fmap-vec
 ```
 
-Results are written to `tests/benchmarks/output/`.
+`tests/benchmarks/hkt-dict-pass.tur` does one `fmap` per process, so it measures
+startup more than dispatch. It is in the performance-audit corpus
+(`benchmarks/audit/corpus.txt`) and runs under `benchmarks/audit/run-corpus.py`
+with the rest; `tests/run-bench.sh`, which timed 10,000 launches of it, was
+folded into that runner.
 
 ### Monomorphization
 

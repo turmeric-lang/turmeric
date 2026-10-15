@@ -67,8 +67,8 @@ __pycache__/
 tests/out/
 tests/fixtures/**/actual.*
 # Generated test/benchmark artifacts written in-place by the harnesses
-# (run-cli.sh writes actual.* next to its fixtures; run-bench.sh compiles
-# benchmarks into tests/benchmarks/output/).
+# (run-cli.sh writes actual.* next to its fixtures; the retired run-bench.sh
+# compiled benchmarks into tests/benchmarks/output/).
 tests/cli/**/actual.*
 tests/benchmarks/output/
 # Build caches/artifacts left when a dedicated runner builds a fixture

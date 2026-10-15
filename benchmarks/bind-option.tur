@@ -5,12 +5,17 @@
 ;;
 ;; The benchmark chains N bind operations: some(0) >>= (+1) >>= (+1) >>= ../..
 ;; using a loop with a mutable accumulator.
+;;
+;; The classes are local and Bench-prefixed: the stdlib prelude auto-loads its
+;; own Applicative and Monad now, and redefining them is an error.  Keeping a
+;; local one-method class preserves what the 2026-05-13 number measured --
+;; dispatch through a dictionary over an erased word, against the C baseline.
 
-(defclass Applicative [^f]
-  (pure [a] :int))
+(defclass BenchApplicative [^f]
+  (bench-pure [a] :int))
 
-(defclass Monad [^m]
-  (bind [m f] :int))
+(defclass BenchMonad [^m]
+  (bench-bind [m f] :int))
 
 ;; Option helpers — plain calling convention (non-capturing lambdas)
 (defn __bench_opt_some [v] :int
@@ -41,8 +46,8 @@
   int64_t *p = (int64_t *)(intptr_t)m; return p[1];
   ```)
 
-(definstance Applicative [option] (pure [a] (__bench_opt_pure a)))
-(definstance Monad [option] (bind [m f] (__bench_opt_bind m f)))
+(definstance BenchApplicative [option] (bench-pure [a] (__bench_opt_pure a)))
+(definstance BenchMonad [option] (bench-bind [m f] (__bench_opt_bind m f)))
 
 ;; The function applied at each bind step: increment the value
 (defn add1 [x] :int (__bench_opt_some (+ x 1)))
@@ -51,7 +56,7 @@
   (let [^mut acc (__bench_opt_some 0)]
     (let [^mut i 0]
       (while (< i 100000)
-        (set! acc (.bind acc add1))
+        (set! acc (.bench-bind acc add1))
         (set! i (+ i 1))))
     ;; Print final value (should be 100000) to prevent dead-code elimination
     (println (__bench_opt_val acc)))
