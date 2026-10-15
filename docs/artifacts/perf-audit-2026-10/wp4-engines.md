@@ -1,6 +1,6 @@
 # WP4 -- interpreter and JIT
 
-[performance-audit-plan](../../upcoming/performance-audit-plan.md) WP4: refresh
+[performance-audit-plan](../../archive/performance-audit-plan.md) WP4: refresh
 the engine triangle (E-4), say where each engine's fixed cost goes, and answer
 E-1 (the interpreter's lookups), E-2 (would a cached MIR image beat c2mir) and
 E-3 (why some JIT'd loops run far behind cc). Box and method are WP0's

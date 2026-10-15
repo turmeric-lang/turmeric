@@ -2,7 +2,7 @@
 
 **Severity:** low-medium (engine divergence; silent wrong answer). Found
 2026-10-14 by the performance audit's WP0 output-parity check
-([performance-audit-plan](../upcoming/performance-audit-plan.md)), which
+([performance-audit-plan](../archive/performance-audit-plan.md)), which
 refuses to time a program whose engines disagree.
 
 ## Repro

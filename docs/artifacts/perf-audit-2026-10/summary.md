@@ -1,6 +1,6 @@
 # The 2026-10 performance audit, ranked
 
-The one-page result of [performance-audit-plan](../../upcoming/performance-audit-plan.md).
+The one-page result of [performance-audit-plan](../../archive/performance-audit-plan.md).
 Each work package has its own write-up with the method and the raw data;
 this page is the part the plan says a reader should be able to act on
 without reading the rest: **what to build next, across every surface, in

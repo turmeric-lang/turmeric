@@ -1,4 +1,4 @@
-# Nightly tracked benchmarks (docs/upcoming/performance-audit-plan.md, WP6).
+# Nightly tracked benchmarks (docs/archive/performance-audit-plan.md, WP6).
 #
 # The same format as corpus.txt, read by the same runner
 # (benchmarks/audit/run-corpus.py --corpus benchmarks/audit/tracked.txt), and

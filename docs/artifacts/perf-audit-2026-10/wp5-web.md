@@ -1,6 +1,6 @@
 # WP5 -- web / WASM
 
-[performance-audit-plan](../../upcoming/performance-audit-plan.md) WP5: put a
+[performance-audit-plan](../../archive/performance-audit-plan.md) WP5: put a
 number on what Try Turmeric costs the visitor -- the download, the time to a
 first result, the language server's latency -- and cost W-1 (the embedded
 stdlib, `docstrings.tur` included) and W-2 (the startup preload).

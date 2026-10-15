@@ -4,7 +4,7 @@
 **Last updated:** 2026-10-13
 
 > Moved here from `infra/bench-box/README.md` on 2026-10-13, together with
-> the AWS notes from the [performance-audit-plan](../upcoming/performance-audit-plan.md)
+> the AWS notes from the [performance-audit-plan](../archive/performance-audit-plan.md)
 > (last section below), when the audit's baseline moved to the author's
 > local machine. The CDK app itself is unchanged and still lives in
 > `infra/bench-box/`; every relative path below (`scripts/`, `iam/`,
@@ -246,7 +246,7 @@ infra/bench-box/
 ## As the performance audit's baseline (2026-10-11 to 2026-10-13)
 
 The AWS notes that were in
-[performance-audit-plan](../upcoming/performance-audit-plan.md) before its
+[performance-audit-plan](../archive/performance-audit-plan.md) before its
 baseline moved to the author's local Intel NUC8i7HVK under WSL2 (that plan's
 section 8, decision 1). Kept here as the plan stated them.
 

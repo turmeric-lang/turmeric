@@ -8,5 +8,5 @@ bootstrap, credentials and permissions, knobs, and how to run things on the
 box -- live in
 [docs/design/aws-bench-box-design.md](../../docs/design/aws-bench-box-design.md).
 No current plan uses the box; the performance audit's baseline is a local
-machine ([performance-audit-plan](../../docs/upcoming/performance-audit-plan.md),
+machine ([performance-audit-plan](../../docs/archive/performance-audit-plan.md),
 section 8).

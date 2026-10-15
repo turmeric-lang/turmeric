@@ -1,4 +1,4 @@
-# Performance-audit corpus (docs/upcoming/performance-audit-plan.md, WP0).
+# Performance-audit corpus (docs/archive/performance-audit-plan.md, WP0).
 #
 # Read by benchmarks/audit/run-corpus.py.  One program per line:
 #
