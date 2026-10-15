@@ -7326,7 +7326,9 @@ static int cmd_test(const char *dir) {
             Buf test_cmd; buf_init(&test_cmd);
             bool tq = buf_put_quoted(&test_cmd, out_path);
             buf_putc(&test_cmd, '\0');
+            prof_enter(PROF_RUN);   /* --timings: the test binary's own run */
             int status = tq ? system(test_cmd.data) : 2;
+            prof_exit(PROF_RUN);
             buf_free(&test_cmd);
             run_rc = decode_exit_status(status);
         }
