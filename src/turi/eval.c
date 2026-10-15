@@ -1603,13 +1603,23 @@ static TuriValue eval_lookup(TuriEnv *env, EvalFrame *frame, const char *name) {
     /* Module-private resolution: a defn whose body is running inside module M
      * can see M's private (non-exported) helpers, which are registered under the
      * qualified key "M/name". Probe that before the flat global name so two
-     * modules' same-named privates do not collide. */
+     * modules' same-named privates do not collide.
+     *
+     * This runs for every non-local reference made from inside a module, and
+     * most of them miss (an exported name, a stdlib global), so the key is
+     * built with memcpy rather than snprintf and probed with find_binding
+     * rather than turi_env_get, which formats an "unbound variable" error on
+     * a miss only for us to drop it.  The two vsnprintf calls were a quarter
+     * of a module-structured loop's instructions (performance-audit WP4 E-1). */
     if (env->current_module && env->current_module[0]) {
         char keybuf[256];
-        int kn = snprintf(keybuf, sizeof keybuf, "%s/%s", env->current_module, name);
-        if (kn > 0 && kn < (int)sizeof keybuf) {
-            TuriValue qv = turi_env_get(env, keybuf);
-            if (qv.tag != TURI_ERROR) return qv;
+        size_t ml = strlen(env->current_module), nl = strlen(name);
+        if (ml + 1 + nl < sizeof keybuf) {
+            memcpy(keybuf, env->current_module, ml);
+            keybuf[ml] = '/';
+            memcpy(keybuf + ml + 1, name, nl + 1);
+            EnvBinding *qb = turi_env_find_binding(env, keybuf);
+            if (qb && qb->value.tag != TURI_ERROR) return qb->value;
         }
     }
     return turi_env_get(env, name);

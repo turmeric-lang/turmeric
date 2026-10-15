@@ -40,6 +40,7 @@ benchmarks/bench-poly-specialize.tur         cc,jit,interp  exact
 benchmarks/bench-regions-subst.tur           cc,jit         cols=1,2,5
 benchmarks/bench-saffron-dyn-tail.tur        cc,jit,interp  exact   timeout=300
 benchmarks/bench-vec-push.tur                cc,jit         exact   # R-6: Vec growth (the interpreter's Vec is native)
+benchmarks/bench-module-lookup.tur           cc,jit,interp  exact   # E-1: lookups from inside a defmodule
 benchmarks/hamt-bench-insert.tur             cc,jit         exact
 benchmarks/hamt-bench-lookup.tur             cc,jit         exact
 benchmarks/hamt-bench-snapshot.tur           cc,jit         exact
