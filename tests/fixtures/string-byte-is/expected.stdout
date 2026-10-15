@@ -1,0 +1,30 @@
+-- string
+T
+F
+F
+F
+F
+98
+none
+none
+T
+-- high byte
+195
+F
+-- slice
+T
+T
+F
+F
+111
+none
+-- cstr
+T
+F
+F
+F
+F
+F
+105
+none
+none

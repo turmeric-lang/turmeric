@@ -197,6 +197,49 @@
 
 (defn string/byte-at [s : String i : int] : int
   (tur_string_byte_at (:: s ptr<void>) i))
+;;; string/byte-is? -- is the byte at index i the character c?
+;;;
+;;; The bounds-checked test a byte scanner needs: false when i is out of
+;;; range, so it replaces
+;;; `(if (< i (string/len s)) (= (string/byte-at s i) 44) false)` and the
+;;; magic number with it.  It compares one byte with c's code, so c should be
+;;; ASCII; a character whose code is above 127 is several bytes in UTF-8 and
+;;; is not what this finds.
+;;;
+;;; Parameters:
+;;;   s -- the String to look in (borrowed)
+;;;   i -- a byte index; out of range is not an error
+;;;   c -- the character to compare with
+;;;
+;;; Returns:
+;;;   true iff 0 <= i < (string/len s) and the byte at i is c's code.
+;;;
+;;; Example:
+;;;   (string/byte-is? (string/from-cstr "a,b") 1 #\,)  ; => true
+;;;
+;;; Since: markdown-library-plan S1
+(defn string/byte-is? [s : String i : int c : Char] : bool
+  (= (string/byte-at s i) (char->int c)))
+;;; string/char-at -- the byte at index i as a Char, or (none) out of range.
+;;;
+;;; For byte-at-a-time scanning that wants to compare with character
+;;; literals: `(match (string/char-at s i) (Some c) (eq? c #\#) (None) false)`.
+;;; The Char is the raw byte (0..255); decoding UTF-8 is a separate step.
+;;;
+;;; Parameters:
+;;;   s -- the String to look in (borrowed)
+;;;   i -- a byte index; out of range is not an error
+;;;
+;;; Returns:
+;;;   (some c) holding the byte at i, or (none) when i is out of range.
+;;;
+;;; Example:
+;;;   (string/char-at (string/from-cstr "hi") 1)  ; => (some #\i)
+;;;
+;;; Since: markdown-library-plan S1
+(defn string/char-at [s : String i : int] : (Option Char)
+  (let [b (string/byte-at s i)]
+    (if (< b 0) (none) (some (int->char b)))))
 ;;; string/eq? -- content equality (length then byte compare).
 ;;;
 ;;; Since: v2
