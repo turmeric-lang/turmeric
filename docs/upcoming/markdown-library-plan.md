@@ -123,7 +123,7 @@ which is why Phase S comes first. The rest is listed in section 7.
 
 Each of these is small, fixes something live today, and stays correct after the
 switch. **All four are in
-[#1197](https://github.com/turmeric-lang/turmeric/pull/1197)** (open), which
+[#1197](https://github.com/turmeric-lang/turmeric/pull/1197)** (merged 2026-10-15), which
 was cut from `main` and doesn't depend on this plan. What it actually does,
 where that differs from the first draft of this section:
 
@@ -650,8 +650,10 @@ history. Plans in `docs/upcoming/` get updated when they're next touched.
 "Windows setup" notes say so). There, `just` really is the runner, so those
 notes and the Windows guide's bootstrap steps keep it.
 
-J3 touches the same guides as #1197 and regenerates the same
-`stdlib/docstrings.tur` as #1200, so it waits for both to merge.
+J3 is split around the open PRs. The wording outside two files can go now that
+#1197 has merged. The two files wait: `stdlib/docstrings.tur` (its header comes
+from `tools/gendocs.py`, and #1200 regenerates the same file) and
+`docs/guides/tur-run-guide.md` (which #1201 edits).
 
 ### What stays
 
