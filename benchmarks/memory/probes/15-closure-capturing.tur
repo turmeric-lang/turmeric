@@ -1,0 +1,29 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | capturing closure | 8 B drop-glue pointer + 8 B code pointer + 8 B per
+;;   |   capture | 1 | scope exit (closure drop glue) |
+;;
+;; Per element: the guide's strategy 7 loop -- a `while` body `let`-binds a
+;; one-capture closure returned by `mk`, calls it once, and drops it at the
+;; end of the `let`.  The closure block should be 24 B of traffic; nothing
+;; should be kept or lost.  The call is a call through a function value, so
+;; anything that costs is in here too: probe 16 is the same loop with a named
+;; defn in place of the closure, and the difference between the two is the
+;; closure itself.
+;;
+;; row: capturing closure (1 capture), `let`-bound in a `while` body
+;; guide: 24 B (8 + 8 + 8/capture), 1 alloc, scope exit
+;; expect-0: 0
+;; expect-N: 50005000
+
+(defn mk [k : int] : (fn [int] int)
+  (fn [x : int] : int (+ x k)))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (let [f (mk i)]
+        (set! acc (+ acc (f 1))))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

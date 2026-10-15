@@ -451,6 +451,14 @@ the reading is not.
 
 ### WP3 -- Memory and allocation
 
+**Status: done 2026-10-15.** `benchmarks/memory/measure.sh` and 29 probes
+regenerate the memory guide's cost table (four rows moved: a `Map` entry is
+~96 B, not ~66, so it is larger than a `MutableMap` entry; the unfreed-`Map`,
+fn-value-call and non-tail-resume rows had drifted). Curves, the leak residue
+(1968 B, 16 B smaller), `tur build` RSS (33 / 96 MiB Release / Debug) and the
+ranked table are in
+[docs/artifacts/perf-audit-2026-10/wp3-memory.md](../artifacts/perf-audit-2026-10/wp3-memory.md).
+
 **Goal.** Turn the memory-usage guide's snapshot into a harness, and find the
 per-iteration allocations a user would not expect.
 

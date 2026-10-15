@@ -1,0 +1,29 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | By-value `defstruct` (`(defstruct P [x : int y : int z : int])`), passed
+;;   |   and returned | 0 | 0 | -- (copied by value) |
+;;
+;; Per element: a P is built by one call, passed to and returned from a second,
+;; and read by a third.  A by-value struct is a C struct, so nothing here may
+;; touch the heap.
+;;
+;; row: By-value `defstruct` P (3 ints), passed and returned
+;; guide: 0 B, 0 allocs
+;; expect-0: 0
+;; expect-N: 150025000
+
+(defstruct P [x : int y : int z : int])
+
+(defn mk [i : int] : P (P i (+ i 1) (+ i 2)))
+
+(defn bump [p : P] : P (P (+ (.x p) 1) (.y p) (.z p)))
+
+(defn sum3 [p : P] : int (+ (.x p) (+ (.y p) (.z p))))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (set! acc (+ acc (sum3 (bump (mk i)))))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

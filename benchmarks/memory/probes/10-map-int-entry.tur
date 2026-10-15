@@ -1,0 +1,30 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `Map int int` entry (persistent HAMT) | ~66 B live; ~720 B and ~7
+;;   |   allocations of traffic per insert | ~7 per insert | `map-free` of each
+;;   |   version you drop |
+;;
+;; Per element: one `map-assoc` of a fresh int key, rebinding the map and
+;; freeing the version it replaces -- the guide's strategy 3 loop.  The last
+;; version is read back in full and freed, so nothing should be lost; peak is
+;; the live map (plus the one path being copied).
+;;
+;; row: `Map int int` entry, each dropped version `map-free`d
+;; guide: ~66 B live, ~720 B traffic, ~7 allocs per insert
+;; expect-0: 0
+;; expect-N: 99990000
+
+(defn fill [m : (Map int int) i : int n : int] : (Map int int)
+  (if (= i n)
+    m
+    (let [m2 (map-assoc m i (* 2 i))]
+      (map-free m)
+      (fill m2 (+ i 1) n))))
+
+(defn msum [m : (Map int int) i : int n : int acc : int] : int
+  (if (= i n) acc (msum m (+ i 1) n (+ acc (map-get m i)))))
+
+(defn main [] : int
+  (let [m (fill (:: (map-new) (Map int int)) 0 __N__)]
+    (println (msum m 0 __N__ 0))
+    (map-free m))
+  0)

@@ -1,0 +1,28 @@
+;; Probe: NEW ROW (performance-audit-plan WP3, R-1) -- a CPS-colored loop.
+;;
+;; Per element: one turn of a self-tail-recursive loop whose body makes a
+;; non-tail call to `use1`, a function that calls its function-typed parameter
+;; and so is emitted in continuation-passing style (a `use1__cps` twin).  This
+;; is the `loop` of tests/fixtures/fn-value-call-join-reclaimed and the repro
+;; of docs/archive/fn-value-call-cps-frames-held-until-outer-entry.md, whose
+;; frames used to be held until the outermost direct entry returned (~200 B a
+;; turn).  The guide's "Calls through function values, and effects" table now
+;; says "calls through a function value | constant" peak: peak/elt should be
+;; ~0, and the frames traffic only.  (Probe 21b is a loop that calls its own
+;; fn parameter directly, which is not emitted CPS at all.)
+;;
+;; row: CPS-colored loop (each turn calls `use1`, which calls a fn value)
+;; guide: (new) peak constant per "Calls through function values" table
+;; expect-0: 0
+;; expect-N: 50005000
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn use1 [f : (fn [int] int) i : int] : int (f i))
+
+(defn loop [i : int n : int acc : int] : int
+  (if (= i n) acc (loop (+ i 1) n (+ acc (use1 add1 i)))))
+
+(defn main [] : int
+  (println (loop 0 __N__ 0))
+  0)

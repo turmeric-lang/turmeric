@@ -61,27 +61,23 @@ Traffic tells you how hard the allocator is working. Peak tells you how big
 the process gets. Small, freed-at-once allocations show up in traffic but not
 in peak.
 
-Here is the harness, so you can measure your own shapes. Write the probe with
-`__N__` where the element count goes:
+The harness is checked in: `benchmarks/memory/measure.sh`, with one probe per
+row of the table below under `benchmarks/memory/probes/` (each with `__N__`
+where the element count goes, and the first line of output it must print, so
+a probe that does less fails instead of looking cheap). To regenerate the
+table, or to measure a shape of your own:
 
 ```sh
-#!/bin/bash
-# measure.sh probe.tur -- per-element heap traffic and peak, N=10000 vs N=0
-f=$1; N=${2:-10000}
-run() {
-  sed "s/__N__/$1/g" "$f" > m_$1.tur && tur build m_$1.tur -o m_$1.bin >/dev/null || exit 1
-  valgrind ./m_$1.bin 2>&1 >/dev/null |
-    awk '/total heap/ {gsub(",",""); print $5, $9}'
-  valgrind --tool=massif --massif-out-file=ms_$1.out ./m_$1.bin >/dev/null 2>&1
-  awk -F= '/mem_heap_B/ {h=$2} /mem_heap_extra_B/ {t=h+$2; if (t>m) m=t} END {print m}' ms_$1.out
-}
-{ read a0 b0; read p0; } < <(run 0)
-{ read a1 b1; read p1; } < <(run $N)
-echo "allocs/elt=$(( (a1-a0)/N ))  bytes/elt=$(( (b1-b0)/N ))  peak/elt=$(( (p1-p0)/N ))"
+TUR=./build-release/tur bash benchmarks/memory/measure.sh            # every probe
+TUR=./build-release/tur bash benchmarks/memory/measure.sh my-probe.tur
 ```
 
-The numbers are a snapshot of one build (2026-10-05). They move when the
-runtime or the codegen changes. Re-measure before you lean on one.
+It refuses a sanitized `tur` (ASan would be the thing measured). See
+`benchmarks/memory/README.md` for the columns and the last run's raw output.
+
+The table was regenerated with it on 2026-10-14 (performance-audit WP3,
+`main` @ `83f7857ae`, gcc 13.3, glibc 2.39). The numbers move when the
+runtime or the codegen changes; re-run the harness before you lean on one.
 
 ---
 
@@ -100,15 +96,20 @@ runtime or the codegen changes. Re-measure before you lean on one.
 | `Vec int` slot | 8 B, doubling from 4 (~19 B peak, ~26 B traffic incl. growth copies) | amortised 0 | `vec-free` |
 | `Vec P` slot, `P` wider than 8 B | 8 B slot + a boxed copy of `P` (~53 B peak for a 24 B `P`) | 1 | `vec-free` (frees the boxes too) |
 | `MutableMap int int` entry | 32 B slot at load factor <= 0.75 (~78 B peak, ~105 B traffic) | amortised 0 | `mutmap-free` |
-| `Map int int` entry (persistent HAMT) | ~66 B live; ~720 B and ~7 allocations of traffic per insert | ~7 per insert | `map-free` of each version you drop |
+| `Map int int` entry (persistent HAMT) | ~96 B live peak (~66 B requested); ~716 B and ~7 allocations of traffic per insert | ~7 per insert | `map-free` of each version you drop |
 | `String` | 16 B header + length + 1 | 1 | `string/release` (refcounted) |
 | `rc<T>` | 72 B control block + a separate block for the value | 2 | last drop |
 | first `rc<T>` in a program | one-time 544 KiB (512 KiB free queue + 32 KiB GC registry) | 2 | process exit |
 | capturing closure | 8 B drop-glue pointer + 8 B code pointer + 8 B per capture | 1 | scope exit (closure drop glue) |
 | named `defn` used as a value | 0 (its fat box is a static) | 0 | -- |
-| a call through a function value | ~200 B of continuation frames | 2 | as they run, else when the outermost direct-style call returns (see below) |
-| `perform` + a tail `resume` under `handle` | the perform's frame and env | 2 | as they run (see below) |
-| `perform` + a non-tail or repeated `resume` | ~630 B | 6 | when the `handle`'s outermost direct-style call returns |
+| a call through a function value, from direct-style code | ~300 B (a tail call) to ~600 B (non-tail) of continuation frames | 2 to 5 | as they run |
+| ... inside a CPS-colored loop | ~176 B a turn | 2 | as they run |
+| `perform` + a tail `resume` under `handle` | ~168 B: the perform's frame and env | 2 | as they run |
+| `perform` + a non-tail `resume`, one `handle` per perform | ~790 B | 7 | as they run |
+| ... N performs under one `handle` | ~168 B held per perform | 3 | when the `handle` returns |
+| ... a `k` resumed more than once | ~795 B held per turn | 17 | when the `handle`'s outermost direct-style call returns |
+| `async` + `await` of a body that does not suspend | ~256 B | 4 | at the `await` (no fiber stack: the body runs inline) |
+| a raw fiber (`fiber-new`) | ~1 MiB stack + ~2.3 KB block | 2 | when it is freed |
 | region generation | 64 KiB slabs; nodes inside cost their size and no malloc each | 1 per 64 KiB | rewind at bracket exit, if nothing escapes |
 
 A few rows need more than a cell.
@@ -159,8 +160,8 @@ Per entry, from smallest to largest:
 | Container | Peak per entry | Mutation | Frees |
 | --- | --- | --- | --- |
 | `Vec int` | ~19 B | in place | `vec-free` |
-| `Map int int` | ~66 B | a new version per insert | `map-free` per version |
 | `MutableMap int int` | ~78 B | in place | `mutmap-free` |
+| `Map int int` | ~96 B | a new version per insert | `map-free` per version |
 
 `Vec` holds a 24-byte header and a buffer of 8-byte slots that doubles when
 full, so a `Vec` can be up to twice as large as its contents. An element
@@ -175,10 +176,11 @@ load factor reaches 0.75.
 `map-assoc` returns a new map that shares structure with the old one. That
 makes old versions cheap to keep, but **each version is a separate object you
 must `map-free`.** A loop that rebinds a map without freeing the previous
-version keeps every version: measured 1.7 KB per insert, all of it leaked.
-When you free each old version, a live entry costs about 66 bytes: a
-24-byte leaf node, a 32-byte entry, and its share of the bitmap nodes above
-it. (Before 2026-10-07 every node was allocated at the size of a full
+version keeps every version: measured ~790 B per insert, ~715 B of it leaked.
+When you free each old version, a live entry costs about 96 bytes -- 66
+requested (a 24-byte leaf node, a 32-byte entry, and its share of the bitmap
+nodes above it) plus ~30 of malloc's own overhead, which a HAMT of small
+blocks pays more of than a flat table does. (Before 2026-10-07 every node was allocated at the size of a full
 32-slot node, and an entry cost ~360 bytes --
 [hamt-nodes-allocated-at-full-array-size](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/hamt-nodes-allocated-at-full-array-size.md).)
 What a persistent map still costs is traffic: each insert copies the path
@@ -233,10 +235,15 @@ below, was never freed in that position:
 
 A function that calls a function-typed value -- a parameter `f`, a closure
 in a `let`, a field holding a function -- is emitted in continuation-passing
-style, and so is one that performs an effect or enters a `handle`. Each such
-call allocates continuation frames: about 2 allocations and 200 bytes for a
-call through a function value; a `perform` handled by `handle` about 6
-allocations.
+style, and so is one that performs an effect or enters a `handle`. (Not
+always: a self-tail-recursive loop that calls its own function parameter
+can stay direct-style -- `benchmarks/memory/probes/21b-fn-param-loop.tur`.)
+Each such call allocates continuation frames. Entered from direct-style
+code, a call through a function value costs about 2 allocations and 300
+bytes when it is a tail call, 5 and 600 when it is not (a heap join node, and
+the reap list's array, which every direct-style entry allocates afresh);
+inside an already-colored loop, about 2 and 176 a turn. A `perform` handled by
+`handle` with a tail `resume` costs 2 allocations and ~168 bytes.
 
 Most of them are handed back as soon as they have run. The rest are freed in
 batches, when the **outermost** direct-style call returns. What that means in
@@ -247,9 +254,11 @@ practice depends on what the loop around them does:
 | calls through a function value | constant |
 | performs an effect whose handler case ends in a tail `(resume k v)` and uses `k` for nothing else | constant |
 | enters a `handle` (and performs inside it, as above) | constant |
-| performs an effect whose case resumes non-tail (`(+ 1 (resume k v))`), or more than once | grows until the outermost call returns |
+| enters a `handle` whose case resumes non-tail (`(+ 1 (resume k v))`) once | constant (~790 B of traffic a turn) |
+| performs, under one long-lived `handle`, an effect whose case resumes non-tail | grows ~168 B a turn until the `handle` returns |
+| performs an effect whose case resumes `k` more than once (`^multishot`) | grows ~795 B a turn until the outermost call returns |
 
-The last row is what is left of
+The last two rows are what is left of
 [fn-value-call-cps-frames-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/fn-value-call-cps-frames-held-until-outer-entry.md):
 a non-tail resume runs a copy of the continuation, and the copies are kept
 ([effect-nontail-resume-copies-held-until-outer-entry](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/effect-nontail-resume-copies-held-until-outer-entry.md)).
@@ -294,11 +303,11 @@ shape.
 
 If you need an index or a stack, use a `Vec` (~19 B per `int`). If you need
 lookups and mutate in place, use a `MutableMap` (~78 B per entry). Use a
-persistent `Map` (~66 B per live entry) when you need its persistence: several
+persistent `Map` (~96 B per live entry) when you need its persistence: several
 versions alive at once, or a value you pass around and must not see change.
-A `Map` used as a mutable table is no larger than a `MutableMap`, but every
-insert allocates a new path (~7 allocations) and each old version needs its
-own `map-free`.
+A `Map` used as a mutable table is ~20% larger than a `MutableMap`, every
+insert allocates a new path (~7 allocations, ~716 B), and each old version
+needs its own `map-free`.
 
 For a `Vec` of wide structs, two cheaper layouts avoid the per-element box:
 

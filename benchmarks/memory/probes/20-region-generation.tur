@@ -1,0 +1,36 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | region generation | 64 KiB slabs; nodes inside cost their size and no
+;;   |   malloc each | 1 per 64 KiB | rewind at bracket exit, if nothing escapes |
+;;
+;; Per element: one stdlib `(Cons int)` cell (16 B) built with `tcons-of`
+;; inside ONE `with-region` bracket that returns only the int sum, so the
+;; generation REWINDS (expect-regions below pins it).  The chain stays typed:
+;; an erasing ascription (`(:: node :int)`) or a node handed to inline C would
+;; be an escape note and the generation would RETIRE instead.  Allocations
+;; should be about one per 64 KiB slab; peak about the cells' size; nothing
+;; lost.  A one-cell bracket runs first in both builds, so the arena's
+;; first-use cost cancels.  N is 100000 rather than 10000 because peak moves
+;; in whole 64 KiB slabs: at 10000 cells (160 KB) the slab rounding is a fifth
+;; of the answer.
+;;
+;; row: region generation (`with-region`, N `tcons-of` cells, rewound)
+;; guide: 64 KiB slabs; node size, no malloc each; 1 alloc per 64 KiB
+;; measure: N=100000
+;; expect-0: 0
+;; expect-N: 5000050000
+;; expect-regions-0: pushes=2 rewinds=2 retires=0
+;; expect-regions-N: pushes=2 rewinds=2 retires=0
+
+(defn build [n : int acc : (Cons int)] : (Cons int)
+  (if (= n 0) acc (build (- n 1) (tcons-of n acc))))
+
+(defn lsum [xs : (Cons int) acc : int] : int
+  (if (tnil? xs) acc (lsum (ttail xs) (+ acc (thead xs)))))
+
+(defn round [n : int] : int
+  (with-region (fn [] : int (lsum (build n (tnil)) 0))))
+
+(defn main [] : int
+  (round 1)
+  (println (round __N__))
+  0)

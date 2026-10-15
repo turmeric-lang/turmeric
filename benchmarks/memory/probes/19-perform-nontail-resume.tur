@@ -1,0 +1,32 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `perform` + a non-tail or repeated `resume` | ~630 B | 6 | when the
+;;   |   `handle`'s outermost direct-style call returns |
+;;
+;; Per element: one turn of a self-tail-recursive loop that opens a `handle`
+;; and performs once inside it, the case resuming once NON-tail,
+;; `(+ 1 (resume k 10))` -- the "handle a turn" shape of
+;; docs/reported/effect-nontail-resume-copies-held-until-outer-entry.md, minus
+;; the repro's second (outer, tail-resumed) effect.  The report says a case
+;; that resumes once non-tail on straight-line code now resumes the original
+;; chain in place (fixed 2026-10-12), so peak should be flat.  The "repeated
+;; resume" half of the row is probe 19b; the performs-under-one-handle loop
+;; (M-2) is probe 22.
+;;
+;; row: `perform` + one non-tail `resume`, a `handle` a turn
+;; guide: ~630 B, 6 allocs, kept until the outermost direct-style call returns
+;; expect-0: 0
+;; expect-N: 50105000
+
+(defeffect Inner [] int)
+
+(defn inner-step [x : int] : int
+  (handle (+ x (perform (Inner)))
+    (Inner [] k) (+ 1 (resume k 10))))
+
+(defn loop [i : int n : int acc : int] : int
+  (if (= i n) acc (loop (+ i 1) n (+ acc (inner-step i)))))
+
+(defn main [] : int
+  (loop 0 1 0)
+  (println (loop 0 __N__ 0))
+  0)

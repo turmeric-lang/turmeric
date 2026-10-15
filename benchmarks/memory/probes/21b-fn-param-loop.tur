@@ -1,0 +1,24 @@
+;; Probe: NEW ROW (performance-audit-plan WP3, R-1) -- a loop that calls its
+;; OWN function-typed parameter every turn.
+;;
+;; Per element: one turn of a self-tail-recursive loop whose body calls its
+;; parameter `f` non-tail, `(+ acc (f i))`.  R-1 says a call through a
+;; function value colors the enclosing function CPS; measured on 2026-10-14
+;; this loop gets no `__cps` twin -- it is emitted as a plain C loop with one
+;; indirect call -- while `use1` / `plus1` in probes 17 / 17b / 21 do.  So
+;; this row should read 0 everywhere; if it ever does not, the coloring rule
+;; moved.
+;;
+;; row: a loop calling its own fn parameter each turn (not emitted CPS)
+;; guide: (new) R-1: "any call through a function value colors the enclosing function"
+;; expect-0: 0
+;; expect-N: 50005000
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn loop [f : (fn [int] int) i : int n : int acc : int] : int
+  (if (= i n) acc (loop f (+ i 1) n (+ acc (f i)))))
+
+(defn main [] : int
+  (println (loop add1 0 __N__ 0))
+  0)

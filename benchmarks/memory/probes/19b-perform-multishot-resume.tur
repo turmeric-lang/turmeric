@@ -1,0 +1,29 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `perform` + a non-tail or repeated `resume` | ~630 B | 6 | when the
+;;   |   `handle`'s outermost direct-style call returns |
+;; -- the REPEATED half: a `^multishot` case that resumes twice.
+;;
+;; Per element: one turn of a self-tail-recursive loop that opens a `handle`
+;; whose `^multishot` case resumes `k` twice, `(+ (resume k 1) (resume k 2))`.
+;; The report (effect-nontail-resume-copies-held-until-outer-entry, "What is
+;; left") says a twice-resumed `k` still keeps its copies until the outermost
+;; call returns, so peak should grow with N here.
+;;
+;; row: `perform` + a `^multishot` case resuming twice, a `handle` a turn
+;; guide: ~630 B, 6 allocs, kept until the outermost direct-style call returns
+;; expect-0: 0
+;; expect-N: 100020000
+
+(defeffect Inner [] int)
+
+(defn twice-step [x : int] : int
+  (handle (+ x (perform (Inner)))
+    (Inner [] ^multishot k) (+ (resume k 1) (resume k 2))))
+
+(defn loop [i : int n : int acc : int] : int
+  (if (= i n) acc (loop (+ i 1) n (+ acc (twice-step i)))))
+
+(defn main [] : int
+  (loop 0 1 0)
+  (println (loop 0 __N__ 0))
+  0)

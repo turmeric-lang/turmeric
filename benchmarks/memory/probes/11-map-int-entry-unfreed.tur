@@ -1,0 +1,27 @@
+;; Probe: memory-usage-guide "Containers", the claim
+;;   "A loop that rebinds a map without freeing the previous version keeps
+;;    every version: measured 1.7 KB per insert, all of it leaked."
+;; (the `Map int int` row of the cost table, without strategy 3).
+;;
+;; Per element: one `map-assoc` of a fresh int key, rebinding the map and
+;; NOT freeing the version it replaces.  Only the last version is freed, so
+;; every intermediate version's unshared nodes should be in the lost columns.
+;;
+;; row: `Map int int` entry, dropped versions NOT freed
+;; guide: 1.7 KB per insert, all leaked
+;; expect-0: 0
+;; expect-N: 99990000
+
+(defn fill [m : (Map int int) i : int n : int] : (Map int int)
+  (if (= i n)
+    m
+    (fill (map-assoc m i (* 2 i)) (+ i 1) n)))
+
+(defn msum [m : (Map int int) i : int n : int acc : int] : int
+  (if (= i n) acc (msum m (+ i 1) n (+ acc (map-get m i)))))
+
+(defn main [] : int
+  (let [m (fill (:: (map-new) (Map int int)) 0 __N__)]
+    (println (msum m 0 __N__ 0))
+    (map-free m))
+  0)

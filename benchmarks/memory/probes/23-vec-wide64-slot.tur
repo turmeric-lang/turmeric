@@ -1,0 +1,30 @@
+;; Probe: NEW ROW (performance-audit-plan WP3, M-4) -- `Vec` of a wide struct.
+;;
+;; Probe 08 is the guide's `Vec P` row (a 24-byte P).  This is the same loop
+;; with a 64-byte element (eight ints), to show how the per-element box
+;; scales with the element: each `vec-push!` mallocs a box of the element's
+;; size, and `vec-free` frees the boxes.  Peak/elt should be about the 8-byte
+;; slot (plus doubling slack) plus a 64 B block with malloc's overhead.
+;;
+;; row: `Vec W` slot, W = 8 ints (64 B)
+;; guide: (new) per guide: 8 B slot + a boxed copy of W
+;; expect-0: 0
+;; expect-N: 399960000
+
+(defstruct W [a : int b : int c : int d : int e : int f : int g : int h : int])
+
+(defn wsum [w : W] : int
+  (+ (.a w) (+ (.b w) (+ (.c w) (+ (.d w) (+ (.e w) (+ (.f w) (+ (.g w) (.h w)))))))))
+
+(defn vsum [v : (Vec W) i : int acc : int] : int
+  (if (= i (vec-len v)) acc (vsum v (+ i 1) (+ acc (wsum (vec-get v i))))))
+
+(defn main [] : int
+  (let [v      (:: (vec-new) (Vec W))
+        ^mut i 0]
+    (while (< i __N__)
+      (vec-push! v (W i i i i i i i i))
+      (set! i (+ i 1)))
+    (println (vsum v 0 0))
+    (vec-free v))
+  0)

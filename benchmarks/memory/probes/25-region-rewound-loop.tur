@@ -1,0 +1,33 @@
+;; Probe: NEW ROW (performance-audit-plan WP3, R-3's steady state) -- a region
+;; bracket rewound in a loop.
+;;
+;; Per element: one round of a small `with-region` bracket (an 8-cell typed
+;; `(Cons int)` list built with `tcons-of` and summed to an int) from a
+;; self-tail-recursive loop -- the guide's strategy 4 shape, scaled down per
+;; round.  Every round must REWIND (expect-regions below pins
+;; pushes = rewinds = N + 1, retires = 0), and a rewound generation's slabs
+;; are reused by the next round, so peak should be constant: peak/elt ~0.
+;;
+;; row: region bracket rewound in a loop (N rounds of 8 cells)
+;; guide: (new) strategy 4: N rounds peak at the memory of one
+;; expect-0: 0
+;; expect-N: 360000
+;; expect-regions-0: pushes=1 rewinds=1 retires=0
+;; expect-regions-N: pushes=10001 rewinds=10001 retires=0
+
+(defn build [n : int acc : (Cons int)] : (Cons int)
+  (if (= n 0) acc (build (- n 1) (tcons-of n acc))))
+
+(defn lsum [xs : (Cons int) acc : int] : int
+  (if (tnil? xs) acc (lsum (ttail xs) (+ acc (thead xs)))))
+
+(defn round [n : int] : int
+  (with-region (fn [] : int (lsum (build n (tnil)) 0))))
+
+(defn rounds [k : int acc : int] : int
+  (if (= k 0) acc (rounds (- k 1) (+ acc (round 8)))))
+
+(defn main [] : int
+  (round 8)
+  (println (rounds __N__ 0))
+  0)

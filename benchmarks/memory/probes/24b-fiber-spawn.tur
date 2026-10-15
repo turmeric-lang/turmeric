@@ -1,0 +1,39 @@
+;; Probe: NEW ROW (performance-audit-plan WP3, R-10) -- a raw fiber per
+;; element, the path that does malloc a fiber stack.
+;;
+;; Probe 24 shows that `(await (async ...))` runs its body inline and never
+;; reaches the fiber allocator.  The FiberBlock runtime is still what
+;; stdlib/fiber.tur, stdlib/taskgroup.tur's spawns and the scheduler run on,
+;; and `tur_fiber_block_new` mallocs a 1 MB stack per fiber when given a stack
+;; size of 0.  Per element: one fiber made with `fiber-new` (stack size 0, the
+;; default), resumed to its one `fiber-yield`, resumed to completion and
+;; freed.  The stack is traffic; the fiber is freed before the next one is
+;; made, so peak should not grow.  One fiber runs first in both builds, so the
+;; first stack's peak cancels.
+;;
+;; row: raw fiber (`fiber-new`, default stack) made, run and freed
+;; guide: (new) R-10: a 1 MB fiber stack malloc'd per task
+;; measure: N=1000
+;; expect-0: 7
+;; expect-N: 7007
+
+(load "stdlib/fiber.tur")
+
+(defn body [] : nil
+  (fiber-yield 7))
+
+(defn one [] : int
+  (let [f (fiber-new body 0)
+        v (fiber-resume f 0)]
+    (fiber-resume f 0)
+    (fiber-free f)
+    v))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc (one)]
+    (while (< i __N__)
+      (set! acc (+ acc (one)))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

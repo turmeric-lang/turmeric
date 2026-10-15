@@ -1,0 +1,26 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `String` | 16 B header + length + 1 | 1 | `string/release` (refcounted) |
+;;
+;; Per element: one `String` of the five bytes "hello", made with
+;; `string/from-cstr`, measured with `string/len` and released.  Traffic per
+;; element is the block size (16 + 5 + 1 = 22 B requested); the block is
+;; released before the next one is made, so peak should not grow, and nothing
+;; should be lost.
+;;
+;; row: `String` ("hello"), made and released
+;; guide: 16 B header + len + 1, 1 alloc, string/release
+;; expect-0: 0
+;; expect-N: 50000
+
+(load "stdlib/string.tur")
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (let [s (string/from-cstr "hello")]
+        (set! acc (+ acc (string/len s)))
+        (string/release s))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

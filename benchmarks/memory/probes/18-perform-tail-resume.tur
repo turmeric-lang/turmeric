@@ -1,0 +1,29 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `perform` + a tail `resume` under `handle` | the perform's frame and env |
+;;   |   2 | as they run |
+;;
+;; Per element: one `perform` from a self-tail-recursive loop running under
+;; ONE `handle` whose case is a tail `(resume k 1)` (the cps-tramp-resume
+;; fixture's shape).  The per-perform frames should be traffic only: the
+;; guide's "Calls through function values, and effects" table says peak is
+;; constant for this shape.  A one-perform handle runs first in both builds,
+;; so the effect runtime's first-use cost cancels.
+;;
+;; row: `perform` + tail `resume`, N performs under one `handle`
+;; guide: the perform's frame and env, 2 allocs, freed as they run
+;; expect-0: 0
+;; expect-N: 10000
+
+(defeffect Ask [] int)
+
+(defn ticks [n : int acc : int] : int
+  (if (= n 0) acc (ticks (- n 1) (+ acc (perform (Ask))))))
+
+(defn run [n : int] : int
+  (handle (ticks n 0)
+    (Ask [] k) (resume k 1)))
+
+(defn main [] : int
+  (run 1)
+  (println (run __N__))
+  0)

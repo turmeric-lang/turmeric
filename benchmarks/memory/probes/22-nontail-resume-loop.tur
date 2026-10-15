@@ -1,0 +1,27 @@
+;; Probe: NEW ROW (performance-audit-plan WP3, M-2) -- a non-tail resume loop.
+;;
+;; Per element: one `perform` from a self-tail-recursive loop running under
+;; ONE `handle` whose case resumes NON-tail, `(+ 0 (resume k 1))` -- the
+;; effect-nontail-resume-under-outer fixture's `ticks` shape.  Every turn's
+;; `(+ 0 _)` waits for the whole loop, so peak grows with N; the report
+;; (effect-nontail-resume-copies-held-until-outer-entry) puts the inherent
+;; cost at one 144 B node a turn since 2026-10-12, against ~1.1 KB before.
+;;
+;; row: non-tail resume LOOP (N performs under one `handle`, case `(+ 0 (resume k 1))`)
+;; guide: (new) report: one 144 B node a turn kept until the handle returns
+;; expect-0: 0
+;; expect-N: 10000
+
+(defeffect Ask [] int)
+
+(defn ticks [n : int acc : int] : int
+  (if (= n 0) acc (ticks (- n 1) (+ acc (perform (Ask))))))
+
+(defn run [n : int] : int
+  (handle (ticks n 0)
+    (Ask [] k) (+ 0 (resume k 1))))
+
+(defn main [] : int
+  (run 1)
+  (println (run __N__))
+  0)

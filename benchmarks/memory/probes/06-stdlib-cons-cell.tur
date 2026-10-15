@@ -1,0 +1,21 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | stdlib `(Cons int)` cell (`tcons-of`) | 16 B (24 B peak) | 1 | a region,
+;;   |   otherwise never |
+;;
+;; Per element: one `(Cons int)` cell built with `tcons-of` outside any region.
+;; The stdlib list is `:heap`, so every cell should be lost at exit.
+;;
+;; row: stdlib `(Cons int)` cell via `tcons-of`, outside a region
+;; guide: 16 B traffic, 24 B peak, 1 alloc, all lost
+;; expect-0: 0
+;; expect-N: 50005000
+
+(defn build [n : int acc : (Cons int)] : (Cons int)
+  (if (= n 0) acc (build (- n 1) (tcons-of n acc))))
+
+(defn lsum [xs : (Cons int) acc : int] : int
+  (if (tnil? xs) acc (lsum (ttail xs) (+ acc (thead xs)))))
+
+(defn main [] : int
+  (println (lsum (build __N__ (tnil)) 0))
+  0)

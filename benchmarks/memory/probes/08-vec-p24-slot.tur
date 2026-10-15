@@ -1,0 +1,29 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `Vec P` slot, `P` wider than 8 B | 8 B slot + a boxed copy of `P` (~53 B
+;;   |   peak for a 24 B `P`) | 1 | `vec-free` (frees the boxes too) |
+;;
+;; Per element: one `vec-push!` of a by-value 24-byte P (three ints).  P does
+;; not fit an 8-byte slot, so each push mallocs a box for it.  The Vec is
+;; summed and then freed, boxes included, so nothing should be lost.
+;;
+;; row: `Vec P` slot, P = 3 ints (24 B)
+;; guide: 8 B slot + boxed P, ~53 B peak, 1 alloc
+;; expect-0: 0
+;; expect-N: 149985000
+
+(defstruct P [x : int y : int z : int])
+
+(defn sum3 [p : P] : int (+ (.x p) (+ (.y p) (.z p))))
+
+(defn vsum [v : (Vec P) i : int acc : int] : int
+  (if (= i (vec-len v)) acc (vsum v (+ i 1) (+ acc (sum3 (vec-get v i))))))
+
+(defn main [] : int
+  (let [v      (:: (vec-new) (Vec P))
+        ^mut i 0]
+    (while (< i __N__)
+      (vec-push! v (P i i i))
+      (set! i (+ i 1)))
+    (println (vsum v 0 0))
+    (vec-free v))
+  0)

@@ -1,0 +1,24 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `MutableMap int int` entry | 32 B slot at load factor <= 0.75 (~78 B peak,
+;;   |   ~105 B traffic) | amortised 0 | `mutmap-free` |
+;;
+;; Per element: one `mutmap-set!` of a fresh int key into one MutableMap,
+;; which is read back in full and then freed.
+;;
+;; row: `MutableMap int int` entry
+;; guide: 32 B slot, ~78 B peak, ~105 B traffic, amortised 0 allocs
+;; expect-0: 0
+;; expect-N: 499950000
+
+(defn msum [mm : (MutableMap int int) i : int n : int acc : int] : int
+  (if (= i n) acc (msum mm (+ i 1) n (+ acc (mutmap-get mm i i)))))
+
+(defn main [] : int
+  (let [mm     (:: (mutmap-new) (MutableMap int int))
+        ^mut i 0]
+    (while (< i __N__)
+      (mutmap-set! mm i i (* i 10))
+      (set! i (+ i 1)))
+    (println (msum mm 0 __N__ 0))
+    (mutmap-free mm))
+  0)

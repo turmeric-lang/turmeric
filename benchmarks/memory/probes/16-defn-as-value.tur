@@ -1,0 +1,24 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | named `defn` used as a value | 0 (its fat box is a static) | 0 | -- |
+;;
+;; Per element: probe 15's loop with the named defn `add1` `let`-bound in
+;; place of the closure, and called once.  The value itself is a static fat
+;; box, so whatever this costs is the call through the function value, not
+;; the value.
+;;
+;; row: named `defn` used as a value, `let`-bound in a `while` body
+;; guide: 0 B, 0 allocs
+;; expect-0: 0
+;; expect-N: 50005000
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (let [f add1]
+        (set! acc (+ acc (f i))))
+      (set! i (+ i 1)))
+    (println acc))
+  0)
