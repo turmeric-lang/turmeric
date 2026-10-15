@@ -17,7 +17,9 @@ CI and the guides rather than producing a write-up.
 
 Ordered by what a change buys against what it costs, leaning runtime on a tie
 (plan section 8, decision 5). Each row names the write-up that has the
-measurement and the fix direction.
+measurement and the fix direction. The "buys" figures are this box's; a PR
+that implements a row checks its own with a before/after there
+([README.md, "Re-measuring on the baseline box"](README.md#re-measuring-on-the-baseline-box)).
 
 | # | change | buys | effort | where |
 | --- | --- | --- | --- | --- |

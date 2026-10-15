@@ -83,3 +83,97 @@ corrected to match.
 
 12 logical CPUs of a 2019 laptop-class part inside a VM. These numbers are
 compared with each other and with nothing on `/ci`.
+
+## Re-measuring on the baseline box
+
+The fixes in [summary.md](summary.md) can be written and tested anywhere, and
+the reports the audit filed reproduce from counts, output or leaked bytes on
+any machine. What only this box can say is **what a fix bought**: every "buys"
+figure is relative to this box, and its numbers compare only with each other
+(decision 1). The nightly benchmarks on `/ci` catch a drift on hosted runners;
+they cannot check a prediction made here. So a PR that implements a ranked
+change, or a suspected regression, gets a before/after from this box.
+
+**The box, as WP0 set it up** (checklist above):
+
+1. Host on the **High performance** plan
+   (`powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c`; Balanced is
+   `381b4222-f694-41f0-9685-ff5bb260df2e`), Steam, Razer Synapse and the NVIDIA
+   overlay closed.
+2. Nothing else building or testing in the VM.
+3. Two checkouts, each a Release `-DTUR_JIT=ON` build of **all targets** (`tur
+   build` links the runtime archives `--target tur` does not produce). A `tur`
+   reads the stdlib beside it, so a stdlib change needs its own tree.
+
+**The run** (inside the WSL distro; refs reach `/srv/perf/turmeric` from the
+Windows clone through its `win` remote):
+
+```sh
+cd /srv/perf/turmeric
+git fetch -q win "+refs/remotes/origin/main:refs/remotes/win/origin-main" \
+                 "+claude/<fix-branch>:refs/remotes/win/<fix-branch>"
+git worktree add --detach /srv/perf/before win/origin-main
+git worktree add --detach /srv/perf/after  win/<fix-branch>
+for d in before after; do
+  cmake -S /srv/perf/$d -B /srv/perf/$d/build-release -DCMAKE_BUILD_TYPE=Release -DTUR_JIT=ON
+  cmake --build /srv/perf/$d/build-release -j12
+done
+cd /srv/perf/after
+bash benchmarks/audit/remeasure.sh /srv/perf/before/build-release/tur \
+     /srv/perf/after/build-release/tur /srv/perf/runs/<fix> \
+     [--sweeps 3] [-- --only '<regex>' | --engines cc,jit]
+```
+
+`benchmarks/audit/remeasure.sh` warns when the plan is not High performance or
+the box is busy (it waits up to two minutes for a just-finished build's load to
+settle), runs the WP0 sweep (`run-corpus.py --reps 5 --cooldown 3`) **alternating
+before and after** so the host's slow drift lands on both sides, merges each
+side, and writes `compare.md` / `compare.csv` with
+`benchmarks/audit/compare-runs.py`. The whole corpus is about ten minutes a
+sweep, so the default six sweeps are an hour; `--only` narrows it to the
+programs the change is about.
+
+**Reading `compare.md`.** A row is `faster` or `slower` only when it moved
+more than 5% (10% under 50 ms) and more than its own noise -- the spread
+between its two best sweeps -- and under 5 ms it is left to the timer
+(`floor`). The geometric mean per engine and phase is over the rows that are
+neither noisy nor at the floor. An A/A run on 2026-10-15 (the same `tur` on
+both sides, 27 rows) set those numbers: at a flat 5% it called one 17 ms
+`emit` "faster"; with 10% under 50 ms it reads 23 same, 3 floor, 1 noisy, 0
+moved. Size (`emit` C bytes, `build` binary bytes) and peak-RSS changes are
+listed separately.
+
+**Quoting it in a PR:** the geomean table, the "Rows that moved" table and the
+footer (box, both `tur`s, the corpus commit, sweeps, date). A same-day A/B is
+the result. A comparison against [wp0-baseline.csv](wp0-baseline.csv)
+(`compare-runs.py wp0-baseline.csv <run>`) is context, not a result: the box
+and the tree have both moved since.
+
+**A worked example, and two traps it found** (2026-10-15, the triangle and
+three sized programs, 27 rows; the outputs are
+[remeasure-2026-10-15-ab.md](remeasure-2026-10-15-ab.md)):
+
+- **The A/B** -- WP0's own commit (`1a2052bf7`) against `main` @ `1d419dd97`,
+  three sweeps a side: one row moved, `region-rounds-100k` under `tur jit`,
+  **1.59 s -> 1.04 s (0.651)**; everything else `same`, `noisy` or `floor`.
+- **Trap 1, the old CSV.** Compared against `wp0-baseline.csv` instead, the
+  same `main` read `mut-map-reassign-1m`'s JIT run as **+29%** and four cc
+  runs as +5-6% -- none of it in the code: WP0's commit, rebuilt and run the
+  same day, read the same as `main`, and its own cc run of `mut-map` 6.6%
+  above the CSV's. Hence "same-day A/B is the result".
+- **Trap 2, a hot CPU.** That +29% came from the A/A run, started 30 s after
+  a 12-thread build: `mut-map`'s JIT run read 2.08 s on both sides, against
+  1.71 s an hour later. An all-core build leaves the part heat-soaked and
+  boosting lower for minutes, which the load average does not show once the
+  build exits. `remeasure.sh` now waits for the load to settle **and** two
+  minutes more; after building by hand, wait before measuring.
+
+**Other surfaces**, by hand with the same rule (both sides, same session):
+memory, `TUR=<tur> bash benchmarks/memory/measure.sh` for each build and diff
+the tables; the triangle, `TUR=<tur> REPS=11 bash benchmarks/run-triangle.sh`
+twice per build; the web, `WEB_PERF=1 WEB_PERF_LOADS=5 npx playwright test
+--project=desktop tests/web-perf.spec.js` against each side's production
+build. The web toolchain (Node 22, emsdk 6.0.10, Playwright Chromium; ~4 GB) is
+not installed on the box at present: put it on C:, or on a **new** VHDX on D:
+attached with `wsl --mount --vhd` from an elevated shell -- not an image file
+under `/mnt/d`, which loses its writes (D: is exFAT).
