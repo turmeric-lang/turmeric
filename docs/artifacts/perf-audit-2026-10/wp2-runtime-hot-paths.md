@@ -398,19 +398,22 @@ iterations, `async-repeated-park-frees-each-turn` at 1M park/resume turns.
 | spawn + await, 2M | 273 ms | **~137 ns** |
 | park + resume, 1M turns | 813 ms | **~813 ns** |
 
-**Which switch path runs**: compiled programs switch fibers through libc
-`swapcontext` (the emitted glue, `src/compiler/emit_module.c:16271-16390`;
-the spawn binary links `swapcontext`, `_setjmp` and `longjmp`). On Linux,
-glibc's `swapcontext` saves and restores the signal mask -- an
-`rt_sigprocmask` system call per switch -- the likely reason a park/resume
-turn costs ~0.8 us (not yet confirmed with a syscall count). The hand-written
+**Which switch path runs** -- *corrected by WP4*
+([wp4-engines.md](wp4-engines.md#r-10-corrected-compiled-async-never-switches-stacks)).
+This section first said compiled programs switch fibers through libc
+`swapcontext`, because the binaries link it. They link it but these two never
+call it: an `LD_PRELOAD` counter finds 0 `swapcontext` / `getcontext` calls in
+both fixtures (and 2 / 1 in `fiber-basic`, the explicit fiber API). Compiled
+`async`/`await` parks a copy of its CPS continuation; the ~813 ns turn is
+~69% `malloc`/`calloc`/`free`, 6% `calloc`'s zeroing and 7% the continuation
+copy. The libc `swapcontext` glue (`src/compiler/emit_module.c:16271-16390`)
+is what `fiber-new` / `task-group-spawn` run; the hand-written
 `src/async/fiber_ctx_x64.S` / `fiber_ctx_arm64.S` are compiled into `tur`
-itself, not into emitted programs; Windows gets its own register-snapshot
-shim (`emit_module.c:13174`). Spawn+await is allocation-bound instead (malloc
-/ calloc / free 52% of its profile: the DK frames and the fiber closure). Fix
-direction: emit the asm switch (or the Windows-style register snapshot) on
-Linux and macOS too; the signal mask is not something a Turmeric fiber
-changes.
+itself, and Windows gets its own register-snapshot shim
+(`emit_module.c:13174`). Spawn+await is allocation-bound too (malloc / calloc
+/ free 52% of its profile: the DK frames and the fiber closure). Fix
+direction: pool the continuation nodes and skip `calloc`'s zeroing; an
+assembly switch would help only the explicit fiber API.
 
 ## R-11 -- dictionary dispatch after monomorphization
 
@@ -496,7 +499,7 @@ and [region-retired-generations-make-shutdown-quadratic](../../reported/region-r
 | 2 | **`realloc` in `vec-push!` growth** (R-6), and an inline "region open?" test in front of `TUR_REGION_NOTE` | -46% wall on a push loop; -8% of a push loop's samples | small |
 | 3 | **In-place HAMT transients** (R-5): copy a node once per transient, mutate after, no path release | ~2/3 of a batch insert's time on this profile; D-3's guide sentence becomes true | medium |
 | 4 | **Retired regions: O(1) registry removal and a cheap shutdown** (R-3): scan `reg_remove` from the end, drop this thread's registry entries in one pass at exit, index retired slabs for `tur_region_owns` | the 71% of `region-rounds-100k`; frees that stay cheap in long runs | small (1-2), medium (3) |
-| 5 | **Fiber switch without `swapcontext`** on Linux/macOS (R-10): emit the asm switch or the Windows-style register snapshot | the ~0.8 us park/resume turn, most of it the signal-mask syscall | medium |
+| 5 | **Pool async continuation nodes; skip `calloc`'s zeroing** (R-10, as corrected by [WP4](wp4-engines.md#r-10-corrected-compiled-async-never-switches-stacks)) -- this row first proposed a fiber switch without `swapcontext`, which compiled `async` never calls | most of the ~0.8 us park/resume turn, ~69% of it the allocator | medium |
 | 6 | **R-1, properly**: effect rows that hold for function values (inference at lambdas, checking at HOF parameters) or a `may_hold_awaiter`-style parameter analysis, **plus** drop-before-call so a self-call with closure drop glue is a real tail call | 42-45% of instructions on combinator-style code, 4 allocations per region bracket, ~250 stdlib functions off the CPS path -- and no closure loop overflowing its stack when it leaves the trampoline | large |
 | 7 | `--release` = `-O3` with the inline preamble (or #1) (R-7, decision 2); LTO optional | ~6% from `-O3` (more on inline-C code), ~4% more with LTO; together with the inline preamble, geomean 0.679 | small |
 | 8 | Region rewind fixtures that assert a rewind (`TUR_REGION_STATS` pinned) | the rewind-corruption tests test a rewind again | small |

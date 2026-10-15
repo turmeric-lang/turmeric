@@ -138,7 +138,7 @@ E = engines, W = web, D = documentation disagreement.
 | R-7 | **Emitted programs are built at `-O2 -fno-strict-aliasing -fwrapv` with no `-O3`, `-march` or LTO option, and `tur run --release` is parsed and ignored.** **Author (2026-10-11): the default stays `-O2`; `--release` adds `-O3`; `-march=native` is never on by default** (it produces binaries that will not run elsewhere). WP2's sweep decides whether `-O3` buys anything here. | `src/main.c:195`, `:3851`, `:6011` (`(void)release;`) | verified; **policy decided** |
 | R-8 | `musttail` is honoured only by clang on x86-64/aarch64; gcc and the JIT get no guarantee for non-self, non-fused tail calls, and a CPS self-loop survives only through gcc's `-O2` sibling-call optimization. | `emit_module.c:10218-10232`; [cps-self-call-through-join-grows-the-stack](../reported/cps-self-call-through-join-grows-the-stack.md) | doc / reported |
 | R-9 | `string/concat` copies both inputs; a loop that concatenates is quadratic (~5 KB traffic per appended character at 10k appends). Documented, with `StringBuilder` as the answer; worth a census of how often stdlib and examples do it anyway. | memory-usage-guide "Strings" | doc |
-| R-10 | Async tasks each `malloc` a 1 MB fiber stack and switch through `swapcontext`-shaped glue; hand-written `fiber_ctx_{x64,arm64}.S` exist and are compiled in. Which path a task actually takes, and what a switch costs, is unmeasured. | `emit_module.c:15727-15750`, `src/async/fiber.c:21`, `src/CMakeLists.txt:399-401` | partly verified; unmeasured |
+| R-10 | Async tasks each `malloc` a 1 MB fiber stack and switch through `swapcontext`-shaped glue; hand-written `fiber_ctx_{x64,arm64}.S` exist and are compiled in. Which path a task actually takes, and what a switch costs, is unmeasured. | `emit_module.c:15727-15750`, `src/async/fiber.c:21`, `src/CMakeLists.txt:399-401` | measured (WP2; corrected in WP4): compiled `async`/`await` takes neither path -- it parks a CPS continuation copy, and its ~813 ns turn is the allocator. The fiber stack and `swapcontext` belong to the explicit fiber API |
 | R-11 | Dictionary dispatch through a function value inside a function also triggers R-1's coloring; monomorphization removes it only where `type_has_concrete_codegen_layout()` succeeds. How much dictionary dispatch survives in the stdlib after monomorphization is unknown. | typeclass-internals-guide, monomorphization-abi-guide | doc; unmeasured |
 
 ### Memory and allocation (WP3)
@@ -481,6 +481,17 @@ per-iteration allocations a user would not expect.
 the curves; guide update. **Effort:** small-medium.
 
 ### WP4 -- Interpreter and JIT
+
+**Status: done 2026-10-15.**
+[docs/artifacts/perf-audit-2026-10/wp4-engines.md](../artifacts/perf-audit-2026-10/wp4-engines.md)
+has the refreshed triangle (the guide's table is replaced), the `tur jit`
+phase split, the E-2 spike and the ranked table. Headlines: c2mir is 65% of a
+quick `tur jit` run, and a cached MIR image is ready to run in ~2 ms against
+~75 ms of c2mir; `eval_lookup` is now 11-12% of interpreted loops, but code
+inside a `defmodule` runs 1.5x the instructions through a `snprintf` and a
+discarded error per non-local reference; the JIT's worst gap is c2mir calling
+`memcpy` for every 16-byte struct copy (inlining them: -29% on Saffron); and
+R-10 is corrected -- compiled `async` never calls `swapcontext`.
 
 **Goal.** Refresh the engine triangle on the baseline box and attribute each
 engine's fixed cost.

@@ -1,0 +1,40 @@
+--------------------------------------------------------------------------------
+Profile data file '/srv/perf/runs/wp4/callgrind/mandel.cg' (creator: callgrind-3.22.0)
+--------------------------------------------------------------------------------
+I1 cache: 
+D1 cache: 
+LL cache: 
+Timerange: Basic block 0 - 1741868159
+Trigger: Program termination
+Profiled target:  ./build-relg/tur --interpret benchmarks/triangle/mandel.tur (PID 4818, part 1)
+Events recorded:  Ir
+Events shown:     Ir
+Event sort order: Ir
+Thresholds:       99
+Include dirs:     
+User annotated:   
+Auto-annotation:  on
+
+--------------------------------------------------------------------------------
+Ir                     
+--------------------------------------------------------------------------------
+7,673,851,591 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                      file:function
+--------------------------------------------------------------------------------
+3,052,937,928 (39.78%)  src/turi/eval.c:eval_drive_ex [/srv/perf/wp4/build-relg/tur]
+  699,874,499 ( 9.12%)  src/turi/eval.c:eval_lookup [/srv/perf/wp4/build-relg/tur]
+  694,665,830 ( 9.05%)  src/turi/eval.c:eval_expr_impl [/srv/perf/wp4/build-relg/tur]
+  573,849,986 ( 7.48%)  ./string/../sysdeps/x86_64/multiarch/strcmp-avx2.S:__strcmp_avx2 [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  507,822,211 ( 6.62%)  src/turi/eval.c:eval_builtin [/srv/perf/wp4/build-relg/tur]
+  489,744,280 ( 6.38%)  ./malloc/./malloc/malloc.c:_int_free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  407,998,323 ( 5.32%)  ./malloc/./malloc/malloc.c:malloc [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  372,110,193 ( 4.85%)  src/turi/eval.c:eval_expr [/srv/perf/wp4/build-relg/tur]
+  253,860,928 ( 3.31%)  ./malloc/./malloc/malloc.c:free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  101,855,398 ( 1.33%)  src/turi/eval.c:frame_pin_bare_tyvars_from_args [/srv/perf/wp4/build-relg/tur]
+   99,728,390 ( 1.30%)  ./malloc/./malloc/arena.c:free
+   82,686,390 ( 1.08%)  src/turi/eval.c:poly_wrap_dict_clone_value [/srv/perf/wp4/build-relg/tur]
+   65,966,719 ( 0.86%)  src/turi/eval.c:frame_release_one [/srv/perf/wp4/build-relg/tur]
+   42,066,109 ( 0.55%)  src/turi/eval.c:turi_copy_byvalue_struct_arg [/srv/perf/wp4/build-relg/tur]
+   32,089,643 ( 0.42%)  src/turi/eval.c:frame_release [/srv/perf/wp4/build-relg/tur]
