@@ -320,6 +320,15 @@ add_test(
   COMMAND bash tests/run-demangle.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# `--timings` (profiling-plan C0+C1): the tur-profile/1 JSON's shape, the
+# phases-partition-the-wall-clock invariant, that each zone a build crosses
+# fires, and that the flag changes no emitted C.  Shape only, never numbers.
+add_test(
+  NAME tur_timings_tests
+  COMMAND bash tests/run-timings.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_timings_tests PROPERTIES TIMEOUT 720)
 
 # The compiler's recursion backstop.  There is no depth CAP any more -- the
 # driver runs on a TUR_STACK_MB-sized stack -- so the remaining guard fires on

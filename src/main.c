@@ -85,6 +85,7 @@
 #include "fmt.h"
 #include "forms.h"
 #include "pass.h"         /* Phase P19-1: pass scheduling */
+#include "prof.h"         /* profiling-plan C0+C1: --timings */
 #include "reader.h"
 #include "reader_macros.h"
 #include "lang_dialects.h"  /* `tur dialects`: the `#lang` base axis */
@@ -193,6 +194,17 @@ static size_t source_stem_len(const char *name, size_t len) {
  * It rides here, after TUR_CC_FLAGS, so a harness or user override that
  * replaces the defaults cannot drop it. */
 #define TUR_EMITTED_C_CC_FLAGS " -Wno-misleading-indentation -fwrapv"
+
+/* Every toolchain subprocess the driver runs over emitted C -- cc, the link,
+ * the parallel prelude pieces' shell, nm -- goes through here, so --timings
+ * charges the wall time the driver spends waiting on it to "cc".  The time is
+ * wall time: pieces compiled in parallel overlap, and their CPU is not summed. */
+static int cc_system(const char *cmd) {
+    prof_enter(PROF_CC);
+    int rc = system(cmd);
+    prof_exit(PROF_CC);
+    return rc;
+}
 
 /* Global configuration variables — defined in globals.c (part of tur_core) */
 /* Phase HKT-P6: --dump-kinds flag: print kind annotations after kind-check */
@@ -655,12 +667,25 @@ static const PassKind core_passes[] = {
 };
 static const int n_core_passes = (int)(sizeof(core_passes) / sizeof(core_passes[0]));
 
-/* Run all core compiler passes in order.  ctx->forms/nforms must be set
- * before calling; ctx->prog and ctx->effect_env are populated by the passes.
- * Returns 0 on success, 1 on the first pass failure.                        */
-static int run_core_passes(PassContext *ctx) {
-    for (int i = 0; i < n_core_passes; i++) {
-        switch (core_passes[i]) {
+/* --timings (profiling-plan 3.3): the zone each core pass is charged to.  No
+ * default arm on purpose -- a new PassKind without a zone is a -Wswitch error
+ * here, not a pass whose time silently lands in whatever zone encloses it. */
+static ProfZone pass_zone(PassKind k) {
+    switch (k) {
+    case PASS_ELABORATE:        return PROF_ELAB;
+    case PASS_KIND_CHECK:       return PROF_KIND;
+    case PASS_EFFECT_LOWER:     return PROF_EFFECT_LOWER;
+    case PASS_EFFECT_ROW_INFER: return PROF_EFFECT_ROW;
+    case PASS_CPS:              return PROF_CPS;
+    case PASS_BORROW_CHECK:     return PROF_BORROW;
+    }
+    return PROF_OTHER;
+}
+
+/* One core pass.  Returns 0 to continue, 1 on failure, 2 to stop the
+ * pipeline successfully (audit-spans mode, after elaboration). */
+static int run_core_pass(PassContext *ctx, PassKind kind) {
+        switch (kind) {
         case PASS_ELABORATE:
             ctx->prog = elaborate_program(ctx->arena, ctx->st,
                                           ctx->forms, ctx->nforms,
@@ -687,7 +712,9 @@ static int run_core_passes(PassContext *ctx) {
              * emit is tracked separately).  Graduated (vl-wide-mono, 2026-07-05):
              * the resolve pass is unconditional; it no-ops when no wide-functor
              * lens pin populated the registry during elaboration. */
+            prof_enter(PROF_MONO);
             mono_specs_resolve_program(ctx->prog);
+            prof_exit(PROF_MONO);
             if (g_dump_mono_specs) {
                 mono_specs_dump(stdout);
                 /* `tur run` calls this pass in-process then execv's the compiled
@@ -701,7 +728,7 @@ static int run_core_passes(PassContext *ctx) {
              * audit mode never emits. */
             if (g_audit_spans) {
                 g_audit_span_holes = span_audit_program(ctx->prog, stdout);
-                return 0;
+                return 2;
             }
             break;
         case PASS_KIND_CHECK:
@@ -780,6 +807,20 @@ static int run_core_passes(PassContext *ctx) {
 #endif
             break;
         }
+    return 0;
+}
+
+/* Run all core compiler passes in order.  ctx->forms/nforms must be set
+ * before calling; ctx->prog and ctx->effect_env are populated by the passes.
+ * Returns 0 on success, 1 on the first pass failure.                        */
+static int run_core_passes(PassContext *ctx) {
+    for (int i = 0; i < n_core_passes; i++) {
+        ProfZone z = pass_zone(core_passes[i]);
+        prof_enter(z);
+        int rc = run_core_pass(ctx, core_passes[i]);
+        prof_exit(z);
+        if (rc == 1) return 1;
+        if (rc == 2) return 0;
     }
     return 0;
 }
@@ -1214,10 +1255,14 @@ static uint32_t prepend_stdlib_forms(Arena *arena, SymbolTable *st,
                                      Form ***forms_in_out,
                                      uint32_t *nforms_in_out,
                                      uint8_t *file_id_in_out) {
+    /* --timings: the auto-loaded stdlib is module loading; its parse inside
+     * is "read" and its elaboration later is "elaborate". */
+    prof_enter(PROF_MODULE_LOAD);
     uint32_t n = tur_stdlib_prepend_forms(arena, st, resolve_stdlib_root(),
                                           entry_path, g_no_auto_stdlib,
                                           forms_in_out, nforms_in_out,
                                           file_id_in_out);
+    prof_exit(PROF_MODULE_LOAD);
     /* The auto-loaded files took ids [1, *file_id_in_out); an import or a
      * `(load ...)` must be numbered past them (elab_core.c). */
     if (file_id_in_out) diag_note_autoload_file_ids(*file_id_in_out);
@@ -1340,6 +1385,9 @@ static int compile_to_c(const char *path, Buf *out_c,
              * apart from "could not audit". */
             if (rc == 0 && g_audit_span_holes > 0) rc = 3;
         } else if (rc == 0) {
+            /* --timings: everything from here to the end of the block is
+             * producing C -- the SRFI prune, the split units, the manifest. */
+            prof_enter(PROF_EMIT);
             /* DEDUP-4b: decide before emitting -- the preamble's text depends
              * on whether the archive will supply the rc<T>/GC runtime. */
             resolve_rcgc_from_archive();
@@ -1448,6 +1496,7 @@ static int compile_to_c(const char *path, Buf *out_c,
                 if (emit_exports_manifest(g_manifest_sink, ctx.prog) != 0) rc = 1;
                 else manifest_keep_defined(g_manifest_sink, mfrom, out_c);
             }
+            prof_exit(PROF_EMIT);
         }
     }
 
@@ -1474,9 +1523,25 @@ static int compile_to_c(const char *path, Buf *out_c,
  * *stdlib_count_out is set to the number of prepended prelude forms.
  * On any load failure the returned array equals user_forms unchanged and
  * *stdlib_count_out = 0. */
+static Form **load_project_prelude_impl(Arena *arena, SymbolTable *st,
+                                         Form **user_forms, uint32_t nuser,
+                                         uint32_t *stdlib_count_out);
+
+/* --timings: as prepend_stdlib_forms -- loading the prelude is module-load,
+ * its parse "read". */
 static Form **load_project_prelude(Arena *arena, SymbolTable *st,
                                     Form **user_forms, uint32_t nuser,
                                     uint32_t *stdlib_count_out) {
+    prof_enter(PROF_MODULE_LOAD);
+    Form **r = load_project_prelude_impl(arena, st, user_forms, nuser,
+                                         stdlib_count_out);
+    prof_exit(PROF_MODULE_LOAD);
+    return r;
+}
+
+static Form **load_project_prelude_impl(Arena *arena, SymbolTable *st,
+                                         Form **user_forms, uint32_t nuser,
+                                         uint32_t *stdlib_count_out) {
     *stdlib_count_out = 0;
 
     /* The prelude IS the project-mode stdlib auto-load: every file the
@@ -1640,10 +1705,12 @@ static int compile_to_h(const char *path, Buf *out_h, const char *module_name,
         ctx.separate_compilation = true;
         ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
+        prof_enter(PROF_EMIT);
         if (rc == 0 && emit_header(out_h, module_name, ctx.prog, true,
                                    forced, n_forced) != 0) {
             rc = 1;
         }
+        prof_exit(PROF_EMIT);
     }
 
     symtab_free(&st);
@@ -1747,6 +1814,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
         ctx.separate_compilation = true;
         ctx.reader_macros   = &reader_macros_reg;
         rc = run_core_passes(&ctx);
+        prof_enter(PROF_EMIT);
         if (rc == 0 && emit_implementation(out_c, module_name, ctx.prog, true,
                                            forced, n_forced,
                                            out_borrow_specs, out_n_borrow_specs) != 0) {
@@ -1761,6 +1829,7 @@ static int compile_to_implementation(const char *path, Buf *out_c, const char *m
             if (emit_exports_manifest(out_manifest, ctx.prog) != 0) rc = 1;
             else manifest_keep_defined(out_manifest, mfrom, out_c);
         }
+        prof_exit(PROF_EMIT);
     }
 
     symtab_free(&st);
@@ -3259,7 +3328,7 @@ static void resolve_autolink_flags(Buf *autolink, const char *cc_flags,
                     snprintf(lib_path + plen, sizeof(lib_path) - plen, "/libturi.a");
                     snprintf(nm_cmd, sizeof(nm_cmd),
                              "nm %s 2>/dev/null | grep -q __asan_init", lib_path);
-                    if (system(nm_cmd) == 0) {
+                    if (cc_system(nm_cmd) == 0) {
                         *out_needs_asan = true;
                         break;
                     }
@@ -3428,7 +3497,7 @@ static int link_command_run(const char *cc, const char *cc_flags,
      * theories (flag ordering, quoting, a missing archive) had each been tested
      * and eliminated. */
     if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
-    int sys_rc = system(cmd.data);
+    int sys_rc = cc_system(cmd.data);
     buf_free(&cmd);
 
     if (sys_rc == 0 && tur_settle_exe_output(out_path) != 0) {
@@ -3507,7 +3576,7 @@ static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *
         buf_puts(&cmd, " exit $ok");
         buf_putc(&cmd, '\0');
         if (show) fprintf(stderr, "CC: %s\n", cmd.data);
-        rc = system(cmd.data) != 0;
+        rc = cc_system(cmd.data) != 0;
         buf_free(&cmd);
     }
     if (rc == 0) {
@@ -3522,7 +3591,7 @@ static int prelude_compile_pieces(const Buf *lib_c, const char *cc, const char *
         buf_putc(&cmd, '\0');
         if (!pq_ok) { buf_free(&cmd); return 2; }
         if (show) fprintf(stderr, "CC: %s\n", cmd.data);
-        rc = system(cmd.data) != 0;
+        rc = cc_system(cmd.data) != 0;
         buf_free(&cmd);
     }
     for (int k = 0; k < written; k++) {
@@ -3832,7 +3901,7 @@ static int prelude_split_object(const Buf *lib_c, const char *cc, const char *cc
                       if (lock_fd >= 0) { close(lock_fd); unlink(lock); }
                       return 2; }
         if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
-        rc = system(cmd.data);
+        rc = cc_system(cmd.data);
         buf_free(&cmd);
     }
     buf_free(&flags);
@@ -4340,6 +4409,8 @@ static int cmd_build_once(const char *input, const char *out_path,
     Buf split_c;
     buf_init(&split_c);
     bool used_split = false;
+    /* --timings: the swap re-emits the preamble to hash it -- emission. */
+    prof_enter(PROF_EMIT);
     if (g_runtime_mode == TUR_RT_SPLIT) {
         if (wasm_target)
             fprintf(stderr,
@@ -4356,6 +4427,7 @@ static int cmd_build_once(const char *input, const char *out_path,
                preamble_split_auto_applies()) {
         used_split = jit_try_split_preamble(&csrc, &split_c);
     }
+    prof_exit(PROF_EMIT);
     Buf *emit_c = used_split ? &split_c : &csrc;
 
     /* Phase S2: scan for __tur_include__ directives and inject them at the
@@ -5814,6 +5886,9 @@ static int cmd_jit(int argc, char **argv) {
      * span, keeping any hoisted prefix.  TUR_JIT_NO_SPLIT=1 opts out. */
     Buf split_src;
     buf_init(&split_src);
+    /* --timings: the split swap and the prune below rework the emitted C --
+     * "emit"; c2mir and the link are "jit" (tur_jit_execute). */
+    prof_enter(PROF_EMIT);
     bool split_used = jit_try_split_preamble(&csrc, &split_src);
     /* jit-suite-pays-for-the-whole-prelude: c2mir compiles every definition
      * it is handed, and every program carries the whole auto-loaded prelude
@@ -5849,6 +5924,7 @@ static int cmd_jit(int argc, char **argv) {
         const char *dump = getenv("TUR_JIT_DUMP_C");
         if (reduced_used && dump && *dump) buf_to_path(&split_src, dump);
     }
+    prof_exit(PROF_EMIT);
 
     /* Program argv: argv[0] = the source path (matches what a compiled binary
      * would see as its own name closely enough for *args*), then everything
@@ -6677,7 +6753,9 @@ static int cmd_run(int argc, char **argv) {
             }                                                            \
         }                                                                \
         buf_putc(&_cmd, '\0');                                           \
+        prof_enter(PROF_RUN);                                            \
         int _sys = _q ? system(_cmd.data) : 2;                           \
+        prof_exit(PROF_RUN);                                             \
         if (!_q) fprintf(stderr, "tur run: an argument was too long to quote\n"); \
         buf_free(&_cmd);                                                  \
         unlink(out_path);                                                \
@@ -6747,7 +6825,9 @@ static int cmd_run(int argc, char **argv) {
             buf_putc(&run_cmd, '\0');
             if (!rq)
                 fprintf(stderr, "tur run: an argument was too long to quote\n");
+            prof_enter(PROF_RUN);
             int sys = rq ? system(run_cmd.data) : 2;
+            prof_exit(PROF_RUN);
             buf_free(&run_cmd);
             unlink(out_path);
             free(user_inc);
@@ -7246,7 +7326,9 @@ static int cmd_test(const char *dir) {
             Buf test_cmd; buf_init(&test_cmd);
             bool tq = buf_put_quoted(&test_cmd, out_path);
             buf_putc(&test_cmd, '\0');
+            prof_enter(PROF_RUN);   /* --timings: the test binary's own run */
             int status = tq ? system(test_cmd.data) : 2;
+            prof_exit(PROF_RUN);
             buf_free(&test_cmd);
             run_rc = decode_exit_status(status);
         }
@@ -8152,7 +8234,7 @@ static int cmd_build_multi_files(char **tur_files, int n_files,
         return 2;
     }
     if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
-    int sys_rc = system(cmd.data);
+    int sys_rc = cc_system(cmd.data);
     buf_free(&cmd);
 
     /* Clean up temp files */
@@ -8828,7 +8910,7 @@ static int cmd_compile(const char *input, const char *out_obj,
         return 2;
     }
     if (getenv("TUR_SHOW_CC")) fprintf(stderr, "CC: %s\n", cmd.data);
-    int sys_rc = system(cmd.data);
+    int sys_rc = cc_system(cmd.data);
     buf_free(&cmd);
     buf_free(&aux_includes);
 
@@ -10459,6 +10541,48 @@ static bool enable_experiment_list(const char *list, ExperimentSource src) {
     return true;
 }
 
+/* profiling-plan C0+C1: does `--timings <arg>` mean <arg> is the JSON
+ * destination?  The two-token form cannot otherwise be told apart from
+ * `--timings <input-file>`, so it takes the next argument only when that is
+ * unmistakably an output path: one ending in `.json`, or a /dev/ node
+ * (/dev/stdout, /dev/stderr, /dev/fd/N).  `--timings=<path>` takes any path,
+ * and `--timings=-` means stdout. */
+static bool timings_path_like(const char *a) {
+    if (!a || !*a) return false;
+    if (strncmp(a, "/dev/", 5) == 0) return true;
+    size_t n = strlen(a);
+    return n > 5 && strcmp(a + n - 5, ".json") == 0;
+}
+
+/* --timings / --timings=<path> / --timings <path>: start the zone timer and
+ * strip the flag (and its path) from argv.  On any command -- the zones are
+ * where the compiler is, so a command that compiles nothing reports "other".
+ * Stops at `--`: what follows is the program's own argv. */
+static void parse_timings_flag(int *argc_io, char **argv) {
+    int argc = *argc_io;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--") == 0) break;
+        int take = 0;
+        const char *path = NULL;
+        if (strcmp(argv[i], "--timings") == 0) {
+            take = 1;
+            if (i + 1 < argc && timings_path_like(argv[i + 1])) {
+                path = argv[i + 1];
+                take = 2;
+            }
+        } else if (strncmp(argv[i], "--timings=", 10) == 0) {
+            take = 1;
+            path = argv[i] + 10;
+        }
+        if (take == 0) continue;
+        prof_start(argc, argv, path);   /* the command as typed, flag and all */
+        for (int j = i; j + take < argc; j++) argv[j] = argv[j + take];
+        argc -= take;
+        i--;
+    }
+    *argc_io = argc;
+}
+
 /* Apply flags string (e.g. "-Xgadt -Xlinear") to global compiler flags. */
 static void wk_apply_flags(const char *flags_str) {
     if (!flags_str || !*flags_str) return;
@@ -10512,6 +10636,25 @@ static void wk_apply_flags(const char *flags_str) {
             g_macro_caps_io = true;
         }
         else if (strcmp(tok, "--no-proc-macros") == 0) g_no_proc_macros = true;
+        /* profiling-plan 2.1: a fixture child re-applies the compiler flags
+         * from this string, and a flag without a row here is silently lost.
+         * The child times its own compile and writes its own report before
+         * _exit (which skips atexit, so the child calls prof_finish itself);
+         * the worker process itself is not profiled and nothing is merged
+         * across fixtures.  Only the one-token forms: the path of
+         * `--timings <path>` would be a second token. */
+        else if (strcmp(tok, "--timings") == 0 || strncmp(tok, "--timings=", 10) == 0) {
+            static char *wk_argv[] = { "tur", "worker", NULL };
+            static char  wk_path[1024];
+            const char  *path = NULL;
+            if (tok[9] == '=') {
+                snprintf(wk_path, sizeof wk_path, "%s", tok + 10);
+                path = wk_path;
+            }
+            prof_start(2, wk_argv, path);
+            prof_note("a `tur worker` fixture child: this one fixture's work only; "
+                      "the worker process is not profiled and fixtures are not merged");
+        }
         tok = strtok(NULL, " \t");
     }
 }
@@ -10811,6 +10954,7 @@ static int wk_eval_fixture(const char *input, const char *flags_str,
             fprintf(stderr, "unsafe stats: %u blocks, %u total forms\n",
                     g_unsafe_block_count, g_unsafe_total_lines);
         }
+        prof_finish();   /* --timings: _exit skips atexit */
         fflush(NULL);
         _exit(exit_code);
     }
@@ -10862,6 +11006,7 @@ static int wk_emit_c_fixture(const char *input, const char *flags_str, char **ge
             fwrite(cbuf.data, 1, cbuf.len, stdout);
         }
         buf_free(&cbuf);
+        prof_finish();   /* --timings: _exit skips atexit */
         fflush(NULL);
         _exit(rc);
     }
@@ -11346,6 +11491,9 @@ static int usage(void) {
         "  --json-diagnostics               output diagnostics as JSON (phase 8)\n"
         "  --explain <TUR-E####>            print explanation for a diagnostic code (HKT-P5)\n"
         "  --explain <snippet>              compile code snippet and explain errors (phase 8)\n"
+        "  --timings[=<path>]               time each compiler phase (read, elaborate, emit, cc, ...):\n"
+        "                                   a table on stderr; with a path, tur-profile/1 JSON there too\n"
+        "                                   (`--timings <path>` when it ends in .json or is /dev/...)\n"
         "  --dump-kinds                     dump kind annotations after kind-check (HKT-P6)\n"
         "  --strict-effects                 warn on unannotated effectful functions (ER1)\n"
         "  -Werror=strict-effects           make the --strict-effects warnings errors (implies it)\n"
@@ -11434,6 +11582,10 @@ static int usage_build(void) {
         "  --debug           emit `#line` directives mapping the generated C back\n"
         "                    to `.tur` source, and compile single-file builds with\n"
         "                    `-g -O0` so gdb/lldb step through Turmeric source.\n"
+        "  --timings[=<p>]   print where the compile's time went, per phase\n"
+        "                    (exclusive time; phases sum to the wall clock), and\n"
+        "                    with <p> write it as tur-profile/1 JSON.  Also on\n"
+        "                    check, emit-c, run and jit.  Profile a Release tur.\n"
         "\n"
         "Try 'tur --help' for global options.\n");
     return 0;
@@ -12874,6 +13026,11 @@ static int try_external_subcommand(int argc, char **argv) {
 
 
 static int tur_main_inner(int argc, char **argv) {
+    /* profiling-plan C0+C1: --timings first, so the clock starts before
+     * anything it should measure, and stripped before g_main_argv is taken
+     * below -- the split build's cache key hashes the command line, and a
+     * profiler that changed the key would profile a cold cache. */
+    parse_timings_flag(&argc, argv);
     /* TUR_ADT_SLAB=1: bump-allocate never-freed multi-variant ADT boxes.
      * Env-only measurement seam (see
      * docs/reported/multi-variant-adts-always-heap-allocate.md), deliberately

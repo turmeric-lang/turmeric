@@ -3,6 +3,7 @@
 #include "runtime/globals.h"     /* g_lang_prelude */   /* r7rs-lang-plan R2: Scheme core forms in an imported module */
 #include "elab_internal.h"
 #include "lang_dialects.h"      /* lang_span_is_dynamic: the H6 forward-decl rule */
+#include "prof.h"               /* --timings: the module-load zone */
 
 /* ---- file-local helper forward declarations ---- */
 static bool module_name_valid(const char *name, uint32_t len);
@@ -606,7 +607,21 @@ static int module_read_named(const char *dir, const char *name,
                              char *out, size_t cap, int *out_len,
                              char **src, size_t *src_len);
 
+static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span import_span);
+
+/* --timings (profiling-plan C1): an import's own cost -- the search over the
+ * module paths, the file read, `(load ...)` splicing, export collection --
+ * is "module-load".  The parse inside it is "read" (the reader's zone) and
+ * the module's forms are "elaborate" (elab_form re-enters that zone), so this
+ * measures loading, not the size of what was loaded. */
 static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_span) {
+    prof_enter(PROF_MODULE_LOAD);
+    ElabModule *m = elab_load_module_impl(e, name, import_span);
+    prof_exit(PROF_MODULE_LOAD);
+    return m;
+}
+
+static ElabModule *elab_load_module_impl(Elab *e, const Symbol *name, Span import_span) {
     /* SB2: Reject imports in sandboxed environments. */
     if (e->sandboxed) {
         diag_emit(DIAG_ERROR, import_span,
@@ -1008,7 +1023,9 @@ static ElabModule *elab_load_module(Elab *e, const Symbol *name, Span import_spa
      * matters for the bare top-level defns that live alongside it.  See
      * docs/archive/compiled-string-return-int-conversion.md (secondary
      * blocker). */
+    prof_enter(PROF_ELAB);   /* --timings: declaring defns is elaboration */
     elab_forward_declare_defns(e, forms, 0, nforms);
+    prof_exit(PROF_ELAB);
 
     const Form *saved_import_tl_stmt = e->toplevel_stmt;
     for (uint32_t i = 0; i < nforms; i++) {

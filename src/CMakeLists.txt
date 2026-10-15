@@ -200,6 +200,8 @@ set(TUR_CORE_SOURCES
     compiler/elab_toplevel.c
     compiler/elab_reflect.c
     compiler/mono_specs.c
+    # profiling-plan C0+C1: the --timings zone timer (prof.h).
+    compiler/prof.c
     compiler/emit_core.c
     compiler/emit_dk_runtime.c
     compiler/emit_cps_ir.c

@@ -1,18 +1,22 @@
 # Profiling -- where does the time actually go
 
-> **Status: P0 LANDED 2026-08-25; everything else PROPOSED.** Written
+> **Status: P0 LANDED 2026-08-25; C0+C1 LANDED 2026-10-14 (`--timings`,
+> performance-audit-plan WP1); everything else PROPOSED.** Written
 > 2026-08-25 in response to "is there a way to output performance information,
 > percentages of time spent in what sub-system, possibly
 > `--profile <profile-json>`". The answer was no; this is the plan for yes.
 > `tur demangle` (section 5.1) is built and tested -- `perf` and Instruments
 > read cleanly against a Turmeric binary today. Open questions 2 and 3 were
 > answered by the author on 2026-08-25 and are folded into sections 2 and 4.3.
-> **Re-verified 2026-09-28: nothing past P0 has landed** (P0 is a9f714914).
-> No `--profile`, `--timings`, `tur profile`, `prof*.c`, `.tur-symbols`
-> side-table or `tur-profile/1` output exists in `src/`;
-> `tur jit --timing-json` is unchanged and unabsorbed; `performance-guide.md`
-> has no Profiling section. Remaining, none started or declined: P0a, P1a, C0+C1, P1,
-> P2, P3, C2/P4, P5, P6, and the section 6 guide. Open questions 1, 4, 5 stand.
+> **C0+C1 (2026-10-14):** `src/compiler/prof.{h,c}`, the zones of section
+> 1.2 plus `jit`, `run` and `other`, `--timings[=<path>]` on any compiling
+> command, the `kind: "compiler"` document, `tests/run-timings.sh` (ctest
+> `tur_timings_tests`), and a "Compiler timings" subsection in
+> `performance-guide.md`; what was decided differently is under C0+C1 in
+> section 5. `tur jit --timing-json` is unchanged and unabsorbed (C4).
+> Remaining, none started or declined: P0a, P1a, P1, P2, P3, C2/P4, P5, P6, C4,
+> and the rest of the section 6 guide (the `--profile` half). Open questions
+> 1, 4, 5 stand.
 > The `src/` file:line anchors below have drifted (e.g. `--timing-json` is now
 > `src/main.c:4634`) -- locate by symbol, not line.
 > **Type:** Tooling / runtime / compiler driver
@@ -516,11 +520,44 @@ same table rather than re-deriving names from `backtrace_symbols`.
 This is cheap, it subsumes the hardest part of P0, and it should land before
 anyone tries to tighten `is_signal_mnemonic()` further.
 
-### C0+C1 -- compiler timings
+### C0+C1 -- compiler timings (LANDED 2026-10-14)
 
 `prof.h` zone API, the `run_core_passes` / read / emit / cc hooks, the
 elaboration subdivision, `--timings`, JSON + stderr table. Answers question 2
 end to end.
+
+As built, and where it differs from sections 2-3:
+
+- **Three zones beyond 1.2's list.** `jit` (c2mir, the MIR link and the
+  context teardown), `run` (the program's own execution under `tur run` /
+  `tur jit`, so the partition holds there too -- the report says the phase is
+  not compile time) and `other` (the stack's bottom: what no zone claims).
+  `pass_zone()` in `main.c` maps every `PassKind` to a zone in a switch with
+  no default, so a new pass without a zone is a `-Wswitch` error rather than
+  a review note.
+- **The stack is run-length encoded**, and `elab_form` re-enters
+  `elaborate`.  The C1 zones (module-load, macro-expand, typeclass, refine)
+  each elaborate forms of their own; `elab_form` pushes `elaborate` when
+  something else is on top, so that work goes back where it belongs.  Pushing
+  the zone already on top bumps a count and reads no clock, so the cost is
+  per zone *change*, and the report counts them (`clock_reads`, ~1,200 for a
+  one-line program: tens of microseconds).
+- **`typeclass` includes instance resolution** (`typeclass_env_lookup_instance`)
+  wherever it is asked for, the CPS pass included.  **`mono`** is the
+  by-value spec resolution pass only; monomorphs instantiated inline are
+  charged to `elaborate` or `emit`, wherever that happens.
+- **`--timings <path>` takes the next argument only when it ends in `.json`
+  or is a `/dev/` node**, since otherwise `--timings f.tur` is ambiguous;
+  `--timings=<path>` takes anything, and `-` / `/dev/stdout` reuse the
+  process's stdout.  Parsed and stripped before anything else, so the r7rs
+  split cache key (which hashes the command line) does not see it.
+- **No worker processes in `tur build`.** Single-file and project builds run
+  in one process; their only children are toolchain subprocesses, charged to
+  `cc` as the wall time the driver waits (parallel prelude pieces overlap).
+  `wk_apply_flags` has the 2.1 row anyway, for the `tur worker` fixture
+  evaluator: each forked fixture child times its own compile and writes its
+  report before `_exit`; nothing is merged.
+- An extra envelope key, `clock_reads`, records the timer's own cost.
 
 ### P1 -- leaf sampling
 

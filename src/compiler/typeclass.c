@@ -1,5 +1,6 @@
 #include "typeclass.h"
 #include "forms.h"     /* class-superclasses: the unresolved `(Super var)` forms */
+#include "prof.h"      /* --timings: instance resolution is "typeclass" */
 
 #include <stdlib.h>
 #include <string.h>
@@ -351,9 +352,27 @@ TypeClassInstance *typeclass_env_lookup_instance_exact(const TypeClassEnv *env,
  * When an instance has constraints (e.g., Clone[Pair a b] requires [Clone a, Clone b]),
  * verify that the required instances exist for the lookup type arguments.
  */
+static TypeClassInstance *typeclass_env_lookup_instance_impl(const TypeClassEnv *env,
+                                                              TypeClass *typeclass,
+                                                              Type *type_args,
+                                                              uint8_t n_type_args);
+
+/* --timings: instance resolution is "typeclass" wherever it is asked for --
+ * a constrained call during elaboration, or the CPS pass. */
 TypeClassInstance *typeclass_env_lookup_instance(const TypeClassEnv *env,
                                                   TypeClass *typeclass,
                                                   Type *type_args, uint8_t n_type_args) {
+    prof_enter(PROF_TYPECLASS);
+    TypeClassInstance *r = typeclass_env_lookup_instance_impl(env, typeclass,
+                                                              type_args, n_type_args);
+    prof_exit(PROF_TYPECLASS);
+    return r;
+}
+
+static TypeClassInstance *typeclass_env_lookup_instance_impl(const TypeClassEnv *env,
+                                                              TypeClass *typeclass,
+                                                              Type *type_args,
+                                                              uint8_t n_type_args) {
     TypeClassInstance *fallback = NULL;
 
     for (TypeClassInstance *inst = env->instances; inst != NULL; inst = inst->next) {

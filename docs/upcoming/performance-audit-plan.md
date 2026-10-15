@@ -362,6 +362,13 @@ the artifact header.
 
 ### WP1 -- Compile latency
 
+**Status: done 2026-10-15.** `--timings` landed (below), and
+[docs/artifacts/perf-audit-2026-10/wp1-compile-latency.md](../artifacts/perf-audit-2026-10/wp1-compile-latency.md)
+has the corpus breakdown and the ranked table. In one line: cc is 91% of
+`tur build`, the front end a median 8 ms; an empty program still compiles
+425 KB of prelude C, and gcc spends 87% of a small build parsing it. C-2 is
+settled toward the r7rs audit.
+
 **Goal.** Answer "why is `tur build` slow" for plain Turmeric the way the r7rs
 audit answered it for r7rs, and settle C-2.
 
@@ -370,6 +377,8 @@ audit answered it for r7rs, and settle C-2.
   zone stack; a table to stderr and JSON to a path). Absorb
   `--timing-json` as that plan specifies. This is the one piece of tooling
   the audit builds, because every number in this package depends on it.
+  **Landed 2026-10-14** (profiling-plan C0+C1; `--timing-json` left as is,
+  its absorption being that plan's C4).
 - Run `--timings` over the corpus on the Release `tur`; callgrind the top
   three programs per zone. Expect C-3's three open hot spots to reappear.
 - Cost the prelude (C-1): time and bytes of the 34 auto-loaded files per

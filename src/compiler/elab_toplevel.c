@@ -7,6 +7,7 @@
 #include "refine_report.h"    /* SX8a-3: --dump-refine=json obligation dump */
 #include "lang_dialects.h"      /* saffron-lang-plan S6 (G7): lang_span_is_dynamic */
 #include "scheme_lower.h"       /* r7rs-lang-plan R2: the Scheme core forms */
+#include "prof.h"               /* --timings: elaborate / module-load / refine */
 
 /* duplicate-ctor-names-collide-in-emitted-c: the constructor-name census lives
  * in emit_core.c; declared here because elab_toplevel.c does not include
@@ -536,7 +537,24 @@ static StrSlice elab_cblock_resolve_cnames(Elab *e, StrSlice code, Span span,
     return strslice(copied, new_len);
 }
 
+static Expr *elab_form_impl(Elab *e, Form *f);
+
+/* --timings (profiling-plan C1): elaboration is the default zone inside
+ * elaboration.  The zones C1 carves out of PASS_ELABORATE -- module-load,
+ * macro-expand, typeclass, refine -- each elaborate forms of their own (an
+ * imported module's body, a method call's arguments, an expansion), and that
+ * work is elaboration, not the carving zone's; re-entering PROF_ELAB here is
+ * what hands it back.  When elaborate is already the innermost zone, which is
+ * nearly every call, the push would change nothing and is skipped. */
 Expr *elab_form(Elab *e, Form *f) {
+    if (!g_timings || prof_top_is(PROF_ELAB)) return elab_form_impl(e, f);
+    prof_enter(PROF_ELAB);
+    Expr *r = elab_form_impl(e, f);
+    prof_exit(PROF_ELAB);
+    return r;
+}
+
+static Expr *elab_form_impl(Elab *e, Form *f) {
     switch (f->tag) {
         case F_NIL:  return e_nil(e, f->span);
         case F_BOOL: {
@@ -2942,7 +2960,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
                 nforms = nk;
             }
         }
+        prof_enter(PROF_MODULE_LOAD);   /* --timings: the parse inside is "read" */
         load_expand_forms(&lx, &e, arena, st, forms, nforms);
+        prof_exit(PROF_MODULE_LOAD);
         if (lx.rc != 0) rc = lx.rc;
         /* If the boundary sat at the very end (no user forms), the loop never
          * reached an index == boundary_in, so the post-expansion stdlib region
@@ -3472,7 +3492,9 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * declared below its subclass), reject cycles, and enforce the instance
      * obligation that keeps the entailment sound.  A no-op for a program with
      * no preamble. */
+    prof_enter(PROF_TYPECLASS);
     if (!elab_typeclass_superclasses_finish(&e)) rc = -1;
+    prof_exit(PROF_TYPECLASS);
 
     /* cps-backend-n6 cross-function resume: gated whole-program reset-wrapping.
      * Runs after the main pass so uses_crossfn_resume reflects the entire program
@@ -3647,6 +3669,11 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
      * hypothesis?" and may only believe a frame that has already been checked.
      * Same deferral rationale as the crossings themselves: a frame's callees may
      * be defined later in the unit. */
+    /* --timings: everything from here to the discharge is refinement work --
+     * frame checks, the crossings (with their path-condition walks), the
+     * solver -- so it is one "refine" zone; refine_discharge_one is zoned
+     * itself too, for the obligations decided in place during elaboration. */
+    prof_enter(PROF_REFINE);
     wf_resolve_write_frames(&e);
     wf_lint_image_globals(&e);   /* AI3.1: TUR-W0706, after every site exists */
     /* R4 slice 2: verify `#reads` frames against their elaborated bodies,
@@ -3664,6 +3691,7 @@ Expr *elaborate_program_session(Arena *arena, SymbolTable *st,
     li_decline_unanalyzed(&e);
     refine_resolve_call_sites(&e);
     refine_discharge_all(&e.refine_obs, arena);
+    prof_exit(PROF_REFINE);
     /* SX8a: the JSON obligation dump.  Emitted here rather than from the
      * discharge pass so it sees every obligation the unit produced, including
      * the crossings resolved just above.  Goes to stdout: it is the artifact
