@@ -272,11 +272,13 @@ test.describe('CI metrics dashboard', () => {
     page.on('pageerror', (e) => errors.push(e.message));
     page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 
-    // Stubbed so a legitimately-absent repo-loc / docs-counts file does not
-    // show up here as a 502 in the console. The degraded paths have their own
-    // tests.
+    // Stubbed so a legitimately-absent repo-loc / docs-counts / bench file does
+    // not show up here as a 502 in the console (bench-<year>.jsonl does not
+    // exist until the nightly's first publish). The degraded paths have their
+    // own tests.
     await stubLoc(page);
     await stubDocs(page);
+    await stubBench(page);
     await page.goto('/ci');
 
     await expect(page.locator('#ci-body')).toBeVisible({ timeout: 20_000 });
