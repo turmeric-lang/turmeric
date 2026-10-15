@@ -103,7 +103,7 @@ happens at compile time -- neither virtual dispatch nor runtime tag lookup is in
        return strcmp((const char *)x, (const char *)y) == 0;
   ```))
 ```
-```sweet-exp
+````sweet-exp
 defclass Eq [a]
   eq? [x y] :bool
 
@@ -117,7 +117,7 @@ definstance Eq [cstr]
        if (x == NULL || y == NULL) return false;
        return strcmp((const char *)x, (const char *)y) == 0;
   ```
-```
+````
 
 Instances can themselves be parametric -- "two pairs are equal when both
 halves are equal":

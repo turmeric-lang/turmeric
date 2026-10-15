@@ -260,8 +260,22 @@ jobs:
         with:
           python-version: '3.12'
 
+      # C-5 (docs/upcoming/security-audit-plan.md): `markdown` is pinned with
+      # hashes in THIS repo's tools/requirements.txt.  The workspace here is the
+      # turmeric-spices checkout, which carries no requirements file, and this
+      # step used to `pip install markdown` with no version at all -- so fetch
+      # just that one file from this repo and install from it.  The path is
+      # outside web/dist, so none of it reaches the deploy.
+      - name: Fetch the pinned doc requirements
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .turmeric-pins
+          sparse-checkout: tools/requirements.txt
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Install Python doc deps (markdown)
-        run: python3 -m pip install markdown
+        run: python3 -m pip install --require-hashes -r .turmeric-pins/tools/requirements.txt
 
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

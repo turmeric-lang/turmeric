@@ -41,25 +41,49 @@ import tempfile
 from pathlib import Path
 
 
-TURMERIC_OPEN_RE = re.compile(r'(?m)^```turmeric(?P<mods>[^\n]*)\n')
+# A fence is three or more backticks.  A block whose inline C closes with a
+# bare ``` line is fenced with four (````turmeric), so that the inner run is
+# content to every CommonMark renderer -- see find_early_closing_blocks.
+TURMERIC_OPEN_RE = re.compile(r'(?m)^(?P<fence>`{3,})turmeric(?P<mods>[^\n]*)\n')
 # Matched with .match(text, pos); the match is anchored at pos (no \A needed).
-SWEET_AFTER_RE = re.compile(r'\s*```sweet-exp\n')
+SWEET_AFTER_RE = re.compile(r'\s*(?P<fence>`{3,})sweet-exp\n')
 
 SPICES_ROOT = Path('../turmeric-spices/spices')
 
+# A line CommonMark reads as the closing fence of a backtick block: up to three
+# spaces of indent, a run of backticks at least as long as the opener, and
+# nothing else.
+_CLOSER_RE = re.compile(r'^ {0,3}(`{3,})[ \t]*$')
 
-def _read_fenced_block(text: str, pos: int) -> tuple[str, int]:
+
+def _read_fenced_block(text: str, pos: int, fence: int = 3) -> tuple[str, int]:
     """Read a markdown fenced block whose opening fence's newline is at `pos`.
 
     Returns (content, end) where `end` is just past the closing fence line.
 
-    A markdown block closes at a column-0 bare ``` line. Turmeric inline-C
+    A block opened with four or more backticks (`fence`) closes the CommonMark
+    way, at the first line holding a run at least that long and nothing else;
+    inline C's three-backtick runs inside it are plain content.
+
+    A three-backtick block closes at a column-0 bare ``` line. Turmeric inline-C
     blocks use ``` to toggle a C span (```c opens; ``` or ```) closes) and may
     be indented or written inline, so we track the C span by scanning ``` runs
     and only treat a bare ``` as the block close when not inside a C span. This
     avoids the non-greedy-regex bug where a standalone turmeric block (or a
-    nested ```c fence) merged content across real block boundaries.
+    nested ```c fence) merged content across real block boundaries.  That is
+    the block the author meant; find_early_closing_blocks reports where a
+    CommonMark renderer would end it sooner.
     """
+    if fence > 3:
+        i = pos
+        while i < len(text):
+            j = text.find('\n', i)
+            end = (j + 1) if j != -1 else len(text)
+            m = _CLOSER_RE.match(text[i:end].rstrip('\n'))
+            if m and len(m.group(1)) >= fence:
+                return text[pos:i], end
+            i = end
+        return text[pos:], len(text)
     n = len(text)
     i = pos
     line_start = pos
@@ -101,11 +125,11 @@ def find_pairs(text: str) -> list[tuple[str, str, int]]:
         if (m.group('mods') or '').strip():
             continue  # e.g. ```turmeric no-check -- opted out
         line_no = text[:m.start()].count('\n') + 1
-        tur_src, after = _read_fenced_block(text, m.end())
+        tur_src, after = _read_fenced_block(text, m.end(), len(m.group('fence')))
         sm = SWEET_AFTER_RE.match(text, after)
         if not sm:
             continue
-        sweet_src, _ = _read_fenced_block(text, sm.end())
+        sweet_src, _ = _read_fenced_block(text, sm.end(), len(sm.group('fence')))
         pairs.append((tur_src, sweet_src, line_no))
     return pairs
 
@@ -160,7 +184,8 @@ def try_parse_check(tur_src: str, sweet_src: str, tur_bin: str) -> list[str]:
 
 # `lisp` is in the set because README.md fences its manifest snippets that way
 # -- the front door, and 5 of the 107 rotted sites.
-ANY_BLOCK_OPEN_RE = re.compile(r'(?m)^```(?P<lang>turmeric|sweet-exp|lisp)(?P<mods>[^\n]*)\n')
+ANY_BLOCK_OPEN_RE = re.compile(
+    r'(?m)^(?P<fence>`{3,})(?P<lang>turmeric|sweet-exp|lisp)(?P<mods>[^\n]*)\n')
 # A manifest block is one whose first real form is (defpackage ...) -- plain --
 # or `defpackage ...` at column 0 -- sweet-exp.
 DEFPACKAGE_RE = re.compile(r'(?m)^\s*\(?defpackage\b')
@@ -188,7 +213,7 @@ def find_manifest_blocks(text: str) -> list[tuple[str, str, int]]:
     for m in ANY_BLOCK_OPEN_RE.finditer(text):
         if 'no-manifest-check' in (m.group('mods') or '').split():
             continue
-        src, _ = _read_fenced_block(text, m.end())
+        src, _ = _read_fenced_block(text, m.end(), len(m.group('fence')))
         if not DEFPACKAGE_RE.search(src):
             continue
         blocks.append((src, m.group('lang'), text[:m.start()].count('\n') + 1))
@@ -236,7 +261,7 @@ def find_unpaired_turmeric(text: str) -> list[tuple[int, str]]:
         mods = (m.group('mods') or '').strip()
         if 'no-check' in mods.split():
             continue
-        _, after = _read_fenced_block(text, m.end())
+        _, after = _read_fenced_block(text, m.end(), len(m.group('fence')))
         # Adjacent means only whitespace between the closing ``` and ```sweet-exp.
         if SWEET_AFTER_RE.match(text, after):
             continue
@@ -282,10 +307,32 @@ def find_blockquoted_fences(text: str) -> list[int]:
     return openers
 
 
+def find_early_closing_blocks(text: str) -> list[int]:
+    """Return the 1-based line number of every three-backtick turmeric,
+    sweet-exp or lisp block that a CommonMark renderer would close early.
+
+    Inline C inside a Turmeric block is itself fenced with ```, and the run
+    that closes it may sit on a line of its own -- at column 0 for a top-level
+    body, or indented two spaces inside a sweet-exp `defn`.  Up to three
+    spaces of indent, CommonMark (and so GitHub) reads that line as the end of
+    the ENCLOSING block, and everything after it renders as prose.  genguides
+    papers over it for the site, but the source is broken everywhere else.
+    Fencing the outer block with four backticks makes the inner run content.
+    """
+    early: list[int] = []
+    for m in ANY_BLOCK_OPEN_RE.finditer(text):
+        if len(m.group('fence')) > 3:
+            continue
+        src, _ = _read_fenced_block(text, m.end())
+        if any(_CLOSER_RE.match(ln) for ln in src.split('\n')):
+            early.append(text[:m.start()].count('\n') + 1)
+    return early
+
+
 def check_file(path: Path, tur_bin: str | None, verbose: bool,
-               strict_unpaired: bool = False) -> tuple[int, int, int, int, int, int, int]:
+               strict_unpaired: bool = False) -> tuple[int, int, int, int, int, int, int, int]:
     """Returns (pairs_found, pairs_ok, pairs_failed, unpaired_failed,
-    manifests_found, manifests_failed, blockquoted_fences)."""
+    manifests_found, manifests_failed, blockquoted_fences, early_closing)."""
     text = path.read_text(encoding='utf-8')
     pairs = find_pairs(text)
     ok = failed = unpaired_failed = 0
@@ -337,8 +384,16 @@ def check_file(path: Path, tur_bin: str | None, verbose: bool,
         print('      raw tag) and the docs build fails on the malformed fragment')
         print('      use an INDENTED code block instead: ">     cmd"')
 
+    early = 0
+    for line_no in find_early_closing_blocks(text):
+        early += 1
+        print(f'FAIL  {path}:{line_no}')
+        print('      a ``` line inside this block (inline C closing on a line of')
+        print('      its own) ends the block early for CommonMark and GitHub;')
+        print('      fence the block with four backticks: ````turmeric ... ````')
+
     return (len(pairs), ok, failed, unpaired_failed, manifests, man_failed,
-            bq_fences)
+            bq_fences, early)
 
 
 def collect_md_files(paths: list[str], include_readme: bool) -> list[Path]:
@@ -410,11 +465,12 @@ def main() -> None:
 
     total_pairs = total_ok = total_failed = total_unpaired = 0
     total_manifests = total_man_failed = 0
-    total_bq_fences = 0
+    total_bq_fences = total_early = 0
     for f in md_files:
-        n, ok, fail, unpaired, manifests, man_failed, bq = check_file(
+        n, ok, fail, unpaired, manifests, man_failed, bq, early = check_file(
             f, tur_bin, args.verbose, strict_unpaired=args.strict_unpaired,
         )
+        total_early += early
         total_pairs += n
         total_ok += ok
         total_failed += fail
@@ -439,13 +495,14 @@ def main() -> None:
     print(f'Manifests found  : {total_manifests}')
     print(f'Manifests failed : {total_man_failed}')
     print(f'Blockquoted fences: {total_bq_fences}')
+    print(f'Early-closing fences: {total_early}')
     if tur_bin:
         print(f'Checker          : {tur_bin} (parse-check + manifest dry-run)')
     else:
         print('Checker          : basic only (tur binary not found; skipped parse-check)')
 
     if (total_failed > 0 or total_unpaired > 0
-            or total_man_failed > 0 or total_bq_fences > 0):
+            or total_man_failed > 0 or total_bq_fences > 0 or total_early > 0):
         sys.exit(1)
     if args.require_pairs and total_pairs == 0:
         print('error: no pairs found', file=sys.stderr)

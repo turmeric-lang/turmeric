@@ -117,14 +117,14 @@ macros:
   return (int64_t)TUR_APPLY1(f, x);
   ```)
 ```
-```sweet-exp
+````sweet-exp
 defn run-once [^fat f x : int] : int
   ```c
   /* f is int64_t at the C level; pass it through TUR_APPLY1
      to invoke the closure under the unified ABI. */
   return (int64_t)TUR_APPLY1(f, x);
   ```
-```
+````
 
 The same rule applies in either direction: a Turmeric global declared
 `^fat` is callable from inline-C as `int64_t`, and an inline-C function
@@ -259,6 +259,7 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
   so anything that keys off "the function" -- an effect registry lookup,
   an identity comparison, a table of known entry points -- must read the
   **direct entry** out of the box, not the box itself.
+
 - `^fat` on a parameter and `^fat` on the return type compose: a
   factory that takes a captureless callback *and* returns a captureless
   fat closure marks both positions.

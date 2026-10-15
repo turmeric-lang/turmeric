@@ -193,6 +193,7 @@ Ten distributions are supported: normal, t, chi2, F, uniform, binomial,
 Poisson, exponential, beta, gamma.
 
 Each distribution has four operations:
+
 - `pdf` -- probability density (or mass) function
 - `cdf` -- cumulative distribution function
 - `quantile` -- inverse CDF

@@ -93,7 +93,7 @@ requests to it.
     (scheduler-run-to-completion sched))
   0)
 ```
-```sweet-exp
+````sweet-exp
 ;; service.tur -- minimal HTTP service for Approach A (Cloudflare Containers)
 ;;
 ;; Listens on $PORT (default 8080), accepts connections concurrently using the
@@ -129,7 +129,7 @@ defn main [] :int
     scheduler-spawn(sched accepter)
     scheduler-run-to-completion(sched)
   0
-```
+````
 
 > **Owned-return note.** `http-ok` assembles a fresh response with nested
 > `str-concat` and returns it as `cstr`; `handle-client` sends it and drops it
@@ -258,6 +258,7 @@ the Worker. The Worker URL is printed on success.
 ### Tradeoffs
 
 **Advantages**
+
 - Works today with no code changes to your Turmeric program
 - Full POSIX environment: all stdlib modules work, including `async_socket.tur`,
   `fs.tur`, `concurrent.tur`, threads, and effects
@@ -265,6 +266,7 @@ the Worker. The Worker URL is printed on success.
 - Container scaling is handled by Cloudflare automatically
 
 **Disadvantages**
+
 - Cloudflare Containers is a paid product (Workers Paid plan required)
 - Cold starts are measured in seconds (container boot), not milliseconds
 - Not available at every Cloudflare PoP -- containers run in a limited set of
@@ -405,12 +407,14 @@ globs = ["**/*.js"]
 ### Tradeoffs
 
 **Advantages**
+
 - True edge execution: runs at every Cloudflare PoP worldwide
 - No container overhead: isolate cold starts are measured in milliseconds
 - No Docker or infrastructure to manage
 - Free tier eligible (within Worker CPU/memory limits)
 
 **Disadvantages**
+
 - The full Turmeric interpreter ships with every Worker (~3 MB WASM) -- counts
   against the 1 MB compressed Worker size limit, which may require a paid plan
 - Cloudflare Workers have a 10 ms CPU time limit per request on the free tier
@@ -573,12 +577,14 @@ globs = ["**/*.wasm"]
 ### Tradeoffs
 
 **Advantages**
+
 - No interpreter overhead: the Worker runs compiled Turmeric code directly
 - Smallest WASM payload: only the code your program actually uses is compiled in
 - Fastest request-time CPU budget: no eval loop, just direct C function calls
 - True edge distribution at every Cloudflare PoP
 
 **Disadvantages**
+
 - Requires Emscripten SDK installed in the build environment
 - The mangled symbol name from `emit-c` is not stable across compiler versions --
   the shim approach handles this but requires a rebuild when the Turmeric version

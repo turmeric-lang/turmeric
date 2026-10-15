@@ -1108,6 +1108,7 @@ anyway.
   (`a = b |- f(a) = f(b)`), which `double` breaks only at signed zero
   (`0.0 = -0.0`, but `1/0.0` is not `1/-0.0`). See
   [`docs/archive/float-proofs-assume-exact-reals.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/float-proofs-assume-exact-reals.md).
+
 - **[by design] A callee's entry check is never elided.** See above -- the call-site layer
   reports, it does not remove the callee's guard. Whole-program elision is a
   separate piece of work with real soundness preconditions.
@@ -1135,6 +1136,7 @@ anyway.
   Closing the gap needs refinements to be part of function types, with the
   contravariant subtyping check that implies -- a type-system change the
   prototype excludes.
+
 - **[by design] An instance that explicitly demands less is checked against its own,
   weaker, predicate at a statically-resolved site** -- deliberately, since it
   is the implementation that will actually run. `TUR-W0377` marks a call that
@@ -1201,6 +1203,7 @@ anyway.
   model search that produces a counterexample. A fact that names a variable
   rebound further down the path is dropped: at the call, the name means the
   inner binding.
+
 - **[by design] A crossing under a shadowing binder is abandoned, not answered.** The
   encoder has one flat namespace, so an argument naming a shadowed variable
   would inherit the outer one's hypotheses -- `(let [x (- x x)] (sdiv 10 x))`

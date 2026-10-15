@@ -222,6 +222,7 @@ deflockfile
 ```
 
 Rules:
+
 - `tur fetch` creates or updates `tur.lock`.
 - `tur build` uses the lock and will not silently upgrade versions.
 - Local `:path` spices are not recorded in the lock file.

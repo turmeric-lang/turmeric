@@ -37,6 +37,7 @@ A step-by-step guide to algebraic effects in Turmeric. Each section builds on th
 An algebraic effect is a typed, named operation that a function can **perform** without knowing who will handle it. The caller supplies a **handler** that intercepts the operation and decides what to do, including whether to resume the suspended computation with a return value.
 
 Think of it as a structured, type-safe alternative to:
+
 - Global mutable state (replace with an injectable value via `Ask`)
 - Printf-style I/O scattered through business logic (replace with a `Write` effect)
 - Callbacks (replace with a `perform` that yields control and resumes)
@@ -92,6 +93,7 @@ hello!
 ```
 
 Key points:
+
 - `defeffect` declares the name, parameter list, and return type.
 - `perform` suspends the current function and passes control to the nearest enclosing `handle`.
 - The handler receives the continuation `k` and calls `resume k nil` to let the function continue.

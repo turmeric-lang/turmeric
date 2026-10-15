@@ -103,7 +103,7 @@ The Comonad instance for Zipper:
           0)))))
 ```
 
-```sweet-exp
+````sweet-exp
 defn ca-rule [z] :int
   ```c
   typedef struct { int64_t *left; size_t left_len; int64_t focus; int64_t *right; size_t right_len; } Zip;
@@ -123,7 +123,7 @@ defn main [] :int
         let [z2 .extend(z1 ca-rule)]
           print-row(z2)                   ;; ..#.#.#..
           0
-```
+````
 
 One `(.extend z ca-rule)` call steps the entire automaton forward.
 
@@ -223,7 +223,7 @@ defn grid-print [g] :int ...
   (duplicate [wa]    (__gridctx_extend wa (fn [g] g))))
 ```
 
-```sweet-exp
+````sweet-exp
 defn __gridctx_extend [g fn] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -248,7 +248,7 @@ definstance Comonad [gridctx]
   extract   [wa]    grid-focus(wa)
   extend    [wa fn] __gridctx_extend(wa fn)
   duplicate [wa]    __gridctx_extend(wa (fn [g] g))
-```
+````
 
 Notice: `tmp` is a stack-allocated scratch struct that shares `src->data`. Because `fn` is called synchronously and never stores the pointer, this is safe. Each call gets a fresh `(cx, cy)`.
 
@@ -283,7 +283,7 @@ The Game of Life rule is a pure function from a focused grid to the next cell st
   ```)
 ```
 
-```sweet-exp
+````sweet-exp
 defn conway-rule [g] :int
   ```c
   typedef struct { int64_t *data; int64_t width; int64_t height; int64_t cx; int64_t cy; } GCtx;
@@ -304,7 +304,7 @@ defn conway-rule [g] :int
   if (n == 3)         return 1;   /* reproduction    */
   return 0;
   ```
-```
+````
 
 A full generation step is then just:
 

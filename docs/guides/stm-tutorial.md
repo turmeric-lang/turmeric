@@ -223,6 +223,7 @@ atomically
 ```
 
 When a `retry` (or a failed `check`) fires:
+
 1. The transaction aborts (without side effects).
 2. Turmeric records which `TVar`s were read.
 3. The transaction sleeps until one of those `TVar`s changes.

@@ -327,6 +327,7 @@ and `:for-macros` import with a diagnostic, so no macro-time code runs at all.
 Template `defmacro` still expands, since substitution runs nothing.  It is
 rust-analyzer's `procMacro.enable = false`: the switch for pointing `tur check`
 at a tree you have not read yet (`tests/fixtures/errors/no-proc-macros/`).
+
 - **Unhygienic like `defmacro`** -- mint bindings with `syntax-gensym`.
 
 Prefer a plain `defmacro` template when substitution is all you need; it
