@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [tsan-cmake-config-fails-to-link](tsan-cmake-config-fails-to-link.md) | low | `-DCMAKE_BUILD_TYPE=TSan` compiles the runtime archives with `-fsanitize=thread`, but the test executables that link them add sanitizer link flags for `Debug` only, so `tur_reactor_slot_reuse_unit` and others fail with undefined `__tsan_*` references. Nothing uses the configuration: the TSan runs build Release. |
+
 ## Found running the performance audit's WP0 corpus (filed 2026-10-14)
 
 | Report | Severity | One line |

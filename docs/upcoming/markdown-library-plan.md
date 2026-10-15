@@ -178,7 +178,7 @@ where that differs from the first draft of this section:
 | **J1** | Justfile recipes stop calling `just` | No | Any time | ~10 lines |
 | **J2** | Guard: the Justfile stays inside `tur run`'s subset | No | With J1 | one check |
 | **J3** | Docs, messages and skills say `tur run`, not `just` | No | After J1 | ~100 mentions |
-| **J4** | `scripts/bootstrap.sh` (+ a PowerShell wrapper): build `tur` from nothing, no runner needed | No | After J1 | ~150 lines + CI/doc edits |
+| **J4** | `release` and `tsan` build in their own trees; no bootstrap script | No | After J1 | ~20 lines + guide fixes |
 
 Each S phase is one PR. U is one PR. M1 to M3 are one PR each, with the spec
 ratchet (section 5.1) rising each time. M4 is its own PR. M5 is one PR per
@@ -552,6 +552,7 @@ The questions this plan first left open, settled with the author on 2026-10-15.
 | 5 | How do the docs CI jobs get a `tur`? | Build in-job with ccache in `release.yml`'s `docs` job and `release-cut.yml`'s spices-site job; the other two docs jobs already build one (6.5) | Matches the existing jobs; keeps the docs jobs parallel to the release builds |
 | 6 | Raw HTML | Pass through with GFM's tag filter by default (`RawHtml` is `TagFilter`); `Pass` and `Escape` are available; the docs build fails on any raw HTML in a guide that doesn't allow it (6.2) | GitHub's behaviour, closest to today's site; the build check catches the accidental-tag hazard pass-through keeps |
 | 7 | Stdlib or spice? | Stdlib: `stdlib/markdown.tur` + `stdlib/markdown/` (6.2) | The repo's own docs build can't depend on the spices checkout, and literate `.tur.md` is a compiler feature |
+| 8 | A bootstrap script for a machine with no `tur` (J4)? | **No.** The first build stays the two CMake commands; J4 only gives `release` and `tsan` their own build trees (section 10) | Two commands need no wrapper, and a script would be one more entry point to keep in step with CI |
 
 ## 9. Related work outside this plan
 
@@ -580,8 +581,9 @@ The questions this plan first left open, settled with the author on 2026-10-15.
 It reads the same `Justfile`, so a contributor who has `tur` doesn't need the
 `just` binary. That makes it the one non-Python tool on the dev path that can
 go away completely. It is worth doing, and most of it has already happened.
-**J1 and J2 are in [#1201](https://github.com/turmeric-lang/turmeric/pull/1201)**
-(open). What's left, as measured on 2026-10-15:
+**J1 and J2 landed in [#1201](https://github.com/turmeric-lang/turmeric/pull/1201)
+and most of J3 in #1202; #1207 does its last line.** What follows is the state
+they started from, as measured on 2026-10-15:
 
 - **CI already doesn't use `just`.** No workflow installs it or runs it.
   Recipes run as `./build/tur run <recipe>` (for example
@@ -591,7 +593,7 @@ go away completely. It is worth doing, and most of it has already happened.
   implements recipe attributes (`[unix]`, `[group]`, `[confirm]` and the
   rest), modules, imports and backtick substitution; only an unknown
   attribute such as `[parallel]` is refused. The guide still listed those as
-  unsupported, and #1201 corrects it.
+  unsupported; #1201 corrected it.
 - **The one hard dependency is the Justfile calling `just` itself.** `debug`,
   `release` and `tsan` run `[ -f build/CMakeCache.txt ] || just configure`,
   `reconfigure` runs `just configure`, and the Windows build runs
@@ -651,63 +653,46 @@ history. Plans in `docs/upcoming/` get updated when they're next touched.
 "Windows setup" notes say so). There, `just` really is the runner, so those
 notes and the Windows guide's bootstrap steps keep it.
 
-J3 is split around the open PRs. The wording outside two files can go now that
-#1197 has merged. The two files wait: `stdlib/docstrings.tur` (its header comes
-from `tools/gendocs.py`, and #1200 regenerates the same file) and
-`docs/guides/tur-run-guide.md` (which #1201 edits).
+J3 was split around the PRs open at the time: #1202 did the wording outside
+two files, #1201 the `tur run` guide, and #1207 the header `tools/gendocs.py`
+writes into `stdlib/docstrings.tur` (which #1200 was regenerating).
 
-### J4 -- a bootstrap script for a machine with no `tur`
+### J4 -- separate build trees for `release` and `tsan`; no bootstrap script
 
 `tur run` needs a `tur`, so the very first build of a checkout can't go through
-it. Today that build is two CMake commands, which the README and CLAUDE.md
-already document. They work on Linux and macOS, and inside an MSYS2 UCRT64
-shell on Windows: CI's Windows job builds and tests that way, with Ninja and
-no `just`. **So a script isn't strictly necessary.** It is still worth having,
-in this shape, for four reasons:
+it. That build is two CMake commands, which the README and CLAUDE.md already
+document. They work on Linux and macOS, and inside an MSYS2 UCRT64 shell on
+Windows: CI's Windows job builds and tests that way, with Ninja and no `just`.
+**Decided (2026-10-15): no bootstrap script.** A `scripts/bootstrap.sh` (plus
+a PowerShell wrapper) was considered, to drop `just` from the Windows setup
+notes and define the configure step once, but two commands do not need a
+wrapper, and it would be one more entry point to keep in step with CI.
 
-1. **It removes the last step that installs `just`.** The Justfile's "Windows
-   setup" notes have a fresh Windows box install `just` with pacman, then run
-   `just setup-windows`, `configure-windows` and `build-windows` from
-   PowerShell. A script that does the same needs no runner at all.
-2. **One definition of the configure step.** The same `cmake -S . -B build ...`
-   line appears in about 15 CI steps, the README, CLAUDE.md and the Justfile.
-3. **It fixes `tur run release`.** That recipe configures `build/` as Debug,
-   then passes `--config Release`. Single-config generators (Makefiles, Ninja)
-   ignore that flag, so it builds Debug, despite guides saying release builds
-   strip contracts. `tsan` has the same problem. The script builds Release
-   into `build-release/`, as the README's release instructions already do.
-4. **A tested entry point.** If CI's build jobs call the script, it can't
-   drift from what CI builds.
+What J4 keeps is the bug that came up while measuring it. **`tur run release`
+built Debug.** The recipe built the shared `build/` tree, configured as Debug,
+and passed `--config Release`. Single-config generators (Makefiles, Ninja)
+ignore that flag, so the guides' "release builds strip contracts" was false:
+contract elision is `#ifdef NDEBUG` in the compiler, and only the Release
+configuration defines it. `tsan` had the same problem, and `test-tsan` then
+ran ctest over the ASan-instrumented `build/` with `TUR_TSAN=1`, which cannot
+work (ASan and TSan cannot share a process; `tests/run-tsan.sh` refuses it).
 
-Shape:
+The fix splits the trees:
 
-- **`scripts/bootstrap.sh [--release] [-- extra cmake args]`**, POSIX `sh`
-  (macOS ships bash 3.2):
-  - Debug goes to `build/`, `--release` to `build-release/`. Under MSYS2 it
-    uses `build-win/` and `-G Ninja`, like CI's Windows job, and refuses any
-    `MSYSTEM` other than UCRT64, with the Justfile notes' explanation.
-  - Checks for `cmake` and a C compiler, with an install hint.
-  - Configures only when there is no CMake cache, then builds.
-  - Finishes with a `tur --version` smoke check under a timeout. A hang there
-    is the macOS ASan-runtime startup deadlock CLAUDE.md describes, and the
-    message points at it.
-  - Extra arguments pass straight to CMake (`-DTUR_JIT=OFF` and so on).
-    `CMAKE_C_COMPILER_LAUNCHER=ccache` works from the environment, because
-    CMake reads it there (3.17+; this project needs 3.20), so CI keeps its
-    ccache.
-- **`scripts/bootstrap.ps1`**, for PowerShell on a fresh Windows box: find
-  MSYS2 (`MSYS2_ROOT`, default `C:\msys64`), install the UCRT64 toolchain
-  with pacman (gcc, cmake, ninja; no `just`), then run `bootstrap.sh` in
-  UCRT64 bash.
-- **Everything else calls it:**
-  - The Justfile's `configure` / `_configured` / `release` / `tsan`.
-  - The README's and CLAUDE.md's bootstrap sections.
-  - At least the Linux and Windows CI build jobs, so it is exercised on every
-    push.
-- **Then the Windows setup notes drop `just`.** Their stale "the Windows port
-  is not finished" status goes too, since CI builds and tests on MSYS2.
-
-After J1 (#1201), because it edits the same Justfile recipes.
+- `release` configures and builds `build-release/` as Release, the directory
+  the README, CLAUDE.md, `tvm` and the benchmark scripts already use.
+- `tsan` configures and builds `build-tsan/` as Release, the tree the nightly
+  TSan workflow and `tests/run-tsan.sh` use. The fixture programs carry
+  `-fsanitize=thread`; `tur` must only not be ASan-instrumented. The TSan
+  CMake configuration, which instruments `tur` too, does not link every
+  target, and is reported separately
+  (`docs/reported/tsan-cmake-config-fails-to-link.md`).
+- `test-tsan` runs `tests/run-tsan.sh` against `build-tsan/tur`, the selection
+  the nightly TSan workflow runs, under the 12-minute suite timeout.
+- `_configured` takes the directory and build type, so all three build
+  recipes share one configure-if-missing step.
+- The guides that describe these recipes say where the binary lands, and that
+  it is the Release `tur` that strips contracts.
 
 ### What stays
 

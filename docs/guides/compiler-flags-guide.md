@@ -90,9 +90,12 @@ second, byte-identical copy of the `TUR-W0030` check, documented as the
 
 ### `--keep-contracts`
 
-Retains contract checks in release builds (`tur run release`). Without this
-flag, `assert!`/`require!`/`ensure!` calls are elided in release mode
-(contracts are on by default in debug). Per-contract `^always` granularity
+Retains contract checks in release builds: programs compiled by a Release
+`tur` (`tur run release` builds one into `build-release/`). Without this
+flag, a Release `tur` elides contract-type checks -- `#refine{...}` types
+and `:pre`/`:post` annotations (contracts are on by default in debug). The
+`assert!`/`require!`/`ensure!` macros run in both builds: stripping them is
+not implemented yet (`stdlib/contract.tur`). Per-contract `^always` granularity
 may be added later.
 
 ### `--no-contracts` (C2)

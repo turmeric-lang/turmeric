@@ -10,11 +10,25 @@ build: debug
 debug: _configured
     cmake --build build -j --config Debug
 
-release: _configured
-    cmake --build build -j --config Release
+# Each build type has its own tree. `--config` alone cannot switch one: the
+# Makefile and Ninja generators build the CMAKE_BUILD_TYPE a tree was
+# configured with and ignore it (only multi-config generators read it), so a
+# shared build/ made every one of these a Debug build.
 
-tsan: _configured
-    cmake --build build -j --config TSan
+# Optimised `tur` (-O2 -DNDEBUG, so it elides contracts) in build-release/.
+release: (_configured "build-release" "Release")
+    cmake --build build-release -j --config Release
+
+# The tree the ThreadSanitizer runs use: tests/run-tsan.sh's default, as in the
+# nightly TSan workflow. Release, not Debug: Debug is ASan-instrumented, the
+# fixture programs (built with -fsanitize=thread under TUR_TSAN=1) link the
+# runtime archives beside `tur`, and ASan and TSan cannot share a process.
+# Not the TSan CMake configuration either, which does not link every target:
+# docs/reported/tsan-cmake-config-fails-to-link.md.
+
+# Non-ASan `tur` for the ThreadSanitizer fixture runs, in build-tsan/.
+tsan: (_configured "build-tsan" "Release")
+    cmake --build build-tsan -j --config Release
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -24,18 +38,18 @@ tsan: _configured
 # either runner, and `tur run` is the one a contributor is assumed to have.
 # A recipe that needs a configured tree depends on `_configured` instead.
 # tests/check-justfile.sh holds the file to that.
-CONFIGURE := "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+CONFIGURE := "cmake -S . -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
 configure:
-    {{CONFIGURE}}
+    {{CONFIGURE}} -B build -DCMAKE_BUILD_TYPE=Debug
 
 reconfigure:
     rm -rf build
-    {{CONFIGURE}}
+    {{CONFIGURE}} -B build -DCMAKE_BUILD_TYPE=Debug
 
-# Configure build/ unless it already is.
-_configured:
-    @[ -f build/CMakeCache.txt ] || {{CONFIGURE}}
+# Configure DIR as build type TYPE unless it already is.
+_configured DIR="build" TYPE="Debug":
+    @[ -f {{DIR}}/CMakeCache.txt ] || {{CONFIGURE}} -B {{DIR}} -DCMAKE_BUILD_TYPE={{TYPE}}
 
 # ---------------------------------------------------------------------------
 # Test targets
@@ -128,8 +142,13 @@ regen-snapshots *ARGS:
 test-turi: build
     bash tests/run-turi.sh
 
+# The nightly TSan workflow's selection (tests/run-tsan.sh), not ctest over
+# build/: that tree is ASan-instrumented, and ASan and TSan cannot share a
+# process.
+
+# Run the concurrency fixtures under ThreadSanitizer.
 test-tsan: tsan
-    TUR_TSAN=1 ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --test-dir build
+    TUR=./build-tsan/tur timeout 720 bash tests/run-tsan.sh
 
 # Run production smoke tests against live turmeric-lang.com + try.turmeric-lang.com.
 # Requires: npm install run from the web/ directory (tur run web-deps).
