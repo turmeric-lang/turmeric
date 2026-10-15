@@ -1279,8 +1279,8 @@ works. Four things follow from where it resolves:
   has nothing to do for a `:global` dep and writes no `tur.lock` row for it --
   the same treatment a `:path` dep gets.
 - **A missing install is a hard error**, not a silent skip:
-  `spice: 'notebook' declares :global true but no such spice is installed --
-  run \`tur install <source>\` first`. Failing here is the point; the
+  ``spice: 'notebook' declares :global true but no such spice is installed --
+  run `tur install <source>` first``. Failing here is the point; the
   alternative surfaces a hundred lines later as `module 'notebook/core' not
   found` with no hint that a spice was never installed.
 - **`:global` takes no `:url` and no `:path`.** They name a different
