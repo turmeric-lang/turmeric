@@ -178,11 +178,12 @@ where that differs from the first draft of this section:
 | **J1** | Justfile recipes stop calling `just` | No | Any time | ~10 lines |
 | **J2** | Guard: the Justfile stays inside `tur run`'s subset | No | With J1 | one check |
 | **J3** | Docs, messages and skills say `tur run`, not `just` | No | After J1 | ~100 mentions |
+| **J4** | `scripts/bootstrap.sh` (+ a PowerShell wrapper): build `tur` from nothing, no runner needed | No | After J1 | ~150 lines + CI/doc edits |
 
 Each S phase is one PR. U is one PR. M1 to M3 are one PR each, with the spec
 ratchet (section 5.1) rising each time. M4 is its own PR. M5 is one PR per
 consumer, and the notebook one lands in `turmeric-spices`. J1 and J2 are one PR;
-J3 is one more (mechanical, docs only).
+J3 is one more (mechanical, docs only); J4 is its own PR.
 
 ## 4. Phase S -- string helpers
 
@@ -654,6 +655,59 @@ J3 is split around the open PRs. The wording outside two files can go now that
 #1197 has merged. The two files wait: `stdlib/docstrings.tur` (its header comes
 from `tools/gendocs.py`, and #1200 regenerates the same file) and
 `docs/guides/tur-run-guide.md` (which #1201 edits).
+
+### J4 -- a bootstrap script for a machine with no `tur`
+
+`tur run` needs a `tur`, so the very first build of a checkout can't go through
+it. Today that build is two CMake commands, which the README and CLAUDE.md
+already document. They work on Linux and macOS, and inside an MSYS2 UCRT64
+shell on Windows: CI's Windows job builds and tests that way, with Ninja and
+no `just`. **So a script isn't strictly necessary.** It is still worth having,
+in this shape, for four reasons:
+
+1. **It removes the last step that installs `just`.** The Justfile's "Windows
+   setup" notes have a fresh Windows box install `just` with pacman, then run
+   `just setup-windows`, `configure-windows` and `build-windows` from
+   PowerShell. A script that does the same needs no runner at all.
+2. **One definition of the configure step.** The same `cmake -S . -B build ...`
+   line appears in about 15 CI steps, the README, CLAUDE.md and the Justfile.
+3. **It fixes `tur run release`.** That recipe configures `build/` as Debug,
+   then passes `--config Release`. Single-config generators (Makefiles, Ninja)
+   ignore that flag, so it builds Debug, despite guides saying release builds
+   strip contracts. `tsan` has the same problem. The script builds Release
+   into `build-release/`, as the README's release instructions already do.
+4. **A tested entry point.** If CI's build jobs call the script, it can't
+   drift from what CI builds.
+
+Shape:
+
+- **`scripts/bootstrap.sh [--release] [-- extra cmake args]`**, POSIX `sh`
+  (macOS ships bash 3.2):
+  - Debug goes to `build/`, `--release` to `build-release/`. Under MSYS2 it
+    uses `build-win/` and `-G Ninja`, like CI's Windows job, and refuses any
+    `MSYSTEM` other than UCRT64, with the Justfile notes' explanation.
+  - Checks for `cmake` and a C compiler, with an install hint.
+  - Configures only when there is no CMake cache, then builds.
+  - Finishes with a `tur --version` smoke check under a timeout. A hang there
+    is the macOS ASan-runtime startup deadlock CLAUDE.md describes, and the
+    message points at it.
+  - Extra arguments pass straight to CMake (`-DTUR_JIT=OFF` and so on).
+    `CMAKE_C_COMPILER_LAUNCHER=ccache` works from the environment, because
+    CMake reads it there (3.17+; this project needs 3.20), so CI keeps its
+    ccache.
+- **`scripts/bootstrap.ps1`**, for PowerShell on a fresh Windows box: find
+  MSYS2 (`MSYS2_ROOT`, default `C:\msys64`), install the UCRT64 toolchain
+  with pacman (gcc, cmake, ninja; no `just`), then run `bootstrap.sh` in
+  UCRT64 bash.
+- **Everything else calls it:**
+  - The Justfile's `configure` / `_configured` / `release` / `tsan`.
+  - The README's and CLAUDE.md's bootstrap sections.
+  - At least the Linux and Windows CI build jobs, so it is exercised on every
+    push.
+- **Then the Windows setup notes drop `just`.** Their stale "the Windows port
+  is not finished" status goes too, since CI builds and tests on MSYS2.
+
+After J1 (#1201), because it edits the same Justfile recipes.
 
 ### What stays
 
