@@ -78,7 +78,7 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
     with open(os.path.join(args.out, "rows.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(merged[0]))
+        w = csv.DictWriter(f, fieldnames=list(merged[0]), lineterminator="\n")
         w.writeheader()
         w.writerows(merged)
     write_summary(os.path.join(args.out, "summary.md"), metas, merged, args.noisy)

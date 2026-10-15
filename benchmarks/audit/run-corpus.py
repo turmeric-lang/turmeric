@@ -377,7 +377,7 @@ def main():
     rows = []
     csv_path = os.path.join(out, "rows.csv")
     with open(csv_path, "w", newline="") as fcsv:
-        w = csv.DictWriter(fcsv, fieldnames=fields)
+        w = csv.DictWriter(fcsv, fieldnames=fields, lineterminator="\n")
         w.writeheader()
 
         def emit(prog, engine, phase, row, nbytes=""):
