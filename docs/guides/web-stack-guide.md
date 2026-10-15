@@ -357,6 +357,7 @@ any!(pattern handler)
 ```
 
 Pattern syntax:
+
 - `"/exact"` -- literal match
 - `"/user/:id"` -- `:id` captures one path segment
 - `"/files/*"` -- `*` captures the rest of the path (greedy)
@@ -437,6 +438,7 @@ status(code resp)
 
 `use!` items run in declaration order before any route handler. A middleware
 function receives a request and returns `option<:int>`:
+
 - `none-value` -- continue to the next middleware / route
 - `some(resp)` -- short-circuit and return this response immediately
 

@@ -13,6 +13,7 @@ Save and resume computations across process boundaries using serializable contin
 Turmeric's **serializable continuations** enable suspended computations to be marshalled to bytes, persisted to disk or sent over a network, then resumed in a fresh process. This builds on the delimited continuations (`shift`/`reset`), which reify the call stack as a heap-allocated closure chain.
 
 Use cases include:
+
 - **Persistent workflows** -- Pause and resume multi-step business processes
 - **Distributed task migration** -- Send half-finished computations to other nodes
 - **Checkpointing** -- Save state periodically; restart from last checkpoint on crash

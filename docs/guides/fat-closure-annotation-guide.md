@@ -259,6 +259,7 @@ uses `^fat` is 1- or 2-ary, so this rarely binds.
   so anything that keys off "the function" -- an effect registry lookup,
   an identity comparison, a table of known entry points -- must read the
   **direct entry** out of the box, not the box itself.
+
 - `^fat` on a parameter and `^fat` on the return type compose: a
   factory that takes a captureless callback *and* returns a captureless
   fat closure marks both positions.

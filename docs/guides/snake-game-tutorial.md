@@ -166,6 +166,7 @@ defn main []
 ```
 
 **What's happening:**
+
 - `extern-c` declares C functions for FFI
 - `main` is the entry point -- the compiler emits a call to it; a function named `-main` is NOT an entry point and is never invoked
 - Window opens and stays open until you close it
@@ -339,6 +340,7 @@ defn main []
 ```
 
 **Turmeric features:**
+
 - `defstruct` -- defines a record type
 - `module` + `import` -- code organization
 - Struct field access with `.` syntax
@@ -420,6 +422,7 @@ defn main []
 ```
 
 **Turmeric features:**
+
 - `if` expressions (they return values!)
 - Nested `if` for multi-way conditionals
 - Immutable state updates (new struct each frame)
@@ -561,6 +564,7 @@ defn main []
 ```
 
 **Turmeric features:**
+
 - `vec` -- persistent vectors
 - `vec-get` / `vec-rest` / `vec-conj` -- vector operations
 - `match` -- pattern matching on direction
@@ -664,6 +668,7 @@ defn draw-state [^state/GameState s]
 ```
 
 **Turmeric features:**
+
 - `defclass` -- define a typeclass
 - `definstance` -- implement a typeclass for a type
 - Polymorphic `draw` function works on any `Drawable`
@@ -816,6 +821,7 @@ defn main []
 ```
 
 **Turmeric features:**
+
 - `defeffect` -- define a new effect
 - `perform` -- raise/perform an effect
 - `handle` -- handle effects with pattern matching
@@ -1002,6 +1008,7 @@ defn main []
 ```
 
 **Turmeric features:**
+
 - `and` / `or` -- boolean logic
 - `any?` -- higher-order function on collections
 - Nested effect handling
@@ -1217,6 +1224,7 @@ defn main []
 ```
 
 **Turmeric features:**
+
 - `option` type -- `some` / `none` for maybe values
 - `match` on `option` types
 - `do` -- sequential evaluation
@@ -1360,6 +1368,7 @@ defn main []
 ```
 
 **Turmeric feature:**
+
 - `defer` -- registers cleanup to run when scope exits
 
 ---
@@ -1822,6 +1831,7 @@ Once you've completed this tutorial, consider:
 ## Summary
 
 You've now built a complete Snake game using:
+
 - CMake + CPM for dependency management
 - Raylib for graphics and input
 - Turmeric for game logic

@@ -309,11 +309,13 @@ predicates must be pure`).
 ## Contract Types vs. Contract Macros
 
 Use **contract macros** when:
+
 - Adding a one-off sanity check inside a function body
 - The check is only relevant in a specific branch, not at all entry points
 - You want imperative control over exactly where the check runs
 
 Use **contract types** when:
+
 - The predicate is part of the type's meaning (e.g. "a non-negative integer")
 - You want the compiler to enforce the check at every call site automatically
 - Writing a library API where callers should be told the invariant upfront

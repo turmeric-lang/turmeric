@@ -395,6 +395,7 @@ you `tur fetch`) and:
   Use `ws-connect-with-ca` for a private or self-signed CA (e.g. a local
   dev server); reach for `ws-connect-insecure` only as an explicit,
   greppable opt-out -- never in production.
+
 - **Server:** drive the listener with `httpd/tls`'s
   `server-start-tls-conn`. The httpd `Conn` carries a TLS context in
   its `tls` slot; `ws-upgrade` reads it via `conn-tls` and runs the

@@ -298,6 +298,7 @@ typedef struct { void *env; int64_t (*fn)(void *, int64_t); } tur_poly_fn_t;
 ```
 
 The compiler automatically:
+
 1. Wraps a global function into a `tur_poly_fn_t` at the call site
 2. Calls `f.fn(f.env, x)` inside the callee body
 3. Passes `tur_poly_fn_t` by value when forwarding between functions

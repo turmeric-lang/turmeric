@@ -260,6 +260,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Finding Guides
 
 **By topic:**
+
 - Getting Started → [introducing-saffron.md](introducing-saffron.md), [quickstart.md](quickstart.md), [syntax-guide.md](syntax-guide.md), [repl.md](repl.md), [repl-tutorial.md](repl-tutorial.md), [releases-and-installation-guide.md](releases-and-installation-guide.md)
 - Language Basics → [structs-guide.md](structs-guide.md), [sum-types-guide.md](sum-types-guide.md), [strings-guide.md](strings-guide.md), [module-system-guide.md](module-system-guide.md), [binding-forms-guide.md](binding-forms-guide.md), [mutable-globals-guide.md](mutable-globals-guide.md), [function-arity-guide.md](function-arity-guide.md), [currying-guide.md](currying-guide.md), [cli-args-guide.md](cli-args-guide.md)
 - Type System → [polymorphism-guide.md](polymorphism-guide.md), [type-annotations-guide.md](type-annotations-guide.md), [hkt-guide.md](hkt-guide.md), [hrt-guide.md](hrt-guide.md), [row-types-guide.md](row-types-guide.md), [union-intersection-types-guide.md](union-intersection-types-guide.md), [sized-types-guide.md](sized-types-guide.md), [sized-primitives-guide.md](sized-primitives-guide.md)
@@ -281,6 +282,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)
 
 **By level:**
+
 - Beginner → [introducing-saffron.md](introducing-saffron.md), [quickstart.md](quickstart.md), [repl-tutorial.md](repl-tutorial.md), then core feature guides
 - Intermediate → Advanced control flow, type system
 - Advanced → Effects, logic programming, serializable continuations, checkpointing
@@ -290,6 +292,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 ## Planning and Design
 
 For design documents, architecture, and phase planning, see:
+
 - **[docs/](https://github.com/turmeric-lang/turmeric/tree/main/docs)** -- Main docs folder
 - **[../archive/](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/README.md)** -- Active planning documents
 - **[../archive/history/](https://github.com/turmeric-lang/turmeric/blob/main/docs/archive/history/README.md)** -- Historical completed work

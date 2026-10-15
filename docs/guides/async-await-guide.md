@@ -50,6 +50,7 @@ println(await(fut))  ; => 3
 ### Fibers
 
 A **fiber** is a user-space thread (lightweight thread) that:
+
 - Has its own execution state (implemented via delimited continuations)
 - Can **yield** (suspend) and **resume**
 - Runs on an OS thread managed by a scheduler

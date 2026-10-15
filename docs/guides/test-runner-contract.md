@@ -11,6 +11,7 @@ This document defines the expected behavior for stdlib test running.
 ## Scope
 
 Applies to:
+
 - stdlib test helpers in `stdlib/test.tur`
 - CLI test entry behavior (the `tur test` command path)
 - fixture and output conventions for pass/fail reporting
@@ -54,16 +55,19 @@ Applies to:
 ## Output Contract
 
 Streaming output:
+
 - `.` per passing test
 - `F` per failing test
 
 Summary output at end:
+
 - total tests
 - passed
 - failed
 - elapsed (optional)
 
 Failure detail block includes:
+
 - test name
 - assertion message / diagnostic snippet
 - source location if available

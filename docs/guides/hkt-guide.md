@@ -15,6 +15,7 @@ A **type constructor** takes one or more types and produces a new type.
 For example, `Option` is a type constructor: given `int`, it produces `Option<int>`.
 
 In Turmeric's kind system:
+
 - `*` -- a plain type (e.g. `int`, `bool`)
 - `* -> *` -- a unary type constructor (e.g. `Option`, `Vec`)
 - `* -> * -> *` -- a binary type constructor (e.g. `Either`, `Pair`)

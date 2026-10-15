@@ -121,6 +121,7 @@ form    ::= any Turmeric form (literal or expression)
 ```
 
 Notes:
+
 - `var` must be exactly one ASCII letter.  Anything longer is a reader error.
 - `form` on either bound side may be a literal (`0`, `-10`, `3.14`) or any
   arbitrary expression (`len`, `(vec-len v)`, `(+ lo offset)`).
@@ -237,6 +238,7 @@ produce a clear `DIAG_ERROR`.
 ### RR1 -- One-sided and literal two-sided ranges
 
 Implement:
+
 - All five one-sided forms (`<`, `<=`, `>`, `>=`, `=`) in both orientations.
 - Two-sided left-to-right forms with literal bounds.
 - Two-sided right-to-left forms with literal bounds.
@@ -245,11 +247,13 @@ Implement:
   This is a `DIAG_WARNING`, not an error.
 
 Variable validation:
+
 - Token identified as `var` must be a single `F_SYM` whose name is exactly
   one ASCII letter.  Otherwise emit `DIAG_ERROR`:
   `"#r{...}: variable must be a single letter, got '<name>'"`.
 
 **Deliverables:**
+
 - One-sided and literal two-sided `#r{...}` forms desugar correctly.
 - Fixture: `tests/fixtures/range_reader_one_sided.tur`
 - Fixture: `tests/fixtures/range_reader_two_sided.tur`
@@ -274,6 +278,7 @@ runtime.
 ```
 
 Changes from RR1:
+
 - The compile-time empty-range check is **skipped** when either bound is not a
   numeric literal (a non-literal form has unknown value at read time).
 - `singleton-range` (`n = v`) still requires `v` to be a form; the reader
@@ -281,6 +286,7 @@ Changes from RR1:
 - No other changes to the desugaring logic.
 
 **Deliverables:**
+
 - Expression bounds pass through to the constructor call.
 - Fixture: `tests/fixtures/range_reader_expr_bounds.tur`
 
@@ -358,6 +364,7 @@ type.  In that case it defaults to the integer constructor family and emits a
 `"#r{...}: mixed literal types; using float constructors -- ensure the expression produces a float"`.
 
 **Deliverables:**
+
 - `stdlib/float-range.tur` with all constructors and `float-range-contains?`.
 - Reader emits float constructors when float literals are present.
 - Fixture: `tests/fixtures/range_reader_float.tur`

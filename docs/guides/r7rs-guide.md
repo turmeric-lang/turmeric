@@ -104,6 +104,7 @@ ends, by `tests/fixtures/docs-r7rs-guide-examples`; the library examples by
 
   `tur fmt` checks a sweet file and leaves its layout alone, which is its
   syntax.
+
 - **Formatting**: `tur fmt` re-indents a Scheme file and never rewrites a
   token. Each line's leading whitespace is recomputed; `#t`, `#\x`,
   `|two words|` and `#e1.5` stay exactly as written.

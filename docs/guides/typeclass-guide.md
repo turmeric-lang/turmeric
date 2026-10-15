@@ -50,6 +50,7 @@ defclass Ord [a]
 ```
 
 Typeclasses can also abstract over **type constructors** (such as `Vec`, `Option`, or user-defined containers) instead of plain types. These are called Higher-Kinded Typeclasses. The compiler uses specific annotations to distinguish their kinds:
+
 - `[^f]` -- a unary type constructor of kind `* -> *` (e.g., `Functor`, `Monad`).
 - `[^^f]` -- a binary type constructor of kind `* -> * -> *` (e.g., `Bifunctor`).
 
