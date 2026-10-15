@@ -540,6 +540,14 @@ and how to read it. **Effort:** medium; reuses the whole timing pipeline.
 
 ### WP7 -- Documentation reconciliation
 
+**Status (2026-10-14):** D-1 to D-5 are resolved in the guides (effects,
+async-await, hamt, performance, type-erasure), performance-guide.md has a
+"Profiling" section (`perf | tur demangle`, `--timings`, the counters) and
+links the artifacts; D-2 turned out half right -- compiled `async`/`await`
+has no per-task stack, the 1 MiB `FiberBlock` stack belongs to the explicit
+fiber API -- and the triangle (WP4) and the cost table (WP3) stay with those
+packages.
+
 **Goal.** Make the guides agree with the code and with each other.
 
 - Resolve D-1 to D-5. All five are decided or mechanical and can land as

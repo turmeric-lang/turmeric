@@ -53,7 +53,30 @@ A **fiber** is a user-space thread (lightweight thread) that:
 - Has its own execution state (implemented via delimited continuations)
 - Can **yield** (suspend) and **resume**
 - Runs on an OS thread managed by a scheduler
-- Has no separate OS stack (avoids thread creation overhead)
+
+Whether it has a stack of its own depends on which kind of fiber it is
+(checked against the source on 2026-10-14):
+
+- **`async` / `await` in a compiled program: no separate stack.** The body
+  runs on the spawner's C stack. An `await` on a pending future parks a heap
+  copy of its CPS continuation, from the await up to the body's root, and
+  fulfilling the future runs that copy (`__tur_await_body` and
+  `__tur_async_resume` in the emitted runtime). No context switch happens.
+  Measured on Linux: ~137 ns per spawn + await of a ready future, ~813 ns per
+  park/resume turn of a body a few calls deep -- the copy and its hand-off
+  ([WP2, R-10](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md#r-10----fibers)).
+- **The explicit fiber API has one.** `fiber-new` (`stdlib/fiber.tur`) and
+  `task-group-spawn` (`stdlib/taskgroup.tur`) each create a `FiberBlock`
+  (which `scheduler-spawn` in `stdlib/scheduler.tur` then runs). A
+  `FiberBlock` `malloc`s its own stack -- 1 MiB unless `fiber-new` is given a
+  size (`tur_fiber_block_new` in `src/compiler/emit_module.c`) -- and
+  switches through `ucontext`: libc `swapcontext` on Linux and macOS
+  (glibc's also saves and restores the signal mask), a register-snapshot
+  shim on Windows. The fallback that runs a `handle` the CPS backend could
+  not take (`TUR_TRACE_EVICT=1` lists those) runs its body on a `FiberBlock`
+  too.
+- **Under `tur --interpret`**, every `async` thunk runs as a `ucontext` fiber
+  on its own 512 KiB `mmap`'d stack (`TURI_ASYNC_STACK_SIZE`).
 
 ### Async Blocks
 
@@ -166,9 +189,9 @@ reset
 | Feature | Threads | Async/Await |
 |---------|-------------------|----------------------|
 | **Model** | OS-level 1:1 threads | User-space fibers |
-| **Overhead** | ~10-100us per thread | ~1us per fiber |
+| **Overhead** | ~10-100us per thread | ~0.14us per spawn + await, ~0.8us per park/resume (compiled; see [Fibers](#fibers)) |
 | **Scalability** | 100s-1000s max | 100k+ feasible |
-| **Stack** | Real OS stack | CPS-based (heap) |
+| **Stack** | Real OS stack | `async`: CPS continuation on the heap; an explicit `fiber-new` fiber: a 1 MiB `malloc`'d stack |
 | **Use case** | CPU-bound parallelism | I/O-bound concurrency |
 
 ## Common Patterns
