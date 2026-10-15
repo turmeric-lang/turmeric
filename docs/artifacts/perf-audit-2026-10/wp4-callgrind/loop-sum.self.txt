@@ -1,0 +1,40 @@
+--------------------------------------------------------------------------------
+Profile data file '/srv/perf/runs/wp4/callgrind/loop-sum.cg' (creator: callgrind-3.22.0)
+--------------------------------------------------------------------------------
+I1 cache: 
+D1 cache: 
+LL cache: 
+Timerange: Basic block 0 - 4269466556
+Trigger: Program termination
+Profiled target:  ./build-relg/tur --interpret benchmarks/triangle/loop-sum.tur (PID 4784, part 1)
+Events recorded:  Ir
+Events shown:     Ir
+Event sort order: Ir
+Thresholds:       99
+Include dirs:     
+User annotated:   
+Auto-annotation:  on
+
+--------------------------------------------------------------------------------
+Ir                      
+--------------------------------------------------------------------------------
+19,074,056,237 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                      file:function
+--------------------------------------------------------------------------------
+8,050,001,752 (42.20%)  src/turi/eval.c:eval_drive_ex [/srv/perf/wp4/build-relg/tur]
+1,810,054,290 ( 9.49%)  src/turi/eval.c:eval_expr_impl [/srv/perf/wp4/build-relg/tur]
+1,590,000,157 ( 8.34%)  src/turi/eval.c:eval_lookup [/srv/perf/wp4/build-relg/tur]
+1,080,523,633 ( 5.66%)  ./malloc/./malloc/malloc.c:_int_free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  945,021,546 ( 4.95%)  src/turi/eval.c:eval_expr [/srv/perf/wp4/build-relg/tur]
+  900,314,775 ( 4.72%)  ./malloc/./malloc/malloc.c:malloc [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  900,000,116 ( 4.72%)  src/turi/eval.c:eval_builtin [/srv/perf/wp4/build-relg/tur]
+  745,000,149 ( 3.91%)  src/turi/eval.c:frame_pin_bare_tyvars_from_args [/srv/perf/wp4/build-relg/tur]
+  603,918,651 ( 3.17%)  ./string/../sysdeps/x86_64/multiarch/strcmp-avx2.S:__strcmp_avx2 [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  560,192,416 ( 2.94%)  ./malloc/./malloc/malloc.c:free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+  365,264,453 ( 1.91%)  src/turi/env.c:ht_find [/srv/perf/wp4/build-relg/tur]
+  255,000,051 ( 1.34%)  src/turi/eval.c:turi_copy_byvalue_struct_arg [/srv/perf/wp4/build-relg/tur]
+  235,000,065 ( 1.23%)  src/turi/eval.c:frame_release_one [/srv/perf/wp4/build-relg/tur]
+  220,072,933 ( 1.15%)  ./malloc/./malloc/arena.c:free
+  210,000,042 ( 1.10%)  src/turi/eval.c:poly_wrap_dict_clone_value [/srv/perf/wp4/build-relg/tur]

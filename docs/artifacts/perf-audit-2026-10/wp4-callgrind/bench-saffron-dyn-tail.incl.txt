@@ -1,0 +1,60 @@
+--------------------------------------------------------------------------------
+Profile data file '/srv/perf/runs/wp4/callgrind/bench-saffron-dyn-tail.cg' (creator: callgrind-3.22.0)
+--------------------------------------------------------------------------------
+I1 cache: 
+D1 cache: 
+LL cache: 
+Timerange: Basic block 0 - 10423820906
+Trigger: Program termination
+Profiled target:  ./build-relg/tur --interpret benchmarks/bench-saffron-dyn-tail.tur (PID 4834, part 1)
+Events recorded:  Ir
+Events shown:     Ir
+Event sort order: Ir
+Thresholds:       99
+Include dirs:     
+User annotated:   
+Auto-annotation:  on
+
+--------------------------------------------------------------------------------
+Ir                      
+--------------------------------------------------------------------------------
+42,797,492,645 (100.0%)  PROGRAM TOTALS
+
+--------------------------------------------------------------------------------
+Ir                       file:function
+--------------------------------------------------------------------------------
+42,796,779,233 (100.0%)  ./nptl/./nptl/pthread_create.c:start_thread [/usr/lib/x86_64-linux-gnu/libc.so.6]
+42,796,751,994 (100.0%)  /srv/perf/wp4/src/compiler/stack_guard.c:tur_big_stack_thunk
+42,796,751,994 (100.0%)  src/compiler/stack_guard.c:tur_big_stack_thunk [/srv/perf/wp4/build-relg/tur]
+42,796,751,717 (100.0%)  /srv/perf/wp4/src/main.c:tur_main_job
+42,796,751,717 (100.0%)  src/main.c:tur_main_job [/srv/perf/wp4/build-relg/tur]
+42,796,751,713 (100.0%)  src/main.c:tur_main_inner [/srv/perf/wp4/build-relg/tur]
+42,796,734,931 (100.0%)  src/main.c:cmd_eval_h [/srv/perf/wp4/build-relg/tur]
+42,757,006,463 (99.91%)  /srv/perf/wp4/src/turi/eval.c:turi_call
+42,757,006,463 (99.91%)  src/turi/eval.c:turi_call [/srv/perf/wp4/build-relg/tur]
+42,757,006,429 (99.91%)  src/turi/eval.c:eval_apply.part.0 [/srv/perf/wp4/build-relg/tur]
+42,757,006,407 (99.91%)  src/turi/eval.c:eval_apply_driven [/srv/perf/wp4/build-relg/tur]
+42,757,006,205 (99.91%)  src/turi/eval.c:eval_drive_ex [/srv/perf/wp4/build-relg/tur]
+32,099,701,581 (75.00%)  src/turi/eval.c:eval_expr [/srv/perf/wp4/build-relg/tur]
+30,749,247,873 (71.85%)  src/turi/eval.c:eval_expr_impl [/srv/perf/wp4/build-relg/tur]
+21,346,652,150 (49.88%)  src/turi/eval.c:eval_expr'2 [/srv/perf/wp4/build-relg/tur]
+18,645,948,206 (43.57%)  src/turi/eval.c:eval_expr_impl'2 [/srv/perf/wp4/build-relg/tur]
+ 3,911,210,571 ( 9.14%)  /srv/perf/wp4/src/compiler/builtins.c:builtin_lookup
+ 3,911,210,571 ( 9.14%)  src/compiler/builtins.c:builtin_lookup [/srv/perf/wp4/build-relg/tur]
+ 2,041,328,225 ( 4.77%)  src/turi/eval.c:eval_lookup [/srv/perf/wp4/build-relg/tur]
+ 1,780,465,852 ( 4.16%)  src/turi/eval.c:eval_builtin [/srv/perf/wp4/build-relg/tur]
+ 1,620,648,162 ( 3.79%)  src/turi/eval.c:turi_any_box_widen [/srv/perf/wp4/build-relg/tur]
+ 1,410,379,055 ( 3.30%)  /srv/perf/wp4/src/compiler/types.h:type_simple.constprop.0
+ 1,410,379,055 ( 3.30%)  src/compiler/types.h:type_simple.constprop.0 [/srv/perf/wp4/build-relg/tur]
+ 1,364,624,806 ( 3.19%)  ./string/../sysdeps/x86_64/multiarch/strcmp-avx2.S:__strcmp_avx2 [/usr/lib/x86_64-linux-gnu/libc.so.6]
+ 1,050,331,984 ( 2.45%)  /srv/perf/wp4/src/compiler/types.c:type_eq
+ 1,050,331,984 ( 2.45%)  src/compiler/types.c:type_eq [/srv/perf/wp4/build-relg/tur]
+   941,231,498 ( 2.20%)  ???:0x0000000000160d48 [???]
+   931,235,202 ( 2.18%)  ./malloc/./malloc/malloc.c:free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   790,372,437 ( 1.85%)  src/turi/eval.c:frame_release [/srv/perf/wp4/build-relg/tur]
+   540,972,619 ( 1.26%)  ./malloc/./malloc/malloc.c:_int_free [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   510,170,034 ( 1.19%)  src/turi/eval.c:turi_copy_byvalue_struct_arg [/srv/perf/wp4/build-relg/tur]
+   470,228,085 ( 1.10%)  src/turi/eval.c:frame_release_one [/srv/perf/wp4/build-relg/tur]
+   460,602,014 ( 1.08%)  ???:0x0000000000160d40 [???]
+   450,839,168 ( 1.05%)  ./malloc/./malloc/malloc.c:malloc [/usr/lib/x86_64-linux-gnu/libc.so.6]
+   240,144,048 ( 0.56%)  src/turi/eval.c:poly_wrap_dict_clone_value [/srv/perf/wp4/build-relg/tur]
