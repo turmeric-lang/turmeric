@@ -4,19 +4,19 @@
 
 (defn bench-hamt-insert [n :int] :int
   ```c
-  void *m = hamt_new();
+  void *m = tur_hamt_new();
   for (int64_t i = 0; i < n; i++) {
       int64_t *k = (int64_t *)malloc(sizeof(int64_t));
       int64_t *v = (int64_t *)malloc(sizeof(int64_t));
       *k = i;
       *v = i * 2;
       uint64_t h = (uint64_t)i * 2654435761ULL;
-      void *m2 = hamt_set(m, (int64_t)h, (void *)k, (void *)v);
-      if (m2 != m) { hamt_free(m); }
+      void *m2 = tur_hamt_set(m, (int64_t)h, (void *)k, (void *)v);
+      if (m2 != m) { tur_hamt_free(m); }
       m = m2;
   }
-  int64_t count = hamt_count(m);
-  hamt_free(m);
+  int64_t count = tur_hamt_count(m);
+  tur_hamt_free(m);
   return count;
   ```)
 

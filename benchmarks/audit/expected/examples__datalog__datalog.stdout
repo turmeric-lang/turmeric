@@ -1,0 +1,5 @@
+-- All user names --
+Alice
+Bob
+-- Posts by Alice (Datalog join) --
+Hello from Alice

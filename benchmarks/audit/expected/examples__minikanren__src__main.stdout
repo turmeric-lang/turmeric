@@ -1,0 +1,25 @@
+parents of bart:
+homer
+marge
+children of homer:
+bart
+lisa
+grandparents of bart:
+abe
+mona
+every parent -> child:
+abe -> homer
+mona -> homer
+homer -> bart
+homer -> lisa
+marge -> bart
+marge -> lisa
+appendo forwards, (1 2) ++ (3 4):
+(1 2 3 4)
+appendo backwards, ? ++ (3 4) = (1 2 3 4):
+(1 2)
+every split of (1 2 3):
+() ++ (1 2 3)
+(1) ++ (2 3)
+(1 2) ++ (3)
+(1 2 3) ++ ()

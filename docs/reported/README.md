@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found running the performance audit's WP0 corpus (filed 2026-10-14)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [jit-string-literal-identity-differs-from-cc](jit-string-literal-identity-differs-from-cc.md) | low-medium | Two identical string literals compare equal by address under `tur build` (gcc merges them) and unequal under `tur jit` (c2mir does not), so `examples/datalog/indexed.tur`, which keys its index on literal addresses, answers its queries compiled and returns nothing JIT'd. |
+
 ## Found executing generic-zipper-plan (filed 2026-10-14)
 
 Hit while building `stdlib/zip.tur` from

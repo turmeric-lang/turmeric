@@ -17,9 +17,11 @@
 
 set -u
 cd "$(dirname "$0")/.."
+. benchmarks/tur-probe.sh
 
 TUR="${TUR:-./build-turjit/tur}"
 [ -x "$TUR" ] || { echo "run-triangle: no tur at $TUR (need a TUR_JIT=ON build)" >&2; exit 2; }
+require_unsanitized_tur "$TUR" run-triangle
 probe=$("$TUR" jit 2>&1 || true)
 case "$probe" in
   *"usage: tur jit"*) ;;

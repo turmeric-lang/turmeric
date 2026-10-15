@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+"""Run the performance-audit corpus and record one row per (program, engine, phase).
+
+WP0 of docs/upcoming/performance-audit-plan.md.  Reads benchmarks/audit/corpus.txt
+(the committed corpus list) and, for every program on every engine it names,
+measures what the plan's baseline asks for:
+
+  wall time    best and median of --reps runs (CLOCK_MONOTONIC around fork/wait4)
+  user / sys   CPU of the best-wall run, from the child's rusage -- which on
+               Linux folds in every descendant the child reaped, so a
+               `tur build` row includes the cc it ran
+  peak RSS     max ru_maxrss over the reps (KiB; macOS bytes are converted)
+  bytes        emitted C size for the `emit` phase, binary size for `build`
+
+Every run goes through benchmarks/audit/rusage-run.c, compiled at start: a
+child forked from Python inherits Python's high-water RSS into its own
+ru_maxrss at exec, so a 1 ms program would read ~16 MB (see that file).
+
+Phases per engine:
+
+  cc      emit  (`tur emit-c`)   build (`tur build -o`)   run (the binary)
+  jit     run   (`tur jit <file>`, compile + run together)
+  interp  run   (`tur --interpret <file>`)
+
+Every run's stdout is checked against the program's pinned answer before its
+number counts, the way benchmarks/run-triangle.sh refuses a program whose
+engines disagree: an experiment must not look fast by doing less.  The pin for
+a fixture is its own expected.stdout; for everything else it lives under
+benchmarks/audit/expected/.  `--pin` writes missing pins (two runs, which must
+agree), and never overwrites one unless `--repin`.
+
+Self-timing programs print nanosecond values that cannot be pinned verbatim.
+A corpus line saying `cols=1,2,5` compares only those comma-separated columns
+of each output line (lines without a comma are compared whole);
+`keep-lines=5:1,2,4` compares only lines 1, 2 and 4 of every group of five.
+
+It refuses a sanitized `tur` (the Debug build): every number would be ASan's
+shadow-memory bookkeeping.  The probe reads symbol tables with `nm`, the way
+the driver's own libturi autodetect does (src/main.c) -- a plain grep of the
+binary finds the string "__asan_init" in a Release tur too, because the driver
+carries that nm command line as a literal.
+
+Usage:
+  python3 benchmarks/audit/run-corpus.py --tur ./build-release/tur
+  python3 benchmarks/audit/run-corpus.py --only triangle --engines cc --reps 5
+  python3 benchmarks/audit/run-corpus.py --pin --reps 1      # write missing pins
+
+Writes <out>/rows.csv, <out>/meta.json and <out>/summary.md (default out:
+benchmarks/output/audit/<UTC timestamp>/, which is gitignored).
+"""
+
+import argparse
+import csv
+import datetime
+import json
+import os
+import platform
+import re
+import shlex
+import shutil
+import statistics
+import subprocess
+import sys
+import time
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+CORPUS = os.path.join(ROOT, "benchmarks", "audit", "corpus.txt")
+PIN_DIR = os.path.join(ROOT, "benchmarks", "audit", "expected")
+ENGINES = ("cc", "jit", "interp")
+SANITIZER_SYMBOLS = ("__asan_init", "__tsan_init", "__ubsan_handle_")
+
+
+# --------------------------------------------------------------------------
+# Corpus
+# --------------------------------------------------------------------------
+
+class Program:
+    def __init__(self, path, engines, check, timeout, note, lineno):
+        self.path = path
+        self.engines = engines
+        self.check = check
+        self.timeout = timeout
+        self.note = note
+        self.lineno = lineno
+
+        # A fixture is run the way tests/run.sh runs it: `flags` are global
+        # flags before the subcommand, `run.args` go to the compiled binary,
+        # `input.stdin` is its stdin, and `expected.exit` is the exit code
+        # that counts as success.
+        self.fixture_dir = None
+        self.flags, self.run_args, self.stdin, self.expected_exit = [], [], "-", 0
+        d = os.path.dirname(path)
+        if d.startswith("tests/fixtures/"):
+            self.fixture_dir = os.path.join(ROOT, d)
+            f = lambda name: os.path.join(self.fixture_dir, name)
+            if os.path.exists(f("flags")):
+                self.flags = shlex.split(open(f("flags")).read())
+            if os.path.exists(f("run.args")):
+                self.run_args = [l.rstrip("\n") for l in open(f("run.args")) if l.strip()]
+            if os.path.exists(f("input.stdin")):
+                self.stdin = f("input.stdin")
+            if os.path.exists(f("expected.exit")):
+                self.expected_exit = int(open(f("expected.exit")).read().strip())
+
+    @property
+    def pin_path(self):
+        if self.fixture_dir:
+            return os.path.join(self.fixture_dir, "expected.stdout")
+        key = re.sub(r"\.tur(\.sweet)?$", "", self.path).replace("/", "__")
+        return os.path.join(PIN_DIR, key + ".stdout")
+
+
+def read_corpus(path):
+    """One program per line: <path> <engines> <check> [timeout=<s>] [# note]."""
+    progs = []
+    with open(path) as f:
+        for lineno, raw in enumerate(f, 1):
+            line, _, note = raw.partition("#")
+            fields = line.split()
+            if not fields:
+                continue
+            if len(fields) < 3:
+                sys.exit(f"{path}:{lineno}: want <path> <engines> <check>, got {raw.strip()!r}")
+            prog_path, engines, check = fields[:3]
+            timeout = 120.0
+            for extra in fields[3:]:
+                k, _, v = extra.partition("=")
+                if k == "timeout":
+                    timeout = float(v)
+                else:
+                    sys.exit(f"{path}:{lineno}: unknown option {extra!r}")
+            engs = tuple(e for e in engines.split(",") if e)
+            bad = [e for e in engs if e not in ENGINES]
+            if bad:
+                sys.exit(f"{path}:{lineno}: unknown engine(s) {bad}")
+            if check != "exact" and not re.fullmatch(r"(cols=|keep-lines=\d+:)\d+(,\d+)*", check):
+                sys.exit(f"{path}:{lineno}: check must be `exact`, `cols=N,M,...` "
+                         "or `keep-lines=P:N,M,...`")
+            if not os.path.exists(os.path.join(ROOT, prog_path)):
+                sys.exit(f"{path}:{lineno}: no such program {prog_path}")
+            progs.append(Program(prog_path, engs, check, timeout, note.strip(), lineno))
+    return progs
+
+
+def masked(text, check):
+    if check == "exact":
+        return text
+    if check.startswith("keep-lines="):
+        # keep-lines=P:N,M -- in each group of P lines keep lines N, M (1-based).
+        period, _, idx = check[len("keep-lines="):].partition(":")
+        keep = {int(i) - 1 for i in idx.split(",")}
+        lines = text.splitlines()
+        return "\n".join(l for i, l in enumerate(lines) if i % int(period) in keep) + "\n"
+    keep = [int(c) - 1 for c in check[len("cols="):].split(",")]
+    out = []
+    for line in text.splitlines():
+        if "," in line:
+            cells = line.split(",")
+            line = ",".join(cells[i] if i < len(cells) else "" for i in keep)
+        out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+# --------------------------------------------------------------------------
+# Measurement
+# --------------------------------------------------------------------------
+
+LAUNCHER = None   # path of the compiled rusage-run, set by main()
+
+
+def build_launcher(dest):
+    src = os.path.join(ROOT, "benchmarks", "audit", "rusage-run.c")
+    cc = os.environ.get("CC", "cc")
+    r = subprocess.run([cc, "-O2", "-o", dest, src], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"run-corpus: could not build {src} with {cc}:\n{r.stderr}")
+    return dest
+
+
+def run_once(argv, timeout, stdout_path, stdin="-"):
+    """Run argv from the repo root under rusage-run.
+
+    Returns (rc, wall_s, user_s, sys_s, maxrss_kib, stdout_bytes); rc is None
+    on timeout and negative for a signal.  stdout goes to a file, so a large
+    output does not sit in a pipe buffer while the clock runs."""
+    r = subprocess.run([LAUNCHER, str(max(1, int(timeout + 0.999))), stdin, stdout_path] + argv,
+                       cwd=ROOT, capture_output=True, text=True)
+    fields = r.stdout.split()
+    if r.returncode != 0 or len(fields) != 5:
+        sys.exit(f"run-corpus: rusage-run failed on {argv}: {r.stdout}{r.stderr}")
+    status, wall_ns, user_us, sys_us, rss = fields
+    if status == "timeout":
+        rc = None
+    elif status.startswith("signal:"):
+        rc = -int(status.split(":")[1])
+    else:
+        rc = int(status)
+    data = open(stdout_path, "rb").read() if rc is not None else b""
+    return rc, int(wall_ns) / 1e9, int(user_us) / 1e6, int(sys_us) / 1e6, int(rss), data
+
+
+WARMUP = 1   # discarded runs before each measured phase, set by main()
+
+
+def measure(argv, reps, timeout, scratch, check=None, pin=None, stdin="-", ok_rc=0):
+    """Best-of-reps.  Returns a dict of metrics plus status and the stdout of
+    the first run (used for pinning).
+
+    The warm-up runs are discarded.  Without them the first phase after a
+    cool-down read up to 7x slow (emit-c 124 ms against a steady 17 ms): an
+    idle WSL2 VM's vCPUs take longer to come back than five 17 ms runs last,
+    so best-of-5 never reached the warm state."""
+    for _ in range(WARMUP):
+        run_once(argv, timeout, os.path.join(scratch, "stdout"), stdin)
+    walls, best = [], None
+    peak = 0
+    first_out = None
+    status = "ok"
+    for i in range(reps):
+        rc, wall, user, sys_s, rss, data = run_once(argv, timeout,
+                                                    os.path.join(scratch, "stdout"), stdin)
+        peak = max(peak, rss)
+        if rc is None:
+            status = f"timeout>{timeout:g}s"
+            walls.append(wall)
+            break
+        if rc != ok_rc:
+            status = f"rc={rc}"
+            walls.append(wall)
+            break
+        text = data.decode("utf-8", "replace")
+        if first_out is None:
+            first_out = text
+        if pin is not None and masked(text, check) != masked(pin, check):
+            status = "MISMATCH"
+            walls.append(wall)
+            break
+        walls.append(wall)
+        if best is None or wall < best[0]:
+            best = (wall, user, sys_s)
+    row = {
+        "reps": len(walls),
+        "wall_ms_min": round(min(walls) * 1000, 2),
+        "wall_ms_median": round(statistics.median(walls) * 1000, 2),
+        "user_ms": round(best[1] * 1000, 2) if best else "",
+        "sys_ms": round(best[2] * 1000, 2) if best else "",
+        "maxrss_kib": peak,
+        "status": status,
+    }
+    return row, first_out
+
+
+# --------------------------------------------------------------------------
+# Probes and header
+# --------------------------------------------------------------------------
+
+def sanitizer_symbols(tur):
+    nm = shutil.which("nm")
+    if not nm:
+        return None
+    found = set()
+    for flag in ([], ["-D"]):
+        r = subprocess.run([nm] + flag + [tur], capture_output=True, text=True)
+        for sym in SANITIZER_SYMBOLS:
+            if sym in r.stdout:
+                found.add(sym)
+    return sorted(found)
+
+
+def has_jit(tur):
+    r = subprocess.run([tur, "jit"], capture_output=True, text=True)
+    return "usage: tur jit" in (r.stdout + r.stderr)
+
+
+def first_line(argv):
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        return (r.stdout or r.stderr).strip().splitlines()[0]
+    except Exception:
+        return ""
+
+
+def cpu_model():
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor()
+
+
+def stamp(path):
+    st = os.stat(path)
+    return (st.st_size, st.st_mtime_ns)
+
+
+def header(tur, args):
+    git = lambda *a: subprocess.run(["git", "-C", ROOT] + list(a),
+                                    capture_output=True, text=True).stdout.strip()
+    return {
+        "date_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+        "commit": git("rev-parse", "HEAD"),
+        "dirty": bool(git("status", "--porcelain", "--untracked-files=no")),
+        "tur": os.path.relpath(tur, ROOT),
+        "tur_version": first_line([tur, "--version"]),
+        "cc": first_line([os.environ.get("CC", "cc"), "--version"]),
+        "host": platform.node(),
+        "kernel": platform.release(),
+        "cpu": cpu_model(),
+        "nproc": os.cpu_count(),
+        "reps": args.reps,
+        "warmup": args.warmup,
+        "cooldown_s": args.cooldown,
+        "env": {k: os.environ[k] for k in ("CC", "TUR_CC_FLAGS", "TUR_BUILD_DIR")
+                if k in os.environ},
+    }
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--tur", default=os.environ.get("TUR", "./build-release/tur"))
+    ap.add_argument("--corpus", default=CORPUS)
+    ap.add_argument("--reps", type=int, default=3)
+    ap.add_argument("--engines", default=",".join(ENGINES))
+    ap.add_argument("--only", default="", help="regex over program paths")
+    ap.add_argument("--out", default="")
+    ap.add_argument("--cooldown", type=float, default=0.0,
+                    help="seconds to sleep between programs (thermal)")
+    ap.add_argument("--warmup", type=int, default=1,
+                    help="discarded runs before each measured phase")
+    ap.add_argument("--pin", action="store_true", help="write missing pins")
+    ap.add_argument("--repin", action="store_true", help="overwrite existing pins")
+    ap.add_argument("--allow-sanitized", action="store_true")
+    args = ap.parse_args()
+
+    tur = os.path.abspath(os.path.join(ROOT, args.tur) if not os.path.isabs(args.tur) else args.tur)
+    if not os.access(tur, os.X_OK):
+        sys.exit(f"run-corpus: no tur at {tur}")
+    san = sanitizer_symbols(tur)
+    if san is None:
+        print("run-corpus: WARNING -- no `nm`, cannot check for a sanitized tur", file=sys.stderr)
+    elif san and not args.allow_sanitized:
+        sys.exit(f"run-corpus: {args.tur} is sanitized ({', '.join(san)}); its numbers would be\n"
+                 "  sanitizer overhead.  Build a Release tur:\n"
+                 "    cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DTUR_JIT=ON\n"
+                 "    cmake --build build-release -j\n"
+                 "  or pass --allow-sanitized for rows you will not check in.")
+    if "TUR_CC_FLAGS" in os.environ:
+        print("run-corpus: WARNING -- TUR_CC_FLAGS is set; cc rows measure it, not the "
+              "driver's defaults", file=sys.stderr)
+
+    want = set(args.engines.split(","))
+    jit_ok = has_jit(tur)
+    if "jit" in want and not jit_ok:
+        print("run-corpus: this tur has no JIT engine (configure -DTUR_JIT=ON); "
+              "jit rows are skipped", file=sys.stderr)
+
+    progs = [p for p in read_corpus(args.corpus) if re.search(args.only, p.path)]
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = os.path.abspath(args.out or os.path.join(ROOT, "benchmarks", "output", "audit", ts))
+    scratch = os.path.join(out, "scratch")
+    os.makedirs(os.path.join(scratch, "bin"), exist_ok=True)
+    global LAUNCHER, WARMUP
+    LAUNCHER = build_launcher(os.path.join(scratch, "rusage-run"))
+    WARMUP = args.warmup
+    meta = header(tur, args)
+    tur_stamp = stamp(tur)
+
+    fields = ["program", "engine", "phase", "status", "reps", "wall_ms_min",
+              "wall_ms_median", "user_ms", "sys_ms", "maxrss_kib", "bytes"]
+    rows = []
+    csv_path = os.path.join(out, "rows.csv")
+    with open(csv_path, "w", newline="") as fcsv:
+        w = csv.DictWriter(fcsv, fieldnames=fields, lineterminator="\n")
+        w.writeheader()
+
+        def emit(prog, engine, phase, row, nbytes=""):
+            r = dict(program=prog.path, engine=engine, phase=phase, bytes=nbytes, **row)
+            rows.append(r)
+            w.writerow(r)
+            fcsv.flush()
+            print(f"  {engine:6} {phase:5} {r['status']:10} min {r['wall_ms_min']:>9} ms"
+                  f"  rss {r['maxrss_kib']:>7} KiB  {nbytes}", flush=True)
+
+        for n, prog in enumerate(progs):
+            if n and args.cooldown:
+                time.sleep(args.cooldown)
+            print(f"[{n + 1}/{len(progs)}] {prog.path}", flush=True)
+            pin = None
+            if os.path.exists(prog.pin_path) and not args.repin:
+                pin = open(prog.pin_path, encoding="utf-8").read()
+            elif not args.pin:
+                print(f"  no pin at {os.path.relpath(prog.pin_path, ROOT)} (run with --pin)")
+            exe = os.path.join(scratch, "bin", re.sub(r"[^A-Za-z0-9_.-]", "_", prog.path))
+            src = os.path.join(ROOT, prog.path)
+            tur_f = [tur] + prog.flags
+            outs = {}
+            for engine in prog.engines:
+                if engine not in want or (engine == "jit" and not jit_ok):
+                    continue
+                if engine == "cc":
+                    row, _ = measure(tur_f + ["emit-c", src], args.reps, prog.timeout, scratch)
+                    emit(prog, "cc", "emit", row,
+                         os.path.getsize(os.path.join(scratch, "stdout"))
+                         if row["status"] == "ok" else "")
+                    row, _ = measure(tur_f + ["build", src, "-o", exe], args.reps,
+                                     prog.timeout, scratch)
+                    emit(prog, "cc", "build", row,
+                         os.path.getsize(exe) if row["status"] == "ok" else "")
+                    if row["status"] != "ok":
+                        continue
+                    argv = [exe] + prog.run_args
+                elif prog.run_args:
+                    # run.args is the compiled binary's argv; the engines take
+                    # theirs differently, so a fixture that needs them is cc-only.
+                    print(f"  {engine:6} run   skipped: run.args is a compiled-binary argv")
+                    continue
+                elif engine == "jit":
+                    argv = tur_f + ["jit", src]
+                else:
+                    argv = tur_f + ["--interpret", src]
+                row, first = measure(argv, args.reps, prog.timeout, scratch, prog.check, pin,
+                                     prog.stdin, prog.expected_exit)
+                emit(prog, engine, "run", row)
+                if row["status"] == "ok" and first is not None:
+                    outs[engine] = first
+            # Pinning: every engine that ran must agree, and with a second run.
+            if (args.pin or args.repin) and outs and (pin is None or args.repin):
+                answers = {masked(o, prog.check) for o in outs.values()}
+                ref_engine = "cc" if "cc" in outs else next(iter(outs))
+                ref = outs[ref_engine]
+                if len(answers) != 1:
+                    print(f"  NOT PINNED: engines disagree ({', '.join(outs)})")
+                elif prog.pin_path.startswith(os.path.join(ROOT, "tests", "fixtures")):
+                    print("  NOT PINNED: fixture pins are the fixture's own expected.stdout")
+                else:
+                    again_argv = [exe] + prog.run_args if ref_engine == "cc" else (
+                        tur_f + ["jit", src] if ref_engine == "jit" else tur_f + ["--interpret", src])
+                    rc, _, _, _, _, data = run_once(again_argv, prog.timeout,
+                                                    os.path.join(scratch, "stdout"), prog.stdin)
+                    if rc != prog.expected_exit or masked(data.decode("utf-8", "replace"), prog.check) != masked(ref, prog.check):
+                        print("  NOT PINNED: a second run disagreed with the first (use cols=)")
+                    else:
+                        os.makedirs(PIN_DIR, exist_ok=True)
+                        with open(prog.pin_path, "w", encoding="utf-8", newline="\n") as f:
+                            f.write(ref)
+                        print(f"  pinned {os.path.relpath(prog.pin_path, ROOT)}")
+
+    if stamp(tur) != tur_stamp:
+        print(f"run-corpus: WARNING -- {args.tur} changed while this run was in progress; "
+              "these rows mix two compilers and are not a result", file=sys.stderr)
+        meta["tur_changed_mid_run"] = True
+    with open(os.path.join(out, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=2)
+    write_summary(os.path.join(out, "summary.md"), meta, rows)
+    shutil.rmtree(scratch, ignore_errors=True)
+    bad = [r for r in rows if r["status"] != "ok"]
+    print(f"run-corpus: {len(rows)} rows, {len(bad)} not ok -> {os.path.relpath(out, ROOT)}")
+    return 1 if bad else 0
+
+
+def write_summary(path, meta, rows):
+    """One markdown line per program: the cc build/run split beside jit and interp."""
+    by = {}
+    for r in rows:
+        by.setdefault(r["program"], {})[(r["engine"], r["phase"])] = r
+
+    def cell(r, key="wall_ms_min"):
+        if r is None:
+            return ""
+        return f"{r[key]}" if r["status"] == "ok" else r["status"]
+
+    with open(path, "w") as f:
+        f.write(f"commit `{meta['commit'][:12]}`{' (dirty)' if meta['dirty'] else ''}, "
+                f"{meta['tur_version']}, {meta['cpu']}, nproc {meta['nproc']}, "
+                f"{meta['cc']}, best of {meta['reps']} after {meta['warmup']} warm-up, "
+                f"{meta['date_utc']}\n\n")
+        f.write("| program | emit-c ms | C bytes | cc build ms | binary bytes | cc run ms "
+                "| run RSS KiB | jit ms | interp ms |\n")
+        f.write("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+        for prog, ph in by.items():
+            e, b, c = ph.get(("cc", "emit")), ph.get(("cc", "build")), ph.get(("cc", "run"))
+            f.write(f"| {prog} | {cell(e)} | {e['bytes'] if e else ''} | {cell(b)} | "
+                    f"{b['bytes'] if b else ''} | {cell(c)} | {cell(c, 'maxrss_kib')} | "
+                    f"{cell(ph.get(('jit', 'run')))} | {cell(ph.get(('interp', 'run')))} |\n")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -112,6 +112,10 @@
     worst
     (sweep (* n 2) (+ worst (bench-one n)))))
 
+;; `sweep`'s sum only keeps `a` and `b` live; it is not a pass/fail count.
+;; build-subst prepends, so every chain's head is var 0 and `a` is 0 by
+;; construction -- returning the sum made the program exit 10 on every run.
+;; It is never negative, so the comparison keeps the dependency and exits 0.
 (defn main [] : int
   (emit-header)
-  (sweep 1 0))
+  (if (< (sweep 1 0) 0) 1 0))
