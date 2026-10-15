@@ -48,6 +48,7 @@
 #include "mir-gen.h"
 #include "c2mir.h"
 #include "runtime/buf.h"
+#include "prof.h"   /* --timings: the jit and run zones */
 
 /* ------------------------------------------------------------------ */
 /* I0 SPIKE INSTRUMENTATION (mir-interp-tier-plan phase I0)            */
@@ -1176,8 +1177,13 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   g_n_atexit = 0;
   double t_start = jit_now_ms ();
   MIR_context_t ctx;
+  /* --timings: c2mir + MIR link is "jit"; the entry thread below is "run"
+   * (which, under the default lazy generation, includes first-call codegen --
+   * the same split run_ms reports). */
+  prof_enter (PROF_JIT);
   int frc = jit_compile_and_link (csrc, csrc_len, autolink,
                                   include_dirs, n_include_dirs, &ctx);
+  prof_exit (PROF_JIT);
   if (frc != TUR_JIT_OK) return frc;
   g_jit_stat_compile_ms = jit_now_ms () - t_start;
 
@@ -1243,7 +1249,9 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     return TUR_JIT_ERR_RUN;
   }
   double t_run = jit_now_ms ();
+  prof_enter (PROF_RUN);
   pthread_join (entry_thread, NULL);
+  prof_exit (PROF_RUN);
 #ifndef _WIN32
   jit_entry_fault_restore ();
 #endif
@@ -1252,6 +1260,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
   jit_timing_mark ("run");
   jit_timing_rss ();
 
+  prof_enter (PROF_JIT);   /* --timings: tearing the MIR context down is the engine's */
   jit_forget_lazy_ctx (ctx);
   if (__atomic_load_n (&g_jit_program_started_threads, __ATOMIC_SEQ_CST)) {
     g_jit_retired_ctx = ctx;   /* its threads may still be running in it */
@@ -1260,6 +1269,7 @@ int tur_jit_execute (const char *csrc, size_t csrc_len, const char *autolink,
     c2mir_finish (ctx);
     MIR_finish (ctx);
   }
+  prof_exit (PROF_JIT);
 
   if (prog_rc) *prog_rc = box.rc;
   return TUR_JIT_OK;

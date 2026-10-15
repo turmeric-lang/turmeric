@@ -158,6 +158,10 @@ bool g_dump_read_frames = false;
 /* CPS2: --dump-cps flag */
 bool g_dump_cps = false;
 
+/* profiling-plan C0+C1: --timings[=<path>] (src/compiler/prof.h) */
+bool g_timings = false;
+const char *g_timings_out = NULL;
+
 /* Phase I: --emit-abi-trace flag */
 bool g_emit_abi_trace = false;
 

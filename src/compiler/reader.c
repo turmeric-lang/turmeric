@@ -4,6 +4,7 @@
 #include "types.h"   /* Phase N: TypeKind constants for literal suffixes */
 #include "globals.h" /* DL0: g_data_literals_enabled */
 #include "buf.h"     /* sweet-exp preprocessor */
+#include "prof.h"    /* --timings: the read and sweet zones */
 
 #include <ctype.h>
 #include <math.h>    /* r7rs-lang-plan R1: +inf.0 / +nan.0, #e on a float lexeme */
@@ -5640,11 +5641,32 @@ static char *sweet_preprocess(Arena *arena, const char *src, size_t len,
  * t-expression preprocessor rewrites the whole buffer, so an offset expressed in
  * original coordinates is meaningless in transformed ones. The interpreter
  * guards on reader_type before opting in. */
+static Form **read_all_core(Arena *arena, SymbolTable *st,
+                            const SourceFile *file,
+                            struct ReaderMacroRegistry *external_reg,
+                            uint32_t start_offset, uint32_t start_line,
+                            uint32_t *out_count);
+
+/* --timings: every read in the process funnels through here -- the entry
+ * file, the auto-loaded stdlib, an imported module, a `(load ...)` -- so one
+ * zone covers them all, nested under whatever zone did the loading. */
 Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
                                    const SourceFile *file,
                                    struct ReaderMacroRegistry *external_reg,
                                    uint32_t start_offset, uint32_t start_line,
                                    uint32_t *out_count) {
+    prof_enter(PROF_READ);
+    Form **forms = read_all_core(arena, st, file, external_reg,
+                                 start_offset, start_line, out_count);
+    prof_exit(PROF_READ);
+    return forms;
+}
+
+static Form **read_all_core(Arena *arena, SymbolTable *st,
+                            const SourceFile *file,
+                            struct ReaderMacroRegistry *external_reg,
+                            uint32_t start_offset, uint32_t start_line,
+                            uint32_t *out_count) {
     /* For READER_SWEET, run the t-expression preprocessor first.  The
      * transformed source replaces the SourceFile in the diag registry so
      * that span offsets recorded in Forms (which index into r.src) match
@@ -5656,8 +5678,10 @@ Form **read_all_with_registry_from(Arena *arena, SymbolTable *st,
         xmap->runs = NULL;
         xmap->n_runs = 0;
         xmap->cap_runs = 0;
+        prof_enter(PROF_SWEET);
         char  *xsrc = sweet_preprocess(arena, file->src, file->len, &xlen, xmap,
                                        file->reader_type == READER_R7RS_SWEET);
+        prof_exit(PROF_SWEET);
         /* TUR_SWEET_DUMP=1 prints the preprocessed source for debugging. */
         if (getenv("TUR_SWEET_DUMP")) {
             fprintf(stderr, "==== sweet-exp preprocessed (%s) ====\n%.*s====\n",

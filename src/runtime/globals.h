@@ -112,6 +112,14 @@ extern bool g_dump_read_frames;
  * colored user-level top-level defn */
 extern bool g_dump_cps;
 
+/* profiling-plan C0+C1: --timings[=<path>] -- the compiler's zone timer
+ * (src/compiler/prof.h).  A diagnostic knob, not an experiment: it reports
+ * where the compile's time went and changes nothing it compiles.  Set only by
+ * prof_start; g_timings_out is the JSON destination, NULL for the stderr
+ * table alone. */
+extern bool g_timings;
+extern const char *g_timings_out;
+
 /* Phase I: --emit-abi-trace flag — print the resolved ABI path (concrete-clone,
  * carrier, dictionary, polymorphic-wrapper) for each call site during emit-c */
 extern bool g_emit_abi_trace;

@@ -26,6 +26,7 @@
 #include "refine_smtlib.h"
 #include "refine_solver.h"
 #include "runtime/globals.h"
+#include "prof.h"   /* --timings: the refine zone */
 
 /* ------------------------------------------------------------------------- *
  * Stats
@@ -477,6 +478,7 @@ void refine_note_invariant_declined(void) { g_stats.inv_declined++; }
 void refine_emit_obligation_notes(const RefineObligation *ob, Arena *a,
                                   bool refuted, bool closed) {
     if (!ob) return;
+    prof_enter(PROF_REFINE);   /* --timings: the hint search runs the solver */
     if (refuted) {
         emit_predicate_note(ob, closed ? PN_REFUTED_CLOSED : PN_REFUTED);
         emit_model_note(ob, closed);
@@ -484,9 +486,23 @@ void refine_emit_obligation_notes(const RefineObligation *ob, Arena *a,
         emit_predicate_note(ob, PN_UNKNOWN);
     }
     emit_hint(ob, ob->vc, a);
+    prof_exit(PROF_REFINE);
 }
 
+static bool refine_discharge_one_impl(RefineObligation *ob, Arena *a);
+
+/* --timings: an obligation decided in place during elaboration is charged to
+ * "refine" here; the end-of-unit pass (elaborate_program) is one refine zone
+ * already, and re-entering it is free. */
 bool refine_discharge_one(RefineObligation *ob, Arena *a) {
+    if (!ob) return false;
+    prof_enter(PROF_REFINE);
+    bool r = refine_discharge_one_impl(ob, a);
+    prof_exit(PROF_REFINE);
+    return r;
+}
+
+static bool refine_discharge_one_impl(RefineObligation *ob, Arena *a) {
     if (!ob) return false;
     if (ob->discharged) return ob->proven;
     ob->discharged = true;

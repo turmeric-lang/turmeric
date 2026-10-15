@@ -1,5 +1,6 @@
 /* elab_macros.c -- compile-time evaluation, quasiquote, macro definition and expansion. */
 #include "elab_internal.h"
+#include "prof.h"   /* --timings: the macro-expand zone */
 
 /* ---- file-local helper forward declarations ---- */
 static CtValue ct_value_form(Form *f);
@@ -1527,8 +1528,21 @@ static Form *substitute_params(Elab *e, Form *f, MacroDef *macro, Form **args, b
     return f;
 }
 
-/* Phase 6: Expand a macro call with arguments */
+static Form *elab_expand_macro_impl(Elab *e, MacroDef *macro, Form **args, uint32_t n_args);
+
+/* --timings (profiling-plan C1): computing an expansion -- substitution,
+ * compile-time evaluation, a procedural macro's closure -- is "macro-expand".
+ * Elaborating the form it produced happens in the caller, after this returns,
+ * and is "elaborate".  Nested expansions re-enter the same zone for free. */
 Form *elab_expand_macro(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) {
+    prof_enter(PROF_MACRO_EXPAND);
+    Form *r = elab_expand_macro_impl(e, macro, args, n_args);
+    prof_exit(PROF_MACRO_EXPAND);
+    return r;
+}
+
+/* Phase 6: Expand a macro call with arguments */
+static Form *elab_expand_macro_impl(Elab *e, MacroDef *macro, Form **args, uint32_t n_args) {
     /* Phase M4: set expansion-origin module so private helper macros of the
      * same module are accessible during this expansion. Restore on every exit.
      * Cross-module wrapper-macro bug fix: push on a stack so nested expansions

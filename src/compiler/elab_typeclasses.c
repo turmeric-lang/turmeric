@@ -5,6 +5,21 @@
 #include "refine_solver.h"        /* RT1: refine_model_search, for the variance witness */
 #include "forms.h"
 #include "mangle.h"
+#include "prof.h"   /* --timings: the typeclass zone */
+
+/* --timings (profiling-plan C1): the class/instance declarations and method
+ * dispatch below are "typeclass".  Each entry point is a thin wrapper over
+ * its *_impl, because the bodies have many exit paths.  The forms they
+ * elaborate along the way -- an instance's method bodies, a method call's
+ * arguments -- go back through elab_form and so back to "elaborate". */
+#define PROF_TYPECLASS_WRAP(ret, name, params, args)            \
+    static ret name##_impl params;                                \
+    ret name params {                                             \
+        prof_enter(PROF_TYPECLASS);                               \
+        ret r_ = name##_impl args;                                \
+        prof_exit(PROF_TYPECLASS);                                \
+        return r_;                                                \
+    }
 
 /* ---- file-local helper forward declarations ---- */
 /* panic-location-names-the-runtime-not-the-call-site: an instance method's
@@ -1314,7 +1329,9 @@ static bool default_body_mentions_sibling(const Form *method_form, uint32_t body
     return false;
 }
 
-Expr *elab_defclass(Elab *e, const Form *call) {
+PROF_TYPECLASS_WRAP(Expr *, elab_defclass, (Elab *e, const Form *call), (e, call))
+
+static Expr *elab_defclass_impl(Elab *e, const Form *call) {
     /* Minimum: (defclass Name) */
     if (call->as.list.len < 2) {
         diag_emit(DIAG_ERROR, call->span,
@@ -2867,9 +2884,11 @@ static Expr *elab_definstance_inner(Elab *e, const Form *call);
  * definstance body" from "inside an ordinary defn".  A wrapper rather than
  * inc/dec at each return, because the inner function has many exit paths. */
 Expr *elab_definstance(Elab *e, const Form *call) {
+    prof_enter(PROF_TYPECLASS);
     e->definstance_depth++;
     Expr *r = elab_definstance_inner(e, call);
     if (e->definstance_depth > 0) e->definstance_depth--;
+    prof_exit(PROF_TYPECLASS);
     return r;
 }
 
@@ -6033,8 +6052,12 @@ bool elab_symbol_is_return_dispatch_method(Elab *e, const Symbol *name) {
     return false;
 }
 
-Expr *elab_try_return_dispatch(Elab *e, const Form *call, const Symbol *name,
-                               bool *handled) {
+PROF_TYPECLASS_WRAP(Expr *, elab_try_return_dispatch,
+                    (Elab *e, const Form *call, const Symbol *name, bool *handled),
+                    (e, call, name, handled))
+
+static Expr *elab_try_return_dispatch_impl(Elab *e, const Form *call, const Symbol *name,
+                                           bool *handled) {
     if (handled) *handled = false;
     if (!name || call->tag != F_LIST) return NULL;
 
@@ -7144,7 +7167,9 @@ static void saffron_mint_constraint_any_instances(Elab *e, const TypeClassInstan
         saffron_mint_dyn_any_instance(e, inst->type_param_constraints[ci].typeclass, sp);
 }
 
-Expr *elab_method_call(Elab *e, const Form *call) {
+PROF_TYPECLASS_WRAP(Expr *, elab_method_call, (Elab *e, const Form *call), (e, call))
+
+static Expr *elab_method_call_impl(Elab *e, const Form *call) {
 
     /* call is (.method obj arg1 arg2 ...)
      * call->as.list.items[0] is the symbol .method
