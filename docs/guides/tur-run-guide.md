@@ -116,11 +116,24 @@ upstream `just` 1.x. For any Justfile that uses only this subset,
   `set positional-arguments := true`, `set windows-shell := [...]`
 - **Built-in functions** in interpolation:
   `env_var("NAME")`, `env_var_or_default("NAME", "fallback")`,
-  `os()`, `arch()`, `justfile_directory()`, `invocation_directory()`,
-  `uppercase(s)`, `lowercase(s)`, `trim(s)`, `quote(s)`
+  `os()`, `os_family()`, `arch()`, `justfile_directory()`,
+  `invocation_directory()`, `uppercase(s)`, `lowercase(s)`, `trim(s)`,
+  `quote(s)`, `path_exists(p)`, `replace(s, from, to)`, `join(a, b)`,
+  `error(msg)`
+- **Backtick substitution**: `` x := `git rev-parse HEAD` `` in assignments,
+  and in interpolation
+- **Modules and imports**: `mod name` (from `name.just`, `name/mod.just` or
+  `name/justfile`; run its recipes as `tur run name::recipe`) and
+  `import 'file'`
+- **Recipe attributes**: `[private]`, `[group('name')]` (grouped sections in
+  `--list`), `[doc("...")]`, `[confirm]` / `[confirm("prompt")]`, `[no-cd]`,
+  `[no-exit-message]`, and the platform selectors `[unix]`, `[linux]`,
+  `[macos]`, `[windows]`, `[openbsd]`; comma-separated lists such as
+  `[private, group('x')]` are accepted
+- **Variable overrides**: `--set VAR VALUE` (or `--set VAR=VALUE`)
 - **Aliases**: `alias b := build`, resolved on invocation and shown in
   `tur run --list`
-- **The `[private]` attribute**, and the `_name` convention: both hide a
+- **Hidden recipes**: `[private]` and the `_name` convention both hide a
   recipe from `--list` while leaving it runnable by name
 - **Conditional expressions** in assignment right-hand sides:
   `x := if os() == "macos" { "brew" } else { "apt" }`
@@ -129,20 +142,20 @@ upstream `just` 1.x. For any Justfile that uses only this subset,
 - **The `default` recipe**: if a recipe named `default` exists, `tur run`
   with no arguments runs it instead of listing
 
-### Deferred (clear error with upgrade hint)
+### Not supported (clear error with upgrade hint)
 
-- Recipe attributes other than `[private]` -- `[unix]`, `[windows]`,
-  `[no-cd]`, `[no-exit-message]`, `[confirm]`, `[group: '...']`
-- Modules and imports (`mod foo`, `import 'subfile'`)
-- Backtick command substitution in assignments
+- Recipe attributes not listed above, such as `[parallel]`, `[script]` or
+  `[extension(...)]`. An unknown attribute is refused, never silently
+  skipped, because skipping one can change what a recipe does (an ignored
+  `[confirm]` would drop the prompt guarding a destructive command).
 
 When `tur run` runs a recipe out of a Justfile using an unsupported feature
 it prints this and exits 2:
 
 ```
-tur run: unsupported Justfile feature at Justfile:14: recipe attribute [unix]
+tur run: unsupported Justfile feature at Justfile:14: recipe attribute [parallel]
         Install `just` (https://just.systems) to run this recipe, or
-        remove the [unix] attribute if the recipe is portable.
+        remove the [parallel] attribute if the recipe is portable.
 ```
 
 Under `--list` the same text appears on stderr prefixed `tur run: note:`, and

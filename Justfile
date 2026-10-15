@@ -7,28 +7,35 @@ default: build
 
 build: debug
 
-debug:
-    @[ -f build/CMakeCache.txt ] || just configure
+debug: _configured
     cmake --build build -j --config Debug
 
-release:
-    @[ -f build/CMakeCache.txt ] || just configure
+release: _configured
     cmake --build build -j --config Release
 
-tsan:
-    @[ -f build/CMakeCache.txt ] || just configure
+tsan: _configured
     cmake --build build -j --config TSan
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
+# No recipe calls `just` (or `tur run`) itself: each one has to run under
+# either runner, and `tur run` is the one a contributor is assumed to have.
+# A recipe that needs a configured tree depends on `_configured` instead.
+# tests/check-justfile.sh holds the file to that.
+CONFIGURE := "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+
 configure:
-    cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    {{CONFIGURE}}
 
 reconfigure:
     rm -rf build
-    just configure
+    {{CONFIGURE}}
+
+# Configure build/ unless it already is.
+_configured:
+    @[ -f build/CMakeCache.txt ] || {{CONFIGURE}}
 
 # ---------------------------------------------------------------------------
 # Test targets
@@ -72,7 +79,7 @@ regen-snapshots *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     TUR=./build/tur
-    [ -x "$TUR" ] || { echo "error: $TUR not built; run 'just build' first" >&2; exit 2; }
+    [ -x "$TUR" ] || { echo "error: $TUR not built; run 'tur run build' first" >&2; exit 2; }
     CHECK_MODE=0
     for _arg in {{ARGS}}; do
         [ "$_arg" = "--check" ] && CHECK_MODE=1
@@ -125,7 +132,7 @@ test-tsan: tsan
     TUR_TSAN=1 ctest -j "$(getconf _NPROCESSORS_ONLN)" --output-on-failure --test-dir build
 
 # Run production smoke tests against live turmeric-lang.com + try.turmeric-lang.com.
-# Requires: npm install run from the web/ directory (just web-deps).
+# Requires: npm install run from the web/ directory (tur run web-deps).
 smoke:
     cd web && npm run test:prod
 
@@ -145,6 +152,7 @@ smoke:
 # ---------------------------------------------------------------------------
 
 MSYS2_ROOT := env_var_or_default("MSYS2_ROOT", "C:/msys64")
+CONFIGURE_WIN := "cmake -S . -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
 # Install or refresh the Windows toolchain (gcc, clang, cmake, ninja, just). Idempotent.
 setup-windows:
@@ -204,17 +212,17 @@ configure-windows:
     # justfile_directory() hands back a backslashed Windows path; bash would
     # eat the backslashes as escapes, so translate it to a POSIX path first.
     ROOT=$(MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cygpath -u '{{justfile_directory()}}'")
-    MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cd '$ROOT' && cmake -S . -B build-win -G Ninja \
-        -DCMAKE_BUILD_TYPE=Debug \
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+    MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cd '$ROOT' && {{CONFIGURE_WIN}}"
 
 # Build tur.exe / libturi for Windows.
 build-windows:
     #!/usr/bin/env bash
     set -euo pipefail
-    [ -f build-win/CMakeCache.txt ] || just configure-windows
     MSYS_BASH="{{MSYS2_ROOT}}/usr/bin/bash"
     ROOT=$(MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cygpath -u '{{justfile_directory()}}'")
+    if [ ! -f build-win/CMakeCache.txt ]; then
+        MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cd '$ROOT' && {{CONFIGURE_WIN}}"
+    fi
     MSYSTEM=UCRT64 "$MSYS_BASH" -lc "cd '$ROOT' && cmake --build build-win -j"
 
 # Drop the Windows build tree (leaves the toolchain alone).
@@ -318,12 +326,12 @@ rebuild: clean configure build
 # and web/public/doc-names.json for the web REPL search bar.
 #
 # stdlib/docstrings.tur is TRACKED, and its `doc-verified?` table comes from
-# `just doctest`'s manifest (tests/doctest-generated/verified.txt), which is
+# `tur run doctest`'s manifest (tests/doctest-generated/verified.txt), which is
 # gitignored. This recipe deliberately does NOT depend on `doctest`: that would
 # put a build plus the full doctest run in front of every docs regen, including
 # the one inside `wasm` -> `web` -> `deploy-web`. Instead gendocs carries the
 # existing table forward when the manifest is missing, and says so on stderr.
-# So: run `just doctest` before this if you want the table REFRESHED; without
+# So: run `tur run doctest` before this if you want the table REFRESHED; without
 # it the table is preserved, never emptied.
 # See docs/archive/docstrings-verified-table-zeroed-by-regen.md.
 # Spice symbols are folded into doc-names.json via --extra-json so the web
@@ -357,7 +365,7 @@ spices:
     python3 tools/genspices.py --out docs/html/spices/ --emit-json docs/html/spices/doc-names-spices.json --emit-pack web/public/docs-pack/
 
 # Bundle the rendered docs (site HTML + docs pack) for offline use off the web.
-# `just docs` first, then: turmeric-docs-<version>.tar.gz, which the release cut
+# `tur run docs` first, then: turmeric-docs-<version>.tar.gz, which the release cut
 # attaches to the GitHub release and the Homebrew formula can install into
 # share/doc/turmeric/ for `tur docs --open`. See OD4.
 docs-tarball: docs
@@ -398,7 +406,7 @@ configure-wasm:
 alias build-wasm := wasm
 
 # Build WASM module (requires Emscripten).
-# Runs `just docs` first so stdlib/docstrings.tur is up-to-date.
+# Runs `tur run docs` first so stdlib/docstrings.tur is up-to-date.
 wasm: docs configure-wasm
     cmake --build build-wasm -j --target tur_wasm
 
@@ -444,18 +452,18 @@ web-dev: web-deps
     #!/usr/bin/env bash
     set -euo pipefail
     if [ ! -f web/public/turmeric.wasm ] || [ ! -f web/public/turmeric.js ]; then
-      echo "error: web/public/turmeric.{js,wasm} missing -- run 'just wasm' first" >&2
+      echo "error: web/public/turmeric.{js,wasm} missing -- run 'tur run wasm' first" >&2
       echo "       (they are build outputs and are no longer committed)" >&2
       exit 1
     fi
     if [ ! -f web/public/doc-names.json ]; then
-      echo "error: web/public/doc-names.json missing -- run 'just docs' first" >&2
+      echo "error: web/public/doc-names.json missing -- run 'tur run docs' first" >&2
       echo "       (it is a build output and is no longer committed; without it" >&2
       echo "        the REPL's doc panel silently finds nothing)" >&2
       exit 1
     fi
     if [ ! -f web/public/docs-pack/index.json ]; then
-      echo "error: web/public/docs-pack/index.json missing -- run 'just docs' first" >&2
+      echo "error: web/public/docs-pack/index.json missing -- run 'tur run docs' first" >&2
       echo "       (it is a build output and is not committed; without it the" >&2
       echo "        REPL's docs pane opens onto an empty nav and the service" >&2
       echo "        worker has nothing to precache for offline reading)" >&2
@@ -568,7 +576,7 @@ perf-run:
 perf-run-size size:
     cd {{PERF}} && bash scripts/run_all.sh all {{size}}
 
-# Run a single category (e.g. `just perf-run-cat numerical`).
+# Run a single category (e.g. `tur run perf-run-cat numerical`).
 perf-run-cat category:
     cd {{PERF}} && bash scripts/run_all.sh {{category}}
 
@@ -681,7 +689,7 @@ bench-box-up:
 bench-box-down:
     bash {{BENCH}}/scripts/down.sh
 
-# Shell on the bench box over SSM (or run a command: `just bench-box-ssh 'cd turmeric && ls'`).
+# Shell on the bench box over SSM (or run a command: `tur run bench-box-ssh 'cd turmeric && ls'`).
 bench-box-ssh *cmd:
     bash {{BENCH}}/scripts/ssh.sh {{cmd}}
 
