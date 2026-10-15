@@ -519,6 +519,14 @@ add_test(
   COMMAND bash tests/check-span-unknown.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# markdown-library-plan Phase J: the Justfile must run under `tur run` alone,
+# with no `just` installed -- every recipe parses (no unsupported attribute),
+# and no recipe body calls `just` itself.
+add_test(
+  NAME tur_justfile_runs_without_just
+  COMMAND bash tests/check-justfile.sh $<TARGET_FILE:tur>
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # concrete-codegen-layout-kind-enumerations-drift: append_type_mangle and
 # type_has_concrete_codegen_layout must stay exhaustive over TypeKind, and the
 # mangle must stay injective against type_eq, or two distinct instantiations
