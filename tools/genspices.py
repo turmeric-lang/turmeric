@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover -- preflight, not a code path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from genguides import (SIDEBAR_DRAWER_JS_SRC, GUIDE_RUNTIME_JS_SRC,
-                       font_links, script_tag, sidebar_drawer,
+                       font_links, theme_head, script_tag, sidebar_drawer,
                        guide_runtime, write_page_scripts, GUIDE_CSS,
                        inject_syntax_toggles, wrap_tables, toc_tokens_to_sidebar,
                        build_page_header, build_sidebar, MAIN_SITE)
@@ -274,6 +274,7 @@ def render_front_page(meta: SpiceMeta, out_dir: Path, style_rel: str,
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{html_module.escape(title)}</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+{theme_head()}
 {font_links()}
   <link rel="stylesheet" href="{style_rel}">
   <style>
@@ -415,6 +416,7 @@ def render_top_index(metas: list[SpiceMeta], out_dir: Path) -> None:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Spices | Turmeric</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+{theme_head()}
 {font_links()}
   <link rel="stylesheet" href="../api/style.css">
   <style>

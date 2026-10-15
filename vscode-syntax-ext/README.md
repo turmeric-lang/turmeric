@@ -64,6 +64,19 @@ Open the test file to see syntax highlighting in action:
 code vscode-syntax-ext/test/test-syntax.tur
 ```
 
+## Color Themes
+
+The extension ships the two themes turmeric-lang.com uses, ported from the
+Try Turmeric editor: **Turmeric Dark** and **Turmeric Light**. Pick one with
+*Preferences: Color Theme* (⌘K ⌘T). To have VS Code switch between them with
+the OS appearance:
+
+```json
+"window.autoDetectColorScheme": true,
+"workbench.preferredDarkColorTheme": "Turmeric Dark",
+"workbench.preferredLightColorTheme": "Turmeric Light"
+```
+
 ## Scope Names (For Theme Creators)
 
 Use these scope names to customize colors in your theme:

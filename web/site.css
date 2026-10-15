@@ -61,7 +61,7 @@ nav {
   top: 0; left: 0; right: 0;
   z-index: 100;
   height: 60px;
-  background: rgba(12,10,8,0.85);
+  background: var(--nav-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
@@ -73,7 +73,7 @@ nav {
 
 /* The CI dashboard scrolls dense tiles under the bar; let none of them show through. */
 body.page-ci nav {
-  background: rgb(12,10,8);
+  background: var(--bg-base);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -92,6 +92,8 @@ body.page-ci nav {
 .nav-logo-wordmark {
   display: block;
 }
+
+.nav-logo img { filter: var(--logo-filter); }
 
 
 .nav-links {
@@ -118,6 +120,35 @@ body.page-ci nav {
   gap: 8px;
 }
 
+/* ── THEME TOGGLE ──────────────────────── */
+/* Sits between the links and .nav-right and takes over the auto margin, so it
+ * stays pinned to the right edge when .nav-right drops out (<= 1080px) and
+ * when the links do (<= 768px). The click is handled by public/theme.js via
+ * [data-theme-toggle]; the icon shown is the theme a click switches TO. */
+.theme-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 7px;
+  border: 1px solid var(--border-str);
+  background: transparent;
+  color: var(--text-sec);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.theme-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.theme-toggle:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.theme-toggle svg { display: block; width: 16px; height: 16px; }
+.theme-toggle .icon-moon { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-sun  { display: none; }
+:root[data-theme="light"] .theme-toggle .icon-moon { display: block; }
+.theme-toggle + .nav-right { margin-left: 8px; }
+
 /* ── BUTTONS ───────────────────────────── */
 .btn-ghost {
   font-family: 'DM Sans', sans-serif;
@@ -136,15 +167,15 @@ body.page-ci nav {
   font-family: 'DM Sans', sans-serif;
   font-size: 13.5px;
   font-weight: 500;
-  color: #000;
+  color: var(--on-gold);
   padding: 7px 18px;
   border-radius: 7px;
-  border: 1px solid var(--gold);
-  background: var(--gold);
+  border: 1px solid var(--gold-fill);
+  background: var(--gold-fill);
   cursor: pointer;
   transition: all 0.12s;
 }
-.btn-gold:hover { background: var(--gold-bright); border-color: var(--gold-bright); }
+.btn-gold:hover { background: var(--gold-fill-hover); border-color: var(--gold-fill-hover); }
 .btn-gold:active { transform: scale(0.98); }
 
 /* ── HERO BUTTONS ──────────────────────── */
@@ -164,11 +195,11 @@ body.page-ci nav {
 }
 
 .btn-hero-primary {
-  background: var(--gold);
-  border: 1px solid var(--gold);
-  color: #0A0800;
+  background: var(--gold-fill);
+  border: 1px solid var(--gold-fill);
+  color: var(--on-gold);
 }
-.btn-hero-primary:hover { background: var(--gold-bright); border-color: var(--gold-bright); }
+.btn-hero-primary:hover { background: var(--gold-fill-hover); border-color: var(--gold-fill-hover); }
 .btn-hero-primary:active { transform: scale(0.98); }
 
 .btn-hero-secondary {
@@ -187,7 +218,7 @@ body.page-ci nav {
   border-radius: 12px;
   overflow: hidden;
   text-align: left;
-  box-shadow: 0 0 0 1px rgba(212,139,28,0.06), 0 32px 64px rgba(0,0,0,0.4);
+  box-shadow: var(--shadow-card);
 }
 
 .code-card-bar {
@@ -325,6 +356,14 @@ body.page-ci nav {
   filter:
     drop-shadow(0 0 1px rgba(240, 232, 220, 0.30))
     drop-shadow(0 30px 46px rgba(0, 0, 0, 0.55));
+}
+
+/* On a light page the screenshot is a dark window on cream: its edges separate
+ * on their own, so the spotlight has nothing to do, and the contact shadow
+ * only needs to lift it, not to carve it out of the dark. */
+:root[data-theme="light"] .product-shot::before { display: none; }
+:root[data-theme="light"] .product-shot img {
+  filter: drop-shadow(0 24px 40px rgba(60, 40, 15, 0.22));
 }
 
 /* ── CODE SYNTAX TOGGLE ───────────────── */
@@ -531,7 +570,7 @@ nav.nav-open .nav-hamburger span:nth-child(3) { transform: translateY(-7px) rota
   flex-direction: column;
   gap: 2px;
   padding: 12px 16px 20px;
-  background: rgba(12,10,8,0.97);
+  background: var(--nav-panel-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border);
@@ -747,7 +786,7 @@ body:has(site-sidebar) {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.55);
+  background: var(--scrim);
   z-index: 99;
 }
 .sidebar-overlay.is-open { display: block; }

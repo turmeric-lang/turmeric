@@ -124,7 +124,7 @@ h1 em { font-style: italic; color: var(--green); }
   margin-right: auto;
 }
 
-.hl { background: rgba(212,139,28,0.08); display: inline-block; width: 100%; border-radius: 2px; }
+.hl { background: var(--gold-subtle); display: inline-block; width: 100%; border-radius: 2px; }
 
 /* ── PAGE SECTIONS ─────────────────────── */
 section {
@@ -218,7 +218,7 @@ section {
 
 .bench-bar {
   height: 100%;
-  background: var(--gold);
+  background: var(--gold-fill);
   border-radius: 2px;
   transform-origin: left;
   animation: growBar 1.2s ease both;

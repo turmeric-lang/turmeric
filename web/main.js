@@ -2158,12 +2158,31 @@ function configureMonaco() {
         wordPattern: /[A-Za-z0-9\-?!*/><+=_]+/g,
     });
 
-    // Rainbow-bracket palette, mirrored from trowel's turmeric-dark theme
-    // (resources/turmeric-dark.theme.json rainbow0..6 + bracketError). Monaco
-    // supports six depth colors before the cycle repeats, so we take six of
-    // trowel's seven levels spanning the spectrum; the unexpected-bracket color
-    // is trowel's BracketError red.
-    const rainbowBrackets = {
+    // The editor follows the site's light/dark switch (public/theme.js). Its
+    // theme is a JS object, not CSS, so it is rebuilt from the stylesheet on
+    // every change rather than defined once.
+    applyMonacoTheme();
+    document.addEventListener('tur-themechange', applyMonacoTheme);
+}
+
+/** The site theme public/theme.js put on <html>: 'light' or 'dark'. */
+function siteTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+}
+
+/** The Monaco theme matching the site theme -- what every editor is created with. */
+function monacoThemeName() {
+    return siteTheme() === 'light' ? 'turmeric-light' : 'turmeric-dark';
+}
+
+// Rainbow-bracket palettes. The dark set is mirrored from trowel's
+// turmeric-dark theme (resources/turmeric-dark.theme.json rainbow0..6 +
+// bracketError). Monaco supports six depth colors before the cycle repeats, so
+// we take six of trowel's seven levels spanning the spectrum; the
+// unexpected-bracket color is trowel's BracketError red. The light set walks
+// the same spectrum, each step darkened to clear 3.7:1 on the light canvas.
+const RAINBOW_BRACKETS = {
+    dark: {
         'editorBracketHighlight.foreground1':               '#EFA030', // orange
         'editorBracketHighlight.foreground2':               '#D7C94A', // yellow
         'editorBracketHighlight.foreground3':               '#A8C98A', // green
@@ -2171,102 +2190,85 @@ function configureMonaco() {
         'editorBracketHighlight.foreground5':               '#8AB0E8', // blue
         'editorBracketHighlight.foreground6':               '#C4A0E8', // purple
         'editorBracketHighlight.unexpectedBracket.foreground': '#FF5C57', // error red
-    };
+    },
+    light: {
+        'editorBracketHighlight.foreground1':               '#B5650A', // orange
+        'editorBracketHighlight.foreground2':               '#8A7800', // yellow
+        'editorBracketHighlight.foreground3':               '#4E7F24', // green
+        'editorBracketHighlight.foreground4':               '#13756A', // teal
+        'editorBracketHighlight.foreground5':               '#2F62B0', // blue
+        'editorBracketHighlight.foreground6':               '#7748AE', // purple
+        'editorBracketHighlight.unexpectedBracket.foreground': '#D0312D', // error red
+    },
+};
 
-    // Minimap + overview ruler (try-turmeric-navigation-and-minimap-plan M1).
-    //
-    // Colors are resolved out of the stylesheet rather than written here as
-    // literals. The strip sits directly against the editor canvas and paints
-    // marks in the same semantic colors the console and the status dots use;
-    // a hardcoded hex would silently stop matching the first time one of those
-    // tokens moves. c2mp reaches into CSS custom properties for the same
-    // reason (minimap.js:204-209).
-    //
-    // Monaco parses these with Color.fromHex() and falls back to opaque RED on
-    // any parse failure, so cssHex() refuses anything that is not #RGB /
-    // #RRGGBB / #RRGGBBAA and hands back the literal fallback instead. A theme
-    // token that fails to resolve must look like the old theme, never like an
-    // error.
-    const minimapColors = {
+/**
+ * Minimap + overview ruler (try-turmeric-navigation-and-minimap-plan M1).
+ *
+ * Colors are resolved out of the stylesheet rather than written here as
+ * literals. The strip sits directly against the editor canvas and paints marks
+ * in the same semantic colors the console and the status dots use; a hardcoded
+ * hex would silently stop matching the first time one of those tokens moves --
+ * or the first time the reader switches theme. c2mp reaches into CSS custom
+ * properties for the same reason (minimap.js:204-209).
+ *
+ * Monaco parses these with Color.fromHex() and falls back to opaque RED on any
+ * parse failure, so cssHex() refuses anything that is not #RGB / #RRGGBB /
+ * #RRGGBBAA and hands back the literal fallback instead. A theme token that
+ * fails to resolve must look like the theme it belongs to, never like an
+ * error -- hence one fallback set per theme (`fb`).
+ */
+function minimapColors(fb) {
+    return {
         // Canvas: the strip is part of the editor, not a panel beside it.
-        'minimap.background':                   cssHex('--bg-base', '#0C0A08'),
-        'minimapSlider.background':             withAlpha(cssHex('--text-dim', '#453F39'), '59'),
-        'minimapSlider.hoverBackground':        withAlpha(cssHex('--text-sec', '#88796C'), '59'),
-        'minimapSlider.activeBackground':       withAlpha(cssHex('--text-sec', '#88796C'), '8C'),
+        'minimap.background':                   cssHex('--bg-base', fb.bgBase),
+        'minimapSlider.background':             withAlpha(cssHex('--text-dim', fb.textDim), '59'),
+        'minimapSlider.hoverBackground':        withAlpha(cssHex('--text-sec', fb.textSec), '59'),
+        'minimapSlider.activeBackground':       withAlpha(cssHex('--text-sec', fb.textSec), '8C'),
 
         // Marks inside the strip. Diagnostics keep full opacity -- they are
         // the reason to look at it; selection and find are washes, because a
         // mark you cannot see past is a mark that hides the shape of the file.
         // c2mp's rule (minimap.js §"marks as washes"), same conclusion.
-        'minimap.errorHighlight':               cssHex('--error-color', '#D9735A'),
-        'minimap.warningHighlight':             cssHex('--warning-color', '#EFA030'),
-        'minimap.findMatchHighlight':           withAlpha(cssHex('--gold', '#D48B1C'), '99'),
-        'minimap.selectionHighlight':           withAlpha(cssHex('--text-dim', '#453F39'), '80'),
-        'minimap.selectionOccurrenceHighlight': withAlpha(cssHex('--text-sec', '#88796C'), '66'),
-        'minimapGutter.addedBackground':        withAlpha(cssHex('--success-color', '#A8C98A'), 'B3'),
-        'minimapGutter.modifiedBackground':     withAlpha(cssHex('--gold', '#D48B1C'), 'B3'),
-        'minimapGutter.deletedBackground':      withAlpha(cssHex('--error-color', '#D9735A'), 'B3'),
+        'minimap.errorHighlight':               cssHex('--error-color', fb.error),
+        'minimap.warningHighlight':             cssHex('--warning-color', fb.warning),
+        'minimap.findMatchHighlight':           withAlpha(cssHex('--gold', fb.gold), '99'),
+        'minimap.selectionHighlight':           withAlpha(cssHex('--text-dim', fb.textDim), '80'),
+        'minimap.selectionOccurrenceHighlight': withAlpha(cssHex('--text-sec', fb.textSec), '66'),
+        'minimapGutter.addedBackground':        withAlpha(cssHex('--success-color', fb.success), 'B3'),
+        'minimapGutter.modifiedBackground':     withAlpha(cssHex('--gold', fb.gold), 'B3'),
+        'minimapGutter.deletedBackground':      withAlpha(cssHex('--error-color', fb.error), 'B3'),
 
         // The outboard ruler. This is the affordance c2mp builds by hand
         // (minimap.js RULER_W): a diagnostic gets a tick here because it must
         // stay findable when the minimap is scrolled past it; an occurrence
         // does not, because there can be fifty of them and they are noise at
         // this width.
-        'editorOverviewRuler.background':       cssHex('--bg-base', '#0C0A08'),
+        'editorOverviewRuler.background':       cssHex('--bg-base', fb.bgBase),
         'editorOverviewRuler.border':           '#00000000',
-        'editorOverviewRuler.errorForeground':  cssHex('--error-color', '#D9735A'),
-        'editorOverviewRuler.warningForeground': cssHex('--warning-color', '#EFA030'),
-        'editorOverviewRuler.infoForeground':   cssHex('--info-color', '#7AC4B8'),
-        'editorOverviewRuler.findMatchForeground': withAlpha(cssHex('--gold', '#D48B1C'), 'CC'),
+        'editorOverviewRuler.errorForeground':  cssHex('--error-color', fb.error),
+        'editorOverviewRuler.warningForeground': cssHex('--warning-color', fb.warning),
+        'editorOverviewRuler.infoForeground':   cssHex('--info-color', fb.info),
+        'editorOverviewRuler.findMatchForeground': withAlpha(cssHex('--gold', fb.gold), 'CC'),
         'editorOverviewRuler.selectionHighlightForeground':
-            withAlpha(cssHex('--text-sec', '#88796C'), '80'),
+            withAlpha(cssHex('--text-sec', fb.textSec), '80'),
         'editorOverviewRuler.bracketMatchForeground': '#00000000',
     };
+}
 
-    // Define theme
-    monaco.editor.defineTheme('turmeric-light', {
-        base: 'vs',
-        inherit: true,
-        rules: [
-            { token: 'comment', foreground: '8292a2' },
-            { token: 'string', foreground: '2aa198' },
-            { token: 'number', foreground: 'd16969' },
-            { token: 'keyword', foreground: '20bbb4', fontStyle: 'bold' },
-            { token: 'keyword.operator', foreground: '20bbb4' },
-            { token: 'type', foreground: 'dc9656' },
-            { token: 'operator', foreground: '89ddff' },
-            { token: 'delimiter', foreground: '24292e' },
-            { token: 'identifier', foreground: '24292e' }
-        ],
-        colors: {
-            'editor.background': '#ffffff',
-            'editor.foreground': '#24292e',
-            'editorCursor.foreground': '#0366d6',
-            'editor.lineHighlightBackground': '#f8f8f8',
-            'editorLineNumber.foreground': '#959da5',
-            // NOTE: Monaco parses theme colors with Color.fromHex() and falls
-            // back to opaque RED on any parse failure -- rgba() strings are NOT
-            // supported here. Always use #RRGGBB or #RRGGBBAA.
-            'editor.selectionBackground': '#0366D64D',
-            'editor.inactiveSelectionBackground': '#0366D61A',
-            'editorIndentGuide.background': '#e1e4e8',
-            'editorIndentGuide.activeBackground': '#959da5',
-            ...rainbowBrackets,
-            // The light theme is not currently selectable (setTheme below
-            // pins turmeric-dark), but a half-themed minimap is exactly the
-            // kind of thing that ships the day someone makes it selectable.
-            ...minimapColors,
-            'minimap.background':             '#ffffff',
-            'editorOverviewRuler.background': '#ffffff',
-            'minimapSlider.background':       '#959da54D',
-            'minimapSlider.hoverBackground':  '#959da580',
-            'minimapSlider.activeBackground': '#959da5A6',
-        }
-    });
-
-    monaco.editor.defineTheme('turmeric-dark', {
+// The two editor themes. `fallback` is what minimapColors() uses when a CSS
+// token does not resolve: the stylesheet's own value for that theme.
+//
+// NOTE: Monaco parses theme colors with Color.fromHex() and falls back to
+// opaque RED on any parse failure -- rgba() strings are NOT supported here.
+// Always use #RRGGBB or #RRGGBBAA.
+//
+// The editor ports -- vscode-syntax-ext/themes/, vim-syntax/colors/ and
+// emacs/ -- carry both themes too. A change to a token color here is a change
+// to those.
+const MONACO_THEMES = {
+    dark: {
         base: 'vs-dark',
-        inherit: true,
         rules: [
             // Dark Spice Market syntax colors — keywords (amber), types (teal),
             // builtins (violet), strings (coral), comments (dark italic),
@@ -2340,17 +2342,111 @@ function configureMonaco() {
 
             // Focus ring — gold instead of VS Code blue
             'focusBorder':                          '#D48B1C66',
+        },
+        fallback: {
+            bgBase: '#0C0A08', textDim: '#453F39', textSec: '#88796C', gold: '#D48B1C',
+            error: '#D9735A', warning: '#EFA030', info: '#7AC4B8', success: '#A8C98A',
+        },
+    },
 
+    // Light Spice Market: the same roles on warm paper (web/vars.css,
+    // :root[data-theme="light"]). Every syntax ink clears 4.5:1 on the canvas;
+    // comments and delimiters are deliberately faint, as in the dark theme.
+    light: {
+        base: 'vs',
+        rules: [
+            { token: 'comment',          foreground: 'A39682', fontStyle: 'italic' },
+            { token: 'string',           foreground: 'AE3C26' },
+            { token: 'number',           foreground: '456F20' },
+            { token: 'number.float',     foreground: '456F20' },
+            { token: 'keyword',          foreground: '965500', fontStyle: 'bold' },
+            { token: 'keyword.operator', foreground: '7748AE' },
+            { token: 'type',             foreground: '127065' },
+            { token: 'operator',         foreground: '8A7D6C' },
+            { token: 'delimiter',        foreground: '9F927F' },
+            { token: 'identifier',       foreground: '2A2016' },
+        ],
+        colors: {
+            'editor.background':                    '#FBF8F2',
+            'editor.foreground':                    '#2A2016',
+            'editorGutter.background':              '#FBF8F2',
+            'editorLineNumber.foreground':          '#978874',
+            'editorLineNumber.activeForeground':    '#6A5B4B',
+
+            // Same rule as dark: selection is a neutral wash, never a color
+            // that could be mistaken for a diagnostic.
+            'editorCursor.foreground':              '#945602',
+            'editor.selectionBackground':           '#9C8B7438',
+            'editor.inactiveSelectionBackground':   '#9C8B7420',
+            'editor.selectionHighlightBackground':  '#9C8B741F',
+            'editor.wordHighlightBackground':       '#9C8B741F',
+            'editor.wordHighlightStrongBackground': '#9C8B742E',
+
+            'editor.lineHighlightBackground':       '#F3EDE2',
+            'editor.lineHighlightBorder':           '#00000000',
+
+            'editorIndentGuide.background1':        '#E3D9C8',
+            'editorIndentGuide.activeBackground1':  '#C0B099',
+
+            'editorBracketMatch.background':        '#9C8B7422',
+            'editorBracketMatch.border':            '#8C7C68A0',
+
+            'editorFindMatch.background':           '#D9921F59',
+            'editorFindMatch.border':               '#945602A6',
+            'editorFindMatchHighlight.background':  '#D9921F2E',
+
+            // Popups float ABOVE the paper, so they go lighter, not darker.
+            'editorWidget.background':                       '#FFFDF9',
+            'editorWidget.border':                           '#D5C8B3',
+            'editorWidget.foreground':                       '#2A2016',
+            'editorSuggestWidget.background':                '#FFFDF9',
+            'editorSuggestWidget.border':                    '#D5C8B3',
+            'editorSuggestWidget.foreground':                '#2A2016',
+            'editorSuggestWidget.selectedBackground':        '#D9921F2E',
+            'editorSuggestWidget.selectedForeground':        '#2A2016',
+            'editorSuggestWidget.highlightForeground':       '#804900',
+            'editorHoverWidget.background':                  '#FFFDF9',
+            'editorHoverWidget.border':                      '#D5C8B3',
+            'editorHoverWidget.foreground':                  '#2A2016',
+
+            'scrollbar.shadow':                     '#00000000',
+            'scrollbarSlider.background':           '#9C8B7466',
+            'scrollbarSlider.hoverBackground':      '#8C7C6899',
+            'scrollbarSlider.activeBackground':     '#7A6C5CB3',
+
+            'focusBorder':                          '#94560266',
+        },
+        fallback: {
+            bgBase: '#FBF8F2', textDim: '#978874', textSec: '#6A5B4B', gold: '#945602',
+            error: '#AE3C26', warning: '#965500', info: '#127065', success: '#456F20',
+        },
+    },
+};
+
+/**
+ * Define the Monaco theme for the current site theme and switch to it.
+ *
+ * setTheme is global, so every editor on the page (the buffer and the REPL
+ * prompt) follows. Only the active theme is (re)defined: minimapColors() reads
+ * the stylesheet as it is NOW, which is right for the theme on screen and
+ * wrong for the other one.
+ */
+function applyMonacoTheme() {
+    const theme = siteTheme();
+    const def = MONACO_THEMES[theme];
+    monaco.editor.defineTheme(monacoThemeName(), {
+        base: def.base,
+        inherit: true,
+        rules: def.rules,
+        colors: {
+            ...def.colors,
             // Rainbow brackets — depth-colored, matching the trowel editor
-            ...rainbowBrackets,
-
-            // Minimap + overview ruler, resolved from the stylesheet above
-            ...minimapColors
-        }
+            ...RAINBOW_BRACKETS[theme],
+            // Minimap + overview ruler, resolved from the stylesheet
+            ...minimapColors(def.fallback),
+        },
     });
-
-    // Always use dark theme to match Dark Spice Market design
-    monaco.editor.setTheme('turmeric-dark');
+    monaco.editor.setTheme(monacoThemeName());
 }
 
 /**
@@ -2365,7 +2461,7 @@ async function initEditor() {
     editor = monaco.editor.create(document.getElementById('editor'), {
         value: CONFIG.DEFAULT_CODE,
         language: 'turmeric',
-        theme: 'turmeric-dark',
+        theme: monacoThemeName(),
         automaticLayout: true,
         tabSize: 2,
         insertSpaces: true,
@@ -3593,7 +3689,7 @@ function initReplInput() {
     promptEditor = monaco.editor.create(host, {
         value: '',
         language: 'turmeric',
-        theme: 'turmeric-dark',
+        theme: monacoThemeName(),
         automaticLayout: true,
         lineNumbers: 'off',
         glyphMargin: false,
