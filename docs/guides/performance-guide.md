@@ -1031,12 +1031,16 @@ so a profile that looks like this is not a surprise:
   continuation copies and closures are each heap-allocated.
 - **Kernel time is large exactly where memory grows**: it is page faults,
   not system calls.
-- **`tur_tls_panicking_ptr` is 2-16% of nearly everything.** On Linux and
+- **`tur_tls_*_ptr` is a cost only where the accessors remain.** On Linux and
   Windows `tur build` links the fixed runtime preamble from a prebuilt
-  archive by default, and under it the panic flag checked after every call is
-  an out-of-line accessor. `TUR_PREAMBLE_SPLIT=0` compiles the preamble into
-  the program instead: a slower compile, and ~25% fewer cycles across WP2's
-  corpus. Removing the accessor is that audit's top-ranked fix.
+  archive by default. WP2 measured the accessors at 2-16% of nearly
+  everything, because the panic flag is checked after every panic-capable
+  call. A gcc build on Linux now reads the thread-locals directly, which made
+  the corpus's cc runs 11% faster (geomean 0.890) and `fib` run 93% fewer
+  instructions. The accessors remain under clang, on Windows and under the
+  sanitizers. There, `TUR_PREAMBLE_SPLIT=0` still trades a slower compile for
+  a faster program; on gcc that gap is now small (`cps-tramp-resume-8m`: 5%
+  more instructions split than inline, against 22% before).
 
 ### The compiler: `--timings`
 

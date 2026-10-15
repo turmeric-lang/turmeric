@@ -589,6 +589,9 @@ extern STM_State __stm_state;;
 extern pthread_once_t __stm_once;
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL STM_Transaction *__stm_current_tx = NULL;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_stm_current_tx;
+#define __stm_current_tx (*(STM_Transaction **)((void **)&tur_tls_stm_current_tx))
 #else
 extern void ** tur_tls_stm_current_tx_ptr(void);
 #define __stm_current_tx (*(STM_Transaction **)tur_tls_stm_current_tx_ptr())
@@ -699,12 +702,18 @@ typedef struct tur_panic_payload tur_panic_payload;
 typedef struct tur_handler_node { jmp_buf buf; struct tur_handler_node *parent; } tur_handler_node;
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL tur_handler_node *tur_handler_chain = NULL;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_handler_chain;
+#define tur_handler_chain (*(tur_handler_node **)((void **)&tur_tls_handler_chain))
 #else
 extern void ** tur_tls_handler_chain_ptr(void);
 #define tur_handler_chain (*(tur_handler_node **)tur_tls_handler_chain_ptr())
 #endif
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL int tur_panicking = 0;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread int tur_tls_panicking;
+#define tur_panicking (*((int *)&tur_tls_panicking))
 #else
 extern int * tur_tls_panicking_ptr(void);
 #define tur_panicking (*tur_tls_panicking_ptr())
@@ -1035,6 +1044,25 @@ static TUR_THREAD_LOCAL int __dk_entry_depth;
 static TUR_THREAD_LOCAL tur_jmp_buf *g_dk_driver;
 static TUR_THREAD_LOCAL DK *g_dk_resume_chain;
 static TUR_THREAD_LOCAL intptr_t g_dk_resume_val;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_dk_reap_v;
+extern __thread void *tur_tls_dk_reap_kind;
+extern __thread size_t tur_tls_dk_reap_n;
+extern __thread size_t tur_tls_dk_reap_cap;
+extern __thread int tur_tls_dk_entry_depth;
+extern __thread void *tur_tls_dk_driver;
+extern __thread void *tur_tls_dk_resume_chain;
+extern __thread intptr_t tur_tls_dk_resume_val;
+extern __thread void *tur_tls_dk_pend_perform;
+#define g_dk_pend_perform (*(DKPendPerform **)((void **)&tur_tls_dk_pend_perform))
+#define __dk_reap_v (*(void ***)((void **)&tur_tls_dk_reap_v))
+#define __dk_reap_kind (*(unsigned char **)((void **)&tur_tls_dk_reap_kind))
+#define __dk_reap_n (*((size_t *)&tur_tls_dk_reap_n))
+#define __dk_reap_cap (*((size_t *)&tur_tls_dk_reap_cap))
+#define __dk_entry_depth (*((int *)&tur_tls_dk_entry_depth))
+#define g_dk_driver (*(tur_jmp_buf **)((void **)&tur_tls_dk_driver))
+#define g_dk_resume_chain (*(DK **)((void **)&tur_tls_dk_resume_chain))
+#define g_dk_resume_val (*((intptr_t *)&tur_tls_dk_resume_val))
 #else
 /* A front end without thread-locals (c2mir, `tur jit`): the host keeps a
  * real per-thread slot each (src/runtime/tur_tls.c), as emit_rt_tls does. */
@@ -1201,6 +1229,9 @@ typedef struct tur_shift_reset_ctx {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL tur_shift_reset_ctx *tur_cur_shift_reset = NULL;
 
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_cur_shift_reset;
+#define tur_cur_shift_reset (*(tur_shift_reset_ctx **)((void **)&tur_tls_cur_shift_reset))
 #else
 extern void ** tur_tls_cur_shift_reset_ptr(void);
 #define tur_cur_shift_reset (*(tur_shift_reset_ctx **)tur_tls_cur_shift_reset_ptr())
@@ -1305,6 +1336,13 @@ typedef struct tur_escape_cont {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL tur_escape_cont **tur_escape_live;
 static TUR_THREAD_LOCAL int tur_escape_live_n, tur_escape_live_cap;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_escape_live;
+extern __thread int tur_tls_escape_live_n;
+extern __thread int tur_tls_escape_live_cap;
+#define tur_escape_live (*(tur_escape_cont ***)((void **)&tur_tls_escape_live))
+#define tur_escape_live_n (*((int *)&tur_tls_escape_live_n))
+#define tur_escape_live_cap (*((int *)&tur_tls_escape_live_cap))
 #else
 /* A front end without thread-locals (c2mir, `tur jit`): the host keeps a
  * real per-thread slot each (src/runtime/tur_tls.c), as emit_rt_tls does. */
@@ -1337,6 +1375,9 @@ TUR_TLS_FRESH(int, tur_escape_live_cap, tur_escape_live_cap__at);
 typedef struct { tur_tagged_t w[4]; } tur_r7rs_dynenv;
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL tur_r7rs_dynenv tur_r7rs_dyn;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread unsigned char tur_tls_r7rs_dyn[64];
+#define tur_r7rs_dyn (*(tur_r7rs_dynenv *)((void **)((void **) tur_tls_r7rs_dyn)))
 #else
 extern void **tur_tls_r7rs_dyn_ptr(void);
 #define tur_r7rs_dyn (*(tur_r7rs_dynenv *)tur_tls_r7rs_dyn_ptr())
@@ -1386,6 +1427,9 @@ struct FiberBlock {
 
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL FiberBlock *tur_current_fiber = NULL;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_current_fiber;
+#define tur_current_fiber (*(FiberBlock **)((void **)&tur_tls_current_fiber))
 #else
 extern void ** tur_tls_current_fiber_ptr(void);
 #define tur_current_fiber (*(FiberBlock **)tur_tls_current_fiber_ptr())
@@ -1399,6 +1443,9 @@ void tur_panic_with(int type_tag, void *payload, const char *file, int line);
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL bool tur_fiber_cancelled_flag = false;
 
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread bool tur_tls_fiber_cancelled_flag;
+#define tur_fiber_cancelled_flag (*((bool *)&tur_tls_fiber_cancelled_flag))
 #else
 extern bool * tur_tls_fiber_cancelled_flag_ptr(void);
 #define tur_fiber_cancelled_flag (*tur_tls_fiber_cancelled_flag_ptr())
@@ -1427,6 +1474,9 @@ typedef struct {
 /* TC0: thread-local pointer to this thread's cancel state (NULL on main thread) */
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL TurThreadState *tur_current_thread_state = NULL;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_current_thread_state;
+#define tur_current_thread_state (*(TurThreadState **)((void **)&tur_tls_current_thread_state))
 #else
 extern void ** tur_tls_current_thread_state_ptr(void);
 #define tur_current_thread_state (*(TurThreadState **)tur_tls_current_thread_state_ptr())
@@ -1434,6 +1484,9 @@ extern void ** tur_tls_current_thread_state_ptr(void);
 /* TC0: thread-local setjmp buffer for with-cancel-guard (0 = not active) */
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL tur_jmp_buf tur_cancel_jmpbuf;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread jmp_buf tur_tls_cancel_jmpbuf;
+#define tur_cancel_jmpbuf (*((tur_jmp_buf *)&tur_tls_cancel_jmpbuf))
 #else
 extern tur_jmp_buf * tur_tls_cancel_jmpbuf_ptr(void);
 #define tur_cancel_jmpbuf (*tur_tls_cancel_jmpbuf_ptr())
@@ -1441,6 +1494,9 @@ extern tur_jmp_buf * tur_tls_cancel_jmpbuf_ptr(void);
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL int tur_cancel_jmpbuf_valid = 0;
 
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread int tur_tls_cancel_jmpbuf_valid;
+#define tur_cancel_jmpbuf_valid (*((int *)&tur_tls_cancel_jmpbuf_valid))
 #else
 extern int * tur_tls_cancel_jmpbuf_valid_ptr(void);
 #define tur_cancel_jmpbuf_valid (*tur_tls_cancel_jmpbuf_valid_ptr())
@@ -1618,6 +1674,9 @@ typedef struct TurSchedulerMT {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL TurSchedulerMT *tur_current_scheduler_mt = NULL;
 
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread void *tur_tls_current_scheduler_mt;
+#define tur_current_scheduler_mt (*(TurSchedulerMT **)((void **)&tur_tls_current_scheduler_mt))
 #else
 extern void ** tur_tls_current_scheduler_mt_ptr(void);
 #define tur_current_scheduler_mt (*(TurSchedulerMT **)tur_tls_current_scheduler_mt_ptr())
@@ -1689,6 +1748,9 @@ extern int tur_async_body_depth;
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL int tur_async_direct_body = 0;  /* the next spawn's body is direct-style */
 
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread int tur_tls_async_direct_body;
+#define tur_async_direct_body (*((int *)&tur_tls_async_direct_body))
 #else
 extern int * tur_tls_async_direct_body_ptr(void);
 #define tur_async_direct_body (*tur_tls_async_direct_body_ptr())
@@ -1696,6 +1758,9 @@ extern int * tur_tls_async_direct_body_ptr(void);
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static TUR_THREAD_LOCAL int tur_async_owns_env = 0;  /* the next closure spawn owns its box */
 
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread int tur_tls_async_owns_env;
+#define tur_async_owns_env (*((int *)&tur_tls_async_owns_env))
 #else
 extern int * tur_tls_async_owns_env_ptr(void);
 #define tur_async_owns_env (*tur_tls_async_owns_env_ptr())
@@ -1967,6 +2032,9 @@ void tur_session_close(TurChannel *ch);
 void *tur_session_thread_wrapper(void *arg);
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(TUR_RT_SPLIT_HOSTED)
 static _Thread_local int64_t tur__rtv_ = 0;
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(_WIN32) && !defined(TUR_TLS_FRESH)
+extern __thread int64_t tur_tls_rtv;
+#define tur__rtv_ (*((int64_t *)&tur_tls_rtv))
 #else
 extern int64_t * tur_tls_rtv_ptr(void);
 #define tur__rtv_ (*tur_tls_rtv_ptr())

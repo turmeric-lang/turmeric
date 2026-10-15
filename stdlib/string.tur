@@ -274,6 +274,218 @@
 
 (defn string/contains? [s : String needle : String] : bool
   (tur_string_contains (:: s ptr<void>) (:: needle ptr<void>)))
+;; ---- Search (markdown-library-plan S2) -------------------------------------
+;; None of these allocates.  A position that may not exist is an
+;; (Option int); a count or an end index that always exists is an int.
+;; The loops are self-recursive helpers rather than named lets, because a
+;; named let cannot declare a result type and its loop call defaults to int.
+;;; string/-match-at -- internal: do bytes [k, n) of p equal s's from at+k on?
+
+(defn string/-match-at [s : String p : String at : int k : int n : int] : bool
+  (if (>= k n)
+    true
+    (if (= (string/byte-at s (+ at k)) (string/byte-at p k))
+      (string/-match-at s p at (+ k 1) n)
+      false)))
+;;; string/starts-with-at? -- does prefix occur in s at byte offset at?
+;;;
+;;; string/starts-with? at any offset: the test a scanner makes before it
+;;; consumes a token.  An offset out of range, or a prefix that would run
+;;; past the end of s, gives false, not an error.  The empty prefix occurs
+;;; at every offset from 0 to (string/len s).
+;;;
+;;; Parameters:
+;;;   s      -- the String to look in (borrowed)
+;;;   prefix -- the bytes to look for (borrowed)
+;;;   at     -- the byte offset in s to test
+;;;
+;;; Returns:
+;;;   true iff the bytes of s from at on begin with prefix.
+;;;
+;;; Example:
+;;;   (string/starts-with-at? (string/from-cstr "a --> b") (string/from-cstr "-->") 2)  ; => true
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/starts-with-at? [s : String prefix : String at : int] : bool
+  (let [n (string/len prefix)]
+    (and (>= at 0)
+      (<= (+ at n) (string/len s))
+      (string/-match-at s prefix at 0 n))))
+;;; string/-index-of-loop -- internal: first match of needle at i..last.
+
+(defn string/-index-of-loop [s : String needle : String i : int last : int] : (Option int)
+  (if (> i last)
+    (none)
+    (if (string/starts-with-at? s needle i)
+      (some i)
+      (string/-index-of-loop s needle (+ i 1) last))))
+;;; string/index-of-from -- byte offset of the first needle at or after start.
+;;;
+;;; A negative start searches from 0; a start past the end finds nothing.
+;;; The empty needle is found at start itself, while start <= (string/len s).
+;;;
+;;; Parameters:
+;;;   s      -- the String to search (borrowed)
+;;;   needle -- the bytes to find (borrowed)
+;;;   start  -- the first byte offset a match may begin at
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i >= start where needle occurs, else (none).
+;;;
+;;; Example:
+;;;   (string/index-of-from (string/from-cstr "a,b,c") (string/from-cstr ",") 2)  ; => (some 3)
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/index-of-from [s : String needle : String start : int] : (Option int)
+  (string/-index-of-loop s
+    needle
+    (if (< start 0) 0 start)
+    (- (string/len s) (string/len needle))))
+;;; string/index-of -- byte offset of the first occurrence of needle in s.
+;;;
+;;; Parameters:
+;;;   s      -- the String to search (borrowed)
+;;;   needle -- the bytes to find (borrowed)
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i where needle occurs, or (none).  The empty
+;;;   needle is found at 0.
+;;;
+;;; Example:
+;;;   (string/index-of (string/from-cstr "key: value") (string/from-cstr ": "))  ; => (some 3)
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/index-of [s : String needle : String] : (Option int)
+  (string/index-of-from s needle 0))
+;;; string/-last-index-of-loop -- internal: last match of needle at i down to 0.
+
+(defn string/-last-index-of-loop [s : String needle : String i : int] : (Option int)
+  (if (< i 0)
+    (none)
+    (if (string/starts-with-at? s needle i)
+      (some i)
+      (string/-last-index-of-loop s needle (- i 1)))))
+;;; string/last-index-of -- byte offset of the last occurrence of needle in s.
+;;;
+;;; Parameters:
+;;;   s      -- the String to search (borrowed)
+;;;   needle -- the bytes to find (borrowed)
+;;;
+;;; Returns:
+;;;   (some i) for the highest i where needle occurs, or (none).  The empty
+;;;   needle is found at (string/len s).
+;;;
+;;; Example:
+;;;   (string/last-index-of (string/from-cstr "a/b/c") (string/from-cstr "/"))  ; => (some 3)
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/last-index-of [s : String needle : String] : (Option int)
+  (string/-last-index-of-loop s needle (- (string/len s) (string/len needle))))
+;;; string/-index-of-byte-loop -- internal: first i in [i, n) holding byte b.
+
+(defn string/-index-of-byte-loop [s : String b : int i : int n : int] : (Option int)
+  (if (>= i n)
+    (none)
+    (if (= (string/byte-at s i) b)
+      (some i)
+      (string/-index-of-byte-loop s b (+ i 1) n))))
+;;; string/index-of-char-from -- byte offset of the first c at or after start.
+;;;
+;;; Compares single bytes, so c should be ASCII (see string/byte-is?).  A
+;;; negative start searches from 0.
+;;;
+;;; Parameters:
+;;;   s     -- the String to search (borrowed)
+;;;   c     -- the character to find
+;;;   start -- the first byte offset to look at
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i >= start holding c, or (none).
+;;;
+;;; Example:
+;;;   (string/index-of-char-from (string/from-cstr "a]b]") #\] 2)  ; => (some 3)
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/index-of-char-from [s : String c : Char start : int] : (Option int)
+  (string/-index-of-byte-loop s
+    (char->int c)
+    (if (< start 0) 0 start)
+    (string/len s)))
+;;; string/index-of-char -- byte offset of the first c in s.
+;;;
+;;; Parameters:
+;;;   s -- the String to search (borrowed)
+;;;   c -- the character to find (ASCII; see string/byte-is?)
+;;;
+;;; Returns:
+;;;   (some i) for the lowest i holding c, or (none).
+;;;
+;;; Example:
+;;;   (string/index-of-char (string/from-cstr "[link](url)") #\])  ; => (some 5)
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/index-of-char [s : String c : Char] : (Option int)
+  (string/index-of-char-from s c 0))
+;;; string/-span-loop -- internal: first i in [i, n) whose byte fails pred, else n.
+
+(defn string/-span-loop [s : String pred : (fn [Char] bool) i : int n : int] : int
+  (if (>= i n)
+    n
+    (if (pred (int->char (string/byte-at s i)))
+      (string/-span-loop s pred (+ i 1) n)
+      i)))
+;;; string/span-while -- the index where a run of bytes satisfying pred ends.
+;;;
+;;; Scans from start while pred holds and returns the first index where it
+;;; fails, or (string/len s) when it holds to the end.  The char.tur
+;;; predicates plug straight in: indentation width, the end of a name, a run
+;;; of digits.  pred sees each byte as a Char, so a multi-byte UTF-8
+;;; character is several calls.  start is clamped into [0, (string/len s)].
+;;;
+;;; Parameters:
+;;;   s     -- the String to scan (borrowed)
+;;;   start -- the byte offset to start at
+;;;   pred  -- the test each byte must pass to continue the run
+;;;
+;;; Returns:
+;;;   The end of the run: an index in [start, (string/len s)].
+;;;
+;;; Example:
+;;;   (string/span-while (string/from-cstr "   - item") 0 space?)  ; => 3
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/span-while [s : String start : int pred : (fn [Char] bool)] : int
+  (let [n (string/len s)]
+    (string/-span-loop s pred (if (< start 0) 0 (if (> start n) n start)) n)))
+;;; string/-run-loop -- internal: first i in [i, n) not holding byte b, else n.
+
+(defn string/-run-loop [s : String b : int i : int n : int] : int
+  (if (>= i n)
+    n
+    (if (= (string/byte-at s i) b) (string/-run-loop s b (+ i 1) n) i)))
+;;; string/run-length -- how many c in a row start at start.
+;;;
+;;; Counts a fence (three or more backticks), an ATX heading's #s, a
+;;; thematic break's dashes.  Zero when start is out of range or the byte
+;;; there is not c.
+;;;
+;;; Parameters:
+;;;   s     -- the String to scan (borrowed)
+;;;   start -- the byte offset the run starts at
+;;;   c     -- the character the run is made of (ASCII)
+;;;
+;;; Returns:
+;;;   The run's length in bytes, 0 or more.
+;;;
+;;; Example:
+;;;   (string/run-length (string/from-cstr "## Title") 0 #\#)  ; => 2
+;;;
+;;; Since: markdown-library-plan S2
+(defn string/run-length [s : String start : int c : Char] : int
+  (let [n (string/len s)]
+    (if (or (< start 0) (>= start n))
+      0
+      (- (string/-run-loop s (char->int c) start n) start))))
 ;; ---- Transforms (each returns a fresh immutable String) --------------------
 ;;; string/concat -- concatenate two Strings into a fresh String.
 ;;;

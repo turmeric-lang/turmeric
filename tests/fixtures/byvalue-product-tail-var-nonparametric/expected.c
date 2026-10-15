@@ -8364,10 +8364,10 @@ static int64_t vec_hyget(int64_t v, int64_t i) {
 static void vec_hypush_ex(int64_t v, int64_t val) {
         struct { int64_t *data; int64_t len; int64_t cap; } *vec = (void*)(intptr_t)v;
   if (vec->len >= vec->cap) {
+    /* realloc (perf audit R-6): data is NULL or malloc'd; grows in place */
     int64_t new_cap = vec->cap > 0 ? vec->cap * 2 : 4;
-    int64_t *new_data = malloc(sizeof(int64_t) * new_cap);
-    for (int64_t i = 0; i < vec->len; i++) new_data[i] = vec->data[i];
-    free(vec->data);
+    int64_t *new_data = realloc(vec->data, sizeof(int64_t) * new_cap);
+    if (!new_data) { fprintf(stderr, "vec-push!: out of memory\n"); abort(); }
     vec->data = new_data;
     vec->cap = new_cap;
   }

@@ -16,6 +16,11 @@
     cstr-nth
     cstr-byte-is?
     cstr-char-at
+    cstr-starts-with?
+    cstr-ends-with?
+    cstr-index-of
+    cstr-index-of-char
+    cstr-span-while
     cstr-sub
     cstr-eq?
     cstr-free)
@@ -93,6 +98,121 @@
     (if (and (>= i 0) (< i (cstr-len s)))
       (some (int->char (cstr-nth s i)))
       (none)))
+  ;; ---- Search (markdown-library-plan S2) -----------------------------------
+  ;; The non-allocating string/ searches for a cstr, so scanning a literal or a
+  ;; line from fs/read-lines needs no copy.  Each measures its arguments once
+  ;; per call; the walk itself is cstr-nth.
+  ;;; cstr-match-at -- internal: do bytes [k, n) of p equal s's from at+k on?
+  (defn cstr-match-at [s : cstr p : cstr at : int k : int n : int] : bool
+    (if (>= k n)
+      true
+      (if (= (cstr-nth s (+ at k)) (cstr-nth p k))
+        (cstr-match-at s p at (+ k 1) n)
+        false)))
+  ;;; cstr-starts-with? -- true iff s begins with prefix.
+  ;;;
+  ;;; Parameters:
+  ;;;   s      -- NUL-terminated C string pointer
+  ;;;   prefix -- NUL-terminated C string pointer
+  ;;;
+  ;;; Returns:
+  ;;;   true iff the first (cstr-len prefix) bytes of s are prefix's.  Every
+  ;;;   string starts with "".
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-starts-with? "# Title" "# ")  ; => true
+  ;;;
+  ;;; Since: markdown-library-plan S2
+  (defn cstr-starts-with? [s : cstr prefix : cstr] : bool
+    (let [m (cstr-len prefix)]
+      (and (<= m (cstr-len s)) (cstr-match-at s prefix 0 0 m))))
+  ;;; cstr-ends-with? -- true iff s ends with suffix.
+  ;;;
+  ;;; Parameters:
+  ;;;   s      -- NUL-terminated C string pointer
+  ;;;   suffix -- NUL-terminated C string pointer
+  ;;;
+  ;;; Returns:
+  ;;;   true iff the last (cstr-len suffix) bytes of s are suffix's.  Every
+  ;;;   string ends with "".
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-ends-with? "guide.md" ".md")  ; => true
+  ;;;
+  ;;; Since: markdown-library-plan S2
+  (defn cstr-ends-with? [s : cstr suffix : cstr] : bool
+    (let [n (cstr-len s)
+          m (cstr-len suffix)]
+      (and (<= m n) (cstr-match-at s suffix (- n m) 0 m))))
+  ;;; cstr-index-of-loop -- internal: first match of needle (length m) at i..last.
+  (defn cstr-index-of-loop [s : cstr needle : cstr m : int i : int last : int] : (Option int)
+    (if (> i last)
+      (none)
+      (if (cstr-match-at s needle i 0 m)
+        (some i)
+        (cstr-index-of-loop s needle m (+ i 1) last))))
+  ;;; cstr-index-of -- byte offset of the first occurrence of needle in s.
+  ;;;
+  ;;; Parameters:
+  ;;;   s      -- NUL-terminated C string pointer to search
+  ;;;   needle -- NUL-terminated C string pointer to find
+  ;;;
+  ;;; Returns:
+  ;;;   (some i) for the lowest i where needle occurs, or (none).  The empty
+  ;;;   needle is found at 0.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-index-of "key: value" ": ")  ; => (some 3)
+  ;;;
+  ;;; Since: markdown-library-plan S2
+  (defn cstr-index-of [s : cstr needle : cstr] : (Option int)
+    (let [m (cstr-len needle)]
+      (cstr-index-of-loop s needle m 0 (- (cstr-len s) m))))
+  ;;; cstr-index-of-byte-loop -- internal: first i in [i, n) holding byte b.
+  (defn cstr-index-of-byte-loop [s : cstr b : int i : int n : int] : (Option int)
+    (if (>= i n)
+      (none)
+      (if (= (cstr-nth s i) b) (some i) (cstr-index-of-byte-loop s b (+ i 1) n))))
+  ;;; cstr-index-of-char -- byte offset of the first c in s.
+  ;;;
+  ;;; Parameters:
+  ;;;   s -- NUL-terminated C string pointer to search
+  ;;;   c -- the character to find (ASCII; see cstr-byte-is?)
+  ;;;
+  ;;; Returns:
+  ;;;   (some i) for the lowest i holding c, or (none).  The terminator is
+  ;;;   not searched, so a NUL byte is never found.
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-index-of-char "a=b" #\=)  ; => (some 1)
+  ;;;
+  ;;; Since: markdown-library-plan S2
+  (defn cstr-index-of-char [s : cstr c : Char] : (Option int)
+    (cstr-index-of-byte-loop s (char->int c) 0 (cstr-len s)))
+  ;;; cstr-span-loop -- internal: first i in [i, n) whose byte fails pred, else n.
+  (defn cstr-span-loop [s : cstr pred : (fn [Char] bool) i : int n : int] : int
+    (if (>= i n)
+      n
+      (if (pred (int->char (cstr-nth s i))) (cstr-span-loop s pred (+ i 1) n) i)))
+  ;;; cstr-span-while -- the index where a run of bytes satisfying pred ends.
+  ;;;
+  ;;; string/span-while for a cstr: scans from start while pred holds.
+  ;;;
+  ;;; Parameters:
+  ;;;   s     -- NUL-terminated C string pointer to scan
+  ;;;   start -- the byte offset to start at (clamped into [0, (cstr-len s)])
+  ;;;   pred  -- the test each byte must pass to continue the run
+  ;;;
+  ;;; Returns:
+  ;;;   The end of the run: an index in [start, (cstr-len s)].
+  ;;;
+  ;;; Example:
+  ;;;   (cstr-span-while "  - item" 0 space?)  ; => 2
+  ;;;
+  ;;; Since: markdown-library-plan S2
+  (defn cstr-span-while [s : cstr start : int pred : (fn [Char] bool)] : int
+    (let [n (cstr-len s)]
+      (cstr-span-loop s pred (if (< start 0) 0 (if (> start n) n start)) n)))
   ;;; cstr-sub -- substring [start, end) of a NUL-terminated C string.
   ;;;
   ;;; Parameters:

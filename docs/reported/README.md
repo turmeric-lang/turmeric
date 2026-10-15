@@ -40,6 +40,12 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [tsan-cmake-config-fails-to-link](tsan-cmake-config-fails-to-link.md) | low | `-DCMAKE_BUILD_TYPE=TSan` compiles the runtime archives with `-fsanitize=thread`, but the test executables that link them add sanitizer link flags for `Debug` only, so `tur_reactor_slot_reuse_unit` and others fail with undefined `__tsan_*` references. Nothing uses the configuration: the TSan runs build Release. |
 
+## Found running the JIT suite against a Release `tur` (filed 2026-10-15)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [contract-purity-check-skipped-when-checks-off](contract-purity-check-skipped-when-checks-off.md) | low-medium | TUR-E0375 (a contract predicate with side effects) is raised only from the code that builds the runtime check. So a Release `tur`, or `--no-contracts` on any build, accepts an impure `:pre`, `:post` or refinement predicate that a Debug `tur` rejects. Only `:invariant` is checked regardless of the gate. |
+
 ## Found running the performance audit's WP0 corpus (filed 2026-10-14)
 
 | Report | Severity | One line |
