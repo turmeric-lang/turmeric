@@ -18,7 +18,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 
 # Parallel arrays: file path and extra flags for that file (empty = none).
 STDLIB_FILES=(

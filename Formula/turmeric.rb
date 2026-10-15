@@ -17,7 +17,7 @@ class Turmeric < Formula
 
     # OD4: install the rendered guides and API reference when the checkout has
     # them, so `tur docs --open` finds a local copy. A fresh clone does not --
-    # docs/html/ is a `just docs` output and is gitignored -- and generating it
+    # docs/html/ is a `tur run docs` output and is gitignored -- and generating it
     # here would mean depending on python3 + the markdown package for something
     # that is optional to running the compiler. So this is a no-op for the
     # common case, and the release's turmeric-docs-<version>.tar.gz is the

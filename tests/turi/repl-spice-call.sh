@@ -10,7 +10,7 @@ set -uo pipefail
 cd "$(dirname "$0")/../.."
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 export TUR_BIN
 case "$TUR" in
     /*) TUR_BIN="$TUR" ;;

@@ -25,7 +25,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 # A self-skip is a green check that tested nothing, which is the same disease
 # this harness was written to catch -- the first CI run of it skipped exactly
 # here, because the MSYS2 environment ships no git, and reported success.  So

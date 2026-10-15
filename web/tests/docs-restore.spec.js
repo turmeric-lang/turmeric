@@ -10,7 +10,7 @@
 // reloading: a reload keeps the hash, which would take the deep-link branch
 // and test nothing. Leaving and returning is what an app launch looks like.
 //
-// The docs pack is stubbed. It is a build artefact (`just docs`, gitignored),
+// The docs pack is stubbed. It is a build artefact (`tur run docs`, gitignored),
 // so a checkout does not have one -- and these tests are about the pane's
 // memory, not about the pack's contents.
 

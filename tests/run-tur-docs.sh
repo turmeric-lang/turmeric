@@ -40,7 +40,7 @@ if [ ! -x "$TUR" ]; then
 fi
 
 if [ ! -f "$ROOT/stdlib/docstrings.tur" ]; then
-    echo "SKIP: stdlib/docstrings.tur absent (run 'just docs')" >&2
+    echo "SKIP: stdlib/docstrings.tur absent (run 'tur run docs')" >&2
     exit 0
 fi
 
@@ -144,7 +144,7 @@ if [ -f "$ROOT/docs/html/guides/index.html" ]; then
         fail "docs in a source checkout -- rc=$RC out=$(head -1 <<<"$OUT")"
     fi
 else
-    echo "SKIP: docs/html not generated (run 'just docs') -- skipping the found case"
+    echo "SKIP: docs/html not generated (run 'tur run docs') -- skipping the found case"
 fi
 
 # With no docs anywhere, the failure names both ways to get them. TUR_DOCS_DIR

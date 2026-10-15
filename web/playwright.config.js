@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 
-// Port 3000 is the developer's own dev server (`just web-dev`). The suite must
+// Port 3000 is the developer's own dev server (`tur run web-dev`). The suite must
 // never use it: pointed at a running server, it silently tests whatever
 // checkout that server was started from, and the developer's session with it.
 // So the suite always starts its OWN server, on a free port picked here, and

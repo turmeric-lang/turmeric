@@ -20,10 +20,10 @@ interpreting benchmarks.
 Always benchmark release builds:
 
 ```sh
-just release          # cmake --build build -j --config Release
+tur run release          # cmake --build build -j --config Release
 ```
 
-The debug build (`just build`) inserts contract checks and disables
+The debug build (`tur run build`) inserts contract checks and disables
 optimisations; its timing numbers are not meaningful for comparison.
 
 ---
@@ -1079,7 +1079,7 @@ binary (or `tur run`).
 
 Use this list before calling a hot path done:
 
-- [ ] Built with `just release` (not `just build`)
+- [ ] Built with `tur run release` (not `tur run build`)
 - [ ] Numeric types annotated concretely (`int`, `float`, not inferred `any`)
 - [ ] Hot loops use `vec` instead of list where random access or mutation is
       needed

@@ -9,8 +9,9 @@ the highest-risk constraints:
 - Read CLI arguments only via `*args*` or helpers from `stdlib/args.tur`.
   Do not reintroduce `parse-first-arg`, `parse-arg`, or raw inline-C access
   to `g_tur_args`.
-- Use `just`, not `make`. Common targets are `just build`, `just test`,
-  `just release`, `just docs`, `just wasm`, and `just web-dev`.
+- Use `tur run` (it reads the Justfile; upstream `just` works too), not
+  `make`. Common targets are `tur run build`, `tur run test`,
+  `tur run release`, `tur run docs`, `tur run wasm`, and `tur run web-dev`.
 - Spice implementations live in the sibling repository `../turmeric-spices`.
   Never create or scaffold `./spices/` in this repo.
 - Use `;;;` docstrings for documented Turmeric definitions and keep fixture

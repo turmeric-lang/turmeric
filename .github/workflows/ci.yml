@@ -1483,7 +1483,7 @@ jobs:
           cc --version | head -1
           cmake --version | head -1
 
-      # Ninja, not the default generator: matches `just build-windows`, so a
+      # Ninja, not the default generator: matches `tur run build-windows`, so a
       # local repro of a CI failure is the same command.  Sanitizers are off on
       # this leg regardless -- MinGW gcc ships no ASan/UBSan runtime, and
       # src/CMakeLists.txt already reports that at configure time.

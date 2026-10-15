@@ -15,7 +15,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 TUR="${TUR:-./build/tur}"
-[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 
 FIXTURE="tests/fixtures/spice-resolver-ok"
 SRC_ROOT="$FIXTURE/src"

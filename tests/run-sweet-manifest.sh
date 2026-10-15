@@ -6,7 +6,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 TUR="$PWD/build/tur"
-[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR" ] || { echo "tests: $TUR not built; run 'tur run build' first" >&2; exit 2; }
 
 FIXTURE="tests/fixtures/pkg-sweet-manifest"
 ENTRY="$FIXTURE/src/main.tur"

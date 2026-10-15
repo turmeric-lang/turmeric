@@ -30,13 +30,13 @@ A web-based REPL for the [Turmeric programming language](https://github.com/turm
 
 2. Build the WASM module (requires [Emscripten](https://emscripten.org)):
    ```bash
-   just configure-wasm
-   just wasm
+   tur run configure-wasm
+   tur run wasm
    ```
 
 3. Run the development server:
    ```bash
-   just web-dev
+   tur run web-dev
    ```
 
 4. Open [http://localhost:3000](http://localhost:3000) in your browser.
@@ -67,7 +67,7 @@ unaffected: the opt-out keys off the hostname.
 ### Production Build
 
 ```bash
-just web
+tur run web
 ```
 
 This will:
@@ -95,7 +95,7 @@ without `WEB_PERF=1` it skips, so the ordinary suite does not pay for it.
 ### Deploy
 
 ```bash
-just deploy-web
+tur run deploy-web
 ```
 
 This will deploy the web app to GitHub Pages.

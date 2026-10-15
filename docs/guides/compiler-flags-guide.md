@@ -90,7 +90,7 @@ second, byte-identical copy of the `TUR-W0030` check, documented as the
 
 ### `--keep-contracts`
 
-Retains contract checks in release builds (`just release`). Without this
+Retains contract checks in release builds (`tur run release`). Without this
 flag, `assert!`/`require!`/`ensure!` calls are elided in release mode
 (contracts are on by default in debug). Per-contract `^always` granularity
 may be added later.
@@ -101,7 +101,7 @@ Strips **all** contracts at elaboration time -- the
 `assert!`/`require!`/`ensure!`/`invariant!` macros and `{ x : T | pred }`
 refinement-type checks -- so predicates are never evaluated. Folds
 `contract-enabled?` to `false` and sets `TUR_CONTRACTS_ENABLED 0` in the
-C preamble. Build a stripped program with `just release-stripped <file>`
+C preamble. Build a stripped program with `tur run release-stripped <file>`
 (i.e. `tur --no-contracts build <file> -O2`).
 
 ### `--warn-unused-result` (R6a)

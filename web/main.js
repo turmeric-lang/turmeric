@@ -5630,7 +5630,7 @@ function rememberDocsScroll() {
 
 /**
  * Fetch and cache the pack manifest. Resolves to null when the pack is absent
- * (a dev server that never ran `just docs`), which the pane reports rather
+ * (a dev server that never ran `tur run docs`), which the pane reports rather
  * than failing silently.
  */
 function loadDocsIndex() {
@@ -5878,7 +5878,7 @@ function renderDocsNav() {
     if (!nav) return;
     if (!docsIndex) {
         nav.innerHTML = '<p class="docs-empty">Documentation pack not found. '
-                      + 'Run <code>just docs</code> to build it.</p>';
+                      + 'Run <code>tur run docs</code> to build it.</p>';
         return;
     }
     const pages = docsAllPages();
@@ -6222,7 +6222,7 @@ function persistDocsState() {
  * renamed or dropped between releases would otherwise restore as
  * "No page ... in this documentation pack", which is a worse greeting than the
  * editor; a stale entry clears itself instead. Nothing is restored when the
- * pack is missing entirely (a dev server that never ran `just docs`), since
+ * pack is missing entirely (a dev server that never ran `tur run docs`), since
  * there is no page to restore into.
  */
 function restoreDocsPane() {

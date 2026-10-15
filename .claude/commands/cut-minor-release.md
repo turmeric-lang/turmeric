@@ -41,7 +41,7 @@ git -C "$ROOT" worktree add --detach "$WT" origin/main
 
 Run every step below against that directory: git commands as
 `git -C "$WT" ...`, the file edits in step 5 at absolute paths under `$WT`, and
-`just deploy-web` in step 7 with `$WT` as its working directory. `cd "$WT"` is
+`tur run deploy-web` in step 7 with `$WT` as its working directory. `cd "$WT"` is
 fine -- it is `personal/` alone that is off limits. **Detached HEAD is correct
 and expected**: the branch pointer moves on the server in step 8, never locally.
 
@@ -52,7 +52,7 @@ them:
   `EXPERIMENTS[]` in `src/runtime/experiments.c` rather than run the binary. It
   is advisory either way -- do not build the compiler just to satisfy it.
 - **There is no `node_modules/` and no emsdk cache**, so step 7's
-  `just deploy-web` pays for the full `web-deps` install and wasm build.
+  `tur run deploy-web` pays for the full `web-deps` install and wasm build.
   `wrangler`'s credentials live in the user's home directory, so authentication
   carries over untouched.
 
@@ -273,10 +273,10 @@ again without having published a broken release.
 ## Step 7: Build and deploy web
 
 ```sh
-just deploy-web
+tur run deploy-web
 ```
 
-This runs `just wasm` (which runs `just docs`), then `just web-deps`,
+This runs `tur run wasm` (which runs `tur run docs`), then `tur run web-deps`,
 then `npm run build`, then `wrangler deploy ...` to push the web app
 to Cloudflare. The user must already be authenticated with `wrangler`.
 
@@ -288,7 +288,7 @@ that habit is what left every release tag carrying the previous release's
 binary, and (until v0.32.3) a doc-name index missing the release's own new
 stdlib symbols.
 
-If `just deploy-web` fails:
+If `tur run deploy-web` fails:
 - Report the failure to the user.
 - Run `git tag -d v<NEW>` to remove the local tag.
 - Do NOT delete the commit -- the user can amend or fix forward.

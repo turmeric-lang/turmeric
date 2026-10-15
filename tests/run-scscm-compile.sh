@@ -24,7 +24,7 @@ pass() { PASS=$((PASS + 1)); echo "PASS $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "FAIL $1 -- $2"; }
 
 if [ ! -x "$TUR" ]; then
-    echo "tests: $TUR not built; run 'just build' first" >&2
+    echo "tests: $TUR not built; run 'tur run build' first" >&2
     exit 2
 fi
 

@@ -46,7 +46,7 @@ must read to the same AST. `tools/check-guide-pairs.py` extracts each pair and
 runs `tur parse-check <turmeric> <sweet-exp>` (exit 0 = same AST), so a drifted
 sweet-exp block fails the check.
 
-Run `just check-guides` (or `python3 tools/check-guide-pairs.py docs/guides/`) to
+Run `tur run check-guides` (or `python3 tools/check-guide-pairs.py docs/guides/`) to
 verify all pairs and see current coverage. A pair that is genuinely illustrative
 pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check ````.
 

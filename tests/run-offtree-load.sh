@@ -14,7 +14,7 @@ set -u
 cd "$(dirname "$0")/.."
 
 TUR_REL="./build/tur"
-[ -x "$TUR_REL" ] || { echo "tests: $TUR_REL not built; run 'just build' first" >&2; exit 2; }
+[ -x "$TUR_REL" ] || { echo "tests: $TUR_REL not built; run 'tur run build' first" >&2; exit 2; }
 TUR="$(cd "$(dirname "$TUR_REL")" && pwd)/$(basename "$TUR_REL")"
 
 PASS=0

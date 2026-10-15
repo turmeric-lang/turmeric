@@ -223,10 +223,10 @@ retried without having published a broken release.
 ### Step 7: Build and deploy web
 
 ```sh
-just deploy-web
+tur run deploy-web
 ```
 
-This runs `just wasm` (which runs `just docs`), then `just web-deps`,
+This runs `tur run wasm` (which runs `tur run docs`), then `tur run web-deps`,
 then `npm run build`, then `wrangler deploy` to push the web app to
 Cloudflare. The user must already be authenticated with `wrangler`.
 

@@ -1,7 +1,7 @@
 # `web/public/docs/`
 
 `html` here is a symlink to the repository's `docs/html/`, the *rendered*
-documentation that `just docs` produces. Vite copies it into `dist/docs/html/`,
+documentation that `tur run docs` produces. Vite copies it into `dist/docs/html/`,
 so the worker serves `/docs/html/guides/`, `/docs/html/api/`, and
 `/docs/html/spices/` -- the URL space the site has always used.
 
