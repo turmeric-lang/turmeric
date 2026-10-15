@@ -1984,7 +1984,8 @@ jobs:
           # update once -- see the `test` job's dependency step for why.
           sudo rm -f /etc/apt/sources.list.d/google-chrome*
           sudo apt-get update || { sleep 20; sudo apt-get update; }
-          sudo apt-get install -y libedit-dev ccache
+          # brotli: tools/ci/web-bundle-size.py's brotli column (WP5).
+          sudo apt-get install -y libedit-dev ccache brotli
 
       - name: Restore ccache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -2173,6 +2174,29 @@ jobs:
           PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-mobile.xml
         run: npx playwright test --project=mobile --reporter=list,junit
 
+      # performance-audit-plan WP5: what the bundle weighs and what a visit
+      # waits for. Informational: never blocking, never retried (a retry would
+      # report the faster attempt). The numbers go to the job summary, the
+      # web-perf artifact, and -- through the collector below -- web_perf:*
+      # rows on ci-metrics, which the suite views leave out (kind: web-perf).
+      # Timing bounds, if any, belong to WP6's trend, not to one hosted run.
+      - name: Measure the web bundle (WP5, informational)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: python3 tools/ci/web-bundle-size.py --json web-bundle.json
+
+      - name: Measure load, first eval and LSP latency (WP5, non-blocking)
+        id: perf
+        if: ${{ !cancelled() && steps.gate.outcome == 'success' }}
+        working-directory: web
+        continue-on-error: true
+        timeout-minutes: 12
+        env:
+          WEB_PERF: '1'
+          WEB_PERF_OUT: ${{ github.workspace }}/web-perf.json
+        run: npx playwright test --project=desktop --reporter=list --retries=0
+          tests/web-perf.spec.js
+
       # Mobile still needs this: a non-blocking failure must announce itself on
       # the job summary and as an annotation, not five thousand lines down a
       # log.  Desktop no longer depends on it to be noticed -- the job is red
@@ -2192,6 +2216,7 @@ jobs:
             echo "| deploy-gate (blocking) | ${{ steps.gate.outcome }} |"
             echo "| desktop (blocking) | ${{ steps.desktop.outcome }} |"
             echo "| mobile (non-blocking) | ${{ steps.mobile.outcome }} |"
+            echo "| web-perf (non-blocking, WP5) | ${{ steps.perf.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.desktop.outcome }}" = "failure" ]; then
             echo "::error title=Try Turmeric desktop suite failed::this suite BLOCKS -- see the playwright-report artifact and the web_desktop row on /ci"
@@ -2205,8 +2230,9 @@ jobs:
         run: |
           python3 tools/ci/collect-playwright-timings.py \
             --suite web_desktop web/results-desktop.xml \
-            --suite web_mobile  web/results-mobile.xml > timings.jsonl || true
-          echo "collected $(wc -l < timings.jsonl) browser suite rows"
+            --suite web_mobile  web/results-mobile.xml \
+            --web-perf web-perf.json > timings.jsonl || true
+          echo "collected $(wc -l < timings.jsonl) browser suite and web-perf rows"
 
       - name: Upload browser suite timings
         if: always()
@@ -2216,6 +2242,17 @@ jobs:
           path: timings.jsonl
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Upload web-perf results (WP5)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-perf
+          path: |
+            web-perf.json
+            web-bundle.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       # `!cancelled()`, not `failure()`.  Written when BOTH suites were
       # continue-on-error, so a failing suite never put the job into a failure

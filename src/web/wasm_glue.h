@@ -18,6 +18,11 @@ extern "C" {
  * Returns 0 on success, non-zero on failure. */
 int turi_wasm_init(void);
 
+/* The wall time of each phase the first turi_wasm_init ran, as a JSON object
+ * of milliseconds in run order ({"env_new":1.2,...}); "{}" before init.  The
+ * string is static -- do not free it (performance-audit-plan WP5). */
+const char *turi_wasm_boot_timings(void);
+
 /* Reset the evaluation environment to a fresh state.
  * This clears all definitions and returns to a clean slate. */
 void turi_wasm_reset(void);

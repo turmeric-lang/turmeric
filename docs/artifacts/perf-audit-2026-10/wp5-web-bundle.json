@@ -1,0 +1,105 @@
+{
+  "files": {
+    "turmeric.wasm": {
+      "raw": 5478786,
+      "gzip": 1625369,
+      "brotli": 1225582
+    },
+    "turmeric.js": {
+      "raw": 98421,
+      "gzip": 25413,
+      "brotli": 22581
+    },
+    "stdlib/ (embedded)": {
+      "raw": 3149761,
+      "gzip": 771780,
+      "brotli": 547374,
+      "files": 204
+    },
+    "stdlib/docstrings.tur": {
+      "raw": 622186,
+      "gzip": 144092,
+      "brotli": 118271
+    }
+  },
+  "wasm_sections": {
+    "type": 3914,
+    "import": 1543,
+    "function": 2272,
+    "table": 5,
+    "global": 78,
+    "export": 1191,
+    "start": 1,
+    "element": 1655,
+    "datacount": 2,
+    "code": 1911094,
+    "data": 3556991
+  },
+  "dist": {
+    "files": 3026,
+    "raw": 46185019,
+    "gzip": 17469262,
+    "largest": [
+      {
+        "path": "assets/ts.worker-DGGa2mF8.js",
+        "raw": 6928036,
+        "gzip": 1483077
+      },
+      {
+        "path": "turmeric.wasm",
+        "raw": 5478786,
+        "gzip": 1625369
+      },
+      {
+        "path": "assets/editor.api-Cn2512s6.js",
+        "raw": 2735602,
+        "gzip": 695808
+      },
+      {
+        "path": "assets/iosevka-latin-500-normal-6hm74U-t.woff",
+        "raw": 1918176,
+        "gzip": 1885968
+      },
+      {
+        "path": "assets/iosevka-latin-400-normal-BVqCxfc4.woff",
+        "raw": 1912240,
+        "gzip": 1879341
+      },
+      {
+        "path": "assets/vs-owoTQ3l5.js",
+        "raw": 1294933,
+        "gzip": 320409
+      },
+      {
+        "path": "assets/css.worker-C6lDtRpF.js",
+        "raw": 1078254,
+        "gzip": 244713
+      },
+      {
+        "path": "assets/iosevka-latin-500-normal-CQO8XnuS.woff2",
+        "raw": 991004,
+        "gzip": 964882
+      },
+      {
+        "path": "assets/iosevka-latin-400-normal-7stTb90X.woff2",
+        "raw": 984084,
+        "gzip": 959645
+      },
+      {
+        "path": "assets/html.worker-C5yZDBHz.js",
+        "raw": 743387,
+        "gzip": 195323
+      },
+      {
+        "path": "docs-pack/index.json",
+        "raw": 567672,
+        "gzip": 135729
+      },
+      {
+        "path": "assets/json.worker-DdeUAmHa.js",
+        "raw": 433137,
+        "gzip": 127602
+      }
+    ]
+  }
+}

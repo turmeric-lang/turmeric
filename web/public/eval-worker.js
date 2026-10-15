@@ -331,7 +331,12 @@ self.addEventListener('message', function (e) {
             return;
         }
 
+        // performance-audit-plan WP5: what a cold start costs, stage by stage.
+        // Durations in ms, posted with 'ready' and published by main.js as
+        // window._turiBoot (tests/web-perf.spec.js reads it).
+        const bootT0 = performance.now();
         importScripts('/turmeric.js');
+        const bootScript = performance.now();
 
         const factory = self.TurmericModule;
         if (typeof factory !== 'function') {
@@ -349,13 +354,29 @@ self.addEventListener('message', function (e) {
             stderr:   (byte) => streamByte(stderrStream, byte),
         }).then(function (mod) {
             turiModule = mod;
+            const bootModule = performance.now();
             const initResult = turiModule._turi_wasm_init();
             if (initResult !== 0) {
                 self.postMessage({ type: 'init-error', error: 'turi_wasm_init failed: ' + initResult });
                 return;
             }
+            const bootInit = performance.now();
+            // An older turmeric.wasm has no phase table; the stage times still hold.
+            let phases = {};
+            if (typeof turiModule._turi_wasm_boot_timings === 'function') {
+                try { phases = JSON.parse(turiModule.UTF8ToString(turiModule._turi_wasm_boot_timings())); }
+                catch (_) { phases = {}; }
+            }
             ready = true;
-            self.postMessage({ type: 'ready' });
+            self.postMessage({
+                type: 'ready',
+                boot: {
+                    script_ms: bootScript - bootT0,          // fetch + parse turmeric.js
+                    module_ms: bootModule - bootScript,      // fetch + compile + instantiate the wasm, embedded files
+                    init_ms:   bootInit - bootModule,        // turi_wasm_init: the stdlib preload
+                    phases:    phases,                       // turi_wasm_init's own split
+                },
+            });
             drainQueue();
         }).catch(function (err) {
             self.postMessage({ type: 'init-error', error: String(err) });

@@ -175,8 +175,8 @@ E = engines, W = web, D = documentation disagreement.
 
 | ID | Claim | Evidence | Status |
 | --- | --- | --- | --- |
-| W-1 | The WASM build embeds the whole 3.5 MB `stdlib/` directory, including the 604 KB generated `docstrings.tur`, into the download. No download size or time-to-first-eval is recorded anywhere. | `src/CMakeLists.txt:1981-2060` (`--embed-file stdlib@/stdlib`) | verified (mechanism); unmeasured |
-| W-2 | Startup preloads macros, collections and typeclasses into the interpreter, then snapshots the prelude. | `src/web/wasm_glue.c:95-127` | verified; unmeasured |
+| W-1 | The WASM build embeds the whole 3.5 MB `stdlib/` directory, including the 604 KB generated `docstrings.tur`, into the download. No download size or time-to-first-eval is recorded anywhere. | `src/CMakeLists.txt:1981-2060` (`--embed-file stdlib@/stdlib`) | measured (WP5): 3.15 MB raw, 0.55 MB brotli of a 1.23 MB wasm; startup reads 11% of it; `docstrings.tur` is 118 KB brotli |
+| W-2 | Startup preloads macros, collections and typeclasses into the interpreter, then snapshots the prelude. | `src/web/wasm_glue.c:95-127` | measured (WP5): ~98 ms per eval-worker start (collections 53, macros 33) |
 
 ### Documentation disagreements (WP7)
 
@@ -512,6 +512,16 @@ engine's fixed cost.
 **Deliverable.** `wp4-engines.md`; refreshed guide table. **Effort:** medium.
 
 ### WP5 -- Web / WASM
+
+**Status: done 2026-10-15.**
+[docs/artifacts/perf-audit-2026-10/wp5-web.md](../artifacts/perf-audit-2026-10/wp5-web.md)
+has the cold-load timeline, the download, W-1, W-2, the LSP and the ranked
+table; `web/tests/web-perf.spec.js` and `tools/ci/web-bundle-size.py` run in
+the web-smoke job and feed `web_perf:*` rows to ci-metrics. Headlines: a
+first visit downloads ~5.0 MB before Ready, 72% of it the wasm (1.6 MB) and
+two Iosevka font files (2.0 MB); startup reads 11% of the 3.15 MB embedded
+stdlib; the boot waits behind the Monaco import; the preload is ~100 ms; an
+LSP keystroke is 150 ms of debounce and ~16 ms of analysis.
 
 **Goal.** Put a number on what Try Turmeric costs the visitor.
 

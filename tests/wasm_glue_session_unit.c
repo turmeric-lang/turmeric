@@ -53,7 +53,15 @@ static int run_main(const char *program, const char *expect) {
 }
 
 int main(void) {
+    CHECK(strcmp(turi_wasm_boot_timings(), "{}") == 0, "no boot phases before init");
     CHECK(turi_wasm_init() == 0, "turi_wasm_init succeeds");
+
+    /* ---- WP5: the boot phase table the page reports ----------------------- */
+    const char *bt = turi_wasm_boot_timings();
+    CHECK(strncmp(bt, "{\"env_new\":", 11) == 0, "boot phases start with env_new");
+    CHECK(strstr(bt, "\"preload_collections\":") != NULL, "boot phases carry the collection preload");
+    CHECK(strstr(bt, "\"snapshot_prelude\":") != NULL && bt[strlen(bt) - 1] == '}',
+          "boot phases end with the prelude snapshot, as a closed JSON object");
 
     /* ---- PS2/PS3: the doc panel ------------------------------------------ */
     CHECK(run_main("(defn main [] : int 1)", "1"), "first Run");

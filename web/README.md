@@ -75,6 +75,23 @@ This will:
 2. Install web dependencies
 3. Create a production-optimized bundle in `web/dist/`
 
+#### What the bundle costs a visitor
+
+Two measurements run against the production build (performance-audit-plan
+WP5), in CI's web-smoke job and by hand:
+
+```bash
+python3 tools/ci/web-bundle-size.py      # from the repo root: raw / gzip / brotli sizes
+cd web && WEB_PERF=1 npx playwright test --project=desktop tests/web-perf.spec.js
+```
+
+The spec serves `dist/client` itself on a free port and times cold loads to
+"Ready", the first evaluation, a repeat visit and LSP keystroke latency, from
+the boot marks the page publishes as `window._turiBoot` (the eval worker's
+stage times and `turi_wasm_init`'s phase table, `_turi_wasm_boot_timings`).
+It writes `test-results/web-perf.json` and asserts only that the page works;
+without `WEB_PERF=1` it skips, so the ordinary suite does not pay for it.
+
 ### Deploy
 
 ```bash
