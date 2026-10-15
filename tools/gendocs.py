@@ -2077,7 +2077,7 @@ def emit_docstrings_tur(modules, out_path, verified_names=None):
             deduped.append((key, text))
 
     lines = [
-        ';; AUTO-GENERATED -- do not edit. Run: just docs',
+        ';; AUTO-GENERATED -- do not edit. Run: tur run docs',
         '(defmodule tur/docstrings',
         '  (export doc-lookup doc-verified?)',
         '',
