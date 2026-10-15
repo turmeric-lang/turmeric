@@ -228,6 +228,15 @@ direction, not a change.
 
 ### WP0 -- Baseline and environment lock (prerequisite for everything)
 
+**Status: done 2026-10-15.** The baseline, the corpus (70 programs), the
+harness fixes and the first readings handed to WP1-WP4 are in
+[docs/artifacts/perf-audit-2026-10/wp0-baseline.md](../artifacts/perf-audit-2026-10/wp0-baseline.md);
+the box and its checklist answers are in that directory's README. One
+method change for every later package: on this box a single sweep can take
+a multi-second burst that slows even sub-millisecond launches 10-250x, so
+timings are three sweeps merged by `benchmarks/audit/merge-sweeps.py`, not
+one.
+
 **Goal.** One machine, one toolchain, one Release build, one corpus, one set
 of numbers everything later is compared against.
 
