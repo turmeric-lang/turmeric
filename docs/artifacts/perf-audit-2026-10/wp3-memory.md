@@ -1,6 +1,6 @@
 # WP3 -- memory and allocation
 
-[performance-audit-plan](../../upcoming/performance-audit-plan.md) WP3: turn the
+[performance-audit-plan](../../archive/performance-audit-plan.md) WP3: turn the
 memory-usage guide's cost-table snapshot into a harness, find the
 per-iteration allocations a user would not expect, and record the long-run,
 build-time and leak-residue numbers (M-1 .. M-5). Box and method are WP0's

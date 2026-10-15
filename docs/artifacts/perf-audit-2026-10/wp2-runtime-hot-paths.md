@@ -1,6 +1,6 @@
 # WP2 -- emitted-program runtime hot paths
 
-[performance-audit-plan](../../upcoming/performance-audit-plan.md) WP2. Box,
+[performance-audit-plan](../../archive/performance-audit-plan.md) WP2. Box,
 toolchain and method are the WP0 ones ([README.md](README.md),
 [wp0-baseline.md](wp0-baseline.md)); every number here was taken on the
 NUC 9 Pro under WSL2 with a Release `-DTUR_JIT=ON` `tur` built from this

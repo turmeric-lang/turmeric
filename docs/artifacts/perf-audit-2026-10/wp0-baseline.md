@@ -1,6 +1,6 @@
 # WP0 -- baseline and environment lock
 
-[performance-audit-plan](../../upcoming/performance-audit-plan.md) WP0. The box
+[performance-audit-plan](../../archive/performance-audit-plan.md) WP0. The box
 header, the checklist answers and the thermal check are in
 [README.md](README.md); every number below was taken on that box under those
 conditions.

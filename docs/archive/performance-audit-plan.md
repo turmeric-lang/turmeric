@@ -1,13 +1,14 @@
 # Performance audit -- Turmeric as it stands at v0.64.1
 
-> **Status: DONE 2026-10-15.** All eight work packages are done -- WP0-WP5 and
-> WP7 merged (#1187-#1193), WP6 is #1194 -- every section-2 row says how it
+> **Status: DONE 2026-10-15; archived.** All eight work packages merged
+> (#1187-#1194) and the close-out (#1196): every section-2 row says how it
 > was resolved, and the
 > result is one ranked page:
 > [docs/artifacts/perf-audit-2026-10/summary.md](../artifacts/perf-audit-2026-10/summary.md)
 > -- what to build next, across every surface, and the definition of done
 > (section 7) closed item by item. The nightly's benchmark rows start with its
-> first night after WP6 merges. What follows is the plan as it was carried out.
+> first scheduled run after 2026-10-15. What follows is the plan as it was
+> carried out.
 >
 > **Status was: PROPOSED; the author's five decisions are in (2026-10-11), see
 > section 8.** Baseline is the author's local Intel NUC 9 Pro (i7-9850H)
@@ -30,7 +31,7 @@
 > `benchmarks/run-benchmarks.sh`, the memory-usage guide's `measure.sh`, and the `ci-metrics` timing pipeline
 > (`tools/ci/collect-suite-timings.py`, `publish-timings.sh`, the `/ci` page)
 > are the instruments this plan builds on.
-> **Related:** [profiling-plan](profiling-plan.md) (the `--timings` /
+> **Related:** [profiling-plan](../upcoming/profiling-plan.md) (the `--timings` /
 > `--profile` tooling WP1 and WP2 want; this plan does not build it twice),
 > [docs/notes/r7rs-performance-audit](../notes/r7rs-performance-audit.md)
 > (the template: one dialect, fully costed, 2026-10-05 -- this plan is the
@@ -96,7 +97,7 @@ What this plan is deliberately **not**:
   tree for whoever wants the external comparison later; nothing here
   depends on it.
 - **Not a profiler plan.** The `--timings` and `--profile` flags belong to
-  [profiling-plan](profiling-plan.md). WP1 builds the minimal `--timings`
+  [profiling-plan](../upcoming/profiling-plan.md). WP1 builds the minimal `--timings`
   (profiling-plan C0+C1) because the compile-time half of the audit cannot be
   done honestly without it; it does not build P1-P6.
 - **Not another r7rs audit.** `#lang r7rs` was costed on 2026-10-05 and its
@@ -145,7 +146,7 @@ E = engines, W = web, D = documentation disagreement.
 | R-5 | **HAMT transients are not in place.** `tur_hamt_transient_set` runs `node_has` then the persistent `node_insert`, so it path-copies and traverses twice; only the shell allocation is saved. The guide says "mutate in place". | `src/runtime/hamt.c:1895-1923`; hamt-guide.md:264 | **measured (WP2):** path-copies; ~2/3 of a batch insert. Ranked (WP2 #3); the guide fixed (D-3) |
 | R-6 | `Vec` growth is `malloc` + copy loop + `free`, not `realloc`. | `stdlib/vec.tur:136-141` | **measured (WP2):** `realloc` growth is -46% on a push loop. Ranked (WP2 #2) |
 | R-7 | **Emitted programs are built at `-O2 -fno-strict-aliasing -fwrapv` with no `-O3`, `-march` or LTO option, and `tur run --release` is parsed and ignored.** **Author (2026-10-11): the default stays `-O2`; `--release` adds `-O3`; `-march=native` is never on by default** (it produces binaries that will not run elsewhere). WP2's sweep decides whether `-O3` buys anything here. | `src/main.c:195`, `:3851`, `:6011` (`(void)release;`) | **measured (WP2):** `-O3` ~6%, `-march=native` nothing, LTO ~4%. Ranked (WP2 #7) |
-| R-8 | `musttail` is honoured only by clang on x86-64/aarch64; gcc and the JIT get no guarantee for non-self, non-fused tail calls, and a CPS self-loop survives only through gcc's `-O2` sibling-call optimization. | `emit_module.c:10218-10232`; [cps-self-call-through-join-grows-the-stack](../reported/cps-self-call-through-join-grows-the-stack.md) | **measured (WP2):** 2,973 of 2,975 fixture programs carry a `TUR_MUSTTAIL` site gcc treats as a hint. Reported |
+| R-8 | `musttail` is honoured only by clang on x86-64/aarch64; gcc and the JIT get no guarantee for non-self, non-fused tail calls, and a CPS self-loop survives only through gcc's `-O2` sibling-call optimization. | `emit_module.c:10218-10232`; [cps-self-call-through-join-grows-the-stack](cps-self-call-through-join-grows-the-stack.md) | **measured (WP2):** 2,973 of 2,975 fixture programs carry a `TUR_MUSTTAIL` site gcc treats as a hint; the join-frame report it cites was resolved 2026-10-12 |
 | R-9 | `string/concat` copies both inputs; a loop that concatenates is quadratic (~5 KB traffic per appended character at 10k appends). Documented, with `StringBuilder` as the answer; worth a census of how often stdlib and examples do it anyway. | memory-usage-guide "Strings" | **measured (close-out):** 7 stdlib concat sites sit in a looping or self-calling defn, none in examples; `re/replace-all` is quadratic in its matches (5 / 14 / 51 / 201 ms at 2k / 4k / 8k / 16k). Ranked (summary) |
 | R-10 | Async tasks each `malloc` a 1 MB fiber stack and switch through `swapcontext`-shaped glue; hand-written `fiber_ctx_{x64,arm64}.S` exist and are compiled in. Which path a task actually takes, and what a switch costs, is unmeasured. | `emit_module.c:15727-15750`, `src/async/fiber.c:21`, `src/CMakeLists.txt:399-401` | measured (WP2; corrected in WP4): compiled `async`/`await` takes neither path -- it parks a CPS continuation copy, and its ~813 ns turn is the allocator. The fiber stack and `swapcontext` belong to the explicit fiber API |
 | R-11 | Dictionary dispatch through a function value inside a function also triggers R-1's coloring; monomorphization removes it only where `type_has_concrete_codegen_layout()` succeeds. How much dictionary dispatch survives in the stdlib after monomorphization is unknown. | typeclass-internals-guide, monomorphization-abi-guide | **measured (WP2):** 63 fixtures still dispatch through a dictionary after monomorphization, none in a loop; its cost is R-1's |
@@ -168,7 +169,7 @@ E = engines, W = web, D = documentation disagreement.
 | C-2 | **The two published front-end numbers disagree by ~5x.** The r7rs audit measured plain `emit-c` at 0.026 s (Release); the performance guide's triangle attributes ~200 ms of every engine's run to "elaboration and codegen shared by all three legs" (interpreter `fib` is 137 ms end to end). One of them is counting something the other is not. | r7rs audit section 1; performance-guide "Execution engines" | **settled (WP1, WP4):** the shared front end is ~15-20 ms; the guide's "~200 ms" is rewritten |
 | C-3 | Of the r7rs front end's ~1 s, the audit left open: refinement path-condition walks (~9.5% incl.), the reader (~9%), `strcmp` on interned names (~3%). Plain Turmeric shares all three. | r7rs audit section 4 | **measured (WP1):** under ~2 ms a build together. Ranked (WP1 #5, low priority) |
 | C-4 | Two solver reports are still open: [solver-hot-structures-linear-scans](../archive/solver-hot-structures-linear-scans.md), [refine-chain-expands-the-same-dnf-four-times](../archive/refine-chain-expands-the-same-dnf-four-times.md) (filed under archive but marked OPEN). | the reports | **already resolved:** both reports were fixed before the audit (2026-09-28, 2026-09-05); "marked OPEN" was stale |
-| C-5 | The preamble split (`libturt_preamble.a`) is default on Linux/Windows and opt-in on macOS, so macOS builds compile ~4,360 lines of runtime per program. | [cc-path-preamble-split-plan](cc-path-preamble-split-plan.md); `main.c:957-1010` | **measured (WP1):** the split takes 25-40% off cc for ordinary programs, nothing for Saffron; its run-time price is R-2. macOS not measured |
+| C-5 | The preamble split (`libturt_preamble.a`) is default on Linux/Windows and opt-in on macOS, so macOS builds compile ~4,360 lines of runtime per program. | [cc-path-preamble-split-plan](../upcoming/cc-path-preamble-split-plan.md); `main.c:957-1010` | **measured (WP1):** the split takes 25-40% off cc for ordinary programs, nothing for Saffron; its run-time price is R-2. macOS not measured |
 | C-6 | The ABI cache (`.tur-abi-cache/`) covers borrow-spec ownership for multi-module builds only; there is no `tur run` output cache, so an unchanged program rebuilds. | `main.c:7231`, `1861`, `11541` | **confirmed (WP4):** no run cache; WP4 #1 (a MIR image keyed on the unit, or on sources and flags) is the JIT's half of it |
 
 ### Engines (WP4)

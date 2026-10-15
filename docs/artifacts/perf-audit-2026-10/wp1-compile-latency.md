@@ -1,6 +1,6 @@
 # WP1 -- compile latency
 
-[performance-audit-plan](../../upcoming/performance-audit-plan.md) WP1: answer
+[performance-audit-plan](../../archive/performance-audit-plan.md) WP1: answer
 "why is `tur build` slow" for plain Turmeric, settle C-2, cost the prelude
 (C-1), the cc leg (C-5) and the front end's hot spots (C-3). Box and method are
 WP0's ([README.md](README.md), [wp0-baseline.md](wp0-baseline.md)): NUC 9 Pro,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the performance-audit corpus and record one row per (program, engine, phase).
 
-WP0 of docs/upcoming/performance-audit-plan.md.  Reads benchmarks/audit/corpus.txt
+WP0 of docs/archive/performance-audit-plan.md.  Reads benchmarks/audit/corpus.txt
 (the committed corpus list) and, for every program on every engine it names,
 measures what the plan's baseline asks for:
 

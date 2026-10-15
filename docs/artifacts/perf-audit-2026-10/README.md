@@ -1,6 +1,6 @@
 # Performance audit 2026-10 -- artifacts
 
-Measurements for [performance-audit-plan](../../upcoming/performance-audit-plan.md).
+Measurements for [performance-audit-plan](../../archive/performance-audit-plan.md).
 **Start at [summary.md](summary.md)**: the audit's result on one page -- what
 to build next across every surface, ranked, and the definition of done closed
 item by item.
