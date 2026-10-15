@@ -1,0 +1,27 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | By-value recursive `defdata` link (`(ICons [hd : int tl : IL])`) | 24 B | 1 |
+;;   |   scope exit, in the shapes gc-guide.md#known-gaps lists; a region |
+;;
+;; Per element: one ICons link.  The N-link spine is built fresh and handed
+;; straight to a summing callee that keeps nothing (one of the shapes the
+;; gc-guide lists as freed), so each link is one allocation of traffic, the
+;; whole spine is the peak, and nothing should be lost.
+;;
+;; row: By-value recursive `defdata` link `ICons`, a fresh spine lent to a callee
+;; guide: 24 B, 1 alloc, freed at scope exit
+;; expect-0: 0
+;; expect-N: 50005000
+
+(defdata IL [] (ICons [hd : int tl : IL]) (INil))
+
+(defn build [n : int acc : IL] : IL
+  (if (= n 0) acc (build (- n 1) (ICons n acc))))
+
+(defn lsum [xs : IL acc : int] : int
+  (match xs
+    (ICons h t) (lsum t (+ acc h))
+    (INil)      acc))
+
+(defn main [] : int
+  (println (lsum (build __N__ (INil)) 0))
+  0)

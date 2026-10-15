@@ -1,0 +1,36 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `:int`, `:float`, `:bool`, `:cstr` literal | 0 | 0 | -- (stack or static) |
+;;
+;; Per element: one call that binds an int, a float, a bool and a cstr
+;; literal and folds all four into the checksum.  Nothing here may touch the
+;; heap, so every column should read 0.
+;;
+;; row: `:int`, `:float`, `:bool`, `:cstr` literal
+;; guide: 0 B, 0 allocs
+;; expect-0: 0
+;; expect-N: 85000
+
+;; stdlib/cstr.tur's cstr-len, inlined: that file is a defmodule, and an
+;; import is only allowed inside another one.
+(defn cstr-len [s : cstr] : int
+  ```c
+  return (int64_t)strlen((const char *)(intptr_t)s);
+  ```)
+
+(defn step [i : int] : int
+  (let [x 3
+        f 7.1
+        b (< i 5000)
+        s "abc"]
+    (+ x (+ (if b 1 2)
+            (+ (if (< f 7.5) 1 0)
+               (cstr-len s))))))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (set! acc (+ acc (step i)))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

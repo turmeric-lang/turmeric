@@ -1,0 +1,25 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `Vec int` slot | 8 B, doubling from 4 (~19 B peak, ~26 B traffic incl.
+;;   |   growth copies) | amortised 0 | `vec-free` |
+;;
+;; Per element: one `vec-push!` of an int onto one Vec, which is summed and
+;; then freed.  Peak is the buffer at its largest (up to twice the contents);
+;; traffic includes every buffer the doublings copied out of.
+;;
+;; row: `Vec int` slot
+;; guide: 8 B slot, ~19 B peak, ~26 B traffic, amortised 0 allocs
+;; expect-0: 0
+;; expect-N: 49995000
+
+(defn vsum [v : (Vec int) i : int acc : int] : int
+  (if (= i (vec-len v)) acc (vsum v (+ i 1) (+ acc (vec-get v i)))))
+
+(defn main [] : int
+  (let [v      (:: (vec-new) (Vec int))
+        ^mut i 0]
+    (while (< i __N__)
+      (vec-push! v i)
+      (set! i (+ i 1)))
+    (println (vsum v 0 0))
+    (vec-free v))
+  0)

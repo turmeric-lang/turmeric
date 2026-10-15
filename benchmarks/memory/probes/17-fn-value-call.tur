@@ -1,0 +1,27 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | a call through a function value | ~200 B of continuation frames | 2 | as
+;;   |   they run, else when the outermost direct-style call returns |
+;;
+;; Per element: one call of `use1`, which calls its function-typed parameter
+;; -- so `use1` is emitted in continuation-passing style -- made from main's
+;; direct-style `while` loop.  The frames are traffic; each one's outermost
+;; direct-style call returns every turn, so peak should not grow.  (Probe 21
+;; is the CPS-colored LOOP, where the loop itself calls the function value.)
+;;
+;; row: a call through a function value (`use1`), from a `while` loop
+;; guide: ~200 B of continuation frames, 2 allocs, freed as they run
+;; expect-0: 0
+;; expect-N: 50005000
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn use1 [f : (fn [int] int) i : int] : int (f i))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (set! acc (+ acc (use1 add1 i)))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

@@ -1,0 +1,26 @@
+;; Probe: NEW ROW (performance-audit-plan WP3, R-10) -- an async task spawn +
+;; await per element.
+;;
+;; Per element: `(await (async (fn [] : int (* k 2))))` from a
+;; self-tail-recursive loop -- tests/fixtures/await-fresh-spawn-future-freed's
+;; `lp` / `tail-await` shape.  R-10 says every task mallocs a fiber stack;
+;; that shows here as traffic.  Each future is owned by the await that reads
+;; it, so nothing should be lost, and peak should not grow with N.  One task
+;; runs first in both builds, so the scheduler's first-use cost cancels.
+;;
+;; row: async task spawn + await (`(await (async ...))`), a task a turn
+;; guide: (new) R-10: a 1 MB fiber stack malloc'd per task
+;; measure: N=2000
+;; expect-0: 0
+;; expect-N: 4002000
+
+(defn tail-await [k : int] : int
+  (await (async (fn [] : int (* k 2)))))
+
+(defn lp [i : int acc : int] : int
+  (if (= i 0) acc (lp (- i 1) (+ acc (tail-await i)))))
+
+(defn main [] : int
+  (tail-await 1)
+  (println (lp __N__ 0))
+  0)

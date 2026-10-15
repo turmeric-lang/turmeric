@@ -1,0 +1,27 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `:heap` `defstruct` / `defdata` node (3 ints) | 24 B (40 B peak with
+;;   |   malloc overhead) | 1 | a region, otherwise never |
+;;
+;; Per element: one `:heap` node of three ints, built outside any region and
+;; read back.  Nothing frees a `:heap` node one at a time, so every node should
+;; be in the lost column at exit.
+;;
+;; row: `:heap` `defstruct` node (3 ints), outside a region
+;; guide: 24 B traffic, 40 B peak, 1 alloc, all lost
+;; expect-0: 0
+;; expect-N: 150015000
+
+(defstruct H :heap [a : int b : int c : int])
+
+(defn mk [i : int] : H (H i (+ i 1) (+ i 2)))
+
+(defn sum3 [h : H] : int (+ (.a h) (+ (.b h) (.c h))))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (set! acc (+ acc (sum3 (mk i))))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

@@ -1,0 +1,28 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | a call through a function value | ~200 B of continuation frames | 2 | as
+;;   |   they run, else when the outermost direct-style call returns |
+;; -- probe 17 with the call through the function value NOT in tail position.
+;;
+;; Per element: one call of `plus1`, which returns `(+ 1 (f i))`, from main's
+;; direct-style `while` loop.  Probe 17's `use1` returns `(f i)` -- a TAIL
+;; call through the function value -- and is emitted with a `__cps` twin; this
+;; one is the shape R-1 (performance-audit-plan) says colors a function CPS
+;; too.  If it does, it costs what probe 17 costs; if it does not, it is 0.
+;;
+;; row: a NON-tail call through a function value (`plus1`), from a `while` loop
+;; guide: ~200 B of continuation frames, 2 allocs, freed as they run
+;; expect-0: 0
+;; expect-N: 50015000
+
+(defn add1 [x : int] : int (+ x 1))
+
+(defn plus1 [f : (fn [int] int) i : int] : int (+ 1 (f i)))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (set! acc (+ acc (plus1 add1 i)))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

@@ -1,0 +1,34 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `Option`/`Result` of a scalar, constructed and matched | 0 | 0 | -- (by value) |
+;;
+;; Per element: one `(Option int)` and one `(Result int int)` are returned
+;; from a call and matched, each arm taken half the time.  Both are by-value
+;; sums, so nothing here may touch the heap.
+;;
+;; row: `Option`/`Result` of a scalar, constructed and matched
+;; guide: 0 B, 0 allocs
+;; expect-0: 0
+;; expect-N: 25000000
+
+(defn half [i : int] : (Option int)
+  (if (= i (* 2 (/ i 2))) (Some (/ i 2)) (None)))
+
+(defn checked [i : int] : (Result int int)
+  (if (< i 5000) (Ok i) (Err 1)))
+
+(defn step [i : int] : int
+  (+ (match (half i)
+       (Some h) h
+       (None)   0)
+     (match (checked i)
+       (Ok v)  v
+       (Err e) e)))
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (set! acc (+ acc (step i)))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

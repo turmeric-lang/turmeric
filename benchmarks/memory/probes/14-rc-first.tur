@@ -1,0 +1,24 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | first `rc<T>` in a program | one-time 544 KiB (512 KiB free queue + 32 KiB
+;;   |   GC registry) | 2 | process exit |
+;;
+;; A one-time cost, so N=1 against N=0: the N=1 build makes the program's only
+;; rc, and every column is that one rc's cost, the one-time tables included
+;; (the per-rc control block and value block are in there too; probe 13 has
+;; them alone).
+;;
+;; row: first `rc<T>` in a program (one-time)
+;; guide: one-time 544 KiB, 2 allocs, kept until exit
+;; measure: N=1
+;; expect-0: 0
+;; expect-N: 1
+
+(defn main [] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (let [r (rc/of 1)]
+        (set! acc (+ acc (deref r))))
+      (set! i (+ i 1)))
+    (println acc))
+  0)

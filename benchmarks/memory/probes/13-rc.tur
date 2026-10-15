@@ -1,0 +1,26 @@
+;; Probe: memory-usage-guide cost table, row
+;;   | `rc<T>` | 72 B control block + a separate block for the value | 2 | last drop |
+;;
+;; Per element: one `(rc/of i)` of an int, read with `deref` and dropped
+;; at the end of its `let`.  One rc is made before the loop, in both builds,
+;; so the first-rc one-time cost (probe 14) cancels out of the difference.
+;;
+;; row: `rc<T>` (`rc/of` an int), dropped each turn
+;; guide: 72 B control block + value block, 2 allocs, last drop
+;; expect-0: 0
+;; expect-N: 49995000
+
+(defn warm [] : int
+  (let [r (rc/of 1)]
+    (deref r)))
+
+(defn main [] : int
+  (warm)
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i __N__)
+      (let [r (rc/of i)]
+        (set! acc (+ acc (deref r))))
+      (set! i (+ i 1)))
+    (println acc))
+  0)
