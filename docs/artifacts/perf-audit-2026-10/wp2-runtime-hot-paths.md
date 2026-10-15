@@ -276,6 +276,153 @@ not chased.)
    decision 2. LTO is not worth its link time here.
 3. Leave `-march=native` out, as decided.
 
+## Where the cycles go, by subsystem
+
+`benchmarks/audit/subsys-profile.py`: `tur build` (default flags), `perf
+record -F 4999` (self time, user + kernel), every sampled symbol bucketed with
+profiling-plan 4.3's prefix table plus three this audit needed -- `region`
+(`tur_region_`, `reg_`, `arena_`), `tls` (the split preamble's
+`tur_tls_*_ptr` accessors, R-2) and `kernel` (page faults, `brk`/`mmap`, exit
+teardown). `user` and `stdlib` are told apart by name through
+`tur demangle` and the program's own `TUR_CPS_CENSUS` file column. Percent of
+samples; buckets under 1% omitted. Raw: [wp2-micro/subsys.csv](wp2-micro/subsys.csv).
+
+| program | biggest buckets |
+| --- | --- |
+| triangle/fib | user 75, kernel 12, **tls 8**, libc 5 |
+| bench-logic-subst | stdlib 59, **tls 13**, user 12, kernel 10 |
+| bench-regions-subst | stdlib 57, user 11, **tls 10**, region 6, libc 6 |
+| bench-dfs-queens | libc 26, kernel 20, native 19, trail 10, region 7, user 7, tls 6 |
+| bench-saffron-dyn-tail | **gc 51**, user 22, native 21 |
+| hamt-bench-insert | **hamt 69**, libc 13, native 12 |
+| sized/cps-tramp-resume-8m | libc 40, **cps 36**, native 15, tls 9 |
+| sized/closure-let-loop-10m | **cps 45**, libc 27, tls 16, native 11 |
+| sized/fn-value-join-1000x | libc 49, **cps 33**, tls 8 |
+| sized/effect-nontail-ticks-1m | kernel 48, libc 25, cps 17 |
+| sized/region-rounds-100k | **region 73**, kernel 19 |
+| sized/mut-map-reassign-1m | hamt 30, kernel 30, native 29, libc 11 |
+| stackless-catch-unwind-deep | kernel 58, libc 33 |
+| tailcall-carrier-let-deep | libc 53, kernel 28 |
+| rc-free-queue 2M (R-4 below) | libc 47, kernel 27, rc 10, gc 4 |
+| vec-push 10M (R-6 below) | kernel 55, user 35, region 8 |
+| async spawn+await 2M (R-10 below) | libc 56, cps 20, native 15, tls 8 |
+
+Read across: **`malloc`/`free` is the largest runtime bucket** wherever CPS,
+effects, async or rc are in play (25-56%) -- DK frames, continuation copies
+and fiber closures are individually heap-allocated; **`kernel` is large
+exactly where memory grows** (M-2's held continuations, the carrier-let
+retention, catch-unwind depth -- page faults, not syscalls); and **`tls` --
+one accessor -- is 2-16% of nearly everything** (R-2). `native` is symbols the
+table cannot place (monomorph `__spec__` clones whose base name the census
+does not list, and the Saffron collector's helpers); it is never the top
+bucket.
+
+## R-4 -- rc allocation and the disabled collector
+
+Every `rc` allocation registers with the cycle collector's registry and every
+free unregisters, even with the collector off (the default): `rc_cb_alloc_kinded`
+-> `gc_register_block` (`src/runtime/gc.c:342`, an append to a growable array
+after an allocation checkpoint that returns at once unless `GC_AUTO`), and
+`gc_unregister_block` + `gc_remove_suspect` on the way out. Priced on
+`rc-free-queue-deep-cascade` built 20x deeper (2M linked `rc` blocks, built and
+cascaded free, 267 ms): `gc_unregister_block` is 2.2% of samples and
+`gc_register_block` does not reach the top 14; `malloc` / `free` and glibc's
+consolidation are ~45%. **Not a problem**: the registry costs a few percent of
+an rc-heavy program, and the allocator is the cost.
+
+## R-5 -- HAMT transients path-copy
+
+100k inserts (WP0's inline-C drivers, same keys, same order):
+
+| | wall | instructions | heap allocs | heap bytes |
+| --- | ---: | ---: | ---: | ---: |
+| persistent `tur_hamt_set` | 177 ms | 1,720,879,185 | 866,177 | 93.4 MB |
+| transient `tur_hamt_transient_set` | 173 ms | 1,701,872,284 | 766,179 | 87.0 MB |
+
+The transient saves exactly one allocation per insert (100k: the map shell)
+and 7% of the bytes; the rest of the work is the same. Its profile says why:
+**56.9% in `tur_hamt_node_release`, 11.5% in `bitmap_node_copy`** -- it copies
+the path and then releases the old one, which is a persistent insert with the
+result handle reused. The hamt guide's "mutate in place" (D-3) is not what the
+code does. An in-place transient (copy a node only the first time the
+transient touches it, mutate it after, no release) would skip both of those
+lines: on this profile, about two thirds of the time.
+
+## R-6 -- `Vec` growth
+
+`vec-push!` grows by `malloc` + element copy loop + `free`
+(`stdlib/vec.tur:136-141`). Priced with a 10M-push program (fill, then sum
+back; same output both ways) against a copy of `stdlib/` whose growth is a
+single `realloc` (`TUR_STDLIB_DIR`):
+
+| growth | wall | instructions |
+| --- | ---: | ---: |
+| malloc + copy + free (today) | 112 ms | 454,077,714 |
+| realloc | **61 ms** | 360,153,953 |
+
+**-46% wall, -21% instructions.** The plan guessed "likely small"; it is not,
+because `realloc` of a large block extends it in place (`mremap`) instead of
+touching every element again, and the copy loop also faults in a fresh buffer
+each time. The same profile shows **`tur_region_note_escape` at 8.3%** of a
+push loop with no region open: the store hook every `vec-push!` carries
+(CLAUDE.md, "Region Store Hooks") is an out-of-line call into the runtime
+archive, and it returns at its first test (`g_live_n <= 0`). An inline
+"is any region open" check before the call would make the hook free when it
+cannot matter. (Unrelated, noticed on the way: `vec-len` returns
+`(int)vec->len`, a 32-bit truncation under its `: int`; harmless below 2^31
+elements.)
+
+## R-8 -- tail calls gcc does not guarantee
+
+Every tail call the emitter wants guaranteed is written
+`TUR_MUSTTAIL return f(...)`, and `TUR_MUSTTAIL` is `__attribute__((musttail))`
+only where the compiler honours it (clang on x86-64/aarch64); under gcc it
+expands to nothing (`# define TUR_MUSTTAIL`), so constant stack rests on
+gcc's `-O2` sibling-call optimization. Over the fixture tree: **2,973 of 2,975
+programs carry at least one such site, 43,559 sites in all** -- most from the
+prelude (the `Eq` instance methods' self-calls appear in every unit), so the
+gap is not a corner: on gcc, every program's guaranteed tail calls are hints.
+Only 2 fixtures carry `requires.musttail`. R-1's spike shows one concrete
+failure shape: a self-call followed by drop glue is not in tail position at
+all, so no compiler can make it a jump (the closure loop above).
+
+## R-10 -- fibers
+
+Two fixtures sized up: `await-fresh-spawn-future-freed` at 2M spawn+await
+iterations, `async-repeated-park-frees-each-turn` at 1M park/resume turns.
+
+| | wall | per operation |
+| --- | ---: | ---: |
+| spawn + await, 2M | 273 ms | **~137 ns** |
+| park + resume, 1M turns | 813 ms | **~813 ns** |
+
+**Which switch path runs**: compiled programs switch fibers through libc
+`swapcontext` (the emitted glue, `src/compiler/emit_module.c:16271-16390`;
+the spawn binary links `swapcontext`, `_setjmp` and `longjmp`). On Linux,
+glibc's `swapcontext` saves and restores the signal mask -- an
+`rt_sigprocmask` system call per switch -- the likely reason a park/resume
+turn costs ~0.8 us (not yet confirmed with a syscall count). The hand-written
+`src/async/fiber_ctx_x64.S` / `fiber_ctx_arm64.S` are compiled into `tur`
+itself, not into emitted programs; Windows gets its own register-snapshot
+shim (`emit_module.c:13174`). Spawn+await is allocation-bound instead (malloc
+/ calloc / free 52% of its profile: the DK frames and the fiber closure). Fix
+direction: emit the asm switch (or the Windows-style register snapshot) on
+Linux and macOS too; the signal mask is not something a Turmeric fiber
+changes.
+
+## R-11 -- dictionary dispatch after monomorphization
+
+From the WP0 fixture sweep (an `emit-c` census of `((void**)__dict_N)[k]`
+dispatch sites): **63 plain fixtures still dispatch through a dictionary after
+monomorphization**, and none of them does it in a loop (all run in 5 ms or
+less), so there is nothing to time; `hkt-generic-calls-generic` (15 sites in
+17 `__dict_N` clones) is the densest. Every such clone is CPS-colored, through
+R-1's indirect rule -- dispatch is a call through a function value -- so R-11's
+cost is R-1's. A loop-bound dispatch microbenchmark is a gap the fixture tree
+does not fill.
+
+## R-3 -- retired region generations
+
 **The claim** (plan): `tur_region_owns` walks every live and retired generation
 on every node free, retired generations accumulate for the life of the
 process, so a free gets slower the longer a program runs.
@@ -323,6 +470,43 @@ that opens a region, under `TUR_REGION_STATS=1`:
 
 Regions work where the chain stays typed: the benchmark the regions plan
 named rewinds every bracket. But the two fixtures whose comments say the pop
-rewinds ("the pop REWINDS (the static walk clears it)") have not rewound
-since the erasure hooks landed. They check only the printed answer, so they
-still pass.
+rewinds ("the pop REWINDS (the static walk clears it)") do not rewind under
+the current hooks. They check only the printed answer, so they still pass.
+Filed: [region-rewind-fixtures-never-rewind](../../reported/region-rewind-fixtures-never-rewind.md)
+and [region-retired-generations-make-shutdown-quadratic](../../reported/region-retired-generations-make-shutdown-quadratic.md).
+
+## Not a problem (measured, fine)
+
+- **R-4**, the collector registry on every rc allocation: ~2-3% of an
+  rc-heavy program; the allocator is the cost.
+- **`-march=native`** (R-7): nothing on this corpus.
+- **LTO across the runtime archive** (R-2) on top of an inline preamble:
+  0.749 -> 0.747 geomean cycles; worth it only for rc-free-heavy code.
+- **Spawn + await** (R-10): ~137 ns, allocation-bound, no switch on the
+  measured path.
+
+## Ranked: change / buys / effort
+
+| # | change | buys | effort |
+| --- | --- | --- | --- |
+| 1 | **Split preamble: read the panic flag (and the other `tur_tls_*_ptr` thread-locals) directly** -- an `extern __thread` in the hosted split, or at least `__attribute__((const))` on the accessor (R-2) | ~25% of cycles across the measured corpus, up to 57% on CPS loops and 98% of instructions on `fib`, without giving back the split's 25-40% cc saving (WP1) | small-medium (check fibers that migrate threads first) |
+| 2 | **`realloc` in `vec-push!` growth** (R-6), and an inline "region open?" test in front of `TUR_REGION_NOTE` | -46% wall on a push loop; -8% of a push loop's samples | small |
+| 3 | **In-place HAMT transients** (R-5): copy a node once per transient, mutate after, no path release | ~2/3 of a batch insert's time on this profile; D-3's guide sentence becomes true | medium |
+| 4 | **Retired regions: O(1) registry removal and a cheap shutdown** (R-3): scan `reg_remove` from the end, drop this thread's registry entries in one pass at exit, index retired slabs for `tur_region_owns` | the 71% of `region-rounds-100k`; frees that stay cheap in long runs | small (1-2), medium (3) |
+| 5 | **Fiber switch without `swapcontext`** on Linux/macOS (R-10): emit the asm switch or the Windows-style register snapshot | the ~0.8 us park/resume turn, most of it the signal-mask syscall | medium |
+| 6 | **R-1, properly**: effect rows that hold for function values (inference at lambdas, checking at HOF parameters) or a `may_hold_awaiter`-style parameter analysis, **plus** drop-before-call so a self-call with closure drop glue is a real tail call | 42-45% of instructions on combinator-style code, 4 allocations per region bracket, ~250 stdlib functions off the CPS path -- and no closure loop overflowing its stack when it leaves the trampoline | large |
+| 7 | `--release` = `-O3` with the inline preamble (or #1) (R-7, decision 2) | ~5% from `-O3`, more on inline-C code; LTO not worth its link time | small |
+| 8 | Region rewind fixtures that assert a rewind (`TUR_REGION_STATS` pinned) | the rewind-corruption tests test a rewind again | small |
+
+## Not done here
+
+- **R-2's third arm** (rc and region hot functions as `static inline` in a
+  header): the build-mode sweep answers the question it was for -- the cost is
+  the split preamble's TLS accessor, not the runtime archive's call boundary
+  -- so the header rewrite is not worth prototyping before fix #1.
+- **C ceilings for R-3..R-6** in the style of `adt-alloc/ceiling.c`: each was
+  priced against the alternative it would be replaced by (a realloc copy of
+  `stdlib/`, the transient's own profile, the registry's profile share), which
+  answers "what would the fix buy" more directly than a ceiling would.
+- **Saffron's run time** (`bench-saffron-dyn-tail`: `gc` 51%) belongs to the
+  Saffron collector and is outside this plan's corpus focus.
