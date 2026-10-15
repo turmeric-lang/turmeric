@@ -12,7 +12,13 @@
 ;;;
 ;;; Since: 2026-07-01
 (defmodule cstr
-  (export cstr-len cstr-nth cstr-byte-is? cstr-char-at cstr-sub cstr-eq? cstr-free)
+  (export cstr-len
+    cstr-nth
+    cstr-byte-is?
+    cstr-char-at
+    cstr-sub
+    cstr-eq?
+    cstr-free)
   ;;; cstr-len -- byte length of a NUL-terminated C string.
   ;;;
   ;;; Parameters:

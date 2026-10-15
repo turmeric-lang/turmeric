@@ -156,8 +156,7 @@
 ;;;
 ;;; Since: markdown-library-plan S1
 (defn slice/char-at [sl : StringSlice i : int] : (Option Char)
-  (let [b (slice/byte-at sl i)]
-    (if (< b 0) (none) (some (int->char b)))))
+  (let [b (slice/byte-at sl i)] (if (< b 0) (none) (some (int->char b)))))
 ;;; slice/compare -- lexicographic byte compare of two slices: -1, 0, or 1.
 ;;;
 ;;; Since: v2

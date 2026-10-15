@@ -238,8 +238,7 @@
 ;;;
 ;;; Since: markdown-library-plan S1
 (defn string/char-at [s : String i : int] : (Option Char)
-  (let [b (string/byte-at s i)]
-    (if (< b 0) (none) (some (int->char b)))))
+  (let [b (string/byte-at s i)] (if (< b 0) (none) (some (int->char b)))))
 ;;; string/eq? -- content equality (length then byte compare).
 ;;;
 ;;; Since: v2
