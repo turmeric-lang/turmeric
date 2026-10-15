@@ -85,6 +85,11 @@
         "label": "Turmeric Dark",
         "uiTheme": "vs-dark",
         "path": "./themes/turmeric-dark-color-theme.json"
+      },
+      {
+        "label": "Turmeric Light",
+        "uiTheme": "vs",
+        "path": "./themes/turmeric-light-color-theme.json"
       }
     ]
   },

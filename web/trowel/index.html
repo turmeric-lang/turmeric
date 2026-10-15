@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Trowel -- The Turmeric Editor</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- Sets <html data-theme> BEFORE first paint (light or dark, from the stored
+     choice or the OS). Classic and blocking, and external because the CSP
+     (web/csp.js) allows no inline script. See public/theme.js. -->
+<meta name="theme-color" content="#0C0A08">
+<script src="/theme.js"></script>
 <meta name="description" content="Trowel is a fast, native desktop editor for Turmeric -- run your code and open a REPL in one click, with the compiler built in.">
 
 <!-- Open Graph -->
@@ -138,15 +143,15 @@
   font-family: 'Space Grotesk', sans-serif;
   font-size: 14px;
   font-weight: 500;
-  color: var(--bg-base);
-  background: var(--gold);
-  border: 1px solid var(--gold);
+  color: var(--on-gold);
+  background: var(--gold-fill);
+  border: 1px solid var(--gold-fill);
   border-radius: 8px;
   padding: 9px 18px;
   text-decoration: none;
   transition: background 0.14s, transform 0.14s;
 }
-.dl-btn:hover { background: var(--gold-bright); transform: translateY(-1px); }
+.dl-btn:hover { background: var(--gold-fill-hover); transform: translateY(-1px); }
 .dl-btn.disabled { pointer-events: none; color: var(--text-dim); background: transparent; border-color: var(--border-mid); }
 
 .dl-brew {

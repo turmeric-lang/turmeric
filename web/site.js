@@ -120,6 +120,18 @@ const SIDEBAR_GROUPS = [
   ]],
 ];
 
+// The light/dark switch. public/theme.js owns the behaviour (it handles every
+// [data-theme-toggle] click by delegation and sets the label); this is only the
+// markup, and site.css shows the icon of the theme a click switches TO.
+// `tools/genguides.py` carries the same markup as THEME_TOGGLE for the
+// generated pages -- change one, change the other.
+const ICON_ATTRS = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+const THEME_TOGGLE_HTML =
+  '<button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle light and dark theme">' +
+  `<svg class="icon-sun" ${ICON_ATTRS}><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>` +
+  `<svg class="icon-moon" ${ICON_ATTRS}><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>` +
+  '</button>';
+
 function sidebarGroupsHTML() {
   return SIDEBAR_GROUPS.map(([heading, links]) =>
     `<h3>${heading}</h3><ul>` +
@@ -169,6 +181,7 @@ class SiteNav extends HTMLElement {
           <img src="/logo.svg" class="nav-logo-wordmark" width="101" height="28" alt="Turmeric">
         </a>
         <div class="nav-links">${linkHTML}</div>
+        ${THEME_TOGGLE_HTML}
         <div class="nav-right">
           <a href="${GITHUB_URL}" class="btn-ghost">GitHub</a>
           ${ctaHTML}
@@ -180,6 +193,9 @@ class SiteNav extends HTMLElement {
       </nav>`;
 
     applyLinkTitles(this);
+    // Label the toggle for the theme it would switch to. theme.js labels the
+    // buttons it can see, but this one did not exist when it ran.
+    window.turTheme?.sync();
 
     const nav   = this.querySelector('nav');
     const btn   = this.querySelector('.nav-hamburger');

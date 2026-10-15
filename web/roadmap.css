@@ -141,15 +141,15 @@
 .pill-done {
   background: var(--green-subtle);
   color: var(--green);
-  border: 1px solid rgba(168,201,138,0.2);
+  border: 1px solid color-mix(in srgb, var(--green) 20%, transparent);
 }
 .pill-progress {
   background: var(--amber-subtle);
   color: var(--amber);
-  border: 1px solid rgba(239,160,48,0.2);
+  border: 1px solid color-mix(in srgb, var(--amber) 20%, transparent);
 }
 .pill-planned {
-  background: rgba(74,68,56,0.3);
+  background: color-mix(in srgb, var(--text-dim) 30%, transparent);
   color: var(--text-sec);
   border: 1px solid var(--border-mid);
 }

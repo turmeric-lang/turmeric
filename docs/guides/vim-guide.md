@@ -108,6 +108,29 @@ setlocal iskeyword+=45
 For Neovim with `nvim-treesitter` not yet supporting Turmeric, the Vim syntax
 file is the correct fallback -- no additional configuration is needed.
 
+## Color schemes
+
+`vim-syntax/colors/` carries the two themes turmeric-lang.com uses, ported
+from the Try Turmeric editor: `turmeric-dark` and `turmeric-light`. Both need
+a true-color terminal. Copy the directory next to `syntax/` and pick one:
+
+```sh
+cp -r vim-syntax/colors ~/.vim/colors/            # Vim
+cp -r vim-syntax/colors ~/.config/nvim/colors/    # Neovim
+```
+
+```vim
+set termguicolors
+colorscheme turmeric-light   " or turmeric-dark
+```
+
+Each scheme sets `background` itself. To follow the terminal's own setting
+instead, choose by it:
+
+```vim
+execute 'colorscheme turmeric-' . (&background ==# 'light' ? 'light' : 'dark')
+```
+
 ## Highlight groups
 
 | Group | Default link | Matches |

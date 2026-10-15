@@ -1,9 +1,19 @@
 /* ==========================================================================
  * vars.css — Design tokens for turmeric-lang.com
  * Imported by site.css; all pages inherit these variables.
+ *
+ * Two themes. `:root` is dark (and is what a page with no script shows);
+ * `:root[data-theme="light"]` below overrides the same names. public/theme.js
+ * sets data-theme before first paint, from the stored choice or the OS.
+ *
+ * The same light block is carried by styles.css (the Try page's own tokens)
+ * and by the CSS string in tools/gendocs.py (guides, API docs, spices). Keep
+ * the three in step, as the dark values already are.
  * ========================================================================== */
 
 :root {
+  color-scheme: dark;
+
   /* Backgrounds */
   --bg-base:       #0C0A08;
   --bg-surface:    #111009;
@@ -23,10 +33,27 @@
   --gold-subtle:   rgba(212,139,28,0.08);
   --gold-line:     rgba(212,139,28,0.25);
 
+  /* Gold as a FILL (buttons, bars, dots) with --on-gold ink on it. Separate
+   * from --gold because the two diverge in light mode: gold TEXT has to go
+   * dark brown to read on cream, while a button stays bright saffron. */
+  --gold-fill:       #D48B1C;
+  --gold-fill-hover: #EFA030;
+  --on-gold:         #0A0800;
+
   /* Text */
   --text-primary:  #EAE0D2;
   --text-sec:      #8A7D6E;
   --text-dim:      #4A4438;
+
+  /* Chrome that sits over content */
+  --nav-bg:        rgba(12,10,8,0.85);   /* the frosted top bar */
+  --nav-panel-bg:  rgba(12,10,8,0.97);   /* the mobile drop-down under it */
+  --scrim:         rgba(0,0,0,0.55);     /* behind an open drawer */
+  --shadow-card:   0 0 0 1px rgba(212,139,28,0.06), 0 32px 64px rgba(0,0,0,0.4);
+  --shadow-pop:    0 8px 24px rgba(0,0,0,0.5);   /* tooltips, popovers */
+  /* The logo SVGs are one amber (#EFA030). Light mode darkens them in place
+   * rather than shipping a second set of files. */
+  --logo-filter:   none;
 
   /* Syntax highlight */
   --syn-kw:        #EFA030;
@@ -87,3 +114,101 @@
   --status-warn-subtle: rgba(217,145,31,0.12);
   --status-fail-subtle: rgba(214,88,74,0.12);
 }
+
+/* ==========================================================================
+ * Light theme -- "Light Spice Market": the same hues on warm paper.
+ *
+ * Not an inversion. Each dark token's ROLE is kept and its value re-stepped
+ * for a light ground:
+ *   - Surfaces step DARKER as they rise (base -> surface -> panel -> hover),
+ *     so a panel and a hover still separate from the page.
+ *   - "-bright" means MORE prominent, which on cream is darker, not lighter;
+ *     "-dim" means closer to the ground, which is lighter.
+ *   - Every text-weight color clears WCAG AA (>= 4.5:1) on base, surface AND
+ *     panel; --text-dim and the comment/punctuation inks are deliberately
+ *     faint (~3:1), as their dark counterparts are (~2:1).
+ * ========================================================================== */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base:       #FBF8F2;
+  --bg-surface:    #F5F0E7;
+  --bg-panel:      #EFE8DC;
+  --bg-hover:      #E7DFD0;
+  --bg-card:       #F7F3EB;
+
+  --border:        #E3D9C8;
+  --border-mid:    #D5C8B3;
+  --border-str:    #C0B099;
+
+  --gold:          #945602;
+  --gold-bright:   #804900;
+  --gold-dim:      #B88A45;
+  --gold-subtle:   rgba(148,86,2,0.08);
+  --gold-line:     rgba(148,86,2,0.25);
+
+  --gold-fill:       #D9921F;
+  --gold-fill-hover: #C98318;
+  --on-gold:         #1C1408;
+
+  --text-primary:  #2A2016;
+  --text-sec:      #6A5B4B;
+  --text-dim:      #978874;
+
+  --nav-bg:        rgba(251,248,242,0.85);
+  --nav-panel-bg:  rgba(251,248,242,0.97);
+  --scrim:         rgba(42,32,22,0.35);
+  --shadow-card:   0 0 0 1px rgba(148,86,2,0.06), 0 24px 48px rgba(60,40,15,0.12);
+  --shadow-pop:    0 8px 24px rgba(60,40,15,0.16);
+  --logo-filter:   brightness(0.74) saturate(1.15);
+
+  --syn-kw:        #965500;
+  --syn-str:       #AE3C26;
+  --syn-cmt:       #A39682;
+  --syn-type:      #127065;
+  --syn-num:       #456F20;
+  --syn-fn:        #7748AE;
+  --syn-punc:      #9F927F;
+
+  --green:         #456F20;
+  --green-subtle:  rgba(69,111,32,0.10);
+  --teal:          #127065;
+  --teal-subtle:   rgba(18,112,101,0.10);
+  --amber:         #965500;
+  --amber-subtle:  rgba(150,85,0,0.10);
+  --purple:        #7748AE;
+  --purple-subtle: rgba(119,72,174,0.10);
+
+  /* Chart series -- the light sibling of the dark set, same hue families in
+   * the same load-bearing order. Validated against light surface #EFE8DC
+   * (--bg-panel): lightness band, chroma floor, CVD separation (10.3 deutan /
+   * 9.9 tritan), normal-vision floor (18.8), contrast (all >= 3:1) all pass. */
+  --chart-1:        #B07412;  /* gold   */
+  --chart-2:        #0F8A7A;  /* teal   */
+  --chart-3:        #C04A35;  /* coral  */
+  --chart-4:        #8A5CC8;  /* purple */
+  --chart-5:        #55912F;  /* green  */
+
+  --chart-1-subtle: rgba(176,116,18,0.14);
+  --chart-2-subtle: rgba(15,138,122,0.14);
+  --chart-3-subtle: rgba(192,74,53,0.14);
+  --chart-4-subtle: rgba(138,92,200,0.14);
+  --chart-5-subtle: rgba(85,145,47,0.14);
+
+  --status-pass:   #3A7420;
+  --status-skip:   #6A5B4B;
+  --status-warn:   #925B00;
+  --status-fail:   #B8392B;
+  --status-pass-subtle: rgba(58,116,32,0.10);
+  --status-skip-subtle: rgba(106,91,75,0.10);
+  --status-warn-subtle: rgba(146,91,0,0.10);
+  --status-fail-subtle: rgba(184,57,43,0.10);
+}
+
+/* public/theme.js sets this for the two frames around a switch, so the page
+ * repaints at once instead of each transition fading on its own clock. */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after { transition: none !important; }

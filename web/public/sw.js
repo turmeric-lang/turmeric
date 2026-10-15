@@ -40,9 +40,11 @@ const RUNTIME  = `${CACHE_VERSION}-runtime`;
 
 const PRECACHE_URLS = [
     '/try/',
-    // The shell's blocking <head> script (pwa-shell.js). It lives in public/, so
-    // it is not an /assets/ reference precacheShellAssets would find.
+    // The shell's blocking <head> scripts (pwa-shell.js, theme.js). They live
+    // in public/, so they are not /assets/ references precacheShellAssets would
+    // find.
     '/pwa-shell.js',
+    '/theme.js',
     '/main.js',
     '/styles.css',
     '/site.css',

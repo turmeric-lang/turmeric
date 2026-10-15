@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Language Tour -- Turmeric</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<!-- Sets <html data-theme> BEFORE first paint (light or dark, from the stored
+     choice or the OS). Classic and blocking, and external because the CSP
+     (web/csp.js) allows no inline script. See public/theme.js. -->
+<meta name="theme-color" content="#0C0A08">
+<script src="/theme.js"></script>
 <meta name="description" content="A hands-on tour of Turmeric's most interesting features -- from algebraic effects to refinement types, the Spice package manager, and the Trowel editor.">
 
 <!-- Open Graph -->

@@ -137,6 +137,20 @@ def font_links(indent: str = '  ') -> str:
     ))
 
 
+def theme_head(indent: str = '  ') -> str:
+    """The light/dark switch's <head> lines: the theme-color tint and the
+    blocking /theme.js, which sets <html data-theme> before first paint.
+
+    Root-relative, like /logo.svg: every deploy (the main site and the spices
+    subdomain alike) serves web/public/ at its root. A page read from disk
+    without it is simply dark -- `:root` carries the dark tokens.
+    """
+    return '\n'.join(indent + line for line in (
+        '<meta name="theme-color" content="#0C0A08">',
+        '<script src="/theme.js"></script>',
+    ))
+
+
 def script_tag(src: str, indent: str = '  ') -> str:
     """A classic external script. Placed where the inline block used to be, so
     it runs at the same point in the parse."""
@@ -239,6 +253,25 @@ def build_sidebar_globals(base: str = '', indent: str = '      ') -> str:
     return apply_link_titles('\n'.join(out))
 
 
+# The light/dark switch. /theme.js handles every [data-theme-toggle] click by
+# delegation and keeps the label current; this is only the markup, and the CSS
+# shows the icon of the theme a click switches TO. Mirrors THEME_TOGGLE_HTML in
+# web/site.js -- change one, change the other.
+_ICON_ATTRS = ('viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+               'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"')
+THEME_TOGGLE = (
+    '<button type="button" class="theme-toggle" data-theme-toggle '
+    'aria-label="Toggle light and dark theme">'
+    f'<svg class="icon-sun" {_ICON_ATTRS}><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/>'
+    '<path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>'
+    '<path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/>'
+    '<path d="m19.07 4.93-1.41 1.41"/></svg>'
+    f'<svg class="icon-moon" {_ICON_ATTRS}><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472'
+    'c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>'
+    '</button>'
+)
+
+
 def build_page_header(active: str = '', base: str = '', search: str = '',
                       indent: str = '  ') -> str:
     """Render the topbar -- identical on every page but for the `active` mark.
@@ -275,6 +308,7 @@ def build_page_header(active: str = '', base: str = '', search: str = '',
 {indent}    <img src="/logo.svg" width="101" height="28" alt="Turmeric">
 {indent}  </a>
 {indent}  <nav class="nav-links">{links}</nav>{search_html}
+{indent}  {THEME_TOGGLE}
 {indent}  <div class="nav-right">
 {indent}    <a href="{github}" class="btn-ghost">GitHub</a>{cta}
 {indent}  </div>
@@ -958,17 +992,10 @@ GUIDE_JS_CORE = '''\
 
   // Mermaid gets the guide palette by hand: it cannot read our CSS custom
   // properties, and its stock dark theme is a blue that clashes with the gold.
-  function mermaidConfig(){
-    return {
-      startOnLoad: false,
-      securityLevel: 'strict',
-      // A diagram that fails to parse keeps its own source text, the same way an
-      // unreachable CDN leaves it. Mermaid's default is to swap in a 'Syntax
-      // error' bomb graphic, which destroys the content it failed to render.
-      suppressErrorRendering: true,
-      theme: 'base',
-      fontFamily: '"DM Sans", system-ui, sans-serif',
-      themeVariables: {
+  // One set per site theme (/theme.js puts it on <html data-theme>), with the
+  // same values as the --bg-panel / --text-* / --gold tokens of each.
+  var MERMAID_VARS = {
+    dark: {
         darkMode: true,
         background: '#161411',
         primaryColor: '#161411',
@@ -985,9 +1012,48 @@ GUIDE_JS_CORE = '''\
         titleColor: '#EFA030',
         edgeLabelBackground: '#161411',
         fontSize: '14px'
-      }
+    },
+    light: {
+        darkMode: false,
+        background: '#EFE8DC',
+        primaryColor: '#EFE8DC',
+        primaryTextColor: '#2A2016',
+        primaryBorderColor: '#945602',
+        secondaryColor: '#E7DFD0',
+        tertiaryColor: '#F5F0E7',
+        lineColor: '#6A5B4B',
+        textColor: '#2A2016',
+        mainBkg: '#EFE8DC',
+        nodeBorder: '#945602',
+        clusterBkg: '#F5F0E7',
+        clusterBorder: '#D5C8B3',
+        titleColor: '#804900',
+        edgeLabelBackground: '#EFE8DC',
+        fontSize: '14px'
+    }
+  };
+
+  function siteTheme(){
+    return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  }
+
+  function mermaidConfig(){
+    return {
+      startOnLoad: false,
+      securityLevel: 'strict',
+      // A diagram that fails to parse keeps its own source text, the same way an
+      // unreachable CDN leaves it. Mermaid's default is to swap in a 'Syntax
+      // error' bomb graphic, which destroys the content it failed to render.
+      suppressErrorRendering: true,
+      theme: 'base',
+      fontFamily: '"DM Sans", system-ui, sans-serif',
+      themeVariables: MERMAID_VARS[siteTheme()]
     };
   }
+
+  // A rendered diagram's <pre> holds the SVG, not its source, so the source is
+  // kept here to draw it again in the other theme.
+  var mermaidSources = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
 
   function loadMermaid(){
     if (mermaidPromise) return mermaidPromise;
@@ -1008,6 +1074,7 @@ GUIDE_JS_CORE = '''\
     scope.querySelectorAll('pre.mermaid').forEach(function(el){
       if (el.dataset.mermaidDone) return;
       el.dataset.mermaidDone = '1';
+      if (mermaidSources && !mermaidSources.has(el)) mermaidSources.set(el, el.textContent);
       nodes.push(el);
     });
     if (!nodes.length) return Promise.resolve();
@@ -1033,6 +1100,26 @@ GUIDE_JS_CORE = '''\
     }).catch(function(err){
       unrendered(nodes, err);   // mermaid itself never loaded
     });
+  }
+
+  // The reader switched theme: redraw every diagram already drawn. One that
+  // never loaded mermaid has nothing to redraw -- its next render reads the
+  // theme then.
+  function redrawMermaid(){
+    if (!mermaidPromise || !mermaidSources) return;
+    mermaidPromise.then(function(m){
+      m.initialize(mermaidConfig());
+      document.querySelectorAll('pre.mermaid[data-processed]').forEach(function(el){
+        if (!mermaidSources.has(el)) return;
+        el.removeAttribute('data-processed');
+        el.textContent = mermaidSources.get(el);
+        delete el.dataset.mermaidDone;
+      });
+      renderMermaid(document);
+    }).catch(function(){ /* never loaded: the source text is still showing */ });
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('tur-themechange', redrawMermaid);
   }
 
   var api = { highlightGuideCode: highlightGuideCode, initSyntaxToggles: initSyntaxToggles,
@@ -1130,11 +1217,11 @@ GUIDE_CSS = '''\
     .guide-toc li { margin:0.2rem 0; font-size:0.875rem; }
     .guide-toc a { color:var(--gold-bright); }
     .guide-toc a:hover { color:var(--gold); }
-    .hl-comment { color:#48433D; font-style:italic; }
-    .hl-string  { color:#D9735A; }
-    .hl-number  { color:#A8C98A; }
-    .hl-keyword { color:#EFA030; font-weight:bold; }
-    .hl-type    { color:#7AC4B8; }
+    .hl-comment { color:var(--syn-cmt, #48433D); font-style:italic; }
+    .hl-string  { color:var(--syn-str, #D9735A); }
+    .hl-number  { color:var(--syn-num, #A8C98A); }
+    .hl-keyword { color:var(--syn-kw, #EFA030); font-weight:bold; }
+    .hl-type    { color:var(--syn-type, #7AC4B8); }
     .code-toggle { border:1px solid var(--border); border-radius:4px; margin-bottom:1rem; overflow:hidden; }
     .code-card-bar { background:var(--bg-surface); border-bottom:1px solid var(--border); padding:0.35rem 0.75rem; display:flex; align-items:center; }
     .code-syntax-toggle { margin-left:auto; display:flex; border:1px solid var(--border); border-radius:4px; overflow:hidden; font-family:"Iosevka","Fira Code",monospace; font-size:11px; }
@@ -1660,6 +1747,7 @@ def render_guide(stem: str, src: Path, out: Path, all_stems: set,
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title} | Turmeric Guides</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+{theme_head()}
 {font_links()}
   <link rel="stylesheet" href="{STYLE_REL}">
   <style>
@@ -1804,6 +1892,7 @@ def render_index(categories: list[dict], all_stems: set[str], out_dir: Path,
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Guides | Turmeric</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+{theme_head()}
 {font_links()}
   <link rel="stylesheet" href="{STYLE_REL}">
   <style>

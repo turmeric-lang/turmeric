@@ -90,6 +90,26 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.5);
     --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.6);
+    /* Floating popups (menus, hover cards): same ink, each its own offset. */
+    --shadow-ink: rgba(0, 0, 0, 0.35);
+
+    /* What sits behind a dialog, the docs sheet, and the startup loader. */
+    --backdrop:         rgba(0, 0, 0, 0.75);
+    --backdrop-docs:    rgba(0, 0, 0, 0.82);
+    --backdrop-loading: rgba(0, 0, 0, 0.92);
+
+    --bg-input: rgba(255, 255, 255, 0.06);
+
+    /* ANSI 7 and 9-15: the console's white and bright colors. 0-6 and 8 are
+       the semantic tokens above, so they follow the theme already. */
+    --ansi-7:  #d4d4d4;
+    --ansi-9:  #ff8870;
+    --ansi-10: #b8e0a0;
+    --ansi-11: #ffd43b;
+    --ansi-12: #339af0;
+    --ansi-13: #e59ef0;
+    --ansi-14: #39c5cf;
+    --ansi-15: #ffffff;
 
     /* Transitions */
     --transition-fast:   0.1s ease;
@@ -120,6 +140,46 @@
     --safe-right:  0px;
     --safe-bottom: 0px;
     --safe-left:   0px;
+}
+
+/* Light theme -- the Try page's own tokens. The shared names (surfaces, gold,
+ * text, --syn-*) are overridden by vars.css's :root[data-theme="light"],
+ * which outranks this file's dark :root on specificity, so only the tokens
+ * this file adds are re-stepped here. Same rules as vars.css: every text ink
+ * clears 4.5:1 on --bg-base and --bg-surface. */
+:root[data-theme="light"] {
+    --gold-glow:       rgba(148, 86, 2, 0.12);
+
+    --success-color:   #456F20;
+    --error-color:     #AE3C26;
+    --warning-color:   #965500;
+    --info-color:      #127065;
+
+    --editor-selection: rgba(148, 86, 2, 0.16);
+
+    --console-result:  #456F20;
+    --console-error:   #AE3C26;
+    --console-warning: #965500;
+
+    --shadow-sm: 0 1px 2px rgba(60, 40, 15, 0.10);
+    --shadow-md: 0 2px 6px rgba(60, 40, 15, 0.12);
+    --shadow-lg: 0 4px 16px rgba(60, 40, 15, 0.16);
+    --shadow-ink: rgba(60, 40, 15, 0.14);
+
+    --backdrop:         rgba(42, 32, 22, 0.40);
+    --backdrop-docs:    rgba(42, 32, 22, 0.45);
+    --backdrop-loading: rgba(251, 248, 242, 0.92);
+
+    --bg-input: #FFFFFF;
+
+    --ansi-7:  #6E604F;
+    --ansi-9:  #BE3E28;
+    --ansi-10: #3B7619;
+    --ansi-11: #8A5F00;
+    --ansi-12: #1F63B0;
+    --ansi-13: #923799;
+    --ansi-14: #0B7480;
+    --ansi-15: #2A2016;
 }
 
 /* The installed app draws under the status bar and the home indicator
@@ -236,7 +296,7 @@ pre {
 .logo-mark {
     width: 30px;
     height: 30px;
-    background: var(--gold);
+    background: var(--gold-fill);
     border-radius: 7px;
     display: flex;
     align-items: center;
@@ -244,7 +304,7 @@ pre {
     font-family: var(--font-serif);
     font-size: 19px;
     font-weight: 600;
-    color: #0A0800;
+    color: var(--on-gold);
     letter-spacing: -0.02em;
     flex-shrink: 0;
 }
@@ -412,7 +472,7 @@ body.split-dragging * {
     border: 1px solid var(--border-mid);
     border-radius: 8px;
     font-size: 13px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 4px 16px var(--shadow-ink);
 }
 
 /* ==========================================================================
@@ -574,7 +634,7 @@ body.split-dragging * {
 .tab-rename {
     font-family: var(--font-mono);
     font-size: 12px;
-    background: var(--bg-input, rgba(255,255,255,0.06));
+    background: var(--bg-input);
     color: var(--text-primary);
     border: 1px solid var(--border);
     border-radius: 3px;
@@ -695,7 +755,7 @@ body.split-dragging * {
 .dot.online  { background: var(--success-color); }
 .dot.offline { background: var(--error-color); }
 .dot.loading {
-    background: var(--gold);
+    background: var(--gold-fill);
     animation: pulse 0.8s infinite;
 }
 
@@ -854,7 +914,7 @@ body.split-dragging * {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    background: rgba(12, 10, 8, 0.85);
+    background: color-mix(in srgb, var(--bg-base) 85%, transparent);
     color: var(--text-sec);
     font-size: var(--font-size-md);
     gap: var(--spacing-md);
@@ -876,19 +936,19 @@ body.split-dragging * {
 
 .repl-input-row:focus-within {
     border-top-color: var(--gold-dim);
-    box-shadow: 0 -2px 12px rgba(212,139,28,0.08);
+    box-shadow: 0 -2px 12px color-mix(in srgb, var(--gold) 8%, transparent);
 }
 
 /* Waiting-for-input state: pulsing gold border */
 .repl-input-row.waiting {
     border-top-color: var(--gold);
-    box-shadow: 0 -2px 16px rgba(212,139,28,0.18);
+    box-shadow: 0 -2px 16px color-mix(in srgb, var(--gold) 18%, transparent);
     animation: replWait 1.8s ease-in-out infinite;
 }
 
 @keyframes replWait {
-    0%, 100% { box-shadow: 0 -2px 16px rgba(212,139,28,0.18); }
-    50%       { box-shadow: 0 -2px 24px rgba(212,139,28,0.35); }
+    0%, 100% { box-shadow: 0 -2px 16px color-mix(in srgb, var(--gold) 18%, transparent); }
+    50%       { box-shadow: 0 -2px 24px color-mix(in srgb, var(--gold) 35%, transparent); }
 }
 
 .repl-prompt {
@@ -922,7 +982,7 @@ body.split-dragging * {
     font-size: 11.5px;
     line-height: 1.5;
     white-space: pre-wrap;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 6px 24px var(--shadow-ink);
     pointer-events: none;
 }
 
@@ -1278,18 +1338,18 @@ body.split-dragging * {
 /* Primary / Run button */
 .btn-primary,
 .btn-run {
-    background: var(--gold);
-    border-color: var(--gold);
-    color: #0A0800;
+    background: var(--gold-fill);
+    border-color: var(--gold-fill);
+    color: var(--on-gold);
     font-weight: 500;
     gap: 7px;
 }
 
 .btn-primary:hover,
 .btn-run:hover {
-    background: var(--gold-bright);
-    border-color: var(--gold-bright);
-    color: #0A0800;
+    background: var(--gold-fill-hover);
+    border-color: var(--gold-fill-hover);
+    color: var(--on-gold);
 }
 
 .run-tri {
@@ -1297,7 +1357,7 @@ body.split-dragging * {
     height: 0;
     border-style: solid;
     border-width: 4px 0 4px 6px;
-    border-color: transparent transparent transparent #0A0800;
+    border-color: transparent transparent transparent var(--on-gold);
     flex-shrink: 0;
 }
 
@@ -1358,7 +1418,7 @@ body.split-dragging * {
 .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.75);
+    background: var(--backdrop);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1372,7 +1432,7 @@ body.split-dragging * {
 }
 
 .overlay.loading {
-    background: rgba(0, 0, 0, 0.92);
+    background: var(--backdrop-loading);
 }
 
 .overlay-content {
@@ -1589,7 +1649,7 @@ body.split-dragging * {
 }
 .tp-progress-bar {
     height: 100%;
-    background: var(--gold);
+    background: var(--gold-fill);
     border-radius: 2px;
     transition: width 0.3s ease;
     width: 0%;
@@ -1619,15 +1679,15 @@ body.split-dragging * {
 .ansi-4  { color: var(--info-color); }
 .ansi-5  { color: var(--syn-fn); }
 .ansi-6  { color: var(--syn-type); }
-.ansi-7  { color: #d4d4d4; }
+.ansi-7  { color: var(--ansi-7); }
 .ansi-8  { color: var(--text-dim); }
-.ansi-9  { color: #ff8870; }
-.ansi-10 { color: #b8e0a0; }
-.ansi-11 { color: #ffd43b; }
-.ansi-12 { color: #339af0; }
-.ansi-13 { color: #e59ef0; }
-.ansi-14 { color: #39c5cf; }
-.ansi-15 { color: #ffffff; }
+.ansi-9  { color: var(--ansi-9); }
+.ansi-10 { color: var(--ansi-10); }
+.ansi-11 { color: var(--ansi-11); }
+.ansi-12 { color: var(--ansi-12); }
+.ansi-13 { color: var(--ansi-13); }
+.ansi-14 { color: var(--ansi-14); }
+.ansi-15 { color: var(--ansi-15); }
 
 .ansi-bold      { font-weight: bold; }
 .ansi-dim       { opacity: 0.5; }
@@ -1766,7 +1826,7 @@ body.split-dragging * {
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 8px 24px var(--shadow-ink);
     padding: 4px;
     z-index: 9999;
     display: flex;
@@ -1789,7 +1849,7 @@ body.split-dragging * {
     border-radius: 4px;
     cursor: pointer;
 }
-.more-item:hover, .more-item:focus { background: var(--bg-hover, rgba(255,255,255,0.06)); outline: none; }
+.more-item:hover, .more-item:focus { background: var(--bg-hover); outline: none; }
 .more-sep { height: 1px; background: var(--border); margin: 4px 0; }
 .more-label {
     font-size: 11px;
@@ -1828,7 +1888,7 @@ body.split-dragging * {
     cursor: pointer;
 }
 .symbol-item:hover, .symbol-item:focus {
-    background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+    background: var(--bg-hover);
     outline: none;
 }
 .symbol-item-name {
@@ -1927,7 +1987,7 @@ body.split-dragging * {
     border-radius: 4px;
     cursor: pointer;
 }
-.lang-row:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
+.lang-row:hover { background: var(--bg-hover); }
 .lang-row input { flex: 0 0 auto; margin: 0; align-self: center; accent-color: var(--gold); }
 /* The row IS the `#lang` line it writes, so it is set as code. */
 .lang-row-name {
@@ -2038,7 +2098,7 @@ body.split-dragging * {
  * ========================================================================== */
 
 .docs-overlay {
-    background: rgba(0, 0, 0, 0.82);
+    background: var(--backdrop-docs);
     align-items: stretch;
     justify-content: stretch;
     padding: 2vh 2vw;
