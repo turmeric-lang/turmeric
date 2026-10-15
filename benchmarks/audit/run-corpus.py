@@ -199,9 +199,19 @@ def run_once(argv, timeout, stdout_path, stdin="-"):
     return rc, int(wall_ns) / 1e9, int(user_us) / 1e6, int(sys_us) / 1e6, int(rss), data
 
 
+WARMUP = 1   # discarded runs before each measured phase, set by main()
+
+
 def measure(argv, reps, timeout, scratch, check=None, pin=None, stdin="-", ok_rc=0):
     """Best-of-reps.  Returns a dict of metrics plus status and the stdout of
-    the first run (used for pinning)."""
+    the first run (used for pinning).
+
+    The warm-up runs are discarded.  Without them the first phase after a
+    cool-down read up to 7x slow (emit-c 124 ms against a steady 17 ms): an
+    idle WSL2 VM's vCPUs take longer to come back than five 17 ms runs last,
+    so best-of-5 never reached the warm state."""
+    for _ in range(WARMUP):
+        run_once(argv, timeout, os.path.join(scratch, "stdout"), stdin)
     walls, best = [], None
     peak = 0
     first_out = None
@@ -301,6 +311,7 @@ def header(tur, args):
         "cpu": cpu_model(),
         "nproc": os.cpu_count(),
         "reps": args.reps,
+        "warmup": args.warmup,
         "cooldown_s": args.cooldown,
         "env": {k: os.environ[k] for k in ("CC", "TUR_CC_FLAGS", "TUR_BUILD_DIR")
                 if k in os.environ},
@@ -321,6 +332,8 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--cooldown", type=float, default=0.0,
                     help="seconds to sleep between programs (thermal)")
+    ap.add_argument("--warmup", type=int, default=1,
+                    help="discarded runs before each measured phase")
     ap.add_argument("--pin", action="store_true", help="write missing pins")
     ap.add_argument("--repin", action="store_true", help="overwrite existing pins")
     ap.add_argument("--allow-sanitized", action="store_true")
@@ -353,8 +366,9 @@ def main():
     out = os.path.abspath(args.out or os.path.join(ROOT, "benchmarks", "output", "audit", ts))
     scratch = os.path.join(out, "scratch")
     os.makedirs(os.path.join(scratch, "bin"), exist_ok=True)
-    global LAUNCHER
+    global LAUNCHER, WARMUP
     LAUNCHER = build_launcher(os.path.join(scratch, "rusage-run"))
+    WARMUP = args.warmup
     meta = header(tur, args)
     tur_stamp = stamp(tur)
 
@@ -465,7 +479,8 @@ def write_summary(path, meta, rows):
     with open(path, "w") as f:
         f.write(f"commit `{meta['commit'][:12]}`{' (dirty)' if meta['dirty'] else ''}, "
                 f"{meta['tur_version']}, {meta['cpu']}, nproc {meta['nproc']}, "
-                f"{meta['cc']}, best of {meta['reps']}, {meta['date_utc']}\n\n")
+                f"{meta['cc']}, best of {meta['reps']} after {meta['warmup']} warm-up, "
+                f"{meta['date_utc']}\n\n")
         f.write("| program | emit-c ms | C bytes | cc build ms | binary bytes | cc run ms "
                 "| run RSS KiB | jit ms | interp ms |\n")
         f.write("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
