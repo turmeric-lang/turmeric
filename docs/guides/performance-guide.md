@@ -494,12 +494,31 @@ See [threading-guide.md](threading-guide.md) and [stm-guide.md](stm-guide.md).
 
 ## Memory and allocation
 
-> Corrected on 2026-08-20. The GC-pressure benchmark scripts this section
-> referenced (`scripts/run_all.sh`, `analyze_results.py`) do not exist; see
-> [Benchmarking methodology](#benchmarking-methodology) for the real harness.
+> Corrected on 2026-08-20, and again on 2026-10-14. The GC-pressure scripts
+> this section once referenced do exist, but under `performance-comparison/`,
+> not at the top level: `performance-comparison/scripts/run_all.sh memory`
+> runs the cross-language `alloc_churn` benchmark, and `analyze_results.py`
+> sits beside it (the 2026-08-20 note said neither existed). That suite
+> compares Turmeric with other languages -- see
+> [Cross-language comparison](#cross-language-comparison); for timing a
+> Turmeric change against itself, see
+> [Benchmarking methodology](#benchmarking-methodology).
 
-Turmeric is refcounted, not tracing, so the cost model is retain/release
-traffic and drop glue rather than collection pauses. Practical consequences:
+Plain Turmeric has no always-on tracing collector. Memory is managed in
+layers -- the stack and plain `malloc`/`free` with compiler-emitted drops,
+bump arenas, reference counting for `rc<T>`, and a Bacon-Rajan cycle
+collector on top of RC that is off by default -- and a `:heap` node is
+reclaimed by a region when a `with-region` or `bt-scope` bracket can prove
+nothing escapes it. The gc guide's
+[The layers, at a glance](gc-guide.md#the-layers-at-a-glance) and
+[What is not GC-managed](gc-guide.md#what-is-not-gc-managed) (regions
+included) have the details. So the cost model is allocation, retain/release
+traffic and drop glue rather than collection pauses. The exception is the
+two dynamic dialects: a compiled `#lang r7rs` or `#lang saffron` program
+runs under a conservative mark-sweep collector that does stop to collect
+([The dialect collector](gc-guide.md#the-dialect-collector-lang-r7rs-lang-saffron);
+`TUR_GC_STATS=1` prints what it did). Practical consequences for plain
+Turmeric:
 
 - `Clone` on a `String` or an `Arc` is a refcount bump, not a copy -- sharing
   is cheap and does not need avoiding.
@@ -527,14 +546,30 @@ Self-tail-calls are optimised into a loop -- see
 measured and accurate. A tail-recursive accumulator therefore runs in constant
 stack and is the idiomatic way to write a loop over a list.
 
-Mutual recursion is **not** turned into a loop: `even?` calling `odd?` calling
-`even?` grows the stack, so deep mutual recursion needs restructuring into a
-single self-recursive function with an explicit state parameter, or into an
-explicit worklist. There is no trampoline module to reach for.
+Mutual **tail** recursion is turned into a loop when the cycle forms a group:
+`even?` tail-calling `odd?` tail-calling `even?`, both plain top-level `defn`s
+with one return type, is fused into one C function with a dispatch loop and
+runs in constant stack at any optimization level (see **Mutual tail calls**
+under [Self-tail-call optimization](#self-tail-call-optimization) for what
+forms a group: up to 8 members and 16 parameters, no closure, dictionary,
+inline-C, effectful or `catch-unwind` member). A cycle of CPS-lowered
+functions is fused the same way on the CPS backend. A cycle outside a group
+keeps its calls in C tail position, which is guaranteed constant stack only
+where the C compiler honours `musttail` (clang on x86-64/aarch64); on gcc and
+the JIT it holds only if the optimizer happens to make the call a sibling
+call. `^tailcall` on a call refuses it on every toolchain unless the cycle
+was fused, so it tells you at compile time which side a cycle landed on.
+Mutual recursion that is **not** in tail position always grows the stack, so
+a deep one needs restructuring into a single self-recursive function with an
+explicit state parameter, or into an explicit worklist. There is no
+trampoline module to reach for.
 
 Generators (`gen` / `yield`) and the CPS-lowered paths have their own cost
-model; the tree-walking interpreter retains roughly 4 KiB per trampolined step,
-which is a memory multiplier under `--interpret` and nothing at all compiled.
+model. Under `--interpret`, the tree-walking interpreter used to retain
+roughly 4 KiB per trampolined step; since 2026-10-05 an activation's frames go
+back to a free list when nothing captured them, so an ordinary loop runs flat
+there too (a closure capture still keeps its frames). None of this applies to
+a compiled program.
 
 ## I/O operations
 
@@ -870,6 +905,119 @@ the program-side `--profile`) are in
 `{"compile_ms", "run_ms", "engine"}` record for the benchmark harness,
 unchanged.
 
+## Profiling
+
+A benchmark says how long; a profile says where. There are three
+instruments, one per question. All three were used by the 2026-10
+performance audit, whose measured results -- the box, the corpus, compile
+latency, runtime hot paths, and ranked fix tables -- are in
+[docs/artifacts/perf-audit-2026-10/](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/README.md).
+Start with that README for the machine and the method.
+
+### A compiled program: `perf` and `tur demangle`
+
+A program `tur build` produced is an ordinary native binary, so any native
+profiler works on it: `perf` on Linux, Instruments or `samply` on macOS. What
+makes the output hard to read is the names. Every Turmeric function appears
+under its mangled C name -- `checked-div` as `checked_hydiv`,
+`geom/vector/add2` as `geom__vector__add2` -- and `tur demangle` turns them
+back. It filters any text on stdin, rewriting the names it recognizes, or
+decodes its arguments one per line:
+
+```sh
+tur build prog.tur -o prog
+perf record ./prog                                  # samples, self time per symbol
+perf report --stdio --no-children | tur demangle    # the per-symbol table, readable
+perf script | tur demangle > prog.perf              # every sample, for a flame-graph tool
+nm ./prog | tur demangle                            # any tool's output
+tur demangle geom__vector__add2                     # -> geom/vector/add2
+```
+
+`--strict` rewrites only module-qualified names (those with the `__`
+separator): no false positives, but bare top-level names stay mangled.
+`--annotate` prints `source[mangled]`, so the C name stays greppable. The
+scheme is in the [name mangling guide](name-mangling-guide.md).
+
+For call graphs, build with debug info and let `perf` unwind with DWARF.
+`TUR_CC_FLAGS` replaces the default C flags, so restate them:
+
+```sh
+TUR_CC_FLAGS="-O2 -g -std=c99 -Wall -fno-strict-aliasing" tur build prog.tur -o prog
+perf record --call-graph dwarf ./prog
+```
+
+`tur build --debug` adds `-g` too, but at `-Og`, which profiles a different
+program from the one you ship.
+
+**Reading the profile.** Runtime symbols group by prefix; this is the table
+`benchmarks/audit/subsys-profile.py` uses to bucket a whole profile by
+subsystem:
+
+| symbol prefix | subsystem |
+|---|---|
+| `__dk_`, `dk_`, `__tur_cps_`, `tur_cont`, `tur_tramp` | CPS and delimited-control frames |
+| `rc_`, `tur_rc_` | reference counting |
+| `gc_`, `tur_gc_` | the cycle collector; in r7rs / saffron, the dialect collector |
+| `tur_hamt_`, `node_insert`, `node_has` | HAMT maps |
+| `tur_region_`, `reg_`, `arena_` | regions |
+| `tur_trail_`, `tur_uf_`, `tur_bt_` | the backtracking trail |
+| `tur_tls_` | the split preamble's thread-local accessors (below) |
+| `malloc`, `free`, `_int_` | the C allocator |
+
+What the audit's corpus showed is normal
+([WP2](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md#where-the-cycles-go-by-subsystem)),
+so a profile that looks like this is not a surprise:
+
+- **The allocator is the largest runtime bucket** wherever CPS, effects,
+  async or `rc` are in play (25-56% of samples): continuation frames,
+  continuation copies and closures are each heap-allocated.
+- **Kernel time is large exactly where memory grows**: it is page faults,
+  not system calls.
+- **`tur_tls_panicking_ptr` is 2-16% of nearly everything.** On Linux and
+  Windows `tur build` links the fixed runtime preamble from a prebuilt
+  archive by default, and under it the panic flag checked after every call is
+  an out-of-line accessor. `TUR_PREAMBLE_SPLIT=0` compiles the preamble into
+  the program instead: a slower compile, and ~25% fewer cycles across WP2's
+  corpus. Removing the accessor is that audit's top-ranked fix.
+
+### The compiler: `--timings`
+
+`tur build --timings[=<path>]` (and `check`, `emit-c`, `run`, `jit`) reports
+where the compiler's own time went, as eighteen exclusive zones that
+partition the wall clock (`read`, `elaborate`, the core passes, `emit`, `cc`,
+...); with a path it also writes the table as a `tur-profile/1` JSON
+document. [Compiler timings](#compiler-timings---timings) above has the
+zones, an example table and the JSON shape. Use a Release `tur`: the Debug
+build's ASan and UBSan skew every zone, and the report says so in its
+`notes`. Over the audit's corpus the C compiler was 91% of `tur build`, the
+front end a median 8 ms, and an empty program still emitted 425 KB of
+prelude C that gcc mostly parses and discards
+([WP1](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp1-compile-latency.md)).
+For `tur jit`, `TUR_JIT_TIMING=1` (below) splits the JIT leg further.
+
+### Counters
+
+Environment variables that make the compiler, or a compiled program, report
+on itself. All of them print to stderr, so stdout is unchanged. "On `tur`"
+means set it when compiling; "on the program" means set it when running the
+binary (or `tur run`).
+
+| variable | set on | prints |
+|---|---|---|
+| `TUR_REGION_STATS=1` | the program | at exit, `region-stats: pushes=N rewinds=N retires=N`: whether region brackets rewound (memory saved) or retired (memory kept) |
+| `TUR_GC_TRACE=1` | the program | one `[gc] #N mode=M candidates=C freed=F live=A->B` line per cycle-collector run ([gc guide](gc-guide.md#seeing-what-the-collector-did)) |
+| `TUR_GC_STATS=1` | an r7rs or saffron program | at exit, the dialect collector's collections, bytes freed, live size at the last collection, heap and peak heap |
+| `TUR_REFINE_STATS=1` | `tur` | per unit, refinement obligations proven / refuted / unknown, then each solver cap's peak against its limit ([solver guide](refinement-solver-internals-guide.md#debugging)) |
+| `TUR_REPR_CENSUS=1` | `tur` | one `repr-census <position> <form>` line per value-representation decision |
+| `TUR_TRACE_EVICT=1` | `tur` | one `[EVICT] <category> eff=N <function> <reason>` line per function the CPS backend declined |
+| `TUR_SHOW_CC=1` | `tur` | the assembled C compiler command (`CC: ...`), and why a prelude or library split was declined |
+| `TUR_CPS_CENSUS=1` | `tur` | one `cps-census` line per function: colored or not, and why (`control`, `callee`, or `indirect` -- a call through a function value and nothing else) |
+| `TUR_JIT_TIMING=1` | `tur jit` | tab-separated milliseconds per phase (`c2mir`, `gen_init`, `load`, `link`, `run`), the prune's byte counts, peak RSS and the total ([JIT guide](jit-guide.md#tuning-knobs)) |
+
+`benchmarks/audit/` holds the scripts that ran these over a whole corpus:
+`cps-census.py` (`TUR_CPS_CENSUS`), `timings-corpus.py` (`--timings`) and
+`subsys-profile.py` (`perf`).
+
 ## Performance checklist
 
 Use this list before calling a hot path done:
@@ -883,5 +1031,7 @@ Use this list before calling a hot path done:
 - [ ] Recursive functions in tail position (verified by running with a large
       input without stack overflow)
 - [ ] Profiled with `time` and at least 5 iterations; CV < 10%
+- [ ] Looked at where the time goes (`perf` + `tur demangle`, see
+      [Profiling](#profiling)) before changing the code
 - [ ] Input size swept from small to large to confirm O-complexity matches
       expectation

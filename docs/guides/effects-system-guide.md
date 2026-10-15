@@ -561,11 +561,33 @@ Two properties of the substrate matter in practice:
   `call/cc` with no enclosing `reset` still has something to capture up to and
   resume.
 
-Performance is preserved by **selectivity**: only functions that can actually
+Performance is meant to be preserved by **selectivity**: functions that can
 reach a control operator (`shift`/`perform`/`call/cc`/...) are CPS-converted
-(the "coloring" analysis, viewable with `--dump-cps-coloring`); direct-style hot
-code keeps its native calling convention and pays no trampoline or allocation
-cost. See the plan for the full model.
+(the "coloring" analysis, viewable with `--dump-cps-coloring`), and
+direct-style code keeps its native calling convention, with no trampoline and
+no continuation frames to allocate.
+
+**Today the coloring is wider than that, and it costs.** The analysis cannot
+see through a call to a function value -- a parameter `f`, a closure bound in
+a `let`, a typeclass method reached through a dictionary -- so it treats every
+such call as one that may reach a control operator. The enclosing function is
+colored, and the color spreads to its callers; constructors, inline-C bodies
+and `extern-c` functions are the only callees exempt (`cps_collect_calls` and
+`cps_color_program` in `src/passes/cps.c`). A colored function pays about 2
+allocations and 200 bytes of continuation frames per call through a function
+value: see the memory usage guide's
+[Calls through function values, and effects](memory-usage-guide.md#calls-through-function-values-and-effects).
+The rule is incidental, not part of the effect system's contract (decided
+2026-10-11; performance-audit item R-1), and it is not a corner case: over
+the fixture tree, the examples and the benchmarks, **72% of CPS-colored
+functions are colored by this rule alone** -- no control operator of their
+own and none reachable through a named callee
+([WP2's R-1 census](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md#r-1-census----how-much-is-cps-colored-and-why)).
+`TUR_CPS_CENSUS=1 tur emit-c f.tur` prints one line per function with the
+reason it was colored (`control`, `callee` or `indirect`). The census also
+shows why the fix is not a one-line narrowing: an empty effect row on a
+function type does not yet mean "pure". This paragraph changes again when
+R-1's fix lands. See the plan for the full model.
 
 ### Performs inside loops and conditionals
 

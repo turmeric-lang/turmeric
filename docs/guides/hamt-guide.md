@@ -255,13 +255,27 @@ defn my-map-fn [] :ptr
 
 ## Transient Mode
 
-Transients allow **batch construction** with in-place mutation, then seal back into an immutable map. This avoids allocating intermediate copies during bulk inserts.
+Transients are a **batch-construction interface**: fork one from a map, apply a run of updates to it, then seal it back into an immutable map. The map you forked from is unchanged throughout.
+
+> **A transient does not mutate in place today.** `tur_hamt_transient_set`
+> (`src/runtime/hamt.c`) looks the key up (`node_has`), then runs the same
+> path-copying `node_insert` a persistent `hamt/set` runs and releases the old
+> path; `transient-del!` reuses `node_delete` the same way. What it saves is
+> the map shell a persistent update allocates. Measured on 100k inserts
+> (2026-10-14): one allocation fewer per insert and 7% fewer heap bytes, but
+> the same instruction count and wall time as `hamt/set` (173 ms against
+> 177 ms), with 57% of the profile releasing nodes and 12% copying them
+> ([performance audit, R-5](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md#r-5----hamt-transients-path-copy)).
+> Use a transient for its interface, not for speed. An in-place transient
+> (copy a node the first time the transient touches it, mutate it after) is
+> ranked fix 3 of that audit; this note goes when it lands.
 
 ```
 ;; Fork a transient from an existing map (original unchanged)
 (def t (hamt/transient m))
 
-;; Mutate in place -- no new HAMT created per operation
+;; Update the transient -- no new map shell per operation
+;; (the trie path is still copied; see the note above)
 (hamt/transient-set! t h1 "a" "alpha")
 (hamt/transient-set! t h2 "b" "beta")
 (hamt/transient-del! t h1 "a")
@@ -331,7 +345,8 @@ hamt/dump(m)
 ### Build from a list
 
 ```turmeric
-;; Use a transient for O(N) bulk construction
+;; Build through a transient (today it costs about what a fold of hamt/set does;
+;; see Transient Mode)
 (defn list->hamt [pairs]
   (let [t (hamt/transient (hamt/new))]
     (for-each pairs
@@ -340,7 +355,8 @@ hamt/dump(m)
     (hamt/persistent! t)))
 ```
 ```sweet-exp
-;; Use a transient for O(N) bulk construction
+;; Build through a transient (today it costs about what a fold of hamt/set does;
+;; see Transient Mode)
 defn list->hamt [pairs]
   let [t hamt/transient(hamt/new())]
     for-each pairs
