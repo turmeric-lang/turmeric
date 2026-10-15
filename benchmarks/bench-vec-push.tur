@@ -1,0 +1,27 @@
+;;; bench-vec-push -- the cost of growing a Vec by pushing onto it.
+;;
+;; 10,000,000 pushes onto one `Vec int`, then a pass that sums it back, so the
+;; run is the growth path: performance-audit R-6 (vec-push! grew by malloc +
+;; element copy + free; it now reallocs, which grows a large block in place).
+;; WP2 priced the change with a program of this shape: 112 ms -> 61 ms on the
+;; WP0 box. In benchmarks/audit/corpus.txt, so remeasure.sh covers it.
+
+(defn fill [v : (Vec int) i : int n : int] : int
+  (if (= i n)
+    n
+    (do
+      (vec-push! v i)
+      (fill v (+ i 1) n))))
+
+(defn sum [v : (Vec int) i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (sum v (+ i 1) n (+ acc (vec-get v i)))))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec int))
+        n (fill v 0 10000000)]
+    (println (vec-len v))
+    (println (sum v 0 n 0))
+    (vec-free v)
+    0))
