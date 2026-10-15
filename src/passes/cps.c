@@ -11,6 +11,7 @@
 #include "typeclass.h"
 #include "effect.h"   /* effect_row_is_empty */
 #include "globals.h"
+#include "diag.h"     /* diag_file_path, for TUR_CPS_CENSUS */
 
 /* Phase 18: CPS transformation for delimited continuations
  * 
@@ -867,6 +868,8 @@ typedef struct CpsNode {
     FnDef    *fd;
     bool      colored;
     bool      has_indirect;   /* makes an unresolved call -> conservatively colored */
+    bool      seed;           /* colored by its own body (a control op), not a callee */
+    bool      effect_only;    /* TUR_CPS_CENSUS: colored with has_indirect ignored */
     uint32_t *edges;          /* indices of resolved top-level callees */
     uint32_t  n_edges, cap_edges;
 } CpsNode;
@@ -1649,6 +1652,46 @@ bool cps_fn_installs_handle(const FnDef *fd) {
     return fd && cps_expr_installs_handle(fd->body);
 }
 
+/* Close nodes[].colored over the call graph: backward propagation to a least
+ * fixed point (a function is colored if any resolved callee is), then
+ * force-color effectful fn-value arguments and propagate again.  Factored out
+ * of cps_color_program so TUR_CPS_CENSUS can run it a second time from a
+ * different seed set. */
+static void cps_color_fixpoint(CpsNode *nodes, uint32_t n) {
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (nodes[i].colored) continue;
+            for (uint32_t e = 0; e < nodes[i].n_edges; e++) {
+                if (nodes[nodes[i].edges[e]].colored) {
+                    nodes[i].colored = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Force-color effectful fn-value arguments, then re-propagate to a fixed
+     * point.  Unconditional since cps-tramp-resume graduated (2026-07-19). */
+    bool fc = true;
+    while (fc) {
+        fc = false;
+        for (uint32_t i = 0; i < n; i++)
+            if (cps_force_color_eff_fnval_args(nodes[i].fd->body, nodes, n)) fc = true;
+    }
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t i = 0; i < n; i++) {
+            if (nodes[i].colored) continue;
+            for (uint32_t e = 0; e < nodes[i].n_edges; e++)
+                if (nodes[nodes[i].edges[e]].colored) { nodes[i].colored = true; changed = true; break; }
+        }
+    }
+}
+
 void cps_color_program(Arena *a, Expr *program) {
     (void)a;
     if (!program || program->kind != EX_PROGRAM) return;
@@ -1705,42 +1748,50 @@ void cps_color_program(Arena *a, Expr *program) {
             && cps_fn_has_leftover_effect(nodes[i].fd)
             && cps_body_has_with_handler(nodes[i].fd->body))
             nodes[i].colored = true;
+        nodes[i].seed = nodes[i].colored;
         cps_collect_calls(nodes[i].fd->body, nodes, n, &nodes[i]);
-        if (nodes[i].has_indirect) nodes[i].colored = true;
     }
 
-    /* Backward propagation to a least fixed point: a function is colored if any
-     * resolved callee is colored. */
-    bool changed = true;
-    while (changed) {
-        changed = false;
+    /* performance-audit-plan R-1: TUR_CPS_CENSUS=1 runs the same fixpoint once
+     * more with has_indirect IGNORED, so every colored function can say why it
+     * is colored -- its own control op (`control`), a resolved callee that
+     * reaches one or an effectful fn-value argument (`callee`), or nothing but
+     * the conservative "an unresolved call may reach a control op" rule
+     * (`indirect`).  The extra run reads and writes only nodes[].colored, which
+     * is reset to the seeds before the real run below; with the variable unset
+     * it costs one cached getenv. */
+    static int census = -1;
+    if (census < 0) census = getenv("TUR_CPS_CENSUS") ? 1 : 0;
+    if (census) {
+        for (uint32_t i = 0; i < n; i++) nodes[i].colored = nodes[i].seed;
+        cps_color_fixpoint(nodes, n);
         for (uint32_t i = 0; i < n; i++) {
-            if (nodes[i].colored) continue;
-            for (uint32_t e = 0; e < nodes[i].n_edges; e++) {
-                if (nodes[nodes[i].edges[e]].colored) {
-                    nodes[i].colored = true;
-                    changed = true;
-                    break;
-                }
-            }
+            nodes[i].effect_only = nodes[i].colored;
+            nodes[i].colored = nodes[i].seed;
         }
     }
+    for (uint32_t i = 0; i < n; i++)
+        if (nodes[i].has_indirect) nodes[i].colored = true;
 
-    /* Force-color effectful fn-value arguments, then re-propagate to a fixed
-     * point.  Unconditional since cps-tramp-resume graduated (2026-07-19). */
-    bool fc = true;
-    while (fc) {
-        fc = false;
-        for (uint32_t i = 0; i < n; i++)
-            if (cps_force_color_eff_fnval_args(nodes[i].fd->body, nodes, n)) fc = true;
-    }
-    changed = true;
-    while (changed) {
-        changed = false;
+    cps_color_fixpoint(nodes, n);
+
+    if (census) {
         for (uint32_t i = 0; i < n; i++) {
-            if (nodes[i].colored) continue;
-            for (uint32_t e = 0; e < nodes[i].n_edges; e++)
-                if (nodes[nodes[i].edges[e]].colored) { nodes[i].colored = true; changed = true; break; }
+            const FnDef *fd = nodes[i].fd;
+            const char *cause = !nodes[i].colored   ? "-"
+                              : nodes[i].seed        ? "control"
+                              : nodes[i].effect_only ? "callee"
+                              :                        "indirect";
+            /* The defining file separates the program's own functions from
+             * the auto-loaded prelude, which is top-level, not a module. */
+            const char *file = fd->binding ? diag_file_path(fd->binding->span.file_id) : NULL;
+            fprintf(stderr, "cps-census %s %s %s %s %s %s\n",
+                    nodes[i].colored ? "colored" : "uncolored", cause,
+                    nodes[i].has_indirect ? "ind" : "-",
+                    fd->binding && fd->binding->defining_module_name
+                        ? fd->binding->defining_module_name->name : "-",
+                    file && *file ? file : "?",
+                    fd->binding && fd->binding->name ? fd->binding->name->name : "?");
         }
     }
 
@@ -1755,7 +1806,7 @@ void cps_color_program(Arena *a, Expr *program) {
         for (uint32_t p = 0; p < nodes[i].fd->n_params; p++)
             if (nodes[i].fd->params[p]) nodes[i].fd->params[p]->may_hold_awaiter = false;
     }
-    changed = true;
+    bool changed = true;
     while (changed) {
         changed = false;
         for (uint32_t i = 0; i < n; i++) {

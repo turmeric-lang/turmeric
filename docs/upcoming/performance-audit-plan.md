@@ -399,6 +399,16 @@ timer is ~a day; the measurement is machine time plus reading).
 
 ### WP2 -- Emitted-program runtime hot paths
 
+**Status: done 2026-10-15.**
+[docs/artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md](../artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md)
+has the R-1 census (`TUR_CPS_CENSUS`), the subsystem table, R-2..R-11 priced,
+and the ranked fix table. Headlines: 72% of CPS-colored functions are colored
+by the indirect-call rule alone, and narrowing it naively is unsound; the
+preamble split costs ~25% of run time through one out-of-line TLS accessor;
+`realloc` growth halves a `Vec` push loop; HAMT transients path-copy; region
+brackets that retire make shutdown quadratic, and the two rewind fixtures
+never rewind (both filed).
+
 **Goal.** Attribute cycles to subsystems across the corpus and price R-1
 through R-11.
 

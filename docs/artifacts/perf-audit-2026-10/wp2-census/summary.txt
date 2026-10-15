@@ -1,0 +1,17 @@
+cps-census: 3035 programs, 3015 compiled with user functions (13 failed or timed out)
+  user functions: 19767; colored: 7065 (control 1299, callee 676, indirect-only 5090)
+  programs with any colored user fn:            1191
+  programs with an indirect-only colored fn:    725
+  programs whose coloring is ALL indirect-only: 606
+  distinct stdlib functions seen: 4406; colored in some program: 1186 (by majority cause: control 14, callee 9, indirect-only 1163)
+  most indirect-only colored user fns:
+     143 indirect    0 control    0 callee  of  144  tests/fixtures/r7rs-numbers/input.tur
+     112 indirect    0 control    0 callee  of  129  tests/fixtures/r7rs-data-forms/input.tur
+     109 indirect    0 control    0 callee  of  122  tests/fixtures/r7rs-core-forms/input.tur
+     108 indirect    0 control    9 callee  of  137  tests/fixtures/r7rs-control/input.tur
+      95 indirect    0 control    7 callee  of  129  tests/fixtures/r7rs-srfi-18/input.tur
+      90 indirect    0 control    0 callee  of   98  tests/fixtures/r7rs-base-library/input.tur
+      86 indirect    0 control    1 callee  of   90  tests/fixtures/r7rs-sicp-extras/input.tur
+      61 indirect    0 control    2 callee  of   81  tests/fixtures/docs-sicp-guide-examples/input.tur
+      58 indirect    0 control    1 callee  of   70  tests/fixtures/docs-r7rs-guide-examples/input.tur
+      54 indirect    0 control    2 callee  of   75  tests/fixtures/r7rs-conformance-fixes/input.tur
