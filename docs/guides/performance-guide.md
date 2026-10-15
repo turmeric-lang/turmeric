@@ -665,7 +665,7 @@ All three legs are re-measured together on each run, so the columns are
 comparable to each other. They are NOT comparable to a snapshot taken on a
 different machine. The `cc build` column is the noisiest (up to 10% between
 sweeps). The audit's write-up,
-[wp4-engines.md](../artifacts/perf-audit-2026-10/wp4-engines.md), has the
+[wp4-engines.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp4-engines.md), has the
 method, and WP0's baseline has every corpus program on all three engines.
 
 How to read it:
