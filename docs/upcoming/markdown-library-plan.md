@@ -44,6 +44,9 @@ This plan:
    the docs pipeline onto it, deletes the workarounds and the `markdown` pin,
    and offers it to the other consumers (notebook spice, literate `.tur.md`,
    terminal rendering).
+4. **Phase J** makes `tur run` the only task runner the project needs, which
+   removes the `just` binary as a dev dependency (section 10). It is
+   independent of S, U and M.
 
 A few fixes in section 2 don't depend on any of this and can land now.
 
@@ -172,10 +175,14 @@ where that differs from the first draft of this section:
 | **M3** | HTML renderer, GFM extensions, heading ids | No | Parallel / post-v1 | ~0.8k lines |
 | **M4** | Docs pipeline cut-over; drop the `markdown` pin | No (site output changes as listed) | After M3 | tool + CI |
 | **M5** | Notebook spice, literate `.tur.md`, terminal rendering | Spice API (notebook) | After M4 | per consumer |
+| **J1** | Justfile recipes stop calling `just` | No | Any time | ~10 lines |
+| **J2** | Guard: the Justfile stays inside `tur run`'s subset | No | With J1 | one check |
+| **J3** | Docs, messages and skills say `tur run`, not `just` | No | After J1 | ~100 mentions |
 
 Each S phase is one PR. U is one PR. M1 to M3 are one PR each, with the spec
 ratchet (section 5.1) rising each time. M4 is its own PR. M5 is one PR per
-consumer, and the notebook one lands in `turmeric-spices`.
+consumer, and the notebook one lands in `turmeric-spices`. J1 and J2 are one PR;
+J3 is one more (mechanical, docs only).
 
 ## 4. Phase S -- string helpers
 
@@ -564,3 +571,80 @@ The questions this plan first left open, settled with the author on 2026-10-15.
   committed compiler C (`gen-runtime-split.py`, `gen_ffi_dispatch.py`,
   `gen-r7rs-*.py`) should stay out of Turmeric, because they would need a
   working `tur` to produce `tur`'s own source.
+
+## 10. Phase J -- `tur run` in place of `just`
+
+`tur run` is the compiler's built-in, Justfile-compatible task runner
+([`tur-run-guide.md`](../guides/tur-run-guide.md); `tur just` is an alias).
+It reads the same `Justfile`, so a contributor who has `tur` doesn't need the
+`just` binary. That makes it the one non-Python tool on the dev path that can
+go away completely. It is worth doing, and most of it has already happened.
+What's left, as measured on 2026-10-15:
+
+- **CI already doesn't use `just`.** No workflow installs it or runs it.
+  Recipes run as `./build/tur run <recipe>` (for example
+  `tur run regen-snapshots -- --check` and `tur run docs`).
+- **`tur run` handles the whole Justfile.** `./build/tur run --list` parses
+  all 75 recipes and prints no unsupported-feature notes. The file uses no
+  `[unix]`-style attributes, modules or backtick substitution, which are the
+  features `tur run` defers.
+- **The one hard dependency is the Justfile calling `just` itself.** `debug`,
+  `release` and `tsan` run `[ -f build/CMakeCache.txt ] || just configure`,
+  `reconfigure` runs `just configure`, and the Windows build runs
+  `just configure-windows`. So `tur run build` on a tree with no CMake cache
+  still fails without `just` installed.
+- **The rest is wording**, where a reader or a message is told to type `just`:
+  - 43 mentions in 17 guides, 2 in AGENTS.md and 1 in CLAUDE.md
+  - the Justfile's own comments and error messages, e.g. "run 'just build'
+    first"
+  - `tools/run-doctests.sh`, the comment in `tools/requirements.txt`, and
+    comments in `release-cut.yml`
+  - `tools/gendocs.py`, which writes `Run: just docs` into the header of the
+    generated `stdlib/docstrings.tur`
+  - the `cut-*-release` commands under `.claude/commands/`
+  - one compiler message: `tur docs` suggests "Or build it: just docs"
+    (`src/main.c`)
+
+### J1 -- recipes stop calling `just`
+
+Replace each self-call with a hidden dependency recipe, so the same file works
+under both runners:
+
+```
+debug: _configured
+    cmake --build build -j --config Debug
+
+_configured:
+    @[ -f build/CMakeCache.txt ] || cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+```
+
+`release` and `tsan` depend on `_configured` the same way. `reconfigure`
+becomes `rm -rf build` followed by the `cmake -S . -B build ...` line, and the
+Windows recipe gets a matching `_configured-windows`. `tur run` already
+supports dependencies and `_`-prefixed hidden recipes. Verify by running
+`tur run build` in a fresh worktree with no `build/` and no `just` on `PATH`.
+
+### J2 -- keep the Justfile inside the subset
+
+Once nothing installs `just`, a recipe that uses a feature `tur run` defers
+would only fail when someone runs it. A small check catches that up front. It
+can be a ctest target or a step in an existing CI job:
+- `./build/tur run --list` prints no `tur run: note:` line;
+- no recipe body calls `just ` again.
+
+### J3 -- say `tur run`
+
+Mechanical: change each mention listed above to `tur run <recipe>`, and
+regenerate `stdlib/docstrings.tur` for its new header. Leave `docs/archive/`
+alone, because those files are history. Plans in `docs/upcoming/` get updated
+when they're next touched.
+
+### What stays
+
+- **The file stays named `Justfile`.** `tur run` reads that name, and upstream
+  `just` still works for anyone who has it.
+- **`tools/just-vs-tur-run.sh` stays** as an optional local parity check. It
+  isn't wired into CI today, and it skips itself when `just` is absent.
+- **A fresh clone with no `tur` at all still bootstraps with CMake**, as
+  CLAUDE.md already documents. With a released `tur` on `PATH`, J1 makes
+  `tur run build` work from a fresh clone too.
