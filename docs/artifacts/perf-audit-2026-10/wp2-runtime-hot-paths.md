@@ -174,7 +174,107 @@ traffic to save (one allocation per iteration either way: the closure).
 3. With both: the 42-45% on combinator-style code above, 4 allocations per
    region bracket, and ~250 stdlib functions off the CPS path.
 
-## R-3 -- retired region generations
+## R-2 and R-7 -- build modes: the preamble split, -O3, -march=native, LTO
+
+**The question.** R-2: rc, region and other runtime helpers are out-of-line
+calls into static archives, and nothing passes `-flto`. R-7: emitted programs
+are built `-O2` with no `-O3`, `-march` or LTO option. Both are questions about
+how the program's C is compiled, so one sweep answers both.
+
+**What a default Linux build links.** `tur build` compiles the program with
+`-DTUR_RT_SPLIT_HOSTED` and links `-lturt_preamble -lturt_runtime`
+(cc-path-preamble-split-plan, default on Linux and Windows since the split
+landed): the fixed runtime preamble -- 4,360 lines the program used to carry
+inline -- is a prebuilt archive, which took 29% off the cc call. Everything in
+it is now an out-of-line call that gcc cannot see into.
+
+**Six modes**, each a `TUR_CC_FLAGS` / environment setting on the same `tur`
+(no code change):
+
+| mode | how |
+| --- | --- |
+| default | today: split preamble, `-O2 -std=c99 -Wall -fno-strict-aliasing` (+ `-fwrapv`) |
+| nosplit | `TUR_PREAMBLE_SPLIT=0`: the preamble compiled into the program's own TU |
+| O3 | `-O3` instead of `-O2` |
+| native | `-O2 -march=native` (Coffee Lake, AVX2: this box only) |
+| lto | `TUR_PREAMBLE_SPLIT=0 TUR_RUNTIME=source` + `-flto`: preamble inline AND the runtime sources (rc, gc, hamt, region, ...) in one LTO link |
+| lto-O3 | the same at `-O3` |
+
+over the 24 corpus programs that run long enough to measure (fixtures built
+with `--debug` left out, since their `-Og` would be overridden). Every mode's
+output matched the default's (the three self-timing programs excepted from the
+comparison). Metric: **user-space instructions** (`perf stat -e
+instructions:u,cycles:u -r 3`), which this box's interference bursts do not
+move; cycles are given in parentheses and are **provisional** -- the sweep's
+first programs ran while another session's test suite was loading the
+machine, which inflates cycles (not instructions) through hyperthread
+contention. Raw: [wp2-build-modes.csv](wp2-build-modes.csv).
+
+| program | nosplit | O3 | native | lto | lto-O3 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| triangle/fib | **-98.7%** | -20.1% | 0.0% | -98.8% | -98.8% |
+| triangle/mandel | -3.8% | +0.2% | -14.8% | -3.9% | -7.7% |
+| bench-backtrack-n-queens (inline C) | 0.0% | -24.8% | -1.6% | 0.0% | -24.8% |
+| bench-dfs-queens | -8.8% | -1.8% | -0.3% | -21.2% | -26.1% |
+| bench-logic-subst | **-49.1%** | -0.3% | -3.6% | -51.7% | -52.0% |
+| bench-regions-subst | -12.1% | -0.3% | -3.4% | -15.1% | -15.9% |
+| hamt-bench-insert / lookup / transient | 0.0% | 0.0% | 0.0% | -0.5% | -1.2% |
+| cps-tramp-resume-deep-1m | -17.8% | -1.4% | +0.1% | -17.8% | -22.0% |
+| cps-capturing-letrec-loop-deep | -18.0% | -1.5% | 0.0% | -18.0% | -22.0% |
+| effect-nontail-resume-under-outer | -12.2% | -0.9% | +0.1% | -12.2% | -17.0% |
+| handle-in-nontail-branch | -12.2% | 0.0% | -0.1% | -12.2% | -17.4% |
+| rc-free-queue-deep-cascade | -0.4% | 0.0% | 0.0% | -14.2% | -14.5% |
+| sized/cps-tramp-resume-8m | -17.8% (-36.4% cyc) | -1.4% | +0.1% | -17.8% | -22.0% |
+| sized/closure-let-loop-10m | **-30.5%** (-56.8% cyc) | 0.0% | 0.0% | -28.9% | -34.2% |
+| sized/fn-value-join-1000x | -16.9% (-32.0% cyc) | 0.0% | -0.1% | -16.9% | -23.4% |
+| sized/effect-nontail-ticks-1m | -12.3% (-19.2% cyc) | -0.9% | +0.1% | -12.3% | -17.1% |
+| sized/mut-map-reassign-1m | 0.0% | 0.0% | 0.0% | -2.2% | -5.7% |
+| **geomean cycles ratio** (provisional) | **0.749** | 0.950 | 1.044 | 0.747 | 0.691 |
+
+(`bench-clone-overhead`, `bench-parsec-json`, `bench-saffron-dyn-tail`,
+`stackless-catch-unwind-deep`, `sized/region-rounds-100k` move by under 6% in
+every mode; the CSV has them. `region-rounds-100k` reads +73% *cycles* at
+equal instructions in all three inline modes -- a memory-side effect of layout,
+not chased.)
+
+**What it says.**
+
+- **The preamble split is the R-2 cost, and it is large**: compiling the
+  preamble inline is worth ~25% of cycles across these programs and 12-50% of
+  instructions on anything that calls through CPS, effects or regions. LTO
+  across the separately compiled runtime sources (rc, hamt, region) adds
+  almost nothing on top -- 0.749 vs 0.747 -- except where rc frees dominate
+  (`rc-free-queue-deep-cascade`, -14%) or a search allocates in a loop
+  (`bench-dfs-queens`).
+- **The mechanism is one accessor.** Under `TUR_RT_SPLIT_HOSTED` the panic
+  flag the emitter checks after every panic-capable call is
+  `#define tur_panicking (*tur_tls_panicking_ptr())`
+  (`src/runtime/generated/tur_rt_split_decls.h:709`) -- an out-of-line call to
+  a function in `tur_tls.c` that returns the address of a `static __thread`.
+  In `fib` that call is 17.6% of the profile by itself, and because it is
+  opaque gcc can no longer transform the recursion at all: inline, the same
+  program runs 98.7% fewer instructions. The accessor exists so a JIT or
+  shared-library build can share the thread-local; a statically linked cc
+  build does not need it.
+- **`-O3` is worth ~5%**, almost all of it on inline-C-heavy code
+  (`bench-backtrack-n-queens` -25% instructions). On emitted Turmeric it moves
+  nothing measurable.
+- **`-march=native` buys nothing** on this corpus (the one -15% is `mandel`'s
+  float loop), and the plan already keeps it out of every default.
+
+**Fix directions** (ranked):
+
+1. **Make the hosted split's panic flag a plain extern thread-local** (or, at
+   least, declare the accessor `__attribute__((const))` so gcc can hoist it
+   out of the call sequence). Same treatment for the other `*_ptr()` TLS
+   accessors the split routes through (`tur_handler_chain`, ...). This should
+   recover most of the 25% while keeping the split's compile-time saving.
+   Caveat to check first: a fiber that migrates between OS threads must not
+   keep a cached TLS address across a suspension point -- the same question
+   applies to the inline preamble's `__thread` today.
+2. **`--release` = `-O3` plus the inline preamble** (or (1)), per the plan's
+   decision 2. LTO is not worth its link time here.
+3. Leave `-march=native` out, as decided.
 
 **The claim** (plan): `tur_region_owns` walks every live and retired generation
 on every node free, retired generations accumulate for the life of the
