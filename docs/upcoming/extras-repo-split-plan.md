@@ -26,18 +26,18 @@ directory; it is the work an extraction has to carry.
 
 | Directory | Files | What it is | Verdict |
 |---|---|---|---|
-| `vim-syntax/` | 4 | Vim/Neovim syntax + colorschemes | **Extract** (editors) |
-| `editors/vim-turmeric/` | 4 | A second, older Vim pack (104-line syntax vs 152) | **Merge into the above, then extract** |
-| `emacs/` | 3 | `turmeric-mode` + light/dark themes | **Extract** (editors) |
-| `vscode-syntax-ext/` | 14 | VS Code syntax/theme extension (`turmeric-syntax` 0.2.0, publisher `fith-lang`) | **Extract** (editors) |
-| `editors/vscode-turmeric/` | 5 | VS Code *debug* extension (`turmeric-debug` 0.1.0) with its own copy of the grammar | **Merge with the above, then extract** |
+| `vim-syntax/` | 4 | Vim/Neovim syntax + colorschemes | **Extract** (own repo per editor) |
+| `editors/vim-turmeric/` | 4 | A second, older Vim pack (104-line syntax vs 152) | **Merge into `vim-syntax/`, then extract** |
+| `emacs/` | 3 | `turmeric-mode` + light/dark themes | **Extract** (own repo per editor) |
+| `vscode-syntax-ext/` | 14 | VS Code syntax/theme extension (`turmeric-syntax` 0.2.0, publisher `fith-lang`) | **Extract** (own repo per editor) |
+| `editors/vscode-turmeric/` | 5 | VS Code *debug* extension (`turmeric-debug` 0.1.0) with its own copy of the grammar | **Merge into `vscode-syntax-ext/`, then extract** |
 | `tvm/` | 5 | Version manager (`tvm.sh`, `install.sh`, tests) | **Extract**, with care (below) |
 | `Formula/` | 1 | Homebrew formula (HEAD build) | **Extract** to `homebrew-turmeric` |
 | `performance-comparison/` | 213 | C/Rust/Haskell/Clojure/Racket/Python vs Turmeric | **Extract** |
 | `infra/bench-box/` | 19 | AWS CDK app that runs the benchmarks | **Extract with the above** |
 | `benchmarks/` | 164 | Turmeric-only micro benchmarks + `audit/` corpus | **Keep** (nightly CI runs `benchmarks/audit/`) |
 | `tutorials/` | 3 | YAML read by Try Turmeric and a ctest | Keep (data for `web/`) |
-| `examples/` | 32 | Example programs, gated by baselines in CMake | Keep for now |
+| `examples/` | 32 | Example programs, gated by baselines in CMake | **Keep** (decided) |
 | `validation/` | 3 | Python Fibonacci cross-check | Keep, tiny; revisit |
 | `.devcontainer/` | 2 | Must live in the repo it builds | Keep |
 | `external/mir/` | 99 | Vendored MIR (`VENDORED.md`) | Keep |
@@ -50,9 +50,18 @@ test suite), `src/`, `stdlib/`, `tools/`.
 
 ## Per-extraction notes
 
-### 1. Editors (`turmeric-lang/editors`, or one repo per editor)
+### 1. Editors (one repo per editor)
 
-Two problems come before any move:
+Decided: **one repo per editor**, so each installs the way its ecosystem
+expects (a Vim plugin manager or MELPA wants the plugin at the repo root) and
+releases on its own clock:
+
+- `turmeric-lang/vim-turmeric` (Vim and Neovim syntax, colorschemes,
+  ftplugin)
+- `turmeric-lang/turmeric-mode` (Emacs mode and themes)
+- `turmeric-lang/vscode-turmeric` (VS Code syntax, themes and debug wiring)
+
+Two things come before any move:
 
 - **Duplicates.** There are two Vim packs (`vim-syntax/`,
   `editors/vim-turmeric/`) and two VS Code extensions
@@ -60,32 +69,28 @@ Two problems come before any move:
   different copy of the grammar. Pick the survivor of each pair in this repo
   first (the newer grammar wins; `vim-syntax` and `vscode-syntax-ext` are the
   ones the guides point at), fold the other's extras in (the debug-adapter
-  wiring from `vscode-turmeric`, the filetype plugin from `vim-turmeric`),
-  and only then move.
-- **Repo shape.** Vim plugin managers and MELPA want the plugin at the repo
-  root, so a monorepo is a poor fit for those two. Recommendation: **one
-  monorepo `turmeric-lang/editors`** for the first cut (cheapest, one place
-  for the shared token palette), and split `vim-turmeric` / `turmeric-mode`
-  out only when someone wants to publish to a plugin index. The monorepo can
-  also carry thin top-level `vim-turmeric`-style subtree mirrors later.
+  wiring from `editors/vscode-turmeric`, the filetype plugin from
+  `editors/vim-turmeric`), and only then move.
+- **Shared palette.** With three repos there is no shared directory to hold
+  the token colors, so the palette contract below matters more, not less.
 
 Coupling to carry:
 
 - `tests/run-editor-syntax.sh` (ctest `tur_editor_syntax`) loads the Vim pack
-  against sample `.tur` files and structure-checks the TextMate grammar. It
-  moves with the packs. The samples it uses from this repo must be vendored
+  against sample `.tur` files and structure-checks the TextMate grammar.
+  Split it: the Vim half goes to `vim-turmeric`, the grammar half to
+  `vscode-turmeric`. The samples it uses from this repo must be vendored
   or fetched; the test must not need a compiler checkout.
 - **Palette sync.** `web/main.js` (~line 2266) says the editor themes carry
   the same token colors as the web theme, so a color change there is a change
   in three editor packs. That is a cross-repo contract after the move. Make
   it checkable: export the palette from one file in this repo (a small JSON
-  under `web/`), and have the editors repo's CI diff its themes against that
+  under `web/`), and have each editor repo's CI diff its themes against that
   file at a pinned compiler tag. Do not leave it as a comment.
 - Docs: `docs/guides/vim-guide.md`, `vscode-guide.md`, `lsp-guide.md`,
   `debugging-guide.md`, `security-guide.md` give `cp -r vim-syntax/...` and
   `cd vscode-syntax-ext` instructions. Rewrite them to `git clone` the new
-  repo (and prefer `Plug 'turmeric-lang/editors', {'rtp': 'vim'}` style
-  lines). Guides link by GitHub URL, so the links must point at the new repo.
+  repo (and prefer `Plug 'turmeric-lang/vim-turmeric'` style lines). Guides link by GitHub URL, so the links must point at the new repo.
 - Smaller refs: `CODEOWNERS`, `tools/ci/collect-loc.py` (LOC buckets),
   `docs/upcoming/github-org-move-plan.md` and `security-audit-plan.md`.
 
@@ -173,7 +178,7 @@ reversible until the in-tree copy is deleted.
    Also move `mobile-try.png` out of the root.
 2. **Homebrew tap**: create `homebrew-turmeric`, copy `Formula/`, update the
    README, delete `Formula/` after one release.
-3. **Editors**: create `turmeric-lang/editors` with history
+3. **Editors**: create the three editor repos, each with its history
    (`git filter-repo --path ... ` on a scratch clone, so blame survives),
    add the palette-sync check, move the test, rewrite the guides, delete the
    in-tree copies.
@@ -199,10 +204,7 @@ reversible until the in-tree copy is deleted.
 
 ## Open questions
 
-- One `editors` repo or one repo per editor, if MELPA / a Vim plugin index is
-  a near-term goal?
-- Is `examples/` (32 files, gated by CMake baselines) worth moving to a
-  `turmeric-examples` repo, or does the baseline check make it compiler
-  territory? Left in place by this plan.
+- None open on repo shape. Decided: one repo per editor; `examples/` stays
+  (its CMake baselines make it compiler territory).
 - `docs/archive/` is 23 MB of mostly text. History, not payload; no action
   proposed.
