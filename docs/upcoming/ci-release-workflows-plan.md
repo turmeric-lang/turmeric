@@ -148,6 +148,16 @@ Consequence worth knowing: `ci.yml` does not run on the release commit (a
 `GITHUB_TOKEN` merge triggers nothing). The release diff is six version and
 notes files; `release.yml` then builds and runs a program from every archive.
 
+The release PR does get a `pull_request` run, though, and `publish` merges the
+PR before that run can start a job. v0.65.0 through v0.65.2 each left a red
+"CI" run with zero jobs on their release PRs, while the releases themselves
+went out green. So `prepare` ends the release commit's message with a
+`[skip ci]` paragraph, which stops GitHub creating that run. The marker reaches
+`main` with the rebase merge. It does not affect the dispatched `release.yml`,
+but a `vNEW` tag pushed by hand onto that commit would not start
+`release.yml`'s tag trigger. Rebuild with `gh workflow run release.yml --ref
+vNEW` instead.
+
 ## Prerequisites
 
 | What | State |
