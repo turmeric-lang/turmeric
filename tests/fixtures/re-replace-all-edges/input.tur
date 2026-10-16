@@ -1,0 +1,30 @@
+; re/replace-all's edge cases, pinned when it moved from str-concat onto a
+; StringBuilder (performance audit R-9).  The expected output is what the
+; str-concat implementation printed: an empty match inserts the replacement
+; and steps one byte, a match at the very end still replaces, and a pattern
+; that cannot match copies the input.  Runs under the compiled backend and
+; --interpret alike.
+(load "stdlib/re.tur")
+
+(defn show [re : Regex input : cstr replacement : cstr] : int
+  (do
+    (println (re/replace-all re input replacement))
+    0))
+
+(defn main [] : int
+  (let [stars (re/compile "x*")
+        digit (re/compile "[0-9]")
+        abs   (re/compile "ab+")
+        aa    (re/compile "aa")
+        c     (re/compile "c")]
+    (do
+      (show stars "abc" "-")        ; -a-b-c-
+      (show stars "" "-")           ; -
+      (show digit "abc" "X")        ; abc
+      (show digit "" "X")           ; (empty)
+      (show c "abc" "X")            ; abX
+      (show digit "a1b22c333" "")   ; abc
+      (show abs "abbbcab" "X")      ; XcX
+      (show aa "aaaaa" "X")         ; XXa
+      (show digit "9" "<>")         ; <>
+      0)))

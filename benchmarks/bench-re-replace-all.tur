@@ -1,0 +1,18 @@
+;;; bench-re-replace-all -- re/replace-all over a string with a match every other byte.
+;;
+;; 32,000 bytes and 16,000 matches.  re/replace-all grew its result with
+;; str-concat once per match and cut each piece with cstr-sub, which measured
+;; the whole input again: quadratic in the matches, 201 ms at this size on the
+;; WP0 box and ~4x per doubling (performance audit R-9).  It builds in a
+;; StringBuilder now: 4 ms, linear.  In benchmarks/audit/corpus.txt.
+(load "stdlib/re.tur")
+(load "stdlib/string.tur")
+
+(defn main [] : int
+  (let [s   (string/repeat (string/from-cstr "a1") 16000)
+        re  (re/compile "[0-9]")
+        out (re/replace-all re (string/to-cstr s) "X")]
+    (do
+      (println (cstr-len out))
+      (println (cstr-sub out 0 8))
+      0)))
