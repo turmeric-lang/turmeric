@@ -257,6 +257,8 @@ static const TuriNativeCapRow k_rows[] = {
     { "map-iter-cur-val-as", 0 },
     { "map-merge", 0 },
     { "map-new", 0 },
+    { "markdown/-entity-cp__", 0 },
+    { "markdown/-entity-find__", 0 },
     { "mbind", 0 },
     { "mock-time-get", 0 },
     { "mock-time-set", 0 },

@@ -206,6 +206,10 @@ fixture_has_inline_c() {
             # (interpreter_natives.c), so the zipper fixtures' tree printer
             # runs here too (generic-zipper-plan).
             stdlib/str-build.tur) continue ;;
+            # markdown/-entity-find__ / -entity-cp__ are interpreter natives
+            # over the same generated C (interpreter_natives.c,
+            # html_entities.inc; markdown-library-plan U2).
+            stdlib/markdown/entities.tur) continue ;;
         esac
         grep -q '```c' "$loaded" 2>/dev/null && return 0
     done < <(sed -n 's/.*(load "\([^"]*\)").*/\1/p' "$f" 2>/dev/null)

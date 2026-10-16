@@ -2,9 +2,9 @@
 
 > **Status:** in progress. Phases S and J are done: S1 (#1200), S2 (#1209),
 > S3 (#1210), S4 (#1213) and S5 (#1216); J1-J3 (#1201, #1202, #1207) and J4
-> (#1208). U1 (Unicode classes, case folding, UTF-8 decoding) is implemented;
-> U2 (the entity table) and Phase M are still plan. Written 2026-10-15; its open questions were
-> settled with the author the same day (section 8). It started as "would
+> (#1208). Phase U is done too: U1 (#1217) and U2. Phase M is still plan.
+> Written 2026-10-15; its open questions were settled with the author the same
+> day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
 > turned out not to remove any dependency (see section 9). The Markdown renderer
 > did look worth doing, and so did the string helpers that both spikes below kept
@@ -394,11 +394,26 @@ adopted into a `String`. UTF-8 decoding is plain Turmeric over
 mirror the plan did not list, `utf8/decode-before`, because the flanking
 rules look left as well as right. The r7rs prelude is unchanged.
 
-**U2 needs a different source.** `html.spec.whatwg.org` is not reachable
-through the build proxy, which allows GitHub. WHATWG has frozen the entity
-list, and CPython's `html.entities.html5` is generated from the same
-`entities.json`. So U2 can read either one and pin a digest of the extracted
-(name, value) table, so that a source that differs fails loudly.
+**U2 as built.**
+- **Source.** `html.spec.whatwg.org` is not reachable through the build proxy,
+  which allows GitHub. WHATWG has frozen the entity list, and CPython's
+  `html.entities.html5` is generated from the same `entities.json`. So
+  `tools/gen-html-entities.py` reads CPython's copy by default, or `--json
+  entities.json`, and checks the extracted table against a pinned SHA-256
+  digest and count. A source that differs fails without writing anything, and
+  both sources give byte-identical output.
+- **What is kept.** The 2125 names that end in `;`, stored without it: CommonMark
+  reads no entity without its semicolon.
+- **The r7rs pattern.** One C table plus a binary search is written twice, into
+  `stdlib/markdown/entities.tur` (inline C) and `src/turi/html_entities.inc`
+  (interpreter natives). `tests/check-html-entities-sync.sh` (ctest
+  `tur_html_entities_sync`) keeps the two copies identical.
+- **The API.** The public function is `markdown/entity-lookup [name : String] :
+  (Option String)`. It builds its result with `utf8/push-char!`, a UTF-8 encoder
+  this phase adds to `stdlib/unicode.tur`.
+- **Interpreter coverage.** `tests/run-turi.sh` lists `entities.tur` among the
+  loaded modules whose inline C is all native-backed, so the interpreter runs
+  its fixture too.
 
 ## 6. Phase M -- `tur/markdown`
 
