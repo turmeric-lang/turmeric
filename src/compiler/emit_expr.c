@@ -1362,6 +1362,12 @@ static char *emit_agg_box(EmitCtx *ctx, Buf *body, Type t, const char *val) {
     free(bx);
     return out;
 }
+/* `e` with any EX_ASCRIBE wrappers peeled off. */
+static const Expr *expr_strip_ascribe(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return e;
+}
+
 static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
     /* repr-trace: int64 slot deref'd back to the by-value aggregate. */
@@ -15168,9 +15174,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         !find_matched_abi_spec(ctx, mwb_arg, acb))
                         mwb_arg_is_carrier_accessor = true;
                 }
+                /* Set when this arm converts `raw`, so the straddle forward
+                 * mirror below, which tests the argument EXPRESSION rather
+                 * than `raw`, does not deref the converted aggregate again
+                 * (byvalue-sum-from-vec-get-bridged-twice). */
+                bool mwb_bridged = false;
                 if (!needs_fn_cast && !matched_spec && !pbp_carrier_cast &&
                     mwb_param_wide && mwb_arg_is_carrier_accessor &&
                     emit_arg && !expr_is_pbp_param(ctx, emit_arg)) {
+                    mwb_bridged = true;
                     /* A wide (> 16 byte) by-value aggregate param is taken
                      * pass-by-pointer (`const T *`); hand it the box pointer cast
                      * to that pointer (no deref).  A 9..16 byte aggregate is taken
@@ -15354,12 +15366,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * ordinary carrier-`:int` consumer or an already-by-value arg is
                  * untouched.  See
                  * docs/archive/inline-c-option-byvalue-carrier-straddle.md. */
+                /* This arm's condition also CLAIMS the argument for the chain
+                 * (a later arm must not fire on it), so the two tests below
+                 * that say `raw` needs no bridge sit on the bridge itself, not
+                 * here (byvalue-sum-from-vec-get-bridged-twice):
+                 *  - the multiword-element-boxing arm above already converted
+                 *    `raw` (mwb_bridged), and
+                 *  - only a DIRECT producer call (through ascriptions) leaves
+                 *    the carrier in `raw`.  A let / do / if / match around it
+                 *    declares its result temp by the tail's by-value type and
+                 *    bridges the tail itself, so `raw` is already the
+                 *    aggregate (`map-get` is such a let, and so is
+                 *    `(show-opt (let [k 1] (mk-opt k)))`). */
                 else if (!needs_fn_cast && !matched_spec &&
                          !callee_param_is_typed_heap_ptr &&
                          emit_arg && fn_name &&
                          !fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg)) {
                     Type arg_bv = fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
-                    if (arg_bv.kind != TY_UNKNOWN) {
+                    const Expr *producer = expr_strip_ascribe(emit_arg);
+                    if (arg_bv.kind != TY_UNKNOWN && !mwb_bridged &&
+                        producer && producer->kind == EX_CALL) {
                         const char *pc = emit_sig_lookup_param_ctype(fn_name, i);
                         if (!pc && fn_binding->type.kind == TY_FN &&
                             i < fn_binding->type.as.fn.arity &&

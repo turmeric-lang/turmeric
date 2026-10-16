@@ -7832,6 +7832,12 @@ typedef struct {
                                 * or handle result read by a loop in a handle
                                 * continuation).  Appended, unchanged, after the
                                 * carried args at each back-edge.  NULL if none. */
+    const char *const *cur_loop_ctypes; /* cps-while-back-edge-grows-the-stack: the
+                                * loop helper's parameter C types, carried params
+                                * then invariants, for the back-edge's bounce env. */
+    const char *const *cur_loop_inv_names; /* the invariants' names, one per entry
+                                * after the carried params in cur_loop_ctypes. */
+    uint32_t    cur_loop_n_carried, cur_loop_n_inv;
     const char *fn_cn;       /* enclosing function's mangled name (helper naming) */
     int        *helper_ctr;  /* per-function unique-helper counter */
     bool        shift_mode;  /* true inside a shift-body / handler-case helper: KK_PROMPT -> return */
@@ -11638,6 +11644,20 @@ static void emit_loop(CE *ce, const CTerm *t) {
         buf_free(&nbuf);
     }
 
+    /* The helper's parameter C types and the invariants' names, for a
+     * back-edge that bounces through the driver (emit_continue). */
+    uint32_t n_ct = np + (uint32_t)inv.n;
+    char **loop_ctypes = (char **)calloc(n_ct ? n_ct : 1, sizeof(char *));
+    char **loop_inv_names = (char **)calloc(inv.n ? (size_t)inv.n : 1, sizeof(char *));
+    for (uint32_t i = 0; i < np; i++)
+        loop_ctypes[i] = strdup(binder_ctype_full(ce->ctx, t->as.loop.params[i].ty,
+                                                  t->as.loop.params[i].type));
+    for (int i = 0; i < inv.n; i++) {
+        loop_ctypes[np + (uint32_t)i] = strdup(cap_ctype(ce->ctx, &inv, i));
+        loop_inv_names[i] = inv.b[i] ? name_for_binding(ce->ctx, inv.b[i])
+                                     : strdup(inv.cvname[i]);
+    }
+
     /* 1. Forward declaration (before nested helpers reference it). */
     buf_printf(ce->helpers, "static int64_t %s__cps(", lname);
     for (uint32_t i = 0; i < np; i++)
@@ -11680,6 +11700,10 @@ static void emit_loop(CE *ce, const CTerm *t) {
     hc.cur_k = "__kont";
     hc.cur_loop_name = lname;
     hc.cur_loop_inv = inv_names;
+    hc.cur_loop_ctypes = (const char *const *)loop_ctypes;
+    hc.cur_loop_inv_names = (const char *const *)loop_inv_names;
+    hc.cur_loop_n_carried = np;
+    hc.cur_loop_n_inv = (uint32_t)inv.n;
     hc.shift_mode = false;
     hc.ret_mode = ret_direct;
     hc.handler_case_mode = false;
@@ -11747,6 +11771,10 @@ static void emit_loop(CE *ce, const CTerm *t) {
         ce_line(ce, "return %s__cps(%s); /* cps-while-native loop entry */", lname, thread);
     free(inv_names);
     free(argv);
+    for (uint32_t i = 0; i < n_ct; i++) free(loop_ctypes[i]);
+    for (int i = 0; i < inv.n; i++) free(loop_inv_names[i]);
+    free(loop_ctypes);
+    free(loop_inv_names);
 }
 
 /* The loop back-edge: re-enter the enclosing loop helper with the next-iteration
@@ -11757,6 +11785,52 @@ static void emit_continue(CE *ce, const CTerm *t) {
     char *argv = atoms_csv(ce, t->as.cont_.args, t->as.cont_.n);
     const char *inv = ce->cur_loop_inv;   /* loop-invariant extra args, unchanged */
     const char *lname = ce->cur_loop_name ? ce->cur_loop_name : "0";
+    /* cps-while-back-edge-grows-the-stack: the back-edge is a C call into the
+     * loop helper.  From the helper's own body it is a sibling call, but from
+     * a join lifted out of the body (the body called a CPS function) each
+     * iteration nests another `loop -> callee -> dk_run -> join -> loop`, flat
+     * only where cc makes those sibling calls.  Guard it as the cps->cps tail
+     * call is guarded (cps-self-call-through-join-grows-the-stack): once the
+     * stack is TUR_DK_BOUNCE_DEPTH below the driver's landing, park the next
+     * iteration's arguments in a heap env and bounce a resume-frame thunk
+     * that re-enters the helper to the driver.  Only where `__kont` is the
+     * live chain: a helper that returns its exit value (ret_direct) clears
+     * kont_tail_live, and so does every shift / case / perform frame. */
+    if (ce->kont_tail_live && ce->cur_loop_name && ce->cur_loop_ctypes &&
+        !ce->shift_mode && !ce->ret_mode && !ce->handler_case_mode &&
+        t->as.cont_.n == ce->cur_loop_n_carried &&
+        !cps_deferred_any_atom(t->as.cont_.args, t->as.cont_.n)) {
+        uint32_t nc = ce->cur_loop_n_carried, ni = ce->cur_loop_n_inv, n = nc + ni;
+        int bid = (*ce->helper_ctr)++;
+        char bname[320];
+        snprintf(bname, sizeof bname, "%s_b%d", lname, bid);
+        Buf *h = ce->helpers;
+        buf_printf(h, "typedef struct { DK *node;");
+        for (uint32_t i = 0; i < n; i++)
+            buf_printf(h, " %s a%u;", ce->cur_loop_ctypes[i], i);
+        buf_printf(h, " } %s_env;\n", bname);
+        buf_printf(h, "static intptr_t %s(intptr_t env, intptr_t v, DK *__kont) {\n"
+                      "    %s_env *a = (%s_env *)(intptr_t)env; (void)v;\n",
+                   bname, bname, bname);
+        for (uint32_t i = 0; i < n; i++)
+            buf_printf(h, "    %s a%u = a->a%u;\n", ce->cur_loop_ctypes[i], i, i);
+        buf_puts(h, "    DK *nd = a->node; free(a); free(nd);\n");
+        buf_printf(h, "    return (intptr_t)%s__cps(", lname);
+        for (uint32_t i = 0; i < n; i++) buf_printf(h, "a%u, ", i);
+        buf_puts(h, "__kont); /* cps-while back-edge, bounced */\n}\n");
+        ce_line(ce, "if (__dk_tail_deep()) {   /* cps-while back-edge on a deep stack: bounce to the driver */");
+        ce_line(ce, "    %s_env *__tb = (%s_env *)malloc(sizeof *__tb);", bname, bname);
+        ce_line(ce, "    __tb->node = dk_frame_resume(%s, (intptr_t)__tb, __kont);", bname);
+        for (uint32_t i = 0; i < nc; i++) {
+            char *a = atom_str(ce, &t->as.cont_.args[i]);
+            ce_line(ce, "    __tb->a%u = %s;", i, a);
+            free(a);
+        }
+        for (uint32_t i = 0; i < ni; i++)
+            ce_line(ce, "    __tb->a%u = %s;", nc + i, ce->cur_loop_inv_names[i]);
+        ce_line(ce, "    return __dk_bounce(__tb->node);");
+        ce_line(ce, "}");
+    }
     if (t->as.cont_.n && inv)
         ce_line(ce, "return %s__cps(%s, %s, __kont); /* cps-while-native back-edge */", lname, argv, inv);
     else if (t->as.cont_.n)

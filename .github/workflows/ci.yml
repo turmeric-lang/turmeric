@@ -394,6 +394,21 @@ jobs:
             "https://github.com/${{ github.repository_owner }}/turmeric-spices" \
             ../turmeric-spices
 
+      # The CommonMark and GFM spec examples tur_markdown_spec renders
+      # (markdown-library-plan 6.1).  Unlike turmeric-spices this IS pinned:
+      # the examples are test inputs whose expected output the ratchet in
+      # tests/markdown-spec/ratchet.txt records, so they move only when
+      # tests/markdown-spec/PINNED does.  Only the aux part runs the suite.
+      - name: Check out commonmark-spec (sibling, pinned)
+        if: matrix.part == 'aux'
+        run: |
+          if [ -x /usr/bin/git ]; then GIT=/usr/bin/git; else GIT=git; fi
+          pin="$(sed -n '1s/^\([0-9a-f]\{40\}\).*/\1/p' tests/markdown-spec/PINNED)"
+          "$GIT" init -q ../commonmark-spec
+          "$GIT" -C ../commonmark-spec fetch -q --depth 1 \
+            "https://github.com/${{ github.repository_owner }}/commonmark-spec" "$pin"
+          "$GIT" -C ../commonmark-spec checkout -q FETCH_HEAD
+
       - name: Smoke check (tur --version must not hang)
         run: |
           # A fresh `tur --version` returns effectively instantly. If a startup
