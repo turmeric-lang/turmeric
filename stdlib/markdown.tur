@@ -1,0 +1,290 @@
+;;; tur/markdown -- CommonMark Markdown: parse a document, render it as HTML.
+;;;
+;;; markdown/parse reads a String into an MdDoc and markdown/render-html
+;;; writes it out; markdown/doc-free releases it.  The parser follows the
+;;; CommonMark spec, 0.31.2.  This is markdown-library-plan's Phase M under
+;;; way: the block structure is complete (M1), inline content is still
+;;; written as escaped text (M2 parses it), and the GFM extensions come with
+;;; M3.  tests/run-markdown-spec.sh runs the spec's examples.
+;;;
+;;; Pure Turmeric apart from the Unicode and entity tables, which the
+;;; interpreter carries as natives, so it runs compiled, under the JIT and
+;;; under --interpret.
+;;;
+;;; Since: markdown-library-plan M1
+;; The parser, and the renderer with its options.
+(load "stdlib/markdown/html.tur")
+;;; MdOpts -- what markdown/parse recognises beyond CommonMark.
+;;;
+;;; The GitHub Flavored Markdown extensions -- tables, strikethrough, extended
+;;; autolinks and task list items -- and $ and $$ math.  None is implemented
+;;; yet (markdown-library-plan M3); the fields are read once they are.
+
+(defstruct MdOpts
+  :copy
+  [tables : bool
+   strikethrough : bool
+   autolinks : bool
+   tasklists : bool
+   math : bool])
+;;; markdown/default-opts -- the GFM extensions on, math off.
+;;;
+;;; Returns:
+;;;   An MdOpts with tables, strikethrough, autolinks and task lists on.
+;;;
+;;; Example:
+;;;   (.tables (markdown/default-opts))  ; => true
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/default-opts [] : MdOpts (MdOpts true true true true false))
+;;; markdown/commonmark-opts -- plain CommonMark: every extension off.
+;;;
+;;; Returns:
+;;;   An MdOpts with every field false.
+;;;
+;;; Example:
+;;;   (.tables (markdown/commonmark-opts))  ; => false
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/commonmark-opts [] : MdOpts
+  (MdOpts false false false false false))
+;;; markdown/default-html-opts -- the renderer's defaults: raw HTML through GitHub's tag filter.
+;;;
+;;; Returns:
+;;;   An MdHtmlOpts whose raw-html is MdRawTagFilter.
+;;;
+;;; Example:
+;;;   (markdown/render-html d (markdown/default-html-opts))
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/default-html-opts [] : MdHtmlOpts (MdHtmlOpts (MdRawTagFilter)))
+;;; markdown/parse -- parse Markdown source into a document.
+;;;
+;;; Any String parses: Markdown has no syntax errors.  Lines may end in LF,
+;;; CR or CR LF, and a NUL byte reads as U+FFFD.  The document keeps its own
+;;; copy of what it needs, so src can be released straight away.
+;;;
+;;; Parameters:
+;;;   src  -- the Markdown text (borrowed)
+;;;   opts -- the extensions to recognise
+;;;
+;;; Returns:
+;;;   A fresh MdDoc; release it with markdown/doc-free.
+;;;
+;;; Example:
+;;;   (markdown/parse (string/from-cstr "# Hi") (markdown/default-opts))
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/parse [src : String opts : MdOpts] : MdDoc
+  (md/-parse-blocks src))
+;;; markdown/render-html -- the HTML for a document.
+;;;
+;;; Block structure as the CommonMark spec writes it: one line per block tag,
+;;; a tight list's paragraphs without <p>, a code block's info string's
+;;; first word as a language- class.
+;;;
+;;; Parameters:
+;;;   d    -- the document (borrowed)
+;;;   opts -- how to treat raw HTML
+;;;
+;;; Returns:
+;;;   A fresh owned String.
+;;;
+;;; Example:
+;;;   (markdown/render-html d (markdown/default-html-opts))  ; => "<h1>Hi</h1>\n"
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/render-html [d : MdDoc opts : MdHtmlOpts] : String
+  (md/-render-doc d opts))
+;;; markdown/doc-free -- release a document and everything it holds.
+;;;
+;;; Parameters:
+;;;   d -- the document; do not use it afterwards
+;;;
+;;; Example:
+;;;   (markdown/doc-free d)
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/doc-free [d : MdDoc] : void
+  (do (string/release-all (.strs d)) (vec-free (.nodes d)) (vec-free (.refs d))))
+;;; markdown/escape-html -- s with & < > and " replaced by their HTML entities.
+;;;
+;;; Parameters:
+;;;   s -- the text to escape (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh owned String, safe to place in HTML text or a quoted attribute.
+;;;
+;;; Example:
+;;;   (string/to-cstr (markdown/escape-html (string/from-cstr "a<b")))  ; => "a&lt;b"
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/escape-html [s : String] : String
+  (let [b (builder/new)]
+    (do (md/-push-escaped! b s 0 (string/len s)) (builder/finish b))))
+;; ---- Walking the tree ----------------------------------------------------------
+;;; MdBlockId -- a block of a parsed document.  Valid only with the MdDoc it came from.
+
+(defstruct MdBlockId :copy [ix : int])
+;;; MdBlock -- what a block is, with the facts that go with its kind.
+;;;
+;;; (MdList ordered start tight): start is the first item's number (1 for a
+;;; bullet list).  (MdHeading level): 1 to 6.  (MdCodeBlock fenced).
+
+(defdata MdBlock
+  :copy
+  (MdDocument)
+  (MdBlockQuote)
+  (MdList bool int bool)
+  (MdItem)
+  (MdParagraph)
+  (MdHeading int)
+  (MdThematicBreak)
+  (MdCodeBlock bool)
+  (MdHtmlBlock))
+;;; md/-node-of -- internal: the arena node behind id.
+
+(defn md/-node-of [d : MdDoc id : MdBlockId] : MdNode
+  (vec-get (.nodes d) (.ix id)))
+;;; md/-new-ids -- internal: an empty MdBlockId Vec.
+
+(defn md/-new-ids [] : (Vec MdBlockId) (vec-new))
+;;; markdown/root -- the document block, the root of the tree.
+;;;
+;;; Parameters:
+;;;   d -- the document
+;;;
+;;; Returns:
+;;;   The MdBlockId of the MdDocument block.
+;;;
+;;; Example:
+;;;   (markdown/block d (markdown/root d))  ; => (MdDocument)
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/root [d : MdDoc] : MdBlockId (MdBlockId 0))
+;;; markdown/children -- the blocks directly inside a block, in order.
+;;;
+;;; A Vec rather than first-child / next-sibling Options: an Option of a
+;;; struct is a heap box that a recursive walk would leak (see
+;;; docs/reported/carrier-sum-option-boxes-have-no-owner.md).
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   A fresh (Vec MdBlockId), empty for a leaf block; free it with vec-free.
+;;;
+;;; Example:
+;;;   (vec-len (markdown/children d (markdown/root d)))  ; => the number of top-level blocks
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/children [d : MdDoc id : MdBlockId] : (Vec MdBlockId)
+  (let [out    (md/-new-ids)
+        ^mut c (.first-child (md/-node-of d id))]
+    (do
+      (while (>= c 0)
+        (do
+          (vec-push! out (MdBlockId c))
+          (set! c (.next (vec-get (.nodes d) c)))))
+      out)))
+;;; markdown/block -- what a block is.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   Its MdBlock: kind, and the level, list facts or fencing that go with it.
+;;;
+;;; Example:
+;;;   (markdown/block d id)  ; => (MdHeading 2) for "## Title"
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/block [d : MdDoc id : MdBlockId] : MdBlock
+  (let [n (md/-node-of d id)
+        l (.list n)]
+    (match (.kind n)
+      (MdKDocument)
+      (MdDocument)
+      (MdKBlockQuote)
+      (MdBlockQuote)
+      (MdKList)
+      (MdList (.ordered l) (if (.ordered l) (.start l) 1) (.tight l))
+      (MdKItem)
+      (MdItem)
+      (MdKParagraph)
+      (MdParagraph)
+      (MdKHeading)
+      (MdHeading (.level n))
+      (MdKThematicBreak)
+      (MdThematicBreak)
+      (MdKCodeBlock)
+      (MdCodeBlock (.fenced (.fence n)))
+      (MdKHtmlBlock)
+      (MdHtmlBlock))))
+;;; markdown/block-text -- a leaf block's text.
+;;;
+;;; A paragraph's or heading's inline text, trimmed and with its inner line
+;;; endings kept (inline syntax is not parsed yet: markdown-library-plan
+;;; M2); a code block's contents, ending in a line feed; or an HTML block's
+;;; HTML.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   (some s), a fresh owned String, or (none) for a block that holds blocks
+;;;   rather than text.
+;;;
+;;; Example:
+;;;   (markdown/block-text d id)  ; => (some "code\n") for "    code"
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/block-text [d : MdDoc id : MdBlockId] : (Option String)
+  (let [n (md/-node-of d id)
+        t (.text n)]
+    (cond (< t 0)                                                                (none)
+          (or (md/-para? (.kind n)) (match (.kind n) (MdKHeading) true _ false)) (some (string/trim (vec-get (.strs d)
+                                                                                                      t)))
+          :else                                                                  (let [s (vec-get (.strs d)
+                                                                                           t)]
+                                                                                   (some (string/substring s
+                                                                                           0
+                                                                                           (string/len s)))))))
+;;; markdown/code-info -- a fenced code block's info string.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   (some s), a fresh owned String with escapes and references resolved
+;;;   (possibly empty), or (none) for any other block.
+;;;
+;;; Example:
+;;;   (markdown/code-info d id)  ; => (some "python") for a fence whose info string is python
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/code-info [d : MdDoc id : MdBlockId] : (Option String)
+  (let [t (.info (md/-node-of d id))]
+    (if (< t 0)
+      (none)
+      (let [s (vec-get (.strs d) t)]
+        (some (string/substring s 0 (string/len s)))))))
+;;; markdown/block-lines -- the source lines a block spans.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   (pair first last): 1-based line numbers, inclusive.
+;;;
+;;; Example:
+;;;   (markdown/block-lines d id)  ; => (pair 3 4) for a paragraph on lines 3-4
+;;;
+;;; Since: markdown-library-plan M1
+(defn markdown/block-lines [d : MdDoc id : MdBlockId] : (Pair int int)
+  (let [n (md/-node-of d id)] (pair (.start-line n) (.end-line n))))

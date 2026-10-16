@@ -85,6 +85,14 @@ hits under ASan.
 | --- | --- | --- |
 | [fmt-rewrites-hex-literals-and-string-escapes](fmt-rewrites-hex-literals-and-string-escapes.md) | low (formatter fidelity) | `tur fmt` prints `0xFF` as `255` and `"\xc3\xa9"` as raw UTF-8, because the reader keeps no radix and the printer re-escapes only bytes below 0x20. With `fmt-bootstrap-stdlib` enforcing fmt output, no stdlib file can keep a hex literal, and a formatted file with high-byte escapes is no longer ASCII. |
 
+## Found writing the CommonMark block parser (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [forward-call-with-rc-argument-rejected](forward-call-with-rc-argument-rejected.md) | low-medium (expressiveness) | A call to a `defn` defined later in the file fails with `TUR-E0001: expected int, got rc<<adt>>` when the callee takes an `rc<T>`, so `rc`-threaded mutual recursion can't be written. The forward declaration leaves the parameter as the `int` placeholder (`fwd_decl_scan_params`), and the call check has no `TY_RC` hatch beside its struct/ADT/session/app ones. |
+| [vec-push-of-with-expression-emits-invalid-c](vec-push-of-with-expression-emits-invalid-c.md) | low | `(vec-push! v (with x [...]))` on a `:copy` struct fails in `cc` (assigning `long int` to `tur_adt_N`): the `with` result is boxed, then the box is boxed again as the element. Binding the `with` in a `let` first works. |
+| [fresh-option-arg-to-self-call-leaks](fresh-option-arg-to-self-call-leaks.md) | low (leak) | A fresh `(Option S)` of a struct, passed straight to a self-recursive call inside a `match` arm, leaks its box (one per level). The same argument `let`-bound first, or passed to a non-recursive call, is freed. A consumer the carrier-sum-option report's owned list does not cover. |
+
 ## Found adding `fs/read-string` (filed 2026-10-15)
 
 | Report | Severity | One line |

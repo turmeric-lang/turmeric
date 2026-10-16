@@ -1,0 +1,1294 @@
+;;; markdown/block -- the CommonMark block parser: lines into a tree of blocks.
+;;;
+;;; A port of commonmark.js 0.31.2's blocks.js.  Each line is matched against
+;;; the open containers (block quotes, list items), then against the block
+;;; starts, and what is left is text for the innermost block that takes
+;;; lines: a paragraph, a code block or an HTML block.  A paragraph line that
+;;; no container matched continues the paragraph lazily.
+;;;
+;;; The tree is an arena: blocks are MdNode values in a Vec, linked by index,
+;;; and their text is a String pool (index 0 holds the parser's copy of the
+;;; source).  Nothing in a node owns heap memory, so the document is released
+;;; by freeing the two Vecs and the Strings in the pool.
+;;;
+;;; Since: markdown-library-plan M1
+;; Escapes, references and the label / destination / title / tag scanners.
+(load "stdlib/markdown/inline.tur")
+;; ---- Types -----------------------------------------------------------------------
+;;; MdKind -- what a block is.
+
+(defdata MdKind
+  :copy
+  (MdKDocument)
+  (MdKBlockQuote)
+  (MdKList)
+  (MdKItem)
+  (MdKParagraph)
+  (MdKHeading)
+  (MdKThematicBreak)
+  (MdKCodeBlock)
+  (MdKHtmlBlock))
+;;; MdListData -- a list's or list item's marker: kind, bullet or delimiter byte, start number, tightness, and the item's content column.
+
+(defstruct MdListData
+  :copy
+  [ordered : bool
+   bullet : int
+   delim : int
+   start : int
+   tight : bool
+   marker-off : int
+   padding : int])
+;;; MdFence -- a code block's fence: fenced?, the fence byte, its length and its indentation.
+
+(defstruct MdFence :copy [fenced : bool char : int len : int off : int])
+;;; MdNode -- one block in the arena.
+;;;
+;;; parent, first-child, last-child, prev and next are arena indices, -1 for
+;;; none.  buf is the block's StringBuilder index while it takes lines, text
+;;; and info are String-pool indices (-1 for none), and start-line and
+;;; end-line are 1-based source lines.
+
+(defstruct MdNode
+  :copy
+  [kind : MdKind
+   parent : int
+   first-child : int
+   last-child : int
+   prev : int
+   next : int
+   open : bool
+   start-line : int
+   end-line : int
+   buf : int
+   text : int
+   info : int
+   level : int
+   fence : MdFence
+   html-type : int
+   list : MdListData])
+;;; MdRef -- a link reference definition: String-pool indices of its normalised label, destination and title (-1 for no title).
+
+(defstruct MdRef :copy [label : int dest : int title : int])
+;;; MdDoc -- a parsed document: the block arena, its String pool and its link reference definitions.
+
+(defstruct MdDoc
+  :copy
+  [nodes : (Vec MdNode) strs : (Vec String) refs : (Vec MdRef)])
+;;; MdSt -- the parser: the document being built, the open leaf's builders, and the cursor in the current line.
+
+(defstruct MdSt
+  [doc : MdDoc
+   bufs : (Vec StringBuilder)
+   tip : int
+   oldtip : int
+   last-matched : int
+   line-start : int
+   line-end : int
+   line-no : int
+   offset : int
+   column : int
+   nn : int
+   nn-col : int
+   indent : int
+   blank : bool
+   partial-tab : bool
+   all-closed : bool])
+;;; MdCont -- a container's answer to a line: it continues, it does not, or it consumed the line.
+
+(defdata MdCont :copy (MdMatched) (MdUnmatched) (MdLineDone))
+;;; MdStart -- a block start's answer: none, a container (keep looking), or a leaf (stop).
+
+(defdata MdStart :copy (MdNoStart) (MdContainerStart) (MdLeafStart))
+;;; md/-new-nodes -- internal: an empty node Vec.
+
+(defn md/-new-nodes [] : (Vec MdNode) (vec-new))
+;;; md/-new-strs -- internal: an empty String Vec.
+
+(defn md/-new-strs [] : (Vec String) (vec-new))
+;;; md/-new-refs -- internal: an empty reference Vec.
+
+(defn md/-new-refs [] : (Vec MdRef) (vec-new))
+;;; md/-new-bufs -- internal: an empty builder Vec.
+
+(defn md/-new-bufs [] : (Vec StringBuilder) (vec-new))
+;;; md/-new-ints -- internal: an empty int Vec.
+
+(defn md/-new-ints [] : (Vec int) (vec-new))
+;;; md/-no-list -- internal: the list data of a block that is not a list or item.
+
+(defn md/-no-list [] : MdListData (MdListData false 0 0 0 true 0 0))
+;;; md/-new-node -- internal: an open block of kind k under parent, starting at line.
+
+(defn md/-new-node [k : MdKind parent : int line : int] : MdNode
+  (MdNode k
+    parent
+    -1
+    -1
+    -1
+    -1
+    true
+    line
+    0
+    -1
+    -1
+    -1
+    0
+    (MdFence false 0 0 0)
+    0
+    (md/-no-list)))
+;; ---- Kinds ---------------------------------------------------------------------
+;;; md/-para? -- internal: is k a paragraph?
+
+(defn md/-para? [k : MdKind] : bool (match k (MdKParagraph) true _ false))
+;;; md/-list? -- internal: is k a list?
+
+(defn md/-list? [k : MdKind] : bool (match k (MdKList) true _ false))
+;;; md/-accepts-lines? -- internal: does a block of kind k take text lines?
+
+(defn md/-accepts-lines? [k : MdKind] : bool
+  (match k (MdKParagraph) true (MdKCodeBlock) true (MdKHtmlBlock) true _ false))
+;;; md/-can-contain? -- internal: can a block of kind parent hold a child of kind child?
+
+(defn md/-can-contain? [parent : MdKind child : MdKind] : bool
+  (let [item (match child (MdKItem) true _ false)]
+    (match parent
+      (MdKDocument)
+      (not item)
+      (MdKBlockQuote)
+      (not item)
+      (MdKItem)
+      (not item)
+      (MdKList)
+      item
+      _
+      false)))
+;; ---- The arena -----------------------------------------------------------------
+;;; md/-nodes -- internal: the parser's node Vec.
+
+(defn md/-nodes [^borrow st : rc<MdSt>] : (Vec MdNode) (.nodes (.doc st)))
+;;; md/-strs -- internal: the parser's String pool.
+
+(defn md/-strs [^borrow st : rc<MdSt>] : (Vec String) (.strs (.doc st)))
+;;; md/-node -- internal: node i.
+
+(defn md/-node [^borrow st : rc<MdSt> i : int] : MdNode
+  (vec-get (md/-nodes st) i))
+;;; md/-put! -- internal: replace node i.
+
+(defn md/-put! [^borrow st : rc<MdSt> i : int n : MdNode] : void
+  (vec-set! (md/-nodes st) i n))
+;;; md/-kind -- internal: node i's kind.
+
+(defn md/-kind [^borrow st : rc<MdSt> i : int] : MdKind (.kind (md/-node st i)))
+;;; md/-add-str! -- internal: put s in the pool; its index.
+
+(defn md/-add-str! [^borrow st : rc<MdSt> s : String] : int
+  (let [i (vec-len (md/-strs st))] (do (vec-push! (md/-strs st) s) i)))
+;;; md/-str -- internal: pool String i (borrowed).
+
+(defn md/-str [^borrow st : rc<MdSt> i : int] : String
+  (vec-get (md/-strs st) i))
+;;; md/-append-child! -- internal: make node c the last child of node p.
+
+(defn md/-append-child! [^borrow st : rc<MdSt> p : int c : int] : void
+  (let [pn   (md/-node st p)
+        last (.last-child pn)]
+    (do
+      (md/-put! st c (with (md/-node st c) [parent p prev last next -1]))
+      (if (< last 0)
+        (md/-put! st p (with pn [first-child c last-child c]))
+        (do
+          (md/-put! st last (with (md/-node st last) [next c]))
+          (md/-put! st p (with pn [last-child c])))))))
+;;; md/-unlink! -- internal: take node i out of its parent's children.
+
+(defn md/-unlink! [^borrow st : rc<MdSt> i : int] : void
+  (let [n (md/-node st i)
+        p (.parent n)]
+    (do
+      (if (>= (.prev n) 0)
+        (md/-put! st (.prev n) (with (md/-node st (.prev n)) [next (.next n)]))
+        (when (>= p 0)
+          (md/-put! st p (with (md/-node st p) [first-child (.next n)]))))
+      (if (>= (.next n) 0)
+        (md/-put! st (.next n) (with (md/-node st (.next n)) [prev (.prev n)]))
+        (when (>= p 0)
+          (md/-put! st p (with (md/-node st p) [last-child (.prev n)]))))
+      (md/-put! st i (with n [parent -1 prev -1 next -1])))))
+;;; md/-insert-after! -- internal: put node b just after node a, under a's parent.
+
+(defn md/-insert-after! [^borrow st : rc<MdSt> a : int b : int] : void
+  (let [an (md/-node st a)
+        nx (.next an)
+        p  (.parent an)]
+    (do
+      (md/-put! st b (with (md/-node st b) [parent p prev a next nx]))
+      (md/-put! st a (with an [next b]))
+      (if (>= nx 0)
+        (md/-put! st nx (with (md/-node st nx) [prev b]))
+        (when (>= p 0) (md/-put! st p (with (md/-node st p) [last-child b])))))))
+;; ---- The current line ------------------------------------------------------------
+;;; md/-src -- internal: the parser's copy of the source (borrowed).
+
+(defn md/-src [^borrow st : rc<MdSt>] : String (md/-str st 0))
+;;; md/-len -- internal: the current line's length in bytes, without its line ending.
+
+(defn md/-len [^borrow st : rc<MdSt>] : int (- (.line-end st) (.line-start st)))
+;;; md/-at -- internal: the byte at offset i of the current line, or -1 past its end.
+
+(defn md/-at [^borrow st : rc<MdSt> i : int] : int
+  (if (and (>= i 0) (< i (md/-len st)))
+    (string/byte-at (md/-src st) (+ (.line-start st) i))
+    -1))
+;;; md/-indented? -- internal: is the next non-space character four or more columns in?
+
+(defn md/-indented? [^borrow st : rc<MdSt>] : bool (>= (.indent st) 4))
+;;; md/-find-next-nonspace! -- internal: find the next character that is not a space or tab, and the indentation before it.
+
+(defn md/-find-next-nonspace! [^borrow st : rc<MdSt>] : void
+  (let [^mut i    (.offset st)
+        ^mut cols (.column st)
+        ^mut go   true]
+    (do
+      (while go
+        (let [c (md/-at st i)]
+          (cond (= c 32) (do (set! i (+ i 1)) (set! cols (+ cols 1)))
+                (= c 9)  (do
+                           (set! i (+ i 1))
+                           (set! cols (+ cols (- 4 (mod cols 4)))))
+                :else    (set! go false))))
+      (set! (.blank st) (< (md/-at st i) 0))
+      (set! (.nn st) i)
+      (set! (.nn-col st) cols)
+      (set! (.indent st) (- cols (.column st))))))
+;;; md/-advance-tab! -- internal: advance over the tab at the offset; the columns it used up.
+
+(defn md/-advance-tab! [^borrow st : rc<MdSt> n : int columns : bool] : int
+  (let [to-tab (- 4 (mod (.column st) 4))]
+    (if columns
+      (let [partial (> to-tab n)
+            adv     (if partial n to-tab)]
+        (do
+          (set! (.partial-tab st) partial)
+          (set! (.column st) (+ (.column st) adv))
+          (when (not partial) (set! (.offset st) (+ (.offset st) 1)))
+          adv))
+      (do
+        (set! (.partial-tab st) false)
+        (set! (.column st) (+ (.column st) to-tab))
+        (set! (.offset st) (+ (.offset st) 1))
+        1))))
+;;; md/-advance! -- internal: advance the offset by n characters, or by n columns when columns is true (a tab may then be consumed part way).
+
+(defn md/-advance! [^borrow st : rc<MdSt> n0 : int columns : bool] : void
+  (let [^mut n n0]
+    (while (and (> n 0) (>= (md/-at st (.offset st)) 0))
+      (if (= (md/-at st (.offset st)) 9)
+        (set! n (- n (md/-advance-tab! st n columns)))
+        (do
+          (set! (.partial-tab st) false)
+          (set! (.offset st) (+ (.offset st) 1))
+          (set! (.column st) (+ (.column st) 1))
+          (set! n (- n 1)))))))
+;;; md/-advance-next-nonspace! -- internal: move the offset to the next non-space character.
+
+(defn md/-advance-next-nonspace! [^borrow st : rc<MdSt>] : void
+  (do
+    (set! (.offset st) (.nn st))
+    (set! (.column st) (.nn-col st))
+    (set! (.partial-tab st) false)))
+;;; md/-advance-to-end! -- internal: move the offset to the end of the line.
+
+(defn md/-advance-to-end! [^borrow st : rc<MdSt>] : void
+  (md/-advance! st (- (md/-len st) (.offset st)) false))
+;;; md/-add-line! -- internal: append the rest of the line, and a line feed, to the tip's text.
+
+(defn md/-add-line! [^borrow st : rc<MdSt>] : void
+  (let [b (vec-get (.bufs st) (.buf (md/-node st (.tip st))))]
+    (do
+      (when (.partial-tab st)
+        (do
+          (set! (.offset st) (+ (.offset st) 1))
+          (builder/push-repeat! b (int->char 32) (- 4 (mod (.column st) 4)))))
+      (string/-push-range! b
+        (md/-src st)
+        (+ (.line-start st) (.offset st))
+        (.line-end st))
+      (builder/push-byte! b 10))))
+;;; md/-count-byte -- internal: how many times byte c occurs in [i, end) of s, plus one.
+
+(defn md/-count-byte [s : String c : int i0 : int end : int] : int
+  (let [^mut i i0
+        ^mut k 1]
+    (do
+      (while (< i end)
+        (do (when (= (string/byte-at s i) c) (set! k (+ k 1))) (set! i (+ i 1))))
+      k)))
+;; ---- Link reference definitions ------------------------------------------------------
+;;; md/-find-ref -- internal: the reference whose normalised label is label, or -1.
+
+(defn md/-find-ref [^borrow st : rc<MdSt> label : String] : int
+  (let [refs     (.refs (.doc st))
+        ^mut i   0
+        ^mut hit -1]
+    (do
+      (while (and (< hit 0) (< i (vec-len refs)))
+        (do
+          (when (string/eq? (md/-str st (.label (vec-get refs i))) label)
+            (set! hit i))
+          (set! i (+ i 1))))
+      hit)))
+;;; md/-dest-inner-start -- internal: where the destination [p, e) starts once its <> are dropped.
+
+(defn md/-dest-inner-start [s : String p : int] : int
+  (if (= (md/-byte s p) 60) (+ p 1) p))
+;;; md/-dest-inner-end -- internal: where the destination [p, e) ends once its <> are dropped.
+
+(defn md/-dest-inner-end [s : String p : int e : int] : int
+  (if (= (md/-byte s p) 60) (- e 1) e))
+;;; md/-parse-ref-title! -- internal: the title and the line end of a definition whose label and destination are read.
+
+(defn md/-parse-ref-title! [^borrow st : rc<MdSt>
+                            s : String
+                            i : int
+                            le : int
+                            p : int
+                            de : int
+                            end : int] : int
+  (let [q  (md/-spnl s de end)
+        te (if (= q de) -1 (md/-scan-title s q end))
+        e1 (md/-space-eol s (if (< te 0) de te) end)
+        ok (if (>= e1 0) e1 (if (< te 0) -1 (md/-space-eol s de end)))
+        tt (if (and (>= e1 0) (>= te 0)) te -1)]
+    (if (< ok 0)
+      -1
+      (let [label (md/-normalize-label s i le)]
+        (if (= (string/len label) 0)
+          (do (string/release label) -1)
+          (do
+            (if (>= (md/-find-ref st label) 0)
+              (string/release label)
+              (let [li (md/-add-str! st label)
+                    di (md/-add-str! st
+                         (md/-unescape s
+                           (md/-dest-inner-start s p)
+                           (md/-dest-inner-end s p de)))
+                    ti (if (< tt 0)
+                         -1
+                         (md/-add-str! st (md/-unescape s (+ q 1) (- tt 1))))]
+                (vec-push! (.refs (.doc st)) (MdRef li di ti))))
+            ok))))))
+;;; md/-parse-ref! -- internal: read the link reference definition at i of s, recording it; the index past it, or -1.
+
+(defn md/-parse-ref! [^borrow st : rc<MdSt> s : String i : int] : int
+  (let [end (string/len s)
+        le  (md/-scan-label s i end)]
+    (if (or (< le 0) (not (= (md/-byte s le) 58)))
+      -1
+      (let [p  (md/-spnl s (+ le 1) end)
+            de (md/-scan-dest s p end)]
+        (if (< de 0) -1 (md/-parse-ref-title! st s i le p de end))))))
+;;; md/-strip-ref-defs! -- internal: read the definitions at the start of s; the index of the first byte that is not one.
+
+(defn md/-strip-ref-defs! [^borrow st : rc<MdSt> s : String] : int
+  (let [^mut pos 0
+        ^mut go  true]
+    (do
+      (while go
+        (if (= (md/-byte s pos) 91)
+          (let [e (md/-parse-ref! st s pos)]
+            (if (< e 0) (set! go false) (set! pos e)))
+          (set! go false)))
+      pos)))
+;;; md/-blank-from? -- internal: is [i, end) of s all spaces, tabs and line endings?
+
+(defn md/-blank-from? [s : String i : int] : bool
+  (>= (md/-skip-ws s i (string/len s)) (string/len s)))
+;;; md/-paragraphs -- internal: append the paragraphs under node i, in document order, to out.
+
+(defn md/-paragraphs [^borrow st : rc<MdSt> i : int out : (Vec int)] : void
+  (do
+    (when (md/-para? (md/-kind st i)) (vec-push! out i))
+    (let [^mut c (.first-child (md/-node st i))]
+      (while (>= c 0)
+        (do (md/-paragraphs st c out) (set! c (.next (md/-node st c))))))))
+;;; md/-strip-paragraph! -- internal: remove the definitions at the start of paragraph i.
+
+(defn md/-strip-paragraph! [^borrow st : rc<MdSt> i : int] : void
+  (let [t (.text (md/-node st i))
+        s (md/-str st t)]
+    (when (= (md/-byte s 0) 91)
+      (let [pos (md/-strip-ref-defs! st s)]
+        (when (> pos 0)
+          (do
+            (md/-put! st
+              i
+              (with (md/-node st i)
+                [start-line
+                 (+ (.start-line (md/-node st i))
+                   (- (md/-count-byte s 10 0 pos) 1))]))
+            (vec-set! (md/-strs st)
+              t
+              (string/substring s pos (- (string/len s) pos)))
+            (string/release s)
+            (when (md/-blank-from? (md/-str st t) 0) (md/-unlink! st i))))))))
+;;; md/-remove-ref-defs! -- internal: take the reference definitions off the front of every paragraph, dropping paragraphs left blank.
+
+(defn md/-remove-ref-defs! [^borrow st : rc<MdSt>] : void
+  (let [paras  (md/-new-ints)
+        ^mut k 0]
+    (do
+      (md/-paragraphs st 0 paras)
+      (while (< k (vec-len paras))
+        (do (md/-strip-paragraph! st (vec-get paras k)) (set! k (+ k 1))))
+      (vec-free paras))))
+;; ---- Opening and closing blocks ----------------------------------------------------
+;;; md/-new-buf! -- internal: a fresh builder; its index in bufs.
+
+(defn md/-new-buf! [^borrow st : rc<MdSt>] : int
+  (let [i (vec-len (.bufs st))] (do (vec-push! (.bufs st) (builder/new)) i)))
+;;; md/-take-text! -- internal: finish node i's builder into a pool String; its index.
+
+(defn md/-take-text! [^borrow st : rc<MdSt> i : int] : int
+  (let [n (md/-node st i)]
+    (if (< (.buf n) 0)
+      (.text n)
+      (let [t (md/-add-str! st (builder/finish (vec-get (.bufs st) (.buf n))))]
+        (do (md/-put! st i (with (md/-node st i) [buf -1 text t])) t)))))
+;;; md/-ends-with-blank? -- internal: is node i followed, after a blank line, by a sibling?
+
+(defn md/-ends-with-blank? [^borrow st : rc<MdSt> i : int] : bool
+  (let [n (md/-node st i)]
+    (and (>= (.next n) 0)
+      (not (= (.end-line n) (- (.start-line (md/-node st (.next n))) 1))))))
+;;; md/-loose-children? -- internal: does a child of node i, before the last, end with a blank line?
+
+(defn md/-loose-children? [^borrow st : rc<MdSt> i : int] : bool
+  (let [^mut c     (.first-child (md/-node st i))
+        ^mut loose false]
+    (do
+      (while (and (not loose) (>= c 0))
+        (do
+          (when (md/-ends-with-blank? st c) (set! loose true))
+          (set! c (.next (md/-node st c)))))
+      loose)))
+;;; md/-finalize-list! -- internal: a list is loose when an item, or a block in an item, is followed by a blank line before more content.
+
+(defn md/-finalize-list! [^borrow st : rc<MdSt> i : int] : void
+  (let [^mut item  (.first-child (md/-node st i))
+        ^mut loose false]
+    (do
+      (while (and (not loose) (>= item 0))
+        (do
+          (when (or (md/-ends-with-blank? st item)
+                  (md/-loose-children? st item))
+            (set! loose true))
+          (set! item (.next (md/-node st item)))))
+      (let [n    (md/-node st i)
+            last (.last-child n)]
+        (md/-put! st
+          i
+          (with n
+            [list
+             (with (.list n) [tight (not loose)])
+             end-line
+             (if (>= last 0) (.end-line (md/-node st last)) (.end-line n))]))))))
+;;; md/-finalize-item! -- internal: an item ends where its last block does, or on its own line when empty.
+
+(defn md/-finalize-item! [^borrow st : rc<MdSt> i : int] : void
+  (let [n    (md/-node st i)
+        last (.last-child n)]
+    (md/-put! st
+      i
+      (with n
+        [end-line
+         (if (>= last 0) (.end-line (md/-node st last)) (.start-line n))]))))
+;;; md/-trim-index -- internal: the first index of [i, end) of s that is not ASCII whitespace, or end.
+
+(defn md/-trim-index [s : String i : int end : int] : int (md/-skip-ws s i end))
+;;; md/-trim-end-index -- internal: one past the last index of [i, end) of s that is not ASCII whitespace, or i.
+
+(defn md/-trim-end-index [s : String i : int end0 : int] : int
+  (let [^mut end end0]
+    (do
+      (while (and (> end i) (md/-ws? (string/byte-at s (- end 1))))
+        (set! end (- end 1)))
+      end)))
+;;; md/-code-keep-end -- internal: the end of an indented code block's text once trailing blank lines are dropped.
+
+(defn md/-code-keep-end [s : String len : int] : int
+  (let [^mut j len]
+    (do
+      (while (and (> j 0)
+               (let [c (string/byte-at s (- j 1))]
+                 (or (md/-space-tab? c) (= c 10))))
+        (set! j (- j 1)))
+      (match (string/index-of-char-from s (int->char 10) j)
+        (Some p)
+        p
+        (None)
+        len))))
+;;; md/-with-final-lf -- internal: [0, end) of s and a line feed, as a fresh String.
+
+(defn md/-with-final-lf [s : String end : int] : String
+  (let [b (builder/new)]
+    (do
+      (string/-push-range! b s 0 end)
+      (builder/push-byte! b 10)
+      (builder/finish b))))
+;;; md/-finalize-code! -- internal: a fenced block's first line is its info string; an indented block drops its trailing blank lines.
+
+(defn md/-finalize-code! [^borrow st : rc<MdSt> i : int] : void
+  (let [t   (md/-take-text! st i)
+        s   (md/-str st t)
+        len (string/len s)
+        n   (md/-node st i)]
+    (if (.fenced (.fence n))
+      (let [nl   (match (string/index-of-char s (int->char 10))
+                   (Some p)
+                   p
+                   (None)
+                   len)
+            a    (md/-trim-index s 0 nl)
+            z    (md/-trim-end-index s a nl)
+            info (md/-add-str! st (md/-unescape s a z))
+            body (string/substring s
+                   (if (< nl len) (+ nl 1) len)
+                   (- len (if (< nl len) (+ nl 1) len)))]
+        (do
+          (string/release s)
+          (vec-set! (md/-strs st) t body)
+          (md/-put! st i (with (md/-node st i) [info info]))))
+      (let [keep  (md/-code-keep-end s len)
+            lines (md/-count-byte s 10 0 keep)
+            body  (md/-with-final-lf s keep)]
+        (do
+          (string/release s)
+          (vec-set! (md/-strs st) t body)
+          (md/-put! st
+            i
+            (with (md/-node st i) [end-line (+ (.start-line n) (- lines 1))])))))))
+;;; md/-finalize-html! -- internal: an HTML block's text loses its final line feed.
+
+(defn md/-finalize-html! [^borrow st : rc<MdSt> i : int] : void
+  (let [t   (md/-take-text! st i)
+        s   (md/-str st t)
+        len (string/len s)]
+    (when (and (> len 0) (= (string/byte-at s (- len 1)) 10))
+      (do
+        (vec-set! (md/-strs st) t (string/substring s 0 (- len 1)))
+        (string/release s)))))
+;;; md/-finalize-kind! -- internal: the per-kind work when node i closes.
+
+(defn md/-finalize-kind! [^borrow st : rc<MdSt> i : int] : void
+  (match (md/-kind st i)
+    (MdKDocument)
+    (md/-remove-ref-defs! st)
+    (MdKList)
+    (md/-finalize-list! st i)
+    (MdKItem)
+    (md/-finalize-item! st i)
+    (MdKParagraph)
+    (do (md/-take-text! st i) nil)
+    (MdKCodeBlock)
+    (md/-finalize-code! st i)
+    (MdKHtmlBlock)
+    (md/-finalize-html! st i)
+    _
+    nil))
+;;; md/-finalize! -- internal: close node i, ending at line, and make its parent the tip.
+
+(defn md/-finalize! [^borrow st : rc<MdSt> i : int line : int] : void
+  (let [n (md/-node st i)]
+    (do
+      (md/-put! st i (with n [open false end-line line]))
+      (md/-finalize-kind! st i)
+      (set! (.tip st) (.parent n)))))
+;;; md/-add-child! -- internal: open a block of kind k under the tip, closing blocks that cannot hold it; its index.
+
+(defn md/-add-child! [^borrow st : rc<MdSt> k : MdKind] : int
+  (do
+    (while (not (md/-can-contain? (md/-kind st (.tip st)) k))
+      (md/-finalize! st (.tip st) (- (.line-no st) 1)))
+    (let [id (vec-len (md/-nodes st))
+          bf (if (md/-accepts-lines? k) (md/-new-buf! st) -1)]
+      (do
+        (let [node (with (md/-new-node k (.tip st) (.line-no st)) [buf bf])]
+          (vec-push! (md/-nodes st) node))
+        (md/-append-child! st (.tip st) id)
+        (set! (.tip st) id)
+        id))))
+;;; md/-close-unmatched! -- internal: close the blocks this line did not continue.
+
+(defn md/-close-unmatched! [^borrow st : rc<MdSt>] : void
+  (when (not (.all-closed st))
+    (do
+      (while (not (= (.oldtip st) (.last-matched st)))
+        (let [parent (.parent (md/-node st (.oldtip st)))]
+          (do
+            (md/-finalize! st (.oldtip st) (- (.line-no st) 1))
+            (set! (.oldtip st) parent))))
+      (set! (.all-closed st) true))))
+;; ---- Continuing open blocks ----------------------------------------------------------
+;;; md/-skip-quote-marker! -- internal: step over a > and the space after it.
+
+(defn md/-skip-quote-marker! [^borrow st : rc<MdSt>] : void
+  (do
+    (md/-advance-next-nonspace! st)
+    (md/-advance! st 1 false)
+    (when (md/-space-tab? (md/-at st (.offset st))) (md/-advance! st 1 true))))
+;;; md/-continue-quote -- internal: a block quote continues on a line starting with >.
+
+(defn md/-continue-quote [^borrow st : rc<MdSt>] : MdCont
+  (if (and (not (md/-indented? st)) (= (md/-at st (.nn st)) 62))
+    (do (md/-skip-quote-marker! st) (MdMatched))
+    (MdUnmatched)))
+;;; md/-continue-item -- internal: a list item continues on a blank line or one indented to its content.
+
+(defn md/-continue-item [^borrow st : rc<MdSt> i : int] : MdCont
+  (let [n   (md/-node st i)
+        col (+ (.marker-off (.list n)) (.padding (.list n)))]
+    (cond (.blank st)           (if (< (.first-child n) 0)
+                                  (MdUnmatched)
+                                  (do
+                                    (md/-advance-next-nonspace! st)
+                                    (MdMatched)))
+          (>= (.indent st) col) (do (md/-advance! st col true) (MdMatched))
+          :else                 (MdUnmatched))))
+;;; md/-fence-run -- internal: how many of byte c repeat from offset i of the line.
+
+(defn md/-fence-run [^borrow st : rc<MdSt> i : int c : int] : int
+  (let [^mut j i]
+    (do (while (= (md/-at st j) c) (set! j (+ j 1))) (- j i))))
+;;; md/-rest-blank? -- internal: is the line from offset i only spaces and tabs?
+
+(defn md/-rest-blank? [^borrow st : rc<MdSt> i : int] : bool
+  (let [^mut j i]
+    (do
+      (while (md/-space-tab? (md/-at st j)) (set! j (+ j 1)))
+      (< (md/-at st j) 0))))
+;;; md/-continue-code -- internal: a fenced block runs to its closing fence; an indented one takes indented and blank lines.
+
+(defn md/-continue-code [^borrow st : rc<MdSt> i : int] : MdCont
+  (let [f (.fence (md/-node st i))]
+    (if (.fenced f)
+      (let [run (md/-fence-run st (.nn st) (.char f))]
+        (if (and (<= (.indent st) 3)
+              (>= run (.len f))
+              (md/-rest-blank? st (+ (.nn st) run)))
+          (do (md/-finalize! st i (.line-no st)) (MdLineDone))
+          (let [^mut k (.off f)]
+            (do
+              (while (and (> k 0) (md/-space-tab? (md/-at st (.offset st))))
+                (do (md/-advance! st 1 true) (set! k (- k 1))))
+              (MdMatched)))))
+      (cond (md/-indented? st) (do (md/-advance! st 4 true) (MdMatched))
+            (.blank st)        (do (md/-advance-next-nonspace! st) (MdMatched))
+            :else              (MdUnmatched)))))
+;;; md/-continue-html -- internal: an HTML block of type 6 or 7 ends at a blank line.
+
+(defn md/-continue-html [^borrow st : rc<MdSt> i : int] : MdCont
+  (let [t (.html-type (md/-node st i))]
+    (if (and (.blank st) (or (= t 6) (= t 7))) (MdUnmatched) (MdMatched))))
+;;; md/-continue -- internal: does the current line continue open block i?
+
+(defn md/-continue [^borrow st : rc<MdSt> i : int] : MdCont
+  (match (md/-kind st i)
+    (MdKBlockQuote)
+    (md/-continue-quote st)
+    (MdKItem)
+    (md/-continue-item st i)
+    (MdKHeading)
+    (MdUnmatched)
+    (MdKThematicBreak)
+    (MdUnmatched)
+    (MdKCodeBlock)
+    (md/-continue-code st i)
+    (MdKHtmlBlock)
+    (md/-continue-html st i)
+    (MdKParagraph)
+    (if (.blank st) (MdUnmatched) (MdMatched))
+    _
+    (MdMatched)))
+;; ---- Block starts ----------------------------------------------------------------------
+;;; md/-start-quote -- internal: > opens a block quote.
+
+(defn md/-start-quote [^borrow st : rc<MdSt>] : MdStart
+  (if (and (not (md/-indented? st)) (= (md/-at st (.nn st)) 62))
+    (do
+      (md/-skip-quote-marker! st)
+      (md/-close-unmatched! st)
+      (md/-add-child! st (MdKBlockQuote))
+      (MdContainerStart))
+    (MdNoStart)))
+;;; md/-rest-blank-range? -- internal: is [i, end) of the line only spaces and tabs?
+
+(defn md/-rest-blank-range? [^borrow st : rc<MdSt> i : int end : int] : bool
+  (let [^mut j i]
+    (do
+      (while (and (< j end) (md/-space-tab? (md/-at st j))) (set! j (+ j 1)))
+      (>= j end))))
+;;; md/-atx-text-end -- internal: where an ATX heading's text ends once an optional closing run of # is dropped.
+
+(defn md/-atx-text-end [^borrow st : rc<MdSt> from : int] : int
+  (let [^mut e (md/-len st)]
+    (do
+      (while (and (> e from) (md/-space-tab? (md/-at st (- e 1))))
+        (set! e (- e 1)))
+      (let [^mut h e]
+        (do
+          (while (and (> h from) (= (md/-at st (- h 1)) 35)) (set! h (- h 1)))
+          (cond (= h e)                              (md/-len st)
+                (md/-rest-blank-range? st from h)    from
+                (md/-space-tab? (md/-at st (- h 1))) (let [^mut w h]
+                                                       (do
+                                                         (while (and (> w from)
+                                                                  (md/-space-tab? (md/-at st
+                                                                                    (- w
+                                                                                      1))))
+                                                           (set! w (- w 1)))
+                                                         w))
+                :else                                (md/-len st)))))))
+;;; md/-start-atx -- internal: one to six # and a space (or the line end) open an ATX heading.
+
+(defn md/-start-atx [^borrow st : rc<MdSt>] : MdStart
+  (let [run (md/-fence-run st (.nn st) 35)
+        nx  (md/-at st (+ (.nn st) run))]
+    (if (and (not (md/-indented? st))
+          (>= run 1)
+          (<= run 6)
+          (or (< nx 0) (md/-space-tab? nx)))
+      (let [^mut ws (+ (.nn st) run)]
+        (do
+          (while (md/-space-tab? (md/-at st ws)) (set! ws (+ ws 1)))
+          (md/-advance-next-nonspace! st)
+          (md/-advance! st (- ws (.nn st)) false)
+          (md/-close-unmatched! st)
+          (let [h  (md/-add-child! st (MdKHeading))
+                a  (.offset st)
+                z  (md/-atx-text-end st a)
+                tx (md/-add-str! st
+                     (string/substring (md/-src st)
+                       (+ (.line-start st) a)
+                       (if (> z a) (- z a) 0)))]
+            (do
+              (md/-put! st h (with (md/-node st h) [level run text tx]))
+              (md/-advance-to-end! st)
+              (MdLeafStart)))))
+      (MdNoStart))))
+;;; md/-backtick-after? -- internal: is there a ` anywhere on the line from offset i?
+
+(defn md/-backtick-after? [^borrow st : rc<MdSt> i : int] : bool
+  (let [^mut j   i
+        ^mut hit false]
+    (do
+      (while (and (not hit) (>= (md/-at st j) 0))
+        (do (when (= (md/-at st j) 96) (set! hit true)) (set! j (+ j 1))))
+      hit)))
+;;; md/-start-fence -- internal: three or more ` or ~ open a fenced code block (a ` fence's line holds no other `).
+
+(defn md/-start-fence [^borrow st : rc<MdSt>] : MdStart
+  (let [c   (md/-at st (.nn st))
+        run (if (or (= c 96) (= c 126)) (md/-fence-run st (.nn st) c) 0)]
+    (if (and (not (md/-indented? st))
+          (>= run 3)
+          (or (= c 126) (not (md/-backtick-after? st (+ (.nn st) run)))))
+      (let [fence-off (.indent st)]
+        (do
+          (md/-close-unmatched! st)
+          (let [b (md/-add-child! st (MdKCodeBlock))]
+            (do
+              (md/-put! st
+                b
+                (with (md/-node st b) [fence (MdFence true c run fence-off)]))
+              (md/-advance-next-nonspace! st)
+              (md/-advance! st run false)
+              (MdLeafStart)))))
+      (MdNoStart))))
+;;; md/-has-at? -- internal: do the bytes of needle occur in s at index i?
+
+(defn md/-has-at? [s : String needle : cstr i : int] : bool
+  (let [n (string/from-cstr needle)
+        r (string/starts-with-at? s n i)]
+    (do (string/release n) r)))
+;;; md/-html-bang-type -- internal: <!-- is kind 2, <![CDATA[ kind 5, <! and a letter kind 4.
+
+(defn md/-html-bang-type [s : String] : int
+  (cond (and (= (md/-byte s 2) 45) (= (md/-byte s 3) 45)) 2
+        (md/-has-at? s "[CDATA[" 2)                       5
+        (md/-alpha? (md/-byte s 2))                       4
+        :else                                             0))
+;;; md/-html7? -- internal: is s a complete open or close tag and nothing else but whitespace?
+
+(defn md/-html7? [s : String] : bool
+  (let [n (string/len s)
+        e (if (= (md/-byte s 1) 47)
+            (md/-close-tag-end s 0 n)
+            (md/-open-tag-end s 0 n))]
+    (and (> e 0) (>= (md/-skip-ws s e n) n))))
+;;; md/-html-type-of -- internal: the kind of HTML block s (which starts with <) opens, or 0.
+
+(defn md/-html-type-of [s : String can7 : bool] : int
+  (let [n  (string/len s)
+        c1 (md/-byte s 1)]
+    (cond (= c1 33) (md/-html-bang-type s)
+          (= c1 63) 3
+          :else     (let [close (= c1 47)
+                          ns    (if close 2 1)
+                          name  (md/-lower-run s ns n)
+                          after (md/-byte s (+ ns (string/len name)))
+                          delim (or (< after 0) (md/-ws? after) (= after 62))
+                          t1    (and (not close)
+                                  delim
+                                  (md/-word-in? "|script|pre|textarea|style|"
+                                    name))
+                          t6    (and (or delim
+                                       (and (= after 47)
+                                         (= (md/-byte s
+                                              (+ ns (string/len name) 1))
+                                           62)))
+                                  (md/-word-in? "|address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|section|search|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul|"
+                                    name))]
+                      (do
+                        (string/release name)
+                        (cond t1 1 t6 6 (and can7 (md/-html7? s)) 7 :else 0))))))
+;;; md/-line-string -- internal: the current line from offset i, as a fresh String.
+
+(defn md/-line-string [^borrow st : rc<MdSt> i : int] : String
+  (string/substring (md/-src st) (+ (.line-start st) i) (- (md/-len st) i)))
+;;; md/-html-start-type -- internal: the kind (1 to 7) of HTML block the line from offset i starts, or 0.
+
+(defn md/-html-start-type [^borrow st : rc<MdSt> i : int can7 : bool] : int
+  (let [s (md/-line-string st i)
+        t (md/-html-type-of s can7)]
+    (do (string/release s) t)))
+;;; md/-start-html -- internal: < and one of the seven HTML block openings.
+
+(defn md/-start-html [^borrow st : rc<MdSt> container : int] : MdStart
+  (if (and (not (md/-indented? st)) (= (md/-at st (.nn st)) 60))
+    (let [lazy (and (not (.all-closed st))
+                 (not (.blank st))
+                 (md/-para? (md/-kind st (.tip st))))
+          can7 (and (not (md/-para? (md/-kind st container))) (not lazy))
+          t    (md/-html-start-type st (.nn st) can7)]
+      (if (> t 0)
+        (do
+          (md/-close-unmatched! st)
+          (let [b (md/-add-child! st (MdKHtmlBlock))]
+            (do
+              (md/-put! st b (with (md/-node st b) [html-type t]))
+              (MdLeafStart))))
+        (MdNoStart)))
+    (MdNoStart)))
+;;; md/-setext-level -- internal: 1 for a line of =, 2 for a line of -, else 0 (trailing spaces allowed).
+
+(defn md/-setext-level [^borrow st : rc<MdSt>] : int
+  (let [c   (md/-at st (.nn st))
+        run (if (or (= c 61) (= c 45)) (md/-fence-run st (.nn st) c) 0)]
+    (cond (= run 0)                                   0
+          (not (md/-rest-blank? st (+ (.nn st) run))) 0
+          (= c 61)                                    1
+          :else                                       2)))
+;;; md/-start-setext -- internal: a line of = or - under a paragraph turns it into a heading.
+
+(defn md/-start-setext [^borrow st : rc<MdSt> container : int] : MdStart
+  (let [level (if (and (not (md/-indented? st))
+                    (md/-para? (md/-kind st container)))
+                (md/-setext-level st)
+                0)]
+    (if (= level 0)
+      (MdNoStart)
+      (do
+        (md/-close-unmatched! st)
+        (let [t   (md/-take-text! st container)
+              s   (md/-str st t)
+              pos (if (= (md/-byte s 0) 91) (md/-strip-ref-defs! st s) 0)
+              n   (string/len s)]
+          (if (>= pos n)
+            (let [b (md/-new-buf! st)]
+              (do
+                (md/-put! st
+                  container
+                  (with (md/-node st container) [buf b text -1]))
+                (MdNoStart)))
+            (let [rest (string/substring s pos (- n pos))
+                  h    (vec-len (md/-nodes st))]
+              (do
+                (vec-set! (md/-strs st) t rest)
+                (string/release s)
+                (let [node (with (md/-new-node (MdKHeading)
+                                   -1
+                                   (.start-line (md/-node st container)))
+                             [level level text t])]
+                  (vec-push! (md/-nodes st) node))
+                (md/-insert-after! st container h)
+                (md/-unlink! st container)
+                (md/-put! st
+                  container
+                  (with (md/-node st container) [open false text -1]))
+                (set! (.tip st) h)
+                (md/-advance-to-end! st)
+                (MdLeafStart)))))))))
+;;; md/-thematic-break? -- internal: are three or more of one of * - _ (and spaces and tabs) all the line holds from offset i?
+
+(defn md/-thematic-break? [^borrow st : rc<MdSt> i : int] : bool
+  (let [c       (md/-at st i)
+        ^mut j  i
+        ^mut k  0
+        ^mut ok (or (= c 42) (= c 45) (= c 95))]
+    (do
+      (while (and ok (>= (md/-at st j) 0))
+        (let [d (md/-at st j)]
+          (do
+            (cond (= d c)            (set! k (+ k 1))
+                  (md/-space-tab? d) nil
+                  :else              (set! ok false))
+            (set! j (+ j 1)))))
+      (and ok (>= k 3)))))
+;;; md/-start-break -- internal: a thematic break.
+
+(defn md/-start-break [^borrow st : rc<MdSt>] : MdStart
+  (if (and (not (md/-indented? st)) (md/-thematic-break? st (.nn st)))
+    (do
+      (md/-close-unmatched! st)
+      (md/-add-child! st (MdKThematicBreak))
+      (md/-advance-to-end! st)
+      (MdLeafStart))
+    (MdNoStart)))
+;;; md/-ordered-run -- internal: the number of digits (at most 9) at offset i.
+
+(defn md/-ordered-run [^borrow st : rc<MdSt> i : int] : int
+  (let [^mut j i]
+    (do
+      (while (and (< (- j i) 10) (md/-digit? (md/-at st j))) (set! j (+ j 1)))
+      (- j i))))
+;;; md/-line-int -- internal: the value of the digits [i, i + n) of the line.
+
+(defn md/-line-int [^borrow st : rc<MdSt> i : int n : int] : int
+  (md/-num-val (md/-src st) (+ (.line-start st) i) (+ (.line-start st) i n) 10))
+;;; md/-consume-marker! -- internal: step over a list marker of length mlen and the spaces after it; the data with its padding.
+
+(defn md/-consume-marker! [^borrow st : rc<MdSt> data : MdListData mlen : int] : MdListData
+  (do
+    (md/-advance-next-nonspace! st)
+    (md/-advance! st mlen true)
+    (let [col0 (.column st)
+          off0 (.offset st)]
+      (do
+        (md/-advance! st 1 true)
+        (while (and (< (- (.column st) col0) 5)
+                 (md/-space-tab? (md/-at st (.offset st))))
+          (md/-advance! st 1 true))
+        (let [blank-item (< (md/-at st (.offset st)) 0)
+              spaces     (- (.column st) col0)]
+          (if (or (>= spaces 5) (< spaces 1) blank-item)
+            (do
+              (set! (.column st) col0)
+              (set! (.offset st) off0)
+              (when (md/-space-tab? (md/-at st (.offset st)))
+                (md/-advance! st 1 true))
+              (with data [padding (+ mlen 1)]))
+            (with data [padding (+ mlen spaces)])))))))
+;;; md/-parse-marker -- internal: the list marker at the next non-space character, consuming it and the spaces after it, or none.
+
+(defn md/-parse-marker [^borrow st : rc<MdSt> container : int] : (Option MdListData)
+  (let [nn   (.nn st)
+        c    (md/-at st nn)
+        para (md/-para? (md/-kind st container))
+        dg   (md/-ordered-run st nn)
+        bul  (or (= c 42) (= c 43) (= c 45))
+        dl   (md/-at st (+ nn dg))
+        ord  (and (not bul)
+               (>= dg 1)
+               (<= dg 9)
+               (or (= dl 46) (= dl 41))
+               (or (not para) (= (md/-line-int st nn dg) 1)))
+        mlen (if bul 1 (+ dg 1))
+        nx   (md/-at st (+ nn mlen))]
+    (cond (>= (.indent st) 4)                         (none)
+          (not (or bul ord))                          (none)
+          (not (or (< nx 0) (md/-space-tab? nx)))     (none)
+          (and para (md/-rest-blank? st (+ nn mlen))) (none)
+          :else                                       (some (md/-consume-marker! st
+                                                              (MdListData ord
+                                                                (if bul c 0)
+                                                                (if bul 0 dl)
+                                                                (if bul
+                                                                  0
+                                                                  (md/-line-int st
+                                                                    nn
+                                                                    dg))
+                                                                true
+                                                                (.indent st)
+                                                                0)
+                                                              mlen)))))
+;;; md/-lists-match? -- internal: do a list and a new item agree in kind, delimiter and bullet?
+
+(defn md/-lists-match? [a : MdListData b : MdListData] : bool
+  (and (= (.ordered a) (.ordered b))
+    (= (.delim a) (.delim b))
+    (= (.bullet a) (.bullet b))))
+;;; md/-start-item -- internal: a list marker opens a list item, and a list when the tip is not a matching one.
+
+(defn md/-start-item [^borrow st : rc<MdSt> container : int] : MdStart
+  (if (or (not (md/-indented? st)) (md/-list? (md/-kind st container)))
+    (match (md/-parse-marker st container)
+      (Some data)
+      (do
+        (md/-close-unmatched! st)
+        (when (or (not (md/-list? (md/-kind st (.tip st))))
+                (not (md/-lists-match? (.list (md/-node st (.tip st))) data)))
+          (let [l (md/-add-child! st (MdKList))]
+            (md/-put! st l (with (md/-node st l) [list data]))))
+        (let [it (md/-add-child! st (MdKItem))]
+          (do
+            (md/-put! st it (with (md/-node st it) [list data]))
+            (MdContainerStart))))
+      (None)
+      (MdNoStart))
+    (MdNoStart)))
+;;; md/-start-indented -- internal: four columns of indentation open an indented code block, outside a paragraph.
+
+(defn md/-start-indented [^borrow st : rc<MdSt>] : MdStart
+  (if (and (md/-indented? st)
+        (not (md/-para? (md/-kind st (.tip st))))
+        (not (.blank st)))
+    (do
+      (md/-advance! st 4 true)
+      (md/-close-unmatched! st)
+      (md/-add-child! st (MdKCodeBlock))
+      (MdLeafStart))
+    (MdNoStart)))
+;;; md/-no-start? -- internal: is r MdNoStart?
+
+(defn md/-no-start? [r : MdStart] : bool (match r (MdNoStart) true _ false))
+;;; md/-try-starts -- internal: the block starts in the spec's order of precedence.
+
+(defn md/-try-starts [^borrow st : rc<MdSt> container : int] : MdStart
+  (let [^mut r (md/-start-quote st)]
+    (do
+      (when (md/-no-start? r) (set! r (md/-start-atx st)))
+      (when (md/-no-start? r) (set! r (md/-start-fence st)))
+      (when (md/-no-start? r) (set! r (md/-start-html st container)))
+      (when (md/-no-start? r) (set! r (md/-start-setext st container)))
+      (when (md/-no-start? r) (set! r (md/-start-break st)))
+      (when (md/-no-start? r) (set! r (md/-start-item st container)))
+      (when (md/-no-start? r) (set! r (md/-start-indented st)))
+      r)))
+;;; md/-maybe-special? -- internal: can byte c begin a block start (a quick filter)?
+
+(defn md/-maybe-special? [c : int] : bool
+  (or (= c 35)
+    (= c 96)
+    (= c 126)
+    (= c 42)
+    (= c 43)
+    (= c 95)
+    (= c 61)
+    (= c 60)
+    (= c 62)
+    (= c 45)
+    (md/-digit? c)))
+;; ---- One line -------------------------------------------------------------------------
+;;; md/-match-containers -- internal: walk the open blocks the line continues; the last that matched, or -1 when the line is used up.
+
+(defn md/-match-containers [^borrow st : rc<MdSt>] : int
+  (let [^mut container 0
+        ^mut go        true
+        ^mut done      false]
+    (do
+      (while go
+        (let [last (.last-child (md/-node st container))]
+          (if (and (>= last 0) (.open (md/-node st last)))
+            (do
+              (md/-find-next-nonspace! st)
+              (match (md/-continue st last)
+                (MdMatched)
+                (set! container last)
+                (MdUnmatched)
+                (set! go false)
+                (MdLineDone)
+                (do (set! done true) (set! go false))))
+            (set! go false))))
+      (if done -1 container))))
+;;; md/-open-new-blocks -- internal: try block starts until a leaf starts or none does; the container the text goes to.
+
+(defn md/-open-new-blocks [^borrow st : rc<MdSt> container0 : int] : int
+  (let [^mut container container0
+        ^mut go        (not (and (md/-accepts-lines? (md/-kind st container0))
+                              (not (md/-para? (md/-kind st container0)))))]
+    (do
+      (while go
+        (do
+          (md/-find-next-nonspace! st)
+          (if (and (not (md/-indented? st))
+                (not (md/-maybe-special? (md/-at st (.nn st)))))
+            (do (md/-advance-next-nonspace! st) (set! go false))
+            (match (md/-try-starts st container)
+              (MdContainerStart)
+              (set! container (.tip st))
+              (MdLeafStart)
+              (do (set! container (.tip st)) (set! go false))
+              (MdNoStart)
+              (do (md/-advance-next-nonspace! st) (set! go false))))))
+      container)))
+;;; md/-has? -- internal: does s contain the bytes of needle?
+
+(defn md/-has? [s : String needle : cstr] : bool
+  (let [n (string/from-cstr needle)
+        r (some? (string/index-of s n))]
+    (do (string/release n) r)))
+;;; md/-lower-all -- internal: s in ASCII lower case, as a fresh String.
+
+(defn md/-lower-all [s : String] : String
+  (let [b      (builder/new)
+        ^mut i 0]
+    (do
+      (while (< i (string/len s))
+        (do
+          (builder/push-byte! b (md/-lower (string/byte-at s i)))
+          (set! i (+ i 1))))
+      (builder/finish b))))
+;;; md/-html-closes? -- internal: does the line from offset i hold the end condition of HTML block kind t (1 to 5)?
+
+(defn md/-html-closes? [^borrow st : rc<MdSt> i : int t : int] : bool
+  (let [s   (md/-line-string st i)
+        low (md/-lower-all s)
+        hit (cond (= t 1) (or (md/-has? low "</script>")
+                            (md/-has? low "</pre>")
+                            (md/-has? low "</textarea>")
+                            (md/-has? low "</style>"))
+                  (= t 2) (md/-has? low "-->")
+                  (= t 3) (md/-has? low "?>")
+                  (= t 4) (md/-has? low ">")
+                  :else   (md/-has? low "]]>"))]
+    (do (string/release low) (string/release s) hit)))
+;;; md/-add-text! -- internal: what is left of the line is text: a lazy paragraph line, a line of the open leaf, or a new paragraph.
+
+(defn md/-add-text! [^borrow st : rc<MdSt> container : int] : void
+  (if (and (not (.all-closed st))
+        (not (.blank st))
+        (md/-para? (md/-kind st (.tip st))))
+    (md/-add-line! st)
+    (do
+      (md/-close-unmatched! st)
+      (let [k (md/-kind st container)]
+        (cond (md/-accepts-lines? k)                                (do
+                                                                      (md/-add-line! st)
+                                                                      (let [t (.html-type (md/-node st
+                                                                                            container))]
+                                                                        (when (and (>= t
+                                                                                     1)
+                                                                                (<= t
+                                                                                  5)
+                                                                                (md/-html-closes? st
+                                                                                  (.offset st)
+                                                                                  t))
+                                                                          (md/-finalize! st
+                                                                            container
+                                                                            (.line-no st)))))
+              (and (< (.offset st) (md/-len st)) (not (.blank st))) (do
+                                                                      (md/-add-child! st
+                                                                        (MdKParagraph))
+                                                                      (md/-advance-next-nonspace! st)
+                                                                      (md/-add-line! st))
+              :else                                                 nil)))))
+;;; md/-incorporate-line! -- internal: process the line [start, end) of the source.
+
+(defn md/-incorporate-line! [^borrow st : rc<MdSt> start : int end : int] : void
+  (do
+    (set! (.oldtip st) (.tip st))
+    (set! (.offset st) 0)
+    (set! (.column st) 0)
+    (set! (.blank st) false)
+    (set! (.partial-tab st) false)
+    (set! (.line-no st) (+ (.line-no st) 1))
+    (set! (.line-start st) start)
+    (set! (.line-end st) end)
+    (let [container (md/-match-containers st)]
+      (when (>= container 0)
+        (do
+          (set! (.all-closed st) (= container (.oldtip st)))
+          (set! (.last-matched st) container)
+          (md/-add-text! st (md/-open-new-blocks st container)))))))
+;; ---- The whole document ------------------------------------------------------------------
+;;; md/-copy-source -- internal: a copy of src with each NUL byte replaced by U+FFFD, as CommonMark requires.
+
+(defn md/-copy-source [src : String] : String
+  (let [b        (builder/new)
+        n        (string/len src)
+        ^mut i   0
+        ^mut run 0]
+    (do
+      (while (< i n)
+        (do
+          (when (= (string/byte-at src i) 0)
+            (do
+              (string/-push-range! b src run i)
+              (builder/push-cstr! b "�")
+              (set! run (+ i 1))))
+          (set! i (+ i 1))))
+      (string/-push-range! b src run n)
+      (builder/finish b))))
+;;; md/-line-end -- internal: the index of the first CR or LF at or after i, or n.
+
+(defn md/-line-end [s : String i0 : int n : int] : int
+  (let [^mut i i0]
+    (do
+      (while (and (< i n)
+               (let [c (string/byte-at s i)] (not (or (= c 10) (= c 13)))))
+        (set! i (+ i 1)))
+      i)))
+;;; md/-parse-lines! -- internal: feed every line of the source to the parser; how many there were.
+
+(defn md/-parse-lines! [^borrow st : rc<MdSt>] : int
+  (let [s        (md/-src st)
+        n        (string/len s)
+        ^mut pos 0
+        ^mut go  true]
+    (do
+      (while go
+        (let [e (md/-line-end s pos n)]
+          (if (>= e n)
+            (do
+              (when (not (and (= pos n)
+                           (> n 0)
+                           (= (string/byte-at s (- n 1)) 10)))
+                (md/-incorporate-line! st pos n))
+              (set! go false))
+            (do
+              (md/-incorporate-line! st pos e)
+              (set! pos
+                (if (and (= (string/byte-at s e) 13)
+                      (= (md/-byte s (+ e 1)) 10))
+                  (+ e 2)
+                  (+ e 1)))))))
+      (.line-no st))))
+;;; md/-parse-blocks -- internal: the block structure of src.
+
+(defn md/-parse-blocks [src : String] : MdDoc
+  (let [doc (MdDoc (md/-new-nodes) (md/-new-strs) (md/-new-refs))
+        st  (rc/of (MdSt doc
+                     (md/-new-bufs)
+                     0
+                     0
+                     0
+                     0
+                     0
+                     0
+                     0
+                     0
+                     0
+                     0
+                     0
+                     false
+                     false
+                     true))]
+    (do
+      (vec-push! (.strs doc) (md/-copy-source src))
+      (vec-push! (.nodes doc) (md/-new-node (MdKDocument) -1 1))
+      (let [lines (md/-parse-lines! st)]
+        (while (>= (.tip st) 0) (md/-finalize! st (.tip st) lines)))
+      (vec-free (.bufs st))
+      doc)))
