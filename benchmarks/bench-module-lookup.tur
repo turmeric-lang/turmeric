@@ -1,0 +1,18 @@
+;;; bench-module-lookup -- non-local references made from inside a module.
+;;
+;; A 2,000,000-step loop whose functions live in a `defmodule`, with the callee
+;; exported.  Under `--interpret` each reference a running module body makes to
+;; a name it did not bind probes the module-private key "m/name" first, and an
+;; exported name misses that probe on every call.  performance-audit WP4 E-1
+;; measured this loop at 1.5x the instructions of the same loop written flat;
+;; the miss used to format, and discard, an "unbound variable" error.  In
+;; benchmarks/audit/corpus.txt, so remeasure.sh covers it.
+
+(defmodule m (export run step)
+  (defn step [x : int] : int (+ x 1))
+  (defn run [i : int n : int acc : int] : int
+    (if (= i n) acc (run (+ i 1) n (step acc)))))
+
+(defn main [] : int
+  (println (run 0 2000000 0))
+  0)
