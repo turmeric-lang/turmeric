@@ -127,4 +127,5 @@ benchmarks/audit/sized/cps-tramp-resume-8m.tur                    cc,jit        
 benchmarks/audit/sized/closure-let-loop-10m.tur                   cc,jit         exact   timeout=300   # R-1
 benchmarks/audit/sized/fn-value-join-1000x.tur                    cc,jit         exact   timeout=300   # R-1
 benchmarks/audit/sized/region-rounds-100k.tur                     cc,jit         exact   timeout=300   # R-3
+benchmarks/bench-region-retired-frees.tur                         cc,jit         exact   timeout=300   # R-3: a free after 1,000 retirements
 benchmarks/audit/sized/mut-map-reassign-1m.tur                    cc,jit         exact   timeout=300

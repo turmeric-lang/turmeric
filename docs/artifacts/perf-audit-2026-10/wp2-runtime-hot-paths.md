@@ -478,7 +478,7 @@ named rewinds every bracket. But the two fixtures whose comments say the pop
 rewinds ("the pop REWINDS (the static walk clears it)") do not rewind under
 the current hooks. They check only the printed answer, so they still pass.
 Filed: [region-rewind-fixtures-never-rewind](../../reported/region-rewind-fixtures-never-rewind.md)
-and [region-retired-generations-make-shutdown-quadratic](../../reported/region-retired-generations-make-shutdown-quadratic.md).
+and [region-retired-generations-make-shutdown-quadratic](../../archive/region-retired-generations-make-shutdown-quadratic.md).
 
 ## Not a problem (measured, fine)
 

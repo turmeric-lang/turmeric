@@ -51,10 +51,11 @@ manifest's `:experiments` (WP1 #6).
 
 ## Filed
 
-Open reports the audit filed or re-measured, all in `docs/reported/`:
-`region-retired-generations-make-shutdown-quadratic` (R-3),
-`region-rewind-fixtures-never-rewind` (WP2), `jit-string-literal-identity-differs-from-cc`
-(WP0), and `carrier-sum-option-boxes-have-no-owner` (M-3, re-measured).
+Reports the audit filed or re-measured, in `docs/reported/` while open:
+`region-retired-generations-make-shutdown-quadratic` (R-3; fixed since, now in
+`docs/archive/`), `region-rewind-fixtures-never-rewind` (WP2),
+`jit-string-literal-identity-differs-from-cc` (WP0), and
+`carrier-sum-option-boxes-have-no-owner` (M-3, re-measured).
 
 ## Closing the definition of done
 

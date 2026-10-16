@@ -49,6 +49,13 @@ TUR_RT_API void  arena_reset(Arena *a);
  * and must be left untouched.  O(slabs). */
 TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
 
+/* Each slab's data block and capacity, head chain then spare: exactly the
+ * ranges arena_owns answers for.  region.c indexes a retired generation's
+ * slabs by address with it (performance-audit R-3). */
+TUR_RT_API void  arena_each_slab(const Arena *a,
+                                 void (*cb)(const void *data, size_t cap, void *ud),
+                                 void *ud);
+
 /* Call `cb` on the used bytes of every slab -- the memory a conservative
  * collector must read as roots (the r7rs-gc experiment scans region memory
  * this way, since an object built in a region can point into its heap). */

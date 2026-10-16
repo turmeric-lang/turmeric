@@ -776,6 +776,13 @@ TUR_RT_API void  arena_reset(Arena *a);
  * and must be left untouched.  O(slabs). */
 TUR_RT_API bool  arena_owns(const Arena *a, const void *p);
 
+/* Each slab's data block and capacity, head chain then spare: exactly the
+ * ranges arena_owns answers for.  region.c indexes a retired generation's
+ * slabs by address with it (performance-audit R-3). */
+TUR_RT_API void  arena_each_slab(const Arena *a,
+                                 void (*cb)(const void *data, size_t cap, void *ud),
+                                 void *ud);
+
 /* Call `cb` on the used bytes of every slab -- the memory a conservative
  * collector must read as roots (the r7rs-gc experiment scans region memory
  * this way, since an object built in a region can point into its heap). */
@@ -1102,6 +1109,13 @@ TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
     }
     return false;
 }
+
+TUR_RT_API void arena_each_slab(const Arena *a,
+                                void (*cb)(const void *data, size_t cap, void *ud),
+                                void *ud) {
+    for (const ArenaSlab *s = a->head; s; s = s->next) cb(s->data, s->cap, ud);
+    for (const ArenaSlab *s = a->spare; s; s = s->next) cb(s->data, s->cap, ud);
+}
 /* ---- end src/runtime/arena.c ---- */
 /* ---- begin src/runtime/region.c (embedded verbatim) ---- */
 /* region.c -- declared lifetimes (RM3).  See region.h for the design and
@@ -1111,8 +1125,10 @@ TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
  * exposes `arena_reset` (whole-arena rewind) and `arena_owns`, not a
  * save/restore watermark, so a per-generation Arena is what the existing API
  * supports without changing it -- and it makes `tur_region_owns` a walk over
- * generations instead of an address-range comparison that would have to know
- * about interleaving.
+ * the live generations instead of an address-range comparison that would have
+ * to know about interleaving.  The retired ones, which accumulate, are
+ * indexed by address (g_ridx below); a retired arena never changes, so that
+ * index never has to.
  *
  * A generation popped WITHOUT reclaim is retired, not freed: its memory stays
  * mapped for the process.  That is deliberately the status quo (the spine
@@ -1160,6 +1176,22 @@ static __thread int      g_live_cap;
 static __thread Arena  **g_retired;
 static __thread int      g_retired_n;
 static __thread int      g_retired_cap;
+
+/* The retired generations again, indexed by address: a slot per 64 KiB block
+ * each retired slab overlaps, in an open-addressing table.  Every node free
+ * asks tur_region_owns (regions are on by default, so the drop glue frees
+ * through tur_region_free), and it used to walk g_retired -- so in a program
+ * that keeps retiring, every free got slower for the life of the process
+ * (performance-audit R-3).  Exact rather than approximate: a retired arena
+ * never allocates again, so its slabs never change after they are indexed,
+ * and a hit is confirmed with arena_owns.  If the table cannot grow, it is
+ * marked broken and the query walks g_retired as before. */
+typedef struct { uintptr_t blk; Arena *a; } RetiredSlot;
+#define TUR_REGION_BLK_SHIFT 16
+static __thread RetiredSlot *g_ridx;
+static __thread size_t       g_ridx_cap;    /* a power of two; 0 = none yet */
+static __thread size_t       g_ridx_n;
+static __thread bool         g_ridx_broken;
 
 /* Reclaimed generations, reset and available for the next push.  Reclaiming
  * REWINDS rather than releases: arena_reset keeps the slabs (and poisons them
@@ -1229,6 +1261,7 @@ static void tls_thread_exit(void *unused) {
     free(g_retired); g_retired = NULL; g_retired_n = g_retired_cap = 0;
     free(g_pool);    g_pool = NULL;    g_pool_n = g_pool_cap = 0;
     free(g_escaped); g_escaped = NULL; g_escaped_cap = 0;
+    free(g_ridx);    g_ridx = NULL;    g_ridx_cap = g_ridx_n = 0; g_ridx_broken = false;
     g_tls_armed = false;
 }
 
@@ -1266,9 +1299,15 @@ static void reg_add(Arena *a) {
     reg_unlock();
 }
 
+/* From the END: brackets are LIFO, so the arena a reclaim hands back is almost
+ * always among the last registered -- behind it sit only the inner
+ * generations that retired since it was pushed -- and the swap-with-last
+ * removal keeps the survivors in that order.  Scanning from index 0 instead
+ * paid for every generation the program had ever retired, on every rewind
+ * (performance-audit R-3). */
 static void reg_remove(Arena *a) {
     reg_lock();
-    for (int i = 0; i < g_reg_n; i++) {
+    for (int i = g_reg_n - 1; i >= 0; i--) {
         if (g_reg[i] == a) {
             g_reg[i] = g_reg[--g_reg_n];
             atomic_fetch_sub_explicit(&g_reg_total, 1, memory_order_relaxed);
@@ -1276,6 +1315,54 @@ static void reg_remove(Arena *a) {
             break;
         }
     }
+    reg_unlock();
+}
+
+static int cmp_arena_ptr(const void *x, const void *y) {
+    uintptr_t a = (uintptr_t)*(Arena *const *)x, b = (uintptr_t)*(Arena *const *)y;
+    return a < b ? -1 : a > b;
+}
+
+/* Drop every registry entry for this thread's live and retired generations in
+ * ONE pass.  Shutdown used to reg_remove each arena in turn, which is R x R/2
+ * compares for R retirements -- 71% of a 100k-round program's cycles, all
+ * after main returned (performance-audit R-3).  When every registered arena is
+ * this thread's (every single-threaded program) the registry is simply
+ * cleared; otherwise this thread's arenas are sorted and the registry filtered
+ * against them.  Subtracts exactly what it removed, so the lock-free "all
+ * mine" test in reg_owns_foreign stays true for the threads that remain. */
+static void reg_remove_mine(void) {
+    reg_lock();
+    int removed = 0;
+    if (atomic_load_explicit(&g_reg_total, memory_order_relaxed) == g_my_reg) {
+        removed = g_reg_n;
+        g_reg_n = 0;
+    } else {
+        int n = g_live_n + g_retired_n;
+        Arena **own = n > 0 ? (Arena **)malloc((size_t)n * sizeof *own) : NULL;
+        if (own) {
+            memcpy(own, g_live, (size_t)g_live_n * sizeof *own);
+            memcpy(own + g_live_n, g_retired, (size_t)g_retired_n * sizeof *own);
+            qsort(own, (size_t)n, sizeof *own, cmp_arena_ptr);
+            int k = 0;
+            for (int i = 0; i < g_reg_n; i++) {
+                if (bsearch(&g_reg[i], own, (size_t)n, sizeof *own, cmp_arena_ptr))
+                    removed++;
+                else
+                    g_reg[k++] = g_reg[i];
+            }
+            g_reg_n = k;
+            free(own);
+        } else if (n > 0) {
+            /* No memory for the sort: one removal each, as before. */
+            reg_unlock();
+            for (int i = 0; i < g_live_n; i++)    reg_remove(g_live[i]);
+            for (int i = 0; i < g_retired_n; i++) reg_remove(g_retired[i]);
+            return;
+        }
+    }
+    atomic_fetch_sub_explicit(&g_reg_total, removed, memory_order_relaxed);
+    g_my_reg -= removed;
     reg_unlock();
 }
 
@@ -1369,6 +1456,53 @@ static bool generation_escaped(int idx0) {
     return g_escaped[idx0];
 }
 
+static size_t ridx_hash(uintptr_t blk, size_t cap) {
+    uint64_t h = (uint64_t)blk * UINT64_C(0x9E3779B97F4A7C15);
+    return (size_t)(h ^ (h >> 29)) & (cap - 1);
+}
+
+static void ridx_put(RetiredSlot *t, size_t cap, uintptr_t blk, Arena *a) {
+    size_t i = ridx_hash(blk, cap);
+    while (t[i].a) i = (i + 1) & (cap - 1);
+    t[i].blk = blk;
+    t[i].a   = a;
+}
+
+static bool ridx_grow(void) {
+    size_t nc = g_ridx_cap ? g_ridx_cap * 2 : 1024;
+    RetiredSlot *nt = (RetiredSlot *)calloc(nc, sizeof *nt);
+    if (!nt) return false;
+    for (size_t i = 0; i < g_ridx_cap; i++)
+        if (g_ridx[i].a) ridx_put(nt, nc, g_ridx[i].blk, g_ridx[i].a);
+    free(g_ridx);
+    g_ridx = nt;
+    g_ridx_cap = nc;
+    return true;
+}
+
+/* arena_each_slab callback: one slot per 64 KiB block the slab overlaps, kept
+ * at most half full so every probe ends at an empty slot. */
+static void ridx_add_slab(const void *data, size_t cap, void *ud) {
+    if (g_ridx_broken || cap == 0) return;
+    uintptr_t lo = (uintptr_t)data >> TUR_REGION_BLK_SHIFT;
+    uintptr_t hi = ((uintptr_t)data + cap - 1) >> TUR_REGION_BLK_SHIFT;
+    for (uintptr_t b = lo; b <= hi; b++) {
+        if ((g_ridx_n + 1) * 2 > g_ridx_cap && !ridx_grow()) {
+            g_ridx_broken = true;   /* incomplete from here on: walk instead */
+            return;
+        }
+        ridx_put(g_ridx, g_ridx_cap, b, (Arena *)ud);
+        g_ridx_n++;
+    }
+}
+
+static bool ridx_owns(const void *p) {
+    uintptr_t blk = (uintptr_t)p >> TUR_REGION_BLK_SHIFT;
+    for (size_t i = ridx_hash(blk, g_ridx_cap); g_ridx[i].a; i = (i + 1) & (g_ridx_cap - 1))
+        if (g_ridx[i].blk == blk && arena_owns(g_ridx[i].a, p)) return true;
+    return false;
+}
+
 static void retire_top(void) {
     Arena *a = g_live[--g_live_n];
     if (stats_enabled()) atomic_fetch_add_explicit(&g_stat_retire, 1, memory_order_relaxed);
@@ -1379,6 +1513,7 @@ static void retire_top(void) {
          * drop path that reaches it still refuses to free(). */
         return;
     }
+    arena_each_slab(a, ridx_add_slab, a);
 }
 
 /* Both pops take the depth back so a mismatched pair cannot rewind somebody
@@ -1444,8 +1579,14 @@ TUR_RT_API bool tur_region_owns(const void *p) {
     if (!p) return false;
     for (int i = 0; i < g_live_n; i++)
         if (arena_owns(g_live[i], p)) return true;
-    for (int i = 0; i < g_retired_n; i++)
-        if (arena_owns(g_retired[i], p)) return true;
+    if (g_retired_n > 0) {
+        if (g_ridx && !g_ridx_broken) {
+            if (ridx_owns(p)) return true;
+        } else {
+            for (int i = 0; i < g_retired_n; i++)
+                if (arena_owns(g_retired[i], p)) return true;
+        }
+    }
     return reg_owns_foreign(p);
 }
 
@@ -1498,14 +1639,17 @@ TUR_RT_API void tur_region_shutdown(void) {
     /* This thread's arenas only: another thread's live or retired generations
      * are its own, and at process exit they go with the process.  Their
      * registry entries are dropped too, so a shutdown that follows every
-     * thread's exit leaves nothing allocated. */
-    for (int i = 0; i < g_live_n; i++)    { reg_remove(g_live[i]);    arena_free(g_live[i]);    free(g_live[i]); }
-    for (int i = 0; i < g_retired_n; i++) { reg_remove(g_retired[i]); arena_free(g_retired[i]); free(g_retired[i]); }
+     * thread's exit leaves nothing allocated.  The entries go first, in one
+     * pass, so no other thread can find a freed arena in the registry. */
+    reg_remove_mine();
+    for (int i = 0; i < g_live_n; i++)    { arena_free(g_live[i]);    free(g_live[i]); }
+    for (int i = 0; i < g_retired_n; i++) { arena_free(g_retired[i]); free(g_retired[i]); }
     for (int i = 0; i < g_pool_n; i++)    { arena_free(g_pool[i]);    free(g_pool[i]); }
     free(g_live);    g_live = NULL;    g_live_n = g_live_cap = 0;
     free(g_retired); g_retired = NULL; g_retired_n = g_retired_cap = 0;
     free(g_pool);    g_pool = NULL;    g_pool_n = g_pool_cap = 0;
     free(g_escaped); g_escaped = NULL; g_escaped_cap = 0;
+    free(g_ridx);    g_ridx = NULL;    g_ridx_cap = g_ridx_n = 0; g_ridx_broken = false;
     g_tls_armed = false;
     reg_lock();
     if (g_reg_n == 0) { free(g_reg); g_reg = NULL; g_reg_cap = 0; }
