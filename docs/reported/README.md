@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found prototyping hiccup vector rewriting (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [typed-list-byvalue-adt-element-unboxed](typed-list-byvalue-adt-element-unboxed.md) | medium-high | A by-value `defdata` as a `(List A)` element is never boxed: `list-map` with a lambda returning one segfaults (the fat shim returns the struct by value through the int64 carrier ABI, and `list-first`'s spec dereferences the word), and `list-of` with such elements fails in cc. `:heap` types work. |
+| [macro-time-forward-reference-typed-int](macro-time-forward-reference-typed-int.md) | low-medium | In a `:for-macros` module or a `defmacro*`'s `letrec`, a call to a function defined later is typed with `int` parameters, so mutually recursive `Syntax` walkers fail at definition time. Compiled and interpreted code handle the same forward reference. Workaround: one self-recursive function with a mode argument. |
+
 ## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
 
 | Report | Severity | One line |

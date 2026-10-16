@@ -985,7 +985,7 @@ Probed with `read-string` / `syntax->string` on the v0.65.2 release:
 (defopaque Attr     ...)    ;; a name and an escaped value
 (defopaque RawBody  ...)    ;; a raw-text body: a checked literal or a Trusted* value
 
-(defdata Html
+(defdata Html :heap                      ;; :heap -- see "D-1 investigation"
   (HElem     Tag (Cons Attr) (Cons Html))
   (HRawText  Tag (Cons Attr) RawBody)    ;; script, style and the other raw-text elements
   (HText     String)                     ;; escaped at render
@@ -1094,7 +1094,8 @@ All three were decided 2026-10-16.
   rewrite is what makes hiccup feel like hiccup. Its cost is that a real
   vector of keywords inside a hiccup body is misread. *Decided: explicit
   `(hiccup ...)` for now.* Revisit the rewrite with real templates before
-  D2.
+  D2. "D-1 investigation" below costs a narrower rewrite, which touches
+  only result positions.
 - **D-2. Trees the HTML parser will not reproduce.** `[:p [:div "x"]]`,
   `[:a [:a "y"]]`, and text directly inside `[:table]` are valid `Html`
   values, but a browser re-nests their serialized form, so string mode and
@@ -1108,3 +1109,76 @@ All three were decided 2026-10-16.
   `#map{...}` only.* It is the documented map literal, and the attribute
   syntax then does not depend on how curly-infix rewrites braces. A bare
   `{...}` is a compile error pointing at `#map{...}`.
+
+#### D-1 investigation: rewriting vectors in result positions (2026-10-16)
+
+What adopting the rewrite would take, found by building it. A prototype
+walker of about 70 lines, in a `:for-macros` module, compiled and ran
+correctly on the v0.65.2 release and on `main` (`d60c40f6`), with the
+escaping checked. It handled element children, `if` with and without
+`else`, `when`, `do`, `let`, and `list-map` over an inline `fn` whose body
+was itself an `if` with markup in both branches. A production version,
+with `unless`, `cond`, `match`, `for` and the diagnostics below, is
+estimated at about 150 lines.
+
+**Rewrite result positions, not every vector.** A vector is rewritten only
+where its value becomes a child:
+
+| Form | Result positions |
+|---|---|
+| hiccup element | each child |
+| `if` | both branches; a missing `else` becomes an empty `Html` |
+| `when` / `unless` | the last body form; the missing branch becomes an empty `Html` |
+| `cond` | each result; a missing `:else` gets an empty `Html` |
+| `do`, `let` | the last body form |
+| `match` | each arm's body |
+| `for` | the last body form |
+| `list-map` with an inline one-parameter `fn` | the `fn`'s last body form; the call becomes a `list-foldl` straight into `Html`, so no `(List Html)` is built |
+
+Any other leaf in a result position becomes `(to-child x)`, so every branch
+is already `Html` and the author never has to make branch types agree.
+
+**Why not every keyword-headed vector.** Across the roughly 5,000 `.tur`
+files in `stdlib/`, `tests/fixtures/` and the spices, keyword-headed
+vectors appear 31 times. Outside comments, every one is type syntax
+(`(fn [:int] :int)`, `(definstance Show [:int])`) or a macro option list
+(`derive-json ... :only [:encode]`). A walk over every vector would
+rewrite those; a result-position walk never reaches them.
+
+**Reach.** Markup outside a result position still needs `(hiccup ...)`:
+a `let` binding's value, an argument to a function the walker does not
+know, or the body of a named helper. A missed vector surfaces as a
+`vec-of` error (`function 'vec-push!' arg 2: expected :Sym, got cstr`),
+which does not say what to do. The macro can also scan non-result
+positions for vectors headed by a known element name and report "wrap
+this in `(hiccup ...)`" instead.
+
+**Spans are good.** Subforms the walker does not touch keep their source
+spans, and a rebuilt list takes its first element's span, so a type error
+inside rewritten code points at the user's line. A's `${...}` holes
+cannot do that (they go through `read-string`).
+
+**What got in the way:**
+
+- **Mutual recursion at macro time.** A call to a function defined later
+  is typed `int`, both in a `letrec` and across a `:for-macros` module's
+  `defn`s (`docs/reported/macro-time-forward-reference-typed-int.md`).
+  The walker is therefore one self-recursive function that dispatches on a
+  mode argument. It works, but it reads worse than three functions would.
+- **The `syntax-*` functions exist only at macro time.** The walker cannot
+  be an ordinary module; it has to be imported `:for-macros`. This is
+  documented, and fine.
+- **`syntax-vec` has a fixed arity, and nothing turns a list into a
+  vector.** Building the fold's parameter vector
+  (`[acc : Html r : cstr]`) works only because the shape is fixed (a
+  one-parameter `fn`; a typed parameter is two elements, the symbol and a
+  `type-ann`). Rewriting a binding vector of arbitrary length would need a
+  `syntax-list->vec`.
+- **`Html` must be `:heap`.** A by-value `defdata` as a `(List A)`
+  element segfaults in `list-map` and fails in cc in `list-of`
+  (`docs/reported/typed-list-byvalue-adt-element-unboxed.md`). With
+  `:heap`, both `(list-map rows item)` through a `ToChild (List Html)`
+  instance and the fold rewrite work. The cost is the one noted in the
+  Outcome section: every `:heap` constructor call allocates a node nothing
+  frees, so rendering an `Html` tree per request needs a `with-region`
+  bracket around it, or a string mode that does not materialize the tree.
