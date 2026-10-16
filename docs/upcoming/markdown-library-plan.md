@@ -727,9 +727,10 @@ a `SlugMode`, for READMEs that are read on GitHub.
     code point, the GitHub rule differs from github-slugger only on
     characters newer than the Unicode version github-slugger was built from.
 - **The API** keeps M1's and M2's shape, ids and accessors, rather than 6.2's
-  `(Vec HeadingInfo)` and `(Vec CodeBlockInfo)`. A struct with a `String`
-  field still leaks its box on `main`
-  (`opaque-field-struct-box-never-freed`; the fix, #1243, is open).
+  `(Vec HeadingInfo)` and `(Vec CodeBlockInfo)`. It was written while a
+  struct with a `String` field still leaked its box
+  (`opaque-field-struct-box-never-freed`, fixed since by #1243). Records of
+  that kind can go on top now, if a consumer in M4 or M5 wants them.
   - `markdown/headings` and `markdown/code-blocks` return a
     `(Vec MdBlockId)`: every block of the kind, in document order.
   - `markdown/heading-text` returns a heading's plain text, and
