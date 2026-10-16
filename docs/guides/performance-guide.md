@@ -20,11 +20,12 @@ interpreting benchmarks.
 Always benchmark release builds:
 
 ```sh
-tur run release          # cmake --build build -j --config Release
+tur run release          # optimised tur in build-release/
+build-release/tur build prog.tur -o prog
 ```
 
-The debug build (`tur run build`) inserts contract checks and disables
-optimisations; its timing numbers are not meaningful for comparison.
+The debug build (`tur run build`, `build/tur`) inserts contract checks and
+disables optimisations; its timing numbers are not meaningful for comparison.
 
 ---
 

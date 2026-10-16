@@ -627,7 +627,7 @@ output is anchored under `<build-dir>/bin/`. To restore the legacy
 ```sh
 tur run build    # debug build
 tur run test     # build + run tests
-tur run release  # release build
+tur run release  # release build, in build-release/
 tur run docs     # generate API documentation
 tur run wasm     # build WebAssembly module (runs docs first)
 tur run web-dev  # run web dev server

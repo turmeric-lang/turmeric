@@ -258,13 +258,15 @@ with-contract-handler my-handler
 
 Contract types are enabled by default.
 
-| Build | Contracts |
-|---|---|
-| `tur run build` (debug) | Always active |
-| `tur run release` | Stripped by default |
-| `tur run release` with `--keep-contracts` | Retained (safety-critical code) |
+What decides it is how `tur` itself was built:
 
-Contracts are compile-time insertions. A release build with no flag produces the same
+| Compiler | Contracts |
+|---|---|
+| Debug `tur` (`tur run build`, in `build/`) | Always active |
+| Release `tur` (`tur run release`, in `build-release/`) | Stripped by default |
+| Release `tur` with `--keep-contracts` | Retained (safety-critical code) |
+
+Contracts are compile-time insertions. A Release `tur` with no flag produces the same
 binary as code written without contract annotations.
 
 ---

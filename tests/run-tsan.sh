@@ -14,6 +14,8 @@
 #   cmake --build build-tsan -j
 #   TUR=./build-tsan/tur timeout 720 bash tests/run-tsan.sh
 #
+# or `tur run test-tsan`, which does all three.
+#
 # TUR must not be an ASan build (the default Debug one is): the fixture
 # programs link against the runtime archives next to it, and ASan and TSan
 # cannot share a process.  Release, or Debug with -DTUR_DEBUG_SANITIZE=OFF.

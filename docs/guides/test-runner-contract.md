@@ -106,16 +106,25 @@ A fixture directory may contain an empty `requires.tsan` marker file.
 - When `TUR_TSAN=1`: all fixtures run normally, including those with
   `requires.tsan`.  The compiler flags gain `-fsanitize=thread -g`.
 
-Enable TSan for a full test run:
+Run the concurrency fixtures under TSan with the dedicated recipe (Justfile,
+via `tur run` or `just`):
 
 ```sh
-TUR_TSAN=1 bash tests/run.sh
-# or using the dedicated recipe (Justfile, via `tur run` or `just`):
 tur run test-tsan
 ```
 
-The `test-tsan` recipe builds the TSan CMake configuration (`tur` itself
-compiled with `-fsanitize=thread`) and then runs ctest with `TUR_TSAN=1`.
+It builds a Release (non-ASan) `tur` into `build-tsan/`, then runs
+`tests/run-tsan.sh` against it: every `requires.tsan` fixture plus the thread, STM, channel and scheduler
+families, the same selection the nightly TSan workflow runs. For every fixture,
+point `TUR` at that build:
+
+```sh
+TUR=./build-tsan/tur TUR_TSAN=1 bash tests/run.sh
+```
+
+Not at the default `build/tur`: that one is ASan-instrumented, fixture
+programs link the runtime archives next to it, and ASan and TSan cannot share
+a process.
 
 ## Failures That Are Not Product Bugs
 
