@@ -86,9 +86,16 @@ jobs:
   # docs-lint (below) always runs: it holds the ctest checks that read docs/
   # and need no build, which a docs-only PR would otherwise never reach.
   #
-  # Pushes to main, the daily schedule, and anything this step cannot classify
-  # count as code: main keeps a run per merge (macOS aside -- see MACOS_LEGS
-  # at the top), and the gate fails open.
+  # Pushes to main are classified the same way, over the whole push: merging
+  # a docs-only PR gets the docs-only run its PR got.  Before 2026-10-16 every
+  # push counted as code, and that morning six docs-only merges in 41 minutes
+  # (#1221-#1226) each ran all 26 jobs -- ~1,600 runner-minutes of a queue
+  # that was already at the account's 20-job cap (MACOS_LEGS at the top).
+  # A docs-only push still publishes its line and doc counts: publish-timings
+  # runs after skipped jobs, and publishes the counts without suite rows.
+  #
+  # The daily schedule, and anything this step cannot classify, count as code,
+  # so the gate fails open.
   changes:
     name: Classify changed paths
     runs-on: ubuntu-latest
@@ -98,15 +105,30 @@ jobs:
     steps:
       # A pull_request run checks out the merge commit; its first parent is
       # the base branch tip, so HEAD^1..HEAD is exactly the PR's change.
+      #
+      # A push diffs github.event.before..HEAD instead: everything the push
+      # moved main by, whether that is one merge commit or several rebased
+      # ones (HEAD^1 would see only the last).  `before` is fetched on its own
+      # at depth 1 -- a diff of two trees needs no history between them.  An
+      # all-zero `before` (a branch creation) or one that cannot be fetched (a
+      # force-push's discarded tip) leaves the run classified as code.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
       - id: classify
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
           code=true
           guides=true
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] \
-             && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
+          files=
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            files=$(git diff --name-only HEAD^1 HEAD) || files=
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ -n "${BEFORE//0/}" ] \
+               && git fetch --no-tags --depth=1 origin "$BEFORE"; then
+            files=$(git diff --name-only "$BEFORE" HEAD) || files=
+          fi
+          if [ -n "$files" ]; then
             echo "$files"
             not_inert=$(awk '!/^docs\// && (!/\.md$/ || /^(tests|web|src|stdlib)\//)' <<<"$files")
             [ -n "$not_inert" ] || code=false
@@ -1352,7 +1374,9 @@ jobs:
   # a git push.
   publish-timings:
     name: Publish suite timings
-    needs: [test, jit, web-smoke]
+    # `changes` for its `code` output only: on a docs-only push the three jobs
+    # that write timings are skipped, and the counts publish alone (below).
+    needs: [changes, test, jit, web-smoke]
     # always(): a red run's timings are the interesting ones (a suite that
     # regressed into a timeout), so publish regardless of upstream job status.
     # Restricted to main pushes and the daily schedule (which always runs on
@@ -1416,11 +1440,18 @@ jobs:
           # log and are separated at query time rather than at write time.
           find timings-artifacts -name 'timings.jsonl' -print0 \
             | xargs -0 cat > all-timings.jsonl 2>/dev/null || true
-          if [ ! -s all-timings.jsonl ]; then
-            echo "::warning::no suite timings collected; nothing to publish"
-            exit 0
+          # No suite rows is expected on a docs-only push (`changes` said
+          # code=false, so nothing ran to time) and a fault anywhere else.
+          # Either way the line and doc counts above are still this commit's,
+          # and publish-timings.sh publishes them without suite rows -- a
+          # docs-only merge is exactly the commit that moves the doc counts.
+          if [ -s all-timings.jsonl ]; then
+            echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
+          elif [ "${{ needs.changes.outputs.code }}" = false ]; then
+            echo "docs-only push: no suite timings by design; publishing the line and doc counts alone"
+          else
+            echo "::warning::no suite timings collected; publishing the line and doc counts alone"
           fi
-          echo "collected $(wc -l < all-timings.jsonl) rows from $(find timings-artifacts -name timings.jsonl | wc -l) leg(s)"
           bash tools/ci/publish-timings.sh all-timings.jsonl --loc repo-loc.jsonl --docs docs-counts.jsonl
 
   windows:
