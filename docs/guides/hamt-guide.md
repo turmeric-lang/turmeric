@@ -257,25 +257,25 @@ defn my-map-fn [] :ptr
 
 Transients are a **batch-construction interface**: fork one from a map, apply a run of updates to it, then seal it back into an immutable map. The map you forked from is unchanged throughout.
 
-> **A transient does not mutate in place today.** `tur_hamt_transient_set`
-> (`src/runtime/hamt.c`) looks the key up (`node_has`), then runs the same
-> path-copying `node_insert` a persistent `hamt/set` runs and releases the old
-> path; `transient-del!` reuses `node_delete` the same way. What it saves is
-> the map shell a persistent update allocates. Measured on 100k inserts
-> (2026-10-14): one allocation fewer per insert and 7% fewer heap bytes, but
-> the same instruction count and wall time as `hamt/set` (173 ms against
-> 177 ms), with 57% of the profile releasing nodes and 12% copying them
-> ([performance audit, R-5](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md#r-5----hamt-transients-path-copy)).
-> Use a transient for its interface, not for speed. An in-place transient
-> (copy a node the first time the transient touches it, mutate it after) is
-> ranked fix 3 of that audit; this note goes when it lands.
+**`hamt/transient-set!` changes the trie in place.** A persistent `hamt/set`
+copies every node on the key's path on every update and then releases the old
+path. A transient copies a node only the first time it changes one the map it
+came from still shares, and changes its own copy directly after that
+(`node_insert_mut` in `src/runtime/hamt.c`). So the first updates into an
+existing map pay roughly what `hamt/set` does, and the rest pay for the change
+alone. Measured on 100k inserts into an empty map (2026-10-16): 47 ms through
+a transient, against 171 ms for a fold of `hamt/set`. Before 2026-10-16 the
+transient path-copied too and cost the same as the fold
+([performance audit, R-5](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp2-runtime-hot-paths.md#r-5----hamt-transients-path-copy)).
+`hamt/transient-del!` still runs the persistent delete, saving only the map
+shell.
 
 ```
 ;; Fork a transient from an existing map (original unchanged)
 (def t (hamt/transient m))
 
-;; Update the transient -- no new map shell per operation
-;; (the trie path is still copied; see the note above)
+;; Update the transient in place -- no new map shell, no path copy once the
+;; transient owns the nodes it changes
 (hamt/transient-set! t h1 "a" "alpha")
 (hamt/transient-set! t h2 "b" "beta")
 (hamt/transient-del! t h1 "a")
@@ -345,8 +345,7 @@ hamt/dump(m)
 ### Build from a list
 
 ```turmeric
-;; Build through a transient (today it costs about what a fold of hamt/set does;
-;; see Transient Mode)
+;; Build through a transient: it fills the trie in place (see Transient Mode)
 (defn list->hamt [pairs]
   (let [t (hamt/transient (hamt/new))]
     (for-each pairs
@@ -355,8 +354,7 @@ hamt/dump(m)
     (hamt/persistent! t)))
 ```
 ```sweet-exp
-;; Build through a transient (today it costs about what a fold of hamt/set does;
-;; see Transient Mode)
+;; Build through a transient: it fills the trie in place (see Transient Mode)
 defn list->hamt [pairs]
   let [t hamt/transient(hamt/new())]
     for-each pairs

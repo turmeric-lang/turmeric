@@ -31,13 +31,16 @@
 ;;
 ;; str.tur supplies str-concat / str-free / the :int cons-list helpers used by
 ;; the union builders; cstr.tur supplies cstr-len / cstr-nth / cstr-sub, the
-;; byte primitives the matcher and parser read input through. The load registry
-;; dedups, so re-loading an already-present module is a no-op.
+;; byte primitives the matcher and parser read input through; string-ffi.tur
+;; supplies the StringBuilder replace-all builds its output in. The load
+;; registry dedups, so re-loading an already-present module is a no-op.
 (load "stdlib/str.tur")
 
 (load "stdlib/cstr.tur")
 
 (load "stdlib/option.tur")
+
+(load "stdlib/string-ffi.tur")
 ;; ================= AST =================
 
 (defdata RxCls :copy (RxClsNil) (RxClsRange :int :int :RxCls))
@@ -398,28 +401,34 @@
       (RxStrsCons (cstr-sub input s e)
         (re-find-all-go re input len (if (> e s) e (+ s 1)))))))
 
+;;
+;; The output goes into a StringBuilder, and the input is copied out of a String
+;; made from it once, so every byte is copied once.  This used to append with
+;; str-concat, which copied the whole result so far at every match, and to cut
+;; each piece with cstr-sub, which measured the whole input again: quadratic in
+;; the matches (performance audit R-9).  `src` and `repl` are the input and the
+;; replacement as Strings, `sb` the builder; each is a raw ptr<void>, as the
+;; string-ffi externs take them.
 (defn re-replace-go [re : Regex
                      input : cstr
                      len : int
                      from : int
-                     replacement : cstr
-                     acc : cstr] : cstr
+                     src : ptr<void>
+                     repl : ptr<void>
+                     sb : ptr<void>] : void
   (match (re-find-from re input len from)
     (RxIP s e)
     (if (< s 0)
-      (str-concat acc (cstr-sub input from len))
-      (let [acc1 (str-concat (str-concat acc (cstr-sub input from s))
-                   replacement)]
+      (tur_sb_push_range sb src from (- len from))
+      (do
+        (tur_sb_push_range sb src from (- s from))
+        (tur_sb_push_string sb repl)
         (if (> e s)
-          (re-replace-go re input len e replacement acc1)
-          (if (< s len)
-            (re-replace-go re
-              input
-              len
-              (+ s 1)
-              replacement
-              (str-concat acc1 (cstr-sub input s (+ s 1))))
-            acc1))))))
+          (re-replace-go re input len e src repl sb)
+          (when (< s len)
+            (do
+              (tur_sb_push_range sb src s 1)
+              (re-replace-go re input len (+ s 1) src repl sb))))))))
 ;;; re/compile -- compile a regular expression pattern into a Regex.
 ;;;
 ;;; Parameters:
@@ -535,7 +544,18 @@
 ;;; Since: Phase B2
 
 (defn re/replace-all [re : Regex input : cstr replacement : cstr] : cstr
-  (re-replace-go re input (cstr-len input) 0 replacement ""))
+  (let [src  (tur_string_from_cstr input)
+        repl (tur_string_from_cstr replacement)
+        sb   (tur_sb_new)]
+    (do
+      (re-replace-go re input (tur_string_len src) 0 src repl sb)
+      (let [out (tur_sb_finish sb)
+            res (cstr-sub (tur_string_cstr out) 0 (tur_string_len out))]
+        (do
+          (tur_string_release out)
+          (tur_string_release repl)
+          (tur_string_release src)
+          res)))))
 ;;; re/free -- no-op shim (a Regex is a GC/heap value, not a malloc'd handle).
 ;;;
 ;;; Parameters:
@@ -618,3 +638,16 @@
     (if (= (:: pat int) 0)
       (RNever)
       (let [r (re/compile pat)] (do (str-free (:: pat int)) r)))))
+;; ---------------------------------------------------------------------------
+;; Autolink hint -- consumed by `tur build` / `tur run` (src/main.c): re/replace-all
+;; builds in a StringBuilder, which lives in src/runtime/tur_string.c.  The same
+;; marker string.tur carries; a bare .c named twice is compiled once.
+;;; re-autolink-hint -- internal marker triggering tur_string.c compilation.
+
+(defn re-autolink-hint []
+  #fx{Unsafe}
+  : int
+  ```c
+  /* __tur_autolink__: src/runtime/tur_string.c src/runtime/rt_alloc.c -Isrc/runtime */
+  return 0;
+  ```)

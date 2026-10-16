@@ -634,9 +634,11 @@ Check [`docs/reported/`](https://github.com/turmeric-lang/turmeric/blob/main/doc
 
 **Structs on the carrier ABI**
 
-- [opaque-field-struct-box-never-freed](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/opaque-field-struct-box-never-freed.md) --
-  a `defstruct` with a `defopaque` field (`String` included) boxes per
-  construction.
+- [cps-byvalue-struct-with-closure-field](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/cps-byvalue-struct-with-closure-field.md) --
+  a `defstruct` with a `defopaque` field beside a closure field stays on the
+  carrier ABI, and boxes per construction, until the CPS backend can take such
+  a struct by value. (Without a closure field it is by value and leaks nothing:
+  `opaque-field-struct-box-never-freed`, archived.)
 
 **Continuations (DK)**
 
