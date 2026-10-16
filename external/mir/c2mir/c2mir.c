@@ -12428,7 +12428,19 @@ static op_t modify_for_block_move (c2m_ctx_t c2m_ctx, op_t mem, op_t index) {
 static void gen_memcpy (c2m_ctx_t c2m_ctx, MIR_disp_t disp, MIR_reg_t base, op_t val,
                         mir_size_t len);
 
-static void block_move (c2m_ctx_t c2m_ctx, op_t var, op_t val, mir_size_t size) {
+/* Copy SIZE bytes of an object aligned to ALIGN from VAL to VAR.
+
+   A copy of at most four words, a word being ALIGN capped at 8 bytes, is
+   emitted as word loads followed by word stores.  Anything larger calls memcpy
+   as before.  Small aggregates are copied constantly -- a 16-byte struct passed
+   or returned by value is one copy per parameter and per return -- and MIR-gen
+   keeps a memcpy call as a call, so a loop over such values made one libc call
+   per copy where a native compiler makes two moves.  Using the object's
+   alignment as the word size keeps every access aligned on targets that
+   require it.  All the loads come before any store, so the copy is right even
+   when the two objects overlap, as memcpy is not required to be. */
+static void block_move (c2m_ctx_t c2m_ctx, op_t var, op_t val, mir_size_t size,
+                        mir_size_t align) {
   gen_ctx_t gen_ctx = c2m_ctx->gen_ctx;
   MIR_context_t ctx = c2m_ctx->ctx;
   MIR_label_t repeat_label;
@@ -12436,6 +12448,30 @@ static void block_move (c2m_ctx_t c2m_ctx, op_t var, op_t val, mir_size_t size) 
 
   if (MIR_op_eq_p (ctx, var.mir_op, val.mir_op) || size == 0) return;
   if (size > 5) {
+    mir_size_t word = align >= 8 ? 8 : align >= 4 ? 4 : align >= 2 ? 2 : 1;
+
+    if (size % word == 0 && size / word <= 4) {
+      MIR_type_t wt = (word == 8   ? MIR_T_I64
+                       : word == 4 ? MIR_T_I32
+                       : word == 2 ? MIR_T_I16
+                                   : MIR_T_I8);
+      int n = (int) (size / word);
+      op_t d, s, t[4];
+
+      d = mem_to_address (c2m_ctx, var, TRUE);
+      s = mem_to_address (c2m_ctx, val, TRUE);
+      assert (d.mir_op.mode == MIR_OP_REG && s.mir_op.mode == MIR_OP_REG);
+      for (int i = 0; i < n; i++) {
+        t[i] = get_new_temp (c2m_ctx, MIR_T_I64);
+        emit2 (c2m_ctx, MIR_MOV, t[i].mir_op,
+               MIR_new_mem_op (ctx, wt, (MIR_disp_t) (i * word), s.mir_op.u.reg, 0, 1));
+      }
+      for (int i = 0; i < n; i++)
+        emit2 (c2m_ctx, MIR_MOV,
+               MIR_new_mem_op (ctx, wt, (MIR_disp_t) (i * word), d.mir_op.u.reg, 0, 1),
+               t[i].mir_op);
+      return;
+    }
     var = mem_to_address (c2m_ctx, var, TRUE);
     assert (var.mir_op.mode == MIR_OP_REG);
     gen_memcpy (c2m_ctx, 0, var.mir_op.u.reg, val, size);
@@ -12569,7 +12605,7 @@ static void MIR_UNUSED simple_add_ret_ops (c2m_ctx_t c2m_ctx, struct type *ret_t
   } else {
     ret_addr_reg = MIR_reg (ctx, RET_ADDR_NAME, curr_func->u.func);
     var = new_op (NULL, MIR_new_mem_op (ctx, MIR_T_I8, 0, ret_addr_reg, 0, 1));
-    block_move (c2m_ctx, var, val, type_size (c2m_ctx, ret_type));
+    block_move (c2m_ctx, var, val, type_size (c2m_ctx, ret_type), type_align (ret_type));
   }
 }
 
@@ -13952,10 +13988,11 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
       if ((val_p || true_label != NULL) && r->code != N_POST_INC && r->code != N_POST_DEC)
         emit2_noopt (c2m_ctx, tp_mov (t), res.mir_op, val.mir_op);
     } else { /* block move */
-      mir_size_t size = type_size (c2m_ctx, ((struct expr *) r->attr)->type);
+      struct type *type = ((struct expr *) r->attr)->type;
+      mir_size_t size = type_size (c2m_ctx, type);
 
       assert (r->code == N_ASSIGN);
-      block_move (c2m_ctx, var, val, size);
+      block_move (c2m_ctx, var, val, size, type_align (type));
     }
     break;
   case N_ID: {
@@ -14215,7 +14252,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
         addr = mem_to_address (c2m_ctx, op1, FALSE);
         emit2 (c2m_ctx, MIR_MOV, res.mir_op, addr.mir_op);
       } else {
-        block_move (c2m_ctx, *desirable_dest, op1, size);
+        block_move (c2m_ctx, *desirable_dest, op1, size, type_align (cond_res_type));
         res = *desirable_dest;
       }
     }
@@ -14232,7 +14269,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
         emit2 (c2m_ctx, MIR_MOV, res.mir_op, addr.mir_op);
         res = new_op (NULL, MIR_new_mem_op (ctx, MIR_T_I8, 0, res.mir_op.u.reg, 0, 1));
       } else {
-        block_move (c2m_ctx, res, op1, size);
+        block_move (c2m_ctx, res, op1, size, type_align (cond_res_type));
       }
     }
     emit_label_insn_opt (c2m_ctx, end_label);
@@ -14824,7 +14861,8 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
           var
             = new_op (param_decl, MIR_new_mem_op (ctx, MIR_T_UNDEF, param_decl->offset,
                                                   MIR_reg (ctx, FP_NAME, curr_func->u.func), 0, 1));
-          block_move (c2m_ctx, var, val, type_size (c2m_ctx, param_type));
+          block_move (c2m_ctx, var, val, type_size (c2m_ctx, param_type),
+                      type_align (param_type));
         } else {
           param_mir_type = get_mir_type (c2m_ctx, param_type);
           emit2 (c2m_ctx, tp_mov (param_mir_type),
@@ -14896,7 +14934,7 @@ static op_t gen (c2m_ctx_t c2m_ctx, node_t r, MIR_label_t true_label, MIR_label_
       struct expr *se = r->attr;
       op_t tmp = new_op (NULL, MIR_new_mem_op (ctx, MIR_T_UNDEF, (MIR_disp_t) se->c.u_val,
                                                MIR_reg (ctx, FP_NAME, curr_func->u.func), 0, 1));
-      block_move (c2m_ctx, tmp, res, size);
+      block_move (c2m_ctx, tmp, res, size, type_align (stmtexpr_type));
       res = tmp;
     }
     break;

@@ -182,3 +182,57 @@
     (let [j (utf8/-start-before s i (- i 1))
           p (utf8/-step s j)]
       (some (if (= (pair-snd p) i) (pair (pair-fst p) j) (utf8/-bad (- i 1)))))))
+;; ---- UTF-8 encoding --------------------------------------------------------
+;; 1114111 is U+10FFFF, 55296-57343 the surrogates U+D800-U+DFFF; a lead
+;; byte is 192, 224 or 240 (0xC0, 0xE0, 0xF0) plus the top bits, and each
+;; continuation byte 128 (0x80) plus the next six.
+;;; utf8/-cont -- internal: the continuation byte holding bits [6k, 6k+6) of cp.
+
+(defn utf8/-cont [cp : int k : int] : int
+  (+ 128 (mod (/ cp (if (= k 0) 1 (if (= k 1) 64 4096))) 64)))
+;;; utf8/-valid? -- internal: is cp a Unicode scalar value (in range, not a surrogate)?
+
+(defn utf8/-valid? [cp : int] : bool
+  (and (>= cp 0) (<= cp 1114111) (not (utf8/-in? cp 55296 57343))))
+;;; utf8/-encoded-len -- internal: how many bytes the UTF-8 encoding of valid cp takes.
+
+(defn utf8/-encoded-len [cp : int] : int
+  (cond (< cp 128) 1 (< cp 2048) 2 (< cp 65536) 3 :else 4))
+;;; utf8/-lead-byte -- internal: the first byte of the n-byte encoding of cp, n of 2 to 4.
+
+(defn utf8/-lead-byte [cp : int n : int] : int
+  (cond (= n 2) (+ 192 (/ cp 64))
+        (= n 3) (+ 224 (/ cp 4096))
+        :else   (+ 240 (/ cp 262144))))
+;;; utf8/-push-conts! -- internal: append cp's continuation bytes k down to 0.
+
+(defn utf8/-push-conts! [b : StringBuilder cp : int k : int] : void
+  (when (>= k 0)
+    (do
+      (builder/push-byte! b (utf8/-cont cp k))
+      (utf8/-push-conts! b cp (- k 1)))))
+;;; utf8/push-char! -- append the UTF-8 encoding of the code point c to b.
+;;;
+;;; One to four bytes, the inverse of utf8/decode-at.  A surrogate, a
+;;; negative value or one past U+10FFFF is not a character, so it appends
+;;; U+FFFD instead.
+;;;
+;;; Parameters:
+;;;   b -- the builder to append to
+;;;   c -- the code point to encode
+;;;
+;;; Example:
+;;;   (let [b (builder/new)]
+;;;     (do (utf8/push-char! b (int->char 233))
+;;;         (string/len (builder/finish b))))  ; => 2
+;;;
+;;; Since: markdown-library-plan U2
+(defn utf8/push-char! [b : StringBuilder c : Char] : void
+  (let [cp0 (char->int c)
+        cp  (if (utf8/-valid? cp0) cp0 65533)
+        n   (utf8/-encoded-len cp)]
+    (if (= n 1)
+      (builder/push-byte! b cp)
+      (do
+        (builder/push-byte! b (utf8/-lead-byte cp n))
+        (utf8/-push-conts! b cp (- n 2))))))

@@ -1,0 +1,78 @@
+;; markdown-entities -- markdown-library-plan U2: the HTML named character
+;; references (markdown/entity-lookup) and utf8/push-char!, the UTF-8 encoder
+;; it builds its result with.
+;;
+;; The source stays ASCII, so each result is printed as its code points,
+;; decoded back with utf8/decode-at, followed by its length in bytes.
+
+(load "stdlib/markdown/entities.tur")
+
+;; the code points of s from i, space-separated
+(defn push-cps [b : StringBuilder s : String i : int] : void
+  (match (utf8/decode-at s i)
+    (Some p) (do (when (> i 0) (builder/push-char! b #\space))
+                 (builder/push-int! b (char->int (pair-fst p)))
+                 (push-cps b s (pair-snd p)))
+    (None) (builder/push-cstr! b "")))
+
+;; "cps (bytes)" for s, then release s
+(defn dump [s : String] : void
+  (let [b (builder/new)]
+    (do (push-cps b s 0)
+        (builder/push-cstr! b " (")
+        (builder/push-int! b (string/len s))
+        (builder/push-cstr! b ")")
+        (string/release s)
+        (let [out (builder/finish b)]
+          (do (println (string/to-cstr out)) (string/release out))))))
+
+(defn lookup [c : cstr] : void
+  (let [name (string/from-cstr c)]
+    (do (match (markdown/entity-lookup name)
+          (Some s) (dump s)
+          (None) (println "none"))
+        (string/release name))))
+
+;; encode cp with utf8/push-char!, then show what decodes back
+(defn encode [cp : int] : void
+  (let [b (builder/new)]
+    (do (utf8/push-char! b (int->char cp)) (dump (builder/finish b)))))
+
+(defn main [] : int
+  (do
+    (println "-- entity-lookup")
+    ;; the first and last names, case-sensitive pairs, two-code-point
+    ;; entities, and one past U+FFFF
+    (lookup "AElig")
+    (lookup "zwnj")
+    (lookup "amp")
+    (lookup "AMP")
+    (lookup "copy")
+    (lookup "COPY")
+    (lookup "ngE")
+    (lookup "NotEqualTilde")
+    (lookup "Afr")
+    (lookup "CounterClockwiseContourIntegral")
+    (println "-- entity-lookup, not found")
+    ;; wrong case, with its semicolon, with its ampersand, empty, a prefix
+    (lookup "Amp")
+    (lookup "amp;")
+    (lookup "&amp")
+    (lookup "")
+    (lookup "am")
+    (lookup "zzzz")
+    (println "-- utf8/push-char!")
+    ;; each length at its edges, then values that are not characters
+    (encode 0)
+    (encode 127)
+    (encode 128)
+    (encode 2047)
+    (encode 2048)
+    (encode 65535)
+    (encode 65536)
+    (encode 1114111)
+    (encode 55296)
+    (encode 57343)
+    (encode 1114112)
+    (encode -1)
+    0))

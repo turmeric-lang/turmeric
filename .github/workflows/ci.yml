@@ -39,14 +39,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Docs-only gate.  A PR that touches nothing outside docs/ cannot change what
-  # the compiler does, so the build-and-suite jobs below are skipped for it --
-  # including their macOS legs, which wait on a small shared runner pool (see
-  # docs/archive/ci-aux-suite-latency-plan.md section 3).  A skipped job
-  # reports "skipped", which is not a failure.
+  # Docs-only gate.  A PR that touches only docs/ and inert Markdown cannot
+  # change what the compiler does, so the build-and-suite jobs below are
+  # skipped for it -- including their macOS legs, which wait on a small shared
+  # runner pool (see docs/archive/ci-aux-suite-latency-plan.md section 3).  A
+  # skipped job reports "skipped", which is not a failure.
+  #
+  # Inert Markdown is any *.md outside tests/, web/, src/ and stdlib/:
+  # CLAUDE.md, README.md, CHANGELOG.md, external/mir/VENDORED.md, benchmark
+  # write-ups.  No job below reads one (checked 2026-10-16: the guide checks
+  # and genguides read docs/guides/ only, genspices reads the spices repo).  The
+  # four excluded trees are where a .md is or could be an input -- the codemod
+  # test's before.md/after.md under tests/, the site's web/public/.  A new
+  # tool or test that reads Markdown outside them must add its path there.
   #
   # Two outputs, because docs/ is not all inert:
-  #   code   -- something outside docs/ changed.  Every job runs.
+  #   code   -- something other than docs/ or inert Markdown changed.  Every
+  #             job runs.
   #   guides -- something under docs/guides/ changed.  The guides are rendered
   #             and link-checked by web-smoke (`tur run docs` ends in
   #             `genpack.py --strict-links`), and checked by check-guides and
@@ -75,7 +84,8 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = pull_request ] \
              && files=$(git diff --name-only HEAD^1 HEAD) && [ -n "$files" ]; then
             echo "$files"
-            grep -qv '^docs/' <<<"$files" || code=false
+            not_inert=$(awk '!/^docs\// && (!/\.md$/ || /^(tests|web|src|stdlib)\//)' <<<"$files")
+            [ -n "$not_inert" ] || code=false
             grep -q '^docs/guides/' <<<"$files" || guides=false
           fi
           echo "code=$code guides=$guides"
