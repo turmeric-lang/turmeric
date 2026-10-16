@@ -1,0 +1,9 @@
+;; A library module that loads stdlib/string.tur inside its defmodule body and
+;; exports a function returning the owned String.
+(defmodule strmod/greet
+  (export greet)
+  (load "stdlib/string.tur")
+
+(defn greet [] : String
+  (string/from-cstr "hi"))
+) ;; end

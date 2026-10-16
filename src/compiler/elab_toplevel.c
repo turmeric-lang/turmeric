@@ -1257,13 +1257,41 @@ static void load_expand_forms(LoadExpandCtx *lx, Elab *e, Arena *arena,
         if (f->tag == F_LIST && f->as.list.len >= 1 &&
             f->as.list.items[0]->tag == F_SYM &&
             f->as.list.items[0]->as.sym == e->sym_defmodule) {
+            /* load-in-defmodule-claims-file-for-one-module: a STDLIB file
+             * loaded in a module body is spliced at this level, ahead of the
+             * module, exactly as `(load "stdlib/...")` written above the
+             * `defmodule` is.  The visited set is compilation-global, so a
+             * stdlib file spliced INTO one module was a no-op for every other
+             * module that loaded it: they saw none of its names (not even
+             * `String`), and the first module's copies were private to it.
+             * The stdlib is shared -- one `String`, one set of instances --
+             * so its definitions belong at global scope wherever the load is
+             * written.  A user file loaded in a module still splices into it,
+             * so a module split across files keeps its members and exports.
+             * Hoisting also keeps the load from ending the module's header
+             * scan when it sits above an `import`. */
+            uint32_t mn = f->as.list.len, mk = 0;
+            Form **mitems = (Form **)arena_alloc(arena, (mn ? mn : 1) * sizeof(Form *));
+            for (uint32_t k = 0; k < mn; k++) {
+                Form *it = f->as.list.items[k];
+                if (k > 0 && it->tag == F_LIST && it->as.list.len == 2 &&
+                    it->as.list.items[0]->tag == F_SYM &&
+                    it->as.list.items[0]->as.sym == e->sym_load &&
+                    it->as.list.items[1]->tag == F_STR &&
+                    it->as.list.items[1]->as.s.len > 7 &&
+                    strncmp(it->as.list.items[1]->as.s.p, "stdlib/", 7) == 0) {
+                    Form *const one[1] = { it };
+                    load_expand_forms(lx, e, arena, st, one, 1);
+                    continue;
+                }
+                mitems[mk++] = it;
+            }
             LoadExpandCtx sub = {0};
-            sub.out_cap = f->as.list.len + 8;
+            sub.out_cap = mk + 8;
             sub.out = (Form **)arena_alloc(arena, sub.out_cap * sizeof(Form *));
             /* Shares the compilation-global visited set on `e`, so a path
              * already spliced elsewhere is not re-spliced here. */
-            load_expand_forms(&sub, e, arena, st,
-                              f->as.list.items, f->as.list.len);
+            load_expand_forms(&sub, e, arena, st, mitems, mk);
             if (sub.rc != 0) lx->rc = sub.rc;
             Form *expanded = form_list(arena, f->span, sub.out, sub.out_n);
             load_expand_emit(lx, arena, expanded);
