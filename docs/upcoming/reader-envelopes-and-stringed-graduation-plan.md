@@ -12,7 +12,7 @@ Two pieces, independent of each other:
 
 1. ~~**Graduate the `stringed` layer.**~~ **Done in v0.49.0, and superseded**
    by the decommission of the whole layer axis -- see
-   [`lang-layers-decommission-plan.md`](../../archive/lang-layers-decommission-plan.md).
+   [`lang-layers-decommission-plan.md`](../archive/lang-layers-decommission-plan.md).
    Part 1 below is a pointer, not a design.
 2. **Add a third reader axis -- the *envelope* -- and put literate `.tur.md`
    on it.** An envelope is a source-to-source pass that runs *before* base
@@ -108,7 +108,7 @@ axis was decommissioned. `#s"..."` is an unconditional reader macro
 `stringed` is a warned no-op for one minor line.
 
 The full argument, the surface audit and the migration window are in
-[`lang-layers-decommission-plan.md`](../../archive/lang-layers-decommission-plan.md).
+[`lang-layers-decommission-plan.md`](../archive/lang-layers-decommission-plan.md).
 The design that used to be written out here is deleted rather than kept
 alongside it: two descriptions of the same finished change is exactly the
 drift the archiving rule exists to prevent.

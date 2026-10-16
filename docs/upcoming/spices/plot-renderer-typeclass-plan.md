@@ -12,6 +12,16 @@
 > Tracks: spices-type-features-uplift-plan **U2 target — plot**
 > Scope: `spices/plot/` only; P3 needed a compiler dependency after all, now
 > satisfied (see Risks).
+>
+> **Re-checked 2026-10-07 against turmeric-spices `origin/main` (388aa99):
+> the status above is accurate and nothing has landed since.** In
+> `spices/plot/src/plot/core.tur` only three per-kind structs exist
+> (`LinesR`, `PointsR`, `LabelR`, each with a `Renderer` instance), alongside
+> `AnyRenderer`, `anyrenderers->legacy` and `plot-anyrenderers`; the other
+> constructors (`line.tur`, `area.tur`, `point.tur`, `contour.tur`) still call
+> `__make-renderer`. The `Backend` typeclass with `CanvasBackend` /
+> `SurfaceBackend` / `PngBackend` is in place. The remaining work is the
+> constructor migration, still pixel-sensitive.
 
 ## Motivation
 

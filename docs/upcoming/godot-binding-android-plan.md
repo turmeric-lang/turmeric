@@ -3,9 +3,9 @@
 > **Status:** Draft Plan
 > **Last Updated:** 2026-06-26
 > **Type:** Integration / Game Engine -- post-v1 follow-up to
-> [godot-language-binding-plan.md](../v1/godot-language-binding-plan.md).
+> [godot-language-binding-plan.md](../archive/godot-language-binding-plan.md).
 > Split out from
-> [godot-binding-shipping-breadth-plan.md](../godot-binding-shipping-breadth-plan.md)
+> [godot-binding-shipping-breadth-plan.md](godot-binding-shipping-breadth-plan.md)
 > (originally Phase T5.B).
 
 ---

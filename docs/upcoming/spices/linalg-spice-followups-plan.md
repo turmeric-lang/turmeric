@@ -3,7 +3,7 @@
 > **Status:** Draft Plan
 > **Last Updated:** 2026-05-27
 > **Type:** Spice Follow-up
-> **Depends on:** [linalg-spice-plan.md](linalg-spice-plan.md) (v0.1.0 complete, tagged `linalg-v0.1.0`)
+> **Depends on:** [linalg-spice-plan.md](../../archive/linalg-spice-plan.md) (v0.1.0 complete, tagged `linalg-v0.1.0`)
 
 ---
 

@@ -365,7 +365,7 @@ is a `spices/watch` finding recorded as probably permanent.
 
 ## Found implementing the notebook docs-and-examples plan (filed 2026-10-05)
 
-The plan ([notebook-docs-examples-plan](../upcoming/notebook-docs-examples-plan.md))
+The plan ([notebook-docs-examples-plan](../upcoming/spices/notebook-docs-examples-plan.md))
 ships five example notebooks that import `plot`, `linalg`, `stats`, and `frame`
 from cells. Until 2026-10-10 none of them could run: every `(import ...)`
 failed with a generic elaboration error. The imports resolve now, and the
@@ -403,7 +403,7 @@ prelude-variant cost it also found was
 Follow-ups to PR #1082, which runs a compiled `#lang r7rs` program on a 1 GiB
 stack and prints a message when it overflows. The longer-term design, a stack
 bounded by memory rather than by the C stack, is on hold in
-[r7rs-heap-frames-plan](../upcoming/hold/r7rs-heap-frames-plan.md).
+[r7rs-heap-frames-plan](../upcoming/r7rs-heap-frames-plan.md).
 
 | Report | Severity | One line |
 | --- | --- | --- |
@@ -2940,7 +2940,7 @@ tracked in `docs/upcoming/security-audit-plan.md`.
 ## Found resolving the wasm-spices plan's open questions (filed 2026-09-30)
 
 Found while answering the browser-integration open questions in
-`docs/upcoming/hold/wasm-spices-plan.md` against a real Emscripten toolchain
+`docs/upcoming/wasm-spices-plan.md` against a real Emscripten toolchain
 (emcc 5.0.5-git, CMake 4.3.3). Latent behind raylib specifically, whose own
 cmake floor sits exactly at CMake 4's cutoff.
 

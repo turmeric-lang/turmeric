@@ -3,10 +3,10 @@
 > **Status:** Proposed (revised 2026-06-24)
 >
 > **Prerequisite:** DV0-DV4 complete (`-Xdynamic-vars`); see
-> [docs/archive/history/dynamic-vars-plan.md](../archive/history/dynamic-vars-plan.md)
-> and [docs/guides/dynamic-vars-guide.md](../guides/dynamic-vars-guide.md).
+> [docs/archive/history/dynamic-vars-plan.md](../../archive/history/dynamic-vars-plan.md)
+> and [docs/guides/dynamic-vars-guide.md](../../guides/dynamic-vars-guide.md).
 >
-> **Sibling plan:** [dynvar-adoption-plan.md](dynvar-adoption-plan.md)
+> **Sibling plan:** [dynvar-adoption-plan.md](../dynvar-adoption-plan.md)
 > covers compiler-tree adoption and lands the C-level dynvar runtime API
 > and the `defthreadlocal` form. **Do not start the spices work until
 > ADO-0 and ADO-0b in the sibling plan are in.** Several spice targets
@@ -289,7 +289,7 @@ co-located with the conversion work.
 
 ## Sequencing relative to the compiler-tree plan
 
-The compiler-tree plan ([dynvar-adoption-plan.md](dynvar-adoption-plan.md))
+The compiler-tree plan ([dynvar-adoption-plan.md](../dynvar-adoption-plan.md))
 must land ADO-0 (C-level runtime API) and ADO-0b (`defthreadlocal`) before
 any spice phase starts -- those are hard prerequisites for SPA-1 (ansi's
 thread-local color mode and sink dynvar) and SPA-6 (opengl thread-locals).

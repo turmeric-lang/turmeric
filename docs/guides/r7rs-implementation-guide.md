@@ -747,7 +747,7 @@ From `docs/reported/` on 2026-10-16:
   -- one unreproduced JIT failure of `r7rs-threads-lifecycle`.
 
 The heap-frames design for deep non-tail recursion is on hold:
-[r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/hold/r7rs-heap-frames-plan.md).
+[r7rs-heap-frames-plan](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/r7rs-heap-frames-plan.md).
 
 ---
 

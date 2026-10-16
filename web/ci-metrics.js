@@ -82,7 +82,10 @@ const LOC_DEFAULT = ['code_lines', 'test_lines'];
 // The open-work series, in palette order. `open_reports` and `active_plans`
 // are the two the panel opens on -- the question is "how much open work, split
 // by kind" -- and `held_plans` / `v1_plans` / `spices_plans` are there so the
-// breakdown of the plan total is visible without being the default view. The
+// breakdown of the plan total is visible without being the default view.
+// `held_plans` and `v1_plans` are retired buckets (docs/upcoming/hold/ and v1/
+// were flattened away); they chart as history that falls to 0, and
+// `active_plans` now means "top-level plans", i.e. everything but spices. The
 // total open_plans is the sum of the four plan buckets; it is not a separate
 // series because a sum line on the same chart as its addends is a visual
 // tautology.
@@ -1337,7 +1340,9 @@ function renderDocsTiles() {
 
   host.innerHTML = [
     tile('', 'clipboard-list', 'Open plans', String(latest.open_plans),
-      `${latest.active_plans} active, ${latest.held_plans} held, ${latest.v1_plans} v1, ${latest.spices_plans} spices`),
+      [`${latest.active_plans} core`, latest.held_plans ? `${latest.held_plans} held` : '',
+       latest.v1_plans ? `${latest.v1_plans} v1` : '', `${latest.spices_plans} spices`]
+        .filter(Boolean).join(', ')),
     tile('', 'circle-dot', 'Open reports', String(latest.open_reports),
       'Findings in docs/reported/'),
     tile('', 'layers', 'Total open work',

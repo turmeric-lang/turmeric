@@ -27,7 +27,7 @@ failed` on a clean CI runner whose workspace is on `D:`. A dozen fixtures (and
 stdlib's `fs/tmpfile`) spell `/tmp/...` literally, and a NATIVE Windows binary
 resolves that against the current drive root, not the MSYS shell's `/tmp`.
 `tests/run.sh` now provisions `<drive>:	mp`; the real fix is tracked in
-[windows-hardcoded-tmp-resolves-to-drive-root](../../archive/windows-hardcoded-tmp-resolves-to-drive-root.md).
+[windows-hardcoded-tmp-resolves-to-drive-root](../archive/windows-hardcoded-tmp-resolves-to-drive-root.md).
 
 Run the suite against a **Debug** build. A Release `tur` compiles out contract
 checks (`rt_contracts_emitted` is `#ifdef NDEBUG`), so every fixture pinning a
@@ -69,7 +69,7 @@ This plan tracks what is left.
 
 The original end-to-end plan (toolchain rationale, the WIN0/WIN1 blockers, the
 Wine loop, the full WIN3 investigation) is archived at
-[docs/archive/windows-support-plan.md](../../archive/windows-support-plan.md).
+[docs/archive/windows-support-plan.md](../archive/windows-support-plan.md).
 
 **Toolchain:** MinGW-w64 / UCRT64 via MSYS2 (`C:\msys64`), not Clang-cl. Build
 with `just build-windows`; run the suite with
@@ -222,7 +222,7 @@ Recommendation: option 1 unless a use case forces option 2.
 diverging output. **Both pass on Windows as of 2026-09-26** (Windows 11,
 MSYS2/UCRT64, gcc 16.1, Debug; `run.sh` in three shards, 3208 passed). They were
 never diagnosed separately. The likeliest fix is the `__builtin_setjmp` fiber
-work ([windows-longjmp-across-fiber-stack-kills-effects](../../archive/windows-longjmp-across-fiber-stack-kills-effects.md)),
+work ([windows-longjmp-across-fiber-stack-kills-effects](../archive/windows-longjmp-across-fiber-stack-kills-effects.md)),
 since both run an effect on a fiber.
 
 (An earlier revision named `httpd-h4-keepalive`, `httpd-h6-routing` and
@@ -247,7 +247,7 @@ it.
   take a DWORD of milliseconds, not a `struct timeval` (a plain cast sets a
   garbage timeout), and `SO_REUSEADDR` is *dropped* on Windows because its
   meaning inverts -- Winsock's permits binding over a LIVE socket. See
-  [docs/archive/windows-httpd-setsockopt-winsock.md](../../archive/windows-httpd-setsockopt-winsock.md).
+  [docs/archive/windows-httpd-setsockopt-winsock.md](../archive/windows-httpd-setsockopt-winsock.md).
 - **POSIX-only inline-C (5 fixtures).** `_mkdir` (3), `ioctl`/`struct winsize`
   (1), `fork`/`getppid` (1). The `_mkdir` case is **not** a source bug --
   `stdlib/fs.tur` is correctly written with `#ifdef _WIN32` /
@@ -264,7 +264,7 @@ it.
   contains only includes/defines/comments -- also unblocks the natural port of
   `term/width`/`term/height`, which would otherwise break the same way the moment
   their `#include <sys/ioctl.h>` is wrapped in an `#ifdef`. See
-  [docs/archive/windows-posix-inline-c-gaps.md](../../archive/windows-posix-inline-c-gaps.md).
+  [docs/archive/windows-posix-inline-c-gaps.md](../archive/windows-posix-inline-c-gaps.md).
 
 ## Subprocess and shared-library layers (not fixture-visible) -- RESOLVED
 
@@ -273,7 +273,7 @@ loading and `tur build --shared` all work on Windows: the shell-string sites
 quote and redirect through `platform_proc.h` / `pkg_cmd_arg`, the lockfile
 hash is in-process, `--shared` emits a `.dll`, and the REPL JIT module graph
 hard-links or copies where it used to hit the `symlink` `ENOSYS` stub. See
-[docs/archive/windows-subprocess-and-shared-lib-gaps.md](../../archive/windows-subprocess-and-shared-lib-gaps.md).
+[docs/archive/windows-subprocess-and-shared-lib-gaps.md](../archive/windows-subprocess-and-shared-lib-gaps.md).
 
 ---
 
@@ -289,13 +289,13 @@ hard-links or copies where it used to hit the `symlink` `ENOSYS` stub. See
   them.
 
   **Update (2026-08-01): four of the five are fixed and archived** --
-  [docs/archive/macos-int-conversion-carrier-pointer-straddles.md](../../archive/macos-int-conversion-carrier-pointer-straddles.md)
+  [docs/archive/macos-int-conversion-carrier-pointer-straddles.md](../archive/macos-int-conversion-carrier-pointer-straddles.md)
   (not macOS-specific despite the filename -- it is "any toolchain new enough";
   verified on Apple clang 21, which promotes `-Wint-conversion` the same way
   gcc >= 14 does). The fifth, `data-literal-nested`, was never a straddle but a
   wrong-monomorph selection that gcc's promoted `-Wincompatible-pointer-types`
   catches and clang's does not; re-filed as
-  [docs/archive/vec-empty-like-monomorph-selects-int-element.md](../../archive/vec-empty-like-monomorph-selects-int-element.md)
+  [docs/archive/vec-empty-like-monomorph-selects-int-element.md](../archive/vec-empty-like-monomorph-selects-int-element.md)
   and **also fixed** (2026-08-01), so all five of this class should now build
   under gcc >= 14 -- unverified on Windows, since the fixes were made and
   measured on Apple clang 21. The older gcc-14 reports are resolved and archived

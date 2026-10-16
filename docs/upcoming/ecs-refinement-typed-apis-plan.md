@@ -14,8 +14,8 @@ description: Rewritten after refinement types landed. What the shipped `#refine{
 >
 > RT0--RT7 and S0--S4 landed 2026-07-24/25 behind `--enable=refined` /
 > `#lang turmeric refined` (see
-> [`refinement-types-plan.md`](../../archive/refinement-types-plan.md) and
-> [the guide](../../guides/refinement-types-guide.md)). So this plan can stop
+> [`refinement-types-plan.md`](../archive/refinement-types-plan.md) and
+> [the guide](../guides/refinement-types-guide.md)). So this plan can stop
 > speculating and start measuring. **Everything asserted below about compiler
 > behaviour was checked against `build-release/tur` at VERSION 0.30.8**; each
 > claim carries the probe that establishes it. **Later probe updates carry
@@ -61,7 +61,7 @@ the single most load-bearing gap for ECS, because *every* domain predicate an
 ECS wants -- alive, has-component, in-bounds-for-this-world -- is naturally a
 `bool`-returning function.
 
-Tracked in [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md).
+Tracked in [`refine-predicate-measures-plan.md`](../archive/refine-predicate-measures-plan.md).
 
 ### 2. The int-valued workaround **works today**
 
@@ -101,7 +101,7 @@ diagnostic reads as pure and congruence reads as impure. So the failure mode
 here is silent loss of the proof, not a rejection.
 
 This is the wall. Tracked in
-[`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md).
+[`refine-stateful-measures-plan.md`](../archive/refine-stateful-measures-plan.md).
 
 ### 4. A `#refine{...}` on a `defopaque` parameter compiles
 
@@ -139,7 +139,7 @@ world whose state lives behind a `:int` handle is not.
 the one that costs real performance rather than real safety: `for-each` lowers
 to a `while` over slot indices, and the bounds facts that would let dense
 storage drop its per-access check live in the loop condition. Waiting on
-[`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md), which was on hold
+[`loop-invariants-plan.md`](../archive/loop-invariants-plan.md), which was on hold
 for want of a demand signal -- **this plan was that signal.**
 
 > **C3 landed (experimental), 2026-09-30.** `(while c :invariant p ...)` ships
@@ -214,7 +214,7 @@ Explicitly **not** a goal: making refinement types the default way to use
 > (TUR-W0063 / TUR-W0064) whose shim ages out one minor line later. So the
 > refined surface no longer costs its consumers a flag, and "opt-in" here means
 > an API choice rather than a compiler gate. See
-> [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md).
+> [`refined-graduation-plan.md`](../archive/refined-graduation-plan.md).
 
 ---
 
@@ -226,9 +226,9 @@ it.
 
 | # | Gap | Needed for | Plan |
 |---|---|---|---|
-| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](../../archive/refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
-| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](../../archive/refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
-| C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md) -- **LANDED 2026-09-30** behind `--enable=loop-invariants` |
+| C1 | Boolean-sorted measures -- `(alive? w e)` usable as a predicate atom | ergonomics of every ECS predicate | [`refine-predicate-measures-plan.md`](../archive/refine-predicate-measures-plan.md) -- **RM-B1 LANDED 2026-07-26** |
+| C2 | A sound route for a measure over mutable world state | RE1 at all | [`refine-stateful-measures-plan.md`](../archive/refine-stateful-measures-plan.md) -- **LANDED 2026-07-26** (`#reads` + the `frozen` region) |
+| C3 | User-written `while` invariants | RE2's bounds elimination | [`loop-invariants-plan.md`](../archive/loop-invariants-plan.md) -- **LANDED 2026-09-30** behind `--enable=loop-invariants` |
 
 **C1 is not strictly blocking** -- probe 2 shows the `(= (alive-i w x) 1)`
 encoding proves today. It is blocking on *whether anyone would write it*. An
@@ -268,7 +268,7 @@ question is answered.~~
 
 > **Trigger note 2026-08-17 -- the `#reads` trust tier now has its own plan,
 > and ONE ECS DECISION IS ITS TRIGGER.**
-> [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md)
+> [`trusted-refinement-claims-plan.md`](../archive/trusted-refinement-claims-plan.md)
 > covers the promise C2's answer rests on. Two pieces are already live and
 > cost the ECS nothing today: `TUR-W0383` warns when a `#reads` measure's
 > body *demonstrably* reads a mutable global, and the same evidence refuses
@@ -607,7 +607,7 @@ it becomes an ordinary path-splitting obligation.
 > bounds elimination to RESIZABLE storage, where `(in-bounds? buf i)` reads
 > mutable capacity (see stateful-refinements-guide.md "Where this
 > generalizes"). The trajectory's trusted-tier half now has its own plan --
-> [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md);
+> [`trusted-refinement-claims-plan.md`](../archive/trusted-refinement-claims-plan.md);
 > see the trigger note under C2 above before touching how measures hold
 > state.
 
@@ -769,7 +769,7 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 >
 > **This is documented design, not a defect**, which is worth stating plainly
 > since it sets the ceiling on RE2 rather than being something to fix on the
-> way. [refinement-types-guide.md](../../guides/refinement-types-guide.md)
+> way. [refinement-types-guide.md](../guides/refinement-types-guide.md)
 > divides a function's refinements into two roles, and only one of them elides:
 >
 > - a **goal** -- a return refinement or `:post` -- "when proved, **no runtime
@@ -868,7 +868,7 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 >    soundness bugs lived in the encoder, and as of 2026-10-02 the encoder's
 >    newest work (`^reflect`'s RF3/RF4) had no differential fuzz coverage at
 >    all -- see
->    [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md).
+>    [reflect-fuzz-never-reaches-the-rf3-rf4-encoder](../archive/reflect-fuzz-never-reaches-the-rf3-rf4-encoder.md).
 >    (Closed 2026-10-03 by `shape_reflect`, whose first run found a third
 >    encoder soundness bug -- a float field's selector declared Int -- fixed
 >    the same day.)
@@ -876,7 +876,7 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 >    to be load-bearing for memory safety. A bisection hatch
 >    (`TUR_<NAME>=0` re-enabling every suppressed check) and a harness kept on
 >    the off path are the other half -- per the INVERTS-not-retires rule in
->    [experimental-flags-guide](../../guides/experimental-flags-guide.md).
+>    [experimental-flags-guide](../guides/experimental-flags-guide.md).
 > 4. **Keep the checked entry point.** A caller that cannot prove the bound
 >    needs somewhere to go that is not `unsafe`. Two entry points over one body
 >    is the shape, which makes (a) the fallback *inside* (c) rather than a
@@ -889,9 +889,9 @@ locally-derived bounds for free. **RE2 does not start without a profile.**
 >    earned it. It also means a call site that cannot prove the bound falls
 >    back to the ordinary `Unsafe` discharge rules rather than to silence.
 > 6. **Where it lives.** Not in this plan. It is a compiler feature, so per
->    [CLAUDE.md](../../../CLAUDE.md) it needs its own `docs/upcoming/` plan and
+>    [CLAUDE.md](../../CLAUDE.md) it needs its own `docs/upcoming/` plan and
 >    an `EXPERIMENTS[]` row behind `--enable=`, and it belongs beside
->    [`trusted-refinement-claims-plan.md`](../../archive/trusted-refinement-claims-plan.md),
+>    [`trusted-refinement-claims-plan.md`](../archive/trusted-refinement-claims-plan.md),
 >    which already owns "what promise does a refinement rest on, and is the
 >    promise checkable" -- an assumed precondition is a new entry in that
 >    taxonomy rather than a variation on `#reads`.
@@ -942,7 +942,7 @@ Encoding a structural type predicate through the SMT layer would mean teaching
 the solver about the type system, which is a great deal of machinery to
 reimplement a question `defworld` can answer by field lookup at elaboration
 time. The right home for it is row/presence constraints, re-filed as
-[`ecs-component-set-bounds-plan.md`](../../archive/ecs-component-set-bounds-plan.md).
+[`ecs-component-set-bounds-plan.md`](../archive/ecs-component-set-bounds-plan.md).
 
 Meanwhile the `(HasPos W)` typeclass encoding **ships and works**, so nothing
 is lost by the deferral except one dictionary indirection per polymorphic call.
@@ -963,7 +963,7 @@ parameter.
 
 ## Relationship to the graduation decision
 
-[`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md) is on hold
+[`refined-dogfooding-plan.md`](../archive/refined-dogfooding-plan.md) is on hold
 "waiting on a program to exist, not on effort", and feeds graduation
 precondition 2 (cost on something that is not a fixture).
 
@@ -1002,12 +1002,12 @@ work), then RE1 as the dogfooding vehicle, then C3/RE2 only against a profile.
 
 ## References
 
-- Parent plan (archived): [`ecs-spice-plan`](../../archive/ecs-spice-plan.md)
-- [`refinement-types-plan.md`](../../archive/refinement-types-plan.md) -- what landed
-- [`refinement-types-guide.md`](../../guides/refinement-types-guide.md) -- the surface
-- [`refined-graduation-plan.md`](../../archive/refined-graduation-plan.md)
-- [`refined-dogfooding-plan.md`](../../archive/refined-dogfooding-plan.md)
-- [`loop-invariants-plan.md`](../../archive/loop-invariants-plan.md)
+- Parent plan (archived): [`ecs-spice-plan`](../archive/ecs-spice-plan.md)
+- [`refinement-types-plan.md`](../archive/refinement-types-plan.md) -- what landed
+- [`refinement-types-guide.md`](../guides/refinement-types-guide.md) -- the surface
+- [`refined-graduation-plan.md`](../archive/refined-graduation-plan.md)
+- [`refined-dogfooding-plan.md`](../archive/refined-dogfooding-plan.md)
+- [`loop-invariants-plan.md`](../archive/loop-invariants-plan.md)
 - `docs/guides/ecs-guide.md`, `docs/guides/ecs-vs-haskell-ecs.md`,
   `docs/guides/ecs-storage-guide.md`
 - `docs/guides/substructural-types-guide.md` -- the linear caps C2 leans on

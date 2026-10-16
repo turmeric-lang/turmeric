@@ -19,9 +19,9 @@
 > this. Phase S is additive and can land any time. Phases U and M are fine to
 > finish after v1, but they touch no compiler code, so they can proceed in
 > parallel without blocking it.
-> **Related:** [`notebook-docs-examples-plan.md`](notebook-docs-examples-plan.md)
+> **Related:** [`notebook-docs-examples-plan.md`](spices/notebook-docs-examples-plan.md)
 > (the notebook spice's `notebook/cmark.tur`),
-> [`hold/reader-envelopes-and-stringed-graduation-plan.md`](hold/reader-envelopes-and-stringed-graduation-plan.md)
+> [`hold/reader-envelopes-and-stringed-graduation-plan.md`](reader-envelopes-and-stringed-graduation-plan.md)
 > (literate `.tur.md`; asks that its fence rules agree with the renderer),
 > [`security-audit-plan.md`](security-audit-plan.md) (C-5, the `markdown` pin;
 > W-4, docs as a trust boundary),

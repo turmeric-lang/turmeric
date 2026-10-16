@@ -2,7 +2,7 @@
 
 **Severity:** medium (feature gap). The notebook is the literate-programming
 entry point, and four of the five example notebooks
-([notebook-docs-examples-plan](../upcoming/notebook-docs-examples-plan.md) C1)
+([notebook-docs-examples-plan](../upcoming/spices/notebook-docs-examples-plan.md) C1)
 are walkthroughs of spices whose functions are inline-C bodies. Since
 [notebook-eval-no-module-base-dir](../archive/notebook-eval-no-module-base-dir.md)
 was fixed (2026-10-10) every import in them resolves; the first call into the
