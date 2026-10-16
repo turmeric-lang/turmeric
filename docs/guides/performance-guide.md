@@ -955,6 +955,15 @@ Two things the numbers do not say:
   file or project) runs in one process and has no such children -- its only
   subprocesses are the toolchain's, which is `cc`.
 
+**On WSL, a large `cc` phase may be your `PATH`.** WSL appends the Windows
+`PATH` to the distro's, and gcc's linker driver (`collect2`) looks for its
+linker in every `PATH` directory, so each link probes the `/mnt/c/...` entries
+over WSL's slow file share. On the audit box that was ~65 ms of every link:
+an empty program's `tur build` took 131 ms with the Windows entries and 79 ms
+without. To check, time a build with `PATH` cut down to the Linux directories;
+to fix it, set `appendWindowsPath = false` under `[interop]` in
+`/etc/wsl.conf`, or drop the `/mnt/` entries in your shell profile.
+
 `--timings` changes no program's meaning, so it is a plain flag, not an
 `--enable=` experiment.  The design and what comes next (per-module timings,
 the program-side `--profile`) are in
