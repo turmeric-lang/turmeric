@@ -47,6 +47,12 @@ hits under ASan.
 | [load-in-defmodule-claims-file-for-one-module](load-in-defmodule-claims-file-for-one-module.md) | medium (compile failure) | A `(load "stdlib/string.tur")` inside a `defmodule` splices the file into that module, but the load-visited set is compilation-global: other modules' loads of it become no-ops, so a library exporting a `String`-returning fn fails for an importer that loads `string.tur` too (the library loses `String`) and for one that does not (`string/...` is private). Only loading above `defmodule` everywhere works. Also: a `load` above an `import` in a module body yields "import is only allowed inside defmodule" |
 | [cps-while-back-edge-grows-the-stack](cps-while-back-edge-grows-the-stack.md) | medium (stack overflow below `-O2`) | The `while` sibling of the resolved cps-self-call-through-join: a CPS-lowered `while` whose body calls callbacks through a helper cycles loop helper -> join -> join -> loop helper in C tail calls. `emit_continue` (`emit_cps_ir.c:11756`) emits the back-edge without the `__dk_tail_deep` bounce, so `--debug` / `-O0` / ASan builds overflow (100,000 iterations at `-O0`) |
 
+## Found implementing the editable DOM, xml-html-parsers-plan B (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [emit-c-segfault-on-colliding-private-helper](emit-c-segfault-on-colliding-private-helper.md) | medium | A program importing from two modules that each define a private `__error` (zero-argument in one, one-argument in the other) crashes `emit-c` in `emit_value_dispatch`. No diagnostic; renaming one private helper avoids it. Reproduces from turmeric-spices `f54e51b` with one `sed`. |
+
 ## Found prototyping hiccup vector rewriting (filed 2026-10-16)
 
 | Report | Severity | One line |

@@ -14,6 +14,8 @@
 > Follow-up D (hiccup: markup as typed data) planned 2026-10-16, not started;
 > its open questions D-1 to D-3 decided the same day. D-1 was revised after a
 > prototype: phase D1b rewrites markup vectors in result positions.
+> Follow-up B: B1-B2 implemented 2026-10-16 on turmeric-spices branch
+> `claude/dom-editable-tree` (see "Status" under follow-up B); B3-B4 next.
 > See "Follow-ups" at the end.
 
 ## Outcome (2026-10-10)
@@ -647,6 +649,55 @@ All four were decided 2026-10-16.
   style and srcdoc", and is not needed for A1-A5.
 
 ### Follow-up B: an editable tree
+
+#### Status (2026-10-16)
+
+B1 and B2 are implemented on turmeric-spices branch `claude/dom-editable-tree`
+(dom-core 0.2.0). Where the code differs from the sketch below:
+
+- **Validation lives in C.** `turdom_check_*` hold the rules and the
+  `turdom_edit_*` entry points check then mutate in one call, so nothing can
+  skip a check by calling functions in the wrong order; `dom/edit` maps error
+  codes to `EditError`. The raw mutators stay unchecked, for the parsers.
+- **`EditError` has nine cases**, not five: `BadPlacement` (a second root or
+  doctype, top-level text, a doctype in an element or after the root, an
+  element under an HTML raw-text element, a child of an HTML void element,
+  CDATA or a PI in an HTML document), `Detached` (the reference node has no
+  parent), `WrongKind` (e.g. `set-value!` on an element) and `OutOfMemory`
+  join the original five.
+- **More is refused than the sketch listed**, each found by the fuzz or the
+  spec: the `plaintext` element (its end tag is never recognized, so it would
+  swallow every later sibling); `<!--` in `<script>` text (the script-data
+  escape states can stop `</script>` from closing it); CDATA and PIs in HTML
+  documents (its parser produces neither -- `<![CDATA[` inside SVG reads as
+  text); `\r` in comments, CDATA, PI data and raw text (it cannot be escaped
+  there and comes back as `\n`); `]]>` in CDATA (it comes back as two
+  sections); PI data starting with whitespace; and in XML, a prefix bound to
+  two URIs on one element.
+- **Serializer changes.** The XML serializer declares the namespace of a node
+  an edit created or renamed wherever its prefix is unbound, tracking scope
+  as it walks; nodes from a parser are never touched, so parsed trees
+  serialize exactly as before. The HTML serializer escapes `\r` as `&#13;`
+  (parsed HTML never holds one).
+- **HTML elements made by `create-element` go in the XHTML namespace**, as
+  `createElement` does and as the parser builds them; otherwise an edited
+  tree never compares equal to a reparse.
+- **API additions:** `set-attr-ns!`, `rename-ns!`, `create-cdata`,
+  `create-pi`, `dom-flavor`, `edit-error-message`; `create-text`,
+  `node-import` and `node-clone` return `Result` (XML text can be invalid; a
+  cross-flavour import validates the subtree); `dom-compact` returns
+  `(Option Document)`.
+- **The cycle check skips childless nodes**, which cannot be ancestors, so
+  building a deep chain one append at a time stays linear rather than
+  O(depth) per insert.
+- **B2's round-trip property, as tested.** For XML it holds exactly over
+  random edit sequences, except that the parser lists namespace declarations
+  before other attributes, so the fuzz keeps `xmlns` attributes out of its
+  pools. For HTML it cannot hold for every valid edit, because the tree
+  builder re-nests some trees on purpose (a `<div>` in a `<p>`, an HTML
+  element inside `<svg>`); the fuzz checks it over trees a predicate says the
+  parser keeps, and counts the rest (about 6.5% of iterations). 18,000
+  iterations per flavour held.
 
 #### What the tree already gives us
 
