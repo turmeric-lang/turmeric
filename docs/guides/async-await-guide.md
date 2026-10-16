@@ -73,9 +73,10 @@ Whether it has a stack of its own depends on which kind of fiber it is
   size (`tur_fiber_block_new` in `src/compiler/emit_module.c`) -- and
   switches through `ucontext`: libc `swapcontext` on Linux and macOS
   (glibc's also saves and restores the signal mask), a register-snapshot
-  shim on Windows. The fallback that runs a `handle` the CPS backend could
-  not take (`TUR_TRACE_EVICT=1` lists those) runs its body on a `FiberBlock`
-  too.
+  shim on Windows. Fibers no longer run effect handlers: a `handle` the CPS
+  backend cannot take is a compile error, not a fiber fallback
+  (`TUR_TRACE_EVICT=1` says why; see the
+  [CPS and DK internals guide](cps-dk-internals-guide.md#stage-3-classification----which-colored-functions-get-the-cps-abi)).
 - **Under `tur --interpret`**, every `async` thunk runs as a `ucontext` fiber
   on its own 512 KiB `mmap`'d stack (`TURI_ASYNC_STACK_SIZE`).
 
