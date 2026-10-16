@@ -14,7 +14,7 @@
  *   static const ExperimentDescriptor EXPERIMENTS[] = {
  *     { "fancy-rows",
  *       "extensible row-typed records",
- *       "docs/upcoming/v1/fancy-rows-plan.md",
+ *       "docs/upcoming/fancy-rows-plan.md",
  *       "0.25.0",                  // introduced
  *       "0.28.0",                  // expires_at (soft deadline; on that version's
  *                                  //   cut, review the row and graduate, shelve, or bump)

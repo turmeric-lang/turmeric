@@ -4,7 +4,7 @@
 > reference for future enhancements (drop overlay polish, iOS Safari
 > validation, larger-project support).
 >
-> **Predecessor:** [`docs/archive/try-turmeric-multi-tab-and-projects-plan.md`](../v1/try-turmeric-multi-tab-and-projects-plan.md)
+> **Predecessor:** [`docs/archive/try-turmeric-multi-tab-and-projects-plan.md`](../archive/try-turmeric-multi-tab-and-projects-plan.md)
 > (§4 of the multi-tab + projects plan)
 
 ## Status (as of 2026-06-28)

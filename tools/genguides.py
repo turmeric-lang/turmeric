@@ -501,6 +501,34 @@ SIDEBAR_DRAWER_JS_SRC = '''\
       var sidebar = document.querySelector('.sidebar');
       var overlay = document.querySelector('.sidebar-overlay');
       if (!btn || !sidebar) return;
+      // Pages with a header filter box hide it on mobile; offer a copy at the
+      // top of the drawer and forward it to the real box, so each page's own
+      // filter script keeps working unchanged.
+      var search = document.querySelector('.search-wrap .search-input');
+      if (search) {
+        var wrap = document.createElement('div');
+        wrap.className = 'sidebar-search';
+        var copy = document.createElement('input');
+        copy.className = 'sidebar-search-input';
+        copy.type = 'search';
+        copy.placeholder = 'Filter...';
+        copy.setAttribute('aria-label', search.getAttribute('aria-label') || 'Filter');
+        wrap.appendChild(copy);
+        sidebar.insertBefore(wrap, sidebar.firstChild);
+        copy.addEventListener('input', function(){
+          search.value = copy.value;
+          search.dispatchEvent(new Event('input'));
+        });
+        search.addEventListener('input', function(){ copy.value = search.value; });
+        copy.addEventListener('keydown', function(e){
+          if (e.key === 'Escape' && copy.value) {
+            copy.value = '';
+            search.value = '';
+            search.dispatchEvent(new Event('input'));
+            e.stopPropagation();
+          }
+        });
+      }
       function setOpen(open) {
         sidebar.classList.toggle('is-open', open);
         overlay && overlay.classList.toggle('is-open', open);

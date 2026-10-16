@@ -19,7 +19,7 @@ facade, the codegen'd ClassDB facade, the editor plugin, the typed
 `godot-call` variants, and the known gaps you'll trip over while the
 binding matures.
 
-The plans in `docs/upcoming/hold/` (the `godot-binding-*` plans) are the
+The plans in `docs/upcoming/` (the `godot-binding-*` plans) are the
 source of truth for *what's coming*; this guide is the source of truth
 for *what works today*.
 
@@ -428,7 +428,7 @@ friends.
    unwrap with `(:: h :int)` at the call boundary.
 
 3. **No Android / iOS / web export.** Desktop only for v1; web is
-   blocked on [`wasm-spices-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/hold/wasm-spices-plan.md).
+   blocked on [`wasm-spices-plan.md`](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/wasm-spices-plan.md).
 
 4. **Generated facade allowlist is 53 of 920 classes.** Grown
    tactically as demos demand; the long tail is editor-internals /

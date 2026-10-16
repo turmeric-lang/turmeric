@@ -9,10 +9,14 @@ commit, so like collect-loc.py it has no (os, cc, nproc) dimension.
 The project tracks open work in two directories under `docs/`:
 
   docs/upcoming/   -- plans (work intended but not yet done).  Top-level files
-                      are active; `hold/` parks plans waiting on a dependency;
-                      `v1/` holds milestone-scoped plans; `spices/` (with its
-                      own `v1/`) holds plans moved in from turmeric-spices so
-                      all open work lives in one tree.
+                      are the compiler/language plans; `spices/` holds the
+                      spice plans.  That is the whole layout: the former
+                      `hold/` and `v1/` subdirectories were flattened away
+                      (a plan's status lives in its own header, not in a
+                      directory).  `held_plans` and `v1_plans` are still
+                      counted, from those directories, so published history
+                      stays comparable -- they are 0 now, and become non-zero
+                      again only if someone recreates the directories.
   docs/reported/   -- open bug reports / findings.  Resolved reports are moved
                       to docs/archive/ (see CLAUDE.md), so everything left here
                       is open by construction.
@@ -79,8 +83,8 @@ def git_sha(repo):
 def count_md(repo, subdir):
     """Count .md files directly under `repo/subdir`, excluding subdirectories.
 
-    A plan in a subdirectory (hold/, v1/) belongs to that sub-bucket, not to
-    the top-level count, so the top-level number is the active set.
+    A plan in a subdirectory (spices/) belongs to that sub-bucket, not to
+    the top-level count, so the top-level number is the non-spice set.
     """
     base = os.path.join(repo, subdir)
     if not os.path.isdir(base):

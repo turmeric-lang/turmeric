@@ -271,4 +271,4 @@ or instead of the AOT path. Plus a measured script compile time, since question
 - [jit-windows-support-spike.md](../archive/jit-windows-support-spike.md) -- sequence that
   one first for anything Windows-shaped.
 - [docs/guides/jit-guide.md](../guides/jit-guide.md) -- "Embedding" section.
-- [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md) -- WIN2.
+- [docs/upcoming/windows-remaining-plan.md](../upcoming/windows-remaining-plan.md) -- WIN2.

@@ -19,8 +19,8 @@
 > **Type:** spice (in `../turmeric-spices/`), plus one candidate stdlib
 > addition (`map-merge-with`) that the plan deliberately declines to make.
 > **Sequencing:** last of three.
-> [type-confusion-detection-plan.md](../archive/type-confusion-detection-plan.md) ->
-> [../archive/lattice-vocabulary-plan.md](../archive/lattice-vocabulary-plan.md) -> this. C1's
+> [type-confusion-detection-plan.md](../../archive/type-confusion-detection-plan.md) ->
+> [../archive/lattice-vocabulary-plan.md](../../archive/lattice-vocabulary-plan.md) -> this. C1's
 > `JoinSemilattice` comes from the lattice plan rather than being redeclared
 > here. Both were gated on two typeclass defects filed from this plan's own
 > probes; both are fixed.
@@ -114,7 +114,7 @@ tests can drive them from `Mock-Time` deterministically.
 
 `stdlib/random.tur` is libc `rand()` seeded with `time(NULL)` (this is
 already documented as the motivating defect in
-[../archive/secret-spice-plan.md](../archive/secret-spice-plan.md) section 2.3). Two replicas
+[../archive/secret-spice-plan.md](../../archive/secret-spice-plan.md) section 2.3). Two replicas
 started in the same second can draw the same ID, and a duplicated replica
 ID breaks a G-Counter's *arithmetic*, not just its tidiness -- two replicas
 sharing a slot overwrite each other's counts under a pointwise `max`.
@@ -296,7 +296,7 @@ dep is `:optional true` in the manifest, matching how `spices/json` itself
 depends on `spices/test` -- the core must build without a transport.
 
 Binary framing belongs to
-[../archive/msgpack-spice-plan.md](../archive/msgpack-spice-plan.md) when that lands;
+[../archive/msgpack-spice-plan.md](../../archive/msgpack-spice-plan.md) when that lands;
 CRDT deltas are a good forcing case for it and a bad reason to block on it.
 
 ## 3. Law checking -- the part that is not a port
@@ -404,7 +404,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
     Section 2.2 flagged it as the one unverified shape and was right to: the
     opaque path stored the interned symbol POINTER into an `int64_t` slot and
     cc rejected it (`-Wint-conversion`, an error on clang >= 21). Filed as
-    [defopaque-over-sym-skips-the-ptr-bridge](../archive/defopaque-over-sym-skips-the-ptr-bridge.md);
+    [defopaque-over-sym-skips-the-ptr-bridge](../../archive/defopaque-over-sym-skips-the-ptr-bridge.md);
     an opaque over `:Sym` or `:cstr` now takes the pointer spelling, so the
     newtype spelling is open to the spice again.
   - **The `defstruct` fallback does not work either, for a different reason.**
@@ -495,7 +495,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
     than pointer identity.
 
   Also filed while building it:
-  [set-add-elem-hash-disagrees-with-set-member](../archive/set-add-elem-hash-disagrees-with-set-member.md)
+  [set-add-elem-hash-disagrees-with-set-member](../../archive/set-add-elem-hash-disagrees-with-set-member.md)
   -- the typed `set-add-elem__` added elements that `set-member?` could not
   find, so `crdt/set` uses the explicit-hash macro pair throughout. Fixed
   2026-09-16 (two emitter defects, neither in set.tur); the typed adder is
@@ -521,11 +521,11 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
 
      | Defect | What it did |
      | --- | --- |
-     | [phantom type param does not drive monomorphization](../archive/phantom-type-param-does-not-drive-monomorphization.md) | a value read out of a carrier and ascribed back to the class var was not seen as a dispatch |
-     | [constrained relay dispatch collapses](../archive/typeclass-constrained-relay-dispatch.md) | a constrained generic calling another was never specialized -- the fold-helper shape exactly |
-     | [base body picks an aggregate instance](../archive/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | the representative search had no tier for a `defopaque` newtype, so it chose an aggregate and the base body would not compile |
-     | [generic defn forward reference](../archive/generic-defn-forward-reference-wrong-arity.md) | both pre-passes read the TYPE-param vector as the value params, so a generic could not be called from above |
-     | [bare parametric `:heap` base repr](../archive/bare-parametric-heap-base-repr-disagreement.md) | `repr_of` said heap-ptr where the emitter said carrier, ICEing on the merge temp |
+     | [phantom type param does not drive monomorphization](../../archive/phantom-type-param-does-not-drive-monomorphization.md) | a value read out of a carrier and ascribed back to the class var was not seen as a dispatch |
+     | [constrained relay dispatch collapses](../../archive/typeclass-constrained-relay-dispatch.md) | a constrained generic calling another was never specialized -- the fold-helper shape exactly |
+     | [base body picks an aggregate instance](../../archive/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | the representative search had no tier for a `defopaque` newtype, so it chose an aggregate and the base body would not compile |
+     | [generic defn forward reference](../../archive/generic-defn-forward-reference-wrong-arity.md) | both pre-passes read the TYPE-param vector as the value params, so a generic could not be called from above |
+     | [bare parametric `:heap` base repr](../../archive/bare-parametric-heap-base-repr-disagreement.md) | `repr_of` said heap-ptr where the emitter said carrier, ICEing on the merge temp |
 
      Two design points worth keeping:
 
@@ -536,7 +536,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
      - **Both merges share ONE fold.** The constrained path passes `__vjoin`
        -- a constrained generic -- as the `f` of the same fold the explicit
        path uses. That collapsed onto a single instance until
-       [the fn-value defect](../archive/constrained-generic-as-fn-value-collapses.md)
+       [the fn-value defect](../../archive/constrained-generic-as-fn-value-collapses.md)
        was fixed, which is why an earlier revision carried a second copy of the
        loop differing in one line.
      - **`V` is phantom**, but `ormap-new` no longer needs an ascription: a
@@ -555,15 +555,15 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
 
   | Defect | What it did |
   | --- | --- |
-  | [`clone_struct_app_type` SEGV](../archive/clone-struct-app-type-segv-on-null-arg.md) | crashed on a parametric instance head whose method recurses into the type parameter |
-  | [fn-typed param forwarded to a later defn](../archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md) | emitted a carrier cast onto a `tur_poly_fn_t`; trigger was source order |
-  | [phantom type param does not drive monomorphization](../archive/phantom-type-param-does-not-drive-monomorphization.md) | a dispatch reached through an ascription was not detected |
-  | [constrained relay dispatch collapses](../archive/typeclass-constrained-relay-dispatch.md) | a constrained generic calling another was never specialized |
-  | [base body picks an aggregate instance](../archive/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | no representative tier for a `defopaque` newtype, so the base body would not compile |
-  | [generic defn forward reference](../archive/generic-defn-forward-reference-wrong-arity.md) | both pre-passes read the TYPE-param vector as the value params |
-  | [bare parametric `:heap` base repr](../archive/bare-parametric-heap-base-repr-disagreement.md) | `repr_of` and the merge-temp emitter disagreed; ICE, plus a duplicate-typedef guard bug |
-  | [phantom-only parametric base ctor was a trap](../archive/generic-defn-forward-reference-wrong-arity.md) | an empty container needed a hand-written ascription; `(ormap-new)` aborted |
-  | [constrained generic as a fn value collapses](../archive/constrained-generic-as-fn-value-collapses.md) | forced two near-identical folds; also surfaced a latent use-after-free in spec interning |
+  | [`clone_struct_app_type` SEGV](../../archive/clone-struct-app-type-segv-on-null-arg.md) | crashed on a parametric instance head whose method recurses into the type parameter |
+  | [fn-typed param forwarded to a later defn](../../archive/fn-typed-param-forwarded-to-a-later-defn-miscasts.md) | emitted a carrier cast onto a `tur_poly_fn_t`; trigger was source order |
+  | [phantom type param does not drive monomorphization](../../archive/phantom-type-param-does-not-drive-monomorphization.md) | a dispatch reached through an ascription was not detected |
+  | [constrained relay dispatch collapses](../../archive/typeclass-constrained-relay-dispatch.md) | a constrained generic calling another was never specialized |
+  | [base body picks an aggregate instance](../../archive/phantom-constrained-generic-base-body-picks-aggregate-instance.md) | no representative tier for a `defopaque` newtype, so the base body would not compile |
+  | [generic defn forward reference](../../archive/generic-defn-forward-reference-wrong-arity.md) | both pre-passes read the TYPE-param vector as the value params |
+  | [bare parametric `:heap` base repr](../../archive/bare-parametric-heap-base-repr-disagreement.md) | `repr_of` and the merge-temp emitter disagreed; ICE, plus a duplicate-typedef guard bug |
+  | [phantom-only parametric base ctor was a trap](../../archive/generic-defn-forward-reference-wrong-arity.md) | an empty container needed a hand-written ascription; `(ormap-new)` aborted |
+  | [constrained generic as a fn value collapses](../../archive/constrained-generic-as-fn-value-collapses.md) | forced two near-identical folds; also surfaced a latent use-after-free in spec interning |
 
   Five of the nine were **silent wrong answers**, every one a constrained
   generic quietly running the wrong instance. That is the argument for building
@@ -602,7 +602,7 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   two causal types carry `OrsetDelta` / `OrmapDelta` instead.
 
   **Two shapes in 2.4's sketch do not compile**, both filed:
-  [associated-type-unusable-nullary-and-generic](../archive/associated-type-unusable-nullary-and-generic.md).
+  [associated-type-unusable-nullary-and-generic](../../archive/associated-type-unusable-nullary-and-generic.md).
 
   1. `(delta-bottom [] : Delta)` -- a nullary method whose only mention of the
      class variable is through the associated type is not registered at all.
@@ -657,10 +657,10 @@ One stdlib-adjacent fix is worth doing regardless of this plan's fate:
   assertion.
 
   Two compiler defects were filed building it, neither blocking:
-  [vec-push-byvalue-struct-param-emits-unbridged-pointer](../reported/vec-push-byvalue-struct-param-emits-unbridged-pointer.md)
+  [vec-push-byvalue-struct-param-emits-unbridged-pointer](../../archive/vec-push-byvalue-struct-param-emits-unbridged-pointer.md)
   (a `defstruct` wider than two words cannot be pushed into a `(Vec T)` from a
   parameter -- hence the eight-parameter `__ins-at!`) and
-  [phantom-parametric-heap-let-binding-repr-ice](../reported/phantom-parametric-heap-let-binding-repr-ice.md)
+  [phantom-parametric-heap-let-binding-repr-ice](../../archive/phantom-parametric-heap-let-binding-repr-ice.md)
   (which also records the pre-existing macOS-only red in `test_ormap.tur`,
   fixed in the same PR).
 - **C6 -- sync.** A separate `crdt-sync` spice over `valkey` pubsub or the
@@ -716,7 +716,7 @@ follow-on, C6 is plumbing. C1-C5 are in; only C6 is left.
   the delta formulation in section 2.4.
 - Kulkarni et al., *Logical Physical Clocks* (2014) -- the HLC in 2.2.
 - Weiss, Urso, Molli, *Logoot*; Roh et al., *RGA* -- candidates for C5.
-- In-tree: [../archive/secret-spice-plan.md](../archive/secret-spice-plan.md) (CSPRNG, and the
+- In-tree: [../archive/secret-spice-plan.md](../../archive/secret-spice-plan.md) (CSPRNG, and the
   template this plan follows), `docs/guides/typeclass-guide.md`
   (associated types, constrained instances),
   `docs/guides/contract-types-guide.md` (`#refine{...}`).

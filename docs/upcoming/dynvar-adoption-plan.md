@@ -347,7 +347,7 @@ for `static` globals and `g_*` symbols, classifying each into:
 
 Land the sweep as a follow-up doc under `docs/reported/` if anything
 surprising shows up; otherwise just expand this plan's target list. The
-sibling spices plan ([dynvar-adoption-spices-plan.md](dynvar-adoption-spices-plan.md))
+sibling spices plan ([dynvar-adoption-spices-plan.md](spices/dynvar-adoption-spices-plan.md))
 does the same sweep across `../turmeric-spices/`.
 
 ---

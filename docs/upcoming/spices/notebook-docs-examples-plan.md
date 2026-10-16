@@ -628,9 +628,9 @@ described as they would be made from a turmeric-spices-rooted session.
 
 ## 8. References
 
-- In-tree: [notebook-guide.md](../guides/notebook-guide.md) (the guide
-  this plan extends), [notebook-spice-plan.md](../archive/history/notebook-spice-plan.md)
-  (the original NB0-NB12 milestone plan, archived), [notebook-katex-plan.md](../archive/notebook-katex-plan.md)
+- In-tree: [notebook-guide.md](../../guides/notebook-guide.md) (the guide
+  this plan extends), [notebook-spice-plan.md](../../archive/history/notebook-spice-plan.md)
+  (the original NB0-NB12 milestone plan, archived), [notebook-katex-plan.md](../../archive/notebook-katex-plan.md)
   (the KaTeX integration plan, archived).
 - Spice source: `spices/notebook/build.tur` (manifest), `src/notebook/session.tur`
   (libturi session, `turi_eval_typed`, stdout capture, `__NB_IMG__` parsing),

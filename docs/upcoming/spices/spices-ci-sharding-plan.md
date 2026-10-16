@@ -9,7 +9,7 @@
 > [`turmeric-spices/.github/workflows/ci.yml`](https://github.com/turmeric-lang/turmeric-spices/blob/main/.github/workflows/ci.yml)
 > (the `test-spice`, `discover-spices` and `manifest-parse` jobs), a new
 > `ci/run-shard.sh` there, and -- section 7 -- a `concurrency:` block on this
-> repo's [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
+> repo's [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml).
 >
 > **Decided:**
 > 1. **Build `tur` once per OS** and hand it to the test jobs as an artifact.
@@ -28,7 +28,7 @@ spice per OS (48 spices x 2 OSes), plus `discover-spices` and
 Debug+ASan `tur` at the same pinned SHA before doing anything else.
 
 The org's runners are shared between turmeric and turmeric-spices, and the
-macOS pool is small. [ci-aux-suite-latency-plan](../archive/ci-aux-suite-latency-plan.md)
+macOS pool is small. [ci-aux-suite-latency-plan](../../archive/ci-aux-suite-latency-plan.md)
 section 3 already measured this repo's macOS jobs waiting 40-80 minutes to
 start. A spices run puts 48 macOS jobs into that same queue, and those jobs
 are mostly recompiling the compiler.

@@ -88,7 +88,7 @@ static void macro_env_bracket_exit(MacroEnvBracket *b, Elab *e) {
 /* ---------------------------------------------------------------------------
  * Stage 4 / R3: bounded type reflection -- syntax-struct-fields.
  *
- * R3 of docs/upcoming/hold/row-types-followups-plan.md rules that if
+ * R3 of docs/upcoming/row-types-followups-plan.md rules that if
  * type-level metaprogramming is ever built, it must be a bounded, TOTAL,
  * structurally-recursive accessor -- never a general Type value in an
  * evaluator.  This native is exactly that: given a Syntax symbol naming a

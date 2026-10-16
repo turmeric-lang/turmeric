@@ -169,7 +169,7 @@ emits `GameWorld-alive?` (`#reads`) + `GameWorld-despawn!`
 emits the cap-gated `get-Pos!` with the refined entity parameter, and
 `(for-each-alive GameWorld w n e body)` iterates with per-entity proofs
 -- all opt-in beside the unchanged forgiving family. See
-[docs/upcoming/v1/ecs-refinement-typed-apis-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/v1/ecs-refinement-typed-apis-plan.md).
+[docs/upcoming/ecs-refinement-typed-apis-plan.md](https://github.com/turmeric-lang/turmeric/blob/main/docs/upcoming/ecs-refinement-typed-apis-plan.md).
 
 ## Queries: `for-each` (imperative)
 
@@ -743,7 +743,7 @@ intended sweet spot.
 
 ## Where to look next
 
-- `docs/upcoming/v1/ecs-refinement-typed-apis-plan.md` -- the
+- `docs/upcoming/ecs-refinement-typed-apis-plan.md` -- the
   refinement-typed roadmap: strict aliveness (RE1, shipped as
   `ecs/refined-world` + `for-each-alive!`), bounded slot indices
   (RE2, gated on loop invariants and a profile).

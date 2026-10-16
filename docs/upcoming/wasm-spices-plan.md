@@ -87,7 +87,7 @@ The goal is that a user with a `build.tur` and no web knowledge can run
 
 ### Relationship to the existing Emscripten tutorial
 
-[docs/guides/web-emscripten-tutorial.md](../../guides/web-emscripten-tutorial.md)
+[docs/guides/web-emscripten-tutorial.md](../guides/web-emscripten-tutorial.md)
 covers the **interpreter-embedding** path end to end: build the REPL module,
 call `turi_wasm_eval` from a page, COOP/COEP, deploying. It has no coverage of
 the AOT path, canvas, graphics or frame loops -- checked, and there is no
@@ -333,7 +333,7 @@ requirement from this repo's own rules.
 
 In `:callback` mode a Turmeric closure has to reach
 `emscripten_set_main_loop`. The mechanism exists:
-[c-integration-guide.md:889](../../guides/c-integration-guide.md) -- a
+[c-integration-guide.md:889](../guides/c-integration-guide.md) -- a
 function-typed parameter marked `^fat` arrives in inline C as an `int64_t`
 closure handle, dispatched with `TUR_APPLY*`.
 
@@ -804,7 +804,7 @@ nothing here waited on W0/W1). **The browser story is real.** Full results in
    finding 5).
 
 One bug fell out and is filed:
-[wasm-arm-suppresses-cmake-policy-min](../../archive/wasm-arm-suppresses-cmake-policy-min.md).
+[wasm-arm-suppresses-cmake-policy-min](../archive/wasm-arm-suppresses-cmake-policy-min.md).
 raylib itself is immune (its floor is exactly 3.5), so W2 is not blocked on
 the fix -- but the second cmake dep will be.
 
@@ -987,7 +987,7 @@ still accepts -- which is why this has never been hit. The second cmake dep
 finds it; `hiredis` is named in pkg.c's own comment as the motivating case.
 
 Filed as
-[docs/archive/wasm-arm-suppresses-cmake-policy-min.md](../../archive/wasm-arm-suppresses-cmake-policy-min.md).
+[docs/archive/wasm-arm-suppresses-cmake-policy-min.md](../archive/wasm-arm-suppresses-cmake-policy-min.md).
 Fix is dropping the `!wasm` conjunct: the `cmake_major_version() >= 4` test
 already handles the CMake 3.x noise the comment was guarding against, and it
 is arm-independent.
@@ -1155,7 +1155,7 @@ One item, and it is a product question rather than a technical one:
   `src/CMakeLists.txt:1914`) is untouched. The app scaffold is a sibling
   target. Its flag set is a useful reference but not a template -- see the two
   reversals in 6.8.
-- [docs/guides/web-emscripten-tutorial.md](../../guides/web-emscripten-tutorial.md)
+- [docs/guides/web-emscripten-tutorial.md](../guides/web-emscripten-tutorial.md)
   documents the interpreter-embedding path (`turi_wasm_eval`, COOP/COEP,
   Vite wiring). No canvas, graphics or loop coverage; no overlap. W6 adds the
   AOT-app sibling guide.

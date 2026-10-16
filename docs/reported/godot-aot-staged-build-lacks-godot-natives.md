@@ -407,4 +407,4 @@ fix this report is not reproducible, because AOT never engages at all.
 
 - [godot-baked-in-prelude-fails-to-eval.md](../archive/godot-baked-in-prelude-fails-to-eval.md)
   -- the three bugs that had to be cleared before the AOT path could be reached.
-- [docs/upcoming/v1/windows-remaining-plan.md](../upcoming/v1/windows-remaining-plan.md) -- WIN2.
+- [docs/upcoming/windows-remaining-plan.md](../upcoming/windows-remaining-plan.md) -- WIN2.

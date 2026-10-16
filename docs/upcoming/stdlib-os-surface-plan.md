@@ -322,8 +322,8 @@ Ordered by expected demand. None is started before P0-P2 land.
 1. **2026-10-04 -- list results are `(Vec cstr)`** (section 3.3).
 2. **2026-10-04 -- old `io.tur` names are deprecated for one release, then
    removed** (section 3.5).
-3. **2026-10-04 -- this plan stays in `docs/upcoming/`**, not
-   `docs/upcoming/v1/`. P0 and P1 are still the intended pre-v1 work; P2 may
+3. **2026-10-04 -- this plan stays in `docs/upcoming/`** (it was weighed
+   against a `v1/` subdirectory, since flattened away). P0 and P1 are still the intended pre-v1 work; P2 may
    slip past v1 if the track needs the time.
 
 ## 8. Implementation notes (P0-P2, 2026-10-04)
