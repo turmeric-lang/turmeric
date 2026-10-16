@@ -84,6 +84,10 @@ void   *tur_sb_new(void);
 void    tur_sb_push_cstr(void *b, const char *s);
 void    tur_sb_push_string(void *b, void *s);
 void    tur_sb_push_byte(void *b, int64_t c);
+void    tur_sb_push_range(void *b, void *s, int64_t off, int64_t len); /* clamped */
+void    tur_sb_push_int(void *b, int64_t v);           /* decimal digits */
+void    tur_sb_push_repeat(void *b, int64_t c, int64_t n); /* n copies of byte c */
+void    tur_sb_push_slice(void *b, void *sl);          /* a StringSlice's bytes */
 int64_t tur_sb_len(void *b);
 void   *tur_sb_finish(void *b);         /* -> String; frees the builder */
 

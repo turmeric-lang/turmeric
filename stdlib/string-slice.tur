@@ -57,6 +57,8 @@
 (extern-c tur_slice_cmp [a :ptr b :ptr] :int)
 
 (extern-c tur_slice_hash [sl :ptr] :int)
+
+(extern-c tur_sb_push_slice [b :ptr sl :ptr] :void)
 ;; ---- Construction ----------------------------------------------------------
 ;;; string/slice -- a zero-copy view of String s over bytes [off, off+len).
 ;;;
@@ -587,6 +589,29 @@
 
 (defn slice/sub [sl : StringSlice off : int len : int] : StringSlice
   (:: (tur_slice_sub (:: sl ptr<void>) off len) StringSlice))
+;; ---- Building (markdown-library-plan S5) ----------------------------------
+;;; builder/push-slice! -- append a slice's bytes to the builder.
+;;;
+;;; Copies the viewed range straight from the parent String, so a parser can
+;;; assemble output from views of its input without a slice/to-string
+;;; temporary for each.  The slice is borrowed, not released.
+;;;
+;;; Parameters:
+;;;   b  -- the builder to append to
+;;;   sl -- the slice whose bytes to append (borrowed)
+;;;
+;;; Example:
+;;;   (let [b (builder/new)]
+;;;     (do (builder/push-slice! b (string/slice (string/from-cstr "hello world") 6 5))
+;;;         (string/to-cstr (builder/finish b))))  ; => "world"
+;;;
+;;; Since: markdown-library-plan S5
+(defn builder/push-slice! [b : StringBuilder sl : StringSlice] : void
+  (tur_sb_push_slice (:: b ptr<void>) (:: sl ptr<void>)))
+;;; BuilderPush [StringSlice] -- the viewed bytes, as builder/push-slice!.
+
+(definstance BuilderPush [StringSlice]
+  (builder/-push-into! [x b] (builder/push-slice! b x)))
 ;; ---- Materialization -------------------------------------------------------
 ;;; slice/to-string -- copy the slice's range into a fresh owned String.
 ;;;

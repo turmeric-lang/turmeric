@@ -1,8 +1,9 @@
 # tur/markdown -- CommonMark + GFM in Turmeric, and the string helpers it needs
 
-> **Status:** in progress. S1 (#1200), S2 (#1209), S3 (#1210) and S4 are
-> implemented; the rest is still plan. Written 2026-10-15; its open questions were settled with the
-> author the same day (section 8). It started as "would
+> **Status:** in progress. Phases S and J are done: S1 (#1200), S2 (#1209),
+> S3 (#1210), S4 (#1213) and S5; J1-J3 (#1201, #1202, #1207) and J4 (#1208).
+> Phases U and M are still plan. Written 2026-10-15; its open questions were
+> settled with the author the same day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
 > turned out not to remove any dependency (see section 9). The Markdown renderer
 > did look worth doing, and so did the string helpers that both spikes below kept
@@ -310,9 +311,9 @@ Written over `vec-push!`, these inherit its region escape note (CLAUDE.md,
 As built: an empty `from` matches nothing, so `replace-all` returns a copy (the
 rule `string/split` has for an empty separator). `parse-int` is strict: an
 optional sign and then digits, the whole string, with `(none)` on overflow. It
-counts down, so the most negative int parses. The byte loops behind
-`replace-all` and the pads (`string/-push-range!`, `string/-push-chars!`) are
-what S5's `builder/push-slice!` and `builder/push-repeat!` replace.
+counts down, so the most negative int parses. S5 replaced the byte loops
+behind `replace-all` and the pads with `tur_sb_push_range` and
+`builder/push-repeat!`.
 
 ### 4.6 S5 -- building
 
@@ -337,6 +338,17 @@ allocating, with every intermediate leaked:
   ```turmeric
   (string/of path "\t" pre "\t" headings)   ;; => owned String
   ```
+
+As built: `builder/push-int!`, `builder/push-repeat!` and `builder/push-slice!`
+are C primitives (`tur_sb_push_int`, `tur_sb_push_repeat`, `tur_sb_push_slice`
+in `src/runtime/tur_string.c`) with interpreter natives, and so is the internal
+`tur_sb_push_range` that S4's `replace-all` now copies through. The class is
+`BuilderPush`. Its method, `builder/-push-into! [x b]`, takes the value first,
+because a class method dispatches on its first argument; `builder/push! [b x]`
+is the constrained `defn` over it. `string/of` mints its builder with `gensym`,
+so it captures none of the caller's names. It borrows its arguments, so a call
+that returns a fresh `String`, such as `(int->string n)`, still leaks as an
+argument; the `int` instance is what makes that unnecessary.
 
 ## 5. Phase U -- Unicode and entity tables
 

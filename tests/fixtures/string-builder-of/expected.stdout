@@ -1,0 +1,20 @@
+-- push-int!
+0 7 -42 9223372036854775807 -9223372036854775808
+-- push-repeat!
+-----||  |
+-- push-slice!
+world hello
+-- push!
+cstr String Str -5 true false
+-- string/of
+
+one
+1+1=2 is true
+[-] Ada
+hello, Ada! you are visitor #3.
+local b, local sb
+-- string/of evaluates left to right
+1
+2
+3
+1 2 3
