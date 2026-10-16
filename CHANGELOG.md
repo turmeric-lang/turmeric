@@ -2,6 +2,51 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.65.2] -- 2026-10-16
+
+### Added
+
+- **`--timings` reports where a compile's time went.** On any compiling command
+  (`build`, `check`, `emit-c`, `run`, `jit`) it prints a percentage table of the
+  compile's phases on stderr; with a path it also writes the tur-profile/1 JSON.
+  `tur test --timings` charges the test binaries' runs to "run".
+- **String helpers across `stdlib/string.tur`, `string-slice.tur` and
+  `cstr.tur`.** Bounds-checked byte tests (`string/byte-is?`, `char-at`
+  returning `(Option Char)`, and slice/cstr twins), non-allocating search
+  (`string/index-of`, `last-index-of`, `starts-with-at?`, `span-while`), and
+  `string/split`, `split-char`, `lines` (LF, CRLF and CR), `join`, plus
+  zero-copy `string/line-slices` and `slice/split-char`. A new opt-in
+  `stdlib/fs-string.tur` adds `fs/read-string`.
+- **turmeric-lang.com gets a light theme.** Every page follows the OS
+  `prefers-color-scheme` until you click the sun/moon toggle; the choice is
+  stored and wins on every page and tab.
+
+### Changed
+
+- **`vec-push!` grows its buffer with `realloc`.** A large block extends in
+  place instead of copying every element at each doubling, cutting wall time on
+  big push loops substantially.
+- **gcc builds read the runtime thread-locals directly.** The out-of-line TLS
+  accessor -- measured at up to 57% of cycles on CPS loops -- is gone from
+  cc-compiled code; only c2mir keeps it.
+- **`turi` probes module-private names without formatting an error.** A loop
+  inside a `defmodule` no longer pays a quarter of its instructions building
+  error values that are dropped on the common lookup path.
+
+### Fixed
+
+- **`tur run release` and `tur run tsan` build Release.** Both previously built
+  the shared Debug tree and ignored `--config`, so "release builds strip
+  contracts" was false; each now configures its own `build-release/` or
+  `build-tsan/` tree.
+
+### Docs
+
+- **Guides render correctly on the site and GitHub.** 54 run-on lists on 23
+  pages now render as lists, 28 inline-C-bearing blocks no longer end early
+  under CommonMark, and the performance guide's engine table, timings section
+  and TLS notes match today's compiler.
+
 ## [0.65.1] -- 2026-10-14
 
 ### Added
