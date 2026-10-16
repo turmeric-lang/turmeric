@@ -12,7 +12,8 @@
 > questions A-1 to A-4 and B's cursor-walk question decided 2026-10-16,
 > with A6 (escaping for script, style and srcdoc holes) planned for later.
 > Follow-up D (hiccup: markup as typed data) planned 2026-10-16, not started;
-> its open questions D-1 to D-3 decided the same day.
+> its open questions D-1 to D-3 decided the same day. D-1 was revised after a
+> prototype: phase D1b rewrites markup vectors in result positions.
 > See "Follow-ups" at the end.
 
 ## Outcome (2026-10-10)
@@ -289,7 +290,7 @@ its own `turmeric-spices` PR, branched from `main`. PRs are never stacked
 | **B** -- editable tree | In-place mutation of the arena tree, validated so that edits cannot inject structure; streaming SAX rewrite | nothing |
 | **C** -- CSS selectors and node paths | A selector engine in dom-core's C layer, plus `node-css-path` | nothing (independent of B) |
 | **A** -- markup literals | `#html{...}` / `#xml{...}` with `${...}` holes, escaped by construction, rendered to a string or a tree | A1-A2 (string mode) need nothing; A3-A4 (tree mode, in-place re-render) need B1-B2 merged |
-| **D** -- hiccup | Markup as a typed Turmeric value (`Html`), written `(hiccup [:li.item #map{:href u} name])`, safe by construction, rendered to a string or a tree; and `node->hiccup` back from a parsed DOM | D1 (string mode) needs nothing but the hole classes it shares with A2; D2 (tree mode) needs B1-B2 merged |
+| **D** -- hiccup | Markup as a typed Turmeric value (`Html`), written `(hiccup [:li.item #map{:href u} name])`, safe by construction, rendered to a string or a tree; and `node->hiccup` back from a parsed DOM | D1 (string mode) needs nothing but the hole classes it shares with A2; D1b (result-position rewriting) follows D1, best after the macro-time forward-reference fix; D2 (tree mode) needs B1-B2 merged |
 
 Suggested order: B, then A and D, with C whenever. B is the substrate the
 others benefit from. A's and D's string modes can start in parallel with B,
@@ -1040,9 +1041,13 @@ literal to constructor calls:
 - A child that is a string or number literal becomes `HText`. A nested
   vector headed by a keyword or a string recurses. Anything else is a hole
   typed through `ToChild`, with the same instances as A plus
-  `ToChild Html` and `ToChild (Cons Html)`. A vector inside such an
-  expression is not rewritten: markup there is written `(hiccup ...)`
-  again (D-1).
+  `ToChild Html` and `ToChild (Cons Html)`. In D1 a vector inside such
+  an expression is not rewritten, and markup there is written
+  `(hiccup ...)` again. From D1b, vectors in that expression's result
+  positions are rewritten too (D-1; the positions are listed under
+  "D-1 investigation"). Markup anywhere else still takes `(hiccup ...)`,
+  and the macro says so when it finds a vector headed by a known element
+  name outside a result position.
 - Nesting the HTML parser would undo is a compile error where the literal
   shows it (D-2): block content directly in `p`, `a` inside `a`, `form`
   inside `form`, interactive content inside `a` or `button`, and anything
@@ -1078,6 +1083,7 @@ and raw-text bodies, so the conversion uses the trusted constructors.
 | Phase | Deliverable | Gate |
 |---|---|---|
 | D1 | `dom/hiccup`: `Html`, `Tag`, `AttrName`, `Attr`, `RawBody` and their checking constructors; the `hiccup` macro (keyword and string names, `#id.class` shorthand, `#map{}` attributes, `:attrs*`, holes through `ToChild` / `ToAttr` / `ToUrlAttr`); `hiccup->string` | A compile-error table: an invalid literal name, a computed tag, children under a void element, a dynamic value under `on*` / `style` / `srcdoc`, a dynamic `<script>` / `<style>` body, a second `id`, a bare `{...}` attribute map, and each D-2 nesting case. The checking constructors refuse bad names, the code-bearing names and the raw-text tags. A2's escaping and URL tables, applied to hiccup. Once A2 exists, `hiccup` and `#html{}` render byte-identical output for a shared corpus |
+| D1b | Result-position rewriting (D-1): markup vectors in the result positions of `if`, `when`, `unless`, `cond`, `do`, `let`, `match`, `for`, and an inline one-parameter `fn` passed to `list-map`, become `Html`; missing `else` branches become an empty `Html`; an inline `list-map` becomes a `list-foldl` straight into `Html`; a vector headed by a known element name outside a result position is a compile error saying to wrap it in `(hiccup ...)`. Best after `macro-time-forward-reference-typed-int` is fixed, so the walker can be ordinary mutually recursive functions; otherwise it ships as the single self-recursive walker the prototype used | One fixture per form in the result-position table, with markup in every branch and a missing `else` where the form allows one. Keyword-headed vectors that are type syntax or option lists (`(fn [:int] :int)`, `:only [:encode]`) inside a hiccup argument are neither rewritten nor reported. A vector in a `let` binding's value or an unknown call's argument gives the "wrap in `(hiccup ...)`" error. A type error inside a rewritten branch points at the user's line |
 | D2 | `hiccup->dom` (needs B1-B2), `hiccup->xml-string`, `ToChild Html` and `HFragment`, `RenderHtml` for `html-response` | For parser-stable trees (D-2), `html-parse-fragment` with context `template` of `hiccup->string h` is `dom-equal?` to `hiccup->dom h`; the same through expat for the XML flavour |
 | D3 | `node->hiccup` | `hiccup->dom (node->hiccup n)` is `dom-equal?` to `n` for every element of both corpora; the guide shows a transform (add `rel="noopener"` to every external `<a>`) |
 
@@ -1093,9 +1099,12 @@ All three were decided 2026-10-16.
   binding vector starts with a symbol, so `[r rows]` is left alone, and the
   rewrite is what makes hiccup feel like hiccup. Its cost is that a real
   vector of keywords inside a hiccup body is misread. *Decided: explicit
-  `(hiccup ...)` for now.* Revisit the rewrite with real templates before
-  D2. "D-1 investigation" below costs a narrower rewrite, which touches
-  only result positions.
+  `(hiccup ...)` in D1, then revised the same day after a prototype (see
+  "D-1 investigation"): phase D1b, before D2, rewrites markup vectors in
+  result positions only.* Rewriting every keyword-headed vector is
+  rejected, because in-tree those are type syntax and option lists. Markup
+  outside a result position keeps `(hiccup ...)`, and the macro reports a
+  vector it would otherwise have missed.
 - **D-2. Trees the HTML parser will not reproduce.** `[:p [:div "x"]]`,
   `[:a [:a "y"]]`, and text directly inside `[:table]` are valid `Html`
   values, but a browser re-nests their serialized form, so string mode and
@@ -1112,7 +1121,7 @@ All three were decided 2026-10-16.
 
 #### D-1 investigation: rewriting vectors in result positions (2026-10-16)
 
-What adopting the rewrite would take, found by building it. A prototype
+What the rewrite takes, found by building it; adopted as D1b. A prototype
 walker of about 70 lines, in a `:for-macros` module, compiled and ran
 correctly on the v0.65.2 release and on `main` (`d60c40f6`), with the
 escaping checked. It handled element children, `if` with and without
