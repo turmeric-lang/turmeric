@@ -664,11 +664,11 @@ against.
   without a PR, use "Run workflow" (workflow_dispatch) on it, once.
 - **Push a PR branch once it is ready, not after every commit.** Amend or
   squash locally; each push to the PR starts the whole matrix again.
-- **A green check does not mean the C tests passed.** `c-tests/runtests.sh` and
-  the bootstrap targets print `FAIL` and exit 0, and the macOS leg has
-  printed six bootstrap `FAIL`s on every run since the fork began. Read the
-  log. See
-  [docs/reported/mir-fork-ci-test-failures-never-fail-the-job.md](docs/reported/mir-fork-ci-test-failures-never-fail-the-job.md).
+- **A red check names its failures.** Since mir#12 a failing c-test or
+  bootstrap fails the job (before, they printed `FAIL` and passed:
+  [docs/archive/mir-fork-ci-test-failures-never-fail-the-job.md](docs/archive/mir-fork-ci-test-failures-never-fail-the-job.md)),
+  and the last step, "List failures", repeats them. Read that rather than the
+  40k-line log.
 
 This applies to every agent and every session; it is not specific to one task.
 

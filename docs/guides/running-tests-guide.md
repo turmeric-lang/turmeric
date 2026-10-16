@@ -108,6 +108,25 @@ commit in `tests/markdown-spec/PINNED`, or point `MD_SPEC_DIR` at a checkout.
   - `--show N` prints input, expected and actual for the first N failures;
   - `--update` adds newly passing examples to the ratchet.
 
+### `tests/run-markdown-diff.sh`
+
+`tur/markdown`'s HTML against commonmark.js 0.31.2's, the implementation it was
+ported from (ctest `tur_markdown_diff`). It renders every Markdown file git
+tracks here, every README in `../turmeric-spices` when that checkout is present,
+and 30,000 random documents from fixed seeds. Every document whose HTML differs
+fails the run.
+
+- **Setup.** It needs node, and commonmark.js installed from the pinned
+  lockfile: `(cd tests/markdown-spec/oracle && npm ci)`. Without either it
+  PASS-skips. CI's `aux` part installs both.
+- **What it compares against.** `tests/markdown-spec/oracle/render.js` patches
+  the places where commonmark.js departs from the spec, following cmark there,
+  and says why at each. So every difference it reports is a finding.
+- **Arguments** go to `tests/markdown-spec/diff.py`:
+  - `--seeds 4,5` and `--docs N` pick the random documents (`--docs` per seed);
+  - `--no-corpus` leaves out the files;
+  - `--show N` prints the first N differences, with the input.
+
 ### ctest
 
 ```sh

@@ -5588,6 +5588,33 @@ static void emit_merge_assign_bridged(Buf *body, const char *tmp, const char *va
     else      buf_printf(body, "%s = %s;\n", tmp, val);
 }
 
+/* match-arm-inline-c-carrier-not-bridged: a `match` arm whose tail hands back
+ * the int64 carrier box -- an inline-C body declared `(Option T)` / `(Result T
+ * E)`, a carrier construct, an `__inst_` method -- into a merge temp declared
+ * as that value's by-value form: the niche `void *` of `(Option String)`, the
+ * `tur_adt_Result__...` struct.  emit_if_value bridges such an arm
+ * carrier->concrete; the match emitters assigned the box as is, so the box
+ * address was read as the String, or the struct assignment failed in cc.
+ *
+ * The same bridge, gated tighter than the if arm's: the arm must be a carrier
+ * producer whose by-value type is exactly what the temp was declared as, since
+ * the match temp is declared from the match's own type rather than from its
+ * arms.  Returns a replacement for `val` (caller frees). */
+static char *match_arm_carrier_bridge(EmitCtx *ctx, Buf *body,
+                                      const Expr *arm_body, const char *tmp,
+                                      char *val) {
+    const char *tc = tmp ? emit_localvar_lookup_ctype(tmp) : NULL;
+    if (!tc || !fn_body_tail_is_carrier_producer(arm_body) ||
+        fn_body_tail_emits_byvalue_carrier_abi(ctx, arm_body))
+        return val;
+    Type abv = fn_body_tail_byvalue_carrier_type(ctx, arm_body);
+    if (abv.kind == TY_UNKNOWN ||
+        strcmp(emit_type_c_name(ctx, abv), tc) != 0 ||
+        emit_arm_is_recorded_byval_agg(ctx, val, abv))
+        return val;
+    return emit_carrier_bridge(ctx, body, val, CK_CARRIER, CK_CONCRETE, abv);
+}
+
 /* panicking-if-branch-leaks-cc-uninitialized-warning: a branch that diverges
  * through `panic` still falls off its end in C -- `tur_panic` sets
  * tur_panicking and returns, and the call site's `if (tur_panicking) return`
@@ -18481,7 +18508,13 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     bool fld_aggregate =
                         (fld_rty.kind == TY_APP || fld_rty.kind == TY_STRUCT ||
                          fld_rty.kind == TY_ADT) &&
-                        !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty);
+                        !type_is_heap_struct(fld_rty) && !type_is_heap_adt(fld_rty) &&
+                        /* opaque-field-struct-box-never-freed: an opaque is ONE
+                         * word, not an inline aggregate, so it takes the cast read
+                         * below -- a pointer opaque's int64 slot read back as the
+                         * `void *` the accessor returns. */
+                        !(fld_rty.kind == TY_ADT && fld_rty.as.adt_.def &&
+                          fld_rty.as.adt_.def->is_opaque);
                     const char *heap_fld_cast =
                         (fld_rcty && strcmp(fld_rcty, "int64_t") != 0 &&
                          cty && strcmp(cty, "int64_t") == 0)
@@ -20857,6 +20890,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
@@ -20981,6 +21015,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
@@ -21149,6 +21184,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                       ctx->match_tail->env);
                         } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                             char *bv = emit_value(ctx, body, arm->body);
+                            bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                             indent_buf(body, ctx->indent);
                             emit_merge_assign_bridged(body, tmp, bv);
                             free(bv);
@@ -21838,6 +21874,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
@@ -22315,6 +22352,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);

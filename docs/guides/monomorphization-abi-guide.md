@@ -97,36 +97,54 @@ emitted symbol; only one TU actually emits the body (the rest declare
 Most ABI-flavored errors look like one of:
 
 ```
-undefined reference to `option_map__spec__int_Option__cstr'
-multiple definition of `some___spec__bool_Option__opaque'
+undefined reference to `pick__spec__const_char___int64_t_const_char__'
+multiple definition of `ident__spec__const_char___const_char__'
 ```
 
+The name is built by `emit_abi_clone_name` (`src/compiler/emit_module.c`).
 Parse it:
 
-1. The first segment up to `__spec__` is the originating
-   defn/method/ctor.
-2. Everything after is the argument-type signature, in elaboration
-   order, with double-underscore separators. Type applications use
-   `F__A` -- `Option__cstr` means `(Option cstr)`.
+1. Everything before `__spec__` is the originating defn/method/ctor's
+   **bare** Turmeric name -- not module-qualified, so `util/ident`'s clones
+   start `ident__spec__`.
+2. Right after `__spec__` comes the C type name of the **result**.
+3. Then, for each argument in order, a single `_` and that argument's C type
+   name.
 
-`some___spec__bool_Option__opaque` = the `some` constructor specialized
-for the type `(Option (Option <opaque>))` (note the triple underscore
-distinguishing constructor-name from method-name).
+Every character that is not a letter or digit becomes `_`, in the name and in
+each C type name. That makes the separators ambiguous, so read the pieces
+against the C types you expect:
 
-If you see one of these in a link error, the usual causes are:
+| Symbol | Meaning |
+|---|---|
+| `pick__spec__const_char___int64_t_const_char__` | `pick` returning `const char *` (`cstr`), args `int64_t`, `const char *` |
+| `some__spec__tur_adt_Option__int_int64_t` | `some` returning `tur_adt_Option__int`, arg `int64_t` |
+| `some___spec__bool_tur_adt_Option__int` | `some?` (the `?` became `_`) returning `bool`, arg `tur_adt_Option__int` |
 
-- **Linkage mismatch.** A spec was emitted `static` in one TU and
-  declared `extern` in another. The fix lives in the compiler -- file
-  a report. User-module and prelude-owned specs alike are emitted with
-  external linkage in exactly one owning TU, so this class of error
-  almost always means a spec is being claimed by two owners.
-- **Missing import.** A module uses a spec that no module in the
-  project actually instantiates. Add the import that drives the
-  instantiation, or move the call site into the using module.
+The `__` inside `tur_adt_Option__int` belongs to the type's own C name (the
+monomorph of `(Option int)`), not to the spec name. A trailing `__h1`, `__h2`,
+... is a discriminator added when two specs in one TU would otherwise get the
+same name.
+
+If you see one of these in a link error under separate compilation (see the
+[separate compilation internals guide](separate-compilation-internals-guide.md)):
+
+- **`multiple definition`.** A spec of a user generic is emitted with external
+  linkage by the module that defines the generic. Because the name carries no
+  module, two modules that define same-named generics instantiated at the same
+  types emit the same symbol
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/spec-clone-names-not-module-qualified.md)). Specs of
+  stdlib generics are `static` per TU and never collide.
+- **`undefined reference` or a type mismatch at the call.** The owning module
+  emits a borrowed spec only after the build's second pass forces it there; a
+  module missing from the build set, or a forced spec the owner rebuilt with
+  the wrong C types
+  ([report](https://github.com/turmeric-lang/turmeric/blob/main/docs/reported/forced-spec-loses-aggregate-type.md)), shows up here. `<build-dir>/.tur-abi-cache/index` lists
+  which owner each borrowed clone was forced onto.
 - **`#[used]` defn reached only by mangled symbol.** A pure-Turmeric
   defn called only via a hand-written inline-C bridge or a C-ABI
-  callback was DCE'd. Add `#[used]` to the defn so the compiler keeps
-  external linkage.
+  callback is emitted `static`. Add `#[used]` to the defn so the compiler
+  keeps external linkage.
 
 ## The residual carrier bridge -- what it does, why it stays
 

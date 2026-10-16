@@ -38,69 +38,7 @@
 ;; of the same name for each (src/turi/string_native.c), so these resolve under
 ;; --interpret exactly as when compiled.
 
-(extern-c tur_string_from_cstr [s :cstr] :ptr)
-
-(extern-c tur_string_from_bytes [src :cstr n :int] :ptr)
-
-(extern-c tur_string_adopt_cstr [s :cstr] :ptr)
-
-(extern-c tur_string_from_int [v :int] :ptr)
-
-(extern-c tur_string_cstr [s :ptr] :cstr)
-
-(extern-c tur_string_retain [s :ptr] :ptr)
-
-(extern-c tur_string_release [s :ptr] :void)
-
-(extern-c tur_string_len [s :ptr] :int)
-
-(extern-c tur_string_empty [s :ptr] :bool)
-
-(extern-c tur_string_byte_at [s :ptr i :int] :int)
-
-(extern-c tur_string_eq [a :ptr b :ptr] :bool)
-
-(extern-c tur_string_cmp [a :ptr b :ptr] :int)
-
-(extern-c tur_string_hash [s :ptr] :int)
-
-(extern-c tur_string_starts_with [s :ptr prefix :ptr] :bool)
-
-(extern-c tur_string_ends_with [s :ptr suffix :ptr] :bool)
-
-(extern-c tur_string_contains [s :ptr needle :ptr] :bool)
-
-(extern-c tur_string_concat [a :ptr b :ptr] :ptr)
-
-(extern-c tur_string_substring [s :ptr start :int len :int] :ptr)
-
-(extern-c tur_string_to_upper [s :ptr] :ptr)
-
-(extern-c tur_string_to_lower [s :ptr] :ptr)
-
-(extern-c tur_string_trim [s :ptr] :ptr)
-
-(extern-c tur_string_box_key [s :ptr] :ptr)
-
-(extern-c tur_string_key_eq_addr [] :int)
-
-(extern-c tur_sb_new [] :ptr)
-
-(extern-c tur_sb_push_cstr [b :ptr s :cstr] :void)
-
-(extern-c tur_sb_push_string [b :ptr s :ptr] :void)
-
-(extern-c tur_sb_push_byte [b :ptr c :int] :void)
-
-(extern-c tur_sb_push_range [b :ptr s :ptr off :int len :int] :void)
-
-(extern-c tur_sb_push_int [b :ptr v :int] :void)
-
-(extern-c tur_sb_push_repeat [b :ptr c :int n :int] :void)
-
-(extern-c tur_sb_len [b :ptr] :int)
-
-(extern-c tur_sb_finish [b :ptr] :ptr)
+(load "stdlib/string-ffi.tur")
 ;; ---- Construction / conversion ---------------------------------------------
 ;;; string/from-cstr -- copy a NUL-terminated C string into a fresh owned String.
 ;;;

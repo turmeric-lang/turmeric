@@ -2,10 +2,14 @@
 ;;;
 ;;; markdown/parse reads a String into an MdDoc and markdown/render-html
 ;;; writes it out; markdown/doc-free releases it.  The parser follows the
-;;; CommonMark spec, 0.31.2.  This is markdown-library-plan's Phase M under
-;;; way: the block structure is complete (M1), inline content is still
-;;; written as escaped text (M2 parses it), and the GFM extensions come with
-;;; M3.  tests/run-markdown-spec.sh runs the spec's examples.
+;;; CommonMark spec, 0.31.2, and passes all 652 of its examples.  This is
+;;; markdown-library-plan's Phase M under way: blocks (M1) and inlines (M2)
+;;; are complete, and the GFM extensions come with M3.
+;;; tests/run-markdown-spec.sh runs the spec's examples.
+;;;
+;;; The tree is walked by id: markdown/children and markdown/block for
+;;; blocks, then markdown/inlines, markdown/inline-children and
+;;; markdown/inline for a paragraph's or heading's inline content.
 ;;;
 ;;; Pure Turmeric apart from the Unicode and entity tables, which the
 ;;; interpreter carries as natives, so it runs compiled, under the JIT and
@@ -76,7 +80,7 @@
 ;;;
 ;;; Since: markdown-library-plan M1
 (defn markdown/parse [src : String opts : MdOpts] : MdDoc
-  (md/-parse-blocks src))
+  (let [d (md/-parse-blocks src)] (do (md/-parse-inlines! d) d)))
 ;;; markdown/render-html -- the HTML for a document.
 ;;;
 ;;; Block structure as the CommonMark spec writes it: one line per block tag,
@@ -106,7 +110,11 @@
 ;;;
 ;;; Since: markdown-library-plan M1
 (defn markdown/doc-free [d : MdDoc] : void
-  (do (string/release-all (.strs d)) (vec-free (.nodes d)) (vec-free (.refs d))))
+  (do
+    (string/release-all (.strs d))
+    (vec-free (.nodes d))
+    (vec-free (.refs d))
+    (vec-free (.inls d))))
 ;;; markdown/escape-html -- s with & < > and " replaced by their HTML entities.
 ;;;
 ;;; Parameters:
@@ -149,6 +157,12 @@
 ;;; md/-new-ids -- internal: an empty MdBlockId Vec.
 
 (defn md/-new-ids [] : (Vec MdBlockId) (vec-new))
+;;; md/-pool-copy -- internal: a fresh copy of pool String i, or (none) when i is -1.
+
+(defn md/-pool-copy [d : MdDoc i : int] : (Option String)
+  (if (< i 0)
+    (none)
+    (let [s (vec-get (.strs d) i)] (some (string/substring s 0 (string/len s))))))
 ;;; markdown/root -- the document block, the root of the tree.
 ;;;
 ;;; Parameters:
@@ -225,10 +239,9 @@
       (MdHtmlBlock))))
 ;;; markdown/block-text -- a leaf block's text.
 ;;;
-;;; A paragraph's or heading's inline text, trimmed and with its inner line
-;;; endings kept (inline syntax is not parsed yet: markdown-library-plan
-;;; M2); a code block's contents, ending in a line feed; or an HTML block's
-;;; HTML.
+;;; A paragraph's or heading's source text, trimmed, with its inner line
+;;; endings and its inline syntax kept (markdown/inlines has it parsed); a
+;;; code block's contents, ending in a line feed; or an HTML block's HTML.
 ;;;
 ;;; Parameters:
 ;;;   d  -- the document
@@ -243,16 +256,7 @@
 ;;;
 ;;; Since: markdown-library-plan M1
 (defn markdown/block-text [d : MdDoc id : MdBlockId] : (Option String)
-  (let [n (md/-node-of d id)
-        t (.text n)]
-    (cond (< t 0)                                                                (none)
-          (or (md/-para? (.kind n)) (match (.kind n) (MdKHeading) true _ false)) (some (string/trim (vec-get (.strs d)
-                                                                                                      t)))
-          :else                                                                  (let [s (vec-get (.strs d)
-                                                                                           t)]
-                                                                                   (some (string/substring s
-                                                                                           0
-                                                                                           (string/len s)))))))
+  (md/-pool-copy d (.text (md/-node-of d id))))
 ;;; markdown/code-info -- a fenced code block's info string.
 ;;;
 ;;; Parameters:
@@ -288,3 +292,186 @@
 ;;; Since: markdown-library-plan M1
 (defn markdown/block-lines [d : MdDoc id : MdBlockId] : (Pair int int)
   (let [n (md/-node-of d id)] (pair (.start-line n) (.end-line n))))
+;; ---- Walking the inlines ---------------------------------------------------------
+;;; MdInlineId -- an inline of a parsed document.  Valid only with the MdDoc it came from.
+
+(defstruct MdInlineId :copy [ix : int])
+;;; MdInline -- what an inline is.
+;;;
+;;; MdText, MdCode and MdHtmlInline carry text (markdown/inline-text).
+;;; MdEmph, MdStrong, MdLink and MdImage hold inlines (markdown/inline-children);
+;;; a link's or image's destination and title come from markdown/link-dest and
+;;; markdown/link-title, and an image's children are its alt text.
+
+(defdata MdInline
+  :copy
+  (MdText)
+  (MdCode)
+  (MdEmph)
+  (MdStrong)
+  (MdLink)
+  (MdImage)
+  (MdHtmlInline)
+  (MdSoftBreak)
+  (MdHardBreak))
+;;; md/-inl-of -- internal: the arena inline behind id.
+
+(defn md/-inl-of [d : MdDoc id : MdInlineId] : MdInl
+  (vec-get (.inls d) (.ix id)))
+;;; md/-inl-ids -- internal: inline i's children as MdInlineIds.
+
+(defn md/-inl-ids [d : MdDoc i : int] : (Vec MdInlineId)
+  (let [out    (vec-new)
+        ^mut c (if (< i 0) -1 (.first-child (vec-get (.inls d) i)))]
+    (do
+      (while (>= c 0)
+        (do
+          (vec-push! out (MdInlineId c))
+          (set! c (.next (vec-get (.inls d) c)))))
+      out)))
+;;; markdown/inlines -- a paragraph's or heading's inlines, in order.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   A fresh (Vec MdInlineId), empty for any other block; free it with vec-free.
+;;;
+;;; Example:
+;;;   (vec-len (markdown/inlines d id))  ; => 2 for the paragraph "a *b*": text, then emphasis
+;;;
+;;; Since: markdown-library-plan M2
+(defn markdown/inlines [d : MdDoc id : MdBlockId] : (Vec MdInlineId)
+  (md/-inl-ids d (.inl (md/-node-of d id))))
+;;; markdown/inline-children -- the inlines inside emphasis, strong emphasis, a link or an image.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- an inline of d
+;;;
+;;; Returns:
+;;;   A fresh (Vec MdInlineId), empty for an inline that holds none; free it
+;;;   with vec-free.
+;;;
+;;; Example:
+;;;   (vec-len (markdown/inline-children d id))  ; => 1 for *b*: the text b
+;;;
+;;; Since: markdown-library-plan M2
+(defn markdown/inline-children [d : MdDoc id : MdInlineId] : (Vec MdInlineId)
+  (md/-inl-ids d (.ix id)))
+;;; markdown/inline -- what an inline is.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- an inline of d
+;;;
+;;; Returns:
+;;;   Its MdInline.
+;;;
+;;; Example:
+;;;   (markdown/inline d id)  ; => (MdStrong) for **b**
+;;;
+;;; Since: markdown-library-plan M2
+(defn markdown/inline [d : MdDoc id : MdInlineId] : MdInline
+  (match (.kind (md/-inl-of d id))
+    (MdIText)
+    (MdText)
+    (MdICode)
+    (MdCode)
+    (MdIEmph)
+    (MdEmph)
+    (MdIStrong)
+    (MdStrong)
+    (MdILink)
+    (MdLink)
+    (MdIImage)
+    (MdImage)
+    (MdIHtml)
+    (MdHtmlInline)
+    (MdISoftBreak)
+    (MdSoftBreak)
+    (MdIHardBreak)
+    (MdHardBreak)
+    (MdIRoot)
+    (MdText)))
+;;; markdown/inline-text -- the text of a text, code or raw-HTML inline.
+;;;
+;;; A text inline's escapes and character references are resolved; a code
+;;; span's contents have their line endings as spaces; raw HTML is as written.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- an inline of d
+;;;
+;;; Returns:
+;;;   (some s), a fresh owned String, or (none) for an inline that holds
+;;;   inlines or is a break.
+;;;
+;;; Example:
+;;;   (markdown/inline-text d id)  ; => (some "x") for `x`
+;;;
+;;; Since: markdown-library-plan M2
+(defn markdown/inline-text [d : MdDoc id : MdInlineId] : (Option String)
+  (let [n (md/-inl-of d id)]
+    (if (< (.str n) 0)
+      (none)
+      (some (string/substring (vec-get (.strs d) (.str n))
+              (.start n)
+              (- (.end n) (.start n)))))))
+;;; markdown/link-dest -- a link's or image's destination.
+;;;
+;;; With escapes and references resolved and the URL percent-encoded, as the
+;;; HTML renderer writes it; mailto: comes first for an email autolink.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- an inline of d
+;;;
+;;; Returns:
+;;;   (some s), a fresh owned String (empty for [x]()), or (none) for any other inline.
+;;;
+;;; Example:
+;;;   (markdown/link-dest d id)  ; => (some "/a%20b") for [x](</a b>)
+;;;
+;;; Since: markdown-library-plan M2
+(defn markdown/link-dest [d : MdDoc id : MdInlineId] : (Option String)
+  (let [n (md/-inl-of d id)]
+    (match (.kind n)
+      (MdILink)
+      (some (match (md/-pool-copy d (.dest n))
+              (Some s)
+              s
+              (None)
+              (string/from-cstr "")))
+      (MdIImage)
+      (some (match (md/-pool-copy d (.dest n))
+              (Some s)
+              s
+              (None)
+              (string/from-cstr "")))
+      _
+      (none))))
+;;; markdown/link-title -- a link's or image's title.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- an inline of d
+;;;
+;;; Returns:
+;;;   (some s), a fresh owned String with escapes and references resolved, or
+;;;   (none) when the link has no title or id is not a link or image.
+;;;
+;;; Example:
+;;;   (markdown/link-title d id)  ; => (some "t") for [x](/u "t")
+;;;
+;;; Since: markdown-library-plan M2
+(defn markdown/link-title [d : MdDoc id : MdInlineId] : (Option String)
+  (let [n (md/-inl-of d id)]
+    (match (.kind n)
+      (MdILink)
+      (md/-pool-copy d (.title n))
+      (MdIImage)
+      (md/-pool-copy d (.title n))
+      _
+      (none))))

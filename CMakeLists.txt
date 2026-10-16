@@ -1094,6 +1094,16 @@ add_test(
   COMMAND bash tests/run-hamt-del-lineage.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# In-place HAMT transients (performance audit R-5).  Compiles
+# tests/test_hamt_transient.c with ASan/UBSan (+LSan on Linux): random
+# transient set / update / delete sequences against an array model, over
+# spread, deep and fully colliding hashes; the source map, a map derived from
+# it and a second transient keep their own contents; nothing leaks.
+add_test(
+  NAME tur_hamt_transient
+  COMMAND bash tests/run-hamt-transient.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
 # collections-cannot-hold-rc-values, map side, step (b): caller-supplied VALUE
 # ownership ops.  Value ownership used to be a bool selecting the hardcoded
 # boxed-value refcount, which an rc<T> value cannot use.  Compiles
@@ -1407,6 +1417,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_markdown_spec PROPERTIES TIMEOUT 720)
+# markdown-library-plan M2: tur/markdown's HTML against commonmark.js 0.31.2's
+# over every tracked Markdown file and seeded random documents.  PASS-skips
+# without node or without commonmark.js installed from
+# tests/markdown-spec/oracle/package-lock.json (CI's aux part installs both).
+add_test(
+  NAME tur_markdown_diff
+  COMMAND bash tests/run-markdown-diff.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_markdown_diff PROPERTIES TIMEOUT 720)
 # T0/T1: the shared C of Scheme numbers -- src/compiler/r7rs_bignum.inc and
 # r7rs_numsyntax.inc (the source reader and the interpreter) -- and their
 # copies in stdlib/r7rs/bignum.tur and numsyntax.tur (the compiled back end)

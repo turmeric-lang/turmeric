@@ -4414,6 +4414,11 @@ static int cont_fold_advance(ContFoldState *s, TuriValue *fn, TuriValue **args,
  * (DK_CONT_FOLD).  Clone / marshal / drop stay on the synchronous path. */
 static bool is_cont_resume_builtin(const BuiltinSpec *spec) {
     const char *name = spec && spec->c_op ? spec->c_op : "";
+    /* Asked of every builtin call the driver completes, so the first byte
+     * turns away the arithmetic and comparison operators (`+`, `<`, ...)
+     * before any strcmp: two strcmps per call were 3% of a Turmeric loop
+     * under --interpret (performance audit E-1). */
+    if (name[0] != 't') return false;
     return strcmp(name, "tur_cloneable_cont_resume") == 0 ||
            strcmp(name, "tur_serial_cont_resume") == 0;
 }
@@ -14322,8 +14327,10 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * than by accident here. */
         if (e->as.dyn_op_.op && n >= 1) {
             const char *opn = e->as.dyn_op_.op->name;
-            bool is_and = (strcmp(opn, "and") == 0);
-            bool is_or  = (strcmp(opn, "or") == 0);
+            /* First byte before strcmp: this runs for every dynamic operator
+             * evaluated, nearly all of them `+`, `<` and the like. */
+            bool is_and = opn[0] == 'a' && strcmp(opn, "and") == 0;
+            bool is_or  = opn[0] == 'o' && strcmp(opn, "or") == 0;
             if (is_and || is_or) {
                 for (uint32_t i = 0; i < n; i++) {
                     TuriValue v = eval_expr(env, frame, e->as.dyn_op_.args[i]);
@@ -14411,6 +14418,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
          * existing program depends on int-truthiness, and because the C rule
          * makes `(if (vec-len v) ...)` silently wrong on an empty vector. */
         if (!failed && n == 1 && e->as.dyn_op_.op &&
+            e->as.dyn_op_.op->name[0] == SAFFRON_TRUTHY_OP[0] &&
             strcmp(e->as.dyn_op_.op->name, SAFFRON_TRUTHY_OP) == 0) {
             TuriValue v = vals[0];
             bool truthy = !(v.tag == TURI_NIL ||
@@ -14421,6 +14429,7 @@ static TuriValue eval_expr_impl(TuriEnv *env, EvalFrame *frame, const Expr *e) {
         /* r7rs-lang-plan R2: Scheme's rule -- only `#f` is false (R7RS 6.3);
          * nil, 0, "" and the empty list are all true. */
         if (!failed && n == 1 && e->as.dyn_op_.op &&
+            e->as.dyn_op_.op->name[0] == SCHEME_TRUTHY_OP[0] &&
             strcmp(e->as.dyn_op_.op->name, SCHEME_TRUTHY_OP) == 0) {
             TuriValue v = vals[0];
             bool truthy = !(v.tag == TURI_BOOL && !v.as_bool);

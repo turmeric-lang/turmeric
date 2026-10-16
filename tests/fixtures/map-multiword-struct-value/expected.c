@@ -6438,8 +6438,8 @@ TUR_FATBOX_DECL(__tur_fatbox_1);
 static const tur_site_t __tur_site_156 = { "vec.tur", 628 };
 static const tur_site_t __tur_site_158 = { "vec.tur", 628 };
 typedef int64_t (*tur_thunk_int64_t_int64_t_t)(void *, int64_t);
-static const tur_site_t __tur_site_372 = { "string.tur", 767 };
-static const tur_site_t __tur_site_381 = { "string.tur", 794 };
+static const tur_site_t __tur_site_372 = { "string.tur", 705 };
+static const tur_site_t __tur_site_381 = { "string.tur", 732 };
 static int64_t __tur_fatshim_bool_int64_t(void *__e, int64_t a0) {
     return (int64_t)(((bool (*)(int64_t))(intptr_t)((int64_t *)__e)[1])(a0));
 }

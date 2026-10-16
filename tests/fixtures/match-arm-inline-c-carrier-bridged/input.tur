@@ -1,0 +1,130 @@
+;; match-arm-inline-c-carrier-not-bridged: a `match` arm whose value is an
+;; inline-C `(Option T)` / `(Result T E)` producer hands back the int64 carrier
+;; box, and the match's result temp is that value's by-value form.  The arm
+;; must be unboxed into the temp, as an `if` arm is.  It was assigned as is:
+;; `(Option String)` (a niche `void *` temp) read the box address as the
+;; string and printed garbage, and a by-value `(Result String int)` or
+;; `(Option int)` temp failed in cc.
+;;
+;; Literal and ADT scrutinees take different emitters, and a match in a
+;; function's tail position takes a third path; each is covered.
+(load "stdlib/string.tur")
+
+(defdata Shape
+  (Circle :int)
+  (Square :int)
+  (Empty))
+
+(defn mk-opt [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("hi", 2));
+  ```)
+
+(defn mk-res [n : int] : (Result String int)
+  ```c
+  if (n == 0) return tur_err_int(7);
+  return tur_ok_ptr(tur_string_from_bytes("ok", 2));
+  ```)
+
+(defn mk-oint [n : int] : (Option int)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_int(n * 10);
+  ```)
+
+;; The payload rides as its IEEE-754 bit pattern.
+(defn mk-ofl [n : int] : (Option float)
+  ```c
+  if (n == 0) return tur_none();
+  double d = 7.1 * n;
+  int64_t bits;
+  memcpy(&bits, &d, 8);
+  return tur_box_some(bits);
+  ```)
+
+(defn show-opt [o : (Option String)] : nil
+  (if (some? o) (println (string/to-cstr (unwrap o))) (println "none")))
+
+(defn show-res [r : (Result String int)] : nil
+  (match r
+    (Ok s)  (println (string/to-cstr s))
+    (Err e) (println e)))
+
+(defn show-oint [o : (Option int)] : nil
+  (match o
+    (Some x) (println x)
+    (None)   (println "none")))
+
+(defn show-ofl [o : (Option float)] : nil
+  (match o
+    (Some x) (println x)
+    (None)   (println "none")))
+
+;; Tail position, ADT scrutinee.
+(defn shape-opt [s : Shape] : (Option String)
+  (match s
+    (Circle r) (mk-opt r)
+    (Square _) (mk-opt 0)
+    (Empty)    (mk-opt 1)))
+
+(defn shape-res [s : Shape] : (Result String int)
+  (match s
+    (Circle r) (mk-res r)
+    (Square _) (mk-res 0)
+    (Empty)    (mk-res 1)))
+
+;; A producer arm beside constructor arms, which build the value directly.
+(defn mixed-opt [n : int] : (Option String)
+  (match n
+    0 (None)
+    1 (Some (string/from-cstr "lit"))
+    _ (mk-opt n)))
+
+(defn mixed-res [n : int] : (Result String int)
+  (match n
+    0 (Err 42)
+    _ (mk-res n)))
+
+;; An Option scrutinee.
+(defn opt-chain [o : (Option int)] : (Option String)
+  (match o
+    (Some x) (mk-opt x)
+    (None)   (mk-opt 1)))
+
+(defn main [] : int
+  ;; The report's repro: `if` was right, both `match` forms were not.
+  (show-opt (if (< 1 2) (mk-opt 1) (mk-opt 0)))              ;; hi
+  (show-opt (match 2 1 (mk-opt 0) _ (mk-opt 1)))             ;; hi
+  (let [o (match 2 1 (mk-opt 0) _ (mk-opt 1))] (show-opt o)) ;; hi
+  (show-res (match 2 1 (mk-res 0) _ (mk-res 1)))             ;; ok
+  (show-res (match 1 1 (mk-res 0) _ (mk-res 1)))             ;; 7
+  ;; ADT scrutinee, not in tail position.
+  (let [a (match (Circle 3)
+            (Circle r) (mk-opt r)
+            (Square _) (mk-opt 0)
+            (Empty)    (mk-opt 0))]
+    (show-opt a))                                            ;; hi
+  (show-res (match (Square 2)
+              (Circle r) (mk-res r)
+              (Square _) (mk-res 0)
+              (Empty)    (mk-res 1)))                        ;; 7
+  ;; Tail position.
+  (show-opt (shape-opt (Circle 1)))                          ;; hi
+  (show-opt (shape-opt (Square 1)))                          ;; none
+  (show-res (shape-res (Empty)))                             ;; ok
+  (show-res (shape-res (Square 1)))                          ;; 7
+  ;; Mixed arms.
+  (show-opt (mixed-opt 0))                                   ;; none
+  (show-opt (mixed-opt 1))                                   ;; lit
+  (show-opt (mixed-opt 2))                                   ;; hi
+  (show-res (mixed-res 0))                                   ;; 42
+  (show-res (mixed-res 5))                                   ;; ok
+  (show-opt (opt-chain (Some 4)))                            ;; hi
+  (show-opt (opt-chain (Some 0)))                            ;; none
+  ;; By-value (Option int) and (Option float); a string scrutinee.
+  (show-oint (match 2 1 (mk-oint 0) _ (mk-oint 4)))          ;; 40
+  (show-oint (match 1 1 (mk-oint 0) _ (mk-oint 4)))          ;; none
+  (show-ofl (match 2 1 (mk-ofl 0) _ (mk-ofl 1)))             ;; 7.1
+  (show-ofl (match "b" "a" (mk-ofl 0) _ (mk-ofl 2)))         ;; 14.2
+  0)

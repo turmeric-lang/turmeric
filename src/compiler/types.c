@@ -4085,6 +4085,32 @@ static bool adt_is_byvalue_product_d(const AdtDef *def, int depth) {
          * riding a heap box in the parametric carrier monomorph
          * (type_is_wide_byval_adt). */
         if (f->full_type && f->full_type->kind == TY_APP) continue;
+        /* opaque-field-struct-box-never-freed: an opaque field is ONE word,
+         * its declared base (`:int`, `:ptr<void>`, `String`), so it no more
+         * disqualifies the owner from the by-value ABI than an `int` or a
+         * `cstr` field does.  Rejecting it (the TY_ADT test below) put every
+         * struct with a `String` field on the carrier ABI, whose heap box has
+         * no owner and leaked on every construction.
+         *
+         * Except beside a closure field.  A by-value struct with a closure
+         * field is what the CPS backend cannot yet carry through a `handle`
+         * body or a CPS-converted loop (`cps-byvalue-struct-with-closure-field`:
+         * "this effect operation has no lowering here", or emitted C naming an
+         * undeclared `__kont`); an `int` field beside the closure already hits
+         * it on main.  The SAX parsers in turmeric-spices are exactly that
+         * shape, so such a struct stays on the carrier until the CPS gap
+         * closes -- it still leaks its box, once per parser rather than per
+         * node. */
+        if (f->full_type && f->full_type->kind == TY_ADT &&
+            f->full_type->as.adt_.def && f->full_type->as.adt_.def->is_opaque) {
+            bool has_fn = false;
+            for (uint32_t j = 0; j < c->n_fields; j++) {
+                const CtorField *g = &c->fields[j];
+                if ((g->full_type && g->full_type->kind == TY_FN) || g->kind == TY_FN)
+                    has_fn = true;
+            }
+            if (!has_fn) continue;
+        }
         if (f->full_type) {
             TypeKind fk = f->full_type->kind;
             if (fk == TY_ADT || fk == TY_APP || fk == TY_STRUCT ||

@@ -13,7 +13,7 @@
 ;;;
 ;;; Since: markdown-library-plan M1
 ;; Escapes, references and the label / destination / title / tag scanners.
-(load "stdlib/markdown/inline.tur")
+(load "stdlib/markdown/scan.tur")
 ;; ---- Types -----------------------------------------------------------------------
 ;;; MdKind -- what a block is.
 
@@ -47,7 +47,8 @@
 ;;; parent, first-child, last-child, prev and next are arena indices, -1 for
 ;;; none.  buf is the block's StringBuilder index while it takes lines, text
 ;;; and info are String-pool indices (-1 for none), and start-line and
-;;; end-line are 1-based source lines.
+;;; end-line are 1-based source lines.  inl is the root of a paragraph's or
+;;; heading's inline tree in the document's inline arena, -1 for none.
 
 (defstruct MdNode
   :copy
@@ -66,15 +67,53 @@
    level : int
    fence : MdFence
    html-type : int
-   list : MdListData])
+   list : MdListData
+   inl : int])
 ;;; MdRef -- a link reference definition: String-pool indices of its normalised label, destination and title (-1 for no title).
 
 (defstruct MdRef :copy [label : int dest : int title : int])
-;;; MdDoc -- a parsed document: the block arena, its String pool and its link reference definitions.
+;;; MdIKind -- what an inline is.  MdIRoot holds a paragraph's or heading's inlines.
+
+(defdata MdIKind
+  :copy
+  (MdIRoot)
+  (MdIText)
+  (MdISoftBreak)
+  (MdIHardBreak)
+  (MdICode)
+  (MdIEmph)
+  (MdIStrong)
+  (MdILink)
+  (MdIImage)
+  (MdIHtml))
+;;; MdInl -- one inline in the arena.
+;;;
+;;; parent, first-child, last-child, prev and next are inline-arena indices,
+;;; -1 for none.  A text, code or raw-HTML inline's literal is the bytes
+;;; [start, end) of pool String str.  dest and title are a link's or image's
+;;; pool Strings (title -1 for none).
+
+(defstruct MdInl
+  :copy
+  [kind : MdIKind
+   parent : int
+   first-child : int
+   last-child : int
+   prev : int
+   next : int
+   str : int
+   start : int
+   end : int
+   dest : int
+   title : int])
+;;; MdDoc -- a parsed document: the block arena, its String pool, its link reference definitions and the inline arena.
 
 (defstruct MdDoc
   :copy
-  [nodes : (Vec MdNode) strs : (Vec String) refs : (Vec MdRef)])
+  [nodes : (Vec MdNode)
+   strs : (Vec String)
+   refs : (Vec MdRef)
+   inls : (Vec MdInl)])
 ;;; MdSt -- the parser: the document being built, the open leaf's builders, and the cursor in the current line.
 
 (defstruct MdSt
@@ -115,6 +154,9 @@
 ;;; md/-new-ints -- internal: an empty int Vec.
 
 (defn md/-new-ints [] : (Vec int) (vec-new))
+;;; md/-new-inls -- internal: an empty inline Vec.
+
+(defn md/-new-inls [] : (Vec MdInl) (vec-new))
 ;;; md/-no-list -- internal: the list data of a block that is not a list or item.
 
 (defn md/-no-list [] : MdListData (MdListData false 0 0 0 true 0 0))
@@ -136,7 +178,8 @@
     0
     (MdFence false 0 0 0)
     0
-    (md/-no-list)))
+    (md/-no-list)
+    -1))
 ;; ---- Kinds ---------------------------------------------------------------------
 ;;; md/-para? -- internal: is k a paragraph?
 
@@ -371,7 +414,7 @@
               (string/release label)
               (let [li (md/-add-str! st label)
                     di (md/-add-str! st
-                         (md/-unescape s
+                         (md/-dest-string s
                            (md/-dest-inner-start s p)
                            (md/-dest-inner-end s p de)))
                     ti (if (< tt 0)
@@ -1268,7 +1311,7 @@
 ;;; md/-parse-blocks -- internal: the block structure of src.
 
 (defn md/-parse-blocks [src : String] : MdDoc
-  (let [doc (MdDoc (md/-new-nodes) (md/-new-strs) (md/-new-refs))
+  (let [doc (MdDoc (md/-new-nodes) (md/-new-strs) (md/-new-refs) (md/-new-inls))
         st  (rc/of (MdSt doc
                      (md/-new-bufs)
                      0

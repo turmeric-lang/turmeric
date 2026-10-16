@@ -5,7 +5,7 @@ plus its DK chain copy. A clone or snapshot the program takes and never drops
 leaks the same amount. This is the residue of
 [lexical-shift-receiver-cont-never-freed](../archive/lexical-shift-receiver-cont-never-freed.md)
 (fixed 2026-10-12), and it mirrors the serial flavour's
-[serial-cont-escaped-or-deserialized-chain-leaks](serial-cont-escaped-or-deserialized-chain-leaks.md).
+[serial-cont-escaped-or-deserialized-chain-leaks](../archive/serial-cont-escaped-or-deserialized-chain-leaks.md).
 
 ## Repro
 

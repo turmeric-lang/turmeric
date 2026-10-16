@@ -1,5 +1,7 @@
 # A struct with a `defopaque` field leaks its box on every construction
 
+**Status: RESOLVED 2026-10-16** -- see [Resolution](#resolution).
+
 **Severity: medium (leak).** A `defstruct` with a field of a `defopaque` type
 lives on the carrier ABI: each constructor call mallocs a box, and nothing
 frees it. This covers a field of type `String`, which is an opaque over a
@@ -111,3 +113,46 @@ Keep opaque types out of struct fields that are built often:
 - **Kinds.** Use a nullary `defdata`.
 - **Text.** Keep `String`s in a `(Vec String)` the owner releases, and store
   their indices in the struct.
+
+## Resolution
+
+Fix direction 1, narrowed, after measuring the cost the 2026-10-11 decision
+([struct-field-with-opaque-sibling-lowered-to-int](struct-field-with-opaque-sibling-lowered-to-int.md))
+had declined to pay.
+
+- **The exposure was nil.** That decision kept these structs on the carrier ABI
+  because moving them would change the C signature of every such struct
+  crossing an inline-C boundary. Across stdlib and turmeric-spices, four
+  non-`:heap` structs have an opaque field at top level (`HtmlSaxParser`,
+  `SaxParser`, `ParseError`, and a macro template in `ecs`), and no inline-C
+  `defn` takes or returns any of them, nor receives one as an erased word.
+- **The change** (`src/compiler/types.c`, `adt_is_byvalue_product_d`): an
+  opaque field is one word, so it is admitted like an `int` or `cstr` field and
+  its struct is a by-value product -- no box, nothing to leak.
+- **The five representation failures** the measurement above found had one
+  cause, and it was the read, not the slot: a `:heap` receiver's field read
+  (`EX_GET_FIELD`, `src/compiler/emit_expr.c`) counted every non-heap `TY_ADT`
+  field as an inline aggregate and read it with no cast. An opaque is a word,
+  so it takes the cast read now, and a pointer opaque's int64 slot comes back
+  as the `void *` its accessor returns.
+- **Except beside a closure field.** With the change unnarrowed,
+  `cps-while-owning-invariant` stopped compiling, and turmeric-spices'
+  `html/tests/sax_tokens.tur` emitted C naming an undeclared `__kont`. Both are
+  a struct with an opaque field and a closure field, used in CPS-converted
+  code; the same struct with an `int` in place of the opaque already fails on
+  main. That is a CPS gap of its own, filed as
+  [cps-byvalue-struct-with-closure-field](../reported/cps-byvalue-struct-with-closure-field.md).
+  Until it closes, a struct with an opaque field beside a closure field stays
+  on the carrier ABI and still leaks its box -- once per SAX parser, not once
+  per node.
+
+Measured on the change: `tests/run.sh` with no failures, `tests/run-leak-check.sh`
+unchanged, no codegen snapshot moved, and the dom-core, xml, html and ecs
+spices pass the same tests as on main.
+
+**Pinned by** `opaque-field-struct-freed` (an int opaque and `String` fields in
+a `let`, a copy, a result, a nested struct and `Vec` elements, leak-checked) and
+`opaque-ptr-field-byvalue` (a pointer opaque read back through a field, a
+function and a `Vec` element, leak-checked); the `:heap` read by
+`saffron-record-opaque-ptr-field`; the closure exception by
+`cps-while-owning-invariant`.

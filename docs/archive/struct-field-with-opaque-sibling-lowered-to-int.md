@@ -73,6 +73,14 @@ the carrier layout stays and its accessors are made to honour it:
 A by-value `defdata` field in the same position (the report's second shape)
 is covered by the same read.
 
+**Revisited 2026-10-16.** Keeping these structs on the carrier ABI left every
+construction's box without an owner
+([opaque-field-struct-box-never-freed](opaque-field-struct-box-never-freed.md)).
+Measured then, the inline-C ABI cost this resolution declined was nil: no
+inline-C `defn` in stdlib or turmeric-spices takes or returns such a struct. So
+a struct with an opaque field is a by-value product now, except beside a closure
+field. That struct still takes the carrier layout and the accessors above.
+
 **Pinned by** `struct-aggregate-field-beside-opaque` (the repro, both field
 orders, a `:non-null` opaque, a by-value `defdata` field, the field passed on
 and `let`-bound) and `struct-beside-opaque-set-field` (`set!` of a scalar and

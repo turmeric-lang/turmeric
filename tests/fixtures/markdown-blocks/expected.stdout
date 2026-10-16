@@ -5,7 +5,7 @@
 <h2>Setext
 two</h2>
 <blockquote>
-<p>quoted *text*
+<p>quoted <em>text</em>
 lazy line</p>
 <blockquote>
 <p>nested</p>
@@ -115,7 +115,7 @@ document [1-11]
 document [1-8]
   paragraph [6-6] text=text after
 ref [foo bar] -> /url title=the "title"
-ref [baz] -> a b title=single
+ref [baz] -> a%20b title=single
 ref [only] -> /x
 ==== tag filter ====
 <div>
