@@ -421,7 +421,10 @@ The `run` arm scans its arguments up to `--`:
 ### `cmd_run`
 
 1. `-I` is collected only up to `--`; everything after `--` is the
-   program's `argv`. `--release` is accepted and ignored.
+   program's `argv`. `--release` sets `g_cc_release`, which makes the cc
+   step default to `-O3` instead of `-O2` (`tur build --release` sets it
+   too); `TUR_CC_FLAGS` still replaces the defaults, and a non-`cc` engine
+   has no cc step for it to change.
 2. **Single-file mode** (`<file>` given): auto-spice includes, then
    `discover_manifest_reader_macros`, then `resolve_engine`. A non-`cc`
    engine goes to `run_delegate_engine` (`cmd_jit` or the interpreter).
