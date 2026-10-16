@@ -27,6 +27,19 @@ run on 2026-07-29 ([run 30430571497](https://github.com/turmeric-lang/mir/action
 fork's patches did not cause this. The ubuntu x86-64 leg is clean
 (`Tests 1095, Success tests 2190`, six `Passed`).
 
+The reworked CI's first run (mir#11, `d93d2bd7`,
+[run 38852158065](https://github.com/turmeric-lang/mir/actions/runs/38852158065)),
+all four legs green:
+
+| Leg | c-tests | Bootstraps |
+| --- | --- | --- |
+| ubuntu x86-64 | all pass | 6 of 6 pass |
+| ubuntu arm64 (first run ever) | all pass (`Tests 1094, Success tests 2188`) | 5 of 6 pass; the lazy-bb one (`-p4 -eb`) differs at byte 652165 |
+| macOS 15 arm64 (`macos-latest`) | one fails per pass | 0 of 6; all differ at `char 8, line 1` |
+
+On macos-14 the six differed about 880 KB in; on macOS 15 they differ at
+byte 8. The failure moves with the OS image.
+
 ## Root cause
 
 - `c-tests/runtests.sh` counts results and prints `Tests N, Success tests M`,
@@ -45,12 +58,12 @@ A bootstrap compiles c2mir with the clang-built `c2m` (stage 1), then runs
 that output under the JIT to compile the same sources again (stage 2), and
 the two `.bmir` files must match. On macOS arm64 they do not. So c2mir built
 by c2mir behaves differently from c2mir built by clang -- a miscompile or
-nondeterminism in the aarch64 path that no test points at. Unverified lead:
-Apple arm64 passes variadic arguments differently from AAPCS64, and the other
-failure, `va-struct-args.c`, is a variadic test. It is unknown whether Linux
-aarch64 shares it, because the fork's `aarch64-test` workflow never ran (it
-asked for upstream's self-hosted runner). The `ubuntu-24.04-arm` leg added in
-the CI rework will show it in its log on its first run.
+nondeterminism that no test points at. It is Apple-specific: Linux arm64
+passes the five lazy-func bootstraps and every c-test. Unverified lead: Apple
+arm64 passes variadic arguments differently from AAPCS64, and the other
+failure, `va-struct-args.c`, is a variadic test. Linux arm64's single
+lazy-bb mismatch is a separate signal. It is one run of a parallel (`-p4`)
+test, so it may be nondeterministic; re-run it before reading anything into it.
 
 ## Fix directions
 
