@@ -68,12 +68,9 @@ the [LSP guide](lsp-guide.md).
 | `tests/run-turi.sh:run_turi_error_fixture` | Interpreted `errors/` fixtures |
 | `tests/run-flags.sh` | The only `tur explain` tests |
 
-These look relevant but are not diagnostic sinks:
-
-| File | Status |
-|---|---|
-| `src/lsp/lsp_sink.c` | The JSON-RPC message transport (fd or buffer), not a diagnostic sink |
-| `src/cli/lsp_lite.c` | Completion and docstring helper. It never compiles, so it reports no diagnostics |
+Two files look relevant but are not diagnostic sinks. `src/lsp/lsp_sink.c`
+is the JSON-RPC message transport. `src/cli/lsp_lite.c` is a completion and
+docstring helper that never compiles, so it reports no diagnostics.
 
 ---
 
@@ -103,18 +100,15 @@ check for it (see [`tur explain`](#tur-explain)).
 
 ### Prefixes and bands
 
-The enum holds 115 `E` codes, 26 `W`, 4 `D` and 1 `I`.
-
-| Prefix | Meaning | Note |
-|---|---|---|
-| `E` | error | |
-| `W` | warning | |
-| `D` | deprecation | The `diag.h` comment says it is emitted as a warning. That is the convention, not a rule: `TUR-D0001` is now always an error (`elab_types.c:reject_fn_type_colon`) |
-| `I` | internal | Only `TUR-I0379`, which is retired |
+The enum holds 115 `E` (error) codes, 26 `W` (warning), 4 `D`
+(deprecation) and 1 `I` (`TUR-I0379`, retired).
 
 **The prefix does not set the severity.** The call site picks the
-`DiagLevel`. `--strict-refine` turns `TUR-W0372` into an error, and
-`--Werror=deprecated` does the same for the `D` band.
+`DiagLevel`. `--strict-refine` turns `TUR-W0372` into an error. The `D` band
+is mixed, whatever the `diag.h` comment says. `--Werror=deprecated` promotes
+`TUR-D0004`, and the uncoded "'x' is deprecated" warning. `TUR-D0002` and
+`D0003` are always warnings (`elab_effects.c`). `TUR-D0001` is always an
+error (`elab_types.c:reject_fn_type_colon`).
 
 **Numbers are unique per prefix, not across prefixes.** `TUR-E0706` and
 `TUR-W0706` are unrelated, and so are `TUR-E0624` and `TUR-W0624`.
@@ -128,16 +122,14 @@ allocation table:
 | W0030-W0044 | Effect-row lints and general lints |
 | W0050, W0060-W0064, W0070-W0071 | CLI flags, experiments, `#lang`, JIT fallback (printed to stderr directly) |
 | E0100-E0108, E0150-E0151 | Linear, borrow, substructural |
-| E0200-E0202, E0210-E0223 | Uniqueness, sessions |
-| E0250-E0260 | Handler typing, sized types |
-| E0270-E0291 | Reader literals (`#json`, `#map`, `#rat`, ...) and kind arguments, text-only |
+| E0200-E0260 | Uniqueness, sessions, handler typing, sized types |
+| E0270-E0291 | Reader literals (`#json`, `#map`, `#rat`, `#cx`) and `#row` fields, text-only |
 | E0292-E0303 | Construction, union, opaque casts |
 | E0304-E0312 | HKT and poly checks (text-only), experiments, engine, Saffron |
 | E0330-E0332 | `#lang` line and sweet-exp `$` |
 | E0350-E0393 | Intersection, refinement, frames, superclasses |
 | E0500-E0502 | Multi-shot capture |
-| E0600-E0605, W0600 | Dynamic vars |
-| E0620-E0624, W0623-W0624 | Manifest (`build.tur`) |
+| E0600-E0624, W0600-W0624 | Dynamic vars, manifest (`build.tur`) |
 | E0700-E0716, W0706 | Control flow and codegen refusals |
 | D0001-D0004 | Deprecations |
 
@@ -193,6 +185,9 @@ All the variadic entry points carry `TUR_PRINTF_FMT`, so `-Wformat=2` checks
 each call's arguments and rejects a non-literal format string. To print a
 message you built yourself, use `diag_emit(level, span, "%s", msg)`.
 
+A formatted message is cut off silently at 4096 bytes on the terminal, 1024
+in JSON, and 512 for the LSP and the embed sink.
+
 ### Which one to use
 
 - **A new error or warning:** `diag_emit_with_code`. A code is what makes a
@@ -230,11 +225,6 @@ didyoumean.tur:3:5: help: Did you mean 'count'?
 didyoumean.tur:3:5: help: see: https://turmeric-lang.dev/docs/errors/TUR-E0003
 
 unbound.tur:3:5: error [TUR-E0003]: unbound symbol 'zzzqqq'
-1 | (defn main [] : int
-2 |   (let [x 1]
-3 |     zzzqqq)
-  |     ^^^^^^
-4 |   0)
 ```
 
 The suggested case loses `[TUR-E0003]`, and its JSON and LSP records have
@@ -247,25 +237,17 @@ site worker (`web/worker.js`) nor the guide generator produces one. The
 long-form text lives only in `diag_explanations_[]`. The JSON and LSP sinks
 drop `replacement` and `doc_url` and keep only the `help` text.
 
-### Message size
-
-The terminal path formats into 4096 bytes and JSON into 1024. LSP and the
-embed sink use 512 bytes, and an LSP entry also keeps at most 255 bytes of
-file path. A longer message is truncated silently.
-
 ### Speculative elaboration: capture frames
 
-Some elaboration is a trial run. A body is elaborated at a guessed result
-kind, and if it fails it is deferred, not reported.
-`diag_push_capture()`/`diag_pop_capture()` bracket such a run. There are nine
-call sites, in `elab_module.c`, `elab_toplevel.c`, `elab_fns.c`,
-`elab_forms.c` and `turi/eval.c`.
+Some elaboration is a trial run: a body is elaborated at a guessed result
+kind and, if it fails, deferred rather than reported. Nine call sites in the
+elaborator and `turi/eval.c` bracket such a run with
+`diag_push_capture()`/`diag_pop_capture()`.
 
 Inside a frame, `diag_intercept` drops every error, note and help, and
-counts the errors. Warnings pass through, so a body that captures cleanly
-behaves exactly as if it had not been captured. `diag_pop_capture` restores
-the error flag to its value at the push, and returns the count. To see the
-real diagnostics, the caller elaborates again with no frame.
+counts the errors. Warnings pass through. `diag_pop_capture` restores the
+error flag to its value at the push and returns the count. To see the real
+diagnostics, the caller elaborates again with no frame.
 
 `diag_error_serial()` counts errors that were *shown*. The macro expander
 reads it before and after an expansion to decide whether to add its note.
@@ -301,10 +283,6 @@ interpreter's incremental path keeps its arenas, so it saves and restores
 the table around each turn with `diag_files_save`/`diag_files_restore`. A
 macro-time evaluator uses `diag_files_replace`, and then
 `diag_force_had_error` to put back an error flag the nested reset cleared.
-
-`diag_file_is_stdlib` and `diag_file_is_imported_stdlib` answer "is this
-file under the stdlib root" (`$TUR_STDLIB_DIR`, else `stdlib`). Panic-site
-attribution uses them.
 
 ### Sweet-exp and `#lang` offsets
 
@@ -359,16 +337,15 @@ A macro in a loaded file, used wrongly, prints this in the terminal:
 
 ```
 mlib.tur:2:10: error [TUR-E0001]: '+' arg 2: type mismatch - expected int, got cstr
-1 | (defmacro add-bad [x]
 2 |   `(+ ~x "oops"))
   |          ^^^^^^
 mlib.tur:2:10: note: argument has this type
-...
 macro.tur:4:3: note: in expansion of macro 'add-bad' -- the diagnostics above are inside code this call generated
-...
 4 |   (add-bad 1))
   |   ^^^^^^^^^^^
 ```
+
+(Context lines are omitted here.)
 
 The same program over `tur lsp`, abridged:
 
@@ -424,8 +401,8 @@ sink. The sinks differ only in where the text goes.
 <snippet>
 ```
 
-`render_snippet_ex` prints `DIAG_CONTEXT_LINES` (2) lines before the error
-line and 2 after, each with a line-number gutter. It then prints a `^` run
+`render_snippet_ex` prints the error line with `DIAG_CONTEXT_LINES` (2) lines
+after it and one more than that (3) before it, each with a line-number gutter. It then prints a `^` run
 from `col_start` to `col_end`, at least one character wide. A note from
 `diag_emit_with_notes` or `diag_emit_multi_span` is underlined with `~`. A
 `DIAG_NOTE` from plain `diag_emit` gets `^`.
@@ -463,13 +440,11 @@ holds 0-based coordinates, copies of the file path and message, the origin
 chain and the expansion site. Paths are copied at append time, because the
 `SourceFile` may be on the stack. `diag_lsp_end()` frees the entries.
 
-There are three ways to flush:
-
-| Function | Used by | Shape |
-|---|---|---|
-| `diag_lsp_flush_array_for(buf, doc_path, relocate, ctx)` | `tur lsp` (`lsp.c`, with `relocate_foreign_diag`) | Entries from other files are moved onto the document |
-| `diag_lsp_flush_array(buf)` | `tur mcp` | Every entry keeps its own coordinates |
-| `diag_lsp_flush(out)` | -- | `{"diagnostics":[...]}` |
+`tur lsp` flushes with `diag_lsp_flush_array_for(buf, doc_path, relocate,
+ctx)`, passing `lsp.c:relocate_foreign_diag`, which moves entries from other
+files onto the document. `tur mcp` uses `diag_lsp_flush_array`, which keeps
+every entry's own coordinates. `diag_lsp_flush` wraps the array in
+`{"diagnostics":[...]}`.
 
 When an entry comes from another file, `lsp_build_array_ex` decides where to
 draw it:
@@ -634,17 +609,12 @@ fixture with neither fails as "asserts nothing". Differences from `run.sh`:
 A diagnostic that only `--interpret` produces, such as a runtime check the
 compiled runtime cannot make, gets `requires.interp-only`. `run.sh` then
 skips it and `run-turi.sh` owns it. The marker's contents explain why.
-`errors/session-deadlock-no-peer-turi` is an example:
+For example, `errors/session-deadlock-no-peer-turi` receives on a session
+that nothing will ever send to. The interpreter's cooperative scheduler sees
+that nothing is runnable; the compiled runtime just hangs. Its
+`expected.diag` is:
 
 ```
-;; input.tur (abridged)
-(defn main [] : int
-  (let [[s r] (make-session (Send int Close))]
-    (let [[v r] (recv r)] ...)))     ; nothing will ever send
-```
-
-```
-expected.diag:
 session recv deadlocked
 no sender
 on Session
@@ -689,33 +659,16 @@ TUR-E0716 commit (`72c37c1c5`) touched, generalized:
      `unexpected.stderr` on the near misses it must not fire on.
    - Run the fixture with `TUR_FORCE=1` and a filter (see the
      [running-tests guide](running-tests-guide.md)).
-8. **Optional:**
-   - a `tur explain` check in `tests/run-flags.sh`;
-   - a mention in the user guide for the feature (W0044 updated
-     `async-await-guide.md`, E0716 updated `performance-guide.md`);
-   - a `turi/docstrings.c` entry if the code comes with new syntax (E0716
-     added `^tailcall`).
-9. **Not needed:** the code has no registry beyond the four tables, and
-   `docs/errors/` does not exist. `tests/check-docs-lint.sh` does not check
-   codes. A new `docs/reported/` file does need its `README.md` row.
+8. **Optional:** a `tur explain` check in `tests/run-flags.sh`; a mention in
+   the feature's user guide (W0044 updated `async-await-guide.md`, E0716
+   `performance-guide.md`); a `turi/docstrings.c` entry for new syntax (E0716
+   added `^tailcall`).
+9. **Not needed:** there is no other registry and no `docs/errors/` page, and
+   `tests/check-docs-lint.sh` does not check codes.
 
 If the diagnostic belongs to an experiment, that is the experiment's own
 `TUR-W0060`/`W0061`, which `experiment_warn_if_used` prints. It does not need
 a new code. See the [experimental flags guide](experimental-flags-guide.md).
-
----
-
-## Known gaps
-
-| Gap | Where |
-|---|---|
-| Header, JSON, LSP and embed-sink columns are untranslated for sweet-exp files | `diag.c` emit entry points and `lsp_append` |
-| A suggestion or notes drop the code | `diag_emit_with_suggestion`, `diag_emit_with_notes` |
-| The four code tables drift, with no check | `diag.h`, `diag.c` |
-| `tur explain TUR-I####` compiles its argument | `diag_looks_like_code` |
-| The `see:` URL has no page in the repo | `elab_toplevel.c` |
-| Pass stamps ignore needle files and `flags` | `tests/run.sh:stamp_key` |
-| JSON `endLine` always equals `line` | `diag_emit_json` |
 
 ---
 

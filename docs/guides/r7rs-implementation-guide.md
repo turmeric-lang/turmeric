@@ -20,16 +20,13 @@ whose unannotated values are `any`. Almost everything Scheme-specific lives in
 three places: the lowering (`src/compiler/scheme_lower.c`), the prelude
 (`stdlib/r7rs/prelude.tur`) and the collector (`src/runtime/r7gc.c`).
 
-> **Trust the code over the header comments.** Several comments in this area
-> predate later stages. Examples, all checked against the code on
-> 2026-10-16: the prelude's numeric header still says there are no exact
-> rationals and no complex numbers (both exist, T2 and T6); its
-> representation header says strings are only `cstr` (mutable `R7rsString`
-> arrived in T3); `scheme_lower.h` names a `scheme_lower_rename_table` that
-> does not exist; and the collector comment in `emit_module.c` calls it
-> single-threaded with TLS as plain statics (it has run threads in parallel
-> and scanned registered TLS since the threads plan). Where a comment and
-> this guide disagree, read the code.
+> **Trust the code over the header comments.** Several comments here
+> predate later stages (checked 2026-10-16): the prelude's numeric header
+> denies exact rationals and complex numbers (both exist); its
+> representation header says strings are only `cstr` (`R7rsString` came in
+> T3); and the collector comment above `r7rs_gc_active` calls it
+> single-threaded (it runs threads in parallel). Where a comment and this
+> guide disagree, read the code.
 
 ---
 
@@ -105,11 +102,11 @@ not `reader_axis_free`, so `r7rs/neoteric` and the like are not bases. A
 
 - `g_opt_dynamic_any` (from `dynamic`): unannotated means `any`, and the
   dynamic call/operator/field surface comes with it. Saffron sets it too.
-- `g_opt_r7rs` (from `scheme_runtime`): what tells the emitter this is a
-  Scheme program -- the collector's opt-out flag, the deep stack, the split
-  build. Its name survives from the `EXPERIMENTS[]` row the dialect had
-  until it graduated in 0.57.0 (`GRADUATED[]` in
-  `src/runtime/experiments.c`).
+- `g_opt_r7rs` (from `scheme_runtime`): tells the emitter this is a Scheme
+  program -- which collector opt-out applies, and the deep stack. Its name
+  survives from the `EXPERIMENTS[]` row the dialect had until it graduated
+  in 0.57.0 (`GRADUATED[]` in `src/runtime/experiments.c`). The split build
+  keys off the prelude instead (`g_lang_prelude`).
 
 `scheme_truthiness` is read per file off the span
 (`lang_dialects.c:lang_span_is_scheme`, used by the elaborator's
@@ -194,9 +191,8 @@ Things the lowering does beyond the table:
   or a Turmeric special form becomes `<name>--user`; a `^name` identifier
   becomes `__scheme_caret_name`; an SRFI's definitions become
   `srfi<N>--<name>`. `scheme_source_name` undoes these for error messages.
-- **The `--std--` prefix.** A standard name the program redefines still
-  means the standard procedure in a form evaluated before the redefinition
-  (`redefinitions_to_set`, `std_before_redefinition`).
+  A redefined standard name keeps its standard meaning in forms evaluated
+  before the redefinition (`redefinitions_to_set`, the `--std--` prefix).
 - **Module wrapping.** A program that imports anything is wrapped in a
   `defmodule` named after its file (Turmeric's `import` is only legal
   there), with its statements as the body of a synthesized `main`. A file
@@ -228,11 +224,10 @@ same change, or Scheme code cannot reach it (an on-demand library's goes in
 `scheme_lower.c` and in the NAMES paragraph of `stdlib/r7rs/prelude.tur`'s
 header. **No script enforces it.** Neither `check-r7rs-srfi-sync.sh` nor
 any other check compares the table with the prelude; a missed row shows up
-only as an unbound name when a Scheme program calls it. As of this writing
-every `RENAMES` target is defined in the prelude, and every public
-(non-`__`) prelude `r7rs-` definition without a row is either an operator,
-a name the lowering emits itself (`r7rs-values-ref`, ...) or an internal
-helper that cannot take the `__` suffix (`r7rs-cont-save-state`: an inline-C
+only as an unbound name when a Scheme program calls it. Today the table and
+the prelude agree: every public (non-`__`) `r7rs-` definition without a row
+is an operator, a name the lowering emits itself (`r7rs-values-ref`), or an
+internal that cannot take `__` (`r7rs-cont-save-state`: an inline-C
 `__TUR_CNAME_` splice ends at the first `__`).
 
 Internal helpers end in `__` by convention; the prelude's own spans are
@@ -289,8 +284,7 @@ Wherever an `any` is unboxed to a `cstr` (a Scheme call passing a string to
 a Turmeric `cstr` parameter, or Turmeric code casting a Scheme result), the
 elaborator calls the prelude's `r7rs-str__`
 (`elab_toplevel.c:r7rs_string_unbox`): a `cstr` passes through and an
-`R7rsString` becomes a fresh UTF-8 copy. The prelude's own comment places
-this in `elab_call.c`; it is in `elab_toplevel.c`.
+`R7rsString` becomes a fresh UTF-8 copy.
 
 ### Numbers
 
@@ -413,12 +407,15 @@ Two caches sit on top:
   `emit_split_carry_load`, `split_check_sigs`, or a failed compile/link, and
   each falls back to emitting. `TUR_SPLIT_LIB_CACHE=0|verify` controls it.
 
-If the split units fail to compile or link, `cmd_build` retries the program
-as one unit. That retry is silent apart from the cc output, so a split
-build that always fails costs a second build every time without failing
-anything. In a tree where only `--target tur` was built (no
-`libturt_*.a`), every Scheme build does exactly that. Link details belong to
-the [build driver internals](build-driver-internals-guide.md) and
+If the units fail to compile or link, `cmd_build` walks a ladder, each step
+"slower, never wrong": a cached library unit is re-emitted, three units
+become two, two become one. The steps are announced only under
+`TUR_SHOW_CC`; otherwise the only trace is the failed cc's own output and a
+`tur: cc invocation failed` line before the program runs normally. So a
+split that always fails costs extra builds on every run without failing
+anything. In a tree where only `--target tur` was built (no runtime
+archives) every Scheme build takes the ladder to the bottom. Link details
+belong to the [build driver internals](build-driver-internals-guide.md) and
 [runtime preamble and linkage](runtime-preamble-and-linkage-guide.md)
 guides.
 
@@ -487,9 +484,11 @@ argument of a procedure that calls and drops its procedure arguments
 `delay`, `case-lambda`, an internal `define`, a rebinding of `k` -- keeps the
 copying `call/cc`. `dynamic-wind` is deliberately not in the list.
 
-Both call `r7rs-call/ec__` through a procedure *value*: a direct call would
-make the caller a CPS function, and a CPS entry's heap frames are freed when
-it returns, which is exactly what a re-entry must not find.
+`r7rs-call/cc`'s no-stack-base fallback and the escape-only lowering both
+reach `r7rs-call/ec__` through the procedure *value* `r7rs-call/ec-proc__`:
+a direct call would make the caller a CPS function, and a CPS entry's heap
+frames are freed when it returns, which is exactly what a re-entry must not
+find. (`lower_guard` calls `r7rs-call/ec__` directly.)
 
 ### The dynamic environment
 
@@ -549,18 +548,14 @@ the collector, so a Scheme value held only in a Turmeric map stays alive.
 Linux/glibc and macOS, and not under `tur jit` (globals live in MIR memory
 the root scan cannot see); elsewhere every entry point is libc.
 
-**Roots.**
-
-- every registered thread's stack and spilled registers (the collecting
-  thread's own, a parked thread's from its park point, others from the
-  stop-signal handler's frame);
-- each thread's `TUR_THREAD_LOCAL` variables, registered at thread start
-  through `tur_rt_tls_roots` (written by `emit_r7rs_gc_tls_roots`), plus
-  values stored with `pthread_setspecific`;
-- the executable's data and bss (`__data_start`..`_end`; the Mach-O
-  writable segments on macOS), minus libturi's renamed sections on Linux;
-- the used bytes of every region generation;
-- each thread's allocation cache.
+**Roots.** Every registered thread's stack and spilled registers (its own
+for the collector, from the park point for a parked thread, from the
+stop-signal handler's frame otherwise); each thread's `TUR_THREAD_LOCAL`
+variables, registered at thread start through `tur_rt_tls_roots` (written by
+`emit_r7rs_gc_tls_roots`), plus values stored with `pthread_setspecific`;
+the executable's data and bss (the Mach-O writable segments on macOS), less
+libturi's renamed sections on Linux; the used bytes of every region
+generation; and each thread's allocation cache.
 
 **Threads.** Allocation is a per-thread cache of size-class slots refilled
 under `G->heap`. A collection takes `G->world`, then `G->heap`, then stops
@@ -630,7 +625,8 @@ Each row is a number, a kind, a title, a file and a reason:
 
 The table drives the import (`srfi_import`), cond-expand's `srfi-N` and
 `(library (srfi N))` (`feature_holds`), the load expander's splice
-(`lib_files_of_set`), and the list `(features)` returns. `(sicp extras)` rides
+(`lib_files_of_set`), and the list `(features)` must return (the prelude
+writes it out; the sync check compares). `(sicp extras)` rides
 the same machinery as row `SICP_EXTRAS_NUM` (100000), with definitions
 spelled `sicpx--<name>` and no `srfi-N` feature.
 
@@ -663,13 +659,10 @@ top-level definition from a `stdlib/srfi/` file that nothing outside those
 files reaches, transitively. Without it, a procedure used as a value
 anywhere gets a static fat box filled at startup, which keeps it and its
 callees alive, and SRFI 1 cost every importing program about 1.6 s of build.
-It is conservative:
-
-- only `defn`s, and `def`s whose initializer is a value or allocation only,
-  are removed;
-- C-linkage and (when a manifest is written) exported definitions stay;
-- an expression kind the walk does not model makes it give up and change
-  nothing.
+It is conservative: only `defn`s and allocation-only `def`s are removed,
+C-linkage and (when a manifest is written) exported definitions stay, and an
+expression kind the walk does not model makes it give up and change
+nothing.
 
 `TUR_NO_SRFI_PRUNE=1` turns it off. Because pruning runs before the split,
 an SRFI's imported-library unit is per program rather than shared.
@@ -686,18 +679,12 @@ an SRFI's imported-library unit is per program rather than shared.
 5. If it has C primitives, add a helper file and an `SRFI_HELPERS` row.
 6. If a suite exists, add `tests/r7rs/srfi/<N>/tests.scm` and a `floor`.
 
-`tests/check-r7rs-srfi-sync.sh` checks steps 1-4 against each other:
-
-- every importable row names an existing file holding
-  `(define-library (srfi N)`;
-- a built-in row's file has no body, and an alias or library row's file
-  has one;
-- every `.scm` file has a row;
-- the guide's table matches the rows;
-- `(features)` equals `R7RS_FEATURES` followed by every supported
-  `srfi-N`.
-
-It runs in CI's "Docs lint" job through `tests/check-docs-lint.sh`.
+`tests/check-r7rs-srfi-sync.sh` checks steps 1-4 against each other: every
+importable row names an existing file holding `(define-library (srfi N)`, a
+built-in row's file has no body and the others have one, every `.scm` file
+has a row, the guide's table matches, and `(features)` is `R7RS_FEATURES`
+followed by every supported `srfi-N`. It runs in CI's "Docs lint" job
+through `tests/check-docs-lint.sh`.
 
 ---
 
@@ -711,11 +698,10 @@ Some C exists twice, once for each back end, and must not drift:
 | Unicode tables | `stdlib/r7rs/unicode.tur` and `src/turi/r7rs_unicode.inc` | `tools/gen-r7rs-unicode.py` | `tests/check-r7rs-unicode-sync.sh` (the two copies against each other) |
 
 Change the `.inc` source and regenerate in the same commit. The interpreter
-natives that mirror prelude inline C (the `r7k_*` stack helpers, the dynamic
-slots) are hand-kept twins; their comments say "keep equal to the prelude's".
-A change to preamble text (`emit_dk_runtime.c`, ...) also needs the
-committed split runtime regenerated (see
-[the split runtime](cps-dk-internals-guide.md#the-split-runtime)).
+natives that mirror prelude inline C (the `r7k_*` helpers, the dynamic
+slots) are hand-kept twins with no check. A change to preamble text also
+needs [the split runtime](cps-dk-internals-guide.md#the-split-runtime)
+regenerated.
 
 ---
 
@@ -727,9 +713,7 @@ fixture programs without sanitizers and only compares output. See the
 
 | Harness (ctest target) | Checks |
 |---|---|
-| `tests/run.sh` | the `r7rs-*` fixtures (~140 dirs) and `errors/r7rs-*` (~27), compiled |
-| `tests/run-turi.sh` | the same fixtures under `--interpret` |
-| `tests/run-jit.sh` | the same fixtures under `tur jit` (collector off) |
+| `run.sh`, `run-turi.sh`, `run-jit.sh` | the `r7rs-*` fixtures (~140 dirs) and `errors/r7rs-*` (~27) compiled, interpreted, and under `tur jit` (collector off) |
 | `run-r7rs-conformance.sh` (`tur_r7rs_conformance`) | chibi-scheme's R7RS suite on both back ends; fails only below the floor (1223) or when a settled difference starts passing |
 | `run-r7rs-srfi-suites.sh` (`tur_r7rs_srfi_suites_*`) | each SRFI's own suite, with a per-SRFI floor |
 | `run-r7rs-gc.sh` (`tur_r7rs_gc`) | every r7rs fixture under `TUR_GC_TORTURE`; HAMT-held values; libturi not a root |
@@ -769,27 +753,16 @@ The heap-frames design for deep non-tail recursion is on hold:
 
 ## Reading the archive
 
-1. [r7rs-lang-plan](../archive/r7rs-lang-plan.md): R0-R10 and T0-T8, the
-   design decisions (D1-D11) and the open questions of Section 8. Start
-   here.
-2. [r7rs-gc-plan](../archive/r7rs-gc-plan.md) and
-   [r7rs-gc-threads-plan](../archive/r7rs-gc-threads-plan.md): the collector
-   and its multi-threaded stages.
-3. [r7rs-srfi-plan](../archive/r7rs-srfi-plan.md) and
-   [r7rs-srfi-18-216-sicp-plan](../archive/r7rs-srfi-18-216-sicp-plan.md):
-   the SRFI table, splicing, pruning, SRFI 18, 216 and `(sicp extras)`.
-4. [r7rs-programs-compile-slowly](../archive/r7rs-programs-compile-slowly.md),
-   [r7rs-imported-libraries-recompiled-every-build](../archive/r7rs-imported-libraries-recompiled-every-build.md)
-   and [r7rs-split-units-each-compile-the-runtime](../archive/r7rs-split-units-each-compile-the-runtime.md):
-   the split build and its caches.
-5. [r7rs-callcc-memory-never-freed](../archive/r7rs-callcc-memory-never-freed.md),
-   [r7rs-toplevel-reentry-reruns-forms](../archive/r7rs-toplevel-reentry-reruns-forms.md)
-   and [r7rs-reentrant-callcc-not-on-windows](../archive/r7rs-reentrant-callcc-not-on-windows.md):
-   escape-only `call/cc`, per-form prompts, the Windows jump.
+| Topic | Archived plan or report |
+|---|---|
+| everything (start here): R0-R10, T0-T8, decisions D1-D11 | [r7rs-lang-plan](../archive/r7rs-lang-plan.md) |
+| the collector, then its threads | [r7rs-gc-plan](../archive/r7rs-gc-plan.md), [r7rs-gc-threads-plan](../archive/r7rs-gc-threads-plan.md) |
+| SRFIs, SRFI 18/216 and `(sicp extras)` | [r7rs-srfi-plan](../archive/r7rs-srfi-plan.md), [r7rs-srfi-18-216-sicp-plan](../archive/r7rs-srfi-18-216-sicp-plan.md) |
+| the split build and its caches | [r7rs-programs-compile-slowly](../archive/r7rs-programs-compile-slowly.md), [r7rs-imported-libraries-recompiled-every-build](../archive/r7rs-imported-libraries-recompiled-every-build.md), [r7rs-split-units-each-compile-the-runtime](../archive/r7rs-split-units-each-compile-the-runtime.md) |
+| escape-only `call/cc`, per-form prompts, the Windows jump | [r7rs-callcc-memory-never-freed](../archive/r7rs-callcc-memory-never-freed.md), [r7rs-toplevel-reentry-reruns-forms](../archive/r7rs-toplevel-reentry-reruns-forms.md), [r7rs-reentrant-callcc-not-on-windows](../archive/r7rs-reentrant-callcc-not-on-windows.md) |
 
-The other `docs/archive/r7rs-*.md` reports each explain one rule in the
-lowering or the prelude; the code comments usually name the report that
-introduced them.
+Each other `docs/archive/r7rs-*.md` report explains one rule; the code
+comments usually name the report that introduced it.
 
 ---
 

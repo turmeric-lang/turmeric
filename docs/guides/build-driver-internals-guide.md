@@ -143,8 +143,8 @@ strip loop in both directions:
 - extra: `--lint-unsafe-doc`, `--lint-unsafe-nested`, which the strip loop
   does not know.
 
-No harness under `tests/` starts `tur worker` today (`tests/run.sh` builds
-each fixture with its own `tur` process), so the drift is latent. If you
+No script under `tests/` starts `tur worker` today (`tests/run.sh` does
+not use it), so the drift is latent. If you
 revive the worker, reconcile the two lists first.
 
 ### Resolving and dispatching the subcommand
@@ -291,8 +291,8 @@ happens in the split shape is therefore slow, never wrong.
 3. `compile_to_c`, with `g_split_lib_sink`/`g_split_imp_sink` set unless the
    target is wasm or `--runtime=split`.
 4. Writes the C to `stable_c_path(input)`: `$TMPDIR/tur-build/` plus the
-   input path **as typed**, every non-alphanumeric byte turned into `_`
-   (`m.tur` -> `m_tur.c`). It is stable so ccache can hit. If the
+   input path **as typed**, every byte outside `[A-Za-z0-9-]` turned into
+   `_` (`m.tur` -> `m_tur.c`). It is stable so ccache can hit. If the
    directory is not ours (`tmp_dir_is_ours`: a real directory, owned by
    us, not group/other-writable) it falls back to
    `$TMPDIR/tur-build-<uid>/`. The file is opened with `O_NOFOLLOW`.
@@ -328,7 +328,8 @@ happens in the split shape is therefore slow, never wrong.
 ```
 $CC <cc_flags> -Wno-misleading-indentation -fwrapv -o '<out>' '<tmp>.c'
     [lib/imp objects] <:c-includes> <:c-sources> <autolink>
-    [-fsanitize=address,undefined] <cmake flags> -I'<dir>'... -lm [Windows: -lpthread -lws2_32 -lshlwapi]
+    [-fsanitize=address,undefined] <cmake flags> -I'<dir>'... -lm
+    [Windows: -lpthread -lws2_32 -lshlwapi]
 ```
 
 and runs it through `cc_system` (`system()` wrapped in the `cc` timing
@@ -443,15 +444,14 @@ The compile runs **in this process** and the program runs in a child that
 shares stdout. Anything the compiler printed to a buffered stdout -- a
 `--dump-*` report -- is still in the parent's buffer when the child writes.
 On a terminal stdout is line-buffered, so the order comes out right.
-Redirected, it is
-fully buffered, and the child's output lands at whatever 4 KiB boundary the
-parent had reached; the rest of the dump follows when the parent exits.
-`tur --dump-effects run f.tur > out` puts the program's `hi` in the middle
-of a dump line.
+Redirected, it is fully buffered: the child's output lands at whatever
+buffer boundary the parent's writes had reached, and the rest of the dump
+follows when the parent exits. `tur --dump-effects run f.tur > out` puts the
+program's `hi` in the middle of a dump line.
 
-Only `--dump-mono-specs` flushes today (in the `PASS_ELABORATE` arm, and its
-comment still says "execv"). A new compile-time report that prints to
-stdout either flushes itself, or the fix goes in `RUN_ENTRY` (an
+Of the dumps in `run_core_pass`, only `--dump-mono-specs` is followed by a
+flush (and its comment still says "execv"). A new compile-time report that
+prints to stdout either flushes itself, or the fix goes in `RUN_ENTRY` (an
 `fflush(NULL)` before `system()` covers every dump at once).
 
 ### Auto-spice discovery
@@ -544,8 +544,9 @@ Three properties of the intermediate-C cache are worth knowing:
   the same `$TMPDIR/tur-build/m_tur.c`, and either `cc` can compile the other
   one's program. The fixture suite never sees it because every fixture has a
   distinct path.
-- The same prefix holds `tur compile`'s `--split-build` objects
-  (`<stem>.o`, `.c`, `.link`), which `cmd_build` deletes afterwards.
+- The same prefix holds the object, `.c` and `.link` sidecar of a
+  `tur build --split-build` (`<stem>.o`), which the `build` arm deletes
+  after the link. They are keyed on the stem alone.
 - `$TMPDIR` is read once (`tur_temp_dir`); on Windows it is `TMP`, `TEMP`,
   then `USERPROFILE`.
 
@@ -565,7 +566,7 @@ only elsewhere are noted.
 | `TUR_RUNTIME` | `auto`/`lib`/`source`/`split`; `--runtime=` wins |
 | `TUR_RUNTIME_LIB` | directory or archive path for `locate_runtime_lib` |
 | `TUR_SDK_ROOT` | the SDK prefix for `-lturi` anchoring |
-| `TUR_RCGC_FROM_ARCHIVE` | `0` keeps the emitted rc/GC replica; `1` forces the archive posture even for `emit-c` |
+| `TUR_RCGC_FROM_ARCHIVE` | `0` keeps the emitted rc/GC replica; `1` takes the archive posture even for `emit-c`, when an archive is found |
 | `TUR_PREAMBLE_SPLIT` | `0` off; `1` opts in on platforms where `auto` does not |
 | `TUR_PRELUDE_SPLIT`, `TUR_IMPORT_SPLIT` | `0` turns off the r7rs two- and three-unit builds |
 | `TUR_PRELUDE_JOBS` | pieces the library unit is compiled in (1-8; default one per CPU) |
