@@ -766,6 +766,215 @@
 ;;; Since: markdown-library-plan S3
 (defn string/release-all [v : (Vec String)] : void
   (do (string/-release-loop v 0 (vec-len v)) (vec-free v)))
+;; ---- Trims and transforms (markdown-library-plan S4) -----------------------
+;; Each returns a fresh owned String and borrows its arguments.  Whitespace is
+;; the ASCII set string/trim strips (char.tur's space?): space, tab, LF, VT,
+;; FF and CR.
+;;; string/-trim-end-loop -- internal: the index past the last non-space byte in [lo, i).
+
+(defn string/-trim-end-loop [s : String lo : int i : int] : int
+  (if (and (> i lo) (space? (int->char (string/byte-at s (- i 1)))))
+    (string/-trim-end-loop s lo (- i 1))
+    i))
+;;; string/trim-start -- copy with the leading ASCII whitespace removed.
+;;;
+;;; Parameters:
+;;;   s -- the String to trim (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh owned String: s from its first non-whitespace byte on.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/trim-start (string/from-cstr "  - item ")))  ; => "- item "
+;;;
+;;; Since: markdown-library-plan S4
+(defn string/trim-start [s : String] : String
+  (let [i (string/span-while s 0 space?)]
+    (string/substring s i (- (string/len s) i))))
+;;; string/trim-end -- copy with the trailing ASCII whitespace removed.
+;;;
+;;; Parameters:
+;;;   s -- the String to trim (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh owned String: s up to and including its last non-whitespace
+;;;   byte.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/trim-end (string/from-cstr " # Title \t")))  ; => " # Title"
+;;;
+;;; Since: markdown-library-plan S4
+(defn string/trim-end [s : String] : String
+  (string/substring s 0 (string/-trim-end-loop s 0 (string/len s))))
+;;; string/-push-range! -- internal: append s's bytes [i, end) to b.
+
+(defn string/-push-range! [b : StringBuilder s : String i : int end : int] : void
+  (when (< i end)
+    (do
+      (builder/push-byte! b (string/byte-at s i))
+      (string/-push-range! b s (+ i 1) end))))
+;;; string/-replace-loop -- internal: copy s from start into b, with to in place of each from.
+
+(defn string/-replace-loop [s : String
+                            from : String
+                            to : String
+                            b : StringBuilder
+                            start : int] : void
+  (match (string/index-of-from s from start)
+    (Some i)
+    (do
+      (string/-push-range! b s start i)
+      (builder/push-string! b to)
+      (string/-replace-loop s from to b (+ i (string/len from))))
+    (None)
+    (string/-push-range! b s start (string/len s))))
+;;; string/replace-all -- copy of s with every occurrence of from replaced by to.
+;;;
+;;; A literal replace: from is matched byte for byte, left to right, and the
+;;; scan resumes after each match, so occurrences never overlap and to is
+;;; never searched.  An empty from matches nothing, so s comes back as a
+;;; copy, the same rule string/split has for an empty separator.  For a
+;;; pattern, use re/replace-all.
+;;;
+;;; Parameters:
+;;;   s    -- the String to copy (borrowed)
+;;;   from -- the text to replace (borrowed)
+;;;   to   -- the text to put in its place (borrowed; may be empty)
+;;;
+;;; Returns:
+;;;   A fresh owned String.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/replace-all (string/from-cstr "a&b&c")
+;;;                                       (string/from-cstr "&")
+;;;                                       (string/from-cstr "&amp;")))  ; => "a&amp;b&amp;c"
+;;;
+;;; Since: markdown-library-plan S4
+(defn string/replace-all [s : String from : String to : String] : String
+  (let [b (builder/new)]
+    (do
+      (if (string/empty? from)
+        (builder/push-string! b s)
+        (string/-replace-loop s from to b 0))
+      (builder/finish b))))
+;;; string/-repeat-loop -- internal: append s to b n times.
+
+(defn string/-repeat-loop [b : StringBuilder s : String n : int] : void
+  (when (> n 0)
+    (do (builder/push-string! b s) (string/-repeat-loop b s (- n 1)))))
+;;; string/repeat -- s written n times in a row.
+;;;
+;;; Parameters:
+;;;   s -- the String to repeat (borrowed)
+;;;   n -- how many copies; 0 or less gives the empty String
+;;;
+;;; Returns:
+;;;   A fresh owned String of (* n (string/len s)) bytes.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/repeat (string/from-cstr "ab") 3))  ; => "ababab"
+;;;
+;;; Since: markdown-library-plan S4
+(defn string/repeat [s : String n : int] : String
+  (let [b (builder/new)] (do (string/-repeat-loop b s n) (builder/finish b))))
+;;; string/-push-chars! -- internal: append c to b n times.
+
+(defn string/-push-chars! [b : StringBuilder c : Char n : int] : void
+  (when (> n 0) (do (builder/push-char! b c) (string/-push-chars! b c (- n 1)))))
+;;; string/pad-start -- s with copies of c in front, to make it width bytes.
+;;;
+;;; Lengths are in bytes, as everywhere in String, so c should be ASCII.  A
+;;; String already width bytes or longer comes back as an unchanged copy; it
+;;; is never cut.
+;;;
+;;; Parameters:
+;;;   s     -- the String to pad (borrowed)
+;;;   width -- the length to pad to
+;;;   c     -- the padding character
+;;;
+;;; Returns:
+;;;   A fresh owned String of (max width (string/len s)) bytes.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/pad-start (int->string 42) 5 #\0))  ; => "00042"
+;;;
+;;; Since: markdown-library-plan S4
+(defn string/pad-start [s : String width : int c : Char] : String
+  (let [b (builder/new)]
+    (do
+      (string/-push-chars! b c (- width (string/len s)))
+      (builder/push-string! b s)
+      (builder/finish b))))
+;;; string/pad-end -- s with copies of c after it, to make it width bytes.
+;;;
+;;; string/pad-start, padding on the right: a table cell or a column of
+;;; names.  A String already width bytes or longer comes back as a copy.
+;;;
+;;; Parameters:
+;;;   s     -- the String to pad (borrowed)
+;;;   width -- the length to pad to
+;;;   c     -- the padding character (ASCII)
+;;;
+;;; Returns:
+;;;   A fresh owned String of (max width (string/len s)) bytes.
+;;;
+;;; Example:
+;;;   (string/to-cstr (string/pad-end (string/from-cstr "ab") 4 #\.))  ; => "ab.."
+;;;
+;;; Since: markdown-library-plan S4
+(defn string/pad-end [s : String width : int c : Char] : String
+  (let [b (builder/new)]
+    (do
+      (builder/push-string! b s)
+      (string/-push-chars! b c (- width (string/len s)))
+      (builder/finish b))))
+;; The digits are folded in counting down, not up, because the most negative
+;; int has no positive twin; string/-signed-int flips the sign afterwards.
+;;; string/-parse-digits -- internal: s's digits [i, n) folded into acc as a negative int, or (none).
+
+(defn string/-parse-digits [s : String i : int n : int acc : int] : (Option int)
+  (if (>= i n)
+    (some acc)
+    (let [d (char->digit (int->char (string/byte-at s i)))]
+      (if (or (< d 0)
+            (< acc -922337203685477580)
+            (and (= acc -922337203685477580) (> d 8)))
+        (none)
+        (string/-parse-digits s (+ i 1) n (- (* acc 10) d))))))
+;;; string/-signed-int -- internal: the parsed value from the negated digits, or (none).
+
+(defn string/-signed-int [neg : bool digits : (Option int)] : (Option int)
+  (match digits
+    (Some v)
+    (if neg (some v) (if (< v -9223372036854775807) (none) (some (- 0 v))))
+    (None)
+    (none)))
+;;; string/parse-int -- the decimal integer s spells, or (none).
+;;;
+;;; The whole of s must be the number: an optional + or -, then one or more
+;;; digits 0-9, and nothing else -- no spaces, no underscores, no 0x.
+;;; Leading zeros are fine.  A number outside the 64-bit int range is
+;;; (none), never a wrapped or clamped value.  str->int-checked, by
+;;; contrast, takes a cstr, skips leading spaces and clamps on overflow.
+;;;
+;;; Parameters:
+;;;   s -- the String to parse (borrowed)
+;;;
+;;; Returns:
+;;;   (some n) when s is exactly a decimal integer n, else (none).
+;;;
+;;; Example:
+;;;   (string/parse-int (string/from-cstr "-042"))  ; => (some -42)
+;;;   (string/parse-int (string/from-cstr "12."))   ; => (none)
+;;;
+;;; Since: markdown-library-plan S4
+(defn string/parse-int [s : String] : (Option int)
+  (let [n     (string/len s)
+        neg   (string/byte-is? s 0 #\-)
+        start (if (or neg (string/byte-is? s 0 #\+)) 1 0)]
+    (if (>= start n)
+      (none)
+      (string/-signed-int neg (string/-parse-digits s start n 0)))))
 ;; ---- Typeclass loads (deferred to here so String + its ops exist first) ----
 ;; typeclass.tur transitively loads stdlib/typeclass-show.tur, whose owned
 ;; `Show` loads this file back -- reentrant, but harmless now that String and

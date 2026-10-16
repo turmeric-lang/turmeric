@@ -1,7 +1,7 @@
 # tur/markdown -- CommonMark + GFM in Turmeric, and the string helpers it needs
 
-> **Status:** in progress. S1 (#1200), S2 (#1209) and S3 are implemented;
-> the rest is still plan. Written 2026-10-15; its open questions were settled with the
+> **Status:** in progress. S1 (#1200), S2 (#1209), S3 (#1210) and S4 are
+> implemented; the rest is still plan. Written 2026-10-15; its open questions were settled with the
 > author the same day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
 > turned out not to remove any dependency (see section 9). The Markdown renderer
@@ -306,6 +306,13 @@ Written over `vec-push!`, these inherit its region escape note (CLAUDE.md,
 - `string/parse-int [s : String] : (Option int)`, plus `slice/parse-int`.
   CommonMark needs it for ordered-list start numbers, and the existing
   `str->int-checked` takes a `cstr` and returns `(Either int int)`.
+
+As built: an empty `from` matches nothing, so `replace-all` returns a copy (the
+rule `string/split` has for an empty separator). `parse-int` is strict: an
+optional sign and then digits, the whole string, with `(none)` on overflow. It
+counts down, so the most negative int parses. The byte loops behind
+`replace-all` and the pads (`string/-push-range!`, `string/-push-chars!`) are
+what S5's `builder/push-slice!` and `builder/push-repeat!` replace.
 
 ### 4.6 S5 -- building
 

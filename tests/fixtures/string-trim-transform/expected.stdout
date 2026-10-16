@@ -1,0 +1,73 @@
+-- trims: start, end, both
+[a b \r\n]
+[  \t a b]
+[a b]
+[ab]
+[ab]
+[ab]
+[]
+[]
+[]
+[]
+[]
+[]
+-- slice trims: start, end, both
+[| cell |  ]
+[  | cell |]
+[| cell |]
+[x]
+[x]
+[x]
+[]
+[]
+[]
+-- replace-all
+[a&amp;b&amp;&amp;c&amp;]
+[bb]
+[ba]
+[abc]
+[abc]
+[ab]
+[abab]
+[]
+-- repeat
+[ababab]
+[ab]
+[]
+[]
+[]
+-- pad-start, pad-end
+[00042]
+[42000]
+[abc]
+[abc]
+[abcdef]
+[abcdef]
+[  ]
+[  ]
+[x]
+[x]
+-- parse-int
+0
+-42
+7
+0
+9223372036854775807
+-9223372036854775808
+none
+none
+none
+none
+none
+none
+none
+none
+none
+none
+none
+none
+-- slice/parse-int
+12
+none
+-5
+none
