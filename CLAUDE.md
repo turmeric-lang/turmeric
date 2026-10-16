@@ -640,26 +640,35 @@ but it is not required. See
 
 ## MIR fork (`turmeric-lang/mir`): at most one PR at a time -- STRICT RULE
 
-`turmeric-lang/mir` runs a six-job test matrix (aarch64, apple-aarch64, riscv64,
-ppc64le, s390x, AMD64-Linux-OSX-Windows) on **every push to any branch**, not
-only on PRs (seen: pushes to `master` and to `claude/*` branches each queue all
-six). Several are non-x86 jobs that queue for a long time. One PR is fine;
-**three in a row saturate the GitHub Actions runners for hours, and nothing else
-gets run** -- every other repo's CI queues behind it.
+The fork's CI is one workflow, `.github/workflows/test.yml`: a four-leg matrix
+(ubuntu x86-64, ubuntu arm64, macOS arm64, Windows x64 -- the platforms the JIT
+ships on) that runs for **every push to an open PR**, plus a weekly run on
+`master`. A branch push with no PR runs nothing; a re-push to a PR cancels the
+superseded run. Its macOS leg draws on the same org-wide macOS runners as
+turmeric's own CI.
+
+It used to be six workflows inherited from upstream that ran on every push to
+any branch. Four of them (aarch64, ppc64le, riscv64, s390x) wait for upstream's
+self-hosted machines, which the fork does not have. So each push left four jobs
+queued for GitHub's 24-hour limit -- none ever ran -- and started two macOS jobs
+doing the same work. That is the "queue for hours" this rule was written
+against.
 
 - **One PR open against the fork at a time.** Do not open another until the
   first has merged or been closed.
 - **Batch.** Collect every MIR fix you need into one branch and one PR rather
   than one PR per fix.
-- **Do not push scratch branches** to the fork to "see what CI says". Each push
-  starts the whole matrix. Build and test locally first
+- **Build and test locally before opening the PR**
   (`cmake -DTUR_MIR_SOURCE_DIR=<checkout> ...`, see
-  [external/mir/VENDORED.md](external/mir/VENDORED.md)), and push once.
-- **Push each branch once it is ready, not after every commit.** Amend or squash
-  locally; a follow-up push re-runs everything.
-- **If the queue is already deep,** cancel stale runs for superseded commits
-  (`gh run list -R turmeric-lang/mir --status queued` /
-  `gh run cancel <id> -R turmeric-lang/mir`) instead of letting them drain.
+  [external/mir/VENDORED.md](external/mir/VENDORED.md)). For CI on a branch
+  without a PR, use "Run workflow" (workflow_dispatch) on it, once.
+- **Push a PR branch once it is ready, not after every commit.** Amend or
+  squash locally; each push to the PR starts the whole matrix again.
+- **A green check does not mean the C tests passed.** `c-tests/runtests.sh` and
+  the bootstrap targets print `FAIL` and exit 0, and the macOS leg has
+  printed six bootstrap `FAIL`s on every run since the fork began. Read the
+  log. See
+  [docs/reported/mir-fork-ci-test-failures-never-fail-the-job.md](docs/reported/mir-fork-ci-test-failures-never-fail-the-job.md).
 
 This applies to every agent and every session; it is not specific to one task.
 

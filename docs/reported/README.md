@@ -34,6 +34,12 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found reworking the MIR fork's CI (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [mir-fork-ci-test-failures-never-fail-the-job](mir-fork-ci-test-failures-never-fail-the-job.md) | medium (test coverage) | In `turmeric-lang/mir`, `c-tests/runtests.sh` never exits non-zero and every bootstrap recipe ends `&& echo Passed \|\| echo FAIL`, so failures print and the job passes. The macOS arm64 leg has hidden six bootstrap mismatches and one failing c-test per pass since the fork's first run (upstream `a8ab7c31`). |
+
 ## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
 
 | Report | Severity | One line |
