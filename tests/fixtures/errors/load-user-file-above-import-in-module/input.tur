@@ -1,0 +1,12 @@
+;; A USER file loaded in a module body still splices into the module (so a
+;; module can be split across files), which ends the module's import section.
+;; An import after it is reported for what it is, not as "only allowed inside
+;; defmodule".  See docs/archive/load-in-defmodule-claims-file-for-one-module.md.
+(defmodule prog
+  (load "tests/fixtures/errors/load-user-file-above-import-in-module/helper.tur")
+  (import tur/macros :refer [when])
+
+(defn main [] : int
+  (println (helper-triple 2))
+  0)
+) ;; end
