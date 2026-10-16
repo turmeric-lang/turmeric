@@ -475,6 +475,39 @@ void *_MIR_get_ff_call (MIR_context_t ctx, size_t nres, MIR_type_t *res_types, s
   return res;
 }
 
+#if defined(__APPLE__)
+/* Bytes of FUNC's named args that the Apple interp shim below reads from the
+   incoming stack -- the same walk as its argument loop.  The shim copies the
+   named args to a block ending where those stack args begin, so interp needs
+   this to step its va_list over them to the first vararg. */
+static size_t interp_shim_named_stack_size (MIR_func_t func) {
+  size_t size = 0, n_xregs = 0, n_vregs = 0, qwords;
+
+  for (size_t i = 0; i < func->nargs; i++) {
+    MIR_var_t var = VARR_GET (MIR_var_t, func->vars, i);
+
+    if (MIR_blk_type_p (var.type) && (qwords = (var.size + 7) / 8) <= 2) {
+      if (n_xregs + qwords <= 8)
+        n_xregs += qwords;
+      else
+        size += 8 * qwords;
+    } else if ((MIR_T_I8 <= var.type && var.type <= MIR_T_U64) || var.type == MIR_T_P
+               || var.type == MIR_T_RBLK || MIR_blk_type_p (var.type)) {
+      if (var.type == MIR_T_RBLK && i == 0) continue; /* x8 */
+      if (n_xregs < 8)
+        n_xregs++;
+      else
+        size += 8;
+    } else if (n_vregs < 8) { /* MIR_T_F, MIR_T_D, MIR_T_LD */
+      n_vregs++;
+    } else {
+      size += 8;
+    }
+  }
+  return size;
+}
+#endif
+
 /* Transform C call to call of void handler (MIR_context_t ctx, MIR_item_t func_item,
                                              va_list va, MIR_val_t *results) */
 void *_MIR_get_interp_shim (MIR_context_t ctx, MIR_item_t func_item, void *handler) {
@@ -615,6 +648,7 @@ void *_MIR_get_interp_shim (MIR_context_t ctx, MIR_item_t func_item, void *handl
       MIR_get_error_func (ctx) (MIR_call_op_error, "wrong type of arg value");
     }
   }
+  mir_assert ((size_t) stack_arg_sp_offset == interp_shim_named_stack_size (func));
   pat = add_x2_sp | (imm << 10);
   push_insns (code, &pat, sizeof (pat));
   sp_offset = (sp_offset + 15) / 16 * 16;
