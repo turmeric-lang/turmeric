@@ -1057,6 +1057,22 @@ em { color: var(--green); font-style: italic; }
 }
 .search-input:focus { outline: none; border-color: var(--gold); width: 280px; }
 .search-input::placeholder { color: var(--text-dim); }
+/* The header filter box is hidden on mobile; site-drawer.js then adds a copy at
+   the top of the sidebar drawer.  It is a separate class so the filter scripts,
+   which bind the first .search-input, never see it. */
+.sidebar-search { display: none; }
+.sidebar-search-input {
+  background: var(--bg-base);
+  border: 1px solid var(--border-mid);
+  border-radius: 6px;
+  color: var(--text-primary);
+  padding: 0.4rem 0.65rem;
+  font-size: 0.875rem;
+  width: 100%;
+  font-family: inherit;
+}
+.sidebar-search-input:focus { outline: none; border-color: var(--gold); }
+.sidebar-search-input::placeholder { color: var(--text-dim); }
 .search-no-results {
   display: none;
   padding: 2rem;
@@ -1407,6 +1423,7 @@ a.index-card:hover { background: var(--bg-hover); border-color: var(--border-mid
   .site-header { padding: 0 1rem; }
   .site-header .nav-links { display: none; }
   .search-wrap { display: none; }
+  .sidebar-search { display: block; margin-bottom: 1rem; }
   /* The filter box is hidden but still a sibling, so its "+" rule above
      would leave the toggle beside the logo. */
   .site-header .search-wrap + .theme-toggle { margin-left: auto; }
