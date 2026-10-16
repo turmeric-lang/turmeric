@@ -34,7 +34,7 @@ all four legs green:
 | Leg | c-tests | Bootstraps |
 | --- | --- | --- |
 | ubuntu x86-64 | all pass | 6 of 6 pass |
-| ubuntu arm64 (first run ever) | all pass except in lazy-bb mode: `c2mir-bb-gen-test` reads `Tests 1098, Success tests 2185`, with four `long double` tests failing (below) | 5 of 6 pass; the lazy-bb one (`-p4 -eb`) differs at byte 652165 |
+| ubuntu arm64 (first run ever) | all pass except in lazy-bb mode: `c2mir-bb-gen-test` reads `Tests 1098, Success tests 2185`, with seven 128-bit (`long double`, `__int128`) tests failing (below) | 5 of 6 pass; the lazy-bb one (`-p4 -eb`) differs at byte 652165 |
 | macOS 15 arm64 (`macos-latest`) | one fails per pass | 0 of 6; all differ at `char 8, line 1` |
 
 On macos-14 the six differed about 880 KB in; on macOS 15 they differ at
@@ -64,29 +64,39 @@ Unverified lead: Apple arm64 passes variadic arguments differently from
 AAPCS64, and the other failure, `va-struct-args.c`, is a variadic test.
 
 Linux arm64's failures are all in lazy-bb mode (`-eb`), and are a separate
-signal. Four c-tests fail there, every one of them a `long double` test, in
-the job log of run 38852158065:
-- `gcc/20020413-1.c`, `gcc/20030914-1.c` and `gcc/regstack-1.c` abort
-  (`FAIL (code = 134)`);
-- `new/issue186-2.c` prints `FAIL!` (NaN comparisons on float, double and
-  long double).
+signal. Seven c-tests fail there, every one of them a 128-bit value, in the
+job log of run 38852158065:
 
-On aarch64 Linux `long double` is a 128-bit quad, so lazy BB generation's
-handling of it is the first suspect. The lazy-bb bootstrap mismatch may be
-the same cause, since c2mir's own sources use `long double`. It is also one
-run of a parallel (`-p4`) test, so it may be nondeterministic; re-run it
-before reading anything into it.
+| test | result | what it uses |
+| --- | --- | --- |
+| `gcc/20020413-1.c` | aborts (`FAIL (code = 134)`) | `long double` |
+| `gcc/20030914-1.c` | aborts | `long double` |
+| `gcc/regstack-1.c` | aborts | `long double` |
+| `lacc/long-double-compare.c` | `code = 141, expected code = 142` | `long double` |
+| `new/issue186-2.c` | output mismatch (`FAIL!` for `OK!`) | NaN comparisons, `long double` among them |
+| `new/int128-misc.c` | output mismatch | `__int128` (mir#7) |
+| `new/int128-ops.c` | output mismatch | `__int128` (mir#7) |
 
-That run includes mir#10 (`fcdaec59`, which inlines small struct copies).
-That change is not what fails the c-tests:
-- three of the four contain no struct or union, so the code mir#10 changed
-  never runs for them, and their MIR is the same with or without it;
-- the fourth, `20030914-1.c`, does copy structs, but it fails the same way as
-  the other three.
+On aarch64 Linux `long double` is a 128-bit quad, and `__int128` travels as
+two 64-bit halves. So lazy BB generation's handling of 128-bit values is the
+first suspect. The lazy-bb bootstrap mismatch may be the same cause, since
+c2mir's own sources use `long double`.
 
-There is no pre-mir#10 arm64 run to compare the bootstrap with, so the
-bootstrap is not settled. A `workflow_dispatch` run of `test.yml` on a branch
-at `456c2e2b` (before mir#10) would settle it.
+**mir#10 is not the cause of any of this.** Run 38852158065 includes mir#10
+(`fcdaec59`, which inlines small struct copies). A baseline without it gives
+the same result: [run 38861952644](https://github.com/turmeric-lang/mir/actions/runs/38861952644),
+a `workflow_dispatch` of `test.yml` on `1302114e`, which is `456c2e2b` (master
+before mir#10) with only the workflows directory taken from mir#11. On its
+arm64 leg:
+- the same seven c-tests fail in lazy-bb mode, the same way
+  (`Tests 1097, Success tests 2183`, the same 11 results short, one test fewer
+  because `block-move-small.c` is not there yet);
+- the lazy-bb bootstrap differs too (byte 644759, line 6105; the offset moves
+  because `c2mir.c` is a different size).
+
+The lazy-bb bootstrap failed in both runs, so it is not a one-off flake of
+the `-p4` test. The scratch branch, `claude/ci-baseline-pre-mir10`, is not for
+merging.
 
 ## Fix directions
 
