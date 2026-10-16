@@ -198,6 +198,7 @@ the same thing:
 | R7RS suites | `ctest --test-dir build -R "$(python3 tests/ctest-parts.py pattern r7rs --leg linux)"` |
 | Float conversions | `ctest --test-dir build -R "$(python3 tests/ctest-parts.py pattern fconv --leg linux)"` |
 | Generic spec matrix 1/2, 2/2 | the `gsm` part: `ctest --test-dir build -R "$(python3 tests/ctest-parts.py pattern gsm --leg linux)"` |
+| Leak check | the `leak` part, Linux only: `bash tests/run-leak-check.sh` (the ctest target `tur_leak_check`) |
 | Interpreter without JIT | `bash tests/run-turi.sh`, on a Debug build configured with `-DTUR_JIT=OFF` |
 | JIT engine | `ctest --test-dir build` on a JIT build; the fixture part is `bash tests/run-jit.sh` |
 | Whole runtime preamble (cc path) | `TUR_PREAMBLE_SPLIT=0 bash tests/run.sh` |
