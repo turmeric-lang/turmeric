@@ -9,11 +9,11 @@ description: How shift/reset, shift0/reset0, call/cc, and escape differ -- promp
 Turmeric ships a family of control operators: the delimited `shift`/`reset`
 and `shift0`/`reset0`, and the undelimited `call/cc` and `escape` (plus the
 multi-shot `call/cc*` and the cloneable/serializable variants documented
-elsewhere). They look similar and share one continuation runtime (a bounded
-fiber-frame snapshot fast path in `tur_cont`, plus the heap-reified CPS
-substrate in `src/runtime/cps_rt.h` for unbounded capture), but they differ
-in precise ways that decide which one you want. This guide explains those
-differences.
+elsewhere). They look similar and, on the compiled path, the delimited ones
+share one continuation runtime -- the heap-reified DK continuation chain
+described in the [CPS and DK internals guide](cps-dk-internals-guide.md) -- but
+they differ in precise ways that decide which one you want. This guide explains
+those differences.
 
 ## Overview
 
@@ -115,11 +115,11 @@ defn is-zero [n :int] :bool
 
 ## `call/cc` -- undelimited capture, value at the capture site
 
-`call/cc` performs real undelimited capture against the implicit program-wide
-prompt -- no enclosing `reset` is required, and capture depth is unbounded
-(the heap-reified CPS substrate, not the 16-frame fiber fast path). `f` is
-typed `cont<T> -> T`; it receives a one-shot continuation handle for "the
-rest of the program from the `call/cc` site":
+`call/cc` captures against the implicit program-wide prompt -- no enclosing
+`reset` is required, and the capture works at any call depth. On the compiled
+path it is a one-shot upward escape: a `setjmp` landing at the `call/cc` site
+that `(k v)` jumps back to. `f` is typed `cont<T> -> T`; it receives a one-shot
+continuation handle for "the rest of the program from the `call/cc` site":
 
 1. If `f` returns normally, that value is the value of the `call/cc` expression
    (the captured `k` is dropped -- `k` defaults to `^unique`, one-shot with
@@ -203,25 +203,32 @@ intervening explicit `reset`.
 
 ## How it lowers (compiler pipeline)
 
-These operators are more than surface theory here -- the compiler leans on
-their semantics:
+On the compiled path every function that can reach one of these operators is
+*colored* and lowered by the CPS backend (`src/compiler/emit_cps_ir.c`) onto a
+heap continuation chain of `DK` nodes:
 
-1. Algebraic effects (`perform`/`handle`) **lower to `shift`/`reset`** in
-   `PASS_EFFECT_LOWER`. The re-delimiting property of `shift` is exactly what
-   makes each `resume` run inside a fresh handler scope.
-2. `shift`/`reset` are then **CPS-transformed to trampolined IR** in
-   `PASS_CPS`, which compiles down to the `tur_cont` runtime.
+- **`reset`** pushes a prompt node (`dk_prompt`). Every base `reset` shares
+  prompt tag 1.
+- **`shift` / `shift0`** slice the chain up to the nearest prompt with that tag
+  (`dk_shift` / `dk_shift0`). The re-delimiting difference between them is
+  whether the prompt is re-installed on the captured slice.
+- **`perform` / `handle`** are *not* rewritten to `shift`/`reset`. They use
+  the same machine directly: `handle` pushes one handler node per case, tagged
+  by effect, and `perform` slices up to the nearest matching handler. A deep
+  handler re-installs itself on the slice, exactly as `shift` re-installs its
+  prompt.
+- **`call/cc` / `escape`** do not use the chain. Each is a local `setjmp`
+  landing (`tur_escape_cont`).
+- **`call/cc*`, `cloneable-*` and `serial-*`** build a private chain and wrap
+  it (`tur_cloneable_cont`) or marshal it.
 
-The symbol bindings live in
+The [CPS and DK internals guide](cps-dk-internals-guide.md) walks through the
+whole pipeline: coloring, the CT-IR, the emitted ABI, the runtime and how to
+debug it. The symbol bindings live in
 [`src/compiler/elab_internal.h`](https://github.com/turmeric-lang/turmeric/blob/main/src/compiler/elab_internal.h) (`sym_shift`,
-`sym_reset`, `sym_shift0`, `sym_call_cc`, `sym_escape`, ...), elaboration in the
-`elab_*` entry points there, and codegen in `src/compiler/emit_internal.h`
-(`emit_effects_shift`, `emit_effects_reset`, `emit_effects_shift0`, ...). The
-runtime structures are in
-[`src/runtime/runtime.h`](https://github.com/turmeric-lang/turmeric/blob/main/src/runtime/runtime.h) (`tur_cont`,
-`tur_cloneable_cont`, `tur_frame`).
+`sym_reset`, `sym_shift0`, `sym_call_cc`, `sym_escape`, ...).
 
-### Abortive shift and the direct/CPS oracle
+### Abortive shift
 
 A base `shift` is **abortive**: it discards its delimited context. The value
 delivered to the enclosing `reset` is `f(body-value)`, where `f` is the shift's
@@ -232,32 +239,33 @@ have been the root cause of silent miscompiles:
    of the body value -- dropping `f` -- makes `(shift (fn [v] v) x)` and
    `(shift (fn [v] (* 2 v)) x)` produce identical IR. The receiver is part of
    the semantics, so the IR must lower it as "apply `f` to the body value."
-2. **An out-of-subset `reset` must not degrade to plain body-eval.** If a
-   backend cannot lower a given reset shape and falls back to
-   `emit_value(body)`, the enclosed `shift` collapses to "return its operand"
-   and the reset yields the wrong value (the abortive continuation is never
-   discarded). The direct backend instead lowers a branch-bearing base reset
-   through a `setjmp`/`longjmp` escape path (`emit_cps_reset`) to the
-   innermost reset landing.
+2. **An out-of-subset `reset` must not degrade to plain body-eval.** If the
+   CPS backend cannot lower the enclosing function, the function goes to the
+   direct emitter. There `emit_effects_reset` just evaluates its body, and the
+   enclosed `shift` collapses to "apply the receiver and carry on", so the reset
+   yields the wrong value: the abortive continuation is never discarded. **This
+   is currently broken**, not merely a hazard. The direct backend's
+   `setjmp`/`longjmp` escape path was deleted with `emit_cps.c`; see
+   [evicted-reset-shift-degrades-to-body-eval](../reported/evicted-reset-shift-degrades-to-body-eval.md).
 
-Because the direct and CPS backends lower these shapes independently, they are
-cross-checked by `cps-oracle-*` fixtures (e.g. `cps-oracle-reset-join-escape`,
-`cps-oracle-reset-both-branch-shift`) that assert `direct == cps` on the same
-program. When you extend the admitted reset/shift subset, add or re-admit the
-matching oracle -- a lowering retired or narrowed on a usage metric alone can
-silently drop the sole correct emitter for a shape, so guard the shapes you stop
-handling with a hard codegen error (as TUR-E0710 does for cloneable contexts)
-rather than a fallback.
+The `cps-oracle-*` fixtures (e.g. `cps-oracle-reset-join-escape`,
+`cps-oracle-reset-both-branch-shift`) were written to assert `direct == cps`
+when there were two backends. Today they are expected-output pins that the
+compiled, interpreted (`run-turi.sh`) and JIT (`run-jit.sh`) runs must all
+match. When you narrow the admitted reset/shift subset, guard the shapes you
+stop handling with a hard codegen error (as TUR-E0710 does for cloneable
+contexts) rather than a fallback.
 
 ## See Also
 
-- [Effects System Guide](effects-system-guide.md) -- Algebraic effects, which lower to `shift`/`reset`
+- [Effects System Guide](effects-system-guide.md) -- Algebraic effects, which share the same prompt machinery
+- [CPS and DK Internals](cps-dk-internals-guide.md) -- How the compiled path lowers all of these operators
 - [Custom Effects Tutorial](custom-effects-tutorial.md) -- Building handlers on the continuation machinery
 - [Async/Await Guide](async-await-guide.md) -- One-shot continuations for async I/O
 - [Logic Programming Guide](logic-programming-guide.md) -- Cloneable continuations (`call/cc*`) for backtracking
 - [Checkpointing Guide](checkpointing-guide.md) -- Cloneable continuations for persistent workflows
 - [Serializable Continuations Guide](serializable-continuations-guide.md) -- Capturing and resuming across process boundaries
-- [Compiler Internals](compiler-internals.md) -- Effect lowering and the CPS pass
+- [Compiler Internals](compiler-internals.md) -- Where the CPS pass sits in the pipeline
 - [Bibliography](bibliography.md#delimited-continuations) -- Papers behind these operators
 
 ## References

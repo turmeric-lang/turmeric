@@ -21,9 +21,9 @@ flowchart TD
   RD["Reader<br/>src/compiler/reader.c"]
   EL["Elaborator<br/>src/compiler/elab_*.c"]
   KC["Kind check<br/>src/passes/kind_check.c"]
-  EFL["Effect lower<br/>src/passes/effect_lower.c"]
+  EFL["Effect env setup<br/>src/passes/effect_lower.c"]
   EFC["Effect row infer<br/>src/passes/effect_check.c"]
-  CPS["CPS transform<br/>src/passes/cps.c"]
+  CPS["CPS pass (legacy metadata)<br/>src/passes/cps.c"]
   BC["Borrow check<br/>src/passes/borrow_check.c"]
   SP["SRFI prune<br/>src/passes/srfi_prune.c"]
   EM["Emitter<br/>src/compiler/emit_*.c"]
@@ -35,12 +35,12 @@ flowchart TD
   STD -->|"Form[]"| EL
   EL -->|"Expr* -- typed IR"| KC
   KC -->|"validates HKT kinds"| EFL
-  EFL -->|"perform/handle -> shift/reset"| EFC
+  EFL -->|"EffectEnv built; IR unchanged"| EFC
   EFC -->|"infer effect rows"| CPS
-  CPS -->|"shift/reset -> trampolined IR"| BC
+  CPS -->|"near-identity copy"| BC
   BC -->|"ownership validation"| SP
   SP -->|"single-TU emission only: unreached<br/>stdlib/srfi/ definitions dropped"| EM
-  EM -->|"Buf -- C99 source text"| CC
+  EM -->|"Buf -- C99 source text<br/>(colored fns via emit_cps_ir.c, see the CPS/DK guide)"| CC
   CC --> BIN
 ```
 
@@ -253,13 +253,19 @@ Code generation from typed `Expr` IR to C99 source. Output goes into a `Buf`
 | `emit_stmt.c` | `let`, `if`, `while`, `set!`, `do` |
 | `emit_fns.c` | Function definitions, closure struct synthesis, thunks |
 | `emit_module.c` | Per-module `.h` / `.c` split (separate compilation) |
+| `emit_effects.c` | Handler literals and tables, `cont?`, the cloneable reset fallback |
+| `emit_cps_ir.c` | The CPS backend: classifies colored functions and lowers their CT-IR to `f__cps(..., DK *)` |
+| `emit_dk_runtime.c` | Emits the DK continuation runtime into the program preamble |
 
 Key decisions made by the emitter:
 
 - Closures become synthesized C structs holding captured variables, plus a
   function pointer field.
 - RC retain/release calls wrap every `rc<T>` assignment and scope exit.
-- Algebraic effects lower to shift/reset trampolines (after CPS).
+- Functions that can reach an effect or control operator are lowered by
+  `emit_cps_ir.c` onto heap continuation chains (`DK` nodes); everything else
+  is emitted direct-style. See the
+  [CPS and DK internals guide](cps-dk-internals-guide.md).
 - Typeclass dictionaries become `static const` C structs passed as pointers.
 - Inline C blocks (```` ```c ... ``` ````) are spliced directly into the output.
 
@@ -307,14 +313,16 @@ and the emitter.
 
 ### effect_lower.c / effect_lower.h
 
-Transforms `EX_PERFORM` and `EX_HANDLE` nodes into `EX_SHIFT` and `EX_RESET`
-nodes. After this pass the IR no longer contains algebraic effect forms; it
-contains only delimited-continuation primitives that the CPS pass understands.
+`PASS_EFFECT_LOWER` builds the `EffectEnv` (the builtin `Unsafe` effect and
+the capabilities) and then calls `effect_lower`, which returns the program
+unchanged. Despite the name and the header comment, `EX_PERFORM`/`EX_HANDLE`/
+`EX_RESUME` survive to the CPS backend, which lowers them directly; they are
+**not** rewritten to `shift`/`reset`.
 
 ### effect_check.c / effect_check.h
 
-Infers and validates effect rows per function (Phase P19-2). Currently a
-stub/partial implementation; it walks the program and populates per-`defn`
+Infers and validates effect rows per function (Phase P19-2): registers the
+`defeffect`s, resolves unresolved rows (TUR-E0026) and populates per-`defn`
 effect row annotations that can be dumped with `--dump-effects`.
 
 ### kind_check.c / kind_check.h
@@ -325,10 +333,20 @@ type constructors are applied to the correct number and kind of arguments.
 
 ### cps.c / cps.h
 
-Continuation-passing-style transformation. Rewrites functions that contain
-`EX_SHIFT` or `EX_RESET` into trampolined form so that delimited continuations
-can be represented as plain C values. Multi-shot (`cloneable-shift`) continuations
-additionally require a clone plan, dumpable with `--dump-clone-plan`.
+Home of the **coloring** analysis (`cps_color_program`): which functions can
+dynamically reach a control operator and so must be CPS-lowered. The backend
+runs it at emission time, not from this pass. `PASS_CPS` itself runs the CPS
+dumps and `cps_transform`, which today is a near-identity tree copy that
+records legacy metadata (`may_capture`, the cloneable clone plan dumped by
+`--dump-clone-plan`).
+
+### cps_ir.c / cps_ir.h
+
+The CT-IR: an A-normal-form IR with explicit continuations, produced for each
+colored function by `cps_ir_translate_fn` and consumed by
+`src/compiler/emit_cps_ir.c`. `--dump-cps` prints it. The
+[CPS and DK internals guide](cps-dk-internals-guide.md) covers this, the
+coloring, the emitted ABI and the DK runtime end to end.
 
 ### borrow_check.c / borrow_check.h
 

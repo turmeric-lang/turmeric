@@ -235,6 +235,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 
 - **[compiler-internals.md](compiler-internals.md)** -- End-to-end walkthrough of the `tur` compiler pipeline and source layout in `src/`, aimed at contributors
 - **[value-representations-guide.md](value-representations-guide.md)** -- The representation inventory and the producer/boundary matrix -- the live scoreboard for the representation-consolidation campaign
+- **[cps-dk-internals-guide.md](cps-dk-internals-guide.md)** -- How the compiled path lowers effects and delimited control: coloring, the CT-IR, the `__cps` ABI, the DK continuation machine, who frees what, and the debugging tools
 - **[gc-guide.md](gc-guide.md)** -- How memory is managed -- reference counting, the Bacon-Rajan cycle collector, arenas, and what is (and isn't) GC-managed
 - **[ownership-guide.md](ownership-guide.md)** -- Which ownership strategy to reach for -- persistent-immutable, single-owner mutable, linear/affine handles, `rc<T>` for genuine sharing, and `weak<T>` to break the resulting cycles
 - **[name-mangling-guide.md](name-mangling-guide.md)** -- How Turmeric turns source names into valid C identifiers -- the injective scheme, the legacy fold, and when each applies
@@ -277,7 +278,7 @@ pseudo-code can opt out by marking its opening fence ```` ```turmeric no-check `
 - Editor and IDE → [vim-guide.md](vim-guide.md), [vscode-guide.md](vscode-guide.md), [lsp-guide.md](lsp-guide.md), [time-travel-tracing-guide.md](time-travel-tracing-guide.md), [ai-assistant-integration-guide.md](ai-assistant-integration-guide.md), [devcontainer-guide.md](devcontainer-guide.md), [formatter-guide.md](formatter-guide.md), [notebook-guide.md](notebook-guide.md)
 - CLI Tools → [tur-new-guide.md](tur-new-guide.md), [tur-run-guide.md](tur-run-guide.md), [tvm-guide.md](tvm-guide.md), [compiler-flags-guide.md](compiler-flags-guide.md), [autodoc-guide.md](autodoc-guide.md)
 - Performance → [performance-guide.md](performance-guide.md), [memory-usage-guide.md](memory-usage-guide.md), [monomorphization-abi-guide.md](monomorphization-abi-guide.md), [jit-guide.md](jit-guide.md)
-- Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
+- Compiler Internals → [compiler-internals.md](compiler-internals.md), [value-representations-guide.md](value-representations-guide.md), [cps-dk-internals-guide.md](cps-dk-internals-guide.md), [name-mangling-guide.md](name-mangling-guide.md), [type-erasure-guide.md](type-erasure-guide.md), [typeclass-internals-guide.md](typeclass-internals-guide.md), [turi-parity-guide.md](turi-parity-guide.md)
 - Interoperability → [c-integration-guide.md](c-integration-guide.md), [ffi-guide.md](ffi-guide.md), [eval-api.md](eval-api.md), [inline-c-results-guide.md](inline-c-results-guide.md), [sandboxing-guide.md](sandboxing-guide.md)
 - Reference → [bibliography.md](bibliography.md), [style-guide.md](style-guide.md)
 

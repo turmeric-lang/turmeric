@@ -34,6 +34,13 @@ sentence above does not cover them. If you touch this file, check
 `ls docs/reported/` against it -- an index that silently omits a quarter of the
 directory is worse for triage than no index.
 
+## Found writing the CPS/DK internals guide (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [evicted-reset-shift-degrades-to-body-eval](evicted-reset-shift-degrades-to-body-eval.md) | medium-high (silent wrong value) | A colored function the CPS backend evicts (e.g. `SIG-REJECT` on a `(Vec int)` parameter) is emitted direct-style, where `reset` evaluates its body and `shift` just applies its receiver. `in_shift_escape` is never set since `emit_cps.c` was deleted, so the abort never happens: `(reset (+ 1 (shift twice 10)))` yields 21, not 20. Regression of the archived `direct-reset-shift-degrades-out-of-subset` |
+| [evicted-handle-reaches-deleted-fiber-emitter](evicted-handle-reaches-deleted-fiber-emitter.md) | low (compile failure) | An evicted function's `handle` whose body performs nothing goes to `emit_effects_handle`'s leftover fiber-era body, which references the deleted `TurEffectCaptureCtx` / `FiberBlock::eff_ctx`, so cc fails instead of a located diagnostic. When the body can perform, the `perform`'s located error fires first |
+
 ## Found adding tunings and buffer interpolation to the signal spice (filed 2026-10-16)
 
 Adding Scala `.scl` / `.kbm` tunings and interpolating buffer reads to
