@@ -1168,6 +1168,17 @@ general triage flow.
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [compiled-args-not-evaluated-left-to-right](../reported/compiled-args-not-evaluated-left-to-right.md) -- Compiled code evaluates a later argument's call before an earlier argument
+- [nil-call-panic-not-propagated](../reported/nil-call-panic-not-propagated.md) -- A panic inside a `: nil` call does not stop its caller
+- [toplevel-statements-dropped-with-user-main](../reported/toplevel-statements-dropped-with-user-main.md) -- Top-level statements are silently dropped when the file defines `main`
+- [float-conversion-checker-passes-on-relative-path](../reported/float-conversion-checker-passes-on-relative-path.md) -- The float-conversion checker passes silently on a relative path
+
 ## Maintenance
 
 Update this guide in the same PR when you:

@@ -1118,3 +1118,12 @@ The *why* behind most branches in the resolver is in `docs/archive/` and
 - `history/intra-instance-method-dispatch-unsupported.md` -- calling a
   sibling method via `(.other self ...)` inside an instance body (now
   supported: an instance is registered before its bodies are elaborated).
+
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [int-receiver-binds-sole-foreign-instance](../reported/int-receiver-binds-sole-foreign-instance.md) -- An `int` argument binds a class's only instance, even a `cstr` one
+- [dict-clone-nested-lambda-cites-wrong-code](../reported/dict-clone-nested-lambda-cites-wrong-code.md) -- The dict-clone nested-lambda error cites TUR-E0311, an unrelated code

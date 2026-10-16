@@ -677,6 +677,16 @@ has the shape it has:
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [adt-fn-field-drop-glue-bare-free](../reported/adt-fn-field-drop-glue-bare-free.md) -- Drop glue frees a closure field with a bare `free()` -- invalid pointer
+- [auto-drop-defers-skipped-on-early-return](../reported/auto-drop-defers-skipped-on-early-return.md) -- Injected scope-exit drops are skipped by an early `return`
+- [regions-off-source-runtime-link-failure](../reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
+
 ## Maintenance
 
 Update this guide in the same change when you:

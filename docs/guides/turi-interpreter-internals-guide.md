@@ -988,6 +988,17 @@ The interpreter was built in phases, each archived with a status banner:
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [turi-skips-handler-borrow-capture-check](../reported/turi-skips-handler-borrow-capture-check.md) -- `tur --interpret` skips the effect-handler borrow-capture check
+- [turi-option-map-native-reintroduces-c-recursion](../reported/turi-option-map-native-reintroduces-c-recursion.md) -- The interpreter's native `option-map` re-nests the C stack
+- [turi-ignores-effect-row-errors](../reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
+- [needle-files-without-trailing-newline-assert-nothing](../reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
+
 ## Maintenance
 
 Update this guide in the same PR when you:

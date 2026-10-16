@@ -792,6 +792,16 @@ Related guides: [gc-guide](gc-guide.md),
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [region-bracket-blocks-effects](../reported/region-bracket-blocks-effects.md) -- A `perform` inside `with-region` / `bt-scope` cannot reach an outer handler
+- [dead-base-ctor-ignores-regions-off](../reported/dead-base-ctor-ignores-regions-off.md) -- Dead generic-base constructor traps call the region allocator with regions off
+- [regions-off-source-runtime-link-failure](../reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
+
 ## Maintenance
 
 Update this guide in the same change when you:

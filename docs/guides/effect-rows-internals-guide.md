@@ -541,6 +541,17 @@ Related internals guides: [compiler internals](compiler-internals.md),
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [effect-row-merge-overflows-past-32-effects](../reported/effect-row-merge-overflows-past-32-effects.md) -- Effect-row merge overflows a 32-entry stack array
+- [turi-ignores-effect-row-errors](../reported/turi-ignores-effect-row-errors.md) -- `tur --interpret` prints effect-row errors and then runs the program anyway
+- [e0254-emitted-once-per-fixpoint-sweep](../reported/e0254-emitted-once-per-fixpoint-sweep.md) -- TUR-E0254 is printed once per effect-inference sweep
+- [effect-row-non-symbol-items-dropped](../reported/effect-row-non-symbol-items-dropped.md) -- Non-symbol items in an effect row are silently dropped
+
 ## Maintenance
 
 Update this guide in the same PR when you:

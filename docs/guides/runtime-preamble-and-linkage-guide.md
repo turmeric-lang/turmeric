@@ -669,6 +669,15 @@ To find *why* a hash differs, dump the probe from the failing invocation
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [wasm-build-takes-native-archive-posture](../reported/wasm-build-takes-native-archive-posture.md) -- `tur build --target wasm` emits the native-archive form of the runtime
+- [regions-off-source-runtime-link-failure](../reported/regions-off-source-runtime-link-failure.md) -- `TUR_REGIONS=0` fails to link when the runtime comes from source
+
 ## Maintenance
 
 Update this guide in the same PR when you:

@@ -920,6 +920,16 @@ recorded notes disagree. The emitter guides start there:
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [forward-call-to-unannotated-return-typed-int](../reported/forward-call-to-unannotated-return-typed-int.md) -- A call to a later-defined function with no return annotation is typed `int`
+- [let-bound-nullary-generic-retyped-invalid-c](../reported/let-bound-nullary-generic-retyped-invalid-c.md) -- A `let`-bound call to a nullary generic emits invalid C
+- [int64-float64-return-annotation-rejected](../reported/int64-float64-return-annotation-rejected.md) -- `int64` / `float64` are rejected as return-type annotations
+
 ## Maintenance
 
 Update this guide in the same PR when you:

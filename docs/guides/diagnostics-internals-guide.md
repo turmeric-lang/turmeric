@@ -672,6 +672,18 @@ a new code. See the [experimental flags guide](experimental-flags-guide.md).
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [sweet-exp-diagnostic-columns-not-translated](../reported/sweet-exp-diagnostic-columns-not-translated.md) -- Diagnostics in sweet-exp files report columns of the transformed text
+- [did-you-mean-unbound-symbol-drops-its-code](../reported/did-you-mean-unbound-symbol-drops-its-code.md) -- An unbound-symbol error with a suggestion loses its TUR-E0003 code
+- [diag-code-tables-drift-without-a-check](../reported/diag-code-tables-drift-without-a-check.md) -- The diagnostic-code tables drift apart, and `tur explain` shows it
+- [needle-files-without-trailing-newline-assert-nothing](../reported/needle-files-without-trailing-newline-assert-nothing.md) -- Needle files without a trailing newline assert nothing
+- [run-sh-stamp-cache-ignores-expectation-files](../reported/run-sh-stamp-cache-ignores-expectation-files.md) -- The test harnesses' pass cache ignores a fixture's expectation files
+
 ## Maintenance
 
 Update this guide in the same PR when you:

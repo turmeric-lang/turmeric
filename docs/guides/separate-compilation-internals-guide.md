@@ -610,6 +610,18 @@ A change to header or implementation emission wants a case in
 
 ---
 
+## Bugs found while writing this guide
+
+Each was reproduced against the compiler this guide describes and filed in
+[`docs/reported/`](../reported/README.md). When one is fixed and archived,
+update the passage above that describes it and drop it from this list.
+
+- [sepcomp-cross-module-effect-unhandled](../reported/sepcomp-cross-module-effect-unhandled.md) -- Separately compiled: an effect performed in one module misses a handler in another
+- [spec-clone-names-not-module-qualified](../reported/spec-clone-names-not-module-qualified.md) -- Specializations of same-named generics in two modules collide at link
+- [forced-spec-loses-aggregate-type](../reported/forced-spec-loses-aggregate-type.md) -- A cross-module specialization at a struct type is emitted at `int64_t`
+- [loaded-user-definstance-duplicated-across-tus](../reported/loaded-user-definstance-duplicated-across-tus.md) -- A `definstance` in a file `load`-ed by two modules is defined twice
+- [nested-import-resolves-from-entry-dir](../reported/nested-import-resolves-from-entry-dir.md) -- A nested `import` resolves from the entry file's directory, and says otherwise
+
 ## Maintenance
 
 Update this guide in the same PR when you:
