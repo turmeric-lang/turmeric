@@ -1,0 +1,56 @@
+;;; bench-region-retired-frees -- ordinary frees in a program that has retired
+;;; region generations.
+;;
+;; Regions are on by default, so the emitted frees of region-capable memory --
+;; drop glue, mut cells, closure cells -- go through tur_region_free, which
+;; first asks tur_region_owns whether the pointer is region memory.  That
+;; walked every generation the thread had ever RETIRED, so a program that keeps
+;; retiring brackets got slower at every such free for the rest of its life
+;; (performance-audit R-3).  This retires 1,000 brackets (the region-with-region
+;; shape, whose escape notes keep any from rewinding), then makes 1,000,000
+;; ordinary heap frees through the same hook the emitted code calls.  `churn`
+;; calls it from inline C, so the count is exact rather than whatever a given
+;; shape of Turmeric code happens to free.  In benchmarks/audit/corpus.txt, so
+;; remeasure.sh covers it.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn build [n : int acc : int] : int
+  (if (<= n 0)
+    acc
+    (build (- n 1) (:: (Link n acc) :int))))
+
+(defn chain-sum [c : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)c;
+  int64_t acc = 0;
+  while (p) { acc += p->v; p = (void *)(intptr_t)p->nxt; }
+  return acc;
+  ```)
+
+(defn pure-total [n : int] #fx{} : int
+  (with-region (fn [] (chain-sum (build n 0)))))
+
+(defn rounds [k : int n : int acc : int] : int
+  (if (<= k 0)
+    acc
+    (rounds (- k 1) n (+ acc (pure-total n)))))
+
+;; n malloc'd blocks, each released through tur_region_free -- the guarded free
+;; the drop glue, mut cells and closure cells use when regions are on.
+(defn churn [n : int] : int
+  ```c
+  int64_t freed = 0;
+  for (int64_t i = 0; i < n; i++) {
+    void *p = malloc(32);
+    if (!p) break;
+    tur_region_free(p);
+    freed++;
+  }
+  return freed;
+  ```)
+
+(defn main [] : int
+  (println (rounds 1000 8 0))
+  (println (churn 1000000))
+  0)

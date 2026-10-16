@@ -1,0 +1,54 @@
+;; region-retired-index-owns (performance-audit R-3): tur_region_owns answers
+;; for a RETIRED generation through an address index now, not a walk of every
+;; retired arena, and it must still answer for every one of them.
+;;
+;; `keep` returns its node out of the bracket as an erased `:int`, an escape
+;; note, so all 2000 generations retire.  That is enough slots to grow the
+;; index's table several times, so the early nodes are found after rehashes.
+;; Then each node is handed to tur_region_free, the guarded free the drop glue
+;; uses when regions are on.  A node the index missed would reach free() as a
+;; pointer into the middle of a slab, which glibc aborts on; a found one is left
+;; to its generation and still reads back.
+;;
+;; The node words are `:int` on purpose: erasing is what makes the bracket
+;; retire, exactly as in region-with-region.
+
+(defdata Link :heap (Link [v : int nxt : int]))
+
+(defn keep [n : int] : int
+  (with-region (fn [] (:: (Link n 0) :int))))
+
+(defn fill [v : (Vec int) i : int n : int] : int
+  (if (= i n)
+    n
+    (do
+      (vec-push! v (keep i))
+      (fill v (+ i 1) n))))
+
+;; Release an erased node word through the region-guarded free.
+(defn region-free! [word : int] : int
+  ```c
+  tur_region_free((void *)(intptr_t)word);
+  return 1;
+  ```)
+
+(defn link-v [word : int] : int
+  ```c
+  struct { int64_t v; int64_t nxt; } *p = (void *)(intptr_t)word;
+  return p->v;
+  ```)
+
+(defn release-and-sum [v : (Vec int) i : int n : int acc : int] : int
+  (if (= i n)
+    acc
+    (do
+      (region-free! (vec-get v i))
+      (release-and-sum v (+ i 1) n (+ acc (link-v (vec-get v i)))))))
+
+(defn main [] : int
+  (let [v (:: (vec-new) (Vec int))
+        n (fill v 0 2000)]
+    (println n)
+    (println (release-and-sum v 0 n 0))
+    (vec-free v)
+    0))

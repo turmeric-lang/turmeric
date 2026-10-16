@@ -75,7 +75,6 @@ have no report: see the plan's section 5.
 | Report | Severity | One line |
 | --- | --- | --- |
 | [region-rewind-fixtures-never-rewind](region-rewind-fixtures-never-rewind.md) | medium (test coverage) | `region-with-region` and `region-scope-value-survives` exist to catch a rewind that corrupts pooled slabs, and say the pop rewinds; under `TUR_REGION_STATS=1` both show `rewinds=0 retires=103`, because their erasing ascription and erased inline-C argument are escape-note hooks. They check stdout only, so they pass. |
-| [region-retired-generations-make-shutdown-quadratic](region-retired-generations-make-shutdown-quadratic.md) | medium (performance) | A retired generation stays in the ownership registry forever: shutdown frees each with a `reg_remove` that scans from index 0 (71% of a 100k-round run's cycles), and every `tur_region_free` walks all retired generations. |
 
 ## Found executing heap-sum-generic-never-specialized (filed 2026-10-14)
 

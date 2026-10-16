@@ -314,3 +314,10 @@ TUR_RT_API bool arena_owns(const Arena *a, const void *p) {
     }
     return false;
 }
+
+TUR_RT_API void arena_each_slab(const Arena *a,
+                                void (*cb)(const void *data, size_t cap, void *ud),
+                                void *ud) {
+    for (const ArenaSlab *s = a->head; s; s = s->next) cb(s->data, s->cap, ud);
+    for (const ArenaSlab *s = a->spare; s; s = s->next) cb(s->data, s->cap, ud);
+}
