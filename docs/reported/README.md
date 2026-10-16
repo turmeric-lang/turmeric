@@ -58,7 +58,7 @@ hits under ASan.
 
 | Report | Severity | One line |
 | --- | --- | --- |
-| [mir-fork-ci-test-failures-never-fail-the-job](mir-fork-ci-test-failures-never-fail-the-job.md) | medium (test coverage) | In `turmeric-lang/mir`, `c-tests/runtests.sh` never exits non-zero and every bootstrap recipe ends `&& echo Passed \|\| echo FAIL`, so failures print and the job passes. The macOS arm64 leg has hidden six bootstrap mismatches and one failing c-test per pass since the fork's first run (upstream `a8ab7c31`). The first Linux arm64 run hides four `long double` c-test failures and a bootstrap mismatch, all in lazy-bb mode. |
+| [mir-fork-ci-test-failures-never-fail-the-job](mir-fork-ci-test-failures-never-fail-the-job.md) | medium (test coverage) | In `turmeric-lang/mir`, `c-tests/runtests.sh` never exits non-zero and every bootstrap recipe ends `&& echo Passed \|\| echo FAIL`, so failures print and the job passes. The macOS arm64 leg has hidden six bootstrap mismatches and one failing c-test per pass since the fork's first run (upstream `a8ab7c31`). The first Linux arm64 run hides seven 128-bit (`long double`, `__int128`) c-test failures and a bootstrap mismatch. All of them are in lazy-bb mode, and all were there before mir#10. |
 
 ## Found splitting the `release` and `tsan` build trees (filed 2026-10-15)
 
