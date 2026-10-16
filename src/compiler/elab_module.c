@@ -1530,8 +1530,18 @@ static bool elab_apply_import(Elab *e, const ImportSpec *imp) {
 }
 
 Expr *elab_toplevel_import(Elab *e, const Form *call) {
-    if (!e->toplevel_imports || e->scope != &e->global
-        || e->current_module != NULL || e->current_module_name != NULL) {
+    if (e->current_module != NULL || e->current_module_name != NULL) {
+        /* Inside a module body: a defmodule takes its imports only in its
+         * header, before the first definition.  An import here came after one
+         * -- often a `(load ...)` of a user file above it, whose definitions
+         * were spliced in (load-in-defmodule-claims-file-for-one-module). */
+        diag_emit(DIAG_ERROR, call->span,
+                  "import must come before the module's first definition: move "
+                  "it up with the module's other imports (a `(load ...)` above "
+                  "it splices definitions in, which ends the import section)");
+        return NULL;
+    }
+    if (!e->toplevel_imports || e->scope != &e->global) {
         diag_emit(DIAG_ERROR, call->span,
                   "import is only allowed inside defmodule");
         return NULL;
