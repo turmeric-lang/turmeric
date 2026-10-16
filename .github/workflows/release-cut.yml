@@ -133,7 +133,21 @@ jobs:
           git switch -c "$BRANCH"
           git add VERSION stdlib/VERSION src/web/wasm_glue.h web/public/sw.js CHANGELOG.md README.md
           SUMMARY=$(sed -n 's/^\*\*Latest release:\*\* `v[^`]*` -- //p' README.md)
-          git commit -m "chore: release v$NEW" -m "$SUMMARY"
+          # [skip ci]: `publish` merges the release PR a second or two after
+          # opening it, so ci.yml's pull_request run for it was created and then
+          # died before starting a job -- a red CI run with no jobs on every
+          # release (v0.65.0, v0.65.1, v0.65.2).  The marker on the PR's head
+          # commit means GitHub never creates that run.  Nothing is lost: the
+          # run never got to a job, and the merged commit is not tested on main
+          # either (a GITHUB_TOKEN merge triggers nothing).
+          #
+          # The marker rides the rebase onto main.  It does not touch the
+          # release.yml run `publish` dispatches -- skip markers apply only to
+          # push and pull_request events -- but a vNEW tag pushed BY HAND onto
+          # this commit is a push whose head commit carries it, so it would not
+          # start release.yml's tag trigger.  Rebuild with
+          # `gh workflow run release.yml --ref vNEW`, as `publish` does.
+          git commit -m "chore: release v$NEW" -m "$SUMMARY" -m "[skip ci]"
           # --force: a scratch branch left by a failed run of THIS version is
           # stale by definition; the run that made it never published.
           git push --force origin "$BRANCH"
