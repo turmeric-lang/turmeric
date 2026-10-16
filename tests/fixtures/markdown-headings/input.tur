@@ -1,0 +1,123 @@
+;; markdown-library-plan M3: heading ids, markdown/headings and
+;; markdown/code-blocks.  The same document is rendered with each heading-id
+;; rule -- python-markdown's toc extension (MdSlugPython) and GitHub's
+;; (MdSlugGitHub) -- then its headings and code blocks are listed with the
+;; public API.
+(load "stdlib/markdown.tur")
+
+;; ---- Printing ----------------------------------------------------------------
+
+(defn print-line [out : StringBuilder] : void
+  (let [line (builder/finish out)]
+    (do (println (string/to-cstr line)) (string/release line))))
+
+(defn push-opt! [out : StringBuilder name : cstr o : (Option String)] : void
+  (match o
+    (Some s)
+    (do
+      (builder/push-cstr! out name)
+      (builder/push-cstr! out "[")
+      (builder/push-string! out s)
+      (builder/push-cstr! out "]")
+      (string/release s))
+    (None)
+    (do (builder/push-cstr! out name) (builder/push-cstr! out "none"))))
+
+(defn push-lines! [out : StringBuilder d : MdDoc id : MdBlockId] : void
+  (let [lines (markdown/block-lines d id)]
+    (do
+      (builder/push-cstr! out " [")
+      (builder/push-int! out (pair-fst lines))
+      (builder/push-cstr! out "-")
+      (builder/push-int! out (pair-snd lines))
+      (builder/push-cstr! out "]"))))
+
+(defn heading-level [b : MdBlock] : int
+  (match b
+    (MdHeading l) l
+    _ 0))
+
+;; Every heading: level, lines, text, and its id under each rule.
+(defn show-headings [d : MdDoc] : void
+  (let [hs     (markdown/headings d)
+        py     (markdown/heading-ids d (MdHtmlOpts (MdRawTagFilter) (MdSlugPython)))
+        gh     (markdown/heading-ids d (MdHtmlOpts (MdRawTagFilter) (MdSlugGitHub)))
+        none   (markdown/heading-ids d (markdown/default-html-opts))
+        ^mut i 0]
+    (do
+      (println "---- headings")
+      (while (< i (vec-len hs))
+        (let [id  (vec-get hs i)
+              out (builder/new)]
+          (do
+            (builder/push-cstr! out "h")
+            (builder/push-int! out (heading-level (markdown/block d id)))
+            (push-lines! out d id)
+            (push-opt! out " text=" (markdown/heading-text d id))
+            (builder/push-cstr! out " python=[")
+            (builder/push-string! out (vec-get py i))
+            (builder/push-cstr! out "] github=[")
+            (builder/push-string! out (vec-get gh i))
+            (builder/push-cstr! out "]")
+            (print-line out)
+            (set! i (+ i 1)))))
+      (let [out (builder/new)]
+        (do
+          (builder/push-cstr! out "ids under MdNoIds: ")
+          (builder/push-int! out (vec-len none))
+          (print-line out)))
+      (vec-free hs)
+      (string/release-all py)
+      (string/release-all gh)
+      (string/release-all none))))
+
+;; Every code block: lines, info string and contents.
+(defn show-code [d : MdDoc] : void
+  (let [cs     (markdown/code-blocks d)
+        ^mut i 0]
+    (do
+      (println "---- code blocks")
+      (while (< i (vec-len cs))
+        (let [id  (vec-get cs i)
+              out (builder/new)]
+          (do
+            (builder/push-cstr! out "code")
+            (push-lines! out d id)
+            (push-opt! out " info=" (markdown/code-info d id))
+            (push-opt! out " text=" (markdown/block-text d id))
+            (print-line out)
+            (set! i (+ i 1)))))
+      (vec-free cs))))
+
+(defn render [d : MdDoc mode : MdSlugMode] : void
+  (let [h (markdown/render-html d (MdHtmlOpts (MdRawTagFilter) mode))]
+    (do (println (string/to-cstr h)) (string/release h))))
+
+;; ---- The document --------------------------------------------------------------
+
+(defn main [] : int
+  ;; Repeated headings get _1, _2 (python-markdown) or -1, -2 (GitHub); an id
+  ;; that already ends in _N counts on from N.  NFKD turns the accented
+  ;; letters and the fi ligature into ASCII for python-markdown, which drops
+  ;; what is left; GitHub keeps letters as they are, lower-cased.  Code spans
+  ;; keep their text, emphasis and links lose their tags, an image loses its
+  ;; alt text.  Headings in a block quote and a list item count, in order.
+  (let [src (string/from-cstr "# Install\n## Install\n### R\u{E9}sum\u{E9}, \u{FB01}le & \u{201C}quotes\u{201D}\n#### `tur build` *fast* [now](/n) ![logo](/l.png)\n> ## In a quote\n- ## In a list\n\n# x_1\n# x\n# x\n#\nSetext heading\n--------------\n# \u{41F}\u{440}\u{438}\u{432}\u{435}\u{442} \u{43C}\u{438}\u{440}\n\n    indented code\n\n```c fenced\nint x;\n```\n")
+        d   (markdown/parse src (markdown/default-opts))]
+    (do
+      (string/release src)
+      (println "==== python-markdown ids")
+      (render d (MdSlugPython))
+      (println "==== GitHub ids")
+      (render d (MdSlugGitHub))
+      (show-headings d)
+      (show-code d)
+      ;; A block that is not a heading has no heading text.
+      (let [top (markdown/children d (markdown/root d))
+            out (builder/new)]
+        (do
+          (push-opt! out "text of the last block: " (markdown/heading-text d (vec-get top (- (vec-len top) 1))))
+          (print-line out)
+          (vec-free top)))
+      (markdown/doc-free d)
+      0)))

@@ -10,6 +10,7 @@
 #
 #   bash tools/fetch-ucd.sh [dir]        # default dir: build/ucd
 #   python3 tools/gen-r7rs-unicode.py --ucd build/ucd
+#   python3 tools/gen-md-slug-data.py --ucd build/ucd   # stdlib/markdown/slug-data.tur
 #
 # ICU release-76-1 carries Unicode 16.0.0 (release-74-2: 15.1.0; main: newer).
 set -euo pipefail

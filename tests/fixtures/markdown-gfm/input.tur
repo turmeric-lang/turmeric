@@ -1,0 +1,177 @@
+;; markdown-library-plan M3: the GFM extensions -- tables, strikethrough,
+;; extended autolinks and task list items -- as cmark-gfm 0.29 has them.
+;; Each document is rendered, then walked with the public API: every block's
+;; kind with its table and task facts, then every inline's kind, text and
+;; destination.
+(load "stdlib/markdown.tur")
+
+;; ---- Printing ----------------------------------------------------------------
+
+(defn align-name [a : MdAlign] : cstr
+  (match a
+    (MdAlignNone) ""
+    (MdAlignLeft) " left"
+    (MdAlignCenter) " center"
+    (MdAlignRight) " right"))
+
+(defn task-name [t : MdTask] : cstr
+  (match t
+    (MdNotTask) "item"
+    (MdUnchecked) "task item [ ]"
+    (MdChecked) "task item [x]"))
+
+(defn block-name [b : MdBlock] : cstr
+  (match b
+    (MdDocument) "document"
+    (MdBlockQuote) "block quote"
+    (MdList o s t) (if o "ordered list" "bullet list")
+    (MdItem k) (task-name k)
+    (MdParagraph) "paragraph"
+    (MdHeading l) "heading"
+    (MdThematicBreak) "thematic break"
+    (MdCodeBlock f) "code"
+    (MdHtmlBlock) "html block"
+    (MdTable c) "table"
+    (MdTableRow h) (if h "header row" "row")
+    (MdTableCell a) "cell"))
+
+(defn inline-name [k : MdInline] : cstr
+  (match k
+    (MdText) "text"
+    (MdCode) "code"
+    (MdEmph) "emph"
+    (MdStrong) "strong"
+    (MdLink) "link"
+    (MdImage) "image"
+    (MdHtmlInline) "html"
+    (MdSoftBreak) "softbreak"
+    (MdHardBreak) "hardbreak"
+    (MdStrikethrough) "strikethrough"))
+
+;; Append an optional String as name=[s], then release it.
+(defn push-field! [out : StringBuilder name : cstr o : (Option String)] : void
+  (match o
+    (Some s)
+    (do
+      (builder/push-cstr! out name)
+      (builder/push-cstr! out "[")
+      (builder/push-string! out s)
+      (builder/push-cstr! out "]")
+      (string/release s))
+    (None)
+    nil))
+
+(defn print-line [out : StringBuilder] : void
+  (let [line (builder/finish out)]
+    (do (println (string/to-cstr line)) (string/release line))))
+
+(defn show-inline [d : MdDoc id : MdInlineId depth : int] : void
+  (let [out    (builder/new)
+        kids   (markdown/inline-children d id)
+        ^mut i 0]
+    (do
+      (builder/push-repeat! out (int->char 32) (* 2 depth))
+      (builder/push-cstr! out (inline-name (markdown/inline d id)))
+      (push-field! out " " (markdown/inline-text d id))
+      (push-field! out " dest=" (markdown/link-dest d id))
+      (print-line out)
+      (while (< i (vec-len kids))
+        (do (show-inline d (vec-get kids i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free kids))))
+
+(defn show-block [d : MdDoc id : MdBlockId depth : int] : void
+  (let [b      (markdown/block d id)
+        lines  (markdown/block-lines d id)
+        out    (builder/new)
+        ins    (markdown/inlines d id)
+        ^mut i 0]
+    (do
+      (builder/push-repeat! out (int->char 32) (* 2 depth))
+      (builder/push-cstr! out (block-name b))
+      (match b
+        (MdTable c)
+        (do (builder/push-cstr! out ", columns ") (builder/push-int! out c))
+        (MdTableCell a)
+        (builder/push-cstr! out (align-name a))
+        _
+        nil)
+      (builder/push-cstr! out " [")
+      (builder/push-int! out (pair-fst lines))
+      (builder/push-cstr! out "-")
+      (builder/push-int! out (pair-snd lines))
+      (builder/push-cstr! out "]")
+      (print-line out)
+      (while (< i (vec-len ins))
+        (do (show-inline d (vec-get ins i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free ins))))
+
+(defn walk [d : MdDoc id : MdBlockId depth : int] : void
+  (let [kids   (markdown/children d id)
+        ^mut i 0]
+    (do
+      (show-block d id depth)
+      (while (< i (vec-len kids))
+        (do (walk d (vec-get kids i) (+ depth 1)) (set! i (+ i 1))))
+      (vec-free kids))))
+
+(defn show-doc [name : cstr src : cstr opts : MdOpts html : MdHtmlOpts] : void
+  (let [s (string/from-cstr src)
+        d (markdown/parse s opts)
+        h (markdown/render-html d html)]
+    (do
+      (string/release s)
+      (let [banner (string/of "==== " name " ====")]
+        (do (println (string/to-cstr banner)) (string/release banner)))
+      (println (string/to-cstr h))
+      (println "----")
+      (walk d (markdown/root d) 0)
+      (string/release h)
+      (markdown/doc-free d))))
+
+(defn gfm [name : cstr src : cstr] : void
+  (show-doc name src (markdown/default-opts) (markdown/default-html-opts)))
+
+;; ---- Documents -----------------------------------------------------------------
+
+(defn main [] : int
+  (do
+    ;; Tables: the delimiter row's colons set each column's alignment; a
+    ;; cell holds inlines, and \| is a pipe inside one, code span included.
+    ;; A short row is padded and a long one cut to the header's width.  Any
+    ;; line that is not blank continues the table, as a row, until a blank
+    ;; line or another block's start.
+    (gfm "tables"
+         "| Left | Center | Right | None |\n|:-----|:------:|------:|------|\n| a | *b* | `c \\| d` | e \\| f |\n| short |\n| one | two | three | four | five |\nno pipes\n> quoted\n")
+    ;; The header is the last line of a paragraph: the lines above it stay a
+    ;; paragraph, which cmark-gfm never reads link reference definitions
+    ;; from.  A delimiter row with a different cell count makes no table.
+    (gfm "table starts"
+         "Intro line\n[x]: /u\nhead a | head b\n--- | ---\ncell\n\n| a | b |\n| - |\n| c | d |\n\n[x]\n")
+    ;; Strikethrough: a run of one or two tildes, closed by a run of the same
+    ;; length; three tildes are text.  Emphasis reads past a tilde to the
+    ;; character beyond it when it decides whether a run can open or close.
+    (gfm "strikethrough"
+         "~~two~~ ~one~ ~~~three~~~ ~~mixed~ x~~in~~y\n*a*~~b~~ _c_~d ~~not closed\n")
+    ;; Extended autolinks: www. and scheme:// links found in text, and email
+    ;; addresses.  Trailing punctuation, an unmatched ) and an entity-like
+    ;; ending are trimmed; an underscore in the last two labels of the domain
+    ;; makes no link; mailto: and xmpp: keep their scheme.  Inside a link's
+    ;; text there is no second link.
+    (gfm "autolinks"
+         "Visit www.commonmark.org/help, https://example.com/a_(b)?c=d. or FTP://files.example.org!\n(www.paren.example) www.ent.example/&amp; www.x_y.z_w http://\nMail foo.bar+baz@mail.example, mailto:x@y.zz or xmpp:me@chat.example/home.\na@b and a@b.c- stay text; [www.inside.example](/u) too.\n")
+    ;; Task list items: [ ], [x] or [X] then a space, opening the item.  A
+    ;; nested list's items can be tasks too; a box with nothing after it, or
+    ;; [] with nothing inside, is text.
+    (gfm "task lists"
+         "- [ ] open\n- [x] done\n- [X] also done\n  - [ ] nested\n- [ ]\n- [] not a box\n\n1. [x] ordered\n")
+    ;; The tag filter, the renderer's default: the < of nine tags is escaped,
+    ;; in an HTML block and inline, and other raw HTML passes through.
+    (gfm "tag filter"
+         "<style>\np { }\n</style>\n\nA <title>t</title>, <TEXTAREA> and <b>bold</b>.\n")
+    ;; With the extensions off (markdown/commonmark-opts), none of the above
+    ;; applies: a table is a paragraph and a tilde is text.
+    (show-doc "extensions off"
+              "| a |\n|---|\n~~s~~ www.a.example x@y.zz\n- [ ] x\n"
+              (markdown/commonmark-opts)
+              (MdHtmlOpts (MdRawPass) (MdNoIds)))
+    0))

@@ -183,7 +183,7 @@ def generate(examples, path):
         "(defn md-spec-one [mark : cstr src : cstr ext : bool] : void",
         "  (let [s (string/from-cstr src)",
         "        o (if ext (markdown/default-opts) (markdown/commonmark-opts))",
-        "        h (if ext (markdown/default-html-opts) (MdHtmlOpts (MdRawPass)))",
+        "        h (if ext (markdown/default-html-opts) (MdHtmlOpts (MdRawPass) (MdNoIds)))",
         "        d (markdown/parse s o)",
         "        r (markdown/render-html d h)]",
         "    (do",

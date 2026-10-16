@@ -2,18 +2,21 @@
 ;; document in a bundle, for tests/markdown-spec/diff.py to compare with
 ;; commonmark.js's (oracle/render.js).
 ;;
-;; Usage: render --in=BUNDLE
+;; Usage: render --in=BUNDLE [--gfm]
 ;;
 ;; BUNDLE holds the documents, each followed by one byte 0x1E (record
 ;; separator).  The output is each document's HTML followed by 0x1E, then a
 ;; line feed.  Plain CommonMark: no extensions, and raw HTML passed through.
+;; With --gfm, the defaults instead: markdown/default-opts (the GFM
+;; extensions) and markdown/default-html-opts (the tag filter), for the
+;; comparison with cmark-gfm (oracle/gfmrender.c).
 (load "stdlib/markdown.tur")
 
 (load "stdlib/fs-string.tur")
 
 (load "stdlib/args.tur")
 
-(defn render-all [src : String] : String
+(defn render-all [src : String gfm : bool] : String
   (let [sep    (string/from-cstr "\x1e")
         docs   (string/split src sep)
         out    (builder/new)
@@ -21,8 +24,12 @@
     (do
       ;; The bundle ends with a separator, so the last piece is empty.
       (while (< i (- (vec-len docs) 1))
-        (let [d (markdown/parse (vec-get docs i) (markdown/commonmark-opts))
-              h (markdown/render-html d (MdHtmlOpts (MdRawPass)))]
+        (let [d (markdown/parse (vec-get docs i)
+                  (if gfm (markdown/default-opts) (markdown/commonmark-opts)))
+              h (markdown/render-html d
+                  (if gfm
+                    (markdown/default-html-opts)
+                    (MdHtmlOpts (MdRawPass) (MdNoIds))))]
           (do
             (builder/push-string! out h)
             (builder/push-byte! out 30)
@@ -33,10 +40,10 @@
       (string/release sep)
       (builder/finish out))))
 
-(defn render-file [path : cstr] : int
+(defn render-file [path : cstr gfm : bool] : int
   (match (fs/read-string path)
     (Ok src)
-    (let [html (render-all src)]
+    (let [html (render-all src gfm)]
       (do
         (println (string/to-cstr html))
         (string/release html)
@@ -46,9 +53,13 @@
     (do (println "render: cannot read the bundle") 2)))
 
 (defn main [] : int
-  (let [spec (args/spec-option (args/spec-new) "--in" "string" (none))
+  (let [spec (args/spec-flag (args/spec-option (args/spec-new)
+                               "--in"
+                               "string"
+                               (none))
+               "--gfm")
         res  (args/parse spec *args*)
         rc   (if (args/error? res)
                (do (println (args/error-msg res)) 2)
-               (render-file (args/get-str res "in")))]
+               (render-file (args/get-str res "in") (args/get-bool res "gfm")))]
     (do (args/result-free res) (args/spec-free spec) rc)))

@@ -2,4 +2,4 @@
 # on every engine tests/run-markdown-spec.sh runs.  Maintained by
 # tests/markdown-spec/run.py --update; the list only grows.
 commonmark-0.31.2: 1-652
-gfm-0.29-extensions: 203 492 652
+gfm-0.29-extensions: 198-205 279-280 491-492 621-631 652

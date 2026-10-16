@@ -2,35 +2,26 @@
 ;;;
 ;;; markdown/parse reads a String into an MdDoc and markdown/render-html
 ;;; writes it out; markdown/doc-free releases it.  The parser follows the
-;;; CommonMark spec, 0.31.2, and passes all 652 of its examples.  This is
-;;; markdown-library-plan's Phase M under way: blocks (M1) and inlines (M2)
-;;; are complete, and the GFM extensions come with M3.
-;;; tests/run-markdown-spec.sh runs the spec's examples.
+;;; CommonMark spec, 0.31.2, and passes all 652 of its examples.  With
+;;; markdown/default-opts it adds GitHub's four extensions -- tables,
+;;; strikethrough, extended autolinks and task list items -- as cmark-gfm
+;;; 0.29.0.gfm.13 implements them, and passes the 24 GFM extension examples.
+;;; The renderer can give headings ids by python-markdown's rule or GitHub's
+;;; (MdSlugMode).  tests/run-markdown-spec.sh runs the spec's examples.
 ;;;
 ;;; The tree is walked by id: markdown/children and markdown/block for
 ;;; blocks, then markdown/inlines, markdown/inline-children and
-;;; markdown/inline for a paragraph's or heading's inline content.
+;;; markdown/inline for a paragraph's, heading's or table cell's inline
+;;; content.  markdown/headings and markdown/code-blocks list the blocks of
+;;; those kinds, wherever they are.
 ;;;
-;;; Pure Turmeric apart from the Unicode and entity tables, which the
-;;; interpreter carries as natives, so it runs compiled, under the JIT and
-;;; under --interpret.
+;;; Pure Turmeric apart from the Unicode, entity and heading-id tables, which
+;;; the interpreter carries as natives, so it runs compiled, under the JIT
+;;; and under --interpret.
 ;;;
 ;;; Since: markdown-library-plan M1
 ;; The parser, and the renderer with its options.
 (load "stdlib/markdown/html.tur")
-;;; MdOpts -- what markdown/parse recognises beyond CommonMark.
-;;;
-;;; The GitHub Flavored Markdown extensions -- tables, strikethrough, extended
-;;; autolinks and task list items -- and $ and $$ math.  None is implemented
-;;; yet (markdown-library-plan M3); the fields are read once they are.
-
-(defstruct MdOpts
-  :copy
-  [tables : bool
-   strikethrough : bool
-   autolinks : bool
-   tasklists : bool
-   math : bool])
 ;;; markdown/default-opts -- the GFM extensions on, math off.
 ;;;
 ;;; Returns:
@@ -52,16 +43,20 @@
 ;;; Since: markdown-library-plan M1
 (defn markdown/commonmark-opts [] : MdOpts
   (MdOpts false false false false false))
-;;; markdown/default-html-opts -- the renderer's defaults: raw HTML through GitHub's tag filter.
+;;; markdown/default-html-opts -- the renderer's defaults: raw HTML through GitHub's tag filter, and no heading ids.
+;;;
+;;; The output is the CommonMark spec's and cmark-gfm's.  For heading ids,
+;;; build an MdHtmlOpts with (MdSlugPython) or (MdSlugGitHub) instead.
 ;;;
 ;;; Returns:
-;;;   An MdHtmlOpts whose raw-html is MdRawTagFilter.
+;;;   An MdHtmlOpts whose raw-html is MdRawTagFilter and heading-ids MdNoIds.
 ;;;
 ;;; Example:
 ;;;   (markdown/render-html d (markdown/default-html-opts))
 ;;;
 ;;; Since: markdown-library-plan M1
-(defn markdown/default-html-opts [] : MdHtmlOpts (MdHtmlOpts (MdRawTagFilter)))
+(defn markdown/default-html-opts [] : MdHtmlOpts
+  (MdHtmlOpts (MdRawTagFilter) (MdNoIds)))
 ;;; markdown/parse -- parse Markdown source into a document.
 ;;;
 ;;; Any String parses: Markdown has no syntax errors.  Lines may end in LF,
@@ -80,7 +75,7 @@
 ;;;
 ;;; Since: markdown-library-plan M1
 (defn markdown/parse [src : String opts : MdOpts] : MdDoc
-  (let [d (md/-parse-blocks src)] (do (md/-parse-inlines! d) d)))
+  (let [d (md/-parse-blocks src opts)] (do (md/-parse-inlines! d) d)))
 ;;; markdown/render-html -- the HTML for a document.
 ;;;
 ;;; Block structure as the CommonMark spec writes it: one line per block tag,
@@ -134,22 +129,39 @@
 ;;; MdBlockId -- a block of a parsed document.  Valid only with the MdDoc it came from.
 
 (defstruct MdBlockId :copy [ix : int])
+;;; MdAlign -- a table column's alignment, from the colons of its delimiter cell.
+
+(defdata MdAlign
+  :copy
+  (MdAlignNone)
+  (MdAlignLeft)
+  (MdAlignCenter)
+  (MdAlignRight))
+;;; MdTask -- a list item's GFM task box: none, [ ], or [x].
+
+(defdata MdTask :copy (MdNotTask) (MdUnchecked) (MdChecked))
 ;;; MdBlock -- what a block is, with the facts that go with its kind.
 ;;;
 ;;; (MdList ordered start tight): start is the first item's number (1 for a
-;;; bullet list).  (MdHeading level): 1 to 6.  (MdCodeBlock fenced).
+;;; bullet list).  (MdItem task): whether the item opens with a GFM task box.
+;;; (MdHeading level): 1 to 6.  (MdCodeBlock fenced).
+;;; (MdTable columns), (MdTableRow header?) and (MdTableCell alignment) are a
+;;; GFM table: its rows are its children, and a row's cells are its children.
 
 (defdata MdBlock
   :copy
   (MdDocument)
   (MdBlockQuote)
   (MdList bool int bool)
-  (MdItem)
+  (MdItem MdTask)
   (MdParagraph)
   (MdHeading int)
   (MdThematicBreak)
   (MdCodeBlock bool)
-  (MdHtmlBlock))
+  (MdHtmlBlock)
+  (MdTable int)
+  (MdTableRow bool)
+  (MdTableCell MdAlign))
 ;;; md/-node-of -- internal: the arena node behind id.
 
 (defn md/-node-of [d : MdDoc id : MdBlockId] : MdNode
@@ -163,6 +175,13 @@
   (if (< i 0)
     (none)
     (let [s (vec-get (.strs d) i)] (some (string/substring s 0 (string/len s))))))
+;;; md/-align -- internal: the MdAlign for alignment code a (1 left, 2 center, 3 right).
+
+(defn md/-align [a : int] : MdAlign
+  (cond (= a 1) (MdAlignLeft)
+        (= a 2) (MdAlignCenter)
+        (= a 3) (MdAlignRight)
+        :else   (MdAlignNone)))
 ;;; markdown/root -- the document block, the root of the tree.
 ;;;
 ;;; Parameters:
@@ -226,7 +245,9 @@
       (MdKList)
       (MdList (.ordered l) (if (.ordered l) (.start l) 1) (.tight l))
       (MdKItem)
-      (MdItem)
+      (MdItem (cond (= (.level n) 1) (MdUnchecked)
+                    (= (.level n) 2) (MdChecked)
+                    :else            (MdNotTask)))
       (MdKParagraph)
       (MdParagraph)
       (MdKHeading)
@@ -236,12 +257,19 @@
       (MdKCodeBlock)
       (MdCodeBlock (.fenced (.fence n)))
       (MdKHtmlBlock)
-      (MdHtmlBlock))))
+      (MdHtmlBlock)
+      (MdKTable)
+      (MdTable (.level n))
+      (MdKTableRow)
+      (MdTableRow (= (.level n) 1))
+      (MdKTableCell)
+      (MdTableCell (md/-align (.level n))))))
 ;;; markdown/block-text -- a leaf block's text.
 ;;;
 ;;; A paragraph's or heading's source text, trimmed, with its inner line
 ;;; endings and its inline syntax kept (markdown/inlines has it parsed); a
-;;; code block's contents, ending in a line feed; or an HTML block's HTML.
+;;; table cell's, the same, with each \| written as |; a code block's
+;;; contents, ending in a line feed; or an HTML block's HTML.
 ;;;
 ;;; Parameters:
 ;;;   d  -- the document
@@ -292,6 +320,99 @@
 ;;; Since: markdown-library-plan M1
 (defn markdown/block-lines [d : MdDoc id : MdBlockId] : (Pair int int)
   (let [n (md/-node-of d id)] (pair (.start-line n) (.end-line n))))
+;;; md/-blocks-of -- internal: the blocks for which keep? holds, in document order, as MdBlockIds.
+
+(defn md/-blocks-of [d : MdDoc keep? : (fn [MdKind] bool)] : (Vec MdBlockId)
+  (let [out    (md/-new-ids)
+        ^mut i 0]
+    (do
+      (while (>= i 0)
+        (do
+          (when (keep? (.kind (vec-get (.nodes d) i)))
+            (vec-push! out (MdBlockId i)))
+          (set! i (md/-block-next d i))))
+      out)))
+;;; markdown/headings -- every heading of a document, in order.
+;;;
+;;; Headings inside block quotes and list items are in it too, where they
+;;; come in the text.  markdown/heading-ids lists their ids in the same order.
+;;;
+;;; Parameters:
+;;;   d -- the document
+;;;
+;;; Returns:
+;;;   A fresh (Vec MdBlockId); free it with vec-free.
+;;;
+;;; Example:
+;;;   (vec-len (markdown/headings d))  ; => 2 for "# A\n\n> ## B\n"
+;;;
+;;; Since: markdown-library-plan M3
+(defn markdown/headings [d : MdDoc] : (Vec MdBlockId)
+  (md/-blocks-of d (fn [k : MdKind] : bool (match k (MdKHeading) true _ false))))
+;;; markdown/heading-text -- a heading's content as plain text, for a table of contents.
+;;;
+;;; The text of its inlines: code spans' contents included, raw HTML and
+;;; images' alt text left out, character references decoded, and each run
+;;; of whitespace one space.  It is the text the heading-id rules start from.
+;;;
+;;; Parameters:
+;;;   d  -- the document
+;;;   id -- a block of d
+;;;
+;;; Returns:
+;;;   (some s), a fresh owned String, or (none) when the block is not a heading.
+;;;
+;;; Example:
+;;;   (markdown/heading-text d id)  ; => (some "Use make here") for "## Use `make` *here*"
+;;;
+;;; Since: markdown-library-plan M3
+(defn markdown/heading-text [d : MdDoc id : MdBlockId] : (Option String)
+  (match (.kind (md/-node-of d id))
+    (MdKHeading)
+    (some (md/-heading-text-of d
+            (MdHtmlOpts (MdRawPass) (MdNoIds))
+            (.ix id)
+            true))
+    _
+    (none)))
+;;; markdown/heading-ids -- the id markdown/render-html gives each heading.
+;;;
+;;; One per heading, in the order markdown/headings lists them, by the rule
+;;; opts's heading-ids names, made unique in the document as that rule does.
+;;; Under (MdNoIds) the renderer writes none, and the Vec is empty.
+;;;
+;;; Parameters:
+;;;   d    -- the document
+;;;   opts -- the options the document is (or would be) rendered with
+;;;
+;;; Returns:
+;;;   A fresh (Vec String); release it with string/release-all.
+;;;
+;;; Example:
+;;;   (markdown/heading-ids d (MdHtmlOpts (MdRawTagFilter) (MdSlugPython)))
+;;;   ; => ["intro" "intro_1"] for "# Intro\n# Intro\n"
+;;;
+;;; Since: markdown-library-plan M3
+(defn markdown/heading-ids [d : MdDoc opts : MdHtmlOpts] : (Vec String)
+  (md/-heading-ids d opts))
+;;; markdown/code-blocks -- every code block of a document, fenced or indented, in order.
+;;;
+;;; markdown/code-info, markdown/block-text and markdown/block-lines read
+;;; each one's info string, contents and source lines.
+;;;
+;;; Parameters:
+;;;   d -- the document
+;;;
+;;; Returns:
+;;;   A fresh (Vec MdBlockId); free it with vec-free.
+;;;
+;;; Example:
+;;;   (vec-len (markdown/code-blocks d))  ; => 1 for "```c\nx;\n```\n"
+;;;
+;;; Since: markdown-library-plan M3
+(defn markdown/code-blocks [d : MdDoc] : (Vec MdBlockId)
+  (md/-blocks-of d
+    (fn [k : MdKind] : bool (match k (MdKCodeBlock) true _ false))))
 ;; ---- Walking the inlines ---------------------------------------------------------
 ;;; MdInlineId -- an inline of a parsed document.  Valid only with the MdDoc it came from.
 
@@ -299,9 +420,11 @@
 ;;; MdInline -- what an inline is.
 ;;;
 ;;; MdText, MdCode and MdHtmlInline carry text (markdown/inline-text).
-;;; MdEmph, MdStrong, MdLink and MdImage hold inlines (markdown/inline-children);
-;;; a link's or image's destination and title come from markdown/link-dest and
-;;; markdown/link-title, and an image's children are its alt text.
+;;; MdEmph, MdStrong, MdStrikethrough, MdLink and MdImage hold inlines
+;;; (markdown/inline-children).  A link's or image's destination and title
+;;; come from markdown/link-dest and markdown/link-title, and an image's
+;;; children are its alt text.  An autolink, extended ones included (www.,
+;;; scheme:// or an email address), is an MdLink.
 
 (defdata MdInline
   :copy
@@ -313,7 +436,8 @@
   (MdImage)
   (MdHtmlInline)
   (MdSoftBreak)
-  (MdHardBreak))
+  (MdHardBreak)
+  (MdStrikethrough))
 ;;; md/-inl-of -- internal: the arena inline behind id.
 
 (defn md/-inl-of [d : MdDoc id : MdInlineId] : MdInl
@@ -329,7 +453,7 @@
           (vec-push! out (MdInlineId c))
           (set! c (.next (vec-get (.inls d) c)))))
       out)))
-;;; markdown/inlines -- a paragraph's or heading's inlines, in order.
+;;; markdown/inlines -- a paragraph's, heading's or table cell's inlines, in order.
 ;;;
 ;;; Parameters:
 ;;;   d  -- the document
@@ -344,7 +468,7 @@
 ;;; Since: markdown-library-plan M2
 (defn markdown/inlines [d : MdDoc id : MdBlockId] : (Vec MdInlineId)
   (md/-inl-ids d (.inl (md/-node-of d id))))
-;;; markdown/inline-children -- the inlines inside emphasis, strong emphasis, a link or an image.
+;;; markdown/inline-children -- the inlines inside emphasis, strong emphasis, strikethrough, a link or an image.
 ;;;
 ;;; Parameters:
 ;;;   d  -- the document
@@ -393,6 +517,8 @@
     (MdSoftBreak)
     (MdIHardBreak)
     (MdHardBreak)
+    (MdIStrike)
+    (MdStrikethrough)
     (MdIRoot)
     (MdText)))
 ;;; markdown/inline-text -- the text of a text, code or raw-HTML inline.
