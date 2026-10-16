@@ -1362,6 +1362,12 @@ static char *emit_agg_box(EmitCtx *ctx, Buf *body, Type t, const char *val) {
     free(bx);
     return out;
 }
+/* `e` with any EX_ASCRIBE wrappers peeled off. */
+static const Expr *expr_strip_ascribe(const Expr *e) {
+    while (e && e->kind == EX_ASCRIBE) e = e->as.ascribe_.inner;
+    return e;
+}
+
 static char *emit_agg_unbox(EmitCtx *ctx, Type t, const char *val) {
     const char *cn = emit_type_c_name(ctx, emit_resolve_type(ctx, t));
     /* repr-trace: int64 slot deref'd back to the by-value aggregate. */
@@ -5580,6 +5586,33 @@ static void emit_merge_assign_bridged(Buf *body, const char *tmp, const char *va
         tmp ? emit_localvar_lookup_ctype(tmp) : NULL, val);
     if (cast) buf_printf(body, "%s = (%s)(intptr_t)(%s);\n", tmp, cast, val);
     else      buf_printf(body, "%s = %s;\n", tmp, val);
+}
+
+/* match-arm-inline-c-carrier-not-bridged: a `match` arm whose tail hands back
+ * the int64 carrier box -- an inline-C body declared `(Option T)` / `(Result T
+ * E)`, a carrier construct, an `__inst_` method -- into a merge temp declared
+ * as that value's by-value form: the niche `void *` of `(Option String)`, the
+ * `tur_adt_Result__...` struct.  emit_if_value bridges such an arm
+ * carrier->concrete; the match emitters assigned the box as is, so the box
+ * address was read as the String, or the struct assignment failed in cc.
+ *
+ * The same bridge, gated tighter than the if arm's: the arm must be a carrier
+ * producer whose by-value type is exactly what the temp was declared as, since
+ * the match temp is declared from the match's own type rather than from its
+ * arms.  Returns a replacement for `val` (caller frees). */
+static char *match_arm_carrier_bridge(EmitCtx *ctx, Buf *body,
+                                      const Expr *arm_body, const char *tmp,
+                                      char *val) {
+    const char *tc = tmp ? emit_localvar_lookup_ctype(tmp) : NULL;
+    if (!tc || !fn_body_tail_is_carrier_producer(arm_body) ||
+        fn_body_tail_emits_byvalue_carrier_abi(ctx, arm_body))
+        return val;
+    Type abv = fn_body_tail_byvalue_carrier_type(ctx, arm_body);
+    if (abv.kind == TY_UNKNOWN ||
+        strcmp(emit_type_c_name(ctx, abv), tc) != 0 ||
+        emit_arm_is_recorded_byval_agg(ctx, val, abv))
+        return val;
+    return emit_carrier_bridge(ctx, body, val, CK_CARRIER, CK_CONCRETE, abv);
 }
 
 /* panicking-if-branch-leaks-cc-uninitialized-warning: a branch that diverges
@@ -15168,9 +15201,15 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                         !find_matched_abi_spec(ctx, mwb_arg, acb))
                         mwb_arg_is_carrier_accessor = true;
                 }
+                /* Set when this arm converts `raw`, so the straddle forward
+                 * mirror below, which tests the argument EXPRESSION rather
+                 * than `raw`, does not deref the converted aggregate again
+                 * (byvalue-sum-from-vec-get-bridged-twice). */
+                bool mwb_bridged = false;
                 if (!needs_fn_cast && !matched_spec && !pbp_carrier_cast &&
                     mwb_param_wide && mwb_arg_is_carrier_accessor &&
                     emit_arg && !expr_is_pbp_param(ctx, emit_arg)) {
+                    mwb_bridged = true;
                     /* A wide (> 16 byte) by-value aggregate param is taken
                      * pass-by-pointer (`const T *`); hand it the box pointer cast
                      * to that pointer (no deref).  A 9..16 byte aggregate is taken
@@ -15354,12 +15393,26 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                  * ordinary carrier-`:int` consumer or an already-by-value arg is
                  * untouched.  See
                  * docs/archive/inline-c-option-byvalue-carrier-straddle.md. */
+                /* This arm's condition also CLAIMS the argument for the chain
+                 * (a later arm must not fire on it), so the two tests below
+                 * that say `raw` needs no bridge sit on the bridge itself, not
+                 * here (byvalue-sum-from-vec-get-bridged-twice):
+                 *  - the multiword-element-boxing arm above already converted
+                 *    `raw` (mwb_bridged), and
+                 *  - only a DIRECT producer call (through ascriptions) leaves
+                 *    the carrier in `raw`.  A let / do / if / match around it
+                 *    declares its result temp by the tail's by-value type and
+                 *    bridges the tail itself, so `raw` is already the
+                 *    aggregate (`map-get` is such a let, and so is
+                 *    `(show-opt (let [k 1] (mk-opt k)))`). */
                 else if (!needs_fn_cast && !matched_spec &&
                          !callee_param_is_typed_heap_ptr &&
                          emit_arg && fn_name &&
                          !fn_body_tail_emits_byvalue_carrier_abi(ctx, emit_arg)) {
                     Type arg_bv = fn_body_tail_byvalue_carrier_type(ctx, emit_arg);
-                    if (arg_bv.kind != TY_UNKNOWN) {
+                    const Expr *producer = expr_strip_ascribe(emit_arg);
+                    if (arg_bv.kind != TY_UNKNOWN && !mwb_bridged &&
+                        producer && producer->kind == EX_CALL) {
                         const char *pc = emit_sig_lookup_param_ctype(fn_name, i);
                         if (!pc && fn_binding->type.kind == TY_FN &&
                             i < fn_binding->type.as.fn.arity &&
@@ -20831,6 +20884,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
@@ -20955,6 +21009,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
@@ -21123,6 +21178,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                                                       ctx->match_tail->env);
                         } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                             char *bv = emit_value(ctx, body, arm->body);
+                            bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                             indent_buf(body, ctx->indent);
                             emit_merge_assign_bridged(body, tmp, bv);
                             free(bv);
@@ -21812,6 +21868,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
@@ -22289,6 +22346,7 @@ static char *emit_value_dispatch(EmitCtx *ctx, Buf *body, const Expr *e) {
                     } else if (!nil_result && arm->body->type.kind != TY_NEVER) {
                         char *bv = emit_value(ctx, body, arm->body);
                         bv = match_arm_pbp_deref(ctx, arm->body, e->type, bv);
+                        bv = match_arm_carrier_bridge(ctx, body, arm->body, tmp, bv);
                         indent_buf(body, ctx->indent);
                         emit_merge_assign_bridged(body, tmp, bv);
                         free(bv);
