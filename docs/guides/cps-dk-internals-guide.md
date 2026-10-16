@@ -102,8 +102,10 @@ does replace `ctx->prog`, and its `source_fn_def` retargeting is relied on, so
 the pass cannot simply be deleted.
 
 **The coloring and classification the backend uses run at emission time, not
-in the pass list.** The first emitter query, the preamble gate
-`emit_cps_ir_program_has_emittable` in `emit_module.c`, calls `ensure_S`. That
+in the pass list.** `ensure_S` runs lazily, on the first emitter query that
+needs it. That is usually the first function body's `emit_cps_ir_try_fn`:
+bodies are emitted before the preamble text is generated, so the preamble gate
+`emit_cps_ir_program_has_emittable` comes later and hits the cache. `ensure_S`
 runs `cps_color_program` on the tree being emitted and caches the result,
 keyed on the program and `EmitCtx` addresses. `emit_cps_ir_forget` clears the
 cache at the start and end of every top-level emission, because `tur lsp` and
