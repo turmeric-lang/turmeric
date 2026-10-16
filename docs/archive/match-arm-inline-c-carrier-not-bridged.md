@@ -60,3 +60,40 @@ such a producer has to convert it into its result temp.
   with the bridged type, as `emit_if_value` arranges.
 - Pin it with the repro above, a `Result` arm, and a `match` over an ADT
   scrutinee as well as a literal one, since they take different emitters.
+
+## Resolution (2026-10-16)
+
+Every `match` arm assignment now goes through `match_arm_carrier_bridge`
+(`src/compiler/emit_expr.c`, beside `emit_merge_assign_bridged`). It applies
+the `if` arm's carrier->concrete bridge to an arm when all of these hold:
+
+- the arm is a carrier producer (`fn_body_tail_is_carrier_producer`) whose
+  tail does not already emit the by-value aggregate;
+- the arm's by-value type (`fn_body_tail_byvalue_carrier_type`) spells
+  exactly the C type the merge temp was declared and recorded with;
+- the value in hand is not already a recorded by-value local.
+
+It is called at all five arm sites: the ADT if-chain and switch emitters, the
+literal-pattern emitter, the `any`/union emitter and the session emitter. The
+gate is tighter than the `if` arm's because the match temp is declared from
+the match's own type, not from its arms: an arm that already yields the
+by-value form (a constructor built by value, a variable) is left alone.
+
+A match in a function's tail position needed nothing: `emit_tail` returns each
+arm through the function's own return bridge.
+
+Passing the match straight to a by-value parameter also needed the call-argument
+change from
+[byvalue-sum-from-vec-get-bridged-twice](byvalue-sum-from-vec-get-bridged-twice.md)
+(PR #1227). The straddle forward mirror otherwise unboxes the already-bridged
+temp a second time. That change landed first, in #1227.
+
+Pinned by `match-arm-inline-c-carrier-bridged`:
+
+- `(Option String)`, `(Result String int)`, `(Option int)` and `(Option float)`
+  (7.1) producers;
+- literal, string, ADT and `Option` scrutinees;
+- tail and non-tail matches;
+- producer arms mixed with constructor arms.
+
+On the unfixed `main` that fixture has 22 cc errors.
