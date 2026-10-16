@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml/badge.svg)](https://github.com/turmeric-lang/turmeric/actions/workflows/ci.yml)
 
-**Latest release:** `v0.65.4` -- `stdlib/markdown.tur` parses CommonMark blocks into HTML, stdlib loads inside a `defmodule` are now global, and small `tur build` compiles only the definitions your program can reach.
+**Latest release:** `v0.65.5` -- `stdlib/markdown.tur` now parses CommonMark inline syntax -- emphasis, links, code spans and more -- and renders it to HTML.
 
 ## What
 

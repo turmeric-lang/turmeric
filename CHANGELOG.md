@@ -2,6 +2,16 @@
 
 All notable changes to Turmeric are documented here.
 
+## [0.65.5] -- 2026-10-16
+
+### Added
+
+- **`stdlib/markdown.tur` now parses and renders inline syntax.** Emphasis and
+  strong via the delimiter-run algorithm, code spans, backslash escapes,
+  character references, inline and reference links and images with nested
+  brackets, autolinks, raw inline HTML, and hard and soft breaks. The `raw-HTML`
+  option now applies to inline HTML, and image alt text escapes raw HTML.
+
 ## [0.65.4] -- 2026-10-16
 
 ### Added
