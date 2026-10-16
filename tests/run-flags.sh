@@ -884,33 +884,37 @@ fi
 # tur run --release / tur build --release compile at -O3; without the flag the
 # cc step stays at -O2 (decision 2 of the performance audit).  TUR_SHOW_CC
 # prints the cc command line.  TUR_CC_FLAGS would replace both, so unset it.
+# (bash globs on the captured line, not `| grep -q` -- see the SIGPIPE/pipefail
+# note above.)
 _rel_src="$(mktemp -t tur-release-XXXXXX).tur"
 echo '(defn main [] : int (do (println (+ 40 2)) 0))' > "$_rel_src"
 _rel_exe="$(mktemp -t tur-release-exe-XXXXXX)"
 out=$(env -u TUR_CC_FLAGS TUR_SHOW_CC=1 "$TUR" run --release "$_rel_src" 2>&1); rc=$?
+cc_line=$(grep -m1 '^CC: ' <<< "$out")
 if [ $rc -ne 0 ]; then
     fail "run-release-o3" "expected exit 0, got $rc; output: $out"
-elif ! grep -q "42" <<< "$out"; then
+elif [[ "$out" != *"42"* ]]; then
     fail "run-release-o3" "expected '42' in output, got '$out'"
-elif ! grep '^CC: ' <<< "$out" | grep -q -- ' -O3 '; then
-    fail "run-release-o3" "expected -O3 on the cc line, got: $(grep '^CC: ' <<< "$out" | head -1)"
+elif [[ "$cc_line" != *" -O3 "* ]]; then
+    fail "run-release-o3" "expected -O3 on the cc line, got: $cc_line"
 else
     pass "run-release-o3"
 fi
 out=$(env -u TUR_CC_FLAGS TUR_SHOW_CC=1 "$TUR" build --release "$_rel_src" -o "$_rel_exe" 2>&1); rc=$?
+cc_line=$(grep -m1 '^CC: ' <<< "$out")
 if [ $rc -ne 0 ]; then
     fail "build-release-o3" "expected exit 0, got $rc; output: $out"
-elif ! grep '^CC: ' <<< "$out" | grep -q -- ' -O3 '; then
-    fail "build-release-o3" "expected -O3 on the cc line, got: $(grep '^CC: ' <<< "$out" | head -1)"
+elif [[ "$cc_line" != *" -O3 "* ]]; then
+    fail "build-release-o3" "expected -O3 on the cc line, got: $cc_line"
 else
     pass "build-release-o3"
 fi
 out=$(env -u TUR_CC_FLAGS TUR_SHOW_CC=1 "$TUR" run "$_rel_src" 2>&1); rc=$?
+cc_line=$(grep -m1 '^CC: ' <<< "$out")
 if [ $rc -ne 0 ]; then
     fail "run-default-o2" "expected exit 0, got $rc; output: $out"
-elif ! grep '^CC: ' <<< "$out" | grep -q -- ' -O2 ' ||
-       grep '^CC: ' <<< "$out" | grep -q -- ' -O3 '; then
-    fail "run-default-o2" "expected -O2 and no -O3 on the cc line, got: $(grep '^CC: ' <<< "$out" | head -1)"
+elif [[ "$cc_line" != *" -O2 "* || "$cc_line" == *" -O3 "* ]]; then
+    fail "run-default-o2" "expected -O2 and no -O3 on the cc line, got: $cc_line"
 else
     pass "run-default-o2"
 fi
