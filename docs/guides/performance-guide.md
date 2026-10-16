@@ -1055,6 +1055,15 @@ build's ASan and UBSan skew every zone, and the report says so in its
 front end a median 8 ms, and an empty program still emitted 425 KB of
 prelude C that gcc mostly parses and discards
 ([WP1](https://github.com/turmeric-lang/turmeric/blob/main/docs/artifacts/perf-audit-2026-10/wp1-compile-latency.md)).
+
+`tur build` now hands gcc the pruned unit `tur jit` hands c2mir, with only
+what the program reaches. For `fib` that cuts the unit from 283 KB to 124 KB
+and gcc's compile from 125 ms to 52 ms, and corpus builds are ~8% faster
+(geomean 0.92). Most of a small build is now the link: about 70 ms of ld over
+`libturt_preamble.a` and `libturt_runtime.a` with `--gc-sections`.
+`TUR_CC_NO_PRUNE=1` turns the prune off. A `TUR-W0071` from `tur build` means
+it dropped something live and the full unit was compiled instead; that is a
+bug, so please report it.
 For `tur jit`, `TUR_JIT_TIMING=1` (below) splits the JIT leg further.
 
 ### Counters
