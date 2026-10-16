@@ -1,0 +1,34 @@
+;; inline-c-option-wrapped-producer-as-call-arg: an inline-C Option / Result
+;; producer wrapped in a let, do or if, passed to a function taking the
+;; by-value aggregate.  The wrapper declares its result temp by the tail's
+;; by-value type and bridges the tail into it; the inline-C straddle forward
+;; mirror then bridged the already-converted aggregate again and cc rejected
+;; it.  The direct calls are inline-c-option-byval-param's; these are the
+;; wrapped ones.  See docs/archive/byvalue-sum-from-vec-get-bridged-twice.md.
+(load "stdlib/string.tur")
+
+(defn mk-opt [n : int] : (Option String)
+  ```c
+  if (n == 0) return tur_none();
+  return tur_some_ptr(tur_string_from_bytes("hi", 2));
+  ```)
+
+(defn show-opt [o : (Option String)] : nil
+  (if (some? o) (println (string/to-cstr (unwrap o))) (println "none")))
+
+(defn mk-res [n : int] : (Result String int)
+  ```c
+  if (n < 0) return tur_err_int(99);
+  return tur_ok_ptr(tur_string_from_bytes("ok", 2));
+  ```)
+
+(defn show-res [r : (Result String int)] : nil
+  (if (ok? r) (println (string/to-cstr (ok-val r))) (println (err-val r))))
+
+(defn main [] : int
+  (show-opt (let [k 1] (mk-opt k)))                ;; hi
+  (show-opt (do (println "side") (mk-opt 0)))      ;; side, none
+  (show-opt (if (> 1 2) (mk-opt 1) (mk-opt 0)))    ;; none
+  (show-res (let [k 2] (mk-res k)))                ;; ok
+  (show-res (do (mk-res -1)))                      ;; 99
+  0)

@@ -1,0 +1,439 @@
+;;; markdown/inline -- CommonMark inline syntax: escapes, references and the scanners.
+;;;
+;;; The pieces of inline syntax the block parser already needs: backslash
+;;; escapes and character references (md/-push-unescaped!), the link label,
+;;; destination and title scanners a link reference definition is made of,
+;;; label normalisation, and the HTML tag scanner that starts an HTML block
+;;; of type 7.  The inline parser (markdown-library-plan M2) is built on the
+;;; same scanners.  Every scanner reads a String between two byte indices and
+;;; answers with the index just past what it matched, or -1.
+;;;
+;;; Since: markdown-library-plan M1
+;; The entity table, which loads unicode.tur and string.tur.
+(load "stdlib/markdown/entities.tur")
+;; ---- Byte classes ------------------------------------------------------------
+;; Bytes are ints here: 9 tab, 10 LF, 13 CR, 32 space, 34 ", 35 #, 38 &,
+;; 39 ', 40 (, 41 ), 47 /, 58 :, 59 ;, 60 <, 61 =, 62 >, 91 [, 92 \, 93 ],
+;; 96 `, 124 |.
+;;; md/-byte -- internal: the byte at i of s, or -1 outside it.
+
+(defn md/-byte [s : String i : int] : int
+  (if (and (>= i 0) (< i (string/len s))) (string/byte-at s i) -1))
+;;; md/-space-tab? -- internal: is b a space or a tab?
+
+(defn md/-space-tab? [b : int] : bool (or (= b 32) (= b 9)))
+;;; md/-ws? -- internal: is b ASCII whitespace: space, tab, LF, VT, FF or CR?
+
+(defn md/-ws? [b : int] : bool (or (= b 32) (and (>= b 9) (<= b 13))))
+;;; md/-punct? -- internal: is b ASCII punctuation, which a backslash escapes?
+
+(defn md/-punct? [b : int] : bool
+  (or (and (>= b 33) (<= b 47))
+    (and (>= b 58) (<= b 64))
+    (and (>= b 91) (<= b 96))
+    (and (>= b 123) (<= b 126))))
+;;; md/-digit? -- internal: is b an ASCII digit?
+
+(defn md/-digit? [b : int] : bool (and (>= b 48) (<= b 57)))
+;;; md/-alpha? -- internal: is b an ASCII letter?
+
+(defn md/-alpha? [b : int] : bool
+  (or (and (>= b 65) (<= b 90)) (and (>= b 97) (<= b 122))))
+;;; md/-alnum? -- internal: is b an ASCII letter or digit?
+
+(defn md/-alnum? [b : int] : bool (or (md/-alpha? b) (md/-digit? b)))
+;;; md/-hex? -- internal: is b an ASCII hex digit?
+
+(defn md/-hex? [b : int] : bool
+  (or (md/-digit? b) (and (>= b 65) (<= b 70)) (and (>= b 97) (<= b 102))))
+;;; md/-hex-val -- internal: the value of hex digit b.
+
+(defn md/-hex-val [b : int] : int
+  (cond (md/-digit? b) (- b 48) (<= b 70) (- b 55) :else (- b 87)))
+;;; md/-lower -- internal: b in ASCII lower case.
+
+(defn md/-lower [b : int] : int (if (and (>= b 65) (<= b 90)) (+ b 32) b))
+;;; md/-skip-ws -- internal: the first index at or after i, before end, that is not ASCII whitespace.
+
+(defn md/-skip-ws [s : String i0 : int end : int] : int
+  (let [^mut i i0]
+    (do
+      (while (and (< i end) (md/-ws? (string/byte-at s i))) (set! i (+ i 1)))
+      i)))
+;;; md/-skip-spaces -- internal: the first index at or after i, before end, that is not a space.
+
+(defn md/-skip-spaces [s : String i0 : int end : int] : int
+  (let [^mut i i0]
+    (do (while (and (< i end) (= (string/byte-at s i) 32)) (set! i (+ i 1))) i)))
+;; ---- Character references ----------------------------------------------------
+;; &name; (an HTML5 entity name), &#digits; (1-7) and &#xhex; (1-6).  A
+;; reference to 0, a surrogate or a value past U+10FFFF stands for U+FFFD.
+;;; md/-run-end -- internal: the end of the run of bytes from i (at most max) that satisfy the class: 0 digits, 1 hex digits, 2 letters and digits.
+
+(defn md/-run-end [s : String i0 : int end : int max : int cls : int] : int
+  (let [^mut i  i0
+        ^mut go true]
+    (do
+      (while (and go (< i end) (< (- i i0) max))
+        (let [b (string/byte-at s i)]
+          (if (cond (= cls 0) (md/-digit? b)
+                    (= cls 1) (md/-hex? b)
+                    :else     (md/-alnum? b))
+            (set! i (+ i 1))
+            (set! go false))))
+      i)))
+;;; md/-num-val -- internal: the value of the digits [i, end) of s in base 10 or 16.
+
+(defn md/-num-val [s : String i0 : int end : int base : int] : int
+  (let [^mut i i0
+        ^mut v 0]
+    (do
+      (while (< i end)
+        (do
+          (set! v (+ (* v base) (md/-hex-val (string/byte-at s i))))
+          (set! i (+ i 1))))
+      v)))
+;;; md/-push-cp! -- internal: append the code point a numeric reference names, U+FFFD for 0.
+
+(defn md/-push-cp! [b : StringBuilder cp : int] : void
+  (utf8/push-char! b (int->char (if (= cp 0) 65533 cp))))
+;;; md/-push-numeric! -- internal: append the numeric reference whose digits start at i; the index past its ; or -1.
+
+(defn md/-push-numeric! [b : StringBuilder s : String i : int end : int] : int
+  (let [x (or (= (md/-byte s i) 120) (= (md/-byte s i) 88))
+        d (if x (+ i 1) i)
+        e (md/-run-end s d end (if x 6 7) (if x 1 0))]
+    (if (and (> e d) (< e end) (= (string/byte-at s e) 59))
+      (do (md/-push-cp! b (md/-num-val s d e (if x 16 10))) (+ e 1))
+      -1)))
+;;; md/-push-named! -- internal: append the named reference whose name starts at i; the index past its ; or -1.
+
+(defn md/-push-named! [b : StringBuilder s : String i : int end : int] : int
+  (let [e (md/-run-end s i end 32 2)]
+    (if (and (md/-alpha? (md/-byte s i))
+          (>= (- e i) 2)
+          (< e end)
+          (= (string/byte-at s e) 59))
+      (let [name (string/substring s i (- e i))
+            hit  (markdown/entity-lookup name)]
+        (do
+          (string/release name)
+          (match hit
+            (Some t)
+            (do (builder/push-string! b t) (string/release t) (+ e 1))
+            (None)
+            -1)))
+      -1)))
+;;; md/-push-entity! -- internal: append the character reference at i (an &); the index past it, or -1 when there is none.
+
+(defn md/-push-entity! [b : StringBuilder s : String i : int end : int] : int
+  (if (= (md/-byte s (+ i 1)) 35)
+    (md/-push-numeric! b s (+ i 2) end)
+    (md/-push-named! b s (+ i 1) end)))
+;;; md/-entity-into! -- internal: at an & at i, flush [run, i) and append the reference; the index past it, or -1 (nothing appended).
+
+(defn md/-entity-into! [b : StringBuilder
+                        s : String
+                        run : int
+                        i : int
+                        end : int] : int
+  (let [t (builder/new)
+        e (md/-push-entity! t s i end)]
+    (if (> e 0)
+      (do
+        (string/-push-range! b s run i)
+        (let [r (builder/finish t)]
+          (do (builder/push-string! b r) (string/release r) e)))
+      (do (string/release (builder/finish t)) -1))))
+;;; md/-push-unescaped! -- internal: append [i, end) of s with backslash escapes and character references replaced.
+
+(defn md/-push-unescaped! [b : StringBuilder s : String i0 : int end : int] : void
+  (let [^mut i   i0
+        ^mut run i0]
+    (do
+      (while (< i end)
+        (let [c (string/byte-at s i)]
+          (cond (and (= c 92)
+                  (< (+ i 1) end)
+                  (md/-punct? (string/byte-at s (+ i 1))))                             (do
+                                                                                         (string/-push-range! b
+                                                                                           s
+                                                                                           run
+                                                                                           i)
+                                                                                         (set! run
+                                                                                           (+ i
+                                                                                             1))
+                                                                                         (set! i
+                                                                                           (+ i
+                                                                                             2)))
+                (= c 38)                                                               (let [e (md/-entity-into! b
+                                                                                                 s
+                                                                                                 run
+                                                                                                 i
+                                                                                                 end)]
+                                                                                         (if (> e
+                                                                                               0)
+                                                                                           (do
+                                                                                             (set! i
+                                                                                               e)
+                                                                                             (set! run
+                                                                                               e))
+                                                                                           (set! i
+                                                                                             (+ i
+                                                                                               1))))
+                :else                                                                  (set! i
+                                                                                         (+ i
+                                                                                           1)))))
+      (string/-push-range! b s run end))))
+;;; md/-unescape -- internal: [i, end) of s with escapes and references replaced, as a fresh String.
+
+(defn md/-unescape [s : String i : int end : int] : String
+  (let [b (builder/new)]
+    (do (md/-push-unescaped! b s i end) (builder/finish b))))
+;; ---- Link reference pieces ---------------------------------------------------
+;;; md/-scan-label -- internal: the end of the link label whose [ is at i: [ ... ] with at most 999 bytes inside and no unescaped bracket.
+
+(defn md/-scan-label [s : String i : int end : int] : int
+  (if (not (= (md/-byte s i) 91))
+    -1
+    (let [^mut j   (+ i 1)
+          ^mut res -2]
+      (do
+        (while (= res -2)
+          (if (or (>= j end) (> (- j i) 1000))
+            (set! res -1)
+            (let [c (string/byte-at s j)]
+              (cond (= c 93) (set! res (+ j 1))
+                    (= c 91) (set! res -1)
+                    (= c 92) (set! j (+ j 2))
+                    :else    (set! j (+ j 1))))))
+        (if (and (> res 0) (> (- res i) 1001)) -1 res)))))
+;;; md/-spnl -- internal: skip spaces, at most one line ending, and spaces.
+
+(defn md/-spnl [s : String i : int end : int] : int
+  (let [j (md/-skip-spaces s i end)]
+    (if (and (< j end) (= (string/byte-at s j) 10))
+      (md/-skip-spaces s (+ j 1) end)
+      j)))
+;;; md/-space-eol -- internal: past spaces and the line ending (or the end) after i, or -1 when something else comes first.
+
+(defn md/-space-eol [s : String i : int end : int] : int
+  (let [j (md/-skip-spaces s i end)]
+    (cond (>= j end) j (= (string/byte-at s j) 10) (+ j 1) :else -1)))
+;;; md/-scan-dest-angle -- internal: the end of an <...> destination whose content starts at i.
+
+(defn md/-scan-dest-angle [s : String i : int end : int] : int
+  (let [^mut j   i
+        ^mut res -2]
+    (do
+      (while (= res -2)
+        (if (>= j end)
+          (set! res -1)
+          (let [c (string/byte-at s j)]
+            (cond (= c 62)               (set! res (+ j 1))
+                  (or (= c 60) (= c 10)) (set! res -1)
+                  (= c 92)               (if (and (< (+ j 1) end)
+                                               (not (= (string/byte-at s
+                                                         (+ j 1))
+                                                      10)))
+                                           (set! j (+ j 2))
+                                           (set! res -1))
+                  :else                  (set! j (+ j 1))))))
+      res)))
+;;; md/-scan-dest-plain -- internal: the end of a destination without <>: balanced parentheses, no whitespace.
+
+(defn md/-scan-dest-plain [s : String i : int end : int] : int
+  (let [^mut j      i
+        ^mut parens 0
+        ^mut stop   -1
+        ^mut go     true]
+    (do
+      (while (and go (< j end))
+        (let [c (string/byte-at s j)]
+          (cond (and (= c 92)
+                  (< (+ j 1) end)
+                  (md/-punct? (string/byte-at s (+ j 1))))                             (set! j
+                                                                                         (+ j
+                                                                                           2))
+                (= c 40)                                                               (do
+                                                                                         (set! j
+                                                                                           (+ j
+                                                                                             1))
+                                                                                         (set! parens
+                                                                                           (+ parens
+                                                                                             1)))
+                (= c 41)                                                               (if (< parens
+                                                                                             1)
+                                                                                         (do
+                                                                                           (set! stop
+                                                                                             c)
+                                                                                           (set! go
+                                                                                             false))
+                                                                                         (do
+                                                                                           (set! j
+                                                                                             (+ j
+                                                                                               1))
+                                                                                           (set! parens
+                                                                                             (- parens
+                                                                                               1))))
+                (md/-ws? c)                                                            (do
+                                                                                         (set! stop
+                                                                                           c)
+                                                                                         (set! go
+                                                                                           false))
+                :else                                                                  (set! j
+                                                                                         (+ j
+                                                                                           1)))))
+      (cond (and (= j i) (not (= stop 41))) -1 (not (= parens 0)) -1 :else j))))
+;;; md/-scan-dest -- internal: the end of the link destination at i, or -1.
+
+(defn md/-scan-dest [s : String i : int end : int] : int
+  (if (= (md/-byte s i) 60)
+    (md/-scan-dest-angle s (+ i 1) end)
+    (md/-scan-dest-plain s i end)))
+;;; md/-scan-title -- internal: the end of the link title at i, in "", '' or ().
+
+(defn md/-scan-title [s : String i : int end : int] : int
+  (let [open  (md/-byte s i)
+        close (if (= open 40) 41 open)]
+    (if (not (or (= open 34) (= open 39) (= open 40)))
+      -1
+      (let [^mut j   (+ i 1)
+            ^mut res -2]
+        (do
+          (while (= res -2)
+            (if (>= j end)
+              (set! res -1)
+              (let [c (string/byte-at s j)]
+                (cond (= c close)                (set! res (+ j 1))
+                      (= c 92)                   (if (< (+ j 1) end)
+                                                   (set! j (+ j 2))
+                                                   (set! res -1))
+                      (and (= open 40) (= c 40)) (set! res -1)
+                      :else                      (set! j (+ j 1))))))
+          res)))))
+;;; md/-normalize-label -- internal: the label [i, end) of s (brackets included) as references match it: trimmed, inner whitespace collapsed to one space, case-folded.
+
+(defn md/-normalize-label [s : String i : int end : int] : String
+  (let [b        (builder/new)
+        ^mut j   (md/-skip-ws s (+ i 1) (- end 1))
+        ^mut gap false]
+    (do
+      (while (< j (- end 1))
+        (let [c (string/byte-at s j)]
+          (if (md/-ws? c)
+            (set! gap true)
+            (do
+              (when gap (builder/push-byte! b 32))
+              (set! gap false)
+              (builder/push-byte! b c)))
+          (set! j (+ j 1))))
+      (let [raw    (builder/finish b)
+            folded (unicode/fold-case raw)]
+        (do (string/release raw) folded)))))
+;; ---- HTML tags -----------------------------------------------------------------
+;; The open and close tags CommonMark recognises (spec section 6.6): a tag
+;; name, then attributes, each a name with an optional unquoted, '' or ""
+;; value, then an optional / and the >.
+;;; md/-name-start? -- internal: can b start an attribute name?
+
+(defn md/-name-start? [b : int] : bool (or (md/-alpha? b) (= b 95) (= b 58)))
+;;; md/-name-byte? -- internal: can b continue an attribute name?
+
+(defn md/-name-byte? [b : int] : bool
+  (or (md/-alnum? b) (= b 95) (= b 58) (= b 46) (= b 45)))
+;;; md/-tag-name-end -- internal: the end of the tag name at i (a letter, then letters, digits and -), or -1.
+
+(defn md/-tag-name-end [s : String i0 : int end : int] : int
+  (if (not (and (< i0 end) (md/-alpha? (string/byte-at s i0))))
+    -1
+    (let [^mut i (+ i0 1)]
+      (do
+        (while (and (< i end)
+                 (let [b (string/byte-at s i)] (or (md/-alnum? b) (= b 45))))
+          (set! i (+ i 1)))
+        i))))
+;;; md/-attr-name-end -- internal: the end of the attribute name at i.
+
+(defn md/-attr-name-end [s : String i0 : int end : int] : int
+  (let [^mut i (+ i0 1)]
+    (do
+      (while (and (< i end) (md/-name-byte? (string/byte-at s i)))
+        (set! i (+ i 1)))
+      i)))
+;;; md/-unquoted-byte? -- internal: can b be in an unquoted attribute value?
+
+(defn md/-unquoted-byte? [b : int] : bool
+  (not (or (<= b 32) (= b 34) (= b 39) (= b 61) (= b 60) (= b 62) (= b 96))))
+;;; md/-attr-value-end -- internal: the end of the attribute value at i, or -1.
+
+(defn md/-attr-value-end [s : String i : int end : int] : int
+  (let [q (md/-byte s i)]
+    (if (or (= q 34) (= q 39))
+      (let [^mut j (+ i 1)]
+        (do
+          (while (and (< j end) (not (= (string/byte-at s j) q)))
+            (set! j (+ j 1)))
+          (if (< j end) (+ j 1) -1)))
+      (let [^mut j i]
+        (do
+          (while (and (< j end) (md/-unquoted-byte? (string/byte-at s j)))
+            (set! j (+ j 1)))
+          (if (> j i) j -1))))))
+;;; md/-attr-end -- internal: the end of one attribute (whitespace, name, optional value) at i, or -1.
+
+(defn md/-attr-end [s : String i : int end : int] : int
+  (let [n (md/-skip-ws s i end)]
+    (if (or (= n i) (>= n end) (not (md/-name-start? (string/byte-at s n))))
+      -1
+      (let [ne (md/-attr-name-end s n end)
+            eq (md/-skip-ws s ne end)]
+        (if (and (< eq end) (= (string/byte-at s eq) 61))
+          (let [v (md/-attr-value-end s (md/-skip-ws s (+ eq 1) end) end)]
+            (if (< v 0) ne v))
+          ne)))))
+;;; md/-open-tag-end -- internal: the end of the open tag whose < is at i, or -1.
+
+(defn md/-open-tag-end [s : String i : int end : int] : int
+  (let [t (md/-tag-name-end s (+ i 1) end)]
+    (if (< t 0)
+      -1
+      (let [^mut j t
+            ^mut a (md/-attr-end s t end)]
+        (do
+          (while (> a 0) (do (set! j a) (set! a (md/-attr-end s j end))))
+          (let [k  (md/-skip-ws s j end)
+                k2 (if (= (md/-byte s k) 47) (+ k 1) k)]
+            (if (= (md/-byte s k2) 62) (+ k2 1) -1)))))))
+;;; md/-close-tag-end -- internal: the end of the close tag whose < is at i, or -1.
+
+(defn md/-close-tag-end [s : String i : int end : int] : int
+  (if (not (= (md/-byte s (+ i 1)) 47))
+    -1
+    (let [t (md/-tag-name-end s (+ i 2) end)]
+      (if (< t 0)
+        -1
+        (let [k (md/-skip-ws s t end)] (if (= (md/-byte s k) 62) (+ k 1) -1))))))
+;;; md/-lower-run -- internal: the letters and digits from i of s, lower-cased, as a fresh String.
+
+(defn md/-lower-run [s : String i0 : int end : int] : String
+  (let [b      (builder/new)
+        ^mut i i0]
+    (do
+      (while (and (< i end) (md/-alnum? (string/byte-at s i)))
+        (do
+          (builder/push-byte! b (md/-lower (string/byte-at s i)))
+          (set! i (+ i 1))))
+      (builder/finish b))))
+;;; md/-word-in? -- internal: is name one of the |-separated words of list?
+
+(defn md/-word-in? [list : cstr name : String] : bool
+  (let [hay (string/from-cstr list)
+        b   (builder/new)]
+    (do
+      (builder/push-byte! b 124)
+      (builder/push-string! b name)
+      (builder/push-byte! b 124)
+      (let [needle (builder/finish b)
+            hit    (some? (string/index-of hay needle))]
+        (do (string/release needle) (string/release hay) hit)))))

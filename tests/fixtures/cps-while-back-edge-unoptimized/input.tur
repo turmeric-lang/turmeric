@@ -1,0 +1,48 @@
+;; cps-while-back-edge-grows-the-stack: each `while` here is lowered through
+;; the CPS backend (its body calls a ^fat callback through a CPS function), so
+;; its back-edge re-enters the loop helper from a join lifted out of the body.
+;; That is constant-stack only through the bounce; hook.sh builds at -O0 so no
+;; sibling-call optimization can stand in for it.
+
+(defeffect Ask [] int)
+
+(defn call [^fat f : (fn [int] int) x : int] : int
+  (f x))
+
+;; 1. The report's repro: two callback calls a step, a loop-carried ^mut
+;;    (a heap cell) and three loop invariants (a, b, n).
+(defn maxdiff [^fat a : (fn [int] int) ^fat b : (fn [int] int) n : int] : int
+  (let [^mut k 0
+        ^mut m 0]
+    (while (< k n)
+      (let [d (- (call a k) (call b k))]
+        (if (> d m) (set! m d) (set! m m)))
+      (set! k (+ k 1)))
+    m))
+
+;; 2. A float accumulator carried through the bounce env.
+(defn fsum [^fat f : (fn [int] int) n : int] : float
+  (let [^mut i   0
+        ^mut acc 0.0]
+    (while (< i n)
+      (set! acc (+ acc (* 0.1 (as float (call f i)))))
+      (set! i (+ i 1)))
+    acc))
+
+;; 3. The callback performs an effect handled outside the loop.
+(defn ask-plus [x : int] : int (+ x (perform (Ask))))
+
+(defn count-asks [n : int] : int
+  (let [^mut i   0
+        ^mut acc 0]
+    (while (< i n)
+      (set! acc (+ acc (ask-plus 1)))
+      (set! i (+ i 1)))
+    acc))
+
+(defn main [] : int
+  (let [n 1000000]
+    (println (maxdiff (fn [x : int] : int (mod x 7)) (fn [x : int] : int (mod x 5)) n))
+    (println (fsum (fn [x : int] : int (mod x 3)) n))
+    (println (handle (count-asks n) (Ask [] k) (resume k 2))))
+  0)

@@ -86,7 +86,7 @@ Passing the match straight to a by-value parameter also needed the call-argument
 change from
 [byvalue-sum-from-vec-get-bridged-twice](byvalue-sum-from-vec-get-bridged-twice.md)
 (PR #1227). The straddle forward mirror otherwise unboxes the already-bridged
-temp a second time. This PR carries that hunk verbatim so it stands alone.
+temp a second time. That change landed first, in #1227.
 
 Pinned by `match-arm-inline-c-carrier-bridged`:
 

@@ -1396,6 +1396,17 @@ add_test(
   COMMAND bash tests/check-html-entities-sync.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+# markdown-library-plan 6.1: the CommonMark and GFM spec examples through
+# tur/markdown, compiled and under --interpret, against the ratchet in
+# tests/markdown-spec/ratchet.txt.  PASS-skips without the sibling
+# ../commonmark-spec checkout (CI fetches the commit in
+# tests/markdown-spec/PINNED).
+add_test(
+  NAME tur_markdown_spec
+  COMMAND bash tests/run-markdown-spec.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_markdown_spec PROPERTIES TIMEOUT 720)
 # T0/T1: the shared C of Scheme numbers -- src/compiler/r7rs_bignum.inc and
 # r7rs_numsyntax.inc (the source reader and the interpreter) -- and their
 # copies in stdlib/r7rs/bignum.tur and numsyntax.tur (the compiled back end)

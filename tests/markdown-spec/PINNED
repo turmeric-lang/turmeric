@@ -1,0 +1,6 @@
+a029e939cdf75017dde2237c337762a4b7b7b8e8
+# The commit of turmeric-lang/commonmark-spec that tests/run-markdown-spec.sh
+# (ctest tur_markdown_spec) runs against.  CI fetches exactly this commit into
+# ../commonmark-spec; locally, clone the repo there and check this commit out.
+# Moving the pin is a change to the test inputs, so it goes in its own commit,
+# with the ratchet re-run against it.

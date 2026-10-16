@@ -1,0 +1,70 @@
+;; byvalue-aggregate-element-as-call-arg: a by-value aggregate read out of a
+;; collection and passed STRAIGHT to a function taking it by value.  For a
+;; 9..16-byte aggregate (a tag plus one word, or a two-word struct) the
+;; element was dereferenced twice -- `(*(T *)(intptr_t)((*(T *)(intptr_t)(x))))`
+;; -- and cc rejected it ("aggregate value used where an integer was
+;; expected").  `vec-get` hit it through the multiword-element-boxing arm plus
+;; the inline-C straddle forward mirror; `map-get`, a macro around a let,
+;; through the let's own tail bridge plus the forward mirror.  Wider
+;; aggregates are passed by pointer and never hit it; they are here as the
+;; control.  See docs/archive/byvalue-sum-from-vec-get-bridged-twice.md.
+
+(defdata E :copy
+  (D :int)
+  (U))
+
+(defdata F :copy
+  (Fv :float)
+  (Fn))
+
+(defdata W :copy
+  (Wv :int :int)
+  (Wn))
+
+(defstruct P2 [x : int y : int])
+
+(defn e-val [e : E] :int
+  (match e
+    (D y) y
+    (U)   -1))
+
+(defn f-val [f : F] :float
+  (match f
+    (Fv y) y
+    (Fn)   -1.5))
+
+(defn w-sum [w : W] :int
+  (match w
+    (Wv a b) (+ a b)
+    (Wn)     -1))
+
+(defn p2-sum [p : P2] :int (+ (.x p) (.y p)))
+
+(defn d? [e : E x :int] :bool
+  (match e
+    (D y) (= x y)
+    (U)   false))
+
+(defn main [] : int
+  (let [es (:: (vec-new) (Vec E))
+        fs (:: (vec-new) (Vec F))
+        ws (:: (vec-new) (Vec W))
+        ps (:: (vec-new) (Vec P2))
+        m  (map-assoc (:: (map-new) (Map int E)) 1 (D 42))]
+    (vec-push! es (D 3))
+    (vec-push! es (U))
+    (vec-push! fs (Fv 7.1))
+    (vec-push! ws (Wv 2 5))
+    (vec-push! ps (make-struct P2 :x 4 :y 5))
+    (println (e-val (vec-get es 0)))                              ;; 3
+    (println (e-val (vec-get es 1)))                              ;; -1
+    (println (e-val (:: (vec-get es 0) E)))                       ;; 3
+    (println (f-val (vec-get fs 0)))                              ;; 7.1
+    (println (p2-sum (vec-get ps 0)))                             ;; 9
+    (println (w-sum (vec-get ws 0)))                              ;; 7 (pass-by-pointer control)
+    (println (if (d? (vec-get es 0) 3) "if-test" "no"))          ;; if-test
+    (println (and (d? (vec-get es 0) 3) (d? (vec-get es 1) 3)))   ;; false
+    (println (e-val (map-get m 1)))                               ;; 42
+    (println (e-val (let [k 0] (vec-get es k))))                  ;; 3
+    (println (e-val (if (> 2 1) (vec-get es 0) (vec-get es 1))))) ;; 3
+  0)
