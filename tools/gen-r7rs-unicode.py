@@ -36,6 +36,9 @@ What is covered, and how it is derived:
     properties), char-numeric? and digit-value (Nd), char-whitespace? (the
     White_Space property, whose list is fixed here since PropList.txt is
     not among the files ICU ships);
+  - CommonMark 0.31's Unicode whitespace (Zs plus tab, LF, FF and CR) and
+    Unicode punctuation (P* and S*), for stdlib/unicode.tur
+    (markdown-library-plan U), from the blank, punctuation and symbol runs;
   - the runs of SRFI 14's standard character sets (r7rs-srfi-plan S5), from
     the properties above and UnicodeData.txt's General Category: title-case
     (Lt), punctuation (P*), symbol (S*), graphic (L* N* M* S* P*) and blank
@@ -286,7 +289,10 @@ static int64_t r7rs_uc_mapc(int64_t cp, int64_t op) {
     return r7rs_uc_map1(r7rs_uc_to_fold, sizeof r7rs_uc_to_fold / sizeof *r7rs_uc_to_fold, (uint32_t)cp);
 }
 /* op 0 alphabetic, 1 upper-case, 2 lower-case, 3 whitespace: 1 or 0.
- * op 4: the digit value of an Nd character, or -1. */
+ * op 4: the digit value of an Nd character, or -1.
+ * op 5, 6: CommonMark 0.31's Unicode whitespace (Zs, or U+0009, U+000A,
+ * U+000C, U+000D) and Unicode punctuation (P* or S*), for stdlib/unicode.tur:
+ * 1 or 0. */
 static int64_t r7rs_uc_prop(int64_t cp, int64_t op) {
     if (cp < 0 || cp >= 0x110000) return op == 4 ? -1 : 0;
     uint32_t c = (uint32_t)cp;
@@ -295,6 +301,10 @@ static int64_t r7rs_uc_prop(int64_t cp, int64_t op) {
         case 1: return r7rs_uc_in(r7rs_uc_upper, sizeof r7rs_uc_upper / sizeof *r7rs_uc_upper, c);
         case 2: return r7rs_uc_in(r7rs_uc_lower, sizeof r7rs_uc_lower / sizeof *r7rs_uc_lower, c);
         case 3: return r7rs_uc_in(r7rs_uc_space, sizeof r7rs_uc_space / sizeof *r7rs_uc_space, c);
+        case 5: return c == 0x0A || c == 0x0C || c == 0x0D ||
+                       r7rs_uc_in(r7rs_uc_blank, sizeof r7rs_uc_blank / sizeof *r7rs_uc_blank, c);
+        case 6: return r7rs_uc_in(r7rs_uc_punct, sizeof r7rs_uc_punct / sizeof *r7rs_uc_punct, c) ||
+                       r7rs_uc_in(r7rs_uc_symbol, sizeof r7rs_uc_symbol / sizeof *r7rs_uc_symbol, c);
         default: {
             long k = r7rs_uc_find(r7rs_uc_nd0, sizeof r7rs_uc_nd0 / sizeof *r7rs_uc_nd0, sizeof *r7rs_uc_nd0, c);
             return (k >= 0 && c - r7rs_uc_nd0[k] < 10) ? (int64_t)(c - r7rs_uc_nd0[k]) : -1;
@@ -405,7 +415,7 @@ TUR_HEAD = """;;; r7rs/unicode -- the Unicode tables behind (scheme char) for `#
 ;;; and registers as natives over these four wrappers.
 ;;;
 ;;; Since: r7rs-lang-plan R10
-;; The prelude loads this file; nothing else should.
+;; The r7rs prelude and stdlib/unicode.tur load this file; nothing else should.
 """
 
 TUR_TAIL = """
@@ -416,7 +426,8 @@ TUR_TAIL = """
   return r7rs_uc_mapc(cp, op);
   ```)
 ;;; r7rs-uc-prop__ -- internal: 1/0 for alphabetic, upper, lower, whitespace
-;;; (op 0-3); op 4 is the digit value of an Nd character or -1.
+;;; (op 0-3); op 4 is the digit value of an Nd character or -1; op 5 and 6
+;;; are CommonMark's Unicode whitespace and punctuation (stdlib/unicode.tur).
 (defn r7rs-uc-prop__ [cp : int op : int] : int
   ```c
   return r7rs_uc_prop(cp, op);

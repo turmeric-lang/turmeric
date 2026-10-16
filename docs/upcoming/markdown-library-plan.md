@@ -1,8 +1,9 @@
 # tur/markdown -- CommonMark + GFM in Turmeric, and the string helpers it needs
 
 > **Status:** in progress. Phases S and J are done: S1 (#1200), S2 (#1209),
-> S3 (#1210), S4 (#1213) and S5; J1-J3 (#1201, #1202, #1207) and J4 (#1208).
-> Phases U and M are still plan. Written 2026-10-15; its open questions were
+> S3 (#1210), S4 (#1213) and S5 (#1216); J1-J3 (#1201, #1202, #1207) and J4
+> (#1208). U1 (Unicode classes, case folding, UTF-8 decoding) is implemented;
+> U2 (the entity table) and Phase M are still plan. Written 2026-10-15; its open questions were
 > settled with the author the same day (section 8). It started as "would
 > `tools/gendocs.py` be a candidate to move to Turmeric?" A straight gendocs port
 > turned out not to remove any dependency (see section 9). The Markdown renderer
@@ -171,7 +172,8 @@ where that differs from the first draft of this section:
 | **S3** | Split / join / lines, owned and zero-copy | No | Any time | ~250 lines |
 | **S4** | One-sided trims, literal replace, repeat, pad, parse-int | No | Any time | ~200 lines |
 | **S5** | Builder pushes and a concatenation macro | No | Any time | ~150 lines |
-| **U** | Unicode classes + case folding, HTML entity table | No | Before M2 | generator + tables |
+| **U1** | Unicode classes, case folding, UTF-8 decoding | No | Before M2 | generator change + ~150 lines |
+| **U2** | HTML entity table | No | Before M2 | generator + table |
 | **M1** | Block parser | No | Parallel / post-v1 | ~1.5k lines |
 | **M2** | Inline parser | No | Parallel / post-v1 | ~1.5k lines |
 | **M3** | HTML renderer, GFM extensions, heading ids | No | Parallel / post-v1 | ~0.8k lines |
@@ -182,7 +184,8 @@ where that differs from the first draft of this section:
 | **J3** | Docs, messages and skills say `tur run`, not `just` | No | After J1 | ~100 mentions |
 | **J4** | `release` and `tsan` build in their own trees; no bootstrap script | No | After J1 | ~20 lines + guide fixes |
 
-Each S phase is one PR. U is one PR. M1 to M3 are one PR each, with the spec
+Each S phase is one PR. U is two, U1 and U2 (split when it was built: the
+two halves share no code). M1 to M3 are one PR each, with the spec
 ratchet (section 5.1) rising each time. M4 is its own PR. M5 is one PR per
 consumer, and the notebook one lands in `turmeric-spices`. J1 and J2 are one PR;
 J3 is one more (mechanical, docs only); J4 is its own PR.
@@ -377,6 +380,25 @@ Plan:
 - A new `tools/gen-html-entities.py` turns WHATWG's `entities.json`, pinned by
   digest, into `stdlib/markdown/entities.tur`, which is generated and committed
   like the r7rs tables.
+
+**U1 as built.** `stdlib/unicode.tur` is hand-written Turmeric over the
+generated tables rather than generated itself. It loads
+`stdlib/r7rs/unicode.tur`, so there is one copy of the tables, not two:
+`tools/gen-r7rs-unicode.py` gained two classes in `r7rs_uc_prop` (op 5,
+CommonMark whitespace; op 6, CommonMark punctuation), built from the blank,
+punctuation and symbol runs it already had. That needed no new native,
+because the interpreter's `r7rs-uc-prop__` passes the op through.
+`unicode/fold-case` is the existing full fold (`r7rs-uc-string__` op 2),
+adopted into a `String`. UTF-8 decoding is plain Turmeric over
+`string/byte-at`, with U+FFFD for each maximal invalid subpart, and it has a
+mirror the plan did not list, `utf8/decode-before`, because the flanking
+rules look left as well as right. The r7rs prelude is unchanged.
+
+**U2 needs a different source.** `html.spec.whatwg.org` is not reachable
+through the build proxy, which allows GitHub. WHATWG has frozen the entity
+list, and CPython's `html.entities.html5` is generated from the same
+`entities.json`. So U2 can read either one and pin a digest of the extracted
+(name, value) table, so that a source that differs fails loudly.
 
 ## 6. Phase M -- `tur/markdown`
 

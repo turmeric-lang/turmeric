@@ -46,6 +46,12 @@ directory is worse for triage than no index.
 | --- | --- | --- |
 | [contract-purity-check-skipped-when-checks-off](contract-purity-check-skipped-when-checks-off.md) | low-medium | TUR-E0375 (a contract predicate with side effects) is raised only from the code that builds the runtime check. So a Release `tur`, or `--no-contracts` on any build, accepts an impure `:pre`, `:post` or refinement predicate that a Debug `tur` rejects. Only `:invariant` is checked regardless of the gate. |
 
+## Found writing `stdlib/unicode.tur` (filed 2026-10-16)
+
+| Report | Severity | One line |
+| --- | --- | --- |
+| [fmt-rewrites-hex-literals-and-string-escapes](fmt-rewrites-hex-literals-and-string-escapes.md) | low (formatter fidelity) | `tur fmt` prints `0xFF` as `255` and `"\xc3\xa9"` as raw UTF-8, because the reader keeps no radix and the printer re-escapes only bytes below 0x20. With `fmt-bootstrap-stdlib` enforcing fmt output, no stdlib file can keep a hex literal, and a formatted file with high-byte escapes is no longer ASCII. |
+
 ## Found adding `fs/read-string` (filed 2026-10-15)
 
 | Report | Severity | One line |

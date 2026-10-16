@@ -1,0 +1,120 @@
+;; unicode-classes -- markdown-library-plan U: CommonMark's Unicode
+;; whitespace and punctuation, full case folding, and UTF-8 decoding at and
+;; before a byte index.
+;;
+;; The source stays ASCII (fixtures must), so non-ASCII text is written with
+;; \x escapes, and code points and folded bytes are printed as numbers.
+
+(load "stdlib/unicode.tur")
+
+(defn yn [b : bool] : cstr (if b "y" "n"))
+
+;; "cp space? punct?"
+(defn classify [cp : int] : void
+  (let [c (int->char cp)
+        line (string/of cp " " (yn (unicode/space? c)) " " (yn (unicode/punct? c)))]
+    (do (println (string/to-cstr line)) (string/release line))))
+
+;; the bytes of s in decimal, space-separated
+(defn push-bytes [b : StringBuilder s : String i : int] : void
+  (when (< i (string/len s))
+    (do (when (> i 0) (builder/push-char! b #\space))
+        (builder/push-int! b (string/byte-at s i))
+        (push-bytes b s (+ i 1)))))
+
+;; fold c, then print the folded bytes
+(defn fold [c : cstr] : void
+  (let [s (string/from-cstr c)
+        f (unicode/fold-case s)
+        b (builder/new)]
+    (do (push-bytes b f 0)
+        (string/release f)
+        (string/release s)
+        (let [out (builder/finish b)]
+          (do (println (string/to-cstr out)) (string/release out))))))
+
+;; one decode result: "cp at" or "none"
+(defn show-decoded [o : (Option (Pair Char int))] : void
+  (match o
+    (Some p) (let [line (string/of (char->int (pair-fst p)) " " (pair-snd p))]
+               (do (println (string/to-cstr line)) (string/release line)))
+    (None) (println "none")))
+
+;; every code point of c, decoded forward from 0
+(defn walk [s : String i : int] : void
+  (when (< i (string/len s))
+    (match (utf8/decode-at s i)
+      (Some p) (do (show-decoded (some p)) (walk s (pair-snd p)))
+      (None) (println "none"))))
+
+(defn decode-all [c : cstr] : void
+  (let [s (string/from-cstr c)]
+    (do (walk s 0) (string/release s))))
+
+;; every code point of c, decoded backward from the end
+(defn walk-back [s : String i : int] : void
+  (when (> i 0)
+    (match (utf8/decode-before s i)
+      (Some p) (do (show-decoded (some p)) (walk-back s (pair-snd p)))
+      (None) (println "none"))))
+
+(defn decode-back [c : cstr] : void
+  (let [s (string/from-cstr c)]
+    (do (walk-back s (string/len s)) (string/release s))))
+
+(defn main [] : int
+  (let [abc (string/from-cstr "abc")]
+    (do
+      (println "-- space? punct?")
+      ;; ASCII: space, tab, LF, VT (not CommonMark whitespace), FF, CR, a, !, $, ~
+      (classify 32)
+      (classify 9)
+      (classify 10)
+      (classify 11)
+      (classify 12)
+      (classify 13)
+      (classify 97)
+      (classify 33)
+      (classify 36)
+      (classify 126)
+      ;; no-break space, em space, ideographic space, line separator (Zl, not Zs)
+      (classify 0xA0)
+      (classify 0x2003)
+      (classify 0x3000)
+      (classify 0x2028)
+      ;; left double quotation mark, em dash, euro sign, rightwards arrow, U+FFFD
+      (classify 0x201C)
+      (classify 0x2014)
+      (classify 0x20AC)
+      (classify 0x2192)
+      (classify 0xFFFD)
+      ;; e acute, CJK ideograph, out of range
+      (classify 0xE9)
+      (classify 0x4E2D)
+      (classify 0x110000)
+      (println "-- fold-case")
+      (fold "HeLLo")
+      (fold "STRASSE")
+      (fold "Stra\xc3\x9fe")
+      (fold "\xe1\xba\x9e")
+      (fold "\xce\xa3\xce\x91")
+      (fold "")
+      (println "-- decode-at")
+      (decode-all "a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80")
+      (println "-- decode-at, invalid")
+      ;; a stray continuation byte, an overlong 2-byte form, a surrogate,
+      ;; a 3-byte sequence cut short by 'z', and 0xFF
+      (decode-all "\x80")
+      (decode-all "\xc0\xaf")
+      (decode-all "\xed\xa0\x80")
+      (decode-all "\xe2\x82z")
+      (decode-all "\xff")
+      (show-decoded (utf8/decode-at abc 3))
+      (show-decoded (utf8/decode-at abc -1))
+      (println "-- decode-before")
+      (decode-back "a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80")
+      (decode-back "a\x80")
+      (show-decoded (utf8/decode-before abc 0))
+      (show-decoded (utf8/decode-before abc 4))
+      (string/release abc)
+      0)))

@@ -836,7 +836,10 @@ static int64_t r7rs_uc_mapc(int64_t cp, int64_t op) {
     return r7rs_uc_map1(r7rs_uc_to_fold, sizeof r7rs_uc_to_fold / sizeof *r7rs_uc_to_fold, (uint32_t)cp);
 }
 /* op 0 alphabetic, 1 upper-case, 2 lower-case, 3 whitespace: 1 or 0.
- * op 4: the digit value of an Nd character, or -1. */
+ * op 4: the digit value of an Nd character, or -1.
+ * op 5, 6: CommonMark 0.31's Unicode whitespace (Zs, or U+0009, U+000A,
+ * U+000C, U+000D) and Unicode punctuation (P* or S*), for stdlib/unicode.tur:
+ * 1 or 0. */
 static int64_t r7rs_uc_prop(int64_t cp, int64_t op) {
     if (cp < 0 || cp >= 0x110000) return op == 4 ? -1 : 0;
     uint32_t c = (uint32_t)cp;
@@ -845,6 +848,10 @@ static int64_t r7rs_uc_prop(int64_t cp, int64_t op) {
         case 1: return r7rs_uc_in(r7rs_uc_upper, sizeof r7rs_uc_upper / sizeof *r7rs_uc_upper, c);
         case 2: return r7rs_uc_in(r7rs_uc_lower, sizeof r7rs_uc_lower / sizeof *r7rs_uc_lower, c);
         case 3: return r7rs_uc_in(r7rs_uc_space, sizeof r7rs_uc_space / sizeof *r7rs_uc_space, c);
+        case 5: return c == 0x0A || c == 0x0C || c == 0x0D ||
+                       r7rs_uc_in(r7rs_uc_blank, sizeof r7rs_uc_blank / sizeof *r7rs_uc_blank, c);
+        case 6: return r7rs_uc_in(r7rs_uc_punct, sizeof r7rs_uc_punct / sizeof *r7rs_uc_punct, c) ||
+                       r7rs_uc_in(r7rs_uc_symbol, sizeof r7rs_uc_symbol / sizeof *r7rs_uc_symbol, c);
         default: {
             long k = r7rs_uc_find(r7rs_uc_nd0, sizeof r7rs_uc_nd0 / sizeof *r7rs_uc_nd0, sizeof *r7rs_uc_nd0, c);
             return (k >= 0 && c - r7rs_uc_nd0[k] < 10) ? (int64_t)(c - r7rs_uc_nd0[k]) : -1;
