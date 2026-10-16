@@ -594,6 +594,178 @@
 
 (defn builder/finish [b : StringBuilder] : String
   (:: (tur_sb_finish (:: b ptr<void>)) String))
+;; ---- Split, join, lines (markdown-library-plan S3) -------------------------
+;; Each part split off is a fresh owned String (rc 1) in a fresh Vec; the
+;; caller releases them all, and the Vec, with string/release-all.  The
+;; zero-copy versions, which hand back StringSlices, are in string-slice.tur.
+;;; string/-new-vec -- internal: an empty (Vec String) (a let-bound vec-new is not inferred).
+
+(defn string/-new-vec [] : (Vec String) (vec-new))
+;;; string/-copy-range -- internal: push a fresh String of s's bytes [start, end) onto out.
+
+(defn string/-copy-range [out : (Vec String) s : String start : int end : int] : void
+  (vec-push! out (string/substring s start (- end start))))
+;;; string/-split-loop -- internal: split s on sep from start into out.
+
+(defn string/-split-loop [s : String
+                          sep : String
+                          out : (Vec String)
+                          start : int] : (Vec String)
+  (match (string/index-of-from s sep start)
+    (Some i)
+    (do
+      (string/-copy-range out s start i)
+      (string/-split-loop s sep out (+ i (string/len sep))))
+    (None)
+    (do (string/-copy-range out s start (string/len s)) out)))
+;;; string/split -- split s at each occurrence of sep.
+;;;
+;;; The parts between separators, in order, including empty ones: "a,,b,"
+;;; split on "," is "a", "", "b", "".  A string with no sep gives one part,
+;;; a copy of itself; the empty string gives one empty part.  An empty sep
+;;; also gives one part, the whole string, since it would match everywhere.
+;;;
+;;; Parameters:
+;;;   s   -- the String to split (borrowed)
+;;;   sep -- the separator (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh (Vec String) of fresh owned parts, at least one.  Free it with
+;;;   string/release-all.
+;;;
+;;; Example:
+;;;   (vec-len (string/split (string/from-cstr "a, b, c") (string/from-cstr ", ")))  ; => 3
+;;;
+;;; Since: markdown-library-plan S3
+(defn string/split [s : String sep : String] : (Vec String)
+  (if (string/empty? sep)
+    (let [out (string/-new-vec)]
+      (do (string/-copy-range out s 0 (string/len s)) out))
+    (string/-split-loop s sep (string/-new-vec) 0)))
+;;; string/-split-char-loop -- internal: split s on byte b from start into out.
+
+(defn string/-split-char-loop [s : String
+                               c : Char
+                               out : (Vec String)
+                               start : int] : (Vec String)
+  (match (string/index-of-char-from s c start)
+    (Some i)
+    (do
+      (string/-copy-range out s start i)
+      (string/-split-char-loop s c out (+ i 1)))
+    (None)
+    (do (string/-copy-range out s start (string/len s)) out)))
+;;; string/split-char -- split s at each occurrence of the character c.
+;;;
+;;; string/split with a one-byte separator, so c should be ASCII.  Empty
+;;; parts are kept: "|a||" split on #\| is "", "a", "", "".
+;;;
+;;; Parameters:
+;;;   s -- the String to split (borrowed)
+;;;   c -- the separator character
+;;;
+;;; Returns:
+;;;   A fresh (Vec String) of fresh owned parts, at least one.  Free it with
+;;;   string/release-all.
+;;;
+;;; Example:
+;;;   (vec-len (string/split-char (string/from-cstr "| a | b |") #\|))  ; => 4
+;;;
+;;; Since: markdown-library-plan S3
+(defn string/split-char [s : String c : Char] : (Vec String)
+  (string/-split-char-loop s c (string/-new-vec) 0))
+;;; string/-lines-loop -- internal: push s's lines from start into out, scanning at i.
+
+(defn string/-lines-loop [s : String
+                          out : (Vec String)
+                          start : int
+                          i : int
+                          n : int] : (Vec String)
+  (if (>= i n)
+    (do (when (< start n) (string/-copy-range out s start n)) out)
+    (if (string/byte-is? s i #\newline)
+      (do
+        (string/-copy-range out s start i)
+        (string/-lines-loop s out (+ i 1) (+ i 1) n))
+      (if (string/byte-is? s i #\return)
+        (let [next (if (string/byte-is? s (+ i 1) #\newline) (+ i 2) (+ i 1))]
+          (do
+            (string/-copy-range out s start i)
+            (string/-lines-loop s out next next n)))
+        (string/-lines-loop s out start (+ i 1) n)))))
+;;; string/lines -- split s into lines, without their line endings.
+;;;
+;;; A line ends at LF, CRLF or CR, the three endings CommonMark recognises.
+;;; A final line ending does not start another line, so "a\nb\n" is two
+;;; lines, "a\n\n" is "a" and "", and the empty string has no lines.
+;;;
+;;; Parameters:
+;;;   s -- the String to split (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh (Vec String) of fresh owned lines, possibly empty.  Free it
+;;;   with string/release-all.
+;;;
+;;; Example:
+;;;   (vec-len (string/lines (string/from-cstr "one\r\ntwo\n")))  ; => 2
+;;;
+;;; Since: markdown-library-plan S3
+(defn string/lines [s : String] : (Vec String)
+  (string/-lines-loop s (string/-new-vec) 0 0 (string/len s)))
+;;; string/-join-loop -- internal: push parts [i, n) onto b, sep between them.
+
+(defn string/-join-loop [parts : (Vec String)
+                         sep : String
+                         b : StringBuilder
+                         i : int
+                         n : int] : void
+  (when (< i n)
+    (do
+      (when (> i 0) (builder/push-string! b sep))
+      (builder/push-string! b (vec-get parts i))
+      (string/-join-loop parts sep b (+ i 1) n))))
+;;; string/join -- concatenate parts with sep between each pair.
+;;;
+;;; Borrows the parts and sep: none is released.  No parts give the empty
+;;; String.  The inverse of string/split: joining what split returned with
+;;; the same separator gives the original string back.
+;;;
+;;; Parameters:
+;;;   parts -- the Strings to join, in order (borrowed)
+;;;   sep   -- the separator to put between them (borrowed)
+;;;
+;;; Returns:
+;;;   A fresh owned String.
+;;;
+;;; Example:
+;;;   (let [v (string/split-char (string/from-cstr "a b c") #\space)]
+;;;     (string/to-cstr (string/join v (string/from-cstr "-"))))  ; => "a-b-c"
+;;;
+;;; Since: markdown-library-plan S3
+(defn string/join [parts : (Vec String) sep : String] : String
+  (let [b (builder/new)]
+    (do (string/-join-loop parts sep b 0 (vec-len parts)) (builder/finish b))))
+;;; string/-release-loop -- internal: release v's elements [i, n).
+
+(defn string/-release-loop [v : (Vec String) i : int n : int] : void
+  (when (< i n)
+    (do (string/release (vec-get v i)) (string/-release-loop v (+ i 1) n))))
+;;; string/release-all -- release every String in v, then free v itself.
+;;;
+;;; The one call that frees what string/split, string/split-char and
+;;; string/lines return.  A Vec does not own its elements, so vec-free alone
+;;; would leak every String in it.  Do not use v, or any String taken out of
+;;; it without string/retain, afterwards.
+;;;
+;;; Parameters:
+;;;   v -- a (Vec String) whose elements this call owns
+;;;
+;;; Example:
+;;;   (string/release-all (string/lines (string/from-cstr "a\nb")))
+;;;
+;;; Since: markdown-library-plan S3
+(defn string/release-all [v : (Vec String)] : void
+  (do (string/-release-loop v 0 (vec-len v)) (vec-free v)))
 ;; ---- Typeclass loads (deferred to here so String + its ops exist first) ----
 ;; typeclass.tur transitively loads stdlib/typeclass-show.tur, whose owned
 ;; `Show` loads this file back -- reentrant, but harmless now that String and

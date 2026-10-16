@@ -366,6 +366,107 @@
     (if (or (< start 0) (>= start n))
       0
       (- (slice/-run-loop sl (char->int c) start n) start))))
+;; ---- Zero-copy lines and split (markdown-library-plan S3) ------------------
+;; The string/lines and string/split-char of string.tur, handing back
+;; StringSlices over the input instead of copies.  Each slice retains its
+;; parent String, so the input may be released as soon as these return;
+;; slice/release-all frees the slices and the Vec.
+;;; slice/-new-vec -- internal: an empty (Vec StringSlice) (a let-bound vec-new is not inferred).
+
+(defn slice/-new-vec [] : (Vec StringSlice) (vec-new))
+;;; string/-line-slices-loop -- internal: push views of s's lines from start into out.
+
+(defn string/-line-slices-loop [s : String
+                                out : (Vec StringSlice)
+                                start : int
+                                i : int
+                                n : int] : (Vec StringSlice)
+  (if (>= i n)
+    (do
+      (when (< start n) (vec-push! out (string/slice s start (- n start))))
+      out)
+    (if (string/byte-is? s i #\newline)
+      (do
+        (vec-push! out (string/slice s start (- i start)))
+        (string/-line-slices-loop s out (+ i 1) (+ i 1) n))
+      (if (string/byte-is? s i #\return)
+        (let [next (if (string/byte-is? s (+ i 1) #\newline) (+ i 2) (+ i 1))]
+          (do
+            (vec-push! out (string/slice s start (- i start)))
+            (string/-line-slices-loop s out next next n)))
+        (string/-line-slices-loop s out start (+ i 1) n)))))
+;;; string/line-slices -- zero-copy views of s's lines, without their endings.
+;;;
+;;; string/lines without the copies: the same LF / CRLF / CR rule, the same
+;;; lines, but each is a StringSlice viewing s.  This is the form a parser
+;;; wants for its input: one String for the document, one O(1) view per line.
+;;;
+;;; Parameters:
+;;;   s -- the String to split (borrowed; each slice retains it)
+;;;
+;;; Returns:
+;;;   A fresh (Vec StringSlice), possibly empty.  Free it with
+;;;   slice/release-all.
+;;;
+;;; Example:
+;;;   (vec-len (string/line-slices (string/from-cstr "# Title\n\nBody\n")))  ; => 3
+;;;
+;;; Since: markdown-library-plan S3
+(defn string/line-slices [s : String] : (Vec StringSlice)
+  (string/-line-slices-loop s (slice/-new-vec) 0 0 (string/len s)))
+;;; slice/-split-char-loop -- internal: split sl on c from start into out.
+
+(defn slice/-split-char-loop [sl : StringSlice
+                              c : Char
+                              out : (Vec StringSlice)
+                              start : int] : (Vec StringSlice)
+  (match (slice/index-of-char-from sl c start)
+    (Some i)
+    (do
+      (vec-push! out (slice/sub sl start (- i start)))
+      (slice/-split-char-loop sl c out (+ i 1)))
+    (None)
+    (do (vec-push! out (slice/sub sl start (- (slice/len sl) start))) out)))
+;;; slice/split-char -- zero-copy views of the parts of sl between each c.
+;;;
+;;; string/split-char for a slice, without the copies: empty parts are kept,
+;;; and each part is a sub-slice of sl over the same parent String.  A table
+;;; row's cells, for instance.
+;;;
+;;; Parameters:
+;;;   sl -- the slice to split (borrowed; each part retains its parent)
+;;;   c  -- the separator character (ASCII)
+;;;
+;;; Returns:
+;;;   A fresh (Vec StringSlice), at least one part.  Free it with
+;;;   slice/release-all.
+;;;
+;;; Example:
+;;;   (vec-len (slice/split-char (string/slice (string/from-cstr "|a|b|") 0 5) #\|))  ; => 4
+;;;
+;;; Since: markdown-library-plan S3
+(defn slice/split-char [sl : StringSlice c : Char] : (Vec StringSlice)
+  (slice/-split-char-loop sl c (slice/-new-vec) 0))
+;;; slice/-release-loop -- internal: release v's elements [i, n).
+
+(defn slice/-release-loop [v : (Vec StringSlice) i : int n : int] : void
+  (when (< i n)
+    (do (slice/release (vec-get v i)) (slice/-release-loop v (+ i 1) n))))
+;;; slice/release-all -- release every StringSlice in v, then free v itself.
+;;;
+;;; The one call that frees what string/line-slices and slice/split-char
+;;; return.  Releasing the last slice over a String releases that String's
+;;; reference too.
+;;;
+;;; Parameters:
+;;;   v -- a (Vec StringSlice) whose elements this call owns
+;;;
+;;; Example:
+;;;   (slice/release-all (string/line-slices (string/from-cstr "a\nb")))
+;;;
+;;; Since: markdown-library-plan S3
+(defn slice/release-all [v : (Vec StringSlice)] : void
+  (do (slice/-release-loop v 0 (vec-len v)) (vec-free v)))
 ;;; slice/compare -- lexicographic byte compare of two slices: -1, 0, or 1.
 ;;;
 ;;; Since: v2

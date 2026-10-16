@@ -1,0 +1,26 @@
+-- split
+4: [a] [] [b] []
+1: [abc]
+1: []
+1: [abc]
+2: [a] [b:c]
+3: [] [x] []
+-- split-char
+5: [] [a] [] [b] []
+1: [a b]
+-- lines
+4: [one] [two] [three] [four]
+1: [a]
+2: [a] []
+0:
+1: []
+2: [] []
+2: [x] []
+-- join
+T
+T
+0
+-- line-slices
+3: [# Title] [] [Body]
+-- slice split-char
+2: [ a ] [ b ]

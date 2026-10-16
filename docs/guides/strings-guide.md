@@ -141,6 +141,27 @@ within the slice's own bounds. `stdlib/cstr.tur` has `cstr-starts-with?`,
 `cstr-ends-with?`, `cstr-index-of`, `cstr-index-of-char` and `cstr-span-while`,
 so a literal or a line from `fs/read-lines` can be scanned without a copy.
 
+Split, join and lines:
+
+- `string/split s sep`, `string/split-char s c` -- the parts between
+  separators, empty ones included, each a fresh owned `String` in a fresh
+  `(Vec String)`.
+- `string/lines s` -- the lines, without their endings. A line ends at LF,
+  CRLF or CR, and a final ending does not start another line, so `"a\nb\n"`
+  is two lines.
+- `string/join parts sep` -- borrows the parts and returns a fresh `String`;
+  it undoes `string/split`.
+- `string/release-all v` -- releases every `String` in `v`, then `v`. A `Vec`
+  does not own its elements, so `vec-free` alone would leak them.
+- Zero-copy: `string/line-slices s` and `slice/split-char sl c` return
+  `(Vec StringSlice)` views instead of copies (each retains its parent), freed
+  with `slice/release-all`. A parser can hold one `String` for the whole
+  document and one O(1) slice per line.
+- `fs/read-string path` reads a whole file into an owned `String`, keeping
+  every byte, NUL included. It is in `stdlib/fs-string.tur`, which loads
+  `fs.tur` and `string.tur`; `fs.tur` itself stays free of `String`, so a
+  program that loads it and defines its own `show` is unaffected.
+
 Transform (each returns a fresh immutable `String`):
 
 - `string/concat`, `string/substring`, `string/to-upper`, `string/to-lower`,

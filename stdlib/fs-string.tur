@@ -1,0 +1,67 @@
+;;; tur/fs-string -- read a whole file into an owned String.
+;;;
+;;; fs/read-string, the String counterpart of fs/read-text, in a module of its
+;;; own: (load "stdlib/fs-string.tur").  It loads stdlib/fs.tur and
+;;; stdlib/string.tur.  It is not in fs.tur because string.tur brings the Show
+;;; typeclass with it, and a program that loads fs.tur and defines its own
+;;; `show` would then fail to compile with an ambiguous-dispatch error.
+;;;
+;;; Compiled only, like the rest of fs.tur: under --interpret it stops with
+;;; "inline-C not supported in interpreter mode"
+;;; (docs/reported/fs-functions-compiled-only.md).
+;;;
+;;; Since: markdown-library-plan S3
+;; IoError and the FS effect come from fs.tur; String from string.tur.
+(load "stdlib/fs.tur")
+
+(load "stdlib/string.tur")
+;;; fs/read-string -- read an entire file into a fresh owned String.
+;;;
+;;; fs/read-text for code that works in String: the whole file, as an owned
+;;; String the caller releases with string/release.  Every byte is kept,
+;;; NUL included, since the String carries its own length; reading through
+;;; fs/read-text and string/adopt-cstr would stop at the first NUL.  A pipe,
+;;; a FIFO or /dev/stdin is read to its end, as fs/read-text does.
+;;;
+;;; Parameters:
+;;;   path -- NUL-terminated path cstr
+;;;
+;;; Returns:
+;;;   (Ok s) holding the file's bytes, or (Err e) carrying the errno.
+;;;
+;;; Example:
+;;;   (match (fs/read-string "README.md")
+;;;     (Ok s)  (do (println (string/len s)) (string/release s))
+;;;     (Err e) (println (io-error/message e)))
+;;;
+;;; Since: markdown-library-plan S3
+
+(defn fs/read-string [path : cstr]
+  #fx{FS}
+  : (Result String IoError)
+  ```c
+  #include <errno.h>
+  FILE *f = fopen(path, "rb");
+  if (!f) return tur_err_int(errno);
+  size_t cap = 4096, len = 0;
+  long size = -1;
+  if (fseek(f, 0, SEEK_END) == 0) size = ftell(f);
+  if (size >= 0) { fseek(f, 0, SEEK_SET); cap = (size_t)size + 1; }
+  char *buf = (char *)malloc(cap);
+  if (!buf) { fclose(f); return tur_err_int(ENOMEM); }
+  for (;;) {
+    if (cap - len < 2) {
+      char *grown = (char *)realloc(buf, cap * 2);
+      if (!grown) { free(buf); fclose(f); return tur_err_int(ENOMEM); }
+      buf = grown; cap *= 2;
+    }
+    size_t n = fread(buf + len, 1, cap - len - 1, f);
+    len += n;
+    if (n == 0) break;
+  }
+  if (ferror(f)) { int e = errno ? errno : EIO; free(buf); fclose(f); return tur_err_int(e); }
+  fclose(f);
+  void *str = tur_string_from_bytes(buf, (int64_t)len);
+  free(buf);
+  return tur_ok_ptr(str);
+  ```)

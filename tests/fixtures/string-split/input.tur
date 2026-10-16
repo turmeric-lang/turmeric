@@ -1,0 +1,131 @@
+;; string-split -- markdown-library-plan S3: split, split-char, lines and join
+;; on String, their zero-copy StringSlice versions, and release-all.
+;;
+;; Empty parts are kept.  A line ends at LF, CRLF or CR, and a final line
+;; ending does not start another line.  Each slice retains its parent, so the
+;; input String can be released while the slices are still in use.
+
+(load "stdlib/string-slice.tur")
+
+;; "n: [p0][p1]..." for a Vec of Strings
+(defn dump [v : (Vec String)] : void
+  (let [b (builder/new)
+        n (int->string (vec-len v))]
+    (do (builder/push-string! b n)
+        (string/release n)
+        (builder/push-cstr! b ":")
+        (dump-parts b v 0)
+        (let [out (builder/finish b)]
+          (do (println (string/to-cstr out))
+              (string/release out))))))
+
+(defn dump-parts [b : StringBuilder v : (Vec String) i : int] : void
+  (when (< i (vec-len v))
+    (do (builder/push-cstr! b " [")
+        (builder/push-string! b (vec-get v i))
+        (builder/push-cstr! b "]")
+        (dump-parts b v (+ i 1)))))
+
+;; the same, for slices
+(defn dump-slices [v : (Vec StringSlice)] : void
+  (let [b (builder/new)
+        n (int->string (vec-len v))]
+    (do (builder/push-string! b n)
+        (string/release n)
+        (builder/push-cstr! b ":")
+        (dump-slice-parts b v 0)
+        (let [out (builder/finish b)]
+          (do (println (string/to-cstr out))
+              (string/release out))))))
+
+(defn dump-slice-parts [b : StringBuilder v : (Vec StringSlice) i : int] : void
+  (when (< i (vec-len v))
+    (let [part (slice/to-string (vec-get v i))]
+      (do (builder/push-cstr! b " [")
+          (builder/push-string! b part)
+          (builder/push-cstr! b "]")
+          (string/release part)
+          (dump-slice-parts b v (+ i 1))))))
+
+(defn split-on [s : cstr sep : cstr] : void
+  (let [ss   (string/from-cstr s)
+        ssep (string/from-cstr sep)
+        v    (string/split ss ssep)]
+    (do (dump v)
+        (string/release-all v)
+        (string/release ss)
+        (string/release ssep))))
+
+(defn split-char-on [s : cstr c : Char] : void
+  (let [ss (string/from-cstr s)
+        v  (string/split-char ss c)]
+    (do (dump v)
+        (string/release-all v)
+        (string/release ss))))
+
+(defn lines-of [s : cstr] : void
+  (let [ss (string/from-cstr s)
+        v  (string/lines ss)]
+    (do (dump v)
+        (string/release-all v)
+        (string/release ss))))
+
+;; join (split s sep) sep gives s back
+(defn round-trip [s : cstr sep : cstr] : void
+  (let [ss   (string/from-cstr s)
+        ssep (string/from-cstr sep)
+        v    (string/split ss ssep)
+        back (string/join v ssep)]
+    (do (println (if (string/eq? back ss) "T" "F"))
+        (string/release back)
+        (string/release-all v)
+        (string/release ss)
+        (string/release ssep))))
+
+(defn empty-strings [] : (Vec String) (vec-new))
+
+(defn main [] : int
+  (do
+    (println "-- split")
+    (split-on "a,,b," ",")              ;; 4: [a] [] [b] []
+    (split-on "abc" ",")                ;; 1: [abc]: no separator
+    (split-on "" ",")                   ;; 1: []: the empty string
+    (split-on "abc" "")                 ;; 1: [abc]: empty separator
+    (split-on "a::b:c" "::")            ;; 2: [a] [b:c]
+    (split-on ", x, " ", ")             ;; 3: [] [x] []
+    (println "-- split-char")
+    (split-char-on "|a||b|" #\|)        ;; 5: [] [a] [] [b] []
+    (split-char-on "a b" #\,)           ;; 1: [a b]
+    (println "-- lines")
+    (lines-of "one\ntwo\r\nthree\rfour")  ;; 4
+    (lines-of "a\n")                    ;; 1: [a]: no line after the last ending
+    (lines-of "a\n\n")                  ;; 2: [a] []
+    (lines-of "")                       ;; 0: no lines
+    (lines-of "\n")                     ;; 1: []
+    (lines-of "\r\n\r")                 ;; 2: [] []
+    (lines-of "x\r\r\n")                ;; 2: [x] []
+    (println "-- join")
+    (round-trip "a,,b," ",")            ;; T
+    (round-trip ", x, " ", ")           ;; T
+    (let [none (empty-strings)
+          sep  (string/from-cstr "-")
+          j    (string/join none sep)]
+      (do (println (string/len j))      ;; 0: no parts
+          (string/release j)
+          (string/release sep)
+          (vec-free none)))
+    (println "-- line-slices")
+    (let [doc (string/from-cstr "# Title\r\n\r\nBody")
+          v   (string/line-slices doc)]
+      (do (string/release doc)          ;; the slices keep it alive
+          (dump-slices v)               ;; 3: [# Title] [] [Body]
+          (slice/release-all v)))
+    (println "-- slice split-char")
+    (let [row  (string/from-cstr "| a | b |")
+          view (string/slice row 1 7)   ;; " a | b "
+          v    (slice/split-char view #\|)]
+      (do (dump-slices v)               ;; 2: [ a ] [ b ]: not the parent's pipes
+          (slice/release-all v)
+          (slice/release view)
+          (string/release row)))
+    0))

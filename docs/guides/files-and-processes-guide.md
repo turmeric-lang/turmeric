@@ -6,13 +6,14 @@ description: Read and write files, walk directories, read stdin line by line, an
 
 # Files and Processes
 
-Three on-demand stdlib modules cover the operating system:
+Four on-demand stdlib modules cover the operating system:
 
 | Module | Namespace | Load with |
 |---|---|---|
 | `stdlib/fs.tur` | paths: `fs/read-text`, `fs/write-text`, `fs/stat`, `fs/mkdirp`, `fs/walk`, ... | `(load "stdlib/fs.tur")` |
 | `stdlib/io.tur` | streams and handles: `file-open`, `file-read-line`, `io/read-line`, ... | `(load "stdlib/io.tur")` |
 | `stdlib/process.tur` | children: `process/run`, `process/output`, `process/spawn`, ... | `(load "stdlib/process.tur")` |
+| `stdlib/fs-string.tur` | a whole file as an owned `String`: `fs/read-string` | `(load "stdlib/fs-string.tur")` |
 
 To print diagnostics without touching stdout, use the `eprintln` / `eprint`
 builtins: they take the same argument types as `println` and write to stderr.
@@ -46,7 +47,9 @@ the end, and `file-read-line` answers `(Result (Option cstr) IoError)`.
 ## Ownership
 
 Every returned string or vector is fresh and owned by the caller. Strings are
-released with `free`; a `(Vec cstr)` from `fs/glob`, `fs/walk`, `fs/read-dir`
+released with `free`, except the owned `String` from `fs/read-string`
+(`(load "stdlib/fs-string.tur")`), which is released with `string/release`;
+a `(Vec cstr)` from `fs/glob`, `fs/walk`, `fs/read-dir`
 or `fs/read-lines` with `fs/paths-free` (strings and vector together), and
 `env/all`'s with `env/all-free`. `FileHandle` and `ChildHandle` are linear:
 close a file exactly once with `file-close`, reap a child exactly once with
