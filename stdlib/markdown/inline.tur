@@ -1,439 +1,729 @@
-;;; markdown/inline -- CommonMark inline syntax: escapes, references and the scanners.
+;;; markdown/inline -- the CommonMark inline parser: a block's text into inlines.
 ;;;
-;;; The pieces of inline syntax the block parser already needs: backslash
-;;; escapes and character references (md/-push-unescaped!), the link label,
-;;; destination and title scanners a link reference definition is made of,
-;;; label normalisation, and the HTML tag scanner that starts an HTML block
-;;; of type 7.  The inline parser (markdown-library-plan M2) is built on the
-;;; same scanners.  Every scanner reads a String between two byte indices and
-;;; answers with the index just past what it matched, or -1.
+;;; A port of commonmark.js 0.31.2's inlines.js.  Each paragraph's and
+;;; heading's text is scanned once, left to right, into a flat list of
+;;; inlines under a root: text runs, code spans, breaks, autolinks, raw HTML,
+;;; and a text inline for every run of * or _ and every [ or ![.  The runs go
+;;; on a delimiter stack and the brackets on a bracket stack; a ] that closes
+;;; a link or image moves what follows its bracket into the new inline, and
+;;; the emphasis algorithm then pairs the delimiter runs (spec section 6.2)
+;;; into emphasis and strong emphasis.
 ;;;
-;;; Since: markdown-library-plan M1
-;; The entity table, which loads unicode.tur and string.tur.
-(load "stdlib/markdown/entities.tur")
-;; ---- Byte classes ------------------------------------------------------------
-;; Bytes are ints here: 9 tab, 10 LF, 13 CR, 32 space, 34 ", 35 #, 38 &,
-;; 39 ', 40 (, 41 ), 47 /, 58 :, 59 ;, 60 <, 61 =, 62 >, 91 [, 92 \, 93 ],
-;; 96 `, 124 |.
-;;; md/-byte -- internal: the byte at i of s, or -1 outside it.
+;;; Inlines live in the document's inline arena, linked by index.  A text
+;;; inline is a byte range of a pool String, usually the block's trimmed
+;;; text, so splitting a delimiter run off is moving an end index.
+;;;
+;;; Since: markdown-library-plan M2
+;; The document types and the block parser.
+(load "stdlib/markdown/block.tur")
+;; ---- Types ---------------------------------------------------------------------
+;;; MdDelim -- a run of * or _ on the delimiter stack: its byte, how many are left and were there, its text inline, its neighbours, and whether it can open or close emphasis.
 
-(defn md/-byte [s : String i : int] : int
-  (if (and (>= i 0) (< i (string/len s))) (string/byte-at s i) -1))
-;;; md/-space-tab? -- internal: is b a space or a tab?
+(defstruct MdDelim
+  :copy
+  [cc : int
+   count : int
+   orig : int
+   node : int
+   prev : int
+   next : int
+   can-open : bool
+   can-close : bool])
+;;; MdBracket -- a [ or ![ on the bracket stack: its text inline, the bracket and delimiter below it, where its [ is, and its state.
 
-(defn md/-space-tab? [b : int] : bool (or (= b 32) (= b 9)))
-;;; md/-ws? -- internal: is b ASCII whitespace: space, tab, LF, VT, FF or CR?
+(defstruct MdBracket
+  :copy
+  [node : int
+   prev : int
+   prev-delim : int
+   index : int
+   image : bool
+   active : bool
+   after : bool])
+;;; MdIP -- the inline parser for one block: the document, the subject's pool index and length, the position, the root inline, and the two stacks.
 
-(defn md/-ws? [b : int] : bool (or (= b 32) (and (>= b 9) (<= b 13))))
-;;; md/-punct? -- internal: is b ASCII punctuation, which a backslash escapes?
+(defstruct MdIP
+  [doc : MdDoc
+   subj : int
+   len : int
+   pos : int
+   root : int
+   delims : int
+   brackets : int
+   dv : (Vec MdDelim)
+   bv : (Vec MdBracket)])
+;;; md/-new-delims -- internal: an empty delimiter Vec.
 
-(defn md/-punct? [b : int] : bool
-  (or (and (>= b 33) (<= b 47))
-    (and (>= b 58) (<= b 64))
-    (and (>= b 91) (<= b 96))
-    (and (>= b 123) (<= b 126))))
-;;; md/-digit? -- internal: is b an ASCII digit?
+(defn md/-new-delims [] : (Vec MdDelim) (vec-new))
+;;; md/-new-brackets -- internal: an empty bracket Vec.
 
-(defn md/-digit? [b : int] : bool (and (>= b 48) (<= b 57)))
-;;; md/-alpha? -- internal: is b an ASCII letter?
+(defn md/-new-brackets [] : (Vec MdBracket) (vec-new))
+;; ---- The inline arena -------------------------------------------------------------
+;;; md/-inl-new! -- internal: a fresh detached inline of kind k over [start, end) of pool String str; its index.
 
-(defn md/-alpha? [b : int] : bool
-  (or (and (>= b 65) (<= b 90)) (and (>= b 97) (<= b 122))))
-;;; md/-alnum? -- internal: is b an ASCII letter or digit?
+(defn md/-inl-new! [v : (Vec MdInl) k : MdIKind str : int start : int end : int] : int
+  (let [id (vec-len v)
+        n  (MdInl k -1 -1 -1 -1 -1 str start end -1 -1)]
+    (do (vec-push! v n) id)))
+;;; md/-inl-append! -- internal: make inline c the last child of inline p.
 
-(defn md/-alnum? [b : int] : bool (or (md/-alpha? b) (md/-digit? b)))
-;;; md/-hex? -- internal: is b an ASCII hex digit?
-
-(defn md/-hex? [b : int] : bool
-  (or (md/-digit? b) (and (>= b 65) (<= b 70)) (and (>= b 97) (<= b 102))))
-;;; md/-hex-val -- internal: the value of hex digit b.
-
-(defn md/-hex-val [b : int] : int
-  (cond (md/-digit? b) (- b 48) (<= b 70) (- b 55) :else (- b 87)))
-;;; md/-lower -- internal: b in ASCII lower case.
-
-(defn md/-lower [b : int] : int (if (and (>= b 65) (<= b 90)) (+ b 32) b))
-;;; md/-skip-ws -- internal: the first index at or after i, before end, that is not ASCII whitespace.
-
-(defn md/-skip-ws [s : String i0 : int end : int] : int
-  (let [^mut i i0]
+(defn md/-inl-append! [v : (Vec MdInl) p : int c : int] : void
+  (let [pn   (vec-get v p)
+        last (.last-child pn)]
     (do
-      (while (and (< i end) (md/-ws? (string/byte-at s i))) (set! i (+ i 1)))
-      i)))
-;;; md/-skip-spaces -- internal: the first index at or after i, before end, that is not a space.
-
-(defn md/-skip-spaces [s : String i0 : int end : int] : int
-  (let [^mut i i0]
-    (do (while (and (< i end) (= (string/byte-at s i) 32)) (set! i (+ i 1))) i)))
-;; ---- Character references ----------------------------------------------------
-;; &name; (an HTML5 entity name), &#digits; (1-7) and &#xhex; (1-6).  A
-;; reference to 0, a surrogate or a value past U+10FFFF stands for U+FFFD.
-;;; md/-run-end -- internal: the end of the run of bytes from i (at most max) that satisfy the class: 0 digits, 1 hex digits, 2 letters and digits.
-
-(defn md/-run-end [s : String i0 : int end : int max : int cls : int] : int
-  (let [^mut i  i0
-        ^mut go true]
-    (do
-      (while (and go (< i end) (< (- i i0) max))
-        (let [b (string/byte-at s i)]
-          (if (cond (= cls 0) (md/-digit? b)
-                    (= cls 1) (md/-hex? b)
-                    :else     (md/-alnum? b))
-            (set! i (+ i 1))
-            (set! go false))))
-      i)))
-;;; md/-num-val -- internal: the value of the digits [i, end) of s in base 10 or 16.
-
-(defn md/-num-val [s : String i0 : int end : int base : int] : int
-  (let [^mut i i0
-        ^mut v 0]
-    (do
-      (while (< i end)
+      (vec-set! v c (with (vec-get v c) [parent p prev last next -1]))
+      (if (< last 0)
+        (vec-set! v p (with pn [first-child c last-child c]))
         (do
-          (set! v (+ (* v base) (md/-hex-val (string/byte-at s i))))
+          (vec-set! v last (with (vec-get v last) [next c]))
+          (vec-set! v p (with pn [last-child c])))))))
+;;; md/-inl-unlink! -- internal: take inline i out of its parent's children.
+
+(defn md/-inl-unlink! [v : (Vec MdInl) i : int] : void
+  (let [n (vec-get v i)
+        p (.parent n)]
+    (do
+      (if (>= (.prev n) 0)
+        (vec-set! v (.prev n) (with (vec-get v (.prev n)) [next (.next n)]))
+        (when (>= p 0)
+          (vec-set! v p (with (vec-get v p) [first-child (.next n)]))))
+      (if (>= (.next n) 0)
+        (vec-set! v (.next n) (with (vec-get v (.next n)) [prev (.prev n)]))
+        (when (>= p 0)
+          (vec-set! v p (with (vec-get v p) [last-child (.prev n)]))))
+      (vec-set! v i (with (vec-get v i) [parent -1 prev -1 next -1])))))
+;;; md/-inl-insert-after! -- internal: put detached inline b just after inline a.
+
+(defn md/-inl-insert-after! [v : (Vec MdInl) a : int b : int] : void
+  (let [an (vec-get v a)
+        nx (.next an)
+        p  (.parent an)]
+    (do
+      (vec-set! v b (with (vec-get v b) [parent p prev a next nx]))
+      (vec-set! v a (with an [next b]))
+      (if (>= nx 0)
+        (vec-set! v nx (with (vec-get v nx) [prev b]))
+        (when (>= p 0) (vec-set! v p (with (vec-get v p) [last-child b])))))))
+;;; md/-inl-move-until! -- internal: move the inlines after from, up to (not including) until, or to the end when until is -1, into inline into.
+
+(defn md/-inl-move-until! [v : (Vec MdInl) from : int until : int into : int] : void
+  (let [^mut tmp (.next (vec-get v from))]
+    (while (and (>= tmp 0) (not (= tmp until)))
+      (let [nx (.next (vec-get v tmp))]
+        (do (md/-inl-unlink! v tmp) (md/-inl-append! v into tmp) (set! tmp nx))))))
+;; ---- The parser's view --------------------------------------------------------------
+;;; md/-ip-s -- internal: the subject (borrowed).
+
+(defn md/-ip-s [^borrow ip : rc<MdIP>] : String
+  (vec-get (.strs (.doc ip)) (.subj ip)))
+;;; md/-ip-c -- internal: the subject's byte at i, or -1 outside it.
+
+(defn md/-ip-c [^borrow ip : rc<MdIP> i : int] : int
+  (if (and (>= i 0) (< i (.len ip))) (string/byte-at (md/-ip-s ip) i) -1))
+;;; md/-ip-v -- internal: the inline arena.
+
+(defn md/-ip-v [^borrow ip : rc<MdIP>] : (Vec MdInl) (.inls (.doc ip)))
+;;; md/-ip-add-str! -- internal: put s in the document's pool; its index.
+
+(defn md/-ip-add-str! [^borrow ip : rc<MdIP> s : String] : int
+  (let [strs (.strs (.doc ip))
+        i    (vec-len strs)]
+    (do (vec-push! strs s) i)))
+;;; md/-ip-leaf! -- internal: append an inline of kind k over [start, end) of pool String str to the root; its index.
+
+(defn md/-ip-leaf! [^borrow ip : rc<MdIP>
+                    k : MdIKind
+                    str : int
+                    start : int
+                    end : int] : int
+  (let [v  (md/-ip-v ip)
+        id (md/-inl-new! v k str start end)]
+    (do (md/-inl-append! v (.root ip) id) id)))
+;;; md/-ip-text! -- internal: append the subject's bytes [start, end) as a text inline; its index.
+
+(defn md/-ip-text! [^borrow ip : rc<MdIP> start : int end : int] : int
+  (md/-ip-leaf! ip (MdIText) (.subj ip) start end))
+;;; md/-ip-own! -- internal: append an inline of kind k holding all of s, which the pool takes over; its index.
+
+(defn md/-ip-own! [^borrow ip : rc<MdIP> k : MdIKind s : String] : int
+  (let [n (string/len s)
+        t (md/-ip-add-str! ip s)]
+    (md/-ip-leaf! ip k t 0 n)))
+;;; md/-ip-advance! -- internal: move the position on by n.
+
+(defn md/-ip-advance! [^borrow ip : rc<MdIP> n : int] : void
+  (set! (.pos ip) (+ (.pos ip) n)))
+;;; md/-ip-run -- internal: how many of byte c repeat from i in the subject.
+
+(defn md/-ip-run [^borrow ip : rc<MdIP> i : int c : int] : int
+  (let [^mut j i]
+    (do (while (= (md/-ip-c ip j) c) (set! j (+ j 1))) (- j i))))
+;; ---- The delimiter stack ------------------------------------------------------------
+;;; md/-dl -- internal: delimiter i.
+
+(defn md/-dl [^borrow ip : rc<MdIP> i : int] : MdDelim (vec-get (.dv ip) i))
+;;; md/-dl-put! -- internal: replace delimiter i.
+
+(defn md/-dl-put! [^borrow ip : rc<MdIP> i : int d : MdDelim] : void
+  (vec-set! (.dv ip) i d))
+;;; md/-remove-delim! -- internal: take delimiter i off the stack.
+
+(defn md/-remove-delim! [^borrow ip : rc<MdIP> i : int] : void
+  (let [d (md/-dl ip i)]
+    (do
+      (when (>= (.prev d) 0)
+        (md/-dl-put! ip (.prev d) (with (md/-dl ip (.prev d)) [next (.next d)])))
+      (if (< (.next d) 0)
+        (set! (.delims ip) (.prev d))
+        (md/-dl-put! ip (.next d) (with (md/-dl ip (.next d)) [prev (.prev d)]))))))
+;;; md/-remove-delims-between! -- internal: drop the delimiters strictly between bottom and top.
+
+(defn md/-remove-delims-between! [^borrow ip : rc<MdIP> bottom : int top : int] : void
+  (when (not (= (.next (md/-dl ip bottom)) top))
+    (do
+      (md/-dl-put! ip bottom (with (md/-dl ip bottom) [next top]))
+      (md/-dl-put! ip top (with (md/-dl ip top) [prev bottom])))))
+;;; md/-push-delim! -- internal: push a delimiter run onto the stack.
+
+(defn md/-push-delim! [^borrow ip : rc<MdIP>
+                       cc : int
+                       n : int
+                       node : int
+                       can-open : bool
+                       can-close : bool] : void
+  (let [id  (vec-len (.dv ip))
+        top (.delims ip)
+        d   (MdDelim cc n n node top -1 can-open can-close)]
+    (do
+      (vec-push! (.dv ip) d)
+      (when (>= top 0) (md/-dl-put! ip top (with (md/-dl ip top) [next id])))
+      (set! (.delims ip) id))))
+;; ---- Emphasis (spec section 6.2, "process emphasis") -----------------------------------
+;;; md/-bottom-index -- internal: which openers-bottom slot a closer uses: by byte, whether it can also open, and its original length mod 3.
+
+(defn md/-bottom-index [c : MdDelim] : int
+  (+ (if (= (.cc c) 95) 2 8) (if (.can-open c) 3 0) (mod (.orig c) 3)))
+;;; md/-find-opener -- internal: the nearest opener below closer that can pair with it, stopping at stop1 or stop2, or -1.
+
+(defn md/-find-opener [^borrow ip : rc<MdIP>
+                       closer : int
+                       stop1 : int
+                       stop2 : int] : int
+  (let [c        (md/-dl ip closer)
+        ^mut o   (.prev c)
+        ^mut hit -1]
+    (do
+      (while (and (< hit 0) (>= o 0) (not (= o stop1)) (not (= o stop2)))
+        (let [od  (md/-dl ip o)
+              odd (and (or (.can-open c) (.can-close od))
+                    (not (= (mod (.orig c) 3) 0))
+                    (= (mod (+ (.orig od) (.orig c)) 3) 0))]
+          (if (and (= (.cc od) (.cc c)) (.can-open od) (not odd))
+            (set! hit o)
+            (set! o (.prev od)))))
+      hit)))
+;;; md/-pair-delims! -- internal: turn the matched opener and closer into emphasis or strong emphasis; the closer to look at next.
+
+(defn md/-pair-delims! [^borrow ip : rc<MdIP> opener : int closer : int] : int
+  (let [o    (md/-dl ip opener)
+        c    (md/-dl ip closer)
+        use  (if (and (>= (.count c) 2) (>= (.count o) 2)) 2 1)
+        v    (md/-ip-v ip)
+        oi   (.node o)
+        ci   (.node c)
+        emph (md/-inl-new! v (if (= use 1) (MdIEmph) (MdIStrong)) -1 0 0)]
+    (do
+      (md/-dl-put! ip opener (with o [count (- (.count o) use)]))
+      (md/-dl-put! ip closer (with c [count (- (.count c) use)]))
+      (vec-set! v oi (with (vec-get v oi) [end (- (.end (vec-get v oi)) use)]))
+      (vec-set! v ci (with (vec-get v ci) [end (- (.end (vec-get v ci)) use)]))
+      (md/-inl-move-until! v oi ci emph)
+      (md/-inl-insert-after! v oi emph)
+      (md/-remove-delims-between! ip opener closer)
+      (when (= (.count (md/-dl ip opener)) 0)
+        (do (md/-inl-unlink! v oi) (md/-remove-delim! ip opener)))
+      (if (= (.count (md/-dl ip closer)) 0)
+        (let [nx (.next (md/-dl ip closer))]
+          (do (md/-inl-unlink! v ci) (md/-remove-delim! ip closer) nx))
+        closer))))
+;;; md/-emph-step! -- internal: handle the closer at closer; the next closer to look at.
+
+(defn md/-emph-step! [^borrow ip : rc<MdIP>
+                      bottoms : (Vec int)
+                      stack-bottom : int
+                      closer : int] : int
+  (let [c      (md/-dl ip closer)
+        slot   (md/-bottom-index c)
+        opener (md/-find-opener ip closer stack-bottom (vec-get bottoms slot))]
+    (if (>= opener 0)
+      (md/-pair-delims! ip opener closer)
+      (let [nx (.next c)]
+        (do
+          (vec-set! bottoms slot (.prev c))
+          (when (not (.can-open c)) (md/-remove-delim! ip closer))
+          nx)))))
+;;; md/-new-bottoms -- internal: the fourteen openers-bottom slots, each stack-bottom.
+
+(defn md/-new-bottoms [stack-bottom : int] : (Vec int)
+  (let [v      (md/-new-ints)
+        ^mut i 0]
+    (do (while (< i 14) (do (vec-push! v stack-bottom) (set! i (+ i 1)))) v)))
+;;; md/-process-emphasis! -- internal: pair the delimiter runs above stack-bottom into emphasis, then drop them all.
+
+(defn md/-process-emphasis! [^borrow ip : rc<MdIP> stack-bottom : int] : void
+  (let [bottoms     (md/-new-bottoms stack-bottom)
+        ^mut closer (.delims ip)]
+    (do
+      (while (and (>= closer 0)
+               (not (= (.prev (md/-dl ip closer)) stack-bottom)))
+        (set! closer (.prev (md/-dl ip closer))))
+      (while (>= closer 0)
+        (if (.can-close (md/-dl ip closer))
+          (set! closer (md/-emph-step! ip bottoms stack-bottom closer))
+          (set! closer (.next (md/-dl ip closer)))))
+      (while (and (>= (.delims ip) 0) (not (= (.delims ip) stack-bottom)))
+        (md/-remove-delim! ip (.delims ip)))
+      (vec-free bottoms))))
+;; ---- Brackets, links and images (spec sections 6.3 and 6.4) ----------------------------------
+;;; md/-bk -- internal: bracket i.
+
+(defn md/-bk [^borrow ip : rc<MdIP> i : int] : MdBracket (vec-get (.bv ip) i))
+;;; md/-add-bracket! -- internal: push a [ (or ![) whose text inline is node and whose [ is at index.
+
+(defn md/-add-bracket! [^borrow ip : rc<MdIP>
+                        node : int
+                        index : int
+                        image : bool] : void
+  (let [top (.brackets ip)
+        id  (vec-len (.bv ip))
+        b   (MdBracket node top (.delims ip) index image true false)]
+    (do
+      (when (>= top 0)
+        (vec-set! (.bv ip) top (with (md/-bk ip top) [after true])))
+      (vec-push! (.bv ip) b)
+      (set! (.brackets ip) id))))
+;;; md/-remove-bracket! -- internal: pop the bracket stack.
+
+(defn md/-remove-bracket! [^borrow ip : rc<MdIP>] : void
+  (set! (.brackets ip) (.prev (md/-bk ip (.brackets ip)))))
+;;; md/-deactivate-links! -- internal: no links in links -- mark every [ still on the stack inactive.
+
+(defn md/-deactivate-links! [^borrow ip : rc<MdIP>] : void
+  (let [^mut b (.brackets ip)]
+    (while (>= b 0)
+      (let [bk (md/-bk ip b)]
+        (do
+          (when (not (.image bk))
+            (vec-set! (.bv ip) b (with bk [active false])))
+          (set! b (.prev bk)))))))
+;;; md/-find-doc-ref -- internal: the reference of d whose normalised label is label, or -1.
+
+(defn md/-find-doc-ref [d : MdDoc label : String] : int
+  (let [refs     (.refs d)
+        ^mut i   0
+        ^mut hit -1]
+    (do
+      (while (and (< hit 0) (< i (vec-len refs)))
+        (do
+          (when (string/eq? (vec-get (.strs d) (.label (vec-get refs i))) label)
+            (set! hit i))
           (set! i (+ i 1))))
-      v)))
-;;; md/-push-cp! -- internal: append the code point a numeric reference names, U+FFFD for 0.
+      hit)))
+;;; md/-lookup-ref -- internal: the reference whose label is [a, b) of the subject (brackets included), or -1.
 
-(defn md/-push-cp! [b : StringBuilder cp : int] : void
-  (utf8/push-char! b (int->char (if (= cp 0) 65533 cp))))
-;;; md/-push-numeric! -- internal: append the numeric reference whose digits start at i; the index past its ; or -1.
+(defn md/-lookup-ref [^borrow ip : rc<MdIP> a : int b : int] : int
+  (let [label (md/-normalize-label (md/-ip-s ip) a b)
+        r     (if (= (string/len label) 0)
+                -1
+                (md/-find-doc-ref (.doc ip) label))]
+    (do (string/release label) r)))
+;;; md/-make-link! -- internal: the link or image for the bracket at top, holding everything after its [.
 
-(defn md/-push-numeric! [b : StringBuilder s : String i : int end : int] : int
-  (let [x (or (= (md/-byte s i) 120) (= (md/-byte s i) 88))
-        d (if x (+ i 1) i)
-        e (md/-run-end s d end (if x 6 7) (if x 1 0))]
-    (if (and (> e d) (< e end) (= (string/byte-at s e) 59))
-      (do (md/-push-cp! b (md/-num-val s d e (if x 16 10))) (+ e 1))
-      -1)))
-;;; md/-push-named! -- internal: append the named reference whose name starts at i; the index past its ; or -1.
-
-(defn md/-push-named! [b : StringBuilder s : String i : int end : int] : int
-  (let [e (md/-run-end s i end 32 2)]
-    (if (and (md/-alpha? (md/-byte s i))
-          (>= (- e i) 2)
-          (< e end)
-          (= (string/byte-at s e) 59))
-      (let [name (string/substring s i (- e i))
-            hit  (markdown/entity-lookup name)]
-        (do
-          (string/release name)
-          (match hit
-            (Some t)
-            (do (builder/push-string! b t) (string/release t) (+ e 1))
-            (None)
-            -1)))
-      -1)))
-;;; md/-push-entity! -- internal: append the character reference at i (an &); the index past it, or -1 when there is none.
-
-(defn md/-push-entity! [b : StringBuilder s : String i : int end : int] : int
-  (if (= (md/-byte s (+ i 1)) 35)
-    (md/-push-numeric! b s (+ i 2) end)
-    (md/-push-named! b s (+ i 1) end)))
-;;; md/-entity-into! -- internal: at an & at i, flush [run, i) and append the reference; the index past it, or -1 (nothing appended).
-
-(defn md/-entity-into! [b : StringBuilder
-                        s : String
-                        run : int
-                        i : int
-                        end : int] : int
-  (let [t (builder/new)
-        e (md/-push-entity! t s i end)]
-    (if (> e 0)
-      (do
-        (string/-push-range! b s run i)
-        (let [r (builder/finish t)]
-          (do (builder/push-string! b r) (string/release r) e)))
-      (do (string/release (builder/finish t)) -1))))
-;;; md/-push-unescaped! -- internal: append [i, end) of s with backslash escapes and character references replaced.
-
-(defn md/-push-unescaped! [b : StringBuilder s : String i0 : int end : int] : void
-  (let [^mut i   i0
-        ^mut run i0]
+(defn md/-make-link! [^borrow ip : rc<MdIP> top : int dest : int title : int] : void
+  (let [bk   (md/-bk ip top)
+        v    (md/-ip-v ip)
+        node (md/-inl-new! v (if (.image bk) (MdIImage) (MdILink)) -1 0 0)]
     (do
-      (while (< i end)
-        (let [c (string/byte-at s i)]
-          (cond (and (= c 92)
-                  (< (+ i 1) end)
-                  (md/-punct? (string/byte-at s (+ i 1))))                             (do
-                                                                                         (string/-push-range! b
-                                                                                           s
-                                                                                           run
-                                                                                           i)
-                                                                                         (set! run
-                                                                                           (+ i
-                                                                                             1))
-                                                                                         (set! i
-                                                                                           (+ i
-                                                                                             2)))
-                (= c 38)                                                               (let [e (md/-entity-into! b
-                                                                                                 s
-                                                                                                 run
-                                                                                                 i
-                                                                                                 end)]
-                                                                                         (if (> e
-                                                                                               0)
-                                                                                           (do
-                                                                                             (set! i
-                                                                                               e)
-                                                                                             (set! run
-                                                                                               e))
-                                                                                           (set! i
-                                                                                             (+ i
-                                                                                               1))))
-                :else                                                                  (set! i
-                                                                                         (+ i
-                                                                                           1)))))
-      (string/-push-range! b s run end))))
-;;; md/-unescape -- internal: [i, end) of s with escapes and references replaced, as a fresh String.
+      (vec-set! v node (with (vec-get v node) [dest dest title title]))
+      (md/-inl-move-until! v (.node bk) -1 node)
+      (md/-inl-append! v (.root ip) node)
+      (md/-process-emphasis! ip (.prev-delim bk))
+      (md/-remove-bracket! ip)
+      (md/-inl-unlink! v (.node bk))
+      (when (not (.image bk)) (md/-deactivate-links! ip)))))
+;;; md/-inline-link-end -- internal: the end of an inline link's ( destination title ) at i, or -1; the destination and title bounds go in out.
 
-(defn md/-unescape [s : String i : int end : int] : String
-  (let [b (builder/new)]
-    (do (md/-push-unescaped! b s i end) (builder/finish b))))
-;; ---- Link reference pieces ---------------------------------------------------
-;;; md/-scan-label -- internal: the end of the link label whose [ is at i: [ ... ] with at most 999 bytes inside and no unescaped bracket.
-
-(defn md/-scan-label [s : String i : int end : int] : int
-  (if (not (= (md/-byte s i) 91))
-    -1
-    (let [^mut j   (+ i 1)
-          ^mut res -2]
-      (do
-        (while (= res -2)
-          (if (or (>= j end) (> (- j i) 1000))
-            (set! res -1)
-            (let [c (string/byte-at s j)]
-              (cond (= c 93) (set! res (+ j 1))
-                    (= c 91) (set! res -1)
-                    (= c 92) (set! j (+ j 2))
-                    :else    (set! j (+ j 1))))))
-        (if (and (> res 0) (> (- res i) 1001)) -1 res)))))
-;;; md/-spnl -- internal: skip spaces, at most one line ending, and spaces.
-
-(defn md/-spnl [s : String i : int end : int] : int
-  (let [j (md/-skip-spaces s i end)]
-    (if (and (< j end) (= (string/byte-at s j) 10))
-      (md/-skip-spaces s (+ j 1) end)
-      j)))
-;;; md/-space-eol -- internal: past spaces and the line ending (or the end) after i, or -1 when something else comes first.
-
-(defn md/-space-eol [s : String i : int end : int] : int
-  (let [j (md/-skip-spaces s i end)]
-    (cond (>= j end) j (= (string/byte-at s j) 10) (+ j 1) :else -1)))
-;;; md/-scan-dest-angle -- internal: the end of an <...> destination whose content starts at i.
-
-(defn md/-scan-dest-angle [s : String i : int end : int] : int
-  (let [^mut j   i
-        ^mut res -2]
-    (do
-      (while (= res -2)
-        (if (>= j end)
-          (set! res -1)
-          (let [c (string/byte-at s j)]
-            (cond (= c 62)               (set! res (+ j 1))
-                  (or (= c 60) (= c 10)) (set! res -1)
-                  (= c 92)               (if (and (< (+ j 1) end)
-                                               (not (= (string/byte-at s
-                                                         (+ j 1))
-                                                      10)))
-                                           (set! j (+ j 2))
-                                           (set! res -1))
-                  :else                  (set! j (+ j 1))))))
-      res)))
-;;; md/-scan-dest-plain -- internal: the end of a destination without <>: balanced parentheses, no whitespace.
-
-(defn md/-scan-dest-plain [s : String i : int end : int] : int
-  (let [^mut j      i
-        ^mut parens 0
-        ^mut stop   -1
-        ^mut go     true]
-    (do
-      (while (and go (< j end))
-        (let [c (string/byte-at s j)]
-          (cond (and (= c 92)
-                  (< (+ j 1) end)
-                  (md/-punct? (string/byte-at s (+ j 1))))                             (set! j
-                                                                                         (+ j
-                                                                                           2))
-                (= c 40)                                                               (do
-                                                                                         (set! j
-                                                                                           (+ j
-                                                                                             1))
-                                                                                         (set! parens
-                                                                                           (+ parens
-                                                                                             1)))
-                (= c 41)                                                               (if (< parens
-                                                                                             1)
-                                                                                         (do
-                                                                                           (set! stop
-                                                                                             c)
-                                                                                           (set! go
-                                                                                             false))
-                                                                                         (do
-                                                                                           (set! j
-                                                                                             (+ j
-                                                                                               1))
-                                                                                           (set! parens
-                                                                                             (- parens
-                                                                                               1))))
-                (md/-ws? c)                                                            (do
-                                                                                         (set! stop
-                                                                                           c)
-                                                                                         (set! go
-                                                                                           false))
-                :else                                                                  (set! j
-                                                                                         (+ j
-                                                                                           1)))))
-      (cond (and (= j i) (not (= stop 41))) -1 (not (= parens 0)) -1 :else j))))
-;;; md/-scan-dest -- internal: the end of the link destination at i, or -1.
-
-(defn md/-scan-dest [s : String i : int end : int] : int
-  (if (= (md/-byte s i) 60)
-    (md/-scan-dest-angle s (+ i 1) end)
-    (md/-scan-dest-plain s i end)))
-;;; md/-scan-title -- internal: the end of the link title at i, in "", '' or ().
-
-(defn md/-scan-title [s : String i : int end : int] : int
-  (let [open  (md/-byte s i)
-        close (if (= open 40) 41 open)]
-    (if (not (or (= open 34) (= open 39) (= open 40)))
+(defn md/-inline-link-end [^borrow ip : rc<MdIP> i : int out : (Vec int)] : int
+  (let [s  (md/-ip-s ip)
+        n  (.len ip)
+        p  (md/-spnl s (+ i 1) n)
+        de (md/-scan-dest s p n)]
+    (if (< de 0)
       -1
-      (let [^mut j   (+ i 1)
-            ^mut res -2]
-        (do
-          (while (= res -2)
-            (if (>= j end)
-              (set! res -1)
-              (let [c (string/byte-at s j)]
-                (cond (= c close)                (set! res (+ j 1))
-                      (= c 92)                   (if (< (+ j 1) end)
-                                                   (set! j (+ j 2))
-                                                   (set! res -1))
-                      (and (= open 40) (= c 40)) (set! res -1)
-                      :else                      (set! j (+ j 1))))))
-          res)))))
-;;; md/-normalize-label -- internal: the label [i, end) of s (brackets included) as references match it: trimmed, inner whitespace collapsed to one space, case-folded.
+      (let [q  (md/-spnl s de n)
+            te (if (and (> q de) (md/-ws? (md/-byte s (- q 1))))
+                 (md/-scan-title s q n)
+                 -1)
+            r  (if (>= te 0) (md/-spnl s te n) q)]
+        (if (= (md/-byte s r) 41)
+          (do
+            (vec-push! out (md/-dest-inner-start s p))
+            (vec-push! out (md/-dest-inner-end s p de))
+            (vec-push! out (if (>= te 0) (+ q 1) -1))
+            (vec-push! out (if (>= te 0) (- te 1) -1))
+            (+ r 1))
+          -1)))))
+;;; md/-close-inline! -- internal: a ] followed by an inline link's ( ... ); whether it made the link.
 
-(defn md/-normalize-label [s : String i : int end : int] : String
-  (let [b        (builder/new)
-        ^mut j   (md/-skip-ws s (+ i 1) (- end 1))
-        ^mut gap false]
+(defn md/-close-inline! [^borrow ip : rc<MdIP> top : int] : bool
+  (if (not (= (md/-ip-c ip (.pos ip)) 40))
+    false
+    (let [out (md/-new-ints)
+          e   (md/-inline-link-end ip (.pos ip) out)]
+      (if (< e 0)
+        (do (vec-free out) false)
+        (let [s     (md/-ip-s ip)
+              dest  (md/-ip-add-str! ip
+                      (md/-dest-string s (vec-get out 0) (vec-get out 1)))
+              title (if (< (vec-get out 2) 0)
+                      -1
+                      (md/-ip-add-str! ip
+                        (md/-unescape s (vec-get out 2) (vec-get out 3))))]
+          (do
+            (vec-free out)
+            (set! (.pos ip) e)
+            (md/-make-link! ip top dest title)
+            true))))))
+;;; md/-close-ref! -- internal: a ] followed by a full, collapsed or shortcut reference; whether it made the link.
+
+(defn md/-close-ref! [^borrow ip : rc<MdIP> top : int startpos : int] : bool
+  (let [bk  (md/-bk ip top)
+        le  (md/-scan-label (md/-ip-s ip) (.pos ip) (.len ip))
+        n   (if (< le 0) 0 (- le (.pos ip)))
+        a   (cond (> n 2) (.pos ip) (not (.after bk)) (.index bk) :else -1)
+        b   (cond (> n 2) le (not (.after bk)) startpos :else -1)
+        ref (if (< a 0) -1 (md/-lookup-ref ip a b))]
+    (if (< ref 0)
+      false
+      (let [r (vec-get (.refs (.doc ip)) ref)]
+        (do
+          (when (> n 0) (set! (.pos ip) le))
+          (md/-make-link! ip top (.dest r) (.title r))
+          true)))))
+;;; md/-close-literal! -- internal: append the ] just before startpos as text.
+
+(defn md/-close-literal! [^borrow ip : rc<MdIP> startpos : int] : void
+  (do (md/-ip-text! ip (- startpos 1) startpos) nil))
+;;; md/-close-link! -- internal: a ] after an active bracket: make the inline link or the reference link it closes; whether it made one.
+
+(defn md/-close-link! [^borrow ip : rc<MdIP> top : int startpos : int] : bool
+  (or (md/-close-inline! ip top) (md/-close-ref! ip top startpos)))
+;;; md/-parse-close-bracket! -- internal: a ] -- a link or image when a [ before it matches, else a literal ].
+
+(defn md/-parse-close-bracket! [^borrow ip : rc<MdIP>] : void
+  (let [startpos (+ (.pos ip) 1)
+        top      (.brackets ip)]
     (do
-      (while (< j (- end 1))
-        (let [c (string/byte-at s j)]
-          (if (md/-ws? c)
-            (set! gap true)
+      (set! (.pos ip) startpos)
+      (cond (< top 0)                         (md/-close-literal! ip startpos)
+            (not (.active (md/-bk ip top)))   (do
+                                                (md/-close-literal! ip startpos)
+                                                (md/-remove-bracket! ip))
+            (md/-close-link! ip top startpos) nil
+            :else                             (do
+                                                (md/-remove-bracket! ip)
+                                                (set! (.pos ip) startpos)
+                                                (md/-close-literal! ip startpos))))))
+;; ---- The other inline starts -------------------------------------------------------------
+;;; md/-strip-final-spaces! -- internal: drop the trailing spaces of text inline i; whether there were two or more (a hard break).
+
+(defn md/-strip-final-spaces! [^borrow ip : rc<MdIP> i : int] : bool
+  (let [v (md/-ip-v ip)]
+    (if (or (< i 0) (not (match (.kind (vec-get v i)) (MdIText) true _ false)))
+      false
+      (let [n (vec-get v i)
+            s (vec-get (.strs (.doc ip)) (.str n))]
+        (if (or (<= (.end n) (.start n))
+              (not (= (string/byte-at s (- (.end n) 1)) 32)))
+          false
+          (let [hard   (and (> (- (.end n) 1) (.start n))
+                         (= (string/byte-at s (- (.end n) 2)) 32))
+                ^mut e (.end n)]
             (do
-              (when gap (builder/push-byte! b 32))
-              (set! gap false)
-              (builder/push-byte! b c)))
-          (set! j (+ j 1))))
-      (let [raw    (builder/finish b)
-            folded (unicode/fold-case raw)]
-        (do (string/release raw) folded)))))
-;; ---- HTML tags -----------------------------------------------------------------
-;; The open and close tags CommonMark recognises (spec section 6.6): a tag
-;; name, then attributes, each a name with an optional unquoted, '' or ""
-;; value, then an optional / and the >.
-;;; md/-name-start? -- internal: can b start an attribute name?
+              (while (and (> e (.start n)) (= (string/byte-at s (- e 1)) 32))
+                (set! e (- e 1)))
+              (vec-set! v i (with n [end e]))
+              hard)))))))
+;;; md/-parse-newline! -- internal: a line ending: a hard break after two spaces, else a soft break; the next line's leading spaces go.
 
-(defn md/-name-start? [b : int] : bool (or (md/-alpha? b) (= b 95) (= b 58)))
-;;; md/-name-byte? -- internal: can b continue an attribute name?
-
-(defn md/-name-byte? [b : int] : bool
-  (or (md/-alnum? b) (= b 95) (= b 58) (= b 46) (= b 45)))
-;;; md/-tag-name-end -- internal: the end of the tag name at i (a letter, then letters, digits and -), or -1.
-
-(defn md/-tag-name-end [s : String i0 : int end : int] : int
-  (if (not (and (< i0 end) (md/-alpha? (string/byte-at s i0))))
-    -1
-    (let [^mut i (+ i0 1)]
-      (do
-        (while (and (< i end)
-                 (let [b (string/byte-at s i)] (or (md/-alnum? b) (= b 45))))
-          (set! i (+ i 1)))
-        i))))
-;;; md/-attr-name-end -- internal: the end of the attribute name at i.
-
-(defn md/-attr-name-end [s : String i0 : int end : int] : int
-  (let [^mut i (+ i0 1)]
+(defn md/-parse-newline! [^borrow ip : rc<MdIP>] : void
+  (let [last (.last-child (vec-get (md/-ip-v ip) (.root ip)))
+        hard (md/-strip-final-spaces! ip last)]
     (do
-      (while (and (< i end) (md/-name-byte? (string/byte-at s i)))
-        (set! i (+ i 1)))
-      i)))
-;;; md/-unquoted-byte? -- internal: can b be in an unquoted attribute value?
+      (md/-ip-advance! ip 1)
+      (md/-ip-leaf! ip (if hard (MdIHardBreak) (MdISoftBreak)) -1 0 0)
+      (while (= (md/-ip-c ip (.pos ip)) 32) (md/-ip-advance! ip 1)))))
+;;; md/-parse-backslash! -- internal: a backslash: a hard break before a line ending, an escaped punctuation character, or itself.
 
-(defn md/-unquoted-byte? [b : int] : bool
-  (not (or (<= b 32) (= b 34) (= b 39) (= b 61) (= b 60) (= b 62) (= b 96))))
-;;; md/-attr-value-end -- internal: the end of the attribute value at i, or -1.
+(defn md/-parse-backslash! [^borrow ip : rc<MdIP>] : void
+  (let [p (+ (.pos ip) 1)
+        c (md/-ip-c ip p)]
+    (cond (= c 10)       (do
+                           (set! (.pos ip) (+ p 1))
+                           (md/-ip-leaf! ip (MdIHardBreak) -1 0 0)
+                           nil)
+          (md/-punct? c) (do
+                           (md/-ip-text! ip p (+ p 1))
+                           (set! (.pos ip) (+ p 1)))
+          :else          (do (md/-ip-text! ip (- p 1) p) (set! (.pos ip) p)))))
+;;; md/-closing-ticks -- internal: where a run of exactly n backticks starts at or after i, or -1.
 
-(defn md/-attr-value-end [s : String i : int end : int] : int
-  (let [q (md/-byte s i)]
-    (if (or (= q 34) (= q 39))
-      (let [^mut j (+ i 1)]
-        (do
-          (while (and (< j end) (not (= (string/byte-at s j) q)))
-            (set! j (+ j 1)))
-          (if (< j end) (+ j 1) -1)))
-      (let [^mut j i]
-        (do
-          (while (and (< j end) (md/-unquoted-byte? (string/byte-at s j)))
-            (set! j (+ j 1)))
-          (if (> j i) j -1))))))
-;;; md/-attr-end -- internal: the end of one attribute (whitespace, name, optional value) at i, or -1.
-
-(defn md/-attr-end [s : String i : int end : int] : int
-  (let [n (md/-skip-ws s i end)]
-    (if (or (= n i) (>= n end) (not (md/-name-start? (string/byte-at s n))))
-      -1
-      (let [ne (md/-attr-name-end s n end)
-            eq (md/-skip-ws s ne end)]
-        (if (and (< eq end) (= (string/byte-at s eq) 61))
-          (let [v (md/-attr-value-end s (md/-skip-ws s (+ eq 1) end) end)]
-            (if (< v 0) ne v))
-          ne)))))
-;;; md/-open-tag-end -- internal: the end of the open tag whose < is at i, or -1.
-
-(defn md/-open-tag-end [s : String i : int end : int] : int
-  (let [t (md/-tag-name-end s (+ i 1) end)]
-    (if (< t 0)
-      -1
-      (let [^mut j t
-            ^mut a (md/-attr-end s t end)]
-        (do
-          (while (> a 0) (do (set! j a) (set! a (md/-attr-end s j end))))
-          (let [k  (md/-skip-ws s j end)
-                k2 (if (= (md/-byte s k) 47) (+ k 1) k)]
-            (if (= (md/-byte s k2) 62) (+ k2 1) -1)))))))
-;;; md/-close-tag-end -- internal: the end of the close tag whose < is at i, or -1.
-
-(defn md/-close-tag-end [s : String i : int end : int] : int
-  (if (not (= (md/-byte s (+ i 1)) 47))
-    -1
-    (let [t (md/-tag-name-end s (+ i 2) end)]
-      (if (< t 0)
-        -1
-        (let [k (md/-skip-ws s t end)] (if (= (md/-byte s k) 62) (+ k 1) -1))))))
-;;; md/-lower-run -- internal: the letters and digits from i of s, lower-cased, as a fresh String.
-
-(defn md/-lower-run [s : String i0 : int end : int] : String
-  (let [b      (builder/new)
-        ^mut i i0]
+(defn md/-closing-ticks [^borrow ip : rc<MdIP> i0 : int n : int] : int
+  (let [^mut i   i0
+        ^mut hit -1]
     (do
-      (while (and (< i end) (md/-alnum? (string/byte-at s i)))
-        (do
-          (builder/push-byte! b (md/-lower (string/byte-at s i)))
+      (while (and (< hit 0) (< i (.len ip)))
+        (if (= (md/-ip-c ip i) 96)
+          (let [run (md/-ip-run ip i 96)]
+            (if (= run n) (set! hit i) (set! i (+ i run))))
           (set! i (+ i 1))))
-      (builder/finish b))))
-;;; md/-word-in? -- internal: is name one of the |-separated words of list?
+      hit)))
+;;; md/-code-sp? -- internal: does byte c count as a space in a code span (a space, or a line ending, which becomes one)?
 
-(defn md/-word-in? [list : cstr name : String] : bool
-  (let [hay (string/from-cstr list)
-        b   (builder/new)]
+(defn md/-code-sp? [c : int] : bool (or (= c 32) (= c 10)))
+;;; md/-code-all-sp? -- internal: is every byte of [a, b) of s a code-span space?
+
+(defn md/-code-all-sp? [s : String a : int b : int] : bool
+  (let [^mut i a]
     (do
-      (builder/push-byte! b 124)
-      (builder/push-string! b name)
-      (builder/push-byte! b 124)
-      (let [needle (builder/finish b)
-            hit    (some? (string/index-of hay needle))]
-        (do (string/release needle) (string/release hay) hit)))))
+      (while (and (< i b) (md/-code-sp? (string/byte-at s i))) (set! i (+ i 1)))
+      (>= i b))))
+;;; md/-code-contents -- internal: a code span's [a, b) of s: line endings as spaces, and one space stripped from each end when both ends have one and it is not all spaces.
+
+(defn md/-code-contents [s : String a : int b : int] : String
+  (let [strip  (and (> b a)
+                 (not (md/-code-all-sp? s a b))
+                 (md/-code-sp? (string/byte-at s a))
+                 (md/-code-sp? (string/byte-at s (- b 1))))
+        x      (if strip (+ a 1) a)
+        y      (if strip (- b 1) b)
+        out    (builder/new)
+        ^mut i x]
+    (do
+      (while (< i y)
+        (let [c (string/byte-at s i)]
+          (do (builder/push-byte! out (if (= c 10) 32 c)) (set! i (+ i 1)))))
+      (builder/finish out))))
+;;; md/-parse-backticks! -- internal: a run of backticks: a code span when a run of the same length closes it, else literal backticks.
+
+(defn md/-parse-backticks! [^borrow ip : rc<MdIP>] : void
+  (let [start (.pos ip)
+        n     (md/-ip-run ip start 96)
+        after (+ start n)
+        close (md/-closing-ticks ip after n)]
+    (if (< close 0)
+      (do (md/-ip-text! ip start after) (set! (.pos ip) after))
+      (do
+        (md/-ip-own! ip (MdICode) (md/-code-contents (md/-ip-s ip) after close))
+        (set! (.pos ip) (+ close n))))))
+;;; md/-cp-before -- internal: the code point before byte i of s, or a line feed at the start.
+
+(defn md/-cp-before [s : String i : int] : int
+  (match (utf8/decode-before s i) (Some p) (char->int (pair-fst p)) (None) 10))
+;;; md/-cp-at -- internal: the code point at byte i of s, or a line feed at the end.
+
+(defn md/-cp-at [s : String i : int] : int
+  (match (utf8/decode-at s i) (Some p) (char->int (pair-fst p)) (None) 10))
+;;; md/-parse-delim! -- internal: a run of * or _: a text inline, and a delimiter when it can open or close emphasis (the flanking rules, spec 6.2).
+
+(defn md/-parse-delim! [^borrow ip : rc<MdIP> cc : int] : void
+  (let [start  (.pos ip)
+        n      (md/-ip-run ip start cc)
+        s      (md/-ip-s ip)
+        before (md/-cp-before s start)
+        after  (md/-cp-at s (+ start n))
+        aw     (unicode/space? (int->char after))
+        ap     (unicode/punct? (int->char after))
+        bw     (unicode/space? (int->char before))
+        bp     (unicode/punct? (int->char before))
+        left   (and (not aw) (or (not ap) bw bp))
+        right  (and (not bw) (or (not bp) aw ap))
+        opens  (if (= cc 95) (and left (or (not right) bp)) left)
+        closes (if (= cc 95) (and right (or (not left) ap)) right)
+        node   (md/-ip-text! ip start (+ start n))]
+    (do
+      (set! (.pos ip) (+ start n))
+      (when (or opens closes) (md/-push-delim! ip cc n node opens closes)))))
+;;; md/-parse-open-bracket! -- internal: a [, which may open a link.
+
+(defn md/-parse-open-bracket! [^borrow ip : rc<MdIP>] : void
+  (let [start (.pos ip)
+        node  (md/-ip-text! ip start (+ start 1))]
+    (do (set! (.pos ip) (+ start 1)) (md/-add-bracket! ip node start false))))
+;;; md/-parse-bang! -- internal: a !, which before a [ may open an image.
+
+(defn md/-parse-bang! [^borrow ip : rc<MdIP>] : void
+  (let [start (.pos ip)]
+    (if (= (md/-ip-c ip (+ start 1)) 91)
+      (let [node (md/-ip-text! ip start (+ start 2))]
+        (do
+          (set! (.pos ip) (+ start 2))
+          (md/-add-bracket! ip node (+ start 1) true)))
+      (do (md/-ip-text! ip start (+ start 1)) (set! (.pos ip) (+ start 1))))))
+;;; md/-autolink! -- internal: append the autolink [i, e) of the subject, its destination prefixed by pre (mailto: for an email address).
+
+(defn md/-autolink! [^borrow ip : rc<MdIP> i : int e : int pre : cstr] : void
+  (let [s    (md/-ip-s ip)
+        b    (builder/new)
+        v    (md/-ip-v ip)
+        node (md/-inl-new! v (MdILink) -1 0 0)
+        text (md/-inl-new! v (MdIText) (.subj ip) (+ i 1) (- e 1))]
+    (do
+      (builder/push-cstr! b pre)
+      (string/-push-range! b s (+ i 1) (- e 1))
+      (let [raw  (builder/finish b)
+            dest (md/-ip-add-str! ip (md/-normalize-uri raw))]
+        (do
+          (string/release raw)
+          (vec-set! v node (with (vec-get v node) [dest dest]))))
+      (md/-inl-append! v node text)
+      (md/-inl-append! v (.root ip) node)
+      (set! (.pos ip) e))))
+;;; md/-parse-lt! -- internal: a < -- an email or URI autolink, raw HTML, or (false) none of them.
+
+(defn md/-parse-lt! [^borrow ip : rc<MdIP>] : bool
+  (let [s  (md/-ip-s ip)
+        i  (.pos ip)
+        n  (.len ip)
+        em (md/-email-autolink-end s i n)
+        ur (if (< em 0) (md/-uri-autolink-end s i n) -1)
+        ht (if (and (< em 0) (< ur 0)) (md/-html-tag-end s i n) -1)]
+    (cond (>= em 0) (do (md/-autolink! ip i em "mailto:") true)
+          (>= ur 0) (do (md/-autolink! ip i ur "") true)
+          (>= ht 0) (do
+                      (md/-ip-leaf! ip (MdIHtml) (.subj ip) i ht)
+                      (set! (.pos ip) ht)
+                      true)
+          :else     false)))
+;;; md/-parse-entity! -- internal: a character reference, appended as its text; whether there was one.
+
+(defn md/-parse-entity! [^borrow ip : rc<MdIP>] : bool
+  (let [b (builder/new)
+        e (md/-push-entity! b (md/-ip-s ip) (.pos ip) (.len ip))]
+    (if (> e 0)
+      (do (md/-ip-own! ip (MdIText) (builder/finish b)) (set! (.pos ip) e) true)
+      (do (string/release (builder/finish b)) false))))
+;;; md/-special? -- internal: can byte c start something other than plain text?
+
+(defn md/-special? [c : int] : bool
+  (or (= c 10)
+    (= c 96)
+    (= c 91)
+    (= c 93)
+    (= c 92)
+    (= c 33)
+    (= c 60)
+    (= c 38)
+    (= c 42)
+    (= c 95)))
+;;; md/-parse-string! -- internal: a run of plain text; whether there was one.
+
+(defn md/-parse-string! [^borrow ip : rc<MdIP>] : bool
+  (let [start  (.pos ip)
+        ^mut j start]
+    (do
+      (while (and (< j (.len ip)) (not (md/-special? (md/-ip-c ip j))))
+        (set! j (+ j 1)))
+      (if (> j start)
+        (do (md/-ip-text! ip start j) (set! (.pos ip) j) true)
+        false))))
+;;; md/-parse-inline! -- internal: parse the inline at the position.
+
+(defn md/-parse-inline! [^borrow ip : rc<MdIP>] : void
+  (let [c       (md/-ip-c ip (.pos ip))
+        handled (cond (= c 10)               (do (md/-parse-newline! ip) true)
+                      (= c 92)               (do (md/-parse-backslash! ip) true)
+                      (= c 96)               (do (md/-parse-backticks! ip) true)
+                      (or (= c 42) (= c 95)) (do (md/-parse-delim! ip c) true)
+                      (= c 91)               (do
+                                               (md/-parse-open-bracket! ip)
+                                               true)
+                      (= c 33)               (do (md/-parse-bang! ip) true)
+                      (= c 93)               (do
+                                               (md/-parse-close-bracket! ip)
+                                               true)
+                      (= c 60)               (md/-parse-lt! ip)
+                      (= c 38)               (md/-parse-entity! ip)
+                      :else                  (md/-parse-string! ip))]
+    (when (not handled)
+      (do (md/-ip-text! ip (.pos ip) (+ (.pos ip) 1)) (md/-ip-advance! ip 1)))))
+;; ---- After parsing ------------------------------------------------------------------------
+;;; md/-text-run? -- internal: is inline j a text inline that carries on straight from inline i's bytes?
+
+(defn md/-text-run? [v : (Vec MdInl) i : int j : int] : bool
+  (and (>= j 0)
+    (match (.kind (vec-get v j)) (MdIText) true _ false)
+    (= (.str (vec-get v j)) (.str (vec-get v i)))
+    (= (.start (vec-get v j)) (.end (vec-get v i)))))
+;;; md/-merge-text! -- internal: join each run of adjacent text inlines over consecutive bytes (an unmatched * between two words, say) into one, for the inlines from first on.
+
+(defn md/-merge-text! [v : (Vec MdInl) first : int] : void
+  (let [^mut i first]
+    (while (< i (vec-len v))
+      (do
+        (when (and (>= (.parent (vec-get v i)) 0)
+                (match (.kind (vec-get v i)) (MdIText) true _ false))
+          (while (md/-text-run? v i (.next (vec-get v i)))
+            (let [j (.next (vec-get v i))]
+              (do
+                (vec-set! v i (with (vec-get v i) [end (.end (vec-get v j))]))
+                (md/-inl-unlink! v j)))))
+        (set! i (+ i 1))))))
+;; ---- Blocks -------------------------------------------------------------------------------
+;;; md/-inline-block! -- internal: parse block i's text (trimmed first) into an inline tree under a fresh root.
+
+(defn md/-inline-block! [d : MdDoc i : int] : void
+  (let [n    (vec-get (.nodes d) i)
+        t    (.text n)
+        s0   (vec-get (.strs d) t)
+        a    (md/-skip-ws s0 0 (string/len s0))
+        z    (md/-trim-end-index s0 a (string/len s0))
+        s    (string/substring s0 a (- z a))
+        root (md/-inl-new! (.inls d) (MdIRoot) -1 0 0)]
+    (do
+      (vec-set! (.strs d) t s)
+      (string/release s0)
+      (vec-set! (.nodes d) i (with n [inl root]))
+      (let [ip (rc/of (MdIP d
+                        t
+                        (string/len s)
+                        0
+                        root
+                        -1
+                        -1
+                        (md/-new-delims)
+                        (md/-new-brackets)))]
+        (do
+          (while (< (.pos ip) (.len ip)) (md/-parse-inline! ip))
+          (md/-process-emphasis! ip -1)
+          (md/-merge-text! (.inls d) root)
+          (vec-free (.dv ip))
+          (vec-free (.bv ip)))))))
+;;; md/-parse-inlines! -- internal: parse every paragraph and heading still in the tree.
+
+(defn md/-parse-inlines! [d : MdDoc] : void
+  (let [^mut i 1]
+    (while (< i (vec-len (.nodes d)))
+      (let [n (vec-get (.nodes d) i)]
+        (do
+          (when (and (>= (.text n) 0)
+                  (>= (.parent n) 0)
+                  (match (.kind n)
+                    (MdKParagraph)
+                    true
+                    (MdKHeading)
+                    true
+                    _
+                    false))
+            (md/-inline-block! d i))
+          (set! i (+ i 1)))))))

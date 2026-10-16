@@ -1407,6 +1407,16 @@ add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(tur_markdown_spec PROPERTIES TIMEOUT 720)
+# markdown-library-plan M2: tur/markdown's HTML against commonmark.js 0.31.2's
+# over every tracked Markdown file and seeded random documents.  PASS-skips
+# without node or without commonmark.js installed from
+# tests/markdown-spec/oracle/package-lock.json (CI's aux part installs both).
+add_test(
+  NAME tur_markdown_diff
+  COMMAND bash tests/run-markdown-diff.sh
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(tur_markdown_diff PROPERTIES TIMEOUT 720)
 # T0/T1: the shared C of Scheme numbers -- src/compiler/r7rs_bignum.inc and
 # r7rs_numsyntax.inc (the source reader and the interpreter) -- and their
 # copies in stdlib/r7rs/bignum.tur and numsyntax.tur (the compiled back end)
